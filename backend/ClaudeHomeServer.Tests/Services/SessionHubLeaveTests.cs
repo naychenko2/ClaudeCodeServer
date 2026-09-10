@@ -83,8 +83,8 @@ public class SessionHubLeaveTests : IDisposable
         var notesKb = new NotesKnowledgeService(knowledge, notesSvc, userStore, _config,
             NullLogger<NotesKnowledgeService>.Instance);
         var personas = new PersonaManager(_config);
-        var bindings = new PersonaBindingsService(personas, _projectManager, wkStore, notesSvc, notesKb,
-            knowledge, new SkillsService(), userStore, _config, NullLogger<PersonaBindingsService>.Instance);
+        var bindings = new PersonaBindingsService(personas, _projectManager, wkStore,
+            knowledge, new SkillsService(), userStore, _config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(_config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
         return new SessionManager(_projectManager, _historyService, _config, adapters, falCost,

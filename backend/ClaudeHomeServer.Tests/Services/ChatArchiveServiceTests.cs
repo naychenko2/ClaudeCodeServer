@@ -421,8 +421,8 @@ public class ChatArchiveServiceTests : IDisposable
         var notesKb = new NotesKnowledgeService(knowledge, notesSvc, users, config,
             NullLogger<NotesKnowledgeService>.Instance);
         var personas = new PersonaManager(config);
-        var bindings = new PersonaBindingsService(personas, projects, wkStore, notesSvc, notesKb,
-            knowledge, new SkillsService(), users, config, NullLogger<PersonaBindingsService>.Instance);
+        var bindings = new PersonaBindingsService(personas, projects, wkStore,
+            knowledge, new SkillsService(), users, config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
 

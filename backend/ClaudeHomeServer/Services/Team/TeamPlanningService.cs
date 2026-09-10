@@ -150,8 +150,15 @@ public class TeamPlanningService(
     // фронтовая фронтендеру. Отсюда и жёсткий контракт ответа: только JSON.
     // feedback — правка человека к текущему плану («Изменить план»): план пересобирается
     // именно под неё; без previous она смысла не имеет и игнорируется.
+    // budget (волна 4 team-blocker-honest) — текущий остаток бюджета итерации: без него
+    // планировщик режет работу на 9 волн при потолке 4 (прод 2026-09-09). null —
+    // состояние ещё не подгрузилось, блок не рисуем (старый путь для глобального чата
+    // или read-only контекста). budget В КОНЦЕ сигнатуры — параметр добавлен после
+    // стабильных коллег, чтобы старые вызовы с projectHint/previous/feedback не
+    // ломались (волна ломает только добровольно, см. PR ревью).
     public static string BuildPlannerPrompt(string request, IReadOnlyList<TeamCandidateCard> cards,
-        string? projectHint = null, TeamImplementPlan? previous = null, string? feedback = null)
+        string? projectHint = null, TeamImplementPlan? previous = null, string? feedback = null,
+        TeamImplementBudget? budget = null)
     {
         var sb = new StringBuilder();
         sb.AppendLine("Ты планировщик командной реализации. Разбей задачу на под-задачи и раздай их " +
@@ -195,6 +202,25 @@ public class TeamPlanningService(
             if (c.Bindings.Count > 0) sb.AppendLine($"    отвечает за: {string.Join("; ", c.Bindings)}");
         }
         sb.AppendLine();
+        // Остаток бюджета итерации (волна 4 team-blocker-honest): планировщик видит
+        // потолки и текущий расход и не должен резать работу на 9 волн при потолке
+        // 4 (прод 2026-09-09: две карточки «Бюджет исчерпан» по ходу итерации).
+        // Если задача объективно не лезет — разнеси на итерации (человек запустит
+        // новую вводную — бюджет сбросится) и пометь это явно в assumptions.
+        if (budget is not null)
+        {
+            sb.AppendLine("ОСТАТОК БЮДЖЕТА ИТЕРАЦИИ (потолки и текущий расход):");
+            sb.AppendLine($"- задачи: {budget.TasksUsed}/{budget.MaxTasks}");
+            sb.AppendLine($"- волны: {budget.WavesUsed}/{budget.MaxWaves}");
+            sb.AppendLine($"- запуски исполнителей: {budget.RunsUsed}/{budget.MaxRuns}");
+            sb.AppendLine($"- перевыдачи: {budget.RetriesUsed}/{budget.MaxRetries}");
+            sb.AppendLine($"- срочные вызовы координатора: {budget.WakeupsUsed}/{budget.MaxWakeups}");
+            sb.AppendLine();
+            sb.AppendLine($"План НЕ ДОЛЖЕН превышать потолки задач и волн ({budget.MaxTasks} / {budget.MaxWaves}). " +
+                          "Если задача явно больше — разнеси на отдельные итерации (новая вводная человека сбрасывает бюджет) " +
+                          "и явно отметь это в assumptions.");
+            sb.AppendLine();
+        }
         sb.AppendLine("ПРАВИЛА:");
         sb.AppendLine("1. Под-задачи независимы по файлам: два исполнителя не правят один файл в одной волне.");
         sb.AppendLine("2. У каждой под-задачи ОБЯЗАТЕЛЬНО executorPersonaId из списка выше и " +
@@ -250,7 +276,10 @@ public class TeamPlanningService(
         // строится vN — из неё берётся блок «Что изменилось».
         TeamImplementPlan? previous = null,
         // Правка человека к плану («Изменить план»): план пересобирается под неё.
-        string? feedback = null)
+        string? feedback = null,
+        // Остаток бюджета итерации (волна 4 team-blocker-honest): прокидывается из
+        // SessionTeamImplement.Budget. null — глобальный чат/штаб вне режима.
+        TeamImplementBudget? budget = null)
     {
         var promptChars = 0;
         var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -264,7 +293,7 @@ public class TeamPlanningService(
 
         var planner = ResolvePlanner(session, ownerId, candidates);
         var cards = candidates.Select(BuildCard).ToList();
-        var prompt = BuildPlannerPrompt(request, cards, projectHint, previous, feedback);
+        var prompt = BuildPlannerPrompt(request, cards, projectHint, previous, feedback, budget);
         promptChars = prompt.Length;
 
         var actionKey = LocalActionCatalog.TeamImplementPlan;

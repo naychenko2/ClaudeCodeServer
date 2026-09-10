@@ -1,5 +1,7 @@
 using System.Security.Claims;
 using System.Text.Encodings.Web;
+using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Composition;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.Extensions.Options;
 
@@ -17,13 +19,13 @@ public sealed class DesktopCapabilityAuthHandler : AuthenticationHandler<Authent
     public const string SchemeName = "DesktopCapability";
 
     private const string BearerPrefix = "Bearer ";
-    private readonly JwtService _jwt;
+    private readonly IDesktopCapabilityTokens _jwt;
 
     public DesktopCapabilityAuthHandler(
         IOptionsMonitor<AuthenticationSchemeOptions> options,
         ILoggerFactory logger,
         UrlEncoder encoder,
-        JwtService jwt) : base(options, logger, encoder)
+        IDesktopCapabilityTokens jwt) : base(options, logger, encoder)
     {
         _jwt = jwt;
     }
@@ -40,7 +42,7 @@ public sealed class DesktopCapabilityAuthHandler : AuthenticationHandler<Authent
         var raw = header[BearerPrefix.Length..].Trim();
         if (raw.Length == 0) return Task.FromResult(AuthenticateResult.NoResult());
 
-        var caller = _jwt.ValidateDesktopToken(raw);
+        var caller = DesktopCaller.FromPrincipal(_jwt.ValidateDesktopPrincipal(raw));
         if (caller is null)
             return Task.FromResult(AuthenticateResult.Fail("Недействительный capability-токен канала устройств"));
 
@@ -51,7 +53,7 @@ public sealed class DesktopCapabilityAuthHandler : AuthenticationHandler<Authent
 
     protected override Task HandleChallengeAsync(AuthenticationProperties properties)
     {
-        Response.Headers.WWWAuthenticate = $"Bearer realm=\"{JwtService.DesktopAudience}\"";
+        Response.Headers.WWWAuthenticate = $"Bearer realm=\"{DesktopProtocol.CapabilityAudience}\"";
         return base.HandleChallengeAsync(properties);
     }
 }

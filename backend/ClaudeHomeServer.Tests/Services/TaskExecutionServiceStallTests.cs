@@ -90,8 +90,8 @@ public class TaskExecutionServiceStallTests : IDisposable
         var server = new Mock<Microsoft.AspNetCore.Hosting.Server.IServer>();
         server.Setup(s => s.Features).Returns(new Microsoft.AspNetCore.Http.Features.FeatureCollection());
         var flags = new FeatureFlagService(_userStore);
-        var bindings = new PersonaBindingsService(personas, projectManager, wkStore, notesSvc, notesKb,
-            knowledge, new SkillsService(), _userStore, config, NullLogger<PersonaBindingsService>.Instance);
+        var bindings = new PersonaBindingsService(personas, projectManager, wkStore,
+            knowledge, new SkillsService(), _userStore, config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
         _sessions = new SessionManager(projectManager, new ChatHistoryService(config), config,
@@ -100,8 +100,8 @@ public class TaskExecutionServiceStallTests : IDisposable
             NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox,
             broadcaster: broadcaster);
 
-        _sut = new TaskExecutionService(_tasks, _sessions, personas, broadcaster, push, notesKb, notif,
-            NullLogger<TaskExecutionService>.Instance, config);
+        _sut = new TaskExecutionService(_tasks, _sessions, personas, broadcaster, push, notif,
+            NullLogger<TaskExecutionService>.Instance, config, kb: notesKb);
         _broadcaster = broadcaster;
     }
 
@@ -274,6 +274,108 @@ public class TaskExecutionServiceStallTests : IDisposable
 
         TaskExecutionService.ClassifyStall(task, Chat(SessionStatus.Active, Now.AddHours(-2)), Now, Stale)
             .Should().Be(TaskExecutionService.ExecutorStallAction.None);
+    }
+
+    // --- Волна 2 team-blocker-honest: «ждёт ответа по блокеру» vs «молчит» ----------
+
+    // Час молчания + открытый блокер: НЕ обычный Alert, а AlertWaitingForBlocker. Nudge
+    // не отправляем: исполнитель уже ждёт ответа, ещё один «закрой или эскалируй» только
+    // заставит его повторно эскалировать (прод 2026-09: блокер «снят правкой критерия», а
+    // Вере никто не написал — сторож закрыл задачу как зависшую).
+    [Fact]
+    public void ClassifyStall_ОткрытБлокер_ТишинаЗаПорогом_СразуЗовёмЧеловекаСДругимТекстом()
+    {
+        var action = TaskExecutionService.ClassifyStall(StaleTask(),
+            Chat(SessionStatus.Active, Now.AddMinutes(-16)), Now, Stale,
+            hasOpenBlocker: true);
+
+        action.Should().Be(TaskExecutionService.ExecutorStallAction.AlertWaitingForBlocker,
+            "открытый блокер меняет причину тишины — окликать исполнителя бесполезно, идём сразу к человеку");
+    }
+
+    [Fact]
+    public void ClassifyStall_ОткрытБлокер_ЧатаИсполнителяНет_ТожеЖдётЧеловека()
+    {
+        // Чат удалён/протух, окликать некого — при открытом блокере это всё равно
+        // «ждёт ответа», а не «молчит молча».
+        var action = TaskExecutionService.ClassifyStall(StaleTask(), null, Now, Stale,
+            hasOpenBlocker: true);
+
+        action.Should().Be(TaskExecutionService.ExecutorStallAction.AlertWaitingForBlocker);
+    }
+
+    [Fact]
+    public void ClassifyStall_ОткрытБлокер_ОкликНеПомог_ЖдёмЧеловека()
+    {
+        // Прежний путь «nudge → alert» при открытом блокере тоже превращается в
+        // AlertWaitingForBlocker: на втором шаге координатор уже знает, что блокер висит,
+        // и формулировка должна отражать это, а не маскировать «общим» молчанием.
+        var action = TaskExecutionService.ClassifyStall(
+            StaleTask(nudgedAt: Now.AddMinutes(-16)),
+            Chat(SessionStatus.Active, Now.AddMinutes(-30)), Now, Stale,
+            hasOpenBlocker: true);
+
+        action.Should().Be(TaskExecutionService.ExecutorStallAction.AlertWaitingForBlocker);
+    }
+
+    [Fact]
+    public void ClassifyStall_ОткрытБлокер_ТишинаНеДошлаДоПорога_НичегоНеДелаем()
+    {
+        // Запас до порога — даже при открытом блокере рано будить координатора.
+        var action = TaskExecutionService.ClassifyStall(StaleTask(),
+            Chat(SessionStatus.Active, Now.AddMinutes(-5)), Now, Stale,
+            hasOpenBlocker: true);
+
+        action.Should().Be(TaskExecutionService.ExecutorStallAction.None);
+    }
+
+    [Fact]
+    public void ClassifyStall_БезБлокера_ПоведениеПрежнее()
+    {
+        // Регрессия: без открытого блокера ветка Nudge/Alert работает как раньше,
+        // новый enum-значение не подменяет старое.
+        var action = TaskExecutionService.ClassifyStall(StaleTask(),
+            Chat(SessionStatus.Active, Now.AddMinutes(-16)), Now, Stale,
+            hasOpenBlocker: false);
+
+        action.Should().Be(TaskExecutionService.ExecutorStallAction.Nudge);
+    }
+
+    [Fact]
+    public void ClassifyStall_DefaultБезБлокера_ПоведениеПрежнее()
+    {
+        // Старая сигнатура без параметра (hasOpenBlocker по умолчанию = false) сохранена:
+        // существующие вызовы и тесты продолжают работать без правок.
+        var action = TaskExecutionService.ClassifyStall(StaleTask(),
+            Chat(SessionStatus.Active, Now.AddMinutes(-16)), Now, Stale);
+
+        action.Should().Be(TaskExecutionService.ExecutorStallAction.Nudge);
+    }
+
+    // Тексты уведомления и подписи плашки разные — иначе координатор не отличит «ждёт»
+    // от «молчит» ни по ленте, ни по пушу.
+    [Fact]
+    public void BuildStaleNotification_ЖдётОтветаПоБлокеру_ОтличаетсяТекстомИЗаголовком()
+    {
+        var task = StaleTask();
+        var plain = TaskExecutionService.BuildStaleNotification(task, persona: null, waitingForBlocker: false);
+        var waiting = TaskExecutionService.BuildStaleNotification(task, persona: null, waitingForBlocker: true);
+
+        plain.Title.Should().Be("Задача осталась в работе");
+        waiting.Title.Should().Be("Исполнитель ждёт ответа по блокеру");
+        waiting.Body.Should().Contain("ждёт ответа");
+        plain.Body.Should().NotContain("ждёт ответа",
+            "без открытого блокера формулировка должна остаться прежней");
+    }
+
+    [Fact]
+    public void StaleAlertStaffNote_ОтличаетсяУОжиданияБлокера()
+    {
+        // Плашка в ленте — единственное, что человек видит от служебного окрика координатора.
+        // Две разные подписи нужны, чтобы по ленте было видно, что это «ждёт», а не «молчит».
+        TaskExecutionService.StaleAlertStaffNote.Should().NotBe(
+            TaskExecutionService.StaleAlertWaitingForBlockerStaffNote);
+        TaskExecutionService.StaleAlertWaitingForBlockerStaffNote.Should().Contain("ждёт");
     }
 
     // --- Эффекты: оклик исполнителю и уведомление человеку --------------------

@@ -93,6 +93,10 @@ public class RootSubsystemBoundaryTests
         // чтобы сторож видел сборки Dossiers.dll / Memory.dll и их root-типы.
         _ = typeof(ClaudeHomeServer.Services.Dossiers.DossiersSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Memory.MemorySubsystem).Assembly;
+        // Desktop — отдельная сборка (Этап 5, вынос Desktop): форс-загрузка нужна,
+        // чтобы сторож видел типы грани (маршрутизатор канала, хаб устройств, схемы
+        // авторизации) и проверял их границы по Desktop.dll.
+        _ = typeof(ClaudeHomeServer.Services.Desktop.DesktopCallRouter).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Backgrounds.BackgroundsSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.ProjectIcons.ProjectIconsSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Terminal.TerminalService).Assembly;
@@ -183,8 +187,12 @@ public class RootSubsystemBoundaryTests
         // (см. FileWatcherService — подписка на CodeGraphService).
         "ClaudeHomeServer.Services.CodeGraph.CodeGraphService",
         // Desktop-капабилити: JwtService создаёт capability-токен для канала
-        // desktop MCP через DesktopCaller (см. JwtService.cs:251,266 — формирование
-        // капабилити-токена).
+        // desktop MCP через DesktopCaller (IssueDesktopToken — формирование
+        // капабилити-токена). После выноса Desktop в отдельную сборку (Этап 5) это
+        // ЕДИНСТВЕННАЯ ссылка root → Desktop: проверка токена отдаёт ClaimsPrincipal,
+        // разбор в вызывателя ушёл на сторону вертикали. Направление Main → вертикаль
+        // разрешено, но допуск точечный — новый тип грани в корне обязан покраснеть.
+        // Живость проверена мутацией: снятие записи роняет сторож.
         "ClaudeHomeServer.Services.Desktop.DesktopCaller",
         // Документация: DocsIndexService читается ProjectPresetService для
         // построения списка доступных пресетов в композере онбординга v2.

@@ -6,10 +6,10 @@ import { C, FONT, R, SHADOW, SP, FS } from '../../lib/design';
 import { stripRoot } from '../../lib/paths';
 import { ChatProjectContext, useAssistantName } from './contexts';
 import { MarkdownContent } from './MarkdownContent';
-import { IconNotes } from '../../features/notes/shared';
-import { saveChatNote, openNoteById } from '../../features/notes/saveToNote';
+import { IconNotes, saveChatNote, openNoteById } from '../../features/notes';
 import { VoiceMicButton } from './VoiceMicButton';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
+import { useSubsystem } from '../../lib/subsystems';
 import { PlanRemarks } from '../../features/plan/PlanRemarks';
 import { PlanScheme } from '../plan/PlanScheme';
 import { api } from '../../lib/api';
@@ -54,12 +54,14 @@ function CollapsedPlanBody({ plan }: { plan: string }) {
   );
 }
 
-// Иконка-кнопка «В заметку» — сохранить текст плана в базу заметок
+// Иконка-кнопка «В заметку» — сохранить текст плана в базу заметок. Гейт по
+// подсистеме: без notes иконка не нужна, запись будет 4xx.
 function SavePlanButton({ plan, online }: { plan: string; online: boolean }) {
   const project = useContext(ChatProjectContext);
+  const notesOn = useSubsystem('notes');
   const [savedId, setSavedId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  if (!online) return null;
+  if (!online || !notesOn) return null;
   const save = () => {
     if (busy || savedId) return;
     setBusy(true);

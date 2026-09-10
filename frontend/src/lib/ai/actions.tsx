@@ -40,6 +40,11 @@ export interface AiActionCtx {
   nav: NavSnapshot | null;
   online: boolean;
   flag: (key: string) => boolean;
+  // Эффективное состояние подсистем (приходит с /api/auth/me, поле subsystems).
+  // Опционально: до введения подсистем использовался только flag. Действия, живущие
+  // в конкретной подсистеме (например, все note.*), гейтятся через c.subsystem?.('notes')
+  // и исчезают из палитры при выключенной подсистеме.
+  subsystem?: (key: string) => boolean;
   caps: { semantic: boolean };
   // Открыт ли сейчас чат (проектный или в разделе «Чаты») и есть ли в нём переписка.
   // Активная сессия проекта не отражается в nav — ChatPanel сообщает это отдельно.
@@ -106,7 +111,14 @@ const IcTranslate = <Sparkles {...ico} />;
 const IcWall = <Columns3 {...ico} />;
 
 // --- Предикаты контекста ---
-const noteOpen = (c: AiActionCtx) => c.nav?.screen === 'notes' && !!c.nav.note;
+// Подсистема заметок включена: гейт для всех note.* действий и chat.summary.
+// Если ctx ещё не успел поднять subsystem (ранний вызов до init me или
+// тест без явного ctx) — считаем подсистему включённой. Только явный false
+// гасит действия. В проде subsystem всегда есть — его прокидывает
+// AiLauncher.buildCtx, который видит store из lib/subsystems; поэтому
+// «не подключено» означает «нет данных о подсистеме», а не «выключено».
+const notesOn = (c: AiActionCtx) => c.subsystem?.('notes') !== false;
+const noteOpen = (c: AiActionCtx) => notesOn(c) && c.nav?.screen === 'notes' && !!c.nav.note;
 const taskOpen = (c: AiActionCtx) => !!c.nav?.task;
 const chatOpen = (c: AiActionCtx) => c.chat.active;
 const personaOpen = (c: AiActionCtx) => c.nav?.screen === 'personas' && !!c.nav.persona;
@@ -178,8 +190,8 @@ export const AI_ACTIONS: AiAction[] = [
   {
     id: 'note.semantic', title: 'Поиск по смыслу', hint: 'семантический поиск по заметкам',
     section: 'notes', sectionLabel: 'Заметки', icon: IcSearch,
-    when: c => c.nav?.screen === 'notes' && c.caps.semantic && c.online,
-    contextual: c => c.nav?.screen === 'notes',
+    when: c => notesOn(c) && c.nav?.screen === 'notes' && c.caps.semantic && c.online,
+    contextual: c => notesOn(c) && c.nav?.screen === 'notes',
     run: () => dispatchAiRun('note.semantic'),
   },
   {
@@ -220,7 +232,7 @@ export const AI_ACTIONS: AiAction[] = [
     // Доступно везде, а не только при открытом документе: комментарии оставляются и в файлах
     // проекта, где действие выше не показывается вовсе. Область — открытый проект, вне
     // проекта все источники.
-    when: c => c.online,
+    when: c => notesOn(c) && c.online,
     run: c => startChatWithPrompt(
       allAnnotationsPrompt(c.nav?.screen === 'project' ? c.nav.project : undefined),
       c, { requiredTool: ANNOTATIONS_TOOL_KEY }),
@@ -303,7 +315,8 @@ export const AI_ACTIONS: AiAction[] = [
   {
     id: 'chat.summary', title: 'Итог сессии в заметку', hint: 'конспект чата заметкой',
     section: 'chat', sectionLabel: 'Чат', icon: IcDoc,
-    when: c => chatOpen(c) && c.chat.hasMessages && c.online, contextual: chatOpen,
+    when: c => notesOn(c) && chatOpen(c) && c.chat.hasMessages && c.online,
+    contextual: c => notesOn(c) && chatOpen(c),
     run: () => dispatchAiRun('chat.summary'),
   },
   {
@@ -510,13 +523,14 @@ export const AI_ACTIONS: AiAction[] = [
   {
     id: 'calendar.plan', title: 'Спланировать день', hint: 'собрать план дня в дневник',
     section: 'global', sectionLabel: 'Глобально', icon: IcSun,
-    when: c => calendarScreen(c) && c.online, contextual: calendarScreen,
+    // Бриф пишет заметку — без подсистемы заметок действия нет
+    when: c => notesOn(c) && calendarScreen(c) && c.online, contextual: calendarScreen,
     run: () => runBriefing(),
   },
   {
     id: 'global.briefing', title: 'Утренний бриф', hint: 'собрать план дня в дневник',
     section: 'global', sectionLabel: 'Глобально', icon: IcSun,
-    when: c => c.online,
+    when: c => notesOn(c) && c.online,
     run: () => runBriefing(),
   },
   {
@@ -535,6 +549,8 @@ export const AI_ACTIONS: AiAction[] = [
     id: 'home.overview', title: 'Обзор за меня', hint: 'приоритеты на сегодня по задачам и заметкам',
     section: 'global', sectionLabel: 'Глобально', icon: IcOverview,
     when: c => c.online, contextual: homeScreen,
+    // Подсистема заметок не блокирует: модель сама решит, что без notes_* инструмента
+    // список заметок пропустить; негоже скрывать полезное действие из-за опциональной части
     run: c => startChatWithPrompt(
       `Собери короткий обзор на сегодня: активные и просроченные задачи (tasks_list), свежие заметки `
       + `(notes_list/notes_search) — и что из этого важнее всего. Дай 3 приоритета на день.`, c),

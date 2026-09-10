@@ -159,8 +159,8 @@ public class SessionManagerTests : IDisposable
             NullLogger<NotesKnowledgeService>.Instance);
         var personas = new PersonaManager(config);
         _personaManager = personas;
-        var bindings = new PersonaBindingsService(personas, _projectManager, wkStore, notesSvc, notesKb,
-            knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance);
+        var bindings = new PersonaBindingsService(personas, _projectManager, wkStore,
+            knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
         _actionOverrides = new ClaudeHomeServer.Services.Llm.LocalActionOverridesStore(config);
@@ -1580,8 +1580,8 @@ public class SessionManagerTests : IDisposable
         var notesKb = new NotesKnowledgeService(knowledge, notesSvc, userStore, config,
             NullLogger<NotesKnowledgeService>.Instance);
         var personas = new PersonaManager(config);
-        var bindings = new PersonaBindingsService(personas, projectManager, wkStore, notesSvc, notesKb,
-            knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance);
+        var bindings = new PersonaBindingsService(personas, projectManager, wkStore,
+            knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
 
@@ -8412,9 +8412,13 @@ public class SessionManagerTests : IDisposable
         team.WaveStartedAt.Should().BeNull("волн ещё не было — сторожу нечего сторожить");
     }
 
-    // M3: текст отказа квоты обязан быть честным — из «ждёт решения» план как раз подтверждён
+    // M3: текст отказа квоты обязан быть честным — из «ждёт решения» план как раз подтверждён.
+    // Волна 1 team-blocker-honest уточнила: AwaitingDecision без открытых карточек — стадия
+    // осталась по инерции (TryResolveBlockerByFactAsync должен был вернуть её), и запуск
+    // разрешён. С блокером — координатор сам разбирается, запуск разрешён. С не-блокером
+    // (Stopped/TaskFailed и пр.) — действительно ждём человека, отказ.
     [Fact]
-    public async Task КвотаЗапуска_ВОжиданииРешения_ОтказНазываетНастоящуюПричину()
+    public async Task КвотаЗапуска_ВОжиданииРешенияБезОткрытыхКарточек_РазрешаетЗапуск()
     {
         var (session, plan, _) = await MakeStabWithPlanAndStarterAsync("ti-quota-awaiting");
         await _sut.RespondTeamPlanAsync(session.Id, plan.Id, TeamPlanDecision.Run, userId: TestUserId);
@@ -8422,9 +8426,9 @@ public class SessionManagerTests : IDisposable
 
         var (verdict, reason) = _sut.TryConsumeTeamImplementRun(session.Id, TestUserId);
 
-        verdict.Should().Be(SessionManager.TeamRunQuota.Exhausted);
-        reason.Should().Contain("ждёт решения");
-        reason.Should().NotContain("не подтверждён", "план подтверждён — врать человеку и модели нельзя");
+        // AwaitingDecision + нет открытых карточек — координатор разбирается, запуск разрешён
+        ((SessionManager.TeamRunQuota)(int)verdict).Should().Be(SessionManager.TeamRunQuota.Allowed);
+        reason.Should().BeNull();
     }
 
     // M8: клик по карточке v1, когда опубликован v2. С фиксом «Изменить план» (2026-08-04)

@@ -59,6 +59,20 @@ public static class TeamProtocolMarkers
         return request.Length == 0 ? null : request;
     }
 
+    // Маркер снятия блокера штабом (волна 1 задачи team-blocker-honest): `<team:resolved>суть</team>`
+    // — координатор явно говорит, что блокер снят действием, не дожидаясь общего P23.
+    // Разбор — как у прочих парных маркеров: вне код-блоков (модель любит цитировать протокол
+    // примером), закрытие по имени терпится (XML-привычка модели).
+    public static string? ParseResolvedMarker(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        var found = FindPairedMarkerOutsideCode(text, ResolvedOpenTagRegex, ResolvedCloseTagRegex);
+        if (found is null) return null;
+        var (openEnd, closeStart, _, _) = found.Value;
+        var note = text[openEnd..closeStart].Trim();
+        return note.Length == 0 ? null : note;
+    }
+
     // Маркер разговора (M6): `<team:talk/>` — координатор честно разобрал сообщение человека:
     // работы нет, файлы менять не нужно. Легальный выход из интервью без плана — по голому
     // тексту бэкенд не отличит такой ответ от молчаливого тупика (stall-гард). Разбор — как
@@ -116,6 +130,10 @@ public static class TeamProtocolMarkers
         new("<team:work>", RegexOptions.Compiled);
     private static readonly Regex WorkCloseTagRegex =
         new(@"</team(?::work)?>", RegexOptions.Compiled);
+    private static readonly Regex ResolvedOpenTagRegex =
+        new("<team:resolved>", RegexOptions.Compiled);
+    private static readonly Regex ResolvedCloseTagRegex =
+        new(@"</team(?::resolved)?>", RegexOptions.Compiled);
     private static readonly Regex EscalateOpenTagRegex =
         new(@"<escalate:(deviation|check|decision|clarify)>", RegexOptions.Compiled);
     private static readonly Regex EscalateCloseTagRegex =
@@ -140,6 +158,7 @@ public static class TeamProtocolMarkers
         // съедался как осиротевший. Диапазон [openStart, closeEnd) уносит и вложенный код.
         text = RemovePairedMarkers(text, EscalateOpenTagRegex, EscalateCloseTagRegex);
         text = RemovePairedMarkers(text, WorkOpenTagRegex, WorkCloseTagRegex);
+        text = RemovePairedMarkers(text, ResolvedOpenTagRegex, ResolvedCloseTagRegex);
         // Остальное (самозакрывающиеся маркеры, осиротевшие закрывающие теги) — по-прежнему
         // посегментно: только вне код-блоков, процитированный в примере протокол не трогаем.
         var sb = new StringBuilder(text.Length);
@@ -230,7 +249,7 @@ public static class TeamProtocolMarkers
     private static readonly string[] MarkerOpenTags =
     [
         "<escalate:deviation>", "<escalate:check>", "<escalate:decision>", "<escalate:clarify>",
-        "<team:work>",
+        "<team:work>", "<team:resolved>",
         // Самозакрывающийся маркер молчания целиком: любой его префикс («<n», «<no-repl»,
         // «<no-reply/») ещё может дорасти до маркера — до этого показывать хвост нельзя
         NoReplyMarker,
@@ -269,7 +288,7 @@ public static class TeamProtocolMarkers
     private static readonly string[] MarkerOpenLiterals =
     [
         "<escalate:deviation>", "<escalate:check>", "<escalate:decision>", "<escalate:clarify>",
-        "<team:work>", "<team:talk", "<no-reply",
+        "<team:work>", "<team:resolved>", "<team:talk", "<no-reply",
     ];
 
     public static string TrimUnresolvedMarkerOpen(string strippedText)

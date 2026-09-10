@@ -185,6 +185,26 @@ internal sealed class TeamTurnCompletionService
             team = teamAfterResolve;
         }
 
+        // Волна 1 team-blocker-honest: явный маркер снятия блокера `<team:resolved>суть</team>`
+        // — координатор говорит, что снял блокер действием, без всякого team:work и финала
+        // итерации. На каждое TaskId из `TaskId` открытых блокеров зовём TryResolveBlockerByFactAsync,
+        // затем НЕ возвращаемся — идём дальше по остальным маркерам хода (M4, фикс-волна): раньше
+        // немедленный return глотал `<escalate:*>`/`<team:work>`/`<team:talk/>` того же хода.
+        // Координатор в одном ходу снял блокер и попросил решение — карточка развилки не
+        // публиковалась; снял блокер и дал team:work — волна не стартовала.
+        if (TeamProtocolMarkers.ParseResolvedMarker(turnText) is { } resolvedNote
+            && team.Stage == TeamImplementStage.AwaitingDecision)
+        {
+            var openBlockers = (await _history.GetOpenTeamEscalationsAsync(sessionId))
+                .Where(c => c.Kind == TeamEscalationKind.Blocker && c.TaskId is not null)
+                .Select(c => c.TaskId!)
+                .Distinct()
+                .ToList();
+            foreach (var taskId in openBlockers)
+                await _sessions.TryResolveBlockerByFactAsync(sessionId, taskId, resolvedNote);
+            // намеренно не return — разбор продолжается ниже
+        }
+
         if (TeamProtocolMarkers.ParseEscalationMarker(turnText) is { } marker)
         {
             // Тупик в волне (Э8) — не «жду решения», а возврат в интервью: волны на паузе,
@@ -386,7 +406,7 @@ internal sealed class TeamTurnCompletionService
         }
 
         var result = await _sessions.ReportUpAsync(sessionId, TeamImplementPrompts.BlockerReportText(text), ownerId,
-            withTurn: true, reactionPrompt: TeamImplementPrompts.BlockerReactionTurn(chat?.Name));
+            withTurn: true, reactionPrompt: TeamImplementPrompts.BlockerReactionTurn(chat?.Name, chat?.Id));
         if (result is not (ReportUpResult.Delivered or ReportUpResult.Queued))
         {
             // Пробуждение списано выше (wake.Allowed), а доклад не дошёл (TooDeep/NoParent/

@@ -27,7 +27,6 @@ public sealed class PersonasCrudService(
     UserStore users,
     PersonaMemoryService memory,
     PersonaBindingsService bindings,
-    NotesService notes,
     SkillsService skills,
     Services.Images.ImageGenerationService images,
     Services.Images.ImageBackfillService imageBackfill,
@@ -37,7 +36,8 @@ public sealed class PersonasCrudService(
     SpecialtySettingsStore specialtySettings,
     IConfiguration config,
     ILogger<PersonasCrudService> log,
-    ISessionBroadcaster broadcaster)
+    ISessionBroadcaster broadcaster,
+    NotesService? notes = null)
 {
     // Провайдеров генерации несколько (fal.ai, glif) — про конкретный ключ конфига не пишем
     private const string ImageGenerationOffError =
@@ -825,7 +825,7 @@ public sealed class PersonasCrudService(
             sb.AppendLine("Базы знаний (type \"knowledge\", target = id):");
             foreach (var d in datasets.Take(20)) sb.AppendLine($"- {d.Id} — {d.Label}");
         }
-        var sources = notes.GetSources(userId);
+        var sources = notes?.GetSources(userId) ?? [];
         if (sources.Count > 0)
         {
             sb.AppendLine("Источники заметок (type \"notes\", target = key):");

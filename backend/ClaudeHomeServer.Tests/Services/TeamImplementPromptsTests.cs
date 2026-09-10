@@ -216,4 +216,88 @@ public class TeamImplementPromptsTests
         turn.Should().Contain("Продолжай с этого места",
             "прочие решения работу возобновляют — их текст не меняется");
     }
+
+    // Волна 2 team-blocker-honest: «Снять задачу» (drop, кнопка Blocker) и «Пропустить» (skip,
+    // кнопка TaskFailed) закрывают под-задачу через SubtaskDropHandler. Координатор должен
+    // увидеть в ходе явный отбой — иначе следующим ходом он предлагал перевыдать только что
+    // снятую задачу (прод 2026-09, чат «Выделение подсистем для Француза»).
+    [Fact]
+    public void EscalationResolvedTurn_Drop_ГоворитЧтоЗадачаСнята_ИИсполнительПолучилОтбой()
+    {
+        var turn = TeamImplementPrompts.EscalationResolvedTurn(null, "drop", "Снять задачу", null);
+
+        turn.Should().Contain("Решение: Снять задачу");
+        turn.Should().Contain("снята", "явное подтверждение закрытия задачи");
+        turn.Should().Contain("получил отбой", "исполнитель уведомлён, что работа не нужна");
+        turn.Should().Contain("в работе её больше нет",
+            "иначе координатор следующим ходом предлагал бы перевыдать уже снятую задачу");
+        turn.Should().NotContain("Продолжай с этого места",
+            "снимать и продолжать — взаимоисключающие действия");
+    }
+
+    [Fact]
+    public void EscalationResolvedTurn_Skip_ГоворитЧтоЗадачаСнята_ИИсполнительПолучилОтбой()
+    {
+        var turn = TeamImplementPrompts.EscalationResolvedTurn(null, "skip", "Пропустить", null);
+
+        turn.Should().Contain("Решение: Пропустить");
+        turn.Should().Contain("снята");
+        turn.Should().Contain("получил отбой");
+        turn.Should().Contain("в работе её больше нет");
+        turn.Should().NotContain("Продолжай с этого места");
+    }
+
+    // Волна 2 team-blocker-honest: промпт реакции на блокер (BlockerReactionTurn) обязан
+    // перечислить конкретные ходы снятия с их инструментами. Прежняя формулировка «уточнить
+    // постановку, перевыдать работу, поправить план» была без имён, и в чате «Выделение
+    // подсистем для Француза» координатор «снял блокер правкой критерия», но Вере в её чат
+    // никто не написал — сторож закрыл задачу как зависшую.
+    [Fact]
+    public void BlockerReactionTurn_ПеречисляетКонкретныеИнструментыСнятия()
+    {
+        var text = TeamImplementPrompts.BlockerReactionTurn("Вера QA", "sess-vera-1");
+
+        // Четыре канала снятия блокера, каждый со своим инструментом
+        text.Should().Contain("chats_send",
+            "главный забытый ход: ответить исполнителю в его чат");
+        text.Should().Contain("sessionId=\"sess-vera-1\"",
+            "id чата исполнителя прокидывается в промпт, чтобы координатор не искал его");
+        text.Should().Contain("tasks_update",
+            "уточнить постановку без переоткрытия карточки");
+        text.Should().Contain("tasks_run_executor",
+            "перезапустить исполнителя, если задача уже корректна");
+        text.Should().Contain("tasks_create",
+            "перевыдача через новую задачу");
+        text.Should().Contain("tasks_complete",
+            "снятие старой задачи при перевыдаче");
+        // Правило про самогашение карточки: координатор больше не должен искать «кнопку
+        // Продолжить», которой у карточки блокера нет (прод 2026-09).
+        text.Should().Contain("погаснет сама",
+            "карточка гаснет по факту снятия — координатору не нужно звать человека");
+    }
+
+    [Fact]
+    public void BlockerReactionTurn_БезIDЧата_ВсёРавноПеречисляетChatsSend()
+    {
+        // На случай, когда вызывающая сторона не передала id чата (например, исторический
+        // путь вызова): промпт всё равно упоминает chats_send, но без подстановки конкретного
+        // sessionId. Координатору придётся самому найти id через чтение задачи.
+        var text = TeamImplementPrompts.BlockerReactionTurn("Вера QA", null);
+
+        text.Should().Contain("chats_send");
+        text.Should().NotContain("sessionId=\"sess-vera-1\"",
+            "без id конкретного чата подстановки быть не должно");
+    }
+
+    [Fact]
+    public void BlockerReactionTurn_ГоворитПроЭскалациюКакКрайнийСлучай()
+    {
+        // Маркер эскалации — запасной путь, а не первая реакция: если снять блокер не выходит,
+        // карточка остаётся человеку, а не «позови человека и всё».
+        var text = TeamImplementPrompts.BlockerReactionTurn("Вера", "sess-vera");
+
+        text.Should().Contain("эскалации");
+        text.Should().Contain("escalate:check");
+        text.Should().Contain("escalate:deviation");
+    }
 }

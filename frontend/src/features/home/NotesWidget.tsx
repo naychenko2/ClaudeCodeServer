@@ -5,7 +5,8 @@ import { api } from '../../lib/api';
 import { C, FONT } from '../../lib/design';
 import { ensureNotesLoaded } from '../../lib/notes';
 import type { HubTab } from '../../components/HubTabs';
-import { NewNoteDialog } from '../notes/NewNoteDialog';
+import { NewNoteDialog } from '../notes';
+import { useSubsystem } from '../../lib/subsystems';
 import { WidgetCard, WidgetAction, WidgetEmpty, relTime } from './WidgetCard';
 
 // Открыть заметку через общий SPA-канал (обработчик #/notes/{id} в App)
@@ -16,16 +17,24 @@ export function openNote(id: string): void {
 }
 
 // «Заметки»: последние измененные по всем источникам.
+// Гейт по подсистеме: выключена — виджет не рендерится.
 export function NotesWidget({ onHubTab }: { onHubTab: (t: HubTab) => void }) {
+  const notesOn = useSubsystem('notes');
   const [notes, setNotes] = useState<NoteSummary[]>([]);
   const [newOpen, setNewOpen] = useState(false);
 
+  // Хук вызываем всегда (Rules of Hooks): при выключенной подсистеме список
+  // не грузим — гейт внутри эффекта, а не перед ним.
   useEffect(() => {
+    if (!notesOn) return;
     api.notes.list().then(setNotes).catch(() => {});
-  }, []);
+  }, [notesOn]);
 
   // Стор заметок нужен диалогу (автодополнение папок) — подгружаем при открытии
   const openNew = () => { void ensureNotesLoaded(); setNewOpen(true); };
+
+  // Гейт по подсистеме — в разметке, а не в хуках: число хуков не зависит от флага.
+  if (!notesOn) return null;
 
   const recent = [...notes]
     .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))

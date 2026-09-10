@@ -1,7 +1,5 @@
 ﻿using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Tasks;
-using FluentAssertions;
-using Microsoft.Extensions.Configuration;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -734,5 +732,134 @@ public class TaskManagerTests : IDisposable
         Session.TaskDoneResolver!(live.Id).Should().BeFalse();
         // Done: TaskDone=true.
         Session.TaskDoneResolver!(done.Id).Should().BeTrue();
+    }
+
+    // ─── DroppedByHumanAt (волна 1 team-blocker-honest, дефект f3965801) ─────────
+    // После снятия человеком по карточке блокера поздний tasks_complete не должен
+    // переписывать Status/Outcome — иначе задача выглядит штатно выполненной с
+    // отчётом исполнителя (находка живой приёмки: штатный tasks_complete затирал
+    // пометку снятия через пять минут после клика «снять»). ResultMarkdown исполнителя
+    // дописывается к пометке снятия отдельной строкой, чтобы не потерять его работу.
+    // Мутация для проверки: убрать защиту в TaskManager.Update (ветка DroppedByHumanAt)
+    // — тест Update_ПослеСнятияНеТрогаетStatusИOutcomeДокладываетИсполнителяОтдельнойСтрокой
+    // сразу падает на StatusChanged и OutcomeChanged.
+
+    [Fact]
+    public void MarkDroppedByHuman_СтавитМеткуИСдвигаетUpdatedAt()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("drop"));
+        var before = task.UpdatedAt;
+
+        var marked = _sut.MarkDroppedByHuman(task.Id, DateTime.UtcNow);
+
+        marked.Should().NotBeNull();
+        marked!.DroppedByHumanAt.Should().NotBeNull();
+        marked.UpdatedAt.Should().BeOnOrAfter(before);
+        _sut.GetById(task.Id)!.DroppedByHumanAt.Should().NotBeNull();
+    }
+
+    [Fact]
+    public void Update_ПослеСнятияНеТрогаетStatusИOutcomeДокладываетИсполнителяОтдельнойСтрокой()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("dropped"));
+        // Штаб снял задачу: Update(Status=Done, ResultMarkdown=reason, Outcome=ClosedWithoutCheck)
+        // + MarkDroppedByHuman — имитируем реальный DropSubtaskAsync.
+        _sut.Update(task.Id, new UpdateTaskRequest(
+            Status: TaskItemStatus.Done,
+            ResultMarkdown: "Снято решением человека по карточке остановки (drop).",
+            Outcome: DefectOutcome.ClosedWithoutCheck));
+        _sut.MarkDroppedByHuman(task.Id, DateTime.UtcNow);
+        var snapshot = _sut.GetById(task.Id)!;
+        snapshot.Status.Should().Be(TaskItemStatus.Done);
+        snapshot.Outcome.Should().Be(DefectOutcome.ClosedWithoutCheck);
+        var originalResultMarkdown = snapshot.ResultMarkdown;
+
+        // Поздний tasks_complete от исполнителя: Status=Done, свой ResultMarkdown,
+        // свой Outcome. По ТЗ: Status/Outcome не меняются, ResultMarkdown дописывается.
+        _sut.Update(task.Id, new UpdateTaskRequest(
+            Status: TaskItemStatus.Done,
+            ResultMarkdown: "Исполнитель успел сделать A, B, C.",
+            Outcome: DefectOutcome.ClosedWithoutCheck));
+
+        var after = _sut.GetById(task.Id)!;
+        after.Status.Should().Be(TaskItemStatus.Done, "пометка снятия сильнее позднего доклада");
+        after.Outcome.Should().Be(DefectOutcome.ClosedWithoutCheck, "Outcome тоже не переписывается");
+        after.ResultMarkdown.Should().Contain(originalResultMarkdown);
+        after.ResultMarkdown.Should().Contain("Исполнитель успел сделать A, B, C.");
+        after.ResultMarkdown.Should().Contain("Доклад исполнителя после снятия");
+    }
+
+    [Fact]
+    public void Update_ПослеСнятияАгентскийПутьОтказываетВнятно()
+    {
+        // Агентский путь (MCP tasks_complete/tasks_update от исполнителя): защита от
+        // затирания снятой задачи — внятный InvalidOperationException вместо молчаливого
+        // 200 OK (находка фикс-волны 4: человек не понимал, почему задача не закрылась
+        // по tasks_complete после клика «снять»). Мутация для проверки: убрать
+        // throw в TaskManager.Update (ветка isAgentCall && DroppedByHumanAt != null) —
+        // метод отдаст Done без ошибки, тест упадёт на ShouldThrow<InvalidOperationException>().
+        var task = _sut.Create(null, "u", new CreateTaskRequest("dropped"));
+        _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done, Outcome: DefectOutcome.ClosedWithoutCheck));
+        _sut.MarkDroppedByHuman(task.Id, DateTime.UtcNow);
+
+        var act = () => _sut.Update(task.Id,
+            new UpdateTaskRequest(Status: TaskItemStatus.Done, ResultMarkdown: "Исполнитель хочет закрыть"),
+            isAgentCall: true);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*снята человеком*");
+        _sut.GetById(task.Id)!.Status.Should().Be(TaskItemStatus.Done,
+            "после отказа статус остаётся от штаба");
+    }
+
+    [Fact]
+    public void Update_ПослеСнятияЧеловекМожетВернутьВРаботу()
+    {
+        // Человеческий путь (HTTP PUT): человек перетащил карточку обратно в «В работе».
+        // Пометка DroppedByHumanAt снимается, статус применяется штатно — иначе человек
+        // не мог бы реабилитировать задачу после снятия (находка фикс-волны 4).
+        var task = _sut.Create(null, "u", new CreateTaskRequest("dropped"));
+        _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done, Outcome: DefectOutcome.ClosedWithoutCheck));
+        _sut.MarkDroppedByHuman(task.Id, DateTime.UtcNow);
+
+        _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.InProgress),
+            isAgentCall: false);
+
+        var after = _sut.GetById(task.Id)!;
+        after.Status.Should().Be(TaskItemStatus.InProgress,
+            "человек вправе вернуть снятую задачу в работу — иначе она навечно в Done");
+        after.DroppedByHumanAt.Should().BeNull(
+            "пометка снята — задача снова активна, защита не нужна");
+    }
+
+    [Fact]
+    public void Update_ПослеСнятияЧеловекОставившийВDoneНеСнимаетПометку()
+    {
+        // Граница: человек закрывает снятую задачу в Done ещё раз (редкий кейс — обычно
+        // человек возвращает в работу). Пометка DroppedByHumanAt остаётся — задача
+        // закрыта человеком, защита от позднего tasks_complete нужна.
+        var task = _sut.Create(null, "u", new CreateTaskRequest("dropped"));
+        _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done, Outcome: DefectOutcome.ClosedWithoutCheck));
+        _sut.MarkDroppedByHuman(task.Id, DateTime.UtcNow);
+
+        _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done),
+            isAgentCall: false);
+
+        var after = _sut.GetById(task.Id)!;
+        after.Status.Should().Be(TaskItemStatus.Done);
+        after.DroppedByHumanAt.Should().NotBeNull(
+            "пометка остаётся — задача закрыта человеком, защита от позднего tasks_complete нужна");
+    }
+
+    [Fact]
+    public void Update_БезСнятияПоведениеПрежнее()
+    {
+        // Контроль: на обычной задаче защита не мешает — Status меняется штатно.
+        var task = _sut.Create(null, "u", new CreateTaskRequest("normal"));
+        task.DroppedByHumanAt.Should().BeNull();
+
+        _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+
+        _sut.GetById(task.Id)!.Status.Should().Be(TaskItemStatus.Done);
     }
 }

@@ -27,6 +27,7 @@ import {
 import { stripVoiceMarker } from '../../lib/tts';
 import { VoiceDigestNote, parseVoiceDigest } from './VoiceDigestNote';
 import { useContextPersona } from '../../lib/contextPersona';
+import { useSubsystem } from '../../lib/subsystems';
 import { ChatProjectContext, ChatTreePathContext, ChatSessionContext, PersonaContext, SpeakingItemContext, useAssistantName } from './contexts';
 import { PromptSnapshotDialog } from '../../features/chat/PromptSnapshotDialog';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
@@ -426,7 +427,10 @@ function TextMessageView({ text, online, onRetry, streaming, model, ts, promptSn
   // карточкой ленты, а не концом этого ответа
   footer?: ReactNode;
 }) {
-  // «В заметку»: сохранение ответа в базу заметок (проект → notes/, чат → personal)
+  // «В заметку»: сохранение ответа в базу заметок (проект → notes/, чат → personal).
+  // Гейт подсистемы: при выключенной notes кнопку НЕ рисуем (иначе клик даст 500),
+  // см. волну 3 — паттерн как в FileViewer/FileExplorer/WorkspacePage.
+  const notesOn = useSubsystem('notes');
   const project = useContext(ChatProjectContext);
   const [savedNoteId, setSavedNoteId] = useState<string | null>(null);
   const [savingNote, setSavingNote] = useState(false);
@@ -468,7 +472,7 @@ function TextMessageView({ text, online, onRetry, streaming, model, ts, promptSn
       {!streaming && (
         <PostActionBar>
           <CopyButton text={text} label="Скопировать ответ" />
-          {online && (
+          {online && notesOn && (
             <>
               {savedNoteId && (
                 <button onClick={() => openNoteById(savedNoteId)}

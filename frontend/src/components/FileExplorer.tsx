@@ -22,11 +22,11 @@ function isKnowledgeIndexable(filename: string): boolean {
 }
 import { toggleSyncMark, useSyncMarks, computeSyncState, isSyncing, isDownloaded, loadSyncMarks, loadDownloadedSet } from '../lib/sync';
 import { bumpNotes, getNotesSnapshot, useNotesByFile } from '../lib/notes';
-import { IconNotes } from '../features/notes/shared';
-import { NewNoteDialog } from '../features/notes/NewNoteDialog';
+import { IconNotes, NewNoteDialog } from '../features/notes';
 import { onFilesChanged } from '../lib/signalr';
 import { showToast } from '../lib/toast';
 import { beginAiBusy, endAiBusy } from '../lib/ai/busy';
+import { useSubsystem } from '../lib/subsystems';
 
 // Форматы, которые markitdown умеет превращать в Markdown (для пункта «Трансформировать в Markdown»)
 const MD_CONVERTIBLE = new Set(['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp', 'epub', 'csv', 'rtf', 'html', 'htm', 'msg']);
@@ -713,8 +713,14 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   const online = useOnline();
   const hasPanelHeader = useHasPanelHeader();
   const marks = useSyncMarks(project.id);
+  // Гейт по подсистеме заметок: при выключенной — бейджи заметок у файлов и
+  // пункт «Заметка» в меню создания пропадают. Хук вызываем всегда (Rules of
+  // Hooks); под подсистемой результат всё равно пуст, потому что стор заметок
+  // остаётся в дефолтном состоянии.
+  const notesOn = useSubsystem('notes');
   // Привязки «файл → заметки» (frontmatter file:) — бейдж у файлов дерева
-  const notesByFile = useNotesByFile(project.id);
+  const notesByFileRaw = useNotesByFile(project.id);
+  const notesByFile = notesOn ? notesByFileRaw : new Map<string, never>();
   const initial = _explorerStore.get(project.id);
   const [dirCache, setDirCache] = useState<Map<string, FileEntry[]>>(() => initial?.dirCache ?? new Map());
   const [expanded, setExpanded] = useState<Set<string>>(() => initial?.expanded ?? new Set());
@@ -1574,8 +1580,9 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   const createMenuEl = createMenu && (
     <Menu anchor={createMenu} minWidth={230} maxHeight={240} onClose={() => setCreateMenu(null)}>
       {/* В vault заметок первым пунктом идёт заметка: обычный файл там тоже можно
-          создать, но .md через notes-API получает бэклинки и попадает в граф */}
-      {inNotes && (
+          создать, но .md через notes-API получает бэклинки и попадает в граф.
+          Подсистема выключена — заметки как формата не существует, пункт скрыт */}
+      {inNotes && notesOn && (
         <MenuItem
           icon={<IconNotes size={15} />}
           label="Заметка"
@@ -2114,8 +2121,10 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       })()}
 
       {/* Диалог «Новая заметка» из раздела файлов (папка vault → source=проект;
-          file — «Заметка о файле» с привязкой frontmatter file:) */}
-      {noteDialog && (
+          file — «Заметка о файле» с привязкой frontmatter file:). Подсистема
+          выключена — состояние noteDialog не должно было появиться, но на
+          всякий случай держим гейт и здесь: окошко не откроется. */}
+      {notesOn && noteDialog && (
         <NewNoteDialog
           defaults={{ source: project.id, folder: noteDialog.folder, file: noteDialog.file }}
           onClose={() => setNoteDialog(null)}

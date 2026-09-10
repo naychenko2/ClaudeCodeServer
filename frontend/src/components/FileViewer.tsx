@@ -39,10 +39,9 @@ import { DocPropsPanel } from '../features/docs/DocPropsPanel';
 import { useDocProps } from '../features/docs/useDocProps';
 import { showToast } from '../lib/toast';
 import { beginAiBusy, endAiBusy } from '../lib/ai/busy';
-import { DocCommentedMarkdown } from '../features/notes/DocComments';
+import { DocCommentedMarkdown, NoteConnections, NoteView } from '../features/notes';
 import { useNotes, ensureNotesLoaded, existingTitleSet, useNotesVersion, useNotesByFile } from '../lib/notes';
-import { NoteConnections } from '../features/notes/NoteConnections';
-import { NoteView } from '../features/notes/NoteView';
+import { useSubsystem } from '../lib/subsystems';
 import type { NoteDetail } from '../types';
 import { MermaidDiagram } from './MermaidDiagram';
 import { DocumentViewer } from './DocumentViewer';
@@ -66,9 +65,13 @@ import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 const CodeEditor = lazy(() =>
   import('./CodeEditor').then(m => ({ default: m.CodeEditor }))
 );
-// Live preview-редактор заметок — для правки notes/*.md (vault проекта)
+// Live preview-редактор заметок — для правки notes/*.md (vault проекта). Импорт
+// через публичный index — прямой путь к внутреннему модулю ломает правило
+// «внешние импорты только через features/notes/index.ts». При выключенной
+// подсистеме сам импорт остаётся (lazy), но рендер ниже откажется его
+// показывать.
 const NoteEditor = lazy(() =>
-  import('../features/notes/NoteEditor').then(m => ({ default: m.NoteEditor }))
+  import('../features/notes').then(m => ({ default: m.NoteEditor }))
 );
 
 SyntaxHighlighter.registerLanguage('tsx', tsx);
@@ -345,6 +348,12 @@ function AudioFilePlayer({ src, mimeType, fileName, fileSizeMb }: {
 
 export function FileViewer({ project, filePath, onClose, onToggleFullscreen, fullscreen, isMobile, onOpenSidebar, initialTab, gitStagePath, scrollToLine, onOpenFile, scrollToAnchor, onFileBack, onFileForward, canFileBack, canFileForward, onTocChange, changedBy, onOpenChat }: Props) {
   const online = useOnline();
+  // Подсистема заметок выключена: vault-рендер (NoteView), редактор заметки, граф
+  // связей и комментарии документа пропадают. Файл из папки notes/*.md показывается
+  // обычным MarkdownViewer — раньше vault требовал NoteView, и без подсистемы
+  // пытаться открыть заметку бессмысленно. useNotesByFile вызываем всегда
+  // (Rules of Hooks); при выключенной подсистеме карта остаётся пустой.
+  const notesOn = useSubsystem('notes');
   // Хост-режим: путь абсолютный (вне корня проекта) — файл открыт карточкой инструмента/
   // изменённого файла чата, живущего в другом дереве. Контент — через /host-files/content,
   // а не projects/{id}/files/*: обычные project-эндпоинты дали бы 403 (SafeJoin).
@@ -353,11 +362,13 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const allNotes = useNotes();
   // Заметки, привязанные к ЭТОМУ файлу (frontmatter file:) — полоса «Заметки» под
   // тулбаром. В хост-режиме путь абсолютный и в ключи карты не попадает — пусто.
-  const notesByFile = useNotesByFile(project.id);
-  const linkedNotes = isHostMode ? [] : (notesByFile.get(filePath.replace(/\\/g, '/').replace(/^\/+/, '')) ?? []);
+  const notesByFileRaw = useNotesByFile(project.id);
+  const notesByFile = notesOn ? notesByFileRaw : new Map<string, never>();
+  const linkedNotes = isHostMode || !notesOn ? [] : (notesByFile.get(filePath.replace(/\\/g, '/').replace(/^\/+/, '')) ?? []);
   // На абсолютном пути эвристика ложно срабатывает (мало ли где встретится «notes/»
   // за пределами проекта) — в хост-режиме файл заметкой не считается никогда.
-  const isNotesFile = !isHostMode && /(^|\/)notes\//i.test(filePath);
+  // Подсистема выключена — то же: notes/ рендерится как обычный markdown.
+  const isNotesFile = !isHostMode && notesOn && /(^|\/)notes\//i.test(filePath);
   useEffect(() => { if (isNotesFile) void ensureNotesLoaded(); }, [isNotesFile]);
   const noteTitles = useMemo(() => existingTitleSet(allNotes), [allNotes]);
   const openNoteByTitle = (t: string) => {
@@ -2046,6 +2057,10 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
                   : isMarkdown && isHostMode
                   // Хост-режим: без комментариев к документу и резолва картинок —
                   // обе фичи проектные (scope=project.id), для файла вне проекта не годятся
+                  ? <div data-selection-scope="doc" data-selection-priority="2"><MarkdownViewer content={content} onDocLink={handleDocLink} /></div>
+                  : isMarkdown && !notesOn
+                  // Подсистема заметок выключена: комментариев к документу нет,
+                  // DocCommentedMarkdown не нужен — обычный MarkdownViewer
                   ? <div data-selection-scope="doc" data-selection-priority="2"><MarkdownViewer content={content} onDocLink={handleDocLink} /></div>
                   : isMarkdown
                   ? (

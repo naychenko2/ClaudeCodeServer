@@ -30,6 +30,12 @@ export const archiveApi = {
 // session.SummaryNoteId проставляется сервером (см. SessionManager.SetSummaryNoteId).
 // Не кладём в archiveApi — это не архивный эндпоинт, а общий «Итог сессии»,
 // которым карточка архива просто пользуется.
+//
+// Гейт по подсистеме (заметки): вызывающая сторона (SessionList/ChatList) не
+// передаёт `onSaveAsNote` в ChatCard при выключенной подсистеме, и пункт меню
+// «Сохранить в заметки» не появляется. Сам запрос без подсистемы ушёл бы на
+// бэк и получил 4xx — лишний шум. Поэтому и здесь не делаем: сервер сам
+// вернёт 4xx, если подсистема выключена в инстансе.
 export async function saveArchiveSessionAsNote(sessionId: string): Promise<NoteDetail> {
   return api.sessions.summary(sessionId);
 }

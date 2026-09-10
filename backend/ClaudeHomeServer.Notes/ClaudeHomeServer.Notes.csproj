@@ -34,4 +34,12 @@
     <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- JWT-стек для `JwtRegisteredClaimNames.Sub` в `NotesController.UserId` (claim sub
+         владельца). Тот же приём, что в `ClaudeHomeServer.Yandex.csproj` — пакет явно
+         ради самодостаточности вертикали; без него `System.IdentityModel.Tokens.Jwt`
+         не подтягивается через FrameworkReference. -->
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.0" />
+  </ItemGroup>
+
 </Project>

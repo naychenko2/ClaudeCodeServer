@@ -74,8 +74,8 @@ public class TaskExecutionServiceJoinTests : IDisposable
 
         var sessions = CreateSessionManager(config, projectManager, userStore, appSettings, personas, knowledge, notesKb, broadcaster);
 
-        _sut = new TaskExecutionService(_tasks, sessions, personas, broadcaster, push, notesKb, notif,
-            NullLogger<TaskExecutionService>.Instance, config);
+        _sut = new TaskExecutionService(_tasks, sessions, personas, broadcaster, push, notif,
+            NullLogger<TaskExecutionService>.Instance, config, kb: notesKb);
     }
 
     public void Dispose()
@@ -101,8 +101,8 @@ public class TaskExecutionServiceJoinTests : IDisposable
         server.Setup(s => s.Features).Returns(new Microsoft.AspNetCore.Http.Features.FeatureCollection());
         var flags = new FeatureFlagService(userStore);
         var notesSvc = new NotesService(projectManager, config, NullLogger<NotesService>.Instance);
-        var bindings = new PersonaBindingsService(personas, projectManager, new WorkspaceKnowledgeStore(config), notesSvc, notesKb,
-            knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance);
+        var bindings = new PersonaBindingsService(personas, projectManager, new WorkspaceKnowledgeStore(config),
+            knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
         var historyService = new ChatHistoryService(config);

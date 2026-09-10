@@ -1,16 +1,26 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
-using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
-using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Notes;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.SignalR;
 
-namespace ClaudeHomeServer.Controllers;
+namespace ClaudeHomeServer.Notes.Controllers;
 
 // Obsidian-совместимая база заметок, per-owner (изоляция как у задач — по claim sub).
+//
+// Контроллер живёт в вынесенной вертикали `ClaudeHomeServer.Notes` (Этап 5,
+// волна 2). Сборка подключается к MVC атрибутом `[assembly: ApplicationPart("...")]`
+// (генерируется MSBuild благодаря Web SDK у Notes.csproj). Гейт вертикали
+// `Subsystems:Notes:Enabled` снимает эту часть в композиции Main
+// (`ConfigureApplicationPartManager` в Program.cs) — при `Enabled=false` MVC не
+// находит action и маршруты `/api/notes/*` отдают общий 404, никаких обращений
+// к сервисам вертикали не происходит.
+//
+// Шов `INotesHubNotifier` (Core) заменил `IHubContext<SessionHub>` (Main):
+// реализация в Main (`NotesHubNotifier` поверх `ISessionBroadcaster`)
+// сама конструирует `NotesChangedMessage` и шлёт в группу владельца.
+// Core-контракт намеренно не видит тип сообщения — обратной зависимости нет.
 [ApiController]
 [Authorize]
 [Route("api/notes")]
@@ -20,16 +30,16 @@ public class NotesController : ControllerBase
     private readonly NotesKnowledgeService _kb;
     private readonly NotesAiService _ai;
     private readonly NoteTaskSyncService _noteTasks;
-    private readonly IHubContext<SessionHub> _hub;
+    private readonly INotesHubNotifier _hubNotifier;
 
     public NotesController(NotesService notes, NotesKnowledgeService kb, NotesAiService ai,
-        NoteTaskSyncService noteTasks, IHubContext<SessionHub> hub)
+        NoteTaskSyncService noteTasks, INotesHubNotifier hubNotifier)
     {
         _notes = notes;
         _kb = kb;
         _ai = ai;
         _noteTasks = noteTasks;
-        _hub = hub;
+        _hubNotifier = hubNotifier;
     }
 
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -38,8 +48,11 @@ public class NotesController : ControllerBase
     {
         // Любая мутация — отложенная синхронизация семантического индекса (дифф по хешам)
         _kb.QueueSync(UserId);
-        return _hub.Clients.Group("user_" + UserId)
-            .SendAsync("message", new NotesChangedMessage(action, noteId));
+        // Шов `INotesHubNotifier` исторически принимает `string noteId` (не nullable);
+        // события уровня папки (`folder_created`, `folder_deleted`, `updated` без
+        // конкретной заметки) шлём с пустым id — клиент различает действия по полю
+        // `Action`, а не по наличию `NoteId`.
+        return _hubNotifier.BroadcastNotesChangedAsync(UserId, action, noteId ?? string.Empty);
     }
 
     // Список заметок владельца (все источники). source — фильтр по источнику, q — поиск.

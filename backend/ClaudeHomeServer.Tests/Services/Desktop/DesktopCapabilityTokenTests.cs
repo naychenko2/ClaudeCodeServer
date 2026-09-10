@@ -3,6 +3,7 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Encodings.Web;
+using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Desktop;
@@ -61,6 +62,13 @@ public class DesktopCapabilityTokenTests : IDisposable
             signingCredentials: new SigningCredentials(key, SecurityAlgorithms.HmacSha256)));
     }
 
+    // Проверка токена и разбор вызывателя разнесены по швy IDesktopCapabilityTokens
+    // (Этап 5, вынос Desktop): подпись и audience проверяет JwtService, claims читает
+    // DesktopCaller. Тесты продолжают проверять пару целиком — как её зовёт схема
+    // аутентификации канала.
+    private DesktopCaller? ValidateCaller(string? token) =>
+        DesktopCaller.FromPrincipal(_sut.ValidateDesktopPrincipal(token));
+
     // --- Выдача ---
 
     [Fact]
@@ -71,7 +79,7 @@ public class DesktopCapabilityTokenTests : IDisposable
         var jwt = new JwtSecurityTokenHandler().ReadJwtToken(token);
 
         jwt.Issuer.Should().Be("ClaudeHomeServer");
-        jwt.Audiences.Should().ContainSingle().Which.Should().Be(JwtService.DesktopAudience);
+        jwt.Audiences.Should().ContainSingle().Which.Should().Be(DesktopProtocol.CapabilityAudience);
         jwt.Claims.Should().Contain(c => c.Type == JwtRegisteredClaimNames.Sub && c.Value == "owner-1");
         jwt.Claims.Should().Contain(c => c.Type == DesktopCaller.SessionClaim && c.Value == "chat-1");
         jwt.Claims.Should().Contain(c => c.Type == DesktopCaller.DeviceClaim && c.Value == "dev-1");
@@ -84,8 +92,8 @@ public class DesktopCapabilityTokenTests : IDisposable
 
         var jwt = new JwtSecurityTokenHandler().ReadJwtToken(token);
 
-        JwtService.DesktopTokenLifetime.Should().BeLessThan(TimeSpan.FromHours(1));
-        jwt.ValidTo.Should().BeCloseTo(DateTime.UtcNow.Add(JwtService.DesktopTokenLifetime), TimeSpan.FromMinutes(1));
+        DesktopProtocol.CapabilityTokenLifetime.Should().BeLessThan(TimeSpan.FromHours(1));
+        jwt.ValidTo.Should().BeCloseTo(DateTime.UtcNow.Add(DesktopProtocol.CapabilityTokenLifetime), TimeSpan.FromMinutes(1));
     }
 
     [Fact]
@@ -93,7 +101,7 @@ public class DesktopCapabilityTokenTests : IDisposable
     {
         // Устройство на момент запуска CLI может быть ещё неизвестно (сеанс рук стартует
         // с самого устройства) — claim did тогда просто отсутствует
-        var caller = _sut.ValidateDesktopToken(_sut.IssueDesktopToken("owner-1", "chat-1"));
+        var caller = ValidateCaller(_sut.IssueDesktopToken("owner-1", "chat-1"));
 
         caller.Should().NotBeNull();
         caller!.DeviceId.Should().BeNull();
@@ -106,7 +114,7 @@ public class DesktopCapabilityTokenTests : IDisposable
     [Fact]
     public void ValidateDesktopToken_OwnToken_ReturnsCaller()
     {
-        var caller = _sut.ValidateDesktopToken(_sut.IssueDesktopToken("owner-1", "chat-1", "dev-1"));
+        var caller = ValidateCaller(_sut.IssueDesktopToken("owner-1", "chat-1", "dev-1"));
 
         caller.Should().Be(new DesktopCaller("owner-1", "chat-1", "dev-1"));
     }
@@ -117,7 +125,7 @@ public class DesktopCapabilityTokenTests : IDisposable
         // Обычный пользовательский JWT (aud ClaudeHomeServer) грань десктопа не открывает
         var user = _users.Add("alice", "password-1", "user");
 
-        _sut.ValidateDesktopToken(_sut.Issue(user).token).Should().BeNull();
+        ValidateCaller(_sut.Issue(user).token).Should().BeNull();
     }
 
     [Fact]
@@ -125,13 +133,13 @@ public class DesktopCapabilityTokenTests : IDisposable
     {
         // Сервисный JWT владельца (typ=svc) лежит в env КАЖДОГО хода, включая ночной
         // tasks-executor: принять его здесь — значит отдать руки любому чату владельца
-        _sut.ValidateDesktopToken(_sut.IssueServiceToken("owner-1")).Should().BeNull();
+        ValidateCaller(_sut.IssueServiceToken("owner-1")).Should().BeNull();
     }
 
     [Fact]
     public void ValidateDesktopToken_OfficeToken_Rejected()
     {
-        _sut.ValidateDesktopToken(_sut.IssueOfficeToken("owner-1", "proj-A", "a.docx")).Should().BeNull();
+        ValidateCaller(_sut.IssueOfficeToken("owner-1", "proj-A", "a.docx")).Should().BeNull();
     }
 
     [Fact]
@@ -153,41 +161,41 @@ public class DesktopCapabilityTokenTests : IDisposable
         var foreign = new SymmetricSecurityKey(RandomNumberGenerator.GetBytes(48));
         var forged = new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(
             issuer: "ClaudeHomeServer",
-            audience: JwtService.DesktopAudience,
+            audience: DesktopProtocol.CapabilityAudience,
             claims: [new Claim(JwtRegisteredClaimNames.Sub, "intruder"),
                      new Claim(DesktopCaller.SessionClaim, "chat-1")],
             expires: DateTime.UtcNow.AddMinutes(5),
             signingCredentials: new SigningCredentials(foreign, SecurityAlgorithms.HmacSha256)));
 
-        _sut.ValidateDesktopToken(forged).Should().BeNull();
+        ValidateCaller(forged).Should().BeNull();
     }
 
     [Fact]
     public void ValidateDesktopToken_Expired_Rejected()
     {
-        var expired = SignWithRealSecret(JwtService.DesktopAudience,
+        var expired = SignWithRealSecret(DesktopProtocol.CapabilityAudience,
             [new Claim(JwtRegisteredClaimNames.Sub, "owner-1"), new Claim(DesktopCaller.SessionClaim, "chat-1")],
             DateTime.UtcNow.AddMinutes(-1));
 
-        _sut.ValidateDesktopToken(expired).Should().BeNull();
+        ValidateCaller(expired).Should().BeNull();
     }
 
     [Fact]
     public void ValidateDesktopToken_WithoutSessionClaim_Rejected()
     {
         // Без чата токен бессмыслен: сверять с чатом активного сеанса рук нечего
-        var noSession = SignWithRealSecret(JwtService.DesktopAudience,
+        var noSession = SignWithRealSecret(DesktopProtocol.CapabilityAudience,
             [new Claim(JwtRegisteredClaimNames.Sub, "owner-1")]);
 
-        _sut.ValidateDesktopToken(noSession).Should().BeNull();
+        ValidateCaller(noSession).Should().BeNull();
     }
 
     [Fact]
     public void ValidateDesktopToken_GarbageAndNull_Rejected()
     {
-        _sut.ValidateDesktopToken("not-a-token").Should().BeNull();
-        _sut.ValidateDesktopToken(null).Should().BeNull();
-        _sut.ValidateDesktopToken("   ").Should().BeNull();
+        ValidateCaller("not-a-token").Should().BeNull();
+        ValidateCaller(null).Should().BeNull();
+        ValidateCaller("   ").Should().BeNull();
     }
 
     // --- Схема аутентификации ---

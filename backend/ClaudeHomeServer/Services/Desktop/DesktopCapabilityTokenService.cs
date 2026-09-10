@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Services.Desktop;
 
@@ -12,7 +14,7 @@ namespace ClaudeHomeServer.Services.Desktop;
 /// отпечаток запуска CLI не входит (BuildLaunchSignature), лишний перевыпуск на каждый
 /// ход означал бы новый секрет в каждом временном конфиге хода без единой причины.
 /// </summary>
-public sealed class DesktopCapabilityTokenService(JwtService jwt)
+public sealed class DesktopCapabilityTokenService(IDesktopCapabilityTokens jwt)
 {
     // Перевыпуск за минуту до истечения: ход может начаться прямо на границе срока
     private static readonly TimeSpan Slack = TimeSpan.FromMinutes(1);
@@ -23,7 +25,7 @@ public sealed class DesktopCapabilityTokenService(JwtService jwt)
     public string TokenFor(string ownerId, string sessionId) =>
         _tokens.AddOrUpdate(sessionId,
             _ => (jwt.IssueDesktopToken(ownerId, sessionId), DateTime.UtcNow),
-            (_, old) => DateTime.UtcNow - old.IssuedAt > JwtService.DesktopTokenLifetime - Slack
+            (_, old) => DateTime.UtcNow - old.IssuedAt > DesktopProtocol.CapabilityTokenLifetime - Slack
                 ? (jwt.IssueDesktopToken(ownerId, sessionId), DateTime.UtcNow)
                 : old).Token;
 

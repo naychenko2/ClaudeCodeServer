@@ -86,18 +86,15 @@ public sealed record DesktopHandsStartResult(bool Started, string Outcome, strin
 /// <summary>
 /// Рассылка статуса сеанса (бейдж «руки на home»). Отдельный интерфейс, чтобы сеанс жил
 /// без SignalR и SessionManager в тестах.
+///
+/// Боевая реализация живёт в Main (<c>Services/Composition/DesktopHandsNotifier.cs</c>):
+/// рассылка идёт через <c>SessionManager.BroadcastSessionMessageAsync</c> — это не «отправить
+/// в группу» (<c>ISessionBroadcaster</c>), а веер по session/project/owner-группам с
+/// проставлением SessionId, и повторять его в вертикали значило бы дублировать логику ядра.
 /// </summary>
 public interface IDesktopHandsNotifier
 {
     Task StatusAsync(DesktopHandsSession session, bool active, string? reason, CancellationToken ct = default);
-}
-
-/// <summary>Боевая рассылка: событие ленты чата через SessionManager.</summary>
-public sealed class DesktopHandsNotifier(SessionManager sessions) : IDesktopHandsNotifier
-{
-    public Task StatusAsync(DesktopHandsSession s, bool active, string? reason, CancellationToken ct = default) =>
-        sessions.BroadcastSessionMessageAsync(s.ChatSessionId, new DesktopSessionMessage(
-            active, s.DeviceName, s.ChatSessionId, s.ChatName, s.StartedAt, s.ExpiresAt, reason));
 }
 
 /// <summary>

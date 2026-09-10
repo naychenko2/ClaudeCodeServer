@@ -105,40 +105,12 @@ public class SessionSummaryService(
     }
 
     // Транскрипт для LLM: реплики пользователя/Claude + однострочные пометки об инструментах
-    // и файлах; thinking и метаданные пропускаются. Переполнение бюджета — голова (цель
-    // сессии) + хвост (развязка), середина сокращается.
-    internal static string BuildTranscript(IReadOnlyList<StoredMessage> messages, int budget)
-    {
-        var sb = new StringBuilder();
-        foreach (var m in messages)
-        {
-            switch (m)
-            {
-                case StoredUserMessage u when !string.IsNullOrWhiteSpace(u.Text):
-                    sb.AppendLine("Пользователь:");
-                    sb.AppendLine(u.Text.Trim());
-                    sb.AppendLine();
-                    break;
-                // Текст сабагента (ParentToolUseId != null) — не реплика Claude в диалоге
-                case StoredTextMessage { ParentToolUseId: null } t when !string.IsNullOrWhiteSpace(t.Text):
-                    sb.AppendLine("AI:");
-                    sb.AppendLine(t.Text.Trim());
-                    sb.AppendLine();
-                    break;
-                case StoredToolUseMessage tu when !string.IsNullOrEmpty(tu.Name):
-                    sb.AppendLine($"[инструмент {tu.Name}]");
-                    break;
-                case StoredFileChangedMessage f:
-                    sb.AppendLine($"[изменён файл {f.Path} +{f.Added}/-{f.Removed}]");
-                    break;
-            }
-        }
-        var text = sb.ToString().Trim();
-        if (text.Length <= budget) return text;
-        var head = budget / 5;
-        var tail = budget - head;
-        return text[..head] + "\n\n[…транскрипт сокращён…]\n\n" + text[^tail..];
-    }
+    // и файлах. Тело переехало в спину — `Services.SessionTranscript.Build` (Этап 5, волна 3:
+    // функцию зовут вертикали Memory/Dossiers, а из отдельной сборки Main не виден). Здесь
+    // остался тонкий форвардер ради семи вызывающих внутри Main — тот же приём, что
+    // `FileService.SafeJoin` → `SafePath.Join`.
+    internal static string BuildTranscript(IReadOnlyList<StoredMessage> messages, int budget) =>
+        SessionTranscript.Build(messages, budget);
 
     internal static string BuildPrompt(string? sessionName, string transcript)
     {

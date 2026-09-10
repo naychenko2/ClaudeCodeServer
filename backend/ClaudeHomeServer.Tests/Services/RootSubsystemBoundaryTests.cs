@@ -89,6 +89,10 @@ public class RootSubsystemBoundaryTests
         // Turn — отдельная сборка (Этап 5, вынос Turn): форс-загрузка нужна, чтобы
         // сторож видел сборку Turn.dll и её root-типы.
         _ = typeof(ClaudeHomeServer.Services.Turn.IPromptSectionContributor).Assembly;
+        // Dossiers/Memory — отдельные сборки (Этап 5, волна 3, финал): форс-загрузка нужна,
+        // чтобы сторож видел сборки Dossiers.dll / Memory.dll и их root-типы.
+        _ = typeof(ClaudeHomeServer.Services.Dossiers.DossiersSubsystem).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Memory.MemorySubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Backgrounds.BackgroundsSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.ProjectIcons.ProjectIconsSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Terminal.TerminalService).Assembly;

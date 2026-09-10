@@ -105,7 +105,7 @@ public sealed class TeamMemoryAutolearnService : IHostedService
         try
         {
             var history = await _sessions.GetHistoryAsync(sessionId);
-            var transcript = SessionSummaryService.BuildTranscript(history, TranscriptBudget);
+            var transcript = SessionTranscript.Build(history, TranscriptBudget);
             if (string.IsNullOrWhiteSpace(transcript)) return;
 
             if (Memory.AutolearnGate.CheckContent(history, _minTurnChars) != Memory.AutolearnSkipReason.None)

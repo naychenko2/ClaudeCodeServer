@@ -9,7 +9,10 @@ namespace ClaudeHomeServer.Services.Dossiers;
 // Все операции экспорта/импорта идут через IGitRefSnapshotStore с этими константами как
 // аргументами. Сторонняя вертикаль, которой понадобится собственная ветка-паспорт,
 // заводит свой клон этого класса и зовёт те же методы со своими значениями.
-internal static class DossierBranch
+// Публичный, а не internal: константы ветки зовёт `DossiersController` (Main) — потребитель
+// из ДРУГОЙ сборки после выноса вертикали в свой `.csproj` (Этап 5, волна 3). Открывать Main
+// весь internal вертикали через `InternalsVisibleTo` ради одного типа было бы шире, чем нужно.
+public static class DossierBranch
 {
     // Полный ref ветки экспорта паспортов изменений.
     public const string Ref = "refs/heads/ccs/dossiers/v1";

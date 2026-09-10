@@ -33,29 +33,29 @@ namespace ClaudeHomeServer.Services.Dossiers;
 // Границы (сознательные):
 // - Источник истины — свой стор `data/dossiers/*`. Бэкап идёт общим правилом `data/`,
 //   отдельно ничего не прописываем.
-// - `Git.GitService` (Services.Git) — захват коммитов (DossierCaptureService.cs:53),
-//   recall (DossierRecallService), автовыгрузка/автоимпорт (DossierAutoExporter/
-//   Importer). TODO на шов: завести `IGitGuard` в Services.Git и перевести вертикаль
-//   на него — по аналогии с Deploy→Git.
-// - `CodeGraph.CodeGraphService` (Services.CodeGraph) — обогащение паспортов графом
-//   кода (DossierCaptureService.cs:54, DossierRecallService). TODO на шов —
-//   `ICodeGraphSnapshot` или аналог.
-// - `ICheapTextRunner` (Services.Llm) — выжимка паспортов и конспектов через локальную
-//   модель или haiku (DossierCaptureService, DossierDiscussionService).
-// - `Services.Memory` — общий слой Dify-синка: `MemoryDocRef`/`MemoryDifyDebouncer`
-//   используются в `DossierStore`/`DossierAutoExporter` для той же дебаунс-семантики,
-//   что и у `PersonaMemoryService`/`TeamMemoryService`. Префикс-шов, как у `Git`/`Deploy`.
-// - Прочие типы корня Services (SessionManager/ProjectManager/TaskManager/FileService/
-//   UserStore/FeatureFlagService) — «вертикаль → спинка» (общая инфраструктура
-//   доменных моделей), как у `Git`/`Spend`/`Tts`/`Images`/`Deploy`.
-// - `Knowledge.KnowledgeService`/`Knowledge.KnowledgeSyncTarget` (Services.Knowledge
-//   после переноса шага 6) — клиент Dify в `DossierStore` и участие в реконсайлере;
-//   точечный allow-list, см. Boundaries[Dossiers].
-// - `Protocol.StoredMessage` (точечный allow-list) — поля async-state-машин
-//   `DossierCaptureService+<BuildTranscriptAsync>d__39` и
-//   `DossierDiscussionService+<EnsureOneAsync>d__10` (сами методы private/internal —
-//   сторож их сигнатуры не читает). `ServerMessage` тут НЕ нужен — присутствует только в
-//   private-методе `OnSessionMessageAsync`, рефлексия private не сканирует.
+// - Вертикаль живёт в отдельной сборке `ClaudeHomeServer.Dossiers` (Этап 5, волна 3,
+//   финал), единственный `ProjectReference` — на Core. Ссылок на Main нет ни одной, и
+//   держит это компилятор, а не только сторож границ: allow-list в Boundaries[Dossiers]
+//   ПУСТ поверх общей спинки.
+// - Всё, что нужно от остальной системы, идёт Core-швами: `IGitRefSnapshotStore`
+//   (снапшот-реф ветки паспортов; владение константами — своё, см. `DossierBranch`),
+//   `IGitCommitInspector` (инспекция коммитов при захвате), `ICodeGraphInspector`
+//   (обогащение паспортов графом кода), `ICheapTextRunner` (выжимка паспортов и
+//   конспектов), `ISessionDirectory`/`IProjectManager`/`IUserStore`/`ITaskLookup`,
+//   `IFeatureFlagGate` (гейт флага `change-dossiers-recall`), `IKnowledgeIndex`
+//   (клиент Dify) и `IKnowledgeSyncParticipant` (участие в реконсайлере),
+//   `SessionIdGuard` (валидация id из трейлера коммита), `SessionTranscript`
+//   (сборка транскрипта под паспорт), `SessionChangedPaths` (нормализация якорей),
+//   `InstanceSecretFiles` (реестр имён секретов инстанса).
+// - Общий слой Dify-синка (`MemoryDocRef`/`MemoryDifyDebouncer`/`MemorySyncItem`,
+//   та же дебаунс-семантика, что у памяти персон) живёт в Core, `Core/Services/Memory/`.
+// - `IDossierRecallSource` (Core) — шов НАРУЖУ: его реализует `DossierRecallService`,
+//   а зовёт вертикаль Memory из auto-recall персоны. Форвардер регистрируем сами (ниже),
+//   потому что контракт объявляет сторона-поставщик.
+// - `ClaudeHomeServer.Protocol` — WS-контракт, часть общей спинки (Core):
+//   `StoredMessage` в полях async-state-машин
+//   `DossierCaptureService+<BuildTranscriptAsync>d__NN` и
+//   `DossierDiscussionService+<EnsureOneAsync>d__NN`.
 //
 //
 public sealed class DossiersSubsystem : IAppSubsystem
@@ -70,6 +70,11 @@ public sealed class DossiersSubsystem : IAppSubsystem
         services.AddSingleton<DossierStore>();
         services.AddSingleton<DossierCaptureState>();
         services.AddSingleton<DossierRecallService>();
+        // Форвардер Core-шва пассивного recall: его потребитель — вертикаль Memory
+        // (`PersonaMemoryService.BuildRecallAsync`), и объявляет контракт сторона-поставщик,
+        // иначе связь была бы прямой «вертикаль → вертикаль» (Этап 5, волна 3).
+        services.AddSingleton<IDossierRecallSource>(
+            sp => sp.GetRequiredService<DossierRecallService>());
         services.AddSingleton<DossierDiscussionStore>();
         services.AddSingleton<DossierDiscussionService>();
         services.AddGatedHostedService<DossierCaptureService>(config);

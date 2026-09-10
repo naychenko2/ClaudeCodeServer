@@ -9,6 +9,10 @@ namespace ClaudeHomeServer.Services;
 // инфраструктурные данные, общие для обеих подсистем (Backup и редактор секретов
 // `Dossiers.InstanceSecretsProvider`). Хранить их внутри Backup = плодить шов
 // `Dossiers → Backup` ради списка имён. По образцу `TranscriptRoots` (волна 4C).
+//
+// Этап 5, волна 3: переехал из корня `Services/` (Main) в спину (Core) — после выноса
+// Dossiers в отдельный `.csproj` реестр стал общим для двух СБОРОК, а не двух папок.
+// Namespace прежний (`ClaudeHomeServer.Services`), вызывающие не менялись.
 public static class InstanceSecretFiles
 {
     public static readonly string[] Names =

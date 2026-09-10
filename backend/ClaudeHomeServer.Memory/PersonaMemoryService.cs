@@ -42,8 +42,10 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
     private readonly TeamMemoryService? _teamMemory;
     // Заметки — для выноса записи памяти в общий vault (③-3.3); null в юнит-тестах
     private readonly INoteAccessor? _notes;
-    // Recall паспортов изменений (этап 2, ADR-004 §5); null в юнит-тестах и без флага
-    private readonly Dossiers.DossierRecallService? _dossierRecall;
+    // Recall паспортов изменений (этап 2, ADR-004 §5); null в юнит-тестах и без флага.
+    // Шов `IDossierRecallSource` (Core) вместо прямой ссылки на вертикаль Dossiers —
+    // ровно один метод, столько и зовём (Этап 5, волна 3).
+    private readonly Dossiers.IDossierRecallSource? _dossierRecall;
     // LLM-резолвер записи памяти (разрешение противоречий на авто-пути); null в юнит-тестах
     private readonly Memory.MemoryWriteResolver? _resolver;
     private readonly ILogger<PersonaMemoryService> _logger;
@@ -69,7 +71,7 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
         IPersonaEvents personaEvents, IDifyMetrics metrics, IUserStore users,
         IConfiguration config, ILogger<PersonaMemoryService> logger,
         TeamMemoryService? teamMemory = null, Memory.MemoryWriteResolver? resolver = null,
-        Dossiers.DossierRecallService? dossierRecall = null, INoteAccessor? notes = null)
+        Dossiers.IDossierRecallSource? dossierRecall = null, INoteAccessor? notes = null)
     {
         _knowledge = knowledge;
         _personas = personas;

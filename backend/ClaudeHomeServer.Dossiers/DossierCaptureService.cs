@@ -184,7 +184,7 @@ public sealed class DossierCaptureService : BackgroundService
 
         // §1: трейлер — не доверенный ввод. Формат + принадлежность, fail-closed.
         var sessionIdRaw = CommitTrailers.ExtractSessionId(fullMessage);
-        if (sessionIdRaw is null || !TranscriptMigrator.IsSafeSessionId(sessionIdRaw)) return;
+        if (sessionIdRaw is null || !SessionIdGuard.IsSafe(sessionIdRaw)) return;
 
         var session = _sessions.GetById(sessionIdRaw);
         if (session is null) return;
@@ -196,7 +196,7 @@ public sealed class DossierCaptureService : BackgroundService
 
         string? taskId = null;
         var taskIdRaw = CommitTrailers.ExtractTaskId(fullMessage);
-        if (taskIdRaw is not null && TranscriptMigrator.IsSafeSessionId(taskIdRaw))
+        if (taskIdRaw is not null && SessionIdGuard.IsSafe(taskIdRaw))
         {
             var task = _tasks.GetById(taskIdRaw);
             if (task is not null && task.ProjectId == project.Id) taskId = taskIdRaw;
@@ -369,7 +369,7 @@ public sealed class DossierCaptureService : BackgroundService
             var history = await _sessions.GetHistoryAsync(sessionId);
             var window = SelectCommitWindow(history, commitTime.ToUnixTimeMilliseconds(), WindowOpts);
             if (window.Count == 0) return "";
-            return SessionSummaryService.BuildTranscript(window, int.MaxValue);
+            return SessionTranscript.Build(window, int.MaxValue);
         }
         catch (Exception ex) { _log.LogDebug(ex, "dossiers: транскрипт сессии {Session}", sessionId); return ""; }
     }

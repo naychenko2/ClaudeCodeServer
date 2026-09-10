@@ -29,7 +29,7 @@ public class DossierRecallService(
     IGitRefSnapshotStore? gitSnapshots = null,
     IGitCommitInspector? gitInspect = null,
     ICodeGraphInspector? codeGraph = null,
-    ILogger<DossierRecallService>? log = null)
+    ILogger<DossierRecallService>? log = null) : IDossierRecallSource
 {
     // Бюджет пассивного канала (ADR-004 §5): блок паспортов не должен весить больше
     // остальной памяти вместе взятой (личная память — единицы записей по 240 символов).

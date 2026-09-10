@@ -38,21 +38,28 @@ namespace ClaudeHomeServer.Services.Memory;
 // - Источник истины — JSON-сторы `data/persona-memory.json` и `data/team-memory.json` +
 //   Dify-датасеты per-persona/per-project. Бэкап идёт общим правилом `data/`, отдельно
 //   ничего не прописываем.
-// - Общий слой `Services.Memory` (MemoryWriteResolver, MemoryDify, MemoryDocRef и т.п.) —
-//   префикс открывается самим `Services.Memory`, проверяется SubsystemBoundaryTests.
-// - `ICheapTextRunner` (Services.Llm) — консолидация и autolearn через локальную модель
-//   или haiku (PersonaMemoryConsolidationService, PersonaMemoryAutolearnService,
-//   TeamMemoryConsolidationService, TeamMemoryAutolearnService). Префикс-шов, как
-//   у Dossiers/Spend.
-// - Прочие типы корня Services (PersonaManager/SessionManager/ProjectManager/
-//   ProjectEventLogService) — «вертикаль → спинка» (общая инфраструктура доменных
-//   моделей), как у Git/Spend/Tts/Images/Deploy.
-// - `ClaudeHomeServer.Hubs` — `IHubContext<SessionHub>` для нотификации о новых записях
-//   памяти команды (TeamMemoryAutolearnService шлёт `memory_changed` в ленту сессии).
-// - Точечный допуск к `ClaudeHomeServer.Protocol` (по аналогии с Dossiers):
+// - Вертикаль живёт в отдельной сборке `ClaudeHomeServer.Memory` (Этап 5, волна 3,
+//   финал), единственный `ProjectReference` — на Core. Ссылок на Main нет ни одной, и
+//   держит это компилятор, а не только сторож границ: allow-list в Boundaries[Memory]
+//   ПУСТ поверх общей спинки.
+// - Общий слой `Services.Memory` (MemoryWriteResolver, MemoryConsolidationCore и т.п.) —
+//   свой же namespace вертикали; часть ядра (MemoryDify/MemoryFulltext/MemoryLlmParsing/
+//   IPersonaRecallSource) живёт в Core, `Core/Services/Memory/`.
+// - Всё, что нужно от остальной системы, идёт Core-швами: `ICheapTextRunner`
+//   (консолидация и autolearn через локальную модель или haiku), `IPersonaResolver`/
+//   `IPersonaLookup`/`IPersonaDirectory` (персоны), `ISessionDirectory`/`IProjectManager`/
+//   `IUserStore`, `IProjectEventLogService`, `IKnowledgeIndex`/`IKnowledgeSyncParticipant`
+//   (Dify), `INoteAccessor` (вынос записи в vault), `IDifyMetrics` (метрика синка),
+//   `ISessionBroadcaster` (событие `memory_changed` в ленту сессии — раньше был прямой
+//   `IHubContext<SessionHub>`), `SessionTranscript` (сборка транскрипта под autolearn).
+// - `IDossierRecallSource` (Core, ОДИН метод) — пассивный recall паспортов изменений
+//   в auto-recall персоны. Шов ОПЦИОНАЛЬНЫЙ: «канала паспортов нет» — штатное состояние
+//   (юнит-тесты, владелец без флага), на этом стоит публичный
+//   `PersonaMemoryService.DossierRecallAvailable`. До волны 3 тут была прямая ссылка
+//   на `Dossiers.DossierRecallService` — последняя связь «вертикаль → вертикаль».
+// - `ClaudeHomeServer.Protocol` — WS-контракт, часть общей спинки (Core):
 //   `StoredMessage`/`StoredUserMessage`/`StoredTextMessage` в сигнатурах public-методов
-//   `AutolearnGate.CheckContent` и `LastTurnLength`. Префикс `ClaudeHomeServer.Protocol`
-//   снят по волне 3, точные имена — в allow-list (см. Boundaries[Memory]).
+//   `AutolearnGate.CheckContent` и `LastTurnLength`.
 //
 // Типы самих фасадов (`PersonaMemoryService`/`TeamMemoryService`/`PersonaMemoryConsolidationService`/
 // `PersonaMemoryAutolearnService`/`TeamMemoryConsolidationService`/`TeamMemoryAutolearnService`)

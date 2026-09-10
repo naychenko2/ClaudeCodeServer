@@ -499,7 +499,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     private readonly LlmProviderRegistry _llmProviders;
     private readonly FalCostService _falCost;
     private readonly UsageService _usage;
-    private readonly AppSettingsService _appSettings;
+    private readonly ITierModelResolver _appSettings;
     // Резолвер моделей агентных мест: пустая модель → назначение места → слот тира
     private readonly Llm.ModelAssignmentResolver _assignments;
     private readonly UserStore _users;
@@ -646,7 +646,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     public SessionManager(ProjectManager projects,
         ChatHistoryService history, IConfiguration config, ILlmSessionAdapterFactory adapters,
         FalCostService falCost, UsageService usage,
-        AppSettingsService appSettings, UserStore users, JwtService jwt,
+        AppSettingsService appSettings, ITierModelResolver tierResolver, UserStore users, JwtService jwt,
         Microsoft.AspNetCore.Hosting.Server.IServer server,
         LlmProviderRegistry llmProviders,
         FeatureFlagService flags, PersonaManager personas,
@@ -806,8 +806,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         _llmProviders = llmProviders;
         _falCost = falCost;
         _usage = usage;
-        _appSettings = appSettings;
-        _assignments = assignments ?? new Llm.ModelAssignmentResolver(appSettings);
+        _appSettings = tierResolver;
+        _assignments = assignments ?? new Llm.ModelAssignmentResolver(tierResolver);
         _users = users;
         _jwt = jwt;
         _desktopTokens = new Desktop.DesktopCapabilityTokenService(jwt);

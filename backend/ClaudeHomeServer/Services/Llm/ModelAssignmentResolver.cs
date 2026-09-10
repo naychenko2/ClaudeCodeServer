@@ -15,7 +15,7 @@ namespace ClaudeHomeServer.Services.Llm;
 // здесь. Отличие от фоновых действий: у агентных мест нет цепочки «локаль → claude"
 // (CheapTextRunner) — local и direct:-шаги пресета им непригодны и пропускаются.
 public sealed class ModelAssignmentResolver(
-    AppSettingsService appSettings,
+    ITierModelResolver appSettings,
     LocalActionOverridesStore? store = null,
     UserModelTierResolver? userTiers = null,
     SpecialtySettingsStore? specialty = null,

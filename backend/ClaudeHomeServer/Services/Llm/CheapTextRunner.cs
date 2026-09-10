@@ -4,7 +4,7 @@ namespace ClaudeHomeServer.Services.Llm;
 // зависеть от шва без ProjectReference на Main).
 public sealed class CheapTextRunner(
     LocalActionRouter router, ILocalLlmClient ollama, CloudCheapClient cloud, IOneShotRunner claude,
-    ILogger<CheapTextRunner> log, AppSettingsService? appSettings = null,
+    ILogger<CheapTextRunner> log, ITierModelResolver? appSettings = null,
     UserModelTierResolver? userTiers = null, ModelAssignmentResolver? assignment = null)
     : ICheapTextRunner
 {

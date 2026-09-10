@@ -33,7 +33,7 @@ public interface IOneShotRunner
 // генерациями задач и заметок, персонами (ask/характер).
 public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILauncherFactory launchers,
     IConfiguration config, Spend.ISpendCollector? spend = null,
-    AppSettingsService? appSettings = null,
+    ITierModelResolver? appSettings = null,
     UserModelTierResolver? userTiers = null,
     ClaudeSubscriptionPool? subscriptionPool = null,
     SubscriptionActivityTracker? activity = null) : IOneShotRunner

@@ -6,6 +6,7 @@ using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Auth;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Composition.Llm;
 using ClaudeHomeServer.Services.Composition.Notifications;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Desktop;
@@ -181,6 +182,9 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.IDataBackupService,
 builder.Services.AddSingleton<JwtService>();
 builder.Services.AddSingleton<FeatureFlagService>();
 builder.Services.AddSingleton<AppSettingsService>();
+// ITierModelResolver — Core-шов для слота модели в AppSettings (волна 1 выноса Llm).
+// Реализация AppSettingsTierModelAdapter живёт в Composition, делегирует в AppSettingsService.
+builder.Services.AddSingleton<ITierModelResolver, AppSettingsTierModelAdapter>();
 // UserModelTierResolver (слоты моделей) — DI в подсистеме `LlmSubsystem`
 // (шаг 0 волны 4, см. LlmSubsystem.cs).
 builder.Services.AddSingleton<UserHomeResolver>();

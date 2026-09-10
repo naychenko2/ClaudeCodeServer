@@ -5,11 +5,13 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Composition;
 using Microsoft.IdentityModel.Tokens;
 
 namespace ClaudeHomeServer.Services;
 
-public class JwtService
+public class JwtService : IDesktopCapabilityTokens
 {
     private static readonly TimeSpan TokenLifetime = TimeSpan.FromDays(30);
     private readonly SymmetricSecurityKey _key;
@@ -224,14 +226,6 @@ public class JwtService
 
     // --- Capability-токен канала устройств (ADR-008, «Авторизация канала») ---
 
-    /// <summary>Audience грани десктопа. Отдельный от "ClaudeHomeServer" — в этом весь смысл.</summary>
-    public const string DesktopAudience = "desktop";
-
-    // TTL — минуты: сторона доверия здесь физическая машина владельца, а конфиг хода лежит
-    // в общем /turn-tmp песочницы (принятый остаточный риск ADR-008). Короткий срок сужает
-    // окно, поэтому токен обновляется на каждом запуске хода, а не живёт днями.
-    public static readonly TimeSpan DesktopTokenLifetime = TimeSpan.FromMinutes(10);
-
     /// <summary>
     /// Capability-токен для /api/devices/*: audience "desktop", claims sub=ownerId + sid=чат
     /// + did=устройство (если известно). Сервисный JWT владельца эти ручки не открывает —
@@ -251,27 +245,27 @@ public class JwtService
         var claims = new Desktop.DesktopCaller(ownerId, sessionId, deviceId).ToClaims();
         var jwt = new JwtSecurityToken(
             issuer: "ClaudeHomeServer",
-            audience: DesktopAudience,
+            audience: DesktopProtocol.CapabilityAudience,
             claims: claims,
-            expires: DateTime.UtcNow.Add(DesktopTokenLifetime),
+            expires: DateTime.UtcNow.Add(DesktopProtocol.CapabilityTokenLifetime),
             signingCredentials: creds);
         return new JwtSecurityTokenHandler().WriteToken(jwt);
     }
 
     /// <summary>
-    /// Проверяет capability-токен канала устройств и возвращает чат-вызывателя либо null.
+    /// Проверяет capability-токен канала устройств и возвращает принципал либо null.
     /// Строго по audience "desktop": пользовательский и сервисный JWT (aud ClaudeHomeServer)
-    /// сюда не проходят, как и office-токен.
+    /// сюда не проходят, как и office-токен. Разбор принципала в чат-вызывателя —
+    /// на стороне вертикали (DesktopCaller.FromPrincipal), см. IDesktopCapabilityTokens.
     /// </summary>
-    public Desktop.DesktopCaller? ValidateDesktopToken(string? token)
+    public ClaimsPrincipal? ValidateDesktopPrincipal(string? token)
     {
         if (string.IsNullOrWhiteSpace(token)) return null;
         try
         {
             // MapInboundClaims=false — читаем raw "sub"/"sid"/"did" без ремапа в ClaimTypes.*
-            var principal = new JwtSecurityTokenHandler { MapInboundClaims = false }
+            return new JwtSecurityTokenHandler { MapInboundClaims = false }
                 .ValidateToken(token, DesktopValidationParameters, out _);
-            return Desktop.DesktopCaller.FromPrincipal(principal);
         }
         catch { return null; }
     }
@@ -282,7 +276,7 @@ public class JwtService
         ValidateIssuer = true,
         ValidIssuer = "ClaudeHomeServer",
         ValidateAudience = true,
-        ValidAudience = DesktopAudience,
+        ValidAudience = DesktopProtocol.CapabilityAudience,
         ValidateLifetime = true,
         ValidateIssuerSigningKey = true,
         IssuerSigningKey = _key,

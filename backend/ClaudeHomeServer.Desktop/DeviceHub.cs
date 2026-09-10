@@ -1,10 +1,9 @@
 using System.Security.Claims;
 using ClaudeHomeServer.Protocol;
-using ClaudeHomeServer.Services.Desktop;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
 
-namespace ClaudeHomeServer.Hubs;
+namespace ClaudeHomeServer.Services.Desktop;
 
 /// <summary>Сервер → устройство. Строго типизированный клиент: имена методов — часть протокола.</summary>
 public interface IDesktopDeviceClient
@@ -28,6 +27,14 @@ public interface IDesktopDeviceClient
 ///
 /// Push идёт в КОНКРЕТНОЕ соединение (групп нет): адресат вызова определён сеансом рук.
 /// Результат сюда не приезжает — он уходит HTTP-POST'ом мимо 32-КБ лимита сообщения хаба.
+///
+/// Живёт в самой вертикали, а не в <c>Hubs/</c> рядом с <c>SessionHub</c>/<c>TerminalHub</c>
+/// (Этап 5, вынос Desktop): это ОТДЕЛЬНЫЙ канал устройств, и все его зависимости —
+/// собственные (<see cref="DesktopCallRouter"/>, <see cref="DesktopProtocol"/>). Шов, как у
+/// <c>ITerminalHubNotifier</c>, здесь был бы лишним: он понадобился терминалу потому, что
+/// <c>TerminalHub</c> держит корневой <c>ProjectManager</c> и физически не мог уехать из Main.
+/// Оставить хаб в Main означало бы цикл Main.Hubs ⇄ вертикаль: хаб зовёт маршрутизатор,
+/// маршрутизатор пушит в хаб через <c>IHubContext&lt;DeviceHub&gt;</c>.
 /// </summary>
 [Authorize(AuthenticationSchemes = DesktopProtocol.DeviceTokenScheme)]
 public sealed class DeviceHub(DesktopCallRouter router, ILogger<DeviceHub> log) : Hub<IDesktopDeviceClient>

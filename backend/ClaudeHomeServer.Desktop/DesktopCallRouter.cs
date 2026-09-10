@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Protocol;
 using Microsoft.AspNetCore.SignalR;
 

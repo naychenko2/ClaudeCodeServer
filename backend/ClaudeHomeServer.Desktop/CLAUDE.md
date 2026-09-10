@@ -1,6 +1,11 @@
-# Десктопный агент (Services/Desktop, за флагом `desktop-agent`)
+# Десктопный агент (ClaudeHomeServer.Desktop, за флагом `desktop-agent`)
 
 > Этот файл — вынесенная часть корневого `CLAUDE.md`: он загружается, только когда идёт работа с файлами этой папки.
+>
+> Вертикаль вынесена в отдельную сборку `ClaudeHomeServer.Desktop` (Этап 5). Связи с корнем
+> закрыты швами спины (`ISessionDirectory`, `IFeatureFlagGate`, `IPersonaResolver`,
+> `IProjectManager`, `IUserStore`, `IDesktopCapabilityTokens`); хаб устройств `DeviceHub`
+> живёт здесь же, а не в `Hubs/`. Контроллеры канала остались в Main.
 
 Руки песочницы на машине пользователя: `container`-владелец отрезан от своего компьютера, и
 грань возвращает ему запуск приложений, клики и взгляд на экран — десктопным клиентом плюс

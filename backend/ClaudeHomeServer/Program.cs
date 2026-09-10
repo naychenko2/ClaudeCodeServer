@@ -204,6 +204,10 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.IProjectIconMigrator,
 builder.Services.AddSingleton<ClaudeHomeServer.Services.IDataBackupService,
     ClaudeHomeServer.Services.Backup.DataBackupServiceAdapter>();
 builder.Services.AddSingleton<JwtService>();
+// Шов IDesktopCapabilityTokens (Core) — форвард на тот же синглтон, не второй экземпляр:
+// вертикаль Desktop берёт у токенов ровно выдачу и проверку capability-токена канала.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.IDesktopCapabilityTokens>(
+    sp => sp.GetRequiredService<JwtService>());
 builder.Services.AddSingleton<FeatureFlagService>();
 builder.Services.AddSingleton<AppSettingsService>();
 // UserModelTierResolver (слоты моделей) — DI в подсистеме `LlmSubsystem`
@@ -264,6 +268,8 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Git.IGitCommitInspector,
 // и резолв `NotesAccessor` падает с InvalidOperationException — то же правило, что у
 // `IKnowledgeSyncParticipant → NotesKnowledgeService` (строки ниже) и у
 // `INoteTaskBridge`/`INotesHubNotifier` (Этап 5, волна E).
+// Потребитель (`PersonaMemoryService`) держит `INoteAccessor?` и гейтит вызовы через
+// `if (_notes is null) return null`, поэтому отсутствие шва — штатное состояние.
 if (SubsystemGate.IsEnabled(builder.Configuration, "notes"))
 {
     builder.Services.AddSingleton<ClaudeHomeServer.Services.Notes.INoteAccessor,
@@ -566,7 +572,7 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDesktopChatDire
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDesktopDeviceDirectory,
     ClaudeHomeServer.Services.Desktop.DesktopDeviceDirectory>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDesktopHandsNotifier,
-    ClaudeHomeServer.Services.Desktop.DesktopHandsNotifier>();
+    ClaudeHomeServer.Services.Composition.DesktopHandsNotifier>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDesktopCallCanceller,
     ClaudeHomeServer.Services.Desktop.DesktopRouterCallCanceller>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DesktopHandsSessionService>();
@@ -1698,7 +1704,7 @@ app.MapHub<SessionHub>("/hubs/session");
 app.MapHub<TerminalHub>("/hubs/terminal");
 // Канал десктопного агента (ADR-008): исходящее соединение клиента с машины пользователя,
 // push команды в конкретное соединение. Схема авторизации — токен устройства, а не общий JWT
-app.MapHub<ClaudeHomeServer.Hubs.DeviceHub>("/hubs/devices");
+app.MapHub<ClaudeHomeServer.Services.Desktop.DeviceHub>("/hubs/devices");
 
 // Graceful shutdown: гасим все живые процессы claude, терминалы и dev-серверы.
 //

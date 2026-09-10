@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Services.Desktop;
 
@@ -195,10 +196,10 @@ public sealed class DesktopAccessGate(
 /// Владелец проектного чата резолвится через проект (у Session.OwnerId он null).
 /// </summary>
 public sealed class DesktopChatDirectory(
-    SessionManager sessions,
+    ISessionDirectory sessions,
     IProjectManager projects,
-    FeatureFlagService flags,
-    PersonaManager? personas = null) : IDesktopChatDirectory
+    IFeatureFlagGate flags,
+    IPersonaResolver? personas = null) : IDesktopChatDirectory
 {
     public DesktopChatInfo? Find(string chatSessionId)
     {

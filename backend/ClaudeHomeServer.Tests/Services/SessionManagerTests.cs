@@ -158,8 +158,8 @@ public class SessionManagerTests : IDisposable
             NullLogger<NotesKnowledgeService>.Instance);
         var personas = new PersonaManager(config);
         _personaManager = personas;
-        var bindings = new PersonaBindingsService(personas, _projectManager, wkStore, notesSvc, notesKb,
-            knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance);
+        var bindings = new PersonaBindingsService(personas, _projectManager, wkStore,
+            knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
         _actionOverrides = new ClaudeHomeServer.Services.Llm.LocalActionOverridesStore(config);
@@ -1579,8 +1579,8 @@ public class SessionManagerTests : IDisposable
         var notesKb = new NotesKnowledgeService(knowledge, notesSvc, userStore, config,
             NullLogger<NotesKnowledgeService>.Instance);
         var personas = new PersonaManager(config);
-        var bindings = new PersonaBindingsService(personas, projectManager, wkStore, notesSvc, notesKb,
-            knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance);
+        var bindings = new PersonaBindingsService(personas, projectManager, wkStore,
+            knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
 
@@ -9609,6 +9609,52 @@ public class SessionManagerTests : IDisposable
 
         _subPool.IsExhausted(ClaudeSubscriptionPool.PrimaryKey).Should().BeFalse();
         _usage.GetAll().Should().Contain(s => s.LimitType == "seven_day_overage_included");
+    }
+
+    [Fact]
+    public async Task RateLimitMessage_ПослеОтказаПоМодели_НеПомечаетПодпискуИсчерпанной()
+    {
+        // Инцидент 2026-09-09 (чат «Анализ документов ВФЛА»): отказ «нет доступа к модели» /
+        // «кончились кредиты модели» приезжает от CLI ещё и телеметрией rate_limit_event
+        // status=rejected — она про ОКНО и про модель не знает ничего. Без подавления такое
+        // позднее событие метило живую подписку исчерпанной, и её Sonnet/Opus выпадали из
+        // ротации до сброса пятичасового окна.
+        var dir = MkProjectDir("ratelimit-model-reject");
+        var project = _projectManager.Create("RLM", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        var acc = new TurnAccumulator(new List<StoredMessage>());
+        // Пометку ставит адаптер, разобрав текст ошибки хода; здесь воспроизводим её факт.
+        _subPool.MarkModelUnavailable(ClaudeSubscriptionPool.PrimaryKey, "fable",
+            FallbackErrorClass.ModelOutOfCredits);
+
+        await InvokeOnMessageAsync(session.Id, acc, new RateLimitMessage("five_hour",
+            DateTime.UtcNow.AddHours(2).ToString("o"), "rejected", null, false));
+
+        _subPool.IsExhausted(ClaudeSubscriptionPool.PrimaryKey).Should().BeFalse(
+            "отказ был по модели — подписка жива");
+        _usage.GetAll().Should().Contain(s => s.LimitType == "five_hour",
+            "в снимок для экрана событие всё равно попадает");
+    }
+
+    [Fact]
+    public async Task RateLimitMessage_ОтказПоМоделиНаДругойПодписке_ТожеПодавляет()
+    {
+        // Гонка (блокер ревью): пометку ставит попытка на одной подписке, а позднее событие
+        // приезжает уже с ключом СОСЕДНЕЙ — тихая ротация переставила Info.Provider до его
+        // прихода. Адресное подавление по ключу тут промахнулось бы, и MarkExhausted забанил
+        // бы здоровый аккаунт — тот же ложный бан, ради которого подавление и заведено.
+        var dir = MkProjectDir("ratelimit-model-race");
+        var project = _projectManager.Create("RLR", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        var acc = new TurnAccumulator(new List<StoredMessage>());
+        // Отказ случился на ЧУЖОЙ (уже отбитой) подписке, чат живёт на PrimaryKey.
+        _subPool.MarkModelUnavailable("acc-другая", "opus", FallbackErrorClass.ModelNoAccess);
+
+        await InvokeOnMessageAsync(session.Id, acc, new RateLimitMessage("five_hour",
+            DateTime.UtcNow.AddHours(2).ToString("o"), "rejected", null, false));
+
+        _subPool.IsExhausted(ClaudeSubscriptionPool.PrimaryKey).Should().BeFalse(
+            "в окне подавления событию про окно не верим, чей бы ключ в нём ни стоял");
     }
 
     [Fact]

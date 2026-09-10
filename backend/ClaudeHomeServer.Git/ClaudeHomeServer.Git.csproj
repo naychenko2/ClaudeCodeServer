@@ -25,6 +25,12 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.Git.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- Dossiers.Tests (Этап 5, волна 3): тесты выгрузки/импорта ветки паспортов готовят
+         репозиторий тем же internal RunAsync, что и Git.Tests. Допуск к тестовой сборке,
+         не к самой вертикали Dossiers — граница «вертикаль → вертикаль» не открывается. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Dossiers.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
   <ItemGroup>

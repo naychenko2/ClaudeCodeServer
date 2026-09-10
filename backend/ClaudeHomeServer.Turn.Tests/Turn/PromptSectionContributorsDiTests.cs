@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Core.Telemetry;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
@@ -13,7 +14,6 @@ using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
@@ -288,12 +288,14 @@ public class PromptSectionContributorsDiTests
             services.AddSingleton(notesKb);
             var personas = new PersonaManager(config);
             services.AddSingleton(personas);
-            var personaMemory = new PersonaMemoryService(knowledge, personas, userStore, config,
+            var personaMemory = new PersonaMemoryService(knowledge, personas, personas,
+                new PersonaDirectoryAdapter(personas), new NoopPersonaEvents(),
+                new EmptyDifyMetrics(), userStore, config,
                 NullLogger<PersonaMemoryService>.Instance);
             services.AddSingleton(personaMemory);
-            var bindings = new PersonaBindingsService(personas, projectManager, wkStore, notesSvc,
-                notesKb, knowledge, new SkillsService(), userStore, config,
-                NullLogger<PersonaBindingsService>.Instance);
+            var bindings = new PersonaBindingsService(personas, projectManager, wkStore,
+                knowledge, new SkillsService(), userStore, config,
+                NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
             services.AddSingleton(bindings);
             // Этап 5, шаг 6: CodeGraphContributor гейтит секцию через Core-шов
             // IPersonaServerToolGate, а не через конкретный PersonaBindingsService.

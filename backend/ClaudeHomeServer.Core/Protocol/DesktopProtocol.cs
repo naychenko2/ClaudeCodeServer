@@ -35,6 +35,22 @@ public static class DesktopProtocol
     public const string OwnerIdClaim = "sub";
     public const string DeviceIdClaim = "did";
 
+    /// <summary>
+    /// Audience capability-токена канала (ADR-008, «Авторизация канала»). Отдельный от
+    /// "ClaudeHomeServer" — в этом весь смысл: сервисный JWT владельца /api/devices/* не
+    /// открывает. Живёт здесь, а не у выдающей стороны: литерал сверяют обе стороны —
+    /// и выдача (JwtService в Main), и схема DesktopCapability в вертикали.
+    /// </summary>
+    public const string CapabilityAudience = "desktop";
+
+    /// <summary>
+    /// TTL capability-токена — минуты: сторона доверия здесь физическая машина владельца,
+    /// а конфиг хода лежит в общем /turn-tmp песочницы (принятый остаточный риск ADR-008).
+    /// Короткий срок сужает окно, поэтому токен обновляется на каждом запуске хода, а не
+    /// живёт днями. Читают обе стороны: выдача и кеш токенов чата.
+    /// </summary>
+    public static readonly TimeSpan CapabilityTokenLifetime = TimeSpan.FromMinutes(10);
+
     /// <summary>Ack на команду: нет за 2 с — честная ошибка, а не висение до таймаута MCP.</summary>
     public static readonly TimeSpan AckTimeout = TimeSpan.FromSeconds(2);
 

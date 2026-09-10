@@ -11,7 +11,7 @@ namespace ClaudeHomeServer.Services.TriggerSources;
 // контент-правки ловятся. Снапшот обновляем синхронно с детекцией (встроенный дедуп).
 //
 // Args: source ("personal"|projectId), tags?:["#тег"], section?:папка
-public sealed class NoteTriggerSource(NotesService notes) : ITriggerSource
+public sealed class NoteTriggerSource(NotesService? notes = null) : ITriggerSource
 {
     public AutomationTriggerType Type => AutomationTriggerType.Note;
 
@@ -22,6 +22,7 @@ public sealed class NoteTriggerSource(NotesService notes) : ITriggerSource
         var wantTags = args.GetStringList("tags");
         var section = args.GetString("section");
 
+        if (notes is null) return Task.FromResult<IReadOnlyList<TriggerEvent>>(Array.Empty<TriggerEvent>());
         IReadOnlyList<NoteSummary> summaries;
         try { summaries = notes.GetSummaries(ctx.User.Id, source, null); }
         catch { return Task.FromResult<IReadOnlyList<TriggerEvent>>(Array.Empty<TriggerEvent>()); }

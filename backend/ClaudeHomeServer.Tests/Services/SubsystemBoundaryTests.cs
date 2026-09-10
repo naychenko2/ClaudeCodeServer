@@ -80,6 +80,14 @@ public class SubsystemBoundaryTests
         // сторож видел типы Turn (IPromptSectionContributor и пр.) и проверял их
         // границы по сборке Turn.dll.
         _ = typeof(ClaudeHomeServer.Services.Turn.IPromptSectionContributor).Assembly;
+        // Dossiers/Memory — отдельные сборки (Этап 5, волна 3, финал): форс-загрузка нужна,
+        // чтобы сторож видел их типы и проверял границы по Dossiers.dll / Memory.dll.
+        _ = typeof(ClaudeHomeServer.Services.Dossiers.DossiersSubsystem).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Memory.MemorySubsystem).Assembly;
+        // Desktop — отдельная сборка (Этап 5, вынос Desktop): форс-загрузка нужна,
+        // чтобы сторож видел типы грани (маршрутизатор канала, хаб устройств, схемы
+        // авторизации) и проверял их границы по Desktop.dll.
+        _ = typeof(ClaudeHomeServer.Services.Desktop.DesktopCallRouter).Assembly;
         // === Этап 5, волна C, шаг 2: новые швы Core, использованные вынесенными
         // вертикалями. Форс-загрузка нужна, чтобы вертикальные сборки (Modules,
         // ProjectServices) видели соответствующие Core-интерфейсы по сборке Core.dll.
@@ -450,42 +458,34 @@ public class SubsystemBoundaryTests
                     .ToArray(),
                 Array.Empty<string>()),
         },
-        // Dossiers — паспорта изменений (ADR-004). Сознательно завязана на две
-        // «вертикали-нижнего-слоя» (Git/CodeGraph) и общий слой Dify-синка
-        // (Services.Memory). Допуски к корню Services точечные:
-        // 1) `SessionManager`/`ProjectManager`/`TaskManager`/`FileService`/`UserStore`
-        //    — общая инфраструктура (DossierCaptureService.cs:39-42, DossierStore.cs:41-42,
-        //    DossierDiscussionService.cs:27, DossierRecallService:tasks/file params).
-        // 2) `KnowledgeService` (DossierStore.cs:40, опциональный параметр ctor) — клиент
-        //    Dify, шов «вертикаль → спинка» по аналогии с `Spend` (KnowledgeService — общий
-        //    для Dify-синка). После переноса в `Services.Knowledge` имя в FullName сохраняется,
-        //    поэтому и тут обновляем префикс.
-        // 3) `FeatureFlagService` (DossierAutoExporter.cs:44, DossierAutoImporter.cs:36) —
-        //    гейт флага `change-dossiers-recall` владельца.
-        // Префиксы-швы:
-        // 4) `ClaudeHomeServer.Services.Git` — большая часть уже за узким швом
-        //    `IGitRefSnapshotStore` (волна 2 линии Dossiers↔Git, снапшот-реф ветки
-        //    паспортов, владение константами `DossierBranch` — в Dossiers). Остаток —
-        //    конкретный `GitService` для операций вне scope снапшот-рефа (`git show`
-        //    и т.п. в DossierCaptureService/DossierRecallService). Общий `IGitGuard`
-        //    на Deploy+Dossiers ОТКЛОНЁН (разведка 2026-09-07): 7+ разных методов с
-        //    5 намерениями — грабмешок, не шов. Допуск остаётся точечным.
-        // 5) `ClaudeHomeServer.Services.CodeGraph` — `CodeGraphService` для обогащения
-        //    паспортов графом кода (DossierCaptureService.cs:54, DossierRecallService).
-        //    TODO на шов аналогично Git.
-        // 6) `ClaudeHomeServer.Services.Llm` — `ICheapTextRunner` для выжимки паспортов
-        //    и конспектов (DossierCaptureService, DossierDiscussionService). Префикс-шов,
-        //    как у `Git`/`Backgrounds`/`Deploy`/`Spend`.
-        // 7) `ClaudeHomeServer.Services.Memory` — общий слой Dify-синка: `MemoryDocRef`,
-        //    `MemoryDifyDebouncer` и `MemorySyncItem` в полях `DossierStore`/`DossierAutoExporter`
-        //    (DossierStore.cs:21,48; DossierAutoExporter.cs:48). Префикс-шов, как
-        //    `Git`/`Deploy` на `Services.Backup`.
-        // Точечный допуск к `ClaudeHomeServer.Protocol`:
-        // 8) `StoredMessage` — поля async-state-машин `DossierCaptureService+<BuildTranscriptAsync>d__39`
-        //    и `DossierDiscussionService+<EnsureOneAsync>d__10` (сами методы private/internal —
-        //    сторож их сигнатуры не читает). `ServerMessage` ТУТ НЕ нужен: фигурирует
-        //    в private-методе `DossierCaptureService.OnSessionMessageAsync`, но метод
-        //    возвращает void, поэтому `ServerMessage` не материализуется в IL-операндах.
+        // Dossiers — паспорта изменений (ADR-004). Вынесена в отдельный `.csproj`
+        // (Этап 5, волна 3, финал), единственный `ProjectReference` — на Core.
+        // Allow-list ПУСТ поверх общей спинки, как у Knowledge: все прежние допуски
+        // проверены мутацией (сняты все разом → сторож остался зелёным) и оказались
+        // мёртвыми. Причина не в сторожé, а в компиляторе: вертикаль в своей сборке
+        // физически не видит типы Main, и остаток связей пришлось разрезать швами.
+        // Куда уехало то, что раньше требовало допуска:
+        // - `SessionManager`/`ProjectManager`/`UserStore`/`TaskManager`/`FileService`/
+        //   `KnowledgeService` — Core-швы `ISessionDirectory`/`IProjectManager`/
+        //   `IUserStore`/`ITaskLookup`/`IKnowledgeIndex` (волна 2);
+        // - `Services.Git`/`Services.CodeGraph` — `IGitRefSnapshotStore`/
+        //   `IGitCommitInspector`/`ICodeGraphInspector` (волна 2). Общий `IGitGuard`
+        //   на Deploy+Dossiers по-прежнему ОТКЛОНЁН (разведка 2026-09-07): 7+ разных
+        //   методов с 5 намерениями — грабмешок, не шов;
+        // - `Services.Memory` (общий слой Dify-синка) — Core, `Core/Services/Memory/`;
+        // - `Services.Llm.TranscriptMigrator.IsSafeSessionId` — Core-примитив
+        //   `Services.SessionIdGuard.IsSafe` (волна 3). Сама `Services/Llm` НЕ тронута:
+        //   её ведёт соседняя линия, поэтому одноимённая копия предиката там осталась
+        //   — техдолг на один шаг, помечен в `SessionIdGuard`;
+        // - `SessionSummaryService.BuildTranscript` — Core-примитив
+        //   `Services.SessionTranscript.Build` (волна 3), в Main остался форвардер;
+        // - `InstanceSecretFiles` — переехал в Core целиком (волна 3);
+        // - `SessionChangedPaths` — уже жил в Core, допуск был мёртв;
+        // - `Protocol.StoredMessage` — покрыт префиксом `ClaudeHomeServer.Protocol`
+        //   из `SharedAllowedPrefixes`, точечный допуск был лишним.
+        // `FeatureFlagService` (гейт флага `change-dossiers-recall`) — тоже мёртв:
+        // вертикаль ходит за флагом через Core-шов, а не за конкретным типом Main.
+        // Появится новая прямая зависимость — сборка не пройдёт раньше сторожа.
         new object[]
         {
             new VerticalBoundary(
@@ -495,47 +495,9 @@ public class SubsystemBoundaryTests
                     .Concat(new[]
                     {
                         "ClaudeHomeServer.Services.Dossiers",
-                        "ClaudeHomeServer.Services.Git",
-                        "ClaudeHomeServer.Services.CodeGraph",
-                        "ClaudeHomeServer.Services.Llm",
-                        "ClaudeHomeServer.Services.Memory",
                     })
                     .ToArray(),
-                new[]
-                {
-                    "ClaudeHomeServer.Services.SessionManager",
-                    "ClaudeHomeServer.Services.ProjectManager",
-                    "ClaudeHomeServer.Services.Tasks.TaskManager",
-                    "ClaudeHomeServer.Services.FileService",
-                    "ClaudeHomeServer.Services.UserStore",
-                    "ClaudeHomeServer.Services.FeatureFlagService",
-                    "ClaudeHomeServer.Services.Knowledge.KnowledgeService",
-                    // DossierStore — участник реконсайлера error-документов Dify
-                    // (KnowledgeIndexReconciler, ADR-004 §4); public-метод ListTargets
-                    // возвращает `IReadOnlyList<Knowledge.KnowledgeSyncTarget>` —
-                    // рефлексия видит `KnowledgeSyncTarget` как возвращаемый тип
-                    // и в generic-аргументе. Шов через IKnowledgeSyncParticipant
-                    // (DossierStore имплементирует интерфейс) виден IL-скану как
-                    // implementing-тип; явный allow-list не нужен, т.к. интерфейс
-                    // живёт в namespace Knowledge (префикс вертикали Knowledge).
-                    // Форвардер регистрации остаётся в Knowledge — кросс-клей.
-                    "ClaudeHomeServer.Services.Knowledge.KnowledgeSyncTarget",
-                    "ClaudeHomeServer.Protocol.StoredMessage",
-                    // === Точечные допуски IL-видимости (задача `8beee75e`, волна 1).
-                    // `DossierCaptureService` материализует `SessionSummaryService`
-                    // (статический вызов `SessionSummaryService.BuildTranscript` из тела
-                    // метода — по аналогии с `Memory → SessionSummaryService`, который
-                    // уже был зафиксирован; теперь Dossiers — второй потребитель).
-                    "ClaudeHomeServer.Services.SessionSummaryService",
-                    // `DossierRecallService` материализует `SessionChangedPaths`
-                    // (поле async-state-машины). Точечный допуск по образцу Git.
-                    "ClaudeHomeServer.Services.SessionChangedPaths",
-                    // `InstanceSecretsProvider` ссылается на реестр имён секретов
-                    // `Services.InstanceSecretFiles.Names` (шаг 5). Примитив вынесен
-                    // из `Backup.BackupPaths` в спину — по образцу `TranscriptRoots`.
-                    // Допуск на `Backup.BackupPaths` снят (см. `p5-Dossiers`).
-                    "ClaudeHomeServer.Services.InstanceSecretFiles",
-                }),
+                Array.Empty<string>()),
         },
         // Knowledge — вертикаль Dify RAG (Knowledge.md + ADR-013 §4). Allow-list
         // пустой поверх общей спинки: всё, что раньше требовало точечных допусков
@@ -652,56 +614,36 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.SessionMessagingService+SendOutcome+Running",
                 }),
         },
-        // Memory — долгая память персон и общая память команды проекта. Подсистема
-        // регистрирует фасады `PersonaMemoryService`/`TeamMemoryService` + их
-        // консолидацию/autolearn; в волне 4B шаг 1 эти шесть файлов переехали
-        // из корня `Services/` в `Services/Memory/` — теперь они охвачены префиксом
-        // `ClaudeHomeServer.Services.Memory` и точные имена в allow-list не нужны.
-        // Общий слой ядра (MemoryWriteResolver/MemoryDify/MemoryConsolidationCore/
-        // AutolearnGate/...) живёт в этом namespace уже давно.
-        // Префиксы-швы (как у Dossiers/Spend):
-        // 1) `ClaudeHomeServer.Services.Knowledge` — общий клиент Dify;
-        //    `MemoryDify` держит `KnowledgeService` полем и материализует
-        //    `DifyDocumentInfo` в async-state `DiffSyncAsync`.
-        // 2) Префикс `ClaudeHomeServer.Services.Llm` — СНЯТ 2026-09-09 как мёртвый: `ICheapTextRunner` живёт
-        //    в Core (`Core/Services/Llm/`), вертикаль берёт его ОТТУДА, и префикс
-        //    на вертикаль `Llm` ничего не открывал. Мутация: без допуска сторож зелёный.
-        // Точечные допуски к корню Services — «вертикаль → спинка», аналогично
-        // `Dossiers`/`Knowledge`/`Git`. После переезда фасадов в `Services.Memory`
-        // эти связи видны IL-скану (вызовы из тел методов фасадов, которые теперь
-        // внутри вертикали):
-        // 3) `SessionManager` (PersonaMemoryService.cs:61, PersonaMemoryAutolearnService.cs:32,
-        //    TeamMemoryAutolearnService.cs:40, TeamMemoryConsolidationService.cs:?;
-        //    TeamMemoryService.cs:?) — нужен фасадам памяти для подписки на ходы
-        //    (`OnSessionMessage`) и записи recall-результатов.
-        // 4) `ProjectManager` (TeamMemoryAutolearnService.cs:40, TeamMemoryService.cs:?) —
-        //    фасады team-памяти резолвят проект для recall и для авто-памяти.
-        // 5) `UserStore` (PersonaMemoryService.cs:61) — общий учёт пользователей,
-        //    нужен для проверки владельца персоны/проекта в lookup-методах фасадов.
-        // 6) `PersonaManager` (PersonaMemoryService.cs:61, PersonaMemoryAutolearnService.cs:32,
-        //    PersonaMemoryConsolidationService.cs:29) — lookup персоны для recall
-        //    итераций и для авто-памяти по итогам хода. Тип живёт в корне `Services/`
-        //    без IAppSubsystem (Persona в инвентаре — группа, а не подсистема), и
-        //    формально это «вертикаль → root-синглтон», а не «вертикаль → вертикаль».
-        //    Но исторически тип принадлежит группе Persona, поэтому фиксируем
-        //    явно в отчёте шага 4B.1: `Memory` → `PersonaManager` — фактическая
-        //    зависимость от «доменной модели персон», допустимая как вертикаль →
-        //    спинка, по аналогии с тем, как `Images` зависит от того же типа
-        //    (см. Boundaries.Images ниже).
-        // 7) `PersonaMemoryScorer`/`TeamMemoryScorer` — статические вызовы из тел
-        //    методов `BuildEvictIds` (PersonaMemoryConsolidationService, TeamMemory
-        //    ConsolidationService). Оба типа живут в namespace `Services.Memory` —
-        //    собственный префикс вертикали покрывает их, отдельная запись не нужна.
-        // 8) `SessionSummaryService` (Services/ корень) — статические вызовы
-        //    `SessionSummaryService.BuildTranscript(...)` из тел методов
-        //    `PersonaMemoryAutolearnService.cs` и `TeamMemoryAutolearnService.cs`.
-        //    IL-скан видит declaring-тип; допуск явный в allow-list (тот же шов
-        //    «вертикаль → спинка», что и прочие точечные допуски ниже).
-        // Точечный допуск к `ClaudeHomeServer.Protocol`:
-        // 8) `StoredMessage` — `AutolearnGate.CheckContent`/`LastTurnLength` принимают
-        //    `IReadOnlyList<StoredMessage>` (видна в сигнатуре public-метода). Префикс
-        //    `ClaudeHomeServer.Protocol` снят (волна 3), чтобы сторож ловил новые
-        //    зависимости от любых из ~105 публичных типов протокола.
+        // Memory — долгая память персон и общая память команды проекта. Вынесена
+        // в отдельный `.csproj` (Этап 5, волна 3, финал), единственный
+        // `ProjectReference` — на Core. Allow-list ПУСТ поверх общей спинки, как
+        // у Knowledge/Dossiers: прежние допуски сняты все разом и сторож остался
+        // зелёным — значит каждый был мёртв. Держит их мёртвыми компилятор: из своей
+        // сборки вертикаль типы Main не видит вовсе.
+        // Куда уехало то, что раньше требовало допуска:
+        // - `SessionManager`/`ProjectManager`/`UserStore`/`PersonaManager`/
+        //   `ProjectEventLogService` — Core-швы (`ISessionDirectory`/`IProjectManager`/
+        //   `IUserStore`/`IPersonaResolver`+`IPersonaLookup`+`IPersonaDirectory`/
+        //   `IProjectEventLogService`);
+        // - `Services.Knowledge` (клиент Dify) и `Services.Notes` — `IKnowledgeIndex`/
+        //   `IKnowledgeSyncParticipant`/`INoteAccessor` (волна 2);
+        // - `Services.Dossiers.DossierRecallService` — Core-шов на ОДИН метод
+        //   `IDossierRecallSource.BuildRecallBlockAsync` (волна 3). Это была последняя
+        //   связь «вертикаль → вертикаль» между Memory и Dossiers; опциональность
+        //   (`IDossierRecallSource?`) сохранена — на ней стоит публичный
+        //   `PersonaMemoryService.DossierRecallAvailable`, и «канала нет» тут штатно;
+        // - `SessionSummaryService.BuildTranscript` — Core-примитив
+        //   `Services.SessionTranscript.Build` (волна 3), в Main остался форвардер;
+        // - `Telemetry.ServerMetrics`/`Telemetry.DifyErrorCategorizer` — общий слой
+        //   Dify-синка (`MemoryDify`) уехал в Core, а метрику вертикаль берёт
+        //   Core-швом `IDifyMetrics` (волна 2);
+        // - префикс `ClaudeHomeServer.Hubs` — мёртв: вещание идёт Core-швом
+        //   `ISessionBroadcaster` (TeamMemoryAutolearnService.cs:29), а не через
+        //   `IHubContext<SessionHub>` напрямую;
+        // - `Protocol.StoredMessage` (`AutolearnGate.CheckContent`/`LastTurnLength`) —
+        //   покрыт префиксом `ClaudeHomeServer.Protocol` из `SharedAllowedPrefixes`;
+        // - `PersonaMemoryScorer`/`TeamMemoryScorer` — свои же типы вертикали,
+        //   покрыты её собственным префиксом.
         // ⚠ Два форвардера `IKnowledgeSyncParticipant → {PersonaMemoryService,
         // TeamMemoryService}` остаются в Program.cs (кросс-вертикальный клей реконсайлера
         // error-документов Dify) и потому НЕ входят в allow-list Memory.
@@ -714,37 +656,9 @@ public class SubsystemBoundaryTests
                     .Concat(new[]
                     {
                         "ClaudeHomeServer.Services.Memory",
-                        "ClaudeHomeServer.Services.Knowledge",
-                        "ClaudeHomeServer.Hubs",
                     })
                     .ToArray(),
-                new[]
-                {
-                    // Вертикаль → спинка (см. пункты 3-6 комментария выше).
-                    "ClaudeHomeServer.Services.SessionManager",
-                    "ClaudeHomeServer.Services.ProjectManager",
-                    "ClaudeHomeServer.Services.UserStore",
-                    "ClaudeHomeServer.Services.PersonaManager",
-                    "ClaudeHomeServer.Services.ProjectEventLogService",
-                    "ClaudeHomeServer.Services.Notes.NotesService",
-                    "ClaudeHomeServer.Services.Dossiers.DossierRecallService",
-                    // DossierRecallRequest/DossierRecallResult допусков больше не требуют:
-                    // пара DTO уехала в Core (Этап 5, узкие швы Turn) и проходит по
-                    // assembly-фильтру IsCoreAssembly.
-                    // AutolearnGate.CheckContent / LastTurnLength — public-метод
-                    // с параметром IReadOnlyList<StoredMessage>.
-                    "ClaudeHomeServer.Protocol.StoredMessage",
-                    // Шов Memory → Services.SessionSummaryService (см. пункт 8
-                    // комментария выше). Статический вызов из тел методов
-                    // PersonaMemoryAutolearnService / TeamMemoryAutolearnService;
-                    // IL-скан видит declaring-тип.
-                    "ClaudeHomeServer.Services.SessionSummaryService",
-                    // Telemetry (бывший префикс, заменён точечным допуском):
-                    // `MemoryDify` логирует Dify-ошибки через
-                    // ServerMetrics.RecordDifySyncError + DifyErrorCategorizer.
-                    "ClaudeHomeServer.Telemetry.ServerMetrics",
-                    "ClaudeHomeServer.Telemetry.DifyErrorCategorizer",
-                }),
+                Array.Empty<string>()),
         },
         // === Шаг 2б плана выноса штаба (этап 4): интерфейс-шов `ITeamNotifier`
         // (Services/Team/) — единственный тип вертикали. Реализация пока внутри
@@ -1160,38 +1074,20 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.InstanceSecretFiles",
                 }),
         },
-        // Desktop — ручной агент песочницы (ADR-008). Префикс-шов Hubs (DeviceHub),
-        // точечные — Protocol (DesktopCall*/DeviceHello*/DesktopCancel/DesktopGo),
-        // плюс root Services (JwtService/FeatureFlagService/PersonaManager/
-        // ProjectManager/SessionManager/UserStore) для capability-токенов и каталога
-        // чатов/устройств/сессий.
+        // Desktop — ручной агент песочницы (ADR-008), отдельная сборка
+        // ClaudeHomeServer.Desktop (Этап 5, вынос Desktop). Допусков нет: связи с корнем
+        // закрыты швами спины (ISessionDirectory/IFeatureFlagGate/IPersonaResolver/
+        // IProjectManager/IUserStore/IDesktopCapabilityTokens), хаб устройств переехал
+        // в саму вертикаль, а Protocol.* проходит по сборке Core.
         new object[]
         {
             new VerticalBoundary(
                 "Desktop",
                 "ClaudeHomeServer.Services.Desktop",
                 SharedAllowedPrefixes
-                    .Concat(new[]
-                    {
-                        "ClaudeHomeServer.Services.Desktop",
-                        "ClaudeHomeServer.Hubs",
-                    })
+                    .Concat(new[] { "ClaudeHomeServer.Services.Desktop" })
                     .ToArray(),
-                new[]
-                {
-                    "ClaudeHomeServer.Protocol.DesktopCallResult",
-                    "ClaudeHomeServer.Protocol.DesktopCallCommand",
-                    "ClaudeHomeServer.Protocol.DeviceHello",
-                    "ClaudeHomeServer.Protocol.DeviceHelloAck",
-                    "ClaudeHomeServer.Protocol.DesktopCancelCommand",
-                    "ClaudeHomeServer.Protocol.DesktopGoCommand",
-                    "ClaudeHomeServer.Services.JwtService",
-                    "ClaudeHomeServer.Services.FeatureFlagService",
-                    "ClaudeHomeServer.Services.PersonaManager",
-                    "ClaudeHomeServer.Services.ProjectManager",
-                    "ClaudeHomeServer.Services.SessionManager",
-                    "ClaudeHomeServer.Services.UserStore",
-                }),
+                Array.Empty<string>()),
         },
         // Diagnostics — файловый лог инстанса (FileLog, 1 файл). Полностью изолирован.
         new object[]
@@ -1804,6 +1700,22 @@ public class SubsystemBoundaryTests
         // вертикаль Spend. Реализация `SpendStore : ISpendCollector` остаётся
         // в Main (Services/Spend) — пока сам Spend не вынесен в свой csproj.
         "ClaudeHomeServer.Services.Spend",
+        // Этап 5, волна 2 (Memory↔Dossiers↔Git): IGitRefSnapshotStore + 5 record-типов
+        // (GitRefIdentity/GitRefTip/GitRefSnapshotResult/GitCredentials/GitSnapshotFile)
+        // переехали из вертикали Git в Core — узкий контракт generic plumbing ветки-паспорта,
+        // по которому несколько потребителей могут иметь свою ветку (Dossiers и в будущем —
+        // другие «ветки-паспорта»). Без переноса контракт жил бы ВНУТРИ вертикали Git и любая
+        // вертикаль-потребитель получала бы запрещённую сторожем границ связь. Дополнительно —
+        // IGitCommitInspector (5 методов инспекции коммитов, один потребитель Dossiers) и
+        // GitRepo.IsRepo (статика, примитив спины по образцу SafePath.Join). Реализация
+        // контракта — GitService в вынесенной вертикали Git; форвардеры (GitCommitInspector)
+        // живут в Main как тонкие прокладки.
+        "ClaudeHomeServer.Services.Git",
+        // Этап 5, волна 2 (Dossiers↔CodeGraph): ICodeGraphInspector + 2 record-типа
+        // (CodeGraphSnapshot/CodeGraphNode) — узкий шов инспекции графа кода для Dossiers
+        // (якоря FQN + сигнатура кеша статусов). CodeGraph — вынесенная вертикаль; без
+        // переноса контракт в Core Dossiers получал бы запрещённую сторожем границ связь.
+        "ClaudeHomeServer.Services.CodeGraph",
         // Этап 5, волна 5 (Knowledge): узкий Core-шов IDifyMetrics (ProjectKnowledgeSyncService
         // больше не ссылается на ServerMetrics/Main напрямую) + DifyErrorCategorizer
         // (43 строки чистой функции, нужны и Knowledge, и Memory, обе вертикали).

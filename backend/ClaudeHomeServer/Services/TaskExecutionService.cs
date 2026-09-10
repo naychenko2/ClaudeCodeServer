@@ -40,7 +40,7 @@ public class TaskExecutionService
     private readonly ISessionBroadcaster _broadcaster;
     private readonly PushService _push;
     private readonly NotificationService _notif;
-    private readonly NotesKnowledgeService _kb;
+    private readonly NotesKnowledgeService? _kb;
     private readonly ILogger<TaskExecutionService> _log;
     // Слоты тиров владельца + реестр провайдеров: только ради алиасов в таблице уровней
     // постановки (какой model= передавать в Task). null — постановка без этой таблицы.
@@ -95,7 +95,6 @@ public class TaskExecutionService
     public TaskExecutionService(
         TaskManager tasks, SessionManager sessions, PersonaManager personas,
         ISessionBroadcaster broadcaster, PushService push,
-        NotesKnowledgeService kb,
         NotificationService notif,
         ILogger<TaskExecutionService> log, IConfiguration config,
         Llm.UserModelTierResolver? tiers = null, Llm.LlmProviderRegistry? providers = null,
@@ -103,7 +102,10 @@ public class TaskExecutionService
         SpecialtySettingsStore? specialtySettings = null,
         Llm.ModelAssignmentResolver? assignments = null,
         Spend.TaskPromptMetricsStore? promptMetrics = null,
-        Llm.Claude.SubagentRunLog? subagentRuns = null)
+        Llm.Claude.SubagentRunLog? subagentRuns = null,
+        // Подсистема Notes отключаемая: null — блок «релевантные заметки» в постановке
+        // исполнителя тихо пропускается (BuildNotesContextAsync).
+        NotesKnowledgeService? kb = null)
     {
         _staleAfter = TimeSpan.FromMinutes(
             int.TryParse(config["Tasks:ExecutorStaleMinutes"], out var stale) && stale > 0 ? stale : 15);
@@ -561,7 +563,7 @@ public class TaskExecutionService
     // (флаг task-exec-context). Тихо пусто, если Dify не настроен или ничего не нашлось.
     private async Task<string> BuildNotesContextAsync(TaskItem task)
     {
-        if (!_kb.Available || task.OwnerId is null) return "";
+        if (_kb is not { } kb || !kb.Available || task.OwnerId is null) return "";
         var query = string.IsNullOrWhiteSpace(task.Description)
             ? task.Title
             : $"{task.Title}\n{task.Description}";
@@ -570,7 +572,7 @@ public class TaskExecutionService
         // topK=2 (было 5): блок заметок — самая крупная переменная часть постановки, а хвост
         // выдачи семантического поиска релевантен всё слабее. Два верхних попадания дают
         // контекст, пять — платный шум на каждом ходу исполнителя.
-        try { hits = await _kb.SearchAsync(task.OwnerId, query, topK: 2); }
+        try { hits = await kb.SearchAsync(task.OwnerId, query, topK: 2); }
         catch (Exception ex)
         {
             _log.LogWarning(ex, "Не удалось получить контекст заметок для задачи {TaskId}", task.Id);

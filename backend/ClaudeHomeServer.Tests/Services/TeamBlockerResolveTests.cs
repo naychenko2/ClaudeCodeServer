@@ -95,9 +95,10 @@ public class TeamBlockerResolveTests : IDisposable
         var notesSvc = new NotesService(_projects, config, NullLogger<NotesService>.Instance);
         var notesKb = new NotesKnowledgeService(knowledge, notesSvc, userStore, config,
             NullLogger<NotesKnowledgeService>.Instance);
-        var bindings = new PersonaBindingsService(_personas, _projects, wkStore, notesSvc, notesKb,
+        var bindings = new PersonaBindingsService(_personas, _projects, wkStore,
             knowledge, new SkillsService(),
-            userStore, config, NullLogger<PersonaBindingsService>.Instance);
+            userStore, config, NullLogger<PersonaBindingsService>.Instance,
+            notes: notesSvc, notesKb: notesKb);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
         var history = new ChatHistoryService(config);

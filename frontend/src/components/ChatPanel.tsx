@@ -1207,6 +1207,22 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     onSessionUpdated?.(updated);
   }, [session.id, onSessionUpdated]);
 
+  // «Продолжить в стандартном окне 200K» под карточкой отказа Window1MUnavailable: снимает
+  // суффикс [1m] с чата. Возврат { ok: false, error } при 400/404 — карточка показывает
+  // серверный текст под кнопкой (не молчит). request() бросает Error с прикреплёнными
+  // status/body, оттуда и берём человеческую формулировку
+  const handleDropWindow1M = useCallback(async (): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const updated = await api.chats.dropWindow1M(session.id);
+      onSessionUpdated?.(updated);
+      return { ok: true };
+    } catch (err) {
+      const body = (err as Error & { body?: { error?: string } })?.body;
+      const msg = body?.error ?? (err instanceof Error ? err.message : 'Не удалось переключить чат на стандартное окно.');
+      return { ok: false, error: msg };
+    }
+  }, [session.id, onSessionUpdated]);
+
   // Смена модели из полосы контролов композера. В рамках одного провайдера — обычный
   // update; смена провайдера у НАЧАТОГО чата упирается в guard (транскрипт живёт у
   // эндпоинта), поэтому идёт миграцией — тот же путь, что в «Настройках чата».
@@ -1849,12 +1865,13 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       promptSnapshotId={turnMeta.snapshots[i]}
       turnContextTokens={turnMeta.contextTokens[i]}
       turnCache={turnMeta.cache[i]}
+      onDropWindow1M={handleDropWindow1M}
     />
   ), [
     online, isWaiting, items.length, lastResultIndex, retryInterruptedIdx, toggleThinking, allowPermission,
     denyPermission, handleAllowAlways, answerQuestion, handleRespondPlan, planVersions,
     lastApprovedPlanIdx, mode, onOpenFile, project, handleRevert, handleRetry,
-    interrupt, handleMigrateProvider, batchByIndex, showWaiting, taskTodos, changeMode, turnBoundaries,
+    interrupt, handleMigrateProvider, handleDropWindow1M, batchByIndex, showWaiting, taskTodos, changeMode, turnBoundaries,
     mechanicOffers, launchedByIndex, failedByIndex, declinedMechanicOffers, runTeamMechanic, scrollToMechanicLaunch,
     presetOffers, presetCardState, presetNote, presetError, presetBusy, applyPreset, declinePreset,
     turnMeta,

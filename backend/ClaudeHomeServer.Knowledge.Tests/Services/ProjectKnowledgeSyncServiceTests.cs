@@ -2,14 +2,15 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using ClaudeHomeServer.Hubs;
+using ClaudeHomeServer.Core.Telemetry;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Tests.Helpers;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Dossiers;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Memory;
-using ClaudeHomeServer.Services.Composition;
-using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;
@@ -301,7 +302,9 @@ public class ProjectKnowledgeSyncServiceTests : IDisposable
     {
         var persona = _personas.Create(_ownerId, "Ада", "Аналитик", null, null,
             null, null, PersonaScope.Global, null, null, null, memoryEnabled: true);
-        var personaMemory = new PersonaMemoryService(_knowledge, _personas, _users, _config,
+        var personaMemory = new PersonaMemoryService(_knowledge, _personas, _personas,
+            new PersonaDirectoryAdapter(_personas), new NoopPersonaEvents(),
+            new EmptyDifyMetrics(), _users, _config,
             NullLogger<PersonaMemoryService>.Instance);
         var notesSvc = new NotesService(_projects, _config, NullLogger<NotesService>.Instance);
         var notesKb = new NotesKnowledgeService(_knowledge, notesSvc, _users, _config,

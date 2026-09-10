@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { Activity, Book, BriefcaseBusiness, Calendar, Coins, Columns3, Folder, House, MessageCircle, Puzzle, Share2, Users } from 'lucide-react';
 import { PillSwitch } from './Toolbar';
 import { useModules } from '../lib/modules';
+import { SUBSYSTEMS, useSubsystem } from '../lib/subsystems';
 
 export type HubTab = 'home' | 'chats' | 'wall' | 'projects' | 'calendar' | 'notes' | 'personas' | 'specialties' | 'knowledge' | 'notifications' | 'spend' | 'telemetry';
 
@@ -46,6 +47,13 @@ export const TAB_LABELS: Record<HubTab, string> = {
 // он строит скрытый компактный эталон именно этого набора и меряет «все 5
 // табов рядом», а не то, что сейчас отрисовано — иначе в откатной ветке (3 таба)
 // эталон бы заведомо влезал и цикл переключал ветки туда-обратно.
+// ВНИМАНИЕ: этот массив — КАНОНИЧЕСКИЙ полный набор при включённой подсистеме
+// заметок. При выключенной подсистеме HubTabs фильтрует 'notes' ИЗ этого набора
+// сам (см. ниже). Эталон HubHeader'а, построенный по DEFAULT_TABS, тогда немного
+// шире реального таббара — это цена границы файлов: HubHeader не в нашем владении,
+// а править пробу по производной (без 'notes') пришлось бы там. Практически на
+// мобильном таббаре это означает чуть более ранний откат на «3 primary + ⋯»
+// (эталон шире реального набора), что безвредно.
 export const DEFAULT_TABS: HubTab[] = ['chats', 'projects', 'calendar', 'notes', 'personas'];
 // Разделы, которые НЕ получают вкладку даже когда активны: вход к ним живёт
 // не в таббаре, а в шапке — логотип «Домой», колокольчик «Уведомления», меню
@@ -76,6 +84,14 @@ export function HubTabs({ value, onChange, mobile, tablet, tabs = DEFAULT_TABS }
     .filter(m => m.tab)
     .map(m => ({ value: `module:${m.id}` as HubTabValue, label: m.tab!.label, icon: <Puzzle size={18} strokeWidth={2} /> }));
 
+  // Гейт подсистемы заметок: при выключенной 'notes' в таббаре быть не должно.
+  // Шаблон — как у useModules() выше: фиксированные разделы дополняются реестром
+  // подсистем так же, как реестром модулей. Подсистема выключена → фильтруем таб
+  // 'notes' ИЗ входного набора `tabs`, иначе он всплыл бы как призрак на пустой
+  // странице (тот же риск, что и для модулей без remote).
+  const notesEnabled = useSubsystem(SUBSYSTEMS.notes);
+  const baseTabs = notesEnabled ? tabs : tabs.filter(t => t !== 'notes');
+
   // «Стена» — рабочий режим раздела проектов: своей вкладки нет, подсвечиваем
   // пилюлю «Проекты» (клик по ней со стены — выход к списку, App.switchHubTab).
   const displayValue: HubTabValue = value === 'wall' ? 'projects' : value;
@@ -87,8 +103,8 @@ export function HubTabs({ value, onChange, mobile, tablet, tabs = DEFAULT_TABS }
   // вкладкой в конец. На мобиле/планшете так всплывают «Заметки» и «Персоны» из
   // «⋯ Разделы», чтобы было видно, где находишься. Модульный таб в набор фиксированных
   // не входит — он живёт в moduleOptions ниже, поэтому из проверки исключаем.
-  const isKnownFixed = !isModuleTab(displayValue) && (tabs.includes(displayValue) || TABLESS.includes(displayValue));
-  const shown = isKnownFixed || isModuleTab(displayValue) ? tabs : [...tabs, displayValue as HubTab];
+  const isKnownFixed = !isModuleTab(displayValue) && (baseTabs.includes(displayValue) || TABLESS.includes(displayValue));
+  const shown = isKnownFixed || isModuleTab(displayValue) ? baseTabs : [...baseTabs, displayValue as HubTab];
   // tablet: иконки у опций нужны как и на мобиле — если PillSwitch включит
   // compact (autoCompact сработает при переполнении), иконки уже на месте.
   const compactLike = mobile || tablet;

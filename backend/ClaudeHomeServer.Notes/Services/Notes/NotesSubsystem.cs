@@ -34,11 +34,24 @@ namespace ClaudeHomeServer.Services.Notes;
 // Регистрация шовных реализаций (`TaskBridge`/`NotesHubNotifier`) — в Main
 // (Program.cs), потому что эти типы сами живут в Main и недоступны из
 // Notes.csproj: обратной ссылки нет.
+//
+// Контроллер `NotesController` (Controllers/NotesController.cs) живёт В ЭТОЙ
+// сборке. Дефолт `Subsystems:Notes:Enabled = true`. Гейт вертикали
+// (закрыть контроллеры при `Enabled=false` — 404 на `/api/notes/*` вместо 500
+// от DI-резолва) — забота КОМПОЗИЦИИ Main (`ConfigureApplicationPartManager` в
+// Program.cs): MSBuild генерирует `[assembly: ApplicationPart("ClaudeHomeServer.Notes")]`
+// в `obj/*/ClaudeHomeServer.MvcApplicationPartsAssemblyInfo.cs` благодаря тому,
+// что Notes.csproj собран под `Microsoft.NET.Sdk.Web`, и подсистема этот атрибут
+// обойти не может. Сравнение по имени сборки; обратной ссылки Main → Notes
+// избежать нельзя, но она узкая (один метод `ConfigureApplicationPartManager`).
 public sealed class NotesSubsystem : IAppSubsystem
 {
     public string Key => "notes";
 
     public string Title => "Заметки";
+
+    // Для админского экрана «Подсистемы»: одно предложение, попадает в REST как `description`.
+    public string Description => "Личный vault, заметки проектов, связи [[…]] и граф.";
 
     public void Register(IServiceCollection services, IConfiguration config)
     {
@@ -52,7 +65,10 @@ public sealed class NotesSubsystem : IAppSubsystem
         // Этап 5, шаг 6 (инверсия контрибьюторов промпта): контрибьютор секции
         // «recall-notes» зарегистрирован в своей вертикали, Turn собирает
         // IEnumerable<IPromptSectionContributor> и натравливает на шину (см.
-        // PromptSectionContributorsRegistration.RegisterAll).
+        // PromptSectionContributorsRegistration.RegisterAll). Гейт подсистемы —
+        // структурный: при `Subsystems:Notes:Enabled=false` `AddSubsystems` не зовёт
+        // `Register`, и контрибьютор (он тянет `NotesKnowledgeService`) в
+        // `IEnumerable<IPromptSectionContributor>` не попадает вовсе.
         services.AddPromptSectionContributor<NotesRecallContributor>();
     }
 }

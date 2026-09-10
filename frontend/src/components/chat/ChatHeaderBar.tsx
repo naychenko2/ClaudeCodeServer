@@ -33,6 +33,7 @@ import { createTask } from '../../lib/tasks';
 import { showToast } from '../../lib/toast';
 import { beginAiBusy, endAiBusy } from '../../lib/ai/busy';
 import { openNoteById } from '../../features/notes/saveToNote';
+import { useSubsystem } from '../../lib/subsystems';
 import type { ExtractedTaskCandidate } from '../../types';
 import { ChatOriginBadge } from '../ChatOriginBadge';
 import { TeamMechanicBadge } from '../../features/team/TeamMechanicBadge';
@@ -830,8 +831,11 @@ interface ChatHeaderBarProps {
 
 // «Итог сессии в заметку» — теперь запускается ТОЛЬКО через AI-палитру (действие
 // chat.summary). Компонент невидим, но остаётся смонтированным ради слушателя
-// cc-ai-run; при успехе открывает созданную заметку.
+// cc-ai-run; при успехе открывает созданную заметку. Гейт по подсистеме notes:
+// если она выключена, монтировать кнопку и слушатель смысла нет — AI-палитра
+// chat.summary всё равно скрыта, событие никогда не прилетит.
 function SessionSummaryButton({ session, hasMessages, online }: { session: Session; hasMessages: boolean; online: boolean }) {
+  const notesOn = useSubsystem('notes');
   const [busy, setBusy] = useState(false);
   // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс busy при смене чата
   useEffect(() => { setBusy(false); }, [session.id]);
@@ -845,12 +849,12 @@ function SessionSummaryButton({ session, hasMessages, online }: { session: Sessi
       .finally(() => { setBusy(false); endAiBusy(); });
   };
   useEffect(() => {
-    if (!online || !hasMessages) return;
+    if (!notesOn || !online || !hasMessages) return;
     const onRun = (e: Event) => { if ((e as CustomEvent<{ action?: string }>).detail?.action === 'chat.summary') run(); };
     window.addEventListener('cc-ai-run', onRun);
     return () => window.removeEventListener('cc-ai-run', onRun);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [online, session.id, hasMessages, busy]);
+  }, [notesOn, online, session.id, hasMessages, busy]);
   return null;
 }
 
@@ -961,6 +965,10 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
 }
 
 export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, onBillingChange, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, onAddToWall, onChatDeleted, island, compact, contextBar }: ChatHeaderBarProps) {
+  // Гейт правого клик-меню по подсистеме заметок: пункт «Итог сессии в заметку»
+  // пропадает при выключенной подсистеме (остальные AI-действия чата к заметкам
+  // не относятся и остаются).
+  const notesOn = useSubsystem('notes');
   // УЗКИЙ планшет (601 – TABLET_WIDE_MIN): мобильная механика — объединённый чип,
   // wide-поповер, плотная группа кнопок, заголовок с многоточием. Объединяем с mobile
   // через `isCompact`, чтобы не дублировать ветки внутри costBadges / rightCluster /
@@ -1772,11 +1780,13 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
             label="Задачи из чата"
             onClick={() => { setCtxMenu(null); runAi('chat.extract'); }}
           />
-          <MenuItem
-            icon={<NotebookPen size={15} strokeWidth={2} />}
-            label="Итог сессии в заметку"
-            onClick={() => { setCtxMenu(null); runAi('chat.summary'); }}
-          />
+          {notesOn && (
+            <MenuItem
+              icon={<NotebookPen size={15} strokeWidth={2} />}
+              label="Итог сессии в заметку"
+              onClick={() => { setCtxMenu(null); runAi('chat.summary'); }}
+            />
+          )}
         </>
       )}
     </Menu>

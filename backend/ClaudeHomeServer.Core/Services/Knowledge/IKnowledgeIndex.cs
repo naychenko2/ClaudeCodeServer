@@ -43,6 +43,14 @@ public interface IKnowledgeIndex
     // Удаляет весь датасет Dify. Используется Dossiers-каскадом при удалении проекта.
     Task DeleteDatasetAsync(string datasetId);
 
+    // Переименовать датасет (Dify: PATCH /datasets /d). Используется при смене хендла
+    // персоны (PersonaMemoryService.RenameDatasetSafeAsync) и при переименовании
+    // проекта (TeamMemoryService.RenameProjectDatasetAsync). Сбой — лог: id остаётся
+    // валидным, retrieve работает, и стухшее имя функциональность не ломает.
+    // Этап 5, волна 2: добавлен в Core-контракт ради Memory↔Knowledge (раньше Memory
+    // держала прямую ссылку на KnowledgeService именно ради этого метода).
+    Task RenameDatasetAsync(string datasetId, string newName);
+
     // Индексирует текстовый документ: создаёт запись Dify, возвращает её описание.
     // Используется заметками и памятью.
     Task<DifyDocumentInfo> IndexFileByTextAsync(string datasetId, string fileName, string content,

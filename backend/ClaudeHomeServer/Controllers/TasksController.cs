@@ -93,8 +93,12 @@ public class ProjectTasksController(
 [Route("api/tasks")]
 public class TasksController(
     TaskManager tasks, ISessionBroadcaster broadcaster, TaskAiService ai, ProjectManager projects,
-    PersonaManager personas, TaskExecutionService executor, NoteTaskSyncService noteSync,
-    PersonaBindingsService bindings, SessionManager sessions) : ControllerBase
+    PersonaManager personas, TaskExecutionService executor,
+    PersonaBindingsService bindings, SessionManager sessions,
+    // Подсистема Notes отключаемая: null — обратная запись чекбокса в заметку-источник
+    // тихо пропускается (SyncTaskToNoteAsync ниже, флаг notes-task-sync и так no-op
+    // для задач не из заметки).
+    NoteTaskSyncService? noteSync = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -391,7 +395,7 @@ public class TasksController(
         // Обратная запись в заметку-источник: смена done-состояния ставит/снимает галочку
         // (флаг notes-task-sync; no-op если задача не из заметки)
         if (wasDone != (updated.Status == TaskItemStatus.Done))
-            await noteSync.SyncTaskToNoteAsync(UserId, updated);
+            await (noteSync?.SyncTaskToNoteAsync(UserId, updated) ?? Task.CompletedTask);
 
         return Ok(updated);
     }

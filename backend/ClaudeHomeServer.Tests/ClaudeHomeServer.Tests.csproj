@@ -47,6 +47,25 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.Turn.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- Dossiers/Memory — отдельные сборки (Этап 5, волна 3, финал): тесты их вертикалей
+         живут в ClaudeHomeServer.Dossiers.Tests / ClaudeHomeServer.Memory.Tests. Допуск
+         нужен под те же internal-хелперы тестов, что у Spend.Tests (TestLauncherFactory /
+         FakeHostEnvironment / TestSessionBroadcaster), а также чтобы статические
+         конструкторы сторожей форс-загрузили обе сборки. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Dossiers.Tests</_Parameter1>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Memory.Tests</_Parameter1>
+    </AssemblyAttribute>
+    <!-- Desktop — отдельная сборка (Этап 5, вынос Desktop): тесты вертикали живут в
+         ClaudeHomeServer.Desktop.Tests. Допуск нужен под общие internal-фейки грани
+         (Helpers/DesktopFakes.cs) — их делят тесты вертикали и оставшиеся в Main тесты
+         контроллеров канала, — а также чтобы статические конструкторы сторожей
+         форс-загрузили сборку. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Desktop.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\ClaudeHomeServer\ClaudeHomeServer.csproj" />
@@ -71,6 +90,14 @@
       статический конструктор SubsystemBoundaryTests видел тип
       `ClaudeHomeServer.Services.Modules.ModuleRegistry` для force-загрузки сборки.
     -->
+    <!--
+      Dossiers/Memory — отдельные сборки (Этап 5, волна 3, финал). Ссылка нужна, чтобы
+      статические конструкторы сторожей (SubsystemBoundaryTests, RootSubsystemBoundaryTests,
+      SubsystemBoundaryCoverageTests) видели типы DossiersSubsystem/MemorySubsystem для
+      форс-загрузки: сама ссылка сборку в AppDomain не грузит — загрузка в .NET ленивая.
+    -->
+    <ProjectReference Include="..\ClaudeHomeServer.Dossiers\ClaudeHomeServer.Dossiers.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Memory\ClaudeHomeServer.Memory.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Backgrounds\ClaudeHomeServer.Backgrounds.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Modules\ClaudeHomeServer.Modules.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.ProjectIcons\ClaudeHomeServer.ProjectIcons.csproj" />

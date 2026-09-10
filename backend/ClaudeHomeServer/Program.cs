@@ -119,7 +119,32 @@ builder.Services.AddExceptionHandler<ClaudeHomeServer.Services.Http.UnhandledExc
 builder.Services.AddControllers()
     .AddJsonOptions(o =>
         o.JsonSerializerOptions.Converters.Add(
-            new JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase)));
+            new JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase)))
+    // Сборки вертикалей, собранные под `Microsoft.NET.Sdk.Web`, несут атрибут
+    // `[assembly: ApplicationPart("...")]` — MSBuild дописывает его в сгенерированный
+    // `obj/*/ClaudeHomeServer.MvcApplicationPartsAssemblyInfo.cs` ссылочного проекта
+    // Main, и `ApplicationPartManager.PopulateDefaultParts` добавляет их к составу
+    // MVC. Из-за этого выключение вертикали гейтом `Subsystems:Notes:Enabled=false`
+    // не изолирует её контроллеры: роутер находит action и пытается активировать
+    // `NotesController` без зависимостей → ProblemDetails 500 на каждый запрос к
+    // `/api/notes/*` (задача 4defaacc, QA-прогон 2026-09-10).
+    //
+    // Убираем часть здесь, в композиции Main — единая точка для всех вертикалей.
+    // Сравнение по имени сборки: оригинальный объект `ApplicationPart` создаётся
+    // внутри MVC и наружу не отдаётся, сравнивать по ссылке нельзя.
+    // `ConfigureApplicationPartManager` отрабатывает на построении менеджера (раньше
+    // первого резолва `MvcOptions` и его кеша моделей контроллеров) — `IConfigureOptions<MvcOptions>`
+    // для этого НЕ подходит: его порядок относительно `PopulateDefaultParts` не
+    // контролируется, и на момент configure части уже зафиксированы.
+    .ConfigureApplicationPartManager(pm =>
+    {
+        if (SubsystemGate.IsEnabled(builder.Configuration, "notes")) return;
+        for (var i = pm.ApplicationParts.Count - 1; i >= 0; i--)
+        {
+            if (pm.ApplicationParts[i].Name == "ClaudeHomeServer.Notes")
+                pm.ApplicationParts.RemoveAt(i);
+        }
+    });
 
 // Hosted-сервисы: в Testing-среде (TestWebApplicationFactory) НЕ регистрируются без
 // явного флага Testing:EnableHostedServices=true — 17 фоновых циклов на каждый из
@@ -179,6 +204,10 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.IProjectIconMigrator,
 builder.Services.AddSingleton<ClaudeHomeServer.Services.IDataBackupService,
     ClaudeHomeServer.Services.Backup.DataBackupServiceAdapter>();
 builder.Services.AddSingleton<JwtService>();
+// Шов IDesktopCapabilityTokens (Core) — форвард на тот же синглтон, не второй экземпляр:
+// вертикаль Desktop берёт у токенов ровно выдачу и проверку capability-токена канала.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.IDesktopCapabilityTokens>(
+    sp => sp.GetRequiredService<JwtService>());
 builder.Services.AddSingleton<FeatureFlagService>();
 builder.Services.AddSingleton<AppSettingsService>();
 // UserModelTierResolver (слоты моделей) — DI в подсистеме `LlmSubsystem`
@@ -224,8 +253,35 @@ builder.Services.AddSingleton<IPreviewTokenValidator, JwtValidatorGateway>();
 // получает только `IsEnabled`, без каталога определений и записи.
 builder.Services.AddSingleton<IModuleFeatureFlagReader, FeatureFlagGateway>();
 builder.Services.AddSingleton<ICommitLogReader, CommitLogReader>();
+// Узкий шов инспекции коммитов (Этап 5, волна 2, разрез Dossiers↔Git): потребитель —
+// Dossiers (DossierCaptureService/DossierRecallService), 5 методов инспекции коммитов.
+// Реализация — `GitCommitInspector` (Main, тонкий форвардер на `GitService` из Core.
+// Git — вынесенная вертикаль с собственным синглтоном; форвардер через тот же
+// `sp.GetRequiredService<GitService>()`, что и `IGitRefSnapshotStore` ниже в GitSubsystem.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Git.IGitCommitInspector,
+    ClaudeHomeServer.Services.Git.GitCommitInspector>();
+// Узкий шов записи памяти в заметки (Этап 5, волна 2, разрез Memory↔Notes):
+// потребитель — Memory (PersonaMemoryService.MemoryToNote/NoteToMemoryAsync),
+// 2 метода (Create/GetDetail). Notes — вынесенная вертикаль; форвардер NotesAccessor
+// резолвит NotesService через тот же синглтон, что и подсистема.
+// Гейт подсистемы Notes: при `Subsystems:Notes:Enabled=false` `NotesService` в DI нет,
+// и резолв `NotesAccessor` падает с InvalidOperationException — то же правило, что у
+// `IKnowledgeSyncParticipant → NotesKnowledgeService` (строки ниже) и у
+// `INoteTaskBridge`/`INotesHubNotifier` (Этап 5, волна E).
+// Потребитель (`PersonaMemoryService`) держит `INoteAccessor?` и гейтит вызовы через
+// `if (_notes is null) return null`, поэтому отсутствие шва — штатное состояние.
+if (SubsystemGate.IsEnabled(builder.Configuration, "notes"))
+{
+    builder.Services.AddSingleton<ClaudeHomeServer.Services.Notes.INoteAccessor,
+        ClaudeHomeServer.Services.Notes.NotesAccessor>();
+}
 // CodeGraph: граф зависимостей кода — DI в подсистеме `CodeGraphSubsystem`
 // (волна 2, первая с пост-билд фазой: регистрирует языковые провайдеры в ConfigureApp).
+// Узкий шов инспекции графа (Этап 5, волна 2, разрез Dossiers↔CodeGraph): потребитель —
+// Dossiers, два метода (GetSnapshotAsync + StartRebuildIfIdle). Форвардер через тот же
+// синглтон `CodeGraphService`, что и подсистем.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.CodeGraph.ICodeGraphInspector,
+    ClaudeHomeServer.Services.CodeGraph.CodeGraphInspector>();
 builder.Services.AddSingleton<ProjectGroupManager>();
 builder.Services.AddSingleton<ProjectEventLogService>();
 // Этап 5, волна E: узкий Core-шов IProjectEventLogService для выноса Notes (NotesService
@@ -421,6 +477,11 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.ITurnEventBus,
 // гасятся внутри). Подключаются к шине фильтром prompt/assembling через
 // PromptSectionContributorsRegistration.RegisterAll в SessionManager.
 // Новый контрибьютор — одна строка в PromptSectionContributorsDi.AddPromptSectionContributors().
+// Здесь регистрируются только «чистые» контрибьюторы Turn; вертикальные (NotesRecallContributor,
+// CodeGraphContributor) регистрирует своя подсистема в `Register` (Этап 5, шаг 6 — инверсия).
+// Гейт отключаемой подсистемы получается СТРУКТУРНЫМ: при `Subsystems:Notes:Enabled=false`
+// `AddSubsystems` не зовёт `NotesSubsystem.Register`, и контрибьютор не регистрируется вовсе —
+// ни предикат на регистрации, ни пост-хок удаление дескрипторов здесь больше не нужны.
 builder.Services.AddPromptSectionContributors();
 builder.Services.AddSingleton<SessionManager>();
 // Серверные сторожа чатов: стор + цикл опроса. Запуск poll-команд — через
@@ -511,7 +572,7 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDesktopChatDire
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDesktopDeviceDirectory,
     ClaudeHomeServer.Services.Desktop.DesktopDeviceDirectory>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDesktopHandsNotifier,
-    ClaudeHomeServer.Services.Desktop.DesktopHandsNotifier>();
+    ClaudeHomeServer.Services.Composition.DesktopHandsNotifier>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDesktopCallCanceller,
     ClaudeHomeServer.Services.Desktop.DesktopRouterCallCanceller>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DesktopHandsSessionService>();
@@ -757,8 +818,14 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSync
     sp => sp.GetRequiredService<ClaudeHomeServer.Services.Memory.TeamMemoryService>());
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
     sp => sp.GetRequiredService<ClaudeHomeServer.Services.Dossiers.DossierStore>());
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
-    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Notes.NotesKnowledgeService>());
+// Гейт подсистемы Notes: NotesKnowledgeService не попадёт в DI при выключенной подсистеме
+// (NotesSubsystem.Register не вызывается) — безусловный форвардер уронил бы резолв ВСЕЙ
+// коллекции IKnowledgeSyncParticipant (а не только заметки), блокер ревью notes-optional Б2.
+if (SubsystemGate.IsEnabled(builder.Configuration, "notes"))
+{
+    builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
+        sp => sp.GetRequiredService<ClaudeHomeServer.Services.Notes.NotesKnowledgeService>());
+}
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
     sp => sp.GetRequiredService<ProjectKnowledgeSyncService>());
 
@@ -770,6 +837,8 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.ISessionMess
     ClaudeHomeServer.Services.Composition.SessionMessageObserver>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.IPersonaDirectory,
     ClaudeHomeServer.Services.Composition.PersonaDirectoryAdapter>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.IPersonaEvents,
+    ClaudeHomeServer.Services.Composition.PersonaEventsImpl>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.IKnowledgeNotificationDispatcher,
     ClaudeHomeServer.Services.Composition.Notifications.KnowledgeNotificationDispatcher>();
 builder.Services.AddSingleton<ClaudeHomeServer.Core.Telemetry.IDifyMetrics,
@@ -812,13 +881,18 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.IPersonaBindingsSou
 // Этап 5, волна E: forwarder-регистрации двух Core-интерфейсов выноса Notes.
 // Реализации (`TaskBridge` поверх TaskManager, `NotesHubNotifier` поверх IHubContext<SessionHub>)
 // живут в Main как тонкие обёртки; Notes (в отдельной сборке) получает только
-// Core-контракты.
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Tasks.TaskBridge>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.NotesHubNotifier>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Notes.INoteTaskBridge>(
-    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Tasks.TaskBridge>());
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Notes.INotesHubNotifier>(
-    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Composition.NotesHubNotifier>());
+// Core-контракты. Гейт `Subsystems:Notes:Enabled`: при выключенной подсистеме
+// и сами реализации, и форвардеры швов в DI не нужны — резолв `INoteTaskBridge`/
+// `INotesHubNotifier` иначе свалится на первом же обращении из Notes.
+if (SubsystemGate.IsEnabled(builder.Configuration, "notes"))
+{
+    builder.Services.AddSingleton<ClaudeHomeServer.Services.Tasks.TaskBridge>();
+    builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.NotesHubNotifier>();
+    builder.Services.AddSingleton<ClaudeHomeServer.Services.Notes.INoteTaskBridge>(
+        sp => sp.GetRequiredService<ClaudeHomeServer.Services.Tasks.TaskBridge>());
+    builder.Services.AddSingleton<ClaudeHomeServer.Services.Notes.INotesHubNotifier>(
+        sp => sp.GetRequiredService<ClaudeHomeServer.Services.Composition.NotesHubNotifier>());
+}
 
 // Этап 5, Ф4: шов ISessionBroadcaster (Core) → SessionHubBroadcaster (Main, поверх
 // IHubContext<SessionHub>). Префиксы групп "user_"/"project_" собираются только здесь —
@@ -1630,7 +1704,7 @@ app.MapHub<SessionHub>("/hubs/session");
 app.MapHub<TerminalHub>("/hubs/terminal");
 // Канал десктопного агента (ADR-008): исходящее соединение клиента с машины пользователя,
 // push команды в конкретное соединение. Схема авторизации — токен устройства, а не общий JWT
-app.MapHub<ClaudeHomeServer.Hubs.DeviceHub>("/hubs/devices");
+app.MapHub<ClaudeHomeServer.Services.Desktop.DeviceHub>("/hubs/devices");
 
 // Graceful shutdown: гасим все живые процессы claude, терминалы и dev-серверы.
 //

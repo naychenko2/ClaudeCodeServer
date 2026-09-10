@@ -83,8 +83,8 @@ public class SessionManagerContainerMigrationTests : IDisposable
         var notesKb = new NotesKnowledgeService(knowledge, notesSvc, userStore, config,
             NullLogger<NotesKnowledgeService>.Instance);
         var personas = new PersonaManager(config);
-        var bindings = new PersonaBindingsService(personas, projectManager, wkStore, notesSvc, notesKb,
-            knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance);
+        var bindings = new PersonaBindingsService(personas, projectManager, wkStore,
+            knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
         var sandbox = new SandboxManager(config, NullLogger<SandboxManager>.Instance);
         // Настоящая фабрика: container-пользователь должен получить песочный драйвер с
         // маппером путей (docker при этом не запускается — Start в тестах не зовётся)

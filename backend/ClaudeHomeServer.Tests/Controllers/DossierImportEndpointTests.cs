@@ -239,7 +239,7 @@ public class DossierImportEndpointTests : IClassFixture<TestWebApplicationFactor
             sp.GetRequiredService<ClaudeHomeServer.Services.Dossiers.DossierCaptureState>(),
             sp.GetRequiredService<ClaudeHomeServer.Services.Git.IGitRefSnapshotStore>(),
             sp.GetRequiredService<ClaudeHomeServer.Services.Dossiers.InstanceSecretsProvider>(),
-            sp.GetRequiredService<ClaudeHomeServer.Services.FeatureFlagService>())
+            sp.GetRequiredService<ClaudeHomeServer.Services.Composition.IFeatureFlagGate>())
             .TickAsync();
 
         var payload = JsonSerializer.Deserialize<JsonElement>(

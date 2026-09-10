@@ -7,6 +7,7 @@ import { useAiAwaiting, ensureAiAwaitingLoaded, type AiAwaitingRec } from '../..
 import { getCachedProject, ensureProjectsLoaded } from '../../features/projects/useAllProjects';
 import type { Project } from '../../types';
 import { getFlag } from '../../lib/featureFlags';
+import { isSubsystemEnabled } from '../../lib/subsystems';
 import { api } from '../../lib/api';
 import { useOnline } from '../../hooks/useOnline';
 import { rankedActions, runActionById, AI_ACTIONS, type AiAction, type AiActionCtx } from '../../lib/ai/actions';
@@ -123,7 +124,14 @@ export function AiLauncher() {
   // руководителем точки быть не должно — там речь не про личное знакомство).
   const me = useMe();
   const showIntroDot = me.loaded && me.needsOnboarding && facePersona?.id === me.defaultPersonaId;
-  useEffect(() => { api.notes.caps().then(c => setSemanticCaps(c.semantic)).catch(() => {}); }, []);
+  // Доступность семантики (Dify) нужна только при включённой подсистеме заметок:
+  // при выключенной маршрута `api.notes.caps()` в MVC нет, и запрос уходит в общий
+  // фолбэка (на стенде 200 `text/html`, который развалит `JSON.parse`), а палитра и так
+  // не покажет «Поиск по смыслу». Гейт ДО запроса (не глушим ошибку, не обращаемся вовсе).
+  useEffect(() => {
+    if (!isSubsystemEnabled('notes')) return;
+    api.notes.caps().then(c => setSemanticCaps(c.semantic)).catch(() => {});
+  }, []);
   // Глобальный стор «ждём ответа» живёт на потоке статусов сессий, не на ChatPanel:
   // запускаем подписку + первичную загрузку при монтировании хаба (он рендерится везде).
   useEffect(() => { void ensureAiAwaitingLoaded(); }, []);
@@ -179,7 +187,7 @@ export function AiLauncher() {
     // иначе статус из прежнего проекта «протёк» бы в новый
     const pid = nav?.screen === 'project' ? nav.project?.id : undefined;
     const git = gitRepo && pid && gitRepo.projectId === pid ? { isRepo: gitRepo.isRepo } : undefined;
-    return { nav, online, flag: getFlag, caps: { semantic: semanticCaps }, chat: getChatContext(), git };
+    return { nav, online, flag: getFlag, subsystem: isSubsystemEnabled, caps: { semantic: semanticCaps }, chat: getChatContext(), git };
   };
 
   const [fabHover, setFabHover] = useState(false);

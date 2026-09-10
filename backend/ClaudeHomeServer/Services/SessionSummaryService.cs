@@ -13,16 +13,27 @@ public sealed class SummaryInProgressException() : Exception("Итог по эт
 // Ошибка генерации конспекта (LLM упал/таймаут) → 502 у контроллера
 public sealed class SummaryGenerationException(string message) : Exception(message);
 
+// Подсистема Notes выключена — конспект сохранять некуда. Отдельный тип, а не
+// SummaryGenerationException: это состояние инстанса, а не сбой обработки, и клиенту
+// повторять запрос бессмысленно. Контроллер отдаёт за него 503 + reason="notes_disabled" —
+// ровно тот же наблюдаемый контракт, что у BriefingUnavailableException в «Утреннем брифе»
+// (одна причина — один код отказа).
+public sealed class SummaryUnavailableException(string message) : Exception(message);
+
 // «Итог сессии»: по явному запросу пользователя собирает транскрипт сессии,
 // one-shot вызовом claude --print строит конспект и сохраняет его заметкой
 // (проектная сессия → notes/Сессии проекта, чат вне проекта → личный vault).
 // Повторный вызов обновляет ту же заметку (Session.SummaryNoteId), а не плодит дубли.
 public class SessionSummaryService(
-    SessionManager sessions, ProjectManager projects, NotesService notes,
-    NotesKnowledgeService kb, Llm.ICheapTextRunner cheap,
+    SessionManager sessions, ProjectManager projects,
+    Llm.ICheapTextRunner cheap,
     ISessionBroadcaster broadcaster,
     NotificationService notif, IConfiguration config,
-    ILogger<SessionSummaryService> logger)
+    ILogger<SessionSummaryService> logger, NotesService? notes = null,
+    // Подсистема Notes отключаемая: null, если выключена. Проверка notes is null стоит
+    // ПЕРВОЙ в SummarizeAsync (после inFlight), чтобы при выключенной подсистеме не
+    // платить за LLM-конспект, который некуда сохранить; kb тоже null и зовётся через `?.`.
+    NotesKnowledgeService? kb = null)
 {
     // Бюджет транскрипта в символах: длиннее — сокращаем (голова + хвост)
     private const int TranscriptBudget = 30_000;
@@ -44,6 +55,13 @@ public class SessionSummaryService(
             throw new SummaryInProgressException();
         try
         {
+            // Подсистема Notes отключена — конспект сохранять некуда. Проверка стоит
+            // ДО платного cheap.RunAsync: иначе пользователь платит за LLM-конспект,
+            // который гарантированно будет выброшен (эталон — DailyBriefingService).
+            if (notes is null)
+                throw new SummaryUnavailableException(
+                    "Итог сессии недоступен: подсистема «Заметки» отключена");
+
             var history = await sessions.GetHistoryAsync(sessionId);
             var transcript = BuildTranscript(history, TranscriptBudget);
             if (string.IsNullOrWhiteSpace(transcript))
@@ -83,7 +101,7 @@ public class SessionSummaryService(
                 sessions.SetSummaryNoteId(sessionId, note.Id);
             }
 
-            kb.QueueSync(ownerId);
+            kb?.QueueSync(ownerId);
             await broadcaster.ToOwner(ownerId,
                 new NotesChangedMessage(isUpdate ? "updated" : "created", note.Id));
 
@@ -105,40 +123,12 @@ public class SessionSummaryService(
     }
 
     // Транскрипт для LLM: реплики пользователя/Claude + однострочные пометки об инструментах
-    // и файлах; thinking и метаданные пропускаются. Переполнение бюджета — голова (цель
-    // сессии) + хвост (развязка), середина сокращается.
-    internal static string BuildTranscript(IReadOnlyList<StoredMessage> messages, int budget)
-    {
-        var sb = new StringBuilder();
-        foreach (var m in messages)
-        {
-            switch (m)
-            {
-                case StoredUserMessage u when !string.IsNullOrWhiteSpace(u.Text):
-                    sb.AppendLine("Пользователь:");
-                    sb.AppendLine(u.Text.Trim());
-                    sb.AppendLine();
-                    break;
-                // Текст сабагента (ParentToolUseId != null) — не реплика Claude в диалоге
-                case StoredTextMessage { ParentToolUseId: null } t when !string.IsNullOrWhiteSpace(t.Text):
-                    sb.AppendLine("AI:");
-                    sb.AppendLine(t.Text.Trim());
-                    sb.AppendLine();
-                    break;
-                case StoredToolUseMessage tu when !string.IsNullOrEmpty(tu.Name):
-                    sb.AppendLine($"[инструмент {tu.Name}]");
-                    break;
-                case StoredFileChangedMessage f:
-                    sb.AppendLine($"[изменён файл {f.Path} +{f.Added}/-{f.Removed}]");
-                    break;
-            }
-        }
-        var text = sb.ToString().Trim();
-        if (text.Length <= budget) return text;
-        var head = budget / 5;
-        var tail = budget - head;
-        return text[..head] + "\n\n[…транскрипт сокращён…]\n\n" + text[^tail..];
-    }
+    // и файлах. Тело переехало в спину — `Services.SessionTranscript.Build` (Этап 5, волна 3:
+    // функцию зовут вертикали Memory/Dossiers, а из отдельной сборки Main не виден). Здесь
+    // остался тонкий форвардер ради семи вызывающих внутри Main — тот же приём, что
+    // `FileService.SafeJoin` → `SafePath.Join`.
+    internal static string BuildTranscript(IReadOnlyList<StoredMessage> messages, int budget) =>
+        SessionTranscript.Build(messages, budget);
 
     internal static string BuildPrompt(string? sessionName, string transcript)
     {

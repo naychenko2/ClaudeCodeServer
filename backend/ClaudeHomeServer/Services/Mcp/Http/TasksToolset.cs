@@ -40,10 +40,12 @@ public sealed class TasksToolset(
     PersonaManager personas,
     TaskExecutionService executor,
     TaskAiService ai,
-    NoteTaskSyncService noteSync,
     PersonaBindingsService bindings,
     SessionManager sessions,
-    ISessionBroadcaster broadcaster) : IMcpParameterizedToolset
+    ISessionBroadcaster broadcaster,
+    // Подсистема Notes отключаемая: null — обратная запись в заметку-источник тихо
+    // пропускается (см. использование ниже, паритет с TasksController).
+    NoteTaskSyncService? noteSync = null) : IMcpParameterizedToolset
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/tasks/{sessionId}. Константа —
     // единственная точка правды для URL конфига хода (ClaudeSession)
@@ -377,7 +379,7 @@ public sealed class TasksToolset(
                 }
                 // Обратная запись в заметку-источник: смена done-состояния ставит/снимает галочку
                 if (wasDone != (updated.Status == TaskItemStatus.Done))
-                    await noteSync.SyncTaskToNoteAsync(context.OwnerId, updated);
+                    await (noteSync?.SyncTaskToNoteAsync(context.OwnerId, updated) ?? Task.CompletedTask);
                 // Волна 1 team-blocker-honest: если у задачи открыт блокер — гасим по факту,
                 // координатор сам снял причину правкой постановки.
                 // S2 (фикс-волна): сигнал засчитывается только если вызывающая сессия — сам
@@ -434,7 +436,7 @@ public sealed class TasksToolset(
                     && tasks.SpawnNextOccurrence(updated) is { } next)
                     await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("created", next));
                 if (wasDone != (updated.Status == TaskItemStatus.Done))
-                    await noteSync.SyncTaskToNoteAsync(context.OwnerId, updated);
+                    await (noteSync?.SyncTaskToNoteAsync(context.OwnerId, updated) ?? Task.CompletedTask);
                 // Волна 1 team-blocker-honest: задача-блокер закрыта координатором — гасим
                 // блокер по факту, стадия возвращается в работу.
                 // S2 (фикс-волна): caller == SourceSessionId — иначе правка из чата исполнителя

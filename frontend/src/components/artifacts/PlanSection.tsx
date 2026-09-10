@@ -11,9 +11,9 @@ import { MarkdownViewer } from '../MarkdownViewer';
 import { useHeadings, scrollToHeading, type Heading } from '../../hooks/useHeadings';
 import type { PlanArtifact, PlanStatus } from '../../hooks/useSessionArtifacts';
 import type { PlanMap } from '../../types';
-import { IconNotes } from '../../features/notes/shared';
-import { saveChatNote, openNoteById } from '../../features/notes/saveToNote';
+import { IconNotes, saveChatNote, openNoteById } from '../../features/notes';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
+import { useSubsystem } from '../../lib/subsystems';
 import { PlanRemarks } from '../../features/plan/PlanRemarks';
 import { PlanScheme } from '../plan/PlanScheme';
 import { api } from '../../lib/api';
@@ -31,10 +31,13 @@ const navChip: CSSProperties = {
 // Заголовок оглавления = реальный <h*> узел из отрендеренного плана; сбор — общий хук
 // useHeadings (им же пользуется панель «Документы»).
 
-// Чип «в заметку» в навигаторе плана — сохраняет текущий план в базу заметок
+// Чип «в заметку» в навигаторе плана — сохраняет текущий план в базу заметок.
+// Гейт по подсистеме: без notes чип скрывается.
 function SavePlanChip({ plan, projectId }: { plan: string; projectId?: string }) {
+  const notesOn = useSubsystem('notes');
   const [savedId, setSavedId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  if (!notesOn) return null;
   const save = () => {
     if (busy) return;
     if (savedId) { openNoteById(savedId); return; }

@@ -32,7 +32,7 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
     };
 
-    private readonly KnowledgeService _knowledge;
+    private readonly IKnowledgeIndex _knowledge;
     private readonly IPersonaResolver _personas;
     private readonly IPersonaLookup _personaLookup;
     private readonly IPersonaDirectory _personaDirectory;
@@ -64,7 +64,7 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
     private readonly SemaphoreSlim _syncLock = new(1, 1);
     private readonly MemoryDifyDebouncer _debounce = new(SyncDebounce);
 
-    public PersonaMemoryService(KnowledgeService knowledge, IPersonaResolver personas,
+    public PersonaMemoryService(IKnowledgeIndex knowledge, IPersonaResolver personas,
         IPersonaLookup personaLookup, IPersonaDirectory personaDirectory,
         IPersonaEvents personaEvents, IDifyMetrics metrics, IUserStore users,
         IConfiguration config, ILogger<PersonaMemoryService> logger,
@@ -490,7 +490,7 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
 
         IReadOnlyList<PersonaMemoryHit> hits;
         // Пустой запрос Dify отбивает 400, длинный — тоже (потолок 250 символов)
-        var q = KnowledgeService.TrimQuery(query);
+        var q = KnowledgeQueryUtilities.TrimQuery(query);
         if (q.Length == 0) hits = [];
         else
             try { hits = await SearchAsync(ownerId, personaId, q, Math.Max(topK, 6)); }

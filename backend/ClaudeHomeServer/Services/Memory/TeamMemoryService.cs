@@ -38,7 +38,7 @@ public class TeamMemoryService : Knowledge.IKnowledgeSyncParticipant, IDisposabl
     private readonly ILogger<TeamMemoryService>? _log;
 
     // Опциональные зависимости семантического слоя (nullable-паттерн: в юнит-тестах Волны 1 не заданы)
-    private readonly KnowledgeService? _knowledge;
+    private readonly IKnowledgeIndex? _knowledge;
     private readonly IDifyMetrics _metrics;
     private readonly IUserStore? _users;
     private readonly IProjectManager? _projects;
@@ -68,7 +68,7 @@ public class TeamMemoryService : Knowledge.IKnowledgeSyncParticipant, IDisposabl
     private const double DedupBoost = 0.1;
 
     public TeamMemoryService(IConfiguration config, ILogger<TeamMemoryService>? log = null,
-        KnowledgeService? knowledge = null, IDifyMetrics? metrics = null, IUserStore? users = null, IProjectManager? projects = null,
+        IKnowledgeIndex? knowledge = null, IDifyMetrics? metrics = null, IUserStore? users = null, IProjectManager? projects = null,
         Memory.MemoryWriteResolver? resolver = null, Llm.ICheapTextRunner? cheap = null)
     {
         _log = log;

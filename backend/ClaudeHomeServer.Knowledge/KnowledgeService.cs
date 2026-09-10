@@ -121,6 +121,9 @@ public class KnowledgeService : IKnowledgeIndex
 
     Task IKnowledgeIndex.DeleteDatasetAsync(string datasetId) => DeleteDatasetAsync(datasetId);
 
+    Task IKnowledgeIndex.RenameDatasetAsync(string datasetId, string newName) =>
+        RenameDatasetAsync(datasetId, newName);
+
     Task<DifyDocumentInfo> IKnowledgeIndex.IndexFileByTextAsync(string datasetId, string fileName,
         string content, List<string>? tags) =>
         IndexFileByTextAsync(datasetId, fileName, content, tags);

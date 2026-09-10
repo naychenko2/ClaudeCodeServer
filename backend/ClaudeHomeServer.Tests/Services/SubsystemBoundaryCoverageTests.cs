@@ -39,7 +39,16 @@ public class SubsystemBoundaryCoverageTests
         _ = typeof(ClaudeHomeServer.Services.Changelog.ChangelogSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Docs.DocsIndexService).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Knowledge.KnowledgeSubsystem).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Modules.ModuleRegistry).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Spend.SpendSubsystem).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Tasks.TasksSubsystem).Assembly;
+        // Turn — отдельная сборка (Этап 5, вынос Turn): нужен typeof, чтобы
+        // сторож видел сборку Turn.dll и её типы (иначе набор сборок пустой,
+        // и проверка полноты Boundaries ничего не проверяет).
+        _ = typeof(ClaudeHomeServer.Services.Turn.IPromptSectionContributor).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Backgrounds.BackgroundsSubsystem).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.ProjectIcons.ProjectIconsSubsystem).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Terminal.TerminalService).Assembly;
     }
 
     [Fact]

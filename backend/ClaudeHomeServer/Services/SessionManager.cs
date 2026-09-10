@@ -12,7 +12,7 @@ using ClaudeHomeServer.Services.Turn;
 
 namespace ClaudeHomeServer.Services;
 
-public class SessionManager : IDisposable, ITeamNotifier,
+public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     ITeamSessionDirectory, ITeamHistoryStore, ITeamRunState, ITeamTurnIntake
 {
     private class SessionEntry
@@ -3626,7 +3626,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         var difyMcp = BuildDifyContext(ownerId);
         var adapter = _adapters.Create(session, new LlmSessionContext(rootPath,
             msg => OnMessageAsync(session.Id, accumulator, msg, runId),
-            rawSystemPrompt, permissionRules,
+            rawSystemPrompt, ProjectManager.BuiltInSystemPrompt, permissionRules,
 
             ContentRootPath: AppContext.BaseDirectory,
             TasksMcp: tasksMcp,
@@ -4932,7 +4932,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             var difyMcp = BuildDifyContext(entry.Info.OwnerId);
             context = new LlmSessionContext(rootPath,
                 msg => OnMessageAsync(sessionId, accumulator, msg, runId),
-                RawSystemPrompt: null, PermissionRules: null,
+                RawSystemPrompt: null, BuiltInSystemPrompt: ProjectManager.BuiltInSystemPrompt,
+                PermissionRules: null,
                 ContentRootPath: AppContext.BaseDirectory,
                 TasksMcp: tasksMcp,
                 NotesMcp: notesMcp,
@@ -4991,6 +4992,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             context = new LlmSessionContext(rootPath,
                 msg => OnMessageAsync(sessionId, accumulator, msg, runId),
                 project.SystemPrompt,
+                ProjectManager.BuiltInSystemPrompt,
                 () => _projects.GetById(entry.Info.ProjectId!)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>(),
                 ContentRootPath: AppContext.BaseDirectory,
                 TasksMcp: tasksMcp,

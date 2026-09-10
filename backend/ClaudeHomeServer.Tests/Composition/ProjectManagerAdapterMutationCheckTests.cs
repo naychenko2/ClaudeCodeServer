@@ -1,6 +1,6 @@
-using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Terminal;
 using FluentAssertions;
@@ -37,8 +37,10 @@ public class ProjectManagerAdapterMutationCheckTests
 
         // TerminalService.CreateAsync зовёт _projects.GetById(projectId) и бросает
         // HubException, если проекта нет. Stub отдаёт null → ожидаем HubException.
+        // Шов `ITerminalHubNotifier` (Этап 5, волна C, шаг 2): вместо
+        // `IHubContext<TerminalHub>` вертикаль берёт Core-интерфейс.
         var terminal = new TerminalService(
-            new Mock<IHubContext<TerminalHub>>().Object,
+            new Mock<ITerminalHubNotifier>().Object,
             seam,
             NullLogger<TerminalService>.Instance,
             new Mock<ILauncherFactory>().Object);

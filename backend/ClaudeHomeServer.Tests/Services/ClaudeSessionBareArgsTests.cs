@@ -180,7 +180,7 @@ public class ClaudeSessionBareArgsTests : IDisposable
         var context = new LlmSessionContext(
             RootPath: root,
             OnMessage: _ => Task.CompletedTask,
-            RawSystemPrompt: null,
+            RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
             PermissionRules: null,
             TasksMcp: null,
             WidgetsMcp: new WidgetsMcpContext("http://localhost:5999", () => "tok", UseHttp: false),
@@ -323,7 +323,7 @@ public class ClaudeSessionBareArgsTests : IDisposable
         var context = new LlmSessionContext(
             RootPath: root,
             OnMessage: _ => Task.CompletedTask,
-            RawSystemPrompt: null,
+            RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
             PermissionRules: null,
             TasksMcp: null,
             WidgetsMcp: new WidgetsMcpContext("http://localhost:5999", () => "tok", UseHttp: false),

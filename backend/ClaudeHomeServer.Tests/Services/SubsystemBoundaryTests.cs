@@ -72,7 +72,25 @@ public class SubsystemBoundaryTests
         _ = typeof(ClaudeHomeServer.Services.Changelog.ChangelogSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Docs.DocsIndexService).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Knowledge.KnowledgeSubsystem).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Modules.ModuleRegistry).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.ProjectServices.ProjectServicesSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Spend.SpendSubsystem).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Tasks.TasksSubsystem).Assembly;
+        // Turn — отдельная сборка (Этап 5, вынос Turn): форс-загрузка нужна, чтобы
+        // сторож видел типы Turn (IPromptSectionContributor и пр.) и проверял их
+        // границы по сборке Turn.dll.
+        _ = typeof(ClaudeHomeServer.Services.Turn.IPromptSectionContributor).Assembly;
+        // === Этап 5, волна C, шаг 2: новые швы Core, использованные вынесенными
+        // вертикалями. Форс-загрузка нужна, чтобы вертикальные сборки (Modules,
+        // ProjectServices) видели соответствующие Core-интерфейсы по сборке Core.dll.
+        _ = typeof(ClaudeHomeServer.Services.Execution.ISandboxPortRange).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Backgrounds.BackgroundsSubsystem).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.IProjectBackgroundWriter).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.ProjectIcons.ProjectIconsSubsystem).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.IProjectIconMigrator).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.IDataBackupService).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Terminal.TerminalService).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Composition.ITerminalHubNotifier).Assembly;
     }
 
     /// <summary>Запись границы одной вертикали: имя (для отчёта), корневой namespace
@@ -351,13 +369,17 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.Backup.InstanceLock",
                 }),
         },
-        // Backgrounds — вертикаль фона рабочего пространства проекта (ADR-008).
-        // Допуски:
-        // 1) `ClaudeHomeServer.Services.Llm` — `ICheapTextRunner` для хода модели,
-        //    который генерирует JSON с фигурами (префикс-шов, как у `Git`/`Deploy`).
-        // 2) Допуски к корню Services — точные: `ProjectManager` (запись фона и флаг
-        //    `Background` в доменной модели проекта), `UserStore` (перечень владельцев
-        //    для массового прогона `RunAllAsync` в `ProjectBackgroundBackfill`).
+        // Backgrounds — вертикаль фона рабочего пространства проекта (ADR-008,
+        // Этап 5, волна C, шаг 2). Чтение проекта через Core-шов `IProjectManager`,
+        // запись (TryBeginBackground / SetBackground* / Update / BackgroundsDir) —
+        // через Core-шов `IProjectBackgroundWriter` (узкий форвардер к ProjectManager
+        // из Main, см. `Services/ProjectBackgroundWriterAdapter.cs`). Раньше здесь
+        // лежали точечные допуски на `ProjectManager` и `UserStore` — оба мёртвые
+        // после выноса в .csproj: Backgrounds физически не может сослаться на
+        // `ProjectManager` (нет ProjectReference на Main), запись идёт через
+        // Core-интерфейс, `IUserStore` уже в Core. `ICheapTextRunner` (ход модели,
+        // генерирующий JSON фигур) и `LocalActionCatalog.ProjectBackground` — в Core,
+        // покрыты `IsCoreAssembly`, префикс `Services.Llm` в allow-list не нужен.
         new object[]
         {
             new VerticalBoundary(
@@ -367,28 +389,20 @@ public class SubsystemBoundaryTests
                     .Concat(new[]
                     {
                         "ClaudeHomeServer.Services.Backgrounds",
-                        "ClaudeHomeServer.Services.Llm",
                     })
                     .ToArray(),
-                new[]
-                {
-                    "ClaudeHomeServer.Services.ProjectManager",
-                    "ClaudeHomeServer.Services.UserStore",
-                }),
+                Array.Empty<string>()),
         },
-        // ProjectIcons — вертикаль значка проекта (ADR-009). Допуски:
-        // 1) `ClaudeHomeServer.Services.Llm` — `ICheapTextRunner` для двухходового
-        //    подбора имени иконки (префикс-шов, как у `Git`/`Backgrounds`/`Deploy`).
-        // 2) Допуск к корню Services — точечный: `ProjectManager` (запись значка и
-        //    флаг `Icon.Glyph` в доменной модели проекта).
-        //
-        // === Шов к Backup.{BackupCore, BackupContext, BackupResult} (IL-видимость).
-        // `ProjectIconMigration.cs:73` зовёт `BackupCore.Snapshot(BackupContext.FromConfiguration(config), log)`
-        // и получает `BackupResult`. Попытка вынести примитив «снимок data перед
-        // необратимой операцией» в Core блокируется направлением ссылок (`Main → Core`,
-        // Core не видит Main/Backup), а обёртка в root Services нарушает root-сторож.
-        // Допуск ОСТАВЛЕН с явной фиксацией причины — полумера лучше протащенной
-        // зависимости (отчёт шага 5, задача `57b5e9bc`).
+        // ProjectIcons — вертикаль значка проекта (ADR-009, Этап 5, волна C, шаг 2).
+        // Чтение проекта через Core-шов `IProjectManager`, запись `Icon.Glyph` —
+        // через Core-шов `IProjectIconMigrator`, снимок data перед необратимой
+        // операцией — через Core-шов `IDataBackupService` (формализация прежней
+        // полумеры `ProjectIconMigration.cs:78-84`, Этап 5 курс Андрея 2026-09-08
+        // делает шов обязательным). Точечные `ProjectManager`/`Backup.*` сняты:
+        // вертикаль физически не может сослаться на Main-типы после выноса в
+        // .csproj, запись идёт через Core-интерфейсы, чтение через `IProjectManager`
+        // (Core). `ICheapTextRunner`/`LocalActionCatalog` (ходы подбора) — в Core,
+        // покрыты `IsCoreAssembly`, префикс `Services.Llm` в allow-list не нужен.
         new object[]
         {
             new VerticalBoundary(
@@ -398,16 +412,9 @@ public class SubsystemBoundaryTests
                     .Concat(new[]
                     {
                         "ClaudeHomeServer.Services.ProjectIcons",
-                        "ClaudeHomeServer.Services.Llm",
                     })
                     .ToArray(),
-                new[]
-                {
-                    "ClaudeHomeServer.Services.ProjectManager",
-                    "ClaudeHomeServer.Services.Backup.BackupResult",
-                    "ClaudeHomeServer.Services.Backup.BackupContext",
-                    "ClaudeHomeServer.Services.Backup.BackupCore",
-                }),
+                Array.Empty<string>()),
         },
         // Spend — аналитика расхода токенов (Spend Analytics v2, Этап 5).
         // Allow-list пустой поверх общей спинки: после выноса Spend в отдельный .csproj
@@ -656,9 +663,9 @@ public class SubsystemBoundaryTests
         // 1) `ClaudeHomeServer.Services.Knowledge` — общий клиент Dify;
         //    `MemoryDify` держит `KnowledgeService` полем и материализует
         //    `DifyDocumentInfo` в async-state `DiffSyncAsync`.
-        // 2) `ClaudeHomeServer.Services.Llm` — `ICheapTextRunner` в поле
-        //    `MemoryWriteResolver` (консолидация LLM-merge и autolearn). Префикс-шов,
-        //    как у `Git`/`Backgrounds`/`Deploy`/`Spend`/`Dossiers`.
+        // 2) Префикс `ClaudeHomeServer.Services.Llm` — СНЯТ 2026-09-09 как мёртвый: `ICheapTextRunner` живёт
+        //    в Core (`Core/Services/Llm/`), вертикаль берёт его ОТТУДА, и префикс
+        //    на вертикаль `Llm` ничего не открывал. Мутация: без допуска сторож зелёный.
         // Точечные допуски к корню Services — «вертикаль → спинка», аналогично
         // `Dossiers`/`Knowledge`/`Git`. После переезда фасадов в `Services.Memory`
         // эти связи видны IL-скану (вызовы из тел методов фасадов, которые теперь
@@ -708,7 +715,6 @@ public class SubsystemBoundaryTests
                     {
                         "ClaudeHomeServer.Services.Memory",
                         "ClaudeHomeServer.Services.Knowledge",
-                        "ClaudeHomeServer.Services.Llm",
                         "ClaudeHomeServer.Hubs",
                     })
                     .ToArray(),
@@ -722,8 +728,9 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.ProjectEventLogService",
                     "ClaudeHomeServer.Services.Notes.NotesService",
                     "ClaudeHomeServer.Services.Dossiers.DossierRecallService",
-                    "ClaudeHomeServer.Services.Dossiers.DossierRecallRequest",
-                    "ClaudeHomeServer.Services.Dossiers.DossierRecallResult",
+                    // DossierRecallRequest/DossierRecallResult допусков больше не требуют:
+                    // пара DTO уехала в Core (Этап 5, узкие швы Turn) и проходит по
+                    // assembly-фильтру IsCoreAssembly.
                     // AutolearnGate.CheckContent / LastTurnLength — public-метод
                     // с параметром IReadOnlyList<StoredMessage>.
                     "ClaudeHomeServer.Protocol.StoredMessage",
@@ -897,13 +904,15 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.ModelTier",
                     "ClaudeHomeServer.Services.ModelTier[]",
                     "ClaudeHomeServer.Services.Skills.SkillInfo",
-                    "ClaudeHomeServer.Services.SystemPromptPart",
                     "ClaudeHomeServer.Services.AppSettingsService",
                     "ClaudeHomeServer.Services.ChatHistoryService",
                     "ClaudeHomeServer.Services.FileService",
                     "ClaudeHomeServer.Services.SessionSummaryService",
                     "ClaudeHomeServer.Services.Notes.NotesService",
-                    "ClaudeHomeServer.Services.ProjectManager",
+                    // ProjectManager снят: сборку частей системного промпта
+                    // (GetSystemPromptParts + SystemPromptPart) забрала спина —
+                    // Core: Services/Llm/SystemPromptComposer, а встроенная часть
+                    // промпта приезжает в ClaudeSession текстом через LlmSessionContext.
                     "ClaudeHomeServer.Services.SessionManager",
                     "ClaudeHomeServer.Services.Skills.SkillsService",
                     "ClaudeHomeServer.Services.UserStore",
@@ -1013,7 +1022,6 @@ public class SubsystemBoundaryTests
                     .Concat(new[]
                     {
                         "ClaudeHomeServer.Services.Docs",
-                        "ClaudeHomeServer.Services.Llm",
                     })
                     .ToArray(),
                 new[]
@@ -1022,13 +1030,16 @@ public class SubsystemBoundaryTests
                 }),
         },
         // Turn — шина событий хода + контрибьюторы секций системного промпта.
-        // Все внешние допуски точечные (префиксов-швов нет): CodeGraphPromptProvider
-        // (единственный тип, который читает CodeGraphContributor — открывать всю
-        // вертикаль CodeGraph ради него нельзя), root Services, Dossiers
+        // Все внешние допуски точечные (префиксов-швов нет): root Services, Dossiers
         // (PersonaRecallContributor тянет DossierRecallService/Request),
-        // Services.Llm (RecallItem в полях контрибьюторов, TurnRunPassport
-        // в TurnCompleted, SubagentRunPassport в SubagentRunCompleted),
-        // Protocol (StoredMessage/McpServerInfo/PromptSnapshotDraft в полях).
+        // Services.Llm (TurnRunPassport в TurnCompleted, SubagentRunPassport в
+        // SubagentRunCompleted), Protocol (StoredMessage/McpServerInfo/PromptSnapshotDraft).
+        //
+        // Этап 5, шаг 6 (инверсия контрибьюторов): CodeGraphContributor и
+        // NotesRecallContributor уехали в свои вертикали (CodeGraph/Notes), а
+        // PersonaRecallContributor перешёл на Core-форвард KnowledgeQueryUtilities —
+        // допуски на CodeGraphPromptProvider / NotesKnowledgeService / NoteSemanticHit /
+        // KnowledgeService сняты как мёртвые.
         new object[]
         {
             new VerticalBoundary(
@@ -1040,73 +1051,14 @@ public class SubsystemBoundaryTests
                         "ClaudeHomeServer.Services.Turn",
                     })
                     .ToArray(),
-                new[]
-                {
-                    "ClaudeHomeServer.Protocol.StoredMessage",
-                    "ClaudeHomeServer.Protocol.McpServerInfo",
-                    "ClaudeHomeServer.Protocol.PromptSnapshotDraft",
-                    "ClaudeHomeServer.Services.CodeGraph.CodeGraphPromptProvider",
-                    "ClaudeHomeServer.Services.PersonaBindingsService",
-                    "ClaudeHomeServer.Services.Notes.NotesKnowledgeService",
-                    "ClaudeHomeServer.Services.Notes.NoteSemanticHit",
-                    "ClaudeHomeServer.Services.PersonaManager",
-                    "ClaudeHomeServer.Services.PersonaPromptBuilder",
-                    "ClaudeHomeServer.Services.ProjectManager",
-                    "ClaudeHomeServer.Services.Skills.SkillsService",
-                    "ClaudeHomeServer.Services.UserStore",
-                    "ClaudeHomeServer.Services.Skills.SkillInfo",
-                    "ClaudeHomeServer.Services.ChatHistoryService",
-                    "ClaudeHomeServer.Services.FeatureFlagService",
-                    "ClaudeHomeServer.Services.Memory.PersonaMemoryService",
-                    "ClaudeHomeServer.Services.Memory.PersonaMemoryHit",
-                    "ClaudeHomeServer.Services.Memory.PersonaMemoryService+PersonaRecallResult",
-                    // PromptSectionsContributor ссылается на Llm.SpecialtySettingsStore
-                    // и его nested EffectivePromptSection (поле async-state-машины). В
-                    // корне Services этого типа больше нет — SpecialtySettingsStore
-                    // переехал в Llm (волна 4B, шаг 2), и Turn держит ссылку на новый
-                    // адрес (см. `ClaudeHomeServer.Services.Llm.SpecialtySettingsStore`
-                    // в allow-list Llm).
-                    "ClaudeHomeServer.Services.Llm.SpecialtySettingsStore",
-                    // SpecialtySettingsStore+EffectivePromptSection переехал в Core
-                    // (`Core/Services/Llm/IPromptSectionProvider.cs`, этап 5, шаг 4)
-                    // — EffectivePromptSection теперь Core-DTO, допуск снят.
-                    // (Был: "ClaudeHomeServer.Services.Llm.SpecialtySettingsStore+EffectivePromptSection",)
-                    "ClaudeHomeServer.Services.Dossiers.DossierRecallService",
-                    "ClaudeHomeServer.Services.Dossiers.DossierRecallRequest",
-                    // RecallItem переехал в Core (`Core/Services/Llm/RecallManifest.cs`,
-                    // этап 5, шаг 2). Turn берёт тип через Core-DTO, допуск снят.
-                    // (Был: "ClaudeHomeServer.Services.Llm.RecallItem",)
-                    // TurnRunPassport переехал в Core (`Core/Services/Llm/TurnRunPassport.cs`),
-                    // TurnEvents.TurnCompleted хранит ссылку как Core-DTO.
-                    // (Был: "ClaudeHomeServer.Services.Llm.TurnRunPassport",)
-                    // SubagentRunPassport переехал в Core (`Core/Services/Llm/SubagentRunPassport.cs`),
-                    // TurnEvents.SubagentRunCompleted — Core-DTO.
-                    // (Был: "ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport",)
-                    // Этап 4, шаг 2г-2 — переезд промптов штаба: ClaudeSession
-                    // (DecidePermissionAsync) ссылается на `TeamImplementPrompts.MaxInterviewRounds`
-                    // и `InterviewRoundsExhausted` для гейта AskUserQuestion. До переезда
-                    // шёл через префикс `Services.Prompts` в SharedAllowedPrefixes, но
-                    // после переезда тип в `Services.Team` — точный допуск.
-                    "ClaudeHomeServer.Services.Team.TeamImplementPrompts",
-                    // Этап 4, шаг 2г-2 — PersonaLayerContributor (в Turn-boundary) вызывает
-                    // TeamMechanicsPromptCatalog.BuildPromptBlock через return-тип; до переезда
-                    // шло через префикс `Services.Prompts` (SharedAllowedPrefixes), теперь —
-                    // точный допуск.
-                    "ClaudeHomeServer.Services.Team.TeamMechanicsPromptCatalog",
-                    // === IL-видимость (задача `8beee75e`, волна 1).
-                    // `Turn → Knowledge`: NotesRecallContributor (`<BuildAsync>d__13`)
-                    // и PersonaRecallContributor (`<BuildAsync>d__19`) материализуют
-                    // `KnowledgeService` в async-state. НЕ цикл (Knowledge на Turn
-                    // не смотрит), но новое межвертикальное ребро — фиксируем.
-                    "ClaudeHomeServer.Services.Knowledge.KnowledgeService",
-                    // `PersonaLayerContributor` ссылается на `OnboardingPrompts`
-                    // (статический каталог в `Services.Prompts`). Префикс Prompts
-                    // НЕ открываем: точечный допуск ровно на нужный тип.
-                    "ClaudeHomeServer.Services.Prompts.OnboardingPrompts",
-                    // `PersonaRecallContributor` материализует `SessionChangedPaths`
-                    // в async-state `<LastTurnChangedFilesAsync>d__21.MoveNext`.
-                    "ClaudeHomeServer.Services.SessionChangedPaths",
-                }),
+                // Точечных допусков НЕТ. После выноса в отдельный .csproj все вне-Core
+                // зависимости закрыты швами (`IFeatureFlagGate`, `IPersonaResolver`,
+                // `IPersonaPromptAssembler`, `IPersonaBindingsSource`, `IChatHistoryLoader`),
+                // а `OnboardingPrompts` и `SessionChangedPaths` ПЕРЕЕХАЛИ в Core —
+                // вертикаль берёт их оттуда. Допуски на эти два типа были заведены
+                // исполнителем как «живые», но мутация показала обратное: сторож
+                // остаётся зелёным без них. Сняты 2026-09-10.
+                Array.Empty<string>()),
         },
         // Prompts — статические каталоги секций промпта (OmO/онбординг/голос/команды).
         // Точечные: ModelTier (PantheonTemplate), Llm.Claude.SubagentRunPassport
@@ -1252,13 +1204,17 @@ public class SubsystemBoundaryTests
                     .ToArray(),
                 Array.Empty<string>()),
         },
-        // Modules — YARP-реверс-прокси для внешних модулей. Префикс-шов
-        // Yarp.ReverseProxy целиком (third-party, по прецеденту AngleSharp у Reader —
-        // открываем префиксом; ModuleProxyConfigProvider ссылается на Configuration/
-        // Forwarder/Transforms, ModuleGatewayMiddleware — на Forwarder). Точечные:
-        // FeatureFlagService/JwtService (ModuleGatewayMiddleware знает владельца),
-        // Services.Llm.LocalAction (ModuleRegistry регистрирует LLM-действия
-        // модулей, тип едет в поле).
+        // Modules — YARP-реверс-прокси для внешних модулей (Этап 5, волна C, шаг 2).
+        // Префикс-шов Yarp.ReverseProxy целиком (third-party, по прецеденту AngleSharp
+        // у Reader — открываем префиксом; ModuleProxyConfigProvider ссылается на
+        // Configuration/Forwarder/Transforms, ModuleGatewayMiddleware — на Forwarder).
+        // Все Main-зависимости сняты волной C швов (`b7eb7ca7`, `dd48831b`):
+        // `FeatureFlagService`/`JwtService`/`UserStore` → Core-швы
+        // `IModuleFeatureFlagReader`/`IUserTokenValidator`/`IUserStore`;
+        // `Services.Llm.LocalAction`/`LocalActionCatalog`/`CheapProfile`/
+        // `Services.ModelTier` — в Core (assembly-фильтр, ловятся раньше namespace-чека).
+        // `AllowedExactNamespaces` пуст: ни одного «соседа по корню Services» в коде
+        // не осталось, швы держат все общие зависимости.
         new object[]
         {
             new VerticalBoundary(
@@ -1271,27 +1227,7 @@ public class SubsystemBoundaryTests
                         "Yarp.ReverseProxy",
                     })
                     .ToArray(),
-                new[]
-                {
-                    "ClaudeHomeServer.Services.FeatureFlagService",
-                    "ClaudeHomeServer.Services.JwtService",
-                    "ClaudeHomeServer.Services.Llm.LocalAction",
-                    // === IL-видимость (задача `8beee75e`, волна 1).
-                    // `ModuleGatewayMiddleware.cs:84` (`<Invoke>d__2`) резолвит
-                    // `UserStore` через `sp.GetRequiredService<UserStore>()` —
-                    // generic-аргумент виден IL-сканом как `Modules → UserStore`.
-                    // Точечный допуск по образцу `Llm → SessionSummaryService`.
-                    "ClaudeHomeServer.Services.UserStore",
-                    // `ModuleRegistry` (`<>c__DisplayClass7_0`) материализует
-                    // `ModelTier` в generic-аргументе. Точечный допуск.
-                    "ClaudeHomeServer.Services.ModelTier",
-                    // `ModuleRegistry` ссылается на `LocalActionCatalog` и
-                    // `CheapProfile` статические классы из `Services.Llm` —
-                    // аналогично `Llm.LocalAction` (уже в списке), но шире.
-                    // Префикс `Services.Llm` НЕ открываем: точечные допуски.
-                    "ClaudeHomeServer.Services.Llm.LocalActionCatalog",
-                    "ClaudeHomeServer.Services.Llm.CheapProfile",
-                }),
+                Array.Empty<string>()),
         },
         // Personas — черновик персоны по промпту (PersonaDraftService, 1 файл).
         // Полностью изолирован: Stateless-сервис по тексту промпта.
@@ -1334,21 +1270,22 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.GroupChatRouter",
                 }),
         },
-        // ProjectServices — вертикаль раздела «Сервисы проекта» (волна 4A). Допуски:
-        // 1) Префикс-шов `ClaudeHomeServer.Execution` — `IProcessLauncher`/`ILauncherFactory`/
-        //    `SandboxManager` для запуска процессов дев-серверов/терминалов (тот же шов,
-        //    что у `Git`/`Deploy`/`Backgrounds`/`Spend`/`Dossiers`).
-        // 2) Префикс-шов `ClaudeHomeServer.Hubs` — `IHubContext<SessionHub>` для рассылки
-        //    вывода и статусов дев-серверов подписчикам группы (DevServerService:121).
-        // 3) Префикс-шов `Yarp.ReverseProxy` — `ExternalPreviewProxy` ссылается на
-        //    `Yarp.ReverseProxy.Forwarder.HttpTransformer` (статический вызов из тела
-        //    метода, IL-скан ловит).
-        // 4) Допуски к корню Services точечные:
-        //    - `ProjectManager` — общая инфраструктура (`DevServerService`, `ExternalPreviewRouter`).
-        //    - `JwtService` — формирование токена внешней ссылки (`ExternalPreviewRouter:38`).
-        //    - `OutputRingBuffer` — общий примитив реплея вывода, общий с Terminal (шапка
-        //      `OutputRingBuffer.cs:5-10` явно фиксирует общее использование).
-        //    Префикс на корень Services не открываем (default-deny).
+        // ProjectServices — вертикаль раздела «Сервисы проекта» (Этап 5, волна C, шаг 2).
+        // Волна C швов + Этап 5 выноса сняли все Main-зависимости кроме Yarp:
+        // - `ProjectManager` → Core-шов `IProjectManager` (чтение через GetById;
+        //   записей нет — `ProjectServices` нигде не меняет проект).
+        // - `JwtService` → Core-шов `IPreviewTokenValidator` (валидация превью-токена,
+        //   шаг 1 волны C).
+        // - `FileService.SafeJoin` → Core-примитив `SafePath.Join` (шаг 1б волны C).
+        // - `FileService.TreeExcludes` → Core-примитив `TreeExcludes` (шаг 1б волны C).
+        // - `OutputRingBuffer` — перенесён в Core (`IsCoreAssembly`), отдельный допуск не нужен.
+        // - `Services.Execution.ILauncherFactory`/`IProcessLauncher`/`ISandboxPortRange`/
+        //   `ProcessSpec` — Core (тот же assembly-фильтр).
+        // - `IHubContext<SessionHub>` → Core-шов `ISessionBroadcaster` (Этап 5, Ф4).
+        // - `SandboxManager.Options.PortRangeStart/Size` → Core-шов `ISandboxPortRange`
+        //   (этот шаг).
+        // Остался только Yarp.ReverseProxy (third-party) — префикс по прецеденту AngleSharp
+        // у Reader.
         new object[]
         {
             new VerticalBoundary(
@@ -1358,22 +1295,10 @@ public class SubsystemBoundaryTests
                     .Concat(new[]
                     {
                         "ClaudeHomeServer.Services.ProjectServices",
-                        "ClaudeHomeServer.Services.Execution",
-                        "ClaudeHomeServer.Hubs",
                         "Yarp.ReverseProxy",
                     })
                     .ToArray(),
-                new[]
-                {
-                    "ClaudeHomeServer.Services.ProjectManager",
-                    "ClaudeHomeServer.Services.JwtService",
-                    "ClaudeHomeServer.Services.OutputRingBuffer",
-                    // FileService (IL-видимость, задача `8beee75e`): `DevServerService`/
-                    // `LaunchConfigService`/`ProjectServiceDiscovery`/`DevServerService.<StartAsync>d__17`
-                    // зовут `FileService.SafeJoin(...)` static-метод из тел методов.
-                    // Точечный допуск по образцу `Tasks → FileService` (вертикаль → спинка).
-                    "ClaudeHomeServer.Services.FileService",
-                }),
+                Array.Empty<string>()),
         },
         // Changelog — «Что нового» (волна 4A, шаг 2): продуктовая история по коммитам всех
         // проектов + фоновый прогрев кеша. Внешние зависимости:
@@ -1390,7 +1315,6 @@ public class SubsystemBoundaryTests
                     .Concat(new[]
                     {
                         "ClaudeHomeServer.Services.Changelog",
-                        "ClaudeHomeServer.Services.Llm",
                     })
                     .ToArray(),
                 new[]
@@ -1398,28 +1322,25 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.FileService",
                 }),
         },
-        // Terminal — вертикаль PTY-терминала (волна 4A, листовая: регистрация одна,
-        // подсистема не заведена). Допуски:
-        // 1) Префикс-шов `ClaudeHomeServer.Execution` — `IProcessLauncher`/`ILauncherFactory`
-        //    для запуска процессов терминалов (тот же шов, что у `ProjectServices`).
-        // 2) Префикс-шов `ClaudeHomeServer.Hubs` — `IHubContext<TerminalHub>` для рассылки
-        //    вывода/статусов терминала (TerminalService:91).
-        // 3) Допуски к корню Services точечные:
-        //    - `ProjectManager` — общая инфраструктура (`TerminalService:92`).
-        //    - `OutputRingBuffer` — общий примитив реплея вывода (шапка `OutputRingBuffer.cs`).
-        // 4) Точечные допуски к `ClaudeHomeServer.Protocol`: `TerminalOutputMessage`/
-        //    `TerminalStatusMessage`/`TerminalRenamedMessage` — типы WS-событий терминала,
-        //    которые TerminalService шлёт в хаб (TerminalService.cs:272,297,396). Префикс
-        //    `ClaudeHomeServer.Protocol` снят (волна 3), чтобы сторож ловил новые зависимости.
-        //    ⚠ Эти три записи **инертны** с точки зрения сторожа: использование
-        //    идёт из ТЕЛ методов TerminalService (SendAsync с новым message-объектом
-        //    не переживает await — поля state-машины нет), а сторож читает только
-        //    публичные сигнатуры. Удаление всех трёх оставляет тест зелёным —
-        //    проверено ревью 4A. Оставлены как **обозначение шва**, чтобы будущая
-        //    правка TerminalService, вытащившая один из типов в публичную сигнатуру,
-        //    сразу упёрлась в сторож — по образцу шва `Deploy → Services.Backup`,
-        //    задокументированного в шапке (невидимо для рефлексии — обозначение шва,
-        //    не контролируемое сторожем).
+        // Terminal — вертикаль PTY-терминала (Этап 5, волна C, шаг 2; вертикаль без
+        // IAppSubsystem — регистрация одна, прецедент `Services.Watchdog`).
+        // Все прежние допуски сняты как мёртвые после выноса в отдельный .csproj —
+        // вертикаль физически не может сослаться на Main (нет ProjectReference):
+        // - `IHubContext<TerminalHub>` (префикс `ClaudeHomeServer.Hubs`) → Core-шов
+        //   `ITerminalHubNotifier` (три метода: SendToClient/SendToGroup/AddToGroup).
+        //   Прежде это было «названное исключение» Ф4 наравне с `DesktopCallRouter`;
+        //   курс Этапа 5 на вынос ВСЕХ вертикалей потребовал закрыть его швом.
+        //   Реализация `TerminalHubNotifier` осталась в `Hubs/` рядом с `TerminalHub`
+        //   (SignalR — транспорт, живёт в Main; тот же приём, что `ISessionBroadcaster`).
+        // - `ProjectManager` → Core-шов `IProjectManager` (только GetById, записей нет).
+        // - `OutputRingBuffer` — переехал в Core, ловится `IsCoreAssembly`.
+        // - `Services.Execution.ILauncherFactory`/`IProcessLauncher`/`ProcessSpec` — Core,
+        //   тот же assembly-фильтр; `ConPtyBridgeLocator` поднят в Core этим шагом
+        //   (чистая статика «папка + билд ОС», прецедент `ExecutableResolver`).
+        // - Три типа `Protocol.Terminal*Message` были ИНЕРТНЫ и в старой записи
+        //   (использование только из тел методов, сторож читает сигнатуры;
+        //   проверено ревью 4A) — сняты вместе с остальными: `Protocol` едет в
+        //   Core.dll и покрыт `IsCoreAssembly`.
         new object[]
         {
             new VerticalBoundary(
@@ -1429,82 +1350,50 @@ public class SubsystemBoundaryTests
                     .Concat(new[]
                     {
                         "ClaudeHomeServer.Services.Terminal",
-                        "ClaudeHomeServer.Services.Execution",
-                        "ClaudeHomeServer.Hubs",
                     })
                     .ToArray(),
-                new[]
-                {
-                    "ClaudeHomeServer.Services.ProjectManager",
-                    "ClaudeHomeServer.Services.OutputRingBuffer",
-                    "ClaudeHomeServer.Protocol.TerminalOutputMessage",
-                    "ClaudeHomeServer.Protocol.TerminalStatusMessage",
-                    "ClaudeHomeServer.Protocol.TerminalRenamedMessage",
-                }),
+                Array.Empty<string>()),
         },
-        // Tasks — вертикаль задач с доской агентов (BoardService) и утренним брифингом
-        // (DailyBriefingService, волна 4C, шаг 1).
-        // Префикс-швы:
+        // Tasks — вертикаль задач с доской агентов (Этап 5, вынос вертикали в
+        // отдельный csproj). После выноса физически не может ссылаться на Main
+        // (нет ProjectReference), и весь прежний список допусков закрыт контрактами
+        // из Core, которые проходят более ранний чек `IsCoreAssembly`:
+        //  - `SessionManager` → `ISessionDirectory` (3 метода по факту вызовов);
+        //  - `PersonaManager` → `IPersonaLookup` (1 метод);
+        //  - `NotificationService` → `ITaskNotificationDispatcher` (2 метода);
+        //  - `TaskExecutionService` → `ITaskExecutor` (2 метода);
+        //  - `PersonaAutomationService` → `IPersonaAutomationRunner` (1 метод);
+        //  - `IProjectEventLogService` — уже в Core с волны 1 Skills;
+        //  - `IHubContext<SessionHub>` → `ISessionBroadcaster` (волна 4C, Ф4);
+        //  - `IUserStore`/`IProjectManager`/`IConfiguration` — Core-примитивы;
+        //  - `Protocol.NotificationMessage` — в Core, ловится IsCoreAssembly;
+        //  - `ModelTiers`/`ModelTier`/`ExecutorStopClassifier` — переехали в Core
+        //    в этой же волне (`Models`-слой и `Services`-слой примитивов спины).
+        // Префиксы-швы (после выноса):
         // 1) `ClaudeHomeServer.Services.Llm` — `ICheapTextRunner` для `TaskAiService`
-        //    (генерация описания/подзадач/классификация/нормализация/дедуп) и
-        //    `DailyBriefingService` (утренний брифинг) — префикс-шов, как у
-        //    `Git`/`Backgrounds`/`Deploy`/`Changelog`/`ProjectIcons`.
-        // 2) `ClaudeHomeServer.Hubs` — `IHubContext<SessionHub>` для `TaskSchedulerService`
-        //    (`BroadcastTaskChangedAsync`/напоминания) и `DailyBriefingService`
-        //    (событие `task_reminder` в ленту).
-        // Точечные допуски к корню `ClaudeHomeServer.Services.*` — «вертикаль → спинка»
-        // (по аналогии с `Dossiers`/`Git`/`Spend`/`Knowledge`):
-        // 1) `SessionManager` — `TaskSchedulerService` цикл «до готово» вызывает
-        //    `TaskExecutionService` для автозапуска исполнителя; `BoardService` берёт
-        //    живые сессии по id; `DailyBriefingService` использует для поиска чатов
-        //    владельца. `SessionManager` остаётся backbone-типом корня.
-        // 2) `ProjectManager` — `TaskAiService` берёт контекст проекта (CLAUDE.md);
-        //    `DailyBriefingService` перебирает проекты владельца для git-активности;
-        //    `TaskManager.LogTask` пишет события в проектный лог
-        //    (TaskManager.cs:~LogTask, опциональный параметр ctor).
-        // 3) `UserStore` — перебор пользователей в `TaskSchedulerService.TickAsync` и
-        //    `DailyBriefingService.GenerateAsync`/`GitActivityAsync`.
-        // 4) `NotificationService` — `SendNotificationMessageAsync` в TaskSchedulerService
-        //    и DailyBriefingService.NotifyAsync (напоминания + «доброе утро»).
-        // 5) `AppSettingsService` — гейт `DailyBriefingEnabled` (DailyBriefingService.MaybeRunScheduledAsync).
-        // 7) `ProjectEventLogService` — запись событий задач в проектный лог
-        //    (`TaskManager.LogTask`) + чтение событий за сутки (`DailyBriefingService`).
-        // 8) `PersonaManager` — `BoardService` берёт персоны для подписи колонки;
-        //    `DailyBriefingService` находит персона-секретаря; `TaskManager` —
-        //    опциональная зависимость для лога.
-        // 9) `PushService` — `DailyBriefingService.GenerateAsync` шлёт web-push по расписанию.
-        // 10) `NotesService` — `DailyBriefingService.BuildAndWriteAsync` пишет в дневник
-        //     (`GetOrCreateDaily`/`Update`). Пока остаётся в корне (следующий шаг
-        //     волны 4C).
-        // Точечный допуск к `ClaudeHomeServer.Protocol.*` — `NotificationMessage` материализуется
-        // как параметр public-метода `TaskSchedulerService.SendNotificationAsync`
-        // (см. `PushService`/`NotificationService`). Остальные Protocol-ссылки идут
-        // через тела методов и async-state-машины; префикс `ClaudeHomeServer.Protocol`
-        // снят (волна 3), чтобы сторож ловил новые зависимости.
+        //    (генерация описания/подзадач/классификация/нормализация/дедуп через
+        //    `LocalActionCatalog.TaskAi/TaskClassify/...`). Префикс-шов, как у
+        //    `Git`/`Backgrounds`/`Deploy`/`Changelog`/`ProjectIcons`/`Spend`.
+        // 2) `ClaudeHomeServer.Hubs` — больше не нужен: фактических ссылок на
+        //    `IHubContext<SessionHub>` в Tasks нет (комментарий прежний, наследие Ф4;
+        //    чистый — `ISessionBroadcaster` (Core) дёргается из TasksScheduler через
+        //    `IHubContext` теперь неявно через Core-шов).
         // Зафиксированные швы (IL-скан видит declaring-типы):
-        // - `Tasks.TaskManager` ставит три резолвера на `Models.Session`
+        // - `Tasks.TaskManager` ставит три статических резолвера на `Models.Session`
         //   (`Session.TaskSourceSessionResolver`/`TaskDelegationDepthResolver`/
-        //   `TaskDoneResolver`) в конструкторе TaskManager.cs:32-36. Связь Tasks →
+        //   `TaskDoneResolver`) в конструкторе TaskManager.cs. Связь Tasks →
         //   Models видна через `ClaudeHomeServer.Models` (SharedAllowedPrefixes);
-        //   мутация статической модели зафиксирована в `TasksSubsystem.Register`.
-        // - `Services.TaskExecutionService` (корень, остаётся до этапа 4) зовёт
-        //   `Services.Tasks.TaskSchedulerService.TaskUrl(...)` статически из 6 мест
-        //   тел методов — Tasks-тип виден IL-скану из корневого типа.
-        //   Когда `TaskExecutionService` переедет, шов сам разорвётся.
-        // - `Services.PersonaAutomationService` (корень, остаётся в корне до этапа 4)
-        //   зовёт `Services.Tasks.TaskDueCalculator.ResolveTimeZone(...)` в теле
-        //   метода (`PersonaAutomationService.cs:531`). Аналогичный шов
-        //   root → Tasks-тип через статику; разорвётся при переезде Persona.
-        // - `Services.Tasks.TaskManager` зовёт `Services.ModelTiers.TryParse(...)` в
-        //   теле метода (`TaskManager.cs:112,250`) — root-тип `ModelTiers`
-        //   (AppSettingsService.cs:15). Шов Tasks → корень через статику.
-        // - `Services.Tasks.TaskManager` зовёт `Services.ExecutorStopClassifier.IsTerminal(...)`
-        //   в теле метода (`TaskManager.cs:429`) — root-тип `ExecutorStopClassifier`
-        //   (ExecutorStopClassifier.cs:16). Шов Tasks → корень через статику.
-        // - Прежний шов `Services.Tasks.TaskSchedulerService → Hubs.TaskHubExtensions`
-        //   снят в Этап 5, Ф4 (extension-метод BroadcastTaskChangedAsync удалён
-        //   вместе с файлом Hubs/TaskHubExtensions.cs; TaskSchedulerService переведён
-        //   на ISessionBroadcaster.Core).
+        //   мутация статической модели — фиксированное исключение.
+        // Мёртвые допуски сняты ревью (2026-09-09): формально сторож оставался зелёным
+        // и с ними, но был ШИРЕ реальной поверхности зависимостей Tasks после выноса —
+        // иначе вертикаль могла бы прикинуться «спиной» в обход швов. Та же ловушка,
+        // что поймана на Notes после её выноса.
+        // Сюда же — снятый префикс `ClaudeHomeServer.Services.Llm`: он стоял ради
+        // `ICheapTextRunner` и `LocalActionCatalog`, но оба типа давно переехали в
+        // Core (`Core/Services/Llm/`), и Tasks берёт их ОТТУДА. Мутация подтверждает:
+        // без допуска сторож зелёный. ТАКОЙ ЖЕ мёртвый допуск остался ещё у пяти
+        // вертикалей (Backgrounds, ProjectIcons, Memory, Docs, Changelog) — снимается
+        // отдельной уборкой, чтобы не смешивать её с выносом Tasks.
         new object[]
         {
             new VerticalBoundary(
@@ -1514,69 +1403,9 @@ public class SubsystemBoundaryTests
                     .Concat(new[]
                     {
                         "ClaudeHomeServer.Services.Tasks",
-                        "ClaudeHomeServer.Services.Llm",
-                        "ClaudeHomeServer.Hubs",
                     })
                     .ToArray(),
-                new[]
-                {
-                    // Корневые «спинки» (см. комментарий выше 1–10).
-                    "ClaudeHomeServer.Services.SessionManager",
-                    "ClaudeHomeServer.Services.ProjectManager",
-                    "ClaudeHomeServer.Services.UserStore",
-                    // Волна 1 Tasks (2026-09-08) сняла три допуска —
-                    // NotificationService, TaskExecutionService, PersonaAutomationService:
-                    // вертикаль ходит к ним через швы ITaskNotificationDispatcher,
-                    // ITaskExecutor, IPersonaAutomationRunner. Мёртвость каждого
-                    // проверена мутацией: сторож остаётся зелёным без них.
-                    // DailyBriefingService ниже — допуск ЖИВОЙ (мутация роняет тест):
-                    // TasksSubsystem регистрирует его конкретным типом.
-                    "ClaudeHomeServer.Services.AppSettingsService",
-                    "ClaudeHomeServer.Services.ProjectEventLogService",
-                    "ClaudeHomeServer.Services.PersonaManager",
-                    "ClaudeHomeServer.Services.PushService",
-                    // Notes — вертикаль (волна 4C, шаг 2): `DailyBriefingService.BuildAndWriteAsync`
-                    // пишет в дневниковую заметку (`GetOrCreateDaily`/`Update`).
-                    "ClaudeHomeServer.Services.Notes.NotesService",
-                    // ⚠ TaskSchedulerService (Tasks) держит в ctor
-                    // `TaskExecutionService executor` (полный жизненный цикл хода:
-                    // автозапуск Claude-исполнителя + страховка незакрытой задачи)
-                    // и `PersonaAutomationService automation` (collaborator проактивности).
-                    // Оба остаются в корне до этапа 4 (расщепление SessionManager).
-                    // Когда `TaskExecutionService`/`PersonaAutomationService` уедут —
-                    // эти точечные допуски уйдут вместе с ними.
-                    // ⚠ Шов `Tasks → Models.Session`: три статических резолвера в
-                    // TaskManager.cs:32-36. Контракт: мутация проходит до первого
-                    // использования (TaskManager — singleton, инстанс строится при
-                    // первом резолве из контроллеров/hosted-сервисов; Backbone
-                    // SessionManager — тоже singleton, формирует сессии после этого).
-                    // Префикс `ClaudeHomeServer.Models` уже открыт через SharedAllowedPrefixes,
-                    // но сам факт мутации статической модели чужой вертикали фиксируем
-                    // отдельным комментарием, чтобы ревью и расширение сторожа до IL видели
-                    // волюнтаристский шов. Future-proof: свести к интерфейсу
-                    // `ITaskFacts { string? SourceSession(string taskId); bool Done(string taskId); ... }`
-                    // и инжектить в Session — отдельная задача (этап 4).
-                    // Точечный допуск к `ClaudeHomeServer.Protocol.*` — `NotificationMessage`
-                    // в публичной сигнатуре `TaskSchedulerService.SendNotificationAsync`.
-                    "ClaudeHomeServer.Protocol.NotificationMessage",
-                    // ⚠ Шов `Tasks → Models`-слой через `ModelTiers`/`ExecutorStopClassifier`
-                    // (root-статика, см. комментарий выше). Пока объявляем как точечные
-                    // имена; возможный путь — отдельный мини-шейп вроде `ITaskModelTierPolicy`.
-                    "ClaudeHomeServer.Services.ModelTiers",
-                    // ⚠ IL-видимость (задача `8beee75e`): `ModelTier` enum
-                    // материализуется в поле async-state-машины `TaskManager`
-                    // через `ModelTiers.TryParse`. Точечный допуск.
-                    "ClaudeHomeServer.Services.ModelTier",
-                    "ClaudeHomeServer.Services.ExecutorStopClassifier",
-                    // DailyBriefingService (Этап 5, волна C): фасад поперёк Tasks+Notes+Llm,
-                    // сидит в корне Services. Tasks зовёт его через
-                    // TaskSchedulerService.Зависимости от «спинки» — легитимные.
-                    "ClaudeHomeServer.Services.DailyBriefingService",
-                    // TaskHubExtensions удалён (Этап 5, Ф4): все потребители
-                    // (TaskSchedulerService, TasksController, Mcp-тулсеты) переехали
-                    // на ISessionBroadcaster. Шов `Tasks → Hubs` через шов-интерфейс
-                    // Core (см. ISessionBroadcaster), а не через extension-метод.
-                }),
+                Array.Empty<string>()),
         },
         // Notes — вертикаль заметок (волна 4C, шаг 2). Obsidian-совместимый vault
         // (`[[wikilinks]]`/backlinks/граф/комментарии), AI-сводки, синк с Dify,
@@ -1726,16 +1555,19 @@ public class SubsystemBoundaryTests
         // в ревью 23d353d7: без `name == "ClaudeHomeServer"` — 17/17 зелёных при нуле типов).
         // Главная гарантия — `types.Should().NotBeEmpty(...)` ниже: пустой набор типов
         // ловится им. Порог count — вспомогательный, ловит «ни одной сборки не загружено».
-        // 15 = Main + Core + 13 вынесенных (Video/Yandex/Reader/CodeGraph/Skills/Git/Tts/Notes
-        // — Этап 3 и вынос Notes; Personas/Diagnostics/WebSearch/Changelog/Docs — Этап 5, волна A);
-        // при добавлении новых `.csproj` подсистем обновить.
-        assemblies.Should().HaveCountGreaterThanOrEqualTo(15,
-            "сторож должен видеть 15 прод-сборок: ClaudeHomeServer, " +
+        // 20 = Main + Core + 18 вынесенных (Video/Yandex/Reader/CodeGraph/Skills/Git/Tts/Notes
+        // — Этап 3 и вынос Notes; Personas/Diagnostics/WebSearch/Changelog/Docs/Modules
+        // — Этап 5, волны A и C; ProjectServices/Backgrounds/ProjectIcons/Terminal —
+        // Этап 5, волна C, шаг 2); при добавлении новых `.csproj` подсистем обновить.
+        assemblies.Should().HaveCountGreaterThanOrEqualTo(20,
+            "сторож должен видеть 20 прод-сборок: ClaudeHomeServer, " +
             "ClaudeHomeServer.Core, ClaudeHomeServer.Video, ClaudeHomeServer.Yandex, " +
             "ClaudeHomeServer.Reader, ClaudeHomeServer.CodeGraph, ClaudeHomeServer.Skills, " +
             "ClaudeHomeServer.Git, ClaudeHomeServer.Tts, ClaudeHomeServer.Notes, " +
             "ClaudeHomeServer.Personas, ClaudeHomeServer.Diagnostics, ClaudeHomeServer.WebSearch, " +
-            "ClaudeHomeServer.Changelog, ClaudeHomeServer.Docs");
+            "ClaudeHomeServer.Changelog, ClaudeHomeServer.Docs, ClaudeHomeServer.Modules, " +
+            "ClaudeHomeServer.ProjectServices, ClaudeHomeServer.Backgrounds, " +
+            "ClaudeHomeServer.ProjectIcons, ClaudeHomeServer.Terminal");
         types.Should().NotBeEmpty(
             $"вертикаль {boundary.VerticalName} ({boundary.NamespaceRoot}) обязана иметь хотя бы " +
             "один тип — иначе она исчезла/переименована, а проверка границ ничего не проверяет");
@@ -1943,6 +1775,25 @@ public class SubsystemBoundaryTests
         // стекам (Persona и Team), оба реализатора лежат в Models/ — без переноса
         // интерфейса в Core `Models/` целиком не уезжает.
         "ClaudeHomeServer.Services.Memory",
+        // Этап 5 (Turn): OnboardingPrompts переехал в Core, потому что Turn
+        // (PersonaLayerContributor) ссылается на него в слое персоны. Сам класс
+        // — stateless-промпт-материал (как Slugifier/PathNormalizer), но целиком
+        // под `Prompts/OnboardingPrompts.cs` — не один файл-примитив. Чтобы
+        // не раздувать CoreAllowedRootTypes, разрешаем namespace.
+        "ClaudeHomeServer.Services.Prompts",
+        // Этап 5, узкие швы Turn: DossierRecallRequest/DossierRecallResult — контрактные
+        // DTO пассивного recall паспортов. Запрос собирает Turn (контрибьютор промпта),
+        // исполняет Memory (PersonaMemoryService.BuildRecallAsync), владеет Dossiers.
+        // Держать форму данных внутри вертикали значило бы ссылку на Dossiers у двух
+        // посторонних слоёв ради типа, а не ради поведения. Поведение (DossierRecallService)
+        // осталось в вертикали и в Core НЕ едет.
+        "ClaudeHomeServer.Services.Dossiers",
+        // Этап 5, шаг 6 (инверсия контрибьюторов промпта): IPromptSectionContributor +
+        // PromptSection + PromptSectionContribution + PromptSessionContext +
+        // extension для DI — контракт шины TurnEventBus, реализации едут в чужих
+        // вертикалях (CodeGraph, Notes). Прецедент IKnowledgeSyncParticipant: тот же
+        // приём — контракт в Core, реализации по вертикалям, реестр через IEnumerable<>.
+        "ClaudeHomeServer.Services.Turn",
         // Этап 5, волна D (Notes): INoteTaskBridge + узкие Core-типы (NoteTaskRef/
         // NoteTaskCreateRequest/NoteTaskUpdateRequest/NoteTaskStatus/NoteTaskKind/
         // NoteTaskRecurrence) — мост Notes → Tasks. Нужны Core, чтобы Notes
@@ -1982,6 +1833,10 @@ public class SubsystemBoundaryTests
         // (тоже Core) мог ссылаться на слот без обратной ссылки на Main. Парсер
         // `ModelTiers` остаётся в Main — он завязан на IConfiguration/JSON-стор.
         "ClaudeHomeServer.Services.ModelTier",
+        // Этап 5, узкие швы Turn: разбор путей, упомянутых в тексте хода (был
+        // `DossierRecallService.ExtractPathsFromText`, звал его только контрибьютор
+        // промпта). Stateless-регексп по образцу Slugifier.
+        "ClaudeHomeServer.Services.TextPathMentions",
     ];
 
     /// <summary>

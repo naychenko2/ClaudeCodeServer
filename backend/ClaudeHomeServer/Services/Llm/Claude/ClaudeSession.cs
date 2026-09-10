@@ -609,6 +609,9 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly ConcurrentDictionary<string, string> _pendingFileClaims = new();
 
     private readonly string? _rawSystemPrompt;
+    // Встроенная часть системного промпта: контент продукта из Main, приезжает контекстом
+    // (собирать части умеет спина — Core: SystemPromptComposer)
+    private readonly string _builtInSystemPrompt;
     private readonly string? _mcpConfigPath;
     // Ключ HTTP MCP-сервера fal-ai (Fal:McpApiKey) — сервер инжектится в конфиг хода
     // из appsettings, а не хардкодится в .mcp.json (секрет вне git); пусто — без fal-ai
@@ -743,6 +746,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _falMcpApiKey = falMcpApiKey;
         _glifMcpToken = glifMcpToken;
         _rawSystemPrompt = context.RawSystemPrompt;
+        _builtInSystemPrompt = context.BuiltInSystemPrompt;
         _skills = skills;
         _wkStore = workspaceStore;
         _permissionRules = context.PermissionRules;
@@ -2778,8 +2782,9 @@ public class ClaudeSession : ILlmSessionAdapter
             // (/effective-prompt): встроенная константа, промпт проекта, автодополнения Dify.
             // Индекс в ключе разводит две auto-части (блок Dify и инструкция по тегам).
             var partIndex = 0;
-            foreach (var part in ProjectManager.GetSystemPromptParts(
-                         _rawSystemPrompt, currentDatasetId != null, currentWk?.DocumentTags))
+            foreach (var part in SystemPromptComposer.GetSystemPromptParts(
+                         _builtInSystemPrompt, _rawSystemPrompt, currentDatasetId != null,
+                         currentWk?.DocumentTags))
             {
                 var partTitle = part.Kind switch
                 {
@@ -3161,7 +3166,7 @@ public class ClaudeSession : ILlmSessionAdapter
             // которых в этом ходе нет.
             if (contributorSections.ContainsKey("code-navigation"))
                 Add("code-navigation", "Какой инструмент навигации по коду звать",
-                    Prompts.CodeNavigationPrompts.SectionText, group: "project");
+                    CodeNavigationPrompts.SectionText, group: "project");
 
             // Персональный слой (этап 2): контрибьютор PersonaLayerContributor добавляет секцию
             // Key="persona-layer" в filter.Sections. Combine находит её по ключу и клеит

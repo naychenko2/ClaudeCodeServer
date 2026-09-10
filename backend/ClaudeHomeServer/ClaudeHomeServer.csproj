@@ -28,10 +28,9 @@
 
   <!-- Белый список имён значков (ADR-009 §5.2): генерируемая копия iconNames установленного
        lucide-react, правится только генератором (frontend/scripts/gen-glyph-names.mjs), не руками.
-       LogicalName задан явно — код читает ресурс по короткому имени и не зависит от папок -->
-  <ItemGroup>
-    <EmbeddedResource Include="Services\ProjectIcons\lucide-icon-names.g.txt" LogicalName="lucide-icon-names.g.txt" />
-  </ItemGroup>
+       LogicalName задан явно — код читает ресурс по короткому имени и не зависит от папок.
+       Этап 5, волна C, шаг 2: перенесён в `ClaudeHomeServer.ProjectIcons.csproj`
+       вместе с вертикалью (EmbeddedResource едет со сборкой, в которой живёт). -->
 
   <!-- Хостовый publish: встроенные MCP-серверы и дефолты CLI кладём рядом с exe —
        TasksServerLocator и синк workflows ищут их от AppContext.BaseDirectory
@@ -68,16 +67,18 @@
     <Copy SourceFiles="@(ConPtyBridgeFiles)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
   </Target>
 
-  <!-- === Модульность (Этап 3) ===
-       Вертикали Video/Yandex/Reader/CodeGraph/Skills/Git вынесены в собственные .csproj
-       и ссылаются только на Core. Здесь — обратная ссылка «Main → вертикаль» ради
-       регистрации подсистем в Program.cs: AddSubsystems(new VideoSubsystem(), ...).
-       Это не цикл: цепочка Main → Vertical → Core → (BCL). Core не ссылается ни
-       на Main, ни на вертикали. До этапа 3 всё это жило одной сборкой, и инвариант
-       «вертикаль зависит только от спинки» соблюдался логически; теперь он
-       держится физически — вертикаль не может «протянуть руку» в Main, потому
-       что ProjectReference в её .csproj нет. -->
+  <!-- === Модульность (Этап 3+, Этап 5)
+       Вертикали Video/Yandex/Reader/CodeGraph/Skills/Git/Notes/Personas/Spend/Knowledge/
+       Changelog/Diagnostics/Docs/Tts/WebSearch/Tasks/Modules/ProjectServices/Backgrounds
+       вынесены в собственные .csproj и ссылаются только на Core. Здесь — обратная
+       ссылка «Main → вертикаль» ради регистрации подсистем в Program.cs:
+       AddSubsystems(new VideoSubsystem(), ...). Это не цикл: цепочка
+       Main → Vertical → Core → (BCL). Core не ссылается ни на Main, ни на вертикали.
+       До этапа 3 всё это жило одной сборкой, и инвариант «вертикаль зависит только
+       от спинки» соблюдался логически; теперь он держится физически — вертикаль не
+       может «протянуть руку» в Main, потому что ProjectReference в её .csproj нет. -->
   <ItemGroup>
+    <ProjectReference Include="..\ClaudeHomeServer.Backgrounds\ClaudeHomeServer.Backgrounds.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Video\ClaudeHomeServer.Video.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Yandex\ClaudeHomeServer.Yandex.csproj" />
@@ -89,10 +90,16 @@
     <ProjectReference Include="..\ClaudeHomeServer.Skills\ClaudeHomeServer.Skills.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Git\ClaudeHomeServer.Git.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Knowledge\ClaudeHomeServer.Knowledge.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Modules\ClaudeHomeServer.Modules.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Notes\ClaudeHomeServer.Notes.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Personas\ClaudeHomeServer.Personas.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.ProjectIcons\ClaudeHomeServer.ProjectIcons.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.ProjectServices\ClaudeHomeServer.ProjectServices.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Spend\ClaudeHomeServer.Spend.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Tasks\ClaudeHomeServer.Tasks.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Terminal\ClaudeHomeServer.Terminal.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Tts\ClaudeHomeServer.Tts.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Turn\ClaudeHomeServer.Turn.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.WebSearch\ClaudeHomeServer.WebSearch.csproj" />
   </ItemGroup>
 

@@ -156,7 +156,7 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
         var context = new LlmSessionContext(
             RootPath: _root,
             OnMessage: m => { lock (messages) messages.Add(m); return Task.CompletedTask; },
-            RawSystemPrompt: null,
+            RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
             PermissionRules: null,
             TasksMcp: null,
             MemoryMcp: new MemoryMcpContext("http://memory.invalid", () => "tok", "persona-1"),

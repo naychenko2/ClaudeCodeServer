@@ -108,14 +108,14 @@ public class ClaudeSessionCodeNavigationPromptTests : IDisposable
                 if (!string.IsNullOrWhiteSpace(block))
                     e.Sections.Add(new ClaudeHomeServer.Services.Turn.PromptSection("code-graph", block!));
                 e.Sections.Add(new ClaudeHomeServer.Services.Turn.PromptSection("code-navigation",
-                    ClaudeHomeServer.Services.Prompts.CodeNavigationPrompts.SectionText));
+                    CodeNavigationPrompts.SectionText));
                 await next();
             }, "Test.CodeGraphProvider");
         }
         var context = new LlmSessionContext(
             RootPath: _root,
             OnMessage: m => { lock (messages) messages.Add(m); return Task.CompletedTask; },
-            RawSystemPrompt: null,
+            RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
             PermissionRules: null,
             TasksMcp: null,
             Launcher: new CapturingLauncher(_clis, _argsCaptured),

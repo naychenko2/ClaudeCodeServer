@@ -27,7 +27,7 @@ public class ClaudeSessionDisposeRaceTests
         var context = new LlmSessionContext(
             RootPath: Path.GetTempPath(),
             OnMessage: msg => { lock (sent) sent.Add(msg); return Task.CompletedTask; },
-            RawSystemPrompt: null,
+            RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
             PermissionRules: null,
             TasksMcp: null);
         return (new ClaudeSession(new Session(), context), sent);

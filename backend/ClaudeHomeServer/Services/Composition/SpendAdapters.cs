@@ -33,6 +33,9 @@ public sealed class ChatHistoryLoaderAdapter(ChatHistoryService history) : IChat
 {
     public Task<List<StoredMessage>> LoadAsync(string claudeSessionId) =>
         history.LoadAsync(claudeSessionId);
+
+    public DateTime? LastWriteUtc(string claudeSessionId) =>
+        history.LastWriteUtc(claudeSessionId);
 }
 
 public sealed class TaskLookupAdapter(TaskManager tasks) : ITaskLookup

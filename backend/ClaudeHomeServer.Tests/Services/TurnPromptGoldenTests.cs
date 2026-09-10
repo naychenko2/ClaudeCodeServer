@@ -492,7 +492,7 @@ public class TurnPromptGoldenTests : IDisposable
             {
                 e.Sections.Add(new PromptSection("code-graph", "graph-slice"));
                 e.Sections.Add(new PromptSection(
-                    "code-navigation", ClaudeHomeServer.Services.Prompts.CodeNavigationPrompts.SectionText));
+                    "code-navigation", CodeNavigationPrompts.SectionText));
             }
             await next();
         }, "Test.CodeGraph");
@@ -508,7 +508,7 @@ public class TurnPromptGoldenTests : IDisposable
         return new LlmSessionContext(
             RootPath: _root,
             OnMessage: _ => Task.CompletedTask,
-            RawSystemPrompt: null,
+            RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
             PermissionRules: null,
             TasksMcp: projectMcpProjectId is null
                 ? new TasksMcpContext("http://tasks.invalid", () => "tok", ProjectId: null)

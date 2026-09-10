@@ -208,7 +208,7 @@ public static class SpecialtyPromptPresets
     private const string CodeGraphFallback =
         "Навигация по коду — три уровня, не взаимозаменяемы: codegraph (типы и связность), LSP (символ и позиция), Grep (текст).\n" +
         "Когда звать: «где объявлен X» — codegraph_find; «что связано с X» — codegraph_neighbors; обзор подсистемы — codegraph_hubs. " +
-        Prompts.CodeNavigationPrompts.PresetLspLine + "\n" +
+        CodeNavigationPrompts.PresetLspLine + "\n" +
         "Структуру кода уточняй инструментами, а не пересказом из памяти. " +
         "Grep — только для текстовых вхождений и файлов вне графа (конфиги, .md, разметка).";
 
@@ -220,8 +220,8 @@ public static class SpecialtyPromptPresets
             "• «где объявлен X» — codegraph_find: файл, строка и вид типа, без шума совпадений;\n" +
             "• «что сломается, если правлю X» — codegraph_neighbors: входящие Calls/Implements/References;\n" +
             "• «с чего начать в незнакомом модуле» — codegraph_hubs;\n" +
-            Prompts.CodeNavigationPrompts.PresetLspLine + "\n" +
-            Prompts.CodeNavigationPrompts.PresetRenameMoment + " " +
+            CodeNavigationPrompts.PresetLspLine + "\n" +
+            CodeNavigationPrompts.PresetRenameMoment + " " +
             "Grep — только для текстовых вхождений и файлов вне графа (конфиги, .md, разметка).",
         [PersonaSpecialty.BackendExecutor] =
             "Навигация по серверному коду (.cs): codegraph — типы и связности, LSP — символ и позиция.\n" +
@@ -229,8 +229,8 @@ public static class SpecialtyPromptPresets
             "• «где объявлен X» — codegraph_find: файл, строка и вид типа;\n" +
             "• «что сломается, если правлю X» — codegraph_neighbors: входящие Calls/Implements/References;\n" +
             "• незнакомая подсистема — codegraph_hubs: точки входа;\n" +
-            Prompts.CodeNavigationPrompts.PresetLspLine + " Методы и поля .cs — LSP, не текстовый поиск.\n" +
-            Prompts.CodeNavigationPrompts.PresetRenameMoment + " " +
+            CodeNavigationPrompts.PresetLspLine + " Методы и поля .cs — LSP, не текстовый поиск.\n" +
+            CodeNavigationPrompts.PresetRenameMoment + " " +
             "Grep — только для текстовых вхождений и файлов вне графа.",
         [PersonaSpecialty.FrontendExecutor] =
             "Навигация по коду фронта (.tsx/.ts): codegraph — типы и связности, LSP — символ и позиция.\n" +
@@ -238,8 +238,8 @@ public static class SpecialtyPromptPresets
             "• «где объявлен X» — codegraph_find: файл, строка и вид типа;\n" +
             "• «что сломается, если правлю X» — codegraph_neighbors: входящие Calls/Implements/References;\n" +
             "• незнакомый модуль — codegraph_hubs: точки входа;\n" +
-            Prompts.CodeNavigationPrompts.PresetLspLine + " Компоненты и хуки .tsx — LSP, не текстовый поиск.\n" +
-            Prompts.CodeNavigationPrompts.PresetRenameMoment + " " +
+            CodeNavigationPrompts.PresetLspLine + " Компоненты и хуки .tsx — LSP, не текстовый поиск.\n" +
+            CodeNavigationPrompts.PresetRenameMoment + " " +
             "Grep — только для текстовых вхождений и файлов вне графа.",
         [PersonaSpecialty.DevopsExecutor] =
             "Навигация по коду — три уровня, не взаимозаменяемы; текстовый поиск по символам промахивается.\n" +
@@ -247,7 +247,7 @@ public static class SpecialtyPromptPresets
             "• «где объявлен X» — codegraph_find: файл, строка и вид типа;\n" +
             "• «что сломается, если правлю X» — codegraph_neighbors: входящие связи;\n" +
             "• незнакомая подсистема — codegraph_hubs: точки входа;\n" +
-            Prompts.CodeNavigationPrompts.PresetLspLine + "\n" +
+            CodeNavigationPrompts.PresetLspLine + "\n" +
             "Grep — только для текстовых вхождений и файлов вне графа.",
         [PersonaSpecialty.Reviewer] =
             "Навигация по коду — три уровня: типы (codegraph), символ (LSP), текст (Grep).\n" +
@@ -255,7 +255,7 @@ public static class SpecialtyPromptPresets
             "• оценивая влияние изменений — codegraph_neighbors по тронутым типам: кто ещё зависит;\n" +
             "• «где объявлен X» — codegraph_find: точное место и вид типа;\n" +
             "• незнакомая подсистема — codegraph_hubs;\n" +
-            Prompts.CodeNavigationPrompts.PresetLspLine + "\n" +
+            CodeNavigationPrompts.PresetLspLine + "\n" +
             "Находку «правка заденет N мест» подтверждай инструментом, а не прикидкой.",
         [PersonaSpecialty.Tester] =
             "Навигация по коду — три уровня: типы (codegraph), символ (LSP), текст (Grep).\n" +
@@ -263,7 +263,7 @@ public static class SpecialtyPromptPresets
             "• «что затронет эта правка» — codegraph_neighbors: границы влияния для объёма проверки;\n" +
             "• «где объявлен X» — codegraph_find;\n" +
             "• незнакомая подсистема — codegraph_hubs: точки входа;\n" +
-            Prompts.CodeNavigationPrompts.PresetLspLine + "\n" +
+            CodeNavigationPrompts.PresetLspLine + "\n" +
             "Проверяй не только изменённый файл, но и его входящих соседей.",
         [PersonaSpecialty.Planner] =
             "Навигация по коду — три уровня: типы (codegraph), символ (LSP), текст (Grep).\n" +
@@ -271,12 +271,12 @@ public static class SpecialtyPromptPresets
             "• «с чего начать» в незнакомом модуле — codegraph_hubs;\n" +
             "• «где объявлен X» — codegraph_find: точное место;\n" +
             "• «что связано с X» — codegraph_neighbors;\n" +
-            Prompts.CodeNavigationPrompts.PresetLspLine + "\n" +
+            CodeNavigationPrompts.PresetLspLine + "\n" +
             "План по коду строй от графа и символов, а не от имён файлов.",
         [PersonaSpecialty.Analyst] =
             "Навигация по коду — три уровня: типы (codegraph), символ (LSP), текст (Grep).\n" +
             "Когда звать: карта подсистемы — codegraph_hubs; «где объявлен термин» — codegraph_find; связи понятия — codegraph_neighbors. " +
-            Prompts.CodeNavigationPrompts.PresetLspLine + "\n" +
+            CodeNavigationPrompts.PresetLspLine + "\n" +
             "Архитектуру подтверждай инструментом, а не догадкой.",
     };
 

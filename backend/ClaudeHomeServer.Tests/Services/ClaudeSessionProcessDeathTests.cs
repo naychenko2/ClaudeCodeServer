@@ -109,7 +109,7 @@ public class ClaudeSessionProcessDeathTests : IDisposable
                 if (m is ExitedMessage) exitedSeen.TrySetResult();
                 return Task.CompletedTask;
             },
-            RawSystemPrompt: null,
+            RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
             PermissionRules: null,
             TasksMcp: null,
             Launcher: new SleepingCliLauncher(_processes, started));

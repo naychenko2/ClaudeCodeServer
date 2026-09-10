@@ -51,7 +51,7 @@ public class ClaudeSessionBadUtf8StreamTests : IDisposable
         var context = new LlmSessionContext(
             RootPath: Path.GetTempPath(),
             OnMessage: m => { lock (sink) sink.Add(m); return Task.CompletedTask; },
-            RawSystemPrompt: null,
+            RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
             PermissionRules: null,
             TasksMcp: null);
         return new ClaudeSession(new Session(), context);

@@ -71,7 +71,7 @@ public static class LoopbackProxyBypass
     /// только под http-MCP, и рубильник Mcp:HttpTransport=false уводил локальный ход в прокси.
     /// Песочницы это не касается — там средой владеет контейнер (ветка выше).
     /// </summary>
-    internal static string? ForTurn(bool useHttp, bool isSandboxed, bool localProvider,
+    public static string? ForTurn(bool useHttp, bool isSandboxed, bool localProvider,
         string? inherited, params string?[] apiUrls) =>
         (!useHttp && !localProvider) || isSandboxed ? null : Merge(inherited, apiUrls);
 }

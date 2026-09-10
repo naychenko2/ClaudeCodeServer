@@ -1,5 +1,5 @@
 using ClaudeHomeServer.Models;
-using ClaudeHomeServer.Services.Tasks;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Services.TriggerSources;
 
@@ -9,7 +9,7 @@ namespace ClaudeHomeServer.Services.TriggerSources;
 // экшена (если правило через персону меняет задачу) «невидима» следующему тику (anti-loop).
 //
 // Args: projectId?, from?:"Todo"|"InProgress"|"Done", to?:..., assignee?:"me"|"claude" (Phase 2)
-public sealed class TaskStatusTriggerSource(TaskManager tasks) : ITriggerSource
+public sealed class TaskStatusTriggerSource(ITaskStatusReader tasks) : ITriggerSource
 {
     public AutomationTriggerType Type => AutomationTriggerType.TaskStatus;
 

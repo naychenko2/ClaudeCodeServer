@@ -1,5 +1,6 @@
 using System.Text.Json;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Services.TriggerSources;
 
@@ -7,14 +8,13 @@ namespace ClaudeHomeServer.Services.TriggerSources;
 // Два режима (см. контракт Args в PersonaAutomation.cs):
 //   • проект: args.projectId → project.RootPath (как исторически);
 //   • папка (глобальный агент): args.folder — относительный подпуть в ДОМАШНЕЙ ПАПКЕ пользователя
-//     (резолв — UserHomeResolver). Пустая строка = вся домашняя папка.
+//     (резолв — IHomePathResolver). Пустая строка = вся домашняя папка.
 //     Guard от path traversal: результат обязан лежать внутри домашней папки.
 // Единая точка, чтобы FileTriggerSource / GitCommitTriggerSource / PersonaAutomationService не
 // дублировали резолв. label — человекочитаемая подпись корня для summary/контекста хода.
-public sealed class AutomationRootResolver(IProjectManager projects, AppSettingsService appSettings,
-    UserHomeResolver? homes = null)
+public sealed class AutomationRootResolver(IProjectManager projects, IHomePathResolver homes)
 {
-    private readonly UserHomeResolver _homes = homes ?? UserHomeResolver.WithoutOverrides(appSettings);
+    private readonly IHomePathResolver _homes = homes;
 
     public (string? Root, string Label) Resolve(IReadOnlyDictionary<string, JsonElement> args, User user)
     {
@@ -37,7 +37,7 @@ public sealed class AutomationRootResolver(IProjectManager projects, AppSettings
         var home = Path.GetFullPath(resolved);
         var full = Path.GetFullPath(Path.Combine(home, folder.Trim().TrimStart('/', '\\')));
         // Guard: не выходить за домашнюю папку пользователя (сама она допустима)
-        if (!UserHomeResolver.IsInside(full, home)) return (null, "");
+        if (!PathGuards.IsInside(full, home)) return (null, "");
 
         var label = string.IsNullOrWhiteSpace(folder) ? "домашняя папка" : $"папка «{folder.Trim()}»";
         return (full, label);

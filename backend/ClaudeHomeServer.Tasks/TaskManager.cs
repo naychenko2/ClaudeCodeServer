@@ -5,7 +5,7 @@ using ClaudeHomeServer.Models;
 namespace ClaudeHomeServer.Services.Tasks;
 
 // Задачи: in-memory + data/tasks.json (по образцу ProjectManager)
-public class TaskManager
+public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusReader
 {
     private readonly ConcurrentDictionary<string, TaskItem> _tasks = new();
     private readonly string _storePath;

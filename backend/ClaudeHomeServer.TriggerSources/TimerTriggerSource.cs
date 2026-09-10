@@ -36,9 +36,9 @@ public sealed class TimerTriggerSource : ITriggerSource
 
     // ─── Чистые предикаты (юнит-тесты) ──────────────────────────────────────────
 
-    internal sealed record Schedule(string Type, TimeOnly? Time, List<int>? Weekdays, int? IntervalMinutes);
+    public sealed record Schedule(string Type, TimeOnly? Time, List<int>? Weekdays, int? IntervalMinutes);
 
-    internal static Schedule? ParseSchedule(IReadOnlyDictionary<string, JsonElement> args)
+    public static Schedule? ParseSchedule(IReadOnlyDictionary<string, JsonElement> args)
     {
         var s = args.GetObject("schedule") ?? args;   // допускаем расписание вложенно или плоско
         var type = (s.GetString("type") ?? "daily").Trim().ToLowerInvariant();

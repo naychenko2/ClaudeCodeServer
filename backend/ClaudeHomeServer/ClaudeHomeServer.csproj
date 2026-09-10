@@ -105,6 +105,8 @@
     <ProjectReference Include="..\ClaudeHomeServer.Tts\ClaudeHomeServer.Tts.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Turn\ClaudeHomeServer.Turn.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.WebSearch\ClaudeHomeServer.WebSearch.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.TriggerSources\ClaudeHomeServer.TriggerSources.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Watchdog\ClaudeHomeServer.Watchdog.csproj" />
   </ItemGroup>
 
   <ItemGroup>

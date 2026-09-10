@@ -51,7 +51,7 @@ public class AutomationRootResolverTests : IDisposable
     {
         var root = Path.Combine(_tempDir, "myproj");
         var project = _projects.Create("MyProj", root, "u1", "alice", createDirectory: true);
-        var resolver = new AutomationRootResolver(_projects, _appSettings);
+        var resolver = new AutomationRootResolver(_projects, UserHomeResolver.WithoutOverrides(_appSettings));
 
         var (resolved, label) = resolver.Resolve(Args(("projectId", project.Id)), Alice);
 
@@ -62,7 +62,7 @@ public class AutomationRootResolverTests : IDisposable
     [Fact]
     public void Несуществующий_проект_даёт_null()
     {
-        var resolver = new AutomationRootResolver(_projects, _appSettings);
+        var resolver = new AutomationRootResolver(_projects, UserHomeResolver.WithoutOverrides(_appSettings));
         var (resolved, _) = resolver.Resolve(Args(("projectId", "нет-такого")), Alice);
         resolved.Should().BeNull();
     }
@@ -70,7 +70,7 @@ public class AutomationRootResolverTests : IDisposable
     [Fact]
     public void Пустая_папка_даёт_домашнюю_папку_пользователя()
     {
-        var resolver = new AutomationRootResolver(_projects, _appSettings);
+        var resolver = new AutomationRootResolver(_projects, UserHomeResolver.WithoutOverrides(_appSettings));
         var (resolved, label) = resolver.Resolve(Args(("folder", "")), Alice);
 
         resolved.Should().Be(Path.GetFullPath(Path.Combine(_tempDir, "alice")));
@@ -80,7 +80,7 @@ public class AutomationRootResolverTests : IDisposable
     [Fact]
     public void Подпапка_резолвится_относительно_домашней()
     {
-        var resolver = new AutomationRootResolver(_projects, _appSettings);
+        var resolver = new AutomationRootResolver(_projects, UserHomeResolver.WithoutOverrides(_appSettings));
         var (resolved, label) = resolver.Resolve(Args(("folder", "sub/dir")), Alice);
 
         resolved.Should().Be(Path.GetFullPath(Path.Combine(_tempDir, "alice", "sub", "dir")));
@@ -92,7 +92,7 @@ public class AutomationRootResolverTests : IDisposable
     [InlineData("../bob")]
     public void Traversal_за_домашнюю_папку_отклоняется(string folder)
     {
-        var resolver = new AutomationRootResolver(_projects, _appSettings);
+        var resolver = new AutomationRootResolver(_projects, UserHomeResolver.WithoutOverrides(_appSettings));
         var (resolved, _) = resolver.Resolve(Args(("folder", folder)), Alice);
         resolved.Should().BeNull();
     }
@@ -100,7 +100,7 @@ public class AutomationRootResolverTests : IDisposable
     [Fact]
     public void Ни_проекта_ни_папки_даёт_null()
     {
-        var resolver = new AutomationRootResolver(_projects, _appSettings);
+        var resolver = new AutomationRootResolver(_projects, UserHomeResolver.WithoutOverrides(_appSettings));
         var (resolved, _) = resolver.Resolve(new Dictionary<string, JsonElement>(), Alice);
         resolved.Should().BeNull();
     }
@@ -119,7 +119,7 @@ public class AutomationRootResolverTests : IDisposable
                 ["Projects:UserHomeOverrides:alice"] = custom,
             })
             .Build();
-        var resolver = new AutomationRootResolver(_projects, _appSettings,
+        var resolver = new AutomationRootResolver(_projects,
             new UserHomeResolver(config, new AppSettingsService(config)));
 
         var (resolved, _) = resolver.Resolve(Args(("folder", "sub")), Alice);
@@ -140,7 +140,7 @@ public class AutomationRootResolverTests : IDisposable
             })
             .Build();
         var appSettings = new AppSettingsService(config);
-        var resolver = new AutomationRootResolver(_projects, appSettings);
+        var resolver = new AutomationRootResolver(_projects, UserHomeResolver.WithoutOverrides(appSettings));
 
         var (resolved, _) = resolver.Resolve(Args(("folder", "sub")), Alice);
         resolved.Should().BeNull();

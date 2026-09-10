@@ -19,7 +19,7 @@ namespace ClaudeHomeServer.Services;
 // путь вне песочницы процессы пользователя всё равно не увидят, а сам корень песочницы —
 // общий для всех изолированных пользователей (дом в нём снял бы границу между ними).
 // Непригодный override игнорируется, работает обычная схема {база}/{username}.
-public sealed class UserHomeResolver
+public sealed class UserHomeResolver : ClaudeHomeServer.Services.Composition.IHomePathResolver
 {
     private readonly AppSettingsService _appSettings;
     private readonly Execution.SandboxManager? _sandbox;

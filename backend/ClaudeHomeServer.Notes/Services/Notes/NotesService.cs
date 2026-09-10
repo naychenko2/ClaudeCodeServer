@@ -11,7 +11,7 @@ namespace ClaudeHomeServer.Services.Notes;
 // Единый per-owner граф агрегирует все источники владельца (Модель 3 из плана).
 // Класс не хранит состояние заметок — сканирует файлы на каждый запрос
 // (заметок немного; кэш-инвалидация — возможная оптимизация позже).
-public sealed partial class NotesService
+public sealed partial class NotesService : ClaudeHomeServer.Services.Composition.INoteSummaryReader
 {
     private readonly IProjectManager _projects;
     private readonly ILogger<NotesService> _logger;

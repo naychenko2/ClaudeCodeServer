@@ -10044,7 +10044,7 @@ public class SessionManagerTests : IDisposable
             NullLogger<NotificationService>.Instance);
         var state = new AutomationStateStore(config);
         var mentions = new MentionTriggerSource(_personaManager);
-        var roots = new AutomationRootResolver(_projectManager, _appSettings);
+        var roots = new AutomationRootResolver(_projectManager, UserHomeResolver.WithoutOverrides(_appSettings));
 
         var service = new PersonaAutomationService(_personaManager, _sut, push, notif,
             state, mentions, _projectManager, _userStore, roots, Array.Empty<ITriggerSource>(),

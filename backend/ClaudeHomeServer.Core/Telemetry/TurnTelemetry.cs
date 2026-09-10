@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
 
-namespace ClaudeHomeServer.Telemetry;
+namespace ClaudeHomeServer.Core.Telemetry;
 
 /// <summary>
 /// Инструментирование хода ClaudeSession: OTel-спаны (chat.turn, process.start)

@@ -646,7 +646,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     public SessionManager(ProjectManager projects,
         ChatHistoryService history, IConfiguration config, ILlmSessionAdapterFactory adapters,
         FalCostService falCost, UsageService usage,
-        AppSettingsService appSettings, ITierModelResolver tierResolver, UserStore users, JwtService jwt,
+        AppSettingsService appSettings, UserStore users, JwtService jwt,
         Microsoft.AspNetCore.Hosting.Server.IServer server,
         LlmProviderRegistry llmProviders,
         FeatureFlagService flags, PersonaManager personas,
@@ -806,8 +806,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         _llmProviders = llmProviders;
         _falCost = falCost;
         _usage = usage;
-        _appSettings = tierResolver;
-        _assignments = assignments ?? new Llm.ModelAssignmentResolver(tierResolver);
+        _appSettings = appSettings;
+        _assignments = assignments ?? new Llm.ModelAssignmentResolver(appSettings);
         _users = users;
         _jwt = jwt;
         _desktopTokens = new Desktop.DesktopCapabilityTokenService(jwt);

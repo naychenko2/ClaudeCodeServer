@@ -1,50 +1,8 @@
 using System.Globalization;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Services.Llm;
-
-// Куда сторож подписок сообщает алерты владельцу. Отдельный шов (а не прямой вызов
-// NotificationService) — тот же приём, что IKnowledgeAlertNotifier: сам NotificationService
-// тянет стор, хаб и push, а тестировать надо логику дедупа, а не доставку.
-public interface ISubscriptionAlertNotifier
-{
-    Task NotifyAdminsAsync(string title, string body);
-}
-
-// Доставка через NotificationService всем администраторам (подписки настраивает админ
-// в конфиге — «владелец» это он). Kind "alert" (категория «Алерты») + push: инцидент
-// чужого токена жил трое суток и нашёлся только ручным сравнением каналов.
-public sealed class SubscriptionAlertNotifier(
-    NotificationService notifications,
-    IUserStore users) : ISubscriptionAlertNotifier
-{
-    public async Task NotifyAdminsAsync(string title, string body)
-    {
-        try
-        {
-            var admins = users.GetAll().Where(u => u.Role == "admin").ToList();
-            foreach (var admin in admins)
-            {
-                try
-                {
-                    await notifications.SendAsync(admin.Id, new CreateNotificationRequest
-                    {
-                        Kind = "alert",
-                        Type = "subscription_window_mismatch",
-                        Title = title,
-                        Body = body,
-                        // Экран «Расходы», вкладка квот — там видны снимки обоих каналов
-                        Url = "#/spend",
-                        Tag = "Подписки",
-                        Source = "Подписки",
-                    }, sendPush: true);
-                }
-                catch { /* отказ одному админу не должен обрывать рассылку остальным */ }
-            }
-        }
-        catch { /* доставка best-effort — не ронять опрос, из-за которого она вызвана */ }
-    }
-}
 
 // Сторож «чужого» setup-токена: сравнивает время сброса 5h-окна одного ключа подписки
 // между двумя каналами — probe/turn (setup-токен из конфига) и oauth (профильный логин

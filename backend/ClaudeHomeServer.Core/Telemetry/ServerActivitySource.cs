@@ -1,6 +1,6 @@
 using System.Diagnostics;
 
-namespace ClaudeHomeServer.Telemetry;
+namespace ClaudeHomeServer.Core.Telemetry;
 
 /// <summary>
 /// Единая точка для всех Activity (traces). Имя = source identifier для OTel SDK.

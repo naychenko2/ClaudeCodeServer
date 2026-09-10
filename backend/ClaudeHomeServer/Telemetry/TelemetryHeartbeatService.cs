@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Core.Telemetry;
 using Microsoft.Extensions.Hosting;
 
 namespace ClaudeHomeServer.Telemetry;

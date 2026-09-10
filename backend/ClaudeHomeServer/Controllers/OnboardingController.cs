@@ -8,7 +8,7 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Personas;
 using ClaudeHomeServer.Services.Prompts;
-using ClaudeHomeServer.Telemetry;
+using ClaudeHomeServer.Core.Telemetry;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;

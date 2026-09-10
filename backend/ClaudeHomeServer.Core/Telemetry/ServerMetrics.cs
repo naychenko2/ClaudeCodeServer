@@ -1,6 +1,6 @@
 using System.Diagnostics.Metrics;
 
-namespace ClaudeHomeServer.Telemetry;
+namespace ClaudeHomeServer.Core.Telemetry;
 
 /// <summary>
 /// Типизированный фасад над OTel Meter. Запрещает ad-hoc теги — все теги

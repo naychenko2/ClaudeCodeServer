@@ -10,7 +10,7 @@ using ClaudeHomeServer.Services.Prompts;
 using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Services.Team;
 using ClaudeHomeServer.Services.Turn;
-using ClaudeHomeServer.Telemetry;
+using ClaudeHomeServer.Core.Telemetry;
 
 namespace ClaudeHomeServer.Services.Llm.Claude;
 

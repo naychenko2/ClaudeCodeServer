@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.Services.Http;
+using ClaudeHomeServer.Core.Telemetry;
 using ClaudeHomeServer.Telemetry;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;

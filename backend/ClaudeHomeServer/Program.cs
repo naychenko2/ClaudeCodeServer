@@ -22,6 +22,7 @@ using ClaudeHomeServer.Services.Modules;
 using ClaudeHomeServer.Services.Turn;
 using ClaudeHomeServer.Services.Video;
 using ClaudeHomeServer.Telemetry;
+using ClaudeHomeServer.Core.Telemetry;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.HttpOverrides;
@@ -182,11 +183,12 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.IDataBackupService,
 builder.Services.AddSingleton<JwtService>();
 builder.Services.AddSingleton<FeatureFlagService>();
 builder.Services.AddSingleton<AppSettingsService>();
-// ITierModelResolver — Core-шов для слота модели в AppSettings (волна 1 выноса Llm).
-// Реализация AppSettingsTierModelAdapter живёт в Composition, делегирует в AppSettingsService.
-builder.Services.AddSingleton<ITierModelResolver, AppSettingsTierModelAdapter>();
+// AppSettingsService реализует ITierModelResolver (Core-шов для слота модели).
+// DI сама по себе не резолвит concrete→interface — пробрасываем вручную, тот
+// же singleton-экземпляр. Отдельного адаптера не нужно: класс уже реализует шов.
 // IModelCatalog — Core-шов для каталога моделей (волна 1 выноса Llm). Реализация
 // ModelCatalogAdapter мапит nested ModelInfo (Main) в ModelCatalogEntry (Core).
+builder.Services.AddSingleton<ITierModelResolver>(sp => sp.GetRequiredService<AppSettingsService>());
 builder.Services.AddSingleton<IModelCatalog, ModelCatalogAdapter>();
 // UserModelTierResolver (слоты моделей) — DI в подсистеме `LlmSubsystem`
 // (шаг 0 волны 4, см. LlmSubsystem.cs).

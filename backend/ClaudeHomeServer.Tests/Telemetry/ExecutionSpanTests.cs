@@ -1,6 +1,6 @@
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
-using ClaudeHomeServer.Telemetry;
+using ClaudeHomeServer.Core.Telemetry;
 using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Telemetry;

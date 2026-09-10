@@ -222,7 +222,7 @@ public sealed class McpTransportController(McpToolsetRegistry registry,
                     // текст, а не разрыв протокола
                     if (!whitelist.Allows(toolset.Name, toolName, context))
                     {
-                        var denied = Telemetry.MetricTagGuard.IsToolShape(toolName)
+                        var denied = Core.Telemetry.MetricTagGuard.IsToolShape(toolName)
                             ? $"Инструмент «{toolName}» недоступен в этом чате"
                             : "Запрошенный инструмент недоступен в этом чате";
                         return Ok(id, ToolContent(denied, isError: true));
@@ -242,7 +242,7 @@ public sealed class McpTransportController(McpToolsetRegistry registry,
                         // в лог идёт только проверенная форма и текст одной строкой, иначе
                         // CRLF-вброс после таймстемпов TimestampedConsoleWriter неотличим от
                         // настоящих записей бэкенда (CWE-117), а имя в сотни КБ — сотни КБ лога
-                        var sane = Telemetry.MetricTagGuard.IsToolShape(toolName);
+                        var sane = Core.Telemetry.MetricTagGuard.IsToolShape(toolName);
                         var logName = sane ? toolName : Services.Mcp.McpCallLog.Overflow;
                         var text = sane
                             ? $"Ошибка: {OneLine(ex.Message)}"
@@ -292,7 +292,7 @@ public sealed class McpTransportController(McpToolsetRegistry registry,
             && request["params"] as JsonObject is { } parms
             && parms["name"] is JsonValue name && name.TryGetValue<string>(out var toolName))
         {
-            tool = Telemetry.MetricTagGuard.IsToolShape(toolName) ? toolName : Services.Mcp.McpCallLog.Overflow;
+            tool = Core.Telemetry.MetricTagGuard.IsToolShape(toolName) ? toolName : Services.Mcp.McpCallLog.Overflow;
         }
         else
         {

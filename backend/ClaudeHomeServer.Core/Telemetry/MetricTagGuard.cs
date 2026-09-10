@@ -1,6 +1,6 @@
 using System.Collections.Concurrent;
 
-namespace ClaudeHomeServer.Telemetry;
+namespace ClaudeHomeServer.Core.Telemetry;
 
 /// <summary>
 /// Ограничитель кардинальности ЗНАЧЕНИЙ тегов метрик.

@@ -392,7 +392,7 @@ public sealed class PersonasCrudService(
         await sessions.BroadcastSessionMessageAsync(onboarding.Id,
             new OnboardingCompletedMessage(onboarding.OnboardingKind!, persona.Id, onboarding.ProjectId));
         // Телеметрия знакомства (план 2.10): без разрезов по пользователю.
-        Telemetry.ServerMetrics.RecordIntroCompleted();
+        Core.Telemetry.ServerMetrics.RecordIntroCompleted();
     }
 
     // --- AI-команда ---

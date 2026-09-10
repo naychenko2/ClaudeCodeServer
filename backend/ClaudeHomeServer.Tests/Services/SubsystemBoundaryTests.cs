@@ -1775,6 +1775,13 @@ public class SubsystemBoundaryTests
         // `DossierRecallService.ExtractPathsFromText`, звал его только контрибьютор
         // промпта). Stateless-регексп по образцу Slugifier.
         "ClaudeHomeServer.Services.TextPathMentions",
+        // Этап 5, волна 6 (Llm): `AttachmentsGitExclude` — статический примитив спины
+        // по тем же причинам, что и TranscriptRoots/ExecutableResolver (выше): реестр
+        // «вертикаль → спина» живёт в корне `Services`, вертикаль (Git) его не знает.
+        // namespace сохранён ради call-site'ов в `Services/Llm/Claude` и
+        // `Composition/Notifications`, и сам файл — единственный носитель логики
+        // «не светить вложения чата в git-статусе проекта».
+        "ClaudeHomeServer.Services.AttachmentsGitExclude",
     ];
 
     /// <summary>

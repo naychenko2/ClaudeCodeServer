@@ -33,13 +33,13 @@ public static class AttachmentsGitExclude
         Directory.CreateDirectory(Path.Combine(commonDir, "info"));
         var lead = exclude.Length == 0 || exclude.EndsWith('\n') ? "" : "\n";
         File.AppendAllText(excludeFile,
-            $"{lead}# Вложения чата (FileService.AttachmentsDir) — файлы сообщений, не история проекта\n" +
-            $"{FileService.AttachmentsDir}/\n");
+            $"{lead}# Вложения чата (TreeExcludes.AttachmentsDir) — файлы сообщений, не история проекта\n" +
+            $"{TreeExcludes.AttachmentsDir}/\n");
     }
 
     // Идемпотентность: правило уже записано (в любом из вариантов написания) — не дублируем
     private static bool HasAttachmentsRule(string text) =>
-        text.Split('\n').Any(l => l.Trim().Trim('/') == FileService.AttachmentsDir);
+        text.Split('\n').Any(l => l.Trim().Trim('/') == TreeExcludes.AttachmentsDir);
 
     // Общий git-dir рабочего дерева. Главное дерево: .git — папка. Linked worktree: .git — файл
     // «gitdir: <.git/worktrees/{id}>», а рядом с ним файл commondir с путём к общему .git.

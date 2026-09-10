@@ -224,8 +224,26 @@ builder.Services.AddSingleton<IPreviewTokenValidator, JwtValidatorGateway>();
 // получает только `IsEnabled`, без каталога определений и записи.
 builder.Services.AddSingleton<IModuleFeatureFlagReader, FeatureFlagGateway>();
 builder.Services.AddSingleton<ICommitLogReader, CommitLogReader>();
+// Узкий шов инспекции коммитов (Этап 5, волна 2, разрез Dossiers↔Git): потребитель —
+// Dossiers (DossierCaptureService/DossierRecallService), 5 методов инспекции коммитов.
+// Реализация — `GitCommitInspector` (Main, тонкий форвардер на `GitService` из Core.
+// Git — вынесенная вертикаль с собственным синглтоном; форвардер через тот же
+// `sp.GetRequiredService<GitService>()`, что и `IGitRefSnapshotStore` ниже в GitSubsystem.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Git.IGitCommitInspector,
+    ClaudeHomeServer.Services.Git.GitCommitInspector>();
+// Узкий шов записи памяти в заметки (Этап 5, волна 2, разрез Memory↔Notes):
+// потребитель — Memory (PersonaMemoryService.MemoryToNote/NoteToMemoryAsync),
+// 2 метода (Create/GetDetail). Notes — вынесенная вертикаль; форвардер NotesAccessor
+// резолвит NotesService через тот же синглтон, что и подсистема.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Notes.INoteAccessor,
+    ClaudeHomeServer.Services.Notes.NotesAccessor>();
 // CodeGraph: граф зависимостей кода — DI в подсистеме `CodeGraphSubsystem`
 // (волна 2, первая с пост-билд фазой: регистрирует языковые провайдеры в ConfigureApp).
+// Узкий шов инспекции графа (Этап 5, волна 2, разрез Dossiers↔CodeGraph): потребитель —
+// Dossiers, два метода (GetSnapshotAsync + StartRebuildIfIdle). Форвардер через тот же
+// синглтон `CodeGraphService`, что и подсистем.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.CodeGraph.ICodeGraphInspector,
+    ClaudeHomeServer.Services.CodeGraph.CodeGraphInspector>();
 builder.Services.AddSingleton<ProjectGroupManager>();
 builder.Services.AddSingleton<ProjectEventLogService>();
 // Этап 5, волна E: узкий Core-шов IProjectEventLogService для выноса Notes (NotesService
@@ -770,6 +788,8 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.ISessionMess
     ClaudeHomeServer.Services.Composition.SessionMessageObserver>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.IPersonaDirectory,
     ClaudeHomeServer.Services.Composition.PersonaDirectoryAdapter>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.IPersonaEvents,
+    ClaudeHomeServer.Services.Composition.PersonaEventsImpl>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.IKnowledgeNotificationDispatcher,
     ClaudeHomeServer.Services.Composition.Notifications.KnowledgeNotificationDispatcher>();
 builder.Services.AddSingleton<ClaudeHomeServer.Core.Telemetry.IDifyMetrics,

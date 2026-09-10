@@ -30,21 +30,6 @@ public sealed class GitConflictException(string message, IReadOnlyList<string> f
     public IReadOnlyList<string> Files { get; } = files;
 }
 
-// Креды HTTP-remote (Forgejo): логин + персональный токен пользователя
-public sealed record GitCredentials(string Username, string Token);
-
-// Файл снапшота ветки-паспорта: путь внутри ветки + текстовое содержимое. При дубле пути
-// в наборе побеждает последняя запись (update-index перезапишет запись индекса).
-public sealed record GitSnapshotFile(string Path, string Content);
-
-// Итог записи ветки-паспорта: Created=false — дерево снапшота совпало с последним
-// коммитом ветки и новый коммит не создавался; CommitSha — tip ветки в обоих случаях.
-public sealed record GitRefSnapshotResult(bool Created, string CommitSha);
-
-// Tip ветки-паспорта: реф, коммит, автор и дата последнего коммита — происхождение данных
-// при обратном чтении ветки (импорт «Историй решений»).
-public sealed record GitRefTip(string Ref, string CommitSha, string Author, DateTimeOffset Date);
-
 // Срез рабочего дерева: short HEAD (для UI/журнала) + список грязных путей (для гейта
 // «можно ли выкатить as-is»). shortHeadSha = null для пустого репо или при сбое rev-parse.
 // Error — null при чистом ответе git или пустом репо; непустое значение означает «команда

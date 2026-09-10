@@ -2,14 +2,15 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using ClaudeHomeServer.Hubs;
+using ClaudeHomeServer.Core.Telemetry;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Tests.Helpers;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Dossiers;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Memory;
-using ClaudeHomeServer.Services.Composition;
-using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;
@@ -124,7 +125,9 @@ public class KnowledgeSyncParticipantTests : IDisposable
     public async Task PersonaMemoryService_Соблюдает_Контракт_Участника()
     {
         var personas = new PersonaManager(_config);
-        var svc = new PersonaMemoryService(_knowledge, personas, _users, _config,
+        var svc = new PersonaMemoryService(_knowledge, personas, personas,
+            new PersonaDirectoryAdapter(personas), new NoopPersonaEvents(),
+            new EmptyDifyMetrics(), _users, _config,
             NullLogger<PersonaMemoryService>.Instance);
         var persona = personas.Create(_ownerId, "Ада", "Аналитик", null, null,
             null, null, PersonaScope.Global, null, null, null, memoryEnabled: true);
@@ -143,7 +146,7 @@ public class KnowledgeSyncParticipantTests : IDisposable
     [Fact]
     public async Task TeamMemoryService_Соблюдает_Контракт_Участника()
     {
-        var svc = new TeamMemoryService(_config, null, _knowledge, _users);
+        var svc = new TeamMemoryService(_config, null, _knowledge, null, _users);
         var entry = svc.Add(_ownerId, "proj-1", "общая договорённость");
         await svc.SyncAsync(_ownerId, "proj-1");   // ds-1, doc-1
 
@@ -157,7 +160,7 @@ public class KnowledgeSyncParticipantTests : IDisposable
     [Fact]
     public async Task DossierStore_Соблюдает_Контракт_Участника()
     {
-        var svc = new DossierStore(_config, null, _knowledge, _users);
+        var svc = new DossierStore(_config, null, _knowledge, null, _users);
         var dossier = new ChangeDossier
         {
             OwnerId = _ownerId,

@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Core.Telemetry;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
@@ -13,9 +14,9 @@ using ClaudeHomeServer.Services.Turn;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.DependencyInjection;
 using Moq;
 
 namespace ClaudeHomeServer.Tests.Services.Turn;
@@ -117,7 +118,9 @@ public class CodeGraphContributorTests
         services.AddSingleton(notesKb);
         var personas = new PersonaManager(config);
         services.AddSingleton(personas);
-        var personaMemory = new PersonaMemoryService(knowledge, personas, userStore, config,
+        var personaMemory = new PersonaMemoryService(knowledge, personas, personas,
+            new PersonaDirectoryAdapter(personas), new NoopPersonaEvents(),
+            new NoopDifyMetrics(), userStore, config,
             NullLogger<PersonaMemoryService>.Instance);
         services.AddSingleton(personaMemory);
         var bindings = new PersonaBindingsService(personas, projectManager, wkStore, notesSvc,

@@ -43,17 +43,20 @@ public sealed class LlamaServerClient : ILocalLlmClient
         _spend = spend;
         _options = LocalLlmOptions.Read(config);
 
-        // Расхождение конфига и реальности не должно быть тихим: Ollama:Profiles:*:NumCtx
-        // задаёт num_ctx для Ollama, у llama-server контекст фиксируется ключом -c при
-        // старте сервера и в запросе не передаётся. Печатаем ОДИН раз, чтобы оператор
-        // не искал, почему длинный промпт обрезается (если контекст сервера короче).
+        // Расхождение конфига и реальности не должно быть тихим: у llama-server контекст
+        // фиксируется при старте сервера и в запросе не передаётся, поэтому NumCtx НЕ
+        // расширяет окно — но и не пропадает: по нему считается бюджет обрезки промпта
+        // (см. комментарий к классу). Занизил NumCtx против реального окна сервера — хвост
+        // промпта уедет в обрез молча, и место получит неполный вход. Печатаем ОДИН раз.
         if (Enabled
             && (config["Ollama:Profiles:small:NumCtx"] is not null
                 || config["Ollama:Profiles:text:NumCtx"] is not null
                 || config["Ollama:Profiles:large:NumCtx"] is not null))
         {
             _logger.LogWarning(
-                "llama-server: Ollama:Profiles:*:NumCtx игнорируется, контекст фиксируется ключом -c при старте сервера");
+                "llama-server: Ollama:Profiles:*:NumCtx окно сервера не меняет (оно фиксируется при "
+                + "старте), но задаёт бюджет обрезки промпта — держите его не выше реального окна и "
+                + "не ниже, чем нужно месту");
         }
     }
 

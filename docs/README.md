@@ -134,6 +134,9 @@
 CLI-провайдер: проверенная конфигурация стенда с замерами, грабли подключения —
 прокси съедает loopback, `--effort high` не принимается, провал кэша промпта
 на `mamba-cache-mode align`),
+[local-vllm-2gpu-2026-09-10.md](research/local-vllm-2gpu-2026-09-10.md) (тот же стенд
+на двух картах в tensor parallel: окно 262 144, замеры скорости через обвязку продукта,
+зависимость декода от языка и от занятого контекста, потолок параллелизма),
 [services-root-inventory-2026-09.md](research/services-root-inventory-2026-09.md)
 (инвентарь корня `Services` и вердикт архитектора перед волной 4),
 [session-core-split-2026-09.md](research/session-core-split-2026-09.md)

@@ -84,6 +84,10 @@ public class SubsystemBoundaryTests
         // чтобы сторож видел их типы и проверял границы по Dossiers.dll / Memory.dll.
         _ = typeof(ClaudeHomeServer.Services.Dossiers.DossiersSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Memory.MemorySubsystem).Assembly;
+        // Desktop — отдельная сборка (Этап 5, вынос Desktop): форс-загрузка нужна,
+        // чтобы сторож видел типы грани (маршрутизатор канала, хаб устройств, схемы
+        // авторизации) и проверял их границы по Desktop.dll.
+        _ = typeof(ClaudeHomeServer.Services.Desktop.DesktopCallRouter).Assembly;
         // === Этап 5, волна C, шаг 2: новые швы Core, использованные вынесенными
         // вертикалями. Форс-загрузка нужна, чтобы вертикальные сборки (Modules,
         // ProjectServices) видели соответствующие Core-интерфейсы по сборке Core.dll.
@@ -1070,38 +1074,20 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.InstanceSecretFiles",
                 }),
         },
-        // Desktop — ручной агент песочницы (ADR-008). Префикс-шов Hubs (DeviceHub),
-        // точечные — Protocol (DesktopCall*/DeviceHello*/DesktopCancel/DesktopGo),
-        // плюс root Services (JwtService/FeatureFlagService/PersonaManager/
-        // ProjectManager/SessionManager/UserStore) для capability-токенов и каталога
-        // чатов/устройств/сессий.
+        // Desktop — ручной агент песочницы (ADR-008), отдельная сборка
+        // ClaudeHomeServer.Desktop (Этап 5, вынос Desktop). Допусков нет: связи с корнем
+        // закрыты швами спины (ISessionDirectory/IFeatureFlagGate/IPersonaResolver/
+        // IProjectManager/IUserStore/IDesktopCapabilityTokens), хаб устройств переехал
+        // в саму вертикаль, а Protocol.* проходит по сборке Core.
         new object[]
         {
             new VerticalBoundary(
                 "Desktop",
                 "ClaudeHomeServer.Services.Desktop",
                 SharedAllowedPrefixes
-                    .Concat(new[]
-                    {
-                        "ClaudeHomeServer.Services.Desktop",
-                        "ClaudeHomeServer.Hubs",
-                    })
+                    .Concat(new[] { "ClaudeHomeServer.Services.Desktop" })
                     .ToArray(),
-                new[]
-                {
-                    "ClaudeHomeServer.Protocol.DesktopCallResult",
-                    "ClaudeHomeServer.Protocol.DesktopCallCommand",
-                    "ClaudeHomeServer.Protocol.DeviceHello",
-                    "ClaudeHomeServer.Protocol.DeviceHelloAck",
-                    "ClaudeHomeServer.Protocol.DesktopCancelCommand",
-                    "ClaudeHomeServer.Protocol.DesktopGoCommand",
-                    "ClaudeHomeServer.Services.JwtService",
-                    "ClaudeHomeServer.Services.FeatureFlagService",
-                    "ClaudeHomeServer.Services.PersonaManager",
-                    "ClaudeHomeServer.Services.ProjectManager",
-                    "ClaudeHomeServer.Services.SessionManager",
-                    "ClaudeHomeServer.Services.UserStore",
-                }),
+                Array.Empty<string>()),
         },
         // Diagnostics — файловый лог инстанса (FileLog, 1 файл). Полностью изолирован.
         new object[]

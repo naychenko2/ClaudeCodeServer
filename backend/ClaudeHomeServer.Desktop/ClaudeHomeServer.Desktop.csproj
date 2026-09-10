@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Библиотека под Web SDK (по образцу Dossiers/Turn/Tasks): типов ASP.NET
+         (IServiceCollection, ILogger, IHostedService, Hub, AuthenticationHandler)
+         много, и без Web SDK FrameworkReference Microsoft.AspNetCore.App их не
+         подтягивает. OutputType=Library и без Program.cs — обычный режим
+         библиотеки, Main не требуется. -->
+    <OutputType>Library</OutputType>
+    <EnableDefaultContentItems>false</EnableDefaultContentItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- InternalsVisibleTo на ДВЕ сборки: ClaudeHomeServer.Tests (тесты контроллеров
+         канала остались в Main вместе с самими контроллерами) и
+         ClaudeHomeServer.Desktop.Tests. Образец — Dossiers. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Tests</_Parameter1>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Desktop.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- JWT: DesktopCaller читает и пишет claims capability-токена
+         (JwtRegisteredClaimNames), схема устройства собирает ClaimsIdentity.
+         Web SDK этот пакет не даёт — он не часть Microsoft.AspNetCore.App.
+         Версия — та же, что резолвится в Main транзитивно через
+         Microsoft.AspNetCore.Authentication.JwtBearer 10.0.0; расхождение
+         подняло бы граф всего решения. -->
+    <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.0.1" />
+  </ItemGroup>
+
+</Project>

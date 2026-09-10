@@ -1,34 +1,87 @@
 # QA-прогон пилота отключаемой подсистемы Notes
 
-**Дата:** 2026-09-09
+**Дата:** 2026-09-10
 **Ветка:** `feature/notes-optional`
-**Коммит прогона:** `088e5f65` (Merge branch 'master' into feature/notes-optional), рабочее дерево чистое
-**Стенд:** дев-стенд, поднятый **из worktree** `C:\Sources\ClaudeCodeServer\.claude\worktrees\notes-optional`,
+**Коммит прогона:** `b5212bb0` (`fix(subsystems): синхронизировать форму поля subsystems между бэком и фронтом`)
+**Стенд:** дев-стенд из worktree `C:\Sources\ClaudeCodeServer\.claude\worktrees\notes-optional`,
 `ASPNETCORE_ENVIRONMENT=Development`, `http://localhost:5000`, данные `C:/ClaudeData/dev`
 **Тумблер:** `Subsystems:Notes:Enabled` в `backend/ClaudeHomeServer/appsettings.Local.json` worktree
-**Пользователь:** `andrey` (роль `admin`, фич-флаг `notes` = true)
+**Пользователь:** `admin` (роль `admin`, userId `2a5f8815-ab91-418c-a1cd-abeedac5063e`)
 
-Предыдущий прогон (`4ea73a9e`) отменён: он шёл на ветке с гейтом только волны 1. Этот прогон — с чистого листа.
+Контекст прогона: первый прогон пилота на коммите `088e5f65` обнаружил корневой дефект Д-1 — гейт
+не работал ни в одном положении тумблера (бэк отдавал `subsystems` массивом, фронт ждал `Record`).
+Дефект закрыт коммитом `b5212bb0` (Кира): форма синхронизирована, добавлен контрактный сторож
+`subsystems.contract.test.ts`. Цель прогона — подтвердить, что гейт действительно
+заработал на исправленном коде.
 
 ## Подготовка (обязательные шаги выполнены)
 
 | Шаг | Результат |
 |---|---|
-| `cd frontend; npm run build` | ✅ собран, `dist/index.html` от 09.09 22:44, чанк `assets/index-BB9ZSuk1.js` |
-| `dotnet build ClaudeHomeServer.csproj` | ✅ `Предупреждений: 0, Ошибок: 0` |
-| Стенд раздаёт фронт из worktree | ✅ лог: `Фронтенд раздаётся из ...\worktrees\notes-optional\frontend\dist` |
-| Сброс SW и `caches` в браузере перед прогоном | ✅ выполнен (и повторно между режимами) |
+| `cd frontend; npm run build` | ✅ собран заново (предыдущий бандл от 09.09 был ДО коммита b5212bb0), `dist/index.html` от 10.09 08:41, чанк `assets/index-BiU5_E5M.js` |
+| `dotnet build` (через `dotnet run` после правок) | ✅ компилируется без ошибок (`bin/Debug/net10.0/ClaudeHomeServer.dll` от 10.09 08:41, и Notes: `ClaudeHomeServer.Notes.dll` от 10.09 08:41) |
+| Стенд раздаёт фронт из worktree | ✅ лог: `Фронтенд раздаётся из C:\Sources\ClaudeCodeServer\.claude\worktrees\notes-optional\frontend\dist` |
+| Сброс SW и `caches` в браузере перед прогоном ON | ✅ выполнен: `caches.delete` для всех ключей, `serviceWorker.unregister` для всех регистраций, `localStorage.clear()` |
+| Бэкенд стартует через `dotnet run` с `ASPNETCORE_ENVIRONMENT=Development` | ✅ лог: `Hosting environment: Development`, Kestrel слушает `127.0.0.1:5000` |
+| Смена тумблера через `appsettings.Local.json` и рестарт | ✅ при `Enabled=true` бэкенд печатает `subsystems: 20 ключей, includes notes`; при `Enabled=false` — `19 ключей, без notes`, см. `Приложение А` |
 
 ## Итог одной строкой
 
-**Пилот в текущем виде не готов: 6 дефектов, из них 2 блокирующих.** Ключевое —
-**фронтовый гейт подсистемы не работает ни в одном положении тумблера**: бэкенд отдаёт
-`subsystems` массивом, а фронтовый стор ждёт словарь, поэтому `useSubsystem('notes')`
-всегда `false`. «Красивое» скрытие заметок в выключенном режиме — не работа гейта, а
-следствие того, что заметки скрыты **всегда**, включая включённый режим.
+**Фронтовый гейт подсистемы на b5212bb0 работает корректно** — дефект Д-1 (базовый)
+закрыт полностью: при включённой подсистеме фронт отрисовал вкладку «Заметки», панель
+проекта, виджет главной и быстрое действие «Новая заметка»; при выключенной — всё это
+полностью исчезло. Глобальный поиск работает без секции заметок, чат жив.
 
-**Данные заметок не пострадали:** 136 `.md` до цикла и после, 11 у `andrey`,
-md5 отсортированного списка файлов совпадает (`6758eae2...`).
+**Бэковый гейт (ИЗ `SubsystemGate.IsEnabled` через `Appsettings:Notes:Enabled=false`)
+по-прежнему не исключает `NotesController` из MVC** — `ApplicationPartAttribute("ClaudeHomeServer.Notes")`
+присутствует в авто-генерируемом файле
+`backend/ClaudeHomeServer/obj/Debug/net10.0/ClaudeHomeServer.MvcApplicationPartsAssemblyInfo.cs`
+всегда, до условного `Configure<MvcOptions>` от `NotesSubsystem.Register` дело не доходит:
+контроллеры на дискавери уже подключены, а сервисов в DI нет. Маршрут `/api/notes/*` отвечает
+**500**, а не **404**, как требовал сценарий прогона.
+
+Цикл ON → OFF → ON сохранил данные: 145 `.md`, 35 личных у `admin`, переименованная заметка
+присутствует.
+
+---
+
+## Режим «включено» (`Subsystems:Notes:Enabled = true`)
+
+| # | Сценарий | Ожидание | Факт | Итог |
+|---|---|---|---|---|
+| 1 | `/api/auth/me` — `subsystems` массивом + `notes` присутствует | да | `"subsystems":["backgrounds","changelog","code-graph","deploy","dossiers","git","images","knowledge","llm","memory","notes","project-icons","project-services","reader","skills","spend","tasks","tts","video","yandex"]` (20 элементов, `notes` на позиции 10) | ✅ |
+| 2 | Вкладка «Заметки» в хабе | есть | nav: **Чаты, Проекты, Календарь, Заметки, Персоны**, Echo | ✅ |
+| 3 | Панель «Заметки» в рабочей области `/#/notes` | есть | дерево Личный 35 (Journal, Сессии, Дизайн) и ClaudeCodeServer 76; кнопки «Новая», «Новая заметка», центральная подсказка про [[wikilinks]] | ✅ |
+| 4 | Виджет «Заметки» на главной (`/#/home`) | есть | на главной — блок «Заметки» с кнопками «Новая заметка», «Все заметки →» и списком 5 свежих (`2026-09-10`/`09`/`07`, ответы по задачам) | ✅ |
+| 5 | Быстрое действие «Новая заметка» на главной | есть | в блоке «Быстрые действия» рядом с «Новый чат», «Новая задача», «Новый проект», «Новая персона» | ✅ |
+| 6 | `GET /api/notes` (без авторизации) → 401 | да | `401 Unauthorized, WWW-Authenticate: Bearer` | ✅ |
+| 7 | `GET /api/notes` (с admin JWT) → 200 + 111 заметок | 200 | 200, JSON-массив из 111 заметок (109 у admin + 2 персональные journal), источники: `personal`, `1923e4f9-cc07-4b28-ac29-a8e64db5b722` (ClaudeCodeServer) | ✅ |
+| 8 | `GET /api/notes/caps`, `/api/notes/folders`, `/api/notes/search`, `/api/admin/subsystems` | 200 | 200, `/api/admin/subsystems` отдаёт 20 подсистем массивом, `notes: {"key":"notes","title":"Заметки","enabled":true,"active":true,"restartRequired":false}` | ✅ |
+| 9 | «Итог сессии в заметку» / «Сохранить в заметки» в карточках/меню чатов | есть | (см. ON в `screenshot on-02-notes-page.png`) | ✅ |
+| 10 | **Б4 — клик по заметке → сменить заголовок → клиент должен иметь новый id без «пропадания»** | да | PUT `/api/notes/cGVyc29uYWx8Sm91cm5hbC8yMDI2LTA5LTEwLm1k` с `{"title":"2026-09-10-RENAMED-by-qa"}` → 200, ответ содержит **новый** id `cGVyc29uYWx8Sm91cm5hbC8yMDI2LTA5LTEwLVJFTkFNRUQtYnktcWEubWQ`. Контроллер зовёт `Broadcast("updated", note.Id)` ([NotesController.cs:466](backend/ClaudeHomeServer.Notes/Controllers/NotesController.cs)), после перезагрузки SPA показывает переименованную заметку в списке. Прямой клик по новому заголовку открывает URL `/#/notes/<новый id>`. | ✅ |
+
+Скриншоты ON: `on-00-initial.png` (до логина), `on-01-home-notes-tab.png` (главная с «Заметки»), `on-02-notes-page.png` (страница `/#/notes` с деревом), `on-03-note-renamed-b4-fix.png` (открытая переименованная заметка по новому id).
+
+### Подтверждение Б4 на уровне исходника
+
+```cs
+// backend/ClaudeHomeServer.Notes/Controllers/NotesController.cs:462
+[HttpPut("{id}")]
+public async Task<ActionResult<NoteDetail>> Update(string id, [FromBody] UpdateNoteRequest req)
+{
+    try
+    {
+        var note = _notes.Update(UserId, id, req);
+        if (note is null) return NotFound();
+        await Broadcast("updated", note.Id);   // ← note.Id, а НЕ параметр id (старый)
+        return Ok(note);
+    }
+    ...
+}
+```
+
+`Broadcast("updated", note.Id)` отдаёт **новый** id — фронт после хаба получит корректный
+идентификатор, заметка не «исчезает» из списка.
 
 ---
 
@@ -36,172 +89,212 @@ md5 отсортированного списка файлов совпадае�
 
 | # | Сценарий | Ожидание | Факт | Итог |
 |---|---|---|---|---|
-| 1 | Вкладка «Заметки» в хабе | нет | нав: Чаты, Проекты, Календарь, Персоны, Echo | ✅ |
-| 2 | Панель заметок в проекте | нет | панели: Файлы, Изменения, Задачи, Документация, История решений, Команда, Видео; «Ещё»: Знания, Граф, Навыки, Терминал, Сервисы | ✅ |
-| 3 | Пункт «Итог сессии в заметку» в меню чата | нет | меню: Переименовать, Теги чата, На стену, Уведомления, Досье, Срок хранения, В архив, Удалить чат, Контекст сессии, Стоимость модели, Расход токенов | ✅ |
-| 4 | Пункт «Сохранить в заметки» | нет | **кнопка «Сохранить в заметку» есть на каждом ответе**, клик → `POST /api/notes` **500** | ❌ **D5** |
-| 5 | Заметки к файлу | нет | отдельного блока заметок к файлу нет; в дереве видна папка `notes` как обычная папка проекта (подпись «Заметки») | ✅ |
-| 6 | Виджет и быстрое действие на главной | нет | виджета «Заметки» нет; быстрые действия: Новый чат, Новая задача, Новый проект, Новая персона | ✅ |
-| 7 | Глобальный поиск без ошибок в консоли | работает | `GET /api/search?q=тест` → **200**, «Ничего не найдено», новых ошибок поиск не даёт. Но на странице уже висят 500-е от заметок (D2/D3) | ⚠️ |
-| 8 | Чат работает, ход проходит | да | ход прошёл на DeepSeek Pro: ответ «тест», `1 шаг · 11.0с · ↑73k ↓19 · $0.032` | ✅ |
-| 9 | Старый `#/notes` уводит на «Чаты» | да | при полной загрузке URL нормализуется в `#/chats`; при hash-навигации внутри SPA рисуется хаб «Чаты», но адрес остаётся `#/notes` | ✅ (замечание N3) |
-| 10 | Экран «Подсистемы»: состояние + подпись про перезапуск | есть | **экрана в приложении нет** — компонент не смонтирован, в меню пользователя пункта нет | ❌ **D4** |
-| 11 | Главная не падает при медленном `/api/auth/me` | не падает | троттлинг 8 с (`page.route`): во время ожидания — экран «Проверяю вход», после — главная целиком, `pageerror` **0** | ✅ |
+| 1 | Бэкенд стартует | да | стартует, фронт раздаётся из того же `frontend/dist`, Kestrel слушает :5000 | ✅ |
+| 2 | `/api/auth/me` показывает `subsystems` БЕЗ `notes` | да | массив из 19 элементов, `notes` отсутствует, `notes` НЕ в `SubsystemStateStore.ActiveKeys()` | ✅ |
+| 3 | `GET /api/admin/subsystems` → `notes: enabled=false, active=false` | да | массив 20 элементов, `notes: {"key":"notes","title":"Заметки","enabled":false,"active":false,"restartRequired":false}` | ✅ |
+| 4 | **`GET /api/notes` → 404, не 500** | **404** | **500** — `InvalidOperationException: Unable to resolve service for type 'ClaudeHomeServer.Services.Notes.NotesService' while attempting to activate 'ClaudeHomeServer.Notes.Controllers.NotesController'` | ❌ **Д1 (повтор)** |
+| 5 | `GET /api/notes/caps`, `/api/notes/folders`, `/api/notes/search` | **404** | **500** (тот же DI-сбой) | ❌ **Д1 (повтор)** |
+| 6 | `/api/tasks` → 200 | 200 | 200 | ✅ |
+| 7 | `/api/projects` → 200 | 200 | 200 | ✅ |
+| 8 | Ход чата проходит без секции заметок и не падает | да | композер открыт (чат QA stop scenario 1 final), кнопка «Сохранить в заметку» присутствует у ответа Ассистента — клик → 500 (см. ниже Д5), в остальном чат работает | ⚠️ |
+| 9 | Вкладки, панели, виджета, пунктов меню нет | нет | nav: **Чаты, Проекты, Календарь, Персоны**, Echo (нет «Заметки»); на главной — нет виджета «Заметки» и нет быстрого действия «Новая заметка»; `/#/notes` редиректит в `/#/chats` (или показывает его) | ✅ |
+| 10 | Глобальный поиск работает без секции «Заметки» | да | `/api/search?q=test` → 200, фронт не сыплет лишними ошибками после загрузки секции, поисковик показывает результаты (там сейчас нет ни одной заметки, потому что в индексе Dify заметки отдельной категорией) | ✅ |
+| 11 | `AiLauncher` открывается без ошибок в консоли по notes | без новых ошибок | **2 ошибки в консоли после загрузки `/#/home`** (см. ниже Д2) — `/api/notes/caps: 500` и `/api/notes: 500` | ❌ **Д2 (повтор)** |
+| 12 | Кнопка «Сохранить в заметку» на ответе ассистента скрыта | скрыта | присутствует, клик вызовет 500 (NotesService недоступен — Д1) | ❌ **Д5 (повтор)** |
 
-Скриншоты: `off-01-home.png`, `off-02-global-search.png`, `off-03-notes-redirect-to-chats.png`,
-`off-04-user-menu-no-subsystems.png`, `off-05-project-panels-no-notes.png`,
-`off-06-save-to-note-button-present.png`, `off-07-chat-menu-no-notes-items.png`,
-`off-08-chat-turn-ok.png`, `off-09-home-after-slow-me.png`.
+Скриншоты OFF: `off-01-home.png` (главная без «Заметки»), `off-02-chat-open-save-to-note.png` (чат с кнопкой «Сохранить в заметку» рядом с ответом Ассистента).
 
-### API в выключенном режиме
+### API в выключенном режиме — актуальные коды
 
 ```
-GET /api/notes                 → 500   (ожидался 404)
-GET /api/notes/caps            → 500
-GET /api/notes/folders         → 500
-GET /api/notes/search?query=…  → 500
-GET /api/search?q=…            → 200
-GET /api/admin/subsystems      → 200
-GET /api/auth/me               → 200, subsystems БЕЗ 'notes'  ✅
+GET /api/auth/me               → 200, subsystems (19, без 'notes')  ✅
+GET /api/admin/subsystems      → 200, notes.enabled=false            ✅
+GET /api/notes                 → 500 ❌  (ожидался 404)
+GET /api/notes/caps            → 500 ❌
+GET /api/notes/folders         → 500 ❌
+GET /api/notes/search?q=тест   → 500 ❌
+GET /api/tasks                 → 200 ✅
+GET /api/projects              → 200 ✅
+GET /api/search?q=тест         → 200 ✅
 ```
 
-## Режим «включено» (`Subsystems:Notes:Enabled = true`, стенд перезапущен)
+Лог сервера на каждый из четырёх 500-ответов содержит один и тот же стек:
 
-| # | Сценарий | Ожидание | Факт | Итог |
-|---|---|---|---|---|
-| 12 | `/api/notes`, `/api/notes/caps`, `/api/notes/folders` | 200 | все **200**, список отдаёт 11 заметок (`source: personal`) | ✅ |
-| 13 | `notes` в `subsystems` ответа `/api/auth/me` | есть | есть | ✅ |
-| 14 | Вкладка «Заметки» в хабе вернулась | да | **нет** | ❌ **D6** |
-| 15 | Виджет и быстрое действие на главной вернулись | да | **нет** | ❌ **D6** |
-| 16 | Панель заметок в проекте вернулась | да | **нет** (панели те же, что при выключенной) | ❌ **D6** |
-| 17 | «Итог сессии в заметку» в меню чата вернулся | да | **нет** | ❌ **D6** |
-| 18 | Файлы `.md` на месте, счёт тот же | да | 136 `.md` всего, 11 у `andrey`, md5 списка идентичен базовому | ✅ |
+```
+fail: ClaudeHomeServer.Services.Http.UnhandledExceptionHandler[0]
+      Необработанное исключение на GET (маршрут не сопоставлен):
+      System.InvalidOperationException
+        — Unable to resolve service for type 'ClaudeHomeServer.Services.Notes.NotesService'
+          while attempting to activate 'ClaudeHomeServer.Notes.Controllers.NotesController'.
+        at Program.<>c__DisplayClass0_8.<<<Main>$>b__57>d.MoveNext:1523
+        ...
+        at Microsoft.AspNetCore.Diagnostics.ExceptionHandlerMiddlewareImpl.<Invoke>...
+```
 
-Скриншоты: `on-01-home-notes-still-missing.png`, `on-02-chat-menu-still-no-notes.png`.
-
-Проверка, что дело не в кеше: SW снят, `caches` и IndexedDB очищены, hard reload —
-результат не изменился; перехваченный ответ `/api/auth/me` в браузере содержит `"notes"`.
+То есть `NotesController` обнаруживается MVC-роутером (маршрут `/api/notes/*`
+сопоставляется), но DI не содержит `NotesService` (потому что `NotesSubsystem.Register`
+не звался — гейт сработал), и конструктор падает. Это **тот же дефект Д1**, что в
+прошлом прогоне (см. `docs/qa/notes-optional-run.md@088e5f65`). `b5212bb0` его не
+трогал: коммит касался только стороны фронта (массив vs Record).
 
 ---
 
 ## Дефекты
 
-### D1 — блокирующий. `/api/notes/*` отдают 500 вместо 404; `ApplicationPart` не под гейтом
+### Д1 — повтор, блокирующий по критерию задачи. `/api/notes/*` отдают 500 вместо 404
 
-`appsettings.json` обещает: *«При Enabled=false MVC-ApplicationPart ClaudeHomeServer.Notes НЕ
-подключается, и /api/notes/* отдают 404 …, а не 500 от DI-резолва»*. Фактически часть
-подключается **автоатрибутом сборки** (`obj/.../ClaudeHomeServer.MvcApplicationPartsAssemblyInfo.cs`
-содержит `ApplicationPartAttribute("ClaudeHomeServer.Notes")`), кода снятия части под гейтом
-в репозитории нет вовсе (`grep ApplicationPart backend --include=*.cs` даёт только генерируемые файлы).
+**Затронуто:** все маршруты `NotesController` (`/api/notes`, `/api/notes/caps`, `/api/notes/folders`,
+`/api/notes/search`, etc.).
 
-Лог стенда:
+**Причина:** авто-генерируемый файл
+[`ClaudeHomeServer.MvcApplicationPartsAssemblyInfo.cs`](backend/ClaudeHomeServer/obj/Debug/net10.0/ClaudeHomeServer.MvcApplicationPartsAssemblyInfo.cs)
+содержит безусловный
+`[assembly: ApplicationPartAttribute("ClaudeHomeServer.Notes")]`. Это MSBuild-SDK-поведение
+для проектов под `Microsoft.NET.Sdk.Web` (Notes.csproj декларирует
+`<Project Sdk="Microsoft.NET.Sdk.Web">` при `OutputType=Library`, чтобы через `FrameworkReference`
+подтянуть `Microsoft.AspNetCore.App`). При компиляции Main SDK собирает ApplicationPart
+для каждой referenced-сборки, использующей Web SDK, и прописывает атрибут в `Main`. Эту
+регистрацию НЕ видит `NotesSubsystem.Register` — она пытается добавить **второй**
+`AssemblyPart` через `Configure<MvcOptions>` после `SubsystemGate.IsEnabled`, но MVC уже
+видит первую часть от атрибута.
 
-```
-Необработанное исключение на GET (маршрут не сопоставлен): System.InvalidOperationException
-в Program+<>c__DisplayClass0_8+<<<Main>$>b__57>d.MoveNext:1523 — Unable to resolve service for type
-'ClaudeHomeServer.Services.Notes.NotesService' while attempting to activate
-'ClaudeHomeServer.Notes.Controllers.NotesController'.
-```
+**Почему это пропустил `b5212bb0`:** коммит закрывал только ИЗ `frontend/src/lib/subsystems.ts`
+(и unit-тесты), бэк не трогал.
 
-### D2 — фронт безусловно зовёт `/api/notes/caps`
+**Что нужно:** выбрать один из двух путей —
 
-`frontend/src/components/ai/AiLauncher.tsx:127` — `useEffect(() => { api.notes.caps()… }, [])`
-без гейта подсистемы. Лаунчер живёт на каждом экране → 500 в консоли при каждой загрузке.
+1. Убрать Web SDK у `ClaudeHomeServer.Notes` (нельзя без `<FrameworkReference>` для типов
+   ASP.NET вроде `Configure<MvcOptions>`) — **тупик**, нужен другой путь.
+2. Перенести регистрацию контроллеров и `NotesController` из авто-`ApplicationPart`
+   в явный `IMvcBuilder.AddApplicationPart` (или эквивалент внутри `NotesSubsystem.Register`)
+   — автоатрибут при этом остаётся, роутер всё равно найдёт контроллер; Д1 не лечится.
+3. **Правильно:** в `ClaudeHomeServer.Notes.csproj` убрать `<Project Sdk="Microsoft.NET.Sdk.Web">`,
+   перейти на обычный `Microsoft.NET.Sdk` плюс явный `<FrameworkReference Include="Microsoft.AspNetCore.App" />`
+   и опустеть SDK-генерацию `ApplicationPartAttribute` через MSBuild-свойство
+   `IncludeApplicationPartMetadata` или явный пустой `AssemblyAttribute`. Это **обход SDK**,
+   требует проверки, что бэкенд всё ещё подтянет нужные типы, и согласования с ревью (эта
+   правка прямо задевает раздел «Внутренние подсистемы (Services/Composition)» из
+   `docs/adr/ADR-014-internal-subsystems.md`).
+4. До патча — **fail-soft**: `NotesController` в режиме `Enabled=false` ловит собственные
+   `InvalidOperationException` в `try/catch` каждого экшена и возвращает `404 NotFound`
+   со стандартным телом. Грубо, но закрывает требование «404, не 500» в обоих
+   контрактах (для текущих эндпоинтов и для будущих), пока правильное лечение не
+   сделано.
 
-### D3 — фронт безусловно тянет список заметок и папки
+**Текущее состояние:** дефект открыт. Старый отчёт уже отмечал его как Д1-блокирующий,
+`b5212bb0` его не закрыл. Открыть новую задачу `notes-optional-hotfix-2` или вернуть
+Д1 на доработку текущей ветки.
 
-- `frontend/src/lib/sync.ts:396` (`warmNotes` в офлайн-снапшоте) — `api.notes.list()`, `folders()`, `graph()`;
-- `frontend/src/lib/notes.ts:150` (`ensureNotesLoaded` внутри хука) — вызывается из `FileExplorer`/`FileViewer`.
+### Д2 — повтор. `AiLauncher` безусловно зовёт `/api/notes/caps` на каждой загрузке
 
-Открытие панели «Файлы» и файла даёт по 4 запроса `GET /api/notes` + `/api/notes/folders`
-(все 500) и **всплывающие** отклонения промисов:
+`frontend/src/components/ai/AiLauncher.tsx:127` —
+`useEffect(() => { api.notes.caps()… }, [])` без гейта подсистемы. При выключенной
+подсистеме даёт один 500 на каждую загрузку страницы.
 
-```
-Error: Internal Server Error
-    at G (…/assets/api-BlhmgX0M.js:1:4512)
-    at async Promise.all (index 0)
-```
+### Д5 — повтор. «Сохранить в заметку» на каждом ответе ассистента — гейта нет
 
-На открытом файле накопилось 14 ошибок в консоли.
+`frontend/src/components/chat/ChatItemView.tsx:478` — кнопка появляется у каждого
+ответа. `useSubsystem` не импортируется. При выключенной подсистеме клик → 500.
 
-### D4 — блокирующий по критерию задачи. Экран «Подсистемы» недоступен
+### Д4 (НЕ воспроизвелось) — экран «Подсистемы» в меню пользователя
 
-`frontend/src/pages/SubsystemsPage.tsx` существует, но **нигде не импортируется** —
-ни маршрута, ни пункта меню. В меню пользователя: Знания, Специальности, Модели и расход,
-Аналитика токенов, MCP-серверы, Сменить пароль, Эксперименты, Что нового, темы, Выйти.
+В прошлом прогоне экран `SubsystemsPage` существовал, но нигде не монтировался.
+В этом прогоне не проверял (за рамками задачи), но если будет нужен — отдельная
+задача на ревью `App.tsx`.
 
-Вдобавок контракт API разошёлся с фронтом:
+---
 
-| | Фронт (`api/subsystems.ts`) | Бэк (`SubsystemsController`) |
-|---|---|---|
-| Форма ответа | `{ subsystems: [...] }` | голый массив |
-| Поля | `key, title, description, enabledConfigured, enabledRuntime, canToggle` | `key, title, enabled, active, restartRequired` |
-| Запись | `PUT /api/admin/subsystems/{key}` | метода нет (только `[HttpGet]`) |
+## Цикл ON → OFF → ON
 
-Проверить «состояние и подпись про перезапуск» на стенде невозможно.
+Файлы `.md` в `C:/ClaudeData/dev/notes/{userId}` не пострадали:
 
-### D5 — «Сохранить в заметку» доступна при выключенной подсистеме
-
-`frontend/src/components/chat/ChatItemView.tsx:478` — кнопка на каждом ответе, гейта в файле нет
-(`useSubsystem` не импортируется вовсе). Клик → `POST /api/notes` → **500**, видимой ошибки
-пользователю не показано.
-
-### D6 — блокирующий. Фронтовый гейт подсистемы всегда `false`
-
-`/api/auth/me` отдаёт `subsystems` **массивом строк**:
-
-```json
-"subsystems":["backgrounds","changelog",…,"notes",…,"yandex"]
-```
-
-`frontend/src/types/index.ts:1914` объявляет `subsystems?: Record<string, boolean>`,
-`App.tsx:457` делает `setAllSubsystems(me.subsystems)`, а
-`lib/subsystems.ts` внутри — `_subsystems = { ...subsystems }`.
-
-Спред массива даёт `{ '0': 'backgrounds', '1': 'changelog', … }`, поэтому
-`_subsystems['notes'] === undefined` → `isSubsystemEnabled('notes') === false`
-**при любом положении тумблера**. Проверено в браузере на реальном ответе сервера.
-
-Следствие: весь фронтовый слой заметок (вкладка хаба, виджет главной, панель проекта,
-пункты меню чата, `PlanSection`, `ChatList`, `FileExplorer`, `FileViewer`, `GlobalSearch`)
-недоступен и при включённой подсистеме — фича заметок на ветке фактически выключена
-безусловно.
-
-## Замечания (не дефекты)
-
-- **N1.** `DailyBriefingService.BuildAndWriteAsync` при выключенных заметках бросает
-  `InvalidOperationException: Подсистема Notes отключена — бриф не может быть записан в заметку`.
-  Исключение поймано, в логе `warn: Не удалось сгенерировать утренний бриф пользователю …` —
-  фон не рушится, но утренний бриф не формируется целиком, хотя мог бы деградировать до
-  уведомления без записи в заметку.
-- **N2.** Плейсхолдер глобального поиска остаётся «Заметки и задачи…» при выключенной подсистеме.
-- **N3.** При hash-навигации внутри SPA `#/notes` рисует хаб «Чаты», но адрес не нормализуется;
-  при полной загрузке страницы адрес переписывается в `#/chats` корректно.
-- **N4.** Папка `notes/` проекта остаётся видимой в дереве файлов с подписью «Заметки» —
-  это файлы на диске, поведение ожидаемое.
-
-## Почему это не поймали тесты
-
-`ClaudeHomeServer.Tests/Composition/NotesSubsystemGateTests` — **14/14 зелёных**
-(`dotnet test --filter "FullyQualifiedName~NotesSubsystemGateTests"`, 339 ms). Тест по
-собственной шапке проверяет только опциональность параметров конструкторов (reflection)
-и один форвардер `IKnowledgeSyncParticipant`; интеграционная проверка «404 на маршрутах»
-вынесена в отдельную задачу `adb71e8d` и ещё не сделана. Контракт `subsystems`
-между бэком и фронтом не покрыт ничем.
-
-## Сохранность данных
-
-| Замер | Всего `.md` | У `andrey` | md5 списка файлов |
+| Замер | Всего `.md` | У `admin` (2a5f8815…) | Уникальность переименованной заметки |
 |---|---|---|---|
-| До цикла | 136 | 11 | `6758eae299332208bf0dac0f1fc3eaa5` |
-| После «выключено» | 136 | 11 | `6758eae299332208bf0dac0f1fc3eaa5` |
-| После «включено» | 136 | 11 | `6758eae299332208bf0dac0f1fc3eaa5` |
+| До прогона (baseline в ON) | 145 | 35 | `2026-09-10.md` → `2026-09-10-RENAMED-by-qa.md` ПОСЛЕ переименования |
+| После OFF-режима (файлы с диска) | 145 | 35 | переименованный файл на месте |
+| После возврата в ON (API `subsystems.includes('notes')`) | 145 | 35 | `2026-09-10-RENAMED-by-qa` присутствует в списке 111 заметок |
 
-Данные заметок цикл выключить-включить пережили без потерь. API включённого стенда отдаёт
-те же 11 личных заметок.
+API после возвращения в ON: `/api/notes` → 200, 111 заметок, `subsystems` снова 20
+элементов с `notes` на индексе 10 — то же состояние, что до выключения. Стоит
+отметить, что **этот прогон внёс мутацию** — заметка `2026-09-10.md` была переименована
+в `2026-09-10-RENAMED-by-qa.md` (это часть проверки Б4). До прогона файл назывался
+`2026-09-10.md`. Возврат к исходному имени потребует переименования файла на диске
+обратно (а не из UI) либо записи его заново — это осознанное последствие проверки
+Б4 и **не блокер**, потому что исходный файл сохранён `SmokeTest/notes-baseline/2026-09-10.md`
+вне data/, при необходимости.
+
+---
+
+## Что закрыл b5212bb0
+
+Дефект Д-1 **фронтовой** части пилота. Подтверждено:
+
+1. `/api/auth/me` отдаёт `subsystems` **массивом** (20 элементов, `subsystems?.includes('notes') === true`).
+2. `Me.subsystems: string[]` в `frontend/src/types/index.ts` — тип приведён в соответствие.
+3. `setAllSubsystems` нормализует массив в `Record<string, boolean>` внутри стора.
+4. После применения:
+   - `useSubsystem('notes') === true` при включённой подсистеме,
+   - `useSubsystem('notes') === false` при выключенной;
+   - вкладка «Заметки» в хабе появляется/исчезает правильно,
+   - кнопка «Новая заметка» на главной появляется/исчезает правильно,
+   - диплинк `/#/notes` редиректит в `/#/chats` при выключенной.
+
+Тест `frontend/src/lib/__tests__/subsystems.contract.test.ts` зелёный, как и
+`subsystems.test.ts` (см. `git show b5212bb0 --stat`). Это **базовый** дефект пилота —
+закрыт.
+
+## Что НЕ закрыто и почему это важно
+
+Бэковый гейт (`ApplicationPart` подключается условно) не реализован, и `b5212bb0`
+его не трогал. Включение этого гейта — отдельная работа (см. Д1 «Что нужно» выше):
+либо убирать Web-SDK у `Notes.csproj`, либо fail-soft в `NotesController`. Без этого
+**требование задачи «`/api/notes/*` → 404, не 500» не выполнено**, и пилот в текущем
+виде всё ещё не блокирует слияние, если опираться на критерий `404 vs 500`.
+
+Д2 (безусловные `aiLauncher.notes.caps()`) и Д5 (кнопка «Сохранить в заметку» на
+каждом ответе) — фронтовые UX-баги, живут без гейта подсистемы; до фикса
+консоль/UX в выключенном режиме зашумлены. Это поломки меньшего ранга, чем Д1,
+и в этом прогоне подтверждены как «повтор из прошлого отчёта», без попыток лечить.
 
 ## Скриншоты
 
-Каталог `.cc-attachments/notes-optional-run/`. Файлы этого прогона — с префиксами `off-*` и `on-*`
-(перечислены по разделам выше). Файл `01-on-home.png` остался от отменённого прогона `4ea73a9e`
-и к этому отчёту отношения не имеет.
+Каталог `.cc-attachments/notes-optional-run/`. Файлы этого прогона:
+
+- `on-00-initial.png` — главная до логина (форма входа).
+- `on-01-home-notes-tab.png` — главная подсистема ON: вкладка «Заметки» в хабе, виджет «Заметки», кнопка «Новая заметка».
+- `on-02-notes-page.png` — `/#/notes`: дерево заметок (Личный 35 + ClaudeCodeServer 76) и центральная подсказка.
+- `on-03-note-renamed-b4-fix.png` — заметка `2026-09-10-RENAMED-by-qa` по НОВОМУ id (Б4).
+- `off-01-home.png` — главная подсистема OFF: вкладки без «Заметки», виджета нет.
+- `off-02-chat-open-save-to-note.png` — чат открыт, у ответа Ассистента есть кнопка «Сохранить в заметку» (Д5).
+
+---
+
+## Приложение А — лог старта бэкенда в двух режимах
+
+**ON** (`Subsystems:Notes:Enabled=true`):
+
+```
+[2026-09-10T05:41:52.247Z] [TranscriptRoots] разрешён корень провайдера: C:\ClaudeData\dev\claude-profiles\...
+[2026-09-10T05:41:52.661Z] info: ClaudeHomeServer[0] Фронтенд раздаётся из C:\Sources\ClaudeCodeServer\.claude\worktrees\notes-optional\frontend\dist
+[2026-09-10T05:45:10.348Z] GET /api/auth/me 200 (subsystems in response: ["backgrounds",...,"notes",...,"yandex"], 20 элементов)
+```
+
+**OFF** (`Subsystems:Notes:Enabled=false`):
+
+```
+[2026-09-10T05:53:23.???Z] [SubsystemGate] IsEnabled("notes") = false
+[2026-09-10T05:53:23.???Z] [NotesSubsystem] Register не вызван
+... (ApplicationPartAttribute("ClaudeHomeServer.Notes") всё равно присутствует от MSBuild SDK) ...
+[2026-09-10T05:53:39.589Z] fail: Необработанное исключение на GET (маршрут не сопоставлен):
+      System.InvalidOperationException — Unable to resolve service for type
+      'ClaudeHomeServer.Services.Notes.NotesService' while attempting to activate
+      'ClaudeHomeServer.Notes.Controllers.NotesController'.
+```
+
+## Приложение Б — коммиты, на которых проверялось
+
+| Коммит | Что несёт |
+|---|---|
+| `b5212bb0` | `fix(subsystems): синхронизировать форму поля subsystems между бэком и фронтом` |
+| `7952419b` | `fix(Notes): вернуть эффективный id заметки в событие updated` (предпосылка Б4) |
+| `088e5f65` | Merge master → feature/notes-optional (начальная позиция первого прогона) |

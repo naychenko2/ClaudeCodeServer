@@ -217,7 +217,8 @@ public sealed class SubscriptionUsageWarmupService(
     internal void RecordAndGuard(string key, RateLimitMessage m)
     {
         usage.Record(m.LimitType, m.Utilization, m.Status, m.IsUsingOverage, m.ResetsAt,
-            m.OverageStatus, m.OverageResetsAt, subscriptionKey: key, source: "probe");
+            m.OverageStatus, m.OverageResetsAt, subscriptionKey: key, source: "probe",
+            overageDisabledReason: m.OverageDisabledReason);
 
         // P31: rate_limit_event пришёл — значит пробный ход авторизовался и дошёл до эндпоинта.
         // auth-dead снимаем по любому окну (а не только exhaustion-окну) и независимо от исчерпания:
@@ -236,6 +237,13 @@ public sealed class SubscriptionUsageWarmupService(
 
         if (m.Status == "rejected" || (m.Utilization >= 1.0 && !m.IsUsingOverage))
         {
+            // Отказ по НЕДОСТУПНОЙ МОДЕЛИ здесь невозможен, и подавления MarkExhausted тут нет
+            // намеренно: пробный ход идёт PingModel (haiku), у неё нет ни отдельного кошелька
+            // usage credits, ни проблем с доступом по тарифу. Значит rejected — настоящее
+            // исчерпание окна, даже когда в событии стоит overageDisabledReason (это лишь
+            // причина ВЫКЛЮЧЕННОГО перерасхода: кредиты перерасхода кончились либо он запрещён
+            // организацией). Этот MarkExhausted — ещё и страховка: если подавление в обработчике
+            // хода скрыло настоящее исчерпание, идл-пинг вернёт подписку в верное состояние.
             var resetsAt = m.ResetsAt is not null && DateTime.TryParse(m.ResetsAt, out var dt)
                 ? (DateTime?)dt.ToUniversalTime() : null;
             pool.MarkExhausted(key, resetsAt);

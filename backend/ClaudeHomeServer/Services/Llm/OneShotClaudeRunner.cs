@@ -78,10 +78,20 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
             ? userTiers?.ModelFor(ModelTier.Medium, ownerId) ?? appSettings?.TierModel(ModelTier.Medium)
             : model);
 
-    // Суффикс [1m] тир-алиаса остаётся, пока в пуле есть живой кандидат с поддержкой 1M-окна;
-    // иначе срезается (деградация в 200K). Без пула — срезаем безусловно (безопасный 200K).
+    // Суффикс [1m] тир-алиаса остаётся, пока пул может обслужить 1M-окно; иначе ТИХО срезается
+    // в базовый алиас (деградация в 200K). Без пула — срезаем безусловно (безопасный 200K).
+    //
+    // Почему здесь тихий срез можно, а в ходе чата нельзя (находка ревью). Это фоновые
+    // one-shot действия — теги, сводки, заголовки, значок проекта: вход у них короткий и
+    // ограничен одним документом/диффом, в 200K помещается с запасом, и потеря окна на
+    // результате не сказывается. Альтернатива — уронить фоновое действие ошибкой, которую
+    // человек всё равно не увидит. В ходе ЧАТА наоборот: контекст растёт до сотен тысяч
+    // токенов, молчаливый 200K там превращается в непонятное переполнение — поэтому
+    // ClaudeSession суффикс не трогает, а недоступность окна разбирает адаптер фолбэка.
     private string? ResolveWindowAlias(string? model) =>
-        subscriptionPool?.ResolveWindowAlias(model) ?? LlmProviderRegistry.StripClaudeWindowAlias(model);
+        subscriptionPool?.CanServeWindow1M(model) == true
+            ? model
+            : LlmProviderRegistry.StripClaudeWindowAlias(model);
 
     // Env процесса + ключ аккаунта пула, которым реально пойдёт вызов (PoolSubKey = null —
     // сторонний провайдер ИЛИ пул пуст/недоступен). Родная модель Claude (BuildCliEnv не нашёл

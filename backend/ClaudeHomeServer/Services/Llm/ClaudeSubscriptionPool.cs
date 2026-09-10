@@ -28,6 +28,22 @@ public class ClaudeSubscriptionPool
     // за трое суток до сброса — недельная утилизация растёт медленно.
     private const double DefaultWeeklyThreshold = 0.95;
 
+    // TTL пометки «пара (подписка × модель) недоступна» по причине. no_access — свойство
+    // тарифа, само не меняется (сутки); out_of_credits — кошелёк кредитов модели, могут
+    // пополнить в любой момент (час). Дефолты перекрываются конфигом, значения в часах.
+    private const double DefaultNoAccessTtlHours = 24;
+    private const double DefaultOutOfCreditsTtlHours = 1;
+
+    // Окно подавления MarkExhausted после отказа ПО МОДЕЛИ (см. HadRecentModelRejection).
+    // Минуты — цена ошибки в обе стороны: ложный бан живой подписки стоит до сброса
+    // пятичасового окна, а пропущенное настоящее исчерпание чинится сразу двумя путями,
+    // не зависящими от этого подавления: адаптер фолбэка метит подписку сам по классу
+    // отказа СВОЕГО хода (ResolveNextTarget → MarkExhausted на RateLimit/UsageLimit), а
+    // следующее rate_limit_event уже за пределами окна отработает штатно. На идл-пинг
+    // warmup здесь ссылаться нельзя: он пингует только аккаунты, простаивающие дольше
+    // IdlePingMinutes, — активную подписку он как раз не трогает.
+    private static readonly TimeSpan ModelRejectionSuppression = TimeSpan.FromMinutes(1);
+
     // Без известного времени сброса помечаем на полчаса: пятичасовое окно всё равно
     // не сбросится быстрее, а редкие пробные чаты сами продлят пометку при новом rejected.
     private static readonly TimeSpan DefaultExhaustion = TimeSpan.FromMinutes(30);
@@ -72,6 +88,25 @@ public class ClaudeSubscriptionPool
     // мёртвую (инцидент 2026-08-13: половина ходов падала на протухшей подписке при живой второй).
     private readonly ConcurrentDictionary<string, byte> _authDead = new();
 
+    // Пометка «пара (подписка × модель) недоступна»: (ключ подписки, модель) → (дедлайн, причина).
+    // В отличие от _exhausted (вся подписка на лимите), режет ТОЛЬКО пару — Sonnet/Opus на той же
+    // подписке остаются кандидатами. In-memory, как _exhausted/_authDead (рестарт сервера снимает
+    // все пометки — восстановление не требуется: пара, которая всё ещё недоступна, перемаркируется
+    // первым же отказом). Ключ — КОРТЕЖ, а не склейка строк: ключи подписок приходят из конфига
+    // владельца, и любой разделитель («|» первой редакции) в них когда-нибудь встретится —
+    // тогда «a|b» × «opus» и «a» × «b|opus» схлопнулись бы в одну пометку.
+    private readonly ConcurrentDictionary<(string Key, string Model), (DateTime Until, FallbackErrorClass Reason)> _modelUnavailable = new();
+
+    // Момент последнего отказа ПО МОДЕЛИ где угодно в пуле (UTC-тики, Interlocked). Нужен одному:
+    // подавить MarkExhausted от ПОЗДНЕГО rate_limit_event той же попытки (см. HadRecentModelRejection).
+    // Намеренно БЕЗ привязки к подписке: событие приезжает после того, как тихая ротация уже
+    // переставила Info.Provider на здоровый аккаунт, и проверка по нему промахивалась бы мимо
+    // пометки — ровно тот баг, от которого рядом защищает FallbackTurnActive (блокер ревью).
+    private long _lastModelRejectionTicks;
+
+    private readonly double _noAccessTtlHours;
+    private readonly double _outOfCreditsTtlHours;
+
     public ClaudeSubscriptionPool(IConfiguration config, UsageService? usage = null)
     {
         var list = new List<ClaudeSubscriptionConfig>();
@@ -91,6 +126,8 @@ public class ClaudeSubscriptionPool
         _usage = usage;
         _softThreshold = config.GetValue($"{Section}:SoftThreshold", DefaultSoftThreshold);
         _weeklyThreshold = config.GetValue($"{Section}:WeeklyThreshold", DefaultWeeklyThreshold);
+        _noAccessTtlHours = config.GetValue($"{Section}:NoAccessTtlHours", DefaultNoAccessTtlHours);
+        _outOfCreditsTtlHours = config.GetValue($"{Section}:OutOfCreditsTtlHours", DefaultOutOfCreditsTtlHours);
 
         if (usage is not null)
             RestoreFromSnapshots(usage);
@@ -154,7 +191,7 @@ public class ClaudeSubscriptionPool
         if (_subscriptions.Count == 0)
             return PrimaryKey;
 
-        var candidates = AllKeys().Where(k => !IsExhausted(k) && !IsAuthDead(k) && SupportsModel(k, model)).ToList();
+        var candidates = AllKeys().Where(k => !IsExhausted(k) && !IsAuthDead(k) && IsPairUsable(k, model)).ToList();
         if (candidates.Count > 0)
         {
             // Приоритет свободным (ниже порога) — крупный, но перегруженный тариф уступает
@@ -163,6 +200,9 @@ public class ClaudeSubscriptionPool
             return PickTopTier(healthy.Count > 0 ? healthy : candidates, deterministic);
         }
 
+        // Живых кандидатов нет — сверяемся только со способностью ПЛАНА (SupportsModel):
+        // временные пометки пар тут fail-open, иначе помеченная пара выбрасывала бы аккаунт
+        // из последнего варианта, и Pick возвращал бы заведомо неспособный по тарифу.
         var capable = AllKeys().Where(k => SupportsModel(k, model)).ToList();
         return PickSoonestRecovery(capable.Count > 0 ? capable : AllKeys(), deterministic);
     }
@@ -217,9 +257,15 @@ public class ClaudeSubscriptionPool
     public static bool RequiresOpus(string? model) =>
         !string.IsNullOrWhiteSpace(model) && model.Contains("opus", StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>Аккаунт может обслужить модель: для Opus-тира — только SupportsOpus-планы,</summary>
+    /// <summary>Способность ПЛАНА аккаунта: для Opus-тира — только SupportsOpus-планы,</summary>
     /// для тир-алиаса с окном [1m] — только Supports1M-планы. Ключи вне пула (сторонние
     /// провайдеры deepseek/glm) не наша забота — true.
+    ///
+    /// Тут ТОЛЬКО ручные флаги конфига — свойство тарифа, которое человеку показывают как
+    /// «подписка не поддерживает модель». Временные пометки пар (MarkModelUnavailable) сюда
+    /// НЕ подмешиваются: с ними тот же текст врал бы — подписка модель поддерживает, просто
+    /// пара помечена по одному отказу (находка ревью). Для выбора кандидата спрашивай
+    /// <see cref="IsPairUsable"/> — он складывает способность плана и живую пометку.
     public bool SupportsModel(string key, string? model)
     {
         var sub = _subscriptions.FirstOrDefault(s => s.Key == key);
@@ -230,26 +276,31 @@ public class ClaudeSubscriptionPool
         return true;
     }
 
-    /// <summary>Суффикс [1m] тир-алиаса остаётся, если в пуле есть живой кандидат с поддержкой</summary>
-    /// 1M-окна; иначе срезается в базовый алиас (деградация в 200K вместо падения хода на
-    /// аккаунте без доступа). Не-тир-алиасы (полные id, сторонние провайдеры, обычные модели)
-    /// не трогает — их суффикс разбирает сам CLI. Пул пуст (локальный Claude) — модель как есть
-    /// (default Supports1M=true). См. коммит 639136c4: срез был лекарством от рулетки «попали
-    /// на учётку без 1M-доступа → ход упал»; теперь подписка выбирается по способности (Pick),
-    /// а срез остаётся лишь страховкой, когда способных не осталось.
-    public string? ResolveWindowAlias(string? model)
-    {
-        if (!LlmProviderRegistry.IsClaudeTierWindowAlias(model)) return model;
-        return HasLive1MCandidate(model)
-            ? model
-            : LlmProviderRegistry.StripClaudeWindowAlias(model);
-    }
+    /// <summary>Пара «подписка × модель» пригодна ПРЯМО СЕЙЧАС: план тянет и пометки нет.</summary>
+    /// Вопрос выбора кандидата (Pick, ротация уровня 1, шаг цепочки) — в отличие от
+    /// <see cref="SupportsModel"/>, который отвечает на вопрос о свойстве тарифа.
+    public bool IsPairUsable(string key, string? model)
+        => SupportsModel(key, model) && !IsModelUnavailable(key, model);
 
-    // Есть ли сейчас в пуле живой (не исчерпанный, не auth-dead) аккаунт, способный обслужить
-    // тир-алиас с 1M-окном. Пул пуст → локальный Claude (default Supports1M=true) → true.
-    private bool HasLive1MCandidate(string? model) =>
-        _subscriptions.Count == 0
-        || AllKeys().Any(k => !IsExhausted(k) && !IsAuthDead(k) && SupportsModel(k, model));
+    /// <summary>Может ли пул обслужить тир-алиас с окном 1M прямо сейчас?</summary>
+    /// Не тир-алиас (полный id, модель стороннего провайдера, обычный алиас) — вопрос не к пулу,
+    /// true. Пул пуст (локальный Claude, default Supports1M=true) — тоже true. Иначе: есть живой
+    /// (не исчерпанный, не auth-dead) аккаунт, чей ПЛАН тянет 1M.
+    ///
+    /// Временные пометки пар здесь НЕ участвуют намеренно (блокер ревью): один отказ по
+    /// «opus[1m]» на единственной 1M-подписке иначе делал бы окно недоступным ВСЕМ чатам на
+    /// сутки TTL — радиус несоразмерен одному отказу. Пометка режет свою пару в выборе
+    /// кандидата (IsPairUsable), а не окно у всего инстанса.
+    ///
+    /// false — сигнал «эта пара не может», а не «ход не состоится»: разбирает его
+    /// FallbackLlmSessionAdapter, уводя ход на шаг цепочки; честный отказ
+    /// (TurnFailureText.Window1MUnavailable) остаётся только когда не смог ни один шаг.
+    public bool CanServeWindow1M(string? model)
+    {
+        if (!LlmProviderRegistry.IsClaudeTierWindowAlias(model)) return true;
+        return _subscriptions.Count == 0
+            || AllKeys().Any(k => !IsExhausted(k) && !IsAuthDead(k) && SupportsModel(k, model));
+    }
 
     /// <summary>Аккаунт «в ротации» для новых чатов.</summary>
     /// Выведен, если исчерпан (rejected/100% — жёсткое состояние, `utilization` при rejected
@@ -376,4 +427,111 @@ public class ClaudeSubscriptionPool
     {
         if (!string.IsNullOrEmpty(key)) _authDead.TryRemove(key, out _);
     }
+
+    /// <summary>Пометить пару (подписка, модель) недоступной до истечения TTL причины.</summary>
+    /// Не трогает исчерпание подписки: пометка режет ТОЛЬКО пару (SupportsModel), Sonnet/Opus на
+    /// той же подписке остаются в ротации. Пустая модель — пары нет, пометка не ставится, но
+    /// подавление MarkExhausted всё равно засекается: подписка тут известна всегда, и поздний
+    /// rate_limit_event умеет соврать про неё и без имени модели.
+    public void MarkModelUnavailable(string key, string? model, FallbackErrorClass reason)
+    {
+        if (string.IsNullOrEmpty(key)) return;
+        Interlocked.Exchange(ref _lastModelRejectionTicks, DateTime.UtcNow.Ticks);
+        if (string.IsNullOrWhiteSpace(model)) return;
+        _modelUnavailable[PairKey(key, model)] = (DateTime.UtcNow.Add(ModelTtl(reason)), reason);
+    }
+
+    /// <summary>Был ли отказ ПО МОДЕЛИ только что (окно ModelRejectionSuppression)?</summary>
+    /// Спрашивается ровно в одном месте — перед MarkExhausted в обработчике rate_limit_event хода
+    /// (SessionManager). Смысл: отказ «нет доступа к модели»/«кончились кредиты модели» приезжает
+    /// от CLI ещё и телеметрией rate_limit_event status=rejected, и она приходит про ОКНО, а про
+    /// модель в ней нет ничего. Пришло такое событие ПОСЛЕ финала хода (FallbackTurnActive уже
+    /// false) — MarkExhausted пометил бы живую подписку исчерпанной, и её Sonnet/Opus выпали бы
+    /// из ротации до сброса окна (инцидент 2026-09-09, чат «Анализ документов ВФЛА»).
+    ///
+    /// Вопрос БЕЗ подписки — это не небрежность, а лечение гонки (блокер ревью). Ключ спрашивать
+    /// не у чего: к моменту позднего события тихая ротация уже переставила Info.Provider на
+    /// СОСЕДНИЙ здоровый аккаунт, и проверка по нему промахивалась бы мимо пометки, оставляя
+    /// ровно тот ложный бан, ради которого подавление и заводилось. Соседний гард
+    /// FallbackTurnActive устроен так же — он тоже не смотрит, чей это ключ.
+    ///
+    /// Почему признак именно такой, а не поля телеметрии: различить эти два случая в
+    /// rate_limit_event НЕЛЬЗЯ. Волна 1 пробовала (rejected + пустая utilization +
+    /// overageDisabledReason) — и признак оказался ложным: overageDisabledReason приходит и на
+    /// НАСТОЯЩЕМ исчерпании пятичасового окна, когда у аккаунта просто выключен перерасход
+    /// (в серверном логе 2026-09-09 — 248 таких строк за сутки от идл-пинга, а он ходит haiku,
+    /// у которой кошелька кредитов нет вовсе). Достоверен только текст ошибки хода, который
+    /// разбирает TurnErrorClassifier → отсюда пометка ставится там, где класс отказа уже известен.
+    ///
+    /// Цена ложного подавления ограничена минутой (см. ModelRejectionSuppression) и страхуется
+    /// не идл-пингом (тот ходит только к простаивающим аккаунтам), а самим адаптером фолбэка:
+    /// исчерпание СВОЕГО хода он метит по классу отказа в ResolveNextTarget.
+    public bool HadRecentModelRejection() =>
+        DateTime.UtcNow - new DateTime(Interlocked.Read(ref _lastModelRejectionTicks), DateTimeKind.Utc)
+            < ModelRejectionSuppression;
+
+    /// <summary>Снять пометку пары вручную (кнопка «проверить заново», волна 2) или успешным</summary>
+    /// ходом этой модели на этой подписке (как Reset снимает исчерпание).
+    public void ClearModelUnavailable(string key, string? model)
+    {
+        if (string.IsNullOrEmpty(key) || string.IsNullOrWhiteSpace(model)) return;
+        _modelUnavailable.TryRemove(PairKey(key, model), out _);
+    }
+
+    /// <summary>Пара сейчас помечена недоступной (TTL ещё не истёк)?</summary>
+    /// Истёкшую пометку попутно вычищаем, но ТОЛЬКО ту, которую прочитали: между чтением и
+    /// удалением параллельный ход мог поставить свежую (`MarkModelUnavailable`), и слепой
+    /// TryRemove по ключу снёс бы её вместе с истёкшей.
+    public bool IsModelUnavailable(string key, string? model)
+    {
+        if (string.IsNullOrEmpty(key) || string.IsNullOrWhiteSpace(model)) return false;
+        var pair = PairKey(key, model);
+        if (!_modelUnavailable.TryGetValue(pair, out var mark)) return false;
+        if (DateTime.UtcNow >= mark.Until)
+        {
+            RemoveStaleMark(pair, mark);
+            return false;
+        }
+        return true;
+    }
+
+    /// <summary>Живые пометки недоступности моделей у одной подписки (для выдачи /api/usage).</summary>
+    /// Истёкшие по TTL не отдаются и попутно вычищаются — иначе карточка показывала бы «проверим
+    /// снова через час» после того, как срок уже прошёл. Модель — в нормализованном виде ключа
+    /// пары (нижний регистр): именно её ждёт обратно эндпоинт сброса.
+    public IReadOnlyList<ModelUnavailableMark> ModelUnavailableMarks(string key)
+    {
+        if (string.IsNullOrEmpty(key)) return [];
+        var now = DateTime.UtcNow;
+        var result = new List<ModelUnavailableMark>();
+        foreach (var (pair, mark) in _modelUnavailable)
+        {
+            if (!string.Equals(pair.Key, key, StringComparison.Ordinal)) continue;
+            if (now >= mark.Until) { RemoveStaleMark(pair, mark); continue; }
+            // Причина без wire-имени сюда не приходит (пометку ставят только два класса отказа
+            // по модели), но врать конкретикой на всякий случай нельзя: нейтральное имя фронт
+            // покажет общей формулировкой, а не «нет доступа на этом плане».
+            result.Add(new ModelUnavailableMark(pair.Model,
+                TurnErrorClassifier.WireName(mark.Reason) ?? "model_unavailable", mark.Until));
+        }
+        return result.OrderBy(m => m.Model, StringComparer.Ordinal).ToList();
+    }
+
+    // Удалить ИМЕННО истёкшую пометку: TryRemove(KeyValuePair) сравнивает и значение, поэтому
+    // свежая пометка, поставленная параллельным ходом между чтением и удалением, уцелеет.
+    private void RemoveStaleMark((string Key, string Model) pair,
+        (DateTime Until, FallbackErrorClass Reason) stale) =>
+        _modelUnavailable.TryRemove(
+            new KeyValuePair<(string Key, string Model), (DateTime Until, FallbackErrorClass Reason)>(pair, stale));
+
+    // Модель нормализуется к нижнему регистру: она приходит и от CLI, и из конфига,
+    // и из тела запроса на сброс пометки.
+    private static (string Key, string Model) PairKey(string key, string model) =>
+        (key, model.ToLowerInvariant());
+
+    private TimeSpan ModelTtl(FallbackErrorClass reason) => reason switch
+    {
+        FallbackErrorClass.ModelOutOfCredits => TimeSpan.FromHours(_outOfCreditsTtlHours),
+        _ => TimeSpan.FromHours(_noAccessTtlHours),
+    };
 }

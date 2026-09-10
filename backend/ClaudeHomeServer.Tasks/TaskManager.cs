@@ -208,6 +208,25 @@ public class TaskManager
         // редактирования шлёт kind при каждом сохранении — сегмент «Задача / Дефект» легитимный
         // кейс переключения, отдельный коммит на запрет менять вид не заказывался).
         // Бросает InvalidOperationException — вызывающая сторона (контроллер) превращает в 400.
+
+        // Защита от затирания (волна 1 team-blocker-honest, дефект f3965801): после снятия
+        // человеком по карточке блокера поздний tasks_complete не должен переписывать
+        // Status/Outcome — иначе задача выглядит штатно выполненной с отчётом исполнителя.
+        // Гонка неустранима (исполнитель мог писать отчёт в момент снятия), поэтому
+        // ResultMarkdown исполнителя дописывается к пометке снятия отдельной строкой,
+        // а Status/Outcome/Verification остаются от штаба. Поле — маркер снятия; null —
+        // обычная задача, никакой защиты.
+        if (task.DroppedByHumanAt is not null)
+        {
+            req = req with
+            {
+                Status = null,
+                Outcome = null,
+                Verification = null,
+                ResultMarkdown = AppendExecutorNote(task.ResultMarkdown, req.ResultMarkdown),
+            };
+        }
+
         var effective = new TaskItem
         {
             Kind = task.Kind,
@@ -437,6 +456,22 @@ public class TaskManager
         return task;
     }
 
+    // Пометка снятия человеком по карточке блокера (волна 1 team-blocker-honest, дефект
+    // f3965801): ставится штабом в DropSubtaskAsync после Update(Status=Done). С этого
+    // момента TaskManager.Update не меняет Status/Outcome, а ResultMarkdown исполнителя
+    // дописывается отдельной строкой — иначе поздний tasks_complete затирал бы пометку
+    // снятия штатным отчётом (находка живой приёмки). UpdatedAt двигаем, чтобы пометка
+    // всплыла наверх списка и человек не потерял факт.
+    public TaskItem? MarkDroppedByHuman(string id, DateTime atUtc)
+    {
+        var task = _tasks.GetValueOrDefault(id);
+        if (task is null) return task;
+        task.DroppedByHumanAt = atUtc;
+        task.UpdatedAt = DateTime.UtcNow;
+        Save();
+        return task;
+    }
+
     // Страховка «ход кончился, а задача не закрыта»: отметка отправленного напоминания
     // исполнителю (nudge) либо уведомления человеку (alert). Как у MarkReminderSent, UpdatedAt
     // НЕ двигаем: тишину чата-исполнителя страховка считает в том числе от UpdatedAt задачи —
@@ -532,6 +567,19 @@ public class TaskManager
         {
             JsonFileStore.Save(_storePath, _tasks.Values.ToList());
         }
+    }
+
+    // Дописывание позднего доклада исполнителя к пометке снятия человеком (волна 1
+    // team-blocker-honest, дефект f3965801): после снятия Status/Outcome заблокированы,
+    // но ResultMarkdown остался открытым — гонка неустранима, и без доклада исполнителя
+    // его работа пропадёт. Поэтому доклад дописывается отдельным разделом к существующему
+    // тексту штаба (или подменяет его, если штаб ещё ничего не записал). Помечаем
+    // раздел явно — иначе теряется граница между «снято человеком» и «итог хода».
+    private static string? AppendExecutorNote(string? existing, string? incoming)
+    {
+        if (string.IsNullOrWhiteSpace(incoming)) return existing;
+        if (string.IsNullOrWhiteSpace(existing)) return incoming;
+        return existing + "\n\n— Доклад исполнителя после снятия —\n" + incoming;
     }
 }
 

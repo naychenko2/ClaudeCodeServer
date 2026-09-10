@@ -2772,6 +2772,75 @@ public class TeamWaveServiceTests : IDisposable
         return (running, backend, frontend);
     }
 
+    // ─── DropSubtaskAsync (волна 1 team-blocker-honest, дефект f3965801) ─────────
+    // Кнопка «Снять задачу у исполнителя» на карточке эскалации должна:
+    // (а) остановить ход исполнителя ТЕМ ЖЕ путём, что TaskExecutionService ставит
+    // пометку «исполнитель встал» (MarkExecutorStopped) — иначе диалог врёт «исполнитель
+    // получит отбой», а ход продолжается; (б) поставить DroppedByHumanAt — маркер
+    // для защиты TaskManager.Update от позднего tasks_complete (см. TaskManagerTests).
+    // Мутация для проверки: убрать MarkExecutorStopped в DropSubtaskAsync — тест
+    // сразу падает на ExecutorStoppedAt==null; убрать MarkDroppedByHuman — падает
+    // на DroppedByHumanAt==null. MakeRunningStabAsync не раздаёт под-задачи
+    // (TaskId остаётся null), поэтому задачу создаём вручную — это та же ветка
+    // кода, что зовётся из раздачи в RespondTeamPlanAsync.
+
+    private TaskItem MakeSubtaskForStab(Session stab, string title = "Под-задача")
+    {
+        var task = _tasks.Create(stab.ProjectId, UserId,
+            new CreateTaskRequest(Title: title, Description: "", Assignee: TaskItemAssignee.Claude));
+        // Привязка к штабу — имитирует то, что делает раздача в волне
+        _tasks.Update(task.Id, new UpdateTaskRequest());
+        return _tasks.GetById(task.Id)!;
+    }
+
+    [Fact]
+    public async Task DropSubtaskAsync_ОстанавливаетИсполнителяИПомечаетСнятие()
+    {
+        var (stab, _) = await MakeRunningStabAsync("drop-subtask-honest");
+        var subtask = MakeSubtaskForStab(stab);
+        // Имитация активного исполнителя: LinkedSessionId + ClaudeStartedAt
+        _tasks.MarkClaudeStarted(subtask.Id, "executor-session-1", DateTime.UtcNow);
+        // HasLiveDelegatedTasks для TryResolveBlockerByFactAsync — функция из TaskExecutionService
+        _sessions.HasLiveDelegatedTasks = id => _tasks.GetById(id) is { } t
+            && t.SourceSessionId == stab.Id
+            && t.LinkedSessionId is not null
+            && t.Status != TaskItemStatus.Done
+            && t.ExecutorStoppedAt is null
+            && !t.CompletionDelivered;
+
+        await _sut.DropSubtaskAsync(subtask.Id, "Снято решением человека по карточке остановки (drop).");
+
+        var after = _tasks.GetById(subtask.Id)!;
+        after.Status.Should().Be(TaskItemStatus.Done, "штаб ставит Done через Update");
+        after.Outcome.Should().Be(DefectOutcome.ClosedWithoutCheck,
+            "деградация дефекта при снятии — без отдельной проверки");
+        after.DroppedByHumanAt.Should().NotBeNull(
+            "пометка снятия — обязательна для защиты от позднего tasks_complete");
+        after.ExecutorStoppedAt.Should().NotBeNull(
+            "пометка «исполнитель встал» — иначе диалог врёт «получит отбой»");
+        after.ExecutorStopReason.Should().Contain("drop",
+            "причина должна объяснять, кто снял и почему — иначе карточка задачи теряет смысл");
+    }
+
+    [Fact]
+    public async Task DropSubtaskAsync_БезАктивногоИсполнителяНеПадает()
+    {
+        // Граница: задача создана, исполнитель не запускался. DropSubtaskAsync
+        // не должен падать, защита от затирания всё равно стоит. Пометка остановки
+        // ставится безусловно (IsTerminal(reason)=true), но это не ошибка — карточка
+        // задачи тогда говорит «штаб снял» независимо от того, был ли запущен ход.
+        var (stab, _) = await MakeRunningStabAsync("drop-subtask-noexec");
+        var subtask = MakeSubtaskForStab(stab);
+        _sessions.HasLiveDelegatedTasks = _ => false;
+
+        await _sut.DropSubtaskAsync(subtask.Id, "Снято решением человека.");
+
+        var after = _tasks.GetById(subtask.Id)!;
+        after.Status.Should().Be(TaskItemStatus.Done);
+        after.DroppedByHumanAt.Should().NotBeNull();
+        after.ExecutorStopReason.Should().Contain("drop");
+    }
+
     // Планировщик-заглушка: отдаёт заранее заданный JSON-план вместо вызова модели
     private sealed class StubPlanner(Func<string> answer) : ClaudeHomeServer.Services.Llm.ICheapTextRunner
     {

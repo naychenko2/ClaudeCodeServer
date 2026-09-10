@@ -58,6 +58,16 @@ public class TaskItem
     // Сбрасывается при повторном запуске исполнителя (TaskManager.MarkClaudeStarted).
     public DateTime? ExecutorStoppedAt { get; set; }
     public string? ExecutorStopReason { get; set; }
+    // Пометка снятия человеком по карточке блокера (волна 1 team-blocker-honest, дефект
+    // f3965801): «Задача будет закрыта как снятая, исполнитель получит отбой» — диалог
+    // ОБЕЩАЕТ это. Поле делает пометку сильнее позднего tasks_complete: гонка
+    // неустранима (исполнитель мог писать отчёт в момент снятия), но после того как
+    // человек нажал «снять», задача НИКОГДА не должна выглядеть штатно выполненной.
+    // TaskManager.Update проверяет поле и не меняет Status/Outcome/ResultMarkdown;
+    // доклад исполнителя при желании дописывается отдельной строкой. Setter: ставит
+    // DropSubtaskAsync после Update (init был бы слишком узким — Update сам ставит
+    // Status=Done, и пометка идёт поверх).
+    public DateTime? DroppedByHumanAt { get; set; }
     // Страховка «ход кончился, а задачу никто не закрыл» (TaskExecutionService.CheckStalledExecutorAsync):
     // отметки о напоминании исполнителю и об уведомлении человека. Ровно по одному на запуск —
     // обе сбрасываются перезапуском исполнителя (MarkClaudeStarted), а не каждым ходом:

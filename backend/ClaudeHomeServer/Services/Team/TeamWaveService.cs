@@ -384,6 +384,12 @@ public class TeamWaveService
     // помечается Done с пояснением — тем же путём, что и обычный доклад исполнителя
     // (TaskManager.TaskCompleted → OnTaskDone → CloseWaveIfDoneAsync), иначе волна не могла
     // закрыться до ручного tasks_complete, а «Пропустить»/«Снять» на карточке ничего не делали.
+    //
+    // Волна 1 team-blocker-honest, дефект f3965801: после снятия по карточке обязательно
+    // а) останавливаем ход исполнителя (MarkExecutorStopped — та же точка, что у
+    // TaskExecutionService.HandleExecutorStoppedAsync, чтобы «исполнитель получит отбой»
+    // из диалога не было враньём), и б) ставим DroppedByHumanAt, который блокирует
+    // поздний tasks_complete от затирания пометки снятия штатным отчётом.
     internal async Task DropSubtaskAsync(string taskId, string reason)
     {
         var task = _tasks.GetById(taskId);
@@ -395,10 +401,22 @@ public class TeamWaveService
             ResultMarkdown: reason,
             Outcome: DefectOutcome.ClosedWithoutCheck));
         if (updated is null) return;
-        if (updated.OwnerId is { } ownerId) await _broadcaster.ToOwner(ownerId, new TaskChangedMessage("updated", updated));
+        // Маркер снятия человеком — ПОСЛЕ Update, иначе Update применил бы Status/Outcome
+        // штаба, а пометка снятия осталась бы не выста влена (TaskManager.Update видит
+        // только своё состояние). MarkDroppedByHuman двигает UpdatedAt и бьёт Save.
+        var markedDropped = _tasks.MarkDroppedByHuman(taskId, DateTime.UtcNow) ?? updated;
+        // Отбой исполнителя: если ход шёл — ставим ExecutorStoppedAt/Reason тем же
+        // путём, что TaskExecutionService.HandleExecutorStoppedAsync. Причина — терминальная
+        // (ExecutorStopClassifier.IsTerminal=true), значит MarkExecutorStopped примет.
+        // null для не-запускавшейся задачи — MarkExecutorStopped вернёт её как есть.
+        var stopReason = "Снято решением человека по карточке блокера (drop)";
+        var stopped = _tasks.MarkExecutorStopped(taskId, DateTime.UtcNow, stopReason)
+            ?? markedDropped;
+        if (stopped.OwnerId is { } ownerId)
+            await _broadcaster.ToOwner(ownerId, new TaskChangedMessage("updated", stopped));
         // Волна 1 team-blocker-honest: сняли под-задачу, на которую был открыт блокер —
         // гасим карточку штаба по факту (стадия возвращается в работу).
-        if (updated.SourceSessionId is { } sourceSessionId)
+        if (stopped.SourceSessionId is { } sourceSessionId)
         {
             var src = _sessions.GetById(sourceSessionId);
             string? stabId = src?.TeamImplement != null ? sourceSessionId : src?.ParentSessionId;

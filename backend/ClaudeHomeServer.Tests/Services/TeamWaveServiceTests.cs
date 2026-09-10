@@ -2982,6 +2982,60 @@ public class TeamWaveServiceTests : IDisposable
             "выход по таймауту обязан оставить след в логе — иначе про несостоявшийся отбой не узнать");
     }
 
+    // ─── Плашка бюджета: потолки после расширения (M7 фикс-волны 4) ────────────────
+    // MaxWavesAfter/MaxTasksAfter считает FillAfterBudgetAsync внутри
+    // BroadcastTeamImplementAsync — единой формулой TeamImplementBudget.PlanShortfall,
+    // общей с автоматическим расширением потолков в TeamDecisionService. Хелпер сам по себе
+    // покрыт TeamImplementBudgetTests, но связь «плашка считает ТОЙ ЖЕ формулой» без этого
+    // теста не сторожилась ничем: подмена вызова на формулу, игнорирующую расход, оставляла
+    // 411 тестов Team зелёными (доказано мутацией в повторном ревью).
+    // РАСХОД НЕНУЛЕВОЙ — в этом весь смысл: формула «Max + max(0, plan - Max)» без учёта
+    // WavesUsed/TasksUsed даёт 2 и 2 вместо 3 и 3, и тест краснеет.
+    [Fact]
+    public async Task ПлашкаБюджета_НенулевойРасход_ПотолкиСчитаютсяОтОстатка()
+    {
+        // План MakeRunningStabAsync: две под-задачи, волны 1 и 2 → plannedWaves=2, plannedTasks=2
+        var (stab, _) = await MakeRunningStabAsync("budget-after-used");
+        ((ITeamRunState)_sessions).WithTeamState(stab.Id, t =>
+        {
+            t.Budget.MaxWaves = 2;
+            t.Budget.WavesUsed = 1;
+            t.Budget.MaxTasks = 2;
+            t.Budget.TasksUsed = 1;
+            return true;
+        });
+
+        await _sessions.BroadcastTeamImplementAsync(stab.Id, _sessions.GetById(stab.Id)!);
+
+        var budget = Team(stab.Id).Budget;
+        budget.MaxWavesAfter.Should().Be(3,
+            "остаток волн 2-1=1, план на 2 — потолок поднимется до 2+1=3; формула без учёта расхода дала бы 2");
+        budget.MaxTasksAfter.Should().Be(3,
+            "остаток задач 2-1=1, план на 2 — потолок поднимется до 2+1=3; формула без учёта расхода дала бы 2");
+    }
+
+    [Fact]
+    public async Task ПлашкаБюджета_ПланУкладываетсяВОстаток_ПотолкиНеДвигаются()
+    {
+        // Обратная сторона той же формулы: расход есть, но остатка хватает — расширять нечего,
+        // и плашка обязана показывать текущий потолок, а не «поднимется до».
+        var (stab, _) = await MakeRunningStabAsync("budget-after-fits");
+        ((ITeamRunState)_sessions).WithTeamState(stab.Id, t =>
+        {
+            t.Budget.MaxWaves = 5;
+            t.Budget.WavesUsed = 1;
+            t.Budget.MaxTasks = 6;
+            t.Budget.TasksUsed = 2;
+            return true;
+        });
+
+        await _sessions.BroadcastTeamImplementAsync(stab.Id, _sessions.GetById(stab.Id)!);
+
+        var budget = Team(stab.Id).Budget;
+        budget.MaxWavesAfter.Should().Be(5, "остаток 4 ≥ плана 2 — потолок волн не двигается");
+        budget.MaxTasksAfter.Should().Be(6, "остаток 4 ≥ плана 2 — потолок задач не двигается");
+    }
+
     // Логгер-копилка: собирает форматированные строки лога службы (нужен тесту таймаута
     // ожидания простоя — предупреждение обязано быть записано)
     private sealed class CollectingLogger<T>(List<string> sink) : ILogger<T>

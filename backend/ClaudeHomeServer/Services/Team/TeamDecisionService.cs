@@ -384,8 +384,9 @@ internal sealed class TeamDecisionService
                     // (DecideReissueAsync). План флагманского случая (9 волн / 27 задач)
                     // при дефолте MaxRuns=20 упирался в третий счётчик на 6–7 волне.
                     // Формула PlanShortfall — единая точка с TeamStateService.FillAfterBudgetAsync
-                    // (M1 фикс-волны 4 team-blocker-honest): раньше формула жила в двух местах
-                    // и разъезжалась тихо, как разъехалась в дефекте c156193b.
+                    // (M1 фикс-волны 4 team-blocker-honest): то же выражение жило копией в двух
+                    // файлах — копии расходятся тихо, а расхождение здесь означает, что плашка
+                    // бюджета обещает человеку не то, что сделает запуск.
                     var deltaTasks = TeamImplementBudget.PlanShortfall(
                         t.Budget.MaxTasks, t.Budget.TasksUsed, plan.Subtasks.Count);
                     var deltaWaves = TeamImplementBudget.PlanShortfall(

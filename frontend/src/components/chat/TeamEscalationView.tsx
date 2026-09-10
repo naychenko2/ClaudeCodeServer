@@ -322,7 +322,11 @@ export function TeamEscalationView({ item, online }: {
       {dropAction && (
         <ConfirmDialog
           title="Снять задачу у исполнителя?"
-          subtitle={`Задача «${esc.title}» будет закрыта как снятая, исполнитель получит отбой`}
+          // Подпись диалога (волна 1 team-blocker-honest, дефект 1430b732): название
+          // задачи, а не заголовок карточки — раньше стоял «Исполнитель застрял: …»,
+          // и человек не видел, какую задачу закрывает. Фолбэк на заголовок карточки,
+          // если штаб не смог подтянуть имя (старая версия, задача удалена).
+          subtitle={`Задача «${esc.taskTitle ?? esc.title}» будет закрыта как снятая, исполнитель получит отбой`}
           confirmLabel="Снять задачу"
           confirmVariant="danger"
           onConfirm={() => { respond(dropAction.id); setDropAction(null); }}

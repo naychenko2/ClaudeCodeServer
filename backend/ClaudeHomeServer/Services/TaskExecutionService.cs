@@ -132,6 +132,11 @@ public class TaskExecutionService
         // штабных хуков, уехавших в TeamCoordinator (шаг 2г-4): те ставила и читала одна и та
         // же вертикаль, а этот ставит чужая сторона.
         _sessions.HasLiveDelegatedTasks = HasLiveDelegatedTask;
+        // Резолв названия задачи по id для подписи карточки эскалации (волна 1
+        // team-blocker-honest, дефект 1430b732): та же причина — SessionManager не знает
+        // TaskManager, штаб читает через Func-канал. null для удалённой задачи не ошибка:
+        // карточка остаётся, фронт подставит заголовок карточки.
+        _sessions.GetTaskTitle = id => _tasks.GetById(id)?.Title;
         // Чат-исполнитель удалён/протух по TTL, не дождавшись result — снимаем накопленный
         // текст ошибки, чтобы буфер не жил дольше самой сессии
         _sessions.OnSessionDeleted += s =>

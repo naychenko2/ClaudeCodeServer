@@ -443,11 +443,20 @@ internal sealed class TeamDecisionService
         // трогаем: карточку мог составить другой участник штаба (например планировщик).
         escalation.PersonaId ??= session.TeamImplement?.CoordinatorPersonaId ?? session.PersonaId;
 
+        // Название задачи (волна 1 team-blocker-honest, дефект 1430b732): подтягиваем из
+        // стора задач, если ещё не заполнено. Единая точка — карточки эскалации создаются
+        // во многих местах штаба, и без этого каждая точка должна была бы резолвить имя
+        // задачи отдельно. Снимок, не live-резолв — карточка остаётся про исходный момент.
+        // null для удалённой задачи — фронт падает обратно на заголовок карточки.
+        if (escalation.TaskTitle is null && escalation.TaskId is { } tid)
+            escalation.TaskTitle = _sessions.GetTaskTitle?.Invoke(tid);
+
         await _history.AppendAsync(sessionId,
             new StoredTeamEscalationMessage { EscalationId = escalation.Id, Escalation = escalation },
             new TeamEscalationMessage(escalation.Id, escalation.Kind.ToWireToken(), escalation.Title,
                 escalation.Details, escalation.Actions, escalation.TaskId, escalation.Wave,
-                false, null, escalation.PersonaId));
+                false, null, escalation.PersonaId,
+                ResolutionNote: null, TaskTitle: escalation.TaskTitle));
 
         if (session.TeamImplement is null) return;
         // Информационная карточка (добавочная волна) практику не останавливает: стадию и
@@ -600,7 +609,8 @@ internal sealed class TeamDecisionService
             (kind).ToWireToken(),
             escalation.Title, escalation.Details,
             escalation.Actions, escalation.TaskId, escalation.Wave, true, actionId,
-            escalation.PersonaId));
+            escalation.PersonaId,
+            ResolutionNote: null, TaskTitle: escalation.TaskTitle));
 
         // «Остановить» с информационной карточки добавочной волны (Э5) — той же точкой, что
         // кнопка режима (ChatsController): состояние уже поставлено транзакцией выше, а повторный
@@ -812,7 +822,8 @@ internal sealed class TeamDecisionService
             await _sessions.BroadcastAsync(stabSessionId, new TeamEscalationMessage(card.Id,
                 card.Kind.ToWireToken(), card.Title, card.Details, card.Actions,
                 card.TaskId, card.Wave, Resolved: true, ChosenActionId: "resolvedByStaff",
-                card.PersonaId, ResolutionNote: reason));
+                card.PersonaId, ResolutionNote: reason,
+                TaskTitle: card.TaskTitle));
         }
 
         // Возврат стадии ТОЛЬКО если решающих открытых карточек больше нет.

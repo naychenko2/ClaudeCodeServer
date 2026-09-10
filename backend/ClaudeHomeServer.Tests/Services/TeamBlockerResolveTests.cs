@@ -61,6 +61,11 @@ public class TeamBlockerResolveTests : IDisposable
         _personas = new PersonaManager(config);
         _tasks = new TaskManager(config, personas: _personas);
         _sessions = CreateSessionManager(config, userStore, appSettings);
+        // Резолв названия задачи по id (волна 1 team-blocker-honest, дефект 1430b732):
+        // нужен тесту публикации эскалации — карточка блокера должна принести Title
+        // задачи, чтобы подпись диалога снятия могла показать «Задача «X»…», а не
+        // заголовок карточки «Исполнитель застрял: …».
+        _sessions.GetTaskTitle = id => _tasks.GetById(id)?.Title;
     }
 
     public void Dispose()
@@ -737,6 +742,56 @@ public class TeamBlockerResolveTests : IDisposable
         TasksToolset.ShouldExtinguishBlocker(task, "executor-2").Should().BeFalse(
             "правка задачи из чата исполнителя НЕ гасит блокер-карточку штаба");
         TasksToolset.ShouldExtinguishBlocker(task, "").Should().BeFalse("пустой caller — защита");
+    }
+
+    // ─── PublishTeamEscalationAsync → TaskTitle (волна 1 team-blocker-honest, дефект 1430b732) ───
+    // Карточка блокера едет в WS-событии team_escalation (и в историю) с плоским полем
+    // taskTitle. Подпись диалога снятия «Задача «X» будет закрыта как снятая» опирается
+    // на taskTitle — иначе подставляется заголовок карточки («Исполнитель застрял: …»),
+    // и человек не видит, какую задачу закрывает. Мутация для проверки: убрать резолв
+    // _sessions.GetTaskTitle?.Invoke(tid) в PublishTeamEscalationAsync — тест сразу
+    // падает на null в задаче и в broadcast'е.
+
+    [Fact]
+    public async Task PublishTeamEscalation_ПодтягиваетTaskTitleИзСтораЗадач()
+    {
+        var (stab, _) = await MakeStabAsync("task-title");
+        var task = _tasks.Create(stab.ProjectId, UserId,
+            new CreateTaskRequest(Title: "Подготовить отчёт о шабаше"));
+        _tasks.Update(task.Id, new UpdateTaskRequest());  // привязка SourceSessionId
+
+        var blocker = await PublishBlockerAsync(stab, task.Id);
+
+        blocker.TaskTitle.Should().Be("Подготовить отчёт о шабаше",
+            "штаб обязан подтянуть название задачи — иначе подпись диалога снятия врёт");
+
+        // Проверка wire-сообщения: фронт получит TaskTitle и подставит в подпись.
+        // В Session два сообщения: TeamEscalationMessage и TeamImplementMessage
+        // (PublishTeamEscalationAsync после смены стадии транслирует снимок режима).
+        _broadcaster.Clear();
+        await ((ITeamHistoryStore)_sessions).PublishTeamEscalationAsync(stab.Id, new TeamEscalation
+        {
+            Kind = TeamEscalationKind.Blocker,
+            Title = "Застрял",
+            Details = "нужна помощь",
+            TaskId = task.Id,
+            Wave = 1,
+            Actions = TeamEscalationActions.For(TeamEscalationKind.Blocker),
+        });
+        var msg = _broadcaster.Session
+            .Select(t => t.Message).OfType<TeamEscalationMessage>().Single();
+        msg.TaskTitle.Should().Be("Подготовить отчёт о шабаше");
+    }
+
+    [Fact]
+    public async Task PublishTeamEscalation_ЗадачаУдаленаTaskTitleОстаётсяNull()
+    {
+        // null для удалённой задачи — фронт падает обратно на заголовок карточки,
+        // не падает. Проверяем деградацию, а не молчаливое враньё.
+        var (stab, _) = await MakeStabAsync("task-title-deleted");
+        var blocker = await PublishBlockerAsync(stab, "missing-task-id");
+
+        blocker.TaskTitle.Should().BeNull("удалённая задача — null, не пустой title");
     }
 
     // Заглушка планировщика: тесты не вызывают планирование, но SessionManager требует

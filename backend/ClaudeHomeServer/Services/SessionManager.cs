@@ -6288,6 +6288,15 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // null — признак не задан (тесты, либо стора задач нет): ждать нечего.
     public Func<string, bool>? HasLiveDelegatedTasks { get; set; }
 
+    // Резолв названия задачи по id (волна 1 team-blocker-honest, дефект 1430b732): штаб
+    // публикует карточку остановки с TaskId, и подпись диалога снятия должна показать
+    // название задачи, а не заголовок карточки. Тот же узкий шов, что у HasLiveDelegatedTasks:
+    // SessionManager не знает TaskManager (цикл), а зовущая сторона (TeamDecisionService)
+    // зависимость на ядро имеет — поэтому Func, а не прямая ссылка. null — задача
+    // не найдена (удалена) или стора задач нет (тесты): подставляется null, фронт падает
+    // обратно на заголовок карточки.
+    public Func<string, string?>? GetTaskTitle { get; set; }
+
     // Тонкие обёртки на Core-хелпер TeamProtocolMarkers. Реализации уехали в спину
     // (`ClaudeHomeServer.Core.Services.TeamProtocolMarkers`): их зовёт и ядро SessionManager,
     // и штаб TeamWaveService, и живая трансляция любого чата в OnMessageAsync, и
@@ -6558,7 +6567,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             await BroadcastAsync(sessionId, new TeamEscalationMessage(card.Id,
                 card.Kind.ToWireToken(), card.Title, card.Details, card.Actions,
                 card.TaskId, card.Wave, Resolved: true, ChosenActionId: "message",
-                card.PersonaId, ResolutionNote: "Ответ сообщением"));
+                card.PersonaId, ResolutionNote: "Ответ сообщением",
+                TaskTitle: card.TaskTitle));
         }
 
         WithTeamState(sessionId, t =>

@@ -1700,7 +1700,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             turn.Settled = true;
         }
 
-        await _downstream(new ErrorMessage(TurnFailureText.Window1MUnavailable, ExpectResultFollows: true));
+        await _downstream(new ErrorMessage(TurnFailureText.Window1MUnavailable, ExpectResultFollows: true, Action: "window-1m-drop"));
 
         var orig = held.OfType<ResultMessage>().FirstOrDefault();
         await _downstream(orig is { Subtype: "error" }

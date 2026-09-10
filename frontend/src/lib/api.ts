@@ -1456,6 +1456,13 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify({ mode }),
       }),
+    // «Продолжить в стандартном окне 200K» под карточкой отказа Window1MUnavailable.
+    // Единственный путь, которым суффикс [1m] снимается с чата: тихая деградация длинного
+    // разговора в 200K — мина, решение принимает человек, сервер только исполняет.
+    // Возвращает обновлённый чат: фронт по нему перерисовывает выбранную модель,
+    // отдельного сигнала не приходит
+    dropWindow1M: (id: string) =>
+      request<Session>(`/chats/${id}/window-1m/drop`, { method: 'POST' }),
     delete: (id: string) => request<void>(`/chats/${id}`, { method: 'DELETE' }),
     getHistory: (id: string) => request<unknown[]>(`/chats/${id}/history`),
     uploadFile: async (id: string, file: File): Promise<{ path: string }> => {

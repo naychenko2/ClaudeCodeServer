@@ -177,7 +177,12 @@ public record RedactedThinkingMessage() : ServerMessage("redacted_thinking");
 // Details — сырой технический текст сбоя (ответ CLI, ex.Message): в ленте он живёт только
 // под «Подробностями», а Text всегда человекочитаемый (Services/Llm/TurnFailureText —
 // единственная точка формулировок). null — деталей нет либо Text и есть исходный текст.
-public record ErrorMessage(string Text, bool ExpectResultFollows = false, string? Details = null)
+// Action — признак предлагаемого действия под карточкой ошибки. Сейчас единственное
+// значение — "window-1m-drop" (POST /api/chats/{id}/window-1m/drop): суффикс [1m]
+// не срезается автоматически, и снять его можно только явной кнопкой человека.
+// null — действия нет, карточка остаётся обычной ошибкой. Сравнение по строке, а не по
+// тексту ошибки: формулировка в TurnFailureText может меняться, а признак — нет.
+public record ErrorMessage(string Text, bool ExpectResultFollows = false, string? Details = null, string? Action = null)
     : ServerMessage("error");
 
 // Телеметрия лимитов подписки (rate_limit_event, ~каждый ход). Utilization (0..1) — доля

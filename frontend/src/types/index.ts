@@ -986,8 +986,12 @@ export type ServerMessage = { sessionId: string } & (
   // Завершённая генерация glif: счётчик + кредиты (если billing доехал в payload). Дедуп по jobId.
   | { type: 'glif_cost'; jobId: string; outputType?: string; mediaCount: number; credits?: number; model?: string }
   // text — человекочитаемая формулировка сбоя, details — сырой технический текст
-  // (ответ CLI, .NET-исключение): в ленте он живёт только под «Подробностями»
-  | { type: 'error'; text: string; details?: string }
+  // (ответ CLI, .NET-исключение): в ленте он живёт только под «Подробностями».
+  // action — признак предлагаемого действия под карточкой: единственное значение
+  // "window-1m-drop" рисует кнопку «Продолжить в стандартном окне» (POST /api/chats/{id}/window-1m/drop).
+  // null/undefined — обычная ошибка, кнопки нет. Сравнение по строке, а не по тексту —
+  // формулировка ошибки живёт на сервере и может меняться
+  | { type: 'error'; text: string; details?: string; action?: string | null }
   | { type: 'rate_limit'; limitType: string; resetsAt?: string; status?: string; utilization?: number; isUsingOverage?: boolean; overageStatus?: string; overageResetsAt?: string }
   | { type: 'compact_boundary'; trigger: string; preTokens?: number; postTokens?: number }
   | { type: 'compact_status'; status?: string; compactResult?: string; compactError?: string }
@@ -1854,8 +1858,12 @@ export type ChatItem =
   // Остановка цикла «до готово»: текст готов на сервере (лимит/ошибка/ручной стоп),
   // фронт его не собирает — иначе разъедется с сервером при смене лимита
   | { kind: 'work_loop_stopped'; reason: string; text: string }
-  // details — сырой технический текст сбоя за человекочитаемым text (см. wire-событие error)
-  | { kind: 'error'; text: string; canRetry?: boolean; details?: string; ts?: number }
+  // details — сырой технический текст сбоя за человекочитаемым text (см. wire-событие error).
+  // action — признак предлагаемого действия под карточкой: сейчас только "window-1m-drop"
+  // (кнопка «Продолжить в стандартном окне» под карточкой отказа Window1MUnavailable).
+  // undefined — обычная ошибка, кнопки нет. Серверная формулировка может меняться,
+  // признак — нет, поэтому сравниваем по строке
+  | { kind: 'error'; text: string; canRetry?: boolean; details?: string; action?: string | null; ts?: number }
   // Группа ошибок прошлых дней (QA Fold 8): строится на фронте в ChatPanel из
   // последовательно идущих error с ts < сегодня. Кат/раскрытие на стороне ChatItemView.
   | { kind: 'error_group'; date: number; items: Extract<ChatItem, { kind: 'error' }>[] };

@@ -11,6 +11,7 @@ import { ToolbarOverflowMenu, type OverflowItem } from './ToolbarOverflowMenu';
 import { AvatarMenu } from '../features/projects/AvatarMenu';
 import { UserManagementModal } from './UserManagementModal';
 import { ChangePasswordDialog } from './ChangePasswordDialog';
+import { SubsystemsPage } from '../pages/SubsystemsPage';
 import { FeatureFlagsModal } from './FeatureFlagsModal';
 import { ModelsSpendModal } from '../features/modelsSpend/ModelsSpendModal';
 import { McpServersModal } from '../features/mcp/McpServersModal';
@@ -60,6 +61,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
   const w = useWindowWidth();
   const isTablet = w > MOBILE_MAX && w <= TABLET_MAX;
   const [showUserMgmt, setShowUserMgmt] = useState(false);
+  const [showSubsystems, setShowSubsystems] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [showFeatureFlags, setShowFeatureFlags] = useState(false);
   const [showModelsSpend, setShowModelsSpend] = useState(false);
@@ -495,6 +497,10 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
           // нечего, сервер всё равно откажет
           onShowDevices={desktopEnabled ? () => setShowDevices(true) : undefined}
           onShowUserManagement={() => setShowUserMgmt(true)}
+          // Админский список подсистем инстанса (Этап 5, волна 3): только
+          // чтение через GET /api/admin/subsystems, без тумблера — глобальный
+          // рубильник через API сознательно отложен (задача 7d261cde).
+          onShowSubsystems={isAdmin ? () => setShowSubsystems(true) : undefined}
           hideStatus={isMobile || isTablet}
           // «Знания», «Специальности», «Аналитика токенов» и «Что нового» живут здесь
           // на обеих платформах: в таббар они не входят, а отдельного меню разделов нет
@@ -519,6 +525,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
       </div>
 
       {showUserMgmt && <UserManagementModal currentUserId={auth.id} onClose={() => setShowUserMgmt(false)} />}
+      {showSubsystems && <SubsystemsPage onClose={() => setShowSubsystems(false)} />}
       {showChangePassword && <ChangePasswordDialog onClose={() => setShowChangePassword(false)} />}
       {showFeatureFlags && <FeatureFlagsModal onClose={() => setShowFeatureFlags(false)} />}
       {showModelsSpend && <ModelsSpendModal onClose={() => setShowModelsSpend(false)} />}

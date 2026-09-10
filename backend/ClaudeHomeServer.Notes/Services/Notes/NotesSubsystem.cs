@@ -50,6 +50,9 @@ public sealed class NotesSubsystem : IAppSubsystem
 
     public string Title => "Заметки";
 
+    // Для админского экрана «Подсистемы»: одно предложение, попадает в REST как `description`.
+    public string Description => "Личный vault, заметки проектов, связи [[…]] и граф.";
+
     public void Register(IServiceCollection services, IConfiguration config)
     {
         // Singleton-ы без внутреннего порядка между собой; `NoteExpiryService` —

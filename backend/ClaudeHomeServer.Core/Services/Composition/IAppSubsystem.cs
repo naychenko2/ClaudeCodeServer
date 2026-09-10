@@ -17,6 +17,12 @@ public interface IAppSubsystem
     // Человекочитаемое имя подсистемы (для логов и диагностических дампов).
     string Title { get; }
 
+    // Одно предложение о разделе для админского экрана «Подсистемы» (`/api/admin/subsystems`).
+    // Дефолт — пустая строка: вертикали, написанные до появления поля, автоматически
+    // получают «голую» строку (имя без описания); этого хватает для стартового пилота.
+    // Новые реализации должны переопределять свойство осмысленным описанием.
+    string Description => "";
+
     // Зарегистрировать свои сервисы. Вызывается один раз при сборке контейнера,
     // в порядке, заданном вызовом `AddSubsystems`.
     void Register(IServiceCollection services, IConfiguration config);
@@ -38,11 +44,14 @@ public interface IAppPhaseSubsystem : IAppSubsystem
 }
 
 // DTO для REST-эндпоинтов `/api/auth/me` и `/api/admin/subsystems`.
+//   Description     — одно предложение о разделе из реализации `IAppSubsystem.Description`.
 //   Enabled         — что сейчас в конфиге (`Subsystems:{Key}:Enabled`, default true).
 //   Active          — была ли подсистема реально зарегистрирована на старте процесса.
 //   RestartRequired — `Enabled` и `Active` различаются: чтобы изменение подействовало,
 //                     нужен рестарт (гейт читается один раз при сборке контейнера).
-public sealed record SubsystemInfo(string Key, string Title, bool Enabled, bool Active, bool RestartRequired);
+public sealed record SubsystemInfo(
+    string Key, string Title, string Description,
+    bool Enabled, bool Active, bool RestartRequired);
 
 // Снимок состава подсистем, увиденного `AddSubsystems` на старте процесса:
 // и активные (прошли гейт и зарегистрировались), и задизейбленные (выпали по
@@ -65,7 +74,8 @@ public sealed class SubsystemStateStore
     // Регистрация подсистемы, прошедшей гейт. `Register` уже вызван, подсистема
     // добавлена в `IEnumerable<IAppSubsystem>` — отмечаем её как активную.
     public void RecordActive(IAppSubsystem subsystem) =>
-        _snapshots[subsystem.Key] = new SubsystemSnapshot(subsystem.Key, subsystem.Title, Active: true);
+        _snapshots[subsystem.Key] = new SubsystemSnapshot(
+            subsystem.Key, subsystem.Title, subsystem.Description, Active: true);
 
     // Регистрация попытки: подсистема передана в `AddSubsystems`, но гейт
     // `Subsystems:{Key}:Enabled=false` сказал пропустить — отмечаем как
@@ -73,9 +83,10 @@ public sealed class SubsystemStateStore
     // увидит. Имя берём из самого инстанса — Key уже проверили выше, без него
     // дошли бы до бросания исключения и сюда не попали.
     public void RecordDisabled(IAppSubsystem subsystem) =>
-        _snapshots[subsystem.Key] = new SubsystemSnapshot(subsystem.Key, subsystem.Title, Active: false);
+        _snapshots[subsystem.Key] = new SubsystemSnapshot(
+            subsystem.Key, subsystem.Title, subsystem.Description, Active: false);
 
-    // Снимок для REST: ключ/имя/включённость/активность/нужен-ли-рестарт.
+    // Снимок для REST: ключ/имя/описание/включённость/активность/нужен-ли-рестарт.
     // Конфиг читаем СВЕЖИЙ (на момент запроса), а не тот, что был при AddSubsystems,
     // — иначе `RestartRequired` был бы всегда false, а это самый ценный сигнал:
     // админ хочет знать, что после галочки в конфиге нужен рестарт.
@@ -88,6 +99,7 @@ public sealed class SubsystemStateStore
                 return new SubsystemInfo(
                     Key: s.Key,
                     Title: s.Title,
+                    Description: s.Description,
                     Enabled: enabled,
                     Active: s.Active,
                     RestartRequired: enabled != s.Active);
@@ -104,7 +116,7 @@ public sealed class SubsystemStateStore
             .OrderBy(k => k, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-    private sealed record SubsystemSnapshot(string Key, string Title, bool Active);
+    private sealed record SubsystemSnapshot(string Key, string Title, string Description, bool Active);
 }
 
 // Единая точка проверки гейта `Subsystems:{Key}:Enabled`. Дефолт `true` —

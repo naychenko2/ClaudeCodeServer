@@ -7,7 +7,6 @@ using ClaudeHomeServer.Services.CodeGraph;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Services.Llm;
-using ClaudeHomeServer.Services.Tasks;
 
 namespace ClaudeHomeServer.Services.Dossiers;
 
@@ -43,7 +42,7 @@ public sealed class DossierCaptureService : BackgroundService
     private readonly ISessionDirectory _sessions;
     private readonly ISessionMessageObserver _sessionObserver;
     private readonly IProjectManager _projects;
-    private readonly TaskManager _tasks;
+    private readonly ITaskLookup _tasks;
     private readonly FileService _files;
     private readonly IGitRefSnapshotStore _gitSnapshots;
     private readonly IGitCommitInspector _gitInspect;
@@ -56,7 +55,7 @@ public sealed class DossierCaptureService : BackgroundService
     private readonly ILogger<DossierCaptureService> _log;
 
     public DossierCaptureService(ISessionDirectory sessions, ISessionMessageObserver sessionObserver,
-        IProjectManager projects, TaskManager tasks,
+        IProjectManager projects, ITaskLookup tasks,
         FileService files, IGitRefSnapshotStore gitSnapshots, IGitCommitInspector gitInspect,
         DossierStore store, DossierCaptureState state,
         ICheapTextRunner cheap, ICodeGraphInspector codeGraph,

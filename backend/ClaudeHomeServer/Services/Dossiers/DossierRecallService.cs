@@ -3,7 +3,6 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.CodeGraph;
 using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Services.Memory;
-using ClaudeHomeServer.Services.Tasks;
 
 namespace ClaudeHomeServer.Services.Dossiers;
 
@@ -26,7 +25,7 @@ namespace ClaudeHomeServer.Services.Dossiers;
 // методами (счётчики вызовов — тест кеша статусов).
 public class DossierRecallService(
     DossierStore store,
-    TaskManager? tasks = null,
+    ITaskLookup? tasks = null,
     IGitRefSnapshotStore? gitSnapshots = null,
     IGitCommitInspector? gitInspect = null,
     ICodeGraphInspector? codeGraph = null,

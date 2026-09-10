@@ -4,9 +4,40 @@
 // окружения с подписками; это уже косвенно проверено в NoteConnections/
 // NoteView. Источник истины для тестов — сами данные.
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import type { NoteSummary } from '../types';
 import { groupNotesByFile } from './notes';
+
+// Гейт подсистемы заметок на `ensureNotesLoaded`: при выключенной notes
+// функция не должна обращаться к /api/notes* (иначе при выключенной подсистеме
+// каждый вызов даёт 500 в консоли — см. Д-4/Д-6 отчёта QA).
+// Тест мокает api и isSubsystemEnabled и проверяет, что при выключенной notes
+// обращений к api не происходит, а при включённой — происходит обычным путём.
+vi.mock('./api', () => ({
+  api: {
+    notes: {
+      list: vi.fn(async () => []),
+      folders: vi.fn(async () => []),
+    },
+  },
+}));
+vi.mock('./signalr', () => ({
+  joinUser: vi.fn(async () => {}),
+  onMessage: vi.fn(() => () => {}),
+  onReconnected: vi.fn(() => () => {}),
+}));
+vi.mock('../components/MarkdownViewer', () => ({
+  clearResolveCache: vi.fn(),
+}));
+vi.mock('./offline', () => ({
+  isOnline: () => true,
+  OfflineError: class extends Error {},
+  subscribeOnline: vi.fn(() => () => {}),
+}));
+vi.mock('./notesOffline', () => ({
+  drainNotesOutbox: vi.fn(async () => {}),
+  overlayNotesList: vi.fn(async (l: unknown) => l),
+}));
 
 // Минимальный конструктор тестовой заметки — все поля, нужные функции для
 // фильтра (source, file) и сравнения путей. createdAt/updatedAt не важны
@@ -24,6 +55,29 @@ function note(partial: Partial<NoteSummary> & { id: string }): NoteSummary {
     file: partial.file ?? null,
   };
 }
+
+// Тест гейта: при выключенной подсистеме `ensureNotesLoaded` НЕ должен
+// дёргать api.notes.list() — иначе консоль шумит 500-ками (см. Д-4/Д-6 QA).
+// Тест на «включена → обращается» не делаем: `ensureNotesLoaded` в включённом
+// режиме зависит от localStorage/sessionStorage (joinUserGroup), а vitest
+// работает в node-окружении — регрессия гейта тут не проверится, зато
+// непрошный тест будет ломаться при любом пересечении с DOM.
+describe('ensureNotesLoaded — гейт подсистемы', () => {
+  it('при выключенной подсистеме НЕ обращается к /api/notes*', async () => {
+    vi.resetModules();
+    vi.doMock('./subsystems', () => ({
+      isSubsystemEnabled: () => false,
+      setAllSubsystems: () => {},
+      getAllSubsystems: () => ({}),
+      subscribeSubsystems: () => () => {},
+      useSubsystem: () => false,
+    }));
+    const { ensureNotesLoaded } = await import('./notes');
+    const { api } = await import('./api');
+    await ensureNotesLoaded();
+    expect(api.notes.list).not.toHaveBeenCalled();
+  });
+});
 
 describe('groupNotesByFile — группировка заметок по file-привязке', () => {
   it('возвращает пустую карту для пустого списка', () => {

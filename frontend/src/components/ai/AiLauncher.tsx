@@ -124,7 +124,13 @@ export function AiLauncher() {
   // руководителем точки быть не должно — там речь не про личное знакомство).
   const me = useMe();
   const showIntroDot = me.loaded && me.needsOnboarding && facePersona?.id === me.defaultPersonaId;
-  useEffect(() => { api.notes.caps().then(c => setSemanticCaps(c.semantic)).catch(() => {}); }, []);
+  // Доступность семантики (Dify) нужна только при включённой подсистеме заметок:
+  // при выключенной `api.notes.caps()` вернул бы 500, а палитра и так не покажет
+  // «Поиск по смыслу». Гейт ДО запроса (не глушим ошибку, не обращаемся вовсе).
+  useEffect(() => {
+    if (!isSubsystemEnabled('notes')) return;
+    api.notes.caps().then(c => setSemanticCaps(c.semantic)).catch(() => {});
+  }, []);
   // Глобальный стор «ждём ответа» живёт на потоке статусов сессий, не на ChatPanel:
   // запускаем подписку + первичную загрузку при монтировании хаба (он рендерится везде).
   useEffect(() => { void ensureAiAwaitingLoaded(); }, []);

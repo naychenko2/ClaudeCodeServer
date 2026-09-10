@@ -10,6 +10,7 @@ import type { FileEntry, Session, SyncMark } from '../types';
 import { api } from './api';
 import { isOnline } from './offline';
 import { idbGet, idbSet, idbKeys, idbDelete } from './idb';
+import { isSubsystemEnabled } from './subsystems';
 import { warmNote, drainNotesOutbox } from './notesOffline';
 import { drainTaskOutbox } from './taskOutbox';
 import './tasks';   // side-effect: configureOutbox регистрирует store-хуки очереди задач
@@ -392,6 +393,11 @@ async function loadNoteMtimes(): Promise<Record<string, string>> {
 }
 
 async function warmNotes(): Promise<void> {
+  // Гейт подсистемы: при выключенных заметках не дёргаем /api/notes* — каждый
+  // вызов вернул бы 500 и шумел в консоли (см. Д-4/Д-6 отчёта QA).
+  // Закрываем сам вызов, а не try/catch: пустой прогрев при выключенной
+  // подсистеме бессмысленен.
+  if (!isSubsystemEnabled('notes')) return;
   try {
     const list = await api.notes.list();               // заполнит GET-кэш /notes
     await api.notes.folders().catch(() => {});

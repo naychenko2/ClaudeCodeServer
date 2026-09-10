@@ -3,36 +3,44 @@ import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// Контракт фронт/бэк для поля `subsystems` в `/api/auth/me`.
+// Контракт формы ответа фронт/бэк для ОБОИХ мест, где фронт читает состав
+// подсистем:
+//   1) `/api/auth/me` → поле `subsystems` (гейт `useSubsystem`);
+//   2) `/api/admin/subsystems` → список для админского экрана «Подсистемы».
 //
-// Под Д-1 отчёта QA пилота «отключаемая подсистема Notes»: бэк отдавал
-// `subsystems` массивом активных ключей (`SubsystemStateStore.ActiveKeys()`),
-// а фронт ждал `Record<string, boolean>` и делал `{ ...arr }` — получались
-// числовые ключи `'0','1'…`, и `useSubsystem('notes')` возвращал `false`
-// при включённой подсистеме. Сторожа не было, дефект дошёл до стенда.
+// Почему сторож на форму вообще существует. Дефект Д-1 отчёта QA пилота
+// «отключаемая подсистема Notes»: бэк отдавал `subsystems` массивом активных
+// ключей (`SubsystemStateStore.ActiveKeys()`), а фронт ждал
+// `Record<string, boolean>` и делал `{ ...arr }` — получались числовые ключи
+// `'0','1'…`, и `useSubsystem('notes')` возвращал `false` при включённой
+// подсистеме. Сторожа не было, дефект дошёл до стенда.
 //
-// Тест закрывает регресс формы по двум линиям:
-//   1) AuthController.cs: на строке Me() поле `subsystems = ...` строится
-//      из вызова, возвращающего массив (`subsystems.ActiveKeys()` или
-//      эквивалент — `IReadOnlyList<string>`, `.ToList()`, `.ToArray()`,
-//      литерал-массив). Спред массива на фронте → числовые ключи, потому
-//      НЕ Record-сборка (`Subsystems().ToDictionary(...)`,
-//      `.ActiveKeys().ToDictionary(...)` и пр. — красный).
-//   2) Me.subsystems в `frontend/src/types/index.ts` — `string[]`,
-//      не `Record<string, boolean>`. Подмена типа на Record на фронте
-//      красная.
+// Почему покрыты ДВА эндпоинта, а не один. Сторож, заведённый под Д-1, покрыл
+// только `/api/auth/me` — и ровно тот же класс дефекта тут же повторился
+// в соседнем непокрытом эндпоинте: `SubsystemsController` отдавал голый массив,
+// а `api/subsystems.ts` деструктурировал `({ subsystems })` → `undefined` →
+// экран падал на `.filter` в ErrorBoundary. Отсюда правило: покрыт каждый
+// эндпоинт, из которого фронт читает состав подсистем, обе его стороны.
 //
-// Если кто-то сменит форму на одной стороне и не сменит на другой —
-// минимум одна из линий красная. Постановка задачи требует «краснеть при
-// рассинхроне формы», и этот тест ровно это и делает.
+// Тесты читают ИСХОДНИКИ (C# и TS) как текст: рантайм-проверка потребовала бы
+// поднятого бэка, а нам нужен дешёвый гейт, краснеющий в обычном `npm run test`.
+// Отсюда хрупкость к строковым литералам — она осознанная: постановка каждый
+// раз указывает конкретный файл и конкретное поле.
 
 const here = dirname(fileURLToPath(import.meta.url));
-const authControllerCs = resolve(here, '../../../../backend/ClaudeHomeServer/Controllers/AuthController.cs');
+const backendRoot = resolve(here, '../../../../backend');
+const authControllerCs = resolve(backendRoot, 'ClaudeHomeServer/Controllers/AuthController.cs');
+const subsystemsControllerCs = resolve(backendRoot, 'ClaudeHomeServer/Controllers/SubsystemsController.cs');
+const appSubsystemCs = resolve(backendRoot, 'ClaudeHomeServer.Core/Services/Composition/IAppSubsystem.cs');
 const meTypeTs = resolve(here, '../../types/index.ts');
+const subsystemsApiTs = resolve(here, '../../api/subsystems.ts');
+const subsystemsPageTsx = resolve(here, '../../pages/SubsystemsPage.tsx');
 
 function readFile(path: string): string {
   return readFileSync(path, 'utf-8');
 }
+
+// ───────────────────────── /api/auth/me ─────────────────────────
 
 // В теле метода Me() ищем место, где в ответе кладётся поле `subsystems = …`.
 // Хрупко к строковому литералу, но постановка прямо указывает на этот
@@ -78,7 +86,7 @@ function isArrayForm(expr: string): boolean {
   return /\bActiveKeys\b/.test(e);
 }
 
-describe('контракт subsystems фронт/бэк', () => {
+describe('контракт subsystems фронт/бэк: /api/auth/me', () => {
   it('AuthController.Me кладёт subsystems из массивной формы', () => {
     const src = readFile(authControllerCs);
     const expr = subsystemsAssignmentLine(src);
@@ -104,12 +112,117 @@ describe('контракт subsystems фронт/бэк', () => {
     // покраснеют (выражение перестанет быть массивной формой), но мы
     // дополнительно фиксируем сам сигнатурный контракт: возвращаемый тип
     // должен быть IEnumerable-семейства, не Dictionary.
-    const storeFile = resolve(here, '../../../../backend/ClaudeHomeServer.Core/Services/Composition/IAppSubsystem.cs');
-    const src = readFile(storeFile);
+    const src = readFile(appSubsystemCs);
     const match = src.match(/public\s+IReadOnlyList<string>\s+ActiveKeys\s*\(/);
     expect(match,
       'SubsystemStateStore.ActiveKeys() должен возвращать IReadOnlyList<string> — это и есть ' +
       'источник массива для /api/auth/me.subsystems. Смена на Dictionary ломает контракт.'
     ).not.toBeNull();
+  });
+});
+
+// ─────────────────────── /api/admin/subsystems ───────────────────────
+
+// Аргумент `Ok(...)` в методе List(). Берём первый `return Ok(` файла:
+// контроллер односоставной, другого действия в нём нет.
+function okArgument(src: string): string {
+  const match = src.match(/return\s+Ok\(([\s\S]*?)\);/);
+  expect(match, 'SubsystemsController.cs: ожидался `return Ok(...);` в List()').not.toBeNull();
+  return (match?.[1] ?? '').replace(/\s+/g, ' ').trim();
+}
+
+// Объявленный тип результата действия List().
+function listReturnType(src: string): string {
+  const match = src.match(/public\s+(?:async\s+)?([\w.<>,\s?[\]]+?)\s+List\s*\(/);
+  expect(match, 'SubsystemsController.cs: ожидалось объявление метода List()').not.toBeNull();
+  return (match?.[1] ?? '').replace(/\s+/g, ' ').trim();
+}
+
+// Отдаём ли мы ГОЛЫЙ массив, а не объект-обёртку. Обёртка `Ok(new { subsystems
+// = … })` — ровно тот дефект, который уронил экран: фронт получал массив,
+// а деструктурировал поле (или наоборот).
+function isBareArrayResponse(expr: string): boolean {
+  // Запрет: любая обёртка-объект — анонимная (`new { ... }`), именованная
+  // (`new SubsystemsListResponse(...)`) и литерал.
+  if (/^new\b/.test(expr)) return false;
+  if (/^\{/.test(expr)) return false;
+  // Запрет: присваивание поля внутри аргумента — признак объекта-обёртки
+  // даже без ключевого слова new.
+  if (/\bsubsystems\s*=/i.test(expr)) return false;
+  // Разрешаем: явные коллекционные формы.
+  if (/\bSnapshot\s*\(/.test(expr)) return true;
+  if (/\.ToList\s*\(\s*\)/.test(expr)) return true;
+  if (/\.ToArray\s*\(\s*\)/.test(expr)) return true;
+  if (/^\[/.test(expr)) return true;
+  return false;
+}
+
+// Тип-аргумент вызова `request<…>('/admin/subsystems')` в клиенте.
+function clientRequestTypeArg(src: string): string {
+  const match = src.match(/request<([^>]+(?:<[^>]*>)?[^>]*)>\s*\(\s*['"]\/admin\/subsystems['"]/);
+  expect(match,
+    "api/subsystems.ts: ожидался вызов `request<...>('/admin/subsystems')`"
+  ).not.toBeNull();
+  return (match?.[1] ?? '').replace(/\s+/g, ' ').trim();
+}
+
+// Параметр обработчика `.then(...)` у `subsystemsApi.get()` на экране.
+// Деструктуризация `({ subsystems })` = потребление обёртки; при голом
+// массиве она даёт `undefined` и экран падает на `.filter`.
+//
+// Внешние скобки снимаем: деструктурирующая стрелка ВСЕГДА обёрнута в них
+// (`({ subsystems }) => …`), и без снятия проверка «начинается с `{`»
+// молча пропускала бы ровно ту форму, ради которой заведена.
+function pageThenParam(src: string): string {
+  const match = src.match(/subsystemsApi\s*\.\s*get\s*\(\s*\)\s*\.then\(\s*([^=]+?)\s*=>/);
+  expect(match,
+    'SubsystemsPage.tsx: ожидался `subsystemsApi.get().then(<параметр> => ...)`'
+  ).not.toBeNull();
+  const raw = (match?.[1] ?? '').trim();
+  return raw.startsWith('(') && raw.endsWith(')')
+    ? raw.slice(1, -1).trim()
+    : raw;
+}
+
+describe('контракт subsystems фронт/бэк: /api/admin/subsystems', () => {
+  it('SubsystemsController.List отдаёт голый массив, а не объект-обёртку', () => {
+    const src = readFile(subsystemsControllerCs);
+    const expr = okArgument(src);
+    expect(isBareArrayResponse(expr),
+      `SubsystemsController.List отдавал Ok(${expr}); ` +
+      'контракт — ГОЛЫЙ массив SubsystemInfo (subsystems.Snapshot(config)). ' +
+      'Обёртка вида `new { subsystems = ... }` ломает клиента: `request<Subsystem[]>` ' +
+      'вернёт объект, `.filter` на нём упадёт и унесёт экран в ErrorBoundary.'
+    ).toBe(true);
+  });
+
+  it('SubsystemsController.List объявлен коллекцией, не обёрткой', () => {
+    // Сигнатура — вторая линия обороны: если аргумент Ok() станет
+    // переменной, форму всё равно видно по объявленному типу результата.
+    const decl = listReturnType(readFile(subsystemsControllerCs));
+    expect(decl,
+      `SubsystemsController.List объявлен как ${decl}; ожидалась коллекция ` +
+      '(`ActionResult<IReadOnlyList<SubsystemInfo>>` или эквивалент IEnumerable-семейства). ' +
+      'Обёрточный тип (`ActionResult<object>`, свой response-record) означает смену формы ответа.'
+    ).toMatch(/^ActionResult<\s*(IReadOnlyList|IReadOnlyCollection|IEnumerable|List|SubsystemInfo\[\])/);
+  });
+
+  it('api/subsystems.ts запрашивает массив, а не обёртку', () => {
+    const arg = clientRequestTypeArg(readFile(subsystemsApiTs));
+    expect(arg,
+      `api/subsystems.ts: request<${arg}>('/admin/subsystems') — ожидался массивный тип ` +
+      '(`Subsystem[]` / `Array<Subsystem>` / `readonly Subsystem[]`). ' +
+      'Обёрточный интерфейс (`SubsystemsListResponse` и т. п.) расходится с бэком: ' +
+      'контроллер отдаёт голый массив.'
+    ).toMatch(/^(readonly\s+)?\w+\[\]$|^Array<\w+>$/);
+  });
+
+  it('SubsystemsPage потребляет ответ как список, без деструктуризации обёртки', () => {
+    const param = pageThenParam(readFile(subsystemsPageTsx));
+    expect(param.startsWith('{'),
+      `SubsystemsPage.tsx: .then(${param} => ...) деструктурирует объект-обёртку. ` +
+      'Бэк отдаёт голый массив — деструктуризация даст undefined, и `.filter` уронит ' +
+      'экран в ErrorBoundary (именно так и был потерян экран «Подсистемы»).'
+    ).toBe(false);
   });
 });

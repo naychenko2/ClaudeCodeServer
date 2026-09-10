@@ -33,13 +33,15 @@ export interface Subsystem {
   restartRequired: boolean;
 }
 
-export interface SubsystemsListResponse {
-  subsystems: Subsystem[];
-}
-
 export const subsystemsApi = {
   // Список подсистем инстанса с их настройками и фактическим состоянием.
   // GET без оптимистичной логики: страница открылась — пользователь увидел
   // ровно то, что отдаёт сервер, без локальных догадок.
-  get: () => request<SubsystemsListResponse>('/admin/subsystems'),
+  //
+  // Форма ответа — ГОЛЫЙ МАССИВ: `SubsystemsController.List()` возвращает
+  // `Ok(subsystems.Snapshot(config))` без обёртки-объекта. Обёртка
+  // `{ subsystems: [...] }` здесь уже была и стоила экрана: деструктуризация
+  // `({ subsystems })` давала `undefined`, и страница падала на `.filter`.
+  // Форму обеих сторон держит сторож `lib/__tests__/subsystems.contract.test.ts`.
+  get: () => request<Subsystem[]>('/admin/subsystems'),
 } as const;

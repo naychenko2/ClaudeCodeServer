@@ -65,9 +65,17 @@ export function SubsystemsPage({ onClose }: Props) {
   useEffect(() => {
     let cancelled = false;
     subsystemsApi.get()
-      .then(({ subsystems }) => {
+      .then(list => {
         if (cancelled) return;
-        setSubsystems(subsystems);
+        // Форма ответа — голый массив. Проверка `Array.isArray` не косметика:
+        // при рассинхроне контракта экран обязан показать «не удалось
+        // загрузить», а не падать в общий ErrorBoundary, унося весь интерфейс
+        // до перезагрузки страницы.
+        if (!Array.isArray(list)) {
+          setLoadState('error');
+          return;
+        }
+        setSubsystems(list);
         setLoadState('ok');
       })
       .catch(() => { if (!cancelled) setLoadState('error'); });

@@ -2772,17 +2772,18 @@ public class TeamWaveServiceTests : IDisposable
         return (running, backend, frontend);
     }
 
-    // ─── DropSubtaskAsync (волна 1 team-blocker-honest, дефект f3965801) ─────────
+    // ─── DropSubtaskAsync (фикс-волна 4 team-blocker-honest, доработка f3965801) ───
     // Кнопка «Снять задачу у исполнителя» на карточке эскалации должна:
-    // (а) остановить ход исполнителя ТЕМ ЖЕ путём, что TaskExecutionService ставит
-    // пометку «исполнитель встал» (MarkExecutorStopped) — иначе диалог врёт «исполнитель
-    // получит отбой», а ход продолжается; (б) поставить DroppedByHumanAt — маркер
-    // для защиты TaskManager.Update от позднего tasks_complete (см. TaskManagerTests).
-    // Мутация для проверки: убрать MarkExecutorStopped в DropSubtaskAsync — тест
-    // сразу падает на ExecutorStoppedAt==null; убрать MarkDroppedByHuman — падает
-    // на DroppedByHumanAt==null. MakeRunningStabAsync не раздаёт под-задачи
-    // (TaskId остаётся null), поэтому задачу создаём вручную — это та же ветка
-    // кода, что зовётся из раздачи в RespondTeamPlanAsync.
+    // (а) РЕАЛЬНО остановить ход исполнителя через InterruptTurn (фикс-волна 4 — прежняя
+    // версия звала только MarkExecutorStopped, и ход CLI исполнителя жил дальше, пока
+    // HasLiveDelegatedTask уже ложен — расхождение состояния в общем worktree); порядок
+    // обязателен «прервать → дождаться простоя → пометить»;
+    // (б) поставить DroppedByHumanAt — маркер для защиты TaskManager.Update от позднего
+    // tasks_complete (см. TaskManagerTests).
+    // Мутация для проверки: убрать блок прерывания в DropSubtaskAsync — мок-интейк
+    // покажет Verify(Times.Never); переставить прерывание после Update — тест на
+    // порядок «прервать → дождаться → пометить» упадёт. MakeRunningStabAsync не
+    // раздаёт под-задачи (TaskId остаётся null), поэтому задачу создаём вручную.
 
     private TaskItem MakeSubtaskForStab(Session stab, string title = "Под-задача")
     {
@@ -2794,12 +2795,18 @@ public class TeamWaveServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task DropSubtaskAsync_ОстанавливаетИсполнителяИПомечаетСнятие()
+    public async Task DropSubtaskAsync_ПрерываетХодИПомечаетСнятие()
     {
         var (stab, _) = await MakeRunningStabAsync("drop-subtask-honest");
         var subtask = MakeSubtaskForStab(stab);
-        // Имитация активного исполнителя: LinkedSessionId + ClaudeStartedAt
-        _tasks.MarkClaudeStarted(subtask.Id, "executor-session-1", DateTime.UtcNow);
+        // Подменяем intake на мок, чтобы проверить факт вызова InterruptTurn
+        var intakeMock = new Mock<ClaudeHomeServer.Services.Team.ITeamTurnIntake>();
+        _sut.IntakeForTestOverride = intakeMock.Object;
+        // Создаём реального исполнителя в Working — IsExecutorBusy читает _dir.Get(sid),
+        // а тот возвращает null для несуществующей сессии. Без живой сессии прерывание
+        // не зовётся (проверка IsExecutorBusy делает гард «некого прерывать»), и тест
+        // ловит это как ложный зелёный — поэтому поднимаем настоящего ребёнка.
+        var executor = await AttachExecutorAsync(subtask, stab, liveTurn: false, busyStatus: true);
         // HasLiveDelegatedTasks для TryResolveBlockerByFactAsync — функция из TaskExecutionService
         _sessions.HasLiveDelegatedTasks = id => _tasks.GetById(id) is { } t
             && t.SourceSessionId == stab.Id
@@ -2810,6 +2817,12 @@ public class TeamWaveServiceTests : IDisposable
 
         await _sut.DropSubtaskAsync(subtask.Id, "Снято решением человека по карточке остановки (drop).");
 
+        // Прерывание реально вызвано (доказательство мутацией: убрать блок InterruptTurn
+        // в DropSubtaskAsync — Verify ниже упадёт с Times.Never)
+        intakeMock.Verify(
+            i => i.InterruptTurn(executor.Id),
+            Times.Once,
+            "DropSubtaskAsync обязан вызвать InterruptTurn у живого исполнителя — иначе диалог «отбой» врёт");
         var after = _tasks.GetById(subtask.Id)!;
         after.Status.Should().Be(TaskItemStatus.Done, "штаб ставит Done через Update");
         after.Outcome.Should().Be(DefectOutcome.ClosedWithoutCheck,
@@ -2817,28 +2830,60 @@ public class TeamWaveServiceTests : IDisposable
         after.DroppedByHumanAt.Should().NotBeNull(
             "пометка снятия — обязательна для защиты от позднего tasks_complete");
         after.ExecutorStoppedAt.Should().NotBeNull(
-            "пометка «исполнитель встал» — иначе диалог врёт «получит отбой»");
+            "пометка «исполнитель встал» ставится ПОСЛЕ прерывания и дождадания простоя");
         after.ExecutorStopReason.Should().Contain("drop",
             "причина должна объяснять, кто снял и почему — иначе карточка задачи теряет смысл");
     }
 
     [Fact]
-    public async Task DropSubtaskAsync_БезАктивногоИсполнителяНеПадает()
+    public async Task DropSubtaskAsync_БезАктивногоИсполнителяНеЗовётПрерывание()
     {
-        // Граница: задача создана, исполнитель не запускался. DropSubtaskAsync
-        // не должен падать, защита от затирания всё равно стоит. Пометка остановки
-        // ставится безусловно (IsTerminal(reason)=true), но это не ошибка — карточка
-        // задачи тогда говорит «штаб снял» независимо от того, был ли запущен ход.
+        // Граница: задача создана, исполнитель не запускался. IsExecutorBusy==false,
+        // InterruptTurn НЕ вызывается — помечать некого, а MarkExecutorStopped всё равно
+        // поставит пометку (IsTerminal(reason)=true). Карточка задачи тогда говорит «штаб снял»
+        // независимо от того, был ли запущен ход.
         var (stab, _) = await MakeRunningStabAsync("drop-subtask-noexec");
         var subtask = MakeSubtaskForStab(stab);
+        var intakeMock = new Mock<ClaudeHomeServer.Services.Team.ITeamTurnIntake>();
+        _sut.IntakeForTestOverride = intakeMock.Object;
         _sessions.HasLiveDelegatedTasks = _ => false;
 
         await _sut.DropSubtaskAsync(subtask.Id, "Снято решением человека.");
 
+        intakeMock.Verify(
+            i => i.InterruptTurn(It.IsAny<string>()),
+            Times.Never,
+            "некому прерывать — InterruptTurn не должен вызываться");
         var after = _tasks.GetById(subtask.Id)!;
         after.Status.Should().Be(TaskItemStatus.Done);
         after.DroppedByHumanAt.Should().NotBeNull();
         after.ExecutorStopReason.Should().Contain("drop");
+    }
+
+    [Fact]
+    public async Task DropSubtaskAsync_ПомечаетСнятиеПослеПрерыванияНеРаньше()
+    {
+        // Порядок «прервать → дождаться → пометить»: пока InterruptTurn не снял занятость,
+        // DropSubtaskAsync не должен успеть выставить DroppedByHumanAt раньше прерывания.
+        // Ловим через Callback мока: к моменту вызова InterruptTurn DroppedByHumanAt ещё
+        // не стоит (иначе порядок сломан — пометка появилась бы «раньше времени»).
+        var (stab, _) = await MakeRunningStabAsync("drop-subtask-order");
+        var subtask = MakeSubtaskForStab(stab);
+        bool droppedAtInterrupt = false;
+        var intakeMock = new Mock<ClaudeHomeServer.Services.Team.ITeamTurnIntake>();
+        intakeMock.Setup(i => i.InterruptTurn(It.IsAny<string>()))
+            .Callback(() =>
+                droppedAtInterrupt = _tasks.GetById(subtask.Id)?.DroppedByHumanAt is not null);
+        _sut.IntakeForTestOverride = intakeMock.Object;
+        var executor = await AttachExecutorAsync(subtask, stab, liveTurn: false, busyStatus: true);
+        _sessions.HasLiveDelegatedTasks = _ => true;
+
+        await _sut.DropSubtaskAsync(subtask.Id, "Снято.");
+
+        droppedAtInterrupt.Should().BeFalse(
+            "к моменту прерывания пометка DroppedByHumanAt ещё не стоит — иначе порядок сломан");
+        _tasks.GetById(subtask.Id)!.DroppedByHumanAt.Should().NotBeNull(
+            "после возврата из DropSubtaskAsync пометка на месте");
     }
 
     // Планировщик-заглушка: отдаёт заранее заданный JSON-план вместо вызова модели

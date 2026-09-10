@@ -1,5 +1,4 @@
-﻿using ClaudeHomeServer.Controllers;
-using ClaudeHomeServer.Services.Composition;
+﻿using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Tasks;
@@ -67,6 +66,12 @@ public class TeamWaveService
     // Переходы волны идут из двух независимых потоков (колбэк завершения задачи и сторож),
     // поэтому «кто закрывает волну» решается под этим локом, а не проверкой состояния на глаз.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> _waveLocks = new();
+
+    // Тестовое прерывание: подменить intake на мок и проверить факт вызова
+    // InterruptTurn (и порядок «прервать → дождаться → пометить»). В проде всегда null
+    // и идёт через _sessions.
+    internal ITeamTurnIntake? IntakeForTestOverride { get; set; }
+    private ITeamTurnIntake Intake => IntakeForTestOverride ?? _intake;
 
     public TeamWaveService(SessionManager sessions, TaskManager tasks, IProjectManager projects,
         ISessionBroadcaster broadcaster, ILogger<TeamWaveService> log,
@@ -386,14 +391,27 @@ public class TeamWaveService
     // закрыться до ручного tasks_complete, а «Пропустить»/«Снять» на карточке ничего не делали.
     //
     // Волна 1 team-blocker-honest, дефект f3965801: после снятия по карточке обязательно
-    // а) останавливаем ход исполнителя (MarkExecutorStopped — та же точка, что у
-    // TaskExecutionService.HandleExecutorStoppedAsync, чтобы «исполнитель получит отбой»
-    // из диалога не было враньём), и б) ставим DroppedByHumanAt, который блокирует
-    // поздний tasks_complete от затирания пометки снятия штатным отчётом.
+    // а) останавливаем ход исполнителя (InterruptTurn + WaitExecutorIdle, чтобы «исполнитель
+    // получит отбой» из диалога не было враньём; доработка f3965801 в фикс-волне 4 — прежняя
+    // версия звала только MarkExecutorStopped, и ход CLI исполнителя жил дальше, пока
+    // HasLiveDelegatedTask уже ложен — расхождение состояния), и б) ставим DroppedByHumanAt,
+    // который блокирует поздний tasks_complete от затирания пометки снятия штатным отчётом.
     internal async Task DropSubtaskAsync(string taskId, string reason)
     {
         var task = _tasks.GetById(taskId);
         if (task is null) return;
+        // Реальное прерывание хода: если исполнитель ещё жив (LinkedSessionId и сессия в
+        // стартовом/рабочем/ждущем состоянии) — Intake.InterruptTurn шлёт сигнал остановки,
+        // WaitExecutorIdle дожидается, пока статус уйдёт. Порядок обязателен: сначала
+        // дождаться простоя, и только потом MarkExecutorStopped/Update — иначе остаётся
+        // окно, где штаб уже не ждёт, а исполнитель ещё правит файлы общего worktree.
+        // Не запускавшийся исполнитель не числится занятым — пропускаем (штатный случай,
+        // пометка ExecutorStoppedAt всё равно встанет через MarkExecutorStopped ниже).
+        if (task.LinkedSessionId is { } linkedId && IsExecutorBusy(task))
+        {
+            Intake.InterruptTurn(linkedId);
+            await WaitExecutorIdleAsync(() => IsExecutorBusy(task), TimeSpan.FromSeconds(10));
+        }
         // Деградация дефекта: снятие волной штаба закрывает карточку без отдельной проверки —
         // Outcome=ClosedWithoutCheck снимает гейт DefectRules.EnsureVerificationOnClose
         var updated = _tasks.Update(taskId, new UpdateTaskRequest(
@@ -405,10 +423,9 @@ public class TeamWaveService
         // штаба, а пометка снятия осталась бы не выста влена (TaskManager.Update видит
         // только своё состояние). MarkDroppedByHuman двигает UpdatedAt и бьёт Save.
         var markedDropped = _tasks.MarkDroppedByHuman(taskId, DateTime.UtcNow) ?? updated;
-        // Отбой исполнителя: если ход шёл — ставим ExecutorStoppedAt/Reason тем же
-        // путём, что TaskExecutionService.HandleExecutorStoppedAsync. Причина — терминальная
+        // Отбой исполнителя: ставим ExecutorStoppedAt/Reason тем же путём, что
+        // TaskExecutionService.HandleExecutorStoppedAsync. Причина — терминальная
         // (ExecutorStopClassifier.IsTerminal=true), значит MarkExecutorStopped примет.
-        // null для не-запускавшейся задачи — MarkExecutorStopped вернёт её как есть.
         var stopReason = "Снято решением человека по карточке блокера (drop)";
         var stopped = _tasks.MarkExecutorStopped(taskId, DateTime.UtcNow, stopReason)
             ?? markedDropped;

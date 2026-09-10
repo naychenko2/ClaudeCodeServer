@@ -47,7 +47,8 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
     // (ClaudeSession.LastContextTokens) теряется при обрыве хода до assistant-сообщения, рестарте
     // сервера и холодном старте чата; последнее StoredResultMessage.ContextTokens переживает и то,
     // и другое. null (тесты без DI) — фолбэк на историю выключен, оценка идёт только живая.
-    private readonly ChatHistoryService? _chatHistory;
+    // Шов IChatHistoryLoader, а не ChatHistoryService: Llm читает историю, но не пишет её.
+    private readonly IChatHistoryLoader? _chatHistory;
     // Логгер фолбэк-оркестрации: без него подмены нечем отлаживать (что
     // классифицировали, куда переключились, почему кандидат отвергнут). null в тестах
     // без DI — адаптер пишет в Console.Error, чтобы не терять диагностику совсем.
@@ -71,7 +72,7 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         FallbackSettingsStore? fallbackSettings = null,
         ProviderHealthRegistry? health = null,
         ContextCapacityRegistry? capacity = null,
-        ChatHistoryService? chatHistory = null,
+        IChatHistoryLoader? chatHistory = null,
         ILogger<LlmSessionAdapterFactory>? log = null,
         IEgressProbe? egress = null,
         ILocalEndpointProbe? localProbe = null,

@@ -60,7 +60,7 @@ public class SessionMessageObserverTests
         var observer = new SessionMessageObserver(sessions);
 
         var calls = 0;
-        Func<string?, ServerMessage, Task> handler = (_, _) =>
+        Func<Session, ServerMessage, Task> handler = (_, _) =>
         {
             Interlocked.Increment(ref calls);
             return Task.CompletedTask;
@@ -84,9 +84,9 @@ public class SessionMessageObserverTests
         var observer = new SessionMessageObserver(sessions);
 
         string? receivedProjectId = null;
-        Func<string?, ServerMessage, Task> handler = (projectId, _) =>
+        Func<Session, ServerMessage, Task> handler = (session, _) =>
         {
-            receivedProjectId = projectId;
+            receivedProjectId = session.ProjectId;
             return Task.CompletedTask;
         };
         observer.Attach(handler);

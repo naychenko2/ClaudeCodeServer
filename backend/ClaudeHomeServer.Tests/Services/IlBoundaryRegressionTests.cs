@@ -43,7 +43,14 @@ public class IlBoundaryRegressionTests
             ("DeployHost → GitService", "ClaudeHomeServer.Services.Deploy.DeployHost", "ClaudeHomeServer.Services.Git.GitService"),
             ("DeployHost → Backup.InstanceLock", "ClaudeHomeServer.Services.Deploy.DeployHost", "ClaudeHomeServer.Services.Backup.InstanceLock"),
             ("ReaderService → SsrfGuard", "ClaudeHomeServer.Services.Reader.ReaderService", "ClaudeHomeServer.Services.SsrfGuard"),
-            ("Memory → SessionSummaryService", "ClaudeHomeServer.Services.Memory.PersonaMemoryAutolearnService", "ClaudeHomeServer.Services.SessionSummaryService"),
+            // Этап 5, волна 3: прежняя проба этой строки — `Memory → SessionSummaryService` —
+            // умерла вместе со швом: чистая функция сборки транскрипта переехала из корня
+            // `Services/` в спину (`Services.SessionTranscript`), потому что после выноса
+            // Memory в отдельную сборку обращение к Main не собиралось вовсе. Проба
+            // проверяет ВИДИМОСТЬ IL-скана, а не политику границ, поэтому цель в Core
+            // годится ровно так же: форма та же — статический вызов из тела метода того же
+            // исходного типа, и подмена обхода тел по-прежнему красит тест.
+            ("Memory → SessionTranscript", "ClaudeHomeServer.Services.Memory.PersonaMemoryAutolearnService", "ClaudeHomeServer.Services.SessionTranscript"),
             ("Execution → TranscriptRoots", "ClaudeHomeServer.Services.Execution.DockerProcessRunner", "ClaudeHomeServer.Services.TranscriptRoots"),
             ("Llm → SpecialtyCatalog", "ClaudeHomeServer.Services.Llm.SpecialtySettingsStore", "ClaudeHomeServer.Services.SpecialtyCatalog"),
         };

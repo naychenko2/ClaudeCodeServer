@@ -17,6 +17,12 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.Spend.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- Moq для тестов: разрешаем проксировать internal-швы (ITeamTurnIntake и др.)
+         через DynamicProxyGenAssembly2 (фикс-волна 4 team-blocker-honest: нужен мок
+         intake для доказательства факта прерывания хода в DropSubtaskAsync). -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>DynamicProxyGenAssembly2</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
 

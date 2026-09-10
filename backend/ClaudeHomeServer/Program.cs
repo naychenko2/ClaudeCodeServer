@@ -224,6 +224,13 @@ builder.Services.AddSingleton<IPreviewTokenValidator, JwtValidatorGateway>();
 // получает только `IsEnabled`, без каталога определений и записи.
 builder.Services.AddSingleton<IModuleFeatureFlagReader, FeatureFlagGateway>();
 builder.Services.AddSingleton<ICommitLogReader, CommitLogReader>();
+// Узкий шов инспекции коммитов (Этап 5, волна 2, разрез Dossiers↔Git): потребитель —
+// Dossiers (DossierCaptureService/DossierRecallService), 5 методов инспекции коммитов.
+// Реализация — `GitCommitInspector` (Main, тонкий форвардер на `GitService` из Core.
+// Git — вынесенная вертикаль с собственным синглтоном; форвардер через тот же
+// `sp.GetRequiredService<GitService>()`, что и `IGitRefSnapshotStore` ниже в GitSubsystem.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Git.IGitCommitInspector,
+    ClaudeHomeServer.Services.Git.GitCommitInspector>();
 // CodeGraph: граф зависимостей кода — DI в подсистеме `CodeGraphSubsystem`
 // (волна 2, первая с пост-билд фазой: регистрирует языковые провайдеры в ConfigureApp).
 builder.Services.AddSingleton<ProjectGroupManager>();

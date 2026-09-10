@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.CodeGraph;
+using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Services.Tasks;
 
@@ -26,7 +27,8 @@ namespace ClaudeHomeServer.Services.Dossiers;
 public class DossierRecallService(
     DossierStore store,
     TaskManager? tasks = null,
-    Git.GitService? git = null,
+    IGitRefSnapshotStore? gitSnapshots = null,
+    IGitCommitInspector? gitInspect = null,
     CodeGraphService? codeGraph = null,
     ILogger<DossierRecallService>? log = null)
 {
@@ -376,15 +378,15 @@ public class DossierRecallService(
 
     protected virtual async Task<string?> ResolveHeadAsync(string ownerId, string root)
     {
-        if (git is null || !Git.GitService.IsGitRepo(root)) return null;
-        return await git.LocalTipAsync(ownerId, root, "HEAD");
+        if (gitSnapshots is null || !GitRepo.IsRepo(root)) return null;
+        return await gitSnapshots.LocalTipAsync(ownerId, root, "HEAD");
     }
 
     protected virtual async Task<string?> GitLogNumstatAsync(
         string ownerId, string root, string sha, IReadOnlyList<string> files)
     {
-        if (git is null || !Git.GitService.IsGitRepo(root)) return null;
-        return await git.LogNumstatRangeAsync(ownerId, root, sha, files);
+        if (gitInspect is null || !GitRepo.IsRepo(root)) return null;
+        return await gitInspect.LogNumstatRangeAsync(ownerId, root, sha, files);
     }
 
     // Живые FQN типов из снимка графа дерева; null — снимка нет (символьный статус не считаем)

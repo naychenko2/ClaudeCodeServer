@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Tasks;
 
@@ -43,7 +44,8 @@ public sealed class DossierCaptureService : BackgroundService
     private readonly IProjectManager _projects;
     private readonly TaskManager _tasks;
     private readonly FileService _files;
-    private readonly Git.GitService _git;
+    private readonly IGitRefSnapshotStore _gitSnapshots;
+    private readonly IGitCommitInspector _gitInspect;
     private readonly DossierStore _store;
     private readonly DossierCaptureState _state;
     private readonly ICheapTextRunner _cheap;
@@ -54,7 +56,8 @@ public sealed class DossierCaptureService : BackgroundService
 
     public DossierCaptureService(ISessionDirectory sessions, ISessionMessageObserver sessionObserver,
         IProjectManager projects, TaskManager tasks,
-        FileService files, Git.GitService git, DossierStore store, DossierCaptureState state,
+        FileService files, IGitRefSnapshotStore gitSnapshots, IGitCommitInspector gitInspect,
+        DossierStore store, DossierCaptureState state,
         ICheapTextRunner cheap, CodeGraph.CodeGraphService codeGraph,
         InstanceSecretsProvider secrets, IConfiguration config, ILogger<DossierCaptureService> log)
     {
@@ -63,7 +66,8 @@ public sealed class DossierCaptureService : BackgroundService
         _projects = projects;
         _tasks = tasks;
         _files = files;
-        _git = git;
+        _gitSnapshots = gitSnapshots;
+        _gitInspect = gitInspect;
         _store = store;
         _state = state;
         _cheap = cheap;
@@ -147,7 +151,7 @@ public sealed class DossierCaptureService : BackgroundService
 
     public async Task TickRootAsync(Project project, string root)
     {
-        if (!Git.GitService.IsGitRepo(root)) return;
+        if (!GitRepo.IsRepo(root)) return;
         var ownerId = project.OwnerId!;
         var key = DossierCaptureState.RootKey(ownerId, project.Id, root);
 
@@ -241,7 +245,7 @@ public sealed class DossierCaptureService : BackgroundService
     // после gc тоже не «ancestor»). Ошибка вызова git (таймаут/сеть) → консервативно true
     // (достижим): ложный отказ от переякорения безопаснее ложного слияния двух паспортов.
     private Task<bool> IsReachableAsync(string ownerId, string root, string sha) =>
-        _git.IsAncestorAsync(ownerId, root, sha, "HEAD");
+        _gitInspect.IsAncestorAsync(ownerId, root, sha, "HEAD");
 
     private async Task CaptureNewAsync(Project project, string root, string ownerId, Session session,
         string? taskId, GitCommitRaw commit)
@@ -352,7 +356,7 @@ public sealed class DossierCaptureService : BackgroundService
     }
 
     private Task<string> GetDiffStatAsync(string ownerId, string root, string sha) =>
-        _git.CommitStatAsync(ownerId, root, sha);
+        _gitInspect.CommitStatAsync(ownerId, root, sha);
 
     // Реплики хода отбираются по времени коммита, а не «последние N»: сессия живёт сутками и
     // ведёт несколько дел подряд, и хвост подобрал бы соседнее (блокер «зачем про чужое дело»).
@@ -449,7 +453,7 @@ public sealed class DossierCaptureService : BackgroundService
         {
             // Общий приём git show --name-only живёт в GitService (им же пользуется
             // детект коммита для атрибуции файлов чатам — CommitAttributionService)
-            return [.. await _git.ChangedFilePathsAsync(ownerId, root, sha)];
+            return [.. await _gitInspect.ChangedFilePathsAsync(ownerId, root, sha)];
         }
         catch (Exception ex) { _log.LogDebug(ex, "dossiers: git show --name-only {Sha}", sha); }
         return [];
@@ -460,7 +464,7 @@ public sealed class DossierCaptureService : BackgroundService
     // типу не ловятся. %P — родительские sha через пробел (0 = корневой, 1 = обычный, 2+ = merge).
     // Ошибка вызова → консервативно 1 (обычный): ложный паспорт на merge безопаснее потери коммита.
     private Task<int> GetParentCountAsync(string ownerId, string root, string sha) =>
-        _git.ParentCountAsync(ownerId, root, sha);
+        _gitInspect.ParentCountAsync(ownerId, root, sha);
 
     private async Task<List<string>> AnchorSymbolsAsync(string root, List<string> files, string ownerId)
     {

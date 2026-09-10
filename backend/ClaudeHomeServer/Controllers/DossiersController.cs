@@ -139,7 +139,7 @@ public class DossiersController(ProjectManager projects, DossierStore store,
         var p = Owned(id);
         if (p is null) return NotFound();
 
-        var isGitRepo = GitService.IsGitRepo(p.RootPath);
+        var isGitRepo = GitRepo.IsRepo(p.RootPath);
         return Ok(new
         {
             isGitRepo,

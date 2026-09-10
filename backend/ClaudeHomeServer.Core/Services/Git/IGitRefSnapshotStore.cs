@@ -7,19 +7,39 @@ public sealed record GitRefIdentity(
     string AuthorName, string AuthorEmail,
     string CommitterName, string CommitterEmail);
 
-// Узкий интерфейс работы с произвольной веткой-паспортом (commit-on-plumbing): запись
-// полного дерева, резолв рефа локально или в origin, чтение списка файлов и содержимого,
-// tip с автором, push. Реализация — GitService: там же `RunAsync`/`RunOkAsync`, per-repo
-// `SemaphoreSlim`, `HostGitPath` и CAS-логика через `update-ref old new`.
+// Контракт ветки-паспорта. Объявлен в Core (а не в ClaudeHomeServer.Git/Services/Git/)
+// по той же причине, что и шина событий хода TurnEventContracts (ADR-013): контракт
+// ДОЛЖЕН жить там, где его читают потребители. Вертикали, ведущие свою ветку-паспорт
+// (Dossiers — `ccs/dossiers/v1`), объявляют имя рефа и идентичность коммита как
+// собственные константы (см. DossierBranch) и зовут методы с ними в качестве аргументов.
+// Ветка не принадлежит GitService — это generic plumbing-приём.
 //
-// Идентичность коммита (`GitRefIdentity`), файл снапшота (`GitSnapshotFile`), итог записи
-// (`GitRefSnapshotResult`) и tip ветки (`GitRefTip`) — публичные record-типы самого
-// GitService (рядом с `GitCredentials`); контракт держится вместе, чтобы вертикаль-потребитель
-// видела аргументы и возвращаемые значения единым блоком.
+// Реализация — `GitService : IGitRefSnapshotStore` в ClaudeHomeServer.Git (вертикаль).
+// Без переноса контракта в Core любая вертикаль, которой нужен generic plumbing
+// (Dossiers, и в будущем — другие «ветки-паспорта»), получала бы запрещённую сторожем
+// границ связь «вертикаль → вертикаль» через ссылку на тип из Services.Git. Здесь же
+// контракт лежит в спине (Core) и доступен всем, кто зависит только от Core.
 //
-// Вертикали, ведущие свою ветку-паспорт, объявляют имя рефа и идентичность коммита
-// как собственные константы (см. DossierBranch в Dossiers) и зовут методы с ними в
-// качестве аргументов. Ветка не принадлежит GitService — это generic plumbing-приём.
+// Сопутствующие record-типы (`GitRefIdentity`, `GitRefTip`, `GitRefSnapshotResult`,
+// `GitCredentials`, `GitSnapshotFile`) — публичные типы, упомянутые в контракте.
+// Держатся вместе с интерфейсом, чтобы вертикаль-потребитель видела аргументы и
+// возвращаемые значения единым блоком.
+
+// Креды HTTP-remote (Forgejo): логин + персональный токен пользователя
+public sealed record GitCredentials(string Username, string Token);
+
+// Файл снапшота ветки-паспорта: путь внутри ветки + текстовое содержимое. При дубле пути
+// в наборее побеждает последняя запись (update-index перезапишет запись индекса).
+public sealed record GitSnapshotFile(string Path, string Content);
+
+// Итог записи ветки-паспорта: Created=false — дерево снапшота совпало с последним
+// коммитом ветки и новый коммит не создавался; CommitSha — tip ветки в обоих случаях.
+public sealed record GitRefSnapshotResult(bool Created, string CommitSha);
+
+// Tip ветки-паспорта: реф, коммит, автор и дата последнего коммита — происхождение данных
+// при обратном чтении ветки (импорт «Историй решений»).
+public sealed record GitRefTip(string Ref, string CommitSha, string Author, DateTimeOffset Date);
+
 public interface IGitRefSnapshotStore
 {
     // Записать ПОЛНЫЙ снапшот файлов в ветку строго через плюминг (hash-object → временный

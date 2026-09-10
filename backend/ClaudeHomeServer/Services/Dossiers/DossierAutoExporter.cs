@@ -101,7 +101,7 @@ public sealed class DossierAutoExporter : IHostedService
             if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.ChangeDossiersRecall)) return;
             var project = _projects.GetById(projectId);
             if (project is null || project.OwnerId != ownerId) return;
-            if (!GitService.IsGitRepo(project.RootPath)) return;
+            if (!GitRepo.IsRepo(project.RootPath)) return;
 
             // Гейт «ветка заведомо наша» (вариант «б» вердикта консилиума): снапшот
             // собирается только из своих паспортов, поэтому чужой tip он молча стёр бы,

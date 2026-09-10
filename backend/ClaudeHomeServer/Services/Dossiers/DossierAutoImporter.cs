@@ -89,7 +89,7 @@ public sealed class DossierAutoImporter : BackgroundService
     {
         if (!project.AutoImportDossiers || project.OwnerId is not { } ownerId) return;
         if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.ChangeDossiersRecall)) return;
-        if (!GitService.IsGitRepo(project.RootPath)) return;
+        if (!GitRepo.IsRepo(project.RootPath)) return;
 
         // Tip того рефа, из которого импортировал бы ручной вызов (локальная ветка, при
         // её отсутствии — remote-tracking после pull): наблюдение и источник импорта не

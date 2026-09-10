@@ -1804,6 +1804,17 @@ public class SubsystemBoundaryTests
         // вертикаль Spend. Реализация `SpendStore : ISpendCollector` остаётся
         // в Main (Services/Spend) — пока сам Spend не вынесен в свой csproj.
         "ClaudeHomeServer.Services.Spend",
+        // Этап 5, волна 2 (Memory↔Dossiers↔Git): IGitRefSnapshotStore + 5 record-типов
+        // (GitRefIdentity/GitRefTip/GitRefSnapshotResult/GitCredentials/GitSnapshotFile)
+        // переехали из вертикали Git в Core — узкий контракт generic plumbing ветки-паспорта,
+        // по которому несколько потребителей могут иметь свою ветку (Dossiers и в будущем —
+        // другие «ветки-паспорта»). Без переноса контракт жил бы ВНУТРИ вертикали Git и любая
+        // вертикаль-потребитель получала бы запрещённую сторожем границ связь. Дополнительно —
+        // IGitCommitInspector (5 методов инспекции коммитов, один потребитель Dossiers) и
+        // GitRepo.IsRepo (статика, примитив спины по образцу SafePath.Join). Реализация
+        // контракта — GitService в вынесенной вертикали Git; форвардеры (GitCommitInspector)
+        // живут в Main как тонкие прокладки.
+        "ClaudeHomeServer.Services.Git",
         // Этап 5, волна 5 (Knowledge): узкий Core-шов IDifyMetrics (ProjectKnowledgeSyncService
         // больше не ссылается на ServerMetrics/Main напрямую) + DifyErrorCategorizer
         // (43 строки чистой функции, нужны и Knowledge, и Memory, обе вертикали).

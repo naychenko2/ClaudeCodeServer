@@ -1,4 +1,4 @@
-using System.Reflection;
+﻿using System.Reflection;
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.Services.Turn;
 
@@ -13,11 +13,15 @@ namespace ClaudeHomeServer.Tests.Services;
 //      коммитом; иначе CI красный.
 public sealed class TurnEventsMapContractTests
 {
-    private static readonly string EventNamespace = typeof(ITurnNotification).Namespace!;
+    private static readonly string EventNamespace = typeof(PromptAssembling).Namespace!;
 
     private static IEnumerable<Type> EnumerateEventTypes()
     {
-        var asm = typeof(ITurnNotification).Assembly;
+        // Якорь берём по СОБЫТИЮ из вертикали, а не по интерфейсу: контракты шины
+        // (ITurnNotification/ITurnFilter) живут в Core (ADR-013), а сами события —
+        // в ClaudeHomeServer.Turn. По интерфейсу мы получили бы сборку Core, где
+        // событий нет, и тест прошёл бы вхолостую на пустом множестве.
+        var asm = typeof(PromptAssembling).Assembly;
         return asm.GetTypes()
             .Where(t => !t.IsAbstract
                 && !t.IsGenericTypeDefinition

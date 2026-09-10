@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Memory;
@@ -24,9 +25,10 @@ public sealed class PersonaRecallContributor : IPromptSectionContributor
     // Узкие швы вместо вертикалей (Этап 5): память персоны — ровно BuildRecallAsync плюс
     // признак «подключён ли канал паспортов», которым заменена прежняя вторая ссылка
     // на Dossiers.DossierRecallService (её держали только ради проверки на null).
+    // Флаги — IFeatureFlagGate (Composition), история — IChatHistoryLoader.
     private readonly IPersonaRecallSource _recall;
-    private readonly FeatureFlagService _flags;
-    private readonly ChatHistoryService _history;
+    private readonly IFeatureFlagGate _flags;
+    private readonly IChatHistoryLoader _history;
     private readonly IProjectManager _projects;
     private readonly IConfiguration _config;
     private readonly ILogger<PersonaRecallContributor> _log;
@@ -38,8 +40,8 @@ public sealed class PersonaRecallContributor : IPromptSectionContributor
 
     public PersonaRecallContributor(
         IPersonaRecallSource recall,
-        FeatureFlagService flags,
-        ChatHistoryService history,
+        IFeatureFlagGate flags,
+        IChatHistoryLoader history,
         IProjectManager projects,
         IConfiguration config,
         ILogger<PersonaRecallContributor> log)

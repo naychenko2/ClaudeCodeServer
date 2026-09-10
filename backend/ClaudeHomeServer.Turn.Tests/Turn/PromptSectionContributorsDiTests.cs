@@ -328,6 +328,13 @@ public class PromptSectionContributorsDiTests
             // напрямую. Адаптеры — те же, что в Program.cs.
             services.AddSingleton<IAgentPromptSource, AgentPromptSourceAdapter>();
             services.AddSingleton<ITeamMechanicsBlockSource, TeamMechanicsBlockAdapter>();
+            // Этап 5 (Turn): ещё 4 узких шва, чтобы Turn зависел только от Core.
+            // В тесте — те же форвардеры на корневые сервисы, что и в Program.cs.
+            services.AddSingleton<IFeatureFlagGate, FeatureFlagGateAdapter>();
+            services.AddSingleton<IPersonaResolver, PersonaResolverAdapter>();
+            services.AddSingleton<IPersonaPromptAssembler, PersonaPromptAssemblerAdapter>();
+            services.AddSingleton<IPersonaBindingsSource, PersonaBindingsSourceAdapter>();
+            services.AddSingleton<IChatHistoryLoader, ChatHistoryLoaderAdapter>();
 
             // Логгеры для контрибьюторов с ILogger в конструкторе
             services.AddSingleton<ILogger<NotesRecallContributor>>(NullLogger<NotesRecallContributor>.Instance);

@@ -19,8 +19,13 @@ namespace ClaudeHomeServer.Services.Turn;
 public sealed class PersonaLayerContributor : IPromptSectionContributor
 {
     private readonly IUserStore _users;
-    private readonly PersonaManager _personas;
-    private readonly PersonaPromptBuilder _promptBuilder;
+    // Узкие швы вместо корневых сервисов (Этап 5): Turn зависел от Main ради двух типов
+    // — резолв персоны по id с проверкой владельца и сборка её слоя промпта.
+    // IPersonaResolver (Core/Services) — резолв; IPersonaPromptAssembler (Core/Services/Turn)
+    // — сборка. Прецедент — IPersonaLookup vs IPersonaDirectory: разделение осознанное,
+    // склейка дала бы читающему контрибьютору лишние права.
+    private readonly IPersonaResolver _personas;
+    private readonly IPersonaPromptAssembler _promptBuilder;
     private readonly IProjectManager _projects;
     // Узкие швы вместо вертикалей (Этап 5): промпт файлового .md-агента (был
     // SkillsService.GetAgentSystemPrompt) и блок командных механик (был статический
@@ -32,8 +37,8 @@ public sealed class PersonaLayerContributor : IPromptSectionContributor
 
     public PersonaLayerContributor(
         IUserStore users,
-        PersonaManager personas,
-        PersonaPromptBuilder promptBuilder,
+        IPersonaResolver personas,
+        IPersonaPromptAssembler promptBuilder,
         IProjectManager projects,
         IAgentPromptSource? agentPrompts,
         ITeamMechanicsBlockSource? teamMechanics,

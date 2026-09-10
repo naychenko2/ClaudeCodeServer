@@ -796,6 +796,18 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.IAgentPromptSource,
     ClaudeHomeServer.Services.Composition.AgentPromptSourceAdapter>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.ITeamMechanicsBlockSource,
     ClaudeHomeServer.Services.Composition.TeamMechanicsBlockAdapter>();
+// Этап 5 (Turn): ещё 4 узких шва, чтобы Turn зависел только от Core. Те же
+// адаптеры 1:1 — IFeatureFlagGate/IFeatureFlagGate, IPersonaResolver,
+// IPersonaPromptAssembler, IPersonaBindingsSource. Состав — ровно те 12 мест,
+// что оставались после двух предыдущих волн (см. ADR-014 «Курс после пилота»).
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.IFeatureFlagGate,
+    ClaudeHomeServer.Services.Composition.FeatureFlagGateAdapter>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.IPersonaResolver,
+    ClaudeHomeServer.Services.Composition.PersonaResolverAdapter>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.IPersonaPromptAssembler,
+    ClaudeHomeServer.Services.Composition.PersonaPromptAssemblerAdapter>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.IPersonaBindingsSource,
+    ClaudeHomeServer.Services.Composition.PersonaBindingsSourceAdapter>();
 
 // Этап 5, волна E: forwarder-регистрации двух Core-интерфейсов выноса Notes.
 // Реализации (`TaskBridge` поверх TaskManager, `NotesHubNotifier` поверх IHubContext<SessionHub>)

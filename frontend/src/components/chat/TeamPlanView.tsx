@@ -26,35 +26,46 @@ function plural(n: number, one: string, few: string, many: string): string {
   return many;
 }
 
-// Предупреждение «план сверх остатка бюджета» (волна 4 team-blocker-honest): человек
+// Предупреждение «план сверх остатка бюджета» (волна 1 team-blocker-honest): человек
 // видит остаток W/T в бюджете итерации, а не потолок — часть волн/задач итерации уже
 // потрачена, и потолок как «остаток» врёт. Сравниваем с остатком (max - used, не ниже 0),
-// а выход за остаток бэкенд лечит расширением потолка на дельту в RespondTeamPlanAsync
-// (ветка Run, та же WithTeamState-транзакция, что старт волны — TeamWaveService видит
-// новые лимиты ещё до старта первой волны). Скрывается целиком, когда план в пределах
-// остатка по обоим измерениям — без лишнего шума.
+// а выход за остаток бэкенд лечит расширением потолка. Числа после расширения (X/Y)
+// бэкенд считает заранее и кладёт в budget.maxWavesAfter / budget.maxTasksAfter; тут
+// они только показываются. 0 — плана нет (плашка скрывается). Скрывается целиком,
+// когда план в пределах остатка по обоим измерениям — без лишнего шума.
 function BudgetOverrunNote({ plan, budget }: { plan: TeamPlan; budget: TeamImplementBudget | null }) {
   if (!budget) return null;
   const waves = plan.waveCount;
   const tasks = plan.subtasks.length;
   const wavesLeft = Math.max(0, budget.maxWaves - budget.wavesUsed);
   const tasksLeft = Math.max(0, budget.maxTasks - budget.tasksUsed);
-  const deltaWaves = Math.max(0, waves - wavesLeft);
-  const deltaTasks = Math.max(0, tasks - tasksLeft);
-  if (deltaWaves === 0 && deltaTasks === 0) return null;
+  // Новые потолки после расширения приходят с бэка (maxWavesAfter/maxTasksAfter):
+  // Max + max(0, plan - left). 0 — плана нет (плашка тогда не нужна).
+  const wavesAfter = budget.maxWavesAfter;
+  const tasksAfter = budget.maxTasksAfter;
+  const wavesOverflow = wavesAfter > 0 && wavesAfter > budget.maxWaves;
+  const tasksOverflow = tasksAfter > 0 && tasksAfter > budget.maxTasks;
+  if (!wavesOverflow && !tasksOverflow) return null;
 
-  // Дословно из задачи: «План на N волн и K задач, в бюджете итерации осталось W волн
-  // и T задач — при запуске потолки поднимутся до нужных». Куски — два независимых
-  // по волнам/задачам; выходит за оба — соединение через « и », единственный — одиночная
-  // формулировка. «Поднимется» относится к клику «Запустить», а не к «расширить»
-  // отдельной кнопкой.
-  const waveClause = deltaWaves > 0
-    ? `план на ${waves} ${plural(waves, 'волну', 'волны', 'волн')}, в бюджете итерации осталось ${wavesLeft} — при запуске потолок поднимется до ${waves}`
-    : null;
-  const taskClause = deltaTasks > 0
-    ? `${tasks} ${plural(tasks, 'под-задача', 'под-задачи', 'под-задач')}, в бюджете итерации осталось ${tasksLeft} — при запуске потолок поднимется до ${tasks}`
-    : null;
-  const headline = [waveClause, taskClause].filter(Boolean).join(' и ');
+  // Формулировка из ТЗ c156193b, дословно: «План на N волн и M задач. В бюджете
+  // итерации осталось W волн и T задач — при запуске потолки поднимутся до X волн
+  // и Y задач.» ОДНА фраза вместо склейки через « и » (старая лексия давала 5 строк
+  // сплошняком на 360 CSS). Если дельта по счётчику нулевая — этот счётчик в фразу
+  // не тащим (ТЗ: «незачем»).
+  const planSizes: string[] = [];
+  const remainders: string[] = [];
+  const targets: string[] = [];
+  if (wavesOverflow) {
+    planSizes.push(`${waves} ${plural(waves, 'волну', 'волны', 'волн')}`);
+    remainders.push(`${wavesLeft} ${plural(wavesLeft, 'волна', 'волны', 'волн')}`);
+    targets.push(`до ${wavesAfter} ${plural(wavesAfter, 'волны', 'волн', 'волн')}`);
+  }
+  if (tasksOverflow) {
+    planSizes.push(`${tasks} ${plural(tasks, 'под-задачу', 'под-задачи', 'под-задач')}`);
+    remainders.push(`${tasksLeft} ${plural(tasksLeft, 'под-задача', 'под-задачи', 'под-задач')}`);
+    targets.push(`до ${tasksAfter} ${plural(tasksAfter, 'задачи', 'задач', 'задач')}`);
+  }
+  const headline = `План на ${planSizes.join(' и ')}. В бюджете итерации осталось ${remainders.join(' и ')} — при запуске потолки поднимутся ${targets.join(' и ')}.`;
 
   return (
     <div style={{

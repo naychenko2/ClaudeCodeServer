@@ -1059,7 +1059,7 @@ export type ServerMessage = { sessionId: string } & (
   // resolutionNote — примечание от штаба (chosenActionId="resolvedByStaff"), показывает,
   // чем координатор закрыл карточку. Поле опциональное — старый бэкенд его не шлёт,
   // и фронт рисует карточку с фолбэком («Снят штабом» без подробностей)
-  | { type: 'team_escalation'; escalationId: string; kind: TeamEscalationKind; title: string; details: string; actions: TeamEscalationAction[]; taskId: string | null; wave: number; resolved: boolean; chosenActionId: string | null; personaId?: string | null; resolutionNote?: string | null }
+  | { type: 'team_escalation'; escalationId: string; kind: TeamEscalationKind; title: string; details: string; actions: TeamEscalationAction[]; taskId: string | null; taskTitle?: string | null; wave: number; resolved: boolean; chosenActionId: string | null; personaId?: string | null; resolutionNote?: string | null }
   // Жизненный цикл вызова планировщика (не путать с team_implement — тот про стадию режима).
   // Транзитное: в историю не пишется, после рестарта не восстанавливается — карточка плана
   // (team_plan) или отказа (team_escalation) уже несут итог. start=true — планировщик запущен;
@@ -1536,7 +1536,11 @@ export type TeamImplementStage =
   | 'idle';             // итерация закрыта, режим ждёт новой вводной
 
 // Бюджет итерации: счётчики «израсходовано» + потолки (сбрасывается по новой вводной).
-// wakeups — срочные вызовы координатора докладом-блокером снизу (свой потолок)
+// wakeups — срочные вызовы координатора докладом-блокером снизу (свой потолок).
+// maxWavesAfter / maxTasksAfter (волна 1 team-blocker-honest) — новые потолки после
+// расширения, посчитанные на бэке (Max + max(0, plan - left)). 0 — плана нет, плашка
+// бюджета скрывается. Раньше плашка показывала «потолок поднимется до N», где N был
+// размером плана — это расходилось с реальностью при ненулевом расходе.
 export interface TeamImplementBudget {
   tasksUsed: number;
   wavesUsed: number;
@@ -1548,6 +1552,8 @@ export interface TeamImplementBudget {
   maxRuns: number;
   maxRetries: number;
   maxWakeups: number;
+  maxWavesAfter: number;
+  maxTasksAfter: number;
 }
 
 // Состояние режима на сессии (Session.teamImplement); null — режим выключен.
@@ -1748,6 +1754,11 @@ export interface TeamEscalation {
   details: string;
   actions: TeamEscalationAction[];
   taskId?: string | null;
+  // Название задачи (волна 1 team-blocker-honest, дефект 1430b732): снимок из штаба на
+  // момент публикации. Идёт в подпись диалога снятия — раньше там стоял заголовок
+  // карточки («Исполнитель застрял: …»), и человек не видел, какую задачу закрывает.
+  // null — штаб не смог подтянуть (задача удалена) или старая версия бэка: фолбэк на title.
+  taskTitle?: string | null;
   wave: number;
   // Только в истории — у live-события времени нет
   createdAt?: string;

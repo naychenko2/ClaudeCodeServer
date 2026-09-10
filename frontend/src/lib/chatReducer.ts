@@ -25,6 +25,7 @@ export function teamImplementSnapshot(ti: SessionTeamImplement | null): TeamImpl
     budget: ti?.budget ?? {
       tasksUsed: 0, wavesUsed: 0, runsUsed: 0, retriesUsed: 0, wakeupsUsed: 0,
       maxTasks: 0, maxWaves: 0, maxRuns: 0, maxRetries: 0, maxWakeups: 0,
+      maxWavesAfter: 0, maxTasksAfter: 0,
     },
     coordinatorNoCode: ti?.coordinatorNoCode ?? true,
     stopped: ti?.stopped ?? false,
@@ -846,6 +847,10 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
           details: msg.details,
           actions: msg.actions ?? [],
           taskId: msg.taskId,
+          // Название задачи (волна 1 team-blocker-honest, дефект 1430b732): если живое
+          // событие пришло без него (старый бэкенд), держим ранее известное — переиздание
+          // не должно «обнулять» подпись диалога снятия
+          taskTitle: msg.taskTitle ?? prevCard?.escalation.taskTitle,
           wave: msg.wave,
           // Время живёт только в истории — при переиздании сохраняем уже известное
           createdAt: prevCard?.escalation.createdAt,

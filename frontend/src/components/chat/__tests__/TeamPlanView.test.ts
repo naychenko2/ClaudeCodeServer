@@ -189,6 +189,7 @@ describe('TeamPlanView — BudgetOverrunNote: остаток бюджета и �
     const budget: TeamImplementBudget = {
       tasksUsed: 5, wavesUsed: 2, runsUsed: 0, retriesUsed: 0, wakeupsUsed: 0,
       maxTasks: 10, maxWaves: 5, maxRuns: 10, maxRetries: 5, maxWakeups: 5,
+      maxWavesAfter: 0, maxTasksAfter: 0,
     };
     const html = renderWithCtx(budget);
     expect(html).not.toContain('осталось');
@@ -196,10 +197,12 @@ describe('TeamPlanView — BudgetOverrunNote: остаток бюджета и �
   });
 
   it('план сверх остатка по волнам — строка про остаток и поднятие потолка волн', () => {
-    // used=5/5 волн (потолок исчерпан), осталось 0; план на 3 волны — выход
+    // used=5/5 волн (потолок исчерпан), осталось 0; план на 3 волны — выход за остаток.
+    // Бэк посчитал новый потолок = maxWaves(5) + delta(3) = 8 — фронт только показывает.
     const budget: TeamImplementBudget = {
       tasksUsed: 5, wavesUsed: 5, runsUsed: 0, retriesUsed: 0, wakeupsUsed: 0,
       maxTasks: 10, maxWaves: 5, maxRuns: 10, maxRetries: 5, maxWakeups: 5,
+      maxWavesAfter: 8, maxTasksAfter: 0,
     };
     const html = renderToStaticMarkup(
       createElement(ChatOpenFileContext.Provider, { value: () => {} },
@@ -216,23 +219,26 @@ describe('TeamPlanView — BudgetOverrunNote: остаток бюджета и �
             online: true,
           }))));
     // Главное по условию задачи: слово «осталось» относится к остатку (W/T),
-    // и обещание про поднятие потолков соответствует тому, что делает «Запустить»
+    // и обещание про поднятие потолков соответствует тому, что делает «Запустить».
     expect(html).toContain('осталось');
-    expect(html).toContain('поднимется');
-    // Конкретика: «в бюджете итерации осталось 0» (W) и «до 3» (N волн плана)
-    expect(html).toContain('в бюджете итерации осталось 0');
-    expect(html).toContain('до 3');
-    // Запрещена старая лексика «потолок будет поднят» и «бюджет итерации — N»:
-    // раньше плашка называла потолок остатком, теперь — нет
+    expect(html).toContain('поднимутся');
+    // Конкретика: «осталось 0» (W) и новый потолок «до 8» (X = Max + delta)
+    expect(html).toContain('осталось 0');
+    expect(html).toContain('до 8');
+    // Главная находка ревью c156193b: старый текст называл новым потолком размер плана (3).
+    // Под запретом и старое «потолок будет поднят», и «бюджет итерации — N» (потолок за остаток).
+    expect(html).not.toContain('до 3');
     expect(html).not.toContain('потолок будет поднят');
     expect(html).not.toMatch(/бюджет итерации — \d+/);
   });
 
   it('план сверх остатка по задачам — строка про остаток и поднятие потолка задач', () => {
-    // used=10/10 задач (потолок исчерпан), осталось 0; план на 2 задачи — выход
+    // used=10/10 задач (потолок исчерпан), осталось 0; план на 2 задачи — выход.
+    // Новый потолок задач = maxTasks(10) + delta(2) = 12.
     const budget: TeamImplementBudget = {
       tasksUsed: 10, wavesUsed: 2, runsUsed: 0, retriesUsed: 0, wakeupsUsed: 0,
       maxTasks: 10, maxWaves: 5, maxRuns: 10, maxRetries: 5, maxWakeups: 5,
+      maxWavesAfter: 0, maxTasksAfter: 12,
     };
     const html = renderToStaticMarkup(
       createElement(ChatOpenFileContext.Provider, { value: () => {} },
@@ -251,17 +257,20 @@ describe('TeamPlanView — BudgetOverrunNote: остаток бюджета и �
             online: true,
           }))));
     expect(html).toContain('осталось');
-    expect(html).toContain('поднимется');
-    expect(html).toContain('в бюджете итерации осталось 0');
-    expect(html).toContain('до 2');
+    expect(html).toContain('поднимутся');
+    expect(html).toContain('осталось 0');
+    expect(html).toContain('до 12');
+    expect(html).not.toContain('до 2');
     expect(html).not.toContain('потолок будет поднят');
     expect(html).not.toMatch(/бюджет итерации — \d+/);
   });
 
-  it('план сверх остатка по обоим измерениям — две клаузы соединены через « и »', () => {
+  it('план сверх остатка по обоим измерениям — ОДНА фраза, без склейки через « и »', () => {
+    // План на 3 волны и 2 задачи; новые потолки 8 и 12.
     const budget: TeamImplementBudget = {
       tasksUsed: 10, wavesUsed: 5, runsUsed: 0, retriesUsed: 0, wakeupsUsed: 0,
       maxTasks: 10, maxWaves: 5, maxRuns: 10, maxRetries: 5, maxWakeups: 5,
+      maxWavesAfter: 8, maxTasksAfter: 12,
     };
     const html = renderToStaticMarkup(
       createElement(ChatOpenFileContext.Provider, { value: () => {} },
@@ -280,19 +289,26 @@ describe('TeamPlanView — BudgetOverrunNote: остаток бюджета и �
             online: true,
           }))));
     expect(html).toContain('осталось');
-    // План на 3 волны и 2 задачи — обе клаузы в одной строке через « и »
-    expect(html).toContain('до 3');
-    expect(html).toContain('до 2');
-    expect(html).toContain(' и ');
+    expect(html).toContain('до 8');
+    expect(html).toContain('до 12');
+    // ОДНА фраза вместо склейки: «План на N. В бюджете осталось W — ... поднимутся до X».
+    // Соединение « и » внутри одной части (план/остаток/потолок) допустимо, но между
+    // частями — только «. » и « — ».
+    expect(html).toContain('План на 3 волны и 2 под-задачи.');
+    expect(html).toContain('осталось 0 волн и 0 под-задач');
+    // Старая склейка двух независимых кусков через « и » между остатком и «потолок
+    // поднимется до» — под запретом.
+    expect(html).not.toContain('потолок поднимется до');
   });
 
-  it('остаток частично израсходован (used > 0, но не max) — плашка называет ОСТАТОК, а не потолок', () => {
-    // used=2/5 волн → осталось 3; план на 5 волн — выход за остаток 3 (потолок 5 не превышен)
-    // Главная находка ревью: прежний код показал бы «бюджет итерации — 5» (потолок как остаток),
-    // новый — «осталось 3» (честный остаток)
+  it('остаток частично израсходован (used > 0, но не max) — плашка показывает остаток и ЧЕСТНЫЙ новый потолок', () => {
+    // used=2/5 волн → осталось 3; план на 5 волн — выход за остаток (delta=2).
+    // Новый потолок = maxWaves(5) + delta(2) = 7. Старый текст говорил бы «до 5» — это
+    // был размер потолка, а не «Max + delta». Главная находка ревью c156193b.
     const budget: TeamImplementBudget = {
       tasksUsed: 5, wavesUsed: 2, runsUsed: 0, retriesUsed: 0, wakeupsUsed: 0,
       maxTasks: 10, maxWaves: 5, maxRuns: 10, maxRetries: 5, maxWakeups: 5,
+      maxWavesAfter: 7, maxTasksAfter: 0,
     };
     const html = renderToStaticMarkup(
       createElement(ChatOpenFileContext.Provider, { value: () => {} },
@@ -305,8 +321,41 @@ describe('TeamPlanView — BudgetOverrunNote: остаток бюджета и �
             item: card({ waveCount: 5 }),
             online: true,
           }))));
-    expect(html).toContain('осталось 3');
-    // Старая лексика «бюджет итерации — N» под запретом (потолок нельзя выдавать за остаток)
+    // Остаток честный: 3 волны (родительный множественного)
+    expect(html).toContain('осталось 3 волны');
+    // Новый потолок — Max + delta = 7, а не размер плана (5)
+    expect(html).toContain('до 7');
+    expect(html).not.toContain('до 5');
+    // Старая лексика «бюджет итерации — N» под запретом
     expect(html).not.toContain('бюджет итерации — 5');
+  });
+
+  it('maxWavesAfter=0 — плашка скрыта (плана нет, бэк не заполнил)', () => {
+    // Доказательство мутацией: если бэк перестал считать maxWavesAfter (например, забыли
+    // про новый код в BroadcastTeamImplementAsync), плашка должна пропасть, а не врать
+    // числом maxWaves как «новым потолком». used=5/5, план на 3 волны — старый код бы
+    // показал «до 3» (размер плана); новый — молчит.
+    const budget: TeamImplementBudget = {
+      tasksUsed: 5, wavesUsed: 5, runsUsed: 0, retriesUsed: 0, wakeupsUsed: 0,
+      maxTasks: 10, maxWaves: 5, maxRuns: 10, maxRetries: 5, maxWakeups: 5,
+      maxWavesAfter: 0, maxTasksAfter: 0,
+    };
+    const html = renderToStaticMarkup(
+      createElement(ChatOpenFileContext.Provider, { value: () => {} },
+        createElement(TeamPlanContext.Provider, { value: {
+          autoWaves: false, waveNumber: 0, planCardId: 'plan1',
+          executorPersonaIds: [], budget,
+          onRespond: () => {},
+        } },
+          createElement(TeamPlanView, {
+            item: card({ waveCount: 3, subtasks: [{
+              id: 'st1', title: 'a', goal: '', executorPersonaId: 'p1',
+              executorRationale: '', files: [], wave: 1, doneCriteria: '',
+            }] }),
+            online: true,
+          }))));
+    expect(html).not.toContain('осталось');
+    expect(html).not.toContain('поднимется');
+    expect(html).not.toContain('до 3');
   });
 });

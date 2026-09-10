@@ -79,10 +79,17 @@ internal sealed class TeamStateService
     // Рассылка TeamImplementMessage по группе чата: стадия, номер волны, состав команды,
     // бюджет и флаги. Тело взято один в один из прежней
     // SessionManager.BroadcastTeamImplementAsync.
-    public Task BroadcastTeamImplementAsync(string sessionId, Session session)
+    public async Task BroadcastTeamImplementAsync(string sessionId, Session session)
     {
         var ti = session.TeamImplement;
-        return _sessions.BroadcastAsync(sessionId, new TeamImplementMessage(
+        // Потолки после расширения (волна 1 team-blocker-honest): плашка бюджета должна
+        // показывать ЧЕСТНЫЕ новые лимиты, а не размер плана — текст обещал «потолок
+        // поднимется до N», но старый N был размером плана (находка ревью c156193b).
+        // Дельта считается из остатка и плана: Max + max(0, plan - left). План подтягиваем
+        // здесь, а не в момент записи в карточку, чтобы число ехало в каждом WS-снимке —
+        // иначе фронт показывал бы устаревшее значение до следующей правки бюджета.
+        if (ti?.Budget is not null) await FillAfterBudgetAsync(sessionId, ti);
+        await _sessions.BroadcastAsync(sessionId, new TeamImplementMessage(
             ti is not null,
             ti?.Stage.ToWireToken(),
             ti?.WaveNumber ?? 0,
@@ -97,6 +104,24 @@ internal sealed class TeamStateService
             ti?.Stopped ?? false,
             ti?.SavedMode is not null,
             ti?.PlanVersion ?? 0));
+    }
+
+    // Считает MaxWavesAfter/MaxTasksAfter в Budget: 0 — плана нет (плашка скрывается).
+    // Вызывается на каждом broadcast'е, чтобы дельта всегда была свежей — потолок могли
+    // расширить через addBudget, а план с тех пор не менялся.
+    private async Task FillAfterBudgetAsync(string sessionId, SessionTeamImplement ti)
+    {
+        ti.Budget.MaxWavesAfter = 0;
+        ti.Budget.MaxTasksAfter = 0;
+        if (ti.PlanCardId is not { } planId) return;
+        var plan = await GetTeamPlanFromHistoryAsync(sessionId, planId);
+        if (plan is null) return;
+        var plannedWaves = plan.Subtasks.Count == 0 ? 0 : plan.Subtasks.Max(s => s.Wave);
+        var plannedTasks = plan.Subtasks.Count;
+        var wavesLeft = Math.Max(0, ti.Budget.MaxWaves - ti.Budget.WavesUsed);
+        var tasksLeft = Math.Max(0, ti.Budget.MaxTasks - ti.Budget.TasksUsed);
+        ti.Budget.MaxWavesAfter = ti.Budget.MaxWaves + Math.Max(0, plannedWaves - wavesLeft);
+        ti.Budget.MaxTasksAfter = ti.Budget.MaxTasks + Math.Max(0, plannedTasks - tasksLeft);
     }
 
     // Бюджет итерации из дефолтов плана с optional override из конфига TeamImplement:Max*

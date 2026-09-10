@@ -231,6 +231,12 @@ builder.Services.AddSingleton<ICommitLogReader, CommitLogReader>();
 // `sp.GetRequiredService<GitService>()`, что и `IGitRefSnapshotStore` ниже в GitSubsystem.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Git.IGitCommitInspector,
     ClaudeHomeServer.Services.Git.GitCommitInspector>();
+// Узкий шов записи памяти в заметки (Этап 5, волна 2, разрез Memory↔Notes):
+// потребитель — Memory (PersonaMemoryService.MemoryToNote/NoteToMemoryAsync),
+// 2 метода (Create/GetDetail). Notes — вынесенная вертикаль; форвардер NotesAccessor
+// резолвит NotesService через тот же синглтон, что и подсистема.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Notes.INoteAccessor,
+    ClaudeHomeServer.Services.Notes.NotesAccessor>();
 // CodeGraph: граф зависимостей кода — DI в подсистеме `CodeGraphSubsystem`
 // (волна 2, первая с пост-билд фазой: регистрирует языковые провайдеры в ConfigureApp).
 // Узкий шов инспекции графа (Этап 5, волна 2, разрез Dossiers↔CodeGraph): потребитель —

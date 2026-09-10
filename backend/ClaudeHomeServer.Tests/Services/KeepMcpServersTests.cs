@@ -63,7 +63,7 @@ public class KeepMcpServersTests : IDisposable
     private static LlmSessionContext AllHttpMcp() => new(
         RootPath: Path.Combine(Path.GetTempPath(), "ccs-keep-mcp-" + Guid.NewGuid().ToString("N")[..8]),
         OnMessage: _ => Task.CompletedTask,
-        RawSystemPrompt: null,
+        RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
         PermissionRules: null,
         TasksMcp: new TasksMcpContext("http://localhost:5999", () => "tok", ProjectId: null,
             UseHttp: true),

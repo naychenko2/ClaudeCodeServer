@@ -164,14 +164,15 @@ public class KnowledgeService : IKnowledgeIndex
     // Жёсткий потолок длины поискового запроса в Dify v1: query длиннее 250 символов
     // отбивается 400 "String should have at most 250 characters". Обрезаем сами —
     // иначе recall заметок и памяти персон падает на любом длинном ходе.
-    public const int MaxQueryLength = 250;
+    //
+    // Этап 5, шаг 6: константа и нормализация переехали в Core
+    // (`Core/Services/Knowledge/KnowledgeQueryUtilities.cs`), чтобы контрибьюторы в чужих
+    // вертикалях (Notes — NotesRecallContributor) ссылались на Core-DTO без зависимости
+    // от Knowledge. Здесь — прямой форвард для обратной совместимости.
+    public const int MaxQueryLength = KnowledgeQueryUtilities.MaxQueryLength;
 
     // Нормализация запроса перед отправкой в Dify: trim + обрезка до потолка.
-    public static string TrimQuery(string? query)
-    {
-        var q = query?.Trim() ?? "";
-        return q.Length > MaxQueryLength ? q[..MaxQueryLength] : q;
-    }
+    public static string TrimQuery(string? query) => KnowledgeQueryUtilities.TrimQuery(query);
 
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly DifyOptions _cfg;

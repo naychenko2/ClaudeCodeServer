@@ -130,7 +130,7 @@ public class ClaudeSessionPromptMcpSectionsTests : IDisposable
     private LlmSessionContext FullMcpContext(IProcessLauncher launcher, ITurnEventBus bus) => new(
         RootPath: NewTempDir(),
         OnMessage: _ => Task.CompletedTask,
-        RawSystemPrompt: null,
+        RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
         PermissionRules: null,
         TasksMcp: new TasksMcpContext("http://localhost:5999", () => "tok", ProjectId: "proj1",
             UseHttp: true),

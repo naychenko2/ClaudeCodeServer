@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.CodeGraph;
 using ClaudeHomeServer.Services.Memory;
@@ -7,21 +6,9 @@ using ClaudeHomeServer.Services.Tasks;
 
 namespace ClaudeHomeServer.Services.Dossiers;
 
-// Запрос пассивного recall паспортов (этап 2, ADR-004 §5): якоря, известные на старте хода
-// (linkedFiles задачи + пути из текста хода + файлы предыдущего хода сессии), плюс сам текст.
-// RootPath — EffectiveRoot чата (WorktreePath ?? project.RootPath): у worktree-чата своё дерево.
-// TaskId — задача чата (у чата-исполнителя): её LinkedFiles тоже якорь (сервис сам проверит
-// принадлежность задаче этого проекта, по образцу guard'а захвата).
-public sealed record DossierRecallRequest(
-    string ProjectId,
-    string? RootPath,
-    string? TaskId,
-    IReadOnlyList<string> AnchorFiles,
-    string TurnText);
-
-// Результат recall'а: markdown-кусок для блока PersonaMemoryService.BuildRecallAsync + записи,
-// реально попавшие в блок (для манифеста атрибуции F3). Text=null — подмешивать нечего.
-public sealed record DossierRecallResult(string? Text, IReadOnlyList<ChangeDossier> Used);
+// Контрактные DTO запроса и результата (`DossierRecallRequest`/`DossierRecallResult`)
+// переехали в спину — `Core/Services/Dossiers/DossierRecallContracts.cs` (Этап 5, узкие
+// швы Turn). Namespace прежний, вызывающие не менялись.
 
 // Recall паспортов изменений (ADR-004 §5, этап 2). Пассивный канал: до 3 паспортов, каждый
 // ≤300 символов, суммарно ≤1 КБ; ранжирование score = семантика × свежесть × статус.
@@ -61,10 +48,6 @@ public class DossierRecallService(
     // Active (ADR-004 §5): файл после паспорта менялся мало — ≤3 коммитов ИЛИ ≤30% строк.
     internal const int ActiveMaxCommits = 3;
     internal const int ActiveMaxChangedPercent = 30;
-
-    private static readonly Regex PathRx = new(
-        @"[A-Za-z0-9_.\-]+(?:[/\\][A-Za-z0-9_.\-]+)+\.[A-Za-z0-9]{1,10}",
-        RegexOptions.Compiled);
 
     // Кеш статусов: owner:project → статусы на версию (HEAD, сигнатура графа). Guard — Lock.
     private sealed class StatusCache
@@ -285,21 +268,8 @@ public class DossierRecallService(
         return set;
     }
 
-    // Пути файлов из текста хода («правлю backend/Services/Foo.cs», «…в api.ts:123»): токен
-    // с ≥1 разделителем пути и расширением. Лишние совпадения не страшны — якорь лишь сигнал
-    // ранжирования, точный матч делает OrdinalIgnoreCase-сравнение с якорями паспорта.
-    internal static IReadOnlyList<string> ExtractPathsFromText(string text)
-    {
-        if (string.IsNullOrWhiteSpace(text)) return [];
-        var result = new List<string>();
-        foreach (Match m in PathRx.Matches(text))
-        {
-            var p = m.Value.Replace('\\', '/');
-            if (p.StartsWith("./", StringComparison.Ordinal)) p = p[2..];
-            result.Add(p);
-        }
-        return result.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-    }
+    // Разбор путей из текста хода уехал в спину: `TextPathMentions.Extract`
+    // (Core/Services/TextPathMentions.cs) — сервис паспортов его не звал.
 
     // --- Статусы (ленивый пересчёт, ADR-004 §5) ---
 

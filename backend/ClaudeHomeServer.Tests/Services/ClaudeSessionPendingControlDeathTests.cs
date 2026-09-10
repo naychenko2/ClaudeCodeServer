@@ -61,7 +61,7 @@ public class ClaudeSessionPendingControlDeathTests : IDisposable
         var context = new LlmSessionContext(
             RootPath: Path.GetTempPath(),
             OnMessage: _ => Task.CompletedTask,
-            RawSystemPrompt: null,
+            RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
             PermissionRules: null,
             TasksMcp: null);
         return new ClaudeSession(new Session(), context);

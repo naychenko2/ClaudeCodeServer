@@ -159,6 +159,25 @@ builder.Services.AddSingleton<IUserStore, UserStoreAdapter>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.SandboxManager>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.ILauncherFactory,
     ClaudeHomeServer.Services.Execution.LauncherFactory>();
+// Узкий шов пула preview-портов песочницы для вертикали ProjectServices
+// (Этап 5, волна C, шаг 2): DevServerService в отдельной сборке
+// получает только диапазон, всё остальное в SandboxManager остаётся
+// инкапсулировано в Execution/Main.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.ISandboxPortRange,
+    ClaudeHomeServer.Services.Execution.SandboxPortRangeAdapter>();
+// Шов записи фона/цвета проекта для вертикали Backgrounds (Этап 5, волна C,
+// шаг 2): ProjectBackgroundService в отдельной сборке пишет Background/Color
+// через IProjectBackgroundWriter, форвардер сидит рядом с ProjectManager.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.IProjectBackgroundWriter,
+    ClaudeHomeServer.Services.ProjectBackgroundWriterAdapter>();
+// Шов миграции значка для вертикали ProjectIcons (Этап 5, волна C, шаг 2).
+builder.Services.AddSingleton<ClaudeHomeServer.Services.IProjectIconMigrator,
+    ClaudeHomeServer.Services.ProjectIconMigratorAdapter>();
+// Шов «снимок data перед необратимой операцией» для вертикали ProjectIcons
+// (Этап 5, волна C, шаг 2); формализует бывшую полумеру (комментарий
+// `ProjectIconMigration.cs:78-84`) — теперь обязательный шов.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.IDataBackupService,
+    ClaudeHomeServer.Services.Backup.DataBackupServiceAdapter>();
 builder.Services.AddSingleton<JwtService>();
 builder.Services.AddSingleton<FeatureFlagService>();
 builder.Services.AddSingleton<AppSettingsService>();
@@ -192,6 +211,18 @@ builder.Services.AddSingleton<IPersonaVoiceLookup, PersonaVoiceLookup>();
 // контракты живут в Core. Адаптер файлов идёт через FileService (а не пишет сам),
 // чтобы синк базы знаний продолжал видеть правки документов.
 builder.Services.AddSingleton<IProjectFileGateway, ProjectFileGateway>();
+// Швы для Modules и ProjectServices (Этап 5, волна C, шаг 1): вместо прямой
+// зависимости от JwtService — узкие контракты на проверку пользовательского
+// и preview-токенов. Auth уже без связи: у AdminByStore.cs JwtService упомянут
+// только в комментарии. Адаптер в `Services/JwtValidatorGateway` реализует оба
+// интерфейса и идёт через `JwtService` — разделение на стороне потребителя.
+builder.Services.AddSingleton<IUserTokenValidator, JwtValidatorGateway>();
+builder.Services.AddSingleton<IPreviewTokenValidator, JwtValidatorGateway>();
+// Шов для Modules (Этап 5, волна C, шаг 1б): вместо прямой зависимости от
+// FeatureFlagService — узкий контракт на проверку одного флага. Адаптер в
+// `Services/FeatureFlagGateway` идёт через `FeatureFlagService` — Modules
+// получает только `IsEnabled`, без каталога определений и записи.
+builder.Services.AddSingleton<IModuleFeatureFlagReader, FeatureFlagGateway>();
 builder.Services.AddSingleton<ICommitLogReader, CommitLogReader>();
 // CodeGraph: граф зависимостей кода — DI в подсистеме `CodeGraphSubsystem`
 // (волна 2, первая с пост-билд фазой: регистрирует языковые провайдеры в ConfigureApp).
@@ -213,6 +244,11 @@ builder.Services.AddSingleton<PersonaPromptBuilder>();
 // IKnowledgeSyncParticipant → DossierStore в блоке Knowledge ниже — участник
 // реконсайлера Dify, остаётся в Program.cs до выделения Knowledge (следующий шаг).
 builder.Services.AddSingleton<PersonaBindingsService>();
+// Этап 5, шаг 6: форвардер IPersonaServerToolGate → PersonaBindingsService — узкая часть
+// контракта ServerToolEnabled (deny-only по Tool-привязке), нужная контрибьюторам
+// секций промпта из чужих вертикалей (CodeGraph → codegraph). Без шва вертикаль
+// CodeGraph тянула бы root Services напрямую — запрет архитектуры.
+builder.Services.AddSingleton<IPersonaServerToolGate>(sp => sp.GetRequiredService<PersonaBindingsService>());
 // Черновик персоны по промпту (one-shot LLM → JSON): переиспользуется ai/quick-create
 // и страховкой онбординга «Применить итоги разговора». Stateless — singleton.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Personas.PersonaDraftService>();
@@ -500,6 +536,10 @@ builder.Services.AddGatedHostedService<ChatTurnLoggerService>(builder.Configurat
 // Подсистема не заведена сознательно: единственная регистрация и два резолва при
 // shutdownTerminals (см. блок var app = builder.Build() ниже) — прецедент вертикали
 // без IAppSubsystem, как у Services.Watchdog.
+// Шов `ITerminalHubNotifier` (Этап 5, волна C, шаг 2): реализация лежит
+// рядом с TerminalHub (Hubs/), вертикаль Terminal зависит только от Core.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.ITerminalHubNotifier,
+    ClaudeHomeServer.Hubs.TerminalHubNotifier>();
 builder.Services.AddSingleton<TerminalService>();
 // Раздел «Сервисы проекта» (Preview/DevServer/ExternalPreview/...) — пилотная подсистема
 // волны 4A. Сам `ProjectServicesSubsystem.Register` подключает ВСЕ регистрации этой
@@ -746,6 +786,28 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.IChatHistoryLoader,
     ClaudeHomeServer.Services.Composition.ChatHistoryLoaderAdapter>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.ITaskLookup,
     ClaudeHomeServer.Services.Composition.TaskLookupAdapter>();
+
+// Этап 5, узкие швы Turn: адаптеры, которыми контрибьюторы промпта заменили прямые
+// ссылки на вертикали. Регистрация в композиционном корне, а не в вертикали: адаптер
+// знает обе стороны шва, и это единственное место, которому это позволено.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Memory.IPersonaRecallSource,
+    ClaudeHomeServer.Services.Composition.PersonaRecallSourceAdapter>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.IAgentPromptSource,
+    ClaudeHomeServer.Services.Composition.AgentPromptSourceAdapter>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.ITeamMechanicsBlockSource,
+    ClaudeHomeServer.Services.Composition.TeamMechanicsBlockAdapter>();
+// Этап 5 (Turn): ещё 4 узких шва, чтобы Turn зависел только от Core. Те же
+// адаптеры 1:1 — IFeatureFlagGate/IFeatureFlagGate, IPersonaResolver,
+// IPersonaPromptAssembler, IPersonaBindingsSource. Состав — ровно те 12 мест,
+// что оставались после двух предыдущих волн (см. ADR-014 «Курс после пилота»).
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.IFeatureFlagGate,
+    ClaudeHomeServer.Services.Composition.FeatureFlagGateAdapter>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.IPersonaResolver,
+    ClaudeHomeServer.Services.Composition.PersonaResolverAdapter>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.IPersonaPromptAssembler,
+    ClaudeHomeServer.Services.Composition.PersonaPromptAssemblerAdapter>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.IPersonaBindingsSource,
+    ClaudeHomeServer.Services.Composition.PersonaBindingsSourceAdapter>();
 
 // Этап 5, волна E: forwarder-регистрации двух Core-интерфейсов выноса Notes.
 // Реализации (`TaskBridge` поверх TaskManager, `NotesHubNotifier` поверх IHubContext<SessionHub>)

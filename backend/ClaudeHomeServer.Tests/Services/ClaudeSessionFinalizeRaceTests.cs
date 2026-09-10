@@ -130,7 +130,7 @@ public class ClaudeSessionFinalizeRaceTests : IDisposable
                     if (m is ExitedMessage) exited.TrySetResult();
                     return Task.CompletedTask;
                 },
-                RawSystemPrompt: null,
+                RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
                 PermissionRules: null,
                 TasksMcp: null,
                 Launcher: launcher);

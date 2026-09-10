@@ -447,6 +447,12 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
         IReadOnlyList<TeamMemoryEntry> TeamHits, IReadOnlyList<ChangeDossier> DossierHits,
         string? DossierText = null);
 
+    // Подключён ли канал паспортов изменений: спрашивают через шов `IPersonaRecallSource`
+    // те, кто решает, собирать ли `DossierRecallRequest` (Этап 5, узкие швы Turn).
+    // Раньше вызывающий держал ради этой проверки собственную ссылку на
+    // `DossierRecallService`, хотя ходит по каналу этот сервис.
+    public bool DossierRecallAvailable => _dossierRecall is not null;
+
     // Markdown-блок памяти для системного промпта хода (auto-recall персоны).
     // Рабочий фокус (если есть) — всегда первым блоком, без скоринга; при фокусе
     // результат не-null даже без хитов. null — персона не найдена / память выключена;

@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 
 namespace ClaudeHomeServer.Services.Composition;
@@ -6,16 +7,18 @@ namespace ClaudeHomeServer.Services.Composition;
 // (SessionManager.OnSessionMessage). Прямой доступ к SessionManager
 // из вынесенной вертикали запрещён: SessionManager живёт в Main.
 //
-// Используется ProjectKnowledgeTurnSync (Knowledge): нужен ProjectId сессии
-// для QueueSync. SessionId и Session.ProjectId — разные вещи: SessionId — id
-// сессии в БД, ProjectId — id проекта. Передаём именно ProjectId (nullable),
-// чтобы не тащить модель Session в Core.
+// Этап 5 (сцепка Memory + Dossiers): сигнатура расширена до
+// `Func<Session, ServerMessage, Task>` — Memory autolearn и Dossier capture
+// используют поля Session (PersonaId, ProjectId, WorktreePath, Participants),
+// не только ProjectId. Knowledge (ProjectKnowledgeTurnSync) был единственным
+// потребителем, ему нужен лишь ProjectId; адаптация — взять s.ProjectId из
+// Session в лямбде.
 public interface ISessionMessageObserver
 {
-    // Подписаться на события хода; обработчик получает ProjectId сессии (nullable)
-    // и ServerMessage. Если handler не зарегистрирован — тихий no-op.
-    void Attach(Func<string?, ServerMessage, Task> handler);
+    // Подписаться на события хода; обработчик получает полную Session и ServerMessage.
+    // Если handler не зарегистрирован — тихий no-op.
+    void Attach(Func<Session, ServerMessage, Task> handler);
 
     // Отписаться.
-    void Detach(Func<string?, ServerMessage, Task> handler);
+    void Detach(Func<Session, ServerMessage, Task> handler);
 }

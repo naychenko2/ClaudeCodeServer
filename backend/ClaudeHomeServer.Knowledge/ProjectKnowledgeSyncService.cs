@@ -465,8 +465,12 @@ public sealed class ProjectKnowledgeTurnSync(
         return Task.CompletedTask;
     }
 
-    private Task OnMsgAsync(string? projectId, ServerMessage msg)
+    private Task OnMsgAsync(Session session, ServerMessage msg)
     {
+        // Сигнатура ISessionMessageObserver расширена (Этап 5, сцепка Memory + Dossiers):
+        // раньше шов отдавал только ProjectId, теперь полную Session — Knowledge был
+        // единственным потребителем прежней формы, ему нужен только ProjectId.
+        var projectId = session.ProjectId;
         if (string.IsNullOrEmpty(projectId)) return Task.CompletedTask;
         if (msg is not (FileChangedMessage or ResultMessage)) return Task.CompletedTask;
         var root = projects.GetById(projectId)?.RootPath;

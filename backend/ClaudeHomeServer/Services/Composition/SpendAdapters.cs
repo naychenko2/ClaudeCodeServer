@@ -10,10 +10,15 @@ namespace ClaudeHomeServer.Services.Composition;
 // корневой сервис Main. Иначе Spend упирается в `ProjectReference` на Main,
 // который сторож `SubsystemBoundaryTests` ловит.
 //
+// Этап 5 (сцепка Memory + Dossiers): интерфейсы `ISessionDirectory` и
+// `IPersonaLookup` расширены методами `GetHistoryAsync`/`GetAllInternal`
+// — добавлены в адаптеры. Spend сам эти методы не зовёт, но обязан
+// удовлетворять контракт интерфейса, иначе не соберётся.
+//
 // Соседняя линия `refactor/core-directories` готовит «директорию сессий» —
 // `ISessionDirectory` подлежит слиянию с ней, когда она приедет в master
 // (см. комментарий в Core/Services/ISessionDirectory.cs). До того момента
-// живём с узким швом на три метода.
+// живём с узким швом.
 
 public sealed class SessionDirectoryAdapter(SessionManager sessions) : ISessionDirectory
 {
@@ -22,11 +27,16 @@ public sealed class SessionDirectoryAdapter(SessionManager sessions) : ISessionD
     public IReadOnlyCollection<Session> GetAll() => sessions.GetAll();
 
     public string? ResolveOwnerId(Session s) => sessions.ResolveOwnerId(s);
+
+    public Task<IReadOnlyList<StoredMessage>> GetHistoryAsync(string sessionId) =>
+        sessions.GetHistoryAsync(sessionId);
 }
 
 public sealed class PersonaLookupAdapter(PersonaManager personas) : IPersonaLookup
 {
     public Persona? GetByIdInternal(string id) => personas.GetByIdInternal(id);
+
+    public IReadOnlyCollection<Persona> GetAllInternal() => personas.GetAllInternal();
 }
 
 public sealed class ChatHistoryLoaderAdapter(ChatHistoryService history) : IChatHistoryLoader

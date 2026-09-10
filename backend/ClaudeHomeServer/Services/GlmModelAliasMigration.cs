@@ -1,4 +1,6 @@
-namespace ClaudeHomeServer.Services.Llm;
+using ClaudeHomeServer.Services.Llm;
+
+namespace ClaudeHomeServer.Services;
 
 // Разовая миграция закреплённых моделей GLM: 19.08.2026 каталог провайдера пересобран под
 // живые пробы z.ai — вся линейка 5.x оказалась алиасом glm-5.3, а glm-4.5-air алиасом
@@ -10,6 +12,12 @@ namespace ClaudeHomeServer.Services.Llm;
 // Идемпотентна и одноразова: после прохода пишет marker-файл в каталоге DataPath, поэтому
 // повторный старт (и осознанный ручной откат пина пользователем) ничего не переписывает.
 // Ошибки не роняют старт приложения (best-effort) — образец PersonaProjectBindingsMigration.
+//
+// Живёт в спине, а не в вертикали `Services/Llm`: это разовая уборка ДАННЫХ в двух сторах
+// (sessions.json и specialty-settings.json), а не часть модельного слоя. В `Llm` она попала
+// по теме («модели GLM»), и оттуда тянула прямую ссылку на ядро (SessionManager.RemapModels) —
+// мутацию, которой нет места в читающем шве ISessionDirectory. Соседство — с
+// PersonaProjectBindingsMigration, регистрация — там же, в Program.cs.
 public class GlmModelAliasMigration : IHostedService
 {
     // Точное совпадение id → новый id. Всё остальное (preset:{id}, tier:*, local/claude/default,

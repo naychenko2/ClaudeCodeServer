@@ -15,10 +15,9 @@ namespace ClaudeHomeServer.Services.Llm;
 // Зарегистрировано здесь (ранее жило блоком в Program.cs:~156-355, 454, 457):
 // 1) `UserModelTierResolver` — слоты моделей (strong/medium/weak) per-user,
 //    глобальная таблица назначений LocalActionCatalog. Шов к слою персон.
-// 2) `GlmModelAliasMigration` (gated hosted) — разовая переадресация закреплённых
-//    GLM-моделей на актуальный каталог (z.ai алиасы). Одноразовая миграция сторов
-//    с marker-файлом; регистрируется здесь как hosted-сервис, а очередь старта
-//    задаётся местом `LlmSubsystem` в списке `AddSubsystems` (Program.cs:~490).
+// 2) (свободно) — `GlmModelAliasMigration` уехала в спину (`Services/GlmModelAliasMigration.cs`,
+//    регистрация в Program.cs рядом с PersonaProjectBindingsMigration): разовая уборка
+//    данных в сторах, а не модельный слой, и единственная в вертикали мутация ядра.
 // 3) `OneShotClaudeRunner` + `IOneShotRunner` (форвард) — основной раннер
 //    дешёвых ходов через claude CLI. Опора на `ClaudeSubscriptionPool` и
 //    `SubscriptionActivityTracker` (ротация подписок).
@@ -214,12 +213,6 @@ public sealed class LlmSubsystem : IAppSubsystem
 
         // Пресеты автоподбора исполнителя фоновых действий.
         services.AddSingleton<LocalActionPresetService>();
-
-        // Разовая переадресация закреплённых моделей GLM на актуальный каталог
-        // (z.ai алиасы) — gated hosted: в Testing не стартует, повторный проход
-        // отсекается marker-файлом в data. Очередь старта задаётся не этой строкой,
-        // а местом `LlmSubsystem` в списке `AddSubsystems` (Program.cs:~490).
-        services.AddGatedHostedService<GlmModelAliasMigration>(config);
 
         // Pre-flight проба локального эндпоинта: при остановленном llama.cpp/vLLM ход
         // завершится сразу понятной ошибкой, без шагов цепочки (см. LocalEndpointProbe,

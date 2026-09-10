@@ -288,8 +288,10 @@ builder.Services.AddSingleton<PersonaAgentFileSync>();
 // реконсайлера error-документов Dify, не собственность Memory.
 // Разовый backfill дефолтных привязок существующим проектным персонам (файлы/заметки/знания)
 builder.Services.AddGatedHostedService<PersonaProjectBindingsMigration>(builder.Configuration);
-// Разовая переадресация закреплённых моделей GLM на действующий каталог (алиасы z.ai)
-// — DI в подсистеме `LlmSubsystem` (шаг 0 волны 4, см. LlmSubsystem.cs).
+// Разовая переадресация закреплённых моделей GLM на действующий каталог (алиасы z.ai) —
+// gated hosted: в Testing не стартует, повторный проход отсекается marker-файлом в data.
+// Живёт в спине рядом с прочими миграциями сторов, а не в вертикали Llm (см. шапку файла).
+builder.Services.AddGatedHostedService<GlmModelAliasMigration>(builder.Configuration);
 // TaskManager/TaskAiService/BoardService/DailyBriefingService/TaskSchedulerService
 // — DI в подсистеме `TasksSubsystem` (волна 4C, шаг 1).
 builder.Services.AddSingleton<FileService>();

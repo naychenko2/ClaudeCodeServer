@@ -260,8 +260,15 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Git.IGitCommitInspector,
 // потребитель — Memory (PersonaMemoryService.MemoryToNote/NoteToMemoryAsync),
 // 2 метода (Create/GetDetail). Notes — вынесенная вертикаль; форвардер NotesAccessor
 // резолвит NotesService через тот же синглтон, что и подсистема.
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Notes.INoteAccessor,
-    ClaudeHomeServer.Services.Notes.NotesAccessor>();
+// Гейт подсистемы Notes: при `Subsystems:Notes:Enabled=false` `NotesService` в DI нет,
+// и резолв `NotesAccessor` падает с InvalidOperationException — то же правило, что у
+// `IKnowledgeSyncParticipant → NotesKnowledgeService` (строки ниже) и у
+// `INoteTaskBridge`/`INotesHubNotifier` (Этап 5, волна E).
+if (SubsystemGate.IsEnabled(builder.Configuration, "notes"))
+{
+    builder.Services.AddSingleton<ClaudeHomeServer.Services.Notes.INoteAccessor,
+        ClaudeHomeServer.Services.Notes.NotesAccessor>();
+}
 // CodeGraph: граф зависимостей кода — DI в подсистеме `CodeGraphSubsystem`
 // (волна 2, первая с пост-билд фазой: регистрирует языковые провайдеры в ConfigureApp).
 // Узкий шов инспекции графа (Этап 5, волна 2, разрез Dossiers↔CodeGraph): потребитель —

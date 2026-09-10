@@ -1468,7 +1468,7 @@ public sealed partial class WorkspaceToolset(
                     _ = Task.Run(async () =>
                     {
                         try { await sessions.TryResolveBlockerByFactAsync(parentId, targetTaskId,
-                            "штаб ответил исполнителю — блокер снят"); }
+                            "штаб отправил сообщение исполнителю"); }
                         catch { /* побочный эффект — не валим основной вызов */ }
                     });
                 }

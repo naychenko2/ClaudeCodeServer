@@ -125,8 +125,9 @@ export function AiLauncher() {
   const me = useMe();
   const showIntroDot = me.loaded && me.needsOnboarding && facePersona?.id === me.defaultPersonaId;
   // Доступность семантики (Dify) нужна только при включённой подсистеме заметок:
-  // при выключенной `api.notes.caps()` вернул бы 500, а палитра и так не покажет
-  // «Поиск по смыслу». Гейт ДО запроса (не глушим ошибку, не обращаемся вовсе).
+  // при выключенной маршрута `api.notes.caps()` в MVC нет, и запрос уходит в общий
+  // фолбэка (на стенде 200 `text/html`, который развалит `JSON.parse`), а палитра и так
+  // не покажет «Поиск по смыслу». Гейт ДО запроса (не глушим ошибку, не обращаемся вовсе).
   useEffect(() => {
     if (!isSubsystemEnabled('notes')) return;
     api.notes.caps().then(c => setSemanticCaps(c.semantic)).catch(() => {});

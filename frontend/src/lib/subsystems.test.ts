@@ -1,7 +1,7 @@
 // Тесты стора включённости подсистем. Покрывает:
 //   - дефолт (всё выключено до setAllSubsystems);
-//   - замену всего набора через setAllSubsystems в ОБЕИХ формах: массив (от бэка)
-//     и Record (локальные патчи из админской модалки);
+//   - замену всего набора через setAllSubsystems массивом ключей — единственная
+//     форма ввода (экран подсистем только читает, PUT нет);
 //   - оповещение подписчиков и корректность отписки;
 //   - поведение useSubsystem через мини-раннер React (как в useSession.test).
 //
@@ -123,31 +123,9 @@ describe('subsystems — setAllSubsystems принимает массив (фо�
     expect(isSubsystemEnabled('notes')).toBe(false);
     expect(getAllSubsystems()).toEqual({});
   });
-});
-
-describe('subsystems — setAllSubsystems принимает Record (локальные патчи)', () => {
-  // Объект нужен админской модалке SubsystemsPage: точечно поправить один ключ,
-  // не сбрасывая остальные. Стороной Array.isArray он пойдёт по ветке объекта.
-  it('включает переданные ключи', () => {
-    setAllSubsystems({ notes: true });
-    expect(isSubsystemEnabled('notes')).toBe(true);
-    expect(getAllSubsystems()).toEqual({ notes: true });
-  });
-
-  it('явно выключенный ключ остаётся false', () => {
-    setAllSubsystems({ notes: false });
-    expect(isSubsystemEnabled('notes')).toBe(false);
-  });
-
-  it('перезаписывает набор целиком — старые ключи сбрасываются', () => {
-    setAllSubsystems({ notes: true });
-    setAllSubsystems({});
-    expect(isSubsystemEnabled('notes')).toBe(false);
-    expect(getAllSubsystems()).toEqual({});
-  });
 
   it('getAllSubsystems возвращает копию, а не внутреннюю ссылку', () => {
-    setAllSubsystems({ notes: true });
+    setAllSubsystems(['notes']);
     const snap = getAllSubsystems();
     snap.notes = false;
     expect(isSubsystemEnabled('notes')).toBe(true);
@@ -215,16 +193,15 @@ describe('subsystems — стык с /api/auth/me (контракт)', () => {
   // Под Д-1 отчёта QA пилота: бэк шлёт массив, фронт ждал Record<string, boolean>
   // — спред массива давал { '0': 'notes' }, гейт ломался.
   //
-  // Защита по двум линиям:
-  //   1) Реальный JSON-ответ бэка (воспроизводим строкой) применяется к стору
-  //      и ожидаемое `useSubsystem('notes')` сходится с тем, что бэк объявил
-  //      активным. Меняется форма поля на бэке → ключ «notes» разворачивается
-  //      иначе → тест краснеет.
-  //   2) Если кто-то решит «а давайте подстрахуемся и на фронте тоже Record» —
-  //      массив всё равно развернётся правильно (см. отдельный тест выше),
-  //      и эта ветка закроет регресс формы. Не подменяем форму на бэке.
-  // Корневой же источник рассинхрона — AuthController.cs + Me.subsystems:
-  // контракт между ними держит subsystems.contract.test.ts в __tests__.
+  // Реальный JSON-ответ бэка (воспроизводим строкой) применяется к стору, и
+  // `useSubsystem('notes')` обязан сойтись с тем, что бэк объявил активным.
+  // Меняется форма поля на бэке → ключ «notes» разворачивается иначе → тест краснеет.
+  //
+  // Толерантности к чужой форме у стора больше нет: `setAllSubsystems` принимает
+  // только массив ключей. Страховка «а вдруг придёт Record» была тестом собственной
+  // недостижимой ветки и снята вместе с ней — форму на фронте не подменяем.
+  // Корневой источник рассинхрона — AuthController.cs + Me.subsystems: контракт
+  // между ними держит subsystems.contract.test.ts в __tests__.
 
   it('на включённой notes в реальном JSON-ответе useSubsystem("notes")=true', () => {
     // Реальный ответ GET /api/auth/me для пользователя с включённой notes.
@@ -266,21 +243,5 @@ describe('subsystems — стык с /api/auth/me (контракт)', () => {
     const me = JSON.parse(serverJson);
     if (me.subsystems) setAllSubsystems(me.subsystems);
     expect(renderUseSubsystem('notes')).toBe(false);
-  });
-
-  it('мутация формы: бэк прислал Record вместо массива — стор всё равно правильно развернёт', () => {
-    // Если кто-то сменит форму на бэке и фронт не успеет — этот тест не
-    // краснеет (стор умеет обе формы), но зато subsystems.contract.test.ts
-    // поймает рассинхрон в коде. Сейчас защита по двум линиям.
-    const serverJson = JSON.stringify({
-      userId: 'u-4',
-      username: 'record-form',
-      role: 'user',
-      featureFlags: {},
-      subsystems: { notes: true },
-    });
-    const me = JSON.parse(serverJson);
-    if (me.subsystems) setAllSubsystems(me.subsystems);
-    expect(renderUseSubsystem('notes')).toBe(true);
   });
 });

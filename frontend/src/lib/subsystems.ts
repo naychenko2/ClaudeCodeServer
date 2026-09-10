@@ -7,9 +7,6 @@
 // Стороной Record приводил бы `{ ...arr }` к числовым ключам '0','1'… —
 // `isSubsystemEnabled('notes')` возвращал false при включённой подсистеме,
 // и гейт не работал ни в одном положении тумблера (см. Д-1 отчёта QA).
-// `setAllSubsystems` принимает ОБЕ формы: массив — основной путь от бэка;
-// объект — локальные патчи из админской модалки (SubsystemsPage), где нужно
-// заменить один ключ, не перетирая остальные.
 //
 // ВНИМАНИЕ: App.tsx (вне папки фронтовых фич) на старте вызывает
 //   setAllSubsystems(me.subsystems ?? [])
@@ -40,21 +37,17 @@ function emit() {
 // «это контракт от бэка», а не «объект, который я хочу залить».
 export type SubsystemsFromServer = string[];
 
-// Полный набор активных подсистем. `string[]` — основной путь от бэка
-// (см. `SubsystemsFromServer`); `Record<string, boolean>` оставлен ради
-// локальных патчей из админской модалки (`SubsystemsPage.applyToggle`).
-// Обе формы нормализуются в `Record<string, boolean>` внутри.
-export function setAllSubsystems(
-  subsystems: SubsystemsFromServer | Record<string, boolean>,
-) {
-  if (Array.isArray(subsystems)) {
-    // Бэк прислал массив активных ключей — разворачиваем в Record.
-    // Пустой массив → пустой набор; null/undefined → не вызываем.
-    _subsystems = {};
-    for (const k of subsystems) _subsystems[k] = true;
-  } else {
-    _subsystems = { ...subsystems };
-  }
+// Полный набор активных подсистем — единственная форма ввода: массив ключей от
+// бэка (см. `SubsystemsFromServer`). Единственный вызывающий — `App.tsx` на старте.
+// Приём `Record<string, boolean>` здесь был ради точечных патчей админской модалки;
+// её больше нет — `a7d08f9f` перевёл экран подсистем в режим только чтение (без
+// `Toggle` и PUT), и ветка стала недостижимой. Понадобится PUT — форму ввода добавит
+// тот, кому она нужна, вместе с её вызывающим.
+export function setAllSubsystems(subsystems: SubsystemsFromServer) {
+  // Разворачиваем массив активных ключей в Record.
+  // Пустой массив → пустой набор; null/undefined → не вызываем.
+  _subsystems = {};
+  for (const k of subsystems) _subsystems[k] = true;
   emit();
 }
 

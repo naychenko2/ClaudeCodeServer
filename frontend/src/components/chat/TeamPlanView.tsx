@@ -1,6 +1,6 @@
 import { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Users, Play, Zap, ChevronDown, RotateCcw, AlertTriangle, Check, ArrowRight, FileText, Network } from 'lucide-react';
-import type { ChatItem, Persona, TeamPlan, TeamPlanSubtask } from '../../types';
+import type { ChatItem, Persona, TeamImplementBudget, TeamPlan, TeamPlanSubtask } from '../../types';
 import { C, FS, FONT, R, SHADOW, SP } from '../../lib/design';
 import { relPath, basename } from '../../lib/paths';
 import { useIsMobile } from '../../lib/breakpoints';
@@ -24,6 +24,62 @@ function plural(n: number, one: string, few: string, many: string): string {
   if (m10 === 1 && m100 !== 11) return one;
   if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return few;
   return many;
+}
+
+// Предупреждение «план сверх остатка бюджета» (волна 1 team-blocker-honest): человек
+// видит остаток W/T в бюджете итерации, а не потолок — часть волн/задач итерации уже
+// потрачена, и потолок как «остаток» врёт. Сравниваем с остатком (max - used, не ниже 0),
+// а выход за остаток бэкенд лечит расширением потолка. Числа после расширения (X/Y)
+// бэкенд считает заранее и кладёт в budget.maxWavesAfter / budget.maxTasksAfter; тут
+// они только показываются. 0 — плана нет (плашка скрывается). Скрывается целиком,
+// когда план в пределах остатка по обоим измерениям — без лишнего шума.
+function BudgetOverrunNote({ plan, budget }: { plan: TeamPlan; budget: TeamImplementBudget | null }) {
+  if (!budget) return null;
+  const waves = plan.waveCount;
+  const tasks = plan.subtasks.length;
+  const wavesLeft = Math.max(0, budget.maxWaves - budget.wavesUsed);
+  const tasksLeft = Math.max(0, budget.maxTasks - budget.tasksUsed);
+  // Новые потолки после расширения приходят с бэка (maxWavesAfter/maxTasksAfter):
+  // Max + max(0, plan - left). 0 — плана нет (плашка тогда не нужна).
+  const wavesAfter = budget.maxWavesAfter;
+  const tasksAfter = budget.maxTasksAfter;
+  const wavesOverflow = wavesAfter > 0 && wavesAfter > budget.maxWaves;
+  const tasksOverflow = tasksAfter > 0 && tasksAfter > budget.maxTasks;
+  if (!wavesOverflow && !tasksOverflow) return null;
+
+  // Формулировка из ТЗ c156193b, дословно: «План на N волн и M задач. В бюджете
+  // итерации осталось W волн и T задач — при запуске потолки поднимутся до X волн
+  // и Y задач.» ОДНА фраза вместо склейки через « и » (старая лексия давала 5 строк
+  // сплошняком на 360 CSS). Если дельта по счётчику нулевая — этот счётчик в фразу
+  // не тащим (ТЗ: «незачем»).
+  const planSizes: string[] = [];
+  const remainders: string[] = [];
+  const targets: string[] = [];
+  if (wavesOverflow) {
+    planSizes.push(`${waves} ${plural(waves, 'волну', 'волны', 'волн')}`);
+    remainders.push(`${wavesLeft} ${plural(wavesLeft, 'волна', 'волны', 'волн')}`);
+    targets.push(`до ${wavesAfter} ${plural(wavesAfter, 'волны', 'волн', 'волн')}`);
+  }
+  if (tasksOverflow) {
+    planSizes.push(`${tasks} ${plural(tasks, 'под-задачу', 'под-задачи', 'под-задач')}`);
+    remainders.push(`${tasksLeft} ${plural(tasksLeft, 'под-задача', 'под-задачи', 'под-задач')}`);
+    targets.push(`до ${tasksAfter} ${plural(tasksAfter, 'задачи', 'задач', 'задач')}`);
+  }
+  const headline = `План на ${planSizes.join(' и ')}. В бюджете итерации осталось ${remainders.join(' и ')} — при запуске потолки поднимутся ${targets.join(' и ')}.`;
+
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'flex-start', gap: 6, marginTop: SP.sm,
+      padding: '8px 10px', borderRadius: R.md, border: `1px solid ${C.warning}`,
+      background: C.warningBg,
+    }}>
+      <AlertTriangle size={12} strokeWidth={2.2} color={C.warningText}
+        style={{ flexShrink: 0, marginTop: 1 }} />
+      <div style={{ fontSize: FS.xs, color: C.warningText, lineHeight: 1.45, fontWeight: 500 }}>
+        {headline}
+      </div>
+    </div>
+  );
 }
 
 // Подзаголовок карточки: «5 под-задач · 2 волны · 3 исполнителя».
@@ -563,6 +619,11 @@ export function TeamPlanView({ item, online, initialSchemeView = 'text' }: {
     );
   }
 
+// Предупреждение «план сверх остатка бюджета» (волна 4 team-blocker-honest) объявлено
+// на верхнем уровне модуля рядом с plural — иначе на каждом рендере TeamPlanView
+// пересоздавалась бы идентичность компонента, и React монтировал/размонтировал
+// поддерево. На статичной плашке безобидно, но это анти-паттерн.
+
   // === На подтверждении ===
   const canAct = online && !!ctx;
   const respond = (decision: 'run' | 'cancel') => ctx?.onRespond(item.planId, decision);
@@ -712,6 +773,11 @@ export function TeamPlanView({ item, online, initialSchemeView = 'text' }: {
               Отменить
             </Button>
           </div>
+          {/* Предупреждение «план сверх бюджета» (волна 4 team-blocker-honest): если
+              план выходит за остаток MaxWaves/MaxTasks — строка видна ДО клика, а
+              само расширение на разницу делает бэкенд на Run. Бюджет может быть
+              ещё не подгружен (read-only режим) — в этом случае блок молчит. */}
+          <BudgetOverrunNote plan={plan} budget={ctx?.budget ?? null} />
           {ctx?.autoWaves && (
             <div style={{
               display: 'flex', alignItems: 'flex-start', gap: 6, marginTop: SP.sm,

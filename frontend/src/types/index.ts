@@ -464,6 +464,14 @@ export interface Task {
   verification?: TaskVerification | null;
   // Исход дефекта: 'closedWithoutCheck' — внутренний путь закрытия без проверки
   outcome?: DefectOutcome | null;
+  // Фикс-волна 4 team-blocker-honest: метки от терминального отказа хода исполнителя
+  // (см. ExecutorStopClassifier). executorStoppedAt != null — карточка ждёт человека.
+  executorStoppedAt?: string;
+  executorStopReason?: string;
+  // Метка снятия человеком по карточке блокера (DropSubtaskAsync): если стоит —
+  // карточка закрыта человеком, правка статуса от агента отвергается. Человек может
+  // снять метку, перетащив задачу обратно в Todo/InProgress.
+  droppedByHumanAt?: string;
   // UI-проекция повторяющейся задачи в календаре (не приходит с бэка):
   // occurrenceOf — id реального экземпляра серии, который надо открыть по клику;
   // virtual — признак вычисленного будущего повтора (реально существует только один экземпляр)
@@ -1060,7 +1068,10 @@ export type ServerMessage = { sessionId: string } & (
   // ответе человека (resolved=true) с тем же escalationId — клиент обновляет карточку.
   // Поля плоские (в истории та же карточка лежит вложенным объектом escalation)
   // personaId — автор карточки (Э8, координатор на момент публикации)
-  | { type: 'team_escalation'; escalationId: string; kind: TeamEscalationKind; title: string; details: string; actions: TeamEscalationAction[]; taskId: string | null; wave: number; resolved: boolean; chosenActionId: string | null; personaId?: string | null }
+  // resolutionNote — примечание от штаба (chosenActionId="resolvedByStaff"), показывает,
+  // чем координатор закрыл карточку. Поле опциональное — старый бэкенд его не шлёт,
+  // и фронт рисует карточку с фолбэком («Снят штабом» без подробностей)
+  | { type: 'team_escalation'; escalationId: string; kind: TeamEscalationKind; title: string; details: string; actions: TeamEscalationAction[]; taskId: string | null; taskTitle?: string | null; wave: number; resolved: boolean; chosenActionId: string | null; personaId?: string | null; resolutionNote?: string | null }
   // Жизненный цикл вызова планировщика (не путать с team_implement — тот про стадию режима).
   // Транзитное: в историю не пишется, после рестарта не восстанавливается — карточка плана
   // (team_plan) или отказа (team_escalation) уже несут итог. start=true — планировщик запущен;
@@ -1551,7 +1562,11 @@ export type TeamImplementStage =
   | 'idle';             // итерация закрыта, режим ждёт новой вводной
 
 // Бюджет итерации: счётчики «израсходовано» + потолки (сбрасывается по новой вводной).
-// wakeups — срочные вызовы координатора докладом-блокером снизу (свой потолок)
+// wakeups — срочные вызовы координатора докладом-блокером снизу (свой потолок).
+// maxWavesAfter / maxTasksAfter (волна 1 team-blocker-honest) — новые потолки после
+// расширения, посчитанные на бэке (Max + max(0, plan - left)). 0 — плана нет, плашка
+// бюджета скрывается. Раньше плашка показывала «потолок поднимется до N», где N был
+// размером плана — это расходилось с реальностью при ненулевом расходе.
 export interface TeamImplementBudget {
   tasksUsed: number;
   wavesUsed: number;
@@ -1563,6 +1578,8 @@ export interface TeamImplementBudget {
   maxRuns: number;
   maxRetries: number;
   maxWakeups: number;
+  maxWavesAfter: number;
+  maxTasksAfter: number;
 }
 
 // Состояние режима на сессии (Session.teamImplement); null — режим выключен.
@@ -1763,6 +1780,11 @@ export interface TeamEscalation {
   details: string;
   actions: TeamEscalationAction[];
   taskId?: string | null;
+  // Название задачи (волна 1 team-blocker-honest, дефект 1430b732): снимок из штаба на
+  // момент публикации. Идёт в подпись диалога снятия — раньше там стоял заголовок
+  // карточки («Исполнитель застрял: …»), и человек не видел, какую задачу закрывает.
+  // null — штаб не смог подтянуть (задача удалена) или старая версия бэка: фолбэк на title.
+  taskTitle?: string | null;
   wave: number;
   // Только в истории — у live-события времени нет
   createdAt?: string;
@@ -1771,6 +1793,11 @@ export interface TeamEscalation {
   // Автор карточки (Э8): координатор на момент публикации — карточка идёт от его лица.
   // null — персоны у штаба нет, шапка деградирует до обезличенного варианта
   personaId?: string | null;
+  // Примечание от штаба при chosenActionId="resolvedByStaff": чем координатор закрыл
+  // карточку. Поле опциональное — старый бэкенд и пустое примечание дают фронт без него;
+  // рисуем «Снят штабом» без тела вместо «Снят штабом: undefined». chosenActionId="message"
+  // означает «человек ответил сообщением» — это уже отдельная ветка без resolutionNote
+  resolutionNote?: string | null;
 }
 
 // Элементы чата

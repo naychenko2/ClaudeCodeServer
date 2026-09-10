@@ -1,5 +1,4 @@
-﻿using ClaudeHomeServer.Controllers;
-using ClaudeHomeServer.Services.Composition;
+﻿using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Tasks;
@@ -68,6 +67,19 @@ public class TeamWaveService
     // поэтому «кто закрывает волну» решается под этим локом, а не проверкой состояния на глаз.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> _waveLocks = new();
 
+    // Тестовое прерывание: подменить intake на фейк и проверить факт вызова
+    // InterruptTurn (и порядок «прервать → дождаться → пометить»). В проде всегда null
+    // и идёт через _sessions. Через свойство Intake ходят ВСЕ три точки прерывания
+    // (снятие под-задачи, перезапуск задачи, остановка волны) — шов, покрывающий один
+    // путь из трёх, сторожил бы треть инварианта (находка фикс-волны 4).
+    internal ITeamTurnIntake? IntakeForTestOverride { get; set; }
+    private ITeamTurnIntake Intake => IntakeForTestOverride ?? _intake;
+
+    // Потолок ожидания простоя исполнителя после InterruptTurn. Поле, а не литерал в трёх
+    // местах: тесты ставят миллисекунды, иначе каждый кейс «статус так и не ушёл» стоил бы
+    // десять секунд прогона (фикс-волна 4 team-blocker-honest).
+    internal TimeSpan ExecutorIdleTimeout { get; set; } = TimeSpan.FromSeconds(10);
+
     public TeamWaveService(SessionManager sessions, TaskManager tasks, IProjectManager projects,
         ISessionBroadcaster broadcaster, ILogger<TeamWaveService> log,
         // Имя персоны-автора для текста уведомлений и push (Э8) — зависимость обязательная:
@@ -120,6 +132,24 @@ public class TeamWaveService
         _tasks.TaskCompleted += OnTaskDone;
         // Провал хода исполнителя: одна перевыдача, второй провал — эскалация
         if (_exec is not null) _exec.TeamTaskFailed = OnTaskFailedAsync;
+        // Волна 2 team-blocker-honest: страховка молчания исполнителя должна отличать
+        // «молчит» от «ждёт ответа по блокеру» — для этого ей нужен признак открытой
+        // карточки блокера по задаче. Резолв идёт по тому же ITeamHistoryStore, через
+        // который штаб публикует/гасит карточки: единая точка правды, без нового шва.
+        if (_exec is not null) _exec.OpenBlockerLookup = t => HasOpenBlockerAsync(t);
+    }
+
+    // Синхронно-выглядящий предикат под sync-сигнатурой крючка: TaskExecutionService.ClassifyStall
+    // чистая функция, и её вызывающий дожидается результата в фоне (TaskSchedulerService тикает
+    // раз в 30 с, единичный дополнительный roundtrip к диску истории не критичен). Снимок
+    // открытых карточек по SourceSessionId задачи; блокер — единственный вид, что ищет
+    // сторож молчания (TaskFailed/PlanDeviation/CheckFailed не блокируют исполнителя).
+    private async Task<bool> HasOpenBlockerAsync(TaskItem task)
+    {
+        var sourceSessionId = task.SourceSessionId;
+        if (sourceSessionId is null) return false;
+        var open = await _history.GetOpenTeamEscalationsAsync(sourceSessionId);
+        return open.Any(e => e.Kind == TeamEscalationKind.Blocker && e.TaskId == task.Id);
     }
 
     // Под-задачи очередной волны: минимальный номер волны среди нерозданных, и только если
@@ -366,10 +396,29 @@ public class TeamWaveService
     // помечается Done с пояснением — тем же путём, что и обычный доклад исполнителя
     // (TaskManager.TaskCompleted → OnTaskDone → CloseWaveIfDoneAsync), иначе волна не могла
     // закрыться до ручного tasks_complete, а «Пропустить»/«Снять» на карточке ничего не делали.
+    //
+    // Волна 1 team-blocker-honest, дефект f3965801: после снятия по карточке обязательно
+    // а) останавливаем ход исполнителя (InterruptTurn + WaitExecutorIdle, чтобы «исполнитель
+    // получит отбой» из диалога не было враньём; доработка f3965801 в фикс-волне 4 — прежняя
+    // версия звала только MarkExecutorStopped, и ход CLI исполнителя жил дальше, пока
+    // HasLiveDelegatedTask уже ложен — расхождение состояния), и б) ставим DroppedByHumanAt,
+    // который блокирует поздний tasks_complete от затирания пометки снятия штатным отчётом.
     internal async Task DropSubtaskAsync(string taskId, string reason)
     {
         var task = _tasks.GetById(taskId);
         if (task is null) return;
+        // Реальное прерывание хода: если исполнитель ещё жив (LinkedSessionId и сессия в
+        // стартовом/рабочем/ждущем состоянии) — Intake.InterruptTurn шлёт сигнал остановки,
+        // WaitExecutorIdle дожидается, пока статус уйдёт. Порядок обязателен: сначала
+        // дождаться простоя, и только потом MarkExecutorStopped/Update — иначе остаётся
+        // окно, где штаб уже не ждёт, а исполнитель ещё правит файлы общего worktree.
+        // Не запускавшийся исполнитель не числится занятым — пропускаем (штатный случай,
+        // пометка ExecutorStoppedAt всё равно встанет через MarkExecutorStopped ниже).
+        if (task.LinkedSessionId is { } linkedId && IsExecutorBusy(task))
+        {
+            Intake.InterruptTurn(linkedId);
+            await WaitExecutorIdleAsync(() => IsExecutorBusy(task), $"снятие под-задачи {taskId}");
+        }
         // Деградация дефекта: снятие волной штаба закрывает карточку без отдельной проверки —
         // Outcome=ClosedWithoutCheck снимает гейт DefectRules.EnsureVerificationOnClose
         var updated = _tasks.Update(taskId, new UpdateTaskRequest(
@@ -377,7 +426,28 @@ public class TeamWaveService
             ResultMarkdown: reason,
             Outcome: DefectOutcome.ClosedWithoutCheck));
         if (updated is null) return;
-        if (updated.OwnerId is { } ownerId) await _broadcaster.ToOwner(ownerId, new TaskChangedMessage("updated", updated));
+        // Маркер снятия человеком — ПОСЛЕ Update, иначе Update применил бы Status/Outcome
+        // штаба, а пометка снятия осталась бы не выста влена (TaskManager.Update видит
+        // только своё состояние). MarkDroppedByHuman двигает UpdatedAt и бьёт Save.
+        var markedDropped = _tasks.MarkDroppedByHuman(taskId, DateTime.UtcNow) ?? updated;
+        // Отбой исполнителя: ставим ExecutorStoppedAt/Reason тем же путём, что
+        // TaskExecutionService.HandleExecutorStoppedAsync. Причина — терминальная
+        // (ExecutorStopClassifier.IsTerminal=true), значит MarkExecutorStopped примет.
+        var stopReason = "Снято решением человека по карточке блокера (drop)";
+        var stopped = _tasks.MarkExecutorStopped(taskId, DateTime.UtcNow, stopReason)
+            ?? markedDropped;
+        if (stopped.OwnerId is { } ownerId)
+            await _broadcaster.ToOwner(ownerId, new TaskChangedMessage("updated", stopped));
+        // Волна 1 team-blocker-honest: сняли под-задачу, на которую был открыт блокер —
+        // гасим карточку штаба по факту (стадия возвращается в работу).
+        if (stopped.SourceSessionId is { } sourceSessionId)
+        {
+            var src = _sessions.GetById(sourceSessionId);
+            string? stabId = src?.TeamImplement != null ? sourceSessionId : src?.ParentSessionId;
+            if (stabId is not null)
+                await _sessions.TryResolveBlockerByFactAsync(stabId, taskId,
+                    "штаб снял подзадачу — блокер снят");
+        }
     }
 
     // --- Э4: автономный цикл волн ---
@@ -725,15 +795,26 @@ public class TeamWaveService
     // Дождаться, пока чат-исполнитель перестанет числиться занятым после Interrupt:
     // статус убирается асинхронно (реанимация зависшего / финализация убитого прогона),
     // а перевыдача сразу после стопа упиралась бы в гейт «по задаче уже работает сессия».
-    // Не дождались — не страшно: ExecuteAsync честно откажет своим текстом, он уйдёт человеку.
-    private static async Task WaitExecutorIdleAsync(Func<bool> busy, TimeSpan timeout)
+    // Вернёт false, если исполнитель не встал за ExecutorIdleTimeout. Молчать в этом
+    // случае нельзя (фикс-волна 4 team-blocker-honest): именно тогда «исполнитель получит
+    // отбой» снова становится неправдой — штаб идёт дальше, а ход ещё правит общее дерево,
+    // и без записи в лог узнать об этом неоткуда.
+    private async Task<bool> WaitExecutorIdleAsync(Func<bool> busy, string what)
     {
-        var deadline = DateTime.UtcNow + timeout;
+        var deadline = DateTime.UtcNow + ExecutorIdleTimeout;
         while (busy())
         {
-            if (DateTime.UtcNow >= deadline) return;
+            if (DateTime.UtcNow >= deadline)
+            {
+                _log.LogWarning(
+                    "Исполнитель не встал за {Timeout} после прерывания ({What}) — идём дальше, " +
+                    "ход может ещё править файлы общего worktree",
+                    ExecutorIdleTimeout, what);
+                return false;
+            }
             await Task.Delay(TimeSpan.FromMilliseconds(200));
         }
+        return true;
     }
 
     // Перезапуск одной под-задачи — строка задачи в поповере (этап 3). Тот же путь перевыдачи,
@@ -771,8 +852,8 @@ public class TeamWaveService
             // живой зависший прогон убивается — иначе перевыдача упрётся в гейт задачи
             if (IsExecutorBusy(task) && task.LinkedSessionId is { } linkedId)
             {
-                _intake.InterruptTurn(linkedId);
-                await WaitExecutorIdleAsync(() => IsExecutorBusy(task), TimeSpan.FromSeconds(10));
+                Intake.InterruptTurn(linkedId);
+                await WaitExecutorIdleAsync(() => IsExecutorBusy(task), $"перезапуск задачи {taskId}");
             }
 
             // Перепроверка перед перевыдачей (гонка ревью этапа 3): исполнитель мог
@@ -848,8 +929,8 @@ public class TeamWaveService
             foreach (var s in undone)
             {
                 if (_tasks.GetById(s.TaskId!) is not { } t || !IsExecutorBusy(t)) continue;
-                _intake.InterruptTurn(t.LinkedSessionId!);
-                await WaitExecutorIdleAsync(() => ExecutorBusyById(t.Id), TimeSpan.FromSeconds(10));
+                Intake.InterruptTurn(t.LinkedSessionId!);
+                await WaitExecutorIdleAsync(() => ExecutorBusyById(t.Id), $"перезапуск волны, задача {t.Id}");
             }
 
             var reissued = 0;

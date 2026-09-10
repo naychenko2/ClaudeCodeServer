@@ -382,7 +382,18 @@ public record TeamEscalationMessage(
         bool Resolved,
         string? ChosenActionId,
         // Автор карточки (Э8): координатор на момент публикации — карточка идёт от его лица
-        string? PersonaId = null)
+        string? PersonaId = null,
+        // Пояснение к снятию карточки штабом (волна 1 team-blocker-honest): идёт в подпись
+        // «Снят штабом: …» в ленте, у кнопок человека — null. Параметр добавлен ПОСЛЕ
+        // PersonaId, чтобы не сбивать позиционную сигнатуру существующих вызовов.
+        string? ResolutionNote = null,
+        // Название задачи (волна 1 team-blocker-honest, дефект 1430b732): фронт подставляет
+        // его в подпись диалога снятия «Задача «X» будет закрыта как снятая», чтобы
+        // человек видел, какую задачу закрывает. Снимок на момент публикации, как TaskId.
+        // В конце — из-за правила C#: optional после required, а TaskTitle опциональный,
+        // а TaskId/Wave/Resolved/ChosenActionId часть — required. JSON-порядок значения
+        // не имеет (фронт парсит по именам полей).
+        string? TaskTitle = null)
     : ServerMessage("team_escalation");
 
 // Жизненный цикл планировщика «Командной реализации» (Э2). Транзитное событие для ленты

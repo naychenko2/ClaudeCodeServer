@@ -361,6 +361,41 @@ internal sealed class TeamDecisionService
                     // Э8: работа разрешена именно этой версии плана — по ней и только по ней
                     // стартуют волны (гард в TeamWaveService).
                     t.ApprovedPlanVersion = plan.Version;
+                    // M1 (фикс-волна 4 team-blocker-honest): план сверх остатка бюджета —
+                    // клик «Запустить» расширяет потолки ровно на недостающую разницу.
+                    // Считаем от ОСТАТКА, а не от потолка: до фикса дельты
+                    // считали `plan.Subtasks − MaxTasks`, игнорируя `TasksUsed`, и при
+                    // уже потраченных волнах расширение выходило нулевым — гейт
+                    // `ExceededReasonForWave` работал от остатка и поднимал карточку
+                    // «Бюджет исчерпан» на следующей волне (Глеб: «MaxWaves=2, WavesUsed=1,
+                    // план на 2 волны — потолки не сдвинулись, после волны 1 — карточка»).
+                    // Гейт и расчёт дельты ОБЯЗАНЫ ходить по одной арифметике: число
+                    // под-задач/волн, которые надо ещё вписать в остаток. Math.Max с
+                    // 0 — защита от отрицательного остатка в редких состояниях
+                    // (легаси-сессии без реинициализации счётчиков).
+                    // Автоматическое расширение ТОЛЬКО на подтверждении плана человеком:
+                    // сюда ходит только SessionHub.RespondTeamPlan с проверкой владельца,
+                    // агентский путь (chats_send → PublishTeamPlanAsync) сюда не ведёт.
+                    // Расширение происходит ДО старта волны — гейт
+                    // TeamWaveService.StartWaveCoreAsync сразу видит новые потолки в
+                    // Budget.ExceededReasonForWave и не поднимает карточку.
+                    // M2: тот же счётчик живёт у MaxRuns — RunsUsed растёт на каждую
+                    // под-задачу (TeamWaveService.StartWaveCoreAsync) и реизиссу
+                    // (DecideReissueAsync). План флагманского случая (9 волн / 27 задач)
+                    // при дефолте MaxRuns=20 упирался в третий счётчик на 6–7 волне.
+                    // Формула PlanShortfall — единая точка с TeamStateService.FillAfterBudgetAsync
+                    // (M1 фикс-волны 4 team-blocker-honest): то же выражение жило копией в двух
+                    // файлах — копии расходятся тихо, а расхождение здесь означает, что плашка
+                    // бюджета обещает человеку не то, что сделает запуск.
+                    var deltaTasks = TeamImplementBudget.PlanShortfall(
+                        t.Budget.MaxTasks, t.Budget.TasksUsed, plan.Subtasks.Count);
+                    var deltaWaves = TeamImplementBudget.PlanShortfall(
+                        t.Budget.MaxWaves, t.Budget.WavesUsed, plan.WaveCount);
+                    var deltaRuns = TeamImplementBudget.PlanShortfall(
+                        t.Budget.MaxRuns, t.Budget.RunsUsed, plan.Subtasks.Count);
+                    t.Budget.MaxTasks += deltaTasks;
+                    t.Budget.MaxWaves += deltaWaves;
+                    t.Budget.MaxRuns += deltaRuns;
                 }
                 if (decision == TeamPlanDecision.Cancel) { t.PlanCardId = null; t.PlannedWaves = 0; }
                 return true;
@@ -412,11 +447,20 @@ internal sealed class TeamDecisionService
         // трогаем: карточку мог составить другой участник штаба (например планировщик).
         escalation.PersonaId ??= session.TeamImplement?.CoordinatorPersonaId ?? session.PersonaId;
 
+        // Название задачи (волна 1 team-blocker-honest, дефект 1430b732): подтягиваем из
+        // стора задач, если ещё не заполнено. Единая точка — карточки эскалации создаются
+        // во многих местах штаба, и без этого каждая точка должна была бы резолвить имя
+        // задачи отдельно. Снимок, не live-резолв — карточка остаётся про исходный момент.
+        // null для удалённой задачи — фронт падает обратно на заголовок карточки.
+        if (escalation.TaskTitle is null && escalation.TaskId is { } tid)
+            escalation.TaskTitle = _sessions.GetTaskTitle?.Invoke(tid);
+
         await _history.AppendAsync(sessionId,
             new StoredTeamEscalationMessage { EscalationId = escalation.Id, Escalation = escalation },
             new TeamEscalationMessage(escalation.Id, escalation.Kind.ToWireToken(), escalation.Title,
                 escalation.Details, escalation.Actions, escalation.TaskId, escalation.Wave,
-                false, null, escalation.PersonaId));
+                false, null, escalation.PersonaId,
+                ResolutionNote: null, TaskTitle: escalation.TaskTitle));
 
         if (session.TeamImplement is null) return;
         // Информационная карточка (добавочная волна) практику не останавливает: стадию и
@@ -569,7 +613,8 @@ internal sealed class TeamDecisionService
             (kind).ToWireToken(),
             escalation.Title, escalation.Details,
             escalation.Actions, escalation.TaskId, escalation.Wave, true, actionId,
-            escalation.PersonaId));
+            escalation.PersonaId,
+            ResolutionNote: null, TaskTitle: escalation.TaskTitle));
 
         // «Остановить» с информационной карточки добавочной волны (Э5) — той же точкой, что
         // кнопка режима (ChatsController): состояние уже поставлено транзакцией выше, а повторный
@@ -735,4 +780,92 @@ internal sealed class TeamDecisionService
     // вертикали знать незачем.
     private static bool AllPlannedWavesClosed(SessionTeamImplement team) =>
         team.PlannedWaves > 0 && team.ClosedWave >= team.PlannedWaves;
+
+    // === Волна 1 team-blocker-honest: единая точка снятия блокера по факту ===
+    // Доклад-блокер одновременно поднимает карточку человеку и будит координатора; координатор
+    // обычно снимает блокер сам (переписал постановку, ответил исполнителю, перезапустил его),
+    // и карточка должна гаснуть по факту этого действия — иначе стадия висит в
+    // AwaitingDecision, а гейт запуска не даёт координатору исполнить собственное решение.
+    // Сигналы: tasks_update/tasks_complete/tasks_run_executor задачи, на которую открыта
+    // карточка, снятие под-задачи, chats_send в дочерний чат задачи, и маркер <team:resolved>
+    // в ходе координатора. Карточка гасится тем же путём, что кнопка человека
+    // (ResolveEscalationAsync → OnTeamEscalationResolved); стадия возвращается по правилам
+    // default-ветки RespondTeamEscalationAsync (Wave со свежими отсечками / Idle при
+    // AllPlannedWavesClosed / StageBeforeDecision до первой волны), ТОЛЬКО если решающих
+    // открытых карточек больше нет. P23 (team:work / все волны закрыты) — частный случай
+    // той же логики. reason — короткий текст для ResolutionNote (карточка подпишется
+    // «Снят штабом: {reason}»).
+    public async Task<bool> TryResolveBlockerByFactAsync(string stabSessionId, string taskId,
+        string reason)
+    {
+        if (string.IsNullOrWhiteSpace(stabSessionId)) return false;
+        if (_sessions.GetById(stabSessionId) is not { } session) return false;
+        if (session.TeamImplement is not { } team) return false;
+
+        // Открытые карточки блокера по задаче: для неактивного чата живут на диске, для
+        // активного — в аккумуляторе. Гасим обе развилки и помогаем всем блокер-карточкам
+        // задачи сразу. Сторона гашения — ResolveEscalationAsync (единая точка, как у кнопки).
+        // P23 (taskId пустой): старый путь ловит блокеры без привязки к задаче (общий карточный
+        // блокер) — гасим ВСЕ открытые блокеры. Это оставляет логику «team:work снял предмет
+        // блокера» работающей для блокеров, которые создаются без TaskId (как в старых тестах).
+        var open = await GetOpenTeamEscalationsAsync(stabSessionId);
+        var blockers = string.IsNullOrEmpty(taskId)
+            ? open.Where(e => e.Kind == TeamEscalationKind.Blocker).ToList()
+            : open.Where(e => e.Kind == TeamEscalationKind.Blocker && e.TaskId == taskId).ToList();
+        if (blockers.Count == 0) return false;
+
+        foreach (var card in blockers)
+        {
+            // M3 (фикс-волна): ResolutionNote пишется в карточку ОДНИМ вызовом вместе с
+            // Resolved/ChosenActionId — раньше отдельный MutateCardAsync у активного чата
+            // ходил через диск и затирался ближайшим снимком аккумулятора, и подпись
+            // «Снят штабом: …» жила только в транзитном WS-сообщении — после F5 её не было.
+            var resolved = await _sessions.ResolveEscalationAsync(stabSessionId, card.Id,
+                "resolvedByStaff", reason);
+            if (resolved is null) continue;
+            await _sessions.BroadcastAsync(stabSessionId, new TeamEscalationMessage(card.Id,
+                card.Kind.ToWireToken(), card.Title, card.Details, card.Actions,
+                card.TaskId, card.Wave, Resolved: true, ChosenActionId: "resolvedByStaff",
+                card.PersonaId, ResolutionNote: reason,
+                TaskTitle: card.TaskTitle));
+        }
+
+        // Возврат стадии ТОЛЬКО если решающих открытых карточек больше нет.
+        // Информационные карточки (WaveAdded) не считаются: практику они не останавливали.
+        // S4 (фикс-волна): чтение открытых карточек и сдвиг стадии — ОДНОЙ транзакцией.
+        // Раньше две отдельные операции: между «прочитали список → hasDecisional=false» и
+        // «WithTeamState{ставим Wave}» параллельный сигнал успевал поднять новую карточку
+        // и перевести стадию в AwaitingDecision, которую мы тут же затирали на Wave — открытая
+        // карточка висела без полосы, человек не знал, что от него ждут решения. Перечитываем
+        // список под локом WithTeamState (sync-метод ITeamHistoryStore, см. S6): без него
+        // возврат стадии шёл по устаревшему снимку.
+        bool stageAdvanced = false;
+        _run.WithTeamState(stabSessionId, t =>
+        {
+            var stillOpen = _history.GetOpenTeamEscalationsSync(stabSessionId);
+            var hasDecisional = stillOpen.Any(e => !e.Kind.IsInformational());
+            if (hasDecisional) return true;
+            stageAdvanced = true;
+            t.Stage = t.WaveNumber == 0
+                ? t.StageBeforeDecision ?? TeamImplementStage.Planning
+                : AllPlannedWavesClosed(t)
+                    ? TeamImplementStage.Idle
+                    : TeamImplementStage.Wave;
+            t.StageBeforeDecision = null;
+            if (t.Stage == TeamImplementStage.Wave && t.WaveNumber > 0
+                && t.ClosedWave < t.WaveNumber)
+            {
+                t.WaveStartedAt = DateTime.UtcNow;
+                t.WaveActivityAt = DateTime.UtcNow;
+            }
+            return true;
+        });
+        if (!stageAdvanced) return true;
+        session.UpdatedAt = DateTime.UtcNow;
+        _sessions.SaveSessions();
+        await _sessions.BroadcastTeamImplementAsync(stabSessionId, session);
+        _log.LogInformation("Карточка блокера по задаче {TaskId} в чате-штабе {SessionId} погашена штабом: {Reason}",
+            taskId, stabSessionId, reason);
+        return true;
+    }
 }

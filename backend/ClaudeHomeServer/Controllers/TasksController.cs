@@ -366,7 +366,15 @@ public class TasksController(
         TaskItem updated;
         try
         {
-            updated = tasks.Update(taskId, req, effectiveColumn)
+            // Агентский путь ловим по X-Caller-Session-Id: заголовок ставят MCP-серверы
+            // (mcp/tasks-server/index.js шлёт его на КАЖДЫЙ вызов), а браузер — никогда.
+            // Без этого гард против затирания снятой задачи терялся на stdio-ветке отката
+            // (Mcp:HttpTransport=false): tasks_complete идёт сюда обычным PUT, и затирание
+            // снова было бы молчаливым (фикс-волна 4 team-blocker-honest). Это не защита от
+            // подделки, а разведение путей: подделанный заголовок делает правило строже.
+            var isAgentCall = !string.IsNullOrEmpty(
+                Request.Headers[DenyOnDelegatedTurnAttribute.CallerHeader].FirstOrDefault());
+            updated = tasks.Update(taskId, req, effectiveColumn, isAgentCall)
                 ?? throw new InvalidOperationException("Задача не найдена");
         }
         catch (InvalidOperationException ex)

@@ -2,7 +2,9 @@
 // Карточка остановки — обычный элемент ленты: её уносит вверх потоком докладов
 // исполнителей, и человек её не замечает (прод 25.08, чат «Удаление чатов с архивом»,
 // практика молча стояла 40+ минут, пока человек не написал в чат случайное сообщение).
-// Предикат — из lib/teamImplement: открытая карточка = team_escalation && !resolved.
+// Предикат — из lib/teamImplement: открытая карточка = team_escalation && !resolved
+// && стадия режима её ждёт (awaitingDecision/interview). Без стадии полоса не рисуется —
+// иначе она висела бы и когда решение уже принято (прод-инцидент с двумя снятыми задачами).
 // Полоса повторяет самую свежую из открытых, счётчик остальных — справа.
 //
 // Тон берётся из teamEscalationTone: warning/success/muted/work — единая палитра
@@ -16,25 +18,35 @@
 
 import { useCallback } from 'react';
 import { AlertTriangle, ChevronUp } from 'lucide-react';
-import type { ChatItem } from '../../types';
+import type { ChatItem, TeamImplementStage } from '../../types';
 import { C, FS, R, SHADOW } from '../../lib/design';
-import { teamEscalationTone } from '../../lib/teamImplement';
+import { isEscalationAwaitingStage, teamEscalationTone } from '../../lib/teamImplement';
 
 interface OpenEscalation {
   item: Extract<ChatItem, { kind: 'team_escalation' }>;
   idx: number;
 }
 
-function isOpenEscalation(it: ChatItem, i: number): OpenEscalation | null {
+// stage === null и stage === undefined трактуются одинаково: полоса не рисуется.
+// null приходит из REST/гидратации без режима, undefined — если вызывающий не передал
+// стадию вообще; в обоих случаях предикат возвращает false, и полоса молчит
+function isOpenEscalation(
+  it: ChatItem,
+  i: number,
+  stage: TeamImplementStage | null | undefined,
+): OpenEscalation | null {
   if (it.kind !== 'team_escalation') return null;
-  if (it.escalation.resolved) return null;
+  if (!isEscalationAwaitingStage(it.escalation, stage)) return null;
   return { item: it, idx: i };
 }
 
-export function findOpenEscalations(items: readonly ChatItem[]): OpenEscalation[] {
+export function findOpenEscalations(
+  items: readonly ChatItem[],
+  stage: TeamImplementStage | null | undefined,
+): OpenEscalation[] {
   const out: OpenEscalation[] = [];
   for (let i = 0; i < items.length; i++) {
-    const m = isOpenEscalation(items[i], i);
+    const m = isOpenEscalation(items[i], i, stage);
     if (m) out.push(m);
   }
   return out;

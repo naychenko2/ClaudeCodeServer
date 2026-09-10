@@ -319,6 +319,47 @@ public class TeamPlanningServiceTests : IDisposable
             "без предыдущего плана пересобирать нечего — правка не имеет смысла");
     }
 
+    // Волна 4 team-blocker-honest: остаток бюджета итерации идёт в промпт, иначе
+    // планировщик режет работу на 9 волн при потолке 4 (прод 2026-09-09). С budget
+    // промпт содержит блок «ОСТАТОК БЮДЖЕТА ИТЕРАЦИИ» со всеми пятью потолками и
+    // текущим расходом, плюс запрет «план НЕ ДОЛЖЕН превышать потолки задач и волн».
+    [Fact]
+    public void BuildPlannerPrompt_СBudget_НесётБлокОстаткаИЗапретПревышения()
+    {
+        var dev = TeamPlanningService.BuildCard(MakePersona("Денис", "Backend-разработчик"));
+        var budget = new TeamImplementBudget
+        {
+            MaxTasks = 12, MaxWaves = 4, MaxRuns = 20, MaxRetries = 3, MaxWakeups = 10,
+            TasksUsed = 0, WavesUsed = 0, RunsUsed = 0, RetriesUsed = 0, WakeupsUsed = 0,
+        };
+
+        var prompt = TeamPlanningService.BuildPlannerPrompt("Добавить экспорт в CSV",
+            [dev], "ClaudeCodeServer", budget: budget);
+
+        prompt.Should().Contain("ОСТАТОК БЮДЖЕТА ИТЕРАЦИИ");
+        prompt.Should().Contain("задачи: 0/12");
+        prompt.Should().Contain("волны: 0/4");
+        prompt.Should().Contain("запуски исполнителей: 0/20");
+        prompt.Should().Contain("перевыдачи: 0/3");
+        prompt.Should().Contain("срочные вызовы координатора: 0/10");
+        prompt.Should().Contain("План НЕ ДОЛЖЕН превышать потолки задач и волн");
+        prompt.Should().Contain("12 / 4", "явные числа потолков — чтобы планировщик не резал на 9 волн при потолке 4");
+    }
+
+    // budget == null (глобальный чат, штаб вне режима, read-only контекст) —
+    // блок «ОСТАТОК БЮДЖЕТА» НЕ рисуется, остальной промпт без изменений.
+    [Fact]
+    public void BuildPlannerPrompt_БезBudget_НетБлокаОстатка()
+    {
+        var dev = TeamPlanningService.BuildCard(MakePersona("Денис", "Backend-разработчик"));
+
+        var prompt = TeamPlanningService.BuildPlannerPrompt("Добавить экспорт в CSV",
+            [dev], "ClaudeCodeServer");
+
+        prompt.Should().NotContain("ОСТАТОК БЮДЖЕТА");
+        prompt.Should().NotContain("План НЕ ДОЛЖЕН превышать потолки");
+    }
+
     // Прод 2026-08-02 (находка Веры): планировщик выдал под-задачу с буквальным
     // «<файл-1 в корне проекта>» вместо значения, которое человек указал в вводной —
     // промпт обязан явно запрещать плейсхолдеры и требовать перенос конкретики или допущение.

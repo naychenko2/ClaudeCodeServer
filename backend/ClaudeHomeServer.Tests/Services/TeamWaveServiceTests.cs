@@ -5,11 +5,11 @@ using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
-using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Services.Team;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
@@ -37,6 +37,9 @@ public class TeamWaveServiceTests : IDisposable
     // TestSessionBroadcaster разделяет по каналам: Owner — уведомления штаба,
     // Session — пульсы/прочее в группу конкретного чата-штаба
     private readonly TestSessionBroadcaster _broadcaster = new();
+    // Лог службы копится в список: тесты снятия проверяют предупреждение о том, что
+    // исполнитель не встал за отведённый срок (фикс-волна 4 team-blocker-honest)
+    private readonly List<string> _logLines = [];
 
     public TeamWaveServiceTests()
     {
@@ -67,7 +70,7 @@ public class TeamWaveServiceTests : IDisposable
                 NullLogger<PushService>.Instance),
             _personas, _projects, NullLogger<NotificationService>.Instance);
         _sut = new TeamWaveService(_sessions, _tasks, _projects, _broadcaster,
-            NullLogger<TeamWaveService>.Instance, _personas, notif: notif);
+            new CollectingLogger<TeamWaveService>(_logLines), _personas, notif: notif);
     }
 
     public void Dispose()
@@ -2519,6 +2522,531 @@ public class TeamWaveServiceTests : IDisposable
         {
             _sut.TestHoldRestart.TrySetResult();
             _sut.TestHoldRestart = null;
+        }
+    }
+
+    // === Волна 4 team-blocker-honest: «Запустить» расширяет бюджет на разницу ===
+
+    // План в пределах бюджета — клик «Запустить» НЕ двигает потолки, волна стартует штатно.
+    // Случай-страховка от регрессии: до этого код клал расширение безусловно, и лишний
+    // сдвиг Max* по любой карточке мог спутать сравнение в Budget.ExceededReason (M1).
+    [Fact]
+    public async Task RespondTeamPlan_RunВПределахБюджета_ПотолкиНеДвигаютсяВолнаСтартует()
+    {
+        var (session, plan) = await MakeRunningStabAsync("budget-plan-ok");
+        // Сжимаем потолок до плана: 2 волны, 2 задачи (план ровно такой)
+        var team = Team(session.Id);
+        var maxTasksBefore = team.Budget.MaxTasks;
+        var maxWavesBefore = team.Budget.MaxWaves;
+        plan.Subtasks.Count.Should().BeLessThanOrEqualTo(maxTasksBefore);
+        plan.WaveCount.Should().BeLessThanOrEqualTo(maxWavesBefore);
+
+        await _sessions.RespondTeamPlanAsync(session.Id, plan.Id, TeamPlanDecision.Run, userId: UserId);
+
+        var after = Team(session.Id);
+        after.Budget.MaxTasks.Should().Be(maxTasksBefore, "план в пределах — потолки не двигаются");
+        after.Budget.MaxWaves.Should().Be(maxWavesBefore, "план в пределах — потолки не двигаются");
+        after.Stage.Should().Be(TeamImplementStage.Wave, "волна стартует штатно");
+    }
+
+    // План сверх бюджета: волн больше MaxWaves ИЛИ под-задач больше MaxTasks.
+    // Клик «Запустить» поднимает потолки ровно на дельту, и волна стартует БЕЗ карточки
+    // «Бюджет исчерпан» (прод 2026-09-09: девять волн при потолке четыре, две остановки).
+    [Fact]
+    public async Task RespondTeamPlan_RunСверхБюджета_РасширяетПотолкиНаДельтуВолнаСтартуетБезКарточки()
+    {
+        var (session, plan) = await MakeRunningStabAsync("budget-plan-overrun");
+        // Сжимаем потолки до гарантированного превышения:
+        //  - волн: план из 2 волн при потолке 1 → дельта 1
+        //  - задач: план из 2 задач при потолке 1 → дельта 1
+        var team = Team(session.Id);
+        team.Budget.MaxWaves = 1;
+        team.Budget.MaxTasks = 1;
+        plan.WaveCount.Should().Be(2);
+        plan.Subtasks.Count.Should().Be(2);
+        var budgetExhaustedBefore = CountBudgetExhaustedCards(session.Id);
+
+        await _sessions.RespondTeamPlanAsync(session.Id, plan.Id, TeamPlanDecision.Run, userId: UserId);
+
+        var after = Team(session.Id);
+        after.Budget.MaxWaves.Should().Be(2, "потолок волн поднят ровно на дельту 1 (план 2, потолок был 1)");
+        after.Budget.MaxTasks.Should().Be(2, "потолок задач поднят ровно на дельту 1 (план 2, потолок был 1)");
+        after.Stage.Should().Be(TeamImplementStage.Wave, "волна стартует — бюджет теперь её вмещает");
+
+        var budgetExhaustedAfter = CountBudgetExhaustedCards(session.Id);
+        budgetExhaustedAfter.Should().Be(budgetExhaustedBefore,
+            "расширение на Run — БЕЗ карточки «Бюджет исчерпан», иначе две остановки по ходу");
+    }
+
+    // Карточек «Бюджет исчерпан» в Session-канале broadcaster-а по конкретному чату.
+    // Используется в тестах волны 4 для проверки инварианта «Run расширяет без карточки».
+    // S1 (фикс-волна 4 team-blocker-honest): фильтрует именно по sessionId — без фильтра
+    // ловились бы карточки соседних штабов из общего snapshot-а broadcaster-а (TestSessionBroadcaster
+    // делит один Session-канал на ВСЕ чаты), а подсчёт не соответствовал бы имени параметра.
+    private int CountBudgetExhaustedCards(string sessionId)
+    {
+        var n = 0;
+        foreach (var (sid, message) in _broadcaster.Session)
+        {
+            if (sid == sessionId
+                && message is Protocol.TeamEscalationMessage t
+                && t.Kind == "budgetExhausted")
+                n++;
+        }
+        return n;
+    }
+
+    // Только дельта по задачам (без волн) — расширение должно быть точечным.
+    [Fact]
+    public async Task RespondTeamPlan_RunСверхТолькоПоЗадачам_ПоднимаетТолькоMaxTasks()
+    {
+        var (session, plan) = await MakeRunningStabAsync("budget-plan-tasks-only");
+        var team = Team(session.Id);
+        // Сжимаем только задачи; волн в плане меньше MaxWaves (он равен 2, потолок дефолт 4)
+        team.Budget.MaxTasks = 1;
+        var maxWavesBefore = team.Budget.MaxWaves;
+
+        await _sessions.RespondTeamPlanAsync(session.Id, plan.Id, TeamPlanDecision.Run, userId: UserId);
+
+        var after = Team(session.Id);
+        after.Budget.MaxTasks.Should().Be(2, "поднят на дельту 1");
+        after.Budget.MaxWaves.Should().Be(maxWavesBefore, "волны не выходили за потолок — не трогаем");
+    }
+
+    // M3 (фикс-волна 4 team-blocker-honest): агентский путь публикации плана
+    // (PublishTeamPlanAsync ветка additional=true) НЕ ДВИГАЕТ потолки. Расширение —
+    // прерогатива человека (SessionHub.RespondTeamPlan → RespondTeamPlanAsync), там
+    // проверка владельца не пускает агента. Структурно это закрыто уже сейчас
+    // (других вызывающих RespondTeamPlanAsync нет), но это «доказательство через
+    // чтение кода», а не сторож — регрессия «кто-то добавит Max* += deltaXxx в
+    // ветку additional» прошла бы молча. Прямой контракт: после публикации
+    // добавочного плана все три Max остаются прежними. Доказательство мутацией:
+    // добавить в PublishTeamPlanAsync additional-ветку строчку
+    // `t.Budget.MaxTasks = 100;` → тест обязан покраснеть (см. отчёт фикс-волны).
+    [Fact]
+    public async Task АвтоСтартДобавочногоПлана_НеРасширяетПотолки()
+    {
+        var (session, _, _) = await MakeStabWithTeamAsync("budget-agent-path");
+        var team = Team(session.Id);
+        // Сжимаем потолки до минимума — любая попытка расширения перешагнула бы за них
+        team.Budget.MaxWaves = 1;
+        team.Budget.MaxTasks = 1;
+        team.Budget.MaxRuns = 1;
+        var maxWavesBefore = team.Budget.MaxWaves;
+        var maxTasksBefore = team.Budget.MaxTasks;
+        var maxRunsBefore = team.Budget.MaxRuns;
+
+        // Второй план: реальный планировщик строит 2 под-задачи в 2 волнах.
+        // additional=true ветка PublishTeamPlanAsync — гард: PlanCardId не null +
+        // AutoWaves=true, без Replanning, fromHuman=true. Состояние удовлетворено.
+        var (p2, r2) = await _sessions.CreateTeamPlanAsync(session.Id, "followup", UserId);
+        r2.Should().BeNull("планировщик-заглушка отдаёт валидный JSON");
+        p2!.WaveCount.Should().Be(2, "планировщик выдаёт 2 волны");
+        p2.Subtasks.Count.Should().Be(2, "планировщик выдаёт 2 под-задачи");
+
+        // Расширение здесь запрещено: дополнительная волна при авто-старте зовётся
+        // мимо RespondTeamPlanAsync, и единственное место в вертикали Team, где
+        // пишется в Max* по плану, — M1/M2 fix в TeamDecisionService.RespondTeamPlanAsync.
+        var after = Team(session.Id);
+        after.Budget.MaxTasks.Should().Be(maxTasksBefore,
+            "агентский путь (добавочный план) не должен расширять MaxTasks");
+        after.Budget.MaxWaves.Should().Be(maxWavesBefore,
+            "агентский путь не должен расширять MaxWaves");
+        after.Budget.MaxRuns.Should().Be(maxRunsBefore,
+            "агентский путь не должен расширять MaxRuns");
+    }
+
+    // Сценарий Глеба из задачи (M1): MaxWaves=2, WavesUsed=1, MaxTasks=2, TasksUsed=1,
+    // план на 2 волны / 2 задачи. До фикса дельты считали от Max (delta = 0),
+    // и после клика «Запустить» потолки не сдвигались; волна 1 раздавалась, TasksUsed
+    // доходил до MaxTasks на закрытии первой задачи, и карточка «Бюджет израсходован»
+    // поднималась посреди второй волны — ровно та остановка, которую волна обещала
+    // предсказать. С фиксом дельты считаются от ОСТАТКА: расширение идёт на
+    // `Subtasks − (MaxTasks − TasksUsed)` = 1 по задачам и столько же по волнам,
+    // и обе волны помещаются в бюджет без карточки.
+    [Fact]
+    public async Task RespondTeamPlan_RunПриЧастичноИзрасходованномБюджете_РасширяетДоПланаБезКарточки()
+    {
+        var (session, plan) = await MakeRunningStabAsync("budget-plan-partial-use");
+        // План на 2 волны / 2 под-задачи (как у Глеба)
+        plan.WaveCount.Should().Be(2);
+        plan.Subtasks.Count.Should().Be(2);
+
+        // Состояние «уже потрачено»: MaxWaves=2, WavesUsed=1 (волна 1 уже была)
+        // — имитируем, что одна волна прошла, RunsUsed и TasksUsed по одной под-задаче
+        var team = Team(session.Id);
+        team.Budget.MaxWaves = 2;
+        team.Budget.MaxTasks = 2;
+        team.Budget.WavesUsed = 1;
+        team.Budget.TasksUsed = 1;
+        team.Budget.RunsUsed = 1;
+        var maxWavesBefore = team.Budget.MaxWaves;
+        var maxTasksBefore = team.Budget.MaxTasks;
+        var maxRunsBefore = team.Budget.MaxRuns;
+        var budgetExhaustedBefore = CountBudgetExhaustedCards(session.Id);
+
+        // Клик «Запустить» — расширение идёт от остатка, не от Max
+        await _sessions.RespondTeamPlanAsync(session.Id, plan.Id, TeamPlanDecision.Run, userId: UserId);
+
+        var after = Team(session.Id);
+        // Остаток по задачам = 2 − 1 = 1; план на 2; дельта = 1 → MaxTasks = 3
+        after.Budget.MaxTasks.Should().Be(maxTasksBefore + 1,
+            "остаток MaxTasks-TasksUsed=1 < plan.Subtasks=2 → дельта 1");
+        // Остаток по волнам = 2 − 1 = 1; план на 2; дельта = 1 → MaxWaves = 3
+        after.Budget.MaxWaves.Should().Be(maxWavesBefore + 1,
+            "остаток MaxWaves-WavesUsed=1 < plan.WaveCount=2 → дельта 1");
+        // Остаток по запускам = 20 (дефолт) − 1 = 19; план на 2; дельта = 0 → MaxRuns не сдвинулся
+        after.Budget.MaxRuns.Should().Be(maxRunsBefore,
+            "план в 2 под-задачи при 19 свободных запусках — дельта по MaxRuns нулевая");
+
+        // Волна 1 стартует. До фикса в этой точке поднималась бы карточка
+        // «Бюджет израсходован»: TasksUsed=1 → +1 = 2 = MaxTasks; волна 2 не помещалась бы.
+        // С фиксом карточек НЕ появилось.
+        var budgetExhaustedAfter = CountBudgetExhaustedCards(session.Id);
+        budgetExhaustedAfter.Should().Be(budgetExhaustedBefore,
+            "расширение на РЕАЛЬНЫЙ остаток — без карточки «Бюджет израсходован» на волне 1");
+    }
+
+    // M2 (фикс-волна 4 team-blocker-honest): план, где под-задач больше остатка
+    // MaxRuns, после клика «Запустить» расширяет MaxRuns на дельту — без карточки
+    // исчерпания. Флагманский случай: план на 9 волн ≈ 18–27 под-задач при дефолте
+    // MaxRuns=20 — без M2 запуск вставал на 6–7 волне.
+    [Fact]
+    public async Task RespondTeamPlan_RunПриПревышенииMaxRuns_РасширяетMaxRunsНаДельтуБезКарточки()
+    {
+        var (session, plan) = await MakeRunningStabAsync("budget-plan-runs");
+        plan.WaveCount.Should().Be(2);
+        plan.Subtasks.Count.Should().Be(2);
+
+        // Состояние: RunsUsed чуть ниже, чем помещается план+5, чтобы быть уверенным,
+        // что без M2 старт волны упёрся бы именно в MaxRuns (а не в MaxTasks/Waves).
+        // Subtasks=2, RunsUsed=19 (дефолтный MaxRuns=20): после волны RunsUsed=21>20 → exhausted.
+        var team = Team(session.Id);
+        team.Budget.RunsUsed = 19;
+        team.Budget.TasksUsed = 0;
+        team.Budget.WavesUsed = 0;
+        // Чтобы MaxTasks/MaxWaves не упирались: дадим запас
+        team.Budget.MaxTasks = 100;
+        team.Budget.MaxWaves = 100;
+        var maxRunsBefore = team.Budget.MaxRuns;
+        var budgetExhaustedBefore = CountBudgetExhaustedCards(session.Id);
+
+        await _sessions.RespondTeamPlanAsync(session.Id, plan.Id, TeamPlanDecision.Run, userId: UserId);
+
+        var after = Team(session.Id);
+        // Остаток по запускам = 20 − 19 = 1; план на 2 под-задачи; дельта = 1 → MaxRuns = 21
+        after.Budget.MaxRuns.Should().Be(maxRunsBefore + 1,
+            "MaxRuns расширен на дельту 1 — иначе запуск встанет на следующей волне");
+        // MaxTasks/MaxWaves не сдвинулись — дельты нулевые (запас 100)
+        after.Budget.MaxTasks.Should().Be(100, "нет дельты — потолок задач не трогается");
+        after.Budget.MaxWaves.Should().Be(100, "нет дельты — потолок волн не трогается");
+        after.Stage.Should().Be(TeamImplementStage.Wave, "волна стартует — MaxRuns расширен");
+
+        // С M2 карточки нет; без M2 на первой же волне превышение RunsUsed > MaxRuns
+        // подняло бы «Бюджет израсходован».
+        var budgetExhaustedAfter = CountBudgetExhaustedCards(session.Id);
+        budgetExhaustedAfter.Should().Be(budgetExhaustedBefore,
+            "расширение MaxRuns на Run — без карточки «Бюджет исчерпан» на волне");
+    }
+
+    // Базовый сценарий M3: делает то же, что MakeRunningStabAsync (создаёт штаб
+    // с уже опубликованным планом при AutoWaves=true), но возвращает ещё и персоны —
+    // нужно для второй итерации планировщика в АвтоСтартДобавочногоПлана.
+    private async Task<(Session Session, Persona Backend, Persona Frontend)> MakeStabWithTeamAsync(string name)
+    {
+        var (session, backend, frontend) = await MakeStabAsync(name);
+        await _sessions.SetTeamImplementAutoAsync(session.Id, true, UserId);
+        _plannerAnswer = $$"""
+            {"summary":"Экспорт задач в CSV","subtasks":[
+              {"title":"Эндпоинт экспорта","goal":"GET /api/tasks/export",
+               "executorPersonaId":"{{backend.Id}}","executorRationale":"Серверная часть — его зона",
+               "files":["backend/Controllers/TasksController.cs"],"wave":1,"doneCriteria":"отдаёт CSV"},
+              {"title":"Кнопка «Экспорт»","goal":"Кнопка в тулбаре",
+               "executorPersonaId":"{{frontend.Id}}","executorRationale":"UI — её зона",
+               "files":["frontend/src/components/Toolbar.tsx"],"wave":2,"doneCriteria":"файл скачивается"}]}
+            """;
+        var (plan, reason) = await _sessions.CreateTeamPlanAsync(session.Id, "Экспорт задач в CSV", UserId);
+        reason.Should().BeNull();
+        plan!.WaveCount.Should().Be(2);
+        plan.Subtasks.Count.Should().Be(2);
+        // Держим штаб «занятым»: та же причина, что у MakeRunningStabAsync —
+        // авто-сводки координатору не уходят в реальный CLI на CI.
+        var running = _sessions.GetById(session.Id)!;
+        running.Status = SessionStatus.Working;
+        return (running, backend, frontend);
+    }
+
+    // ─── DropSubtaskAsync (фикс-волна 4 team-blocker-honest, доработка f3965801) ───
+    // Кнопка «Снять задачу у исполнителя» на карточке эскалации должна:
+    // (а) РЕАЛЬНО остановить ход исполнителя через InterruptTurn (прежняя версия звала
+    // только MarkExecutorStopped, и ход CLI исполнителя жил дальше, пока HasLiveDelegatedTask
+    // уже ложен — расхождение состояния в общем worktree) и ДОЖДАТЬСЯ простоя: InterruptTurn
+    // асинхронен, и без ожидания пометка встаёт мгновенно, штаб идёт дальше, а исполнитель
+    // ещё пишет в общее дерево — это и есть исходный дефект;
+    // (б) поставить DroppedByHumanAt — маркер для защиты TaskManager.Update от позднего
+    // tasks_complete (см. TaskManagerTests).
+    //
+    // Фейк интейка снимает занятость АСИНХРОННО (как это делает прод: статус уходит на
+    // финализации прогона) — иначе ожидание простоя не сторожится ничем: со мгновенным
+    // снятием мутация «убрать await WaitExecutorIdleAsync» остаётся зелёной. Мутации:
+    // • убрать блок прерывания — падают InterruptCount(Times.Once) в двух тестах;
+    // • убрать await WaitExecutorIdleAsync — падает ПрерываетХодИЖдётПростояПередПометкой:
+    //   DroppedByHumanAt оказывается РАНЬШЕ момента, когда исполнитель перестал быть занят;
+    // • переставить прерывание после Update — падает ПомечаетСнятиеПослеПрерыванияНеРаньше.
+    // MakeRunningStabAsync не раздаёт под-задачи (TaskId остаётся null), поэтому задачу
+    // создаём вручную — это та же ветка кода, что зовётся из раздачи в RespondTeamPlanAsync.
+
+    // Ручной фейк шва вместо Mock<ITeamTurnIntake>: интерфейс из двух методов, а мок
+    // internal-типа требовал бы открыть Castle DynamicProxy ВСЕ internal-типы главной
+    // сборки через InternalsVisibleTo (коммит 08d5ba01 отменён в фикс-волне 4).
+    private sealed class FakeTurnIntake : ClaudeHomeServer.Services.Team.ITeamTurnIntake
+    {
+        private readonly List<string> _interrupts = [];
+        // Что делает «прерывание» с исполнителем: в проде статус уходит асинхронно,
+        // тесты подставляют своё поведение (снять занятость с задержкой либо не снимать).
+        public Action<string>? OnInterrupt { get; set; }
+
+        public void InterruptTurn(string sessionId)
+        {
+            lock (_interrupts) _interrupts.Add(sessionId);
+            OnInterrupt?.Invoke(sessionId);
+        }
+
+        public Task<bool> SendOrEnqueueAsync(string sessionId, string text,
+            string? senderPersonaId = null, bool silent = false,
+            bool suppressTasksExecute = false, string? staffNote = null) => Task.FromResult(true);
+
+        public int InterruptCount(string? sessionId = null)
+        {
+            lock (_interrupts)
+                return sessionId is null ? _interrupts.Count : _interrupts.Count(s => s == sessionId);
+        }
+    }
+
+    // Снимать занятость исполнителя не мгновенно, а через delay — как в проде, где статус
+    // уходит на финализации прогона. Момент снятия отдаётся через TaskCompletionSource:
+    // по нему тест сравнивает, что пометка снятия встала ПОСЛЕ простоя.
+    private Action<string> ClearBusyAfter(TimeSpan delay, TaskCompletionSource<DateTime> idleAt) =>
+        sid => _ = Task.Run(async () =>
+        {
+            await Task.Delay(delay);
+            // Момент фиксируем ДО снятия статуса: пометка снятия обязана быть не раньше него
+            var moment = DateTime.UtcNow;
+            if (_sessions.GetById(sid) is { } s) s.Status = SessionStatus.Active;
+            idleAt.TrySetResult(moment);
+        });
+
+    private TaskItem MakeSubtaskForStab(Session stab, string title = "Под-задача")
+    {
+        var task = _tasks.Create(stab.ProjectId, UserId,
+            new CreateTaskRequest(Title: title, Description: "", Assignee: TaskItemAssignee.Claude));
+        // Привязка к штабу — имитирует то, что делает раздача в волне
+        _tasks.Update(task.Id, new UpdateTaskRequest());
+        return _tasks.GetById(task.Id)!;
+    }
+
+    [Fact]
+    public async Task DropSubtaskAsync_ПрерываетХодИЖдётПростояПередПометкой()
+    {
+        var (stab, _) = await MakeRunningStabAsync("drop-subtask-honest");
+        var subtask = MakeSubtaskForStab(stab);
+        // Фейк интейка: занятость снимается через 250 мс — как в проде, где статус уходит
+        // асинхронно на финализации прогона. Мгновенное снятие сделало бы ожидание простоя
+        // ненаблюдаемым (M3 фикс-волны 4: без него мутация «убрать await» зелёная).
+        var idleAt = new TaskCompletionSource<DateTime>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var intake = new FakeTurnIntake { OnInterrupt = ClearBusyAfter(TimeSpan.FromMilliseconds(250), idleAt) };
+        _sut.IntakeForTestOverride = intake;
+        // Создаём реального исполнителя в Working — IsExecutorBusy читает _dir.Get(sid),
+        // а тот возвращает null для несуществующей сессии. Без живой сессии прерывание
+        // не зовётся (проверка IsExecutorBusy делает гард «некого прерывать»), и тест
+        // ловит это как ложный зелёный — поэтому поднимаем настоящего ребёнка.
+        var executor = await AttachExecutorAsync(subtask, stab, liveTurn: false, busyStatus: true);
+        // HasLiveDelegatedTasks для TryResolveBlockerByFactAsync — функция из TaskExecutionService
+        _sessions.HasLiveDelegatedTasks = id => _tasks.GetById(id) is { } t
+            && t.SourceSessionId == stab.Id
+            && t.LinkedSessionId is not null
+            && t.Status != TaskItemStatus.Done
+            && t.ExecutorStoppedAt is null
+            && !t.CompletionDelivered;
+
+        await _sut.DropSubtaskAsync(subtask.Id, "Снято решением человека по карточке остановки (drop).");
+
+        // Прерывание реально вызвано (мутация: убрать блок InterruptTurn — счётчик 0)
+        intake.InterruptCount(executor.Id).Should().Be(1,
+            "DropSubtaskAsync обязан вызвать InterruptTurn у живого исполнителя — иначе диалог «отбой» врёт");
+        var idleMoment = await idleAt.Task;
+        _sessions.GetById(executor.Id)!.Status.Should().Be(SessionStatus.Active,
+            "к возврату из DropSubtaskAsync исполнитель уже не занят");
+        var after = _tasks.GetById(subtask.Id)!;
+        after.Status.Should().Be(TaskItemStatus.Done, "штаб ставит Done через Update");
+        after.Outcome.Should().Be(DefectOutcome.ClosedWithoutCheck,
+            "деградация дефекта при снятии — без отдельной проверки");
+        after.DroppedByHumanAt.Should().NotBeNull(
+            "пометка снятия — обязательна для защиты от позднего tasks_complete");
+        // ГЛАВНОЕ: пометка встала ПОСЛЕ того, как исполнитель перестал числиться занятым.
+        // Мутация M3 (убрать await WaitExecutorIdleAsync) даёт пометку на 250 мс раньше
+        // этого момента — ассерт краснеет.
+        after.DroppedByHumanAt!.Value.Should().BeOnOrAfter(idleMoment,
+            "снятие ждёт простоя исполнителя: без ожидания штаб идёт дальше, пока ход ещё правит общее дерево");
+        after.ExecutorStoppedAt.Should().NotBeNull(
+            "пометка «исполнитель встал» ставится ПОСЛЕ прерывания и ожидания простоя");
+        after.ExecutorStopReason.Should().Contain("drop",
+            "причина должна объяснять, кто снял и почему — иначе карточка задачи теряет смысл");
+        _logLines.Should().NotContain(l => l.Contains("не встал за"),
+            "исполнитель встал штатно — предупреждению о таймауте взяться неоткуда");
+    }
+
+    [Fact]
+    public async Task DropSubtaskAsync_БезАктивногоИсполнителяНеЗовётПрерывание()
+    {
+        // Граница: задача создана, исполнитель не запускался. IsExecutorBusy==false,
+        // InterruptTurn НЕ вызывается — помечать некого, а MarkExecutorStopped всё равно
+        // поставит пометку (IsTerminal(reason)=true). Карточка задачи тогда говорит «штаб снял»
+        // независимо от того, был ли запущен ход.
+        var (stab, _) = await MakeRunningStabAsync("drop-subtask-noexec");
+        var subtask = MakeSubtaskForStab(stab);
+        var intake = new FakeTurnIntake();
+        _sut.IntakeForTestOverride = intake;
+        _sessions.HasLiveDelegatedTasks = _ => false;
+
+        await _sut.DropSubtaskAsync(subtask.Id, "Снято решением человека.");
+
+        intake.InterruptCount().Should().Be(0, "некому прерывать — InterruptTurn не должен вызываться");
+        var after = _tasks.GetById(subtask.Id)!;
+        after.Status.Should().Be(TaskItemStatus.Done);
+        after.DroppedByHumanAt.Should().NotBeNull();
+        after.ExecutorStopReason.Should().Contain("drop");
+    }
+
+    [Fact]
+    public async Task DropSubtaskAsync_ПомечаетСнятиеПослеПрерыванияНеРаньше()
+    {
+        // Порядок «прервать → дождаться → пометить»: к моменту вызова InterruptTurn
+        // DroppedByHumanAt ещё не стоит (иначе порядок сломан — пометка появилась бы
+        // «раньше времени»). Счётчик прерываний тут обязателен: без него тест вакуумно
+        // зелёный — при полном отсутствии прерывания droppedAtInterrupt просто некому
+        // выставить, и false проходит (находка повторного ревью).
+        var (stab, _) = await MakeRunningStabAsync("drop-subtask-order");
+        var subtask = MakeSubtaskForStab(stab);
+        bool droppedAtInterrupt = false;
+        var idleAt = new TaskCompletionSource<DateTime>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var clearBusy = ClearBusyAfter(TimeSpan.FromMilliseconds(50), idleAt);
+        var intake = new FakeTurnIntake
+        {
+            OnInterrupt = sid =>
+            {
+                droppedAtInterrupt = _tasks.GetById(subtask.Id)?.DroppedByHumanAt is not null;
+                clearBusy(sid);
+            },
+        };
+        _sut.IntakeForTestOverride = intake;
+        var executor = await AttachExecutorAsync(subtask, stab, liveTurn: false, busyStatus: true);
+        _sessions.HasLiveDelegatedTasks = _ => true;
+
+        await _sut.DropSubtaskAsync(subtask.Id, "Снято.");
+
+        intake.InterruptCount(executor.Id).Should().Be(1,
+            "прерывание обязано быть вызвано ровно один раз — иначе проверка порядка ничего не значит");
+        droppedAtInterrupt.Should().BeFalse(
+            "к моменту прерывания пометка DroppedByHumanAt ещё не стоит — иначе порядок сломан");
+        _tasks.GetById(subtask.Id)!.DroppedByHumanAt.Should().NotBeNull(
+            "после возврата из DropSubtaskAsync пометка на месте");
+    }
+
+    [Fact]
+    public async Task DropSubtaskAsync_ИсполнительНеВсталЗаТаймаут_ИдётДальшеИПишетПредупреждение()
+    {
+        // Обратный случай: прерывание послано, а статус так и не ушёл (процесс завис, стоп
+        // не долетел). Штаб не имеет права висеть вечно — по истечении ExecutorIdleTimeout
+        // идёт дальше и ставит пометки. Но молчать здесь нельзя: это ровно тот случай, когда
+        // «исполнитель получит отбой» снова становится неправдой, и без записи в лог узнать
+        // об этом неоткуда (находка повторного ревью). Таймаут — поле, а не литерал 10 с:
+        // иначе кейс стоил бы десять секунд прогона.
+        var (stab, _) = await MakeRunningStabAsync("drop-subtask-timeout");
+        var subtask = MakeSubtaskForStab(stab);
+        var intake = new FakeTurnIntake(); // OnInterrupt пуст — занятость не снимается никогда
+        _sut.IntakeForTestOverride = intake;
+        _sut.ExecutorIdleTimeout = TimeSpan.FromMilliseconds(100);
+        var executor = await AttachExecutorAsync(subtask, stab, liveTurn: false, busyStatus: true);
+        _sessions.HasLiveDelegatedTasks = _ => true;
+
+        await _sut.DropSubtaskAsync(subtask.Id, "Снято.");
+
+        intake.InterruptCount(executor.Id).Should().Be(1, "прерывание послано");
+        _sessions.GetById(executor.Id)!.Status.Should().Be(SessionStatus.Working,
+            "исполнитель так и не встал — это и есть проверяемый случай");
+        var after = _tasks.GetById(subtask.Id)!;
+        after.DroppedByHumanAt.Should().NotBeNull("штаб не висит вечно — по таймауту идёт дальше");
+        after.Status.Should().Be(TaskItemStatus.Done);
+        _logLines.Should().Contain(l => l.Contains("не встал за") && l.Contains(subtask.Id),
+            "выход по таймауту обязан оставить след в логе — иначе про несостоявшийся отбой не узнать");
+    }
+
+    // ─── Плашка бюджета: потолки после расширения (M7 фикс-волны 4) ────────────────
+    // MaxWavesAfter/MaxTasksAfter считает FillAfterBudgetAsync внутри
+    // BroadcastTeamImplementAsync — единой формулой TeamImplementBudget.PlanShortfall,
+    // общей с автоматическим расширением потолков в TeamDecisionService. Хелпер сам по себе
+    // покрыт TeamImplementBudgetTests, но связь «плашка считает ТОЙ ЖЕ формулой» без этого
+    // теста не сторожилась ничем: подмена вызова на формулу, игнорирующую расход, оставляла
+    // 411 тестов Team зелёными (доказано мутацией в повторном ревью).
+    // РАСХОД НЕНУЛЕВОЙ — в этом весь смысл: формула «Max + max(0, plan - Max)» без учёта
+    // WavesUsed/TasksUsed даёт 2 и 2 вместо 3 и 3, и тест краснеет.
+    [Fact]
+    public async Task ПлашкаБюджета_НенулевойРасход_ПотолкиСчитаютсяОтОстатка()
+    {
+        // План MakeRunningStabAsync: две под-задачи, волны 1 и 2 → plannedWaves=2, plannedTasks=2
+        var (stab, _) = await MakeRunningStabAsync("budget-after-used");
+        ((ITeamRunState)_sessions).WithTeamState(stab.Id, t =>
+        {
+            t.Budget.MaxWaves = 2;
+            t.Budget.WavesUsed = 1;
+            t.Budget.MaxTasks = 2;
+            t.Budget.TasksUsed = 1;
+            return true;
+        });
+
+        await _sessions.BroadcastTeamImplementAsync(stab.Id, _sessions.GetById(stab.Id)!);
+
+        var budget = Team(stab.Id).Budget;
+        budget.MaxWavesAfter.Should().Be(3,
+            "остаток волн 2-1=1, план на 2 — потолок поднимется до 2+1=3; формула без учёта расхода дала бы 2");
+        budget.MaxTasksAfter.Should().Be(3,
+            "остаток задач 2-1=1, план на 2 — потолок поднимется до 2+1=3; формула без учёта расхода дала бы 2");
+    }
+
+    [Fact]
+    public async Task ПлашкаБюджета_ПланУкладываетсяВОстаток_ПотолкиНеДвигаются()
+    {
+        // Обратная сторона той же формулы: расход есть, но остатка хватает — расширять нечего,
+        // и плашка обязана показывать текущий потолок, а не «поднимется до».
+        var (stab, _) = await MakeRunningStabAsync("budget-after-fits");
+        ((ITeamRunState)_sessions).WithTeamState(stab.Id, t =>
+        {
+            t.Budget.MaxWaves = 5;
+            t.Budget.WavesUsed = 1;
+            t.Budget.MaxTasks = 6;
+            t.Budget.TasksUsed = 2;
+            return true;
+        });
+
+        await _sessions.BroadcastTeamImplementAsync(stab.Id, _sessions.GetById(stab.Id)!);
+
+        var budget = Team(stab.Id).Budget;
+        budget.MaxWavesAfter.Should().Be(5, "остаток 4 ≥ плана 2 — потолок волн не двигается");
+        budget.MaxTasksAfter.Should().Be(6, "остаток 4 ≥ плана 2 — потолок задач не двигается");
+    }
+
+    // Логгер-копилка: собирает форматированные строки лога службы (нужен тесту таймаута
+    // ожидания простоя — предупреждение обязано быть записано)
+    private sealed class CollectingLogger<T>(List<string> sink) : ILogger<T>
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            lock (sink) sink.Add(formatter(state, exception));
         }
     }
 

@@ -107,7 +107,11 @@ internal sealed class TeamPlanService
         var empty = new TeamPlanningService.Result(null, TeamPlanningService.Failure.Failed, null, 0, 0, TimeSpan.Zero);
         await _coordinator.BroadcastTeamPlanningStartedAsync(sessionId, empty, plannerPersonaId);
 
-        var planning = await _planning.CreatePlanAsync(session, ownerId, request, projectHint, ct, previous, feedback);
+        var planning = await _planning.CreatePlanAsync(session, ownerId, request, projectHint, ct,
+            previous, feedback,
+            // Остаток бюджета итерации в промпт планировщика (волна 4 team-blocker-honest):
+            // без этого планировщик режет работу на 9 волн при потолке 4 (прод 2026-09-09).
+            budget: session.TeamImplement?.Budget);
         if (planning.Plan is null)
         {
             // Событие «планировщик закончил» с отказом — фронт снимет спиннер и покажет

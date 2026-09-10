@@ -58,8 +58,9 @@ internal sealed class TeamBudgetService
 
     // Гейт лавины запусков: на реакционном ходу координатора (ответ на доклад исполнителя)
     // запуск задачи разрешён, ПОКА цел бюджет итерации — запрет заменён квотой, а не снят.
-    // Разрешение сразу же расходует единицу: счёт ведёт бэкенд в точке запуска, иначе
-    // координатор в цикле «доклад → запуск → доклад» уходит в бесконечный платный круг.
+    // Списание единицы отложено до итогового Allowed (M2, фикс-волна): раньше RunsUsed++
+    // и TasksUsed++ шли ДО проверки открытых карточек и не компенсировались на отказе —
+    // пять отказов подряд жгли пять единиц бюджета впустую.
     public (TeamRunQuota Verdict, string? Reason) TryConsumeTeamImplementRun(string sessionId, string ownerId)
     {
         // Запуск приходит не только из самого штаба, но и со второго уровня — из чата
@@ -78,46 +79,80 @@ internal sealed class TeamBudgetService
         // колбэки задач, HTTP-фильтр).
         _run.WithTeamState(stabId, t =>
         {
-            // Стадия волны — вторая проверка после «Остановлено»: без неё квота честно
-            // считала расход, но разрешала запуск ДО публикации и подтверждения плана —
-            // единственное согласование (карточка плана) обходилось целиком (Э7-фикс).
+            // Приоритет гейта: 1) Stopped — человек сам остановил практику
             if (t.Stopped)
+            {
                 reason = "практика остановлена человеком — новые запуски не идут, пока он не продолжит";
-            // M3: причина отказа обязана быть честной. Из «ждёт решения» ссылаться на
-            // неподтверждённый план — враньё: план как раз подтверждён, а ждём мы ответа
-            // человека по карточке остановки (кнопкой или обычным сообщением в чат).
-            else if (t.Stage == TeamImplementStage.AwaitingDecision)
-                reason = "практика ждёт решения человека по карточке остановки — запуск исполнителей " +
-                         "возобновится, когда он ответит (кнопкой карточки или сообщением в чат)";
+                return true;
+            }
+            // M1 (фикс-волна): бюджет проверяется ВСЕГДА, независимо от стадии и состава
+            // карточек. Раньше ветка `else if (Stage == AwaitingDecision) reason = null;`
+            // съедала следующий `else` с Budget.ExceededReason().
+            if (t.Budget.ExceededReason() is { } b)
+            {
+                reason = budgetReason = b;
+                return true;
+            }
+            // Стадия — после потолков
+            if (t.Stage == TeamImplementStage.AwaitingDecision)
+            {
+                // «ждёт решения» — допустимая стадия: проверка открытых карточек ниже
+            }
             else if (t.Stage != TeamImplementStage.Wave)
+            {
                 reason = "план ещё не подтверждён человеком — запуск исполнителей доступен только " +
                          "в стадии волны, единственное согласование — карточка плана";
-            else
-                reason = budgetReason = t.Budget.ExceededReason();
-            if (reason is null)
-            {
-                t.Budget.RunsUsed++;
-                // Задача, запущенная руками координатора, — такая же задача итерации, как
-                // розданная волной: без этого счётчика потолок задач обходился ручной раздачей
-                t.Budget.TasksUsed++;
             }
             return true;
         });
+
+        // Проверка открытых карточек отдельно от WithTeamState: она читает чужое хранилище
+        // и не должна идти под локом SessionTeamImplement. Если в «ждёт решения» все
+        // открытые карточки — блокеры, координатор сам разбирается с ними (TryResolveBlockerByFactAsync
+        // уже отработал по факту: переписал задачу, ответил исполнителю, перезапустил его) —
+        // и запуск исполнителя не должен отбиваться текстом про «ждёт вашего решения».
+        // Если открытых карточек вообще нет — стадия «ждёт решения» осталась по инерции
+        // (TryResolveBlockerByFactAsync должен был вернуть её), и запуск всё равно разрешён.
+        if (reason is null && stab.TeamImplement?.Stage == TeamImplementStage.AwaitingDecision)
+        {
+            // Sync-over-async был здесь: гейт вызывается из MVC-фильтра DenyOnDelegatedTurn
+            // на запросном потоке, у неактивного чата читался диск через .GetAwaiter().GetResult().
+            // Синхронный шов GetOpenTeamEscalationsSync — тот же путь, что у TryResolveBlockerByFactAsync
+            // в TeamDecisionService:799, и он безопасен с точки зрения потоков (читает только
+            // персистентное состояние).
+            var openCards = _history.GetOpenTeamEscalationsSync(stabId);
+            // Решающая НЕ-блокер карточка (Stopped, TaskFailed, PlanDeviation, CheckFailed,
+            // ProductDecision, BudgetExhausted, WaveStalled, WaveGate, NeedsClarification) —
+            // ждём человека. Блокер — координатор обычно снимает сам, и гейт обязан это уважать
+            var hasNonBlockerDecisional = openCards.Any(c =>
+                !c.Kind.IsInformational() && c.Kind != TeamEscalationKind.Blocker);
+            if (hasNonBlockerDecisional)
+                reason = "практика ждёт решения человека по карточке остановки — запуск исполнителей " +
+                         "возобновится, когда он ответит (кнопкой карточки или сообщением в чат)";
+            // Иначе — все блокеры (координатор разбирается сам) или открытых карточек
+            // нет вообще (стадия осталась по инерции). reason остаётся null → запуск разрешён.
+        }
+
         if (reason is not null)
         {
-            // Исчерпанный бюджет — единственный отказ, о котором человек ещё НЕ знает:
-            // «остановлено» и «ждёт решения» уже висят карточкой, неподтверждённый план —
-            // карточкой плана. Без этой публикации выхода из тупика не было вовсе: потолки
-            // поднимает только кнопка «Добавить бюджет» карточки BudgetExhausted, а её
-            // публиковала раздача волны — не гейт ручного запуска; попросить карточку
-            // координатор тоже не мог (в протоколе лишь deviation/check/clarify), и штаб
-            // бесконечно упирался в отказ, пока человек жал «Разрешить» на чужой карточке
-            // расхождения с планом — та бюджет не трогает (прод 2026-08-08).
             if (budgetReason is not null)
                 FireAndForget(RaiseTeamBudgetExhaustedAsync(stabId, budgetReason),
                     $"карточка исчерпанного бюджета итерации ({stabId})");
+            // M2 (фикс-волна): на отказе счётчики НЕ списаны
             return (TeamRunQuota.Exhausted, reason);
         }
+
+        // M2 (фикс-волна): списание бюджета — после ВСЕХ проверок, в т.ч. после sync-read
+        // открытых карточек. Раньше RunsUsed++/TasksUsed++ шли в той же транзакции, что
+        // и проверки — поэтому отказ «ждёт решения» (с reason != null уже после инкремента)
+        // списывал единицу впустую. Здесь же reason == null (все гейты зелёные), и мы
+        // честно платим за запуск.
+        _run.WithTeamState(stabId, t =>
+        {
+            t.Budget.RunsUsed++;
+            t.Budget.TasksUsed++;
+            return true;
+        });
 
         stab.UpdatedAt = DateTime.UtcNow;
         _dir.Persist();
@@ -192,6 +227,11 @@ internal sealed class TeamBudgetService
     // против отдельного потолка. Без этого бюджет обходится соседним инструментом: запуск
     // задач гейтит квота `TryConsumeTeamImplementRun`, а разбудить координатора можно было
     // бесплатно и бесконечно.
+    // Волна 1 team-blocker-honest: отказ ТОЛЬКО по «остановлено» и `WakeupsUsed >= MaxWakeups`.
+    // Раньше текст шёл через общий `Budget.ExceededReason()`, и исчерпание волн/задач глушило
+    // канал блокеров — координатор не получал блокер в последней волне (прод 2026-09-08,
+    // блокер Киры в волне 4/4). Канал пробуждений — для блокеров, остальные потолки
+    // проверяются в TryConsumeTeamImplementRun и в TryStartWave (для волн/задач — там).
     // TeamMode=false — чат не штаб: ограничение не наше дело, пропускаем как раньше.
     public (bool TeamMode, bool Allowed, string? Reason) TryConsumeTeamWakeup(string sessionId)
     {
@@ -201,9 +241,10 @@ internal sealed class TeamBudgetService
         string? reason = null;
         var allowed = _run.WithTeamState(sessionId, t =>
         {
-            reason = t.Stopped
-                ? "практика остановлена человеком — команда не будит координатора, пока он не продолжит"
-                : t.Budget.ExceededReason();
+            if (t.Stopped)
+                reason = "практика остановлена человеком — команда не будит координатора, пока он не продолжит";
+            else if (t.Budget.WakeupsUsed >= t.Budget.MaxWakeups)
+                reason = $"исчерпано срочных вызовов координатора: {t.Budget.WakeupsUsed} из {t.Budget.MaxWakeups}";
             if (reason is not null) return false;
             t.Budget.WakeupsUsed++;
             return true;

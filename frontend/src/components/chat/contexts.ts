@@ -1,5 +1,5 @@
 import { createContext, useContext } from 'react';
-import type { Persona, Task, TeamPlanDecision } from '../../types';
+import type { Persona, Task, TeamImplementBudget, TeamPlanDecision } from '../../types';
 
 // Контекст текущего проекта — для резолва локальных путей картинок в сообщениях
 export const ChatProjectContext = createContext<{ id: string; rootPath: string } | null>(null);
@@ -56,6 +56,10 @@ export interface TeamPlanChatContext {
   planCardId: string | null;
   // Явно выбранный состав исполнителей; пустой — вся команда проекта
   executorPersonaIds: string[];
+  // Бюджет итерации на момент подтверждения — нужен карточке, чтобы показать
+  // строку «план сверх бюджета» до клика «Запустить» (само расширение — на бэкенде
+  // при Run). null допустим только в read-only режиме, когда состояние ещё не подгрузилось
+  budget: TeamImplementBudget | null;
   // feedback — правка плана (decision 'edit'): сервер сам гасит карточку и пересобирает план
   onRespond: (planId: string, decision: TeamPlanDecision, subtaskId?: string, executorPersonaId?: string, feedback?: string) => void;
 }
@@ -64,8 +68,15 @@ export const TeamPlanContext = createContext<TeamPlanChatContext | null>(null);
 // Обвязка карточки остановки «Командной реализации» (Э4): решение уходит в хаб
 // (кнопка + необязательный комментарий), карточка гаснет. Контекстом, как у плана —
 // карточка лежит глубоко в ленте. null — режим выключен: карточка только для чтения.
+//
+// coordinatorTurnActive — пока идёт ход-реакции координатора при открытой карточке
+// блокера, карточка показывает «Координатор разбирается». ChatPanel считает флаг
+// один раз (isWaiting && открытая карточка) и кладёт в контекст; карточка просто
+// читает. Это НЕ новое событие и не запрос — данные уже в сторе (этап 2.5:
+// убираем догадки, что делает штаб, теперь видно)
 export interface TeamEscalationChatContext {
   onRespond: (escalationId: string, actionId?: string, comment?: string) => void;
+  coordinatorTurnActive?: boolean;
 }
 export const TeamEscalationContext = createContext<TeamEscalationChatContext | null>(null);
 

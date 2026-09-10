@@ -16,6 +16,7 @@ import {
   teamPulseBadgeShort, teamWaveTaskStatusLabel, teamWaveTaskRunningLabel,
   teamWaveTasksSorted, TEAM_IMPLEMENT_SHORT_NAME,
   isTeamWavePulseStale, TEAM_WAVE_PULSE_STALE_MS,
+  isEscalationAwaitingStage,
 } from '../teamImplement';
 import { applyServerMessage, initialChatState, type ChatState } from '../chatReducer';
 
@@ -236,6 +237,83 @@ describe('карточка эскалации: тон и разбор детал
     expect(teamEscalationDetailsMarkdown('Волна 2 не стартовала целиком.\n\nБюджет: задачи 6 из 6'))
       .toBe('Волна 2 не стартовала целиком.\n\nБюджет: задачи 6 из 6');
     expect(teamEscalationDetailsMarkdown('')).toBe('');
+  });
+});
+
+// Полоса «Практика ждёт вашего решения»: видна, только если есть открытая карточка
+// И стадия её ждёт. Предикат — единая точка для ChatPanel и TeamPlanSimPage.
+// Раньше полоса висела по одному признаку — есть ли открытая карточка — и не гасла
+// после решения координатора. Прод-инцидент 2026-09 с двумя снятыми задачами
+describe('isEscalationAwaitingStage — предикат полосы над композером', () => {
+  const esc = (over: { resolved?: boolean; kind?: TeamEscalationKind } = {}) => ({
+    resolved: false,
+    kind: 'blocker' as TeamEscalationKind,
+    ...over,
+  });
+
+  // Главный кейс прод-инцидента: открытая карточка блокера на стадии planning —
+  // координатор ещё НЕ ждёт решения, снимать задачу нельзя. Полоса НЕ рисуется
+  it('открытая карточка блокера на стадии planning — полосы нет', () => {
+    expect(isEscalationAwaitingStage(esc(), 'planning')).toBe(false);
+  });
+
+  it('открытая карточка блокера на стадии wave (исполнители работают) — полосы нет', () => {
+    expect(isEscalationAwaitingStage(esc(), 'wave')).toBe(false);
+  });
+
+  // Стандартный путь: эскалация пришла → стадия перешла в awaitingDecision → полоса
+  it('открытая карточка блокера на awaitingDecision — полоса видна', () => {
+    expect(isEscalationAwaitingStage(esc(), 'awaitingDecision')).toBe(true);
+  });
+
+  it('продуктовая развилка тоже ждёт awaitingDecision', () => {
+    expect(isEscalationAwaitingStage(esc({ kind: 'productDecision' }), 'awaitingDecision')).toBe(true);
+    expect(isEscalationAwaitingStage(esc({ kind: 'productDecision' }), 'planning')).toBe(false);
+  });
+
+  // needsClarification (Э8) — тупик в волне, ждёт интервью, не awaitingDecision
+  it('needsClarification ждёт стадии interview', () => {
+    expect(isEscalationAwaitingStage(esc({ kind: 'needsClarification' }), 'interview')).toBe(true);
+    // На awaitingDecision — это совсем другая стадия, needsClarification там НЕ ждёт
+    expect(isEscalationAwaitingStage(esc({ kind: 'needsClarification' }), 'awaitingDecision')).toBe(false);
+  });
+
+  // Информационная карточка (waveAdded) — работа уже идёт, никогда не считается
+  it('waveAdded (информационная) никогда не считается открытой по полосе', () => {
+    for (const stage of ['planning', 'interview', 'awaitingDecision', 'wave', 'checking', 'idle', 'confirming'] as const) {
+      expect(isEscalationAwaitingStage(esc({ kind: 'waveAdded' }), stage)).toBe(false);
+    }
+  });
+
+  // Стадии нет — режим выключен или ещё не пришла. Полоса висит только если есть
+  // реальная стадия, иначе получалась бы ложь «ждём вашего решения» в обычном чате
+  // (прод-инцидент: открытая team_escalation из истории, режима уже нет)
+  it('без стадии (null) полосы нет — открытая в истории карточка не рисуется', () => {
+    expect(isEscalationAwaitingStage(esc(), null)).toBe(false);
+    expect(isEscalationAwaitingStage(esc(), undefined)).toBe(false);
+  });
+
+  // Уже решённая карточка — и без проверки стадии полоса не рисуется
+  it('погашенная карточка полосу не показывает — даже если стадия совпала', () => {
+    expect(isEscalationAwaitingStage(esc({ resolved: true }), 'awaitingDecision')).toBe(false);
+    expect(isEscalationAwaitingStage(esc({ resolved: true }), 'interview')).toBe(false);
+  });
+
+  // Граничные оставшиеся виды — все они ждут awaitingDecision (это правило,
+  // и тесты ниже стоят на страже — если кто-то добавит новый kind, не подумав
+  // о предикате, эти тесты укажут, что делать с дефолтом)
+  it('все основные виды эскалации ждут awaitingDecision', () => {
+    const kinds: TeamEscalationKind[] = [
+      'blocker', 'taskFailed', 'planDeviation', 'checkFailed', 'productDecision',
+      'budgetExhausted', 'waveStalled', 'waveGate', 'stopped',
+    ];
+    for (const kind of kinds) {
+      expect(isEscalationAwaitingStage(esc({ kind }), 'awaitingDecision'))
+        .toBe(true);
+      // А на planning они НЕ открыты по полосе (нужна своя стадия)
+      expect(isEscalationAwaitingStage(esc({ kind }), 'planning'))
+        .toBe(false);
+    }
   });
 });
 

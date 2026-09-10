@@ -32,6 +32,27 @@ const MSG = {
     autoWaves: true, coordinatorPersonaId: 'p-coord', plannerPersonaId: 'p-plan',
     executorPersonaIds: ['p-exec'], budget: BUDGET, planCardId: null, modeLocked: true,
   },
+  awaitingDecision: {
+    // Кнопка для проверки новой полосы: стадия awaitingDecision — на ней открытые
+    // карточки эскалации прорастают в полосу. Без этой стадии полоса не рисуется
+    type: 'team_implement', active: true, stage: 'awaitingDecision', waveNumber: 1,
+    autoWaves: true, coordinatorPersonaId: 'p-coord', plannerPersonaId: 'p-plan',
+    executorPersonaIds: ['p-exec'], budget: BUDGET, planCardId: 'plan-1', modeLocked: false,
+  },
+  interview: {
+    // Для карточек needsClarification: стадия interview — единственное, на которой
+    // такие карточки считаются открытыми по новому предикату
+    type: 'team_implement', active: true, stage: 'interview', waveNumber: 0,
+    autoWaves: true, coordinatorPersonaId: 'p-coord', plannerPersonaId: 'p-plan',
+    executorPersonaIds: [], budget: BUDGET, planCardId: null, modeLocked: true,
+  },
+  // «Сбросить стадию»: выключает режим (active=false). Полоса не рисуется,
+  // даже если открытая карточка есть — режима нет, «ждать вашего решения» нечего
+  implementOff: {
+    type: 'team_implement', active: false, stage: null, waveNumber: 0,
+    autoWaves: true, coordinatorPersonaId: null, plannerPersonaId: null,
+    executorPersonaIds: [], budget: null, planCardId: null, modeLocked: false,
+  },
   planningNewPlanner: {
     // После правки бэка: тот же стади-планинг + plannerPersonaId уже заполнен
     type: 'team_implement', active: true, stage: 'planning', waveNumber: 0,
@@ -205,8 +226,16 @@ export function TeamPlanSimPage() {
     ? (SIM_PERSONAS[plannerId] as unknown as Persona | undefined) ?? null
     : null;
 
-  // Полоса «Практика ждёт вашего решения» — открытые team_escalation из ленты
-  const openEscalations = useMemo(() => findOpenEscalations(state.items), [state.items]);
+  // Полоса «Практика ждёт вашего решения» — открытые team_escalation из ленты,
+  // отфильтрованные по стадии режима (awaitingDecision/interview). Витрина: чтобы
+  // эффект нового предиката был виден, добавим кнопки переключения стадии —
+  // иначе карточка «ждёт решения» при стадии planning не показывалась бы полосой,
+  // и обновление предиката нельзя было проверить глазами
+  const currentStage = state.teamImplement?.stage ?? null;
+  const openEscalations = useMemo(
+    () => findOpenEscalations(state.items, currentStage as Parameters<typeof findOpenEscalations>[1]),
+    [state.items, currentStage],
+  );
   const topEscalation = openEscalations[openEscalations.length - 1] ?? null;
 
   const stage = state.teamImplement?.stage ?? null;
@@ -241,6 +270,16 @@ export function TeamPlanSimPage() {
           <SimButton label="add-second-escalation" onClick={() => dispatch(wireMsg(MSG.escalationBlocker as unknown as ServerMessage))} />
           <SimButton label="add-third-escalation" onClick={() => dispatch(wireMsg(MSG.escalationBudget as unknown as ServerMessage))} />
           <SimButton label="reset" onClick={() => dispatch(RESET)} />
+        </div>
+
+        {/* Стадия режима — полоса над композером рисуется только на awaitingDecision
+            (для блокеров/развилок) и interview (для needsClarification). Кнопки ниже —
+            триггеры волны 3: чтобы видеть эффект нового предиката глазами */}
+        <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap', alignItems: 'center' }}>
+          <SimButton label="stage=awaitingDecision" onClick={() => dispatch(wireMsg(MSG.awaitingDecision as unknown as ServerMessage))} />
+          <SimButton label="stage=interview" onClick={() => dispatch(wireMsg(MSG.interview as unknown as ServerMessage))} />
+          <SimButton label="stage=planning" onClick={() => dispatch(wireMsg(MSG.planning as unknown as ServerMessage))} />
+          <SimButton label="stage=off" onClick={() => dispatch(wireMsg(MSG.implementOff as unknown as ServerMessage))} />
         </div>
 
         <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap' }}>

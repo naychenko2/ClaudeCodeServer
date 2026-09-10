@@ -1279,19 +1279,16 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     waveNumber: teamImplementState.waveNumber,
     planCardId: teamImplementState.planCardId ?? null,
     executorPersonaIds: teamImplementState.executorPersonaIds,
+    // budget нужен карточке плана для предупреждения «план сверх бюджета»
+    // до клика «Запустить» (волна 4 team-blocker-honest)
+    budget: teamImplementState.budget,
     onRespond: handleRespondTeamPlan,
   } : null, [teamImplementState, handleRespondTeamPlan]);
 
   // Обвязка карточек остановки (Э4): решение уходит в хаб, карточка гаснет.
-  // Контекст живёт, пока включён режим — в выключенном чате карточки только читаются
-  const handleRespondTeamEscalation = useCallback((escalationId: string, actionId?: string, comment?: string) => {
-    respondTeamEscalation(escalationId, actionId, comment).catch(err => {
-      showToast('Командная реализация', err instanceof Error ? err.message : 'Не удалось отправить решение');
-    });
-  }, [respondTeamEscalation]);
-  const teamEscalationCtx = useMemo<TeamEscalationChatContext | null>(() => teamImplementState
-    ? { onRespond: handleRespondTeamEscalation }
-    : null, [teamImplementState, handleRespondTeamEscalation]);
+  // Подробности — рядом с местом создания teamEscalationCtx ниже (он зависит
+  // от openEscalations/isWaiting, и переносить handleRespondTeamEscalation сюда
+  // было бы циклом зависимостей)
 
   // Откат файла — стабильный колбэк для карточек file_changed в ленте. Действие бьёт
   // по git checkout HEAD и стирает ЛЮБЫЕ несохранённые правки файла (не только модели),
@@ -1657,12 +1654,44 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
 
   // Открытые карточки остановки (есть неотвеченная team_escalation): закреплённая полоса
   // над композером показывает самую свежую (последнюю по индексу — чем ниже, тем позже),
-  // остальные — счётчиком. Без открытых карточек полоса не рисуется. Карточки-плана и
-  // вопрос человеку НЕ считаются открытыми остановками: у них своя логика видимости
-  const openEscalations = useMemo(() => findOpenEscalations(items), [items]);
+  // остальные — счётчиком. Полоса видна, только если И открытая карточка, И стадия
+  // режима её ждёт (awaitingDecision для большинства видов, interview для needsClarification):
+  // без стадии полоса висела бы и когда решение уже принято, или когда координатор просто
+  // пишет в чат (прод-инцидент 2026-09 с двумя случайно снятыми задачами). Префильтр —
+  // единая точка в lib/teamImplement.isEscalationAwaitingStage, чтобы и тест, и симулятор,
+// и UI смотрели в одно условие. Без teamImplementState полоса не рисуется: режима нет —
+// «ждать вашего решения» нечего
+  const openEscalations = useMemo(
+    () => findOpenEscalations(items, teamImplementState?.stage ?? null),
+    [items, teamImplementState?.stage],
+  );
   const topEscalation = openEscalations[openEscalations.length - 1] ?? null;
   // jumpToEscalation объявлен ниже — после renderedItems, от которого зависит
   // (порядок определения в JS важен — иначе ReferenceError)
+
+  // Обвязка карточек остановки (Э4): решение уходит в хаб, карточка гаснет.
+  // Стоит ЗДЕСЬ, потому что teamEscalationCtx зависит от openEscalations (флаг
+  // coordinatorTurnActive) — перенеси выше и будет цикл: ctx использует openEscalations,
+  // topEscalation зависит от openEscalations. Контекст живёт, пока включён режим —
+  // в выключенном чате карточки только читаются
+  const handleRespondTeamEscalation = useCallback((escalationId: string, actionId?: string, comment?: string) => {
+    respondTeamEscalation(escalationId, actionId, comment).catch((err: unknown) => {
+      showToast('Командная реализация', err instanceof Error ? err.message : 'Не удалось отправить решение');
+    });
+  }, [respondTeamEscalation]);
+  // Пока координатор ведёт ход-реакции по открытой карточке блокера — карточка
+  // показывает «Координатор разбирается». Флаг — единая точка, чтобы UI не
+  // пересчитывал то же самое: нужно одновременно И идёт ход, И открыта по стадии
+  // именно карточка-блокер (openEscalations уже отфильтрован awaitingDecision/interview,
+  // но в нём могут быть и productDecision/taskFailed/прочие — строку рисуем только у блокера,
+  // см. TeamEscalationView). Иначе на любом идущем ходе штаба при любой открытой
+  // карточке продуктовой развилки строка утверждала бы, что координатор разбирается
+  // с блокером, которого нет
+  const coordinatorTurnActive = isWaiting
+    && openEscalations.some(e => e.item.escalation.kind === 'blocker');
+  const teamEscalationCtx = useMemo<TeamEscalationChatContext | null>(() => teamImplementState
+    ? { onRespond: handleRespondTeamEscalation, coordinatorTurnActive }
+    : null, [teamImplementState, handleRespondTeamEscalation, coordinatorTurnActive]);
 
   const runTeamMechanic = useCallback(async (offer: TeamMechanicOffer, offerIndex: number) => {
     setClickedOfferIndices(prev => new Set(prev).add(offerIndex));

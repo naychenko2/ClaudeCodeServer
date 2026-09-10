@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Git;
 
 namespace ClaudeHomeServer.Services.Dossiers;
@@ -33,12 +34,12 @@ public sealed class DossierAutoImporter : BackgroundService
     private readonly DossierCaptureState _state;
     private readonly IGitRefSnapshotStore _git;
     private readonly InstanceSecretsProvider _secrets;
-    private readonly FeatureFlagService _flags;
+    private readonly IFeatureFlagGate _flags;
     private readonly DossierImporter _importer;
     private readonly ILogger<DossierAutoImporter>? _log;
 
     public DossierAutoImporter(IProjectManager projects, DossierStore store, DossierCaptureState state,
-        IGitRefSnapshotStore git, InstanceSecretsProvider secrets, FeatureFlagService flags,
+        IGitRefSnapshotStore git, InstanceSecretsProvider secrets, IFeatureFlagGate flags,
         ILoggerFactory? logFactory = null, ILogger<DossierAutoImporter>? log = null,
         DossierImporter? importer = null)
     {

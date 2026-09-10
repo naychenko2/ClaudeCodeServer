@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Services.Memory;
 
@@ -37,19 +38,19 @@ public sealed class DossierAutoExporter : IHostedService
 {
     private readonly DossierStore _store;
     private readonly IProjectManager _projects;
-    private readonly SessionManager _sessions;
+    private readonly ISessionDirectory _sessions;
     private readonly IGitRefSnapshotStore _git;
     private readonly InstanceSecretsProvider _secrets;
     private readonly DossierDiscussionService _discussions;
-    private readonly FeatureFlagService _flags;
+    private readonly IFeatureFlagGate _flags;
     private readonly DossierCaptureState _state;
     private readonly DossierAutoExportGate _gate;
     private readonly ILogger<DossierAutoExporter>? _log;
     private readonly MemoryDifyDebouncer _debounce;
 
-    public DossierAutoExporter(DossierStore store, IProjectManager projects, SessionManager sessions,
+    public DossierAutoExporter(DossierStore store, IProjectManager projects, ISessionDirectory sessions,
         IGitRefSnapshotStore git, InstanceSecretsProvider secrets, DossierDiscussionService discussions,
-        FeatureFlagService flags, DossierCaptureState state, IConfiguration config,
+        IFeatureFlagGate flags, DossierCaptureState state, IConfiguration config,
         ILogger<DossierAutoExporter>? log = null)
     {
         _store = store;

@@ -42,14 +42,14 @@ public sealed class DossierGitExporter
         WriteIndented = true,
     };
 
-    private readonly SessionManager _sessions;
+    private readonly ISessionDirectory _sessions;
     private readonly DossierStore _store;
     private readonly IGitRefSnapshotStore _git;
     private readonly InstanceSecretsProvider _secrets;
     private readonly DossierDiscussionService _discussions;
     private readonly ILogger<DossierGitExporter>? _log;
 
-    public DossierGitExporter(SessionManager sessions, DossierStore store, IGitRefSnapshotStore git,
+    public DossierGitExporter(ISessionDirectory sessions, DossierStore store, IGitRefSnapshotStore git,
         InstanceSecretsProvider secrets, DossierDiscussionService discussions,
         ILogger<DossierGitExporter>? log = null)
     {

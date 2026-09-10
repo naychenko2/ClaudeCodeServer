@@ -3,10 +3,10 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Dossiers;
 using ClaudeHomeServer.Services.Git;
+using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
-using Xunit;
 
 namespace ClaudeHomeServer.Tests.Services.Dossiers;
 
@@ -23,7 +23,7 @@ public class DossierAutoImportTests : IDisposable
     private readonly IConfiguration _config;
     private readonly UserStore _users;
     private readonly ProjectManager _projects;
-    private readonly FeatureFlagService _flags;
+    private readonly FakeFeatureFlagGate _flags;
     private readonly DossierStore _store;
     private readonly DossierCaptureState _state;
     private readonly GitService _git = new(TestLauncherFactory.Instance);
@@ -44,7 +44,7 @@ public class DossierAutoImportTests : IDisposable
         _users = new UserStore(_config,
             new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         _projects = new ProjectManager(_config, _users, new AppSettingsService(_config));
-        _flags = new FeatureFlagService(_users);
+        _flags = new FakeFeatureFlagGate(_users);
         _store = new DossierStore(_config);
         _state = new DossierCaptureState(_config);
         _auto = new DossierAutoImporter(_projects, _store, _state, _git,

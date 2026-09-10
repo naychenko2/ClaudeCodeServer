@@ -24,13 +24,13 @@ public sealed class DossierDiscussionService
 
     private readonly DossierDiscussionStore _digests;
     private readonly DossierStore _dossiers;
-    private readonly SessionManager _sessions;
+    private readonly ISessionDirectory _sessions;
     private readonly ICheapTextRunner _cheap;
     private readonly InstanceSecretsProvider _secrets;
     private readonly ILogger<DossierDiscussionService>? _log;
 
     public DossierDiscussionService(DossierDiscussionStore digests, DossierStore dossiers,
-        SessionManager sessions, ICheapTextRunner cheap, InstanceSecretsProvider secrets,
+        ISessionDirectory sessions, ICheapTextRunner cheap, InstanceSecretsProvider secrets,
         ILogger<DossierDiscussionService>? log = null)
     {
         _digests = digests;

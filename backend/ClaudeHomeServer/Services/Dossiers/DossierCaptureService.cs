@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Tasks;
 
@@ -37,7 +38,8 @@ public sealed class DossierCaptureService : BackgroundService
 
     private static readonly JsonSerializerOptions JsonOpts = new() { PropertyNameCaseInsensitive = true };
 
-    private readonly SessionManager _sessions;
+    private readonly ISessionDirectory _sessions;
+    private readonly ISessionMessageObserver _sessionObserver;
     private readonly IProjectManager _projects;
     private readonly TaskManager _tasks;
     private readonly FileService _files;
@@ -50,12 +52,14 @@ public sealed class DossierCaptureService : BackgroundService
     private readonly HashSet<string> _skipTypes;
     private readonly ILogger<DossierCaptureService> _log;
 
-    public DossierCaptureService(SessionManager sessions, IProjectManager projects, TaskManager tasks,
+    public DossierCaptureService(ISessionDirectory sessions, ISessionMessageObserver sessionObserver,
+        IProjectManager projects, TaskManager tasks,
         FileService files, Git.GitService git, DossierStore store, DossierCaptureState state,
         ICheapTextRunner cheap, CodeGraph.CodeGraphService codeGraph,
         InstanceSecretsProvider secrets, IConfiguration config, ILogger<DossierCaptureService> log)
     {
         _sessions = sessions;
+        _sessionObserver = sessionObserver;
         _projects = projects;
         _tasks = tasks;
         _files = files;
@@ -77,13 +81,13 @@ public sealed class DossierCaptureService : BackgroundService
 
     public override Task StartAsync(CancellationToken ct)
     {
-        _sessions.OnSessionMessage += OnSessionMessageAsync;
+        _sessionObserver.Attach(OnSessionMessageAsync);
         return base.StartAsync(ct);
     }
 
     public override Task StopAsync(CancellationToken ct)
     {
-        _sessions.OnSessionMessage -= OnSessionMessageAsync;
+        _sessionObserver.Detach(OnSessionMessageAsync);
         return base.StopAsync(ct);
     }
 

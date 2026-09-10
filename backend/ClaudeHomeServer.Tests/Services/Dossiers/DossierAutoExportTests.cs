@@ -31,7 +31,7 @@ public class DossierAutoExportTests : IDisposable
     private readonly IConfiguration _config;
     private readonly ProjectManager _projects;
     private readonly UserStore _users;
-    private readonly FeatureFlagService _flags;
+    private readonly FakeFeatureFlagGate _flags;
     private readonly ChatHistoryService _history;
     private readonly TestSessionBroadcaster _broadcaster = new();
     private readonly DossierStore _store;
@@ -61,7 +61,7 @@ public class DossierAutoExportTests : IDisposable
         _users = new UserStore(_config,
             new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         _projects = new ProjectManager(_config, _users, new AppSettingsService(_config));
-        _flags = new FeatureFlagService(_users);
+        _flags = new FakeFeatureFlagGate(_users);
         _history = new ChatHistoryService(_config);
         _store = new DossierStore(_config);
         _digests = new DossierDiscussionStore(_config);

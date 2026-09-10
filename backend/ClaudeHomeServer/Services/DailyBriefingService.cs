@@ -31,6 +31,14 @@ namespace ClaudeHomeServer.Services;
 // (утренний хук в TaskSchedulerService, идемпотентность — по дате в briefing-state.json;
 // автозапуск гасится настройкой инстанса AppSettings.DailyBriefingEnabled, ручной сбор —
 // всегда доступен).
+
+// Подсистема Notes выключена — бриф по конструкции пишется в дневниковую заметку, писать
+// некуда. Отдельный тип вместо InvalidOperationException нужен границе: BriefingController
+// ловит его и отдаёт понятный отказ 503, иначе бросок доезжал до UnhandledExceptionHandler
+// → 500 + LogError со стектрейсом. Приём тот же, что у SummaryGenerationException → 502
+// в «Итоге сессии» (SessionSummaryService).
+public sealed class BriefingUnavailableException(string message) : Exception(message);
+
 public sealed class DailyBriefingService
 {
     private const string Header = "## Утренний бриф";
@@ -133,7 +141,8 @@ public sealed class DailyBriefingService
     private async Task<NoteDetail> BuildAndWriteAsync(string userId, TimeZoneInfo tz, string day, CancellationToken ct)
     {
         if (_notes is null)
-            throw new InvalidOperationException("Подсистема Notes отключена — бриф не может быть записан в заметку");
+            throw new BriefingUnavailableException(
+                "Утренний бриф недоступен: подсистема «Заметки» отключена");
         var brief = await BuildBriefAsync(userId, tz, day, ct);
         var daily = _notes.GetOrCreateDaily(userId, day);
         var content = UpsertSection(daily.Content, Header, brief);

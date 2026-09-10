@@ -6,6 +6,7 @@ using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace ClaudeHomeServer.Tests.Subsystems;
 
@@ -68,12 +69,53 @@ public class NotesDisabledTests : IDisposable
 
     private sealed class DisabledNotesFactory : TestWebApplicationFactory
     {
+        // Записи лога уровня Error поднятого хоста: ими проверяется, что отказ брифа ушёл
+        // границей контроллера, а не через UnhandledExceptionHandler (тот пишет LogError
+        // со стектрейсом на каждое необработанное исключение).
+        public ErrorLogSink Errors { get; } = new();
+
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             base.ConfigureWebHost(builder);
             // Едет в хост-конфигурацию → командной строкой в CreateBuilder(args) → успевает
             // к AddSubsystems. Разбор механики и почему это не гонка — в шапке класса.
             builder.UseSetting("Subsystems:Notes:Enabled", "false");
+            builder.ConfigureServices(services => services.AddSingleton<ILoggerProvider>(Errors));
+        }
+    }
+
+    // Сток записей лога уровня Error: у TestServer нет консольного вывода, а проверить нужно
+    // сам факт записи. Уровнем ниже Error не интересуемся — предмет проверки ровно один:
+    // не появилось ли записи от UnhandledExceptionHandler.
+    public sealed class ErrorLogSink : ILoggerProvider
+    {
+        private readonly List<string> _entries = [];
+
+        public IReadOnlyList<string> Snapshot()
+        {
+            lock (_entries) return [.. _entries];
+        }
+
+        public ILogger CreateLogger(string categoryName) => new Sink(this, categoryName);
+
+        public void Dispose() { }
+
+        private void Add(string entry)
+        {
+            lock (_entries) _entries.Add(entry);
+        }
+
+        private sealed class Sink(ErrorLogSink owner, string category) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+            public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Error;
+
+            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+                Func<TState, Exception?, string> formatter)
+            {
+                if (logLevel < LogLevel.Error) return;
+                owner.Add($"{category}: {formatter(state, exception)}");
+            }
         }
     }
 
@@ -242,4 +284,58 @@ public class NotesDisabledTests : IDisposable
 
     private static IReadOnlyList<string> ContributorKeys(TestWebApplicationFactory factory) =>
         [.. factory.Services.GetServices<IPromptSectionContributor>().Select(c => c.Key)];
+
+    // ─── 5. Утренний бриф: заявленный отказ вместо 500 ───────────────────────────
+
+    // `BriefingController` живёт в сборке Main и маршрутизируется при любом гейте — здесь
+    // «404 от роутинга» из пункта 1 не работает: запрос доходит до `DailyBriefingService`,
+    // а тому без vault писать бриф некуда (бриф по конструкции пишется в дневниковую заметку).
+    //
+    // Отказ обязан быть заявленным (503 + текст причины), а не необработанным исключением:
+    // 500 означал бы, что REST-путь не защищён ничем — фронт кнопку брифа при выключенной
+    // подсистеме прячет (`notesOn` в lib/ai/actions.tsx), но REST дёргают и мимо UI, и каждый
+    // такой запрос оставлял бы в логе стектрейс от `UnhandledExceptionHandler`.
+    [Fact]
+    public async Task УтреннийБриф_ПриВыключеннойПодсистеме_ОтказБезПятисоткиИБезLogError()
+    {
+        // Проба стока: без неё «новых записей об ошибке нет» было бы правдой и у провайдера,
+        // который к логгеру хоста не подключён вовсе, — проверка стала бы вакуумной.
+        _disabled.Services.GetRequiredService<ILoggerFactory>()
+            .CreateLogger("проба-стока").LogError("сток лога подключён");
+        var errorsBefore = _disabled.Errors.Snapshot();
+        errorsBefore.Should().Contain(e => e.Contains("сток лога подключён"),
+            "сток обязан ловить записи логгера ХОСТА — иначе проверка ниже ничего не значит");
+
+        var response = await _disabled.CreateAuthenticatedClient()
+            .PostAsJsonAsync("/api/briefing/today", new { });
+
+        response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable,
+            "подсистема заметок выключена — бриф писать некуда, и это состояние инстанса, "
+            + "а не сбой: клиент обязан получить заявленный отказ, а не ProblemDetails 500");
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Contain("Заметки",
+            "в отказе нужна причина: без неё клиенту нечем отличить выключенную подсистему от поломки");
+
+        // Фоновые сервисы хоста логируют своё — сравниваем не «ноль ошибок вообще», а именно
+        // отсутствие записи последнего рубежа пайплайна (UnhandledExceptionHandler.cs:41-47).
+        // Проверено мутацией (возврат к InvalidOperationException): ассерт краснеет с записью
+        // «Необработанное исключение на POST … System.InvalidOperationException в
+        // DailyBriefingService.BuildAndWriteAsync» — то есть ловит именно то, ради чего стоит.
+        _disabled.Errors.Snapshot().Skip(errorsBefore.Count)
+            .Should().NotContain(e => e.Contains("Необработанное исключение"),
+                "исключение поймано контроллером — до UnhandledExceptionHandler не доходит");
+    }
+
+    // Контроль рядом: тот же запрос на включённой подсистеме доходит до конца. Без него 503
+    // выше мог бы приходить по неверной причине — от опечатки в маршруте, формы тела или
+    // упавшего ICheapTextRunner (в тестовом хосте он застаблен и отвечает мгновенно).
+    [Fact]
+    public async Task УтреннийБриф_ПриВключённойПодсистеме_СобираетсяШтатно()
+    {
+        var response = await _enabled.CreateAuthenticatedClient()
+            .PostAsJsonAsync("/api/briefing/today", new { });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK,
+            "с включённой подсистемой бриф записывается в дневниковую заметку и возвращается ею");
+    }
 }

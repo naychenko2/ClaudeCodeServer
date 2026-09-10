@@ -21,7 +21,19 @@ public class BriefingController(DailyBriefingService briefing) : ControllerBase
     [HttpPost("today")]
     public async Task<ActionResult<NoteDetail>> Today([FromBody] DailyNoteRequest? req, CancellationToken ct)
     {
-        var note = await briefing.GenerateAsync(UserId, req?.Date, ct);
-        return Ok(note);
+        try
+        {
+            var note = await briefing.GenerateAsync(UserId, req?.Date, ct);
+            return Ok(note);
+        }
+        // Подсистема заметок выключена — бриф писать некуда. 503, а не 500: это состояние
+        // инстанса, а не сбой; форма ответа — как у прочих "не настроено на этом сервере"
+        // (McpCatalogController, TtsController). Гейт нужен на сервере независимо от того,
+        // что фронт прячет кнопку брифа (`notesOn` в lib/ai/actions.tsx): REST дёргают и мимо UI.
+        catch (BriefingUnavailableException ex)
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable,
+                new { error = ex.Message, reason = "notes_disabled" });
+        }
     }
 }

@@ -2,6 +2,7 @@
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -11,7 +12,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Route("api/auth")]
 public class AuthController(UserStore users, JwtService jwt, FeatureFlagService flags,
-    PersonaManager personas) : ControllerBase
+    PersonaManager personas, SubsystemStateStore subsystems) : ControllerBase
 {
     [AllowAnonymous]
     [EnableRateLimiting("auth-login")]
@@ -62,11 +63,15 @@ public class AuthController(UserStore users, JwtService jwt, FeatureFlagService 
             && defaultPersona is not null;
         // displayName отдаём и здесь: имя могли поправить в users.json уже после логина,
         // а перевыпускать токен ради этого незачем
+        // Активные подсистемы: список ключей, реально зарегистрированных в текущем
+        // процессе. Снимок берётся из `SubsystemStateStore` — он наполняется на старте
+        // через `AddSubsystems` и не меняется в рантайме (гейт одноразовый).
         return Ok(new
         {
             userId, username, displayName = me?.DisplayName, role, featureFlags,
             contextThresholds, executionEnvironment,
             defaultPersonaId, needsOnboarding, onboardingSessionId = me?.OnboardingSessionId,
+            subsystems = subsystems.ActiveKeys(),
         });
     }
 

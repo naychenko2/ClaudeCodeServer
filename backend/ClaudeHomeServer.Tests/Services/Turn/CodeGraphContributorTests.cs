@@ -123,9 +123,9 @@ public class CodeGraphContributorTests
             new NoopDifyMetrics(), userStore, config,
             NullLogger<PersonaMemoryService>.Instance);
         services.AddSingleton(personaMemory);
-        var bindings = new PersonaBindingsService(personas, projectManager, wkStore, notesSvc,
-            notesKb, knowledge, new SkillsService(), userStore, config,
-            NullLogger<PersonaBindingsService>.Instance);
+        var bindings = new PersonaBindingsService(personas, projectManager, wkStore,
+            knowledge, new SkillsService(), userStore, config,
+            NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
         services.AddSingleton(bindings);
         // Этап 5, шаг 6: контрибьютор гейтит секцию через Core-шов IPersonaServerToolGate,
         // а не через конкретный PersonaBindingsService. Форвардер — тот же, что в Program.cs.

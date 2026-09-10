@@ -110,8 +110,8 @@ public class PersonaBindingsService : IPersonaServerToolGate
     private readonly PersonaManager _personas;
     private readonly ProjectManager _projects;
     private readonly WorkspaceKnowledgeStore _wkStore;
-    private readonly NotesService _notes;
-    private readonly NotesKnowledgeService _notesKb;
+    private readonly NotesService? _notes;
+    private readonly NotesKnowledgeService? _notesKb;
     private readonly KnowledgeService _knowledge;
     private readonly SkillsService _skills;
     private readonly UserStore _users;
@@ -125,13 +125,17 @@ public class PersonaBindingsService : IPersonaServerToolGate
     private readonly ConcurrentDictionary<string, string> _datasetLabelCache = new();
 
     public PersonaBindingsService(PersonaManager personas, ProjectManager projects,
-        WorkspaceKnowledgeStore wkStore, NotesService notes, NotesKnowledgeService notesKb,
+        WorkspaceKnowledgeStore wkStore,
         KnowledgeService knowledge, SkillsService skills,
         UserStore users, IConfiguration config, ILogger<PersonaBindingsService> log,
         // Опционально (в тестах не передаётся): личный реестр MCP-серверов владельца —
         // его записи попадают в каталог Tool-ключей как «mcp:<ключ>». Без него каталог
         // остаётся статическим, а mcp-привязки не проходят валидацию
-        Mcp.McpRegistry? mcpRegistry = null)
+        Mcp.McpRegistry? mcpRegistry = null, NotesService? notes = null,
+        // Подсистема Notes отключаемая (Subsystems:Notes:Enabled=false) — null, если она
+        // выключена. Датасет заметок пропадает из каталога целей знаний, а recall по
+        // заметочным привязкам тихо возвращает пусто (ExtractNotesAsync).
+        NotesKnowledgeService? notesKb = null)
     {
         _personas = personas;
         _projects = projects;
@@ -602,7 +606,7 @@ public class PersonaBindingsService : IPersonaServerToolGate
             if (!string.IsNullOrWhiteSpace(p.RootPath)
                 && _wkStore.GetByPath(p.RootPath)?.DifyDatasetId is { Length: > 0 } ds)
                 list.Add((ds, p.Name, p.Id));
-        if (_notesKb.GetDatasetId(ownerId) is { Length: > 0 } notesDs)
+        if (_notesKb?.GetDatasetId(ownerId) is { Length: > 0 } notesDs)
             list.Add((notesDs, "Заметки", null));
         return list;
     }
@@ -804,7 +808,7 @@ public class PersonaBindingsService : IPersonaServerToolGate
                 }
             case PersonaBindingType.Notes:
                 {
-                    var source = _notes.GetSources(ownerId).FirstOrDefault(s => s.Key == binding.Target);
+                    var source = _notes?.GetSources(ownerId).FirstOrDefault(s => s.Key == binding.Target);
                     if (source is null) return null;
                     var folder = string.IsNullOrWhiteSpace(binding.Path) ? "" : $", папка \"{binding.Path}\"";
                     return $"mcp__notes__notes_search/notes_semantic_search (source \"{source.Key}\"{folder}, «{source.Label}»)";
@@ -927,15 +931,15 @@ public class PersonaBindingsService : IPersonaServerToolGate
 
     private async Task<string?> ExtractNotesAsync(string ownerId, PersonaBinding binding, string query)
     {
-        if (query.Length == 0) return null;
+        if (query.Length == 0 || _notesKb is not { } notesKb) return null;
         var topK = int.TryParse(_config["Persona:BindingsRecallTopK"], out var k) ? k : 4;
-        var hits = (await _notesKb.SearchAsync(ownerId, query, Math.Max(topK, 8)))
+        var hits = (await notesKb.SearchAsync(ownerId, query, Math.Max(topK, 8)))
             .Where(h => h.Source == binding.Target);
         // Пост-фильтр по папке источника: пути берём из сводок заметок
         if (!string.IsNullOrWhiteSpace(binding.Path))
         {
             var prefix = binding.Path.TrimEnd('/') + "/";
-            var paths = _notes.GetSummaries(ownerId, binding.Target, null)
+            var paths = (_notes?.GetSummaries(ownerId, binding.Target, null) ?? [])
                 .ToDictionary(s => s.Id, s => s.Path);
             hits = hits.Where(h => paths.TryGetValue(h.Id, out var p)
                 && p.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
@@ -984,7 +988,7 @@ public class PersonaBindingsService : IPersonaServerToolGate
                     ?? (_datasetLabelCache.TryGetValue(binding.Target, out var cached) ? cached : binding.Target);
             case PersonaBindingType.Notes:
                 {
-                    var label = _notes.GetSources(ownerId)
+                    var label = _notes?.GetSources(ownerId)
                         .FirstOrDefault(s => s.Key == binding.Target)?.Label ?? binding.Target;
                     return string.IsNullOrWhiteSpace(binding.Path) ? label : $"{label}/{binding.Path}";
                 }
@@ -1078,7 +1082,7 @@ public class PersonaBindingsService : IPersonaServerToolGate
                     return "База знаний не найдена или недоступна";
                 break;
             case PersonaBindingType.Notes:
-                if (_notes.GetSources(ownerId).All(s => s.Key != binding.Target))
+                if (_notes is null || _notes.GetSources(ownerId).All(s => s.Key != binding.Target))
                     return "Источник заметок не найден";
                 break;
             case PersonaBindingType.Skill:

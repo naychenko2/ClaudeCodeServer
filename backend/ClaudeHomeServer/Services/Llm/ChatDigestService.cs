@@ -27,8 +27,8 @@ public sealed class DigestGenerationException(string message) : Exception(messag
 // файл ...]», но сами реплики описывают увиденное) — тот же класс запрета, что у
 // межпровайдерного фолбэка десктопных чатов.
 public class ChatDigestService(
-    SessionManager sessions, IProjectManager projects, NotesService notes,
-    ICheapTextRunner cheap, ILogger<ChatDigestService> logger)
+    SessionManager sessions, IProjectManager projects, ICheapTextRunner cheap,
+    ILogger<ChatDigestService> logger, NotesService? notes = null)
 {
     // Тот же бюджет транскрипта, что у «Итога сессии»: при переполнении голова + хвост
     private const int TranscriptBudget = 30_000;
@@ -125,7 +125,7 @@ public class ChatDigestService(
         if (FreshSummary(session) is { } fresh) return fresh;
         if (session.SummaryNoteId is { Length: > 0 } noteId
             && ResolveOwnerId(session) is { } ownerId
-            && notes.GetDetail(ownerId, noteId) is { } note
+            && notes?.GetDetail(ownerId, noteId) is { } note
             && FirstLines(note.Content) is { } noteLines)
         {
             return noteLines;

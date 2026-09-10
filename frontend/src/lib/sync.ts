@@ -10,6 +10,7 @@ import type { FileEntry, Session, SyncMark } from '../types';
 import { api } from './api';
 import { isOnline } from './offline';
 import { idbGet, idbSet, idbKeys, idbDelete } from './idb';
+import { isSubsystemEnabled } from './subsystems';
 import { warmNote, drainNotesOutbox } from './notesOffline';
 import { drainTaskOutbox } from './taskOutbox';
 import './tasks';   // side-effect: configureOutbox регистрирует store-хуки очереди задач
@@ -392,6 +393,13 @@ async function loadNoteMtimes(): Promise<Record<string, string>> {
 }
 
 async function warmNotes(): Promise<void> {
+  // Гейт подсистемы: при выключенных заметках не дёргаем /api/notes* — маршрута
+  // в MVC нет, и вызов упирается в общий фолбэк приложения: на стенде это 200
+  // `text/html` (`response.ok === true`, а `JSON.parse` падает синтаксической
+  // ошибкой), в тестовом хосте 404. Шум в консоли — см. Д-4/Д-6 отчёта QA.
+  // Закрываем сам вызов, а не try/catch: пустой прогрев при выключенной
+  // подсистеме бессмысленен.
+  if (!isSubsystemEnabled('notes')) return;
   try {
     const list = await api.notes.list();               // заполнит GET-кэш /notes
     await api.notes.folders().catch(() => {});

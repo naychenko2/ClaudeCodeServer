@@ -6,17 +6,29 @@ namespace ClaudeHomeServer.Services.Composition;
 // и общая форма резолва каталога данных. Семантика — копия 1-в-1 локальных хелперов
 // из Program.cs, чтобы у подсистем не было соблазна дублировать гейт самогейтом
 // (см. костыль `Services/Images/ImageBackfillHostedService.cs:20-24`).
+//
+// Параметр `subsystemKey` — гейт `Subsystems:{Key}:Enabled`. Если передан,
+// метод проверяет его ПЕРЕД проверкой среды: выключенная подсистема не
+// получает hosted-сервиса ни в Testing, ни в Production. По умолчанию `null` —
+// гейта по подсистеме нет, проверяется только среда (старая семантика, чтобы
+// вызовы из Program.cs, не относящиеся к конкретной подсистеме, продолжали
+// работать).
 public static class SubsystemHostingExtensions
 {
     // Регистрирует hosted-сервис, если разрешено средой и ключом. В Testing без явного
     // Testing:EnableHostedServices=true hosted НЕ регистрируется; в Production —
     // регистрируется всегда. Подсистемы вызывают этот метод вместо прямого
     // AddHostedService, чтобы случайно не притащить фоновый цикл в тесты.
+    //
+    // Параметр `subsystemKey` опционален: для подсистем это их собственный Key,
+    // и тогда подсистема, задизейбленная по `Subsystems:{Key}:Enabled=false`,
+    // не зарегистрирует hosted даже в Production. Для вызовов из Program.cs,
+    // которые не относятся к конкретной подсистеме, ключ можно опустить.
     public static IServiceCollection AddGatedHostedService<T>(
-        this IServiceCollection services, IConfiguration config)
+        this IServiceCollection services, IConfiguration config, string? subsystemKey = null)
         where T : class, IHostedService
     {
-        if (GatedHostedShouldRegister(config))
+        if (GatedHostedShouldRegister(config, subsystemKey))
             services.AddHostedService<T>();
         return services;
     }
@@ -26,16 +38,23 @@ public static class SubsystemHostingExtensions
     // StartAsync, чтобы подписки встали на тот же объект, что и в DI).
     public static IServiceCollection AddGatedHostedFrom<T>(
         this IServiceCollection services, IConfiguration config,
-        Func<IServiceProvider, T> factory)
+        Func<IServiceProvider, T> factory, string? subsystemKey = null)
         where T : class, IHostedService
     {
-        if (GatedHostedShouldRegister(config))
+        if (GatedHostedShouldRegister(config, subsystemKey))
             services.AddHostedService(factory);
         return services;
     }
 
-    private static bool GatedHostedShouldRegister(IConfiguration config)
+    private static bool GatedHostedShouldRegister(IConfiguration config, string? subsystemKey)
     {
+        // Сначала гейт подсистемы: `Subsystems:{Key}:Enabled=false` блокирует регистрацию
+        // ВСЕГДА, даже если Testing:EnableHostedServices=true. Иначе тестовая среда
+        // с включёнными хостами обходила бы отключение подсистемы и тянула её фоновые
+        // циклы — это размазывает состояние «выключено» между Production/Testing.
+        if (subsystemKey is not null && !SubsystemGate.IsEnabled(config, subsystemKey))
+            return false;
+
         // Та же проверка, что была в Program.cs:121-130: ASP.NET Core кладёт среду
         // в IConfiguration["ASPNETCORE_ENVIRONMENT"] при WebApplication.CreateBuilder.
         var isTesting = string.Equals(

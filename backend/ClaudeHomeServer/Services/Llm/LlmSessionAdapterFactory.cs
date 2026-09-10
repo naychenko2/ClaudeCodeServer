@@ -1,5 +1,11 @@
 using ClaudeHomeServer.Models;
-using ClaudeHomeServer.Services.Skills;
+using ClaudeHomeServer.Services.Turn;
+
+// Швы из Core, оставшиеся в namespace ClaudeHomeServer.Services.Skills после выноса
+// SkillsService в отдельную вертикаль: используются полным именем, чтобы Llm не тащил
+// using назад (иначе декомпозиция пробного проекта снова ломается).
+using ICommandExpansion = ClaudeHomeServer.Services.Skills.ICommandExpansion;
+using ISkillSnapshotSource = ClaudeHomeServer.Services.Skills.ISkillSnapshotSource;
 
 namespace ClaudeHomeServer.Services.Llm;
 
@@ -21,7 +27,7 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
     // Токен HTTP MCP-сервера glif (инжектится там же, рядом с fal-ai)
     private readonly string? _glifMcpToken;
     private readonly string[] _disallowedTools;
-    private readonly SkillsService _skills;
+    private readonly IAgentPromptSource _agentPrompt;
     // Шов разворота /skill в тексте хода (этап 5, Skills): null — тесты без DI, сообщение
     // идёт в ход неизменённым (прежнее поведение при skills=null)
     private readonly ICommandExpansion? _commandExpansion;
@@ -70,7 +76,7 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
     // ход завершается сразу с понятной красной карточкой, без шагов цепочки. null (тесты) — выключена.
     private readonly ILocalEndpointProbe? _localProbe;
 
-    public LlmSessionAdapterFactory(IConfiguration config, SkillsService skills,
+    public LlmSessionAdapterFactory(IConfiguration config, IAgentPromptSource agentPrompt,
         IWorkspaceDatasetLookup workspaceStore, LlmProviderRegistry providers,
         ClaudeSubscriptionPool subscriptionPool, ModelAssignmentResolver? assignments = null,
         FileChangeAttributor? fileChangeAttributor = null,
@@ -111,7 +117,7 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         // прокидываем в каждый адаптер, а не мутируем глобальный static
         if (int.TryParse(config["Claude:BgLingerMinutes"], out var lingerMin) && lingerMin > 0)
             _bgLingerTimeout = TimeSpan.FromMinutes(lingerMin);
-        _skills = skills;
+        _agentPrompt = agentPrompt;
         _commandExpansion = commandExpansion;
         _skillSnapshot = skillSnapshot;
         _workspaceStore = workspaceStore;
@@ -167,7 +173,7 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         {
             OnMessage = msg => fallback is not null ? fallback.HandleMessageAsync(msg) : context.OnMessage(msg),
         };
-        var claudeSession = new Claude.ClaudeSession(session, innerContext, _mcpConfigPath, _skills,
+        var claudeSession = new Claude.ClaudeSession(session, innerContext, _mcpConfigPath, _agentPrompt,
             _commandExpansion, _skillSnapshot, _workspaceStore, _disallowedTools, _providers,
             _subscriptionPool, _fileWatcherOptions, _bgLingerTimeout, _falMcpApiKey,
             _glifMcpToken, _assignments, _fileChangeAttributor, _log, _sessionLog);

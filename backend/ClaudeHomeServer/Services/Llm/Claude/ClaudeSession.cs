@@ -6,8 +6,13 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Prompts;
-using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Services.Turn;
+
+// Швы из Core, оставшиеся в namespace ClaudeHomeServer.Services.Skills после выноса
+// SkillsService в отдельную вертикаль: используются полным именем, чтобы Llm не тащил
+// using назад (иначе декомпозиция пробного проекта снова ломается).
+using ICommandExpansion = ClaudeHomeServer.Services.Skills.ICommandExpansion;
+using ISkillSnapshotSource = ClaudeHomeServer.Services.Skills.ISkillSnapshotSource;
 using ClaudeHomeServer.Core.Telemetry;
 
 namespace ClaudeHomeServer.Services.Llm.Claude;
@@ -619,7 +624,7 @@ public class ClaudeSession : ILlmSessionAdapter
     // Токен HTTP MCP-сервера glif (Glif:McpToken) — второй генератор медиа рядом с fal-ai;
     // инжектится тем же путём из appsettings; пусто — без glif
     private readonly string? _glifMcpToken;
-    private readonly SkillsService? _skills;
+    private readonly IAgentPromptSource? _agentPrompt;
     // Шов разворота /skill в тексте хода (этап 5, Skills): null — сессия без SkillsService
     // или собрана в тестах без DI, сообщение идёт в ход неизменённым
     private readonly ICommandExpansion? _commandExpansion;
@@ -724,7 +729,7 @@ public class ClaudeSession : ILlmSessionAdapter
     private Activity? _turnActivity;
 
     public ClaudeSession(Session info, LlmSessionContext context,
-        string? mcpConfigPath = null, SkillsService? skills = null,
+        string? mcpConfigPath = null, IAgentPromptSource? agentPrompt = null,
         ICommandExpansion? commandExpansion = null,
         ISkillSnapshotSource? skillSnapshot = null,
         IWorkspaceDatasetLookup? workspaceStore = null, string[]? disallowedTools = null,
@@ -755,7 +760,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _glifMcpToken = glifMcpToken;
         _rawSystemPrompt = context.RawSystemPrompt;
         _builtInSystemPrompt = context.BuiltInSystemPrompt;
-        _skills = skills;
+        _agentPrompt = agentPrompt;
         _commandExpansion = commandExpansion;
         _skillSnapshot = skillSnapshot;
         _wkStore = workspaceStore;
@@ -3185,8 +3190,8 @@ public class ClaudeSession : ILlmSessionAdapter
             // Объявление agentPrompt снаружи (строка выше) — ApplyBudget видит его ПОСЛЕ сборки env.
             agentPrompt = contributorSections.TryGetValue("persona-layer", out var personaSection)
                 ? personaSection.Text
-                : (!string.IsNullOrEmpty(Info.AgentName) && _skills is not null
-                    ? _skills.GetAgentSystemPrompt(_rootPath, Info.AgentName)
+                : (!string.IsNullOrEmpty(Info.AgentName) && _agentPrompt is not null
+                    ? _agentPrompt.GetAgentSystemPrompt(_rootPath, Info.AgentName)
                     : null);
             personaLayerPrompt = agentPrompt;
 

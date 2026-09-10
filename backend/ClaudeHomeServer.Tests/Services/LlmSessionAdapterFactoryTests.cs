@@ -83,7 +83,7 @@ public class LlmSessionAdapterFactoryTests
                 }).Build();
             var providers = new LlmProviderRegistry(config);
             var pool = new ClaudeSubscriptionPool(config);
-            var factory = new LlmSessionAdapterFactory(config, new SkillsService(),
+            var factory = new LlmSessionAdapterFactory(config, new AgentPromptSourceAdapter(new SkillsService()),
                 new WorkspaceDatasetLookup(new WorkspaceKnowledgeStore(config)), providers, pool);
             var session = new Session { Model = "opus[1m]", Provider = "glm" };
             var context = new LlmSessionContext(tempDir, _ => Task.CompletedTask,
@@ -117,7 +117,7 @@ public class LlmSessionAdapterFactoryTests
                 }).Build();
             var providers = new LlmProviderRegistry(config);
             var pool = new ClaudeSubscriptionPool(config);
-            var factory = new LlmSessionAdapterFactory(config, new SkillsService(),
+            var factory = new LlmSessionAdapterFactory(config, new AgentPromptSourceAdapter(new SkillsService()),
                 new WorkspaceDatasetLookup(new WorkspaceKnowledgeStore(config)), providers, pool);
             var session = new Session { Model = "glm-5.2", Provider = "glm" };
             var context = new LlmSessionContext(tempDir, _ => Task.CompletedTask,

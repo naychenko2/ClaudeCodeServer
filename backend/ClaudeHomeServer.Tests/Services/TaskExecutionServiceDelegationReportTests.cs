@@ -84,7 +84,7 @@ public class TaskExecutionServiceDelegationReportTests : IDisposable
 
         var llmProviders = new LlmProviderRegistry(config);
         var subPool = new ClaudeSubscriptionPool(config);
-        var adapters = new LlmSessionAdapterFactory(config, new SkillsService(), new WorkspaceDatasetLookup(wkStore), llmProviders, subPool);
+        var adapters = new LlmSessionAdapterFactory(config, new AgentPromptSourceAdapter(new SkillsService()), new WorkspaceDatasetLookup(wkStore), llmProviders, subPool);
         var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, config);
         var usage = new UsageService(config);
         var server = new Mock<Microsoft.AspNetCore.Hosting.Server.IServer>();

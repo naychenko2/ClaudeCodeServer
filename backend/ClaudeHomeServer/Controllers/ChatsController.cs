@@ -15,7 +15,7 @@ namespace ClaudeHomeServer.Controllers;
 [Route("api/chats")]
 public class ChatsController(SessionManager sessions, ProjectManager projects, FileService files,
     DefaultAssistantProvisioner provisioner, TeamWaveService teamWaves,
-    Services.Llm.ChatDigestService digest, ChatArchiveService autoArchive,
+    ChatDigestService digest, ChatArchiveService autoArchive,
     UserStore users, FeatureFlagService flags,
     ILogger<ChatsController> logger) : ControllerBase
 {
@@ -287,8 +287,8 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
             return Ok(await digest.BuildDigestAsync(UserId, id, ct));
         }
         catch (KeyNotFoundException) { return NotFound(); }
-        catch (Services.Llm.DigestInProgressException ex) { return Conflict(new { error = ex.Message }); }
-        catch (Services.Llm.DigestGenerationException ex) { return StatusCode(502, new { error = ex.Message }); }
+        catch (DigestInProgressException ex) { return Conflict(new { error = ex.Message }); }
+        catch (DigestGenerationException ex) { return StatusCode(502, new { error = ex.Message }); }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
 

@@ -292,6 +292,10 @@ builder.Services.AddGatedHostedService<PersonaProjectBindingsMigration>(builder.
 // gated hosted: в Testing не стартует, повторный проход отсекается marker-файлом в data.
 // Живёт в спине рядом с прочими миграциями сторов, а не в вертикали Llm (см. шапку файла).
 builder.Services.AddGatedHostedService<GlmModelAliasMigration>(builder.Configuration);
+// Сводка карточки архива чата (место chat-digest). Живёт в спине, а не в вертикали Llm:
+// читает историю чата и заметку-итог, пишет сводку в сессию, а модель ей нужна лишь как
+// генератор текста через ICheapTextRunner (см. шапку файла).
+builder.Services.AddSingleton<ChatDigestService>();
 // TaskManager/TaskAiService/BoardService/DailyBriefingService/TaskSchedulerService
 // — DI в подсистеме `TasksSubsystem` (волна 4C, шаг 1).
 builder.Services.AddSingleton<FileService>();

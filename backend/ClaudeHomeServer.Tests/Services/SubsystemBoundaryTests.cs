@@ -879,7 +879,7 @@ public class SubsystemBoundaryTests
                     // Protocol — поля async-state-машин (FallbackLlmSessionAdapter,
                     // ClaudeSession, LlamaServerClient.ReadChatStreamAsync,
                     // OllamaClient.ReadChatStreamAsync, LlmProviderRegistry,
-                    // LlmSessionContext, TurnFileWatcher, ChatDigestService,
+                    // LlmSessionContext, TurnFileWatcher,
                     // ClaudeRateLimitParser, TurnPromptAssembler, SubagentStreamWatcher).
                     "ClaudeHomeServer.Protocol.StoredMessage",
                     "ClaudeHomeServer.Protocol.UsageInfo",

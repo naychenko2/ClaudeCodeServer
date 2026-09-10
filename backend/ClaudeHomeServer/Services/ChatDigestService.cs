@@ -1,9 +1,10 @@
 using System.Collections.Concurrent;
 using System.Text;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Notes;
 
-namespace ClaudeHomeServer.Services.Llm;
+namespace ClaudeHomeServer.Services;
 
 // Сводка этого чата уже собирается (повторный клик) → 409 у контроллера
 public sealed class DigestInProgressException() : Exception("Сводка этого чата уже собирается");
@@ -20,6 +21,12 @@ public sealed class DigestGenerationException(string message) : Exception(messag
 // Это НЕ вынос в заметки: «Сохранить в заметки» — отдельная кнопка через существующий
 // POST /api/sessions/{id}/summary (SessionSummaryService, место session-summary), здесь
 // этот маршрут не участвует вовсе.
+//
+// Живёт в СПИНЕ, а не в вертикали `Services.Llm` (перенесён из неё): сервис про чаты и
+// заметки — читает историю чата (SessionManager), заметку-итог (NotesService) и пишет
+// сводку обратно в сессию, а модель ему нужна лишь как генератор текста через
+// `ICheapTextRunner`, ровно как десятку других мест каталога `LocalActionCatalog`.
+// В вертикали он был причиной запрещённых связей `Llm → SessionManager` и `Llm → Notes`.
 //
 // Десктопным чатам сводка НЕ строится: наружу, к настроенному для chat-digest провайдеру,
 // уехали бы текстовые описания экрана и содержимого чужих окон (кадров в base64 в

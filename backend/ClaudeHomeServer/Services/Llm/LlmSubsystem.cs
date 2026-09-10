@@ -8,9 +8,9 @@ namespace ClaudeHomeServer.Services.Llm;
 // (Claude через cli, GLM/OpenRouter напрямую, локальные Ollama/llama-server),
 // one-shot раннеры и дешёвые текстовые операции, реестры провайдеров/балансов/
 // контекстных ёмкостей, файлы наблюдаемости (логи ходов и сабагентов, egress-probe),
-// а также пара «не-LLM» карточек, живущих в `Services.Llm`:
-// `ChatDigestService` (сводка архива чата — место `chat-digest`, отдельный ход
-// по кнопке) и `PlanMapService` (визуальная развертка плана — место `plan-map`).
+// а также «не-LLM» карточка `PlanMapService` (визуальная развертка плана — место
+// `plan-map`), живущая в `Services.Llm`. `ChatDigestService` уехал в спину
+// (`Services/ChatDigestService.cs`) — см. шапку того файла.
 //
 // Зарегистрировано здесь (ранее жило блоком в Program.cs:~156-355, 454, 457):
 // 1) `UserModelTierResolver` — слоты моделей (strong/medium/weak) per-user,
@@ -64,8 +64,9 @@ namespace ClaudeHomeServer.Services.Llm;
 //     пишут зеркало в `data/logs/subagent-runs-*.jsonl` и `data/logs/turn-runs-*.jsonl`.
 // 19) `IEgressProbe` → `EgressProbe` — проба исходящего HTTP(S)_PROXY для
 //     разведения отказа провайдера и отказа канала наружу.
-// 20) `ChatDigestService` (место `chat-digest`, сводка архива) и
-//     `PlanMapService` (место `plan-map`, визуальный разворот плана).
+// 20) `PlanMapService` (место `plan-map`, визуальный разворот плана).
+//     `ChatDigestService` (место `chat-digest`) отсюда уехал в спину — он про
+//     чаты и заметки, а не про модель; регистрация в Program.cs.
 // 21) Волна 4B, шаг 2 — переселение в `Services.Llm`:
 //   - `SpecialtySettingsStore` + `SpecialtySettingsLayer` (ADR-007 §2): матрицы
 //     моделей по уровням, пресеты-цепочки и DefaultTier для специальностей; все
@@ -265,10 +266,9 @@ public sealed class LlmSubsystem : IAppSubsystem
         // от отказа эндпоинта вендора — при первом смена модели не лечит ничего.
         services.AddSingleton<IEgressProbe>(sp => new EgressProbe(sp.GetRequiredService<IConfiguration>()));
 
-        // Сводка карточки архива (место chat-digest) и визуальная развертка плана
-        // (место plan-map). Эти карточки живут в Services.Llm, хоть и не про модель —
-        // перенос сюда согласован с архитектурой шага.
-        services.AddSingleton<ChatDigestService>();
+        // Визуальная развертка плана (место plan-map). Карточка живёт в Services.Llm,
+        // хоть и не про модель — перенос сюда согласован с архитектурой шага.
+        // `ChatDigestService` рядом больше не стоит: он уехал в спину, DI в Program.cs.
         services.AddSingleton<PlanMapService>();
 
         // === Волна 4B, шаг 2 — переселение из корня `Services` ===

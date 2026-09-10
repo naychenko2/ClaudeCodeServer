@@ -206,14 +206,16 @@ public class RootSubsystemBoundaryTests
         // пересмотреть, не вынести ли конкретный root-тип внутрь Tasks (или не выделить
         // общий Tasks-интерфейс).
         "ClaudeHomeServer.Services.Tasks.TaskManager",
-        // ⚠ Волна 4C, шаг 2 — выделена вертикаль Notes; пять root-типов держат
+        // ⚠ Волна 4C, шаг 2 — выделена вертикаль Notes; шесть root-типов держат
         // `NotesService`/`NotesKnowledgeService` в конструкторе как «продуктовую
         // зависимость» (Notes записывает события в журнал, генерирует теги,
         // делает семантический поиск для recall-запросов). Префикс `Services.Notes`
         // не открываем (Notes — продуктовая вертикаль, не «общий слой»):
         // точечный допуск ровно на два типа, чтобы `PersonaBindingsService`/
         // `PersonasCrudService`/`SessionSummaryService`/`TaskExecutionService`/
-        // `UnifiedSearchService` могли держать их в сигнатуре. Если завтра root
+        // `UnifiedSearchService`/`ChatDigestService` могли держать их в сигнатуре.
+        // (`ChatDigestService` — волна 3 выноса Llm: приехал из вертикали в спину,
+        // берёт `NotesService.GetDetail` для текста карточки архива.) Если завтра root
         // начнёт ссылаться ещё на `NotesAiService`/`NoteTaskSyncService`/etc —
         // сторож покраснеет, и повод пересмотреть, не выделить ли конкретный
         // root-тип внутрь Notes.

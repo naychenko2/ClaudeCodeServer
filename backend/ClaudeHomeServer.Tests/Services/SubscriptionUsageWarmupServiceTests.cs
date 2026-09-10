@@ -122,12 +122,19 @@ public class SubscriptionUsageWarmupServiceTests : IDisposable
     }
 
     [Fact]
-    public void RecordAndGuard_RejectedПричинаПерерасхода_ДоезжаетДоЛога()
+    public void RecordAndGuard_RejectedПричинаПерерасхода_ПомечаетИсчерпаннойИДоезжаетДоСнимка()
     {
         // Инцидент 20–23.08.2026: без причины в логе видно только status=rejected, а
-        // «кончились кредиты» (out_of_credits) и «выключено организацией»
-        // (org_level_disabled) — разные причины с разными действиями
-        var (svc, pool, _, _) = MkService(subKeys: ["second"]);
+        // «кончились кредиты перерасхода» (out_of_credits) и «перерасход выключен
+        // организацией» (org_level_disabled) — разные причины с разными действиями.
+        //
+        // Подписка при этом ОБЯЗАНА пометиться исчерпанной: идл-пинг ходит haiku, отказа по
+        // модели у неё быть не может, значит rejected — настоящее исчерпание окна, а
+        // overageDisabledReason лишь объясняет, почему ход не ушёл в перерасход. Волна 1
+        // трактовала это поле как «модель недоступна» и MarkExhausted здесь глушила — по
+        // логам такое событие приходит на КАЖДОМ исчерпании (248 строк за сутки), то есть
+        // исчерпанные подписки остались бы в ротации.
+        var (svc, pool, usage, _) = MkService(subKeys: ["second"]);
         var msg = new RateLimitMessage("five_hour", DateTime.UtcNow.AddHours(2).ToString("o"),
             "rejected", null, false, OverageDisabledReason: "out_of_credits");
 
@@ -135,6 +142,8 @@ public class SubscriptionUsageWarmupServiceTests : IDisposable
 
         pool.IsExhausted("second").Should().BeTrue();
         log.Should().Contain("out_of_credits");
+        // Поле полезное и остаётся в снимке — просто значит «почему выключен перерасход»
+        usage.GetAll().Should().ContainSingle().Which.OverageDisabledReason.Should().Be("out_of_credits");
     }
 
     [Fact]

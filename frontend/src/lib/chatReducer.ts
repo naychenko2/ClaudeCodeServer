@@ -673,8 +673,10 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         // compact_status с результатом, и без сброса «Сжимаю…» висело бы до перезагрузки
         isCompacting: false,
         // details — сырой технический текст за человекочитаемым msg.text; если следом
-        // придёт подмена модели, элемент схлопнется в её маркер (appendModelSwitched)
-        items: [...prev.items, { kind: 'error', text: msg.text, canRetry: true, ...(msg.details ? { details: msg.details } : {}) }],
+        // придёт подмена модели, элемент схлопнется в её маркер (appendModelSwitched).
+        // action — признак предлагаемого действия под карточкой (window-1m-drop): проброс
+        // без сравнения с текстом, чтобы смена формулировки на бэке не сломала UI молча
+        items: [...prev.items, { kind: 'error', text: msg.text, canRetry: true, ...(msg.details ? { details: msg.details } : {}), ...(msg.action ? { action: msg.action } : {}) }],
       };
 
     case 'exited': {

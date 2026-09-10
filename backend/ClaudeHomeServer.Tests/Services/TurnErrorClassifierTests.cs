@@ -60,6 +60,72 @@ public class TurnErrorClassifierTests
             RateLimitRejected = true,
         }).Should().Be(FallbackErrorClass.RateLimit);
 
+    // ===== ModelUnavailable: недоступность модели на подписке (не исчерпание лимита) =====
+
+    // Ловушка: «нет кредитов» приезжает как rate_limit_event status=rejected → RateLimitRejected
+    // был бы true, но это отдельный кошелёк кредитов модели, а НЕ лимит подписки. Текст ошибки
+    // смотрится ДО ветки RateLimitRejected, иначе подписка ложно помечалась бы исчерпанной.
+    [Fact]
+    public void ТребуютсяКредиты_ПриRateLimitRejected_КлассModelOutOfCredits()
+        => TurnErrorClassifier.Classify(new TurnAttemptOutcome
+        {
+            HasResult = false,
+            RateLimitRejected = true,
+            ErrorText = "Fable 5.1 requires usage credits. Switch to another model, or manage usage credits at claude.ai/settings/usage, to continue.",
+        }).Should().Be(FallbackErrorClass.ModelOutOfCredits,
+            "«requires usage credits» — кредиты модели, не исчерпание окна подписки");
+
+    [Fact]
+    public void ТребуютсяКредиты_ПустойСтатус_КлассModelOutOfCredits()
+        => TurnErrorClassifier.Classify(Result(null,
+                "Fable 5.1 requires usage credits. Switch to another model to continue."))
+            .Should().Be(FallbackErrorClass.ModelOutOfCredits);
+
+    // «issue with the selected model» — подписка не имеет доступа к модели (обычно 404).
+    // Раньше это был None (fail-closed, без фолбэка): упавший ход не шёл на соседнюю модель.
+    // Теперь — ModelNoAccess с фолбэком: другая подписка/модель может иметь доступ.
+    [Theory]
+    [InlineData("There's an issue with the selected model (fable[1m]). It may not exist or you may not have access to it.")]
+    [InlineData("There's an issue with the selected model (opus[1m])")]
+    // Хвост фразы принимается и без головы, но только рядом со словом «model»
+    [InlineData("The model is unknown or you may not have access to it")]
+    public void НетДоступаКМодели_КлассModelNoAccess(string text)
+        => TurnErrorClassifier.Classify(Result(null, text)).Should().Be(FallbackErrorClass.ModelNoAccess);
+
+    // Фраза «may not have access to it» сама по себе НЕ специфична: её возвращают в своих
+    // ошибках чужие инструменты и MCP-серверы (так выглядел инцидент P31). Принять такую
+    // ошибку за отказ по модели — значит пометить живую пару и увести ход с правильной
+    // подписки, поэтому без соседства со словом «model» класс не ставится.
+    [Theory]
+    [InlineData("Repository is private — you may not have access to it")]
+    [InlineData("mcp__github: resource not found, you may not have access to it")]
+    public void ФразаПроДоступБезКонтекстаМодели_НеModelNoAccess(string text)
+        => TurnErrorClassifier.Classify(Result(null, text)).Should().NotBe(FallbackErrorClass.ModelNoAccess);
+
+    // 404 с текстом «нет доступа» — тоже ModelNoAccess (до белого списка статусов, иначе None).
+    [Fact]
+    public void НетДоступаКМодели_Статус404_КлассModelNoAccess()
+        => TurnErrorClassifier.Classify(Result("404",
+                "There's an issue with the selected model (fable[1m]). It may not exist or you may not have access to it."))
+            .Should().Be(FallbackErrorClass.ModelNoAccess);
+
+    // Настоящее исчерпание окна сессии — по-прежнему RateLimit, а не ModelOutOfCredits.
+    [Fact]
+    public void НастоящийЛимитСессии_ПриRateLimitRejected_ОстаётсяRateLimit()
+        => TurnErrorClassifier.Classify(new TurnAttemptOutcome
+        {
+            HasResult = false,
+            RateLimitRejected = true,
+            ErrorText = "You've hit your session limit · resets 9pm",
+        }).Should().Be(FallbackErrorClass.RateLimit,
+            "«session limit» — настоящее исчерпание окна, не кредиты модели");
+
+    [Theory]
+    [InlineData(FallbackErrorClass.ModelNoAccess, "model_no_access")]
+    [InlineData(FallbackErrorClass.ModelOutOfCredits, "model_out_of_credits")]
+    public void ModelUnavailable_WireName(FallbackErrorClass cls, string expected)
+        => TurnErrorClassifier.WireName(cls).Should().Be(expected);
+
     [Theory]
     [InlineData("500")]
     [InlineData("502")]

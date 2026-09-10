@@ -11,8 +11,9 @@ import { Button, Dot } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { useIsMobile } from '../../lib/breakpoints';
 import {
-  cliProviderKeys, getModels, getProviders, providerCapsByKey, providerLabel, useModels,
+  cliProviderKeys, getModels, getProviders, modelLabel, providerCapsByKey, providerLabel, useModels,
 } from '../../lib/models';
+import { modelUnavailableText, unavailableModelName } from '../../lib/providerLimit';
 import { fmtReset, latestPerWindow, seriesByWindow, snapshotFreshnessLabel, windowLabel, worstWindow } from '../../lib/rateLimit';
 import { rotationBadgeState } from '../../lib/rotation';
 import type { RotationBadgeState } from '../../lib/rotation';
@@ -22,7 +23,7 @@ import { isLocalEngineKey } from '../../lib/localEngine';
 import { showToast } from '../../lib/toast';
 import { KpiRibbon } from './KpiRibbon';
 import { ProviderCard } from './ProviderCard';
-import type { FreshnessSpec, PillSpec, ProviderCardData } from './ProviderCard';
+import type { FreshnessSpec, PillSpec, ProviderCardData, UnavailableModelRow } from './ProviderCard';
 import { parseQuotaWindow, type QuotaWindowView } from './QuotaWindow';
 import { BalanceChip, type BalanceChipData } from './BalanceChip';
 
@@ -264,6 +265,18 @@ interface SubCtx {
   freeAvailable: boolean;
   subs: Record<string, SubscriptionUsage>;
   usageError: boolean;
+  // Досрочный сброс пометки «модель недоступна» — эндпоинт админский, поэтому у остальных
+  // строки пометок остаются, а кнопки нет
+  onRecheckModel?: (key: string, model: string) => Promise<void>;
+}
+
+// Пометки подписки → строки карточки: человеческий текст плюс сырой id для сброса.
+// Имя модели резолвится каталогом (id приходит нормализованным, «fable[1m]»).
+function unavailableModelRows(sub: SubscriptionUsage): UnavailableModelRow[] {
+  return (sub.unavailableModels ?? []).map(m => ({
+    model: m.model,
+    text: modelUnavailableText(unavailableModelName(m.model, modelLabel), m.reason, m.until),
+  }));
 }
 
 // Ранг тарифа по ярлыку с бэка ("Max 20×", "Max 5×", "Max", "Pro") — копия
@@ -320,6 +333,12 @@ export function buildSubscriptionCard(key: string, sub: SubscriptionUsage, ctx: 
   const color = sourceColor('claude');   // оба аккаунта пула — один цвет, различаются именем
   const pollStatus = ctx.pollStatuses[key];
   const lastSnap = lastSnapshot(sub.snapshots);
+  // Пометки живут независимо от снимков: аккаунт без единого снимка тоже может не пускать
+  // модель, поэтому блок нужен обеим веткам возврата
+  const unavailableModels = unavailableModelRows(sub);
+  const onRecheckModel = ctx.onRecheckModel
+    ? (model: string) => ctx.onRecheckModel!(key, model)
+    : undefined;
 
   // Нет снимков совсем — «пустая» карточка: имя + тариф + хинт, без нулевых шкал (не ошибка)
   if (!lastSnap) {
@@ -337,6 +356,8 @@ export function buildSubscriptionCard(key: string, sub: SubscriptionUsage, ctx: 
         ? 'Опрос лимитов недоступен — в профиле нет полноценного входа'
         : 'Данных пока нет — цифры появятся после первого хода или ближайшего опроса',
       hasExhausted: false,
+      unavailableModels,
+      onRecheckModel,
       expandable: !!(unauthorized && sub.loginCommand),
       tier: sub.tier ?? null,
       freshnessDetail: unauthorized && sub.loginCommand
@@ -395,6 +416,8 @@ export function buildSubscriptionCard(key: string, sub: SubscriptionUsage, ctx: 
     freshness: fresh.corner,
     hint: buildSubHint(worst, rot),
     hasExhausted,
+    unavailableModels,
+    onRecheckModel,
     expandable: true,
     tier: sub.tier ?? null,
     // Оба окна: пул выводит аккаунт по любому из них (IsOverloaded), и подпись про одно
@@ -496,6 +519,25 @@ export function QuotasTab({ balances, onClose }: { balances?: BalanceChipData[];
     setProv(prev => ({ ...prev, [key]: undefined }));
     api.providers.usage(key).then(d => setProv(prev => ({ ...prev, [key]: d }))).catch(() => setProv(prev => ({ ...prev, [key]: null })));
   }, []);
+  // «Проверить сейчас»: снимаем пометку «модель недоступна на этой подписке» досрочно.
+  // Ответ несёт обновлённый список — кладём его в стейт вместо перезапроса /usage
+  // (тот идёт раз в минуту и вернул бы карточку к прежнему виду только к следующему тику).
+  const recheckModel = useCallback(async (key: string, model: string) => {
+    try {
+      const res = await api.usage.clearModelAvailability(key, model);
+      setUsage(prev => {
+        const sub = prev?.subscriptions?.[key];
+        if (!prev || !sub) return prev;
+        return {
+          ...prev,
+          subscriptions: { ...prev.subscriptions, [key]: { ...sub, unavailableModels: res.unavailableModels } },
+        };
+      });
+    } catch {
+      showToast('Не удалось снять пометку', 'Сервер не ответил — попробуйте ещё раз', 'error');
+    }
+  }, []);
+
   const loadSpend = useCallback(() => {
     api.spend.overview(spendQuery({ from: addDaysUtc(todayUtc(), -4), to: todayUtc(), scope: 'all' }))
       .then(setSpend).catch(() => setSpend(null));
@@ -611,6 +653,7 @@ export function QuotasTab({ balances, onClose }: { balances?: BalanceChipData[];
       freeAvailable: Object.values(subs).some(s => s.inRotation !== false),
       subs,
       usageError,
+      onRecheckModel: isAdmin ? recheckModel : undefined,
     };
     for (const [key, sub] of Object.entries(subs)) {
       out.push(buildSubscriptionCard(key, sub, subCtx));
@@ -641,7 +684,7 @@ export function QuotasTab({ balances, onClose }: { balances?: BalanceChipData[];
       out.push({ key, name: providerLabel(key), color: sourceColor(key), state: 'unavailable', isFree: isFreeSource(key), onRetry: () => {}, windows: [], pills: [], hasExhausted: false, expandable: false });
     }
     return out;
-  }, [prov, balanceKeys, providerKeys, loadProvider, retryAt, usage, usageError]);
+  }, [prov, balanceKeys, providerKeys, loadProvider, retryAt, usage, usageError, isAdmin, recheckModel]);
 
   // Денежные плитки (админ): денежные CLI-провайдеры
   const moneyTiles: MoneyTileData[] = useMemo(() => {

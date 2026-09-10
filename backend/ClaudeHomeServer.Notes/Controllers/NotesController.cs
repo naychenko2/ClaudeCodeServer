@@ -10,11 +10,12 @@ namespace ClaudeHomeServer.Notes.Controllers;
 // Obsidian-совместимая база заметок, per-owner (изоляция как у задач — по claim sub).
 //
 // Контроллер живёт в вынесенной вертикали `ClaudeHomeServer.Notes` (Этап 5,
-// волна 2) и подключается к Main через `ApplicationPart` — см.
-// `NotesSubsystem.AddApplicationPart` и гейт `Subsystems:Notes:Enabled`.
-// При выключенной подсистеме сборка не подключается к MVC и маршруты
-// `/api/notes/*` отдают 404 (не зарегистрированы) — никаких обращений к
-// сервисам вертикали не происходит.
+// волна 2). Сборка подключается к MVC атрибутом `[assembly: ApplicationPart("...")]`
+// (генерируется MSBuild благодаря Web SDK у Notes.csproj). Гейт вертикали
+// `Subsystems:Notes:Enabled` снимает эту часть в композиции Main
+// (`ConfigureApplicationPartManager` в Program.cs) — при `Enabled=false` MVC не
+// находит action и маршруты `/api/notes/*` отдают общий 404, никаких обращений
+// к сервисам вертикали не происходит.
 //
 // Шов `INotesHubNotifier` (Core) заменил `IHubContext<SessionHub>` (Main):
 // реализация в Main (`NotesHubNotifier` поверх `ISessionBroadcaster`)

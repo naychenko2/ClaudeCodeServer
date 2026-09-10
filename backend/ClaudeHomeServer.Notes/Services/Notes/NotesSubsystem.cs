@@ -1,9 +1,5 @@
-using System.Reflection;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Turn;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.Mvc.ApplicationParts;
-using Microsoft.Extensions.Options;
 
 namespace ClaudeHomeServer.Services.Notes;
 
@@ -40,10 +36,14 @@ namespace ClaudeHomeServer.Services.Notes;
 // Notes.csproj: обратной ссылки нет.
 //
 // Контроллер `NotesController` (Controllers/NotesController.cs) живёт В ЭТОЙ
-// сборке и подключается к Main через `ApplicationPart` — см. метод
-// `AddApplicationPart` ниже. Дефолт `Subsystems:Notes:Enabled = true`;
-// при `false` сборка не подключается к MVC и маршруты `/api/notes/*` отдают
-// 404 (роутер не находит action), а не 500 (DI-резолв упавшего контроллера).
+// сборке. Дефолт `Subsystems:Notes:Enabled = true`. Гейт вертикали
+// (закрыть контроллеры при `Enabled=false` — 404 на `/api/notes/*` вместо 500
+// от DI-резолва) — забота КОМПОЗИЦИИ Main (`ConfigureApplicationPartManager` в
+// Program.cs): MSBuild генерирует `[assembly: ApplicationPart("ClaudeHomeServer.Notes")]`
+// в `obj/*/ClaudeHomeServer.MvcApplicationPartsAssemblyInfo.cs` благодаря тому,
+// что Notes.csproj собран под `Microsoft.NET.Sdk.Web`, и подсистема этот атрибут
+// обойти не может. Сравнение по имени сборки; обратной ссылки Main → Notes
+// избежать нельзя, но она узкая (один метод `ConfigureApplicationPartManager`).
 public sealed class NotesSubsystem : IAppSubsystem
 {
     public string Key => "notes";
@@ -67,42 +67,5 @@ public sealed class NotesSubsystem : IAppSubsystem
         // `Register`, и контрибьютор (он тянет `NotesKnowledgeService`) в
         // `IEnumerable<IPromptSectionContributor>` не попадает вовсе.
         services.AddPromptSectionContributor<NotesRecallContributor>();
-
-        // Подключение MVC-ApplicationPart ТОЛЬКО при включённой подсистеме.
-        // При `Enabled=false` `IConfigureOptions<MvcOptions>` не регистрируется,
-        // MVC строит свой `ApplicationPartManager` без этой сборки, и
-        // `NotesController` НЕ обнаруживается — запросы к `/api/notes/*` уходят
-        // в общий 404, а не 500 от DI-резолва. Никаких записей об исключениях.
-        //
-        // Почему `IConfigureOptions<MvcOptions>` + DI-резолв `ApplicationPartManager`,
-        // а не `IMvcBuilder.AddApplicationPart`:
-        // `IAppSubsystem.Register` не получает `IMvcBuilder` на руки (он создаётся
-        // и тут же потребляется в `AddControllers().AddJsonOptions(...)` в Program.cs).
-        // Configure-options — единственный шанс добавить part к моменту построения
-        // `ApplicationPartManager`, не дёргая обратную ссылку Main → вертикаль.
-        // `ApplicationPartManager` — синглтон в DI, регистрируется в `AddControllers()`
-        // раньше, чем сюда доходит наша `Register`; добавляем свой `AssemblyPart` в его
-        // `ApplicationParts`, и MVC при первом резолве `MvcOptions` уже видит обе сборки.
-        // Единая точка гейта — SubsystemGate.IsEnabled (Core), не второй инлайн-читатель
-        // конфига: технически Register() и так вызывается только при пройденном гейте
-        // (AddSubsystems), но дубль ключа "Subsystems:Notes:Enabled" тут был второй
-        // реализацией той же проверки (блокер ревью notes-optional Б5).
-        if (SubsystemGate.IsEnabled(config, Key))
-        {
-            services.AddSingleton<IConfigureOptions<MvcOptions>>(
-                sp => new ConfigureMvcOptions(
-                    sp.GetRequiredService<ApplicationPartManager>(),
-                    typeof(NotesSubsystem).Assembly));
-        }
-    }
-
-    // `IConfigureOptions<MvcOptions>`-обёртка, которая к моменту построения `MvcOptions`
-    // дописывает нашу сборку в общий `ApplicationPartManager`. Сам `MvcOptions` не
-    // отдаёт `ApplicationPartManager` как публичное свойство — идём через DI-синглтон.
-    private sealed class ConfigureMvcOptions(
-        ApplicationPartManager partManager, Assembly assembly) : IConfigureOptions<MvcOptions>
-    {
-        public void Configure(MvcOptions options) =>
-            partManager.ApplicationParts.Add(new AssemblyPart(assembly));
     }
 }

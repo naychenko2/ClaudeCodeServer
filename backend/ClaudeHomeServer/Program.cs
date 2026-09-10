@@ -119,7 +119,32 @@ builder.Services.AddExceptionHandler<ClaudeHomeServer.Services.Http.UnhandledExc
 builder.Services.AddControllers()
     .AddJsonOptions(o =>
         o.JsonSerializerOptions.Converters.Add(
-            new JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase)));
+            new JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase)))
+    // Сборки вертикалей, собранные под `Microsoft.NET.Sdk.Web`, несут атрибут
+    // `[assembly: ApplicationPart("...")]` — MSBuild дописывает его в сгенерированный
+    // `obj/*/ClaudeHomeServer.MvcApplicationPartsAssemblyInfo.cs` ссылочного проекта
+    // Main, и `ApplicationPartManager.PopulateDefaultParts` добавляет их к составу
+    // MVC. Из-за этого выключение вертикали гейтом `Subsystems:Notes:Enabled=false`
+    // не изолирует её контроллеры: роутер находит action и пытается активировать
+    // `NotesController` без зависимостей → ProblemDetails 500 на каждый запрос к
+    // `/api/notes/*` (задача 4defaacc, QA-прогон 2026-09-10).
+    //
+    // Убираем часть здесь, в композиции Main — единая точка для всех вертикалей.
+    // Сравнение по имени сборки: оригинальный объект `ApplicationPart` создаётся
+    // внутри MVC и наружу не отдаётся, сравнивать по ссылке нельзя.
+    // `ConfigureApplicationPartManager` отрабатывает на построении менеджера (раньше
+    // первого резолва `MvcOptions` и его кеша моделей контроллеров) — `IConfigureOptions<MvcOptions>`
+    // для этого НЕ подходит: его порядок относительно `PopulateDefaultParts` не
+    // контролируется, и на момент configure части уже зафиксированы.
+    .ConfigureApplicationPartManager(pm =>
+    {
+        if (SubsystemGate.IsEnabled(builder.Configuration, "notes")) return;
+        for (var i = pm.ApplicationParts.Count - 1; i >= 0; i--)
+        {
+            if (pm.ApplicationParts[i].Name == "ClaudeHomeServer.Notes")
+                pm.ApplicationParts.RemoveAt(i);
+        }
+    });
 
 // Hosted-сервисы: в Testing-среде (TestWebApplicationFactory) НЕ регистрируются без
 // явного флага Testing:EnableHostedServices=true — 17 фоновых циклов на каждый из

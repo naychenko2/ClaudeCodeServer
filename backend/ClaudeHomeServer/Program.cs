@@ -264,8 +264,16 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Git.IGitCommitInspector,
 // потребитель — Memory (PersonaMemoryService.MemoryToNote/NoteToMemoryAsync),
 // 2 метода (Create/GetDetail). Notes — вынесенная вертикаль; форвардер NotesAccessor
 // резолвит NotesService через тот же синглтон, что и подсистема.
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Notes.INoteAccessor,
-    ClaudeHomeServer.Services.Notes.NotesAccessor>();
+// Регистрация ПО ГЕЙТУ: у выключенной подсистемы `Register` не вызывается, а
+// `NotesAccessor` берёт `NotesService` обязательным параметром — безусловная
+// регистрация роняла DI («Unable to resolve service for type NotesService»).
+// Потребитель (`PersonaMemoryService`) держит `INoteAccessor?` и гейтит вызовы
+// через `if (_notes is null) return null`, поэтому отсутствие шва штатно.
+if (SubsystemGate.IsEnabled(builder.Configuration, "notes"))
+{
+    builder.Services.AddSingleton<ClaudeHomeServer.Services.Notes.INoteAccessor,
+        ClaudeHomeServer.Services.Notes.NotesAccessor>();
+}
 // CodeGraph: граф зависимостей кода — DI в подсистеме `CodeGraphSubsystem`
 // (волна 2, первая с пост-билд фазой: регистрирует языковые провайдеры в ConfigureApp).
 // Узкий шов инспекции графа (Этап 5, волна 2, разрез Dossiers↔CodeGraph): потребитель —

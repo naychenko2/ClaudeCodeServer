@@ -3,6 +3,10 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
 
+// SpecialtyDefaultBinding переехал в Core/Services/SpecialtyDefaultBinding.cs
+// (этап 5, волна 4): SpecialtyPromptPresets отдаёт наружу список этих DTO, и без
+// Core-типа SpecialtySettingsStore не мог бы жить в отдельной сборке Llm.
+
 namespace ClaudeHomeServer.Services.Llm;
 
 // Секция промпта специальности в слое настроек: id из каталога (SpecialtyPromptPresets),
@@ -15,20 +19,8 @@ public class SpecialtyPromptSectionSettings
     public string? Text { get; set; }
 }
 
-// Типовое умение роли: привязка-заготовка, материализуемая в Persona.Bindings при
-// создании персоны (модель «копия при создании», не динамическое наследование).
-// Цель НЕ хранится: конкретную цель подбирает AI по каталогу владельца; исключение —
-// «Навык» (Skill): там явное имя скилла (SkillName), отсутствующие скиллы при
-// материализации пропускаются молча.
-public class SpecialtyDefaultBinding
-{
-    public PersonaBindingType Type { get; set; }
-    public PersonaBindingMode Mode { get; set; } = PersonaBindingMode.Auto;
-    // Условие «когда применять» — попадает в индекс системного промпта (как Condition привязки)
-    public string Condition { get; set; } = "";
-    // Имя скилла из каталога владельца — только при Type == Skill
-    public string? SkillName { get; set; }
-}
+// Типовое умение роли — SpecialtyDefaultBinding: см. Core/Services/SpecialtyDefaultBinding.cs
+// (вынесено в Core на этапе 5, волна 4 переноса каталогов специальностей).
 
 // Настройка шаблона специальности в глобальном слое. Слоёв больше нет (v5): значение
 // либо задано глобально, либо берётся дефолт кода —

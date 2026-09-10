@@ -53,6 +53,9 @@ public class SubsystemBoundaryCoverageTests
         _ = typeof(ClaudeHomeServer.Services.Backgrounds.BackgroundsSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.ProjectIcons.ProjectIconsSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Terminal.TerminalService).Assembly;
+        // Llm — отдельная сборка (Этап 5, финал линии): без typeof набор сборок её
+        // не содержит, и проверка полноты Boundaries по ней ничего не проверяет.
+        _ = typeof(ClaudeHomeServer.Services.Llm.LlmSubsystem).Assembly;
     }
 
     [Fact]

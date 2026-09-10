@@ -95,6 +95,10 @@ public class SubsystemBoundaryTests
         _ = typeof(ClaudeHomeServer.Services.IDataBackupService).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Terminal.TerminalService).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Composition.ITerminalHubNotifier).Assembly;
+        // Llm — отдельная сборка (Этап 5, финал линии): форс-загрузка нужна, чтобы
+        // сторож видел сборку Llm.dll и её типы. Без неё изолированный прогон
+        // проходит по вертикали вакуумно.
+        _ = typeof(ClaudeHomeServer.Services.Llm.LlmSubsystem).Assembly;
     }
 
     /// <summary>Запись границы одной вертикали: имя (для отчёта), корневой namespace
@@ -1675,6 +1679,14 @@ public class SubsystemBoundaryTests
         // LlmTimeoutException переехали в Core, чтобы вертикали (Skills, Git, Notes, Tasks)
         // могли зависеть от шва без ProjectReference на Main.
         "ClaudeHomeServer.Services.Llm",
+        // Этап 5, финал линии Llm: TranscriptProbe — stateless-примитив спины (117 строк,
+        // только BCL + `TranscriptRoots`), нужный обеим сторонам границы: вертикали
+        // (ClaudeSession/MainTranscriptTailer/WorkflowAgentParser) и спине (SessionManager).
+        // Переехал в Core целиком, а не через шов: статической функции без состояния
+        // интерфейс не нужен (тот же довод, что у SafePath/CmdlineEstimate). namespace
+        // сохранён ради неизменных call-site'ов с обеих сторон — прецедент
+        // `Services.Mcp.Http` (LoopbackProxyBypass, волна 5б).
+        "ClaudeHomeServer.Services.Llm.Claude",
         // Этап 3, волна 1 (Skills): ILauncherFactory/IProcessLauncher/ProcessSpec/IPathMapper
         // переехали в Core — общие контракты запуска процессов для всех вертикалей.
         "ClaudeHomeServer.Services.Execution",

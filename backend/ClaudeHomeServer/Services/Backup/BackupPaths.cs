@@ -61,7 +61,7 @@ public static class BackupPaths
         // Корзина синка профилей (ADR-015 §5.3): мусорная зона с TTL, в облако ехать
         // не должна и восстановлению из архива не подлежит. По ADR-015 восстановление
         // архива = повторное усыновление, а не возврат .sync-trash.
-        if (root.Equals(Llm.SyncTrashStore.RootDirName, StringComparison.OrdinalIgnoreCase)) return false;
+        if (root.Equals(Llm.SyncTrashPaths.RootDirName, StringComparison.OrdinalIgnoreCase)) return false;
         // Последний известный статус MCP-серверов: наблюдение, а не настройка. Восстановленное
         // из архива, оно врёт — описывает состояние чужой машины в прошлом. Заново приедет
         // из первого же system/init (или пробы по кнопке).

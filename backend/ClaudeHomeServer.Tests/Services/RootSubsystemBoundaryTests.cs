@@ -96,6 +96,9 @@ public class RootSubsystemBoundaryTests
         _ = typeof(ClaudeHomeServer.Services.Backgrounds.BackgroundsSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.ProjectIcons.ProjectIconsSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Terminal.TerminalService).Assembly;
+        // Llm — отдельная сборка (Этап 5, финал линии): форс-загрузка нужна, чтобы
+        // сторож видел сборку Llm.dll и её root-типы.
+        _ = typeof(ClaudeHomeServer.Services.Llm.LlmSubsystem).Assembly;
     }
 
     /// <summary>Неймспейсы, на которые ЛЮБОЙ root-тип имеет право ссылаться

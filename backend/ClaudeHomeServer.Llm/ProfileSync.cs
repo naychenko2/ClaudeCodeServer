@@ -65,7 +65,10 @@ public sealed class ProfileMirrorReport
 // профили она не едет (другая корневая папка).
 internal sealed class SyncTrashStore
 {
-    public const string RootDirName = ".sync-trash";
+    // Форвард на примитив спины: имя папки нужно ещё и бэкапу (BackupPaths исключает
+    // корзину из архива), а тянуть ради него internal-тип чужой вертикали нельзя —
+    // источник правды переехал в Core (Services/Llm/SyncTrashPaths.cs).
+    public const string RootDirName = SyncTrashPaths.RootDirName;
 
     // 14 дней. Зафиксировано в задаче. mtime файла в корзине мог обмануть (это mtime
     // доставки, а не удаления), поэтому ретенция — по отметке прохода.

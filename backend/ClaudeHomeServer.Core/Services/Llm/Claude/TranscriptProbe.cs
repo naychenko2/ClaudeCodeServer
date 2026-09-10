@@ -7,7 +7,16 @@ namespace ClaudeHomeServer.Services.Llm.Claude;
 // CLI пишет user-сообщение в .jsonl только когда ЧИТАЕТ его из stdin — убитый до чтения
 // процесс не фиксирует сообщение, и повторный ход обязан идти обычным submit'ом, а не
 // «доиграется через --resume».
-internal static class TranscriptProbe
+//
+// Примитив спины (Этап 5, финал линии Llm): чистая работа с файлом транскрипта без
+// состояния и без чужих зависимостей (BCL + `TranscriptRoots`, тоже Core). Нужен обеим
+// сторонам границы — вертикали (`ClaudeSession`, `MainTranscriptTailer`,
+// `WorkflowAgentParser`) и спине (`SessionManager`), поэтому переехал в Core целиком
+// по образцу `SafePath`/`CmdlineEstimate`, а не через шов: статической функции без
+// состояния интерфейс не нужен. Namespace сохранён — call-site'ы не изменились.
+// `public`, а не `internal`: из Core internal-тип не виден ни Main, ни Llm
+// (IVT у Core стоит только на тесты).
+public static class TranscriptProbe
 {
     // Путь главного транскрипта — те же корни и уплощение cwd, что у MainTranscriptTailer
     // (единственная точка поиска, чтобы поиск не разъезжался между потребителями).

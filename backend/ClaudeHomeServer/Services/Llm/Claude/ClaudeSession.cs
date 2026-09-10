@@ -8,7 +8,6 @@ using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Prompts;
 using ClaudeHomeServer.Services.Skills;
-using ClaudeHomeServer.Services.Team;
 using ClaudeHomeServer.Services.Turn;
 using ClaudeHomeServer.Core.Telemetry;
 
@@ -2125,16 +2124,17 @@ public class ClaudeSession : ILlmSessionAdapter
         {
             // Лимит раундов интервью (Minor, волна 3): раньше InterviewProtocol только ПРОСИЛ
             // модель остановиться словами («лимит исчерпан, больше не спрашивай») — факт бэкенд
-            // не проверял, и 3-й раунд так же уходил в карточку. Раунд сверх MaxInterviewRounds
+            // не проверял, и 3-й раунд так же уходил в карточку. Раунд сверх MaxRounds
             // отклоняем прямо на permission-канале — тем же приёмом, что CoordinatorWriteGuard
-            // (см. DecidePermissionAsync), только для другого инструмента.
+            // (см. DecidePermissionAsync), только для другого инструмента. Само правило —
+            // Core-контракт `TeamInterviewLimit`, общий с текстами штаба.
             if (Info.TeamImplement is { Stage: TeamImplementStage.Interview } team
-                && TeamImplementPrompts.InterviewRoundsExhausted(team))
+                && TeamInterviewLimit.Exhausted(team))
             {
                 SendControlResponse(requestId, new
                 {
                     behavior = "deny",
-                    message = $"Лимит раундов интервью ({TeamImplementPrompts.MaxInterviewRounds}) уже " +
+                    message = $"Лимит раундов интервью ({TeamInterviewLimit.MaxRounds}) уже " +
                               "исчерпан — больше не спрашивай, оформи остаток неясностей допущениями " +
                               "и заверши интервью маркером работы."
                 }, run.Process);

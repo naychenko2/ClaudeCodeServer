@@ -125,17 +125,14 @@ public static class TeamImplementPrompts
         "Инструмент ExitPlanMode отключён, им не пользуйся: планирование завершается маркером " +
         "работы, а согласование — карточкой плана команды.";
 
-    // Потолок раундов вопросов на одну вводную: интервью — вход в работу, а не допрос
-    // (риск «интервью превращается в допрос» из продуктового плана).
-    public const int MaxInterviewRounds = 2;
+    // Потолок раундов вопросов на одну вводную и проверка его исчерпания. Источник правды
+    // уехал в Core (`Models.TeamInterviewLimit`): то же правило применяет permission-гейт
+    // хода в `ClaudeSession`, и ради этой пары вертикаль Llm тянула вертикаль Team.
+    // Здесь — тонкие форвардеры, чтобы вызовы внутри штаба не переписывать.
+    public const int MaxInterviewRounds = TeamInterviewLimit.MaxRounds;
 
-    // Единая проверка исчерпания лимита раундов (Minor, волна 3): используется и текстом
-    // (что сказать модели — InterviewProtocol/ClarifyInterviewTurn), и permission-гейтом
-    // (что реально позволить — ClaudeSession.HandleControlRequestAsync денаит AskUserQuestion
-    // сверх лимита). Раньше был только текст-просьба «больше не спрашивай» без проверки факта —
-    // 3-й раунд так же уходил в карточку.
     public static bool InterviewRoundsExhausted(SessionTeamImplement team) =>
-        team.InterviewRounds >= MaxInterviewRounds;
+        TeamInterviewLimit.Exhausted(team);
 
     // Выход из интервью без работы (M6): сообщение человека оказалось разговором — практику
     // на пустом месте не разворачиваем. Маркер, а не «просто ответь»: по голому тексту бэкенд

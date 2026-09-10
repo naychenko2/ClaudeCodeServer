@@ -1121,7 +1121,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     ? new System.Text.Json.Nodes.JsonObject
                     {
                         ["type"] = "http",
-                        ["url"] = Services.Mcp.Http.TasksToolset.EndpointFor(_tasksMcp.ApiUrl, Info.Id),
+                        ["url"] = McpEndpoints.EndpointFor(_tasksMcp.ApiUrl, McpEndpoints.TasksName, Info.Id),
                         ["headers"] = new System.Text.Json.Nodes.JsonObject
                         {
                             ["Authorization"] = $"Bearer {tasksToken}",
@@ -1184,7 +1184,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     ? new System.Text.Json.Nodes.JsonObject
                     {
                         ["type"] = "http",
-                        ["url"] = Services.Mcp.Http.NotesToolset.EndpointFor(_notesMcp.ApiUrl, Info.Id),
+                        ["url"] = McpEndpoints.EndpointFor(_notesMcp.ApiUrl, McpEndpoints.NotesName, Info.Id),
                         ["headers"] = new System.Text.Json.Nodes.JsonObject
                         {
                             ["Authorization"] = $"Bearer {notesToken}",
@@ -1233,8 +1233,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     ? new System.Text.Json.Nodes.JsonObject
                     {
                         ["type"] = "http",
-                        ["url"] = Services.Mcp.Http.McpHttpTransport.EndpointFor(
-                            _widgetsMcp!.ApiUrl, Services.Mcp.Http.WidgetsToolset.ServerName),
+                        ["url"] = McpEndpoints.EndpointFor(_widgetsMcp!.ApiUrl, McpEndpoints.WidgetsName),
                         ["headers"] = new System.Text.Json.Nodes.JsonObject
                         {
                             ["Authorization"] = $"Bearer {_widgetsMcp!.TokenFactory()}",
@@ -1266,7 +1265,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 servers["watch"] = new System.Text.Json.Nodes.JsonObject
                 {
                     ["type"] = "http",
-                    ["url"] = Services.Mcp.Http.WatchToolset.EndpointFor(_watchMcp!.ApiUrl, Info.Id),
+                    ["url"] = McpEndpoints.EndpointFor(_watchMcp!.ApiUrl, McpEndpoints.WatchName, Info.Id),
                     ["headers"] = new System.Text.Json.Nodes.JsonObject
                     {
                         ["Authorization"] = $"Bearer {_watchMcp.TokenFactory()}",
@@ -1297,8 +1296,8 @@ public class ClaudeSession : ILlmSessionAdapter
                     ? new System.Text.Json.Nodes.JsonObject
                     {
                         ["type"] = "http",
-                        ["url"] = Services.Mcp.Http.MemoryToolset.EndpointFor(
-                            _memoryMcp.ApiUrl, _memoryMcp.PersonaId, _memoryMcp.ProjectId),
+                        ["url"] = McpEndpoints.EndpointFor(_memoryMcp.ApiUrl, McpEndpoints.MemoryName,
+                            McpEndpoints.MemoryTail(_memoryMcp.PersonaId, _memoryMcp.ProjectId)),
                         ["headers"] = new System.Text.Json.Nodes.JsonObject
                         {
                             ["Authorization"] = $"Bearer {memoryToken}",
@@ -1372,7 +1371,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     ? new System.Text.Json.Nodes.JsonObject
                     {
                         ["type"] = "http",
-                        ["url"] = Services.Mcp.Http.PersonasToolset.EndpointFor(_personasMcp.ApiUrl, Info.Id),
+                        ["url"] = McpEndpoints.EndpointFor(_personasMcp.ApiUrl, McpEndpoints.PersonasName, Info.Id),
                         ["headers"] = new System.Text.Json.Nodes.JsonObject
                         {
                             ["Authorization"] = $"Bearer {personasToken}",
@@ -1453,7 +1452,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     ? new System.Text.Json.Nodes.JsonObject
                     {
                         ["type"] = "http",
-                        ["url"] = Services.Mcp.Http.WorkspaceToolset.EndpointFor(_workspaceMcp.ApiUrl, Info.Id),
+                        ["url"] = McpEndpoints.EndpointFor(_workspaceMcp.ApiUrl, McpEndpoints.WorkspaceName, Info.Id),
                         ["headers"] = new System.Text.Json.Nodes.JsonObject
                         {
                             ["Authorization"] = $"Bearer {wspToken}",
@@ -1514,7 +1513,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     ? new System.Text.Json.Nodes.JsonObject
                     {
                         ["type"] = "http",
-                        ["url"] = Services.Mcp.Http.NotificationsToolset.EndpointFor(_notificationsMcp.ApiUrl, Info.Id),
+                        ["url"] = McpEndpoints.EndpointFor(_notificationsMcp.ApiUrl, McpEndpoints.NotificationsName, Info.Id),
                         ["headers"] = new System.Text.Json.Nodes.JsonObject
                         {
                             ["Authorization"] = $"Bearer {notificationsToken}",
@@ -1555,7 +1554,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     ? new System.Text.Json.Nodes.JsonObject
                     {
                         ["type"] = "http",
-                        ["url"] = Services.Mcp.Http.CodeGraphToolset.EndpointFor(_codeGraphMcp.ApiUrl, Info.Id),
+                        ["url"] = McpEndpoints.EndpointFor(_codeGraphMcp.ApiUrl, McpEndpoints.CodeGraphName, Info.Id),
                         ["headers"] = new System.Text.Json.Nodes.JsonObject
                         {
                             ["Authorization"] = $"Bearer {codeGraphToken}",
@@ -1593,7 +1592,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 servers["websearch"] = new System.Text.Json.Nodes.JsonObject
                 {
                     ["type"] = "http",
-                    ["url"] = Services.Mcp.Http.WebSearchToolset.EndpointFor(_webSearchMcp!.ApiUrl, Info.Id),
+                    ["url"] = McpEndpoints.EndpointFor(_webSearchMcp!.ApiUrl, McpEndpoints.WebSearchName, Info.Id),
                     ["headers"] = new System.Text.Json.Nodes.JsonObject
                     {
                         ["Authorization"] = $"Bearer {_webSearchMcp.TokenFactory()}",
@@ -1621,7 +1620,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     ? new System.Text.Json.Nodes.JsonObject
                     {
                         ["type"] = "http",
-                        ["url"] = Services.Mcp.Http.DifyToolset.EndpointFor(_difyMcp.ApiUrl, Info.Id),
+                        ["url"] = McpEndpoints.EndpointFor(_difyMcp.ApiUrl, McpEndpoints.DifyName, Info.Id),
                         ["headers"] = new System.Text.Json.Nodes.JsonObject
                         {
                             ["Authorization"] = $"Bearer {difyToken}",
@@ -1700,8 +1699,8 @@ public class ClaudeSession : ILlmSessionAdapter
                         ? new System.Text.Json.Nodes.JsonObject
                         {
                             ["type"] = "http",
-                            ["url"] = Services.Mcp.Http.MemoryToolset.EndpointFor(
-                                c.ApiUrl, c.PersonaId, c.ProjectId),
+                            ["url"] = McpEndpoints.EndpointFor(c.ApiUrl, McpEndpoints.MemoryName,
+                                McpEndpoints.MemoryTail(c.PersonaId, c.ProjectId)),
                             ["headers"] = new System.Text.Json.Nodes.JsonObject
                             {
                                 ["Authorization"] = $"Bearer {c.TokenFactory()}",

@@ -50,4 +50,33 @@ public static class McpEndpoints
         Uri.TryCreate(apiUrl, UriKind.Absolute, out var uri)
             ? uri.GetLeftPart(UriPartial.Authority) + uri.AbsolutePath.TrimEnd('/') + "/mcp/" + server
             : apiUrl.TrimEnd('/') + "/mcp/" + server;
+
+    /// <summary>
+    /// Адрес эндпоинта с одним хвостовым сегментом — для одно-параметрических тулсетов
+    /// (tasks/notes/personas/workspace/…), у которых хвост = id сессии. Без этого тулсет
+    /// склеивал Core-формулу с `/` и хвостом сам, и ClaudeSession звал его через чужую
+    /// вертикаль Mcp.Http (этап 5, волна 5а).
+    /// </summary>
+    public static string EndpointFor(string apiUrl, string server, string tail) =>
+        EndpointFor(apiUrl, server) + "/" + tail;
+
+    // Дефолтный сегмент «параметра нет» в хвосте маршрута памяти: чат без персоны (team-only)
+    // или вне проекта. Дефис не сталкивается с реальными id (GUID) и не требует percent-кодирования.
+    private const string NoneSegment = "-";
+
+    /// <summary>
+    /// Сегмент хвоста memory-сервера: id, либо "-" если пусто. Дефолт «-» — единственная точка
+    /// правды, общая для построения URL хода и парсинга хвоста на входе (тождество заменяет
+    /// прежний `string.IsNullOrEmpty(id) ? "-" : id` в каждом из тулсетов).
+    /// </summary>
+    public static string MemorySegment(string? id) =>
+        string.IsNullOrEmpty(id) ? NoneSegment : id;
+
+    /// <summary>
+    /// Хвост memory-сервера из двух сегментов: `{personaId}/{projectId}` с дефолтом "-".
+    /// MemoryToolset строит ту же формулу — здесь, чтобы ClaudeSession собирал URL хода
+    /// без чужой вертикали (этап 5, волна 5а).
+    /// </summary>
+    public static string MemoryTail(string? personaId, string? projectId) =>
+        MemorySegment(personaId) + "/" + MemorySegment(projectId);
 }

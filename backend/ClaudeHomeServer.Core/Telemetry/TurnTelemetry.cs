@@ -10,8 +10,14 @@ namespace ClaudeHomeServer.Telemetry;
 /// ключевых точках жизненного цикла хода.
 ///
 /// Токены здесь НЕ учитываются (C4 — SpendStore = source of truth для биллинга).
+///
+/// Перенесён из Main (Telemetry/TurnTelemetry.cs) в Core на этапе 5, волна 1
+/// выноса Llm: ClaudeSession живёт в Llm, а шов ради одного вызова OTel —
+/// лишняя работа. Видимость повышена с internal на public ради доступа из
+/// вертикальной сборки Llm; internal-члены, нужные только тестам, помечены
+/// комментарием.
 /// </summary>
-internal static class TurnTelemetry
+public static class TurnTelemetry
 {
     /// <summary>
     /// Запуск корневого спана хода. Возвращает Activity (null, если ни один

@@ -8,6 +8,9 @@ namespace ClaudeHomeServer.Telemetry;
 /// Границы спанов — на логических событиях (tool_use, permission, mcp),
 /// НЕ на token deltas. Token deltas — атрибуты текущего спана или поля в SpendStore,
 /// но не отдельные спаны (иначе trace раздуется до тысяч записей на ход).
+///
+/// Перенесён из Main в Core на этапе 5, волна 1 выноса Llm: TurnTelemetry
+/// (его единственный потребитель) едет в Core.
 /// </summary>
 public static class ServerActivitySource
 {

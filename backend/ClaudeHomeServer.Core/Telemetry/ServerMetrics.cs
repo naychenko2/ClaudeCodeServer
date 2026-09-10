@@ -15,6 +15,11 @@ namespace ClaudeHomeServer.Telemetry;
 /// Архитектурное решение (C4): токены НЕ учитываются здесь — SpendStore
 /// (JSONL) остаётся source of truth для billing. OTel = операционные метрики
 /// (latency, error rates, rate-limiting), не бухгалтерия.
+///
+/// Перенесён из Main в Core на этапе 5, волна 1 выноса Llm: TurnTelemetry
+/// (его потребитель ходов LLM) едет в Core. Остальные вызывающие — OnboardingController,
+/// ProjectPresetsController, DifyMetricsAdapter, McpCallLog, MemoryDify, PersonasCrudService
+/// — Main и доступ к типу из Core получают через сборку-спинку.
 /// </summary>
 public static class ServerMetrics
 {
@@ -49,7 +54,7 @@ public static class ServerMetrics
     /// <summary>Доступ к Meter для регистрации ObservableGauges (T9).</summary>
     public static Meter MeterInstance => _meter;
 
-    // ── Histograms ──────────────────────────────────────────────────────────
+    // ── Histograms ───────────────────────────────────────────────────────────
 
     public static readonly Histogram<double> LlmDuration = _meter.CreateHistogram<double>(
         "ccs.llm.duration",
@@ -66,7 +71,7 @@ public static class ServerMetrics
     /// и не различали ход на 30 секунд и ход на 10 минут: метрика формально была,
     /// а ответить «какие ходы самые долгие» ею было нельзя (на живых данных p99 = 9975).
     ///
-    /// Шкала до 20 минут с сгущением на 5–60 с — там основная масса ходов.
+    /// Шкала до 20 минут с гущением на 5–60 с — там основная масса ходов.
     /// </summary>
     public static readonly double[] LlmDurationBoundaries =
         [1_000, 2_500, 5_000, 10_000, 20_000, 30_000, 60_000, 120_000, 300_000, 600_000, 1_200_000];

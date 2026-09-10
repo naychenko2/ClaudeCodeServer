@@ -23,6 +23,8 @@ namespace ClaudeHomeServer.Telemetry;
 /// схлопывается в <see cref="Overflow"/> — метрика продолжает считать вызовы, теряется лишь
 /// детализация. Точные значения остаются в диагностике: <c>GET /api/mcp/calls</c> для
 /// инструментов, транскрипт и SpendStore для моделей.
+///
+/// Перенесён из Main в Core вместе с ServerMetrics на этапе 5, волна 1 выноса Llm.
 /// </summary>
 public static class MetricTagGuard
 {
@@ -50,13 +52,15 @@ public static class MetricTagGuard
 
     // Форма имени инструмента: латиница, цифры и разделители имён MCP-серверов.
     // Путь запроса отсекается слэшем, «(без имени) …» — скобками и пробелом.
-    internal static bool IsToolShape(string v) =>
+    // public ради McpTransportController (Main), который проверяет форму до записи
+    // метрики — иначе сборка падает на internal-доступе из чужой вертикали.
+    public static bool IsToolShape(string v) =>
         v.Length <= 64 && v.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-' or '.');
 
     // Форма идентификатора модели — та же плюс ':' (тег Ollama) и '/' (вендор в direct:-маршруте).
     // Слэш здесь разрешён, поэтому длина и отсутствие пробелов — единственная защита от пути;
     // за остальное отвечает лимит различных значений.
-    internal static bool IsModelShape(string v) =>
+    public static bool IsModelShape(string v) =>
         v.Length <= 64 && v.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-' or '.' or ':' or '/');
 }
 

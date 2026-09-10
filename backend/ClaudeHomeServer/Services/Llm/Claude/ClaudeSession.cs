@@ -620,6 +620,12 @@ public class ClaudeSession : ILlmSessionAdapter
     // инжектится тем же путём из appsettings; пусто — без glif
     private readonly string? _glifMcpToken;
     private readonly SkillsService? _skills;
+    // Шов разворота /skill в тексте хода (этап 5, Skills): null — сессия без SkillsService
+    // или собрана в тестах без DI, сообщение идёт в ход неизменённым
+    private readonly ICommandExpansion? _commandExpansion;
+    // Шов каталога скиллов для снимка промпта (этап 5, Skills): null — секция Skills
+    // в снимке не появляется
+    private readonly ISkillSnapshotSource? _skillSnapshot;
     private readonly IWorkspaceDatasetLookup? _wkStore;
     // Провайдер правил разрешений проекта — резолвим каждый запрос (правила могут меняться)
     private readonly Func<IReadOnlyList<PermissionRule>>? _permissionRules;
@@ -719,6 +725,8 @@ public class ClaudeSession : ILlmSessionAdapter
 
     public ClaudeSession(Session info, LlmSessionContext context,
         string? mcpConfigPath = null, SkillsService? skills = null,
+        ICommandExpansion? commandExpansion = null,
+        ISkillSnapshotSource? skillSnapshot = null,
         IWorkspaceDatasetLookup? workspaceStore = null, string[]? disallowedTools = null,
         LlmProviderRegistry? providers = null,
         ClaudeSubscriptionPool? subscriptionPool = null,
@@ -748,6 +756,8 @@ public class ClaudeSession : ILlmSessionAdapter
         _rawSystemPrompt = context.RawSystemPrompt;
         _builtInSystemPrompt = context.BuiltInSystemPrompt;
         _skills = skills;
+        _commandExpansion = commandExpansion;
+        _skillSnapshot = skillSnapshot;
         _wkStore = workspaceStore;
         _permissionRules = context.PermissionRules;
         _tasksMcp = context.TasksMcp;
@@ -1908,7 +1918,7 @@ public class ClaudeSession : ILlmSessionAdapter
         Info.UpdatedAt = DateTime.UtcNow;
 
         // Если сообщение — вызов скилла (/skill-name [args]), разворачиваем его содержимое
-        var effectiveText = _skills?.TryExpandSkill(text) ?? text;
+        var effectiveText = _commandExpansion?.ExpandSkill(text) ?? text;
         // Картинки отправляем как image-блоки (base64), остальные файлы — инлайним в текст
         var (imagePaths, otherPaths) = AttachmentInliner.SplitImagePaths(attachedPaths);
         var fullText = AttachmentInliner.BuildMessageText(_rootPath, effectiveText, otherPaths);
@@ -4207,22 +4217,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 AddClaudeMd(files, Path.Combine(configRoot, "CLAUDE.md"), "Ваш общий CLAUDE.md (для всех проектов)");
         }
 
-        var skills = new List<CliSkillDto>();
-        if (_skills is not null)
-        {
-            try
-            {
-                if (_cliConfigRoot is { Length: > 0 } root)
-                    skills.AddRange(_skills.GetSkillsInConfigRoot(root)
-                        .Select(s => new CliSkillDto(s.Name, s.Description, "profile")));
-                skills.AddRange(_skills.GetProjectSkills(_rootPath)
-                    .Select(s => new CliSkillDto(s.Name, s.Description, "project")));
-            }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine($"[ClaudeSession] Каталог скиллов для снимка не прочитан: {ex.Message}");
-            }
-        }
+        var skills = _skillSnapshot?.GetCliSkills(_rootPath, _cliConfigRoot) ?? (IReadOnlyList<CliSkillDto>)[];
 
         var (bytes, messages) = TranscriptStats();
         return new CliLayerDto(Files: files, Skills: skills,

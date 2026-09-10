@@ -836,6 +836,10 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.IAgentPromptSource,
     ClaudeHomeServer.Services.Composition.AgentPromptSourceAdapter>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.ITeamMechanicsBlockSource,
     ClaudeHomeServer.Services.Composition.TeamMechanicsBlockAdapter>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Skills.ICommandExpansion,
+    ClaudeHomeServer.Services.Composition.CommandExpansionAdapter>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Skills.ISkillSnapshotSource,
+    ClaudeHomeServer.Services.Composition.SkillSnapshotSourceAdapter>();
 // Этап 5 (Turn): ещё 4 узких шва, чтобы Turn зависел только от Core. Те же
 // адаптеры 1:1 — IFeatureFlagGate/IFeatureFlagGate, IPersonaResolver,
 // IPersonaPromptAssembler, IPersonaBindingsSource. Состав — ровно те 12 мест,

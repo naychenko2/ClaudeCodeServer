@@ -25,6 +25,19 @@ public static class McpEndpoints
     public const string WorkspaceName = "wsp";
 
     /// <summary>
+    /// Имя заголовка вызывающей MCP-сессии: ставит общий api() каждого MCP-сервера в свой запрос,
+    /// читают фильтр <c>[DenyOnDelegatedTurn]</c> и лог-журнал <c>McpCallLogMiddleware</c>.
+    /// Часть протокола обращения к нашим эндпоинтам — на пару с адресами MCP-серверов.
+    ///
+    /// Вынесено из <c>DenyOnDelegatedTurnAttribute.CallerHeader</c> (этап 5, волна 4 переноса
+    /// спины): атрибут в Main остался прежним (форвардит на Core-константу), а само имя едет в Core —
+    /// иначе Llm не мог бы собрать MCP-конфиг хода со ссылкой на Main-фильтр, и перенос вертикали
+    /// требовал бы переноса атрибута (а за ним — <c>DelegatedTurnGate</c>, <c>SessionManager</c>,
+    /// <c>TurnDelegationState</c>: это не шов, а god-узел).
+    /// </summary>
+    public const string CallerSessionHeader = "X-Caller-Session-Id";
+
+    /// <summary>
     /// Адрес эндпоинта сервера: базовый URL владельца плюс маршрут контроллера. Строится из
     /// РАЗОБРАННОГО адреса, а не конкатенацией сырой строки — гейт судит по нормализованному
     /// Uri, и адрес в конфиге хода обязан с ним соглашаться.

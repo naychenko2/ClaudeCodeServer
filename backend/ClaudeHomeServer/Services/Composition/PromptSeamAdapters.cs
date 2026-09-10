@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Dossiers;
 using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Services.Skills;
@@ -92,4 +93,49 @@ public sealed class PersonaBindingsSourceAdapter(PersonaBindingsService bindings
     public Task<string?> BuildTurnBlockAsync(string ownerId, string personaId, string turnText,
         IReadOnlyList<string> mountedSections) =>
         bindings.BuildTurnBlockAsync(ownerId, personaId, turnText, mountedSections);
+}
+
+// Этап 5 (Skills): два узких шва, чтобы Llm не зависел от SkillsService. Те же адаптеры
+// 1:1, что и выше — форвардят в фасад SkillsService. Регистрация — в композиционном корне.
+
+public sealed class CommandExpansionAdapter(SkillsService skills) : ICommandExpansion
+{
+    public string? ExpandSkill(string message) => skills.TryExpandSkill(message);
+}
+
+public sealed class SkillSnapshotSourceAdapter(SkillsService skillsService) : ISkillSnapshotSource
+{
+    // Сборка двух каталогов (профильные + проектные) с теми же гашениями исключений, что
+    // были в ClaudeSession.BuildCliLayerFilesInternal: сорванное чтение одного каталога не
+    // убивает второй, ошибка идёт в stderr, снимок продолжает собираться (у пустого
+    // списка Skills снимок всё равно валиден — секция просто не появляется).
+    public IReadOnlyList<CliSkillDto>? GetCliSkills(string projectRootPath, string? configRootPath)
+    {
+        var result = new List<CliSkillDto>();
+
+        if (!string.IsNullOrEmpty(configRootPath))
+        {
+            try
+            {
+                result.AddRange(skillsService.GetSkillsInConfigRoot(configRootPath)
+                    .Select(s => new CliSkillDto(s.Name, s.Description, "profile")));
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[SkillSnapshotSourceAdapter] Профильный каталог не прочитан: {ex.Message}");
+            }
+        }
+
+        try
+        {
+            result.AddRange(skillsService.GetProjectSkills(projectRootPath)
+                .Select(s => new CliSkillDto(s.Name, s.Description, "project")));
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[SkillSnapshotSourceAdapter] Проектный каталог не прочитан: {ex.Message}");
+        }
+
+        return result.Count > 0 ? result : null;
+    }
 }

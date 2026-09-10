@@ -22,6 +22,12 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
     private readonly string? _glifMcpToken;
     private readonly string[] _disallowedTools;
     private readonly SkillsService _skills;
+    // Шов разворота /skill в тексте хода (этап 5, Skills): null — тесты без DI, сообщение
+    // идёт в ход неизменённым (прежнее поведение при skills=null)
+    private readonly ICommandExpansion? _commandExpansion;
+    // Шов каталога скиллов для снимка промпта (этап 5, Skills): null — тесты, секция Skills
+    // в снимке не появляется
+    private readonly ISkillSnapshotSource? _skillSnapshot;
     private readonly IWorkspaceDatasetLookup _workspaceStore;
     private readonly LlmProviderRegistry _providers;
     private readonly ClaudeSubscriptionPool _subscriptionPool;
@@ -75,7 +81,9 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         ILogger<LlmSessionAdapterFactory>? log = null,
         IEgressProbe? egress = null,
         ILocalEndpointProbe? localProbe = null,
-        ILoggerFactory? loggerFactory = null)
+        ILoggerFactory? loggerFactory = null,
+        ICommandExpansion? commandExpansion = null,
+        ISkillSnapshotSource? skillSnapshot = null)
     {
         _assignments = assignments;
         _fileChangeAttributor = fileChangeAttributor;
@@ -104,6 +112,8 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         if (int.TryParse(config["Claude:BgLingerMinutes"], out var lingerMin) && lingerMin > 0)
             _bgLingerTimeout = TimeSpan.FromMinutes(lingerMin);
         _skills = skills;
+        _commandExpansion = commandExpansion;
+        _skillSnapshot = skillSnapshot;
         _workspaceStore = workspaceStore;
         _providers = providers;
         _subscriptionPool = subscriptionPool;
@@ -158,9 +168,9 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
             OnMessage = msg => fallback is not null ? fallback.HandleMessageAsync(msg) : context.OnMessage(msg),
         };
         var claudeSession = new Claude.ClaudeSession(session, innerContext, _mcpConfigPath, _skills,
-            _workspaceStore, _disallowedTools, _providers, _subscriptionPool, _fileWatcherOptions,
-            _bgLingerTimeout, _falMcpApiKey, _glifMcpToken, _assignments, _fileChangeAttributor,
-            _log, _sessionLog);
+            _commandExpansion, _skillSnapshot, _workspaceStore, _disallowedTools, _providers,
+            _subscriptionPool, _fileWatcherOptions, _bgLingerTimeout, _falMcpApiKey,
+            _glifMcpToken, _assignments, _fileChangeAttributor, _log, _sessionLog);
         fallback = new FallbackLlmSessionAdapter(claudeSession,
             () => claudeSession.EffectiveTurnModel,
             context.OnMessage, _subscriptionPool, _providers, context.RootPath,

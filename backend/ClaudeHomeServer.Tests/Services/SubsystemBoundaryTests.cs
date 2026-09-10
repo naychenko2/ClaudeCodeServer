@@ -1714,6 +1714,13 @@ public class SubsystemBoundaryTests
         // вертикаль Spend. Реализация `SpendStore : ISpendCollector` остаётся
         // в Main (Services/Spend) — пока сам Spend не вынесен в свой csproj.
         "ClaudeHomeServer.Services.Spend",
+        // Этап 5, узкие швы Skills (Llm → Skills): ICommandExpansion (разворот
+        // /skill в тексте хода) и ISkillSnapshotSource (каталог CliSkillDto для
+        // снимка промпта) переехали в Core — те же прецеденты, что IAgentPromptSource
+        // выше и ISpendCollector: Llm берёт шов без ProjectReference на вертикаль Skills.
+        // Реализации — CommandExpansionAdapter/SkillSnapshotSourceAdapter в Main,
+        // форвардят в SkillsService. Узкие: 1 метод + 1 метод.
+        "ClaudeHomeServer.Services.Skills",
         // Этап 5, волна 2 (Memory↔Dossiers↔Git): IGitRefSnapshotStore + 5 record-типов
         // (GitRefIdentity/GitRefTip/GitRefSnapshotResult/GitCredentials/GitSnapshotFile)
         // переехали из вертикали Git в Core — узкий контракт generic plumbing ветки-паспорта,

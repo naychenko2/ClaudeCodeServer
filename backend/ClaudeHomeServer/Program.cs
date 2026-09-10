@@ -264,11 +264,12 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Git.IGitCommitInspector,
 // потребитель — Memory (PersonaMemoryService.MemoryToNote/NoteToMemoryAsync),
 // 2 метода (Create/GetDetail). Notes — вынесенная вертикаль; форвардер NotesAccessor
 // резолвит NotesService через тот же синглтон, что и подсистема.
-// Регистрация ПО ГЕЙТУ: у выключенной подсистемы `Register` не вызывается, а
-// `NotesAccessor` берёт `NotesService` обязательным параметром — безусловная
-// регистрация роняла DI («Unable to resolve service for type NotesService»).
-// Потребитель (`PersonaMemoryService`) держит `INoteAccessor?` и гейтит вызовы
-// через `if (_notes is null) return null`, поэтому отсутствие шва штатно.
+// Гейт подсистемы Notes: при `Subsystems:Notes:Enabled=false` `NotesService` в DI нет,
+// и резолв `NotesAccessor` падает с InvalidOperationException — то же правило, что у
+// `IKnowledgeSyncParticipant → NotesKnowledgeService` (строки ниже) и у
+// `INoteTaskBridge`/`INotesHubNotifier` (Этап 5, волна E).
+// Потребитель (`PersonaMemoryService`) держит `INoteAccessor?` и гейтит вызовы через
+// `if (_notes is null) return null`, поэтому отсутствие шва — штатное состояние.
 if (SubsystemGate.IsEnabled(builder.Configuration, "notes"))
 {
     builder.Services.AddSingleton<ClaudeHomeServer.Services.Notes.INoteAccessor,

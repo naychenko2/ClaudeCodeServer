@@ -499,7 +499,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     private readonly LlmProviderRegistry _llmProviders;
     private readonly FalCostService _falCost;
     private readonly UsageService _usage;
-    private readonly AppSettingsService _appSettings;
+    private readonly ITierModelResolver _appSettings;
     // Резолвер моделей агентных мест: пустая модель → назначение места → слот тира
     private readonly Llm.ModelAssignmentResolver _assignments;
     private readonly UserStore _users;

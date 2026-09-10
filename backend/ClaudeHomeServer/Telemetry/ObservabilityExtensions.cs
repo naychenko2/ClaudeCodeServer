@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using ClaudeHomeServer.Core.Telemetry;
 using ClaudeHomeServer.Services.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;

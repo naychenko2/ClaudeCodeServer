@@ -1,5 +1,4 @@
 using ClaudeHomeServer.Core.Telemetry;
-using ClaudeHomeServer.Telemetry;
 
 namespace ClaudeHomeServer.Services.Composition;
 

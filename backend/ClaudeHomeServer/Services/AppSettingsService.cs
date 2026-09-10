@@ -6,7 +6,7 @@ namespace ClaudeHomeServer.Services;
 // `ModelTiers.TryParse/IsValidWireValue/WireError` (Этап 5, вынос Tasks) и
 // `ModelTier` enum (Core, прежний переезд) живут в Core-сборке; этот файл
 // держит только сам `AppSettingsService` + его персистенцию.
-public class AppSettingsService
+public class AppSettingsService : ITierModelResolver
 {
     private readonly string _storePath;
     // Источник истины для DefaultProjectsPath — ТОЛЬКО конфиг (appsettings.Local.json).

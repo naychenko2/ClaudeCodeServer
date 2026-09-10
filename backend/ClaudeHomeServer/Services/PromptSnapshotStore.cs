@@ -183,23 +183,21 @@ public sealed class PromptSnapshotStore
     private string PathFor(string sessionId, string snapshotId) =>
         Path.Combine(_basePath, sessionId, snapshotId + ".json.gz");
 
-    // Счётчик внутри процесса — суффикс имени. Именно возрастающий, а не случайный:
-    // ретеншн сортирует файлы ПО ИМЕНИ, и у снимков одной миллисекунды случайный суффикс
-    // задавал бы неверный порядок — вытеснялись бы не самые старые.
-    private static int _seq;
+    // Счётчик переехал в Core (SnapshotIdGenerator._seq, волна 6) — общий на оба генератора,
+    // иначе вернутся коллизии id в одной миллисекунде. Именно возрастающий, а не
+    // случайный: ретеншн сортирует файлы ПО ИМЕНИ, и у снимков одной миллисекунды
+    // случайный суффикс задавал бы неверный порядок — вытеснялись бы не самые старые.
 
     // {unixMs}-{seq}: лексикографически сортируемо по времени. После рестарта счётчик
     // начинается заново, но старшая часть (миллисекунды) уже больше — порядок сохраняется.
-    private static string NewId() =>
-        $"{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}-{Interlocked.Increment(ref _seq) & 0xFFFFF:x5}";
+    private static string NewId() => SnapshotIdGenerator.NewPublicId();
 
     /// <summary>
     /// Генератор id для ClaudeSession: ему нужен id ДО шинной публикации, чтобы отправить
     /// PromptSnapshotMessage в UI синхронно (шина — Notification, возврата не даёт).
     /// Контракт совпадает с NewId(), и счётчик общий — без коллизий.
     /// </summary>
-    public static string NewPublicId() =>
-        $"{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}-{Interlocked.Increment(ref _seq) & 0xFFFFF:x5}";
+    public static string NewPublicId() => SnapshotIdGenerator.NewPublicId();
 
     private static void WriteFile(string path, PromptSnapshotDto snapshot)
     {

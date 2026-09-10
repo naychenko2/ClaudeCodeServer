@@ -6,6 +6,7 @@ using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Auth;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Composition.Llm;
 using ClaudeHomeServer.Services.Composition.Notifications;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Desktop;
@@ -210,6 +211,21 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.IDesktopCapa
     sp => sp.GetRequiredService<JwtService>());
 builder.Services.AddSingleton<FeatureFlagService>();
 builder.Services.AddSingleton<AppSettingsService>();
+// AppSettingsService реализует ITierModelResolver (Core-шов для слота модели).
+// DI сама по себе не резолвит concrete→interface — пробрасываем вручную, тот
+// же singleton-экземпляр. Отдельного адаптера не нужно: класс уже реализует шов.
+// IModelCatalog — Core-шов для каталога моделей (волна 1 выноса Llm). Реализация
+// ModelCatalogAdapter мапит nested ModelInfo (Main) в ModelCatalogEntry (Core).
+builder.Services.AddSingleton<ITierModelResolver>(sp => sp.GetRequiredService<AppSettingsService>());
+builder.Services.AddSingleton<IModelCatalog, ModelCatalogAdapter>();
+// ISubscriptionAlertNotifier — спинный адаптер поверх NotificationService (волна 6 выноса
+// Llm). Регистрация живёт здесь, а не в LlmSubsystem: реализация тянет спинной
+// NotificationService, и держать резолв в DI вертикали было бы запрещённой границей.
+// Прецедент уборки Git (CLAUDE.md, «возврат регистрации спинных реакторов»).
+builder.Services.AddSingleton<ISubscriptionAlertNotifier, SubscriptionAlertNotifier>(sp =>
+    new SubscriptionAlertNotifier(
+        sp.GetRequiredService<NotificationService>(),
+        sp.GetRequiredService<IUserStore>()));
 // UserModelTierResolver (слоты моделей) — DI в подсистеме `LlmSubsystem`
 // (шаг 0 волны 4, см. LlmSubsystem.cs).
 builder.Services.AddSingleton<UserHomeResolver>();
@@ -234,6 +250,11 @@ builder.Services.AddSingleton<IProjectSummaryLookup, ProjectSummaryLookup>();
 // PersonaManager — узкий контракт на голос персоны. Реализация — тонкая обёртка
 // в Main (`Services/Composition/PersonaVoiceLookup`), контракт живёт в Core.
 builder.Services.AddSingleton<IPersonaVoiceLookup, PersonaVoiceLookup>();
+// Шов для Llm (Этап 5, волна 3): вместо прямой зависимости ClaudeSession/
+// LlmSessionAdapterFactory от WorkspaceKnowledgeStore — узкий контракт на чтение
+// знаний рабочего дерева (dataset id + теги документов), нужное ходу. Реализация —
+// тонкая обёртка в Main (`Services/Composition/WorkspaceDatasetLookup`), контракт в Core.
+builder.Services.AddSingleton<IWorkspaceDatasetLookup, WorkspaceDatasetLookup>();
 // Швы для Docs/Changelog (Этап 5, ярус 1, волна A): вместо прямой зависимости
 // DocsIndexService/ChangelogService от FileService — узкие контракты на файловые
 // операции и чтение git-лога. Реализации — тонкие обёртки в `Services/Composition`,
@@ -335,8 +356,14 @@ builder.Services.AddSingleton<PersonaAgentFileSync>();
 // реконсайлера error-документов Dify, не собственность Memory.
 // Разовый backfill дефолтных привязок существующим проектным персонам (файлы/заметки/знания)
 builder.Services.AddGatedHostedService<PersonaProjectBindingsMigration>(builder.Configuration);
-// Разовая переадресация закреплённых моделей GLM на действующий каталог (алиасы z.ai)
-// — DI в подсистеме `LlmSubsystem` (шаг 0 волны 4, см. LlmSubsystem.cs).
+// Разовая переадресация закреплённых моделей GLM на действующий каталог (алиасы z.ai) —
+// gated hosted: в Testing не стартует, повторный проход отсекается marker-файлом в data.
+// Живёт в спине рядом с прочими миграциями сторов, а не в вертикали Llm (см. шапку файла).
+builder.Services.AddGatedHostedService<GlmModelAliasMigration>(builder.Configuration);
+// Сводка карточки архива чата (место chat-digest). Живёт в спине, а не в вертикали Llm:
+// читает историю чата и заметку-итог, пишет сводку в сессию, а модель ей нужна лишь как
+// генератор текста через ICheapTextRunner (см. шапку файла).
+builder.Services.AddSingleton<ChatDigestService>();
 // TaskManager/TaskAiService/BoardService/DailyBriefingService/TaskSchedulerService
 // — DI в подсистеме `TasksSubsystem` (волна 4C, шаг 1).
 builder.Services.AddSingleton<FileService>();
@@ -865,6 +892,10 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.IAgentPromptSource,
     ClaudeHomeServer.Services.Composition.AgentPromptSourceAdapter>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.ITeamMechanicsBlockSource,
     ClaudeHomeServer.Services.Composition.TeamMechanicsBlockAdapter>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Skills.ICommandExpansion,
+    ClaudeHomeServer.Services.Composition.CommandExpansionAdapter>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Skills.ISkillSnapshotSource,
+    ClaudeHomeServer.Services.Composition.SkillSnapshotSourceAdapter>();
 // Этап 5 (Turn): ещё 4 узких шва, чтобы Turn зависел только от Core. Те же
 // адаптеры 1:1 — IFeatureFlagGate/IFeatureFlagGate, IPersonaResolver,
 // IPersonaPromptAssembler, IPersonaBindingsSource. Состав — ровно те 12 мест,

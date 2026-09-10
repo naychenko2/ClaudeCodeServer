@@ -99,6 +99,10 @@ public class SubsystemBoundaryTests
         _ = typeof(ClaudeHomeServer.Services.IDataBackupService).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Terminal.TerminalService).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Composition.ITerminalHubNotifier).Assembly;
+        // Llm — отдельная сборка (Этап 5, финал линии): форс-загрузка нужна, чтобы
+        // сторож видел сборку Llm.dll и её типы. Без неё изолированный прогон
+        // проходит по вертикали вакуумно.
+        _ = typeof(ClaudeHomeServer.Services.Llm.LlmSubsystem).Assembly;
     }
 
     /// <summary>Запись границы одной вертикали: имя (для отчёта), корневой namespace
@@ -793,7 +797,7 @@ public class SubsystemBoundaryTests
                     // Protocol — поля async-state-машин (FallbackLlmSessionAdapter,
                     // ClaudeSession, LlamaServerClient.ReadChatStreamAsync,
                     // OllamaClient.ReadChatStreamAsync, LlmProviderRegistry,
-                    // LlmSessionContext, TurnFileWatcher, ChatDigestService,
+                    // LlmSessionContext, TurnFileWatcher,
                     // ClaudeRateLimitParser, TurnPromptAssembler, SubagentStreamWatcher).
                     "ClaudeHomeServer.Protocol.StoredMessage",
                     "ClaudeHomeServer.Protocol.UsageInfo",
@@ -1652,10 +1656,23 @@ public class SubsystemBoundaryTests
         "ClaudeHomeServer.Services.Composition",
         "ClaudeHomeServer.Services.Http",
         "ClaudeHomeServer.Services.Mcp",
+        // Этап 5, волна 5б (Llm): LoopbackProxyBypass — env-утилита спины, переехала из
+        // Services/Mcp/Http вертикали. Никаких чужих using (только BCL), один call-site
+        // (ClaudeSession), и лежит по теме, а не по слою. namespace сохранён ради
+        // call-site и обоих тестов.
+        "ClaudeHomeServer.Services.Mcp.Http",
         // Этап 3, волна 1 (Skills): ICheapTextRunner/OneShotResult/OneShotUsage/
         // LlmTimeoutException переехали в Core, чтобы вертикали (Skills, Git, Notes, Tasks)
         // могли зависеть от шва без ProjectReference на Main.
         "ClaudeHomeServer.Services.Llm",
+        // Этап 5, финал линии Llm: TranscriptProbe — stateless-примитив спины (117 строк,
+        // только BCL + `TranscriptRoots`), нужный обеим сторонам границы: вертикали
+        // (ClaudeSession/MainTranscriptTailer/WorkflowAgentParser) и спине (SessionManager).
+        // Переехал в Core целиком, а не через шов: статической функции без состояния
+        // интерфейс не нужен (тот же довод, что у SafePath/CmdlineEstimate). namespace
+        // сохранён ради неизменных call-site'ов с обеих сторон — прецедент
+        // `Services.Mcp.Http` (LoopbackProxyBypass, волна 5б).
+        "ClaudeHomeServer.Services.Llm.Claude",
         // Этап 3, волна 1 (Skills): ILauncherFactory/IProcessLauncher/ProcessSpec/IPathMapper
         // переехали в Core — общие контракты запуска процессов для всех вертикалей.
         "ClaudeHomeServer.Services.Execution",
@@ -1700,6 +1717,13 @@ public class SubsystemBoundaryTests
         // вертикаль Spend. Реализация `SpendStore : ISpendCollector` остаётся
         // в Main (Services/Spend) — пока сам Spend не вынесен в свой csproj.
         "ClaudeHomeServer.Services.Spend",
+        // Этап 5, узкие швы Skills (Llm → Skills): ICommandExpansion (разворот
+        // /skill в тексте хода) и ISkillSnapshotSource (каталог CliSkillDto для
+        // снимка промпта) переехали в Core — те же прецеденты, что IAgentPromptSource
+        // выше и ISpendCollector: Llm берёт шов без ProjectReference на вертикаль Skills.
+        // Реализации — CommandExpansionAdapter/SkillSnapshotSourceAdapter в Main,
+        // форвардят в SkillsService. Узкие: 1 метод + 1 метод.
+        "ClaudeHomeServer.Services.Skills",
         // Этап 5, волна 2 (Memory↔Dossiers↔Git): IGitRefSnapshotStore + 5 record-типов
         // (GitRefIdentity/GitRefTip/GitRefSnapshotResult/GitCredentials/GitSnapshotFile)
         // переехали из вертикали Git в Core — узкий контракт generic plumbing ветки-паспорта,
@@ -1749,6 +1773,19 @@ public class SubsystemBoundaryTests
         // `DossierRecallService.ExtractPathsFromText`, звал его только контрибьютор
         // промпта). Stateless-регексп по образцу Slugifier.
         "ClaudeHomeServer.Services.TextPathMentions",
+        // Этап 5, волна 6 (Llm): `AttachmentsGitExclude` — статический примитив спины
+        // по тем же причинам, что и TranscriptRoots/ExecutableResolver (выше): реестр
+        // «вертикаль → спина» живёт в корне `Services`, вертикаль (Git) его не знает.
+        // namespace сохранён ради call-site'ов в `Services/Llm/Claude` и
+        // `Composition/Notifications`, и сам файл — единственный носитель логики
+        // «не светить вложения чата в git-статусе проекта».
+        "ClaudeHomeServer.Services.AttachmentsGitExclude",
+        // Этап 5, волна 6 (Llm): `SnapshotIdGenerator` — генератор id снимков промпта,
+        // ехал из PromptSnapshotStore (Main) ради ClaudeSession. Один счётчик на
+        // процесс: и NewId (private в PromptSnapshotStore), и NewPublicId (форвардер)
+        // ходят через этот же статик, иначе коллизии вернутся. Прецедент
+        // SafePath/ExecutableResolver — stateless-примитив в Core.
+        "ClaudeHomeServer.Services.SnapshotIdGenerator",
     ];
 
     /// <summary>

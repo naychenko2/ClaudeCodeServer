@@ -116,6 +116,12 @@
       сборки Turn.
     -->
     <ProjectReference Include="..\ClaudeHomeServer.Turn\ClaudeHomeServer.Turn.csproj" />
+    <!--
+      Llm — отдельная сборка (Этап 5, финал линии). Тесты вертикали остались здесь
+      (отдельной ClaudeHomeServer.Llm.Tests нет), плюс статические конструкторы трёх
+      сторожей форс-загружают сборку через typeof(LlmSubsystem).Assembly.
+    -->
+    <ProjectReference Include="..\ClaudeHomeServer.Llm\ClaudeHomeServer.Llm.csproj" />
     <!-- Мост: юниты парсера кадров (internals) + интеграционные тесты гоняют exe из bin -->
     <ProjectReference Include="..\ConPtyBridge\ConPtyBridge.csproj" />
   </ItemGroup>

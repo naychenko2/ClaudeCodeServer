@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Tests.Helpers;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Llm;
 using FluentAssertions;
 

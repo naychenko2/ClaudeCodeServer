@@ -349,7 +349,7 @@ public class TasksController(
         // не защита. null-сессия/персона → проверка человеком (TaskVerification.PersonaId == null)
         if (req.Verification is not null)
         {
-            var callerSessionId = Request.Headers[DenyOnDelegatedTurnAttribute.CallerHeader].FirstOrDefault();
+            var callerSessionId = Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault();
             var callerPersonaId = callerSessionId is not null ? sessions.GetById(callerSessionId)?.PersonaId : null;
             req = req with
             {

@@ -1,6 +1,6 @@
 using System.Reflection;
 using System.Text.RegularExpressions;
-using ClaudeHomeServer.Telemetry;
+using ClaudeHomeServer.Core.Telemetry;
 using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Telemetry;

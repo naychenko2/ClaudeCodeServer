@@ -35,7 +35,9 @@ public class FileService(
 
     // Папка вложений чата в рабочей папке (файлы, загруженные в сообщение с компьютера).
     // Служебная: исключена из дерева, ватчеров, дефолтного .gitignore и синка базы знаний.
-    public const string AttachmentsDir = ".cc-attachments";
+    // Константа живёт в Core (TreeExcludes) — значение нужно вертикалям мимо Main;
+    // форвардер оставлен ради существующих вызывающих внутри Main.
+    public const string AttachmentsDir = TreeExcludes.AttachmentsDir;
 
     // Список исключений дерева переехал в Core (TreeExcludes) — по соглашению проекта
     // из вертикалей нельзя звать FileService ради статики. Здесь только потребитель.

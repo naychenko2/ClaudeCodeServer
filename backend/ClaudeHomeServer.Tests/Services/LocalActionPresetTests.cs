@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Tests.Helpers;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition.Llm;
 using ClaudeHomeServer.Services.Llm;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -37,7 +38,8 @@ public class LocalActionPresetTests
         var store = new LocalActionOverridesStore(config, NullLogger<LocalActionOverridesStore>.Instance);
         var router = new LocalActionRouter(ollama, store, config, NullLogger<LocalActionRouter>.Instance);
         var models = new ModelCatalogService(providers, http, config);
-        var service = new LocalActionPresetService(store, router, ollama, models, config,
+        var catalog = new ModelCatalogAdapter(models);
+        var service = new LocalActionPresetService(store, router, ollama, catalog, config,
             NullLogger<LocalActionPresetService>.Instance);
         return (service, store);
     }

@@ -1,5 +1,6 @@
 ﻿using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition.Llm;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Tests.Helpers;
 using Microsoft.Extensions.Configuration;
@@ -1482,8 +1483,8 @@ public class LocalActionRoutingTests
         store.Set(LocalActionCatalog.ChatNew, "tier:weak");
         var router = new LocalActionRouter(Ollama(config), store, config, NullLogger<LocalActionRouter>.Instance);
         var presets = new LocalActionPresetService(store, router, Ollama(config),
-            new ModelCatalogService(new LlmProviderRegistry(config),
-                new NullHttpFactory(), config),
+            new ModelCatalogAdapter(new ModelCatalogService(new LlmProviderRegistry(config),
+                new NullHttpFactory(), config)),
             config, NullLogger<LocalActionPresetService>.Instance);
 
         await presets.ApplyAsync(ActionPreset.Recommended);

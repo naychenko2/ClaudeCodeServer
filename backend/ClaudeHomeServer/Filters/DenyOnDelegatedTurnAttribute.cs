@@ -27,8 +27,10 @@ namespace ClaudeHomeServer.Filters;
 [AttributeUsage(AttributeTargets.Method)]
 public sealed class DenyOnDelegatedTurnAttribute(string action) : Attribute, IActionFilter
 {
-    // Заголовок ставит общий api() каждого MCP-сервера: id сессии, в которой работает модель
-    public const string CallerHeader = "X-Caller-Session-Id";
+    // Заголовок ставит общий api() каждого MCP-сервера: id сессии, в которой работает модель.
+    // Форвардим на Core-константу: имя едет в спину (McpEndpoints), а фильтр остаётся в Main —
+    // иначе перенос Llm в отдельный .csproj заставил бы тащить сюда весь стек атрибута.
+    public const string CallerHeader = McpEndpoints.CallerSessionHeader;
 
     /// <summary>
     /// Запрещать ещё и на реакционном авто-ходу постановщика (доклад делегированной задачи):

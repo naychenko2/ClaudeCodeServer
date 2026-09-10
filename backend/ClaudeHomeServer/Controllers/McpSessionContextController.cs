@@ -1,6 +1,5 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
-using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -27,7 +26,7 @@ public class McpSessionContextController(SessionManager sessions, SessionContext
     [HttpGet("session-context")]
     public IActionResult Get()
     {
-        if (Request.Headers[DenyOnDelegatedTurnAttribute.CallerHeader].FirstOrDefault()
+        if (Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault()
             is not { Length: > 0 } sessionId)
             return BadRequest(new { error = "Не определена сессия вызова (X-Caller-Session-Id)" });
 

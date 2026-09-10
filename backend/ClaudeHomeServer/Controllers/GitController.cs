@@ -486,7 +486,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
     // где трейлер уже пришёл из системного промпта хода, если он был).
     private string AppendDossierTrailer(string message)
     {
-        var callerSessionId = Request.Headers[Filters.DenyOnDelegatedTurnAttribute.CallerHeader].ToString();
+        var callerSessionId = Request.Headers[McpEndpoints.CallerSessionHeader].ToString();
         if (string.IsNullOrEmpty(callerSessionId)) return message;
         var session = sessions.GetById(callerSessionId);
         if (session is null) return message;

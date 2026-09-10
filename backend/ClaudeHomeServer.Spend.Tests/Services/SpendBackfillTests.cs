@@ -68,7 +68,8 @@ public class SpendBackfillTests : IDisposable
         _llmResolver = new LlmModelResolverAdapter(llmProviders);
         var subPool = new ClaudeSubscriptionPool(config);
         var adapters = new ClaudeHomeServer.Services.Llm.LlmSessionAdapterFactory(
-            config, new SkillsService(), new WorkspaceKnowledgeStore(config), llmProviders, subPool);
+            config, new AgentPromptSourceAdapter(new SkillsService()), new WorkspaceDatasetLookup(new WorkspaceKnowledgeStore(config)),
+            llmProviders, subPool);
         var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, config);
         var glif = new GlifAccountService(new Mock<IHttpClientFactory>().Object, config);
         var usage = new UsageService(config);

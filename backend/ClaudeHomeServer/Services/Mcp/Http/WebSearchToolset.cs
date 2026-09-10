@@ -47,7 +47,7 @@ public sealed class WebSearchToolset(
     // Имя сервера = первый сегмент маршрута POST /mcp/websearch/{sessionId}. Константа —
     // единственная точка правды для URL конфига хода (ClaudeSession) и для ключей
     // KeepMcpServers/KeepMcpTools профиля провайдера
-    public const string ServerName = "websearch";
+    public const string ServerName = McpEndpoints.WebSearchName;
 
     // Потолок markdown одной страницы. Ридер режет ИСХОДНИК (2 МБ html), а после извлечения
     // длинная статья всё равно даёт десятки тысяч символов — окно локальной модели это
@@ -225,7 +225,7 @@ public sealed class WebSearchToolset(
 
     /// <summary>URL эндпоинта в конфиге хода: базовый адрес + маршрут тулсета с хвостом.</summary>
     public static string EndpointFor(string apiUrl, string sessionId) =>
-        McpHttpTransport.EndpointFor(apiUrl, ServerName) + "/" + sessionId;
+        McpEndpoints.EndpointFor(apiUrl, ServerName) + "/" + sessionId;
 
     // Один сегмент — id сессии; форма как у соседних тулсетов (белый список resumeSessionId)
     private static bool TryParseRoute(string? route, out string sessionId)

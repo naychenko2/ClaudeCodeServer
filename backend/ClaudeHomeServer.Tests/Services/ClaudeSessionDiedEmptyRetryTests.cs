@@ -173,7 +173,7 @@ public class ClaudeSessionDiedEmptyRetryTests : IDisposable
                 if (m is ExitedMessage) turn2ExitedSeen.TrySetResult();
                 return Task.CompletedTask;
             },
-            RawSystemPrompt: null,
+            RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
             PermissionRules: null,
             TasksMcp: null,
             // Один http-сервер реестра: BuildTurnMcpConfig обязан собрать temp-конфиг хода

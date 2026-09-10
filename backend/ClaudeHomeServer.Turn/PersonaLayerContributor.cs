@@ -1,6 +1,4 @@
 using ClaudeHomeServer.Models;
-using ClaudeHomeServer.Services.Skills;
-using ClaudeHomeServer.Services.Team;
 
 namespace ClaudeHomeServer.Services.Turn;
 
@@ -21,18 +19,29 @@ namespace ClaudeHomeServer.Services.Turn;
 public sealed class PersonaLayerContributor : IPromptSectionContributor
 {
     private readonly IUserStore _users;
-    private readonly PersonaManager _personas;
-    private readonly PersonaPromptBuilder _promptBuilder;
+    // Узкие швы вместо корневых сервисов (Этап 5): Turn зависел от Main ради двух типов
+    // — резолв персоны по id с проверкой владельца и сборка её слоя промпта.
+    // IPersonaResolver (Core/Services) — резолв; IPersonaPromptAssembler (Core/Services/Turn)
+    // — сборка. Прецедент — IPersonaLookup vs IPersonaDirectory: разделение осознанное,
+    // склейка дала бы читающему контрибьютору лишние права.
+    private readonly IPersonaResolver _personas;
+    private readonly IPersonaPromptAssembler _promptBuilder;
     private readonly IProjectManager _projects;
-    private readonly SkillsService? _skills;
+    // Узкие швы вместо вертикалей (Этап 5): промпт файлового .md-агента (был
+    // SkillsService.GetAgentSystemPrompt) и блок командных механик (был статический
+    // каталог Team поверх трёх методов SkillsService). Оба опциональны — как прежний
+    // `SkillsService?`: без них слой персоны деградирует к минимуму, а не падает.
+    private readonly IAgentPromptSource? _agentPrompts;
+    private readonly ITeamMechanicsBlockSource? _teamMechanics;
     private readonly Func<bool> _personasEnabled;
 
     public PersonaLayerContributor(
         IUserStore users,
-        PersonaManager personas,
-        PersonaPromptBuilder promptBuilder,
+        IPersonaResolver personas,
+        IPersonaPromptAssembler promptBuilder,
         IProjectManager projects,
-        SkillsService? skills,
+        IAgentPromptSource? agentPrompts,
+        ITeamMechanicsBlockSource? teamMechanics,
         // Резолвер «разрешены ли персоны для этой сессии» — определяет, добавлять ли
         // подсказку про создание персоны в онбординг-оверлей. Без него (тесты) —
         // оверлей деградирует к минимуму.
@@ -42,7 +51,8 @@ public sealed class PersonaLayerContributor : IPromptSectionContributor
         _personas = personas;
         _promptBuilder = promptBuilder;
         _projects = projects;
-        _skills = skills;
+        _agentPrompts = agentPrompts;
+        _teamMechanics = teamMechanics;
         _personasEnabled = personasEnabled ?? (() => true);
     }
 
@@ -58,6 +68,7 @@ public sealed class PersonaLayerContributor : IPromptSectionContributor
     //   agentPrompt = _personaPromptProvider?.Invoke();
     //   if (agentPrompt is null && !string.IsNullOrEmpty(Info.AgentName) && _skills is not null)
     //       agentPrompt = _skills.GetAgentSystemPrompt(_rootPath, Info.AgentName);
+    // (SkillsService заменён швом IAgentPromptSource — гейт тот же.)
     public bool IsEnabled(PromptSessionContext sessionContext)
     {
         if (sessionContext.OwnerId is null) return false;
@@ -68,7 +79,7 @@ public sealed class PersonaLayerContributor : IPromptSectionContributor
         // Обычная персонная сессия.
         if (session.PersonaId is not null) return true;
         // Файловый агент (.md) при пустой персоне — fallback.
-        if (!string.IsNullOrEmpty(session.AgentName) && _skills is not null) return true;
+        if (!string.IsNullOrEmpty(session.AgentName) && _agentPrompts is not null) return true;
         return false;
     }
 
@@ -127,9 +138,10 @@ public sealed class PersonaLayerContributor : IPromptSectionContributor
             agentPrompt = built;
         }
         // 3) Файловый .md-агент при пустой персоне — fallback.
-        else if (!string.IsNullOrEmpty(session.AgentName) && _skills is not null)
+        else if (!string.IsNullOrEmpty(session.AgentName) && _agentPrompts is not null)
         {
-            agentPrompt = _skills.GetAgentSystemPrompt(sessionContext.RootPath ?? "", session.AgentName);
+            agentPrompt = _agentPrompts.GetAgentSystemPrompt(
+                sessionContext.RootPath ?? "", session.AgentName);
         }
 
         if (string.IsNullOrWhiteSpace(agentPrompt))
@@ -141,30 +153,17 @@ public sealed class PersonaLayerContributor : IPromptSectionContributor
 
     // Блок «Командные механики» для руководителя проекта (мост в механики). Только
     // когда персона чата — дефолт-персона проекта (Project.DefaultPersonaId).
-    // Без SkillsService (тесты) — механики не добавляются, не падаем.
+    // Без шва (тесты) — механики не добавляются, не падаем.
+    //
+    // Гейт «кому предлагать» остаётся здесь, а сборка самого блока (фильтр каталога Team
+    // по установленным умениям Skills) уехала за шов ITeamMechanicsBlockSource: слою
+    // персоны не нужно знать ни таксономию умений, ни состав механик.
     private string? BuildTeamMechanicsBlock(Session session, Persona persona)
     {
         if (session.ProjectId is not { } projectId) return null;
         var project = _projects.GetById(projectId);
         if (project is null || project.DefaultPersonaId != persona.Id) return null;
-        if (_skills is null) return null;
-        return TeamMechanicsPromptCatalog.BuildPromptBlock(InstalledSkillNames());
-    }
-
-    private IReadOnlySet<string> InstalledSkillNames()
-    {
-        if (_skills is null) return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        try
-        {
-            return _skills.GetGlobalSkills().Select(s => s.Name)
-                .Concat(_skills.GetGlobalWorkflows().Select(s => s.Name))
-                .Concat(_skills.GetPluginSkills().Select(s => s.Name))
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        }
-        catch
-        {
-            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        }
+        return _teamMechanics?.BuildBlock();
     }
 
     // Групповая надстройка промпта: участники чата + дисциплина «отвечай только от

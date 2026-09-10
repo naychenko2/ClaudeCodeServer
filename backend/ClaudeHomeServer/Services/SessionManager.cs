@@ -3626,7 +3626,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         var difyMcp = BuildDifyContext(ownerId);
         var adapter = _adapters.Create(session, new LlmSessionContext(rootPath,
             msg => OnMessageAsync(session.Id, accumulator, msg, runId),
-            rawSystemPrompt, permissionRules,
+            rawSystemPrompt, ProjectManager.BuiltInSystemPrompt, permissionRules,
 
             ContentRootPath: AppContext.BaseDirectory,
             TasksMcp: tasksMcp,
@@ -4932,7 +4932,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             var difyMcp = BuildDifyContext(entry.Info.OwnerId);
             context = new LlmSessionContext(rootPath,
                 msg => OnMessageAsync(sessionId, accumulator, msg, runId),
-                RawSystemPrompt: null, PermissionRules: null,
+                RawSystemPrompt: null, BuiltInSystemPrompt: ProjectManager.BuiltInSystemPrompt,
+                PermissionRules: null,
                 ContentRootPath: AppContext.BaseDirectory,
                 TasksMcp: tasksMcp,
                 NotesMcp: notesMcp,
@@ -4991,6 +4992,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             context = new LlmSessionContext(rootPath,
                 msg => OnMessageAsync(sessionId, accumulator, msg, runId),
                 project.SystemPrompt,
+                ProjectManager.BuiltInSystemPrompt,
                 () => _projects.GetById(entry.Info.ProjectId!)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>(),
                 ContentRootPath: AppContext.BaseDirectory,
                 TasksMcp: tasksMcp,
@@ -5421,6 +5423,27 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 entry.Info.UpdatedAt = DateTime.UtcNow;
         SaveSessions();
         return entry.Info;
+    }
+
+    /// <summary>Явно перевести чат с окна 1M на базовое (200K): срезать суффикс [1m] у модели.</summary>
+    /// Единственный путь, которым суффикс окна снимается по воле человека — кнопка «продолжить в
+    /// стандартном окне» под карточкой отказа Window1MUnavailable. Автоматического среза больше
+    /// нет нигде в ходе чата (он был тихой миной для длинных разговоров), поэтому решение
+    /// «мне хватит 200K» принимает пользователь, а сервер только исполняет.
+    ///
+    /// Модель берём ЭФФЕКТИВНУЮ (Info.Model может быть пуста — тогда модель приходит от слота
+    /// назначения места), а закрепляем в чате базовый алиас явно: иначе назначение места на
+    /// следующем ходу вернуло бы окно 1M и человек снова упёрся бы в ту же карточку.
+    /// Не тир-алиас с окном — снимать нечего, отказ (InvalidOperationException → 400).
+    public async Task<Session?> DropWindow1MAsync(string sessionId, string ownerId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
+        var usageKey = UsageKeyFor(entry.Info.TaskExecution, entry.Info.TaskId, entry.Info.PersonaId);
+        var effective = _assignments.Resolve(usageKey, entry.Info.Model, entry.Info.OwnerId);
+        if (!LlmProviderRegistry.IsClaudeTierWindowAlias(effective))
+            throw new InvalidOperationException("У чата не выбрано окно 1M — переключать нечего");
+        return await UpdateAsync(sessionId, ownerId,
+            name: null, model: LlmProviderRegistry.StripClaudeWindowAlias(effective), effort: null);
     }
 
     // Ответ на карточку, которой уже нет, — протухший: конец хода (result/error/exited) снял её
@@ -8193,7 +8216,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                         acc.OnModelSwitched(m.Model, acc.LastStartedModel(), m.Reason, m.ErrorDetails);
                     break;
                 case RateLimitMessage m:
-                    _usage.Record(m.LimitType, m.Utilization, m.Status, m.IsUsingOverage, m.ResetsAt, m.OverageStatus, m.OverageResetsAt, subscriptionKey: entry?.Info.Provider, source: "turn");
+                    _usage.Record(m.LimitType, m.Utilization, m.Status, m.IsUsingOverage, m.ResetsAt, m.OverageStatus, m.OverageResetsAt, subscriptionKey: entry?.Info.Provider, source: "turn", overageDisabledReason: m.OverageDisabledReason);
                     _activity?.Touch(entry?.Info.Provider);
                     // P31: rate_limit_event от подписки — доказательство аутентификации (до лимитов
                     // запрос не дошёл бы). Снимаем auth-dead независимо от окна и исчерпания: иначе
@@ -8215,6 +8238,22 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                         // без overage — окно выбрано (с overage ходы ещё проходят).
                         if (m.Status == "rejected" || (m.Utilization >= 1.0 && !m.IsUsingOverage))
                         {
+                            // Отказ по НЕДОСТУПНОЙ модели (кредиты модели / нет доступа) только что
+                            // случился на этой подписке — событие про её ОКНО не метит подписку
+                            // исчерпанной: Sonnet/Opus на ней работают, ложный бан выводил бы её из
+                            // ротации до сброса окна (инцидент 2026-09-09, чат «Анализ документов
+                            // ВФЛА»). Природа та же, что у проверки FallbackTurnActive ниже, —
+                            // позднее событие от отбитой попытки; но окно шире хода, потому что
+                            // rate_limit_event умеет прийти уже ПОСЛЕ его финала. Пару (подписка ×
+                            // модель) помечает адаптер в ResolveNextTarget: здесь события несут
+                            // окно, а не модель, и пара нам неизвестна. По полям телеметрии этот
+                            // случай не распознаётся в принципе — разбор в HadRecentModelRejection.
+                            // Спрашиваем БЕЗ ключа подписки намеренно: entry.Info.Provider к этому
+                            // моменту уже переставлен тихой ротацией на соседний здоровый аккаунт,
+                            // и вопрос по нему промахнулся бы мимо пометки — как раз тот ложный бан,
+                            // ради которого подавление и заведено (та же гонка, что у FallbackTurnActive).
+                            if (_subscriptionPool.HadRecentModelRejection())
+                                return;
                             // M1: под фолбэк-оркестрацией ротацией владеет адаптер —
                             // помечать провайдер исчерпанным и переключать пул тут
                             // нельзя. Не только потому, что будет дубль provider_switched:

@@ -113,7 +113,7 @@ public class ClaudeSessionProxyBypassEnvTests : IDisposable
                 if (m is ExitedMessage) exited.TrySetResult();
                 return Task.CompletedTask;
             },
-            RawSystemPrompt: null,
+            RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
             PermissionRules: null,
             TasksMcp: null,
             WidgetsMcp: widgets ?? new WidgetsMcpContext("http://localhost:5999", () => "tok", UseHttp: useHttp),

@@ -72,8 +72,8 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         var p = projects.GetById(id);
         if (p is null || p.OwnerId != UserId) return NotFound();
         var wk = wkStore.GetByPath(p.RootPath);
-        var parts = ProjectManager.GetSystemPromptParts(
-            p.SystemPrompt, wk?.DifyDatasetId != null, wk?.DocumentTags);
+        var parts = Services.Llm.SystemPromptComposer.GetSystemPromptParts(
+            ProjectManager.BuiltInSystemPrompt, p.SystemPrompt, wk?.DifyDatasetId != null, wk?.DocumentTags);
         return Ok(new { parts });
     }
 

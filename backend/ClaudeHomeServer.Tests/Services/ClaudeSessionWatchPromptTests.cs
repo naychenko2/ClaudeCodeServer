@@ -86,7 +86,7 @@ public class ClaudeSessionWatchPromptTests : IDisposable
         var context = new LlmSessionContext(
             RootPath: _root,
             OnMessage: _ => Task.CompletedTask,
-            RawSystemPrompt: null, PermissionRules: null,
+            RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt, PermissionRules: null,
             TasksMcp: null,
             WatchMcp: watch,
             Launcher: new CapturingLauncher(_clis, _argsCaptured),

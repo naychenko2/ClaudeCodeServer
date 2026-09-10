@@ -16,7 +16,17 @@ public record UsageSnapshot(
     string? OverageStatus = null,
     string? OverageResetsAt = null,
     string SubscriptionKey = "claude",
-    string? Source = null);
+    string? Source = null,
+    // Почему перерасход (overage) выключен: out_of_credits — кредиты перерасхода кончились,
+    // org_level_disabled — перерасход запрещён на уровне организации. Долго терялось:
+    // RateLimitMessage его несёт, но UsageService.Record не принимал; доведено до снимка для
+    // разбора инцидентов. ВАЖНО: это НЕ признак «модель недоступна» — поле приезжает и на
+    // обычном исчерпании пятичасового окна у аккаунта с выключенным перерасходом (в логе
+    // 2026-09-09 — 248 таких строк за сутки от идл-пинга, который ходит haiku). Отличить
+    // отказ по модели от исчерпания окна можно только по тексту ошибки хода
+    // (TurnErrorClassifier), см. ClaudeSubscriptionPool.HadRecentModelRejection.
+    // null — поле отсутствовало (старые снимки) или не пришло.
+    string? OverageDisabledReason = null);
 
 // Информация о тарифе подписки (из ~/.claude/.credentials.json)
 public record PlanInfo(string? SubscriptionType, string? RateLimitTier, string Label);
@@ -79,9 +89,20 @@ public record OllamaActionInfo(string Key, string Title, string Group, bool Rout
 // подписок попадают только аккаунты с настроенной конфигурацией пула (HasExtra), где
 // оба поля невыключаемые; null остаётся для обратной совместимости со старыми бэкапами
 // снимков (data/usage.json), где этих полей ещё не было.
+// UnavailableModels — живые пометки «модель недоступна на ЭТОЙ подписке» (пара подписка ×
+// модель). Без них человек не понимает, почему модель не выбирается: подписка «В ротации»,
+// лимит не исчерпан, а ходы на неё не идут. Пустой список = пометок нет.
 public record SubscriptionUsage(IReadOnlyList<UsageSnapshot> Snapshots, string? Name = null,
     bool InRotation = true, double Utilization = 0, bool Exhausted = false, string? Tier = null,
     string? LoginCommand = null, bool? SupportsOpus = null, bool? Supports1M = null,
     // Эффективная утилизация недельного окна (истёкшее окно/нет данных = 0) — вторая ось
     // вывода из ротации наравне с Utilization.
-    double WeeklyUtilization = 0);
+    double WeeklyUtilization = 0,
+    IReadOnlyList<ModelUnavailableMark>? UnavailableModels = null);
+
+// Пометка «модель недоступна на подписке» для выдачи наружу (ClaudeSubscriptionPool).
+// Reason — wire-имя класса отказа: "model_no_access" (подписка не имеет доступа к модели —
+// свойство тарифа) | "model_out_of_credits" (кончились usage credits модели — можно пополнить).
+// Until — момент UTC, до которого пометка держится: по нему UI пишет «проверим снова через …».
+// Снять досрочно — POST /api/usage/subscriptions/{key}/model-availability/clear.
+public record ModelUnavailableMark(string Model, string Reason, DateTime Until);

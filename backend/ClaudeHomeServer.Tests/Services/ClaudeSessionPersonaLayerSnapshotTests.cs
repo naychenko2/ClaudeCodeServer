@@ -115,7 +115,7 @@ public class ClaudeSessionPersonaLayerSnapshotTests : IDisposable
         var context = new LlmSessionContext(
             RootPath: _root,
             OnMessage: _ => Task.CompletedTask,
-            RawSystemPrompt: null,
+            RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
             PermissionRules: null,
             TasksMcp: null,
             MemoryMcp: new MemoryMcpContext("http://memory.invalid", () => "tok", "persona-1"),

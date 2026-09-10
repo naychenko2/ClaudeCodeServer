@@ -9,10 +9,12 @@ namespace ClaudeHomeServer.Services.Turn;
 // привязок нет или они все Off — BuildAsync отдаст null и секция не добавится.
 public sealed class PersonaBindingsContributor : IPromptSectionContributor
 {
-    private readonly PersonaBindingsService _bindings;
+    // Узкий шов IPersonaBindingsSource вместо корневого PersonaBindingsService (Этап 5):
+    // Turn зависел от Main ради одного метода BuildTurnBlockAsync — это и есть цикл.
+    private readonly IPersonaBindingsSource _bindings;
     private readonly ILogger<PersonaBindingsContributor> _log;
 
-    public PersonaBindingsContributor(PersonaBindingsService bindings,
+    public PersonaBindingsContributor(IPersonaBindingsSource bindings,
         ILogger<PersonaBindingsContributor> log)
     {
         _bindings = bindings;

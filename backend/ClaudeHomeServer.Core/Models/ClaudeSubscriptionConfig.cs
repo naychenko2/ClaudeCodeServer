@@ -29,7 +29,9 @@ public class ClaudeSubscriptionConfig
     // false — пул не отдаёт такому аккаунту чаты с пином тир-алиаса+окна (opus[1m] и т.п.),
     // иначе CLI на таком аккаунте падает «model may not exist / no access». Default true —
     // соответствует текущему состоянию пула (все подписки тянут 1M). Когда способных не
-    // осталось — ClaudeSubscriptionPool деградирует срезом суффикса (ход в 200K), а не падением.
+    // осталось — ход чата уходит на шаг цепочки (FallbackLlmSessionAdapter), а исчерпав её,
+    // честно отказывает; тихим срезом суффикса в 200K деградируют только фоновые one-shot
+    // действия (OneShotClaudeRunner).
     public bool Supports1M { get; set; } = true;
 
     // Тариф подписки: "pro" | "max" | "max5" | "max20" (варианты записи нормализуются).

@@ -1,4 +1,4 @@
-import { memo, useState, useContext, useEffect, type ReactNode } from 'react';
+import { memo, useState, useCallback, useContext, useEffect, type ReactNode } from 'react';
 import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock, ScrollText, RefreshCw, ChevronDown, Ban } from 'lucide-react';
 import type { ChatItem, Persona, ProviderFallbackOption } from '../../types';
 import {
@@ -12,6 +12,8 @@ import type { TodoItem } from '../../hooks/useSessionArtifacts';
 import type { Mode } from '../../lib/modes';
 import { TodoList } from './TodoList';
 import { C, FONT, SHADOW, R } from '../../lib/design';
+import { Button } from '../ui/Button';
+import { useIsMobile } from '../../lib/breakpoints';
 import { useModelLabel } from '../../lib/models';
 import { formatPostTime, formatPostTimeFull } from '../../lib/postTime';
 import { relPathTree, stripRootTree } from '../../lib/paths';
@@ -613,6 +615,11 @@ interface ItemProps {
   onInterrupt: () => void;
   // Миграция чата на другого провайдера (карточка «Продолжить на …» при исчерпании лимита)
   onMigrateProvider?: (model: string, subscriptionKey?: string) => Promise<void>;
+  // «Продолжить в стандартном окне 200K» под карточкой отказа Window1MUnavailable:
+  // снимает суффикс [1m] с чата и возвращает обновлённую сессию (по ней перерисовывается
+  // выбранная модель). Возвращает ok=false + текст ошибки при 400/404 — карточка показывает
+  // его под кнопкой, не молчит. undefined — обычная ошибка, кнопки нет
+  onDropWindow1M?: () => Promise<{ ok: boolean; error?: string }>;
   // Агрегированный чек-лист TaskCreate/TaskUpdate — приходит только на последний task-вызов ленты
   taskPlan?: TodoItem[];
   // Пилюля прогресса плана: приходит на ПОСЛЕДНИЙ result, когда ход уже закончился, —
@@ -968,7 +975,7 @@ function ModelSwitchedPill({ item }: { item: Extract<ChatItem, { kind: 'model_sw
   );
 }
 
-export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, canRetryInterrupted, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, onMigrateProvider, taskPlan, planPill, agentActivity, agentRenderChild, turnBoundaryKind, teamMechanicOffer, projectPresetOffer, promptSnapshotId, turnContextTokens, turnCache }: ItemProps) {
+export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, canRetryInterrupted, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, onMigrateProvider, onDropWindow1M, taskPlan, planPill, agentActivity, agentRenderChild, turnBoundaryKind, teamMechanicOffer, projectPresetOffer, promptSnapshotId, turnContextTokens, turnCache }: ItemProps) {
   const project = useContext(ChatProjectContext);
   const treePath = useContext(ChatTreePathContext);
   const persona = useContext(PersonaContext);
@@ -1842,39 +1849,12 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
 
     case 'error':
       return (
-        <div style={{
-          background: C.dangerBg, borderRadius: 8, padding: '8px 12px',
-          fontSize: 13, color: C.dangerText, border: `1px solid ${C.dangerBorder}`,
-          // flex-start, не center: при многострочной ошибке кнопка «Повторить»
-          // держится у первой строки, а не уезжает в вертикальный центр блока
-          display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10,
-        }}>
-          <span style={{ display: 'flex', alignItems: 'flex-start', gap: 6, minWidth: 0 }}>
-            {/* marginTop:1 — оптическая подгонка иконки 13px к первой строке текста
-                13px; в шкале SP значения 1 нет, поэтому сырым числом с пояснением */}
-            <AlertTriangle size={13} strokeWidth={2} style={{ flexShrink: 0, marginTop: 1 }} />
-            <span style={{
-              whiteSpace: 'pre-wrap', overflowWrap: 'break-word',
-              // Потолок со скроллом: сырая многострочная ошибка (JSON/HTML от сломанного
-              // прокси) не растягивает ленту. 180 ≈ 10 строк — та же высота, что у detail-
-              // блока PermissionRequestView; аккуратный текст фолбэка (заголовок +
-              // поставщики + подсказка) в лимит помещается целиком, без скролла
-              maxHeight: 180, overflow: 'auto',
-            }}>{item.text}</span>
-          </span>
-          {item.canRetry && online && (
-            <button
-              onClick={onRetry}
-              style={{
-                fontSize: 12, padding: '4px 10px', borderRadius: 6,
-                border: `1px solid ${C.dangerBorder}`, background: C.bgWhite,
-                cursor: 'pointer', color: C.dangerText, whiteSpace: 'nowrap', flexShrink: 0,
-              }}
-            >
-              Повторить
-            </button>
-          )}
-        </div>
+        <ErrorCard
+          item={item}
+          online={online}
+          onRetry={onRetry}
+          onDropWindow1M={onDropWindow1M}
+        />
       );
 
     default:
@@ -2001,6 +1981,116 @@ function ErrorRetryButton({ onRetry }: { onRetry: () => void }) {
     >
       <RotateCcw size={13} strokeWidth={2.2} />
     </button>
+  );
+}
+
+// Карточка ошибки хода. Три возможных действия: «Повторить» (canRetry, inline справа от
+// текста), «Продолжить в стандартном окне» (item.action === 'window-1m-drop', вторичная
+// кнопка под текстом — отказ по окну 1M, единственный путь снять суффикс [1m] с чата),
+// и текст ошибки запроса (если сервер вернул 400/404). Локальный useState держит фазу
+// ожидания и текст отказа: после успеха кнопка исчезает сама (без parent-перерендера),
+// повторные клики блокируются пока loading, иначе двойной POST снимет суффикс дважды.
+// canRetry-вариант и кнопка окна не пересекаются по смыслу (повтор хода против смены
+// модели), но физически могут жить рядом — поэтому Retry рисуется inline, а drop-кнопка
+// строкой ниже, на своей полосе. Под 360 CSS «Продолжить в стандартном окне» помещается
+// в одну строку (Button size xs, fontSize 12) — оборачивать в свою полку не пришлось.
+function ErrorCard({ item, online, onRetry, onDropWindow1M }: {
+  item: Extract<ChatItem, { kind: 'error' }>;
+  online: boolean;
+  onRetry: () => void;
+  onDropWindow1M?: () => Promise<{ ok: boolean; error?: string }>;
+}) {
+  const [dropLoading, setDropLoading] = useState(false);
+  // После успешного drop кнопка уходит — модель в шапке чата уже без [1m], это и есть
+  // подтверждение. Отдельной плашки не надо (требование задачи)
+  const [dropResolved, setDropResolved] = useState(false);
+  const [dropError, setDropError] = useState<string | null>(null);
+  // useIsMobile: на 360 CSS текст «Продолжить в стандартном окне» влезает в Button xs без
+  // переноса, отдельная мобильная ветка не нужна — хук оставлен ради согласованности с
+  // остальной лентой и для возможного переноса подписи в будущем
+  useIsMobile();
+  const showDrop = item.action === 'window-1m-drop' && !!onDropWindow1M && !dropResolved;
+
+  const handleDrop = useCallback(async () => {
+    if (!onDropWindow1M || dropLoading) return;
+    setDropLoading(true);
+    setDropError(null);
+    try {
+      const res = await onDropWindow1M();
+      if (res.ok) {
+        setDropResolved(true);
+      } else {
+        // 400 «переключать нечего» / 404 — отдаём человеческий текст с сервера, не молчим.
+        // Если error пустой (нештатный случай) — показываем общий фолбэк
+        setDropError(res.error ?? 'Не удалось переключить чат на стандартное окно.');
+      }
+    } catch (err) {
+      // Сетевой сбой / парсинг — request() бросает Error с message
+      setDropError(err instanceof Error ? err.message : 'Не удалось переключить чат на стандартное окно.');
+    } finally {
+      setDropLoading(false);
+    }
+  }, [onDropWindow1M, dropLoading]);
+
+  return (
+    <div style={{
+      background: C.dangerBg, borderRadius: 8, padding: '8px 12px',
+      fontSize: 13, color: C.dangerText, border: `1px solid ${C.dangerBorder}`,
+    }}>
+      <div style={{
+        display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10,
+      }}>
+        <span style={{ display: 'flex', alignItems: 'flex-start', gap: 6, minWidth: 0 }}>
+          {/* marginTop:1 — оптическая подгонка иконки 13px к первой строке текста
+              13px; в шкале SP значения 1 нет, поэтому сырым числом с пояснением */}
+          <AlertTriangle size={13} strokeWidth={2} style={{ flexShrink: 0, marginTop: 1 }} />
+          <span style={{
+            whiteSpace: 'pre-wrap', overflowWrap: 'break-word',
+            // Потолок со скроллом: сырая многострочная ошибка (JSON/HTML от сломанного
+            // прокси) не растягивает ленту. 180 ≈ 10 строк — та же высота, что у detail-
+            // блока PermissionRequestView; аккуратный текст фолбэка (заголовок +
+            // поставщики + подсказка) в лимит помещается целиком, без скролла
+            maxHeight: 180, overflow: 'auto',
+          }}>{item.text}</span>
+        </span>
+        {item.canRetry && online && (
+          <button
+            onClick={onRetry}
+            style={{
+              fontSize: 12, padding: '4px 10px', borderRadius: 6,
+              border: `1px solid ${C.dangerBorder}`, background: C.bgWhite,
+              cursor: 'pointer', color: C.dangerText, whiteSpace: 'nowrap', flexShrink: 0,
+            }}
+          >
+            Повторить
+          </button>
+        )}
+      </div>
+      {showDrop && (
+        <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <Button
+            variant="ghostFilled"
+            size="xs"
+            loading={dropLoading}
+            onClick={handleDrop}
+            // Подпись: предупреждаем про 200K, длинный разговор может не поместиться —
+            // именно та формулировка, которой раньше не хватало в тексте ошибки (теперь
+            // тут, чтобы не врать «поместится» для всех чатов одинаково)
+            title="Окно чата станет 200 тысяч токенов — длинный разговор может не поместиться"
+          >
+            Продолжить в стандартном окне
+          </Button>
+          {dropError && (
+            <div style={{
+              fontSize: 12, color: C.dangerText, opacity: 0.85,
+              whiteSpace: 'pre-wrap', overflowWrap: 'break-word',
+            }}>
+              {dropError}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 

@@ -310,6 +310,10 @@ public class PromptSectionContributorsDiTests
                 new SpecialtyPromptSectionProvider(sp.GetRequiredService<SpecialtySettingsStore>()));
             services.AddSingleton<DossierStore>(); // для PersonaRecallContributor
             services.AddSingleton<DossierRecallService>(); // для PersonaRecallContributor
+            // Этап 5, узкие швы Turn: контрибьютор идёт в память персоны через Core-шов
+            // IPersonaRecallSource, а не через PersonaMemoryService напрямую. Адаптер —
+            // тот же, что регистрирует Program.cs.
+            services.AddSingleton<IPersonaRecallSource, PersonaRecallSourceAdapter>();
             // CodeGraphService с зависимостями: нужен для CodeGraphPromptProvider → CodeGraphContributor
             services.AddSingleton<CodeGraphService>(sp =>
                 new CodeGraphService(
@@ -318,7 +322,19 @@ public class PromptSectionContributorsDiTests
                     new GraphPersistence(Path.Combine(tempDir, "data"), NullLogger<GraphPersistence>.Instance),
                     sp.GetRequiredService<IConfiguration>()));
             services.AddSingleton<CodeGraphPromptProvider>(); // для CodeGraphContributor
-            services.AddSingleton<SkillsService>(); // для PersonaLayerContributor
+            services.AddSingleton<SkillsService>(); // для адаптеров швов слоя персоны
+            // Этап 5, узкие швы Turn: слой персоны идёт к умениям и к каталогу командных
+            // механик через Core-швы, а не через SkillsService/TeamMechanicsPromptCatalog
+            // напрямую. Адаптеры — те же, что в Program.cs.
+            services.AddSingleton<IAgentPromptSource, AgentPromptSourceAdapter>();
+            services.AddSingleton<ITeamMechanicsBlockSource, TeamMechanicsBlockAdapter>();
+            // Этап 5 (Turn): ещё 4 узких шва, чтобы Turn зависел только от Core.
+            // В тесте — те же форвардеры на корневые сервисы, что и в Program.cs.
+            services.AddSingleton<IFeatureFlagGate, FeatureFlagGateAdapter>();
+            services.AddSingleton<IPersonaResolver, PersonaResolverAdapter>();
+            services.AddSingleton<IPersonaPromptAssembler, PersonaPromptAssemblerAdapter>();
+            services.AddSingleton<IPersonaBindingsSource, PersonaBindingsSourceAdapter>();
+            services.AddSingleton<IChatHistoryLoader, ChatHistoryLoaderAdapter>();
 
             // Логгеры для контрибьюторов с ILogger в конструкторе
             services.AddSingleton<ILogger<NotesRecallContributor>>(NullLogger<NotesRecallContributor>.Instance);

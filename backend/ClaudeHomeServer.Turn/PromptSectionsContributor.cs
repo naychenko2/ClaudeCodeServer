@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Llm;
 
 namespace ClaudeHomeServer.Services.Turn;
@@ -22,9 +23,9 @@ namespace ClaudeHomeServer.Services.Turn;
 public sealed class PromptSectionsContributor : IPromptSectionContributor
 {
     private readonly IPromptSectionProvider? _sections;
-    private readonly FeatureFlagService _flags;
+    private readonly IFeatureFlagGate _flags;
 
-    public PromptSectionsContributor(IPromptSectionProvider? sections, FeatureFlagService flags)
+    public PromptSectionsContributor(IPromptSectionProvider? sections, IFeatureFlagGate flags)
     {
         _sections = sections;
         _flags = flags;

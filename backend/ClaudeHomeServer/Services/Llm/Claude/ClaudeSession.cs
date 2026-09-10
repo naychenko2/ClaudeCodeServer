@@ -32,13 +32,15 @@ public class ClaudeSession : ILlmSessionAdapter
     // учитывается по модели, которой реально идёт ход. Сам резолв остаётся приватным.
     internal string? EffectiveTurnModel => EffectiveModel;
 
-    // Модель для --model / set_model: суффикс [1m] тир-алиаса остаётся, пока в пуле есть живой
-    // кандидат с поддержкой 1M-окна; иначе срезается в базовый алиас (деградация в 200K вместо
-    // падения хода на аккаунте без доступа — см. ClaudeSubscriptionPool.ResolveWindowAlias).
-    // Пул не задан (нет подписок) — срезаем безусловно: локальный вход не описан в конфиге, и
-    // безопаснее идти в надёжном 200K, чем рисковать падением на неизвестном аккаунте.
+    // Модель для --model / set_model: суффикс [1m] тир-алиаса едет в CLI КАК ЕСТЬ. Тихого среза
+    // в базовый алиас здесь нет и быть не должно: для длинного чата деградация в 200K — мина
+    // (контекст в сотни тысяч токенов не влезет, и человек получит непонятное переполнение
+    // вместо причины). Недоступность окна разбирает слой выше — FallbackLlmSessionAdapter:
+    // уводит ход на шаг цепочки, а исчерпав её, отвечает честным Window1MUnavailable.
+    // Пул не задан вовсе (тесты, сборка без подписок) — срезаем: способность аккаунта неизвестна,
+    // и надёжный 200K лучше падения на неизвестном плане.
     private string? ResolveModelForCli(string? model) =>
-        _subscriptionPool?.ResolveWindowAlias(model) ?? LlmProviderRegistry.StripClaudeWindowAlias(model);
+        _subscriptionPool is null ? LlmProviderRegistry.StripClaudeWindowAlias(model) : model;
 
     // Цепочка хода для фолбэка (ADR-007 §4): упорядоченные конкретные модели пресета (первая =
     // основная, остальные = план подмен). Пустая Info.Model → резолв по месту мог дать пресет;
@@ -609,6 +611,9 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly ConcurrentDictionary<string, string> _pendingFileClaims = new();
 
     private readonly string? _rawSystemPrompt;
+    // Встроенная часть системного промпта: контент продукта из Main, приезжает контекстом
+    // (собирать части умеет спина — Core: SystemPromptComposer)
+    private readonly string _builtInSystemPrompt;
     private readonly string? _mcpConfigPath;
     // Ключ HTTP MCP-сервера fal-ai (Fal:McpApiKey) — сервер инжектится в конфиг хода
     // из appsettings, а не хардкодится в .mcp.json (секрет вне git); пусто — без fal-ai
@@ -743,6 +748,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _falMcpApiKey = falMcpApiKey;
         _glifMcpToken = glifMcpToken;
         _rawSystemPrompt = context.RawSystemPrompt;
+        _builtInSystemPrompt = context.BuiltInSystemPrompt;
         _skills = skills;
         _wkStore = workspaceStore;
         _permissionRules = context.PermissionRules;
@@ -2778,8 +2784,9 @@ public class ClaudeSession : ILlmSessionAdapter
             // (/effective-prompt): встроенная константа, промпт проекта, автодополнения Dify.
             // Индекс в ключе разводит две auto-части (блок Dify и инструкция по тегам).
             var partIndex = 0;
-            foreach (var part in ProjectManager.GetSystemPromptParts(
-                         _rawSystemPrompt, currentDatasetId != null, currentWk?.DocumentTags))
+            foreach (var part in SystemPromptComposer.GetSystemPromptParts(
+                         _builtInSystemPrompt, _rawSystemPrompt, currentDatasetId != null,
+                         currentWk?.DocumentTags))
             {
                 var partTitle = part.Kind switch
                 {

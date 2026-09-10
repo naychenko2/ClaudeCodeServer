@@ -76,6 +76,10 @@ public class SubsystemBoundaryTests
         _ = typeof(ClaudeHomeServer.Services.ProjectServices.ProjectServicesSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Spend.SpendSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Tasks.TasksSubsystem).Assembly;
+        // Turn — отдельная сборка (Этап 5, вынос Turn): форс-загрузка нужна, чтобы
+        // сторож видел типы Turn (IPromptSectionContributor и пр.) и проверял их
+        // границы по сборке Turn.dll.
+        _ = typeof(ClaudeHomeServer.Services.Turn.IPromptSectionContributor).Assembly;
         // === Этап 5, волна C, шаг 2: новые швы Core, использованные вынесенными
         // вертикалями. Форс-загрузка нужна, чтобы вертикальные сборки (Modules,
         // ProjectServices) видели соответствующие Core-интерфейсы по сборке Core.dll.
@@ -724,8 +728,9 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.ProjectEventLogService",
                     "ClaudeHomeServer.Services.Notes.NotesService",
                     "ClaudeHomeServer.Services.Dossiers.DossierRecallService",
-                    "ClaudeHomeServer.Services.Dossiers.DossierRecallRequest",
-                    "ClaudeHomeServer.Services.Dossiers.DossierRecallResult",
+                    // DossierRecallRequest/DossierRecallResult допусков больше не требуют:
+                    // пара DTO уехала в Core (Этап 5, узкие швы Turn) и проходит по
+                    // assembly-фильтру IsCoreAssembly.
                     // AutolearnGate.CheckContent / LastTurnLength — public-метод
                     // с параметром IReadOnlyList<StoredMessage>.
                     "ClaudeHomeServer.Protocol.StoredMessage",
@@ -899,13 +904,15 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.ModelTier",
                     "ClaudeHomeServer.Services.ModelTier[]",
                     "ClaudeHomeServer.Services.Skills.SkillInfo",
-                    "ClaudeHomeServer.Services.SystemPromptPart",
                     "ClaudeHomeServer.Services.AppSettingsService",
                     "ClaudeHomeServer.Services.ChatHistoryService",
                     "ClaudeHomeServer.Services.FileService",
                     "ClaudeHomeServer.Services.SessionSummaryService",
                     "ClaudeHomeServer.Services.Notes.NotesService",
-                    "ClaudeHomeServer.Services.ProjectManager",
+                    // ProjectManager снят: сборку частей системного промпта
+                    // (GetSystemPromptParts + SystemPromptPart) забрала спина —
+                    // Core: Services/Llm/SystemPromptComposer, а встроенная часть
+                    // промпта приезжает в ClaudeSession текстом через LlmSessionContext.
                     "ClaudeHomeServer.Services.SessionManager",
                     "ClaudeHomeServer.Services.Skills.SkillsService",
                     "ClaudeHomeServer.Services.UserStore",
@@ -1044,50 +1051,14 @@ public class SubsystemBoundaryTests
                         "ClaudeHomeServer.Services.Turn",
                     })
                     .ToArray(),
-                new[]
-                {
-                    "ClaudeHomeServer.Protocol.StoredMessage",
-                    "ClaudeHomeServer.Protocol.McpServerInfo",
-                    "ClaudeHomeServer.Protocol.PromptSnapshotDraft",
-                    "ClaudeHomeServer.Services.PersonaBindingsService",
-                    "ClaudeHomeServer.Services.PersonaManager",
-                    "ClaudeHomeServer.Services.PersonaPromptBuilder",
-                    "ClaudeHomeServer.Services.ProjectManager",
-                    "ClaudeHomeServer.Services.Skills.SkillsService",
-                    // IL-видимость: PersonaLayerContributor.InstalledSkillNames() зовёт
-                    // `.Select(s => s.Name)` на IReadOnlyList<SkillInfo> — generic-аргумент
-                    // материализуется в лямбде <>c и в теле метода. Мутация подтвердила:
-                    // без допуска сторож краснеет именно на этом типе.
-                    "ClaudeHomeServer.Services.Skills.SkillInfo",
-                    "ClaudeHomeServer.Services.ChatHistoryService",
-                    "ClaudeHomeServer.Services.FeatureFlagService",
-                    "ClaudeHomeServer.Services.Memory.PersonaMemoryService",
-                    // IL-видимость: PersonaRecallContributor.BuildAsync материализует
-                    // PersonaMemoryHit в generic-аргументе `recall.Hits.Select(h => …)`
-                    // внутри async-state-машины `<BuildAsync>d__19`. Мутация подтвердила.
-                    "ClaudeHomeServer.Services.Memory.PersonaMemoryHit",
-                    "ClaudeHomeServer.Services.Memory.PersonaMemoryService+PersonaRecallResult",
-                    "ClaudeHomeServer.Services.Dossiers.DossierRecallService",
-                    "ClaudeHomeServer.Services.Dossiers.DossierRecallRequest",
-                    // Этап 5, шаг 6 (инверсия контрибьюторов): три допуска сняты как
-                    // мёртвые (мутация — прогон без них дал зелёный сторож): UserStore,
-                    // Llm.SpecialtySettingsStore (+EffectivePromptSection ранее уже снят),
-                    // Team.TeamImplementPrompts — комментарий на месте допуска описывал
-                    // использование в ClaudeSession (Services.Llm.Claude), а не в Turn;
-                    // допуск никогда не был нужен ИМЕННО Turn-контрибьюторам.
-                    // Этап 4, шаг 2г-2 — PersonaLayerContributor (в Turn-boundary) вызывает
-                    // TeamMechanicsPromptCatalog.BuildPromptBlock через return-тип; до переезда
-                    // шло через префикс `Services.Prompts` (SharedAllowedPrefixes), теперь —
-                    // точный допуск.
-                    "ClaudeHomeServer.Services.Team.TeamMechanicsPromptCatalog",
-                    // `PersonaLayerContributor` ссылается на `OnboardingPrompts`
-                    // (статический каталог в `Services.Prompts`). Префикс Prompts
-                    // НЕ открываем: точечный допуск ровно на нужный тип.
-                    "ClaudeHomeServer.Services.Prompts.OnboardingPrompts",
-                    // `PersonaRecallContributor` материализует `SessionChangedPaths`
-                    // в async-state `<LastTurnChangedFilesAsync>d__21.MoveNext`.
-                    "ClaudeHomeServer.Services.SessionChangedPaths",
-                }),
+                // Точечных допусков НЕТ. После выноса в отдельный .csproj все вне-Core
+                // зависимости закрыты швами (`IFeatureFlagGate`, `IPersonaResolver`,
+                // `IPersonaPromptAssembler`, `IPersonaBindingsSource`, `IChatHistoryLoader`),
+                // а `OnboardingPrompts` и `SessionChangedPaths` ПЕРЕЕХАЛИ в Core —
+                // вертикаль берёт их оттуда. Допуски на эти два типа были заведены
+                // исполнителем как «живые», но мутация показала обратное: сторож
+                // остаётся зелёным без них. Сняты 2026-09-10.
+                Array.Empty<string>()),
         },
         // Prompts — статические каталоги секций промпта (OmO/онбординг/голос/команды).
         // Точечные: ModelTier (PantheonTemplate), Llm.Claude.SubagentRunPassport
@@ -1804,6 +1775,19 @@ public class SubsystemBoundaryTests
         // стекам (Persona и Team), оба реализатора лежат в Models/ — без переноса
         // интерфейса в Core `Models/` целиком не уезжает.
         "ClaudeHomeServer.Services.Memory",
+        // Этап 5 (Turn): OnboardingPrompts переехал в Core, потому что Turn
+        // (PersonaLayerContributor) ссылается на него в слое персоны. Сам класс
+        // — stateless-промпт-материал (как Slugifier/PathNormalizer), но целиком
+        // под `Prompts/OnboardingPrompts.cs` — не один файл-примитив. Чтобы
+        // не раздувать CoreAllowedRootTypes, разрешаем namespace.
+        "ClaudeHomeServer.Services.Prompts",
+        // Этап 5, узкие швы Turn: DossierRecallRequest/DossierRecallResult — контрактные
+        // DTO пассивного recall паспортов. Запрос собирает Turn (контрибьютор промпта),
+        // исполняет Memory (PersonaMemoryService.BuildRecallAsync), владеет Dossiers.
+        // Держать форму данных внутри вертикали значило бы ссылку на Dossiers у двух
+        // посторонних слоёв ради типа, а не ради поведения. Поведение (DossierRecallService)
+        // осталось в вертикали и в Core НЕ едет.
+        "ClaudeHomeServer.Services.Dossiers",
         // Этап 5, шаг 6 (инверсия контрибьюторов промпта): IPromptSectionContributor +
         // PromptSection + PromptSectionContribution + PromptSessionContext +
         // extension для DI — контракт шины TurnEventBus, реализации едут в чужих
@@ -1849,6 +1833,10 @@ public class SubsystemBoundaryTests
         // (тоже Core) мог ссылаться на слот без обратной ссылки на Main. Парсер
         // `ModelTiers` остаётся в Main — он завязан на IConfiguration/JSON-стор.
         "ClaudeHomeServer.Services.ModelTier",
+        // Этап 5, узкие швы Turn: разбор путей, упомянутых в тексте хода (был
+        // `DossierRecallService.ExtractPathsFromText`, звал его только контрибьютор
+        // промпта). Stateless-регексп по образцу Slugifier.
+        "ClaudeHomeServer.Services.TextPathMentions",
     ];
 
     /// <summary>

@@ -14,7 +14,7 @@ public sealed class FileChangeAttributor
     // debounce'ат FS-событие на 400мс (см. TurnFileWatcher), запас — на медленные диски/CI.
     public static readonly TimeSpan AttributionWindow = TimeSpan.FromSeconds(15);
 
-    // OrdinalIgnoreCase — как в FileService.SafeJoin: единообразное сравнение путей
+    // OrdinalIgnoreCase — как в SafePath.Join: единообразное сравнение путей
     // независимо от регистрочувствительности ФС хоста (Windows-разработка / Linux CI)
     private readonly ConcurrentDictionary<string, (string SessionId, DateTimeOffset At)> _claims =
         new(StringComparer.OrdinalIgnoreCase);
@@ -52,7 +52,7 @@ public sealed class FileChangeAttributor
     }
 
     // Регистр не в git-репо (нет .git) сравнивать не с чем — нормализация просто схлопывает
-    // "." и ".." сегменты; сравнение по OrdinalIgnoreCase (как в FileService.SafeJoin) —
+    // "." и ".." сегменты; сравнение по OrdinalIgnoreCase (как в SafePath.Join) —
     // единообразно для Windows-разработки и Linux CI, а не по фактической ФС хоста.
     private static string NormalizePath(string path)
     {

@@ -31,7 +31,7 @@ public static class AttachmentInliner
         {
             try
             {
-                var fullPath = FileService.SafeJoin(rootPath, relativePath);
+                var fullPath = SafePath.Join(rootPath, relativePath);
                 if (!File.Exists(fullPath)) continue;
 
                 var info = new FileInfo(fullPath);

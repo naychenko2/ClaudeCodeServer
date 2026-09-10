@@ -2042,7 +2042,7 @@ public class ClaudeSession : ILlmSessionAdapter
         {
             try
             {
-                var full = FileService.SafeJoin(_rootPath, rel);
+                var full = SafePath.Join(_rootPath, rel);
                 if (!File.Exists(full)) continue;
                 var bytes = File.ReadAllBytes(full);
                 if (bytes.Length == 0 || bytes.Length > 8 * 1024 * 1024) continue;
@@ -4421,8 +4421,8 @@ public class ClaudeSession : ILlmSessionAdapter
     {
         if (Path.IsPathRooted(configured)) return configured;
         if (!string.IsNullOrEmpty(serverContentRoot))
-            return FileService.SafeJoin(serverContentRoot, configured);
-        return FileService.SafeJoin(projectRoot, configured);
+            return SafePath.Join(serverContentRoot, configured);
+        return SafePath.Join(projectRoot, configured);
     }
 
     // Резолв карты BareMode с приоритетом проектного файла: если в проекте чата есть

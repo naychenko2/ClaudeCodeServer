@@ -67,11 +67,18 @@ public class TeamWaveService
     // поэтому «кто закрывает волну» решается под этим локом, а не проверкой состояния на глаз.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> _waveLocks = new();
 
-    // Тестовое прерывание: подменить intake на мок и проверить факт вызова
+    // Тестовое прерывание: подменить intake на фейк и проверить факт вызова
     // InterruptTurn (и порядок «прервать → дождаться → пометить»). В проде всегда null
-    // и идёт через _sessions.
+    // и идёт через _sessions. Через свойство Intake ходят ВСЕ три точки прерывания
+    // (снятие под-задачи, перезапуск задачи, остановка волны) — шов, покрывающий один
+    // путь из трёх, сторожил бы треть инварианта (находка фикс-волны 4).
     internal ITeamTurnIntake? IntakeForTestOverride { get; set; }
     private ITeamTurnIntake Intake => IntakeForTestOverride ?? _intake;
+
+    // Потолок ожидания простоя исполнителя после InterruptTurn. Поле, а не литерал в трёх
+    // местах: тесты ставят миллисекунды, иначе каждый кейс «статус так и не ушёл» стоил бы
+    // десять секунд прогона (фикс-волна 4 team-blocker-honest).
+    internal TimeSpan ExecutorIdleTimeout { get; set; } = TimeSpan.FromSeconds(10);
 
     public TeamWaveService(SessionManager sessions, TaskManager tasks, IProjectManager projects,
         ISessionBroadcaster broadcaster, ILogger<TeamWaveService> log,
@@ -410,7 +417,7 @@ public class TeamWaveService
         if (task.LinkedSessionId is { } linkedId && IsExecutorBusy(task))
         {
             Intake.InterruptTurn(linkedId);
-            await WaitExecutorIdleAsync(() => IsExecutorBusy(task), TimeSpan.FromSeconds(10));
+            await WaitExecutorIdleAsync(() => IsExecutorBusy(task), $"снятие под-задачи {taskId}");
         }
         // Деградация дефекта: снятие волной штаба закрывает карточку без отдельной проверки —
         // Outcome=ClosedWithoutCheck снимает гейт DefectRules.EnsureVerificationOnClose
@@ -788,15 +795,26 @@ public class TeamWaveService
     // Дождаться, пока чат-исполнитель перестанет числиться занятым после Interrupt:
     // статус убирается асинхронно (реанимация зависшего / финализация убитого прогона),
     // а перевыдача сразу после стопа упиралась бы в гейт «по задаче уже работает сессия».
-    // Не дождались — не страшно: ExecuteAsync честно откажет своим текстом, он уйдёт человеку.
-    private static async Task WaitExecutorIdleAsync(Func<bool> busy, TimeSpan timeout)
+    // Вернёт false, если исполнитель не встал за ExecutorIdleTimeout. Молчать в этом
+    // случае нельзя (фикс-волна 4 team-blocker-honest): именно тогда «исполнитель получит
+    // отбой» снова становится неправдой — штаб идёт дальше, а ход ещё правит общее дерево,
+    // и без записи в лог узнать об этом неоткуда.
+    private async Task<bool> WaitExecutorIdleAsync(Func<bool> busy, string what)
     {
-        var deadline = DateTime.UtcNow + timeout;
+        var deadline = DateTime.UtcNow + ExecutorIdleTimeout;
         while (busy())
         {
-            if (DateTime.UtcNow >= deadline) return;
+            if (DateTime.UtcNow >= deadline)
+            {
+                _log.LogWarning(
+                    "Исполнитель не встал за {Timeout} после прерывания ({What}) — идём дальше, " +
+                    "ход может ещё править файлы общего worktree",
+                    ExecutorIdleTimeout, what);
+                return false;
+            }
             await Task.Delay(TimeSpan.FromMilliseconds(200));
         }
+        return true;
     }
 
     // Перезапуск одной под-задачи — строка задачи в поповере (этап 3). Тот же путь перевыдачи,
@@ -834,8 +852,8 @@ public class TeamWaveService
             // живой зависший прогон убивается — иначе перевыдача упрётся в гейт задачи
             if (IsExecutorBusy(task) && task.LinkedSessionId is { } linkedId)
             {
-                _intake.InterruptTurn(linkedId);
-                await WaitExecutorIdleAsync(() => IsExecutorBusy(task), TimeSpan.FromSeconds(10));
+                Intake.InterruptTurn(linkedId);
+                await WaitExecutorIdleAsync(() => IsExecutorBusy(task), $"перезапуск задачи {taskId}");
             }
 
             // Перепроверка перед перевыдачей (гонка ревью этапа 3): исполнитель мог
@@ -911,8 +929,8 @@ public class TeamWaveService
             foreach (var s in undone)
             {
                 if (_tasks.GetById(s.TaskId!) is not { } t || !IsExecutorBusy(t)) continue;
-                _intake.InterruptTurn(t.LinkedSessionId!);
-                await WaitExecutorIdleAsync(() => ExecutorBusyById(t.Id), TimeSpan.FromSeconds(10));
+                Intake.InterruptTurn(t.LinkedSessionId!);
+                await WaitExecutorIdleAsync(() => ExecutorBusyById(t.Id), $"перезапуск волны, задача {t.Id}");
             }
 
             var reissued = 0;

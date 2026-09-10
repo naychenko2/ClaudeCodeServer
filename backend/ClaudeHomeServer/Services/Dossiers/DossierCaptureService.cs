@@ -43,7 +43,7 @@ public sealed class DossierCaptureService : BackgroundService
     private readonly ISessionMessageObserver _sessionObserver;
     private readonly IProjectManager _projects;
     private readonly ITaskLookup _tasks;
-    private readonly FileService _files;
+    private readonly ICommitLogReader _files;
     private readonly IGitRefSnapshotStore _gitSnapshots;
     private readonly IGitCommitInspector _gitInspect;
     private readonly DossierStore _store;
@@ -56,7 +56,7 @@ public sealed class DossierCaptureService : BackgroundService
 
     public DossierCaptureService(ISessionDirectory sessions, ISessionMessageObserver sessionObserver,
         IProjectManager projects, ITaskLookup tasks,
-        FileService files, IGitRefSnapshotStore gitSnapshots, IGitCommitInspector gitInspect,
+        ICommitLogReader files, IGitRefSnapshotStore gitSnapshots, IGitCommitInspector gitInspect,
         DossierStore store, DossierCaptureState state,
         ICheapTextRunner cheap, ICodeGraphInspector codeGraph,
         InstanceSecretsProvider secrets, IConfiguration config, ILogger<DossierCaptureService> log)

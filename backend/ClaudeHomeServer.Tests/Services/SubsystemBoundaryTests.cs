@@ -495,6 +495,15 @@ public class SubsystemBoundaryTests
                     .Concat(new[]
                     {
                         "ClaudeHomeServer.Services.Dossiers",
+                        // Префикс Llm ЖИВОЙ, но не из-за `ICheapTextRunner` — тот уехал
+                        // в Core (Этап 3) и покрывается `IsCoreAssembly`. Держит его
+                        // ровно один тип: `Services.Llm.TranscriptMigrator` (статика
+                        // `IsSafeSessionId` в DossierCaptureService.cs:187,199) — это
+                        // настоящая связь «вертикаль → вертикаль». В волне 2 НЕ резалась
+                        // по прямому запрету постановки («Services/Llm не трогать: её
+                        // ведёт соседняя линия»). Волне 3: примитив просится в спину
+                        // по образцу `TranscriptRoots`/`SafePath` — это чистая
+                        // валидация идентификатора, к домену Llm отношения не имеет.
                         "ClaudeHomeServer.Services.Llm",
                     })
                     .ToArray(),
@@ -502,7 +511,6 @@ public class SubsystemBoundaryTests
                 {
                     "ClaudeHomeServer.Services.SessionManager",
                     "ClaudeHomeServer.Services.ProjectManager",
-                    "ClaudeHomeServer.Services.FileService",
                     "ClaudeHomeServer.Services.UserStore",
                     "ClaudeHomeServer.Services.FeatureFlagService",
                     // === Этап 5, волна 2 (разрез Dossiers↔Git/CodeGraph/Tasks/Knowledge/Memory):

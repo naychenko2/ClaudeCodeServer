@@ -5,7 +5,6 @@ using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Execution;
-using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Prompts;
 using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Services.Turn;
@@ -621,7 +620,7 @@ public class ClaudeSession : ILlmSessionAdapter
     // инжектится тем же путём из appsettings; пусто — без glif
     private readonly string? _glifMcpToken;
     private readonly SkillsService? _skills;
-    private readonly WorkspaceKnowledgeStore? _wkStore;
+    private readonly IWorkspaceDatasetLookup? _wkStore;
     // Провайдер правил разрешений проекта — резолвим каждый запрос (правила могут меняться)
     private readonly Func<IReadOnlyList<PermissionRule>>? _permissionRules;
     private readonly TasksMcpContext? _tasksMcp;
@@ -720,7 +719,7 @@ public class ClaudeSession : ILlmSessionAdapter
 
     public ClaudeSession(Session info, LlmSessionContext context,
         string? mcpConfigPath = null, SkillsService? skills = null,
-        WorkspaceKnowledgeStore? workspaceStore = null, string[]? disallowedTools = null,
+        IWorkspaceDatasetLookup? workspaceStore = null, string[]? disallowedTools = null,
         LlmProviderRegistry? providers = null,
         ClaudeSubscriptionPool? subscriptionPool = null,
         FileWatcherOptions? fileWatcherOptions = null,
@@ -2632,8 +2631,8 @@ public class ClaudeSession : ILlmSessionAdapter
         }
 
         // MCP-конфиг: создаём каждый ход с актуальным dataset id (мог появиться после создания сессии)
-        var currentWk = _wkStore?.GetByPath(_rootPath);
-        var currentDatasetId = currentWk?.DifyDatasetId;
+        var currentWk = _wkStore?.ForRoot(_rootPath);
+        var currentDatasetId = currentWk?.DatasetId;
         var (turnMcpPath, mcpServerKeys, mcpServerNames) = BuildTurnMcpConfig(currentDatasetId, personaAgents);
         // Секции промпта про MCP-серверы вешаются на ФАКТ доставки сервера в конфиг ЭТОГО хода,
         // а не на «контекст сервера есть у сессии»: TrimMcpServers/KeepMcpServers гасят сервер
@@ -5552,7 +5551,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 catch (InvalidOperationException) { /* непереводимый корень — сравниваем как есть */ }
             }
 
-            if (WorkspaceKnowledgeStore.NormalizePath(cwd) == WorkspaceKnowledgeStore.NormalizePath(expected))
+            if (PathNormalizer.NormalizePath(cwd) == PathNormalizer.NormalizePath(expected))
                 return null;
 
             var trimmed = cwd.TrimEnd('/', '\\');

@@ -1,5 +1,4 @@
 using ClaudeHomeServer.Models;
-using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Skills;
 
 namespace ClaudeHomeServer.Services.Llm;
@@ -23,7 +22,7 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
     private readonly string? _glifMcpToken;
     private readonly string[] _disallowedTools;
     private readonly SkillsService _skills;
-    private readonly WorkspaceKnowledgeStore _workspaceStore;
+    private readonly IWorkspaceDatasetLookup _workspaceStore;
     private readonly LlmProviderRegistry _providers;
     private readonly ClaudeSubscriptionPool _subscriptionPool;
     private readonly FileWatcherOptions _fileWatcherOptions;
@@ -66,7 +65,7 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
     private readonly ILocalEndpointProbe? _localProbe;
 
     public LlmSessionAdapterFactory(IConfiguration config, SkillsService skills,
-        WorkspaceKnowledgeStore workspaceStore, LlmProviderRegistry providers,
+        IWorkspaceDatasetLookup workspaceStore, LlmProviderRegistry providers,
         ClaudeSubscriptionPool subscriptionPool, ModelAssignmentResolver? assignments = null,
         FileChangeAttributor? fileChangeAttributor = null,
         FallbackSettingsStore? fallbackSettings = null,

@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
@@ -83,7 +84,7 @@ public class LlmSessionAdapterFactoryTests
             var providers = new LlmProviderRegistry(config);
             var pool = new ClaudeSubscriptionPool(config);
             var factory = new LlmSessionAdapterFactory(config, new SkillsService(),
-                new WorkspaceKnowledgeStore(config), providers, pool);
+                new WorkspaceDatasetLookup(new WorkspaceKnowledgeStore(config)), providers, pool);
             var session = new Session { Model = "opus[1m]", Provider = "glm" };
             var context = new LlmSessionContext(tempDir, _ => Task.CompletedTask,
                 RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt, PermissionRules: null, TasksMcp: null);
@@ -117,7 +118,7 @@ public class LlmSessionAdapterFactoryTests
             var providers = new LlmProviderRegistry(config);
             var pool = new ClaudeSubscriptionPool(config);
             var factory = new LlmSessionAdapterFactory(config, new SkillsService(),
-                new WorkspaceKnowledgeStore(config), providers, pool);
+                new WorkspaceDatasetLookup(new WorkspaceKnowledgeStore(config)), providers, pool);
             var session = new Session { Model = "glm-5.2", Provider = "glm" };
             var context = new LlmSessionContext(tempDir, _ => Task.CompletedTask,
                 RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt, PermissionRules: null, TasksMcp: null);

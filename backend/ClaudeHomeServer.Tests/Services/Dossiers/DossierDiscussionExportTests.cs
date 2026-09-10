@@ -161,7 +161,7 @@ public class DossierDiscussionExportTests : IDisposable
         var llmProviders = new ClaudeHomeServer.Services.Llm.LlmProviderRegistry(_config);
         var subPool = new ClaudeSubscriptionPool(_config);
         var adapters = new ClaudeHomeServer.Services.Llm.LlmSessionAdapterFactory(
-            _config, new SkillsService(), new WorkspaceKnowledgeStore(_config), llmProviders, subPool);
+            _config, new SkillsService(), new WorkspaceDatasetLookup(new WorkspaceKnowledgeStore(_config)), llmProviders, subPool);
         var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, _config);
         var usage = new UsageService(_config);
         var userStore = new UserStore(_config,

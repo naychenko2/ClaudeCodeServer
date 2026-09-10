@@ -214,6 +214,11 @@ builder.Services.AddSingleton<IProjectSummaryLookup, ProjectSummaryLookup>();
 // PersonaManager — узкий контракт на голос персоны. Реализация — тонкая обёртка
 // в Main (`Services/Composition/PersonaVoiceLookup`), контракт живёт в Core.
 builder.Services.AddSingleton<IPersonaVoiceLookup, PersonaVoiceLookup>();
+// Шов для Llm (Этап 5, волна 3): вместо прямой зависимости ClaudeSession/
+// LlmSessionAdapterFactory от WorkspaceKnowledgeStore — узкий контракт на чтение
+// знаний рабочего дерева (dataset id + теги документов), нужное ходу. Реализация —
+// тонкая обёртка в Main (`Services/Composition/WorkspaceDatasetLookup`), контракт в Core.
+builder.Services.AddSingleton<IWorkspaceDatasetLookup, WorkspaceDatasetLookup>();
 // Швы для Docs/Changelog (Этап 5, ярус 1, волна A): вместо прямой зависимости
 // DocsIndexService/ChangelogService от FileService — узкие контракты на файловые
 // операции и чтение git-лога. Реализации — тонкие обёртки в `Services/Composition`,

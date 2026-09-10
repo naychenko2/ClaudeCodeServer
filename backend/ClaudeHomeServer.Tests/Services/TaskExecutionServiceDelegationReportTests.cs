@@ -2,6 +2,7 @@ using System.Reflection;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Tasks;
@@ -83,7 +84,7 @@ public class TaskExecutionServiceDelegationReportTests : IDisposable
 
         var llmProviders = new LlmProviderRegistry(config);
         var subPool = new ClaudeSubscriptionPool(config);
-        var adapters = new LlmSessionAdapterFactory(config, new SkillsService(), wkStore, llmProviders, subPool);
+        var adapters = new LlmSessionAdapterFactory(config, new SkillsService(), new WorkspaceDatasetLookup(wkStore), llmProviders, subPool);
         var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, config);
         var usage = new UsageService(config);
         var server = new Mock<Microsoft.AspNetCore.Hosting.Server.IServer>();

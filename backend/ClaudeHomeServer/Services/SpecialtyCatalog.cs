@@ -3,17 +3,6 @@ using ClaudeHomeServer.Models;
 
 namespace ClaudeHomeServer.Services;
 
-// Шаблон прав и инструментов персоны по специальности: что подставляется в поля
-// Access/Tools/DisallowedTools при выборе специальности.
-// После подстановки поля живут своей жизнью — источник правды у персоны, шаблоны
-// ничего не ограничивают (жёсткого потолка нет).
-// Tools: null — все возможности (tasks+notes+web), как у Persona.Tools=null.
-// DisallowedTools имеет смысл только при Access == Custom.
-public sealed record SpecialtyTemplate(
-    PersonaAccess Access,
-    IReadOnlyList<string>? Tools,
-    IReadOnlyList<string>? DisallowedTools);
-
 // Каталог специальностей персоны: машинный ключ (wire-значение), подпись для UI,
 // семейство исполнителя и дефолтный шаблон прав. Единственный источник подписей —
 // все потребители (API, планировщик команды) берут их отсюда.

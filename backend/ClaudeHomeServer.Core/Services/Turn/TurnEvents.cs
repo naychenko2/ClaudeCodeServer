@@ -13,6 +13,12 @@ namespace ClaudeHomeServer.Services.Turn;
 // (`Core/Services/Turn/IPromptSectionContributor.cs`) — контрибьюторы в чужих
 // вертикалях (CodeGraph, Notes, …) ссылаются на Core-DTO, импорт Turn не нужен.
 
+// Этап 5, шаг 7: файл TurnEvents.cs целиком перенесён из вертикали Turn в Core.
+// Событие шины — DTO между издателем и подписчиками разных вертикалей; держать его
+// внутри одной вертикали значит заставлять всех остальных зависеть от неё.
+// Контракты шины (ITurnEventBus/ITurnEvent/ITurnNotification/ITurnFilter/TurnContext)
+// уже лежат в Core — события просто отстали от своего контракта.
+
 // prompt/assembling — Filter: цепочка подписчиков собирает секции системного промпта.
 // Класс, а не record: Sections — мутируемый вход/выход waterfall (подписчик добавляет свою
 // секцию или правит чужую), TurnText — текст хода для recall-провайдеров, Session —
@@ -95,7 +101,7 @@ public sealed record SubagentRunCompleted(TurnContext Turn, SubagentRunPassport 
 // (TurnErrorClassifier) у неуспешного исхода; строки, а не enum'ы — чтобы шина не
 // зависела от внутренних типов слоя LLM.
 //
-// Этап 1: Passport добавляется, чтобы подписчик TurnRunLog заменил прямой finally-
+// Этап 1: Passport добавляется, чтобы подписчик TurnRunLog заменил прямый finally-
 // вызов в FallbackLlmSessionAdapter единственной публикацией на шине и сохранил
 // контракт «ровно один источник записи». CompactOutcome даёт подписчикам, которым
 // достаточно исхода, не зависеть от типа TurnRunPassport.

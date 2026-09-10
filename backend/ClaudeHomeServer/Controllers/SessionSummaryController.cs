@@ -27,6 +27,15 @@ public class SessionSummaryController(
         catch (KeyNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return Forbid(); }
         catch (SummaryInProgressException ex) { return Conflict(new { error = ex.Message }); }
+        // Подсистема заметок выключена — итог сохранять некуда. 503 + reason, а не 502:
+        // 502 означает «апстрим сбойнул, повтори», а здесь повторять бессмысленно, пока
+        // подсистему не включат. Форма ответа общая с BriefingController — одна причина
+        // отказа обязана давать один наблюдаемый контракт.
+        catch (SummaryUnavailableException ex)
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable,
+                new { error = ex.Message, reason = "notes_disabled" });
+        }
         catch (SummaryGenerationException ex) { return StatusCode(502, new { error = ex.Message }); }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }

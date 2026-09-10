@@ -35,8 +35,9 @@ namespace ClaudeHomeServer.Services;
 // Подсистема Notes выключена — бриф по конструкции пишется в дневниковую заметку, писать
 // некуда. Отдельный тип вместо InvalidOperationException нужен границе: BriefingController
 // ловит его и отдаёт понятный отказ 503, иначе бросок доезжал до UnhandledExceptionHandler
-// → 500 + LogError со стектрейсом. Приём тот же, что у SummaryGenerationException → 502
-// в «Итоге сессии» (SessionSummaryService).
+// → 500 + LogError со стектрейсом. Приём и наблюдаемый контракт те же, что у
+// SummaryUnavailableException → 503 + reason="notes_disabled" в «Итоге сессии»
+// (SessionSummaryService).
 public sealed class BriefingUnavailableException(string message) : Exception(message);
 
 public sealed class DailyBriefingService

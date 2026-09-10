@@ -13,6 +13,13 @@ public sealed class SummaryInProgressException() : Exception("Итог по эт
 // Ошибка генерации конспекта (LLM упал/таймаут) → 502 у контроллера
 public sealed class SummaryGenerationException(string message) : Exception(message);
 
+// Подсистема Notes выключена — конспект сохранять некуда. Отдельный тип, а не
+// SummaryGenerationException: это состояние инстанса, а не сбой обработки, и клиенту
+// повторять запрос бессмысленно. Контроллер отдаёт за него 503 + reason="notes_disabled" —
+// ровно тот же наблюдаемый контракт, что у BriefingUnavailableException в «Утреннем брифе»
+// (одна причина — один код отказа).
+public sealed class SummaryUnavailableException(string message) : Exception(message);
+
 // «Итог сессии»: по явному запросу пользователя собирает транскрипт сессии,
 // one-shot вызовом claude --print строит конспект и сохраняет его заметкой
 // (проектная сессия → notes/Сессии проекта, чат вне проекта → личный vault).
@@ -52,7 +59,8 @@ public class SessionSummaryService(
             // ДО платного cheap.RunAsync: иначе пользователь платит за LLM-конспект,
             // который гарантированно будет выброшен (эталон — DailyBriefingService).
             if (notes is null)
-                throw new SummaryGenerationException("Подсистема Notes отключена — сохранение итога недоступно");
+                throw new SummaryUnavailableException(
+                    "Итог сессии недоступен: подсистема «Заметки» отключена");
 
             var history = await sessions.GetHistoryAsync(sessionId);
             var transcript = BuildTranscript(history, TranscriptBudget);

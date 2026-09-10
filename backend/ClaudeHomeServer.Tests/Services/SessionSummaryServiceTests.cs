@@ -109,7 +109,7 @@ public class SessionSummaryServiceTests
     // который некуда сохранить, и тот гарантированно выбрасывается (эталон —
     // DailyBriefingService.BuildAndWriteAsync).
     [Fact]
-    public async Task Summarize_NotesDisabled_LlmНеВызывается_502Возвращается()
+    public async Task Summarize_NotesDisabled_LlmНеВызывается_503Возвращается()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), "summary_gate_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDir);
@@ -126,9 +126,12 @@ public class SessionSummaryServiceTests
 
             var act = () => sut.SummarizeAsync(ctx.OwnerId, chat.Id, CancellationToken.None);
 
-            // SummaryGenerationException → контроллер мапит в 502 (см. SessionSummaryController)
-            await act.Should().ThrowExactlyAsync<SummaryGenerationException>()
-                .WithMessage("*Notes отключена*");
+            // SummaryUnavailableException → контроллер мапит в 503 + reason="notes_disabled"
+            // (см. SessionSummaryController) — тот же контракт, что у «Утреннего брифа».
+            // Тип важен: SummaryGenerationException ушёл бы в 502 «повтори», а повторять
+            // при выключенной подсистеме бессмысленно.
+            await act.Should().ThrowExactlyAsync<SummaryUnavailableException>()
+                .WithMessage("*«Заметки» отключена*");
             runner.Calls.Should().Be(0,
                 "при выключенной Notes платный LLM-вызов не должен случаться — " +
                 "конспект некуда сохранить, и это известно ещё до первого токена");
@@ -136,7 +139,7 @@ public class SessionSummaryServiceTests
             var second = () => sut.SummarizeAsync(ctx.OwnerId, chat.Id, CancellationToken.None);
             // второй вызов должен дойти до той же проверки (а не 409 inFlight),
             // поэтому кидаем и его — runner.Calls всё ещё 0
-            await second.Should().ThrowExactlyAsync<SummaryGenerationException>();
+            await second.Should().ThrowExactlyAsync<SummaryUnavailableException>();
             runner.Calls.Should().Be(0);
         }
         finally

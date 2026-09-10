@@ -40,7 +40,7 @@ public sealed class CodeGraphToolset(
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/codegraph/{sessionId}. Константа —
     // единственная точка правды для URL конфига хода (ClaudeSession)
-    public const string ServerName = "codegraph";
+    public const string ServerName = McpEndpoints.CodeGraphName;
 
     public string Name => ServerName;
     public string Version => "1.0.0";
@@ -111,7 +111,7 @@ public sealed class CodeGraphToolset(
 
     /// <summary>URL эндпоинта в конфиге хода: базовый адрес + маршрут тулсета с хвостом.</summary>
     public static string EndpointFor(string apiUrl, string sessionId) =>
-        McpHttpTransport.EndpointFor(apiUrl, ServerName) + "/" + RouteTail(sessionId);
+        McpEndpoints.EndpointFor(apiUrl, ServerName) + "/" + RouteTail(sessionId);
 
     // Один сегмент — id сессии; форма как у resumeSessionId-белого списка (хвост строим мы,
     // но проверяем форму всё равно — он приезжает из URL)

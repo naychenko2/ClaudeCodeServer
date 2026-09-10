@@ -31,7 +31,7 @@ public sealed class NotificationsToolset(
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/notifications/{sessionId}. Константа —
     // единственная точка правды для URL конфига хода (ClaudeSession)
-    public const string ServerName = "notifications";
+    public const string ServerName = McpEndpoints.NotificationsName;
 
     // Ответы — как у stdio-ветки (JSON.stringify): camelCase, кириллица без юникод-экранирования
     private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web)
@@ -129,7 +129,7 @@ public sealed class NotificationsToolset(
 
     /// <summary>URL эндпоинта в конфиге хода: базовый адрес + маршрут тулсета с хвостом.</summary>
     public static string EndpointFor(string apiUrl, string sessionId) =>
-        McpHttpTransport.EndpointFor(apiUrl, ServerName) + "/" + RouteTail(sessionId);
+        McpEndpoints.EndpointFor(apiUrl, ServerName) + "/" + RouteTail(sessionId);
 
     // Один сегмент — id сессии; форма как у resumeSessionId-белого списка (хвост строим мы,
     // но проверяем форму всё равно — он приезжает из URL)

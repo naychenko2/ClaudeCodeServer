@@ -46,8 +46,9 @@ public sealed class TasksToolset(
     ISessionBroadcaster broadcaster) : IMcpParameterizedToolset
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/tasks/{sessionId}. Константа —
-    // единственная точка правды для URL конфига хода (ClaudeSession)
-    public const string ServerName = "tasks";
+    // единственная точка правды для URL конфига хода (ClaudeSession); живёт в Core
+    // (см. McpEndpoints.TasksName), здесь — алиас для удобства вызывающих в Main.
+    public const string ServerName = McpEndpoints.TasksName;
 
     // Дефолтные колонки доски: у проекта без кастомных и у личных задач. Category — enum,
     // глобальный camelCase-конвертер отдаёт его как "todo"/"inProgress"/"done" (как stdio)
@@ -584,7 +585,7 @@ public sealed class TasksToolset(
 
     /// <summary>URL эндпоинта в конфиге хода: базовый адрес + маршрут тулсета с хвостом.</summary>
     public static string EndpointFor(string apiUrl, string sessionId) =>
-        McpHttpTransport.EndpointFor(apiUrl, ServerName) + "/" + RouteTail(sessionId);
+        McpEndpoints.EndpointFor(apiUrl, ServerName) + "/" + RouteTail(sessionId);
 
     // Один сегмент — id сессии; форма как у resumeSessionId-белого списка (хвост строим мы,
     // но проверяем форму всё равно — он приезжает из URL)

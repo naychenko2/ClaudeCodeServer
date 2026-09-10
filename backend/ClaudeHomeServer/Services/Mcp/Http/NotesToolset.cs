@@ -36,7 +36,7 @@ public sealed class NotesToolset(
     ISessionBroadcaster broadcaster) : IMcpParameterizedToolset
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/notes/{sessionId}
-    public const string ServerName = "notes";
+    public const string ServerName = McpEndpoints.NotesName;
 
     // Ответы — как у stdio-ветки (JSON.stringify): camelCase, кириллица без экранирования
     private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web)
@@ -346,7 +346,7 @@ public sealed class NotesToolset(
 
     /// <summary>URL эндпоинта в конфиге хода: базовый адрес + маршрут тулсета с хвостом.</summary>
     public static string EndpointFor(string apiUrl, string sessionId) =>
-        McpHttpTransport.EndpointFor(apiUrl, ServerName) + "/" + RouteTail(sessionId);
+        McpEndpoints.EndpointFor(apiUrl, ServerName) + "/" + RouteTail(sessionId);
 
     private static bool TryParseRoute(string? route, out string sessionId)
     {

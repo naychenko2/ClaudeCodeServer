@@ -77,7 +77,7 @@ public sealed partial class WorkspaceToolset(
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/wsp/{sessionId}. Константа —
     // единственная точка правды для URL конфига хода (ClaudeSession)
-    public const string ServerName = "wsp";
+    public const string ServerName = McpEndpoints.WorkspaceName;
 
     // Ограничение выдачи files_tree — дерево большого проекта не должно раздувать контекст
     internal const int TreeMaxEntries = 500;
@@ -171,7 +171,7 @@ public sealed partial class WorkspaceToolset(
 
     /// <summary>URL эндпоинта в конфиге хода: базовый адрес + маршрут тулсета с хвостом.</summary>
     public static string EndpointFor(string apiUrl, string sessionId) =>
-        McpHttpTransport.EndpointFor(apiUrl, ServerName) + "/" + RouteTail(sessionId);
+        McpEndpoints.EndpointFor(apiUrl, ServerName) + "/" + RouteTail(sessionId);
 
     // Один сегмент — id сессии; форма как у resumeSessionId-белого списка (хвост строим мы,
     // но проверяем форму всё равно — он приезжает из URL)

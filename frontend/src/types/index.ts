@@ -464,6 +464,14 @@ export interface Task {
   verification?: TaskVerification | null;
   // Исход дефекта: 'closedWithoutCheck' — внутренний путь закрытия без проверки
   outcome?: DefectOutcome | null;
+  // Фикс-волна 4 team-blocker-honest: метки от терминального отказа хода исполнителя
+  // (см. ExecutorStopClassifier). executorStoppedAt != null — карточка ждёт человека.
+  executorStoppedAt?: string;
+  executorStopReason?: string;
+  // Метка снятия человеком по карточке блокера (DropSubtaskAsync): если стоит —
+  // карточка закрыта человеком, правка статуса от агента отвергается. Человек может
+  // снять метку, перетащив задачу обратно в Todo/InProgress.
+  droppedByHumanAt?: string;
   // UI-проекция повторяющейся задачи в календаре (не приходит с бэка):
   // occurrenceOf — id реального экземпляра серии, который надо открыть по клику;
   // virtual — признак вычисленного будущего повтора (реально существует только один экземпляр)

@@ -353,12 +353,15 @@ public sealed class TasksToolset(
                 TaskItem updated;
                 try
                 {
-                    updated = tasks.Update(id, req, effectiveColumn)
+                    // Агентский путь (MCP): isAgentCall=true — гард против затирания
+                    // DroppedByHumanAt выдаёт внятный 400 вместо молчаливого 200 OK
+                    // (фикс-волна 4 team-blocker-honest)
+                    updated = tasks.Update(id, req, effectiveColumn, isAgentCall: true)
                         ?? throw new InvalidOperationException($"Задача {id} не найдена");
                 }
                 catch (InvalidOperationException ex)
                 {
-                    // 400-семантика: гейт DefectRules.EnsureVerificationOnClose/EnsureReproOnReview —
+                    // 400-семантика: гейт DefectRules + защита от затирания снятой задачи —
                     // тот же текст, что в REST-контроллере; catch же ловит и наш «не найдена»
                     // с подставленным id (см. ?? throw выше)
                     return Deny(ex.Message);
@@ -413,7 +416,10 @@ public sealed class TasksToolset(
                         ResultMarkdown: arguments.ContainsKey("resultMarkdown") ? StringArg(arguments, "resultMarkdown") : null,
                         LinkedFiles: arguments.ContainsKey("linkedFiles") ? LabelsArg(arguments, "linkedFiles") : null,
                         Verification: verificationEffective,
-                        Outcome: outcomeArg))
+                        Outcome: outcomeArg),
+                        // Агентский путь (MCP): защита от затирания снятой задачи —
+                        // tasks_complete на снятой задаче вернёт 400 вместо молчаливого 200 OK
+                        isAgentCall: true)
                         ?? throw new InvalidOperationException($"Задача {id} не найдена");
                 }
                 catch (InvalidOperationException ex)

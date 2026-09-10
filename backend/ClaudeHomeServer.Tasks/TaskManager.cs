@@ -189,7 +189,14 @@ public class TaskManager
     // иначе — текущая). Раньше оба признака брались из запроса, и обход сводился к
     // паре «kind: "task"» + «status: "done»» либо «repro: {}» без columnId на карточке,
     // уже стоящей в review-колонке.
-    public TaskItem? Update(string id, UpdateTaskRequest req, BoardColumn? effectiveColumn = null)
+    // isAgentCall (фикс-волна 4 team-blocker-honest): true для путей, которые приходят
+    // ОТ персоны-исполнителя (MCP tools_update/tasks_complete/tags_apply через
+    // TasksToolset/WorkspaceToolset). false для HTTP PUT — это человек. Используется
+    // ТОЛЬКО гардом против затирания снятой задачи: человек вправе вернуть снятую задачу
+    // в работу и снять пометку, а агенту мы обязаны отказать внятно — иначе «200 OK и
+    // ничего не изменилось» (находка фикс-волны 4, мутация в TaskManagerTests).
+    public TaskItem? Update(string id, UpdateTaskRequest req, BoardColumn? effectiveColumn = null,
+        bool isAgentCall = false)
     {
         var task = _tasks.GetValueOrDefault(id);
         if (task is null) return null;
@@ -209,22 +216,46 @@ public class TaskManager
         // кейс переключения, отдельный коммит на запрет менять вид не заказывался).
         // Бросает InvalidOperationException — вызывающая сторона (контроллер) превращает в 400.
 
-        // Защита от затирания (волна 1 team-blocker-honest, дефект f3965801): после снятия
+        // Защита от затирания (фикс-волна 4 team-blocker-honest, дефект f3965801): после снятия
         // человеком по карточке блокера поздний tasks_complete не должен переписывать
         // Status/Outcome — иначе задача выглядит штатно выполненной с отчётом исполнителя.
-        // Гонка неустранима (исполнитель мог писать отчёт в момент снятия), поэтому
-        // ResultMarkdown исполнителя дописывается к пометке снятия отдельной строкой,
-        // а Status/Outcome/Verification остаются от штаба. Поле — маркер снятия; null —
-        // обычная задача, никакой защиты.
+        // Гард применяется ТОЛЬКО к агентскому пути (isAgentCall=true): человек вправе
+        // вернуть снятую задачу в работу — перевод из Done в Todo/InProgress снимает
+        // пометку DroppedByHumanAt и сохраняет новый статус штатно. На человеческом пути
+        // НЕ отказываем внятным 400, а на агентском — обязаны: иначе поздний tasks_complete
+        // «молча» глотал Status, а человек не понимал, почему 200 OK и ничего не поменялось
+        // (мутация в TaskManagerTests). Гонка неустранима (исполнитель мог писать отчёт в
+        // момент снятия), поэтому ResultMarkdown исполнителя дописывается к пометке снятия
+        // отдельной строкой, а Status/Outcome/Verification остаются от штаба. Поле — маркер
+        // снятия; null — обычная задача, никакой защиты.
+        bool humanReturnsToWork = false;
         if (task.DroppedByHumanAt is not null)
         {
-            req = req with
+            bool triesStatus = req.Status is not null;
+            bool triesOutcome = req.Outcome is not null;
+            bool triesVerification = req.Verification is not null;
+            if (isAgentCall && (triesStatus || triesOutcome || triesVerification))
+                throw new InvalidOperationException(
+                    $"Задача «{task.Title}» снята человеком: правка статуса/исхода/вердикта " +
+                    "заблокирована. Чтобы вернуть задачу в работу, перетащите её в нужную колонку в UI.");
+            // Человек возвращает задачу в работу (Status в Todo/InProgress) — снимаем
+            // пометку снятия и сохраняем новый статус штатно. Возврат В Done человеком
+            // оставляем редким: снятую задачу человек обычно снова делает активной,
+            // а закрыть руками — отдельный кейс, и пометка остаётся.
+            humanReturnsToWork = !isAgentCall
+                && triesStatus && req.Status != TaskItemStatus.Done;
+            if (humanReturnsToWork)
+                task.DroppedByHumanAt = null;
+            if (!humanReturnsToWork)
             {
-                Status = null,
-                Outcome = null,
-                Verification = null,
-                ResultMarkdown = AppendExecutorNote(task.ResultMarkdown, req.ResultMarkdown),
-            };
+                req = req with
+                {
+                    Status = null,
+                    Outcome = null,
+                    Verification = null,
+                    ResultMarkdown = AppendExecutorNote(task.ResultMarkdown, req.ResultMarkdown),
+                };
+            }
         }
 
         var effective = new TaskItem

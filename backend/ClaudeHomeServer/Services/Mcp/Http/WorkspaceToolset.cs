@@ -481,7 +481,11 @@ public sealed partial class WorkspaceToolset(
                 TaskItem? updatedTask;
                 try
                 {
-                    updatedTask = tasks.Update(entityId, new UpdateTaskRequest(Labels: mergedLabels));
+                    // Агентский путь (MCP): isAgentCall=true — гард против затирания
+                    // DroppedByHumanAt сработает при попытке изменить статус/исход/вердикт;
+                    // правка только меток обычно безобидна, но флаг держит поведение единым
+                    updatedTask = tasks.Update(entityId, new UpdateTaskRequest(Labels: mergedLabels),
+                        isAgentCall: true);
                 }
                 catch (InvalidOperationException ex)
                 {
@@ -558,7 +562,8 @@ public sealed partial class WorkspaceToolset(
                 TaskItem? updatedTask;
                 try
                 {
-                    updatedTask = tasks.Update(entityId, new UpdateTaskRequest(Labels: keptLabels));
+                    updatedTask = tasks.Update(entityId, new UpdateTaskRequest(Labels: keptLabels),
+                        isAgentCall: true);
                 }
                 catch (InvalidOperationException ex)
                 {

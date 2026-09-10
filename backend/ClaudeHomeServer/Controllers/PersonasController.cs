@@ -72,7 +72,7 @@ public class PersonasController(
     // Сессия-вызыватель MCP-вызова (заголовок ставит конфиг хода): по ней crud отличает
     // вызовы из чата (онбординг-предохранители) от рукотворного REST
     private string? CallerSessionId() =>
-        Request.Headers[DenyOnDelegatedTurnAttribute.CallerHeader].FirstOrDefault();
+        Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault();
 
     private Task Broadcast(string action, string? personaId = null) =>
         _hub.Clients.Group("user_" + UserId)

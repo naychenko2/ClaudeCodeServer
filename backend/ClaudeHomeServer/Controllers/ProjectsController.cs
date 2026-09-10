@@ -106,7 +106,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     // Персона-вызыватель MCP-инструмента (mcp/memory-server отдаёт свой MEMORY_PERSONA_ID
     // заголовком на каждый запрос) — пусто у обычного чата проекта без персоны и у фронта
     // (UI «Командного центра» этот заголовок не шлёт вовсе, поэтому ручное управление всегда
-    // разрешено). См. DenyOnDelegatedTurnAttribute.CallerHeader — тот же паттерн, свой заголовок:
+    // разрешено). См. McpEndpoints.CallerSessionHeader — тот же паттерн, свой заголовок:
     // персона — не сессия, а MEMORY_PERSONA_ID у сессии меняется (смена спикера в группе).
     private const string CallerPersonaHeader = "X-Caller-Persona-Id";
 

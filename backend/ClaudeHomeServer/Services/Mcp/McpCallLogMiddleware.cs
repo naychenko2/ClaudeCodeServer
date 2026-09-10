@@ -1,11 +1,10 @@
 using System.Diagnostics;
-using ClaudeHomeServer.Filters;
 
 namespace ClaudeHomeServer.Services.Mcp;
 
 /// <summary>
 /// Логирование вызовов продуктовых MCP-серверов к бэкенду. Запрос узнаётся по заголовку
-/// <see cref="DenyOnDelegatedTurnAttribute.CallerHeader"/> (его шлёт общий api() каждого сервера);
+/// <see cref="McpEndpoints.CallerSessionHeader"/> (его шлёт общий api() каждого сервера);
 /// имя инструмента — по <see cref="ToolHeader"/>. Обычные запросы фронта проходят мимо.
 ///
 /// Успешные вызовы пишутся в Debug (в норме их много, шум в логе не нужен), отказы — в Warning
@@ -22,7 +21,7 @@ public static class McpCallLogMiddleware
 
     public static IApplicationBuilder UseMcpCallLog(this IApplicationBuilder app) =>
         app.UseWhen(
-            ctx => ctx.Request.Headers.ContainsKey(DenyOnDelegatedTurnAttribute.CallerHeader),
+            ctx => ctx.Request.Headers.ContainsKey(McpEndpoints.CallerSessionHeader),
             branch => branch.Use(Invoke));
 
     private static async Task Invoke(HttpContext ctx, RequestDelegate next)
@@ -55,7 +54,7 @@ public static class McpCallLogMiddleware
                 // имени делает McpCallLog — и только для таблицы диагностики: в тег метрики путь
                 // с GUID пускать нельзя (кардинальность + PII), там своё схлопывание.
                 var tool = ctx.Request.Headers[ToolHeader].FirstOrDefault() is { Length: > 0 } t ? t : null;
-                var sessionId = ctx.Request.Headers[DenyOnDelegatedTurnAttribute.CallerHeader].FirstOrDefault();
+                var sessionId = ctx.Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault();
                 var status = ctx.Items.ContainsKey(UnhandledErrorItemKey)
                     ? Math.Max(ctx.Response.StatusCode, 500)
                     : ctx.Response.StatusCode;

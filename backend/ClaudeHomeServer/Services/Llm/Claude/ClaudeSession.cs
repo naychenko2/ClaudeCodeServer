@@ -1125,7 +1125,7 @@ public class ClaudeSession : ILlmSessionAdapter
                         ["headers"] = new System.Text.Json.Nodes.JsonObject
                         {
                             ["Authorization"] = $"Bearer {tasksToken}",
-                            [Filters.DenyOnDelegatedTurnAttribute.CallerHeader] = Info.Id,
+                            [McpEndpoints.CallerSessionHeader] = Info.Id,
                         },
                         ["alwaysLoad"] = true,
                     }
@@ -1188,7 +1188,7 @@ public class ClaudeSession : ILlmSessionAdapter
                         ["headers"] = new System.Text.Json.Nodes.JsonObject
                         {
                             ["Authorization"] = $"Bearer {notesToken}",
-                            [Filters.DenyOnDelegatedTurnAttribute.CallerHeader] = Info.Id,
+                            [McpEndpoints.CallerSessionHeader] = Info.Id,
                         },
                         ["alwaysLoad"] = true,
                     }
@@ -1238,7 +1238,7 @@ public class ClaudeSession : ILlmSessionAdapter
                         ["headers"] = new System.Text.Json.Nodes.JsonObject
                         {
                             ["Authorization"] = $"Bearer {_widgetsMcp!.TokenFactory()}",
-                            [Filters.DenyOnDelegatedTurnAttribute.CallerHeader] = Info.Id,
+                            [McpEndpoints.CallerSessionHeader] = Info.Id,
                         },
                         ["alwaysLoad"] = true,
                     }
@@ -1270,7 +1270,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     ["headers"] = new System.Text.Json.Nodes.JsonObject
                     {
                         ["Authorization"] = $"Bearer {_watchMcp.TokenFactory()}",
-                        [Filters.DenyOnDelegatedTurnAttribute.CallerHeader] = Info.Id,
+                        [McpEndpoints.CallerSessionHeader] = Info.Id,
                     },
                     ["alwaysLoad"] = true,
                 };
@@ -1302,7 +1302,7 @@ public class ClaudeSession : ILlmSessionAdapter
                         ["headers"] = new System.Text.Json.Nodes.JsonObject
                         {
                             ["Authorization"] = $"Bearer {memoryToken}",
-                            [Filters.DenyOnDelegatedTurnAttribute.CallerHeader] = Info.Id,
+                            [McpEndpoints.CallerSessionHeader] = Info.Id,
                         },
                         ["alwaysLoad"] = true,
                     }
@@ -1376,7 +1376,7 @@ public class ClaudeSession : ILlmSessionAdapter
                         ["headers"] = new System.Text.Json.Nodes.JsonObject
                         {
                             ["Authorization"] = $"Bearer {personasToken}",
-                            [Filters.DenyOnDelegatedTurnAttribute.CallerHeader] = Info.Id,
+                            [McpEndpoints.CallerSessionHeader] = Info.Id,
                         },
                         ["alwaysLoad"] = true,
                     }
@@ -1457,7 +1457,7 @@ public class ClaudeSession : ILlmSessionAdapter
                         ["headers"] = new System.Text.Json.Nodes.JsonObject
                         {
                             ["Authorization"] = $"Bearer {wspToken}",
-                            [Filters.DenyOnDelegatedTurnAttribute.CallerHeader] = Info.Id,
+                            [McpEndpoints.CallerSessionHeader] = Info.Id,
                         },
                         ["alwaysLoad"] = true,
                     }
@@ -1518,7 +1518,7 @@ public class ClaudeSession : ILlmSessionAdapter
                         ["headers"] = new System.Text.Json.Nodes.JsonObject
                         {
                             ["Authorization"] = $"Bearer {notificationsToken}",
-                            [Filters.DenyOnDelegatedTurnAttribute.CallerHeader] = Info.Id,
+                            [McpEndpoints.CallerSessionHeader] = Info.Id,
                         },
                         ["alwaysLoad"] = true,
                     }
@@ -1559,7 +1559,7 @@ public class ClaudeSession : ILlmSessionAdapter
                         ["headers"] = new System.Text.Json.Nodes.JsonObject
                         {
                             ["Authorization"] = $"Bearer {codeGraphToken}",
-                            [Filters.DenyOnDelegatedTurnAttribute.CallerHeader] = Info.Id,
+                            [McpEndpoints.CallerSessionHeader] = Info.Id,
                         },
                         ["alwaysLoad"] = true,
                     }
@@ -1597,7 +1597,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     ["headers"] = new System.Text.Json.Nodes.JsonObject
                     {
                         ["Authorization"] = $"Bearer {_webSearchMcp.TokenFactory()}",
-                        [Filters.DenyOnDelegatedTurnAttribute.CallerHeader] = Info.Id,
+                        [McpEndpoints.CallerSessionHeader] = Info.Id,
                     },
                     ["alwaysLoad"] = true,
                 };
@@ -1625,7 +1625,7 @@ public class ClaudeSession : ILlmSessionAdapter
                         ["headers"] = new System.Text.Json.Nodes.JsonObject
                         {
                             ["Authorization"] = $"Bearer {difyToken}",
-                            [Filters.DenyOnDelegatedTurnAttribute.CallerHeader] = Info.Id,
+                            [McpEndpoints.CallerSessionHeader] = Info.Id,
                         },
                         ["alwaysLoad"] = true,
                     }
@@ -1705,7 +1705,7 @@ public class ClaudeSession : ILlmSessionAdapter
                             ["headers"] = new System.Text.Json.Nodes.JsonObject
                             {
                                 ["Authorization"] = $"Bearer {c.TokenFactory()}",
-                                [Filters.DenyOnDelegatedTurnAttribute.CallerHeader] = Info.Id,
+                                [McpEndpoints.CallerSessionHeader] = Info.Id,
                             },
                         }
                         : new System.Text.Json.Nodes.JsonObject

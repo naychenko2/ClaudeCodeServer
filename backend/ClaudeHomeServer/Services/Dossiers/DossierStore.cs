@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using ClaudeHomeServer.Core.Telemetry;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Memory;
@@ -39,6 +40,7 @@ public sealed class DossierStore : Knowledge.IKnowledgeSyncParticipant, IDisposa
     private readonly ILogger<DossierStore>? _log;
 
     private readonly IKnowledgeIndex? _knowledge;
+    private readonly IDifyMetrics _difyMetrics;
     private readonly IUserStore? _users;
     private readonly IProjectManager? _projects;
 
@@ -55,10 +57,14 @@ public sealed class DossierStore : Knowledge.IKnowledgeSyncParticipant, IDisposa
     private readonly HashSet<string> _migrationWarned = [];
 
     public DossierStore(IConfiguration config, ILogger<DossierStore>? log = null,
-        IKnowledgeIndex? knowledge = null, IUserStore? users = null, IProjectManager? projects = null)
+        IKnowledgeIndex? knowledge = null, IDifyMetrics? difyMetrics = null, IUserStore? users = null, IProjectManager? projects = null)
     {
         _log = log;
         _knowledge = knowledge;
+        // Метрика Dify-синка для дифф-проходки — обязательная, иначе прогресс синка
+        // теряется молча (коммит ревью 2026-08). В юнит-тестах без Dify DI даёт null —
+        // no-op реализация живёт в Dossiers (см. NoopDifyMetrics ниже).
+        _difyMetrics = difyMetrics ?? new EmptyDifyMetrics();
         _users = users;
         _projects = projects;
         var dataRoot = Path.GetDirectoryName(Path.GetFullPath(
@@ -377,7 +383,7 @@ public sealed class DossierStore : Knowledge.IKnowledgeSyncParticipant, IDisposa
             var changed = await MemoryDify.DiffSyncAsync(_knowledge!, state.DatasetId!, items, docsSnapshot,
                 (id, doc) => { lock (_kLock) state.Docs[id] = doc; },
                 id => { lock (_kLock) state.Docs.Remove(id); },
-                _log);
+                _log, _difyMetrics);
 
             if (changed > 0)
             {

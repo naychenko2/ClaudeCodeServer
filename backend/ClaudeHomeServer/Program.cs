@@ -22,7 +22,6 @@ using ClaudeHomeServer.Services.Modules;
 using ClaudeHomeServer.Services.Turn;
 using ClaudeHomeServer.Services.Video;
 using ClaudeHomeServer.Telemetry;
-using ClaudeHomeServer.Core.Telemetry;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.HttpOverrides;
@@ -190,6 +189,14 @@ builder.Services.AddSingleton<AppSettingsService>();
 // ModelCatalogAdapter мапит nested ModelInfo (Main) в ModelCatalogEntry (Core).
 builder.Services.AddSingleton<ITierModelResolver>(sp => sp.GetRequiredService<AppSettingsService>());
 builder.Services.AddSingleton<IModelCatalog, ModelCatalogAdapter>();
+// ISubscriptionAlertNotifier — спинный адаптер поверх NotificationService (волна 6 выноса
+// Llm). Регистрация живёт здесь, а не в LlmSubsystem: реализация тянет спинной
+// NotificationService, и держать резолв в DI вертикали было бы запрещённой границей.
+// Прецедент уборки Git (CLAUDE.md, «возврат регистрации спинных реакторов»).
+builder.Services.AddSingleton<ISubscriptionAlertNotifier, SubscriptionAlertNotifier>(sp =>
+    new SubscriptionAlertNotifier(
+        sp.GetRequiredService<NotificationService>(),
+        sp.GetRequiredService<IUserStore>()));
 // UserModelTierResolver (слоты моделей) — DI в подсистеме `LlmSubsystem`
 // (шаг 0 волны 4, см. LlmSubsystem.cs).
 builder.Services.AddSingleton<UserHomeResolver>();

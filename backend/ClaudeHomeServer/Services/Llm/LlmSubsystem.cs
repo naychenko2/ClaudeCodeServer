@@ -1,5 +1,4 @@
 using ClaudeHomeServer.Services.Composition;
-using ClaudeHomeServer.Services.Composition.Llm;
 using ClaudeHomeServer.Services.Http;
 
 namespace ClaudeHomeServer.Services.Llm;
@@ -297,10 +296,8 @@ public sealed class LlmSubsystem : IAppSubsystem
         // Сторож «чужого» setup-токена: расхождение сброса 5h-окна между setup-токеном
         // (probe/turn) и профильным логином (oauth) — алерт админам, без вывода из ротации.
         // Шов нотификатора — для юнит-тестов дедупа (как IKnowledgeAlertNotifier).
-        services.AddSingleton<ISubscriptionAlertNotifier, SubscriptionAlertNotifier>(sp =>
-            new SubscriptionAlertNotifier(
-                sp.GetRequiredService<NotificationService>(),
-                sp.GetRequiredService<IUserStore>()));
+        // Регистрация реализации переехала в Program.cs рядом с другими адаптерами:
+        // вертикаль Llm больше не резолвит спинной NotificationService.
         services.AddSingleton<SubscriptionWindowMismatchGuard>();
 
         // Стартовый прогрев + идл-пинг утилизации подписок (пробный ход на простаивающий

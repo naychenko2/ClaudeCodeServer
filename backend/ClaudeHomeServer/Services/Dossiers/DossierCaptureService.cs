@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.CodeGraph;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Services.Llm;
@@ -49,7 +50,7 @@ public sealed class DossierCaptureService : BackgroundService
     private readonly DossierStore _store;
     private readonly DossierCaptureState _state;
     private readonly ICheapTextRunner _cheap;
-    private readonly CodeGraph.CodeGraphService _codeGraph;
+    private readonly ICodeGraphInspector _codeGraph;
     private readonly InstanceSecretsProvider _secrets;
     private readonly HashSet<string> _skipTypes;
     private readonly ILogger<DossierCaptureService> _log;
@@ -58,7 +59,7 @@ public sealed class DossierCaptureService : BackgroundService
         IProjectManager projects, TaskManager tasks,
         FileService files, IGitRefSnapshotStore gitSnapshots, IGitCommitInspector gitInspect,
         DossierStore store, DossierCaptureState state,
-        ICheapTextRunner cheap, CodeGraph.CodeGraphService codeGraph,
+        ICheapTextRunner cheap, ICodeGraphInspector codeGraph,
         InstanceSecretsProvider secrets, IConfiguration config, ILogger<DossierCaptureService> log)
     {
         _sessions = sessions;

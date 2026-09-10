@@ -29,7 +29,7 @@ public class DossierRecallService(
     TaskManager? tasks = null,
     IGitRefSnapshotStore? gitSnapshots = null,
     IGitCommitInspector? gitInspect = null,
-    CodeGraphService? codeGraph = null,
+    ICodeGraphInspector? codeGraph = null,
     ILogger<DossierRecallService>? log = null)
 {
     // Бюджет пассивного канала (ADR-004 §5): блок паспортов не должен весить больше
@@ -371,8 +371,12 @@ public class DossierRecallService(
     private static string CacheKey(string ownerId, string projectId) => $"{ownerId}:{projectId}";
 
     // Дешёвая сигнатура снимка графа (mtime graph.json): пока не менялась, граф не перестраивался
-    private string GraphSigOf(string rootPath) =>
-        codeGraph?.GetCacheSignature(rootPath)?.ToString("O") ?? "";
+    private string GraphSigOf(string rootPath)
+    {
+        if (codeGraph is null) return "";
+        var snap = codeGraph.GetSnapshotAsync(rootPath, CancellationToken.None).GetAwaiter().GetResult();
+        return snap?.BuiltAt.ToString("O") ?? "";
+    }
 
     // --- Точки подмены для тестов (счётчики git-вызовов, фейковые снимки графа) ---
 

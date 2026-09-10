@@ -233,6 +233,11 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Git.IGitCommitInspector,
     ClaudeHomeServer.Services.Git.GitCommitInspector>();
 // CodeGraph: граф зависимостей кода — DI в подсистеме `CodeGraphSubsystem`
 // (волна 2, первая с пост-билд фазой: регистрирует языковые провайдеры в ConfigureApp).
+// Узкий шов инспекции графа (Этап 5, волна 2, разрез Dossiers↔CodeGraph): потребитель —
+// Dossiers, два метода (GetSnapshotAsync + StartRebuildIfIdle). Форвардер через тот же
+// синглтон `CodeGraphService`, что и подсистем.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.CodeGraph.ICodeGraphInspector,
+    ClaudeHomeServer.Services.CodeGraph.CodeGraphInspector>();
 builder.Services.AddSingleton<ProjectGroupManager>();
 builder.Services.AddSingleton<ProjectEventLogService>();
 // Этап 5, волна E: узкий Core-шов IProjectEventLogService для выноса Notes (NotesService

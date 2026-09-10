@@ -1815,6 +1815,11 @@ public class SubsystemBoundaryTests
         // контракта — GitService в вынесенной вертикали Git; форвардеры (GitCommitInspector)
         // живут в Main как тонкие прокладки.
         "ClaudeHomeServer.Services.Git",
+        // Этап 5, волна 2 (Dossiers↔CodeGraph): ICodeGraphInspector + 2 record-типа
+        // (CodeGraphSnapshot/CodeGraphNode) — узкий шов инспекции графа кода для Dossiers
+        // (якоря FQN + сигнатура кеша статусов). CodeGraph — вынесенная вертикаль; без
+        // переноса контракт в Core Dossiers получал бы запрещённую сторожем границ связь.
+        "ClaudeHomeServer.Services.CodeGraph",
         // Этап 5, волна 5 (Knowledge): узкий Core-шов IDifyMetrics (ProjectKnowledgeSyncService
         // больше не ссылается на ServerMetrics/Main напрямую) + DifyErrorCategorizer
         // (43 строки чистой функции, нужны и Knowledge, и Memory, обе вертикали).

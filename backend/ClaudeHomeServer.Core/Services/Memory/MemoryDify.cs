@@ -1,10 +1,16 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
-using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Core.Telemetry;
+using ClaudeHomeServer.Services.Knowledge;
 
 namespace ClaudeHomeServer.Services.Memory;
+
+// Общий слой Dify-синка, используемый и Memory (Persona/Team), и Dossiers
+// (паспорта изменений). До Этапа 5 волны 2 жил в `Services.Memory` — из-за
+// этого Dossiers держала префикс Services.Memory в allow-list. Теперь
+// вынесен в Core: оба потребителя зависят от Core-типа, запрещённая связь
+// «вертикаль → вертикаль» снята, префикс в Boundaries[Dossiers] мёртвый.
 
 // Ссылка на документ Dify для записи памяти: id документа + хеш проиндексированного содержимого
 // (по нему дифф-синк решает, нужно ли переиндексировать). Общий тип для памяти персон и команд;
@@ -95,7 +101,7 @@ public static class MemoryDify
 // Дебаунс-планировщик синхронизации: на ключ (personaId / «owner:project») держит один одноразовый
 // таймер, сбрасываемый при новой активности — синк идёт только после паузы SyncDebounce.
 // IDisposable обязателен: таймер, переживший остановку сервиса, сработал бы после неё и
-// запустил фоновую работу (git/Dify) по уже остановленному приложению (находка QA 23.08).
+// запустил бы фоновую работу (git/Dify) по уже остановленному приложению (находка QA 23.08).
 public sealed class MemoryDifyDebouncer(TimeSpan debounce) : IDisposable
 {
     private readonly ConcurrentDictionary<string, Timer> _timers = new();

@@ -6,7 +6,7 @@ using ClaudeHomeServer.Protocol;
 namespace ClaudeHomeServer.Services.Llm;
 
 // Настройки шумоподавления ватчера (из секции конфига FileWatcher). Дефолты покрывают
-// служебные каталоги инструментов (.omc, .claude), вложения чата (FileService.AttachmentsDir),
+// служебные каталоги инструментов (.omc, .claude), вложения чата (TreeExcludes.AttachmentsDir),
 // артефакты сборки и временные файлы, чтобы командные ходы (OmO, workflow) не спамили ленту
 // чата чужими изменениями, а загрузка вложения не выглядела правкой файла проекта.
 public sealed record FileWatcherOptions(

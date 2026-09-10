@@ -1782,6 +1782,12 @@ public class SubsystemBoundaryTests
         // `Composition/Notifications`, и сам файл — единственный носитель логики
         // «не светить вложения чата в git-статусе проекта».
         "ClaudeHomeServer.Services.AttachmentsGitExclude",
+        // Этап 5, волна 6 (Llm): `SnapshotIdGenerator` — генератор id снимков промпта,
+        // ехал из PromptSnapshotStore (Main) ради ClaudeSession. Один счётчик на
+        // процесс: и NewId (private в PromptSnapshotStore), и NewPublicId (форвардер)
+        // ходят через этот же статик, иначе коллизии вернутся. Прецедент
+        // SafePath/ExecutableResolver — stateless-примитив в Core.
+        "ClaudeHomeServer.Services.SnapshotIdGenerator",
     ];
 
     /// <summary>

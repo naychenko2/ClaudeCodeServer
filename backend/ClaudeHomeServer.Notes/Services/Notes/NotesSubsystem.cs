@@ -58,6 +58,7 @@ public sealed class NotesSubsystem : IAppSubsystem
         // Singleton-ы без внутреннего порядка между собой; `NoteExpiryService` —
         // hosted поверх `NotesService` (читает заметки по проектам для авто-истечения).
         services.AddSingleton<NotesService>();
+        services.AddSingleton<INoteSummaryReader, NotesService>();
         services.AddSingleton<NotesKnowledgeService>();
         services.AddSingleton<NotesAiService>();
         services.AddSingleton<NoteTaskSyncService>();

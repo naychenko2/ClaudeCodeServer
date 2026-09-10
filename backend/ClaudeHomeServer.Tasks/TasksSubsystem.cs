@@ -56,6 +56,7 @@ public sealed class TasksSubsystem : IAppSubsystem
         // случается лениво — на первом обращении из контроллера либо hosted-сервиса;
         // к тому моменту DI гарантирует все зависимости.
         services.AddSingleton<TaskManager>();
+        services.AddSingleton<ITaskStatusReader, TaskManager>();
         services.AddSingleton<TaskAiService>();
         services.AddSingleton<BoardService>();
         // Шов IPersonaAutomationRunner (Core) — регистрация фабрики вынесена в

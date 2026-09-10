@@ -229,6 +229,7 @@ builder.Services.AddSingleton<ISubscriptionAlertNotifier, SubscriptionAlertNotif
 // UserModelTierResolver (слоты моделей) — DI в подсистеме `LlmSubsystem`
 // (шаг 0 волны 4, см. LlmSubsystem.cs).
 builder.Services.AddSingleton<UserHomeResolver>();
+builder.Services.AddSingleton<IHomePathResolver, UserHomeResolver>();
 builder.Services.AddSingleton<ProjectManager>();
 // Этап 5, волна E: узкий Core-шов IProjectManager для выноса Notes (см.
 // Core/Services/IProjectManager.cs). Полный ProjectManager в Main, Notes видит
@@ -310,6 +311,7 @@ builder.Services.AddSingleton<ProjectEventLogService>();
 // Notes видит только Append.
 builder.Services.AddSingleton<IProjectEventLogService>(sp => sp.GetRequiredService<ProjectEventLogService>());
 builder.Services.AddSingleton<PersonaManager>();
+builder.Services.AddSingleton<IPersonaHandleResolver, PersonaManager>();
 builder.Services.AddSingleton<PersonaPromptBuilder>();
 // Память персон и команды (волна 3, шаг 4) — DI в подсистеме `MemorySubsystem`:
 // PersonaMemoryService и TeamMemoryService регистрируются там же.

@@ -495,31 +495,23 @@ public class SubsystemBoundaryTests
                     .Concat(new[]
                     {
                         "ClaudeHomeServer.Services.Dossiers",
-                        "ClaudeHomeServer.Services.Git",
-                        "ClaudeHomeServer.Services.CodeGraph",
                         "ClaudeHomeServer.Services.Llm",
-                        "ClaudeHomeServer.Services.Memory",
                     })
                     .ToArray(),
                 new[]
                 {
                     "ClaudeHomeServer.Services.SessionManager",
                     "ClaudeHomeServer.Services.ProjectManager",
-                    "ClaudeHomeServer.Services.Tasks.TaskManager",
                     "ClaudeHomeServer.Services.FileService",
                     "ClaudeHomeServer.Services.UserStore",
                     "ClaudeHomeServer.Services.FeatureFlagService",
-                    "ClaudeHomeServer.Services.Knowledge.KnowledgeService",
-                    // DossierStore — участник реконсайлера error-документов Dify
-                    // (KnowledgeIndexReconciler, ADR-004 §4); public-метод ListTargets
-                    // возвращает `IReadOnlyList<Knowledge.KnowledgeSyncTarget>` —
-                    // рефлексия видит `KnowledgeSyncTarget` как возвращаемый тип
-                    // и в generic-аргументе. Шов через IKnowledgeSyncParticipant
-                    // (DossierStore имплементирует интерфейс) виден IL-скану как
-                    // implementing-тип; явный allow-list не нужен, т.к. интерфейс
-                    // живёт в namespace Knowledge (префикс вертикали Knowledge).
-                    // Форвардер регистрации остаётся в Knowledge — кросс-клей.
-                    "ClaudeHomeServer.Services.Knowledge.KnowledgeSyncTarget",
+                    // === Этап 5, волна 2 (разрез Dossiers↔Git/CodeGraph/Tasks/Knowledge/Memory):
+                    // после перевода на Core-интерфейсы (IGitRefSnapshotStore/
+                    // IGitCommitInspector/ICodeGraphInspector/ITaskLookup/IKnowledgeIndex
+                    // + общий слой Dify-синка) префиксы Services.Git, Services.CodeGraph,
+                    // Services.Tasks.TaskManager, Services.Knowledge.KnowledgeService,
+                    // Services.Knowledge.KnowledgeSyncTarget, Services.Memory — мёртвые,
+                    // все потребители внутри Core. Сняты.
                     "ClaudeHomeServer.Protocol.StoredMessage",
                     // === Точечные допуски IL-видимости (задача `8beee75e`, волна 1).
                     // `DossierCaptureService` материализует `SessionSummaryService`
@@ -714,7 +706,6 @@ public class SubsystemBoundaryTests
                     .Concat(new[]
                     {
                         "ClaudeHomeServer.Services.Memory",
-                        "ClaudeHomeServer.Services.Knowledge",
                         "ClaudeHomeServer.Hubs",
                     })
                     .ToArray(),
@@ -726,7 +717,21 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.UserStore",
                     "ClaudeHomeServer.Services.PersonaManager",
                     "ClaudeHomeServer.Services.ProjectEventLogService",
-                    "ClaudeHomeServer.Services.Notes.NotesService",
+                    // === Этап 5, волна 2 (разрез Memory↔Knowledge/Notes/Dossiers):
+                    // после перевода на Core-интерфейсы (IKnowledgeIndex/IKnowledgeSyncParticipant
+                    // + INoteAccessor) префиксы Services.Knowledge, Services.Notes,
+                    // Services.Dossiers.DossierRecallService — мёртвые. Сцепка с
+                    // DossierRecallService живой: PersonaMemoryService.BuildRecallAsync
+                    // держит прямую ссылку `Dossiers.DossierRecallService? _dossierRecall`.
+                    // Решение по этой сцепке (Этап 5, шаг 4) принимает Андрей:
+                    // - узкий Core-шов IDossierRecallSource (по образцу IPersonaRecallSource);
+                    // - перенос DossierRecallService.BuildRecallBlockAsync в Core
+                    //   (потребует переезд его зависимостями);
+                    // - инверсия: Memory вытягивается через запись, досье — через
+                    //   Memory-side канал, без `Memory → Dossiers`.
+                    // До решения префикс Services.Dossiers и точечный
+                    // `DossierRecallService` остаются — это явное «вертикаль → вертикаль»,
+                    // которое и описывает задача.
                     "ClaudeHomeServer.Services.Dossiers.DossierRecallService",
                     // DossierRecallRequest/DossierRecallResult допусков больше не требуют:
                     // пара DTO уехала в Core (Этап 5, узкие швы Turn) и проходит по

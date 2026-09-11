@@ -17,6 +17,9 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.Spend.Tests</_Parameter1>
     </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Prompts.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
 
@@ -102,6 +105,7 @@
     <ProjectReference Include="..\ClaudeHomeServer.Personas\ClaudeHomeServer.Personas.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.ProjectIcons\ClaudeHomeServer.ProjectIcons.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.ProjectServices\ClaudeHomeServer.ProjectServices.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Prompts\ClaudeHomeServer.Prompts.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Spend\ClaudeHomeServer.Spend.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Tasks\ClaudeHomeServer.Tasks.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Terminal\ClaudeHomeServer.Terminal.csproj" />

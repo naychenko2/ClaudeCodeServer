@@ -63,6 +63,9 @@ public class SubsystemBoundaryCoverageTests
         // Images — отдельная сборка (Этап 5, вынос Images): без typeof набор сборок
         // её не содержит, и проверка полноты Boundaries по ней ничего не проверяет.
         _ = typeof(ClaudeHomeServer.Services.Images.ImagesSubsystem).Assembly;
+        // Prompts — отдельная сборка (Этап 5, вынос Prompts): без typeof набор
+        // сборок её не содержит, и проверка полноты Boundaries по ней ничего не проверяет.
+        _ = typeof(ClaudeHomeServer.Services.Prompts.OmoPrompts).Assembly;
     }
 
     [Fact]

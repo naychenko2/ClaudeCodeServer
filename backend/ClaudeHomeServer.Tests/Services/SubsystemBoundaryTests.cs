@@ -336,9 +336,9 @@ public class SubsystemBoundaryTests
         //    `DeployReportService:15-20` (доклад об итоге выкатки в чат-инициатор и
         //    push-уведомление) — «вертикаль → спинка» (общая инфраструктура),
         //    аналогично `Git`/`Tts`/`Images`/`Reader`.
-        // 2) `ClaudeHomeServer.Services.Execution` — `ILauncherFactory` для `schtasks`
-        //    (`DeployHost.WakeAgentAsync` будит задачу планировщика через `launchers.Local`);
-        //    легально: Execution — нижний слой, общий для всех, кто запускает процессы.
+        // 2) Execution-зависимость снята (задача 36e7a41d): `ILauncherFactory`/
+        //    `IProcessLauncher`/`ProcessSpec` живут в Core (assembly-фильтр),
+        //    ProjectReference на ClaudeHomeServer.Execution из Deploy.csproj убран.
         // 3) Git-зависимость снята (задача 36e7a41d): `DeployHost` теперь работает
         //    через Core-шов `IGitRepoChecker` (Services.Composition), а не на
         //    конкретном `GitService`. Прежняя связь «вертикаль → вертикаль»
@@ -368,7 +368,6 @@ public class SubsystemBoundaryTests
                     .Concat(new[]
                     {
                         "ClaudeHomeServer.Services.Deploy",
-                        "ClaudeHomeServer.Services.Execution",
                     })
                     .ToArray(),
                 new[]

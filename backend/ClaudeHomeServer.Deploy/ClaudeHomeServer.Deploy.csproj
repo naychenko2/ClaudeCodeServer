@@ -16,7 +16,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
-    <ProjectReference Include="..\ClaudeHomeServer.Execution\ClaudeHomeServer.Execution.csproj" />
   </ItemGroup>
 
 </Project>

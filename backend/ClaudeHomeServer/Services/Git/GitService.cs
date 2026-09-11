@@ -276,15 +276,30 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         return r.Ok ? ParseLog(r.Stdout) : [];
     }
 
-    // Незапушенные коммиты (впереди upstream): `git log @{u}..HEAD`. Без отслеживаемой ветки
-    // (@{u} не резолвится) git падает → возвращаем пустой список: стек = строго незапушенное.
+    // Незапушенные коммиты (впереди upstream): `git log @{u}..HEAD`. Счастливый путь — один
+    // запуск git. Ветка не отслеживает ничего (@{u} не резолвится) — фолбэк считает «чего нет
+    // НИ НА ОДНОЙ ветке origin»: `log HEAD --not --remotes=origin`. Ступень с origin/<branch>
+    // тут не годилась бы — новая ветка без upstream падает на несуществующем origin/<branch>,
+    // а detached HEAD не даёт имени ветки вовсе, и обе ситуации проваливались в «весь HEAD»,
+    // выдавая давно опубликованное за неотправленное. Origin не подключён вовсе — шаблон не
+    // матчит ничего, и остаётся вся история ветки: без remote «неопубликовано» это и есть она,
+    // иначе кнопка публикации не появилась бы никогда. Шаблон точный: `origin2` не цепляется.
+    // Репозиторий без коммитов даёт пустой список: `log HEAD` там падает.
     public async Task<IReadOnlyList<GitLogEntry>> UnpushedLogAsync(string? ownerId, string root, int limit = 100, CancellationToken ct = default)
     {
         if (!IsGitRepo(root)) return [];
+        if (await LogRangeAsync(ownerId, root, limit, ["@{u}..HEAD"], ct) is { } tracked) return tracked;
+        return await LogRangeAsync(ownerId, root, limit, ["HEAD", "--not", "--remotes=origin"], ct) ?? [];
+    }
+
+    // Лог по диапазону ревизий; null — git отказал (диапазон не резолвится)
+    private async Task<IReadOnlyList<GitLogEntry>?> LogRangeAsync(
+        string? ownerId, string root, int limit, string[] range, CancellationToken ct)
+    {
         var r = await RunAsync(ownerId, root,
             ["log", "-n", limit.ToString(),
-             "--pretty=format:%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s%x1e", "@{u}..HEAD"], ct: ct);
-        return r.Ok ? ParseLog(r.Stdout) : [];
+             "--pretty=format:%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s%x1e", .. range], ct: ct);
+        return r.Ok ? ParseLog(r.Stdout) : null;
     }
 
     // История одного файла (--follow: переживает переименования)
@@ -1252,6 +1267,21 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
             await RunOkAsync(ownerId, root, ["remote", "set-url", "origin", url], ct: ct);
         else
             await RunOkAsync(ownerId, root, ["remote", "add", "origin", url], ct: ct);
+    }
+
+    // Фактический адрес origin (null — origin не подключён). Не путать с Project.GitRemoteUrl:
+    // та настройка проекта пуста, если origin добавляли руками мимо продукта.
+    // push: true — адрес, по которому реально уйдёт push (remote.origin.pushurl, если задан):
+    // в чужом .git/config fetch и push могут вести на РАЗНЫЕ серверы.
+    public async Task<string?> GetRemoteUrlAsync(string? ownerId, string root, bool push = false, CancellationToken ct = default)
+    {
+        if (!IsGitRepo(root)) return null;
+        string[] args = push
+            ? ["remote", "get-url", "--push", "origin"]
+            : ["remote", "get-url", "origin"];
+        var r = await RunAsync(ownerId, root, args, ct: ct);
+        var url = r.Stdout.Trim();
+        return r.Ok && url.Length > 0 ? url : null;
     }
 
     public Task CreateBranchAsync(string? ownerId, string root, string name, string? from, CancellationToken ct = default)

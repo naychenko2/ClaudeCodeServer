@@ -774,7 +774,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // симметричен _teamCoordinator/TeamStateService — owning в конструкторе, регистрация
         // через DI придёт в шаге 2г-4.
         _teamPlan = new TeamPlanService(this, this, this, _teamPlanning, _teamCoordinator,
-            _personas, _projects,
+            _personas, _projects, _teamState,
             // Опциональный ILoggerFactory (для вертикали TeamPlanService с собственным
             // типизированным логгером). В тестах SessionManagerTests логгер не передаётся —
             // подменяем на null-логгер, чтобы вертикаль могла логировать не падая.
@@ -784,22 +784,22 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // SessionManager — здесь тот же приём, что у _teamCoordinator/_teamState/_teamPlan).
         // В DI переедет на шаге 2г-4, owning-обёртки StartTeamWorkAsync/CloseTeamTalkAsync/
         // RespondTeamPlanAsync в SessionManager будут сняты.
-        _teamDecision = new TeamDecisionService(this, this, this, this, this, _personas,
+        _teamDecision = new TeamDecisionService(this, this, this, this, this, _personas, _teamState, _teamPlan,
             loggerFactory?.CreateLogger<TeamDecisionService>() ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<TeamDecisionService>.Instance);
         // Квоты и бюджет практики (волна Е). Owning-паттерн (создаётся в конструкторе,
         // в DI переедет на шаге 2г-4) разрывает цикл «SessionManager хочет TeamBudgetService,
         // TeamBudgetService хочет SessionManager» — вертикаль видит ядро по прямой ссылке,
         // а ядро знает о вертикали через поле _teamBudget.
-        _teamBudget = new TeamBudgetService(this, this, this,
+        _teamBudget = new TeamBudgetService(this, this, this, _teamState,
             loggerFactory?.CreateLogger<TeamBudgetService>() ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<TeamBudgetService>.Instance);
         // Шапка разбора хода штаба и доклад о блокере (волна Ж): owning-паттерн по тому же
         // рецепту, что у _teamDecision/_teamBudget. Подписчик turn/completed переехал в
         // вертикаль — шинная подписка ниже регистрирует делегат на метод TeamTurnCompletionService.
-        _teamTurnCompletion = new TeamTurnCompletionService(this, this, this, this,
+        _teamTurnCompletion = new TeamTurnCompletionService(this, this, this, this, _teamDecision,
             loggerFactory?.CreateLogger<TeamTurnCompletionService>() ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<TeamTurnCompletionService>.Instance);
         // Включение и переключение режима «Командная реализация» (волна Ж): SetTeamImplementAsync
         // и SetTeamImplementAutoAsync. Owning-паттерн по тому же рецепту, что и _teamBudget.
-        _teamEnable = new TeamEnableService(this, this, this, this,
+        _teamEnable = new TeamEnableService(this, this, this, this, _teamState,
             loggerFactory?.CreateLogger<TeamEnableService>() ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<TeamEnableService>.Instance);
         _history = history;
         _adapters = adapters;
@@ -2149,10 +2149,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // Корень, куда «Командная реализация» пишет файл полного плана (Э8-доп., 2026-08-02):
     // worktree штаба, если он в нём работает, иначе корень проекта. null — чат вне проекта,
     // писать план некуда (глобальный чат — раздел «Состав команды» продуктового плана).
-    // Тело переехало в TeamStateService (волна А); обёртка сохранена, потому что вызов
-    // идёт из PublishTeamPlanAsync ниже в этом же классе. Публичный (волна В):
-    // TeamPlanService публикует файл плана и ходит через ту же обёртку.
-    public string? ResolveTeamPlanRoot(Session session) => _teamState.ResolveTeamPlanRoot(session);
+    // Тело переехало в TeamStateService (волна А); обёртка снята (волна 3, шаг 2г-4):
+    // TeamPlanService зовёт TeamStateService.ResolveTeamPlanRoot напрямую.
+    internal string? ResolveTeamPlanRoot(Session session) => _teamState.ResolveTeamPlanRoot(session);
 
     // Уборка за удалённым деревом чата (ADR-003): снимаем watcher его файлов и выбрасываем
     // снимок графа из data/code-graphs — иначе он остался бы сиротой на диске, а watcher
@@ -5945,7 +5944,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // сигнатуры (вызовы идут из нескольких точек этого класса).
     // Публичный (волна Г): TeamDecisionService.StartTeamWorkAsync зовёт при входе
     // в план-фазу из Idle, не дёргая приватный шов.
-    public void EnterPlanPhaseMode(string sessionId)
+    internal void EnterPlanPhaseMode(string sessionId)
         => _teamState.EnterPlanPhaseMode(sessionId);
 
     // Возврат режима человека после согласования плана (Confirming → Wave), при
@@ -5953,18 +5952,18 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // TeamStateService (волна Б); обёртка сохранена по тем же причинам, что
     // EnterPlanPhaseMode. Публичный (волна В): TeamPlanService зовёт из публикации
     // добавочного плана, не дёргая приватный шов.
-    public void RestoreUserMode(string sessionId)
+    internal void RestoreUserMode(string sessionId)
         => _teamState.RestoreUserMode(sessionId);
 
     // Бюджет итерации из дефолтов плана с optional override из конфига TeamImplement:Max*
     // Публичный (волна Г): TeamDecisionService.StartTeamWorkAsync зовёт при открытии
     // свежей итерации в Idle.
-    public TeamImplementBudget NewTeamImplementBudget() => _teamState.NewTeamImplementBudget();
+    internal TeamImplementBudget NewTeamImplementBudget() => _teamState.NewTeamImplementBudget();
 
     // Рассылка TeamImplementMessage по группе чата. Тело в TeamStateService. Публичный
     // (волна В): TeamPlanService публикует состояние режима после правки PlanCardId/
     // PlanVersion/Replanning — через тот же канал, что и TeamWaveService.
-    public Task BroadcastTeamImplementAsync(string sessionId, Session session) =>
+    internal Task BroadcastTeamImplementAsync(string sessionId, Session session) =>
         _teamState.BroadcastTeamImplementAsync(sessionId, session);
 
     private Task BroadcastTeamImplementAsync(string sessionId, SessionEntry entry) =>
@@ -6000,7 +5999,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // канала: RespondTeamPlanAsync вызывает её в той же ветке, что и раньше.
     // Публичный (волна Г): TeamDecisionService.RespondTeamPlanAsync вызывает её
     // по тому же контракту.
-    public Task ResolveStalePlanCardAsync(string sessionId, Session session,
+    internal Task ResolveStalePlanCardAsync(string sessionId, Session session,
         SessionTeamImplement team, string planId, TeamImplementPlan plan) =>
         _teamPlan.ResolveStalePlanCardAsync(sessionId, session, team, planId, plan);
 
@@ -6009,7 +6008,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // и EnterInterviewAsync вызывается по тому же контракту.
     // Публичный (волна Г): TeamDecisionService.StartTeamWorkAsync/RespondTeamPlanAsync
     // (ветка Edit) вызывают её по тому же контракту.
-    public Task SupersedeCurrentPlanCardAsync(string sessionId, Session session, int nextVersion) =>
+    internal Task SupersedeCurrentPlanCardAsync(string sessionId, Session session, int nextVersion) =>
         _teamPlan.SupersedeCurrentPlanCardAsync(sessionId, session, nextVersion);
 
     // Обработчики волны переехали в вертикаль (шаг 2г-4, волна 1): их держит
@@ -6117,7 +6116,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // завершения задачи, перевыдача из колбэка провала хода, квота из HTTP-фильтра), а
     // `int++` не атомарен — частичный лок означал бы потерянные инкременты и нечестный счёт
     // ровно там, ради чего Э4 и делался. Внутри — только синхронная работа с моделью.
-    public T? WithTeamState<T>(string sessionId, Func<SessionTeamImplement, T> mutate) =>
+    internal T? WithTeamState<T>(string sessionId, Func<SessionTeamImplement, T> mutate) =>
         _teamState.WithTeamState(sessionId, mutate);
 
     // Публичный (волна Д): TeamDecisionService зовёт его вместо прямой работы с
@@ -6477,7 +6476,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // retryPlan и RespondTeamPlanAsync (ветка Edit) зовут её по тому же контракту.
     // Публичный (волна Г): TeamDecisionService.StartTeamWorkAsync/RespondTeamPlanAsync
     // (ветка Edit) зовут её по тому же контракту.
-    public Task RunTeamPlanningAsync(string sessionId, string request, string? feedback,
+    internal Task RunTeamPlanningAsync(string sessionId, string request, string? feedback,
         bool fromHuman) =>
         _teamPlan.RunTeamPlanningAsync(sessionId, request, feedback, fromHuman);
 

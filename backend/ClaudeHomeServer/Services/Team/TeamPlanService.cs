@@ -48,10 +48,11 @@ internal sealed class TeamPlanService
     private readonly PersonaManager _personas;
     private readonly IProjectManager _projects;
     private readonly ILogger<TeamPlanService> _log;
+    private readonly TeamStateService _state;
 
     internal TeamPlanService(SessionManager sessions, ITeamHistoryStore history, ITeamRunState run,
         TeamPlanningService? planning, TeamCoordinator coordinator, PersonaManager personas,
-        IProjectManager projects, ILogger<TeamPlanService> log)
+        IProjectManager projects, TeamStateService state, ILogger<TeamPlanService> log)
     {
         _sessions = sessions;
         _history = history;
@@ -60,6 +61,7 @@ internal sealed class TeamPlanService
         _coordinator = coordinator;
         _personas = personas;
         _projects = projects;
+        _state = state;
         _log = log;
     }
 
@@ -152,7 +154,7 @@ internal sealed class TeamPlanService
         // IterationNumber той же логикой разводит разные вводные одного чата (прод 2026-08-03).
         // Глобальный чат без проекта — писать некуда (null), карточка покажет только «Замысел»;
         // ошибка записи не должна ронять публикацию карточки — TryWrite её не бросает.
-        if (_sessions.ResolveTeamPlanRoot(session) is { } planRoot)
+        if (_state.ResolveTeamPlanRoot(session) is { } planRoot)
         {
             var ownerIdForLabels = _sessions.ResolveOwnerId(session);
             plan.PlanFilePath = TeamPlanFileRenderer.TryWrite(planRoot, session.Name, sessionId,
@@ -210,10 +212,10 @@ internal sealed class TeamPlanService
             // входом в интервью по этой же вводной, снять было бы негде (RestoreUserMode звался
             // только по клику «Запустить» и при выключении режима), и селектор оставался бы
             // залоченным «Штаб планирует…» до конца жизни чата.
-            if (additional) _sessions.RestoreUserMode(sessionId);
+            if (additional) _state.RestoreUserMode(sessionId);
             session.UpdatedAt = DateTime.UtcNow;
             _sessions.SaveSessions();
-            await _sessions.BroadcastTeamImplementAsync(sessionId, session);
+            await _state.BroadcastTeamImplementAsync(sessionId, session);
         }
         await _sessions.BroadcastAsync(sessionId, new TeamPlanMessage(plan.Id, plan, additional,
             additional ? true : null));

@@ -57,7 +57,7 @@ public class ImageBackfillTests : IDisposable
     {
         var settings = new ImageGenerationSettingsStore(_config);
         var images = new ImageGenerationService([generator], settings);
-        return new ImageBackfillService(store ?? NewStore(), images, _personas,
+        return new ImageBackfillService(store ?? NewStore(), images, _personas, _personas,
             _broadcaster, new FakeLifetime(), NullLogger<ImageBackfillService>.Instance)
         {
             RetryDelay = TimeSpan.Zero,

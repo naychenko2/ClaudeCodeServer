@@ -880,6 +880,8 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.ISessionDirectory,
     ClaudeHomeServer.Services.Composition.SessionDirectoryAdapter>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.IPersonaLookup,
     ClaudeHomeServer.Services.Composition.PersonaLookupAdapter>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.IPersonaAvatarStore,
+    ClaudeHomeServer.Services.Composition.PersonaAvatarStoreAdapter>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.IChatHistoryLoader,
     ClaudeHomeServer.Services.Composition.ChatHistoryLoaderAdapter>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.ITaskLookup,

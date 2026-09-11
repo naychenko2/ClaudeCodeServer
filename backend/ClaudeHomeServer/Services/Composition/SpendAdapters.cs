@@ -39,6 +39,16 @@ public sealed class PersonaLookupAdapter(PersonaManager personas) : IPersonaLook
     public IReadOnlyCollection<Persona> GetAllInternal() => personas.GetAllInternal();
 }
 
+// Шов для выноса Images (Этап 5): ImageBackfillService пишет аватар персоны.
+// Обёртка один-к-одному: PersonaManager уже реализует IPersonaAvatarStore.
+public sealed class PersonaAvatarStoreAdapter(PersonaManager personas) : IPersonaAvatarStore
+{
+    public string AssetsDir => personas.AssetsDir;
+
+    public Persona SetAvatarImage(string id, string userId, string imageFile) =>
+        personas.SetAvatarImage(id, userId, imageFile);
+}
+
 public sealed class ChatHistoryLoaderAdapter(ChatHistoryService history) : IChatHistoryLoader
 {
     public Task<List<StoredMessage>> LoadAsync(string claudeSessionId) =>

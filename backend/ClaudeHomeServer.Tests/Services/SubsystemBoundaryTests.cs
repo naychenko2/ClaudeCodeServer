@@ -103,6 +103,10 @@ public class SubsystemBoundaryTests
         // сторож видел сборку Llm.dll и её типы. Без неё изолированный прогон
         // проходит по вертикали вакуумно.
         _ = typeof(ClaudeHomeServer.Services.Llm.LlmSubsystem).Assembly;
+        // Images — отдельная сборка (Этап 5, вынос Images): форс-загрузка нужна,
+        // чтобы сторож видел типы Images (IImageGenerator, ImageGenerationService)
+        // и проверял границы по Images.dll.
+        _ = typeof(ClaudeHomeServer.Services.Images.ImagesSubsystem).Assembly;
     }
 
     /// <summary>Запись границы одной вертикали: имя (для отчёта), корневой namespace
@@ -231,48 +235,20 @@ public class SubsystemBoundaryTests
                     .ToArray(),
                 Array.Empty<string>()),
         },
-        // Images — вертикаль генерации картинок. Допуск к корню Services точечный,
-        // через AllowedExactNamespaces: `PersonaManager` (Services/ корень) — догоняющая
-        // генерация аватара триггерится из карточки персоны; это сознательная зависимость
-        // от «спинки» (доменная модель пользователей и персон). См. ctor
-        // `ImageBackfillService.cs:34-37`.
-        // Прочие соседи по корню (`FalImageService`, `ImageAssetHelper`) — отдельные
-        // единицы из корня, но ImagesSubsystem ссылается на них через интерфейс
-        // `IImageGenerator` (своя вертикаль) и через static-вызовы. Прежде рефлексия их
-        // не видела; после волны 1 IL-скан видит — потому `ImageAssetHelper` и стоит
-        // в допуске ниже, а не держится на слепоте сторожа.
-        // `ClaudeHomeServer.Hubs` — нужен `IHubContext<SessionHub>` (событие
-        // `image_backfilled` едет в ленту персоны).
-        // Точечный допуск к `ClaudeHomeServer.Protocol`: `ImageBackfilledMessage`
-        // (ImageBackfillService отправляет событие в ленту персоны; см. также
-        // `event image_backfilled` в `ServerMessage`). Префикс `ClaudeHomeServer.Protocol`
-        // снят (волна 3), чтобы сторож ловил новые зависимости от любых из ~105
-        // публичных типов протокола (включая десктопный `DesktopCallCommand`/`DeviceHello`).
+        // Images — вертикаль генерации картинок. После выноса (Этап 5) все зависимости
+        // на внешние типы уходят в Core-интерфейсы: `IPersonaLookup`/`IPersonaAvatarStore`
+        // (аватар персоны), `ServerMessage` (ImageBackfilledMessage), `ImageAssetHelper`
+        // (ExtFor) — все в ClaudeHomeServer.Core.dll, покрываются `IsCoreAssembly`.
+        // Допусков за пределами спинки и своего namespace не осталось.
         new object[]
         {
             new VerticalBoundary(
                 "Images",
                 "ClaudeHomeServer.Services.Images",
                 SharedAllowedPrefixes
-                    .Concat(new[]
-                    {
-                        "ClaudeHomeServer.Services.Images",
-                        "ClaudeHomeServer.Hubs",
-                    })
+                    .Concat(new[] { "ClaudeHomeServer.Services.Images" })
                     .ToArray(),
-                new[]
-                {
-                    "ClaudeHomeServer.Services.PersonaManager",
-                    // ссылку на базовый record ServerMessage материализует наследование
-                    // ImageBackfilledMessage (объявлен в самой вертикали,
-                    // ImageBackfillService.cs:21).
-                    "ClaudeHomeServer.Protocol.ServerMessage",
-                    // ImageAssetHelper (Services/ImageAssetHelper.cs) — IL-видимость
-                    // (задача `8beee75e`): `ImageBackfillService.cs:269` зовёт
-                    // `ImageAssetHelper.ExtFor(...)` (static-метод) из тела метода.
-                    // Точечный допуск: «вертикаль → спинка» (root-инфраструктура).
-                    "ClaudeHomeServer.Services.ImageAssetHelper",
-                }),
+                Array.Empty<string>()),
         },
         // Tts — вертикаль озвучки голосового режима чата. Допуск к корню Services
         // точечный: `PersonaManager` (Services/ корень) — голос персоны как часть

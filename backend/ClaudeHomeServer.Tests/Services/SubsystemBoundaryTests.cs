@@ -557,33 +557,19 @@ public class SubsystemBoundaryTests
                     .ToArray(),
                 Array.Empty<string>()),
         },
-        // Watchdog — серверные сторожа чатов (ADR-013). Вертикаль без реализации
-        // `IAppSubsystem` (подаётся в Program.cs как обычные `AddSingleton`/
-        // `AddHostedService`), поэтому попадает в таблицу вручную — зато сторож
-        // полноты `SubsystemBoundaryCoverageTests` не пропустит её удаление.
+        // Watchdog — серверные сторожа чатов (ADR-013). Вынесена в отдельный `.csproj`
+        // (Этап 5, Этап 5b), единственный `ProjectReference` — на Core.
         // Допуски:
-        // 1) `ClaudeHomeServer.Services.Execution` — `ILauncherFactory` для poll-команды
-        //    (WatchdogRunner.cs:3);
-        // 2) `ClaudeHomeServer.Hubs` — `IHubContext<SessionHub>` для события
-        //    `watchdogs_changed` (WatchdogNotifier.cs:22-23);
-        // 3) Точечный допуск к `ClaudeHomeServer.Protocol`: `WatchdogsChangedMessage`
-        //    (WatchdogNotifier.cs:3) — единственный тип протокола, на который ссылается
-        //    вертикаль. Префикс `ClaudeHomeServer.Protocol` возвращён в
-        //    `SharedAllowedPrefixes` (волна 1 IL-сторожа, 2026-09-06, задача `8beee75e`;
-        //    решение зафиксировано в ADR-014 §«Решение по Protocol`), точечный допуск
-        //    оставлен как документация явного шва для будущих ревью.
-        // 4) Допуски к корню Services — точные: серверные сторожа должны знать про чаты,
-        //    проекты, юзеров и домашние папки, чтобы гаситься при удалении/архивации
-        //    и резолвить рабочий каталог опроса. Это «вертикаль → спинка» (общая
-        //    инфраструктура), по аналогии с `Git`/`Deploy`. Шов через явные
-        //    `SessionManager`/`ProjectManager`/`UserStore`/`UserHomeResolver` —
-        //    тестируется через `WatchdogEnvironment` (см. WatchdogEnvironment.cs:26-30).
-        // 5) `ClaudeHomeServer.Services.SessionMessagingService` (точное) — `SessionMessagingService`
-        //    для будильника (WatchdogAlarm.cs:17); nested `SendOutcome` едет в async-state-машине
-        //    `WatchdogAlarm.DeliverAsync`. Сам `SessionMessagingService` живёт в namespace
-        //    `ClaudeHomeServer.Services` (корень, см. SessionMessagingService.cs:3), поэтому
-        //    префикс `ClaudeHomeServer.Services.Llm` НЕ нужен — точного допуска хватает.
-        //    (Раньше префикс был — декорация, не гейт; убран вместе с фиксом default-deny.)
+        // 1) `ClaudeHomeServer.Services.Execution` — `ILauncherFactory`/`IProcessLauncher`/
+        //    `ProcessSpec` для poll-команды (WatchdogRunner.cs). Все в Core-сборке,
+        //    но namespace не входит в SharedAllowedPrefixes — точечный prefix-допуск.
+        // 2) `ClaudeHomeServer.Protocol` — `WatchdogsChangedMessage` (WatchdogNotifier.cs).
+        //    В Core-сборке, допуск идёт через `IsCoreAssembly`, но prefix-запись
+        //    оставлена как документация явного шва (прецедент Memory/Dossiers).
+        // Main-типы: `WatchdogEnvironment` (SessionManager, ProjectManager, UserStore,
+        // UserHomeResolver) и `WatchdogAlarm` (SessionMessagingService) живут в Main
+        // namespace `ClaudeHomeServer.Services.Watchdog` как адаптеры — точечные допуски
+        // на их Main-зависимости.
         new object[]
         {
             new VerticalBoundary(
@@ -594,28 +580,22 @@ public class SubsystemBoundaryTests
                     {
                         "ClaudeHomeServer.Services.Watchdog",
                         "ClaudeHomeServer.Services.Execution",
-                        "ClaudeHomeServer.Hubs",
                     })
                     .ToArray(),
                 new[]
                 {
-                    "ClaudeHomeServer.Services.SessionManager",
-                    "ClaudeHomeServer.Services.ProjectManager",
-                    "ClaudeHomeServer.Services.UserStore",
-                    "ClaudeHomeServer.Services.UserHomeResolver",
+                    "ClaudeHomeServer.Protocol.WatchdogsChangedMessage",
+                    // Адаптеры в Main (namespace Watchdog) ссылаются на Main-типы:
                     "ClaudeHomeServer.Services.SessionMessagingService",
                     "ClaudeHomeServer.Services.SessionMessagingService+SendOutcome",
-                    // WatchdogNotifier.cs:3 — поле async-state-машины
-                    // WatchdogNotifier+<BroadcastAsync>d__8 (локал msg переживает await).
-                    "ClaudeHomeServer.Protocol.WatchdogsChangedMessage",
-                    // SendOutcome nested-типы (задача `8beee75e`): `WatchdogAlarm`
-                    // материализует `Completed`/`Queued`/`Running` в async-state-машине
-                    // (поле `<DeliverAsync>d__N`). Раньше сторож видел только `SendOutcome`
-                    // (базовый record), nested-варианты — нет, теперь видит.
-                    // Шов уже зафиксирован через `+SendOutcome`, дописываем nested-типы.
                     "ClaudeHomeServer.Services.SessionMessagingService+SendOutcome+Completed",
                     "ClaudeHomeServer.Services.SessionMessagingService+SendOutcome+Queued",
                     "ClaudeHomeServer.Services.SessionMessagingService+SendOutcome+Running",
+                    "ClaudeHomeServer.Services.SessionManager",
+                    "ClaudeHomeServer.Services.UserStore",
+                    "ClaudeHomeServer.Services.UserHomeResolver",
+                    "ClaudeHomeServer.Services.IProjectManager",
+                    "ClaudeHomeServer.Services.ProjectManager",
                 }),
         },
         // Memory — долгая память персон и общая память команды проекта. Вынесена
@@ -1142,11 +1122,12 @@ public class SubsystemBoundaryTests
                 Array.Empty<string>()),
         },
         // TriggerSources — источники событий проактивности персон (timer/file/note/
-        // git/task). Точечные root-сервисы: AppSettingsService/ProjectManager/
-        // UserHomeResolver (AutomationRootResolver знает владельца), FileService
-        // (GitCommitTriggerSource слушает файлы), PersonaManager (MentionTriggerSource),
-        // NotesService (NoteTriggerSource), TaskManager (TaskStatusTriggerSource),
-        // RuleRuntimeState (TriggerContext несёт состояние правила).
+        // git/task). Вынесены в отдельный `.csproj` (Этап 5, Этап 5b), единственный
+        // `ProjectReference` — на Core. Allow-list ПУСТ: все прежние допуски к Main-типам
+        // (AppSettingsService/ProjectManager/UserHomeResolver/FileService/PersonaManager/
+        // NotesService/TaskManager/RuleRuntimeState/GroupChatRouter) сняты швами:
+        // IHomePathResolver, IProjectManager (Core), ICommitLogReader, IPersonaHandleResolver,
+        // INoteSummaryReader, ITaskStatusReader — все в Core.
         new object[]
         {
             new VerticalBoundary(
@@ -1155,20 +1136,7 @@ public class SubsystemBoundaryTests
                 SharedAllowedPrefixes
                     .Concat(new[] { "ClaudeHomeServer.Services.TriggerSources" })
                     .ToArray(),
-                new[]
-                {
-                    "ClaudeHomeServer.Services.AppSettingsService",
-                    "ClaudeHomeServer.Services.ProjectManager",
-                    "ClaudeHomeServer.Services.UserHomeResolver",
-                    "ClaudeHomeServer.Services.FileService",
-                    "ClaudeHomeServer.Services.PersonaManager",
-                    "ClaudeHomeServer.Services.Notes.NotesService",
-                    "ClaudeHomeServer.Services.Tasks.TaskManager",
-                    "ClaudeHomeServer.Services.RuleRuntimeState",
-                    // `MentionTriggerSource.cs:18` ссылается на `GroupChatRouter`
-                    // (IL-видимость, задача `8beee75e`). Точечный допуск.
-                    "ClaudeHomeServer.Services.GroupChatRouter",
-                }),
+                Array.Empty<string>()),
         },
         // ProjectServices — вертикаль раздела «Сервисы проекта» (Этап 5, волна C, шаг 2).
         // Волна C швов + Этап 5 выноса сняли все Main-зависимости кроме Yarp:

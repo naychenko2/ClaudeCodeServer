@@ -48,7 +48,7 @@ public sealed class WatchdogNotifier : IDisposable
     /// Снимок активных сторожей владельца: id чатов с хотя бы одним активным (Status==Active)
     /// сторожем и id проектов, где такие чаты есть; чаты вне проектов — только в Sessions.
     /// </summary>
-    internal WatchdogsChangedMessage Snapshot(string ownerId)
+    public WatchdogsChangedMessage Snapshot(string ownerId)
     {
         var active = _store.GetByOwner(ownerId).Where(w => w.Status == WatchdogStatus.Active).ToList();
         return new WatchdogsChangedMessage(

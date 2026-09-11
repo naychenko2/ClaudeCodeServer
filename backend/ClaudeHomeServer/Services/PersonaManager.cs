@@ -15,7 +15,7 @@ namespace ClaudeHomeServer.Services;
 // персону по id через узкий шов, минуя проверки доступа и без зависимости на полный
 // менеджер. `GetByIdInternal` уже был здесь — оформлен как реализация шва без правок
 // логики.
-public class PersonaManager : IPersonaLookup, IPersonaResolver
+public class PersonaManager : IPersonaLookup, IPersonaResolver, ClaudeHomeServer.Services.Composition.IPersonaHandleResolver
 {
     private static readonly JsonSerializerOptions JsonOpts = new()
     {

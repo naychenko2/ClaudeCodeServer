@@ -12,9 +12,8 @@ public static class GroupChatRouter
     public sealed record RouteResult(string SpeakerPersonaId, bool Switched, IReadOnlyList<string> AlsoMentioned);
 
     // @handle по границе слова: не срабатывает внутри email (a@b) и на «слипшихся» токенах.
-    // internal — переиспользуется источником триггеров MentionTriggerSource.
-    internal static readonly Regex MentionPattern =
-        new(@"(?<![\p{L}\p{N}_@-])@([\p{L}\p{N}_-]+)", RegexOptions.Compiled);
+    // common: MentionPattern в Core — переиспользуется MentionTriggerSource (TriggerSources-сборка).
+    internal static readonly Regex MentionPattern = ClaudeHomeServer.Services.Composition.MentionPattern.Regex;
 
     // Первый @handle участника в тексте (без учёта регистра) → спикер; остальные упомянутые
     // участники → AlsoMentioned. Упоминания не-участников игнорируются. Без упоминаний —

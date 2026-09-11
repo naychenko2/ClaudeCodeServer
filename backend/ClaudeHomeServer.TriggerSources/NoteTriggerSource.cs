@@ -1,7 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using ClaudeHomeServer.Models;
-using ClaudeHomeServer.Services.Notes;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Services.TriggerSources;
 
@@ -11,7 +11,7 @@ namespace ClaudeHomeServer.Services.TriggerSources;
 // контент-правки ловятся. Снапшот обновляем синхронно с детекцией (встроенный дедуп).
 //
 // Args: source ("personal"|projectId), tags?:["#тег"], section?:папка
-public sealed class NoteTriggerSource(NotesService? notes = null) : ITriggerSource
+public sealed class NoteTriggerSource(INoteSummaryReader? notes = null) : ITriggerSource
 {
     public AutomationTriggerType Type => AutomationTriggerType.Note;
 

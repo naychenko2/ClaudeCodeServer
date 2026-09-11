@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Services.TriggerSources;
 
@@ -10,13 +11,13 @@ namespace ClaudeHomeServer.Services.TriggerSources;
 // (OriginSessionId), если у упомянутой персоны есть включённое правило Mention.
 //
 // Не реализует ITriggerSource.EvaluateAsync — у него другая сигнатура (push). Сервис вызывает DetectAsync.
-public sealed class MentionTriggerSource(PersonaManager personas)
+public sealed class MentionTriggerSource(IPersonaHandleResolver personas)
 {
     public AutomationTriggerType Type => AutomationTriggerType.Mention;
 
     public Task<IReadOnlyList<TriggerEvent>> DetectAsync(string ownerId, Session session, string text, CancellationToken ct)
     {
-        var matches = GroupChatRouter.MentionPattern.Matches(text);
+        var matches = MentionPattern.Regex.Matches(text);
         if (matches.Count == 0) return Task.FromResult<IReadOnlyList<TriggerEvent>>(Array.Empty<TriggerEvent>());
 
         var participants = session.Participants is { Count: > 0 } p ? new HashSet<string>(p) : null;

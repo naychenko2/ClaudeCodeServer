@@ -1,16 +1,18 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Composition;
 using Microsoft.Extensions.Logging;
 
 namespace ClaudeHomeServer.Services.TriggerSources;
 
-// Git-коммит-триггер: новый коммит в репозитории. Poll HEAD через FileService.GetCommitsRaw
-// (TTL-кеш — см. ChangelogService): если HEAD сдвинулся — собираем коммиты новее прошлого HEAD.
+// Git-коммит-триггер: новый коммит в репозитории. Poll HEAD через ICommitLogReader
+// (адаптер CommitLogReader → FileService.GetCommitsRaw): если HEAD сдвинулся —
+// собираем коммиты новее прошлого HEAD.
 // Первое наблюдение (LastGitHeadSha пусто) НЕ эмитит — иначе React на всю историю.
 //
 // Корень резолвится AutomationRootResolver: projectId → project.RootPath, либо folder → подпапка
 // основной папки пользователя (глобальный агент; папка должна быть git-репо, иначе триггер молчит).
 // Args: projectId | folder, paths?:["src/**"] (фильтр по путям — Phase 2, пока игнорируем; фильтр оставляем гейту)
-public sealed class GitCommitTriggerSource(AutomationRootResolver roots, FileService files,
+public sealed class GitCommitTriggerSource(AutomationRootResolver roots, ICommitLogReader files,
     ILogger<GitCommitTriggerSource> log) : ITriggerSource
 {
     public AutomationTriggerType Type => AutomationTriggerType.GitCommit;

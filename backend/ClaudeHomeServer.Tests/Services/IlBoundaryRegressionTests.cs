@@ -49,7 +49,7 @@ public class IlBoundaryRegressionTests
         // больше не существует.
         var checks = new (string Label, string SourceType, string Needle)[]
         {
-            ("DeployHost → GitService", "ClaudeHomeServer.Services.Deploy.DeployHost", "ClaudeHomeServer.Services.Git.GitService"),
+            ("DeployHost → IGitRepoChecker", "ClaudeHomeServer.Services.Deploy.DeployHost", "ClaudeHomeServer.Services.Composition.IGitRepoChecker"),
             ("DeployAgentLockAdapter → Backup.InstanceLock", "ClaudeHomeServer.Services.Composition.Deploy.DeployAgentLockAdapter", "ClaudeHomeServer.Services.Backup.InstanceLock"),
             ("ReaderService → SsrfGuard", "ClaudeHomeServer.Services.Reader.ReaderService", "ClaudeHomeServer.Services.SsrfGuard"),
             // Этап 5, волна 3: прежняя проба этой строки — `Memory → SessionSummaryService` —

@@ -107,6 +107,10 @@ public class SubsystemBoundaryTests
         // чтобы сторож видел типы Images (IImageGenerator, ImageGenerationService)
         // и проверял границы по Images.dll.
         _ = typeof(ClaudeHomeServer.Services.Images.ImagesSubsystem).Assembly;
+        // Prompts — отдельная сборка (Этап 5, вынос Prompts): форс-загрузка нужна,
+        // чтобы сторож видел типы Prompts (OmoPrompts, SubagentPrompts, OmcPersonaRouting)
+        // и проверял границы по Prompts.dll.
+        _ = typeof(ClaudeHomeServer.Services.Prompts.OmoPrompts).Assembly;
     }
 
     /// <summary>Запись границы одной вертикали: имя (для отчёта), корневой namespace
@@ -844,18 +848,10 @@ public class SubsystemBoundaryTests
                     // циклы существовали «вслепую». После включения IL-скана они пойманы
                     // и объявлены явно с TODO на шов.
                     //
-                    // `Llm ⇄ Prompts`: ClaudeSession ссылается на статические
-                    // классы `CoordinatorWriteGuard` (DecidePermissionAsync),
-                    // `ChatContextPrompts`/`VoicePrompts` (RunTurnAsync). Все три —
-                    // статические вызовы из тел методов, теперь видимые. Префикс-шов
-                    // через `Services.Prompts` НЕ открываем: Prompts — каталожная
-                    // вертикаль, узкие зависимости объявляем точечно.
-                    // (TODO на шов: завести интерфейс `IPromptGuard`/`IPromptCatalog`
-                    // в `Services.Llm` и проксировать stat-вызовы, тогда Prompts-типы
-                    // уйдут из allow-list Llm и цикл Llm ⇄ Prompts исчезнет.)
-                    "ClaudeHomeServer.Services.Prompts.CoordinatorWriteGuard",
-                    "ClaudeHomeServer.Services.Prompts.ChatContextPrompts",
-                    "ClaudeHomeServer.Services.Prompts.VoicePrompts",
+                    // `Llm → Prompts`: ClaudeSession ссылается на `CoordinatorWriteGuard`,
+                    // `ChatContextPrompts`, `VoicePrompts` (все три — Core, этап 5, шаг 2;
+                    // проходят IsCoreAssembly). Цикл Llm ⇄ Prompts (вертикаль) разрезан
+                    // выносом Prompts: Llm не ссылается на типы вертикали Prompts.dll.
                     // `Llm ⇄ Team`: ClaudeSession.HandleControlRequestAsync ссылается
                     // на `TeamImplementPrompts.MaxInterviewRounds`/`InterviewRoundsExhausted`
                     // через static-вызов (видимо IL-сканером в `<HandleControlRequestAsync>d__144`).
@@ -935,8 +931,9 @@ public class SubsystemBoundaryTests
                 Array.Empty<string>()),
         },
         // Prompts — статические каталоги секций промпта (OmO/онбординг/голос/команды).
-        // Точечные: ModelTier (PantheonTemplate), Llm.Claude.SubagentRunPassport
-        // (SubagentPrompts формирует заголовок сабагента из паспорта).
+        // Вынесена в отдельную сборку (Этап 5, финал линии). Зависимости — только Core
+        // (ModelTier, PersonaConsultantToolset, SubagentRunPassport, SpecialtyCatalog —
+        // все в Core, проходят IsCoreAssembly). Точечных допусков нет.
         new object[]
         {
             new VerticalBoundary(
@@ -945,18 +942,7 @@ public class SubsystemBoundaryTests
                 SharedAllowedPrefixes
                     .Concat(new[] { "ClaudeHomeServer.Services.Prompts" })
                     .ToArray(),
-                new[]
-                {
-                    "ClaudeHomeServer.Services.ModelTier",
-                    // SubagentRunPassport переехал в Core (`Core/Services/Llm/SubagentRunPassport.cs`,
-                    // этап 5, шаг 2) — SubagentPrompts теперь берёт тип через Core-DTO,
-                    // допуск снят. Раньше был мёртвый декоратор (с момента коммита Этапа 5).
-                    // (Был: "ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport",)
-                    // `OmcPersonaRouting.cs:114` зовёт `PersonaConsultantToolset`
-                    // static-метод из тела метода (IL-видимость, задача `8beee75e`).
-                    // Точечный допуск по образцу `Llm → SpecialtyCatalog`/`SpecialtyPromptPresets`.
-                    "ClaudeHomeServer.Services.PersonaConsultantToolset",
-                }),
+                Array.Empty<string>()),
         },
         // Execution — запуск процессов и песочница (LauncherFactory/SandboxManager/
         // IProcessLauncher/IPathMapper/ILauncherFactory). Точечный: UserStore

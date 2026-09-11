@@ -37,7 +37,7 @@ public sealed class GitAutoCommitService(
         var project = projects.GetById(session.ProjectId);
         // Чат в отдельном worktree меняет файлы ТАМ — коммитим его дерево, не корень проекта
         var root = session.WorktreePath ?? project?.RootPath;
-        if (project is null || root is null || !project.GitAutoCommit || !GitService.IsGitRepo(root))
+        if (project is null || root is null || !project.GitAutoCommit || !git.IsGitRepo(root))
             return Task.CompletedTask;
 
         _ = Task.Run(() => AutoCommitSafeAsync(project, session, root));

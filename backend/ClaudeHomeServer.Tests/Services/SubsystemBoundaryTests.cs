@@ -339,13 +339,10 @@ public class SubsystemBoundaryTests
         // 2) `ClaudeHomeServer.Services.Execution` — `ILauncherFactory` для `schtasks`
         //    (`DeployHost.WakeAgentAsync` будит задачу планировщика через `launchers.Local`);
         //    легально: Execution — нижний слой, общий для всех, кто запускает процессы.
-        // 3) `ClaudeHomeServer.Services.Git` — `GitService.RepoSnapshotAsync` в `DeployHost`
-        //    (проба репозитория: HEAD + грязное дерево). Это СОЗНАТЕЛЬНАЯ связь
-        //    «вертикаль → вертикаль». `IGitGuard` как общий шов для Deploy+Dossiers
-        //    ОТКЛОНЁН (разведка Dossiers↔Git, 2026-09-07): Deploy нужен один метод,
-        //    Dossiers — 7+ разных с 5 намерениями — единый контракт был бы вторым
-        //    `LlmSessionContext`. Deploy остаётся на конкретном `GitService`, допуск
-        //    в allow-list не снимается;
+        // 3) Git-зависимость снята (задача 36e7a41d): `DeployHost` теперь работает
+        //    через Core-шов `IGitRepoChecker` (Services.Composition), а не на
+        //    конкретном `GitService`. Прежняя связь «вертикаль → вертикаль»
+        //    (`ClaudeHomeServer.Services.Git` в allow-list) больше не требуется.
         //
         // === Шов `Deploy → Backup.InstanceLock.TryAcquireDeploy` (шаг 5, задача `57b5e9bc`).
         // `DeployHost.TryLockAgent` берёт мьютекс `Global\ccs-deploy` через статику
@@ -372,7 +369,6 @@ public class SubsystemBoundaryTests
                     {
                         "ClaudeHomeServer.Services.Deploy",
                         "ClaudeHomeServer.Services.Execution",
-                        "ClaudeHomeServer.Services.Git",
                     })
                     .ToArray(),
                 new[]

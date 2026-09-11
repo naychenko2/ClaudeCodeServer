@@ -7219,7 +7219,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
         if (enabled)
         {
-            if (!Git.GitService.IsGitRepo(project.RootPath))
+            if (!Path.Exists(Path.Combine(project.RootPath, ".git")))
                 throw new Git.GitCommandException("В папке проекта нет git-репозитория");
 
             // Ветка: заданная вручную либо wt/<slug имени чата>; коллизии решаем суффиксом

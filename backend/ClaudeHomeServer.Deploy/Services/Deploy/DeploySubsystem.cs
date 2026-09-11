@@ -19,10 +19,9 @@ namespace ClaudeHomeServer.Services.Deploy;
 //    `DeployLauncher`.
 //
 // Известные границы (сознательные, см. CLAUDE.md «Внутренные подсистемы»):
-// - `DeployHost` зависит от `GitService` (Services.Git) — это связь вертикаль→вертикаль,
-//   и TODO на шов: довести до самостоятельного `IGitGuard` в `Services.Git` и переписать
-//   `DeployHost` через него, тогда `Services.Git` уйдёт из allow-list `Deploy`.
-//   Документировано в `SubsystemBoundaryTests` явно (см. запись "deploy").
+// - `DeployHost` использует `IGitRepoChecker` (Services.Composition, Core) — узкий шов
+//   на `GitService` (HEAD + dirty-дерево). Связь «вертикаль → вертикаль» снята:
+//   `Services.Git` больше не в allow-list `Deploy`.
 // - `DeployHost` использует `ILauncherFactory` (Services.Execution) — легально: Git-нижний
 //   слой, и Deployment как нижний слой для любой будущей вертикали «Deploy-anything».
 // - `DeployHost.TryLockAgent` берёт мьютекс `Global\ccs-deploy` через `Backup.InstanceLock`

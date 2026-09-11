@@ -18,6 +18,15 @@ public class IlBoundaryRegressionTests
 {
     private readonly ITestOutputHelper _out;
 
+    // Форс-загрузка сборок вынесенных вертикалей: .NET 5+ лодит сборку по первому
+    // использованию типа, а не из каталога. Без явного typeof() AppDomain.GetAssemblies()
+    // не видит сборку, если ни один тип из неё не вызывался в этом процессе.
+    static IlBoundaryRegressionTests()
+    {
+        _ = typeof(ClaudeHomeServer.Services.Execution.DockerProcessRunner).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Deploy.DeployService).Assembly;
+    }
+
     public IlBoundaryRegressionTests(ITestOutputHelper output) => _out = output;
 
     private static Type? Find(IEnumerable<System.Reflection.Assembly> asms, string full) =>
@@ -40,8 +49,8 @@ public class IlBoundaryRegressionTests
         // больше не существует.
         var checks = new (string Label, string SourceType, string Needle)[]
         {
-            ("DeployHost → GitService", "ClaudeHomeServer.Services.Deploy.DeployHost", "ClaudeHomeServer.Services.Git.GitService"),
-            ("DeployHost → Backup.InstanceLock", "ClaudeHomeServer.Services.Deploy.DeployHost", "ClaudeHomeServer.Services.Backup.InstanceLock"),
+            ("DeployHost → IGitRepoChecker", "ClaudeHomeServer.Services.Deploy.DeployHost", "ClaudeHomeServer.Services.Composition.IGitRepoChecker"),
+            ("DeployAgentLockAdapter → Backup.InstanceLock", "ClaudeHomeServer.Services.Composition.Deploy.DeployAgentLockAdapter", "ClaudeHomeServer.Services.Backup.InstanceLock"),
             ("ReaderService → SsrfGuard", "ClaudeHomeServer.Services.Reader.ReaderService", "ClaudeHomeServer.Services.SsrfGuard"),
             // Этап 5, волна 3: прежняя проба этой строки — `Memory → SessionSummaryService` —
             // умерла вместе со швом: чистая функция сборки транскрипта переехала из корня

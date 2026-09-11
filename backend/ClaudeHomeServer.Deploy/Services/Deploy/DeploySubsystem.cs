@@ -19,12 +19,12 @@ namespace ClaudeHomeServer.Services.Deploy;
 //    `DeployLauncher`.
 //
 // Известные границы (сознательные, см. CLAUDE.md «Внутренные подсистемы»):
-// - `DeployHost` зависит от `GitService` (Services.Git) — это связь вертикаль→вертикаль,
-//   и TODO на шов: довести до самостоятельного `IGitGuard` в `Services.Git` и переписать
-//   `DeployHost` через него, тогда `Services.Git` уйдёт из allow-list `Deploy`.
-//   Документировано в `SubsystemBoundaryTests` явно (см. запись "deploy").
-// - `DeployHost` использует `ILauncherFactory` (Services.Execution) — легально: Git-нижний
-//   слой, и Deployment как нижний слой для любой будущей вертикали «Deploy-anything».
+// - `DeployHost` использует `IGitRepoChecker` (Services.Composition, Core) — узкий шов
+//   на `GitService` (HEAD + dirty-дерево). Связь «вертикаль → вертикаль» снята:
+//   `Services.Git` больше не в allow-list `Deploy`.
+// - `DeployHost` использует `ILauncherFactory`/`IProcessLauncher`/`ProcessSpec` —
+//   все в Core (assembly-фильтр). ProjectReference на Execution-сборку убран
+//   (задача 36e7a41d): Deploy не тянет реализации (`DockerProcessRunner` и др.).
 // - `DeployHost.TryLockAgent` берёт мьютекс `Global\ccs-deploy` через `Backup.InstanceLock`
 //   (Services.Backup, статический класс). Это инфраструктурный примитив общего назначения
 //   (мьютекс деплоя), а не зависимость от логики Backup, и TODO на шов: выделить мьютекс

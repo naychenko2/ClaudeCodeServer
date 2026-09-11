@@ -103,6 +103,10 @@ public class SubsystemBoundaryTests
         // сторож видел сборку Llm.dll и её типы. Без неё изолированный прогон
         // проходит по вертикали вакуумно.
         _ = typeof(ClaudeHomeServer.Services.Llm.LlmSubsystem).Assembly;
+        // Execution/Deploy — отдельные сборки (Этап 5, волна 2): форс-загрузка,
+        // чтобы сторож видел DockerProcessRunner/SandboxManager и Deploy-типы.
+        _ = typeof(ClaudeHomeServer.Services.Execution.DockerProcessRunner).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Deploy.DeployService).Assembly;
         // Images — отдельная сборка (Этап 5, вынос Images): форс-загрузка нужна,
         // чтобы сторож видел типы Images (IImageGenerator, ImageGenerationService)
         // и проверял границы по Images.dll.
@@ -308,16 +312,13 @@ public class SubsystemBoundaryTests
         //    `DeployReportService:15-20` (доклад об итоге выкатки в чат-инициатор и
         //    push-уведомление) — «вертикаль → спинка» (общая инфраструктура),
         //    аналогично `Git`/`Tts`/`Images`/`Reader`.
-        // 2) `ClaudeHomeServer.Services.Execution` — `ILauncherFactory` для `schtasks`
-        //    (`DeployHost.WakeAgentAsync` будит задачу планировщика через `launchers.Local`);
-        //    легально: Execution — нижний слой, общий для всех, кто запускает процессы.
-        // 3) `ClaudeHomeServer.Services.Git` — `GitService.RepoSnapshotAsync` в `DeployHost`
-        //    (проба репозитория: HEAD + грязное дерево). Это СОЗНАТЕЛЬНАЯ связь
-        //    «вертикаль → вертикаль». `IGitGuard` как общий шов для Deploy+Dossiers
-        //    ОТКЛОНЁН (разведка Dossiers↔Git, 2026-09-07): Deploy нужен один метод,
-        //    Dossiers — 7+ разных с 5 намерениями — единый контракт был бы вторым
-        //    `LlmSessionContext`. Deploy остаётся на конкретном `GitService`, допуск
-        //    в allow-list не снимается;
+        // 2) Execution-зависимость снята (задача 36e7a41d): `ILauncherFactory`/
+        //    `IProcessLauncher`/`ProcessSpec` живут в Core (assembly-фильтр),
+        //    ProjectReference на ClaudeHomeServer.Execution из Deploy.csproj убран.
+        // 3) Git-зависимость снята (задача 36e7a41d): `DeployHost` теперь работает
+        //    через Core-шов `IGitRepoChecker` (Services.Composition), а не на
+        //    конкретном `GitService`. Прежняя связь «вертикаль → вертикаль»
+        //    (`ClaudeHomeServer.Services.Git` в allow-list) больше не требуется.
         //
         // === Шов `Deploy → Backup.InstanceLock.TryAcquireDeploy` (шаг 5, задача `57b5e9bc`).
         // `DeployHost.TryLockAgent` берёт мьютекс `Global\ccs-deploy` через статику
@@ -343,8 +344,6 @@ public class SubsystemBoundaryTests
                     .Concat(new[]
                     {
                         "ClaudeHomeServer.Services.Deploy",
-                        "ClaudeHomeServer.Services.Execution",
-                        "ClaudeHomeServer.Services.Git",
                     })
                     .ToArray(),
                 new[]

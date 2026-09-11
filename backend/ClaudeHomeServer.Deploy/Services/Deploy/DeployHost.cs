@@ -1,6 +1,6 @@
 using System.Text;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Execution;
-using ClaudeHomeServer.Services.Git;
 
 namespace ClaudeHomeServer.Services.Deploy;
 
@@ -32,8 +32,9 @@ public interface IDeployHost
 }
 
 public sealed class DeployHost(
-    GitService git,
+    IGitRepoChecker git,
     ILauncherFactory launchers,
+    IDeployAgentLock agentLock,
     ILogger<DeployHost> log) : IDeployHost
 {
     // Сколько ждём schtasks: он только ставит задачу в очередь и возвращается,
@@ -44,7 +45,7 @@ public sealed class DeployHost(
     {
         if (!Directory.Exists(repoDir))
             return new DeployGitSnapshot(null, [], $"каталог репозитория не найден: {repoDir}");
-        if (!GitService.IsGitRepo(repoDir))
+        if (!git.IsGitRepo(repoDir))
             return new DeployGitSnapshot(null, [], $"это не git-репозиторий: {repoDir}");
 
         try
@@ -56,7 +57,7 @@ public sealed class DeployHost(
             // пропустил бы выкатку с непрочитанным состоянием.
             return new DeployGitSnapshot(snap.ShortHeadSha, snap.DirtyPaths, snap.Error);
         }
-        catch (GitCommandException ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             return new DeployGitSnapshot(null, [], ex.Message);
         }
@@ -107,7 +108,7 @@ public sealed class DeployHost(
     }
 
     public IDisposable? TryLockAgent() =>
-        Backup.InstanceLock.TryAcquireDeploy() is { } mutex ? new MutexLease(mutex) : null;
+        agentLock.TryAcquireDeploy() is { } mutex ? new MutexLease(mutex) : null;
 
     // Отпускаем в try/catch: мьютекс мог быть заброшен умершим агентом (владение перешло
     // к нам через AbandonedMutexException), и падение на ReleaseMutex не должно ронять

@@ -887,6 +887,14 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.IChatHistoryLoader,
 builder.Services.AddSingleton<ClaudeHomeServer.Services.ITaskLookup,
     ClaudeHomeServer.Services.Composition.TaskLookupAdapter>();
 
+// Этап 5, волна 2: адаптеры узких швов для выноса Deploy в отдельный .csproj.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.INotificationSender,
+    ClaudeHomeServer.Services.Composition.Notifications.DeployNotificationSenderAdapter>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.ISessionMessageSender,
+    ClaudeHomeServer.Services.Composition.Sessions.SessionMessageSenderAdapter>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.IDeployAgentLock,
+    ClaudeHomeServer.Services.Composition.Deploy.DeployAgentLockAdapter>();
+
 // Этап 5, узкие швы Turn: адаптеры, которыми контрибьюторы промпта заменили прямые
 // ссылки на вертикали. Регистрация в композиционном корне, а не в вертикали: адаптер
 // знает обе стороны шва, и это единственное место, которому это позволено.

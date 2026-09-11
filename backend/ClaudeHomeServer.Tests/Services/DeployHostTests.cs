@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Deploy;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Git;
@@ -29,7 +30,7 @@ public class DeployHostTests : IDisposable
         File.WriteAllText(Path.Combine(_repo, "seed.txt"), "seed\n");
         git.StageAllAsync(null, _repo).GetAwaiter().GetResult();
         git.CommitAsync(null, _repo, "seed").GetAwaiter().GetResult();
-        _host = new DeployHost(git, new LocalOnlyFactory(), NullLogger<DeployHost>.Instance);
+        _host = new DeployHost(git, new LocalOnlyFactory(), new NoopDeployAgentLock(), NullLogger<DeployHost>.Instance);
     }
 
     public void Dispose()
@@ -97,4 +98,10 @@ public class DeployHostTests : IDisposable
         }
         finally { try { Directory.Delete(notRepo, recursive: true); } catch { } }
     }
+}
+
+/// <summary>Тестовый заглушка: мьютекс всегда свободен (null = не занят).</summary>
+internal sealed class NoopDeployAgentLock : IDeployAgentLock
+{
+    public Mutex? TryAcquireDeploy() => null;
 }

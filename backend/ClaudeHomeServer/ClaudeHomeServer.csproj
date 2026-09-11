@@ -88,10 +88,12 @@
     <ProjectReference Include="..\ClaudeHomeServer.Reader\ClaudeHomeServer.Reader.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.CodeGraph\ClaudeHomeServer.CodeGraph.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Changelog\ClaudeHomeServer.Changelog.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Deploy\ClaudeHomeServer.Deploy.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Diagnostics\ClaudeHomeServer.Diagnostics.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Desktop\ClaudeHomeServer.Desktop.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Docs\ClaudeHomeServer.Docs.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Dossiers\ClaudeHomeServer.Dossiers.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Execution\ClaudeHomeServer.Execution.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Memory\ClaudeHomeServer.Memory.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Skills\ClaudeHomeServer.Skills.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Git\ClaudeHomeServer.Git.csproj" />

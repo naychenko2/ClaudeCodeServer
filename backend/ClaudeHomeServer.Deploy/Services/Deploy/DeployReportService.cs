@@ -1,5 +1,6 @@
 using System.Text;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Services.Deploy;
 
@@ -14,8 +15,9 @@ namespace ClaudeHomeServer.Services.Deploy;
 /// </summary>
 public sealed class DeployReportService(
     DeployService deploy,
-    NotificationService notifications,
-    SessionManager sessions,
+    INotificationSender notifications,
+    ISessionDirectory sessions,
+    ISessionMessageSender sender,
     BuildIdProvider build,
     ILogger<DeployReportService> log) : BackgroundService
 {
@@ -83,7 +85,7 @@ public sealed class DeployReportService(
             try
             {
                 // Общая для сервера точка отправки в чат: занят своим ходом — встанет в очередь
-                await sessions.SendOrEnqueueAsync(sessionId, $"{title}\n\n{body}",
+                await sender.SendOrEnqueueAsync(sessionId, $"{title}\n\n{body}",
                     suppressTasksExecute: true);
             }
             catch (Exception ex)

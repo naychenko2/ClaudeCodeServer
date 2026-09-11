@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Execution;
 
 namespace ClaudeHomeServer.Services.Git;
@@ -30,12 +31,7 @@ public sealed class GitConflictException(string message, IReadOnlyList<string> f
     public IReadOnlyList<string> Files { get; } = files;
 }
 
-// Срез рабочего дерева: short HEAD (для UI/журнала) + список грязных путей (для гейта
-// «можно ли выкатить as-is»). shortHeadSha = null для пустого репо или при сбое rev-parse.
-// Error — null при чистом ответе git или пустом репо; непустое значение означает «команда
-// git status --porcelain не выполнилась», и Empty DirtyPaths тогда НЕ означает чистое
-// дерево: вызывающий обязан трактовать такой снапшот как отказ, а не как зелёный свет.
-public sealed record GitRepoSnapshot(string? ShortHeadSha, IReadOnlyList<string> DirtyPaths, string? Error = null);
+// GitRepoSnapshot — переехал в Core (Services/Git/GitRepoSnapshot.cs), namespace тот же.
 
 // Единая точка ЛОКАЛЬНЫХ git-операций над рабочим деревом проекта.
 // Запуск — через слой Execution (ILauncherFactory.ForOwner): для container-пользователей
@@ -46,7 +42,7 @@ public sealed record GitRepoSnapshot(string? ShortHeadSha, IReadOnlyList<string>
 // (commit-on-plumbing): запись полного дерева, резолв рефа, чтение списка файлов и
 // содержимого, tip с автором, push. Имя ветки и идентичность коммита — на стороне
 // вызывающей вертикали (см. DossierBranch), GitService про конкретные ветки не знает.
-public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? logger = null) : IGitRefSnapshotStore
+public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? logger = null) : IGitRefSnapshotStore, IGitRepoChecker
 {
     // Сериализация write-операций одного репозитория: git из UI, авто-коммит хода и
     // сессия Claude могут столкнуться на .git/index.lock. Чтение (status/log/diff) — без блокировки.
@@ -58,7 +54,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     private SemaphoreSlim LockFor(string root) =>
         _repoLocks.GetOrAdd(root, _ => new SemaphoreSlim(1, 1));
 
-    public static bool IsGitRepo(string root) => Path.Exists(Path.Combine(root, ".git"));
+    public bool IsGitRepo(string root) => Path.Exists(Path.Combine(root, ".git"));
 
     // Конвенция проекта: все относительные пути — через SafePath.Join (защита от
     // traversal) до передачи в git. Git и сам отвергает пути вне репо, но валидируем

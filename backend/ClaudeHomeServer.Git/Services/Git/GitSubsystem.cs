@@ -36,6 +36,9 @@ public sealed class GitSubsystem : IAppSubsystem
         // вертикаль с собственной веткой-паспортом. GitService — единственная реализация,
         // отдельный экземпляр не заводим (синглтон шарится между интерфейсом и классом).
         services.AddSingleton<IGitRefSnapshotStore>(sp => sp.GetRequiredService<GitService>());
+        // IGitRepoChecker — узкий шов для Deploy (HEAD + dirty-дерево), паттерн
+        // вчерашних трёх швов: контракт в Core, реализация — сам GitService.
+        services.AddSingleton<IGitRepoChecker>(sp => sp.GetRequiredService<GitService>());
         services.AddSingleton<GitServerService>();
 
         services.AddSingleton<GitAiService>();

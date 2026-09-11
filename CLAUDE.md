@@ -387,16 +387,20 @@ generic-аргументы инстанцированных методов (вк
 
 **Шаг 2г-4 (обёртки → DI):** четыре `Func`-свойства штаба с ядра сняты —
 обработчики волны живут в `TeamCoordinator`, ядро отдаёт его одной ссылкой.
-Обёрток в ядре 27 → 21. `HasLiveDelegatedTasks` осознанно остаётся `Func`:
-его ставит `TaskExecutionService` (чужая сторона, цикл настоящий), а прямая
-ссылка на `TaskManager` из спины уронила бы сторож границ.
+Обёрток в ядре 27 → **10 фасадных**: волна 3 (2026-09-11) сняла 11 снимаемых
+обёрток и три мёртвых метода (`ResolveTeamPlanRoot`, `StartTeamWorkAsync`,
+`CloseTeamTalkAsync`) — сервисы штаба зовут siblings напрямую через DI, ядро
+больше не доска объявлений для штабной логики (остались только базовые
+`GetById`/`BroadcastAsync`/`SaveSessions`). `HasLiveDelegatedTasks` осознанно
+остаётся `Func`: его ставит `TaskExecutionService` (чужая сторона, цикл
+настоящий), а прямая ссылка на `TaskManager` из спины уронила бы сторож границ.
 
 **Отдельным `.csproj` Team не выносится** (проверено по критерию ADR-014):
-73 обращения к типу `SessionManager` из вертикали, швы тянут `Models` и
-`Protocol` из Main, на `InternalsVisibleTo` стоят все тесты. Остаток обёрток
-снимается только вместе с переводом вертикали на DI: `TeamWaveService` —
-синглтон DI, а читающие сервисы создаёт ядро в своём конструкторе, и общего
-адреса, кроме `SessionManager`, у них нет. Фактура и разбивка шага 2г-4 —
+67 обращений к типу `SessionManager` из вертикали, но после волны 3 все они —
+базовые операции ядра (`GetById`, `BroadcastAsync`, `SaveSessions`), а не
+штабная логика; швы тянут `Models` и `Protocol` из Main, на `InternalsVisibleTo`
+стоят все тесты. Вынос потребовал бы фасада на десятки методов (второй
+`LlmSessionContext`) — дороже оставляемого. Фактура и разбивка шага 2г-4 —
 [docs/research/team-di-migration-2026-09.md](docs/research/team-di-migration-2026-09.md),
 план выноса — [session-core-split-2026-09.md](docs/research/session-core-split-2026-09.md).
 

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Protocol;
 
@@ -32,7 +33,8 @@ public record ImageBackfilledMessage(string Kind, string EntityId)
 /// </summary>
 public sealed class ImageBackfillService(
     ImageBackfillStore store, ImageGenerationService images,
-    PersonaManager personas, ISessionBroadcaster broadcaster, IHostApplicationLifetime lifetime,
+    IPersonaLookup personas, IPersonaAvatarStore avatarStore,
+    ISessionBroadcaster broadcaster, IHostApplicationLifetime lifetime,
     ILogger<ImageBackfillService> log)
 {
     // Не больше 2 генераций одновременно на инстанс: залп заявок упрётся в rate limit
@@ -266,11 +268,11 @@ public sealed class ImageBackfillService(
     private async Task SaveAsync(ImageBackfillRequest request, GeneratedImage image)
     {
         var ext = ImageAssetHelper.ExtFor(image.ContentType);
-        var dir = Path.Combine(personas.AssetsDir, request.EntityId);
+        var dir = Path.Combine(avatarStore.AssetsDir, request.EntityId);
         Directory.CreateDirectory(dir);
         var name = $"avatar-{Guid.NewGuid():N}{ext}";
         await File.WriteAllBytesAsync(Path.Combine(dir, name), image.Bytes);
-        personas.SetAvatarImage(request.EntityId, request.OwnerId, name);
+        avatarStore.SetAvatarImage(request.EntityId, request.OwnerId, name);
     }
 
     // Персонам вдобавок шлём штатное personas_changed: раздел «Персоны» уже слушает его

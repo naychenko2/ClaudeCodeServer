@@ -67,4 +67,24 @@ public class SkillsSubsystemRegistrationTests
         sp.GetRequiredService<SkillSuggestService>();
         sp.GetRequiredService<SkillGenerationService>();
     }
+
+    // Сторож швов Skills (этап 5, Llm → Skills): Llm держит ICommandExpansion (разворот
+    // /skill в тексте хода) и ISkillSnapshotSource (каталог скиллов для снимка промпта)
+    // как ОПЦИОНАЛЬНЫЕ аргументы ClaudeSession/LlmSessionAdapterFactory (null → молчаливая
+    // деградация, не ошибка). Поэтому юнит-тесты вертикали НЕ падают, если композиционный
+    // корень перестанет их резолвить: ход просто перестаёт разворачивать /skill, а снимок
+    // промпта — получать секцию Skills. Ловим именно обрыв проводки: реальный DI-граф
+    // обязан отдавать швы в их АДАПТЕРЫ, а не в null/no-op. Поведение разворота не
+    // дублируем — оно покрыто в Skills.Tests; здесь только «правильный тип в контейнере».
+    [Fact]
+    public void Program_ResolvesSkillSeams_ToAdaptersNotNoOp()
+    {
+        using var factory = new TestWebApplicationFactory();
+        var sp = factory.Services;
+
+        // GetRequiredService бросает, если регистрация потерялась (выпал из Program.cs);
+        // is-проверка на конкретный адаптер падает, если тип подменили на no-op.
+        sp.GetRequiredService<ICommandExpansion>().Should().BeOfType<CommandExpansionAdapter>();
+        sp.GetRequiredService<ISkillSnapshotSource>().Should().BeOfType<SkillSnapshotSourceAdapter>();
+    }
 }

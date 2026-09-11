@@ -428,6 +428,28 @@ export async function gitInit(projectId: string): Promise<{ ok: boolean; htmlUrl
   }
 }
 
+// Подключение origin: ручной адрес и создание репозитория на встроенном Forgejo.
+// После успеха перечитываем статус и стек неопубликованных — у ветки появился upstream,
+// и «неопубликовано» считается уже по нему, а не по всей истории.
+async function connectRemote(projectId: string, op: () => Promise<GitRemoteInfo>): Promise<boolean> {
+  patch(projectId, { busy: true, error: null });
+  try {
+    const remote = await op();
+    patch(projectId, { remote, busy: false });
+    await loadGitStatus(projectId);
+    await loadUnpushedLog(projectId);
+    return true;
+  } catch (e) {
+    patch(projectId, { busy: false, error: e instanceof Error ? e.message : 'Не удалось подключить репозиторий' });
+    return false;
+  }
+}
+
+export const gitSetRemote = (projectId: string, url: string) =>
+  connectRemote(projectId, () => api.git.setRemote(projectId, url));
+export const gitCreateServerRepo = (projectId: string) =>
+  connectRemote(projectId, () => api.git.createServerRepo(projectId));
+
 // Настройки авто-коммита после хода ИИ (enabled) и авто-пуша (push)
 export async function gitSetAutoCommit(projectId: string, enabled: boolean, push: boolean): Promise<boolean> {
   try {

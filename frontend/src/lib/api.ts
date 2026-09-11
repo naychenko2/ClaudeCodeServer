@@ -1905,6 +1905,14 @@ export const api = {
       request<{ status: GitStatus; htmlUrl: string | null }>(`/projects/${projectId}/git/init`, { method: 'POST', timeoutMs: 60_000 }),
     remote: (projectId: string) =>
       request<GitRemoteInfo>(`/projects/${projectId}/git/remote`),
+    // Подключить/обновить origin введённым адресом
+    setRemote: (projectId: string, url: string) =>
+      request<GitRemoteInfo>(`/projects/${projectId}/git/remote`, {
+        method: 'POST', body: JSON.stringify({ url }), timeoutMs: 30_000,
+      }),
+    // Завести репозиторий на встроенном Forgejo и подключить его как origin
+    createServerRepo: (projectId: string) =>
+      request<GitRemoteInfo>(`/projects/${projectId}/git/remote/server`, { method: 'POST', timeoutMs: 60_000 }),
     setAutoCommit: (projectId: string, enabled: boolean, push: boolean) =>
       request<{ autoCommit: boolean; autoPush: boolean }>(`/projects/${projectId}/git/auto-commit`, {
         method: 'PUT', body: JSON.stringify({ enabled, push }),

@@ -1,4 +1,5 @@
 using System.Text;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Git;
 
@@ -34,6 +35,7 @@ public interface IDeployHost
 public sealed class DeployHost(
     GitService git,
     ILauncherFactory launchers,
+    IDeployAgentLock agentLock,
     ILogger<DeployHost> log) : IDeployHost
 {
     // Сколько ждём schtasks: он только ставит задачу в очередь и возвращается,
@@ -107,7 +109,7 @@ public sealed class DeployHost(
     }
 
     public IDisposable? TryLockAgent() =>
-        Backup.InstanceLock.TryAcquireDeploy() is { } mutex ? new MutexLease(mutex) : null;
+        agentLock.TryAcquireDeploy() is { } mutex ? new MutexLease(mutex) : null;
 
     // Отпускаем в try/catch: мьютекс мог быть заброшен умершим агентом (владение перешло
     // к нам через AbandonedMutexException), и падение на ReleaseMutex не должно ронять

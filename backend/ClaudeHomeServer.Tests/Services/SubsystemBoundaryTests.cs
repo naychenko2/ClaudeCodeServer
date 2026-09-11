@@ -103,6 +103,10 @@ public class SubsystemBoundaryTests
         // сторож видел сборку Llm.dll и её типы. Без неё изолированный прогон
         // проходит по вертикали вакуумно.
         _ = typeof(ClaudeHomeServer.Services.Llm.LlmSubsystem).Assembly;
+        // Execution/Deploy — отдельные сборки (Этап 5, волна 2): форс-загрузка,
+        // чтобы сторож видел DockerProcessRunner/SandboxManager и Deploy-типы.
+        _ = typeof(ClaudeHomeServer.Services.Execution.DockerProcessRunner).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Deploy.DeployService).Assembly;
     }
 
     /// <summary>Запись границы одной вертикали: имя (для отчёта), корневой namespace

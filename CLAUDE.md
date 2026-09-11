@@ -65,7 +65,8 @@ cd frontend; npm run build     # production-сборка (tsc -b + vite)
 Browser (React 18 + TypeScript)  →  SignalR WebSocket  →  ASP.NET Core 10 (:5000)
 ```
 
-Слои бэкенда — `Controllers/`, `Hubs/SessionHub`, `Services/` (в т.ч. `Llm/` — слой LLM-провайдеров),
+Слои бэкенда — `Controllers/`, `Hubs/SessionHub`, `Services/`,
+`ClaudeHomeServer.Llm` (отдельная сборка — слой LLM-провайдеров),
 `Protocol/ServerMessage` (record-типы WS-событий); фронт — `pages/`, `components/`, `hooks/`,
 `lib/` (`api.ts`, `signalr.ts`, `design.ts`), `types/`. Состав файлов смотри в дереве репозитория.
 ## Дизайн-макеты
@@ -95,7 +96,7 @@ Claude Design проект: `52adb1f7-312b-4f25-8c47-2bccfca9df94`. Ключев
 - Новый раздел — по «Рецепту нового раздела» из гайда (эталон — KnowledgePage); для заметного
   UI перед коммитом **предложить** прогон через субагента `designer` и дождаться ответа.
 
-## LLM-провайдеры (Services/Llm)
+## LLM-провайдеры (ClaudeHomeServer.Llm)
 
 Единственный рантайм — claude CLI (`Llm/Claude/ClaudeSession`); сторонние провайдеры
 (DeepSeek, GLM) подключаются env-оверрайдами процесса на каждый ход. Конфиг — секция
@@ -177,7 +178,7 @@ Claude Design проект: `52adb1f7-312b-4f25-8c47-2bccfca9df94`. Ключев
 `LocalActionRouter` + `CheapTextRunner`; исполнителя каждого места выбирает админ в диалоге
 «Поставщики моделей», выбор действует сразу.
 
-**Перед правками в `Services/Llm/` — прочитай
+**Перед правками в `ClaudeHomeServer.Llm/` — прочитай
 [docs/architecture/llm-providers.md](docs/architecture/llm-providers.md)**; слоты и таблица
 назначений — [model-presets-and-tiers.md](docs/features/model-presets-and-tiers.md), цепочки
 фолбэка и ёмкость контекста — [ADR-007](docs/adr/ADR-007-model-preset-chains.md) §4.
@@ -236,12 +237,14 @@ YARP (`Services/Modules`, `IModule`/`ModuleRegistry`) — те живут в о�
 и разрез через `TranscriptRoots` в спине стал лечением, а не записью в allow-list.
 
 **Курс после пилота физической изоляции** ([ADR-014](docs/adr/ADR-014-internal-subsystems.md),
-раздел «Курс после пилота»): **четырнадцать** вертикалей уже вынесены в отдельные
-`.csproj` — Changelog, CodeGraph, Diagnostics, Docs, Git, Knowledge, Notes,
-Personas, Reader, Skills, Tts, Video, WebSearch, Yandex. Сначала плановый мерж
+раздел «Курс после пилота»): **двадцать семь** вертикалей уже вынесены в отдельные
+`.csproj` — Backgrounds, Changelog, CodeGraph, Desktop, Diagnostics, Docs,
+Dossiers, Git, Knowledge, Llm, Memory, Modules, Notes, Personas, ProjectIcons,
+ProjectServices, Reader, Skills, Spend, Tasks, Terminal, Tray, Tts, Turn, Video,
+WebSearch, Yandex. Сначала плановый мерж
 пилота (Video, Yandex, Reader), затем по критерию готовности швов — CodeGraph,
-Skills, Git, Tts, а на Этапе 5 — Notes, Knowledge и волна из пяти
-(Personas, Diagnostics, WebSearch, Changelog, Docs).
+Skills, Git, Tts, а на Этапе 5 — все оставшиеся, включая `Llm`
+(мерж `e9bd6f74`, 2026-09-11).
 
 Трём вынос потребовал предварительной уборки: **Git** (`SafeJoin` →
 Core-примитив `SafePath.Join`, `Models.User` вон из контракта через read-метод
@@ -250,16 +253,12 @@ Core-примитив `SafePath.Join`, `Models.User` вон из контрак�
 `Tasks`, плюс снятие двух инверсий слоёв) и **Knowledge** (семь швов под
 фактические вызовы, DTO каталога из контроллера в вертикаль).
 
-**Не вынесены и почему** (по разведкам боем 2026-09-08, объём доказан
-компилятором): **Tasks** — швы готовы, ждёт чужих швов под четыре god-объекта;
-**Spend** — 8 мест, из них пять god-объекты; **Turn** — 32 места, свой набор
-чужих вертикалей (Dossiers, CodeGraph, Notes, Skills); **Llm** (73 файла,
-23 232 строки) — была заблокирована взаимными циклами с Turn и Spend, циклы
-разрезаны; **Memory** — сцеплена с `Dossiers` (зависимости на Knowledge 8 и
-Dossiers 6), уезжает вместе с ней; **Dossiers** — решением Андрея отложена
-в конец этапа: `DossierCaptureService`/`DossierRecallService` берут
-`GitService`/`CodeGraphService`/`TaskManager` ОБЯЗАТЕЛЬНЫМИ параметрами
-конструктора, и это не утечка абстракции, а смысл подсистемы (ADR-004).
+**Не вынесены и почему** (статус на master, 2026-09-11):
+- **Team** — 73 обращения к `SessionManager`, решение прежнее (ADR-014);
+- **Backup** — вычеркнут: инфраструктурный срез поперёк всех, не вертикаль;
+- **Execution** — горизонтальный слой на 14 потребителей, нужна не форма вертикали;
+- **Prompts**, **Images**, **Deploy**, **TriggerSources**, **Watchdog**, **Auth** —
+  не вынесены; объём не мерян честным методом (пробная сборка / заглушки до сходимости).
 
 **Решение Андрея 2026-09-08 — Этап 5: вынести в отдельные `.csproj` ВСЕ
 оставшиеся вертикали**, критерий успеха — в `Services/` не остаётся ни одной папки
@@ -283,7 +282,7 @@ Dossiers 6), уезжает вместе с ней; **Dossiers** — решен�
 отдают пустой набор (доказано мутацией в ревью: 17/17 зелёных при нулевом наборе).
 Статические конструкторы сторожей (`SubsystemBoundaryTests`,
 `RootSubsystemBoundaryTests`, `SubsystemBoundaryCoverageTests`) форсят загрузку всех
-вертикальных сборок (все четырнадцать — список выше), иначе
+вертикальных сборок (все двадцать семь — список выше), иначе
 порядок тестов ложно рушит сторож при изолированном прогоне. **Дубль записи в
 `Boundaries` сторожа не ловят ни один:** `SubsystemBoundaryCoverageTests` сводит
 записи в `boundaryRoots` через `ToHashSet()` по `NamespaceRoot`, и вторая запись о
@@ -418,34 +417,35 @@ Microsoft DI не выгружает контейнер по конструкц�
 `InternalsVisibleTo` (на нём стоят все тесты), в .NET сборка — не бесплатная
 папка как в pnpm-монорепе.
 
-**Метрика успеха:** два ряда, оба замерены после волны 4 (текущий `HEAD` ветки
-`feature/subsystems-wave4`):
+**Метрика успеха:** три ряда, замерены на `master` (2026-09-11, после мержа
+`Llm` `e9bd6f74`):
 
-- **`Program.cs` = 1511 строк / 156 регистраций** (замер 2026-09-08, после
-  уборки Git). Опорные точки: волна 4 давала 1464 / 144, волна 3 — 1544 / 207,
+- **`Program.cs` = 1776 строк / 215 регистраций** (замер 2026-09-11, master).
+  Опорные точки: волна 4 — 1464 / 144, волна 3 — 1544 / 207,
   merge-base `b8ce8f85` от `master` — 1616 / 246.
   Считается так: `wc -l backend/ClaudeHomeServer/Program.cs` для строк и
   `grep -c 'builder\.Services\.Add' backend/ClaudeHomeServer/Program.cs`
   для регистраций.
-  **Рост от 144 к 156 — не регресс курса, а два разных явления.** Десять
-  регистраций пришли с обычными фичами (метрика не запрещает новый код в
-  композиции), а две — осознанное решение уборки Git 2026-09-08: реакторы
-  `GitAutoCommitService`/`CommitAttributionService` физически лежат в СПИНЕ
-  (`Services/*.cs`), и их регистрация вернулась туда же из
-  `GitSubsystem.Register`. Метрика — прокси для «сколько ВЕРТИКАЛЬНОГО кода
-  осталось в композиции»; держать регистрацию спины внутри вертикали ради
-  красивой цифры значило бы подделывать её тем же способом, каким подделывалась
-  снятая метрика «корень < 15k».
-- **`Services/*.cs` (верхний уровень, без подкаталогов) = 24 704 строк
-  / 63 файла** (после выноса штаба, 2026-09-06; сразу после волны 4 было
-  27 724 / 69). Было после волны 3 43 482 / 123, merge-base `b8ce8f85`
-  от `master` давал те же 43 482 / 123 (метрика корня в эту базу не
-  измерялась ранее). Δ от «после волны 3» = −18 778 строк, −60 файлов.
+  Рост от 144 к 215 — регистрации новых вертикалей, добавленные в
+  `AddSubsystems` по мере выноса; каждая вынесенная вертикаль добавляет
+  строку, но не удаляет существующий код.
+- **`Services/*.cs` (верхний уровень, без подкаталогов) = 24 667 строк
+  / 67 файлов** (2026-09-11, master). Опорные точки: после волны 3 —
+  43 482 / 123, merge-base `b8ce8f85` — те же 43 482 / 123.
+  Δ от «после волны 3» = −18 815 строк, −56 файлов.
   Считается так:
   `find backend/ClaudeHomeServer/Services -maxdepth 1 -name '*.cs' | wc -l`
   для числа файлов и
   `find backend/ClaudeHomeServer/Services -maxdepth 1 -name '*.cs' | xargs wc -l | tail -1`
   для строк.
+- **Размер Main-компиляции (все `.cs` в `backend/ClaudeHomeServer/`)
+  = 333 файла / 75 717 строк** (2026-09-11, master).
+  Было перед выносом `Llm` — 405 файла / 100 568 строк (Δ = −73 файла,
+  −23 191 строк). Эта величина отражает цель Этапа 5: Main = композиция
+  + контроллеры + ядро сессий, без папок вертикалей.
+  Считается так:
+  `find backend/ClaudeHomeServer -name '*.cs' | wc -l`
+  и `find backend/ClaudeHomeServer -name '*.cs' | xargs wc -l | tail -1`.
 
 Полный разбор баз и способа подсчёта — в
 [ADR-014](docs/adr/ADR-014-internal-subsystems.md), раздел «Метрика успеха».
@@ -466,7 +466,7 @@ Microsoft DI не выгружает контейнер по конструкц�
 выход по `is null`, честный отказ на границе со своим кодом (502/503) — 500 и
 необработанное исключение не годятся. Гейт ставится **на регистрацию**: пост-хок
 удаление дескрипторов не видит регистрацию через `ImplementationFactory`.
-Грабля, которая касается всех четырнадцати вынесенных вертикалей:
+Грабля, которая касается всех вынесенных вертикалей:
 `ApplicationPart` вертикали под `Microsoft.NET.Sdk.Web` подключается MSBuild
 сам, «добавить часть по гейту» — мёртвый код, изоляция маршрутов делается
 **удалением** части в `Program.cs` через `ConfigureApplicationPartManager`.

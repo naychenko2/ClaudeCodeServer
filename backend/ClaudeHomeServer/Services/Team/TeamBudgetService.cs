@@ -41,14 +41,16 @@ internal sealed class TeamBudgetService
     private readonly ITeamRunState _run;
     private readonly ITeamHistoryStore _history;
     private readonly ILogger<TeamBudgetService> _log;
+    private readonly TeamStateService _state;
 
     internal TeamBudgetService(SessionManager sessions, ITeamSessionDirectory dir,
-        ITeamRunState run, ILogger<TeamBudgetService> log)
+        ITeamRunState run, TeamStateService state, ILogger<TeamBudgetService> log)
     {
         _sessions = sessions;
         _dir = dir;
         _run = run;
         _history = sessions;
+        _state = state;
         _log = log;
     }
 
@@ -156,7 +158,7 @@ internal sealed class TeamBudgetService
 
         stab.UpdatedAt = DateTime.UtcNow;
         _dir.Persist();
-        FireAndForget(_sessions.BroadcastTeamImplementAsync(stabId, stab),
+        FireAndForget(_state.BroadcastTeamImplementAsync(stabId, stab),
             $"рассылка состояния режима после расхода квоты ({stabId})");
         return (TeamRunQuota.Allowed, null);
     }
@@ -202,7 +204,7 @@ internal sealed class TeamBudgetService
         });
         stab.UpdatedAt = DateTime.UtcNow;
         _dir.Persist();
-        FireAndForget(_sessions.BroadcastTeamImplementAsync(stabId, stab),
+        FireAndForget(_state.BroadcastTeamImplementAsync(stabId, stab),
             $"рассылка состояния режима после возврата квоты ({stabId})");
     }
 
@@ -254,7 +256,7 @@ internal sealed class TeamBudgetService
         {
             stab.UpdatedAt = DateTime.UtcNow;
             _dir.Persist();
-            FireAndForget(_sessions.BroadcastTeamImplementAsync(sessionId, stab),
+            FireAndForget(_state.BroadcastTeamImplementAsync(sessionId, stab),
                 $"рассылка состояния режима после расхода пробуждения ({sessionId})");
         }
         return (true, allowed, reason);
@@ -276,7 +278,7 @@ internal sealed class TeamBudgetService
         });
         stab.UpdatedAt = DateTime.UtcNow;
         _dir.Persist();
-        FireAndForget(_sessions.BroadcastTeamImplementAsync(sessionId, stab),
+        FireAndForget(_state.BroadcastTeamImplementAsync(sessionId, stab),
             $"рассылка состояния режима после возврата пробуждения ({sessionId})");
     }
 

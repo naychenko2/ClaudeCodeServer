@@ -70,10 +70,15 @@ internal sealed class TeamDecisionService
     private readonly ITeamTurnIntake _intake;
     private readonly PersonaManager _personas;
     private readonly ILogger<TeamDecisionService> _log;
+    // Прямые ссылки на sibling-сервисы вертикали (волна 3, шаг 2г-4): вместо owning-обёрток
+    // ядра вызовы идут на TeamStateService/TeamPlanService напрямую.
+    private readonly TeamStateService _state;
+    private readonly TeamPlanService _plan;
 
     internal TeamDecisionService(SessionManager sessions, ITeamSessionDirectory dir,
         ITeamHistoryStore history, ITeamRunState run, ITeamTurnIntake intake,
-        PersonaManager personas, ILogger<TeamDecisionService> log)
+        PersonaManager personas, TeamStateService state, TeamPlanService plan,
+        ILogger<TeamDecisionService> log)
     {
         _sessions = sessions;
         _dir = dir;
@@ -81,6 +86,8 @@ internal sealed class TeamDecisionService
         _run = run;
         _intake = intake;
         _personas = personas;
+        _state = state;
+        _plan = plan;
         _log = log;
     }
 
@@ -118,7 +125,7 @@ internal sealed class TeamDecisionService
             _run.WithTeamState(sessionId, t => { t.Stage = TeamImplementStage.Planning; return true; });
             session.UpdatedAt = DateTime.UtcNow;
             _dir.Persist();
-            await _sessions.BroadcastTeamImplementAsync(sessionId, session);
+            await _state.BroadcastTeamImplementAsync(sessionId, session);
         }
 
         // Правка плана на подтверждении: тот же контур, что у clarify (Э8) — старая карточка
@@ -135,10 +142,10 @@ internal sealed class TeamDecisionService
                 t.WaveActivityAt = null;
                 return true;
             });
-            await _sessions.SupersedeCurrentPlanCardAsync(sessionId, session, nextVersion);
+            await _plan.SupersedeCurrentPlanCardAsync(sessionId, session, nextVersion);
             session.UpdatedAt = DateTime.UtcNow;
             _dir.Persist();
-            await _sessions.BroadcastTeamImplementAsync(sessionId, session);
+            await _state.BroadcastTeamImplementAsync(sessionId, session);
         }
 
         // M6: новая итерация в ожидании открывается ЗДЕСЬ — классификацией вводной как работы,
@@ -149,7 +156,7 @@ internal sealed class TeamDecisionService
         {
             _run.WithTeamState(sessionId, t =>
             {
-                t.Budget = _sessions.NewTeamImplementBudget();
+                t.Budget = _state.NewTeamImplementBudget();
                 t.WaveNumber = 0;
                 t.ClosedWave = 0;
                 t.PlannedWaves = 0;
@@ -169,13 +176,13 @@ internal sealed class TeamDecisionService
             });
             // План-режим — с классификации, а не с приёма сообщения: разговорный ход в
             // ожидании идёт в режиме человека, селектор не лочится.
-            _sessions.EnterPlanPhaseMode(sessionId);
+            _state.EnterPlanPhaseMode(sessionId);
             session.UpdatedAt = DateTime.UtcNow;
             _dir.Persist();
-            await _sessions.BroadcastTeamImplementAsync(sessionId, session);
+            await _state.BroadcastTeamImplementAsync(sessionId, session);
         }
 
-        await _sessions.RunTeamPlanningAsync(sessionId, request, feedback, _run.TurnStartedByHuman(sessionId));
+        await _plan.RunTeamPlanningAsync(sessionId, request, feedback, _run.TurnStartedByHuman(sessionId));
     }
 
     // Выход из интервью без работы (M6, маркер `<team:talk/>`): координатор честно разобрал
@@ -212,10 +219,10 @@ internal sealed class TeamDecisionService
             }
             return true;
         });
-        _sessions.RestoreUserMode(sessionId);
+        _state.RestoreUserMode(sessionId);
         session.UpdatedAt = DateTime.UtcNow;
         _dir.Persist();
-        await _sessions.BroadcastTeamImplementAsync(sessionId, session);
+        await _state.BroadcastTeamImplementAsync(sessionId, session);
 
         // Третья дверь в мёртвую зону (Major, ревью 2026-08-17): интервью могло закончиться
         // ПОСЛЕ закрытия волны (clarify посреди волны → CloseWaveIfDoneAsync стоит в
@@ -268,7 +275,7 @@ internal sealed class TeamDecisionService
         // то есть отказ был молчаливым, а состояние — враньём.
         if (session.TeamImplement is { } current && IsStalePlanCard(current, planId, plan))
         {
-            await _sessions.ResolveStalePlanCardAsync(sessionId, session, current, planId, plan);
+            await _plan.ResolveStalePlanCardAsync(sessionId, session, current, planId, plan);
             return null;
         }
 
@@ -308,14 +315,14 @@ internal sealed class TeamDecisionService
                 t.Replanning = true;
                 return true;
             });
-            await _sessions.SupersedeCurrentPlanCardAsync(sessionId, session, nextVersion);
+            await _plan.SupersedeCurrentPlanCardAsync(sessionId, session, nextVersion);
             session.UpdatedAt = DateTime.UtcNow;
             _dir.Persist();
-            await _sessions.BroadcastTeamImplementAsync(sessionId, session);
+            await _state.BroadcastTeamImplementAsync(sessionId, session);
 
             // Планировщик зовётся напрямую: вводная — Request самой карточки (последняя
             // накопленная постановка итерации), правка уходит отдельным блоком промпта.
-            await _sessions.RunTeamPlanningAsync(sessionId, plan.Request, feedback, fromHuman: true);
+            await _plan.RunTeamPlanningAsync(sessionId, plan.Request, feedback, fromHuman: true);
             return plan;
         }
 
@@ -403,10 +410,10 @@ internal sealed class TeamDecisionService
             // Э8: «Запустить» закрывает стадии интервью и планирования — человеку возвращается
             // его режим прав (селектор снова разблокирован). «Отменить» возвращает штаб в
             // планирование, поэтому план-режим там остаётся.
-            if (decision == TeamPlanDecision.Run) _sessions.RestoreUserMode(sessionId);
+            if (decision == TeamPlanDecision.Run) _state.RestoreUserMode(sessionId);
             session.UpdatedAt = DateTime.UtcNow;
             _dir.Persist();
-            await _sessions.BroadcastTeamImplementAsync(sessionId, session);
+            await _state.BroadcastTeamImplementAsync(sessionId, session);
         }
 
         await _sessions.BroadcastAsync(sessionId, new TeamPlanMessage(planId, plan, resolved,
@@ -485,7 +492,7 @@ internal sealed class TeamDecisionService
         });
         session.UpdatedAt = DateTime.UtcNow;
         _sessions.SaveSessions();
-        await _sessions.BroadcastTeamImplementAsync(sessionId, session);
+        await _state.BroadcastTeamImplementAsync(sessionId, session);
     }
 
     // Открытые (не resolved) карточки остановки чата — сторожу повторных напоминаний
@@ -536,7 +543,7 @@ internal sealed class TeamDecisionService
                     // Добавить бюджет может ТОЛЬКО человек — этот путь идёт из хаба, у агента
                     // такого инструмента нет. Иначе потолок обходился бы действием координатора.
                     case "addBudget":
-                        var fresh = _sessions.NewTeamImplementBudget();
+                        var fresh = _state.NewTeamImplementBudget();
                         team.Budget.MaxTasks += fresh.MaxTasks;
                         team.Budget.MaxWaves += fresh.MaxWaves;
                         team.Budget.MaxRuns += fresh.MaxRuns;
@@ -606,7 +613,7 @@ internal sealed class TeamDecisionService
             });
             session.UpdatedAt = DateTime.UtcNow;
             _sessions.SaveSessions();
-            await _sessions.BroadcastTeamImplementAsync(sessionId, session);
+            await _state.BroadcastTeamImplementAsync(sessionId, session);
         }
 
         await _sessions.BroadcastAsync(sessionId, new TeamEscalationMessage(escalationId,
@@ -699,7 +706,7 @@ internal sealed class TeamDecisionService
         {
             var teamState = session.TeamImplement;
             if (!string.IsNullOrWhiteSpace(teamState?.LastPlanRequest))
-                await _sessions.RunTeamPlanningAsync(sessionId, teamState.LastPlanRequest,
+                await _plan.RunTeamPlanningAsync(sessionId, teamState.LastPlanRequest,
                     teamState.LastPlanFeedback, _run.TurnStartedByHuman(sessionId));
             else
                 _log.LogWarning("Повтор планирования в чате {SessionId}: сохранённая вводная пуста", sessionId);
@@ -735,7 +742,7 @@ internal sealed class TeamDecisionService
         });
         session.UpdatedAt = DateTime.UtcNow;
         _sessions.SaveSessions();
-        await _sessions.BroadcastTeamImplementAsync(sessionId, session);
+        await _state.BroadcastTeamImplementAsync(sessionId, session);
 
         // Карточка возврата — один раз на остановку: повторное «Остановить» при уже открытой
         // карточке Stopped второй не плодит, человек решает по той, что висит
@@ -863,7 +870,7 @@ internal sealed class TeamDecisionService
         if (!stageAdvanced) return true;
         session.UpdatedAt = DateTime.UtcNow;
         _sessions.SaveSessions();
-        await _sessions.BroadcastTeamImplementAsync(stabSessionId, session);
+        await _state.BroadcastTeamImplementAsync(stabSessionId, session);
         _log.LogInformation("Карточка блокера по задаче {TaskId} в чате-штабе {SessionId} погашена штабом: {Reason}",
             taskId, stabSessionId, reason);
         return true;

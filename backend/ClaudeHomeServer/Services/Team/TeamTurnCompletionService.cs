@@ -60,14 +60,17 @@ internal sealed class TeamTurnCompletionService
     private readonly ITeamHistoryStore _history;
     private readonly ITeamRunState _run;
     private readonly ILogger<TeamTurnCompletionService> _log;
+    private readonly TeamDecisionService _decision;
 
     internal TeamTurnCompletionService(SessionManager sessions, ITeamSessionDirectory dir,
-        ITeamHistoryStore history, ITeamRunState run, ILogger<TeamTurnCompletionService> log)
+        ITeamHistoryStore history, ITeamRunState run, TeamDecisionService decision,
+        ILogger<TeamTurnCompletionService> log)
     {
         _sessions = sessions;
         _dir = dir;
         _history = history;
         _run = run;
+        _decision = decision;
         _log = log;
     }
 
@@ -218,7 +221,7 @@ internal sealed class TeamTurnCompletionService
 
         if (TeamProtocolMarkers.ParseWorkMarker(turnText) is { } request)
         {
-            await _sessions.StartTeamWorkAsync(sessionId, request);
+            await _decision.StartTeamWorkAsync(sessionId, request);
             return;
         }
 
@@ -226,7 +229,7 @@ internal sealed class TeamTurnCompletionService
         // и без ложной эскалации, практика возвращается в прежнее состояние.
         if (TeamProtocolMarkers.HasTalkMarker(turnText))
         {
-            await _sessions.CloseTeamTalkAsync(sessionId);
+            await _decision.CloseTeamTalkAsync(sessionId);
             return;
         }
 

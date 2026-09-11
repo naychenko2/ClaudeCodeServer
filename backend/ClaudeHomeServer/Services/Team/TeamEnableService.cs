@@ -48,14 +48,17 @@ internal sealed class TeamEnableService
     private readonly ITeamHistoryStore _history;
     private readonly ITeamRunState _run;
     private readonly ILogger<TeamEnableService> _log;
+    private readonly TeamStateService _state;
 
     internal TeamEnableService(SessionManager sessions, ITeamSessionDirectory dir,
-        ITeamHistoryStore history, ITeamRunState run, ILogger<TeamEnableService> log)
+        ITeamHistoryStore history, ITeamRunState run, TeamStateService state,
+        ILogger<TeamEnableService> log)
     {
         _sessions = sessions;
         _dir = dir;
         _history = history;
         _run = run;
+        _state = state;
         _log = log;
     }
 
@@ -95,7 +98,7 @@ internal sealed class TeamEnableService
         // Выключение режима посреди интервью/планирования: сначала вернуть человеку его
         // режим прав, пока состояние с SavedMode ещё живо — иначе чат навсегда остался бы
         // в план-режиме, который ему навязал штаб (Э8).
-        if (!enabled) _sessions.RestoreUserMode(sessionId);
+        if (!enabled) _state.RestoreUserMode(sessionId);
 
         if (enabled && session.TeamImplement is { } active)
         {
@@ -124,7 +127,7 @@ internal sealed class TeamEnableService
                     CoordinatorPersonaId = coordinatorPersonaId,
                     PlannerPersonaId = plannerPersonaId,
                     ExecutorPersonaIds = executorPersonaIds?.ToList() ?? [],
-                    Budget = _sessions.NewTeamImplementBudget(),
+                    Budget = _state.NewTeamImplementBudget(),
                     CoordinatorNoCode = coordinatorNoCode,
                 }
                 : null;
@@ -147,7 +150,7 @@ internal sealed class TeamEnableService
         }
         session.UpdatedAt = DateTime.UtcNow;
         _dir.Persist();
-        await _sessions.BroadcastTeamImplementAsync(sessionId, session);
+        await _state.BroadcastTeamImplementAsync(sessionId, session);
 
         // След «итерация оборвана» (Minor, волна 3): молчаливых пауз не бывает и у ручного
         // выключения — задачи незакрытой волны продолжат исполняться сами по себе, но человек
@@ -176,7 +179,7 @@ internal sealed class TeamEnableService
         ti.AutoWaves = autoWaves;
         session.UpdatedAt = DateTime.UtcNow;
         _dir.Persist();
-        await _sessions.BroadcastTeamImplementAsync(sessionId, session);
+        await _state.BroadcastTeamImplementAsync(sessionId, session);
         return session;
     }
 }

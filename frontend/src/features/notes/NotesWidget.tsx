@@ -4,7 +4,7 @@ import type { NoteSummary } from '../../types';
 import { api } from '../../lib/api';
 import { C, FONT } from '../../lib/design';
 import { ensureNotesLoaded } from '../../lib/notes';
-import type { HubTab } from '../../components/HubTabs';
+import { subsystemTabValue, type HubTabValue } from '../../components/HubTabs';
 import { useSubsystem } from '../../lib/subsystems';
 import { WidgetCard, WidgetAction, WidgetEmpty, relTime } from '../home/WidgetCard';
 import { NewNoteDialog } from './NewNoteDialog';
@@ -14,7 +14,7 @@ import { openNote } from './openNote';
 // (раньше лежал в features/home и импортировал диалог заметки напрямую) — дашборд
 // рисует его вкладом слота home-widget.
 // Гейт по подсистеме: выключена — виджет не рендерится.
-export function NotesWidget({ onHubTab }: { onHubTab: (t: HubTab) => void }) {
+export function NotesWidget({ onHubTab }: { onHubTab: (t: HubTabValue) => void }) {
   const notesOn = useSubsystem('notes');
   const [notes, setNotes] = useState<NoteSummary[]>([]);
   const [newOpen, setNewOpen] = useState(false);
@@ -42,7 +42,7 @@ export function NotesWidget({ onHubTab }: { onHubTab: (t: HubTab) => void }) {
       title="Заметки"
       onCreate={openNew}
       createTitle="Новая заметка"
-      action={<WidgetAction label="Все заметки →" onClick={() => onHubTab('notes')} />}
+      action={<WidgetAction label="Все заметки →" onClick={() => onHubTab(subsystemTabValue('notes'))} />}
     >
       {recent.length === 0
         ? <WidgetEmpty text="Заметок пока нет." />

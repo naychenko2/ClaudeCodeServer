@@ -15,7 +15,7 @@
 import { useMemo, useSyncExternalStore } from 'react';
 import type { ComponentType, LazyExoticComponent, ReactNode } from 'react';
 import type { AuthState, NoteDetail, Session } from '../../types';
-import type { HubTab, HubTabValue } from '../../components/HubTabs';
+import type { HubTabValue } from '../../components/hubTabsModel';
 import { isSubsystemEnabled, subscribeSubsystems } from '../subsystems';
 
 // Вклад в слот. Ровно два вида:
@@ -104,7 +104,7 @@ export interface WorkspacePanelNotesCtx {
   onOpenFile: (path: string) => void;
 }
 
-export interface HomeWidgetNotesCtx { onHubTab: (t: HubTab) => void }
+export interface HomeWidgetNotesCtx { onHubTab: (t: HubTabValue) => void }
 
 export interface ActionButtonProps {
   icon: ReactNode;
@@ -151,7 +151,11 @@ function emit() {
 }
 
 export function registerSubsystem(m: SubsystemManifest) {
-  _manifests.push(m);
+  // Дедупликация по ключу: при dev-HMR модуль-регистратор исполняется повторно,
+  // и без замены в реестре оказались бы две «Заметки» (двойные слоты/вкладки).
+  const i = _manifests.findIndex(x => x.key === m.key);
+  if (i >= 0) _manifests[i] = m;
+  else _manifests.push(m);
   emit();
 }
 
@@ -211,4 +215,12 @@ export function useSlotItem<C = never, A = Record<string, unknown>>(slot: string
   const version = useSyncExternalStore(subscribeRegistry, getRegistryVersion, getRegistryVersion);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- version в deps: пересчёт при изменении реестра/тумблеров
   return useMemo(() => getSlotItem<C, A>(slot, name), [slot, name, version]);
+}
+
+// Список зарегистрированных подсистем с подпиской: перерисовка при регистрации
+// новой подсистемы и при смене тумблеров включённости. База для таббара хаба.
+export function useRegisteredSubsystems(): SubsystemManifest[] {
+  const version = useSyncExternalStore(subscribeRegistry, getRegistryVersion, getRegistryVersion);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- version в deps: пересчёт при регистрации/тумблерах
+  return useMemo(() => getRegisteredSubsystems(), [version]);
 }

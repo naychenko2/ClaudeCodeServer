@@ -8,6 +8,7 @@
 // Тяжёлые части (страница раздела, редактор заметок) остаются ленивыми.
 
 import { lazy } from 'react';
+import { Share2 } from 'lucide-react';
 import { registerSubsystem } from '../../lib/subsystems/registryCore';
 import type {
   SubsystemManifest,
@@ -37,7 +38,8 @@ const NoteEditor = lazy(() => import('./NoteEditor').then(m => ({ default: m.Not
 const manifest: SubsystemManifest = {
   key: 'notes',
   title: 'Заметки',
-  icon: <IconNotes size={18} />,
+  // Иконка вкладки хаба — Share2 (как в прежнем статичном TAB_ICONS.notes).
+  icon: <Share2 size={18} strokeWidth={2} />,
   order: 35,
   tab: { component: NotesPage },
   slots: {

@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Заглушка динамического модуля (сценарий Б, PoC). Библиотека под Web SDK по образцу
+         вертикалей: MVC-типы (ControllerBase, [ApiController]) нужны для контроллера, который
+         ядро находит через ApplicationPart. Ссылается ТОЛЬКО на Core — Main НЕ тянет, иначе
+         загрузка по пути теряет смысл (ProjectReference дал бы компиляционную ссылку). -->
+    <OutputType>Library</OutputType>
+    <EnableDefaultContentItems>false</EnableDefaultContentItems>
+    <AssemblyName>StubModule</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -70,6 +70,23 @@
     <Copy SourceFiles="@(ConPtyBridgeFiles)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
   </Target>
 
+  <!-- Динамический модуль-заглушка (сценарий Б, PoC): грузится по пути из конфига, НЕ
+       через ProjectReference, поэтому ReferenceOutputAssembly="false" — нужен только порядок
+       сборки (stub строится до Main). Собранный dll копируем рядом с exe в modules/__stub/,
+       чтобы ModuleLoader резолвил относительный путь из appsettings.json (Modules:0:AssemblyPath).
+       N3: копирование в выходной каталог только для Debug — в Release (prod) заглушка в
+       базовом appsettings.json Disabled (Enabled=false), и dll в артефакте не нужна. -->
+  <ItemGroup>
+    <ProjectReference Include="..\modules\__stub\StubModule.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+  <Target Name="CopyStubModule" AfterTargets="Build" Condition="'$(Configuration)' == 'Debug'">
+    <ItemGroup>
+      <StubModuleFiles Include="..\modules\__stub\bin\$(Configuration)\net10.0\StubModule.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(StubModuleFiles)" DestinationFolder="$(OutDir)modules\__stub"
+          SkipUnchangedFiles="true" Condition="Exists('..\modules\__stub\bin\$(Configuration)\net10.0\StubModule.dll')" />
+  </Target>
+
   <!-- === Модульность (Этап 3+, Этап 5)
        Вертикали Video/Yandex/Reader/CodeGraph/Skills/Git/Notes/Personas/Spend/Knowledge/
        Changelog/Diagnostics/Docs/Tts/WebSearch/Tasks/Modules/ProjectServices/Backgrounds

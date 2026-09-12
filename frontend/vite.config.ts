@@ -141,6 +141,9 @@ export default defineConfig({
       // Раздел «Телеметрия»: бэкенд форвардит /telemetry-proxy/* на SigNoz. Без этой строки
       // Vite отдал бы свой index.html (SPA-fallback), и в iframe грузился бы сам CCS.
       '/telemetry-proxy': { target: backendUrl, changeOrigin: true, ws: true },
+      // MF remote notes (dev): dev-сервер модуля на :5174, хост грузит remoteEntry.js
+      // через этот префикс. В прод remoteEntry.js сервиcится статически из wwwroot.
+      '/notes-remote': { target: 'http://localhost:5174', changeOrigin: true, rewrite: (p: string) => p.replace(/^\/notes-remote/, '') },
     },
   },
   preview: {
@@ -151,6 +154,7 @@ export default defineConfig({
       '/hubs': { target: backendUrl, changeOrigin: true, ws: true },
       '/drawio': { target: backendUrl, changeOrigin: true },
       '/telemetry-proxy': { target: backendUrl, changeOrigin: true, ws: true },
+      '/notes-remote': { target: 'http://localhost:5174', changeOrigin: true, rewrite: (p: string) => p.replace(/^\/notes-remote/, '') },
     },
   },
 });

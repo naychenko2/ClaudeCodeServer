@@ -133,4 +133,14 @@
          процесс-глобальным состоянием сериализуются коллекцией (TestCollections.cs) -->
     <None Include="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+
+  <!-- Динамический модуль-заглушка (сценарий Б): копируем собранный dll рядом с test-host
+       (OutDir = каталог сборки тестов = AppContext.BaseDirectory для WebApplicationFactory).
+       ModuleLoader резолвит относительный Modules:0:AssemblyPath отсюда. Stub строится до
+       тестов: он ProjectReference Main, а Main — ProjectReference тестов. -->
+  <Target Name="CopyStubModuleForTests" AfterTargets="Build">
+    <Copy SourceFiles="..\modules\__stub\bin\$(Configuration)\net10.0\StubModule.dll"
+          DestinationFolder="$(OutDir)modules\__stub" SkipUnchangedFiles="true"
+          Condition="Exists('..\modules\__stub\bin\$(Configuration)\net10.0\StubModule.dll')" />
+  </Target>
 </Project>

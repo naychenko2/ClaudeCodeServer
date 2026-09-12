@@ -9,6 +9,7 @@ import type { HubTabValue } from './components/HubTabs'
 import { moduleIdOf, subsystemKeyOf, subsystemTabValue } from './components/HubTabs'
 import { ModuleScreen } from './components/modules/ModuleScreen'
 import { loadModules } from './lib/modules'
+import { loadSubsystemRemotes } from './lib/subsystems/registry'
 import { VideoFloat } from './features/video/VideoFloat'
 import { VideoStageFrame } from './features/video/VideoStageFrame'
 import { useVideoStage } from './lib/videoStage'
@@ -481,6 +482,7 @@ export default function App() {
         // «По умолчанию» в пикерах) — одним запросом, fire-and-forget, есть fallback
         loadModels()
         void loadModules() // список внешних модулей платформы для вкладок оболочки (R6)
+        void loadSubsystemRemotes() // MF-remote подсистем (пилот): notes через registerRemotes+loadRemote
         // Таймзона устройства — серверу для напоминаний (fire-and-forget)
         const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
         if (tz) api.auth.setTimeZone(tz).catch(() => {})

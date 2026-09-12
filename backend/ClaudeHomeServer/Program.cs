@@ -25,6 +25,7 @@ using ClaudeHomeServer.Telemetry;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.StaticFiles;
 using Yarp.ReverseProxy.Forwarder;
 
@@ -117,7 +118,10 @@ if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(OAuthTokenVar))
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<ClaudeHomeServer.Services.Http.UnhandledExceptionHandler>();
 
-builder.Services.AddControllers()
+// Держим IMvcBuilder в переменной: ниже, после загрузки динамических модулей (ModuleLoader),
+// на том же builder'е подключаем их контроллеры (AddApplicationPart-эквивалент —
+// ConfigureApplicationPartManager, единственный доступный на IServiceCollection-уровне путь).
+var mvcBuilder = builder.Services.AddControllers()
     .AddJsonOptions(o =>
         o.JsonSerializerOptions.Converters.Add(
             new JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase)))
@@ -146,6 +150,34 @@ builder.Services.AddControllers()
                 pm.ApplicationParts.RemoveAt(i);
         }
     });
+
+// Динамические модули (сценарий Б): отдельные сборки, грузятся по пути из секции "DynamicModules"
+// конфига при старте (не через ProjectReference). Load-once, выгрузки нет (DI сам не выгружает).
+// Загрузчик зовёт Register каждого Enabled-модуля (регистрация сервисов) и возвращает
+// загруженные сборки; контроллеры каждой подключаем AssemblyPart'ом на том же mvcBuilder'е.
+//
+// Честный ILogger<ModuleLoader> (M10): на этом этапе builder.Build() ещё не вызван, а
+// WebApplicationBuilder в .NET 10 не отдаёт готовый ILoggerFactory/ServiceProvider (builder.Logging
+// — ILoggingBuilder, CreateLogger<T> на нём не резолвится). Поэтому собираем ОДНОРАЗОВЫЙ
+// провайдер из builder.Services (в нём уже зарегистрированы реальные лог-провайдеры, поставленные
+// WebApplication.CreateBuilder) и берём оттуда ILoggerFactory: «модуль не загрузился» уходит
+// в консоль, а не теряется в no-op-фабрике (раньше здесь был new LoggerFactory() без провайдеров).
+// Логирование происходит сразу, в LoadAll, внутри using — одноразовый провайдер к тому моменту жив.
+using (var dynamicModuleLogProvider = builder.Services.BuildServiceProvider())
+{
+    var dynamicModuleLogFactory = dynamicModuleLogProvider.GetRequiredService<ILoggerFactory>();
+    var dynamicModuleRegistry = new ClaudeHomeServer.Services.DynamicModules.ModuleRegistry(builder.Configuration);
+    var dynamicModuleLoader = new ClaudeHomeServer.Services.DynamicModules.ModuleLoader(
+        dynamicModuleRegistry,
+        builder.Configuration,
+        dynamicModuleLogFactory.CreateLogger<ClaudeHomeServer.Services.DynamicModules.ModuleLoader>());
+    foreach (var dynamicModuleAssembly in dynamicModuleLoader.LoadAll(builder.Services))
+        // MVC-контроллеры загруженной сборки подключаем как отдельный ApplicationPart на том же
+        // IMvcBuilder (ConfigureApplicationPartManager отрабатывает на построении менеджера частей —
+        // единственный путь на уровне сервиса; IServiceCollection-перегрузки нет).
+        mvcBuilder.ConfigureApplicationPartManager(parts =>
+            parts.ApplicationParts.Add(new Microsoft.AspNetCore.Mvc.ApplicationParts.AssemblyPart(dynamicModuleAssembly)));
+}
 
 // Hosted-сервисы: в Testing-среде (TestWebApplicationFactory) НЕ регистрируются без
 // явного флага Testing:EnableHostedServices=true — 17 фоновых циклов на каждый из
@@ -1680,6 +1712,23 @@ if (Directory.Exists(distPath))
 
     app.UseDefaultFiles(new DefaultFilesOptions { FileProvider = fp });
     app.UseStaticFiles(new StaticFileOptions { FileProvider = fp, OnPrepareResponse = setCacheHeaders, ContentTypeProvider = contentTypes });
+
+    // MF-remote подсистем (N2): /notes-remote/** раздаём из ФИЗИЧЕСКОГО wwwroot/notes-remote.
+    // Отдельно от distPath (выше fp может указывать на dev-dist, не на wwwroot), чтобы в проде
+    // запрос remoteEntry.js всегда резолвился в файл, а не SPA-fallback → index.html (loadRemote упал бы).
+    // Middleware стоит РАНЬШЕ MapFallbackToFile, поэтому перехватывает /notes-remote/* до SPA-фолбэка.
+    var notesRemotePath = Path.Combine(AppContext.BaseDirectory, "wwwroot", "notes-remote");
+    if (Directory.Exists(notesRemotePath))
+    {
+        app.UseStaticFiles(new StaticFileOptions
+        {
+            FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(notesRemotePath),
+            RequestPath = "/notes-remote",
+            OnPrepareResponse = setCacheHeaders,
+            ContentTypeProvider = contentTypes
+        });
+    }
+
     // /_api/* — Office/SharePoint-запросы; возвращаем 404 вместо SPA, иначе Word показывает «Нет доступа»
     app.Map("/_api", api => api.Run(ctx => { ctx.Response.StatusCode = 404; return Task.CompletedTask; }));
     app.MapFallbackToFile("index.html", new StaticFileOptions { FileProvider = fp, OnPrepareResponse = setCacheHeaders });

@@ -227,6 +227,10 @@ public class SubsystemBoundaryCoverageTests
             "ClaudeHomeServer.Services.Http",         // HTTP-утилиты, QuietHttpLogger
             "ClaudeHomeServer.Services.Composition",  // контракт IAppSubsystem
             "ClaudeHomeServer.Services.Mcp",          // MCP-инфраструктура (ADR-014)
+            // Спина: загрузчик динамических модулей (ModuleLoader/ModuleRegistry) —
+            // инфраструктура загрузки по манифесту секции "DynamicModules", не вертикаль-
+            // подсистема (IAppSubsystem не имеет). Живёт в Main, потребляет его Program.cs.
+            "ClaudeHomeServer.Services.DynamicModules",
         };
 
         // Все namespace, покрытые через SubsystemBoundaryTests.Boundaries (по полю

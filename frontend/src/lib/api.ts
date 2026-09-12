@@ -290,6 +290,12 @@ export const api = {
     list: () => request<{ items: ModuleInfo[] }>('/modules'),
   },
 
+  // MF-remote подсистем (пилот Module Federation): список remotes, которые хост
+  // загружает в рантайме и регистрирует в реестре слотов.
+  subsystemModules: {
+    list: () => request<{ items: { id: string; remoteUrl: string; exposedModule: string }[] }>('/subsystem-modules'),
+  },
+
   // Личный реестр MCP-серверов владельца (фича mcp-registry). Секретные значения наружу
   // не выходят: в McpValue у секрета value = null, а в форме пустое значение секрета
   // означает «оставить как было».

@@ -48,7 +48,7 @@ public class NotesSubsystemGateTests
     public static IEnumerable<object[]> OptionalNotesVerticalParams =>
     [
         [typeof(ProjectsController), "notesKb", typeof(INoteSemanticIndex)],
-        [typeof(TasksController), "noteSync", typeof(NoteTaskSyncService)],
+        [typeof(TasksController), "noteSync", typeof(INoteTaskSync)],
         [typeof(PersonaBindingsService), "notesKb", typeof(INoteSemanticIndex)],
         [typeof(SessionSummaryService), "kb", typeof(INoteSemanticIndex)],
         [typeof(TaskExecutionService), "kb", typeof(INoteSemanticIndex)],
@@ -56,7 +56,7 @@ public class NotesSubsystemGateTests
         [typeof(NotesToolset), "kb", typeof(NotesKnowledgeService)],
         [typeof(NotesToolset), "ai", typeof(NotesAiService)],
         [typeof(NotesToolset), "noteTasks", typeof(NoteTaskSyncService)],
-        [typeof(TasksToolset), "noteSync", typeof(NoteTaskSyncService)],
+        [typeof(TasksToolset), "noteSync", typeof(INoteTaskSync)],
         // Шов `INoteAccessor` (10 потребителей в спине и `Memory`).
         [typeof(FilesController), "notes", typeof(INoteAccessor)],
         [typeof(DocsController), "notes", typeof(INoteAccessor)],
@@ -163,6 +163,9 @@ public class NotesSubsystemGateTests
         // Второй Core-шов (`INoteSemanticIndex`) — тем же структурным гейтом.
         services.Any(d => d.ServiceType == typeof(INoteSemanticIndex)).Should().Be(enabled,
             $"шов INoteSemanticIndex регистрируется в NotesSubsystem.Register (Enabled={enabled})");
+        // Третий Core-шов (`INoteTaskSync` — обратная запись Main → Notes) — тем же гейтом.
+        services.Any(d => d.ServiceType == typeof(INoteTaskSync)).Should().Be(enabled,
+            $"шов INoteTaskSync регистрируется в NotesSubsystem.Register (Enabled={enabled})");
 
         if (!enabled)
         {
@@ -186,6 +189,9 @@ public class NotesSubsystemGateTests
                 .ImplementationFactory.Should().NotBeNull();
             // И шов `INoteSemanticIndex` — тоже фабрика на тот же синглтон, а не второй экземпляр.
             services.Single(d => d.ServiceType == typeof(INoteSemanticIndex))
+                .ImplementationFactory.Should().NotBeNull();
+            // И шов `INoteTaskSync` — фабрика на `NoteTaskSyncService`, а не второй экземпляр.
+            services.Single(d => d.ServiceType == typeof(INoteTaskSync))
                 .ImplementationFactory.Should().NotBeNull();
         }
     }

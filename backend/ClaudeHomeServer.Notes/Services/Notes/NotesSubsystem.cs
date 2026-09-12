@@ -75,6 +75,11 @@ public sealed class NotesSubsystem : IAppSubsystem
         services.AddSingleton<NotesKnowledgeService>();
         services.AddSingleton<NotesAiService>();
         services.AddSingleton<NoteTaskSyncService>();
+        // Узкий Core-шов обратной записи (Main → Notes): TasksController/TasksToolset
+        // держат `INoteTaskSync?` и при выключенной подсистеме деградируют в null.
+        // Форвардер на уже зарегистрированный синглтон, а не `AddSingleton<INoteTaskSync,
+        // NoteTaskSyncService>()` — иначе второй экземпляр.
+        services.AddSingleton<INoteTaskSync>(sp => sp.GetRequiredService<NoteTaskSyncService>());
         services.AddGatedHostedService<NoteExpiryService>(config);
         // Этап 5, шаг 6 (инверсия контрибьюторов промпта): контрибьютор секции
         // «recall-notes» зарегистрирован в своей вертикали, Turn собирает

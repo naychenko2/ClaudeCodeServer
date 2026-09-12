@@ -181,3 +181,12 @@ public record NoteReplyDto(
     string Excerpt,
     string CreatedAt,
     IReadOnlyList<string> Tags);
+
+// --- Семантический индекс заметок (Dify) ---
+
+// Результат семантического поиска по заметкам (Dify retrieve → заметка по маппингу
+// docId → noteId). В Core, потому что это return-тип Core-шва `INoteSemanticIndex`:
+// его материализуют потребители спины (напр. TaskExecutionService), а сама реализация
+// живёт в вынесенной сборке `ClaudeHomeServer.Notes`.
+public record NoteSemanticHit(
+    string Id, string Title, string Source, string SourceLabel, double Score, string Snippet);

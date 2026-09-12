@@ -14,7 +14,7 @@ public sealed class UnifiedSearchService(
     TaskManager tasks, ProjectManager projects, INoteAccessor? notes = null,
     // Подсистема Notes отключаемая: null — семантический поиск заметок пропускается,
     // остаётся ключевой фолбэк через notes (если тоже включена) и задачи.
-    NotesKnowledgeService? kb = null)
+    INoteSemanticIndex? kb = null)
 {
     // allowedProjects — зона сессии-вызова (AllowedProjectIds плана wsp, ADR-012 волна 3.1):
     // при суженной зоне выдача ограничена её проектами — заметки по источнику (личный vault

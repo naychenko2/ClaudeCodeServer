@@ -39,17 +39,20 @@ namespace ClaudeHomeServer.Tests.Composition;
 public class NotesSubsystemGateTests
 {
     // Параметры конструкторов, приходящие из отключаемой вертикали Notes: места Б1
-    // (kb/noteSync/ai — сервисы вертикали Notes*) и шов `INoteAccessor` (Этап 5, волна
-    // «разрыв Main↔NotesService»). Инвариант один: обязательный такой параметр вне
-    // самой вертикали — дефект; у шва он должен быть строго `INoteAccessor? notes = null`.
+    // (noteSync/ai — сервисы вертикали Notes*) и Core-швы `INoteAccessor` (волна
+    // «разрыв Main↔NotesService») и `INoteSemanticIndex` (под-волна «разрыв
+    // Main→NotesKnowledgeService»). Инвариант один: обязательный такой параметр вне
+    // самой вертикали — дефект; у шва он должен быть строго `<Шов>? x = null`.
+    // `NotesToolset` (MCP) по-прежнему держит прямые `NotesKnowledgeService`/`NotesAiService`/
+    // `NoteTaskSyncService`: его вынос в вертикаль — отдельная волна, шов на него не заведён.
     public static IEnumerable<object[]> OptionalNotesVerticalParams =>
     [
-        [typeof(ProjectsController), "notesKb", typeof(NotesKnowledgeService)],
+        [typeof(ProjectsController), "notesKb", typeof(INoteSemanticIndex)],
         [typeof(TasksController), "noteSync", typeof(NoteTaskSyncService)],
-        [typeof(PersonaBindingsService), "notesKb", typeof(NotesKnowledgeService)],
-        [typeof(SessionSummaryService), "kb", typeof(NotesKnowledgeService)],
-        [typeof(TaskExecutionService), "kb", typeof(NotesKnowledgeService)],
-        [typeof(UnifiedSearchService), "kb", typeof(NotesKnowledgeService)],
+        [typeof(PersonaBindingsService), "notesKb", typeof(INoteSemanticIndex)],
+        [typeof(SessionSummaryService), "kb", typeof(INoteSemanticIndex)],
+        [typeof(TaskExecutionService), "kb", typeof(INoteSemanticIndex)],
+        [typeof(UnifiedSearchService), "kb", typeof(INoteSemanticIndex)],
         [typeof(NotesToolset), "kb", typeof(NotesKnowledgeService)],
         [typeof(NotesToolset), "ai", typeof(NotesAiService)],
         [typeof(NotesToolset), "noteTasks", typeof(NoteTaskSyncService)],
@@ -157,6 +160,9 @@ public class NotesSubsystemGateTests
         // остального в подсистеме.
         services.Any(d => d.ServiceType == typeof(INoteAccessor)).Should().Be(enabled,
             $"шов INoteAccessor регистрируется в NotesSubsystem.Register (Enabled={enabled})");
+        // Второй Core-шов (`INoteSemanticIndex`) — тем же структурным гейтом.
+        services.Any(d => d.ServiceType == typeof(INoteSemanticIndex)).Should().Be(enabled,
+            $"шов INoteSemanticIndex регистрируется в NotesSubsystem.Register (Enabled={enabled})");
 
         if (!enabled)
         {
@@ -177,6 +183,9 @@ public class NotesSubsystemGateTests
             // разница — в числе экземпляров). Поэтому проверяем форму дескриптора. Граф
             // заметок здесь намеренно не поднимаем (см. шапку класса).
             services.Single(d => d.ServiceType == typeof(INoteAccessor))
+                .ImplementationFactory.Should().NotBeNull();
+            // И шов `INoteSemanticIndex` — тоже фабрика на тот же синглтон, а не второй экземпляр.
+            services.Single(d => d.ServiceType == typeof(INoteSemanticIndex))
                 .ImplementationFactory.Should().NotBeNull();
         }
     }

@@ -40,7 +40,7 @@ public class TaskExecutionService
     private readonly ISessionBroadcaster _broadcaster;
     private readonly PushService _push;
     private readonly NotificationService _notif;
-    private readonly NotesKnowledgeService? _kb;
+    private readonly INoteSemanticIndex? _kb;
     private readonly ILogger<TaskExecutionService> _log;
     // Слоты тиров владельца + реестр провайдеров: только ради алиасов в таблице уровней
     // постановки (какой model= передавать в Task). null — постановка без этой таблицы.
@@ -105,7 +105,7 @@ public class TaskExecutionService
         Llm.Claude.SubagentRunLog? subagentRuns = null,
         // Подсистема Notes отключаемая: null — блок «релевантные заметки» в постановке
         // исполнителя тихо пропускается (BuildNotesContextAsync).
-        NotesKnowledgeService? kb = null)
+        INoteSemanticIndex? kb = null)
     {
         _staleAfter = TimeSpan.FromMinutes(
             int.TryParse(config["Tasks:ExecutorStaleMinutes"], out var stale) && stale > 0 ? stale : 15);

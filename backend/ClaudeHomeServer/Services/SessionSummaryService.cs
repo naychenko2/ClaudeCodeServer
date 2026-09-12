@@ -33,7 +33,7 @@ public class SessionSummaryService(
     // Подсистема Notes отключаемая: null, если выключена. Проверка notes is null стоит
     // ПЕРВОЙ в SummarizeAsync (после inFlight), чтобы при выключенной подсистеме не
     // платить за LLM-конспект, который некуда сохранить; kb тоже null и зовётся через `?.`.
-    NotesKnowledgeService? kb = null)
+    INoteSemanticIndex? kb = null)
 {
     // Бюджет транскрипта в символах: длиннее — сокращаем (голова + хвост)
     private const int TranscriptBudget = 30_000;

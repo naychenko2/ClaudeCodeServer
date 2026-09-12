@@ -14,8 +14,9 @@ namespace ClaudeHomeServer.Services.Notes;
 //  - RewriteAnnotationTargets — перепись привязок комментариев при переименовании
 //    документа (FilesController/DocsController/WorkspaceToolset).
 // Полного API заметок (граф, backlinks, треды комментариев, move/delete) здесь НЕТ:
-// единственный его потребитель — MCP-тулсет `NotesToolset` в спине, он остаётся на
-// `NotesService` как продуктовая граница сервера заметок.
+// единственный его потребитель — MCP-тулсет `NotesToolset`, и тот живёт уже в
+// вертикали `ClaudeHomeServer.Notes`, оставаясь на `NotesService` как продуктовая
+// граница сервера заметок.
 // Запись и перепись аннотаций (`Update`/`RewriteAnnotationTargets`/`GetOrCreateDaily`) —
 // для спины; вертикаль с read-only нуждами должна просить расщепление шва, а не тянуть
 // его целиком.

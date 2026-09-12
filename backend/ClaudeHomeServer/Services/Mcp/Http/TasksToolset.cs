@@ -45,7 +45,7 @@ public sealed class TasksToolset(
     ISessionBroadcaster broadcaster,
     // Подсистема Notes отключаемая: null — обратная запись в заметку-источник тихо
     // пропускается (см. использование ниже, паритет с TasksController).
-    NoteTaskSyncService? noteSync = null) : IMcpParameterizedToolset
+    INoteTaskSync? noteSync = null) : IMcpParameterizedToolset
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/tasks/{sessionId}. Константа —
     // единственная точка правды для URL конфига хода (ClaudeSession); живёт в Core

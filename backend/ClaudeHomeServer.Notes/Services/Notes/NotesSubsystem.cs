@@ -68,9 +68,18 @@ public sealed class NotesSubsystem : IAppSubsystem
         // подсистемы — структурный: при `Subsystems:Notes:Enabled=false` `Register` не
         // зовётся вовсе, шва в DI нет, а потребители держат `INoteAccessor?` и деградируют в null.
         services.AddSingleton<INoteAccessor>(sp => sp.GetRequiredService<NotesService>());
+        // Тот же приём для Core-шва `INoteSemanticIndex` (семантический индекс заметок):
+        // форвардер на уже зарегистрированный синглтон `NotesKnowledgeService`, а не
+        // `AddSingleton<INoteSemanticIndex, NotesKnowledgeService>()` — иначе второй экземпляр.
+        services.AddSingleton<INoteSemanticIndex>(sp => sp.GetRequiredService<NotesKnowledgeService>());
         services.AddSingleton<NotesKnowledgeService>();
         services.AddSingleton<NotesAiService>();
         services.AddSingleton<NoteTaskSyncService>();
+        // Узкий Core-шов обратной записи (Main → Notes): TasksController/TasksToolset
+        // держат `INoteTaskSync?` и при выключенной подсистеме деградируют в null.
+        // Форвардер на уже зарегистрированный синглтон, а не `AddSingleton<INoteTaskSync,
+        // NoteTaskSyncService>()` — иначе второй экземпляр.
+        services.AddSingleton<INoteTaskSync>(sp => sp.GetRequiredService<NoteTaskSyncService>());
         services.AddGatedHostedService<NoteExpiryService>(config);
         // Этап 5, шаг 6 (инверсия контрибьюторов промпта): контрибьютор секции
         // «recall-notes» зарегистрирован в своей вертикали, Turn собирает

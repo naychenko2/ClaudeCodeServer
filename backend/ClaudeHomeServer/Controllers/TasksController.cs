@@ -98,7 +98,7 @@ public class TasksController(
     // Подсистема Notes отключаемая: null — обратная запись чекбокса в заметку-источник
     // тихо пропускается (SyncTaskToNoteAsync ниже, флаг notes-task-sync и так no-op
     // для задач не из заметки).
-    NoteTaskSyncService? noteSync = null) : ControllerBase
+    INoteTaskSync? noteSync = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 

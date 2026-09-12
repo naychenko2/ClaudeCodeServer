@@ -1,9 +1,10 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
-using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Notes;
 
 namespace ClaudeHomeServer.Services.Mcp.Http;
@@ -26,9 +27,9 @@ namespace ClaudeHomeServer.Services.Mcp.Http;
 /// NotesToolsetParityTests (index.js заморожен).
 /// </summary>
 public sealed class NotesToolset(
-    PersonaManager personas,
-    PersonaBindingsService bindings,
-    SessionManager sessions,
+    IPersonaResolver personas,
+    IMcpPersonaBindings bindings,
+    IMcpSessionAccessor sessions,
     ISessionBroadcaster broadcaster,
     NotesService? notes = null,
     // Все четыре — синглтоны одной отключаемой вертикали (NotesSubsystem.Register),

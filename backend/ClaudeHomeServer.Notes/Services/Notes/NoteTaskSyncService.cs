@@ -14,7 +14,7 @@ namespace ClaudeHomeServer.Services.Notes;
 // и IHubContext соответственно.
 public sealed class NoteTaskSyncService(
     NotesService notes, INoteTaskBridge tasks, IProjectManager projects, NotesKnowledgeService kb,
-    INotesHubNotifier notifier, ILogger<NoteTaskSyncService> log)
+    INotesHubNotifier notifier, ILogger<NoteTaskSyncService> log) : INoteTaskSync
 {
     // Чекбоксы заметки + связанные задачи (для панели «Задачи из заметки»)
     public IReadOnlyList<NoteTaskDto> ListForNote(string userId, string noteId)

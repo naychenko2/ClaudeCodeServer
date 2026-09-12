@@ -10,7 +10,7 @@ namespace ClaudeHomeServer.Services.Notes;
 // («{username}:notes», permission only_me). Синхронизация — полный дифф по хешам
 // содержимого (устойчив к переименованиям/массовым правкам), с дебаунсом на мутации.
 // Без настроенного Dify всё тихо выключено (graceful degradation).
-public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant
+public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant, INoteSemanticIndex
 {
     // userId → { datasetId, noteId → { difyDocId, contentHash } }
     private sealed class Entry
@@ -275,7 +275,3 @@ public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant
     private static string Hash(string s) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(s)));
 }
-
-// Результат семантического поиска по заметкам
-public record NoteSemanticHit(
-    string Id, string Title, string Source, string SourceLabel, double Score, string Snippet);

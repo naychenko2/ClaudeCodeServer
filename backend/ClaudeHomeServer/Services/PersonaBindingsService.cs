@@ -111,7 +111,7 @@ public class PersonaBindingsService : IPersonaServerToolGate
     private readonly ProjectManager _projects;
     private readonly WorkspaceKnowledgeStore _wkStore;
     private readonly INoteAccessor? _notes;
-    private readonly NotesKnowledgeService? _notesKb;
+    private readonly INoteSemanticIndex? _notesKb;
     private readonly KnowledgeService _knowledge;
     private readonly SkillsService _skills;
     private readonly UserStore _users;
@@ -135,7 +135,7 @@ public class PersonaBindingsService : IPersonaServerToolGate
         // Подсистема Notes отключаемая (Subsystems:Notes:Enabled=false) — null, если она
         // выключена. Датасет заметок пропадает из каталога целей знаний, а recall по
         // заметочным привязкам тихо возвращает пусто (ExtractNotesAsync).
-        NotesKnowledgeService? notesKb = null)
+        INoteSemanticIndex? notesKb = null)
     {
         _personas = personas;
         _projects = projects;

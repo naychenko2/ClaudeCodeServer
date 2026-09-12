@@ -367,11 +367,10 @@ public class RootSubsystemBoundaryTests
         {
             var seen = new HashSet<(string, string)>();
 
-            // Сначала рефлексия (поля/конструкторы/сигнатуры), затем IL-скан тел
-            // методов. Обход nested-типов обязателен: без него сторож видит 4 из 7
-            // известных швов (docs/research/il-boundary-scan-2026-09.md, раздел про слепые пятна).
-            foreach (var referenced in CollectReferencedTypes(type)
-                .Concat(IlScanReferencedTypes(type)))
+            // IL-скан тел методов (включая nested-типы): ловит статические вызовы,
+            // DI-резолвы, generic-аргументы. Обход nested-типов обязателен: без него
+            // сторож видит 4 из 7 известных швов (docs/research/il-boundary-scan-2026-09.md).
+            foreach (var referenced in BoundaryIlScanner.CollectAllReferencedTypes(type))
             {
                 if (referenced.Namespace is null) continue; // Безымянный namespace — не Services.*.
 
@@ -438,17 +437,6 @@ public class RootSubsystemBoundaryTests
             string.Join("\n", violations));
     }
 
-    /// <summary>Типы, упомянутые в телах методов (включая nested-типы): статические
-    /// вызовы, <c>sp.GetRequiredService&lt;T&gt;()</c>, generic-аргументы инстанцированных
-    /// методов. Идёт через общий <see cref="BoundaryIlScanner.CollectAllReferencedTypes"/> —
-    /// единую точку сбора для сторожей и регрессии, чтобы сломать обход nested-типов
-    /// в одном месте и сразу покраснели ОБЕ проверки.</summary>
-    private static IEnumerable<Type> IlScanReferencedTypes(Type type)
-    {
-        foreach (var t in BoundaryIlScanner.CollectAllReferencedTypes(type))
-            yield return t;
-    }
-
     private static bool IsSharedAllowed(Type type)
     {
         var ns = type.Namespace;
@@ -493,15 +481,5 @@ public class RootSubsystemBoundaryTests
     {
         return RootAllowedExactTypes.Contains(type.FullName ?? string.Empty);
     }
-
-    /// <summary>
-    /// Единственный путь сбора типов: <see cref="BoundaryIlScanner.CollectAllReferencedTypes"/>.
-    /// Прежде у сторожа было два независимых пути — IL-скан и собственная рефлексия полей,
-    /// и подмена вызова сканера в коде сторожа оставляла все тесты зелёными. Теперь оба
-    /// идут через ту же функцию: подмена реализации сканера роняет весь гейт единым
-    /// движением, в том числе регрессию <see cref="IlBoundaryRegressionTests"/>.
-    /// </summary>
-    private static IEnumerable<Type> CollectReferencedTypes(Type type) =>
-        BoundaryIlScanner.CollectAllReferencedTypes(type);
 
 }

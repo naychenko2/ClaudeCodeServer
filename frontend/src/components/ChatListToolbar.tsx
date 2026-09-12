@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Plus, CalendarDays, Tags, List, ListTree, Check, MonitorSmartphone,
-  ArrowDownWideNarrow, ArrowUpNarrowWide, SlidersHorizontal, Archive,
+  ArrowDownWideNarrow, ArrowUpNarrowWide, CalendarArrowDown, CalendarArrowUp,
+  SlidersHorizontal, Archive,
 } from 'lucide-react';
 import type { Persona, Session } from '../types';
 import { C, FONT, FS, SP } from '../lib/design';
 import { Button, IconButton, Menu, MenuItem, Modal, PanelHeaderSlot, PillSwitch, Toggle, useHasPanelHeader } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { FilterBar } from './FilterBar';
-import type { ChatFilters, ChatGroupBy, ChatSortOrder } from '../lib/chatFilters';
+import { ALL_SORT_ORDERS, type ChatFilters, type ChatGroupBy, type ChatSortOrder } from '../lib/chatFilters';
 
 // === Однострочный тулбар списка чатов (макет chat-unified-view, вариант А) ===
 // [+] главное действие → группировка (PillSwitch) → фильтры с бейджем → сортировка →
@@ -29,10 +30,24 @@ const GROUP_BY_META: Record<ChatGroupBy, { label: string; title: string; Icon: t
   none: { label: 'Без', title: 'Без группировки', Icon: List },
 };
 
-const SORT_META: Record<ChatSortOrder, { title: string; Icon: typeof ArrowDownWideNarrow }> = {
-  newest: { title: 'Сортировка: новые сверху', Icon: ArrowDownWideNarrow },
-  oldest: { title: 'Сортировка: старые сверху', Icon: ArrowUpNarrowWide },
+// Ось порядка: стрелки — по активности чата, календарь — по времени создания.
+// label — короткая подпись сегмента в мобильной шторке (четыре пункта в строку),
+// title — полная подсказка кнопки-переключателя.
+const SORT_META: Record<ChatSortOrder, { title: string; label: string; Icon: typeof ArrowDownWideNarrow }> = {
+  newest: { title: 'Сортировка: новые сверху', label: 'Новые', Icon: ArrowDownWideNarrow },
+  oldest: { title: 'Сортировка: старые сверху', label: 'Старые', Icon: ArrowUpNarrowWide },
+  'created-newest': {
+    title: 'Сортировка: сначала новые по созданию', label: 'Созданы новые', Icon: CalendarArrowDown,
+  },
+  'created-oldest': {
+    title: 'Сортировка: сначала старые по созданию', label: 'Созданы старые', Icon: CalendarArrowUp,
+  },
 };
+
+// Кнопка-переключатель циклит все значения оси по кругу (порядок белого списка):
+// новые → старые → новые по созданию → старые по созданию → снова новые
+const nextSortOrder = (v: ChatSortOrder): ChatSortOrder =>
+  ALL_SORT_ORDERS[(ALL_SORT_ORDERS.indexOf(v) + 1) % ALL_SORT_ORDERS.length];
 
 type Tier = 'comfort' | 'cozy' | 'compact';
 
@@ -165,18 +180,22 @@ export function ChatListToolbar({
               fill isMobile
             />
             <SheetSec>Сортировка</SheetSec>
+            {/* Четыре пункта в строку: autoCompact оставляет подпись активному,
+                остальные сегменты на узком экране сжимаются до иконок */}
             <PillSwitch<ChatSortOrder>
               value={sortOrder}
-              options={(['newest', 'oldest'] as ChatSortOrder[]).map(v => {
-                const SortIcon = SORT_META[v].Icon;
+              options={ALL_SORT_ORDERS.map(v => {
+                const m = SORT_META[v];
+                const SortIcon = m.Icon;
                 return {
                   value: v,
-                  label: v === 'newest' ? 'Новые сверху' : 'Старые сверху',
+                  label: m.label,
+                  title: m.title,
                   icon: <SortIcon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
                 };
               })}
               onChange={v => patch({ sortOrder: v })}
-              fill isMobile
+              fill isMobile autoCompact
             />
             <SheetSec>Структура</SheetSec>
             <div style={{
@@ -237,7 +256,7 @@ export function ChatListToolbar({
           size="xs"
           active={sortOrder !== 'newest'}
           title={sort.title}
-          onClick={() => patch({ sortOrder: sortOrder === 'newest' ? 'oldest' : 'newest' })}
+          onClick={() => patch({ sortOrder: nextSortOrder(sortOrder) })}
         >
           <sort.Icon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
         </IconButton>
@@ -353,7 +372,7 @@ export function ChatListToolbar({
         size={iconBtnSize}
         active={sortOrder !== 'newest'}
         title={sort.title}
-        onClick={() => patch({ sortOrder: sortOrder === 'newest' ? 'oldest' : 'newest' })}
+        onClick={() => patch({ sortOrder: nextSortOrder(sortOrder) })}
       >
         <sort.Icon size={iconBtnSize === 'md' ? ICON_SIZE.sm : ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
       </IconButton>

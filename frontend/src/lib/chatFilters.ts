@@ -19,7 +19,24 @@ export type ChatOnlyFilter = 'pinned' | 'temp' | 'group';
 // вместе с ним. От фильтрующих полей отличаются тем, что не скрывают чаты, а лишь
 // перестраивают список: isDefaultFilters их не учитывает.
 export type ChatGroupBy = 'days' | 'tags' | 'none';
-export type ChatSortOrder = 'newest' | 'oldest';
+// Белый список значений оси: он же порядок цикла кнопки-переключателя и фильтр
+// мусора из localStorage (незнакомое значение вырождается в 'newest'). Список
+// неизменяем (as const), а тип оси выводится ИЗ НЕГО — иначе список и тип разошлись бы.
+export const ALL_SORT_ORDERS = ['newest', 'oldest', 'created-newest', 'created-oldest'] as const;
+
+// Ось порядка совмещает ПОЛЕ даты и направление в одном значении: 'newest'/'oldest' —
+// по активности (updatedAt), 'created-*' — по времени создания чата. Отдельной оси
+// «по какому полю» нет намеренно — переключатель в тулбаре один.
+export type ChatSortOrder = (typeof ALL_SORT_ORDERS)[number];
+
+// Разбор значения оси в поле даты и направление — ЕДИНАЯ точка для всех
+// сортировщиков списка (chatGroups, chatTree, композиция в списках). Тем же полем
+// считаются и секции дней: при сортировке по созданию «Сегодня» = создан сегодня.
+export function sortKeyOf(sortOrder: ChatSortOrder): { field: 'updatedAt' | 'createdAt'; dir: 1 | -1 } {
+  const byCreated = sortOrder === 'created-newest' || sortOrder === 'created-oldest';
+  const asc = sortOrder === 'oldest' || sortOrder === 'created-oldest';
+  return { field: byCreated ? 'createdAt' : 'updatedAt', dir: asc ? 1 : -1 };
+}
 
 export interface ChatFilters {
   origins: Session['origin'][];
@@ -124,7 +141,9 @@ function normalize(p: Partial<ChatFilters>, scopeKey?: string): ChatFilters {
     search: typeof p.search === 'string' ? p.search : '',
     tags: Array.isArray(p.tags) ? p.tags.filter((t): t is string => typeof t === 'string' && t.length > 0) : [],
     groupBy,
-    sortOrder: p.sortOrder === 'oldest' || p.sortOrder === 'newest' ? p.sortOrder : 'newest',
+    // Белым списком: запись старого формата ('newest'/'oldest') читается как есть,
+    // а незнакомое значение (мусор, ось из будущей версии) — дефолтом, не роняя фильтры
+    sortOrder: ALL_SORT_ORDERS.find(v => v === p.sortOrder) ?? 'newest',
     hierarchy: typeof p.hierarchy === 'boolean' ? p.hierarchy : legacyAxes.hierarchy ?? false,
     // Запись старого формата (до режима архива) — начинаем с обычного списка
     archivedOnly: typeof p.archivedOnly === 'boolean' ? p.archivedOnly : false,

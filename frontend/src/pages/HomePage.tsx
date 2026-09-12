@@ -14,7 +14,8 @@ import { SpendWidget } from '../features/home/SpendWidget';
 import { RecentSessionsWidget } from '../features/home/RecentSessionsWidget';
 import { QuickActions } from '../features/home/QuickActions';
 import { ProjectsWidget } from '../features/home/ProjectsWidget';
-import { NotesWidget } from '../features/home/NotesWidget';
+import { useSlotItem } from '../lib/subsystems/registry';
+import type { HomeWidgetNotesCtx } from '../lib/subsystems/registryCore';
 import { TeamWidget } from '../features/home/TeamWidget';
 import { WhatsNewWidget } from '../features/home/WhatsNewWidget';
 import { NotificationsWidget } from '../features/home/NotificationsWidget';
@@ -44,6 +45,8 @@ export function HomePage({ auth, onLogout, onHubTab, onOpenProject }: Props) {
   const isMobile = useIsMobile();
   const { data } = useHomeSummary();
   const isAdmin = auth.role === 'admin';
+  // Виджет заметок — вклад слота home-widget (фича Notes). Нет вклада — виджета нет.
+  const notesWidget = useSlotItem<HomeWidgetNotesCtx>('home-widget', 'notes-widget');
   // Персоны — для подписей «Роль (Имя)» в строках сессий
   useEffect(() => { void ensurePersonasLoaded(); }, []);
 
@@ -96,7 +99,7 @@ export function HomePage({ auth, onLogout, onHubTab, onOpenProject }: Props) {
               <TasksWidget onHubTab={onHubTab} />
               <RecentSessionsWidget recent={data?.recent ?? []} onHubTab={onHubTab} />
               <ProjectsWidget onOpenProject={onOpenProject} />
-              <NotesWidget onHubTab={onHubTab} />
+              {notesWidget?.render?.({ onHubTab })}
               <TeamWidget onHubTab={onHubTab} />
               {/* Справочные сводки — хвостом */}
               <WhatsNewWidget userId={auth.id} />
@@ -126,7 +129,7 @@ export function HomePage({ auth, onLogout, onHubTab, onOpenProject }: Props) {
                     Только десктоп: стена гасит себя при ширине ≤ MOBILE_MAX (тот же
                     порог, что у useIsMobile), и на телефоне вход вёл бы в заглушку */}
                 <WallWidget ownerId={auth.id} onOpenWall={openWall} />
-                <NotesWidget onHubTab={onHubTab} />
+                {notesWidget?.render?.({ onHubTab })}
                 <TeamWidget onHubTab={onHubTab} />
               </div>
             </div>

@@ -12,24 +12,12 @@ import { designSystem } from './eslint.config.js'
 import noCrossFeatureImport from './eslint-rules/no-cross-feature-import.js'
 
 // Файлы, в которых пока остаются прямые импорты из внутренних модулей
-// `features/notes/*`. Каждый — реальное существующее нарушение на момент
-// фиксации правила (см. задачу e55dcabf). Цель волны 4: по мере выноса
-// заметок в подсистему импорты переводятся на `import { ... } from
-// '@/features/notes'` (через index.ts) и запись отсюда снимается. Разовое
-// отклонение в обычном файле оформляется построчно с причиной:
-//   // eslint-disable-next-line module/no-cross-feature-import -- причина
-export const CROSS_FEATURE_IMPORT_ALLOWED = [
-  'src/App.tsx',
-  'src/pages/WorkspacePage.tsx',
-  'src/lib/ai/actions.tsx',
-  'src/components/FileViewer.tsx',
-  'src/components/FileExplorer.tsx',
-  'src/components/chat/ChatHeaderBar.tsx',
-  'src/components/chat/ChatItemView.tsx',
-  'src/components/chat/PlanReviewView.tsx',
-  'src/components/artifacts/PlanSection.tsx',
-  'src/components/GlobalSearch.tsx',
-]
+// `features/notes/*`. После пилота извлекаемости каркасных потребителей не
+// осталось: каркас общается с фичей только через реестр подсистем
+// (`src/lib/subsystems/registry.ts`), и там единственный side-effect-импорт
+// оформлен построчным `eslint-disable` с причиной. Список оставлен пустым как
+// точка возврата, если у будущей фичи появятся стартовые нарушения.
+export const CROSS_FEATURE_IMPORT_ALLOWED = []
 
 // Фичи, у которых уже есть публичный `index.ts` и для которых линт-сторож
 // уже действует. Подключение новой фичи = добавить её в этот список и
@@ -68,8 +56,12 @@ export default defineConfig([
       }],
     },
   },
-  {
-    files: CROSS_FEATURE_IMPORT_ALLOWED,
-    rules: { 'module/no-cross-feature-import': 'off' },
-  },
+  // Блок-исключение подключаем только при непустом allow-list: пустой `files`
+  // невалиден в flat-config. Сейчас список пуст — каркасных нарушений нет.
+  ...(CROSS_FEATURE_IMPORT_ALLOWED.length
+    ? [{
+        files: CROSS_FEATURE_IMPORT_ALLOWED,
+        rules: { 'module/no-cross-feature-import': 'off' },
+      }]
+    : []),
 ])

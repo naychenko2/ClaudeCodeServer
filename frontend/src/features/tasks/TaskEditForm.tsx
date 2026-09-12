@@ -1,7 +1,7 @@
 // Редактирование задачи — инлайн-экран вместо деталей (как в макете):
 // шапка «Редактирование задачи» с Отмена / ✓ Готово / корзина, ниже поля формы.
 
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import { Check, FilePlus2, Plus, SquarePen, Trash2, X } from 'lucide-react';
 import type {
   DefectRepro, Project, Task, TaskAssignee, TaskKind, TaskPriority, TaskRecurrence,
@@ -23,17 +23,12 @@ import { formatEffectiveLine } from '../../lib/presets';
 import { USAGE } from '../../lib/models';
 import type { Persona, SpecialtyCatalogEntry } from '../../types';
 import { personaLabel } from '../../lib/personas';
-// CodeMirror тяжёлый — редактор грузим лениво, только при входе в правку. Статический
-// импорт здесь обнулял бы ленивую загрузку и в NoteView, и в FileViewer: сборщик тянет
-// модуль в основной чанк, если хоть один потребитель просит его статически.
-// Импорт через публичный index — прямой путь к внутреннему модулю ломает правило
-// «внешние импорты заметок только через features/notes/index.ts».
-const NoteEditor = lazy(() => import('../notes').then(m => ({ default: m.NoteEditor })));
 import { AttachPicker } from '../../components/chat/AttachPicker';
 import { Toggle, SegmentedControl, TextArea, WaitingIndicator } from '../../components/ui';
 import { EXPIRY_PRESETS, DEFAULT_EXPIRY } from '../../lib/expiry';
 import { useAiJob, runAiJob, resetAiJob } from '../../lib/aiJobStore';
-import { useSubsystem } from '../../lib/subsystems';
+import { useSlotItem } from '../../lib/subsystems/registry';
+import type { MarkdownEditorCtx } from '../../lib/subsystems/registryCore';
 import { NO_AUTOFILL } from '../../lib/noAutofill';
 
 interface Props {
@@ -75,9 +70,10 @@ function reminderChipStyle(active: boolean): React.CSSProperties {
 }
 
 export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendingAi, onPendingConsumed }: Props) {
-  // Подсистема заметок выключена — markdown-редактор (CodeMirror из features/notes)
-  // не грузим. В полях описания/результата показывается обычный <textarea>.
-  const notesOn = useSubsystem('notes');
+  // Markdown-редактор — вклад слота markdown-editor (фича Notes). Нет вклада
+  // (подсистема выключена/не зарегистрирована) — в полях описания/результата
+  // показывается обычный <textarea>.
+  const noteEditor = useSlotItem<MarkdownEditorCtx>('markdown-editor', 'note-editor');
   const [title, setTitle] = useState(task.title);
   const [priority, setPriority] = useState<TaskPriority>(task.priority);
   const [dueDate, setDueDate] = useState<string | null>(task.dueDate ?? null);
@@ -757,14 +753,14 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
                 <WaitingIndicator hint="Генерирую описание по названию задачи" />
               </div>
             ) : descEditing ? (
-              notesOn ? (
+              noteEditor ? (
                 <Suspense fallback={<EditorFallback />}>
-                  <NoteEditor
-                    value={description}
-                    onChange={setDescription}
-                    placeholder="Описание задачи (markdown)…"
-                    minHeight={150}
-                  />
+                  {noteEditor.render?.({
+                    value: description,
+                    onChange: setDescription,
+                    placeholder: 'Описание задачи (markdown)…',
+                    minHeight: 150,
+                  })}
                 </Suspense>
               ) : (
                 <TextArea
@@ -814,14 +810,14 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
           </div>
           <div style={{ marginBottom: 22 }}>
             {resultEditing ? (
-              notesOn ? (
+              noteEditor ? (
                 <Suspense fallback={<EditorFallback />}>
-                  <NoteEditor
-                    value={result}
-                    onChange={setResult}
-                    placeholder="Итог выполнения (markdown)…"
-                    minHeight={160}
-                  />
+                  {noteEditor.render?.({
+                    value: result,
+                    onChange: setResult,
+                    placeholder: 'Итог выполнения (markdown)…',
+                    minHeight: 160,
+                  })}
                 </Suspense>
               ) : (
                 <TextArea

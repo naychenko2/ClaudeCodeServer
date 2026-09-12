@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import type { SearchHit } from '../types';
 import { api } from '../lib/api';
-import { openNoteById } from '../features/notes';
+import { useSlotItem } from '../lib/subsystems/registry';
+import type { GlobalSearchNoteApi } from '../lib/subsystems/registryCore';
 import { Modal } from './ui';
 import { VoiceMicButton } from './chat/VoiceMicButton';
 import { C, FONT, R } from '../lib/design';
 import { useListAutoFocus } from '../lib/listAutoFocus';
-import { useSubsystem } from '../lib/subsystems';
 
 // Единый поиск (флаг unified-search): оверлей с поиском по заметкам и задачам сразу.
 // Заметка → открыть в разделе «Заметки»; задача → диплинк через App (календарь/проект).
@@ -16,11 +16,10 @@ export function GlobalSearch({ onClose }: { onClose: () => void }) {
   const [loading, setLoading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const canFocus = useListAutoFocus();
-  // Гейт по подсистеме: без notes раздел «Заметки» в выдаче скрывается, но поиск
-  // продолжает работать для задач. Сам запрос api.search единый — сервер сам не
-  // вернёт заметок, если подсистемы нет, но гейт ставим на клиенте на случай,
-  // если в выдачу проскочит устаревший хит.
-  const notesOn = useSubsystem('notes');
+  // Провайдер поиска заметок — вклад слота global-search-provider (фича Notes).
+  // Нет вклада (подсистема выключена/не зарегистрирована) — раздел «Заметки» в
+  // выдаче скрывается, поиск продолжает работать для задач.
+  const noteProvider = useSlotItem<never, GlobalSearchNoteApi>('global-search-provider', 'note');
 
   useEffect(() => { if (canFocus) inputRef.current?.focus(); }, [canFocus]);
 
@@ -37,14 +36,14 @@ export function GlobalSearch({ onClose }: { onClose: () => void }) {
 
   const open = (hit: SearchHit) => {
     onClose();
-    if (hit.type === 'note') openNoteById(hit.id);
+    if (hit.type === 'note') noteProvider?.action?.open(hit.id);
     // Через cc-open-url, а НЕ записью в location.hash: hashchange в приложении никто не
     // слушает, поэтому прямая запись меняла адрес, оставляя раздел прежним, и добавляла
     // запись истории со state=null, на которой залипал Back.
     else window.dispatchEvent(new CustomEvent('cc-open-url', { detail: { url: hit.url } }));
   };
 
-  const notes = notesOn ? hits.filter(h => h.type === 'note') : [];
+  const notes = noteProvider ? hits.filter(h => h.type === 'note') : [];
   const tasks = hits.filter(h => h.type === 'task');
   const empty = !loading && q.trim().length >= 2 && hits.length === 0;
 

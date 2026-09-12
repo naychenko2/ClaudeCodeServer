@@ -17,7 +17,8 @@ import { ICON_SIZE } from '../../components/ui/icons';
 import type { NavSnapshot } from '../nav';
 import { api } from '../api';
 import { showToast } from '../toast';
-import { openNoteById } from '../../features/notes/saveToNote';
+import { getSlotAction } from '../subsystems/registryCore';
+import type { AiNoteOpenerApi } from '../subsystems/registryCore';
 import { addChatsToWall } from '../../features/wall/wallSuggest';
 import { startChatWithPrompt } from './startChat';
 import { allAnnotationsPrompt, docAnnotationsPrompt, ANNOTATIONS_TOOL_KEY } from './annotationsPrompt';
@@ -576,7 +577,7 @@ export const AI_ACTIONS: AiAction[] = [
 function runBriefing(): void {
   showToast('Собираю бриф', 'AI готовит план дня…', 'claude');
   api.briefing.today(localDate())
-    .then(n => openNoteById(n.id))
+    .then(n => getSlotAction<AiNoteOpenerApi>('ai-action', 'note')?.openNote(n.id))
     .catch(() => showToast('Не удалось собрать бриф', 'ИИ недоступен (AI не залогинен на сервере)', 'info'));
 }
 

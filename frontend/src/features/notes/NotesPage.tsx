@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MessageCircle, Plus } from 'lucide-react';
 import type { AuthState, NoteDetail, NoteSemanticHit, NoteSummary } from '../../types';
-import type { HubTabValue } from '../../components/HubTabs';
+import { subsystemTabValue, type HubTabValue } from '../../components/HubTabs';
 import { HubHeader } from '../../components/HubHeader';
 import { PillSwitch } from '../../components/Toolbar';
 import { NewNoteDialog } from './NewNoteDialog';
@@ -528,7 +528,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
 
   return (
     <PageCanvas>
-      <HubHeader value="notes" onTab={onHubTab} auth={auth} onLogout={onLogout} />
+      <HubHeader value={subsystemTabValue('notes')} onTab={onHubTab} auth={auth} onLogout={onLogout} />
       <div style={{ flex: 1, minHeight: 0 }}>
         {body}
       </div>

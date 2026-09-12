@@ -27,15 +27,14 @@ import {
 import { stripVoiceMarker } from '../../lib/tts';
 import { VoiceDigestNote, parseVoiceDigest } from './VoiceDigestNote';
 import { useContextPersona } from '../../lib/contextPersona';
-import { useSubsystem } from '../../lib/subsystems';
+import { useSlotItem } from '../../lib/subsystems/registry';
+import type { ChatItemSaveNoteCtx, ChatItemFileChangedApi } from '../../lib/subsystems/registryCore';
 import { ChatProjectContext, ChatTreePathContext, ChatSessionContext, PersonaContext, SpeakingItemContext, useAssistantName } from './contexts';
 import { PromptSnapshotDialog } from '../../features/chat/PromptSnapshotDialog';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { AGENT_COLORS } from '../AgentSelector';
 import { MessageOriginChip } from '../MessageOriginChip';
 import { getPersonaById, usePersonasVersion, personaLabel, ensurePersonasLoaded } from '../../lib/personas';
-import { IconNotes } from '../../features/notes/shared';
-import { saveChatNote, openNoteById } from '../../features/notes/saveToNote';
 import { MarkdownContent } from './MarkdownContent';
 import { CollapsibleMarkdownBody } from './AgentContentBlocks';
 import { parseDelegationReport } from '../../lib/delegationReport';
@@ -427,23 +426,9 @@ function TextMessageView({ text, online, onRetry, streaming, model, ts, promptSn
   // карточкой ленты, а не концом этого ответа
   footer?: ReactNode;
 }) {
-  // «В заметку»: сохранение ответа в базу заметок (проект → notes/, чат → personal).
-  // Гейт подсистемы: при выключенной notes кнопку НЕ рисуем (иначе клик даст 500),
-  // см. волну 3 — паттерн как в FileViewer/FileExplorer/WorkspacePage.
-  const notesOn = useSubsystem('notes');
+  // «В заметку» — вклад слота chat-item-action (фича Notes). Нет вклада — кнопки нет.
+  const saveNoteC = useSlotItem<ChatItemSaveNoteCtx>('chat-item-action', 'save-note');
   const project = useContext(ChatProjectContext);
-  const [savedNoteId, setSavedNoteId] = useState<string | null>(null);
-  const [savingNote, setSavingNote] = useState(false);
-  const [noteError, setNoteError] = useState(false);
-  const saveNote = () => {
-    if (savingNote || savedNoteId) return;
-    setSavingNote(true);
-    setNoteError(false);
-    saveChatNote({ text, projectId: project?.id })
-      .then(n => { setSavedNoteId(n.id); setTimeout(() => setSavedNoteId(null), 6000); })
-      .catch(() => { setNoteError(true); setTimeout(() => setNoteError(false), 3000); })
-      .finally(() => setSavingNote(false));
-  };
   const iconBtn = postIconBtn;
   const { tapped, handleTap } = usePostTap();
   return (
@@ -472,27 +457,7 @@ function TextMessageView({ text, online, onRetry, streaming, model, ts, promptSn
       {!streaming && (
         <PostActionBar>
           <CopyButton text={text} label="Скопировать ответ" />
-          {online && notesOn && (
-            <>
-              {savedNoteId && (
-                <button onClick={() => openNoteById(savedNoteId)}
-                  style={{ ...iconBtn, width: 'auto', padding: '0 8px', fontSize: 11, fontWeight: 600, color: C.successText }}
-                  title="Открыть созданную заметку">
-                  Открыть
-                </button>
-              )}
-              <button onClick={saveNote} disabled={savingNote} style={{ ...iconBtn, opacity: savingNote ? 0.5 : 1 }}
-                title={noteError ? 'Не удалось сохранить' : savedNoteId ? 'Сохранено в заметки' : 'Сохранить в заметку'}
-                aria-label="Сохранить в заметку"
-                {...postIconHover}>
-                {savedNoteId
-                  ? <Check size={14} color={C.success} strokeWidth={3} style={{ flexShrink: 0 }} />
-                  : noteError
-                    ? <AlertCircle size={13} color={C.dangerText} strokeWidth={2} style={{ flexShrink: 0 }} />
-                    : <IconNotes size={13} />}
-              </button>
-            </>
-          )}
+          {saveNoteC?.render?.({ text, projectId: project?.id, online })}
           {online && (
             <button onClick={onRetry} style={iconBtn} title="Повторить последний запрос" aria-label="Повторить последний запрос"
               {...postIconHover}>
@@ -984,6 +949,9 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
   const asstName = useAssistantName();
   // Подписка на стор персон: авторские аватары реплик (personaId) обновятся после загрузки стора
   usePersonasVersion();
+  // Вклад карточки изменённого файла-заметки: заметка ли это (match) и как её
+  // открыть/нарисовать. Нет вклада — обычная карточка изменённого файла.
+  const fileChangedNote = useSlotItem<never, ChatItemFileChangedApi>('chat-item-action', 'file-changed');
   switch (item.kind) {
     case 'user_message': {
       // Служебный ход механики штаба (ответ на карточку, возврат в интервью, сводка волны) —
@@ -1382,11 +1350,14 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
 
     case 'file_changed': {
       const fileName = relPathTree(item.path, project?.rootPath, treePath);
-      // Заметка (notes/*.md): подпись «Заметка · …», клик ведёт в раздел «Заметки»
-      const isNote = /(^|\/)notes\/[^/]*\.md$/i.test(item.path);
+      // Заметка (notes/*.md): подпись «Заметка · …», клик ведёт в раздел «Заметки».
+      // Распознавание и переход — вклад слота chat-item-action (фича Notes).
+      const noteApi = fileChangedNote?.action;
+      const isNote = noteApi ? noteApi.match(item.path) : false;
       const noteTitle = item.path.split(/[\\/]/).pop()!.replace(/\.md$/i, '');
-      const openNote = () => { sessionStorage.setItem('cc_pending_note_title', noteTitle); window.dispatchEvent(new Event('cc-open-note')); };
-      const openAction = isNote ? openNote : (onOpenFile ? () => onOpenFile(item.path) : undefined);
+      const openAction = isNote && noteApi
+        ? () => noteApi.open(item.path)
+        : (onOpenFile ? () => onOpenFile(item.path) : undefined);
       return (
         <div style={{
           border: `1px solid ${C.borderLight}`, borderRadius: 14, overflow: 'hidden',
@@ -1405,8 +1376,8 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               flexShrink: 0,
             }}>
-              {isNote
-                ? <IconNotes size={14} />
+              {isNote && noteApi
+                ? noteApi.icon
                 : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
                     <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />

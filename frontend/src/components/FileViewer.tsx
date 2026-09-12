@@ -39,9 +39,12 @@ import { DocPropsPanel } from '../features/docs/DocPropsPanel';
 import { useDocProps } from '../features/docs/useDocProps';
 import { showToast } from '../lib/toast';
 import { beginAiBusy, endAiBusy } from '../lib/ai/busy';
-import { DocCommentedMarkdown, NoteConnections, NoteView } from '../features/notes';
 import { useNotes, ensureNotesLoaded, existingTitleSet, useNotesVersion, useNotesByFile } from '../lib/notes';
 import { useSubsystem } from '../lib/subsystems';
+import { useSlotItem } from '../lib/subsystems/registry';
+import type {
+  FileViewerNoteViewCtx, FileViewerNoteEditorCtx, FileViewerNoteConnectionsCtx, FileViewerDocCommentsCtx,
+} from '../lib/subsystems/registryCore';
 import type { NoteDetail } from '../types';
 import { MermaidDiagram } from './MermaidDiagram';
 import { DocumentViewer } from './DocumentViewer';
@@ -64,14 +67,6 @@ import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
 const CodeEditor = lazy(() =>
   import('./CodeEditor').then(m => ({ default: m.CodeEditor }))
-);
-// Live preview-редактор заметок — для правки notes/*.md (vault проекта). Импорт
-// через публичный index — прямой путь к внутреннему модулю ломает правило
-// «внешние импорты только через features/notes/index.ts». При выключенной
-// подсистеме сам импорт остаётся (lazy), но рендер ниже откажется его
-// показывать.
-const NoteEditor = lazy(() =>
-  import('../features/notes').then(m => ({ default: m.NoteEditor }))
 );
 
 SyntaxHighlighter.registerLanguage('tsx', tsx);
@@ -354,6 +349,12 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   // пытаться открыть заметку бессмысленно. useNotesByFile вызываем всегда
   // (Rules of Hooks); при выключенной подсистеме карта остаётся пустой.
   const notesOn = useSubsystem('notes');
+  // Панели заметок — вклады слота file-viewer-panel (ноль прямых импортов фичи).
+  // Нет вклада — соответствующий рендер деградирует до обычного markdown/редактора.
+  const noteView = useSlotItem<FileViewerNoteViewCtx>('file-viewer-panel', 'note-view');
+  const noteEditor = useSlotItem<FileViewerNoteEditorCtx>('file-viewer-panel', 'note-editor');
+  const noteConnections = useSlotItem<FileViewerNoteConnectionsCtx>('file-viewer-panel', 'note-connections');
+  const docCommented = useSlotItem<FileViewerDocCommentsCtx>('file-viewer-panel', 'doc-commented-markdown');
   // Хост-режим: путь абсолютный (вне корня проекта) — файл открыт карточкой инструмента/
   // изменённого файла чата, живущего в другом дереве. Контент — через /host-files/content,
   // а не projects/{id}/files/*: обычные project-эндпоинты дали бы 403 (SafeJoin).
@@ -1549,20 +1550,20 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   // Заметка vault — полноценный NoteView (теги, ✨-связи, перенос, правка через
   // notes-API с переименованием): тот же функционал, что в разделе «Заметки».
   // Fallback на обычный рендер ниже — пока заметка не зарезолвилась (или файл не .md).
-  if (isNotesFile && isMarkdown && (noteIdOverride || noteDetail)) {
+  if (isNotesFile && isMarkdown && noteView && (noteIdOverride || noteDetail)) {
+    const noteId = noteIdOverride ?? noteDetail!.id;
     return (
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: C.bgCard }}>
-        <NoteView
-          key={noteIdOverride ?? noteDetail!.id}
-          noteId={noteIdOverride ?? noteDetail!.id}
-          existingTitles={noteTitles}
-          onWikilink={openWikilinkInPlace}
-          onSelectNote={id => setNoteIdOverride(id)}
-          onDeleted={onClose}
-          isMobile={isMobile}
-          onBack={isMobile ? onClose : undefined}
-          onOpenFileRef={onOpenFile}
-          extraToolbar={
+        {noteView.render?.({
+          noteId,
+          existingTitles: noteTitles,
+          onWikilink: openWikilinkInPlace,
+          onSelectNote: id => setNoteIdOverride(id),
+          onDeleted: onClose,
+          isMobile,
+          onBack: isMobile ? onClose : undefined,
+          onOpenFileRef: onOpenFile,
+          extraToolbar: (
             <>
               {/* Тумблер режима: иконка ЦЕЛЕВОГО состояния — из полноэкранного
                   режима заметки должен быть обратный путь в сплит */}
@@ -1583,8 +1584,8 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
                 </ToolbarIconButton>
               )}
             </>
-          }
-        />
+          ),
+        })}
       </div>
     );
   }
@@ -1996,14 +1997,13 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
                       Загрузка редактора…
                     </div>
                   }>
-                    {isNotesFile && isMarkdown ? (
-                      <NoteEditor
-                        key={filePath}
-                        value={editContent}
-                        onChange={setEditContent}
-                        onWikilink={openNoteByTitle}
-                        fill
-                      />
+                    {isNotesFile && isMarkdown && noteEditor ? (
+                      noteEditor.render?.({
+                        filePath,
+                        value: editContent,
+                        onChange: setEditContent,
+                        onWikilink: openNoteByTitle,
+                      })
                     ) : (
                       <CodeEditor
                         key={filePath}
@@ -2034,22 +2034,20 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
                         <MarkdownViewer content={content}
                           existingTitles={noteTitles} onWikilink={openNoteByTitle}
                           resolveNote={resolveNoteByName} embedSource={project.id} />
-                        {noteDetail && isMobile && (
+                        {noteDetail && isMobile && noteConnections && (
                           <div style={{ marginTop: 20, borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
-                            <NoteConnections note={noteDetail} onOpenNote={openNoteById}
-                              onWikilink={openNoteByTitle} />
+                            {noteConnections.render?.({ note: noteDetail, onOpenNote: openNoteById, onWikilink: openNoteByTitle })}
                           </div>
                         )}
                       </div>
                       {/* Связи заметки — сайдбар справа (sticky в скролле), на мобиле — снизу */}
-                      {noteDetail && !isMobile && (
+                      {noteDetail && !isMobile && noteConnections && (
                         <aside style={{
                           width: 270, flex: 'none', position: 'sticky', top: 0,
                           maxHeight: 'calc(100vh - 160px)', overflowY: 'auto',
                           borderLeft: `1px solid ${C.border}`, paddingLeft: 14,
                         }}>
-                          <NoteConnections note={noteDetail} onOpenNote={openNoteById}
-                            onWikilink={openNoteByTitle} />
+                          {noteConnections.render?.({ note: noteDetail, onOpenNote: openNoteById, onWikilink: openNoteByTitle })}
                         </aside>
                       )}
                     </div>
@@ -2058,9 +2056,10 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
                   // Хост-режим: без комментариев к документу и резолва картинок —
                   // обе фичи проектные (scope=project.id), для файла вне проекта не годятся
                   ? <div data-selection-scope="doc" data-selection-priority="2"><MarkdownViewer content={content} onDocLink={handleDocLink} /></div>
-                  : isMarkdown && !notesOn
-                  // Подсистема заметок выключена: комментариев к документу нет,
-                  // DocCommentedMarkdown не нужен — обычный MarkdownViewer
+                  : isMarkdown && (!notesOn || !docCommented)
+                  // Подсистемы заметок нет (выключена или не зарегистрирована):
+                  // комментариев к документу нет, вклад doc-commented-markdown пуст —
+                  // обычный MarkdownViewer
                   ? <div data-selection-scope="doc" data-selection-priority="2"><MarkdownViewer content={content} onDocLink={handleDocLink} /></div>
                   : isMarkdown
                   ? (
@@ -2082,22 +2081,20 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
                       {!hasComments && !stackSide && docSide}
                       <div style={hasComments ? { flex: 1, minWidth: 0 } : { minWidth: 0 }}
                         data-selection-scope="doc" data-selection-priority="2">
-                        <DocCommentedMarkdown
-                          scope={project.id} docPath={filePath} content={content} isMobile={isMobile}
-                          onCounts={onCommentCounts}
-                          panelTarget={sideEl}
-                          // Пока контейнер колонки не смонтирован, панель не рисуется нигде:
-                          // без этого она успевала мигнуть на своём обычном месте
-                          deferPanel
+                        {docCommented?.render?.({
+                          scope: project.id, docPath: filePath, content, isMobile,
+                          onCounts: onCommentCounts,
+                          panelTarget: sideEl,
                           // Логотип и скриншоты README лежат рядом в репозитории: путь в src
                           // относителен документа, грузить их надо через файловый эндпоинт.
                           // onDocLink — переход по md-ссылкам внутри файла (другой файл/якорь),
                           // иначе клик уводил бы браузер из SPA на главный экран
-                          viewer={{ onDocLink: handleDocLink, resolveImageSrc: src => {
+                          onDocLink: handleDocLink,
+                          resolveImageSrc: src => {
                             const target = resolveDocImage(filePath, src);
                             return target ? api.files.fileUrl(project.id, target) : undefined;
-                          } }}
-                        />
+                          },
+                        })}
                         {/* На узком просмотрщике блок уезжает под текст — там же,
                             где его ждут глазами */}
                         {stackSide && docSide}

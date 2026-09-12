@@ -110,7 +110,7 @@ public class PersonaBindingsService : IPersonaServerToolGate
     private readonly PersonaManager _personas;
     private readonly ProjectManager _projects;
     private readonly WorkspaceKnowledgeStore _wkStore;
-    private readonly NotesService? _notes;
+    private readonly INoteAccessor? _notes;
     private readonly NotesKnowledgeService? _notesKb;
     private readonly KnowledgeService _knowledge;
     private readonly SkillsService _skills;
@@ -131,7 +131,7 @@ public class PersonaBindingsService : IPersonaServerToolGate
         // Опционально (в тестах не передаётся): личный реестр MCP-серверов владельца —
         // его записи попадают в каталог Tool-ключей как «mcp:<ключ>». Без него каталог
         // остаётся статическим, а mcp-привязки не проходят валидацию
-        Mcp.McpRegistry? mcpRegistry = null, NotesService? notes = null,
+        Mcp.McpRegistry? mcpRegistry = null, INoteAccessor? notes = null,
         // Подсистема Notes отключаемая (Subsystems:Notes:Enabled=false) — null, если она
         // выключена. Датасет заметок пропадает из каталога целей знаний, а recall по
         // заметочным привязкам тихо возвращает пусто (ExtractNotesAsync).

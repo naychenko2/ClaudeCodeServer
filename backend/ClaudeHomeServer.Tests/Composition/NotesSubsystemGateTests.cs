@@ -38,7 +38,10 @@ namespace ClaudeHomeServer.Tests.Composition;
 // через WebApplicationFactory (404 на маршрутах, ход без секции) — отдельная задача adb71e8d.
 public class NotesSubsystemGateTests
 {
-    // Все 8 мест из Б1: тип, параметр, ожидаемый тип параметра.
+    // Параметры конструкторов, приходящие из отключаемой вертикали Notes: места Б1
+    // (kb/noteSync/ai — сервисы вертикали Notes*) и шов `INoteAccessor` (Этап 5, волна
+    // «разрыв Main↔NotesService»). Инвариант один: обязательный такой параметр вне
+    // самой вертикали — дефект; у шва он должен быть строго `INoteAccessor? notes = null`.
     public static IEnumerable<object[]> OptionalNotesVerticalParams =>
     [
         [typeof(ProjectsController), "notesKb", typeof(NotesKnowledgeService)],
@@ -51,6 +54,17 @@ public class NotesSubsystemGateTests
         [typeof(NotesToolset), "ai", typeof(NotesAiService)],
         [typeof(NotesToolset), "noteTasks", typeof(NoteTaskSyncService)],
         [typeof(TasksToolset), "noteSync", typeof(NoteTaskSyncService)],
+        // Шов `INoteAccessor` (10 потребителей в спине и `Memory`).
+        [typeof(FilesController), "notes", typeof(INoteAccessor)],
+        [typeof(DocsController), "notes", typeof(INoteAccessor)],
+        [typeof(PersonasController), "notes", typeof(INoteAccessor)],
+        [typeof(DailyBriefingService), "notes", typeof(INoteAccessor)],
+        [typeof(ChatDigestService), "notes", typeof(INoteAccessor)],
+        [typeof(SessionSummaryService), "notes", typeof(INoteAccessor)],
+        [typeof(PersonaBindingsService), "notes", typeof(INoteAccessor)],
+        [typeof(PersonasCrudService), "notes", typeof(INoteAccessor)],
+        [typeof(UnifiedSearchService), "notes", typeof(INoteAccessor)],
+        [typeof(WorkspaceToolset), "notes", typeof(INoteAccessor)],
     ];
 
     // Прямая проверка «правила пилота»: DI-контейнер строит объект без исключения только
@@ -139,6 +153,10 @@ public class NotesSubsystemGateTests
             $"NotesRecallContributor регистрируется в NotesSubsystem.Register (Enabled={enabled})");
         services.Any(d => d.ServiceType == typeof(IPromptSectionContributor)).Should().Be(enabled,
             $"форвардер IPromptSectionContributor едет тем же вызовом (Enabled={enabled})");
+        // Шов `INoteAccessor` живёт в том же `Register` — гейт у него структурный, как у всего
+        // остального в подсистеме.
+        services.Any(d => d.ServiceType == typeof(INoteAccessor)).Should().Be(enabled,
+            $"шов INoteAccessor регистрируется в NotesSubsystem.Register (Enabled={enabled})");
 
         if (!enabled)
         {
@@ -150,6 +168,16 @@ public class NotesSubsystemGateTests
             var act = () => sp.GetServices<IPromptSectionContributor>().ToList();
             act.Should().NotThrow();
             act().Should().BeEmpty();
+        }
+        else
+        {
+            // Шов — фабрика на уже зарегистрированный синглтон `NotesService`, а не
+            // `AddSingleton<INoteAccessor, NotesService>`: вторая регистрация типа дала бы
+            // ВТОРОЙ экземпляр сервиса, и резолвом это не поймать (оба варианта разрешаются,
+            // разница — в числе экземпляров). Поэтому проверяем форму дескриптора. Граф
+            // заметок здесь намеренно не поднимаем (см. шапку класса).
+            services.Single(d => d.ServiceType == typeof(INoteAccessor))
+                .ImplementationFactory.Should().NotBeNull();
         }
     }
 

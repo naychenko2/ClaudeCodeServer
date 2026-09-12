@@ -12,7 +12,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/files")]
-public class FilesController(FileService files, ProjectManager projects, SyncService sync, IConfiguration config, JwtService jwt, ILogger<FilesController> logger, DocumentAiService docAi, ProjectFileSessionsIndex fileSessions, NotesService? notes = null) : ControllerBase
+public class FilesController(FileService files, ProjectManager projects, SyncService sync, IConfiguration config, JwtService jwt, ILogger<FilesController> logger, DocumentAiService docAi, ProjectFileSessionsIndex fileSessions, INoteAccessor? notes = null) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);

@@ -58,7 +58,16 @@ public sealed class NotesSubsystem : IAppSubsystem
         // Singleton-ы без внутреннего порядка между собой; `NoteExpiryService` —
         // hosted поверх `NotesService` (читает заметки по проектам для авто-истечения).
         services.AddSingleton<NotesService>();
-        services.AddSingleton<INoteSummaryReader, NotesService>();
+        // Форвардер на один синглтон, а не `AddSingleton<INoteSummaryReader, NotesService>`:
+        // вторая регистрация типа давала ВТОРОЙ экземпляр сервиса (рассинхрон кэша модели).
+        services.AddSingleton<INoteSummaryReader>(sp => sp.GetRequiredService<NotesService>());
+        // Узкий шов наружу — Core-контракт `INoteAccessor` (7 методов по фактическим
+        // вызовам спины) реализует сам `NotesService` (как и `INoteSummaryReader`).
+        // Форвардер на уже зарегистрированный синглтон, а не `AddSingleton<INoteAccessor,
+        // NotesService>()`: вторая регистрация типа дала бы ВТОРОЙ экземпляр сервиса. Гейт
+        // подсистемы — структурный: при `Subsystems:Notes:Enabled=false` `Register` не
+        // зовётся вовсе, шва в DI нет, а потребители держат `INoteAccessor?` и деградируют в null.
+        services.AddSingleton<INoteAccessor>(sp => sp.GetRequiredService<NotesService>());
         services.AddSingleton<NotesKnowledgeService>();
         services.AddSingleton<NotesAiService>();
         services.AddSingleton<NoteTaskSyncService>();

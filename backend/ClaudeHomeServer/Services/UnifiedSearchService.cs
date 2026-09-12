@@ -11,7 +11,7 @@ namespace ClaudeHomeServer.Services;
 // MVP: чаты (транскрипты сессий) и файлы проектов пока НЕ индексируются — это следующий
 // шаг (требует отдельного Dify-пайплайна по образцу NotesKnowledgeService).
 public sealed class UnifiedSearchService(
-    TaskManager tasks, ProjectManager projects, NotesService? notes = null,
+    TaskManager tasks, ProjectManager projects, INoteAccessor? notes = null,
     // Подсистема Notes отключаемая: null — семантический поиск заметок пропускается,
     // остаётся ключевой фолбэк через notes (если тоже включена) и задачи.
     NotesKnowledgeService? kb = null)

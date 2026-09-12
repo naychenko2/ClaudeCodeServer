@@ -45,7 +45,7 @@ public sealed class DailyBriefingService
     private const string Header = "## Утренний бриф";
 
     private readonly TaskManager _tasks;
-    private readonly NotesService? _notes;
+    private readonly INoteAccessor? _notes;
     private readonly ProjectManager _projects;
     private readonly UserStore _users;
     private readonly PersonaManager _personas;
@@ -69,7 +69,7 @@ public sealed class DailyBriefingService
         Llm.ICheapTextRunner cheap, PushService push,
         ITaskNotificationDispatcher notif,
         IConfiguration config, ILogger<DailyBriefingService> log,
-        ProjectEventLogService? events = null, NotesService? notes = null)
+        ProjectEventLogService? events = null, INoteAccessor? notes = null)
     {
         _tasks = tasks;
         _notes = notes;

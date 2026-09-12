@@ -15,7 +15,7 @@ namespace ClaudeHomeServer.Controllers;
 [Authorize]
 [Route("api/projects/{projectId}/docs")]
 public class DocsController(DocsIndexService docs, ProjectManager projects,
-    ILogger<DocsController> logger, NotesService? notes = null) : ControllerBase
+    ILogger<DocsController> logger, INoteAccessor? notes = null) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub читаем напрямую (как в FilesController)
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);

@@ -1412,7 +1412,7 @@ public class SubsystemBoundaryTests
             // одной строки на пару «тип-источник → тип-нарушитель».
             var seen = new HashSet<(string, string)>();
 
-            foreach (var referenced in CollectReferencedTypes(type))
+            foreach (var referenced in BoundaryIlScanner.CollectAllReferencedTypes(type))
             {
                 if (!IsAllowed(referenced, boundary.AllowedNamespacePrefixes, boundary.AllowedExactNamespaces))
                 {
@@ -1469,17 +1469,6 @@ public class SubsystemBoundaryTests
             }
         }
     }
-
-    /// <summary>
-    /// Единственный путь сбора типов: <see cref="BoundaryIlScanner.CollectAllReferencedTypes"/>.
-    /// Прежде у сторожа было два независимых пути — IL-скан и собственная рефлексия полей,
-    /// и подмена вызова сканера в коде сторожа оставляла все тесты зелёными. Теперь оба
-    /// идут через ту же функцию: подмена реализации сканера роняет весь гейт единым
-    /// движением, в том числе регрессию <see cref="IlBoundaryRegressionTests"/>.
-    /// </summary>
-    private static IEnumerable<Type> CollectReferencedTypes(Type type) =>
-        BoundaryIlScanner.CollectAllReferencedTypes(type);
-
 
     // Сначала проверяем точное совпадение FullName (одноуровневые синглтоны из
     // корня Services: PersonaManager, SessionManager и т.п., плюс nested-типы

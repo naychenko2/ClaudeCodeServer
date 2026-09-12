@@ -8,5 +8,6 @@ public static class ProjectFileGatewayConstants
 {
     // Каталог вложений чата. Используется ProjectKnowledgeSyncService для фильтрации
     // путей в NormalizeHint: вложения чата не должны попадать в базу знаний.
-    public const string AttachmentsDir = ".cc-attachments";
+    // Форвардер: источник правды — TreeExcludes.AttachmentsDir.
+    public const string AttachmentsDir = TreeExcludes.AttachmentsDir;
 }

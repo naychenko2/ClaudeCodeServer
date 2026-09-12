@@ -1564,10 +1564,10 @@ public class SubsystemBoundaryTests
     /// два перенесённых примитива в <c>Models</c>. Вертикалям тут места нет.
     /// </summary>
     /// <remarks>
-    /// Корневого <c>ClaudeHomeServer.Services</c> здесь НЕТ намеренно: под ним в Main
-    /// живут вертикали, и одного этого неймспейса хватило бы, чтобы спрятать вертикаль
-    /// в спинке уровнем выше (ревью 894e3ec9 доказало мутацией — сторож молчал).
-    /// Четыре корневых примитива Core пришпилены поимённо в <see cref="CoreAllowedRootTypes"/>.
+    /// Корневого <c>ClaudeHomeServer.Services</c> здесь НЕТ: под ним в Main живут
+    /// вертикали, и широкой записи namespace (48+ типов) было достаточно, чтобы
+    /// спрятать вертикаль в спинке (ревью 894e3ec9 доказало мутацией). Все типы
+    /// корневого namespace Core перечислены поимённо в <see cref="CoreAllowedRootTypes"/>.
     /// </remarks>
     private static readonly string[] CoreAllowedNamespaces =
     [
@@ -1577,11 +1577,6 @@ public class SubsystemBoundaryTests
         // дискриминируются по `type` в едином потоке `ServerMessage`, отдельная
         // сборка не нужна.
         "ClaudeHomeServer.Protocol",
-        // Этап 3 (уборка Git/Skills/CodeGraph): корневые stateless-примитивы спины —
-        // PathNormalizer/Slugifier/SafePath/ExecutableResolver/JsonFileStore/SsrfGuard/
-        // PermissionModeGuard/ModelTier/TeamProtocolMarkers. Вертикали берут их через
-        // цепочку namespace `ClaudeHomeServer.Services.*` (без using — прецедент Git).
-        "ClaudeHomeServer.Services",
         "ClaudeHomeServer.Services.Composition",
         "ClaudeHomeServer.Services.Http",
         "ClaudeHomeServer.Services.Mcp",
@@ -1677,44 +1672,72 @@ public class SubsystemBoundaryTests
 
     /// <summary>
     /// Единственные типы, которым позволено лежать в Core прямо в корневом
-    /// <c>ClaudeHomeServer.Services</c>. Список закрытый и поимённый: пятый примитив
-    /// здесь — осознанное решение, а не побочный эффект переноса файла.
+    /// <c>ClaudeHomeServer.Services</c>. Список закрытый и поимённый: тип, добавленный
+    /// сюда без осознанного решения — дефект. Широкая запись namespace (ранее
+    /// <c>"ClaudeHomeServer.Services"</c> в <see cref="CoreAllowedNamespaces"/>) удалена:
+    /// она открывала ВСЕ типы корневого namespace разом (48+), и тип вертикали,
+    /// положенный в Core «чтобы собиралось», проходил сторожем молча (ревью 2026-09-10).
     /// </summary>
     private static readonly string[] CoreAllowedRootTypes =
     [
+        // ── Stateful / utility classes (spine primitives and infrastructure) ──
+        "ClaudeHomeServer.Services.OutputRingBuffer",
         "ClaudeHomeServer.Services.JsonFileStore",
-        "ClaudeHomeServer.Services.PermissionModeGuard",
         "ClaudeHomeServer.Services.SsrfGuard",
-        "ClaudeHomeServer.Services.TeamProtocolMarkers",
-        // Этап 3, волна 1: чистые статики подняты в Core ради CodeGraph.
-        // PathNormalizer — нормализация корня, ExecutableResolver — поиск по PATH+PATHEXT.
+        "ClaudeHomeServer.Services.RuleRuntimeState",
+        "ClaudeHomeServer.Services.ModelTiers",
+        "ClaudeHomeServer.Services.SpecialtyDefaultBinding",
+        // ── Static spine primitives (stateless helpers, no vertical ownership) ──
+        "ClaudeHomeServer.Services.SafePath",
+        "ClaudeHomeServer.Services.TreeExcludes",
+        "ClaudeHomeServer.Services.Slugifier",
         "ClaudeHomeServer.Services.PathNormalizer",
         "ClaudeHomeServer.Services.ExecutableResolver",
-        // Этап 3: транслитерация кириллицы в slug. Три независимые копии
-        // (`PersonaManager`, `Dossiers/DossierGitExporter`, `Git/GitServerService`)
-        // не принадлежали ни одной вертикали — чистый stateless-примитив спины.
-        "ClaudeHomeServer.Services.Slugifier",
-        // Этап 3, волна 2 (Skills): `ModelTier` переехал в Core, чтобы `LocalActionCatalog`
-        // (тоже Core) мог ссылаться на слот без обратной ссылки на Main. Парсер
-        // `ModelTiers` остаётся в Main — он завязан на IConfiguration/JSON-стор.
+        "ClaudeHomeServer.Services.PermissionModeGuard",
+        "ClaudeHomeServer.Services.TeamProtocolMarkers",
         "ClaudeHomeServer.Services.ModelTier",
-        // Этап 5, узкие швы Turn: разбор путей, упомянутых в тексте хода (был
-        // `DossierRecallService.ExtractPathsFromText`, звал его только контрибьютор
-        // промпта). Stateless-регексп по образцу Slugifier.
+        "ClaudeHomeServer.Services.TranscriptRoots",
         "ClaudeHomeServer.Services.TextPathMentions",
-        // Этап 5, волна 6 (Llm): `AttachmentsGitExclude` — статический примитив спины
-        // по тем же причинам, что и TranscriptRoots/ExecutableResolver (выше): реестр
-        // «вертикаль → спина» живёт в корне `Services`, вертикаль (Git) его не знает.
-        // namespace сохранён ради call-site'ов в `Services/Llm/Claude` и
-        // `Composition/Notifications`, и сам файл — единственный носитель логики
-        // «не светить вложения чата в git-статусе проекта».
         "ClaudeHomeServer.Services.AttachmentsGitExclude",
-        // Этап 5, волна 6 (Llm): `SnapshotIdGenerator` — генератор id снимков промпта,
-        // ехал из PromptSnapshotStore (Main) ради ClaudeSession. Один счётчик на
-        // процесс: и NewId (private в PromptSnapshotStore), и NewPublicId (форвардер)
-        // ходят через этот же статик, иначе коллизии вернутся. Прецедент
-        // SafePath/ExecutableResolver — stateless-примитив в Core.
         "ClaudeHomeServer.Services.SnapshotIdGenerator",
+        "ClaudeHomeServer.Services.McpEndpoints",
+        "ClaudeHomeServer.Services.TaskUrl",
+        "ClaudeHomeServer.Services.ImageAssetHelper",
+        "ClaudeHomeServer.Services.InstanceSecretFiles",
+        "ClaudeHomeServer.Services.SessionChangedPaths",
+        "ClaudeHomeServer.Services.SessionIdGuard",
+        "ClaudeHomeServer.Services.SessionTranscript",
+        "ClaudeHomeServer.Services.ExecutorStopClassifier",
+        "ClaudeHomeServer.Services.PersonaLabel",
+        "ClaudeHomeServer.Services.PersonaConsultantToolset",
+        "ClaudeHomeServer.Services.SpecialtyCatalog",
+        "ClaudeHomeServer.Services.SpecialtyPromptPresets",
+        "ClaudeHomeServer.Services.SpecialtyTemplate",
+        // ── Shared contracts (interfaces crossing vertical boundaries) ──
+        "ClaudeHomeServer.Services.IChatHistoryLoader",
+        "ClaudeHomeServer.Services.IDailyBriefingRunner",
+        "ClaudeHomeServer.Services.IDataBackupService",
+        "ClaudeHomeServer.Services.IKnowledgeHubNotifier",
+        "ClaudeHomeServer.Services.IModelCatalog",
+        "ClaudeHomeServer.Services.IPersonaAutomationRunner",
+        "ClaudeHomeServer.Services.IPersonaAvatarStore",
+        "ClaudeHomeServer.Services.IPersonaLookup",
+        "ClaudeHomeServer.Services.IPersonaResolver",
+        "ClaudeHomeServer.Services.IProjectBackgroundWriter",
+        "ClaudeHomeServer.Services.IProjectEventLogService",
+        "ClaudeHomeServer.Services.IProjectIconMigrator",
+        "ClaudeHomeServer.Services.IProjectManager",
+        "ClaudeHomeServer.Services.ISessionDirectory",
+        "ClaudeHomeServer.Services.ITaskExecutor",
+        "ClaudeHomeServer.Services.ITaskLookup",
+        "ClaudeHomeServer.Services.ITaskNotificationDispatcher",
+        "ClaudeHomeServer.Services.ITierModelResolver",
+        "ClaudeHomeServer.Services.IUserStore",
+        "ClaudeHomeServer.Services.IWorkspaceDatasetLookup",
+        // ── DTOs (records shared across verticals) ──
+        "ClaudeHomeServer.Services.DataBackupResult",
+        "ClaudeHomeServer.Services.ModelCatalogEntry",
+        "ClaudeHomeServer.Services.WorkspaceDatasetInfo",
     ];
 
     /// <summary>

@@ -98,4 +98,66 @@ describe('sortChatsFlat', () => {
     expect(sortChatsFlat(chats, 'newest').map(c => c.id)).toEqual(['pinnedOldest', 'new', 'old']);
     expect(sortChatsFlat(chats, 'oldest').map(c => c.id)).toEqual(['pinnedOldest', 'old', 'new']);
   });
+
+  it('created-*: порядок по createdAt, а не по активности', () => {
+    const chats = [
+      // активен сегодня, создан давно — по активности первый, по созданию последний
+      mk('oldBorn', { createdAt: daysAgo(6), updatedAt: daysAgo(0) }),
+      mk('newBorn', { createdAt: daysAgo(1), updatedAt: daysAgo(1) }),
+    ];
+    expect(sortChatsFlat(chats, 'newest').map(c => c.id)).toEqual(['oldBorn', 'newBorn']);
+    expect(sortChatsFlat(chats, 'created-newest').map(c => c.id)).toEqual(['newBorn', 'oldBorn']);
+    expect(sortChatsFlat(chats, 'created-oldest').map(c => c.id)).toEqual(['oldBorn', 'newBorn']);
+  });
+});
+
+// Сортировка по времени создания: и порядок, и СЕКЦИИ дней считаются по createdAt —
+// «Сегодня» означает «создан сегодня», сколько бы раз чат ни оживал потом
+describe('groupChats: сортировка по созданию', () => {
+  const chats = [
+    mk('oldBornActiveToday', { createdAt: daysAgo(4), updatedAt: daysAgo(0, 18) }),
+    mk('bornToday', { createdAt: daysAgo(0, 9), updatedAt: daysAgo(0, 9) }),
+    mk('bornYesterday', { createdAt: daysAgo(1), updatedAt: daysAgo(1) }),
+  ];
+
+  it('чат, созданный давно и активный сегодня, попадает в секцию своего дня создания', () => {
+    const groups = groupChats(chats, 'created-newest');
+    expect(groups.map(g => g.title)).toEqual([
+      'Сегодня', expect.stringContaining('Вчера'), expect.any(String),
+    ]);
+    expect(groups[0].items.map(c => c.id)).toEqual(['bornToday']);
+    expect(groups[2].items.map(c => c.id)).toEqual(['oldBornActiveToday']);
+    // По активности тот же чат живёт в «Сегодня» — оси расходятся осознанно
+    expect(groupChats(chats, 'newest')[0].items.map(c => c.id))
+      .toEqual(['oldBornActiveToday', 'bornToday']);
+  });
+
+  it('created-oldest: порядок секций обращается — старые дни сверху, «Сегодня» внизу', () => {
+    const groups = groupChats(chats, 'created-oldest');
+    expect(groups[groups.length - 1].title).toBe('Сегодня');
+    expect(groups[0].items.map(c => c.id)).toEqual(['oldBornActiveToday']);
+  });
+
+  it('секция «Закреплённые» первая во всех четырёх режимах', () => {
+    const withPin = [...chats, mk('pin', { createdAt: daysAgo(7), updatedAt: daysAgo(7), isPinned: true })];
+    for (const order of ['newest', 'oldest', 'created-newest', 'created-oldest'] as const) {
+      const groups = groupChats(withPin, order);
+      expect(groups[0].title).toBe('Закреплённые');
+      expect(groups[0].items.map(c => c.id)).toEqual(['pin']);
+    }
+  });
+});
+
+describe('groupByTags: сортировка по созданию', () => {
+  it('внутри секции — по createdAt, порядок секций реестровый', () => {
+    const chats = [
+      mk('oldBorn', { createdAt: daysAgo(5), updatedAt: daysAgo(0), tags: ['Работа'] }),
+      mk('newBorn', { createdAt: daysAgo(1), updatedAt: daysAgo(1), tags: ['Работа'] }),
+    ];
+    const groups = groupByTags(chats, REGISTRY, 'created-newest');
+    expect(groups.map(g => g.tag)).toEqual(['Работа']);
+    expect(groups[0].items.map(c => c.id)).toEqual(['newBorn', 'oldBorn']);
+    expect(groupByTags(chats, REGISTRY, 'created-oldest')[0].items.map(c => c.id))
+      .toEqual(['oldBorn', 'newBorn']);
+  });
 });

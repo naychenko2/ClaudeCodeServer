@@ -1,6 +1,6 @@
 import type { ProjectTag, Session } from '../types';
 import { sortTagsByRegistry } from './tagRegistry';
-import type { ChatSortOrder } from './chatFilters';
+import { sortKeyOf, type ChatSortOrder } from './chatFilters';
 
 export interface ChatGroup {
   title: string;
@@ -40,13 +40,14 @@ export function dayGroupTitle(d: Date): string {
 // Группировка чатов для сайдбара: Закреплённые → Сегодня → Вчера → по дням.
 // Дни идут отдельными группами (а не общим «Ранее») — по разделителю видно,
 // какие чаты относятся к одной дате. Внутри группы — свежие сверху.
-// sortOrder='oldest': порядок секций и порядок внутри них обращается,
-// а секция «Закреплённые» всё равно остаётся первой (макет chat-unified-view).
+// Обратное направление ('oldest'/'created-oldest'): порядок секций и порядок внутри
+// них обращается, а секция «Закреплённые» всё равно остаётся первой (макет
+// chat-unified-view). Поле даты — из sortKeyOf: в режимах 'created-*' и порядок,
+// и сами секции дней считаются по createdAt («Сегодня» = чат создан сегодня).
 export function groupChats(chats: Session[], sortOrder: ChatSortOrder = 'newest'): ChatGroup[] {
-  const dir = sortOrder === 'oldest' ? 1 : -1;
-  const byDate = [...chats].sort(
-    (a, b) => dir * (new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime())
-  );
+  const { field, dir } = sortKeyOf(sortOrder);
+  const ts = (c: Session) => new Date(c[field]).getTime();
+  const byDate = [...chats].sort((a, b) => dir * (ts(a) - ts(b)));
 
   const pinned = byDate.filter(c => c.isPinned);
   const rest = byDate.filter(c => !c.isPinned);
@@ -60,7 +61,7 @@ export function groupChats(chats: Session[], sortOrder: ChatSortOrder = 'newest'
   // Дни старше вчерашнего — своей группой каждый; порядок вставки уже в направлении sortOrder
   const earlierDays = new Map<number, Session[]>();
   for (const c of rest) {
-    const d = startOfDay(new Date(c.updatedAt));
+    const d = startOfDay(new Date(ts(c)));
     if (d >= today) todayItems.push(c);
     else if (d >= today - day) yesterdayItems.push(c);
     else {
@@ -76,7 +77,7 @@ export function groupChats(chats: Session[], sortOrder: ChatSortOrder = 'newest'
   const todayGroup = { title: 'Сегодня', items: todayItems };
   const yesterdayGroup = { title: dayGroupTitle(new Date(today - day)), items: yesterdayItems };
   if (pinned.length) groups.push({ title: 'Закреплённые', items: pinned });
-  if (sortOrder === 'oldest') {
+  if (dir === 1) {
     // Старые дни сверху → вчера → сегодня в самом низу
     groups.push(...earlier);
     if (yesterdayItems.length) groups.push(yesterdayGroup);
@@ -94,12 +95,12 @@ export function groupChats(chats: Session[], sortOrder: ChatSortOrder = 'newest'
 // в конце — хвост «Без тегов». Чат с НЕСКОЛЬКИМИ тегами дублируется в каждой своей
 // секции — иначе из-под остальных его тегов он был бы не найти. Пустые секции
 // (тег реестра без единого чата) не рисуются.
-// Внутри секции — по свежести (updatedAt) в направлении sortOrder; порядок секций
-// от sortOrder не зависит — он реестровый (ручной, ▲▼).
+// Внутри секции — по дате из sortKeyOf (активность или создание) в направлении
+// sortOrder; порядок секций от sortOrder не зависит — он реестровый (ручной, ▲▼).
 export function groupByTags(chats: Session[], registry: ProjectTag[], sortOrder: ChatSortOrder = 'newest'): TagChatGroup[] {
-  const dir = sortOrder === 'oldest' ? 1 : -1;
+  const { field, dir } = sortKeyOf(sortOrder);
   const sorted = [...chats].sort(
-    (a, b) => dir * (new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime())
+    (a, b) => dir * (new Date(a[field]).getTime() - new Date(b[field]).getTime())
   );
 
   // tag → чаты (ключ — имя как у чата; каноничный регистр берём из реестра при сборке)
@@ -140,12 +141,12 @@ export function chatTagsSorted(chat: Session, registry: ProjectTag[]): string[] 
 }
 
 // Плоский список без группировки (groupBy='none'): закреплённые всегда первыми,
-// дальше — по свежести в направлении sortOrder.
+// дальше — по дате из sortKeyOf в направлении sortOrder.
 export function sortChatsFlat(chats: Session[], sortOrder: ChatSortOrder = 'newest'): Session[] {
-  const dir = sortOrder === 'oldest' ? 1 : -1;
+  const { field, dir } = sortKeyOf(sortOrder);
   return [...chats].sort((a, b) => {
     const pin = Number(b.isPinned ?? false) - Number(a.isPinned ?? false);
     if (pin !== 0) return pin;
-    return dir * (new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime());
+    return dir * (new Date(a[field]).getTime() - new Date(b[field]).getTime());
   });
 }

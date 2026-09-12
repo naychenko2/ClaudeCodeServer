@@ -221,20 +221,19 @@ public class RootSubsystemBoundaryTests
         // пересмотреть, не вынести ли конкретный root-тип внутрь Tasks (или не выделить
         // общий Tasks-интерфейс).
         "ClaudeHomeServer.Services.Tasks.TaskManager",
-        // ⚠ Волна 4C, шаг 2 — выделена вертикаль Notes; шесть root-типов держат
-        // `NotesService`/`NotesKnowledgeService` в конструкторе как «продуктовую
-        // зависимость» (Notes записывает события в журнал, генерирует теги,
-        // делает семантический поиск для recall-запросов). Префикс `Services.Notes`
-        // не открываем (Notes — продуктовая вертикаль, не «общий слой»):
-        // точечный допуск ровно на два типа, чтобы `PersonaBindingsService`/
-        // `PersonasCrudService`/`SessionSummaryService`/`TaskExecutionService`/
-        // `UnifiedSearchService`/`ChatDigestService` могли держать их в сигнатуре.
-        // (`ChatDigestService` — волна 3 выноса Llm: приехал из вертикали в спину,
-        // берёт `NotesService.GetDetail` для текста карточки архива.) Если завтра root
+        // ⚠ Волна 4C, шаг 2 — выделена вертикаль Notes; пять root-типов держат
+        // `NotesKnowledgeService` в конструкторе как «продуктовую зависимость»
+        // (Notes генерирует теги, делает семантический поиск для recall-запросов).
+        // Префикс `Services.Notes` не открываем (Notes — продуктовая вертикаль,
+        // не «общий слой»): точечный допуск ровно на один тип, чтобы
+        // `PersonaBindingsService`/`SessionSummaryService`/`TaskExecutionService`/
+        // `UnifiedSearchService` могли держать его в сигнатуре. Если завтра root
         // начнёт ссылаться ещё на `NotesAiService`/`NoteTaskSyncService`/etc —
         // сторож покраснеет, и повод пересмотреть, не выделить ли конкретный
         // root-тип внутрь Notes.
-        "ClaudeHomeServer.Services.Notes.NotesService",
+        // `NotesService` из допуска снят (Этап 5, 2026-09-12): root-типы перешли на
+        // Core-шов `INoteAccessor`, прямая ссылка спины на сервис вертикали ушла —
+        // запись осталась осиротевшей.
         "ClaudeHomeServer.Services.Notes.NotesKnowledgeService",
         // ⚠ Шов `root → Skills`: `PersonaBindingsService`/`PersonasCrudService` дёргают
         // `SkillsService` в ctor для валидации Skill-привязок персон и UI карточки персоны

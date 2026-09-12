@@ -29,7 +29,7 @@ public class SessionSummaryService(
     Llm.ICheapTextRunner cheap,
     ISessionBroadcaster broadcaster,
     NotificationService notif, IConfiguration config,
-    ILogger<SessionSummaryService> logger, NotesService? notes = null,
+    ILogger<SessionSummaryService> logger, INoteAccessor? notes = null,
     // Подсистема Notes отключаемая: null, если выключена. Проверка notes is null стоит
     // ПЕРВОЙ в SummarizeAsync (после inFlight), чтобы при выключенной подсистеме не
     // платить за LLM-конспект, который некуда сохранить; kb тоже null и зовётся через `?.`.

@@ -73,7 +73,7 @@ public sealed partial class WorkspaceToolset(
     DefaultAssistantProvisioner provisioner,
     KnowledgeBaseCatalogService knowledgeCatalog,
     ISessionBroadcaster broadcaster,
-    NotesService? notes = null) : IMcpParameterizedToolset
+    INoteAccessor? notes = null) : IMcpParameterizedToolset
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/wsp/{sessionId}. Константа —
     // единственная точка правды для URL конфига хода (ClaudeSession)

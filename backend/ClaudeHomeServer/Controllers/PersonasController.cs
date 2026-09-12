@@ -45,14 +45,14 @@ public class PersonasController(
     IConfiguration config,
     ILogger<PersonasController> log,
     IHubContext<SessionHub> hub,
-    NotesService? notes = null) : ControllerBase
+    INoteAccessor? notes = null) : ControllerBase
 {
     private readonly PersonaManager _personas = personas;
     private readonly ProjectManager _projects = projects;
     private readonly SessionManager _sessions = sessions;
     private readonly PersonaMemoryService _memory = memory;
     private readonly PersonaBindingsService _bindings = bindings;
-    private readonly NotesService? _notes = notes;
+    private readonly INoteAccessor? _notes = notes;
     private readonly SkillsService _skills = skills;
     private readonly KnowledgeService _knowledge = knowledge;
     private readonly Services.Images.ImageGenerationService _images = images;

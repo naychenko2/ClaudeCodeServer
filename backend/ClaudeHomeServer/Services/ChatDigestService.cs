@@ -35,7 +35,7 @@ public sealed class DigestGenerationException(string message) : Exception(messag
 // межпровайдерного фолбэка десктопных чатов.
 public class ChatDigestService(
     SessionManager sessions, IProjectManager projects, ICheapTextRunner cheap,
-    ILogger<ChatDigestService> logger, NotesService? notes = null)
+    ILogger<ChatDigestService> logger, INoteAccessor? notes = null)
 {
     // Тот же бюджет транскрипта, что у «Итога сессии»: при переполнении голова + хвост
     private const int TranscriptBudget = 30_000;

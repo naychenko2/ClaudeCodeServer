@@ -785,7 +785,9 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.ChatHistoryService",
                     "ClaudeHomeServer.Services.FileService",
                     "ClaudeHomeServer.Services.SessionSummaryService",
-                    "ClaudeHomeServer.Services.Notes.NotesService",
+                    // `Notes.NotesService` снят (Этап 5, 2026-09-12): прямых ссылок
+                    // из Llm на сервис вертикали Notes не осталось (замечание сторожа
+                    // было осиротевшим — пережило переезд `ChatDigestService` в спину).
                     // ProjectManager снят: сборку частей системного промпта
                     // (GetSystemPromptParts + SystemPromptPart) забрала спина —
                     // Core: Services/Llm/SystemPromptComposer, а встроенная часть

@@ -37,7 +37,7 @@ public sealed class PersonasCrudService(
     IConfiguration config,
     ILogger<PersonasCrudService> log,
     ISessionBroadcaster broadcaster,
-    NotesService? notes = null)
+    INoteAccessor? notes = null)
 {
     // Провайдеров генерации несколько (fal.ai, glif) — про конкретный ключ конфига не пишем
     private const string ImageGenerationOffError =

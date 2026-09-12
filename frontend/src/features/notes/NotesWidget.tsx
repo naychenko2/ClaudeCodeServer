@@ -5,18 +5,14 @@ import { api } from '../../lib/api';
 import { C, FONT } from '../../lib/design';
 import { ensureNotesLoaded } from '../../lib/notes';
 import type { HubTab } from '../../components/HubTabs';
-import { NewNoteDialog } from '../notes';
 import { useSubsystem } from '../../lib/subsystems';
-import { WidgetCard, WidgetAction, WidgetEmpty, relTime } from './WidgetCard';
+import { WidgetCard, WidgetAction, WidgetEmpty, relTime } from '../home/WidgetCard';
+import { NewNoteDialog } from './NewNoteDialog';
+import { openNote } from './openNote';
 
-// Открыть заметку через общий SPA-канал (обработчик #/notes/{id} в App)
-export function openNote(id: string): void {
-  window.dispatchEvent(new CustomEvent('cc-open-url', {
-    detail: { url: `#/notes/${encodeURIComponent(id)}` },
-  }));
-}
-
-// «Заметки»: последние измененные по всем источникам.
+// «Заметки»: последние изменённые по всем источникам. Виджет живёт в фиче заметок
+// (раньше лежал в features/home и импортировал диалог заметки напрямую) — дашборд
+// рисует его вкладом слота home-widget.
 // Гейт по подсистеме: выключена — виджет не рендерится.
 export function NotesWidget({ onHubTab }: { onHubTab: (t: HubTab) => void }) {
   const notesOn = useSubsystem('notes');

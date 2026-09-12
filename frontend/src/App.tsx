@@ -36,6 +36,7 @@ import { api } from './lib/api'
 import { idbClear } from './lib/idb'
 import { setAllFlags } from './lib/featureFlags'
 import { SUBSYSTEMS, isSubsystemEnabled, setAllSubsystems, useSubsystem } from './lib/subsystems'
+import { getSubsystem, getSubsystemTab } from './lib/subsystems/registry'
 import { setMeFromServer, clearMe, useMe } from './lib/defaultPersona'
 import { IntroChatPage, ProjectIntroChatPage, OPEN_INTRO_EVENT } from './features/onboarding/OnboardingPage'
 import { getWallReturn, isWallActive, setWallActive, setWallReturn } from './lib/wallMode'
@@ -44,11 +45,9 @@ import { setCtxThresholdsFromServer } from './lib/contextPrefs'
 import { useIsMobile } from './lib/breakpoints'
 import { loadModels } from './lib/models'
 import { CalendarPage } from './features/tasks/CalendarPage'
-// Раздел «Заметки» грузим через React.lazy: его чанк подъезжает только когда
-// пользователь реально открывает заметки. При выключенной подсистеме NotesPage
-// никогда не смонтируется (см. fallback в seed-снимке ниже) — и чанк уйдёт
-// в unused и Vite его отбросит. Тест на отбрасывание — в build:quiet.
-const NotesPage = lazy(() => import('./features/notes/NotesPage').then(m => ({ default: m.NotesPage })))
+// Раздел «Заметки» приходит из реестра подсистем (manifest.tab, ленивый компонент):
+// прямой импорт страницы здесь больше не нужен — каркас резолвит его по ключу
+// раздела. См. lib/subsystems/registry.
 import { PersonasPage } from './features/personas/PersonasPage'
 import { ensureNotificationsSubscribed } from './lib/notifications'
 import { KnowledgePage } from './features/knowledge/KnowledgePage'
@@ -162,7 +161,10 @@ export default function App() {
   // useState обычно уже сидирован ответом /api/auth/me, но если нет (холодный старт
   // без авторизации или первый кадр до резолва) — isSubsystemEnabled вернёт false
   // по умолчанию, и это та же безопасная ветка.
-  const notesOnInit = isSubsystemEnabled(SUBSYSTEMS.notes)
+  // Плюс проверка регистрации в бандле: ключ с бэка приходит независимо от наличия
+  // фичи, и без неё диплинк #/notes после удаления features/notes вёл бы на пустоту.
+  const notesRegistered = getSubsystem('notes') !== undefined
+  const notesOnInit = isSubsystemEnabled(SUBSYSTEMS.notes) && notesRegistered
   const [hubTab, setHubTab] = useState<HubTabValue>(() => {
     if (initialHash?.screen === 'home') return 'home'
     if (initialHash?.screen === 'calendar') return 'calendar'
@@ -182,11 +184,16 @@ export default function App() {
   // Реактивный гейт подсистемы «Заметки»: подписка на стор ловит отключение
   // админом на лету и уводит с раздела. Используется в seed-снимке, hashchange
   // и switchHubTab ниже — единая точка правды, чтобы все три пути вели в «Чаты»
-  // одинаково.
-  const notesOn = useSubsystem(SUBSYSTEMS.notes)
+  // одинаково. Регистрация в бандле (notesRegistered) — чтобы при удалённой фиче
+  // не осталось пилюли/раздела на пустой экран.
+  const notesOn = useSubsystem(SUBSYSTEMS.notes) && notesRegistered
   const fallbackIfNotesOff = (t: HubTabValue): HubTabValue =>
     (t === 'notes' && !notesOn) ? 'chats' : t
   const effectiveHubTab: HubTabValue = fallbackIfNotesOff(hubTab)
+  // Компонент раздела «Заметки» — из реестра подсистем (ноль прямых импортов фичи).
+  // Регистрация статична, читаем в рендере: undefined означает «подсистема не
+  // зарегистрирована» — тогда ветка ниже отрисует пустоту.
+  const NotesTabComponent = getSubsystemTab('notes')
 
   // Цвет титлбара окна (Chromium: meta[name=theme-color]): внутри открытого
   // проекта — фирменный цвет проекта, вне — акцент текущей темы. «Спящий»
@@ -1230,7 +1237,9 @@ export default function App() {
               ? <CalendarPage auth={auth} onLogout={logout} onHubTab={switchHubTab} onOpenTask={openTaskInProject} />
             : effectiveHubTab === 'notes'
               ? <Suspense fallback={<div style={{ minHeight: '100vh', background: C.bgMain }} />}>
-                  <NotesPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
+                  {NotesTabComponent
+                    ? <NotesTabComponent auth={auth} onLogout={logout} onHubTab={switchHubTab} />
+                    : null}
                 </Suspense>
             : effectiveHubTab === 'personas'
               ? <PersonasPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />

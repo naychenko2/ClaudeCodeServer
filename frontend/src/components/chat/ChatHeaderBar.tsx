@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, type ReactNode } from 'react';
-import { Plus, Menu as MenuIcon, Tags, Bell, BellOff, History, Hourglass, ListChecks, NotebookPen, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore } from 'lucide-react';
+import { Plus, Menu as MenuIcon, Tags, Bell, BellOff, History, Hourglass, ListChecks, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore } from 'lucide-react';
 import type { Project, Session, ClaudeBilling, Persona, ProjectTag } from '../../types';
 import { api } from '../../lib/api';
 import { isArchivedChat } from '../../lib/chatFilters';
@@ -28,12 +28,11 @@ import { useWindowWidth, MOBILE_MAX, TABLET_WIDE_MIN } from '../../lib/breakpoin
 import { Toolbar, ToolbarIconButton } from '../Toolbar';
 import { ToolbarOverflowMenu, type OverflowItem } from '../ToolbarOverflowMenu';
 import { BackButton, ChatTopicIcon, Modal, ModalActions, ConfirmDialog, TextField, Menu, MenuItem, MenuSep } from '../ui';
-import { bumpNotes } from '../../lib/notes';
 import { createTask } from '../../lib/tasks';
 import { showToast } from '../../lib/toast';
 import { beginAiBusy, endAiBusy } from '../../lib/ai/busy';
-import { openNoteById } from '../../features/notes/saveToNote';
-import { useSubsystem } from '../../lib/subsystems';
+import { useSlotItem } from '../../lib/subsystems/registry';
+import type { ChatHeaderSummaryCtx, ChatHeaderMenuItemCtx } from '../../lib/subsystems/registryCore';
 import type { ExtractedTaskCandidate } from '../../types';
 import { ChatOriginBadge } from '../ChatOriginBadge';
 import { TeamMechanicBadge } from '../../features/team/TeamMechanicBadge';
@@ -829,35 +828,6 @@ interface ChatHeaderBarProps {
   contextBar?: ReactNode;
 }
 
-// «Итог сессии в заметку» — теперь запускается ТОЛЬКО через AI-палитру (действие
-// chat.summary). Компонент невидим, но остаётся смонтированным ради слушателя
-// cc-ai-run; при успехе открывает созданную заметку. Гейт по подсистеме notes:
-// если она выключена, монтировать кнопку и слушатель смысла нет — AI-палитра
-// chat.summary всё равно скрыта, событие никогда не прилетит.
-function SessionSummaryButton({ session, hasMessages, online }: { session: Session; hasMessages: boolean; online: boolean }) {
-  const notesOn = useSubsystem('notes');
-  const [busy, setBusy] = useState(false);
-  // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс busy при смене чата
-  useEffect(() => { setBusy(false); }, [session.id]);
-  const run = () => {
-    if (busy) return;
-    setBusy(true);
-    beginAiBusy();
-    api.sessions.summary(session.id)
-      .then(n => { bumpNotes(); openNoteById(n.id); })
-      .catch(() => showToast('Итог сессии', 'Не удалось составить итог (claude не залогинен?)', 'info'))
-      .finally(() => { setBusy(false); endAiBusy(); });
-  };
-  useEffect(() => {
-    if (!notesOn || !online || !hasMessages) return;
-    const onRun = (e: Event) => { if ((e as CustomEvent<{ action?: string }>).detail?.action === 'chat.summary') run(); };
-    window.addEventListener('cc-ai-run', onRun);
-    return () => window.removeEventListener('cc-ai-run', onRun);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [notesOn, online, session.id, hasMessages, busy]);
-  return null;
-}
-
 // «Обновить название чата» — запускается через AI-палитру (действие chat.retitle).
 // Невидимый слушатель cc-ai-run: перечитывает переписку и переименовывает чат по её смыслу.
 function RetitleButton({ session, hasMessages, online }: { session: Session; hasMessages: boolean; online: boolean }) {
@@ -965,10 +935,11 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
 }
 
 export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, onBillingChange, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, onAddToWall, onChatDeleted, island, compact, contextBar }: ChatHeaderBarProps) {
-  // Гейт правого клик-меню по подсистеме заметок: пункт «Итог сессии в заметку»
-  // пропадает при выключенной подсистеме (остальные AI-действия чата к заметкам
-  // не относятся и остаются).
-  const notesOn = useSubsystem('notes');
+  // Вклады слота chat-header-action: невидимый слушатель «Итог сессии в заметку»
+  // и его пункт в правом клик-меню. Нет подсистемы — нет и вкладов, остальные
+  // AI-действия чата к заметкам не относятся и остаются.
+  const summaryAction = useSlotItem<ChatHeaderSummaryCtx>('chat-header-action', 'session-summary');
+  const summaryMenuItem = useSlotItem<ChatHeaderMenuItemCtx>('chat-header-action', 'summary-menu-item');
   // УЗКИЙ планшет (601 – TABLET_WIDE_MIN): мобильная механика — объединённый чип,
   // wide-поповер, плотная группа кнопок, заголовок с многоточием. Объединяем с mobile
   // через `isCompact`, чтобы не дублировать ветки внутри costBadges / rightCluster /
@@ -1400,7 +1371,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     : null;
   // На узких раскладках артефакты и настройки — плотная пара справа (gap 0 вместо
   // TB.gap), читаются как единая группа действий чата; на десктопе — как раньше, врозь.
-  const summaryBtn = <SessionSummaryButton session={session} hasMessages={hasMessages} online={online} />;
+  const summaryBtn = summaryAction?.render?.({ session, hasMessages, online });
   const extractBtn = <ExtractTasksButton session={session} hasMessages={hasMessages} online={online} />;
   const retitleBtn = <RetitleButton session={session} hasMessages={hasMessages} online={online} />;
 
@@ -1780,13 +1751,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
             label="Задачи из чата"
             onClick={() => { setCtxMenu(null); runAi('chat.extract'); }}
           />
-          {notesOn && (
-            <MenuItem
-              icon={<NotebookPen size={15} strokeWidth={2} />}
-              label="Итог сессии в заметку"
-              onClick={() => { setCtxMenu(null); runAi('chat.summary'); }}
-            />
-          )}
+          {summaryMenuItem?.render?.({ run: () => { setCtxMenu(null); runAi('chat.summary'); } })}
         </>
       )}
     </Menu>

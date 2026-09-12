@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 
-// Реестр тянет api/saveToNote (браузерные зависимости) — мокаем, тестируем чистую
-// логику ранжирования rankedActions.
+// Реестр действий тянет api — мокаем, тестируем чистую логику ранжирования
+// rankedActions. Фича Notes в граф теста не входит: открытие заметки теперь
+// вклад слота реестра (registryCore), а не прямой импорт features/notes.
 vi.mock('../api', () => ({ api: {} }));
-vi.mock('../../features/notes/saveToNote', () => ({ openNoteById: () => {} }));
 
 import { rankedActions, type AiActionCtx } from '../ai/actions';
 

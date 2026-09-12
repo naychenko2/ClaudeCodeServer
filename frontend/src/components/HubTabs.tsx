@@ -3,6 +3,7 @@ import { Activity, Book, BriefcaseBusiness, Calendar, Coins, Columns3, Folder, H
 import { PillSwitch } from './Toolbar';
 import { useModules } from '../lib/modules';
 import { SUBSYSTEMS, useSubsystem } from '../lib/subsystems';
+import { getSubsystem } from '../lib/subsystems/registry';
 
 export type HubTab = 'home' | 'chats' | 'wall' | 'projects' | 'calendar' | 'notes' | 'personas' | 'specialties' | 'knowledge' | 'notifications' | 'spend' | 'telemetry';
 
@@ -84,12 +85,13 @@ export function HubTabs({ value, onChange, mobile, tablet, tabs = DEFAULT_TABS }
     .filter(m => m.tab)
     .map(m => ({ value: `module:${m.id}` as HubTabValue, label: m.tab!.label, icon: <Puzzle size={18} strokeWidth={2} /> }));
 
-  // Гейт подсистемы заметок: при выключенной 'notes' в таббаре быть не должно.
-  // Шаблон — как у useModules() выше: фиксированные разделы дополняются реестром
-  // подсистем так же, как реестром модулей. Подсистема выключена → фильтруем таб
-  // 'notes' ИЗ входного набора `tabs`, иначе он всплыл бы как призрак на пустой
-  // странице (тот же риск, что и для модулей без remote).
-  const notesEnabled = useSubsystem(SUBSYSTEMS.notes);
+  // Гейт подсистемы заметок: таб 'notes' показываем, только если подсистема И
+  // зарегистрирована в бандле (фича на месте), И включена пользователю. Одного
+  // useSubsystem мало: ключ приходит с бэка независимо от того, есть ли фича в
+  // бандле, — после удаления features/notes осталась бы пилюля на пустой экран.
+  // Шаблон — как у useModules() выше: реестр подсистем дополняет фиксированные
+  // разделы так же, как реестр модулей.
+  const notesEnabled = useSubsystem(SUBSYSTEMS.notes) && getSubsystem('notes') !== undefined;
   const baseTabs = notesEnabled ? tabs : tabs.filter(t => t !== 'notes');
 
   // «Стена» — рабочий режим раздела проектов: своей вкладки нет, подсвечиваем

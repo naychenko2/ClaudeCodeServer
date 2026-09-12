@@ -43,8 +43,9 @@ public class NotesSubsystemGateTests
     // «разрыв Main↔NotesService») и `INoteSemanticIndex` (под-волна «разрыв
     // Main→NotesKnowledgeService»). Инвариант один: обязательный такой параметр вне
     // самой вертикали — дефект; у шва он должен быть строго `<Шов>? x = null`.
-    // `NotesToolset` (MCP) по-прежнему держит прямые `NotesKnowledgeService`/`NotesAiService`/
-    // `NoteTaskSyncService`: его вынос в вертикаль — отдельная волна, шов на него не заведён.
+    // `NotesToolset` (MCP) уже вынесен в вертикаль `ClaudeHomeServer.Notes/Services/Mcp`,
+    // но держит прямые `NotesKnowledgeService`/`NotesAiService`/`NoteTaskSyncService` —
+    // это его внутренняя композиция, и шов для внешних потребителей на него не нужен.
     public static IEnumerable<object[]> OptionalNotesVerticalParams =>
     [
         [typeof(ProjectsController), "notesKb", typeof(INoteSemanticIndex)],

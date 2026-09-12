@@ -1591,6 +1591,10 @@ public class SubsystemBoundaryTests
         // Services/Mcp/Http вертикали. Никаких чужих using (только BCL), один call-site
         // (ClaudeSession), и лежит по теме, а не по слою. namespace сохранён ради
         // call-site и обоих тестов.
+        // Волна NotesToolset: под тем же namespace живут узкие швы контекста вызова
+        // `McpCallContextSeams` (IMcpSessionAccessor/IMcpPersonaBindings) — они
+        // форвардят в god-объекты Main (SessionManager/PersonaBindingsService), и
+        // реализации-адапторы лежат рядом в PromptSeamAdapters.
         "ClaudeHomeServer.Services.Mcp.Http",
         // Этап 3, волна 1 (Skills): ICheapTextRunner/OneShotResult/OneShotUsage/
         // LlmTimeoutException переехали в Core, чтобы вертикали (Skills, Git, Notes, Tasks)

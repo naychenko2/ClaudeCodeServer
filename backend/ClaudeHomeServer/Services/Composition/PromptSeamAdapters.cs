@@ -1,6 +1,7 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Dossiers;
+using ClaudeHomeServer.Services.Mcp.Http;
 using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Services.Team;
@@ -138,4 +139,22 @@ public sealed class SkillSnapshotSourceAdapter(SkillsService skillsService) : IS
 
         return result.Count > 0 ? result : null;
     }
+}
+
+// Волна NotesToolset (Этап 5, финал извлекаемости Notes): швы контекста вызова
+// MCP-over-HTTP-тулсетов. Адаптеры 1:1 форвардят в god-объекты Main.
+// Регистрация — в Program.cs (композиционный корень).
+
+public sealed class McpSessionAccessorAdapter(SessionManager sessions) : IMcpSessionAccessor
+{
+    public Session? GetOwned(string sessionId, string ownerId) =>
+        sessions.GetOwned(sessionId, ownerId);
+}
+
+public sealed class McpPersonaBindingsAdapter(PersonaBindingsService bindings) : IMcpPersonaBindings
+{
+    public bool EffectiveToolEnabled(string? ownerId, Persona? persona, string key) =>
+        bindings.EffectiveToolEnabled(ownerId, persona, key);
+    public bool SectionEnabled(string? ownerId, Persona? persona, string key) =>
+        bindings.SectionEnabled(ownerId, persona, key);
 }

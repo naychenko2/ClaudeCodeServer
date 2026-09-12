@@ -905,6 +905,12 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.IPersonaPromptAssem
     ClaudeHomeServer.Services.Composition.PersonaPromptAssemblerAdapter>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.IPersonaBindingsSource,
     ClaudeHomeServer.Services.Composition.PersonaBindingsSourceAdapter>();
+// Волна NotesToolset: швы контекста вызова MCP-over-HTTP-тулсетов
+// (SessionManager.GetOwned + PersonaBindingsService.Effective/SectionEnabled).
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpSessionAccessor,
+    ClaudeHomeServer.Services.Composition.McpSessionAccessorAdapter>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpPersonaBindings,
+    ClaudeHomeServer.Services.Composition.McpPersonaBindingsAdapter>();
 
 // Этап 5, волна E: forwarder-регистрации двух Core-интерфейсов выноса Notes.
 // Реализации (`TaskBridge` поверх TaskManager, `NotesHubNotifier` поверх IHubContext<SessionHub>)

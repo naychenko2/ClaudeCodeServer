@@ -42,4 +42,14 @@
     <PackageReference Include="Xunit.SkippableFact" Version="1.5.23" />
   </ItemGroup>
 
+  <!-- Notes: динамический модуль — dll в modules/notes/ для ModuleLoader (тот же паттерн,
+       что в ClaudeHomeServer.Tests). Без DLL ModuleLoader не находит NotesSubsystem.Register,
+       INoteSemanticIndex не регистрируется, и гейт Subsystems:notes:Enabled (default true)
+       в Program.cs бросает на первом резолве IKnowledgeSyncParticipant. -->
+  <Target Name="CopyNotesModuleForTests" AfterTargets="Build">
+    <Copy SourceFiles="..\ClaudeHomeServer.Notes\bin\$(Configuration)\net10.0\ClaudeHomeServer.Notes.dll"
+          DestinationFolder="$(OutDir)modules\notes" SkipUnchangedFiles="true"
+          Condition="Exists('..\ClaudeHomeServer.Notes\bin\$(Configuration)\net10.0\ClaudeHomeServer.Notes.dll')" />
+  </Target>
+
 </Project>

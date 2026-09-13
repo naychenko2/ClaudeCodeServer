@@ -4098,7 +4098,9 @@ public class SessionManagerTests : IDisposable
         // воспроизвёлся бы продовый дефект «фантомная эскалация» (коммит fcce2753 показал,
         // что на interrupted штаб раньше не разбирался; проверка живьём не воспроизводилась
         // — CLI на стенде завершается сам за 11–15 секунд). Этот тест закрывает ту дыру.
-        var (session, _, _) = await MakeInterviewStabAsync("wire-interrupted");
+        // MakeTeamStabAsync (не InterviewStab): не запускает реальный адаптер — тест
+        // проверяет только логику раннего выхода подписчика, не гард тупика.
+        var (session, _, _) = await MakeTeamStabAsync("wire-interrupted");
         var entry = GetEntry(session.Id);
 
         await DriveOneTeamTurnAsync(_sut, session.Id, 7, "interrupted",
@@ -4125,7 +4127,9 @@ public class SessionManagerTests : IDisposable
     [Fact]
     public async Task TurnWire_OutcomeCancelled_ШтабНеРазбирает()
     {
-        var (session, _, _) = await MakeInterviewStabAsync("wire-cancelled");
+        // MakeTeamStabAsync (не InterviewStab): не запускает реальный адаптер — тест
+        // проверяет только логику раннего выхода подписчика, не гард тупика.
+        var (session, _, _) = await MakeTeamStabAsync("wire-cancelled");
 
         await DriveOneTeamTurnAsync(_sut, session.Id, 7, "cancelled",
             "отменено человеком", failed: false);
@@ -4206,7 +4210,9 @@ public class SessionManagerTests : IDisposable
         // По ключу 5 в LastTeamTurnEnds лежит план, но шина публикует событие с TurnSeq=7
         // (например, пришёл поздний терминал чужого хода). TryTakeTeamTurnEnd по 7 возвращает
         // false (запись есть только под 5) — подписчик пишет WARN и не вызывает штаб.
-        var (session, _, _) = await MakeInterviewStabAsync("wire-stray");
+        // MakeTeamStabAsync (не InterviewStab): не запускает реальный адаптер — тест
+        // проверяет только логику раннего выхода подписчика, не гард тупика.
+        var (session, _, _) = await MakeTeamStabAsync("wire-stray");
         var entry = GetEntry(session.Id);
         _sut.GetById(session.Id)!.Status = SessionStatus.Working;
         SetLastTurnSeq(entry, 5);

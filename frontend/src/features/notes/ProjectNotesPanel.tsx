@@ -2,10 +2,10 @@ import { useEffect, useState } from 'react';
 import { Plus } from 'lucide-react';
 import { NotesList } from './NotesList';
 import { NewNoteDialog } from './NewNoteDialog';
-import { useNotes, ensureNotesLoaded, bumpNotes } from '../../lib/notes';
-import { C, SP } from '../../lib/design';
-import { Button, PanelHeaderSlot, useHasPanelHeader } from '../../components/ui';
-import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
+import {
+  useNotes, ensureNotesLoaded, bumpNotes, C, SP,
+  Button, PanelHeaderSlot, useHasPanelHeader, ICON_SIZE, ICON_STROKE,
+} from 'aihome_shell/kit';
 
 // Панель «Заметки» воркспейса: заметки ТЕКУЩЕГО проекта (физические .md в notes/
 // репы). Пара к разделу хаба «Заметки» (все источники) — как knowledge/knowledgeList.

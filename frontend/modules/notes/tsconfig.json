@@ -8,6 +8,9 @@
     "allowImportingTsExtensions": true,
     "jsx": "react-jsx",
     "noEmit": true,
+    "paths": {
+      "aihome_shell/kit": ["../../src/lib/shell-kit/index.ts"]
+    },
     "skipLibCheck": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,

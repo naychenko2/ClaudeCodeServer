@@ -22,8 +22,13 @@ export default defineConfig({
       exposes: {
         './subsystem': './subsystem.tsx',
       },
-      // Мёртвый remotes убран: модуль не потребляет design-kit хоста (aihome_shell) —
-      // remote сам по себе не требует remote'ов. Остался только shared singleton.
+      // Runtime-кит хоста: aihome_shell/kit → remoteEntry.js хоста (MF runtime
+      // подтягивает expose-чанк кита как отдельный ESM-модуль; общий ESM-граф
+      // браузера гарантирует один инстанс модульного состояния).
+      // Алиас aihome_shell/kit на локальный путь НЕ ставим: именно он вернул бы копию.
+      remotes: {
+        aihome_shell: { type: 'module', name: 'aihome_shell', entry: '/remoteEntry.js' },
+      },
       shared: {
         react: { singleton: true, requiredVersion: '^19.2.0' },
         'react-dom': { singleton: true, requiredVersion: '^19.2.0' },

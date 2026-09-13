@@ -1,11 +1,6 @@
 import { useEffect, useState } from 'react';
 import { NotebookPen } from 'lucide-react';
-import { api } from '../../lib/api';
-import { bumpNotes } from '../../lib/notes';
-import { beginAiBusy, endAiBusy } from '../../lib/ai/busy';
-import { showToast } from '../../lib/toast';
-import { useSubsystem } from '../../lib/subsystems';
-import { MenuItem } from '../../components/ui';
+import { api, bumpNotes, beginAiBusy, endAiBusy, showToast, useSubsystem, MenuItem } from 'aihome_shell/kit';
 import { openNoteById } from './saveToNote';
 import type { ChatHeaderSummaryCtx, ChatHeaderMenuItemCtx } from '../../lib/subsystems/registryCore';
 

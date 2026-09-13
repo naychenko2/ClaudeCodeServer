@@ -15,6 +15,12 @@
     "noEmit": true,
     "jsx": "react-jsx",
 
+    /* Резолв runtime-кита: хост резолвит локально (копия одна),
+       модуль — через MF-рантайм (aliас на локальный файл не ставит). */
+    "paths": {
+      "aihome_shell/kit": ["./src/lib/shell-kit/index.ts"]
+    },
+
     /* Linting */
     "noUnusedLocals": true,
     "noUnusedParameters": true,

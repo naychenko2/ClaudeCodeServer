@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { NoteGraph } from '../../types';
-import { api } from '../../lib/api';
-import { useNotesVersion } from '../../lib/notes';
-import { C, FONT } from '../../lib/design';
+import { api, useNotesVersion, C, FONT } from 'aihome_shell/kit';
 import { sourceColor } from './shared';
 import { useGraphSettings, type GraphSettings } from './graph/graphSettings';
 import { filterGraph } from './graph/graphFilter';

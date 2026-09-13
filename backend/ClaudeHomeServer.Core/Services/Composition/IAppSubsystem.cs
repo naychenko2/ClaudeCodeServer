@@ -153,8 +153,14 @@ public static class SubsystemRegistration
         // если кто-то зовёт AddSubsystems дважды (тест), последний стор перетирает
         // первый вместе с историей — это приемлемо для теста: реальный Production
         // стартует ровно один раз.
-        var state = new SubsystemStateStore();
-        services.AddSingleton(state);
+        // Динамические модули (ModuleLoader) регистрируют стор ДО AddSubsystems: если
+        // экземпляр уже в коллекке — переиспользуем, чтобы записи LoadAll не потерялись.
+        var existingStore = services
+            .Where(s => s.ServiceType == typeof(SubsystemStateStore))
+            .Select(s => s.ImplementationInstance as SubsystemStateStore)
+            .FirstOrDefault(s => s is not null);
+        var state = existingStore ?? new SubsystemStateStore();
+        if (existingStore is null) services.AddSingleton(state);
 
         // Порядок важен: подсистемы более низкого слоя идут первыми, верхние — позже.
         // Дубликат `Key` — ошибка конфигурации: тихо проглатывать её нельзя, иначе

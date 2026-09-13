@@ -87,8 +87,24 @@
           SkipUnchangedFiles="true" Condition="Exists('..\modules\__stub\bin\$(Configuration)\net10.0\StubModule.dll')" />
   </Target>
 
+  <!-- Динамический модуль Notes: тот же паттерн, что заглушка, но модуль реально используется
+       (Enabled=true в прод-конфиге). ReferenceOutputAssembly="false" — Main не видит типы Notes
+       на этапе компиляции; все швы (INoteAccessor, INoteSemanticIndex и др.) живут в Core.
+       Копия dll в выходной каталог нужна всегда (Debug+Release): ModuleLoader грузит по пути
+       из appsettings.json. -->
+  <ItemGroup>
+    <ProjectReference Include="..\ClaudeHomeServer.Notes\ClaudeHomeServer.Notes.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+  <Target Name="CopyNotesModule" AfterTargets="Build">
+    <ItemGroup>
+      <NotesModuleFiles Include="..\ClaudeHomeServer.Notes\bin\$(Configuration)\net10.0\ClaudeHomeServer.Notes.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(NotesModuleFiles)" DestinationFolder="$(OutDir)modules\notes"
+          SkipUnchangedFiles="true" Condition="Exists('..\ClaudeHomeServer.Notes\bin\$(Configuration)\net10.0\ClaudeHomeServer.Notes.dll')" />
+  </Target>
+
   <!-- === Модульность (Этап 3+, Этап 5)
-       Вертикали Video/Yandex/Reader/CodeGraph/Skills/Git/Notes/Personas/Spend/Knowledge/
+       Вертикали Video/Yandex/Reader/CodeGraph/Skills/Git/Personas/Spend/Knowledge/
        Changelog/Diagnostics/Docs/Tts/WebSearch/Tasks/Modules/ProjectServices/Backgrounds
        вынесены в собственные .csproj и ссылаются только на Core. Здесь — обратная
        ссылка «Main → вертикаль» ради регистрации подсистем в Program.cs:
@@ -96,7 +112,8 @@
        Main → Vertical → Core → (BCL). Core не ссылается ни на Main, ни на вертикали.
        До этапа 3 всё это жило одной сборкой, и инвариант «вертикаль зависит только
        от спинки» соблюдался логически; теперь он держится физически — вертикаль не
-       может «протянуть руку» в Main, потому что ProjectReference в её .csproj нет. -->
+       может «протянуть руку» в Main, потому что ProjectReference в её .csproj нет.
+       Notes — исключение: динамический модуль (см. CopyNotesModule), не прямой референс. -->
   <ItemGroup>
     <ProjectReference Include="..\ClaudeHomeServer.Backgrounds\ClaudeHomeServer.Backgrounds.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
@@ -118,8 +135,8 @@
     <ProjectReference Include="..\ClaudeHomeServer.Knowledge\ClaudeHomeServer.Knowledge.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Llm\ClaudeHomeServer.Llm.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Modules\ClaudeHomeServer.Modules.csproj" />
-    <ProjectReference Include="..\ClaudeHomeServer.Notes\ClaudeHomeServer.Notes.csproj" />
-    <ProjectReference Include="..\ClaudeHomeServer.Personas\ClaudeHomeServer.Personas.csproj" />
+    <!-- Notes — теперь динамический модуль (см. CopyNotesModule выше), не прямой референс -->
+<ProjectReference Include="..\ClaudeHomeServer.Personas\ClaudeHomeServer.Personas.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.ProjectIcons\ClaudeHomeServer.ProjectIcons.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.ProjectServices\ClaudeHomeServer.ProjectServices.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Prompts\ClaudeHomeServer.Prompts.csproj" />

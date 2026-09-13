@@ -89,5 +89,9 @@ public sealed class NotesSubsystem : IAppSubsystem
         // `Register`, и контрибьютор (он тянет `NotesKnowledgeService`) в
         // `IEnumerable<IPromptSectionContributor>` не попадает вовсе.
         services.AddPromptSectionContributor<NotesRecallContributor>();
+        // MCP-over-HTTP-тулсет (ADR-012, фаза 2 волна 2): динамический модуль
+        // регистрирует собственный тулсет (раньше — в Program.cs Main).
+        services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
+            ClaudeHomeServer.Services.Mcp.Http.NotesToolset>();
     }
 }

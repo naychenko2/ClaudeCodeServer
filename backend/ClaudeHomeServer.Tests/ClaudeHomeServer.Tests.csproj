@@ -69,6 +69,10 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\ClaudeHomeServer\ClaudeHomeServer.csproj" />
+    <!-- Notes — динамический модуль: Main не тянет его как ProjectReference,
+         поэтому Tests (нуждает NotesService/NotesKnowledgeService напрямую)
+         добавляет явную ссылку. -->
+    <ProjectReference Include="..\ClaudeHomeServer.Notes\ClaudeHomeServer.Notes.csproj" />
     <!-- Core — спинка (этап 3, Этап 5). Тесты ссылаются на Core-DTO
          (`SubagentRunPassport`/`TurnRunPassport`/`RecallItem`/`RecallBlock` после
          переезда, И на Core-интерфейсы вроде `IKnowledgeIndex`). Транзитивно
@@ -142,5 +146,11 @@
     <Copy SourceFiles="..\modules\__stub\bin\$(Configuration)\net10.0\StubModule.dll"
           DestinationFolder="$(OutDir)modules\__stub" SkipUnchangedFiles="true"
           Condition="Exists('..\modules\__stub\bin\$(Configuration)\net10.0\StubModule.dll')" />
+  </Target>
+  <!-- Notes: тот же паттерн, что заглушка — dll в modules/notes/ для ModuleLoader. -->
+  <Target Name="CopyNotesModuleForTests" AfterTargets="Build">
+    <Copy SourceFiles="..\ClaudeHomeServer.Notes\bin\$(Configuration)\net10.0\ClaudeHomeServer.Notes.dll"
+          DestinationFolder="$(OutDir)modules\notes" SkipUnchangedFiles="true"
+          Condition="Exists('..\ClaudeHomeServer.Notes\bin\$(Configuration)\net10.0\ClaudeHomeServer.Notes.dll')" />
   </Target>
 </Project>

@@ -124,8 +124,8 @@ builder.Services.AddExceptionHandler<ClaudeHomeServer.Services.Http.UnhandledExc
 var mvcBuilder = builder.Services.AddControllers()
     .AddJsonOptions(o =>
         o.JsonSerializerOptions.Converters.Add(
-            new JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase)))
-    // Сборки вертикалей, собранные под `Microsoft.NET.Sdk.Web`, несут атрибут
+            new JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase)));
+// Сборки вертикалей, собранные под `Microsoft.NET.Sdk.Web`, несут атрибут
     // `[assembly: ApplicationPart("...")]` — MSBuild дописывает его в сгенерированный
     // `obj/*/ClaudeHomeServer.MvcApplicationPartsAssemblyInfo.cs` ссылочного проекта
     // Main, и `ApplicationPartManager.PopulateDefaultParts` добавляет их к составу
@@ -135,21 +135,11 @@ var mvcBuilder = builder.Services.AddControllers()
     // `/api/notes/*` (задача 4defaacc, QA-прогон 2026-09-10).
     //
     // Убираем часть здесь, в композиции Main — единая точка для всех вертикалей.
-    // Сравнение по имени сборки: оригинальный объект `ApplicationPart` создаётся
-    // внутри MVC и наружу не отдаётся, сравнивать по ссылке нельзя.
-    // `ConfigureApplicationPartManager` отрабатывает на построении менеджера (раньше
-    // первого резолва `MvcOptions` и его кеша моделей контроллеров) — `IConfigureOptions<MvcOptions>`
-    // для этого НЕ подходит: его порядок относительно `PopulateDefaultParts` не
-    // контролируется, и на момент configure части уже зафиксированы.
-    .ConfigureApplicationPartManager(pm =>
-    {
-        if (SubsystemGate.IsEnabled(builder.Configuration, "notes")) return;
-        for (var i = pm.ApplicationParts.Count - 1; i >= 0; i--)
-        {
-            if (pm.ApplicationParts[i].Name == "ClaudeHomeServer.Notes")
-                pm.ApplicationParts.RemoveAt(i);
-        }
-    });
+    // Notes — теперь динамический модуль (сценарий Б): ApplicationPart добавляется
+    // ModuleLoader'ом по пути из DynamicModules-конфига (см. ниже), а не автоматически
+    // через ProjectReference. Старый gate по имени сборки ("ClaudeHomeServer.Notes") удалён.
+    // Гейт «выключить Notes» — теперь `DynamicModules.notes.Enabled=false` (ModuleLoader
+    // просто не загрузит dll) + `Subsystems:Notes:Enabled` для Main-side-форвардеров.
 
 // Динамические модули (сценарий Б): отдельные сборки, грузятся по пути из секции "DynamicModules"
 // конфига при старте (не через ProjectReference). Load-once, выгрузки нет (DI сам не выгружает).
@@ -163,6 +153,11 @@ var mvcBuilder = builder.Services.AddControllers()
 // WebApplication.CreateBuilder) и берём оттуда ILoggerFactory: «модуль не загрузился» уходит
 // в консоль, а не теряется в no-op-фабрике (раньше здесь был new LoggerFactory() без провайдеров).
 // Логирование происходит сразу, в LoadAll, внутри using — одноразовый провайдер к тому моменту жив.
+// Стор подсистем: регистрируем ДО LoadAll, чтобы ModuleLoader записал в него
+// динамические модули (RecordActive/RecordDisabled) и AddSubsystems переиспользовал
+// тот же инстанс.
+var dynamicModuleStore = new ClaudeHomeServer.Services.Composition.SubsystemStateStore();
+builder.Services.AddSingleton(dynamicModuleStore);
 using (var dynamicModuleLogProvider = builder.Services.BuildServiceProvider())
 {
     var dynamicModuleLogFactory = dynamicModuleLogProvider.GetRequiredService<ILoggerFactory>();
@@ -172,13 +167,28 @@ using (var dynamicModuleLogProvider = builder.Services.BuildServiceProvider())
         builder.Configuration,
         dynamicModuleLogFactory.CreateLogger<ClaudeHomeServer.Services.DynamicModules.ModuleLoader>());
     foreach (var dynamicModuleAssembly in dynamicModuleLoader.LoadAll(builder.Services))
-        // MVC-контроллеры загруженной сборки подключаем как отдельный ApplicationPart на том же
-        // IMvcBuilder (ConfigureApplicationPartManager отрабатывает на построении менеджера частей —
-        // единственный путь на уровне сервиса; IServiceCollection-перегрузки нет).
+    {
+        // MVC-контроллеры загруженной сборки подключаем как отдельный ApplicationPart
+        // на том же IMvcBuilder (ConfigureApplicationPartManager отрабатывает на построении
+        // менеджера частей — единственный путь на уровне сервиса).
         mvcBuilder.ConfigureApplicationPartManager(parts =>
             parts.ApplicationParts.Add(new Microsoft.AspNetCore.Mvc.ApplicationParts.AssemblyPart(dynamicModuleAssembly)));
+        // Записываем подсистему в стор: AddSubsystems ниже переиспользует этот инстанс.
+        var implType = dynamicModuleAssembly.GetTypes()
+            .FirstOrDefault(t => t is not null && !t.IsAbstract && !t.IsGenericTypeDefinition
+                && typeof(ClaudeHomeServer.Services.Composition.IAppSubsystem).IsAssignableFrom(t));
+        if (implType is not null)
+            dynamicModuleStore.RecordActive((ClaudeHomeServer.Services.Composition.IAppSubsystem)Activator.CreateInstance(implType)!);
+    }
+    // Задизейбленные модули (Enabled=false): RecordDisabled, чтобы админский
+    // экран показывал «выключено намеренно», а не «забыли подключить».
+    foreach (var desc in dynamicModuleRegistry.All.Where(m => !m.Enabled))
+    {
+        // Ключ модуля = key в конфиге; для RecordDisabled нужен IAppSubsystem-инстанс,
+        // но dll не загружена — создаём lightweight-заглушку, несущую Key/Title/Description.
+        dynamicModuleStore.RecordDisabled(new DisabledModuleStub(desc));
+    }
 }
-
 // Hosted-сервисы: в Testing-среде (TestWebApplicationFactory) НЕ регистрируются без
 // явного флага Testing:EnableHostedServices=true — 17 фоновых циклов на каждый из
 // ~27 бутов тестовых хостов только жгли время прогона и порождали фоновую возню
@@ -474,8 +484,7 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
 // по ней тулсет резолвит проект чата, персону и её привязки на каждый вызов
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
     ClaudeHomeServer.Services.Mcp.Http.TasksToolset>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
-    ClaudeHomeServer.Services.Mcp.Http.NotesToolset>();
+// NotesToolset — динамический модуль: регистрация переехала в NotesSubsystem.Register
 // Персоны (фаза 2, волна 2): тяжёлая оркестрация CRUD — в PersonasCrudService (общий с REST),
 // тулсет — тонкий JSON-фасад над ним и сервисами; хвост маршрута — та же сессия-вызыватель
 builder.Services.AddSingleton<ClaudeHomeServer.Services.PersonasCrudService>();
@@ -719,11 +728,9 @@ builder.Services.AddSubsystems(builder.Configuration,
     // флагом (см. appsettings). Шов Tasks → Models.Session (три статических
     // резолвера) описан в `Services/Tasks/TasksSubsystem.cs` (см. комментарий 6).
     new ClaudeHomeServer.Services.Tasks.TasksSubsystem(),
-    // Notes — вертикаль заметок (Obsidian-совместимый vault, AI-сводки, синк с Dify,
-    // мост чекбоксов заметок ↔ задач). Регистрируется после Tasks: шов `Notes → Tasks`
-    // через `NoteTaskSyncService` (TaskManager, CreateTaskRequest, UpdateTaskRequest) —
-    // нижний слой регистрируется раньше, как и везде.
-    new ClaudeHomeServer.Services.Notes.NotesSubsystem(),
+    // Notes — динамический модуль (сценарий Б): грузится ModuleLoader'ом по пути из
+    // секции DynamicModules, НЕ через ProjectReference. Шов `Notes → Tasks`
+    // через `INoteTaskBridge` (Core) + `TaskBridge` (Main, ниже).
     // Skills — вертикаль навыков (реестр skills.sh, LLM-подбор/генерация, обёртка
     // CLI «npx skills»). Регистрируется после Notes: порядок с Task/Notes не связан
     // (Skills — листовая, единственный шов `SessionManager → SkillsService` остаётся
@@ -867,10 +874,14 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSync
 // Гейт подсистемы Notes: NotesKnowledgeService не попадёт в DI при выключенной подсистеме
 // (NotesSubsystem.Register не вызывается) — безусловный форвардер уронил бы резолв ВСЕЙ
 // коллекции IKnowledgeSyncParticipant (а не только заметки), блокер ревью notes-optional Б2.
+// NotesKnowledgeService реализует INoteSemanticIndex (Core) и IKnowledgeSyncParticipant:
+// резолвим через INoteSemanticIndex и кастим — не тянем конкретный тип Notes-сборки
+// в Main (теперь динамический модуль).
 if (SubsystemGate.IsEnabled(builder.Configuration, "notes"))
 {
     builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
-        sp => sp.GetRequiredService<ClaudeHomeServer.Services.Notes.NotesKnowledgeService>());
+        sp => (ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant)
+            sp.GetRequiredService<ClaudeHomeServer.Services.Notes.INoteSemanticIndex>());
 }
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
     sp => sp.GetRequiredService<ProjectKnowledgeSyncService>());
@@ -1826,3 +1837,14 @@ if (instanceLock is not null)
 }
 
 public partial class Program { }
+
+// Lightweight-заглушка для динамических модулей с Enabled=false: несёт Key/Title
+// без загрузки сборки, чтобы SubsystemStateStore показывал «выключено намеренно».
+sealed class DisabledModuleStub(ClaudeHomeServer.Services.Composition.ModuleDescriptor desc)
+    : ClaudeHomeServer.Services.Composition.IAppSubsystem
+{
+    public string Key => desc.Key;
+    public string Title => desc.Title ?? desc.Key;
+    public string Description => "";
+    public void Register(IServiceCollection services, IConfiguration config) { }
+}

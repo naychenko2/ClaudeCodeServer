@@ -98,6 +98,9 @@ public class NotesDisabledTests : IDisposable
             // Едет в хост-конфигурацию → командной строкой в CreateBuilder(args) → успевает
             // к AddSubsystems. Разбор механики и почему это не гонка — в шапке класса.
             builder.UseSetting("Subsystems:Notes:Enabled", "false");
+            // Dynamic module: без этого ModuleLoader загрузит dll и зарегистрирует все
+            // сервисы вертикали, обходя Subsystems:Notes:Enabled (forwarders).
+            builder.UseSetting("DynamicModules:1:Enabled", "false");
             builder.ConfigureServices(services => services.AddSingleton<ILoggerProvider>(Errors));
         }
     }
@@ -241,18 +244,20 @@ public class NotesDisabledTests : IDisposable
 
     // ─── 3. Состав MCP-тулсета заметок ───────────────────────────────────────────
 
-    // `tools/list` — то, что видит модель на ходу. Пустой состав при выключенной подсистеме
-    // и непустой при включённой: тулсет объявлен всегда (маршрут `/mcp/notes/{sessionId}`
-    // жив), но инструменты не показываются — модель не получает того, что не отработает.
+    // Динамический модуль: при `DynamicModules:1:Enabled=false` DLL не грузится вовсе,
+    // `NotesToolset` в DI не попадает, и `McpToolsetRegistry.Find("notes")` = null → 404.
+    // Контрольный хост (модуль на месте) обязан вернуть >0 инструментов.
     [Fact]
     public async Task СоставИнструментовЗаметок_ПриВыключеннойПодсистеме_Пуст()
     {
-        (await ListNotesToolsAsync(_disabled)).Should().Be(0,
-            "инструменты заметок не должны объявляться при выключенной вертикали");
+        var status = await ListNotesToolsStatusAsync(_disabled);
+        status.Should().Be(404,
+            "динамический модуль не загружен — тулсета «notes» в DI нет, MCP-транспорт "
+            + "отвечает unknown_mcp_server (404), а не 200 с пустым списком");
 
         (await ListNotesToolsAsync(_enabled)).Should().BeGreaterThan(0,
-            "контроль: при включённой подсистеме состав непуст — значит ноль выше даёт "
-            + "именно гейт, а не ошибка в вызове tools/list");
+            "контроль: при включённой подсистеме (модуль на месте) состав непуст — "
+            + "значит 404 выше даёт именно гейт, а не ошибку в маршруте");
     }
 
     private static async Task<int> ListNotesToolsAsync(TestWebApplicationFactory factory)
@@ -275,6 +280,24 @@ public class NotesDisabledTests : IDisposable
 
         return (await list.Content.ReadFromJsonAsync<JsonElement>())
             .GetProperty("result").GetProperty("tools").GetArrayLength();
+    }
+
+    /// <summary>
+    /// Статус HTTP-ответа `tools/list` без броска: 404 — тулсет в DI отсутствует
+    /// (динамический модуль не загружен), 200 — тулсет на месте.
+    /// </summary>
+    private static async Task<int> ListNotesToolsStatusAsync(TestWebApplicationFactory factory)
+    {
+        var client = factory.CreateAuthenticatedClient();
+        var project = await client.PostAsJsonAsync("/api/projects", new { name = $"notes-st-{Guid.NewGuid():N}" });
+        project.EnsureSuccessStatusCode();
+        var projectId = (await project.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+        var session = await client.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "acceptEdits" });
+        session.EnsureSuccessStatusCode();
+        var sessionId = (await session.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+        var list = await client.PostAsJsonAsync($"/mcp/notes/{sessionId}",
+            new { jsonrpc = "2.0", id = 1, method = "tools/list" });
+        return (int)list.StatusCode;
     }
 
     // ─── 4. Ход чата идёт без секции заметок ─────────────────────────────────────

@@ -877,7 +877,13 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSync
 // NotesKnowledgeService реализует INoteSemanticIndex (Core) и IKnowledgeSyncParticipant:
 // резолвим через INoteSemanticIndex и кастим — не тянем конкретный тип Notes-сборки
 // в Main (теперь динамический модуль).
-if (SubsystemGate.IsEnabled(builder.Configuration, "notes"))
+// Кроме гейта требуется ФАКТ загрузки модуля: Notes — динамическая сборка, и dll может
+// не доехать до деплоя (пробел publish-копирования). Тогда гейт говорит «включено»,
+// а INoteSemanticIndex в DI нет — безусловный резолв ронял старт ВСЕГО хоста
+// (KnowledgeIndexReconciler тянет коллекцию IKnowledgeSyncParticipant). ActiveKeys
+// записывается ModuleLoader'ом выше по фактической загрузке.
+var notesModuleActive = dynamicModuleStore.ActiveKeys().Contains("notes");
+if (SubsystemGate.IsEnabled(builder.Configuration, "notes") && notesModuleActive)
 {
     builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
         sp => (ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant)
@@ -961,7 +967,9 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpPersonaBind
 // Core-контракты. Гейт `Subsystems:Notes:Enabled`: при выключенной подсистеме
 // и сами реализации, и форвардеры швов в DI не нужны — резолв `INoteTaskBridge`/
 // `INotesHubNotifier` иначе свалится на первом же обращении из Notes.
-if (SubsystemGate.IsEnabled(builder.Configuration, "notes"))
+// Условие `&& notesModuleActive` — как выше: швы регистрируем только при
+// фактически загруженном динамическом модуле Notes.
+if (SubsystemGate.IsEnabled(builder.Configuration, "notes") && notesModuleActive)
 {
     builder.Services.AddSingleton<ClaudeHomeServer.Services.Tasks.TaskBridge>();
     builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.NotesHubNotifier>();

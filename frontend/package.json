@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
-    "build:quiet": "tsc -b && vite build --logLevel warn",
+    "build": "tsc -b && vite build && npm run build:notes",
+    "build:quiet": "tsc -b && vite build --logLevel warn && npm run build:notes",
     "lint": "eslint .",
     "lint:design": "eslint --config eslint.design.config.js .",
     "test": "vitest run",

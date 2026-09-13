@@ -95,11 +95,19 @@
   <ItemGroup>
     <ProjectReference Include="..\ClaudeHomeServer.Notes\ClaudeHomeServer.Notes.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
-  <Target Name="CopyNotesModule" AfterTargets="Build">
+  <Target Name="CopyNotesModule" AfterTargets="Build;Publish">
+    <!-- Две цели: Build копирует в $(OutDir) (dev-запуск dotnet run), Publish — в
+         $(PublishDir) (деплой deploy80.ps1 делает dotnet publish -o и раньше терял
+         модуль: на проде ModuleLoader не находил dll, INoteSemanticIndex не
+         регистрировался, и форвардер Knowledge ронял старт хоста). -->
+    <PropertyGroup>
+      <NotesModuleDir Condition="'$(PublishDir)' != ''">$(PublishDir)modules\notes</NotesModuleDir>
+      <NotesModuleDir Condition="'$(PublishDir)' == ''">$(OutDir)modules\notes</NotesModuleDir>
+    </PropertyGroup>
     <ItemGroup>
       <NotesModuleFiles Include="..\ClaudeHomeServer.Notes\bin\$(Configuration)\net10.0\ClaudeHomeServer.Notes.dll" />
     </ItemGroup>
-    <Copy SourceFiles="@(NotesModuleFiles)" DestinationFolder="$(OutDir)modules\notes"
+    <Copy SourceFiles="@(NotesModuleFiles)" DestinationFolder="$(NotesModuleDir)"
           SkipUnchangedFiles="true" Condition="Exists('..\ClaudeHomeServer.Notes\bin\$(Configuration)\net10.0\ClaudeHomeServer.Notes.dll')" />
   </Target>
 

@@ -221,6 +221,31 @@ public class StructuredBgEventsTests : IDisposable
         PresenceOf(sent).Select(m => m.Active).Should().Equal([true, false]);
     }
 
+    // Сторож ИНВАРИАНТА упорядочивания: серия быстрых смен состояния приходит клиенту в том
+    // же порядке, в каком менялось состояние. До упорядочивания (PublishBgPresence через
+    // `_ = Task.Run(...)`) ThreadPool под нагрузкой мог выполнить задачи в произвольном
+    // порядке — `[true,false,true,false]` доезжало как `[false,true,false,true]`, клиент
+    // оставался в `true` после последней смены, и значок агентов залипал до перезагрузки
+    // списка (инцидент 2026-09-14, см. комментарий выше). Четыре быстрые смены — предел
+    // реалистичного сценария: при запуске-и-завершении пары агентов подряд пути учёта
+    // (TrackBgLaunch, task_started, task_notification, background_tasks_changed) могут
+    // вызывать PublishBgPresence в любой последовательности на потоках ридера.
+    [Fact]
+    public async Task БыстрыеСменыСостояния_ДоставляютсяВПорядкеСмены()
+    {
+        var (session, sent) = NewClaudeSession();
+        var run = NewRun();
+
+        InvokeHandleTaskStarted(session, run, AgentStarted("t1", "toolu_1"));
+        InvokeHandleBackgroundTasksChanged(session, run, El("""{"tasks":[]}"""));
+        InvokeHandleTaskStarted(session, run, AgentStarted("t2", "toolu_2"));
+        InvokeHandleBackgroundTasksChanged(session, run, El("""{"tasks":[]}"""));
+
+        await WaitForAsync(() => PresenceOf(sent).Count >= 4);
+
+        PresenceOf(sent).Select(m => m.Active).Should().Equal([true, false, true, false]);
+    }
+
     [Fact]
     public void ПослеПустогоСнэпшота_НоваяЗадачаСноваЗажигаетЗначок()
     {

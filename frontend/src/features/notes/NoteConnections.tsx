@@ -1,5 +1,5 @@
 import type { NoteDetail } from '../../types';
-import { C, FONT, R } from '../../lib/design';
+import { C, FONT, R } from 'aihome_shell/kit';
 import { NotesGraph } from './NotesGraph';
 import { CollapseGroup, SourceDot, IconBacklink, IconOutlink, IconGraph, IconLink } from './shared';
 

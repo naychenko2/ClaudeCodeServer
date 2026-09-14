@@ -1,12 +1,11 @@
 import { useEffect, useState } from 'react';
 import { Share2 } from 'lucide-react';
 import type { NoteSummary } from '../../types';
-import { api } from '../../lib/api';
-import { C, FONT } from '../../lib/design';
-import { ensureNotesLoaded } from '../../lib/notes';
-import { subsystemTabValue, type HubTabValue } from '../../components/HubTabs';
-import { useSubsystem } from '../../lib/subsystems';
-import { WidgetCard, WidgetAction, WidgetEmpty, relTime } from '../home/WidgetCard';
+import {
+  api, C, FONT, ensureNotesLoaded, subsystemTabValue, useSubsystem,
+  WidgetCard, WidgetAction, WidgetEmpty, relTime,
+} from 'aihome_shell/kit';
+import type { HubTabValue } from 'aihome_shell/kit';
 import { NewNoteDialog } from './NewNoteDialog';
 import { openNote } from './openNote';
 

@@ -1,8 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { Maximize } from 'lucide-react';
-import { C, FONT, R } from '../../../lib/design';
-import { useIsMobile } from '../../../lib/breakpoints';
-import { ICON_SIZE } from '../../../components/ui/icons';
+import { C, FONT, R, useIsMobile, ICON_SIZE } from 'aihome_shell/kit';
 import type { GraphSettings } from './graphSettings';
 import type { SimApi, SimNode } from './useForceSimulation';
 import type { ThemeColors } from './useThemeColors';

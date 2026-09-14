@@ -8,7 +8,7 @@
 // Манифест вынесен в manifest.tsx — чистый экспорт (без side-effect), чтобы
 // Module Federation remote мог экспортировать его независимо от регистрации.
 
-import { registerSubsystem } from '../../lib/subsystems/registryCore';
+import { registerSubsystem } from 'aihome_shell/kit';
 import { manifest } from './manifest';
 
 registerSubsystem(manifest);

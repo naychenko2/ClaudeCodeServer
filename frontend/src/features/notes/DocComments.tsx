@@ -1,19 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { Check, MessageCircle, Pin, Sparkles, Trash2, TriangleAlert, Undo2, User, X } from 'lucide-react';
-import { MarkdownViewer, stripFrontmatter } from '../../components/MarkdownViewer';
-import { api } from '../../lib/api';
-import { C, FONT, R, SHADOW, Z } from '../../lib/design';
-import { useNotesVersion } from '../../lib/notes';
-import { useContainerWidth } from '../../hooks/useContainerWidth';
-import { ensurePersonasLoaded, usePersonas, personaLabel } from '../../lib/personas';
-import { PersonaAvatar } from '../personas/PersonaAvatar';
-import { Badge, Button, ConfirmDialog, SidebarSection } from '../../components/ui';
-import { startChatFromPanel } from '../../lib/ai/startChat';
-import { docAnnotationsPrompt, ANNOTATIONS_TOOL_KEY } from '../../lib/ai/annotationsPrompt';
+import {
+  MarkdownViewer, stripFrontmatter, api, C, FONT, R, SHADOW, Z,
+  useNotesVersion, useContainerWidth, ensurePersonasLoaded, usePersonas, personaLabel,
+  PersonaAvatar, Badge, Button, ConfirmDialog, SidebarSection,
+  startChatFromPanel, docAnnotationsPrompt, ANNOTATIONS_TOOL_KEY, NO_AUTOFILL,
+} from 'aihome_shell/kit';
 import type { DocAnnotation, NoteReply, Persona } from '../../types';
 import type { ResolvedNote } from '../../components/MarkdownViewer';
-import { NO_AUTOFILL } from '../../lib/noAutofill';
 
 // Комментарии к MD-документам (флаг doc-annotations): обёртка над MarkdownViewer
 // для просмотра .md проекта — выделение → попап «Комментировать», маркеры якорных

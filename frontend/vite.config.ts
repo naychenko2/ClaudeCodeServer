@@ -32,6 +32,13 @@ const backendPort = process.env.BACKEND_PORT || '5000';
 const backendUrl = `http://127.0.0.1:${backendPort}`;
 
 export default defineConfig({
+  // Хост резолвит kит локально (не через MF-рантайм): копия в хосте одна, и
+  // expose-чанк кита импортирует те же URL-чанки, что и приложение хоста (общий ESM-граф).
+  resolve: {
+    alias: {
+      'aihome_shell/kit': fileURLToPath(new URL('./src/lib/shell-kit/index.ts', import.meta.url)),
+    },
+  },
   // Подстановка метки сборки (читает src/lib/buildInfo.ts): время — момент запуска
   // vite build/dev, sha — HEAD на машине сборки. QA сверяет с временем своих правок.
   define: {
@@ -56,6 +63,8 @@ export default defineConfig({
       filename: 'remoteEntry.js',
       exposes: {
         './design-kit': './src/lib/design-kit/index.ts',
+        // Runtime-кит для ВНУТРЕННИХ подсистем (MF remote): широкий, не версионируется.
+        './kit': './src/lib/shell-kit/index.ts',
       },
       remotes: {},
       // dts (#TYPE-001): дефолтный tsConfigPath плагина — корневой tsconfig.json,

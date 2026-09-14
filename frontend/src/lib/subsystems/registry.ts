@@ -34,9 +34,12 @@ export async function loadSubsystemRemotes(): Promise<void> {
   for (const m of response.items) {
     try {
       await loadSubsystemRemote(m.id, m.remoteUrl, m.exposedModule ?? './subsystem');
-    } catch {
+    } catch (e) {
       // remote конкретного модуля не отвечает — он не зарегистрируется, его раздел
       // не появится, пока remote не станет доступен; остальные модули не трогает.
+      // Ошибку ОБЯЗАТЕЛЬНО пишем в консоль: молча исчезнувший раздел неотличим от
+      // выключенной подсистемы, и диагностировать его без этой строки нечем.
+      console.warn(`[subsystems] модуль «${m.id}» не загрузился:`, e);
     }
   }
 }
@@ -46,8 +49,13 @@ async function loadSubsystemRemote(id: string, entry: string, exposed: string): 
   if (_registeredRemotes.has(id)) return;
   registerRemotes([{ name: id, entry, type: 'module' }]);
   _registeredRemotes.add(id);
-  const mod = await loadRemote<{ subsystem: SubsystemManifest }>(`${id}/${exposed.replace(/^\.\//, '')}`);
-  if (mod?.subsystem) {
-    registerSubsystem(mod.subsystem);
+  const mod = await loadRemote<{ subsystem: SubsystemManifest | Promise<SubsystemManifest> }>(`${id}/${exposed.replace(/^\.\//, '')}`);
+  // Манифест может приехать промисом: expose модуля — async boundary, которая
+  // ждёт кит оболочки перед загрузкой кода фичи (см. modules/notes/subsystem.tsx).
+  const manifest = mod?.subsystem ? await mod.subsystem : null;
+  if (manifest) {
+    registerSubsystem(manifest);
+  } else {
+    console.warn(`[subsystems] модуль «${id}»: expose «${exposed}» не отдал манифест`, mod);
   }
 }

@@ -271,7 +271,9 @@ builder.Services.AddSingleton<ISubscriptionAlertNotifier, SubscriptionAlertNotif
 // UserModelTierResolver (слоты моделей) — DI в подсистеме `LlmSubsystem`
 // (шаг 0 волны 4, см. LlmSubsystem.cs).
 builder.Services.AddSingleton<UserHomeResolver>();
-builder.Services.AddSingleton<IHomePathResolver, UserHomeResolver>();
+// Форвардер, а не вторая регистрация: иначе второй экземпляр `UserHomeResolver` со своим
+// кешем домашних папок (см. DuplicateSingletonRegistrationTests).
+builder.Services.AddSingleton<IHomePathResolver>(sp => sp.GetRequiredService<UserHomeResolver>());
 builder.Services.AddSingleton<ProjectManager>();
 // Этап 5, волна E: узкий Core-шов IProjectManager для выноса Notes (см.
 // Core/Services/IProjectManager.cs). Полный ProjectManager в Main, Notes видит
@@ -309,8 +311,11 @@ builder.Services.AddSingleton<IProjectFileGateway, ProjectFileGateway>();
 // и preview-токенов. Auth уже без связи: у AdminByStore.cs JwtService упомянут
 // только в комментарии. Адаптер в `Services/JwtValidatorGateway` реализует оба
 // интерфейса и идёт через `JwtService` — разделение на стороне потребителя.
-builder.Services.AddSingleton<IUserTokenValidator, JwtValidatorGateway>();
-builder.Services.AddSingleton<IPreviewTokenValidator, JwtValidatorGateway>();
+builder.Services.AddSingleton<JwtValidatorGateway>();
+// Форвардеры, а не вторая регистрация: иначе второй экземпляр `JwtValidatorGateway` со
+// своим кешем/состоянием (см. DuplicateSingletonRegistrationTests).
+builder.Services.AddSingleton<IUserTokenValidator>(sp => sp.GetRequiredService<JwtValidatorGateway>());
+builder.Services.AddSingleton<IPreviewTokenValidator>(sp => sp.GetRequiredService<JwtValidatorGateway>());
 // Шов для Modules (Этап 5, волна C, шаг 1б): вместо прямой зависимости от
 // FeatureFlagService — узкий контракт на проверку одного флага. Адаптер в
 // `Services/FeatureFlagGateway` идёт через `FeatureFlagService` — Modules
@@ -338,7 +343,9 @@ builder.Services.AddSingleton<ProjectEventLogService>();
 // Notes видит только Append.
 builder.Services.AddSingleton<IProjectEventLogService>(sp => sp.GetRequiredService<ProjectEventLogService>());
 builder.Services.AddSingleton<PersonaManager>();
-builder.Services.AddSingleton<IPersonaHandleResolver, PersonaManager>();
+// Форвардер, а не вторая регистрация: иначе второй стор персон и резолвер handle не видит
+// персон, созданных после старта (см. DuplicateSingletonRegistrationTests).
+builder.Services.AddSingleton<IPersonaHandleResolver>(sp => sp.GetRequiredService<PersonaManager>());
 builder.Services.AddSingleton<PersonaPromptBuilder>();
 // Память персон и команды (волна 3, шаг 4) — DI в подсистеме `MemorySubsystem`:
 // PersonaMemoryService и TeamMemoryService регистрируются там же.
@@ -888,6 +895,25 @@ if (SubsystemGate.IsEnabled(builder.Configuration, "notes") && notesModuleActive
     builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
         sp => (ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant)
             sp.GetRequiredService<ClaudeHomeServer.Services.Notes.INoteSemanticIndex>());
+}
+else if (SubsystemGate.IsEnabled(builder.Configuration, "notes"))
+{
+    // Гейт говорит «включено», но dll динамического модуля не загрузилась. Тихо не оставляем:
+    // заметки без `NotesKnowledgeService` НЕ попадут в реконсайлер Dify (KnowledgeIndexReconciler
+    // тянет коллекцию IKnowledgeSyncParticipant для error-документов и пересборки) и не будут
+    // синхронизированы в базе знаний вообще — это уже не «форвардер не зарегистрирован», а
+    // потерянный контур данных. Модуль выключен намеренно (`Subsystems:Notes:Enabled=false`)
+    // случай выше не покрывает — там Notes нет в списке, предупреждение избыточно.
+    // Используем Console.Error вместо ILogger: builder.Build() ещё не вызван, а
+    // IL-логгер ModuleLoader резолвится из временного SP, который закрыт в using-блоке
+    // выше (его LoggerFactory уже disposed). Тот же префикс, что у других стартовых
+    // предупреждений в Program.cs (`[HandleMigration]`, `[TranscriptRoots]`).
+    Console.Error.WriteLine(
+        "[Knowledge] WARNING: подсистема Notes включена (`Subsystems:Notes:Enabled=true`), " +
+        "но её сборка не загружена — заметки не будут синхронизироваться в Knowledge " +
+        "(Dify-датасет) и не появятся среди участников реконсайлера. Проверьте путь " +
+        "`DynamicModules:1:Backend:AssemblyPath` и факт копирования `ClaudeHomeServer.Notes.dll` " +
+        "в publish.");
 }
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
     sp => sp.GetRequiredService<ProjectKnowledgeSyncService>());

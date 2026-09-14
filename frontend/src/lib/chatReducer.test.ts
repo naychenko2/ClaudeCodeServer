@@ -124,7 +124,7 @@ describe('PERSISTED_KINDS ↔ StoredMessage.cs', () => {
   it('совпадает с дискриминаторами StoredMessage', () => {
     const here = path.dirname(fileURLToPath(import.meta.url));
     const storedPath = path.resolve(here, '..', '..', '..', 'backend',
-      'ClaudeHomeServer', 'Protocol', 'StoredMessage.cs');
+      'ClaudeHomeServer.Core', 'Protocol', 'StoredMessage.cs');
     const src = readFileSync(storedPath, 'utf8');
     const discriminators = [...src.matchAll(/JsonDerivedType\(typeof\([^)]+\),\s*"([a-z_]+)"\)/g)]
       .map(m => m[1]);

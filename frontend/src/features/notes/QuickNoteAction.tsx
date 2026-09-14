@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { NotebookPen } from 'lucide-react';
-import { ensureNotesLoaded } from '../../lib/notes';
+import { ensureNotesLoaded } from 'aihome_shell/kit';
 import { NewNoteDialog } from './NewNoteDialog';
 import { openNote } from './openNote';
 import type { QuickActionNoteCtx } from '../../lib/subsystems/registryCore';

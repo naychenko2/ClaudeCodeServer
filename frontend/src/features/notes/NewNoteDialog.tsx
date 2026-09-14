@@ -1,13 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { NoteSource, NoteTemplate } from '../../types';
-import { api } from '../../lib/api';
-import { useNotes, useNoteFolders } from '../../lib/notes';
-import { Modal } from '../../components/ui';
-import { C, FONT, R } from '../../lib/design';
-import { OfflineError } from '../../lib/offline';
-import { createNoteOffline } from '../../lib/notesOffline';
-import { EXPIRY_PRESETS, expiryOptionLabel } from '../../lib/expiry';
-import { NO_AUTOFILL } from '../../lib/noAutofill';
+import {
+  api, useNotes, useNoteFolders, Modal, C, FONT, R,
+  OfflineError, createNoteOffline, EXPIRY_PRESETS, expiryOptionLabel, NO_AUTOFILL,
+} from 'aihome_shell/kit';
 
 // Диалог создания заметки: заголовок, источник, папка (с автодополнением по
 // существующим — включая пустые физические папки), опционально шаблон и время жизни.

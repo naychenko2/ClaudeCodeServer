@@ -271,7 +271,9 @@ builder.Services.AddSingleton<ISubscriptionAlertNotifier, SubscriptionAlertNotif
 // UserModelTierResolver (слоты моделей) — DI в подсистеме `LlmSubsystem`
 // (шаг 0 волны 4, см. LlmSubsystem.cs).
 builder.Services.AddSingleton<UserHomeResolver>();
-builder.Services.AddSingleton<IHomePathResolver, UserHomeResolver>();
+// Форвардер, а не вторая регистрация: иначе второй экземпляр `UserHomeResolver` со своим
+// кешем домашних папок (см. DuplicateSingletonRegistrationTests).
+builder.Services.AddSingleton<IHomePathResolver>(sp => sp.GetRequiredService<UserHomeResolver>());
 builder.Services.AddSingleton<ProjectManager>();
 // Этап 5, волна E: узкий Core-шов IProjectManager для выноса Notes (см.
 // Core/Services/IProjectManager.cs). Полный ProjectManager в Main, Notes видит
@@ -309,8 +311,11 @@ builder.Services.AddSingleton<IProjectFileGateway, ProjectFileGateway>();
 // и preview-токенов. Auth уже без связи: у AdminByStore.cs JwtService упомянут
 // только в комментарии. Адаптер в `Services/JwtValidatorGateway` реализует оба
 // интерфейса и идёт через `JwtService` — разделение на стороне потребителя.
-builder.Services.AddSingleton<IUserTokenValidator, JwtValidatorGateway>();
-builder.Services.AddSingleton<IPreviewTokenValidator, JwtValidatorGateway>();
+builder.Services.AddSingleton<JwtValidatorGateway>();
+// Форвардеры, а не вторая регистрация: иначе второй экземпляр `JwtValidatorGateway` со
+// своим кешем/состоянием (см. DuplicateSingletonRegistrationTests).
+builder.Services.AddSingleton<IUserTokenValidator>(sp => sp.GetRequiredService<JwtValidatorGateway>());
+builder.Services.AddSingleton<IPreviewTokenValidator>(sp => sp.GetRequiredService<JwtValidatorGateway>());
 // Шов для Modules (Этап 5, волна C, шаг 1б): вместо прямой зависимости от
 // FeatureFlagService — узкий контракт на проверку одного флага. Адаптер в
 // `Services/FeatureFlagGateway` идёт через `FeatureFlagService` — Modules
@@ -338,7 +343,9 @@ builder.Services.AddSingleton<ProjectEventLogService>();
 // Notes видит только Append.
 builder.Services.AddSingleton<IProjectEventLogService>(sp => sp.GetRequiredService<ProjectEventLogService>());
 builder.Services.AddSingleton<PersonaManager>();
-builder.Services.AddSingleton<IPersonaHandleResolver, PersonaManager>();
+// Форвардер, а не вторая регистрация: иначе второй стор персон и резолвер handle не видит
+// персон, созданных после старта (см. DuplicateSingletonRegistrationTests).
+builder.Services.AddSingleton<IPersonaHandleResolver>(sp => sp.GetRequiredService<PersonaManager>());
 builder.Services.AddSingleton<PersonaPromptBuilder>();
 // Память персон и команды (волна 3, шаг 4) — DI в подсистеме `MemorySubsystem`:
 // PersonaMemoryService и TeamMemoryService регистрируются там же.

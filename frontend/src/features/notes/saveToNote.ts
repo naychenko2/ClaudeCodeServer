@@ -2,8 +2,7 @@
 // (ответ ассистента, план). Создаёт .md через notes-API; куда — по контексту:
 // чат в проекте → notes/ проекта, чат вне проекта → личный vault.
 
-import { api } from '../../lib/api';
-import { bumpNotes } from '../../lib/notes';
+import { api, bumpNotes } from 'aihome_shell/kit';
 import type { NoteDetail } from '../../types';
 
 // Папка, куда складываются заметки, сохранённые из чата

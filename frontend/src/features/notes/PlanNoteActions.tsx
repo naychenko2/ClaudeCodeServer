@@ -1,9 +1,6 @@
 import { useContext, useState, type CSSProperties } from 'react';
 import { Check } from 'lucide-react';
-import { C, FONT, FS, R, SP } from '../../lib/design';
-import { useSubsystem } from '../../lib/subsystems';
-import { Button, IconButton } from '../../components/ui';
-import { ChatProjectContext } from '../../components/chat/contexts';
+import { C, FONT, FS, R, SP, useSubsystem, Button, IconButton, ChatProjectContext } from 'aihome_shell/kit';
 import { saveChatNote, openNoteById } from './saveToNote';
 import { IconNotes } from './shared';
 import type { PlanChipCtx, PlanButtonCtx } from '../../lib/subsystems/registryCore';

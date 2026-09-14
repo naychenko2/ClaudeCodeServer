@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { Check, AlertCircle } from 'lucide-react';
-import { C } from '../../lib/design';
-import { useSubsystem } from '../../lib/subsystems';
+import { C, useSubsystem } from 'aihome_shell/kit';
 import { saveChatNote, openNoteById } from './saveToNote';
 import { IconNotes } from './shared';
 import type { ChatItemSaveNoteCtx } from '../../lib/subsystems/registryCore';

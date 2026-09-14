@@ -4,7 +4,22 @@
 // SubsystemManifest (manifest + tab + slots). Регистрация в реестре слотов —
 // ответственность хоста (registerSubsystem), не этого модуля.
 //
-// Импортируем из ../../src/features/notes/manifest.tsx — тот же файл, что
-// использует side-effect-регистрация, но без side-effect (чистый экспорт).
+// ASYNC BOUNDARY — не убирать. Код фичи импортирует ядро оболочки статически
+// (`aihome_shell/kit`), а @module-federation/vite переписывает такой импорт в
+// СИНХРОННУЮ деструктуризацию remote-прокси: пока кит не загружен, любое чтение
+// его экспорта бросает промис загрузки (proxy.get → `throw ensurePending()`).
+// Файлы фичи читают токены кита на верхнем уровне модуля, поэтому статический
+// импорт манифеста отсюда падал БЕЗ ВИДИМОЙ ПРИЧИНЫ: хост ловил брошенный промис
+// в catch и молча не регистрировал подсистему — раздел «Заметки» исчезал целиком.
+//
+// Поэтому сначала дожидаемся кита (динамический import — плагин ждёт его
+// __mf_remote_pending), и только потом грузим код фичи. Экспорт — промис:
+// хост его await'ит (await по обычному значению тоже безвреден).
 
-export { manifest as subsystem } from '../../src/features/notes/manifest';
+import type { SubsystemManifest } from '../../src/lib/subsystems/registryCore';
+
+export const subsystem: Promise<SubsystemManifest> = (async () => {
+  await import('aihome_shell/kit');
+  const { manifest } = await import('../../src/features/notes/manifest');
+  return manifest;
+})();

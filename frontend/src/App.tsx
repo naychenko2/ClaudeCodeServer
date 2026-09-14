@@ -64,6 +64,11 @@ import { useUiInspector, setUiInspectorAdmin, wireUiInspectorHotkey } from './li
 import { UiInspectorOverlay } from './features/inspector/UiInspectorOverlay'
 
 const OPEN_PROJECT_KEY = 'cc_open_project'
+// Потолок ожидания MF-remote подсистем на старте (см. вызов loadSubsystemRemotes):
+// раздел подсистемы должен быть зарегистрирован до первого рендера, но недоступный
+// remote не имеет права задерживать вход в оболочку дольше этого срока.
+const SUBSYSTEM_REMOTES_WAIT_MS = 2_000
+
 const HUB_TAB_KEY = 'cc_hub_tab'
 // Значение вкладки подсистемы «Заметки» — динамическое (`subsystem:notes`), оно не
 // входит в union HubTab, а вставляется в таббар из реестра по manifest.order. Экранный
@@ -482,10 +487,28 @@ export default function App() {
         // «По умолчанию» в пикерах) — одним запросом, fire-and-forget, есть fallback
         loadModels()
         void loadModules() // список внешних модулей платформы для вкладок оболочки (R6)
-        void loadSubsystemRemotes() // MF-remote подсистем (пилот): notes через registerRemotes+loadRemote
         // Таймзона устройства — серверу для напоминаний (fire-and-forget)
         const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
         if (tz) api.auth.setTimeZone(tz).catch(() => {})
+        // MF-remote подсистем (пилот: notes) — ДОЖИДАЕМСЯ до первого рендера оболочки.
+        // Регистрация раздела асинхронная, а стартовый таб и диплинк считаются один раз
+        // в useState: без ожидания заход по #/notes и F5 в разделе «Заметки» уводили в
+        // «Чаты» (гейт notesRegistered ещё false), и вкладка появлялась лишь после
+        // следующего ре-рендера по чужой причине — реестр слотов подписок не имеет.
+        // Потолок ожидания: модуль не отвечает — стартуем без него (честная деградация),
+        // оболочка не должна висеть на недоступном remote.
+        return Promise.race([
+          loadSubsystemRemotes(),
+          new Promise<void>(resolve => setTimeout(resolve, SUBSYSTEM_REMOTES_WAIT_MS)),
+        ]).then(() => {
+          // Догоняем диплинк: стартовый таб считается в useState при монтировании,
+          // когда MF-remote ещё не зарегистрирован, и #/notes уходит в fallback «Чаты».
+          // Ждать регистрацию там нельзя (useState синхронен), поэтому восстанавливаем
+          // раздел здесь — но только если человек с fallback-таба никуда не ушёл сам.
+          if (initialHash?.screen !== 'notes') return
+          if (!isSubsystemEnabled(SUBSYSTEMS.notes) || getSubsystem('notes') === undefined) return
+          setHubTab(prev => (prev === 'chats' ? NOTES_TAB : prev))
+        })
       })
       .catch(() => { /* результат отразится в _online */ })
       .finally(() => {

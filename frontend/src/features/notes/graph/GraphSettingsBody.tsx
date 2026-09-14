@@ -1,12 +1,9 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { RotateCcw, X } from 'lucide-react';
-import { C, FONT, GROUP_COLORS, R } from '../../../lib/design';
-import { ICON_SIZE } from '../../../components/ui/icons';
-import { Toggle } from '../../../components/ui';
+import { C, FONT, GROUP_COLORS, R, ICON_SIZE, Toggle, NO_AUTOFILL } from 'aihome_shell/kit';
 import { CollapseGroup, SourceDot } from '../shared';
 import type { GraphSettings } from './graphSettings';
 import { GRAPH_DEFAULTS } from './graphSettings';
-import { NO_AUTOFILL } from '../../../lib/noAutofill';
 
 // Тело настроек графа (секции Фильтры / Группы / Отображение / Силы). Общий
 // контент для левого сайдбара раздела (глобальный граф) и плавающей панели

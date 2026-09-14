@@ -1815,8 +1815,15 @@ public class ClaudeSession : ILlmSessionAdapter
     public Task SendMessageAsync(string text, IReadOnlyList<string>? attachedPaths = null, int agentDepth = 0,
         bool suppressTasksExecute = false)
     {
+        // Счётчик ходов процесса: растёт и на служебных директивах — они реально уходят в CLI,
+        // меняют ленту и служат признаком «ход запускался» (SessionLiveness, ревизия синка).
+        // Числом ходов ЧЕЛОВЕКА он не является: при фолбэке FallbackLlmSessionAdapter зовёт
+        // этот метод повторно на каждой попытке — ход с двумя подменами накрутит счётчик на 3.
+        // Превью чата (LastMessage) здесь НЕ трогаем: сюда приходит текст УЖЕ с обвязкой
+        // (BuildCliTurnText), а при фолбэке этот вызов повторяется на каждой попытке — сырая
+        // директива и протокол цикла утекали бы в карточку чата. Превью ставит единственная
+        // точка — SessionManager, тем текстом, который видел человек.
         Info.MessageCount++;
-        Info.LastMessage = text.Length > 100 ? text[..100] + "…" : text;
         Info.UpdatedAt = DateTime.UtcNow;
 
         // Если сообщение — вызов скилла (/skill-name [args]), разворачиваем его содержимое

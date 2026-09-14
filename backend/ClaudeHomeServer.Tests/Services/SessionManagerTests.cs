@@ -2113,6 +2113,86 @@ public class SessionManagerTests : IDisposable
         pending.Should().NotContain(p => p.Text == "user-последнее");
     }
 
+    // --- Превью карточки чата (Session.LastMessage) ---
+
+    // Свободный чат с подставным адаптером: ход идёт прямо в процесс (SendDirectAsync),
+    // минуя очередь. sentText ловит текст, который реально уехал в CLI.
+    private async Task<(Session Session, object Entry, Func<string?> SentText)> MkPreviewChatAsync(string suffix)
+    {
+        var session = await MkBusySessionAsync(suffix, SessionStatus.Active); // Active = чат свободен
+        session.Name = "есть имя"; // иначе фоновый уточнятор заголовка полезет в локальную модель
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        string? sent = null;
+        adapter.Setup(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+                It.IsAny<int>(), It.IsAny<bool>()))
+            .Callback<string, IReadOnlyList<string>?, int, bool>((t, _, _, _) => sent = t)
+            .Returns(Task.CompletedTask);
+        SetProcess(entry, adapter.Object);
+        return (session, entry, () => sent);
+    }
+
+    private static ClaudeHomeServer.Services.Llm.Claude.SubagentRunPassport PreviewBgRun() =>
+        new("a1", "mark", "Волна 1: агент деплоя", "sess-1", "toolu_1",
+            DateTime.UtcNow.AddMinutes(-8), DateTime.UtcNow, 495, 34, 90, 1, 146_000, 4000,
+            "tool_use", true, "Bash", "claude-opus-5", 1024, 0, false, "bg_done", DateTime.UtcNow);
+
+    [Fact]
+    public async Task Превью_ОбычныйХод_ИсходныйТекстБезОбвязкиХода()
+    {
+        // В CLI ход уходит с обвязкой (BuildCliTurnText — здесь пометка об обрыве фонового
+        // агента), а в карточке чата обязано остаться то, что написал человек
+        var (session, entry, sentText) = await MkPreviewChatAsync("prev-plain");
+        entry.GetType().GetField("TruncatedBgNote")!.SetValue(entry, PreviewBgRun());
+
+        await _sut.SendMessageAsync(session.Id, "почини тесты", []);
+
+        session.LastMessage.Should().Be("почини тесты");
+        sentText()!.Should().EndWith("почини тесты").And.Contain("обрывок",
+            "обвязка хода в CLI уехала — и именно её не должно быть в превью");
+    }
+
+    [Fact]
+    public async Task Превью_СистемнаяДиректива_ОстаётсяПоследнееСообщениеЧеловека()
+    {
+        // Директива («[СИСТЕМНАЯ ДИРЕКТИВА — ОБРЫВ САБАГЕНТА 1/2] …») человеку в списке
+        // чатов не адресована: превью держит его последнюю реплику
+        var (session, _, sentText) = await MkPreviewChatAsync("prev-directive");
+        await _sut.SendMessageAsync(session.Id, "почини тесты", []);
+
+        await _sut.SendMessageAsync(session.Id, "[СИСТЕМНАЯ ДИРЕКТИВА — ОБРЫВ САБАГЕНТА 1/2] Сабагент «kostya» замолчал",
+            [], systemDirective: true);
+
+        session.LastMessage.Should().Be("почини тесты");
+        sentText()!.Should().Contain("СИСТЕМНАЯ ДИРЕКТИВА", "в CLI директива уходит как обычный ход");
+    }
+
+    [Fact]
+    public async Task Превью_ДлинноеСообщение_ОбрезаетсяСоМноготочием()
+    {
+        var (session, _, _) = await MkPreviewChatAsync("prev-long");
+        var text = new string('я', 150);
+
+        await _sut.SendMessageAsync(session.Id, text, []);
+
+        session.LastMessage.Should().Be(new string('я', 100) + "…");
+    }
+
+    [Fact]
+    public async Task Превью_ХодАгента_СообщениемАгентаБезОбвязки()
+    {
+        // chats_send (SendMessageAndWaitAsync): превью агентскому ходу ставит SessionManager —
+        // адаптер LastMessage больше не пишет, без записи здесь карточка чата вовсе не видела
+        // бы сообщения агента. Обвязки хода нет и в CLI: BuildCliTurnText агентскому пути не клеится
+        var (session, _, sentText) = await MkPreviewChatAsync("prev-agent");
+
+        var result = await _sut.SendMessageAndWaitAsync(session.Id, "доклад из соседнего чата", TimeSpan.Zero);
+
+        result.Should().BeOfType<SendAndWaitResult.Running>("таймаут нулевой — ход не ждём");
+        session.LastMessage.Should().Be("доклад из соседнего чата");
+        sentText().Should().Be("доклад из соседнего чата", "агентскому ходу обвязка не клеится");
+    }
+
     // --- Очередь входящих сообщений в занятом чате (enqueue, прерывание — точечное) ---
 
     [Fact]

@@ -3702,6 +3702,13 @@ public class SessionManager : IDisposable
         entry.CurrentTurnSnapshot = !auto && !systemDirective
             ? new UserTurnSnapshot(text, attachedPaths, mode)
             : null;
+        // Превью чата — исходным сообщением, без обвязок BuildCliTurnText (адаптер превью
+        // не выставляет: ему текст приходит уже обвязанным и повторяется на каждой попытке
+        // фолбэка). Служебные директивы (цикл «до готово», добивание сабагента) превью НЕ
+        // трогают вовсе: их сырой текст («[СИСТЕМНАЯ ДИРЕКТИВА — …]») человеку в списке чатов
+        // не адресован (MINOR B-п.5) — в карточке остаётся то, что он видел последним.
+        if (!systemDirective)
+            entry.Info.LastMessage = ChatPreview(text);
         // Диспетчеризация: локальный голосовой ход идёт мимо CLI (fire-and-forget — как
         // CLI-ветка, где SendMessageAsync лишь ставит ход в процесс; ответ приходит
         // событиями через OnMessageAsync). Реплика уже в аккумуляторе (OnUserMessage выше).
@@ -3725,13 +3732,10 @@ public class SessionManager : IDisposable
             await entry.Process!.SendMessageAsync(BuildCliTurnText(entry, text), attachedPaths,
                 suppressTasksExecute: suppressTasksExecute);
         }
-        // Превью чата (LastMessage выставляет адаптер из текста для CLI) — исходным сообщением.
-        // Служебные директивы цикла (verifying/continuation) пропускаем: их сырой текст
-        // («[СИСТЕМНАЯ ДИРЕКТИВА — …]») человеку в списке чатов не адресован (MINOR B-п.5) —
-        // превью остаётся тем, что видел человек в последний раз
-        if (!systemDirective)
-            entry.Info.LastMessage = text.Length > 100 ? text[..100] + "…" : text;
     }
+
+    // Превью чата для карточки списка: первые 100 символов сообщения
+    internal static string ChatPreview(string text) => text.Length > 100 ? text[..100] + "…" : text;
 
     // Текст хода для CLI: исходное сообщение + обвязки.
     // Протокол цикла «до готово» — пока Session.WorkLoop активен. Своей вставки ultrawork
@@ -4048,6 +4052,8 @@ public class SessionManager : IDisposable
         entry.TurnInWorktree = false; // сообщение = новый ход в основном дереве (зеркало Extract)
         entry.CurrentTurnSnapshot = null; // ход агента — по «Стоп» в композер не возвращается
         entry.TeamTurnFromHuman = false; // ход поднят агентом (chats_send), не человеком (M7)
+        // Превью чата — сообщением агента: адаптер его больше не выставляет (см. ChatPreview)
+        entry.Info.LastMessage = ChatPreview(text);
         await entry.Process!.SendMessageAsync(text, null, agentDepth);
 
         if (timeout <= TimeSpan.Zero) return new SendAndWaitResult.Running();

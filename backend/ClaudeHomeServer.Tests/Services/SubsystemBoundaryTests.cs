@@ -1351,6 +1351,22 @@ public class SubsystemBoundaryTests
                     .ToArray(),
                 Array.Empty<string>()),
         },
+        // Power — питание машины из веб-морды (выключить/перезагрузить/усылать). Вертикаль
+        // без IAppSubsystem (как Watchdog): регистрации в Program.cs хоста, сервисы живут
+        // в Main (`backend/ClaudeHomeServer/Services/Power/`). Независимых рёбер нет:
+        // типы вертикали используют только `ClaudeHomeServer.Models` (опции в Core) и BCL,
+        // обе записи уже в SharedAllowedPrefixes — allow-list дефолтный (спинка + сама
+        // вертикаль), точные допуски пустые.
+        new object[]
+        {
+            new VerticalBoundary(
+                "Power",
+                "ClaudeHomeServer.Services.Power",
+                SharedAllowedPrefixes
+                    .Concat(new[] { "ClaudeHomeServer.Services.Power" })
+                    .ToArray(),
+                Array.Empty<string>()),
+        },
     };
 
     [Theory]

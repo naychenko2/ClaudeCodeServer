@@ -1139,8 +1139,27 @@ public class TaskExecutionService
     // (ParentOverrideId побеждает связь по задаче, ParentDetached гасит её вовсе). Чата-исполнителя
     // нет (задача закрыта без запуска) — остаётся сырой SourceSessionId. null — докладывать некуда.
     // internal — для юнит-тестов.
-    internal static string? ResolveReportTarget(Session? executorSession, string? sourceSessionId) =>
-        executorSession is not null ? executorSession.ParentSessionId : sourceSessionId;
+    //
+    // `fromFallback=true` означает «резолвер по задаче не дал ответа при живом
+    // ParentOverrideId=null && !ParentDetached» — аномалия, при которой доклад нельзя терять
+    // (раньше она маскировалась под detached и молча сбрасывалась с Information-логом, что
+    // сутки прятало поломку DI-резолвера). В этом случае возвращаем SourceSessionId — пусть
+    // доклад идёт туда, а вызывающий код пишет Warning, чтобы аномалия была видна.
+    internal static string? ResolveReportTarget(Session? executorSession, string? sourceSessionId,
+        out bool fromFallback)
+    {
+        fromFallback = false;
+        if (executorSession is null) return sourceSessionId;
+        var parent = executorSession.ParentSessionId;
+        if (parent is not null) return parent;
+        // parent == null: либо ParentDetached=true (явный вынос в корень — гасим),
+        // либо у чата вообще нет TaskId (корневой чат без задачи — гасим, аномалии нет:
+        // задача к нему не привязана), либо ParentOverrideId=null && !ParentDetached и резолвер
+        // по задаче не дал id (аномалия DI — fallback на sourceSessionId с Warning).
+        if (executorSession.ParentDetached || executorSession.TaskId is null) return null;
+        fromFallback = true;
+        return sourceSessionId;
+    }
 
     // Доклад применим, когда задача вообще делегирована из чата (есть SourceSessionId) и
     // исполнитель не докладывает сам себе. Персоны с обеих сторон больше НЕ обязательны:
@@ -1187,11 +1206,18 @@ public class TaskExecutionService
         // вынос в корень её гасит — «вынес из группы» значит «не докладывай туда». Чата-исполнителя
         // нет (задача закрыта без запуска) — остаётся SourceSessionId, как было.
         var executorSession = task.LinkedSessionId is not null ? _sessions.GetById(task.LinkedSessionId) : null;
-        var targetId = ResolveReportTarget(executorSession, task.SourceSessionId);
+        var targetId = ResolveReportTarget(executorSession, task.SourceSessionId, out var fromFallback);
         if (targetId is null)
         {
-            _log.LogInformation("Доклад Z задачи {TaskId}: пропуск — у чата-исполнителя нет родителя (вынесен в корень)", task.Id);
+            _log.LogInformation("Доклад Z задачи {TaskId}: пропуск — чат-исполнитель явно вынесен в корень (ParentDetached)", task.Id);
             return;
+        }
+        if (fromFallback)
+        {
+            // Резолвер по задаче не дал ответа (ParentOverrideId=null, !ParentDetached).
+            // Доклад терять нельзя — fallback на SourceSessionId; видимость аномалии — Warning,
+            // чтобы поломка DI-резолвера не пряталась сутки, как это было 2026-09-13/14.
+            _log.LogWarning("Доклад Z задачи {TaskId}: связь чата-исполнителя с задачей не резолвится — fallback на SourceSessionId ({SourceId})", task.Id, targetId);
         }
 
         // Владелец S — как в NotifyDelegatorAsync: чужая/неизвестная сессия не годится

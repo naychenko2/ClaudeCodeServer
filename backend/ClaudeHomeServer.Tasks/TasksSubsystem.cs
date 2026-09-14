@@ -56,7 +56,10 @@ public sealed class TasksSubsystem : IAppSubsystem
         // случается лениво — на первом обращении из контроллера либо hosted-сервиса;
         // к тому моменту DI гарантирует все зависимости.
         services.AddSingleton<TaskManager>();
-        services.AddSingleton<ITaskStatusReader, TaskManager>();
+        // Форвардер, а не вторая регистрация: иначе второй экземпляр `TaskManager`
+        // перезаписывает статические резолверы на `Session` и иерархия чатов для новых задач
+        // отмирает (см. DuplicateSingletonRegistrationTests).
+        services.AddSingleton<ITaskStatusReader>(sp => sp.GetRequiredService<TaskManager>());
         services.AddSingleton<TaskAiService>();
         services.AddSingleton<BoardService>();
         // Шов IPersonaAutomationRunner (Core) — регистрация фабрики вынесена в

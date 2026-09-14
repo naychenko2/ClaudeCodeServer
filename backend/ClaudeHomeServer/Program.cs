@@ -889,6 +889,25 @@ if (SubsystemGate.IsEnabled(builder.Configuration, "notes") && notesModuleActive
         sp => (ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant)
             sp.GetRequiredService<ClaudeHomeServer.Services.Notes.INoteSemanticIndex>());
 }
+else if (SubsystemGate.IsEnabled(builder.Configuration, "notes"))
+{
+    // Гейт говорит «включено», но dll динамического модуля не загрузилась. Тихо не оставляем:
+    // заметки без `NotesKnowledgeService` НЕ попадут в реконсайлер Dify (KnowledgeIndexReconciler
+    // тянет коллекцию IKnowledgeSyncParticipant для error-документов и пересборки) и не будут
+    // синхронизированы в базе знаний вообще — это уже не «форвардер не зарегистрирован», а
+    // потерянный контур данных. Модуль выключен намеренно (`Subsystems:Notes:Enabled=false`)
+    // случай выше не покрывает — там Notes нет в списке, предупреждение избыточно.
+    // Используем Console.Error вместо ILogger: builder.Build() ещё не вызван, а
+    // IL-логгер ModuleLoader резолвится из временного SP, который закрыт в using-блоке
+    // выше (его LoggerFactory уже disposed). Тот же префикс, что у других стартовых
+    // предупреждений в Program.cs (`[HandleMigration]`, `[TranscriptRoots]`).
+    Console.Error.WriteLine(
+        "[Knowledge] WARNING: подсистема Notes включена (`Subsystems:Notes:Enabled=true`), " +
+        "но её сборка не загружена — заметки не будут синхронизироваться в Knowledge " +
+        "(Dify-датасет) и не появятся среди участников реконсайлера. Проверьте путь " +
+        "`DynamicModules:1:Backend:AssemblyPath` и факт копирования `ClaudeHomeServer.Notes.dll` " +
+        "в publish.");
+}
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
     sp => sp.GetRequiredService<ProjectKnowledgeSyncService>());
 

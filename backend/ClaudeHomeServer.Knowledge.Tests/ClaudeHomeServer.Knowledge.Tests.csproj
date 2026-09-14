@@ -34,4 +34,16 @@
     <PackageReference Include="Moq" Version="4.20.72" />
   </ItemGroup>
 
+  <!-- Notes — динамический модуль. TestWebApplicationFactory стартует хост с
+       AppContext.BaseDirectory = OutDir; ModuleLoader грузит dll по относительному
+       `modules/notes/ClaudeHomeServer.Notes.dll`, поэтому dll должна лежать
+       в OutDir/modules/notes. Без этого `notesModuleActive=false`,
+       форвардер NotesKnowledgeService в DI не регистрируется, и
+       KnowledgeSubsystemRegistrationTests.Program_* ловит 4 участника вместо 5. -->
+  <Target Name="CopyNotesModuleForTests" AfterTargets="Build">
+    <Copy SourceFiles="..\ClaudeHomeServer.Notes\bin\$(Configuration)\net10.0\ClaudeHomeServer.Notes.dll"
+          DestinationFolder="$(OutDir)modules\notes" SkipUnchangedFiles="true"
+          Condition="Exists('..\ClaudeHomeServer.Notes\bin\$(Configuration)\net10.0\ClaudeHomeServer.Notes.dll')" />
+  </Target>
+
 </Project>

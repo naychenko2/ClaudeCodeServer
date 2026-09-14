@@ -1,7 +1,7 @@
 using ClaudeHomeServer.Tests.Helpers;
 using System.Net;
 using System.Text;
-using ClaudeHomeServer.Controllers;
+using ClaudeHomeServer.Services.Spend.Controllers;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Spend;

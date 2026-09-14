@@ -428,6 +428,10 @@ public class SubsystemBoundaryTests
         // `SpendStore` форвардит `ISpendCollector` через `sp => ...GetRequiredService<SpendStore>()` —
         // инвариант «интерфейс и конкретный тип указывают на ОДИН инстанс» (тест
         // `SpendSubsystemRegistrationTests.Register_SpendCollector_IsSameInstanceAsStore`).
+        // `SpendController` (namespace `ClaudeHomeServer.Services.Spend.Controllers`) лежит ВНУТРИ
+        // дерева NamespaceRoot Spend, поэтому попадает в перебор типов сторожа и IL-сканируется
+        // (мутация: снятие собственного префикса даёт 9 нарушений от контроллера). Namespace в
+        // стиле Notes оставил бы его вне сторожа.
         new object[]
         {
             new VerticalBoundary(

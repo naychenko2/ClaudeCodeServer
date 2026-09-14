@@ -27,9 +27,9 @@
   <ItemGroup>
     <!-- InternalsVisibleTo на ClaudeHomeServer.Spend.Tests (Этап 5, вынос Spend):
          Spend.Tests использует internal TestLauncherFactory / FakeHostEnvironment /
-         TestSessionBroadcaster (хелперы тестов), а Spend внутри Main вызывает
-         internal SpendController.ClampPeriod/MaxPeriodDays. Без двойного допуска
-         тесты Spend не соберутся в отдельной сборке. -->
+         TestSessionBroadcaster (хелперы тестов Main) и internal SpendController.ClampPeriod/
+         MaxPeriodDays (контроллер переехал в Spend.dll, internals доступны только через
+         InternalsVisibleTo). Без допуска тесты Spend не соберутся в отдельной сборке. -->
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.Spend.Tests</_Parameter1>
     </AssemblyAttribute>

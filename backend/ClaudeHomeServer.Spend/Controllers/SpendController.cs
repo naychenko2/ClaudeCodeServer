@@ -1,21 +1,25 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Services;
-using ClaudeHomeServer.Services.Spend;
-using ClaudeHomeServer.Services.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
-namespace ClaudeHomeServer.Controllers;
+namespace ClaudeHomeServer.Services.Spend.Controllers;
 
 // API аналитики расхода токенов (Spend Analytics v2). Всё под [Authorize]; чужие данные —
 // только роли admin (scope=all), гейт — SpendAccess. Содержимого сообщений здесь нет и быть
 // не может: хранилище держит только метрики и id разрезов, имена резолвятся по реестрам.
+//
+// Контроллер живёт в вынесенной вертикали `ClaudeHomeServer.Spend` (Этап 5, переезд из Main).
+// Сборка подключается к MVC атрибутом `[assembly: ApplicationPart("...")]`
+// (генерируется MSBuild благодаря Web SDK у Spend.csproj). Конструктор принимает Core-швы
+// `ISessionDirectory`/`ITaskLookup` (адаптеры в Main) — Main-типы `SessionManager`/`TaskManager`
+// в вертикаль не заходят.
 [ApiController]
 [Route("api/spend")]
 [Authorize]
-public class SpendController(SpendAnalyticsService analytics, SessionManager sessions,
-    TaskManager tasks, TaskPromptMetricsStore promptMetrics) : ControllerBase
+public class SpendController(SpendAnalyticsService analytics, ISessionDirectory sessions,
+    ITaskLookup tasks, TaskPromptMetricsStore promptMetrics) : ControllerBase
 {
     private string CurrentUserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub) ?? "";
     private bool IsAdmin => User.IsInRole("admin");

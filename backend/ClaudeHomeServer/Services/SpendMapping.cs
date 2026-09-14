@@ -8,9 +8,11 @@ namespace ClaudeHomeServer.Services;
 
 // Чистые функции сборки SpendRecord из потока сообщений/событий приёма хода. Вынесены из
 // SessionManager (этап 4, волна 1 «приём хода», 2026-09-07) — это код спины, использующий
-// обе стороны (ISpendCollector подсистемы Spend и LlmProviderRegistry слоя Llm), и держать
-// его внутри SessionManager было лишним весом ядра. Никакого состояния, только зависимости
-// в параметрах — шов здесь не нужен.
+// обе стороны: Core-контракт `ISpendCollector` (зависимость на вертикаль Spend идёт через
+// интерфейс в Core, не через ProjectReference на Spend.dll) и `LlmProviderRegistry`/
+// `IModelResolver` слоя Llm. Перенос самого SpendMapping в вертикаль Spend отклонён
+// архитектором: потянуло бы правку конструктора SessionManager ради косметики.
+// Никакого состояния, только зависимости в параметрах — шов здесь не нужен.
 internal static class SpendMapping
 {
     // Извлекает request_id из результата вызова, если это генерация fal.ai. Признак fal —

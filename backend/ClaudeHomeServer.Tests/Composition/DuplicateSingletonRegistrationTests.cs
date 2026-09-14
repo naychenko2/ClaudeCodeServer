@@ -1,7 +1,6 @@
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 
 namespace ClaudeHomeServer.Tests.Composition;
 
@@ -23,9 +22,14 @@ namespace ClaudeHomeServer.Tests.Composition;
 // границ подсистем: 17/17 зелёных при нулевом наборе).
 public class DuplicateSingletonRegistrationTests
 {
-    // Размещённый hosted-сервис регистрируется ДВУМЯ singleton-дескрипторами: один как
-    // `IHostedService` (для движка хоста), второй как сам класс (чтобы достать напрямую через
-    // DI для тестов и форвардеров). Это легитимная множественная регистрация — обходят сторож.
+    // Дескрипторы с `ImplementationFactory` (форвардеры `sp.GetRequiredService<T>()`
+    // и `AddHostedService(factory)` из `AddGatedHostedFrom`) под сторож не попадают —
+    // фильтр ниже отсеивает их по `ImplementationType is not null`. Поэтому явного
+    // исключения по `ServiceType == typeof(IHostedService)` тут нет: оно прикрыло бы
+    // дефект `AddSingleton<X>() + AddHostedService<X>()` (два экземпляра X — стейт
+    // фонового цикла и подписки на одном объекте, резолвы на другом), и сторож бы
+    // его не поймал. См. `KnowledgeSubsystemRegistrationTests` и
+    // `DossiersSubsystemRegistrationTests` — там этот инвариант проверяется явно.
 
     // Внешние библиотеки (`Microsoft.*`, `Yarp.*`) регистрируют собственные реализации
     // паттерном «один класс под несколько интерфейсов» (`IConfigureOptions<T1>/<T2>/<T3>`,
@@ -41,8 +45,7 @@ public class DuplicateSingletonRegistrationTests
     }
 
     private static bool IsExcluded(ServiceDescriptor d) =>
-        d.ServiceType == typeof(IHostedService) ||
-        (d.ImplementationType is not null && IsExternalImplementationType(d.ImplementationType));
+        d.ImplementationType is not null && IsExternalImplementationType(d.ImplementationType);
 
     [Fact]
     public void SingletonImplementations_НеПусты_СторожНеПроходитВпустую()

@@ -5142,17 +5142,22 @@ public class ClaudeSession : ILlmSessionAdapter
             // ContinueWith только регистрирует колбэк; сам он отработает после `prev` —
             // последовательная цепочка, FIFO на уровне прогона гарантирован.
             var prev = run.PresenceTail;
-            var next = prev.ContinueWith(_ =>
+            // async-колбэк + Unwrap(): следующая публикация стартует строго после ВНУТРЕННЕЙ
+            // рассылки (порядок доставки сохраняется), при этом поток пула не блокируется на
+            // время рассылки — раньше `GetAwaiter().GetResult()` на `_onMessage` занимал
+            // поток на всю длительность записи под SessionManager._saveLock (sessions.json на
+            // проде — 1.7 МБ), а публикаций присутствия на одной смене состояния — семь путей
+            var next = prev.ContinueWith(async _ =>
             {
                 try
                 {
-                    _onMessage(new BgAgentsPresenceMessage(agents, command)).GetAwaiter().GetResult();
+                    await _onMessage(new BgAgentsPresenceMessage(agents, command));
                 }
                 catch (Exception ex)
                 {
                     Console.Error.WriteLine($"[ClaudeSession] bg_agents_presence не разослан: {ex.Message}");
                 }
-            }, TaskScheduler.Default);
+            }, TaskScheduler.Default).Unwrap();
             run.PresenceTail = next;
         }
     }

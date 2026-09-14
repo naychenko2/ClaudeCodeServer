@@ -529,7 +529,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
           // на обеих платформах: в таббар они не входят, а отдельного меню разделов нет
           onOpenKnowledge={() => onTab('knowledge')}
           onOpenSpecialties={() => onTab('specialties')}
-          onOpenSpend={() => onTab('spend')}
+          onOpenSpend={() => onTab(subsystemTabValue('spend'))}
           // Телеметрия — только админам (проброс SigNoz под [Authorize(Roles=admin)])
           // Выкатка на бой: админ И включённая в конфиге сервера фича. Одного isAdmin мало —
           // на машине, где своего раннера нет, пункт был бы кнопкой в никуда

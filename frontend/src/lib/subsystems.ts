@@ -20,6 +20,7 @@ import { useSyncExternalStore } from 'react';
 // приходят с сервера — здесь только ключи.
 export const SUBSYSTEMS = {
   notes: 'notes',
+  spend: 'spend',
 } as const;
 
 export type SubsystemKey = (typeof SUBSYSTEMS)[keyof typeof SUBSYSTEMS];

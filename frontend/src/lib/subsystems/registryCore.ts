@@ -42,6 +42,8 @@ export interface SubsystemManifest {
   title: string;
   icon?: ReactNode;
   order: number;
+  // Подсистема не получает пилюлю в таббаре хаба (вход — через меню/шорткаты).
+  noPill?: boolean;
   tab?: { component: LazyExoticComponent<ComponentType<SubsystemTabProps>> };
   slots?: Record<string, SlotContribution[]>;
 }
@@ -105,6 +107,13 @@ export interface WorkspacePanelNotesCtx {
 }
 
 export interface HomeWidgetNotesCtx { onHubTab: (t: HubTabValue) => void }
+export interface HomeWidgetSpendCtx {}
+export interface ChatHeaderBadgeCtx {
+  sessionId: string;
+  chatName?: string | null;
+  resultCount: number;
+  isMobile?: boolean;
+}
 
 export interface ActionButtonProps {
   icon: ReactNode;

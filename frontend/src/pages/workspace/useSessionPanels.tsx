@@ -8,7 +8,7 @@
 import type { ReactNode } from 'react';
 import type { Session } from '../../types';
 import { C, FONT } from '../../lib/design';
-import { plural } from '../../lib/spend';
+import { plural } from '../../lib/plural';
 import { useSessionArtifacts } from '../../hooks/useSessionArtifacts';
 import { PlanSection } from '../../components/artifacts/PlanSection';
 import { AgentsSection } from '../../components/artifacts/AgentsSection';

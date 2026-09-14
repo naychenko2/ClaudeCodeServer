@@ -27,6 +27,26 @@ describe('defaultHubTabs: набор вкладок таббара из реес
     expect(defaultHubTabs([withoutTab('hidden', 35)])).toEqual(['chats', 'projects', 'calendar', 'personas']);
   });
 
+  it('подсистема с noPill: true не попадает в набор пилюль/таббара', () => {
+    const noPill: SubsystemManifest = {
+      key: 'spend', title: 'Аналитика', order: 90, noPill: true,
+      tab: {} as unknown as SubsystemManifest['tab'],
+    };
+    const tabs = defaultHubTabs([noPill]);
+    expect(tabs).not.toContain(subsystemTabValue('spend'));
+    expect(tabs).toEqual(['chats', 'projects', 'calendar', 'personas']);
+  });
+
+  it('подсистема БЕЗ noPill (аналог Notes) попадает в таббар', () => {
+    const normal: SubsystemManifest = {
+      key: 'notes', title: 'Заметки', order: 35,
+      tab: {} as unknown as SubsystemManifest['tab'],
+    };
+    const tabs = defaultHubTabs([normal]);
+    expect(tabs).toContain(subsystemTabValue('notes'));
+    expect(tabs).toEqual(['chats', 'projects', 'calendar', 'subsystem:notes', 'personas']);
+  });
+
   it('выключенная подсистема не проходит гейт isSubsystemEnabled', () => {
     const subs = [withTab('notes', 35)];
     // выключена (стор пуст — fail-closed): активных подсистем нет

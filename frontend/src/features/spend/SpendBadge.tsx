@@ -5,9 +5,9 @@
 // и переходом в раздел «Аналитика токенов» с фильтром по этому чату.
 import { useEffect, useRef, useState } from 'react';
 import type { SpendBadgeResponse } from '../../types';
-import { api } from '../../lib/api';
-import { C, FONT, R, SHADOW } from '../../lib/design';
-import { fmtTok, fmtDate, fmtTime, openSpend, sourceLabel } from '../../lib/spend';
+import { api, C, FONT, R, SHADOW } from '../../lib/shell-kit';
+import { openSpend } from '../../lib/spendContract';
+import { fmtDate, fmtTime, fmtTok, sourceLabel } from './spendModel';
 
 export function SpendBadge({ sessionId, chatName, resultCount, isMobile }: {
   sessionId: string;

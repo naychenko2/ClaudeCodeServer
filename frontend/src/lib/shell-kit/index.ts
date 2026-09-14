@@ -10,7 +10,7 @@
 // в хостовой сборке (tsc/vitest/vite) — через алиас на этот файл.
 
 // ─── design ──────────────────────────────────────────────────────────────────
-export { FONT, FS, C, R, SP, SHADOW, ISLAND, Z, GROUP_COLORS, CHAT_MAX_W, TB } from '../design';
+export { FONT, FS, C, R, SP, SHADOW, ISLAND, Z, GROUP_COLORS, CHAT_MAX_W, TB, CONTENT_MAX_W } from '../design';
 
 // ─── api ─────────────────────────────────────────────────────────────────────
 export { api } from '../api';
@@ -42,7 +42,7 @@ export { showToast } from '../toast';
 export { ensurePersonasLoaded, usePersonas, personaLabel } from '../personas';
 
 // ─── breakpoints ─────────────────────────────────────────────────────────────
-export { useIsMobile, useWindowWidth } from '../breakpoints';
+export { useIsMobile, useWindowWidth, MOBILE_MAX, TABLET_MAX } from '../breakpoints';
 
 // ─── noAutofill ──────────────────────────────────────────────────────────────
 export { NO_AUTOFILL } from '../noAutofill';
@@ -94,7 +94,7 @@ export { useContainerWidth } from '../../hooks/useContainerWidth';
 export {
   Button, IconButton, Badge, Modal, ConfirmDialog, BackButton,
   IslandScaffold, PanelHeaderSlot, useHasPanelHeader, MenuItem,
-  SidebarSection, Toggle, PageCanvas, WaitingIndicator,
+  SidebarSection, Toggle, PageCanvas, WaitingIndicator, Dot,
 } from '../../components/ui';
 
 // ─── components/ui/icons ─────────────────────────────────────────────────────
@@ -121,7 +121,7 @@ export { ChatProjectContext } from '../../components/chat/contexts';
 export { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 
 // ─── features/home/WidgetCard ─────────────────────────────────────────────────
-export { WidgetCard, WidgetAction, WidgetEmpty, relTime } from '../../features/home/WidgetCard';
+export { WidgetCard, WidgetAction, WidgetEmpty, relTime, MiniSegment } from '../../features/home/WidgetCard';
 
 // ─── pages/workspace/PanelZone ───────────────────────────────────────────────
 export { PanelZone } from '../../pages/workspace/PanelZone';
@@ -131,3 +131,6 @@ export { NOTES_KEYS } from '../../pages/workspace/panelCatalog';
 
 // ─── pages/workspace/panelStackState ─────────────────────────────────────────
 export { notesPanels, zoneOf } from '../../pages/workspace/panelStackState';
+
+// ─── signalr ─────────────────────────────────────────────────────────────────
+export { onMessage, onReconnected } from '../signalr';

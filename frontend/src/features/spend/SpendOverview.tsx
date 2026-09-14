@@ -3,12 +3,12 @@
 // Любой клик проваливает в «Анализ» с применённым контекстом.
 import type { ReactNode } from 'react';
 import type { SpendCardRow, SpendOverviewResponse, SpendTurnDto } from '../../types';
-import { C, FONT, R, SHADOW, SP } from '../../lib/design';
+import { C, FONT, R, SHADOW, SP } from '../../lib/shell-kit';
 import {
   DIM_LABELS, SPEND_SOURCES, fmtDate, fmtRub, fmtTok, fmtTime, genUnit, genUnitLong, isGenSource,
   nodeName, sourceColor, sourceLabel,
-  type SpendDim, type SpendFilter,
-} from '../../lib/spend';
+} from './spendModel';
+import type { SpendDim, SpendFilter } from '../../lib/spendContract';
 import { Dot, EmptyBody, GhostBtn, nodeIcon } from './spendUi';
 import type { SpendEmptyKind } from './SpendScreen';
 

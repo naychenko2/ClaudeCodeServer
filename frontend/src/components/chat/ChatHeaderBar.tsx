@@ -32,13 +32,12 @@ import { createTask } from '../../lib/tasks';
 import { showToast } from '../../lib/toast';
 import { beginAiBusy, endAiBusy } from '../../lib/ai/busy';
 import { useSlotItem } from '../../lib/subsystems/registry';
-import type { ChatHeaderSummaryCtx, ChatHeaderMenuItemCtx } from '../../lib/subsystems/registryCore';
+import type { ChatHeaderSummaryCtx, ChatHeaderMenuItemCtx, ChatHeaderBadgeCtx } from '../../lib/subsystems/registryCore';
 import type { ExtractedTaskCandidate } from '../../types';
 import { ChatOriginBadge } from '../ChatOriginBadge';
 import { TeamMechanicBadge } from '../../features/team/TeamMechanicBadge';
 import type { TeamMechanicId } from '../../features/team/teamMechanics';
 import { resolveChatOrigin } from '../../lib/chatOrigin';
-import { SpendBadge } from '../../features/spend/SpendBadge';
 import { type GlifGenStats, fmtCredits } from './glifStats';
 import { useActionVisibility } from '../../hooks/useActionVisibility';
 import { CHAT_ACTION_ORDER, CHAT_BADGE_ORDER, CHAT_BADGE_LABELS, HEADER_ACTIONS_HIDDEN_BY_DEFAULT, HEADER_COMPACT_HIDDEN_BY_DEFAULT, WALL_ACTIONS_HIDDEN_BY_DEFAULT, type ChatActionKey, type ChatBadgeKey } from '../../lib/chatActions';
@@ -940,6 +939,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // AI-действия чата к заметкам не относятся и остаются.
   const summaryAction = useSlotItem<ChatHeaderSummaryCtx>('chat-header-action', 'session-summary');
   const summaryMenuItem = useSlotItem<ChatHeaderMenuItemCtx>('chat-header-action', 'summary-menu-item');
+  const spendBadgeSlot = useSlotItem<ChatHeaderBadgeCtx>('chat-header-badge', 'spend-badge');
   // УЗКИЙ планшет (601 – TABLET_WIDE_MIN): мобильная механика — объединённый чип,
   // wide-поповер, плотная группа кнопок, заголовок с многоточием. Объединяем с mobile
   // через `isCompact`, чтобы не дублировать ветки внутри costBadges / rightCluster /
@@ -1328,9 +1328,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     : <CostBadge stats={cost} isMobile={isCompact} billing={billing} onBillingChange={onBillingChange} windows={rateWindows} resetKey={session.id} />;
   // Бейдж расхода токенов чата (аналитика v2): обновляется по завершению хода —
   // триггер cost.results растёт вместе с result-сообщениями ленты
-  const spendBadge = (
-    <SpendBadge sessionId={session.id} chatName={session.name} resultCount={cost.results} isMobile={isCompact} />
-  );
+  const spendBadge = spendBadgeSlot?.render?.({ sessionId: session.id, chatName: session.name, resultCount: cost.results, isMobile: isCompact });
   // compact (колонка стены): плашек контекста, стоимости и расхода нет — в узкой
   // шапке они занимают всю ширину и переносят строку, а следить за деньгами и
   // контекстом уместнее в полном виде чата (открывается кнопкой из ярлыка колонки)

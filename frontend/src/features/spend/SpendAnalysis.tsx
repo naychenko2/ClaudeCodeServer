@@ -7,13 +7,13 @@ import type {
   SpendOverviewResponse, SpendPivotNode, SpendTaskPromptRun, SpendTurnDetailResponse,
   SpendTurnDto, SpendTurnsResponse,
 } from '../../types';
-import { api } from '../../lib/api';
-import { C, FONT, R, SHADOW, SP, Z } from '../../lib/design';
+import { api, C, FONT, R, SHADOW, SP, Z } from '../../lib/shell-kit';
 import {
   ADMIN_ONLY_DIMS, DIM_LABELS, SPEND_PRESETS, fmtDate, fmtRub, fmtTok, fmtTime, genUnit,
-  genUnitLong, isGenSource, nodeName, sourceColor, sourceLabel, sourceTextColor, spendQuery,
-  type SpendDim, type SpendFilter, type SpendLevel,
-} from '../../lib/spend';
+  genUnitLong, isGenSource, nodeName, sourceColor, sourceLabel, sourceTextColor,
+  type SpendLevel,
+} from './spendModel';
+import { spendQuery, type SpendDim, type SpendFilter } from '../../lib/spendContract';
 import type { SpendEmptyKind, SpendState } from './SpendScreen';
 import {
   Chip, ChipX, Dot, DropMenu, EmptyBody, GhostBtn, HBar, LoadError, MenuItem, Skel, nodeIcon,

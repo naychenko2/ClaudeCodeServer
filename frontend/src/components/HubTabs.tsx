@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Activity, Book, BriefcaseBusiness, Calendar, Coins, Columns3, Folder, House, MessageCircle, Puzzle, Users } from 'lucide-react';
+import { Activity, Book, BriefcaseBusiness, Calendar, Columns3, Folder, House, MessageCircle, Puzzle, Users } from 'lucide-react';
 import { PillSwitch } from './Toolbar';
 import { useModules } from '../lib/modules';
 import { isSubsystemEnabled } from '../lib/subsystems';
@@ -15,7 +15,7 @@ export * from './hubTabsModel';
 export const TAB_LABELS: Record<HubTab, string> = {
   home: 'Домой', chats: 'Чаты', wall: 'Стена', projects: 'Проекты', calendar: 'Календарь',
   personas: 'Персоны', specialties: 'Специальности', knowledge: 'Знания',
-  notifications: 'Уведомления', spend: 'Аналитика',
+  notifications: 'Уведомления',
   telemetry: 'Телеметрия',
 };
 
@@ -31,7 +31,6 @@ export const TAB_ICONS: Record<HubTab, ReactNode> = {
   specialties: <BriefcaseBusiness size={18} strokeWidth={2} />,
   knowledge: <Book size={18} strokeWidth={2} />,
   notifications: <MessageCircle size={18} strokeWidth={2} />,
-  spend: <Coins size={18} strokeWidth={2} />,
   telemetry: <Activity size={18} strokeWidth={2} />,
 };
 
@@ -39,7 +38,7 @@ export const TAB_ICONS: Record<HubTab, ReactNode> = {
 // не в таббаре, а в шапке — логотип «Домой», колокольчик «Уведомления», меню
 // аватара «Знания», «Специальности» и «Аналитика токенов». Всплывающая только внутри раздела
 // вкладка-призрак сбивает с толку: набор таббара скачет от того, где ты находишься.
-const TABLESS: HubTab[] = ['home', 'notifications', 'knowledge', 'specialties', 'spend', 'telemetry'];
+const TABLESS: HubTab[] = ['home', 'notifications', 'knowledge', 'specialties', 'telemetry'];
 
 // Подпись/иконка вкладки любого вида (подсистемная — из манифеста). Нужны и
 // таббару, и скрытому эталону замера в HubHeader.

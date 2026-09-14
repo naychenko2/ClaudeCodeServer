@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
@@ -259,15 +260,50 @@ public class StructuredBgEventsTests : IDisposable
 
         // Дождаться, что хотя бы одна публикация стартовала — без этого любые ассерты
         // ниже race'или бы с пустой очередью
-        await WaitForAsync(() => PendingReleasesCount(pendingReleases, queueLock) >= 1);
-        await Task.Delay(50); // дать планировщику пула запустить всё, что могло стартануть
+        await WaitForAsync(
+            () => PendingReleasesCount(pendingReleases, queueLock) >= 1,
+            timeoutMs: 10_000,
+            description: "первая публикация должна поставить TCS в очередь");
+
+        // ВМЕСТО `Task.Delay(50)`: дождаться стабилизации счётчика на 1 (5 одинаковых
+        // чтений подряд через 20 мс = окно 100 мс). С Unwrap() в очереди всегда ровно
+        // 1 TCS — следующие публикации ждут завершения первой, и счётчик стабильно == 1.
+        // БЕЗ Unwrap() все 4 публикации стартанули бы параллельно, в очереди оказалось
+        // бы 4 TCS, стабилизация на 1 не наступила бы, и мы получили бы понятный
+        // TimeoutException вместо «не совпали последовательности».
+        // Окно 100 мс под ThreadPool голоданием — компромисс: стабилизация сама дотянется,
+        // пока счётчик не перестанет меняться (а `Task.Delay(50)` мог ложно-зелёным пройти,
+        // если за 50 мс успела дойти только первая публикация — стабилизация 5x20ms=100ms
+        // ловит это надёжнее).
+        await WaitForStableAsync(
+            sample: () => PendingReleasesCount(pendingReleases, queueLock),
+            expected: 1,
+            stableReadings: 5,
+            intervalMs: 20,
+            timeoutMs: 10_000,
+            description: "PendingReleasesCount должен стабильно == 1: без Unwrap() в очереди было бы 4 TCS");
 
         PendingReleasesCount(pendingReleases, queueLock).Should().Be(1,
             "следующая публикация должна ждать завершения предыдущей — иначе без Unwrap() 4 рассылки стартанули бы параллельно");
 
-        // Последовательно освобождаем каждую рассылку и проверяем, что счётчик растёт
-        while (true)
+        // Последовательно освобождаем каждую рассылку и проверяем, что счётчик растёт.
+        // Бюджет 10 с: тест делает четыре цикла «освободить TCS → дождаться события», и
+        // под голодающим ThreadPool на полном прогоне (6383 теста) дефолтные 2 с выедались
+        // целиком. На зелёном пути это не замедляет прогон — выход по условию, а не по
+        // таймеру.
+        //
+        // Перед каждым Dequeue ждём, что в очереди есть TCS: с Unwrap() следующая
+        // публикация стартует только после завершения предыдущей, и под нагрузкой пула
+        // между Release#N и стартом ВНУТРЕННЕЙ задачи публикации N+1 проходит заметное
+        // время — без явного ожидания цикл может выйти, посчитав очередь пустой, и
+        // финальный WaitForAsync(Count == 4) сорвётся с честным «не дождались».
+        while (PresenceOf(sent).Count < 4)
         {
+            await WaitForAsync(
+                () => PendingReleasesCount(pendingReleases, queueLock) >= 1,
+                timeoutMs: 10_000,
+                description: "перед Release в очереди должен быть TCS — следующая публикация ещё не стартовала");
+
             var countBefore = PresenceOf(sent).Count;
             TaskCompletionSource<bool>? tcsToRelease;
             lock (queueLock)
@@ -276,12 +312,11 @@ public class StructuredBgEventsTests : IDisposable
                 tcsToRelease = pendingReleases.Dequeue();
             }
             tcsToRelease.SetResult(true);
-            await WaitForAsync(() => PresenceOf(sent).Count > countBefore);
+            await WaitForAsync(
+                () => PresenceOf(sent).Count > countBefore,
+                timeoutMs: 10_000,
+                description: "после Release#N должен появиться следующий presence");
         }
-
-        // Защита от того, что Count >= 4 поймал бы промежуточное состояние:
-        // после Release#4 sent.Count == 4, но PresenceTail.IsCompleted может ещё не стать true
-        await WaitForAsync(() => PresenceOf(sent).Count == 4);
 
         PresenceOf(sent).Select(m => m.Active).Should().Equal([true, false, true, false]);
     }
@@ -393,12 +428,61 @@ public class StructuredBgEventsTests : IDisposable
     }
 
     // Завершение через структурный/текстовый путь шлёт bg_agent_done из fire-and-forget
-    // Task.Run — ждём появления сообщения вместо фиксированной паузы
-    private static async Task WaitForAsync(Func<bool> condition, int timeoutMs = 2000)
+    // Task.Run — ждём появления сообщения вместо фиксированной паузы. Таймаут молча
+    // НЕ выходит: иначе тест падает на ассерте с сообщением про «не совпали
+    // последовательности», а настоящая причина «не дождались» теряется (CI-флак
+    // БыстрыеСменыСостояния_ДоставляютсяВПорядкеСмены в master как раз был таким).
+    // [CallerArgumentExpression] подставляет выражение condition строкой, чтобы при
+    // таймауте сразу было видно, какое именно условие не дождались.
+    private static async Task WaitForAsync(
+        Func<bool> condition,
+        int timeoutMs = 2000,
+        string? description = null,
+        [CallerArgumentExpression(nameof(condition))] string? conditionExpression = null)
     {
         var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
-        while (!condition() && DateTime.UtcNow < deadline)
+        while (!condition())
+        {
+            if (DateTime.UtcNow >= deadline)
+                throw new TimeoutException(
+                    $"Условие не выполнилось за {timeoutMs} мс: {description ?? conditionExpression ?? "<no description>"}");
             await Task.Delay(10);
+        }
+    }
+
+    // Детерминированная замена `await Task.Delay(N)`: ждём, пока sample() вернёт expected
+    // подряд stableReadings раз с интервалом intervalMs. Используется вместо фиксированной
+    // паузы там, где нужно дать планировщику пула шанс — но без ложно-зелёного на
+    // медленном CI (стабилизация сама дотянется, пока счётчик не перестанет меняться).
+    private static async Task WaitForStableAsync(
+        Func<int> sample,
+        int expected,
+        int stableReadings,
+        int intervalMs,
+        int timeoutMs,
+        string description)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        int lastValue = int.MinValue;
+        int stableCount = 0;
+        while (DateTime.UtcNow < deadline)
+        {
+            var current = sample();
+            if (current == expected && current == lastValue)
+            {
+                stableCount++;
+                if (stableCount >= stableReadings) return;
+            }
+            else
+            {
+                stableCount = current == expected ? 1 : 0;
+                lastValue = current;
+            }
+            await Task.Delay(intervalMs);
+        }
+        throw new TimeoutException(
+            $"Счётчик не стабилизировался на {expected} за {timeoutMs} мс: {description}. " +
+            $"Текущее значение: {sample()}");
     }
 
     // --- 1. task_started регистрирует фоновую задачу как активную ---

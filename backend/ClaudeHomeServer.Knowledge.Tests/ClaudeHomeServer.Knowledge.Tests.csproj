@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk.Web">
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -33,5 +33,15 @@
     <PackageReference Include="FluentAssertions" Version="6.12.2" />
     <PackageReference Include="Moq" Version="4.20.72" />
   </ItemGroup>
+
+  <!-- Notes: динамический модуль — dll в modules/notes/ для ModuleLoader (тот же паттерн,
+       что в ClaudeHomeServer.Tests и CodeGraph.Tests). Без DLL ModuleLoader не находит
+       NotesSubsystem.Register, форвардер NotesKnowledgeService → IKnowledgeSyncParticipant
+       не регистрируется, и Program_RegistersKnowledgeSubsystem видит 4 участника вместо 5. -->
+  <Target Name="CopyNotesModuleForTests" AfterTargets="Build">
+    <Copy SourceFiles="..\ClaudeHomeServer.Notes\bin\$(Configuration)\net10.0\ClaudeHomeServer.Notes.dll"
+          DestinationFolder="$(OutDir)modules\notes" SkipUnchangedFiles="true"
+          Condition="Exists('..\ClaudeHomeServer.Notes\bin\$(Configuration)\net10.0\ClaudeHomeServer.Notes.dll')" />
+  </Target>
 
 </Project>

@@ -434,6 +434,13 @@ public class ClaudeSession : ILlmSessionAdapter
         // Interlocked.Exchange. Стартовый 0 = «фона нет»: на пустом прогоне мутации набора
         // ничего не публикуют, как и раньше.
         public int BgPresencePublished;
+        // Хвост цепочки рассылки bg_agents_presence: каждая публикация цепляется к текущему
+        // хвосту под локом (PendingBg), и `_onMessage` всегда вызывается ПОСЛЕ предыдущей —
+        // иначе ThreadPool выполнял бы параллельные Task.Run в произвольном порядке и события
+        // приходили клиенту вперемешку (инцидент 2026-09-14: значок агентов горел часами).
+        // ContinueWith под локом только регистрирует колбэк; сам колбэк отрабатывает ВНЕ
+        // лока, поэтому обратный порядок двух локов с _onMessage не возникает.
+        public Task PresenceTail = Task.CompletedTask;
 
         public static TaskCompletionSource NewTcs() =>
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -5105,25 +5112,54 @@ public class ClaudeSession : ILlmSessionAdapter
     // ведут семь разных путей (текстовый TrackBgLaunch, структурные task_started /
     // task_notification / background_tasks_changed, TaskOutput, финализация прогона).
     //
-    // Звать СТРОГО вне lock (PendingBg): рассылка уходит в SessionManager, а тот под своим
-    // _saveLock сериализует сессии — держать наш лок в этот момент значило бы выстроить два
-    // лока в противоположном порядке. HasPendingBg берёт лок сам, на мгновение.
+    // ПОРЯДОК ДОСТАВКИ — ИНВАРИАНТ: фронт (agentsPresence.setPresence) применяет событие
+    // безусловно, без версии, поэтому если два события одного прогона (true, затем false)
+    // доставлены в обратном порядке, клиент останется в true — следующего события не будет,
+    // значок агентов залипнет до перезагрузки списка. Раньше рассылка шла через независимые
+    // `_ = Task.Run(...)`, и ThreadPool под нагрузкой выполнял их в произвольном порядке.
+    //
+    // Решение — последовательная цепочка публикаций на CliRun: под локом (PendingBg) ВПРИТЫК
+    // к вычислению state добавляем колбэк к `PresenceTail` через ContinueWith. Лок держит
+    // обе операции атомарно (порядок вычисления И порядок постановки в очередь одинаковы),
+    // а сам колбэк отрабатывает ВНЕ лока — поэтому SessionManager._saveLock не образует с
+    // нашим локом пару в обратном порядке (HasPendingBg берёт лок сам, на мгновение).
     private void PublishBgPresence(CliRun run)
     {
-        var agents = run.HasTrackedBg;
-        var command = run.HasTrackedCommandBg;
-        // Оба вида в одном гейте: у чата с агентом И дев-сервером завершение агента меняет
-        // только первый бит, и раздельные гейты слали бы два события об одном состоянии
-        var state = (agents ? 1 : 0) | (command ? 2 : 0);
-        if (Interlocked.Exchange(ref run.BgPresencePublished, state) == state) return;
-        _ = Task.Run(async () =>
+        bool agents, command;
+        int state;
+        lock (run.PendingBg)
         {
-            try { await _onMessage(new BgAgentsPresenceMessage(agents, command)); }
-            catch (Exception ex)
+            agents = run.HasTrackedBg;
+            command = run.HasTrackedCommandBg;
+            // Оба вида в одном гейте: у чата с агентом И дев-сервером завершение агента меняет
+            // только первый бит, и раздельные гейты слали бы два события об одном состоянии
+            state = (agents ? 1 : 0) | (command ? 2 : 0);
+            if (run.BgPresencePublished == state) return;
+            // Сначала видимое состояние (тест и внешние наблюдатели читают через
+            // Interlocked/Volatile), потом цепочка — иначе наблюдатель мог бы увидеть
+            // новое состояние раньше, чем публикация поставлена в очередь.
+            Interlocked.Exchange(ref run.BgPresencePublished, state);
+            // ContinueWith только регистрирует колбэк; сам он отработает после `prev` —
+            // последовательная цепочка, FIFO на уровне прогона гарантирован.
+            var prev = run.PresenceTail;
+            // async-колбэк + Unwrap(): следующая публикация стартует строго после ВНУТРЕННЕЙ
+            // рассылки (порядок доставки сохраняется), при этом поток пула не блокируется на
+            // время рассылки — раньше `GetAwaiter().GetResult()` на `_onMessage` занимал
+            // поток на всю длительность записи под SessionManager._saveLock (sessions.json на
+            // проде — 1.7 МБ), а публикаций присутствия на одной смене состояния — семь путей
+            var next = prev.ContinueWith(async _ =>
             {
-                Console.Error.WriteLine($"[ClaudeSession] bg_agents_presence не разослан: {ex.Message}");
-            }
-        });
+                try
+                {
+                    await _onMessage(new BgAgentsPresenceMessage(agents, command));
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"[ClaudeSession] bg_agents_presence не разослан: {ex.Message}");
+                }
+            }, TaskScheduler.Default).Unwrap();
+            run.PresenceTail = next;
+        }
     }
 
     // Этот tool_use — фоновый агент, который только запустился и ещё работает? Учёт ведут

@@ -221,6 +221,71 @@ public class StructuredBgEventsTests : IDisposable
         PresenceOf(sent).Select(m => m.Active).Should().Equal([true, false]);
     }
 
+    // Сторож ИНВАРИАНТА упорядочивания: серия быстрых смен состояния приходит клиенту в том
+    // же порядке, в каком менялось состояние. До упорядочивания (PublishBgPresence через
+    // `_ = Task.Run(...)`) ThreadPool под нагрузкой мог выполнить задачи в произвольном
+    // порядке — `[true,false,true,false]` доезжало как `[false,true,false,true]`, клиент
+    // оставался в `true` после последней смены, и значок агентов залипал до перезагрузки
+    // списка (инцидент 2026-09-14, см. комментарий выше). Четыре быстрые смены — предел
+    // реалистичного сценария: при запуске-и-завершении пары агентов подряд пути учёта
+    // (TrackBgLaunch, task_started, task_notification, background_tasks_changed) могут
+    // вызывать PublishBgPresence в любой последовательности на потоках ридера.
+    [Fact]
+    public async Task БыстрыеСменыСостояния_ДоставляютсяВПорядкеСмены()
+    {
+        // Стенд с async-воронкой: OnMessage создаёт TCS, кладёт в очередь, ждёт и только
+        // после await добавляет сообщение в sent. Это имитирует реальный IO (сеть клиента),
+        // при котором клиент видит событие только после завершения await.
+        //
+        // БЕЗ Unwrap() в PublishBgPresence: каждая публикация создаёт ContinueWith, который
+        // ставится в очередь ЗА await OnMessage. Все 4 ContinueWith выполняются подряд,
+        // пока первый await ещё ждёт — в очереди pendingReleases окажется 4 TCS, не 1.
+        // С Unwrap() цепочка склеивается: следующий вызов PublishBgPresence ждёт завершения
+        // предыдущего, и в очереди всегда ровно 1 TCS.
+        //
+        // Ожидание Count > countBefore после каждого Release, а не Count >= 4 в конце:
+        // первое поймало бы промежуточное состояние и стало источником флака на CI
+        // (ThreadPool может выполнить ContinueWith после проверки условия, но до ассерта).
+        // Второе требует доказательства, что ВСЕ рассылки завершились — после Release#4
+        // sent.Count == 4, но PresenceTail.IsCompleted может ещё не стать true,
+        // особенно без Unwrap().
+        var (session, sent, pendingReleases, queueLock) = NewClaudeSessionWithAsyncSink();
+        var run = NewRun();
+
+        InvokeHandleTaskStarted(session, run, AgentStarted("t1", "toolu_1"));
+        InvokeHandleBackgroundTasksChanged(session, run, El("""{"tasks":[]}"""));
+        InvokeHandleTaskStarted(session, run, AgentStarted("t2", "toolu_2"));
+        InvokeHandleBackgroundTasksChanged(session, run, El("""{"tasks":[]}"""));
+
+        // Дождаться, что хотя бы одна публикация стартовала — без этого любые ассерты
+        // ниже race'или бы с пустой очередью
+        await WaitForAsync(() => PendingReleasesCount(pendingReleases, queueLock) >= 1);
+        await Task.Delay(50); // дать планировщику пула запустить всё, что могло стартануть
+
+        PendingReleasesCount(pendingReleases, queueLock).Should().Be(1,
+            "следующая публикация должна ждать завершения предыдущей — иначе без Unwrap() 4 рассылки стартанули бы параллельно");
+
+        // Последовательно освобождаем каждую рассылку и проверяем, что счётчик растёт
+        while (true)
+        {
+            var countBefore = PresenceOf(sent).Count;
+            TaskCompletionSource<bool>? tcsToRelease;
+            lock (queueLock)
+            {
+                if (pendingReleases.Count == 0) break;
+                tcsToRelease = pendingReleases.Dequeue();
+            }
+            tcsToRelease.SetResult(true);
+            await WaitForAsync(() => PresenceOf(sent).Count > countBefore);
+        }
+
+        // Защита от того, что Count >= 4 поймал бы промежуточное состояние:
+        // после Release#4 sent.Count == 4, но PresenceTail.IsCompleted может ещё не стать true
+        await WaitForAsync(() => PresenceOf(sent).Count == 4);
+
+        PresenceOf(sent).Select(m => m.Active).Should().Equal([true, false, true, false]);
+    }
+
     [Fact]
     public void ПослеПустогоСнэпшота_НоваяЗадачаСноваЗажигаетЗначок()
     {
@@ -257,6 +322,52 @@ public class StructuredBgEventsTests : IDisposable
             PermissionRules: null,
             TasksMcp: null);
         return (new ClaudeSession(new Session(), context), sent);
+    }
+
+    // Стенд с async-воронкой для тестирования упорядочивания публикаций.
+    // Существующий NewClaudeSession делает OnMessage синхронным (lock → add → return CompletedTask),
+    // поэтому PublishBgPresence с ContinueWith без Unwrap() выполняется быстро и ассерт
+    // Count >= 4 проходит — ThreadPool не успевает намешать порядок.
+    //
+    // Этот стенд ловит отсутствие Unwrap(): OnMessage создаёт TCS, кладёт его в очередь,
+    // ждёт await, и только после завершения добавляет сообщение в sent. Без Unwrap()
+    // все 4 ContinueWith (по одному на каждую смену состояния) стартуют подряд, пока
+    // первый await ещё спит — в очереди pendingReleases окажется 4 TCS, не 1.
+    // С Unwrap() цепочка склеивается: следующий вызов ждёт завершения предыдущего,
+    // и в очереди всегда ровно 1 TCS.
+    private static (ClaudeSession Session, List<ServerMessage> Sent, Queue<TaskCompletionSource<bool>> PendingReleases, object QueueLock) NewClaudeSessionWithAsyncSink()
+    {
+        var sent = new List<ServerMessage>();
+        var pendingReleases = new Queue<TaskCompletionSource<bool>>();
+        var queueLock = new object();
+        var context = new LlmSessionContext(
+            RootPath: Path.GetTempPath(),
+            OnMessage: async msg =>
+            {
+                var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                lock (queueLock)
+                {
+                    pendingReleases.Enqueue(tcs);
+                }
+                await tcs.Task;
+                lock (sent)
+                {
+                    sent.Add(msg);
+                }
+            },
+            RawSystemPrompt: null,
+            BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
+            PermissionRules: null,
+            TasksMcp: null);
+        return (new ClaudeSession(new Session(), context), sent, pendingReleases, queueLock);
+    }
+
+    private static int PendingReleasesCount(Queue<TaskCompletionSource<bool>> q, object lockObj)
+    {
+        lock (lockObj)
+        {
+            return q.Count;
+        }
     }
 
     private static void InvokeHandleTaskStarted(ClaudeSession session, object run, JsonElement root) =>

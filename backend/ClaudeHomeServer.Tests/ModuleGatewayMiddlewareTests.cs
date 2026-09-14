@@ -1,5 +1,6 @@
 using System.IdentityModel.Tokens.Jwt;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Modules;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -41,7 +42,16 @@ public class ModuleGatewayMiddlewareTests
         services.AddSingleton<ModuleRegistry>();
         services.AddSingleton<JwtService>();
         services.AddSingleton<UserStore>();
+        // ModuleGatewayMiddleware резолвит пользователя через шов IUserStore (Core).
+        // В тесте это тот же UserStore — он реализует IUserStore.
+        services.AddSingleton<IUserStore>(sp => sp.GetRequiredService<UserStore>());
+        // Шов JwtService → IUserTokenValidator: в проде регистрируется в Program.cs
+        // как singleton; в тесте собираем вручную поверх того же JwtService.
+        services.AddSingleton<IUserTokenValidator>(sp => new JwtValidatorGateway(sp.GetRequiredService<JwtService>()));
         services.AddSingleton<FeatureFlagService>();
+        // Шов FeatureFlagService → IModuleFeatureFlagReader: в проде регистрируется
+        // в Program.cs как singleton; в тесте собираем вручную поверх того же сервиса.
+        services.AddSingleton<IModuleFeatureFlagReader>(sp => new FeatureFlagGateway(sp.GetRequiredService<FeatureFlagService>()));
         services.AddSingleton<ModuleTokenService>();
         return services.BuildServiceProvider();
     }

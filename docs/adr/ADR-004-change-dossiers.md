@@ -13,7 +13,8 @@
 [PersonaMemoryService](../../backend/ClaudeHomeServer/Services/PersonaMemoryService.cs)
 (`BuildRecallAsync` — точка врезки в промпт),
 [GitCommitTriggerSource](../../backend/ClaudeHomeServer/Services/TriggerSources/GitCommitTriggerSource.cs)
-(образец детекции коммитов), [GitService](../../backend/ClaudeHomeServer/Services/Git/GitService.cs),
+(образец детекции коммитов), [GitService](../../backend/ClaudeHomeServer.Git/Services/Git/GitService.cs)
+(вертикаль вынесена в отдельную сборку Этапом 3),
 [CheapTextRunner](../../backend/ClaudeHomeServer/Services/Llm/CheapTextRunner.cs),
 [BackupPaths](../../backend/ClaudeHomeServer/Services/Backup/BackupPaths.cs).
 

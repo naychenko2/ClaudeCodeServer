@@ -2,6 +2,7 @@ using System.Text.Json;
 using ClaudeHomeServer.Controllers;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Modules;
 using Microsoft.AspNetCore.Builder;
@@ -58,6 +59,9 @@ public class ModuleHostChannelTests
         services.AddSingleton<ModuleRegistry>();
         services.AddSingleton<UserStore>();
         services.AddSingleton<FeatureFlagService>();
+        // Шов FeatureFlagService → IModuleFeatureFlagReader: в проде регистрируется
+        // в Program.cs как singleton; в тесте собираем вручную поверх того же сервиса.
+        services.AddSingleton<IModuleFeatureFlagReader>(sp => new FeatureFlagGateway(sp.GetRequiredService<FeatureFlagService>()));
         services.AddSingleton<ModuleTokenService>();
         var sp = services.BuildServiceProvider();
         return (sp, sp.GetRequiredService<ModuleRegistry>().Get(id)!);

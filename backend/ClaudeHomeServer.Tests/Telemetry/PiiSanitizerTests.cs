@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using ClaudeHomeServer.Core.Telemetry;
 using ClaudeHomeServer.Telemetry;
 using FluentAssertions;
 using Xunit;

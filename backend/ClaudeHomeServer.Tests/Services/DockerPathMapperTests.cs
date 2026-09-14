@@ -1,3 +1,4 @@
+using System.Reflection;
 using ClaudeHomeServer.Services.Execution;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -78,6 +79,95 @@ public class DockerPathMapperTests
         act.Should().Throw<InvalidOperationException>();
     }
 
+    // СТОРОЖ правила SystemPrompts: DockerPathMapper обязан мочь замапить путь в
+    // /app/SystemPrompts. Без правила ToRuntime бросает InvalidOperationException,
+    // второй catch в ClaudeSession.BuildArgs снимает BareMode тихо — ход провайдера
+    // уходит по полной CLAUDE.md. Сторож: мутация удаления правила SystemPrompts
+    // → этот тест красный. Наличие каталога на диске НЕ проверяем: правило
+    // добавляется безусловно (DockerPathMapper.Add), ToHost/CanMap работают только
+    // по списку правил.
+    [Fact]
+    public void ToRuntime_ФайлКартыBareMode_МапитсяВАппSystemPrompts()
+    {
+        var m = Make();
+        var runtimeRoot = m.ToHost("/app/SystemPrompts");
+        runtimeRoot.TrimEnd(Path.DirectorySeparatorChar)
+            .Should().Be(Path.Combine(AppContext.BaseDirectory, "SystemPrompts").TrimEnd(Path.DirectorySeparatorChar),
+                "правило SystemPrompts обязано быть в DockerPathMapper; иначе второй catch " +
+                "в ClaudeSession.BuildArgs будет ловить ToRuntime на каждом container-владельце");
+    }
+
+    [Fact]
+    public void CanMap_ПутьКSystemPrompts_True()
+    {
+        // Защита от Medium-2 регрессии: правило SystemPrompts существует — CanMap
+        // для пути внутри него возвращает true (а не false). Без правила CanMap
+        // вернул бы false и optional-пути (--add-dir на SystemPrompts) молча
+        // отбрасывались. Наличие файла на диске НЕ проверяем.
+        var m = Make();
+        var sysPrompts = Path.Combine(AppContext.BaseDirectory, "SystemPrompts", "CLAUDE-local.md");
+        m.CanMap(sysPrompts).Should().BeTrue(
+            "правило SystemPrompts обязано быть в DockerPathMapper; без него CanMap вернёт false");
+    }
+
     // Достаём хостовый корень /projects через ToHost (внутренние правила приватны)
     private static string RootProjectsHost(DockerPathMapper m) => m.ToHost("/projects");
+
+    // СТОРОЖ отсутствия дубля правила SystemPrompts: на /app/SystemPrompts должно быть
+    // РОВНО одно правило в _rules. Два правила на один runtime-путь ломают round-trip
+    // стабильность ToHost (первое всегда побеждает, репо-правило становится мёртвым
+    // кодом) — и это БЫЛО: до фикса в маппере висело репо-правило на 3 точки, которое
+    // ни ToRuntime, ни CanMap не достигали. Мутация «вернуть репо-правило с 5 точекми»
+    // → тест красный: в _rules теперь два правила с тем же runtime.
+    //
+    // Хост проверяется регуляркой /bin/<конфиг>/net10.0/SystemPrompts$ — на любой
+    // конфигурации сборки (Debug/Release) и на любой платформе (путь нормализуется
+    // заменой \\ → /).
+    [Fact]
+    public void Правила_НаSystemPrompts_РовноОдно()
+    {
+        var m = Make();
+        var rules = (List<(string Host, string Runtime)>)typeof(DockerPathMapper)
+            .GetField("_rules", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(m)!;
+        var systemPromptsRules = rules.Where(r => r.Runtime == "/app/SystemPrompts").ToList();
+        systemPromptsRules.Should().HaveCount(1,
+            "ровно одно правило для /app/SystemPrompts — два делают ToHost не round-trip-стабильным");
+        var hostPath = systemPromptsRules[0].Host.Replace('\\', '/');
+        // Фиксируем регрессию из логов 2026-09-05: SystemPrompts лежал в репо-правиле
+        // на 3 точки, и репо-правило становилось мёртвым кодом. Сейчас правило ОДНО
+        // и его хост — bin/<конфиг>/<TFM>/SystemPrompts. Защита от возврата репо-правила.
+        // TFM в шаблоне НЕ зашит: подъём net10.0 → net11.0 не должен краснить не по делу.
+        hostPath.Should().MatchRegex(@"/bin/[^/]+/[^/]+/SystemPrompts$",
+            "хостовый путь должен идти от AppContext.BaseDirectory бэкенда (bin/<конфиг>/<TFM>/SystemPrompts)");
+    }
+
+    // СТОРОЖ ПАРЫ «mount ↔ правило маппера»: SandboxManager монтирует хостовый каталог
+    // DefaultSystemPromptsHost() в /app/SystemPrompts, а DockerPathMapper переводит в
+    // /app/SystemPrompts хост своего правила. Стороны обязаны совпадать; расхождение
+    // ничем не ловится в рантайме — ToRuntime не бросит, mount отработает, а CLI в
+    // контейнере получит путь, которого там нет: «System prompt file not found», exit=1,
+    // ноль событий stream-json → Unreachable → ложная цепочка фолбэка у КАЖДОГО
+    // container-владельца при зелёных тестах (ревью 2026-09-06, M-1).
+    //
+    // Мутация любой из двух сторон (правка DefaultSystemPromptsHost или Add(...) в
+    // маппере) → этот тест красный.
+    [Fact]
+    public void ХостПравилаSystemPrompts_СовпадаетСМонтируемымSandboxManager()
+    {
+        var m = Make();
+        var rules = (List<(string Host, string Runtime)>)typeof(DockerPathMapper)
+            .GetField("_rules", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(m)!;
+        var ruleHost = rules.Single(r => r.Runtime == SandboxManager.SystemPromptsMount).Host;
+
+        // Нормализация как в DockerPathMapper.Add: полный путь без хвостового разделителя.
+        var mountedHost = Path.GetFullPath(SandboxManager.DefaultSystemPromptsHost())
+            .TrimEnd('\\', '/');
+
+        ruleHost.Should().Be(mountedHost,
+            "bind-mount в SandboxManager и правило перевода путей в DockerPathMapper обязаны " +
+            "указывать на ОДИН хостовый каталог — иначе --system-prompt-file уедет в путь, " +
+            "которого в контейнере нет");
+    }
 }

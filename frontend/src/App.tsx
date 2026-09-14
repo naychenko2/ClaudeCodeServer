@@ -6,9 +6,10 @@ import { ProjectListPage } from './pages/ProjectListPage'
 import { ChatsPage } from './pages/ChatsPage'
 import { WorkspacePage } from './pages/WorkspacePage'
 import type { HubTabValue } from './components/HubTabs'
-import { moduleIdOf } from './components/HubTabs'
+import { moduleIdOf, subsystemKeyOf, subsystemTabValue } from './components/HubTabs'
 import { ModuleScreen } from './components/modules/ModuleScreen'
 import { loadModules } from './lib/modules'
+import { loadSubsystemRemotes } from './lib/subsystems/registry'
 import { VideoFloat } from './features/video/VideoFloat'
 import { VideoStageFrame } from './features/video/VideoStageFrame'
 import { useVideoStage } from './lib/videoStage'
@@ -35,6 +36,8 @@ import { navPush, navReplace, parseHash, getNav, type NavSnapshot } from './lib/
 import { api } from './lib/api'
 import { idbClear } from './lib/idb'
 import { setAllFlags } from './lib/featureFlags'
+import { SUBSYSTEMS, isSubsystemEnabled, setAllSubsystems, useSubsystem } from './lib/subsystems'
+import { getSubsystem, getSubsystemTab } from './lib/subsystems/registry'
 import { setMeFromServer, clearMe, useMe } from './lib/defaultPersona'
 import { IntroChatPage, ProjectIntroChatPage, OPEN_INTRO_EVENT } from './features/onboarding/OnboardingPage'
 import { getWallReturn, isWallActive, setWallActive, setWallReturn } from './lib/wallMode'
@@ -43,7 +46,9 @@ import { setCtxThresholdsFromServer } from './lib/contextPrefs'
 import { useIsMobile } from './lib/breakpoints'
 import { loadModels } from './lib/models'
 import { CalendarPage } from './features/tasks/CalendarPage'
-import { NotesPage } from './features/notes/NotesPage'
+// Раздел «Заметки» приходит из реестра подсистем (manifest.tab, ленивый компонент):
+// прямой импорт страницы здесь больше не нужен — каркас резолвит его по ключу
+// раздела. См. lib/subsystems/registry.
 import { PersonasPage } from './features/personas/PersonasPage'
 import { ensureNotificationsSubscribed } from './lib/notifications'
 import { KnowledgePage } from './features/knowledge/KnowledgePage'
@@ -59,7 +64,16 @@ import { useUiInspector, setUiInspectorAdmin, wireUiInspectorHotkey } from './li
 import { UiInspectorOverlay } from './features/inspector/UiInspectorOverlay'
 
 const OPEN_PROJECT_KEY = 'cc_open_project'
+// Потолок ожидания MF-remote подсистем на старте (см. вызов loadSubsystemRemotes):
+// раздел подсистемы должен быть зарегистрирован до первого рендера, но недоступный
+// remote не имеет права задерживать вход в оболочку дольше этого срока.
+const SUBSYSTEM_REMOTES_WAIT_MS = 2_000
+
 const HUB_TAB_KEY = 'cc_hub_tab'
+// Значение вкладки подсистемы «Заметки» — динамическое (`subsystem:notes`), оно не
+// входит в union HubTab, а вставляется в таббар из реестра по manifest.order. Экранный
+// ключ навигации остаётся 'notes': деплинки #/notes и событие cc-open-note не меняются.
+const NOTES_TAB: HubTabValue = subsystemTabValue('notes')
 
 // Витрина дизайн-системы — dev-only. Открывается по #/ui-kit, в обход авторизации
 // и обычной навигации. import.meta.env.DEV → Vite DCE вычищает и компонент, и роут
@@ -151,12 +165,22 @@ export default function App() {
   // hash-диплинк приоритетнее, а без hash всегда открывается 'home'. Ключ HUB_TAB_KEY
   // теперь write-only (старт его НЕ читает) — записи по коду оставлены как навигационная
   // память для будущего, но на выбор стартового экрана не влияют.
+  // Гейт подсистемы «Заметки»: при выключенной notes (диплинк #/notes/#/notes/{id})
+  // ведём в «Чаты» — старый URL был открыт, когда подсистема ещё работала, и без
+  // fallback человек пришёл бы на пустую страницу с ошибкой. Стор к моменту
+  // useState обычно уже сидирован ответом /api/auth/me, но если нет (холодный старт
+  // без авторизации или первый кадр до резолва) — isSubsystemEnabled вернёт false
+  // по умолчанию, и это та же безопасная ветка.
+  // Плюс проверка регистрации в бандле: ключ с бэка приходит независимо от наличия
+  // фичи, и без неё диплинк #/notes после удаления features/notes вёл бы на пустоту.
+  const notesRegistered = getSubsystem('notes') !== undefined
+  const notesOnInit = isSubsystemEnabled(SUBSYSTEMS.notes) && notesRegistered
   const [hubTab, setHubTab] = useState<HubTabValue>(() => {
     if (initialHash?.screen === 'home') return 'home'
     if (initialHash?.screen === 'calendar') return 'calendar'
     if (initialHash?.screen === 'chats') return 'chats'
     if (initialHash?.screen === 'wall') return 'wall'
-    if (initialHash?.screen === 'notes') return 'notes'
+    if (initialHash?.screen === 'notes') return notesOnInit ? NOTES_TAB : 'chats'
     if (initialHash?.screen === 'personas') return 'personas'
     if (initialHash?.screen === 'specialties') return 'specialties'
     if (initialHash?.screen === 'knowledge') return 'knowledge'
@@ -167,7 +191,21 @@ export default function App() {
     if (initialHash?.screen === 'projects' || initialHash?.screen === 'project') return 'projects'
     return 'home'
   })
-  const effectiveHubTab: HubTabValue = hubTab
+  // Реактивный гейт подсистемы «Заметки»: подписка на стор ловит отключение
+  // админом на лету и уводит с раздела. Используется в seed-снимке, hashchange
+  // и switchHubTab ниже — единая точка правды, чтобы все три пути вели в «Чаты»
+  // одинаково. Регистрация в бандле (notesRegistered) — чтобы при удалённой фиче
+  // не осталось пилюли/раздела на пустой экран.
+  const notesOn = useSubsystem(SUBSYSTEMS.notes) && notesRegistered
+  const fallbackIfNotesOff = (t: HubTabValue): HubTabValue =>
+    (t === NOTES_TAB && !notesOn) ? 'chats' : t
+  const effectiveHubTab: HubTabValue = fallbackIfNotesOff(hubTab)
+  // Активный раздел-подсистема: если effectiveHubTab — подсистемная вкладка
+  // (`subsystem:{key}`), компонент берём из реестра ПО КЛЮЧУ (не только для Notes).
+  // Регистрация статична, читаем в рендере: undefined — раздел не зарегистрирован,
+  // ветка отрисует пустоту.
+  const activeSubsystemKey = subsystemKeyOf(effectiveHubTab)
+  const ActiveSubsystemTab = activeSubsystemKey ? getSubsystemTab(activeSubsystemKey) : undefined
 
   // Цвет титлбара окна (Chromium: meta[name=theme-color]): внутри открытого
   // проекта — фирменный цвет проекта, вне — акцент текущей темы. «Спящий»
@@ -305,7 +343,7 @@ export default function App() {
   // Целевая заметка передаётся через sessionStorage (cc_pending_note_title),
   // NotesPage подхватывает её при монтировании и по тому же событию.
   useEffect(() => {
-    const open = () => { localStorage.setItem(HUB_TAB_KEY, 'notes'); setHubTab('notes'); navToSection({ screen: 'notes' }) }
+    const open = () => { localStorage.setItem(HUB_TAB_KEY, NOTES_TAB); setHubTab(NOTES_TAB); navToSection({ screen: 'notes' }) }
     window.addEventListener('cc-open-note', open)
     return () => window.removeEventListener('cc-open-note', open)
   }, [])
@@ -432,6 +470,10 @@ export default function App() {
     api.auth.me()
       .then(me => {
         if (me?.featureFlags) setAllFlags(me.featureFlags)
+        // Стор подсистем — вход в раздел «Заметки» и панель проекта гейтятся
+        // useSubsystem('notes') (см. HubTabs, WorkspacePage). До прихода me
+        // стор пуст и useSubsystem возвращает false (fail-closed по умолчанию).
+        if (me.subsystems) setAllSubsystems(me.subsystems)
         setCtxThresholdsFromServer(me?.contextThresholds)
         // Стор дефолт-персоны/онбординга — от него живут приглашение первого входа
         // и резолвер аватаров
@@ -448,6 +490,25 @@ export default function App() {
         // Таймзона устройства — серверу для напоминаний (fire-and-forget)
         const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
         if (tz) api.auth.setTimeZone(tz).catch(() => {})
+        // MF-remote подсистем (пилот: notes) — ДОЖИДАЕМСЯ до первого рендера оболочки.
+        // Регистрация раздела асинхронная, а стартовый таб и диплинк считаются один раз
+        // в useState: без ожидания заход по #/notes и F5 в разделе «Заметки» уводили в
+        // «Чаты» (гейт notesRegistered ещё false), и вкладка появлялась лишь после
+        // следующего ре-рендера по чужой причине — реестр слотов подписок не имеет.
+        // Потолок ожидания: модуль не отвечает — стартуем без него (честная деградация),
+        // оболочка не должна висеть на недоступном remote.
+        return Promise.race([
+          loadSubsystemRemotes(),
+          new Promise<void>(resolve => setTimeout(resolve, SUBSYSTEM_REMOTES_WAIT_MS)),
+        ]).then(() => {
+          // Догоняем диплинк: стартовый таб считается в useState при монтировании,
+          // когда MF-remote ещё не зарегистрирован, и #/notes уходит в fallback «Чаты».
+          // Ждать регистрацию там нельзя (useState синхронен), поэтому восстанавливаем
+          // раздел здесь — но только если человек с fallback-таба никуда не ушёл сам.
+          if (initialHash?.screen !== 'notes') return
+          if (!isSubsystemEnabled(SUBSYSTEMS.notes) || getSubsystem('notes') === undefined) return
+          setHubTab(prev => (prev === 'chats' ? NOTES_TAB : prev))
+        })
       })
       .catch(() => { /* результат отразится в _online */ })
       .finally(() => {
@@ -493,7 +554,7 @@ export default function App() {
     // погасил бы uiKitMode, и витрина закрылась бы сразу после открытия.
     if (isDevUiKitHash()) return;
     if (isDevTeamPlanSimHash()) return;
-    const seed: NavSnapshot = { screen: hubTab === 'home' ? 'home' : hubTab === 'chats' ? 'chats' : hubTab === 'wall' ? 'wall' : hubTab === 'calendar' ? 'calendar' : hubTab === 'notes' ? 'notes' : hubTab === 'personas' ? 'personas' : hubTab === 'specialties' ? 'specialties' : hubTab === 'knowledge' ? 'knowledge' : hubTab === 'spend' ? 'spend' : hubTab === 'telemetry' ? 'telemetry' : hubTab === 'notifications' ? 'notifications' : 'projects' }
+    const seed: NavSnapshot = { screen: effectiveHubTab === 'home' ? 'home' : effectiveHubTab === 'chats' ? 'chats' : effectiveHubTab === 'wall' ? 'wall' : effectiveHubTab === 'calendar' ? 'calendar' : effectiveHubTab === NOTES_TAB ? 'notes' : effectiveHubTab === 'personas' ? 'personas' : effectiveHubTab === 'specialties' ? 'specialties' : effectiveHubTab === 'knowledge' ? 'knowledge' : effectiveHubTab === 'spend' ? 'spend' : effectiveHubTab === 'telemetry' ? 'telemetry' : effectiveHubTab === 'notifications' ? 'notifications' : 'projects' }
     // Диплинк #/notes/{id}: сохраняем заметку в снимок, иначе сид затрёт id в URL
     if (seed.screen === 'notes' && initialHash?.screen === 'notes') seed.note = initialHash.noteId ?? null
     // Диплинк #/personas/{id}: сохраняем персону в снимок, иначе сид затрёт id в URL
@@ -562,8 +623,15 @@ export default function App() {
         // Раздел «Календарь» — проект тоже «спит»
         if (hubTab !== 'calendar') { localStorage.setItem(HUB_TAB_KEY, 'calendar'); setHubTab('calendar') }
       } else if (s?.screen === 'notes') {
-        // Раздел «Заметки» — проект «спит»
-        if (hubTab !== 'notes') { localStorage.setItem(HUB_TAB_KEY, 'notes'); setHubTab('notes') }
+        // Раздел «Заметки» — проект «спит». Гейт подсистемы: при выключенной notes
+        // возвращаемся на «Чаты», чтобы Back не приводил на пустую страницу
+        if (!notesOn) {
+          localStorage.setItem(HUB_TAB_KEY, 'chats')
+          setHubTab('chats')
+        } else if (hubTab !== NOTES_TAB) {
+          localStorage.setItem(HUB_TAB_KEY, NOTES_TAB)
+          setHubTab(NOTES_TAB)
+        }
       } else if (s?.screen === 'personas') {
         // Раздел «Персоны» — проект «спит»
         if (hubTab !== 'personas') { localStorage.setItem(HUB_TAB_KEY, 'personas'); setHubTab('personas') }
@@ -742,7 +810,7 @@ export default function App() {
         case 'chats': next = 'chats'; break
         case 'wall': next = 'wall'; break
         case 'calendar': next = 'calendar'; break
-        case 'notes': next = 'notes'; break
+        case 'notes': next = notesOn ? NOTES_TAB : 'chats'; break
         case 'personas': next = 'personas'; break
         case 'specialties': next = 'specialties'; break
         case 'knowledge': next = 'knowledge'; break
@@ -785,6 +853,12 @@ export default function App() {
   // Переключатель раздела «Чаты | Проекты». НЕ сбрасывает открытый проект — он «спит»
   // при уходе в «Чаты» и восстанавливается при возврате в «Проекты» (навигационная память).
   const switchHubTab = (t: HubTabValue) => {
+    // Гейт подсистемной вкладки: если подсистема не зарегистрирована в бандле или
+    // выключена пользователю — ведём в «Чаты». Точка одна, покрывает все вызывающие
+    // (пилюлю, диплинк из уведомления, программный switchHubTabRef/hashchange).
+    // Обобщение прежнего жёсткого гейта notes: работает для любой подсистемы.
+    const subKey = subsystemKeyOf(t)
+    if (subKey && !(getSubsystem(subKey) !== undefined && isSubsystemEnabled(subKey))) t = 'chats'
     // Уход ИЗ зоны проектов (стена/воркспейс/список — все три живут на пилюле
     // «Проекты») в другой раздел — запоминаем режим: клик «Проекты» из другого
     // раздела вернёт именно туда, где были до ухода. Пишем до всех early-return
@@ -877,7 +951,7 @@ export default function App() {
     const moduleId = moduleIdOf(t)
     const dest: NavSnapshot = moduleId
       ? { screen: 'module', moduleId }
-      : ({ screen: t === 'home' ? 'home' : t === 'chats' ? 'chats' : t === 'wall' ? 'wall' : t === 'calendar' ? 'calendar' : t === 'notes' ? 'notes' : t === 'personas' ? 'personas' : t === 'specialties' ? 'specialties' : t === 'knowledge' ? 'knowledge' : t === 'spend' ? 'spend' : t === 'telemetry' ? 'telemetry' : t === 'notifications' ? 'notifications' : 'projects' } as NavSnapshot)
+      : ({ screen: t === 'home' ? 'home' : t === 'chats' ? 'chats' : t === 'wall' ? 'wall' : t === 'calendar' ? 'calendar' : t === NOTES_TAB ? 'notes' : t === 'personas' ? 'personas' : t === 'specialties' ? 'specialties' : t === 'knowledge' ? 'knowledge' : t === 'spend' ? 'spend' : t === 'telemetry' ? 'telemetry' : t === 'notifications' ? 'notifications' : 'projects' } as NavSnapshot)
     // Если на текущем табе открыто «глубокое» состояние (заметка/файл/задача/персона/база) — уходя,
     // сохраняем его в истории (navPush), чтобы Back вернул именно к нему. Уход С дашборда
     // «Домой» — тоже push: дашборд — хаб-центр, Back с любого раздела возвращает на него.
@@ -1015,8 +1089,8 @@ export default function App() {
     // Тот же канал, что у «открыть в заметках» из чата: cc_pending_note_id + cc-open-note.
     if (target?.screen === 'notes' && target.noteId) {
       sessionStorage.setItem('cc_pending_note_id', target.noteId)
-      if (effectiveHubTab === 'notes') window.dispatchEvent(new Event('cc-open-note'))
-      else switchHubTab('notes')
+      if (effectiveHubTab === NOTES_TAB) window.dispatchEvent(new Event('cc-open-note'))
+      else switchHubTab(NOTES_TAB)
       return
     }
     // Диплинк на базу знаний (#/knowledge/{id}) — событие knowledge_changed в ленте
@@ -1059,6 +1133,8 @@ export default function App() {
     if (target) {
       const dest: HubTabValue = target.screen === 'project' ? 'projects'
         : target.screen === 'module' ? `module:${target.moduleId ?? ''}` as HubTabValue
+        // Экранный ключ подсистемы 'notes' → динамическое значение вкладки из реестра
+        : target.screen === 'notes' ? NOTES_TAB
         : target.screen
       switchHubTab(dest)
       return
@@ -1193,8 +1269,12 @@ export default function App() {
             ? <WallPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
             : effectiveHubTab === 'calendar'
               ? <CalendarPage auth={auth} onLogout={logout} onHubTab={switchHubTab} onOpenTask={openTaskInProject} />
-            : effectiveHubTab === 'notes'
-              ? <NotesPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
+            : activeSubsystemKey
+              ? <Suspense fallback={<div style={{ minHeight: '100vh', background: C.bgMain }} />}>
+                  {ActiveSubsystemTab
+                    ? <ActiveSubsystemTab auth={auth} onLogout={logout} onHubTab={switchHubTab} />
+                    : null}
+                </Suspense>
             : effectiveHubTab === 'personas'
               ? <PersonasPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
             : effectiveHubTab === 'specialties'

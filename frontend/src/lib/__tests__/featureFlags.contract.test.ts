@@ -9,7 +9,7 @@ import { FLAGS } from '../featureFlags';
 // этот тест ловит рассинхрон при добавлении/переименовании флага.
 
 const here = dirname(fileURLToPath(import.meta.url));
-const csFile = resolve(here, '../../../../backend/ClaudeHomeServer/Models/FeatureFlag.cs');
+const csFile = resolve(here, '../../../../backend/ClaudeHomeServer.Core/Models/FeatureFlag.cs');
 
 function readBackendKeys(): string[] {
   const src = readFileSync(csFile, 'utf-8');

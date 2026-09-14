@@ -151,7 +151,7 @@ public class SessionMessagesController(SessionManager sessions, SessionMessaging
         // X-Agent-Depth — фолбэк глубины для прямых вызовов REST-канала без вызывателя.
         var agentDepth = Request.Headers.TryGetValue("X-Agent-Depth", out var dh)
             && int.TryParse(dh.FirstOrDefault(), out var d) ? Math.Max(0, d) : 0;
-        var caller = Request.Headers.TryGetValue(DenyOnDelegatedTurnAttribute.CallerHeader, out var ch)
+        var caller = Request.Headers.TryGetValue(McpEndpoints.CallerSessionHeader, out var ch)
             ? ch.FirstOrDefault() : null;
         var sender = Request.Headers.TryGetValue("X-Sender-Session-Id", out var sh)
             ? sh.FirstOrDefault() : null;

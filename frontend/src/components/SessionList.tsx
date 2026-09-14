@@ -12,6 +12,7 @@ import { usePersonas, usePersonasVersion } from '../lib/personas';
 import { createChatWithContextPersona } from '../lib/defaultPersona';
 import { showToast } from '../lib/toast';
 import { useFeature, FLAGS } from '../lib/featureFlags';
+import { useSubsystem } from '../lib/subsystems';
 import { ChatFilterResetActions } from './FilterBar';
 import { ChatListToolbar } from './ChatListToolbar';
 import { EmptyState } from './ui';
@@ -59,6 +60,10 @@ const orderBtnStyle = (disabled: boolean): React.CSSProperties => ({
 });
 
 export function SessionList({ project, activeSession, onSelect, onSessionUpdated, onSessionsChanged, onCleared, isMobile = false, workflowRunningFor, onTagsReorder, onAddToWall }: Props) {
+  // «Сохранить в заметки» доступно только при включённой подсистеме заметок — иначе
+  // кнопка/пункт в ChatCard уйдёт в архив не сохранённой, а карточка не получит
+  // ссылку SummaryNoteId (часть пункта меню «Сохранить в заметки» в ChatCard).
+  const notesOn = useSubsystem('notes');
   const online = useOnline();
   // История чата под курсором едет до клика — открытие обходится без спиннера
   const warmHover = useHoverWarm();
@@ -506,7 +511,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
           // Возврат из архива открывает чат и выводит список из архивного вида
           if (!archived) leaveArchiveAndOpen(s);
         } : undefined}
-        onSaveAsNote={online ? () => handleSaveAsNote(s) : undefined}
+        onSaveAsNote={online && notesOn ? () => handleSaveAsNote(s) : undefined}
         swipeOpen={openSwipeId === s.id}
         onSwipeToggle={open => setOpenSwipeId(open ? s.id : null)}
       />

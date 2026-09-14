@@ -32,7 +32,7 @@ public sealed class WatchToolset(
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/watch/{sessionId}. Константа —
     // единственная точка правды для URL конфига хода (ClaudeSession)
-    public const string ServerName = "watch";
+    public const string ServerName = McpEndpoints.WatchName;
 
     // Ответы — как у соседних тулсетов (JSON.stringify): camelCase, кириллица без \u
     private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web)
@@ -115,7 +115,7 @@ public sealed class WatchToolset(
 
     /// <summary>URL эндпоинта в конфиге хода: базовый адрес + маршрут тулсета с хвостом.</summary>
     public static string EndpointFor(string apiUrl, string sessionId) =>
-        McpHttpTransport.EndpointFor(apiUrl, ServerName) + "/" + sessionId;
+        McpEndpoints.EndpointFor(apiUrl, ServerName) + "/" + sessionId;
 
     // Один сегмент — id сессии; форма как у тулсетов волны 2 (белый список resumeSessionId)
     private static bool TryParseRoute(string? route, out string sessionId)

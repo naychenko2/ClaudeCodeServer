@@ -289,6 +289,10 @@ function ModePill({
   // «достать onClick из children», это было бы непрозрачно для будущих правок
   onTrailingClick,
   trailingTitle,
+  // Тон пилюли: 'active' — accent (по умолчанию), 'muted' — приглушённые токены
+  // (для пассивных/ждущих фаз, например ожидание цикла «до готово»). Новых цветов
+  // не вводим — фон C.bgInset, текст и иконка C.textMuted
+  tone = 'active',
 }: {
   isMobile?: boolean;
   icon: ReactNode;
@@ -304,11 +308,20 @@ function ModePill({
   name?: string;
   onTrailingClick?: () => void;
   trailingTitle?: string;
+  tone?: 'active' | 'muted';
 }) {
   // Высота пилюли. На компактной форме + мобила — сегменты 36×36 (тач-цель)
   const h = isMobile ? 30 : 28;
   const segW = compact && isMobile ? 36 : h;
   const xSegW = compact && isMobile ? 36 : 26;
+  // Тон: палитра приглушённого состояния собирается из существующих токенов —
+  // фон утопленный, акцент уступает приглушённому тексту
+  const pillBg = tone === 'muted' ? C.bgInset : C.accentLight;
+  const pillFg = tone === 'muted' ? C.textMuted : C.accent;
+  const pillHover = tone === 'muted' ? C.border : C.accentMuted;
+  const pillSeparator = tone === 'muted' ? C.border : C.accentMuted;
+  const pillXbg = tone === 'muted' ? C.border : C.accentMuted;
+  const pillXactive = tone === 'muted' ? C.bgInset : C.accentSoft;
 
   // Компактная пилюля: сегмент ✕ на постоянной заливке accentMuted — единственный
   // способ различить сегменты в тёмной теме, где волосяная граница accentMuted на
@@ -327,7 +340,7 @@ function ModePill({
         height: compact && isMobile ? 36 : h,
         maxWidth: maxWidth ?? '100%',
         borderRadius: R.pill, overflow: 'hidden', flexShrink: 0,
-        background: C.accentLight,
+        background: pillBg,
       }}
     >
       <button
@@ -336,19 +349,19 @@ function ModePill({
         aria-label={leadTitle}
         onClick={leadDisabled ? undefined : onLeadClick}
         disabled={leadDisabled}
-        onMouseEnter={e => { if (!leadDisabled && onLeadClick) e.currentTarget.style.background = C.accentMuted; }}
+        onMouseEnter={e => { if (!leadDisabled && onLeadClick) e.currentTarget.style.background = pillHover; }}
         onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
-        onFocus={e => { e.currentTarget.style.outline = `2px solid ${C.accent}`; e.currentTarget.style.outlineOffset = '-2px'; }}
+        onFocus={e => { e.currentTarget.style.outline = `2px solid ${pillFg}`; e.currentTarget.style.outlineOffset = '-2px'; }}
         onBlur={e => { e.currentTarget.style.outline = 'none'; }}
         // Тач у компактной пилюли: hover недоступен — нужен активный фон. CSS :active на
         // inline-стилях не работает, поэтому фон переключаем через pointer events
-        onPointerDown={e => { if (!leadDisabled && onLeadClick) (e.currentTarget as HTMLElement).style.background = C.accentMuted; }}
+        onPointerDown={e => { if (!leadDisabled && onLeadClick) (e.currentTarget as HTMLElement).style.background = pillHover; }}
         onPointerUp={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
         onPointerCancel={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
         style={{
           width: segW, flexShrink: 0, border: 'none', padding: 0,
-          borderRight: compact ? 'none' : `1px solid ${C.accentMuted}`,
-          background: 'transparent', color: C.accent,
+          borderRight: compact ? 'none' : `1px solid ${pillSeparator}`,
+          background: 'transparent', color: pillFg,
           cursor: leadDisabled || !onLeadClick ? 'default' : 'pointer',
           opacity: leadDisabled ? 0.4 : 1,
           display: 'flex', alignItems: 'center', justifyContent: 'center', outline: 'none',
@@ -367,7 +380,7 @@ function ModePill({
           style={{
             display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0,
             padding: '0 9px',
-            color: C.accent,
+            color: pillFg,
             fontSize: FS.xs, fontWeight: 600, whiteSpace: 'nowrap',
           }}
         >
@@ -380,7 +393,7 @@ function ModePill({
           style={{
             display: 'inline-flex', alignItems: 'center', minWidth: 0,
             padding: '0 2px 0 7px',
-            color: C.accent,
+            color: pillFg,
             fontSize: FS.xs, fontWeight: 600, whiteSpace: 'nowrap',
           }}
         >
@@ -393,13 +406,13 @@ function ModePill({
           aria-label={trailingTitle}
           title={trailingTitle}
           onClick={onTrailingClick}
-          // :active на тач-цели: временная заливка accentSoft, иначе hover-эквивалента нет
-          onPointerDown={e => { (e.currentTarget as HTMLElement).style.background = C.accentSoft; }}
-          onPointerUp={e => { (e.currentTarget as HTMLElement).style.background = C.accentMuted; }}
-          onPointerCancel={e => { (e.currentTarget as HTMLElement).style.background = C.accentMuted; }}
+          // :active на тач-цели: временная заливка pillXactive, иначе hover-эквивалента нет
+          onPointerDown={e => { (e.currentTarget as HTMLElement).style.background = pillXactive; }}
+          onPointerUp={e => { (e.currentTarget as HTMLElement).style.background = pillXbg; }}
+          onPointerCancel={e => { (e.currentTarget as HTMLElement).style.background = pillXbg; }}
           style={{
             width: xSegW, flexShrink: 0, border: 'none', padding: 0,
-            background: C.accentMuted, color: C.accent, cursor: 'pointer',
+            background: pillXbg, color: pillFg, cursor: 'pointer',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             transition: 'background 0.15s',
             touchAction: 'manipulation', WebkitTouchCallout: 'none',
@@ -1503,12 +1516,19 @@ export function Composer({
       icon={<RefreshCw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
       leadTitle="Остановить цикл «до готово»"
       onLeadClick={toggleWorkLoopSafe}
+      // Фаза ожидания рисуется приглушённой: координатор делегировал задачу и не
+      // тратит итерации, застывший N/M выглядел бы как зависание
+      tone={workLoop.phase === 'waiting' ? 'muted' : 'active'}
       valueTitle={workLoop.phase === 'verifying'
         ? 'Цикл «до готово»: верификационный ход'
-        : `Цикл «до готово»: итерация ${workLoop.iteration} из ${workLoop.maxIterations}`}
+        : workLoop.phase === 'waiting'
+          ? 'Цикл «до готово»: ожидание исполнителя'
+          : `Цикл «до готово»: итерация ${workLoop.iteration} из ${workLoop.maxIterations}`}
       value={workLoop.phase === 'verifying'
         ? (isMobile ? 'Проверка' : 'Цикл: верификация')
-        : (isMobile ? `${workLoop.iteration}/${workLoop.maxIterations}` : `Цикл: итерация ${workLoop.iteration}/${workLoop.maxIterations}`)}
+        : workLoop.phase === 'waiting'
+          ? (isMobile ? 'Ожидание' : 'Цикл: ожидание исполнителя')
+          : (isMobile ? `${workLoop.iteration}/${workLoop.maxIterations}` : `Цикл: итерация ${workLoop.iteration}/${workLoop.maxIterations}`)}
     />
   ) : null;
 
@@ -2110,10 +2130,19 @@ export function Composer({
   // Команда — когда механика выбрана, но в полосе её нет (например, кнопка «Обсудить»
   // уехала в «⋯» обычным ходом сворачивания — её значение короткое, sublabel —
   // единственное место, где оно видно, а дубль в существующее меню ничего не стоит)
+  // Подпись строки цикла в меню «⋯»: три фазы — ожидание, итерация, верификация.
+  // В фазе ожидания номер итерации НЕ показываем: он не растёт, и застывшая цифра
+  // читается как зависание. Тернарник из трёх веток плохо читается — вынесено рядом.
+  // phase допускает null: пилюля активна, а событие work_loop ещё не пришло
+  const workLoopSublabel = (phase: 'working' | 'waiting' | 'verifying' | null, iteration: number, maxIterations: number) =>
+    phase === 'verifying' ? 'Включено · верификация'
+      : phase === 'waiting' ? 'Включено · ожидание исполнителя'
+      : `Включено · итерация ${iteration}/${maxIterations}`;
+
   const activeModeItems = ([
-    loopInMenu && loopActive && workLoop && onToggleWorkLoop && { key: 'loop-on',
+    loopInMenu && loopActive && workLoop != null && onToggleWorkLoop && { key: 'loop-on',
       icon: <RefreshCw size={16} strokeWidth={ICON_STROKE} />, label: 'Цикл «до готово»',
-      sublabel: workLoop.phase === 'verifying' ? 'Включено · верификация' : `Включено · итерация ${workLoop.iteration}/${workLoop.maxIterations}`,
+      sublabel: workLoopSublabel(workLoop.phase, workLoop.iteration, workLoop.maxIterations),
       toggle: true, onClick: () => toggleWorkLoopSafe?.() },
     // Этап 2: бейдж «Командная реализация» в «⋯» как строка-свитч. Клик открывает тот же
     // поповер (выключение с подтверждением остаётся там, где было). Toggle отражает

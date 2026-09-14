@@ -44,7 +44,10 @@ public class PersonaAccessPolicyTests
     {
         var result = PersonaAccessPolicy.BuildExtraDisallowed(Make(tools: ["tasks", "notes"]));
 
-        result.Should().BeEquivalentTo(["WebSearch", "WebFetch"]);
+        // Продуктовый сервер веб-поиска — второй путь в интернет: выключенный «web»
+        // обязан резать и его, иначе тумблер персоны обходится через MCP
+        result.Should().BeEquivalentTo(["WebSearch", "WebFetch",
+            "mcp__websearch__web_search", "mcp__websearch__web_read"]);
     }
 
     [Fact]
@@ -71,7 +74,8 @@ public class PersonaAccessPolicyTests
 
         var result = PersonaAccessPolicy.BuildExtraDisallowed(persona);
 
-        result.Should().BeEquivalentTo(["WebSearch", "WebFetch", "Bash", "Edit"]);
+        result.Should().BeEquivalentTo(["WebSearch", "WebFetch",
+            "mcp__websearch__web_search", "mcp__websearch__web_read", "Bash", "Edit"]);
     }
 
     [Fact]

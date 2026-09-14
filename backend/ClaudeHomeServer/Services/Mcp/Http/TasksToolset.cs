@@ -2,11 +2,12 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Controllers;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Filters;
-using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
-using ClaudeHomeServer.Services;
-using Microsoft.AspNetCore.SignalR;
+using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Notes;
+using ClaudeHomeServer.Services.Tasks;
 
 namespace ClaudeHomeServer.Services.Mcp.Http;
 
@@ -39,14 +40,17 @@ public sealed class TasksToolset(
     PersonaManager personas,
     TaskExecutionService executor,
     TaskAiService ai,
-    NoteTaskSyncService noteSync,
     PersonaBindingsService bindings,
     SessionManager sessions,
-    IHubContext<SessionHub> hub) : IMcpParameterizedToolset
+    ISessionBroadcaster broadcaster,
+    // Подсистема Notes отключаемая: null — обратная запись в заметку-источник тихо
+    // пропускается (см. использование ниже, паритет с TasksController).
+    INoteTaskSync? noteSync = null) : IMcpParameterizedToolset
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/tasks/{sessionId}. Константа —
-    // единственная точка правды для URL конфига хода (ClaudeSession)
-    public const string ServerName = "tasks";
+    // единственная точка правды для URL конфига хода (ClaudeSession); живёт в Core
+    // (см. McpEndpoints.TasksName), здесь — алиас для удобства вызывающих в Main.
+    public const string ServerName = McpEndpoints.TasksName;
 
     // Дефолтные колонки доски: у проекта без кастомных и у личных задач. Category — enum,
     // глобальный camelCase-конвертер отдаёт его как "todo"/"inProgress"/"done" (как stdio)
@@ -207,6 +211,14 @@ public sealed class TasksToolset(
                     && TaskPersonaValidator.Error(personas, context.OwnerId, selfPersonaId, targetProjectId, extraScopes) is { } creatorError)
                     return Deny(creatorError);
 
+                // Дефект: гейты DefectRules.EnsureNotClosedAtCreate (статус/категория колонки)
+                // и EnsureReproOnReview (Role="review" у колонки ⇒ Repro.Steps обязателен).
+                // Колонку передаём целиком, чтобы TaskManager не воссоздавал заглушку —
+                // она уже у нас на руках из резолва выше, отдавать минимум данных неуместно
+                var targetColumn = project?.BoardColumns?.FirstOrDefault(c => c.Id == columnId);
+
+                // Outcome при создании не передаём — у CreateTaskRequest такого поля нет вовсе
+                // (исход дефекта принадлежит только UpdateTaskRequest)
                 var req = new CreateTaskRequest(
                     Title: title,
                     // Пустая строка едет как есть (паритет со stdio): OptionalArg превратил
@@ -229,9 +241,22 @@ public sealed class TasksToolset(
                     CreatedByPersonaId: selfPersonaId,
                     SourceSessionId: session.Id,
                     WorktreePath: OptionalArg(arguments, "worktreePath"),
-                    WorktreeBranch: OptionalArg(arguments, "worktreeBranch"));
-                var created = tasks.Create(targetProjectId, context.OwnerId, req);
-                await hub.BroadcastTaskChangedAsync(context.OwnerId, "created", created);
+                    WorktreeBranch: OptionalArg(arguments, "worktreeBranch"),
+                    // Вид карточки и шаги воспроизведения дефекта. null Kind — Task (дефолт)
+                    Kind: KindArg(arguments),
+                    Repro: ReproArg(arguments));
+                TaskItem created;
+                try
+                {
+                    created = tasks.Create(targetProjectId, context.OwnerId, req, targetColumn);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    // 400-семантика: гейт DefectRules (EnsureNotClosedAtCreate/EnsureReproOnReview)
+                    // — тот же текст, что в REST-контроллере, в Deny пробрасываем как есть
+                    return Deny(ex.Message);
+                }
+                await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("created", created));
                 return Json(created);
             }
 
@@ -263,16 +288,40 @@ public sealed class TasksToolset(
                     return Deny(ModelTiers.WireError);
 
                 var columnId = arguments.ContainsKey("columnId") ? StringArg(arguments, "columnId") : null;
-                var cat = columnId is null
-                    ? null
-                    : BoardColumnHelper.Category(
-                        targetProjectId is null ? null : projects.GetById(targetProjectId), columnId);
+                var targetProject = targetProjectId is null ? null : projects.GetById(targetProjectId);
+                var cat = columnId is null ? null : BoardColumnHelper.Category(targetProject, columnId);
+                // Дефект: колонка ревью ⇒ нужен Repro.Steps (EnsureReproOnReview). Колонка для
+                // гейта — та, в которой карточка ОКАЖЕТСЯ после Update: новая из req.columnId
+                // либо текущая (когда columnId не менялся — а review-колонка могла уже стоять).
+                // Без текущей колонки гейт не срабатывает на repro:{} для дефекта, уже стоящего
+                // в ревью (находка 2 ревью Глеба).
+                BoardColumn? effectiveColumn = null;
+                if (!string.IsNullOrEmpty(columnId))
+                    effectiveColumn = targetProject?.BoardColumns?.FirstOrDefault(c => c.Id == columnId);
+                else if (existing.ColumnId is not null && targetProject?.BoardColumns is { } currentColumns)
+                    effectiveColumn = currentColumns.FirstOrDefault(c => c.Id == existing.ColumnId);
                 var personaId = StringArg(arguments, "personaId");
                 // Скоупы назначаемой персоны, не вызывателя — как REST Update (блокер 2.1)
                 if (personaId.Length > 0
                     && TaskPersonaValidator.Error(personas, context.OwnerId, personaId, targetProjectId,
                         AssignedPersonaScopes(context.OwnerId, personaId)) is { } personaError)
                     return Deny(personaError);
+
+                // Дефект: вердикт. VerifiedAt/PersonaId подставляет сервер из сессии вызова —
+                // хвост-сессия уже изолирована по владельцу, её PersonaId даёт автора вердикта.
+                // null-сессия/персона (чат без персоны) → проверка человеком (PersonaId == null).
+                var verificationArg = VerificationArg(arguments);
+                var verificationEffective = verificationArg is null ? null : new TaskVerification
+                {
+                    Notes = verificationArg.Notes,
+                    VerifiedAt = DateTime.UtcNow,
+                    PersonaId = session.PersonaId,
+                };
+                // Outcome — поле только Defect (паспорт 432b6de2, проверка Д-3): обычная задача
+                // не получает Outcome ни при каком раскладе. Для kind=task (и «не передано» при
+                // существующей Task) отбрасываем значение на входе.
+                var kindEffective = KindArg(arguments) ?? existing.Kind;
+                var outcomeArg = kindEffective == TaskKind.Defect ? OutcomeArg(arguments) : null;
 
                 var wasDone = existing.Status == TaskItemStatus.Done;
                 var req = new UpdateTaskRequest(
@@ -297,21 +346,49 @@ public sealed class TasksToolset(
                     ExecutionExpiresAfterMinutes: NullableIntArg(arguments, "executionExpiresAfterMinutes"),
                     ModelTier: arguments.ContainsKey("modelTier") ? modelTier : null,
                     WorktreePath: arguments.ContainsKey("worktreePath") ? StringArg(arguments, "worktreePath") : null,
-                    WorktreeBranch: arguments.ContainsKey("worktreeBranch") ? StringArg(arguments, "worktreeBranch") : null);
-                var updated = tasks.Update(id, req);
-                if (updated is null) return Deny($"Задача {id} не найдена.");
-                await hub.BroadcastTaskChangedAsync(context.OwnerId, "updated", updated);
+                    WorktreeBranch: arguments.ContainsKey("worktreeBranch") ? StringArg(arguments, "worktreeBranch") : null,
+                    // Вид карточки, шаги воспроизведения, вердикт проверки и исход дефекта.
+                    // null/не передано = «не менять», как и для остальных полей update
+                    Kind: KindArg(arguments),
+                    Repro: arguments.ContainsKey("repro") ? ReproArg(arguments) : null,
+                    Verification: verificationEffective,
+                    Outcome: outcomeArg);
+                TaskItem updated;
+                try
+                {
+                    // Агентский путь (MCP): isAgentCall=true — гард против затирания
+                    // DroppedByHumanAt выдаёт внятный 400 вместо молчаливого 200 OK
+                    // (фикс-волна 4 team-blocker-honest)
+                    updated = tasks.Update(id, req, effectiveColumn, isAgentCall: true)
+                        ?? throw new InvalidOperationException($"Задача {id} не найдена");
+                }
+                catch (InvalidOperationException ex)
+                {
+                    // 400-семантика: гейт DefectRules + защита от затирания снятой задачи —
+                    // тот же текст, что в REST-контроллере; catch же ловит и наш «не найдена»
+                    // с подставленным id (см. ?? throw выше)
+                    return Deny(ex.Message);
+                }
+                await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("updated", updated));
 
                 // Завершение регулярной задачи → следующий экземпляр серии (тот же путь, что REST)
                 if (!wasDone && updated.Status == TaskItemStatus.Done && updated.Recurrence is not null)
                 {
                     var next = tasks.SpawnNextOccurrence(updated);
                     if (next is not null)
-                        await hub.BroadcastTaskChangedAsync(context.OwnerId, "created", next);
+                        await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("created", next));
                 }
                 // Обратная запись в заметку-источник: смена done-состояния ставит/снимает галочку
                 if (wasDone != (updated.Status == TaskItemStatus.Done))
-                    await noteSync.SyncTaskToNoteAsync(context.OwnerId, updated);
+                    await (noteSync?.SyncTaskToNoteAsync(context.OwnerId, updated) ?? Task.CompletedTask);
+                // Волна 1 team-blocker-honest: если у задачи открыт блокер — гасим по факту,
+                // координатор сам снял причину правкой постановки.
+                // S2 (фикс-волна): сигнал засчитывается только если вызывающая сессия — сам
+                // штаб (caller == task.SourceSessionId). Иначе вызов из чата исполнителя
+                // погасил бы карточку текстом «штаб переписал задачу» — действие приписано,
+                // которого не было.
+                FireResolveBlockerByTask(updated, session.Id,
+                    "штаб переписал задачу — блокер снят");
                 return Json(updated);
             }
 
@@ -320,18 +397,53 @@ public sealed class TasksToolset(
                 var id = StringArg(arguments, "id");
                 if (GetAccessible(context.OwnerId, projectId, allowed, id) is not { } task)
                     return Deny($"Задача {id} не найдена или недоступна в этом контексте.");
+                // Дефект: вердикт/исход. Автор вердикта берётся из сессии вызова (заголовок
+                // X-Caller-Session-Id на REST-пути, хвост-сессия здесь); null PersonaId у чата
+                // без персоны → человек проверяет лично.
+                var verificationArg = VerificationArg(arguments);
+                var verificationEffective = verificationArg is null ? null : new TaskVerification
+                {
+                    Notes = verificationArg.Notes,
+                    VerifiedAt = DateTime.UtcNow,
+                    PersonaId = session.PersonaId,
+                };
+                // Outcome — поле только Defect (паспорт 432b6de2, проверка Д-3); обычная задача
+                // не получает Outcome ни при каком раскладе.
+                var outcomeArg = task.Kind == TaskKind.Defect ? OutcomeArg(arguments) : null;
                 var wasDone = task.Status == TaskItemStatus.Done;
-                var updated = tasks.Update(id, new UpdateTaskRequest(
-                    Status: TaskItemStatus.Done,
-                    ResultMarkdown: arguments.ContainsKey("resultMarkdown") ? StringArg(arguments, "resultMarkdown") : null,
-                    LinkedFiles: arguments.ContainsKey("linkedFiles") ? LabelsArg(arguments, "linkedFiles") : null));
-                if (updated is null) return Deny($"Задача {id} не найдена.");
-                await hub.BroadcastTaskChangedAsync(context.OwnerId, "updated", updated);
+                TaskItem updated;
+                try
+                {
+                    updated = tasks.Update(id, new UpdateTaskRequest(
+                        Status: TaskItemStatus.Done,
+                        ResultMarkdown: arguments.ContainsKey("resultMarkdown") ? StringArg(arguments, "resultMarkdown") : null,
+                        LinkedFiles: arguments.ContainsKey("linkedFiles") ? LabelsArg(arguments, "linkedFiles") : null,
+                        Verification: verificationEffective,
+                        Outcome: outcomeArg),
+                        // Агентский путь (MCP): защита от затирания снятой задачи —
+                        // tasks_complete на снятой задаче вернёт 400 вместо молчаливого 200 OK
+                        isAgentCall: true)
+                        ?? throw new InvalidOperationException($"Задача {id} не найдена");
+                }
+                catch (InvalidOperationException ex)
+                {
+                    // 400-семантика: EnsureVerificationOnClose — дефект без вердикта и без
+                    // ClosedWithoutCheck. Передаём тот же текст, что REST-контроллер; catch
+                    // же ловит и наш «не найдена» с подставленным id (см. ?? throw выше)
+                    return Deny(ex.Message);
+                }
+                await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("updated", updated));
                 if (!wasDone && updated.Recurrence is not null
                     && tasks.SpawnNextOccurrence(updated) is { } next)
-                    await hub.BroadcastTaskChangedAsync(context.OwnerId, "created", next);
+                    await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("created", next));
                 if (wasDone != (updated.Status == TaskItemStatus.Done))
-                    await noteSync.SyncTaskToNoteAsync(context.OwnerId, updated);
+                    await (noteSync?.SyncTaskToNoteAsync(context.OwnerId, updated) ?? Task.CompletedTask);
+                // Волна 1 team-blocker-honest: задача-блокер закрыта координатором — гасим
+                // блокер по факту, стадия возвращается в работу.
+                // S2 (фикс-волна): caller == SourceSessionId — иначе правка из чата исполнителя
+                // гасит карточку «штаб закрыл задачу», приписанного действия нет
+                FireResolveBlockerByTask(updated, session.Id,
+                    "штаб закрыл задачу — блокер снят");
                 return Json(updated);
             }
 
@@ -339,15 +451,17 @@ public sealed class TasksToolset(
             {
                 // Анти-рекурсия — тот же гейт, что [DenyOnDelegatedTurn] на TasksController.
                 // Execute: fail-closed без вызывателя, запрет на делегированном и реакционном
-                // ходу, квоты team-implement/work-loop вместо запрета. Сессия — из хвоста
-                // (уже изолирована по владельцу), заголовку от клиента доверять нельзя.
-                // failOpenWhenUnknown: false формально недостижим (сессию резолвит TryResolve
-                // выше, пустого id сюда не доезжает) — fail-closed защита на будущее
+                // ходу, квота team-implement вместо запрета. Для обычного чата с циклом
+                // «до готово» квоты больше нет: лимит возвратов держит Iteration в
+                // ContinueWorkLoopAsync. Сессия — из хвоста (уже изолирована по владельцу),
+                // заголовку от клиента доверять нельзя. failOpenWhenUnknown: false формально
+                // недостижим (сессию резолвит TryResolve выше, пустого id сюда не доезжает)
+                // — fail-closed защита на будущее
                 var gate = DelegatedTurnGate.Decide(
                     sessions, context.OwnerId, session.Id,
                     "Запуск задачи на исполнение",
                     alsoWhenExecutorSuppressed: true,
-                    allowInTeamImplement: true, allowInWorkLoop: true,
+                    allowInTeamImplement: true,
                     failOpenWhenUnknown: false);
                 if (!gate.Allowed) return Deny(gate.DenyText!);
 
@@ -369,6 +483,12 @@ public sealed class TasksToolset(
                 try
                 {
                     var executed = await executor.ExecuteAsync(task, auto: false);
+                    // Волна 1 team-blocker-honest: координатор перезапустил исполнителя по
+                    // задаче-блокеру — гасим блокер по факту, стадия возвращается в работу.
+                    // S2 (фикс-волна): caller == SourceSessionId — иначе запуск из чата
+                    // исполнителя гасит карточку «штаб перезапустил исполнителя»
+                    FireResolveBlockerByTask(task, session.Id,
+                        "штаб перезапустил исполнителя — блокер снят");
                     return Json(new
                     {
                         id = executed.Id,
@@ -397,7 +517,7 @@ public sealed class TasksToolset(
                 if (GetAccessible(context.OwnerId, projectId, allowed, id) is not { } task)
                     return Deny($"Задача {id} не найдена или недоступна в этом контексте.");
                 tasks.Delete(id);
-                await hub.BroadcastTaskChangedAsync(context.OwnerId, "deleted", task);
+                await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("deleted", task));
                 return Text($"Задача {id} удалена.");
             }
 
@@ -410,9 +530,20 @@ public sealed class TasksToolset(
                 var subtasks = task.Subtasks
                     .Select(s => new UpdateSubtaskRequest(s.Id, s.Title, s.IsDone)).ToList();
                 subtasks.Add(new UpdateSubtaskRequest("", StringArg(arguments, "title"), false));
-                var updated = tasks.Update(taskId, new UpdateTaskRequest(Subtasks: subtasks));
+                // Дефект-в-Done с пустым verification бросает EnsureVerificationOnClose — здесь
+                // это не наша ошибка, а валидный запрет. Пробрасываем как Deny, чтобы клиент
+                // получил текст правила, а не 500 (находка minor-ревью Глеба).
+                TaskItem? updated;
+                try
+                {
+                    updated = tasks.Update(taskId, new UpdateTaskRequest(Subtasks: subtasks));
+                }
+                catch (InvalidOperationException ex)
+                {
+                    return Deny(ex.Message);
+                }
                 if (updated is null) return Deny($"Задача {taskId} не найдена.");
-                await hub.BroadcastTaskChangedAsync(context.OwnerId, "updated", updated);
+                await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("updated", updated));
                 return Json(updated);
             }
 
@@ -432,9 +563,17 @@ public sealed class TasksToolset(
                 var subtasks = task.Subtasks
                     .Select(s => Match(s) ? new UpdateSubtaskRequest(s.Id, s.Title, isDone) : new UpdateSubtaskRequest(s.Id, s.Title, s.IsDone))
                     .ToList();
-                var updated = tasks.Update(taskId, new UpdateTaskRequest(Subtasks: subtasks));
+                TaskItem? updated;
+                try
+                {
+                    updated = tasks.Update(taskId, new UpdateTaskRequest(Subtasks: subtasks));
+                }
+                catch (InvalidOperationException ex)
+                {
+                    return Deny(ex.Message);
+                }
                 if (updated is null) return Deny($"Задача {taskId} не найдена.");
-                await hub.BroadcastTaskChangedAsync(context.OwnerId, "updated", updated);
+                await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("updated", updated));
                 return Json(updated);
             }
 
@@ -474,7 +613,7 @@ public sealed class TasksToolset(
 
     /// <summary>URL эндпоинта в конфиге хода: базовый адрес + маршрут тулсета с хвостом.</summary>
     public static string EndpointFor(string apiUrl, string sessionId) =>
-        McpHttpTransport.EndpointFor(apiUrl, ServerName) + "/" + RouteTail(sessionId);
+        McpEndpoints.EndpointFor(apiUrl, ServerName) + "/" + RouteTail(sessionId);
 
     // Один сегмент — id сессии; форма как у resumeSessionId-белого списка (хвост строим мы,
     // но проверяем форму всё равно — он приезжает из URL)
@@ -615,6 +754,16 @@ public sealed class TasksToolset(
         recurrence = t.Recurrence is { Type: not TaskRecurrenceType.None } r ? r : null,
         t.Assignee,
         t.PersonaId, t.ProjectId, t.ColumnId, t.CompletedAt,
+        // Вид карточки: task — обычная, defect — дефект (правила DefectRules)
+        kind = t.Kind,
+        // Признак наличия вердикта: true, если дефект закрыт через Verification.
+        // Outcome == closedWithoutCheck (без Verification) выдаёт false: дизъюнкция закрытого
+        // дефекта опирается на Verification ИЛИ Outcome (DefectRules).
+        hasVerification = t.Verification is not null,
+        // Исход дефекта: closedWithoutCheck у закрытого внутренним путём, null — обычная
+        // задача или дефект, закрытый через verification. В списке отличим
+        // "закрыт без проверки" от "вообще закрыт без указания способа".
+        outcome = t.Outcome,
         t.Labels,
         subtasks = $"{t.Subtasks.Count(s => s.IsDone)}/{t.Subtasks.Count}",
     };
@@ -673,6 +822,38 @@ public sealed class TasksToolset(
                 Until = OptionalArg(rec, "until"),
             }
             : null;
+
+    // Вид карточки: enum задач/дефектов. null — ключа нет (не менять при update).
+    // При update принимает значения ровно из KindSchema — мусорные строки отбрасываем как
+    // «не передано» (парсер stdio-ветки делает то же самое).
+    private static TaskKind? KindArg(JsonObject arguments) =>
+        ParseEnum<TaskKind>(arguments, "kind");
+
+    // Шаги воспроизведения: парсим объект целиком (null, "", отсутствующие поля едут как null).
+    // null на update = «не менять» (как у RecurrenceArg). Допускается и пустой объект {} —
+    // клиент стёр шаги, дефект без Repro вполне валиден до попадания в review-колонку.
+    private static DefectRepro? ReproArg(JsonObject arguments) =>
+        arguments["repro"] is not JsonObject rep ? null : new DefectRepro
+        {
+            Steps = OptionalArg(rep, "steps"),
+            Expected = OptionalArg(rep, "expected"),
+            Actual = OptionalArg(rep, "actual"),
+        };
+
+    // Вердикт проверки дефекта: клиент шлёт только notes. VerifiedAt и PersonaId подставляет
+    // сервер из сессии вызова (X-Caller-Session-Id у REST-пути, хвост-сессия у MCP). null —
+    // ключа нет, не менять.
+    private static TaskVerification? VerificationArg(JsonObject arguments) =>
+        arguments["verification"] is not JsonObject ver ? null : new TaskVerification
+        {
+            Notes = OptionalArg(ver, "notes"),
+        };
+
+    // Исход дефекта: единственное допустимое значение — closedWithoutCheck. Прочее отбрасываем
+    // как «не передано» (парсер stdio-ветки делает то же). Применение к kind=Task игнорируется
+    // выше — Outcome по инварианту только у Defect (DefectRules, проверка Д-3).
+    private static DefectOutcome? OutcomeArg(JsonObject arguments) =>
+        ParseEnum<DefectOutcome>(arguments, "outcome");
 
     // --- Схемы инструментов: копия mcp/tasks-server/index.js (источник контракта — здесь,
     // index.js заморожен; сторож парности — TasksToolsetParityTests). Описания зависят от
@@ -818,6 +999,8 @@ public sealed class TasksToolset(
                     },
                     ["columnId"] = ColumnIdSchema(),
                     ["executionExpiresAfterMinutes"] = ExecutionTtlSchema(),
+                    ["kind"] = KindSchema(),
+                    ["repro"] = ReproSchema(),
                     ["projectId"] = new JsonObject
                     {
                         ["type"] = "string",
@@ -877,6 +1060,10 @@ public sealed class TasksToolset(
                     },
                     ["columnId"] = ColumnIdSchema(),
                     ["executionExpiresAfterMinutes"] = ExecutionTtlSchema(),
+                    ["kind"] = KindSchema(),
+                    ["repro"] = ReproSchema(),
+                    ["verification"] = VerificationSchema(),
+                    ["outcome"] = OutcomeSchema(),
                     ["projectId"] = new JsonObject
                     {
                         ["type"] = "string",
@@ -893,8 +1080,9 @@ public sealed class TasksToolset(
 
         yield return Tool("tasks_complete",
             "Пометить задачу выполненной (status → done) и сразу прикрепить итог: " +
-            "resultMarkdown (что сделано) и linkedFiles (итоговые файлы). Это ТОЛЬКО смена статуса — " +
-            "исполнителя запускает tasks_run_executor.",
+            "resultMarkdown (что сделано) и linkedFiles (итоговые файлы). Для дефекта — " +
+            "verification (кто проверил) или outcome (внутренний путь closedWithoutCheck). " +
+            "Это ТОЛЬКО смена статуса — исполнителя запускает tasks_run_executor.",
             new JsonObject
             {
                 ["type"] = "object",
@@ -913,6 +1101,8 @@ public sealed class TasksToolset(
                         ["items"] = new JsonObject { ["type"] = "string" },
                         ["description"] = "Итоговые файлы проекта (пути от корня, через /)",
                     },
+                    ["verification"] = VerificationSchema(),
+                    ["outcome"] = OutcomeSchema(),
                 },
             });
 
@@ -1079,6 +1269,90 @@ public sealed class TasksToolset(
         ["description"] = "ID колонки доски проекта (см. tasks_board_columns); статус выставится по её категории",
     };
 
+    // Вид карточки: task — обычная, defect — дефект (правила DefectRules).
+    private static JsonObject KindSchema() => new()
+    {
+        ["type"] = "string",
+        ["enum"] = new JsonArray { "task", "defect" },
+        ["description"] = "Тип карточки (обычная задача или дефект — см. инструкции сервера tasks)",
+    };
+
+    // Шаги воспроизведения дефекта. steps обязателен у дефекта, expected/actual — пояснения
+    // наблюдателя, опциональны. Передаётся ЦЕЛИКОМ: частичное обновление стирает прежние поля.
+    private static JsonObject ReproSchema() => new()
+    {
+        ["type"] = "object",
+        ["description"] = "Шаги воспроизведения дефекта (см. инструкции сервера tasks)",
+        ["properties"] = new JsonObject
+        {
+            ["steps"] = new JsonObject { ["type"] = "string", ["description"] = "Шаги (markdown); обязательны у дефекта" },
+            ["expected"] = new JsonObject { ["type"] = "string", ["description"] = "Ожидаемое поведение (опционально)" },
+            ["actual"] = new JsonObject { ["type"] = "string", ["description"] = "Фактическое поведение (опционально)" },
+        },
+    };
+
+    // Подтверждение проверки дефекта. Автора (человек/персона) и отметку времени бэкенд ставит
+    // сам по сессии вызова; MCP передаёт только комментарий проверяющего.
+    private static JsonObject VerificationSchema() => new()
+    {
+        ["type"] = "object",
+        ["description"] = "Подтверждение проверки дефекта (см. инструкции сервера tasks)",
+        ["properties"] = new JsonObject
+        {
+            ["notes"] = new JsonObject { ["type"] = "string", ["description"] = "Комментарий проверяющего (опционально)" },
+        },
+    };
+
+    // Исход дефекта: closedWithoutCheck — внутренний путь закрытия без отдельной проверки.
+    // У обычной задачи поле игнорируется (Outcome — только у Defect, см. DefectRules).
+    private static JsonObject OutcomeSchema() => new()
+    {
+        ["type"] = "string",
+        ["enum"] = new JsonArray { "closedWithoutCheck" },
+        ["description"] = "Исход дефекта (закрытие без отдельной проверки; только для kind=defect)",
+    };
+
     private static McpToolSchema Tool(string name, string description, JsonObject schema) =>
         new(name, description, schema);
+
+    // S2 (фикс-волна): гасим блокер ТОЛЬКО если caller (сессия-вызыватель) совпадает с
+    // sourceSessionId (чат, в котором задача создана = чат-штаба). Из чата исполнителя
+    // правка задачи карточку штаба не гасит — приписала бы координатору несуществующее
+    // решение («штаб переписал задачу», когда сам штаб ничего не делал). Чистая функция —
+    // отдельная от fire-and-forget обработки, чтобы тест проводки сигнала (S3) мог
+    // проверить правило caller/source без поднятия TasksToolset с девятью зависимостями.
+    internal static bool ShouldExtinguishBlocker(TaskItem task, string? callerSessionId) =>
+        task is not null
+            && !string.IsNullOrEmpty(callerSessionId)
+            && !string.IsNullOrEmpty(task.SourceSessionId)
+            && callerSessionId == task.SourceSessionId;
+
+    // Волна 1 team-blocker-honest: погасить блокер-карточку штаба по задаче, если она висит.
+    // Побочный эффект — fire-and-forget: ошибки в журнал, основной вызов не валится.
+    // Чаще всего SourceSessionId — чат исполнителя; его parent и есть чат-штаба. Если сама
+    // SourceSessionId в режиме — она и есть штаб (задача создана из штаба). Иначе —
+    // обычная задача вне режима, блокера не висит, выходим.
+    // S2 (фикс-волна): callerSessionId — сессия-вызыватель (хвост-маршрут MCP). Карточка
+    // гасится только если вызывающая сессия совпадает с SourceSessionId задачи — иначе
+    // tasks_update из чата исполнителя гасил бы карточку человека текстом «штаб
+    // переписал задачу», а реального действия штаба не было.
+    // internal: тесты S2 проверяют правило через ShouldExtinguishBlocker (выше),
+    // а не через этот метод — TasksToolset собирается из девяти DI-зависимостей,
+    // которые в тесте гонять нерационально.
+    internal void FireResolveBlockerByTask(TaskItem task, string callerSessionId, string reason)
+    {
+        if (task is null) return;
+        if (!ShouldExtinguishBlocker(task, callerSessionId)) return;
+        var sourceSessionId = task.SourceSessionId!;
+        var src = sessions.GetById(sourceSessionId);
+        if (src is null) return;
+        string? stabId = src.TeamImplement != null ? sourceSessionId : src.ParentSessionId;
+        if (stabId is null) return;
+        var taskId = task.Id;
+        _ = Task.Run(async () =>
+        {
+            try { await sessions.TryResolveBlockerByFactAsync(stabId, taskId, reason); }
+            catch { /* побочный эффект — не валим основной вызов */ }
+        });
+    }
 }

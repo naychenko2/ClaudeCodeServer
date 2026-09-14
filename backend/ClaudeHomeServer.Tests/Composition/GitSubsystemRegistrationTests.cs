@@ -1,0 +1,175 @@
+using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Git;
+using ClaudeHomeServer.Tests.Helpers;
+using FluentAssertions;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Http;
+using Microsoft.Extensions.Options;
+
+namespace ClaudeHomeServer.Tests.Composition;
+
+// Сторож подсистемы «Git» (волна 1.5): проверяет, что GitSubsystem.Register подключает
+// ВСЕ типы, которые раньше жили в Program.cs тремя отдельными блоками (блок Git-сервисов
+// рядом с DocumentAiService, отдельная строка CommitAttributionService рядом с SessionManager,
+// и AddHttpClient("forgejo") в секции HTTP-клиентов). Если кто-то добавит регистрацию в
+// Program.cs вместо подсистемы — или вынесет регистрацию из Register — тест упадёт, и ревью
+// это поймает.
+//
+// Конфиг минимальный: ключей Forgejo не задаём (GitServerService тихо выключен —
+// см. шапку GitSubsystem.cs и `GitServerService.IsConfigured`).
+//
+// Проверяем РЕГИСТРАЦИЮ через `services.Any(...)` / резолв типа, а не полный резолв
+// графа: `GitAutoCommitService` (hosted) подписан на SessionManager, `CommitAttributionService`
+// тоже зависит от SessionManager — полный резолв потребует поднимать весь SessionManager
+// и его зависимости, что не задача стража Git.
+//
+// Остаётся в ClaudeHomeServer.Tests (Этап 3, волна 2 — вынос Git): по конвенции
+// docs/architecture/conventions.md («Сторож регистрации подсистемы: где ему жить»)
+// дефолт для стража подсистемы — Main.Tests, потому что ему нужен Program из Main
+// (или его эквивалент через TestWebApplicationFactory<Program>). Перенос в Git.Tests
+// потребовал бы поднимать полный стенд Main ради регистрации, что не задача стража.
+public class GitSubsystemRegistrationTests
+{
+    private static IConfiguration BuildConfig() =>
+        new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Forgejo:BaseUrl"] = "",
+                ["Forgejo:AdminToken"] = "",
+            })
+            .Build();
+
+    [Fact]
+    public void Register_SubsystemHasStableKeyAndTitle()
+    {
+        var subsystem = new GitSubsystem();
+
+        subsystem.Key.Should().Be("git");
+        subsystem.Title.Should().Be("Git");
+    }
+
+    [Fact]
+    public void Register_RegistersCoreGitServices()
+    {
+        // После уборки Git (Этап 3): GitSubsystem.Register отвечает только за
+        // вертикальные сервисы — `GitService`/`GitServerService`/`GitAiService`
+        // плюс HTTP-клиент forgejo. Реакторы (`GitAutoCommitService`/
+        // `CommitAttributionService`) уехали в Program.cs как «общая композиция
+        // спины», и проверять их через `AddSubsystems(...)` теперь некорректно:
+        // сторож ниже (`Program_RegistersGitSubsystem_ServicesResolvable`) резолвит
+        // их из полного DI-графа, а здесь достаточно убедиться, что ядро Git
+        // подключается.
+        var services = new ServiceCollection();
+        var config = BuildConfig();
+
+        services.AddSubsystems(config, new GitSubsystem());
+
+        services.Should().Contain(s => s.ServiceType == typeof(GitService));
+        services.Should().Contain(s => s.ServiceType == typeof(GitServerService));
+        services.Should().Contain(s => s.ServiceType == typeof(GitAiService));
+    }
+
+    [Fact]
+    public void Register_DoesNotRegisterReactorServices()
+    {
+        // Контракт-фикс: после уборки Git GitSubsystem не должна регистрировать
+        // сервисы из корня `Services.*`. Если кто-то снова добавит регистрацию
+        // реактора в подсистему — этот тест укажет на нарушение «вертикаль →
+        // спинка» и подскажет вернуть её в Program.cs.
+        var services = new ServiceCollection();
+        var config = BuildConfig();
+
+        services.AddSubsystems(config, new GitSubsystem());
+
+        services.Should().NotContain(s => s.ServiceType == typeof(GitAutoCommitService));
+        services.Should().NotContain(s => s.ServiceType == typeof(CommitAttributionService));
+        services.Should().NotContain(s => s.ImplementationType == typeof(GitAutoCommitService));
+        services.Should().NotContain(s => s.ImplementationType == typeof(CommitAttributionService));
+    }
+
+    // Сторож факта подключения в Program.cs: поднимает полный стенд через
+    // `TestWebApplicationFactory<Program>` и резолвит типы Git из РЕАЛЬНОГО DI-графа
+    // (а не из изолированного ServiceCollection, как предыдущие тесты). Если кто-то
+    // уберёт `new GitSubsystem()` из `AddSubsystems(...)` в Program.cs — резолв
+    // упадёт с InvalidOperationException, и тест поймает регрессию. Без него класс
+    // дефекта «вынесли подсистему, но забыли подключить» проходит молча.
+    [Fact]
+    public void Program_RegistersGitSubsystem_ServicesResolvable()
+    {
+        using var factory = new TestWebApplicationFactory();
+        var sp = factory.Services;
+
+        // Если GitSubsystem отсутствует в Program.cs — любой из этих резолвов бросит
+        // InvalidOperationException «Unable to resolve service for type …».
+        sp.GetRequiredService<GitService>();
+        sp.GetRequiredService<GitServerService>();
+        sp.GetRequiredService<GitAiService>();
+        sp.GetRequiredService<CommitAttributionService>();
+    }
+
+    // Сторож прокси-инварианта (см. шапку GitSubsystem.cs): Forgejo — локальный сервис,
+    // идёт БЕЗ egress-прокси. `WithoutEgressProxy()` обязателен, иначе Forgejo молча
+    // проксируется (на контейнерных владельцев — на sandbox-прокси) и не отвечает.
+    // Техника проверки скопирована из VideoSubsystemRegistrationTests.
+    [Fact]
+    public void Register_ForgejoHttpClient_DisablesSystemProxy()
+    {
+        using var sp = BuildServiceProvider();
+        var monitor = sp.GetRequiredService<IOptionsMonitor<HttpClientFactoryOptions>>();
+
+        var builder = ApplyActions(monitor.Get("forgejo"), sp);
+        var primary = builder.PrimaryHandler.Should().BeOfType<HttpClientHandler>().Subject;
+
+        primary.UseProxy.Should().BeFalse(
+            "Forgejo — локальный сервис: egress-прокси ему противопоказан, WithoutEgressProxy обязателен");
+    }
+
+    private static ServiceProvider BuildServiceProvider()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSubsystems(BuildConfig(), new GitSubsystem());
+        return services.BuildServiceProvider();
+    }
+
+    private static TestHandlerBuilder ApplyActions(
+        HttpClientFactoryOptions options, IServiceProvider sp)
+    {
+        var builder = new TestHandlerBuilder(sp);
+        foreach (var action in options.HttpMessageHandlerBuilderActions)
+            action(builder);
+        return builder;
+    }
+
+    // Копия тестовой обвязки для проверки прокси — см. VideoSubsystemRegistrationTests.
+    private sealed class TestHandlerBuilder : HttpMessageHandlerBuilder
+    {
+        public TestHandlerBuilder(IServiceProvider services)
+        {
+            Services = services;
+        }
+
+        public override string Name { get; set; } = string.Empty;
+
+        public override IServiceProvider Services { get; }
+
+        public override HttpMessageHandler PrimaryHandler { get; set; } = new HttpClientHandler();
+
+        public override IList<DelegatingHandler> AdditionalHandlers { get; } =
+            new List<DelegatingHandler>();
+
+        public override HttpMessageHandler Build()
+        {
+            var handler = PrimaryHandler;
+            foreach (var next in AdditionalHandlers)
+            {
+                if (next is null) continue;
+                next.InnerHandler = handler;
+                handler = next;
+            }
+            return handler;
+        }
+    }
+}

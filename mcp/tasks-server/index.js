@@ -227,6 +227,9 @@ function brief(t) {
     // Outcome == closedWithoutCheck (без verification) выдаёт false: дизъюнкция закрытого
     // дефекта опирается на заполненный Verification ИЛИ Outcome (DefectRules).
     hasVerification: !!t.verification,
+    // Исход дефекта: closedWithoutCheck у закрытого внутренним путём, null — обычная задача
+    // или дефект, закрытый через verification. Парный полю outcome в http-ветке TasksToolset.cs.
+    outcome: t.outcome ?? null,
     // Дата+время завершения (когда статус стал done); null — не завершена или неизвестно.
     // В режиме списка «Готово» задачи идут сверху вниз от свежих к старым по этому полю.
     completedAt: t.completedAt ?? null,
@@ -403,9 +406,10 @@ const INSTRUCTIONS = [
   'REPRO: steps обязателен, expected/actual опциональны. Передаётся ЦЕЛИКОМ — для правки одного',
   '  поля шлите весь объект, иначе прежние поля пропадут. Стереть — передайте {} целиком.',
   '',
-  'VERIFICATION/OUTCOME в tasks_complete: один из двух для закрытия дефекта. verification.notes —',
-  '  комментарий проверяющего (автора и время бэк ставит сам по X-Caller-Session-Id). outcome=',
-  '  closedWithoutCheck — снять дефект без отдельной проверки.',
+  'VERIFICATION/OUTCOME: один из двух для закрытия дефекта. Поля принимают и tasks_complete,',
+  '  и tasks_update (если хочется сменить verdict/outcome без немедленного done).',
+  '  verification.notes — комментарий проверяющего (автора и время бэк ставит сам по',
+  '  X-Caller-Session-Id). outcome=closedWithoutCheck — снять дефект без отдельной проверки.',
   '',
   'ОЧИСТКА в tasks_update: "" в dueDate/dueTime убирает срок, -1 в reminderMinutes — снимает',
   '  напоминание, -1 в executionExpiresAfterMinutes — делает чат бессрочным.',
@@ -512,6 +516,8 @@ const TOOLS = [
         executionExpiresAfterMinutes: EXECUTION_TTL_SCHEMA,
         kind: KIND_SCHEMA,
         repro: REPRO_SCHEMA,
+        verification: VERIFICATION_SCHEMA,
+        outcome: OUTCOME_SCHEMA,
         projectId: { type: 'string', description: 'Перенести в другой проект (см. tasks_list_projects) или "" — сделать личной' },
       },
     },

@@ -1,10 +1,11 @@
-using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Skills;
+using ClaudeHomeServer.Services.Notes;
+using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
-using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -21,8 +22,7 @@ public class DefaultAssistantProvisionerTests : IDisposable
     private readonly UserStore _users;
     private readonly PersonaManager _personas;
     private readonly PersonaBindingsService _bindings;
-    private readonly Mock<IHubContext<SessionHub>> _hub;
-    private readonly List<ServerMessage> _broadcasts;
+    private readonly TestSessionBroadcaster _broadcaster;
     private readonly DefaultAssistantProvisioner _sut;
     private readonly string _userId;
 
@@ -50,25 +50,14 @@ public class DefaultAssistantProvisionerTests : IDisposable
             NullLogger<NotesKnowledgeService>.Instance);
         var mcp = new ClaudeHomeServer.Services.Mcp.McpRegistry(config,
             new ClaudeHomeServer.Services.Mcp.McpSecretStore(config));
-        _bindings = new PersonaBindingsService(_personas, projects, wkStore, notesSvc, notesKb,
+        _bindings = new PersonaBindingsService(_personas, projects, wkStore,
             knowledge, new SkillsService(), _users, config,
-            NullLogger<PersonaBindingsService>.Instance, mcp);
-        // Перехват broadcast-сообщений в группу (паттерн GlifCostPipelineTests).
-        _broadcasts = [];
-        _hub = new Mock<IHubContext<SessionHub>>();
-        var clients = new Mock<IHubClients>();
-        var proxy = new Mock<IClientProxy>();
-        proxy.Setup(c => c.SendCoreAsync("message", It.IsAny<object[]>(), It.IsAny<CancellationToken>()))
-            .Callback<string, object[], CancellationToken>((_, args, _) =>
-            {
-                if (args.Length > 0 && args[0] is ServerMessage m) _broadcasts.Add(m);
-            })
-            .Returns(Task.CompletedTask);
-        clients.Setup(c => c.Group(It.IsAny<string>())).Returns(proxy.Object);
-        _hub.Setup(h => h.Clients).Returns(clients.Object);
+            NullLogger<PersonaBindingsService>.Instance, mcp, notes: notesSvc, notesKb: notesKb);
+        // Перехват broadcast-сообщений через TestSessionBroadcaster (заменяет мок IHubContext).
+        _broadcaster = new TestSessionBroadcaster();
 
         _sut = new DefaultAssistantProvisioner(_users, _personas, _bindings,
-            _hub.Object, NullLogger<DefaultAssistantProvisioner>.Instance);
+            _broadcaster, NullLogger<DefaultAssistantProvisioner>.Instance);
     }
 
     public void Dispose()
@@ -89,7 +78,8 @@ public class DefaultAssistantProvisionerTests : IDisposable
         _personas.GetByOwner(_userId).Should().HaveCount(1, "заготовка создаётся ровно одна");
 
         // Broadcast строго по факту создания: created (стор персон) + default (перечитывание /me)
-        _broadcasts.OfType<PersonasChangedMessage>()
+        _broadcaster.Owner.Select(t => t.Message)
+            .OfType<PersonasChangedMessage>()
             .Select(m => m.Action)
             .Should().Contain(new[] { "created", "default" });
     }
@@ -106,7 +96,8 @@ public class DefaultAssistantProvisionerTests : IDisposable
         _personas.GetByOwner(_userId).Should().HaveCount(1);
 
         // При возврате существующей персоны broadcast не шлётся — событие только по факту создания.
-        _broadcasts.OfType<PersonasChangedMessage>()
+        _broadcaster.Owner.Select(t => t.Message)
+            .OfType<PersonasChangedMessage>()
             .Count(m => m.Action == "created")
             .Should().Be(1);
     }

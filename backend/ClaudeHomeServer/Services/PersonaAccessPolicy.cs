@@ -70,6 +70,12 @@ public static class PersonaAccessPolicy
         {
             result.Add("WebSearch");
             result.Add("WebFetch");
+            // Продуктовый сервер веб-поиска — второй путь в интернет, и выключенный «web»
+            // обязан резать оба. Первый рубеж — объявление сервера (SessionManager.
+            // BuildWebSearchContext спрашивает ту же возможность), здесь defense-in-depth:
+            // запрет переживает и рассинхрон гейтов, и объявление сервера прежним ходом
+            result.Add("mcp__websearch__web_search");
+            result.Add("mcp__websearch__web_read");
         }
 
         switch (persona.Access)

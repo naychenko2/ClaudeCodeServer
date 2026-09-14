@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { Settings, X } from 'lucide-react';
-import { C, FONT, R, SHADOW } from '../../../lib/design';
-import { ICON_SIZE } from '../../../components/ui/icons';
+import { C, FONT, R, SHADOW, ICON_SIZE } from 'aihome_shell/kit';
 import type { GraphSettings } from './graphSettings';
 import { GraphSettingsBody } from './GraphSettingsBody';
 

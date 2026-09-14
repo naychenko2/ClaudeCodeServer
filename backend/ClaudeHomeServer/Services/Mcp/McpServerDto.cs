@@ -20,13 +20,20 @@ public sealed record McpServerStatusDto(string Status, DateTime ObservedAt, stri
 public sealed record McpCatalogRefDto(string Name, string? Version, DateTime? PublishedAt, string? Url);
 
 /// <summary>Запись реестра для выдачи наружу — маскированная (см. McpServerMapper).</summary>
+/// <param name="Group">
+/// Группа экрана «MCP-серверы» по ключу (см. <see cref="McpRegistry.BuiltinGroupOf"/>).
+/// Не null для встроенных серверов (Product/Integration/PersonaMemory/External) и для
+/// ручных записей на незнакомых ключах — значение External, «подключено вне продукта».
+/// Фронт использует его как фильтр «Доступа»: у интеграций (group=integration) каскад
+/// «включить в проекте / выдать персоне» снят, тумблеры только врали бы.
+/// </param>
 public sealed record McpServerDto(
     string Id, string Key, string ToolKey, string Label, string? Description,
     string Transport, string? Command, IReadOnlyList<string> Args, IReadOnlyList<McpValueDto> Env,
     string? Url, IReadOnlyList<McpValueDto> Headers, McpAuthDto Auth,
     bool Enabled, bool AlwaysLoad, bool AllowReadOnlyPersonas, bool AllowOutsideProjects,
     string Source, int AuthVersion, DateTime CreatedAt, DateTime UpdatedAt,
-    McpCatalogRefDto? CatalogRef = null, McpServerStatusDto? Status = null);
+    string? Group = null, McpCatalogRefDto? CatalogRef = null, McpServerStatusDto? Status = null);
 
 /// <summary>
 /// ЕДИНСТВЕННАЯ точка выхода записей реестра наружу. Всегда маскирует: значение, лежащее
@@ -58,6 +65,7 @@ public static class McpServerMapper
         AuthVersion: r.AuthVersion,
         CreatedAt: r.CreatedAt,
         UpdatedAt: r.UpdatedAt,
+        Group: McpRegistry.BuiltinGroupOf(r.Key),
         CatalogRef: r.CatalogRef is null ? null
             : new McpCatalogRefDto(r.CatalogRef.Name, r.CatalogRef.Version,
                 r.CatalogRef.PublishedAt, r.CatalogRef.Url),

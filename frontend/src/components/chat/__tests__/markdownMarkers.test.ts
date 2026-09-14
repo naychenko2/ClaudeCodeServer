@@ -1,7 +1,9 @@
-// Служебные маркеры протоколов не должны доезжать до ленты: <promise>ГОТОВО</promise>
-// (цикл «до готово») и протокол «Командной реализации» — <team:work>, <escalate:*>.
+// Служебные маркеры протоколов не должны доезжать до ленты: <promise>ГОТОВО</promise>,
+// <blocked>причина</blocked>, <waiting>чего ждёшь</waiting> (цикл «до готово») и протокол
+// «Командной реализации» — <team:work>, <escalate:*>.
 // Внутри кода маркер остаётся: там его цитируют, и детекторы бэкенда его так же
-// игнорируют (SessionManager.ParseWorkMarker / ParseEscalationMarker).
+// игнорируют (SessionManager.ParseWorkMarker / ParseEscalationMarker / TryExtractBlockedMarker
+// / TryExtractWaitingMarker).
 import { describe, it, expect, vi } from 'vitest';
 
 // MarkdownContent тянет react-markdown и api-модуль — для чистой функции не нужны
@@ -24,6 +26,13 @@ describe('stripServiceMarkers', () => {
   it('режет маркер эскалации и маркер завершения цикла', () => {
     expect(stripServiceMarkers('Итог.\n<escalate:decision>Какой формат?</escalate>')).toBe('Итог.');
     expect(stripServiceMarkers('Всё сделано.\n<promise>ГОТОВО</promise>')).toBe('Всё сделано.');
+  });
+
+  it('режет маркер остановки цикла и маркер ожидания по внешнему событию', () => {
+    expect(stripServiceMarkers('Не сходится.\n<blocked>тесты падают на CI</blocked>')).toBe('Не сходится.');
+    expect(stripServiceMarkers(
+      'Жду ответа.\n<waiting>доклад Дениса по задаче 0a6eae95 (волна 2, шаг 1: Backgrounds+ProjectIcons)</waiting>',
+    )).toBe('Жду ответа.');
   });
 
   it('режет незакрытый маркер в хвосте — ход ещё стримится', () => {

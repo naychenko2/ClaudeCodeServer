@@ -63,12 +63,18 @@ public class ClaudeSessionChatPreviewTests : IDisposable
         {
             try { process.Kill(entireProcessTree: true); } catch { /* уже мёртв */ }
         }
+
+        // Оценка длины командной строки — чистая функция интерфейса IProcessLauncher,
+        // делегируем штатной реализации (как и Start выше)
+        public int EstimateCommandLineLength(ProcessSpec spec) =>
+            LocalProcessRunner.Instance.EstimateCommandLineLength(spec);
     }
 
     private ClaudeSession NewSession(Session info) => new(info, new LlmSessionContext(
         RootPath: _root,
         OnMessage: _ => Task.CompletedTask,
-        RawSystemPrompt: null, PermissionRules: null,
+        RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
+        PermissionRules: null,
         TasksMcp: null,
         Launcher: new SilentLauncher(_clis)));
 

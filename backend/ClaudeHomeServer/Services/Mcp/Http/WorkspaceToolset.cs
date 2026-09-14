@@ -2,12 +2,16 @@
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Controllers;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Filters;
-using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Deploy;
-using Microsoft.AspNetCore.SignalR;
+using ClaudeHomeServer.Services.Docs;
+using ClaudeHomeServer.Services.Knowledge;
+using ClaudeHomeServer.Services.Memory;
+using ClaudeHomeServer.Services.Notes;
+using ClaudeHomeServer.Services.Tasks;
 
 namespace ClaudeHomeServer.Services.Mcp.Http;
 
@@ -54,14 +58,13 @@ public sealed partial class WorkspaceToolset(
     SessionManager sessions,
     PersonaManager personas,
     FileService files,
-    NotesService notes,
     DocumentAiService docAi,
     KnowledgeService knowledge,
     WorkspaceKnowledgeStore workspaceStore,
     ProjectKnowledgeSyncService knowledgeSync,
     UnifiedSearchService search,
     Git.GitService git,
-    Git.CommitAttributionService commitAttribution,
+    CommitAttributionService commitAttribution,
     UserStore users,
     TeamMemoryService teamMemory,
     DeployService deploy,
@@ -69,11 +72,12 @@ public sealed partial class WorkspaceToolset(
     TaskManager tasks,
     DefaultAssistantProvisioner provisioner,
     KnowledgeBaseCatalogService knowledgeCatalog,
-    IHubContext<SessionHub> hub) : IMcpParameterizedToolset
+    ISessionBroadcaster broadcaster,
+    INoteAccessor? notes = null) : IMcpParameterizedToolset
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/wsp/{sessionId}. Константа —
     // единственная точка правды для URL конфига хода (ClaudeSession)
-    public const string ServerName = "wsp";
+    public const string ServerName = McpEndpoints.WorkspaceName;
 
     // Ограничение выдачи files_tree — дерево большого проекта не должно раздувать контекст
     internal const int TreeMaxEntries = 500;
@@ -167,7 +171,7 @@ public sealed partial class WorkspaceToolset(
 
     /// <summary>URL эндпоинта в конфиге хода: базовый адрес + маршрут тулсета с хвостом.</summary>
     public static string EndpointFor(string apiUrl, string sessionId) =>
-        McpHttpTransport.EndpointFor(apiUrl, ServerName) + "/" + RouteTail(sessionId);
+        McpEndpoints.EndpointFor(apiUrl, ServerName) + "/" + RouteTail(sessionId);
 
     // Один сегмент — id сессии; форма как у resumeSessionId-белого списка (хвост строим мы,
     // но проверяем форму всё равно — он приезжает из URL)
@@ -256,7 +260,7 @@ public sealed partial class WorkspaceToolset(
     // (ветка формально недостижима — сессию резолвит TryResolve раньше; защита на будущее).
     private string? DelegatedDenied(McpToolCallContext context, Session callerSession, string action) =>
         DelegatedTurnGate.Decide(sessions, context.OwnerId, callerSession.Id, action,
-            alsoWhenExecutorSuppressed: false, allowInTeamImplement: false, allowInWorkLoop: false,
+            alsoWhenExecutorSuppressed: false, allowInTeamImplement: false,
             failOpenWhenUnknown: false) is { Allowed: false } gate
             ? gate.DenyText
             : null;
@@ -471,12 +475,27 @@ public sealed partial class WorkspaceToolset(
                     && (task.ProjectId is null || !allowed.Contains(task.ProjectId)))
                     return Deny($"Задача {entityId} вне разрешённой зоны этой сессии");
                 var mergedLabels = UnionStrings(task.Labels, incoming);
-                var updatedTask = tasks.Update(entityId, new UpdateTaskRequest(Labels: mergedLabels));
+                // Дефект-в-Done с пустым verification бросает EnsureVerificationOnClose на
+                // любой правке (переименование, метки, подзадачи) — пробрасываем как Deny,
+                // чтобы клиент получил текст правила, а не 500 (находка minor-ревью Глеба).
+                TaskItem? updatedTask;
+                try
+                {
+                    // Агентский путь (MCP): isAgentCall=true — гард против затирания
+                    // DroppedByHumanAt сработает при попытке изменить статус/исход/вердикт;
+                    // правка только меток обычно безобидна, но флаг держит поведение единым
+                    updatedTask = tasks.Update(entityId, new UpdateTaskRequest(Labels: mergedLabels),
+                        isAgentCall: true);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    return Deny(ex.Message);
+                }
                 // Бродкаст task_updated — как REST-путь (TasksController.Update): без него
                 // интерфейс жил бы с устаревшими метками до перезагрузки (блокер волны 3.1;
                 // TaskManager.Update бродкаста не делает — он был обязанностью контроллера)
                 if (updatedTask is not null)
-                    await hub.BroadcastTaskChangedAsync(context.OwnerId, "updated", updatedTask);
+                    await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("updated", updatedTask));
                 var taskAnswer = new Dictionary<string, object?>
                 {
                     ["entityType"] = "task",
@@ -538,11 +557,22 @@ public sealed partial class WorkspaceToolset(
                     && (task.ProjectId is null || !allowed.Contains(task.ProjectId)))
                     return Deny($"Задача {entityId} вне разрешённой зоны этой сессии");
                 var (keptLabels, removedLabels) = SubtractStrings(task.Labels, removing);
-                var updatedTask = tasks.Update(entityId, new UpdateTaskRequest(Labels: keptLabels));
+                // Дефект-в-Done с пустым verification бросает EnsureVerificationOnClose на
+                // любой правке (см. tags_apply) — пробрасываем как Deny.
+                TaskItem? updatedTask;
+                try
+                {
+                    updatedTask = tasks.Update(entityId, new UpdateTaskRequest(Labels: keptLabels),
+                        isAgentCall: true);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    return Deny(ex.Message);
+                }
                 // Бродкаст task_changed(updated) — как tags_apply (блокер волны 3.1): без него
                 // интерфейс жил бы с устаревшими метками до перезагрузки
                 if (updatedTask is not null)
-                    await hub.BroadcastTaskChangedAsync(context.OwnerId, "updated", updatedTask);
+                    await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("updated", updatedTask));
                 return Json(new Dictionary<string, object?>
                 {
                     ["entityType"] = "task",
@@ -756,8 +786,9 @@ public sealed partial class WorkspaceToolset(
                     files.Rename(root, oldPath, newPath);
                     // Комментарии к переименованному документу следуют за новым путём —
                     // привязка не сиротеет (как REST-эндпоинт rename)
-                    try { notes.RewriteAnnotationTargets(context.OwnerId, p.Id, oldPath, p.Id, newPath, prefix: true); }
-                    catch { /* перепись привязок — best-effort, rename уже состоялся */ }
+                    if (notes is not null)
+                        try { notes.RewriteAnnotationTargets(context.OwnerId, p.Id, oldPath, p.Id, newPath, prefix: true); }
+                        catch { /* перепись привязок — best-effort, rename уже состоялся */ }
                 }
                 catch (FileNotFoundException) { return Deny($"Файл не найден: {oldPath}"); }
                 catch (UnauthorizedAccessException) { return Deny("Доступ за пределы проекта запрещён"); }
@@ -1015,8 +1046,8 @@ public sealed partial class WorkspaceToolset(
 
     // Событие knowledge_changed в хаб — тот же канал, что у контроллеров знаний
     private Task BroadcastKnowledgeChanged(string ownerId, string? datasetId) =>
-        hub.Clients.Group("user_" + ownerId)
-            .SendAsync("message", new KnowledgeChangedMessage("doc_changed", datasetId));
+        broadcaster.ToOwner(ownerId,
+            new KnowledgeChangedMessage("doc_changed", datasetId));
 
     // --- Секция search (единый поиск по рабочему пространству) ---
 
@@ -1117,8 +1148,7 @@ public sealed partial class WorkspaceToolset(
 
     // Событие git_status_changed в хаб — тот же канал, что у GitController.NotifyChanged
     private Task BroadcastGitChanged(string ownerId, string projectId) =>
-        hub.Clients.Group("user_" + ownerId)
-            .SendAsync("message", new GitStatusChangedMessage(projectId));
+        broadcaster.ToOwner(ownerId, new GitStatusChangedMessage(projectId));
 
     // --- Секция knowledge_bases (менеджер баз Dify владельца) ---
 
@@ -1429,6 +1459,20 @@ public sealed partial class WorkspaceToolset(
                 // Состояние ПОСЛЕ отправки: доставленное сообщение вернуло чат из архива,
                 // busy/queued — ещё нет
                 var stillArchived = sessions.GetOwned(sid, context.OwnerId)?.IsArchived ?? false;
+                // Волна 1 team-blocker-honest: отправка сообщения в чат исполнителя по
+                // задаче-блокеру — координатор сам разбирается с блокером. Дочерний чат
+                // идентифицируется по TaskId (он выставляется при создании сессии из штаба).
+                // Гасим открытую блокер-карточку штаба, если она висит на этой задаче.
+                if (target is { TaskId: { } targetTaskId, ParentSessionId: { } parentId }
+                    && sessions.GetById(parentId)?.TeamImplement != null)
+                {
+                    _ = Task.Run(async () =>
+                    {
+                        try { await sessions.TryResolveBlockerByFactAsync(parentId, targetTaskId,
+                            "штаб отправил сообщение исполнителю"); }
+                        catch { /* побочный эффект — не валим основной вызов */ }
+                    });
+                }
                 return WithArchiveNote(sent, wasArchived, stillArchived);
             }
 

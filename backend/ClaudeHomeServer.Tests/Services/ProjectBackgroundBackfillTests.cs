@@ -64,7 +64,9 @@ public class ProjectBackgroundBackfillTests : IDisposable
 
     private ProjectBackgroundBackfill Backfill(ICheapTextRunner cheap)
     {
-        var service = new ProjectBackgroundService(_projects, cheap,
+        // Шов `IProjectBackgroundWriter` (Этап 5, волна C, шаг 2): запись идёт
+        // через Core-интерфейс, в тестах через настоящий `ProjectBackgroundWriterAdapter`.
+        var service = new ProjectBackgroundService(_projects, new ProjectBackgroundWriterAdapter(_projects), cheap,
             NullLogger<ProjectBackgroundService>.Instance);
         return new ProjectBackgroundBackfill(_projects, service, _users,
             NullLogger<ProjectBackgroundBackfill>.Instance)

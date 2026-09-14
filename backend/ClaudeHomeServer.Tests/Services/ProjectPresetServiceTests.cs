@@ -1,6 +1,7 @@
 using System.Text;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Docs;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
@@ -26,7 +27,10 @@ public class ProjectPresetServiceTests : IDisposable
     {
         _tempDir = Path.Combine(Path.GetTempPath(), "preset_tests_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_tempDir);
-        _docs = new DocsIndexService(_files);
+        // DocsIndexService принимает узкий шов IProjectFileGateway (Этап 5, ярус 1,
+        // волна A): адаптер над FileService. ProjectPresetService сам по-прежнему
+        // зависит от FileService — это вне рамок шва.
+        _docs = new DocsIndexService(new ProjectFileGateway(_files));
         _projects = CreateManager();
     }
 

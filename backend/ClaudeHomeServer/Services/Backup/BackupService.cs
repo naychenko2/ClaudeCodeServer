@@ -10,7 +10,7 @@ namespace ClaudeHomeServer.Services.Backup;
 // Настройки — секция «Backup» конфига (см. BackupOptions), правятся руками.
 public class BackupService(
     IConfiguration config,
-    ProjectManager projects,
+    IProjectManager projects,
     ILogger<BackupService> log) : BackgroundService
 {
     private static readonly TimeSpan Tick = TimeSpan.FromMinutes(60);

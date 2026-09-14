@@ -464,6 +464,14 @@ export interface Task {
   verification?: TaskVerification | null;
   // Исход дефекта: 'closedWithoutCheck' — внутренний путь закрытия без проверки
   outcome?: DefectOutcome | null;
+  // Фикс-волна 4 team-blocker-honest: метки от терминального отказа хода исполнителя
+  // (см. ExecutorStopClassifier). executorStoppedAt != null — карточка ждёт человека.
+  executorStoppedAt?: string;
+  executorStopReason?: string;
+  // Метка снятия человеком по карточке блокера (DropSubtaskAsync): если стоит —
+  // карточка закрыта человеком, правка статуса от агента отвергается. Человек может
+  // снять метку, перетащив задачу обратно в Todo/InProgress.
+  droppedByHumanAt?: string;
   // UI-проекция повторяющейся задачи в календаре (не приходит с бэка):
   // occurrenceOf — id реального экземпляра серии, который надо открыть по клику;
   // virtual — признак вычисленного будущего повтора (реально существует только один экземпляр)
@@ -688,7 +696,7 @@ export interface Session {
   // Выбор принадлежит УСТРОЙСТВУ (localStorage), здесь — последнее выставленное значение
   voiceStyle?: string | null;
   // Цикл «до готово» (флаг work-loop); null/отсутствует — цикл выключен
-  workLoop?: { promise: string; iteration: number; maxIterations: number; phase: 'working' | 'verifying' } | null;
+  workLoop?: { promise: string; iteration: number; maxIterations: number; phase: 'working' | 'waiting' | 'verifying' } | null;
   // Режим «Командная реализация»; null/отсутствует — режим выключен
   teamImplement?: SessionTeamImplement | null;
   // Отдельное git worktree чата: рабочая папка сессии вместо корня проекта.
@@ -989,8 +997,12 @@ export type ServerMessage = { sessionId: string } & (
   // Завершённая генерация glif: счётчик + кредиты (если billing доехал в payload). Дедуп по jobId.
   | { type: 'glif_cost'; jobId: string; outputType?: string; mediaCount: number; credits?: number; model?: string }
   // text — человекочитаемая формулировка сбоя, details — сырой технический текст
-  // (ответ CLI, .NET-исключение): в ленте он живёт только под «Подробностями»
-  | { type: 'error'; text: string; details?: string }
+  // (ответ CLI, .NET-исключение): в ленте он живёт только под «Подробностями».
+  // action — признак предлагаемого действия под карточкой: единственное значение
+  // "window-1m-drop" рисует кнопку «Продолжить в стандартном окне» (POST /api/chats/{id}/window-1m/drop).
+  // null/undefined — обычная ошибка, кнопки нет. Сравнение по строке, а не по тексту —
+  // формулировка ошибки живёт на сервере и может меняться
+  | { type: 'error'; text: string; details?: string; action?: string | null }
   | { type: 'rate_limit'; limitType: string; resetsAt?: string; status?: string; utilization?: number; isUsingOverage?: boolean; overageStatus?: string; overageResetsAt?: string }
   | { type: 'compact_boundary'; trigger: string; preTokens?: number; postTokens?: number }
   | { type: 'compact_status'; status?: string; compactResult?: string; compactError?: string }
@@ -1044,7 +1056,7 @@ export type ServerMessage = { sessionId: string } & (
   // Лимит подписки исчерпан, в пуле переключиться некуда — предложение продолжить
   // чат на стороннем провайдере (карточка с кнопками)
   | { type: 'provider_limit'; resetsAt?: string; providers: ProviderFallbackOption[] }
-  | { type: 'work_loop'; active: boolean; iteration: number; maxIterations: number; phase: string | null }
+  | { type: 'work_loop'; active: boolean; iteration: number; maxIterations: number; phase: string | null; waitingReason?: string | null; waitingTicks?: number }
   // Явная остановка цикла «до готово» в ленту — человекочитаемый текст (лимит/ошибка/ручной
   // стоп), готовый с сервера. reason ∈ limit|error|manual (см. WorkLoopStoppedMessage)
   | { type: 'work_loop_stopped'; reason: string; text: string }
@@ -1059,7 +1071,10 @@ export type ServerMessage = { sessionId: string } & (
   // ответе человека (resolved=true) с тем же escalationId — клиент обновляет карточку.
   // Поля плоские (в истории та же карточка лежит вложенным объектом escalation)
   // personaId — автор карточки (Э8, координатор на момент публикации)
-  | { type: 'team_escalation'; escalationId: string; kind: TeamEscalationKind; title: string; details: string; actions: TeamEscalationAction[]; taskId: string | null; wave: number; resolved: boolean; chosenActionId: string | null; personaId?: string | null }
+  // resolutionNote — примечание от штаба (chosenActionId="resolvedByStaff"), показывает,
+  // чем координатор закрыл карточку. Поле опциональное — старый бэкенд его не шлёт,
+  // и фронт рисует карточку с фолбэком («Снят штабом» без подробностей)
+  | { type: 'team_escalation'; escalationId: string; kind: TeamEscalationKind; title: string; details: string; actions: TeamEscalationAction[]; taskId: string | null; taskTitle?: string | null; wave: number; resolved: boolean; chosenActionId: string | null; personaId?: string | null; resolutionNote?: string | null }
   // Жизненный цикл вызова планировщика (не путать с team_implement — тот про стадию режима).
   // Транзитное: в историю не пишется, после рестарта не восстанавливается — карточка плана
   // (team_plan) или отказа (team_escalation) уже несут итог. start=true — планировщик запущен;
@@ -1103,8 +1118,9 @@ export interface PromptSection {
   title: string;
   text: string;
   // system — часть --append-system-prompt; turn — текст сообщения хода с обвязками;
-  // cli-file — файл слоя CLI (CLAUDE.md с раскрытыми импортами)
-  kind: 'system' | 'turn' | 'cli-file';
+  // cli-file — файл слоя CLI (CLAUDE.md с раскрытыми импортами); truncated — секция,
+  // срезанная ради лимита командной строки Windows (живёт в PromptSnapshot.TruncatedSections)
+  kind: 'system' | 'turn' | 'cli-file' | 'truncated';
   // Длина оригинального текста, когда сам текст в выдаче опущен (файлы слоя CLI
   // грузятся по требованию — они весят десятки КБ)
   size?: number | null;
@@ -1147,6 +1163,11 @@ export interface PromptSnapshot {
   model?: string | null;
   mode?: string | null;
   cliLayer?: CliLayer | null;
+  // Секции, вырезанные из промпта ради лимита командной строки Windows: в модель НЕ ушли,
+  // а здесь — чтобы человек видел, чем пришлось пожертвовать. null/пусто — срезки не было,
+  // обычный ход. У каждой записи kind='truncated', text — пометка о факте срезки (что
+  // вырезано и сколько символов осталось бы), не исходное содержимое. Задача dc641949
+  truncatedSections?: PromptSection[] | null;
 }
 
 export interface UsageInfo {
@@ -1395,6 +1416,20 @@ export interface SubscriptionUsage {
   // Эффективная утилизация недельного окна (0..1) — вторая ось вывода из ротации наравне
   // с utilization: аккаунт с 5ч 35% и 7д 99% пул уже не берёт (ClaudeSubscriptionPool.IsOverloaded)
   weeklyUtilization?: number;
+  // Живые пометки «модель недоступна на ЭТОЙ подписке» (пара подписка × модель). Истёкшие
+  // бэкенд не отдаёт; пустой список = пометок нет. Без них подписка выглядит полностью
+  // здоровой («В ротации», лимит не исчерпан), а ходы конкретной модели на неё не идут
+  unavailableModels?: ModelUnavailableMark[];
+}
+
+// Пометка «модель недоступна на подписке». reason — «model_no_access» (нет доступа по
+// тарифу) | «model_out_of_credits» (кончились usage credits модели); until — момент, до
+// которого пара не пробуется. model — нормализованный id (нижний регистр), в этом же виде
+// его ждёт эндпоинт досрочного сброса
+export interface ModelUnavailableMark {
+  model: string;
+  reason: string;
+  until: string;
 }
 
 // Статистика аккаунта fal.ai (баланс + расход за период)
@@ -1509,7 +1544,13 @@ export interface WorkLoopState {
   active: boolean;
   iteration: number;
   maxIterations: number;
-  phase: string | null;
+  phase: 'working' | 'waiting' | 'verifying' | null;
+  // Причина ожидания по маркеру `<waiting>` (только при phase='waiting'). null — обычное
+  // ожидание по живой делегированной задаче, счётчик тиков не идёт
+  waitingReason?: string | null;
+  // Число тиков ожидания (Loop:WaitingTickSeconds, дефолт 300 с). Потолок — Loop:MaxWaitingTicks.
+  // 0 — счётчик ещё не стартовал или только что сброшен
+  waitingTicks?: number;
 }
 
 // === Режим «Командная реализация» ===
@@ -1524,7 +1565,11 @@ export type TeamImplementStage =
   | 'idle';             // итерация закрыта, режим ждёт новой вводной
 
 // Бюджет итерации: счётчики «израсходовано» + потолки (сбрасывается по новой вводной).
-// wakeups — срочные вызовы координатора докладом-блокером снизу (свой потолок)
+// wakeups — срочные вызовы координатора докладом-блокером снизу (свой потолок).
+// maxWavesAfter / maxTasksAfter (волна 1 team-blocker-honest) — новые потолки после
+// расширения, посчитанные на бэке (Max + max(0, plan - left)). 0 — плана нет, плашка
+// бюджета скрывается. Раньше плашка показывала «потолок поднимется до N», где N был
+// размером плана — это расходилось с реальностью при ненулевом расходе.
 export interface TeamImplementBudget {
   tasksUsed: number;
   wavesUsed: number;
@@ -1536,6 +1581,8 @@ export interface TeamImplementBudget {
   maxRuns: number;
   maxRetries: number;
   maxWakeups: number;
+  maxWavesAfter: number;
+  maxTasksAfter: number;
 }
 
 // Состояние режима на сессии (Session.teamImplement); null — режим выключен.
@@ -1736,6 +1783,11 @@ export interface TeamEscalation {
   details: string;
   actions: TeamEscalationAction[];
   taskId?: string | null;
+  // Название задачи (волна 1 team-blocker-honest, дефект 1430b732): снимок из штаба на
+  // момент публикации. Идёт в подпись диалога снятия — раньше там стоял заголовок
+  // карточки («Исполнитель застрял: …»), и человек не видел, какую задачу закрывает.
+  // null — штаб не смог подтянуть (задача удалена) или старая версия бэка: фолбэк на title.
+  taskTitle?: string | null;
   wave: number;
   // Только в истории — у live-события времени нет
   createdAt?: string;
@@ -1744,6 +1796,11 @@ export interface TeamEscalation {
   // Автор карточки (Э8): координатор на момент публикации — карточка идёт от его лица.
   // null — персоны у штаба нет, шапка деградирует до обезличенного варианта
   personaId?: string | null;
+  // Примечание от штаба при chosenActionId="resolvedByStaff": чем координатор закрыл
+  // карточку. Поле опциональное — старый бэкенд и пустое примечание дают фронт без него;
+  // рисуем «Снят штабом» без тела вместо «Снят штабом: undefined». chosenActionId="message"
+  // означает «человек ответил сообщением» — это уже отдельная ветка без resolutionNote
+  resolutionNote?: string | null;
 }
 
 // Элементы чата
@@ -1831,8 +1888,12 @@ export type ChatItem =
   // Остановка цикла «до готово»: текст готов на сервере (лимит/ошибка/ручной стоп),
   // фронт его не собирает — иначе разъедется с сервером при смене лимита
   | { kind: 'work_loop_stopped'; reason: string; text: string }
-  // details — сырой технический текст сбоя за человекочитаемым text (см. wire-событие error)
-  | { kind: 'error'; text: string; canRetry?: boolean; details?: string; ts?: number }
+  // details — сырой технический текст сбоя за человекочитаемым text (см. wire-событие error).
+  // action — признак предлагаемого действия под карточкой: сейчас только "window-1m-drop"
+  // (кнопка «Продолжить в стандартном окне» под карточкой отказа Window1MUnavailable).
+  // undefined — обычная ошибка, кнопки нет. Серверная формулировка может меняться,
+  // признак — нет, поэтому сравниваем по строке
+  | { kind: 'error'; text: string; canRetry?: boolean; details?: string; action?: string | null; ts?: number }
   // Группа ошибок прошлых дней (QA Fold 8): строится на фронте в ChatPanel из
   // последовательно идущих error с ts < сегодня. Кат/раскрытие на стороне ChatItemView.
   | { kind: 'error_group'; date: number; items: Extract<ChatItem, { kind: 'error' }>[] };
@@ -1897,6 +1958,17 @@ export interface Me {
   displayName?: string | null;
   role: string;
   featureFlags?: Record<string, boolean>;
+  // Активные подсистемы: массив ключей реально зарегистрированных в процессе
+  // (отдаётся `SubsystemStateStore.ActiveKeys()` бэка). В список попадают
+  // подсистемы, прошедшие гейт `Subsystems:{Key}:Enabled=true` И зарегистрированные
+  // на старте; список короткий, детерминированный. Стороной `Record` бэк НЕ
+  // шлёт — `{ ...arr }` на фронте даёт числовые ключи '0','1'…, и гейт ломается.
+  // Заполняется App.tsx через `setAllSubsystems(me.subsystems)` в lib/subsystems;
+  // стор разворачивает массив в `Record<string, boolean>` внутри. Отдельные
+  // вкрапления UI (виджеты, пункты меню, кнопки) гейтятся хуком `useSubsystem('notes')`
+  // и дают fail-closed false, пока стор пуст — это нормально, лишь бы поле
+  // пришло в me-ответе. Контрактный сторож — subsystems.contract.test.ts.
+  subsystems?: string[];
   contextThresholds?: { warnPct: number; dangerPct: number } | null;
   defaultPersonaId?: string | null;
   needsOnboarding?: boolean;
@@ -3074,6 +3146,14 @@ export interface McpServer {
   // CatalogRef запись заведена руками. Сама строка запуска лежит в command/args/url —
   // CatalogRef её НЕ дублирует, только помечает происхождение
   catalogRef?: McpCatalogRef | null;
+  // Группа встроенного сервера продукта: задаётся только для ключей из
+  // McpRegistry.ReservedKeys / IntegrationKeys / pmem_*. У интеграций (dify,
+  // fal-ai, glif, higgsfield) каскад «включить в проекте / выдать персоне»
+  // снят — запись доставляется во все чаты по факту OAuth-входа. Значение
+  // присылает бэкенд через McpRegistry.BuiltinGroupOf, фронту — источник
+  // правды для фильтрации «Доступа». Не-null для встроенных, null/undefined
+  // для обычных записей реестра.
+  group?: McpBuiltinGroup | null;
 }
 
 // Указатель на каталожную запись в McpServerDto и McpServerUpsert. Поля стабильны

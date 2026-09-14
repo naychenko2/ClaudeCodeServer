@@ -1,5 +1,8 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Skills;
+using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -80,11 +83,11 @@ public class LlmSessionAdapterFactoryTests
                 }).Build();
             var providers = new LlmProviderRegistry(config);
             var pool = new ClaudeSubscriptionPool(config);
-            var factory = new LlmSessionAdapterFactory(config, new SkillsService(),
-                new WorkspaceKnowledgeStore(config), providers, pool);
+            var factory = new LlmSessionAdapterFactory(config, new AgentPromptSourceAdapter(new SkillsService()),
+                new WorkspaceDatasetLookup(new WorkspaceKnowledgeStore(config)), providers, pool);
             var session = new Session { Model = "opus[1m]", Provider = "glm" };
             var context = new LlmSessionContext(tempDir, _ => Task.CompletedTask,
-                RawSystemPrompt: null, PermissionRules: null, TasksMcp: null);
+                RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt, PermissionRules: null, TasksMcp: null);
 
             var adapter = factory.Create(session, context);
 
@@ -114,11 +117,11 @@ public class LlmSessionAdapterFactoryTests
                 }).Build();
             var providers = new LlmProviderRegistry(config);
             var pool = new ClaudeSubscriptionPool(config);
-            var factory = new LlmSessionAdapterFactory(config, new SkillsService(),
-                new WorkspaceKnowledgeStore(config), providers, pool);
+            var factory = new LlmSessionAdapterFactory(config, new AgentPromptSourceAdapter(new SkillsService()),
+                new WorkspaceDatasetLookup(new WorkspaceKnowledgeStore(config)), providers, pool);
             var session = new Session { Model = "glm-5.2", Provider = "glm" };
             var context = new LlmSessionContext(tempDir, _ => Task.CompletedTask,
-                RawSystemPrompt: null, PermissionRules: null, TasksMcp: null);
+                RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt, PermissionRules: null, TasksMcp: null);
 
             factory.Create(session, context);
 

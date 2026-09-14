@@ -22,11 +22,12 @@ function isKnowledgeIndexable(filename: string): boolean {
 }
 import { toggleSyncMark, useSyncMarks, computeSyncState, isSyncing, isDownloaded, loadSyncMarks, loadDownloadedSet } from '../lib/sync';
 import { bumpNotes, getNotesSnapshot, useNotesByFile } from '../lib/notes';
-import { IconNotes } from '../features/notes/shared';
-import { NewNoteDialog } from '../features/notes/NewNoteDialog';
 import { onFilesChanged } from '../lib/signalr';
 import { showToast } from '../lib/toast';
 import { beginAiBusy, endAiBusy } from '../lib/ai/busy';
+import { useSubsystem } from '../lib/subsystems';
+import { useSlotItem } from '../lib/subsystems/registry';
+import type { FileExplorerFolderIconCtx, FileExplorerNoteDialogCtx } from '../lib/subsystems/registryCore';
 
 // Форматы, которые markitdown умеет превращать в Markdown (для пункта «Трансформировать в Markdown»)
 const MD_CONVERTIBLE = new Set(['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp', 'epub', 'csv', 'rtf', 'html', 'htm', 'msg']);
@@ -161,9 +162,12 @@ function FolderIcon() {
   return <Folder size={14} strokeWidth={ICON_STROKE} color={C.textSecondary} />;
 }
 
-// Иконка папки «Заметки» (vault проекта) — единая IconNotes в accent-цвете
+// Иконка папки «Заметки» (vault проекта) — из вклада слота file-explorer-action
+// в accent-цвете. Подсистемы нет — падаем на обычную иконку папки.
 function NotesFolderIcon() {
-  return <span style={{ color: C.accent, display: 'flex' }}><IconNotes size={14} /></span>;
+  const c = useSlotItem<FileExplorerFolderIconCtx>('file-explorer-action', 'folder-icon');
+  if (!c) return <FolderIcon />;
+  return <span style={{ color: C.accent, display: 'flex' }}>{c.render?.({ size: 14 })}</span>;
 }
 
 function CloudIcon({ variant }: { variant: 'direct' | 'inherited' | 'idle' }) {
@@ -713,8 +717,19 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   const online = useOnline();
   const hasPanelHeader = useHasPanelHeader();
   const marks = useSyncMarks(project.id);
+  // Гейт по подсистеме заметок: при выключенной — бейджи заметок у файлов и
+  // пункт «Заметка» в меню создания пропадают. Хук вызываем всегда (Rules of
+  // Hooks); под подсистемой результат всё равно пуст, потому что стор заметок
+  // остаётся в дефолтном состоянии.
+  const notesOn = useSubsystem('notes');
+  // Вклады слота file-explorer-action (иконка vault + диалог новой заметки) —
+  // ноль прямых импортов фичи Notes. Пусто у выключенной/незарегистрированной
+  // подсистемы: тогда пункты меню заметок и диалог не показываются.
+  const folderIconC = useSlotItem<FileExplorerFolderIconCtx>('file-explorer-action', 'folder-icon');
+  const newNoteDialogC = useSlotItem<FileExplorerNoteDialogCtx>('file-explorer-action', 'new-note-dialog');
   // Привязки «файл → заметки» (frontmatter file:) — бейдж у файлов дерева
-  const notesByFile = useNotesByFile(project.id);
+  const notesByFileRaw = useNotesByFile(project.id);
+  const notesByFile = notesOn ? notesByFileRaw : new Map<string, never>();
   const initial = _explorerStore.get(project.id);
   const [dirCache, setDirCache] = useState<Map<string, FileEntry[]>>(() => initial?.dirCache ?? new Map());
   const [expanded, setExpanded] = useState<Set<string>>(() => initial?.expanded ?? new Set());
@@ -1574,10 +1589,11 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   const createMenuEl = createMenu && (
     <Menu anchor={createMenu} minWidth={230} maxHeight={240} onClose={() => setCreateMenu(null)}>
       {/* В vault заметок первым пунктом идёт заметка: обычный файл там тоже можно
-          создать, но .md через notes-API получает бэклинки и попадает в граф */}
-      {inNotes && (
+          создать, но .md через notes-API получает бэклинки и попадает в граф.
+          Подсистема выключена — заметки как формата не существует, пункт скрыт */}
+      {inNotes && notesOn && folderIconC && newNoteDialogC && (
         <MenuItem
-          icon={<IconNotes size={15} />}
+          icon={folderIconC.render?.({ size: 15 })}
           label="Заметка"
           onClick={() => { setCreateMenu(null); setNoteDialog({ folder: noteFolderOf(targetDir) }); }}
         />
@@ -2050,7 +2066,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         const add = (cond: unknown, node: ReactNode) => { if (cond) items.push(node); };
         const sep = (key: string) => items.push(<div key={key} style={{ height: 1, background: C.border, margin: '4px 6px' }} />);
 
-        add(entry.isDirectory && inNotesVault(entry.path),
+        add(entry.isDirectory && inNotesVault(entry.path) && newNoteDialogC,
           <MenuItem key="note" icon={<MI_NotePlus />} label="Новая заметка" onClick={() => { close(); setNoteDialog({ folder: noteFolderOf(entry.path) }); }} />);
         // Контекст чата — первым: он про «материал живёт у чата», вложение ниже —
         // про «уедет с ближайшим сообщением». В контексте пункт превращается
@@ -2079,7 +2095,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           <MenuItem key="dossiers" icon={<MI_Dossiers />} label="Почему менялся этот файл" onClick={() => { close(); onOpenDossiers!(entry.path); }} />);
         // «Заметка о файле» — привязка frontmatter file:. Только вне vault: внутри
         // notes/ уже есть «Новая заметка», а заметка о заметке не нужна
-        add(!entry.isDirectory && !inNotesVault(entry.path),
+        add(!entry.isDirectory && !inNotesVault(entry.path) && newNoteDialogC,
           <MenuItem key="note-about" icon={<MI_NotePlus />} label="Заметка о файле" onClick={() => { close(); setNoteDialog({ file: entry.path }); }} />);
 
         // «Заметки» (vault) не переименовываем/не удаляем — сломается база знаний
@@ -2114,20 +2130,19 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       })()}
 
       {/* Диалог «Новая заметка» из раздела файлов (папка vault → source=проект;
-          file — «Заметка о файле» с привязкой frontmatter file:) */}
-      {noteDialog && (
-        <NewNoteDialog
-          defaults={{ source: project.id, folder: noteDialog.folder, file: noteDialog.file }}
-          onClose={() => setNoteDialog(null)}
-          onCreated={() => {
-            setNoteDialog(null);
-            bumpNotes();
-            const dir = noteDialog.folder ? `notes/${noteDialog.folder}` : 'notes';
-            void invalidateDir(dir);
-            setExpanded(prev => new Set(prev).add(dir));
-          }}
-        />
-      )}
+          file — «Заметка о файле» с привязкой frontmatter file:) — вклад слота
+          file-explorer-action. Нет вклада — состояние noteDialog и не возникнет. */}
+      {newNoteDialogC && noteDialog && newNoteDialogC.render?.({
+        defaults: { source: project.id, folder: noteDialog.folder, file: noteDialog.file },
+        onClose: () => setNoteDialog(null),
+        onCreated: () => {
+          setNoteDialog(null);
+          bumpNotes();
+          const dir = noteDialog.folder ? `notes/${noteDialog.folder}` : 'notes';
+          void invalidateDir(dir);
+          setExpanded(prev => new Set(prev).add(dir));
+        },
+      })}
     </div>
   );
 }

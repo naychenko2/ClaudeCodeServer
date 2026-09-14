@@ -85,4 +85,26 @@ public class TurnFailureTextTests
     [InlineData("Prompt is too long: 1529 tokens")]
     public void Нераспознанное_Null(string? raw)
         => TurnFailureText.ForCliError(raw).Should().BeNull();
+
+    // ===== PromptOverflow: текст для ленты при перерасходе cmdline (задача dc641949) =====
+
+    [Fact]
+    public void PromptOverflow_НеПустой_ИмеетДействия()
+    {
+        // Текст показывается пользователю в ленте. Должен называть проблему (размер промпта)
+        // и уводить от ложного "сменить модель" — это ключевая часть лечения: раньше
+        // FallbackLlmSessionAdapter.Classify отдавал Unreachable, фолбэк жёг 5 пар впустую,
+        // и пользователь видел "ни одна модель не ответила" без указания на причину.
+        TurnFailureText.PromptOverflow.Should().NotBeNullOrWhiteSpace();
+        TurnFailureText.PromptOverflow.Should().Contain("командной строки",
+            "формулировка указывает на размер cmdline — причину, а не на «сменить модель»");
+        // FluentAssertions.NotContain(string, StringComparison) в этой версии недоступна —
+        // проверяем через прямой Contains + BeFalse, чтобы сохранить регистронезависимость
+        // (формулировка может писаться «неизвестно»/«Неизвестно», тест ловит оба).
+        TurnFailureText.PromptOverflow.Contains("unknown", StringComparison.OrdinalIgnoreCase)
+            .Should().BeFalse("это НЕ про перегрузку провайдера и НЕ про таймаут — формулировка "
+                + "должна отличаться от Generic/Overloaded, иначе пользователь снова нажмёт «Отправить»");
+        TurnFailureText.PromptOverflow.Contains("попробуйте позже", StringComparison.OrdinalIgnoreCase)
+            .Should().BeFalse("тот же риск — таймаут/перегрузка лечатся подменой, тут бесполезны");
+    }
 }

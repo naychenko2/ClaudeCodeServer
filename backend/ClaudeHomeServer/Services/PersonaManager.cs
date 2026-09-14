@@ -11,7 +11,11 @@ namespace ClaudeHomeServer.Services;
 
 // CRUD персон с изоляцией per-owner. Хранилище — data/personas.json
 // (образец: ProjectManager + JsonFileStore). Все запросы фильтруются по OwnerId.
-public class PersonaManager
+// Реализует IPersonaLookup (Core) для выноса Tasks (Этап 5): TaskManager/Spend читают
+// персону по id через узкий шов, минуя проверки доступа и без зависимости на полный
+// менеджер. `GetByIdInternal` уже был здесь — оформлен как реализация шва без правок
+// логики.
+public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarStore, ClaudeHomeServer.Services.Composition.IPersonaHandleResolver
 {
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -208,10 +212,19 @@ public class PersonaManager
 
     // Весь слой персоны уезжает в claude аргументом --append-system-prompt (ClaudeSession),
     // а командная строка Windows ограничена 32767 символами вместе с остальным промптом хода
-    // (контекст проекта, привязки, code graph, recall памяти, дисциплинарный слой) — это ещё
-    // 8-12 КБ. Отсюда потолок самого контракта: 12 000 символов оставляют запас, при котором
-    // ход стартует. Проверяется только на пользовательской записи (PersonasController → UI и
-    // MCP personas_create/update); ConnectPantheon с его каталожными регламентами идёт мимо.
+    // (контекст проекта, привязки, code graph, recall памяти, дисциплинарный слой). Замер
+    // 2026-09-07 по 48 чатам в зоне риска (≥ 28 000): обвязка — ~27 КБ (persona-layer,
+    // recall-memory, project-builtin-0, persona-mentions, recall-notes, mcp-tasks, code-graph,
+    // voice-mode, mcp-memory, images, mcp-workspace, mcp-personas, persona-bindings,
+    // dossier-recall). Раньше комментарий говорил «8-12 КБ остального промпта» — это
+    // устарело: по факту обвязки выросли в 2-3 раза за счёт подключения MCP-серверов и
+    // recall-каналов. Отсюда потолок самого контракта: 12 000 символов оставляют запас,
+    // при котором TurnPromptAssembler.ApplyBudget (задача dc641949) срезает нестабильные
+    // секции в порядке code-graph → dossier-recall → recall-notes → recall-memory →
+    // persona-mentions и ход укладывается в лимит. Без срезания ~5 КБ уводят из зоны
+    // 30-32к все 48 чатов, и ход стартует. Проверяется только на пользовательской записи
+    // (PersonasController → UI и MCP personas_create/update); ConnectPantheon с его
+    // каталожными регламентами идёт мимо.
     public const int MaxContractChars = 12_000;
 
     // Суммарный размер контракта: все слоты плюс legacy-SystemPrompt — ровно то, что
@@ -326,9 +339,13 @@ public class PersonaManager
         return persona;
     }
 
-    // Подпись персоны для логов: «Роль (Имя)» либо просто имя
-    internal static string PersonaLabel(Persona p) =>
-        string.IsNullOrEmpty(p.Role) ? p.Name : $"{p.Role} ({p.Name})";
+    // Подпись персоны для логов: «Роль (Имя)» либо просто имя.
+    // Утилита форматирования переехала в Core как `PersonaLabel.Of` (Этап 5, вынос Tasks):
+    // несколько вертикалей (Tasks/Spend/DailyBriefing/Team/Memory) подписывали персону
+    // в логах и уведомлениях и ради этого тащили `PersonaManager` целиком. Здесь —
+    // тонкий форвардер для совместимости с прежними вызывающими, вычищается в следующих
+    // волнах (за рамками данной задачи).
+    internal static string PersonaLabel(Persona p) => global::ClaudeHomeServer.Services.PersonaLabel.Of(p);
 
     // --- Подключаемая команда «Пантеон OmO» (built-in-подход, как у самих OmO) ---
 
@@ -909,68 +926,13 @@ public class PersonaManager
     };
 
     // Транслитерация кириллицы для slug: без неё русские имена давали handle «agent»,
-    // и @упоминания превращались в безликие @agent-2
-    private static readonly Dictionary<char, string> Translit = new()
-    {
-        ['а'] = "a",
-        ['б'] = "b",
-        ['в'] = "v",
-        ['г'] = "g",
-        ['д'] = "d",
-        ['е'] = "e",
-        ['ё'] = "e",
-        ['ж'] = "zh",
-        ['з'] = "z",
-        ['и'] = "i",
-        ['й'] = "y",
-        ['к'] = "k",
-        ['л'] = "l",
-        ['м'] = "m",
-        ['н'] = "n",
-        ['о'] = "o",
-        ['п'] = "p",
-        ['р'] = "r",
-        ['с'] = "s",
-        ['т'] = "t",
-        ['у'] = "u",
-        ['ф'] = "f",
-        ['х'] = "h",
-        ['ц'] = "ts",
-        ['ч'] = "ch",
-        ['ш'] = "sh",
-        ['щ'] = "sch",
-        ['ъ'] = "",
-        ['ы'] = "y",
-        ['ь'] = "",
-        ['э'] = "e",
-        ['ю'] = "yu",
-        ['я'] = "ya",
-    };
-
+    // и @упоминания превращались в безликие @agent-2. Сам алгоритм живёт в спине
+    // (`Slugifier`, Этап 3) — здесь тонкий forwarding: имя зовут из десятка мест этого
+    // класса плюс `GitServerService` (имена репозиториев) и `SessionManager` (имена ветвей
+    // и папок worktree). Стиль «х»→«h» зафиксирован: handle персистятся в personas.json
+    // и в @упоминаниях, смена буквы переименовала бы существующие персоны.
     // public: переиспользуется GitServerService для имён репозиториев (транслит кириллицы)
-    public static string Slugify(string s)
-    {
-        var sb = new StringBuilder();
-        var prevDash = false;
-        foreach (var ch in s.Trim().ToLowerInvariant())
-        {
-            if (char.IsLetterOrDigit(ch) && ch < 128)
-            {
-                sb.Append(ch);
-                prevDash = false;
-            }
-            else if (Translit.TryGetValue(ch, out var tr))
-            {
-                if (tr.Length > 0) { sb.Append(tr); prevDash = false; }
-            }
-            else if (!prevDash && sb.Length > 0)
-            {
-                sb.Append('-');
-                prevDash = true;
-            }
-        }
-        return sb.ToString().Trim('-');
-    }
+    public static string Slugify(string s) => Slugifier.Slugify(s, Slugifier.XStyle.H);
 
     private void Load()
     {

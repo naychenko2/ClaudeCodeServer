@@ -1,7 +1,6 @@
-using ClaudeHomeServer.Hubs;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
-using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services;
 
@@ -11,7 +10,7 @@ namespace ClaudeHomeServer.Services;
 //  SessionSummaryService, PersonaAutomationService) проходят через него.
 public class NotificationService(
     NotificationStore store,
-    IHubContext<SessionHub> hub,
+    ISessionBroadcaster broadcaster,
     PushService push,
     PersonaManager personas,
     ProjectManager projects,
@@ -43,7 +42,7 @@ public class NotificationService(
             ProjectName: item.ProjectName) { SessionId = item.SessionId ?? "" };
 
         // In-app тост (SignalR)
-        await hub.Clients.Group("user_" + userId).SendAsync("message", msg);
+        await broadcaster.ToOwner(userId, msg);
 
         // Web push (опционально — для важных: напоминания, завершение задачи)
         if (sendPush)

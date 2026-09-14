@@ -70,6 +70,17 @@ public class ClaudeSessionProcessDeathTests : IDisposable
             return process;
         }
 
+                public int EstimateCommandLineLength(ProcessSpec spec)
+        {
+            // Заглушка для фейков: тесты, которые гоняют ClaudeSession.ApplyBudget,
+            // нуждаются в числовом ответе, но не в точной семантике раннера (её
+            // проверяет DockerProcessRunnerCmdlineEstimationTests на реальном раннере).
+            // Считаем FileName + args через TurnPromptAssembler.ArgCost — та же формула,
+            // что в LocalProcessRunner.EstimateCommandLineLength, без RawArguments.
+            var total = (spec.FileName ?? string.Empty).Length;
+            foreach (var a in spec.Args) total += TurnPromptAssembler.ArgCost(a);
+            return total;
+        }
         public void Kill(Process process, string? turnId = null)
         {
             try { process.Kill(entireProcessTree: true); }
@@ -98,7 +109,7 @@ public class ClaudeSessionProcessDeathTests : IDisposable
                 if (m is ExitedMessage) exitedSeen.TrySetResult();
                 return Task.CompletedTask;
             },
-            RawSystemPrompt: null,
+            RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
             PermissionRules: null,
             TasksMcp: null,
             Launcher: new SleepingCliLauncher(_processes, started));

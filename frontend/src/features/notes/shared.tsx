@@ -3,8 +3,7 @@ import {
   Search, Plus, Eye, SquarePen, MessageCircle, Share2, StickyNote, Undo2, ExternalLink,
   Trash2, ArrowLeft, CalendarDays, Folder, FolderOutput, Sparkles, Link2, Star,
 } from 'lucide-react';
-import { C, FONT, R } from '../../lib/design';
-import { projectColor } from '../../lib/tasks';
+import { C, FONT, R, projectColor } from 'aihome_shell/kit';
 
 // Цвет источника заметки: личный vault — accent, проект — детерминированный цвет проекта.
 export function sourceColor(source: string): string {

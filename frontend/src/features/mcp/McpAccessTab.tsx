@@ -45,13 +45,27 @@ function AllowAccessView({ data, onClose, onAdd, onEdit }: {
     );
   }
 
-  if (servers.length === 0) {
+  // Встроенные интеграции (dify / fal-ai / glif / higgsfield) доставляются во все чаты
+  // владельца по факту OAuth-входа — каскад «включить в проекте / выдать персоне» для
+  // них снят. Признак группы бэкенд отдаёт через McpRegistry.BuiltinGroupOf → McpBuiltinGroups.
+  // Фильтруем на входе: тумблеры на таких записях только врали бы про модель доступа.
+  const integrationCount = servers.filter(s => s.group === 'integration').length;
+  const ownServers = servers.filter(s => s.group !== 'integration');
+  // Один текст на оба случая: пустое состояние и подсказка под списком. Имя «Higgsfield»
+  // здесь не случайно — человек, который только что вошёл, шёл в раздел MCP именно за ним
+  // (увидел в ленте), и обобщённое «встроенные серверы доступны всегда» ему не отвечает.
+  // Когда интеграций нет — возвращаемся к прежней общей формулировке
+  const integrationHint = 'Интеграции вроде Higgsfield работают во всех чатах после входа — отдельно выдавать доступ не нужно.';
+
+  if (ownServers.length === 0) {
     return (
       <EmptyState
         compact
         icon={<Plug size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />}
         title="Своих серверов пока нет"
-        subtitle="Выдавать доступ пока не к чему: встроенные серверы продукта доступны всегда."
+        subtitle={integrationCount > 0
+          ? integrationHint
+          : 'Выдавать доступ пока не к чему: встроенные серверы продукта доступны всегда.'}
         action={<Button variant="primary" size="sm" onClick={onAdd}>Добавить сервер</Button>}
       />
     );
@@ -64,7 +78,10 @@ function AllowAccessView({ data, onClose, onAdd, onEdit }: {
         Свой сервер едет в ход, только если он включён в проекте этого чата или у персоны
         этого чата. Чат вне проекта — по отдельной настройке сервера «Чаты вне проектов».
       </div>
-      {servers.map(server => (
+      {integrationCount > 0 && (
+        <div style={allowHintStyle}>{integrationHint}</div>
+      )}
+      {ownServers.map(server => (
         <ServerAccessCard key={server.id} server={server} data={data} projects={projects} personas={personas} onClose={onClose} onEdit={onEdit} />
       ))}
     </div>

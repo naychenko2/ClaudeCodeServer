@@ -2,11 +2,11 @@ using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
-using ClaudeHomeServer.Hubs;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Dossiers;
-using Microsoft.AspNetCore.SignalR;
+using ClaudeHomeServer.Services.Memory;
 
 namespace ClaudeHomeServer.Services.Mcp.Http;
 
@@ -43,12 +43,12 @@ public sealed class MemoryToolset(
     DossierRecallService dossierRecall,
     FeatureFlagService flags,
     IConfiguration config,
-    IHubContext<SessionHub> hub) : IMcpParameterizedToolset
+    ISessionBroadcaster broadcaster) : IMcpParameterizedToolset
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/memory/{personaId}/{projectId}.
     // Константа — единственная точка правды: URL конфига хода (ClaudeSession) и хвост
     // собирает сам тулсет, литералы не дублируются
-    public const string ServerName = "memory";
+    public const string ServerName = McpEndpoints.MemoryName;
 
     // Сегмент «параметра нет» в хвосте маршрута: чат без персоны (team-only) или вне проекта.
     // Дефис не сталкивается с реальными id (это GUID) и не требует percent-кодирования
@@ -327,7 +327,7 @@ public sealed class MemoryToolset(
 
     /// <summary>URL эндпоинта в конфиге хода: базовый адрес + маршрут тулсета с хвостом.</summary>
     public static string EndpointFor(string apiUrl, string? personaId, string? projectId) =>
-        McpHttpTransport.EndpointFor(apiUrl, ServerName) + "/" + RouteTail(personaId, projectId);
+        McpEndpoints.EndpointFor(apiUrl, ServerName) + "/" + RouteTail(personaId, projectId);
 
     private static string Segment(string? id) =>
         string.IsNullOrEmpty(id) ? NoneSegment : id;
@@ -473,12 +473,12 @@ public sealed class MemoryToolset(
     // --- Broadcast (UI-панели памяти обновляются и при MCP-записи, как при stdio-прокси) ---
 
     private async Task BroadcastMemoryAsync(string ownerId, string personaId) =>
-        await hub.Clients.Group("user_" + ownerId)
-            .SendAsync("message", new PersonasChangedMessage("memory", personaId));
+        await broadcaster.ToOwner(ownerId,
+            new PersonasChangedMessage("memory", personaId));
 
     private async Task BroadcastTeamAsync(string ownerId, string projectId, string action, string? entryId) =>
-        await hub.Clients.Group("user_" + ownerId)
-            .SendAsync("message", new TeamMemoryChangedMessage(action, projectId, entryId));
+        await broadcaster.ToOwner(ownerId,
+            new TeamMemoryChangedMessage(action, projectId, entryId));
 
     // --- Схемы инструментов: копия mcp/memory-server/index.js (источник контракта — здесь,
     // index.js заморожен; сторож парности — MemoryToolsetParityTests). internal для того

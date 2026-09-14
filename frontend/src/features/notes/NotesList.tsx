@@ -1,13 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, FileText, FolderPlus, MessageCircle, Timer, X } from 'lucide-react';
 import type { NoteSummary } from '../../types';
-import { api } from '../../lib/api';
-import { bumpNotes, isFavorite, toggleFavorite, useNoteFolders } from '../../lib/notes';
-import { C, FONT, FS, R, SHADOW } from '../../lib/design';
-import { ICON_SIZE } from '../../components/ui/icons';
-import { ConfirmDialog, IconButton } from '../../components/ui';
+import {
+  api, bumpNotes, isFavorite, toggleFavorite, useNoteFolders, C, FONT, FS, R, SHADOW,
+  ICON_SIZE, ConfirmDialog, IconButton, NO_AUTOFILL,
+} from 'aihome_shell/kit';
 import { CollapseGroup, SourceDot, IconFolder, IconFolderMove, IconPencil, IconPlus, IconStar, IconTrash } from './shared';
-import { NO_AUTOFILL } from '../../lib/noAutofill';
 // Форматирует остаток времени от ISO-строки expiresAt
 const expiryTimeLeft = (expiresAt?: string): { label: string; urgent: boolean } | null => {
   if (!expiresAt) return null;

@@ -1,0 +1,122 @@
+using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Http;
+
+namespace ClaudeHomeServer.Services.Knowledge;
+
+// Подсистема Knowledge: единая точка входа Dify RAG (ADR-013 + Knowledge.md).
+// Регистрирует стор рабочего пространства, сервис Dify-моста, синк файлов проекта
+// с документами Dify (hosted-мост на ход Claude), каскадную уборку при удалении
+// пользователя, реконсайлер error-документов Dify и каталог баз знаний
+// (общий для REST /api/knowledge/catalog и wsp-тулсета Dify).
+//
+// Состав (ранее жил тремя блоками в Program.cs:323, 388, 668-693 без форвардеров):
+// - WorkspaceKnowledgeStore — JSON-стор `data/workspace-knowledge.json` (привязка
+//   «путь проекта → {DifyDatasetId, DocumentTags}»); миграция из старых полей Project
+//   выполняется ОДНОКРАТНО в блоке PostConfigure (см. ниже — причина отдельной жизни).
+// - KnowledgeService — клиент Dify: список/создание документов, поиск, ретривер,
+//   graceful degradation при недоступном Dify.
+// - KnowledgeBaseCatalogService — менеджер Dify-датасетов под пользователя (общий
+//   для REST /api/knowledge/catalog и wsp-тулсета Dify, см. ADR-014 §Knowledge).
+// - ProjectKnowledgeSyncService — дебаунс-синк «файл проекта ↔ документ БЗ»:
+//   singleton, подписан на `IProjectFileGateway.OnMutated` (Core-шов; в адаптере
+//   в Main это `FileService.OnMutated`).
+// - ProjectKnowledgeTurnSync (hosted через AddGatedHostedFrom) — мост «ход Claude
+//   → синк»: подписан на `ISessionMessageObserver` (Core-шов) и зовёт
+//   `ProjectKnowledgeSyncService.QueueSync` с путями из `FileChangedMessage`/
+//   `ResultMessage`.
+// - UserKnowledgeCascade — каскадная уборка знаний при удалении пользователя
+//   (UsersController).
+// - IKnowledgeAlertNotifier + KnowledgeAlertNotifier — шов нотификатора для
+//   реконсайлера (юнит-тесты дедупа, как у ISubscriptionAlertNotifier).
+// - KnowledgeIndexReconciler (hosted через AddGatedHostedFrom) — фоновая петля
+//   реконсайлера error-документов Dify (Dify:Reconcile, дефолт Mode=off — dark launch).
+// - HTTP-клиент `dify` (AddQuietHttpClient + WithoutEgressProxy) — Dify локальный,
+//   egress-прокси ему противопоказан (инвариант, как у Forgejo).
+//
+// ⚠ Миграция `WorkspaceKnowledgeStore.MigrateFromProjects` НЕ переехала из Program.cs
+// (PostConfigure ~строка 993). Причина: `UseSubsystems()` (`AddSubsystems(...)`) выполняется
+// ДО `PostRestoreHook.RunIfNeeded`, и перенос миграции в `IAppPhaseSubsystem.ConfigureApp`
+// сломал бы восстановление из бэкапа — инвариант требует, чтобы `WorkspaceKnowledgeStore`
+// НЕ конструировался до хука.
+//
+// ⚠ Пять форвардеров `IKnowledgeSyncParticipant → {PersonaMemoryService, TeamMemoryService,
+// DossierStore, NotesKnowledgeService, ProjectKnowledgeSyncService}` тоже остаются
+// в Program.cs — это кросс-вертикальный клей между пятью владельцами стора «запись →
+// {DocId, Hash}» (PersonaMemory, TeamMemory, Dossiers, Notes, ProjectSync). Перенос в
+// `KnowledgeSubsystem` дал бы ей прямые ссылки на `DossierStore` и прочие чужие вертикали.
+//
+// Границы (сознательные):
+// - Источник истины — Dify + локальный стор `data/workspace-knowledge.json`. Бэкап идёт
+//   общим правилом `data/`; отдельно ничего не прописываем.
+// - `ICheapTextRunner` (Services.Llm) — KnowledgeIndexReconciler не использует, но
+//   `ProjectKnowledgeSyncService` (вне записи) при будущем расширении может; сейчас
+//   допуск не нужен.
+// - `IKnowledgeNotificationDispatcher` (Core-шов) — `KnowledgeAlertNotifier` шлёт
+//   алерт владельцу через Core-интерфейс; реализация в Main переиспользует
+//   `NotificationService` (Services/ корень) и его стор, как `AlertPollingService`,
+//   но Knowledge этого типа не видит — инвариант «вертикаль → спинка только через
+//   Core-шовы», как у Git/Deploy (см. `KnowledgeAlertNotifier.cs:23-24`,
+//   `Core/Services/IKnowledgeNotificationDispatcher.cs`).
+// - Все типы подсистемы (`WorkspaceKnowledgeStore`/`KnowledgeService`/`KnowledgeBaseCatalogService`/
+//   `ProjectKnowledgeSyncService`/`UserKnowledgeCascade`/`KnowledgeAlertNotifier`/
+//   `KnowledgeIndexReconciler`/`IKnowledgeSyncParticipant`/`KnowledgeSyncTarget`/
+//   `IKnowledgeAlertNotifier`) живут в `Services.Knowledge` и попадают под префиксный
+//   allow-list сторожа SubsystemBoundaryTests напрямую.
+public sealed class KnowledgeSubsystem : IAppSubsystem
+{
+    public string Key => "knowledge";
+
+    public string Title => "Знания";
+
+    public void Register(IServiceCollection services, IConfiguration config)
+    {
+        // WorkspaceKnowledgeStore — стор `data/workspace-knowledge.json`, миграция из Project
+        // выполняется отдельным пост-билд блоком в Program.cs (см. шапку файла).
+        services.AddSingleton<WorkspaceKnowledgeStore>();
+
+        // Каталог баз знаний Dify под пользователя — общий для REST /api/knowledge/catalog
+        // и wsp-тулсета Dify (см. ADR-014 §Knowledge).
+        services.AddSingleton<KnowledgeBaseCatalogService>();
+
+        // Dify — локальный сервис, egress-прокси ему противопоказан (инвариант, как у Forgejo).
+        services.AddQuietHttpClient("dify", new QuietHttpClientProfile(
+            Category: "ClaudeHomeServer.Knowledge.Dify",
+            Subject: "базой знаний Dify",
+            Consequence: "Семантический поиск по заметкам и знаниям не работает."))
+            .WithoutEgressProxy();
+
+        // Секция DifyOptions (источник правды для KnowledgeService/ProjectKnowledgeSyncService/
+        // KnowledgeIndexReconciler и других потребителей).
+        services.Configure<DifyOptions>(config.GetSection(DifyOptions.Section));
+
+        // Клиент Dify: список/создание документов, поиск, ретривер; graceful degradation
+        // при недоступном Dify (см. KnowledgeService).
+        services.AddSingleton<KnowledgeService>();
+        // Шов из Core (IKnowledgeIndex, Этап 5, волна 5): Notes/Memory/Dossiers зовут
+        // шесть методов KnowledgeService через узкий Core-контракт. Полный API сервиса
+        // (включая EnsureDatasetAsync, ListDatasetsAsync, UpdateDocumentTagsAsync и пр.)
+        // остаётся доступным напрямую как KnowledgeService — для ProjectKnowledgeSyncService
+        // и контроллеров Main.
+        services.AddSingleton<IKnowledgeIndex>(
+            sp => sp.GetRequiredService<KnowledgeService>());
+
+        // Синк «файл проекта ↔ документ БЗ»: singleton + hosted-мост событий хода Claude
+        // (ProjectKnowledgeTurnSync подписан на ISessionMessageObserver и на QueueSync
+        // синка; сам синк подписан на IProjectFileGateway.OnMutated).
+        services.AddSingleton<ProjectKnowledgeSyncService>();
+        services.AddGatedHostedService<ProjectKnowledgeTurnSync>(config);
+
+        // Каскадная уборка знаний при удалении пользователя (UsersController).
+        services.AddSingleton<UserKnowledgeCascade>();
+
+        // Шов нотификатора (для тестов дедупа KnowledgeIndexReconciler, по аналогии с
+        // ISubscriptionAlertNotifier).
+        services.AddSingleton<IKnowledgeAlertNotifier, KnowledgeAlertNotifier>();
+
+        // Реконсайлер error-документов Dify (Dify:Reconcile, дефолт Mode=off — dark launch):
+        // singleton + hosted, чтобы снапшот состояния был доступен видимости.
+        services.AddSingleton<KnowledgeIndexReconciler>();
+        services.AddGatedHostedFrom(config, sp => sp.GetRequiredService<KnowledgeIndexReconciler>());
+    }
+}

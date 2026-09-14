@@ -38,7 +38,7 @@ public class DeployController(DeployService deploy, SessionManager sessions) : C
     {
         get
         {
-            if (!Request.Headers.TryGetValue(Filters.DenyOnDelegatedTurnAttribute.CallerHeader, out var v)
+            if (!Request.Headers.TryGetValue(McpEndpoints.CallerSessionHeader, out var v)
                 || v.FirstOrDefault() is not { Length: > 0 } id) return null;
             var session = sessions.GetById(id);
             return session is not null && sessions.ResolveOwnerId(session) == UserId ? id : null;

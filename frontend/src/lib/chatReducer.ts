@@ -25,6 +25,7 @@ export function teamImplementSnapshot(ti: SessionTeamImplement | null): TeamImpl
     budget: ti?.budget ?? {
       tasksUsed: 0, wavesUsed: 0, runsUsed: 0, retriesUsed: 0, wakeupsUsed: 0,
       maxTasks: 0, maxWaves: 0, maxRuns: 0, maxRetries: 0, maxWakeups: 0,
+      maxWavesAfter: 0, maxTasksAfter: 0,
     },
     coordinatorNoCode: ti?.coordinatorNoCode ?? true,
     stopped: ti?.stopped ?? false,
@@ -673,8 +674,10 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         // compact_status с результатом, и без сброса «Сжимаю…» висело бы до перезагрузки
         isCompacting: false,
         // details — сырой технический текст за человекочитаемым msg.text; если следом
-        // придёт подмена модели, элемент схлопнется в её маркер (appendModelSwitched)
-        items: [...prev.items, { kind: 'error', text: msg.text, canRetry: true, ...(msg.details ? { details: msg.details } : {}) }],
+        // придёт подмена модели, элемент схлопнется в её маркер (appendModelSwitched).
+        // action — признак предлагаемого действия под карточкой (window-1m-drop): проброс
+        // без сравнения с текстом, чтобы смена формулировки на бэке не сломала UI молча
+        items: [...prev.items, { kind: 'error', text: msg.text, canRetry: true, ...(msg.details ? { details: msg.details } : {}), ...(msg.action ? { action: msg.action } : {}) }],
       };
 
     case 'exited': {
@@ -767,10 +770,20 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       return withItems([...prev.items, { kind: 'git_turn_commit', projectId: msg.projectId, sha: msg.sha, subject: msg.subject }]);
 
     case 'work_loop':
-      // Цикл «до готово»: приходит при каждом изменении состояния (вкл/итерация/верификация/стоп)
+      // Цикл «до готово»: приходит при каждом изменении состояния (вкл/итерация/верификация/стоп).
+      // WaitingReason и WaitingTicks заполнены только при ожидании по маркеру `<waiting>`
+      // (не по живой задаче): пробрасываем наверх, чтобы WaitingIndicator показал причину
+      // и счётчик тиков рядом с печатной машинкой.
       return {
         ...prev,
-        workLoop: { active: msg.active, iteration: msg.iteration, maxIterations: msg.maxIterations, phase: msg.phase },
+        workLoop: {
+          active: msg.active,
+          iteration: msg.iteration,
+          maxIterations: msg.maxIterations,
+          phase: msg.phase,
+          waitingReason: msg.waitingReason ?? null,
+          waitingTicks: msg.waitingTicks ?? 0,
+        },
       };
 
     case 'work_loop_stopped':
@@ -836,6 +849,10 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
           details: msg.details,
           actions: msg.actions ?? [],
           taskId: msg.taskId,
+          // Название задачи (волна 1 team-blocker-honest, дефект 1430b732): если живое
+          // событие пришло без него (старый бэкенд), держим ранее известное — переиздание
+          // не должно «обнулять» подпись диалога снятия
+          taskTitle: msg.taskTitle ?? prevCard?.escalation.taskTitle,
           wave: msg.wave,
           // Время живёт только в истории — при переиздании сохраняем уже известное
           createdAt: prevCard?.escalation.createdAt,
@@ -844,6 +861,10 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
           // Автор (Э8) фиксируется в момент публикации — если переиздание вдруг придёт без
           // него, не даём авторству карточки «мигать» на пустое
           personaId: msg.personaId ?? prevCard?.escalation.personaId,
+          // Примечание от штаба (chosenActionId="resolvedByStaff"): одно переиздание
+          // может его принести, следующее — нет; как с автором, держим последнее
+          // известное, чтобы при пересборке при рестарте не терять уже показанное
+          resolutionNote: msg.resolutionNote ?? prevCard?.escalation.resolutionNote,
         },
       };
       if (idx < 0) return withItems([...prev.items, card]);

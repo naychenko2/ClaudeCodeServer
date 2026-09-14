@@ -139,6 +139,17 @@ public class ClaudeSessionDiedEmptyRetryTests : IDisposable
             return process;
         }
 
+                public int EstimateCommandLineLength(ProcessSpec spec)
+        {
+            // Заглушка для фейков: тесты, которые гоняют ClaudeSession.ApplyBudget,
+            // нуждаются в числовом ответе, но не в точной семантике раннера (её
+            // проверяет DockerProcessRunnerCmdlineEstimationTests на реальном раннере).
+            // Считаем FileName + args через TurnPromptAssembler.ArgCost — та же формула,
+            // что в LocalProcessRunner.EstimateCommandLineLength, без RawArguments.
+            var total = (spec.FileName ?? string.Empty).Length;
+            foreach (var a in spec.Args) total += TurnPromptAssembler.ArgCost(a);
+            return total;
+        }
         public void Kill(Process process, string? turnId = null)
         {
             try { process.Kill(entireProcessTree: true); }
@@ -162,7 +173,7 @@ public class ClaudeSessionDiedEmptyRetryTests : IDisposable
                 if (m is ExitedMessage) turn2ExitedSeen.TrySetResult();
                 return Task.CompletedTask;
             },
-            RawSystemPrompt: null,
+            RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
             PermissionRules: null,
             TasksMcp: null,
             // Один http-сервер реестра: BuildTurnMcpConfig обязан собрать temp-конфиг хода

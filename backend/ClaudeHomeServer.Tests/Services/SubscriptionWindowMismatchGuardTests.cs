@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Tests.Helpers;
-using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Llm;
 using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Services;
@@ -8,6 +9,9 @@ namespace ClaudeHomeServer.Tests.Services;
 // (probe/turn) и профильным логином (oauth) одного ключа — инцидент 20–23.08.2026.
 // Алерт — ровно один на смену состояния; без пары каналов (аккаунт без профильного
 // логина), на несвежих снимках и при мелком расхождении — тишина. Из ротации — никогда.
+// Часть тестов перехватывает Console.SetError (процесс-глобален) — класс идёт в коллекции
+// процесс-глобального состояния (см. TestCollections.cs).
+[Collection(TestCollections.ProcessGlobalState)]
 public class SubscriptionWindowMismatchGuardTests : IDisposable
 {
     private readonly string _tempDir;

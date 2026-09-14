@@ -94,7 +94,6 @@ public class McpToolsetStabilityTests
     [SkippableTheory]
     [InlineData("private WidgetsMcpContext? BuildWidgetsContext", "widgets")]
     [InlineData("private CodeGraphMcpContext? BuildCodeGraphContext", "codegraph")]
-    [InlineData("private Func<string?, Task<string?>>? BuildCodeGraphProvider", "codegraph")]
     // internal с волны 2 http: те же формулы резолвят тулсеты по живой сессии-вызывателю
     [InlineData("internal bool PersonasEnabled", "personas")]
     [InlineData("internal bool ConsultantsEnabled", "consultants")]
@@ -182,9 +181,11 @@ public class McpToolsetStabilityTests
     }
 
     /// <summary>
-    /// Статус MCP-серверов пишется из ОДНОЙ точки — приёмника состава инструментов, который
-    /// уже получает system/init хода. Заводить ради статуса второй канал (правку ClaudeSession,
-    /// новое поле протокола, фоновый поллинг) не нужно: init перечисляет все поднятые серверы.
+    /// Статус MCP-серверов пишется из ОДНОЙ точки — обработчика шины для фазы Tools
+    /// (приёмник system/init хода). После переезда на шину событий хода роль приёмника
+    /// выполняет SafePromptSnapshotAttach, вызываемый подписчиком PromptSnapshotPhase.Tools.
+    /// Заводить ради статуса второй канал (правку ClaudeSession, новое поле протокола,
+    /// фоновый поллинг) не нужно: init перечисляет все поднятые серверы.
     /// </summary>
     [SkippableFact]
     public void СтатусСерверов_ПишетсяИзПриёмникаSystemInit()
@@ -193,7 +194,7 @@ public class McpToolsetStabilityTests
         Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
 
         var body = MethodBody(File.ReadAllText(path!),
-            "private Action<string, IReadOnlyList<string>, IReadOnlyList<McpServerInfo>>? PromptToolsSinkFor");
+            "private void SafePromptSnapshotAttach(string sessionId, string snapshotId,\r\n    IReadOnlyList<string> tools, IReadOnlyList<McpServerInfo> servers)");
 
         body.Should().Contain("RecordFromInit(",
             "наблюдение из system/init обязано попадать в McpStatusStore");
@@ -225,6 +226,87 @@ public class McpToolsetStabilityTests
         Skip.If(policy is null, "PersonaAccessPolicy.cs не найден");
         File.ReadAllText(policy!).Should().NotContain("mcp__mcp_",
             "инструменты серверов реестра гасятся отключением сервера, а не deny-правилами");
+    }
+
+    /// <summary>
+    /// Продуктовая встроенная интеграция Higgsfield доставляется НЕ по каскаду реестра
+    /// (McpServersOn/McpServerGranted), а собственной чистой формулой
+    /// McpDelivery.IsBuiltinDelivered: рубильник записи + RO-гейт. Возврат к
+    /// McpDelivery.ShouldDeliver в этой ветке был бы откатом заявки
+    /// «продуктовая интеграция, не запись реестра» и обязан ронять тест.
+    /// </summary>
+    [SkippableFact]
+    public void Хиггсфилд_ПродуктоваяИнтеграция_КаскадРеестраНеПрименяется()
+    {
+        var path = FindSource("Services", "SessionManager.cs");
+        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+
+        var body = MethodBody(File.ReadAllText(path!), "private void TryAddHiggsfieldBuiltin");
+
+        // Решение принимает отдельная точка — IsBuiltinDelivered
+        body.Should().Contain("IsBuiltinDelivered(",
+            "продуктовая интеграция: гейт — McpDelivery.IsBuiltinDelivered, без проекта/персоны");
+        // Каскад реестра (McpServersOn / McpServerGranted) здесь НЕ применяется
+        body.Should().NotContain("McpServerGranted(",
+            "выдача сервера персоне — каскад реестра, к встроенной интеграции не относится");
+        body.Should().NotContain("McpServersOn",
+            "McpServersOn — каскад реестра, к встроенной интеграции не относится");
+        body.Should().NotContain("Mcp.McpDelivery.ShouldDeliver(",
+            "возврат к ShouldDeliver откатывает продуктовое правило на реестровое");
+        // Фич-флага в этой ветке нет с 2026-09-08 (снят): интеграция работает безусловно,
+        // единственный предохранитель — рубильник Enabled записи, который читает
+        // IsBuiltinDelivered. Возврат любой проверки флага (хоть FeatureFlagKeys.DesktopAgent,
+        // хоть литералом "higgsfield") обязан ронять тест: доставка идёт по записи
+        // реестра, а не по тумблеру фичи.
+        body.Should().NotContain("_flags",
+            "флаг higgsfield снят: доставка идёт по записи реестра, а не по тумблеру фичи");
+        // Живой OAuth сохраняем
+        body.Should().Contain("EnsureFresh",
+            "живой OAuth-токен обязателен (или сервер снимается с хода с WARN)");
+        // RO-гейт сохранён через IsBuiltinDelivered — требование точное: «readOnly» даёт
+        // и сигнатура bool readOnly, поэтому проверять «любое вхождение readOnly» бессмысленно,
+        // мутация «захардкодить readOnly: false на месте вызова» пройдёт. Требуем точный вызов
+        // IsBuiltinDelivered(hf, readOnly) — иначе проводка «RO персоны → гейт» не закрыта.
+        body.Should().Contain("IsBuiltinDelivered(hf, readOnly)",
+            "readOnly персоны обязан доезжать до гейта, а не гаситься литералом на месте вызова");
+    }
+
+    /// <summary>
+    /// Записи встроенных интеграций (IntegrationKeys, сейчас — dify/fal-ai/glif/higgsfield)
+    /// доставляются собственной веткой (TryAddHiggsfieldBuiltin и аналоги), а НЕ реестровым
+    /// циклом BuildExternalMcpProvider. Иначе у доставки становится две точки истины:
+    /// higgsfield лежит в реестре и включён в проекте/персоне — и доедет реестровым путём
+    /// мимо продуктовой формулы (рубильник Enabled + RO-гейт), да ещё дублем.
+    /// </summary>
+    [SkippableFact]
+    public void Хиггсфилд_РеестровыйЦикл_ИсключаетВстроенныеИнтеграции()
+    {
+        var path = FindSource("Services", "SessionManager.cs");
+        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+
+        var body = MethodBody(File.ReadAllText(path!),
+            "private Func<ExternalMcpContext?>? BuildExternalMcpProvider");
+
+        // Тело реестрового цикла обязано знать, что ключи из IntegrationKeys пропускаются —
+        // иначе путь «включено в проекте/персоне» доставляет higgsfield мимо продуктовой формулы.
+        body.Should().Contain("IntegrationKeys",
+            "реестровый цикл BuildExternalMcpProvider обязан пропускать записи встроенных "
+            + "интеграций — их доставляет TryAddHiggsfieldBuiltin по рубильнику Enabled и RO-гейту, "
+            + "а каскад «проект/персона» к ним не применяется");
+
+        // Гейт ОБЯЗАН сравнивать ключ без учёта регистра: McpRegistry грузит data/mcp-servers.json
+        // через JsonFileStore.Load как есть, минуя нормализацию Create/CreateBuiltIn/Update,
+        // и запись вроде «HIGGSFIELD» проскользнёт в реестр (ручная правка файла, восстановление
+        // из бэкапа, миграция). Array.IndexOf сравнивает по Ordinal — запись поедет реестровым
+        // путём мимо продуктовой формулы, и мы получим ровно ту поломку, которую чинили волной 2.
+        body.Should().Contain("IntegrationKeys.Contains(",
+            "гейт должен использовать Contains, а не Array.IndexOf — последний case-sensitive "
+            + "и не ловит ключ, попавший в реестр мимо нормализации");
+        body.Should().Contain("StringComparer.OrdinalIgnoreCase",
+            "CompareMode OrdinalIgnoreCase — единственное правило, общее с McpRegistry.BuiltinGroupOf, "
+            + "иначе классификатор экрана «MCP-серверы» и гейт реестрового цикла разойдутся");
+        body.Should().NotContain("Array.IndexOf(Mcp.McpRegistry.IntegrationKeys",
+            "Array.IndexOf по Ordinal — возврат к поломке волны 2 через чёрный ход JsonFileStore.Load");
     }
 
     /// <summary>
@@ -389,6 +471,34 @@ public class McpToolsetStabilityTests
         statement.Should().NotContain("MentionsHint",
             "MentionsHint — про текст промпта, а не про состав: гаснет при единственной "
             + "персоне владельца, тогда как persona_ask остаётся");
+    }
+
+    /// <summary>
+    /// Белый список инструментов профиля провайдера (KeepMcpTools) режет состав tools/list —
+    /// значит обязан решаться ТОЛЬКО по свойствам сессии: сессия-вызыватель → её эффективная
+    /// модель → провайдер. Любое обращение к состоянию хода здесь означало бы мерцание состава
+    /// между ходами и перезапуск процесса CLI со всеми MCP-серверами.
+    /// </summary>
+    [SkippableFact]
+    public void ФильтрKeepMcpTools_РешаетсяПоСессииАНеПоХоду()
+    {
+        var path = FindSource("Services", "Mcp", "Http", "McpToolWhitelist.cs");
+        Skip.If(path is null, "McpToolWhitelist.cs не найден (сборка вне дерева репозитория)");
+
+        var code = string.Join('\n', File.ReadAllText(path!).Split('\n')
+            .Where(l => !l.TrimStart().StartsWith("//", StringComparison.Ordinal)
+                && !l.TrimStart().StartsWith("///", StringComparison.Ordinal)));
+
+        code.Should().Contain("GetOwned(",
+            "профиль резолвится по сессии-вызывателю, изолированной по владельцу токена");
+        code.Should().Contain("ResolveByModel(",
+            "провайдер выводится из эффективной модели сессии — той же формулой, что в бою");
+        code.Should().NotContain("GetActiveTurnDelegation",
+            "глубина делегирования — свойство ХОДА: гейт делегирования живёт отдельно");
+        code.Should().NotContain("TurnDelegation",
+            "состояние делегирования не смеет влиять на состав инструментов");
+        code.Should().NotContain("_currentTurn",
+            "состояние хода не должно влиять на состав инструментов");
     }
 
     // Каталог по пути от корня репозитория (FindSource ищет файл — этот ищет папку)

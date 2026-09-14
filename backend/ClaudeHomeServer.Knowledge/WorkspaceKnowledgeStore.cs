@@ -1,0 +1,112 @@
+using System.Collections.Concurrent;
+using System.Text.Json;
+using ClaudeHomeServer.Models;
+
+namespace ClaudeHomeServer.Services.Knowledge;
+
+public class WorkspaceKnowledgeStore
+{
+    private readonly ConcurrentDictionary<string, WorkspaceKnowledge> _store =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly string _storePath;
+    private readonly Lock _saveLock = new();
+
+    public WorkspaceKnowledgeStore(IConfiguration config)
+    {
+        var projectsPath = config["DataPath"]
+            ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
+        var dataDir = Path.GetDirectoryName(projectsPath)
+            ?? Path.Combine(AppContext.BaseDirectory, "data");
+        _storePath = Path.Combine(dataDir, "workspace-knowledge.json");
+        Load();
+    }
+
+    // Примитив переехал в `Core.Services.PathNormalizer` (Этап 3, волна 1).
+    // Здесь — тонкий forwarding, чтобы существующие вызовы `WorkspaceKnowledgeStore.NormalizePath`
+    // в `ProjectManager`/`SessionManager`/`ClaudeSession`/контроллерах не ломались.
+    public static string NormalizePath(string path) => PathNormalizer.NormalizePath(path);
+
+    public WorkspaceKnowledge? GetByPath(string rootPath) =>
+        _store.GetValueOrDefault(NormalizePath(rootPath));
+
+    // Снимок всех записей (для реконсайлера error-документов — обход датасетов проектов)
+    public IReadOnlyList<WorkspaceKnowledge> All() => _store.Values.ToList();
+
+    public WorkspaceKnowledge GetOrCreate(string rootPath)
+    {
+        var key = NormalizePath(rootPath);
+        return _store.GetOrAdd(key, _ => new WorkspaceKnowledge { RootPath = rootPath });
+    }
+
+    public void Save(WorkspaceKnowledge wk)
+    {
+        var key = NormalizePath(wk.RootPath);
+        wk.UpdatedAt = DateTime.UtcNow;
+        _store[key] = wk;
+        Persist();
+    }
+
+    public void Delete(string rootPath)
+    {
+        _store.TryRemove(NormalizePath(rootPath), out _);
+        Persist();
+    }
+
+    // Миграция записи при смене RootPath проекта: датасет/документы переезжают под новый ключ
+    // (иначе запись сиротеет, а EnsureDatasetAsync создаёт дубль-датасет для нового пути).
+    // Если под новым путём уже есть запись с датасетом — не затираем её, старую оставляем.
+    public bool Move(string oldRootPath, string newRootPath)
+    {
+        var oldKey = NormalizePath(oldRootPath);
+        var newKey = NormalizePath(newRootPath);
+        if (oldKey == newKey) return false;
+        if (!_store.TryGetValue(oldKey, out var wk)) return false;
+        if (_store.TryGetValue(newKey, out var existing) && !string.IsNullOrEmpty(existing.DifyDatasetId))
+            return false;
+        _store.TryRemove(oldKey, out _);
+        wk.RootPath = newRootPath;
+        wk.UpdatedAt = DateTime.UtcNow;
+        _store[newKey] = wk;
+        Persist();
+        return true;
+    }
+
+    // Однократная миграция: переносит DifyDatasetId/DocumentTags из старых Project-записей
+    public void MigrateFromProjects(IEnumerable<Project> projects)
+    {
+        var migrated = false;
+        foreach (var p in projects.Where(p => !string.IsNullOrEmpty(p.DifyDatasetId)))
+        {
+            var key = NormalizePath(p.RootPath);
+            _store.GetOrAdd(key, _ =>
+            {
+                migrated = true;
+                return new WorkspaceKnowledge
+                {
+                    RootPath = p.RootPath,
+                    DifyDatasetId = p.DifyDatasetId,
+                    DocumentTags = p.DocumentTags,
+                    UpdatedAt = DateTime.UtcNow,
+                };
+            });
+        }
+        if (migrated) Persist();
+    }
+
+    private void Load()
+    {
+        var list = JsonFileStore.Load<List<WorkspaceKnowledge>>(_storePath,
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        if (list is null) return;
+        foreach (var wk in list)
+            _store[NormalizePath(wk.RootPath)] = wk;
+    }
+
+    private void Persist()
+    {
+        lock (_saveLock)
+        {
+            JsonFileStore.Save(_storePath, _store.Values.ToList());
+        }
+    }
+}

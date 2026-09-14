@@ -1,12 +1,15 @@
-using ClaudeHomeServer.Hubs;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Skills;
+using ClaudeHomeServer.Services.Notes;
+using ClaudeHomeServer.Services.Memory;
+using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
-using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -25,7 +28,6 @@ public class SessionManagerContainerMigrationTests : IDisposable
 {
     private readonly string _tempDir;
     private readonly string _projectsRoot;
-    private readonly List<ServerMessage> _sentMessages = [];
 
     public SessionManagerContainerMigrationTests()
     {
@@ -62,23 +64,12 @@ public class SessionManagerContainerMigrationTests : IDisposable
         var projectManager = new ProjectManager(config, userStore, appSettings);
         var historyService = new ChatHistoryService(config);
 
-        var clients = new Mock<IHubClients>();
-        var clientProxy = new Mock<IClientProxy>();
-        clientProxy
-            .Setup(c => c.SendCoreAsync(It.IsAny<string>(), It.IsAny<object[]>(), It.IsAny<CancellationToken>()))
-            .Callback<string, object[], CancellationToken>((_, args, _) =>
-            {
-                if (args.Length > 0 && args[0] is ServerMessage msg) _sentMessages.Add(msg);
-            })
-            .Returns(Task.CompletedTask);
-        clients.Setup(c => c.Group(It.IsAny<string>())).Returns(clientProxy.Object);
-        var hub = new Mock<IHubContext<SessionHub>>();
-        hub.Setup(h => h.Clients).Returns(clients.Object);
+        var broadcaster = new TestSessionBroadcaster();
 
         var llmProviders = new LlmProviderRegistry(config);
         var subPool = new ClaudeSubscriptionPool(config);
-        var adapters = new LlmSessionAdapterFactory(config, new SkillsService(),
-            new WorkspaceKnowledgeStore(config), llmProviders, subPool);
+        var adapters = new LlmSessionAdapterFactory(config, new AgentPromptSourceAdapter(new SkillsService()),
+            new WorkspaceDatasetLookup(new WorkspaceKnowledgeStore(config)), llmProviders, subPool);
         var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, config);
         var usage = new UsageService(config);
         var jwt = new JwtService(config, userStore, NullLogger<JwtService>.Instance);
@@ -92,20 +83,17 @@ public class SessionManagerContainerMigrationTests : IDisposable
         var notesKb = new NotesKnowledgeService(knowledge, notesSvc, userStore, config,
             NullLogger<NotesKnowledgeService>.Instance);
         var personas = new PersonaManager(config);
-        var personaMemory = new PersonaMemoryService(knowledge, personas, userStore, config,
-            NullLogger<PersonaMemoryService>.Instance);
-        var bindings = new PersonaBindingsService(personas, projectManager, wkStore, notesSvc, notesKb,
-            knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance);
-        var promptBuilder = new PersonaPromptBuilder(llmProviders);
+        var bindings = new PersonaBindingsService(personas, projectManager, wkStore,
+            knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
         var sandbox = new SandboxManager(config, NullLogger<SandboxManager>.Instance);
         // Настоящая фабрика: container-пользователь должен получить песочный драйвер с
         // маппером путей (docker при этом не запускается — Start в тестах не зовётся)
         var launchers = new LauncherFactory(userStore, sandbox);
 
-        var sut = new SessionManager(projectManager, hub.Object, historyService, config, adapters, falCost,
-            usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas,
-            personaMemory, bindings, promptBuilder, subPool, NullLogger<SessionManager>.Instance,
-            launchers, sandbox);
+        var sut = new SessionManager(projectManager, historyService, config, adapters, falCost,
+            usage, appSettings, userStore, jwt, server.Object, llmProviders, flags, personas,
+            bindings, subPool, NullLogger<SessionManager>.Instance,
+            launchers, sandbox, broadcaster);
 
         return (sut, sandbox, llmProviders, userStore, projectManager);
     }

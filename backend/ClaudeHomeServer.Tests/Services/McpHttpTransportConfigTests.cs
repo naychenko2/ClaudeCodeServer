@@ -17,6 +17,9 @@ namespace ClaudeHomeServer.Tests.Services;
 /// Сторожа стабильности состава (McpToolsetStabilityTests) это не заменяет и не трогает:
 /// там инвариант «состав не зависит от хода», здесь — форма объявления сервера.
 /// </summary>
+// Часть тестов перехватывает Console.SetError (процесс-глобален) — класс идёт в коллекции
+// процесс-глобального состояния (см. TestCollections.cs).
+[Collection(TestCollections.ProcessGlobalState)]
 public class McpHttpTransportConfigTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(),
@@ -46,7 +49,7 @@ public class McpHttpTransportConfigTests : IDisposable
         var context = new LlmSessionContext(
             RootPath: _root,
             OnMessage: _ => Task.CompletedTask,
-            RawSystemPrompt: null,
+            RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
             PermissionRules: null,
             TasksMcp: tasks,
             NotesMcp: notes,
@@ -168,7 +171,7 @@ public class McpHttpTransportConfigTests : IDisposable
         var context = new LlmSessionContext(
             RootPath: _root,
             OnMessage: _ => Task.CompletedTask,
-            RawSystemPrompt: null, PermissionRules: null,
+            RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt, PermissionRules: null,
             TasksMcp: null,
             WatchMcp: new WatchMcpContext("http://localhost:5000", () => "tok-W", UseHttp: true));
         var adapter = new ClaudeSession(session, context);
@@ -227,7 +230,7 @@ public class McpHttpTransportConfigTests : IDisposable
         var context = new LlmSessionContext(
             RootPath: _root,
             OnMessage: _ => Task.CompletedTask,
-            RawSystemPrompt: null,
+            RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
             PermissionRules: null,
             TasksMcp: null,
             WidgetsMcp: new WidgetsMcpContext("http://localhost:5000", () => "tok", UseHttp: true),

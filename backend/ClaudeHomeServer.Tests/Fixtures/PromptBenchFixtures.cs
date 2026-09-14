@@ -1,6 +1,7 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 
+using ClaudeHomeServer.Services.Notes;
 namespace ClaudeHomeServer.Tests.Fixtures;
 
 // Замороженные кейсы для бенча промпта постановки задачи (план «Оптимизация потребления

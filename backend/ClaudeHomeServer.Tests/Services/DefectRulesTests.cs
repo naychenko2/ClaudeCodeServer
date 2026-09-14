@@ -1,5 +1,7 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Notes;
+using ClaudeHomeServer.Services.Tasks;
 using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Services;
@@ -80,8 +82,10 @@ public class DefectRulesTests
     [Fact]
     public void EnsureVerificationOnClose_ДефектВDoneСВердиктом_Проходит()
     {
+        // Осмысленный Notes обязателен (паспорт 432b6de2): null/whitespace — не вердикт,
+        // один только VerifiedAt гейт не пропускает.
         var defect = DefectIn(TaskItemStatus.Done,
-            Verification: new TaskVerification { VerifiedAt = DateTime.UtcNow });
+            Verification: new TaskVerification { Notes = "проверил", VerifiedAt = DateTime.UtcNow });
 
         var act = () => DefectRules.EnsureVerificationOnClose(defect);
 
@@ -108,7 +112,7 @@ public class DefectRulesTests
         // тоже выставлен. Такой кейс легитимен, если внешний сервис подтверждает свой же
         // ClosedWithoutCheck персоной-проверяющим
         var defect = DefectIn(TaskItemStatus.Done,
-            Verification: new TaskVerification { VerifiedAt = DateTime.UtcNow },
+            Verification: new TaskVerification { Notes = "проверил", VerifiedAt = DateTime.UtcNow },
             Outcome: DefectOutcome.ClosedWithoutCheck);
 
         var act = () => DefectRules.EnsureVerificationOnClose(defect);
@@ -141,21 +145,25 @@ public class DefectRulesTests
     }
 
     [Fact]
-    public void EnsureVerificationOnClose_ДефектВDoneСWhitespaceВердиктомВсёРавноПадает()
+    public void EnsureVerificationOnClose_ДефектВDoneСVerificationБезNotes_Бросает()
     {
-        // Без PersonaId/Notes/VerifiedAt — правило смотрит только на Verification != null
+        // Паспорт 432b6de2: null Notes — не вердикт. Verification != null, но Notes
+        // не задан — гейт закрытия должен срабатывать (как при отсутствии Verification вообще).
+        // Старое поведение «null Notes допустим» противоречило паспорту и закрывало дефект
+        // через verification: {} без единого слова о проверке (находка 3 ревью Глеба).
         var defect = DefectIn(TaskItemStatus.Done,
-            Verification: new TaskVerification());
+            Verification: new TaskVerification { VerifiedAt = DateTime.UtcNow });
 
         var act = () => DefectRules.EnsureVerificationOnClose(defect);
 
-        act.Should().NotThrow(); // конструктор Verification без параметров задаёт дефолты, объект не null
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*заполните Verification*ClosedWithoutCheck*");
     }
 
     [Fact]
     public void EnsureVerificationOnClose_ДефектСПустымNotes_Бросает()
     {
-        // Д-1: пустой Notes — не вердикт. Verification != null, но содержимого нет,
+        // Пустой Notes — не вердикт. Verification != null, но содержимого нет,
         // гейт закрытия должен срабатывать (как при отсутствии Verification вообще).
         var defect = DefectIn(TaskItemStatus.Done,
             Verification: new TaskVerification { Notes = "" });
@@ -314,16 +322,17 @@ public class DefectRulesTests
     public static IEnumerable<object[]> ClosedDefectFixtures()
     {
         // Каждая фикстура — закрытый дефект (Status == Done). Дизъюнкция инварианта:
-        //   Verification != null  ИЛИ  Outcome == ClosedWithoutCheck.
+        //   Verification с непустым Notes  ИЛИ  Outcome == ClosedWithoutCheck.
         // Если правила DefectRules согласятся принять эту фикстуру, она ОБЯЗАНА
         // удовлетворять дизъюнкции. Упало здесь — либо DefectRules принял невалидное,
         // либо дизъюнкция отстала от правил.
+        // Notes обязателен осмысленный (паспорт 432b6de2; null/whitespace — не вердикт).
         yield return new object[] { new TaskItem { Kind = TaskKind.Defect, Status = TaskItemStatus.Done,
-            Verification = new TaskVerification { VerifiedAt = DateTime.UtcNow } } };
+            Verification = new TaskVerification { Notes = "проверил", VerifiedAt = DateTime.UtcNow } } };
         yield return new object[] { new TaskItem { Kind = TaskKind.Defect, Status = TaskItemStatus.Done,
             Outcome = DefectOutcome.ClosedWithoutCheck } };
         yield return new object[] { new TaskItem { Kind = TaskKind.Defect, Status = TaskItemStatus.Done,
-            Verification = new TaskVerification { VerifiedAt = DateTime.UtcNow },
+            Verification = new TaskVerification { Notes = "проверил", VerifiedAt = DateTime.UtcNow },
             Outcome = DefectOutcome.ClosedWithoutCheck } };
     }
 

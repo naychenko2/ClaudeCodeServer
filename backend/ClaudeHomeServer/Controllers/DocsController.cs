@@ -3,6 +3,7 @@ using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Docs;
+using ClaudeHomeServer.Services.Notes;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -14,7 +15,7 @@ namespace ClaudeHomeServer.Controllers;
 [Authorize]
 [Route("api/projects/{projectId}/docs")]
 public class DocsController(DocsIndexService docs, ProjectManager projects,
-    NotesService notes, ILogger<DocsController> logger) : ControllerBase
+    ILogger<DocsController> logger, INoteAccessor? notes = null) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub читаем напрямую (как в FilesController)
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
@@ -340,10 +341,13 @@ public class DocsController(DocsIndexService docs, ProjectManager projects,
 
         // Комментарии заметок к документу (и ко всему поддереву раздела) следуют за новым
         // путём — привязка не сиротеет. Как в FilesController.Rename
-        foreach (var (from, to) in moved)
+        if (notes is not null)
         {
-            try { notes.RewriteAnnotationTargets(UserId!, projectId, from, projectId, to, prefix: true); }
-            catch (Exception ex) { logger.LogWarning(ex, "Перепись привязок комментариев при {Action} {Old}", action, from); }
+            foreach (var (from, to) in moved)
+            {
+                try { notes.RewriteAnnotationTargets(UserId!, projectId, from, projectId, to, prefix: true); }
+                catch (Exception ex) { logger.LogWarning(ex, "Перепись привязок комментариев при {Action} {Old}", action, from); }
+            }
         }
 
         // «Начало» указывает на конкретный путь: без переезда выбранный документ молча

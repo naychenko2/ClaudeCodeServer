@@ -2,6 +2,8 @@ using System.Text.Json;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.CodeGraph;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
@@ -97,8 +99,9 @@ public class FileWatcherFullResyncTests : IDisposable
         var knowledge = new KnowledgeService(new Mock<IHttpClientFactory>().Object,
             Options.Create(new DifyOptions()), wkStore);
         var knowledgeSync = new ProjectKnowledgeSyncService(knowledge, wkStore, projects,
-            new FileService(), hub.Context, NullLogger<ProjectKnowledgeSyncService>.Instance);
-        var graphs = new CodeGraphService(NullLogger<CodeGraphService>.Instance, projects,
+            new ProjectFileGateway(new FileService()), new RecordingHubNotifier(), new NullDifyMetrics(),
+            NullLogger<ProjectKnowledgeSyncService>.Instance);
+        var graphs = new CodeGraphService(NullLogger<CodeGraphService>.Instance, new ProjectRootLookup(projects),
             new GraphPersistence(_tempDir, NullLogger<GraphPersistence>.Instance), config);
 
         var svc = new FileWatcherService(projects, hub.Context, knowledgeSync, graphs, config);

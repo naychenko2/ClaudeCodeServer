@@ -1,0 +1,407 @@
+namespace ClaudeHomeServer.Services.Llm;
+
+// Классы ошибок хода, запускающих фолбэк (ADR «Порядок резолва модели, классы ошибок
+// фолбэка, защита от зацикливания» §2). Фолбэк запускают только ошибки ДОСТАВКИ,
+// при которых та же просьба на другой паре «модель × подписка» имеет шанс пройти.
+// Ошибки содержания (невалидный ответ, отказ модели, авторизация, сломанный запрос)
+// подменой пары не лечатся — их фолбэк маскировал бы, а не лечил.
+public enum FallbackErrorClass
+{
+    // Не фолбэк-класс: неизвестная ошибка либо не ошибка вовсе (успех, interrupt
+    // пользователя). Fail-closed: лучше показать ошибку, чем молча жечь лимиты
+    // других аккаунтов о неопознанную проблему.
+    None,
+    // Лимит запросов: HTTP 429; rate_limit_event rejected по окну исчерпания
+    RateLimit,
+    // Лимит использования: HTTP 403 с семантикой «usage limit reached»
+    UsageLimit,
+    // Ошибка провайдера: HTTP 5xx, overloaded_error
+    ProviderError,
+    // Недоступность эндпоинта: DNS-фейл, connection refused/timeout, обрыв TLS,
+    // любой обрыв stream — в том числе посреди уже начатого ответа
+    Unreachable,
+    // Контекст хода не помещается в окно модели («Prompt is too long» и эквиваленты
+    // сторонних провайдеров). Отдельный класс: ту же модель/подписку повторять бессмысленно
+    // (окно — свойство модели, не аккаунта), но шагать по цепочке к модели с бóльшим окном —
+    // можно. Не помечает подписку исчерпанной и эндпоинт недоступным (он ответил, просто отказал).
+    ContextOverflow,
+    // Ошибка авторизации/аутентификации: HTTP 401, 403-invalid-key, «Failed to authenticate»,
+    // «OAuth session expired». AuthFailure сюда ДОЛЖЕН дойти (P29): у следующего шага цепочки
+    // свой ключ, и его смена — основной способ лечения. Сторонний провайдер с одним ключом —
+    // fail-closed error. Внутри пула подписок Claude AuthFailure триггерит тихую ротацию
+    // уровня 1: протухший OAuth/ключ одной подписки закрывается живой другой (P29, инцидент
+    // 2026-08-13). Источник ошибки разводит FallbackLlmSessionAdapter: подписка пула → ротация,
+    // провайдер/пул без живых → error.
+    AuthFailure,
+    // Промпт хода превысил лимит командной строки Windows (Win32 ERROR_FILENAME_EXCED_RANGE,
+    // код 206). Локальный детерминированный отказ: сбой не в провайдере, и перебор других
+    // моделей ничего не лечит (длина промпта от выбора пары не зависит). Маркер ставит
+    // ClaudeSession: при сбое старта процесса префикс "[Win32:206]" попадает в Details
+    // ErrorMessage, оттуда — в ErrorText попытки. FallbackLlmSessionAdapter: attempts=1,
+    // фолбэк не запускается, человек видит TurnFailureText.PromptOverflow. Источник подмены —
+    // задача dc641949 (инцидент 2026-09-07, чат 74f1c3d6: 5 попыток цепочки по 9 секунд
+    // каждая на сломанном промпте).
+    PromptOverflow,
+    // Модель недоступна на ЭТОЙ подписке (а не исчерпан лимит подписки). Два корня, оба
+    // лечатся сменой пары «подписка × модель»:
+    //   ModelNoAccess — подписка не имеет доступа к модели («issue with the selected model» /
+    //     «may not have access to it», обычно apiErrorStatus=404). Свойство тарифа, само не
+    //     меняется — TTL пометки пары длинный (сутки).
+    //   ModelOutOfCredits — у модели кончились usage credits («requires usage credits»).
+    //     Отдельный кошелёк кредитов модели, НЕ лимит подписки: Sonnet/Opus на той же
+    //     подписке работают. Приезжает как rate_limit_event status=rejected (см. ловушку
+    //     в Classify ниже) — кредиты могут пополнить в любой момент, TTL короткий (час).
+    ModelNoAccess,
+    ModelOutOfCredits,
+}
+
+// Итог одной попытки хода глазами потока событий адаптера. Всё, что нужно
+// классификатору, собрано здесь — сама классификация есть одна функция Classify.
+public sealed record TurnAttemptOutcome
+{
+    // Ход завершился result-событием CLI (иначе — процесс умер без result
+    // либо запуск/цикл чтения упал исключением)
+    public required bool HasResult { get; init; }
+    public string? Subtype { get; init; }
+    // api_error_status из result (HTTP-статус строкой либо ярлык CLI)
+    public string? ApiErrorStatus { get; init; }
+    // Текст ошибки хода (API-ошибка провайдера из result / исключение запуска)
+    public string? ErrorText { get; init; }
+    // Win32 NativeErrorCode исключения запуска процесса (если сбой пришёл через Win32Exception):
+    // 0 или null — не Win32, или код не передан адаптером. Сейчас используется только для
+    // ERROR_FILENAME_EXCED_RANGE (206) — выставляет PromptOverflow, чтобы сбой старта по
+    // перерасходу cmdline не уходил в Unreachable и не крутил фолбэк по живым моделям.
+    public int? Win32ErrorCode { get; init; }
+    // rate_limit_event rejected по окну исчерпания внутри попытки — CLI приостановил ход
+    public bool RateLimitRejected { get; init; }
+    // Ход остановил пользователь (Interrupt) — это не ошибка доставки
+    public bool InterruptedByUser { get; init; }
+}
+
+// Классификатор ошибок фолбэка: ОДНА функция с белым списком классов — по образцу
+// TurnTelemetry.ClassifyErrorType (классификация в одной точке, а не разбросанные
+// по коду if). Вызывается только для неудачных попыток; неизвестная ошибка = None
+// (фолбэк НЕ запускается).
+public static class TurnErrorClassifier
+{
+    // Node/сетевые коды ошибок — стабильные маркеры недоступности эндпоинта
+    // (встречаются в тексте ошибки CLI, иногда в api_error_status)
+    private static readonly string[] NetworkErrorCodes =
+    [
+        "ECONNREFUSED", "ECONNRESET", "ECONNABORTED", "ENOTFOUND", "ETIMEDOUT",
+        "EAI_AGAIN", "EPIPE", "EHOSTUNREACH", "ENETUNREACH", "EPROTO", "UND_ERR_SOCKET",
+    ];
+
+    // Те же маркеры фразами: CLI не всегда присылает код ошибки целиком
+    private static readonly string[] NetworkPhrases =
+        ["fetch failed", "socket hang up", "network socket disconnected", "tls handshake"];
+
+    // Win32-код, который .NET оборачивает в Win32Exception при перерасходе длины командной
+    // строки. Маркируется явно — на разных локалях ОС текст ошибки разный, а числовой код
+    // стабилен. Полный путь: ClaudeSession при Process.Start ловит Win32Exception, кладёт
+    // префикс "[Win32:206]" в Details ErrorMessage; адаптер пробрасывает в outcome.Win32ErrorCode
+    // и ищет подстроку в ErrorText как запасной канал на случай потери маркера.
+    private const int Win32ErrorFilenameExcedRange = 206;
+
+    // Ищет префикс "[Win32:NNN]" в начале текста ошибки (ClaudeSession ставит его первым
+    // токеном в Details ErrorMessage). Возвращает true, если первый маркер имеет искомый код.
+    // НЕ проверяет весь текст на вхождение "[Win32:206]" где попало — это спасло бы от
+    // ложных срабатываний в чате, который ЦИТИРУЕТ маркер в своей переписке.
+    private static bool HasWin32Marker(string? text, int code)
+    {
+        if (string.IsNullOrEmpty(text)) return false;
+        var prefix = $"[Win32:{code}]";
+        return text.StartsWith(prefix, StringComparison.Ordinal);
+    }
+
+    public static FallbackErrorClass Classify(TurnAttemptOutcome outcome)
+    {
+        // Остановка пользователем — не ошибка доставки
+        if (outcome.InterruptedByUser) return FallbackErrorClass.None;
+
+        // Модель недоступна на этой подписке — ДО ветки RateLimitRejected. Ловушка: отказ
+        // «нет кредитов» приезжает как rate_limit_event status=rejected (five_hour), и
+        // RateLimitRejected был бы поставлен ПЕРВЫМ — до всякого разбора текста. Тогда ход
+        // ложно классифицировался бы как RateLimit, подписка помечалась исчерпанной целиком,
+        // а человек видел «лимит подписки исчерпан» при живых Sonnet/Opus. Текст ошибки
+        // попытки (outcome.ErrorText) смотрим раньше: маркеры у обеих причин канонические
+        // и не пересекаются с «You've hit your session limit» (настоящим исчерпанием окна).
+        if (LooksModelOutOfCredits(outcome.ErrorText)) return FallbackErrorClass.ModelOutOfCredits;
+        if (LooksModelNoAccess(outcome.ErrorText)) return FallbackErrorClass.ModelNoAccess;
+
+        // Мягкий лимит: rejected по окну исчерпания (five_hour/seven_day) — CLI
+        // приостановил ход до сброса окна
+        if (outcome.RateLimitRejected) return FallbackErrorClass.RateLimit;
+
+        // Локальный детерминированный сбой старта процесса: Win32 ERROR_FILENAME_EXCED_RANGE
+        // (206) значит, что командная строка (системный промпт + прочие аргументы + путь
+        // к exe + WorkingDirectory) перевалила лимит Windows 32 767 символов. Сменить пару
+        // «модель × подписка» бесполезно — длина промпта от неё не зависит. Должно стоять
+        // ДО ветки "процесс умер без result → Unreachable", иначе локальная причина маскируется
+        // под мёртвый эндпоинт и фолбэк жжёт 5 попыток впустую (инцидент 2026-09-07, чат
+        // 74f1c3d6). Код приходит из адаптера (FallbackLlmSessionAdapter → FallbackTurn →
+        // outcome.Win32ErrorCode); второй источник — префикс "[Win32:206]" в ErrorText,
+        // который ClaudeSession кладёт в Details ErrorMessage на сбое Process.Start.
+        if (outcome.Win32ErrorCode == Win32ErrorFilenameExcedRange
+            || HasWin32Marker(outcome.ErrorText, Win32ErrorFilenameExcedRange))
+            return FallbackErrorClass.PromptOverflow;
+
+        // Процесс умер без result — любой обрыв потока, включая посреди начатого ответа
+        if (!outcome.HasResult) return FallbackErrorClass.Unreachable;
+
+        var status = outcome.ApiErrorStatus?.Trim();
+        if (string.IsNullOrEmpty(status))
+        {
+            // Статуса нет — решаем по тексту (напр. «fetch failed» без статуса);
+            // порядок: недоступность → лимит использования → ошибка провайдера → лимит
+            // запросов → переполнение контекста; не опознали — None (fail-closed).
+            // Инвариант паритета «статус ↔ текст» (ADR §2): каждый признак, что ловится по
+            // статусу, обязан ловиться и по тексту — CLI часто отдаёт apiErrorStatus=null,
+            // и тогда текст единственный сигнал (на этом перекосе вскрылись прод-инциденты).
+            if (LooksUnreachable(outcome.ErrorText)) return FallbackErrorClass.Unreachable;
+            // Исчерпание квоты при пустом статусе (инцидент 2026-08-11, kimi: CLI не положил
+            // 403 в api_error_status, код остался только в тексте «Failed to authenticate.
+            // API Error: 403 You've reached your usage limit for this billing cycle»). Раньше
+            // ветка про usage limit не спрашивала — класс выходил None, и фолбэк не стартовал.
+            // ПЕРЕД auth и лимитом запросов: «usage limit» — маркер более узкий и более длящийся
+            // (квота биллингового цикла, а не окно запросов). Прод-кейс kimi начинается той же
+            // фразой «Failed to authenticate», но это исчерпание квоты — оно обязано остаться
+            // UsageLimit, а не уходить в AuthFailure, поэтому спрашивается ПЕРЕД LooksAuthFailure.
+            if (LooksUsageLimited(outcome.ErrorText)) return FallbackErrorClass.UsageLimit;
+            // Auth-ошибка при пустом статусе (инцидент 2026-08-13, Claude OAuth: «Failed to
+            // authenticate: OAuth session expired and could not be refreshed» пришло БЕЗ кода в
+            // api_error_status). AuthFailure запускает эскалацию по пулу и цепочке (P29), а не
+            // обрывает ход. «Failed to authenticate» без «usage limit» — auth, не квота.
+            if (LooksAuthFailure(outcome.ErrorText)) return FallbackErrorClass.AuthFailure;
+            // Ошибка провайдера (5xx/перегрузка) перед лимитом запросов: перегруженный эндпоинт
+            // уходит в кулдаун, а не ждёт сброса секундного окна — тяжелее по последствиям.
+            // Маркеры — канонические reason phrases/type 5xx, не общие слова (см. LooksProviderError):
+            // закрывает паритет со статусами overloaded_error/5xx при пустом api_error_status.
+            if (LooksProviderError(outcome.ErrorText)) return FallbackErrorClass.ProviderError;
+            if (LooksRateLimited(outcome.ErrorText)) return FallbackErrorClass.RateLimit;
+            if (LooksContextOverflow(outcome.ErrorText)) return FallbackErrorClass.ContextOverflow;
+            return FallbackErrorClass.None;
+        }
+
+        // Белый список статусов
+        if (status is "429" or "rate_limit") return FallbackErrorClass.RateLimit;
+        // Смерть CLI-процесса — тот же класс, что обрыв потока
+        if (status == "process_exit") return FallbackErrorClass.Unreachable;
+        // Перегрузка провайдера
+        if (status == "overloaded_error") return FallbackErrorClass.ProviderError;
+        // 401 — авторизация/аутентификация (P29): для подписки пула Claude переход на живую
+        // подписку лечит протухший OAuth/ключ, поэтому это отдельный класс AuthFailure —
+        // оркестратор разводит его по источнику (подписка пула → ротация, провайдер → error).
+        if (status == "401") return FallbackErrorClass.AuthFailure;
+        // 403 неоднозначен: исчерпание квоты («usage limit reached») — UsageLimit (кулдаун
+        // провайдера); invalid key/авторизация — AuthFailure (ротация подписки пула / fail-closed).
+        if (status == "403")
+            return LooksUsageLimited(outcome.ErrorText) ? FallbackErrorClass.UsageLimit : FallbackErrorClass.AuthFailure;
+        // authentication_error (OpenAI-совместимый skin) — та же природа, что у 401: AuthFailure.
+        if (status == "authentication_error") return FallbackErrorClass.AuthFailure;
+        // Класс «5xx» целиком
+        if (int.TryParse(status, out var code) && code is >= 500 and <= 599) return FallbackErrorClass.ProviderError;
+        // Сетевые маркеры в статусе или тексте ошибки
+        if (LooksUnreachable(status) || LooksUnreachable(outcome.ErrorText)) return FallbackErrorClass.Unreachable;
+        // Контекст не помещается в окно модели. Anthropic шлёт «Prompt is too long» (видели на проде:
+        // kimi-k3 с заявленным окном 1M), OpenAI-совместимые — «context_length_exceeded». Провайдеры
+        // кладут это на 400/413, а иные — в поле статуса ТИП ошибки: invalid_request_error,
+        // request_too_large. Маркеры в ErrorText трактуем как overflow ТОЛЬКО при этих статусах:
+        // иначе ход, ЦИТИРУЮЩИЙ «Prompt is too long» (разбор таких инцидентов в чатах), при прочем
+        // сбое классифицировался бы ложно как overflow. Без overflow-текста любой из этих статусов —
+        // содержательная ошибка (None): fail-closed сохраняется и для новых ярлыков.
+        // Пустой статус (когда маркеры в тексте — единственный сигнал) разобран отдельной веткой выше.
+        if (status is "400" or "413" or "invalid_request_error" or "request_too_large"
+            && LooksContextOverflow(outcome.ErrorText))
+            return FallbackErrorClass.ContextOverflow;
+
+        // Неизвестный статус, прочие 4xx (400/401), содержательные отказы — фолбэк НЕ запускается
+        return FallbackErrorClass.None;
+    }
+
+    // Имя класса на проводе (ProviderSwitchedMessage.Reason): фронт по нему выбирает
+    // каноническую формулировку подсказки. Стиль — как у api_error_status CLI
+    // (rate_limit, overloaded_error): snake_case. None наружу не уходит — null.
+    public static string? WireName(FallbackErrorClass cls) => cls switch
+    {
+        FallbackErrorClass.RateLimit => "rate_limit",
+        FallbackErrorClass.UsageLimit => "usage_limit",
+        FallbackErrorClass.ProviderError => "provider_error",
+        FallbackErrorClass.Unreachable => "unreachable",
+        FallbackErrorClass.ContextOverflow => "context_overflow",
+        // P31: auth_failure несёт причину в маркер смены провайдера. До фикса здесь был null —
+        // и маркер уходил с Reason: null (в логе «причина неизвестно»), а стартовая подмена через
+        // ProviderHealthRegistry.UnavailableReason подставляла ?? "unreachable" → пользователь
+        // видел «Сервис не отвечает» при протухшем ключе. Тот же класс бага, что раньше чинили
+        // хардкодом unreachable в стартовой подмене.
+        FallbackErrorClass.AuthFailure => "auth_failure",
+        // Перерасход командной строки: не идёт в ProviderSwitchedMessage (фолбэк не
+        // запускается), но имя полезно для лога/паспорта хода и для будущих подсказок.
+        FallbackErrorClass.PromptOverflow => "prompt_overflow",
+        // Недоступность модели на подписке: две причины — фронт по ним даёт разные
+        // подсказки («нет доступа» — свойство тарифа; «нет кредитов» — пополнить кошелёк).
+        FallbackErrorClass.ModelNoAccess => "model_no_access",
+        FallbackErrorClass.ModelOutOfCredits => "model_out_of_credits",
+        _ => null,
+    };
+
+    // Семантика исчерпанного лимита использования (а не «ключ плохой»). Спрашивается и при
+    // статусе 403, и при пустом статусе — сторонние провайдеры оставляют код только в тексте.
+    // «quota» + «exhausted» — исчерпание квоты (биллинговый цикл), а не окно запросов: lived
+    // здесь, чтобы провайдер уходил в кулдаун, а не долбился каждый ход (инцидент 2026-08-11,
+    // другая формулировка). По отдельности слова не трактуем — слишком обычны в разборе ошибок.
+    private static bool LooksUsageLimited(string? text) =>
+        text is not null
+        && (text.Contains("usage limit", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("usage_limit", StringComparison.OrdinalIgnoreCase)
+            || (text.Contains("quota", StringComparison.OrdinalIgnoreCase)
+                && text.Contains("exhausted", StringComparison.OrdinalIgnoreCase)));
+
+    // Маркеры ошибки авторизации/аутентификации в тексте при пустом статусе (P29, инцидент
+    // 2026-08-13: CLI отдал «Failed to authenticate: OAuth session expired…» без кода в
+    // api_error_status). Фразы устойчивые — канонические формулировки Claude CLI и сторонних
+    // провайдеров, не общие слова: голое «oauth»/«token»/«key» слишком обычны в разборе
+    // инцидентов. Спрашивается ПОСЛЕ LooksUsageLimited, поэтому kimi-кейс («Failed to
+    // authenticate … usage limit») здесь уже не доходит — ушёл в UsageLimit выше.
+    // P31: убраны слишком широкие «unauthorized» и «could not be refreshed». ErrorText
+    // собирается не только из is_error-текста CLI, но и из обычных ErrorMessage — ход с
+    // MCP-сервером личного реестра с протухшим OAuth давал в тексте «401 Unauthorized» чужого
+    // API → ложный AuthFailure → MarkAuthDead на здоровую подписку Claude (навсегда, до бл. 1).
+    // Оставлены только канонические формулировки: «Failed to authenticate», «OAuth session
+    // expired» (покрывает «…and could not be refreshed»), «invalid api key». Голый статус 401
+    // ловится выше по коду статуса, а не по тексту.
+    private static readonly string[] AuthFailurePhrases =
+    [
+        "failed to authenticate",
+        "authentication failed",
+        "oauth session expired",
+        "invalid api key",
+        "invalid_api_key",
+    ];
+
+    private static bool LooksAuthFailure(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        foreach (var phrase in AuthFailurePhrases)
+            if (text.Contains(phrase, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    // Признаки переполнения контекста. Anthropic CLI шлёт «Prompt is too long» (видели на проде:
+    // kimi-k3 с заявленным окном 1M упал с этим текстом — тариф режет раньше конфига).
+    // Сторонние провайдеры через Anthropic-скин и OpenAI-совместимые эндпоинты дают свои
+    // формулировки: «context_length_exceeded», «input length exceeds», «longer than the model's
+    // context window». Берём по подстроке без учёта регистра — точного кода ошибки у них нет.
+    private static readonly string[] ContextOverflowPhrases =
+    [
+        "prompt is too long",
+        "input length exceeds",
+        "context length exceeded",
+        "context_length_exceeded",
+        "maximum context length",
+        "longer than the model",
+        "exceeds the model",
+        "too long for the model",
+    ];
+
+    private static bool LooksContextOverflow(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        foreach (var phrase in ContextOverflowPhrases)
+            if (value.Contains(phrase, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    // Модель недоступна на подписке: подписка не имеет доступа к модели. Формулировка
+    // каноническая (Claude CLI, «There's an issue with the selected model (…) or you may not
+    // have access to it»), обычно apiErrorStatus=404. Голое «no access»/«access denied» сюда
+    // НЕ входит — слишком обычно.
+    //
+    // Хвост «may not have access to it» принимается ТОЛЬКО рядом со словом «model»: сама по
+    // себе фраза не специфична — её возвращают в своих ошибках чужие инструменты и MCP-серверы
+    // (ровно так выглядел инцидент P31), а принять такую ошибку за отказ по модели значит
+    // пометить живую пару и увести ход с правильной подписки. У канонического текста CLI это
+    // соседство есть всегда, так что покрытие не теряется.
+    private static bool LooksModelNoAccess(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        if (text.Contains("issue with the selected model", StringComparison.OrdinalIgnoreCase)) return true;
+        return text.Contains("may not have access to it", StringComparison.OrdinalIgnoreCase)
+            && text.Contains("model", StringComparison.OrdinalIgnoreCase);
+    }
+
+    // У модели кончились usage credits — отдельный кошелёк кредитов, НЕ лимит подписки.
+    // Формулировка каноническая («requires usage credits. Switch to another model…»). Именно
+    // она в тексте, когда подписка жива, но кредиты на конкретную модель (Fable/Opus) иссякли.
+    private static bool LooksModelOutOfCredits(string? text) =>
+        text is not null
+        && text.Contains("requires usage credits", StringComparison.OrdinalIgnoreCase);
+
+    // Маркеры лимита запросов в тексте ошибки при пустом статусе (прод-кейс: сторонние
+    // провайдеры отдают в поле статуса «—», а HTTP 429 — только текстом). Формулировки без
+    // кода ошибки. Исчерпание квоты («quota exhausted») сюда НЕ относится — это UsageLimit.
+    private static readonly string[] RateLimitPhrases =
+    [
+        "rate limit",
+        "too many requests",
+    ];
+
+    // Код 429 в связке со словом-квалификатором. Голое «429» ловить нельзя — текст
+    // ошибки может ЦИТИРОВАТЬ код (тот же класс грабель, что у overflow-маркеров выше):
+    // узнаваем только в окружении «error/status/http/rejected», характерном для самой
+    // ошибки, а не для разбора инцидента в чате.
+    private static readonly string[] RateLimitCodeMarkers =
+    [
+        "rejected (429)",
+        "error 429",
+        "status 429",
+        "http 429",
+    ];
+
+    private static bool LooksRateLimited(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        foreach (var phrase in RateLimitPhrases)
+            if (value.Contains(phrase, StringComparison.OrdinalIgnoreCase)) return true;
+        foreach (var marker in RateLimitCodeMarkers)
+            if (value.Contains(marker, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    // Маркеры ошибки провайдера в тексте при пустом статусе — паритет со статусами
+    // overloaded_error/5xx (прод-кейс: CLI отдал 5xx без кода в api_error_status). Каждый
+    // маркер — канонический error type или HTTP reason phrase 5xx: overloaded_error (Anthropic),
+    // internal server error (500), bad gateway (502), service unavailable (503),
+    // gateway timeout (504). Голое «server error»/«overloaded» сюда НЕ входят — слишком
+    // обычны в разборе инцидентов, и ход, ЦИТИРУЮЩИЙ их, не должен уезжать на фолбэк (тот же
+    // гейт от ложных срабатываний, что у ContextOverflow и RateLimit). Редкие 5xx без общей
+    // формулировки (501 Not Implemented и т.п.) при пустом статусе остаются None: их код почти
+    // всегда приезжает в api_error_status, а ловить «not implemented» как маркер — ловить и
+    // содержательные ответы о нереализованных функциях. Fail-closed сохраняется.
+    private static readonly string[] ProviderErrorPhrases =
+    [
+        "overloaded_error",
+        "internal server error",
+        "bad gateway",
+        "service unavailable",
+        "gateway timeout",
+    ];
+
+    private static bool LooksProviderError(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        foreach (var phrase in ProviderErrorPhrases)
+            if (value.Contains(phrase, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    private static bool LooksUnreachable(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        foreach (var code in NetworkErrorCodes)
+            if (value.Contains(code, StringComparison.OrdinalIgnoreCase)) return true;
+        foreach (var phrase in NetworkPhrases)
+            if (value.Contains(phrase, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+}

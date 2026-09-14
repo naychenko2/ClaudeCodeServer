@@ -1,9 +1,10 @@
-using System.Text;
-using ClaudeHomeServer.Controllers;
-using ClaudeHomeServer.Hubs;
+﻿using System.Text;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
-using Microsoft.AspNetCore.SignalR;
+using ClaudeHomeServer.Services.Llm;
+using ClaudeHomeServer.Services.Notes;
+using ClaudeHomeServer.Services.Tasks;
 
 namespace ClaudeHomeServer.Services;
 
@@ -36,10 +37,10 @@ public class TaskExecutionService
     private readonly TaskManager _tasks;
     private readonly SessionManager _sessions;
     private readonly PersonaManager _personas;
-    private readonly IHubContext<SessionHub> _hub;
+    private readonly ISessionBroadcaster _broadcaster;
     private readonly PushService _push;
     private readonly NotificationService _notif;
-    private readonly NotesKnowledgeService _kb;
+    private readonly INoteSemanticIndex? _kb;
     private readonly ILogger<TaskExecutionService> _log;
     // Слоты тиров владельца + реестр провайдеров: только ради алиасов в таблице уровней
     // постановки (какой model= передавать в Task). null — постановка без этой таблицы.
@@ -93,8 +94,7 @@ public class TaskExecutionService
 
     public TaskExecutionService(
         TaskManager tasks, SessionManager sessions, PersonaManager personas,
-        IHubContext<SessionHub> hub, PushService push,
-        NotesKnowledgeService kb,
+        ISessionBroadcaster broadcaster, PushService push,
         NotificationService notif,
         ILogger<TaskExecutionService> log, IConfiguration config,
         Llm.UserModelTierResolver? tiers = null, Llm.LlmProviderRegistry? providers = null,
@@ -102,7 +102,10 @@ public class TaskExecutionService
         SpecialtySettingsStore? specialtySettings = null,
         Llm.ModelAssignmentResolver? assignments = null,
         Spend.TaskPromptMetricsStore? promptMetrics = null,
-        Llm.Claude.SubagentRunLog? subagentRuns = null)
+        Llm.Claude.SubagentRunLog? subagentRuns = null,
+        // Подсистема Notes отключаемая: null — блок «релевантные заметки» в постановке
+        // исполнителя тихо пропускается (BuildNotesContextAsync).
+        INoteSemanticIndex? kb = null)
     {
         _staleAfter = TimeSpan.FromMinutes(
             int.TryParse(config["Tasks:ExecutorStaleMinutes"], out var stale) && stale > 0 ? stale : 15);
@@ -117,12 +120,25 @@ public class TaskExecutionService
         _tasks = tasks;
         _sessions = sessions;
         _personas = personas;
-        _hub = hub;
+        _broadcaster = broadcaster;
         _push = push;
         _kb = kb;
         _log = log;
         _notif = notif;
         _sessions.OnSessionMessage += OnSessionMessageAsync;
+        // Признак «у чата есть живая делегированная задача» (цикл «до готово» уходит в фазу
+        // waiting, пока такие задачи не закроются). Один и тот же предикат использует и
+        // SessionManager.ContinueWorkLoopAsync (точка ухода в waiting), и диагностика. Делегат,
+        // а не прямая зависимость SessionManager→TaskManager: SessionManager по построению
+        // не знает TaskManager, иначе цикл в DI. Здесь цикл НАСТОЯЩИЙ, в отличие от четырёх
+        // штабных хуков, уехавших в TeamCoordinator (шаг 2г-4): те ставила и читала одна и та
+        // же вертикаль, а этот ставит чужая сторона.
+        _sessions.HasLiveDelegatedTasks = HasLiveDelegatedTask;
+        // Резолв названия задачи по id для подписи карточки эскалации (волна 1
+        // team-blocker-honest, дефект 1430b732): та же причина — SessionManager не знает
+        // TaskManager, штаб читает через Func-канал. null для удалённой задачи не ошибка:
+        // карточка остаётся, фронт подставит заголовок карточки.
+        _sessions.GetTaskTitle = id => _tasks.GetById(id)?.Title;
         // Чат-исполнитель удалён/протух по TTL, не дождавшись result — снимаем накопленный
         // текст ошибки, чтобы буфер не жил дольше самой сессии
         _sessions.OnSessionDeleted += s =>
@@ -136,8 +152,28 @@ public class TaskExecutionService
         _tasks.TaskCompleted += OnTaskCompleted;
     }
 
+    // Предусловие ухода цикла в фазу waiting. Задача «живая делегированная» = поставлена
+    // из этого чата (SourceSessionId), исполнитель запущен (LinkedSessionId/ClaudeStartedAt),
+    // статус не терминальный (не Done, нет терминальной остановки ExecutorStoppedAt), и доклад
+    // ещё не доставлен (!CompletionDelivered). Без !CompletionDelivered цикл висел бы после
+    // доклада (CAS-флаг уже занят, и в ленте лежит гостевая реплика — ждать нечего, координатор
+    // уже в курсе). ExecutorStoppedAt снимает задачу, по которой ждать нечего (своё уведомление
+    // с причиной уже ушло через HandleExecutorStoppedAsync).
+    private bool HasLiveDelegatedTask(string sourceSessionId)
+    {
+        foreach (var task in _tasks.GetBySourceSession(sourceSessionId))
+        {
+            if (task.Status == TaskItemStatus.Done) continue;
+            if (task.CompletionDelivered) continue;
+            if (task.ExecutorStoppedAt is not null) continue;
+            if (task.ClaudeStartedAt is null) continue;
+            return true;
+        }
+        return false;
+    }
+
     // Хук провала хода исполнителя для режима «Командная реализация» (Э4): вешает
-    // TeamWaveService при старте — тем же приёмом, что SessionManager.TeamWaveStarter.
+    // TeamWaveService при старте — тем же приёмом, что обработчики TeamCoordinator.
     // null — режима нет либо сервис не поднят: провал остаётся обычным (тост владельцу).
     public Func<TaskItem, Task>? TeamTaskFailed { get; set; }
 
@@ -231,7 +267,7 @@ public class TaskExecutionService
 
         var updated = _tasks.MarkClaudeStarted(task.Id, session.Id, DateTime.UtcNow)
             ?? throw new InvalidOperationException("Задача удалена");
-        await _hub.BroadcastTaskChangedAsync(task.OwnerId, "updated", updated);
+        await _broadcaster.ToOwner(task.OwnerId, new TaskChangedMessage("updated", updated));
 
         var prompt = BuildPrompt(updated, persona, ResolveTierAliases(task.OwnerId),
             ResolveCategoryProfilesPath(task));
@@ -261,7 +297,7 @@ public class TaskExecutionService
             await NotifyAsync(updated, new NotificationMessage(
                 Title: "Взял задачу в работу",
                 Body: updated.Title,
-                Url: TaskSchedulerService.TaskUrl(updated),
+                Url: TaskUrl.Of(updated),
                 Kind: "claude",
                 PersonaId: persona?.Id,
                 ProjectId: updated.ProjectId,
@@ -527,7 +563,7 @@ public class TaskExecutionService
     // (флаг task-exec-context). Тихо пусто, если Dify не настроен или ничего не нашлось.
     private async Task<string> BuildNotesContextAsync(TaskItem task)
     {
-        if (!_kb.Available || task.OwnerId is null) return "";
+        if (_kb is not { } kb || !kb.Available || task.OwnerId is null) return "";
         var query = string.IsNullOrWhiteSpace(task.Description)
             ? task.Title
             : $"{task.Title}\n{task.Description}";
@@ -536,7 +572,7 @@ public class TaskExecutionService
         // topK=2 (было 5): блок заметок — самая крупная переменная часть постановки, а хвост
         // выдачи семантического поиска релевантен всё слабее. Два верхних попадания дают
         // контекст, пять — платный шум на каждом ходу исполнителя.
-        try { hits = await _kb.SearchAsync(task.OwnerId, query, topK: 2); }
+        try { hits = await kb.SearchAsync(task.OwnerId, query, topK: 2); }
         catch (Exception ex)
         {
             _log.LogWarning(ex, "Не удалось получить контекст заметок для задачи {TaskId}", task.Id);
@@ -596,7 +632,7 @@ public class TaskExecutionService
                     var ok = IsSuccess(result) && stopReason is null;
                     var updated = _tasks.MarkClaudeResult(task.Id, ok ? "success" : "error");
                     if (updated is null) return;
-                    await _hub.BroadcastTaskChangedAsync(updated.OwnerId!, "updated", updated);
+                    await _broadcaster.ToOwner(updated.OwnerId!, new TaskChangedMessage("updated", updated));
                     if (stopReason is not null)
                     {
                         // Своё уведомление вместо обычного «Не смог выполнить задачу»: у человека
@@ -685,7 +721,7 @@ public class TaskExecutionService
     private async Task HandleExecutorStoppedAsync(TaskItem task, string reason)
     {
         var stopped = _tasks.MarkExecutorStopped(task.Id, DateTime.UtcNow, reason) ?? task;
-        await _hub.BroadcastTaskChangedAsync(stopped.OwnerId!, "updated", stopped);
+        await _broadcaster.ToOwner(stopped.OwnerId!, new TaskChangedMessage("updated", stopped));
 
         var persona = stopped.PersonaId is not null ? _personas.Get(stopped.PersonaId, stopped.OwnerId!) : null;
         await NotifyAsync(stopped, BuildExecutorStoppedNotification(stopped, persona));
@@ -713,7 +749,7 @@ public class TaskExecutionService
     internal static NotificationMessage BuildExecutorStoppedNotification(TaskItem task, Persona? persona = null) => new(
         Title: "Исполнитель остановился",
         Body: $"{task.Title}: {ExecutorStopText(task.ExecutorStopReason)}. Работа не идёт, задача ждёт вас",
-        Url: TaskSchedulerService.TaskUrl(task),
+        Url: TaskUrl.Of(task),
         Kind: "claude",
         PersonaId: persona?.Id,
         ProjectId: task.ProjectId,
@@ -792,6 +828,13 @@ public class TaskExecutionService
         None,   // не наш случай либо порог тишины ещё не вышел
         Nudge,  // напомнить самому исполнителю (один автоход)
         Alert,  // напоминание не помогло (или напоминать некому) — звать человека
+        // Волна 2 team-blocker-honest: по задаче висит открытая карточка блокера —
+        // исполнитель НЕ молчит, а ждёт ответа штаба/человека. Зовём человека с ДРУГИМ
+        // текстом («исполнитель ждёт ответа по блокеру N мин: ответь или сними»), чтобы
+        // координатор понимал причину тишины и не пытался «перезапустить» того, кто и так
+        // заблокирован. Nudge не отправляем: окликать того, кто уже ждёт ответа — лишний
+        // расход хода и спам в ленте исполнителя.
+        AlertWaitingForBlocker,
     }
 
     // Успешный ход задачу не закрывает: сделать это обязан сам исполнитель вызовом
@@ -802,8 +845,13 @@ public class TaskExecutionService
     //
     // Чистый предикат (без побочных эффектов): все три ветки проверяются юнит-тестами без
     // живого CLI. Порог передаётся параметром — тот же и для тишины после напоминания.
+    // hasOpenBlocker (волна 2 team-blocker-honest): есть ли по этой задаче открытая карточка
+    // блокера в чате-штабе (SourceSessionId → TeamEscalation c TaskId=task.Id и Kind=Blocker).
+    // Резолв идёт на стороне вызывающего — ClassifyStall остаётся чистой функцией, как и
+    // раньше. true переключает исход Alert/Nudge на AlertWaitingForBlocker (отдельный текст
+    // окрика + отдельная подпись плашки в CheckStalledExecutorAsync).
     internal static ExecutorStallAction ClassifyStall(TaskItem task, Session? session,
-        DateTime nowUtc, TimeSpan staleAfter)
+        DateTime nowUtc, TimeSpan staleAfter, bool hasOpenBlocker = false)
     {
         // Задача закрыта либо доклад по ней уже ушёл — страховать нечего
         if (task.Status == TaskItemStatus.Done || task.CompletionDelivered) return ExecutorStallAction.None;
@@ -820,9 +868,12 @@ public class TaskExecutionService
             or SessionStatus.Waiting)
             return ExecutorStallAction.None;
 
-        // Шаг 2: напоминание ушло, а задача так и не закрыта — зовём человека
+        // Шаг 2: напоминание ушло, а задача так и не закрыта — зовём человека.
+        // При открытой карточке блокера — «ждёт ответа», а не «молчащий после напоминания».
         if (task.ExecutorNudgedAt is { } nudgedAt)
-            return nowUtc - nudgedAt >= staleAfter ? ExecutorStallAction.Alert : ExecutorStallAction.None;
+            return nowUtc - nudgedAt >= staleAfter
+                ? (hasOpenBlocker ? ExecutorStallAction.AlertWaitingForBlocker : ExecutorStallAction.Alert)
+                : ExecutorStallAction.None;
 
         // Шаг 1: тишину считаем от последней активности чата-исполнителя.
         var lastActivity = session?.UpdatedAt ?? task.UpdatedAt;
@@ -833,9 +884,13 @@ public class TaskExecutionService
         // же тике после обновления такие ходы ушли бы во ВСЕ давно висящие задачи разом
         // (та же защита от лавины, что AutoStartWindow у автозапуска). Человеку при этом
         // сказать всё равно надо — уведомление уходит без окна.
-        return session is null || idle > NudgeWindow
-            ? ExecutorStallAction.Alert
-            : ExecutorStallAction.Nudge;
+        if (session is null || idle > NudgeWindow)
+            return hasOpenBlocker ? ExecutorStallAction.AlertWaitingForBlocker : ExecutorStallAction.Alert;
+        // При открытой карточке блокера Nudge пропускаем: исполнитель и так ждёт ответа —
+        // ещё один «закрой или эскалируй» отправит его эскалировать повторно, а не решит
+        // блокер. Идём сразу в Alert с другой формулировкой.
+        if (hasOpenBlocker) return ExecutorStallAction.AlertWaitingForBlocker;
+        return ExecutorStallAction.Nudge;
     }
 
     // Окно свежести оклика: чат молчит дольше — сразу к человеку, без платного автохода
@@ -849,16 +904,44 @@ public class TaskExecutionService
     public async Task CheckStalledExecutorAsync(TaskItem task, DateTime nowUtc)
     {
         var session = task.LinkedSessionId is not null ? _sessions.GetById(task.LinkedSessionId) : null;
-        switch (ClassifyStall(task, session, nowUtc, _staleAfter))
+        // Резолв «есть ли открытая карточка блокера по этой задаче» — на стороне штаба.
+        // Сейчас штабный реестр эскалаций живёт в TeamWaveService через ITeamHistoryStore,
+        // и его резолв делает подключаемый крючок (OpenBlockerLookup ниже). null — крючок не
+        // подключён (например, режим «Командная реализация» выключен): страховка работает
+        // как раньше, без новой ветки.
+        var hasOpenBlocker = false;
+        if (_openBlockerLookup is not null)
+        {
+            try { hasOpenBlocker = await _openBlockerLookup(task); }
+            catch (Exception ex)
+            {
+                _log.LogError(ex, "Резолв открытого блокера по задаче {TaskId} не удался", task.Id);
+            }
+        }
+        switch (ClassifyStall(task, session, nowUtc, _staleAfter, hasOpenBlocker))
         {
             case ExecutorStallAction.Nudge:
                 await NudgeExecutorAsync(task, session!, nowUtc);
                 break;
             case ExecutorStallAction.Alert:
-                await AlertStaleTaskAsync(task, nowUtc);
+                await AlertStaleTaskAsync(task, nowUtc, waitingForBlocker: false);
+                break;
+            case ExecutorStallAction.AlertWaitingForBlocker:
+                await AlertStaleTaskAsync(task, nowUtc, waitingForBlocker: true);
                 break;
         }
     }
+
+    // Крючок «открыт ли блокер по задаче»: ставится штабом (TeamWaveService) на старте режима,
+    // мимо него TaskExecutionService не знал бы про эскалации и не смог бы отличить
+    // «исполнитель молчит» от «исполнитель ждёт ответа по блокеру». Подпись (task) → Task<bool>:
+    // true, если в SourceSessionId задачи висит открытая карточка блокера с TaskId == task.Id.
+    internal Func<TaskItem, Task<bool>>? OpenBlockerLookup
+    {
+        get => _openBlockerLookup;
+        set => _openBlockerLookup = value;
+    }
+    private Func<TaskItem, Task<bool>>? _openBlockerLookup;
 
     // Оклик исполнителя: один автоход в его же чат — «закрой задачу или эскалируй».
     private async Task NudgeExecutorAsync(TaskItem task, Session session, DateTime nowUtc)
@@ -884,19 +967,59 @@ public class TaskExecutionService
 
     // Оклик не помог (или окликать было некого) — уведомление человеку. Пометку «исполнитель
     // встал» не ставим: она про терминальный отказ провайдера, а здесь работа просто брошена.
-    private async Task AlertStaleTaskAsync(TaskItem task, DateTime nowUtc)
+    // waitingForBlocker (волна 2 team-blocker-honest): по задаче открыта карточка блокера —
+    // исполнитель не «молчит», а ждёт ответа штаба/человека, и текст окрика другой.
+    private async Task AlertStaleTaskAsync(TaskItem task, DateTime nowUtc, bool waitingForBlocker)
     {
         var updated = _tasks.MarkExecutorStaleAlerted(task.Id, nowUtc) ?? task;
-        await _hub.BroadcastTaskChangedAsync(updated.OwnerId!, "updated", updated);
+        await _broadcaster.ToOwner(updated.OwnerId!, new TaskChangedMessage("updated", updated));
 
         var persona = updated.PersonaId is not null ? _personas.Get(updated.PersonaId, updated.OwnerId!) : null;
-        await NotifyAsync(updated, BuildStaleNotification(updated, persona));
+        await NotifyAsync(updated, BuildStaleNotification(updated, persona, waitingForBlocker));
+
+        // Будим координатора, если он ждал этого исполнителя в цикле «до готово» (фаза waiting):
+        // без пробуждения цикл повис бы в ожидании уже мёртвого исполнителя, и тумблер горел
+        // бы до ручного вмешательства. Сообщение идёт как Report — гейт разбора очереди при
+        // активном цикле пропустит его наравне с User и ход-реакция вернёт цикл к работе.
+        // Без активного цикла — обычная отправка в чат (auto), без шума в ленте.
+        if (updated.SourceSessionId is { } sourceId)
+        {
+            try
+            {
+                var minutes = _staleAfter.TotalMinutes;
+                var text = waitingForBlocker
+                    ? $"⚠️ Исполнитель задачи «{updated.Title}» ждёт ответа по блокеру {minutes:0} мин: " +
+                      "ответь ему в чат или сними задачу."
+                    : $"⚠️ Исполнитель задачи «{updated.Title}» молчит {minutes:0} мин: " +
+                      "перезапусти, переиграй или встань по блокеру.";
+                await _sessions.SendOrEnqueueAsync(sourceId, text,
+                    senderOrigin: "task-stall-alert", silent: true, suppressTasksExecute: true,
+                    staffNote: waitingForBlocker ? StaleAlertWaitingForBlockerStaffNote : StaleAlertStaffNote,
+                    kind: SessionManager.PendingKind.Report);
+            }
+            catch (Exception ex)
+            {
+                _log.LogError(ex, "Не удалось разбудить координатора сессии {SessionId} по молчанию исполнителя задачи {TaskId}",
+                    sourceId, updated.Id);
+            }
+        }
+
         _log.LogWarning("Задача {TaskId} «{Title}» осталась в работе после конца хода — " +
-            "напоминание исполнителю не помогло, зову человека", updated.Id, updated.Title);
+            "{Reason}, зову человека", updated.Id, updated.Title,
+            waitingForBlocker ? "исполнитель ждёт ответа по блокеру" : "напоминание исполнителю не помогло");
     }
 
     // Подпись плашки оклика: единственное, что человек видит от служебного промпта
     internal const string StaleNudgeStaffNote = "Напоминание исполнителю: задача не закрыта";
+
+    // Подпись плашки пробуждения координатора: то же поведение, что у DelegatorReactionStaffNote —
+    // ход-реакция в ленте рисуется разделителем, а не пузырём с сырым служебным промптом.
+    internal const string StaleAlertStaffNote = "Исполнитель молчит — задача ждёт решения";
+
+    // Волна 2 team-blocker-honest: исполнитель ждёт ответа по блокеру — текст другой,
+    // чтобы координатор понимал причину тишины и не предлагал «перезапустить» того, кто
+    // уже ждёт ответа по открытой карточке.
+    internal const string StaleAlertWaitingForBlockerStaffNote = "Исполнитель ждёт ответа по блокеру";
 
     // Промпт оклика: ровно два выхода — закрыть задачу либо эскалировать. Третьего («доделаю
     // как-нибудь потом») быть не должно, иначе оклик превращается в новый бесконечный ход.
@@ -908,10 +1031,15 @@ public class TaskExecutionService
         "Ничего другого сейчас не делай.";
 
     // Уведомление человеку: задача не закрыта и сама уже не закроется
-    internal static NotificationMessage BuildStaleNotification(TaskItem task, Persona? persona = null) => new(
-        Title: "Задача осталась в работе",
-        Body: $"{task.Title}: исполнитель закончил и не закрыл задачу — проверьте результат",
-        Url: TaskSchedulerService.TaskUrl(task),
+    // waitingForBlocker (волна 2 team-blocker-honest): по задаче открыт блокер — формулировка
+    // другая, чтобы в списке уведомлений было видно, что это «ждёт», а не «молчит».
+    internal static NotificationMessage BuildStaleNotification(TaskItem task, Persona? persona = null,
+        bool waitingForBlocker = false) => new(
+        Title: waitingForBlocker ? "Исполнитель ждёт ответа по блокеру" : "Задача осталась в работе",
+        Body: waitingForBlocker
+            ? $"{task.Title}: исполнитель ждёт ответа по открытой карточке блокера — ответьте или снимите задачу"
+            : $"{task.Title}: исполнитель закончил и не закрыл задачу — проверьте результат",
+        Url: TaskUrl.Of(task),
         Kind: "claude",
         PersonaId: persona?.Id,
         ProjectId: task.ProjectId,
@@ -939,7 +1067,7 @@ public class TaskExecutionService
         return new NotificationMessage(
             Title: title,
             Body: body,
-            Url: TaskSchedulerService.TaskUrl(updated),
+            Url: TaskUrl.Of(updated),
             Kind: ok ? "success" : "claude",
             PersonaId: persona?.Id,
             ProjectId: updated.ProjectId,
@@ -986,7 +1114,7 @@ public class TaskExecutionService
         Title: ok ? "Делегированная задача выполнена" : "Делегированная задача не выполнена",
         Body: task.Title,
         Url: sourceSession is null || !ok
-            ? TaskSchedulerService.TaskUrl(task)
+            ? TaskUrl.Of(task)
             : string.IsNullOrEmpty(sourceSession.ProjectId)
                 ? $"/chats/{sourceSession.Id}"
                 : $"/project/{sourceSession.ProjectId}/chat/{sourceSession.Id}",
@@ -1011,8 +1139,27 @@ public class TaskExecutionService
     // (ParentOverrideId побеждает связь по задаче, ParentDetached гасит её вовсе). Чата-исполнителя
     // нет (задача закрыта без запуска) — остаётся сырой SourceSessionId. null — докладывать некуда.
     // internal — для юнит-тестов.
-    internal static string? ResolveReportTarget(Session? executorSession, string? sourceSessionId) =>
-        executorSession is not null ? executorSession.ParentSessionId : sourceSessionId;
+    //
+    // `fromFallback=true` означает «резолвер по задаче не дал ответа при живом
+    // ParentOverrideId=null && !ParentDetached» — аномалия, при которой доклад нельзя терять
+    // (раньше она маскировалась под detached и молча сбрасывалась с Information-логом, что
+    // сутки прятало поломку DI-резолвера). В этом случае возвращаем SourceSessionId — пусть
+    // доклад идёт туда, а вызывающий код пишет Warning, чтобы аномалия была видна.
+    internal static string? ResolveReportTarget(Session? executorSession, string? sourceSessionId,
+        out bool fromFallback)
+    {
+        fromFallback = false;
+        if (executorSession is null) return sourceSessionId;
+        var parent = executorSession.ParentSessionId;
+        if (parent is not null) return parent;
+        // parent == null: либо ParentDetached=true (явный вынос в корень — гасим),
+        // либо у чата вообще нет TaskId (корневой чат без задачи — гасим, аномалии нет:
+        // задача к нему не привязана), либо ParentOverrideId=null && !ParentDetached и резолвер
+        // по задаче не дал id (аномалия DI — fallback на sourceSessionId с Warning).
+        if (executorSession.ParentDetached || executorSession.TaskId is null) return null;
+        fromFallback = true;
+        return sourceSessionId;
+    }
 
     // Доклад применим, когда задача вообще делегирована из чата (есть SourceSessionId) и
     // исполнитель не докладывает сам себе. Персоны с обеих сторон больше НЕ обязательны:
@@ -1059,11 +1206,18 @@ public class TaskExecutionService
         // вынос в корень её гасит — «вынес из группы» значит «не докладывай туда». Чата-исполнителя
         // нет (задача закрыта без запуска) — остаётся SourceSessionId, как было.
         var executorSession = task.LinkedSessionId is not null ? _sessions.GetById(task.LinkedSessionId) : null;
-        var targetId = ResolveReportTarget(executorSession, task.SourceSessionId);
+        var targetId = ResolveReportTarget(executorSession, task.SourceSessionId, out var fromFallback);
         if (targetId is null)
         {
-            _log.LogInformation("Доклад Z задачи {TaskId}: пропуск — у чата-исполнителя нет родителя (вынесен в корень)", task.Id);
+            _log.LogInformation("Доклад Z задачи {TaskId}: пропуск — чат-исполнитель явно вынесен в корень (ParentDetached)", task.Id);
             return;
+        }
+        if (fromFallback)
+        {
+            // Резолвер по задаче не дал ответа (ParentOverrideId=null, !ParentDetached).
+            // Доклад терять нельзя — fallback на SourceSessionId; видимость аномалии — Warning,
+            // чтобы поломка DI-резолвера не пряталась сутки, как это было 2026-09-13/14.
+            _log.LogWarning("Доклад Z задачи {TaskId}: связь чата-исполнителя с задачей не резолвится — fallback на SourceSessionId ({SourceId})", task.Id, targetId);
         }
 
         // Владелец S — как в NotifyDelegatorAsync: чужая/неизвестная сессия не годится
@@ -1163,10 +1317,16 @@ public class TaskExecutionService
         // одном факте снова было бы два сообщения. staffNote переводит запись в плашку-
         // разделитель (как у ходов штаба — «Ответ на карточку передан координатору»): она
         // едет и в live-бродкаст, и в history.json, и переживает доставку из очереди.
+        //
+        // kind: PendingKind.Report — доклад будит ждущий цикл «до готово» (а не ждёт его
+        // конца, как обычный Agent). Без этого координатор в цикле не увидит доклада до
+        // ручного вмешательства: гейт разбора очереди при активном цикле пропускает только
+        // User и Report, всё остальное ждёт конца ВСЕГО цикла.
         var deferred = await _sessions.SendOrEnqueueAsync(targetSessionId,
             BuildDelegatorReactionPrompt(task, executor),
             senderPersonaId: delegator?.Id, silent: true, suppressTasksExecute: true,
-            staffNote: DelegatorReactionStaffNote);
+            staffNote: DelegatorReactionStaffNote,
+            kind: SessionManager.PendingKind.Report);
         _log.LogInformation("Доклад Z задачи {TaskId}: отправлен (гостевая реплика + реакция{Deferred}) в чат {SessionId}",
             task.Id, deferred ? " отложена — чат занят" : "", targetSessionId);
     }
@@ -1242,7 +1402,7 @@ public class TaskExecutionService
             // Маркер даём БЕЗ обратных кавычек: в код-блоке (в т.ч. инлайн-`…`) он не считается
             // активным ни стрижкой, ни HasNoReplyMarker — модель, скопировав оформление из
             // промпта, оставила бы его в ленте буквальным текстом
-            $"Решать нечего — ответь ровно {SessionManager.NoReplyMarker} и больше ничем: " +
+            $"Решать нечего — ответь ровно {TeamProtocolMarkers.NoReplyMarker} и больше ничем: " +
             "тогда реплика в ленте не появится.";
     }
 
@@ -1250,7 +1410,7 @@ public class TaskExecutionService
     internal static NotificationMessage BuildWaitingNotification(TaskItem task, Persona? persona = null) => new(
         Title: "Ждёт ответа по задаче",
         Body: task.Title,
-        Url: TaskSchedulerService.TaskUrl(task),
+        Url: TaskUrl.Of(task),
         Kind: "claude",
         PersonaId: persona?.Id,
         ProjectId: task.ProjectId,

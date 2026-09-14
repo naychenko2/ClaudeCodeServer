@@ -19,6 +19,9 @@ import { loadWorkspaceState, saveWorkspaceState, loadFileFullscreenPref, saveFil
 import { api } from '../lib/api';
 import { chatNeighborForArchive } from '../lib/chatUpdate';
 import { useFeature, FLAGS } from '../lib/featureFlags';
+import { SUBSYSTEMS, useSubsystem } from '../lib/subsystems';
+import { useSlotItem } from '../lib/subsystems/registry';
+import type { WorkspacePanelNotesCtx } from '../lib/subsystems/registryCore';
 import { isArchivedChat, matchChatFilter, loadChatFilters } from '../lib/chatFilters';
 import { markChatRead } from '../lib/chatReadState';
 import { refreshProjectActivity } from '../lib/projectActivity';
@@ -62,7 +65,6 @@ import { useProjectTerminals } from '../hooks/useProjectTerminals';
 import { useProjectServices } from '../hooks/useProjectServices';
 import { TerminalPanelContent, PreviewPanelContent } from './workspace/panels';
 import { DocsPanel } from './workspace/DocsPanel';
-import { ProjectNotesPanel } from '../features/notes/ProjectNotesPanel';
 import { DossierHistoryPanel } from './workspace/DossierHistoryPanel';
 import { wsPanels } from './workspace/panelStackState';
 import { CodeGraphPanel } from '../features/codegraph/CodeGraphPanel';
@@ -291,6 +293,16 @@ function histReducer(s: FileHistoryState, a: FileHistoryAction): FileHistoryStat
 }
 
 export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLogout }: Props) {
+  // Гейт подсистемы «Заметки»: при выключенной notes панель «notes» (notes/ репы)
+  // не должна появляться в рельсе панелей и принимать клики. Рельсу собирает
+  // PanelZone из `allowedKeys` и `panels`: если ключ есть в WORKSPACE_KEYS, но
+  // контента нет — keyAvailable возвращает false и кнопка скрыта. Так что
+  // достаточно не передавать `notes` в panels (см. блок ниже). Здесь же
+  // подписка на стор подсистем нужна — она же читается гейтом.
+  const notesEnabled = useSubsystem(SUBSYSTEMS.notes)
+  // Панель «Заметки проекта» — вклад слота workspace-panel (ноль прямых импортов фичи).
+  const notesPanel = useSlotItem<WorkspacePanelNotesCtx>('workspace-panel', 'project-notes')
+
   // Восстанавливаем состояние окна для этого проекта (компонент перемонтируется при входе в проект)
   const [leftTab, setLeftTab] = useState<LeftTab>(() => {
     const savedRaw = loadWorkspaceState(project.id)?.leftTab;
@@ -1879,8 +1891,13 @@ const windowWidth = useWindowWidth();
             // «развернуть» тем же путём, что открываются остальные файлы
             docs: <DocsPanel project={project} onOpenFile={handleOpenFileFromTree} onAttachToChat={handleAttachToChat} activeFilePath={openFile} onCloseFile={backFromFile} />,
             // Заметки ТЕКУЩЕГО проекта (notes/ репы) — клик открывает в центре тем же
-            // путём, что файлы (FileViewer для notes/**.md рендерит NoteView)
-            notes: <ProjectNotesPanel projectId={project.id} activeFilePath={openFile} onOpenFile={handleOpenFileFromTree} />,
+            // путём, что файлы (FileViewer для notes/**.md рендерит NoteView).
+            // Гейт подсистемы: при выключенной notes контент не передаём — PanelZone
+            // по keyAvailable вернёт false и кнопка в рельсе не появится (см.
+            // useSubsystem в начале компонента).
+            ...(notesEnabled && notesPanel ? {
+              notes: notesPanel.render?.({ projectId: project.id, activeFilePath: openFile, onOpenFile: handleOpenFileFromTree }),
+            } : {}),
             // «История решений» (change-dossiers, этап 1): гейт по флагу — внутри самой
             // панели (мокап требует видимый вход даже при выключенной фиче — она сама
             // показывает empty-state с кнопкой «Открыть настройки»)

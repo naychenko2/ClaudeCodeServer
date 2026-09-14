@@ -1,7 +1,6 @@
-using ClaudeHomeServer.Hubs;
-using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Terminal;
 using FluentAssertions;
-using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging;
 using Moq;
 
@@ -17,9 +16,10 @@ public class TerminalServiceTests
 
     public TerminalServiceTests()
     {
-        // ProjectManager не требуется для тестов пустого словаря терминалов
+        // Шов `ITerminalHubNotifier` (Этап 5, волна C, шаг 2): вместо
+        // `IHubContext<TerminalHub>` вертикаль берёт Core-интерфейс.
         _svc = new TerminalService(
-            new Mock<IHubContext<TerminalHub>>().Object,
+            new Mock<ITerminalHubNotifier>().Object,
             null!,
             new Mock<ILogger<TerminalService>>().Object,
             TestLauncherFactory.Instance);

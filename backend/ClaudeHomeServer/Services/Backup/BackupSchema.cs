@@ -27,5 +27,9 @@ public static class BackupSchema
     // 8 — из ProjectIcon удалены ImageFile/OriginalFile/Crop и значение enum Image, добавлен
     //     Glyph (ADR-009 §6): старый код не знает поля Glyph и при первом же Save молча
     //     вытер бы значки у всех проектов; Kind=1 (бывший Image) выведен из обращения
-    public const int Version = 8;
+// 9 — из SessionWorkLoop удалены ExecutionsStarted/MaxExecutions и убран enum WorkLoopRunQuota
+    //     (дефект «два лимита по 20»: цикл теперь считает возвраты из ожидания, не запуски
+    //     задач). System.Text.Json молча игнорирует лишние поля — старые сессии с этими
+    //     полями читаются штатно, но SchemaVersion всё равно поднимаем для ArchiveSchema.
+    public const int Version = 9;
 }

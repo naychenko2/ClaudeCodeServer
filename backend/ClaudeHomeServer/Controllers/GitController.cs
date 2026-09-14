@@ -13,7 +13,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/git")]
-public class GitController(GitService git, GitServerService gitServer, GitAiService gitAi, ProjectManager projects, UserStore users, SessionManager sessions, IHubContext<SessionHub> hub, CommitAttributionService commitAttribution) : ControllerBase
+public class GitController(GitService git, GitServerService gitServer, GitAiService gitAi, ProjectManager projects, UserStore users, Services.Git.IForgejoAccountStore forgejoAccounts, SessionManager sessions, IHubContext<SessionHub> hub, CommitAttributionService commitAttribution) : ControllerBase
 {
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
 
@@ -271,8 +271,9 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
             var p = GetProject(projectId);
             var owner = p.OwnerId is null ? null : users.GetById(p.OwnerId);
             if (owner is null) return NotFound();
-            var password = await gitServer.ResetPasswordAsync(owner, ct);
-            return Ok(new { login = owner.ForgejoUsername, password });
+            var password = await gitServer.ResetPasswordAsync(owner.Id, owner.Username, ct);
+            var view = forgejoAccounts.GetAccount(owner.Id);
+            return Ok(new { login = view?.ForgejoUsername, password });
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
@@ -493,7 +494,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
     // где трейлер уже пришёл из системного промпта хода, если он был).
     private string AppendDossierTrailer(string message)
     {
-        var callerSessionId = Request.Headers[Filters.DenyOnDelegatedTurnAttribute.CallerHeader].ToString();
+        var callerSessionId = Request.Headers[McpEndpoints.CallerSessionHeader].ToString();
         if (string.IsNullOrEmpty(callerSessionId)) return message;
         var session = sessions.GetById(callerSessionId);
         if (session is null) return message;
@@ -578,7 +579,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
     {
         if (!gitServer.Enabled || p.OwnerId is null || users.GetById(p.OwnerId) is not { } owner)
             return null;
-        var repo = await gitServer.CreateRepoAsync(owner, p.Name, p.Id, ct);
+        var repo = await gitServer.CreateRepoAsync(owner.Id, owner.Username, p.Name, p.Id, ct);
         await git.SetRemoteAsync(Owner(p), p.RootPath, repo.CloneUrl, ct);
         projects.UpdateGitSettings(p.Id, remoteUrl: repo.CloneUrl);
         return repo.HtmlUrl;

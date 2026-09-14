@@ -3,6 +3,7 @@ using System.Security.Claims;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Knowledge;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -221,21 +222,6 @@ public class KnowledgeBasesController(KnowledgeService knowledge, IHubContext<Se
     // Классификация датасетов под пользователя (личные/публичные/чужие) — в
     // KnowledgeBaseCatalogService: та же точка обслуживает WorkspaceToolset (ADR-012, волна 3).
 }
-
-// --- DTO ---
-
-public record KnowledgeBaseSummary(
-    string Id, string Title, string Type, string Visibility,
-    int DocumentCount, DateTime? CreatedAt, bool Deletable, string? Description);
-
-// Error — текст ошибки индексации от Dify (только у документов в статусе error): для тех,
-// у кого автолечения нет (ручные документы), это единственный ключ к причине
-public record KnowledgeDocumentDto(string Id, string Name, string IndexingStatus, string? Error = null);
-
-public record KnowledgeBaseDetail(
-    string Id, string Title, string Type, string Visibility,
-    int DocumentCount, DateTime? CreatedAt, bool Deletable, string? Description,
-    IReadOnlyList<KnowledgeDocumentDto> Documents);
 
 public record CreateKnowledgeBaseRequest(string Title, string? Description, string Visibility);
 

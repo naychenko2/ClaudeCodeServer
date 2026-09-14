@@ -45,4 +45,29 @@ public static class McpDelivery
 
         return true;
     }
+
+    /// <summary>
+    /// Правило доставки ПРОДУКТОВОЙ встроенной интеграции (сейчас — только Higgsfield).
+    /// Заводится нашим же кодом (<c>HiggsfieldIntegration.EnsureRecord</c>), ключ сидит
+    /// в <c>ReservedKeys</c> — это НЕ запись личного реестра, каскад «проект/персона»
+    /// для неё не применяется: владелец вошёл в интеграцию и ожидает, что она работает,
+    /// а не требует обхода настроек в каждом чате. Единственные оси:
+    /// <list type="bullet">
+    /// <item><see cref="McpServerRecord.Enabled"/> — рубильник записи, чтобы выключить
+    ///   сервер целиком (например, при выходе из OAuth)</item>
+    /// <item><see cref="McpServerRecord.AllowReadOnlyPersonas"/> — AND-гейт профиля
+    ///   «Только чтение»: пишущие инструменты интеграции не должны доезжать до RO-персон
+    ///   по умолчанию. Продуктовая запись не выставляет его в true, поэтому RO-персоны
+    ///   интеграцию не получают — намеренно</item>
+    /// </list>
+    /// Живой OAuth-токен проверяется отдельно (после этого гейта) в <c>SessionManager</c>:
+    /// <c>McpOAuthService.EnsureFresh</c> обновляет протухший токен или возвращает null,
+    /// если вход не выполнен — тогда сервер снимается с хода с WARN.
+    /// </summary>
+    public static bool IsBuiltinDelivered(McpServerRecord record, bool readOnly)
+    {
+        if (!record.Enabled) return false;
+        if (readOnly && !record.AllowReadOnlyPersonas) return false;
+        return true;
+    }
 }

@@ -1,5 +1,8 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Skills;
+using ClaudeHomeServer.Services.Notes;
+using ClaudeHomeServer.Services.Knowledge;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -47,9 +50,9 @@ public class PersonaBindingsServiceTests : IDisposable
 
         _mcp = new ClaudeHomeServer.Services.Mcp.McpRegistry(config,
             new ClaudeHomeServer.Services.Mcp.McpSecretStore(config));
-        _sut = new PersonaBindingsService(_personas, _projects, wkStore, notesSvc, notesKb,
+        _sut = new PersonaBindingsService(_personas, _projects, wkStore,
             knowledge, new SkillsService(), _users, config,
-            NullLogger<PersonaBindingsService>.Instance, _mcp);
+            NullLogger<PersonaBindingsService>.Instance, _mcp, notes: notesSvc, notesKb: notesKb);
     }
 
     public void Dispose()

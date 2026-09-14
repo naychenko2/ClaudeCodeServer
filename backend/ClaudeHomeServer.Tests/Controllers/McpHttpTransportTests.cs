@@ -189,7 +189,26 @@ public class McpHttpTransportTests(TestWebApplicationFactory factory)
     [Fact]
     public void Тулсеты_НеЗависятОтHttpContext()
     {
-        var toolsets = typeof(ClaudeHomeServer.Services.Mcp.Http.IMcpToolset).Assembly.GetTypes()
+        // Интерфейс IMcpToolset лежит в Core, а реализации — в вертикалях (Notes, Tasks, …).
+        // Сборка интерфейса реализаций НЕ содержит, и NotBeEmpty на ней молча падает.
+        // Сканируем ВСЕ загруженные ClaudeHomeServer* сборки (тот же приём, что
+        // SubsystemBoundaryTests), с защитой от вакуумного прохода.
+        var assemblies = AppDomain.CurrentDomain.GetAssemblies()
+            .Where(a =>
+            {
+                var name = a.GetName().Name;
+                return name is not null
+                    && (name == "ClaudeHomeServer"
+                        || name.StartsWith("ClaudeHomeServer.", StringComparison.Ordinal))
+                    && !name.EndsWith(".Tests", StringComparison.Ordinal);
+            })
+            .ToList();
+        assemblies.Should().NotBeEmpty(
+            "хотя бы одна прод-сборка ClaudeHomeServer* обязана быть загружена — иначе " +
+            "сторож не видел ни одного тулсета и прошёл зелёным");
+
+        var toolsets = assemblies
+            .SelectMany(a => a.GetTypes())
             .Where(t => typeof(ClaudeHomeServer.Services.Mcp.Http.IMcpToolset).IsAssignableFrom(t)
                 && t is { IsAbstract: false, IsInterface: false })
             .ToList();

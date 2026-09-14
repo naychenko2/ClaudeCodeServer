@@ -1,5 +1,5 @@
 using System.Text;
-using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Llm;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -235,6 +235,51 @@ public class WorkflowMetaResolverTests : IDisposable
             e.Level == LogLevel.Warning
             && e.Message.Contains("missing-workflow-name")
             && e.Message.Contains("не найден"));
+    }
+
+    // Сторож изоляции Log по ExecutionContext. Имитирует гонку из реального мира: один поток
+    // (наш тест) подставляет свой CollectingLogger, параллельный поток (через Task.Run —
+    // аналог Program.cs, поднимающего WebApplicationFactory в чужом ExecutionContext) пишет
+    // свой. С AsyncLocal наш Log не топчется; без него — оба видят «последнего победителя»
+    // в общей статике, и наш коллектор теряет записи (ровно тот сценарий, что ловит
+    // Промах_мета_логируется_как_warning на полном прогоне). Без AsyncLocal этот тест ПАДАЕТ.
+    [Fact]
+    public async Task AsyncLocal_LogИзолированПоExecutionContext_ПараллельныйTaskНеТопчет()
+    {
+        var outerLog = new CollectingLogger();
+        WorkflowMetaResolver.Log = outerLog;
+
+        try
+        {
+            // Task.Run стартует задачу с НОВЫМ ExecutionContext (ThreadPool гарантирует
+            // изоляцию от родительского). В ней пишем свой логгер — без AsyncLocal эта запись
+            // перетёрла бы outerLog в общем статическом поле, и наш outerLog перестал бы быть
+            // текущим значением Log.
+            var innerSeen = await Task.Run(() =>
+            {
+                var innerLog = new CollectingLogger();
+                WorkflowMetaResolver.Log = innerLog;
+                return WorkflowMetaResolver.Log;
+            });
+
+            innerSeen.Should().NotBeSameAs(outerLog,
+                "параллельный Task видит свой Log — иначе AsyncLocal не работает");
+
+            // После возврата из Task.Run наш ExecutionContext должен сохранить outerLog.
+            // Без AsyncLocal здесь был бы innerSeen (статика общая, последний записавший —
+            // победитель). С AsyncLocal — наш outerLog нетронут.
+            WorkflowMetaResolver.Log.Should().BeSameAs(outerLog,
+                "запись в параллельном Task.Run не должна протекать в наш ExecutionContext");
+
+            // И запись, прошедшая через outerLog после гонки, должна попасть именно в outerLog.
+            WorkflowMetaResolver.TryGetMetaBlock([_dir], "missing-workflow-name");
+            outerLog.Entries.Should().ContainSingle(e => e.Message.Contains("missing-workflow-name"),
+                "после гонки запись должна уйти в outerLog — если попала в чужой, AsyncLocal сломан");
+        }
+        finally
+        {
+            WorkflowMetaResolver.Log = NullLogger.Instance;
+        }
     }
 
     // Локальный in-memory логгер — собирает записи для утверждений и не зависит от TestContext.

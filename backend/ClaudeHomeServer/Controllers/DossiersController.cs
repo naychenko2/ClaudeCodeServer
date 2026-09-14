@@ -19,20 +19,27 @@ namespace ClaudeHomeServer.Controllers;
 [Route("api/projects")]
 public class DossiersController(ProjectManager projects, DossierStore store,
     CodeGraphService graphs, DossierRecallService recall, FeatureFlagService flags,
-    GitService git, SessionManager sessions, UserStore users, InstanceSecretsProvider secrets,
-    DossierDiscussionService discussions, DossierCaptureState captureState) : ControllerBase
+    GitService git, IGitRefSnapshotStore snapshotStore, SessionManager sessions, UserStore users,
+    InstanceSecretsProvider secrets, DossierDiscussionService discussions,
+    DossierCaptureState captureState) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
+    // Помощник: IGitRefSnapshotStore и GitService регистрируются на одном синглтоне
+    // (см. GitSubsystem), так что оба указывают на тот же объект. Контроллеру нужны оба:
+    // GitService — для generic-операций (CountRecentCommitsAsync, IsGitRepo, PushAsync),
+    // IGitRefSnapshotStore — для работы с веткой-паспортом.
+    private IGitRefSnapshotStore DossiersGit => snapshotStore;
+
     // Экспортёр паспортов не в DI (Program.cs — вне файлов этой волны): собираем сами
     // из инжектируемых синглтонов. Объект тонкий, состояния не держит — ок per-request.
-    private DossierGitExporter Exporter => new(sessions, store, git, secrets, discussions);
+    private DossierGitExporter Exporter => new(sessions, store, DossiersGit, secrets, discussions);
 
     // Импортёр — тот же паттерн: тонкий объект над синглтонами, per-request
-    private DossierImporter Importer => new(store, git, secrets);
+    private DossierImporter Importer => new(store, DossiersGit, secrets);
 
     // Гейт автовыгрузки — тот же паттерн: опрашивается статусом выгрузки (autoExport)
-    private DossierAutoExportGate AutoExportGate => new(projects, git, captureState);
+    private DossierAutoExportGate AutoExportGate => new(projects, DossiersGit, captureState);
 
     // Чужой проект — 404, а не 403: подтверждать его существование незачему
     private Project? Owned(string id)
@@ -132,12 +139,12 @@ public class DossiersController(ProjectManager projects, DossierStore store,
         var p = Owned(id);
         if (p is null) return NotFound();
 
-        var isGitRepo = GitService.IsGitRepo(p.RootPath);
+        var isGitRepo = GitRepo.IsRepo(p.RootPath);
         return Ok(new
         {
             isGitRepo,
             sharedFolder = projects.GetByRootPath(p.RootPath).Any(x => x.OwnerId != p.OwnerId),
-            hasDossierBranch = await git.HasDossiersBranchAsync(p.OwnerId, p.RootPath, ct),
+            hasDossierBranch = await DossiersGit.RefExistsAsync(p.OwnerId, p.RootPath, DossierBranch.Ref, ct),
             autoExport = isGitRepo ? await AutoExportGate.ClassifyAsync(UserId, p, ct) : null,
         });
     }
@@ -184,11 +191,15 @@ public class DossiersController(ProjectManager projects, DossierStore store,
             : null;
         try
         {
-            await git.PushDossiersBranchAsync(p.OwnerId, p.RootPath, creds, ct);
+            await DossiersGit.PushRefAsync(p.OwnerId, p.RootPath, DossierBranch.Ref, creds, ct);
             // Отправленная ветка — наша по определению (кнопку жмёт владелец): фиксируем
             // её tip, чтобы тик автоимпорта не завёз содержимое ветки обратно как «чужое».
             // Push tip не двигает, но ветка могла быть создана до включения автоимпорта.
-            var tip = await git.GetDossiersTipAsync(p.OwnerId, p.RootPath, ct);
+            var resolved = await DossiersGit.ResolveRefAsync(p.OwnerId, p.RootPath,
+                [DossierBranch.Ref, DossierBranch.RemoteRef], ct);
+            var tip = resolved is null
+                ? null
+                : await DossiersGit.TipAsync(p.OwnerId, p.RootPath, resolved, ct);
             captureState.MarkOwnTip(UserId, p.Id, tip?.CommitSha);
             return Ok(new { pushed = true });
         }

@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 using ClaudeHomeServer.Controllers;
 using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Knowledge;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ClaudeHomeServer.Services.Mcp.Http;
@@ -42,7 +43,7 @@ public sealed partial class PersonasToolset(
     SessionManager sessions) : IMcpParameterizedToolset
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/personas/{sessionId}
-    public const string ServerName = "personas";
+    public const string ServerName = McpEndpoints.PersonasName;
 
     // Ответы — как у stdio-ветки (JSON.stringify): camelCase, кириллица без экранирования
     private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web)
@@ -166,7 +167,7 @@ public sealed partial class PersonasToolset(
                 var gate = DelegatedTurnGate.Decide(sessions, ownerId, session.Id,
                     "Назначение дефолт-персоны",
                     alsoWhenExecutorSuppressed: false,
-                    allowInTeamImplement: false, allowInWorkLoop: false,
+                    allowInTeamImplement: false,
                     failOpenWhenUnknown: false);
                 if (!gate.Allowed) return Deny(gate.DenyText!);
                 return Unwrap(await crud.MakeDefaultAsync(ownerId,
@@ -386,7 +387,7 @@ public sealed partial class PersonasToolset(
                 var gate = DelegatedTurnGate.Decide(sessions, ownerId, session.Id,
                     "Вопрос другой персоне",
                     alsoWhenExecutorSuppressed: false,
-                    allowInTeamImplement: false, allowInWorkLoop: false,
+                    allowInTeamImplement: false,
                     failOpenWhenUnknown: false);
                 if (!gate.Allowed) return Deny(gate.DenyText!);
 
@@ -443,7 +444,7 @@ public sealed partial class PersonasToolset(
 
     /// <summary>URL эндпоинта в конфиге хода: базовый адрес + маршрут тулсета с хвостом.</summary>
     public static string EndpointFor(string apiUrl, string sessionId) =>
-        McpHttpTransport.EndpointFor(apiUrl, ServerName) + "/" + RouteTail(sessionId);
+        McpEndpoints.EndpointFor(apiUrl, ServerName) + "/" + RouteTail(sessionId);
 
     private static bool TryParseRoute(string? route, out string sessionId)
     {

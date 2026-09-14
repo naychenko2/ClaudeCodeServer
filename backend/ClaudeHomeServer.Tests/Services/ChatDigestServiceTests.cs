@@ -1,11 +1,14 @@
-using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Skills;
+using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
+using ClaudeHomeServer.Services.Memory;
+using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
-using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -196,8 +199,8 @@ public class ChatDigestServiceTests : IDisposable
     {
         var runner = new GatedRunner("Сводка.");
         var (mgr, projects, notes) = BuildManager();
-        var sut = new ChatDigestService(mgr, projects, notes, runner,
-            NullLogger<ChatDigestService>.Instance);
+        var sut = new ChatDigestService(mgr, projects, runner,
+            NullLogger<ChatDigestService>.Instance, notes: notes);
         var chatA = NewProjectChat(mgr, projects, withHistory: true);
         var chatB = NewProjectChat(mgr, projects, withHistory: true);
 
@@ -301,22 +304,22 @@ public class ChatDigestServiceTests : IDisposable
     private (ChatDigestService Sut, Session Chat) BuildSut(ICheapTextRunner runner, bool withHistory = true)
     {
         var (mgr, projects, notes) = BuildManager();
-        return (new ChatDigestService(mgr, projects, notes, runner,
-            NullLogger<ChatDigestService>.Instance), NewProjectChat(mgr, projects, withHistory));
+        return (new ChatDigestService(mgr, projects, runner,
+            NullLogger<ChatDigestService>.Instance, notes: notes), NewProjectChat(mgr, projects, withHistory));
     }
 
     private (ChatDigestService Sut, Session Chat) BuildSut()
     {
         var (mgr, projects, notes) = BuildManager();
-        return (new ChatDigestService(mgr, projects, notes, new CountingRunner("x"),
-            NullLogger<ChatDigestService>.Instance), NewProjectChat(mgr, projects));
+        return (new ChatDigestService(mgr, projects, new CountingRunner("x"),
+            NullLogger<ChatDigestService>.Instance, notes: notes), NewProjectChat(mgr, projects));
     }
 
     private (ChatDigestService Sut, Session Chat, NotesService Notes) BuildSutWithNotes()
     {
         var (mgr, projects, notes) = BuildManager();
-        return (new ChatDigestService(mgr, projects, notes, new CountingRunner("x"),
-            NullLogger<ChatDigestService>.Instance), NewProjectChat(mgr, projects), notes);
+        return (new ChatDigestService(mgr, projects, new CountingRunner("x"),
+            NullLogger<ChatDigestService>.Instance, notes: notes), NewProjectChat(mgr, projects), notes);
     }
 
     private (SessionManager Manager, ProjectManager Projects, NotesService Notes) BuildManager()
@@ -337,19 +340,12 @@ public class ChatDigestServiceTests : IDisposable
         var projectManager = new ProjectManager(config, userStore, appSettings);
         _history = new ChatHistoryService(config);
 
-        var clientProxy = new Mock<IClientProxy>();
-        clientProxy
-            .Setup(c => c.SendCoreAsync(It.IsAny<string>(), It.IsAny<object[]>(), It.IsAny<CancellationToken>()))
-            .Returns(Task.CompletedTask);
-        var clients = new Mock<IHubClients>();
-        clients.Setup(c => c.Group(It.IsAny<string>())).Returns(clientProxy.Object);
-        var hub = new Mock<IHubContext<SessionHub>>();
-        hub.Setup(h => h.Clients).Returns(clients.Object);
+        var broadcaster = new TestSessionBroadcaster();
 
         var llmProviders = new LlmProviderRegistry(config);
         var subPool = new ClaudeSubscriptionPool(config);
-        var adapters = new LlmSessionAdapterFactory(config, new SkillsService(),
-            new WorkspaceKnowledgeStore(config), llmProviders, subPool);
+        var adapters = new LlmSessionAdapterFactory(config, new AgentPromptSourceAdapter(new SkillsService()),
+            new WorkspaceDatasetLookup(new WorkspaceKnowledgeStore(config)), llmProviders, subPool);
         var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, config);
         var usage = new UsageService(config);
         var jwt = new JwtService(config, userStore, NullLogger<JwtService>.Instance);
@@ -363,18 +359,15 @@ public class ChatDigestServiceTests : IDisposable
         var notesKb = new NotesKnowledgeService(knowledge, notesSvc, userStore, config,
             NullLogger<NotesKnowledgeService>.Instance);
         var personas = new PersonaManager(config);
-        var personaMemory = new PersonaMemoryService(knowledge, personas, userStore, config,
-            NullLogger<PersonaMemoryService>.Instance);
-        var bindings = new PersonaBindingsService(personas, projectManager, wkStore, notesSvc, notesKb,
-            knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance);
-        var promptBuilder = new PersonaPromptBuilder(llmProviders);
+        var bindings = new PersonaBindingsService(personas, projectManager, wkStore,
+            knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
 
-        var manager = new SessionManager(projectManager, hub.Object, _history, config, adapters, falCost,
-            usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas,
-            personaMemory, bindings, promptBuilder, subPool, NullLogger<SessionManager>.Instance,
-            TestLauncherFactory.Instance, sandbox, cheap: null);
+        var manager = new SessionManager(projectManager, _history, config, adapters, falCost,
+            usage, appSettings, userStore, jwt, server.Object, llmProviders, flags, personas,
+            bindings, subPool, NullLogger<SessionManager>.Instance,
+            TestLauncherFactory.Instance, sandbox, cheap: null, broadcaster: broadcaster);
         return (manager, projectManager, notesSvc);
     }
 

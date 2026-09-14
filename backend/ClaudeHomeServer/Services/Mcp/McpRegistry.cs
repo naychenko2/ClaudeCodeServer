@@ -23,7 +23,7 @@ public class McpRegistry
     public static readonly string[] ReservedKeys =
     [
         "tasks", "notes", "memory", "personas", "wsp", "notifications",
-        "widgets", "codegraph", "dify", "fal-ai", "glif",
+        "widgets", "codegraph", "dify", "fal-ai", "glif", "higgsfield",
     ];
 
     // Префикс серверов памяти персон-консультантов (pmem_<handle>)
@@ -33,7 +33,7 @@ public class McpRegistry
     /// Ключи интеграций продукта с внешними сервисами: они тоже встроенные (часть
     /// ReservedKeys), но ходят во внешний мир — на экране помечаются отдельно.
     /// </summary>
-    public static readonly string[] IntegrationKeys = ["dify", "fal-ai", "glif"];
+    public static readonly string[] IntegrationKeys = ["dify", "fal-ai", "glif", "higgsfield"];
 
     /// <summary>
     /// Группа сервера на экране «MCP-серверы» — см. <see cref="McpBuiltinGroups"/>.
@@ -112,6 +112,42 @@ public class McpRegistry
     }
 
     /// <summary>
+    /// Заводит запись встроенного сервера продукта (Higgsfield и подобные). Путь
+    /// отдельный и явный — обычный Create режет по ReservedKeys, чтобы человек через
+    /// форму не мог занять ключ встроенного сервера; встроенный код (HiggsfieldIntegration
+    /// и пр.) идёт сюда и обходит только проверку резерва, сохраняя формат ключа,
+    /// префикс персон-памяти и уникальность у владельца. Sanity check ключа —
+    /// обязательно встроенный, иначе метод падает: иначе им можно было бы заводить
+    /// произвольные серверы в обход ValidateKey.
+    /// </summary>
+    public McpServerRecord CreateBuiltIn(string ownerId, McpServerRecord draft)
+    {
+        draft.OwnerId = ownerId;
+        draft.Key = (draft.Key ?? "").Trim().ToLowerInvariant();
+        draft.Id = string.IsNullOrWhiteSpace(draft.Id) ? Guid.NewGuid().ToString() : draft.Id;
+        draft.CreatedAt = draft.UpdatedAt = DateTime.UtcNow;
+        if (draft.AuthVersion < 1) draft.AuthVersion = 1;
+        if (string.IsNullOrWhiteSpace(draft.Label)) draft.Label = draft.Key;
+
+        // Защита от случайного вызова с произвольным ключом: встроенный путь только
+        // для ключей из ReservedKeys (включая IntegrationKeys — это подмножество).
+        if (!ReservedKeys.Contains(draft.Key, StringComparer.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                $"CreateBuiltIn допускает только ключи из ReservedKeys, получен «{draft.Key}»");
+
+        lock (_lock)
+        {
+            var list = _byOwner.TryGetValue(ownerId, out var l) ? l : _byOwner[ownerId] = [];
+            // Формат, префикс персон-памяти и уникальность остаются; резервы пропускаем.
+            var error = ValidateBuiltInKey(draft.Key, list, excludeId: null);
+            if (error is not null) throw new InvalidOperationException(error);
+            list.Add(draft);
+            Save();
+        }
+        return draft;
+    }
+
+    /// <summary>
     /// Заменяет запись целиком (кроме Id/OwnerId/CreatedAt) и поднимает AuthVersion:
     /// заголовки запекаются в конфиг на старте процесса, поэтому правка обязана менять
     /// сигнатуру запуска — иначе живой процесс доживания останется со старым секретом.
@@ -126,7 +162,13 @@ public class McpRegistry
             if (existing is null) return null;
 
             var key = (draft.Key ?? "").Trim().ToLowerInvariant();
-            var error = ValidateKey(key, list, excludeId: id);
+            // Ключ существующей записи при обновлении не меняется — резерв защищает от ЗАНЯТИЯ
+            // ключа человеком через форму, а не от правки уже заведённой встроенной записи
+            // (StoreTokens в OAuth и Logout в HiggsfieldIntegration кладут токены тем же ключом,
+            // что и EnsureRecord). Совпал с прежним — резерв пропускаем; смена ключа на
+            // резервный по-прежнему отвергается.
+            var allowReserved = string.Equals(key, existing.Key, StringComparison.OrdinalIgnoreCase);
+            var error = ValidateKey(key, list, excludeId: id, allowReserved: allowReserved);
             if (error is not null) throw new InvalidOperationException(error);
 
             existing.Key = key;
@@ -201,18 +243,37 @@ public class McpRegistry
     }
 
     /// <summary>Текст ошибки для 400 или null, если ключ годен.</summary>
-    public string? ValidateKey(string key, IReadOnlyList<McpServerRecord> ownerServers, string? excludeId)
+    public string? ValidateKey(string key, IReadOnlyList<McpServerRecord> ownerServers, string? excludeId,
+        bool allowReserved = false)
     {
         if (string.IsNullOrWhiteSpace(key))
             return "Не задан ключ сервера";
         if (!KeyPattern.IsMatch(key))
             return "Ключ: латиница в нижнем регистре, цифры, дефис и подчёркивание, до 40 символов";
-        if (ReservedKeys.Contains(key, StringComparer.OrdinalIgnoreCase))
+        if (!allowReserved && ReservedKeys.Contains(key, StringComparer.OrdinalIgnoreCase))
             return $"Ключ «{key}» занят встроенным сервером продукта";
         if (key.StartsWith(ConsultantMemoryPrefix, StringComparison.OrdinalIgnoreCase))
             return $"Ключи с префиксом «{ConsultantMemoryPrefix}» заняты памятью персон-консультантов";
         if (ModuleKeys().Contains(key, StringComparer.OrdinalIgnoreCase))
             return $"Ключ «{key}» занят MCP-сервером внешнего модуля";
+        if (ownerServers.Any(r => r.Id != excludeId && string.Equals(r.Key, key, StringComparison.OrdinalIgnoreCase)))
+            return $"Сервер с ключом «{key}» уже есть";
+        return null;
+    }
+
+    /// <summary>
+    /// Проверка ключа для <see cref="CreateBuiltIn"/>: формат, префикс персон-памяти и
+    /// уникальность у владельца. Резервы пропущены — ключ обязан быть в ReservedKeys,
+    /// что контролируется снаружи (см. <see cref="CreateBuiltIn"/>).
+    /// </summary>
+    private string? ValidateBuiltInKey(string key, IReadOnlyList<McpServerRecord> ownerServers, string? excludeId)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+            return "Не задан ключ сервера";
+        if (!KeyPattern.IsMatch(key))
+            return "Ключ: латиница в нижнем регистре, цифры, дефис и подчёркивание, до 40 символов";
+        if (key.StartsWith(ConsultantMemoryPrefix, StringComparison.OrdinalIgnoreCase))
+            return $"Ключи с префиксом «{ConsultantMemoryPrefix}» заняты памятью персон-консультантов";
         if (ownerServers.Any(r => r.Id != excludeId && string.Equals(r.Key, key, StringComparison.OrdinalIgnoreCase)))
             return $"Сервер с ключом «{key}» уже есть";
         return null;

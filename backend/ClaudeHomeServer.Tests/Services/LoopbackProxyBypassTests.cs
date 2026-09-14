@@ -97,6 +97,7 @@ public class LoopbackProxyBypassTests
     public void ForTurn_Песочница_ХостовойNO_PROXY_НеНаследуетсяНичем()
     {
         var value = LoopbackProxyBypass.ForTurn(useHttp: true, isSandboxed: true,
+            localProvider: false,
             inherited: "corp.example.com,10.0.0.0/8", apiUrls: "http://host.docker.internal:5000");
 
         value.Should().BeNull("exec-оверрайд затёр бы egress-whitelist песочницы; " +
@@ -111,15 +112,47 @@ public class LoopbackProxyBypassTests
     public void ForTurn_ТранспортНеHttp_ОверрайдаНет()
     {
         var value = LoopbackProxyBypass.ForTurn(useHttp: false, isSandboxed: false,
+            localProvider: false,
             inherited: "corp.example.com", apiUrls: "http://localhost:5000");
 
         value.Should().BeNull("в бэкенд по этому адресу CLI не ходит — переменная не нужна");
+    }
+
+    /// <summary>
+    /// §7б local-vllm-provider.md, грабля 1: ход на ЛОКАЛЬНОМ LLM-провайдере требует обхода сам
+    /// по себе — с HTTP_PROXY в окружении CLI тащит в прокси даже 127.0.0.1 и падает
+    /// «Connection refused». Рубильник Mcp:HttpTransport=false не смеет уводить такой ход
+    /// в прокси, поэтому транспорт MCP здесь ни при чём.
+    /// </summary>
+    [Fact]
+    public void ForTurn_ЛокальныйПровайдерБезHttpТранспорта_ОбходСтоит()
+    {
+        var value = LoopbackProxyBypass.ForTurn(useHttp: false, isSandboxed: false,
+            localProvider: true,
+            inherited: "corp.example.com", apiUrls: "http://127.0.0.1:18020");
+
+        value!.Split(',').Should().Contain("corp.example.com").And.Contain("127.0.0.1");
+    }
+
+    /// <summary>
+    /// Песочница сильнее локального провайдера: средой exec-процесса владеет контейнер,
+    /// хостовой оверрайд затёр бы её egress-whitelist (см. блокер консилиума №1).
+    /// </summary>
+    [Fact]
+    public void ForTurn_ЛокальныйПровайдерВПесочнице_ОверрайдаНет()
+    {
+        var value = LoopbackProxyBypass.ForTurn(useHttp: false, isSandboxed: true,
+            localProvider: true,
+            inherited: "corp.example.com", apiUrls: "http://127.0.0.1:18020");
+
+        value.Should().BeNull("слоем среды контейнера владеет IProcessLauncher, а не код хода");
     }
 
     [Fact]
     public void ForTurn_LocalВладелец_УнаследованноеДополняетсяАдресомЭндпоинта()
     {
         var value = LoopbackProxyBypass.ForTurn(useHttp: true, isSandboxed: false,
+            localProvider: false,
             inherited: "corp.example.com", apiUrls: "http://ccs-host:5000");
 
         value.Should().Be("corp.example.com,localhost,127.0.0.1,::1,host.docker.internal,ccs-host");
@@ -135,6 +168,7 @@ public class LoopbackProxyBypassTests
     public void ForTurn_ТолькоПmemНаХttp_ЕгоХостПопадаетВОбход()
     {
         var value = LoopbackProxyBypass.ForTurn(useHttp: true, isSandboxed: false,
+            localProvider: false,
             inherited: null, apiUrls: [null, null, "http://ccs-pmem-host:5000", null]);
 
         value!.Split(',').Should().Contain("ccs-pmem-host",

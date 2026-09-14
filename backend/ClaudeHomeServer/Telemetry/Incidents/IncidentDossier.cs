@@ -39,8 +39,11 @@ public sealed record IncidentTurn(
     string? ErrorType,
     long DurationMs);
 
-/// <summary>Строка лога уровня Warning/Error за окно инцидента.</summary>
-public sealed record IncidentLogLine(DateTimeOffset? At, string Severity, string Message);
+/// <summary>
+/// Строка лога уровня Warning/Error за окно инцидента. <c>ExceptionType</c> — только тип
+/// класса исключения (санитайзер стирает message/stacktrace как потенциальный PII).
+/// </summary>
+public sealed record IncidentLogLine(DateTimeOffset? At, string Severity, string Message, string? ExceptionType = null);
 
 /// <summary>
 /// Затронутый чат с локальным контекстом: то, чего в телеметрии нет и быть не должно

@@ -3,38 +3,10 @@ using ClaudeHomeServer.Models;
 
 namespace ClaudeHomeServer.Services;
 
-// Слот тира модели: три именованные модели инстанса, на которые ссылаются
-// назначения мест («новый чат», «теги заметок»…) значением "tier:<slot>".
-public enum ModelTier { Strong, Medium, Weak }
-
-// Разбор уровня модели, пришедшего с провода (задача, персона): "strong|medium|weak",
-// регистр не важен. Только белый список трёх имён — Enum.TryParse сюда не годится: он
-// принимает индексы enum ("0" → Strong, со знаком "+0" мимо любого digit-guard) и списки
-// флагов ("strong,weak" → Weak) независимо от FlagsAttribute. Мусор от LLM должен давать
-// 400, а не молча уезжать на самую дорогую модель.
-public static class ModelTiers
-{
-    // Текст ошибки 400 при неизвестном уровне — один на все точки входа (задачи, персоны)
-    public const string WireError = "Уровень модели должен быть strong, medium или weak";
-
-    public static bool TryParse(string? value, out ModelTier tier)
-    {
-        tier = default;
-        switch (value?.Trim().ToLowerInvariant())
-        {
-            case "strong": tier = ModelTier.Strong; return true;
-            case "medium": tier = ModelTier.Medium; return true;
-            case "weak": tier = ModelTier.Weak; return true;
-            default: return false;
-        }
-    }
-
-    // Значение поля в запросе: null — не прислали, "" — сброс, иначе — обязан быть уровнем
-    public static bool IsValidWireValue(string? value) =>
-        value is null || value.Trim().Length == 0 || TryParse(value, out _);
-}
-
-public class AppSettingsService
+// `ModelTiers.TryParse/IsValidWireValue/WireError` (Этап 5, вынос Tasks) и
+// `ModelTier` enum (Core, прежний переезд) живут в Core-сборке; этот файл
+// держит только сам `AppSettingsService` + его персистенцию.
+public class AppSettingsService : ITierModelResolver
 {
     private readonly string _storePath;
     // Источник истины для DefaultProjectsPath — ТОЛЬКО конфиг (appsettings.Local.json).

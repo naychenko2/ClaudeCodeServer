@@ -262,7 +262,14 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   const workLoopState = useMemo<WorkLoopState | null>(() => {
     if (liveWorkLoop !== undefined) return liveWorkLoop.active ? liveWorkLoop : null;
     return session.workLoop
-      ? { active: true, iteration: session.workLoop.iteration, maxIterations: session.workLoop.maxIterations, phase: session.workLoop.phase }
+      ? {
+        active: true,
+        iteration: session.workLoop.iteration,
+        maxIterations: session.workLoop.maxIterations,
+        phase: session.workLoop.phase,
+        waitingReason: undefined,
+        waitingTicks: 0,
+      }
       : null;
   }, [liveWorkLoop, session.workLoop]);
   const handleToggleWorkLoop = useCallback(async () => {
@@ -1193,6 +1200,22 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     onSessionUpdated?.(updated);
   }, [session.id, onSessionUpdated]);
 
+  // «Продолжить в стандартном окне 200K» под карточкой отказа Window1MUnavailable: снимает
+  // суффикс [1m] с чата. Возврат { ok: false, error } при 400/404 — карточка показывает
+  // серверный текст под кнопкой (не молчит). request() бросает Error с прикреплёнными
+  // status/body, оттуда и берём человеческую формулировку
+  const handleDropWindow1M = useCallback(async (): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const updated = await api.chats.dropWindow1M(session.id);
+      onSessionUpdated?.(updated);
+      return { ok: true };
+    } catch (err) {
+      const body = (err as Error & { body?: { error?: string } })?.body;
+      const msg = body?.error ?? (err instanceof Error ? err.message : 'Не удалось переключить чат на стандартное окно.');
+      return { ok: false, error: msg };
+    }
+  }, [session.id, onSessionUpdated]);
+
   // Смена модели из полосы контролов композера. В рамках одного провайдера — обычный
   // update; смена провайдера у НАЧАТОГО чата упирается в guard (транскрипт живёт у
   // эндпоинта), поэтому идёт миграцией — тот же путь, что в «Настройках чата».
@@ -1249,19 +1272,16 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     waveNumber: teamImplementState.waveNumber,
     planCardId: teamImplementState.planCardId ?? null,
     executorPersonaIds: teamImplementState.executorPersonaIds,
+    // budget нужен карточке плана для предупреждения «план сверх бюджета»
+    // до клика «Запустить» (волна 4 team-blocker-honest)
+    budget: teamImplementState.budget,
     onRespond: handleRespondTeamPlan,
   } : null, [teamImplementState, handleRespondTeamPlan]);
 
   // Обвязка карточек остановки (Э4): решение уходит в хаб, карточка гаснет.
-  // Контекст живёт, пока включён режим — в выключенном чате карточки только читаются
-  const handleRespondTeamEscalation = useCallback((escalationId: string, actionId?: string, comment?: string) => {
-    respondTeamEscalation(escalationId, actionId, comment).catch(err => {
-      showToast('Командная реализация', err instanceof Error ? err.message : 'Не удалось отправить решение');
-    });
-  }, [respondTeamEscalation]);
-  const teamEscalationCtx = useMemo<TeamEscalationChatContext | null>(() => teamImplementState
-    ? { onRespond: handleRespondTeamEscalation }
-    : null, [teamImplementState, handleRespondTeamEscalation]);
+  // Подробности — рядом с местом создания teamEscalationCtx ниже (он зависит
+  // от openEscalations/isWaiting, и переносить handleRespondTeamEscalation сюда
+  // было бы циклом зависимостей)
 
   // Откат файла — стабильный колбэк для карточек file_changed в ленте. Действие бьёт
   // по git checkout HEAD и стирает ЛЮБЫЕ несохранённые правки файла (не только модели),
@@ -1627,12 +1647,44 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
 
   // Открытые карточки остановки (есть неотвеченная team_escalation): закреплённая полоса
   // над композером показывает самую свежую (последнюю по индексу — чем ниже, тем позже),
-  // остальные — счётчиком. Без открытых карточек полоса не рисуется. Карточки-плана и
-  // вопрос человеку НЕ считаются открытыми остановками: у них своя логика видимости
-  const openEscalations = useMemo(() => findOpenEscalations(items), [items]);
+  // остальные — счётчиком. Полоса видна, только если И открытая карточка, И стадия
+  // режима её ждёт (awaitingDecision для большинства видов, interview для needsClarification):
+  // без стадии полоса висела бы и когда решение уже принято, или когда координатор просто
+  // пишет в чат (прод-инцидент 2026-09 с двумя случайно снятыми задачами). Префильтр —
+  // единая точка в lib/teamImplement.isEscalationAwaitingStage, чтобы и тест, и симулятор,
+// и UI смотрели в одно условие. Без teamImplementState полоса не рисуется: режима нет —
+// «ждать вашего решения» нечего
+  const openEscalations = useMemo(
+    () => findOpenEscalations(items, teamImplementState?.stage ?? null),
+    [items, teamImplementState?.stage],
+  );
   const topEscalation = openEscalations[openEscalations.length - 1] ?? null;
   // jumpToEscalation объявлен ниже — после renderedItems, от которого зависит
   // (порядок определения в JS важен — иначе ReferenceError)
+
+  // Обвязка карточек остановки (Э4): решение уходит в хаб, карточка гаснет.
+  // Стоит ЗДЕСЬ, потому что teamEscalationCtx зависит от openEscalations (флаг
+  // coordinatorTurnActive) — перенеси выше и будет цикл: ctx использует openEscalations,
+  // topEscalation зависит от openEscalations. Контекст живёт, пока включён режим —
+  // в выключенном чате карточки только читаются
+  const handleRespondTeamEscalation = useCallback((escalationId: string, actionId?: string, comment?: string) => {
+    respondTeamEscalation(escalationId, actionId, comment).catch((err: unknown) => {
+      showToast('Командная реализация', err instanceof Error ? err.message : 'Не удалось отправить решение');
+    });
+  }, [respondTeamEscalation]);
+  // Пока координатор ведёт ход-реакции по открытой карточке блокера — карточка
+  // показывает «Координатор разбирается». Флаг — единая точка, чтобы UI не
+  // пересчитывал то же самое: нужно одновременно И идёт ход, И открыта по стадии
+  // именно карточка-блокер (openEscalations уже отфильтрован awaitingDecision/interview,
+  // но в нём могут быть и productDecision/taskFailed/прочие — строку рисуем только у блокера,
+  // см. TeamEscalationView). Иначе на любом идущем ходе штаба при любой открытой
+  // карточке продуктовой развилки строка утверждала бы, что координатор разбирается
+  // с блокером, которого нет
+  const coordinatorTurnActive = isWaiting
+    && openEscalations.some(e => e.item.escalation.kind === 'blocker');
+  const teamEscalationCtx = useMemo<TeamEscalationChatContext | null>(() => teamImplementState
+    ? { onRespond: handleRespondTeamEscalation, coordinatorTurnActive }
+    : null, [teamImplementState, handleRespondTeamEscalation, coordinatorTurnActive]);
 
   const runTeamMechanic = useCallback(async (offer: TeamMechanicOffer, offerIndex: number) => {
     setClickedOfferIndices(prev => new Set(prev).add(offerIndex));
@@ -1806,12 +1858,13 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       promptSnapshotId={turnMeta.snapshots[i]}
       turnContextTokens={turnMeta.contextTokens[i]}
       turnCache={turnMeta.cache[i]}
+      onDropWindow1M={handleDropWindow1M}
     />
   ), [
     online, isWaiting, items.length, lastResultIndex, retryInterruptedIdx, toggleThinking, allowPermission,
     denyPermission, handleAllowAlways, answerQuestion, handleRespondPlan, planVersions,
     lastApprovedPlanIdx, mode, onOpenFile, project, handleRevert, handleRetry,
-    interrupt, handleMigrateProvider, batchByIndex, showWaiting, taskTodos, changeMode, turnBoundaries,
+    interrupt, handleMigrateProvider, handleDropWindow1M, batchByIndex, showWaiting, taskTodos, changeMode, turnBoundaries,
     mechanicOffers, launchedByIndex, failedByIndex, declinedMechanicOffers, runTeamMechanic, scrollToMechanicLaunch,
     presetOffers, presetCardState, presetNote, presetError, presetBusy, applyPreset, declinePreset,
     turnMeta,
@@ -2546,10 +2599,41 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
           // гаснет по концу хода, а прогресс нужно смотреть как раз в паузе. Общая строка
           // держит её на одном месте в обоих состояниях, без прыжка при старте/конце хода.
           <div style={{ marginTop: 5, display: 'flex', alignItems: 'center', gap: 10 }}>
-            <WaitingIndicator planning={planningKind} awaitingResponse={awaitingResponse} />
+            <WaitingIndicator
+              planning={planningKind}
+              awaitingResponse={awaitingResponse}
+              waitingReason={workLoopState?.waitingReason ?? null}
+              waitingTicks={workLoopState?.waitingTicks ?? 0}
+            />
             <div style={{ marginLeft: 'auto', minWidth: 0, display: 'flex' }}>
               <TurnPlanPill todos={taskTodos} />
             </div>
+          </div>
+        )}
+
+        {/* Плашка «Сжимаю контекст…» под лентой: видна, пока isCompacting=true. В самой ленте
+            процесс уплотнения никак не виден — только в шапке (ContextAmount) и поповере, а
+            пользователь смотрит на ленту и теряется. Тонкая строка со спиннером и текстом,
+            отдельной жизнью от WaitingIndicator (компакция может идти без хода). Гаснет по
+            compact_status с compact_result. */}
+        {isCompacting && (
+          <div
+            data-testid="compact-indicator"
+            style={{
+              marginTop: 4,
+              marginLeft: 38,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              minHeight: 17,
+              color: C.textMuted,
+              fontSize: 12,
+              fontFamily: 'inherit',
+            }}
+          >
+            {/* Спиннер из утилитарного класса — единый стиль с кнопкой «Сжимаю…» в поповере */}
+            <span className="tool-spinner" style={{ width: 11, height: 11, flexShrink: 0 }} />
+            <span>Сжимаю контекст…</span>
           </div>
         )}
 

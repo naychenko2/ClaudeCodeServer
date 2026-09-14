@@ -3,11 +3,15 @@ using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Skills;
+using ClaudeHomeServer.Services.Notes;
+using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Backup;
 using ClaudeHomeServer.Services.Llm;
+using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
-using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -277,10 +281,15 @@ public class ChatArchiveFlagTests : IDisposable
     // --- Формат стора ---
 
     [Fact]
-    public void BackupSchema_ВерсияНеИзменена()
+    public void BackupSchema_ВерсияНеНижеДевятой()
     {
-        // Поля архива аддитивны (nullable с дефолтом) — версию формата не двигаем
-        BackupSchema.Version.Should().Be(8);
+        // Бамп 8→9 (вынос квоты цикла «до готово», удаление ExecutionsStarted/MaxExecutions
+        // и enum WorkLoopRunQuota) был необходим — старые сессии с этими полями читаются
+        // штатно через System.Text.Json (лишние поля тихо игнорируются), но BackupSchema
+        // обязательно двигается по правилу «удаление поля = ломающее изменение». Сторож тут
+        // ловит откат инкремента вниз, а конкретные числа версий живут в комментариях
+        // BackupSchema.
+        BackupSchema.Version.Should().BeGreaterThanOrEqualTo(9);
     }
 
     // --- Подключение стора копий: SetArchived копирует и возвращает транскрипт ---
@@ -348,19 +357,10 @@ public class ChatArchiveFlagTests : IDisposable
         var projectManager = new ProjectManager(config, userStore, appSettings);
         _historyForBuild = new ChatHistoryService(config);
 
-        var clientProxy = new Mock<IClientProxy>();
-        clientProxy
-            .Setup(c => c.SendCoreAsync(It.IsAny<string>(), It.IsAny<object[]>(), It.IsAny<CancellationToken>()))
-            .Returns(Task.CompletedTask);
-        var clients = new Mock<IHubClients>();
-        clients.Setup(c => c.Group(It.IsAny<string>())).Returns(clientProxy.Object);
-        var hub = new Mock<IHubContext<SessionHub>>();
-        hub.Setup(h => h.Clients).Returns(clients.Object);
-
         var llmProviders = new LlmProviderRegistry(config);
         var subPool = new ClaudeSubscriptionPool(config);
-        var adapters = new LlmSessionAdapterFactory(config, new SkillsService(),
-            new WorkspaceKnowledgeStore(config), llmProviders, subPool);
+        var adapters = new LlmSessionAdapterFactory(config, new AgentPromptSourceAdapter(new SkillsService()),
+            new WorkspaceDatasetLookup(new WorkspaceKnowledgeStore(config)), llmProviders, subPool);
         var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, config);
         var usage = new UsageService(config);
         var jwt = new JwtService(config, userStore, NullLogger<JwtService>.Instance);
@@ -374,18 +374,15 @@ public class ChatArchiveFlagTests : IDisposable
         var notesKb = new NotesKnowledgeService(knowledge, notesSvc, userStore, config,
             NullLogger<NotesKnowledgeService>.Instance);
         var personas = new PersonaManager(config);
-        var personaMemory = new PersonaMemoryService(knowledge, personas, userStore, config,
-            NullLogger<PersonaMemoryService>.Instance);
-        var bindings = new PersonaBindingsService(personas, projectManager, wkStore, notesSvc, notesKb,
-            knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance);
-        var promptBuilder = new PersonaPromptBuilder(llmProviders);
+        var bindings = new PersonaBindingsService(personas, projectManager, wkStore,
+            knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
 
-        return (new SessionManager(projectManager, hub.Object, _historyForBuild, config, adapters, falCost,
-            usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas,
-            personaMemory, bindings, promptBuilder, subPool, NullLogger<SessionManager>.Instance,
-            TestLauncherFactory.Instance, sandbox, cheap: cheap), projectManager);
+        return (new SessionManager(projectManager, _historyForBuild, config, adapters, falCost,
+            usage, appSettings, userStore, jwt, server.Object, llmProviders, flags, personas,
+            bindings, subPool, NullLogger<SessionManager>.Instance,
+            TestLauncherFactory.Instance, sandbox, cheap: cheap, broadcaster: new TestSessionBroadcaster()), projectManager);
     }
 
     private Session NewChat(SessionManager sut, ProjectManager projects, string? resumeSessionId = null) =>

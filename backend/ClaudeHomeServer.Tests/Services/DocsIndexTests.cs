@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Docs;
 using FluentAssertions;
 
@@ -416,6 +417,13 @@ public class DocsIndexTests : IDisposable
 
         // Ни один документ не менялся: без .order в отпечатке кеш отдал бы прежний порядок
         Write("b\na\n", "docs", ".order");
+        // Отпечаток кеша — это mtime + длина (DocsIndexService.Fingerprint), а обе версии
+        // .order длиной 4 байта. Когда обе записи попадают в одно окно таймера ФС, отпечаток
+        // совпадает и кеш ЗАКОННО отдаёт прежний порядок — тест проходил по везению и падал
+        // под нагрузкой. Двигаем mtime явно: проверяем инвалидацию по .order, а не разрешение
+        // таймера файловой системы.
+        var orderPath = Path.Combine(_root, "docs", ".order");
+        File.SetLastWriteTimeUtc(orderPath, File.GetLastWriteTimeUtc(orderPath).AddSeconds(1));
 
         _svc.GetIndex(_root)[0].Path.Should().Be("docs/b.md");
     }
@@ -631,9 +639,10 @@ public class DocsIndexTests : IDisposable
 
     // ─── Создание документов и разделов ─────────────────────────────────────
 
-    // Создание пишет в рабочее дерево, поэтому идёт через FileService (SafeJoin + OnMutated).
+    // Создание пишет в рабочее дерево, поэтому идёт через файловый шов
+    // (IProjectFileGateway — SafeJoin + OnMutated внутри FileService).
     // Отдельный экземпляр сервиса: у остальных тестов файлового сервиса нет, он им не нужен
-    private DocsIndexService Creating() => new(new FileService());
+    private DocsIndexService Creating() => new(new ProjectFileGateway(new FileService()));
 
     [Fact]
     public void Создание_Документа_ФайлСЗаголовкомИПутьВОтвете()

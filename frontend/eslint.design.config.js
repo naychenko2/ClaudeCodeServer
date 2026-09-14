@@ -9,6 +9,21 @@ import tseslint from 'typescript-eslint'
 import reactHooks from 'eslint-plugin-react-hooks'
 import reactRefresh from 'eslint-plugin-react-refresh'
 import { designSystem } from './eslint.config.js'
+import noCrossFeatureImport from './eslint-rules/no-cross-feature-import.js'
+
+// Файлы, в которых пока остаются прямые импорты из внутренних модулей
+// `features/notes/*`. После пилота извлекаемости каркасных потребителей не
+// осталось: каркас общается с фичей только через реестр подсистем
+// (`src/lib/subsystems/registry.ts`), и там единственный side-effect-импорт
+// оформлен построчным `eslint-disable` с причиной. Список оставлен пустым как
+// точка возврата, если у будущей фичи появятся стартовые нарушения.
+export const CROSS_FEATURE_IMPORT_ALLOWED = []
+
+// Фичи, у которых уже есть публичный `index.ts` и для которых линт-сторож
+// уже действует. Подключение новой фичи = добавить её в этот список и
+// завести allow-list стартовых нарушений (если они есть). Пока в проекте
+// только «notes» (пилот волны выноса подсистем).
+export const CROSS_FEATURE_IMPORT_ENABLED = ['notes']
 
 export default defineConfig([
   globalIgnores(['dist', 'dev-dist']),   // dev-dist — сгенерированный workbox PWA
@@ -28,4 +43,25 @@ export default defineConfig([
     },
   },
   ...designSystem,
+  // Модульность фич: импорт снаружи — только через `index.ts`. Регистрируем
+  // под отдельным ключом `module` — ESLint 10 запрещает переопределять уже
+  // зарегистрированный в `designSystem` плагин `design`, а конфликтовать с
+  // чужим ключом нельзя.
+  {
+    files: ['src/**/*.{ts,tsx}'],
+    plugins: { module: { rules: { 'no-cross-feature-import': noCrossFeatureImport } } },
+    rules: {
+      'module/no-cross-feature-import': ['error', {
+        features: CROSS_FEATURE_IMPORT_ENABLED,
+      }],
+    },
+  },
+  // Блок-исключение подключаем только при непустом allow-list: пустой `files`
+  // невалиден в flat-config. Сейчас список пуст — каркасных нарушений нет.
+  ...(CROSS_FEATURE_IMPORT_ALLOWED.length
+    ? [{
+        files: CROSS_FEATURE_IMPORT_ALLOWED,
+        rules: { 'module/no-cross-feature-import': 'off' },
+      }]
+    : []),
 ])

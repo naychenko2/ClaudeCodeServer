@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Core.Telemetry;
 using ClaudeHomeServer.Telemetry;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;

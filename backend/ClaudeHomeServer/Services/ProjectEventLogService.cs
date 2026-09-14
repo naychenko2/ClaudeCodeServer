@@ -13,7 +13,7 @@ namespace ClaudeHomeServer.Services;
 //
 // Первая подсистема на SQLite. WAL + busy_timeout — конкурентные записи (одновременные ходы,
 // задачи) не падают с «database is locked»; записи сериализуются локом дополнительно.
-public class ProjectEventLogService : IDisposable
+public class ProjectEventLogService : IDisposable, IProjectEventLogService
 {
     private readonly string _connStr;
     private readonly Lock _writeLock = new();

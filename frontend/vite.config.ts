@@ -32,6 +32,13 @@ const backendPort = process.env.BACKEND_PORT || '5000';
 const backendUrl = `http://127.0.0.1:${backendPort}`;
 
 export default defineConfig({
+  // Хост резолвит kит локально (не через MF-рантайм): копия в хосте одна, и
+  // expose-чанк кита импортирует те же URL-чанки, что и приложение хоста (общий ESM-граф).
+  resolve: {
+    alias: {
+      'aihome_shell/kit': fileURLToPath(new URL('./src/lib/shell-kit/index.ts', import.meta.url)),
+    },
+  },
   // Подстановка метки сборки (читает src/lib/buildInfo.ts): время — момент запуска
   // vite build/dev, sha — HEAD на машине сборки. QA сверяет с временем своих правок.
   define: {
@@ -56,6 +63,8 @@ export default defineConfig({
       filename: 'remoteEntry.js',
       exposes: {
         './design-kit': './src/lib/design-kit/index.ts',
+        // Runtime-кит для ВНУТРЕННИХ подсистем (MF remote): широкий, не версионируется.
+        './kit': './src/lib/shell-kit/index.ts',
       },
       remotes: {},
       // dts (#TYPE-001): дефолтный tsConfigPath плагина — корневой tsconfig.json,
@@ -141,6 +150,9 @@ export default defineConfig({
       // Раздел «Телеметрия»: бэкенд форвардит /telemetry-proxy/* на SigNoz. Без этой строки
       // Vite отдал бы свой index.html (SPA-fallback), и в iframe грузился бы сам CCS.
       '/telemetry-proxy': { target: backendUrl, changeOrigin: true, ws: true },
+      // MF remote notes (dev): dev-сервер модуля на :5174, хост грузит remoteEntry.js
+      // через этот префикс. В прод remoteEntry.js сервиcится статически из wwwroot.
+      '/notes-remote': { target: 'http://localhost:5174', changeOrigin: true, rewrite: (p: string) => p.replace(/^\/notes-remote/, '') },
     },
   },
   preview: {
@@ -151,6 +163,7 @@ export default defineConfig({
       '/hubs': { target: backendUrl, changeOrigin: true, ws: true },
       '/drawio': { target: backendUrl, changeOrigin: true },
       '/telemetry-proxy': { target: backendUrl, changeOrigin: true, ws: true },
+      '/notes-remote': { target: 'http://localhost:5174', changeOrigin: true, rewrite: (p: string) => p.replace(/^\/notes-remote/, '') },
     },
   },
 });

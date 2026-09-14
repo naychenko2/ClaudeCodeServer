@@ -1,4 +1,5 @@
 using System.Diagnostics.Metrics;
+using ClaudeHomeServer.Core.Telemetry;
 using ClaudeHomeServer.Services;
 
 namespace ClaudeHomeServer.Telemetry;

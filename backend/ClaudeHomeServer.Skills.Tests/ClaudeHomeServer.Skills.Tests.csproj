@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Тестовая сборка вертикали Skills. По тем же причинам, что и Core/Video/Yandex/
+         Reader/CodeGraph: SDK = Web ради FrameworkReference Microsoft.AspNetCore.App
+         и OutputType=Library ради отсутствия Main. -->
+    <OutputType>Library</OutputType>
+    <EnableDefaultContentItems>false</EnableDefaultContentItems>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ClaudeHomeServer.Skills\ClaudeHomeServer.Skills.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
+    <!-- ProjectReference на Main не нужен: тесты Skills — чистый парсинг (SkillsService.
+     SaveGlobalSkill, SkillsCliService.Parse*, SkillSuggestService.ParsePicks,
+     SkillTranslationService.ParseTranslations, SkillGenerationService.Parse/Slugify),
+     без подъёма полного стенда и без internals Main. -->
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="FluentAssertions" Version="6.12.2" />
+  </ItemGroup>
+
+</Project>

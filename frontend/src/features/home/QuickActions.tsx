@@ -1,20 +1,19 @@
 import { useEffect, useState } from 'react';
-import { ArrowRight, FolderPlus, MessageCirclePlus, NotebookPen, Plus, UserPlus, Zap } from 'lucide-react';
+import { ArrowRight, FolderPlus, MessageCirclePlus, Plus, UserPlus, Zap } from 'lucide-react';
 import type { Project, ProjectGroup } from '../../types';
 import { api } from '../../lib/api';
 import { createChatWithContextPersona } from '../../lib/defaultPersona';
 import { C, FONT, R } from '../../lib/design';
 import { openTaskInSection } from '../../lib/tasks';
-import { ensureNotesLoaded } from '../../lib/notes';
 import { useRecentIds } from '../../lib/pinnedProjects';
 import type { HubTab } from '../../components/HubTabs';
 import { NewTaskDialog } from '../tasks/NewTaskDialog';
-import { NewNoteDialog } from '../notes/NewNoteDialog';
+import { useSlotItem } from '../../lib/subsystems/registry';
+import type { QuickActionNoteCtx } from '../../lib/subsystems/registryCore';
 import { AddProjectDialog } from '../projects/dialogs/AddProjectDialog';
 import { ProjectIcon } from '../projects/ProjectIcon';
 import { ensureProjectsLoaded } from '../projects/useAllProjects';
 import { WidgetCard } from './WidgetCard';
-import { openNote } from './NotesWidget';
 
 // Хинт разделу «Персоны»: открыть мастер создания сразу после перехода с дашборда
 export const PENDING_PERSONA_CREATE_KEY = 'cc_pending_persona_create';
@@ -88,7 +87,6 @@ export function QuickActions({ onHubTab, onOpenProject }: {
 }) {
   const [creatingChat, setCreatingChat] = useState(false);
   const [newTaskOpen, setNewTaskOpen] = useState(false);
-  const [newNoteOpen, setNewNoteOpen] = useState(false);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [groups, setGroups] = useState<ProjectGroup[]>([]);
   // Последний открытый проект берём из клиентского MRU (lib/pinnedProjects) — это
@@ -106,6 +104,9 @@ export function QuickActions({ onHubTab, onOpenProject }: {
       .catch(() => {});
     return () => { alive = false; };
   }, [lastId]);
+  // Кнопка «Новая заметка» — вклад слота quick-action (фича Notes). Нет вклада —
+  // кнопки нет (подсистема выключена/не зарегистрирована).
+  const quickNote = useSlotItem<QuickActionNoteCtx>('quick-action', 'new-note');
 
   // Новый чат вне проекта: создаем и передаем готовому listener'у App (cc-open-chat) —
   // тот сам переключит раздел «Чаты» и откроет чат
@@ -121,8 +122,7 @@ export function QuickActions({ onHubTab, onOpenProject }: {
     }
   };
 
-  // Диалогу заметки нужны стор заметок (автодополнение папок) и группы (диалогу проекта)
-  const openNewNote = () => { void ensureNotesLoaded(); setNewNoteOpen(true); };
+  // Диалогу проекта нужны группы
   const openNewProject = () => {
     api.projectGroups.list().then(setGroups).catch(() => {});
     setNewProjectOpen(true);
@@ -152,11 +152,7 @@ export function QuickActions({ onHubTab, onOpenProject }: {
           label="Новая задача"
           onClick={() => setNewTaskOpen(true)}
         />
-        <ActionButton
-          icon={<NotebookPen size={15} strokeWidth={2} />}
-          label="Новая заметка"
-          onClick={openNewNote}
-        />
+        {quickNote?.render?.({ ActionButton })}
         <ActionButton
           icon={<FolderPlus size={15} strokeWidth={2} />}
           label="Новый проект"
@@ -177,12 +173,6 @@ export function QuickActions({ onHubTab, onOpenProject }: {
             if (configure) openTaskInSection(task);
           }}
           onClose={() => setNewTaskOpen(false)}
-        />
-      )}
-      {newNoteOpen && (
-        <NewNoteDialog
-          onCreated={id => { setNewNoteOpen(false); openNote(id); }}
-          onClose={() => setNewNoteOpen(false)}
         />
       )}
       {newProjectOpen && (

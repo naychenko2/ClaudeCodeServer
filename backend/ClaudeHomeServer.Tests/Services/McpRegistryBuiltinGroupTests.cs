@@ -1,6 +1,5 @@
 using ClaudeHomeServer.Services.Mcp;
 using FluentAssertions;
-using Xunit;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -25,6 +24,7 @@ public class McpRegistryBuiltinGroupTests
     [InlineData("dify", McpBuiltinGroups.Integration)]
     [InlineData("fal-ai", McpBuiltinGroups.Integration)]
     [InlineData("glif", McpBuiltinGroups.Integration)]
+    [InlineData("higgsfield", McpBuiltinGroups.Integration)]
     public void BuiltinGroupOf_Интеграции_ГруппаIntegration(string key, string expected) =>
         McpRegistry.BuiltinGroupOf(key).Should().Be(expected);
 

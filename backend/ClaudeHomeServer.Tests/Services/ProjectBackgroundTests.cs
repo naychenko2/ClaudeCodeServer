@@ -265,7 +265,12 @@ public class ProjectBackgroundTests : IDisposable
     // ---------- Сервис генерации ----------
 
     private ProjectBackgroundService Service(string answer) =>
-        new(_projects, new FakeCheap(answer), NullLogger<ProjectBackgroundService>.Instance);
+        // Шов `IProjectBackgroundWriter` (Этап 5, волна C, шаг 2): ProjectBackgroundService
+        // в отдельной сборке берёт writer как Core-интерфейс; в тестах через
+        // настоящий адаптер `ProjectBackgroundWriterAdapter` — те же транзакции,
+        // что в проде, без каста (ProjectManager сам по себе интерфейс не реализует,
+        // это формальный класс-обёртка в Core/Composition-спине).
+        new(_projects, new ProjectBackgroundWriterAdapter(_projects), new FakeCheap(answer), NullLogger<ProjectBackgroundService>.Instance);
 
     [Fact]
     public async Task Удачная_генерация_пишет_файл_и_ссылку()
@@ -321,7 +326,10 @@ public class ProjectBackgroundTests : IDisposable
     public async Task Модель_не_ответила_фон_остаётся_стандартным()
     {
         var project = NewProject();
-        var service = new ProjectBackgroundService(_projects,
+        // Шов `IProjectBackgroundWriter` (Этап 5, волна C, шаг 2): запись идёт
+        // через Core-интерфейс, в тестах через настоящий `ProjectBackgroundWriterAdapter`
+        // (тот же форвардер, что в Program.cs).
+        var service = new ProjectBackgroundService(_projects, new ProjectBackgroundWriterAdapter(_projects),
             new FakeCheap(null), NullLogger<ProjectBackgroundService>.Instance);
 
         var result = await service.GenerateAsync(project);

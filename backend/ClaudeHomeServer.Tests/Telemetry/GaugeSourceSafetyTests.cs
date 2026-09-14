@@ -1,5 +1,6 @@
 using System.Diagnostics.Metrics;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Core.Telemetry;
 using ClaudeHomeServer.Telemetry;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;

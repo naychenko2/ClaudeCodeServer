@@ -9,6 +9,7 @@ import { api } from './api';
 import { joinUser, onMessage, onReconnected } from './signalr';
 import { clearResolveCache } from '../components/MarkdownViewer';
 import { isOnline, OfflineError, subscribeOnline } from './offline';
+import { isSubsystemEnabled } from './subsystems';
 import { drainNotesOutbox, overlayNotesList } from './notesOffline';
 
 let _notes: NoteSummary[] = [];
@@ -84,6 +85,12 @@ export async function reloadNotes(): Promise<void> {
 }
 
 export function ensureNotesLoaded(): Promise<void> {
+  // Гейт подсистемы: при выключенных заметках НЕ подписываемся на WS,
+  // НЕ идём в joinUserGroup, НЕ дренажим очередь, НЕ дёргаем /api/notes*.
+  // Иначе при выключенной подсистеме открытие файла вызывало до 14 ошибок
+  // и отклонений промисов в консоли (см. Д-4/Д-6 отчёта QA). Гейт ДО запроса,
+  // а не .catch(() => {}) — закрываем вызов.
+  if (!isSubsystemEnabled('notes')) return Promise.resolve();
   wireRealtime();
   joinUserGroup();
   if (offlineEnabled() && isOnline()) void syncNotes();   // подхватить незасинканное с прошлого офлайна

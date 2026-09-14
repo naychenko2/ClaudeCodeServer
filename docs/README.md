@@ -98,16 +98,25 @@
 [ADR-010](adr/ADR-010-deploy-from-chat.md) (пересборка и переопубликация прода из чата: сервер
 себя не деплоит, заявка в журнал и внешний агент выкатки),
 [ADR-011](adr/ADR-011-lsp-and-codegraph-roles.md) (роли LSP и CodeGraph в навигации по коду:
-уровень символа против уровня типов, свой языковой сервер не делаем);
+уровень символа против уровня типов, свой языковой сервер не делаем),
 [ADR-012-mcp-over-http](adr/ADR-012-mcp-over-http-transport.md) (продуктовые MCP-серверы
 переехали со stdio на HTTP внутри Kestrel: ноль node-процессов на ход),
 [ADR-012-specialty-settings](adr/ADR-012-specialty-settings-single-layer.md) (настройки
 специальностей — один глобальный слой с admin-only записью; номер совпал с транспортом MCP,
 это разные решения),
+[ADR-013](adr/ADR-013-turn-event-bus.md) (шина событий хода: связь вертикалей событием
+вместо прямой зависимости),
 [ADR-013](adr/ADR-013-server-chat-watchdogs.md) (серверные сторожа чатов: долгое ожидание
-живёт в бэкенде и будит чат, а не умирает вместе с процессом CLI);
+живёт в бэкенде и будит чат, а не умирает вместе с процессом CLI — номер совпал с шиной
+событий хода, это разные решения),
+[ADR-014](adr/ADR-014-internal-subsystems.md) (внутренние подсистемы: контракт `IAppSubsystem`,
+пилот Video, правило зависимостей между вертикалями),
+[ADR-015](adr/ADR-015-cli-profile-sync-zones.md) (зоны профилей CLI и правила синхронизации:
+кто источник истины для каждой зоны, удаление только по манифесту доставки);
 [model-resolution-and-fallback.md](adr/model-resolution-and-fallback.md) — приложение к ADR-007
-(резолв модели и фолбэк хода по цепочке).
+(резолв модели и фолбэк хода по цепочке),
+[specialties-personalization-review.md](adr/specialties-personalization-review.md) — приложение
+к ADR-012 о специальностях (раздел «Специальности» — только настройки роли).
 
 **research/** — материалы с датой: [feature-parity.md](research/feature-parity.md),
 [messenger-integration.md](research/messenger-integration.md) (не реализовано),
@@ -118,7 +127,23 @@
 [voice-mode-benchmark.md](research/voice-mode-benchmark.md) (режим диалога против ChatGPT
 и Claude: разрывы и план P0/P1/P2),
 [speechkit-pricing.md](research/speechkit-pricing.md) (биллинг Yandex SpeechKit: цены STT/TTS,
-правила округления, расчёт голосового режима, v1 против v3). Читать как «так было тогда».
+правила округления, расчёт голосового режима, v1 против v3),
+[llm-execution-cycle-verdict.md](research/llm-execution-cycle-verdict.md) (вердикт по циклу
+`Llm ⇄ Execution` волны 4B: куда принадлежат `WorkflowAgentParser` и `ClaudeCliLocator`),
+[local-vllm-provider.md](research/local-vllm-provider.md) (локальная Qwen3.8-27B как
+CLI-провайдер: проверенная конфигурация стенда с замерами, грабли подключения —
+прокси съедает loopback, `--effort high` не принимается, провал кэша промпта
+на `mamba-cache-mode align`),
+[local-vllm-2gpu-2026-09-10.md](research/local-vllm-2gpu-2026-09-10.md) (тот же стенд
+на двух картах в tensor parallel: окно 262 144, замеры скорости через обвязку продукта,
+зависимость декода от языка и от занятого контекста, потолок параллелизма),
+[services-root-inventory-2026-09.md](research/services-root-inventory-2026-09.md)
+(инвентарь корня `Services` и вердикт архитектора перед волной 4),
+[session-core-split-2026-09.md](research/session-core-split-2026-09.md)
+(разведка разреза `SessionManager` и план выноса штаба вертикалью),
+[team-di-migration-2026-09.md](research/team-di-migration-2026-09.md)
+(что реально снимается при переводе штаба на DI: 17 обёрток против 10 фасадных,
+почему Team не выносится отдельным `.csproj`). Читать как «так было тогда».
 
 **omo/** — [adoption.md](omo/adoption.md) (правовая рамка), `translations/` — переводы
 промптов, из которых генерируются `Services/Prompts/OmoPrompts*.cs`.

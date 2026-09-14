@@ -71,4 +71,14 @@ public class PersonaContractLimitTests
 
         PersonaManager.ExceedsContractLimit(grown, null, current, out _).Should().BeTrue();
     }
+
+    // Регрессия: 12 000 — это не «правило из ниоткуда», а контракт с TurnPromptAssembler
+    // (задача dc641949). Уменьшение подкрутит потолок и при длинных инструкциях часть чатов
+    // упрётся в лимит командной строки ДО срезки нестабильных секций; увеличение
+    // пройдёт мимо проверки на записи (PersonasController → UI / MCP personas_update),
+    // и раздутая персона уронит процесс при Process.Start. Стоит как явный тест, чтобы
+    // правка комментария или «оптимизация» числа не прошла тихо.
+    [Fact]
+    public void MaxContractChars_РегрессияНа12Тысяч()
+        => PersonaManager.MaxContractChars.Should().Be(12_000);
 }

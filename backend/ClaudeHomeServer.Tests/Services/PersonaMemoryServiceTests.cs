@@ -1,5 +1,10 @@
+using ClaudeHomeServer.Core.Telemetry;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Knowledge;
+using ClaudeHomeServer.Services.Memory;
+using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -35,7 +40,9 @@ public class PersonaMemoryServiceTests : IDisposable
         var knowledge = new KnowledgeService(new Mock<IHttpClientFactory>().Object,
             Microsoft.Extensions.Options.Options.Create(new DifyOptions()), wkStore);
         _personas = new PersonaManager(config);
-        _sut = new PersonaMemoryService(knowledge, _personas, userStore, config,
+        _sut = new PersonaMemoryService(knowledge, _personas, _personas,
+            new PersonaDirectoryAdapter(_personas), new NoopPersonaEvents(),
+            new NoopDifyMetrics(), userStore, config,
             NullLogger<PersonaMemoryService>.Instance);
 
         _persona = _personas.Create(OwnerId, "Ада", "Аналитик", null, null,

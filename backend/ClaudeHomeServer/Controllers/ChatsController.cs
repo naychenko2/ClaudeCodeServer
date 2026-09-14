@@ -1,9 +1,9 @@
-using System.IdentityModel.Tokens.Jwt;
+﻿using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
-using ClaudeHomeServer.Services.Git;
+using ClaudeHomeServer.Services.Team;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -15,7 +15,7 @@ namespace ClaudeHomeServer.Controllers;
 [Route("api/chats")]
 public class ChatsController(SessionManager sessions, ProjectManager projects, FileService files,
     DefaultAssistantProvisioner provisioner, TeamWaveService teamWaves,
-    Services.Llm.ChatDigestService digest, ChatArchiveService autoArchive,
+    ChatDigestService digest, ChatArchiveService autoArchive,
     UserStore users, FeatureFlagService flags,
     ILogger<ChatsController> logger) : ControllerBase
 {
@@ -212,6 +212,28 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
+    // «Продолжить в стандартном окне 200 тысяч токенов» — кнопка под карточкой отказа
+    // Window1MUnavailable. Серверный путь к StripClaudeWindowAlias: сам по себе срез окна в ходе
+    // чата запрещён (тихая деградация длинного разговора в 200K — мина), поэтому снять суффикс
+    // может только явное решение человека, и приходит оно сюда. Возвращает обновлённый чат:
+    // фронт по нему перерисовывает выбранную модель, отдельного сигнала не нужно.
+    // Как и MigrateProvider/SetArchived/SetWorkLoop, работает и для проектной сессии:
+    // фронт рисует ту же кнопку (ChatPanel без ветвления по проекту), а GetOwned резолвит
+    // владельца через проект — единственный разрез, где OwnedChat (только чаты вне проекта)
+    // был бы неправ.
+    [HttpPost("{id}/window-1m/drop")]
+    public async Task<IActionResult> DropWindow1M(string id)
+    {
+        if (sessions.GetOwned(id, UserId) is null) return NotFound();
+        try
+        {
+            var updated = await sessions.DropWindow1MAsync(id, UserId);
+            return updated is null ? NotFound() : Ok(updated);
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
+    }
+
     // Ручная группировка чатов (drag-and-drop в списке): вложить чат в родительский либо
     // вынести в корень (parentId == null). Один эндпоинт на оба списка — GetOwned внутри
     // SetParent резолвит и проектную сессию (как /loop), поэтому дубля в SessionsController нет.
@@ -265,8 +287,8 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
             return Ok(await digest.BuildDigestAsync(UserId, id, ct));
         }
         catch (KeyNotFoundException) { return NotFound(); }
-        catch (Services.Llm.DigestInProgressException ex) { return Conflict(new { error = ex.Message }); }
-        catch (Services.Llm.DigestGenerationException ex) { return StatusCode(502, new { error = ex.Message }); }
+        catch (DigestInProgressException ex) { return Conflict(new { error = ex.Message }); }
+        catch (DigestGenerationException ex) { return StatusCode(502, new { error = ex.Message }); }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
@@ -322,7 +344,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
         }
         // Гард на входе (B2): нет координатора либо состава. Код отказа машинный — фронт по
         // нему показывает пикер и НЕ отправляет вводную обычным сообщением.
-        catch (Services.TeamImplementSetupException ex)
+        catch (TeamImplementSetupException ex)
         {
             return BadRequest(new { error = ex.Message, code = ex.Code });
         }
@@ -576,7 +598,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
 
         // Вложения не должны светиться в git-статусе проекта и уезжать в историю по `git add -A`.
         // Лениво, до записи файла: у проекта со своим .gitignore дефолтный игнор не создавался.
-        try { GitService.EnsureAttachmentsExcluded(root); }
+        try { AttachmentsGitExclude.Ensure(root); }
         catch (Exception ex) { logger.LogWarning(ex, "Не удалось записать игнор вложений для {Root}", root); }
 
         using var ms = new MemoryStream();

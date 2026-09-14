@@ -23,15 +23,134 @@
     <!-- Интеграционные тесты ConPTY: Skip.IfNot(IsWindows) — на Linux CI честный skip -->
     <PackageReference Include="Xunit.SkippableFact" Version="1.5.23" />
   </ItemGroup>
+
+  <ItemGroup>
+    <!-- InternalsVisibleTo на ClaudeHomeServer.Spend.Tests (Этап 5, вынос Spend):
+         Spend.Tests использует internal TestLauncherFactory / FakeHostEnvironment /
+         TestSessionBroadcaster (хелперы тестов), а Spend внутри Main вызывает
+         internal SpendController.ClampPeriod/MaxPeriodDays. Без двойного допуска
+         тесты Spend не соберутся в отдельной сборке. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Spend.Tests</_Parameter1>
+    </AssemblyAttribute>
+    <!-- Tasks — отдельная сборка (Этап 5, вынос Tasks): Tests её вертикали
+         живут в ClaudeHomeServer.Tasks.Tests; эта сборка нужна только чтобы
+         статический конструктор `SubsystemBoundaryTests`/`SubsystemBoundaryCoverageTests`
+         форс-загрузил Tasks через typeof(TaskManager).Assembly. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Tasks.Tests</_Parameter1>
+    </AssemblyAttribute>
+    <!-- Turn — отдельная сборка (Этап 5, вынос Turn): Tests её вертикали живут
+         в ClaudeHomeServer.Turn.Tests; эта сборка нужна, чтобы статический
+         конструктор сторожей `SubsystemBoundaryTests`/`SubsystemBoundaryCoverageTests`
+         форс-загрузил Turn через typeof(IPromptSectionContributor).Assembly. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Turn.Tests</_Parameter1>
+    </AssemblyAttribute>
+    <!-- Dossiers/Memory — отдельные сборки (Этап 5, волна 3, финал): тесты их вертикалей
+         живут в ClaudeHomeServer.Dossiers.Tests / ClaudeHomeServer.Memory.Tests. Допуск
+         нужен под те же internal-хелперы тестов, что у Spend.Tests (TestLauncherFactory /
+         FakeHostEnvironment / TestSessionBroadcaster), а также чтобы статические
+         конструкторы сторожей форс-загрузили обе сборки. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Dossiers.Tests</_Parameter1>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Memory.Tests</_Parameter1>
+    </AssemblyAttribute>
+    <!-- Desktop — отдельная сборка (Этап 5, вынос Desktop): тесты вертикали живут в
+         ClaudeHomeServer.Desktop.Tests. Допуск нужен под общие internal-фейки грани
+         (Helpers/DesktopFakes.cs) — их делят тесты вертикали и оставшиеся в Main тесты
+         контроллеров канала, — а также чтобы статические конструкторы сторожей
+         форс-загрузили сборку. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Desktop.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\ClaudeHomeServer\ClaudeHomeServer.csproj" />
+    <!-- Notes — динамический модуль: Main не тянет его как ProjectReference,
+         поэтому Tests (нуждает NotesService/NotesKnowledgeService напрямую)
+         добавляет явную ссылку. -->
+    <ProjectReference Include="..\ClaudeHomeServer.Notes\ClaudeHomeServer.Notes.csproj" />
+    <!-- Core — спинка (этап 3, Этап 5). Тесты ссылаются на Core-DTO
+         (`SubagentRunPassport`/`TurnRunPassport`/`RecallItem`/`RecallBlock` после
+         переезда, И на Core-интерфейсы вроде `IKnowledgeIndex`). Транзитивно
+         через Main типы в bin попадают, но для компиляции C#-файлов нужна явная
+         ссылка на сборку. -->
+    <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
+    <!--
+      Знание — отдельная сборка (этап 5). Нужен ProjectReference, чтобы тесты
+      видели IKnowledgeIndex/IKnowledgeSyncParticipant/KnowledgeDtos из Core,
+      и компилировались Knowledge-вызовы в UserKnowledgeCascadeTests,
+      PersonaMemoryServiceDossierSplitTests, NotesKnowledgeServiceDossierSplitTests
+      и др. Сама по себе ссылка сборку в AppDomain не грузит — загрузка в .NET
+      ленивая; явный форс лежит в статических конструкторах SubsystemBoundaryTests,
+      RootSubsystemBoundaryTests и SubsystemBoundaryCoverageTests.
+    -->
+    <ProjectReference Include="..\ClaudeHomeServer.Knowledge\ClaudeHomeServer.Knowledge.csproj" />
+    <!--
+      Modules — отдельная сборка (Этап 5, волна C). Нужен ProjectReference, чтобы
+      статический конструктор SubsystemBoundaryTests видел тип
+      `ClaudeHomeServer.Services.Modules.ModuleRegistry` для force-загрузки сборки.
+    -->
+    <!--
+      Dossiers/Memory — отдельные сборки (Этап 5, волна 3, финал). Ссылка нужна, чтобы
+      статические конструкторы сторожей (SubsystemBoundaryTests, RootSubsystemBoundaryTests,
+      SubsystemBoundaryCoverageTests) видели типы DossiersSubsystem/MemorySubsystem для
+      форс-загрузки: сама ссылка сборку в AppDomain не грузит — загрузка в .NET ленивая.
+    -->
+    <ProjectReference Include="..\ClaudeHomeServer.Dossiers\ClaudeHomeServer.Dossiers.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Memory\ClaudeHomeServer.Memory.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Backgrounds\ClaudeHomeServer.Backgrounds.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Modules\ClaudeHomeServer.Modules.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.ProjectIcons\ClaudeHomeServer.ProjectIcons.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Terminal\ClaudeHomeServer.Terminal.csproj" />
+    <!--
+      ProjectServices — отдельная сборка (Этап 5, волна C). Нужен ProjectReference,
+      чтобы статический конструктор SubsystemBoundaryTests видел тип
+      `ClaudeHomeServer.Services.ProjectServices.ProjectServicesSubsystem` для
+      force-загрузки сборки.
+    -->
+    <ProjectReference Include="..\ClaudeHomeServer.ProjectServices\ClaudeHomeServer.ProjectServices.csproj" />
+    <!--
+      Turn — отдельная сборка (Этап 5, вынос Turn). Нужен ProjectReference, чтобы
+      статический конструктор SubsystemBoundaryTests видел тип
+      `ClaudeHomeServer.Services.Turn.IPromptSectionContributor` для force-загрузки
+      сборки Turn.
+    -->
+    <ProjectReference Include="..\ClaudeHomeServer.Turn\ClaudeHomeServer.Turn.csproj" />
+    <!--
+      Llm — отдельная сборка (Этап 5, финал линии). Тесты вертикали остались здесь
+      (отдельной ClaudeHomeServer.Llm.Tests нет), плюс статические конструкторы трёх
+      сторожей форс-загружают сборку через typeof(LlmSubsystem).Assembly.
+    -->
+    <ProjectReference Include="..\ClaudeHomeServer.Llm\ClaudeHomeServer.Llm.csproj" />
     <!-- Мост: юниты парсера кадров (internals) + интеграционные тесты гоняют exe из bin -->
     <ProjectReference Include="..\ConPtyBridge\ConPtyBridge.csproj" />
   </ItemGroup>
   <ItemGroup>
     <!-- Ограничение параллелизма планировщика: при 24 потоках блокирующие тесты
          (git, node MCP, буты веб-хостов) забивали слоты, стена росла на 40% и
-         всплывали флаки (диагностика 2026-07-30). 6 — с запасом и для CI (4 ядра) -->
+         всплывали флаки (диагностика 2026-07-30). 6 — с запасом и для CI (4 ядра).
+         Настройка снова живая: parallelizeTestCollections вернулся в true, классы с
+         процесс-глобальным состоянием сериализуются коллекцией (TestCollections.cs) -->
     <None Include="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+
+  <!-- Динамический модуль-заглушка (сценарий Б): копируем собранный dll рядом с test-host
+       (OutDir = каталог сборки тестов = AppContext.BaseDirectory для WebApplicationFactory).
+       ModuleLoader резолвит относительный Modules:0:AssemblyPath отсюда. Stub строится до
+       тестов: он ProjectReference Main, а Main — ProjectReference тестов. -->
+  <Target Name="CopyStubModuleForTests" AfterTargets="Build">
+    <Copy SourceFiles="..\modules\__stub\bin\$(Configuration)\net10.0\StubModule.dll"
+          DestinationFolder="$(OutDir)modules\__stub" SkipUnchangedFiles="true"
+          Condition="Exists('..\modules\__stub\bin\$(Configuration)\net10.0\StubModule.dll')" />
+  </Target>
+  <!-- Notes: тот же паттерн, что заглушка — dll в modules/notes/ для ModuleLoader. -->
+  <Target Name="CopyNotesModuleForTests" AfterTargets="Build">
+    <Copy SourceFiles="..\ClaudeHomeServer.Notes\bin\$(Configuration)\net10.0\ClaudeHomeServer.Notes.dll"
+          DestinationFolder="$(OutDir)modules\notes" SkipUnchangedFiles="true"
+          Condition="Exists('..\ClaudeHomeServer.Notes\bin\$(Configuration)\net10.0\ClaudeHomeServer.Notes.dll')" />
+  </Target>
 </Project>

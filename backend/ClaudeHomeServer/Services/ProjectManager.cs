@@ -1,11 +1,11 @@
 ﻿using System.Collections.Concurrent;
-using System.Text;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Knowledge;
 
 namespace ClaudeHomeServer.Services;
 
-public class ProjectManager
+public class ProjectManager : IProjectManager
 {
     // Встроенная часть системного промпта — всегда добавляется, пользователь не редактирует
     public const string BuiltInSystemPrompt =
@@ -475,7 +475,7 @@ public class ProjectManager
 
     // Все проекты, чей RootPath указывает на ту же папку (датасет знаний общий per-RootPath):
     // каскад удаления и события синка знаний должны учитывать соседей по папке
-    public IReadOnlyList<Project> GetByRootPath(string rootPath)
+    public IReadOnlyCollection<Project> GetByRootPath(string rootPath)
     {
         var key = WorkspaceKnowledgeStore.NormalizePath(rootPath);
         return _projects.Values
@@ -515,62 +515,12 @@ public class ProjectManager
         if (changed) Save();
     }
 
-    // Части эффективного системного промпта в порядке отправки:
-    // builtin — встроенная константа, user — промпт проекта, auto — автодополнения (Dify, теги).
-    // Единственный источник состава промпта: и реальная отправка (BuildSystemPrompt),
-    // и просмотр на UI (/effective-prompt) собираются отсюда.
-    public static List<SystemPromptPart> GetSystemPromptParts(string? userPrompt, bool hasDify,
-        Dictionary<string, List<string>>? documentTags = null)
-    {
-        var parts = new List<SystemPromptPart> { new("builtin", BuiltInSystemPrompt) };
-
-        if (!string.IsNullOrWhiteSpace(userPrompt))
-            parts.Add(new("user", userPrompt));
-
-        if (hasDify)
-        {
-            var combined = string.Join("\n\n", parts.Select(p => p.Content));
-            if (!combined.Contains("mcp__dify__search_knowledge"))
-                parts.Add(new("auto",
-                    "В этом проекте настроена база знаний Dify. Используй инструмент mcp__dify__search_knowledge для поиска по ней при ответе на вопросы о документации проекта. dataset_id уже настроен — указывать его не нужно.\n\n" +
-                    "Если пользователь просит найти, поискать или проверить информацию — используй MCP-сервер Dify (search_knowledge) в первую очередь, до ответа из памяти."));
-
-            var tagInstruction = BuildTagInstruction(documentTags);
-            if (!string.IsNullOrEmpty(tagInstruction))
-                parts.Add(new("auto", tagInstruction));
-        }
-
-        return parts;
-    }
-
+    // Сборка частей промпта переехала в спину (Core: Services/Llm/SystemPromptComposer) —
+    // вертикали Llm нужна была сама функция, а не ProjectManager. Встроенная часть
+    // остаётся здесь и уходит в композитор параметром.
     public static string BuildSystemPrompt(string? userPrompt, bool hasDify,
         Dictionary<string, List<string>>? documentTags = null) =>
-        string.Join("\n\n", GetSystemPromptParts(userPrompt, hasDify, documentTags).Select(p => p.Content));
-
-    private static string BuildTagInstruction(Dictionary<string, List<string>>? documentTags)
-    {
-        if (documentTags is null || documentTags.Count == 0) return "";
-
-        // Инвертируем: tag → список путей
-        var byTag = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
-        foreach (var (path, tags) in documentTags)
-            foreach (var tag in tags)
-            {
-                if (!byTag.TryGetValue(tag, out var list))
-                    byTag[tag] = list = [];
-                list.Add(path);
-            }
-
-        if (byTag.Count == 0) return "";
-
-        var sb = new StringBuilder();
-        sb.AppendLine("Теги документов в базе знаний:");
-        foreach (var (tag, paths) in byTag.OrderBy(x => x.Key))
-            sb.AppendLine($"  тег \"{tag}\": {string.Join(", ", paths)}");
-        sb.Append("Если пользователь просит искать по тегу, вызови mcp__dify__search_knowledge, " +
-                  "затем оставь только результаты, где segment.document.name входит в список выше для нужного тега.");
-        return sb.ToString();
-    }
+        Llm.SystemPromptComposer.BuildSystemPrompt(BuiltInSystemPrompt, userPrompt, hasDify, documentTags);
 
     public bool Delete(string id)
     {
@@ -660,6 +610,3 @@ public class ProjectManager
         }
     }
 }
-
-// Kind: builtin | user | auto
-public record SystemPromptPart(string Kind, string Content);

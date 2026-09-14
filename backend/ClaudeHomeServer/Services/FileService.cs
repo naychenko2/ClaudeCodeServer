@@ -35,16 +35,12 @@ public class FileService(
 
     // Папка вложений чата в рабочей папке (файлы, загруженные в сообщение с компьютера).
     // Служебная: исключена из дерева, ватчеров, дефолтного .gitignore и синка базы знаний.
-    public const string AttachmentsDir = ".cc-attachments";
+    // Константа живёт в Core (TreeExcludes) — значение нужно вертикалям мимо Main;
+    // форвардер оставлен ради существующих вызывающих внутри Main.
+    public const string AttachmentsDir = TreeExcludes.AttachmentsDir;
 
-    // Папки, которые не обходим при рекурсивном Tree (тяжёлые/нерелевантные для офлайна).
-    // internal — переиспользуется FileWatcherService для фильтрации событий ФС.
-    internal static readonly HashSet<string> TreeExcludes = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ".git", "node_modules", "bin", "obj", "dist", "dev-dist",
-        ".vs", ".idea", "publish", ".next", "target", ".cache",
-        AttachmentsDir,
-    };
+    // Список исключений дерева переехал в Core (TreeExcludes) — по соглашению проекта
+    // из вертикалей нельзя звать FileService ради статики. Здесь только потребитель.
 
     // Предохранитель от патологически больших деревьев
     private const int TreeMaxEntries = 20000;
@@ -57,27 +53,17 @@ public class FileService(
         relativePath.Equals(".claude/worktrees", StringComparison.OrdinalIgnoreCase) ||
         relativePath.StartsWith(".claude/worktrees/", StringComparison.OrdinalIgnoreCase);
 
-    // Защита от path traversal.
-    // ВАЖНО: второй аргумент — путь ОТНОСИТЕЛЬНО корня; ведущие разделители срезаются.
-    // Абсолютный путь сюда передавать нельзя: на Linux «/a/b» станет относительным «a/b»
-    // и приклеится к корню — вместо отказа получится путь внутри проекта, то есть проверка
-    // «ссылка наружу» молча исчезнет. На Windows подмена незаметна (Path.Combine отдаёт
-    // приоритет второму абсолютному пути), поэтому такое ловится только в CI на Linux.
-    // Есть абсолютный путь — сначала Path.GetRelativePath(root, full).
-    internal static string SafeJoin(string root, string relativePath)
-    {
-        var full = Path.GetFullPath(Path.Combine(root, relativePath.TrimStart('/', '\\')));
-        var rootFull = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        // Сравнение с разделителем на конце: иначе root "C:\Data\Proj" пропускает "C:\Data\Proj2\..."
-        if (!full.Equals(rootFull, StringComparison.OrdinalIgnoreCase) &&
-            !full.StartsWith(rootFull + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-            throw new UnauthorizedAccessException("Доступ за пределы проекта запрещён");
-        return full;
-    }
+    // Защита от path traversal — форвардер к Core-примитиву (Этап 3, уборка Git).
+    // Реализация и обоснование граничных случаев (`..`, абсолютный путь, символы диска)
+    // живут в `ClaudeHomeServer.Core/Services/SafePath.cs`. Форвардеры оставлены:
+    // десятки вызывающих внутри Main, и смена имени сломала бы полпроекта; SafePath.Join
+    // остаётся прямой точкой для нового кода вроде `GitService.ValidateRel`.
+    internal static string SafeJoin(string root, string relativePath) =>
+        SafePath.Join(root, relativePath);
 
     // Публичная обёртка SafeJoin для использования вне сборки (WebDav и др.)
     public static string SafeJoinPublic(string root, string relativePath) =>
-        SafeJoin(root, relativePath);
+        SafePath.Join(root, relativePath);
 
     public IEnumerable<FileEntry> List(string rootPath, string relativePath = "", bool showHidden = false)
     {
@@ -394,19 +380,14 @@ public class FileService(
         NotifyMutated(rootPath, oldRelative, FileMutationKind.Rename, newRelative);
     }
 
-    public string? GetDiff(string rootPath, string relativePath)
+    public async Task<string?> GetDiffAsync(string rootPath, string relativePath, CancellationToken ct = default)
     {
         if (!IsGitRepo(rootPath)) return null;
         try
         {
             // Путь через SafeJoin — валидация до передачи в git
             SafeJoin(rootPath, relativePath);
-            // diff рабочего дерева vs HEAD (покрывает изменённые отслеживаемые файлы)
-            var output = RunGit(rootPath, "diff", "HEAD", "--", relativePath);
-            // Если пусто — файл может быть новым в индексе (git add, но ещё не commit)
-            if (string.IsNullOrWhiteSpace(output))
-                output = RunGit(rootPath, "diff", "--cached", "--", relativePath);
-            return string.IsNullOrWhiteSpace(output) ? null : output;
+            return await DiffFileVsHeadAsync(rootPath, relativePath, ct);
         }
         catch
         {
@@ -414,11 +395,21 @@ public class FileService(
         }
     }
 
-    // Запуск git с учётом среды владельца (Execution через GitService); без DI — прежний хостовый
-    private string RunGit(string rootPath, params string[] args) =>
+    // Единая точка входа: для владельца-через-Execution — типизированный метод GitService
+    // (внутри сам GitService валидирует путь, идёт через Execute/локальный git и собирает
+    // --cached как фолбэк), без DI — прежний хостовый путь через Process.Start.
+    private Task<string?> DiffFileVsHeadAsync(string rootPath, string relativePath, CancellationToken ct) =>
         git is not null
-            ? git.RunAsync(OwnerOf(rootPath), rootPath, args).GetAwaiter().GetResult().Stdout
-            : GitRun(rootPath, args);
+            ? git.DiffFileVsHeadAsync(OwnerOf(rootPath), rootPath, relativePath, ct)
+            : Task.FromResult<string?>(TryLocalDiff(rootPath, relativePath));
+
+    private static string? TryLocalDiff(string rootPath, string relativePath)
+    {
+        var head = GitRun(rootPath, "diff", "HEAD", "--", relativePath);
+        if (!string.IsNullOrWhiteSpace(head)) return head;
+        var cached = GitRun(rootPath, "diff", "--cached", "--", relativePath);
+        return string.IsNullOrWhiteSpace(cached) ? null : cached;
+    }
 
     /// <summary>
     /// Последние коммиты репозитория (сырье для продуктовой сводки). Алиасы авторов:

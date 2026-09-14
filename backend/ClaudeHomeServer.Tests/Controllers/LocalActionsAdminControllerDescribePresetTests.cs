@@ -1,6 +1,6 @@
 using System.Text.Json;
 using ClaudeHomeServer.Controllers;
-using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Llm;
 using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Controllers;

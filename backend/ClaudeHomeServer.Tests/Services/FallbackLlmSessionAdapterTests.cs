@@ -204,7 +204,7 @@ public class FallbackLlmSessionAdapterTests
             orchestrationDone: orchestrationDone,
             contextSource: contextSource,
             egress: egress,
-            turnRuns: turnRuns,
+            events: null,
             // Пауза повтора при лежащем канале — миллисекунды: ждать продовые 5 с в тесте нельзя
             egressRetryDelay: TimeSpan.FromMilliseconds(10));
         inner.Sink = sut.HandleMessageAsync;
@@ -272,6 +272,102 @@ public class FallbackLlmSessionAdapterTests
         inner.Info.MessageCount.Should().Be(1);
     }
 
+    // --- Окно 1M недоступно (блокер ревью волны 3) ---
+
+    // Пул, где ни одна подписка не тянет 1M-окно: план 200K задан явно, чтобы тест не держался
+    // на дефолте Supports1M=true.
+    private static ClaudeSubscriptionPool BuildPoolWithout1M(params string[] keys)
+    {
+        var dict = new Dictionary<string, string?>();
+        foreach (var key in keys)
+        {
+            dict[$"ClaudeSubscriptions:{key}:OAuthToken"] = $"token-{key}";
+            dict[$"ClaudeSubscriptions:{key}:Supports1M"] = "false";
+        }
+        return new ClaudeSubscriptionPool(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+    }
+
+    // Главный блокер: недоступность окна 1M — отказ ТЕКУЩЕЙ ПАРЫ, а не всего хода. Раньше
+    // pre-flight обрывал ход до первой попытки, не дав цепочке ни шанса, хотя в ней стоит
+    // модель стороннего провайдера с большим окном — она бы прошла.
+    [Fact]
+    public async Task Окно1MНедоступно_ХодИдётПоЦепочке_АНеПадает()
+    {
+        var pool = BuildPoolWithout1M("acc-a");
+        var (sut, inner) = BuildSut(pool, BuildProviders(), model: "opus[1m]", provider: "acc-a",
+            chain: ["opus[1m]", "deepseek-chat"]);
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));   // шаг 2 отвечает с первой попытки
+
+        await sut.SendMessageAsync("сделай что-нибудь");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+
+        inner.Attempts.Should().ContainSingle("на заведомо неспособной паре попытку не тратим");
+        inner.Attempts[0].Should().Be(("deepseek", "deepseek-chat"), "старт сразу на шаге цепочки");
+        Downstream().OfType<ResultMessage>().Should().ContainSingle()
+            .Which.Subtype.Should().Be("success");
+        Downstream().OfType<ErrorMessage>().Should().BeEmpty("ход состоялся — красной карточки быть не должно");
+        Downstream().OfType<ProviderSwitchedMessage>().Should().ContainSingle()
+            .Which.Label.Should().Contain("окно 1M");
+    }
+
+    // Обратная сторона: текст про 1M человек видит только тогда, когда подхватить ход было
+    // некому — цепочки нет вовсе (или в ней нет ни одного шага, способного взять окно).
+    [Fact]
+    public async Task Окно1MНедоступно_ЦепочкиНет_ЧестныйОтказСТекстомПро1M()
+    {
+        var pool = BuildPoolWithout1M("acc-a");
+        var (sut, inner) = BuildSut(pool, BuildProviders(), model: "opus[1m]", provider: "acc-a",
+            chain: ["opus[1m]"]);
+
+        await sut.SendMessageAsync("сделай что-нибудь");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+
+        inner.Attempts.Should().BeEmpty("ход не стартует: способной пары нет ни у одного шага");
+        Downstream().OfType<ErrorMessage>().Should().ContainSingle()
+            .Which.Text.Should().Be(TurnFailureText.Window1MUnavailable);
+        Downstream().OfType<ResultMessage>().Should().ContainSingle()
+            .Which.Subtype.Should().Be("error");
+    }
+
+    // Все шаги цепочки просят то же недоступное окно — подхватить некому, и отказ честный:
+    // «остальные модели цепочки тоже не подошли» из текста относится ровно к этому случаю.
+    [Fact]
+    public async Task Окно1MНедоступно_ВсеШагиЦепочкиПросят1M_ЧестныйОтказ()
+    {
+        var pool = BuildPoolWithout1M("acc-a");
+        var (sut, inner) = BuildSut(pool, BuildProviders(), model: "opus[1m]", provider: "acc-a",
+            chain: ["opus[1m]", "sonnet[1m]"]);
+
+        await sut.SendMessageAsync("сделай что-нибудь");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+
+        inner.Attempts.Should().BeEmpty();
+        Downstream().OfType<ErrorMessage>().Should().ContainSingle()
+            .Which.Text.Should().Be(TurnFailureText.Window1MUnavailable);
+    }
+
+    // Блокер 2, вид со стороны хода: одна пометка «пара недоступна» на единственной 1M-подписке
+    // не имеет права закрывать окно всем. Ход обязан стартовать (и упасть уже по факту, если
+    // модель и правда недоступна), а не отказать до попытки текстом про 1M.
+    [Fact]
+    public async Task ПометкаПарыНа1M_ОкноНеЗакрыто_ХодСтартует()
+    {
+        var pool = BuildPool("acc-a");   // единственная подписка, план тянет 1M
+        pool.MarkModelUnavailable("acc-a", "opus[1m]", FallbackErrorClass.ModelNoAccess);
+        var (sut, inner) = BuildSut(pool, BuildProviders(), model: "opus[1m]", provider: "acc-a",
+            chain: ["opus[1m]"]);
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));
+
+        await sut.SendMessageAsync("сделай что-нибудь");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+
+        inner.Attempts.Should().ContainSingle("пометка режет пару в выборе кандидата, а не окно у инстанса");
+        Downstream().OfType<ErrorMessage>().Should().BeEmpty();
+        Downstream().OfType<ResultMessage>().Should().ContainSingle()
+            .Which.Subtype.Should().Be("success");
+        pool.IsModelUnavailable("acc-a", "opus[1m]").Should().BeFalse("успешный ход снял пометку пары");
+    }
+
     [Fact]
     public async Task НеизвестнаяОшибка_ФолбэкНеЗапускается()
     {
@@ -287,6 +383,36 @@ public class FallbackLlmSessionAdapterTests
         Downstream().OfType<ResultMessage>().Should().ContainSingle()
             .Which.ApiErrorStatus.Should().Be("418");
         pool.IsExhausted("acc-a").Should().BeFalse("не лимитный класс — подписка не помечается");
+    }
+
+    // Признак «отказ по модели, а не исчерпание окна» — ТОЛЬКО текст ошибки хода (доводка
+    // волны 1а). По полям rate_limit_event он не распознаётся: overageDisabledReason приходит
+    // и на настоящем исчерпании окна у аккаунта с выключенным перерасходом, и признак по нему
+    // глушил бы MarkExhausted всегда. Здесь — сцепка целиком: «requires usage credits» →
+    // ModelOutOfCredits → помечена ПАРА (подписка × модель) + взведено подавление, а сама
+    // подписка исчерпанной НЕ помечена (её Sonnet/Opus остаются в ротации).
+    [Fact]
+    public async Task ОтказПоКредитамМодели_ПомеченаПара_ПодпискаЖива_ПодавлениеВзведено()
+    {
+        var pool = BuildPool("acc-a", "acc-b");
+        var (sut, inner) = BuildSut(pool, model: "fable");
+        inner.Scripts.Enqueue(() =>
+        {
+            // Формулировка CLI: она же приезжает вместе с rate_limit_event status=rejected,
+            // из-за которого волна 1 ложно ставила RateLimit до разбора текста.
+            inner.Emit(new ErrorMessage("Fable requires usage credits. Switch to another model.",
+                ExpectResultFollows: true));
+            inner.Emit(ApiError("429"));
+        });
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));
+
+        await sut.SendMessageAsync("сделай что-нибудь");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+
+        pool.IsExhausted("acc-a").Should().BeFalse("кончились кредиты МОДЕЛИ — это не лимит подписки");
+        pool.IsModelUnavailable("acc-a", "fable").Should().BeTrue("помечена пара, а не подписка");
+        pool.HadRecentModelRejection().Should()
+            .BeTrue("поздний rate_limit_event этой же попытки не должен пометить подписку исчерпанной");
     }
 
     [Fact]
@@ -576,6 +702,38 @@ public class FallbackLlmSessionAdapterTests
         inner.Attempts.Should().HaveCount(2);
         inner.Attempts.Should().NotContain(p => p.Provider == "glm",
             "автоподбор при цепочке выключен");
+        Downstream().OfType<ResultMessage>().Single().Subtype.Should().Be("error");
+    }
+
+    // Регресс-страховка дефекта be684c7b (этап 4): при исчерпании цепочки FailExhaustedAsync
+    // шлёт наружу ErrorMessage("ни одна модель не ответила") и следом ResultMessage. Парный
+    // result опирается на SkipNextTeamTurnEnd в SessionManager — флаг взводится ТОЛЬКО на
+    // ErrorMessage{ExpectResultFollows: true}. Без него оба сообщения независимо дёргают
+    // HandleTeamTurnEndAsync, и в командном чате штаб разбирает ход дважды (второй раз по
+    // пустому turnText). Существующая пара ErrorMessage{ExpectResultFollows:true}+Result
+    // уже проверена в SessionManagerTests; здесь — что FailExhaustedAsync отправляет свой
+    // вердикт-ошибку именно с этим флагом.
+    [Fact]
+    public async Task ЦепочкаИсчерпана_ErrorMessageВердиктаИдётСExpectResultFollows()
+    {
+        var providers = BuildProviders();
+        var pool = BuildPool("acc-a");
+        var (sut, inner) = BuildSut(pool, providers, model: "sonnet",
+            chain: ["sonnet", "deepseek-chat"]);
+        for (var i = 0; i < 5; i++)
+            inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+
+        // Вердикт-ошибка «ни одна модель не ответила» обязана нести флаг ExpectResultFollows:
+        // иначе SessionManager не взведёт SkipNextTeamTurnEnd, и парный result ниже пройдёт
+        // через разбор хода штабом второй раз (дефект be684c7b).
+        Downstream().OfType<ErrorMessage>()
+            .Should().ContainSingle(e => e.ExpectResultFollows,
+                "вердикт исчерпания идёт В ПАРЕ с финальным result — SessionManager должен "
+                + "взвести SkipNextTeamTurnEnd на ошибке и пропустить разбор по result");
+        // Сама пара: после такой ErrorMessage всегда идёт result с subtype=error.
         Downstream().OfType<ResultMessage>().Single().Subtype.Should().Be("error");
     }
 
@@ -1396,10 +1554,12 @@ public class FallbackLlmSessionAdapterTests
     // соседних тестов направления «сторонний → нативный»: нативный шаг цепочки принадлежит
     // ПУЛУ ПОДПИСОК, а не текущему стороннему провайдеру. Отличие от них — модель шага: тир-алиас
     // с суффиксом окна, и закрепляется ровно это. «opus[1m]» не принимается за модель стороннего
-    // каталога (иначе ключом шага стал бы «glm»); суффикс доезжает до пары НЕИЗМЕНЁННЫМ —
-    // ResolveWindowAlias живёт ниже, в ClaudeSession.ResolveModelForCli и OneShotClaudeRunner,
-    // в адаптере его нет и быть не должно; маршрут идёт в живую подписку пула мимо стороннего
-    // шага. Развилку Supports1M здесь не видно (способная подписка одна) — её закрепляет
+    // каталога (иначе ключом шага стал бы «glm»); суффикс доезжает до пары НЕИЗМЕНЁННЫМ — резать
+    // его адаптер не вправе (тихая деградация длинного чата в 200K), он лишь сверяется со
+    // способностью пула (CanServeWindow1M) и при её отсутствии уводит ход на шаг цепочки;
+    // маршрут идёт в живую подписку пула мимо стороннего шага. Обе подписки здесь 1M-способны,
+    // поэтому сверка проходит молча. Развилку Supports1M тут не видно (способная подписка
+    // одна после исчерпания первой) — её закрепляет
     // соседний тест НативныйШагСОкном1M_УходитНаПодпискуС1M_АНеНаЛюбуюЖивую.
     [Fact]
     public async Task БоеваяЦепочкаРевьюера_НативныйШагСОкном1M_УходитНаЖивуюПодпискуПула()
@@ -3041,5 +3201,136 @@ public class FallbackLlmSessionAdapterTests
         Downstream().OfType<ProviderSwitchedMessage>().Should().BeEmpty();
         Downstream().OfType<ResultMessage>().Should().ContainSingle()
             .Which.Subtype.Should().Be("success");
+    }
+
+    // «Стоп» завершает ход даже без терминала от CLI: в проде финал может прийти ОТЛИЧНО от Exited
+    // (ResultMessage пришёл ДО Interrupt, но аккумулятор/карточка ещё не отрисованы — терминал
+    // уже осел в Settle, и приход Exited позже не обязателен). Главное — _userInterrupted взведён
+    // и ход должен закрыться с outcome=interrupted, а НЕ висеть до DisposeAsync.
+    //
+    // Сейчас адаптер висит: WaitAsync на attemptTcs ждёт ExitedMessage, которого нет, а _cts
+    // (отменяется только в DisposeAsync) Interrupt не трогает. Это и есть причина инцидента
+    // 2026-09-05: «Стоп» на стенде Вера → CLI виснет, turn/completed не публикуется.
+    [Fact]
+    public async Task InterruptБезТерминалаОтCli_ХодВсёРавноЗавершается()
+    {
+        var pool = BuildPool("acc-a", "acc-b");
+        var (sut, inner) = BuildSut(pool, provider: "acc-a");
+        inner.Scripts.Enqueue(() =>
+        {
+            // Симулируем «Стоп»: пользователь прервал, inner.Interrupt убил процесс, но ExitedMessage
+            // до FallbackLlmSessionAdapter не дошёл (на стенде это и наблюдалось).
+            sut.Interrupt();
+            inner.Interrupts.Should().Be(1, "sut.Interrupt пробрасывает сигнал в inner");
+        });
+
+        await sut.SendMessageAsync("сделай");
+
+        // Без ExitedMessage ход всё равно должен завершиться: ждём ExitedMessage, по которому
+        // SessionManager снимает Working и разбирает Pending. Таймаут 3 с — на стенде «Стоп»
+        // отрабатывал за <1 с.
+        await WaitForAsync(
+            () => Downstream().OfType<ExitedMessage>().Any(),
+            "ExitedMessage финала хода (регрессия: без него ход висит до DisposeAsync, и queued, position=1)");
+
+        // Итог: попытка ровно одна — подмены быть не должно (Interrupt = не ошибка доставки)
+        inner.Attempts.Should().ContainSingle("остановка пользователем — не ошибка доставки, фолбэка нет");
+    }
+
+    // ===== ExtractWin32Code: разбор маркера "[Win32:NNN]" из Details (ревью dc641949, M3) =====
+
+    // Метод приватный: он шов между Details ErrorMessage и Win32Code паспорта хода,
+    // публиковать его наружу ради теста незачем — зовём рефлексией.
+    private static int? CallExtractWin32Code(string? details)
+    {
+        var m = typeof(FallbackLlmSessionAdapter).GetMethod(
+            "ExtractWin32Code",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        m.Should().NotBeNull("ExtractWin32Code — шов паспорта хода, переименование ломает разбор маркера");
+        return (int?)m!.Invoke(null, [details]);
+    }
+
+    [Fact]
+    public void ExtractWin32Code_МаркерПервым_ДаётКод()
+    {
+        // Штатный случай: ClaudeSession ставит маркер первым токеном Details.
+        // Регрессия off-by-one: AsSpan(6, …) отдавал ":206" — int.TryParse возвращал false,
+        // и паспорт хода терял Win32Code (перерасход cmdline выглядел безымянным сбоем).
+        CallExtractWin32Code("[Win32:206] Слишком длинное имя файла").Should().Be(206);
+        CallExtractWin32Code("[Win32:2] коротко").Should().Be(2);
+        CallExtractWin32Code("[Win32:206]").Should().Be(206);
+    }
+
+    [Fact]
+    public void ExtractWin32Code_МаркерНеПервым_НеРазбирается()
+    {
+        // Склейка через \n от HeldErrorDetails: ошибка попытки задержана и приклеена к
+        // «Подробностям» маркера подмены. Маркер уехал с начала строки — по контракту
+        // (StartsWith) разбирать нечего, и это правильно: код относится к ДРУГОЙ попытке.
+        CallExtractWin32Code("ошибка первой попытки\n[Win32:206] вторая").Should().BeNull();
+        CallExtractWin32Code(" [Win32:206]").Should().BeNull();
+    }
+
+    [Fact]
+    public void ExtractWin32Code_БезМаркера_Null()
+    {
+        CallExtractWin32Code(null).Should().BeNull();
+        CallExtractWin32Code("").Should().BeNull();
+        CallExtractWin32Code("Модель перегружена, попробуйте позже").Should().BeNull();
+        CallExtractWin32Code("[Win32 206]").Should().BeNull("нет двоеточия — это не наш маркер");
+    }
+
+    [Fact]
+    public void ExtractWin32Code_НекорректныйКод_Null()
+    {
+        CallExtractWin32Code("[Win32:]").Should().BeNull("пустой код");
+        CallExtractWin32Code("[Win32:abc] текст").Should().BeNull("не число");
+        CallExtractWin32Code("[Win32:206 текст").Should().BeNull("нет закрывающей скобки");
+        CallExtractWin32Code("[Win32:2 06]").Should().BeNull("пробел внутри числа");
+    }
+
+    // ===== StripWin32Marker: снятие маркера «[Win32:NNN]» с видимого текста Details =====
+    //
+    // Метод приватный: публиковать его наружу ради теста незачем — зовём рефлексией.
+    // Мутация «вернуть text как есть» (без срезания префикса) должна ронять тест:
+    // человек видит в «Подробностях» маркера подмены текст «[Win32:206] Промпт хода превысил…»,
+    // а не «Промпт хода превысил…», и это лишний шум — код уже едет через ExtractWin32Code
+    // в outcome.Win32ErrorCode и оттуда в TurnErrorClassifier.
+    private static string? CallStripWin32Marker(string? text)
+    {
+        var m = typeof(FallbackLlmSessionAdapter).GetMethod(
+            "StripWin32Marker",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        m.Should().NotBeNull("StripWin32Marker — шов Details ErrorMessage, переименование ломает видимый текст ошибки");
+        return (string?)m!.Invoke(null, [text]);
+    }
+
+    [Fact]
+    public void StripWin32Marker_МаркерПервым_Снимается()
+    {
+        // Штатный случай от FailPromptOverflowAsync: ClaudeSession кладёт [Win32:206] первым
+        // токеном Details, StripWin32Marker обязан снять префикс и оставить осмысленный текст.
+        CallStripWin32Marker("[Win32:206] Промпт хода превысил лимит 32 767 символов")
+            .Should().Be(" Промпт хода превысил лимит 32 767 символов",
+                "префикс [Win32:206] снят, остаток текста доходит до Details как есть");
+    }
+
+    [Fact]
+    public void StripWin32Marker_МаркерНеПервым_НеТрогается()
+    {
+        // Маркер НЕ в начале — по контракту StartsWith не срабатывает, текст идёт целиком.
+        // (Та же логика, что и у ExtractWin32Code: код относится к ДРУГОЙ попытке.)
+        CallStripWin32Marker("ошибка первой попытки\n[Win32:206] вторая")
+            .Should().Be("ошибка первой попытки\n[Win32:206] вторая",
+                "StripWin32Marker режет только префикс; серединный маркер не его дело");
+    }
+
+    [Fact]
+    public void StripWin32Marker_БезМаркера_ТекстЦеликом()
+    {
+        // Нет префикса — текст идёт как есть; иначе мы бы проглатывали нормальные сообщения.
+        CallStripWin32Marker("Промпт хода превысил лимит").Should().Be("Промпт хода превысил лимит");
+        CallStripWin32Marker(null).Should().BeNull("null на входе — null на выходе");
+        CallStripWin32Marker("").Should().Be(string.Empty);
     }
 }

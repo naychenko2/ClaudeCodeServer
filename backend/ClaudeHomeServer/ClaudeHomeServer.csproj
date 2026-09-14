@@ -11,6 +11,15 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.Tests</_Parameter1>
     </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Git.Tests</_Parameter1>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Spend.Tests</_Parameter1>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Prompts.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
 
@@ -22,15 +31,19 @@
 
   <!-- Белый список имён значков (ADR-009 §5.2): генерируемая копия iconNames установленного
        lucide-react, правится только генератором (frontend/scripts/gen-glyph-names.mjs), не руками.
-       LogicalName задан явно — код читает ресурс по короткому имени и не зависит от папок -->
-  <ItemGroup>
-    <EmbeddedResource Include="Services\ProjectIcons\lucide-icon-names.g.txt" LogicalName="lucide-icon-names.g.txt" />
-  </ItemGroup>
+       LogicalName задан явно — код читает ресурс по короткому имени и не зависит от папок.
+       Этап 5, волна C, шаг 2: перенесён в `ClaudeHomeServer.ProjectIcons.csproj`
+       вместе с вертикалью (EmbeddedResource едет со сборкой, в которой живёт). -->
 
   <!-- Хостовый publish: встроенные MCP-серверы и дефолты CLI кладём рядом с exe —
        TasksServerLocator и синк workflows ищут их от AppContext.BaseDirectory
        (в контейнере это делала копия в /app из Dockerfile) -->
   <ItemGroup>
+    <!-- Краткая карта для BareMode-провайдеров (SystemPrompts/CLAUDE-local.md) —
+         путь относительно AppContext.BaseDirectory, нужна и в bin/ (dotnet run), и в
+         /app/ (publish). Без копии флаг system-prompt-file укажет на несуществующий файл
+         и ход провайдера упадёт (см. ревью 2026-09-05). -->
+    <None Include="SystemPrompts\CLAUDE-local.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\..\mcp\**\*" LinkBase="mcp" CopyToPublishDirectory="PreserveNewest" />
     <!-- __tests__ исключаем: Node-хёрнессы не должны попадать в production-артефакт,
          их место в репозитории для локального/CI-прогона -->
@@ -57,8 +70,95 @@
     <Copy SourceFiles="@(ConPtyBridgeFiles)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
   </Target>
 
+  <!-- Динамический модуль-заглушка (сценарий Б, PoC): грузится по пути из конфига, НЕ
+       через ProjectReference, поэтому ReferenceOutputAssembly="false" — нужен только порядок
+       сборки (stub строится до Main). Собранный dll копируем рядом с exe в modules/__stub/,
+       чтобы ModuleLoader резолвил относительный путь из appsettings.json (Modules:0:AssemblyPath).
+       N3: копирование в выходной каталог только для Debug — в Release (prod) заглушка в
+       базовом appsettings.json Disabled (Enabled=false), и dll в артефакте не нужна. -->
   <ItemGroup>
-    <PackageReference Include="AngleSharp" Version="1.5.2" />
+    <ProjectReference Include="..\modules\__stub\StubModule.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+  <Target Name="CopyStubModule" AfterTargets="Build" Condition="'$(Configuration)' == 'Debug'">
+    <ItemGroup>
+      <StubModuleFiles Include="..\modules\__stub\bin\$(Configuration)\net10.0\StubModule.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(StubModuleFiles)" DestinationFolder="$(OutDir)modules\__stub"
+          SkipUnchangedFiles="true" Condition="Exists('..\modules\__stub\bin\$(Configuration)\net10.0\StubModule.dll')" />
+  </Target>
+
+  <!-- Динамический модуль Notes: тот же паттерн, что заглушка, но модуль реально используется
+       (Enabled=true в прод-конфиге). ReferenceOutputAssembly="false" — Main не видит типы Notes
+       на этапе компиляции; все швы (INoteAccessor, INoteSemanticIndex и др.) живут в Core.
+       Копия dll в выходной каталог нужна всегда (Debug+Release): ModuleLoader грузит по пути
+       из appsettings.json. -->
+  <ItemGroup>
+    <ProjectReference Include="..\ClaudeHomeServer.Notes\ClaudeHomeServer.Notes.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+  <Target Name="CopyNotesModule" AfterTargets="Build;Publish">
+    <!-- Две цели: Build копирует в $(OutDir) (dev-запуск dotnet run), Publish — в
+         $(PublishDir) (деплой deploy80.ps1 делает dotnet publish -o и раньше терял
+         модуль: на проде ModuleLoader не находил dll, INoteSemanticIndex не
+         регистрировался, и форвардер Knowledge ронял старт хоста). -->
+    <PropertyGroup>
+      <NotesModuleDir Condition="'$(PublishDir)' != ''">$(PublishDir)modules\notes</NotesModuleDir>
+      <NotesModuleDir Condition="'$(PublishDir)' == ''">$(OutDir)modules\notes</NotesModuleDir>
+    </PropertyGroup>
+    <ItemGroup>
+      <NotesModuleFiles Include="..\ClaudeHomeServer.Notes\bin\$(Configuration)\net10.0\ClaudeHomeServer.Notes.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(NotesModuleFiles)" DestinationFolder="$(NotesModuleDir)"
+          SkipUnchangedFiles="true" Condition="Exists('..\ClaudeHomeServer.Notes\bin\$(Configuration)\net10.0\ClaudeHomeServer.Notes.dll')" />
+  </Target>
+
+  <!-- === Модульность (Этап 3+, Этап 5)
+       Вертикали Video/Yandex/Reader/CodeGraph/Skills/Git/Personas/Spend/Knowledge/
+       Changelog/Diagnostics/Docs/Tts/WebSearch/Tasks/Modules/ProjectServices/Backgrounds
+       вынесены в собственные .csproj и ссылаются только на Core. Здесь — обратная
+       ссылка «Main → вертикаль» ради регистрации подсистем в Program.cs:
+       AddSubsystems(new VideoSubsystem(), ...). Это не цикл: цепочка
+       Main → Vertical → Core → (BCL). Core не ссылается ни на Main, ни на вертикали.
+       До этапа 3 всё это жило одной сборкой, и инвариант «вертикаль зависит только
+       от спинки» соблюдался логически; теперь он держится физически — вертикаль не
+       может «протянуть руку» в Main, потому что ProjectReference в её .csproj нет.
+       Notes — исключение: динамический модуль (см. CopyNotesModule), не прямой референс. -->
+  <ItemGroup>
+    <ProjectReference Include="..\ClaudeHomeServer.Backgrounds\ClaudeHomeServer.Backgrounds.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Video\ClaudeHomeServer.Video.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Yandex\ClaudeHomeServer.Yandex.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Reader\ClaudeHomeServer.Reader.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.CodeGraph\ClaudeHomeServer.CodeGraph.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Changelog\ClaudeHomeServer.Changelog.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Deploy\ClaudeHomeServer.Deploy.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Diagnostics\ClaudeHomeServer.Diagnostics.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Desktop\ClaudeHomeServer.Desktop.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Docs\ClaudeHomeServer.Docs.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Dossiers\ClaudeHomeServer.Dossiers.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Execution\ClaudeHomeServer.Execution.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Memory\ClaudeHomeServer.Memory.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Skills\ClaudeHomeServer.Skills.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Git\ClaudeHomeServer.Git.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Images\ClaudeHomeServer.Images.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Knowledge\ClaudeHomeServer.Knowledge.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Llm\ClaudeHomeServer.Llm.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Modules\ClaudeHomeServer.Modules.csproj" />
+    <!-- Notes — теперь динамический модуль (см. CopyNotesModule выше), не прямой референс -->
+<ProjectReference Include="..\ClaudeHomeServer.Personas\ClaudeHomeServer.Personas.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.ProjectIcons\ClaudeHomeServer.ProjectIcons.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.ProjectServices\ClaudeHomeServer.ProjectServices.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Prompts\ClaudeHomeServer.Prompts.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Spend\ClaudeHomeServer.Spend.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Tasks\ClaudeHomeServer.Tasks.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Terminal\ClaudeHomeServer.Terminal.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Tts\ClaudeHomeServer.Tts.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Turn\ClaudeHomeServer.Turn.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.WebSearch\ClaudeHomeServer.WebSearch.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.TriggerSources\ClaudeHomeServer.TriggerSources.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Watchdog\ClaudeHomeServer.Watchdog.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.0" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.Negotiate" Version="10.0.10" />
     <PackageReference Include="Microsoft.CodeAnalysis" Version="4.12.0" />
@@ -67,7 +167,6 @@
     <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.17.0" />
     <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.17.0" />
     <PackageReference Include="OpenTelemetry.Instrumentation.Http" Version="1.17.0" />
-    <PackageReference Include="SmartReader" Version="0.11.1" />
     <!-- OpenTelemetry.Instrumentation.Runtime не нужен: он даёт СВОЙ метр
          (OpenTelemetry.Instrumentation.Runtime) через AddRuntimeInstrumentation(), а мы
          слушаем встроенный в .NET метр System.Runtime — он есть в рантайме сам по себе.

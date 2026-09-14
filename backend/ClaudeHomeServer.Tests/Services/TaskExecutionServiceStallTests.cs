@@ -1,12 +1,17 @@
-﻿using System.Reflection;
+using System.Reflection;
 using ClaudeHomeServer.Controllers;
-using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Skills;
+using ClaudeHomeServer.Services.Notes;
+using ClaudeHomeServer.Services.Tasks;
+using ClaudeHomeServer.Services.Memory;
+using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
+using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
-using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -21,6 +26,7 @@ namespace ClaudeHomeServer.Tests.Services;
 // не должен получать ничего (регрессия на спам), брошенная задача — ровно один оклик исполнителю
 // и ровно одно уведомление человеку. CLI не поднимается: процесс чата подставляется моком
 // адаптера (тот же приём, что в TaskExecutionServiceDelegationReportTests).
+[Collection(TestCollections.SessionStaticResolvers)]
 public class TaskExecutionServiceStallTests : IDisposable
 {
     private static readonly TimeSpan Stale = TimeSpan.FromMinutes(15);
@@ -32,13 +38,12 @@ public class TaskExecutionServiceStallTests : IDisposable
     private readonly SessionManager _sessions;
     private readonly NotificationStore _notifStore;
     private readonly TaskExecutionService _sut;
-    private readonly List<ServerMessage> _sent = [];
-    private readonly object _sentLock = new();
+    private readonly TestSessionBroadcaster _broadcaster;
 
-    private List<T> Sent<T>()
-    {
-        lock (_sentLock) return _sent.OfType<T>().ToList();
-    }
+    // Захват только session-канала (см. TaskExecutionServiceDelegationReportTests).
+    private List<T> Sent<T>() => _broadcaster.Session.Select(t => t.Message)
+        .OfType<T>()
+        .ToList();
 
     public TaskExecutionServiceStallTests()
     {
@@ -61,30 +66,13 @@ public class TaskExecutionServiceStallTests : IDisposable
         var personas = new PersonaManager(config);
         _tasks = new TaskManager(config, personas: personas);
 
-        var clientProxy = new Mock<IClientProxy>();
-        clientProxy
-            .Setup(c => c.SendCoreAsync(It.IsAny<string>(), It.IsAny<object[]>(), It.IsAny<CancellationToken>()))
-            .Callback<string, object[], CancellationToken>((_, args, _) =>
-            {
-                if (args.Length > 0 && args[0] is ServerMessage msg)
-                    lock (_sentLock) _sent.Add(msg);
-            })
-            .Returns(Task.CompletedTask);
-        var clients = new Mock<IHubClients>();
-        // Только session-группа: клиент чата состоит и в user_/project_-группе, широкая
-        // рассылка задвоила бы сообщения в снимке
-        clients.Setup(c => c.Group(It.Is<string>(g => !g.StartsWith("project_") && !g.StartsWith("user_"))))
-            .Returns(clientProxy.Object);
-        clients.Setup(c => c.Group(It.Is<string>(g => g.StartsWith("project_") || g.StartsWith("user_"))))
-            .Returns(new Mock<IClientProxy>().Object);
-        var hub = new Mock<IHubContext<SessionHub>>();
-        hub.Setup(h => h.Clients).Returns(clients.Object);
+        var broadcaster = new TestSessionBroadcaster();
 
         var pushStore = new PushSubscriptionStore(config);
         var jwt = new JwtService(config, _userStore, NullLogger<JwtService>.Instance);
         var push = new PushService(config, pushStore, jwt, NullLogger<PushService>.Instance);
         _notifStore = new NotificationStore(config, NullLogger<NotificationStore>.Instance);
-        var notif = new NotificationService(_notifStore, hub.Object, push, personas, projectManager,
+        var notif = new NotificationService(_notifStore, broadcaster, push, personas, projectManager,
             NullLogger<NotificationService>.Instance);
 
         var wkStore = new WorkspaceKnowledgeStore(config);
@@ -96,26 +84,25 @@ public class TaskExecutionServiceStallTests : IDisposable
 
         var llmProviders = new LlmProviderRegistry(config);
         var subPool = new ClaudeSubscriptionPool(config);
-        var adapters = new LlmSessionAdapterFactory(config, new SkillsService(), wkStore, llmProviders, subPool);
+        var adapters = new LlmSessionAdapterFactory(config, new AgentPromptSourceAdapter(new SkillsService()), new WorkspaceDatasetLookup(wkStore), llmProviders, subPool);
         var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, config);
         var usage = new UsageService(config);
         var server = new Mock<Microsoft.AspNetCore.Hosting.Server.IServer>();
         server.Setup(s => s.Features).Returns(new Microsoft.AspNetCore.Http.Features.FeatureCollection());
         var flags = new FeatureFlagService(_userStore);
-        var personaMemory = new PersonaMemoryService(knowledge, personas, _userStore, config,
-            NullLogger<PersonaMemoryService>.Instance);
-        var bindings = new PersonaBindingsService(personas, projectManager, wkStore, notesSvc, notesKb,
-            knowledge, new SkillsService(), _userStore, config, NullLogger<PersonaBindingsService>.Instance);
-        var promptBuilder = new PersonaPromptBuilder(llmProviders);
+        var bindings = new PersonaBindingsService(personas, projectManager, wkStore,
+            knowledge, new SkillsService(), _userStore, config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
-        _sessions = new SessionManager(projectManager, hub.Object, new ChatHistoryService(config), config,
-            adapters, falCost, usage, appSettings, _userStore, jwt, server.Object, llmProviders, notesKb,
-            flags, personas, personaMemory, bindings, promptBuilder, subPool,
-            NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox);
+        _sessions = new SessionManager(projectManager, new ChatHistoryService(config), config,
+            adapters, falCost, usage, appSettings, _userStore, jwt, server.Object, llmProviders,
+            flags, personas, bindings, subPool,
+            NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox,
+            broadcaster: broadcaster);
 
-        _sut = new TaskExecutionService(_tasks, _sessions, personas, hub.Object, push, notesKb, notif,
-            NullLogger<TaskExecutionService>.Instance, config);
+        _sut = new TaskExecutionService(_tasks, _sessions, personas, broadcaster, push, notif,
+            NullLogger<TaskExecutionService>.Instance, config, kb: notesKb);
+        _broadcaster = broadcaster;
     }
 
     public void Dispose()
@@ -138,7 +125,7 @@ public class TaskExecutionServiceStallTests : IDisposable
         }
     }
 
-    // ─── Предикат: три ветки решения ──────────────────────────────────────────
+    // --- Предикат: три ветки решения ------------------------------------------
 
     // Задача после успешного хода исполнителя, который её не закрыл
     private static TaskItem StaleTask(DateTime? nudgedAt = null, DateTime? alertedAt = null) => new()
@@ -289,7 +276,109 @@ public class TaskExecutionServiceStallTests : IDisposable
             .Should().Be(TaskExecutionService.ExecutorStallAction.None);
     }
 
-    // ─── Эффекты: оклик исполнителю и уведомление человеку ────────────────────
+    // --- Волна 2 team-blocker-honest: «ждёт ответа по блокеру» vs «молчит» ----------
+
+    // Час молчания + открытый блокер: НЕ обычный Alert, а AlertWaitingForBlocker. Nudge
+    // не отправляем: исполнитель уже ждёт ответа, ещё один «закрой или эскалируй» только
+    // заставит его повторно эскалировать (прод 2026-09: блокер «снят правкой критерия», а
+    // Вере никто не написал — сторож закрыл задачу как зависшую).
+    [Fact]
+    public void ClassifyStall_ОткрытБлокер_ТишинаЗаПорогом_СразуЗовёмЧеловекаСДругимТекстом()
+    {
+        var action = TaskExecutionService.ClassifyStall(StaleTask(),
+            Chat(SessionStatus.Active, Now.AddMinutes(-16)), Now, Stale,
+            hasOpenBlocker: true);
+
+        action.Should().Be(TaskExecutionService.ExecutorStallAction.AlertWaitingForBlocker,
+            "открытый блокер меняет причину тишины — окликать исполнителя бесполезно, идём сразу к человеку");
+    }
+
+    [Fact]
+    public void ClassifyStall_ОткрытБлокер_ЧатаИсполнителяНет_ТожеЖдётЧеловека()
+    {
+        // Чат удалён/протух, окликать некого — при открытом блокере это всё равно
+        // «ждёт ответа», а не «молчит молча».
+        var action = TaskExecutionService.ClassifyStall(StaleTask(), null, Now, Stale,
+            hasOpenBlocker: true);
+
+        action.Should().Be(TaskExecutionService.ExecutorStallAction.AlertWaitingForBlocker);
+    }
+
+    [Fact]
+    public void ClassifyStall_ОткрытБлокер_ОкликНеПомог_ЖдёмЧеловека()
+    {
+        // Прежний путь «nudge → alert» при открытом блокере тоже превращается в
+        // AlertWaitingForBlocker: на втором шаге координатор уже знает, что блокер висит,
+        // и формулировка должна отражать это, а не маскировать «общим» молчанием.
+        var action = TaskExecutionService.ClassifyStall(
+            StaleTask(nudgedAt: Now.AddMinutes(-16)),
+            Chat(SessionStatus.Active, Now.AddMinutes(-30)), Now, Stale,
+            hasOpenBlocker: true);
+
+        action.Should().Be(TaskExecutionService.ExecutorStallAction.AlertWaitingForBlocker);
+    }
+
+    [Fact]
+    public void ClassifyStall_ОткрытБлокер_ТишинаНеДошлаДоПорога_НичегоНеДелаем()
+    {
+        // Запас до порога — даже при открытом блокере рано будить координатора.
+        var action = TaskExecutionService.ClassifyStall(StaleTask(),
+            Chat(SessionStatus.Active, Now.AddMinutes(-5)), Now, Stale,
+            hasOpenBlocker: true);
+
+        action.Should().Be(TaskExecutionService.ExecutorStallAction.None);
+    }
+
+    [Fact]
+    public void ClassifyStall_БезБлокера_ПоведениеПрежнее()
+    {
+        // Регрессия: без открытого блокера ветка Nudge/Alert работает как раньше,
+        // новый enum-значение не подменяет старое.
+        var action = TaskExecutionService.ClassifyStall(StaleTask(),
+            Chat(SessionStatus.Active, Now.AddMinutes(-16)), Now, Stale,
+            hasOpenBlocker: false);
+
+        action.Should().Be(TaskExecutionService.ExecutorStallAction.Nudge);
+    }
+
+    [Fact]
+    public void ClassifyStall_DefaultБезБлокера_ПоведениеПрежнее()
+    {
+        // Старая сигнатура без параметра (hasOpenBlocker по умолчанию = false) сохранена:
+        // существующие вызовы и тесты продолжают работать без правок.
+        var action = TaskExecutionService.ClassifyStall(StaleTask(),
+            Chat(SessionStatus.Active, Now.AddMinutes(-16)), Now, Stale);
+
+        action.Should().Be(TaskExecutionService.ExecutorStallAction.Nudge);
+    }
+
+    // Тексты уведомления и подписи плашки разные — иначе координатор не отличит «ждёт»
+    // от «молчит» ни по ленте, ни по пушу.
+    [Fact]
+    public void BuildStaleNotification_ЖдётОтветаПоБлокеру_ОтличаетсяТекстомИЗаголовком()
+    {
+        var task = StaleTask();
+        var plain = TaskExecutionService.BuildStaleNotification(task, persona: null, waitingForBlocker: false);
+        var waiting = TaskExecutionService.BuildStaleNotification(task, persona: null, waitingForBlocker: true);
+
+        plain.Title.Should().Be("Задача осталась в работе");
+        waiting.Title.Should().Be("Исполнитель ждёт ответа по блокеру");
+        waiting.Body.Should().Contain("ждёт ответа");
+        plain.Body.Should().NotContain("ждёт ответа",
+            "без открытого блокера формулировка должна остаться прежней");
+    }
+
+    [Fact]
+    public void StaleAlertStaffNote_ОтличаетсяУОжиданияБлокера()
+    {
+        // Плашка в ленте — единственное, что человек видит от служебного окрика координатора.
+        // Две разные подписи нужны, чтобы по ленте было видно, что это «ждёт», а не «молчит».
+        TaskExecutionService.StaleAlertStaffNote.Should().NotBe(
+            TaskExecutionService.StaleAlertWaitingForBlockerStaffNote);
+        TaskExecutionService.StaleAlertWaitingForBlockerStaffNote.Should().Contain("ждёт");
+    }
+
+    // --- Эффекты: оклик исполнителю и уведомление человеку --------------------
 
     // Живой чат-исполнитель с подставным процессом (иначе SendOrEnqueueAsync поднял бы CLI)
     private async Task<(TaskItem Task, Session Chat)> ArrangeExecutorChatAsync(TimeSpan silence)

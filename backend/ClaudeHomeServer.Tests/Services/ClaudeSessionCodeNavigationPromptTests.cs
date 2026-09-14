@@ -5,6 +5,7 @@ using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Llm.Claude;
+using ClaudeHomeServer.Services.Turn;
 using FluentAssertions;
 using Xunit;
 
@@ -56,8 +57,8 @@ public class ClaudeSessionCodeNavigationPromptTests : IDisposable
             {
                 FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh",
                 Args = OperatingSystem.IsWindows()
-                    ? ["/c", "ping -n 120 127.0.0.1 >nul"]
-                    : ["-c", "sleep 120"],
+                    ? ["/c", "ping -n 10 127.0.0.1 >nul"]
+                    : ["-c", "sleep 10"],
                 WorkingDirectory = spec.WorkingDirectory,
                 ClearEnv = spec.ClearEnv,
                 StdioEncoding = spec.StdioEncoding,
@@ -70,6 +71,17 @@ public class ClaudeSessionCodeNavigationPromptTests : IDisposable
             return process;
         }
 
+                public int EstimateCommandLineLength(ProcessSpec spec)
+        {
+            // Заглушка для фейков: тесты, которые гоняют ClaudeSession.ApplyBudget,
+            // нуждаются в числовом ответе, но не в точной семантике раннера (её
+            // проверяет DockerProcessRunnerCmdlineEstimationTests на реальном раннере).
+            // Считаем FileName + args через TurnPromptAssembler.ArgCost — та же формула,
+            // что в LocalProcessRunner.EstimateCommandLineLength, без RawArguments.
+            var total = (spec.FileName ?? string.Empty).Length;
+            foreach (var a in spec.Args) total += TurnPromptAssembler.ArgCost(a);
+            return total;
+        }
         public void Kill(Process process, string? turnId = null)
         {
             try { process.Kill(entireProcessTree: true); } catch { /* уже мёртв */ }
@@ -80,14 +92,34 @@ public class ClaudeSessionCodeNavigationPromptTests : IDisposable
     {
         var messages = new List<ServerMessage>();
         var info = new Session();
+        // Этап 2: CodeGraphProvider заменён контрибьютором, его кладём на шину как
+        // подписчик prompt/assembling и прокидываем шину через LlmSessionContext.Events.
+        var bus = new TurnEventBus();
+        // Имитируем CodeGraphContributor: гейт «есть провайдер» живёт в подписчике —
+        // null = нет фильтра, нет секций. Прежний ClaudeSession гейтил это через
+        // `if (_codeGraphProvider is not null)`.
+        if (codeGraphProvider is not null)
+        {
+            bus.OnFilter<PromptAssembling>(600, async (e, next) =>
+            {
+                // Имитируем CodeGraphContributor: зовём провайдер с текстом хода и кладём
+                // секции code-graph + code-navigation (статичная подсказка — рядом).
+                var block = await codeGraphProvider(e.TurnText);
+                if (!string.IsNullOrWhiteSpace(block))
+                    e.Sections.Add(new ClaudeHomeServer.Services.Turn.PromptSection("code-graph", block!));
+                e.Sections.Add(new ClaudeHomeServer.Services.Turn.PromptSection("code-navigation",
+                    CodeNavigationPrompts.SectionText));
+                await next();
+            }, "Test.CodeGraphProvider");
+        }
         var context = new LlmSessionContext(
             RootPath: _root,
             OnMessage: m => { lock (messages) messages.Add(m); return Task.CompletedTask; },
-            RawSystemPrompt: null,
+            RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
             PermissionRules: null,
             TasksMcp: null,
-            CodeGraphProvider: codeGraphProvider,
-            Launcher: new CapturingLauncher(_clis, _argsCaptured));
+            Launcher: new CapturingLauncher(_clis, _argsCaptured),
+            Events: bus);
 
         var session = new ClaudeSession(info, context);
         await using var _ = session;

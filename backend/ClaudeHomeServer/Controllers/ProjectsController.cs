@@ -7,6 +7,10 @@ using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Knowledge;
+using ClaudeHomeServer.Services.Memory;
+using ClaudeHomeServer.Services.Notes;
+using ClaudeHomeServer.Services.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
@@ -16,7 +20,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects")]
-public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, UserStore users, UserHomeResolver homes, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory, ClaudeHomeServer.Services.Dossiers.DossierStore dossiers, KnowledgeService knowledge, NotesKnowledgeService notesKb, PersonaManager personas, PersonaMemoryService personaMemory, ClaudeHomeServer.Services.Git.GitService git, ClaudeHomeServer.Services.Git.GitServerService gitServer, ClaudeHomeServer.Services.ProjectIcons.ProjectIconGlyphService iconGlyphs, FeatureFlagService flags, ClaudeHomeServer.Services.Desktop.DesktopHandsSessionService desktopHands, Services.Mcp.McpRegistry mcpRegistry, ChatArchiveService autoArchive, ILogger<ProjectsController> logger, IHubContext<SessionHub> hub) : ControllerBase
+public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, UserStore users, UserHomeResolver homes, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory, ClaudeHomeServer.Services.Dossiers.DossierStore dossiers, KnowledgeService knowledge, PersonaManager personas, PersonaMemoryService personaMemory, ClaudeHomeServer.Services.Git.GitService git, ClaudeHomeServer.Services.Git.GitServerService gitServer, ClaudeHomeServer.Services.ProjectIcons.ProjectIconGlyphService iconGlyphs, FeatureFlagService flags, ClaudeHomeServer.Services.Desktop.DesktopHandsSessionService desktopHands, Services.Mcp.McpRegistry mcpRegistry, ChatArchiveService autoArchive, ILogger<ProjectsController> logger, IHubContext<SessionHub> hub, INoteSemanticIndex? notesKb = null) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -68,8 +72,8 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         var p = projects.GetById(id);
         if (p is null || p.OwnerId != UserId) return NotFound();
         var wk = wkStore.GetByPath(p.RootPath);
-        var parts = ProjectManager.GetSystemPromptParts(
-            p.SystemPrompt, wk?.DifyDatasetId != null, wk?.DocumentTags);
+        var parts = Services.Llm.SystemPromptComposer.GetSystemPromptParts(
+            ProjectManager.BuiltInSystemPrompt, p.SystemPrompt, wk?.DifyDatasetId != null, wk?.DocumentTags);
         return Ok(new { parts });
     }
 
@@ -102,7 +106,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     // Персона-вызыватель MCP-инструмента (mcp/memory-server отдаёт свой MEMORY_PERSONA_ID
     // заголовком на каждый запрос) — пусто у обычного чата проекта без персоны и у фронта
     // (UI «Командного центра» этот заголовок не шлёт вовсе, поэтому ручное управление всегда
-    // разрешено). См. DenyOnDelegatedTurnAttribute.CallerHeader — тот же паттерн, свой заголовок:
+    // разрешено). См. McpEndpoints.CallerSessionHeader — тот же паттерн, свой заголовок:
     // персона — не сессия, а MEMORY_PERSONA_ID у сессии меняется (смена спикера в группе).
     private const string CallerPersonaHeader = "X-Caller-Persona-Id";
 
@@ -195,7 +199,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
                     await git.InitAsync(p.OwnerId, p.RootPath);
                     if (gitServer.Enabled && p.OwnerId is not null && users.GetById(p.OwnerId) is { } owner)
                     {
-                        var repo = await gitServer.CreateRepoAsync(owner, p.Name, p.Id);
+                        var repo = await gitServer.CreateRepoAsync(owner.Id, owner.Username, p.Name, p.Id);
                         await git.SetRemoteAsync(p.OwnerId, p.RootPath, repo.CloneUrl);
                         projects.UpdateGitSettings(p.Id, remoteUrl: repo.CloneUrl,
                             autoCommit: req.GitAutoCommit, autoPush: req.GitAutoPush);
@@ -427,7 +431,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
 
         // Заметки notes/ проекта выпали из alive-set — вычистить их из «{user}:notes» сразу,
         // не дожидаясь следующей несвязанной правки заметок
-        notesKb.QueueSync(UserId);
+        notesKb?.QueueSync(UserId);
 
         // Проектные персоны осиротели вместе с проектом — каскад: память (стор + Dify-датасет),
         // сама персона (файлы сабагента снимет OnPersonaDeleted), событие фронту

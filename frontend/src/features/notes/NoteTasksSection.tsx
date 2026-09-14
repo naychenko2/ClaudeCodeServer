@@ -1,10 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { X, Check } from 'lucide-react';
 import type { NoteTask } from '../../types';
-import { api } from '../../lib/api';
-import { bumpNotes } from '../../lib/notes';
-import { C, FONT, R } from '../../lib/design';
-import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
+import { api, bumpNotes, C, FONT, R, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
 
 // Секция «Задачи из заметки» (флаг notes-task-sync): чекбоксы заметки с промоутом в
 // настоящую задачу (появится в календаре), синхронной отметкой и сроком через дейт-пикер.

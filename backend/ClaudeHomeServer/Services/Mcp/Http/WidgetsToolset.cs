@@ -25,7 +25,7 @@ public sealed class WidgetsToolset : IMcpStaticToolset
     // Имя сервера = сегмент маршрута POST /mcp/{name} и ключ в конфиге хода. Константа —
     // единственная точка правды: литерал «widgets» в URL конфига хода (ClaudeSession)
     // собирается из неё, а не дублируется строкой
-    public const string ServerName = "widgets";
+    public const string ServerName = McpEndpoints.WidgetsName;
 
     public string Name => ServerName;
     public string Version => "1.0.0";

@@ -1,9 +1,9 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Text;
-using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Notes;
+using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Protocol;
-using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services;
 
@@ -15,12 +15,37 @@ namespace ClaudeHomeServer.Services;
 // (утренний хук в TaskSchedulerService, идемпотентность — по дате в briefing-state.json;
 // автозапуск гасится настройкой инстанса AppSettings.DailyBriefingEnabled, ручной сбор —
 // всегда доступен).
+//
+// Переехал из Services/Tasks/ в Services/ (Этап 5, волна 5): это фасад поперёк
+// Notes+Tasks+Llm+Push (см. NotesSubsystem.cs:9-11 про UnifiedSearchService — тот же
+// силуэт), класть его в Notes нельзя (потянет Task), в Task нельзя (потянет Notes+Llm).
+// Сидит в спине `Services/` как кросс-вертикальный клей — TasksSubsystem продолжает
+// регистрировать (см. TasksSubsystem.cs:76), `namespace Services.Tasks` больше не
+// собственный, TaskManager/TaskItem подтягиваются через using.
+
+// Утренний бриф-агент. Собирает из уже готовых источников:
+// просроченные и сегодняшние задачи, изменённые сегодня заметки, git-активность
+// проектов владельца за сутки — прогоняет через one-shot Claude и пишет
+// структурированный план дня в дневниковую заметку (секция «## Утренний бриф»),
+// затем шлёт тост + web-push. Работает on-demand (BriefingController) и по расписанию
+// (утренний хук в TaskSchedulerService, идемпотентность — по дате в briefing-state.json;
+// автозапуск гасится настройкой инстанса AppSettings.DailyBriefingEnabled, ручной сбор —
+// всегда доступен).
+
+// Подсистема Notes выключена — бриф по конструкции пишется в дневниковую заметку, писать
+// некуда. Отдельный тип вместо InvalidOperationException нужен границе: BriefingController
+// ловит его и отдаёт понятный отказ 503, иначе бросок доезжал до UnhandledExceptionHandler
+// → 500 + LogError со стектрейсом. Приём и наблюдаемый контракт те же, что у
+// SummaryUnavailableException → 503 + reason="notes_disabled" в «Итоге сессии»
+// (SessionSummaryService).
+public sealed class BriefingUnavailableException(string message) : Exception(message);
+
 public sealed class DailyBriefingService
 {
     private const string Header = "## Утренний бриф";
 
     private readonly TaskManager _tasks;
-    private readonly NotesService _notes;
+    private readonly INoteAccessor? _notes;
     private readonly ProjectManager _projects;
     private readonly UserStore _users;
     private readonly PersonaManager _personas;
@@ -28,8 +53,7 @@ public sealed class DailyBriefingService
     private readonly ProjectEventLogService? _events;
     private readonly Llm.ICheapTextRunner _cheap;
     private readonly PushService _push;
-    private readonly IHubContext<SessionHub> _hub;
-    private readonly NotificationService _notif;
+    private readonly ITaskNotificationDispatcher _notif;
     private readonly IConfiguration _config;
     private readonly ILogger<DailyBriefingService> _log;
 
@@ -40,12 +64,12 @@ public sealed class DailyBriefingService
     private readonly Lock _stateLock = new();
 
     public DailyBriefingService(
-        TaskManager tasks, NotesService notes, ProjectManager projects, UserStore users,
+        TaskManager tasks, ProjectManager projects, UserStore users,
         PersonaManager personas, AppSettingsService appSettings,
         Llm.ICheapTextRunner cheap, PushService push,
-        IHubContext<SessionHub> hub, NotificationService notif,
+        ITaskNotificationDispatcher notif,
         IConfiguration config, ILogger<DailyBriefingService> log,
-        ProjectEventLogService? events = null)
+        ProjectEventLogService? events = null, INoteAccessor? notes = null)
     {
         _tasks = tasks;
         _notes = notes;
@@ -55,7 +79,6 @@ public sealed class DailyBriefingService
         _appSettings = appSettings;
         _cheap = cheap;
         _push = push;
-        _hub = hub;
         _notif = notif;
         _config = config;
         _log = log;
@@ -118,6 +141,9 @@ public sealed class DailyBriefingService
 
     private async Task<NoteDetail> BuildAndWriteAsync(string userId, TimeZoneInfo tz, string day, CancellationToken ct)
     {
+        if (_notes is null)
+            throw new BriefingUnavailableException(
+                "Утренний бриф недоступен: подсистема «Заметки» отключена");
         var brief = await BuildBriefAsync(userId, tz, day, ct);
         var daily = _notes.GetOrCreateDaily(userId, day);
         var content = UpsertSection(daily.Content, Header, brief);
@@ -141,7 +167,7 @@ public sealed class DailyBriefingService
         var today = open.Where(t => t.DueDate == day).ToList();
 
         // Заметки, изменённые сегодня (кроме самого дневника — он и так меняется)
-        var changedNotes = _notes.GetSummaries(userId, null, null)
+        var changedNotes = (_notes?.GetSummaries(userId, null, null) ?? [])
             .Where(s => s.UpdatedAt.StartsWith(day, StringComparison.Ordinal))
             .Take(15).ToList();
 

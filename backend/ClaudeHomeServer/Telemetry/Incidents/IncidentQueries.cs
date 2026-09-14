@@ -91,7 +91,7 @@ public static class IncidentQueries
             spec.WriteString("signal", "logs");
             spec.WriteNumber("limit", limit);
             WriteOrderByTimestamp(spec);
-            WriteSelectFields(spec, "logs", "severity_text", "body");
+            WriteSelectFields(spec, "logs", "severity_text", "body", "exception.type");
             WriteFilter(spec, Combine(
                 "(severity_text = 'Warning' OR severity_text = 'Error')", Expression(environment)));
         });
@@ -238,7 +238,8 @@ public static class IncidentQueries
             lines.Add(new IncidentLogLine(
                 At: RowTime(row),
                 Severity: Str(row, "severity_text") ?? "Error",
-                Message: message.Length > 400 ? message[..400] + "…" : message));
+                Message: message.Length > 400 ? message[..400] + "…" : message,
+                ExceptionType: Str(row, "exception.type")));
         }
         return lines;
     }

@@ -1,6 +1,6 @@
 // Секция «План»: навигатор планов + статус + оглавление + текст.
 // Перенесена из ArtifactsPanel verbatim при разбиении на секции.
-import { useState, useEffect, useRef, type CSSProperties } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { ChevronRight, ChevronLeft, ChevronsRight, List, Network, FileText, AlertCircle, Loader2 } from 'lucide-react';
 import { C, FONT, R, SHADOW, SP, FS } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
@@ -11,49 +11,18 @@ import { MarkdownViewer } from '../MarkdownViewer';
 import { useHeadings, scrollToHeading, type Heading } from '../../hooks/useHeadings';
 import type { PlanArtifact, PlanStatus } from '../../hooks/useSessionArtifacts';
 import type { PlanMap } from '../../types';
-import { IconNotes } from '../../features/notes/shared';
-import { saveChatNote, openNoteById } from '../../features/notes/saveToNote';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
+import { useSlotItem } from '../../lib/subsystems/registry';
+import type { PlanChipCtx } from '../../lib/subsystems/registryCore';
 import { PlanRemarks } from '../../features/plan/PlanRemarks';
 import { PlanScheme } from '../plan/PlanScheme';
 import { api } from '../../lib/api';
 import { showToast } from '../../lib/toast';
 
-// Единый стиль кнопок-чипов в навигаторе плана («последний», «оглавление») —
-// утопленный фон (не белый), одинаковые размеры/типографика.
-const navChip: CSSProperties = {
-  height: 28, padding: '0 10px', borderRadius: R.md, cursor: 'pointer',
-  display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
-  fontFamily: FONT.sans, fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap',
-  border: `1px solid ${C.border}`, background: C.bgInset, color: C.textSecondary,
-};
-
 // Заголовок оглавления = реальный <h*> узел из отрендеренного плана; сбор — общий хук
 // useHeadings (им же пользуется панель «Документы»).
 
-// Чип «в заметку» в навигаторе плана — сохраняет текущий план в базу заметок
-function SavePlanChip({ plan, projectId }: { plan: string; projectId?: string }) {
-  const [savedId, setSavedId] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const save = () => {
-    if (busy) return;
-    if (savedId) { openNoteById(savedId); return; }
-    setBusy(true);
-    saveChatNote({ text: plan, projectId, titlePrefix: 'План: ' })
-      .then(n => { setSavedId(n.id); setTimeout(() => setSavedId(null), 6000); })
-      .catch(() => {})
-      .finally(() => setBusy(false));
-  };
-  return (
-    <button onClick={save} title={savedId ? 'Сохранено — открыть заметку' : 'Сохранить план в заметку'}
-      style={savedId
-        ? { ...navChip, background: C.successBg, border: `1px solid ${C.successBg}`, color: C.successText }
-        : { ...navChip, opacity: busy ? 0.6 : 1 }}>
-      <IconNotes size={13} />
-      {savedId ? 'открыть' : 'в заметку'}
-    </button>
-  );
-}
+// Чип «в заметку» приходит вкладом слота plan-action (фича Notes) — см. registry.
 
 const STATUS_META: Record<PlanStatus, { label: string; fg: string; bg: string }> = {
   approved: { label: 'одобрен', fg: C.successText, bg: C.successBg },
@@ -82,6 +51,8 @@ function NavArrow({ dir, disabled, onClick }: { dir: 'prev' | 'next'; disabled: 
 // Активный сегмент на C.plan, не C.accent — режим «План» живёт своей гаммой.
 
 export function PlanSection({ plans, projectId }: { plans: PlanArtifact[]; projectId?: string }) {
+  // Чип «в заметку» — вклад слота plan-action (ноль прямых импортов фичи Notes).
+  const planChip = useSlotItem<PlanChipCtx>('plan-action', 'plan-chip');
   // Навигация по планам: null = «не выбирал» → показываем последний
   const [planIdx, setPlanIdx] = useState<number | null>(null);
   const effIdx = planIdx == null ? plans.length - 1 : Math.min(Math.max(planIdx, 0), plans.length - 1);
@@ -178,7 +149,7 @@ export function PlanSection({ plans, projectId }: { plans: PlanArtifact[]; proje
           {STATUS_META[curPlan.status].label}
         </span>
         <div style={{ flex: 1 }} />
-        <SavePlanChip plan={curPlan.plan} projectId={projectId} />
+        {planChip?.render?.({ plan: curPlan.plan, projectId })}
         {plans.length > 1 && effIdx !== plans.length - 1 && (
           <Button
             variant="ghostFilled"

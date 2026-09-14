@@ -53,8 +53,8 @@ public class ClaudeSessionWatchPromptTests : IDisposable
             {
                 FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh",
                 Args = OperatingSystem.IsWindows()
-                    ? ["/c", "ping -n 120 127.0.0.1 >nul"]
-                    : ["-c", "sleep 120"],
+                    ? ["/c", "ping -n 10 127.0.0.1 >nul"]
+                    : ["-c", "sleep 10"],
                 WorkingDirectory = spec.WorkingDirectory,
                 RedirectStdin = spec.RedirectStdin,
                 Track = false,
@@ -64,6 +64,17 @@ public class ClaudeSessionWatchPromptTests : IDisposable
             return process;
         }
 
+                public int EstimateCommandLineLength(ProcessSpec spec)
+        {
+            // Заглушка для фейков: тесты, которые гоняют ClaudeSession.ApplyBudget,
+            // нуждаются в числовом ответе, но не в точной семантике раннера (её
+            // проверяет DockerProcessRunnerCmdlineEstimationTests на реальном раннере).
+            // Считаем FileName + args через TurnPromptAssembler.ArgCost — та же формула,
+            // что в LocalProcessRunner.EstimateCommandLineLength, без RawArguments.
+            var total = (spec.FileName ?? string.Empty).Length;
+            foreach (var a in spec.Args) total += TurnPromptAssembler.ArgCost(a);
+            return total;
+        }
         public void Kill(Process process, string? turnId = null)
         {
             try { process.Kill(entireProcessTree: true); } catch { /* уже мёртв */ }
@@ -75,7 +86,7 @@ public class ClaudeSessionWatchPromptTests : IDisposable
         var context = new LlmSessionContext(
             RootPath: _root,
             OnMessage: _ => Task.CompletedTask,
-            RawSystemPrompt: null, PermissionRules: null,
+            RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt, PermissionRules: null,
             TasksMcp: null,
             WatchMcp: watch,
             Launcher: new CapturingLauncher(_clis, _argsCaptured),

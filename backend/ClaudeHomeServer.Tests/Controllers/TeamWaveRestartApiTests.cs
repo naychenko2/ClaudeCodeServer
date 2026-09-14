@@ -3,6 +3,9 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Tasks;
+using ClaudeHomeServer.Services.Team;
+using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -92,7 +95,7 @@ public class TeamWaveRestartApiTests : IClassFixture<TestWebApplicationFactory>
             .GetValue(sessions)!;
         entries[session.Id]!.GetType().GetField("Accumulator")!
             .SetValue(entries[session.Id], null);
-        sessions.WithTeamState(session.Id, t =>
+        ((ITeamRunState)sessions).WithTeamState(session.Id, t =>
         {
             t.Stage = TeamImplementStage.Wave;
             t.WaveNumber = 1;
@@ -315,7 +318,7 @@ public class TeamWaveRestartApiTests : IClassFixture<TestWebApplicationFactory>
         Directory.CreateDirectory(projDir);
         await File.WriteAllTextAsync(Path.Combine(projDir, csid + ".jsonl"),
             "{\"type\":\"user\"}\n{\"type\":\"assistant\",\"mess");
-        ClaudeHomeServer.Services.WorkflowAgentParser.AddAllowedRoot(_factory.TempDir);
+        TranscriptRoots.AddAllowedRoot(_factory.TempDir);
 
         var refused = await _client.PostAsync(
             $"/api/chats/{sessionId}/team-wave/restart-turn", Body(new { }));

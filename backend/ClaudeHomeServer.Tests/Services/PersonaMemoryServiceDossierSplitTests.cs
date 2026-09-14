@@ -1,6 +1,11 @@
+using ClaudeHomeServer.Core.Telemetry;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Dossiers;
+using ClaudeHomeServer.Services.Memory;
+using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -43,7 +48,9 @@ public class PersonaMemoryServiceDossierSplitTests : IDisposable
             Microsoft.Extensions.Options.Options.Create(new DifyOptions()), wkStore);
         _personas = new PersonaManager(config);
         _dossierStore = new DossierStore(config);
-        _sut = new PersonaMemoryService(knowledge, _personas, userStore, config,
+        _sut = new PersonaMemoryService(knowledge, _personas, _personas,
+            new PersonaDirectoryAdapter(_personas), new NoopPersonaEvents(),
+            new NoopDifyMetrics(), userStore, config,
             NullLogger<PersonaMemoryService>.Instance, dossierRecall: new FakeRecall(_dossierStore));
 
         _persona = _personas.Create(OwnerId, "Ада", "Аналитик", null, null,

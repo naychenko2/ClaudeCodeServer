@@ -1,5 +1,5 @@
 using System.Collections.Concurrent;
-using ClaudeHomeServer.Telemetry;
+using ClaudeHomeServer.Core.Telemetry;
 
 namespace ClaudeHomeServer.Services.Mcp;
 

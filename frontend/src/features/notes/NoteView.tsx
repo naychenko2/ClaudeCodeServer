@@ -1,36 +1,28 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, lazy, Suspense } from 'react';
 import { Check, Copy, FileText, MessageCircle, Undo2, X } from 'lucide-react';
 import type { NoteDetail, NoteReply, Persona } from '../../types';
-import { api } from '../../lib/api';
-import { bumpNotes, isFavorite, useNotesVersion, withFavoriteTag, withoutFavoriteTag } from '../../lib/notes';
-import { C, FONT, ISLAND, R, TB } from '../../lib/design';
-import { lazy, Suspense } from 'react';
-import { MarkdownViewer, stripFrontmatter } from '../../components/MarkdownViewer';
-// CodeMirror тяжёлый — редактор грузим лениво, только при входе в правку
-const NoteEditor = lazy(() => import('./NoteEditor').then(m => ({ default: m.NoteEditor })));
-import { BackButton, ConfirmDialog, IconButton, Modal, WaitingIndicator } from '../../components/ui';
-import { useAiJob, runAiJob, patchAiJobResult, resetAiJob } from '../../lib/aiJobStore';
-import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
-import { tbBtnPrimary, tbBtnGhost } from '../../components/Toolbar';
-import { useNotes } from '../../lib/notes';
+import {
+  api, bumpNotes, useNotesVersion, isFavorite, withFavoriteTag, withoutFavoriteTag,
+  C, FONT, ISLAND, R, TB,
+  MarkdownViewer, stripFrontmatter, BackButton, ConfirmDialog, IconButton, Modal, WaitingIndicator,
+  useAiJob, runAiJob, patchAiJobResult, resetAiJob, ICON_SIZE, ICON_STROKE,
+  tbBtnPrimary, tbBtnGhost, useNotes, useOnline, OfflineError, useNow,
+  getNoteForView, saveNoteOffline, deleteNoteOffline, offlineResolve,
+  showToast, openChatById, beginAiBusy, endAiBusy,
+  registerCopyDoc, copyMarkdown, copyRenderedHtml,
+  ensurePersonasLoaded, personaLabel, usePersonas, NO_AUTOFILL,
+} from 'aihome_shell/kit';
 import type { NoteSource } from '../../types';
 import { NoteConnections } from './NoteConnections';
 import { NoteTasksSection } from './NoteTasksSection';
 import { DocCommentedMarkdown, PersonaAssignMenu, filterAssignablePersonas } from './DocComments';
-import { useOnline } from '../../hooks/useOnline';
-import { OfflineError } from '../../lib/offline';
-import { useNow } from '../../lib/useNow';
-import { getNoteForView, saveNoteOffline, deleteNoteOffline, offlineResolve } from '../../lib/notesOffline';
-import { showToast } from '../../lib/toast';
-import { openChatById } from '../../lib/openChat';
-import { beginAiBusy, endAiBusy } from '../../lib/ai/busy';
-import { registerCopyDoc, copyMarkdown, copyRenderedHtml } from '../../lib/selectionScope';
-import { ensurePersonasLoaded, personaLabel, usePersonas } from '../../lib/personas';
 import {
   SourceBadge,
   IconTrash, IconLink, IconSparkle, IconFolder, IconFolderMove, IconStar,
 } from './shared';
-import { NO_AUTOFILL } from '../../lib/noAutofill';
+
+// CodeMirror тяжёлый — редактор грузим лениво, только при входе в правку
+const NoteEditor = lazy(() => import('./NoteEditor').then(m => ({ default: m.NoteEditor })));
 
 // Просмотр и правка одной заметки; связи (backlinks/исходящие/упоминания/граф) —
 // в правом сайдбаре на десктопе, снизу на мобильном.

@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Knowledge;
 
 namespace ClaudeHomeServer.Services.Mcp.Http;
 
@@ -52,7 +53,7 @@ public sealed class DifyToolset(
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/dify/{sessionId}. Константа —
     // единственная точка правды для URL конфига хода (ClaudeSession)
-    public const string ServerName = "dify";
+    public const string ServerName = McpEndpoints.DifyName;
 
     public string Name => ServerName;
     public string Version => "1.0.0";
@@ -308,7 +309,7 @@ public sealed class DifyToolset(
 
     /// <summary>URL эндпоинта в конфиге хода: базовый адрес + маршрут тулсета с хвостом.</summary>
     public static string EndpointFor(string apiUrl, string sessionId) =>
-        McpHttpTransport.EndpointFor(apiUrl, ServerName) + "/" + RouteTail(sessionId);
+        McpEndpoints.EndpointFor(apiUrl, ServerName) + "/" + RouteTail(sessionId);
 
     // Имена search-only ядра: та же четвёрка, что у stdio-ветки при DIFY_SEARCH_ONLY=true
     internal static readonly HashSet<string> SearchOnlyNames =

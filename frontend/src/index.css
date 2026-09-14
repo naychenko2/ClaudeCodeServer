@@ -599,11 +599,14 @@ body {
    класс cc-msg--tapped вешает сам компонент. Раньше они висели поверх каждого
    ответа постоянно и мешали читать. pointer-events гасим, пока скрыты, чтобы
    невидимые кнопки не перехватывали тап по тексту. */
+/* Длинные пути в ленте чата обрезаем слева (видно имя файла/конец пути, а не начало).
+   direction: rtl + unicode-bidi: plaintext переворачивает только точку обрезки
+   ellipsis, а символы внутри сегментов (включая /) остаются в естественном порядке. */
+.cc-trunc-left { direction: rtl; text-align: left; unicode-bidi: plaintext; }
+
 @media (hover: none), (pointer: coarse) {
   .cc-actions { opacity: 0; pointer-events: none; transition: opacity 0.15s ease; }
   .cc-msg--tapped .cc-actions { opacity: 1; pointer-events: auto; }
-  /* Длинные пути обрезаем слева (видно имя файла/конец пути, а не начало) */
-  .cc-trunc-left { direction: rtl; text-align: left; unicode-bidi: plaintext; }
 }
 
 /* === Кнопка копирования блока кода (CodeCopyButton) === */

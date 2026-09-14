@@ -1,11 +1,14 @@
-using ClaudeHomeServer.Hubs;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Skills;
+using ClaudeHomeServer.Services.Notes;
+using ClaudeHomeServer.Services.Memory;
+using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
-using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -20,7 +23,10 @@ namespace ClaudeHomeServer.Tests.Services;
 public class SessionManagerSubscriptionMigrationTests : IDisposable
 {
     private readonly string _tempDir;
-    private readonly List<ServerMessage> _sentMessages = [];
+    // Широковещатель сообщений, в котором SessionManager ведёт поток событий про провайдеров
+    // (ProviderLimitMessage, ProviderSwitchedMessage). Тесты читают из него, как раньше
+    // читали из _broadcaster.Session.Select(t => t.Message) через mock IHubContext<SessionHub>.
+    private readonly TestSessionBroadcaster _broadcaster = new();
     // Назначения мест каталога (то, что админ ставит в диалоге «Поставщики моделей») последней
     // сборки BuildSut: в кортеж не выносим — он есть у каждого теста файла, а нужен одному.
     // Каждый тест зовёт BuildSut ровно раз, так что «последняя» здесь = «своя».
@@ -54,23 +60,10 @@ public class SessionManagerSubscriptionMigrationTests : IDisposable
         var projectManager = new ProjectManager(config, userStore, appSettings);
         var historyService = new ChatHistoryService(config);
 
-        var clients = new Mock<IHubClients>();
-        var clientProxy = new Mock<IClientProxy>();
-        clientProxy
-            .Setup(c => c.SendCoreAsync(It.IsAny<string>(), It.IsAny<object[]>(), It.IsAny<CancellationToken>()))
-            .Callback<string, object[], CancellationToken>((_, args, _) =>
-            {
-                if (args.Length > 0 && args[0] is ServerMessage msg) _sentMessages.Add(msg);
-            })
-            .Returns(Task.CompletedTask);
-        clients.Setup(c => c.Group(It.IsAny<string>())).Returns(clientProxy.Object);
-        var hub = new Mock<IHubContext<SessionHub>>();
-        hub.Setup(h => h.Clients).Returns(clients.Object);
-
         var llmProviders = new LlmProviderRegistry(config);
         var subPool = new ClaudeSubscriptionPool(config);
-        var adapters = new LlmSessionAdapterFactory(config, new SkillsService(),
-            new WorkspaceKnowledgeStore(config), llmProviders, subPool);
+        var adapters = new LlmSessionAdapterFactory(config, new AgentPromptSourceAdapter(new SkillsService()),
+            new WorkspaceDatasetLookup(new WorkspaceKnowledgeStore(config)), llmProviders, subPool);
         var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, config);
         var usage = new UsageService(config);
         var jwt = new JwtService(config, userStore, NullLogger<JwtService>.Instance);
@@ -84,11 +77,8 @@ public class SessionManagerSubscriptionMigrationTests : IDisposable
         var notesKb = new NotesKnowledgeService(knowledge, notesSvc, userStore, config,
             NullLogger<NotesKnowledgeService>.Instance);
         var personas = new PersonaManager(config);
-        var personaMemory = new PersonaMemoryService(knowledge, personas, userStore, config,
-            NullLogger<PersonaMemoryService>.Instance);
-        var bindings = new PersonaBindingsService(personas, projectManager, wkStore, notesSvc, notesKb,
-            knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance);
-        var promptBuilder = new PersonaPromptBuilder(llmProviders);
+        var bindings = new PersonaBindingsService(personas, projectManager, wkStore,
+            knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
 
@@ -98,10 +88,10 @@ public class SessionManagerSubscriptionMigrationTests : IDisposable
         var assignments = new ModelAssignmentResolver(appSettings, _actionOverrides,
             new UserModelTierResolver(userStore, appSettings));
 
-        var sut = new SessionManager(projectManager, hub.Object, historyService, config, adapters, falCost,
-            usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas,
-            personaMemory, bindings, promptBuilder, subPool, NullLogger<SessionManager>.Instance,
-            TestLauncherFactory.Instance, sandbox, assignments: assignments);
+        var sut = new SessionManager(projectManager, historyService, config, adapters, falCost,
+            usage, appSettings, userStore, jwt, server.Object, llmProviders, flags, personas,
+            bindings, subPool, NullLogger<SessionManager>.Instance,
+            TestLauncherFactory.Instance, sandbox, _broadcaster, assignments: assignments);
 
         return (sut, subPool, llmProviders, userStore, projectManager);
     }
@@ -127,7 +117,7 @@ public class SessionManagerSubscriptionMigrationTests : IDisposable
 
         await sut.OfferProviderFallbackAsync(session.Id, resetsAt: null);
 
-        var msg = _sentMessages.OfType<ProviderLimitMessage>().Should().ContainSingle().Subject;
+        var msg = _broadcaster.Session.Select(t => t.Message).OfType<ProviderLimitMessage>().Should().ContainSingle().Subject;
         var option = msg.Providers.Should().ContainSingle().Subject;
         option.Key.Should().Be("acc-b");
         option.Kind.Should().Be("subscription");
@@ -152,7 +142,7 @@ public class SessionManagerSubscriptionMigrationTests : IDisposable
 
         await sut.OfferProviderFallbackAsync(session.Id, resetsAt: null);
 
-        var msg = _sentMessages.OfType<ProviderLimitMessage>().Should().ContainSingle().Subject;
+        var msg = _broadcaster.Session.Select(t => t.Message).OfType<ProviderLimitMessage>().Should().ContainSingle().Subject;
         msg.Providers.Select(o => o.Key).Should().BeEquivalentTo(["acc-c"]);
     }
 
@@ -174,7 +164,7 @@ public class SessionManagerSubscriptionMigrationTests : IDisposable
         await sut.OfferProviderFallbackAsync(session.Id, resetsAt: null);
 
         // acc-b жив, но без Opus — на opus-модели карточка не предложит его вовсе
-        _sentMessages.OfType<ProviderLimitMessage>().Should().BeEmpty();
+        _broadcaster.Session.Select(t => t.Message).OfType<ProviderLimitMessage>().Should().BeEmpty();
     }
 
     // --- MigrateProviderAsync: явный ключ подписки ---
@@ -208,7 +198,7 @@ public class SessionManagerSubscriptionMigrationTests : IDisposable
             TranscriptMigrator.FlattenCwd(dir), claudeSessionId + ".jsonl");
         File.Exists(dstFile).Should().BeTrue("транскрипт должен переехать в профиль целевой подписки");
         // Подпись разделителя — про подписку, а не безликое «Продолжено на AI»
-        _sentMessages.OfType<ProviderSwitchedMessage>().Single().Label
+        _broadcaster.Session.Select(t => t.Message).OfType<ProviderSwitchedMessage>().Single().Label
             .Should().Be("Продолжено на подписке «acc-b»");
     }
 
@@ -240,7 +230,7 @@ public class SessionManagerSubscriptionMigrationTests : IDisposable
         var updated = await sut.MigrateProviderAsync(session.Id, user.Id, "sonnet");
 
         updated.Provider.Should().Be("acc-b");
-        _sentMessages.OfType<ProviderSwitchedMessage>().Should().ContainSingle()
+        _broadcaster.Session.Select(t => t.Message).OfType<ProviderSwitchedMessage>().Should().ContainSingle()
             .Which.Label.Should().BeNull("смены типа поставщика не было — ротация внутри пула");
     }
 

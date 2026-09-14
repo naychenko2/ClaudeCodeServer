@@ -58,17 +58,28 @@ public sealed class PromptSnapshotStore
 
     /// <summary>Записать снимок хода. Возвращает id (он же имя файла) либо null при сбое.</summary>
     public string? Save(string sessionId, PromptSnapshotDraft draft)
+        => Save(sessionId, NewId(), draft);
+
+    /// <summary>
+    /// Записать снимок хода С ЗАДАННЫМ id: путь вызова из ClaudeSession, которому id нужен
+    /// ДО отправки события (UI-кнопка «какой промпт ушёл» требует его синхронно, а шина
+    /// событий хода возврата не даёт). Контракт id тот же, что у NewId(): {unixMs}-{seq}.
+    /// </summary>
+    public string? Save(string sessionId, string id, PromptSnapshotDraft draft)
     {
-        if (!SafeId.IsMatch(sessionId)) return null;
+        if (!SafeId.IsMatch(sessionId) || !SafeId.IsMatch(id)) return null;
 
         try
         {
-            var id = NewId();
             var snapshot = new PromptSnapshotDto(
                 id, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                 draft.Applied, draft.InheritedFromId,
                 Trim(draft.Sections), draft.CliArgs, draft.McpServers,
-                draft.Model, draft.Mode, draft.CliLayer);
+                draft.Model, draft.Mode, draft.CliLayer,
+                // TruncatedSections режутся по тому же Trim — каждая такая запись короткая
+                // (поясняющий текст, не исходное содержимое секции) и редко превышает
+                // MaxSectionChars, но граница у неё та же: снимок — диагностика, а не архив.
+                TruncatedSections: TrimOrNull(draft.TruncatedSections));
 
             snapshot = DedupCliLayer(sessionId, snapshot);
 
@@ -172,15 +183,21 @@ public sealed class PromptSnapshotStore
     private string PathFor(string sessionId, string snapshotId) =>
         Path.Combine(_basePath, sessionId, snapshotId + ".json.gz");
 
-    // Счётчик внутри процесса — суффикс имени. Именно возрастающий, а не случайный:
-    // ретеншн сортирует файлы ПО ИМЕНИ, и у снимков одной миллисекунды случайный суффикс
-    // задавал бы неверный порядок — вытеснялись бы не самые старые.
-    private static int _seq;
+    // Счётчик переехал в Core (SnapshotIdGenerator._seq, волна 6) — общий на оба генератора,
+    // иначе вернутся коллизии id в одной миллисекунде. Именно возрастающий, а не
+    // случайный: ретеншн сортирует файлы ПО ИМЕНИ, и у снимков одной миллисекунды
+    // случайный суффикс задавал бы неверный порядок — вытеснялись бы не самые старые.
 
     // {unixMs}-{seq}: лексикографически сортируемо по времени. После рестарта счётчик
     // начинается заново, но старшая часть (миллисекунды) уже больше — порядок сохраняется.
-    private static string NewId() =>
-        $"{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}-{Interlocked.Increment(ref _seq) & 0xFFFFF:x5}";
+    private static string NewId() => SnapshotIdGenerator.NewPublicId();
+
+    /// <summary>
+    /// Генератор id для ClaudeSession: ему нужен id ДО шинной публикации, чтобы отправить
+    /// PromptSnapshotMessage в UI синхронно (шина — Notification, возврата не даёт).
+    /// Контракт совпадает с NewId(), и счётчик общий — без коллизий.
+    /// </summary>
+    public static string NewPublicId() => SnapshotIdGenerator.NewPublicId();
 
     private static void WriteFile(string path, PromptSnapshotDto snapshot)
     {
@@ -229,6 +246,14 @@ public sealed class PromptSnapshotStore
             result.Add(s with { Text = text });
         }
         return result;
+    }
+
+    // TruncatedSections — необязательное поле. null/пусто → null (срезки не было);
+    // непусто → пропущено через Trim (потолки те же, что у Sections).
+    private static IReadOnlyList<PromptSectionDto>? TrimOrNull(IReadOnlyList<PromptSectionDto>? sections)
+    {
+        if (sections is null || sections.Count == 0) return null;
+        return Trim(sections);
     }
 
     // Файловая часть слоя CLI (CLAUDE.md + скиллы) меняется редко, а весит больше всего

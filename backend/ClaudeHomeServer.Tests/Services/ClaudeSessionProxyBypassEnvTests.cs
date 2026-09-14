@@ -19,7 +19,21 @@ namespace ClaudeHomeServer.Tests.Services;
 public class ClaudeSessionProxyBypassEnvTests : IDisposable
 {
     private const string Sentinel = "ccs-no-proxy-sentinel.example";
+    private const string LocalModelId = "qwen3.8-27b";
     private readonly List<Process> _processes = [];
+
+    // Реестр с двумя провайдерами: локальный vLLM на loopback и облачный deepseek —
+    // на нём же проверяется, что поведение непричастных ходов не изменилось.
+    private static LlmProviderRegistry LocalProviders() => new(Helpers.TestConfig.Build(
+        new Dictionary<string, string?>
+        {
+            ["LlmProviders:local-qwen:AnthropicBaseUrl"] = "http://127.0.0.1:18020",
+            ["LlmProviders:local-qwen:IsLocal"] = "true",
+            ["LlmProviders:local-qwen:Models:0:Id"] = LocalModelId,
+            ["LlmProviders:deepseek:AnthropicBaseUrl"] = "https://api.deepseek.com/anthropic",
+            ["LlmProviders:deepseek:ApiKey"] = "sk-test",
+            ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-v4-pro",
+        }));
 
     public void Dispose()
     {
@@ -64,6 +78,17 @@ public class ClaudeSessionProxyBypassEnvTests : IDisposable
             return process;
         }
 
+                public int EstimateCommandLineLength(ProcessSpec spec)
+        {
+            // Заглушка для фейков: тесты, которые гоняют ClaudeSession.ApplyBudget,
+            // нуждаются в числовом ответе, но не в точной семантике раннера (её
+            // проверяет DockerProcessRunnerCmdlineEstimationTests на реальном раннере).
+            // Считаем FileName + args через TurnPromptAssembler.ArgCost — та же формула,
+            // что в LocalProcessRunner.EstimateCommandLineLength, без RawArguments.
+            var total = (spec.FileName ?? string.Empty).Length;
+            foreach (var a in spec.Args) total += TurnPromptAssembler.ArgCost(a);
+            return total;
+        }
         public void Kill(Process process, string? turnId = null)
         {
             try { process.Kill(entireProcessTree: true); }
@@ -73,7 +98,7 @@ public class ClaudeSessionProxyBypassEnvTests : IDisposable
 
     private async Task<Dictionary<string, string>?> RunTurnAsync(bool sandboxed, bool useHttp,
         WidgetsMcpContext? widgets = null, PersonaAgentsContext? personaAgents = null,
-        Func<bool>? httpEnabled = null)
+        Func<bool>? httpEnabled = null, LlmProviderRegistry? providers = null, string? model = null)
     {
         var exited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -88,7 +113,7 @@ public class ClaudeSessionProxyBypassEnvTests : IDisposable
                 if (m is ExitedMessage) exited.TrySetResult();
                 return Task.CompletedTask;
             },
-            RawSystemPrompt: null,
+            RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
             PermissionRules: null,
             TasksMcp: null,
             WidgetsMcp: widgets ?? new WidgetsMcpContext("http://localhost:5999", () => "tok", UseHttp: useHttp),
@@ -98,7 +123,8 @@ public class ClaudeSessionProxyBypassEnvTests : IDisposable
             HttpMcpActive: useHttp,
             HttpMcpEnabledProvider: httpEnabled,
             Launcher: launcher);
-        var session = new ClaudeSession(new Session(), context);
+        var session = new ClaudeSession(new Session { Model = model ?? "" }, context,
+            providers: providers);
 
         var prev = Environment.GetEnvironmentVariable("NO_PROXY");
         Environment.SetEnvironmentVariable("NO_PROXY", Sentinel);
@@ -180,6 +206,52 @@ public class ClaudeSessionProxyBypassEnvTests : IDisposable
 
         env!.ContainsKey("NO_PROXY").Should().BeFalse(
             "откат уносит не только http-узлы конфига, но и env-обход прокси");
+        env.ContainsKey("no_proxy").Should().BeFalse();
+    }
+
+    /// <summary>
+    /// Блокер §7б local-vllm-provider.md (грабля 1), сквозной: ход на ЛОКАЛЬНОМ провайдере
+    /// получает обход прокси даже при выключенном http-транспорте MCP. Без этого запрос CLI
+    /// к 127.0.0.1 уезжает в HTTP_PROXY и ход падает «Connection refused — a firewall or proxy
+    /// may be blocking it» — так был потерян первый замер локальной модели.
+    /// </summary>
+    [Fact]
+    public async Task ХодНаЛокальномПровайдере_БезHttpMcp_ОбходСтоит()
+    {
+        var env = await RunTurnAsync(sandboxed: false, useHttp: false,
+            providers: LocalProviders(), model: LocalModelId);
+
+        var noProxy = env!["NO_PROXY"].Split(',');
+        noProxy.Should().Contain("127.0.0.1", "локальный эндпоинт не смеет уезжать в прокси");
+        noProxy.Should().Contain(Sentinel, "унаследованные исключения сохраняются");
+        env["no_proxy"].Should().Be(env["NO_PROXY"]);
+    }
+
+    /// <summary>
+    /// Обратная сторона той же правки: облачный провайдер при выключенном http-транспорте
+    /// оверрайда по-прежнему не получает — поведение непричастных ходов не меняется.
+    /// </summary>
+    [Fact]
+    public async Task ХодНаОблачномПровайдере_БезHttpMcp_ОверрайдаНет()
+    {
+        var env = await RunTurnAsync(sandboxed: false, useHttp: false,
+            providers: LocalProviders(), model: "deepseek-v4-pro");
+
+        env!.ContainsKey("NO_PROXY").Should().BeFalse();
+        env.ContainsKey("no_proxy").Should().BeFalse();
+    }
+
+    /// <summary>
+    /// Песочница сильнее: у container-владельца средой exec-процесса владеет контейнер,
+    /// локальный провайдер этого не меняет.
+    /// </summary>
+    [Fact]
+    public async Task ХодНаЛокальномПровайдереВПесочнице_ОверрайдаНет()
+    {
+        var env = await RunTurnAsync(sandboxed: true, useHttp: false,
+            providers: LocalProviders(), model: LocalModelId);
+
+        env!.ContainsKey("NO_PROXY").Should().BeFalse();
         env.ContainsKey("no_proxy").Should().BeFalse();
     }
 

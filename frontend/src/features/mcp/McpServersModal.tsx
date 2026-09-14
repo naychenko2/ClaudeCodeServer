@@ -56,7 +56,15 @@ export function McpServersModal({ onClose, isAdmin }: { onClose: () => void; isA
   };
 
   const tabs: { key: TabKey; label: string; count?: number; admin?: boolean }[] = [
-    { key: 'servers', label: 'Серверы', count: data.servers?.length || undefined },
+    // Счётчик на вкладке «Серверы» — по своим записям, без интеграций: те показываются
+    // карточкой HiggsfieldCard и не должны считаться «вашими серверами» (McpServerList
+    // их не рендерит). Иначе у владельца с одной Higgsfield вкладка светилась бы «1»,
+    // а под ней — пустое состояние «своих серверов пока нет»
+    {
+      key: 'servers',
+      label: 'Серверы',
+      count: data.servers?.filter(s => s.group !== 'integration').length || undefined,
+    },
     { key: 'add', label: editing ? 'Правка' : (catalogDraft ? 'Каталог' : 'Добавить') },
     ...(catalogOn ? [{ key: 'catalog' as TabKey, label: 'Каталог' }] : []),
     { key: 'access', label: 'Доступ' },

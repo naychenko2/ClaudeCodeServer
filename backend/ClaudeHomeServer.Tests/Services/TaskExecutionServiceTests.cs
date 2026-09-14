@@ -114,7 +114,7 @@ public class TaskExecutionServiceTests
         n.Body.Should().Be("Задача");
         n.Kind.Should().Be("success");
         n.PersonaId.Should().BeNull();
-        n.Url.Should().Be(TaskSchedulerService.TaskUrl(task));
+        n.Url.Should().Be(TaskUrl.Of(task));
     }
 
     [Fact]
@@ -167,7 +167,7 @@ public class TaskExecutionServiceTests
         var n = TaskExecutionService.BuildDelegatorNotification(task, ok: false, delegator, source);
 
         n.Title.Should().Be("Делегированная задача не выполнена");
-        n.Url.Should().Be(TaskSchedulerService.TaskUrl(task));
+        n.Url.Should().Be(TaskUrl.Of(task));
     }
 
     [Fact]
@@ -728,7 +728,9 @@ public class TaskExecutionServiceTests
         // Задача закрыта без запуска исполнителя — эффективного родителя взять неоткуда
         var source = Guid.NewGuid().ToString();
 
-        TaskExecutionService.ResolveReportTarget(null, source).Should().Be(source);
+        TaskExecutionService.ResolveReportTarget(null, source, out var fromFallback)
+            .Should().Be(source);
+        fromFallback.Should().BeFalse("нет чата-исполнителя — это нормальный путь, а не аномалия");
     }
 
     [Fact]
@@ -740,7 +742,9 @@ public class TaskExecutionServiceTests
         var manual = Guid.NewGuid().ToString();
         var executorSession = new Session { TaskId = "t-1", ParentOverrideId = manual };
 
-        TaskExecutionService.ResolveReportTarget(executorSession, source).Should().Be(manual);
+        TaskExecutionService.ResolveReportTarget(executorSession, source, out var fromFallback)
+            .Should().Be(manual);
+        fromFallback.Should().BeFalse("явная ручная группировка — не fallback");
     }
 
     [Fact]
@@ -749,8 +753,43 @@ public class TaskExecutionServiceTests
         // «Вынес из группы» значит «не докладывай туда» — доклад гасится целиком
         var executorSession = new Session { TaskId = "t-1", ParentDetached = true };
 
-        TaskExecutionService.ResolveReportTarget(executorSession, Guid.NewGuid().ToString())
+        TaskExecutionService.ResolveReportTarget(executorSession, Guid.NewGuid().ToString(),
+                out var fromFallback)
             .Should().BeNull();
+        fromFallback.Should().BeFalse("ParentDetached=true — гашение по решению пользователя, не аномалия");
+    }
+
+    // Новая ветка: ParentOverrideId=null && !ParentDetached, но резолвер по задаче не дал id.
+    // Раньше это маскировалось под «вынесен в корень» (ParentSessionId==null), и доклад
+    // терялся с Information-логом — что сутки прятало поломку DI-резолвера 2026-09-13/14.
+    // Теперь: возвращаем SourceSessionId (аномалия не должна терять доклад) и взводим
+    // fromFallback, чтобы вызывающий код залогировал Warning.
+    [Fact]
+    public void ResolveReportTarget_РезолверНеДалОтвета_FallbackНаSource()
+    {
+        var source = Guid.NewGuid().ToString();
+        // TaskId задан, ParentOverrideId/ParentDetached пусты — ParentSessionId уйдёт в
+        // TaskSourceSessionResolver(TaskId). Без установленного резолвера он вернёт null:
+        // это и есть «резолвер не дал ответа».
+        var executorSession = new Session { TaskId = "t-orphan" };
+
+        TaskExecutionService.ResolveReportTarget(executorSession, source, out var fromFallback)
+            .Should().Be(source);
+        fromFallback.Should().BeTrue("аномалия — резолвер по задаче не вернул id, это не detached");
+    }
+
+    // Без TaskId ParentSessionId всегда null без вызова резолвера — НЕ аномалия, а просто
+    // корневой чат без задачи. Гасим как detached (доклад не привязан к чату), но fromFallback
+    // НЕ взводим — это не «резолвер не дал ответа», это «у чата нет задачи вовсе».
+    [Fact]
+    public void ResolveReportTarget_КорневойЧатБезЗадачи_ГасимКакDetached()
+    {
+        var source = Guid.NewGuid().ToString();
+        var executorSession = new Session();  // ни TaskId, ни ParentOverrideId, ни ParentDetached
+
+        TaskExecutionService.ResolveReportTarget(executorSession, source, out var fromFallback)
+            .Should().BeNull("корневой чат без задачи — докладывать некуда, гасим как detached");
+        fromFallback.Should().BeFalse("нет TaskId — это не аномалия резолвера, а просто корневой чат");
     }
 
     // ─── MINOR 2: групповой чат — реакция только от лица постановщика ───────────

@@ -559,7 +559,7 @@ internal class TurnAccumulator
             if (_textBuf.Length > 0)
             {
                 var raw = _teamRawText.ToString() + _textBuf;
-                var safe = SessionManager.TrimUnresolvedMarkerOpen(SessionManager.StripTeamProtocolMarkers(raw));
+                var safe = TeamProtocolMarkers.TrimUnresolvedMarkerOpen(TeamProtocolMarkers.StripTeamProtocolMarkers(raw));
                 // Пусто после стрижки (ход отвечает одним маркером — напр. `<no-reply/>`) —
                 // поста нет: тот же гард, что в FlushBuffers, иначе снимок посреди хода
                 // записал бы в историю пузырь из одних пробелов.
@@ -610,8 +610,8 @@ internal class TurnAccumulator
             // инструмента, разъехавшись между несколькими FlushBuffers.
             var raw = _teamRawText.ToString();
             var safe = final
-                ? SessionManager.StripTeamProtocolMarkers(raw)
-                : SessionManager.TrimUnresolvedMarkerOpen(SessionManager.StripTeamProtocolMarkers(raw));
+                ? TeamProtocolMarkers.StripTeamProtocolMarkers(raw)
+                : TeamProtocolMarkers.TrimUnresolvedMarkerOpen(TeamProtocolMarkers.StripTeamProtocolMarkers(raw));
             // Гард пустого хода (B4 доклада о задаче): ответ ровно маркером (`<no-reply/>`,
             // `<team:talk/>`) после стрижки оставляет пустую строку или один перевод строки —
             // записи в истории быть не должно, иначе в ленте всплывёт призрачный пустой пост.

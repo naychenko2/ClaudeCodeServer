@@ -22,6 +22,7 @@ import { ChatTreeBranch, nestTreeRows } from './ChatTreeRow';
 import { ChatGroupingDnd } from './ChatGroupingDnd';
 import { ListDateDivider } from './ListDateDivider';
 import { showToast } from '../lib/toast';
+import { useSubsystem } from '../lib/subsystems';
 
 interface Props {
   chats: Session[];
@@ -48,6 +49,8 @@ const GROUP_BY_OPTIONS: ChatGroupBy[] = ['days', 'none'];
 
 export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited, onDeleted, onArchive, isMobile = false, workflowRunningFor, bare = false }: Props) {
   const online = useOnline();
+  // «Сохранить в заметки» — только при включённой подсистеме заметок (см. SessionList)
+  const notesOn = useSubsystem('notes');
   // История чата под курсором едет до клика — открытие обходится без спиннера
   const warmHover = useHoverWarm();
   // Подписка на стор персон — перерисоваться, когда список подгрузится (аватары чатов персон)
@@ -203,7 +206,7 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
         // и достаётся. Сеть при этом остаётся у владельца списка (onArchive выше).
         if (!archived) leaveArchiveAndOpen(chat);
       } : undefined}
-      onSaveAsNote={online ? () => handleSaveAsNote(chat) : undefined}
+      onSaveAsNote={online && notesOn ? () => handleSaveAsNote(chat) : undefined}
       swipeOpen={openSwipeId === chat.id}
       onSwipeToggle={open => setOpenSwipeId(open ? chat.id : null)}
     />

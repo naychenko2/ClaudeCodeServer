@@ -1,10 +1,13 @@
-using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Skills;
+using ClaudeHomeServer.Services.Notes;
+using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
+using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
-using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -399,19 +402,12 @@ public class ChatArchiveServiceTests : IDisposable
         var projects = new ProjectManager(config, users, appSettings);
         var history = new ChatHistoryService(config);
 
-        var clientProxy = new Mock<IClientProxy>();
-        clientProxy
-            .Setup(c => c.SendCoreAsync(It.IsAny<string>(), It.IsAny<object[]>(), It.IsAny<CancellationToken>()))
-            .Returns(Task.CompletedTask);
-        var clients = new Mock<IHubClients>();
-        clients.Setup(c => c.Group(It.IsAny<string>())).Returns(clientProxy.Object);
-        var hub = new Mock<IHubContext<SessionHub>>();
-        hub.Setup(h => h.Clients).Returns(clients.Object);
+        var broadcaster = new TestSessionBroadcaster();
 
         var llmProviders = new LlmProviderRegistry(config);
         var subPool = new ClaudeSubscriptionPool(config);
-        var adapters = new LlmSessionAdapterFactory(config, new SkillsService(),
-            new WorkspaceKnowledgeStore(config), llmProviders, subPool);
+        var adapters = new LlmSessionAdapterFactory(config, new AgentPromptSourceAdapter(new SkillsService()),
+            new WorkspaceDatasetLookup(new WorkspaceKnowledgeStore(config)), llmProviders, subPool);
         var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, config);
         var usage = new UsageService(config);
         var jwt = new JwtService(config, users, NullLogger<JwtService>.Instance);
@@ -425,18 +421,15 @@ public class ChatArchiveServiceTests : IDisposable
         var notesKb = new NotesKnowledgeService(knowledge, notesSvc, users, config,
             NullLogger<NotesKnowledgeService>.Instance);
         var personas = new PersonaManager(config);
-        var personaMemory = new PersonaMemoryService(knowledge, personas, users, config,
-            NullLogger<PersonaMemoryService>.Instance);
-        var bindings = new PersonaBindingsService(personas, projects, wkStore, notesSvc, notesKb,
-            knowledge, new SkillsService(), users, config, NullLogger<PersonaBindingsService>.Instance);
-        var promptBuilder = new PersonaPromptBuilder(llmProviders);
+        var bindings = new PersonaBindingsService(personas, projects, wkStore,
+            knowledge, new SkillsService(), users, config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
 
-        var sessions = new SessionManager(projects, hub.Object, history, config, adapters, falCost,
-            usage, appSettings, users, jwt, server.Object, llmProviders, notesKb, flags, personas,
-            personaMemory, bindings, promptBuilder, subPool, NullLogger<SessionManager>.Instance,
-            TestLauncherFactory.Instance, sandbox);
+        var sessions = new SessionManager(projects, history, config, adapters, falCost,
+            usage, appSettings, users, jwt, server.Object, llmProviders, flags, personas,
+            bindings, subPool, NullLogger<SessionManager>.Instance,
+            TestLauncherFactory.Instance, sandbox, broadcaster: broadcaster);
         var notifStore = new NotificationStore(config, NullLogger<NotificationStore>.Instance);
         return (sessions, projects, users, flags, notifStore);
     }
@@ -448,19 +441,11 @@ public class ChatArchiveServiceTests : IDisposable
         {
             ["DataPath"] = Path.Combine(tempDir, "projects.json"),
         }).Build();
-        var clientProxy = new Mock<IClientProxy>();
-        clientProxy
-            .Setup(c => c.SendCoreAsync(It.IsAny<string>(), It.IsAny<object[]>(), It.IsAny<CancellationToken>()))
-            .Returns(Task.CompletedTask);
-        var clients = new Mock<IHubClients>();
-        clients.Setup(c => c.Group(It.IsAny<string>())).Returns(clientProxy.Object);
-        var hub = new Mock<IHubContext<SessionHub>>();
-        hub.Setup(h => h.Clients).Returns(clients.Object);
         var users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         var push = new PushService(config,
             new PushSubscriptionStore(config), new JwtService(config, users, NullLogger<JwtService>.Instance),
             NullLogger<PushService>.Instance);
-        return new NotificationService(notifStore, hub.Object, push, new PersonaManager(config), projects,
+        return new NotificationService(notifStore, new TestSessionBroadcaster(), push, new PersonaManager(config), projects,
             NullLogger<NotificationService>.Instance);
     }
 }

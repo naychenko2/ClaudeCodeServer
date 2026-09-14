@@ -16,9 +16,12 @@ public static class BackupPaths
     // синканные plugins, кеши — осознанно за бортом: основной архив уезжает в облако.
     private static readonly string[] ProfileRoots = ["claude-profiles", "sandbox-profiles"];
 
-    // Секреты: в основной архив не попадают никогда, уезжают отдельным локальным архивом
-    public static readonly string[] SecretFileNames =
-        ["jwt-secret.txt", "vapid-keys.json", "module-keys.json", "mcp-secrets.json"];
+    // Секреты: в основной архив не попадают никогда, уезжают отдельным локальным архивом.
+    // Реестр имён — примитив инфраструктуры, вынесен в `Services.InstanceSecretFiles`
+    // (задача `57b5e9bc`, шаг 5): общий источник для Backup и редактора секретов
+    // (`Dossiers.InstanceSecretsProvider`). Здесь оставлен тонкий алиас ради обратной
+    // совместимости внутренних вызовов Backup.
+    public static readonly string[] SecretFileNames = InstanceSecretFiles.Names;
 
     /// <summary>
     /// Брать ли файл в основной архив. <paramref name="relativePath"/> — путь относительно
@@ -55,6 +58,10 @@ public static class BackupPaths
         if (root.Equals("logs", StringComparison.OrdinalIgnoreCase)) return false;
         // Конфиги MCP на один ход и cwd one-shot вызовов — живут минуты
         if (root.Equals("sandbox-tmp", StringComparison.OrdinalIgnoreCase)) return false;
+        // Корзина синка профилей (ADR-015 §5.3): мусорная зона с TTL, в облако ехать
+        // не должна и восстановлению из архива не подлежит. По ADR-015 восстановление
+        // архива = повторное усыновление, а не возврат .sync-trash.
+        if (root.Equals(Llm.SyncTrashPaths.RootDirName, StringComparison.OrdinalIgnoreCase)) return false;
         // Последний известный статус MCP-серверов: наблюдение, а не настройка. Восстановленное
         // из архива, оно врёт — описывает состояние чужой машины в прошлом. Заново приедет
         // из первого же system/init (или пробы по кнопке).

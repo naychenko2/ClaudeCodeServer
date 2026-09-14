@@ -2,14 +2,15 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using ClaudeHomeServer.Hubs;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Notes;
+using ClaudeHomeServer.Services.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Controllers;
 
@@ -19,7 +20,7 @@ namespace ClaudeHomeServer.Controllers;
 [Route("api/projects/{projectId}/tasks")]
 public class ProjectTasksController(
     TaskManager tasks, ProjectManager projects, PersonaManager personas,
-    IHubContext<SessionHub> hub, PersonaBindingsService bindings) : ControllerBase
+    ISessionBroadcaster broadcaster, PersonaBindingsService bindings) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -49,7 +50,6 @@ public class ProjectTasksController(
         // Колонка доски → статус выводим из её категории
         var cat = BoardColumnHelper.Category(project, req.ColumnId);
         if (cat is not null) req = req with { Status = cat };
-        var targetIsReview = BoardColumnHelper.IsReview(project, req.ColumnId);
         // Полный объект колонки — для гейта DefectRules.EnsureNotClosedAtCreate:
         // дефект в Todo с columnId="done" не должен пройти мимо правила только потому,
         // что клиент не привёл Status в соответствие с категорией колонки.
@@ -76,13 +76,13 @@ public class ProjectTasksController(
         TaskItem task;
         try
         {
-            task = tasks.Create(projectId, UserId, req, targetIsReview, targetColumn);
+            task = tasks.Create(projectId, UserId, req, targetColumn);
         }
         catch (InvalidOperationException ex)
         {
             return BadRequest(new { error = ex.Message });
         }
-        await hub.BroadcastTaskChangedAsync(UserId, "created", task);
+        await broadcaster.ToOwner(UserId, new TaskChangedMessage("created", task));
         return Ok(task);
     }
 }
@@ -92,9 +92,13 @@ public class ProjectTasksController(
 [Authorize]
 [Route("api/tasks")]
 public class TasksController(
-    TaskManager tasks, IHubContext<SessionHub> hub, TaskAiService ai, ProjectManager projects,
-    PersonaManager personas, TaskExecutionService executor, NoteTaskSyncService noteSync,
-    PersonaBindingsService bindings, SessionManager sessions) : ControllerBase
+    TaskManager tasks, ISessionBroadcaster broadcaster, TaskAiService ai, ProjectManager projects,
+    PersonaManager personas, TaskExecutionService executor,
+    PersonaBindingsService bindings, SessionManager sessions,
+    // Подсистема Notes отключаемая: null — обратная запись чекбокса в заметку-источник
+    // тихо пропускается (SyncTaskToNoteAsync ниже, флаг notes-task-sync и так no-op
+    // для задач не из заметки).
+    INoteTaskSync? noteSync = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -235,14 +239,19 @@ public class TasksController(
         {
             // Личная задача — проект не сохраняем в TaskItem, но колонку прокидываем
             // через TaskManager.Create для гейта DefectRules (review-гейт у личных
-            // задач не действует — пользователь сам решает, что ему делать).
-            task = tasks.Create(null, UserId, req, targetIsReview: false, targetColumn);
+            // задач не действует: targetColumn приходит из BoardColumns ПРОЕКТА, а у
+            // личной задачи projectId == null ⇒ project == null ⇒ targetColumn всегда null,
+            // гейт EnsureReproOnReview no-op). Внутренние пути (NoteTaskSyncService/
+            // TeamWaveService) могут слать personal-карточки в review-колонку своих
+            // проектов через bodyProjectId — это не «личная» задача в смысле обхода,
+            // обычный кейс гейта.
+            task = tasks.Create(null, UserId, req, targetColumn);
         }
         catch (InvalidOperationException ex)
         {
             return BadRequest(new { error = ex.Message });
         }
-        await hub.BroadcastTaskChangedAsync(UserId, "created", task);
+        await broadcaster.ToOwner(UserId, new TaskChangedMessage("created", task));
         return Ok(task);
     }
 
@@ -313,8 +322,16 @@ public class TasksController(
         var targetProject = targetProjectId is null ? null : projects.GetById(targetProjectId);
         var cat = BoardColumnHelper.Category(targetProject, req.ColumnId);
         if (cat is not null) req = req with { Status = cat };
-        // Дефект: карточка попадает в review-колонку → нужны шаги воспроизведения (гейт — TaskManager/DefectRules)
-        var targetIsReview = BoardColumnHelper.IsReview(targetProject, req.ColumnId);
+        // Дефект: карточка попадает в review-колонку → нужны шаги воспроизведения (гейт —
+        // TaskManager.EnsureReproOnReview). Колонка должна быть той, в которой карточка
+        // ОКАЖЕТСЯ после Update: новая из req.ColumnId либо текущая (когда columnId не
+        // менялся — а Review-колонка могла уже стоять). Без текущей колонки гейт не
+        // срабатывает на repro:{} для дефекта, уже стоящего в ревью (находка 2 ревью Глеба).
+        BoardColumn? effectiveColumn = null;
+        if (!string.IsNullOrEmpty(req.ColumnId))
+            effectiveColumn = targetProject?.BoardColumns?.FirstOrDefault(c => c.Id == req.ColumnId);
+        else if (task.ColumnId is not null && targetProject?.BoardColumns is { } currentColumns)
+            effectiveColumn = currentColumns.FirstOrDefault(c => c.Id == task.ColumnId);
 
         // Персона-исполнитель: "" = убрать (валидировать нечего), непустая — проверяем.
         // Валидация по целевому проекту: проектная персона прежнего проекта в новом недействительна,
@@ -332,7 +349,7 @@ public class TasksController(
         // не защита. null-сессия/персона → проверка человеком (TaskVerification.PersonaId == null)
         if (req.Verification is not null)
         {
-            var callerSessionId = Request.Headers[DenyOnDelegatedTurnAttribute.CallerHeader].FirstOrDefault();
+            var callerSessionId = Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault();
             var callerPersonaId = callerSessionId is not null ? sessions.GetById(callerSessionId)?.PersonaId : null;
             req = req with
             {
@@ -349,14 +366,22 @@ public class TasksController(
         TaskItem updated;
         try
         {
-            updated = tasks.Update(taskId, req, targetIsReview)
+            // Агентский путь ловим по X-Caller-Session-Id: заголовок ставят MCP-серверы
+            // (mcp/tasks-server/index.js шлёт его на КАЖДЫЙ вызов), а браузер — никогда.
+            // Без этого гард против затирания снятой задачи терялся на stdio-ветке отката
+            // (Mcp:HttpTransport=false): tasks_complete идёт сюда обычным PUT, и затирание
+            // снова было бы молчаливым (фикс-волна 4 team-blocker-honest). Это не защита от
+            // подделки, а разведение путей: подделанный заголовок делает правило строже.
+            var isAgentCall = !string.IsNullOrEmpty(
+                Request.Headers[DenyOnDelegatedTurnAttribute.CallerHeader].FirstOrDefault());
+            updated = tasks.Update(taskId, req, effectiveColumn, isAgentCall)
                 ?? throw new InvalidOperationException("Задача не найдена");
         }
         catch (InvalidOperationException ex)
         {
             return BadRequest(new { error = ex.Message });
         }
-        await hub.BroadcastTaskChangedAsync(UserId, "updated", updated);
+        await broadcaster.ToOwner(UserId, new TaskChangedMessage("updated", updated));
 
         // Завершение экземпляра регулярной задачи → следующий экземпляр серии.
         // Покрывает и UI, и MCP (tasks_complete/tasks_update идут через этот PUT)
@@ -364,13 +389,13 @@ public class TasksController(
         {
             var next = tasks.SpawnNextOccurrence(updated);
             if (next is not null)
-                await hub.BroadcastTaskChangedAsync(UserId, "created", next);
+                await broadcaster.ToOwner(UserId, new TaskChangedMessage("created", next));
         }
 
         // Обратная запись в заметку-источник: смена done-состояния ставит/снимает галочку
         // (флаг notes-task-sync; no-op если задача не из заметки)
         if (wasDone != (updated.Status == TaskItemStatus.Done))
-            await noteSync.SyncTaskToNoteAsync(UserId, updated);
+            await (noteSync?.SyncTaskToNoteAsync(UserId, updated) ?? Task.CompletedTask);
 
         return Ok(updated);
     }
@@ -381,11 +406,11 @@ public class TasksController(
     // чередование обычного и делегированного хода перезапускало процесс CLI со всеми MCP.
     // AllowInTeamImplement: у чата-штаба «Командной реализации» запрет заменён квотой —
     // автономный цикл волн иначе невозможен, а лавину держит бюджет итерации (Э4).
-    // AllowInWorkLoop: тот же паттерн в обычном чате с включённым циклом «до готово» —
-    // запрет хода доклада заменён квотой запусков, иначе агент в цикле не запустит
-    // собственные задачи (лавину держит лимит Loop:MaxTaskExecutions).
+    // Для обычного чата с включённым циклом «до готово» отдельной квоты больше нет: чистый
+    // рабочий ход координатора запускается без ограничений, лавину возвратов «запуск →
+    // доклад → запуск» держит лимит Iteration в ContinueWorkLoopAsync.
     [DenyOnDelegatedTurn("Запуск задачи на исполнение",
-        AlsoWhenExecutorSuppressed = true, AllowInTeamImplement = true, AllowInWorkLoop = true)]
+        AlsoWhenExecutorSuppressed = true, AllowInTeamImplement = true)]
     public async Task<IActionResult> Execute(string taskId)
     {
         var task = tasks.GetById(taskId);
@@ -408,7 +433,7 @@ public class TasksController(
         if (task is null || task.OwnerId != UserId) return NotFound();
 
         tasks.Delete(taskId);
-        await hub.BroadcastTaskChangedAsync(UserId, "deleted", task);
+        await broadcaster.ToOwner(UserId, new TaskChangedMessage("deleted", task));
         return NoContent();
     }
 }
@@ -467,15 +492,6 @@ public static class BoardColumnHelper
         var custom = project?.BoardColumns?.FirstOrDefault(c => c.Id == columnId);
         return custom?.Role == "review";
     }
-}
-
-public static class TaskHubExtensions
-{
-    // Уведомление всех устройств пользователя об изменении задачи
-    public static Task BroadcastTaskChangedAsync(
-        this IHubContext<SessionHub> hub, string userId, string action, TaskItem task) =>
-        hub.Clients.Group("user_" + userId)
-            .SendAsync("message", new TaskChangedMessage(action, task));
 }
 
 // Опции десериализации CreateTaskRequest для ручного парсинга тела в TasksController.Create

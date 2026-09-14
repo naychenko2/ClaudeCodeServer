@@ -1,31 +1,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MessageCircle, Plus } from 'lucide-react';
 import type { AuthState, NoteDetail, NoteSemanticHit, NoteSummary } from '../../types';
-import type { HubTabValue } from '../../components/HubTabs';
-import { HubHeader } from '../../components/HubHeader';
-import { PillSwitch } from '../../components/Toolbar';
 import { NewNoteDialog } from './NewNoteDialog';
-import { C, FONT, ISLAND, R, CHAT_MAX_W } from '../../lib/design';
-import { api } from '../../lib/api';
-import { useNotes, ensureNotesLoaded, existingTitleSet, bumpNotes, isFavorite, FAVORITE_TAG } from '../../lib/notes';
-import { useOnline } from '../../hooks/useOnline';
-import { OfflineError } from '../../lib/offline';
-import { createNoteOffline } from '../../lib/notesOffline';
-import { parseHash, navPush, navReplace, getNav, type NavSnapshot } from '../../lib/nav';
+import {
+  subsystemTabValue, HubHeader, PillSwitch, C, FONT, ISLAND, R, CHAT_MAX_W,
+  api, useNotes, ensureNotesLoaded, existingTitleSet, bumpNotes, isFavorite, FAVORITE_TAG,
+  useOnline, OfflineError, createNoteOffline,
+  parseHash, navPush, navReplace, getNav,
+  Button, IslandScaffold, ConfirmDialog, PageCanvas, ICON_SIZE,
+  PanelZone, notesPanels, zoneOf, NOTES_KEYS, useIsMobile, useWindowWidth, useListAutoFocus,
+} from 'aihome_shell/kit';
+import type { NavSnapshot } from 'aihome_shell/kit';
+import type { HubTabValue } from 'aihome_shell/kit';
 import { NotesList } from './NotesList';
 import { NoteView } from './NoteView';
 import { NotesGraph, type GraphStats } from './NotesGraph';
 import { GraphSettingsBody } from './graph/GraphSettingsBody';
 import { useGraphSettings } from './graph/graphSettings';
-import { Button, IslandScaffold, ConfirmDialog } from '../../components/ui';
-import { PageCanvas } from '../../components/ui/PageCanvas';
-import { ICON_SIZE } from '../../components/ui/icons';
 import { CollapseGroup, IconSearch, IconPlus, IconCalendarDay, SourceDot } from './shared';
-import { PanelZone } from '../../pages/workspace/PanelZone';
-import { notesPanels, zoneOf } from '../../pages/workspace/panelStackState';
-import { NOTES_KEYS } from '../../pages/workspace/panelCatalog';
-import { useIsMobile, useWindowWidth } from '../../lib/breakpoints';
-import { useListAutoFocus } from '../../lib/listAutoFocus';
 
 type Mode = 'notes' | 'graph';
 
@@ -544,7 +536,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
 
   return (
     <PageCanvas>
-      <HubHeader value="notes" onTab={onHubTab} auth={auth} onLogout={onLogout} />
+      <HubHeader value={subsystemTabValue('notes')} onTab={onHubTab} auth={auth} onLogout={onLogout} />
       <div style={{ flex: 1, minHeight: 0 }}>
         {body}
       </div>

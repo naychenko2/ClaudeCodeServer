@@ -7,6 +7,12 @@ using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 
+// Этап 5, шаг 4: SectionSource и EffectivePromptSection переехали в Core
+// (`ClaudeHomeServer.Services.Llm`). В Main есть одноимённый `Services.SectionSource`
+// (`PersonaBindingsService`, Off/Preset/Explicit) — без алиаса короткое имя
+// становится неоднозначным.
+using SectionSource = ClaudeHomeServer.Services.Llm.SectionSource;
+
 namespace ClaudeHomeServer.Tests.Services;
 
 // Стор настроек специальностей и пресетов-цепочек: ОДИН слой (общий для инстанса, ADR-012),
@@ -465,7 +471,7 @@ public class SpecialtySettingsStoreTests : IDisposable
         states["history"].Text.Should().Be("глобальная история",
             "замена записи целиком снесла бы секции, заданные глобально");
         states["codeGraph"].Enabled.Should().BeTrue("владелец задал только enabled");
-        states["codeGraph"].TextSource.Should().Be(SpecialtySettingsStore.SectionSource.Code,
+        states["codeGraph"].TextSource.Should().Be(SectionSource.Code,
             "текста владелец не задавал — остаётся дефолт кода");
     }
 
@@ -706,8 +712,8 @@ public class SpecialtySettingsStoreTests : IDisposable
 
         states.Select(s => s.Id).Should()
             .Equal(["history", "codeGraph", "processes", "roleRules"], "порядок — порядок каталога");
-        states.Should().OnlyContain(s => s.EnabledSource == SpecialtySettingsStore.SectionSource.Code
-            && s.TextSource == SpecialtySettingsStore.SectionSource.Code);
+        states.Should().OnlyContain(s => s.EnabledSource == SectionSource.Code
+            && s.TextSource == SectionSource.Code);
 
         // Таблица дефолтов аналитика: история и правила роли включены, граф и процессы — нет
         var enabled = store.EffectivePromptSections(Owner, PersonaSpecialty.Analyst).Select(s => s.Id).ToList();
@@ -756,7 +762,7 @@ public class SpecialtySettingsStoreTests : IDisposable
         // Секция, которую настройка не трогает, осталась на дефолте кода
         var states = store.EffectivePromptSectionStates(Owner, PersonaSpecialty.Planner);
         states.Single(s => s.Id == "codeGraph").TextSource
-            .Should().Be(SpecialtySettingsStore.SectionSource.Code);
+            .Should().Be(SectionSource.Code);
     }
 
     [Fact]
@@ -769,9 +775,9 @@ public class SpecialtySettingsStoreTests : IDisposable
         var state = store.EffectivePromptSectionStates(Owner, PersonaSpecialty.Analyst)
             .Single(s => s.Id == "codeGraph");
         state.Enabled.Should().BeTrue("дефолт кода у аналитика — off, настройка его включила");
-        state.EnabledSource.Should().Be(SpecialtySettingsStore.SectionSource.Global);
+        state.EnabledSource.Should().Be(SectionSource.Global);
         state.Text.Should().Be(SpecialtyPromptPresets.DefaultText("codeGraph", PersonaSpecialty.Analyst));
-        state.TextSource.Should().Be(SpecialtySettingsStore.SectionSource.Code);
+        state.TextSource.Should().Be(SectionSource.Code);
     }
 
     // --- Типовой профиль умений ---
@@ -903,7 +909,7 @@ public class SpecialtySettingsStoreTests : IDisposable
         store.Snapshot.Global.Specialties["analyst"].PromptSections.Should().BeNull("полей не было — дефолты из кода");
         store.Snapshot.Global.Specialties["analyst"].DefaultBindings.Should().BeNull();
         store.EffectivePromptSections(Owner, PersonaSpecialty.Analyst)
-            .Should().OnlyContain(s => s.TextSource == SpecialtySettingsStore.SectionSource.Code);
+            .Should().OnlyContain(s => s.TextSource == SectionSource.Code);
     }
 
     [Fact]

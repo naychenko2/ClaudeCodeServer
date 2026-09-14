@@ -1,13 +1,14 @@
 using System.Text.Json;
 using ClaudeHomeServer.Controllers;
-using ClaudeHomeServer.Filters;
-using ClaudeHomeServer.Hubs;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Memory;
+using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Personas;
-using ClaudeHomeServer.Services.TriggerSources;
+using ClaudeHomeServer.Services.Skills;
+using ClaudeHomeServer.Services.Llm;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services;
 
@@ -26,7 +27,6 @@ public sealed class PersonasCrudService(
     UserStore users,
     PersonaMemoryService memory,
     PersonaBindingsService bindings,
-    NotesService notes,
     SkillsService skills,
     Services.Images.ImageGenerationService images,
     Services.Images.ImageBackfillService imageBackfill,
@@ -36,7 +36,8 @@ public sealed class PersonasCrudService(
     SpecialtySettingsStore specialtySettings,
     IConfiguration config,
     ILogger<PersonasCrudService> log,
-    IHubContext<SessionHub> hub)
+    ISessionBroadcaster broadcaster,
+    INoteAccessor? notes = null)
 {
     // Провайдеров генерации несколько (fal.ai, glif) — про конкретный ключ конфига не пишем
     private const string ImageGenerationOffError =
@@ -53,8 +54,7 @@ public sealed class PersonasCrudService(
     private static NoContentResult NoContent() => new();
 
     private Task Broadcast(string userId, string action, string? personaId = null) =>
-        hub.Clients.Group("user_" + userId)
-            .SendAsync("message", new PersonasChangedMessage(action, personaId));
+        broadcaster.ToOwner(userId, new PersonasChangedMessage(action, personaId));
 
     // --- Создание / правка / удаление / дефолт (тела POST/PUT/DELETE/make-default) ---
 
@@ -392,7 +392,7 @@ public sealed class PersonasCrudService(
         await sessions.BroadcastSessionMessageAsync(onboarding.Id,
             new OnboardingCompletedMessage(onboarding.OnboardingKind!, persona.Id, onboarding.ProjectId));
         // Телеметрия знакомства (план 2.10): без разрезов по пользователю.
-        Telemetry.ServerMetrics.RecordIntroCompleted();
+        Core.Telemetry.ServerMetrics.RecordIntroCompleted();
     }
 
     // --- AI-команда ---
@@ -825,7 +825,7 @@ public sealed class PersonasCrudService(
             sb.AppendLine("Базы знаний (type \"knowledge\", target = id):");
             foreach (var d in datasets.Take(20)) sb.AppendLine($"- {d.Id} — {d.Label}");
         }
-        var sources = notes.GetSources(userId);
+        var sources = notes?.GetSources(userId) ?? [];
         if (sources.Count > 0)
         {
             sb.AppendLine("Источники заметок (type \"notes\", target = key):");

@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Остановка цикла «до готово» — карточки по причине · макет v1</title>
+<style>
+/* ===== Токены (значения из frontend/src/lib/theme.css; семантика — C.* из design.ts) ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5; --c-accent-soft:#E8A990;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-dashed:#D0C6B4; --c-track:#D8CFBE;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --c-overlay:rgba(23,19,15,.42);
+  --shadow-card:0 2px 8px rgba(60,50,35,.05);
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C; --c-accent-soft:#9A5E48;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-dashed:#4A443B; --c-track:#453F37;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72; --c-danger-border:#5A302A;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --c-overlay:rgba(0,0,0,.62);
+  --shadow-card:0 2px 10px rgba(0,0,0,.35);
+}
+* { box-sizing:border-box; }
+body {
+  margin:0; background:var(--c-bg-main); color:var(--c-text-primary);
+  font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif;
+  font-size:13px; line-height:1.5;
+}
+.serif { font-family:"PT Serif",Georgia,"Times New Roman",serif; letter-spacing:-.01em; }
+svg.ic { width:13px; height:13px; flex-shrink:0; }
+
+/* ===== Служебная обвязка макета (не часть продукта) ===== */
+.bar {
+  position:sticky; top:0; z-index:50; display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+  padding:12px 24px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border);
+}
+.bar h1 { margin:0; font-size:15px; font-weight:600; color:var(--c-text-heading); flex:1; min-width:220px; }
+.bar .toggle { display:flex; border:1px solid var(--c-border); border-radius:10px; overflow:hidden; }
+.bar .toggle button {
+  font:inherit; font-size:12px; padding:6px 14px; cursor:pointer;
+  background:transparent; border:none; color:var(--c-text-secondary);
+}
+.bar .toggle button.on { background:var(--c-text-heading); color:var(--c-bg-main); }
+.wrap { max-width:950px; margin:0 auto; padding:28px 24px 96px; }
+h2.sec {
+  margin:44px 0 4px; font-size:20px; font-weight:600; color:var(--c-text-heading);
+  font-family:"PT Serif",Georgia,serif; letter-spacing:-.01em;
+}
+h2.sec:first-of-type { margin-top:8px; }
+p.note { margin:0 0 18px; color:var(--c-text-secondary); font-size:13px; max-width:74ch; }
+p.note code { background:var(--c-bg-inset); padding:1px 5px; border-radius:6px; font-size:12px; font-family:"JetBrains Mono",monospace; }
+.cap { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--c-text-muted); margin:0 0 8px; }
+.reason-tag { font-family:"JetBrains Mono",monospace; font-size:11px; color:var(--c-text-muted); }
+
+/* ===== Лента чата (усечённая, только сам ряд-уведомление) ===== */
+.lane {
+  display:flex; flex-direction:column; gap:14px; padding:18px;
+  background:var(--c-bg-main); border:1px solid var(--c-border-light); border-radius:14px;
+  margin-bottom:10px;
+}
+.lane.mobile { max-width:360px; }
+.msg-hint { align-self:flex-start; font-size:11.5px; color:var(--c-text-muted); margin-bottom:-6px; }
+
+/* ---- было: единая нейтральная пилюля для всех причин ---- */
+.pill-neutral {
+  align-self:center; display:flex; align-items:center; gap:9px; flex-wrap:wrap; justify-content:center;
+  background:var(--c-bg-selected); border:1px solid var(--c-border); border-radius:8px;
+  padding:6px 12px; font-size:12px; color:var(--c-text-secondary); max-width:100%; text-align:center;
+}
+
+/* ---- стало: 4 визуальных яруса ---- */
+.pill-warning {
+  align-self:center; max-width:100%; display:flex; align-items:center; gap:8px; flex-wrap:wrap; justify-content:center;
+  background:var(--c-warning-bg); border:1px solid var(--c-warning); border-radius:8px;
+  padding:7px 12px; font-size:12.5px; color:var(--c-warning-text); text-align:center;
+}
+.card {
+  display:flex; align-items:flex-start; gap:8px;
+  border-radius:8px; padding:8px 12px; font-size:13px;
+}
+.card .txt { flex:1; min-width:0; overflow-wrap:break-word; max-height:180px; overflow:auto; }
+.card.danger { background:var(--c-danger-bg); border:1px solid var(--c-danger-border); color:var(--c-danger-text); }
+.card.info   { background:var(--c-info-bg);   border:1px solid var(--c-info);          color:var(--c-info); }
+.card .ic-slot { margin-top:1px; }
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <h1 class="serif">Остановка цикла «до готово» — карточки по причине (work_loop_stopped)</h1>
+  <div class="toggle" id="theme-toggle">
+    <button data-v="light" class="on">Светлая</button>
+    <button data-v="dark">Тёмная</button>
+  </div>
+  <div class="toggle" id="width-toggle">
+    <button data-v="desktop" class="on">Десктоп</button>
+    <button data-v="mobile">Мобильный 360</button>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <h2 class="sec">Было — одна пилюля на все 5 причин</h2>
+  <p class="note">
+    <code>case 'work_loop_stopped'</code> сейчас рендерит текст с сервера в нейтральной серой
+    пилюле независимо от <code>item.reason</code>. Длинный текст блокера тонет в мелкой строке
+    без иерархии, а мягкое предупреждение о лимите выглядит так же тревожно, как ошибка хода.
+  </p>
+  <div class="lane" id="lane-before">
+    <div class="msg-hint reason-tag">reason: blocked</div>
+    <div class="pill-neutral">
+      <svg class="ic" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>
+      <span>Цикл остановлен: работа встала на блокере — ожидаю разрешения пользователя на мерж feature/subsystems-wave2 в master (per политика — push/merge в master только по явному запросу)</span>
+    </div>
+  </div>
+
+  <h2 class="sec">Стало — 4 яруса по важности</h2>
+  <p class="note">
+    Различитель — уже существующее поле <code>item.reason</code> (фронт его получает, значения
+    видны в <code>WorkLoopStoppedMessage</code>/<code>SessionManager.AddWorkLoopStoppedNoticeAsync</code>),
+    новых полей с бэкенда не нужно. Разводим по цвету и форме, а не плодим 5 разных контейнеров:
+  </p>
+  <table style="border-collapse:collapse; width:100%; font-size:12px; margin:8px 0 24px;">
+    <tr style="text-align:left; color:var(--c-text-muted);">
+      <th style="padding:4px 8px; border-bottom:1px solid var(--c-border);">reason</th>
+      <th style="padding:4px 8px; border-bottom:1px solid var(--c-border);">ярус</th>
+      <th style="padding:4px 8px; border-bottom:1px solid var(--c-border);">форма</th>
+      <th style="padding:4px 8px; border-bottom:1px solid var(--c-border);">цвет</th>
+      <th style="padding:4px 8px; border-bottom:1px solid var(--c-border);">иконка</th>
+    </tr>
+    <tr><td style="padding:4px 8px;">manual</td><td style="padding:4px 8px;">нейтральный, без изменений</td><td style="padding:4px 8px;">пилюля по центру</td><td style="padding:4px 8px;">bgSelected/border/textSecondary</td><td style="padding:4px 8px;">стоп-квадрат (как interrupted)</td></tr>
+    <tr><td style="padding:4px 8px;">limit</td><td style="padding:4px 8px;">мягкое предупреждение</td><td style="padding:4px 8px;">пилюля по центру, перенос строк</td><td style="padding:4px 8px;">warningBg/warning/warningText</td><td style="padding:4px 8px;">AlertCircle</td></tr>
+    <tr><td style="padding:4px 8px;">blocked</td><td style="padding:4px 8px;">нужно решение человека</td><td style="padding:4px 8px;">карточка на всю ширину, потолок 180px</td><td style="padding:4px 8px;">infoBg/info</td><td style="padding:4px 8px;">Ban</td></tr>
+    <tr><td style="padding:4px 8px;">waiting_timeout</td><td style="padding:4px 8px;">нужно решение человека</td><td style="padding:4px 8px;">карточка на всю ширину, потолок 180px</td><td style="padding:4px 8px;">infoBg/info</td><td style="padding:4px 8px;">Clock</td></tr>
+    <tr><td style="padding:4px 8px;">error</td><td style="padding:4px 8px;">что-то сломалось</td><td style="padding:4px 8px;">карточка на всю ширину (=case 'error')</td><td style="padding:4px 8px;">dangerBg/dangerBorder/dangerText</td><td style="padding:4px 8px;">AlertTriangle</td></tr>
+  </table>
+
+  <div class="lane" id="lane-after">
+
+    <div class="msg-hint reason-tag">reason: manual — без изменений</div>
+    <div class="pill-neutral">
+      <svg class="ic" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>
+      <span>Цикл остановлен вами. Текущий ход продолжает работу.</span>
+    </div>
+
+    <div class="msg-hint reason-tag">reason: limit</div>
+    <div class="pill-warning">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
+      <span>Цикл остановлен: исчерпан лимит в 40 ходов. Работа могла остаться незавершённой — проверьте результат.</span>
+    </div>
+
+    <div class="msg-hint reason-tag">reason: blocked</div>
+    <div class="card info">
+      <span class="ic-slot"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/></svg></span>
+      <span class="txt">Цикл остановлен: работа встала на блокере — ожидаю разрешения пользователя на мерж feature/subsystems-wave2 в master (per политика — push/merge в master только по явному запросу)</span>
+    </div>
+
+    <div class="msg-hint reason-tag">reason: waiting_timeout</div>
+    <div class="card info">
+      <span class="ic-slot"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span>
+      <span class="txt">Цикл остановлен: ожидание по маркеру «review-approved» не завершилось за 30 минут (10 из 10 тиков).</span>
+    </div>
+
+    <div class="msg-hint reason-tag">reason: error</div>
+    <div class="card danger">
+      <span class="ic-slot"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg></span>
+      <span class="txt">Цикл остановлен: ход завершился ошибкой.</span>
+    </div>
+
+  </div>
+
+  <h2 class="sec">Крайний случай — blocked на 300 символов</h2>
+  <p class="note">Потолок высоты 180px + внутренний скролл (тот же паттерн, что у <code>case 'error'</code>) — карточка не растягивает ленту, длинный текст остаётся читаемым и доступным целиком.</p>
+  <div class="lane" id="lane-overflow">
+    <div class="card info">
+      <span class="ic-slot"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/></svg></span>
+      <span class="txt">Цикл остановлен: работа встала на блокере — не могу продолжить без явного решения: нашёл два конфликтующих требования в задаче (миграция схемы БД ломает обратную совместимость API v1, но задача просит не трогать v1 до конца квартала), нужен приоритет — откладываем миграцию или заводим v2 эндпоинт параллельно, распишите, пожалуйста, как поступить дальше и я продолжу.</span>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const themeBtns = document.querySelectorAll('#theme-toggle button');
+themeBtns.forEach(b => b.addEventListener('click', () => {
+  themeBtns.forEach(x => x.classList.remove('on')); b.classList.add('on');
+  document.documentElement.setAttribute('data-theme', b.dataset.v);
+}));
+const widthBtns = document.querySelectorAll('#width-toggle button');
+const lanes = () => document.querySelectorAll('.lane');
+widthBtns.forEach(b => b.addEventListener('click', () => {
+  widthBtns.forEach(x => x.classList.remove('on')); b.classList.add('on');
+  lanes().forEach(l => l.classList.toggle('mobile', b.dataset.v === 'mobile'));
+}));
+</script>
+</body>
+</html>

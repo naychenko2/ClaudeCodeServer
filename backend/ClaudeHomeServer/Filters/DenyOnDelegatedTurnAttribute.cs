@@ -1,4 +1,4 @@
-using System.IdentityModel.Tokens.Jwt;
+﻿using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
@@ -27,8 +27,10 @@ namespace ClaudeHomeServer.Filters;
 [AttributeUsage(AttributeTargets.Method)]
 public sealed class DenyOnDelegatedTurnAttribute(string action) : Attribute, IActionFilter
 {
-    // Заголовок ставит общий api() каждого MCP-сервера: id сессии, в которой работает модель
-    public const string CallerHeader = "X-Caller-Session-Id";
+    // Заголовок ставит общий api() каждого MCP-сервера: id сессии, в которой работает модель.
+    // Форвардим на Core-константу: имя едет в спину (McpEndpoints), а фильтр остаётся в Main —
+    // иначе перенос Llm в отдельный .csproj заставил бы тащить сюда весь стек атрибута.
+    public const string CallerHeader = McpEndpoints.CallerSessionHeader;
 
     /// <summary>
     /// Запрещать ещё и на реакционном авто-ходу постановщика (доклад делегированной задачи):
@@ -49,15 +51,12 @@ public sealed class DenyOnDelegatedTurnAttribute(string action) : Attribute, IAc
     /// </summary>
     public bool AllowInTeamImplement { get; init; }
 
-    /// <summary>
-    /// Цикл «До готово» (work-loop): как AllowInTeamImplement, но для обычного чата с
-    /// включённым тумблером — запрет хода доклада заменяется КВОТОЙ запусков, иначе
-    /// «доклад → запуск → доклад» — бесконечный платный цикл. Квота принадлежит самой
-    /// сессии цикла (вверх по родителям не поднимаемся); делегированного хода
-    /// (agentDepth ≥ 1) исключение не касается — анти-рекурсия не ослабляется режимом.
-    /// Guard B4 запрещает оба режима в одном чате, так что двойного списания нет.
-    /// </summary>
-    public bool AllowInWorkLoop { get; init; }
+    // Цикл «До готово» (work-loop) больше НЕ имеет квоты запусков: квота дырявилась вместе
+    // с двумя лимитами по 20 и заменена инкрементом Iteration на возврате waiting→working в
+    // ContinueWorkLoopAsync (SessionManager.cs). Запуск из обычного чата с включённым циклом
+    // по-прежнему запрещён на делегированном ходу (анти-рекурсия) и на реакционном ходу
+    // доклада (тоже AlsoWhenExecutorSuppressed) — это держит [DenyOnDelegatedTurn] без
+    // отдельного флага: чистый рабочий ход координатора и запускает, и ничего не сжигает.
 
     // Ключ HttpContext.Items: квота расходуется в OnActionExecuting, ДО того как действие
     // реально что-то сделало — флаг «списана» даёт OnActionExecuted вернуть единицу, если
@@ -65,9 +64,6 @@ public sealed class DenyOnDelegatedTurnAttribute(string action) : Attribute, IAc
     // команды быстрее, чем идёт реальная работа). Сессия и владелец не меняются между
     // executing/executed — их refund берёт из того же запроса.
     private const string ConsumedRunKey = "TeamImplementRunConsumed";
-
-    // Отдельный ключ квоты цикла: возврат обязан идти ровно в ту квоту, что была списана
-    private const string ConsumedWorkLoopRunKey = "WorkLoopRunConsumed";
 
     public void OnActionExecuting(ActionExecutingContext context)
     {
@@ -78,12 +74,11 @@ public sealed class DenyOnDelegatedTurnAttribute(string action) : Attribute, IAc
             http.RequestServices.GetService<SessionManager>(),
             http.User.FindFirstValue(JwtRegisteredClaimNames.Sub),
             http.Request.Headers[CallerHeader].FirstOrDefault(),
-            action, AlsoWhenExecutorSuppressed, AllowInTeamImplement, AllowInWorkLoop);
+            action, AlsoWhenExecutorSuppressed, AllowInTeamImplement);
         if (decision.Allowed)
         {
             // Списанную квоту запоминаем для возврата в OnActionExecuted при неудаче
             if (decision.TeamQuotaConsumed) http.Items[ConsumedRunKey] = true;
-            if (decision.WorkLoopQuotaConsumed) http.Items[ConsumedWorkLoopRunKey] = true;
             return;
         }
 
@@ -94,11 +89,9 @@ public sealed class DenyOnDelegatedTurnAttribute(string action) : Attribute, IAc
     public void OnActionExecuted(ActionExecutedContext context)
     {
         // Возврат списанной единицы гарантирован при ЛЮБОМ исходе, кроме чистого успеха
-        // (2xx — запуск состоялся, платить честно). Раньше условие смотрело лишь на
-        // Exception и статус результата — и промахивалось на обрыве/замыкании: если ход
-        // замкнулся другим фильтром ДО запуска действия (Canceled=true, без результата-
-        // ошибки) или запрос оборвался без результата, единица «зависала» навсегда
-        // (ревью Глеба: квота work-loop между TryConsume и Refund).
+        // (2xx — запуск состоялся, платить честно). Условие смотрит на Exception, Canceled
+        // и статус результата: иначе единица «зависала» бы между TryConsume и Refund на
+        // обрыве/замыкании (ревью Глеба).
         var failed = context.Exception is not null
             || context.Canceled
             || context.Result switch
@@ -116,8 +109,6 @@ public sealed class DenyOnDelegatedTurnAttribute(string action) : Attribute, IAc
 
         if (http.Items[ConsumedRunKey] is true)
             sessions.RefundTeamImplementRun(callerSessionId, userId);
-        if (http.Items[ConsumedWorkLoopRunKey] is true)
-            sessions.RefundWorkLoopRun(callerSessionId, userId);
     }
 
     // Решение вынесено из фильтра, чтобы проверяться таблицей без HttpContext и DI
@@ -142,9 +133,6 @@ internal sealed record DelegatedTurnGateDecision
     /// <summary>Разрешение оплачено квотой «Командной реализации» — вернуть её при неудачном действии.</summary>
     public bool TeamQuotaConsumed { get; init; }
 
-    /// <summary>Разрешение оплачено квотой цикла «до готово» — вернуть её при неудачном действии.</summary>
-    public bool WorkLoopQuotaConsumed { get; init; }
-
     public static DelegatedTurnGateDecision Pass { get; } = new() { Allowed = true, DenyText = null };
 }
 
@@ -165,7 +153,7 @@ internal static class DelegatedTurnGate
     public static DelegatedTurnGateDecision Decide(
         SessionManager? sessions, string? ownerId, string? callerSessionId,
         string action, bool alsoWhenExecutorSuppressed,
-        bool allowInTeamImplement, bool allowInWorkLoop,
+        bool allowInTeamImplement,
         bool failOpenWhenUnknown = true)
     {
         if (string.IsNullOrEmpty(callerSessionId) || sessions is null || string.IsNullOrEmpty(ownerId))
@@ -197,21 +185,10 @@ internal static class DelegatedTurnGate
                     + "(подтвердить план, добавить бюджет или завершить итерацию)."));
         }
 
-        // Квота вместо запрета в цикле «до готово» — на ЛЮБОМ неделегированном ходу чата
-        // с циклом: ход доклада исполнителя — тот самый случай, ради которого снимается
-        // запрет, а «чистый» ход не должен обходить счётчик. Вердикт NotInLoop = чат не
-        // в цикле: проваливаемся в прежний запрет.
-        if (!delegated && allowInWorkLoop)
-        {
-            var (verdict, reason) = sessions.TryConsumeWorkLoopRun(callerSessionId, ownerId);
-            if (verdict == SessionManager.WorkLoopRunQuota.Allowed)
-                return new DelegatedTurnGateDecision
-                    { Allowed = true, DenyText = null, WorkLoopQuotaConsumed = true };
-            if (verdict == SessionManager.WorkLoopRunQuota.Exhausted)
-                return Deny(QuotaExhaustedText(action, reason,
-                    "Доложи человеку сводку и дождись его решения "
-                    + "(остановить цикл или запустить оставшиеся задачи руками)."));
-        }
+        // Цикл «до готово» больше не имеет отдельной квоты: чистый рабочий ход координатора
+        // в чате с циклом идёт без ограничений (лимит только на возвраты из ожидания, тот
+        // живёт в ContinueWorkLoopAsync). Здесь остаются лишь два гейта: делегированный ход
+        // и реакционный ход доклада — оба пришли из анти-рекурсии, не из квоты.
 
         if (!delegated && !DenyOnDelegatedTurnAttribute.IsSuppressedExecutorTurn(turn, alsoWhenExecutorSuppressed))
             return DelegatedTurnGateDecision.Pass;
@@ -233,7 +210,6 @@ internal static class DelegatedTurnGate
         DelegatedTurnGateDecision decision)
     {
         if (decision.TeamQuotaConsumed) sessions.RefundTeamImplementRun(callerSessionId, ownerId);
-        if (decision.WorkLoopQuotaConsumed) sessions.RefundWorkLoopRun(callerSessionId, ownerId);
     }
 
     private static DelegatedTurnGateDecision Deny(string text) =>

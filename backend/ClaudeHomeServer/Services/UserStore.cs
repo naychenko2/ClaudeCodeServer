@@ -1,11 +1,12 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Git;
 using Microsoft.AspNetCore.Identity;
 
 namespace ClaudeHomeServer.Services;
 
-public class UserStore
+public class UserStore : IForgejoAccountStore, IUserStore
 {
     private readonly string _filePath;
     private readonly PasswordHasher<User> _hasher = new();
@@ -298,6 +299,20 @@ public class UserStore
             if (password is not null) user.ForgejoPassword = password;
             Save();
             return true;
+        }
+    }
+
+    /// <summary>
+    /// Read-проекция для вертикали Git (Этап 3, уборка Git): сокращена до
+    /// логина и токена, без пароля. null — пользователь не найден либо не провижнен.
+    /// </summary>
+    public ForgejoAccountView? GetAccount(string userId)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == userId);
+            if (user is null) return null;
+            return new ForgejoAccountView(user.ForgejoUsername, user.ForgejoToken);
         }
     }
 

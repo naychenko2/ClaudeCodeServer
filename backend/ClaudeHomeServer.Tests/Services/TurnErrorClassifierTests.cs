@@ -60,6 +60,72 @@ public class TurnErrorClassifierTests
             RateLimitRejected = true,
         }).Should().Be(FallbackErrorClass.RateLimit);
 
+    // ===== ModelUnavailable: недоступность модели на подписке (не исчерпание лимита) =====
+
+    // Ловушка: «нет кредитов» приезжает как rate_limit_event status=rejected → RateLimitRejected
+    // был бы true, но это отдельный кошелёк кредитов модели, а НЕ лимит подписки. Текст ошибки
+    // смотрится ДО ветки RateLimitRejected, иначе подписка ложно помечалась бы исчерпанной.
+    [Fact]
+    public void ТребуютсяКредиты_ПриRateLimitRejected_КлассModelOutOfCredits()
+        => TurnErrorClassifier.Classify(new TurnAttemptOutcome
+        {
+            HasResult = false,
+            RateLimitRejected = true,
+            ErrorText = "Fable 5.1 requires usage credits. Switch to another model, or manage usage credits at claude.ai/settings/usage, to continue.",
+        }).Should().Be(FallbackErrorClass.ModelOutOfCredits,
+            "«requires usage credits» — кредиты модели, не исчерпание окна подписки");
+
+    [Fact]
+    public void ТребуютсяКредиты_ПустойСтатус_КлассModelOutOfCredits()
+        => TurnErrorClassifier.Classify(Result(null,
+                "Fable 5.1 requires usage credits. Switch to another model to continue."))
+            .Should().Be(FallbackErrorClass.ModelOutOfCredits);
+
+    // «issue with the selected model» — подписка не имеет доступа к модели (обычно 404).
+    // Раньше это был None (fail-closed, без фолбэка): упавший ход не шёл на соседнюю модель.
+    // Теперь — ModelNoAccess с фолбэком: другая подписка/модель может иметь доступ.
+    [Theory]
+    [InlineData("There's an issue with the selected model (fable[1m]). It may not exist or you may not have access to it.")]
+    [InlineData("There's an issue with the selected model (opus[1m])")]
+    // Хвост фразы принимается и без головы, но только рядом со словом «model»
+    [InlineData("The model is unknown or you may not have access to it")]
+    public void НетДоступаКМодели_КлассModelNoAccess(string text)
+        => TurnErrorClassifier.Classify(Result(null, text)).Should().Be(FallbackErrorClass.ModelNoAccess);
+
+    // Фраза «may not have access to it» сама по себе НЕ специфична: её возвращают в своих
+    // ошибках чужие инструменты и MCP-серверы (так выглядел инцидент P31). Принять такую
+    // ошибку за отказ по модели — значит пометить живую пару и увести ход с правильной
+    // подписки, поэтому без соседства со словом «model» класс не ставится.
+    [Theory]
+    [InlineData("Repository is private — you may not have access to it")]
+    [InlineData("mcp__github: resource not found, you may not have access to it")]
+    public void ФразаПроДоступБезКонтекстаМодели_НеModelNoAccess(string text)
+        => TurnErrorClassifier.Classify(Result(null, text)).Should().NotBe(FallbackErrorClass.ModelNoAccess);
+
+    // 404 с текстом «нет доступа» — тоже ModelNoAccess (до белого списка статусов, иначе None).
+    [Fact]
+    public void НетДоступаКМодели_Статус404_КлассModelNoAccess()
+        => TurnErrorClassifier.Classify(Result("404",
+                "There's an issue with the selected model (fable[1m]). It may not exist or you may not have access to it."))
+            .Should().Be(FallbackErrorClass.ModelNoAccess);
+
+    // Настоящее исчерпание окна сессии — по-прежнему RateLimit, а не ModelOutOfCredits.
+    [Fact]
+    public void НастоящийЛимитСессии_ПриRateLimitRejected_ОстаётсяRateLimit()
+        => TurnErrorClassifier.Classify(new TurnAttemptOutcome
+        {
+            HasResult = false,
+            RateLimitRejected = true,
+            ErrorText = "You've hit your session limit · resets 9pm",
+        }).Should().Be(FallbackErrorClass.RateLimit,
+            "«session limit» — настоящее исчерпание окна, не кредиты модели");
+
+    [Theory]
+    [InlineData(FallbackErrorClass.ModelNoAccess, "model_no_access")]
+    [InlineData(FallbackErrorClass.ModelOutOfCredits, "model_out_of_credits")]
+    public void ModelUnavailable_WireName(FallbackErrorClass cls, string expected)
+        => TurnErrorClassifier.WireName(cls).Should().Be(expected);
+
     [Theory]
     [InlineData("500")]
     [InlineData("502")]
@@ -346,4 +412,79 @@ public class TurnErrorClassifierTests
     [Fact]
     public void AuthFailure_WireName_AuthFailure()
         => TurnErrorClassifier.WireName(FallbackErrorClass.AuthFailure).Should().Be("auth_failure");
+
+    // ===== PromptOverflow: Win32:206 ERROR_FILENAME_EXCED_RANGE (задача dc641949) =====
+
+    // Канал, по которому приходит сбой старта процесса: ClaudeSession бросает Win32Exception
+    // при Process.Start (или локальный PromptOverflowException до Start), маркирует
+    // Details префиксом "[Win32:206]" и через FallbackLlmSessionAdapter.NoteWin32Code
+    // пробрасывает в outcome.Win32ErrorCode. Классификатор должен выдать PromptOverflow,
+    // а не Unreachable — иначе локальная причина маскируется под мёртвый эндпоинт и фолбэк
+    // крутит 5 пар впустую (история инцидента 2026-09-07, чат 74f1c3d6).
+    [Fact]
+    public void Win32Error206_HasResultFalse_КлассPromptOverflow()
+    {
+        var outcome = new TurnAttemptOutcome
+        {
+            HasResult = false,
+            ErrorText = "Имя файла или его расширение имеет слишком большую длину.",
+            Win32ErrorCode = 206,
+        };
+        TurnErrorClassifier.Classify(outcome)
+            .Should().Be(FallbackErrorClass.PromptOverflow,
+                "Win32:206 (ERROR_FILENAME_EXCED_RANGE) — локальный сбой старта, не Unreachable");
+    }
+
+    // Тот же случай, но маркер не дошёл через поле Win32ErrorCode — fallback на текст.
+    // Стоит ДО "процесс умер без result → Unreachable", чтобы вторая ветка не выиграла.
+    [Fact]
+    public void Win32Marker_ВErrorText_HasResultFalse_КлассPromptOverflow()
+    {
+        var outcome = new TurnAttemptOutcome
+        {
+            HasResult = false,
+            ErrorText = "[Win32:206]Имя файла или его расширение имеет слишком большую длину.",
+        };
+        TurnErrorClassifier.Classify(outcome).Should().Be(FallbackErrorClass.PromptOverflow,
+            "префикс \"[Win32:206]\" в ErrorText — тот же локальный сбой старта");
+    }
+
+    // Другой Win32-код — НЕ PromptOverflow. Идёт по общему правилу (Unreachable),
+    // потому что настоящая причина не та (например, ERROR_ACCESS_DENIED=5 на неверных
+    // правах к exe). Тест-фикстура на будущее: при появлении новых "локальных" классов
+    // мы добавим сюда свой, а PromptOverflow останется только под 206.
+    [Fact]
+    public void Win32Error5_AccessDenied_HasResultFalse_КлассНеPromptOverflow()
+    {
+        var outcome = new TurnAttemptOutcome
+        {
+            HasResult = false,
+            ErrorText = "Access is denied.",
+            Win32ErrorCode = 5,
+        };
+        TurnErrorClassifier.Classify(outcome).Should().NotBe(FallbackErrorClass.PromptOverflow,
+            "PromptOverflow — только Win32:206 ERROR_FILENAME_EXCED_RANGE");
+    }
+
+    // Регрессия: в обычной переписке чат может процитировать "[Win32:206]" — мы НЕ
+    // должны ложно классифицировать это как PromptOverflow. Защита держится на
+    // HasWin32Marker (проверяет StartWith, а не Contains) и на HasResult=true для
+    // успешного result. Этот тест ловит и противоположный регресс — что
+    // HasWin32Marker случайно расширили до Contains.
+    [Fact]
+    public void Win32Marker_ВнутриТекста_НеНачалоСтроки_HasResultTrue_КлассНеМеняется()
+    {
+        var outcome = new TurnAttemptOutcome
+        {
+            HasResult = true,
+            Subtype = "success",
+            ErrorText = "обсуждали: \"[Win32:206]\" встречалось в соседнем логе",
+        };
+        TurnErrorClassifier.Classify(outcome).Should().Be(FallbackErrorClass.None,
+            "HasWin32Marker смотрит на StartWith, цитата в середине текста — не маркер старта");
+    }
+
+    [Fact]
+    public void PromptOverflow_WireName()
+        => TurnErrorClassifier.WireName(FallbackErrorClass.PromptOverflow).Should().Be("prompt_overflow");
 }

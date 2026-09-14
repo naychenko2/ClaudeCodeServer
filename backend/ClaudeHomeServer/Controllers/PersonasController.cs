@@ -6,7 +6,11 @@ using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Knowledge;
+using ClaudeHomeServer.Services.Memory;
+using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Personas;
+using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Services.TriggerSources;
 using ClaudeHomeServer.Services.Tts;
 using Microsoft.AspNetCore.Authorization;
@@ -28,7 +32,6 @@ public class PersonasController(
     SessionManager sessions,
     PersonaMemoryService memory,
     PersonaBindingsService bindings,
-    NotesService notes,
     SkillsService skills,
     KnowledgeService knowledge,
     Services.Images.ImageGenerationService images,
@@ -41,14 +44,15 @@ public class PersonasController(
     PersonasCrudService crud,
     IConfiguration config,
     ILogger<PersonasController> log,
-    IHubContext<SessionHub> hub) : ControllerBase
+    IHubContext<SessionHub> hub,
+    INoteAccessor? notes = null) : ControllerBase
 {
     private readonly PersonaManager _personas = personas;
     private readonly ProjectManager _projects = projects;
     private readonly SessionManager _sessions = sessions;
     private readonly PersonaMemoryService _memory = memory;
     private readonly PersonaBindingsService _bindings = bindings;
-    private readonly NotesService _notes = notes;
+    private readonly INoteAccessor? _notes = notes;
     private readonly SkillsService _skills = skills;
     private readonly KnowledgeService _knowledge = knowledge;
     private readonly Services.Images.ImageGenerationService _images = images;
@@ -68,7 +72,7 @@ public class PersonasController(
     // Сессия-вызыватель MCP-вызова (заголовок ставит конфиг хода): по ней crud отличает
     // вызовы из чата (онбординг-предохранители) от рукотворного REST
     private string? CallerSessionId() =>
-        Request.Headers[DenyOnDelegatedTurnAttribute.CallerHeader].FirstOrDefault();
+        Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault();
 
     private Task Broadcast(string action, string? personaId = null) =>
         _hub.Clients.Group("user_" + UserId)
@@ -967,7 +971,7 @@ public class PersonasController(
             sb.AppendLine("Проекты (для триггеров file/gitCommit/taskStatus, projectId = id):");
             foreach (var p in projects.Take(20)) sb.AppendLine($"- {p.Id} — {p.Name}");
         }
-        var sources = _notes.GetSources(UserId);
+        var sources = _notes?.GetSources(UserId) ?? [];
         if (sources.Count > 0)
         {
             sb.AppendLine("Источники заметок (для триггера note, source = key):");
@@ -1068,7 +1072,7 @@ public class PersonasController(
                     var source = dict.GetString("source");
                     if (string.IsNullOrWhiteSpace(source)) return false;
                     if (source == "personal") return true;
-                    return _notes.GetSources(UserId).Any(s => s.Key == source);
+                    return _notes?.GetSources(UserId)?.Any(s => s.Key == source) ?? false;
                 }
             case AutomationTriggerType.Mention:
                 return true;
@@ -1151,7 +1155,7 @@ public class PersonasController(
                 {
                     // Папки источника — из путей его заметок (все промежуточные уровни)
                     var folders = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
-                    foreach (var s in _notes.GetSummaries(UserId, source, null))
+                    foreach (var s in _notes?.GetSummaries(UserId, source, null) ?? [])
                     {
                         var dir = System.IO.Path.GetDirectoryName(s.Path)?.Replace('\\', '/');
                         while (!string.IsNullOrEmpty(dir))
@@ -1164,7 +1168,7 @@ public class PersonasController(
                 }
 
             case "notes":
-                return Ok(_notes.GetSources(UserId)
+                return Ok((_notes?.GetSources(UserId) ?? [])
                     .Select(s => new { id = s.Key, label = s.Label, hint = (string?)null, meta = (string?)null }));
 
             case "tool":
@@ -1414,7 +1418,7 @@ public class PersonasController(
                     }
                 case "notes":
                     {
-                        var summaries = _notes.GetSummaries(UserId, target, null).AsEnumerable();
+                        var summaries = (_notes?.GetSummaries(UserId, target, null) ?? []).AsEnumerable();
                         if (!string.IsNullOrWhiteSpace(path))
                         {
                             var prefix = path.Trim().Replace('\\', '/').Trim('/') + "/";

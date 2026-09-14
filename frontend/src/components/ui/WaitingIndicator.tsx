@@ -22,10 +22,15 @@ const ECHO_FACE_H = 56;
 // что именно происходит и сколько примерно ждать.
 // В режиме awaitingResponse=true — фиксированный текст «Ожидаю ответа…» без анимации,
 // т.к. Claude ждёт ввода пользователя.
-export function WaitingIndicator({ planning, hint, awaitingResponse }: {
+export function WaitingIndicator({ planning, hint, awaitingResponse, waitingReason, waitingTicks }: {
   planning?: 'planning' | 'replanning';
   hint?: string;
   awaitingResponse?: boolean;
+  // Причина ожидания из маркера `<waiting>` цикла «до готово» — показываем под индикатором,
+  // чтобы пользователь понимал, чего ждёт ход. null — обычный ход, без причины.
+  waitingReason?: string | null;
+  // Счётчик тиков ожидания (Loop:WaitingTickSeconds, дефолт 300 с). 0 — не показываем
+  waitingTicks?: number;
 } = {}) {
   const reduced = typeof window !== 'undefined'
     && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
@@ -149,6 +154,21 @@ export function WaitingIndicator({ planning, hint, awaitingResponse }: {
           maxWidth: '100%',
         }}>
           {hint}
+        </span>
+      )}
+      {/* Причина ожидания по маркеру `<waiting>` цикла «до готово»: показываем под основной
+          строкой индикатора. Рядом — счётчик тиков, чтобы было видно, что цикл живой, а не
+          завис: бэкенд тикает раз в Loop:WaitingTickSeconds (дефолт 5 минут), и N тиков —
+          это N интервалов ожидания. Не показываем при ожидании по живой задаче (reason=null). */}
+      {waitingReason && (
+        <span style={{
+          fontSize: 11.5, color: C.textMuted, marginLeft: 38, fontFamily: 'inherit',
+          maxWidth: '100%', display: 'inline-flex', alignItems: 'baseline', gap: 6,
+        }}>
+          <span>ожидание: {waitingReason}</span>
+          {waitingTicks && waitingTicks > 0 ? (
+            <span style={{ opacity: 0.75 }}>· тик {waitingTicks}</span>
+          ) : null}
         </span>
       )}
     </div>

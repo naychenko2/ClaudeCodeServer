@@ -1,16 +1,19 @@
 import { useState, useEffect, useRef } from 'react';
-import { Activity, Bell, ChevronRight, ExternalLink, House, Settings, Share2, Users } from 'lucide-react';
+import { Activity, Bell, ChevronRight, ExternalLink, House, Puzzle, Settings, Users } from 'lucide-react';
 import type { AuthState, Project } from '../types';
 import { C, FONT, R, TB, SHADOW } from '../lib/design';
 import { useIsMobile, useWindowWidth, MOBILE_MAX, TABLET_MAX } from '../lib/breakpoints';
+import { isSubsystemEnabled } from '../lib/subsystems';
+import { useRegisteredSubsystems } from '../lib/subsystems/registry';
 import { IconButton } from './ui/IconButton';
 import { ICON_SIZE } from './ui/icons';
 import { ProjectIcon } from '../features/projects/ProjectIcon';
-import { HubTabs, DEFAULT_TABS, TAB_ICONS, TAB_LABELS, type HubTab, type HubTabValue, isModuleTab } from './HubTabs';
+import { HubTabs, defaultHubTabs, subsystemTabValue, tabLabel, tabIcon, isSubsystemTab, type HubTab, type HubTabValue, isModuleTab } from './HubTabs';
 import { ToolbarOverflowMenu, type OverflowItem } from './ToolbarOverflowMenu';
 import { AvatarMenu } from '../features/projects/AvatarMenu';
 import { UserManagementModal } from './UserManagementModal';
 import { ChangePasswordDialog } from './ChangePasswordDialog';
+import { SubsystemsPage } from '../pages/SubsystemsPage';
 import { FeatureFlagsModal } from './FeatureFlagsModal';
 import { ModelsSpendModal } from '../features/modelsSpend/ModelsSpendModal';
 import { McpServersModal } from '../features/mcp/McpServersModal';
@@ -61,6 +64,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
   const w = useWindowWidth();
   const isTablet = w > MOBILE_MAX && w <= TABLET_MAX;
   const [showUserMgmt, setShowUserMgmt] = useState(false);
+  const [showSubsystems, setShowSubsystems] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [showFeatureFlags, setShowFeatureFlags] = useState(false);
   const [showModelsSpend, setShowModelsSpend] = useState(false);
@@ -211,27 +215,48 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
   // Активная стена подсвечивает пилюлю «Проекты» (displayValue в HubTabs) —
   // это рабочий режим раздела проектов. Диплинк #/wall работает.
 
+  // Полный набор таббара (фиксированные + подсистемные вкладки из реестра) — он же
+  // эталон замера «5 табов влезают». Подсистемные вкладки идут по manifest.order.
+  const subs = useRegisteredSubsystems();
+  // Раздел подсистемы показываем, только если она объявила `tab` и включена:
+  // подсистема без tab пилюли не даёт (иначе пункт меню вёл бы в пустоту).
+  const activeSubs = subs.filter(m => m.tab && isSubsystemEnabled(m.key));
+  const defaultTabs = defaultHubTabs(activeSubs);
+
   const PRIMARY_MOBILE: HubTab[] = ['chats', 'projects', 'calendar'];
-  const HIDDEN_MOBILE: HubTab[] = ['notes', 'personas'];
+  // Спрятанные ФИКСИРОВАННЫЕ разделы, показываемые 4-й вкладкой при активности.
+  // Подсистемные вкладки («Заметки») дописывает сам HubTabs — он знает активные ключи.
+  const HIDDEN_MOBILE: HubTab[] = ['personas'];
   // Самая длинная подпись в полном наборе — для скрытого компактного эталона.
   // Активный сегмент берётся с ней, чтобы замер покрывал худший случай (любой
   // реальный активный таб даст ряд не шире эталона). Дубликаты длин режутся по
-  // порядку в DEFAULT_TABS — для нашего набора самые длинные «Проекты»/«Календарь».
-  const longestHubLabel = DEFAULT_TABS.reduce(
-    (acc, t) => (TAB_LABELS[t].length > acc.length ? TAB_LABELS[t] : acc),
+  // порядку в defaultTabs — для нашего набора самые длинные «Проекты»/«Календарь».
+  const longestHubLabel = defaultTabs.reduce(
+    (acc, t) => (tabLabel(t).length > acc.length ? tabLabel(t) : acc),
     '',
   );
-  // Активен спрятанный раздел — показываем его 4-й вкладкой, чтобы подсветка была верной
-  // (модульные табы — не из HubTab, их добавляет сам HubTabs из реестра)
-  const mobileTabs = !isModuleTab(value) && HIDDEN_MOBILE.includes(value)
-    ? [...PRIMARY_MOBILE, value] : PRIMARY_MOBILE;
+  // Активен спрятанный фиксированный раздел — показываем его 4-й вкладкой, чтобы
+  // подсветка была верной (подсистемные и модульные табы — не из HubTab, их
+  // добавляет сам HubTabs из реестра)
+  const mobileTabs = !isModuleTab(value) && !isSubsystemTab(value) && HIDDEN_MOBILE.includes(value as HubTab)
+    ? [...PRIMARY_MOBILE, value as HubTab] : PRIMARY_MOBILE;
   // active — подсветка текущего раздела: эти пункты живут в «⋯», и без неё
   // не видно, где находишься
   const sectionItems: OverflowItem[] = [
     // «Домой» есть и на логотипе, но дублируем пунктом: у дашборда нет своей вкладки,
     // и без строки в меню не видно, что ты на нём
     { key: 'home', icon: <House size={18} strokeWidth={2} />, label: 'Домой', onClick: () => onTab('home'), active: !historyActive && value === 'home' },
-    { key: 'notes', icon: <Share2 size={18} strokeWidth={2} />, label: 'Заметки', onClick: () => onTab('notes'), active: !historyActive && value === 'notes' },
+    // Разделы подсистем из реестра (напр. «Заметки»): иконка/подпись — из манифеста.
+    ...activeSubs.map(m => {
+      const tab = subsystemTabValue(m.key);
+      return {
+        key: tab,
+        icon: m.icon ?? <Puzzle size={18} strokeWidth={2} />,
+        label: m.title,
+        onClick: () => onTab(tab),
+        active: !historyActive && value === tab,
+      };
+    }),
     { key: 'personas', icon: <Users size={18} strokeWidth={2} />, label: 'Персоны', onClick: () => onTab('personas'), active: !historyActive && value === 'personas' },
   ];
 
@@ -364,8 +389,8 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
                 top: 0, left: 0, display: 'flex', gap: 3, whiteSpace: 'nowrap',
               }}
             >
-              {DEFAULT_TABS.map((tab) => {
-                const label = TAB_LABELS[tab];
+              {defaultTabs.map((tab) => {
+                const label = tabLabel(tab);
                 const isActive = label.length === longestHubLabel.length;
                 return (
                   <span
@@ -375,7 +400,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
                       padding: '0 11px', fontSize: 13, fontWeight: 600,
                     }}
                   >
-                    {TAB_ICONS[tab]}
+                    {tabIcon(tab)}
                     {isActive && label}
                   </span>
                 );
@@ -510,6 +535,10 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
           // нечего, сервер всё равно откажет
           onShowDevices={desktopEnabled ? () => setShowDevices(true) : undefined}
           onShowUserManagement={() => setShowUserMgmt(true)}
+          // Админский список подсистем инстанса (Этап 5, волна 3): только
+          // чтение через GET /api/admin/subsystems, без тумблера — глобальный
+          // рубильник через API сознательно отложен (задача 7d261cde).
+          onShowSubsystems={isAdmin ? () => setShowSubsystems(true) : undefined}
           hideStatus={isMobile || isTablet}
           // «Знания», «Специальности», «Аналитика токенов» и «Что нового» живут здесь
           // на обеих платформах: в таббар они не входят, а отдельного меню разделов нет
@@ -536,6 +565,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
       </div>
 
       {showUserMgmt && <UserManagementModal currentUserId={auth.id} onClose={() => setShowUserMgmt(false)} />}
+      {showSubsystems && <SubsystemsPage onClose={() => setShowSubsystems(false)} />}
       {showChangePassword && <ChangePasswordDialog onClose={() => setShowChangePassword(false)} />}
       {showFeatureFlags && <FeatureFlagsModal onClose={() => setShowFeatureFlags(false)} />}
       {showModelsSpend && <ModelsSpendModal onClose={() => setShowModelsSpend(false)} />}

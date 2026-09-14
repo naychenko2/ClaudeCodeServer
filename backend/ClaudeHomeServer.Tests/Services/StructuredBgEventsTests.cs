@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
@@ -221,6 +222,105 @@ public class StructuredBgEventsTests : IDisposable
         PresenceOf(sent).Select(m => m.Active).Should().Equal([true, false]);
     }
 
+    // Сторож ИНВАРИАНТА упорядочивания: серия быстрых смен состояния приходит клиенту в том
+    // же порядке, в каком менялось состояние. До упорядочивания (PublishBgPresence через
+    // `_ = Task.Run(...)`) ThreadPool под нагрузкой мог выполнить задачи в произвольном
+    // порядке — `[true,false,true,false]` доезжало как `[false,true,false,true]`, клиент
+    // оставался в `true` после последней смены, и значок агентов залипал до перезагрузки
+    // списка (инцидент 2026-09-14, см. комментарий выше). Четыре быстрые смены — предел
+    // реалистичного сценария: при запуске-и-завершении пары агентов подряд пути учёта
+    // (TrackBgLaunch, task_started, task_notification, background_tasks_changed) могут
+    // вызывать PublishBgPresence в любой последовательности на потоках ридера.
+    [Fact]
+    public async Task БыстрыеСменыСостояния_ДоставляютсяВПорядкеСмены()
+    {
+        // Стенд с async-воронкой: OnMessage создаёт TCS, кладёт в очередь, ждёт и только
+        // после await добавляет сообщение в sent. Это имитирует реальный IO (сеть клиента),
+        // при котором клиент видит событие только после завершения await.
+        //
+        // БЕЗ Unwrap() в PublishBgPresence: каждая публикация создаёт ContinueWith, который
+        // ставится в очередь ЗА await OnMessage. Все 4 ContinueWith выполняются подряд,
+        // пока первый await ещё ждёт — в очереди pendingReleases окажется 4 TCS, не 1.
+        // С Unwrap() цепочка склеивается: следующий вызов PublishBgPresence ждёт завершения
+        // предыдущего, и в очереди всегда ровно 1 TCS.
+        //
+        // Ожидание Count > countBefore после каждого Release, а не Count >= 4 в конце:
+        // первое поймало бы промежуточное состояние и стало источником флака на CI
+        // (ThreadPool может выполнить ContinueWith после проверки условия, но до ассерта).
+        // Второе требует доказательства, что ВСЕ рассылки завершились — после Release#4
+        // sent.Count == 4, но PresenceTail.IsCompleted может ещё не стать true,
+        // особенно без Unwrap().
+        var (session, sent, pendingReleases, queueLock) = NewClaudeSessionWithAsyncSink();
+        var run = NewRun();
+
+        InvokeHandleTaskStarted(session, run, AgentStarted("t1", "toolu_1"));
+        InvokeHandleBackgroundTasksChanged(session, run, El("""{"tasks":[]}"""));
+        InvokeHandleTaskStarted(session, run, AgentStarted("t2", "toolu_2"));
+        InvokeHandleBackgroundTasksChanged(session, run, El("""{"tasks":[]}"""));
+
+        // Дождаться, что хотя бы одна публикация стартовала — без этого любые ассерты
+        // ниже race'или бы с пустой очередью
+        await WaitForAsync(
+            () => PendingReleasesCount(pendingReleases, queueLock) >= 1,
+            timeoutMs: 10_000,
+            description: "первая публикация должна поставить TCS в очередь");
+
+        // ВМЕСТО `Task.Delay(50)`: дождаться стабилизации счётчика на 1 (5 одинаковых
+        // чтений подряд через 20 мс = окно 100 мс). С Unwrap() в очереди всегда ровно
+        // 1 TCS — следующие публикации ждут завершения первой, и счётчик стабильно == 1.
+        // БЕЗ Unwrap() все 4 публикации стартанули бы параллельно, в очереди оказалось
+        // бы 4 TCS, стабилизация на 1 не наступила бы, и мы получили бы понятный
+        // TimeoutException вместо «не совпали последовательности».
+        // Окно 100 мс под ThreadPool голоданием — компромисс: стабилизация сама дотянется,
+        // пока счётчик не перестанет меняться (а `Task.Delay(50)` мог ложно-зелёным пройти,
+        // если за 50 мс успела дойти только первая публикация — стабилизация 5x20ms=100ms
+        // ловит это надёжнее).
+        await WaitForStableAsync(
+            sample: () => PendingReleasesCount(pendingReleases, queueLock),
+            expected: 1,
+            stableReadings: 5,
+            intervalMs: 20,
+            timeoutMs: 10_000,
+            description: "PendingReleasesCount должен стабильно == 1: без Unwrap() в очереди было бы 4 TCS");
+
+        PendingReleasesCount(pendingReleases, queueLock).Should().Be(1,
+            "следующая публикация должна ждать завершения предыдущей — иначе без Unwrap() 4 рассылки стартанули бы параллельно");
+
+        // Последовательно освобождаем каждую рассылку и проверяем, что счётчик растёт.
+        // Бюджет 10 с: тест делает четыре цикла «освободить TCS → дождаться события», и
+        // под голодающим ThreadPool на полном прогоне (6383 теста) дефолтные 2 с выедались
+        // целиком. На зелёном пути это не замедляет прогон — выход по условию, а не по
+        // таймеру.
+        //
+        // Перед каждым Dequeue ждём, что в очереди есть TCS: с Unwrap() следующая
+        // публикация стартует только после завершения предыдущей, и под нагрузкой пула
+        // между Release#N и стартом ВНУТРЕННЕЙ задачи публикации N+1 проходит заметное
+        // время — без явного ожидания цикл может выйти, посчитав очередь пустой, и
+        // финальный WaitForAsync(Count == 4) сорвётся с честным «не дождались».
+        while (PresenceOf(sent).Count < 4)
+        {
+            await WaitForAsync(
+                () => PendingReleasesCount(pendingReleases, queueLock) >= 1,
+                timeoutMs: 10_000,
+                description: "перед Release в очереди должен быть TCS — следующая публикация ещё не стартовала");
+
+            var countBefore = PresenceOf(sent).Count;
+            TaskCompletionSource<bool>? tcsToRelease;
+            lock (queueLock)
+            {
+                if (pendingReleases.Count == 0) break;
+                tcsToRelease = pendingReleases.Dequeue();
+            }
+            tcsToRelease.SetResult(true);
+            await WaitForAsync(
+                () => PresenceOf(sent).Count > countBefore,
+                timeoutMs: 10_000,
+                description: "после Release#N должен появиться следующий presence");
+        }
+
+        PresenceOf(sent).Select(m => m.Active).Should().Equal([true, false, true, false]);
+    }
+
     [Fact]
     public void ПослеПустогоСнэпшота_НоваяЗадачаСноваЗажигаетЗначок()
     {
@@ -253,10 +353,56 @@ public class StructuredBgEventsTests : IDisposable
         var context = new LlmSessionContext(
             RootPath: Path.GetTempPath(),
             OnMessage: msg => { lock (sent) sent.Add(msg); return Task.CompletedTask; },
-            RawSystemPrompt: null,
+            RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
             PermissionRules: null,
             TasksMcp: null);
         return (new ClaudeSession(new Session(), context), sent);
+    }
+
+    // Стенд с async-воронкой для тестирования упорядочивания публикаций.
+    // Существующий NewClaudeSession делает OnMessage синхронным (lock → add → return CompletedTask),
+    // поэтому PublishBgPresence с ContinueWith без Unwrap() выполняется быстро и ассерт
+    // Count >= 4 проходит — ThreadPool не успевает намешать порядок.
+    //
+    // Этот стенд ловит отсутствие Unwrap(): OnMessage создаёт TCS, кладёт его в очередь,
+    // ждёт await, и только после завершения добавляет сообщение в sent. Без Unwrap()
+    // все 4 ContinueWith (по одному на каждую смену состояния) стартуют подряд, пока
+    // первый await ещё спит — в очереди pendingReleases окажется 4 TCS, не 1.
+    // С Unwrap() цепочка склеивается: следующий вызов ждёт завершения предыдущего,
+    // и в очереди всегда ровно 1 TCS.
+    private static (ClaudeSession Session, List<ServerMessage> Sent, Queue<TaskCompletionSource<bool>> PendingReleases, object QueueLock) NewClaudeSessionWithAsyncSink()
+    {
+        var sent = new List<ServerMessage>();
+        var pendingReleases = new Queue<TaskCompletionSource<bool>>();
+        var queueLock = new object();
+        var context = new LlmSessionContext(
+            RootPath: Path.GetTempPath(),
+            OnMessage: async msg =>
+            {
+                var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                lock (queueLock)
+                {
+                    pendingReleases.Enqueue(tcs);
+                }
+                await tcs.Task;
+                lock (sent)
+                {
+                    sent.Add(msg);
+                }
+            },
+            RawSystemPrompt: null,
+            BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
+            PermissionRules: null,
+            TasksMcp: null);
+        return (new ClaudeSession(new Session(), context), sent, pendingReleases, queueLock);
+    }
+
+    private static int PendingReleasesCount(Queue<TaskCompletionSource<bool>> q, object lockObj)
+    {
+        lock (lockObj)
+        {
+            return q.Count;
+        }
     }
 
     private static void InvokeHandleTaskStarted(ClaudeSession session, object run, JsonElement root) =>
@@ -282,12 +428,61 @@ public class StructuredBgEventsTests : IDisposable
     }
 
     // Завершение через структурный/текстовый путь шлёт bg_agent_done из fire-and-forget
-    // Task.Run — ждём появления сообщения вместо фиксированной паузы
-    private static async Task WaitForAsync(Func<bool> condition, int timeoutMs = 2000)
+    // Task.Run — ждём появления сообщения вместо фиксированной паузы. Таймаут молча
+    // НЕ выходит: иначе тест падает на ассерте с сообщением про «не совпали
+    // последовательности», а настоящая причина «не дождались» теряется (CI-флак
+    // БыстрыеСменыСостояния_ДоставляютсяВПорядкеСмены в master как раз был таким).
+    // [CallerArgumentExpression] подставляет выражение condition строкой, чтобы при
+    // таймауте сразу было видно, какое именно условие не дождались.
+    private static async Task WaitForAsync(
+        Func<bool> condition,
+        int timeoutMs = 2000,
+        string? description = null,
+        [CallerArgumentExpression(nameof(condition))] string? conditionExpression = null)
     {
         var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
-        while (!condition() && DateTime.UtcNow < deadline)
+        while (!condition())
+        {
+            if (DateTime.UtcNow >= deadline)
+                throw new TimeoutException(
+                    $"Условие не выполнилось за {timeoutMs} мс: {description ?? conditionExpression ?? "<no description>"}");
             await Task.Delay(10);
+        }
+    }
+
+    // Детерминированная замена `await Task.Delay(N)`: ждём, пока sample() вернёт expected
+    // подряд stableReadings раз с интервалом intervalMs. Используется вместо фиксированной
+    // паузы там, где нужно дать планировщику пула шанс — но без ложно-зелёного на
+    // медленном CI (стабилизация сама дотянется, пока счётчик не перестанет меняться).
+    private static async Task WaitForStableAsync(
+        Func<int> sample,
+        int expected,
+        int stableReadings,
+        int intervalMs,
+        int timeoutMs,
+        string description)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        int lastValue = int.MinValue;
+        int stableCount = 0;
+        while (DateTime.UtcNow < deadline)
+        {
+            var current = sample();
+            if (current == expected && current == lastValue)
+            {
+                stableCount++;
+                if (stableCount >= stableReadings) return;
+            }
+            else
+            {
+                stableCount = current == expected ? 1 : 0;
+                lastValue = current;
+            }
+            await Task.Delay(intervalMs);
+        }
+        throw new TimeoutException(
+            $"Счётчик не стабилизировался на {expected} за {timeoutMs} мс: {description}. " +
+            $"Текущее значение: {sample()}");
     }
 
     // --- 1. task_started регистрирует фоновую задачу как активную ---

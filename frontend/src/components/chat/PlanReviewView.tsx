@@ -6,15 +6,14 @@ import { C, FONT, R, SHADOW, SP, FS } from '../../lib/design';
 import { stripRoot } from '../../lib/paths';
 import { ChatProjectContext, useAssistantName } from './contexts';
 import { MarkdownContent } from './MarkdownContent';
-import { IconNotes } from '../../features/notes/shared';
-import { saveChatNote, openNoteById } from '../../features/notes/saveToNote';
 import { VoiceMicButton } from './VoiceMicButton';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
+import { useSlotItem } from '../../lib/subsystems/registry';
+import type { PlanButtonCtx } from '../../lib/subsystems/registryCore';
 import { PlanRemarks } from '../../features/plan/PlanRemarks';
 import { PlanScheme } from '../plan/PlanScheme';
 import { api } from '../../lib/api';
 import { Button } from '../ui/Button';
-import { IconButton } from '../ui/IconButton';
 import { InlineSegmented } from '../ui/InlineSegmented';
 
 // Иконка режима «План» — прямоугольник с линиями (как ModeIcon plan в Composer)
@@ -54,42 +53,7 @@ function CollapsedPlanBody({ plan }: { plan: string }) {
   );
 }
 
-// Иконка-кнопка «В заметку» — сохранить текст плана в базу заметок
-function SavePlanButton({ plan, online }: { plan: string; online: boolean }) {
-  const project = useContext(ChatProjectContext);
-  const [savedId, setSavedId] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  if (!online) return null;
-  const save = () => {
-    if (busy || savedId) return;
-    setBusy(true);
-    saveChatNote({ text: plan, projectId: project?.id, titlePrefix: 'План: ' })
-      .then(n => { setSavedId(n.id); setTimeout(() => setSavedId(null), 6000); })
-      .catch(() => {})
-      .finally(() => setBusy(false));
-  };
-  return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xxs, marginLeft: 'auto', flexShrink: 0 }}>
-      {savedId && (
-        <Button variant="ghost" size="xs" onClick={() => openNoteById(savedId)}
-          style={{ color: C.successText, fontSize: FS.xs }}>
-          Открыть
-        </Button>
-      )}
-      <IconButton
-        size="xs"
-        tone="muted"
-        ariaLabel={savedId ? 'Сохранено в заметки' : 'Сохранить план в заметку'}
-        disabled={busy}
-        onClick={save}
-      >
-        {savedId
-          ? <Check size={14} color={C.success} strokeWidth={3} style={{ flexShrink: 0 }} />
-          : <IconNotes size={14} />}
-      </IconButton>
-    </span>
-  );
-}
+// Иконка-кнопка «В заметку» приходит вкладом слота plan-action (фича Notes).
 
 // Карточка согласования плана (ExitPlanMode в режиме «План»):
 // показывает план и кнопки «Одобрить и выполнить» / «Отклонить» (с комментарием).
@@ -102,6 +66,8 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
   showSwitch?: boolean;
   onSwitchMode?: (mode: Mode) => void;
 }) {
+  // Кнопка «В заметку» — вклад слота plan-action (ноль прямых импортов фичи Notes).
+  const planButton = useSlotItem<PlanButtonCtx>('plan-action', 'plan-button');
   const [rejecting, setRejecting] = useState(false);
   const [feedback, setFeedback] = useState('');
   const feedbackRef = useRef<HTMLTextAreaElement>(null);
@@ -197,7 +163,7 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600, color: C.successText }}>
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="8" fill={C.success} /><path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke={C.onAccent} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
           План одобрен — выполняется
-          <SavePlanButton plan={plan} online={online} />
+          {planButton?.render?.({ plan, online })}
         </div>
         <CollapsedPlanBody plan={plan} />
         {/* Выход из режима «План» — только у актуального (последнего) одобренного плана.
@@ -234,7 +200,7 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600, color: C.textSecondary }}>
           <RotateCcw size={15} color={C.textMuted} strokeWidth={2} style={{ flexShrink: 0 }} />
           План{version ? ` v${version}` : ''} — отклонён
-          <SavePlanButton plan={plan} online={online} />
+          {planButton?.render?.({ plan, online })}
         </div>
         {item.feedback?.trim() && (
           <div style={{ fontSize: 12, color: C.textSecondary, marginTop: 7, whiteSpace: 'pre-wrap' }}>
@@ -275,7 +241,7 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
             v{version} · на согласовании
           </span>
         )}
-        <SavePlanButton plan={plan} online={online} />
+        {planButton?.render?.({ plan, online })}
       </div>
 
       <div style={{ position: 'relative', margin: '12px 0' }}>

@@ -219,6 +219,11 @@ public class LlmProviderRegistry
     public const int ClaudeWindow1M = 1_000_000;
     public const int ClaudeWindowDefault = 200_000;
 
+    // Маржа на расхождение счётчиков токенов между CLI и vLLM. В инциденте промах
+    // был ровно 1 токен, 512 ≪ резерва 8192. Единственный регулятор, если расхождение
+    // окажется больше.
+    public const int WindowSafetyMargin = 512;
+
     // Шкала усилий рассуждений (от самого лёгкого к самому тяжёлому). Используется в EffortFor
     // для подмены неподдерживаемого провайдером значения на ближайшее СНИЗУ: так «max» у
     // провайдера, который знает только [low, medium, xhigh], становится «xhigh», а не «low»
@@ -442,6 +447,17 @@ public class LlmProviderRegistry
             contextWindow = liveWindow;
             liveWindowUsed = true;
         }
+        // vLLM сверяет prompt + max_tokens ≤ max_model_len ДО генерации, поэтому
+        // объявляемое CLI окно = max_model_len − резерв под ответ − маржа;
+        // иначе auto-compact не успевает и ход падает 400 вместо сжатия.
+        var reserve = 0;
+        if (p.ExtraEnv.TryGetValue("CLAUDE_CODE_MAX_OUTPUT_TOKENS", out var reserveStr)
+            && int.TryParse(reserveStr, out var rv) && rv > 0)
+            reserve = rv;
+        var declared = (contextWindow > 0 && reserve > 0)
+            ? Math.Max(0, contextWindow - reserve - WindowSafetyMargin)
+            : contextWindow;
+
         // Фолбэк на каталог у ЛОКАЛЬНОГО провайдера — единственный путь, где окно можно
         // объявить завышенным: каталожное число статично, а стенд меняет режим (CTX=fast/
         // long/huge дают 65 536 / 98 304 / 245 760). Завышение не деградирует мягко — vLLM
@@ -452,11 +468,15 @@ public class LlmProviderRegistry
         // разбор «какое окно реально объявили» упирался в тупик.
         if (p.IsLocal && !liveWindowUsed && contextWindow > 0)
             Console.Error.WriteLine(
-                $"[LlmProviders] {p.Key}: живое окно от пробы недоступно, объявляем каталожное "
-                + $"{contextWindow} токенов — если стенд поднят в другом режиме, ход упадёт "
+                $"[LlmProviders] {p.Key}: живое окно от пробы недоступно, объявляем "
+                + $"declared={declared} (каталог={contextWindow}"
+                + (reserve > 0
+                    ? $", вычтен резерв={reserve}+маржа={WindowSafetyMargin}"
+                    : "")
+                + ") — если стенд поднят в другом режиме, ход упадёт "
                 + "«Prompt is too long» вместо сжатия контекста");
-        if (contextWindow > 0)
-            env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = contextWindow.ToString(CultureInfo.InvariantCulture);
+        if (declared > 0)
+            env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = declared.ToString(CultureInfo.InvariantCulture);
 
         // Лимит токенов на блок thinking. Только локальным/медленным провайдерам сейчас
         // задаём явно (qwen3.8-27b на llama.cpp/vLLM без потолка уходит в минутные размышления);

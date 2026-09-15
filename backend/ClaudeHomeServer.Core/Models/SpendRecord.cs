@@ -3,9 +3,9 @@ using System.Text.Json.Serialization;
 namespace ClaudeHomeServer.Models;
 
 // Источники расхода токенов (спека Spend Analytics v2): ходы чатов/задач, фоновые one-shot,
-// генерации fal.ai (токенов нет — счётчик), бесплатные модели (токены есть, стоимость 0),
-// синтез речи Yandex SpeechKit (токенов нет, счётчик запросов и рубли), веб-поиск через
-// Perplexity Sonar (токены есть — источник обычный, в суммы токенов входит).
+// генерации fal.ai (токенов нет — счётчик), генерации Higgsfield (кредиты, не токены — счётчик),
+// бесплатные модели (токены есть, стоимость 0), синтез речи Yandex SpeechKit (токенов нет,
+// счётчик запросов и рубли), веб-поиск через Perplexity Sonar (токены есть — источник обычный).
 public static class SpendSources
 {
     public const string ChatTurn = "chat-turn";
@@ -15,10 +15,11 @@ public static class SpendSources
     public const string Free = "free";
     public const string Tts = "tts";
     public const string WebSearch = "websearch";
+    public const string Higgsfield = "higgsfield";
 
     // Источники без токенов: у них расход меряется счётчиком вызовов, а не токенами, поэтому
     // в рейтингах «по токенам» им делать нечего (иначе они вечно висят внизу с нулём).
-    public static bool IsTokenless(string source) => source is Fal or Glif or Tts;
+    public static bool IsTokenless(string source) => source is Fal or Glif or Tts or Higgsfield;
 
     // Бесплатный исполнитель: локальная модель (Ollama или llama-server), прямой
     // адаптер любого OpenAI-совместимого источника (провайдер заканчивается на "-direct")

@@ -251,49 +251,6 @@ public class McpToolsetStabilityTests
     }
 
     /// <summary>
-    /// Продуктовая встроенная интеграция Higgsfield доставляется НЕ по каскаду реестра
-    /// (McpServersOn/McpServerGranted), а собственной чистой формулой
-    /// McpDelivery.IsBuiltinDelivered: рубильник записи + RO-гейт. Возврат к
-    /// McpDelivery.ShouldDeliver в этой ветке был бы откатом заявки
-    /// «продуктовая интеграция, не запись реестра» и обязан ронять тест.
-    /// </summary>
-    [SkippableFact]
-    public void Хиггсфилд_ПродуктоваяИнтеграция_КаскадРеестраНеПрименяется()
-    {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
-
-        var body = MethodBody(File.ReadAllText(path!), "private void TryAddHiggsfieldBuiltin");
-
-        // Решение принимает отдельная точка — IsBuiltinDelivered
-        body.Should().Contain("IsBuiltinDelivered(",
-            "продуктовая интеграция: гейт — McpDelivery.IsBuiltinDelivered, без проекта/персоны");
-        // Каскад реестра (McpServersOn / McpServerGranted) здесь НЕ применяется
-        body.Should().NotContain("McpServerGranted(",
-            "выдача сервера персоне — каскад реестра, к встроенной интеграции не относится");
-        body.Should().NotContain("McpServersOn",
-            "McpServersOn — каскад реестра, к встроенной интеграции не относится");
-        body.Should().NotContain("Mcp.McpDelivery.ShouldDeliver(",
-            "возврат к ShouldDeliver откатывает продуктовое правило на реестровое");
-        // Фич-флага в этой ветке нет с 2026-09-08 (снят): интеграция работает безусловно,
-        // единственный предохранитель — рубильник Enabled записи, который читает
-        // IsBuiltinDelivered. Возврат любой проверки флага (хоть FeatureFlagKeys.DesktopAgent,
-        // хоть литералом "higgsfield") обязан ронять тест: доставка идёт по записи
-        // реестра, а не по тумблеру фичи.
-        body.Should().NotContain("_flags",
-            "флаг higgsfield снят: доставка идёт по записи реестра, а не по тумблеру фичи");
-        // Живой OAuth сохраняем
-        body.Should().Contain("EnsureFresh",
-            "живой OAuth-токен обязателен (или сервер снимается с хода с WARN)");
-        // RO-гейт сохранён через IsBuiltinDelivered — требование точное: «readOnly» даёт
-        // и сигнатура bool readOnly, поэтому проверять «любое вхождение readOnly» бессмысленно,
-        // мутация «захардкодить readOnly: false на месте вызова» пройдёт. Требуем точный вызов
-        // IsBuiltinDelivered(hf, readOnly) — иначе проводка «RO персоны → гейт» не закрыта.
-        body.Should().Contain("IsBuiltinDelivered(hf, readOnly)",
-            "readOnly персоны обязан доезжать до гейта, а не гаситься литералом на месте вызова");
-    }
-
-    /// <summary>
     /// Записи встроенных интеграций (IntegrationKeys, сейчас — dify/fal-ai/glif/higgsfield)
     /// доставляются собственной веткой (TryAddHiggsfieldBuiltin и аналоги), а НЕ реестровым
     /// циклом BuildExternalMcpProvider. Иначе у доставки становится две точки истины:

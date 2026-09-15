@@ -2107,24 +2107,23 @@ export const api = {
     embedCheck: (url: string) => checkReaderEmbeddable(url),
   },
 
-  // Higgsfield (волна 1): отдельный контроллер, идёт вне реестра MCP-серверов.
-  // Запись в реестре mcp-servers.json создаётся автоматически при первом login.
+  // Higgsfield: подключается администратором один раз на весь продукт.
+  // Статус (GET /higgsfield/status) — { connected, expiresAt }:
+  // обычная карточка показывает только connected, admin-вкладка — и срок.
   higgsfield: {
-    status: () => request<HiggsfieldStatus>('/mcp/integrations/higgsfield'),
-    login: () => request<HiggsfieldLoginResult>('/mcp/integrations/higgsfield/login', { method: 'POST' }),
-    logout: () => request<{ ok: true }>('/mcp/integrations/higgsfield/logout', { method: 'POST' }),
-    completeOAuth: (state: string, code: string) =>
-      request<{ ok: boolean }>('/mcp/integrations/higgsfield/complete', {
-        method: 'POST',
-        body: JSON.stringify({ state, code }),
-      }),
+    status: () => request<HiggsfieldStatus>('/higgsfield/status'),
+    // Тот же эндпоинт, но тип допускает expiresAt для admin-вкладки
+    adminStatus: () => request<HiggsfieldAdminStatus>('/higgsfield/status'),
+    connect: () => request<{ authorizeUrl: string }>('/higgsfield/connect', { method: 'POST' }),
+    disconnect: () => request<{ ok: true }>('/higgsfield/disconnect', { method: 'POST' }),
   },
 };
 
-// enabled — рубильник записи реестра: у владельца без входа записи ещё нет, и это
-// не «выключено», а «можно войти» (сервер отдаёт true).
-export type HiggsfieldStatus = { enabled: boolean; connected: boolean; expiresAt: string | null };
-export type HiggsfieldLoginResult = { authorizeUrl: string; state: string; redirectUri: string };
+// Пользовательский вид: только «подключён или нет». Админский токен и его срок
+// пользователю не показывают.
+export type HiggsfieldStatus = { connected: boolean };
+// Админский вид: с expiresAt, чтобы администратор видел, когда токен истекёт.
+export type HiggsfieldAdminStatus = { connected: boolean; expiresAt?: string | null };
 
 async function checkReaderEmbeddable(url: string): Promise<{ embeddable: boolean }> {
   try {

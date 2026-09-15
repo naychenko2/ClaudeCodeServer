@@ -477,8 +477,14 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpStatusStore>();
 // токена перед ходом (pending-записи входа живут только в памяти — отсюда singleton)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpOAuthService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpProbeService>();
-// Встроенная интеграция Higgsfield (волна 1): запись реестра + OAuth-вход + инжект в ход
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.HiggsfieldIntegration>();
+// Инстансное подключение Higgsfield (фаза 1.1): единый OAuth-вход админа, шарится всеми
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.HiggsfieldOAuthService>();
+builder.Services.AddQuietHttpClient(
+    ClaudeHomeServer.Services.Mcp.HiggsfieldOAuthService.HttpClientName,
+    new QuietHttpClientProfile(
+        Category: "ClaudeHomeServer.Mcp.Higgsfield",
+        Subject: "инстансным подключением Higgsfield",
+        Consequence: "Обновление токена не прошло — админу нужно переподключиться."));
 // Продуктовые MCP-серверы поверх HTTP (ADR-012): тулсет отдаёт схемы, общий контроллер
 // McpTransportController — транспорт. Новый сервер добавляется одной регистрацией здесь.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
@@ -523,6 +529,17 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
 // не объявляется вовсе (SessionManager не строит контекст).
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
     ClaudeHomeServer.Services.Mcp.Http.WebSearchToolset>();
+// Higgsfield (фаза 1.2): прокси к mcp.higgsfield.ai/mcp, 10 инструментов из белого списка.
+// Instance-level OAuth фазы 1.1 уже зарегистрирован выше (HiggsfieldOAuthService +
+// higgsfield-oauth-клиент); здесь — тихий клиент самого прокси и сам тулсет.
+builder.Services.AddQuietHttpClient(
+    ClaudeHomeServer.Services.Mcp.Http.HiggsfieldToolset.HttpClientName,
+    new QuietHttpClientProfile(
+        Category: "ClaudeHomeServer.Mcp.Higgsfield",
+        Subject: "прокси-тулсетом Higgsfield",
+        Consequence: "Генерации картинок/видео/аудио недоступны — список инструментов устарел."));
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
+    ClaudeHomeServer.Services.Mcp.Http.HiggsfieldToolset>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.McpToolsetRegistry>();
 // Белый список инструментов профиля провайдера (KeepMcpTools): читает McpTransportController
 // на tools/list и tools/call, сами тулсеты о нём не знают
@@ -1213,6 +1230,25 @@ app.Services.GetRequiredService<UserStore>();
 // LocalActionOverridesStore при загрузке отбрасывает оверрайды неизвестных ключей —
 // поздняя регистрация теряла бы сохранённые маршруты модульных действий
 app.Services.GetRequiredService<ModuleRegistry>();
+// Одноразовая миграция ф.2.1: усыновление per-owner higgsfield-токенов под сервисного
+// владельца (higgsfield-instance). Идемпотентна — повторный вызов без per-owner записей
+// вернёт false. Best-effort: сбой не блокирует старт.
+// В инспекционной копии НЕ запускаем: она работает только на чтение, а миграция удаляет
+// per-owner записи и переносит секреты — то есть показала бы не то, что лежит в архиве
+// (а архив до этой фичи такие записи как раз и содержит). Плюс SaveState в конце пишет
+// higgsfield.json даже когда переносить нечего.
+if (!inspectionMode)
+{
+    try
+    {
+        app.Services.GetRequiredService<ClaudeHomeServer.Services.Mcp.HiggsfieldOAuthService>()
+            .RunMigration();
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"[HiggsfieldMigration] миграция пропущена: {ex.Message}");
+    }
+}
 if (!inspectionMode)
 {
     // Фоновый прогрев каталога моделей (опрос claude CLI ~5 с — не задерживаем старт).

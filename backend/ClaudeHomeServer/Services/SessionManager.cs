@@ -636,8 +636,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     private readonly Mcp.McpStatusStore? _mcpStatus;
     // OAuth внешних серверов: обновление протухшего токена перед сборкой конфига хода; null — в тестах
     private readonly Mcp.McpOAuthService? _mcpOAuth;
-    // Встроенная интеграция Higgsfield: null — в тестах
-    private readonly Mcp.HiggsfieldIntegration? _higgsfield;
+    // OAuth-сервис Higgsfield (инстансное подключение): null — в тестах
+    private readonly Mcp.HiggsfieldOAuthService? _higgsfieldOAuth;
     // Секция Dify (ApiUrl/ApiKey/неймспейс) — для BuildDifyContext (волна 4): единственное
     // потребление тут — проверка настроенности и строки stdio-ветки отката; вся работа с
     // Dify — в KnowledgeService со своей копией IOptions
@@ -700,8 +700,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // Опционально (в тестах не передаётся): OAuth внешних серверов — обновление
         // истекающего токена перед ходом, иначе инструменты сервера получали бы 401
         Mcp.McpOAuthService? mcpOAuth = null,
-        // Опционально (в тестах не передаётся): встроенная интеграция Higgsfield
-        Mcp.HiggsfieldIntegration? higgsfield = null,
+        // Опционально (в тестах не передаётся): OAuth-сервис Higgsfield (инстансное подключение)
+        Mcp.HiggsfieldOAuthService? higgsfieldOAuth = null,
         // Опционально (в тестах не передаётся): паспорта прогонов сабагентов. Без него
         // диагностики обрывов нет и автодобивание молчит — ходы идут как раньше.
         Llm.Claude.SubagentRunLog? subagentRuns = null,
@@ -736,7 +736,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         _mcpSecrets = mcpSecrets;
         _mcpStatus = mcpStatus;
         _mcpOAuth = mcpOAuth;
-        _higgsfield = higgsfield;
+        _higgsfieldOAuth = higgsfieldOAuth;
         _promptSnapshots = promptSnapshots;
         _teamPlanning = teamPlanning;
         _activity = activity;
@@ -1033,6 +1033,24 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         return new WebSearchMcpContext(apiUrl, () => GetServiceToken(ownerId!), HttpEndpointUsable(apiUrl));
     }
 
+    // MCP-сервер Higgsfield: инстансное OAuth-подключение (единый вход админа, шарится
+    // всеми владельцами). Узел присутствует в конфиге хода только когда:
+    //   1) инстанс подключён (EnsureFresh() ≠ null) — иначе прокси некому ретранслировать
+    //   2) персона НЕ ReadOnly — RO-гейт (аналог «инстанс не подключён → узла нет»)
+    // URL — тот же Kestrel, что и websearch: /mcp/higgsfield/{sessionId}.
+    // Токен — сервисный JWT владельца (Bearer), как у websearch/dify/wsp.
+    internal HiggsfieldMcpContext? BuildHiggsfieldContext(string? ownerId, Persona? persona)
+    {
+        if (ownerId is null) return null;
+        if (_higgsfieldOAuth is null) return null;
+        // RO-гейт: ReadOnly-персона не получает higgsfield (аналог «инстанс не подключён»)
+        if (persona is { Access: PersonaAccess.ReadOnly }) return null;
+        // Инстанс подключён: EnsureFresh() ≠ null
+        if (_higgsfieldOAuth.EnsureFresh() is null) return null;
+        var apiUrl = ResolveTasksApiUrl(ownerId);
+        return new HiggsfieldMcpContext(apiUrl, () => GetServiceToken(ownerId!), HttpEndpointUsable(apiUrl));
+    }
+
     // Допускает ли АДРЕС бэкенда http-транспорт (ADR-012) — СХЕМА и форма строки, без
     // рубильника. Не http — значит https: боевой серт выписан на внешний домен, CLI упрётся
     // в ERR_TLS_CERT_ALTNAME_INVALID и спрячет инструмент от модели МОЛЧА, а *.naychenko.me
@@ -1071,12 +1089,14 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         TasksMcpContext? tasks = null, NotesMcpContext? notes = null, PersonasMcpContext? personas = null,
         WorkspaceMcpContext? workspace = null, NotificationsMcpContext? notifications = null,
         CodeGraphMcpContext? codeGraph = null, DifyMcpContext? dify = null,
-        WatchMcpContext? watch = null, WebSearchMcpContext? webSearch = null) =>
+        WatchMcpContext? watch = null, WebSearchMcpContext? webSearch = null,
+        HiggsfieldMcpContext? higgsfield = null) =>
         widgets is { UseHttp: true } || memory is { UseHttp: true }
         || tasks is { UseHttp: true } || notes is { UseHttp: true } || personas is { UseHttp: true }
         || workspace is { UseHttp: true } || notifications is { UseHttp: true }
         || codeGraph is { UseHttp: true } || dify is { UseHttp: true }
-        || watch is { UseHttp: true } || webSearch is { UseHttp: true };
+        || watch is { UseHttp: true } || webSearch is { UseHttp: true }
+        || higgsfield is { UseHttp: true };
 
     // Браузер (плагин playwright): нужен по роли тестировщику, остальным персонам — нет.
     // Ключ-надстройка «browser» с дефолтом по пресету (SectionEnabled → SpecialtySections),
@@ -3329,12 +3349,6 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                         fresh.AuthVersion));
                 }
 
-                // Встроенная интеграция Higgsfield: продуктовая, не реестровая. Каскад
-                // «проект/персона» снят — запись заводится нашим же HiggsfieldIntegration
-                // по входу владельца, ключ в ReservedKeys, и не настраивается через UI.
-                // Гейт доставки — отдельная чистая функция McpDelivery.IsBuiltinDelivered.
-                TryAddHiggsfieldBuiltin(ownerId, readOnly, servers);
-
                 return servers.Count > 0 ? new ExternalMcpContext(servers) : null;
             }
             catch (Exception ex)
@@ -3345,53 +3359,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         };
     }
 
-    // Продуктовая встроенная интеграция Higgsfield (вынесено из лямбды
-    // BuildExternalMcpProvider, чтобы было отдельное тело для сторожа). Доставка:
-    // запись в реестре (TryGetRecord, не создаём) → рубильник Enabled и RO-гейт
-    // (McpDelivery.IsBuiltinDelivered) → живой OAuth-токен (EnsureFresh). Фич-флага
-    // здесь нет с 2026-09-08 (снят): интеграция безусловна, предохранитель — Enabled.
-    // Ни McpServersOn проекта, ни McpServerGranted персоны здесь НЕ читаются — это
-    // встроенная интеграция, а не запись личного реестра, и каскад доставки другой.
-    private void TryAddHiggsfieldBuiltin(string ownerId, bool readOnly, List<ExternalMcpServer> servers)
-    {
-        if (_higgsfield is null) return;
-        // Владелец, который никогда не входил: записи нет — тихо выходим, без ошибок
-        // и без обращений к провайдеру.
-        var hf = _higgsfield.TryGetRecord(ownerId);
-        if (hf is null || !Mcp.McpDelivery.IsBuiltinDelivered(hf, readOnly)) return;
-
-        var fresh = hf.Auth.Kind == McpAuthKind.OAuth2 && _mcpOAuth is not null
-            ? _mcpOAuth.EnsureFresh(ownerId, hf)
-            : hf;
-        if (fresh is null)
-        {
-            _log.LogWarning("MCP-сервер Higgsfield снят с хода: нужен вход (OAuth)");
-            return;
-        }
-        // Секреты (secret:* в Env/Headers) разворачиваются на лету — отдельная точка
-        // с реестровым путём не нужна, у встроенной записи их нет по построению, но
-        // формальное API одно и то же.
-        var env = ResolveSecretValues(ownerId, fresh.Env);
-        var headers = ResolveSecretValues(ownerId, fresh.Headers);
-        // TryApplyAuthHeaders сам пишет WARN «не найдено значение авторизации» —
-        // дополнительный лог в Higgsfield-пути раньше дублировал строку (WARN печатался
-        // дважды), теперь один.
-        if (!TryApplyAuthHeaders(ownerId, fresh, headers)) return;
-        servers.Add(new ExternalMcpServer(
-            fresh.Key,
-            fresh.Transport.ToString().ToLowerInvariant(),
-            null,
-            fresh.Args ?? [],
-            env,
-            fresh.Url,
-            headers,
-            fresh.AlwaysLoad,
-            fresh.AuthVersion));
-    }
-
-    // Локальные обёртки вокруг Mcp.McpAuthHeaders / секрет-стора — нужны и в лямбде
-    // BuildExternalMcpProvider, и в TryAddHiggsfieldBuiltin, поэтому живут на классе.
-    // Поведение и сообщения логов совпадают с теми, что были внутри лямбды.
+    // Локальные обёртки вокруг Mcp.McpAuthHeaders / секрет-стора — нужны в лямбде
+    // BuildExternalMcpProvider, поэтому живут на классе. Поведение и сообщения
+    // логов совпадают с теми, что были внутри лямбды.
     private Dictionary<string, string> ResolveSecretValues(string ownerId, Dictionary<string, string>? map)
     {
         if (_mcpSecrets is null) return new Dictionary<string, string>(StringComparer.Ordinal);
@@ -3621,6 +3591,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         var widgetsMcp = BuildWidgetsContext(ownerId, persona.Persona);
         var watchMcp = BuildWatchContext(ownerId);
         var webSearchMcp = BuildWebSearchContext(ownerId, persona.Persona);
+        var higgsfieldMcp = BuildHiggsfieldContext(ownerId, persona.Persona);
         var memoryMcp = persona.Memory ?? BuildTeamMemoryContext(ownerId, session.ProjectId);
         var tasksMcp = TasksMcpEnabled(ownerId, session, persona.Persona)
             ? BuildTasksContext(ownerId, session.ProjectId, persona.Persona) : null;
@@ -3657,7 +3628,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             EnqueueBypass: BuildEnqueueBypass(session.Id),
             OrchestrationDone: BuildOrchestrationDone(session.Id),
             HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp,
-                workspace, notificationsMcp, codeGraphMcp, difyMcp, watchMcp, webSearchMcp),
+                workspace, notificationsMcp, codeGraphMcp, difyMcp, watchMcp, webSearchMcp, higgsfieldMcp),
             HttpMcpEnabledProvider: HttpMcpEnabled,
             // Материалы контекста — только у проектных чатов (адреса file/task живут внутри
             // проекта); во внепроектной ветке восстановления провайдер не передаётся вовсе
@@ -3665,6 +3636,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             Events: _turnEvents,
             WatchMcp: watchMcp,
             WebSearchMcp: webSearchMcp,
+            HiggsfieldMcp: higgsfieldMcp,
             // Корень ГЛАВНОЙ ветки проекта — fallback для slice графа кода, пока свой граф
             // worktree-ветки не построен (ADR-003). У не-worktree чата совпадает с rootPath,
             // fallback сводится к no-op в CodeGraphPromptProvider.GetSliceAsync.
@@ -4929,6 +4901,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             var widgetsMcp = BuildWidgetsContext(entry.Info.OwnerId, persona.Persona);
             var watchMcp = BuildWatchContext(entry.Info.OwnerId);
             var webSearchMcp = BuildWebSearchContext(entry.Info.OwnerId, persona.Persona);
+            var higgsfieldMcp = BuildHiggsfieldContext(entry.Info.OwnerId, persona.Persona);
             var tasksMcp = TasksMcpEnabled(entry.Info.OwnerId, entry.Info, persona.Persona)
                 ? BuildTasksContext(entry.Info.OwnerId, null, persona.Persona) : null;
             var notesMcp = _bindings.EffectiveToolEnabled(entry.Info.OwnerId, persona.Persona, "notes")
@@ -4963,11 +4936,13 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 EnqueueBypass: BuildEnqueueBypass(sessionId),
                 OrchestrationDone: BuildOrchestrationDone(sessionId),
                 HttpMcpActive: HttpMcpActive(widgetsMcp, persona.Memory, tasksMcp, notesMcp, personasMcp,
-                    workspace, notificationsMcp, dify: difyMcp, watch: watchMcp, webSearch: webSearchMcp),
+                    workspace, notificationsMcp, dify: difyMcp, watch: watchMcp, webSearch: webSearchMcp,
+                    higgsfield: higgsfieldMcp),
                 HttpMcpEnabledProvider: HttpMcpEnabled,
                 Events: _turnEvents,
                 WatchMcp: watchMcp,
                 WebSearchMcp: webSearchMcp,
+                HiggsfieldMcp: higgsfieldMcp,
                 // Чат вне проекта — fallback для slice графа не применяется (граф ключуется проектом)
                 MainRootPath: null);
                 // Чат вне проекта: трейлер CCS-Session в подсказке досье (DossierTrailerContributor) пропускается
@@ -4986,6 +4961,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             var widgetsMcp = BuildWidgetsContext(project.OwnerId, persona.Persona);
             var watchMcp = BuildWatchContext(project.OwnerId);
             var webSearchMcp = BuildWebSearchContext(project.OwnerId, persona.Persona);
+            var higgsfieldMcp = BuildHiggsfieldContext(project.OwnerId, persona.Persona);
             var memoryMcp = persona.Memory ?? BuildTeamMemoryContext(project.OwnerId, project.Id);
             var tasksMcp = TasksMcpEnabled(project.OwnerId, entry.Info, persona.Persona)
                 ? BuildTasksContext(project.OwnerId, project.Id, persona.Persona) : null;
@@ -5023,12 +4999,13 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 EnqueueBypass: BuildEnqueueBypass(sessionId),
                 OrchestrationDone: BuildOrchestrationDone(sessionId),
                 HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp,
-                    workspace, notificationsMcp, codeGraphMcp, difyMcp, watchMcp, webSearchMcp),
+                    workspace, notificationsMcp, codeGraphMcp, difyMcp, watchMcp, webSearchMcp, higgsfieldMcp),
                 HttpMcpEnabledProvider: HttpMcpEnabled,
                 ChatContextProvider: BuildChatContextProvider(sessionId),
                 Events: _turnEvents,
                 WatchMcp: watchMcp,
                 WebSearchMcp: webSearchMcp,
+                HiggsfieldMcp: higgsfieldMcp,
                 // Корень ГЛАВНОЙ ветки проекта — fallback для slice графа кода, пока свой граф
                 // worktree-ветки не построен (ADR-003).
                 MainRootPath: projectRoot);
@@ -8129,6 +8106,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 case ToolUseMessage m:
                     acc.OnToolUse(m.Id, m.Name, m.Input, m.ParentToolUseId);
                     TryUnmarkCommittedOnToolUse(sessionId, entry, m.Name, m.Input);
+                    if (entry is not null && SpendMapping.TryExtractHiggsfieldGeneration(m.Name))
+                        SpendMapping.RecordHiggsfieldGeneration(_spend, ResolveOwnerId, _log, entry.Info);
                     break;
                 case ToolResultMessage m:
                     acc.OnToolResult(m.ToolUseId, m.Content, m.IsError);

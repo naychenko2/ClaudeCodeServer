@@ -703,6 +703,10 @@ public class ClaudeSession : ILlmSessionAdapter
     // Веб-поиск: условие ровно как у сторожей — схема адреса допускает http И рубильник
     // включён. stdio-ветки отката нет, поэтому негодный адрес означает «сервера ходу нет»
     private bool WebSearchHttpOn() => _webSearchMcp is { UseHttp: true } && HttpMcpOnNow();
+    // MCP-сервер Higgsfield (инстансное OAuth-подключение, прокси): null — не подключён или RO
+    private readonly HiggsfieldMcpContext? _higgsfieldMcp;
+    // Higgsfield: условие как у websearch — схема адреса допускает http И рубильник включён
+    private bool HiggsfieldHttpOn() => _higgsfieldMcp is { UseHttp: true } && HttpMcpOnNow();
     // MCP-сервер графа кода (codegraph_find/neighbors/hubs): null — чат вне проекта
     private readonly CodeGraphMcpContext? _codeGraphMcp;
     // MCP-сервер баз знаний Dify (ADR-012, волна 4): null — нет владельца или секция Dify
@@ -793,6 +797,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _widgetsMcp = context.WidgetsMcp;
         _watchMcp = context.WatchMcp;
         _webSearchMcp = context.WebSearchMcp;
+        _higgsfieldMcp = context.HiggsfieldMcp;
         _httpMcpActive = context.HttpMcpActive;
         _httpMcpEnabled = context.HttpMcpEnabledProvider;
         _codeGraphMcp = context.CodeGraphMcp;
@@ -864,6 +869,9 @@ public class ClaudeSession : ILlmSessionAdapter
         // Веб-поиск: та же история — stdio-ветки нет, контекста нет вовсе при пустом
         // Perplexity:ApiKey (тогда схемы web_search/web_read не занимают окно модели)
         var hasWebSearch = WebSearchHttpOn();
+        // Higgsfield: та же история — stdio-ветки нет, контекста нет вовсе когда инстанс не
+        // подключён или персона ReadOnly
+        var hasHiggsfield = HiggsfieldHttpOn();
         // pmem-консультанты приезжают списком на каждый ход — рубильник для них тот же живой
         bool ConsultantHttp(ConsultantMemoryServer c) => c.UseHttp && httpOn;
         // tasks/notes/personas живут в Kestrel (ADR-012, фаза 2 волна 2), но пути их
@@ -958,6 +966,7 @@ public class ClaudeSession : ILlmSessionAdapter
             hasDify = hasDify && Keep("dify");
             hasWatch = hasWatch && Keep("watch");
             hasWebSearch = hasWebSearch && Keep("websearch");
+            hasHiggsfield = hasHiggsfield && Keep("higgsfield");
             hasConsultants = hasConsultants && Keep("consultants");
             hasModules = hasModules && Keep("modules");
             hasFalAi = hasFalAi && Keep("fal-ai");
@@ -968,7 +977,8 @@ public class ClaudeSession : ILlmSessionAdapter
             // и стоит он дёшево
         }
         if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasNotifications
-            && !hasWidgets && !hasCodeGraph && !hasDify && !hasDesktop && !hasDataset && !hasModules && !hasFalAi && !hasGlif && userServers is null
+            && !hasWidgets && !hasCodeGraph && !hasDify && !hasDesktop && !hasDataset && !hasModules && !hasFalAi && !hasGlif
+            && !hasHiggsfield && userServers is null
             && !hasExternal && !hasWatch && !hasWebSearch
             && !(hasConsultants && (memoryServerPath is not null
                 || personaAgents!.MemoryServers.Any(ConsultantHttp)))) return (null, "", []);
@@ -1616,6 +1626,27 @@ public class ClaudeSession : ILlmSessionAdapter
                 };
                 // Состав фиксирован (2 инструмента), вариативен только транспорт
                 shapes["websearch"] = "t:http";
+            }
+
+            if (hasHiggsfield)
+            {
+                // Higgsfield (инстансное OAuth-подключение): http-ветка только, stdio-отката нет.
+                // Ключ Higgsfield наружу не уезжает: тулсет ходит во внешний API сам (Bearer
+                // admin-токен на бэкенде), а ходу достаётся только адрес узла Kestrel и сервисный
+                // JWT владельца. Сессия-вызыватель едет хвостом URL (как websearch).
+                servers["higgsfield"] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["type"] = "http",
+                    ["url"] = McpEndpoints.EndpointFor(_higgsfieldMcp!.ApiUrl, McpEndpoints.HiggsfieldName, Info.Id),
+                    ["headers"] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["Authorization"] = $"Bearer {_higgsfieldMcp.TokenFactory()}",
+                        [McpEndpoints.CallerSessionHeader] = Info.Id,
+                    },
+                    ["alwaysLoad"] = true,
+                };
+                // Состав определяется белым списком провайдера (KeepMcpTools["higgsfield"])
+                shapes["higgsfield"] = "t:http";
             }
 
             if (hasDify && _difyMcp is not null)

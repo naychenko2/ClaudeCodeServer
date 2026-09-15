@@ -134,4 +134,37 @@ internal static class SpendMapping
         }
         catch (Exception ex) { log?.LogWarning(ex, "spend: запись генерации glif не удалась"); }
     }
+
+    // Аналитика: генерация Higgsfield — признак по ИМЕНИ инструмента (mcp__higgsfield__generate_*),
+    // не по контенту результата. У Higgsfield кредиты, не токены и не USD — считаем только факт
+    // генерации. Вызывается по ToolUseMessage (имя доступно в момент вызова, до tool_result).
+    public static bool TryExtractHiggsfieldGeneration(string? toolName) =>
+        toolName is not null && toolName.Contains("mcp__higgsfield__generate_");
+
+    // Запись расхода Higgsfield-генерации: Generations=1, CostUsd=null (кредиты не пересчитываем).
+    public static void RecordHiggsfieldGeneration(
+        ISpendCollector? spend,
+        Func<Session, string?> resolveOwnerId,
+        ILogger? log,
+        Session s)
+    {
+        if (spend is null) return;
+        try
+        {
+            spend.Record(new SpendRecord
+            {
+                OwnerId = resolveOwnerId(s) ?? "",
+                ProjectId = s.ProjectId,
+                SessionId = s.Id,
+                TaskId = s.TaskId,
+                PersonaId = s.PersonaId,
+                Provider = SpendSources.Higgsfield,
+                Source = SpendSources.Higgsfield,
+                CostUsd = null,
+                Generations = 1,
+                Label = "higgsfield-generation",
+            });
+        }
+        catch (Exception ex) { log?.LogWarning(ex, "spend: запись генерации higgsfield не удалась"); }
+    }
 }

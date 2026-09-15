@@ -158,6 +158,7 @@ public class SpendAnalyticsTests : IDisposable
         Assert.True(SpendSources.IsTokenless(SpendSources.Tts));
         Assert.True(SpendSources.IsTokenless(SpendSources.Fal));
         Assert.True(SpendSources.IsTokenless(SpendSources.Glif));
+        Assert.True(SpendSources.IsTokenless(SpendSources.Higgsfield));
         Assert.False(SpendSources.IsTokenless(SpendSources.ChatTurn));
         Assert.False(SpendSources.IsTokenless(SpendSources.Free));
     }

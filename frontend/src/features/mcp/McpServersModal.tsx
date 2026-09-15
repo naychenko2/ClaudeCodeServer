@@ -9,6 +9,7 @@ import { McpServerForm } from './McpServerForm';
 import { McpAccessTab } from './McpAccessTab';
 import { McpDiagnosticsTab } from './McpDiagnosticsTab';
 import { McpCatalogPanel } from './McpCatalogPanel';
+import { HiggsfieldAdminTab } from './HiggsfieldAdminTab';
 import type { McpCatalogServer, McpServer, McpServerCatalogDraft } from '../../types';
 
 // Раздел «MCP-серверы» — модалка из меню аватара, рядом с «Поставщиками моделей»:
@@ -16,7 +17,7 @@ import type { McpCatalogServer, McpServer, McpServerCatalogDraft } from '../../t
 // (полоса вкладок, ширина MODAL_W.wide) повторяет сестринский диалог — два соседних
 // пункта меню не должны выглядеть как из разных продуктов.
 
-type TabKey = 'servers' | 'add' | 'catalog' | 'access' | 'diag';
+type TabKey = 'servers' | 'add' | 'catalog' | 'access' | 'higgsfield' | 'diag';
 
 export function McpServersModal({ onClose, isAdmin }: { onClose: () => void; isAdmin: boolean }) {
   const data = useMcpData();
@@ -68,7 +69,10 @@ export function McpServersModal({ onClose, isAdmin }: { onClose: () => void; isA
     { key: 'add', label: editing ? 'Правка' : (catalogDraft ? 'Каталог' : 'Добавить') },
     ...(catalogOn ? [{ key: 'catalog' as TabKey, label: 'Каталог' }] : []),
     { key: 'access', label: 'Доступ' },
-    ...(isAdmin ? [{ key: 'diag' as TabKey, label: 'Диагностика', admin: true }] : []),
+    ...(isAdmin ? [
+      { key: 'higgsfield' as TabKey, label: 'Higgsfield', admin: true },
+      { key: 'diag' as TabKey, label: 'Диагностика', admin: true },
+    ] : []),
   ];
 
   // Реестровые имена уже подключённых каталожных серверов. По плану §4: «этот
@@ -171,6 +175,7 @@ export function McpServersModal({ onClose, isAdmin }: { onClose: () => void; isA
               />
             )}
             {tab === 'access' && <McpAccessTab data={data} onClose={onClose} onAdd={openAdd} onEdit={openEdit} />}
+            {tab === 'higgsfield' && isAdmin && <HiggsfieldAdminTab />}
             {tab === 'diag' && isAdmin && <McpDiagnosticsTab />}
           </div>
         </div>

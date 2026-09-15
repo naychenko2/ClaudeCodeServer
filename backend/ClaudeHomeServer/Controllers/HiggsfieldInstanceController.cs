@@ -7,12 +7,12 @@ using Microsoft.AspNetCore.Mvc;
 namespace ClaudeHomeServer.Controllers;
 
 /// <summary>
-/// Админские эндпоинты инстансного подключения Higgsfield. Отдельно от
-/// <see cref="HiggsfieldAuthController"/> (личная интеграция владельца): здесь один
-/// OAuth-вход админа шарится всеми пользователями.
+/// Инстансное подключение Higgsfield: один OAuth-вход админа шарится всеми
+/// пользователями. <see cref="Status"/> доступен любому залогиненному,
+/// <see cref="Connect"/>/<see cref="Callback"/>/<see cref="Disconnect"/> — только admin.
 /// </summary>
 [ApiController]
-[Authorize(Roles = "admin")]
+[Authorize]
 [Route("api/higgsfield")]
 public class HiggsfieldInstanceController(
     HiggsfieldOAuthService service) : ControllerBase
@@ -20,6 +20,7 @@ public class HiggsfieldInstanceController(
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
     /// <summary>Старт OAuth-входа: возвращает authorize-URL для открытия окна провайдера.</summary>
+    [Authorize(Roles = "admin")]
     [HttpPost("connect")]
     public async Task<IActionResult> Connect(CancellationToken ct)
     {
@@ -36,6 +37,7 @@ public class HiggsfieldInstanceController(
     }
 
     /// <summary>Приём кода/redirect от провайдера. Body: { state, code }.</summary>
+    [Authorize(Roles = "admin")]
     [HttpPost("callback")]
     public async Task<IActionResult> Callback([FromBody] CallbackRequest req, CancellationToken ct)
     {
@@ -48,6 +50,7 @@ public class HiggsfieldInstanceController(
     }
 
     /// <summary>Отключение: чистит токены и состояние.</summary>
+    [Authorize(Roles = "admin")]
     [HttpPost("disconnect")]
     public IActionResult Disconnect()
     {

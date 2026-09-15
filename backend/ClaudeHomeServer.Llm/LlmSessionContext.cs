@@ -151,6 +151,11 @@ public sealed record WatchMcpContext(string ApiUrl, Func<string> TokenFactory, b
 // он живёт только на бэкенде, в конфиг хода и env процесса CLI не уезжает.
 public sealed record WebSearchMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp);
 
+// Контекст MCP-сервера Higgsfield (инстансное OAuth-подключение, прокси к mcp.higgsfield.ai).
+// null — инстанс не подключён (EnsureFresh() = null) или персона ReadOnly.
+// TokenFactory/UseHttp — тот же идиом, что у websearch: сервисный JWT владельца Kestrel.
+public sealed record HiggsfieldMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp);
+
 // Контекст MCP-сервера графа кода (codegraph_find/neighbors/hubs): адрес API, сервисный
 // токен владельца и проект, чей граф доступен инструментами. ProjectId обязателен —
 // граф ключуется проектом, в чате вне проекта сервер не подключается.
@@ -345,6 +350,10 @@ public sealed record LlmSessionContext(
     // Perplexity:ApiKey. Наличие контекста — свойство владельца и настройки инстанса
     // (инвариант стабильности состава ADR-012).
     WebSearchMcpContext? WebSearchMcp = null,
+    // MCP-сервер Higgsfield (инстансное OAuth-подключение): null — не подключён или RO-персона.
+    // Наличие контекста — свойство инстанса (EnsureFresh) и персоны (ReadOnly) — инвариант
+    // стабильности состава не нарушается: оба стабильны в рамках сессии.
+    HiggsfieldMcpContext? HiggsfieldMcp = null,
     // Корень сервера (AppContext.BaseDirectory, не IHostEnvironment.ContentRootPath —
     // при `dotnet run` это bin/Debug/net10.0, у IHostEnvironment — папка проекта) — для
     // BareMode: SystemPromptFile поставляется с продуктом и живёт в репозитории/публикации

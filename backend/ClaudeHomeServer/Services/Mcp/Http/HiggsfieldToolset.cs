@@ -26,7 +26,7 @@ public sealed class HiggsfieldToolset(
     public const string HttpClientName = "higgsfield-mcp";
 
     /// <summary>Базовый URL эндпоинта Higgsfield MCP.</summary>
-    public const string UpstreamUrl = HiggsfieldIntegration.Url;
+    public const string UpstreamUrl = HiggsfieldOAuthService.Url;
 
     /// <summary>TTL кэша списка tools/list: 30 минут.</summary>
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(30);

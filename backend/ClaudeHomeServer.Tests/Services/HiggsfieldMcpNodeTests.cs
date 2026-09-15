@@ -1,9 +1,15 @@
+using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Llm.Claude;
+using ClaudeHomeServer.Services.Mcp;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
+using Moq;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -165,5 +171,161 @@ public class HiggsfieldMcpNodeTests : IDisposable
         tools.Should().BeEquivalentTo(
             new[] { "generate_image", "generate_video", "job_status" },
             "состав KeepMcpTools[higgsfield]: generate_image, generate_video, job_status");
+    }
+
+    // ── RO-гейт: изоляция от ветки «нет токена» ─────────────────────────────────────
+
+    /// <summary>
+    /// Строит HiggsfieldOAuthService с живым токеном (EnsureFresh() ≠ null) и вешает её
+    /// на bare-SessionManager. Общий хелпер для тестов RO-гейта.
+    /// </summary>
+    private static (SessionManager Sm, HiggsfieldOAuthService HfOAuth) CreateHiggsfieldSetup(
+        string ownerId, string dataDir)
+    {
+        Directory.CreateDirectory(dataDir);
+
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(dataDir, "placeholder.json"),
+                ["McpTasksApiUrl"] = "http://localhost:5000",
+            }).Build();
+
+        var secrets = new McpSecretStore(config);
+        // Живой токен: non-null из Resolve → EnsureFresh вернёт его.
+        // Токен и запись — под ServiceOwnerId (инстансный владелец), не под человеком.
+        var svcOwner = HiggsfieldOAuthService.ServiceOwnerId;
+        var tokenRef = secrets.Set(svcOwner, "valid-access-token");
+
+        var registry = new McpRegistry(config, secrets);
+        var record = new McpServerRecord
+        {
+            OwnerId = svcOwner,
+            Key = "higgsfield",
+            Label = "Higgsfield",
+            Auth = new McpAuthConfig
+            {
+                Kind = McpAuthKind.OAuth2,
+                OAuth = new McpOAuthConfig { AccessTokenRef = tokenRef },
+            },
+        };
+        registry.CreateBuiltIn(svcOwner, record);
+
+        var status = new McpStatusStore(config);
+        var httpFactory = new Mock<System.Net.Http.IHttpClientFactory>().Object;
+        var oauth = new McpOAuthService(registry, secrets, status, httpFactory, config,
+            Mock.Of<ILogger<McpOAuthService>>());
+        var hfOAuth = new HiggsfieldOAuthService(registry, secrets, status, oauth, config,
+            Mock.Of<ILogger<HiggsfieldOAuthService>>());
+
+        // Состояние подключения: AdminOwnerId задан → EnsureFresh не вылетит на первом if
+        File.WriteAllText(
+            Path.Combine(dataDir, "higgsfield.json"),
+            System.Text.Json.JsonSerializer.Serialize(new
+            {
+                Connected = true,
+                AdminOwnerId = ownerId,
+                ExpiresAt = (string?)null,
+                AuthVersion = 1,
+            }));
+
+        var sm = (SessionManager)RuntimeHelpers.GetUninitializedObject(typeof(SessionManager));
+        var bf = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+
+        // _higgsfieldOAuth: нужен для BuildHiggsfieldContext
+        typeof(SessionManager).GetField("_higgsfieldOAuth", bf)!.SetValue(sm, hfOAuth);
+
+        // _launchers + _config: нужны для ResolveTasksApiUrl (контрпример: Full-персона)
+        var plMock = new Mock<IProcessLauncher>();
+        plMock.Setup(l => l.McpApiUrlOverride).Returns(null as string);
+        var launchers = new Mock<ILauncherFactory>();
+        launchers.Setup(f => f.ForOwner(It.IsAny<string?>())).Returns(plMock.Object);
+        typeof(SessionManager).GetField("_launchers", bf)!.SetValue(sm, launchers.Object);
+
+        typeof(SessionManager).GetField("_config", bf)!.SetValue(sm, config);
+
+        return (sm, hfOAuth);
+    }
+
+    [Fact]
+    public void RoGate_ТокенЖив_ReadOnlyПерсона_ВернётNull()
+    {
+        // Изоляция RO-гейта от ветки «нет токена»: EnsureFresh() ≠ null (живой токен),
+        // но persona.Access == ReadOnly → BuildHiggsfieldContext = null.
+        // Если убрать строку RO-гейта, тест сломается: код пойдёт дальше к EnsureFresh()
+        // и вернёт non-null контекст.
+        var ownerId = "owner-1";
+        var dataDir = Path.Combine(_root, "ro-gate-" + Guid.NewGuid().ToString("N")[..8]);
+        var (sm, hfOAuth) = CreateHiggsfieldSetup(ownerId, dataDir);
+
+        // Контроль: EnsureFresh() действительно жив (не null) — иначе тест тривиально
+        // проходил бы и по ветке «нет токена».
+        hfOAuth.EnsureFresh().Should().NotBeNull(
+            "препостановка: EnsureFresh() ≠ null (токен жив)");
+
+        var roPersona = new Persona { Access = PersonaAccess.ReadOnly };
+        var result = sm.BuildHiggsfieldContext(ownerId, roPersona);
+
+        result.Should().BeNull(
+            "RO-гейт: ReadOnly-персона → null, хотя EnsureFresh() вернул живой токен");
+
+        // Контрпример: та же настройка, но персона не ReadOnly → контекст создаётся
+        var rwPersona = new Persona { Access = PersonaAccess.Full };
+        var result2 = sm.BuildHiggsfieldContext(ownerId, rwPersona);
+        result2.Should().NotBeNull(
+            "контрпример: Full-персона + живой токен → BuildHiggsfieldContext вернул контекст");
+    }
+
+    // ── ClaudeSession-защита: не-http контекст не даёт узла ───────────────────────────
+
+    [Fact]
+    public void ClaudeSession_Защита_НонHttpКонтекст_УзлаНет()
+    {
+        // Имитация «ошибка выше по цепочке»: HiggsfieldMcpContext пришёл не-null (контекст
+        // существует), но UseHttp=false (адрес не поддерживает http-транспорт).
+        // ClaudeSession проверяет HiggsfieldHttpOn() = _higgsfieldMcp is { UseHttp: true }
+        // && HttpMcpOnNow() — без UseHttp=true узел не объявляется, даже если контекст
+        // не-null. Это вторая линия защиты: RO-гейт выше (BuildHiggsfieldContext → null),
+        // а здесь — сам ClaudeSession.
+        var hf = new HiggsfieldMcpContext("https://example.com", () => "svc-tok", UseHttp: false);
+        var servers = BuildServers(hf);
+
+        servers.Should().NotContain("higgsfield",
+            "non-null контекст с UseHttp=false → ClaudeSession не объявляет узел higgsfield");
+    }
+
+    // ── Фиксация «без per-owner изоляции» (ф.2.1, осознанное решение) ────────────────────
+
+    /// <summary>
+    /// Higgsfield — ПЕРВЫЙ http-тулсет, где владелец JWT-claims (admin) авторизует
+    /// ДОСТУП, но данные за ним ОБЩИЕ (один внешний аккаунт, один OAuth-токен).
+    /// Единственная защита — белый список <see cref="Mcp.Http.HiggsfieldToolset.Whitelist"/>:
+    /// ни листинга, ни биллинга, ни публикации. Это НЕ дефект, а осознанный выбор.
+    ///
+    /// Тест сторожит две оси фиксации:
+    /// 1. <c>ServiceOwnerId</c> — фиксированный pseudo-owner (не id человека),
+    ///    значит записей per-owner быть не должно.
+    /// 2. Белый список не пуст — если его вычистят, защита исчезнет.
+    /// </summary>
+    [Fact]
+    public void БезPerOwnerИзоляции_PseudoOwnerИБелыйСписок()
+    {
+        // Ось 1: фиксированный pseudo-owner — не id конкретного человека.
+        // Если кто-то заменит его на ownerId из JWT, per-owner изоляция «вернётся»
+        // молча, и тест обязан упасть.
+        ClaudeHomeServer.Services.Mcp.HiggsfieldOAuthService.ServiceOwnerId
+            .Should().Be("higgsfield-instance",
+                "фиксированный pseudo-owner: один аккаунт Higgsfield, один OAuth-токен на инстанс");
+
+        // Ось 2: белый список — единственная защита общих данных от посторонних инструментов.
+        // Если вычистят список (пустой массив), защита исчезнет, и Higgsfield отдаст
+        // ВСЕ 88+ инструментов, включая биллинг/листинг/публикацию.
+        var whitelist = ClaudeHomeServer.Services.Mcp.Http.HiggsfieldToolset.Whitelist;
+        whitelist.Length.Should().BeGreaterThan(0,
+            "белый список Higgsfield — единственная защита: пустой список = все 88+ инструментов наружу");
+        // Критичные инструменты (доступ к биллингу/публичным данным) не должны попасть в список:
+        // их присутствие означало бы, что защита не работает.
+        whitelist.Should().NotContain("billing", "листинг/биллинг — не в белом списке");
+        whitelist.Should().NotContain("publish", "публичные данные — не в белом списке");
     }
 }

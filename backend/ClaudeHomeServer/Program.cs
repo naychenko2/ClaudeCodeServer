@@ -477,8 +477,6 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpStatusStore>();
 // токена перед ходом (pending-записи входа живут только в памяти — отсюда singleton)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpOAuthService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpProbeService>();
-// Встроенная интеграция Higgsfield (волна 1): запись реестра + OAuth-вход + инжект в ход
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.HiggsfieldIntegration>();
 // Инстансное подключение Higgsfield (фаза 1.1): единый OAuth-вход админа, шарится всеми
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.HiggsfieldOAuthService>();
 builder.Services.AddQuietHttpClient(

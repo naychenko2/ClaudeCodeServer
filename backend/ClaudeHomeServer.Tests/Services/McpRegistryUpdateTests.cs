@@ -46,10 +46,10 @@ public class McpRegistryUpdateTests : IDisposable
         // обновлении тот же, что и был, — проверку резерва для него пропускаем.
         var draft = new McpServerRecord
         {
-            Key = HiggsfieldIntegration.Key,
-            Label = HiggsfieldIntegration.Label,
+            Key = HiggsfieldOAuthService.Key,
+            Label = HiggsfieldOAuthService.Label,
             Transport = McpTransport.Http,
-            Url = HiggsfieldIntegration.Url,
+            Url = HiggsfieldOAuthService.Url,
             Auth = new McpAuthConfig { Kind = McpAuthKind.OAuth2 },
         };
         var created = _registry.CreateBuiltIn(OwnerId, draft);
@@ -69,7 +69,7 @@ public class McpRegistryUpdateTests : IDisposable
 
         act.Should().NotThrow("обновление существующей встроенной записи тем же ключом обязано работать — это путь StoreTokens");
         var saved = _registry.Get(OwnerId, created.Id)!;
-        saved.Key.Should().Be(HiggsfieldIntegration.Key);
+        saved.Key.Should().Be(HiggsfieldOAuthService.Key);
         saved.AuthVersion.Should().BeGreaterThan(versionBefore, "Update поднимает AuthVersion — без него живой CLI остался бы со старым секретом");
     }
 

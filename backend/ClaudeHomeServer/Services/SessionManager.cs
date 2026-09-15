@@ -636,8 +636,6 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     private readonly Mcp.McpStatusStore? _mcpStatus;
     // OAuth внешних серверов: обновление протухшего токена перед сборкой конфига хода; null — в тестах
     private readonly Mcp.McpOAuthService? _mcpOAuth;
-    // Встроенная интеграция Higgsfield: null — в тестах
-    private readonly Mcp.HiggsfieldIntegration? _higgsfield;
     // OAuth-сервис Higgsfield (инстансное подключение): null — в тестах
     private readonly Mcp.HiggsfieldOAuthService? _higgsfieldOAuth;
     // Секция Dify (ApiUrl/ApiKey/неймспейс) — для BuildDifyContext (волна 4): единственное
@@ -702,8 +700,6 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // Опционально (в тестах не передаётся): OAuth внешних серверов — обновление
         // истекающего токена перед ходом, иначе инструменты сервера получали бы 401
         Mcp.McpOAuthService? mcpOAuth = null,
-        // Опционально (в тестах не передаётся): встроенная интеграция Higgsfield
-        Mcp.HiggsfieldIntegration? higgsfield = null,
         // Опционально (в тестах не передаётся): OAuth-сервис Higgsfield (инстансное подключение)
         Mcp.HiggsfieldOAuthService? higgsfieldOAuth = null,
         // Опционально (в тестах не передаётся): паспорта прогонов сабагентов. Без него
@@ -740,7 +736,6 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         _mcpSecrets = mcpSecrets;
         _mcpStatus = mcpStatus;
         _mcpOAuth = mcpOAuth;
-        _higgsfield = higgsfield;
         _higgsfieldOAuth = higgsfieldOAuth;
         _promptSnapshots = promptSnapshots;
         _teamPlanning = teamPlanning;
@@ -1044,7 +1039,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     //   2) персона НЕ ReadOnly — RO-гейт (аналог «инстанс не подключён → узла нет»)
     // URL — тот же Kestrel, что и websearch: /mcp/higgsfield/{sessionId}.
     // Токен — сервисный JWT владельца (Bearer), как у websearch/dify/wsp.
-    private HiggsfieldMcpContext? BuildHiggsfieldContext(string? ownerId, Persona? persona)
+    internal HiggsfieldMcpContext? BuildHiggsfieldContext(string? ownerId, Persona? persona)
     {
         if (ownerId is null) return null;
         if (_higgsfieldOAuth is null) return null;
@@ -3354,12 +3349,6 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                         fresh.AuthVersion));
                 }
 
-                // Встроенная интеграция Higgsfield: продуктовая, не реестровая. Каскад
-                // «проект/персона» снят — запись заводится нашим же HiggsfieldIntegration
-                // по входу владельца, ключ в ReservedKeys, и не настраивается через UI.
-                // Гейт доставки — отдельная чистая функция McpDelivery.IsBuiltinDelivered.
-                TryAddHiggsfieldBuiltin(ownerId, readOnly, servers);
-
                 return servers.Count > 0 ? new ExternalMcpContext(servers) : null;
             }
             catch (Exception ex)
@@ -3370,55 +3359,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         };
     }
 
-    // LEGACY (TODO: удалить в ф.2.1): старый путь доставки higgsfield через реестр.
-    // Продуктовая встроенная интеграция Higgsfield (вынесено из лямбды
-    // BuildExternalMcpProvider, чтобы было отдельное тело для сторожа). Доставка:
-    // запись в реестре (TryGetRecord, не создаём) → рубильник Enabled и RO-гейт
-    // (McpDelivery.IsBuiltinDelivered) → живой OAuth-токен (EnsureFresh). Фич-флага
-    // здесь нет с 2026-09-08 (снят): интеграция безусловна, предохранитель — Enabled.
-    // Ни McpServersOn проекта, ни McpServerGranted персоны здесь НЕ читаются — это
-    // встроенная интеграция, а не запись личного реестра, и каскад доставки другой.
-    // Заменён ф.1.3 узлом BuildHiggsfieldContext (Kestrel-прото, сервисный JWT).
-    private void TryAddHiggsfieldBuiltin(string ownerId, bool readOnly, List<ExternalMcpServer> servers)
-    {
-        if (_higgsfield is null) return;
-        // Владелец, который никогда не входил: записи нет — тихо выходим, без ошибок
-        // и без обращений к провайдеру.
-        var hf = _higgsfield.TryGetRecord(ownerId);
-        if (hf is null || !Mcp.McpDelivery.IsBuiltinDelivered(hf, readOnly)) return;
-
-        var fresh = hf.Auth.Kind == McpAuthKind.OAuth2 && _mcpOAuth is not null
-            ? _mcpOAuth.EnsureFresh(ownerId, hf)
-            : hf;
-        if (fresh is null)
-        {
-            _log.LogWarning("MCP-сервер Higgsfield снят с хода: нужен вход (OAuth)");
-            return;
-        }
-        // Секреты (secret:* в Env/Headers) разворачиваются на лету — отдельная точка
-        // с реестровым путём не нужна, у встроенной записи их нет по построению, но
-        // формальное API одно и то же.
-        var env = ResolveSecretValues(ownerId, fresh.Env);
-        var headers = ResolveSecretValues(ownerId, fresh.Headers);
-        // TryApplyAuthHeaders сам пишет WARN «не найдено значение авторизации» —
-        // дополнительный лог в Higgsfield-пути раньше дублировал строку (WARN печатался
-        // дважды), теперь один.
-        if (!TryApplyAuthHeaders(ownerId, fresh, headers)) return;
-        servers.Add(new ExternalMcpServer(
-            fresh.Key,
-            fresh.Transport.ToString().ToLowerInvariant(),
-            null,
-            fresh.Args ?? [],
-            env,
-            fresh.Url,
-            headers,
-            fresh.AlwaysLoad,
-            fresh.AuthVersion));
-    }
-
-    // Локальные обёртки вокруг Mcp.McpAuthHeaders / секрет-стора — нужны и в лямбде
-    // BuildExternalMcpProvider, и в TryAddHiggsfieldBuiltin, поэтому живут на классе.
-    // Поведение и сообщения логов совпадают с теми, что были внутри лямбды.
+    // Локальные обёртки вокруг Mcp.McpAuthHeaders / секрет-стора — нужны в лямбде
+    // BuildExternalMcpProvider, поэтому живут на классе. Поведение и сообщения
+    // логов совпадают с теми, что были внутри лямбды.
     private Dictionary<string, string> ResolveSecretValues(string ownerId, Dictionary<string, string>? map)
     {
         if (_mcpSecrets is null) return new Dictionary<string, string>(StringComparer.Ordinal);

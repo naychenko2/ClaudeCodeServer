@@ -132,29 +132,28 @@ public sealed class HiggsfieldOAuthService(
         return (start.AuthorizeUrl, start.State, start.RedirectUri);
     }
 
-    /// Обмен кода на токены.
+    /// Обмен кода на токены. Авторизация — сам state (одноразовый, 10 мин);
+    /// adminOwnerId берётся из pending-записи, сохранённого при ConnectAsync.
     public async Task<bool> CompleteAsync(string? state, string? code,
-        string adminOwnerId, CancellationToken ct = default)
+        CancellationToken ct = default)
     {
         CleanupPending();
         if (string.IsNullOrEmpty(state) || !_pending.TryRemove(state, out var pending))
             throw new McpOAuthException("Вход не найден или истёк — начни заново");
         if (pending.CreatedAt + PendingTtl <= DateTime.UtcNow)
             throw new McpOAuthException("Вход истёк — начни заново");
-        if (!string.Equals(pending.AdminOwnerId, adminOwnerId, StringComparison.Ordinal))
-            throw new McpOAuthException("Вход не найден или истёк — начни заново");
 
         await oauth.CompleteAsync(state, code, ServiceOwnerId, ct: ct);
 
         var rec = TryGetServiceRecord();
         var st = LoadState();
         st.Connected = true;
-        st.AdminOwnerId = adminOwnerId;
+        st.AdminOwnerId = pending.AdminOwnerId;
         st.ExpiresAt = rec?.Auth.OAuth?.ExpiresAt;
         st.AuthVersion++;
         SaveState(st);
         log.LogInformation("Higgsfield: подключение (admin={Admin}, ver={Ver})",
-            adminOwnerId, st.AuthVersion);
+            pending.AdminOwnerId, st.AuthVersion);
         return true;
     }
 

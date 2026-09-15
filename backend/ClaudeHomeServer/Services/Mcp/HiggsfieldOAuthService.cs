@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Reflection;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Mcp;
@@ -347,12 +346,5 @@ public sealed class HiggsfieldOAuthService(
         return bestEntry is not null;
     }
 
-    /// <summary>Все owners из McpRegistry._byOwner (рефлексия, one-time use).</summary>
-    private IEnumerable<string> EnumerateAllOwners()
-    {
-        var field = typeof(McpRegistry).GetField("_byOwner",
-            BindingFlags.NonPublic | BindingFlags.Instance)!;
-        var byOwner = (Dictionary<string, List<McpServerRecord>>)field.GetValue(registry)!;
-        return byOwner.Keys;
-    }
+    private IEnumerable<string> EnumerateAllOwners() => registry.GetAllOwners();
 }

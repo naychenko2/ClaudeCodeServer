@@ -79,6 +79,13 @@ public class McpRegistry
             return _byOwner.TryGetValue(ownerId, out var list) ? list.ToList() : [];
     }
 
+    /// <summary>Все владельцы, у которых есть хотя бы одна запись (снимок).</summary>
+    public IEnumerable<string> GetAllOwners()
+    {
+        lock (_lock)
+            return _byOwner.Keys.ToList();
+    }
+
     public McpServerRecord? Get(string ownerId, string id)
     {
         lock (_lock)

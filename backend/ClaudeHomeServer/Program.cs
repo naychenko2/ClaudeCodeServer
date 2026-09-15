@@ -1230,6 +1230,18 @@ app.Services.GetRequiredService<UserStore>();
 // LocalActionOverridesStore при загрузке отбрасывает оверрайды неизвестных ключей —
 // поздняя регистрация теряла бы сохранённые маршруты модульных действий
 app.Services.GetRequiredService<ModuleRegistry>();
+// Одноразовая миграция ф.2.1: усыновление per-owner higgsfield-токенов под сервисного
+// владельца (higgsfield-instance). Идемпотентна — повторный вызов без per-owner записей
+// вернёт false. Best-effort: сбой не блокирует старт.
+try
+{
+    app.Services.GetRequiredService<ClaudeHomeServer.Services.Mcp.HiggsfieldOAuthService>()
+        .RunMigration();
+}
+catch (Exception ex)
+{
+    Console.Error.WriteLine($"[HiggsfieldMigration] миграция пропущена: {ex.Message}");
+}
 if (!inspectionMode)
 {
     // Фоновый прогрев каталога моделей (опрос claude CLI ~5 с — не задерживаем старт).

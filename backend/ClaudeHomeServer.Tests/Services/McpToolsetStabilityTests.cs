@@ -24,7 +24,26 @@ namespace ClaudeHomeServer.Tests.Services;
 /// </summary>
 public class McpToolsetStabilityTests
 {
-    private static string? FindSource() => FindSource("Services", "Llm", "Claude", "ClaudeSession.cs");
+    // ClaudeSession.cs переехал при выносе вертикали Llm (мерж e9bd6f74):
+    // backend/ClaudeHomeServer/Services/Llm/Claude/ → backend/ClaudeHomeServer.Llm/Claude/
+    // Ищем по обоим путям: новому (текущее) и старому (на случай отката).
+    private static string? FindSource()
+    {
+        return FindSourceIn("ClaudeHomeServer.Llm", "Claude", "ClaudeSession.cs")
+            ?? FindSource("Services", "Llm", "Claude", "ClaudeSession.cs");
+    }
+
+    private static string? FindSourceIn(string assembly, params string[] relative)
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null)
+        {
+            var candidate = Path.Combine([dir.FullName, "backend", assembly, .. relative]);
+            if (File.Exists(candidate)) return candidate;
+            dir = dir.Parent;
+        }
+        return null;
+    }
 
     private static string? FindSource(params string[] relative)
     {
@@ -53,11 +72,14 @@ public class McpToolsetStabilityTests
             .Where(l => !l.TrimStart().StartsWith("//", StringComparison.Ordinal)));
     }
 
-    [SkippableFact]
+    [Fact]
     public void СоставИнструментовХода_НеЗависитОтСостоянияХода()
     {
         var path = FindSource();
-        Skip.If(path is null, "ClaudeSession.cs не найден (сборка вне дерева репозитория)");
+        path.Should().NotBeNull(
+            "ClaudeSession.cs не найден ни по одному из ожидаемых путей: "
+            + "backend/ClaudeHomeServer.Llm/Claude/ (новый) или "
+            + "backend/ClaudeHomeServer/Services/Llm/Claude/ (старый)");
 
         var source = File.ReadAllText(path!);
         // Сигнатуру ищем регулярным выражением, а не точной строкой: кортеж возврата растёт
@@ -453,11 +475,14 @@ public class McpToolsetStabilityTests
     /// читать MentionsToolsEnabled — «MentionsHint is not null» расходился с составом при
     /// единственной персоне владельца (подсказка гаснет, инструмент остаётся).
     /// </summary>
-    [SkippableFact]
+    [Fact]
     public void ShapeПерсон_ЧитаетЕдинуюФормулуMentions()
     {
         var path = FindSource();
-        Skip.If(path is null, "ClaudeSession.cs не найден (сборка вне дерева репозитория)");
+        path.Should().NotBeNull(
+            "ClaudeSession.cs не найден ни по одному из ожидаемых путей: "
+            + "backend/ClaudeHomeServer.Llm/Claude/ (новый) или "
+            + "backend/ClaudeHomeServer/Services/Llm/Claude/ (старый)");
 
         var source = File.ReadAllText(path!);
         var start = source.IndexOf("mentionsForShape", StringComparison.Ordinal);

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { Button, Badge } from '../../components/ui';
 import { C, FONT, FS, R, SP } from '../../lib/design';
@@ -33,6 +33,10 @@ export function HiggsfieldAdminTab() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<'connect' | 'disconnect' | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  // Таймер polling'а закрытого OAuth-окна (fallback, если postMessage не пришёл)
+  const oauthTimerRef = useRef<number | null>(null);
 
   const loadStatus = useCallback(() => {
     setLoading(true);
@@ -45,15 +49,52 @@ export function HiggsfieldAdminTab() {
     loadStatus();
   }, [loadStatus]);
 
+  const stopOAuthPoll = useCallback(() => {
+    if (oauthTimerRef.current !== null) {
+      window.clearInterval(oauthTimerRef.current);
+      oauthTimerRef.current = null;
+    }
+  }, []);
+
+  // Размонтирование — снять polling
+  useEffect(() => () => stopOAuthPoll(), [stopOAuthPoll]);
+
+  // postMessage: callback-страница шлёт { type: 'mcp-oauth', ok, key: 'higgsfield', error }.
+  // Тот же контракт, что у личного OAuth-входа MCP-серверов (useMcpData).
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      const payload = e.data as { type?: string; ok?: boolean; key?: string; error?: string } | null;
+      if (!payload || payload.type !== 'mcp-oauth' || payload.key !== 'higgsfield') return;
+      stopOAuthPoll();
+      if (payload.ok) {
+        setNotice(null);
+        loadStatus();
+      } else {
+        setError(payload.error || 'Вход не удался');
+      }
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [stopOAuthPoll, loadStatus]);
+
   const handleConnect = async () => {
     setBusy('connect');
     setError(null);
+    setNotice(null);
     try {
       const { authorizeUrl } = await api.higgsfield.connect();
-      window.open(authorizeUrl, 'higgsfield-admin-oauth', 'width=600,height=700');
-      // После авторизации в окне — статус обновится (пользователь закроет окно,
-      // а мы просто обновим; можно добавить polling, но минимум — по reload)
-      loadStatus();
+      const win = window.open(authorizeUrl, 'higgsfield-admin-oauth', 'width=600,height=700');
+      if (!win) {
+        setError('Не удалось открыть окно входа — разрешите всплывающие окна и попробуйте снова');
+        return;
+      }
+      // Polling: окно закрылось, postMessage не пришёл
+      stopOAuthPoll();
+      oauthTimerRef.current = window.setInterval(() => {
+        if (!win.closed) return;
+        stopOAuthPoll();
+        setNotice('Окно закрыто — вход не завершён');
+      }, 500);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Не удалось начать подключение');
     } finally {
@@ -104,6 +145,10 @@ export function HiggsfieldAdminTab() {
           fontSize: FS.sm, color: C.dangerText, background: C.dangerBg,
           padding: '6px 10px', borderRadius: R.md,
         }}>{error}</div>
+      )}
+
+      {notice && (
+        <div style={{ fontSize: FS.xs, color: C.warningText }}>{notice}</div>
       )}
 
       {connected && (

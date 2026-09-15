@@ -210,6 +210,13 @@ public class ClaudeSession : ILlmSessionAdapter
     private string? _lastSubmittedTurnText;
     private volatile bool _lastTurnResolved = true;
     private bool _lastSubmitWasNewProcess;
+
+    // Хеш нестабильных секций, вклеенных в текст ПРОШЛОГО хода (RecallInTurnText).
+    // Не изменились — не повторяем: они уже лежат в транскрипте и доедут по --resume,
+    // а копия в каждом ходе растила бы контекст на ровном месте. Живёт в памяти
+    // процесса: после рестарта первый ход пошлёт склейку заново — кэш префикса это
+    // не трогает (вклейка идёт в хвост), цена ошибки — один лишний блок.
+    private string? _lastTurnRecallHash;
     // Сериализует записи в stdin процесса: control_response шлются из SignalR-потоков
     // параллельно с пампом — без лока JSON-строки могут перемешаться
     private readonly SemaphoreSlim _stdinLock = new(1, 1);
@@ -2756,6 +2763,13 @@ public class ClaudeSession : ILlmSessionAdapter
         // (снимок пишется уже после развилки same-process, когда известно, применён ли он)
         List<PromptSectionDto> sections = [];
 
+        // RecallInTurnText: нестабильные секции не идут в системный блок (он обязан быть
+        // побайтово неизменным, иначе prefix cache движка рвёт кэш всей истории), а
+        // копятся здесь и уезжают хвостом — вклейкой в текст хода. Признак берём от
+        // провайдера СЕССИИ, как BareMode: сигнатура запуска остаётся стабильной.
+        var recallInTurnText = _providers?.ResolveByModel(EffectiveModel) is { RecallInTurnText: true };
+        List<PromptSectionDto> turnRecallSections = [];
+
         // Секции, удалённые TurnPromptAssembler.ApplyBudget из-за лимита командной строки
         // (32 767 символов Windows). По умолчанию пусто — обычный ход, срезки нет. Заполняется
         // в момент склейки, едет в PromptSnapshotDraft.TruncatedSections через PublishPromptSnapshot.
@@ -2783,8 +2797,16 @@ public class ClaudeSession : ILlmSessionAdapter
             // group — чья это часть: по ней UI считает, во сколько обходится персона.
             void Add(string key, string title, string? text, bool stable = true, string group = "misc")
             {
-                if (!string.IsNullOrWhiteSpace(text))
-                    sections.Add(new PromptSectionDto(key, title, text, Stable: stable, Group: group));
+                if (string.IsNullOrWhiteSpace(text)) return;
+                // При RecallInTurnText нестабильные секции придерживаем: ниже они либо
+                // уедут хвостом (Kind="turn" — Combine берёт только "system"), либо будут
+                // опущены как неизменившиеся. В системный блок они не попадают никогда.
+                if (recallInTurnText && !stable)
+                {
+                    turnRecallSections.Add(new PromptSectionDto(key, title, text, "turn", Stable: false, Group: group));
+                    return;
+                }
+                sections.Add(new PromptSectionDto(key, title, text, Stable: stable, Group: group));
             }
 
             // Шина событий хода: реестр IPromptSectionContributor собирает свои секции
@@ -3251,6 +3273,29 @@ public class ClaudeSession : ILlmSessionAdapter
                     manifestItems.Select(i => new RecallItemDto(i.Kind, i.Ref, i.Title, i.Snippet)).ToList()));
         }
 
+        // Хвост хода (RecallInTurnText): нестабильные секции уезжают вклейкой в текст, а не
+        // системным блоком. Кэш префикса это не трогает — текст хода и так новый каждый ход.
+        //
+        // Повтор не шлём: склейка не изменилась против прошлого хода — она уже в транскрипте
+        // и доедет по --resume, а копия в каждом ходе растила бы контекст. Не вклеили —
+        // не кладём и в sections: снимок «что ушло модели» не должен показывать лишнего.
+        //
+        // Побочно чинится мягкая деградация same-process хода: системный промпт живому
+        // процессу не обновляется, а текст хода доезжает всегда — значит и recall тоже.
+        var turnTextForCli = text;
+        if (turnRecallSections.Count > 0)
+        {
+            var joinedRecall = string.Join("\n\n", turnRecallSections.Select(x => x.Text));
+            var recallHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes(joinedRecall)));
+            if (recallHash != _lastTurnRecallHash)
+            {
+                _lastTurnRecallHash = recallHash;
+                sections.AddRange(turnRecallSections);
+                turnTextForCli = joinedRecall + "\n\n---\n\n" + text;
+            }
+        }
+
         // Env-оверрайды собираем ДО ApplyBudget: оценка должна учитывать фактический env,
         // иначе сторонний провайдер (ANTHROPIC_BASE_URL + ANTHROPIC_AUTH_TOKEN от BuildCliEnv)
         // приехал бы в оценку нулевой длиной, а в реальном docker exec — нет (ревью dc641949,
@@ -3488,11 +3533,11 @@ public class ClaudeSession : ILlmSessionAdapter
         object content;
         if (imageBlocks.Count == 0)
         {
-            content = text;
+            content = turnTextForCli;
         }
         else
         {
-            var blocks = new List<object> { new { type = "text", text } };
+            var blocks = new List<object> { new { type = "text", text = turnTextForCli } };
             blocks.AddRange(imageBlocks);
             content = blocks;
         }

@@ -399,7 +399,8 @@ public class WebSearchToolsetTests : IDisposable
             NullLogger<ReaderService>.Instance);
         var spend = new RecordingSpend();
 
-        var toolset = new WebSearchToolset(search, reader, new ReaderQuotaService(), sessions, spend);
+        var toolset = new WebSearchToolset(search, reader, new ReaderQuotaService(), sessions,
+            NullLogger<WebSearchToolset>.Instance, spend);
         var context = new McpToolCallContext(TestUserId, session.Id, session.Id);
         return new Env(toolset, context, session, perplexity, site, spend, log);
     }

@@ -1,3 +1,4 @@
+using System.Threading;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
@@ -15,6 +16,12 @@ namespace ClaudeHomeServer.Services;
 // Никакого состояния, только зависимости в параметрах — шов здесь не нужен.
 internal static class SpendMapping
 {
+    // One-shot-флаги: при отсутствии ISpendCollector предупреждаем один раз за процесс,
+    // чтобы каждый ход не спамил лог
+    private static int _turnSpendWarned;
+    private static int _falSpendWarned;
+    private static int _glifSpendWarned;
+
     // Извлекает request_id из результата вызова, если это генерация fal.ai. Признак fal —
     // наличие request_id И fal-домена где-либо в ответе. Покрывает обе формы результата:
     //  • run_model/submit_job: fal.run в *_url (status_url/response_url/cancel_url);
@@ -46,7 +53,12 @@ internal static class SpendMapping
         Session? s,
         ResultMessage m)
     {
-        if (spend is null || s is null || m.Usage is null) return;
+        if (spend is null || s is null || m.Usage is null)
+        {
+            if (spend is null && Interlocked.Exchange(ref _turnSpendWarned, 1) == 0)
+                log?.LogWarning("spend: коллектор недоступен, запись расхода хода пропущена");
+            return;
+        }
         try
         {
             var provider = SpendSources.NormalizeProvider(s.Provider);
@@ -85,7 +97,12 @@ internal static class SpendMapping
         Session s,
         FalCostMessage msg)
     {
-        if (spend is null) return;
+        if (spend is null)
+        {
+            if (Interlocked.Exchange(ref _falSpendWarned, 1) == 0)
+                log?.LogWarning("spend: коллектор недоступен, запись расхода генерации fal.ai пропущена");
+            return;
+        }
         try
         {
             spend.Record(new SpendRecord
@@ -114,7 +131,12 @@ internal static class SpendMapping
         Session s,
         GlifCostMessage msg)
     {
-        if (spend is null) return;
+        if (spend is null)
+        {
+            if (Interlocked.Exchange(ref _glifSpendWarned, 1) == 0)
+                log?.LogWarning("spend: коллектор недоступен, запись расхода генерации glif пропущена");
+            return;
+        }
         try
         {
             spend.Record(new SpendRecord

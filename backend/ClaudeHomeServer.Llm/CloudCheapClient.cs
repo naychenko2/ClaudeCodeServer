@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Threading;
 using System.Text.Json;
 
 namespace ClaudeHomeServer.Services.Llm;
@@ -31,6 +32,7 @@ public sealed class CloudCheapClient
     private readonly List<Source> _sources = [];
     // Сбор расхода бесплатных вызовов (null — в тестах: аналитика выключена)
     private readonly Spend.ISpendCollector? _spend;
+    private int _spendNullWarned;
 
     // Ключ legacy-провайдера-источника (openrouter по умолчанию). Сохраняется для
     // обратной совместимости с кодом, который ожидал единственный источник.
@@ -263,7 +265,12 @@ public sealed class CloudCheapClient
     // Ошибка записи вызов не роняет.
     private void RecordSpend(string model, string sourceKey, JsonElement json, string? ownerId, string? label)
     {
-        if (_spend is null) return;
+        if (_spend is null)
+        {
+            if (Interlocked.Exchange(ref _spendNullWarned, 1) == 0)
+                _logger.LogWarning("spend: коллектор недоступен, запись расхода cloud-cheap пропущена");
+            return;
+        }
         try
         {
             long inTok = 0, outTok = 0;

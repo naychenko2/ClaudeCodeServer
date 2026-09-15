@@ -1,3 +1,4 @@
+using System.Threading;
 using System.Text.Json;
 using ClaudeHomeServer.Protocol;
 
@@ -23,6 +24,7 @@ public sealed class OllamaClient : ILocalLlmClient
     private readonly ILogger<OllamaClient> _logger;
     // Сбор расхода бесплатных вызовов (null — в тестах: аналитика выключена)
     private readonly Spend.ISpendCollector? _spend;
+    private int _spendNullWarned;
     private readonly LocalLlmOptions _options;
     // keep_alive для Ollama: число (секунды; -1 = держать вечно) ЛИБО duration-строка ("5m").
     // Строку "-1" API отвергает ("missing unit in duration") — поэтому целое отдаём числом.
@@ -113,7 +115,12 @@ public sealed class OllamaClient : ILocalLlmClient
     // Ошибка записи вызов не роняет.
     private void RecordSpend(string model, JsonElement json, string? ownerId, string? label)
     {
-        if (_spend is null) return;
+        if (_spend is null)
+        {
+            if (Interlocked.Exchange(ref _spendNullWarned, 1) == 0)
+                _logger.LogWarning("spend: коллектор недоступен, запись расхода ollama пропущена");
+            return;
+        }
         try
         {
             _spend.Record(new Models.SpendRecord

@@ -98,6 +98,44 @@ public class SpendAnalyticsTests : IDisposable
     }
 
     [Fact]
+    public void Rollup_PersistDailyПадает_СырьёНеУдаляется()
+    {
+        var dir = Path.Combine(_dir, "spend_persist_fail");
+        Directory.CreateDirectory(dir);
+        var store = new SpendStore(dir, detailDays: 30);
+
+        var oldDay = new DateTime(2026, 7, 5, 12, 0, 0, DateTimeKind.Utc);
+        store.Record(Rec(oldDay));
+        store.Record(Rec(oldDay, model: "sonnet"));
+
+        // Создаём daily.json.tmp как DIRECTORY — File.WriteAllText к нему упадёт
+        var tmpPath = Path.Combine(dir, "daily.json.tmp");
+        Directory.CreateDirectory(tmpPath);
+
+        var cutoff = new DateOnly(2026, 7, 10);
+        store.RollupOlderThan(cutoff);
+
+        // Сырьё НЕ удалено: daily.json не записан, rollup откатился
+        var turnsFile = Path.Combine(dir, "turns-2026-07-05.jsonl");
+        Assert.True(File.Exists(turnsFile), "turns-*.jsonl остаётся на диске после сбоя PersistDaily");
+        Assert.Equal(2, store.DetailsBetween(new DateOnly(2026, 7, 5), new DateOnly(2026, 7, 5)).Count);
+        Assert.False(store.IsAggregated(new DateOnly(2026, 7, 5)), "день ещё не в агрегатах");
+
+        // Исправляем файловую систему: удаляем блокирующий каталог
+        Directory.Delete(tmpPath);
+
+        // Повторный проход: PersistDaily теперь succeeds, сырьё удаляется
+        store.RollupOlderThan(cutoff);
+        Assert.False(File.Exists(turnsFile), "после успешной записи daily.json сырьё удалено");
+        Assert.Empty(store.DetailsBetween(new DateOnly(2026, 7, 5), new DateOnly(2026, 7, 5)));
+        Assert.True(store.IsAggregated(new DateOnly(2026, 7, 5)));
+
+        // Идемпотентность: следующий проход по пустому _details — no-op, агрегаты не дублируются
+        store.RollupOlderThan(cutoff);
+        Assert.Equal(2, store.DailyBetween(new DateOnly(2026, 7, 5), new DateOnly(2026, 7, 5)).Count);
+    }
+
+    [Fact]
     public void Record_ПустаяЗаписьОтбрасывается()
     {
         var store = NewStore();

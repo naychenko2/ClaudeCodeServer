@@ -22,8 +22,15 @@ namespace ClaudeHomeServer.Controllers;
 [Authorize]
 [Route("api/tts")]
 public class TtsController(YandexTtsService tts, VoiceResolver voices,
-    SessionManager sessions, ISpendCollector spend) : ControllerBase
+    SessionManager sessions, ILogger<TtsController> logger,
+    ISpendCollector? spend = null) : ControllerBase
 {
+    // Форма «предупредили один раз» в остальных местах проекта — инстансное поле (стороны
+    // хоста — отдельный TestWebApplicationFactory, и shared static между хостами был бы
+    // ложью: один хост прозвонил, другой уже «не предупредим»). Interlocked.Exchange
+    // атомарный — двух одновременных записей лога не случится даже при гонке ходов.
+    private int _spendNullWarned;
+
     // Лимит запроса фронта; заодно верхняя граница расхода на один синтез (тарификация по запросам)
     public const int MaxTextLength = 3000;
 
@@ -84,6 +91,12 @@ public class TtsController(YandexTtsService tts, VoiceResolver voices,
     private void RecordSpend(TtsRequest req, VoiceChoice voice, TtsResult res)
     {
         if (res.BilledRequests <= 0) return;
+        if (spend is null)
+        {
+            if (Interlocked.Exchange(ref _spendNullWarned, 1) == 0)
+                logger.LogWarning("spend: коллектор недоступен, запись расхода TTS пропущена");
+            return;
+        }
 
         // Чат нужен только ради разрезов (проект, задача, персона). Чужой или протухший id —
         // не ошибка: озвучка уже состоялась, трата всё равно ложится на своего владельца,

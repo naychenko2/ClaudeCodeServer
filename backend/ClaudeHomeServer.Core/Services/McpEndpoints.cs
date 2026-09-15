@@ -22,6 +22,7 @@ public static class McpEndpoints
     public const string WebSearchName = "websearch";
     public const string CodeGraphName = "codegraph";
     public const string DifyName = "dify";
+    public const string HiggsfieldName = "higgsfield";
     public const string WidgetsName = "widgets";
     public const string WorkspaceName = "wsp";
 

@@ -479,6 +479,14 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpOAuthService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpProbeService>();
 // Встроенная интеграция Higgsfield (волна 1): запись реестра + OAuth-вход + инжект в ход
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.HiggsfieldIntegration>();
+// Инстансное подключение Higgsfield (фаза 1.1): единый OAuth-вход админа, шарится всеми
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.HiggsfieldOAuthService>();
+builder.Services.AddQuietHttpClient(
+    ClaudeHomeServer.Services.Mcp.HiggsfieldOAuthService.HttpClientName,
+    new QuietHttpClientProfile(
+        Category: "ClaudeHomeServer.Mcp.Higgsfield",
+        Subject: "инстансным подключением Higgsfield",
+        Consequence: "Обновление токена не прошло — админу нужно переподключиться."));
 // Продуктовые MCP-серверы поверх HTTP (ADR-012): тулсет отдаёт схемы, общий контроллер
 // McpTransportController — транспорт. Новый сервер добавляется одной регистрацией здесь.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
@@ -523,6 +531,17 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
 // не объявляется вовсе (SessionManager не строит контекст).
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
     ClaudeHomeServer.Services.Mcp.Http.WebSearchToolset>();
+// Higgsfield (фаза 1.2): прокси к mcp.higgsfield.ai/mcp, 10 инструментов из белого списка.
+// Instance-level OAuth фазы 1.1 уже зарегистрирован выше (HiggsfieldOAuthService +
+// higgsfield-oauth-клиент); здесь — тихий клиент самого прокси и сам тулсет.
+builder.Services.AddQuietHttpClient(
+    ClaudeHomeServer.Services.Mcp.Http.HiggsfieldToolset.HttpClientName,
+    new QuietHttpClientProfile(
+        Category: "ClaudeHomeServer.Mcp.Higgsfield",
+        Subject: "прокси-тулсетом Higgsfield",
+        Consequence: "Генерации картинок/видео/аудио недоступны — список инструментов устарел."));
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
+    ClaudeHomeServer.Services.Mcp.Http.HiggsfieldToolset>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.McpToolsetRegistry>();
 // Белый список инструментов профиля провайдера (KeepMcpTools): читает McpTransportController
 // на tools/list и tools/call, сами тулсеты о нём не знают

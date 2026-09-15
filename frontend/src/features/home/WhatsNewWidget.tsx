@@ -7,6 +7,13 @@ import { PRODUCT_HISTORY_EVENT, productHistorySeenKey } from '../../components/H
 import { HERO_SCORE, ScoreBadge, scoreBadge } from '../../components/ProductHistory';
 import { WidgetCard, WidgetAction, WidgetEmpty } from './WidgetCard';
 
+// Статический анонс: Higgsfield перешёл на admin-подключение (ф.2.3)
+const HIGGSFIELD_ANNOUNCEMENT = {
+  emoji: '🔗',
+  title: 'Higgsfield подключается администратором — личный логин больше не нужен',
+  area: 'Higgsfield',
+} as const;
+
 // Человеческая подпись дня сводки («за сегодня» / «за вчера» / «за 16 июля»)
 function dayLabel(date: string): string {
   const [y, m, d] = date.split('-').map(Number);
@@ -93,6 +100,32 @@ export function WhatsNewWidget({ userId }: { userId?: string | null }) {
           <div style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, padding: '0 0 4px' }}>
             {dayLabel(day.date)}
           </div>
+          {/* Статический анонс: всегда первым, не зависит от score */}
+          <button
+            key="higgsfield-ann"
+            onClick={openHistory}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 9, width: '100%', textAlign: 'left',
+              background: 'none', border: 'none', borderRadius: 8, padding: '7px 8px',
+              margin: '0 -8px', cursor: 'pointer', minWidth: 0,
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'none'; }}
+          >
+            <span style={{ fontSize: 14, flexShrink: 0, lineHeight: 1 }}>{HIGGSFIELD_ANNOUNCEMENT.emoji}</span>
+            <span style={{
+              fontFamily: FONT.sans, fontSize: 13, color: C.textPrimary, flex: 1, minWidth: 0,
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            }}>
+              {HIGGSFIELD_ANNOUNCEMENT.title}
+            </span>
+            <span style={{
+              fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, flexShrink: 0,
+              maxWidth: 110, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            }}>
+              {HIGGSFIELD_ANNOUNCEMENT.area}
+            </span>
+          </button>
           {top.map((item, i) => (
             <button
               key={i}

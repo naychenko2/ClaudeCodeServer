@@ -8,7 +8,8 @@ using Microsoft.Extensions.Logging;
 
 namespace ClaudeHomeServer.Tests.Services;
 
-// Аргументы BareMode (--bare + --system-prompt-file + опц. --tools) и СНИМОК промпта —
+// Аргументы BareMode (--system-prompt-file + опц. --tools; переменная
+// CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 ставится в env, не args) и СНИМОК промпта —
 // критичные сигнатуры запуска CLI и наблюдаемого состояния. Проверяем через сквозной
 // BuildArgs (ArgsCapturingLauncher по образцу ClaudeSessionEffortArgsTests): гейт
 // `bareProvider is { BareMode: true }` (ClaudeSession.cs:2455) и снимок
@@ -155,7 +156,7 @@ public class ClaudeSessionBareArgsTests : IDisposable
             // под мутацией гейта `is { BareMode: true }` → `is not null` BuildBareModeArgs
             // получил бы пустой SystemPromptFile, сам снял бы оба флага (ранний возврат по
             // string.IsNullOrWhiteSpace) и тест остался бы ЗЕЛЁНЫМ — мутация прошла бы молча
-            // (ревью 2026-09-06, H-1). С существующей картой мутация даёт --bare → честный RED.
+            // (ревью 2026-09-06, H-1). С существующей картой мутация даёт --system-prompt-file → честный RED.
             ["LlmProviders:deepseek:SystemPromptFile"] = "SystemPrompts/ok.md",
         });
         if (localSystemPromptFile is not null)
@@ -205,41 +206,42 @@ public class ClaudeSessionBareArgsTests : IDisposable
     }
 
     /// <summary>
-    /// СТОРОЖ ГЕЙТА: при BareMode=true у локального провайдера CLI получает --bare,
-    /// _lastBareModeApplied=true. Мутация `is { BareMode: true }` → `is not null` оставит
-    /// ход в обычном режиме (облачный провайдер не подключит BuildBareModeArgs), но
-    /// этот тест облачные модели не запускает — он зеркальный к тесту облачного.
+    /// СТОРОЖ ГЕЙТА: при BareMode=true у локального провайдера CLI получает
+    /// --system-prompt-file, _lastBareModeApplied=true. Мутация `is { BareMode: true }`
+    /// → `is not null` оставит ход в обычном режиме (облачный провайдер не подключит
+    /// BuildBareModeArgs), но этот тест облачные модели не запускает — он зеркальный
+    /// к тесту облачного.
     /// </summary>
     [Fact]
-    public async Task ХодНаЛокальном_BareMode_СтавитBareИПоследнийПризнакTrue()
+    public async Task ХодНаЛокальном_BareMode_СтавитСистемныйПромптИПризнакTrue()
     {
         var providers = LocalProviders(
             localBareMode: true,
             localSystemPromptFile: "SystemPrompts/CLAUDE-local.md");
         var (args, session) = await RunTurnAsync(LocalModelId, providers);
 
-        args!.Should().Contain("--bare", "BareMode=true обязан пройти в CLI");
-        args.Should().Contain("--system-prompt-file");
+        args!.Should().Contain("--system-prompt-file", "BareMode=true обязан поставить явную карту");
         session.LastBareModeApplied.Should().BeTrue();
     }
 
     /// <summary>
-    /// СТОРОЖ ГЕЙТА: при BareMode=false у локального провайдера CLI НЕ получает --bare,
-    /// _lastBareModeApplied=false. Мутация `is { BareMode: true }` → `is not null` сломает
-    /// ход на deepseek-v4-pro (облачный провайдер, без BareMode вовсе): BareArgs подключатся
-    /// → args будут содержать --bare → RED. Сторож ДЕРЖИТСЯ на строке фикстуры
+    /// СТОРОЖ ГЕЙТА: при BareMode=false у локального провайдера CLI НЕ получает
+    /// --system-prompt-file, _lastBareModeApplied=false. Мутация `is { BareMode: true }`
+    /// → `is not null` сломает ход на deepseek-v4-pro (облачный провайдер, без BareMode
+    /// вовсе): BareArgs подключатся → args будут содержать --system-prompt-file → RED.
+    /// Сторож ДЕРЖИТСЯ на строке фикстуры
     /// `LlmProviders:deepseek:SystemPromptFile` (существующий ok.md): без неё
     /// BuildBareModeArgs снял бы оба флага сам, по пустому пути карты, и мутация прошла
     /// бы молча — так и было до круга 8.
     /// </summary>
     [Fact]
-    public async Task ХодНаОблачномПровайдере_BareModeОтсутствует_ФлагаBareНет()
+    public async Task ХодНаОблачномПровайдере_BareModeОтсутствует_СистемногоПромптаНет()
     {
         var providers = LocalProviders(localBareMode: false, localSystemPromptFile: null);
         var (args, session) = await RunTurnAsync(CloudModelId, providers);
 
-        args!.Should().NotContain("--bare", "облачный провайдер без BareMode не должен подключать BuildBareModeArgs");
-        args.Should().NotContain("--system-prompt-file");
+        args!.Should().NotContain("--system-prompt-file",
+            "облачный провайдер без BareMode не должен подключать BuildBareModeArgs");
         session.LastBareModeApplied.Should().BeFalse();
     }
 
@@ -265,8 +267,8 @@ public class ClaudeSessionBareArgsTests : IDisposable
         {
             var (args, session) = await RunTurnAsync(LocalModelId, providers);
 
-            args!.Should().NotContain("--bare", "UnauthorizedAccessException из SafeJoin должен быть пойман, BareMode снят");
-            args.Should().NotContain("--system-prompt-file");
+            args!.Should().NotContain("--system-prompt-file",
+                "UnauthorizedAccessException из SafeJoin должен быть пойман, BareMode снят");
             session.LastBareModeApplied.Should().BeFalse();
             errCapture.ToString().Should().Contain("за пределами корня",
                 "catch обязан писать диагностику в stderr; no-op catch ломает это");
@@ -302,9 +304,8 @@ public class ClaudeSessionBareArgsTests : IDisposable
         {
             var (args, session) = await RunTurnAsyncWithLauncher(LocalModelId, providers, throwingLauncher);
 
-            args!.Should().NotContain("--bare",
+            args!.Should().NotContain("--system-prompt-file",
                 "InvalidOperationException из ToRuntime должен быть пойман вторым catch, BareMode снят");
-            args.Should().NotContain("--system-prompt-file");
             session.LastBareModeApplied.Should().BeFalse();
             errCapture.ToString().Should().Contain("недоступен в песочнице",
                 "второй catch обязан писать диагностику в stderr; no-op ломает это");
@@ -518,14 +519,14 @@ public class ClaudeSessionBareArgsTests : IDisposable
             out effective);
 
     [Fact]
-    public void BareMode_ФайлСуществуетОтносительноСервера_ОбаФлагаДобавлены()
+    public void BareMode_ФайлСуществуетОтносительноСервера_СистемныйПромптДобавлен()
     {
         var (full, rel) = CreateServerPromptFile();
 
         var args = Build(rel, bareTools: null, serverRoot: ServerRoot,
             out var warning, out var effective);
 
-        args.Should().Equal("--bare", "--system-prompt-file", full);
+        args.Should().Equal("--system-prompt-file", full);
         warning.Should().BeNull();
         effective.Should().BeTrue();
     }
@@ -550,7 +551,7 @@ public class ClaudeSessionBareArgsTests : IDisposable
         var args = Build(full, bareTools: null, serverRoot: null,
             out var warning, out var effective);
 
-        args.Should().Equal("--bare", "--system-prompt-file", full);
+        args.Should().Equal("--system-prompt-file", full);
         warning.Should().BeNull();
         effective.Should().BeTrue();
     }
@@ -575,9 +576,8 @@ public class ClaudeSessionBareArgsTests : IDisposable
     [Fact]
     public void BareMode_SystemPromptFileПустой_СнимаетBareИWarning()
     {
-        // SystemPromptFile пустой: --bare без --system-prompt-file оставил бы модель
-        // без контекста, т.к. --bare отключает автозагрузку CLAUDE.md и CLI ничего
-        // своего не подтянет. Асимметрия с веткой «файл не найден» неоправданна —
+        // SystemPromptFile пустой: без --system-prompt-file модель была бы без явной
+        // карты. Асимметрия с веткой «файл не найден» неоправданна —
         // теперь единое поведение: пустой SystemPromptFile = BareMode снят с warning,
         // ход в обычном режиме с полной CLAUDE.md.
         var args = Build("", bareTools: null, serverRoot: ServerRoot,
@@ -592,8 +592,7 @@ public class ClaudeSessionBareArgsTests : IDisposable
     [Fact]
     public void BareMode_BareToolsЗаданы_АргументToolsПрисутствует()
     {
-        // Контракт --tools: имя сужает набор, расширять нельзя (замер 2026-09-05).
-        // CLI получает один аргумент "--tools" со списком через пробел.
+        // Контракт --tools: CLI получает один аргумент "--tools" со списком через пробел.
         var (full, rel) = CreateServerPromptFile();
         var tools = new[] { "Bash", "Edit", "Read", "PowerShell" };
 
@@ -601,7 +600,6 @@ public class ClaudeSessionBareArgsTests : IDisposable
             out var warning, out var effective);
 
         args.Should().Equal(
-            "--bare",
             "--tools", string.Join(' ', tools),
             "--system-prompt-file", full);
         warning.Should().BeNull();
@@ -616,7 +614,7 @@ public class ClaudeSessionBareArgsTests : IDisposable
         var args = Build(rel, bareTools: [], serverRoot: ServerRoot,
             out var warning, out var effective);
 
-        args.Should().Equal("--bare", "--system-prompt-file", full);
+        args.Should().Equal("--system-prompt-file", full);
         warning.Should().BeNull();
         effective.Should().BeTrue();
         args.Should().NotContain("--tools");
@@ -630,7 +628,7 @@ public class ClaudeSessionBareArgsTests : IDisposable
         var args = Build(rel, bareTools: null, serverRoot: ServerRoot,
             out var warning, out var effective);
 
-        args.Should().Equal("--bare", "--system-prompt-file", full);
+        args.Should().Equal("--system-prompt-file", full);
         warning.Should().BeNull();
         effective.Should().BeTrue();
         args.Should().NotContain("--tools");
@@ -639,8 +637,8 @@ public class ClaudeSessionBareArgsTests : IDisposable
     [Fact]
     public void BareMode_ФайлНеНайден_ФлагаToolsТожеНет()
     {
-        // --tools без --bare бесполезен (CLI всё равно урежет тулсет). При снятии
-        // обоих флагов из-за пропажи файла карты --tools снимается тем же ходом.
+        // --tools без BareMode бесполезен (CLI всё равно урежет тулсет). При снятии
+        // BareMode из-за пропажи файла карты --tools снимается тем же ходом.
         var args = Build("SystemPrompts/nope.md",
             bareTools: new[] { "Write", "Glob" },
             serverRoot: ServerRoot, out var warning, out var effective);
@@ -655,7 +653,7 @@ public class ClaudeSessionBareArgsTests : IDisposable
     public void BareMode_SystemPromptFileПустой_BareToolsЗаданы_ТожеСнимает()
     {
         // Пустой SystemPromptFile + любой bareTools: BareMode всё равно снимается
-        // с warning. --bare без карты оставил бы модель без контекста — --tools тут
+        // с warning. Без карты модель осталась бы без явного контекста — --tools тут
         // не спасает.
         var tools = new[] { "Bash", "Edit", "Read", "PowerShell" };
 
@@ -666,7 +664,6 @@ public class ClaudeSessionBareArgsTests : IDisposable
         warning.Should().NotBeNullOrEmpty();
         warning.Should().Contain("SystemPromptFile не задан");
         effective.Should().BeFalse();
-        args.Should().NotContain("--bare");
         args.Should().NotContain("--tools");
     }
 
@@ -688,7 +685,7 @@ public class ClaudeSessionBareArgsTests : IDisposable
             "SystemPrompts/CLAUDE-local.md", null, Paths,
             out var warning, out var effective);
 
-        args.Should().Equal("--bare", "--system-prompt-file", projectLocal);
+        args.Should().Equal("--system-prompt-file", projectLocal);
         warning.Should().BeNull();
         effective.Should().BeTrue();
         // Защита от регрессии: серверный путь НЕ должен попасть в args.
@@ -707,7 +704,7 @@ public class ClaudeSessionBareArgsTests : IDisposable
             out var warning, out var effective);
 
         var expectedPath = Path.Combine(ServerRoot, "SystemPrompts", "CLAUDE-local.md");
-        args.Should().Equal("--bare", "--system-prompt-file", expectedPath);
+        args.Should().Equal("--system-prompt-file", expectedPath);
         warning.Should().BeNull();
         effective.Should().BeTrue();
     }
@@ -730,7 +727,7 @@ public class ClaudeSessionBareArgsTests : IDisposable
             out var warning, out var effective);
 
         var expectedPath = Path.Combine(ServerRoot, "SystemPrompts", "CLAUDE-local.md");
-        args.Should().Equal("--bare", "--system-prompt-file", expectedPath);
+        args.Should().Equal("--system-prompt-file", expectedPath);
         warning.Should().NotBeNullOrEmpty("oversized-флаг обязан сопровождаться warning");
         warning.Should().Contain("превышает");
         effective.Should().BeTrue();
@@ -750,7 +747,7 @@ public class ClaudeSessionBareArgsTests : IDisposable
             "SystemPrompts/CLAUDE-local.md", null, Paths,
             out var warning, out var effective);
 
-        args.Should().Equal("--bare", "--system-prompt-file", projectLocal);
+        args.Should().Equal("--system-prompt-file", projectLocal);
         warning.Should().BeNull();
         effective.Should().BeTrue();
     }

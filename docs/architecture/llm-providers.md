@@ -220,26 +220,25 @@ UI скрывает недоступное (`useModelCaps` в `lib/models.ts`), 
 полная автозагрузка CLAUDE.md проекта съедает десятки тысяч входных токенов
 (замер 2026-09-05: 95 070 токенов при полной CLAUDE.md против ~2 400 при
 `BareMode` + краткой карте в SystemPrompts/CLAUDE-local.md) и тормозит ход.
-Провайдер с `LlmProviderConfig:BareMode=true` запускает CLI с `--bare` (отключает
-автозагрузку CLAUDE.md, хуков, LSP, плагинов и авто-памяти) и
-`--system-prompt-file <путь>` (явная короткая карта проекта).
+Провайдер с `LlmProviderConfig:BareMode=true` запускает CLI с
+`--system-prompt-file <путь>` (явная короткая карта проекта). Автозагрузка
+CLAUDE.md отключается переменной окружения `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1`
+(задача 2026-09-15: замена флага `--bare`, который также глушил MCP и ограничивал
+тулсет до `Bash/Edit/Read/PowerShell`). Переменная не документирована в
+`claude --help` — найдена строкой в бинарнике CLI 2.1.270.
 
-**`--tools` только сужает набор, расширять нельзя.** Замерено на qwen3.8-27b
-локально (2026-09-05):
+**Инструменты (замер 2026-09-15, CLI 2.1.270):**
 
-| Прогон | Инструменты |
-|---|---|
-| `--bare` без `--tools` | `Bash, Edit, PowerShell, Read` |
-| `--bare --tools "default"` | `Bash, Edit, PowerShell, Read` |
-| `--bare` + наш `BareTools=["Bash","Edit","Read","PowerShell"]` | `Bash, Edit, Read, PowerShell` (тот же набор) |
-| без `--bare`, тот же список | `Bash, Edit, Glob, Grep, Read, Write` |
+| Вариант | Инструменты | MCP | CLAUDE.md | Символов |
+|---|---|---|---|---|
+| `--bare` (до 2026-09-15) | Bash, Edit, PowerShell, Read | есть | выкл | 10 032 |
+| `--safe-mode` | +Write | **НЕТ — глушит** | выкл | 22 306 |
+| без флагов | +Write | есть | **вкл, 64 576** | 76 147 |
+| **`DISABLE_CLAUDE_MDS=1` + 6 инструментов** (сейчас) | Bash, Edit, Read, Write, Glob, Grep | **есть** | **выкл** | **17 580** |
 
-Под `--bare` физический потолок — `Bash/Edit/Read/PowerShell`. `Write/Glob/Grep`
-недоступны, их роль исполняет `Bash` (`printf >`, `find`, `grep`). Это совпадает
-с курсом CLI 2.1.116, где `Glob/Grep` удалены в пользу `bfs/ugrep` через `Bash`.
-Поэтому `BareTools` для `local-qwen` сведён к `["Bash","Edit","Read","PowerShell"]`
-(явный список задан только для документирования состава, --bare без --tools даёт
-тот же набор).
+Цена перехода — примерно +2 150 токенов на ход (1,6% окна 131К).
+`PowerShell` снят: схема стоит 9 284 символа (~2 650 токенов), а локальная
+модель не вызвала его ни разу за 2 000 вызовов — всегда берёт Bash.
 
 **Файл карты** — `backend/ClaudeHomeServer/SystemPrompts/CLAUDE-local.md` (несколько
 килобайт; замер 2026-09-05). Поставляется с продуктом, лежит в
@@ -261,11 +260,11 @@ Docker-публикации (`CopyToOutputDirectory` + `CopyToPublishDirectory`)
    проекте локальная модель была мертва на старте (`System prompt file not found`,
    exit=1, без единого события stream-json → `TurnErrorClassifier:Unreachable` →
    ложная цепь фолбэка).
-3. **Ничего не нашли** — оба флага (`--bare`, `--system-prompt-file`) снимаются,
-   ход идёт обычным путём (CLI сам подтянет CLAUDE.md проекта). Лучше пусть
-   модель получит полный CLAUDE.md, чем упадёт с exit=1 без диагностики.
-   Предупреждение уходит в stderr через out-параметр
-   `BuildBareModeArgs(..., out warning)`.
+3. **Ничего не нашли** — `--system-prompt-file` и переменная
+   `CLAUDE_CODE_DISABLE_CLAUDE_MDS` снимаются, ход идёт обычным путём
+   (CLI сам подтянет CLAUDE.md проекта). Лучше пусть модель получит полный
+   CLAUDE.md, чем упадёт с exit=1 без диагностики. Предупреждение уходит в
+   stderr через out-параметр `BuildBareModeArgs(..., out warning)`.
 
 Сейчас путь идёт через `ClaudeSession.BuildBareModeArgs` — чистая static-функция
 под тестом.
@@ -274,14 +273,13 @@ Docker-публикации (`CopyToOutputDirectory` + `CopyToPublishDirectory`)
 `UnauthorizedAccessException` в BuildArgs, ход продолжается без BareMode
 (ранее исключение вылетало без диагностики и валило ход).
 
-**OAuth-инвариант.** `--bare` ломает OAuth-авторизацию CLI (пропускает чтение
-`~/.claude/.credentials.json`). Безопасно СТРУКТУРНО: BareMode включается
-только если `ResolveByModel(EffectiveModel)` нашёл провайдер, а находятся
-там только не-родные провайдеры с API-ключом (родной Claude использует OAuth
-через пул подписок, реестр его не возвращает — `LlmProviderRegistry.cs:11`).
-Условие `bareProvider is { BareMode: true }` для OAuth-чата не выполнится.
-Защита держится структурой — добавлять рантайм-чек «BareMode у OAuth-провайдера»
-не нужно.
+**OAuth-инвариант (снят, задача 2026-09-15).** Раньше `--bare` ломал OAuth-авторизацию
+CLI (пропускал чтение `~/.claude/.credentials.json`), и BareMode был безопасен
+«структурно»: включался только если `ResolveByModel(EffectiveModel)` нашёл
+не-родной провайдер. Переменной окружения `CLAUDE_CODE_DISABLE_CLAUDE_MDS` этот
+риск не грозит — OAuth-авторизация не трогается. Проверяющую ветку в коде
+(`bareProvider is { BareMode: true }`) пока НЕ снимаем (лишняя работа для этой
+задачи), но фактически ограничение больше не действует.
 
 **Контейнерная нога: пара «bind-mount ↔ правило маппера».** У container-владельцев
 CLI живёт в песочнице, а карта — на хосте, поэтому файл обязан быть виден изнутри

@@ -95,11 +95,18 @@ public class ClaudeSession : ILlmSessionAdapter
     // бэкенда, а не в каждом проекте пользователя. null — тесты без DI / старый контракт:
     // в этом случае SystemPromptFile ожидается абсолютным путём.
     private readonly string? _serverContentRoot;
-    // Фактическое состояние BareMode в последнем BuildArgs: true если CLI реально
-    // получил `--bare`. Снимок промпта читает этот признак, а не повторно ResolveByModel
-    // (см. ревью 2026-09-05: при деградации BuildBareModeArgs снимает оба флага, и снимок
+    // Фактическое состояние BareMode в последнем BuildArgs: true если BareMode реально
+    // применён (карта найдена, CLAUDE_CODE_DISABLE_CLAUDE_MDS поставлен). Снимок промпта
+    // читает этот признак, а не повторно ResolveByModel
+    // (см. ревью 2026-09-05: при деградации BuildBareModeArgs снимает флага, и снимок
     // обязан показывать обычный режим, а не «bare»).
     private bool _lastBareModeApplied;
+    // Сторож на пропажу CLAUDE_CODE_DISABLE_CLAUDE_MDS: переменная недокументирована,
+    // в любом обновлении CLI может исчезнуть. На первом ходу BareMode-сессии входные
+    // токены обязаны быть в пределах краткой карты (~2 000); если они превысили порог
+    // (64 КБ CLAUDE.md ≈ 18 000 токенов), переменная перестала работать. Одноразовый:
+    // после первого срабатывания (или первого хода) не повторяем.
+    private volatile bool _bareModeWatchdogFired;
     // Для тестов-сторожей (InternalsVisibleTo): мутация гейта или снимка обязана
     // краснеть на этом свойстве. Не часть публичного API.
     internal bool LastBareModeApplied => _lastBareModeApplied;
@@ -2550,21 +2557,19 @@ public class ClaudeSession : ILlmSessionAdapter
         if (!string.IsNullOrEmpty(effort))
             args.AddRange(["--effort", effort!]);
 
-        // Режим bare отключает автозагрузку CLAUDE.md, хуков, LSP, плагинов и авто-памяти.
-        // У локальных моделей полная карта проекта съедает контекст и тормозит ход (замер
-        // 2026-09-05: ~95 000 токенов при полной CLAUDE.md против ~2 400 при --bare +
-        // краткой карте в SystemPromptFile). Вместо неё подаём явную короткую карту.
+        // BareMode: краткая карта проекта вместо полной CLAUDE.md. У локальных моделей
+        // полная карта съедает контекст и тормозит ход (замер 2026-09-05: ~95 000 токенов
+        // против ~2 400 при BareMode + краткой карте). Автозагрузка CLAUDE.md теперь
+        // отключается переменной CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 (в envOverrides ниже),
+        // а не флагом --bare — MCP, хуки и LSP остаются живыми.
         // Признак берётся от свойств СЕССИИ (EffectiveModel → провайдер), не хода:
         // сигнатура запуска стабильна в пределах сессии, McpToolsetStabilityTests остаётся
-        // зелёным. Состав MCP задаётся через --mcp-config ниже — --bare его НЕ трогает.
+        // зелёным.
         //
-        // OAuth-инвариант: --bare ломает OAuth-авторизацию CLI (пропускает чтение кредов
-        // ~/.claude/.credentials.json, см. OneShotClaudeRunner.cs:299). Здесь это безопасно
-        // СТРУКТУРНО: bareProvider != null ⇒ провайдер найден реестром ⇒ это сторонний
-        // CLI-провайдер с API-ключом, OAuth используется ТОЛЬКО у пула подписок родного Claude
-        // (LlmProviderRegistry.cs:411, BuildCliEnv ставит ANTHROPIC_API_KEY из authToken).
-        // null от ResolveByModel = родной Claude без env-оверрайдов — BareMode там не включится,
-        // условие bareProvider is { BareMode: true } не выполнится.
+        // OAuth-инвариант (задача 2026-09-15: снят, см. docs/architecture/llm-providers.md):
+        // раньше --bare ломал OAuth-авторизацию, и BareMode был безопасен «структурно» —
+        // включался только для не-родных провайдеров. Переменной окружения этот риск не
+        // грозит, но проверку в коде пока НЕ снимаем (лишняя работа для этой задачи).
         var bareProvider = _providers?.ResolveByModel(EffectiveModel);
         if (bareProvider is { BareMode: true })
         {
@@ -3318,6 +3323,14 @@ public class ClaudeSession : ILlmSessionAdapter
                         envOverrides[k] = v;
             }
         }
+
+        // BareMode (замена --bare, задача 2026-09-15): переменная окружения отключает
+        // автозагрузку CLAUDE.md, не трогая MCP/хуки/остальное. Не документирована в
+        // claude --help (найдена строкой в бинарнике CLI 2.1.270) — сторож на пропажу
+        // см. TrackContextTokens. Ставим только когда BareMode реально применён (карта
+        // найдена), иначе у облачного провайдера переменная была бы лишним шумом.
+        if (_lastBareModeApplied)
+            envOverrides["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] = "1";
 
         // Родной Claude (подписка — основной аккаунт или аккаунт пула): объявляем окно
         // контекста сами, как сторонним провайдерам это делает BuildCliEnv. Считаем по модели
@@ -4331,14 +4344,16 @@ public class ClaudeSession : ILlmSessionAdapter
            && (usage is null || (usage.InputTokens == 0 && usage.OutputTokens == 0
                                   && usage.CacheReadTokens == 0 && usage.CacheCreationTokens == 0));
 
-    // Чистая функция сборки аргументов BareMode (--bare + опц. --tools + --system-prompt-file).
+    // Чистая функция сборки аргументов BareMode (опц. --tools + --system-prompt-file).
     // Вызывается ИЗ BuildArgs при bareProvider.BareMode=true. Ход аргументов:
-    //   1) --bare (всегда);
-    //   2) --tools "<список>" (только если bareTools непустой);
-    //   3) --system-prompt-file <путь в среде исполнения> (только если SystemPromptFile задан
-    //      и файл существует; иначе оба флага снимаются с warning).
-    // На out bareModeEffective: true если CLI реально получит `--bare` (хотя бы пустой карты);
-    // false если оба флага сняты (нет файла карты). Снимок промпта в BuildCliLayerFiles
+    //   1) --tools "<список>" (только если bareTools непустой);
+    //   2) --system-prompt-file <путь в среде исполнения> (только если SystemPromptFile задан
+    //      и файл существует; иначе всё снимается с warning).
+    // Отключение автозагрузки CLAUDE.md (раньше — флаг `--bare`) теперь реализовано
+    // переменной окружения CLAUDE_CODE_DISABLE_CLAUDE_MDS=1, которую ставит RunTurnAsync
+    // при _lastBareModeApplied=true.
+    // На out bareModeEffective: true если BareMode реально применён (карта найдена);
+    // false если флага нет (нет файла карты). Снимок промпта в BuildCliLayerFiles
     // решает по этому признаку, а не по флагу BareMode провайдера — иначе при деградации
     // снапшот показывал карту Bare, которой в реальном запуске нет.
     //
@@ -4363,10 +4378,9 @@ public class ClaudeSession : ILlmSessionAdapter
     {
         warning = null;
         bareModeEffective = false;
-        // BareMode без файла карты: --bare без --system-prompt-file оставил бы модель
-        // БЕЗ контекста, потому что --bare отключает автозагрузку CLAUDE.md и CLI
-        // ничего своего не подтянет. Асимметрия с веткой «файл не найден» ниже
-        // (она снимает оба флага с warning) была неоправданна — модель идёт без
+        // BareMode без файла карты: --system-prompt-file без карты оставил бы модель
+        // БЕЗ явной карты проекта. Асимметрия с веткой «файл не найден» ниже
+        // (она снимает всё с warning) была неоправданна — модель идёт без
         // карты молча. Теперь единое поведение: пустой SystemPromptFile =
         // BareMode снят с warning, ход в обычном режиме с полной CLAUDE.md.
         if (string.IsNullOrWhiteSpace(promptFilePath))
@@ -4393,13 +4407,11 @@ public class ClaudeSession : ILlmSessionAdapter
             projectLocalUsed ? "проектная" : "серверная",
             resolved,
             new FileInfo(resolved).Length);
-        var args = new List<string>(capacity: 4 + (bareTools is { Length: > 0 } ? 2 : 0))
-        {
-            "--bare",
-        };
-        // Состав: --bare → (опц.) --tools → --system-prompt-file <путь>. Три порядка
-        // проверены на 2.1.241/2.1.261 — набор идентичен, CLI принимает любой. Текущий
-        // порядок (--bare → --tools → --system-prompt-file) оставлен как наиболее читаемый.
+        // Состав: (опц.) --tools → --system-prompt-file <путь>.
+        // CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 (ставится в env, не args) заменяет
+        // бывший флаг --bare: отключает автозагрузку CLAUDE.md, не трогая
+        // MCP/хуки/остальное. Задача 2026-09-15.
+        var args = new List<string>(capacity: 4 + (bareTools is { Length: > 0 } ? 2 : 0));
         if (bareTools is { Length: > 0 })
             args.AddRange(BuildToolsArg(bareTools));
         args.Add("--system-prompt-file");
@@ -5557,6 +5569,27 @@ public class ClaudeSession : ILlmSessionAdapter
             + IntProp(u, "cache_read_input_tokens")
             + IntProp(u, "cache_creation_input_tokens");
         if (tokens > 0) _lastContextTokens = tokens;
+
+        // Сторож на пропажу CLAUDE_CODE_DISABLE_CLAUDE_MDS: переменная не в claude --help,
+        // в любом обновлении CLI она может исчезнуть/сменить имя. На первом ходу BareMode
+        // входные токены обязаны быть ~2 000 (краткая карта); если > 15 000 — CLAUDE.md
+        // проекта (64 КБ ≈ 18 тыс. токенов) уехал в контекст. WARN делает поломку видимой.
+        if (tokens > 0 && !_bareModeWatchdogFired && _lastBareModeApplied && SubmittedTurnSeq <= 1)
+        {
+            if (tokens > 15_000)
+            {
+                _bareModeWatchdogFired = true;
+                Console.Error.WriteLine(
+                    $"[ClaudeSession] BareMode-сторож: входные токены {tokens} на первом ходу — " +
+                    $"похоже, CLAUDE_CODE_DISABLE_CLAUDE_MDS больше не работает (обновление CLI?); " +
+                    $"молчаливая автозагрузка CLAUDE.md проекта раздувает контекст локальной модели");
+            }
+            else
+            {
+                // Не сработал: BareMode работает штатно, дальнейшие проверки не нужны.
+                _bareModeWatchdogFired = true;
+            }
+        }
     }
 
     // Ход мог уйти в собственный git worktree через встроенный инструмент EnterWorktree —

@@ -2450,6 +2450,13 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             ? new TurnDelegationState(adapter.CurrentTurnAgentDepth, adapter.CurrentTurnSuppressTasksExecute)
             : new TurnDelegationState(0, false);
 
+    // Активен ли цикл «до готово» в чате-вызывателе: гейт анти-рекурсии (DelegatedTurnGate.Decide)
+    // спрашивает это, чтобы разрешить ход-реакцию на доклад при активном цикле (единственная точка,
+    // где координатор принимает результат и запускает следующего). Владение — тот же путь, что в
+    // GetActiveTurnDelegation: GetOwned (внутри — ResolveOwnerId).
+    public bool HasActiveWorkLoop(string sessionId, string ownerId) =>
+        GetOwned(sessionId, ownerId)?.WorkLoop is not null;
+
     // Запомнить заметку-итог сессии (SessionSummaryService) — для обновления при повторной генерации
     public void SetSummaryNoteId(string sessionId, string noteId)
     {

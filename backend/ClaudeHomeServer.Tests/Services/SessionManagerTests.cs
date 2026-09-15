@@ -5722,9 +5722,11 @@ public class SessionManagerTests : IDisposable
 
     // Регресс: запуск задачи из чата с включённым циклом на ходу ДОКЛАДА исполнителя —
     // по-прежнему запрещён (тоже AlsoWhenExecutorSuppressed, иначе «доклад → запуск →
-    // доклад» → бесконечный круг). Защиту держит счётчик Iteration, не квота.
+    // доклад» → бесконечный круг). В чате с АКТИВНЫМ циклом ход-реакция — единственная точка,
+    // где координатор принимает результат и запускает следующего; круг уже оплачен инкрементом
+    // Iteration в ContinueWorkLoopAsync, поэтому запрет здесь срезает саму суть цикла.
     [Fact]
-    public async Task ГейтЗапуска_ХодДокладаВЧатеСЦиклом_ЗапретКакРаньше()
+    public async Task ГейтЗапуска_ХодДокладаВЧатеСЦиклом_Разрешён()
     {
         var session = await MakeWorkLoopChatAsync("report-turn");
         var entry = GetEntry(session.Id);
@@ -5735,8 +5737,9 @@ public class SessionManagerTests : IDisposable
 
         ExecuteFilter().OnActionExecuting(context);
 
-        var result = context.Result.Should().BeOfType<Microsoft.AspNetCore.Mvc.ObjectResult>().Subject;
-        result.StatusCode.Should().Be(403, "доклад → запуск → доклад кольцо держит AlsoWhenExecutorSuppressed");
+        context.Result.Should().BeNull(
+            "активный цикл «до готово»: ход-реакция на доклад — единственный момент, где координатор "
+            + "ставит следующего исполнителя; лавину возвратов держит Iteration, не запрет");
     }
 
     // Регресс: ход доклада вне цикла — запрет как раньше.

@@ -8106,6 +8106,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 case ToolUseMessage m:
                     acc.OnToolUse(m.Id, m.Name, m.Input, m.ParentToolUseId);
                     TryUnmarkCommittedOnToolUse(sessionId, entry, m.Name, m.Input);
+                    if (entry is not null && SpendMapping.TryExtractHiggsfieldGeneration(m.Name))
+                        SpendMapping.RecordHiggsfieldGeneration(_spend, ResolveOwnerId, _log, entry.Info);
                     break;
                 case ToolResultMessage m:
                     acc.OnToolResult(m.ToolUseId, m.Content, m.IsError);

@@ -1,5 +1,7 @@
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Mcp.Http;
+using ClaudeHomeServer.Services.Spend;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
 
@@ -55,6 +57,80 @@ public class HiggsfieldToolsetTests
     {
         var empty = "";
         HiggsfieldToolset.ExtractSseData(empty).Should().BeNull();
+    }
+
+    // --- Фаза 3.1: учёт трат Higgsfield (SpendSources.Higgsfield + сниффер генерации) ---
+
+    // TryExtractHiggsfieldGeneration: распознаёт генерации по имени инструмента,
+    // но не служебные вызовы (job_status, models_explore).
+    [Fact]
+    public void TryExtractHiggsfieldGeneration_ТолькоГенерации_НеСлужебные()
+    {
+        SpendMapping.TryExtractHiggsfieldGeneration("mcp__higgsfield__generate_image").Should().BeTrue();
+        SpendMapping.TryExtractHiggsfieldGeneration("mcp__higgsfield__generate_video").Should().BeTrue();
+        SpendMapping.TryExtractHiggsfieldGeneration("mcp__higgsfield__generate_audio").Should().BeTrue();
+        SpendMapping.TryExtractHiggsfieldGeneration("mcp__higgsfield__job_status").Should().BeFalse();
+        SpendMapping.TryExtractHiggsfieldGeneration("mcp__higgsfield__models_explore").Should().BeFalse();
+        SpendMapping.TryExtractHiggsfieldGeneration("mcp__websearch__web_search").Should().BeFalse();
+        SpendMapping.TryExtractHiggsfieldGeneration(null).Should().BeFalse();
+    }
+
+    // RecordHiggsfieldGeneration: создаёт SpendRecord с provider=higgsfield, generations=1, costUsd=null.
+    [Fact]
+    public void RecordHiggsfieldGeneration_СоздаётВернуюЗапись()
+    {
+        var recorded = new List<SpendRecord>();
+        var spend = new FakeSpend(recording: recorded);
+        var session = new Session
+        {
+            Id = "sess-1",
+            ProjectId = "proj-1",
+            TaskId = "task-1",
+            PersonaId = "persona-1",
+            Provider = "higgsfield",
+        };
+
+        SpendMapping.RecordHiggsfieldGeneration(spend, s => s.OwnerId, null, session);
+
+        var r = recorded.Should().ContainSingle().Which;
+        r.Provider.Should().Be("higgsfield");
+        r.Source.Should().Be("higgsfield");
+        r.Generations.Should().Be(1);
+        r.CostUsd.Should().BeNull();
+        r.SessionId.Should().Be("sess-1");
+    }
+
+    // RecordHiggsfieldGeneration: null-collector — не падает.
+    [Fact]
+    public void RecordHiggsfieldGeneration_NullCollector_НеПадает()
+    {
+        var session = new Session { Id = "sess-2", OwnerId = "owner-1" };
+        SpendMapping.RecordHiggsfieldGeneration(null, s => "o", null, session); // no exception
+    }
+
+    // IsTokenless: higgsfield — источник без токенов (кредиты ≠ токены).
+    [Fact]
+    public void IsTokenless_Higgsfield()
+    {
+        SpendSources.IsTokenless(SpendSources.Higgsfield).Should().BeTrue();
+    }
+
+    // McpCallLog: higgsfield — продуктовый http-MCP-тулсет, поэтому вызовы автоматически
+    // попадают в McpCallLog (механизм общий для всех http-тулсетов). Тест фиксирует, что
+    // higgsfield-инструмент попадает в таблицу как отдельная строка.
+    [Fact]
+    public void McpCallLog_Higgsfield_ВызовПопадаетВЖурнал()
+    {
+        var log = new ClaudeHomeServer.Services.Mcp.McpCallLog();
+
+        // Имитация того, что McpTransportController.NameCallForLog кладёт в заголовок:
+        // для tools/call — имя инструмента из тела JSON-RPC
+        var displayed = log.Record("generate_image", "sess-1", "/mcp/higgsfield", 200, 42);
+
+        displayed.Should().Be("generate_image");
+
+        var stats = log.Stats();
+        stats.Should().Contain(s => s.Tool == "generate_image" && s.Calls == 1);
     }
 
     // Защита от регрессии: пустое поле data: (валидный SSE при инициализации без payload)
@@ -117,6 +193,11 @@ public class HiggsfieldToolsetTests
             log: NullLogger<HiggsfieldToolset>.Instance);
         act.Should().NotThrow();
     }
+}
+
+internal sealed class FakeSpend(List<SpendRecord> recording) : ISpendCollector
+{
+    public void Record(SpendRecord record) => recording.Add(record);
 }
 
 internal sealed class NullLogger<T> : ILogger<T>

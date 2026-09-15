@@ -885,6 +885,21 @@ try {
     $h = Add-DeployStep 'publish-backend'
     dotnet publish (Join-Path $RepoDir 'backend\ClaudeHomeServer\ClaudeHomeServer.csproj') -c Release -o $StagingDir
     if ($LASTEXITCODE -ne 0) { Complete-DeployStep $h 'failed' "dotnet exit $LASTEXITCODE"; throw "публикация бэка упала (exit $LASTEXITCODE)" }
+    # Проверка динамических модулей: ModuleLoader резолвит их по пути из appsettings.json
+    # (modules/notes и modules/spend). Если csproj потеряет копию при publish — INoteSemanticIndex
+    # и ISpendCollector не зарегистрируются, форвардер Knowledge роняет старт, /api/spend/*
+    # отдаёт 404. Раньше отлавливалось уже в продакшене (задача H4). Ловим здесь, пока
+    # staging не заархивирован: падаем с понятным сообщением, а не выкатываем мёртвый хост.
+    foreach ($mod in @(
+        @{ Name = 'notes'; Dll = 'ClaudeHomeServer.Notes.dll' },
+        @{ Name = 'spend'; Dll = 'ClaudeHomeServer.Spend.dll' })) {
+        $dllPath = Join-Path $StagingDir "modules\$($mod.Name)\$($mod.Dll)"
+        if (-not (Test-Path $dllPath)) {
+            $msg = "нет $dllPath после publish: ModuleLoader не найдёт модуль $($mod.Name) — INoteSemanticIndex/ISpendCollector не зарегистрируются (см. CopyNotesModule/CopySpendModule)"
+            Complete-DeployStep $h 'failed' $msg
+            throw $msg
+        }
+    }
     Complete-DeployStep $h 'ok' ''
 
     $h = Add-DeployStep 'publish-conpty'

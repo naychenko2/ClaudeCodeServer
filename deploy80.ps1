@@ -175,6 +175,26 @@ Write-Host '[3/9] Публикация бэка (dotnet publish -c Release)...' 
 dotnet publish $csproj -c Release -o $PublishDir
 if ($LASTEXITCODE -ne 0) { throw "Публикация бэка упала (exit $LASTEXITCODE)" }
 
+# Проверка динамических модулей: ModuleLoader резолвит их по пути из appsettings.json
+# (modules/notes и modules/spend). Если csproj потеряет копию при publish — INoteSemanticIndex
+# и ISpendCollector не зарегистрируются, форвардер Knowledge роняет старт, /api/spend/*
+# отдаёт 404. Раньше отлавливалось уже в продакшене (задача H4). Ловим здесь, пока сервер
+# ещё не тронут: падаем с понятным сообщением, а не выкатываем мёртвый хост.
+foreach ($mod in @(
+    @{ Name = 'notes'; Dll = 'ClaudeHomeServer.Notes.dll' },
+    @{ Name = 'spend'; Dll = 'ClaudeHomeServer.Spend.dll' })) {
+    $dllPath = Join-Path $PublishDir "modules\$($mod.Name)\$($mod.Dll)"
+    if (-not (Test-Path $dllPath)) {
+        Write-Host ''
+        Write-Host "ОСТАНОВЛЕНО: после publish нет $dllPath" -ForegroundColor Red
+        Write-Host '  Динамический модуль не попал в выходную папку. ModuleLoader не найдёт' -ForegroundColor Yellow
+        Write-Host '  его на старте — INoteSemanticIndex / ISpendCollector не зарегистрируются.' -ForegroundColor Yellow
+        Write-Host '  Скорее всего csproj снова отрезал модуль при publish (см. CopyNotesModule/CopySpendModule).' -ForegroundColor Yellow
+        Write-Host ''
+        exit 1
+    }
+}
+
 # --- 3.1 Обеспечить appsettings.Production80.json (gitignored, машинно-специфичный) ---
 # При Environment=Production80 ASP.NET Core грузит именно его; без него Kestrel поднимается
 # на дефолтном порту 5000. Если файла в папке публикации нет — создаём из Production.json.

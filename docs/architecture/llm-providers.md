@@ -312,6 +312,15 @@ CLI живёт в песочнице, а карта — на хосте, поэ�
 потолок 16 КБ проектной карты с отступом к серверной, лог размера,
 снимок промпта по эффективному применению).
 
+**Объявляемое CLI окно.** `LocalEndpointProbe` берёт `max_model_len` из `GET /v1/models`
+стенда, а `LlmProviderRegistry.BuildCliEnv` подставляет в
+`CLAUDE_CODE_MAX_CONTEXT_TOKENS` не голое `max_model_len`, а
+`max_model_len − CLAUDE_CODE_MAX_OUTPUT_TOKENS − WindowSafetyMargin`:
+vLLM сверяет `prompt + max_tokens ≤ max_model_len` ДО генерации, поэтому
+объявленное окно обязано оставлять место под ответ — иначе auto-compact не
+успевает и ход падает мгновенным HTTP 400. Инцидент 2026-09-15: промпт 122881
++ резерв 8192 = 131073 > 131072 → отказ вместо сжатия контекста.
+
 ## Пул подписок Claude и опрос usage
 
 `ClaudeSubscriptionPool` (секция `ClaudeSubscriptions`) — несколько аккаунтов Claude на

@@ -2108,14 +2108,14 @@ export const api = {
   },
 
   // Higgsfield: подключается администратором один раз на весь продукт.
-  // Пользовательский статус (GET) — только connected; админский (GET /admin) —
-  // с expiresAt, чтобы админ видел срок.
+  // Статус (GET /higgsfield/status) — { connected, expiresAt }:
+  // обычная карточка показывает только connected, admin-вкладка — и срок.
   higgsfield: {
-    status: () => request<HiggsfieldStatus>('/mcp/integrations/higgsfield'),
-    // Админские эндпоинты
-    adminStatus: () => request<HiggsfieldAdminStatus>('/mcp/integrations/higgsfield/admin'),
-    connect: () => request<{ authorizeUrl: string }>('/mcp/integrations/higgsfield/connect', { method: 'POST' }),
-    disconnect: () => request<{ ok: true }>('/mcp/integrations/higgsfield/disconnect', { method: 'POST' }),
+    status: () => request<HiggsfieldStatus>('/higgsfield/status'),
+    // Тот же эндпоинт, но тип допускает expiresAt для admin-вкладки
+    adminStatus: () => request<HiggsfieldAdminStatus>('/higgsfield/status'),
+    connect: () => request<{ authorizeUrl: string }>('/higgsfield/connect', { method: 'POST' }),
+    disconnect: () => request<{ ok: true }>('/higgsfield/disconnect', { method: 'POST' }),
   },
 };
 

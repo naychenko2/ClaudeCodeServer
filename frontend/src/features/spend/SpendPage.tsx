@@ -7,7 +7,7 @@
 // (consumeSpendContext), а при прямом заходе (#/spend без события) — дефолт.
 import { useState } from 'react';
 import type { SubsystemTabProps } from '../../lib/subsystems/registryCore';
-import { HubHeader, PageCanvas, subsystemTabValue } from '../../lib/shell-kit';
+import { HubHeader, PageCanvas, subsystemTabValue } from 'aihome_shell/kit';
 import { consumeSpendContext, type SpendOpenContext } from '../../lib/spendContract';
 import { SpendScreen } from './SpendScreen';
 

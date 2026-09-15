@@ -30,7 +30,7 @@ frontend/node_modules/
 frontend/dist/
 frontend/dev-dist/
 # Служебная диагностика плагина @module-federation/vite (пересоздаётся сборкой)
-frontend/.mf/
+frontend/**/.mf/
 
 # Playwright MCP
 .playwright-mcp/

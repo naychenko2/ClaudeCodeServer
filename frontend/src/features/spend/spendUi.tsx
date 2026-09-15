@@ -1,7 +1,7 @@
 // Общие примитивы раздела «Аналитика токенов»: пустые состояния, скелетоны,
 // чипы, иконки узлов. Только токены design.ts, инлайн-стили.
 import type { ReactNode, CSSProperties } from 'react';
-import { C, FONT, GROUP_COLORS, R, SP, Dot } from '../../lib/shell-kit';
+import { C, FONT, GROUP_COLORS, R, SP, Dot } from 'aihome_shell/kit';
 import type { SpendDim } from '../../lib/spendContract';
 
 // Детерминированный цвет аватара-инициала по строке (как у групп проектов)

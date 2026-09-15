@@ -1,8 +1,9 @@
 // Регистрация подсистемы «Аналитика»: side-effect-импорт манифеста в реестр.
 //
-// Пока Spend не MF-модуль, регистрация идёт статическим импортом из
-// lib/subsystems/registry.ts. На шаге Ф2.3 (переезд на MF-remote) эта
-// строка-импорт будет убрана, а manifest станет доступным через loadRemote.
+// После Ф2.3 (переезд на MF-remote) хост манифест получает через
+// loadRemote('aihome_spend/subsystem'), а не статическим импортом этой строки,
+// поэтому файл в графе хоста не висит (остался бы только для статической
+// регистрации; manifest сам доступен через modules/spend/subsystem.tsx).
 
 import { registerSubsystem } from 'aihome_shell/kit';
 import { manifest } from './manifest';

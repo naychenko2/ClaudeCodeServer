@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { X } from 'lucide-react';
 import type { SpendOverviewResponse } from '../../types';
-import { api, C, FONT, ISLAND, R, SHADOW, SP, Z, CONTENT_MAX_W, MOBILE_MAX, TABLET_MAX, useIsMobile, useWindowWidth, IconButton, MiniSegment } from '../../lib/shell-kit';
+import { api, C, FONT, ISLAND, R, SHADOW, SP, Z, CONTENT_MAX_W, MOBILE_MAX, TABLET_MAX, useIsMobile, useWindowWidth, IconButton, MiniSegment } from 'aihome_shell/kit';
 import { SPEND_PERIODS, periodRange, fmtDate, type SpendLevel } from './spendModel';
 import { spendQuery, type SpendFilter, type SpendOpenContext } from '../../lib/spendContract';
 import { SkelBlock, LoadError, WindowBadge, Chip } from './spendUi';

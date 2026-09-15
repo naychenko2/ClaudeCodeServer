@@ -5,15 +5,17 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build && npm run build:notes",
-    "build:quiet": "tsc -b && vite build --logLevel warn && npm run build:notes",
+    "build": "tsc -b && vite build && npm run build:notes && npm run build:spend",
+    "build:quiet": "tsc -b && vite build --logLevel warn && npm run build:notes && npm run build:spend",
     "lint": "eslint .",
     "lint:design": "eslint --config eslint.design.config.js .",
     "test": "vitest run",
     "test:e2e": "playwright test",
     "preview": "vite preview",
     "build:notes": "cd modules/notes && npx vite build && node -e \"const fs=require('fs');const dst='../../dist/notes-remote';fs.rmSync(dst,{recursive:true,force:true});fs.cpSync('dist',dst,{recursive:true});console.log('[notes] published to',dst)\"",
-    "dev:notes": "cd modules/notes && npx vite"
+    "dev:notes": "cd modules/notes && npx vite",
+    "build:spend": "cd modules/spend && npx vite build && node -e \"const fs=require('fs');const dst='../../dist/spend-remote';fs.rmSync(dst,{recursive:true,force:true});fs.cpSync('dist',dst,{recursive:true});console.log('[spend] published to',dst)\"",
+    "dev:spend": "cd modules/spend && npx vite"
   },
   "dependencies": {
     "@babel/runtime": "^8.0.0",

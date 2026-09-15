@@ -4,7 +4,7 @@
 import { useEffect, useState } from 'react';
 import { Coins } from 'lucide-react';
 import type { SpendWidgetResponse } from '../../types';
-import { api, C, FONT, R, onMessage, onReconnected, WidgetCard, WidgetAction, WidgetEmpty } from '../../lib/shell-kit';
+import { api, C, FONT, R, onMessage, onReconnected, WidgetCard, WidgetAction, WidgetEmpty } from 'aihome_shell/kit';
 import { openSpend } from '../../lib/spendContract';
 import { fmtTok } from './spendModel';
 

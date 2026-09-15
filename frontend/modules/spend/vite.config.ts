@@ -1,11 +1,11 @@
-// Module Federation build для подсистемы «Заметки».
+// Module Federation build для подсистемы «Расходы».
 //
-// Пилот динамических модулей: notes собирается в отдельный remote-чанк,
+// Пилот динамических модулей: spend собирается в отдельный remote-чанк,
 // хост (aihome_shell) грузит его по URL в рантайме (registerRemotes + loadRemote).
 // Remote экспортирует ./subsystem — полный SubsystemManifest (manifest + tab + slots).
 //
-// Dev-сервер запускается на порту 5174 (vite dev), хост проксирует /notes-remote/**
-// сюда. В прод remoteEntry.js сервиcится статически под /notes-remote/ в wwwroot.
+// Dev-сервер запускается на порту 5175 (vite dev), хост проксирует /spend-remote/**
+// сюда. В прод remoteEntry.js сервиcится статически под /spend-remote/ в wwwroot.
 
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
@@ -13,13 +13,13 @@ import { federation } from '@module-federation/vite';
 
 export default defineConfig(({ mode }) => ({
   // Dev: префикс прокси хоста — MF-рантайм резолвит root-absolute импорты
-  // относительно base, поэтому в dev все URL должны начинаться с /notes-remote/.
-  // Prod: относительный — remoteEntry.js сервиcится статически под /notes-remote/.
-  base: mode === 'development' ? '/notes-remote/' : './',
+  // относительно base, поэтому в dev все URL должны начинаться с /spend-remote/.
+  // Prod: относительный — remoteEntry.js сервиcится статически под /spend-remote/.
+  base: mode === 'development' ? '/spend-remote/' : './',
   plugins: [
     react(),
     federation({
-      name: 'aihome_notes',
+      name: 'aihome_spend',
       filename: 'remoteEntry.js',
       // Единственный экспорт: полный манифест подсистемы.
       // Хост вызывает registerSubsystem(loaded.subsystem) после loadRemote.
@@ -47,8 +47,8 @@ export default defineConfig(({ mode }) => ({
     },
   },
   server: {
-    port: 5174,
-    // Dev-сервер — цель прокси /notes-remote хоста: браузер идёт same-origin
+    port: 5175,
+    // Dev-сервер — цель прокси /spend-remote хоста: браузер идёт same-origin
     // (через прокси), поэтому CORS для него формально не нужен; cors:true оставлен
     // страховкой на случай прямого кросс-оригин доступа к remoteEntry.js.
     cors: true,

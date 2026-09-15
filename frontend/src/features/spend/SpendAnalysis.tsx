@@ -7,7 +7,7 @@ import type {
   SpendOverviewResponse, SpendPivotNode, SpendTaskPromptRun, SpendTurnDetailResponse,
   SpendTurnDto, SpendTurnsResponse,
 } from '../../types';
-import { api, C, FONT, R, SHADOW, SP, Z } from '../../lib/shell-kit';
+import { api, C, FONT, R, SHADOW, SP, Z } from 'aihome_shell/kit';
 import {
   ADMIN_ONLY_DIMS, DIM_LABELS, SPEND_PRESETS, fmtDate, fmtRub, fmtTok, fmtTime, genUnit,
   genUnitLong, isGenSource, nodeName, sourceColor, sourceLabel, sourceTextColor,

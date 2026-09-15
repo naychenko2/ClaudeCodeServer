@@ -1,7 +1,7 @@
 // Данные аналитики расхода токенов (Spend Analytics v2): словари разрезов, периоды,
 // источники, форматирование. Контракт входа в раздел — lib/spendContract.ts;
 // данные — /api/spend/* (docs/architecture/spend-analytics-api.md).
-import { C } from '../../lib/design';
+import { C } from 'aihome_shell/kit';
 import { addDaysUtc, todayUtc, type SpendDim } from '../../lib/spendContract';
 
 // Разрезы pivot-дерева и фильтров. 'turn' — терминальный псевдо-уровень (лист-ходы).

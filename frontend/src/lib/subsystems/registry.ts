@@ -2,10 +2,11 @@
 //
 // Реэкспортирует механизм из registryCore и собирает РЕГИСТРАЦИЮ подсистем.
 //
-// Пилот Module Federation: подсистема «Заметки» НЕ импортируется в бандл каркаса
-// (side-effect-импорт убран) — хост грузит её как MF-remote по URL
-// (registerRemotes + loadRemote) и сам зовёт registerSubsystem. Список remotes
-// приходит с бэка: GET /api/subsystem-modules (единая секция DynamicModules).
+// Пилот Module Federation: подсистемы «Заметки» и «Расходы» НЕ импортируются
+// в бандл каркаса (side-effect-импорты убраны) — хост грузит их как MF-remote
+// по URL (registerRemotes + loadRemote) и сам зовёт registerSubsystem.
+// Список remotes приходит с бэка: GET /api/subsystem-modules (единая секция
+// DynamicModules).
 //
 // Деградация честная, inline-фолбэка НЕТ: если API недоступен (офлайн, первый
 // запуск) или remote конкретного модуля не отдаёт remoteEntry.js — этот модуль
@@ -18,11 +19,6 @@ import { registerSubsystem } from './registryCore';
 import type { SubsystemManifest } from './registryCore';
 import { loadRemote, registerRemotes } from '@module-federation/runtime';
 import { api } from '../api';
-
-// Статическая регистрация: подсистема «Аналитика» пока не MF-модуль (пока
-// без remoteEntry.js) — регистрируется побочным эффектом импорта.
-// На шаге Ф2.3 (переезд на MF-remote) эта строка будет убрана.
-import '../../features/spend/registry';
 
 // ===== Загрузка subsystem-remotes через Module Federation =====
 

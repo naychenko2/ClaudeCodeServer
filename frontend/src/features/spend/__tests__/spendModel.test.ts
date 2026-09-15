@@ -1,7 +1,7 @@
 // Серия glif в аналитике расхода: источник с подписью и своим цветом (отличным
 // от fal), относится к «генерациям медиа» — рендерится счётчиком, без токенов.
 import { describe, it, expect } from 'vitest';
-import { C } from '../../../lib/design';
+import { C } from 'aihome_shell/kit';
 import { SPEND_SOURCES, GEN_SOURCES, isGenSource, sourceColor, sourceLabel, sourceTextColor } from '../spendModel';
 
 describe('SPEND_SOURCES: серия glif', () => {

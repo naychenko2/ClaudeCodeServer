@@ -3,7 +3,7 @@
 // Любой клик проваливает в «Анализ» с применённым контекстом.
 import type { ReactNode } from 'react';
 import type { SpendCardRow, SpendOverviewResponse, SpendTurnDto } from '../../types';
-import { C, FONT, R, SHADOW, SP } from '../../lib/shell-kit';
+import { C, FONT, R, SHADOW, SP } from 'aihome_shell/kit';
 import {
   DIM_LABELS, SPEND_SOURCES, fmtDate, fmtRub, fmtTok, fmtTime, genUnit, genUnitLong, isGenSource,
   nodeName, sourceColor, sourceLabel,

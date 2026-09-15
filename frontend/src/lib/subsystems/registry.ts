@@ -19,6 +19,11 @@ import type { SubsystemManifest } from './registryCore';
 import { loadRemote, registerRemotes } from '@module-federation/runtime';
 import { api } from '../api';
 
+// Статическая регистрация: подсистема «Аналитика» пока не MF-модуль (пока
+// без remoteEntry.js) — регистрируется побочным эффектом импорта.
+// На шаге Ф2.3 (переезд на MF-remote) эта строка будет убрана.
+import '../../features/spend/registry';
+
 // ===== Загрузка subsystem-remotes через Module Federation =====
 
 const _registeredRemotes = new Set<string>();

@@ -51,7 +51,7 @@ import type { BoardColumn } from '../types';
 import { useTasks } from '../lib/tasks';
 import { useGitState, ensureGit, loadUnpushedLog, setActiveSessionForChangedBy } from '../lib/git';
 import { useExternalPreviewLinksState, ensureExternalPreviewLinks } from '../hooks/useExternalPreviewLinks';
-import { plural } from '../lib/spend';
+import { plural } from '../lib/plural';
 import { applyContextUpdated, loadChatContext, setActiveChatForContext } from '../lib/chatContext';
 import { ensurePersonasLoaded } from '../lib/personas';
 import { createChatWithContextPersona } from '../lib/defaultPersona';

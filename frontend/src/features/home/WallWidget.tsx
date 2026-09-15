@@ -17,7 +17,7 @@ import { useBgWorkRunning } from '../../lib/agentsPresence';
 import { STATUS_COLOR, STATUS_PULSE } from '../../lib/projectActivity';
 import { getPersonaById, personaLabel } from '../../lib/personas';
 import { showToast } from '../../lib/toast';
-import { plural } from '../../lib/spend';
+import { plural } from '../../lib/plural';
 import { Button } from '../../components/ui';
 import { ProjectIcon } from '../projects/ProjectIcon';
 import { useWallState, initWall, chatStatus } from '../wall/wallStore';

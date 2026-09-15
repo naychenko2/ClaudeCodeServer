@@ -56,10 +56,9 @@ import { SpecialtiesPage } from './features/personas/SpecialtiesPage'
 import { NotificationsPage } from './features/notifications/NotificationsPage'
 import { HomePage } from './pages/HomePage'
 import { WallPage } from './pages/WallPage'
-import { SpendPage } from './features/spend/SpendPage'
 import { TelemetryPage } from './features/telemetry/TelemetryPage'
 import { setPendingIncident, INCIDENT_OPEN_EVENT } from './features/telemetry/incidentLink'
-import { OPEN_SPEND_EVENT, type SpendOpenContext } from './lib/spend'
+import { OPEN_SPEND_EVENT } from './lib/spendContract'
 import { useUiInspector, setUiInspectorAdmin, wireUiInspectorHotkey } from './lib/uiInspector'
 import { UiInspectorOverlay } from './features/inspector/UiInspectorOverlay'
 
@@ -74,6 +73,7 @@ const HUB_TAB_KEY = 'cc_hub_tab'
 // входит в union HubTab, а вставляется в таббар из реестра по manifest.order. Экранный
 // ключ навигации остаётся 'notes': деплинки #/notes и событие cc-open-note не меняются.
 const NOTES_TAB: HubTabValue = subsystemTabValue('notes')
+const SPEND_TAB: HubTabValue = subsystemTabValue('spend')
 
 // Витрина дизайн-системы — dev-only. Открывается по #/ui-kit, в обход авторизации
 // и обычной навигации. import.meta.env.DEV → Vite DCE вычищает и компонент, и роут
@@ -184,7 +184,7 @@ export default function App() {
     if (initialHash?.screen === 'personas') return 'personas'
     if (initialHash?.screen === 'specialties') return 'specialties'
     if (initialHash?.screen === 'knowledge') return 'knowledge'
-    if (initialHash?.screen === 'spend') return 'spend'
+    if (initialHash?.screen === 'spend') return SPEND_TAB
     if (initialHash?.screen === 'telemetry') return 'telemetry'
     if (initialHash?.screen === 'notifications') return 'notifications'
     if (initialHash?.screen === 'module' && initialHash.moduleId) return `module:${initialHash.moduleId}` as HubTabValue
@@ -316,15 +316,13 @@ export default function App() {
   }
 
   // Раздел «Аналитика токенов» — полноценная вкладка хаба (вход через меню аватара,
-  // как «Знания»), поэтому главная шапка остаётся сверху. Контекст открытия
-  // (фильтр/день/паспорт хода) несем в spendCtx и пробрасываем в экран.
-  const [spendCtx, setSpendCtx] = useState<SpendOpenContext | null>(null)
+  // как «Знания»). Контекст открытия (фильтр/день/паспорт хода) заложит openSpend()
+  // в stash (spendContract.stashSpendContext), а SpendScreen заберёт его при монтировании.
+  // Хост слушает событие только ради переключения активной вкладки.
   useEffect(() => {
-    const open = (e: Event) => {
-      const detail = (e as CustomEvent<SpendOpenContext>).detail ?? {}
-      setSpendCtx(detail)
-      localStorage.setItem(HUB_TAB_KEY, 'spend')
-      setHubTab('spend')
+    const open = () => {
+      localStorage.setItem(HUB_TAB_KEY, SPEND_TAB)
+      setHubTab(SPEND_TAB)
       navToSection({ screen: 'spend' })
     }
     window.addEventListener(OPEN_SPEND_EVENT, open)
@@ -554,7 +552,7 @@ export default function App() {
     // погасил бы uiKitMode, и витрина закрылась бы сразу после открытия.
     if (isDevUiKitHash()) return;
     if (isDevTeamPlanSimHash()) return;
-    const seed: NavSnapshot = { screen: effectiveHubTab === 'home' ? 'home' : effectiveHubTab === 'chats' ? 'chats' : effectiveHubTab === 'wall' ? 'wall' : effectiveHubTab === 'calendar' ? 'calendar' : effectiveHubTab === NOTES_TAB ? 'notes' : effectiveHubTab === 'personas' ? 'personas' : effectiveHubTab === 'specialties' ? 'specialties' : effectiveHubTab === 'knowledge' ? 'knowledge' : effectiveHubTab === 'spend' ? 'spend' : effectiveHubTab === 'telemetry' ? 'telemetry' : effectiveHubTab === 'notifications' ? 'notifications' : 'projects' }
+    const seed: NavSnapshot = { screen: effectiveHubTab === 'home' ? 'home' : effectiveHubTab === 'chats' ? 'chats' : effectiveHubTab === 'wall' ? 'wall' : effectiveHubTab === 'calendar' ? 'calendar' : effectiveHubTab === NOTES_TAB ? 'notes' : effectiveHubTab === SPEND_TAB ? 'spend' : effectiveHubTab === 'personas' ? 'personas' : effectiveHubTab === 'specialties' ? 'specialties' : effectiveHubTab === 'knowledge' ? 'knowledge' : effectiveHubTab === 'telemetry' ? 'telemetry' : effectiveHubTab === 'notifications' ? 'notifications' : 'projects' }
     // Диплинк #/notes/{id}: сохраняем заметку в снимок, иначе сид затрёт id в URL
     if (seed.screen === 'notes' && initialHash?.screen === 'notes') seed.note = initialHash.noteId ?? null
     // Диплинк #/personas/{id}: сохраняем персону в снимок, иначе сид затрёт id в URL
@@ -643,7 +641,7 @@ export default function App() {
         if (hubTab !== 'knowledge') { localStorage.setItem(HUB_TAB_KEY, 'knowledge'); setHubTab('knowledge') }
       } else if (s?.screen === 'spend') {
         // Раздел «Аналитика токенов» — проект «спит»
-        if (hubTab !== 'spend') { localStorage.setItem(HUB_TAB_KEY, 'spend'); setHubTab('spend') }
+        if (hubTab !== SPEND_TAB) { localStorage.setItem(HUB_TAB_KEY, SPEND_TAB); setHubTab(SPEND_TAB) }
       } else if (s?.screen === 'telemetry') {
         // Раздел «Телеметрия» — проект «спит»
         if (hubTab !== 'telemetry') { localStorage.setItem(HUB_TAB_KEY, 'telemetry'); setHubTab('telemetry') }
@@ -814,7 +812,7 @@ export default function App() {
         case 'personas': next = 'personas'; break
         case 'specialties': next = 'specialties'; break
         case 'knowledge': next = 'knowledge'; break
-        case 'spend': next = 'spend'; break
+        case 'spend': next = SPEND_TAB; break
         case 'telemetry': next = 'telemetry'; break
         case 'notifications': next = 'notifications'; break
         case 'module':
@@ -871,9 +869,6 @@ export default function App() {
     // туда человека, который в зоне проектов вообще не был. Пишем то же, что
     // записал бы уход с дашборда в любой другой раздел.
     if (t === 'wall' && hubTab === 'home') setWallReturn(project ? 'workspace' : 'list')
-    // Покидаем «Аналитику токенов» — чистим контекст открытия, чтобы следующий
-    // вход через меню/таб открыл чистый обзор (виджет/бейдж выставят свежий ctx)
-    if (hubTab === 'spend' && t !== 'spend') setSpendCtx({})
     // Уход в раздел закрывает overlay «Что нового» ЗАМЕНОЙ записи #/history, а не Back'ом:
     // history.back() асинхронен, и его popstate прилетел бы уже ПОСЛЕ смены раздела, вернув
     // hubTab на снимок, из которого overlay открывали (клик по «Персонам» кидал в «Проекты»).
@@ -951,7 +946,7 @@ export default function App() {
     const moduleId = moduleIdOf(t)
     const dest: NavSnapshot = moduleId
       ? { screen: 'module', moduleId }
-      : ({ screen: t === 'home' ? 'home' : t === 'chats' ? 'chats' : t === 'wall' ? 'wall' : t === 'calendar' ? 'calendar' : t === NOTES_TAB ? 'notes' : t === 'personas' ? 'personas' : t === 'specialties' ? 'specialties' : t === 'knowledge' ? 'knowledge' : t === 'spend' ? 'spend' : t === 'telemetry' ? 'telemetry' : t === 'notifications' ? 'notifications' : 'projects' } as NavSnapshot)
+      : ({ screen: t === 'home' ? 'home' : t === 'chats' ? 'chats' : t === 'wall' ? 'wall' : t === 'calendar' ? 'calendar' : t === NOTES_TAB ? 'notes' : t === SPEND_TAB ? 'spend' : t === 'personas' ? 'personas' : t === 'specialties' ? 'specialties' : t === 'knowledge' ? 'knowledge' : t === 'telemetry' ? 'telemetry' : t === 'notifications' ? 'notifications' : 'projects' } as NavSnapshot)
     // Если на текущем табе открыто «глубокое» состояние (заметка/файл/задача/персона/база) — уходя,
     // сохраняем его в истории (navPush), чтобы Back вернул именно к нему. Уход С дашборда
     // «Домой» — тоже push: дашборд — хаб-центр, Back с любого раздела возвращает на него.
@@ -1135,6 +1130,7 @@ export default function App() {
         : target.screen === 'module' ? `module:${target.moduleId ?? ''}` as HubTabValue
         // Экранный ключ подсистемы 'notes' → динамическое значение вкладки из реестра
         : target.screen === 'notes' ? NOTES_TAB
+        : target.screen === 'spend' ? SPEND_TAB
         : target.screen
       switchHubTab(dest)
       return
@@ -1281,8 +1277,6 @@ export default function App() {
               ? <SpecialtiesPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
             : effectiveHubTab === 'knowledge'
               ? <KnowledgePage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
-            : effectiveHubTab === 'spend'
-              ? <SpendPage auth={auth} onLogout={logout} onHubTab={switchHubTab} ctx={spendCtx ?? {}} onClose={() => switchHubTab('home')} />
             : effectiveHubTab === 'telemetry'
               ? <TelemetryPage auth={auth} onLogout={logout} onHubTab={switchHubTab} onClose={() => switchHubTab('home')} onOpenChat={openChatFromIncident} />
               : effectiveHubTab === 'notifications'

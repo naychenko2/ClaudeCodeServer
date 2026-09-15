@@ -1,9 +1,10 @@
-// Аналитика расхода токенов (Spend Analytics v2): словари разрезов, форматирование,
-// событие открытия раздела. Данные — /api/spend/* (docs/architecture/spend-analytics-api.md).
-import { C } from './design';
+// Данные аналитики расхода токенов (Spend Analytics v2): словари разрезов, периоды,
+// источники, форматирование. Контракт входа в раздел — lib/spendContract.ts;
+// данные — /api/spend/* (docs/architecture/spend-analytics-api.md).
+import { C } from '../../lib/design';
+import { addDaysUtc, todayUtc, type SpendDim } from '../../lib/spendContract';
 
 // Разрезы pivot-дерева и фильтров. 'turn' — терминальный псевдо-уровень (лист-ходы).
-export type SpendDim = 'user' | 'project' | 'chat' | 'task' | 'persona' | 'provider' | 'model' | 'source';
 export type SpendLevel = SpendDim | 'turn';
 
 export const DIM_LABELS: Record<SpendDim, string> = {
@@ -86,10 +87,6 @@ export const SPEND_PERIODS: { key: string; label: string; days: number }[] = [
   { key: 'q', label: '90 дней', days: 90 },
 ];
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-export const todayUtc = () => new Date().toISOString().slice(0, 10);
-export const addDaysUtc = (date: string, n: number) =>
-  new Date(Date.parse(date + 'T12:00:00Z') + n * DAY_MS).toISOString().slice(0, 10);
 export function periodRange(periodKey: string): { from: string; to: string } {
   const p = SPEND_PERIODS.find(x => x.key === periodKey) ?? SPEND_PERIODS[1];
   const to = todayUtc();
@@ -104,53 +101,6 @@ export function fmtTok(n: number): string {
   return String(n);
 }
 
-// Склонение счётчиков (та же логика, что у локальных plural в виджетах/списках)
-export function plural(n: number, one: string, few: string, many: string): string {
-  const mod10 = n % 10;
-  const mod100 = n % 100;
-  if (mod10 === 1 && mod100 !== 11) return one;
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return few;
-  return many;
-}
-// «1 ход», «2 хода», «47 ходов»
-export const fmtTurns = (n: number) => `${n} ${plural(n, 'ход', 'хода', 'ходов')}`;
 export const fmtDate = (d: string) => d.slice(8, 10) + '.' + d.slice(5, 7);
 export const fmtTime = (iso: string) =>
   new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-
-// Активный фильтр среза; label — читаемое имя значения для чипа (val может быть id)
-export interface SpendFilter {
-  dim: SpendDim;
-  val: string;
-  label: string;
-}
-
-// Контекст открытия раздела из внешних точек (виджет «Домой», бейдж чата, обзор)
-export interface SpendOpenContext {
-  screen?: 'overview' | 'analysis';
-  filters?: SpendFilter[];
-  day?: string;               // срез одного дня (клик по бару обзора)
-  preset?: string;            // ключ раскладки уровней
-  pivotDim?: SpendDim;        // «разложить →»: разрез первым уровнем
-  turnId?: string;            // сразу открыть паспорт хода
-}
-
-export const OPEN_SPEND_EVENT = 'cc-open-spend';
-export function openSpend(ctx?: SpendOpenContext) {
-  window.dispatchEvent(new CustomEvent<SpendOpenContext>(OPEN_SPEND_EVENT, { detail: ctx ?? {} }));
-}
-
-// Query-параметры /api/spend/*: период + скоуп + фильтры (кроме отсутствующих)
-export function spendQuery(opts: {
-  from?: string; to?: string; scope?: 'mine' | 'all';
-  filters?: SpendFilter[]; extra?: Record<string, string | number | undefined>;
-}): string {
-  const q = new URLSearchParams();
-  if (opts.from) q.set('from', opts.from);
-  if (opts.to) q.set('to', opts.to);
-  if (opts.scope) q.set('scope', opts.scope);
-  for (const f of opts.filters ?? []) q.set(f.dim, f.val);
-  for (const [k, v] of Object.entries(opts.extra ?? {})) if (v !== undefined) q.set(k, String(v));
-  const s = q.toString();
-  return s ? `?${s}` : '';
-}

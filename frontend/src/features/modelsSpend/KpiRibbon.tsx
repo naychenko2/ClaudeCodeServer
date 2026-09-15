@@ -4,7 +4,7 @@
 // вычисляет QuotasTab; лента только рисует (нет бизнес-логики/запросов).
 import type { CSSProperties, ReactNode } from 'react';
 import { C, FONT, FS, R } from '../../lib/design';
-import { plural } from '../../lib/spend';
+import { plural } from '../../lib/plural';
 
 export interface KpiHot { usedPct: number; label: string }       // label = «Claude 2 · неделя»
 export interface KpiMoney { amount: number; accounts: number }

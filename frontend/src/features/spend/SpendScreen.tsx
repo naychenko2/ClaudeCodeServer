@@ -5,15 +5,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { X } from 'lucide-react';
 import type { SpendOverviewResponse } from '../../types';
-import { api } from '../../lib/api';
-import { C, FONT, ISLAND, R, SHADOW, SP, Z, CONTENT_MAX_W } from '../../lib/design';
-import { MOBILE_MAX, TABLET_MAX, useIsMobile, useWindowWidth } from '../../lib/breakpoints';
-import { IconButton } from '../../components/ui';
-import { MiniSegment } from '../home/WidgetCard';
-import {
-  SPEND_PERIODS, periodRange, fmtDate, spendQuery,
-  type SpendFilter, type SpendLevel, type SpendOpenContext,
-} from '../../lib/spend';
+import { api, C, FONT, ISLAND, R, SHADOW, SP, Z, CONTENT_MAX_W, MOBILE_MAX, TABLET_MAX, useIsMobile, useWindowWidth, IconButton, MiniSegment } from '../../lib/shell-kit';
+import { SPEND_PERIODS, periodRange, fmtDate, type SpendLevel } from './spendModel';
+import { spendQuery, type SpendFilter, type SpendOpenContext } from '../../lib/spendContract';
 import { SkelBlock, LoadError, WindowBadge, Chip } from './spendUi';
 import { SpendOverview } from './SpendOverview';
 import { SpendAnalysis } from './SpendAnalysis';

@@ -4,11 +4,9 @@
 import { useEffect, useState } from 'react';
 import { Coins } from 'lucide-react';
 import type { SpendWidgetResponse } from '../../types';
-import { api } from '../../lib/api';
-import { C, FONT, R } from '../../lib/design';
-import { onMessage, onReconnected } from '../../lib/signalr';
-import { fmtTok, openSpend } from '../../lib/spend';
-import { WidgetCard, WidgetAction, WidgetEmpty } from './WidgetCard';
+import { api, C, FONT, R, onMessage, onReconnected, WidgetCard, WidgetAction, WidgetEmpty } from '../../lib/shell-kit';
+import { openSpend } from '../../lib/spendContract';
+import { fmtTok } from './spendModel';
 
 const POLL_MS = 60_000;
 

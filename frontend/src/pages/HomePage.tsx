@@ -10,12 +10,11 @@ import { useHomeSummary } from '../features/home/useHomeSummary';
 import { ActivityWidget } from '../features/home/ActivityWidget';
 import { TasksWidget } from '../features/home/TasksWidget';
 import { UsageWidget } from '../features/home/UsageWidget';
-import { SpendWidget } from '../features/home/SpendWidget';
 import { RecentSessionsWidget } from '../features/home/RecentSessionsWidget';
 import { QuickActions } from '../features/home/QuickActions';
 import { ProjectsWidget } from '../features/home/ProjectsWidget';
 import { useSlotItem } from '../lib/subsystems/registry';
-import type { HomeWidgetNotesCtx } from '../lib/subsystems/registryCore';
+import type { HomeWidgetNotesCtx, HomeWidgetSpendCtx } from '../lib/subsystems/registryCore';
 import { TeamWidget } from '../features/home/TeamWidget';
 import { WhatsNewWidget } from '../features/home/WhatsNewWidget';
 import { NotificationsWidget } from '../features/home/NotificationsWidget';
@@ -47,6 +46,7 @@ export function HomePage({ auth, onLogout, onHubTab, onOpenProject }: Props) {
   const isAdmin = auth.role === 'admin';
   // Виджет заметок — вклад слота home-widget (фича Notes). Нет вклада — виджета нет.
   const notesWidget = useSlotItem<HomeWidgetNotesCtx>('home-widget', 'notes-widget');
+  const spendWidget = useSlotItem<HomeWidgetSpendCtx>('home-widget', 'spend-widget');
   // Персоны — для подписей «Роль (Имя)» в строках сессий
   useEffect(() => { void ensurePersonasLoaded(); }, []);
 
@@ -104,7 +104,7 @@ export function HomePage({ auth, onLogout, onHubTab, onOpenProject }: Props) {
               {/* Справочные сводки — хвостом */}
               <WhatsNewWidget userId={auth.id} />
               <ActivityWidget active={data?.active ?? []} />
-              <SpendWidget />
+              {spendWidget?.render?.({})}
               <UsageWidget />
               {isAdmin && <BackupWidget />}
             </div>
@@ -115,7 +115,7 @@ export function HomePage({ auth, onLogout, onHubTab, onOpenProject }: Props) {
                 <NotificationsWidget onHubTab={onHubTab} />
                 <WhatsNewWidget userId={auth.id} />
                 <ActivityWidget active={data?.active ?? []} />
-                <SpendWidget />
+                {spendWidget?.render?.({})}
                 <UsageWidget />
                 {/* Бэкап — только админу: настройка инстансная, общая для всех */}
                 {isAdmin && <BackupWidget />}

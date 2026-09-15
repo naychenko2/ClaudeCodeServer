@@ -200,8 +200,11 @@ public class RootSubsystemBoundaryTests
         // Внешние модули (YARP): ModuleRegistry знает, активен ли модуль —
         // FeatureFlagService дёргает ModuleRegistry на каждый запрос.
         "ClaudeHomeServer.Services.Modules.ModuleRegistry",
-        // Метрики задач: TaskExecutionService пишет метрики в spend-стор через
-        // TaskPromptMetricsStore. Первый root→Spend переход.
+        // Regression-канарейка B3: TaskExecutionService пишeт метрики через
+        // ITaskPromptMetricsStore (Core). DO B3 root имел прямой переход root→Spend
+        // через TaskPromptMetricsStore. Эта запись ДОЛЖНА ОСТАТЬСЯ НЕИСПОЛЬЗУЕМОЙ
+        // (нет new-конструкторов); появление нового корешного типа здесь — сигнал
+        // регрессии, не «документация истории».
         "ClaudeHomeServer.Services.Spend.TaskPromptMetricsStore",
         // SpendMapping — чистые функции сборки SpendRecord из потока сообщений приёма хода
         // (этап 4, волна 1, 2026-09-07). Использует `ISpendCollector` как зависимость в
@@ -270,8 +273,10 @@ public class RootSubsystemBoundaryTests
         // static-метод из тела метода — аналогично задокументированному шву
         // `Tasks → TaskHubExtensions` (см. комментарий у Tasks allow-list).
         "ClaudeHomeServer.Services.Tasks.TaskSchedulerService",
-        // `TaskExecutionService` материализует nested `Spend.TaskPromptMetricsStore+Entry`
-        // в async-state (поле state-машины). Точечный допуск на nested-тип.
+        // Regression-канарейка B3: `TaskExecutionService` создаёт `TaskPromptMetricsEntry`
+        // (Core, top-level), а не nested `Spend.TaskPromptMetricsStore+Entry`.
+        // ДОЛЖНА ОСТАВАТЬСЯ НЕИСПОЛЬЗУЕМОЙ; если Entry снова станет nested, допуск
+        // вернёт актуальность — это сигнал регрессии.
         "ClaudeHomeServer.Services.Spend.TaskPromptMetricsStore+Entry",
         // Telemetry (бывший префикс, заменён точечным допуском):
         // `PersonasCrudService`/`OnboardingController`/`ProjectPresetsController`

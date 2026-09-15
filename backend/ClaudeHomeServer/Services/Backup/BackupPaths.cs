@@ -81,8 +81,10 @@ public static class BackupPaths
         // Замеры размера постановки задач — наблюдение, а не настройка (как mcp-status.json):
         // растут линейно с числом запусков, восстанавливать нечего. Сама аналитика расхода
         // (spend/turns-*.jsonl, spend/daily.json) в архив едет — исключён только этот файл.
-        if (root.Equals(Spend.TaskPromptMetricsStore.DirName, StringComparison.OrdinalIgnoreCase)
-            && fileName.Equals(Spend.TaskPromptMetricsStore.FileName, StringComparison.OrdinalIgnoreCase))
+        // Константы из TaskPromptMetricsStore (Spend) влиты сюда как литералы, чтобы Main
+        // не тянул конкретную сборку Spend: смена имён файлов/директорий — редкое событие.
+        if (root.Equals("spend", StringComparison.OrdinalIgnoreCase)
+            && fileName.Equals("task-prompts.jsonl", StringComparison.OrdinalIgnoreCase))
             return false;
         if (root.Equals(StagingDirName, StringComparison.OrdinalIgnoreCase)) return false;
 

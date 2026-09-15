@@ -33,6 +33,7 @@ public sealed class SpendSubsystem : IAppSubsystem
         // `ISpendCollector` должен указывать на ТОТ ЖЕ экземпляр `SpendStore`,
         // иначе коллектор и стор разъедутся по данным.
         services.AddSingleton<ISpendCollector>(sp => sp.GetRequiredService<SpendStore>());
+        services.AddSingleton<ISpendDetailReader>(sp => sp.GetRequiredService<SpendStore>());
 
         services.AddSingleton<SpendAnalyticsService>();
 

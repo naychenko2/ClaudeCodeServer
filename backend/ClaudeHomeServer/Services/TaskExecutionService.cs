@@ -4,6 +4,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Notes;
+using ClaudeHomeServer.Services.Spend;
 using ClaudeHomeServer.Services.Tasks;
 
 namespace ClaudeHomeServer.Services;
@@ -79,7 +80,8 @@ public class TaskExecutionService
     private const int TurnErrorTextLimit = 4000;
     // Учёт размера постановки по секциям (шаг 4 плана оптимизации токенов). null — стор
     // не подключён (тесты без DI): замер тогда идёт только в лог, запуск задачи не страдает.
-    private readonly Spend.TaskPromptMetricsStore? _promptMetrics;
+    // Шов — ITaskPromptMetricsStore (Core): Main не тянет конкретную сборку Spend.
+    private readonly ITaskPromptMetricsStore? _promptMetrics;
     // Паспорта прогонов сабагентов: отсюда исполнитель узнаёт, что сабагент его хода замолчал
     // на середине. null — стор не подключён (тесты без DI): ходы разбираются как раньше.
     private readonly Llm.Claude.SubagentRunLog? _subagentRuns;
@@ -101,7 +103,7 @@ public class TaskExecutionService
         PersonaAgentFileSync? agentFiles = null, Execution.ILauncherFactory? launchers = null,
         SpecialtySettingsStore? specialtySettings = null,
         Llm.ModelAssignmentResolver? assignments = null,
-        Spend.TaskPromptMetricsStore? promptMetrics = null,
+        ITaskPromptMetricsStore? promptMetrics = null,
         Llm.Claude.SubagentRunLog? subagentRuns = null,
         // Подсистема Notes отключаемая: null — блок «релевантные заметки» в постановке
         // исполнителя тихо пропускается (BuildNotesContextAsync).
@@ -285,7 +287,7 @@ public class TaskExecutionService
             metrics.TaskSectionChars, metrics.ExpectedResultChars, metrics.ToolsChars,
             metrics.MandatoryChars, metrics.RestrictionsChars, metrics.DelegationChars,
             metrics.OmOChars, metrics.ContextChars, metrics.NotesContextChars);
-        _promptMetrics?.Record(new Spend.TaskPromptMetricsStore.Entry(
+        _promptMetrics?.Record(new TaskPromptMetricsEntry(
             DateTime.UtcNow, updated.Id, updated.OwnerId!, updated.ProjectId, session.Id, persona?.Id,
             metrics.TotalChars, metrics.TotalTokensEst,
             metrics.TaskSectionChars, metrics.ExpectedResultChars, metrics.ToolsChars,

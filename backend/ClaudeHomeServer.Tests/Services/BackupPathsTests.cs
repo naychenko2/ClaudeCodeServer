@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Services.Backup;
+using ClaudeHomeServer.Services.Spend;
 using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Services;
@@ -77,6 +78,28 @@ public class BackupPathsTests
         // А сама аналитика расхода — данные, которых больше нигде нет: она в архив едет
         BackupPaths.ShouldInclude("spend/turns-2026-08-09.jsonl").Should().BeTrue();
         BackupPaths.ShouldInclude("spend/daily.json").Should().BeTrue();
+    }
+
+    // Сторож связки пары «константа вертикали ↔ литерал в спине» (по образцу DockerPathMapperTests,
+    // раздел SystemPrompts). Без него переименование `TaskPromptMetricsStore.FileName` или
+    // `DirName` осталось бы незамеченным: литерал "spend"/"task-prompts.jsonl" в BackupPaths
+    // тихо протухнет, и метрики промптов поедут в облачный архив как обычная аналитика.
+    // Main не имеет ProjectReference на Spend.dll, поэтому прямая ссылка через константы
+    // невозможна — связь держит тест: имена сравниваются через ShouldInclude, который
+    // читает литералы, против актуальных значений TaskPromptMetricsStore.
+    [Fact]
+    public void ЛитералыВBackupPaths_СовпадаютСКонстантамиВертикали()
+    {
+        // Составной путь, который BackupPaths.ShouldInclude читает как
+        // {root="spend", file="task-prompts.jsonl"}.
+        var composite = string.Join('/', TaskPromptMetricsStore.DirName, TaskPromptMetricsStore.FileName);
+
+        composite.Should().Be("spend/task-prompts.jsonl",
+            $"константы вертикали изменились — обнови литералы в BackupPaths.ShouldInclude " +
+            $"(DirName='{TaskPromptMetricsStore.DirName}', FileName='{TaskPromptMetricsStore.FileName}')");
+
+        BackupPaths.ShouldInclude(composite).Should().BeFalse(
+            "имя в Spend должно оставаться исключением облачного архива: это наблюдение, не настройка");
     }
 
     [Fact]

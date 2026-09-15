@@ -22,7 +22,7 @@ public class TaskPromptMetricsStoreTests : IDisposable
 
     private TaskPromptMetricsStore Store() => new(_dir);
 
-    private static TaskPromptMetricsStore.Entry Entry(string taskId, string ownerId = "o1",
+    private static TaskPromptMetricsEntry Entry(string taskId, string ownerId = "o1",
         int total = 1000) =>
         new(DateTime.UtcNow, taskId, ownerId, "p1", "s1", "persona1",
             total, total / 4, 55, 0, 0, 646, 0, 252, 0, 31, 852);
@@ -96,7 +96,7 @@ public class TaskPromptMetricsStoreTests : IDisposable
         var m = TaskExecutionService.MeasurePrompt(prompt, notes);
 
         var store = Store();
-        store.Record(new TaskPromptMetricsStore.Entry(
+        store.Record(new TaskPromptMetricsEntry(
             DateTime.UtcNow, task.Id, task.OwnerId!, "p1", "s1", null,
             m.TotalChars, m.TotalTokensEst, m.TaskSectionChars, m.ExpectedResultChars,
             m.ToolsChars, m.MandatoryChars, m.RestrictionsChars, m.DelegationChars,

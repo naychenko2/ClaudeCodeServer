@@ -44,6 +44,32 @@ public sealed class ModuleLoader
 
     private Assembly? TryLoadOne(IServiceCollection services, ModuleDescriptor desc)
     {
+        // Единая точка истины для гейта подсистемы: `Subsystems:{Key}:Enabled` (ADR-014,
+        // CLAUDE.md «Отключаемость подсистемы»). Без этой проверки ModuleLoader грузил
+        // сборку и звал Register, даже когда подсистема выключена вторым рубильником
+        // (хост: `Subsystems:spend:Enabled=false` при включённом модуле) — отсюда расхождение
+        // snapshot (`enabled=False, active=True`), фронт продолжал грузить remote,
+        // а hosted-сервисы подсистемы (rollup/backfill) молча не крутились: гейт уважался
+        // только внутри AddGatedHostedService, остальная регистрация проходила.
+        //
+        // `DynamicModules:Enabled=false` уже отфильтрован на уровне `_registry.All.Where` —
+        // это «не загружать сборку вообще». Здесь — «загрузить, но не регистрировать»:
+        // `Register` НЕ вызывается, hosted и контроллеры подсистемы в контейнер не попадут,
+        // `AddApplicationPart` сборки НЕ подключается (возвращаем null ниже).
+        //
+        // Возвращаем null без попытки загрузить dll — у фронт-only модулей (notes) сборки
+        // Backend нет и не ожидается; если бы ModuleLoader начал грузить её понапрасну,
+        // он бы шумел Warning «сборка не найдена» для штатно сконфигурированного модуля
+        // (см. существующий ранний возврат `if (desc.Backend is null)` ниже).
+        if (!SubsystemGate.IsEnabled(_config, desc.Key))
+        {
+            _log.LogInformation(
+                "Модуль «{Key}»: гейт Subsystems:{Key}:Enabled выключен — регистрация подсистемы пропущена",
+                desc.Key, desc.Key);
+            return null;
+        }
+
+
         // Фронт-only модуль (N1: notes): Backend отсутствует, отдельной сборки и не ожидается —
         // его MF-remote отдаёт SubsystemModulesController. Без этого раннего возврата каждый старт
         // хоста шептал Warning «сборка не найдена «»» о штатно сконфигурированном модуле.

@@ -188,7 +188,31 @@ using (var dynamicModuleLogProvider = builder.Services.BuildServiceProvider())
         // но dll не загружена — создаём lightweight-заглушку, несущую Key/Title/Description.
         dynamicModuleStore.RecordDisabled(new DisabledModuleStub(desc));
     }
+    // Третий сценарий отключения: `DynamicModules:N:Enabled=true` (ModuleLoader грузит dll)
+    // + `Subsystems:{key}:Enabled=false` (ModuleLoader возвращает null до загрузки — рубильник
+    // гейта первым бьёт по `ModuleLoader.TryLoadOne`, см. Services/DynamicModules/ModuleLoader.cs
+    // строка «if (!SubsystemGate.IsEnabled(...)) return null»). Цикл выше отбирает только
+    // `!m.Enabled` и обходит такой модуль, `RecordActive` ему тоже не достаётся — модуль
+    // выпадает из снимка ВООБЩЕ, и админ не отличает «выключено намеренно» от «не подключали».
+    // Снимок должен показывать обе группы (Активные/Задизейбленные — контракт
+    // SubsystemStateStore), поэтому добавляем запись здесь. Дубля с предыдущим циклом нет:
+    // он фильтрует по `!m.Enabled` (DynamicModules), этот — по `m.Enabled && !SubsystemGate.IsEnabled`
+    // (DynamicModules вкл, Subsystems выкл). Пересечение пусто.
+    foreach (var desc in dynamicModuleRegistry.All
+        .Where(m => m.Enabled && !ClaudeHomeServer.Services.Composition.SubsystemGate.IsEnabled(builder.Configuration, m.Key)))
+    {
+        dynamicModuleStore.RecordDisabled(new DisabledModuleStub(desc));
+    }
 }
+
+// Статические вертикали: их `[assembly: ApplicationPart("...")]` MSBuild дописывает
+// автоматически (см. блок выше). Гейт `Subsystems:{key}:Enabled` снимает DI-регистрацию
+// (Register не вызывается), но ApplicationPart остаётся в MVC-частях → роутер находит
+// контроллер, пытается его активировать без зависимостей → 500 вместо 404.
+// Notes и Spend — динамические модули (сценарий Б): ApplicationPart подключает
+// ModuleLoader (выше), а не MSBuild-атрибут — M1-костыль (ручное снятие части
+// ClaudeHomeServer.Spend) снят после перехода на ReferenceOutputAssembly="false".
+
 // Hosted-сервисы: в Testing-среде (TestWebApplicationFactory) НЕ регистрируются без
 // явного флага Testing:EnableHostedServices=true — 17 фоновых циклов на каждый из
 // ~27 бутов тестовых хостов только жгли время прогона и порождали фоновую возню
@@ -727,7 +751,9 @@ builder.Services.AddSubsystems(builder.Configuration,
     // от Dossiers/Knowledge напрямую; миграция WorkspaceKnowledgeStore из Project —
     // отдельный пост-билд блок ниже, чтобы не словить construct до PostRestoreHook.
     new ClaudeHomeServer.Services.Knowledge.KnowledgeSubsystem(),
-    new ClaudeHomeServer.Services.Spend.SpendSubsystem(),
+    // Spend — динамический модуль (сценарий Б): грузится ModuleLoader'ом по пути из
+    // секции DynamicModules, НЕ через ProjectReference. Швы (ISpendAnalytics,
+    // ITaskPromptMetricsStore, ISpendDetailReader, ISpendCollector) — в Core.
     new VideoSubsystem(),
     new ClaudeHomeServer.Services.Yandex.YandexSubsystem(),
     new ClaudeHomeServer.Services.Reader.ReaderSubsystem(),
@@ -1794,24 +1820,57 @@ if (Directory.Exists(distPath))
     app.UseDefaultFiles(new DefaultFilesOptions { FileProvider = fp });
     app.UseStaticFiles(new StaticFileOptions { FileProvider = fp, OnPrepareResponse = setCacheHeaders, ContentTypeProvider = contentTypes });
 
-    // MF-remote подсистем (N2): /notes-remote/** раздаём из ФИЗИЧЕСКОГО wwwroot/notes-remote.
-    // Отдельно от distPath (выше fp может указывать на dev-dist, не на wwwroot), чтобы в проде
-    // запрос remoteEntry.js всегда резолвился в файл, а не SPA-fallback → index.html (loadRemote упал бы).
-    // Middleware стоит РАНЬШЕ MapFallbackToFile, поэтому перехватывает /notes-remote/* до SPA-фолбэка.
-    var notesRemotePath = Path.Combine(AppContext.BaseDirectory, "wwwroot", "notes-remote");
-    if (Directory.Exists(notesRemotePath))
+    // MF-remote подсистем (N2): для каждого DynamicModules-модуля с Frontend.RemoteUrl
+    // раздаём статику из ФИЗИЧЕСКОГО wwwroot/{имя-папки}. Отдельно от distPath (выше fp может
+    // указывать на dev-dist, не на wwwroot), чтобы в проде запрос remoteEntry.js всегда
+    // резолвился в файл, а не SPA-fallback → index.html (loadRemote упал бы).
+    // Middleware стоит РАНЬШЕ MapFallbackToFile, поэтому перехватывает /*-remote/* до SPA-фолбэка.
+    foreach (var module in app.Configuration.GetSection("DynamicModules").GetChildren())
     {
-        app.UseStaticFiles(new StaticFileOptions
+        var remoteUrl = module["Frontend:RemoteUrl"];
+        if (string.IsNullOrEmpty(remoteUrl)) continue;
+        // L3 (2026-09-15): абсолютный URL (https://…) не начинается с '/' — TrimStart+Split
+        // дал бы папку "https:" → Directory.Exists=false → тихий пропуск без лога.
+        if (!remoteUrl.StartsWith('/'))
         {
-            FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(notesRemotePath),
-            RequestPath = "/notes-remote",
-            OnPrepareResponse = setCacheHeaders,
-            ContentTypeProvider = contentTypes
-        });
+            app.Logger.LogWarning(
+                "[DynamicModules] Frontend:RemoteUrl модуля {Key} не является относительным путём ({Url}) — раздача MF-remote пропущена",
+                module["Key"], remoteUrl);
+            continue;
+        }
+        // Из RemoteUrl = "/{имя}-remote/remoteEntry.js" папка на диске = первый слаг URL.
+        var folder = remoteUrl.TrimStart('/').Split('/')[0];
+        if (string.IsNullOrEmpty(folder)) continue;
+        var remotePath = Path.Combine(AppContext.BaseDirectory, "wwwroot", folder);
+        if (Directory.Exists(remotePath))
+        {
+            app.UseStaticFiles(new StaticFileOptions
+            {
+                FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(remotePath),
+                RequestPath = "/" + folder,
+                OnPrepareResponse = setCacheHeaders,
+                ContentTypeProvider = contentTypes
+            });
+        }
     }
 
     // /_api/* — Office/SharePoint-запросы; возвращаем 404 вместо SPA, иначе Word показывает «Нет доступа»
     app.Map("/_api", api => api.Run(ctx => { ctx.Response.StatusCode = 404; return Task.CompletedTask; }));
+    // /api/* — REST API: любой несопоставленный маршрут (выключенная подсистема, опечатка,
+    // устаревший путь) обязан отдавать 404, а не 200+index.html из SPA-фолбэка — иначе клиент
+    // не отличит «выключенный Spend» (контроллер не зарегистрирован, action нет) от
+    // «живой чат SPA» (HTML-страница с JS): фронт получит 200 и попытается распарсить
+    // HTML как JSON. Тот же дефект на живом хосте 2026-09-16: выключенный
+    // /api/spend/overview отдавал 200 text/html.
+    //
+    // Раньше это была `app.Map("/api", api => api.Run(...404...))` — терминальная ветка
+    // middleware, выполнявшаяся В ПАЙПЛАЙНЕ до исполнения выбранного эндпоинта и рубившая
+    // ВСЕ /api/* как 404, ВКЛЮЧАЯ живые контроллеры (Александр, ревью c66e4127). Сейчас —
+    // fallback-эндпоинт с шаблоном `/api/{**rest}`: более специфичный, чем
+    // `MapFallbackToFile` ниже, поэтому выигрывает у SPA-фолбэка, но ПРОИГРЫВАЕТ реальным
+    // контроллерам (MVC-роутинг специфичнее fallback'а). `/hubs/*`, `/mcp/*` и
+    // `/api/modules` (ModuleGateway, регистрируется раньше строкой 1512) не задеты.
+    app.MapFallback("/api/{**rest}", ctx => { ctx.Response.StatusCode = 404; return Task.CompletedTask; });
     app.MapFallbackToFile("index.html", new StaticFileOptions { FileProvider = fp, OnPrepareResponse = setCacheHeaders });
 }
 else

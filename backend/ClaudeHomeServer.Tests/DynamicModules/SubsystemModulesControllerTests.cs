@@ -72,4 +72,53 @@ public class SubsystemModulesControllerTests
         ParseItems(result).GetArrayLength().Should().Be(0,
             "модуль без Frontend:RemoteUrl в список subsystem remotes не попадает");
     }
+
+    [Fact]
+    public void ВыключенныйМодульСFrontend_ВОтветНеПопадает()
+    {
+        // Enabled=false + Frontend заполнен → модуль не должен попасть в список (гейт подсистем).
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["DynamicModules:0:Key"] = "spend",
+            ["DynamicModules:0:Title"] = "Spend",
+            ["DynamicModules:0:Version"] = "1.0.0",
+            ["DynamicModules:0:Enabled"] = "false",
+            ["DynamicModules:0:Frontend:RemoteUrl"] = "/spend-remote/remoteEntry.js",
+            ["DynamicModules:0:Frontend:ExposedModule"] = "./subsystem",
+        }).Build();
+
+        var controller = new SubsystemModulesController(config);
+
+        var result = (OkObjectResult)controller.List();
+        ParseItems(result).GetArrayLength().Should().Be(0,
+            "выключенный (Enabled=false) модуль с Frontend.RemoteUrl не отдаётся фронту");
+    }
+
+    // H2 (зоид живого хоста 2026-09-15): SubsystemModulesController фильтровал только по
+    // `DynamicModules:Enabled`, а второй рубильник `Subsystems:{Key}:Enabled` игнорировал.
+    // В итоге фронт продолжал грузить remote выключенной подсистемы, а ModuleLoader
+    // хоста оказывался в расхождении со снимком /api/admin/subsystems. Тест ниже
+    // фиксирует, что оба рубильника уважаются единообразно.
+    [Fact]
+    public void ПодсистемныйГейтВыключен_МодульНеПопадаетВСписок()
+    {
+        // DynamicModules:Enabled=true, Subsystems:Key:Enabled=false — типичная конфигурация
+        // «модуль сконфигурирован, но выключен админом». Фронт не должен грузить remote.
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["DynamicModules:0:Key"] = "spend",
+            ["DynamicModules:0:Enabled"] = "true",
+            ["DynamicModules:0:Frontend:RemoteUrl"] = "/spend-remote/remoteEntry.js",
+            ["DynamicModules:0:Frontend:ExposedModule"] = "./subsystem",
+            ["Subsystems:spend:Enabled"] = "false",
+        }).Build();
+
+        var controller = new SubsystemModulesController(config);
+
+        var result = (OkObjectResult)controller.List();
+        ParseItems(result).GetArrayLength().Should().Be(0,
+            "выключенный по Subsystems:{Key}:Enabled модуль НЕ должен попадать в выдачу — " +
+            "иначе фронт будет грузить remote выключенной подсистемы, и ModuleLoader хоста " +
+            "окажется в расхождении со снимком /api/admin/subsystems");
+    }
 }

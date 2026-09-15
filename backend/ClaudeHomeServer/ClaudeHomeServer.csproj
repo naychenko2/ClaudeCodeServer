@@ -91,24 +91,53 @@
        (Enabled=true в прод-конфиге). ReferenceOutputAssembly="false" — Main не видит типы Notes
        на этапе компиляции; все швы (INoteAccessor, INoteSemanticIndex и др.) живут в Core.
        Копия dll в выходной каталог нужна всегда (Debug+Release): ModuleLoader грузит по пути
-       из appsettings.json. -->
+       из appsettings.json.
+
+       Две отдельные цели вместо одной с условием IsPublishing: SDK выставляет только
+       _IsPublishing (с подчёркиванием); IsPublishing всегда пуст — publish выбирал ветку
+       $(OutDir), и в PublishDir модуль не попадал. Build копирует в $(OutDir)
+       (dev-запуск dotnet run), Publish — в $(PublishDir) (деплой deploy80.ps1 / deploy-agent
+       делают dotnet publish -o и раньше теряли dll: на проде ModuleLoader не находил
+       INoteSemanticIndex, форвардер Knowledge ронял старт хоста). -->
   <ItemGroup>
     <ProjectReference Include="..\ClaudeHomeServer.Notes\ClaudeHomeServer.Notes.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
-  <Target Name="CopyNotesModule" AfterTargets="Build;Publish">
-    <!-- Две цели: Build копирует в $(OutDir) (dev-запуск dotnet run), Publish — в
-         $(PublishDir) (деплой deploy80.ps1 делает dotnet publish -o и раньше терял
-         модуль: на проде ModuleLoader не находил dll, INoteSemanticIndex не
-         регистрировался, и форвардер Knowledge ронял старт хоста). -->
-    <PropertyGroup>
-      <NotesModuleDir Condition="'$(PublishDir)' != ''">$(PublishDir)modules\notes</NotesModuleDir>
-      <NotesModuleDir Condition="'$(PublishDir)' == ''">$(OutDir)modules\notes</NotesModuleDir>
-    </PropertyGroup>
+  <Target Name="CopyNotesModuleBuild" AfterTargets="Build">
     <ItemGroup>
       <NotesModuleFiles Include="..\ClaudeHomeServer.Notes\bin\$(Configuration)\net10.0\ClaudeHomeServer.Notes.dll" />
     </ItemGroup>
-    <Copy SourceFiles="@(NotesModuleFiles)" DestinationFolder="$(NotesModuleDir)"
+    <Copy SourceFiles="@(NotesModuleFiles)" DestinationFolder="$(OutDir)modules\notes"
           SkipUnchangedFiles="true" Condition="Exists('..\ClaudeHomeServer.Notes\bin\$(Configuration)\net10.0\ClaudeHomeServer.Notes.dll')" />
+  </Target>
+  <Target Name="CopyNotesModulePublish" AfterTargets="Publish">
+    <ItemGroup>
+      <NotesModuleFiles Include="..\ClaudeHomeServer.Notes\bin\$(Configuration)\net10.0\ClaudeHomeServer.Notes.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(NotesModuleFiles)" DestinationFolder="$(PublishDir)modules\notes"
+          SkipUnchangedFiles="true" Condition="Exists('..\ClaudeHomeServer.Notes\bin\$(Configuration)\net10.0\ClaudeHomeServer.Notes.dll')" />
+  </Target>
+
+  <!-- Динамический модуль Spend: тот же паттерн, что Notes.
+       ReferenceOutputAssembly="false" — Main не видит типы Spend на этапе компиляции;
+       все швы (ISpendCollector, ISpendAnalytics, ITaskPromptMetricsStore и др.) живут в Core.
+       Копия dll в выходной каталог: ModuleLoader грузит по пути из appsettings.json.
+       Две цели (Build/Publish) — симметрично CopyNotesModule выше. -->
+  <ItemGroup>
+    <ProjectReference Include="..\ClaudeHomeServer.Spend\ClaudeHomeServer.Spend.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+  <Target Name="CopySpendModuleBuild" AfterTargets="Build">
+    <ItemGroup>
+      <SpendModuleFiles Include="..\ClaudeHomeServer.Spend\bin\$(Configuration)\net10.0\ClaudeHomeServer.Spend.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(SpendModuleFiles)" DestinationFolder="$(OutDir)modules\spend"
+          SkipUnchangedFiles="true" Condition="Exists('..\ClaudeHomeServer.Spend\bin\$(Configuration)\net10.0\ClaudeHomeServer.Spend.dll')" />
+  </Target>
+  <Target Name="CopySpendModulePublish" AfterTargets="Publish">
+    <ItemGroup>
+      <SpendModuleFiles Include="..\ClaudeHomeServer.Spend\bin\$(Configuration)\net10.0\ClaudeHomeServer.Spend.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(SpendModuleFiles)" DestinationFolder="$(PublishDir)modules\spend"
+          SkipUnchangedFiles="true" Condition="Exists('..\ClaudeHomeServer.Spend\bin\$(Configuration)\net10.0\ClaudeHomeServer.Spend.dll')" />
   </Target>
 
   <!-- === Модульность (Этап 3+, Этап 5)
@@ -121,7 +150,8 @@
        До этапа 3 всё это жило одной сборкой, и инвариант «вертикаль зависит только
        от спинки» соблюдался логически; теперь он держится физически — вертикаль не
        может «протянуть руку» в Main, потому что ProjectReference в её .csproj нет.
-       Notes — исключение: динамический модуль (см. CopyNotesModule), не прямой референс. -->
+       Notes и Spend — исключения (динамические модули, см. CopyNotesModule/CopySpendModule),
+       не прямые референсы. -->
   <ItemGroup>
     <ProjectReference Include="..\ClaudeHomeServer.Backgrounds\ClaudeHomeServer.Backgrounds.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
@@ -143,12 +173,11 @@
     <ProjectReference Include="..\ClaudeHomeServer.Knowledge\ClaudeHomeServer.Knowledge.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Llm\ClaudeHomeServer.Llm.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Modules\ClaudeHomeServer.Modules.csproj" />
-    <!-- Notes — теперь динамический модуль (см. CopyNotesModule выше), не прямой референс -->
+    <!-- Notes и Spend — теперь динамические модули (см. CopyNotesModule/CopySpendModule выше), не прямые референсы -->
 <ProjectReference Include="..\ClaudeHomeServer.Personas\ClaudeHomeServer.Personas.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.ProjectIcons\ClaudeHomeServer.ProjectIcons.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.ProjectServices\ClaudeHomeServer.ProjectServices.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Prompts\ClaudeHomeServer.Prompts.csproj" />
-    <ProjectReference Include="..\ClaudeHomeServer.Spend\ClaudeHomeServer.Spend.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Tasks\ClaudeHomeServer.Tasks.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Terminal\ClaudeHomeServer.Terminal.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Tts\ClaudeHomeServer.Tts.csproj" />

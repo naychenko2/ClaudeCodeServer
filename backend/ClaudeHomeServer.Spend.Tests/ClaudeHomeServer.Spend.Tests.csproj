@@ -35,4 +35,13 @@
     <PackageReference Include="Moq" Version="4.20.72" />
   </ItemGroup>
 
+  <!-- Динамический модуль Spend: dll в modules/spend/ для ModuleLoader.
+       AppContext.BaseDirectory тест-проекта — каталог сборки Spend.Tests, и именно
+       отсюда ModuleLoader ищет modules/spend/ClaudeHomeServer.Spend.dll. -->
+  <Target Name="CopySpendModuleForSpendTests" AfterTargets="Build">
+    <Copy SourceFiles="..\ClaudeHomeServer.Spend\bin\$(Configuration)\net10.0\ClaudeHomeServer.Spend.dll"
+          DestinationFolder="$(OutDir)modules\spend" SkipUnchangedFiles="true"
+          Condition="Exists('..\ClaudeHomeServer.Spend\bin\$(Configuration)\net10.0\ClaudeHomeServer.Spend.dll')" />
+  </Target>
+
 </Project>

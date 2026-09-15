@@ -1233,14 +1233,21 @@ app.Services.GetRequiredService<ModuleRegistry>();
 // Одноразовая миграция ф.2.1: усыновление per-owner higgsfield-токенов под сервисного
 // владельца (higgsfield-instance). Идемпотентна — повторный вызов без per-owner записей
 // вернёт false. Best-effort: сбой не блокирует старт.
-try
+// В инспекционной копии НЕ запускаем: она работает только на чтение, а миграция удаляет
+// per-owner записи и переносит секреты — то есть показала бы не то, что лежит в архиве
+// (а архив до этой фичи такие записи как раз и содержит). Плюс SaveState в конце пишет
+// higgsfield.json даже когда переносить нечего.
+if (!inspectionMode)
 {
-    app.Services.GetRequiredService<ClaudeHomeServer.Services.Mcp.HiggsfieldOAuthService>()
-        .RunMigration();
-}
-catch (Exception ex)
-{
-    Console.Error.WriteLine($"[HiggsfieldMigration] миграция пропущена: {ex.Message}");
+    try
+    {
+        app.Services.GetRequiredService<ClaudeHomeServer.Services.Mcp.HiggsfieldOAuthService>()
+            .RunMigration();
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"[HiggsfieldMigration] миграция пропущена: {ex.Message}");
+    }
 }
 if (!inspectionMode)
 {

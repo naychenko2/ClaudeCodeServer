@@ -343,10 +343,31 @@ function Invoke-Robocopy([string]$src, [string]$dst, [switch]$Mirror, [string[]]
         $rcArgs += '/XD'
         foreach ($d in $excludeDirs) { $rcArgs += (Join-Path $src $d) }
     }
-    $rcArgs += @('/R:2', '/W:1', '/NFL', '/NDL', '/NP', '/NJH', '/NJS')
+    $rcArgs += @('/R:2', '/W:1', '/NP')
+    # Полный ход robocopy пишем в лог-файл. Раньше /NFL /NDL /NJH /NJS глушили и консоль, и
+    # лог, и при коде ≥8 в журнале оставалось только число — список упавших файлов терялся,
+    # каждый такой случай приходилось расследовать руками на боевой машине.
+    $rcLog = $null
+    if (-not $DryRun) {
+        $logDir = Join-Path $AgentDir 'logs\robocopy'
+        New-Item -ItemType Directory -Force $logDir -ErrorAction SilentlyContinue | Out-Null
+        $rcLog = Join-Path $logDir ('{0}-{1}.log' -f $stamp, [guid]::NewGuid().ToString('N').Substring(0,8))
+        $rcArgs += '/LOG+:' + $rcLog
+    }
     & robocopy.exe @rcArgs | Out-Null
     $code = $LASTEXITCODE
-    if ($code -ge 8) { throw "robocopy '$src' -> '$dst' вернул $code" }
+    if ($code -ge 8) {
+        $msg = "robocopy '$src' -> '$dst' вернул $code"
+        if ($rcLog -and (Test-Path $rcLog)) {
+            $tail = @(Get-Content $rcLog -Tail 100 -ErrorAction SilentlyContinue)
+            if ($tail.Count -gt 0) {
+                Write-Bad "$msg — последние строки лога:"
+                foreach ($line in $tail) { Write-Bad "  $line" }
+            }
+            $msg += ". Лог: $rcLog"
+        }
+        throw $msg
+    }
     return $code
 }
 
@@ -414,6 +435,31 @@ function Start-ServerStack {
         if (-not (Test-Path $trayExe)) { throw "не найден трей-супервизор: $trayExe" }
         Start-Process -FilePath $trayExe -WorkingDirectory $PublishDir | Out-Null
     }
+}
+
+# --- Песочница ---------------------------------------------------------------------------
+# На одной машине живут cc-sandbox (dev) и cc-sandbox-prod (prod): прод-агент НЕ должен
+# трогать дев. Имя контейнера берётся из appsettings.Local.json прод-конфига
+# (Sandbox:ContainerName, дефолт cc-sandbox), и две точки вызова (stop-sandbox и
+# sandbox-container) ходят через одну функцию.
+function Get-SandboxContainerName {
+    $localCfg = Join-Path $PublishDir 'appsettings.Local.json'
+    if (Test-Path $localCfg) {
+        try {
+            $cn = (Get-Content $localCfg -Raw | ConvertFrom-Json).Sandbox.ContainerName
+            if ($cn) { return "$cn" }
+        } catch { }
+    }
+    return 'cc-sandbox'
+}
+
+function Remove-SandboxContainer {
+    # Снимает bind-mount контейнера на $PublishDir\SystemPrompts. Без этого robocopy во время
+    # swap падает с кодом 11 (часть файлов не скопирована) — задача cc3ca7aa. Терпим
+    # «контейнера нет» (2>$null | Out-Null): на свежем инстансе это норма.
+    $name = Get-SandboxContainerName
+    docker rm -f $name 2>$null | Out-Null
+    return $name
 }
 
 function Invoke-DataBackup {
@@ -788,9 +834,10 @@ try {
             Write-Host '  ФАЗА 2 (окно недоступности):'
             $n++; Write-Host "  $n. ClaudeHomeServer.exe --backup (снимок данных)"
             $n++; Write-Host "  $n. стоп трея, сервера, ConPtyBridge"
+            if (-not $SkipSandbox) { $n++; Write-Host "  $n. остановить контейнер песочницы (освобождает bind-mount на $PublishDir\SystemPrompts)" }
             $n++; Write-Host "  $n. снимок бинарников -> $ReleasesDir\$stamp (без $($script:DataDirs -join ', '))"
             $n++; Write-Host "  $n. staging -> $PublishDir + build-id.txt (deployId $deployId)"
-            if (-not $SkipSandbox) { $n++; Write-Host "  $n. пересоздать контейнер песочницы" }
+            if (-not $SkipSandbox) { $n++; Write-Host "  $n. пересоздать контейнер песочницы (новый образ)" }
             $n++; Write-Host "  $n. старт трея"
             Write-Host '  ФАЗА 3 (гейт):'
             $n++; Write-Host "  $n. health $HealthSuccesses успешных ответа за $HealthTimeoutSec с ($HealthUrl), X-Build = $deployId"
@@ -1012,6 +1059,20 @@ try {
     Stop-ServerStack
     Complete-DeployStep $h 'ok' ''
 
+    # Прод-контейнер песочницы держит bind-mount на $PublishDir\SystemPrompts (карта BareMode),
+    # поэтому robocopy во время swap падает с кодом 11. Гасим контейнер ДО snapshot/swap,
+    # чтобы bind-mount освободил каталог. Имя — из прод-конфига (Sandbox:ContainerName,
+    # дефолт cc-sandbox), иначе можно удалить чужой контейнер на машине, где живут и dev
+    # (cc-sandbox), и prod (cc-sandbox-prod). Шаг sandbox-container ПОСЛЕ swap остаётся — он
+    # обеспечивает переход на новый образ.
+    $h = Add-DeployStep 'stop-sandbox'
+    if ($SkipSandbox) {
+        Complete-DeployStep $h 'skipped' '-SkipSandbox'
+    } else {
+        $containerName = Remove-SandboxContainer
+        Complete-DeployStep $h 'ok' $containerName
+    }
+
     $h = Add-DeployStep 'snapshot'
     if (Test-Path (Join-Path $PublishDir 'ClaudeHomeServer.exe')) {
         New-Item -ItemType Directory -Force $releaseDir -ErrorAction Stop | Out-Null
@@ -1051,15 +1112,7 @@ try {
     } else {
         # Имя из прод-конфига (Sandbox:ContainerName), дефолт cc-sandbox. Бэкенд поднял бы
         # свежий контейнер и сам, но явное удаление гарантирует переход на новый образ сразу.
-        $containerName = 'cc-sandbox'
-        $localCfg = Join-Path $PublishDir 'appsettings.Local.json'
-        if (Test-Path $localCfg) {
-            try {
-                $cn = (Get-Content $localCfg -Raw | ConvertFrom-Json).Sandbox.ContainerName
-                if ($cn) { $containerName = $cn }
-            } catch { }
-        }
-        docker rm -f $containerName 2>$null | Out-Null
+        $containerName = Remove-SandboxContainer
         Complete-DeployStep $h 'ok' $containerName
     }
 

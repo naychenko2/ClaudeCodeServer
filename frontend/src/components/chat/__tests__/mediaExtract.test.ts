@@ -324,3 +324,53 @@ describe('смешанный боевой результат fal + glif', () => 
     expect(media.map(m => m.kind)).toEqual(['video', 'image']); // маркеры идут первым проходом
   });
 });
+
+// ---------- Higgsfield — jobs_wait и generate_image ----------
+
+const HIGGSFIELD_JOBS_WAIT = JSON.stringify({
+  jobs: [
+    {
+      index: 0,
+      job_id: '8c516bb9-f774-4523-9777-d9f5cb2ca3bf',
+      status: 'completed',
+      type: 'image',
+      model: 'gpt_image_2_5',
+      result_url: 'https://d8j0ntlcm91z4.cloudfront.net/user_abc/hf_20260916_074017_8c516bb9.png',
+    },
+  ],
+  summary: { total: 1, completed: 1, failed: 0, active: 0, errors: 0 },
+  all_terminal: true,
+});
+
+const HIGGSFIELD_GENERATE_IMAGE = JSON.stringify({
+  results: [
+    {
+      id: '8c516bb9-f774-4523-9777-d9f5cb2ca3bf',
+      type: 'image',
+      status: 'pending',
+      model: 'gpt_image_2_5',
+      params: { prompt: '…', aspect_ratio: '16:9' },
+    },
+  ],
+});
+
+describe('Higgsfield', () => {
+  it('jobs_wait: один элемент, kind=image, ссылка из result_url', () => {
+    const media = extractMediaFromResult(HIGGSFIELD_JOBS_WAIT);
+    expect(media).toHaveLength(1);
+    expect(media[0].kind).toBe('image');
+    expect(media[0].url).toBe('https://d8j0ntlcm91z4.cloudfront.net/user_abc/hf_20260916_074017_8c516bb9.png');
+  });
+
+  it('generate_image (pending): пустой список, без падений', () => {
+    const media = extractMediaFromResult(HIGGSFIELD_GENERATE_IMAGE);
+    expect(media).toEqual([]);
+  });
+
+  it('extractMediaMeta: источник higgsfield, модель gpt_image_2_5, цены нет', () => {
+    const meta = extractMediaMeta(HIGGSFIELD_JOBS_WAIT);
+    expect(meta.source).toBe('higgsfield');
+    expect(meta.model).toBe('gpt_image_2_5');
+    expect(meta.costUsd).toBeUndefined();
+  });
+});

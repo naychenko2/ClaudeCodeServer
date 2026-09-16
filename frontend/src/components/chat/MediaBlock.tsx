@@ -60,7 +60,7 @@ function str(v: Json | undefined): string {
 export function classifyUrl(item: Json | undefined): 'image' | 'video' | 'audio' | null {
   const obj = asObj(item);
   if (!obj) return null;
-  const url = obj.url ?? obj.uri;
+  const url = obj.url ?? obj.uri ?? obj.result_url;
   if (typeof url !== 'string') return null;
   // Явный тип элемента: glif assets — type:"image"|"video"|"audio",
   // glif view_media media[] — kind с теми же значениями
@@ -116,7 +116,7 @@ export function extractMediaFromResult(result: string): MediaItem[] {
   const push = (item: Json | undefined) => {
     const obj = asObj(item);
     if (!obj) return;
-    const url = obj.url ?? obj.uri;
+    const url = obj.url ?? obj.uri ?? obj.result_url;
     if (typeof url !== 'string') return;
     // Входные изображения пользователя (uploaded) — не выход генерации
     if (obj.source === 'uploaded' || url.includes('glifchat-image-input-production')) return;
@@ -149,8 +149,8 @@ export function extractMediaFromResult(result: string): MediaItem[] {
       }
       return;
     }
-    // Массивы медиа (fal + glif assets + glif view_media media[])
-    for (const arr of [value.images, value.videos, value.audio_files, value.audios, value.assets, value.media]) {
+    // Массивы медиа (fal + glif assets + glif view_media media[] + higgsfield jobs/results)
+    for (const arr of [value.images, value.videos, value.audio_files, value.audios, value.assets, value.media, value.jobs, value.results]) {
       if (Array.isArray(arr)) for (const item of arr) push(item);
     }
     // Одиночные объекты
@@ -184,7 +184,7 @@ export interface MediaMeta {
   inferenceTime?: number;
   // Источник генерации: fal (request_id/endpoint_id) или glif (_meta.glif, project_id+job_id,
   // медиа с glif-хоста). В футере метку показываем только для glif — рендер fal не меняется.
-  source?: 'fal' | 'glif';
+  source?: 'fal' | 'glif' | 'higgsfield';
   outputType?: string;
   // jobId генерации glif — ключ сопоставления с glif_cost (кредиты с backend, GlifCostContext)
   jobId?: string;
@@ -249,9 +249,14 @@ export function extractMediaMeta(result: string, media?: MediaItem[]): MediaMeta
   try {
     const parsed = parseLoose(result);
     const root = asObj(parsed);
-    // Имя модели: endpoint_id → берём только короткое имя после последнего / (в результате fal обычно отсутствует)
+    // Имя модели: endpoint_id → короткое имя после / (fal); higgsfield: model в jobs[]/results[]
     const endpointId = typeof root?.endpoint_id === 'string' ? root.endpoint_id : undefined;
-    const model = endpointId ? endpointId.split('/').pop() : undefined;
+    const hfArrays: Json[][] = [root?.jobs, root?.results].filter((v): v is Json[] => Array.isArray(v));
+    const hfModel: string | undefined = hfArrays
+      .flat()
+      .map(j => { const o = asObj(j); return o?.model; })
+      .find((v): v is string => typeof v === 'string');
+    const model = endpointId ? endpointId.split('/').pop() : hfModel;
     // Время генерации: ищем в нескольких местах
     const r = asObj(root?.result) ?? root;
     const inferenceTimeRaw =
@@ -262,15 +267,20 @@ export function extractMediaMeta(result: string, media?: MediaItem[]): MediaMeta
 
     const items = media ?? extractMediaFromResult(result);
     const { glifMeta, isGlif, outputType: bagOutputType } = detectGlif(parsed, items);
+    // Higgsfield: host d8j0ntlcm91z4.cloudfront.net или jobs[]/results[] с result_url
+    const isHiggsfield = items.some(m => hostMatches(m.url, ['d8j0ntlcm91z4.cloudfront.net']))
+      || hfArrays.some(arr => arr.some(j => { const o = asObj(j); return o != null && typeof o.result_url === 'string'; }));
     // jobId glif-генерации: в _meta.glif или в одном из «мешков» результата (snake/camel)
     const jobId: string | undefined = [glifMeta, root, asObj(root?.structuredContent), asObj(root?.result)]
       .map(b => b?.jobId ?? b?.job_id)
       .find((v): v is string => typeof v === 'string');
     const source: MediaMeta['source'] = isGlif
       ? 'glif'
-      : (root?.request_id || endpointId || items.some(m => m.url.includes('fal.media') || m.url.includes('fal.run')))
-        ? 'fal'
-        : undefined;
+      : isHiggsfield
+        ? 'higgsfield'
+        : (root?.request_id || endpointId || items.some(m => m.url.includes('fal.media') || m.url.includes('fal.run')))
+          ? 'fal'
+          : undefined;
     const outputType = glifMeta?.outputType ?? glifMeta?.output_type ?? (isGlif ? bagOutputType ?? root?.outputType : undefined);
 
     return {
@@ -309,7 +319,7 @@ export function MediaBlock({
   costPending?: boolean;
   // Списанные кредиты glif (с backend по jobId через GlifCostContext); нет — не показываем
   credits?: number;
-  source?: 'fal' | 'glif';
+  source?: 'fal' | 'glif' | 'higgsfield';
   outputType?: string;
   online?: boolean;
 }) {
@@ -359,16 +369,17 @@ export function MediaBlock({
 
   // Строка метаданных
   const metaParts: string[] = [];
-  // Метка источника — только glif: fal-рендер исторически без метки, не меняем
+  // Метка источника: glif и higgsfield; fal-рендер исторически без метки, не меняем
   if (source === 'glif') metaParts.push(outputType ? `glif · ${outputType}` : 'glif');
+  if (source === 'higgsfield') metaParts.push(model ? `higgsfield · ${model}` : 'higgsfield');
   if (m.kind !== 'audio' && m.width && m.height) metaParts.push(`${m.width}×${m.height}`);
   if ((m.kind === 'video' || m.kind === 'audio') && m.duration) metaParts.push(`${m.duration.toFixed(1)}с`);
   if (inferenceTime) metaParts.push(`${inferenceTime.toFixed(1)}с`);
-  if (model) metaParts.push(model);
+  if (model && source !== 'higgsfield') metaParts.push(model);
   // Стоимость: fal — точная, с backend (billing-events, «считается…» пока ждём);
-  // glif — если доехала в JSON результата; не доехала — просто без цены, без вечной метки.
+  // glif — если доехала в JSON; higgsfield — не в JSON, «считается…» не показываем.
   if (costUsd) metaParts.push(costUsd < 0.01 ? `$${costUsd.toFixed(4)}` : `$${costUsd.toFixed(2)}`);
-  else if (costPending) metaParts.push('считается…');
+  else if (costPending && source !== 'higgsfield') metaParts.push('считается…');
   // Кредиты glif — с backend по jobId (glif_cost); нет данных — ничего не добавляем
   if (credits !== undefined) metaParts.push(fmtCredits(credits));
 

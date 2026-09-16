@@ -386,36 +386,78 @@ function Copy-BuildTree([string]$src, [string]$dst) {
 # любой одноимённый процесс на машине, а на этой же машине штатно живут хостовой дев-стенд
 # (dotnet run), инспекционные копии бэкапа (--inspect) и тестовый инстанс полигона на :8080 —
 # выкатка убивала бы их заодно, а потом ещё и падала на «процессы не умерли за 20 с».
-# Путь недоступен (процесс чужой учётки) — значит и не наш: такие не трогаем.
-function Get-StackProcesses {
+# Процесс с НАШИМ именем, у которого путь прочитать не удалось, — не «чужой», а
+# «неопознанный»: чаще всего это наш же стек, запущенный С ПОВЫШЕНИЕМ, тогда как агент
+# идёт из планировщика без него (RunLevel=LeastPrivilege). Молча считать такой процесс
+# чужим нельзя — именно это стоило шести дней и четырёх выкаток 14–16.09: шаг stop
+# отчитывался ok, никого не погасив, а swap затем падал на занятых dll с robocopy 11.
+# Поэтому список делится надвое, а решение о неопознанных принимает вызывающий.
+function Get-StackProcessInfo {
     $root = Get-NormalizedPath $PublishDir
     $procs = @(Get-Process -Name 'ClaudeHomeServer', 'ClaudeHomeServer.Tray', 'ConPtyBridge' -ErrorAction SilentlyContinue)
-    return @($procs | Where-Object {
+    $ours = @()
+    $unknown = @()
+    foreach ($p in $procs) {
         $exePath = ''
-        try { $exePath = $_.Path } catch { $exePath = '' }
-        if (-not $exePath) { return $false }
-        return ((Get-NormalizedPath (Split-Path -Parent $exePath)) -eq $root)
-    })
+        try { $exePath = $p.Path } catch { $exePath = '' }
+        if (-not $exePath) { $unknown += $p; continue }
+        if ((Get-NormalizedPath (Split-Path -Parent $exePath)) -eq $root) { $ours += $p }
+    }
+    return [pscustomobject]@{ Ours = @($ours); Unreadable = @($unknown) }
+}
+
+# Совместимый вид для остальных вызывающих: только опознанно наши процессы.
+function Get-StackProcesses { return @((Get-StackProcessInfo).Ours) }
+
+# Текст про неопознанные процессы — один на guard и на Stop-ServerStack, чтобы человек
+# читал одну и ту же формулировку с готовым диагнозом, а не гадал по PID.
+function Get-UnreadableStackText([object[]]$procs) {
+    $ids = @($procs | ForEach-Object { "$($_.ProcessName):$($_.Id)" }) -join ', '
+    return "не удалось опознать процессы стека (путь недоступен): $ids. " +
+           'Скорее всего они запущены с повышением, а агент — без него: проверь RunLevel ' +
+           'задачи планировщика (нужен HighestAvailable). Гасить и подменять файлы вслепую нельзя.'
 }
 
 function Stop-ServerStack {
+    # Fail-closed: неопознанный процесс с нашим именем останавливает выкатку ДО подмены
+    # файлов. Раньше он молча выпадал из списка, и шаг рапортовал успех вхолостую.
+    $info = Get-StackProcessInfo
+    if ($info.Unreadable.Count -gt 0) { throw (Get-UnreadableStackText $info.Unreadable) }
+
     # Трей глушим ПЕРВЫМ, иначе его супервизор поднимет сервер обратно посреди подмены файлов.
     # ConPtyBridge живёт в PublishDir и переживает смерть сервера-родителя — его exe залочит
     # копирование, поэтому он в списке наравне с сервером.
-    @(Get-StackProcesses | Where-Object { $_.ProcessName -eq 'ClaudeHomeServer.Tray' }) |
-        Stop-Process -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Milliseconds 400
-    @(Get-StackProcesses | Where-Object { $_.ProcessName -ne 'ClaudeHomeServer.Tray' }) |
-        Stop-Process -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Milliseconds 700
+    # PID запоминаем ДО убийства: живость проверяем по ним, а не повторным отбором — у
+    # процесса, которого не удалось завершить, путь может стать нечитаемым, и он снова
+    # выпал бы из выдачи как «не наш».
+    $targets = @($info.Ours | ForEach-Object { [pscustomobject]@{ Id = $_.Id; Name = $_.ProcessName } })
+    $failures = @()
+    foreach ($group in @('tray', 'rest')) {
+        $batch = @($info.Ours | Where-Object {
+            if ($group -eq 'tray') { $_.ProcessName -eq 'ClaudeHomeServer.Tray' }
+            else { $_.ProcessName -ne 'ClaudeHomeServer.Tray' }
+        })
+        foreach ($p in $batch) {
+            # Отказ в завершении больше не глотаем: без прав на возвышенный процесс
+            # Stop-Process просто ничего не делает, и раньше это было не видно.
+            try { Stop-Process -Id $p.Id -Force -ErrorAction Stop }
+            catch { $failures += "$($p.ProcessName):$($p.Id) — $($_.Exception.Message)" }
+        }
+        Start-Sleep -Milliseconds $(if ($group -eq 'tray') { 400 } else { 700 })
+    }
+
+    $stillAlive = { @($targets | Where-Object { Get-Process -Id $_.Id -ErrorAction SilentlyContinue }) }
     $deadline = (Get-Date).AddSeconds(20)
     while ((Get-Date) -lt $deadline) {
-        $alive = @(Get-StackProcesses)
-        if ($alive.Count -eq 0) { break }
+        if ((& $stillAlive).Count -eq 0) { break }
         Start-Sleep -Milliseconds 500
     }
-    $alive = @(Get-StackProcesses)
-    if ($alive.Count -gt 0) { throw "процессы не умерли за 20 с: $($alive.ProcessName -join ', ')" }
+    $alive = & $stillAlive
+    if ($alive.Count -gt 0) {
+        $msg = "процессы не умерли за 20 с: $(@($alive | ForEach-Object { "$($_.Name):$($_.Id)" }) -join ', ')"
+        if ($failures.Count -gt 0) { $msg += ". Отказы завершения: $($failures -join '; ')" }
+        throw $msg
+    }
     # Файловые локи снимаются не мгновенно после Exit процесса — даём Windows дописать.
     Start-Sleep -Milliseconds 800
 }
@@ -770,6 +812,19 @@ try {
     }
     if ($runner.Count -gt 0) { Write-Warn 'Runner жив, но задан -IgnoreRunner: сервер после подмены поднимет он' }
 
+    # --- Guard: стек опознаётся -----------------------------------------------------------
+    # Ту же проверку делает Stop-ServerStack, но там она сработала бы уже после сборки и
+    # бэкапа — на проде это ~15 минут работы впустую и два лишних перезапуска. Здесь отказ
+    # стоит секунду. Проверяем ДО всего: процесс с нашим именем, чей путь не читается,
+    # почти наверняка наш же стек с повышением, который агент не сможет ни опознать, ни
+    # погасить (14–16.09: четыре выкатки подряд откатились на swap именно из-за этого).
+    $stackInfo = Get-StackProcessInfo
+    if ($stackInfo.Unreadable.Count -gt 0) {
+        $text = Get-UnreadableStackText $stackInfo.Unreadable
+        Write-Bad "ОТКАЗ: $text"
+        Exit-Guard "$text Выкатка не начиналась."
+    }
+
     # --- Guard: свободное место -----------------------------------------------------------
     $binSize = Get-DirSizeBytes $PublishDir $script:DataDirs
     if ($binSize -le 0) { $binSize = [int64](1GB) }
@@ -1025,6 +1080,20 @@ try {
         Complete-DeployStep $h 'ok' ''
     }
 
+    # MSBuild/Roslyn build-server (VBCSCompiler/dotnet build-server) после `dotnet publish`
+    # держит handles на собранные в staging .dll — robocopy во время swap падает с кодом 11
+    # (ERROR 32, "file is being used by another process"). Гасим сервер сборки ДО остановки
+    # прода, чтобы все хендлы на staging освободились к моменту копирования. Безопасно при
+    # уже-мёртвом build-server (команда завершается мгновенно) и при отсутствии SDK.
+    $h = Add-DeployStep 'build-server-shutdown'
+    & dotnet build-server shutdown 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn "dotnet build-server shutdown вернул $LASTEXITCODE — продолжаю (не критично)"
+        Complete-DeployStep $h 'warn' "exit $LASTEXITCODE"
+    } else {
+        Complete-DeployStep $h 'ok' ''
+    }
+
 } catch {
     # Сюда попадают все провалы ФАЗЫ 1 и guard'ов после старта журнала: сервер жив,
     # публикацию мы не трогали — просто честно закрываем выкатку.
@@ -1177,7 +1246,9 @@ try {
         Write-Bad "откат сам упал: $($_.Exception.Message)"
     }
     if ($rolled) {
-        Complete-Deploy 'rolled_back' "$reason. Прошлый релиз $stamp возвращён, прод отвечает." $stamp
+        # ВАЖНО: формулировка должна явно говорить, что НОВЫЙ код на прод НЕ попал. Иначе
+        # «прод отвечает» читалось как успех, а на деле крутился старый релиз (см. задачу 3b9cbf99).
+        Complete-Deploy 'rolled_back' "$reason. Выкатка ОТМЕНЕНА, прод работает на ПРОШЛОМ релизе $stamp — новый код sha $($git.sha) НЕ УСТАНОВЛЕН." $stamp
         $exitCode = 3
     } else {
         Complete-Deploy 'failed' "$reason. Откат не поднял прод — нужен человек: $releaseDir" $stamp

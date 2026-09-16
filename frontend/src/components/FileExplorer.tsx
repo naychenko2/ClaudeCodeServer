@@ -943,6 +943,11 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       setOnlyChanged(st.onlyChanged ?? false);
       loadDir('');
       if (st.mobileDir) loadDir(st.mobileDir);
+      // Пока проводник был размонтирован (пользователь на другой вкладке), листинги
+      // восстановленных папок могли устареть: событие filesChanged доходит только до
+      // смонтированного подписчика. Перезапрашиваем ВСЕ восстановленные папки (тот же
+      // приём, что и при full=true-ресинке); повторные пути loadDir снимает через inFlight.
+      for (const d of st.dirCache.keys()) loadDir(d);
     } else {
       setDirCache(new Map());
       setDirErrors(new Map());

@@ -122,7 +122,15 @@ public class SessionHub : Hub
     {
         if (!OwnsProject(projectId)) throw Denied();
         await Groups.AddToGroupAsync(Context.ConnectionId, "project_" + projectId);
-        _watcher.Watch(projectId, Context.ConnectionId);
+        if (_watcher.Watch(projectId, Context.ConnectionId))
+        {
+            // Watcher поднят заново (пробел в наблюдении: disconnect → rejoin).
+            // За время его отсутствия правки не отслеживались — клиенту нужен full-ресинк.
+            // Caller, а не группа: пробел был у этого одного соединения; при групповой
+            // рассылке чужие живые вкладки получили бы лишний ресинк.
+            await Clients.Caller.SendAsync("filesChanged",
+                new { projectId, paths = Array.Empty<string>(), full = true });
+        }
     }
 
     public async Task LeaveProject(string projectId)

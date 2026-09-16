@@ -8,8 +8,9 @@ namespace ClaudeHomeServer.Services;
 
 // Следит за файлами проекта, пока к нему подключён хотя бы один клиент (ref-count по connectionId),
 // и шлёт в группу "project_{id}" событие "filesChanged" { projectId, paths, full } с дебаунсом.
-// full=true — сигнал полной пересинхронизации (переполнение лимита путей либо пересоздание
-// watcher'а после сбоя): paths при нём пуст, клиент перезагружает всё раскрытое.
+// full=true — сигнал полной пересинхронизации (переполнение лимита путей, пересоздание
+// watcher'а после сбоя, либо reconnect после обрыва — Watch вернул true):
+// paths при нём пуст, клиент перезагружает всё раскрытое.
 // События тяжёлых/нерелевантных папок (.git, node_modules, bin, obj, …) отфильтрованы.
 //
 // Второй вид watcher'ов — по произвольному пути (WatchPath/UnwatchPath, ключ "worktree:{sessionId}"):
@@ -71,11 +72,14 @@ public class FileWatcherService : IDisposable
         _pollIntervalMs = config.GetValue("FileWatcher:PollIntervalMs", 2000);
     }
 
-    // Клиент начал смотреть проект — поднимаем watcher (или увеличиваем ref-count)
-    public void Watch(string projectId, string connectionId)
+    // Клиент начал смотреть проект — поднимаем watcher (или увеличиваем ref-count).
+    // Возвращает true, если watcher поднят заново (entry был без Watcher/Poll — в наблюдении
+    // был пробел, например disconnect → rejoin): клиенту нужен full-ресинк. False —
+    // к живому watcher'у прибавился ещё один connectionId (второй таб) или ранний выход.
+    public bool Watch(string projectId, string connectionId)
     {
         var project = _projects.GetById(projectId);
-        if (project is null || !Directory.Exists(project.RootPath)) return;
+        if (project is null || !Directory.Exists(project.RootPath)) return false;
 
         lock (_lock)
         {
@@ -87,7 +91,9 @@ public class FileWatcherService : IDisposable
             {
                 if (_usePolling) StartPolling(projectId, entry);
                 else entry.Watcher = CreateWatcher(projectId, entry);
+                return true;
             }
+            return false;
         }
     }
 

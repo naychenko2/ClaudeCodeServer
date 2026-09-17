@@ -4116,7 +4116,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             entry.Info.ClaudeSessionId ?? sessionId, IsResume: false,
             Model: _router!.LocalModel, Mode: entry.Info.Mode.ToString().ToLowerInvariant()), runId);
 
-        var spec = _router.ProfileSpec(Llm.CheapProfile.Text);
+        // Профиль читаем по ключу места — раньше жёстко `CheapProfile.Text` и таймаут
+        // по ключу места; пока значения совпадали — `chat-voice` объявлен `CheapProfile.Text`.
+        // Одна строка правды устраняет рассинхрон при переводе места на другой профиль.
+        var spec = _router.ProfileFor(Llm.LocalActionCatalog.ChatVoice);
         var messages = BuildVoiceMessages(entry, acc);
         var sw = System.Diagnostics.Stopwatch.StartNew();
         using var cts = new CancellationTokenSource();

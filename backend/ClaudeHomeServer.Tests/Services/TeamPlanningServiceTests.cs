@@ -735,6 +735,7 @@ public class TeamPlanningServiceTests : IDisposable
         public string LastPrompt { get; private set; } = "";
 
         public bool UsesLocal(string actionKey) => false;
+        public bool HasFreeRoute(string actionKey) => false;
 
         public string DescribeRoute(string actionKey, string? fallbackModel) =>
             string.IsNullOrWhiteSpace(fallbackModel) ? "claude" : $"claude({fallbackModel})";

@@ -46,8 +46,11 @@ public interface ILocalLlmClient
         int numPredict, int numCtx, string? ownerId,
         Func<string, Task>? onDelta = null, CancellationToken ct = default);
 
-    // Прогрев: холостой вызов, чтобы модель загрузилась в память заранее. Best-effort.
-    Task WarmUpAsync(CancellationToken ct = default);
+    // Прогрев: холостой вызов указанной модели, чтобы её веса загрузились в память
+    // заранее. Передаём model явно: текстовые вызовы идут на TextModel, голосовой
+    // ход держит свой путь и тоже использует TextModel как основную — единая точка
+    // прогрева обязана греть ту же модель, на которую пойдут ходы. Best-effort.
+    Task WarmUpAsync(string? model, CancellationToken ct = default);
 }
 
 // Реплика диалога для ChatTurnAsync: role = system|user|assistant. На уровне namespace,

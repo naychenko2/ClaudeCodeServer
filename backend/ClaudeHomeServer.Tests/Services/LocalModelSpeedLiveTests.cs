@@ -109,7 +109,7 @@ public class LocalModelSpeedLiveTests(ITestOutputHelper output)
 
         var client = BuildClient();
         Assert.True(client.Enabled);
-        await client.WarmUpAsync();
+        await client.WarmUpAsync(Model);
 
         foreach (var (profile, spec) in LocalActionCatalog.ProfileDefaults)
         {
@@ -138,7 +138,7 @@ public class LocalModelSpeedLiveTests(ITestOutputHelper output)
         if (!await AliveAsync()) { output.WriteLine("Локальный стенд не поднят — замер пропущен"); return; }
 
         var client = BuildClient();
-        await client.WarmUpAsync();
+        await client.WarmUpAsync(Model);
 
         // 262 144 — окно стенда после перехода на TP=2. Проверяем, что обвязка доносит
         // до модели промпты, которые прежнее каталожное окно 98 304 обрезало бы.
@@ -163,7 +163,7 @@ public class LocalModelSpeedLiveTests(ITestOutputHelper output)
         if (!await AliveAsync()) { output.WriteLine("Локальный стенд не поднят — замер пропущен"); return; }
 
         var client = BuildClient();
-        await client.WarmUpAsync();
+        await client.WarmUpAsync(Model);
 
         // Сколько одновременных ходов держит стенд: столько же параллельных фоновых
         // действий и сабагентов проект может отправить на локаль, не деградируя.

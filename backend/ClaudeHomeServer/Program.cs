@@ -1207,13 +1207,31 @@ builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
 // автоочистки — удалять чаты и заметки. Снимаем регистрации разом, а не по списку:
 // перечень пришлось бы дописывать при каждом новом сервисе, и однажды его забудут.
 // Хостинговые сервисы самого ASP.NET Core (Kestrel и прочие) не трогаем — только свои.
-if (inspectionMode)
+//
+// Фильтр — по имени сборки `ClaudeHomeServer` и `ClaudeHomeServer.*`, минус `*.Tests`:
+// ровно та же логика, что у сторожей границ (SubsystemBoundaryTests), иначе вынесенная
+// вертикаль (Llm, Images, Tasks, Notes…) продолжит ехать в инспекции молча — фильтр
+// по одной сборке Main её не видит.
+static bool IsOwnHostedServiceDescriptor(ServiceDescriptor d)
 {
-    var appAssembly = typeof(ClaudeHomeServer.Services.Backup.BackupService).Assembly;
+    var implAsm = d.ImplementationType?.Assembly
+        ?? d.ImplementationFactory?.Method.DeclaringType?.Assembly;
+    var n = implAsm?.GetName().Name;
+    if (n is null) return false;
+    if (n.EndsWith(".Tests", StringComparison.Ordinal)) return false;
+    return n == "ClaudeHomeServer" || n.StartsWith("ClaudeHomeServer.", StringComparison.Ordinal);
+}
+
+// Чтение `inspectionMode` здесь повторное — первое (строка 68) смотрит на конфиг ДО
+// `ConfigureAppConfiguration` (TestWebApplicationFactory.ExtraConfig), второй раз —
+// уже после всех источников. Раннее чтение остаётся для ProcessRegistry/InstanceLock,
+// позднее — для гейта фоновых сервисов: без этого фильтр не снимал бы хосты
+// телеметрии и вынесенных вертикалей в тестовой среде.
+if (builder.Configuration.GetValue<bool>("InspectionMode"))
+{
     var background = builder.Services
         .Where(d => d.ServiceType == typeof(IHostedService))
-        .Where(d => d.ImplementationType?.Assembly == appAssembly
-                    || d.ImplementationFactory?.Method.DeclaringType?.Assembly == appAssembly)
+        .Where(IsOwnHostedServiceDescriptor)
         .ToList();
     foreach (var descriptor in background) builder.Services.Remove(descriptor);
     Console.WriteLine($"[Inspection] фоновые сервисы отключены ({background.Count})");
@@ -1297,9 +1315,8 @@ if (!inspectionMode)
     // В копии пропускаем: запуск claude зарегистрировал бы процесс в pid-файле БОЕВОГО
     // сервера (реестр живёт рядом с exe, а не в DataPath).
     _ = Task.Run(() => app.Services.GetRequiredService<ModelCatalogService>().GetModelsAsync());
-    // Фоновый прогрев активной локальной LLM (грузим веса в память заранее; best-effort).
-    // Резолвится через интерфейс — выбор движка уже сделан по LocalLlm:Provider.
-    _ = Task.Run(() => app.Services.GetRequiredService<ClaudeHomeServer.Services.Llm.ILocalLlmClient>().WarmUpAsync());
+    // Прогрев активной локальной LLM — IHostedService `LocalLlmWarmupService` из
+    // подсистемы Llm, срабатывает автоматически при старте (условие — внутри сервиса).
 }
 app.Services.GetRequiredService<JwtService>();
 // Раздача волн «Командной реализации»: конструктор вешает хук в SessionManager

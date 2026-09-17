@@ -5,8 +5,13 @@ import { C, FONT, FS, R } from '../../lib/design';
 import { api } from '../../lib/api';
 import type { HiggsfieldStatus } from '../../lib/api';
 
-// Плитка Higgsfield для пользователя: показывает только статус подключения.
-// Администратор подключает один раз на весь продукт — пользователю кнопки не нужны.
+// Плитка Higgsfield для пользователя: показывает подключение И состояние из
+// McpStatusStore. До правки карточка смотрела только на `connected` из
+// higgsfield.json — а HiggsfieldToolset туда ничего не пишет при лежащем апстриме,
+// и карточка зеленела даже когда интеграция мертва. Теперь контроллер Status()
+// подмешивает health/error из стора, и здесь мы рисуем тон по нему (задача
+// 67b7c30a, раздел «громкий отказ не доезжает до человека»). Администратор
+// подключает один раз на весь продукт — пользователю кнопки не нужны.
 
 export function HiggsfieldCard() {
   const [status, setStatus] = useState<HiggsfieldStatus | null>(null);
@@ -45,6 +50,10 @@ export function HiggsfieldCard() {
   }
 
   const connected = status?.connected ?? false;
+  // health из McpStatusStore: failed/needs-auth перекрывают зелёный connected.
+  // unknown = наблюдения ещё не было, не красним.
+  const health = status?.health ?? null;
+  const isFailed = health === 'failed' || health === 'needs-auth';
 
   return (
     <div style={cardStyle}>
@@ -53,12 +62,23 @@ export function HiggsfieldCard() {
           <span style={titleStyle}>Higgsfield</span>
           <span style={subtitleStyle}>Видео и картинки по подписке</span>
         </div>
-        {connected && (
-          <Badge tone="success" size="sm">Подключено администратором</Badge>
-        )}
+        {isFailed
+          ? <Badge tone="danger" size="sm">
+              {health === 'needs-auth' ? 'Нужен вход' : 'Не отвечает'}
+            </Badge>
+          : connected
+            ? <Badge tone="success" size="sm">Подключено</Badge>
+            : <Badge tone="neutral" size="sm">Не подключено</Badge>}
       </div>
 
-      {!connected && (
+      {isFailed && status?.error && (
+        <div style={{
+          fontSize: FS.sm, color: C.dangerText, background: C.dangerBg,
+          padding: '6px 10px', borderRadius: R.md, lineHeight: 1.45,
+        }}>{status.error}</div>
+      )}
+
+      {!connected && !isFailed && (
         <div style={{ fontSize: FS.sm, color: C.textMuted, lineHeight: 1.5 }}>
           Администратор ещё не подключил Higgsfield. Функция станет доступна после подключения.
         </div>

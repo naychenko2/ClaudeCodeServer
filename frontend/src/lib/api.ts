@@ -2112,18 +2112,24 @@ export const api = {
   // обычная карточка показывает только connected, admin-вкладка — и срок.
   higgsfield: {
     status: () => request<HiggsfieldStatus>('/higgsfield/status'),
-    // Тот же эндпоинт, но тип допускает expiresAt для admin-вкладки
+    // Тот же эндпоинт, тип расширен expiresAt для admin-вкладки.
     adminStatus: () => request<HiggsfieldAdminStatus>('/higgsfield/status'),
     connect: () => request<{ authorizeUrl: string }>('/higgsfield/connect', { method: 'POST' }),
     disconnect: () => request<{ ok: true }>('/higgsfield/disconnect', { method: 'POST' }),
   },
 };
 
-// Пользовательский вид: только «подключён или нет». Админский токен и его срок
-// пользователю не показывают.
-export type HiggsfieldStatus = { connected: boolean };
+// Пользовательский вид: подключение + фактическое состояние из McpStatusStore.
+// health='failed' означает, что у апстрима проблемы прямо сейчас (HTTP-ошибка,
+// таймаут, пустой белый список) — карточка должна покраснеть, иначе громкий отказ
+// теряется (задача 67b7c30a, раздел «громкий отказ не доезжает до человека»).
+export type HiggsfieldStatus = {
+  connected: boolean;
+  health?: string | null;
+  error?: string | null;
+};
 // Админский вид: с expiresAt, чтобы администратор видел, когда токен истекёт.
-export type HiggsfieldAdminStatus = { connected: boolean; expiresAt?: string | null };
+export type HiggsfieldAdminStatus = HiggsfieldStatus & { expiresAt?: string | null };
 
 async function checkReaderEmbeddable(url: string): Promise<{ embeddable: boolean }> {
   try {

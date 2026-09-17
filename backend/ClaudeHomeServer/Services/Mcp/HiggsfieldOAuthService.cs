@@ -21,7 +21,7 @@ namespace ClaudeHomeServer.Services.Mcp;
 /// С 2026-09-17 вход идёт через общий callback <see cref="McpOAuthService.CallbackPath"/>:
 /// провайдер (Clerk DCR) прибит к нему, и собственный путь ронял authorize с
 /// «redirect_uri does not match any pre-registered url». Обмен кода в живом потоке
-/// делает <see cref="McpOAuthController"/>, а <see cref="NotifyCompletedAsync"/>
+/// делает <see cref="McpOAuthController"/>, а <see cref="NotifyCompleted"/>
 /// ставит Connected/AdminOwnerId/ExpiresAt/AuthVersion в higgsield.json. Старый
 /// <see cref="CompleteAsync"/> оставлен только для legacy-эндпоинта
 /// <c>/api/higgsfield/callback</c>.
@@ -162,7 +162,7 @@ public sealed class HiggsfieldOAuthService(
     /// если его нет — это либо чужой state, либо повторный callback того же входа.
     /// Молчаливый no-op, чтобы общий контроллер не зависел от внутренней логики Higgsfield.
     /// </summary>
-    public bool NotifyCompletedAsync(string? state)
+    public bool NotifyCompleted(string? state)
     {
         CleanupPending();
         if (string.IsNullOrEmpty(state) || !_pending.TryRemove(state, out var pending))
@@ -180,7 +180,7 @@ public sealed class HiggsfieldOAuthService(
     }
 
     // Единая точка выставления Connected/AdminOwnerId/ExpiresAt/AuthVersion —
-    // оба пути (legacy CompleteAsync и NotifyCompletedAsync из общего callback)
+    // оба пути (legacy CompleteAsync и NotifyCompleted из общего callback)
     // делают ровно то же.
     private void ApplyConnected(string adminOwnerId)
     {
@@ -243,9 +243,26 @@ public sealed class HiggsfieldOAuthService(
     public string? EnsureFresh()
     {
         var st = LoadState();
-        if (st.AdminOwnerId is not { } owner) return null;
+
+        // Штатный путь «не подключено» — статус в McpStatusStore НЕ пишем, иначе сломанная
+        // интеграция у каждого нового пользователя создавала бы красную карточку на ровном месте.
+        if (!st.Connected) return null;
+
+        // Неконсистентное состояние: higgsfield.json говорит Connected=true, но либо нет
+        // AdminOwnerId (например, восстановили data из архива до миграции ф.2.1), либо
+        // пропала сервисная запись реестра. Без записи статус был бы НЕ виден — UI показывал
+        // бы зелёную карточку, а токен отдать неоткуда (находка п.2 ревью Глеба).
+        if (st.AdminOwnerId is null)
+        {
+            RecordMissingServiceState("Connected=true, но AdminOwnerId пуст");
+            return null;
+        }
         var record = TryGetServiceRecord();
-        if (record is null || record.Auth.Kind != McpAuthKind.OAuth2) return null;
+        if (record is null || record.Auth.Kind != McpAuthKind.OAuth2)
+        {
+            RecordMissingServiceState("Connected=true, но нет сервисной записи реестра");
+            return null;
+        }
 
         try
         {
@@ -267,6 +284,16 @@ public sealed class HiggsfieldOAuthService(
             log.LogWarning(ex, "Higgsfield EnsureFresh: не удалось обновить токен");
             return null;
         }
+    }
+
+    // Записать NeedsAuth в McpStatusStore + WARN в лог. Пишется ТОЛЬКО при неконсистентном
+    // Connected=true (см. EnsureFresh) — иначе сломанная интеграция у нового пользователя
+    // создала бы красную карточку на ровном месте. status и owner — фиксированные:
+    // Higgsfield-инстанс живёт под ServiceOwnerId, а не под реальным владельцем.
+    private void RecordMissingServiceState(string reason)
+    {
+        statuses.RecordAuthFailure(ServiceOwnerId, Key, reason);
+        log.LogWarning("Higgsfield EnsureFresh: state неконсистентен — {Reason}", reason);
     }
 
     /// Текущее состояние: подключено, срок, версия авторизации.

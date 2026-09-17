@@ -6,6 +6,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Mcp;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -89,7 +90,9 @@ public class McpOAuthServiceTests : IDisposable
 
         endpoints.AuthorizationEndpoint.Should().Be("https://auth.example.com/authorize");
         endpoints.TokenEndpoint.Should().Be("https://auth.example.com/token");
-        endpoints.RegistrationEndpoint.Should().Be("https://auth.example.com/register");
+        // registration_endpoint опционален по RFC 8414; если провайдер его не объявил —
+        // выдумывать путь нельзя, иначе RegisterClientAsync отправит POST в никуда.
+        endpoints.RegistrationEndpoint.Should().BeNull();
     }
 
     // ── сквозной вход ────────────────────────────────────────────────────────────────
@@ -319,6 +322,77 @@ public class McpOAuthServiceTests : IDisposable
             "input.ClientId задан — DCR не запускается независимо от mismatch");
         System.Web.HttpUtility.ParseQueryString(new Uri(start.AuthorizeUrl).Query)["client_id"]
             .Should().Be("client-руками");
+    }
+
+    // Сервер без DCR: человек однажды вписал client_id руками, у провайдера
+    // зарегистрированы оба адреса возврата (типичный кейс — статический клиент
+    // стороннего MCP-сервера). Mcp:PublicBaseUrl не задан: redirectUri получается
+    // из origin запроса и меняется при смене стенда (порт 5000 ↔ 5173 у Vite).
+    // До правки код сбрасывал client_id на mismatch — вход падал на «впиши client_id
+    // вручную». После правки откатываемся на сохранённый client_id с WARN; решает
+    // провайдер. Задача 39a034c7.
+    [Fact]
+    public async Task Вход_РазошелсяRedirectUri_НетDcr_ОткатНаПрежнийClientId()
+    {
+        var (svc, registry, secrets, statuses, handler) = NewService();
+        handler.IncludeRegistrationEndpoint = false;
+
+        var log = new RecordingLogger<McpOAuthService>();
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(_dir, "projects.json"),
+        }).Build();
+        var service = new McpOAuthService(registry, secrets, statuses,
+            new StubHttpClientFactory(handler), config, log);
+
+        // Прежний вход был с ручным client_id: эмулируем запись клиента как к
+        // человек когда-то вписал client_id вручную.
+        var record = Authorized(registry, secrets, expiresAt: DateTime.UtcNow.AddHours(1));
+        const string manualClient = "client-руками-старый";
+        record.Auth.OAuth!.ClientId = manualClient;
+        record = registry.Update(Owner, record.Id, record)!;
+        record.Auth.OAuth!.RedirectUri.Should().Be(Redirect,
+            "исходное состояние — RedirectUri сохранён от первого входа");
+
+        // Дев-стенд: Vite на 5173, бэк на 5000. Host остаётся 5173.
+        const string newRedirect = "http://localhost:5173/api/mcp/oauth/callback";
+        newRedirect.Should().NotBe(Redirect, "иначе это не сценарий mismatch");
+
+        var start = await service.StartAsync(Owner, record, newRedirect, input: null);
+
+        // Без DCR запроса быть не должно: провайдер не объявил registration_endpoint —
+        // POST /register ушёл бы в никуда. Прежний client_id пригоден.
+        handler.BodyOf("https://auth.example.com/register").Should().BeNull(
+            "DCR недоступна — перерегистрировать нечем, используем прежний client_id");
+
+        var query = System.Web.HttpUtility.ParseQueryString(new Uri(start.AuthorizeUrl).Query);
+        query["client_id"].Should().Be(manualClient,
+            "сохранённый client_id годен — у провайдера могут быть зарегистрированы оба адреса");
+        query["redirect_uri"].Should().Be(newRedirect,
+            "authorize едет на текущий redirect_uri — пусть провайдер решит сам");
+
+        log.HasWarningContaining("DCR недоступна").Should().BeTrue(
+            "WARN человеку: адрес разошёлся, перерегистрировать нечем, пробуем прежним client_id");
+    }
+
+    // Контраст: для серверов С DCR поведение прежнее — клиент сбрасывается, идём в
+    // регистрацию, secret тоже сбрасывается. Сторож от регрессии при правке discovery.
+    [Fact]
+    public async Task Вход_РазошелсяRedirectUri_ЕстьDcr_СбрасываетClientIdКакРаньше()
+    {
+        var (service, registry, secrets, _, http) = NewService();
+        // IncludeRegistrationEndpoint=true по умолчанию в StubHandler
+        var record = Authorized(registry, secrets, expiresAt: DateTime.UtcNow.AddHours(1));
+        record.Auth.OAuth!.ClientId.Should().NotBeNullOrEmpty("исходное состояние — клиент сохранён");
+
+        const string newRedirect = "http://localhost:5173/api/mcp/oauth/callback";
+        var start = await service.StartAsync(Owner, record, newRedirect, input: null);
+
+        http.BodyOf("https://auth.example.com/register").Should().NotBeNull(
+            "DCR объявлена — на mismatch прежний клиент непригоден, нужна перерегистрация");
+        System.Web.HttpUtility.ParseQueryString(new Uri(start.AuthorizeUrl).Query)["client_id"]
+            .Should().Be("client-from-dcr",
+            "DCR вернул нового клиента — он и уехал в authorize");
     }
 
     // ── scope: источник правды — ответ DCR, не scopes_supported ─────────────────────
@@ -609,6 +683,32 @@ public class McpOAuthServiceTests : IDisposable
         public HttpClient CreateClient(string name) => new(handler, disposeHandler: false);
     }
 
+    // Простой логгер-ловушка: пишет всё в список пар (уровень, сообщение), чтобы тест
+    // мог проверить наличие конкретного WARN. Используется только в кейсах, где
+    // поведение логирования — часть контракта (например, откат на сохранённый client_id
+    // при redirectMismatch без DCR должен сопровождаться предупреждением в лог).
+    private sealed class RecordingLogger<T> : ILogger<T>
+    {
+        public List<(LogLevel Level, string Message)> Entries { get; } = new();
+
+        public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state,
+            Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            Entries.Add((logLevel, formatter(state, exception)));
+        }
+
+        public bool HasWarningContaining(string fragment) =>
+            Entries.Any(e => e.Level == LogLevel.Warning && e.Message.Contains(fragment));
+
+        private sealed class NullScope : IDisposable
+        {
+            public static readonly NullScope Instance = new();
+            public void Dispose() { }
+        }
+    }
+
     /// <summary>
     /// Чужой сервер целиком: 401 с указанием метаданных, метаданные ресурса, метаданные
     /// authorization server, регистрация клиента и выдача токенов. Тела запросов запоминает —
@@ -626,6 +726,13 @@ public class McpOAuthServiceTests : IDisposable
 
         /// <summary>Scopes_supported в метаданных authorization server. null — поля нет.</summary>
         public IReadOnlyList<string>? AuthorizationServerScopesSupported { get; set; }
+
+        /// <summary>
+        /// Признак «провайдер поддерживает DCR»: отдавать ли <c>registration_endpoint</c>
+        /// в метаданных authorization server. По умолчанию true — большинство тестов
+        /// опирают DCR; кейс «без DCR» включается явно.
+        /// </summary>
+        public bool IncludeRegistrationEndpoint { get; set; } = true;
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken ct)
@@ -667,21 +774,25 @@ public class McpOAuthServiceTests : IDisposable
 
             // scopes_supported не обязаны быть в ответе — оставлены как опциональное поле,
             // чтобы тесты могли убедиться: даже если провайдер их отдаёт, мы их в authorize
-            // не подставляем.
+            // не подставляем. registration_endpoint тоже опционален (RFC 8414): выключаем
+            // полем IncludeRegistrationEndpoint, чтобы покрыть кейс «провайдер без DCR».
             string BuildAuthorizationServerMetadata()
             {
+                var registration = IncludeRegistrationEndpoint
+                    ? "\"registration_endpoint\":\"https://auth.example.com/register\","
+                    : string.Empty;
                 if (AuthorizationServerScopesSupported is null)
                     return "{\"issuer\":\"https://auth.example.com\"," +
                            "\"authorization_endpoint\":\"https://auth.example.com/authorize\"," +
                            "\"token_endpoint\":\"https://auth.example.com/token\"," +
-                           "\"registration_endpoint\":\"https://auth.example.com/register\"," +
+                           registration +
                            "\"code_challenge_methods_supported\":[\"S256\"]}";
                 var scopes = string.Join(",",
                     AuthorizationServerScopesSupported.Select(s => "\"" + s + "\""));
                 return "{\"issuer\":\"https://auth.example.com\"," +
                        "\"authorization_endpoint\":\"https://auth.example.com/authorize\"," +
                        "\"token_endpoint\":\"https://auth.example.com/token\"," +
-                       "\"registration_endpoint\":\"https://auth.example.com/register\"," +
+                       registration +
                        "\"code_challenge_methods_supported\":[\"S256\"]," +
                        "\"scopes_supported\":[" + scopes + "]}";
             }

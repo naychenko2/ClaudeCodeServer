@@ -68,7 +68,7 @@ public class McpOAuthController(
     /// Отвечает маленькой страницей, которая говорит открывшему окну результат и закрывается.
     ///
     /// После успешного Complete, если это вход инстансного Higgsfield, дёргаем
-    /// HiggsfieldOAuthService.NotifyCompletedAsync — ЕДИНСТВЕННАЯ точка условия
+    /// HiggsfieldOAuthService.NotifyCompleted — ЕДИНСТВЕННАЯ точка условия
     /// <c>ServerKey == Key</c> живёт здесь, в Higgsfield-сервисе её нет.
     /// </summary>
     [AllowAnonymous]
@@ -86,7 +86,7 @@ public class McpOAuthController(
             if (higgsfield is not null
                 && string.Equals(done.ServerKey, HiggsfieldOAuthService.Key, StringComparison.OrdinalIgnoreCase))
             {
-                higgsfield.NotifyCompletedAsync(state);
+                higgsfield.NotifyCompleted(state);
             }
             return Page(true, null, done.ServerKey);
         }

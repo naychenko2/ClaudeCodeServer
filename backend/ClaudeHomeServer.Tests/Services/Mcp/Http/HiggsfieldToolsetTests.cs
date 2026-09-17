@@ -936,6 +936,92 @@ public class HiggsfieldToolsetTests
         }
     }
 
+    // --- Шаг 6: успешный tools/list сбрасывает залипший Failed ---
+
+    // До правки у RecordToolsListFailure не было пары: прошлая ошибка жила в сторе вечно,
+    // и зелёная интеграция показывалась красной карточкой. Теперь успешный tools/list
+    // обязан перевести запись в Connected и очистить текст ошибки.
+    [Fact]
+    public async Task FetchToolsListAsync_УспешныйОтветПослеFailed_ПишетСтатусConnectedИОчищаетError()
+    {
+        // Тело — корректный JSON-RPC с одним инструментом из белого списка,
+        // поэтому после FetchToolsListAsync должна записаться пара Connected/null.
+        var body = "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":0," +
+            "\"result\":{\"tools\":[" +
+            "{\"name\":\"generate_image\",\"description\":\"img\",\"inputSchema\":{}}" +
+            "]}}\n\n";
+        var (dir, config, statuses, oauth, handler) = NewStep3Fixture("succ-after-fail",
+            HttpStatusCode.OK, body);
+        try
+        {
+            var toolset = new HiggsfieldToolset(oauth,
+                new StubHttpClientFactory(handler),
+                sessions: null!,
+                config,
+                mcpStatus: statuses,
+                NullLogger<HiggsfieldToolset>.Instance);
+
+            // Предпосылка: прошлая ошибка зависла в сторе как failed.
+            statuses.RecordProbe(HiggsfieldOAuthService.ServiceOwnerId, HiggsfieldOAuthService.Key,
+                McpServerStatuses.Failed, "HTTP 406");
+
+            var fetch = typeof(HiggsfieldToolset).GetMethod("FetchToolsListAsync",
+                BindingFlags.NonPublic | BindingFlags.Instance)!;
+            var task = (Task)fetch.Invoke(toolset, [CancellationToken.None])!;
+            await task;
+
+            var entry = statuses.Get(HiggsfieldOAuthService.ServiceOwnerId, HiggsfieldOAuthService.Key);
+            entry.Should().NotBeNull();
+            entry!.Status.Should().Be(McpServerStatuses.Connected,
+                "успешный tools/list обязан снять залипший Failed — иначе карточка в UI врёт");
+            entry.Error.Should().BeNull(
+                "при Connected текст прежней ошибки должен быть очищен — иначе в UI гниёт красный текст");
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { /* best-effort */ }
+        }
+    }
+
+    // Регрессия существующего поведения: успешный статус не должен мешать последующему
+    // отказу переписать запись на Failed с новой причиной. Иначе «один раз Connected —
+    // навсегда Connected», и новая поломка апстрима останется невидимой.
+    [Fact]
+    public async Task FetchToolsListAsync_ОтказПослеConnected_ПишетСтатусFailed()
+    {
+        var (dir, config, statuses, oauth, handler) = NewStep3Fixture("fail-after-ok",
+            HttpStatusCode.InternalServerError, "boom");
+        try
+        {
+            var toolset = new HiggsfieldToolset(oauth,
+                new StubHttpClientFactory(handler),
+                sessions: null!,
+                config,
+                mcpStatus: statuses,
+                NullLogger<HiggsfieldToolset>.Instance);
+
+            // Предпосылка: интеграция была здорова — connected/null.
+            statuses.RecordProbe(HiggsfieldOAuthService.ServiceOwnerId, HiggsfieldOAuthService.Key,
+                McpServerStatuses.Connected, error: null);
+
+            var fetch = typeof(HiggsfieldToolset).GetMethod("FetchToolsListAsync",
+                BindingFlags.NonPublic | BindingFlags.Instance)!;
+            var task = (Task)fetch.Invoke(toolset, [CancellationToken.None])!;
+            await task;
+
+            var entry = statuses.Get(HiggsfieldOAuthService.ServiceOwnerId, HiggsfieldOAuthService.Key);
+            entry.Should().NotBeNull();
+            entry!.Status.Should().Be(McpServerStatuses.Failed,
+                "новая поломка обязана перекрыть прежний Connected — иначе регрессия ADR-012");
+            entry.Error.Should().Contain("500",
+                "текст ошибки должен нести актуальный код — иначе диагностика потеряна");
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { /* best-effort */ }
+        }
+    }
+
     // Расширенная фабрика для тестов прогрева: handler умеет задать «следующий» ответ.
     private sealed class ConfigurableResponseHandler : HttpMessageHandler
     {

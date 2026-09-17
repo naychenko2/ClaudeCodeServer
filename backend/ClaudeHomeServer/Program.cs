@@ -15,6 +15,7 @@ using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Services.Team;
 using ClaudeHomeServer.Services.Http;
 using ClaudeHomeServer.Services.Mcp;
+using ClaudeHomeServer.Services.Mcp.Http;
 using ClaudeHomeServer.Services.ProjectServices;
 using ClaudeHomeServer.Services.Terminal;
 using ClaudeHomeServer.Services.TriggerSources;
@@ -562,8 +563,23 @@ builder.Services.AddQuietHttpClient(
         Category: "ClaudeHomeServer.Mcp.Higgsfield",
         Subject: "прокси-тулсетом Higgsfield",
         Consequence: "Генерации картинок/видео/аудио недоступны — список инструментов устарел."));
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
-    ClaudeHomeServer.Services.Mcp.Http.HiggsfieldToolset>();
+// Регистрация HiggsfieldToolset под двумя типами через форвардер: одна реализация
+// под собственным типом и под IMcpToolset, без дубля singleton. `AddSingleton<I, C>()`
+// дал бы ВТОРОЙ экземпляр рядом с `AddSingleton<C>()`, а каст `(HiggsfieldToolset)
+// sp.GetRequiredService<IMcpToolset>()` бросил бы InvalidCastException: последняя
+// AddSingleton<IMcpToolset> в AddSubsystems (NotesToolset) перекрыла бы Higgsfield —
+// приложение не поднялось бы. Форвардер ловит оба требования: один экземпляр +
+// каст не нужен (hosted берёт по собственному типу). Задача eefcb96a.
+builder.Services.AddSingleton<HiggsfieldToolset>();
+builder.Services.AddSingleton<IMcpToolset>(sp => sp.GetRequiredService<HiggsfieldToolset>());
+// Фоновый прогрев снимка tools/list для Higgsfield (шаг 4 задачи 6e309216):
+// тулсет остаётся тот же singleton, hosted берёт его из DI по тому же корню, что
+// и IMcpToolset — иначе у нас было бы ДВА HiggsfieldToolset в процессе, и обновление
+// кэша в одном не отражалось бы в ToolsFor у другого.
+builder.Services.AddGatedHostedFrom<HiggsfieldSnapshotWarmer>(builder.Configuration,
+    sp => new HiggsfieldSnapshotWarmer(
+        sp.GetRequiredService<HiggsfieldToolset>(),
+        sp.GetRequiredService<ILogger<HiggsfieldSnapshotWarmer>>()));
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.McpToolsetRegistry>();
 // Белый список инструментов профиля провайдера (KeepMcpTools): читает McpTransportController
 // на tools/list и tools/call, сами тулсеты о нём не знают

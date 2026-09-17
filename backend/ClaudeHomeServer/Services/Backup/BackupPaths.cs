@@ -75,6 +75,15 @@ public static class BackupPaths
             && fileName.Equals(Llm.PlanMapService.CacheFileName, StringComparison.OrdinalIgnoreCase))
             return false;
 
+        // Снимок списка инструментов Higgsfield — кеш tools/list, который прокси пишет
+        // при каждом успешном опросе апстрима (шаг 2 дозадачи 6e309216). Секретов нет,
+        // но восстанавливать его из архива бесполезно: список всё равно устаревший, а
+        // первый же успешный handshake файл перезапишет. Переехавший из бэкапа снимок
+        // заставит ходы 30 мин жить на чужой версии схем — это регрессия, а не польза.
+        if (segments.Length == 1
+            && fileName.Equals(Mcp.Http.HiggsfieldToolset.SnapshotFileName, StringComparison.OrdinalIgnoreCase))
+            return false;
+
         // Снимки промпта ходов — диагностический лог (последние 50 ходов на чат):
         // восстанавливать нечего, а в облако они бы поехали десятками мегабайт
         if (root.Equals("prompt-snapshots", StringComparison.OrdinalIgnoreCase)) return false;

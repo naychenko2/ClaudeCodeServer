@@ -35,12 +35,16 @@ public sealed class HiggsfieldToolset : IMcpParameterizedToolset
         this.mcpStatus = mcpStatus;
         this.log = log;
         _snapshotPath = ResolveSnapshotPath(config);
-        // Холодный старт: поднимаем снимок с диска, чтобы первый ход после выкатки
-        // жил на нём 30 мин, а не лез в сеть. _cachedAt = now — снимок считается
-        // свежим; иначе при первом же вызове GetCachedTools он истёк бы и пошёл в сеть.
+        // Холодный старт: поднимаем снимок с диска. lastSuccessAt берём из снимка
+        // (новый формат с полем SavedAt); если поля нет — старый формат — считаем снимок
+        // свежим. Иначе при первом же вызове GetCachedTools он истёк бы и пошёл в сеть.
         var loaded = LoadSnapshotFromDisk(_snapshotPath);
-        _cachedTools = loaded;
-        _cachedAt = loaded is null ? DateTime.MinValue : DateTime.UtcNow;
+        _cachedTools = loaded?.Tools;
+        // Для обратной совместимости: снимок без SavedAt (старый формат) — относимся как
+        // к «только что сохранённому». Иначе после выкатки на новый код все существующие
+        // инсталляции остались бы без сервера, пока warmer не обновит кэш (а warmer не
+        // идёт, если снимок старше 24ч — лечим именно это условие).
+        _lastSuccessAt = loaded?.SavedAt ?? DateTime.UtcNow;
     }
 
     public const string ServerName = McpEndpoints.HiggsfieldName;
@@ -53,6 +57,21 @@ public sealed class HiggsfieldToolset : IMcpParameterizedToolset
 
     /// <summary>TTL кэша списка tools/list: 30 минут.</summary>
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(30);
+
+    /// <summary>
+    /// Потолок возраста успешного снимка. После него лучше не объявлять сервер,
+    /// чем кормить модель фантомными инструментами (апстрим переименовал
+    /// <c>generate_image</c> → модель бесконечно видит 10 фантомов, каждый вызов
+    /// горит ошибкой). Замер шире дневного окна дрейфа апстрима с запасом.
+    /// </summary>
+    private static readonly TimeSpan SnapshotMaxAge = TimeSpan.FromDays(1);
+
+    /// <summary>
+    /// Короткий отрицательный кэш после провала fetch: следующая попытка не раньше,
+    /// чем через эту паузу. Без него пять чатов после рестарта при лежащем апстриме
+    /// долбят сеть каждый ход.
+    /// </summary>
+    private static readonly TimeSpan NegativeCacheTtl = TimeSpan.FromMinutes(1.5);
 
     /// <summary>
     /// Имя файла снимка списка инструментов в data/ — кеш, едет в исключения облачного архива
@@ -85,12 +104,19 @@ public sealed class HiggsfieldToolset : IMcpParameterizedToolset
     public string Name => ServerName;
     public string Version => "1.0.0";
 
-    // Кэш: последний успешный снимок + время. Fail-open при отказе обновления.
-    // При пуске процесса _cachedTools поднимается со снимка data/higgsfield-tools.json,
-    // если он есть — иначе первый ход после рестарта лотерея на рваном канале.
+    // Кэш: последний успешный снимок + два таймстампа.
+    //   _lastSuccessAt   — момент последнего УСПЕШНОГО tools/list (из сети).
+    //                       Снимкам старше SnapshotMaxAge — отказ: фантомные инструменты.
+    //   _lastFetchAttempt — момент последней ПОПЫТКИ (любой исход). Используется для
+    //                       negative cache: после провала следующая попытка не раньше
+    //                       NegativeCacheTtl, иначе пять чатов при лежащем апстриме
+    //                       долбят сеть каждый ход (см. задачу 67b7c30a).
+    // При пуске процесса _cachedTools и _lastSuccessAt поднимаются со снимка
+    // data/higgsfield-tools.json — иначе первый ход после рестарта лотерея на рваном канале.
     private readonly object _cacheLock = new();
     private IReadOnlyList<McpToolSchema>? _cachedTools;
-    private DateTime _cachedAt;
+    private DateTime _lastSuccessAt;
+    private DateTime _lastFetchAttempt;
     private readonly string _snapshotPath;
 
     // ---- Состав ----
@@ -98,18 +124,56 @@ public sealed class HiggsfieldToolset : IMcpParameterizedToolset
     public IReadOnlyList<McpToolSchema> ToolsFor(McpToolCallContext context)
     {
         if (!TryResolveSession(context, out _)) return [];
-        return GetCachedTools();
+
+        // Решаем «надо ли обновлять» под локом. Сетевого вызова здесь НЕТ — критический
+        // фикс ревью Глеба: раньше ToolsFor ходил в сеть (40–80 с на лежащем апстриме) и
+        // CLI с MCP_TIMEOUT=30 не дожидался handshake. Теперь фоном пинаем RefreshNowAsync.
+        IReadOnlyList<McpToolSchema>? cached;
+        DateTime lastSuccessAt;
+        DateTime lastFetchAttempt;
+        bool needRefresh;
+        lock (_cacheLock)
+        {
+            cached = _cachedTools;
+            lastSuccessAt = _lastSuccessAt;
+            lastFetchAttempt = _lastFetchAttempt;
+            needRefresh = cached is null || lastSuccessAt + CacheTtl < DateTime.UtcNow;
+        }
+
+        // Снимку больше суток — отдаём пустой состав: апстрим мог переименовать инструменты,
+        // и кормить модель фантомами опаснее, чем оставить чат без интеграции. Сервер при
+        // этом продолжает быть «объявленным» — это решает McpRegistry (запись живёт), а
+        // отсутствие инструментов означает «не отдавать ни одного», не «не показывать».
+        if (cached is not null && DateTime.UtcNow - lastSuccessAt > SnapshotMaxAge)
+        {
+            ScheduleRefresh(lastFetchAttempt);
+            return [];
+        }
+
+        if (needRefresh) ScheduleRefresh(lastFetchAttempt);
+        return cached ?? [];
+    }
+
+    // Запускает RefreshNowAsync в фоне, если только что не пробовали. Negative cache
+    // обязателен: иначе пять одновременных ToolsFor после рестарта при лежащем апстриме
+    // долбят сеть каждый ход (тик warmer раз в 20 мин, а ходы идут постоянно).
+    private void ScheduleRefresh(DateTime lastFetchAttempt)
+    {
+        if (DateTime.UtcNow - lastFetchAttempt < NegativeCacheTtl) return;
+        _ = Task.Run(() => RefreshNowAsync(CancellationToken.None));
     }
 
     /// <summary>
     /// Принудительный прогрев снимка: для <see cref="IHostedService"/> стартёра. Идёт
-    /// той же дорогой, что и GetCachedTools (та же <see cref="FetchToolsListAsync"/>,
+    /// той же дорогой, что и ToolsFor (та же <see cref="FetchToolsListAsync"/>,
     /// тот же WARN на отказе, та же запись на диск при успехе), но снаружи лока —
     /// ходы не должны ловить «не успели обновить кэш» как свою ошибку.
     /// Возвращает true, если снимок обновлён.
     /// </summary>
     public async Task<bool> RefreshNowAsync(CancellationToken ct)
     {
+        var now = DateTime.UtcNow;
+        lock (_cacheLock) _lastFetchAttempt = now;
         IReadOnlyList<McpToolSchema>? fresh = null;
         try
         {
@@ -123,7 +187,7 @@ public sealed class HiggsfieldToolset : IMcpParameterizedToolset
         lock (_cacheLock)
         {
             _cachedTools = fresh;
-            _cachedAt = DateTime.UtcNow;
+            _lastSuccessAt = DateTime.UtcNow;
         }
         try { SaveSnapshot(fresh); }
         catch (Exception ex)
@@ -131,48 +195,6 @@ public sealed class HiggsfieldToolset : IMcpParameterizedToolset
             log.LogWarning(ex, "Higgsfield warmer: snapshot save failed");
         }
         return true;
-    }
-
-    private IReadOnlyList<McpToolSchema> GetCachedTools()
-    {
-        // Решаем «надо ли обновлять» под локом; сам сетевой вызов идёт ВНЕ лока.
-        // ОСОЗНАННЫЙ отказ от single-flight: при холодном кэше N ходов пошлют N запросов.
-        // Это выбор, а не побочка: tools/list — handshake, не горячий путь; на рваном канале
-        // параллель полезна (быстрее кто-то да ответит); семафор ради handshake — overkill.
-        var expired = false;
-        lock (_cacheLock)
-        {
-            expired = _cachedAt + CacheTtl < DateTime.UtcNow;
-            if (!expired) return _cachedTools ?? [];
-        }
-
-        // Сетевой вызов вне лока: следующий ход пройдёт под локом независимо от того,
-        // сколько сейчас идёт обновлений, и при таймауте вернётся к свежему fail-open.
-        IReadOnlyList<McpToolSchema>? fresh = null;
-        try
-        {
-            fresh = FetchToolsListAsync(CancellationToken.None).GetAwaiter().GetResult();
-        }
-        catch (Exception ex)
-        {
-            log.LogWarning(ex, "Higgsfield tools/list: refresh failed - fail-open on last snapshot");
-        }
-        if (fresh is not null)
-        {
-            lock (_cacheLock)
-            {
-                _cachedTools = fresh;
-                _cachedAt = DateTime.UtcNow;
-            }
-            // Снимок на диск — в фоне, чтобы ход не ждал записи. Ошибка записи НЕ
-            // пробрасывается: лучше работать без снимка, чем уронить ход. При следующем
-            // успешном tools/list файл перезапишется.
-            _ = Task.Run(() => SaveSnapshot(fresh));
-        }
-        lock (_cacheLock)
-        {
-            return _cachedTools ?? [];
-        }
     }
 
     // ---- Вызов ----
@@ -237,7 +259,7 @@ public sealed class HiggsfieldToolset : IMcpParameterizedToolset
         // апстрим вправе ответить 406 Not Acceptable (Higgsfield именно это и делал).
         request.Headers.Accept.ParseAdd("application/json");
         request.Headers.Accept.ParseAdd("text/event-stream");
-        var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
         using var stream = await response.Content.ReadAsStreamAsync(ct);
         var text = await new System.IO.StreamReader(stream).ReadToEndAsync(ct);
         if (!response.IsSuccessStatusCode)
@@ -293,7 +315,7 @@ public sealed class HiggsfieldToolset : IMcpParameterizedToolset
             request.Headers.Accept.ParseAdd("text/event-stream");
             try
             {
-                var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+                using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
                 using var stream = await response.Content.ReadAsStreamAsync(ct);
                 var text = await new System.IO.StreamReader(stream).ReadToEndAsync(ct);
                 if (!response.IsSuccessStatusCode)
@@ -449,6 +471,10 @@ public sealed class HiggsfieldToolset : IMcpParameterizedToolset
     private bool TryResolveSession(McpToolCallContext context, out Models.Session? session)
     {
         session = null;
+        // Fail-closed без SessionManager: unit-тесты передают null, и попытка
+        // GetOwned ниже упала бы NRE. На проде sessions всегда заданы DI,
+        // и null здесь означает «контейнер не собрали» — это и есть отказ.
+        if (sessions is null) return false;
         if (!TryParseRoute(context.RouteTail, out var sessionId))
             return false;
         session = sessions.GetOwned(sessionId, context.OwnerId);
@@ -491,18 +517,39 @@ public sealed class HiggsfieldToolset : IMcpParameterizedToolset
         return Path.Combine(dataDir, SnapshotFileName);
     }
 
-    private IReadOnlyList<McpToolSchema>? LoadSnapshotFromDisk(string path)
+    /// <summary>
+    /// Снимок с диска: новый формат — объект <c>{ savedAt, tools }</c>; старый формат —
+    /// массив инструментов (обратная совместимость, <c>SavedAt</c> в этом случае null).
+    /// Старый формат в конструкторе трактуется как «только что сохранённый» (см. ctor),
+    /// иначе выкатка сломала бы существующие инсталляции до первого успешного tools/list.
+    /// </summary>
+    private sealed class SnapshotSnapshot
     {
-        var loaded = JsonFileStore.Load<List<McpToolSchema>>(path, JsonOpts, log);
-        if (loaded is null || loaded.Count == 0) return null;
-        return loaded;
+        public DateTime? SavedAt { get; set; }
+        public List<McpToolSchema>? Tools { get; set; }
+    }
+
+    private SnapshotSnapshot? LoadSnapshotFromDisk(string path)
+    {
+        var loaded = JsonFileStore.Load<SnapshotSnapshot>(path, JsonOpts, log);
+        if (loaded is null) return null;
+        if (loaded.Tools is { Count: > 0 }) return loaded;
+        // Обратная совместимость: массив напрямую (старый формат).
+        var legacy = JsonFileStore.Load<List<McpToolSchema>>(path, JsonOpts, log);
+        if (legacy is null || legacy.Count == 0) return null;
+        return new SnapshotSnapshot { SavedAt = null, Tools = legacy };
     }
 
     private void SaveSnapshot(IReadOnlyList<McpToolSchema> tools)
     {
         try
         {
-            JsonFileStore.Save(_snapshotPath, tools.ToList(), JsonOpts);
+            var payload = new SnapshotSnapshot
+            {
+                SavedAt = DateTime.UtcNow,
+                Tools = tools.ToList(),
+            };
+            JsonFileStore.Save(_snapshotPath, payload, JsonOpts);
         }
         catch (Exception ex)
         {

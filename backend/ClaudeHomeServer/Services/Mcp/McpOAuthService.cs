@@ -137,19 +137,35 @@ public class McpOAuthService(
             && currentRedirect is not null
             && !string.Equals(storedRedirect, currentRedirect, StringComparison.OrdinalIgnoreCase);
 
-        var clientId = manualClientId ?? (redirectMismatch ? null : Trim(oauth.ClientId));
-        // Сбрасываем секрет вместе с client_id: при redirectMismatch прежний client_id
-        // непригоден, идём в DCR, а новый клиент может оказаться публичным (DCR без
-        // client_secret) — оставшийся ClientSecretRef от старого клиента привёл бы к
-        // отправке чужого секрета в обмене кода. Сейчас не стреляет (Higgsfield —
-        // публичный Clerk-клиент), но логически обязательно держать пары в унисон.
-        var clientSecretRef = (manualClientId is null && redirectMismatch)
+        // Сбрасываем client_id только когда можем его перерегистрировать: при наличии
+        // registration_endpoint у провайдера (DCR) идём в RegisterClientAsync. Если DCR
+        // нет — провайдер сам решает, зарегистрированы ли у него оба адреса возврата;
+        // откатываемся на сохранённый client_id иначе вход сломался бы требованием
+        // «впиши client_id вручную», хотя прежний уже годен (находка ревью Глеба,
+        // задача 39a034c7).
+        var hasDcr = !string.IsNullOrWhiteSpace(endpoints.RegistrationEndpoint);
+        var clientId = manualClientId
+            ?? (redirectMismatch && hasDcr ? null : Trim(oauth.ClientId));
+        // Сбрасываем секрет вместе с client_id: при redirectMismatch идём в DCR, а новый
+        // клиент может оказаться публичным (DCR без client_secret) — оставшийся
+        // ClientSecretRef от старого клиента привёл бы к отправке чужого секрета в обмене
+        // кода. Сейчас не стреляет (Higgsfield — публичный Clerk-клиент), но логически
+        // обязательно держать пары в унисон. Без DCR прежний клиент пригоден — секрет
+        // оставляем.
+        var clientSecretRef = (manualClientId is null && redirectMismatch && hasDcr)
             ? null
             : oauth.ClientSecretRef;
         if (manualClientId is null && redirectMismatch)
-            log.LogWarning(
-                "OAuth-клиент «{Key}» зарегистрирован под «{Old}», запрошен «{New}» — перерегистрация",
-                record.Key, storedRedirect, currentRedirect);
+        {
+            if (hasDcr)
+                log.LogWarning(
+                    "OAuth-клиент «{Key}» зарегистрирован под «{Old}», запрошен «{New}» — перерегистрация",
+                    record.Key, storedRedirect, currentRedirect);
+            else
+                log.LogWarning(
+                    "OAuth-клиент «{Key}» зарегистрирован под «{Old}», запрошен «{New}» — DCR недоступна, пробуем прежний client_id",
+                    record.Key, storedRedirect, currentRedirect);
+        }
         if (Trim(input?.ClientSecret) is { } freshSecret)
             clientSecretRef = secrets.Set(ownerId, freshSecret);
 

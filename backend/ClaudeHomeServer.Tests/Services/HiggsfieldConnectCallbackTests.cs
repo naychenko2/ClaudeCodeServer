@@ -80,18 +80,18 @@ public class HiggsfieldConnectCallbackTests : IDisposable
     }
 
     [Fact]
-    public void NotifyCompletedAsync_StateНеИзPending_NoOp()
+    public void NotifyCompleted_StateНеИзPending_NoOp()
     {
         var (service, _, _) = NewService();
 
-        var result = service.NotifyCompletedAsync("unknown-state");
+        var result = service.NotifyCompleted("unknown-state");
 
         result.Should().BeFalse(
             "чужой или повторный callback не должен ронять состояние или бросать");
     }
 
     [Fact]
-    public async Task NotifyCompletedAsync_StateИзPending_СтавитConnectedИЧиститPending()
+    public async Task NotifyCompleted_StateИзPending_СтавитConnectedИЧиститPending()
     {
         var (service, oauth, registry) = NewService();
         SeedServiceRecordWithOAuth(registry,
@@ -102,16 +102,16 @@ public class HiggsfieldConnectCallbackTests : IDisposable
             "admin-2", oauth.ResolveRedirectUri("http://test:5000"));
 
         // Уведомляем о завершении через общий callback
-        var ok = service.NotifyCompletedAsync(state);
+        var ok = service.NotifyCompleted(state);
 
         ok.Should().BeTrue("pending-запись есть — значит, это наш вход");
         var st = service.LoadState();
-        st.Connected.Should().BeTrue("NotifyCompletedAsync ставит Connected");
+        st.Connected.Should().BeTrue("NotifyCompleted ставит Connected");
         st.AdminOwnerId.Should().Be("admin-2",
             "adminOwnerId берётся из pending, не из claim");
 
         // Повторный вызов с тем же state — no-op, не бросает
-        var again = service.NotifyCompletedAsync(state);
+        var again = service.NotifyCompleted(state);
         again.Should().BeFalse("повторный callback того же входа — pending уже снят");
     }
 

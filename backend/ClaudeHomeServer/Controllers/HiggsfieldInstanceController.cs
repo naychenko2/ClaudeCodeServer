@@ -23,7 +23,8 @@ namespace ClaudeHomeServer.Controllers;
 [Route("api/higgsfield")]
 public class HiggsfieldInstanceController(
     HiggsfieldOAuthService service,
-    McpOAuthService oauth) : ControllerBase
+    McpOAuthService oauth,
+    McpStatusStore statuses) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -109,12 +110,22 @@ public class HiggsfieldInstanceController(
         return Ok(new { ok = true });
     }
 
-    /// <summary>Состояние подключения: { connected, expiresAt? }.</summary>
+    /// <summary>
+    /// Состояние подключения: { connected, expiresAt?, health?, error? }.
+    /// health и error подмешиваются из McpStatusStore (ServiceOwnerId/Key) — иначе
+    /// карточка в UI не видит «Failed» от <see cref="Services.Mcp.Http.HiggsfieldToolset"/>
+    /// и продолжает рисовать зелёный тон на лежащем апстриме (мутация Глеба:
+    /// удаление ResolveStatusOwner/GetByOwnerMerged в UI не сказывалось — значит
+    /// правка закрыла логи и API, но не человека).
+    /// </summary>
     [HttpGet("status")]
     public IActionResult Status()
     {
         var (connected, expiresAt, _) = service.Status();
-        return Ok(new { connected, expiresAt });
+        var entry = statuses.Get(HiggsfieldOAuthService.ServiceOwnerId, HiggsfieldOAuthService.Key);
+        var health = entry?.Status;
+        var error = entry?.Error;
+        return Ok(new { connected, expiresAt, health, error });
     }
 
 }

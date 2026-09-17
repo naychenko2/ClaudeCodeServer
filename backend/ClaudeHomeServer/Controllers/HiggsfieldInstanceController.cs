@@ -10,14 +10,20 @@ namespace ClaudeHomeServer.Controllers;
 /// <summary>
 /// Инстансное подключение Higgsfield: один OAuth-вход админа шарится всеми
 /// пользователями. <see cref="Status"/> доступен любому залогиненному,
-/// <see cref="Connect"/>/<see cref="Disconnect"/> — только admin,
-/// <see cref="Callback"/> — анонимный (провайдер редиректит браузер без JWT).
+/// <see cref="Connect"/>/<see cref="Disconnect"/> — только admin.
+///
+/// Callback: для живого входа провайдер редиректит браузер на общий путь
+/// <c>/api/mcp/oauth/callback</c> (см. <see cref="McpOAuthService.CallbackPath"/>)
+/// и анонимный <see cref="Callback"/> здесь оставлен как LEGACY — на случай, если
+/// у провайдера зарегистрирован старый адрес. Клиент Clerk DCR прибит к общему
+/// пути, и собственный путь Higgsfield не использовать.
 /// </summary>
 [ApiController]
 [Authorize]
 [Route("api/higgsfield")]
 public class HiggsfieldInstanceController(
-    HiggsfieldOAuthService service) : ControllerBase
+    HiggsfieldOAuthService service,
+    McpOAuthService oauth) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -27,7 +33,11 @@ public class HiggsfieldInstanceController(
     public async Task<IActionResult> Connect(CancellationToken ct)
     {
         var origin = $"{Request.Scheme}://{Request.Host}";
-        var redirectUri = $@"{origin}/api/higgsfield/callback";
+        // Единая точка правды про адрес возврата: тот же общий callback, под который
+        // зарегистрирован Clerk DCR-клиент 1RCTtOkycHK7idPi. Свой путь Higgsfield
+        // больше не используем — две точки правды про redirect_uri разъехались
+        // 2026-09-15 и вход падал «redirect_uri does not match any pre-registered url».
+        var redirectUri = oauth.ResolveRedirectUri(origin);
 
         try
         {
@@ -39,7 +49,9 @@ public class HiggsfieldInstanceController(
     }
 
     /// <summary>
-    /// Возврат провайдера. Анонимен намеренно: в редиректе нет ни JWT, ни кук нашего
+    /// LEGACY-возврат провайдера. Оставлен на случай, если у Clerk где-то закеширован
+    /// адрес <c>/api/higgsfield/callback</c> — после полного обновления провайдера
+    /// стоит удалить. Анонимен намеренно: в редиректе нет ни JWT, ни кук нашего
     /// домена. Авторизация — сам state: непредсказуемый, одноразовый, живёт 10 минут.
     /// Отвечает маленькой страницей, которая говорит открывшему окну результат и закрывается.
     /// </summary>

@@ -11,11 +11,19 @@ namespace ClaudeHomeServer.Controllers;
 /// Вход в внешний MCP-сервер по OAuth (волна 7). Отдельно от McpServersController:
 /// callback провайдера обязан быть анонимным — JWT в редиректе не будет, авторизация там
 /// по одноразовому state.
+///
+/// Для инстансного Higgsfield после успешного Complete нужен хук в HiggsfieldOAuthService,
+/// чтобы поставить Connected/AdminOwnerId/ExpiresAt/AuthVersion в data/higgsfield.json.
+/// Higgsfield передаётся nullable: если в контейнере по какой-то причине нет сервиса
+/// (например, в тестах на одного владельца), общий путь всё равно работает.
 /// </summary>
 [ApiController]
 [Authorize]
 [Route("api/mcp")]
-public class McpOAuthController(McpRegistry registry, McpOAuthService oauth) : ControllerBase
+public class McpOAuthController(
+    McpRegistry registry,
+    McpOAuthService oauth,
+    HiggsfieldOAuthService? higgsfield = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -58,6 +66,10 @@ public class McpOAuthController(McpRegistry registry, McpOAuthService oauth) : C
     /// Возврат провайдера. Анонимен намеренно: в редиректе нет ни JWT, ни кук нашего
     /// домена. Авторизация — сам state: непредсказуемый, одноразовый, живёт 10 минут.
     /// Отвечает маленькой страницей, которая говорит открывшему окну результат и закрывается.
+    ///
+    /// После успешного Complete, если это вход инстансного Higgsfield, дёргаем
+    /// HiggsfieldOAuthService.NotifyCompletedAsync — ЕДИНСТВЕННАЯ точка условия
+    /// <c>ServerKey == Key</c> живёт здесь, в Higgsfield-сервисе её нет.
     /// </summary>
     [AllowAnonymous]
     [HttpGet("oauth/callback")]
@@ -71,6 +83,11 @@ public class McpOAuthController(McpRegistry registry, McpOAuthService oauth) : C
         {
             var done = await oauth.CompleteAsync(state, code,
                 arrivedAt: $"{Request.Scheme}://{Request.Host}{McpOAuthService.CallbackPath}", ct: ct);
+            if (higgsfield is not null
+                && string.Equals(done.ServerKey, HiggsfieldOAuthService.Key, StringComparison.OrdinalIgnoreCase))
+            {
+                higgsfield.NotifyCompletedAsync(state);
+            }
             return Page(true, null, done.ServerKey);
         }
         catch (McpOAuthException ex) { return Page(false, ex.Message, null); }

@@ -609,22 +609,23 @@ public sealed class LlamaServerClient : ILocalLlmClient
         return JsonDocument.Parse(ms.ToArray()).RootElement.Clone();
     }
 
-    // Прогрев: холостой вызов с max_tokens:1, чтобы модель загрузилась в память.
-    // Best-effort — ошибки глушим.
-    public async Task WarmUpAsync(CancellationToken ct = default)
+    // Прогрев: холостой вызов с max_tokens:1, чтобы заданная модель загрузилась в память.
+    // null/пусто → дефолтный Model. Best-effort — ошибки глушим.
+    public async Task WarmUpAsync(string? model, CancellationToken ct = default)
     {
         if (!Enabled) return;
+        var target = string.IsNullOrWhiteSpace(model) ? Model : model;
         try
         {
             var client = _http.CreateClient(HttpClientName);
             client.Timeout = TimeSpan.FromSeconds(90);
             await client.PostAsJsonAsync($"{BaseUrl}/v1/chat/completions", new
             {
-                model = Model,
+                model = target,
                 messages = new[] { new { role = "user", content = "ok" } },
                 max_tokens = 1,
             }, ct);
-            _logger.LogInformation("llama-server прогрет: модель {Model}", Model);
+            _logger.LogInformation("llama-server прогрет: модель {Model}", target);
         }
         catch (Exception ex)
         {

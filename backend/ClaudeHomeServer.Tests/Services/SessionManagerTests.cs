@@ -5222,6 +5222,7 @@ public class SessionManagerTests : IDisposable
         public Func<Task>? Gate;
 
         public bool UsesLocal(string actionKey) => false;
+        public bool HasFreeRoute(string actionKey) => false;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "claude";
 
         public async Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
@@ -9979,6 +9980,7 @@ public class SessionManagerTests : IDisposable
     private sealed class StubTitleCheapRunner(bool usesLocal, Func<string> response) : ICheapTextRunner
     {
         public bool UsesLocal(string actionKey) => usesLocal;
+        public bool HasFreeRoute(string actionKey) => false;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "claude";
 
         public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,

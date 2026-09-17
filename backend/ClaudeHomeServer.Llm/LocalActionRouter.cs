@@ -72,6 +72,14 @@ public sealed class LocalActionRouter
 
     public bool OllamaEnabled => _ollama.Enabled;
 
+    // Форвардеры снимка локальной модели — нужны потребителям, которые показывают
+    // настройки движка (UsageController: BaseUrl/ProviderKey для блока OllamaUsageInfo),
+    // но саму модель не вызывают. Раньше они держали `ILocalLlmClient` в конструкторе
+    // и тянули лишний тип в свой namespace — теперь идут через роутер. Сторож границ
+    // ILocalLlmClient поэтому находит только легитимных прямых потребителей.
+    public string LocalBaseUrl => _ollama.BaseUrl;
+    public string LocalProviderKey => _ollama.ProviderKey;
+
     // Начинается ли действие с локальной модели. Требует настроенного Ollama; иначе — нет.
     public bool UsesLocal(string actionKey) =>
         _ollama.Enabled && Resolve(actionKey).Kind == RouteKind.Local;

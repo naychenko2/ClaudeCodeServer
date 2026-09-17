@@ -240,6 +240,7 @@ public class ProjectIconMigrationTests : IDisposable
         public int Calls => Volatile.Read(ref _calls);
 
         public bool UsesLocal(string actionKey) => false;
+        public bool HasFreeRoute(string actionKey) => false;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "claude";
 
         public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,

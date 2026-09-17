@@ -10,6 +10,25 @@ public sealed class CheapTextRunner(
 {
     public bool UsesLocal(string actionKey) => router.UsesLocal(actionKey);
 
+    // Та же проверка, что и первые два шага RunFreeAsync: прямой адаптер → локаль.
+    // Не вызывает — нужно только знать «пройдёт ли», не тратить деньги/время.
+    // Условия (см. CheapTextRunner.RunFreeAsync):
+    //   • direct-модель агрератора — CloudCheapClient.IsDirectRoute;
+    //   • локаль — LocalStepApplies (Kind=Local ИЛИ Kind=Model при DefaultLocal=true)
+    //     И живой ILocalLlmClient.
+    public bool HasFreeRoute(string actionKey)
+    {
+        var route = router.Resolve(actionKey);
+
+        if (route.Kind == RouteKind.Model && !string.IsNullOrWhiteSpace(route.Model)
+            && CloudCheapClient.IsDirectRoute(route.Model))
+        {
+            return true;
+        }
+
+        return LocalStepApplies(actionKey, route.Kind) && ollama.Enabled;
+    }
+
     // Описание маршрута для лога/события: kind + конкретная модель или слот, если это
     // слот/модель. claude/local — без модели (дефолты маршрута). Пример: «model=nemotron:free»,
     // «tier=strong», «claude», «local». Используется из TeamPlanningService — там, где

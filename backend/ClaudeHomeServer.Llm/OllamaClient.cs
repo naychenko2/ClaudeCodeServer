@@ -344,25 +344,26 @@ public sealed class OllamaClient : ILocalLlmClient
             ? new Protocol.UsageInfo(p.GetInt32(), e.GetInt32(), 0, 0)
             : null;
 
-    // Прогрев: холостой вызов, чтобы модель загрузилась в память заранее (keep_alive из конфига).
-    // Best-effort — ошибки глушим.
-    public async Task WarmUpAsync(CancellationToken ct = default)
+    // Прогрев: холостой вызов, чтобы заданная модель загрузилась в память заранее
+    // (keep_alive из конфига). null/пусто → дефолтный Model. Best-effort — ошибки глушим.
+    public async Task WarmUpAsync(string? model, CancellationToken ct = default)
     {
         if (!Enabled) return;
+        var target = string.IsNullOrWhiteSpace(model) ? Model : model;
         try
         {
             var client = _http.CreateClient(HttpClientName);
             client.Timeout = TimeSpan.FromSeconds(90); // холодный старт грузит веса
             await client.PostAsJsonAsync($"{BaseUrl}/api/chat", new
             {
-                model = Model,
+                model = target,
                 stream = false,
                 think = false,
                 keep_alive = _keepAlive,
                 options = new { num_predict = 1 },
                 messages = new[] { new { role = "user", content = "ok" } },
             }, ct);
-            _logger.LogInformation("Ollama прогрет: модель {Model}", Model);
+            _logger.LogInformation("Ollama прогрет: модель {Model}", target);
         }
         catch (Exception ex)
         {

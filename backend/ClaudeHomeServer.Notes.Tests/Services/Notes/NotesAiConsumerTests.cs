@@ -41,6 +41,7 @@ public class NotesAiConsumerTests : IDisposable
     {
         public string? LastOwnerId;
         public bool UsesLocal(string actionKey) => false;
+        public bool HasFreeRoute(string actionKey) => false;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "claude";
 
         public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,

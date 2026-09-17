@@ -312,6 +312,7 @@ public class ProjectBackgroundBackfillTests : IDisposable
         public int MaxConcurrent => Volatile.Read(ref _maxConcurrent);
 
         public bool UsesLocal(string actionKey) => false;
+        public bool HasFreeRoute(string actionKey) => false;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "claude";
 
         public async Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,

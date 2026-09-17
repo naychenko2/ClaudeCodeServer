@@ -122,8 +122,8 @@ namespace ClaudeHomeServer.Services.Llm;
 // Прогрев после Build:
 // - `LlmProviderRegistry` резолвится в Program.cs:~869 для регистрации корней
 //   провайдеров в TranscriptRoots и установки `TranscriptRoots.ProfilesRoot`.
-// - `ILocalLlmClient` резолвится в Program.cs:~912 для фонового прогрева активной
-//   локальной модели.
+// - Прогрев локальной модели делает `LocalLlmWarmupService` (IHostedService
+//   из этой подсистемы, см. Register выше). Условие запуска — внутри сервиса.
 public sealed class LlmSubsystem : IAppSubsystem
 {
     public string Key => "llm";
@@ -186,6 +186,12 @@ public sealed class LlmSubsystem : IAppSubsystem
         // Бесплатное ранжирование действий локальной Ollama для роутинга
         // через LocalActionRouter.
         services.AddSingleton<OllamaActionRankService>();
+
+        // Фоновый прогрев активной локальной LLM (грузим веса в память заранее;
+        // best-effort). Регистрируется IHostedService — раньше жил строкой
+        // в Program.cs и срабатывал на каждом старте безусловно. Условие запуска
+        // (локаль включена И есть маршрут на локаль) — внутри самого сервиса.
+        services.AddGatedHostedService<LocalLlmWarmupService>(config, Key);
 
         // Прямой HTTP-адаптер бесплатных моделей OpenRouter для one-shot задач
         // (второй транспорт рядом с провайдером через claude CLI; модели —

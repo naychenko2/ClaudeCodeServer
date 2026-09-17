@@ -4,7 +4,7 @@ import type { AuthState, NoteDetail, NoteSemanticHit, NoteSummary } from '../../
 import { NewNoteDialog } from './NewNoteDialog';
 import {
   subsystemTabValue, HubHeader, PillSwitch, C, FONT, ISLAND, R, CHAT_MAX_W,
-  api, useNotes, ensureNotesLoaded, existingTitleSet, bumpNotes,
+  api, useNotes, ensureNotesLoaded, existingTitleSet, bumpNotes, isFavorite, FAVORITE_TAG,
   useOnline, OfflineError, createNoteOffline,
   parseHash, navPush, navReplace, getNav,
   Button, IslandScaffold, ConfirmDialog, PageCanvas, ICON_SIZE,
@@ -24,6 +24,7 @@ type Mode = 'notes' | 'graph';
 // --- Чипы-фильтры списка: патчат операторы (tag:/status:) в строке поиска ---
 
 const TAGS_COLLAPSED = 8;   // тегов в свёрнутом виде (остальные — за «+N»)
+const FAVORITE_TOKEN = `tag:${FAVORITE_TAG}`;   // чип «Избранное» — обычный оператор поиска
 
 // Есть ли токен-оператор в запросе (регистронезависимо, по словам)
 function hasToken(query: string, token: string): boolean {
@@ -80,13 +81,16 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   const connectionsBelow = !isMobile && windowWidth < NOTE_CONN_SIDEBAR_MIN;
   const notes = useNotes();
   const online = useOnline();
-  // Теги всех заметок по частоте — чипы-фильтры списка (клик = оператор tag: в поиске)
+  // Теги всех заметок по частоте — чипы-фильтры списка (клик = оператор tag: в поиске).
+  // Тег избранного среди них не показываем: у него свой чип над группой фильтров.
   const allTags = useMemo(() => {
     const counts = new Map<string, number>();
     for (const n of notes)
-      for (const t of n.tags) counts.set(t, (counts.get(t) ?? 0) + 1);
+      for (const t of n.tags)
+        if (t.trim().toLowerCase() !== FAVORITE_TAG) counts.set(t, (counts.get(t) ?? 0) + 1);
     return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'ru'));
   }, [notes]);
+  const favoriteCount = useMemo(() => notes.filter(n => isFavorite(n.tags)).length, [notes]);
   const [tagsExpanded, setTagsExpanded] = useState(false);
   const hasCommentRoots = notes.some(n => n.annotation && !n.annotation.isReply);
   // Режим МОБИЛЬНОЙ ветки: там панелей нет, разделами по-прежнему рулит переключатель.
@@ -310,6 +314,17 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
           )}
         </div>
       )}
+      {/* Избранное — тот же оператор tag:, но чип вынесен из свёрнутой группы фильтров:
+          ради одного клика фича и делалась, за раскрытием «Фильтров» она бы потерялась */}
+      {listMode && favoriteCount > 0 && (
+        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+          <FilterChip
+            on={hasToken(query, FAVORITE_TOKEN)}
+            label={`★ Избранное · ${favoriteCount}`}
+            onClick={() => setQuery(toggleToken(query, FAVORITE_TOKEN))}
+          />
+        </div>
+      )}
       {/* Фильтры списка — свёрнутая группа (бейдж показывает активные, когда закрыта).
           Чипы патчат операторы в строке поиска, текст запроса сохраняется.
           «Теги» — по всем заметкам; «Комментарии» — только заметки-комментарии к документам */}
@@ -410,6 +425,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   const listPane = showSemantic
     ? <SemanticResults hits={semanticHits} selectedId={selectedId} onSelect={selectNote} />
     : <NotesList notes={listed} selectedId={selectedId} onSelect={selectNote} isMobile={isMobile}
+        filtered={results !== null}
         onMoved={(oldId, newId) => { if (selectedId === oldId) { setSelectedId(newId); navReplace({ screen: 'notes', note: newId }); } }}
         onCreateInFolder={(source, folder) => setNewDialog({ source, folder })}
         onDeleted={ids => { if (selectedId && ids.includes(selectedId)) clearNote(); }}

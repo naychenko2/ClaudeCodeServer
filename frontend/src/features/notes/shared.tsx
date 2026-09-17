@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import {
   Search, Plus, Eye, SquarePen, MessageCircle, Share2, StickyNote, Undo2, ExternalLink,
-  Trash2, ArrowLeft, CalendarDays, Folder, FolderOutput, Sparkles, Link2,
+  Trash2, ArrowLeft, CalendarDays, Folder, FolderOutput, Sparkles, Link2, Star,
 } from 'lucide-react';
 import { C, FONT, R, projectColor } from 'aihome_shell/kit';
 
@@ -29,6 +29,9 @@ export const IconCalendarDay = ({ size = 16 }: { size?: number }) => <CalendarDa
 export const IconFolder = ({ size = 14 }: { size?: number }) => <Folder size={size} strokeWidth={2} style={{ flexShrink: 0 }} />;
 export const IconFolderMove = ({ size = 16 }: { size?: number }) => <FolderOutput size={size} strokeWidth={2} style={{ flexShrink: 0 }} />;
 export const IconSparkle = ({ size = 16 }: { size?: number }) => <Sparkles size={size} strokeWidth={2} style={{ flexShrink: 0 }} />;
+// Избранное: залитая звезда — заметка в избранном, контурная — нет
+export const IconStar = ({ size = 16, filled = false }: { size?: number; filled?: boolean }) =>
+  <Star size={size} strokeWidth={2} fill={filled ? 'currentColor' : 'none'} style={{ flexShrink: 0 }} />;
 export const IconLink = ({ size = 16 }: { size?: number }) => <Link2 size={size} strokeWidth={2} style={{ flexShrink: 0 }} />;
 
 // Точка-индикатор источника

@@ -2,10 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, FileText, FolderPlus, MessageCircle, Timer, X } from 'lucide-react';
 import type { NoteSummary } from '../../types';
 import {
-  api, bumpNotes, useNoteFolders, C, FONT, FS, R, SHADOW,
+  api, bumpNotes, isFavorite, toggleFavorite, useNoteFolders, C, FONT, FS, R, SHADOW,
   ICON_SIZE, ConfirmDialog, IconButton, NO_AUTOFILL,
 } from 'aihome_shell/kit';
-import { CollapseGroup, SourceDot, IconFolder, IconFolderMove, IconPencil, IconPlus, IconTrash } from './shared';
+import { CollapseGroup, SourceDot, IconFolder, IconFolderMove, IconPencil, IconPlus, IconStar, IconTrash } from './shared';
 // Форматирует остаток времени от ISO-строки expiresAt
 const expiryTimeLeft = (expiresAt?: string): { label: string; urgent: boolean } | null => {
   if (!expiresAt) return null;
@@ -80,7 +80,7 @@ function buildTree(notes: NoteSummary[], folderPaths: string[] = []): FolderNode
 
 // Список заметок: источники → дерево папок → заметки. Перенос — drag&drop
 // заметки на папку/заголовок источника (в пределах источника).
-export function NotesList({ notes: notesInput, selectedId, onSelect, onMoved, onCreateInFolder, onDeleted, onIdsRemapped, isMobile, sourceFilter, onOpenFileRef }: {
+export function NotesList({ notes: notesInput, selectedId, onSelect, onMoved, onCreateInFolder, onDeleted, onIdsRemapped, isMobile, sourceFilter, onOpenFileRef, filtered }: {
   notes: NoteSummary[];
   selectedId: string | null;
   onSelect: (id: string) => void;
@@ -98,6 +98,9 @@ export function NotesList({ notes: notesInput, selectedId, onSelect, onMoved, on
   onMoved?: (oldId: string, newId: string) => void;
   // «+» на папке: создать заметку сразу в этой папке источника
   onCreateInFolder?: (source: string, folder: string) => void;
+  // Список уже отфильтрован (поиск, чип избранного/тега): пустые физические папки и
+  // источники без результатов не показываем — иначе выдача тонет в пустых ветках
+  filtered?: boolean;
   // Папка удалена вместе с заметками — вызывающий сбрасывает выбор при необходимости
   onDeleted?: (ids: string[]) => void;
   // Папка переименована/перенесена — маппинг id заметок для обновления выбора
@@ -120,6 +123,19 @@ export function NotesList({ notes: notesInput, selectedId, onSelect, onMoved, on
 
   // Свёрнутые папки (ключ source|path); по умолчанию всё раскрыто
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  // Отфильтрованный список живёт со СВОЕЙ свёрткой, пустой на входе: результат поиска
+  // не должен прятаться в свёрнутой руками папке, но и сворачивать в выдаче можно.
+  // Обычная свёртка при этом цела и возвращается со снятием фильтра.
+  const [filterCollapsed, setFilterCollapsed] = useState<Set<string>>(new Set());
+  // Сброс на смене режима — правкой состояния в рендере (не эффектом): лишнего
+  // прохода с устаревшим набором не будет, React перезапустит рендер сразу
+  const [prevFiltered, setPrevFiltered] = useState(filtered);
+  if (prevFiltered !== filtered) {
+    setPrevFiltered(filtered);
+    setFilterCollapsed(new Set());
+  }
+  const collapsedNow = filtered ? filterCollapsed : collapsed;
+  const setCollapsedNow = filtered ? setFilterCollapsed : setCollapsed;
   // Наведённая строка (ключ folder=source|path, note=note.id) — иконки только при ховере
   const [hoveredKey, setHoveredKey] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);   // source|path
@@ -224,8 +240,11 @@ export function NotesList({ notes: notesInput, selectedId, onSelect, onMoved, on
       arr.push(f.path);
       foldersBySrc.set(f.source, arr);
     }
-    // Источник может иметь только пустые папки (без заметок) — показываем и его
-    const keys = new Set<string>([...notesBySrc.keys(), ...foldersBySrc.keys()]);
+    // Источник может иметь только пустые папки (без заметок) — показываем и его.
+    // В отфильтрованном списке наоборот: источник без попаданий скрываем целиком.
+    const keys = new Set<string>(filtered
+      ? notesBySrc.keys()
+      : [...notesBySrc.keys(), ...foldersBySrc.keys()]);
     return [...keys]
       .map(source => {
         const gn = notesBySrc.get(source);
@@ -233,10 +252,12 @@ export function NotesList({ notes: notesInput, selectedId, onSelect, onMoved, on
         const docGroups = [...(docsBySrc.get(source) ?? new Map<string, NoteSummary[]>())]
           .map(([docPath, ns]) => ({ docPath, notes: ns }))
           .sort((a, b) => a.docPath.localeCompare(b.docPath, 'ru'));
-        return { source, label, root: buildTree(gn?.notes ?? [], foldersBySrc.get(source) ?? []), docGroups };
+        // Пустые физические папки подмешиваем только в полном списке
+        const folderPaths = filtered ? [] : (foldersBySrc.get(source) ?? []);
+        return { source, label, root: buildTree(gn?.notes ?? [], folderPaths), docGroups };
       })
       .sort((a, b) => a.source === 'personal' ? -1 : b.source === 'personal' ? 1 : a.label.localeCompare(b.label, 'ru'));
-  }, [notes, folders, srcLabels]);
+  }, [notes, folders, srcLabels, filtered]);
 
   const doMove = async (noteId: string, source: string, folder: string) => {
     const note = notes.find(n => n.id === noteId);
@@ -299,6 +320,7 @@ export function NotesList({ notes: notesInput, selectedId, onSelect, onMoved, on
     const active = n.id === selectedId;
     const hovered = hoveredKey === n.id;
     const exp = expiryTimeLeft(n.expiresAt);
+    const fav = isFavorite(n.tags);
     return (
       <div
         key={n.id}
@@ -355,6 +377,13 @@ export function NotesList({ notes: notesInput, selectedId, onSelect, onMoved, on
                 <FileText size={11} strokeWidth={2.5} />
               </span>
         )}
+        {/* Избранное: у отмеченной звезда видна всегда, у прочих — при ховере */}
+        {(fav || (!isMobile && hovered)) && (
+          <IconButton size="xs" tone={fav ? 'accent' : 'muted'} title={fav ? 'Убрать из избранного' : 'В избранное'}
+            onClick={e => { e.stopPropagation(); void toggleFavorite(n.id); }}>
+            <IconStar filled={fav} />
+          </IconButton>
+        )}
         {/* Действия — только при ховере на десктопе (на мобиле — long-press меню) */}
         {!isMobile && hovered && (
           <IconButton size="xs" tone="danger" title="Удалить заметку"
@@ -410,7 +439,7 @@ export function NotesList({ notes: notesInput, selectedId, onSelect, onMoved, on
 
   const renderFolder = (source: string, node: FolderNode, depth: number): React.ReactNode => {
     const key = `${source}|${node.path}`;
-    const isCollapsed = collapsed.has(key);
+    const isCollapsed = collapsedNow.has(key);
     const isDrop = dropTarget === key;
     const isRenaming = renaming === key;
     const hovered = hoveredKey === key;
@@ -439,7 +468,7 @@ export function NotesList({ notes: notesInput, selectedId, onSelect, onMoved, on
           </div>
         ) : (
         <div
-          onClick={() => setCollapsed(prev => { const next = new Set(prev); if (isCollapsed) next.delete(key); else next.add(key); return next; })}
+          onClick={() => setCollapsedNow(prev => { const next = new Set(prev); if (isCollapsed) next.delete(key); else next.add(key); return next; })}
           onContextMenu={e => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, kind: 'folder', source, node }); }}
           {...longPress((x, y) => setCtxMenu({ x, y, kind: 'folder', source, node }))}
           onMouseEnter={() => setHoveredKey(key)}
@@ -510,13 +539,13 @@ export function NotesList({ notes: notesInput, selectedId, onSelect, onMoved, on
   // удалённый документ — ghost (зачёркнутый путь). Ответы — под корневым комментарием.
   const renderDocGroup = (source: string, dg: DocGroup) => {
     const key = `${source}|doc:${dg.docPath}`;
-    const isCollapsed = collapsed.has(key);
+    const isCollapsed = collapsedNow.has(key);
     const openCount = dg.notes.filter(n => n.annotation?.status === 'open').length;
     const ghost = dg.notes.length > 0 && dg.notes.every(n => n.annotation?.docMissing);
     return (
       <div key={key}>
         <div
-          onClick={() => setCollapsed(prev => { const next = new Set(prev); if (isCollapsed) next.delete(key); else next.add(key); return next; })}
+          onClick={() => setCollapsedNow(prev => { const next = new Set(prev); if (isCollapsed) next.delete(key); else next.add(key); return next; })}
           title={ghost ? `${dg.docPath} — документ удалён` : dg.docPath}
           style={{
             cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6,
@@ -690,13 +719,17 @@ export function NotesList({ notes: notesInput, selectedId, onSelect, onMoved, on
                   {onCreateInFolder && menuItem(<IconPlus />, 'Новая заметка', () => onCreateInFolder(ctxMenu.source, ''))}
                   {menuItem(<IconFolderPlus />, 'Новая папка', () => {
                     const k = `${ctxMenu.source}|`;
-                    setCollapsed(prev => { const n = new Set(prev); n.delete(k); return n; });
+                    setCollapsedNow(prev => { const n = new Set(prev); n.delete(k); return n; });
                     setCreatingFolder(k); setNewFolderValue('');
                   })}
                 </>
               ) : ctxMenu.kind === 'note' ? (
                 <>
                   {menuItem(<IconPencil />, 'Открыть', () => onSelect(ctxMenu.note.id))}
+                  {/* На мобиле ховера нет — избранное переключается только отсюда */}
+                  {menuItem(<IconStar filled={isFavorite(ctxMenu.note.tags)} />,
+                    isFavorite(ctxMenu.note.tags) ? 'Убрать из избранного' : 'В избранное',
+                    () => { void toggleFavorite(ctxMenu.note.id); })}
                   {menuItem(<IconFolderMove />, 'Переместить в...', () => setCtxMenu({ ...ctxMenu, move: true }))}
                   {menuDivider}
                   {menuItem(<IconTrash />, 'Удалить', () => deleteNote(ctxMenu.note), true)}
@@ -706,7 +739,7 @@ export function NotesList({ notes: notesInput, selectedId, onSelect, onMoved, on
                   {onCreateInFolder && menuItem(<IconPlus />, 'Новая заметка', () => onCreateInFolder(ctxMenu.source, ctxMenu.node.path))}
                   {menuItem(<IconFolderPlus />, 'Новая папка', () => {
                     const k = `${ctxMenu.source}|${ctxMenu.node.path}`;
-                    setCollapsed(prev => { const n = new Set(prev); n.delete(k); return n; });   // раскрыть, чтобы ввод был виден
+                    setCollapsedNow(prev => { const n = new Set(prev); n.delete(k); return n; });   // раскрыть, чтобы ввод был виден
                     setCreatingFolder(k); setNewFolderValue('');
                   })}
                   {menuItem(<IconPencil />, 'Переименовать', () => { setRenaming(`${ctxMenu.source}|${ctxMenu.node.path}`); setRenameValue(ctxMenu.node.path); })}

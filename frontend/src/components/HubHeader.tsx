@@ -20,6 +20,7 @@ import { McpServersModal } from '../features/mcp/McpServersModal';
 import { DevicesModal } from '../features/desktop/DevicesModal';
 import { useFeature, FLAGS } from '../lib/featureFlags';
 import { DeployModal } from './DeployModal';
+import { PowerModal } from './PowerModal';
 import { api } from '../lib/api';
 import { subscribeModelProvidersNav } from '../lib/modelProvidersNav';
 import { getUnreadCount, subscribeToNotifications, ensureNotificationsSubscribed, ensureUnreadCountLoaded } from '../lib/notifications';
@@ -70,6 +71,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
   const [showMcpServers, setShowMcpServers] = useState(false);
   const [showDevices, setShowDevices] = useState(false);
   const [showDeploy, setShowDeploy] = useState(false);
+  const [showPower, setShowPower] = useState(false);
   // «Даже компактный ряд табов не влезает в центр таббара» — на планшете
   // переключаем набор с полного (5 разделов) на сокращённый (3 primary + «⋯ Разделы»).
   // Замер делаем сами, по ПОСТОЯННОМУ скрытому эталону полного набора 5 табов —
@@ -188,6 +190,19 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
     let alive = true;
     api.deploy.status()
       .then(s => { if (alive) setDeployEnabled(s.enabled); })
+      .catch(() => { /* нет ответа — считаем, что фичи нет */ });
+    return () => { alive = false; };
+  }, [isAdmin]);
+
+  // Доступно ли управление питанием машины. Условия те же, что у выкатки: фича admin-only и
+  // выключена в конфиге по умолчанию — на чужой машине пункта быть не должно. Спрашиваем ещё и
+  // available: на не-Windows команду отдавать нечем, и пункт был бы кнопкой в никуда.
+  const [powerEnabled, setPowerEnabled] = useState(false);
+  useEffect(() => {
+    if (!isAdmin) return;
+    let alive = true;
+    api.power.status()
+      .then(s => { if (alive) setPowerEnabled(s.enabled && s.available); })
       .catch(() => { /* нет ответа — считаем, что фичи нет */ });
     return () => { alive = false; };
   }, [isAdmin]);
@@ -534,6 +549,8 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
           // Выкатка на бой: админ И включённая в конфиге сервера фича. Одного isAdmin мало —
           // на машине, где своего раннера нет, пункт был бы кнопкой в никуда
           onShowDeploy={isAdmin && deployEnabled ? () => setShowDeploy(true) : undefined}
+          // Питание машины: тот же двойной замок, что и у выкатки
+          onShowPower={isAdmin && powerEnabled ? () => setShowPower(true) : undefined}
           onShowHistory={openHistory}
           historyBadge={historyBadge}
           historyNeverSeen={neverSeen}
@@ -555,6 +572,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
       {showMcpServers && <McpServersModal isAdmin={isAdmin} onClose={() => setShowMcpServers(false)} />}
       {showDevices && <DevicesModal onClose={() => setShowDevices(false)} />}
       {showDeploy && <DeployModal onClose={() => setShowDeploy(false)} />}
+      {showPower && <PowerModal onClose={() => setShowPower(false)} />}
     </div>
   );
 }

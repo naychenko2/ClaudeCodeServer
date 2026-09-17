@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildChatTreeRows, collectDescendants, formatGroupCount, splitChatTreeByRoots, withAncestors } from '../chatTree';
+import { buildChatTreeRows, collectDescendants, formatGroupCount, rootChatForSection, splitChatTreeByRoots, withAncestors } from '../chatTree';
 import type { Session } from '../../types';
 
 // Фабрика минимальной сессии: важны только id/parentSessionId/updatedAt/origin/isPinned
@@ -221,6 +221,43 @@ describe('buildChatTreeRows', () => {
     expect(r.rows.map(x => x.chat.id)).toEqual(['p', 'old', 'new']);
   });
 
+  // У сортировки по созданию понятия «активность поддерева» нет: корень идёт по
+  // собственному createdAt, иначе свежий потомок тянул бы старый корень наверх
+  it('created-newest: корень не всплывает из-за свежего потомка', () => {
+    const r = buildChatTreeRows([
+      mk('oldRoot', { createdAt: '2026-07-01T10:00:00Z', updatedAt: '2026-07-01T10:00:00Z' }),
+      mk('freshKid', {
+        parentSessionId: 'oldRoot',
+        createdAt: '2026-07-30T10:00:00Z', updatedAt: '2026-07-30T10:00:00Z',
+      }),
+      mk('newRoot', { createdAt: '2026-07-20T10:00:00Z', updatedAt: '2026-07-20T10:00:00Z' }),
+    ], { isVisible: all, collapsedIds: none, activeId: null, sortOrder: 'created-newest' });
+    // По активности oldRoot был бы первым (maxActivity поддерева = 30 июля)
+    expect(r.rows.map(x => x.chat.id)).toEqual(['newRoot', 'oldRoot', 'freshKid']);
+  });
+
+  it('created-oldest: корни по возрастанию createdAt, дети — по своему createdAt', () => {
+    const r = buildChatTreeRows([
+      mk('p', { createdAt: '2026-07-05T10:00:00Z' }),
+      mk('kidNew', { parentSessionId: 'p', createdAt: '2026-07-09T10:00:00Z', updatedAt: '2026-07-09T10:00:00Z' }),
+      mk('kidOld', { parentSessionId: 'p', createdAt: '2026-07-06T10:00:00Z', updatedAt: '2026-07-28T10:00:00Z' }),
+      mk('later', { createdAt: '2026-07-25T10:00:00Z' }),
+    ], { isVisible: all, collapsedIds: none, activeId: null, sortOrder: 'created-oldest' });
+    expect(r.rows.map(x => x.chat.id)).toEqual(['p', 'kidOld', 'kidNew', 'later']);
+  });
+
+  it('закреплённый корень первый во всех четырёх режимах сортировки', () => {
+    const chats = [
+      mk('fresh', { createdAt: '2026-07-28T10:00:00Z', updatedAt: '2026-07-28T10:00:00Z' }),
+      mk('pinned', { createdAt: '2026-07-02T10:00:00Z', updatedAt: '2026-07-02T10:00:00Z', isPinned: true }),
+      mk('mid', { createdAt: '2026-07-14T10:00:00Z', updatedAt: '2026-07-14T10:00:00Z' }),
+    ];
+    for (const sortOrder of ['newest', 'oldest', 'created-newest', 'created-oldest'] as const) {
+      const r = buildChatTreeRows(chats, { isVisible: all, collapsedIds: none, activeId: null, sortOrder });
+      expect(r.rows[0].chat.id).toBe('pinned');
+    }
+  });
+
   it('maxActivity строки — максимум updatedAt по поддереву (ключ секций корня)', () => {
     const r = build([
       mk('parent', { updatedAt: '2026-07-20T10:00:00Z' }),
@@ -374,5 +411,31 @@ describe('withAncestors — наследование признака вверх
 
   it('чат, ссылающийся сам на себя, не считается своим предком дважды', () => {
     expect(withAncestors([mk('self', { parentSessionId: 'self' })], new Set(['self']))).toEqual(new Set(['self']));
+  });
+});
+
+describe('rootChatForSection', () => {
+  // Корень старый, ребёнок свежий: maxActivity поддерева = дата ребёнка
+  const chats = [
+    mk('root', { createdAt: '2026-07-01T10:00:00Z', updatedAt: '2026-07-01T10:00:00Z' }),
+    mk('kid', { parentSessionId: 'root', createdAt: '2026-07-09T10:00:00Z', updatedAt: '2026-07-09T10:00:00Z' }),
+  ];
+  const seg = () => splitChatTreeByRoots(build(chats).rows)[0];
+
+  it('по активности корень едет в секцию с датой maxActivity поддерева', () => {
+    for (const order of ['newest', 'oldest'] as const) {
+      const root = rootChatForSection(seg(), order);
+      expect(root.id).toBe('root');
+      expect(root.updatedAt).toBe('2026-07-09T10:00:00.000Z');
+    }
+  });
+
+  it('по созданию едет настоящий корень — дата не подменяется', () => {
+    for (const order of ['created-newest', 'created-oldest'] as const) {
+      const root = rootChatForSection(seg(), order);
+      expect(root).toBe(seg()[0].chat);
+      expect(root.updatedAt).toBe('2026-07-01T10:00:00Z');
+      expect(root.createdAt).toBe('2026-07-01T10:00:00Z');
+    }
   });
 });

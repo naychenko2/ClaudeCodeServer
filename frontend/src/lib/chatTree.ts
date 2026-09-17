@@ -3,7 +3,7 @@
 // 'global' и каждый projectId. Спецификация — docs/design/mockups/chat-list-tree-spec.md.
 import { useEffect, useRef, useState } from 'react';
 import type { Session } from '../types';
-import type { ChatSortOrder } from './chatFilters';
+import { sortKeyOf, type ChatSortOrder } from './chatFilters';
 
 const COLLAPSE_KEY_PREFIX = 'cc_chat_tree_collapsed:';
 
@@ -181,7 +181,14 @@ export function buildChatTreeRows(
     bgWorkIds?: ReadonlySet<string>;
   },
 ): ChatTreeResult {
-  const dir = opts.sortOrder === 'oldest' ? 1 : -1;
+  const { field, dir } = sortKeyOf(opts.sortOrder ?? 'newest');
+  // Ключ сортировки узла. По активности корни идут по maxActivity поддерева (корень
+  // с живым ребёнком не тонет в старых днях), а у сортировки ПО СОЗДАНИЮ понятия
+  // «создание поддерева» нет вовсе — там ключ строго собственный createdAt узла,
+  // иначе свежий потомок тянул бы старый корень наверх.
+  const byCreated = field === 'createdAt';
+  const chatTs = (c: Session) => new Date(c[field]).getTime();
+  const nodeKey = (n: TreeNode) => (byCreated ? chatTs(n.chat) : n.maxActivity);
   const byId = new Map(chats.map(c => [c.id, c]));
   const childrenOf = new Map<string, Session[]>();
   const topCandidates: Session[] = [];
@@ -201,7 +208,7 @@ export function buildChatTreeRows(
     visited.add(chat.id);
     const kids = (childrenOf.get(chat.id) ?? [])
       .filter(k => !visited.has(k.id))
-      .sort((a, b) => dir * (activity(a) - activity(b)))
+      .sort((a, b) => dir * (chatTs(a) - chatTs(b)))
       .map(buildNode);
     return {
       chat,
@@ -247,11 +254,11 @@ export function buildChatTreeRows(
   };
   const roots = filterForest(topNodes);
 
-  // Закреплённые корни сверху (без группового заголовка), дальше — по активности
-  // поддерева в направлении sortOrder
+  // Закреплённые корни сверху (без группового заголовка), дальше — по ключу узла
+  // (активность поддерева либо собственное создание) в направлении sortOrder
   roots.sort((a, b) => {
     const pin = Number(b.chat.isPinned ?? false) - Number(a.chat.isPinned ?? false);
-    return pin !== 0 ? pin : dir * (a.maxActivity - b.maxActivity);
+    return pin !== 0 ? pin : dir * (nodeKey(a) - nodeKey(b));
   });
 
   let renderedCount = 0;
@@ -332,4 +339,19 @@ export function splitChatTreeByRoots(rows: ChatTreeRowData[]): ChatTreeRowData[]
     else segments[segments.length - 1].push(row);
   }
   return segments;
+}
+
+/**
+ * Что подать секционеру (groupChats/groupByTags работают по Session) за корень сегмента.
+ * При сортировке ПО АКТИВНОСТИ корень попадает в дневную секцию по maxActivity поддерева
+ * (корень с живым ребёнком не тонет в старых днях) — отдаём синтетическую сессию с
+ * подменённой датой. При сортировке ПО СОЗДАНИЮ подмена увела бы корень в чужой день:
+ * понятия «создание поддерева» нет, и там едет настоящая сессия корня с её createdAt.
+ * Точка ОДНА на оба списка (ChatList и SessionList) — разъехавшиеся копии дали бы
+ * глобальному и проектному спискам разные оси секционирования.
+ */
+export function rootChatForSection(seg: ChatTreeRowData[], sortOrder: ChatSortOrder): Session {
+  const root = seg[0];
+  if (sortKeyOf(sortOrder).field === 'createdAt') return root.chat;
+  return { ...root.chat, updatedAt: new Date(root.maxActivity).toISOString() } as Session;
 }

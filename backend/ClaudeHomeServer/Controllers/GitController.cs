@@ -30,14 +30,22 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         return s.WorktreePath ?? p.RootPath;
     }
 
-    // Креды Forgejo владельца проекта — для push/pull/fetch по HTTP (null — без кред,
-    // git попробует анонимно/системный helper, публичные remote так тоже работают)
-    private GitCredentials? CredsFor(Models.Project p)
+    // Креды Forgejo владельца проекта — для push/pull/fetch по HTTP, и ТОЛЬКО на свой Forgejo
+    // (адрес origin проверяется по Forgejo:BaseUrl). Чужому серверу пара логин-токен не подойдёт,
+    // а подстановка заодно гасит системные credential helper'ы: публикация на введённый вручную
+    // github упёрлась бы в 401 без шанса спросить настоящий токен. null — без кред, git
+    // попробует системный helper/анонимно (публичные remote так тоже работают).
+    private async Task<GitCredentials?> CredsFor(Models.Project p, CancellationToken ct)
     {
         var owner = p.OwnerId is null ? null : users.GetById(p.OwnerId);
-        return owner is { ForgejoUsername: { Length: > 0 } u, ForgejoToken: { Length: > 0 } t }
-            ? new GitCredentials(u, t)
-            : null;
+        if (owner is not { ForgejoUsername: { Length: > 0 } u, ForgejoToken: { Length: > 0 } t })
+            return null;
+        // Адрес берём у КОРНЯ проекта: worktree чата делит с ним общий .git.
+        // Проверяем ОБА адреса: push уходит по remote.origin.pushurl, если он задан, и в
+        // принесённом извне .git/config fetch ведёт на свой Forgejo, а push — на чужой сервер.
+        var fetchUrl = await git.GetRemoteUrlAsync(Owner(p), p.RootPath, ct: ct);
+        var pushUrl = await git.GetRemoteUrlAsync(Owner(p), p.RootPath, push: true, ct: ct);
+        return gitServer.OwnsUrl(fetchUrl) && gitServer.OwnsUrl(pushUrl) ? new GitCredentials(u, t) : null;
     }
 
     // Проект текущего пользователя; чужой/несуществующий → 404 (как в FilesController)
@@ -354,9 +362,9 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
                 {
                     var fresh = await git.StatusAsync(Owner(p), RootFor(p), ct);
                     if (fresh.Upstream is null && fresh.Branch is not null)
-                        await git.PushSetUpstreamAsync(Owner(p), RootFor(p), fresh.Branch, CredsFor(p), ct);
+                        await git.PushSetUpstreamAsync(Owner(p), RootFor(p), fresh.Branch, await CredsFor(p, ct), ct);
                     else
-                        await git.PushAsync(Owner(p), RootFor(p), CredsFor(p), ct);
+                        await git.PushAsync(Owner(p), RootFor(p), await CredsFor(p, ct), ct);
                 }
                 catch { /* push best-effort — сохранение важнее */ }
             }
@@ -496,11 +504,11 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
 
     [HttpPost("fetch")]
     public Task<IActionResult> Fetch(string projectId, CancellationToken ct) =>
-        Mutate(projectId, (p) => git.FetchAsync(Owner(p), RootFor(p), CredsFor(p), ct));
+        Mutate(projectId, async (p) => await git.FetchAsync(Owner(p), RootFor(p), await CredsFor(p, ct), ct));
 
     [HttpPost("pull")]
     public Task<IActionResult> Pull(string projectId, CancellationToken ct) =>
-        Mutate(projectId, (p) => git.PullAsync(Owner(p), RootFor(p), CredsFor(p), ct));
+        Mutate(projectId, async (p) => await git.PullAsync(Owner(p), RootFor(p), await CredsFor(p, ct), ct));
 
     [HttpPost("push")]
     public async Task<IActionResult> Push(string projectId, CancellationToken ct)
@@ -511,9 +519,9 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
             var status = await git.StatusAsync(Owner(p), RootFor(p), ct);
             // Ветка без upstream (первый push) — сразу с -u origin <branch>
             if (status.Upstream is null && status.Branch is not null)
-                await git.PushSetUpstreamAsync(Owner(p), RootFor(p), status.Branch, CredsFor(p), ct);
+                await git.PushSetUpstreamAsync(Owner(p), RootFor(p), status.Branch, await CredsFor(p, ct), ct);
             else
-                await git.PushAsync(Owner(p), RootFor(p), CredsFor(p), ct);
+                await git.PushAsync(Owner(p), RootFor(p), await CredsFor(p, ct), ct);
             await NotifyChanged(projectId);
             return Ok(await git.StatusAsync(Owner(p), RootFor(p), ct));
         }
@@ -535,7 +543,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
             // Ветку и наличие upstream резолвим ДО SyncAsync: внутри он держит лок репозитория,
             // а чтение статуса лока не берёт (иначе — самоблокировка)
             var status = await git.StatusAsync(Owner(p), root, ct);
-            await git.SyncAsync(Owner(p), root, status.Branch, status.Upstream is not null, CredsFor(p), ct);
+            await git.SyncAsync(Owner(p), root, status.Branch, status.Upstream is not null, await CredsFor(p, ct), ct);
             await NotifyChanged(projectId);
             return Ok(await git.StatusAsync(Owner(p), root, ct));
         }
@@ -556,14 +564,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
             var p = GetProject(projectId);
             // Инициализация — всегда про КОРЕНЬ проекта, worktree-чата здесь быть не может
             await git.InitAsync(Owner(p), p.RootPath, ct);
-            string? htmlUrl = null;
-            if (gitServer.Enabled && p.OwnerId is not null && users.GetById(p.OwnerId) is { } owner)
-            {
-                var repo = await gitServer.CreateRepoAsync(owner.Id, owner.Username, p.Name, p.Id, ct);
-                await git.SetRemoteAsync(Owner(p), p.RootPath, repo.CloneUrl, ct);
-                projects.UpdateGitSettings(p.Id, remoteUrl: repo.CloneUrl);
-                htmlUrl = repo.HtmlUrl;
-            }
+            var htmlUrl = await CreateServerRepoAsync(p, ct);
             await NotifyChanged(projectId);
             return Ok(new { status = await git.StatusAsync(Owner(p), p.RootPath, ct), htmlUrl });
         }
@@ -571,21 +572,86 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
     }
 
+    // Репозиторий на встроенном Forgejo + подключение origin — общая ветка /git/init и
+    // /git/remote/server (дублировать её нельзя: обе меняют и git-конфиг, и настройку проекта).
+    // null — Forgejo не настроен либо владельца проекта нет (репозиторий заводится под него).
+    private async Task<string?> CreateServerRepoAsync(Models.Project p, CancellationToken ct)
+    {
+        if (!gitServer.Enabled || p.OwnerId is null || users.GetById(p.OwnerId) is not { } owner)
+            return null;
+        var repo = await gitServer.CreateRepoAsync(owner.Id, owner.Username, p.Name, p.Id, ct);
+        await git.SetRemoteAsync(Owner(p), p.RootPath, repo.CloneUrl, ct);
+        projects.UpdateGitSettings(p.Id, remoteUrl: repo.CloneUrl);
+        return repo.HtmlUrl;
+    }
+
     // Данные remote для UI: настроен ли Forgejo, подключён ли origin, deep-link
     [HttpGet("remote")]
-    public IActionResult Remote(string projectId)
+    public async Task<IActionResult> Remote(string projectId, CancellationToken ct)
+    {
+        try { return Ok(await RemoteInfoAsync(GetProject(projectId), ct)); }
+        catch (KeyNotFoundException) { return NotFound(); }
+    }
+
+    // Ответ /git/remote — одна форма на GET и обе мутации origin.
+    // originUrl — ФАКТИЧЕСКИЙ origin репозитория; remoteUrl — настройка проекта, и она пуста,
+    // если origin подключали руками мимо продукта. По originUrl UI решает, предлагать ли
+    // подключение удалённого репозитория.
+    private async Task<object> RemoteInfoAsync(Models.Project p, CancellationToken ct)
+    {
+        var owner = p.OwnerId is null ? null : users.GetById(p.OwnerId);
+        // clone URL (внутренний, напр. localhost:3005) → публичная веб-ссылка (PublicUrl)
+        var htmlUrl = p.GitRemoteUrl is not null && owner?.ForgejoUsername is not null
+            ? gitServer.ToPublicHtmlUrl(p.GitRemoteUrl)
+            : null;
+        var originUrl = await git.GetRemoteUrlAsync(Owner(p), p.RootPath, ct: ct);
+        return new
+        {
+            serverEnabled = gitServer.Enabled, remoteUrl = p.GitRemoteUrl, originUrl, htmlUrl,
+            autoCommit = p.GitAutoCommit, autoPush = p.GitAutoPush,
+        };
+    }
+
+    // Подключить/обновить origin вручную введённым адресом. Всегда про КОРЕНЬ проекта:
+    // worktree чата делит с ним общий .git, своего origin у него нет.
+    [HttpPost("remote")]
+    public async Task<IActionResult> SetRemote(string projectId, [FromBody] GitSetRemoteRequest body, CancellationToken ct)
     {
         try
         {
             var p = GetProject(projectId);
-            var owner = p.OwnerId is null ? null : users.GetById(p.OwnerId);
-            // clone URL (внутренний, напр. localhost:3005) → публичная веб-ссылка (PublicUrl)
-            var htmlUrl = p.GitRemoteUrl is not null && owner?.ForgejoUsername is not null
-                ? gitServer.ToPublicHtmlUrl(p.GitRemoteUrl)
-                : null;
-            return Ok(new { serverEnabled = gitServer.Enabled, remoteUrl = p.GitRemoteUrl, htmlUrl, autoCommit = p.GitAutoCommit, autoPush = p.GitAutoPush });
+            var url = (body.Url ?? "").Trim();
+            // Пробелы и управляющие символы в адресе — мусор, а ведущий «-» уехал бы в git
+            // как флаг команды
+            if (url.Length == 0 || url.StartsWith('-')
+                || url.Any(ch => char.IsWhiteSpace(ch) || char.IsControl(ch)))
+                return BadRequest(new { error = "Некорректный адрес репозитория" });
+
+            await git.SetRemoteAsync(Owner(p), p.RootPath, url, ct);
+            projects.UpdateGitSettings(p.Id, remoteUrl: url);
+            await NotifyChanged(projectId);
+            return Ok(await RemoteInfoAsync(p, ct));
         }
         catch (KeyNotFoundException) { return NotFound(); }
+        catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
+    }
+
+    // Завести репозиторий на встроенном Forgejo для уже инициализированной репы и подключить
+    // его как origin (у /git/init это делается заодно с созданием репозитория)
+    [HttpPost("remote/server")]
+    public async Task<IActionResult> CreateServerRepo(string projectId, CancellationToken ct)
+    {
+        try
+        {
+            var p = GetProject(projectId);
+            if (!gitServer.Enabled) return Conflict(new { error = "Forgejo не настроен" });
+            if (await CreateServerRepoAsync(p, ct) is null)
+                return Conflict(new { error = "Не удалось создать репозиторий: у проекта нет владельца" });
+            await NotifyChanged(projectId);
+            return Ok(await RemoteInfoAsync(p, ct));
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
     }
 
     // Режим документов: авто-commit (и опционально push) после каждого хода Claude
@@ -631,6 +697,8 @@ public record GitStashRequest(string? Message = null);
 public record GitAutoCommitRequest(bool Enabled, bool Push = false);
 public record GitCommitRequest(string Message, bool Amend = false);
 public record GitCheckoutRequest(string Branch);
+// Адрес удалённого репозитория, введённый человеком (валидация — в SetRemote)
+public record GitSetRemoteRequest(string? Url);
 public record GitCreateBranchRequest(string Name, string? From = null);
 // Оба уровня промпта + активный: Global → User (всегда), Project → override при UseProject
 public record GitCommitPromptRequest(string? Global, string? Project, bool UseProject);

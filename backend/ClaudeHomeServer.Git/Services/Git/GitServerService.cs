@@ -26,13 +26,50 @@ public sealed class GitServerService(IConfiguration config, IHttpClientFactory h
     /// <summary>
     /// Публичная веб-ссылка из clone-URL: внутренний хост (BaseUrl, напр. localhost:3005)
     /// заменяется на PublicUrl (домен), суффикс .git срезается. Чужой remote — как есть без .git.
+    /// Граница та же, что у кред (MatchesOrigin): голого строкового префикса мало — под
+    /// «http://localhost:3005» подошёл бы чужой «http://localhost:30051/…» и получил бы в
+    /// отображаемой ссылке наш хост.
     /// </summary>
     public string ToPublicHtmlUrl(string cloneUrl)
     {
         var noGit = cloneUrl.EndsWith(".git", StringComparison.OrdinalIgnoreCase) ? cloneUrl[..^4] : cloneUrl;
-        if (BaseUrl.Length > 0 && noGit.StartsWith(BaseUrl, StringComparison.OrdinalIgnoreCase))
+        if (MatchesOrigin(noGit, BaseUrl) && noGit.StartsWith(BaseUrl, StringComparison.OrdinalIgnoreCase))
             return PublicUrl + noGit[BaseUrl.Length..];
         return noGit;
+    }
+
+    /// <summary>
+    /// Адрес ведёт на ЭТОТ Forgejo? По нему решается, подставлять ли к remote-операции пару
+    /// логин-токен владельца: чужому адресу она не подойдёт, а вместе с ней гасится цепочка
+    /// системных credential helper'ов — публикация на сторонний сервер упёрлась бы в 401
+    /// без шанса спросить настоящий токен. Forgejo не настроен (пустой BaseUrl) — всегда false.
+    /// Сверяются ОБА адреса: внутренний BaseUrl (по нему собран clone URL) и публичный PublicUrl —
+    /// именно его человек видит в кнопке «Открыть в Forgejo» и вводит руками в диалоге публикации.
+    /// </summary>
+    public bool OwnsUrl(string? url) =>
+        url is not null && (MatchesOrigin(url, BaseUrl) || MatchesOrigin(url, PublicUrl));
+
+    /// <summary>
+    /// Совпадение адреса с нашим по схеме, хосту, порту и префиксу пути (Forgejo может стоять
+    /// за реверс-прокси на /git). Строкового префикса тут МАЛО: «https://git.example.com»
+    /// начинает и чужой «https://git.example.com.attacker.net/repo.git», а «http://localhost:3000» —
+    /// любой «http://localhost:30001/…», и токен с правом записи уехал бы в Basic-заголовке
+    /// на посторонний хост.
+    /// </summary>
+    private static bool MatchesOrigin(string url, string origin)
+    {
+        if (origin.Length == 0) return false;
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var u)) return false;
+        if (!Uri.TryCreate(origin, UriKind.Absolute, out var o)) return false;
+        if (!string.Equals(u.Scheme, o.Scheme, StringComparison.OrdinalIgnoreCase)) return false;
+        if (!string.Equals(u.Host, o.Host, StringComparison.OrdinalIgnoreCase)) return false;
+        if (u.Port != o.Port) return false;   // порт эффективный: у http/https подставлен дефолтный
+
+        var basePath = o.AbsolutePath.TrimEnd('/');
+        if (basePath.Length == 0) return true;
+        var path = u.AbsolutePath.TrimEnd('/');
+        return string.Equals(path, basePath, StringComparison.OrdinalIgnoreCase)
+            || path.StartsWith(basePath + "/", StringComparison.OrdinalIgnoreCase);
     }
 
     private HttpClient Client()

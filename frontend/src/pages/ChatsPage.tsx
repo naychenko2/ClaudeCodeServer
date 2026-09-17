@@ -375,31 +375,18 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
       // Дудл-фон и на мобиле: виден под лентой чата и в пустых состояниях
       <PageCanvas>
         {activeChat ? (
-          // Чат + сессионная рельса в ОДНОЙ строке: рельса — flex-сосед справа
-          // (сам пейн колоночный, без row-обёртки рельса встала бы под чатом)
-          <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden', position: 'relative' }}>
-            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-              <ChatPanel
-                key={activeChat.id}
-                session={activeChat}
-                onChatDeleted={handleChatDeleted}
-                isMobile
-                onBack={backToList}
-                skills={skills}
-                attachedFiles={attachedFiles}
-                onAttachedFilesChange={setAttachedFiles}
-                onSessionUpdated={handleChatEdited}
-                onWorkflowRunning={handleWorkflowRunning}
-              />
-            </div>
-            <PanelZone
-              side="right"
-              allowedKeys={SESSION_KEYS}
-              hideWhenEmpty
-              compact
-              panelStack={chatPanels}
-              panels={{}}
-              sessionPanels={sessionPanels}
+          <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
+            <ChatPanel
+              key={activeChat.id}
+              session={activeChat}
+              onChatDeleted={handleChatDeleted}
+              isMobile
+              onBack={backToList}
+              skills={skills}
+              attachedFiles={attachedFiles}
+              onAttachedFilesChange={setAttachedFiles}
+              onSessionUpdated={handleChatEdited}
+              onWorkflowRunning={handleWorkflowRunning}
             />
           </div>
         ) : (

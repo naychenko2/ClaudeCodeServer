@@ -9,9 +9,7 @@ import { GitCommitView } from '../components/GitCommitView';
 import { GitChangesRail } from '../components/GitChangesRail';
 import { VideoPanel } from '../features/video/VideoPanel';
 import { useVideoPlaying } from '../lib/videoStage';
-import { PanelZone } from './workspace/PanelZone';
-import { useSessionPanels } from './workspace/useSessionPanels';
-import { SESSION_KEYS, type PanelKey, type RailBadgeInfo } from './workspace/panelCatalog';
+import { type PanelKey, type RailBadgeInfo } from './workspace/panelCatalog';
 import { KnowledgePanel } from '../components/KnowledgePanel';
 import { ModelsSpendModal } from '../features/modelsSpend/ModelsSpendModal';
 import { ProjectIntroCard } from '../features/projects/ProjectIntroCard';
@@ -981,11 +979,6 @@ const windowWidth = useWindowWidth();
     void buildCodeGraph(project.id);
   }, [project.id]);
 
-  // Панели сессии: контент — для МОБИЛЬНОЙ ветки (десктоп собирает свой в
-  // DesktopWorkspace). Фильтр «только файлы чата» панели «Изменений» сюда больше
-  // не ходит — GitChangesRail берёт myChangedPaths из git-стора сам.
-  const sessionPanels = useSessionPanels(activeSession, project.id, project.rootPath);
-
   const handleSelectSession = (session: Session, firstMessage?: string, autoSelect?: boolean) => {
     setActiveSession(session);
     setPendingMessage(firstMessage);
@@ -1758,13 +1751,7 @@ const windowWidth = useWindowWidth();
                 : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: C.textMuted, fontSize: 14 }}>Выберите задачу</div>)
             : activeSession
             ? (
-              // Чат + сессионная рельса в одной строке (пейн колоночный — нужна row-обёртка)
-              <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
-                <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                  <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} onOpenReader={handleOpenReader} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onBack={backFromChat} onWorkflowRunning={handleWorkflowRunning} skills={composerSkills} agents={skillsData?.agents} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} onChatDeleted={handleClearSession} contextBar={contextChipsMobile} />
-                </div>
-                <PanelZone side="right" allowedKeys={SESSION_KEYS} hideWhenEmpty compact panels={{}} sessionPanels={sessionPanels} />
-              </div>
+              <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} onOpenReader={handleOpenReader} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onBack={backFromChat} onWorkflowRunning={handleWorkflowRunning} skills={composerSkills} agents={skillsData?.agents} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} onChatDeleted={handleClearSession} contextBar={contextChipsMobile} />
             )
             : NoSession
           }

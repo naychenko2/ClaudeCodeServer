@@ -364,6 +364,82 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
         Norm(await File.ReadAllTextAsync(Path.Combine(_repo, "a.txt"))).Should().Be(before);
     }
 
+    // Без origin «неопубликовано» = вся история ветки: иначе кнопка публикации не появилась
+    // бы вовсе и подключить удалённый репозиторий из интерфейса было бы неоткуда
+    [Fact]
+    public async Task Unpushed_Без_Origin_Считает_Всю_Историю_Ветки()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_repo, "c.txt"), "c\n");
+        await _git.StageAllAsync(null, _repo);
+        await _git.CommitAsync(null, _repo, "второй коммит");
+
+        var unpushed = await _git.UnpushedLogAsync(null, _repo);
+
+        unpushed.Should().HaveCount(2);
+        unpushed[0].Subject.Should().Be("второй коммит");
+    }
+
+    // Поднять bare-«сервер» и опубликовать в него main: origin живой, вся история — на сервере
+    private async Task SetupPublishedOriginAsync()
+    {
+        var bare = Path.Combine(Path.GetTempPath(), "gitsvc_bare_" + Guid.NewGuid().ToString("N"));
+        _extraDirs.Add(bare);
+        await RawGitIn(Path.GetTempPath(), "init", "--bare", "-b", "main", bare);
+        await RawGit("remote", "add", "origin", bare);
+        await RawGit("push", "-u", "origin", "main");
+    }
+
+    // Новая ветка ещё не отслеживает ничего, и origin/<branch> для неё не существует —
+    // «неопубликовано» это ровно её собственные коммиты, а не вся история от корня
+    [Fact]
+    public async Task Unpushed_Новая_Ветка_Без_Upstream_Считает_Только_Свои_Коммиты()
+    {
+        await SetupPublishedOriginAsync();
+        await RawGit("checkout", "-b", "feature");
+        await File.WriteAllTextAsync(Path.Combine(_repo, "f.txt"), "f\n");
+        await _git.StageAllAsync(null, _repo);
+        await _git.CommitAsync(null, _repo, "коммит в ветке");
+
+        var unpushed = await _git.UnpushedLogAsync(null, _repo);
+
+        // Ровно один коммит: ContainSingle(предикат) фильтрует коллекцию и прошёл бы
+        // и на всей истории — регресс «весь HEAD» ловится только счётом
+        unpushed.Should().HaveCount(1);
+        unpushed[0].Subject.Should().Be("коммит в ветке");
+    }
+
+    // Detached HEAD имени ветки не даёт вовсе: все коммиты уже на origin — публиковать нечего
+    [Fact]
+    public async Task Unpushed_В_Detached_HEAD_Пуст_При_Живом_Origin()
+    {
+        await SetupPublishedOriginAsync();
+        await RawGit("checkout", "--detach", "HEAD");
+
+        (await _git.UnpushedLogAsync(null, _repo)).Should().BeEmpty();
+    }
+
+    // Пустой репозиторий: HEAD не резолвится, но список должен быть пустым, а не падать
+    [Fact]
+    public async Task Unpushed_В_Репозитории_Без_Коммитов_Пуст()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "gitsvc_empty_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        _extraDirs.Add(dir);
+        await _git.InitAsync(null, dir);
+
+        (await _git.UnpushedLogAsync(null, dir)).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetRemoteUrl_Отдаёт_Null_Без_Origin_И_Адрес_После_SetRemote()
+    {
+        (await _git.GetRemoteUrlAsync(null, _repo)).Should().BeNull();
+
+        await _git.SetRemoteAsync(null, _repo, "https://example.test/repo.git");
+
+        (await _git.GetRemoteUrlAsync(null, _repo)).Should().Be("https://example.test/repo.git");
+    }
+
     [Fact]
     public async Task Push_Без_Remote_Даёт_Понятную_Ошибку()
     {

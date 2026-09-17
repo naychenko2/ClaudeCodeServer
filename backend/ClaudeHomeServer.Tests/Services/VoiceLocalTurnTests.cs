@@ -191,6 +191,24 @@ public class VoiceLocalTurnTests : IDisposable
     }
 
     [Fact]
+    public async Task ЛокальныйХод_ВАрхивномЧате_ВозвращаетЕгоИзАрхива()
+    {
+        // Локальный ход идёт мимо адаптера, а тот — единственный, кто ставит отметку
+        // активности у CLI-ветки. Без явной записи в SendDirectAsync архивный голосовой
+        // чат остался бы в архиве: смену статуса гейтит ApplyStatusAsync
+        var session = await MakeVoiceChatAsync();
+        session.UpdatedAt = DateTime.UtcNow.AddMinutes(-5);
+        _sut.SetArchived(session.Id, archived: true, by: "user");
+        session.IsArchived.Should().BeTrue();
+        _ollamaHttp.NextResponse = """{"message":{"role":"assistant","content":"Слушаю."},"prompt_eval_count":5,"eval_count":2}""";
+
+        await _sut.SendMessageAsync(session.Id, "привет", []);
+        await WaitForAsync(() => Sent<ExitedMessage>(), TimeSpan.FromSeconds(5));
+
+        session.IsArchived.Should().BeFalse("сообщение в чат — активность, она снимает архив сама");
+    }
+
+    [Fact]
     public async Task ЛокальныйХод_ИдётПотокомИОтдаётКускиПоПредложениям()
     {
         // Ради озвучки: первый кусок ответа должен уходить в ленту ДО конца генерации,

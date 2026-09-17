@@ -2,7 +2,8 @@ import { useEffect, useRef, useState, lazy, Suspense } from 'react';
 import { Check, Copy, FileText, MessageCircle, Undo2, X } from 'lucide-react';
 import type { NoteDetail, NoteReply, Persona } from '../../types';
 import {
-  api, bumpNotes, useNotesVersion, C, FONT, ISLAND, R, TB,
+  api, bumpNotes, useNotesVersion, isFavorite, withFavoriteTag, withoutFavoriteTag,
+  C, FONT, ISLAND, R, TB,
   MarkdownViewer, stripFrontmatter, BackButton, ConfirmDialog, IconButton, Modal, WaitingIndicator,
   useAiJob, runAiJob, patchAiJobResult, resetAiJob, ICON_SIZE, ICON_STROKE,
   tbBtnPrimary, tbBtnGhost, useNotes, useOnline, OfflineError, useNow,
@@ -17,7 +18,7 @@ import { NoteTasksSection } from './NoteTasksSection';
 import { DocCommentedMarkdown, PersonaAssignMenu, filterAssignablePersonas } from './DocComments';
 import {
   SourceBadge,
-  IconTrash, IconLink, IconSparkle, IconFolder, IconFolderMove,
+  IconTrash, IconLink, IconSparkle, IconFolder, IconFolderMove, IconStar,
 } from './shared';
 
 // CodeMirror тяжёлый — редактор грузим лениво, только при входе в правку
@@ -233,6 +234,13 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
     const updated = await api.notes.update(note.id, { content });
     setNote(updated);
     patchAiJobResult<{ title: string; why: string }[]>(linksKey, prev => prev.filter(l => l.title !== title));
+    bumpNotes();
+  };
+  // Избранное — тот же тег в тексте: тело уже загружено, дочитывать не надо
+  const toggleFav = async () => {
+    if (!note) return;
+    const content = isFavorite(note.tags) ? withoutFavoriteTag(note.content) : withFavoriteTag(note.content);
+    setNote(await api.notes.update(note.id, { content }));
     bumpNotes();
   };
   // Принять тег (ИИ-предложение или ручной ввод): inline #тег в конец заметки
@@ -489,6 +497,10 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
           ) : (
             <>
               {/* AI-действия (связи, теги, конспект дня, «спросить Claude») — только через AI-палитру (⌘/Ctrl+K) */}
+              <IconButton title={isFavorite(note.tags) ? 'Убрать из избранного' : 'В избранное'}
+                tone={isFavorite(note.tags) ? 'accent' : undefined} onClick={() => { void toggleFav(); }}>
+                <IconStar size={ICON_SIZE.sm} filled={isFavorite(note.tags)} />
+              </IconButton>
               <IconButton title={copied ? 'Скопировано' : 'Скопировать Markdown (Shift — с форматированием)'} onClick={copyNote}>
                 {copied ? <Check size={ICON_SIZE.sm} color={C.success} strokeWidth={2.5} /> : <Copy size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
               </IconButton>
@@ -768,6 +780,10 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
                 panelBelow={isMobile || connectionsBelow}
                 panelTarget={!isMobile && !connectionsBelow ? panelEl : null}
                 deferPanel={!isMobile && !connectionsBelow}
+                // Сайдбар связей плавает справа, текст обтекает его и уходит под него —
+                // рельс маркеров живёт на левом поле. Связи ушли под контент — правое
+                // поле свободно, рельс возвращается туда
+                railSide={!isMobile && !connectionsBelow ? 'left' : 'right'}
                 viewer={{ onWikilink, existingTitles, resolveNote, embedSource: note.source, hideLeadingH1: hero }}
               />
             )}

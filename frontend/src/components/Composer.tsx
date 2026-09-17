@@ -950,9 +950,13 @@ export function Composer({
     el.style.height = Math.min(el.scrollHeight, 200) + 'px';
   }, []);
 
+  // isListening в зависимостях не для красоты: на время записи textarea размонтирована
+  // (вместо неё полоса с волной), распознанные куски копятся в text вхолостую — ref пустой.
+  // Возвращается поле уже НОВЫМ узлом, без inline-высоты прошлого, то есть в одну строку
+  // при большом тексте; text при этом не меняется, и по нему эффект не сработал бы
   useEffect(() => {
     autoResize();
-  }, [text, autoResize]);
+  }, [text, isListening, autoResize]);
 
   // Голосовая диктовка: после коммита нового текста уводим textarea в конец.
   // Эффект стоит ПОСЛЕ useEffect [text, autoResize] выше — React выполняет эффекты

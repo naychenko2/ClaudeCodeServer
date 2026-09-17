@@ -89,6 +89,9 @@ export interface FileViewerDocCommentsCtx {
   isMobile?: boolean;
   onCounts?: (total: number, open: number) => void;
   panelTarget: HTMLElement | null;
+  // Сторона рельса маркеров комментариев: карточка плавает справа (текст под неё),
+  // тогда рельс уводим на левое поле — см. FileViewer (плавающая карточка свойств)
+  railSide?: 'left' | 'right';
   onDocLink?: (href: string) => void;
   resolveImageSrc: (src: string) => string | undefined;
 }

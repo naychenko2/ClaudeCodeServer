@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   loadChatFilters, persistChatFilters, isDefaultFilters, defaultChatFilters,
-  defaultChatFiltersKeepingView, matchChatFilter, buildHiddenReason, type ChatFilters,
+  defaultChatFiltersKeepingView, matchChatFilter, buildHiddenReason, sortKeyOf,
+  ALL_SORT_ORDERS, type ChatFilters,
 } from '../chatFilters';
 import type { Session } from '../../types';
 
@@ -103,12 +104,41 @@ describe('loadChatFilters: оси вида и миграция cc_chat_view', ()
     expect(f.hierarchy).toBe(false);
   });
 
+  it('значения оси по созданию читаются как есть', () => {
+    store.set('cc_chat_filters:p1', JSON.stringify({ sortOrder: 'created-oldest' }));
+    expect(loadChatFilters('p1').sortOrder).toBe('created-oldest');
+    persistChatFilters('p1', { ...defaultChatFilters(), sortOrder: 'created-newest' });
+    expect(loadChatFilters('p1').sortOrder).toBe('created-newest');
+  });
+
+  it('незнакомое значение sortOrder вырождается в newest, остальные поля целы', () => {
+    store.set('cc_chat_filters:p1', JSON.stringify({ sortOrder: 'by-name', groupBy: 'none', search: 'ревью' }));
+    const f = loadChatFilters('p1');
+    expect(f.sortOrder).toBe('newest');
+    expect(f.groupBy).toBe('none');
+    expect(f.search).toBe('ревью');
+  });
+
   it('мусор в осях откатывается к дефолту', () => {
     store.set('cc_chat_filters:p1', JSON.stringify({ groupBy: 'zzz', sortOrder: 'zzz', hierarchy: 'да' }));
     const f = loadChatFilters('p1');
     expect(f.groupBy).toBe('days');
     expect(f.sortOrder).toBe('newest');
     expect(f.hierarchy).toBe(false);
+  });
+});
+
+// Единая точка разбора оси: по ней сортируют и секционируют chatGroups и chatTree
+describe('sortKeyOf', () => {
+  it('поле даты и направление для всех четырёх значений', () => {
+    expect(sortKeyOf('newest')).toEqual({ field: 'updatedAt', dir: -1 });
+    expect(sortKeyOf('oldest')).toEqual({ field: 'updatedAt', dir: 1 });
+    expect(sortKeyOf('created-newest')).toEqual({ field: 'createdAt', dir: -1 });
+    expect(sortKeyOf('created-oldest')).toEqual({ field: 'createdAt', dir: 1 });
+  });
+
+  it('белый список оси — он же порядок цикла кнопки', () => {
+    expect(ALL_SORT_ORDERS).toEqual(['newest', 'oldest', 'created-newest', 'created-oldest']);
   });
 });
 

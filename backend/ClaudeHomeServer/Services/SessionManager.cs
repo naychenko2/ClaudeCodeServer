@@ -1359,7 +1359,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
             sid, adapter is { HasLiveTurn: true }, adapter is { HasPendingBg: true }, adapter is { IsContinuationInFlight: true });
         _ = Task.Run(async () =>
         {
-            try { await ApplyStatusAsync(sid, entry, SessionStatus.Finished); }
+            // Доводка: содержимого за ней нет — прочитанный чат не должен стать непрочитанным
+            try { await ApplyStatusAsync(sid, entry, SessionStatus.Finished, touchUpdatedAt: false); }
             catch (Exception ex) { _log.LogError(ex, "[SessionManager] Sweep ApplyStatus не удался ({Sid})", sid); }
         });
     }
@@ -3919,11 +3920,22 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         entry.CurrentTurnSnapshot = !auto && !systemDirective
             ? new UserTurnSnapshot(text, attachedPaths, mode)
             : null;
+        // Превью чата — исходным сообщением, без обвязок BuildCliTurnText (адаптер превью
+        // не выставляет: ему текст приходит уже обвязанным и повторяется на каждой попытке
+        // фолбэка). Служебные директивы (цикл «до готово», добивание сабагента) превью НЕ
+        // трогают вовсе: их сырой текст («[СИСТЕМНАЯ ДИРЕКТИВА — …]») человеку в списке чатов
+        // не адресован (MINOR B-п.5) — в карточке остаётся то, что он видел последним.
+        if (!systemDirective)
+            entry.Info.LastMessage = ChatPreview(text);
         // Диспетчеризация: локальный голосовой ход идёт мимо CLI (fire-and-forget — как
         // CLI-ветка, где SendMessageAsync лишь ставит ход в процесс; ответ приходит
         // событиями через OnMessageAsync). Реплика уже в аккумуляторе (OnUserMessage выше).
         if (localVoice)
         {
+            // Отметка активности: у CLI-ветки её ставит адаптер (SendMessageAsync), а
+            // локальный ход идёт мимо него — без явной записи архивный чат остался бы в
+            // архиве (ApplyStatusAsync его больше не двигает)
+            entry.Info.UpdatedAt = DateTime.UtcNow;
             _ = Task.Run(async () =>
             {
                 try { await RunLocalVoiceTurnAsync(sessionId, entry); }
@@ -3938,13 +3950,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             await entry.Process!.SendMessageAsync(BuildCliTurnText(entry, text), attachedPaths,
                 suppressTasksExecute: suppressTasksExecute);
         }
-        // Превью чата (LastMessage выставляет адаптер из текста для CLI) — исходным сообщением.
-        // Служебные директивы цикла (verifying/continuation) пропускаем: их сырой текст
-        // («[СИСТЕМНАЯ ДИРЕКТИВА — …]») человеку в списке чатов не адресован (MINOR B-п.5) —
-        // превью остаётся тем, что видел человек в последний раз
-        if (!systemDirective)
-            entry.Info.LastMessage = text.Length > 100 ? text[..100] + "…" : text;
     }
+
+    // Превью чата для карточки списка: первые 100 символов сообщения
+    internal static string ChatPreview(string text) => text.Length > 100 ? text[..100] + "…" : text;
 
     // Текст хода для CLI: исходное сообщение + обвязки.
     // Протокол цикла «до готово» — пока Session.WorkLoop активен. Своей вставки ultrawork
@@ -4264,6 +4273,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         entry.TurnInWorktree = false; // сообщение = новый ход в основном дереве (зеркало Extract)
         entry.CurrentTurnSnapshot = null; // ход агента — по «Стоп» в композер не возвращается
         entry.TeamTurnFromHuman = false; // ход поднят агентом (chats_send), не человеком (M7)
+        // Превью чата — сообщением агента: адаптер его больше не выставляет (см. ChatPreview)
+        entry.Info.LastMessage = ChatPreview(text);
         await entry.Process!.SendMessageAsync(text, null, agentDepth);
 
         if (timeout <= TimeSpan.Zero) return new SendAndWaitResult.Running();
@@ -5198,7 +5209,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         // чата — не перезаписываем то, что уже стоит
         if (!string.IsNullOrEmpty(entry.Info.Topic)) return entry.Info;
         entry.Info.Topic = iconName;
-        entry.Info.UpdatedAt = DateTime.UtcNow;
+        // Архивный чат из архива не выводим — зеркало гейта в RetitleAsync и предфильтра
+        // пакетного прогона (SetChatIconsAsync): значок — не активность разговора
+        if (!entry.Info.IsArchived) entry.Info.UpdatedAt = DateTime.UtcNow;
         SaveSessions();
         // Имя не менялось — шлём его же: событие переносит и значок, отдельного не заводим
         await BroadcastChatRenamedAsync(sessionId, entry.Info, entry.Info.Name ?? "");
@@ -8434,7 +8447,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 // struct DateTimeOffset? читает sweep под тем же локом; lock короткий, без await.
                 lock (entry.PendingLock)
                     entry.LastTurnEndedAt = newStatus == SessionStatus.Active ? DateTimeOffset.UtcNow : null;
-                await ApplyStatusAsync(sessionId, entry, newStatus.Value);
+                // exited — та же доводка, что у sweep: содержимое хода пришло раньше
+                // (result/сообщения), а обрыв без result его не добавляет
+                await ApplyStatusAsync(sessionId, entry, newStatus.Value,
+                    touchUpdatedAt: msg is not ExitedMessage);
             }
 
             // Цикл «до готово»: решение о продолжении — по result/error хода, нёсшего
@@ -8835,11 +8851,27 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         await BroadcastSessionMessageAsync(sessionId, broadcast);
     }
 
-    // Единая точка перехода статуса сессии: обновить Info → сохранить на диск → разослать клиентам
-    private async Task ApplyStatusAsync(string sessionId, SessionEntry entry, SessionStatus status)
+    // Единая точка перехода статуса сессии: обновить Info → сохранить на диск → разослать клиентам.
+    //
+    // touchUpdatedAt = false у ДОВОДКИ статуса — перехода, за которым не стоит нового
+    // содержимого: exited прогона и sweep-терминус Active→Finished приходят уже после ответа
+    // (sweep — спустя grace, на ближайшем SaveSessions, то есть до минуты). UpdatedAt несёт
+    // непрочитанность (updatedAt > lastReadAt), поэтому такая доводка метила прочитанный чат
+    // непрочитанным заново: точка на кнопке проекта и стены гасла при открытии чата и через
+    // полминуты возвращалась (инцидент 06.09.2026). Новое содержимое отмечают переходы, за
+    // которыми оно есть: Working (ход пошёл), Active по result (ответ готов), Waiting
+    // (карточка ждёт человека), Error.
+    //
+    // Архивный чат сменой статуса из архива не выводим вовсе (как RetitleAsync/UpdateAsync):
+    // признак архива производный (UpdatedAt <= ArchivedAt), и любая отметка возвращала бы его.
+    // Настоящая активность архива не теряет: отметку ставит приём сообщения (адаптер
+    // SendMessageAsync, локальный голосовой ход — SendDirectAsync), и до смены статуса чат
+    // уже не архивный.
+    private async Task ApplyStatusAsync(string sessionId, SessionEntry entry, SessionStatus status,
+        bool touchUpdatedAt = true)
     {
         entry.Info.Status = status;
-        entry.Info.UpdatedAt = DateTime.UtcNow;
+        if (touchUpdatedAt && !entry.Info.IsArchived) entry.Info.UpdatedAt = DateTime.UtcNow;
         SaveSessions();
         await BroadcastStatusChangeAsync(sessionId, entry.Info,
             status, entry.Info.LastMessage, entry.Info.MessageCount);

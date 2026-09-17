@@ -13,7 +13,7 @@ import { ChatListToolbar } from './ChatListToolbar';
 import { EmptyState } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, isDefaultFilters, defaultChatFiltersKeepingView, buildHiddenReason, isArchivedChat, ARCHIVE_EMPTY_TITLE, ARCHIVE_EMPTY_SUBTITLE, type ChatGroupBy } from '../lib/chatFilters';
-import { buildChatTreeRows, splitChatTreeByRoots, useTreeCollapse } from '../lib/chatTree';
+import { buildChatTreeRows, splitChatTreeByRoots, rootChatForSection, useTreeCollapse } from '../lib/chatTree';
 import { useBgWorkPresence } from '../lib/agentsPresence';
 import { useLastMechanicVersion } from '../lib/lastMechanic';
 import { ChatCard } from './ChatCard';
@@ -163,14 +163,13 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
 
   // === Композиция списка по осям (groupBy × sortOrder × hierarchy) ===
   // groupBy уже клампнут к GROUP_BY_OPTIONS выше — ветка 'tags' сюда не доходит.
-  // Сегменты дерева — как в SessionList: корень секционируется по maxActivity поддерева.
+  // Сегменты дерева — как в SessionList: при сортировке по активности корень
+  // секционируется по maxActivity поддерева, при сортировке по созданию подмена даты
+  // сломала бы секции — там едет настоящая сессия корня с её createdAt.
   const treeSegments = useMemo(() => {
     if (!tree) return null;
-    return splitChatTreeByRoots(tree.rows).map(seg => ({
-      seg,
-      rootChat: { ...seg[0].chat, updatedAt: new Date(seg[0].maxActivity).toISOString() } as Session,
-    }));
-  }, [tree]);
+    return splitChatTreeByRoots(tree.rows).map(seg => ({ seg, rootChat: rootChatForSection(seg, sortOrder) }));
+  }, [tree, sortOrder]);
   const segByRootId = useMemo(
     () => treeSegments ? new Map(treeSegments.map(x => [x.seg[0].chat.id, x.seg])) : null,
     [treeSegments],

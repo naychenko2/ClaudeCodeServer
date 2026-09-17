@@ -901,6 +901,9 @@ export interface GitBlameLine {
 export interface GitRemoteInfo {
   serverEnabled: boolean;
   remoteUrl: string | null;
+  // Фактический origin репозитория (null — не подключён). Отличается от remoteUrl:
+  // тот — настройка проекта, и он пуст, если origin добавляли руками мимо продукта.
+  originUrl: string | null;
   htmlUrl: string | null;
   autoCommit: boolean;
   autoPush: boolean;

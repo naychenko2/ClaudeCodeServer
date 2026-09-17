@@ -74,6 +74,7 @@ export const manifest: SubsystemManifest = {
           <DocCommentedMarkdown
             scope={ctx.scope} docPath={ctx.docPath} content={ctx.content} isMobile={ctx.isMobile}
             onCounts={ctx.onCounts} panelTarget={ctx.panelTarget} deferPanel
+            railSide={ctx.railSide}
             viewer={{ onDocLink: ctx.onDocLink, resolveImageSrc: ctx.resolveImageSrc }}
           />
         ),

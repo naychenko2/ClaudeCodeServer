@@ -9,10 +9,13 @@
 // (rebase на origin + push одним действием, эндпоинт /git/sync).
 import { useEffect, useState } from 'react';
 import { C, FONT, FS, MODAL_W, R, SP } from '../lib/design';
-import { useGitState, gitFetch, gitPush, gitSync, loadUnpushedLog } from '../lib/git';
+import {
+  useGitState, getGitState, gitFetch, gitPush, gitSync, gitSetRemote, gitCreateServerRepo,
+  loadGitRemote, loadUnpushedLog,
+} from '../lib/git';
 import { relTime } from '../lib/gitFormat';
 import { prefillComposer } from '../lib/ai/startChat';
-import { Modal, ModalActions, useIsMobileModal } from './ui';
+import { Button, Field, Modal, ModalActions, TextField, useIsMobileModal } from './ui';
 
 // Высота тела диалога фиксирована: содержимое меняется на лету (проверка → список
 // коммитов → текст расхождения → ошибка с файлами конфликта), и без фиксации окно
@@ -44,18 +47,30 @@ export function PublishDialog({ projectId, onClose }: { projectId: string; onClo
   const status = st.status;
   const isMobile = useIsMobileModal();
   const [checking, setChecking] = useState(true);
+  const [remoteUrl, setRemoteUrl] = useState('');
 
-  // Тихая сверка с сервером при открытии. Ошибку fetch не прячем: если до origin не
-  // достучались, публиковать всё равно некуда — честнее показать причину сразу.
-  // Список неопубликованных перечитываем ПОСЛЕ fetch: до него он считается от
-  // устаревшей локальной копии origin/<branch>.
+  // Тихая сверка с сервером при открытии. Сначала remote: без подключённого origin
+  // fetch звать некуда — тянуть неоткуда, и его отказ выглядел бы ошибкой публикации.
+  // Ошибку fetch при живом origin не прячем: если до него не достучались, публиковать
+  // всё равно некуда — честнее показать причину сразу. Список неопубликованных
+  // перечитываем ПОСЛЕ fetch: до него он считается от устаревшей копии origin/<branch>.
   useEffect(() => {
     let alive = true;
-    void gitFetch(projectId)
-      .then(() => loadUnpushedLog(projectId))
-      .finally(() => { if (alive) setChecking(false); });
+    void (async () => {
+      await loadGitRemote(projectId);
+      if (!alive) return;
+      if (getGitState(projectId).remote?.originUrl) await gitFetch(projectId);
+      if (!alive) return;
+      await loadUnpushedLog(projectId);
+      if (alive) setChecking(false);
+    })();
     return () => { alive = false; };
   }, [projectId]);
+
+  // Удалённого репозитория у проекта нет вовсе — вместо публикации диалог сперва
+  // предлагает его подключить (адресом или созданием на встроенном сервере)
+  const noOrigin = !checking && !st.remote?.originUrl;
+  const canConnect = remoteUrl.trim().length > 0;
 
   const behind = status?.behind ?? 0;
   const publishN = (status?.ahead ?? 0) || st.unpushed.length;
@@ -83,6 +98,9 @@ export function PublishDialog({ projectId, onClose }: { projectId: string; onClo
   };
 
   const run = async () => {
+    // Сначала подключаем origin введённым адресом: push уходит с -u origin <branch>
+    // и сам заводит отслеживание
+    if (noOrigin && !await gitSetRemote(projectId, remoteUrl.trim())) return;
     const ok = needSync ? await gitSync(projectId) : await gitPush(projectId);
     if (!ok) return;   // остаёмся в диалоге: ниже покажется ошибка, действие сменится на sync
     // Панель «Изменения» (если открыта) возвращаем на «Не зафиксировано»:
@@ -95,13 +113,17 @@ export function PublishDialog({ projectId, onClose }: { projectId: string; onClo
     <Modal
       width={MODAL_W.wide}
       onClose={onClose}
-      title={hasConflict ? 'Изменения конфликтуют' : needSync ? 'Ветка разошлась с сервером' : 'Опубликовать изменения'}
+      title={hasConflict ? 'Изменения конфликтуют'
+        : noOrigin ? 'Подключить удалённый репозиторий'
+          : needSync ? 'Ветка разошлась с сервером' : 'Опубликовать изменения'}
       subtitle={<span>Отправить {publishN} коммит(ов) на сервер</span>}
       footer={
         <ModalActions
-          confirmLabel={hasConflict ? 'Разобрать в чате' : needSync ? 'Подтянуть и опубликовать' : 'Опубликовать'}
+          confirmLabel={hasConflict ? 'Разобрать в чате'
+            : noOrigin ? 'Подключить и опубликовать'
+              : needSync ? 'Подтянуть и опубликовать' : 'Опубликовать'}
           loading={st.busy}
-          confirmDisabled={checking || st.busy}
+          confirmDisabled={checking || st.busy || (noOrigin && !canConnect)}
           onConfirm={hasConflict ? askChat : () => void run()}
           onCancel={onClose}
         />
@@ -116,6 +138,11 @@ export function PublishDialog({ projectId, onClose }: { projectId: string; onClo
         <div style={{ flexShrink: 0, fontSize: 13, color: C.textSecondary, fontFamily: FONT.sans, lineHeight: 1.5 }}>
           {checking ? (
             'Проверяю, нет ли новых коммитов на сервере…'
+          ) : noOrigin ? (
+            <>
+              У проекта не задан удалённый репозиторий — отправлять коммиты пока некуда.
+              Укажи адрес существующего репозитория{st.remote?.serverEnabled && <> или заведи новый на своём сервере</>}.
+            </>
           ) : hasConflict ? (
             <>
               Твои правки и пришедшие с сервера меняют одни и те же места — сами git их не сведёт.
@@ -135,6 +162,36 @@ export function PublishDialog({ projectId, onClose }: { projectId: string; onClo
             </>
           )}
         </div>
+
+        {/* Адрес репозитория — закреплён над списком коммитов: он и есть главное поле
+            этого режима, уезжать со скроллом ему нельзя */}
+        {noOrigin && (
+          <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+            <Field label="Адрес репозитория" hint="Например: https://github.com/user/repo.git или git@github.com:user/repo.git">
+              <TextField
+                value={remoteUrl}
+                onChange={setRemoteUrl}
+                placeholder="https://…"
+                mono
+                autoFocus={!isMobile}
+                disabled={st.busy}
+                onEnter={() => { if (canConnect && !st.busy) void run(); }}
+              />
+            </Field>
+            {/* Свой Forgejo настроен — репозиторий можно завести прямо отсюда, без чужого
+                хостинга. После создания origin подключён, и остаётся обычная публикация */}
+            {st.remote?.serverEnabled && (
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={st.busy}
+                onClick={() => void gitCreateServerRepo(projectId)}
+              >
+                Создать на сервере
+              </Button>
+            )}
+          </div>
+        )}
 
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
           {/* Что именно уйдёт: перед публикацией видно поимённо, а не только счётчик.

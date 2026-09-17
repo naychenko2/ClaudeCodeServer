@@ -18,6 +18,7 @@ export { api } from '../api';
 // ─── notes (стор + hooks) ─────────────────────────────────────────────────────
 export {
   useNotes, useNoteFolders, useNotesVersion, ensureNotesLoaded, existingTitleSet, bumpNotes,
+  isFavorite, toggleFavorite, withFavoriteTag, withoutFavoriteTag, FAVORITE_TAG,
 } from '../notes';
 
 // ─── notesOffline ────────────────────────────────────────────────────────────

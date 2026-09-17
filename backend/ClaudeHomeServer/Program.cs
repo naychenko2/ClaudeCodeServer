@@ -917,6 +917,13 @@ builder.Services.AddSingleton<Yarp.ReverseProxy.Configuration.IProxyConfigProvid
 // LLM-канал модулей (контракт §10): лимит конкурентности per-модуль + учёт вызовов R13
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Modules.HostLlmConcurrencyLimiter>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Modules.ModuleLlmUsageStore>();
+// Питание машины из веб-морды (выключить/перезагрузить/усыпить). Как и выкатка, по умолчанию
+// выключено — см. PowerControlOptions. Сервисы живут в хосте (модуля Power нет), поэтому
+// регистрации — здесь, а не в подсистеме.
+builder.Services.Configure<ClaudeHomeServer.Models.PowerControlOptions>(builder.Configuration.GetSection(ClaudeHomeServer.Models.PowerControlOptions.Section));
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Power.IPowerActions,
+    ClaudeHomeServer.Services.Power.WindowsPowerActions>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Power.PowerControlService>();
 // Секция DifyOptions + KnowledgeService + ProjectKnowledgeSyncService (singleton + hosted
 // мост ProjectKnowledgeTurnSync) + UserKnowledgeCascade + IKnowledgeAlertNotifier +
 // KnowledgeIndexReconciler (singleton + hosted) — DI в подсистеме `KnowledgeSubsystem`

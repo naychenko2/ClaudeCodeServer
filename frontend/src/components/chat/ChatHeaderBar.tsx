@@ -825,6 +825,9 @@ interface ChatHeaderBarProps {
   // Полоса контекста чата (фича chat-context): отдельная строка ПОД заголовком —
   // и в hero-шапке, и в тулбарной. Не задана — шапка ровно такая, как была
   contextBar?: ReactNode;
+  // Лента прокручена от начала — только тогда шапку отделяет линия. В начале ленты
+  // отделять нечего, и черта лежала бы поперёк пустого чата без причины
+  scrolled?: boolean;
 }
 
 // «Обновить название чата» — запускается через AI-палитру (действие chat.retitle).
@@ -933,7 +936,7 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
   );
 }
 
-export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, onBillingChange, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, onAddToWall, onChatDeleted, island, compact, contextBar }: ChatHeaderBarProps) {
+export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, onBillingChange, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, onAddToWall, onChatDeleted, island, compact, contextBar, scrolled }: ChatHeaderBarProps) {
   // Вклады слота chat-header-action: невидимый слушатель «Итог сессии в заметку»
   // и его пункт в правом клик-меню. Нет подсистемы — нет и вкладов, остальные
   // AI-действия чата к заметкам не относятся и остаются.
@@ -1847,11 +1850,17 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       // БЕЗ overflow:hidden — поповеры бейджей (контекст, стоимость, участники)
       // выпадают ниже шапки и не должны обрезаться её границей.
       // openBtn обязателен: без него свёрнутый сайдбар не вернуть при открытом чате
-      // Ни подложки, ни линии, ни тени: границу шапки к ленте держит САМА ЛЕНТА —
-      // её верхний край растворяется при прокрутке (ChatPanel, FEED_FADE). Подложка
-      // мутила бы дудл-холст, а линия поверх растворения читалась бы вторым
-      // разделителем подряд
-      <div style={{ position: 'relative', flexShrink: 0, width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto', boxSizing: 'border-box' }}>
+      // Подложки и тени нет — шапка стоит прямо на холсте, а границу к ленте держит
+      // тонкая линия снизу, как у тулбарной шапки. Стекло мутило дудл-холст, тень
+      // поверх него читалась тяжело, поэтому вернулись к простому разделителю.
+      // Линия ПРОЗРАЧНАЯ, пока лента в начале: меняется только цвет, место под неё
+      // занято всегда — иначе появление черты дёргало бы шапку на пиксель
+      <div style={{
+        position: 'relative', flexShrink: 0, width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto',
+        boxSizing: 'border-box',
+        borderBottom: `1px solid ${scrolled ? C.borderLight : 'transparent'}`,
+        transition: 'border-color 0.18s ease-out',
+      }}>
         {/* flexWrap: при узком окне правый кластер уходит второй строкой — остров подрастает */}
         <div
           onContextMenu={e => {
@@ -1876,8 +1885,9 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
 
   const toolbarEl = (
     // compact (колонка стены): фон прозрачный — подложку даёт стеклянный остров
-    // колонки, плотный тулбар закрывал бы дудл-холст под шапкой
-    <Toolbar isMobile={isCompact} noBorder={island || compact} bg={island || compact ? 'transparent' : undefined}
+    // колонки, плотный тулбар закрывал бы дудл-холст под шапкой. Линия снизу при этом
+    // остаётся: она и отделяет шапку от ленты
+    <Toolbar isMobile={isCompact} noBorder={island} bg={island || compact ? 'transparent' : undefined}
       // Правый клик по шапке — меню действий у курсора (desktop, см. ctxMenuEl)
       onContextMenu={isCompact ? undefined : e => {
         e.preventDefault();
@@ -1885,6 +1895,14 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       }}
       style={{
         ...(personaAccent ? { borderLeft: `3px solid ${personaAccent}` } : null),
+        // Линия к ленте — только когда лента прокручена, и тоном мягче обычной границы:
+        // это разделитель ВНУТРИ одной поверхности, а не край панели. Место под неё
+        // занято всегда (прозрачный цвет), поэтому шапка не дёргается по высоте.
+        // На острове (island) границу даёт сама карточка — там своей линии не рисуем
+        ...(island ? null : {
+          borderBottom: `1px solid ${scrolled ? C.borderLight : 'transparent'}`,
+          transition: 'border-color 0.18s ease-out',
+        }),
         // Узкий десктоп: фиксированную высоту отпускаем, кластер переносится второй строкой
         ...(isCompact ? null : { flexWrap: 'wrap' as const, height: 'auto', minHeight: TB.heightDesktop, padding: `6px ${TB.padX}px` }),
       }}>

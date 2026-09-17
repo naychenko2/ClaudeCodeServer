@@ -50,7 +50,6 @@ import { ProjectGitBar } from './ProjectGitBar';
 import { C, R, SHADOW, SP, FS, PANEL_ANIM, CHAT_MAX_W, CHAT_GUTTER_L } from '../lib/design';
 import { VAR_PAD_R, VAR_SHIFT, VAR_W, useChatGutter } from '../lib/chatGutter';
 import { useIsTouch } from '../lib/breakpoints';
-import { projectTopWash } from '../lib/projectTone';
 import { setChatContext, AI_RECOMPUTE_EVENT } from '../lib/ai/chatContext';
 import { setFabObstacle } from '../lib/ai/fabObstacle';
 import { ChatHeaderBar, type CostStats, type FalCostStats } from './chat/ChatHeaderBar';
@@ -83,12 +82,6 @@ import { NO_AUTOFILL } from '../lib/noAutofill';
 // Значения сейчас совпадают, но роли разные: мобильное поле держит ширину экрана,
 // десктопное — размах колец индикатора. Сливать в одно не надо.
 const CHAT_GUTTER_MOBILE = 16;
-
-// Растворение верхнего края прокрученной ленты — им обозначена граница с шапкой
-// вместо линии, тени и стеклянной подложки: холст с рисунком под шапкой остаётся
-// чистым, а край читается по самому тексту. Чёрный и прозрачный здесь не цвета:
-// в маске значима только альфа, поэтому токенов темы тут нет и быть не может
-const FEED_FADE = 'linear-gradient(to bottom, transparent 0, rgba(0, 0, 0, 0.35) 14px, black 44px)';
 
 interface Props {
   session: Session;
@@ -2384,12 +2377,11 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     return () => io.disconnect();
   }, [hidden, showEarlier, scrollRef]);
 
-  // Подпал цветом проекта под верхом чата (см. слой в разметке ниже)
-  const projectWash = projectTopWash(project);
-
   const headerBar = (
     <ChatHeaderBar
       island={headerIsland}
+      // Линию под шапкой зажигает прокрутка ленты: в её начале отделять нечего
+      scrolled={scrolled}
       compact={embedded}
       session={session}
       project={project}
@@ -2432,19 +2424,6 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       display: 'flex', flexDirection: 'column', height: '100%', position: 'relative',
       background: headerIsland || embedded ? 'transparent' : C.bgMain,
     }}>
-      {/* Подпал цветом проекта под верхом чата — ПО ШИРИНЕ ЛЕНТЫ, а не всего центра:
-          растянутый на всю ширину он читался бы как фон экрана, а не как метка этого
-          чата. На стене подпал рисует сам остров колонки (там он и есть карточка) */}
-      {!embedded && projectWash && (
-        <div style={{
-          position: 'absolute', top: 0, left: '50%', transform: 'translateX(-50%)',
-          width: '100%', maxWidth: CHAT_MAX_W, height: 96,
-          backgroundImage: projectWash, pointerEvents: 'none',
-          // Верхние углы скруглены — подпал читается как продолжение карточки
-          // чата, а не как прямоугольная плашка, наклеенная поверх
-          borderTopLeftRadius: R.xxl, borderTopRightRadius: R.xxl,
-        }} />
-      )}
       {/* В режиме headerIsland шапка сама рисует себя hero-вариантом прямо на
           холсте (ChatHeaderBar, ветка island) — обёртки не нужно. На стене
           (embedded) шапка тоже штатная — канонический вид чата; над ней колонка
@@ -2535,11 +2514,6 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         // компенсировать некуда, поэтому остаток до CHAT_GUTTER_L добирается
         // паддингом — величину считает useChatGutter замером полосы.
         overflowY: 'auto', overflowX: 'hidden', position: 'relative', paddingTop: isMobile ? 16 : 20,
-        // Верхний край ленты растворяется, когда она прокручена, — этим и обозначена
-        // граница с шапкой (ни линии, ни тени, ни подложки под шапкой нет: они мутили
-        // бы дудл-холст). В начале ленты маски нет, иначе первое сообщение всегда
-        // висело бы полупрозрачным
-        ...(scrolled ? { maskImage: FEED_FADE, WebkitMaskImage: FEED_FADE } : null),
         paddingRight: isMobile ? CHAT_GUTTER_MOBILE : embedded ? `var(${VAR_PAD_R}, 0px)` : 0, paddingBottom: 8,
         // Лента заканчивается НАД композером, а не подлезает под него: раньше это был
         // paddingBottom, и контент прокручивался в прозрачных промежутках композера

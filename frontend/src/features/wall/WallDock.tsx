@@ -7,7 +7,7 @@
 // При маунте лениво поднимает состав стены (initWall): addChat шлёт PUT полного
 // состава, и без загруженного снимка дроп затирал бы чужие монеты.
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { AlarmClock, Plus, Search } from 'lucide-react';
+import { AlarmClock, Plus, ZoomIn } from 'lucide-react';
 import { C, FONT, R } from '../../lib/design';
 import { RailCapsule, RailHat, RailIconButton, RailSep } from '../../components/ui';
 import { ICON_STROKE } from '../../components/ui/icons';
@@ -224,10 +224,11 @@ export function WallDock({ onOpenWall, slots = 0 }: {
       {chats.length > 0 && <RailSep />}
 
       {/* Поиск чата для стены — в ОБОИХ режимах: собрать стену можно, не покидая
-          проект. Лупа, а не «плюс»: за кнопкой пикер с поиском по всем чатам, а
-          «плюс» в этой капсуле занят мишенью перетаскивания выше */}
+          проект. Лупа с плюсом: за кнопкой пикер с поиском по всем чатам, и найденный
+          чат добавляется на стену — плюс про это. Голый «плюс» тут занят мишенью
+          перетаскивания выше */}
       <RailIconButton side="left" label="Найти чат для стены" onClick={() => setPicker(true)}>
-        <Search size={16} strokeWidth={ICON_STROKE} />
+        <ZoomIn size={16} strokeWidth={ICON_STROKE} />
       </RailIconButton>
 
       </>

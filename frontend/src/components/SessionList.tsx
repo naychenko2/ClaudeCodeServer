@@ -17,7 +17,7 @@ import { ChatFilterResetActions } from './FilterBar';
 import { ChatListToolbar } from './ChatListToolbar';
 import { EmptyState } from './ui';
 import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, loadChatFilters, isDefaultFilters, defaultChatFiltersKeepingView, buildHiddenReason, isArchivedChat, ARCHIVE_EMPTY_TITLE, ARCHIVE_EMPTY_SUBTITLE } from '../lib/chatFilters';
-import { buildChatTreeRows, splitChatTreeByRoots, useTreeCollapse, withAncestors } from '../lib/chatTree';
+import { buildChatTreeRows, splitChatTreeByRoots, rootChatForSection, useTreeCollapse, withAncestors } from '../lib/chatTree';
 import { useBgWorkPresence } from '../lib/agentsPresence';
 import { ensureGit, useGitState } from '../lib/git';
 import { useLastMechanicVersion } from '../lib/lastMechanic';
@@ -459,13 +459,9 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // корня — maxActivity поддерева: корень с живым ребёнком не тонет в старых днях.
   const treeSegments = useMemo(() => {
     if (!tree) return null;
-    return splitChatTreeByRoots(tree.rows).map(seg => ({
-      seg,
-      // Синтетическая сессия корня для секционеров (groupChats/groupByTags работают
-      // по Session): дату подменяем активностью поддерева, остальное — как у чата
-      rootChat: { ...seg[0].chat, updatedAt: new Date(seg[0].maxActivity).toISOString() } as Session,
-    }));
-  }, [tree]);
+    // Чем представлен корень для секционеров — одна точка на оба списка (rootChatForSection)
+    return splitChatTreeByRoots(tree.rows).map(seg => ({ seg, rootChat: rootChatForSection(seg, sortOrder) }));
+  }, [tree, sortOrder]);
   const segByRootId = useMemo(
     () => treeSegments ? new Map(treeSegments.map(x => [x.seg[0].chat.id, x.seg])) : null,
     [treeSegments],

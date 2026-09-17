@@ -3,7 +3,7 @@ import { C, FS, R, SHADOW, Z } from '../../lib/design';
 import { ConnectionStatus } from '../../components/ConnectionStatus';
 import { SegmentedControl } from '../../components/ui';
 import { useThemeMode, setThemeMode, type ThemeMode } from '../../lib/themeMode';
-import { Bell, History, Book, BriefcaseBusiness, Box, Gauge, Users, Lock, FlaskConical, LogOut, Mic, Coins, MonitorSmartphone, Palette, Plug, Rocket, SquareDashedMousePointer } from 'lucide-react';
+import { Bell, History, Book, BriefcaseBusiness, Box, Gauge, Users, Lock, FlaskConical, LogOut, Mic, Coins, MonitorSmartphone, Palette, Plug, Power, Rocket, SquareDashedMousePointer } from 'lucide-react';
 import { ICON_SIZE } from '../../components/ui/icons';
 import { isMicKeyboardFallback, clearMicKeyboardFallback } from '../../lib/voiceInput';
 import { showToast } from '../../lib/toast';
@@ -89,9 +89,12 @@ interface Props {
   // (Этап 5, волна 3). Пункт только для админов; HubHeader передаёт колбэк не всегда.
   // Экран сейчас только на чтение (см. задачу 7d261cde) — тумблера нет.
   onShowSubsystems?: () => void;
+  // «Питание компьютера» — выключить/перезагрузить/усыпить машину, на которой крутится
+  // продукт. Те же условия, что у выкатки: админ И включено в конфиге сервера
+  onShowPower?: () => void;
 }
 
-export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout, onShowChangePassword, onShowFeatureFlags, onShowUserManagement, hideStatus, onShowHistory, historyBadge = 0, historyNeverSeen = false, historyActive = false, onOpenKnowledge, onOpenSpecialties, onShowModelsSpend, onOpenSpend, onShowMcpServers, onShowDevices, onShowDeploy, onShowSubsystems, onOpenNotifications, notifBadge = 0, notifActive = false }: Props) {
+export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout, onShowChangePassword, onShowFeatureFlags, onShowUserManagement, hideStatus, onShowHistory, historyBadge = 0, historyNeverSeen = false, historyActive = false, onOpenKnowledge, onOpenSpecialties, onShowModelsSpend, onOpenSpend, onShowMcpServers, onShowDevices, onShowDeploy, onShowSubsystems, onShowPower, onOpenNotifications, notifBadge = 0, notifActive = false }: Props) {
   // Как обращаемся к пользователю; логин остаётся видимым отдельной строкой,
   // чтобы было понятно, под каким аккаунтом сидишь
   const name = displayName?.trim() || username;
@@ -367,6 +370,15 @@ export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout
             >
               <Rocket size={ICON_SIZE.xs} strokeWidth={2} />
               Выкатить на бой
+            </button>
+          )}
+          {onShowPower && (
+            <button
+              onClick={() => { setOpen(false); onShowPower(); }}
+              style={dropdownItem}
+            >
+              <Power size={ICON_SIZE.xs} strokeWidth={2} />
+              Питание компьютера
             </button>
           )}
           <MenuDivider />

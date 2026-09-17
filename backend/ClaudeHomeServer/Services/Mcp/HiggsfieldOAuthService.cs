@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
-using ClaudeHomeServer.Services.Mcp;
 
 namespace ClaudeHomeServer.Services.Mcp;
 
@@ -18,6 +17,14 @@ namespace ClaudeHomeServer.Services.Mcp;
 /// аккаунт Higgsfield, один OAuth-токен). Единственная защита — белый список
 /// инструментов (<see cref="Http.HiggsfieldToolset.Whitelist"/>): ни листинга, ни
 /// биллинга, ни публикации. Это НЕ дефект, а осознанный выбор — см. ADR/коммент.
+///
+/// С 2026-09-17 вход идёт через общий callback <see cref="McpOAuthService.CallbackPath"/>:
+/// провайдер (Clerk DCR) прибит к нему, и собственный путь ронял authorize с
+/// «redirect_uri does not match any pre-registered url». Обмен кода в живом потоке
+/// делает <see cref="McpOAuthController"/>, а <see cref="NotifyCompletedAsync"/>
+/// ставит Connected/AdminOwnerId/ExpiresAt/AuthVersion в higgsield.json. Старый
+/// <see cref="CompleteAsync"/> оставлен только для legacy-эндпоинта
+/// <c>/api/higgsfield/callback</c>.
 ///
 /// Проба протокола (2026-09-15, токен прод-админа):
 /// - Session id: заголовок Mcp-Session-Id в ответе НЕ приходит — сервер безсессионный.
@@ -144,16 +151,48 @@ public sealed class HiggsfieldOAuthService(
 
         await oauth.CompleteAsync(state, code, ServiceOwnerId, ct: ct);
 
+        ApplyConnected(pending.AdminOwnerId);
+        return true;
+    }
+
+    /// <summary>
+    /// Хук для общего потока входа: <see cref="McpOAuthController.Callback"/> уже
+    /// обменял код на токены и сохранил их в записи, остаётся поставить состояние в
+    /// higgsfield.json. State обязан быть в нашем pending (создан <see cref="ConnectAsync"/>);
+    /// если его нет — это либо чужой state, либо повторный callback того же входа.
+    /// Молчаливый no-op, чтобы общий контроллер не зависел от внутренней логики Higgsfield.
+    /// </summary>
+    public bool NotifyCompletedAsync(string? state)
+    {
+        CleanupPending();
+        if (string.IsNullOrEmpty(state) || !_pending.TryRemove(state, out var pending))
+        {
+            log.LogDebug("Higgsfield NotifyCompleted: state не в pending — чужой или повторный callback");
+            return false;
+        }
+        if (pending.CreatedAt + PendingTtl <= DateTime.UtcNow)
+        {
+            log.LogWarning("Higgsfield NotifyCompleted: state истёк до завершения входа");
+            return false;
+        }
+        ApplyConnected(pending.AdminOwnerId);
+        return true;
+    }
+
+    // Единая точка выставления Connected/AdminOwnerId/ExpiresAt/AuthVersion —
+    // оба пути (legacy CompleteAsync и NotifyCompletedAsync из общего callback)
+    // делают ровно то же.
+    private void ApplyConnected(string adminOwnerId)
+    {
         var rec = TryGetServiceRecord();
         var st = LoadState();
         st.Connected = true;
-        st.AdminOwnerId = pending.AdminOwnerId;
+        st.AdminOwnerId = adminOwnerId;
         st.ExpiresAt = rec?.Auth.OAuth?.ExpiresAt;
         st.AuthVersion++;
         SaveState(st);
         log.LogInformation("Higgsfield: подключение (admin={Admin}, ver={Ver})",
-            pending.AdminOwnerId, st.AuthVersion);
-        return true;
+            adminOwnerId, st.AuthVersion);
     }
 
     /// Отключение: чистит токены, сбрасывает состояние.

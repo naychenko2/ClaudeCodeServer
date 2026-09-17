@@ -234,6 +234,10 @@ public sealed class HiggsfieldToolset : IMcpParameterizedToolset
                 System.Text.Encoding.UTF8, "application/json"),
         };
         request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+        // MCP поверх Streamable HTTP требует Accept с обоими типами: без text/event-stream
+        // апстрим вправе ответить 406 Not Acceptable (Higgsfield именно это и делал).
+        request.Headers.Accept.ParseAdd("application/json");
+        request.Headers.Accept.ParseAdd("text/event-stream");
         var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
         using var stream = await response.Content.ReadAsStreamAsync(ct);
         var text = await new System.IO.StreamReader(stream).ReadToEndAsync(ct);
@@ -284,6 +288,10 @@ public sealed class HiggsfieldToolset : IMcpParameterizedToolset
                 Content = new StringContent(bodyJson, System.Text.Encoding.UTF8, "application/json"),
             };
             request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+            // MCP поверх Streamable HTTP требует Accept с обоими типами: без text/event-stream
+            // апстрим вправе ответить 406 Not Acceptable (Higgsfield именно это и делал).
+            request.Headers.Accept.ParseAdd("application/json");
+            request.Headers.Accept.ParseAdd("text/event-stream");
             try
             {
                 var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);

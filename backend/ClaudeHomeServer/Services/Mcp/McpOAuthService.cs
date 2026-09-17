@@ -124,6 +124,12 @@ public class McpOAuthService(
         // это явное решение человека, дальше он сам отвечает за соответствие своему
         // провайдеру. Refresh-токен лежит в той же McpSecretEntry, что и access
         // (через AccessTokenRef), — повторный DCR его не задевает.
+        //
+        // Расхождение она диагностирует, но НЕ лечит автоматически: у Clerk DCR по
+        // client_name возвращает прежнего клиента с прежним списком адресов, новый
+        // redirect_uri в этот список не попадает (см. HiggsfieldInstanceController —
+        // лечение там: привести адрес к зарегистрированному, т.е. взять общий
+        // callback McpOAuthService.CallbackPath).
         var manualClientId = Trim(input?.ClientId);
         var storedRedirect = Trim(oauth.RedirectUri);
         var currentRedirect = Trim(redirectUri);

@@ -10,7 +10,6 @@ using ClaudeHomeServer.Services.Spend;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeHomeServer.Tests.Services.Mcp.Http;
 
@@ -850,6 +849,93 @@ public class HiggsfieldToolsetTests
         }
     }
 
+    // --- Шаг 5: исходящие запросы обязаны ставить Accept (MCP-over-Streamable-HTTP) ---
+
+    // Регрессия HTTP 406 от апстрима: Higgsfield требует Accept с обоими типами,
+    // иначе отвечает 406 Not Acceptable и тулсет пропадает у хода. Прокрываем оба пути —
+    // tools/list (FetchToolsListAsync) и tools/call (PostToHiggsfieldAsync).
+    // Хедер ставится на HttpRequestMessage.Headers.Accept, а не на DefaultRequestHeaders клиента —
+    // клиент общий и переиспользуется между ходами, глобальный Accept мог бы уехать в чужой запрос.
+    [Fact]
+    public async Task FetchToolsListAsync_СтавитЗаголовокAccept()
+    {
+        var dir = Path.Combine(Path.GetTempPath(),
+            "ccs-hf-accept-list-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var config = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["DataPath"] = Path.Combine(dir, "projects.json"),
+                }).Build();
+
+            var (statuses, oauth, handler) = NewStep3FixtureComponents(config);
+            handler.SetNext("event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":0,\"result\":{\"tools\":[]}}\n\n");
+
+            var toolset = new HiggsfieldToolset(oauth,
+                new StubHttpClientFactory(handler),
+                sessions: null!,
+                config,
+                mcpStatus: statuses,
+                NullLogger<HiggsfieldToolset>.Instance);
+
+            var fetch = typeof(HiggsfieldToolset).GetMethod("FetchToolsListAsync",
+                BindingFlags.NonPublic | BindingFlags.Instance)!;
+            var task = (Task)fetch.Invoke(toolset, [CancellationToken.None])!;
+            await task;
+
+            handler.LastAccept.Should().BeEquivalentTo(new[] { "application/json", "text/event-stream" },
+                "MCP-over-Streamable-HTTP требует оба типа в Accept, иначе апстрим отвечает 406");
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { /* best-effort */ }
+        }
+    }
+
+    [Fact]
+    public async Task PostToHiggsfieldAsync_СтавитЗаголовокAccept()
+    {
+        var dir = Path.Combine(Path.GetTempPath(),
+            "ccs-hf-accept-call-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var config = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["DataPath"] = Path.Combine(dir, "projects.json"),
+                }).Build();
+
+            var (statuses, oauth, handler) = NewStep3FixtureComponents(config);
+            handler.SetNext("event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"content\":[{\"text\":\"ok\"}],\"isError\":false}}\n\n");
+
+            var toolset = new HiggsfieldToolset(oauth,
+                new StubHttpClientFactory(handler),
+                sessions: null!,
+                config,
+                mcpStatus: statuses,
+                NullLogger<HiggsfieldToolset>.Instance);
+
+            // Зовём приватный PostToHiggsfieldAsync напрямую: проверяем контракт метода,
+            // а не путь через CallAsync (там ещё проверка whitelist/whitelisted и пр.).
+            var post = typeof(HiggsfieldToolset).GetMethod("PostToHiggsfieldAsync",
+                BindingFlags.NonPublic | BindingFlags.Instance)!;
+            var task = (Task<JsonObject?>)post.Invoke(toolset,
+                ["test-token", new JsonObject { ["jsonrpc"] = "2.0", ["id"] = 1 }, CancellationToken.None, 5_000])!;
+            var result = await task;
+
+            result.Should().NotBeNull("ответ 200 OK с JSON-RPC даёт не null");
+            handler.LastAccept.Should().BeEquivalentTo(new[] { "application/json", "text/event-stream" },
+                "MCP-over-Streamable-HTTP требует оба типа в Accept, иначе апстрим отвечает 406");
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { /* best-effort */ }
+        }
+    }
+
     // Расширенная фабрика для тестов прогрева: handler умеет задать «следующий» ответ.
     private sealed class ConfigurableResponseHandler : HttpMessageHandler
     {
@@ -857,9 +943,17 @@ public class HiggsfieldToolsetTests
 
         public void SetNext(string body) => _body = body;
 
+        // Для тестов на заголовки исходящего запроса (Accept и т. п.).
+        // Каждый запрос перезаписывает LastAccept — так тесты на tools/list и tools/call
+        // изолированы и не зависят от порядка вызовов handler'а.
+        public System.Collections.Generic.List<string?> LastAccept { get; private set; } = [];
+        public System.Collections.Generic.List<HttpRequestMessage> CapturedRequests { get; } = [];
+
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken ct)
         {
+            CapturedRequests.Add(request);
+            LastAccept = [.. request.Headers.Accept.Select(a => a.MediaType)];
             var response = new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(_body),

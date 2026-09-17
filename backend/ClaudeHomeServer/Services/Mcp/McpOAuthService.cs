@@ -115,8 +115,35 @@ public class McpOAuthService(
         var oauth = record.Auth.OAuth ?? new McpOAuthConfig();
         var (issuer, endpoints) = await DiscoverWithinBudgetAsync(serverUrl, oauth, ct);
 
-        var clientId = Trim(input?.ClientId) ?? Trim(oauth.ClientId);
-        var clientSecretRef = oauth.ClientSecretRef;
+        // Сохранённый redirect_uri мог разойтись с актуальным (смена домена, туннель,
+        // переезд пути — случай Higgsfield 2026-09-15: собственный callback появился
+        // позже, клиент был зарегистрирован под общий /api/mcp/oauth/callback).
+        // Без проверки authorize уедет со старым client_id и новым redirect_uri —
+        // провайдер отбивает «redirect_uri does not match any pre-registered url»
+        // и повторный «Войти» не помогает. Ручной client_id из формы всегда побеждает:
+        // это явное решение человека, дальше он сам отвечает за соответствие своему
+        // провайдеру. Refresh-токен лежит в той же McpSecretEntry, что и access
+        // (через AccessTokenRef), — повторный DCR его не задевает.
+        var manualClientId = Trim(input?.ClientId);
+        var storedRedirect = Trim(oauth.RedirectUri);
+        var currentRedirect = Trim(redirectUri);
+        var redirectMismatch = storedRedirect is not null
+            && currentRedirect is not null
+            && !string.Equals(storedRedirect, currentRedirect, StringComparison.OrdinalIgnoreCase);
+
+        var clientId = manualClientId ?? (redirectMismatch ? null : Trim(oauth.ClientId));
+        // Сбрасываем секрет вместе с client_id: при redirectMismatch прежний client_id
+        // непригоден, идём в DCR, а новый клиент может оказаться публичным (DCR без
+        // client_secret) — оставшийся ClientSecretRef от старого клиента привёл бы к
+        // отправке чужого секрета в обмене кода. Сейчас не стреляет (Higgsfield —
+        // публичный Clerk-клиент), но логически обязательно держать пары в унисон.
+        var clientSecretRef = (manualClientId is null && redirectMismatch)
+            ? null
+            : oauth.ClientSecretRef;
+        if (manualClientId is null && redirectMismatch)
+            log.LogWarning(
+                "OAuth-клиент «{Key}» зарегистрирован под «{Old}», запрошен «{New}» — перерегистрация",
+                record.Key, storedRedirect, currentRedirect);
         if (Trim(input?.ClientSecret) is { } freshSecret)
             clientSecretRef = secrets.Set(ownerId, freshSecret);
 

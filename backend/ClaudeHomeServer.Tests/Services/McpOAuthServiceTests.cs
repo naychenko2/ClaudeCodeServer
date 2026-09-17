@@ -219,6 +219,108 @@ public class McpOAuthServiceTests : IDisposable
         http.BodyOf("https://auth.example.com/register").Should().BeNull("DCR не нужен, client_id задан");
     }
 
+    // Регресс Higgsfield 2026-09-15: клиент зарегистрирован под общий callback
+    // /api/mcp/oauth/callback, а вход теперь идёт через собственный /api/higgsfield/callback.
+    // Без проверки authorize уехал бы со старым client_id и новым redirect_uri —
+    // провайдер (Clerk) отбивает «redirect_uri does not match any pre-registered url»
+    // и повторный «Войти» не помогает. Проверка закрывает весь класс: смена домена,
+    // туннель, переезд пути.
+    [Fact]
+    public async Task Вход_РазошелсяRedirectUri_ПринудительнаяПеререгистрация()
+    {
+        var (service, registry, secrets, _, http) = NewService();
+        // Запись с OAuth-конфигом и старым redirect_uri; refresh-токен уже в сторе
+        var record = Authorized(registry, secrets, expiresAt: DateTime.UtcNow.AddHours(1));
+        record.Auth.OAuth!.RedirectUri.Should().Be(Redirect);
+
+        const string newRedirect = "https://home.example.com/api/higgsfield/callback";
+        newRedirect.Should().NotBe(Redirect, "это и есть суть теста — разные адреса");
+
+        var start = await service.StartAsync(Owner, record, newRedirect, input: null);
+
+        // DCR дошёл до провайдера под новый redirect_uri — иначе authorize сломался бы
+        http.BodyOf("https://auth.example.com/register").Should().NotBeNull(
+            "при mismatch хранимый клиент непригоден — нужна перерегистрация");
+        var registration = JsonDocument.Parse(http.BodyOf("https://auth.example.com/register")!);
+        registration.RootElement.GetProperty("redirect_uris")[0].GetString().Should().Be(newRedirect);
+
+        // authorize уехал с тем же новым redirect_uri
+        System.Web.HttpUtility.ParseQueryString(new Uri(start.AuthorizeUrl).Query)["redirect_uri"]
+            .Should().Be(newRedirect);
+
+        // Запись обновилась; refresh-токен в той же McpSecretEntry — сброс ClientId его не задел
+        var saved = registry.Get(Owner, record.Id)!;
+        saved.Auth.OAuth!.RedirectUri.Should().Be(newRedirect);
+        saved.Auth.OAuth!.AccessTokenRef.Should().NotBeNullOrEmpty(
+            "AccessTokenRef копируется в новый McpOAuthConfig при сохранении");
+        var tokens = secrets.ResolveEntry(Owner, saved.Auth.OAuth!.AccessTokenRef)!;
+        tokens.RefreshToken.Should().Be("refresh-старый",
+            "refresh-токен лежит в той же записи стора, что и access — перерегистрация его не трогает");
+    }
+
+    [Fact]
+    public async Task Вход_СовпадаетRedirectUri_DcrНеЗапускается()
+    {
+        var (service, registry, secrets, _, http) = NewService();
+        // Authorized: RedirectUri = Redirect, ClientId = "client-from-dcr"
+        var record = Authorized(registry, secrets, expiresAt: DateTime.UtcNow.AddHours(1));
+
+        var start = await service.StartAsync(Owner, record, Redirect, input: null);
+
+        http.BodyOf("https://auth.example.com/register").Should().BeNull(
+            "RedirectUri совпадает — хранимый клиент пригоден, плодить новых не надо");
+        System.Web.HttpUtility.ParseQueryString(new Uri(start.AuthorizeUrl).Query)["client_id"]
+            .Should().Be("client-from-dcr", "используется сохранённый client_id");
+    }
+
+    // Сбрасываем клиента — сбрасываем и его секрет. Старый код сбрасывал ClientId при
+    // mismatch, но ClientSecretRef оставлял от прежнего клиента: новый публичный DCR
+    // (Higgsfield через Clerk) не вернёт секрет, и при обмене кода уехал бы чужой.
+    // Сейчас не стреляет (Higgsfield — публичный клиент), но логически обязательно
+    // держать пары в унисон. Задача eefcb96a.
+    [Fact]
+    public async Task Вход_РазошелсяRedirectUri_СбрасываетClientSecretRef()
+    {
+        var (service, registry, secrets, _, _) = NewService();
+        // Запись с заполненным ClientSecretRef — эмулируем прежний «секретный» клиент
+        var record = Authorized(registry, secrets, expiresAt: DateTime.UtcNow.AddHours(1));
+        var oldSecretRef = secrets.Set(Owner, "secret-старый");
+        record.Auth.OAuth!.ClientSecretRef = oldSecretRef;
+        record = registry.Update(Owner, record.Id, record)!;
+        record.Auth.OAuth!.ClientSecretRef.Should().Be(oldSecretRef,
+            "это и есть исходное состояние — сбрасывать есть что");
+
+        const string newRedirect = "https://home.example.com/api/higgsfield/callback";
+        await service.StartAsync(Owner, record, newRedirect, input: null);
+
+        var saved = registry.Get(Owner, record.Id)!;
+        saved.Auth.OAuth!.ClientSecretRef.Should().BeNullOrEmpty(
+            "при mismatch идём в DCR — хранить чужой секрет нельзя, новый клиент может быть публичным");
+        // Соседние секреты (access/refresh) лежат в одной записи стора, но ClientSecretRef
+        // и AccessTokenRef — разные поля McpOAuthConfig; сброс одного не трогает другой.
+        saved.Auth.OAuth!.AccessTokenRef.Should().NotBeNullOrEmpty(
+            "access/refresh живут в AccessTokenRef — DCR их не задевает, только ClientSecretRef");
+    }
+
+    // Ручной client_id из формы — явное решение человека. Проверка redirect_uri
+    // его не перебивает: дальше человек сам разбирается со своим провайдером
+    // (его client_id зарегистрирован под конкретный redirect_uri — это его ответственность).
+    [Fact]
+    public async Task Вход_РучнойClientIdПриMismatch_НеТриггеритПеререгистрацию()
+    {
+        var (service, registry, secrets, _, http) = NewService();
+        var record = Authorized(registry, secrets, expiresAt: DateTime.UtcNow.AddHours(1));
+        const string newRedirect = "https://home.example.com/api/higgsfield/callback";
+
+        var start = await service.StartAsync(Owner, record, newRedirect,
+            new McpOAuthClientInput("client-руками", null, null));
+
+        http.BodyOf("https://auth.example.com/register").Should().BeNull(
+            "input.ClientId задан — DCR не запускается независимо от mismatch");
+        System.Web.HttpUtility.ParseQueryString(new Uri(start.AuthorizeUrl).Query)["client_id"]
+            .Should().Be("client-руками");
+    }
+
     // ── scope: источник правды — ответ DCR, не scopes_supported ─────────────────────
 
     [Fact]

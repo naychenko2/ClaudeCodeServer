@@ -24,8 +24,12 @@ public class McpServersController(McpRegistry registry, McpSecretStore secrets,
     [HttpGet]
     public IActionResult List()
     {
-        var observed = statuses.GetByOwner(UserId);
-        return Ok(registry.GetByOwner(UserId)
+        // Статусы подтягиваются через McpStatusStore — он сам знает, что для инстансных
+        // интеграций (например, Higgsfield) раздел другой: иначе человек видит зелёную
+        // карточку, пока реальный статус Failed пишется в чужой owner.
+        var records = registry.GetByOwner(UserId);
+        var observed = statuses.GetByOwnerForServers(UserId, records);
+        return Ok(records
             .OrderBy(r => r.Key, StringComparer.Ordinal)
             .Select(r => McpServerMapper.ToDto(r, observed.GetValueOrDefault(r.Key))));
     }
@@ -48,7 +52,9 @@ public class McpServersController(McpRegistry registry, McpSecretStore secrets,
             .Where(p => p.MemoryEnabled)
             .Select(p => PersonaConsultantToolset.PmemServerKey(p.Handle))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        return Ok(statuses.GetByOwner(UserId)
+        // Мердж пользовательских наблюдений с инстансными — иначе статус Higgsfield
+        // (общий для всех, живёт в ServiceOwnerId) пропадёт из карточки встроенных серверов.
+        return Ok(statuses.GetByOwnerMerged(UserId)
             .Where(kv => !own.Contains(kv.Key))
             .Where(kv => !kv.Key.StartsWith(McpRegistry.ConsultantMemoryPrefix, StringComparison.OrdinalIgnoreCase)
                 || livePmem.Contains(kv.Key))
@@ -65,7 +71,7 @@ public class McpServersController(McpRegistry registry, McpSecretStore secrets,
     [HttpGet("{id}")]
     public IActionResult Get(string id) =>
         registry.Get(UserId, id) is { } record
-            ? Ok(McpServerMapper.ToDto(record, statuses.Get(UserId, record.Key)))
+            ? Ok(McpServerMapper.ToDto(record, statuses.GetForServer(UserId, record)))
             : NotFound(new { error = "Сервер не найден" });
 
     // Разовая проверка «по кнопке»: поднимаем сервер как это сделал бы ход и спрашиваем

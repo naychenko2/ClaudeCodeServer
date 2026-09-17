@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 
 namespace ClaudeHomeServer.Services.Mcp;
@@ -157,6 +158,67 @@ public class McpStatusStore
             if (!_byOwner.TryGetValue(ownerId, out var bag) || !bag.Remove(serverKey)) return;
             Save(DateTime.UtcNow);
         }
+    }
+
+    /// <summary>
+    /// Резолв «откуда читать статус» для конкретной записи. Инстансные интеграции
+    /// (общий OAuth-вход админа, единое подключение на бэкенд) лежат под фиксированным
+    /// ServiceOwnerId, а не под реальным владельцем — иначе статусы `Failed`/`needs-auth`
+    /// пишутся в один раздел стора, а читаются из другого, и человек видит зелёную карточку
+    /// (ADR-012 «тихо терять инструмент нельзя»). Это ЕДИНСТВЕННОЕ место, где учитывается
+    /// инстансность — иначе контроллер дублирует условие и со временем расходится с записью.
+    /// </summary>
+    private static string ResolveStatusOwner(string userId, McpServerRecord record)
+    {
+        // Пока единственная инстансная интеграция — Higgsfield. Карта «ключ → ServiceOwnerId»
+        // лежит здесь же, чтобы добавление следующей интеграции требовало правки одного метода.
+        if (string.Equals(record.Key, HiggsfieldOAuthService.Key, StringComparison.OrdinalIgnoreCase))
+            return HiggsfieldOAuthService.ServiceOwnerId;
+        return userId;
+    }
+
+    /// <summary>
+    /// Статус для одной записи реестра. Подтягивается из нужного раздела стора — для
+    /// инстансных интеграций это ServiceOwnerId (см. <see cref="ResolveStatusOwner"/>).
+    /// </summary>
+    public McpServerStatusEntry? GetForServer(string userId, McpServerRecord record)
+    {
+        var ownerId = ResolveStatusOwner(userId, record);
+        return Get(ownerId, record.Key);
+    }
+
+    /// <summary>
+    /// Батч: для каждой записи решаем, из какого раздела читать. Дешевле, чем N одиночных
+    /// резолвов в контроллере, и сохраняет «одну точку» — иначе <see cref="List"/> задвоит
+    /// условие с <see cref="GetForServer"/>.
+    /// </summary>
+    public IReadOnlyDictionary<string, McpServerStatusEntry> GetByOwnerForServers(
+        string userId, IEnumerable<McpServerRecord> records)
+    {
+        var result = new Dictionary<string, McpServerStatusEntry>(StringComparer.OrdinalIgnoreCase);
+        foreach (var record in records)
+        {
+            var entry = GetForServer(userId, record);
+            if (entry is not null) result[record.Key] = entry;
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Мердж наблюдений владельца со всеми инстансными источниками — для экрана
+    /// встроенных серверов (<c>GET /api/mcp/servers/builtin</c>): запись Higgsfield живёт
+    /// в ServiceOwnerId, а init CLI может принести наблюдение под userId. Приоритет
+    /// у инстансного — он про фактическое здоровье интеграции, а `connected` из init
+    /// означает лишь «CLI поднял сервер».
+    /// </summary>
+    public IReadOnlyDictionary<string, McpServerStatusEntry> GetByOwnerMerged(string userId)
+    {
+        var result = new Dictionary<string, McpServerStatusEntry>(
+            GetByOwner(userId), StringComparer.OrdinalIgnoreCase);
+        // При появлении следующих инстансных источников перебираем их тут же.
+        foreach (var (key, entry) in GetByOwner(HiggsfieldOAuthService.ServiceOwnerId))
+            result[key] = entry;
+        return result;
     }
 
     private Dictionary<string, McpServerStatusEntry> Bag(string ownerId)

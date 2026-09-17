@@ -1,6 +1,5 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using ClaudeHomeServer.Models;
 
 namespace ClaudeHomeServer.Services.Mcp.Http;
 
@@ -341,6 +340,7 @@ public sealed class HiggsfieldToolset : IMcpParameterizedToolset
                     RecordToolsListFailure("empty filtered list");
                     return null;
                 }
+                RecordToolsListSuccess();
                 return filtered;
             }
             catch (TaskCanceledException) when (ct.IsCancellationRequested)
@@ -380,6 +380,26 @@ public sealed class HiggsfieldToolset : IMcpParameterizedToolset
         {
             // McpStatusStore сам логгирует; наш страх — не уронить caller
             log.LogWarning(ex, "Higgsfield tools/list: failed to record status");
+        }
+    }
+
+    // Парный к RecordToolsListFailure: единственный путь «интеграция здорова». Без
+    // него прошлая ошибка зависает в сторе вечно — до первой новой ошибки карточка
+    // в UI остаётся красной. Симметричный контракт: тот же ServiceOwnerId/Key,
+    // Source=Probe (природа наблюдения та же — наш сетевой запрос), error=null.
+    // Зовётся из FetchToolsListAsync после фильтрации белого списка, чтобы
+    // подъём с диска и возврат свежего кэша не плодили лишних записей.
+    private void RecordToolsListSuccess()
+    {
+        if (mcpStatus is null) return;
+        try
+        {
+            mcpStatus.RecordProbe(HiggsfieldOAuthService.ServiceOwnerId, HiggsfieldOAuthService.Key,
+                McpServerStatuses.Connected, error: null);
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "Higgsfield tools/list: failed to record success status");
         }
     }
 

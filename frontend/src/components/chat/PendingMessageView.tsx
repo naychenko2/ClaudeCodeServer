@@ -277,7 +277,15 @@ export function PendingMessageList({ items, onCancel, onPreempt, isMobile, sessi
     const prev = prevRef.current;
     prevRef.current = items;
     const gone = prev.filter(p => !items.some(i => i.id === p.id));
-    if (gone.length === 0) { setShown(items); return; }
+    if (gone.length === 0) {
+      setShown(items);
+      // Отметки ухода гасим здесь же. Их снимал таймер ниже, но cleanup убивает его при
+      // ЛЮБОЙ смене items — а переключение чата меняет их дважды подряд (у соседнего чата
+      // своя очередь, и его вход в группу сразу приносит снимок). Без сброса строка,
+      // вернувшаяся вместе с чатом, осталась бы висеть прозрачной до перезагрузки страницы.
+      setLeavingIds(ids => (ids.length ? [] : ids));
+      return;
+    }
 
     // Показываем ушедшие ещё один кадр — с ними отработает transition
     setShown([...items, ...gone]);

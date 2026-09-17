@@ -442,7 +442,8 @@ const PROXY_ALLOWED_HOSTS = [
 
 // Домены генераторов медиа — их src в markdown не проксируем: медиа уже показаны в MediaBlock.
 // res.cloudinary.com здесь нет намеренно: это общий CDN, ссылку на него в markdown показываем.
-const MEDIA_HOSTS = ['fal.media', 'fal.run', 'queue.fal.run', 'cdn.fal.ai', 'glifusercontent.com'];
+// Higgsfield-CDN — точный distribution (как в PROXY_ALLOWED_HOSTS), не суффикс cloudfront.net.
+const MEDIA_HOSTS = ['fal.media', 'fal.run', 'queue.fal.run', 'cdn.fal.ai', 'glifusercontent.com', 'd8j0ntlcm91z4.cloudfront.net'];
 
 function matchesHosts(url: string, hosts: string[]): boolean {
   try {

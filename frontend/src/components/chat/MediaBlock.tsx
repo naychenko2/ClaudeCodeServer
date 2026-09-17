@@ -90,6 +90,19 @@ export function classifyUrl(item: Json | undefined): 'image' | 'video' | 'audio'
 // целиком такая строка не JSON, поэтому маркеры вытаскиваем regex'ом независимо от JSON.
 const RESOURCE_LINK_RE = /\[Resource link:\s*([^\]]+)\]\s*(https?:\/\/\S+)/g;
 
+// Голый URL в свободном тексте (Higgsfield job_status: ссылка — не в JSON и не маркером,
+// а строкой в тексте). Стопим на пробел/кавычки/скобки, чтобы markdown-`](url)` не
+// захватил закрывающую скобку.
+const BARE_URL_RE = /https?:\/\/[^\s"'<>()]+/g;
+
+// Хосты, которые кладут готовую ссылку на медиа СТРОКОЙ в свободный текст tool-результата
+// (не в JSON, не маркером). Пока — только Higgsfield: точный distribution его CDN
+// (не суффикс cloudfront.net, чтобы не стать открытым на чужой контент). fal/glif/cloudinary
+// сюда НЕ входят: их URL живёт в JSON/маркерах, и именно там фильтруются входные референсы
+// (source=uploaded, glifchat-image-input-production) — голым {url} этот контекст теряется
+// и входная картинка «оживала» дублем.
+const BARE_TEXT_MEDIA_HOSTS = ['d8j0ntlcm91z4.cloudfront.net'];
+
 // Толерантный разбор результата: целиком JSON — отлично; нет — пробуем хвост от первой
 // фигурной скобки до последней (сплющенный боевой формат «мусор + {json}»).
 // На мусоре не падаем — вернём undefined, медиа из маркеров всё равно покажутся.
@@ -175,6 +188,17 @@ export function extractMediaFromResult(result: string): MediaItem[] {
   // 2. JSON целиком или хвостом — fal-формат и glif structuredContent
   const parsed = parseLoose(result);
   if (parsed) scan(parsed, 0);
+
+  // 3. Голые URL в свободном тексте — строго по белому списку хостов, не «любым ссылкам»:
+  //    иначе в ленте рисовалось бы всё, что случайно попало в текст. Higgsfield job_status
+  //    отдаёт готовую ссылку строкой (не в JSON), fal/glif сюда не попадают — у них URL в
+  //    JSON. Тип — classifyUrl по расширению; дедуп по URL в push: повторный опрос задания
+  //    не нарисует картинку дважды. Проход идёт ПОСЛЕДНИМ: JSON-версия с метаданными
+  //    (width/height) выигрывает, голый URL лишь дополняет то, что JSON не дал.
+  for (const m of result.matchAll(BARE_URL_RE)) {
+    if (!hostMatches(m[0], BARE_TEXT_MEDIA_HOSTS)) continue;
+    push({ url: m[0] });
+  }
 
   return items;
 }

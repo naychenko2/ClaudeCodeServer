@@ -38,9 +38,13 @@ public static class TranscriptBrancher
     // sourcePath — готовый путь к файлу-источнику; anchorTexts — тексты сообщений
     // пользователя истории, до якорного включительно (последний = сам якорь);
     // newSessionId — новый csid (валидируется, имя файла и поле sessionId в записях);
-    // dstPath — полный путь целевого файла (родительская папка — забота вызывающего).
+    // dstPath — полный путь целевого файла (родительская папка — забота вызывающего);
+    // anchorUuid — ТОЧНЫЙ якорь (шаг 5): uuid записи транскрипта, снятый на конце якорного
+    // хода (StoredResultMessage.TranscriptTailUuid). Есть и найден в файле — граница берётся
+    // точным сравнением, текстовое сопоставление не запускается вовсе; нет (исторический чат)
+    // или в этом файле не нашёлся — прежний текстовый путь со своими fail-closed условиями.
     public static BranchResult Branch(string sourcePath, IEnumerable<string> anchorTexts,
-        string newSessionId, string dstPath)
+        string newSessionId, string dstPath, string? anchorUuid = null)
     {
         if (!File.Exists(sourcePath))
             return BranchResult.Fail($"файл-источник {sourcePath} не найден");
@@ -51,6 +55,14 @@ public static class TranscriptBrancher
         var lines = new List<string>();
         var promptLines = new List<int>();    // 0-based номер строки «человеческого» промпта в lines
         var promptTexts = new List<string>();  // его нормализованный текст
+        // Строка записи с точным якорем (uuid хвоста якорного хода); -1 — якоря нет либо
+        // он в этом файле не встретился. Ищем сырой подстрокой, не разбирая каждую запись:
+        // у длинных сессий строк десятки тысяч. Ведущая кавычка в игле обязательна —
+        // без неё игла нашлась бы внутри "parentUuid"/"leafUuid" соседних записей.
+        var uuidNeedles = TranscriptMigrator.IsSafeSessionId(anchorUuid)
+            ? new[] { $"\"uuid\":\"{anchorUuid}\"", $"\"uuid\": \"{anchorUuid}\"" }
+            : null;
+        var anchorUuidLine = -1;
         bool endsWithNewline;
         using (var fs = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
         {
@@ -69,6 +81,10 @@ public static class TranscriptBrancher
                 line = line.TrimEnd('\r');
                 if (line.Length == 0) continue;
                 lines.Add(line);
+                if (anchorUuidLine < 0 && uuidNeedles is not null
+                    && (line.Contains(uuidNeedles[0], StringComparison.Ordinal)
+                        || line.Contains(uuidNeedles[1], StringComparison.Ordinal)))
+                    anchorUuidLine = lines.Count - 1;
                 if (TryExtractHumanPrompt(line, out var norm))
                 {
                     promptLines.Add(lines.Count - 1);
@@ -77,11 +93,37 @@ public static class TranscriptBrancher
             }
         }
         // Файл, не оканчивающийся переносом строки — с недописанной последней строкой: отбрасываем
-        if (!endsWithNewline) DropLastLine(lines, promptLines, promptTexts);
+        if (!endsWithNewline)
+        {
+            DropLastLine(lines, promptLines, promptTexts);
+            // Якорь пришёлся на отброшенную недописанную строку — считаем, что его нет
+            if (anchorUuidLine >= lines.Count) anchorUuidLine = -1;
+        }
         if (lines.Count == 0)
             return BranchResult.Fail("файл-источник пуст: ни одной полной записи");
 
-        // 2. Сопоставление: для каждого сообщения истории — первый промпт транскрипта,
+        // 2. Точный якорь (шаг 5): uuid конца якорного хода найден в файле — граница известна
+        //    точно, текстовое сопоставление не запускается вовсе. Начало хода (оно же левая
+        //    граница хвостовой проверки п. 4) — последний человеческий промпт не позже
+        //    якорной записи; K считается ниже от самой якорной записи.
+        //    Якорь снимается на КОНЦЕ хода, поэтому отставание записи файла на пару строк
+        //    (CLI дописывает хвост асинхронно) границу не двигает: K всё равно берётся по
+        //    следующему человеческому промпту, а он заведомо позже.
+        if (anchorUuidLine >= 0)
+        {
+            var turnStart = 0;
+            foreach (var p in promptLines)
+            {
+                if (p > anchorUuidLine) break;
+                turnStart = p;
+            }
+            return CutAndWrite(lines, promptLines, turnStart, anchorUuidLine, newSessionId, dstPath);
+        }
+        if (uuidNeedles is not null)
+            Console.Error.WriteLine(
+                $"[TranscriptBrancher] Точный якорь {anchorUuid} не найден в {sourcePath} — переходим на текстовое сопоставление");
+
+        // 3. Сопоставление: для каждого сообщения истории — первый промпт транскрипта,
         //    СОДЕРЖАЩИЙ его нормализованный текст (сравнение «содержит»: сервер клеит к
         //    промпту хвосты — recall, контекст). Три fail-closed проверки — ниже.
         var anchors = new List<string>();
@@ -116,25 +158,36 @@ public static class TranscriptBrancher
             matched.Add(found);
         }
 
-        // 3. K = строка СЛЕДУЮЩЕГО человеческого промпта после якорного хода;
-        //    если ветвимся от последнего хода — конец файла.
-        var anchorPromptLine = promptLines[matched[^1]];
+        return CutAndWrite(lines, promptLines, promptLines[matched[^1]], promptLines[matched[^1]],
+            newSessionId, dstPath);
+    }
+
+    // Общий хвост обоих путей поиска границы (точного по uuid и текстового): K, хвостовая
+    // проверка, запись префикса. turnStartLine — строка промпта, которым начался якорный ход
+    // (левая граница проверки пар tool_use/tool_result); anchorLine — запись, ОТ которой
+    // ищется следующий человеческий промпт (у текстового пути это тот же промпт якоря, у
+    // точного — запись конца хода).
+    private static BranchResult CutAndWrite(List<string> lines, List<int> promptLines,
+        int turnStartLine, int anchorLine, string newSessionId, string dstPath)
+    {
+        // K = строка СЛЕДУЮЩЕГО человеческого промпта после якорного хода;
+        // если ветвимся от последнего хода — конец файла.
         var k = lines.Count;
         foreach (var p in promptLines)
-            if (p > anchorPromptLine) { k = p; break; }
+            if (p > anchorLine) { k = p; break; }
 
-        // 4. Хвостовая проверка: последний ход префикса (промпт якорного → K) обязан
-        //    завершать пары tool_use/tool_result. Прерванный ход (непарные) → отступить
-        //    назад к предыдущей границе хода; синтетическим result НЕ чиним.
-        if (!LastTurnIsBalanced(lines, anchorPromptLine, k))
+        // Хвостовая проверка: последний ход префикса (промпт якорного → K) обязан
+        // завершать пары tool_use/tool_result. Прерванный ход (непарные) → отступить
+        // назад к предыдущей границе хода; синтетическим result НЕ чиним.
+        if (!LastTurnIsBalanced(lines, turnStartLine, k))
         {
-            k = anchorPromptLine;
+            k = turnStartLine;
             if (k == 0)
                 return BranchResult.Fail("последний ход ветки обрывается на непарном tool_use, а более ранней границы хода нет: в ветке не осталось ни одного завершённого хода");
         }
 
-        // 5. Запись префикса [0, K) под новым id; sessionId в записях переписывается
-        //    (отчёт шага 0: CLI принимает оба варианта, но имя файла и содержимое — в схождение).
+        // Запись префикса [0, K) под новым id; sessionId в записях переписывается
+        // (отчёт шага 0: CLI принимает оба варианта, но имя файла и содержимое — в схождение).
         WritePrefix(lines, k, newSessionId, dstPath);
         return BranchResult.Success(k);
     }

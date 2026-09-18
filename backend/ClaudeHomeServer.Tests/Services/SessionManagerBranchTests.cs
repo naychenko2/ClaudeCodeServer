@@ -152,7 +152,8 @@ public class SessionManagerBranchTests : IDisposable
     private async Task<(Session Session, Project Project, string Csid, string UserText1, string UserText2)>
         SeedBranchableChatAsync(string suffix,
             string userText1 = "первый вопрос разговора с запасом символов для якоря",
-            string userText2 = "второй вопрос разговора с запасом символов для якоря")
+            string userText2 = "второй вопрос разговора с запасом символов для якоря",
+            string? tailUuid1 = null, string? tailUuid2 = null)
     {
         var dir = MkProjectDir(suffix);
         var project = _projectManager.Create("P-" + suffix, dir, TestUserId, TestUsername);
@@ -166,10 +167,10 @@ public class SessionManagerBranchTests : IDisposable
         [
             new StoredUserMessage(userText1),
             new StoredTextMessage("ответ 1"),
-            new StoredResultMessage("success", 100, 1),
+            new StoredResultMessage("success", 100, 1) { TranscriptTailUuid = tailUuid1 },
             new StoredUserMessage(userText2),
             new StoredTextMessage("ответ 2"),
-            new StoredResultMessage("success", 100, 1),
+            new StoredResultMessage("success", 100, 1) { TranscriptTailUuid = tailUuid2 },
         ]);
 
         WriteTranscript(csid, project.RootPath, userText1, userText2);
@@ -456,5 +457,53 @@ public class SessionManagerBranchTests : IDisposable
 
         result.Session.ClaudeSessionId.Should().NotBeNullOrEmpty().And.NotBe(csid);
         result.Session.Id.Should().NotBe(session.Id);
+    }
+
+    // --- Точный якорь (шаг 5): uuid конца хода из истории бьёт текстовое сопоставление ---
+
+    // Короткий якорный текст без подтверждающего соседа — тот случай, на котором текстовый
+    // путь честно отказывает (соседний тест ниже). С записанным uuid конца хода ветвление
+    // проходит: граница берётся точным сравнением.
+    [Fact]
+    public async Task ТочныйЯкорь_КороткийТекст_ВетвитсяПоUuid()
+    {
+        var (session, _, _, text1, _) = await SeedBranchableChatAsync("uuid-anchor",
+            userText1: "да", tailUuid1: "a1");
+
+        var result = await _sut.BranchAsync(session.Id, TestUserId, 0, text1,
+            SessionManager.ChatBranchInclude.Turn);
+
+        var branchHistory = await _historyService.LoadAsync(result.Session.ClaudeSessionId!);
+        branchHistory.OfType<StoredUserMessage>().Should().ContainSingle(m => m.Text == "да");
+    }
+
+    // Контроль к тесту выше: та же затравка БЕЗ uuid — отказ. Без него первый тест не
+    // доказывал бы, что сработал именно точный путь.
+    [Fact]
+    public async Task БезЯкоря_КороткийТекст_Отказ()
+    {
+        var (session, _, _, text1, _) = await SeedBranchableChatAsync("uuid-anchor-missing",
+            userText1: "да");
+
+        var act = () => _sut.BranchAsync(session.Id, TestUserId, 0, text1,
+            SessionManager.ChatBranchInclude.Turn);
+
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*в памяти модели*");
+    }
+
+    // Якорь берётся у ЯКОРНОГО хода, а не у последнего в чате: ветка от первого хода не
+    // должна утащить второй.
+    [Fact]
+    public async Task ТочныйЯкорь_БерётсяУСвоегоХода_НеУПоследнего()
+    {
+        var (session, _, _, text1, text2) = await SeedBranchableChatAsync("uuid-own-turn",
+            tailUuid1: "a1", tailUuid2: "a2");
+
+        var result = await _sut.BranchAsync(session.Id, TestUserId, 0, text1,
+            SessionManager.ChatBranchInclude.Turn);
+
+        var branchHistory = await _historyService.LoadAsync(result.Session.ClaudeSessionId!);
+        branchHistory.OfType<StoredUserMessage>().Should().ContainSingle()
+            .Which.Text.Should().Be(text1);
     }
 }

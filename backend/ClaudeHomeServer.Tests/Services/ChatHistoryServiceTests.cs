@@ -242,6 +242,29 @@ public class ChatHistoryServiceTests : IDisposable
             "null/0 у последнего result пропущен — берём предыдущий ненулевой");
     }
 
+    // Совместимость со старой историей: result без TranscriptTailUuid читается как null,
+    // поле опциональное (фича chat-branch, шаг 5). Хранилище — System.Text.Json, отсутствующее
+    // свойство тихо подставляет default для ссылочного типа, но проверим явно: легаси-чат
+    // с диска остаётся рабочим без миграции.
+    [Fact]
+    public async Task LoadAsync_СтараяИсторияБезTranscriptTailUuid_ПолеNull()
+    {
+        var sessionId = Guid.NewGuid().ToString();
+        var dir = Path.Combine(_tempDir, "sessions", sessionId);
+        Directory.CreateDirectory(dir);
+        await File.WriteAllTextAsync(Path.Combine(dir, "history.json"), """
+        [
+          { "kind": "user_message", "text": "привет" },
+          { "kind": "result", "subtype": "success", "durationMs": 100, "numTurns": 1 }
+        ]
+        """);
+
+        var loaded = await _sut.LoadAsync(sessionId);
+
+        loaded.OfType<StoredResultMessage>().Single()
+            .TranscriptTailUuid.Should().BeNull();
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_tempDir))

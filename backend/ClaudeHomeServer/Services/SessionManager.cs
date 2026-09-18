@@ -2592,8 +2592,19 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         }
         anchors.Add(anchorMessage.Text);
 
+        // Точный якорь (шаг 5): uuid хвоста транскрипта, записанный на конце ЯКОРНОГО хода —
+        // последний result этого хода, то есть до следующего сообщения пользователя. Есть —
+        // резак берёт границу точным сравнением; нет (чат до этого поля) — текстовый путь.
+        var anchorHistoryIndex = history.IndexOf(anchorMessage);
+        string? anchorUuid = null;
+        for (var i = anchorHistoryIndex + 1; i < history.Count; i++)
+        {
+            if (history[i] is StoredUserMessage) break;
+            if (history[i] is StoredResultMessage { TranscriptTailUuid: { } uuid }) anchorUuid = uuid;
+        }
+
         // §9.5 — границу не удалось сопоставить (отказ резака) — 409, резать наугад нельзя
-        var branchResult = Llm.TranscriptBrancher.Branch(srcPath, anchors, newCsid, dstPath);
+        var branchResult = Llm.TranscriptBrancher.Branch(srcPath, anchors, newCsid, dstPath, anchorUuid);
         if (!branchResult.Ok)
         {
             Console.Error.WriteLine($"[SessionManager] Ветвление чата {sessionId} отказано резаком: {branchResult.Reason}");
@@ -2604,7 +2615,6 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         // Обрезанная история ветки: turn — по конец хода (следующий user_message или конец
         // файла), beforePrompt — до якорного сообщения (оно не входит, его текст — draft,
         // иначе транскрипт заканчивался бы висящим промптом и следующий ход подклеил бы второй)
-        var anchorHistoryIndex = history.IndexOf(anchorMessage);
         int cutAt;
         string? draft = null;
         if (include == ChatBranchInclude.BeforePrompt)
@@ -8484,7 +8494,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                     acc.SetPromptSnapshot(m.SnapshotId);
                     break;
                 case ResultMessage m:
-                    await acc.OnResultAsync(m.Subtype, m.DurationMs, m.NumTurns, m.Usage, m.TotalCostUsd, m.ApiErrorStatus, m.PermissionDenials, _history, m.ContextTokens, m.UsageModel, m.DurationApiMs);
+                    // Точный якорь границы хода для ветвления (фича chat-branch, §4): uuid
+                    // последней записи транскрипта на КОНЕЦ хода. Снимается здесь, потому что
+                    // result — последнее событие хода, и дальше файл уже не растёт до
+                    // следующего. Не прочиталось — null, чат остаётся на текстовом пути.
+                    await acc.OnResultAsync(m.Subtype, m.DurationMs, m.NumTurns, m.Usage, m.TotalCostUsd, m.ApiErrorStatus, m.PermissionDenials, _history, m.ContextTokens, m.UsageModel, m.DurationApiMs,
+                        entry is not null ? Llm.Claude.TranscriptProbe.LastRecordUuid(FindResumeTranscript(entry)) : null);
                     if (entry is not null) entry.LoopTurnFailed = m.Subtype == "error";
                     SpendMapping.RecordTurnSpend(_spend, _llmProviders, ResolveOwnerId, _log, entry?.Info, m);
                     break;

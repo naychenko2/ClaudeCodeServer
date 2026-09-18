@@ -139,6 +139,13 @@ public class StoredResultMessage(string subtype, long durationMs, int numTurns,
     // Время запросов к API за ход — см. ResultMessage.DurationApiMs. В историях до этого
     // поля null: скорость у старых ходов считается по полному времени хода.
     public long? DurationApiMs { get; init; } = durationApiMs;
+    // Точный якорь границы хода для ветвления чата (фича chat-branch, §4 документа-основания):
+    // uuid последней записи транскрипта CLI на момент конца этого хода
+    // (TranscriptProbe.LastRecordUuid). Пока его нет, границу приходится искать текстовым
+    // сопоставлением сообщений истории с промптами транскрипта — оно честно отказывает
+    // примерно на каждом десятом шаге. null — история до этого поля (исторические чаты
+    // так и ветвятся текстовым путём), транскрипт не найден либо хвост не прочитался.
+    public string? TranscriptTailUuid { get; init; }
 }
 
 public class StoredErrorMessage(string text) : StoredMessage

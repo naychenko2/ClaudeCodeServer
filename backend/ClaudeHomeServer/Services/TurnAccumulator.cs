@@ -473,9 +473,14 @@ internal class TurnAccumulator
                 .LastOrDefault(m => m.EscalationId == escalationId)?.Escalation;
     }
 
+    // transcriptTailUuid — точный якорь границы хода для ветвления чата: uuid последней
+    // записи транскрипта CLI, снятый вызывающим на конце хода (см.
+    // StoredResultMessage.TranscriptTailUuid). null — не прочитался, чат остаётся на
+    // текстовом сопоставлении.
     public async Task OnResultAsync(string subtype, long durationMs, int numTurns,
         UsageInfo? usage, double? totalCostUsd, string? apiErrorStatus, IReadOnlyList<string>? permissionDenials, ChatHistoryService svc,
-        int? contextTokens = null, string? usageModel = null, long? durationApiMs = null)
+        int? contextTokens = null, string? usageModel = null, long? durationApiMs = null,
+        string? transcriptTailUuid = null)
     {
         lock (_lock)
         {
@@ -486,7 +491,8 @@ internal class TurnAccumulator
             foreach (var m in _currentTurn)
                 if (m is StoredTextMessage t && t.ParentToolUseId is null && t.Model is null)
                     t.Model = usageModel;
-            _currentTurn.Add(new StoredResultMessage(subtype, durationMs, numTurns, usage, totalCostUsd, apiErrorStatus, permissionDenials, contextTokens, durationApiMs));
+            _currentTurn.Add(new StoredResultMessage(subtype, durationMs, numTurns, usage, totalCostUsd, apiErrorStatus, permissionDenials, contextTokens, durationApiMs)
+                { TranscriptTailUuid = transcriptTailUuid });
         }
         await FlushAsync(svc);
     }

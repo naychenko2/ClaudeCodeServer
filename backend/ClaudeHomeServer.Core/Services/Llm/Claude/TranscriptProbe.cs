@@ -71,6 +71,52 @@ public static class TranscriptProbe
         }
     }
 
+    // uuid ПОСЛЕДНЕЙ записи транскрипта — точный якорь границы хода для ветвления чата
+    // (шаг 5 фичи chat-branch, документ-основание §4 «Точный якорь»). Пишется на конце
+    // каждого хода в StoredResultMessage.TranscriptTailUuid, и тогда резак ищет границу
+    // точным сравнением вместо текстового сопоставления.
+    //
+    // null — файла нет, хвост битый, uuid в последних записях отсутствует либо любая
+    // ошибка ФС: вызывающий остаётся на прежнем текстовом пути (fail-open в сторону
+    // старого поведения, а не отказ хода из-за не прочитанного якоря).
+    // Читается только хвост файла — транскрипты длинных сессий весят десятки МБ.
+    public static string? LastRecordUuid(string? transcriptPath, int tailBytes = 256 * 1024)
+    {
+        if (transcriptPath is null) return null;
+        try
+        {
+            using var fs = new FileStream(transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            var tail = new byte[Math.Min(tailBytes, fs.Length)];
+            fs.Seek(-tail.Length, SeekOrigin.End);
+            fs.ReadExactly(tail);
+
+            // Края хвоста режут строки пополам — битые отсеиваются JsonException'ом,
+            // идём с конца к первой целой записи с собственным uuid
+            var lines = System.Text.Encoding.UTF8.GetString(tail).Split('\n');
+            for (var i = lines.Length - 1; i >= 0; i--)
+            {
+                var line = lines[i].TrimEnd('\r');
+                if (line.Length == 0) continue;
+                try
+                {
+                    using var doc = JsonDocument.Parse(line);
+                    if (doc.RootElement.ValueKind != JsonValueKind.Object) continue;
+                    if (!doc.RootElement.TryGetProperty("uuid", out var uuid)
+                        || uuid.ValueKind != JsonValueKind.String) continue;
+                    var value = uuid.GetString();
+                    if (!string.IsNullOrEmpty(value)) return value;
+                }
+                catch (JsonException) { /* обрезанная/битая строка хвоста — идём дальше к целым */ }
+            }
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[TranscriptProbe] Не удалось прочитать uuid хвоста транскрипта {transcriptPath}: {ex.Message}");
+            return null;
+        }
+    }
+
     // Текст последнего user-сообщения транскрипта (content-строка; массивы блоков — вложения —
     // не сравнить со стартовым текстом хода, возвращаем null). null и при любой ошибке ФС —
     // вызывающий трактует как «текста нет» и не skip'ает submit (безопасная сторона).

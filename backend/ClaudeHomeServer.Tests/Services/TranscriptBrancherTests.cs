@@ -246,4 +246,113 @@ public class TranscriptBrancherTests : IDisposable
         res.Ok.Should().BeTrue(res.Reason); // короткий якорь подтверждён: его промпт — следующий за соседом
         res.CutLine.Should().Be(5);
     }
+
+    // --- Точный якорь по uuid (шаг 5, §4 «Точный якорь») ---
+
+    // Главный смысл шага: при точном якоре текстовое сопоставление НЕ запускается вовсе.
+    // Доказательство — заведомо негодные тексты («да»): текстовый путь на них отказывает
+    // (см. КороткийЯкорьБезПодтверждения_Отказ), а с uuid граница находится ровно та же,
+    // что в ГраницаВСередине_РежетПередСледующимПрмптом.
+    [Fact]
+    public void ТочныйЯкорь_ГраницаПоUuid_ТекстНеСпрашивается()
+    {
+        var src = WriteScenario(out _, out _, out _);
+        var dst = Dst();
+
+        var res = TranscriptBrancher.Branch(src, ["да"], New, dst, anchorUuid: "a3");
+
+        res.Ok.Should().BeTrue(res.Reason);
+        res.CutLine.Should().Be(8); // до строки u5 — весь ход B, как и у текстового пути
+        File.ReadAllLines(dst).Should().HaveCount(8);
+    }
+
+    // Ветвление от ПОСЛЕДНЕГО хода: следующего промпта нет — префикс до конца файла.
+    [Fact]
+    public void ТочныйЯкорь_ПоследнийХод_РежетДоКонцаФайла()
+    {
+        var src = WriteScenario(out _, out _, out _);
+        var dst = Dst();
+
+        var res = TranscriptBrancher.Branch(src, ["да"], New, dst, anchorUuid: "a4");
+
+        res.Ok.Should().BeTrue(res.Reason);
+        res.CutLine.Should().Be(10);
+    }
+
+    // Якорь есть, но в ЭТОМ файле его нет (короткая копия транскрипта, чужой файл) —
+    // не отказ, а честный откат на прежний текстовый путь.
+    [Fact]
+    public void ТочныйЯкорь_НеНайден_ПадаетНаТекстовыйПуть()
+    {
+        var src = WriteScenario(out var a, out var b, out _);
+        var dst = Dst();
+
+        var res = TranscriptBrancher.Branch(src, [a, b], New, dst, anchorUuid: "нет-такого-uuid");
+
+        res.Ok.Should().BeTrue(res.Reason);
+        res.CutLine.Should().Be(8);
+    }
+
+    // Игла ищется с ведущей кавычкой: "parentUuid"/"leafUuid" соседних записей не должны
+    // сойти за собственный uuid записи — иначе граница уехала бы на ход назад.
+    [Fact]
+    public void ТочныйЯкорь_НеПутаетParentUuid()
+    {
+        var a = "альфа: первое сообщение разговора с запасом символов для якоря";
+        var b = "бета: второе сообщение разговора с запасом символов для якоря";
+        var src = WriteFile("uuid-parent.jsonl",
+            SysInit,
+            UserStr("u1", a),
+            // ссылается на a2 ВПЕРЁД: наивный поиск подстроки "uuid":"a2" встал бы здесь
+            "{\"type\":\"assistant\",\"parentUuid\":\"a2\",\"leafUuid\":\"a2\",\"uuid\":\"a1\",\"message\":{\"role\":\"assistant\",\"content\":\"ответ 1\"}}",
+            UserStr("u2", b),
+            AsstStr("a2", "ответ 2"));
+        var dst = Dst();
+
+        var res = TranscriptBrancher.Branch(src, ["да"], New, dst, anchorUuid: "a2");
+
+        res.Ok.Should().BeTrue(res.Reason);
+        res.CutLine.Should().Be(5); // весь файл, а не обрез по первому ходу
+    }
+
+    // Хвостовая проверка считается по ХОДУ якоря (от его промпта), а не от записи-якоря:
+    // непарный tool_use внутри хода обязан отправить границу к началу этого хода.
+    [Fact]
+    public void ТочныйЯкорь_НепарныйToolUse_ОтступаетКНачалуХода()
+    {
+        var a = "альфа: первое сообщение разговора с запасом символов для якоря";
+        var b = "бета: второе сообщение разговора с запасом символов для якоря";
+        var src = WriteFile("uuid-unbalanced.jsonl",
+            SysInit,
+            UserStr("u1", a),
+            AsstStr("a1", "ответ 1"),
+            UserStr("u2", b),
+            AsstArr("a2", "[{\"type\":\"text\",\"text\":\"начал\"},{\"type\":\"tool_use\",\"id\":\"t9\",\"name\":\"Bash\",\"input\":{}}]"),
+            AsstStr("a3", "ход оборван: результата инструмента нет"));
+        var dst = Dst();
+
+        var res = TranscriptBrancher.Branch(src, ["да"], New, dst, anchorUuid: "a3");
+
+        res.Ok.Should().BeTrue(res.Reason);
+        res.CutLine.Should().Be(3); // до промпта u2 — оборванный ход B в ветку не попал
+    }
+
+    // Недописанная последняя строка отброшена вместе с якорем — тогда его считаем
+    // отсутствующим и идём текстовым путём, а не режем по несуществующей строке.
+    [Fact]
+    public void ТочныйЯкорь_НаНедописаннойСтроке_ПадаетНаТекстовыйПуть()
+    {
+        var a = "альфа: первое сообщение разговора с запасом символов для якоря";
+        var src = WriteTruncated("uuid-truncated.jsonl",
+            "{\"type\":\"assistant\",\"uuid\":\"a9\",\"message\":{\"role\":\"assis",
+            SysInit,
+            UserStr("u1", a),
+            AsstStr("a1", "ответ 1"));
+        var dst = Dst();
+
+        var res = TranscriptBrancher.Branch(src, [a], New, dst, anchorUuid: "a9");
+
+        res.Ok.Should().BeTrue(res.Reason);
+        res.CutLine.Should().Be(3);
+    }
 }

@@ -43,10 +43,6 @@ public interface IWatchdogCommandRunner
 // PATH профильного окружения, без него py/nvm в песочнице не видны).
 public sealed class WatchdogCommandRunner(ILauncherFactory launchers) : IWatchdogCommandRunner
 {
-    // Сборка cmd-аргументов — чистый шов под юнит-тест: сырая строка «/s /c "команда"».
-    // Строка, а не ArgumentList, — суть фикса ложных fired (см. комментарий в RunAsync)
-    internal static string WindowsCmdArguments(string command) => $"/s /c \"{command}\"";
-
     public async Task<PollOutcome> RunAsync(string ownerId, string workDir, string command,
         int timeoutSeconds, CancellationToken ct)
     {
@@ -54,17 +50,12 @@ public sealed class WatchdogCommandRunner(ILauncherFactory launchers) : IWatchdo
         var windows = launcher.TargetIsWindows;
         var spec = new ProcessSpec
         {
-            FileName = windows ? "cmd.exe" : "bash",
-            // cmd: /s /c + СЫРАЯ строка (RawArguments), не ArgumentList. .NET экранирует
-            // внутренние " как \", cmd этих правил не знает: poll-команда с вложенными
-            // кавычками (powershell -NoProfile -Command "if …") разваливалась — cmd сносил
-            // первую внешнюю кавычку, powershell получал литеральные кавычки, исполнял тело
-            // как строковый литерал и ЭХНУЛ его в stdout с exit 0 = ложный fired (прод
-            // 01.09, сторожа dd1fac4e/8ea8c9cc/3a091224). /s: cmd снимает только внешние
-            // кавычки, внутренние доходят до команды как есть. bash (песочница, Linux) —
-            // аргументы идут массивом execve без экранирования, ветка прежняя
-            RawArguments = windows ? WindowsCmdArguments(command) : null,
-            Args = windows ? [] : ["-lc", command],
+            FileName = ShellCommandLine.ShellFileName(windows),
+            // cmd: /s /c + СЫРАЯ строка (RawArguments), не ArgumentList — суть фикса ложных
+            // fired (прод 01.09, сторожа dd1fac4e/8ea8c9cc/3a091224). Формула одна на всех
+            // потребителей шелла и живёт в спине — см. ClaudeHomeServer.Services.ShellCommandLine
+            RawArguments = windows ? ShellCommandLine.WindowsCmdArguments(command) : null,
+            Args = windows ? [] : ShellCommandLine.UnixShellArgs(command),
             WorkingDirectory = workDir,
             RedirectStdin = false,
             // Вывод команды в UTF-8; без явной кодировки .NET читает в системной (OEM/ANSI)

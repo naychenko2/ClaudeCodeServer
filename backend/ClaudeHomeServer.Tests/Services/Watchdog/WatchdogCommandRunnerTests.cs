@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Watchdog;
 using FluentAssertions;
@@ -30,8 +31,9 @@ public class WatchdogCommandRunnerTests : IDisposable
     public void WindowsCmdArguments_сыраяСтрокаСключомS()
     {
         // /s: cmd снимает ТОЛЬКО внешние кавычки — внутренние должны дойти до команды
-        // как есть. Строка обязана оставаться сырой (Arguments), не ArgumentList
-        WatchdogCommandRunner.WindowsCmdArguments(@"powershell -NoProfile -Command ""if (1) { exit 0 }""")
+        // как есть. Строка обязана оставаться сырой (Arguments), не ArgumentList.
+        // Формула переехала в спину (ShellCommandLine) — её делят сторожа и пульт команд
+        ShellCommandLine.WindowsCmdArguments(@"powershell -NoProfile -Command ""if (1) { exit 0 }""")
             .Should().Be(@"/s /c ""powershell -NoProfile -Command ""if (1) { exit 0 }""""");
     }
 
@@ -43,7 +45,7 @@ public class WatchdogCommandRunnerTests : IDisposable
         var psi = LocalProcessRunner.BuildStartInfo(new ProcessSpec
         {
             FileName = "cmd.exe",
-            RawArguments = WatchdogCommandRunner.WindowsCmdArguments(
+            RawArguments = ShellCommandLine.WindowsCmdArguments(
                 @"powershell -NoProfile -Command ""if (Test-Path 'x') { exit 0 } else { exit 1 }"""),
             Args = [],
             RedirectStdin = false,

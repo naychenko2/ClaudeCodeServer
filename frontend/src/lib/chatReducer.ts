@@ -244,7 +244,7 @@ export const PERSISTED_KINDS = new Set<ChatItem['kind']>([
   'user_message', 'session_started', 'text', 'thinking', 'tool_use',
   'ask_question', 'plan_review', 'team_plan', 'team_escalation',
   'file_changed', 'result', 'fal_cost', 'glif_cost', 'compact_boundary', 'error',
-  'work_loop_stopped', 'model_switched',
+  'work_loop_stopped', 'model_switched', 'branched_from',
 ]);
 
 // Стоит ли заменить живую ленту историей с сервера: сравнение длин БЕЗ live-only

@@ -62,6 +62,9 @@ public static class FeatureFlagKeys
     // wsp-сервера и подсказку хода: иначе схема инструмента висела бы в контексте каждого
     // хода каждого пользователя при выключенной фиче.
     public const string ChatContext = "chat-context";
+    // Ветвление чата: кнопка «Ветвление» под шагом чата создаёт новый чат с копией
+    // истории до этого места (docs/research/chat-branching-2026-09.md, §7).
+    public const string ChatBranch = "chat-branch";
 }
 
 /// <summary>
@@ -151,6 +154,14 @@ public static class FeatureFlagCatalog
             Key: FeatureFlagKeys.ChatContext,
             Title: "Контекст чата",
             Description: "Файлы, ссылки и задачи можно закрепить за чатом кнопкой «в контекст чата»: они остаются на месте после закрытия окна, видны вкладками справа, а Claude может свериться с ними сам.",
+            Default: false,
+            Stage: "dev"),
+        // Ветвление чата (docs/research/chat-branching-2026-09.md, §7): новый чат с копией
+        // истории оригинала до выбранного шага.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.ChatBranch,
+            Title: "Ветвление чата",
+            Description: "Кнопка «Ветвление» под шагом чата создаёт новый чат с копией истории до этого места — можно переспросить иначе, не теряя исходный разговор.",
             Default: false,
             Stage: "dev"),
     ];

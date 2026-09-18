@@ -1881,6 +1881,10 @@ export type ChatItem =
   // provider_switched.errorDetails, история: StoredModelSwitchedMessage.Details):
   // раскрывается «Подробностями» внутри маркера
   | { kind: 'model_switched'; model: string; previousModel: string; reason?: string; rawLabel?: string; details?: string }
+  // Плашка «Ветка от {имя чата}» (фича chat-branch): запись истории нового чата, созданного
+  // ветвлением. sourceSessionId — id оригинала, sourceName — имя оригинала (снимок на момент
+  // ветвления), ts — Unix-мс UTC (в истории — StoredBranchedFromMessage.Timestamp).
+  | { kind: 'branched_from'; sourceSessionId: string; sourceName: string; ts?: number }
   // Карточка-предложение: лимит подписки исчерпан — продолжить на стороннем провайдере.
   // resolved — миграция состоялась (карточка гаснет)
   | { kind: 'provider_limit'; resetsAt?: string; providers: ProviderFallbackOption[]; resolved?: boolean }

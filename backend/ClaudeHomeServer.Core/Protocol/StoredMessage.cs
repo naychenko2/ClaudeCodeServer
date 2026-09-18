@@ -21,6 +21,7 @@ namespace ClaudeHomeServer.Protocol;
 [JsonDerivedType(typeof(StoredWorkflowProgressMessage), "workflow_progress")]
 [JsonDerivedType(typeof(StoredWorkLoopStoppedMessage), "work_loop_stopped")]
 [JsonDerivedType(typeof(StoredModelSwitchedMessage), "model_switched")]
+[JsonDerivedType(typeof(StoredBranchedFromMessage), "branched_from")]
 public abstract class StoredMessage { }
 
 public class StoredUserMessage(string text, string[]? attachedPaths = null, bool? viaAgent = null,
@@ -284,4 +285,16 @@ public class StoredModelSwitchedMessage : StoredMessage
     // Сырой текст промежуточной ошибки, погашенной этой подменой (ProviderSwitchedMessage.
     // ErrorDetails): без записи в историю после F5 «Подробности» маркера опустели бы.
     public string? Details { get; init; }
+}
+
+// Плашка «Ветка от {имя чата}» в ленте нового чата, созданного ветвлением (фича
+// chat-branch). Это запись ИСТОРИИ, а не живое событие: она обязана переживать F5 и
+// рестарт сервера (как model_switched, а не как provider_switched). SourceSessionId —
+// id оригинального чата, SourceName — его имя (снимок на момент ветвления), Timestamp —
+// Unix-мс UTC (см. StoredTextMessage.Timestamp).
+public class StoredBranchedFromMessage : StoredMessage
+{
+    public string SourceSessionId { get; init; } = "";
+    public string SourceName { get; init; } = "";
+    public long? Timestamp { get; init; }
 }

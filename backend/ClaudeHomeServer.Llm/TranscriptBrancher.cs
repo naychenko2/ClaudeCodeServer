@@ -1,0 +1,296 @@
+using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+
+namespace ClaudeHomeServer.Services.Llm;
+
+// Резак транскрипта для «ветвления чата» (шаг 1 фичи; документ-основание
+// docs/research/chat-branching-2026-09.md §3/§4, поведение CLI — chat-branching-cli-experiment-2026-09.md).
+//
+// Читает журнал claude CLI по ГОТОВОМУ пути (поиск самой длинной копии и фолбэк на архив —
+// в SessionManager, шаг 3; сюда путь приходит параметром — ссылка Llm → Main запрещена
+// сторожём границ), находит границу K по якорям истории и записывает префикс строк [0, K)
+// под новым csid в файл {новый csid}.jsonl.
+//
+// Правило отреза (доказано экспериментом шага 0): ветка = префикс строк файла. Ничего не
+// переупорядочивается и не пересобирается. Обход по parentUuid («путь от листа вверх»)
+// ЗАПРЕЩЁН: CLI пишет параллельные tool_use братьями по дереву, и путь от листа теряет
+// tool_result соседней ветви — следующий ход уйдёт с tool_use без результата.
+//
+// Сопоставление сообщений истории с промптами транскрипта — fail-closed: нарушение любого
+// из трёх условий (полнота / монотонность / однозначность) = отказ с причиной.
+// Короткое сообщение («да», «ок») нашлось бы в чужом промпте, и граница уехала бы на ход
+// вперёд — пользователь получил бы ветку с ровно тем ответом, от которого хотел уйти.
+public static class TranscriptBrancher
+{
+    // Ниже этого порога значимых символов якорный текст не само-опознаваем:
+    // кандидат принимается только при подтверждении соседом.
+    private const int AnchorMinSignificantChars = 40;
+
+    // Результат резака. Ok — с позицией отреза (0-based, количество строк префикса);
+    // Fail — с причиной для 409 (шаг 3 разворачивает). Молчаливой null без причины нет.
+    public sealed record BranchResult(bool Ok, int? CutLine, string? Reason)
+    {
+        public static BranchResult Success(int cutLine) => new(true, cutLine, null);
+        public static BranchResult Fail(string reason) => new(false, null, reason);
+    }
+
+    // sourcePath — готовый путь к файлу-источнику; anchorTexts — тексты сообщений
+    // пользователя истории, до якорного включительно (последний = сам якорь);
+    // newSessionId — новый csid (валидируется, имя файла и поле sessionId в записях);
+    // dstPath — полный путь целевого файла (родительская папка — забота вызывающего).
+    public static BranchResult Branch(string sourcePath, IEnumerable<string> anchorTexts,
+        string newSessionId, string dstPath)
+    {
+        if (!File.Exists(sourcePath))
+            return BranchResult.Fail($"файл-источник {sourcePath} не найден");
+        if (!TranscriptMigrator.IsSafeSessionId(newSessionId))
+            return BranchResult.Fail($"новый csid «{newSessionId}» не проходит проверку имени транскрипта");
+
+        // 1. Читаем файл построчно (FileShare.ReadWrite: живой/умирающий CLI пишет в него).
+        var lines = new List<string>();
+        var promptLines = new List<int>();    // 0-based номер строки «человеческого» промпта в lines
+        var promptTexts = new List<string>();  // его нормализованный текст
+        bool endsWithNewline;
+        using (var fs = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        {
+            if (fs.Length == 0) endsWithNewline = true;
+            else
+            {
+                fs.Position = fs.Length - 1;
+                var lastByte = fs.ReadByte();
+                fs.Position = 0;
+                endsWithNewline = lastByte == '\n' || lastByte == '\r';
+            }
+            using var reader = new StreamReader(fs, Encoding.UTF8);
+            string? line;
+            while ((line = reader.ReadLine()) is not null)
+            {
+                line = line.TrimEnd('\r');
+                if (line.Length == 0) continue;
+                lines.Add(line);
+                if (TryExtractHumanPrompt(line, out var norm))
+                {
+                    promptLines.Add(lines.Count - 1);
+                    promptTexts.Add(norm);
+                }
+            }
+        }
+        // Файл, не оканчивающийся переносом строки — с недописанной последней строкой: отбрасываем
+        if (!endsWithNewline) DropLastLine(lines, promptLines, promptTexts);
+        if (lines.Count == 0)
+            return BranchResult.Fail("файл-источник пуст: ни одной полной записи");
+
+        // 2. Сопоставление: для каждого сообщения истории — первый промпт транскрипта,
+        //    СОДЕРЖАЩИЙ его нормализованный текст (сравнение «содержит»: сервер клеит к
+        //    промпту хвосты — recall, контекст). Три fail-closed проверки — ниже.
+        var anchors = new List<string>();
+        foreach (var t in anchorTexts)
+        {
+            var n = Normalize(t);
+            if (n.Length > 0) anchors.Add(n);
+        }
+        if (anchors.Count == 0)
+            return BranchResult.Fail("не передано ни одного якорного сообщения с текстом — шаг неопределён");
+
+        var matched = new List<int>(); // индексы в promptTexts (строго растут)
+        for (var i = 0; i < anchors.Count; i++)
+        {
+            var found = IndexOfContainingPrompt(promptTexts, anchors[i], 0);
+            if (found < 0)
+                return BranchResult.Fail(i == anchors.Count - 1
+                    ? "якорный промпт не найден в транскрипте: этот шаг не удалось найти в памяти модели"
+                    : $"сообщение истории №{i} из {anchors.Count} не совпало ни с одним промптом транскрипта — неполное сопоставление");
+
+            // монотонность: позиции найденных промптов строго возрастают
+            if (matched.Count > 0 && found <= matched[^1])
+                return BranchResult.Fail("немонотонное сопоставление: позднее сообщение сошлось с более ранним промптом, чем предыдущее");
+
+            // однозначность: короткий якорь (<40 значимых символов) принимается только
+            // при совпадении соседа — промпт якоря обязан быть следующим за промптом соседа
+            if (i == anchors.Count - 1 && SignificantLength(anchors[i]) < AnchorMinSignificantChars)
+            {
+                if (matched.Count == 0 || matched[^1] + 1 != found)
+                    return BranchResult.Fail("текст якорного сообщения слишком короткий (<40 значимых символов) и не подтверждён предыдущим сообщением — совпадение неоднозначно");
+            }
+            matched.Add(found);
+        }
+
+        // 3. K = строка СЛЕДУЮЩЕГО человеческого промпта после якорного хода;
+        //    если ветвимся от последнего хода — конец файла.
+        var anchorPromptLine = promptLines[matched[^1]];
+        var k = lines.Count;
+        foreach (var p in promptLines)
+            if (p > anchorPromptLine) { k = p; break; }
+
+        // 4. Хвостовая проверка: последний ход префикса (промпт якорного → K) обязан
+        //    завершать пары tool_use/tool_result. Прерванный ход (непарные) → отступить
+        //    назад к предыдущей границе хода; синтетическим result НЕ чиним.
+        if (!LastTurnIsBalanced(lines, anchorPromptLine, k))
+        {
+            k = anchorPromptLine;
+            if (k == 0)
+                return BranchResult.Fail("последний ход ветки обрывается на непарном tool_use, а более ранней границы хода нет: в ветке не осталось ни одного завершённого хода");
+        }
+
+        // 5. Запись префикса [0, K) под новым id; sessionId в записях переписывается
+        //    (отчёт шага 0: CLI принимает оба варианта, но имя файла и содержимое — в схождение).
+        WritePrefix(lines, k, newSessionId, dstPath);
+        return BranchResult.Success(k);
+    }
+    // «Человеческий промпт» (тот же набор признаков, что у TranscriptProbe.LastUserText,
+    // но для ветвления массив текстовых блоков тоже считается промптом — tool_result не считается):
+    // type == "user" AND isSidechain != true AND isMeta != true AND content — строка
+    // либо массив, в котором НЕТ блока tool_result. Битая (недописанная) строка — false.
+    public static bool TryExtractHumanPrompt(string line, out string normalizedText)
+    {
+        normalizedText = string.Empty;
+        try
+        {
+            using var doc = JsonDocument.Parse(line);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return false;
+            if (!root.TryGetProperty("type", out var type) || type.GetString() != "user") return false;
+            if (root.TryGetProperty("isSidechain", out var sc) && sc.ValueKind == JsonValueKind.True) return false;
+            if (root.TryGetProperty("isMeta", out var meta) && meta.ValueKind == JsonValueKind.True) return false;
+            if (!root.TryGetProperty("message", out var msg) || msg.ValueKind != JsonValueKind.Object) return false;
+            if (!msg.TryGetProperty("content", out var content)) return false;
+
+            if (content.ValueKind == JsonValueKind.String)
+            {
+                normalizedText = Normalize(content.GetString());
+                return true;
+            }
+            if (content.ValueKind == JsonValueKind.Array)
+            {
+                var sb = new StringBuilder();
+                foreach (var block in content.EnumerateArray())
+                {
+                    if (block.ValueKind != JsonValueKind.Object) continue;
+                    // массив с хотя бы одним tool_result — запись результата инструмента, не промпт
+                    if (block.TryGetProperty("type", out var bt)
+                        && bt.ValueKind == JsonValueKind.String && bt.GetString() == "tool_result")
+                        return false;
+                    if (block.TryGetProperty("text", out var txt) && txt.ValueKind == JsonValueKind.String)
+                        sb.Append(txt.GetString() ?? string.Empty);
+                }
+                normalizedText = Normalize(sb.ToString());
+                return true;
+            }
+            return false;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    // Нормализация текста для сравнения «содержит»: нижний регистр + схлопывание пробельных.
+    public static string Normalize(string? s)
+    {
+        if (string.IsNullOrEmpty(s)) return string.Empty;
+        var sb = new StringBuilder(s.Length);
+        var prevSpace = true;
+        foreach (var c in s)
+        {
+            if (char.IsWhiteSpace(c))
+            {
+                if (!prevSpace) { sb.Append(' '); prevSpace = true; }
+            }
+            else
+            {
+                sb.Append(char.ToLowerInvariant(c));
+                prevSpace = false;
+            }
+        }
+        return sb.ToString().TrimEnd();
+    }
+
+    // «Значимые» символы нормализованного текста (без пробелов) — мера самостоятельности якоря.
+    public static int SignificantLength(string normalized)
+    {
+        var n = 0;
+        foreach (var c in normalized) if (!char.IsWhiteSpace(c)) n++;
+        return n;
+    }
+
+    // Первый промпт (не раньше от from), содержащий нормализованный текст; -1 — нет.
+    private static int IndexOfContainingPrompt(List<string> promptTexts, string needle, int from)
+    {
+        if (needle.Length == 0) return -1;
+        for (var i = from; i < promptTexts.Count; i++)
+            if (promptTexts[i].Contains(needle, StringComparison.Ordinal))
+                return i;
+        return -1;
+    }
+
+    // Недописанная последняя строка (файл без завершающего переноса) — отбрасывается вместе
+    // с метками промпта, если она уже попала в списки.
+    private static void DropLastLine(List<string> lines, List<int> promptLines, List<string> promptTexts)
+    {
+        if (lines.Count == 0) return;
+        var last = lines.Count - 1;
+        lines.RemoveAt(last);
+        if (promptLines.Count > 0 && promptLines[^1] == last)
+        {
+            promptLines.RemoveAt(promptLines.Count - 1);
+            promptTexts.RemoveAt(promptTexts.Count - 1);
+        }
+    }
+
+    // Хвостовая проверка (fail-closed, без синтетических tool_result): все tool_use последнего
+    // хода префикса [fromLine, toLine) парны с tool_result и наоборот.
+    private static bool LastTurnIsBalanced(List<string> lines, int fromLine, int toLine)
+    {
+        var toolUse = new HashSet<string>();
+        var toolResult = new HashSet<string>();
+        for (var i = fromLine; i < toLine; i++)
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(lines[i]);
+                if (doc.RootElement.ValueKind != JsonValueKind.Object) continue;
+                if (!doc.RootElement.TryGetProperty("message", out var msg) || msg.ValueKind != JsonValueKind.Object) continue;
+                if (!msg.TryGetProperty("content", out var content) || content.ValueKind != JsonValueKind.Array) continue;
+                foreach (var block in content.EnumerateArray())
+                {
+                    if (block.ValueKind != JsonValueKind.Object) continue;
+                    if (!block.TryGetProperty("type", out var bt) || bt.ValueKind != JsonValueKind.String) continue;
+                    if (bt.GetString() == "tool_use")
+                    {
+                        if (block.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String)
+                            toolUse.Add(id.GetString()!);
+                    }
+                    else if (bt.GetString() == "tool_result")
+                    {
+                        if (block.TryGetProperty("tool_use_id", out var tid) && tid.ValueKind == JsonValueKind.String)
+                            toolResult.Add(tid.GetString()!);
+                    }
+                }
+            }
+            catch (JsonException) { /* битая строка внутри хода — уже учтена при отборе строк */ }
+        }
+        foreach (var id in toolUse) if (!toolResult.Contains(id)) return false;
+        foreach (var id in toolResult) if (!toolUse.Contains(id)) return false;
+        return true;
+    }
+
+    // Запись префикса [0, k) → dstPath. sessionId в записях переписывается на newSessionId:
+    // отчёт шага 0 — CLI принимает оба варианта (не форкает по внутр. id), но переписываем,
+    // чтобы имя файла и содержимое сходились (иначе файл смешанный: префикс под старым id).
+    private static void WritePrefix(List<string> lines, int k, string newSessionId, string dstPath)
+    {
+        // csid — алфавитно-цифровой (IsSafeSessionId), JSON-экранирование не нужно;
+        // работаем на raw-строках, не разбирая каждую запись целиком.
+        var re = new Regex("\"sessionId\"\\s*:\\s*\"[A-Za-z0-9_-]{1,128}\"", RegexOptions.Compiled);
+        var sb = new StringBuilder();
+        for (var i = 0; i < k && i < lines.Count; i++)
+        {
+            var line = lines[i];
+            if (line.Contains("\"sessionId\"", StringComparison.Ordinal))
+                line = re.Replace(line, $"\"sessionId\":\"{newSessionId}\"");
+            sb.Append(line).Append('\n');
+        }
+        File.WriteAllText(dstPath, sb.ToString(), new UTF8Encoding(false));
+    }
+}

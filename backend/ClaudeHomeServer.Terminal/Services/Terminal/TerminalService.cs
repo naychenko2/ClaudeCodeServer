@@ -100,12 +100,22 @@ public sealed class TerminalService : IDisposable
     private readonly CancellationTokenSource _shutdownCts = new();
     private readonly Timer _cleanupTimer;
 
-    private static readonly string PtyBridgePath = "/app/pty-bridge";
+    // В образе песочницы (и в docker-образе сервера) бинарь лежит в /app
+    private const string ContainerPtyBridgePath = "/app/pty-bridge";
+
+    // Нативный запуск на Linux-хосте: сначала рядом со сборкой сервера, затем /app
+    private static readonly string LocalPtyBridgePath =
+        File.Exists(Path.Combine(AppContext.BaseDirectory, "pty-bridge"))
+            ? Path.Combine(AppContext.BaseDirectory, "pty-bridge")
+            : ContainerPtyBridgePath;
+
+    private static string PtyBridgePathFor(Execution.IProcessLauncher launcher) =>
+        launcher.IsSandboxed ? ContainerPtyBridgePath : LocalPtyBridgePath;
 
     // Есть ли pty-bridge в целевой среде: локально — файл на диске,
     // в песочнице — гарантирован образом
     private static bool HasPtyBridge(Execution.IProcessLauncher launcher) =>
-        launcher.IsSandboxed || File.Exists(PtyBridgePath);
+        launcher.IsSandboxed || File.Exists(LocalPtyBridgePath);
 
     // Префикс имени группы терминала (шаг 5, волна C, шов `ITerminalHubNotifier`):
     // формат знает только TerminalService, реализация шва имя не дописывает.
@@ -220,7 +230,7 @@ public sealed class TerminalService : IDisposable
                 usesPtyBridge = true;
                 process = launcher.Start(new Execution.ProcessSpec
                 {
-                    FileName = PtyBridgePath,
+                    FileName = PtyBridgePathFor(launcher),
                     Args = [cols.ToString(), rows.ToString()],
                     WorkingDirectory = project.RootPath,
                     Env = env,

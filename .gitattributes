@@ -4,3 +4,5 @@ claude-defaults/workflows/*.js text eol=lf
 mcp/**/*.js text eol=lf
 # Обвязка запуска процессов в sandbox-контейнере: CRLF в shebang ломает /bin/sh
 backend/sandbox/*.sh text eol=lf
+# Скрипты выкатки на Linux-хосте
+scripts/ops/*.sh text eol=lf

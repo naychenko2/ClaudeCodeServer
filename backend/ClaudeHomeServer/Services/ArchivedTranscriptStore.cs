@@ -146,6 +146,14 @@ public sealed class ArchivedTranscriptStore
         && File.Exists(FileService.SafeJoin(_root, claudeSessionId + ".jsonl"));
 
     /// <summary>
+    /// Путь к архивной копии транскрипта — фолбэк источника для ветвления чата (шаг 3
+    /// chat-branch, §3 документа-основания): архивный чат ветвить разрешено, транскрипт
+    /// профилей CLI мог уже вычистить плановой уборкой. null — копии нет либо ключ небезопасен.
+    /// </summary>
+    public string? FindCopyPath(string? claudeSessionId) =>
+        HasCopy(claudeSessionId) ? FileService.SafeJoin(_root, claudeSessionId + ".jsonl") : null;
+
+    /// <summary>
     /// Унести копию при удалении чата — иначе переписка переживёт сам чат и в data, и в
     /// бэкапе. Best-effort: удаление чата важнее уборки, ошибки глотаем.
     /// </summary>

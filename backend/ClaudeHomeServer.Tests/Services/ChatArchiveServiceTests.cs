@@ -45,7 +45,7 @@ public class ChatArchiveServiceTests : IDisposable
     public void Dispose()
     {
         _sessions.Dispose();
-        if (Directory.Exists(_tempDir)) Directory.Delete(_tempDir, recursive: true);
+        Helpers.TestFs.DeleteDirectoryResilient(_tempDir);
     }
 
     // --- Прохождение порога ---

@@ -59,7 +59,7 @@ public class SessionHubLeaveTests : IDisposable
 
     public void Dispose()
     {
-        if (Directory.Exists(_tempDir)) Directory.Delete(_tempDir, recursive: true);
+        Helpers.TestFs.DeleteDirectoryResilient(_tempDir);
     }
 
     private SessionManager CreateSessionManager()

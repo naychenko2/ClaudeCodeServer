@@ -35,7 +35,7 @@ public class ChatDigestServiceTests : IDisposable
 
     public void Dispose()
     {
-        if (Directory.Exists(_tempDir)) Directory.Delete(_tempDir, recursive: true);
+        Helpers.TestFs.DeleteDirectoryResilient(_tempDir);
     }
 
     // ─── Место каталога ───────────────────────────────────────────────────────

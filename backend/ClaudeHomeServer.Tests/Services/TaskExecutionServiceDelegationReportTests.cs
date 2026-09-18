@@ -108,21 +108,8 @@ public class TaskExecutionServiceDelegationReportTests : IDisposable
     public void Dispose()
     {
         GC.SuppressFinalize(this);
-        if (!Directory.Exists(_dir)) return;
         // История пишется из fire-and-forget обработчиков — уборка temp не предмет теста
-        for (var i = 1; ; i++)
-        {
-            try
-            {
-                Directory.Delete(_dir, recursive: true);
-                return;
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                if (i >= 5) return;
-                Thread.Sleep(50 * i);
-            }
-        }
+        Helpers.TestFs.DeleteDirectoryResilient(_dir);
     }
 
     // --- Обвязка сценария ---

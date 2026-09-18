@@ -40,7 +40,7 @@ public class SessionManagerSubscriptionMigrationTests : IDisposable
 
     public void Dispose()
     {
-        if (Directory.Exists(_tempDir)) Directory.Delete(_tempDir, recursive: true);
+        Helpers.TestFs.DeleteDirectoryResilient(_tempDir);
     }
 
     private (SessionManager Sut, ClaudeSubscriptionPool Pool, LlmProviderRegistry LlmProviders,

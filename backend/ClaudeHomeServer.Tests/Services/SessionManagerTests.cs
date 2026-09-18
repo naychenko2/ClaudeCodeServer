@@ -182,25 +182,10 @@ public class SessionManagerTests : IDisposable
 
     public void Dispose()
     {
-        if (!Directory.Exists(_tempDir)) return;
-
-        // Запись history.json идёт из fire-and-forget обработчиков SessionManager: после
-        // ускорения прогона (нет CLI-прогревов) тест доходит до Dispose раньше дописывания,
-        // и на Linux Directory.Delete падал «Directory not empty». Ретрай по паттерну
-        // TestWebApplicationFactory.Dispose — уборка temp не предмет теста.
-        for (var i = 1; ; i++)
-        {
-            try
-            {
-                Directory.Delete(_tempDir, recursive: true);
-                return;
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                if (i >= 5) return;
-                Thread.Sleep(50 * i);
-            }
-        }
+        // Запись history.json идёт из fire-and-forget обработчиков SessionManager: тест
+        // доходит до Dispose раньше дописывания — отсюда «Directory not empty» на Linux и
+        // занятый {path}.{guid}.tmp на Windows. Ретрай живёт в общем хелпере.
+        Helpers.TestFs.DeleteDirectoryResilient(_tempDir);
     }
 
     private string MkProjectDir(string suffix) =>

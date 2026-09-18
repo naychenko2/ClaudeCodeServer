@@ -38,7 +38,7 @@ public class ChatArchivedEventTests : IDisposable
 
     public void Dispose()
     {
-        if (Directory.Exists(_tempDir)) Directory.Delete(_tempDir, recursive: true);
+        Helpers.TestFs.DeleteDirectoryResilient(_tempDir);
     }
 
     // Широковещатель сообщений, в котором SessionManager ведёт поток по группе адресации:

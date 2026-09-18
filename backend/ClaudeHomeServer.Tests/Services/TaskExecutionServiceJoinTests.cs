@@ -81,7 +81,7 @@ public class TaskExecutionServiceJoinTests : IDisposable
 
     public void Dispose()
     {
-        if (Directory.Exists(_dir)) Directory.Delete(_dir, recursive: true);
+        Helpers.TestFs.DeleteDirectoryResilient(_dir);
     }
 
     // Построение SessionManager нужно только затем, что конструктор TaskExecutionService

@@ -50,7 +50,12 @@ RUN npm install -g @anthropic-ai/claude-code skills
 RUN apt-get update && apt-get install -y --no-install-recommends mc \
  && rm -rf /var/lib/apt/lists/*
 
-RUN useradd -m -u 1001 app
+# UID пользователя app. На Linux-хосте bind-mount проверяет права по UID —
+# задать UID владельца папок проектов: --build-arg APP_UID=$(id -u).
+# UID 1000 в базовом образе занят пользователем node — освобождаем
+ARG APP_UID=1001
+RUN if getent passwd ${APP_UID} >/dev/null; then userdel -r "$(getent passwd ${APP_UID} | cut -d: -f1)"; fi \
+ && useradd -m -u ${APP_UID} app
 WORKDIR /app
 
 COPY --from=pty-bridge /src/pty-bridge /app/pty-bridge
@@ -105,7 +110,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends mc \
  && rm -rf /var/lib/apt/lists/*
 
 # Непривилегированный пользователь; HOME под volume ~/.claude
-RUN useradd -m -u 1001 app
+# UID пользователя app. На Linux-хосте bind-mount проверяет права по UID —
+# задать UID владельца папок проектов: --build-arg APP_UID=$(id -u).
+# UID 1000 в базовом образе занят пользователем node — освобождаем
+ARG APP_UID=1001
+RUN if getent passwd ${APP_UID} >/dev/null; then userdel -r "$(getent passwd ${APP_UID} | cut -d: -f1)"; fi \
+ && useradd -m -u ${APP_UID} app
 WORKDIR /app
 
 COPY --from=pty-bridge /src/pty-bridge /app/pty-bridge

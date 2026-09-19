@@ -38,8 +38,9 @@ public class LocalProcessRunnerIsolationTests
     };
 
     private static (System.Diagnostics.ProcessStartInfo psi, string? reason) Build(
-        ProcessSpec spec, IsolationOptions options, bool windows = false, string? systemdRun = SystemdRun) =>
-        LocalProcessRunner.BuildStartInfo(spec, options, windows, systemdRun, Unit);
+        ProcessSpec spec, IsolationOptions options, bool windows = false, string? systemdRun = SystemdRun,
+        SystemdRunProbeResult? probeResult = null) =>
+        LocalProcessRunner.BuildStartInfo(spec, options, windows, systemdRun, probeResult, Unit);
 
     // Юнитам user-шина нужна «на бумаге»: обёртка проверяет только наличие переменных
     private static IDisposable Bus(bool present)
@@ -58,6 +59,17 @@ public class LocalProcessRunnerIsolationTests
     private sealed class Restore(Action undo) : IDisposable
     {
         public void Dispose() => undo();
+    }
+
+    // psi.Environment — КОПИЯ окружения хоста, поэтому «переменной там нет» проверяемо только
+    // при её отсутствии снаружи. А снаружи она как раз бывает: изолированным процессам её
+    // ставит этот самый механизм, и тестраннер, запущенный под изоляцией, её наследует —
+    // без снятия ассерт проверял бы среду прогона, а не код.
+    private static IDisposable NoAmbient(string name)
+    {
+        var prev = Environment.GetEnvironmentVariable(name);
+        Environment.SetEnvironmentVariable(name, null);
+        return new Restore(() => Environment.SetEnvironmentVariable(name, prev));
     }
 
     [Fact]
@@ -94,23 +106,15 @@ public class LocalProcessRunnerIsolationTests
     public void Выключена_ЗапускКакРаньше()
     {
         using var _ = Bus(present: true);
-        // Сам тест может идти в ходе агента, где переменная унаследована от прежнего режима
-        var inherited = Environment.GetEnvironmentVariable("MSBUILDDISABLENODEREUSE");
-        Environment.SetEnvironmentVariable("MSBUILDDISABLENODEREUSE", null);
-        try
-        {
-            var (psi, reason) = Build(Spec(args: ["--print"]), new IsolationOptions { Enabled = false });
+        using var noAmbient = NoAmbient("MSBUILDDISABLENODEREUSE");
 
-            reason.Should().Be("no-isolation");
-            psi.FileName.Should().Be("dummy");
-            psi.ArgumentList.Should().Equal("--print");
-            psi.Environment.Should().NotContainKey("MSBUILDDISABLENODEREUSE");
-            psi.Environment.Should().NotContainKey("MSBUILDNODEHANDSHAKESALT");
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("MSBUILDDISABLENODEREUSE", inherited);
-        }
+        var (psi, reason) = Build(Spec(args: ["--print"]), new IsolationOptions { Enabled = false });
+
+        reason.Should().Be("no-isolation");
+        psi.FileName.Should().Be("dummy");
+        psi.ArgumentList.Should().Equal("--print");
+        psi.Environment.Should().NotContainKey("MSBUILDDISABLENODEREUSE");
+        psi.Environment.Should().NotContainKey("MSBUILDNODEHANDSHAKESALT");
     }
 
     [Fact]
@@ -160,6 +164,89 @@ public class LocalProcessRunnerIsolationTests
         psi.FileName.Should().Be("dummy");
         psi.Arguments.Should().Be("/s /c \"echo hi\"");
         psi.ArgumentList.Should().BeEmpty();
+    }
+
+    // Проба systemd-run: systemd-run в PATH и user-шина на месте, но обёртка разрешена —
+    // её применяем (проба прошла → reason null, FileName = systemd-run).
+    [Fact]
+    public void ПробаOk_ОбёрткаПрименена()
+    {
+        using var _ = Bus(present: true);
+
+        var (psi, reason) = Build(Spec(args: ["--print", "a"]), On(),
+            probeResult: new SystemdRunProbeResult(true));
+
+        reason.Should().BeNull();
+        psi.FileName.Should().Be(SystemdRun);
+        psi.ArgumentList.Should().ContainInOrder("--", "dummy", "--print", "a");
+    }
+
+    // Проба systemd-run не прошла (ненулевой код/таймаут/исключение) — fail-open:
+    // обёртка НЕ применяется, процесс запускается напрямую, и есть причина для warning.
+    [Fact]
+    public void ПробаУпала_ОбёрткиНет_ЕстьПричина()
+    {
+        using var _ = Bus(present: true);
+
+        const string failReason = "проба systemd-run завершилась с кодом 1";
+        var (psi, reason) = Build(Spec(args: ["--print"]), On(),
+            probeResult: new SystemdRunProbeResult(false, failReason));
+
+        reason.Should().Be(failReason);
+        psi.FileName.Should().Be("dummy");
+        psi.ArgumentList.Should().Equal("--print");
+    }
+
+    // Проба выполняется ОДИН раз за процесс (лениво, результат кэшируется, потокобезопасно):
+    // N вызовов ProbeOnce при N запусках — ровно 1 обращение к шву, остальные — из кэша.
+    [Fact]
+    public void ПробаOnce_ОдинВызовНаНесколькоЗапусков()
+    {
+        var prevProbe = LocalProcessRunner.Probe;
+        var calls = 0;
+        LocalProcessRunner.Probe = (path, args, cmd, ms) =>
+        {
+            calls++;
+            return new SystemdRunProbeResult(true);
+        };
+        try
+        {
+            LocalProcessRunner.ResetProbeForTests();
+            var options = On();
+            for (var i = 0; i < 5; i++)
+            {
+                var r = LocalProcessRunner.ProbeOnce(options, SystemdRun);
+                r!.Ok.Should().BeTrue("кэшированный результат пробы стабилен");
+            }
+            calls.Should().Be(1, "проба повторяется только при пустом кэше");
+        }
+        finally
+        {
+            LocalProcessRunner.Probe = prevProbe;
+            LocalProcessRunner.ResetProbeForTests();
+        }
+    }
+
+    // Проба не нужна, когда обёртки всё равно не будет: изоляция выключена или systemd-run
+    // не найден — ProbeOnce не ходит в шов (null), чтобы тесты не зависели от настоящего systemd.
+    [Fact]
+    public void ПробаOnce_НеНужна_КогдаОбёрткиВсёРавноНеБудет()
+    {
+        var prevProbe = LocalProcessRunner.Probe;
+        var calls = 0;
+        LocalProcessRunner.Probe = (path, args, cmd, ms) => { calls++; return new SystemdRunProbeResult(true); };
+        try
+        {
+            LocalProcessRunner.ResetProbeForTests();
+            LocalProcessRunner.ProbeOnce(new IsolationOptions { Enabled = false }, SystemdRun).Should().BeNull();
+            LocalProcessRunner.ProbeOnce(On(), systemdRunPath: null).Should().BeNull();
+            calls.Should().Be(0, "проба не выполняется, если обёртки всё равно не будет");
+        }
+        finally
+        {
+            LocalProcessRunner.Probe = prevProbe;
+            LocalProcessRunner.ResetProbeForTests();
+        }
     }
 
     [Fact]

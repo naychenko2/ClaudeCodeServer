@@ -443,7 +443,10 @@ public class TeamWaveService
         if (stopped.SourceSessionId is { } sourceSessionId)
         {
             var src = _sessions.GetById(sourceSessionId);
-            string? stabId = src?.TeamImplement != null ? sourceSessionId : src?.ParentSessionId;
+            // Эффективный родитель — через SessionManager: он сам держит lookup
+            // (SessionTaskLinks внутри), и Team не нужно тащить свой ITaskLookup.
+            var srcParent = src is null ? null : _sessions.EffectiveParentSessionId(src);
+            string? stabId = src?.TeamImplement != null ? sourceSessionId : srcParent;
             if (stabId is not null)
                 await _sessions.TryResolveBlockerByFactAsync(stabId, taskId,
                     "штаб снял подзадачу — блокер снят");

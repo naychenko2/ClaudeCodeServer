@@ -227,7 +227,7 @@ public class PersonasController(
 
     // Чаты, которые ведутся от лица этой персоны
     [HttpGet("{id}/chats")]
-    public ActionResult<IReadOnlyList<Session>> Chats(string id)
+    public IActionResult Chats(string id)
     {
         if (_personas.Get(id, UserId) is null) return NotFound();
         return Ok(_sessions.GetPersonaChats(UserId, id));

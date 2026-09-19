@@ -30,7 +30,8 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     }
 
     [HttpGet]
-    public IActionResult GetAll() => Ok(sessions.GetProjectlessChats(UserId));
+    public IActionResult GetAll() =>
+        Ok(sessions.GetProjectlessChats(UserId));
 
     // Снимок «у каких чатов прямо сейчас идёт фоновая работа»: id сессий владельца, включая
     // проектные — карточки чатов проекта рисует тот же стор. Нужен потому, что событие

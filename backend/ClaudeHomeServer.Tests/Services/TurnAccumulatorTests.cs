@@ -21,6 +21,40 @@ public class TurnAccumulatorTests : IDisposable
             }).Build());
     }
 
+    // --- Отметка «Ход остановлен пользователем» ---
+
+    [Fact]
+    public void OnUserInterrupted_ВстаётПослеНаписанногоИНеДублируется()
+    {
+        var acc = new TurnAccumulator([]);
+        acc.OnUserMessage("напиши доклад", []);
+        acc.OnTextDelta("начало отве");
+
+        acc.OnUserInterrupted().Should().BeTrue();
+        acc.OnUserInterrupted().Should().BeFalse("повторный «Стоп» подряд второй отметки не даёт");
+
+        var all = acc.GetAll();
+        all.Select(m => m.GetType()).Should().Equal(
+            typeof(StoredUserMessage), typeof(StoredTextMessage), typeof(StoredInterruptedMessage));
+        ((StoredTextMessage)all[1]).Text.Should().Be("начало отве");
+        ((StoredInterruptedMessage)all[2]).Timestamp.Should().BeGreaterThan(0);
+    }
+
+    [Fact]
+    public async Task OnUserInterrupted_ПереживаетСохранениеИЗагрузку()
+    {
+        var sessionId = Guid.NewGuid().ToString();
+        var acc = new TurnAccumulator([], sessionId);
+        acc.OnUserMessage("вопрос", []);
+        acc.OnUserInterrupted();
+        await acc.SaveSnapshotAsync(_histSvc);
+
+        var loaded = await _histSvc.LoadAsync(sessionId);
+        loaded.Should().HaveCount(2);
+        loaded[1].Should().BeOfType<StoredInterruptedMessage>()
+            .Which.Timestamp.Should().BeGreaterThan(0);
+    }
+
     [Fact]
     public void SetPromptSnapshot_ПривязываетСнимокКСообщениюХода()
     {

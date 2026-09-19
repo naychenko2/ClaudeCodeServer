@@ -32,6 +32,9 @@ public class FileWatcherService : IDisposable
     // гасим handle, при следующем запросе он поднимется лениво снова.
     private const int PathIdleMinutes = 30;
     private const int IdleSweepMs = 5 * 60 * 1000;
+    // Ошибка, пришедшая в пределах этого окна после прошлого пересоздания, — продолжение той же
+    // серии сбоев: пауза перед следующим пересозданием удваивается (до потолка RecreateMaxDelay).
+    private static readonly TimeSpan RecreateStreakWindow = TimeSpan.FromMinutes(10);
 
     private class Entry
     {
@@ -46,6 +49,10 @@ public class FileWatcherService : IDisposable
         public readonly HashSet<string> Connections = new();
         public readonly HashSet<string> PendingPaths = new(StringComparer.OrdinalIgnoreCase);
         public Timer? Debounce;
+        // Отложенное пересоздание watcher'а после Error (одно на entry, серия ошибок схлопывается).
+        public Timer? Recreate;
+        public int RecreateStreak;
+        public DateTime LastRecreateUtc = DateTime.MinValue;
     }
 
     private readonly ConcurrentDictionary<string, Entry> _entries = new();             // key (projectId | worktree:{id}) -> Entry
@@ -60,6 +67,12 @@ public class FileWatcherService : IDisposable
     // Polling вместо FileSystemWatcher — для bind-mount ФС без inotify (9p/virtiofs в Docker Desktop).
     private readonly bool _usePolling;
     private readonly int _pollIntervalMs;
+    // Пауза перед пересозданием после Error: база и потолок экспоненты.
+    private readonly int _recreateDelayMs;
+    private readonly int _recreateMaxDelayMs;
+    private int _recreateCount;
+    // Для тестов: сколько раз пересоздавался watcher (серия ошибок не должна давать шторм).
+    internal int RecreateCount { get { lock (_lock) return _recreateCount; } }
 
     public FileWatcherService(ProjectManager projects, IHubContext<SessionHub> hub,
         ProjectKnowledgeSyncService knowledgeSync, CodeGraphService codeGraphs, IConfiguration config)
@@ -70,6 +83,8 @@ public class FileWatcherService : IDisposable
         _codeGraphs = codeGraphs;
         _usePolling = config.GetValue("FileWatcher:UsePolling", false);
         _pollIntervalMs = config.GetValue("FileWatcher:PollIntervalMs", 2000);
+        _recreateDelayMs = Math.Max(1, config.GetValue("FileWatcher:RecreateDelayMs", 2000));
+        _recreateMaxDelayMs = Math.Max(_recreateDelayMs, config.GetValue("FileWatcher:RecreateMaxDelayMs", 5 * 60 * 1000));
     }
 
     // Клиент начал смотреть проект — поднимаем watcher (или увеличиваем ref-count).
@@ -90,7 +105,7 @@ public class FileWatcherService : IDisposable
             if (entry.Watcher is null && entry.Poll is null)
             {
                 if (_usePolling) StartPolling(projectId, entry);
-                else entry.Watcher = CreateWatcher(projectId, entry);
+                else StartWatcher(projectId, entry);
                 return true;
             }
             return false;
@@ -145,7 +160,9 @@ public class FileWatcherService : IDisposable
             if (_entries.TryGetValue(key, out var existing))
             {
                 // Тот же ключ на другом пути (чат пересоздал дерево) — перевешиваем watcher.
-                if (string.Equals(existing.Root, full, StringComparison.OrdinalIgnoreCase))
+                // Тот же путь без живого watcher'а (старт упал, пересоздание не назначено) — поднимаем заново.
+                if (string.Equals(existing.Root, full, StringComparison.OrdinalIgnoreCase)
+                    && (existing.Watcher is not null || existing.Poll is not null || existing.Recreate is not null))
                 {
                     existing.LastTouchUtc = DateTime.UtcNow;
                     return;
@@ -156,7 +173,7 @@ public class FileWatcherService : IDisposable
             var entry = new Entry { Root = full, LastTouchUtc = DateTime.UtcNow };
             _entries[key] = entry;
             if (_usePolling) StartPolling(key, entry);
-            else entry.Watcher = CreateWatcher(key, entry);
+            else StartWatcher(key, entry);
             _idleSweep ??= new Timer(_ => SweepIdlePaths(), null, IdleSweepMs, IdleSweepMs);
         }
     }
@@ -183,7 +200,10 @@ public class FileWatcherService : IDisposable
         }
     }
 
-    private FileSystemWatcher CreateWatcher(string key, Entry entry)
+    // Вызывается под _lock. entry.Watcher присваивается ДО включения: на Linux ошибки старта
+    // (не удалось поставить слежку) приходят в Error синхронно, изнутри EnableRaisingEvents, —
+    // обработчик должен узнать в отправителе текущий watcher.
+    private void StartWatcher(string key, Entry entry)
     {
         var w = new FileSystemWatcher(entry.Root)
         {
@@ -197,10 +217,51 @@ public class FileWatcherService : IDisposable
         w.Changed += OnChange;
         w.Deleted += OnChange;
         w.Renamed += (_, e) => { OnFsEvent(key, entry, e.FullPath); OnFsEvent(key, entry, e.OldFullPath); };
-        w.Error += (_, _) => RecreateWatcher(key, entry);
-        try { w.EnableRaisingEvents = true; } catch { /* недоступный путь — оставим без watcher */ }
-        return w;
+        w.Error += (sender, _) => OnWatcherError(key, entry, sender);
+        entry.Watcher = w;
+        try { w.EnableRaisingEvents = true; }
+        catch
+        {
+            // Недоступный путь либо исчерпан лимит inotify-экземпляров (EMFILE) — без watcher'а,
+            // с повтором по той же лестнице пауз, что и после Error.
+            if (ReferenceEquals(entry.Watcher, w)) entry.Watcher = null;
+            try { w.Dispose(); } catch { }
+            ScheduleRecreate(key, entry);
+        }
     }
+
+    // Error watcher'а (переполнение очереди, не удалось поставить слежку на новую папку) —
+    // только ЗАКАЗ пересоздания, не само пересоздание. Инцидент 2026-09-19: пересоздание прямо
+    // из колбэка при исчерпанном бюджете слежек (ENOSPC) давало рекурсию — новый watcher падал
+    // синхронно внутри своего же старта и заказывал следующий, и так до исчерпания лимита
+    // inotify-экземпляров (8076 штук). Каждый watcher, у которого не встала корневая слежка,
+    // держит inotify-fd навсегда: поток .NET висит в read(), будить его нечем, Dispose не
+    // помогает. Поэтому — пауза с удвоением на серию сбоев и не больше одного заказа на entry.
+    // Сам колбэк в _lock не лезет: .NET зовёт Error из-под своего внутреннего замка слежек,
+    // а Dispose под нашим _lock ждёт тот же замок — была бы взаимоблокировка.
+    private void OnWatcherError(string key, Entry entry, object? sender) =>
+        ThreadPool.QueueUserWorkItem(_ =>
+        {
+            lock (_lock)
+            {
+                // Ошибка снятого/заменённого watcher'а (досылка при Dispose) — не повод пересоздавать живой
+                if (!ReferenceEquals(sender, entry.Watcher)) return;
+                ScheduleRecreate(key, entry);
+            }
+        });
+
+    // Вызывается под _lock.
+    private void ScheduleRecreate(string key, Entry entry)
+    {
+        if (entry.Recreate is not null || !IsLive(key, entry)) return;
+        var now = DateTime.UtcNow;
+        entry.RecreateStreak = now - entry.LastRecreateUtc < RecreateStreakWindow ? entry.RecreateStreak + 1 : 0;
+        var delay = Math.Min((long)_recreateDelayMs << Math.Min(entry.RecreateStreak, 20), _recreateMaxDelayMs);
+        entry.Recreate = new Timer(_ => RecreateWatcher(key, entry), null, delay, Timeout.Infinite);
+    }
+
+    private bool IsLive(string key, Entry entry) =>
+        _entries.TryGetValue(key, out var current) && ReferenceEquals(current, entry);
 
     private void OnFsEvent(string key, Entry entry, string fullPath)
     {
@@ -353,8 +414,14 @@ public class FileWatcherService : IDisposable
     {
         lock (_lock)
         {
+            entry.Recreate?.Dispose();
+            entry.Recreate = null;
+            if (!IsLive(key, entry)) return; // entry снят, пока ждали паузу
+            entry.LastRecreateUtc = DateTime.UtcNow;
+            _recreateCount++;
             try { entry.Watcher?.Dispose(); } catch { }
-            entry.Watcher = CreateWatcher(key, entry);
+            entry.Watcher = null;
+            StartWatcher(key, entry);
         }
         // За время сбоя watcher'а события ФС потеряны — списку файлов в UI нечем
         // компенсироваться. Клиенту уходит сигнал полной пересинхронизации (пути неизвестны),
@@ -378,8 +445,11 @@ public class FileWatcherService : IDisposable
     private void DisposeEntry(string key, Entry entry)
     {
         try { entry.Watcher?.Dispose(); } catch { }
+        entry.Watcher = null;
         entry.Poll?.Dispose();
         entry.Debounce?.Dispose();
+        entry.Recreate?.Dispose();
+        entry.Recreate = null;
         _entries.TryRemove(key, out _);
     }
 
@@ -392,6 +462,7 @@ public class FileWatcherService : IDisposable
             try { e.Watcher?.Dispose(); } catch { }
             e.Poll?.Dispose();
             e.Debounce?.Dispose();
+            e.Recreate?.Dispose();
         }
         _entries.Clear();
     }

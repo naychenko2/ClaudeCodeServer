@@ -33,6 +33,11 @@ public static class TestCollections
     // (модель в Core не должна звать сервисы, но её вычисляемые свойства торчат в DTO и
     // фильтрах чатов; трогать это заодно нельзя).
     public const string SessionStaticResolvers = "session-static-resolvers";
+
+    // Классы, которые на время теста урезают лимит дескрипторов ПРОЦЕССА (setrlimit, см.
+    // InotifyProbe.WithFdHeadroom) и меряют inotify-fd процесса: параллельный сосед либо
+    // упал бы на EMFILE, либо исказил бы замер своими наблюдателями.
+    public const string FdLimit = "fd-limit";
 }
 
 // Объявление коллекции (без фикстуры — общего состояния тестам не нужно, нужна только
@@ -43,3 +48,6 @@ public class ProcessGlobalStateCollection;
 
 [CollectionDefinition(TestCollections.SessionStaticResolvers, DisableParallelization = true)]
 public class SessionStaticResolversCollection;
+
+[CollectionDefinition(TestCollections.FdLimit, DisableParallelization = true)]
+public class FdLimitCollection;

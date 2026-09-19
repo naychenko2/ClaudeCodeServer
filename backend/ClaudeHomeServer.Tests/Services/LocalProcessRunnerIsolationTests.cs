@@ -13,6 +13,7 @@ namespace ClaudeHomeServer.Tests.Services;
 public class LocalProcessRunnerIsolationTests
 {
     private const string SystemdRun = "/usr/bin/systemd-run";
+    private const string Unit = "ccs-run-test.scope";
 
     private static ProcessSpec Spec(
         IReadOnlyList<string>? args = null,
@@ -27,9 +28,10 @@ public class LocalProcessRunnerIsolationTests
             RawArguments = raw,
         };
 
-    private static IsolationOptions On(string? memHigh = null, string? memMax = null) => new()
+    private static IsolationOptions On(string? memHigh = null, string? memMax = null, bool reuse = true) => new()
     {
         Enabled = true,
+        BuildNodeReuse = reuse,
         Slice = "ccs-agents.slice",
         MemoryHigh = memHigh,
         MemoryMax = memMax,
@@ -37,7 +39,7 @@ public class LocalProcessRunnerIsolationTests
 
     private static (System.Diagnostics.ProcessStartInfo psi, string? reason) Build(
         ProcessSpec spec, IsolationOptions options, bool windows = false, string? systemdRun = SystemdRun) =>
-        LocalProcessRunner.BuildStartInfo(spec, options, windows, systemdRun);
+        LocalProcessRunner.BuildStartInfo(spec, options, windows, systemdRun, Unit);
 
     // Юнитам user-шина нужна «на бумаге»: обёртка проверяет только наличие переменных
     private static IDisposable Bus(bool present)
@@ -69,6 +71,7 @@ public class LocalProcessRunnerIsolationTests
         psi.FileName.Should().Be(SystemdRun);
         psi.ArgumentList.Should().Equal(
             "--user", "--scope", "--quiet", "--collect",
+            $"--unit={Unit}",
             "--slice=ccs-agents.slice",
             "--property=MemoryHigh=12G",
             "--property=MemoryMax=16G",
@@ -91,13 +94,23 @@ public class LocalProcessRunnerIsolationTests
     public void Выключена_ЗапускКакРаньше()
     {
         using var _ = Bus(present: true);
+        // Сам тест может идти в ходе агента, где переменная унаследована от прежнего режима
+        var inherited = Environment.GetEnvironmentVariable("MSBUILDDISABLENODEREUSE");
+        Environment.SetEnvironmentVariable("MSBUILDDISABLENODEREUSE", null);
+        try
+        {
+            var (psi, reason) = Build(Spec(args: ["--print"]), new IsolationOptions { Enabled = false });
 
-        var (psi, reason) = Build(Spec(args: ["--print"]), new IsolationOptions { Enabled = false });
-
-        reason.Should().Be("no-isolation");
-        psi.FileName.Should().Be("dummy");
-        psi.ArgumentList.Should().Equal("--print");
-        psi.Environment.Should().NotContainKey("MSBUILDDISABLENODEREUSE");
+            reason.Should().Be("no-isolation");
+            psi.FileName.Should().Be("dummy");
+            psi.ArgumentList.Should().Equal("--print");
+            psi.Environment.Should().NotContainKey("MSBUILDDISABLENODEREUSE");
+            psi.Environment.Should().NotContainKey("MSBUILDNODEHANDSHAKESALT");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("MSBUILDDISABLENODEREUSE", inherited);
+        }
     }
 
     [Fact]
@@ -150,17 +163,75 @@ public class LocalProcessRunnerIsolationTests
     }
 
     [Fact]
-    public void MsbuildПеременные_ДобавляютсяИНеПеребиваютЯвные()
+    public void РеюзВыключен_ЗапретыMsbuildДобавляютсяИНеПеребиваютЯвные()
     {
         using var _ = Bus(present: true);
 
         var (psi, _) = Build(
             Spec(env: new Dictionary<string, string> { ["UseSharedCompilation"] = "true" }),
-            On());
+            On(reuse: false));
 
         psi.Environment["MSBUILDDISABLENODEREUSE"].Should().Be("1");
         psi.Environment["DOTNET_CLI_USE_MSBUILD_SERVER"].Should().Be("0");
         psi.Environment["UseSharedCompilation"].Should().Be("true", "явный spec.Env сильнее дефолта изоляции");
+        psi.Environment.Should().NotContainKey("MSBUILDNODEHANDSHAKESALT");
+    }
+
+    [Fact]
+    public void Реюз_УзлыСборкиСолятсяИменемScope()
+    {
+        using var _ = Bus(present: true);
+
+        var (psi, _) = Build(Spec(), On());
+
+        // Соль рукопожатия и труба компилятора — имя юнита: узлы приватны scope, и остановка
+        // чужого scope не роняет идущую сборку соседнего хода
+        psi.Environment["MSBUILDNODEHANDSHAKESALT"].Should().Be(Unit);
+        psi.Environment["SharedCompilationId"].Should().Be(Unit);
+        psi.Environment.Should().NotContainKey("MSBUILDDISABLENODEREUSE");
+        psi.Environment.Should().NotContainKey("DOTNET_CLI_USE_MSBUILD_SERVER");
+        psi.Environment.Should().NotContainKey("UseSharedCompilation");
+    }
+
+    [Fact]
+    public void Реюз_УнаследованныеЗапретыСнимаются_ЯвныеОстаются()
+    {
+        using var _ = Bus(present: true);
+        // Бэкенд, запущенный из хода агента, наследует запреты прежнего режима
+        var prevReuse = Environment.GetEnvironmentVariable("MSBUILDDISABLENODEREUSE");
+        var prevShared = Environment.GetEnvironmentVariable("UseSharedCompilation");
+        Environment.SetEnvironmentVariable("MSBUILDDISABLENODEREUSE", "1");
+        Environment.SetEnvironmentVariable("UseSharedCompilation", "false");
+        try
+        {
+            var (psi, _) = Build(
+                Spec(env: new Dictionary<string, string> { ["UseSharedCompilation"] = "false" }),
+                On());
+
+            psi.Environment.Should().NotContainKey("MSBUILDDISABLENODEREUSE", "унаследованный запрет молча выключил бы реюз");
+            psi.Environment["UseSharedCompilation"].Should().Be("false", "явный spec.Env сильнее режима");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("MSBUILDDISABLENODEREUSE", prevReuse);
+            Environment.SetEnvironmentVariable("UseSharedCompilation", prevShared);
+        }
+    }
+
+    [Fact]
+    public void ИмяScope_УникальноНаЗапуск()
+    {
+        using var _ = Bus(present: true);
+
+        var (a, _) = LocalProcessRunner.BuildStartInfo(Spec(), On(), false, SystemdRun);
+        var (b, _) = LocalProcessRunner.BuildStartInfo(Spec(), On(), false, SystemdRun);
+
+        var unitA = a.ArgumentList.Single(x => x.StartsWith("--unit="));
+        var unitB = b.ArgumentList.Single(x => x.StartsWith("--unit="));
+        unitA.Should().MatchRegex("^--unit=ccs-run-[0-9a-f]{32}\\.scope$");
+        unitA.Should().NotBe(unitB);
+        unitA.Length.Should().Be(("--unit=" + LocalProcessRunner.ScopeUnitPlaceholder).Length,
+            "оценка длины командной строки считает имя заглушкой той же длины");
     }
 
     [Fact]
@@ -370,6 +441,164 @@ public class LocalProcessRunnerIsolationTests
         finally
         {
             IsolationOptions.Instance = prev;
+        }
+    }
+    // Гашение scope по выходу процесса — через шов StopScope и поддельный systemd-run
+    // (скрипт отбрасывает флаги обёртки до «--» и exec-ает команду): реальный systemd не
+    // нужен, поэтому тест идёт на любом Linux, включая CI. Проверяем: стоп ровно один раз
+    // и ровно с тем юнитом, что ушёл обёртке в --unit.
+    [Fact]
+    public async Task Start_ПоВыходуПроцесса_ScopeГаситсяРовноОдинРаз()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        var dir = Path.Combine(Path.GetTempPath(), "lpr_stop_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        var fake = Path.Combine(dir, "systemd-run");
+        var argsLog = Path.Combine(dir, "args.txt");
+        File.WriteAllText(fake, $$"""
+            #!/bin/sh
+            printf '%s\n' "$@" > '{{argsLog}}'
+            while [ "$1" != "--" ]; do shift; done
+            shift
+            exec "$@"
+            """.Replace("\r\n", "\n"));
+        File.SetUnixFileMode(fake, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        using var _ = Bus(present: true);
+        var prevOptions = IsolationOptions.Instance;
+        var prevStop = LocalProcessRunner.StopScope;
+        var calls = new List<(string Systemctl, string Unit)>();
+        var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        IsolationOptions.Instance = new IsolationOptions { Enabled = true, SystemdRunPath = fake };
+        LocalProcessRunner.StopScope = (systemctl, unit) =>
+        {
+            lock (calls) calls.Add((systemctl, unit));
+            stopped.TrySetResult();
+        };
+        try
+        {
+            using var process = LocalProcessRunner.Instance.Start(new ProcessSpec
+            {
+                FileName = "sh",
+                Args = ["-c", "echo готово"],
+                RedirectStdin = false,
+                Track = false,
+            });
+            (await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10)))
+                .Should().Be("готово");
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            (await Task.WhenAny(stopped.Task, Task.Delay(TimeSpan.FromSeconds(10))))
+                .Should().Be(stopped.Task, "по выходу обёрнутого процесса scope обязан гаситься");
+            // Второго вызова быть не должно: даём фону шанс ошибиться
+            await Task.Delay(300);
+
+            var unitArg = File.ReadAllLines(argsLog).Single(a => a.StartsWith("--unit="));
+            lock (calls)
+            {
+                calls.Should().ContainSingle();
+                calls[0].Unit.Should().Be(unitArg["--unit=".Length..]);
+                calls[0].Systemctl.Should().Be("systemctl", "рядом с поддельным systemd-run systemctl нет — берётся из PATH");
+            }
+        }
+        finally
+        {
+            LocalProcessRunner.StopScope = prevStop;
+            IsolationOptions.Instance = prevOptions;
+            try { Directory.Delete(dir, recursive: true); } catch { /* best-effort */ }
+        }
+    }
+
+    [Fact]
+    public async Task Start_ИзоляцияВыключена_ScopeНеГасится()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        var prevOptions = IsolationOptions.Instance;
+        var prevStop = LocalProcessRunner.StopScope;
+        var calls = 0;
+        IsolationOptions.Instance = new IsolationOptions { Enabled = false };
+        LocalProcessRunner.StopScope = (_, _) => Interlocked.Increment(ref calls);
+        try
+        {
+            using var process = LocalProcessRunner.Instance.Start(new ProcessSpec
+            {
+                FileName = "sh",
+                Args = ["-c", "true"],
+                RedirectStdin = false,
+                Track = false,
+            });
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            await Task.Delay(300);
+            calls.Should().Be(0);
+        }
+        finally
+        {
+            LocalProcessRunner.StopScope = prevStop;
+            IsolationOptions.Instance = prevOptions;
+        }
+    }
+
+    // Живой systemd: процесс оставляет в своём scope фоновый хвост (как узлы MSBuild после
+    // сборки) и выходит. Остановка scope обязана добить хвост и выгрузить юнит.
+    // Только Linux с user-шиной и systemd-run — иначе пропуск.
+    [Fact]
+    public async Task Start_Linux_ХвостВScopeГибнетПослеВыхода()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR"))
+            && string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DBUS_SESSION_BUS_ADDRESS"))) return;
+        if (LocalProcessRunner.FindSystemdRun(Environment.GetEnvironmentVariable("PATH")) is null) return;
+
+        const string slice = "ccs-isotest.slice";
+        var prev = IsolationOptions.Instance;
+        IsolationOptions.Instance = new IsolationOptions { Enabled = true, Slice = slice, MemoryMax = "256M" };
+        try
+        {
+            using var process = LocalProcessRunner.Instance.Start(new ProcessSpec
+            {
+                FileName = "sh",
+                // Хвост отвязан от наших труб, иначе чтение stdout ждало бы и его
+                Args = ["-c", "sleep 300 </dev/null >/dev/null 2>&1 & echo $!"],
+                RedirectStdin = false,
+                Track = false,
+            });
+            var tailPid = int.Parse((await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10)))!);
+            var cgroup = await File.ReadAllTextAsync($"/proc/{tailPid}/cgroup");
+            var unit = cgroup.Trim().Split('/').Last();
+            unit.Should().StartWith("ccs-run-").And.EndWith(".scope");
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+
+            var deadline = DateTime.UtcNow.AddSeconds(15);
+            while (Directory.Exists($"/proc/{tailPid}") && DateTime.UtcNow < deadline)
+                await Task.Delay(100);
+            Directory.Exists($"/proc/{tailPid}").Should().BeFalse("остановка scope добивает хвост");
+
+            // Хвост умер раньше, чем systemd обработал его SIGCHLD: юнит ещё секунду-другую
+            // бывает в «deactivating» — ждём выгрузки, а не снимаем мгновенный кадр
+            var units = await ListUnitAsync(unit);
+            while (units.Contains(unit) && DateTime.UtcNow < deadline)
+            {
+                await Task.Delay(100);
+                units = await ListUnitAsync(unit);
+            }
+            units.Should().NotContain(unit, "юнит выгружен (--collect), в slice от процесса ничего не осталось");
+        }
+        finally
+        {
+            IsolationOptions.Instance = prev;
+        }
+
+        static async Task<string> ListUnitAsync(string unit)
+        {
+            using var list = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("systemctl")
+            {
+                ArgumentList = { "--user", "list-units", "--all", "--no-legend", unit },
+                RedirectStandardOutput = true,
+            })!;
+            var text = await list.StandardOutput.ReadToEndAsync();
+            await list.WaitForExitAsync();
+            return text;
         }
     }
 }

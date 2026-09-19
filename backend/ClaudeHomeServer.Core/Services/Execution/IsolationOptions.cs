@@ -21,6 +21,12 @@ public sealed class IsolationOptions
     public string? MemoryMax { get; init; }
     // Явный путь к systemd-run; пусто — поиск по PATH
     public string? SystemdRunPath { get; init; }
+    // Реюз узлов MSBuild и общего компилятора ВНУТРИ scope (замер 2026-09-19: пересборка
+    // тестов 7,1 с → 3,4–4,0 с на тёплых узлах). Хвосты гасятся остановкой scope по выходу
+    // процесса, узлы приватны scope (соль рукопожатия = имя юнита). false — прежний режим:
+    // MSBUILDDISABLENODEREUSE=1, DOTNET_CLI_USE_MSBUILD_SERVER=0, UseSharedCompilation=false.
+    // Опция конфига, а не константа: откат — правкой appsettings без пересборки.
+    public bool BuildNodeReuse { get; init; } = true;
 
     public static IsolationOptions FromConfig(IConfiguration config) => new()
     {
@@ -29,5 +35,6 @@ public sealed class IsolationOptions
         MemoryHigh = config["Execution:Isolation:MemoryHigh"],
         MemoryMax = config["Execution:Isolation:MemoryMax"],
         SystemdRunPath = config["Execution:Isolation:SystemdRunPath"],
+        BuildNodeReuse = config.GetValue("Execution:Isolation:BuildNodeReuse", true),
     };
 }

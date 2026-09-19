@@ -312,6 +312,23 @@ CLI живёт в песочнице, а карта — на хосте, поэ�
 потолок 16 КБ проектной карты с отступом к серверной, лог размера,
 снимок промпта по эффективному применению).
 
+**Состав MCP-инструментов локальной модели.** Поверх `TrimMcpServers`/`KeepMcpServers`
+(целыми серверами) профиль режет инструменты внутри сервера — `KeepMcpTools`
+(`McpToolWhitelist`, гейт и в `tools/list`, и в `tools/call`). У `local-qwen` состав ужат
+по фактическому спросу (137 транскриптов за 14 дней до 2026-09-19):
+
+| Сервер | Оставлено (вызовов) | Снято (вызовов) |
+|---|---|---|
+| tasks | `tasks_get` 49, `tasks_toggle_subtask` 37, `tasks_complete` 33, `tasks_add_subtask` 23, `tasks_create` 15, `tasks_update` 7 | `tasks_search` 5, `tasks_list` 4, `tasks_board_columns`/`tasks_list_projects`/`tasks_find_duplicate` 0 |
+| memory | `memory_recall` 17, `memory_remember` 11, `team_memory_search` 5, `memory_search` 5 | `dossier_lookup` 4, `memory_list`/`team_memory_list`/`dossier_get` 0 |
+| codegraph | `codegraph_find` 8 | `codegraph_neighbors`/`codegraph_hubs` 0 |
+| websearch, watch | целиком (`web_search` 57, `web_read` 37; `watch_start` 6, `watch_cancel` 3) | — |
+
+Фильтр берёт пересечение списка с настоящим составом и опечатку не замечает — неверное
+имя молча выключило бы инструмент. Сторож — `KeepMcpToolsConfigTests`: каждое имя
+отгружаемого конфига сверяется с полным составом тулсета, сервер без эталона в тесте —
+отказ, состав `local-qwen` закреплён целиком.
+
 **Объявляемое CLI окно.** `LocalEndpointProbe` берёт `max_model_len` из `GET /v1/models`
 стенда, а `LlmProviderRegistry.BuildCliEnv` подставляет в
 `CLAUDE_CODE_MAX_CONTEXT_TOKENS` не голое `max_model_len`, а

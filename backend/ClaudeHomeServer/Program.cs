@@ -86,7 +86,17 @@ ClaudeHomeServer.Services.Diagnostics.FileLog.Attach(builder.Configuration, buil
 // без этого они копятся и съедают гигабайты памяти. Должно быть ДО первого Process.Start.
 // В инспекционной копии пропускаем: pid-файл лежит рядом с exe (а не в DataPath), то есть
 // принадлежит БОЕВОМУ серверу — чистка убила бы его MCP-серверы и идущие ходы.
-if (!inspectionMode) ProcessRegistry.Initialize();
+//
+// Execution:ProcessRegistry:Enabled (дефолт true) — вторая, та же по смыслу оговорка:
+// реестр процессов ПРОЦЕСС-ГЛОБАЛЕН (статика), а хост в процессе бывает не один. В бою
+// хост ровно один и владеет всеми порождёнными процессами машины; тестовый хост
+// (appsettings.Testing.json) — не владеет: он поднимается и гасится десятки раз за прогон
+// рядом с чужими процессами того же процесса ОС, и его ApplicationStopping вычищал реестр
+// и убивал процессы параллельно идущих тестов (доказано: подъём и Dispose тестового хоста
+// снимал с учёта и убивал заранее зарегистрированный живой процесс).
+var ownsProcessRegistry = !inspectionMode
+    && builder.Configuration.GetValue("Execution:ProcessRegistry:Enabled", true);
+if (ownsProcessRegistry) ProcessRegistry.Initialize();
 
 // Изоляция процессов local-среды по памяти (инцидент 2026-09-19: systemd-oomd дважды
 // убил прод ccs.service целиком, потому что сборки агентских CLI живут в cgroup прода).
@@ -97,6 +107,14 @@ if (!inspectionMode) ProcessRegistry.Initialize();
 //     "MemoryHigh": "12G", "MemoryMax": "16G" } }
 ClaudeHomeServer.Services.Execution.IsolationOptions.Instance =
     ClaudeHomeServer.Services.Execution.IsolationOptions.FromConfig(builder.Configuration);
+
+// Гашение scope висит на событии Exited и умирает вместе с процессом бэкенда: упал бэкенд —
+// scope с узлами сборки остался в slice, и увидеть его можно только отсюда, со следующего
+// старта. Как сирота отличается от scope живого соседнего инстанса — в ScopeOrphanSweeper.
+// Фоном: старт не должен ждать systemctl, а свои scope этого запуска сторож не тронет
+// (их владелец — мы, и мы живы).
+_ = Task.Run(() => ClaudeHomeServer.Services.Execution.ScopeOrphanSweeper.Sweep(
+    ClaudeHomeServer.Services.Execution.IsolationOptions.Instance));
 
 // Признак «сервер работает на этом каталоге data»: держится весь uptime и проверяется
 // восстановлением. Живой сервер во время restore продолжил бы писать в перемещённый
@@ -2008,8 +2026,9 @@ app.Lifetime.ApplicationStopping.Register(() =>
     Safe(shutdownSessions.KillAllProcesses, "процессы claude");
     Safe(shutdownTerminals.Dispose, "терминалы");
     Safe(shutdownDevServers.Dispose, "dev-серверы");
-    // Тот же pid-файл принадлежит боевому серверу — копия его не трогает
-    if (!inspectionMode) Safe(ProcessRegistry.KillAll, "реестр процессов");
+    // Тот же pid-файл принадлежит боевому серверу — копия его не трогает; не владеющий
+    // реестром хост (тестовый) тем более: KillAll бьёт по ВСЕМ процессам процесса ОС
+    if (ownsProcessRegistry) Safe(ProcessRegistry.KillAll, "реестр процессов");
 });
 
 app.Run();

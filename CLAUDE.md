@@ -56,6 +56,15 @@ cd frontend; npm run build     # production-сборка (tsc -b + vite)
 **Инварианты:** смена `ExecutionEnvironment` при существующих чатах запрещена; токен подписки
 доставляется в песочницу per-exec, а не запекается при создании контейнера.
 
+Изоляция local-процессов по памяти (`Execution:Isolation`, systemd-scope в `ccs-agents.slice`):
+узлы MSBuild и компилятор переиспользуются ВНУТРИ scope (соль — имя юнита), scope гасится
+по выходу процесса; прежние запреты реюза (`MSBUILDDISABLENODEREUSE` и др.) — за
+`BuildNodeReuse=false`. Гашение висит на событии `Exited` и умирает вместе с бэкендом,
+поэтому scope упавшего инстанса подметает `ScopeOrphanSweeper` при старте: имя юнита несёт
+отпечаток владельца (`ccs-run-<pid в hex>-<guid>.scope`), гасятся только те, чей владелец
+мёртв. Свежий worktree чата/задачи прогревается фоновой сборкой тестов
+(`Execution:WarmupBuild`).
+
 **Перед правками в `Services/Execution/`, `SandboxManager`, `UserHomeResolver` — прочитай
 [docs/architecture/sandbox.md](docs/architecture/sandbox.md)** (монтирования, interrupt, MCP из песочницы, overrides).
 

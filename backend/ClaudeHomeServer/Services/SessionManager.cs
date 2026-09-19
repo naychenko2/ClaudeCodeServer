@@ -578,6 +578,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // подписок (SubscriptionUsageWarmupService); null — в тестах, тогда просто не трогаем.
     private readonly SubscriptionActivityTracker? _activity;
     private readonly ILogger<SessionManager> _log;
+    // Прогрев сборки свежего worktree (SetWorktreeAsync/AttachWorktreeAsync)
+    private readonly WorktreeBuildWarmup _warmup;
     // Фабрика логгеров для вертикали (волна В): TeamPlanService получает собственный
     // типизированный ILogger. null — в тестах без DI, TeamPlanService работает на NullLogger.
     private readonly ILoggerFactory? _loggerFactory;
@@ -848,6 +850,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         _bindings = bindings;
         _subscriptionPool = subscriptionPool;
         _log = log;
+        _warmup = new WorktreeBuildWarmup(launchers, config, log);
 
         // Швы данных «штаб → ядро» (ITeamHistoryStore/ITeamRunState/ITeamTurnIntake)
         // назначаем ДО создания TeamPlanService/TeamDecisionService: они передают `this`
@@ -7312,6 +7315,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
             entry.Info.WorktreePath = wtPath;
             entry.Info.WorktreeBranch = branchName;
+            _warmup.TryStart(ownerId, wtPath);
         }
         else
         {
@@ -7389,6 +7393,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         entry.Info.WorktreeBranch = string.IsNullOrWhiteSpace(branch) ? known.Branch : branch.Trim();
         entry.AdapterStale = true;
         SaveSessions();
+        // Дерево задачи заводит не сервер, а человек/агент, — прогрев здесь, при первой привязке;
+        // уже собранное (obj/ есть) или уже прогретое дерево прогрев пропускает сам
+        _warmup.TryStart(ResolveOwnerId(entry.Info), path);
         return true;
     }
 

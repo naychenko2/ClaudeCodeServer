@@ -20,8 +20,19 @@ public sealed class LocalProcessRunner : IProcessLauncher
         // Резолв systemd-run по PATH — только при включённой изоляции: выключенная не платит
         // ни одним обращением к диску, а BuildStartInfo остаётся чистой функцией от параметров.
         var systemdRun = options.Enabled && !TargetIsWindows ? ResolveSystemdRunPath(options) : null;
-        var (psi, _) = BuildStartInfo(spec, options, TargetIsWindows, systemdRun, ProbeOnce(options, systemdRun));
-        var process = new Process { StartInfo = psi, EnableRaisingEvents = spec.EnableRaisingEvents };
+        var unit = NewScopeUnitName();
+        var (psi, reason) = BuildStartInfo(
+            spec, options, TargetIsWindows, systemdRun, ProbeOnce(options, systemdRun), unit);
+        var wrapped = reason is null;
+        var process = new Process { StartInfo = psi, EnableRaisingEvents = spec.EnableRaisingEvents || wrapped };
+        // Процесс вышел — гасим его scope: оставшиеся в нём узлы MSBuild и VBCSCompiler
+        // (реюз внутри хода) и прочие отпочковавшиеся потомки иначе живут в ccs-agents.slice
+        // до своего idle-таймаута. Подписка ДО Start — выход не проскочит мимо обработчика.
+        if (wrapped)
+        {
+            var systemctl = ResolveSystemctlPath(systemdRun!);
+            process.Exited += (_, _) => StopScopeInBackground(systemctl, unit);
+        }
         if (!process.Start())
             throw new InvalidOperationException($"Не удалось запустить {spec.FileName}");
         if (spec.Track) ProcessRegistry.Register(process);
@@ -44,7 +55,7 @@ public sealed class LocalProcessRunner : IProcessLauncher
         //   и LocalProcessRunnerEnvTests на живой сборке .NET).
         //   Обёртка systemd-run (изоляция включена, не Windows, systemd-run найден): FileName
         //   становится путь к systemd-run, а exe уезжает в ArgumentList после флагов обёртки
-        //   и `--`. Проверку user-шины оценка не повторяет — при её отсутствии обёртки не будет,
+        //   и `--` (имя юнита — заглушка той же длины). Проверку user-шины оценка не повторяет — при её отсутствии обёртки не будет,
         //   и оценка выйдет завышенной, а верхней границе это можно.
         var options = IsolationOptions.Instance;
         var systemdRun = options.Enabled && !TargetIsWindows && spec.RawArguments is null
@@ -63,7 +74,7 @@ public sealed class LocalProcessRunner : IProcessLauncher
         if (options.Enabled && !string.IsNullOrEmpty(systemdRun))
         {
             total = systemdRun.Length + CmdlineEstimate.ArgCost(exePath);
-            foreach (var a in WrapperArgs(options)) total += CmdlineEstimate.ArgCost(a);
+            foreach (var a in WrapperArgs(options, ScopeUnitPlaceholder)) total += CmdlineEstimate.ArgCost(a);
         }
         else total = exePath.Length;
         foreach (var a in spec.Args) total += CmdlineEstimate.ArgCost(a);
@@ -73,9 +84,10 @@ public sealed class LocalProcessRunner : IProcessLauncher
     // Изоляция процессов по памяти (инцидент 2026-09-19: systemd-oomd дважды убил весь
     // ccs.service, потому что сборки агентов живут в cgroup прода). При включённой изоляции
     // на не-Windows процесс запускается как
-    //   systemd-run --user --scope --quiet --collect --slice=… --property=MemoryHigh=…
+    //   systemd-run --user --scope --quiet --collect --unit=ccs-run-<guid>.scope --slice=…
+    //     --property=MemoryHigh=…
     //     --property=MemoryMax=… -- <exe> <args…>
-    // и оказывается в …/ccs.slice/ccs-agents.slice/run-p<PID>-….scope; прод ccs.service
+    // и оказывается в …/ccs.slice/ccs-agents.slice/ccs-run-<guid>.scope; прод ccs.service
     // живёт в app.slice (default user-юнитов) — ccs.slice и app.slice сиблинги под
     // user@<uid>.service, и ccs.service «внутри» ccs.slice НЕ сидит. При нехватке памяти
     // умирает scope агента, а не прод. systemd-run --scope исполняет команду в своём же
@@ -85,7 +97,8 @@ public sealed class LocalProcessRunner : IProcessLauncher
     //
     // targetIsWindows и systemdRunPath — параметры, а не чтение OperatingSystem/PATH внутри:
     // решение «оборачивать или нет» проверяется тестом на любой ОС. systemdRunPath — уже
-    // разрешённый путь (null — не найден); резолвит его Start.
+    // разрешённый путь (null — не найден); резолвит его Start. scopeUnit — имя юнита scope
+    // (null — сгенерировать): Start знает его заранее, чтобы погасить scope по выходу процесса.
     //
     // probeResult — результат пробы systemd-run; null — проба не выполнялась (изоляция
     // выключена, Windows, systemd-run не найден) или её не передали — обёртка решается
@@ -98,7 +111,8 @@ public sealed class LocalProcessRunner : IProcessLauncher
         IsolationOptions? options = null,
         bool targetIsWindows = false,
         string? systemdRunPath = null,
-        SystemdRunProbeResult? probeResult = null)
+        SystemdRunProbeResult? probeResult = null,
+        string? scopeUnit = null)
     {
         options ??= IsolationOptions.Instance;
         var psi = new ProcessStartInfo
@@ -151,14 +165,12 @@ public sealed class LocalProcessRunner : IProcessLauncher
             return (psi, reason);
         }
 
-        // Висящие узлы MSBuild и VBCSCompiler держат гигабайты между сборками. MSBuild читает
-        // переменные окружения как свойства; явный spec.Env не перебиваем.
-        foreach (var (k, v) in BuildIsolationEnv)
-            psi.Environment.TryAdd(k, v);
+        var unit = scopeUnit ?? NewScopeUnitName();
+        ApplyBuildEnv(psi, spec, options, unit);
 
         var exeArgs = psi.ArgumentList.ToList();
         psi.ArgumentList.Clear();
-        foreach (var a in WrapperArgs(options)) psi.ArgumentList.Add(a);
+        foreach (var a in WrapperArgs(options, unit)) psi.ArgumentList.Add(a);
         psi.ArgumentList.Add(psi.FileName);
         foreach (var a in exeArgs) psi.ArgumentList.Add(a);
         psi.FileName = systemdRunPath!;
@@ -174,16 +186,51 @@ public sealed class LocalProcessRunner : IProcessLauncher
         SystemdRunProbeResult? probeResult = null) =>
         BuildStartInfo(spec, options, targetIsWindows, systemdRunPath, probeResult).psi;
 
+    // Узлы сборки изолированного процесса. MSBuild читает переменные окружения как свойства;
+    // явный spec.Env не перебиваем.
+    //   Реюз (дефолт): узлы MSBuild и сервер компилятора живут весь ход и гаснут вместе со
+    //   scope. Рукопожатие узлов солим именем юнита (MSBUILDNODEHANDSHAKESALT), трубу
+    //   компилятора — им же (SharedCompilationId): без этого параллельные ходы одного
+    //   пользователя цеплялись бы к узлам друг друга, и остановка чужого scope роняла бы
+    //   идущую сборку. Унаследованные запреты реюза (бэкенд, запущенный из хода агента)
+    //   снимаем — иначе режим молча выключен.
+    //   Без реюза: прежние три запрета — висящие узлы держали гигабайты между сборками.
+    private static void ApplyBuildEnv(ProcessStartInfo psi, ProcessSpec spec, IsolationOptions options, string unit)
+    {
+        if (!options.BuildNodeReuse)
+        {
+            foreach (var (k, v) in BuildIsolationEnv) psi.Environment.TryAdd(k, v);
+            return;
+        }
+        foreach (var (k, _) in BuildIsolationEnv)
+            if (spec.Env is null || !spec.Env.ContainsKey(k)) psi.Environment.Remove(k);
+        psi.Environment.TryAdd("MSBUILDNODEHANDSHAKESALT", unit);
+        psi.Environment.TryAdd("SharedCompilationId", unit);
+    }
+
+    // Уникальное имя scope на процесс: по нему scope гасится после выхода и солятся узлы сборки.
+    // В имени — ОТПЕЧАТОК ВЛАДЕЛЬЦА (PID бэкенда, 8 hex-цифр): по нему сторож
+    // ScopeOrphanSweeper при старте отличает сироту от живого scope соседнего инстанса.
+    // PID в hex фиксированной ширины, поэтому длина имени постоянна — заглушка оценки
+    // командной строки той же длины.
+    internal static string NewScopeUnitName() =>
+        $"ccs-run-{Environment.ProcessId:x8}-{Guid.NewGuid():N}.scope";
+    internal static readonly string ScopeUnitPlaceholder = new('x', NewScopeUnitName().Length);
+
     // Флаги systemd-run до exe, заканчиваются `--`. Единственный источник и для сборки
     // запуска, и для оценки длины командной строки — иначе они разъедутся.
     // Свойства — длинной формой --property=…: короткое «-p X» одним элементом argv getopt
     // разобрал бы как значение с ведущим пробелом.
-    internal static IEnumerable<string> WrapperArgs(IsolationOptions options)
+    internal static IEnumerable<string> WrapperArgs(IsolationOptions options) =>
+        WrapperArgs(options, ScopeUnitPlaceholder);
+
+    internal static IEnumerable<string> WrapperArgs(IsolationOptions options, string unit)
     {
         yield return "--user";
         yield return "--scope";
         yield return "--quiet";
         yield return "--collect";
+        yield return $"--unit={unit}";
         if (!string.IsNullOrWhiteSpace(options.Slice))
             yield return $"--slice={options.Slice}";
         if (!string.IsNullOrWhiteSpace(options.MemoryHigh))
@@ -193,9 +240,9 @@ public sealed class LocalProcessRunner : IProcessLauncher
         yield return "--";
     }
 
-    // Переменные против висящих узлов MSBuild: ставим ВСЕМ изолированным процессам,
-    // а не только сборкам (для не-сборщиков безвредно — MSBuild их просто не читает).
-    // Явный spec.Env сильнее (TryAdd).
+    // Переменные против висящих узлов MSBuild (режим BuildNodeReuse=false): ставим ВСЕМ
+    // изолированным процессам, а не только сборкам (для не-сборщиков безвредно — MSBuild их
+    // просто не читает). Явный spec.Env сильнее (TryAdd).
     internal static readonly (string Key, string Value)[] BuildIsolationEnv =
     [
         ("MSBUILDDISABLENODEREUSE", "1"),
@@ -224,6 +271,67 @@ public sealed class LocalProcessRunner : IProcessLauncher
         return null;
     }
 
+    // systemctl лежит рядом с systemd-run (тот же пакет systemd); не нашёлся — по PATH
+    internal static string ResolveSystemctlPath(string systemdRunPath)
+    {
+        var dir = Path.GetDirectoryName(systemdRunPath);
+        var sibling = string.IsNullOrEmpty(dir) ? null : Path.Combine(dir, "systemctl");
+        return sibling is not null && File.Exists(sibling) ? sibling : "systemctl";
+    }
+
+    // Шов для тестов: чем гасить scope (путь к systemctl, имя юнита). По умолчанию — systemctl.
+    internal static Action<string, string> StopScope { get; set; } = StopScopeViaSystemctl;
+
+    // Остановка scope уходит с потока события Exited: systemctl — процесс, а обработчик
+    // Exited не должен ждать чужой ввод-вывод. Fail-open: сбой — warning, не исключение.
+    private static void StopScopeInBackground(string systemctl, string unit) =>
+        _ = Task.Run(() =>
+        {
+            try { StopScope(systemctl, unit); }
+            catch (Exception ex) { WarnScopeStopOnce(ex.GetType().Name, $"{ex.GetType().Name}: {ex.Message}"); }
+        });
+
+    // KillMode у scope по умолчанию control-group: stop шлёт SIGTERM всем процессам cgroup
+    // (узлы MSBuild и VBCSCompiler на него выходят сразу), через TimeoutStopSec — SIGKILL.
+    // --no-block: ждать гибели хвоста незачем. Гонки с --collect нет: если scope опустел
+    // вместе с процессом, systemd уже собрал его, и stop отвечает «not loaded» (код 5) —
+    // гасить нечего, это штатный исход, а не сбой.
+    private static void StopScopeViaSystemctl(string systemctl, string unit)
+    {
+        var psi = new ProcessStartInfo(systemctl)
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+        foreach (var a in new[] { "--user", "stop", "--no-block", unit }) psi.ArgumentList.Add(a);
+        using var p = Process.Start(psi)
+            ?? throw new InvalidOperationException("systemctl не запустился");
+        var stderr = p.StandardError.ReadToEndAsync();
+        _ = p.StandardOutput.ReadToEndAsync();
+        if (!p.WaitForExit(10_000))
+        {
+            try { p.Kill(); } catch { /* уже вышел */ }
+            WarnScopeStopOnce("timeout", "systemctl --user stop не ответил за 10 с");
+            return;
+        }
+        if (p.ExitCode is 0 or 5) return;
+        WarnScopeStopOnce($"code-{p.ExitCode}",
+            $"systemctl --user stop вернул код {p.ExitCode}: {stderr.GetAwaiter().GetResult().Trim()}");
+    }
+
+    // Сбой остановки scope: один раз на класс сбоя (в тексте имя юнита — по нему не дедупить)
+    private static readonly HashSet<string> _scopeStopWarnings = [];
+    private static void WarnScopeStopOnce(string kind, string details)
+    {
+        lock (_scopeStopWarnings)
+        {
+            if (!_scopeStopWarnings.Add(kind)) return;
+        }
+        Console.WriteLine($"[exec] не удалось погасить scope процесса, хвост мог остаться в slice: {details}");
+    }
+
     // ---- Проба systemd-run: обёртка есть в PATH, но работает ли она в рантайме? ----
     // systemd-run в PATH, user-шина есть, а обёртка в рантайме не сработала (нет прав на
     // slice, битая шина, не тот systemd) — без пробы КАЖДЫЙ запуск агента падал и прод стоял.
@@ -244,13 +352,18 @@ public sealed class LocalProcessRunner : IProcessLauncher
     // не будет и без пробы (BuildStartInfo сам fail-open'ит). Для spec с RawArguments Start
     // тоже вызывает пробу: сам этот запуск решит fail-open на RawArguments, но следующий
     // запуск без RawArguments получит уже кэшированный результат, а не новую пробу.
+    //
+    // Имя юнита пробе выдаётся СВЕЖЕЕ (NewScopeUnitName), а не заглушка ScopeUnitPlaceholder:
+    // проба обязана быть той же формы, что боевой запуск (иначе она проверяет не то, что
+    // потом поедет), а фиксированное имя столкнулось бы с ещё живым юнитом соседнего
+    // инстанса — systemd вернул бы «unit already exists», и мы бы решили, что обёртка мертва.
     internal static SystemdRunProbeResult? ProbeOnce(IsolationOptions options, string? systemdRunPath)
     {
         if (!options.Enabled || string.IsNullOrEmpty(systemdRunPath)) return null;
         lock (_probeLock)
         {
             if (_probeResult is not null) return _probeResult;
-            var result = Probe(systemdRunPath, WrapperArgs(options), "true", ProbeTimeoutMs);
+            var result = Probe(systemdRunPath, WrapperArgs(options, NewScopeUnitName()), "true", ProbeTimeoutMs);
             _probeResult = result;
             return result;
         }

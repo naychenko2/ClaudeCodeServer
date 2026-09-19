@@ -1148,11 +1148,11 @@ public class TaskExecutionService
     // сутки прятало поломку DI-резолвера). В этом случае возвращаем SourceSessionId — пусть
     // доклад идёт туда, а вызывающий код пишет Warning, чтобы аномалия была видна.
     internal static string? ResolveReportTarget(Session? executorSession, string? sourceSessionId,
-        out bool fromFallback)
+        ITaskLookup? tasks, out bool fromFallback)
     {
         fromFallback = false;
         if (executorSession is null) return sourceSessionId;
-        var parent = executorSession.ParentSessionId;
+        var parent = SessionTaskLinks.ParentSessionId(executorSession, tasks);
         if (parent is not null) return parent;
         // parent == null: либо ParentDetached=true (явный вынос в корень — гасим),
         // либо у чата вообще нет TaskId (корневой чат без задачи — гасим, аномалии нет:
@@ -1208,7 +1208,7 @@ public class TaskExecutionService
         // вынос в корень её гасит — «вынес из группы» значит «не докладывай туда». Чата-исполнителя
         // нет (задача закрыта без запуска) — остаётся SourceSessionId, как было.
         var executorSession = task.LinkedSessionId is not null ? _sessions.GetById(task.LinkedSessionId) : null;
-        var targetId = ResolveReportTarget(executorSession, task.SourceSessionId, out var fromFallback);
+        var targetId = ResolveReportTarget(executorSession, task.SourceSessionId, new TaskLookupAdapter(_tasks), out var fromFallback);
         if (targetId is null)
         {
             _log.LogInformation("Доклад Z задачи {TaskId}: пропуск — чат-исполнитель явно вынесен в корень (ParentDetached)", task.Id);

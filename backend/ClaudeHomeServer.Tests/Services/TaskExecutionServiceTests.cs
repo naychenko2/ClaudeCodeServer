@@ -728,7 +728,7 @@ public class TaskExecutionServiceTests
         // Задача закрыта без запуска исполнителя — эффективного родителя взять неоткуда
         var source = Guid.NewGuid().ToString();
 
-        TaskExecutionService.ResolveReportTarget(null, source, out var fromFallback)
+        TaskExecutionService.ResolveReportTarget(null, source, null, out var fromFallback)
             .Should().Be(source);
         fromFallback.Should().BeFalse("нет чата-исполнителя — это нормальный путь, а не аномалия");
     }
@@ -742,7 +742,7 @@ public class TaskExecutionServiceTests
         var manual = Guid.NewGuid().ToString();
         var executorSession = new Session { TaskId = "t-1", ParentOverrideId = manual };
 
-        TaskExecutionService.ResolveReportTarget(executorSession, source, out var fromFallback)
+        TaskExecutionService.ResolveReportTarget(executorSession, source, null, out var fromFallback)
             .Should().Be(manual);
         fromFallback.Should().BeFalse("явная ручная группировка — не fallback");
     }
@@ -754,7 +754,7 @@ public class TaskExecutionServiceTests
         var executorSession = new Session { TaskId = "t-1", ParentDetached = true };
 
         TaskExecutionService.ResolveReportTarget(executorSession, Guid.NewGuid().ToString(),
-                out var fromFallback)
+                null, out var fromFallback)
             .Should().BeNull();
         fromFallback.Should().BeFalse("ParentDetached=true — гашение по решению пользователя, не аномалия");
     }
@@ -773,7 +773,7 @@ public class TaskExecutionServiceTests
         // это и есть «резолвер не дал ответа».
         var executorSession = new Session { TaskId = "t-orphan" };
 
-        TaskExecutionService.ResolveReportTarget(executorSession, source, out var fromFallback)
+        TaskExecutionService.ResolveReportTarget(executorSession, source, null, out var fromFallback)
             .Should().Be(source);
         fromFallback.Should().BeTrue("аномалия — резолвер по задаче не вернул id, это не detached");
     }
@@ -787,7 +787,7 @@ public class TaskExecutionServiceTests
         var source = Guid.NewGuid().ToString();
         var executorSession = new Session();  // ни TaskId, ни ParentOverrideId, ни ParentDetached
 
-        TaskExecutionService.ResolveReportTarget(executorSession, source, out var fromFallback)
+        TaskExecutionService.ResolveReportTarget(executorSession, source, null, out var fromFallback)
             .Should().BeNull("корневой чат без задачи — докладывать некуда, гасим как detached");
         fromFallback.Should().BeFalse("нет TaskId — это не аномалия резолвера, а просто корневой чат");
     }

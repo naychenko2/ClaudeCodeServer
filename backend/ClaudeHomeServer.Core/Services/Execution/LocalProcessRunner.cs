@@ -75,8 +75,10 @@ public sealed class LocalProcessRunner : IProcessLauncher
     // на не-Windows процесс запускается как
     //   systemd-run --user --scope --quiet --collect --slice=… --property=MemoryHigh=…
     //     --property=MemoryMax=… -- <exe> <args…>
-    // и оказывается в …/ccs-agents.slice/run-p<PID>-….scope — вне ccs.service; при нехватке
-    // памяти умирает scope агента, а не прод. systemd-run --scope исполняет команду в своём же
+    // и оказывается в …/ccs.slice/ccs-agents.slice/run-p<PID>-….scope; прод ccs.service
+    // живёт в app.slice (default user-юнитов) — ccs.slice и app.slice сиблинги под
+    // user@<uid>.service, и ccs.service «внутри» ccs.slice НЕ сидит. При нехватке памяти
+    // умирает scope агента, а не прод. systemd-run --scope исполняет команду в своём же
     // процессе, поэтому PID тот же: Kill(entireProcessTree) и interrupt работают как раньше,
     // stdin/stdout идут насквозь, окружение psi.Environment (ClearEnv → Env) доезжает до
     // команды (проверено на прод-хосте).
@@ -181,6 +183,9 @@ public sealed class LocalProcessRunner : IProcessLauncher
         yield return "--";
     }
 
+    // Переменные против висящих узлов MSBuild: ставим ВСЕМ изолированным процессам,
+    // а не только сборкам (для не-сборщиков безвредно — MSBuild их просто не читает).
+    // Явный spec.Env сильнее (TryAdd).
     internal static readonly (string Key, string Value)[] BuildIsolationEnv =
     [
         ("MSBUILDDISABLENODEREUSE", "1"),

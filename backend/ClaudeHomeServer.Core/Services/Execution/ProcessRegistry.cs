@@ -21,6 +21,9 @@ public static class ProcessRegistry
 {
     // Паспорт процесса. StartedAt == DateTime.MinValue — время недоступно (нет прав
     // на чтение у чужого процесса): тогда сверяем только по имени.
+    // Name — имя В МОМЕНТ регистраций: под обёрткой systemd-run это «systemd-run»,
+    // а после её exec — уже реальная команда. Сверка по имени — только запасной путь
+    // (Matches); основное сравнение — время старта, которому exec не мешает.
     internal sealed record TrackedProcess(int Pid, string Name, DateTime StartedAt);
 
     private static readonly ConcurrentDictionary<int, TrackedProcess> _tracked = new();
@@ -124,6 +127,13 @@ public static class ProcessRegistry
     }
 
     // Тот ли это процесс, что мы записывали, или номер уже переиспользован ОС.
+    //
+    // Приоритет: время старта, а НЕ имя. Обёртка systemd-run делает exec на реальный
+    // процесс, поэтому ProcessName записи из Register («systemd-run») расходится с
+    // живым именем («claude»/«node») — сверка по имени бы вычёркивала живой процесс
+    // (а exec не меняет время старта). exec не изменяет start_time, и пара
+    // «PID + время старта» строже имени как защита от переиспользования PID.
+    // Имя сверяем, только когда время старта неизвестно хотя бы с одной стороны.
     internal static bool Matches(TrackedProcess entry, Process actual)
     {
         string name;
@@ -136,9 +146,9 @@ public static class ProcessRegistry
         }
         catch (Exception) { return false; }
 
-        if (!string.Equals(name, entry.Name, StringComparison.OrdinalIgnoreCase)) return false;
         // Время старта неизвестно с одной из сторон — довольствуемся совпадением имени
-        if (entry.StartedAt == DateTime.MinValue || started == DateTime.MinValue) return true;
+        if (entry.StartedAt == DateTime.MinValue || started == DateTime.MinValue)
+            return string.Equals(name, entry.Name, StringComparison.OrdinalIgnoreCase);
         // ОС округляет время старта по-разному на разных платформах — сверяем с допуском
         return Math.Abs((started - entry.StartedAt).TotalMilliseconds) < 1000;
     }

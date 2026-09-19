@@ -10,7 +10,10 @@ public sealed class IsolationOptions
     public static IsolationOptions Instance { get; set; } = new();
 
     public bool Enabled { get; init; }
-    // Дефис в имени slice systemd читает как иерархию: ccs-agents.slice живёт внутри ccs.slice
+    // Дефис в имени slice systemd читает как иерархию: ccs-agents.slice живёт внутри
+    // ccs.slice. Прод ccs.service не «внутри» ccs.slice — у user-юнитов slice по умолчанию
+    // app.slice, и ccs.slice с app.slice — сиблинги под user@<uid>.service. Итог тот же:
+    // scope агента вне cgroup прода.
     public string Slice { get; init; } = "ccs-agents.slice";
     // Пределы памяти scope (MemoryHigh — мягкий, с троттлингом; MemoryMax — OOM внутри scope).
     // Пусто — свойство не ставится.

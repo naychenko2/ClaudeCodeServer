@@ -205,16 +205,32 @@ public class LocalProcessRunnerIsolationTests
     [Fact]
     public void Оценка_НеМеньшеРеальнойКоманднойСтроки()
     {
-        // Верхняя граница: сравниваем с тем, что реально соберёт BuildStartInfo
+        // Верхняя граница: сравниваем с реальной командной строкой ПОСЛЕ экранирования .NET
+        // (PasteArguments): FileName — с кавычками, если в нём есть пробел/таб/" (а при
+        // экранировании \ перед " удваиваются — и в конце аргумента тоже); каждый аргумент
+        // — с кавычками, если содержит пробел/таб/", и с \→\\" перед каждой ".
+        // Нижний счёт (без кавычек и удвоений) тест проходил тривиально.
         using var _ = Bus(present: true);
-        var spec = Spec(args: ["--print", "с пробелом", "кавычка\"внутри"]);
+        var spec = Spec(args: ["--print", "с пробелом", "кавычка\"внутри", "\\x\\"]);
         var options = On(memHigh: "12G", memMax: "16G");
 
         var (psi, _) = Build(spec, options);
-        var actual = psi.FileName.Length + psi.ArgumentList.Sum(a => a.Length + 1);
+        var actual = Escape(psi.FileName).Length;
+        foreach (var a in psi.ArgumentList) actual += Escape(a).Length;
 
         LocalProcessRunner.EstimateCommandLineLength(spec, options, SystemdRun)
             .Should().BeGreaterThanOrEqualTo(actual);
+
+        // Имитация PasteArguments: " → \", затем \ → \\ (два прохода, порядок удвоений),
+        // обрамляющие кавычки, если в аргументе есть пробел/таб/".
+        static string Escape(string s)
+        {
+            if (!s.Any(c => c is ' ' or '\t' or '"')) return s;
+            var sb = new System.Text.StringBuilder();
+            foreach (var c in s) sb.Append(c == '"' ? "\\\"" : c);
+            foreach (var c in s) if (c == '\\') sb.Append('\\');
+            return $"\"{sb}\"";
+        }
     }
 
     [Fact]
@@ -254,6 +270,60 @@ public class LocalProcessRunnerIsolationTests
     {
         LocalProcessRunner.ResolveSystemdRunPath(new IsolationOptions { SystemdRunPath = "/opt/systemd-run" })
             .Should().Be("/opt/systemd-run");
+    }
+
+    // Реестр процессов: при Track=true Register запоминает имя ИМЕННО того процесса,
+    // что .NET видит после Start — под обёрткой это «systemd-run» (кэш .NET до её exec).
+    // Matches теперь сверяет время старта (exec не меняет start_time), и запись переживает
+    // смену имени на «sleep»: PruneDead её не вычёркивает, PID-файл полон, KillAll
+    // graceful-shutdown доходит до процесса.
+    // Живой реестр правит IsolationOptions.Instance и XDG/DBUS-переменные — класс уже
+    // сериализован коллекцией ProcessGlobalState, здесь только свои переменные.
+    [Fact]
+    public async Task Start_Linux_РеестрУдерживаетОбёрнутыйПроцесс()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR"))
+            && string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DBUS_SESSION_BUS_ADDRESS"))) return;
+        if (LocalProcessRunner.FindSystemdRun(Environment.GetEnvironmentVariable("PATH")) is null) return;
+
+        var prev = IsolationOptions.Instance;
+        IsolationOptions.Instance = new IsolationOptions { Enabled = true, Slice = "ccs-isotest.slice", MemoryMax = "256M" };
+        var process = new System.Diagnostics.Process { StartInfo = new()
+        {
+            FileName = "sh",
+            ArgumentList = { "-c", "exec sleep 30" },
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        }};
+        try
+        {
+            process.Start();
+            var pid = process.Id;
+            // Запись с именем обёртки: в реальном Register это «systemd-run» (кэш .NET до exec)
+            ProcessRegistry.TrackForTests(new ProcessRegistry.TrackedProcess(pid, "systemd-run", process.StartTime));
+            try
+            {
+                // Даём systemd-run успеть сделать exec: к этому моменту живое имя уже «sleep»
+                await Task.Delay(TimeSpan.FromSeconds(2));
+                ProcessRegistry.PruneDead();
+                ProcessRegistry.IsTracked(pid).Should().BeTrue(
+                    "реестр не должен вычёркивать живой обёрнутый процесс (Matches — по времени старта, не имени)");
+                System.Diagnostics.Process.GetProcessById(pid).ProcessName
+                    .Should().Be("sleep", "к моменту PruneDead обёртка уже exec-нулась");
+            }
+            finally
+            {
+                if (!process.HasExited) process.Kill(entireProcessTree: true);
+                ProcessRegistry.Unregister(process);
+                process.Dispose();
+            }
+        }
+        finally
+        {
+            IsolationOptions.Instance = prev;
+        }
     }
 
     // Живой запуск: процесс в заданном slice, stdout читается, Kill его завершает.

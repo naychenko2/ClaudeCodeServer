@@ -239,7 +239,12 @@ export function normalizeHistory(raw: unknown[], opts?: { deriveSpeakers?: boole
 // live-only элемент завышает длину клиента, серверная история навсегда признаётся
 // не новее, и оборванный посреди хода ответ залипает до перезагрузки страницы.
 // Список белый, а не чёрный, намеренно: новый вид элемента ленты по умолчанию
-// считается live-only и сверку не ломает. Сторож соответствия — chatReducer.test.ts.
+// считается live-only и сверку не ломает.
+// Сторож — `lib/chatReducer.test.ts`, describe «PERSISTED_KINDS ↔ StoredMessage.cs»: он
+// ЧИТАЕТ StoredMessage.cs, вынимает дискриминаторы [JsonDerivedType] и сверяет с этим
+// списком в обе стороны. Расхождение = красный тест; обе законные асимметрии (хранимый вид
+// без своей строки ленты — workflow_progress; вид ленты без C#-типа — сейчас таких нет)
+// перечислены там же поимённо, с объяснением каждой записи.
 export const PERSISTED_KINDS = new Set<ChatItem['kind']>([
   'user_message', 'session_started', 'text', 'thinking', 'tool_use',
   'ask_question', 'plan_review', 'team_plan', 'team_escalation',

@@ -1,5 +1,5 @@
 import { memo, useState, useCallback, useContext, useEffect, type ReactNode } from 'react';
-import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock, ScrollText, RefreshCw, ChevronDown, Ban } from 'lucide-react';
+import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock, ScrollText, RefreshCw, ChevronDown, Ban, GitFork } from 'lucide-react';
 import type { ChatItem, Persona, ProviderFallbackOption } from '../../types';
 import {
   splitFallbackOptions, formatSubscriptionMeta, providerSwitchReasonLabel, modelSwitchHeadline,
@@ -1686,6 +1686,42 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
           <div style={{ flex: 1, minWidth: 24, height: 1, background: C.border }} />
         </div>
       );
+
+    case 'branched_from': {
+      // Плашка «Ветка от {sourceName}» (фича chat-branch). В отличие от provider_switched
+      // (live-only), приезжает из истории — поэтому обязана переживать F5. Клик ведёт
+      // в оригинальный чат: hash строится из ChatProjectContext (ветка наследует ProjectId
+      // оригинала по §11 документа, так что наличие project у текущей ветки почти всегда
+      // равно наличию project у оригинала). Вне проекта — глобальный #/chats/{id}. Хеш
+      // проходит через parseHash/App как обычный диплинк; переход на chat/проект = тот же
+      // канал, что и проактивные уведомления и форк чата. Проверка «жив ли оригинал» —
+      // TODO шага 7, где ChatPanel принесёт chatsIndex через проп/контекст
+      const sourceHash = project
+        ? `#/project/${encodeURIComponent(project.id)}/chat/${encodeURIComponent(item.sourceSessionId)}`
+        : `#/chats/${encodeURIComponent(item.sourceSessionId)}`;
+      const openSource = () => { window.location.hash = sourceHash; };
+      return (
+        <div style={{ alignSelf: 'center', display: 'flex', alignItems: 'center', gap: 8, maxWidth: '100%' }}>
+          <div style={{ flex: 1, minWidth: 24, height: 1, background: C.border }} />
+          <a
+            href={sourceHash}
+            onClick={(e) => { e.preventDefault(); openSource(); }}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              fontSize: 12, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden',
+              textOverflow: 'ellipsis', padding: '3px 10px', borderRadius: 999,
+              background: C.bgSelected, border: `1px solid ${C.border}`,
+              textDecoration: 'none', cursor: 'pointer',
+            }}
+            title={`Открыть оригинал: ${item.sourceName}`}
+          >
+            <GitFork size={11} strokeWidth={2.4} color={C.textMuted} style={{ flexShrink: 0 }} />
+            Ветка от {item.sourceName}
+          </a>
+          <div style={{ flex: 1, minWidth: 24, height: 1, background: C.border }} />
+        </div>
+      );
+    }
 
     case 'model_switched':
       return <ModelSwitchedPill item={item} />;

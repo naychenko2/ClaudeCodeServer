@@ -227,6 +227,12 @@ export function normalizeHistory(raw: unknown[], opts?: { deriveSpeakers?: boole
       const { timestamp, ...rest } = m as unknown as Record<string, unknown> & { timestamp?: number };
       items.push({ ...rest, ...(timestamp !== undefined ? { ts: timestamp } : {}) } as unknown as ChatItem);
     }
+    else if (m.kind === 'branched_from') {
+      // Плашка «Ветка от …» (фича chat-branch): запись истории с sourceSessionId/sourceName,
+      // ts перекладываем так же, как у text/user_message — без этого дата в ленте потеряется
+      const { timestamp, ...rest } = m as unknown as Record<string, unknown> & { timestamp?: number };
+      items.push({ ...rest, ...(timestamp !== undefined ? { ts: timestamp } : {}) } as unknown as ChatItem);
+    }
     else items.push(m as unknown as ChatItem);
   }
   return items;

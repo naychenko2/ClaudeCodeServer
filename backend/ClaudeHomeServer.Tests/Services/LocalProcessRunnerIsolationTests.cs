@@ -315,7 +315,8 @@ public class LocalProcessRunnerIsolationTests
 
         var unitA = a.ArgumentList.Single(x => x.StartsWith("--unit="));
         var unitB = b.ArgumentList.Single(x => x.StartsWith("--unit="));
-        unitA.Should().MatchRegex("^--unit=ccs-run-[0-9a-f]{32}\\.scope$");
+        // ccs-run-<pid бэкенда в hex>-<guid>: отпечаток владельца нужен сторожу сирот
+        unitA.Should().MatchRegex($"^--unit=ccs-run-{Environment.ProcessId:x8}-[0-9a-f]{{32}}\\.scope$");
         unitA.Should().NotBe(unitB);
         unitA.Length.Should().Be(("--unit=" + LocalProcessRunner.ScopeUnitPlaceholder).Length,
             "оценка длины командной строки считает имя заглушкой той же длины");
@@ -649,8 +650,14 @@ public class LocalProcessRunnerIsolationTests
     }
 
     // Живой systemd: процесс оставляет в своём scope фоновый хвост (как узлы MSBuild после
-    // сборки) и выходит. Остановка scope обязана добить хвост и выгрузить юнит.
-    // Только Linux с user-шиной и systemd-run — иначе пропуск.
+    // сборки) и выходит. Остановка scope обязана добить хвост и не дать в scope остаться
+    // ничему живому. Только Linux с user-шиной и systemd-run — иначе пропуск.
+    //
+    // Инвариант продукта — «в slice не остаётся живых процессов», а НЕ «systemd успел
+    // выгрузить юнит». Первая редакция теста сторожила второе и падала на холодной
+    // user-шине (1 прогон из 3, ревью 879ea3a9): хвост уже мёртв, cgroup пуст, а юнит через
+    // 30 с всё ещё «deactivating/stop-sigterm» — systemd добирает собственный TimeoutStopSec.
+    // Поэтому deactivating при пустой cgroup считается успехом, а потолок поднят до 90 с.
     [Fact]
     public async Task Start_Linux_ХвостВScopeГибнетПослеВыхода()
     {
@@ -673,40 +680,57 @@ public class LocalProcessRunnerIsolationTests
                 Track = false,
             });
             var tailPid = int.Parse((await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10)))!);
-            var cgroup = await File.ReadAllTextAsync($"/proc/{tailPid}/cgroup");
-            var unit = cgroup.Trim().Split('/').Last();
+            var cgroupLine = (await File.ReadAllTextAsync($"/proc/{tailPid}/cgroup")).Trim();
+            var unit = cgroupLine.Split('/').Last();
             unit.Should().StartWith("ccs-run-").And.EndWith(".scope");
+            // Путь cgroup сохраняем сразу: после гашения читать его будет неоткуда
+            var cgroupDir = "/sys/fs/cgroup" + cgroupLine[(cgroupLine.IndexOf("::", StringComparison.Ordinal) + 2)..];
             await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
 
-            // Остановка асинхронная (stop --no-block): у каждого ожидания свой потолок, под
-            // нагрузкой SIGTERM и выгрузка юнита занимают секунды
-            var deadline = DateTime.UtcNow.AddSeconds(30);
-            while (Directory.Exists($"/proc/{tailPid}") && DateTime.UtcNow < deadline)
+            // Остановка асинхронная (stop --no-block), а под нагрузкой SIGTERM и уборка
+            // занимают секунды. Ждём именно инвариант: хвост мёртв и в cgroup никого нет
+            var deadline = DateTime.UtcNow.AddSeconds(90);
+            while ((Directory.Exists($"/proc/{tailPid}") || AliveInScope(cgroupDir) is not 0)
+                   && DateTime.UtcNow < deadline)
                 await Task.Delay(100);
             Directory.Exists($"/proc/{tailPid}").Should().BeFalse("остановка scope добивает хвост");
+            AliveInScope(cgroupDir).Should().Be(0, "в scope не осталось живых процессов");
 
-            // Хвост умер раньше, чем systemd обработал опустевшую cgroup: юнит ещё бывает
-            // в «deactivating» — ждём терминального состояния, а не снимаем мгновенный кадр
-            deadline = DateTime.UtcNow.AddSeconds(30);
+            // И новые там не заводятся: узлы сборки не должны перезапускаться в мёртвом scope
+            await Task.Delay(1000);
+            AliveInScope(cgroupDir).Should().Be(0, "в погашенном scope не появляются новые процессы");
+
+            // Состояние юнита — вторично: --collect выгрузит его сам, но собственный
+            // TimeoutStopSec systemd досчитывает уже после опустевшей cgroup
             var state = await UnitStateAsync(unit);
-            while (!IsTerminal(state) && DateTime.UtcNow < deadline)
-            {
-                await Task.Delay(100);
-                state = await UnitStateAsync(unit);
-            }
-            IsTerminal(state).Should().BeTrue(
-                $"юнит остановлен и выгружен (--collect), в slice от процесса ничего не осталось; состояние: {state}");
+            IsAcceptable(state).Should().BeTrue(
+                $"юнит остановлен, останавливается или уже выгружен; состояние: {state}");
         }
         finally
         {
             IsolationOptions.Instance = prev;
         }
 
-        // Выгружен (not-found) либо уже остановлен — --collect соберёт и failed
-        static bool IsTerminal(string state) =>
+        // Сколько процессов в cgroup scope. Каталога нет — systemd его уже собрал, это ноль.
+        static int AliveInScope(string cgroupDir)
+        {
+            try
+            {
+                return File.ReadAllLines(Path.Combine(cgroupDir, "cgroup.procs"))
+                    .Count(l => !string.IsNullOrWhiteSpace(l));
+            }
+            catch (DirectoryNotFoundException) { return 0; }
+            catch (FileNotFoundException) { return 0; }
+        }
+
+        // Выгружен (not-found), остановлен (inactive/failed — --collect соберёт и его) либо
+        // ещё досчитывает свой TimeoutStopSec над пустой cgroup (deactivating): для продукта
+        // это один и тот же исход — живых процессов в slice не осталось
+        static bool IsAcceptable(string state) =>
             state.Contains("LoadState=not-found")
             || state.Contains("ActiveState=inactive")
-            || state.Contains("ActiveState=failed");
+            || state.Contains("ActiveState=failed")
+            || state.Contains("ActiveState=deactivating");
 
         static async Task<string> UnitStateAsync(string unit)
         {

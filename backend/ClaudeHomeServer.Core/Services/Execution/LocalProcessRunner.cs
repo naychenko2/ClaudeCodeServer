@@ -209,8 +209,12 @@ public sealed class LocalProcessRunner : IProcessLauncher
     }
 
     // Уникальное имя scope на процесс: по нему scope гасится после выхода и солятся узлы сборки.
-    // Длина постоянна — заглушка оценки командной строки той же длины.
-    internal static string NewScopeUnitName() => $"ccs-run-{Guid.NewGuid():N}.scope";
+    // В имени — ОТПЕЧАТОК ВЛАДЕЛЬЦА (PID бэкенда, 8 hex-цифр): по нему сторож
+    // ScopeOrphanSweeper при старте отличает сироту от живого scope соседнего инстанса.
+    // PID в hex фиксированной ширины, поэтому длина имени постоянна — заглушка оценки
+    // командной строки той же длины.
+    internal static string NewScopeUnitName() =>
+        $"ccs-run-{Environment.ProcessId:x8}-{Guid.NewGuid():N}.scope";
     internal static readonly string ScopeUnitPlaceholder = new('x', NewScopeUnitName().Length);
 
     // Флаги systemd-run до exe, заканчиваются `--`. Единственный источник и для сборки

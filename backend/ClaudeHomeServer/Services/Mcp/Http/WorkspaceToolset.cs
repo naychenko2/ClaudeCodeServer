@@ -1463,7 +1463,8 @@ public sealed partial class WorkspaceToolset(
                 // задаче-блокеру — координатор сам разбирается с блокером. Дочерний чат
                 // идентифицируется по TaskId (он выставляется при создании сессии из штаба).
                 // Гасим открытую блокер-карточку штаба, если она висит на этой задаче.
-                if (target is { TaskId: { } targetTaskId, ParentSessionId: { } parentId }
+                var targetParent = SessionTaskLinks.ParentSessionId(target, new TaskLookupAdapter(tasks));
+                if (target is { TaskId: { } targetTaskId } && targetParent is { } parentId
                     && sessions.GetById(parentId)?.TeamImplement != null)
                 {
                     _ = Task.Run(async () =>

@@ -25,6 +25,8 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
     public IActionResult GetAll(string projectId)
     {
         if (!OwnsProject(projectId)) return NotFound();
+        // Вычисляемые parentSessionId/taskDone дописывает конвертер Session на границе
+        // сериализации (SessionJsonConverter) — здесь ничего подставлять не нужно
         return Ok(sessions.GetByProject(projectId));
     }
 

@@ -27,7 +27,6 @@ namespace ClaudeHomeServer.Tests.Services;
 // Здесь гоняется весь путь доклада целиком: TryDeliverCompletionAsync → ReportToDelegatorAsync
 // → SendOrEnqueueAsync → SendDirectAsync. CLI не поднимается — процессом чата подставляется мок
 // адаптера (как в SessionManagerTests), поэтому тест остаётся юнитом и не зависит от claude.exe.
-[Collection(TestCollections.SessionStaticResolvers)]
 public class TaskExecutionServiceDelegationReportTests : IDisposable
 {
     private readonly string _dir;

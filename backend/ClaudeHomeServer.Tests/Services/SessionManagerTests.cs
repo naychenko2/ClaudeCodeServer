@@ -23,7 +23,6 @@ using Moq;
 
 namespace ClaudeHomeServer.Tests.Services;
 
-[Collection(TestCollections.SessionStaticResolvers)]
 public class SessionManagerTests : IDisposable
 {
     private const string TestUserId = "test-user-id";
@@ -105,9 +104,9 @@ public class SessionManagerTests : IDisposable
             {
                 ["DataPath"] = Path.Combine(_tempDir, "projects.json"),
                 // Автосейв по таймеру выключен: внутри SaveSessions живёт sweep-terminus, и
-                // фоновое срабатывание выполняло его между ассертами теста — вместе с глобальным
-                // Session.TaskSourceSessionResolver, который переустанавливает каждый новый
-                // TaskManager в параллельном классе, это давало плавающее падение
+                // фоновое срабатывание выполняло его между ассертами теста. Когда sweep ещё читал
+                // статический Session.TaskSourceSessionResolver (перезаписывался каждым новым
+                // TaskManager в параллельном классе), это давало плавающее падение
                 // Sweep_ЖивойПотомокВГлубину на полном прогоне. Тесты зовут sweep явно.
                 ["Session:AutoSaveSeconds"] = "0",
                 // Домашние папки владельцев (чаты вне проекта живут в {home}/Chats) — в temp
@@ -9272,8 +9271,8 @@ public class SessionManagerTests : IDisposable
 
         var updated = _sut.SetParent(child.Id, parent.Id, TestUserId);
 
-        updated!.ParentSessionId.Should().Be(parent.Id);
-        _sut.GetById(child.Id)!.ParentSessionId.Should().Be(parent.Id, "связь персистится");
+        SessionTaskLinks.ParentSessionId(updated!, null).Should().Be(parent.Id);
+        SessionTaskLinks.ParentSessionId(_sut.GetById(child.Id)!, null).Should().Be(parent.Id, "связь персистится");
     }
 
     [Fact]
@@ -9301,9 +9300,9 @@ public class SessionManagerTests : IDisposable
         var child = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
         _sut.SetParent(child.Id, parent.Id, TestUserId);
 
-        var updated = _sut.SetParent(child.Id, null, TestUserId);
+        var updated = _sut.SetParent(child.Id, null, TestUserId)!;
 
-        updated!.ParentSessionId.Should().BeNull();
+        SessionTaskLinks.ParentSessionId(updated, null).Should().BeNull();
         updated.ParentOverrideId.Should().BeNull();
         updated.ParentDetached.Should().BeFalse("у обычного чата гасить нечего — флаг не оседает");
     }
@@ -9317,19 +9316,19 @@ public class SessionManagerTests : IDisposable
         var manualParent = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
         var child = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, taskExecution: true, taskId: "t-1");
 
-        var prev = Session.TaskSourceSessionResolver;
+        var tasks = new StubTasks(("t-1", autoParent.Id, TaskItemStatus.Todo));
+        _sut.SetTaskLookupForTests(tasks);
         try
         {
-            Session.TaskSourceSessionResolver = _ => autoParent.Id;
-            _sut.GetById(child.Id)!.ParentSessionId.Should().Be(autoParent.Id, "исходно — авто-связь");
+            SessionTaskLinks.ParentSessionId(_sut.GetById(child.Id)!, tasks).Should().Be(autoParent.Id, "исходно — авто-связь");
 
-            var updated = _sut.SetParent(child.Id, manualParent.Id, TestUserId);
+            var updated = _sut.SetParent(child.Id, manualParent.Id, TestUserId)!;
 
-            updated!.ParentSessionId.Should().Be(manualParent.Id, "ручной родитель побеждает");
+            SessionTaskLinks.ParentSessionId(updated, tasks).Should().Be(manualParent.Id, "ручной родитель побеждает");
             updated.TaskId.Should().Be("t-1", "связь с задачей перетаскиванием не рвётся");
             updated.Origin.Should().Be(ChatOrigin.Task);
         }
-        finally { Session.TaskSourceSessionResolver = prev; }
+        finally { _sut.SetTaskLookupForTests(null); }
     }
 
     [Fact]
@@ -9340,17 +9339,16 @@ public class SessionManagerTests : IDisposable
         var autoParent = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
         var child = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, taskExecution: true, taskId: "t-2");
 
-        var prev = Session.TaskSourceSessionResolver;
+        var tasks = new StubTasks(("t-2", autoParent.Id, TaskItemStatus.Todo));
+        _sut.SetTaskLookupForTests(tasks);
         try
         {
-            Session.TaskSourceSessionResolver = _ => autoParent.Id;
-
             var updated = _sut.SetParent(child.Id, null, TestUserId);
 
             updated!.ParentDetached.Should().BeTrue();
-            updated.ParentSessionId.Should().BeNull("явный корень перебивает авто-связь");
+            SessionTaskLinks.ParentSessionId(updated!, tasks).Should().BeNull("явный корень перебивает авто-связь");
         }
-        finally { Session.TaskSourceSessionResolver = prev; }
+        finally { _sut.SetTaskLookupForTests(null); }
     }
 
     [Fact]
@@ -9380,7 +9378,7 @@ public class SessionManagerTests : IDisposable
         var act = () => _sut.SetParent(a.Id, c.Id, TestUserId);
 
         act.Should().Throw<InvalidOperationException>();
-        _sut.GetById(a.Id)!.ParentSessionId.Should().BeNull("отклонённая операция ничего не записала");
+        SessionTaskLinks.ParentSessionId(_sut.GetById(a.Id)!, null).Should().BeNull("отклонённая операция ничего не записала");
     }
 
     [Fact]
@@ -10569,8 +10567,7 @@ public class SessionManagerTests : IDisposable
         var (coordinator, coordEntry) = await MkStuckCoordinatorAsync("live-child");
         var (child, _) = await MkChildAsync("exec", SessionStatus.Working, alive: true);
 
-        var prev = Session.TaskSourceSessionResolver;
-        Session.TaskSourceSessionResolver = id => id == child.TaskId ? coordinator.Id : null;
+        _sut.SetTaskLookupForTests(new StubTasks((child.TaskId!, coordinator.Id, TaskItemStatus.Todo)));
         try
         {
             SetLastTurnEndedAt(coordEntry, DateTimeOffset.UtcNow.AddSeconds(-30)); // grace истёк
@@ -10578,7 +10575,7 @@ public class SessionManagerTests : IDisposable
 
             AssertSweepSkipped(_sut, coordinator.Id, coordEntry);
         }
-        finally { Session.TaskSourceSessionResolver = prev; }
+        finally { _sut.SetTaskLookupForTests(null); }
     }
 
     [Fact]
@@ -10591,8 +10588,7 @@ public class SessionManagerTests : IDisposable
         var (coordinator, coordEntry) = await MkStuckCoordinatorAsync("dead-child");
         var (child, _) = await MkChildAsync("exec", SessionStatus.Working, alive: false);
 
-        var prev = Session.TaskSourceSessionResolver;
-        Session.TaskSourceSessionResolver = id => id == child.TaskId ? coordinator.Id : null;
+        _sut.SetTaskLookupForTests(new StubTasks((child.TaskId!, coordinator.Id, TaskItemStatus.Todo)));
         try
         {
             SetLastTurnEndedAt(coordEntry, DateTimeOffset.UtcNow.AddSeconds(-30)); // grace истёк
@@ -10602,7 +10598,7 @@ public class SessionManagerTests : IDisposable
                 TimeSpan.FromSeconds(2));
             _sut.GetById(coordinator.Id)!.Status.Should().Be(SessionStatus.Finished);
         }
-        finally { Session.TaskSourceSessionResolver = prev; }
+        finally { _sut.SetTaskLookupForTests(null); }
     }
 
     [Fact]
@@ -10615,8 +10611,7 @@ public class SessionManagerTests : IDisposable
         var (coordinator, coordEntry) = await MkStuckCoordinatorAsync("waiting-child");
         var (child, _) = await MkChildAsync("exec", SessionStatus.Waiting, alive: false);
 
-        var prev = Session.TaskSourceSessionResolver;
-        Session.TaskSourceSessionResolver = id => id == child.TaskId ? coordinator.Id : null;
+        _sut.SetTaskLookupForTests(new StubTasks((child.TaskId!, coordinator.Id, TaskItemStatus.Todo)));
         try
         {
             SetLastTurnEndedAt(coordEntry, DateTimeOffset.UtcNow.AddSeconds(-30)); // grace истёк
@@ -10626,14 +10621,14 @@ public class SessionManagerTests : IDisposable
                 TimeSpan.FromSeconds(2));
             _sut.GetById(coordinator.Id)!.Status.Should().Be(SessionStatus.Finished);
         }
-        finally { Session.TaskSourceSessionResolver = prev; }
+        finally { _sut.SetTaskLookupForTests(null); }
     }
 
     [Fact]
     public async Task Sweep_ЖивойПотомокВГлубину_ДержитКоординатораЧерезСреднийУзел()
     {
         // P28 (глубина): законная цепочка делегирования координатор → исполнитель → суб-исполнитель
-        // (TaskDelegationDepth до 3). Суб-исполнитель работает (Working+alive), а исполнитель уже
+        // (глубина цепочки делегирования до 3). Суб-исполнитель работает (Working+alive), а исполнитель уже
         // отдал result и сидит в Active без своих фоновых задач — сам он не жив по HasLiveWork,
         // но под ним кипит работа. Правило по ПРЯМЫМ детям закрыло бы координатора (его ребёнок-
         // исполнитель не жив) — рекурсивный подъём от суб-исполнителя должен пройти через средний
@@ -10653,13 +10648,9 @@ public class SessionManagerTests : IDisposable
 
         var (sub, _) = await MkChildAsync("sub", SessionStatus.Working, alive: true);
 
-        var parentOf = new Dictionary<string, string>
-        {
-            [executor.TaskId!] = coordinator.Id,
-            [sub.TaskId!] = executor.Id,
-        };
-        var prev = Session.TaskSourceSessionResolver;
-        Session.TaskSourceSessionResolver = id => parentOf.TryGetValue(id, out var p) ? p : null;
+        SetSutTasks(
+            (executor.TaskId!, coordinator.Id, TaskItemStatus.Todo),
+            (sub.TaskId!, executor.Id, TaskItemStatus.Todo));
         try
         {
             SetLastTurnEndedAt(coordEntry, DateTimeOffset.UtcNow.AddSeconds(-30)); // grace истёк
@@ -10671,7 +10662,7 @@ public class SessionManagerTests : IDisposable
             _sut.GetById(executor.Id)!.Status.Should().Be(SessionStatus.Active,
                 "средний узел удержан живым потомком, хотя сам не HasLiveWork");
         }
-        finally { Session.TaskSourceSessionResolver = prev; }
+        finally { _sut.SetTaskLookupForTests(null); }
     }
 
     [Fact]
@@ -10971,4 +10962,24 @@ public class SessionManagerTests : IDisposable
     // после рестарта) проверяет TeamWaveRestartApiTests на фейк-фабрике адаптеров —
     // юнит-фикстура здесь настоящая LlmSessionAdapterFactory, и реальная отправка в ней
     // не гоняется (см. MakeRunningStabAsync в TeamWaveServiceTests).
+
+    // Стерильный ITaskLookup для юнитов: id → TaskItem (SourceSessionId/Status из аргументов).
+    // Заменяет прежний приём «Session.TaskSourceSessionResolver = ...» (статический резолвер,
+    // гонка с параллельными TaskManager'ами). TaskManager в ctor SessionManager не пробрасывают
+    // (DI-цикл), поэтому lookup подменяют через SessionManager.SetTaskLookupForTests.
+    private sealed class StubTasks : ITaskLookup
+    {
+        private readonly Dictionary<string, TaskItem> _byId;
+        public StubTasks(params (string Id, string? SourceSessionId, TaskItemStatus Status)[] items)
+        {
+            _byId = items.ToDictionary(
+                t => t.Id,
+                t => new TaskItem { Id = t.Id, SourceSessionId = t.SourceSessionId, Status = t.Status });
+        }
+        public TaskItem? GetById(string id) => _byId.GetValueOrDefault(id);
+    }
+
+    // Задать «task → чат-источник» (и статус) для sweep/SetParent-тестов.
+    private void SetSutTasks(params (string TaskId, string? SourceSessionId, TaskItemStatus Status)[] items)
+        => _sut.SetTaskLookupForTests(new StubTasks(items));
 }

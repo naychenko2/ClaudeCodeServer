@@ -7,6 +7,7 @@ using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Prompts;
+using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.Team;
 using ClaudeHomeServer.Services.Turn;
 
@@ -415,11 +416,11 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     ///
     /// Ноль нужен ТЕСТАМ, и не ради скорости: sweep живёт внутри SaveSessions, поэтому фоновый
     /// таймер выполняет его в произвольный момент — в том числе между двумя ассертами теста.
-    /// Вместе с глобальным Session.TaskSourceSessionResolver, который переустанавливает конструктор
-    /// каждого нового TaskManager в параллельном классе, это давало плавающее падение
-    /// Sweep_ЖивойПотомокВГлубину: иерархия делегирования на миг переставала резолвиться, и sweep
-    /// закрывал сессию, которую тест только что проверил живой. Поодиночке ни один из двух факторов
-    /// не воспроизводился — падало только на полном прогоне и не каждый раз.
+    /// Когда sweep ещё читал статический Session.TaskSourceSessionResolver (конструктор каждого
+    /// нового TaskManager перезаписывал его под параллельными классами), это давало плавающее
+    /// падение Sweep_ЖивойПотомокВГлубину: иерархия делегирования на миг переставала резолвиться,
+    /// и sweep закрывал сессию, которую тест только что проверил живой. Поодиночке ни один из двух
+    /// факторов не воспроизводился — падало только на полном прогоне и не каждый раз.
     /// </summary>
     private static readonly TimeSpan DefaultAutoSaveInterval = TimeSpan.FromSeconds(30);
     private Timer? _autoSaveTimer;
@@ -642,6 +643,17 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // потребление тут — проверка настроенности и строки stdio-ветки отката; вся работа с
     // Dify — в KnowledgeService со своей копией IOptions
     private readonly Models.DifyOptions _dify = new();
+    // Реестр задач (опционально, в тестах не передаётся): единственная точка вычисления
+    // вычисляемых «связей» сессии-чата (SessionTaskLinks.ParentSessionId / IsTaskDone).
+    // TaskManager не зависит от SessionManager (его ctor: config/лог/уведомления/персоны),
+    // поэтому прямой ссылки DI-цикла не возникает. Храним Core-шов ITaskLookup (адаптер
+    // строится один раз), чтобы сам SessionManager не тянул конкретный TaskManager.
+    // null — задача не резолвится (та же семантика, что «резолвер не установлен»:
+    // ParentSessionId=null, TaskDone=false).
+    private ITaskLookup? _taskLookup;
+    // Тест-шов: подменить ITaskLookup. TaskManager в конструктор SessionManager не пробрасывают
+    // (DI-цикл), поэтому юниты, которым нужен резолв задачи, подменяют lookup явно.
+    internal void SetTaskLookupForTests(ITaskLookup? lookup) => _taskLookup = lookup;
 
     public SessionManager(ProjectManager projects,
         ChatHistoryService history, IConfiguration config, ILlmSessionAdapterFactory adapters,
@@ -720,6 +732,9 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // Опционально (в тестах не передаётся): шина событий хода (ADR-013). Подписчики
         // SessionManager ведут паспорта ходов/сабагентов и снимки промпта (этап 1).
         Turn.ITurnEventBus? turnEvents = null,
+        // Опционально (в тестах не передаётся): реестр задач — единая точка вычисления
+        // вычисляемых «связей» сессии (SessionTaskLinks.ParentSessionId / IsTaskDone).
+        TaskManager? tasks = null,
         // Опционально (в тестах не передаётся): фабрика логгеров — нужна вертикали
         // TeamPlanService с собственным типизированным логгером (волна В). Без неё
         // TeamPlanService работает на NullLogger.
@@ -727,6 +742,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     {
         _turnEvents = turnEvents;
         _loggerFactory = loggerFactory;
+        _taskLookup = tasks is null ? null : new Composition.TaskLookupAdapter(tasks);
         _subagentRuns = subagentRuns;
         _turnRuns = turnRuns;
         _router = router;
@@ -1397,9 +1413,14 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
         return entry.Info.TaskId is { } tid
-            ? Session.TaskSourceSessionResolver?.Invoke(tid)
+            ? _taskLookup?.GetById(tid)?.SourceSessionId
             : null;
     }
+
+    // Эффективный родительский чат сессии (SessionTaskLinks): ручная группировка, иначе чат,
+    // в котором была создана её задача. Единственный вход для вертикалей, у которых нет
+    // собственного TaskManager (TeamTurnCompletionService/TeamBudgetService), а есть SessionManager.
+    internal string? EffectiveParentSessionId(Session s) => SessionTaskLinks.ParentSessionId(s, _taskLookup);
 
     // Только для тестов: запустить sweep-terminus (P12/P15) вне обычных триггеров SaveSessions,
     // чтобы детерминированно проверить переход Active→Finished по истечению grace. Прод-код
@@ -1457,7 +1478,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
                 if (info.ProjectId is not null || info.OwnerId != ownerId) continue;
             }
             else if (info.ProjectId != projectId) continue;
-            if (!MatchesArchiveRule(info, cutoff)) continue;
+            if (!MatchesArchiveRule(info, _taskLookup, cutoff)) continue;
             // Живость в чистый предикат не входит: она — свойство entry/адаптера, не Session
             if (HasTurnInFlight(entry) || entry.Process is { HasTrackedBg: true }) continue;
             result.Add(info);
@@ -1477,12 +1498,12 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // «без активности N дней» её и означает; архив при этом ничего не удаляет, и первая же
     // запись в чат возвращает его из архива автоматически (IsArchived — производный от
     // UpdatedAt <= ArchivedAt).
-    internal static bool MatchesArchiveRule(Session s, DateTime cutoff) =>
+    internal static bool MatchesArchiveRule(Session s, ITaskLookup? tasks, DateTime cutoff) =>
         !s.IsArchived
         && !s.IsPinned
         && s.ExpiresAfterMinutes is null
         && s.UpdatedAt <= cutoff
-        && (s.TaskId is null || s.TaskDone);
+        && (s.TaskId is null || SessionTaskLinks.IsTaskDone(s, tasks));
 
     // Число сессий проекта — для карточки проекта (без аллокации списка)
     public int CountByProject(string projectId) =>
@@ -1558,7 +1579,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         var cur = GetById(candidateId);
         for (var steps = 0; cur is not null && steps < 256; steps++)
         {
-            if (cur.ParentSessionId is not { } pid) return false;
+            if (SessionTaskLinks.ParentSessionId(cur, _taskLookup) is not { } pid) return false;
             if (pid == ancestorId) return true;
             cur = GetById(pid);
         }
@@ -4423,7 +4444,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     {
         if (GetOwned(sessionId, ownerId) is not { } chat) return ReportUpResult.NotFound;
         if (!_sessions.TryGetValue(sessionId, out var from)) return ReportUpResult.NotFound;
-        if (chat.ParentSessionId is not { } parentId) return ReportUpResult.NoParent;
+        if (SessionTaskLinks.ParentSessionId(chat, _taskLookup) is not { } parentId) return ReportUpResult.NoParent;
         if (GetOwned(parentId, ownerId) is null) return ReportUpResult.NoParent;
         if (!_sessions.TryGetValue(parentId, out var to)) return ReportUpResult.NoParent;
 
@@ -6976,17 +6997,18 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
     IReadOnlyList<TeamSessionInfo> ITeamSessionDirectory.ListChildren(string parentSessionId) =>
         [.. _sessions.Values.Select(e => e.Info)
-            .Where(s => s.ParentSessionId == parentSessionId)
+            .Where(s => SessionTaskLinks.ParentSessionId(s, _taskLookup) == parentSessionId)
             .Select(Snapshot)];
 
     ILookup<string, TeamSessionInfo> ITeamSessionDirectory.ChildrenByParent() =>
         _sessions.Values.Select(e => e.Info)
-            .Where(s => s.ParentSessionId is not null)
-            .ToLookup(s => s.ParentSessionId!, Snapshot);
+            .Where(s => SessionTaskLinks.ParentSessionId(s, _taskLookup) is not null)
+            .ToLookup(s => SessionTaskLinks.ParentSessionId(s, _taskLookup)!, Snapshot);
 
-    // Снимок под нужды штаба: узкий набор полей вместо 40-польной Session (см. TeamSessionInfo)
-    private static TeamSessionInfo Snapshot(Session s) =>
-        new(s.Id, s.ParentSessionId, s.ProjectId, s.OwnerId, s.Status, s.UpdatedAt);
+    // Снимок под нужды штаба: узкий набор полей вместо 40-польной Session (см. TeamSessionInfo).
+    // ParentSessionId — вычисляемый (SessionTaskLinks), поэтому снимок строит метод, а не статика.
+    private TeamSessionInfo Snapshot(Session s) =>
+        new(s.Id, SessionTaskLinks.ParentSessionId(s, _taskLookup), s.ProjectId, s.OwnerId, s.Status, s.UpdatedAt);
 
     Task<bool> ITeamHistoryStore.MutateCardAsync<T>(string sessionId, Func<T, bool> match, Action<T> mutate)
         => _sessions.TryGetValue(sessionId, out var entry)

@@ -116,8 +116,14 @@ Claude Design проект: `52adb1f7-312b-4f25-8c47-2bccfca9df94`. Ключев
   только сервер, `CLAUDE_CODE_OAUTH_TOKEN` не трогается.
 - One-shot вызовы — всегда `--safe-mode` + `--no-session-persistence` (состав флагов —
   `OneShotClaudeRunner.BuildArgs`, под тестом).
-- **`BareMode` + `SystemPromptFile`** в `LlmProviderConfig` — отключают автозагрузку CLAUDE.md,
-  хуков, LSP, плагинов и авто-памяти; CLI получает ТОЛЬКО короткую карту через
+- **`BareMode` + `SystemPromptFile`** в `LlmProviderConfig` — отключают ТОЛЬКО автозагрузку
+  CLAUDE.md проекта; хуки, LSP, плагины и авто-память остаются живыми. Флага `--bare` в
+  аргументах CLI больше нет (снят 2026-09-15, `BuildBareModeArgs` его не собирает) — вместо
+  него `RunTurnAsync` при реально применённом BareMode ставит переменную окружения
+  `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1`. Переменная недокументирована в CLI (её нет в
+  `claude --help`) и может пропасть/переименоваться при обновлении — сторож на аномальный
+  размер входа на первом ходу уже стоит в `ClaudeSession` (`_bareModeWatchdogFired`, срабатывает
+  при >15 000 токенов вместо ожидаемых ~2 000). CLI получает ТОЛЬКО короткую карту через
   `--system-prompt-file`. Для локальных моделей с малым окном это снижает вход с ~95 000 до
   ~2 400 токенов (замер 2026-09-05). Файл карты (`backend/ClaudeHomeServer/SystemPrompts/CLAUDE-local.md`,
   несколько КБ) поставляется с продуктом. **Цепочка резолва** per-project:
@@ -127,16 +133,16 @@ Claude Design проект: `52adb1f7-312b-4f25-8c47-2bccfca9df94`. Ключев
   `AppContext.BaseDirectory` — лечение ревью 2026-09-05: иначе в любом чужом проекте ход
   падает с exit=1. Если файл не найден — оба флага снимаются с warning в stderr
   («SystemPromptFile не найден»), ход идёт обычным путём (CLI сам подтянет CLAUDE.md
-  проекта); SafeJoin ловится, ход не валится (тоже с warning). `--bare` ломает
-  OAuth-авторизацию CLI, но это безопасно СТРУКТУРНО: BareMode включается только для
-  не-родного провайдера (реестр находит через `ResolveByModel`), а у не-родных OAuth нет
-  (ставят `ANTHROPIC_API_KEY` из `BuildCliEnv`). Состав стабилен в пределах сессии
-  (`McpToolsetStabilityTests`). **У container-владельцев карта живёт на паре, которую
-  обязаны держать синхронно:** bind-mount `<BaseDirectory>/SystemPrompts:/app/SystemPrompts`
-  (`SandboxManager`, факт наличия каталога входит в `ConfigHash`) и одноимённое правило
-  `DockerPathMapper` — расхождение рантайм не ловит, оно даёт exit=1 и ложный `Unreachable`
-  у каждого container-владельца; связаны тестом в `DockerPathMapperTests`.
-  Тесты — `ClaudeSessionBareArgsTests`.
+  проекта); SafeJoin ловится, ход не валится (тоже с warning). Хуки серверных сессий гасит
+  отдельный, не связанный с BareMode механизм — `ClaudeRuntimeSettings.HooksOffArgs`
+  (`--settings` с `disableAllHooks`) — только на Windows-хосте, где хуки плагинов
+  открывают мелькающие окна консоли; на Linux хуки живые. Состав
+  MCP-инструментов стабилен в пределах сессии (`McpToolsetStabilityTests`). **У
+  container-владельцев карта живёт на паре, которую обязаны держать синхронно:** bind-mount
+  `<BaseDirectory>/SystemPrompts:/app/SystemPrompts` (`SandboxManager`, факт наличия каталога
+  входит в `ConfigHash`) и одноимённое правило `DockerPathMapper` — расхождение рантайм не
+  ловит, оно даёт exit=1 и ложный `Unreachable` у каждого container-владельца; связаны тестом
+  в `DockerPathMapperTests`. Тесты — `ClaudeSessionBareArgsTests`.
 - **`RecallInTurnText`** в `LlmProviderConfig` — нестабильные секции промпта (recall заметок
   и памяти, досье, привязки персоны, граф кода) доставляются хвостом хода, вклейкой в его
   текст, а не системным блоком. Причина: prefix cache движка ищет совпадение от начала
@@ -525,8 +531,9 @@ node-процесса нет вовсе (замер: 30 продуктовых n
 
 Серверы, рождённые сразу в Kestrel (stdio-ветки отката нет вовсе, при негодном для http
 адресе или выключенном рубильнике ходу не объявляются): `watch` (сторожа чатов, ADR-013)
-и **`websearch`** — веб-поиск для чатов, заведён ради локальной модели: под `--bare` CLI
-не отдаёт ни `WebSearch`, ни `WebFetch`. Два инструмента, сознательно без третьего:
+и **`websearch`** — веб-поиск для чатов, заведён ради локальной модели: под BareMode CLI
+получает явный allow-list `--tools`, в который `WebSearch` и `WebFetch` не входят. Два
+инструмента, сознательно без третьего:
 `web_search` — запрос в Perplexity Sonar с ответом и ЦИТАТАМИ-ссылками (ключ живёт только
 в секции `Perplexity` appsettings и наружу не уезжает; замер 2026-09-06 показал, что через
 egress-прокси доступен только Perplexity, а google/bing/brave/SearXNG — нет, поэтому готовые

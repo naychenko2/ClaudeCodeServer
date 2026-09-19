@@ -2,13 +2,16 @@ using ClaudeHomeServer.Services.Execution;
 
 namespace ClaudeHomeServer.Services.Llm.Claude;
 
-// Файл настроек для claude --settings: отключает ВСЕ хуки (disableAllHooks) в
-// серверных сессиях. Причина — на Windows-хосте хуки плагинов (oh-my-claudecode:
-// SessionStart/SessionEnd/UserPromptSubmit/PreToolUse) на каждый ход порождают
-// дочерние git/cmd-процессы, каждый из которых открывает мелькающее окно консоли.
-// Остальные плагины при этом остаются загружены — скиллы /oh-my-claudecode:*
-// работают, а эффект keyword-detector воспроизводит OmcKeywordRouting на стороне
-// сервера.
+// Файл настроек для claude --settings: гасит хуки плагинов только на Windows-хосте
+// (disableAllHooks). На остальных платформах (Linux/macOS) хуки нужны: PostToolUse
+// срабатывает на каждый вызов и помогает локальной модели держать правила CLAUDE-local.md,
+// которые к сороковому шагу забываются. Причина первоначального глушения — на Windows-хосте
+// хуки плагинов (oh-my-claudecode: SessionStart/SessionEnd/UserPromptSubmit/PreToolUse)
+// на каждый ход порождают дочерние git/cmd-процессы, каждый из которых открывает
+// мелькающее окно консоли. Сервер переехал на Linux — причина отпала, привязку к
+// платформе хоста делаем здесь. Остальные плагины при этом остаются загружены —
+// скиллы /oh-my-claudecode:* работают, а эффект keyword-detector воспроизводит
+// OmcKeywordRouting на стороне сервера.
 //
 // Второй режим файла — гейт браузера: enabledPlugins явно включает или выключает
 // плагин playwright (24 browser_*-инструмента) независимо от того, что лежит в
@@ -45,16 +48,23 @@ public static class ClaudeRuntimeSettings
     // не документирована и не проверялась)
     private const int TranscriptRetentionDays = 3650;
 
-    // Ключ кэша — (temp-каталог среды, режим): temp у драйверов запуска разный, и одного
-    // флага мало — первый владелец «застолбил» бы путь в своей папке для всех остальных
-    private static readonly Dictionary<(string TempDir, bool Browser), string> _cachedPaths = [];
+    // На Windows хуки плагинов порождают мелькающие окна консоли — гасим.
+    // На остальных платформах хуки нужны как канал влияния на локальную модель.
+    private static bool HostRequiresHooksOff => OperatingSystem.IsWindows();
+
+    // Ключ кэша — (temp-каталог среды, режим, гасить ли хуки): temp у драйверов запуска
+    // разный, одного флага мало — первый владелец «застолбил» бы путь в своей папке для
+    // всех остальных; добавляем измерение платформы хоста, иначе при смене режима хуков
+    // (Windows-процесс vs Linux-процесс с одним TempDir) первый запуск отдаст файл
+    // неправильного состава.
+    private static readonly Dictionary<(string TempDir, bool Browser, bool DisableHooks), string> _cachedPaths = [];
     private static readonly Lock _lock = new();
 
     // Аргументы --settings для запуска claude; пусто для песочницы.
     // browserEnabled: false — вдобавок к хукам гасит плагин браузера.
     // Путь файла входит в сигнатуру прогона, поэтому решение обязано быть
-    // детерминировано по сессии (оно и есть — считается по персоне, не по ходу),
-    // иначе живой процесс перезапускался бы между ходами.
+    // детерминировано по сессии (оно и есть — считается по персоне и платформе,
+    // не по ходу), иначе живой процесс перезапускался бы между ходами.
     public static IEnumerable<string> HooksOffArgs(IProcessLauncher launcher, bool browserEnabled = true) =>
         launcher.IsSandboxed ? [] : ["--settings", EnsureFile(launcher.HostTempDir, browserEnabled)];
 
@@ -64,14 +74,18 @@ public static class ClaudeRuntimeSettings
     {
         lock (_lock)
         {
-            var cacheKey = (hostTempDir, browserEnabled);
+            var disableHooks = HostRequiresHooksOff;
+            var cacheKey = (hostTempDir, browserEnabled, disableHooks);
             if (_cachedPaths.TryGetValue(cacheKey, out var cached) && File.Exists(cached)) return cached;
             var dir = Path.Combine(hostTempDir, "claude-runtime");
             Directory.CreateDirectory(dir);
+            // Имя повторяет состав файла: по нему (в cliArgs снимков промпта) читают, включены
+            // ли хуки, — содержимое там не видно. И путь различается по тем же измерениям,
+            // что ключ кэша, иначе два ключа делили бы один файл и перезаписывали друг друга.
             var path = Path.Combine(dir,
-                browserEnabled ? "hooks-off.settings.json" : "hooks-off-no-browser.settings.json");
+                $"hooks-{(disableHooks ? "off" : "on")}{(browserEnabled ? "" : "-no-browser")}.settings.json");
             File.WriteAllText(path,
-                $"{{\"disableAllHooks\":true,\"enabledPlugins\":{{\"{BrowserPluginKey}\":{(browserEnabled ? "true" : "false")}}},\"cleanupPeriodDays\":{TranscriptRetentionDays}}}");
+                $"{{\"disableAllHooks\":{(disableHooks ? "true" : "false")},\"enabledPlugins\":{{\"{BrowserPluginKey}\":{(browserEnabled ? "true" : "false")}}},\"cleanupPeriodDays\":{TranscriptRetentionDays}}}");
             _cachedPaths[cacheKey] = path;
             return path;
         }

@@ -58,6 +58,17 @@ public class LocalProcessRunnerIsolationTests
         public void Dispose() => undo();
     }
 
+    // psi.Environment — КОПИЯ окружения хоста, поэтому «переменной там нет» проверяемо только
+    // при её отсутствии снаружи. А снаружи она как раз бывает: изолированным процессам её
+    // ставит этот самый механизм, и тестраннер, запущенный под изоляцией, её наследует —
+    // без снятия ассерт проверял бы среду прогона, а не код.
+    private static IDisposable NoAmbient(string name)
+    {
+        var prev = Environment.GetEnvironmentVariable(name);
+        Environment.SetEnvironmentVariable(name, null);
+        return new Restore(() => Environment.SetEnvironmentVariable(name, prev));
+    }
+
     [Fact]
     public void Включена_НеWindows_ЗапускИдётЧерезSystemdRun()
     {
@@ -91,6 +102,7 @@ public class LocalProcessRunnerIsolationTests
     public void Выключена_ЗапускКакРаньше()
     {
         using var _ = Bus(present: true);
+        using var noAmbient = NoAmbient("MSBUILDDISABLENODEREUSE");
 
         var (psi, reason) = Build(Spec(args: ["--print"]), new IsolationOptions { Enabled = false });
 

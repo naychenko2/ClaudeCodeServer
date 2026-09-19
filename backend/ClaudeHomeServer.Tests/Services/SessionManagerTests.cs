@@ -1702,6 +1702,97 @@ public class SessionManagerTests : IDisposable
             .Which.Text.Should().Be("не доставлять");
     }
 
+    // --- Отметка «Ход остановлен пользователем» в истории ---
+
+    private async Task<(Session Session, Mock<ILlmSessionAdapter> Adapter)> MkRunningTurnAsync(
+        string suffix, SessionStatus status = SessionStatus.Working)
+    {
+        var session = await MkBusySessionAsync(suffix, status);
+        session.Name = "есть имя";
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        GetAccumulator(entry).OnUserMessage("сделай отчёт", []);
+        GetAccumulator(entry).OnTextDelta("начинаю");
+        return (session, adapter);
+    }
+
+    [Fact]
+    public async Task Interrupt_Человеком_ПишетОтметкуВИсторию()
+    {
+        var (session, adapter) = await MkRunningTurnAsync("stop-marker");
+
+        _sut.Interrupt(session.Id);
+
+        adapter.Verify(a => a.Interrupt(), Times.Once());
+        var history = await _sut.GetHistoryAsync(session.Id);
+        history.Select(m => m.GetType()).Should().Equal(
+            typeof(StoredUserMessage), typeof(StoredTextMessage), typeof(StoredInterruptedMessage));
+    }
+
+    [Fact]
+    public async Task InterruptTurn_Штабом_ОтметкуНеПишет()
+    {
+        // Штаб снимает исполнителя той же механикой, но это не «Стоп» человека
+        var (session, adapter) = await MkRunningTurnAsync("staff-stop");
+
+        ((ITeamTurnIntake)_sut).InterruptTurn(session.Id);
+
+        adapter.Verify(a => a.Interrupt(), Times.Once());
+        (await _sut.GetHistoryAsync(session.Id)).OfType<StoredInterruptedMessage>().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ОбрывХодаБезСтопа_ОтметкуНеПишет()
+    {
+        // Падение процесса: ошибка и голый exited — отметки «остановлен пользователем» нет
+        var (session, _) = await MkRunningTurnAsync("crash");
+        var acc = GetAccumulator(GetEntry(session.Id));
+
+        await InvokeOnMessageAsync(session.Id, acc, new ErrorMessage("процесс упал"), TestRunId);
+        await InvokeOnMessageAsync(session.Id, acc, new ExitedMessage(), TestRunId);
+
+        (await _sut.GetHistoryAsync(session.Id)).OfType<StoredInterruptedMessage>().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Interrupt_СвободныйЧат_ОтметкуНеПишет()
+    {
+        var (session, _) = await MkRunningTurnAsync("idle-stop", SessionStatus.Active);
+
+        _sut.Interrupt(session.Id);
+
+        (await _sut.GetHistoryAsync(session.Id)).OfType<StoredInterruptedMessage>().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task PreemptForPending_ПишетОтметкуВИсторию()
+    {
+        var (session, _) = await MkRunningTurnAsync("preempt-marker");
+        await _sut.SendMessageAsync(session.Id, "срочное", []);
+
+        _sut.PreemptForPending(session.Id).Should().BeTrue();
+
+        (await _sut.GetHistoryAsync(session.Id)).OfType<StoredInterruptedMessage>().Should().ContainSingle();
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task SendMessage_ПрерываетЖдущийХод_ОтметкаТолькоДляЧеловека(bool fromHub)
+    {
+        var (session, _) = await MkRunningTurnAsync("preempt-send-" + fromHub, SessionStatus.Waiting);
+
+        var outcome = fromHub
+            ? await _sut.SendMessageAsync(session.Id, "не спрашивай, делай", [], cause: SessionManager.DeliveryCause.User)
+            // Отправка не из хаба (cause не User) — живая лента чужого клиента отметки не ставит
+            : await _sut.SendMessageAsync(session.Id, "директива", []);
+
+        outcome.Should().Be(SessionManager.SendUserOutcome.QueuedPreempted);
+        (await _sut.GetHistoryAsync(session.Id)).OfType<StoredInterruptedMessage>()
+            .Should().HaveCount(fromHub ? 1 : 0);
+    }
+
     // --- Гейт протухших ответов и реанимация зависшего чата ---
 
     private static void SetPendingInteraction(object entry, ServerMessage? msg) =>

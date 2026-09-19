@@ -180,7 +180,8 @@ const _sending = new Set<string>();
 
 // Ход прерван сервером ради очереди (кнопка «Прервать и отправить» либо исход
 // 'queued-preempted'). Факт держим здесь, а НЕ только отметкой в ленте: лента переживает
-// замену историей с сервера (маркер 'interrupted' live-only, в history его нет), и после
+// замену историей с сервера (сервер пишет маркер 'interrupted' в историю, но реконнект может
+// привезти её раньше, чем он туда лёг), и после
 // реконнекта посреди преемпта `exited` убитого хода снова читался бы как авария. Флаг живёт
 // до ближайшего конца хода — дальше он неактуален и следующую настоящую аварию не заглушит.
 const _preempted = new Set<string>();
@@ -695,12 +696,14 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
   const interrupt = useCallback(() => {
     if (!sessionId) return;
     interruptSession(sessionId);
-    // Оптимистично помечаем ход как остановленный пользователем; подсказка прерванного хода неактуальна
+    // Оптимистично помечаем ход как остановленный пользователем; подсказка прерванного хода неактуальна.
+    // Закончившийся ход не помечаем: сервер пишет ту же отметку в историю только на идущем
+    // ходу, и лишний персистентный элемент в ленте навсегда перевесил бы историю при сверке
     setState(sessionId, prev => ({
       ...prev,
       isWaiting: false,
       promptSuggestion: null,
-      items: prev.items[prev.items.length - 1]?.kind === 'interrupted'
+      items: turnAlreadyEnded(prev.items)
         ? prev.items
         : [...prev.items, { kind: 'interrupted' }],
     }));

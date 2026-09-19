@@ -21,6 +21,7 @@ namespace ClaudeHomeServer.Protocol;
 [JsonDerivedType(typeof(StoredWorkflowProgressMessage), "workflow_progress")]
 [JsonDerivedType(typeof(StoredWorkLoopStoppedMessage), "work_loop_stopped")]
 [JsonDerivedType(typeof(StoredModelSwitchedMessage), "model_switched")]
+[JsonDerivedType(typeof(StoredInterruptedMessage), "interrupted")]
 public abstract class StoredMessage { }
 
 public class StoredUserMessage(string text, string[]? attachedPaths = null, bool? viaAgent = null,
@@ -161,6 +162,17 @@ public class StoredWorkLoopStoppedMessage(string reason, string text) : StoredMe
 {
     public string Reason { get; init; } = reason;
     public string Text { get; init; } = text;
+}
+
+// Отметка «Ход остановлен пользователем»: ход оборвал ЧЕЛОВЕК («Стоп», «Прервать и
+// отправить», сообщение в ход, ждавший его ответа). Убитый ход не присылает ни result, ни
+// error — без этой записи после F5 и на другом устройстве в ленте висел бы вопрос без
+// ответа, неотличимый от зависшего хода. Прочие обрывы (падение процесса, перезапуск хода
+// штабом, снятие задачи) её не пишут — у них своя запись либо её нет вовсе.
+// Timestamp — Unix-мс UTC, как у StoredErrorMessage.
+public class StoredInterruptedMessage(long? timestamp = null) : StoredMessage
+{
+    public long? Timestamp { get; init; } = timestamp;
 }
 
 // Граница компакции контекста — чтобы после перезагрузки страницы оценка заполнения не врала

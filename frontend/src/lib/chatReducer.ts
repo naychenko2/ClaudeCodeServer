@@ -221,7 +221,7 @@ export function normalizeHistory(raw: unknown[], opts?: { deriveSpeakers?: boole
     // Поля маркера подмены (model/previousModel/reason/details) переносятся как есть,
     // но пару «ошибка + подмена» из истории старых чатов схлопываем — см. appendModelSwitched
     else if (m.kind === 'model_switched') appendModelSwitched(items, m as unknown as ModelSwitchedItem);
-    else if (m.kind === 'text' || m.kind === 'user_message') {
+    else if (m.kind === 'text' || m.kind === 'user_message' || m.kind === 'interrupted') {
       // В истории поле называется timestamp (StoredMessage.Timestamp), в ленте — ts:
       // без перекладывания панель поста осталась бы без времени после перезагрузки
       const { timestamp, ...rest } = m as unknown as Record<string, unknown> & { timestamp?: number };
@@ -249,7 +249,7 @@ export const PERSISTED_KINDS = new Set<ChatItem['kind']>([
   'user_message', 'session_started', 'text', 'thinking', 'tool_use',
   'ask_question', 'plan_review', 'team_plan', 'team_escalation',
   'file_changed', 'result', 'fal_cost', 'glif_cost', 'compact_boundary', 'error',
-  'work_loop_stopped', 'model_switched',
+  'work_loop_stopped', 'model_switched', 'interrupted',
 ]);
 
 // Стоит ли заменить живую ленту историей с сервера: сравнение длин БЕЗ live-only

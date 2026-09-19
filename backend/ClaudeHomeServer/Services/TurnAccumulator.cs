@@ -503,6 +503,24 @@ internal class TurnAccumulator
         await FlushAsync(svc);
     }
 
+    // Ход остановлен человеком: отметка встаёт в текущий ход СЛЕДОМ за тем, что он успел
+    // написать (буферы сбрасываем, как на конце хода), — там же, где её ставит живая лента.
+    // Ход в историю не закрываем (FlushAsync): фоновые агенты убитого хода ещё могут прислать
+    // bg_agent_done/прогресс workflow по своим карточкам. Повторный «Стоп» подряд второй
+    // отметки не даёт. false — отметка уже стоит, писать нечего.
+    public bool OnUserInterrupted()
+    {
+        lock (_lock)
+        {
+            FlushBuffers(final: true);
+            var last = _currentTurn.Count > 0 ? _currentTurn[^1]
+                : _history.Count > 0 ? _history[^1] : null;
+            if (last is StoredInterruptedMessage) return false;
+            _currentTurn.Add(new StoredInterruptedMessage(NowMs()));
+            return true;
+        }
+    }
+
     // Стоимость генерации fal.ai приходит асинхронно (вне хода) — добавляем в историю напрямую.
     // Возвращает false, если запись с таким requestId уже есть (дедуп run_model + get_job_result).
     public bool OnFalCost(string requestId, string? endpointId, double costUsd, double? outputUnits, double? unitPrice)

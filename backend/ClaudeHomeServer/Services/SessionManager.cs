@@ -3752,7 +3752,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                     && stillPreemptable
                     && enqueued is not SendAndWaitResult.Queued { Dispatched: true })
                 {
-                    PreemptTurnForQueue(sessionId, entry, "user-message (preempt хода пользователя)");
+                    PreemptTurnForQueue(sessionId, entry, "user-message (preempt хода пользователя)",
+                        byUser: cause == DeliveryCause.User);
                     return SendUserOutcome.QueuedPreempted;
                 }
                 return SendUserOutcome.Queued;
@@ -4471,8 +4472,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // Прервать идущий ход РАДИ очереди: убитый процесс result не пришлёт, поэтому доставку
     // разберёт exited того же прогона (DrainOnExitedRun). В отличие от «Стоп» очередь НЕ
     // морозится — прерывание здесь и есть требование доставить ждущее сообщение сейчас.
-    private void PreemptTurnForQueue(string sessionId, SessionEntry entry, string callsite)
+    // byUser — перебой затеял человек (кнопка на карточке очереди, его сообщение в ход, ждавший
+    // его ответа): живая лента ставит на нём отметку «Ход остановлен пользователем», история
+    // обязана её повторить, иначе после F5 разъедется с ней (и со сверкой длин на фронте).
+    private void PreemptTurnForQueue(string sessionId, SessionEntry entry, string callsite, bool byUser)
     {
+        if (byUser) RecordUserInterrupt(sessionId, entry);
         // Ход убит — result по нему не придёт, а с ним не придёт и потребление буфера маркеров
         // (конец хода в OnMessageAsync, у штаба ещё и HandleTeamTurnEndAsync). Чистим синхронно:
         // иначе маркер мёртвого хода склеился бы с текстом следующего и применился задним
@@ -4517,7 +4522,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         if (entry.QueueFrozen) return false;
         lock (entry.PendingLock)
             if (entry.Pending.Count == 0) return false;
-        PreemptTurnForQueue(sessionId, entry, "pending-preempt (кнопка «прервать и отправить»)");
+        PreemptTurnForQueue(sessionId, entry, "pending-preempt (кнопка «прервать и отправить»)", byUser: true);
         return true;
     }
 
@@ -5500,7 +5505,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         return entry.Info;
     }
 
-    public void Interrupt(string sessionId)
+    // «Стоп» человека (хаб, доска агентов). Штаб останавливает исполнителя через
+    // ITeamTurnIntake.InterruptTurn — та же механика, но без отметки в истории.
+    public void Interrupt(string sessionId) => InterruptCore(sessionId, byUser: true);
+
+    private void InterruptCore(string sessionId, bool byUser)
     {
         if (_sessions.TryGetValue(sessionId, out var entry))
         {
@@ -5510,6 +5519,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             // (1-3 с), composer_restore для него не нужен.
             if (entry.LocalVoiceCts is { } localCts)
             {
+                if (byUser) RecordUserInterrupt(sessionId, entry);
                 localCts.Cancel();
                 return;
             }
@@ -5536,6 +5546,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             // хода, и тот падал ObjectDisposedException'ом в ленту (диагноз 2026-08-15).
             var stuck = entry.Info.Status is SessionStatus.Working or SessionStatus.Waiting
                 && entry.Process is null or { HasLiveTurn: false, HasQueuedTurn: false };
+            // Отметка в историю — только когда было что останавливать (чат занят, в том числе
+            // зависший: человек нажал «Стоп» и видит отметку в живой ленте)
+            if (byUser && entry.Info.Status is SessionStatus.Working or SessionStatus.Waiting)
+                RecordUserInterrupt(sessionId, entry);
             // «Стоп» замораживает очередь (не чистит): сообщения остаются ждать возобновления,
             // а последнее пользовательское возвращается в композер (composer_restore).
             // При реанимации не замораживаем: размораживающего конца хода уже не будет,
@@ -5561,6 +5575,17 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 entry.Process?.Interrupt();
             }
         }
+    }
+
+    // Отметка «Ход остановлен пользователем» в history.json. Пишется ТОЛЬКО на прерывании
+    // человеком — в точке, где его намерение известно наверняка: ниже по стеку (адаптер,
+    // паспорт хода с исходом interrupted) «Стоп» человека уже не отличить от остановки
+    // исполнителя штабом, а падение процесса и внутренние перезапуски хода эту точку не
+    // проходят вовсе. Живая лента ставит такую же отметку сама, оптимистично.
+    private void RecordUserInterrupt(string sessionId, SessionEntry entry)
+    {
+        if (entry.Accumulator is not { } acc || !acc.OnUserInterrupted()) return;
+        FireAndForget(acc.SaveSnapshotAsync(_history), $"отметка прерывания хода ({sessionId})");
     }
 
     // Возврат зависшего чата в рабочее состояние: снимаем ожидающую карточку, выбрасываем
@@ -7096,7 +7121,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         => SendOrEnqueueAsync(sessionId, text, senderPersonaId,
             silent: silent, suppressTasksExecute: suppressTasksExecute, staffNote: staffNote);
 
-    void ITeamTurnIntake.InterruptTurn(string sessionId) => Interrupt(sessionId);
+    void ITeamTurnIntake.InterruptTurn(string sessionId) => InterruptCore(sessionId, byUser: false);
 
     // Публикация карточки остановки: запись в ленту + WS + стадия «ждёт решения».
     // Тело в TeamDecisionService (волна Д).

@@ -455,10 +455,11 @@ public class LocalProcessRunnerIsolationTests
         var dir = Path.Combine(Path.GetTempPath(), "lpr_stop_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
         var fake = Path.Combine(dir, "systemd-run");
-        var argsLog = Path.Combine(dir, "args.txt");
+        // Файл аргументов — по PID: exec сохраняет PID, так что это PID нашего процесса. Раннер
+        // глобальный, и процессы параллельных тестов других коллекций тоже проходят через фейк
         File.WriteAllText(fake, $$"""
             #!/bin/sh
-            printf '%s\n' "$@" > '{{argsLog}}'
+            printf '%s\n' "$@" > '{{dir}}/args-'$$'.txt'
             while [ "$1" != "--" ]; do shift; done
             shift
             exec "$@"
@@ -470,11 +471,15 @@ public class LocalProcessRunnerIsolationTests
         var prevStop = LocalProcessRunner.StopScope;
         var calls = new List<(string Systemctl, string Unit)>();
         var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        string? ourUnit = null;
         IsolationOptions.Instance = new IsolationOptions { Enabled = true, SystemdRunPath = fake };
         LocalProcessRunner.StopScope = (systemctl, unit) =>
         {
-            lock (calls) calls.Add((systemctl, unit));
-            stopped.TrySetResult();
+            lock (calls)
+            {
+                calls.Add((systemctl, unit));
+                if (unit == ourUnit) stopped.TrySetResult();
+            }
         };
         try
         {
@@ -487,18 +492,24 @@ public class LocalProcessRunnerIsolationTests
             });
             (await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10)))
                 .Should().Be("готово");
+            var unitArg = File.ReadAllLines(Path.Combine(dir, $"args-{process.Id}.txt"))
+                .Single(a => a.StartsWith("--unit="));
+            lock (calls)
+            {
+                ourUnit = unitArg["--unit=".Length..];
+                if (calls.Any(c => c.Unit == ourUnit)) stopped.TrySetResult();
+            }
             await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
             (await Task.WhenAny(stopped.Task, Task.Delay(TimeSpan.FromSeconds(10))))
                 .Should().Be(stopped.Task, "по выходу обёрнутого процесса scope обязан гаситься");
             // Второго вызова быть не должно: даём фону шанс ошибиться
             await Task.Delay(300);
 
-            var unitArg = File.ReadAllLines(argsLog).Single(a => a.StartsWith("--unit="));
             lock (calls)
             {
-                calls.Should().ContainSingle();
-                calls[0].Unit.Should().Be(unitArg["--unit=".Length..]);
-                calls[0].Systemctl.Should().Be("systemctl", "рядом с поддельным systemd-run systemctl нет — берётся из PATH");
+                var ours = calls.Where(c => c.Unit == ourUnit).ToList();
+                ours.Should().ContainSingle("scope гасится ровно один раз и ровно тем именем, что ушло в --unit");
+                ours[0].Systemctl.Should().Be("systemctl", "рядом с поддельным systemd-run systemctl нет — берётся из PATH");
             }
         }
         finally

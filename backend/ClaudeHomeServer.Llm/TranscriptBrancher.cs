@@ -1,6 +1,5 @@
 using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 
 namespace ClaudeHomeServer.Services.Llm;
 
@@ -29,9 +28,15 @@ public static class TranscriptBrancher
 
     // Результат резака. Ok — с позицией отреза (0-based, количество строк префикса);
     // Fail — с причиной для 409 (шаг 3 разворачивает). Молчаливой null без причины нет.
-    public sealed record BranchResult(bool Ok, int? CutLine, string? Reason)
+    // AnchorTurnExcluded — якорный ход из ветки исключён: его tool_use остался без tool_result,
+    // граница отступила назад к началу хода и успех — не «по якорю». Успех без отступа — false.
+    // (Проброс в SessionManager/эндпоинт/UI — не этого шага; вызовы держат старый порядок полей,
+    // поэтому существующие продолжают компилироваться.)
+    public sealed record BranchResult(bool Ok, int? CutLine, string? Reason,
+        bool AnchorTurnExcluded = false)
     {
-        public static BranchResult Success(int cutLine) => new(true, cutLine, null);
+        public static BranchResult Success(int cutLine, bool anchorTurnExcluded = false) =>
+            new(true, cutLine, null, anchorTurnExcluded);
         public static BranchResult Fail(string reason) => new(false, null, reason);
     }
 
@@ -179,9 +184,11 @@ public static class TranscriptBrancher
         // Хвостовая проверка: последний ход префикса (промпт якорного → K) обязан
         // завершать пары tool_use/tool_result. Прерванный ход (непарные) → отступить
         // назад к предыдущей границе хода; синтетическим result НЕ чиним.
+        var anchorExcluded = false;
         if (!LastTurnIsBalanced(lines, turnStartLine, k))
         {
             k = turnStartLine;
+            anchorExcluded = true;
             if (k == 0)
                 return BranchResult.Fail("последний ход ветки обрывается на непарном tool_use, а более ранней границы хода нет: в ветке не осталось ни одного завершённого хода");
         }
@@ -189,7 +196,7 @@ public static class TranscriptBrancher
         // Запись префикса [0, K) под новым id; sessionId в записях переписывается
         // (отчёт шага 0: CLI принимает оба варианта, но имя файла и содержимое — в схождение).
         WritePrefix(lines, k, newSessionId, dstPath);
-        return BranchResult.Success(k);
+        return BranchResult.Success(k, anchorExcluded);
     }
     // «Человеческий промпт» (тот же набор признаков, что у TranscriptProbe.LastUserText,
     // но для ветвления массив текстовых блоков тоже считается промптом — tool_result не считается):
@@ -331,19 +338,79 @@ public static class TranscriptBrancher
     // Запись префикса [0, k) → dstPath. sessionId в записях переписывается на newSessionId:
     // отчёт шага 0 — CLI принимает оба варианта (не форкает по внутр. id), но переписываем,
     // чтобы имя файла и содержимое сходились (иначе файл смешанный: префикс под старым id).
+    //
+    // Меняется ТОЛЬКО верхнеуровневый свойство: регулярка по сырой строке (прежняя
+    // реализация) матчила бы и экранированное \"sessionId\":\"…\" внутри вложенных данных
+    // (tool_result с текстом чужого транскрипта) и тихо портило историю ветки.
+    // Utf8JsonReader идёт по строке, находит имя свойства sessionId на глубине 1
+    // (Depth == 0 — корневой объект, PropertyName — имя свойства) и берёт байтовые
+    // границы (TokenStartIndex..ValueSpan) его строкового значения; замена — только
+    // этих границ. Остальные байты (порядок ключей, экранирование, кириллица) не меняются:
+    // пересериализация через JsonNode переэкранировала бы не-ASCII, а csid
+    // (IsSafeSessionId) — чистый ASCII.
     private static void WritePrefix(List<string> lines, int k, string newSessionId, string dstPath)
     {
-        // csid — алфавитно-цифровой (IsSafeSessionId), JSON-экранирование не нужно;
-        // работаем на raw-строках, не разбирая каждую запись целиком.
-        var re = new Regex("\"sessionId\"\\s*:\\s*\"[A-Za-z0-9_-]{1,128}\"", RegexOptions.Compiled);
         var sb = new StringBuilder();
         for (var i = 0; i < k && i < lines.Count; i++)
         {
             var line = lines[i];
             if (line.Contains("\"sessionId\"", StringComparison.Ordinal))
-                line = re.Replace(line, $"\"sessionId\":\"{newSessionId}\"");
+            {
+                var replaced = ReplaceTopLevelSessionId(line, newSessionId);
+                if (replaced is not null) line = replaced;
+            }
             sb.Append(line).Append('\n');
         }
         File.WriteAllText(dstPath, sb.ToString(), new UTF8Encoding(false));
+    }
+
+    // Точечная замена значения верхнеуровневого sessionId; null — запись не JSON-объект
+    // (битая/мусорная строка — её WritePrefix пишет как есть, прежняя регулярка тоже была
+    // бессильна) или верхнеуровневого sessionId в ней нет (тогда в строке нет ни одного
+    // кандидата и менять нечего).
+    private static string? ReplaceTopLevelSessionId(string line, string newSessionId)
+    {
+        var utf8 = Encoding.UTF8.GetBytes(line);
+        try
+        {
+            var reader = new Utf8JsonReader(utf8);
+            if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject) return null;
+            while (reader.Read())
+            {
+                if (reader.TokenType != JsonTokenType.PropertyName) continue;
+                // CurrentDepth 1 — имя/значение свойства ВЕРХНЕУРОВНЕВОГО (root) объекта:
+                // Utf8JsonReader считает глубину токена, а не объекта, поэтому свойства
+                // root-объекта имеют CurrentDepth == 1. sessionId на любой другой глубине
+                // (вложенные объекты, tool_result-тексты) не трогаем.
+                if (reader.CurrentDepth != 1) continue;
+                if (!string.Equals(reader.GetString(), "sessionId", StringComparison.Ordinal)) continue;
+
+                // Значение свойства: ждём строку
+                if (!reader.Read()) return null;
+                if (reader.TokenType != JsonTokenType.String) return null;
+
+                // TokenStartIndex — смещение ОТКРЫВАЮЩЕЙ кавычки значения, ValueSpan — её
+                // содержимое (без кавычек): заменяем байты содержимого, кавычки и всё
+                // остальное (порядок ключей, экранирование, кириллица) остаются на месте.
+                // Замена — на БАЙТАХ (не на char[]): кириллица в UTF-8 — 2 байта/символ,
+                // char-модель бы её рассинхронизировала.
+                // (TokenStartIndex/BytesConsumed — long, BlockCopy принимает int — строка
+                //  строки .jsonl в пределах int)
+                var start = (int)reader.TokenStartIndex + 1;
+                var length = reader.ValueSpan.Length;
+                var body = Encoding.UTF8.GetBytes(newSessionId);
+                var result = new byte[utf8.Length - length + body.Length];
+                Buffer.BlockCopy(utf8, 0, result, 0, start);
+                Buffer.BlockCopy(body, 0, result, start, body.Length);
+                Buffer.BlockCopy(utf8, start + length, result, start + body.Length, utf8.Length - start - length);
+                return Encoding.UTF8.GetString(result);
+            }
+            // дошли до EndObject, не найдя sessionId — строка остаётся как есть
+            return null;
+        }
+        // Parse-ошибка (битая/мусорная строка): JsonReaderException — internal-внучка
+        // JsonException, ловим публичную JsonException — семантика та же (строка не объект)
+        catch (JsonException) { }
+        return null;
     }
 }

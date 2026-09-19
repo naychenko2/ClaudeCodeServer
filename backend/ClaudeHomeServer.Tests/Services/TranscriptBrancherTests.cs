@@ -125,9 +125,102 @@ public class TranscriptBrancherTests : IDisposable
 
         res.Ok.Should().BeTrue(res.Reason);
         res.CutLine.Should().Be(5); // ход завершён и сбалансирован (t1/t2 парны) — весь файл
+        res.AnchorTurnExcluded.Should().BeFalse(); // завершённый ход — отступа не было
         var got = File.ReadAllLines(dst);
         got.Length.Should().Be(5);
         got[3].Should().Contain("\"t1\"").And.Contain("\"t2\""); // оба tool_result сохранены
+    }
+
+    // Непарный tool_use в последнем ходе: граница отступает к началу хода (CutLine = промпт)
+    // И признак AnchorTurnExcluded — истинный: якорный ход в ветку не попал.
+    // В ветку попадают завершённые ходы (с парными tool_use/tool_result), поэтому
+    // LastTurnIsBalanced на них — true, а отступ срабатывает только на оборванном.
+    [Fact]
+    public void НепарныйToolUse_ОтступГраницы_ПризнакИстинный()
+    {
+        var a = "альфа: первое сообщение разговора с запасом символов для якоря";
+        var src = WriteFile("unbal2.jsonl",
+            SysInit,
+            // завершённый ход 1: text + tool_use t1 + tool_result t1
+            UserStr("u1", a),
+            AsstArr("a1", "[{\"type\":\"text\",\"text\":\"дело\"},{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"Bash\",\"input\":{}}"),
+            UserArr("u1r", "[{\"type\":\"tool_result\",\"tool_use_id\":\"t1\",\"content\":\"ok\"}]"),
+            AsstStr("a2", "готово"),
+            // оборванный ход 2: tool_use t9 без tool_result
+            UserStr("u2", "второй: продолжай и запусти ещё один инструмент"),
+            AsstArr("a3", "[{\"type\":\"text\",\"text\":\"начал\"},{\"type\":\"tool_use\",\"id\":\"t9\",\"name\":\"Bash\",\"input\":{}}]"));
+        var dst = Dst();
+
+        var res = TranscriptBrancher.Branch(src, [a, "второй: продолжай и запусти ещё один инструмент"], New, dst);
+
+        res.Ok.Should().BeTrue(res.Reason);
+        res.AnchorTurnExcluded.Should().BeTrue();
+        res.CutLine.Should().Be(5); // начало оборванного хода = промпт u2 (индекс 5)
+        var got = File.ReadAllLines(dst);
+        got.Should().HaveCount(5); // до u2, оборванный ход B не в ветке
+        got[3].Should().Contain("\"t1\""); // завершённый ход 1 сохранён целиком
+    }
+
+    // Замечание 1 ревью: sessionId меняется ТОЛЬКО на верхнем уровне записи.
+    // Вложенное \"sessionId\":\"…\" (экранированное, внутри tool_result) прежняя регулярка
+    // портила; Utf8JsonReader-путь берёт байтовые границы значения верхнеуровневого свойства.
+    [Fact]
+    public void ВложенныйSessionIdToolResult_НеТронут_ВерхнийЗаменён()
+    {
+        var a = "альфа: разбор схемы ветвления с чтением чужого транскрипта";
+        var b = "бета: запусти инструмент и доложи результат";
+        var c = "гамма: ещё один вопрос разговора, не нужен в ветке";
+        // tool_result, внутри которого — ЧУЖОЙ транскрипт: экранированное "sessionId":"other-id"
+        // (в строке .jsonl это \\\\"sessionId\\\\\":" — вложение во вложенный JSON)
+        const string foreignTranscript =
+            "{\"type\":\"user\",\"sessionId\":\"22222222-3333-4444-5555-666666666666\",\"uuid\":\"x1\",\"message\":{\"role\":\"user\",\"content\":\"другая сессия\"}}";
+        var toolResultBlocks =
+            "[{\"type\":\"tool_result\",\"tool_use_id\":\"t9\",\"content\":" + JsonStr(foreignTranscript) + "}";
+        var src = WriteFile("nested.jsonl",
+            SysInit,
+            UserStr("u1", a),
+            AsstStr("a1", "ответ 1"),
+            UserStr("u2", b),
+            AsstArr("a2", "[{\"type\":\"tool_use\",\"id\":\"t9\",\"name\":\"Bash\",\"input\":{}}]"),
+            UserArr("u3", toolResultBlocks + "]"),
+            AsstStr("a3", "ответ 2"),
+            UserStr("u4", c));
+        var dst = Dst();
+
+        var res = TranscriptBrancher.Branch(src, [a, b], New, dst);
+
+        res.Ok.Should().BeTrue(res.Reason);
+        res.CutLine.Should().Be(7); // до u4=c (индекс 7) — ход B (u2..a3) целиком в ветке
+        var got = File.ReadAllLines(dst);
+        got.Should().HaveCount(7);
+        // верхнеуровневый sessionId во ВСЕХ записях → новый
+        got.Should().OnlyContain(l => l.Contains("\"sessionId\":\"" + New + "\""));
+        // вложенное (экранированное) sessionId чужого транскрипта НЕ тронуто
+        got[5].Should().Contain(JsonStr(foreignTranscript));
+    }
+
+    // Кириллица в content: байт в байт, кроме самого sessionId (пересериализация JsonNode
+    // переэкранировала бы не-ASCII, а WritePrefix — точечная замена).
+    [Fact]
+    public void КириллицаВContent_БайтВБайт_КромеSessionId()
+    {
+        const string cyr = "Разбор схемы: привет, мир, приветствие от пользователя.";
+        var src = WriteFile("cyr.jsonl",
+            UserStr("u1", cyr),
+            AsstStr("a1", cyr));
+        var dst = Dst();
+
+        var res = TranscriptBrancher.Branch(src, [cyr], New, dst);
+
+        res.Ok.Should().BeTrue(res.Reason);
+        var got = File.ReadAllLines(dst);
+        // исходная строка, где заменено только значение sessionId
+        var expected = UserStr("u1", cyr).Replace("\"sessionId\":\"" + Old + "\"",
+            "\"sessionId\":\"" + New + "\"");
+        got[0].Should().Be(expected);
+        expected = AsstStr("a1", cyr).Replace("\"sessionId\":\"" + Old + "\"",
+            "\"sessionId\":\"" + New + "\"");
+        got[1].Should().Be(expected);
     }
 
     [Fact]

@@ -96,6 +96,7 @@ onlyoffice/local.json
 # Маска со ** — агент, запущенный с рабочей папкой внутри проекта, роняет копию .claude туда.
 **/.claude/agents/*
 !.claude/agents/designer.md
+!.claude/agents/scout.md
 
 # Справочник профилей категорий делегирования — его кладёт PersonaAgentFileSync
 # из константы OmoPrompts.DelegationCategoryProfiles (источник — docs/omo/translations)

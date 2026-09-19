@@ -18,7 +18,7 @@ public static class TestCollections
     public const string ProcessGlobalState = "process-global-state";
 
     // Классы, которые пишут или читают статические `Session.TaskSourceSessionResolver` /
-    // `Session.TaskDelegationDepthResolver` / `Session.TaskDoneResolver`. Эти `Func`-свойства
+    // `Session.TaskDoneResolver`. Эти `Func`-свойства
     // живут в `Core/Models/Session.cs:481/505/515`, а ставит их конструктор `TaskManager`
     // (`Services/Tasks/TaskManager.cs:32-36`). Любой `new TaskManager(...)` в тестах
     // перезаписывает все три под ногами у параллельно идущих классов — отсюда плавающее

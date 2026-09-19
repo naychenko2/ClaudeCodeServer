@@ -517,22 +517,12 @@ public class Session
     // Родительский чат: ручная группировка, иначе — чат, в котором была создана задача
     // сессии-исполнителя (TaskId → Task.SourceSessionId). Вычисляется, не хранится — как Origin.
     // null — корневой чат либо задача удалена (чат всплывает в корень — принято осознанно).
-    // TaskId ручная группировка не трогает: связь чата с задачей (плашка, артефакты,
-    // TaskDelegationDepth) живёт своей жизнью и перетаскиванием не рвётся.
+    // TaskId ручная группировка не трогает: связь чата с задачей (плашка, артефакты)
+    // живёт своей жизнью и перетаскиванием не рвётся.
     public string? ParentSessionId =>
         ParentOverrideId is not null ? ParentOverrideId
         : ParentDetached ? null
         : TaskId != null ? TaskSourceSessionResolver?.Invoke(TaskId) : null;
-
-    // Резолвер «задача → глубина делегирования»: назначает TaskManager при старте (как
-    // TaskSourceSessionResolver). Истина живёт в TaskItem.DelegationDepth.
-    public static Func<string, int>? TaskDelegationDepthResolver { get; set; }
-
-    // Глубина цепочки делегирования задачи-исполнителя этого чата (0 — обычный чат либо
-    // задача без глубины). Вычисляется, не хранится. Используется гейтом TASKS_EXECUTE
-    // (ClaudeSession.BuildTurnMcpConfig): чат-исполнитель глубины >= 3 не запускает нового.
-    public int TaskDelegationDepth =>
-        TaskId != null ? TaskDelegationDepthResolver?.Invoke(TaskId) ?? 0 : 0;
 
     // Резолвер «задача → выполнена?»: назначает TaskManager при старте (как
     // TaskSourceSessionResolver). Истина живёт в TaskItem.Status == Done.

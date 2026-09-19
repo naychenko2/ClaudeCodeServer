@@ -33,8 +33,6 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         Load();
         // Вычисляемый Session.ParentSessionId (иерархия чатов): резолв TaskId → SourceSessionId
         Session.TaskSourceSessionResolver = id => GetById(id)?.SourceSessionId;
-        // Вычисляемый Session.TaskDelegationDepth (гейт TASKS_EXECUTE): резолв TaskId → глубина
-        Session.TaskDelegationDepthResolver = id => GetById(id)?.DelegationDepth ?? 0;
         // Вычисляемый Session.TaskDone (фильтр чатов «Готово»): резолв TaskId → задача в Done
         Session.TaskDoneResolver = id => GetById(id)?.Status == TaskItemStatus.Done;
     }

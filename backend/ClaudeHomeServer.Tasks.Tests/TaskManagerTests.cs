@@ -703,32 +703,28 @@ public class TaskManagerTests : IDisposable
         _sut.GetById(task.Id)!.Status.Should().NotBe(TaskItemStatus.Done);
     }
 
-    // ─── Шов Tasks → Models.Session (три статических резолвера) ─────────────────
+    // ─── Шов Tasks → Models.Session (статические резолверы) ──────────────────────
     // Волна 4C, шаг 1 — после переезда TaskManager в `Services.Tasks.TaskManager`
     // нужно доказать, что ctor всё ещё ставит резолверы на `Session`. Без этого
-    // `Session.ParentSessionId`/`TaskDone`/`TaskDelegationDepth` выродились бы в
-    // null/0/false (архитектор: «если TaskManager однажды не будет создан к моменту
-    // первой сериализации Session — иерархия чатов, гейт глубины делегирования и
-    // фильтр "Завершён" тихо выродятся»). Инициализация в TaskManager.cs:32-36.
+    // `Session.ParentSessionId`/`TaskDone` выродились бы в null/false (архитектор:
+    // «если TaskManager однажды не будет создан к моменту первой сериализации
+    // Session — иерархия чатов и фильтр "Завершён" тихо выродятся»).
+    // Инициализация в TaskManager.cs. (Старый `TaskDelegationDepth`/`TaskDelegationDepthResolver`
+    // удалён: гейт анти-рекурсии перешёл на глубину хода, а не на модель.)
 
     [Fact]
-    public void Constructor_УстанавливаетТриРезолвераНаSession()
+    public void Constructor_УстанавливаетРезолверыНаSession()
     {
         // ctor уже вызван в этом тест-фикстуре (InstancePerTest); проверяем,
-        // что все три резолвера на Session не null и корректно резолвят наши задачи.
-        // Без инициализации в TaskManager.cs:32-36 Session.ParentSessionId/
-        // Session.TaskDelegationDepth (гейт TASKS_EXECUTE)/Session.TaskDone выродились бы
-        // в null/0/false — архитектор прямо предупреждает (досье переезда Task).
+        // что оба резолвера на Session не null и корректно резолвят наши задачи.
         var live = _sut.Create(null, "owner", new CreateTaskRequest("t-резолверы-live"));
         var done = _sut.Create(null, "owner", new CreateTaskRequest("t-резолверы-done"));
         _sut.Update(done.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
 
         Session.TaskSourceSessionResolver.Should().NotBeNull("ctor должен ставить TaskSourceSessionResolver");
-        Session.TaskDelegationDepthResolver.Should().NotBeNull("ctor должен ставить TaskDelegationDepthResolver");
         Session.TaskDoneResolver.Should().NotBeNull("ctor должен ставить TaskDoneResolver");
 
-        // Live: делегации нет → 0, TaskDone=false.
-        Session.TaskDelegationDepthResolver!(live.Id).Should().Be(0);
+        // Live: TaskDone=false.
         Session.TaskDoneResolver!(live.Id).Should().BeFalse();
         // Done: TaskDone=true.
         Session.TaskDoneResolver!(done.Id).Should().BeTrue();

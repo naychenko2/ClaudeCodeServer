@@ -35,10 +35,9 @@ namespace ClaudeHomeServer.Services.Tasks;
 // 4) Точечный допуск к `ClaudeHomeServer.Protocol.NotificationMessage` — параметр
 //    public-метода `TaskSchedulerService.SendNotificationAsync`. Префикс
 //    `ClaudeHomeServer.Protocol` снят (волна 3).
-// 5) Шов `Tasks → Models.Session`: `TaskManager.ctor` мутирует три статических
-//    резолвера на `Session` (`Session.TaskSourceSessionResolver`,
-//    `TaskDelegationDepthResolver`, `TaskDoneResolver`) — нужны `Session.ParentSessionId`,
-//    `Session.TaskDelegationDepth` (гейт `TASKS_EXECUTE`) и `Session.TaskDone`
+// 5) Шов `Tasks → Models.Session`: `TaskManager.ctor` мутирует статические
+//    резолверы на `Session` (`Session.TaskSourceSessionResolver`,
+//    `TaskDoneResolver`) — нужны `Session.ParentSessionId` и `Session.TaskDone`
 //    (фильтр чатов «Готово»). Связь из тела конструктора, рефлексией не
 //    контролируется. Контракт: `TaskManager` создаётся раньше первой сериализации
 //    `Session` (он singleton, инстанс живёт весь процесс, никаких поздних Lazy).

@@ -26,11 +26,36 @@
   а `ccs.slice`, которому подчинён `ccs-agents.slice`, его сиблинг под `user@<uid>.service`,
   — и при нехватке памяти умирает scope агента, а не прод. PID тот же, поэтому `Kill` и
   interrupt не меняются. Fail-open с одним warning за процесс: нет `systemd-run`,
-  нет user-шины, задан `RawArguments`. При включённой изоляции в окружение ВСЕХ
-  изолированных процессов (не только сборщиков) добавляются
-  `MSBUILDDISABLENODEREUSE=1`, `DOTNET_CLI_USE_MSBUILD_SERVER=0`, `UseSharedCompilation=false`
-  (явный `spec.Env` сильнее). Оценка длины командной строки учитывает обёртку.
+  нет user-шины, задан `RawArguments`. Оценка длины командной строки учитывает обёртку.
   `DockerProcessRunner` не затронут.
+
+  **Реюз узлов сборки внутри хода и гашение scope** (`Execution:Isolation:BuildNodeReuse`,
+  дефолт true). Scope именуется `--unit=ccs-run-<guid>.scope`, и узлы MSBuild и сервер
+  компилятора живут весь ход: соль рукопожатия узлов (`MSBUILDNODEHANDSHAKESALT`) и труба
+  компилятора (`SharedCompilationId`) — имя юнита, поэтому параллельные ходы не цепляются к
+  узлам друг друга (иначе остановка чужого scope роняла бы идущую сборку). Унаследованные
+  запреты реюза снимаются, явный `spec.Env` сильнее. По выходу обёрнутого процесса
+  (событие `Exited`, подписка до `Start`) `systemctl --user stop --no-block <unit>` гасит
+  оставшийся хвост: `KillMode` scope по умолчанию `control-group`, узлы выходят на SIGTERM
+  сразу. Гонки с `--collect` нет — опустевший scope уже собран, и stop отвечает кодом 5
+  («not loaded»), это штатный исход. Прочие сбои — один warning на класс, не исключение.
+  Шов для тестов — `LocalProcessRunner.StopScope`. Что даёт (замер 2026-09-19, пересборка
+  `ClaudeHomeServer.Tests` после правки в Core, `-m:4`): прежний режим 7,3–7,5 с на каждой
+  сборке; с реюзом первая сборка хода 7,9 с, следующие 4,0 и 3,3 с. Между ходами ничего не
+  переиспользуется — новый scope = холодные узлы. Откат без пересборки — `BuildNodeReuse=false`:
+  возвращаются `MSBUILDDISABLENODEREUSE=1`, `DOTNET_CLI_USE_MSBUILD_SERVER=0`,
+  `UseSharedCompilation=false` (для не-сборщиков безвредны).
+- **Прогрев сборки свежего worktree** (`WorktreeBuildWarmup`, тумблер `Execution:WarmupBuild`,
+  дефолт true, читается на каждом вызове). Холодная сборка свежего дерева — 60–90 с, и без
+  прогрева её оплачивает модель. После `SessionManager.SetWorktreeAsync` (дерево заводит
+  сервер) и `AttachWorktreeAsync` (дерево задачи заводит человек/агент) фоном запускается
+  `dotnet build backend/ClaudeHomeServer.Tests -m:4` в корне дерева через
+  `ILauncherFactory.ForOwner(ownerId)` — та же изоляция и пределы памяти, что у ходов.
+  Fire-and-forget: ход не ждёт, результат только в лог, таймаут 15 мин. Не более одного
+  прогрева на дерево за жизнь процесса и только если тестовый проект есть и ещё не
+  собирался (нет `obj/`) — иначе прогрев дрался бы с идущей сборкой агента за obj/bin.
+  Остаточный риск: агент, начавший `dotnet build` в первые секунды хода свежего дерева,
+  соберёт параллельно с прогревом.
 - **Пути** — `IPathMapper`: бэкенд ВСЕГДА работает с хостовыми путями (projects.json
   хранит `C:\…`), а процессы container-юзера — с контейнерными; перевод в момент
   запуска (`DockerPathMapper`, аналог SafeJoin — путь вне монтирований → ошибка).

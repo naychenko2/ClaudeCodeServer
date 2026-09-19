@@ -32,7 +32,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         _storePath = Path.Combine(dataDir, "tasks.json");
         Load();
         // Раньше здесь конструктор ставил СТАТИЧЕСКИЕ резолверы Session (ParentSessionId/TaskDone).
-        // Снят: вычисляемые «связи» сессии теперь считаются в Main через SessionTaskLinks +
+        // Снят: вычисляемые «связи» сессии теперь считает SessionTaskLinks (Core) поверх
         // ITaskLookup (адаптер в Program.cs), и спин-модель Session больше не зависит от
         // вертикали Tasks.
     }

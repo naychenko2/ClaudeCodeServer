@@ -13,7 +13,7 @@ namespace ClaudeHomeServer.Controllers;
 [Route("api/projects/{projectId}/sessions")]
 public class SessionsController(SessionManager sessions, ProjectManager projects,
     FeatureFlagService flags, DefaultAssistantProvisioner provisioner,
-    PersonaManager personas, SessionContextResolver contextResolver, ITaskLookup tasks) : ControllerBase
+    PersonaManager personas, SessionContextResolver contextResolver) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -25,8 +25,9 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
     public IActionResult GetAll(string projectId)
     {
         if (!OwnsProject(projectId)) return NotFound();
-        // Вычисляемые parentSessionId/taskDone подставляются в wire (SessionWire), т.к. убраны из модели
-        return Ok(sessions.GetByProject(projectId).Select(s => SessionWire.ToWire(s, tasks)).ToList());
+        // Вычисляемые parentSessionId/taskDone дописывает конвертер Session на границе
+        // сериализации (SessionJsonConverter) — здесь ничего подставлять не нужно
+        return Ok(sessions.GetByProject(projectId));
     }
 
     [HttpPost]

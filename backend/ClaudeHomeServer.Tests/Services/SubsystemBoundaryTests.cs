@@ -1218,8 +1218,9 @@ public class SubsystemBoundaryTests
         //   статические резолверы на `Models.Session` (`TaskSourceSessionResolver`/
         //   `TaskDelegationDepthResolver`/`TaskDoneResolver`) — мутация статической
         //   модели была фиксированным исключением. Теперь вычисления `ParentSessionId`/
-        //   `TaskDone` живут в Main'e через Core-шов `ITaskLookup` (SessionTaskLinks/
-        //   SessionWire), Tasks → Models.Session не мутает.
+        //   `TaskDone` считает `SessionTaskLinks` (Core) поверх Core-шва `ITaskLookup`,
+        //   а на wire их дописывает `SessionJsonConverter` (Main) — Tasks → Models.Session
+        //   не мутает.
         // Мёртвые допуски сняты ревью (2026-09-09): формально сторож оставался зелёным
         // и с ними, но был ШИРЕ реальной поверхности зависимостей Tasks после выноса —
         // иначе вертикаль могла бы прикинуться «спиной» в обход швов. Та же ловушка,
@@ -1723,6 +1724,10 @@ public class SubsystemBoundaryTests
         "ClaudeHomeServer.Services.SessionChangedPaths",
         "ClaudeHomeServer.Services.SessionIdGuard",
         "ClaudeHomeServer.Services.SessionTranscript",
+        // Чистая проекция над Core-типами: Models.Session + контракт ITaskLookup (обе связи
+        // «чат ↔ задача»). Осознанно в спине, а не в Main: владения вертикалью нет, состояния
+        // нет, а в Main этот хелпер заставлял вертикали ходить в обход через SessionManager.
+        "ClaudeHomeServer.Services.SessionTaskLinks",
         "ClaudeHomeServer.Services.ExecutorStopClassifier",
         "ClaudeHomeServer.Services.PersonaLabel",
         "ClaudeHomeServer.Services.PersonaConsultantToolset",

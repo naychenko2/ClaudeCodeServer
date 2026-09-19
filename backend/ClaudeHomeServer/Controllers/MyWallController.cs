@@ -1,6 +1,5 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
-using System.Text.Json.Nodes;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -14,7 +13,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/me/wall")]
-public class MyWallController(UserStore users, SessionManager sessions, ITaskLookup tasks) : ControllerBase
+public class MyWallController(UserStore users, SessionManager sessions) : ControllerBase
 {
     // Потолок набора: монет на рельсе больше пары десятков не разглядеть, а неограниченный
     // список — дорога к разбуханию users.json от забытых стен.
@@ -30,8 +29,7 @@ public class MyWallController(UserStore users, SessionManager sessions, ITaskLoo
     public IActionResult Get()
     {
         if (UserId is null) return Unauthorized();
-        return Ok(new WallDto(
-            ResolveChats(users.GetWallChatIds(UserId), UserId).Select(s => SessionWire.ToWire(s, tasks)).ToList()));
+        return Ok(new WallDto(ResolveChats(users.GetWallChatIds(UserId), UserId)));
     }
 
     // Полная замена состава. Валидация молчаливая, без кодов ошибок: дедуп → отброс
@@ -49,7 +47,7 @@ public class MyWallController(UserStore users, SessionManager sessions, ITaskLoo
         if (!users.SetWallChatIds(UserId, live.Select(s => s.Id).ToList()))
             return Unauthorized();
 
-        return Ok(new WallDto(live.Select(s => SessionWire.ToWire(s, tasks)).ToList()));
+        return Ok(new WallDto(live));
     }
 
     // Кандидаты для пикера: чаты владельца (проектные и вне проектов), свежие сверху.
@@ -62,8 +60,7 @@ public class MyWallController(UserStore users, SessionManager sessions, ITaskLoo
         return Ok(sessions.GetAllOwnedBy(UserId)
             .Where(s => !s.IsArchived) // архивный чат на стену не зовут — он там и не встанет
                                        // (признак производный: активность возвращает чат сама)
-            .OrderByDescending(s => s.UpdatedAt).Take(200)
-            .Select(s => SessionWire.ToWire(s, tasks)).ToList());
+            .OrderByDescending(s => s.UpdatedAt).Take(200).ToList());
     }
 
     // id → живые Session владельца, с дедупликацией и сохранением порядка.
@@ -86,5 +83,5 @@ public class MyWallController(UserStore users, SessionManager sessions, ITaskLoo
     }
 }
 
-public record WallDto(List<JsonObject> Chats);
+public record WallDto(List<Session> Chats);
 public record PutWallRequest(List<string>? ChatIds);

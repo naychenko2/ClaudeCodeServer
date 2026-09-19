@@ -510,11 +510,13 @@ public class Session
     public bool ParentDetached { get; set; }
 
     // Эффективный родительский чат (ParentSessionId) и признак «Готово» (TaskDone) —
-    // ВЫЧИСЛЯЕМЫЕ, и живут НЕ здесь, а в SessionTaskLinks (Main) поверх шва ITaskLookup:
+    // ВЫЧИСЛЯЕМЫЕ, и живут НЕ здесь, а в SessionTaskLinks (Core/Services) поверх шва ITaskLookup:
     // ручная группировка, иначе TaskId → Task.SourceSessionId / Task.Status==Done. Раньше
     // эти вычисления читали статические Func-резолверы, ставившиеся конструктором TaskManager,
-    // т.е. спин-модель зависела от вертикали. На wire (list/SignalR/summary) поля подставляются
-    // в контроллерах — см. SessionWire.
+    // т.е. спин-модель зависела от вертикали. На wire оба поля дописывает КОНВЕРТЕР типа
+    // Session на границе сериализации (Main, Services/SessionJsonConverter.cs) — одна точка на
+    // все эндпоинты; проекции в контроллерах (HomeSessionDto) зовут SessionTaskLinks сами.
+    // Сторож «в модели нет изменяемой статики» — SessionModelStaticsTests.
 
     // Чат в архиве: его архивировали (ArchivedAt) и активности после этого не было
     // (UpdatedAt не двигался). Вычисляется, не хранится — как Origin/TaskDone. Признак

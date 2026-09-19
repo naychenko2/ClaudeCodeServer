@@ -17,7 +17,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     DefaultAssistantProvisioner provisioner, TeamWaveService teamWaves,
     ChatDigestService digest, ChatArchiveService autoArchive,
     UserStore users, FeatureFlagService flags,
-    ILogger<ChatsController> logger, ITaskLookup tasks) : ControllerBase
+    ILogger<ChatsController> logger) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -31,7 +31,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
 
     [HttpGet]
     public IActionResult GetAll() =>
-        Ok(sessions.GetProjectlessChats(UserId).Select(s => SessionWire.ToWire(s, tasks)).ToList());
+        Ok(sessions.GetProjectlessChats(UserId));
 
     // Снимок «у каких чатов прямо сейчас идёт фоновая работа»: id сессий владельца, включая
     // проектные — карточки чатов проекта рисует тот же стор. Нужен потому, что событие

@@ -443,9 +443,8 @@ public class TeamWaveService
         if (stopped.SourceSessionId is { } sourceSessionId)
         {
             var src = _sessions.GetById(sourceSessionId);
-            // Эффективный родитель — через SessionManager (допуск у Team есть), не тянем
-            // SessionTaskLinks напрямую: он в namespace ClaudeHomeServer.Services (Main-root),
-            // не в дозволах Team. SessionManager сам держит lookup (SessionTaskLinks внутри).
+            // Эффективный родитель — через SessionManager: он сам держит lookup
+            // (SessionTaskLinks внутри), и Team не нужно тащить свой ITaskLookup.
             var srcParent = src is null ? null : _sessions.EffectiveParentSessionId(src);
             string? stabId = src?.TeamImplement != null ? sourceSessionId : srcParent;
             if (stabId is not null)

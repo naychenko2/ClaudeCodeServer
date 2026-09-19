@@ -38,8 +38,8 @@ namespace ClaudeHomeServer.Services.Tasks;
 // 5) Шов `Tasks → Models.Session` (статика) — снят (эксперимент-4). Раньше
 //    `TaskManager.ctor` мутировал статические `Session.TaskSourceSessionResolver`/
 //    `TaskDoneResolver`, из чего `Session` (Core) вычислял `ParentSessionId`/`TaskDone`.
-//    Теперь вычисления живут в Main'e: `SessionTaskLinks` поверх шва `ITaskLookup`
-//    (Core) и `SessionWire` на точках отдачи списков — связь вертикаль → модель
+//    Теперь вычисления живут в спине: `SessionTaskLinks` (Core) поверх шва `ITaskLookup`,
+//    а на wire их дописывает конвертер `Session` в Main — связь вертикаль → модель
 //    через явный Core-порт, а не скрытую статическую запись из конструктора.
 public sealed class TasksSubsystem : IAppSubsystem
 {

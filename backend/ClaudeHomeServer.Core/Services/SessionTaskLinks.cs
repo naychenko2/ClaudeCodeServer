@@ -3,14 +3,22 @@ using ClaudeHomeServer.Models;
 namespace ClaudeHomeServer.Services;
 
 // Единая точка вычисления «связей с задачей» сессии поверх шва ITaskLookup.
-// Выносит из модели Session (Core) вычисляемые признаки ParentSessionId/TaskDone,
+// Выносит из модели Session вычисляемые признаки ParentSessionId/TaskDone,
 // которые раньше читали СТАТИЧЕСКИЕ Func-резолверы, поставленные конструктором
 // TaskManager (вертикаль Tasks): спин-модель фактически зависела от вертикали, а
 // сторож границ (рефлексия по типам) статического присваивания не видел.
 // ITaskLookup — единственный шов (новый не заводим). null-safe: lookup=null → задача
 // не резолвится — ровно та же семантика, что у прежней «резолвер не установлен»
 // (ParentSessionId=null, TaskDone=false), без исключений.
-internal static class SessionTaskLinks
+//
+// Живёт в СПИНЕ (Core), а не в Main: обе функции — чистые проекции над Core-типами
+// (Models.Session + контракт Core/Services/ITaskLookup.cs), зависимостей от Main нет
+// вовсе. В Main этот же файл заставлял вертикали ходить в обход (см. комментарий
+// TeamWaveService: «SessionTaskLinks напрямую нельзя — он в namespace Main-root»),
+// хотя никакой новой поверхности зависимостей вызов не открывает: сторож границ
+// пропускает Core-типы раньше проверки допусков (IsCoreAssembly). Namespace оставлен
+// прежним — call-site'ы не меняются, как при любом переносе спины в Core.
+public static class SessionTaskLinks
 {
     // TaskDone: чат-исполнитель выполненной задачи (TaskId → Status == Done).
     // true только для чатов выполненных задач (бывший «архив»); false — обычные чаты

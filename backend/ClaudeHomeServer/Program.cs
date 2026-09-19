@@ -136,6 +136,12 @@ var mvcBuilder = builder.Services.AddControllers()
     .AddJsonOptions(o =>
         o.JsonSerializerOptions.Converters.Add(
             new JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase)));
+// Вычисленные «связи» сессии (parentSessionId/taskDone) дописываются на границе
+// сериализации — одним конвертером типа Session на все точки отдачи (см.
+// Services/SessionJsonConverter.cs). Только в опциях MVC: стор sessions.json пишется
+// своими опциями SessionManager, и вычисленные поля в файл не попадают.
+builder.Services.AddSingleton<Microsoft.Extensions.Options.IConfigureOptions<Microsoft.AspNetCore.Mvc.JsonOptions>,
+    ClaudeHomeServer.Services.SessionJsonOptionsSetup>();
 // Сборки вертикалей, собранные под `Microsoft.NET.Sdk.Web`, несут атрибут
     // `[assembly: ApplicationPart("...")]` — MSBuild дописывает его в сгенерированный
     // `obj/*/ClaudeHomeServer.MvcApplicationPartsAssemblyInfo.cs` ссылочного проекта

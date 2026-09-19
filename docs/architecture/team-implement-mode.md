@@ -351,8 +351,9 @@ team-blocker-honest): если волн или задач в плане боль
 ## Что уже готово и переиспользуется
 
 - Атрибуция задач: `TaskItem.CreatedByPersonaId`, `SourceSessionId`, `DelegationDepth`.
-- Иерархия: `Session.ParentSessionId` вычисляется из `Task.SourceSessionId` — дочерние
-  чаты прикрепляются к штабу без единой новой строки.
+- Иерархия: `parentSessionId` вычисляется из `Task.SourceSessionId` (`SessionTaskLinks`,
+  на wire — конвертером `Session`, см. ADR-001 §2) — дочерние чаты прикрепляются к штабу
+  без единой новой строки.
 - Доклад исполнителя в чат-источник + авто-ход постановщика (ADR-001, модель Z, CT-8).
 - `chats_report_up` — промежуточные доклады снизу вверх (для блокеров нужна доработка,
   см. «Эскалация»).

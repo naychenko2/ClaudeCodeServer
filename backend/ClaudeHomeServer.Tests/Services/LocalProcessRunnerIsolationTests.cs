@@ -376,13 +376,14 @@ public class LocalProcessRunnerIsolationTests
             ProcessRegistry.TrackForTests(new ProcessRegistry.TrackedProcess(pid, "systemd-run", process.StartTime));
             try
             {
-                // Даём systemd-run успеть сделать exec: к этому моменту живое имя уже «sleep»
-                await Task.Delay(TimeSpan.FromSeconds(2));
+                // Ждём exec опросом, а не фиксированной паузой: под нагрузкой он запаздывает
+                var deadline = DateTime.UtcNow.AddSeconds(30);
+                while (LiveName(pid) != "sleep" && DateTime.UtcNow < deadline)
+                    await Task.Delay(100);
+                LiveName(pid).Should().Be("sleep", "к моменту PruneDead обёртка уже exec-нулась");
                 ProcessRegistry.PruneDead();
                 ProcessRegistry.IsTracked(pid).Should().BeTrue(
                     "реестр не должен вычёркивать живой обёрнутый процесс (Matches — по времени старта, не имени)");
-                System.Diagnostics.Process.GetProcessById(pid).ProcessName
-                    .Should().Be("sleep", "к моменту PruneDead обёртка уже exec-нулась");
             }
             finally
             {
@@ -394,6 +395,16 @@ public class LocalProcessRunnerIsolationTests
         finally
         {
             IsolationOptions.Instance = prev;
+        }
+
+        static string? LiveName(int pid)
+        {
+            try
+            {
+                using var p = System.Diagnostics.Process.GetProcessById(pid);
+                return p.ProcessName;
+            }
+            catch (ArgumentException) { return null; }
         }
     }
 
@@ -580,36 +591,46 @@ public class LocalProcessRunnerIsolationTests
             unit.Should().StartWith("ccs-run-").And.EndWith(".scope");
             await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
 
-            var deadline = DateTime.UtcNow.AddSeconds(15);
+            // Остановка асинхронная (stop --no-block): у каждого ожидания свой потолок, под
+            // нагрузкой SIGTERM и выгрузка юнита занимают секунды
+            var deadline = DateTime.UtcNow.AddSeconds(30);
             while (Directory.Exists($"/proc/{tailPid}") && DateTime.UtcNow < deadline)
                 await Task.Delay(100);
             Directory.Exists($"/proc/{tailPid}").Should().BeFalse("остановка scope добивает хвост");
 
-            // Хвост умер раньше, чем systemd обработал его SIGCHLD: юнит ещё секунду-другую
-            // бывает в «deactivating» — ждём выгрузки, а не снимаем мгновенный кадр
-            var units = await ListUnitAsync(unit);
-            while (units.Contains(unit) && DateTime.UtcNow < deadline)
+            // Хвост умер раньше, чем systemd обработал опустевшую cgroup: юнит ещё бывает
+            // в «deactivating» — ждём терминального состояния, а не снимаем мгновенный кадр
+            deadline = DateTime.UtcNow.AddSeconds(30);
+            var state = await UnitStateAsync(unit);
+            while (!IsTerminal(state) && DateTime.UtcNow < deadline)
             {
                 await Task.Delay(100);
-                units = await ListUnitAsync(unit);
+                state = await UnitStateAsync(unit);
             }
-            units.Should().NotContain(unit, "юнит выгружен (--collect), в slice от процесса ничего не осталось");
+            IsTerminal(state).Should().BeTrue(
+                $"юнит остановлен и выгружен (--collect), в slice от процесса ничего не осталось; состояние: {state}");
         }
         finally
         {
             IsolationOptions.Instance = prev;
         }
 
-        static async Task<string> ListUnitAsync(string unit)
+        // Выгружен (not-found) либо уже остановлен — --collect соберёт и failed
+        static bool IsTerminal(string state) =>
+            state.Contains("LoadState=not-found")
+            || state.Contains("ActiveState=inactive")
+            || state.Contains("ActiveState=failed");
+
+        static async Task<string> UnitStateAsync(string unit)
         {
-            using var list = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("systemctl")
+            using var show = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("systemctl")
             {
-                ArgumentList = { "--user", "list-units", "--all", "--no-legend", unit },
+                ArgumentList = { "--user", "show", unit, "-p", "LoadState,ActiveState,SubState" },
                 RedirectStandardOutput = true,
             })!;
-            var text = await list.StandardOutput.ReadToEndAsync();
-            await list.WaitForExitAsync();
-            return text;
+            var text = await show.StandardOutput.ReadToEndAsync();
+            await show.WaitForExitAsync();
+            return text.Replace('\n', ' ').Trim();
         }
     }
 }

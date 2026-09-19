@@ -23,6 +23,9 @@ public class BackupPathsTests
     [InlineData("dossiers/owner1/project1.json")]
     [InlineData("dossiers/owner1/project1.archive.jsonl")]
     [InlineData("dossiers/state.json")]
+    // Репозитории встроенного Forgejo — едут, исключены только ключи хоста SSH
+    [InlineData("forgejo/git/repositories/andrey/ai-home.git/HEAD")]
+    [InlineData("forgejo/gitea/gitea.db")]
     public void СтейтИМаркерыМиграций_ПопадаютВАрхив(string path)
     {
         BackupPaths.ShouldInclude(path).Should().BeTrue();
@@ -58,6 +61,13 @@ public class BackupPathsTests
     [InlineData("backups/ccs-old.zip")]
     [InlineData("backups-secrets/ccs-secrets-1.zip")]
     [InlineData(".backup-staging/users.json")]
+    // Ключи хоста SSH Forgejo — приватные и нечитаемые для сервера (root, 600)
+    [InlineData("forgejo/ssh/ssh_host_rsa_key")]
+    [InlineData("forgejo/ssh/ssh_host_ed25519_key.pub")]
+    // Рабочая очередь Forgejo (LevelDB) — живой контейнер держит LOCK
+    [InlineData("forgejo/gitea/queues/common/LOCK")]
+    // Поисковый индекс Forgejo (bleve/bolt) — тоже под блокировкой, пересобирается
+    [InlineData("forgejo/gitea/indexers/issues.bleve/store/root.bolt")]
     [InlineData("backup-state.json")]
     [InlineData("projects.json.abc123.tmp")]
     [InlineData("users.json.corrupt-20260101-000000.bak")]

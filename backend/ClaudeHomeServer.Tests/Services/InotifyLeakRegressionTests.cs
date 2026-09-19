@@ -22,16 +22,21 @@ namespace ClaudeHomeServer.Tests.Services;
 /// прямо из колбэка; новый наблюдатель падал СИНХРОННО внутри своего же EnableRaisingEvents
 /// (на проде — ENOSPC при исчерпанном бюджете слежек) и заказывал следующий — рекурсия до
 /// лимита экземпляров. Бюджет слежек в тесте не исчерпать безопасно (он общий на пользователя
-/// ОС), поэтому синхронную ошибку старта даёт папка без прав на чтение (EACCES на слежку) —
-/// тот же путь кода. Шторм старого кода обрывается потолком дескрипторов процесса.
+/// ОС), поэтому синхронную ошибку слежки на подпапке даёт путь длиннее PATH_MAX
+/// (ENAMETOOLONG) — тот же путь кода, и одинаково под любым пользователем: права на папку
+/// (chmod 000) root обходит, а EMFILE при урезанном лимите fd бросается из старта
+/// исключением и Error не порождает вовсе. Шторм старого кода обрывается потолком
+/// дескрипторов процесса.
 /// </summary>
-[Collection(TestCollections.FdLimit)]
+[Collection(TestCollections.Inotify)]
 public class InotifyLeakRegressionTests : IDisposable
 {
     private readonly string _tempDir =
         Path.Combine(Path.GetTempPath(), "ccs_inotify_" + Guid.NewGuid().ToString("N"));
     private readonly List<IDisposable> _disposables = [];
-    private string? _lockedDir;
+    // Переименованная вершина цепочки с путём длиннее PATH_MAX: перед уборкой её надо вернуть
+    // к короткому имени, иначе рекурсивное удаление само упрётся в ENAMETOOLONG.
+    private (string Long, string Short)? _deepChain;
 
     public InotifyLeakRegressionTests()
     {
@@ -41,12 +46,32 @@ public class InotifyLeakRegressionTests : IDisposable
     public void Dispose()
     {
         foreach (var d in _disposables) d.Dispose();
-        if (_lockedDir is not null && OperatingSystem.IsLinux())
-            try { File.SetUnixFileMode(_lockedDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute); }
+        if (_deepChain is { } chain && Directory.Exists(chain.Long))
+            try { Directory.Move(chain.Long, chain.Short); }
             catch { /* уборка */ }
         if (Directory.Exists(_tempDir))
             try { Directory.Delete(_tempDir, recursive: true); }
             catch { /* уборка temp — не предмет теста */ }
+    }
+
+    // Цепочка вложенных папок, у самой глубокой из которых полный путь длиннее PATH_MAX (4096):
+    // создаётся короткой (иначе mkdir сам упал бы на ENAMETOOLONG), затем вершина
+    // переименовывается в имя из 250 символов. Родитель последней папки ещё открывается,
+    // а inotify_add_watch на ней самой отвечает ENAMETOOLONG — .NET шлёт это в Error.
+    private void CreateTooLongChain(string root)
+    {
+        const int PathMax = 4096;
+        var top = Path.Combine(root, "c");
+        var segment = new string('s', 50);
+        var levels = (PathMax - 100 - top.Length) / (segment.Length + 1);
+        var deepest = top;
+        for (var i = 0; i < levels; i++) deepest = Path.Combine(deepest, segment);
+        Directory.CreateDirectory(deepest);
+        var longTop = Path.Combine(root, new string('L', 250));
+        Directory.Move(top, longTop);
+        _deepChain = (longTop, top);
+        (longTop.Length + deepest.Length - top.Length).Should().BeGreaterThan(PathMax,
+            "иначе слежка на глубокой папке встанет и сценарий ничего не проверит");
     }
 
     private FileWatcherService BuildService()
@@ -85,13 +110,7 @@ public class InotifyLeakRegressionTests : IDisposable
 
         var root = Path.Combine(_tempDir, "worktree");
         for (var i = 0; i < 50; i++) Directory.CreateDirectory(Path.Combine(root, "src", "d" + i));
-        _lockedDir = Path.Combine(root, "locked");
-        Directory.CreateDirectory(_lockedDir);
-        File.SetUnixFileMode(_lockedDir, UnixFileMode.None);
-        var readable = true;
-        try { Directory.EnumerateFileSystemEntries(_lockedDir).Any(); }
-        catch (UnauthorizedAccessException) { readable = false; }
-        Skip.If(readable, "под root права на папку не мешают слежке — сценарий не воспроизвести");
+        CreateTooLongChain(root);
 
         var svc = BuildService();
         var baseline = InotifyProbe.CountInotifyFds();
@@ -137,8 +156,32 @@ public class InotifyLeakRegressionTests : IDisposable
             "после снятия наблюдателя ни одного inotify-экземпляра не остаётся");
         svc.RecreateCount.Should().BeGreaterThan(1,
             "сценарий обязан реально гонять Error → пересоздание, иначе тест ничего не проверяет");
-        svc.RecreateCount.Should().BeLessThan(40,
+        // Теория — порядка десятка за 2 с; граница с запасом на медленный раннер: смысл
+        // проверки — «нет шторма на сотни и тысячи», а не точное число.
+        svc.RecreateCount.Should().BeLessThan(100,
             "пересоздание идёт по лестнице пауз, а не штормом из колбэка");
+    }
+
+    [Fact]
+    public void WatchPath_ТотЖеПутьБезНаблюдателя_ПоднимаетЕгоНаТойЖеЗаписи()
+    {
+        var root = Path.Combine(_tempDir, "same");
+        Directory.CreateDirectory(root);
+        var svc = BuildService();
+
+        svc.WatchPath("worktree:same", root);
+        var first = svc.Inspect("worktree:same");
+        first.Should().NotBeNull();
+        first!.Value.Watching.Should().BeTrue();
+
+        svc.DropWatcherKeepEntry("worktree:same");
+        svc.Inspect("worktree:same")!.Value.Watching.Should().BeFalse();
+
+        svc.WatchPath("worktree:same", root);
+        var second = svc.Inspect("worktree:same");
+        second!.Value.Entry.Should().BeSameAs(first.Value.Entry,
+            "живая запись переиспользуется: подмена новой теряла бы накопленные PendingPaths");
+        second.Value.Watching.Should().BeTrue("наблюдение поднимается заново на той же записи");
     }
 
     [SkippableFact]

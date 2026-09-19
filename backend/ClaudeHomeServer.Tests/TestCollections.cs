@@ -34,10 +34,13 @@ public static class TestCollections
     // фильтрах чатов; трогать это заодно нельзя).
     public const string SessionStaticResolvers = "session-static-resolvers";
 
-    // Классы, которые на время теста урезают лимит дескрипторов ПРОЦЕССА (setrlimit, см.
-    // InotifyProbe.WithFdHeadroom) и меряют inotify-fd процесса: параллельный сосед либо
-    // упал бы на EMFILE, либо исказил бы замер своими наблюдателями.
-    public const string FdLimit = "fd-limit";
+    // Классы, которые открывают настоящие inotify-наблюдатели (FileSystemWatcher, в том числе
+    // через FileWatcherService/TurnFileWatcher), урезают лимит дескрипторов ПРОЦЕССА
+    // (setrlimit, см. InotifyProbe.WithFdLimit) или меряют inotify-fd процесса. Лимит
+    // inotify-экземпляров общий на пользователя ОС: при параллельном прогоне сосед падал на
+    // «max_user_instances has been reached», под урезанным лимитом — на EMFILE, а замер
+    // искажался чужими наблюдателями.
+    public const string Inotify = "inotify";
 }
 
 // Объявление коллекции (без фикстуры — общего состояния тестам не нужно, нужна только
@@ -49,5 +52,5 @@ public class ProcessGlobalStateCollection;
 [CollectionDefinition(TestCollections.SessionStaticResolvers, DisableParallelization = true)]
 public class SessionStaticResolversCollection;
 
-[CollectionDefinition(TestCollections.FdLimit, DisableParallelization = true)]
-public class FdLimitCollection;
+[CollectionDefinition(TestCollections.Inotify, DisableParallelization = true)]
+public class InotifyCollection;

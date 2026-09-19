@@ -159,14 +159,19 @@ public class FileWatcherService : IDisposable
         {
             if (_entries.TryGetValue(key, out var existing))
             {
-                // Тот же ключ на другом пути (чат пересоздал дерево) — перевешиваем watcher.
-                // Тот же путь без живого watcher'а (старт упал, пересоздание не назначено) — поднимаем заново.
-                if (string.Equals(existing.Root, full, StringComparison.OrdinalIgnoreCase)
-                    && (existing.Watcher is not null || existing.Poll is not null || existing.Recreate is not null))
+                if (string.Equals(existing.Root, full, StringComparison.OrdinalIgnoreCase))
                 {
                     existing.LastTouchUtc = DateTime.UtcNow;
+                    // Тот же путь без живого watcher'а и без заказанного пересоздания — поднимаем
+                    // на ЭТОЙ ЖЕ записи: подмена новой потеряла бы накопленные PendingPaths.
+                    if (existing.Watcher is null && existing.Poll is null && existing.Recreate is null)
+                    {
+                        if (_usePolling) StartPolling(key, existing);
+                        else StartWatcher(key, existing);
+                    }
                     return;
                 }
+                // Тот же ключ на другом пути (чат пересоздал дерево) — перевешиваем watcher.
                 DisposeEntry(key, existing);
             }
 
@@ -205,27 +210,33 @@ public class FileWatcherService : IDisposable
     // обработчик должен узнать в отправителе текущий watcher.
     private void StartWatcher(string key, Entry entry)
     {
-        var w = new FileSystemWatcher(entry.Root)
+        FileSystemWatcher? w = null;
+        try
         {
-            IncludeSubdirectories = true,
-            NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName
-                         | NotifyFilters.LastWrite | NotifyFilters.Size,
-            InternalBufferSize = PathBufferBytes,
-        };
-        void OnChange(object _, FileSystemEventArgs e) => OnFsEvent(key, entry, e.FullPath);
-        w.Created += OnChange;
-        w.Changed += OnChange;
-        w.Deleted += OnChange;
-        w.Renamed += (_, e) => { OnFsEvent(key, entry, e.FullPath); OnFsEvent(key, entry, e.OldFullPath); };
-        w.Error += (sender, _) => OnWatcherError(key, entry, sender);
-        entry.Watcher = w;
-        try { w.EnableRaisingEvents = true; }
-        catch
+            // Конструктор — тоже под try: пересоздание идёт из таймера, и папка, удалённая за
+            // время паузы (ArgumentException), уронила бы процесс необработанным исключением.
+            w = new FileSystemWatcher(entry.Root)
+            {
+                IncludeSubdirectories = true,
+                NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName
+                             | NotifyFilters.LastWrite | NotifyFilters.Size,
+                InternalBufferSize = PathBufferBytes,
+            };
+            void OnChange(object _, FileSystemEventArgs e) => OnFsEvent(key, entry, e.FullPath);
+            w.Created += OnChange;
+            w.Changed += OnChange;
+            w.Deleted += OnChange;
+            w.Renamed += (_, e) => { OnFsEvent(key, entry, e.FullPath); OnFsEvent(key, entry, e.OldFullPath); };
+            w.Error += (sender, _) => OnWatcherError(key, entry, sender);
+            entry.Watcher = w;
+            w.EnableRaisingEvents = true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
         {
-            // Недоступный путь либо исчерпан лимит inotify-экземпляров (EMFILE) — без watcher'а,
-            // с повтором по той же лестнице пауз, что и после Error.
-            if (ReferenceEquals(entry.Watcher, w)) entry.Watcher = null;
-            try { w.Dispose(); } catch { }
+            // Папки нет, нет прав на неё, исчерпан лимит inotify-экземпляров (EMFILE — IOException) —
+            // без watcher'а, с повтором по той же лестнице пауз, что и после Error.
+            if (w is not null && ReferenceEquals(entry.Watcher, w)) entry.Watcher = null;
+            try { w?.Dispose(); } catch { }
             ScheduleRecreate(key, entry);
         }
     }
@@ -440,6 +451,27 @@ public class FileWatcherService : IDisposable
     internal void RecreateWatcher(string key)
     {
         if (_entries.TryGetValue(key, out var entry)) RecreateWatcher(key, entry);
+    }
+
+    // internal для тестов: запись по ключу (для сверки по ссылке) и поднят ли на ней watcher.
+    internal (object Entry, bool Watching)? Inspect(string key)
+    {
+        lock (_lock)
+            return _entries.TryGetValue(key, out var e) ? (e, e.Watcher is not null || e.Poll is not null) : null;
+    }
+
+    // internal для тестов: гасит watcher и заказ пересоздания, оставляя саму запись, —
+    // состояние «запись жива, наблюдения нет», которое штатные пути сейчас не порождают.
+    internal void DropWatcherKeepEntry(string key)
+    {
+        lock (_lock)
+        {
+            if (!_entries.TryGetValue(key, out var e)) return;
+            try { e.Watcher?.Dispose(); } catch { }
+            e.Watcher = null;
+            e.Recreate?.Dispose();
+            e.Recreate = null;
+        }
     }
 
     private void DisposeEntry(string key, Entry entry)

@@ -78,16 +78,26 @@ internal static class InotifyProbe
     // Мягкий лимит дескрипторов процесса на время action. RLIMIT_NOFILE ограничивает НОМЕР
     // нового fd (он обязан быть меньше лимита), а не их число: при дырах в нумерации лимит
     // «открытые + N» ничего не запрещает. Поэтому вызывающий даёт сам потолок номера.
-    // Процесс-глобально: вызывающие классы обязаны сидеть в коллекции без параллелизма.
+    // Процесс-глобально: на время action НИКТО в процессе (включая раннер xunit и соседние
+    // потоки) не откроет fd с номером >= limit, поэтому вызывающие классы обязаны сидеть в
+    // коллекции TestCollections.Inotify (без параллелизма), а action — быть коротким.
+    // limit <= 0 запрещён: он не нужен ни одному сценарию и запирает вообще любые новые fd.
+    // Прежний лимит возвращается в finally при любом исходе action; не вернулся — бросок,
+    // а не тихое продолжение прогона под урезанным лимитом.
     public static async Task WithFdLimit(int limit, Func<Task> action)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
         if (getrlimit(RlimitNofile, out var saved) != 0)
             throw new InvalidOperationException("getrlimit(RLIMIT_NOFILE) не удался");
-        var capped = saved with { Cur = (ulong)Math.Max(limit, 0) };
+        var capped = saved with { Cur = Math.Min((ulong)limit, saved.Cur) };
         if (setrlimit(RlimitNofile, in capped) != 0)
             throw new InvalidOperationException("setrlimit(RLIMIT_NOFILE) не удался");
         try { await action(); }
-        finally { setrlimit(RlimitNofile, in saved); }
+        finally
+        {
+            if (setrlimit(RlimitNofile, in saved) != 0)
+                throw new InvalidOperationException("не удалось вернуть RLIMIT_NOFILE — прогон дальше идёт под урезанным лимитом");
+        }
     }
 
     private const int RlimitNofile = 7; // RLIMIT_NOFILE на Linux (x64 и arm64)

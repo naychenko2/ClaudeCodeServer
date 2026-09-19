@@ -24,6 +24,7 @@ namespace ClaudeHomeServer.Tests.Services;
 /// Юнит-набор: сервис в изоляции, хаб — Moq-рекордер (по образцу ChatArchivedEventTests);
 /// переполнение проверяется в polling-режиме — он детерминированнее FileSystemWatcher в CI.
 /// </summary>
+[Collection(TestCollections.Inotify)]
 public class FileWatcherFullResyncTests : IDisposable
 {
     private readonly string _tempDir =

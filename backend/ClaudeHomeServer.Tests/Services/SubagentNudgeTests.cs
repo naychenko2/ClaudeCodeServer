@@ -11,7 +11,6 @@ namespace ClaudeHomeServer.Tests.Services;
 
 // Автодобивание оборванного сабагента: политика отправки, потолок в две попытки и разведение
 // двух реакций — «продолжить» (обрыв на середине) против «зовите человека» (терминальный отказ).
-[Collection(TestCollections.SessionStaticResolvers)]
 public class SubagentNudgeTests : IDisposable
 {
     private readonly string _dir;

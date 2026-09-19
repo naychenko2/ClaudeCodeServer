@@ -45,6 +45,7 @@ public class PersonasController(
     IConfiguration config,
     ILogger<PersonasController> log,
     IHubContext<SessionHub> hub,
+    ITaskLookup tasks,
     INoteAccessor? notes = null) : ControllerBase
 {
     private readonly PersonaManager _personas = personas;
@@ -227,10 +228,10 @@ public class PersonasController(
 
     // Чаты, которые ведутся от лица этой персоны
     [HttpGet("{id}/chats")]
-    public ActionResult<IReadOnlyList<Session>> Chats(string id)
+    public IActionResult Chats(string id)
     {
         if (_personas.Get(id, UserId) is null) return NotFound();
-        return Ok(_sessions.GetPersonaChats(UserId, id));
+        return Ok(_sessions.GetPersonaChats(UserId, id).Select(s => SessionWire.ToWire(s, tasks)).ToList());
     }
 
     // Открыть новый чат с персоной (или продолжить существующий по resumeSessionId)

@@ -26,7 +26,6 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // Passport-семантику (чужой ход = 404, не 403),
 // Badge/TaskPrompt-авторизацию.
 // Таблицу правил SpendAccess НЕ дублируем — она покрыта в SpendAnalyticsTests.
-[Collection(TestCollections.SessionStaticResolvers)]
 public class SpendControllerTests : IDisposable
 {
     private readonly string _dir;

@@ -3,7 +3,6 @@ using ClaudeHomeServer.Services.Tasks;
 
 namespace ClaudeHomeServer.Tests.Services;
 
-[Collection(TestCollections.SessionStaticResolvers)]
 public class TaskManagerTests : IDisposable
 {
     private readonly string _dir;
@@ -701,33 +700,6 @@ public class TaskManagerTests : IDisposable
 
         act.Should().Throw<InvalidOperationException>();
         _sut.GetById(task.Id)!.Status.Should().NotBe(TaskItemStatus.Done);
-    }
-
-    // ─── Шов Tasks → Models.Session (статические резолверы) ──────────────────────
-    // Волна 4C, шаг 1 — после переезда TaskManager в `Services.Tasks.TaskManager`
-    // нужно доказать, что ctor всё ещё ставит резолверы на `Session`. Без этого
-    // `Session.ParentSessionId`/`TaskDone` выродились бы в null/false (архитектор:
-    // «если TaskManager однажды не будет создан к моменту первой сериализации
-    // Session — иерархия чатов и фильтр "Завершён" тихо выродятся»).
-    // Инициализация в TaskManager.cs. (Старый `TaskDelegationDepth`/`TaskDelegationDepthResolver`
-    // удалён: гейт анти-рекурсии перешёл на глубину хода, а не на модель.)
-
-    [Fact]
-    public void Constructor_УстанавливаетРезолверыНаSession()
-    {
-        // ctor уже вызван в этом тест-фикстуре (InstancePerTest); проверяем,
-        // что оба резолвера на Session не null и корректно резолвят наши задачи.
-        var live = _sut.Create(null, "owner", new CreateTaskRequest("t-резолверы-live"));
-        var done = _sut.Create(null, "owner", new CreateTaskRequest("t-резолверы-done"));
-        _sut.Update(done.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
-
-        Session.TaskSourceSessionResolver.Should().NotBeNull("ctor должен ставить TaskSourceSessionResolver");
-        Session.TaskDoneResolver.Should().NotBeNull("ctor должен ставить TaskDoneResolver");
-
-        // Live: TaskDone=false.
-        Session.TaskDoneResolver!(live.Id).Should().BeFalse();
-        // Done: TaskDone=true.
-        Session.TaskDoneResolver!(done.Id).Should().BeTrue();
     }
 
     // ─── DroppedByHumanAt (волна 1 team-blocker-honest, дефект f3965801) ─────────

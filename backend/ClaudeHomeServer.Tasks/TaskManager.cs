@@ -31,10 +31,10 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))!;
         _storePath = Path.Combine(dataDir, "tasks.json");
         Load();
-        // Вычисляемый Session.ParentSessionId (иерархия чатов): резолв TaskId → SourceSessionId
-        Session.TaskSourceSessionResolver = id => GetById(id)?.SourceSessionId;
-        // Вычисляемый Session.TaskDone (фильтр чатов «Готово»): резолв TaskId → задача в Done
-        Session.TaskDoneResolver = id => GetById(id)?.Status == TaskItemStatus.Done;
+        // Раньше здесь конструктор ставил СТАТИЧЕСКИЕ резолверы Session (ParentSessionId/TaskDone).
+        // Снят: вычисляемые «связи» сессии теперь считаются в Main через SessionTaskLinks +
+        // ITaskLookup (адаптер в Program.cs), и спин-модель Session больше не зависит от
+        // вертикали Tasks.
     }
 
     // Запись в проектный лог (только для задач с projectId — личные в лог не попадают).

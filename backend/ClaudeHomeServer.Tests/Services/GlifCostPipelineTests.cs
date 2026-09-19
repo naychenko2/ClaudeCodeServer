@@ -19,7 +19,6 @@ namespace ClaudeHomeServer.Tests.Services;
 
 // Pipeline glif_cost: tool_result → GlifCostParser → PublishGlifCostAsync →
 // история + SignalR broadcast + SpendRecord.
-[Collection(TestCollections.SessionStaticResolvers)]
 public class GlifCostPipelineTests : IDisposable
 {
     private readonly string _dir;

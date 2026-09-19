@@ -26,7 +26,6 @@ namespace ClaudeHomeServer.Tests.Services;
 // не должен получать ничего (регрессия на спам), брошенная задача — ровно один оклик исполнителю
 // и ровно одно уведомление человеку. CLI не поднимается: процесс чата подставляется моком
 // адаптера (тот же приём, что в TaskExecutionServiceDelegationReportTests).
-[Collection(TestCollections.SessionStaticResolvers)]
 public class TaskExecutionServiceStallTests : IDisposable
 {
     private static readonly TimeSpan Stale = TimeSpan.FromMinutes(15);

@@ -17,22 +17,9 @@ public static class TestCollections
     // на этом классе.
     public const string ProcessGlobalState = "process-global-state";
 
-    // Классы, которые пишут или читают статические `Session.TaskSourceSessionResolver` /
-    // `Session.TaskDoneResolver`. Эти `Func`-свойства
-    // живут в `Core/Models/Session.cs:481/505/515`, а ставит их конструктор `TaskManager`
-    // (`Services/Tasks/TaskManager.cs:32-36`). Любой `new TaskManager(...)` в тестах
-    // перезаписывает все три под ногами у параллельно идущих классов — отсюда плавающее
-    // падение `TaskManagerTests.Constructor_УстанавливаетТриРезолвераНаSession` и
-    // `TeamWaveServiceTests.Пульс_АктивностьСчитаетсяПоВсемТочкамВолны` в полном прогоне
-    // (Ф5 не меняла логику, но сменила порядок/частоту создания этих объектов и разбудила
-    // гонку). Лучше включить лишний класс, чем пропустить нужный: цена ошибки в первую
-    // сторону — секунды прогона, во вторую — возврат флака.
-    //
-    // Это НЕ костыль-ретрай, а честная декларация: эти тесты делят глобальное состояние
-    // процесса и параллелиться не могут. Убирать статику из `Session` — отдельная задача
-    // (модель в Core не должна звать сервисы, но её вычисляемые свойства торчат в DTO и
-    // фильтрах чатов; трогать это заодно нельзя).
-    public const string SessionStaticResolvers = "session-static-resolvers";
+    // (Коллекция `SessionStaticResolvers` снята, эксперимент-4: она сериализовала классы,
+    // делявшие статические `Session.Task*Resolver`; вычисления переехали в Main'e
+    // на пер-инстансный lookup через ITaskLookup, статика из Core/Models/Session.cs убрана.)
 
     // Классы, которые открывают настоящие inotify-наблюдатели (FileSystemWatcher, в том числе
     // через FileWatcherService/TurnFileWatcher), урезают лимит дескрипторов ПРОЦЕССА
@@ -48,9 +35,6 @@ public static class TestCollections
 // переехало сюда вместе с расширением области на stderr-классы.
 [CollectionDefinition(TestCollections.ProcessGlobalState)]
 public class ProcessGlobalStateCollection;
-
-[CollectionDefinition(TestCollections.SessionStaticResolvers, DisableParallelization = true)]
-public class SessionStaticResolversCollection;
 
 [CollectionDefinition(TestCollections.Inotify, DisableParallelization = true)]
 public class InotifyCollection;

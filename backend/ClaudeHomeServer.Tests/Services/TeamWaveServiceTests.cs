@@ -22,7 +22,6 @@ namespace ClaudeHomeServer.Tests.Services;
 // ждёт, пока закроются задачи предыдущей.
 // TaskExecutionService в тестах не передаём — запуск claude.exe здесь не гоняется, проверяем
 // раздачу: карточки задач, состояние режима и счётчики бюджета.
-[Collection(TestCollections.SessionStaticResolvers)]
 public class TeamWaveServiceTests : IDisposable
 {
     private readonly string _dir;
@@ -61,6 +60,12 @@ public class TeamWaveServiceTests : IDisposable
 
         _teamPlanning = new TeamPlanningService(_personas, new StubPlanner(() => _plannerAnswer));
         _sessions = CreateSessionManager(config, userStore, appSettings, _broadcaster);
+        // Явный per-инстансный lookup задач. Раньше вычисляемый Session.ParentSessionId
+        // (дерево чатов-исполнителей) закрывалась статикой Session.TaskSourceSessionResolver,
+        // которую тестовый TaskManager (_tasks) ставил в ctor; теперь lookup явный. В проде
+        // DI пробрасывает TaskManager в SessionManager (см. его ctor), в этом тесте SessionManager
+        // создан без него → подменяем lookup, иначе родительство ребёнка-исполнителя не резолвится.
+        _sessions.SetTaskLookupForTests(new TaskLookupAdapter(_tasks));
         // Реальный NotificationService с дисковым стором (паттерн TaskExecutionServiceDelegationReportTests):
         // напоминания о карточках проверяем по broadcast-снимку выше
         var notif = new NotificationService(
@@ -1412,10 +1417,12 @@ public class TeamWaveServiceTests : IDisposable
     // собирает проект 45 минут. Все UpdatedAt-якоря статичны (двигаются только на границах
     // ходов), но прогон CLI ребёнка жив — это активность «сейчас», а не «зависло».
     // Родительство чата-исполнителя закрепляем через SetParent, а не вычисляемым по задаче
-    // путём: Session.TaskSourceSessionResolver статический, и параллельный тестовый класс
-    // (WebApplicationFactory со своей TaskManager) переприсваивает его себе — вычисляемый
-    // ParentSessionId флакует в null. Для пульса оба пути — один и тот же ребёнок
-    // (ParentSessionId), авто-резолв отдельно покрыт тестом активности выше.
+    // путём: раньше ParentSessionId шло через статический Session.TaskSourceSessionResolver,
+    // который параллельный тестовый класс (WebApplicationFactory со своей TaskManager)
+    // переприсваивал себе — вычисляемый ParentSessionId флакал в null (статика теперь снята,
+    // lookup пер-инстанса, но SetParent — самый явный и устойчивый способ закрепить род).
+    // Для пульса оба пути — один и тот же ребёнок (ParentSessionId), авто-резолв
+    // отдельно покрыт тестом активности выше.
     [Fact]
     public async Task Пульс_ЖивойХодИсполнителяСпасаетОтЛожногоЗависания()
     {

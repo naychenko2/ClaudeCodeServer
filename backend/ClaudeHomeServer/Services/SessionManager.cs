@@ -416,11 +416,11 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     ///
     /// Ноль нужен ТЕСТАМ, и не ради скорости: sweep живёт внутри SaveSessions, поэтому фоновый
     /// таймер выполняет его в произвольный момент — в том числе между двумя ассертами теста.
-    /// Вместе с глобальным Session.TaskSourceSessionResolver, который переустанавливает конструктор
-    /// каждого нового TaskManager в параллельном классе, это давало плавающее падение
-    /// Sweep_ЖивойПотомокВГлубину: иерархия делегирования на миг переставала резолвиться, и sweep
-    /// закрывал сессию, которую тест только что проверил живой. Поодиночке ни один из двух факторов
-    /// не воспроизводился — падало только на полном прогоне и не каждый раз.
+    /// Когда sweep ещё читал статический Session.TaskSourceSessionResolver (конструктор каждого
+    /// нового TaskManager перезаписывал его под параллельными классами), это давало плавающее
+    /// падение Sweep_ЖивойПотомокВГлубину: иерархия делегирования на миг переставала резолвиться,
+    /// и sweep закрывал сессию, которую тест только что проверил живой. Поодиночке ни один из двух
+    /// факторов не воспроизводился — падало только на полном прогоне и не каждый раз.
     /// </summary>
     private static readonly TimeSpan DefaultAutoSaveInterval = TimeSpan.FromSeconds(30);
     private Timer? _autoSaveTimer;
@@ -650,7 +650,10 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // строится один раз), чтобы сам SessionManager не тянул конкретный TaskManager.
     // null — задача не резолвится (та же семантика, что «резолвер не установлен»:
     // ParentSessionId=null, TaskDone=false).
-    private readonly ITaskLookup? _taskLookup;
+    private ITaskLookup? _taskLookup;
+    // Тест-шов: подменить ITaskLookup. TaskManager в конструктор SessionManager не пробрасывают
+    // (DI-цикл), поэтому юниты, которым нужен резолв задачи, подменяют lookup явно.
+    internal void SetTaskLookupForTests(ITaskLookup? lookup) => _taskLookup = lookup;
 
     public SessionManager(ProjectManager projects,
         ChatHistoryService history, IConfiguration config, ILlmSessionAdapterFactory adapters,

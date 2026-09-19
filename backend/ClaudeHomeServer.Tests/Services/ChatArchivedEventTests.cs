@@ -20,7 +20,6 @@ namespace ClaudeHomeServer.Tests.Services;
 // BroadcastChatDeletedAsync), chat_deleted суррогатом не используется. Здесь же отбор
 // кандидатов автоправила: GetArchiveRuleCandidates — та же функция, что позовёт тик.
 // Сборка SessionManager своя (как ChatArchiveFlagTests), но мок хаба ЗАПИСЫВАЕТ группы.
-[Collection(TestCollections.SessionStaticResolvers)]
 public class ChatArchivedEventTests : IDisposable
 {
     // Владелец чатов: свой пользователь на каждую сборку (CreateChatAsync резолвит

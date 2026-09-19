@@ -1214,11 +1214,12 @@ public class SubsystemBoundaryTests
         //    чистый — `ISessionBroadcaster` (Core) дёргается из TasksScheduler через
         //    `IHubContext` теперь неявно через Core-шов).
         // Зафиксированные швы (IL-скан видит declaring-типы):
-        // - `Tasks.TaskManager` ставит три статических резолвера на `Models.Session`
-        //   (`Session.TaskSourceSessionResolver`/`TaskDelegationDepthResolver`/
-        //   `TaskDoneResolver`) в конструкторе TaskManager.cs. Связь Tasks →
-        //   Models видна через `ClaudeHomeServer.Models` (SharedAllowedPrefixes);
-        //   мутация статической модели — фиксированное исключение.
+        // - (снят, эксперимент-4) раньше `Tasks.TaskManager` ставил в конструкторе
+        //   статические резолверы на `Models.Session` (`TaskSourceSessionResolver`/
+        //   `TaskDelegationDepthResolver`/`TaskDoneResolver`) — мутация статической
+        //   модели была фиксированным исключением. Теперь вычисления `ParentSessionId`/
+        //   `TaskDone` живут в Main'e через Core-шов `ITaskLookup` (SessionTaskLinks/
+        //   SessionWire), Tasks → Models.Session не мутает.
         // Мёртвые допуски сняты ревью (2026-09-09): формально сторож оставался зелёным
         // и с ними, но был ШИРЕ реальной поверхности зависимостей Tasks после выноса —
         // иначе вертикаль могла бы прикинуться «спиной» в обход швов. Та же ловушка,

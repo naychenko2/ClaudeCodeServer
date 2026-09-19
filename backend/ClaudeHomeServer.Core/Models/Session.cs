@@ -499,11 +499,6 @@ public class Session
         : AutomationRuleId != null ? ChatOrigin.Automation
         : ChatOrigin.Manual;
 
-    // Резолвер «задача → чат-источник»: назначает TaskManager при старте (DI в модель не
-    // пробросить — Session сериализуется напрямую во всех точках отдачи). Истина живёт
-    // в TaskItem.SourceSessionId, здесь только вычисление.
-    public static Func<string, string?>? TaskSourceSessionResolver { get; set; }
-
     // Ручная группировка (drag-and-drop в списке чатов): родитель, назначенный пользователем.
     // Побеждает авто-связь по задаче. Пара с ParentDetached описывает три состояния, поэтому
     // менять их обоих можно ТОЛЬКО через SessionManager.SetParent — он держит инвариант
@@ -514,25 +509,12 @@ public class Session
     // состояния, и sentinel-строка их бы склеила.
     public bool ParentDetached { get; set; }
 
-    // Родительский чат: ручная группировка, иначе — чат, в котором была создана задача
-    // сессии-исполнителя (TaskId → Task.SourceSessionId). Вычисляется, не хранится — как Origin.
-    // null — корневой чат либо задача удалена (чат всплывает в корень — принято осознанно).
-    // TaskId ручная группировка не трогает: связь чата с задачей (плашка, артефакты)
-    // живёт своей жизнью и перетаскиванием не рвётся.
-    public string? ParentSessionId =>
-        ParentOverrideId is not null ? ParentOverrideId
-        : ParentDetached ? null
-        : TaskId != null ? TaskSourceSessionResolver?.Invoke(TaskId) : null;
-
-    // Резолвер «задача → выполнена?»: назначает TaskManager при старте (как
-    // TaskSourceSessionResolver). Истина живёт в TaskItem.Status == Done.
-    public static Func<string, bool>? TaskDoneResolver { get; set; }
-
-    // Связанная задача чата-исполнителя выполнена (TaskId != null и задача в статусе Done).
-    // true только для чатов выполненных задач (бывший «архив»); false — обычные чаты и живые
-    // задачи. Вычисляется, не хранится — как Origin/ParentSessionId. Фронт объединяет его с
-    // статусом Finished в чип «Готово» фильтра чатов (маппинг статусов, макет A).
-    public bool TaskDone => TaskId is not null && (TaskDoneResolver?.Invoke(TaskId) ?? false);
+    // Эффективный родительский чат (ParentSessionId) и признак «Готово» (TaskDone) —
+    // ВЫЧИСЛЯЕМЫЕ, и живут НЕ здесь, а в SessionTaskLinks (Main) поверх шва ITaskLookup:
+    // ручная группировка, иначе TaskId → Task.SourceSessionId / Task.Status==Done. Раньше
+    // эти вычисления читали статические Func-резолверы, ставившиеся конструктором TaskManager,
+    // т.е. спин-модель зависела от вертикали. На wire (list/SignalR/summary) поля подставляются
+    // в контроллерах — см. SessionWire.
 
     // Чат в архиве: его архивировали (ArchivedAt) и активности после этого не было
     // (UpdatedAt не двигался). Вычисляется, не хранится — как Origin/TaskDone. Признак

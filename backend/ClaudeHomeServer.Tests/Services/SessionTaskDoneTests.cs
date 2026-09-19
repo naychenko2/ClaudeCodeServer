@@ -2,15 +2,16 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Controllers;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
 using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Services;
 
-// Признак «Готово» для фильтра чатов (wire-поле taskDone): логика резолвера
-// TaskId → статус задачи и присутствие поля в JSON обеих точек отдачи списка чатов
-// (Session напрямую — проектный список/SignalR; HomeSessionDto — глобальный summary).
-// Платформонезависимый unit по модели, без DI.
-[Collection(TestCollections.SessionStaticResolvers)]
+// Признак «Готово» для фильтра чатов (wire-поле taskDone): логика SessionTaskLinks.IsTaskDone
+// (резолв TaskId → статус задачи через ITaskLookup) и присутствие поля в JSON обеих точек
+// отдачи (Session — проектный список/SignalR; HomeSessionDto — глобальный summary).
+// Раньше это читало статический Session.TaskDoneResolver, который ставил TaskManager — отсюда
+// тест жил в безпараллельной коллекции. Теперь lookup явный, статик нет → коллекция снята.
 public class SessionTaskDoneTests
 {
     // Те же настройки JSON, что в Program.cs для AddControllers (camelCase + строки-enum).
@@ -19,6 +20,13 @@ public class SessionTaskDoneTests
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
     };
+
+    // Стерильный ITaskLookup: единственный известный id → Done, остальные → не найдена.
+    private sealed class DoneTaskLookup : ITaskLookup
+    {
+        public TaskItem? GetById(string id) =>
+            id == "t-done" ? new TaskItem { Id = id, Status = TaskItemStatus.Done } : null;
+    }
 
     private static Session SessionWithTask(string? taskId) => new()
     {
@@ -30,51 +38,33 @@ public class SessionTaskDoneTests
     [Fact]
     public void TaskDone_БезЗадачи_False()
     {
-        var prev = Session.TaskDoneResolver;
-        try
-        {
-            Session.TaskDoneResolver = _ => true; // даже если бы резолвер сказал true
-            SessionWithTask(null).TaskDone
-                .Should().BeFalse("нет задачи — признак неприменим, чат не «Готово» по задаче");
-        }
-        finally { Session.TaskDoneResolver = prev; }
+        // Даже если бы lookup сказал true — без TaskId признак неприменим.
+        SessionTaskLinks.IsTaskDone(SessionWithTask(null), new DoneTaskLookup())
+            .Should().BeFalse("нет задачи — признак неприменим, чат не «Готово» по задаче");
     }
 
     [Fact]
     public void TaskDone_ЖиваяЗадача_False()
     {
-        var prev = Session.TaskDoneResolver;
-        try
-        {
-            Session.TaskDoneResolver = _ => false;
-            SessionWithTask("t-live").TaskDone.Should().BeFalse("задача не Done");
-        }
-        finally { Session.TaskDoneResolver = prev; }
+        SessionTaskLinks.IsTaskDone(SessionWithTask("t-live"), new DoneTaskLookup())
+            .Should().BeFalse("задача не Done");
     }
 
     [Fact]
     public void TaskDone_ВыполненнаяЗадача_True()
     {
-        var prev = Session.TaskDoneResolver;
-        try
-        {
-            Session.TaskDoneResolver = id => id == "t-done";
-            SessionWithTask("t-done").TaskDone
-                .Should().BeTrue("задача Done — чат уходит в чип «Готово»");
-        }
-        finally { Session.TaskDoneResolver = prev; }
+        SessionTaskLinks.IsTaskDone(SessionWithTask("t-done"), new DoneTaskLookup())
+            .Should().BeTrue("задача Done — чат уходит в чип «Готово»");
     }
 
     [Fact]
     public void TaskDone_СериализуетсяВSessionJson()
     {
-        // Резолвер не трогаем: проверяем лишь, что свойство вообще попадает в wire JSON
-        // проектного списка/SignalR (Session отдаётся напрямую). Значение здесь не важно —
-        // без резолвера TaskDone=false, но поле обязано присутствовать. Намеренно не задаём
-        // Session.TaskDoneResolver, чтобы тест не зависел от глобальной статики и её гонок
-        // с параллельными fixture-тестами TaskManager (конструктор переназначает резолвер).
-        var json = JsonSerializer.Serialize(SessionWithTask("t-done"), WireOpts);
-        json.Should().Contain("\"taskDone\":",
+        // Wire-поле taskDone подставляется в контроллере (SessionWire), поэтому здесь проверяем,
+        // что SessionWire добавляет его в JSON Session (проектный список/SignalR).
+        var wire = SessionWire.ToWire(SessionWithTask("t-done"), new DoneTaskLookup());
+        var json = wire.ToJsonString();
+        json.Should().Contain("\"taskDone\":true",
             "проектный список и SignalR отдают Session напрямую — поле должно ехать в wire");
     }
 

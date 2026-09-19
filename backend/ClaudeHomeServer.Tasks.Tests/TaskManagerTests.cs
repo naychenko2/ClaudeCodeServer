@@ -17,6 +17,9 @@ public class TaskManagerTests : IDisposable
 
     public void Dispose()
     {
+        // Гасим таймер дебаунса записи: иначе отложенный сброс уже удалённого набора
+        // задач воссоздал бы временный каталог после теста.
+        _sut.Dispose();
         if (Directory.Exists(_dir)) Directory.Delete(_dir, recursive: true);
     }
 
@@ -195,6 +198,10 @@ public class TaskManagerTests : IDisposable
     {
         var task = _sut.Create("proj-1", "user-1", new CreateTaskRequest("выживу рестарт",
             DueDate: "2026-08-01", ReminderMinutes: 15));
+
+        // Запись стора отложена дебаунсом — досбрасываем явно, чтобы «рестарт» увидел
+        // задачу детерминированно (ровно это делает остановка приложения)
+        _sut.Flush();
 
         // «Рестарт сервера»: новый менеджер с тем же DataPath
         var reloaded = new TaskManager(BuildConfig(_dir)).GetById(task.Id);
@@ -497,7 +504,8 @@ public class TaskManagerTests : IDisposable
         task.WorktreePath.Should().Be(Wt);
         task.WorktreeBranch.Should().Be("wt/feature-x");
 
-        // Переживает рестарт (поле в data/tasks.json)
+        // Переживает рестарт (поле в data/tasks.json); Flush — из-за дебаунса записи
+        _sut.Flush();
         new TaskManager(BuildConfig(_dir)).GetById(task.Id)!.WorktreePath.Should().Be(Wt);
     }
 

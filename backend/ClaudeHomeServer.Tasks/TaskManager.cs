@@ -1,15 +1,65 @@
 using System.Collections.Concurrent;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 
 namespace ClaudeHomeServer.Services.Tasks;
 
 // Задачи: in-memory + data/tasks.json (по образцу ProjectManager)
-public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusReader
+public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusReader, IDisposable
 {
     private readonly ConcurrentDictionary<string, TaskItem> _tasks = new();
     private readonly string _storePath;
     private readonly Lock _saveLock = new();
+
+    /// <summary>
+    /// Формат записи ТОЛЬКО этого стора. <see cref="JsonFileStore"/> общий для всех сторов,
+    /// поэтому опции передаются точечно в <c>JsonFileStore.Save</c> отсюда, а его дефолт
+    /// (и, значит, формат остальных сторов) не меняется.
+    ///
+    /// Что даёт: у дефолтного энкодера System.Text.Json любой не-ASCII символ уезжает в
+    /// <c>\uXXXX</c> — кириллическая буква занимает 6 байт вместо 2 в UTF-8. Задачи почти
+    /// целиком состоят из русского текста (заголовок, описание, итог), и на проде это
+    /// давало 56 МБ файла при ~18 МБ полезных данных. Каждая запись стора — полная
+    /// пересериализация, так что лишние байты — это ещё и лишние секунды.
+    ///
+    /// <c>UnsafeRelaxedJsonEscaping</c> здесь безопасен: файл читает только
+    /// System.Text.Json, ни в HTML, ни в JS он не встраивается (наружу задачи уходят
+    /// сериализатором ASP.NET со своими опциями). «Unsafe» в имени — ровно про
+    /// HTML-контекст, которого у файлового стора нет.
+    ///
+    /// <c>WriteIndented = false</c> выставлен явно, хотя он и совпадает с дефолтом:
+    /// формат стора — осознанное решение, а не побочный эффект чужого дефолта.
+    /// </summary>
+    private static readonly JsonSerializerOptions SaveOptions = new()
+    {
+        WriteIndented = false,
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
+
+    /// <summary>
+    /// Окно дебаунса записи стора по умолчанию. Переопределяется ключом
+    /// <c>Tasks:SaveDebounceMs</c>; 0 и меньше — таймер не заводится вовсе и запись идёт
+    /// синхронно, как раньше (нужно тестам и как аварийный откат поведения).
+    ///
+    /// Почему секунда: типичная нагрузка — пачка изменений одной задачи подряд
+    /// (создание → привязка сессии → статус → подзадачи → итог), она укладывается в
+    /// доли секунды и схлопывается в ОДНУ запись вместо пяти. При этом потолок
+    /// «протухания» файла на диске — 1 с, что на порядок меньше уже принятых в продукте
+    /// 30 с автосохранения сессий. Больше секунды брать незачем: выигрыш от схлопывания
+    /// дальше почти не растёт, а окно потери при НЕштатной смерти процесса растёт линейно
+    /// (штатная остановка сбрасывает всё, см. <see cref="Flush"/>).
+    /// </summary>
+    private static readonly TimeSpan DefaultSaveDebounce = TimeSpan.FromMilliseconds(1000);
+    private readonly TimeSpan _saveDebounce;
+    // null — режим синхронной записи (Tasks:SaveDebounceMs <= 0)
+    private readonly Timer? _saveTimer;
+    // Отдельный короткий лок на «грязный» флаг: брать под ним _saveLock нельзя, обратный
+    // порядок (сначала _saveLock, потом _dirtyLock) — единственный разрешённый.
+    private readonly Lock _dirtyLock = new();
+    private bool _dirty;
+    private bool _timerArmed;
+    private bool _disposed;
     private readonly IProjectEventLogService? _events;
     private readonly ITaskNotificationDispatcher? _notif;
     // Узкий шов чтения персоны по id (Core): Tasks нужно только имя для лога
@@ -30,6 +80,13 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         var dataDir = Path.GetDirectoryName(
             config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))!;
         _storePath = Path.Combine(dataDir, "tasks.json");
+        _saveDebounce = int.TryParse(config["Tasks:SaveDebounceMs"], out var ms)
+            ? TimeSpan.FromMilliseconds(ms)
+            : DefaultSaveDebounce;
+        // Таймер одноразовый: заводится в Infinite и взводится каждый раз вручную из
+        // ScheduleSave — периодический тик впустую будил бы процесс при простое.
+        if (_saveDebounce > TimeSpan.Zero)
+            _saveTimer = new Timer(_ => OnSaveTimer(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         Load();
         // Раньше здесь конструктор ставил СТАТИЧЕСКИЕ резолверы Session (ParentSessionId/TaskDone).
         // Снят: вычисляемые «связи» сессии теперь считает SessionTaskLinks (Core) поверх
@@ -142,7 +199,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         DefectRules.EnsureNotClosedAtCreate(task, targetColumn);
         DefectRules.EnsureReproOnReview(task, targetColumn);
         _tasks[task.Id] = task;
-        Save();
+        ScheduleSave();
         LogTask(task, ProjectEventTypes.TaskCreated, $"Создана задача «{task.Title}»");
         return task;
     }
@@ -353,7 +410,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         // Инвариант «worktree только у проектной задачи» — после смены проекта выше
         NormalizeWorktree(task);
         task.UpdatedAt = DateTime.UtcNow;
-        Save();
+        ScheduleSave();
         // Завершение задачи фиксируем в логе (переход в Done — заметное командное событие)
         // и поднимаем сигнал D для join-а с сигналом R (конец хода) — ровно один раз на переход
         if (task.Status == TaskItemStatus.Done && statusBefore != TaskItemStatus.Done)
@@ -408,7 +465,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             Repro = completed.Repro,
         };
         _tasks[task.Id] = task;
-        Save();
+        ScheduleSave();
         LogTask(task, ProjectEventTypes.TaskSpawned, $"Создан следующий экземпляр: «{task.Title}»");
         // proactive-уведомление через единый NotificationService (②-2.1) — персистится в центре уведомлений
         if (!string.IsNullOrEmpty(task.PersonaId) && !string.IsNullOrEmpty(task.OwnerId))
@@ -429,7 +486,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         var task = _tasks.GetValueOrDefault(id);
         if (task is null) return null;
         task.ReminderSentAt = atUtc;
-        Save();
+        ScheduleSave();
         return task;
     }
 
@@ -452,7 +509,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         task.ExecutorStaleAlertedAt = null;
         if (task.Status == TaskItemStatus.Todo) task.Status = TaskItemStatus.InProgress;
         task.UpdatedAt = DateTime.UtcNow;
-        Save();
+        ScheduleSave();
         return task;
     }
 
@@ -463,7 +520,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         if (task is null) return null;
         task.ClaudeResult = result;
         task.UpdatedAt = DateTime.UtcNow;
-        Save();
+        ScheduleSave();
         return task;
     }
 
@@ -481,7 +538,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         task.ExecutorStoppedAt = atUtc;
         task.ExecutorStopReason = reason;
         task.UpdatedAt = DateTime.UtcNow;
-        Save();
+        ScheduleSave();
         return task;
     }
 
@@ -497,7 +554,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         if (task is null) return task;
         task.DroppedByHumanAt = atUtc;
         task.UpdatedAt = DateTime.UtcNow;
-        Save();
+        ScheduleSave();
         return task;
     }
 
@@ -510,7 +567,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         var task = _tasks.GetValueOrDefault(id);
         if (task is null) return null;
         task.ExecutorNudgedAt = atUtc;
-        Save();
+        ScheduleSave();
         return task;
     }
 
@@ -519,7 +576,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         var task = _tasks.GetValueOrDefault(id);
         if (task is null) return null;
         task.ExecutorStaleAlertedAt = atUtc;
-        Save();
+        ScheduleSave();
         return task;
     }
 
@@ -539,14 +596,14 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             task.CompletionDelivered = true;
             claimed = true;
         }
-        Save();
+        ScheduleSave();
         return claimed;
     }
 
     public bool Delete(string id)
     {
         if (!_tasks.TryRemove(id, out var task)) return false;
-        Save();
+        ScheduleSave();
         LogTask(task, ProjectEventTypes.TaskDeleted, $"Удалена задача «{task.Title}»");
         return true;
     }
@@ -557,12 +614,16 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         var ids = _tasks.Values.Where(t => t.ProjectId == projectId).Select(t => t.Id).ToList();
         foreach (var id in ids)
             _tasks.TryRemove(id, out _);
-        if (ids.Count > 0) Save();
+        if (ids.Count > 0) ScheduleSave();
         return ids;
     }
 
     private void Load()
     {
+        // Опции чтения НЕ трогаем и энкодер сюда не тянем: он влияет только на запись.
+        // Файл, написанный прежним форматом (с отступами и \uXXXX), — валидный JSON, и
+        // этот же парсер читает его без единой правки. Миграции формата нет и не нужно:
+        // первая же запись перепишет файл компактно.
         var list = JsonFileStore.Load<List<TaskItem>>(_storePath,
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
         if (list is null) return;
@@ -587,15 +648,79 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
                 unset[i].Order = baseOrder + (i + 1) * 1000;
             changed = true;
         }
-        if (changed) Save();
+        if (changed) ScheduleSave();
     }
 
-    private void Save()
+    // Пометить стор изменённым. Файл пишется не сразу: изменения копятся, а запись
+    // случается не чаще раза в _saveDebounce (см. DefaultSaveDebounce). Пачка правок
+    // одной задачи подряд схлопывается в одну пересериализацию файла целиком.
+    // При _saveDebounce <= 0 (Tasks:SaveDebounceMs=0) пишем синхронно, как раньше.
+    private void ScheduleSave()
+    {
+        bool writeNow;
+        lock (_dirtyLock)
+        {
+            _dirty = true;
+            // После Dispose таймера, который донесёт правку до диска, уже нет — пишем сами.
+            writeNow = _saveTimer is null || _disposed;
+            if (!writeNow)
+            {
+                // Таймер уже взведён — эта правка уедет в тот же сброс. Перевзводить нельзя:
+                // непрерывный поток правок откладывал бы запись бесконечно.
+                if (_timerArmed) return;
+                _timerArmed = true;
+                _saveTimer!.Change(_saveDebounce, Timeout.InfiniteTimeSpan);
+            }
+        }
+        if (writeNow) Flush();
+    }
+
+    private void OnSaveTimer()
+    {
+        lock (_dirtyLock) _timerArmed = false;
+        // Исключение из колбэка таймера некому поймать — оно уронит процесс. Стор не
+        // настолько важен: логируем и ждём следующей правки (она взведёт таймер заново).
+        try { Flush(); }
+        catch (Exception ex) { Console.Error.WriteLine($"[TaskManager] не удалось сохранить {_storePath}: {ex.Message}"); }
+    }
+
+    /// <summary>
+    /// Записать накопленные изменения немедленно. Идемпотентна: без несохранённых
+    /// изменений ничего не делает. Нужна там, где состояние на диске обязано быть
+    /// актуальным прямо сейчас: остановка приложения (<see cref="Dispose"/> и хук
+    /// ApplicationStopping в Program.cs) и тесты, которые читают файл сразу после операции.
+    /// </summary>
+    public void Flush()
     {
         lock (_saveLock)
         {
-            JsonFileStore.Save(_storePath, _tasks.Values.ToList());
+            // Флаг гасим ДО снимка: правка, приехавшая в этот зазор, в худшем случае
+            // получит лишнюю запись следом — но не потеряется.
+            lock (_dirtyLock)
+            {
+                if (!_dirty) return;
+                _dirty = false;
+            }
+            SaveNow();
         }
+    }
+
+    // Вызывать только под _saveLock.
+    private void SaveNow() => JsonFileStore.Save(_storePath, _tasks.Values.ToList(), SaveOptions);
+
+    // Гасим таймер и досбрасываем несохранённое. Зовётся контейнером DI при остановке
+    // хоста; двойной вызов безопасен (форвардер ITaskStatusReader зарегистрирован
+    // фабрикой, и контейнер отслеживает тот же экземпляр вторично).
+    public void Dispose()
+    {
+        lock (_dirtyLock)
+        {
+            if (_disposed) return;
+            _disposed = true;
+        }
+        _saveTimer?.Dispose();
+        Flush();
+        GC.SuppressFinalize(this);
     }
 
     // Дописывание позднего доклада исполнителя к пометке снятия человеком (волна 1

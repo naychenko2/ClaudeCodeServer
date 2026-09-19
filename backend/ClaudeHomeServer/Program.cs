@@ -2013,6 +2013,11 @@ app.MapHub<ClaudeHomeServer.Services.Desktop.DeviceHub>("/hubs/devices");
 var shutdownSessions = app.Services.GetRequiredService<SessionManager>();
 var shutdownTerminals = app.Services.GetRequiredService<TerminalService>();
 var shutdownDevServers = app.Services.GetRequiredService<DevServerService>();
+// Стор задач пишется с дебаунсом (TaskManager.ScheduleSave) — несохранённое досбрасываем
+// руками. Dispose контейнера сделал бы то же самое, но он случается ПОСЛЕ остановки хоста,
+// а терять правки при штатной остановке нельзя даже в окне между двумя фазами.
+// GetService, а не GetRequiredService: подсистема задач отключаемая (Subsystems:tasks).
+var shutdownTasks = app.Services.GetService<ClaudeHomeServer.Services.Tasks.TaskManager>();
 
 app.Lifetime.ApplicationStopping.Register(() =>
 {
@@ -2023,6 +2028,7 @@ app.Lifetime.ApplicationStopping.Register(() =>
         catch (Exception ex) { Console.Error.WriteLine($"Shutdown: {what} — {ex.Message}"); }
     }
 
+    if (shutdownTasks is not null) Safe(shutdownTasks.Flush, "стор задач");
     Safe(shutdownSessions.KillAllProcesses, "процессы claude");
     Safe(shutdownTerminals.Dispose, "терминалы");
     Safe(shutdownDevServers.Dispose, "dev-серверы");

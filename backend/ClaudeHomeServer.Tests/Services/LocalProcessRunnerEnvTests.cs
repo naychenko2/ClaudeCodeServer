@@ -49,7 +49,7 @@ public class LocalProcessRunnerEnvTests
     {
         using var _ = SystemEnv(key, "https://чужой-эндпоинт");
 
-        var psi = LocalProcessRunner.BuildStartInfo(Spec(clear: LlmProviderRegistry.ProviderEnvKeys));
+        var psi = LocalProcessRunner.BuildStartInfoOnly(Spec(clear: LlmProviderRegistry.ProviderEnvKeys));
 
         psi.Environment.ContainsKey(key).Should().BeFalse(
             $"{key} задан на машине, но маршрут хода определяет сервер, а не окружение");
@@ -63,7 +63,7 @@ public class LocalProcessRunnerEnvTests
         // и отвалится всё.
         using var _ = SystemEnv("CLAUDE_CODE_OAUTH_TOKEN", "токен-подписки");
 
-        var psi = LocalProcessRunner.BuildStartInfo(Spec(clear: LlmProviderRegistry.ProviderEnvKeys));
+        var psi = LocalProcessRunner.BuildStartInfoOnly(Spec(clear: LlmProviderRegistry.ProviderEnvKeys));
 
         psi.Environment.Should().ContainKey("CLAUDE_CODE_OAUTH_TOKEN");
     }
@@ -75,7 +75,7 @@ public class LocalProcessRunnerEnvTests
         // до его эндпоинта, даже если та же переменная задана на машине.
         using var _ = SystemEnv("ANTHROPIC_BASE_URL", "https://системный");
 
-        var psi = LocalProcessRunner.BuildStartInfo(Spec(
+        var psi = LocalProcessRunner.BuildStartInfoOnly(Spec(
             clear: LlmProviderRegistry.ProviderEnvKeys,
             env: new Dictionary<string, string> { ["ANTHROPIC_BASE_URL"] = "https://api.z.ai/api/anthropic" }));
 
@@ -87,7 +87,7 @@ public class LocalProcessRunnerEnvTests
     {
         using var _ = SystemEnv("ANTHROPIC_BASE_URL", "https://системный");
 
-        var psi = LocalProcessRunner.BuildStartInfo(Spec(clear: null));
+        var psi = LocalProcessRunner.BuildStartInfoOnly(Spec(clear: null));
 
         psi.Environment["ANTHROPIC_BASE_URL"].Should().Be("https://системный");
     }

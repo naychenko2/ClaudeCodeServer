@@ -88,6 +88,16 @@ ClaudeHomeServer.Services.Diagnostics.FileLog.Attach(builder.Configuration, buil
 // принадлежит БОЕВОМУ серверу — чистка убила бы его MCP-серверы и идущие ходы.
 if (!inspectionMode) ProcessRegistry.Initialize();
 
+// Изоляция процессов local-среды по памяти (инцидент 2026-09-19: systemd-oomd дважды
+// убил прод ccs.service целиком, потому что сборки агентских CLI живут в cgroup прода).
+// Опции — секция Execution:Isolation (Enabled/Slice/MemoryHigh/MemoryMax). Дефолт
+// выключено: на Windows и в dev-контейнере user-шины нет, и там обёртка fail-open.
+// Выставить в appsettings.Local.json:
+//   "Execution": { "Isolation": { "Enabled": true, "Slice": "ccs-agents.slice",
+//     "MemoryHigh": "12G", "MemoryMax": "16G" } }
+ClaudeHomeServer.Services.Execution.IsolationOptions.Instance =
+    ClaudeHomeServer.Services.Execution.IsolationOptions.FromConfig(builder.Configuration);
+
 // Признак «сервер работает на этом каталоге data»: держится весь uptime и проверяется
 // восстановлением. Живой сервер во время restore продолжил бы писать в перемещённый
 // каталог и пересоздал бы data под собой.

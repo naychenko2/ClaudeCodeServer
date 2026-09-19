@@ -40,7 +40,7 @@ public class WatchdogCommandRunnerTests : IDisposable
     {
         // Суть инцидента: ArgumentList экранировал бы " как \" — без RawArguments строка
         // с вложенными кавычками до целевой команды не доезжает
-        var psi = LocalProcessRunner.BuildStartInfo(new ProcessSpec
+        var psi = LocalProcessRunner.BuildStartInfoOnly(new ProcessSpec
         {
             FileName = "cmd.exe",
             RawArguments = WatchdogCommandRunner.WindowsCmdArguments(

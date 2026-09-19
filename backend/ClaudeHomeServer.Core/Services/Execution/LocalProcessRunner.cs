@@ -16,7 +16,11 @@ public sealed class LocalProcessRunner : IProcessLauncher
 
     public Process Start(ProcessSpec spec)
     {
-        var psi = BuildStartInfo(spec);
+        var options = IsolationOptions.Instance;
+        // Резолв systemd-run по PATH — только при включённой изоляции: выключенная не платит
+        // ни одним обращением к диску, а BuildStartInfo остаётся чистой функцией от параметров.
+        var systemdRun = options.Enabled && !TargetIsWindows ? ResolveSystemdRunPath(options) : null;
+        var (psi, _) = BuildStartInfo(spec, options, TargetIsWindows, systemdRun);
         var process = new Process { StartInfo = psi, EnableRaisingEvents = spec.EnableRaisingEvents };
         if (!process.Start())
             throw new InvalidOperationException($"Не удалось запустить {spec.FileName}");
@@ -38,19 +42,58 @@ public sealed class LocalProcessRunner : IProcessLauncher
         //   остаётся «голой», и верхней оценки хватает: запас на типичном наборе аргументов
         //   остаётся положительным (проверено в DockerProcessRunnerCmdlineEstimationTests
         //   и LocalProcessRunnerEnvTests на живой сборке .NET).
-        var cliPath = ExecutableResolver.ResolveExecutable(spec.FileName);
+        //   Обёртка systemd-run (изоляция включена, не Windows, systemd-run найден): FileName
+        //   становится путь к systemd-run, а exe уезжает в ArgumentList после флагов обёртки
+        //   и `--`. Проверку user-шины оценка не повторяет — при её отсутствии обёртки не будет,
+        //   и оценка выйдет завышенной, а верхней границе это можно.
+        var options = IsolationOptions.Instance;
+        var systemdRun = options.Enabled && !TargetIsWindows && spec.RawArguments is null
+            ? ResolveSystemdRunPath(options)
+            : null;
+        return EstimateCommandLineLength(spec, options, systemdRun);
+    }
+
+    // Чистая часть оценки: systemdRun != null означает «обёртка будет».
+    internal static int EstimateCommandLineLength(ProcessSpec spec, IsolationOptions options, string? systemdRun)
+    {
+        var exePath = ExecutableResolver.ResolveExecutable(spec.FileName);
         if (spec.RawArguments is { } raw)
-            return cliPath.Length + 1 + raw.Length;
-        var total = cliPath.Length;
+            return exePath.Length + 1 + raw.Length;
+        int total;
+        if (options.Enabled && !string.IsNullOrEmpty(systemdRun))
+        {
+            total = systemdRun.Length + CmdlineEstimate.ArgCost(exePath);
+            foreach (var a in WrapperArgs(options)) total += CmdlineEstimate.ArgCost(a);
+        }
+        else total = exePath.Length;
         foreach (var a in spec.Args) total += CmdlineEstimate.ArgCost(a);
         return total;
     }
 
-    // Сборка ProcessStartInfo вынесена из Start, чтобы правила окружения (что наследуем,
-    // что выкидываем) можно было проверить тестом, не запуская процессов: сам запуск
-    // непереносим между Windows и linux-раннером CI.
-    public static ProcessStartInfo BuildStartInfo(ProcessSpec spec)
+    // Изоляция процессов по памяти (инцидент 2026-09-19: systemd-oomd дважды убил весь
+    // ccs.service, потому что сборки агентов живут в cgroup прода). При включённой изоляции
+    // на не-Windows процесс запускается как
+    //   systemd-run --user --scope --quiet --collect --slice=… --property=MemoryHigh=…
+    //     --property=MemoryMax=… -- <exe> <args…>
+    // и оказывается в …/ccs-agents.slice/run-p<PID>-….scope — вне ccs.service; при нехватке
+    // памяти умирает scope агента, а не прод. systemd-run --scope исполняет команду в своём же
+    // процессе, поэтому PID тот же: Kill(entireProcessTree) и interrupt работают как раньше,
+    // stdin/stdout идут насквозь, окружение psi.Environment (ClearEnv → Env) доезжает до
+    // команды (проверено на прод-хосте).
+    //
+    // targetIsWindows и systemdRunPath — параметры, а не чтение OperatingSystem/PATH внутри:
+    // решение «оборачивать или нет» проверяется тестом на любой ОС. systemdRunPath — уже
+    // разрешённый путь (null — не найден); резолвит его Start.
+    //
+    // reason: null — обёртка применена; «no-isolation» — изоляция выключена или Windows;
+    // иначе — текст причины fail-open (warning печатается один раз за процесс).
+    public static (ProcessStartInfo psi, string? reason) BuildStartInfo(
+        ProcessSpec spec,
+        IsolationOptions? options = null,
+        bool targetIsWindows = false,
+        string? systemdRunPath = null)
     {
+        options ??= IsolationOptions.Instance;
         var psi = new ProcessStartInfo
         {
             FileName = ExecutableResolver.ResolveExecutable(spec.FileName),
@@ -80,7 +123,102 @@ public sealed class LocalProcessRunner : IProcessLauncher
         if (spec.Env is not null)
             foreach (var (k, v) in spec.Env) psi.Environment[k] = v;
 
-        return psi;
+        if (!options.Enabled || targetIsWindows) return (psi, "no-isolation");
+
+        // Fail-open: обёртку не применить — запускаем как раньше, причину пишем в лог один раз
+        string? reason = null;
+        if (spec.RawArguments is not null)
+            reason = "задан RawArguments (механизм Windows-cmd, в список аргументов не заворачивается)";
+        else if (string.IsNullOrEmpty(systemdRunPath))
+            reason = "systemd-run не найден в PATH";
+        else if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR"))
+                 && string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DBUS_SESSION_BUS_ADDRESS")))
+            reason = "нет user-шины (XDG_RUNTIME_DIR и DBUS_SESSION_BUS_ADDRESS пусты)";
+        if (reason is not null)
+        {
+            WarnIsolationOnce(reason);
+            return (psi, reason);
+        }
+
+        // Висящие узлы MSBuild и VBCSCompiler держат гигабайты между сборками. MSBuild читает
+        // переменные окружения как свойства; явный spec.Env не перебиваем.
+        foreach (var (k, v) in BuildIsolationEnv)
+            psi.Environment.TryAdd(k, v);
+
+        var exeArgs = psi.ArgumentList.ToList();
+        psi.ArgumentList.Clear();
+        foreach (var a in WrapperArgs(options)) psi.ArgumentList.Add(a);
+        psi.ArgumentList.Add(psi.FileName);
+        foreach (var a in exeArgs) psi.ArgumentList.Add(a);
+        psi.FileName = systemdRunPath!;
+        return (psi, null);
+    }
+
+    // Только psi — для вызывающих, которым причина решения не нужна.
+    public static ProcessStartInfo BuildStartInfoOnly(
+        ProcessSpec spec,
+        IsolationOptions? options = null,
+        bool targetIsWindows = false,
+        string? systemdRunPath = null) =>
+        BuildStartInfo(spec, options, targetIsWindows, systemdRunPath).psi;
+
+    // Флаги systemd-run до exe, заканчиваются `--`. Единственный источник и для сборки
+    // запуска, и для оценки длины командной строки — иначе они разъедутся.
+    // Свойства — длинной формой --property=…: короткое «-p X» одним элементом argv getopt
+    // разобрал бы как значение с ведущим пробелом.
+    internal static IEnumerable<string> WrapperArgs(IsolationOptions options)
+    {
+        yield return "--user";
+        yield return "--scope";
+        yield return "--quiet";
+        yield return "--collect";
+        if (!string.IsNullOrWhiteSpace(options.Slice))
+            yield return $"--slice={options.Slice}";
+        if (!string.IsNullOrWhiteSpace(options.MemoryHigh))
+            yield return $"--property=MemoryHigh={options.MemoryHigh}";
+        if (!string.IsNullOrWhiteSpace(options.MemoryMax))
+            yield return $"--property=MemoryMax={options.MemoryMax}";
+        yield return "--";
+    }
+
+    internal static readonly (string Key, string Value)[] BuildIsolationEnv =
+    [
+        ("MSBUILDDISABLENODEREUSE", "1"),
+        ("DOTNET_CLI_USE_MSBUILD_SERVER", "0"),
+        ("UseSharedCompilation", "false"),
+    ];
+
+    // Путь к systemd-run: явный из конфига (Execution:Isolation:SystemdRunPath) или поиск по PATH.
+    public static string? ResolveSystemdRunPath(IsolationOptions options) =>
+        !string.IsNullOrWhiteSpace(options.SystemdRunPath)
+            ? options.SystemdRunPath
+            : FindSystemdRun(Environment.GetEnvironmentVariable("PATH"));
+
+    internal static string? FindSystemdRun(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) return null;
+        foreach (var dir in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        {
+            try
+            {
+                var full = Path.Combine(dir, "systemd-run");
+                if (File.Exists(full)) return full;
+            }
+            catch (ArgumentException) { /* мусорная запись в PATH */ }
+        }
+        return null;
+    }
+
+    // Изоляция включена, но обёртка не применена: без этой строки «oomd снова убил прод»
+    // не объяснить. Один раз на причину за жизнь процесса — иначе строка на каждом запуске.
+    private static readonly HashSet<string> _isolationWarnings = [];
+    private static void WarnIsolationOnce(string reason)
+    {
+        lock (_isolationWarnings)
+        {
+            if (!_isolationWarnings.Add(reason)) return;
+        }
+        Console.WriteLine($"[exec] изоляция процессов по памяти включена, но не применена: {reason}");
     }
 
     /// <summary>

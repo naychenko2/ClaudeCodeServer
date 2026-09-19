@@ -18,6 +18,16 @@
   OneShotClaudeRunner, ModelCatalogService, TerminalService, DevServerService,
   SkillsCliService) идут через него; системные one-shot (changelog, каталог моделей) —
   всегда local.
+- **Изоляция local-процессов по памяти** (секция `Execution:Isolation`, по умолчанию выключена) —
+  после инцидента 2026-09-19 (systemd-oomd дважды убил весь `ccs.service`: сборки агентов жили
+  в cgroup прода). На не-Windows `LocalProcessRunner` запускает процесс как
+  `systemd-run --user --scope --quiet --collect --slice=<Slice> --property=MemoryHigh=… --property=MemoryMax=… -- <exe> <args…>`:
+  scope оказывается вне `ccs.service`, и при нехватке памяти умирает он, а не прод. PID тот же,
+  поэтому `Kill` и interrupt не меняются. Fail-open с одним warning за процесс: нет `systemd-run`,
+  нет user-шины, задан `RawArguments`. При включённой изоляции в окружение добавляются
+  `MSBUILDDISABLENODEREUSE=1`, `DOTNET_CLI_USE_MSBUILD_SERVER=0`, `UseSharedCompilation=false`
+  (явный `spec.Env` сильнее). Оценка длины командной строки учитывает обёртку. `DockerProcessRunner`
+  не затронут.
 - **Пути** — `IPathMapper`: бэкенд ВСЕГДА работает с хостовыми путями (projects.json
   хранит `C:\…`), а процессы container-юзера — с контейнерными; перевод в момент
   запуска (`DockerPathMapper`, аналог SafeJoin — путь вне монтирований → ошибка).

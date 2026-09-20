@@ -272,7 +272,7 @@ public class TaskExecutionService
         await _broadcaster.ToOwner(task.OwnerId, new TaskChangedMessage("updated", updated));
 
         var prompt = BuildPrompt(updated, persona, ResolveTierAliases(task.OwnerId),
-            ResolveCategoryProfilesPath(task));
+            ResolveCategoryProfilesPath(task), ResolveRulesTemplate(session.Id, task.OwnerId));
         // Обогащение контекста семантически близкими заметками
         var notesBlock = await BuildNotesContextAsync(updated);
         prompt += notesBlock;
@@ -353,6 +353,22 @@ public class TaskExecutionService
         return runtimePath;
     }
 
+    // Шаблон правил постановки для этой задачи. Корень берём у сессии-исполнителя
+    // (GetChatRoot) — она уже создана к моменту сборки промпта, и её EffectiveRoot
+    // учитывает worktree задачи: правка правил в ветке видна сразу, без выкатки.
+    // Путь ХОСТОВЫЙ и читает его бэкенд, а не процесс исполнителя, — перевод в среду
+    // владельца здесь не нужен (в отличие от ссылки на справочник категорий).
+    private string? ResolveRulesTemplate(string sessionId, string? ownerId)
+    {
+        string? root = null;
+        if (ownerId is not null)
+        {
+            try { root = _sessions.GetChatRoot(sessionId, ownerId); }
+            catch (Exception ex) { _log.LogDebug(ex, "Корень чата {Session} не определён — шаблон правил только серверный", sessionId); }
+        }
+        return ReadRulesTemplate(root);
+    }
+
     // null — путь вне монтирований среды (аналог SafeJoin, см. DockerPathMapper):
     // ссылаться на такой адрес нельзя, лучше не давать ссылки вовсе.
     internal static string? ToRuntimeOrNull(Execution.IPathMapper paths, string hostPath)
@@ -361,14 +377,55 @@ public class TaskExecutionService
         catch { return null; }
     }
 
+    // Шаблон статичных блоков постановки (ПРАВИЛА + ДЕЛЕГИРОВАНИЕ). Вынесен из кода, чтобы
+    // правка текста не требовала пересборки и выкатки: цепочка резолва как у карты BareMode
+    // (ClaudeSession.ResolvePromptPath) — файл в проекте перебивает серверный дефолт рядом
+    // с exe. Шаблон не найден/не читается — работает встроенный фолбэк ниже, постановка
+    // никогда не остаётся без правил.
+    internal const string RulesTemplateFileName = "task-executor-rules.md";
+
+    // Плейсхолдеры шаблона: строка уровней моделей владельца и ссылка на справочник
+    // категорий. Оба необязательны — пустое значение убирает строку целиком, а не
+    // оставляет висящий заголовок без содержимого.
+    private const string TierLevelsPlaceholder = "{{TIER_LEVELS}}";
+    private const string CategoryProfilesPlaceholder = "{{CATEGORY_PROFILES}}";
+
+    /// <summary>
+    /// Текст шаблона правил: `docs/task-executor-rules.md` проекта, иначе серверный дефолт
+    /// из `SystemPrompts/` рядом с exe. null — ни одного файла нет либо чтение не удалось:
+    /// вызывающий получает встроенный текст.
+    /// </summary>
+    internal static string? ReadRulesTemplate(string? projectRoot)
+    {
+        if (!string.IsNullOrWhiteSpace(projectRoot))
+        {
+            var projectLocal = Path.Combine(projectRoot, "docs", RulesTemplateFileName);
+            if (File.Exists(projectLocal) && TryRead(projectLocal) is { } local) return local;
+        }
+        var serverDefault = Path.Combine(AppContext.BaseDirectory, "SystemPrompts", RulesTemplateFileName);
+        return File.Exists(serverDefault) ? TryRead(serverDefault) : null;
+
+        // Файл читается на КАЖДУЮ постановку — правка подхватывается без перезапуска.
+        // Сбой чтения (файл подменяют прямо сейчас, права) не должен ронять запуск задачи:
+        // молча отступаем к встроенному тексту.
+        static string? TryRead(string path)
+        {
+            try { return File.ReadAllText(path); }
+            catch (IOException) { return null; }
+            catch (UnauthorizedAccessException) { return null; }
+        }
+    }
+
     // Постановка задачи для Claude: контекст + правила ведения статуса через MCP tasks_*.
     // С персоной — структурированный 6-секционный контракт (персона-исполнитель);
     // без персоны — прежний формат (обратная совместимость).
     internal static string BuildPrompt(TaskItem task, Persona? persona = null,
-        ModelTierAliases? aliases = null, string? categoryProfilesPath = null)
+        ModelTierAliases? aliases = null, string? categoryProfilesPath = null,
+        string? rulesTemplate = null)
     {
         if (persona is not null)
-            return BuildPersonaPrompt(task, aliases ?? ModelTierAliases.None, categoryProfilesPath);
+            return BuildPersonaPrompt(task, aliases ?? ModelTierAliases.None, categoryProfilesPath,
+                rulesTemplate);
 
         var sb = new StringBuilder();
         sb.AppendLine($"Выполни задачу из трекера (id задачи: {task.Id}).");
@@ -412,7 +469,7 @@ public class TaskExecutionService
     // Секция КОНТЕКСТ идёт последней: блок заметок (BuildNotesContextAsync)
     // дописывается после и попадает в неё же.
     private static string BuildPersonaPrompt(TaskItem task, ModelTierAliases aliases,
-        string? categoryProfilesPath = null)
+        string? categoryProfilesPath = null, string? rulesTemplate = null)
     {
         var sb = new StringBuilder();
         sb.AppendLine("## ЗАДАЧА");
@@ -425,6 +482,16 @@ public class TaskExecutionService
             sb.AppendLine(task.Description);
         }
         sb.AppendLine();
+        // Блоки ПРАВИЛА и ДЕЛЕГИРОВАНИЕ приезжают шаблоном из файла (ReadRulesTemplate).
+        // Встроенный текст ниже — фолбэк на случай, когда файла нет: он обязан оставаться
+        // дословной копией шаблона, сторож RulesTemplate_СовпадаетСВстроеннымФолбэком
+        // сравнивает обе ветки байт в байт.
+        if (rulesTemplate is { } template && !string.IsNullOrWhiteSpace(template))
+        {
+            sb.AppendLine(RenderRulesTemplate(template, aliases, categoryProfilesPath));
+            AppendContextSection(sb, task);
+            return sb.ToString();
+        }
         // Секции ОЖИДАЕМЫЙ РЕЗУЛЬТАТ, ОБЯЗАТЕЛЬНО, НЕЛЬЗЯ и ИНСТРУМЕНТЫ слиты в одну:
         // они говорили об одном и том же (заверши через tasks_complete с итогом и файлами)
         // тремя разными формулировками. Содержание правил — защищённое, тронут только
@@ -475,6 +542,47 @@ public class TaskExecutionService
         // ссылку не даём вовсе, чтобы исполнитель не бился в несуществующий путь.
         if (categoryProfilesPath is not null)
             sb.AppendLine($"Профили категорий (какой уровень и как формулировать) — `{categoryProfilesPath}`.");
+        AppendContextSection(sb, task);
+        return sb.ToString();
+    }
+
+    // Подстановка плейсхолдеров шаблона. Пустое значение убирает СТРОКУ целиком: иначе
+    // в постановке остаётся пустая строка там, где у владельца нет алиасов тиров или
+    // справочник категорий недоступен.
+    private static string RenderRulesTemplate(string template, ModelTierAliases aliases,
+        string? categoryProfilesPath)
+    {
+        var levels = new List<string>(3);
+        if (aliases.Strong is { } strong) levels.Add($"сильная `{strong}`/`strong`");
+        if (aliases.Medium is { } medium) levels.Add($"средняя `{medium}`/`medium`");
+        if (aliases.Weak is { } weak) levels.Add($"слабая `{weak}`/`weak`");
+
+        var tierLine = aliases.Any
+            ? $"Уровень (`model=` в `Task` / `modelTier` в задаче): {string.Join("; ", levels)}."
+            : null;
+        var profilesLine = categoryProfilesPath is not null
+            ? $"Профили категорий (какой уровень и как формулировать) — `{categoryProfilesPath}`."
+            : null;
+
+        var rendered = ReplaceLine(template, TierLevelsPlaceholder, tierLine);
+        rendered = ReplaceLine(rendered, CategoryProfilesPlaceholder, profilesLine);
+        // Хвостовые переводы строк шаблона срезаем: разделитель перед ## КОНТЕКСТ ставит
+        // AppendContextSection, иначе пустых строк накопится сколько угодно.
+        return rendered.TrimEnd('\r', '\n');
+
+        static string ReplaceLine(string text, string placeholder, string? value)
+        {
+            if (value is not null) return text.Replace(placeholder, value);
+            // Плейсхолдер вместе со своим переводом строки — и в LF, и в CRLF-варианте
+            return text.Replace(placeholder + "\r\n", "")
+                       .Replace(placeholder + "\n", "")
+                       .Replace(placeholder, "");
+        }
+    }
+
+    // Секция КОНТЕКСТ — общая для обеих веток сборки (шаблон и встроенный фолбэк).
+    private static void AppendContextSection(StringBuilder sb, TaskItem task)
+    {
         sb.AppendLine();
         sb.AppendLine("## КОНТЕКСТ");
         if (task.Subtasks.Count > 0)
@@ -494,7 +602,6 @@ public class TaskExecutionService
         }
         if (task.Subtasks.Count == 0 && task.LinkedFiles.Count == 0)
             sb.AppendLine("Дополнительного контекста нет.");
-        return sb.ToString();
     }
 
     // Измерить размер промпта по секциям: символы + грубая оценка токенов (~4 байта на символ UTF-8).

@@ -44,6 +44,15 @@
          /app/ (publish). Без копии флаг system-prompt-file укажет на несуществующий файл
          и ход провайдера упадёт (см. ревью 2026-09-05). -->
     <None Include="SystemPrompts\CLAUDE-local.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <!-- Шаблон блоков ПРАВИЛА и ДЕЛЕГИРОВАНИЕ постановки задач-исполнителей
+         (TaskExecutionService.ReadRulesTemplate). Читается на каждую постановку, поэтому
+         правка текста на проде не требует пересборки — достаточно заменить файл. Нет файла
+         — работает встроенный фолбэк в коде, постановка не остаётся без правил. -->
+    <None Include="SystemPrompts\task-executor-rules.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <!-- Блок «ПРАВИЛА» постановки задачи-исполнителю (TaskExecutionService.ResolveExecutorRules):
+         серверный дефолт, который перебивается docs/task-executor-rules.md в корне проекта задачи.
+         Читается при каждой сборке промпта — правка текста не требует ни кода, ни выкатки. -->
+    <None Include="SystemPrompts\task-executor-rules.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\..\mcp\**\*" LinkBase="mcp" CopyToPublishDirectory="PreserveNewest" />
     <!-- __tests__ исключаем: Node-хёрнессы не должны попадать в production-артефакт,
          их место в репозитории для локального/CI-прогона -->

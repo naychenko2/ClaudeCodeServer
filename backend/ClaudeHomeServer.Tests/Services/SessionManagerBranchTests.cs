@@ -446,6 +446,31 @@ public class SessionManagerBranchTests : IDisposable
         marker.SourceName.Should().Be(session.Name);
     }
 
+    // Ветка от ветки (дефект QA): у источника хвостом истории стоит его собственная плашка
+    // «Ветка от …», и при include=turn от ПОСЛЕДНЕГО хода она попадала в копию — у новой
+    // ветки оказывались две плашки, причём первая указывала на прадеда.
+    [Fact]
+    public async Task ВеткаОтВетки_ОднаПлашка_НаНепосредственныйИсточник()
+    {
+        var (session, _, _, text1, _) = await SeedBranchableChatAsync("branch-of-branch");
+
+        // A → B: ветвим от первого хода, у B история кончается плашкой «Ветка от A»
+        var b = (await _sut.BranchAsync(session.Id, TestUserId, 0, text1,
+            SessionManager.ChatBranchInclude.Turn)).Session;
+        var bHistory = await _historyService.LoadAsync(b.ClaudeSessionId!);
+        bHistory[^1].Should().BeOfType<StoredBranchedFromMessage>("затравка сценария: плашка — хвост истории B");
+
+        // B → C: тот же ход, он же последний в B — после него только плашка
+        var c = (await _sut.BranchAsync(b.Id, TestUserId, 0, text1,
+            SessionManager.ChatBranchInclude.Turn)).Session;
+
+        var cHistory = await _historyService.LoadAsync(c.ClaudeSessionId!);
+        var marker = cHistory.OfType<StoredBranchedFromMessage>().Should().ContainSingle(
+            "плашка в ветке ровно одна — унаследованная от источника не копируется").Subject;
+        marker.SourceSessionId.Should().Be(b.Id, "источник — непосредственный, а не прадед");
+        marker.SourceName.Should().Be(b.Name);
+    }
+
     // --- Новый ClaudeSessionId — не общий с оригиналом ---
 
     [Fact]

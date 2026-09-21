@@ -2624,9 +2624,13 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         }
         else
         {
+            // Граница — следующий user_message ИЛИ собственная плашка источника: когда
+            // ветвят саму ветку от её последнего хода, чужая плашка «Ветка от …» (§7 — она
+            // всегда последняя запись истории) попала бы в копию и встала бы второй рядом
+            // со свежей. Унаследованная плашка неверна: у новой ветки источник свой.
             cutAt = history.Count;
             for (var i = anchorHistoryIndex + 1; i < history.Count; i++)
-                if (history[i] is StoredUserMessage) { cutAt = i; break; }
+                if (history[i] is StoredUserMessage or StoredBranchedFromMessage) { cutAt = i; break; }
         }
 
         var branchHistory = history.Take(cutAt).ToList();

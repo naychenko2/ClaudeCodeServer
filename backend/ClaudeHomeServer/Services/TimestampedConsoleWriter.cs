@@ -28,28 +28,39 @@ namespace ClaudeHomeServer.Services;
 // собственный `lock (_lock)`: корректность держится на самом writer'е, а не на поведении Console.
 public static class TimestampedConsoleWriter
 {
+    // Признак «обёртка уже поставлена» — СОБСТВЕННЫЙ, а не вывод из типа Console.Out.
+    // Прежняя проверка `Console.Out is not TimestampWriter` не срабатывала НИ РАЗУ:
+    // Console.SetOut заворачивает переданный writer в TextWriter.Synchronized, поэтому
+    // Console.Out — всегда SyncTextWriter. Каждый вызов Enable добавлял к луковице ещё
+    // слой TimestampWriter×SyncTextWriter (в тестах хостов десятки — снятый стек показал
+    // 40 и 73 вложенных пары), а вложенные пары «свой lock + монитор SyncTextWriter»
+    // дают lock-ordering inversion между потоками — прогон вставал намертво.
+    // Interlocked, а не голый bool: хосты в тестах поднимаются параллельно.
+    private static int _enabled;
+
     public static void Enable(string? format)
     {
         if (string.IsNullOrWhiteSpace(format)) return;
+        // Флаг взводится ДО SetOut: повторный вход (в том числе из другого потока) не
+        // должен проскочить между проверкой и подменой. Сорвавшаяся подмена флаг не
+        // возвращает осознанно — консоли нет, повторять нечего.
+        if (Interlocked.Exchange(ref _enabled, 1) != 0) return;
         try
         {
-            // Повторный вызов НЕ оборачивает уже обёрнутое: тесты поднимают в одном
-            // процессе десятки хостов, каждый звал Enable → Console.Out обрастал луковицей
-            // вложенных TimestampWriter×SyncTextWriter. Вложенные пары «свой lock + монитор
-            // SyncTextWriter» дают lock-ordering inversion между потоками — на CI (stdout =
-            // узкий пайп) это приводило к дедлоку всех тестовых слотов (диагноз по full-дампу:
-            // цепочка из 8 обёрток, 6 мониторов SyncTextWriter с разными владельцами).
-            if (Console.Out is not TimestampWriter)
-            {
-                Console.SetOut(new TimestampWriter(Console.Out, format));
-                Console.SetError(new TimestampWriter(Console.Error, format));
-            }
+            Console.SetOut(new TimestampWriter(Console.Out, format));
+            Console.SetError(new TimestampWriter(Console.Error, format));
         }
         catch
         {
             // Нет консоли/права (неинтерактивный контекст) — остаётся прямой вывод без времени
         }
     }
+
+    // Только для тестов (InternalsVisibleTo): снимает признак включения, чтобы тест
+    // идемпотентности не зависел от того, звал ли Enable кто-то раньше в этом процессе
+    // (его зовёт каждый старт хоста — Program.cs). Console.Out/Error восстанавливает
+    // сам тест: обёртка их не запоминает.
+    internal static void ResetForTests() => Interlocked.Exchange(ref _enabled, 0);
 
     private sealed class TimestampWriter : TextWriter
     {

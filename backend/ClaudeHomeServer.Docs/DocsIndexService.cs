@@ -2067,25 +2067,24 @@ public sealed partial class DocsIndexService(IProjectFileGateway? files = null)
     [GeneratedRegex(@"(?<!\!)\[([^\]]*)\]\(\s*([^)\s]*)(?:\s+""[^""]*"")?\s*\)")]
     internal static partial Regex LinkRegex();
 
-    // Ограда блока кода: ``` или ~~~ (с отступом до трёх пробелов)
-    [GeneratedRegex(@"^ {0,3}(`{3,}|~{3,})")]
-    internal static partial Regex FenceRegex();
-
     internal static ParsedDocument ParseDocument(string markdown)
     {
         string? title = null;
         var headings = new List<DocHeading>();
         var links = new List<ParsedLink>();
-        var inFence = false;
+        var fence = new MarkdownFence();
 
         foreach (var raw in markdown.Split('\n'))
         {
             var line = raw.TrimEnd('\r');
 
             // Блоки кода пропускаем целиком: «# комментарий» в bash-примере — не заголовок,
-            // а markdown-ссылка в примере кода — не связь между документами
-            if (FenceRegex().IsMatch(line)) { inFence = !inFence; continue; }
-            if (inFence) continue;
+            // а markdown-ссылка в примере кода — не связь между документами.
+            // Правило забора одно на вертикаль — MarkdownFence (CommonMark), тот же, что у
+            // сканера карты: наивное «переключить флаг на любом маркере» закрывало внешний
+            // забор вложенным примером, а наш корпус — документация ПРО документацию, где
+            // вложенный пример норма
+            if (fence.Consume(line) || fence.InFence) continue;
 
             var h = HeadingRegex().Match(line);
             if (h.Success)

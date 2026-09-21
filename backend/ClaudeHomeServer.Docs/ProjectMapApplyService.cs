@@ -59,8 +59,6 @@ public sealed record MapApplyResult(
 /// </summary>
 public sealed class ProjectMapApplyService(ProjectMapScanner scanner, ILogger<ProjectMapApplyService> log)
 {
-    private const string MainMapName = "CLAUDE.md";
-
     /// <summary>
     /// Разбор байтов карты: текст и признак BOM — или false, если файл не наш.
     ///
@@ -106,7 +104,7 @@ public sealed class ProjectMapApplyService(ProjectMapScanner scanner, ILogger<Pr
     public async Task<MapApplyResult> ApplyAsync(string root, string? baseSha,
         IReadOnlyList<string> ids, CancellationToken ct = default)
     {
-        var mapPath = Path.Combine(root, MainMapName);
+        var mapPath = Path.Combine(root, ProjectMapScanner.MainMapName);
         var gate = LockFor(Path.GetFullPath(mapPath));
 
         await gate.WaitAsync(ct);

@@ -33,7 +33,7 @@ internal static partial class DocProperties
     private static partial Regex PropertyRegex();
 
     // Строка, обрывающая шапку, даже если стоит сразу за свойством: список, цитата, таблица.
-    // Заголовок и ограду кода ловят HeadingRegex/FenceRegex — они уже описаны в соседнем классе
+    // Заголовок ловит HeadingRegex соседнего класса, ограду кода — MarkdownFence из спины
     [GeneratedRegex(@"^ {0,3}(?:[-*+][ \t]|\d{1,9}[.)][ \t]|>|\|)")]
     private static partial Regex BlockBreakRegex();
 
@@ -100,6 +100,10 @@ internal static partial class DocProperties
         // Оформление шапки берётся у ПЕРВОЙ её строки: новое свойство должно встать
         // в том же виде, что и соседние, а не голой строкой посреди списка
         var marker = "";
+        // Ограда кода — тем же правилом, что и весь остальной разбор markdown вертикали
+        // (CommonMark): бэктик в info-string забора не открывает, и такая строка шапку
+        // не обрывает
+        var fence = new MarkdownFence();
 
         while (pos < markdown.Length)
         {
@@ -107,7 +111,7 @@ internal static partial class DocProperties
 
             // Пустая строка, заголовок или ограда кода — конец шапки
             if (line.Trim().Length == 0) break;
-            if (DocsIndexService.FenceRegex().IsMatch(line)) break;
+            if (fence.Consume(line)) break;
             if (DocsIndexService.HeadingRegex().IsMatch(line)) break;
 
             var m = PropertyRegex().Match(line);

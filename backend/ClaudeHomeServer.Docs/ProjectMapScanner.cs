@@ -296,7 +296,9 @@ public sealed class ProjectMapScanner(IConfiguration? config = null)
 
     // Карта проекта — то, что реально собирает продукт (ClaudeSession): корневой файл и
     // его двойник в .claude/. Личный CLAUDE.md профиля CLI в отчёт не входит — он не про проект.
-    private const string MainMapName = "CLAUDE.md";
+    // internal, а не private: имя карты — одно на вертикаль, второй такой же литерал
+    // в ProjectMapApplyService означал бы две точки правды об одном файле
+    internal const string MainMapName = "CLAUDE.md";
     // Компактная карта для BareMode: в счёт контекста не входит, но показывает, что
     // компактная версия того же проекта уже написана и цель достижима (Р4)
     private const string LocalMapPath = "docs/CLAUDE-local.md";

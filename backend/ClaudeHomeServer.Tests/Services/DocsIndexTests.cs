@@ -197,6 +197,82 @@ public class DocsIndexTests : IDisposable
         doc.Headings.Should().ContainSingle().Which.Text.Should().Be("Настоящий раздел");
     }
 
+    // Документация ПРО документацию — наш корпус целиком (ADR, планы, гайды), и вложенный
+    // пример забора там норма. Наивное «переключить флаг на любом маркере» закрывало внешний
+    // забор внутренним, и остаток примера разбирался как живой текст: заголовок из примера
+    // попадал в оглавление панели, а ссылка — в OutLinks и в Backlinks чужого документа
+    [Fact]
+    public void ВложенныйЗабор_ВнутреннийНеЗакрываетВнешний()
+    {
+        Write("""
+              # Документ
+
+              ````md
+              ```
+              ## Заголовок из примера
+              [ссылка из примера](docs/architecture.md)
+              ```
+              ````
+
+              ## Настоящий раздел
+              """, "docs", "nested-fence.md");
+        Write("# Архитектура", "docs", "architecture.md");
+
+        var entry = _svc.GetIndex(_root).Single(d => d.Path == "docs/nested-fence.md");
+        var doc = _svc.GetDoc(_root, "docs/nested-fence.md")!;
+
+        entry.Headings.Should().ContainSingle().Which.Text.Should().Be("Настоящий раздел");
+        doc.Links.Should().BeEmpty();
+        _svc.GetDoc(_root, "docs/architecture.md")!.Backlinks.Should().BeEmpty();
+    }
+
+    // Забор, закрытый маркером ДРУГОГО типа, — не закрыт: ~~~ внутри ```-примера
+    [Fact]
+    public void ЗаборДругогоТипаВнутри_НеЗакрываетОткрытый()
+    {
+        Write("""
+              # Документ
+
+              ```md
+              ~~~
+              ## Заголовок из примера
+              ~~~
+              ```
+
+              ## Настоящий раздел
+              """, "docs", "mixed-fence.md");
+
+        var entry = _svc.GetIndex(_root).Single(d => d.Path == "docs/mixed-fence.md");
+
+        entry.Headings.Should().ContainSingle().Which.Text.Should().Be("Настоящий раздел");
+    }
+
+    // Незакрытый забор от опечатки выкидывает из разбора остаток файла — и это честнее,
+    // чем разбирать пример кода как текст документа. Признака «забор не закрыт» у индекса
+    // нет (он есть у сканера карты), поэтому фиксируем само поведение
+    [Fact]
+    public void НезакрытыйЗабор_ОстатокФайлаНеРазбирается()
+    {
+        Write("""
+              # Документ
+
+              ## Раздел до забора
+
+              ```bash
+              # комментарий, а не заголовок
+              [пример ссылки](docs/architecture.md)
+
+              ## Раздел после незакрытого забора
+              """, "docs", "unclosed-fence.md");
+
+        var entry = _svc.GetIndex(_root).Single(d => d.Path == "docs/unclosed-fence.md");
+        var doc = _svc.GetDoc(_root, "docs/unclosed-fence.md")!;
+
+        entry.Title.Should().Be("Документ");
+        entry.Headings.Should().ContainSingle().Which.Text.Should().Be("Раздел до забора");
+        doc.Links.Should().BeEmpty();
+    }
+
     [Fact]
     public void Слаг_СчитаетсяОтТекстаБезРазметки()
     {

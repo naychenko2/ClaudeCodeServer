@@ -192,6 +192,9 @@ public sealed class DifyToolset(
                     var docs = await knowledge.ListDocumentsAsync(ds.Id, page, limit, keyword: keyword);
                     return Json(new
                     {
+                        // WordCount — int?: у документа в индексации Dify объём ещё не посчитан.
+                        // Уходит модели явным `"wordCount": null` (JsonOpts null не прячет) —
+                        // «неизвестно» обязано отличаться от честного нуля слов
                         data = docs.Data.Select(d => new { d.Id, d.Name, d.IndexingStatus, d.WordCount }),
                         docs.Total, docs.HasMore,
                         page,

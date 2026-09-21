@@ -12,8 +12,13 @@ public record DifyDocumentItem(
     [property: JsonPropertyName("indexing_status")] string IndexingStatus,
     // Текст ошибки индексации (документы в статусе error); у здоровых — null
     [property: JsonPropertyName("error")] string? Error = null,
-    // Объём документа в словах (для выдачи модели в MCP dify); у старых ответов — 0
-    [property: JsonPropertyName("word_count")] int WordCount = 0);
+    // Объём документа в словах (для выдачи модели в MCP dify). Именно nullable: у Dify
+    // колонка documents.word_count объявлена nullable (models/dataset.py, `Mapped[int | None]`),
+    // и сериализатор отдаёт явный `word_count: null`, пока объём не посчитан (документ в
+    // индексации). Non-nullable int тут ронял разбор ВСЕГО ответа (17 362 JsonException за
+    // четверо суток: реконсайлер и память персон не работали). null — «ещё не посчитано»,
+    // 0 — утверждение «ноль слов»; для человека и модели это разные вещи.
+    [property: JsonPropertyName("word_count")] int? WordCount = null);
 
 // DifyDocumentInfo (id/name/indexing_status) — переехал в Core/Services/Knowledge/
 // KnowledgeDtos.cs (Этап 5, волна 5): IKnowledgeIndex в Core возвращает DifyDocumentInfo.
@@ -29,6 +34,9 @@ public record DifySegmentItem(
     [property: JsonPropertyName("id")] string Id,
     [property: JsonPropertyName("position")] int Position,
     [property: JsonPropertyName("content")] string Content,
+    // Non-nullable осознанно, в отличие от DifyDocumentItem.WordCount: у сегмента колонка
+    // объявлена nullable=False (Dify, models/dataset.py) и сериализатор отдаёт `word_count: int` —
+    // null прийти неоткуда. Подтверждено логами боя: все падения разбора — только по документам.
     [property: JsonPropertyName("word_count")] int WordCount);
 
 public record DifySegmentsPage(
@@ -52,6 +60,9 @@ public record DifyDatasetListItem(
     // счётчики, дата создания, описание. У старых вызовов остаются необязательными.
     [property: JsonPropertyName("permission")] string? Permission = null,
     [property: JsonPropertyName("document_count")] int DocumentCount = 0,
+    // Тоже non-nullable: у датасета объём — не колонка, а агрегат
+    // `coalesce(sum(documents.word_count), 0)` (Dify, fields/dataset_fields.py), null не отдаётся
+    // даже у пустой базы. Дефолт 0 остаётся на случай ОТСУТСТВИЯ поля в ответе старых версий.
     [property: JsonPropertyName("word_count")] int WordCount = 0,
     [property: JsonPropertyName("created_at")] double? CreatedAt = null,
     [property: JsonPropertyName("description")] string? Description = null);

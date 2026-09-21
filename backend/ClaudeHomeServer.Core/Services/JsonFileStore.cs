@@ -5,7 +5,9 @@ using System.Text.Json;
 namespace ClaudeHomeServer.Services;
 
 // Надёжная JSON-персистентность для файловых хранилищ:
-// - чтение не теряет данные: битая запись стоит только себя, повреждённый целиком файл
+// - чтение не теряет данные: битая запись стоит только себя (уцелевшие поднимаются, а полный
+//   исходник кладётся рядом копией .partial-*.bak — первый же Save перезатёр бы файл усечённым
+//   списком, и чинить пропущенные записи было бы уже нечем), повреждённый целиком файл
 //   переименовывается в .corrupt-*.bak (а не перезатирается), состояние поднимается из
 //   прошлого .bak, и лишь когда не вышло ничего — пустое состояние с алертом наверх;
 // - запись атомарна: сериализация во временный файл + File.Move с заменой (на Windows — атомарная замена),
@@ -14,14 +16,23 @@ namespace ClaudeHomeServer.Services;
 public static class JsonFileStore
 {
     /// <summary>
-    /// Стор не прочитан вовсе: ни сам файл, ни бэкапы — подсистема стартовала с пустым состоянием.
+    /// Данные стора прочитаны не полностью. Два разных случая, различимых по
+    /// <paramref name="SkippedItems"/>: 0 — стор не прочитан вовсе (ни сам файл, ни бэкапы,
+    /// подсистема стартовала с пустым состоянием); больше нуля — частичный подъём, уцелевшие
+    /// записи живы, пропущенные остались только в копии исходника <paramref name="BackupPath"/>.
     /// </summary>
-    public sealed record DataLossAlert(string Path, string? BackupPath, string Reason);
+    public sealed record DataLossAlert(
+        string Path,
+        string? BackupPath,
+        string Reason,
+        int LoadedItems = 0,
+        int SkippedItems = 0);
 
     /// <summary>
     /// Читает и десериализует JSON. Файла нет → default. Парсинг упал — по порядку:
-    /// поэлементный разбор коллекции (битые записи пропускаются с WARN, файл остаётся на месте) →
-    /// откат на самый свежий {path}.corrupt-*.bak → default с алертом в <see cref="DataLossSink"/>.
+    /// поэлементный разбор коллекции (битые записи пропускаются с WARN, файл остаётся на месте,
+    /// полный исходник копируется в {path}.partial-{timestamp}.bak) → откат на самый свежий
+    /// {path}.corrupt-*.bak → default с алертом в <see cref="DataLossSink"/>.
     /// В последних двух случаях повреждённый файл сохраняется как {path}.corrupt-{timestamp}.bak.
     /// </summary>
     public static T? Load<T>(string path, JsonSerializerOptions? options = null, ILogger? logger = null)
@@ -38,9 +49,46 @@ public static class JsonFileStore
             // Одна битая запись из сотен не должна стоить всего стора (инцидент 19.09.2026:
             // 22 записи с null в non-nullable поле унесли все 866 сессий). Поэлементный разбор
             // включается ТОЛЬКО после провала обычного — на здоровых файлах путь чтения прежний.
-            if (json is not null && TryLoadPerItem<T>(json, options, logger, path, out var partial))
+            if (json is not null && TryLoadPerItem<T>(json, options, logger, path, out var partial, out var stats))
+            {
+                if (stats.Skipped > 0) ReportPartialLoad(path, ex, stats, logger);
                 return partial;
+            }
             return Recover<T>(path, ex, options, logger);
+        }
+    }
+
+    // Сколько записей коллекции уцелело и сколько пропущено при поэлементном разборе.
+    private readonly record struct PerItemStats(int Loaded, int Skipped);
+
+    // Частичный подъём: сам файл остаётся на месте (на этом стоит остальная логика), но рядом
+    // ложится КОПИЯ полного исходника. Без неё первый же Save — у SessionManager это автосейв
+    // через секунды — перезаписал бы файл усечённым списком, и данные пропущенных записей
+    // исчезли бы безвозвратно (19.09.2026 их чинили руками: null → false в 22 записях).
+    private static void ReportPartialLoad(string path, Exception ex, PerItemStats stats, ILogger? logger)
+    {
+        var copyPath = CopyAside(path, logger);
+        LogWarn(logger, copyPath is null
+            ? $"{path}: копию исходника сохранить не удалось — данные пропущенных записей ({stats.Skipped}) будут потеряны первым же сохранением"
+            : $"{path}: полный исходник скопирован в {copyPath}");
+        ReportDataLoss(new DataLossAlert(path, copyPath, ex.Message, stats.Loaded, stats.Skipped));
+    }
+
+    // Копия (не перенос!) исходника рядом со стором: оригинал обязан остаться на месте.
+    private static string? CopyAside(string path, ILogger? logger)
+    {
+        var stem = $"{path}.partial-{DateTime.UtcNow:yyyyMMdd-HHmmss}";
+        var copyPath = $"{stem}.bak";
+        for (var i = 2; File.Exists(copyPath); i++) copyPath = $"{stem}-{i}.bak";
+        try
+        {
+            File.Copy(path, copyPath);
+            return copyPath;
+        }
+        catch (Exception copyEx)
+        {
+            LogError(logger, copyEx, $"не удалось сохранить копию исходника как {copyPath}");
+            return null;
         }
     }
 
@@ -91,7 +139,9 @@ public static class JsonFileStore
         }
         catch
         {
-            return TryLoadPerItem(json, options, logger, file, out value);
+            // Копию бэкапа рядом не кладём и алерт не шлём: бэкап никто не перезаписывает,
+            // а о самой аварии вызывающий уже сообщил — копия и алерт нужны только стору.
+            return TryLoadPerItem(json, options, logger, file, out value, out _);
         }
     }
 
@@ -101,9 +151,11 @@ public static class JsonFileStore
     /// Не коллекция, не разбирается сам JSON или не уцелел ни один элемент — false, и вызывающий
     /// идёт прежним путём.
     /// </summary>
-    private static bool TryLoadPerItem<T>(string json, JsonSerializerOptions? options, ILogger? logger, string path, out T? value)
+    private static bool TryLoadPerItem<T>(string json, JsonSerializerOptions? options, ILogger? logger, string path,
+        out T? value, out PerItemStats stats)
     {
         value = default;
+        stats = default;
         JsonDocument doc;
         try
         {
@@ -118,17 +170,19 @@ public static class JsonFileStore
         using (doc)
         {
             var root = doc.RootElement;
-            if (root.ValueKind == JsonValueKind.Array && TryBuildList<T>(root, options, logger, path, out value))
+            if (root.ValueKind == JsonValueKind.Array && TryBuildList<T>(root, options, logger, path, out value, out stats))
                 return true;
-            if (root.ValueKind == JsonValueKind.Object && TryBuildDictionary<T>(root, options, logger, path, out value))
+            if (root.ValueKind == JsonValueKind.Object && TryBuildDictionary<T>(root, options, logger, path, out value, out stats))
                 return true;
             return false;
         }
     }
 
-    private static bool TryBuildList<T>(JsonElement root, JsonSerializerOptions? options, ILogger? logger, string path, out T? value)
+    private static bool TryBuildList<T>(JsonElement root, JsonSerializerOptions? options, ILogger? logger, string path,
+        out T? value, out PerItemStats stats)
     {
         value = default;
+        stats = default;
         var itemType = EnumerableItemType(typeof(T));
         // Собираем в List<итем>: им закрываются все формы T у вызывающих (List<X>, IList<X>,
         // IReadOnlyList<X>, IEnumerable<X>). Экзотику (массивы, HashSet) в продукте не зовут,
@@ -158,13 +212,16 @@ public static class JsonFileStore
         if (list.Count == 0) return false;
         if (skipped > 0)
             LogWarn(logger, $"{path}: поднято записей {list.Count}, пропущено битых {skipped} (файл оставлен на месте)");
+        stats = new PerItemStats(list.Count, skipped);
         value = (T)list;
         return true;
     }
 
-    private static bool TryBuildDictionary<T>(JsonElement root, JsonSerializerOptions? options, ILogger? logger, string path, out T? value)
+    private static bool TryBuildDictionary<T>(JsonElement root, JsonSerializerOptions? options, ILogger? logger, string path,
+        out T? value, out PerItemStats stats)
     {
         value = default;
+        stats = default;
         // Только Dictionary<string, V>: ключи всех словарных сторов продукта строковые,
         // а разбор ключа произвольного типа пришлось бы дублировать за System.Text.Json.
         var type = typeof(T);
@@ -190,6 +247,7 @@ public static class JsonFileStore
         if (dict.Count == 0) return false;
         if (skipped > 0)
             LogWarn(logger, $"{path}: поднято записей {dict.Count}, пропущено битых {skipped} (файл оставлен на месте)");
+        stats = new PerItemStats(dict.Count, skipped);
         value = (T)dict;
         return true;
     }

@@ -79,6 +79,71 @@ public class JsonFileStoreTests : IDisposable
         logger.Warnings.Should().Contain(m => m.Contains("пропущено битых 1"));
     }
 
+    // Файл после частичного подъёма остаётся на месте, и первый же Save (у SessionManager —
+    // автосейв через секунды) перезапишет его усечённым списком. Данные пропущенных записей
+    // обязаны сохраниться в копии рядом — иначе чинить их руками уже нечем.
+    [Fact]
+    public void Load_БитаяЗаписьВСписке_КладётРядомКопиюПолногоИсходника()
+    {
+        var path = Path.Combine(_dir, "sessions.json");
+        var source = """
+            [
+              {"Id":"a","Flag":true},
+              {"Id":"b","Flag":null},
+              {"Id":"c","Flag":false}
+            ]
+            """;
+        File.WriteAllText(path, source);
+
+        var loaded = JsonFileStore.Load<List<Record>>(path);
+
+        loaded!.Select(r => r.Id).Should().BeEquivalentTo(["a", "c"]);
+        // Сам стор не тронут — на этом стоит остальная логика чтения
+        File.ReadAllText(path).Should().Be(source);
+        var copies = Directory.GetFiles(_dir, "sessions.json.partial-*.bak");
+        copies.Should().HaveCount(1);
+        File.ReadAllText(copies[0]).Should().Be(source);
+
+        // Автосейв поверх усечённого состояния копию не задевает
+        JsonFileStore.Save(path, loaded);
+        File.ReadAllText(copies[0]).Should().Be(source);
+    }
+
+    // Частичный подъём и полная потеря лечатся по-разному, поэтому в алерте различимы:
+    // там записи живы и чинятся по копии, тут состояние пустое.
+    [Fact]
+    public void Load_ЧастичныйПодъём_АлертОтличимОтПолнойПотери()
+    {
+        var partialPath = Path.Combine(_dir, "sessions.json");
+        File.WriteAllText(partialPath, """[{"Id":"a","Flag":true},{"Id":"b","Flag":null}]""");
+        var lostPath = Path.Combine(_dir, "state.json");
+        File.WriteAllBytes(lostPath, new byte[64]);
+
+        var alerts = new List<JsonFileStore.DataLossAlert>();
+        // Сброс подписчика заодно очищает накопленное — стартуем с пустого буфера
+        JsonFileStore.DataLossSink = null;
+        JsonFileStore.DataLossSink = alerts.Add;
+        try
+        {
+            JsonFileStore.Load<List<Record>>(partialPath);
+            JsonFileStore.Load<List<Record>>(lostPath);
+        }
+        finally
+        {
+            JsonFileStore.DataLossSink = null;
+        }
+
+        var partial = alerts.Should().ContainSingle(a => a.Path == partialPath).Subject;
+        partial.SkippedItems.Should().Be(1);
+        partial.LoadedItems.Should().Be(1);
+        partial.BackupPath.Should().EndWith(".bak").And.Contain(".partial-");
+
+        var lost = alerts.Should().ContainSingle(a => a.Path == lostPath).Subject;
+        lost.SkippedItems.Should().Be(0);
+        lost.LoadedItems.Should().Be(0);
+        lost.BackupPath.Should().Contain(".corrupt-");
+    }
+
     [Fact]
     public void Load_БитаяЗаписьВСловаре_ПоднимаетОстальные()
     {

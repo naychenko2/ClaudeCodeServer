@@ -475,6 +475,9 @@ builder.Services.AddSingleton<SessionContextResolver>();
 // Документация проекта (README + docs/) для панели «Доки»: индекс, связи, поиск.
 // Кеш живёт внутри сервиса и ключуется корнем папки, поэтому singleton.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Docs.DocsIndexService>();
+// Гигиена карты проекта (CLAUDE.md): детерминированный сканер без модели, пороги —
+// из секции ProjectMap конфигурации. Состояния нет, читает файлы по запросу
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Docs.ProjectMapScanner>();
 // Применение пресета каркаса знакомства v2: только добавляет поверх живой папки,
 // отчёт по каждому шагу; зависимости-синглтоны, сам тоже stateless-синглтон
 builder.Services.AddSingleton<ProjectPresetService>();

@@ -23,9 +23,16 @@ public class TranscriptBrancherTests : IDisposable
     }
 
     // --- Синтез строк .jsonl ---
-    private static string JsonStr(string s) => "\"" + s.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+    // Переводы строк обязаны уезжать в \n: без этого многострочный текст (тик /loop,
+    // recall-префикс) разорвал бы строку .jsonl и запись перестала бы быть записью
+    private static string JsonStr(string s) => "\"" + s.Replace("\\", "\\\\").Replace("\"", "\\\"")
+        .Replace("\r", "\\r").Replace("\n", "\\n") + "\"";
     private static string UserStr(string uuid, string text) =>
         "{\"type\":\"user\",\"sessionId\":\"" + Old + "\",\"uuid\":\"" + uuid + "\",\"message\":{\"role\":\"user\",\"content\":" + JsonStr(text) + "}}";
+    // Промпт со временем записи — как пишет живой CLI (поле timestamp, ISO-8601)
+    private static string UserStrAt(string uuid, string text, string timestamp) =>
+        "{\"type\":\"user\",\"sessionId\":\"" + Old + "\",\"uuid\":\"" + uuid + "\",\"timestamp\":"
+        + JsonStr(timestamp) + ",\"message\":{\"role\":\"user\",\"content\":" + JsonStr(text) + "}}";
     private static string AsstStr(string uuid, string text) =>
         "{\"type\":\"assistant\",\"sessionId\":\"" + Old + "\",\"uuid\":\"" + uuid + "\",\"message\":{\"role\":\"assistant\",\"content\":" + JsonStr(text) + "}}";
     private static string UserArr(string uuid, string blocks) =>
@@ -261,31 +268,35 @@ public class TranscriptBrancherTests : IDisposable
     }
 
     [Fact]
-    public void НеполноеСопоставление_Отказ()
+    public void ПропущенноеЗвеноЦепочки_ЯкорьВсёРавноНайден()
     {
-        // первое (не якорное) сообщение не нашлось, якорь нашёлся — «часть сошлась» не считается
+        // Сообщение истории, которого нет в транскрипте (ход не доехал в этот файл) — штатное
+        // расхождение, а не повод отказать: задача f18e784c, чат прода 955e0ba2, где четыре
+        // таких звена подряд делали невозможным ветвление от ЛЮБОГО более позднего места.
+        var anchor = "текст промта два, длинный, с надёжным запасом значимых символов";
         var src = WriteFile("m2.jsonl",
             SysInit,
             UserStr("u1", "текст промта один с запасом символов"),
             AsstStr("a1", "ответ 1"),
-            UserStr("u2", "текст промта два с запасом символов"),
+            UserStr("u2", anchor),
             AsstStr("a2", "ответ 2"));
         var dst = Dst();
 
         var res = TranscriptBrancher.Branch(
             src,
-            ["нет такого текста в транскрипте вообще", "текст промта два с запасом символов"],
+            ["нет такого текста в транскрипте вообще", anchor],
             New, dst);
 
-        res.Ok.Should().BeFalse();
-        res.Reason.Should().Contain("неполное сопоставление");
+        res.Ok.Should().BeTrue(res.Reason);
+        res.CutLine.Should().Be(5);
     }
 
     [Fact]
-    public void НемонотонноеСопоставление_Отказ()
+    public void ЦепочкаЗадаётНижнююГраницуПоиска_ЯкорьРаньшеСоседаНеБерётся()
     {
-        // A (якорь) живёт в П3, B — в P2: первое найденное промпт-содержание
-        // «задом наперед» по файлу → границы разъезжаются
+        // Без времени цепочка задаёт нижнюю границу: якорь ищется ПОСЛЕ промпта соседа.
+        // Здесь «бета-маркер» живёт в П2, а сосед «зета-маркер» — в П3, то есть якорь
+        // раньше соседа: назад резак не смотрит и отказывает, а не режет наугад.
         var src = WriteFile("m3.jsonl",
             SysInit,
             UserStr("u1", "нейтральный промпт нулевой без следов других"),
@@ -298,11 +309,11 @@ public class TranscriptBrancherTests : IDisposable
 
         var res = TranscriptBrancher.Branch(
             src,
-            ["зета-маркер", "бета-маркер"], // якорь зета-маркер (П3), сосед бета-маркер (П2)
+            ["зета-маркер", "бета-маркер"], // якорь бета-маркер (П2), сосед зета-маркер (П3)
             New, dst);
 
         res.Ok.Should().BeFalse();
-        res.Reason.Should().Contain("монотон");
+        res.Reason.Should().Contain("не найден");
     }
 
     [Fact]
@@ -529,5 +540,239 @@ public class TranscriptBrancherTests : IDisposable
         res.AnchorTurnExcluded.Should().BeTrue();
         res.CutLine.Should().Be(3); // отступ к началу оборванного хода B (строка u2)
         File.ReadAllLines(dst).Should().HaveCount(3);
+    }
+
+    // --- Класс «насыщенный персона-чат» (задача f18e784c) ---
+    //
+    // Прежние тесты этого файла — чистые разговоры на 2–3 промптах, и все были зелёными,
+    // когда на проде ветвление работало в 20 местах из 66. Дыру закрывает корпусная фикстура
+    // с анатомией живого чата 955e0ba2 СРАЗУ: повторяющиеся дословно тики /loop, повторяющийся
+    // шаблон доклада персоны-исполнителя, повтор короткого «продолжай», recall-префикс перед
+    // текстом хода и сообщения истории, чьих промптов в транскрипте нет вовсе.
+    // Утверждение — покрытие с точными числами: ровно 10 верных границ, ровно 2 отказа,
+    // ни одного неверного среза.
+
+    private const string LoopTick =
+        "[СИСТЕМНАЯ ДИРЕКТИВА — ТИК ОЖИДАНИЯ ЦИКЛА 1/20]\nТы в фазе ожидания по своему маркеру. "
+        + "Проверь, не завершился ли делегированный шаг, и продолжай ждать.";
+    private const string ExecutorReport =
+        "Персона-исполнитель Код-ревьюер (Глеб) завершила делегированную тобой задачу и прислала отчёт. "
+        + "Ознакомься с результатом и реши, что делать дальше.";
+    private const string RecallPrefix =
+        "## Память по теме\n- ветвление чата обсуждали ранее\n\n---\n\n";
+
+    // Время истории (Unix-мс) и транскрипта (ISO) — лаг 3 с, как у живой пары
+    private static long HistMs(int step) =>
+        DateTimeOffset.Parse("2026-09-18T18:00:00Z").AddSeconds(step * 600).ToUnixTimeMilliseconds();
+    private static string TrMs(int step) =>
+        DateTimeOffset.Parse("2026-09-18T18:00:00Z").AddSeconds(step * 600 + 3).ToUniversalTime()
+            .ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
+
+    private string WriteSaturatedChat()
+    {
+        var alpha = "альфа: давай добавим ветвление чата, чтобы можно было уйти в сторону с любого шага";
+        var omega = "омега: последнее длинное сообщение разговора, уже после мержа изменений";
+        return WriteFile("saturated.jsonl",
+            SysInit,
+            UserStrAt("u0", RecallPrefix + alpha, TrMs(0)),   // 1  — recall клеится ПРЕФИКСОМ
+            AsstStr("a0", "ответ 0"),                          // 2
+            UserStrAt("u1", ExecutorReport, TrMs(1)),          // 3
+            AsstStr("a1", "ответ 1"),                          // 4
+            UserStrAt("u2", LoopTick, TrMs(2)),                // 5  — тик
+            AsstStr("a2", "ответ 2"),                          // 6
+            UserStrAt("u3", LoopTick, TrMs(3)),                // 7  — тик, текст тот же
+            AsstStr("a3", "ответ 3"),                          // 8
+            // сообщения истории №4 «Делай» и №5 «продолжай» в транскрипт не попали
+            UserStrAt("u6", "продолжай", TrMs(6)),             // 9
+            AsstStr("a6", "ответ 6"),                          // 10
+            UserStrAt("u7", ExecutorReport, TrMs(7)),          // 11 — доклад, текст тот же
+            AsstStr("a7", "ответ 7"),                          // 12
+            UserStrAt("u8", LoopTick, TrMs(8)),                // 13 — тик, текст тот же
+            AsstStr("a8", "ответ 8"),                          // 14
+            UserStrAt("u9", "продолжай", TrMs(9)),             // 15 — повтор короткого текста
+            AsstStr("a9", "ответ 9"),                          // 16
+            UserStrAt("u10", "мержим", TrMs(10)),              // 17
+            AsstStr("a10", "ответ 10"),                        // 18
+            UserStrAt("u11", omega, TrMs(11)),                 // 19
+            AsstStr("a11", "ответ 11"));                       // 20
+    }
+
+    // Сообщения истории: текст, время, ожидаемая граница (null — обязан быть отказ)
+    public static TheoryData<int, string, int, int?> SaturatedHistory() => new()
+    {
+        { 0,  "альфа: давай добавим ветвление чата, чтобы можно было уйти в сторону с любого шага", 0, 3 },
+        { 1,  ExecutorReport, 1, 5 },
+        { 2,  LoopTick, 2, 7 },
+        { 3,  LoopTick, 3, 9 },   // третий дословный тик — НЕ первый: граница 9, а не 7
+        { 4,  "Делай", 4, null },       // промпта нет в транскрипте, двойников по тексту нет
+        { 5,  "продолжай", 5, null },   // промпта нет, а двойники есть — их отсекает окно лага
+        { 6,  "продолжай", 6, 11 },
+        { 7,  ExecutorReport, 7, 13 },
+        { 8,  LoopTick, 8, 15 },
+        { 9,  "продолжай", 9, 17 },     // повтор короткого текста — граница 17, а не 11
+        { 10, "мержим", 10, 19 },
+        { 11, "омега: последнее длинное сообщение разговора, уже после мержа изменений", 11, 21 },
+    };
+
+    [Theory]
+    [MemberData(nameof(SaturatedHistory))]
+    public void НасыщенныйПерсонаЧат_ГраницаПоВремени(int index, string text, int step, int? expectedCut)
+    {
+        var src = WriteSaturatedChat();
+        var dst = Dst();
+
+        var res = TranscriptBrancher.Branch(src, [text], New, dst,
+            anchorTimestampMs: HistMs(step));
+
+        if (expectedCut is null)
+        {
+            res.Ok.Should().BeFalse($"сообщение №{index} в транскрипт не попало — резать наугад нельзя");
+            res.Reason.Should().NotBeNullOrWhiteSpace();
+        }
+        else
+        {
+            res.Ok.Should().BeTrue(res.Reason);
+            res.CutLine.Should().Be(expectedCut, $"сообщение №{index}");
+        }
+    }
+
+    // Итог по фикстуре одним утверждением: покрытие ровно 10 из 12, и ни одного неверного среза
+    [Fact]
+    public void НасыщенныйПерсонаЧат_Покрытие10Из12()
+    {
+        var src = WriteSaturatedChat();
+        var ok = 0;
+        var wrong = 0;
+        foreach (var row in SaturatedHistory())
+        {
+            var (index, text, step, expected) = ((int)row[0], (string)row[1], (int)row[2], (int?)row[3]);
+            var res = TranscriptBrancher.Branch(src, [text], New, Dst(), anchorTimestampMs: HistMs(step));
+            if (!res.Ok) continue;
+            ok++;
+            if (res.CutLine != expected) wrong++;
+        }
+
+        ok.Should().Be(10);
+        wrong.Should().Be(0, "неверная граница хуже отказа: ветка ушла бы не от того шага");
+    }
+
+    // Точный якорь из РАЗОШЕДШЕЙСЯ копии: у чата, мигрировавшего между провайдерами, хвост
+    // хода снимается по одной копии транскрипта, а резак берёт самую длинную. В живом 955e0ba2
+    // uuid хвоста ходов от 21.09 оказался последней записью трёх коротких копий от 18.09, и в
+    // длинной копии тот же uuid лежит в середине — ветка молча резалась позапрошлым днём.
+    // Противоречие по времени снимает доверие к uuid, работу продолжает текстовый путь.
+    [Fact]
+    public void ТочныйЯкорь_ЗаписьСтарееСообщения_ПадаетНаТекстовыйПуть()
+    {
+        var anchor = "мержим, выкладывай на бой и проверим живьём";
+        var src = WriteFile("stale-uuid.jsonl",
+            SysInit,                                                              // 0
+            UserStrAt("u1", "старый разговор позапрошлого дня с запасом символов",
+                "2026-09-18T19:00:00.000Z"),                                      // 1
+            // хвост старого хода — именно на него показывает протухший uuid
+            "{\"type\":\"assistant\",\"sessionId\":\"" + Old + "\",\"uuid\":\"tail-old\","
+                + "\"timestamp\":\"2026-09-18T19:57:53.411Z\",\"message\":{\"role\":\"assistant\","
+                + "\"content\":\"ответ 1\"}}",                                     // 2
+            UserStrAt("u2", anchor, "2026-09-21T16:00:03.000Z"),                  // 3
+            AsstStr("a2", "ответ 2"));                                             // 4
+        var dst = Dst();
+
+        var res = TranscriptBrancher.Branch(src, [anchor], New, dst, anchorUuid: "tail-old",
+            anchorTimestampMs: DateTimeOffset.Parse("2026-09-21T16:00:00Z").ToUnixTimeMilliseconds());
+
+        res.Ok.Should().BeTrue(res.Reason);
+        res.CutLine.Should().Be(5, "граница по тексту и времени — конец файла, а не строка протухшего uuid");
+    }
+
+    // Чат без времени (95 чатов прода из 400 не имеют Timestamp ни у одного сообщения) —
+    // работает цепочка, и она обязана искать якорь ПОСЛЕ промпта предыдущего сообщения.
+    // Прежний поиск с начала файла схлопывал повтор на первое вхождение: ровно так отказывал
+    // живой c2480bce, где «пересобери прод» звучало дважды.
+    [Fact]
+    public void БезВремени_ПовторТекста_ЦепочкаБерётВтороеВхождение()
+    {
+        var start = "старт: длинное первое сообщение разговора с запасом значимых символов";
+        var repeat = "пересобери прод, пожалуйста, целиком и выложи его на бой";
+        var src = WriteFile("no-time-repeat.jsonl",
+            SysInit,
+            UserStr("u1", start),                                   // 1
+            AsstStr("a1", "ответ 1"),                               // 2
+            UserStr("u2", repeat),                                  // 3 — первое вхождение
+            AsstStr("a2", "ответ 2"),                               // 4
+            UserStr("u3", ExecutorReport),                          // 5 — служебный промпт между ними
+            AsstStr("a3", "ответ 3"),                               // 6
+            UserStr("u4", repeat),                                  // 7 — повтор, он и есть якорь
+            AsstStr("a4", "ответ 4"));                              // 8
+        var dst = Dst();
+
+        var res = TranscriptBrancher.Branch(src, [start, repeat, repeat], New, dst);
+
+        res.Ok.Should().BeTrue(res.Reason);
+        res.CutLine.Should().Be(9); // ход ВТОРОГО вхождения (до конца файла), а не первого
+    }
+
+    // Два дословно одинаковых промпта ВНУТРИ окна лага — не выдумка: в живом 955e0ba2 тики
+    // /loop местами идут подряд с интервалом в секунды (промпты на строках 276 и 283).
+    // Среди кандидатов окна берётся БЛИЖАЙШИЙ по времени, иначе ветка уехала бы на ход вперёд.
+    [Fact]
+    public void ДваОдинаковыхПромптаВОкне_БерётсяБлижайшийПоВремени()
+    {
+        var src = WriteFile("close-twins.jsonl",
+            SysInit,
+            UserStrAt("u1", LoopTick, "2026-09-18T18:00:03.000Z"),  // 1 — лаг 3 с
+            AsstStr("a1", "ответ 1"),                                // 2
+            UserStrAt("u2", LoopTick, "2026-09-18T18:01:03.000Z"),  // 3 — лаг 63 с, тоже в окне
+            AsstStr("a2", "ответ 2"),                                // 4
+            UserStrAt("u3", "мержим", "2026-09-18T18:02:03.000Z"),  // 5
+            AsstStr("a3", "ответ 3"));                               // 6
+        var dst = Dst();
+
+        var res = TranscriptBrancher.Branch(src, [LoopTick], New, dst,
+            anchorTimestampMs: DateTimeOffset.Parse("2026-09-18T18:00:00Z").ToUnixTimeMilliseconds());
+
+        res.Ok.Should().BeTrue(res.Reason);
+        res.CutLine.Should().Be(3); // ход ПЕРВОГО тика, а не второго (тот дал бы 5)
+    }
+
+    // Короткий якорь сверяется по границам слова: «делай» не считается найденным внутри
+    // «сделай» — иначе у сообщения, чьего промпта в файле нет, единственным кандидатом
+    // оказался бы чужой промпт с подстрокой, и срез ушёл бы не туда молча.
+    [Fact]
+    public void КороткийЯкорь_ПодстрокаВнутриСлова_НеСчитаетсяСовпадением()
+    {
+        var src = WriteFile("word-bound.jsonl",
+            SysInit,
+            UserStrAt("u1", "сделай уже наконец", "2026-09-18T18:00:03.000Z"),
+            AsstStr("a1", "ответ 1"));
+        var dst = Dst();
+
+        var res = TranscriptBrancher.Branch(src, ["делай"], New, dst,
+            anchorTimestampMs: DateTimeOffset.Parse("2026-09-18T18:00:00Z").ToUnixTimeMilliseconds());
+
+        res.Ok.Should().BeFalse();
+        res.Reason.Should().Contain("не найден");
+    }
+
+    // Часовой пояс: история — Unix-мс UTC, транскрипт — ISO со смещением. Разбор без приведения
+    // к UTC сдвинул бы все лаги на часы и отказал бы ВЕЗДЕ (при зелёном CI, где TZ=UTC).
+    [Fact]
+    public void ВремяСоСмещением_РазбираетсяВUtc()
+    {
+        var anchor = "продолжай";
+        var src = WriteFile("tz.jsonl",
+            SysInit,
+            // 21:00:04 +03:00 == 18:00:04Z — верный кандидат, лаг 4 с
+            UserStrAt("u1", anchor, "2026-09-18T21:00:04.000+03:00"),
+            AsstStr("a1", "ответ 1"),
+            // тот же текст 40 минутами позже — вне окна лага
+            UserStrAt("u2", anchor, "2026-09-18T21:40:00.000+03:00"),
+            AsstStr("a2", "ответ 2"));
+        var dst = Dst();
+
+        var res = TranscriptBrancher.Branch(src, [anchor], New, dst,
+            anchorTimestampMs: DateTimeOffset.Parse("2026-09-18T18:00:00Z").ToUnixTimeMilliseconds());
+
+        res.Ok.Should().BeTrue(res.Reason);
+        res.CutLine.Should().Be(3); // граница перед вторым промптом, а не в конце файла
     }
 }

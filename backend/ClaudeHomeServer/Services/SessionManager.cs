@@ -2631,10 +2631,15 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         // include резак обязан знать: у beforePrompt граница транскрипта — сам якорный промпт
         // (не включая), иначе лента ветки и её транскрипт расходятся — на экране вопроса нет,
         // а в памяти модели и вопрос, и прежний ответ на него.
+        // anchorTimestampMs — главный ключ текстового пути резака (ResolveAnchorPrompt):
+        // время отправки якорного сообщения, по лагу до записи промпта в транскрипт
+        // различаются повторяющиеся тексты («продолжай», тики /loop). null — история до
+        // этого поля, там резак работает по цепочке.
         var branchResult = Llm.TranscriptBrancher.Branch(srcPath, anchors, newCsid, dstPath, anchorUuid,
             include == ChatBranchInclude.BeforePrompt
                 ? Llm.TranscriptBrancher.BranchInclude.BeforePrompt
-                : Llm.TranscriptBrancher.BranchInclude.Turn);
+                : Llm.TranscriptBrancher.BranchInclude.Turn,
+            anchorMessage.Timestamp);
         if (!branchResult.Ok)
         {
             Console.Error.WriteLine($"[SessionManager] Ветвление чата {sessionId} отказано резаком: {branchResult.Reason}");

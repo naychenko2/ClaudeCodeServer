@@ -16,15 +16,39 @@ namespace ClaudeHomeServer.Services.Llm;
 // ЗАПРЕЩЁН: CLI пишет параллельные tool_use братьями по дереву, и путь от листа теряет
 // tool_result соседней ветви — следующий ход уйдёт с tool_use без результата.
 //
-// Сопоставление сообщений истории с промптами транскрипта — fail-closed: нарушение любого
-// из трёх условий (полнота / монотонность / однозначность) = отказ с причиной.
-// Короткое сообщение («да», «ок») нашлось бы в чужом промпте, и граница уехала бы на ход
-// вперёд — пользователь получил бы ветку с ровно тем ответом, от которого хотел уйти.
+// Адресация шага — два пути. Первый и главный: точный якорь по uuid конца хода
+// (TranscriptTailUuid), он покрывает все новые ходы. Второй, для исторических чатов, —
+// ТЕКСТ ЯКОРЯ ПЛЮС ЕГО ВРЕМЯ (ResolveAnchorPrompt). Прежняя цепочка «каждое сообщение
+// истории обязано найтись по порядку» снята задачей f18e784c: она стояла на ложном
+// инварианте (история и транскрипт штатно расходятся по составу) и отказывала на проде
+// в 46 местах из 66 в живом чате.
+//
+// Fail-closed сохранён там, где он по делу: якорь обязан найтись, кандидат обязан попасть
+// в окно лага, а короткий якорь («да», «ок») сверяется по границам слова и без времени
+// требует подтверждения предыдущим сообщением. Иначе он нашёлся бы в чужом промпте и
+// граница уехала бы на ход вперёд — пользователь получил бы ветку с ровно тем ответом,
+// от которого хотел уйти.
 public static class TranscriptBrancher
 {
     // Ниже этого порога значимых символов якорный текст не само-опознаваем:
     // кандидат принимается только при подтверждении соседом.
     private const int AnchorMinSignificantChars = 40;
+
+    // Окно лага «история → транскрипт» для адресации якоря по времени (см. ResolveAnchorPrompt).
+    // StoredUserMessage.Timestamp пишется НЕ при отправке, а на диспатче хода
+    // (TurnAccumulator.OnUserMessage), поэтому ожидание в очереди в лаг не превращается и
+    // лаг настоящей пары мал: замер по двум живым чатам прода (955e0ba2, 862f74b7, 81 пара) —
+    // 2,1–8,9 с, медиана 2,5 с. Остаток лага — сборка промпта (recall, досье, граф) и холодный
+    // старт CLI (spawn, рукопожатие MCP, у container-владельцев ещё docker exec), это десятки
+    // секунд, отсюда запас в 5 минут.
+    //
+    // Окно назад — только на люфт часов (оба времени пишет одна машина). Работа окна ВПЕРЁД
+    // ровно одна: не дать сообщению, чьего промпта в файле нет вовсе, молча привязаться к
+    // более позднему промпту с тем же текстом (у таких ложных пар лаг на два порядка больше:
+    // наблюдались +595, +1195, +216141 с, либо он отрицателен: −12858 с). Расширять окно
+    // «на всякий случай» нельзя — это возвращает тихий срез не в том месте.
+    private const long AnchorLagBackToleranceMs = 5_000;
+    private const long AnchorLagForwardWindowMs = 5 * 60_000;
 
     // Что входит в ветку (зеркало SessionManager.ChatBranchInclude — резак живёт в Llm и
     // ссылаться на Main не может): Turn — якорный ход целиком, BeforePrompt — всё ДО
@@ -55,12 +79,15 @@ public static class TranscriptBrancher
     // anchorUuid — ТОЧНЫЙ якорь (шаг 5): uuid записи транскрипта, снятый на конце якорного
     // хода (StoredResultMessage.TranscriptTailUuid). Есть и найден в файле — граница берётся
     // точным сравнением, текстовое сопоставление не запускается вовсе; нет (исторический чат)
-    // или в этом файле не нашёлся — прежний текстовый путь со своими fail-closed условиями;
+    // или в этом файле не нашёлся — текстовый путь со своими fail-closed условиями;
     // include — что входит в ветку (см. BranchInclude): граница префикса считается от
-    // якорного промпта по-разному, но дальше оба пути общие.
+    // якорного промпта по-разному, но дальше оба пути общие;
+    // anchorTimestampMs — время якорного сообщения истории (StoredUserMessage.Timestamp,
+    // Unix-мс): главный ключ текстового пути, см. ResolveAnchorPrompt. null — история до
+    // этого поля (≈11% сообщений прода), тогда работает цепочка предыдущих сообщений.
     public static BranchResult Branch(string sourcePath, IEnumerable<string> anchorTexts,
         string newSessionId, string dstPath, string? anchorUuid = null,
-        BranchInclude include = BranchInclude.Turn)
+        BranchInclude include = BranchInclude.Turn, long? anchorTimestampMs = null)
     {
         if (!File.Exists(sourcePath))
             return BranchResult.Fail($"файл-источник {sourcePath} не найден");
@@ -71,6 +98,7 @@ public static class TranscriptBrancher
         var lines = new List<string>();
         var promptLines = new List<int>();    // 0-based номер строки «человеческого» промпта в lines
         var promptTexts = new List<string>();  // его нормализованный текст
+        var promptTimes = new List<long?>();   // время записи промпта (Unix-мс) — ключ адресации якоря
         // Строка записи с точным якорем (uuid хвоста якорного хода); -1 — якоря нет либо
         // он в этом файле не встретился. Ищем сырой подстрокой, не разбирая каждую запись:
         // у длинных сессий строк десятки тысяч. Ведущая кавычка в игле обязательна —
@@ -79,6 +107,7 @@ public static class TranscriptBrancher
             ? new[] { $"\"uuid\":\"{anchorUuid}\"", $"\"uuid\": \"{anchorUuid}\"" }
             : null;
         var anchorUuidLine = -1;
+        long? anchorUuidTime = null;   // время записи точного якоря — сверяется со временем сообщения
         bool endsWithNewline;
         using (var fs = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
         {
@@ -100,18 +129,22 @@ public static class TranscriptBrancher
                 if (anchorUuidLine < 0 && uuidNeedles is not null
                     && (line.Contains(uuidNeedles[0], StringComparison.Ordinal)
                         || line.Contains(uuidNeedles[1], StringComparison.Ordinal)))
+                {
                     anchorUuidLine = lines.Count - 1;
-                if (TryExtractHumanPrompt(line, out var norm))
+                    anchorUuidTime = TryReadTimestamp(line);
+                }
+                if (TryExtractHumanPrompt(line, out var norm, out var promptTime))
                 {
                     promptLines.Add(lines.Count - 1);
                     promptTexts.Add(norm);
+                    promptTimes.Add(promptTime);
                 }
             }
         }
         // Файл, не оканчивающийся переносом строки — с недописанной последней строкой: отбрасываем
         if (!endsWithNewline)
         {
-            DropLastLine(lines, promptLines, promptTexts);
+            DropLastLine(lines, promptLines, promptTexts, promptTimes);
             // Якорь пришёлся на отброшенную недописанную строку — считаем, что его нет
             if (anchorUuidLine >= lines.Count) anchorUuidLine = -1;
         }
@@ -125,6 +158,25 @@ public static class TranscriptBrancher
         //    Якорь снимается на КОНЦЕ хода, поэтому отставание записи файла на пару строк
         //    (CLI дописывает хвост асинхронно) границу не двигает: K всё равно берётся по
         //    следующему человеческому промпту, а он заведомо позже.
+        //
+        //    Но найденному uuid верим не безоглядно: он обязан указывать на запись НЕ РАНЬШЕ
+        //    якорного сообщения. У чата, много раз мигрировавшего между провайдерами, копии
+        //    транскрипта расходятся, а хвост хода снимается по ОДНОЙ из них — резак же берёт
+        //    самую длинную. Живой пример (задача f18e784c, чат 955e0ba2): хвост ходов от
+        //    21.09 записан как 0fa74da9…, и это последняя запись трёх коротких копий (316
+        //    строк, 18.09), а в длинной копии (1257 строк) тот же uuid лежит на строке 314 —
+        //    точный якорь молча резал ветку в середине позапрошлого дня. Неверная граница
+        //    хуже отказа, поэтому противоречие по времени снимает доверие к uuid и работу
+        //    продолжает текстовый путь, у которого свои fail-closed условия.
+        if (anchorUuidLine >= 0 && anchorTimestampMs is long anchorMsgTime
+            && anchorUuidTime is long uuidTime && uuidTime < anchorMsgTime - AnchorLagBackToleranceMs)
+        {
+            Console.Error.WriteLine(
+                $"[TranscriptBrancher] Точный якорь {anchorUuid} в {sourcePath} указывает на запись "
+                + $"старше самого сообщения (на {(anchorMsgTime - uuidTime) / 1000} с) — копии транскрипта "
+                + "разошлись, переходим на текстовое сопоставление");
+            anchorUuidLine = -1;
+        }
         if (anchorUuidLine >= 0)
         {
             var turnStart = 0;
@@ -139,9 +191,7 @@ public static class TranscriptBrancher
             Console.Error.WriteLine(
                 $"[TranscriptBrancher] Точный якорь {anchorUuid} не найден в {sourcePath} — переходим на текстовое сопоставление");
 
-        // 3. Сопоставление: для каждого сообщения истории — первый промпт транскрипта,
-        //    СОДЕРЖАЩИЙ его нормализованный текст (сравнение «содержит»: сервер клеит к
-        //    промпту хвосты — recall, контекст). Три fail-closed проверки — ниже.
+        // 3. Текстовый путь: ищем промпт САМОГО якоря (см. ResolveAnchorPrompt).
         var anchors = new List<string>();
         foreach (var t in anchorTexts)
         {
@@ -151,32 +201,125 @@ public static class TranscriptBrancher
         if (anchors.Count == 0)
             return BranchResult.Fail("не передано ни одного якорного сообщения с текстом — шаг неопределён");
 
-        var matched = new List<int>(); // индексы в promptTexts (строго растут)
-        for (var i = 0; i < anchors.Count; i++)
-        {
-            var found = IndexOfContainingPrompt(promptTexts, anchors[i], 0);
-            if (found < 0)
-                return BranchResult.Fail(i == anchors.Count - 1
-                    ? "якорный промпт не найден в транскрипте: этот шаг не удалось найти в памяти модели"
-                    : $"сообщение истории №{i} из {anchors.Count} не совпало ни с одним промптом транскрипта — неполное сопоставление");
+        var (anchorPrompt, failReason) = ResolveAnchorPrompt(promptTexts, promptTimes, anchors, anchorTimestampMs);
+        if (anchorPrompt < 0)
+            return BranchResult.Fail(failReason!);
 
-            // монотонность: позиции найденных промптов строго возрастают
-            if (matched.Count > 0 && found <= matched[^1])
-                return BranchResult.Fail("немонотонное сопоставление: позднее сообщение сошлось с более ранним промптом, чем предыдущее");
-
-            // однозначность: короткий якорь (<40 значимых символов) принимается только
-            // при совпадении соседа — промпт якоря обязан быть следующим за промптом соседа
-            if (i == anchors.Count - 1 && SignificantLength(anchors[i]) < AnchorMinSignificantChars)
-            {
-                if (matched.Count == 0 || matched[^1] + 1 != found)
-                    return BranchResult.Fail("текст якорного сообщения слишком короткий (<40 значимых символов) и не подтверждён предыдущим сообщением — совпадение неоднозначно");
-            }
-            matched.Add(found);
-        }
-
-        return CutAndWrite(lines, promptLines, promptLines[matched[^1]], promptLines[matched[^1]],
+        return CutAndWrite(lines, promptLines, promptLines[anchorPrompt], promptLines[anchorPrompt],
             newSessionId, dstPath, include);
     }
+
+    // Адресация якорного промпта в транскрипте — сердце текстового пути.
+    //
+    // Ключ — ТЕКСТ ЯКОРЯ ПЛЮС ЕГО ВРЕМЯ, а не цепочка предыдущих сообщений. Прежняя цепочка
+    // (каждое неслужебное сообщение истории обязано найтись, монотонно, а короткий якорь —
+    // вплотную за соседом) стояла на ложном инварианте: история и транскрипт штатно
+    // расходятся по составу. Разбор двух живых чатов прода (задача f18e784c): в 955e0ba2
+    // четыре подряд сообщения истории («Делай», «проверяй», «Продолжай», «продолжай») в
+    // транскрипт не попали вовсе — одно такое звено делало невозможным ветвление от ЛЮБОГО
+    // более позднего места чата (20 мест из 66), а требование «вплотную за соседом» рубило
+    // каждое короткое сообщение, потому что между ними в насыщенном чате всегда стоят
+    // служебные промпты (доклады исполнителей, тики /loop, task-notification).
+    //
+    // Кандидаты — промпты, СОДЕРЖАЩИЕ нормализованный текст якоря: сервер клеит к тексту хода
+    // recall ПРЕФИКСОМ (ClaudeSession: joinedRecall + разделитель + text), поэтому ни равенство,
+    // ни EndsWith тут не годятся. Кандидатов бывает много; разводит их лаг записи: берём
+    // кандидата с минимальным лагом ВНУТРИ окна (сначала окно, потом минимум — иначе перекос
+    // часов отдал бы победу лагу −3 с).
+    //
+    // Нет времени (история до поля Timestamp либо транскрипт без timestamp) — работает
+    // запасной путь по цепочке: она ЗАДАЁТ НИЖНЮЮ ГРАНИЦУ поиска (поиск идёт от позиции
+    // последнего совпавшего сообщения, а не с начала файла — прежний поиск с нуля и схлопывал
+    // повторяющийся текст на первое вхождение), а несовпавшее звено пропускается молча. Путь
+    // не мёртвый: 95 чатов прода из 400 не имеют Timestamp ни у одного сообщения.
+    // Fail-closed остаётся там, где он по делу: якорь обязан найтись, а короткий якорь —
+    // быть подтверждён совпавшим предыдущим сообщением.
+    //
+    // Известная деградация: повтор хода в тот же файл (egress-повтор пары через 5 с,
+    // повторная попытка) пишет промпт дважды с разницей в секунды — оба в окне, минимум лага возьмёт
+    // ПЕРВУЮ, провалившуюся попытку. Частично ловится хвостовой проверкой парности; менять
+    // правило под этот случай нельзя — для дублей текста внутри окна минимум верен.
+    //
+    // Это МОСТ для исторических чатов: настоящее лечение адресации — точный якорь
+    // StoredResultMessage.TranscriptTailUuid (путь выше), который покрывает все новые ходы.
+    // Обвешивать текстовое правило эвристиками вместо ожидания, пока старые чаты вымоются, не надо.
+    //
+    // Возвращает индекс в promptTexts либо (-1, причина отказа).
+    private static (int Index, string? Reason) ResolveAnchorPrompt(List<string> promptTexts,
+        List<long?> promptTimes, List<string> anchors, long? anchorTimestampMs)
+    {
+        const string NotFound = "якорный промпт не найден в транскрипте: этот шаг не удалось найти в памяти модели";
+        var anchorText = anchors[^1];
+        // Короткий якорь сверяется по ГРАНИЦАМ СЛОВА: сравнение «содержит» без них принимает
+        // «делай» внутри «сделай», а «да» — внутри «задача». Пока настоящий промпт на месте,
+        // ошибку ловит минимум лага, но у сообщения, чьего промпта в файле нет, единственным
+        // кандидатом в окне может оказаться чужой промпт с такой подстрокой — и это молча
+        // неверный срез, ровно то, против чего писалось правило однозначности.
+        var wordBounded = SignificantLength(anchorText) < AnchorMinSignificantChars;
+
+        if (anchorTimestampMs is long anchorTime)
+        {
+            var best = -1;
+            var bestLag = long.MaxValue;
+            var timedCandidates = 0;
+            for (var j = 0; j < promptTexts.Count; j++)
+            {
+                if (!ContainsAnchor(promptTexts[j], anchorText, wordBounded)) continue;
+                if (promptTimes[j] is not long promptTime) continue;
+                timedCandidates++;
+                var lag = promptTime - anchorTime;
+                if (lag < -AnchorLagBackToleranceMs || lag > AnchorLagForwardWindowMs) continue;
+                if (lag < bestLag) { bestLag = lag; best = j; }
+            }
+            if (best >= 0)
+            {
+                // Фактический лаг в журнал: через месяц окно пересчитывается по замеру, а не переугадывается
+                Console.Error.WriteLine(
+                    $"[TranscriptBrancher] Якорь найден по времени: промпт №{best}, лаг {bestLag} мс, кандидатов со временем {timedCandidates}");
+                return (best, null);
+            }
+            // Кандидаты со временем были, но все вне окна — это не «текст не найден», а
+            // совпадение с ЧУЖИМ промптом: резать по нему нельзя (ветка ушла бы не туда).
+            if (timedCandidates > 0)
+                return (-1, "этот шаг не удалось надёжно найти в памяти модели: подходящий по тексту промпт записан не в то время");
+            // Кандидатов со временем нет вовсе — уходим на цепочку ниже
+        }
+
+        var pos = 0;
+        var previousMatched = false;
+        for (var i = 0; i < anchors.Count - 1; i++)
+        {
+            var idx = IndexOfContainingPrompt(promptTexts, anchors[i], pos, wordBounded: false);
+            if (idx < 0) { previousMatched = false; continue; }
+            pos = idx + 1;
+            previousMatched = true;
+        }
+
+        var found = IndexOfContainingPrompt(promptTexts, anchorText, pos, wordBounded);
+        if (found < 0) return (-1, NotFound);
+        if (wordBounded && !previousMatched)
+            return (-1, "текст якорного сообщения слишком короткий (<40 значимых символов) и не подтверждён предыдущим сообщением — совпадение неоднозначно");
+        return (found, null);
+    }
+
+    // Промпт содержит текст якоря; wordBounded — требовать границы слова с обеих сторон
+    // вхождения (соседний символ не буква, не цифра и не подчёркивание).
+    private static bool ContainsAnchor(string prompt, string needle, bool wordBounded)
+    {
+        if (!wordBounded) return prompt.Contains(needle, StringComparison.Ordinal);
+        var i = prompt.IndexOf(needle, StringComparison.Ordinal);
+        while (i >= 0)
+        {
+            var okBefore = i == 0 || !IsWordChar(prompt[i - 1]);
+            var end = i + needle.Length;
+            var okAfter = end >= prompt.Length || !IsWordChar(prompt[end]);
+            if (okBefore && okAfter) return true;
+            i = prompt.IndexOf(needle, i + 1, StringComparison.Ordinal);
+        }
+        return false;
+    }
+
+    private static bool IsWordChar(char c) => char.IsLetterOrDigit(c) || c == '_';
 
     // Общий хвост обоих путей поиска границы (точного по uuid и текстового): K, хвостовая
     // проверка, запись префикса. turnStartLine — строка промпта, которым начался якорный ход
@@ -238,9 +381,16 @@ public static class TranscriptBrancher
     // но для ветвления массив текстовых блоков тоже считается промптом — tool_result не считается):
     // type == "user" AND isSidechain != true AND isMeta != true AND content — строка
     // либо массив, в котором НЕТ блока tool_result. Битая (недописанная) строка — false.
-    public static bool TryExtractHumanPrompt(string line, out string normalizedText)
+    public static bool TryExtractHumanPrompt(string line, out string normalizedText) =>
+        TryExtractHumanPrompt(line, out normalizedText, out _);
+
+    // Та же проверка плюс время записи (поле timestamp, ISO-8601 от CLI) в Unix-мс —
+    // ключ адресации якоря (ResolveAnchorPrompt). null — поля нет либо оно не разбирается.
+    public static bool TryExtractHumanPrompt(string line, out string normalizedText,
+        out long? timestampMs)
     {
         normalizedText = string.Empty;
+        timestampMs = null;
         try
         {
             using var doc = JsonDocument.Parse(line);
@@ -251,6 +401,8 @@ public static class TranscriptBrancher
             if (root.TryGetProperty("isMeta", out var meta) && meta.ValueKind == JsonValueKind.True) return false;
             if (!root.TryGetProperty("message", out var msg) || msg.ValueKind != JsonValueKind.Object) return false;
             if (!msg.TryGetProperty("content", out var content)) return false;
+
+            timestampMs = TryReadTimestamp(root);
 
             if (content.ValueKind == JsonValueKind.String)
             {
@@ -280,6 +432,29 @@ public static class TranscriptBrancher
             return false;
         }
     }
+
+    // Время записи транскрипта (поле timestamp, ISO-8601 от CLI) в Unix-мс; null — поля нет
+    // либо оно не разбирается. Приведение к UTC обязательно: история хранит Unix-мс UTC, а
+    // строка приходит со смещением, и разбор в местном времени сдвинул бы все лаги на часы.
+    private static long? TryReadTimestamp(string line)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(line);
+            return doc.RootElement.ValueKind == JsonValueKind.Object
+                ? TryReadTimestamp(doc.RootElement)
+                : null;
+        }
+        catch (JsonException) { return null; }
+    }
+
+    private static long? TryReadTimestamp(JsonElement root) =>
+        root.TryGetProperty("timestamp", out var ts) && ts.ValueKind == JsonValueKind.String
+        && DateTimeOffset.TryParse(ts.GetString(), System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.AdjustToUniversal
+            | System.Globalization.DateTimeStyles.AssumeUniversal, out var parsed)
+            ? parsed.ToUnixTimeMilliseconds()
+            : null;
 
     // Нормализация текста для сравнения «содержит»: нижний регистр + схлопывание пробельных.
     public static string Normalize(string? s)
@@ -311,18 +486,20 @@ public static class TranscriptBrancher
     }
 
     // Первый промпт (не раньше от from), содержащий нормализованный текст; -1 — нет.
-    private static int IndexOfContainingPrompt(List<string> promptTexts, string needle, int from)
+    private static int IndexOfContainingPrompt(List<string> promptTexts, string needle, int from,
+        bool wordBounded)
     {
         if (needle.Length == 0) return -1;
         for (var i = from; i < promptTexts.Count; i++)
-            if (promptTexts[i].Contains(needle, StringComparison.Ordinal))
+            if (ContainsAnchor(promptTexts[i], needle, wordBounded))
                 return i;
         return -1;
     }
 
     // Недописанная последняя строка (файл без завершающего переноса) — отбрасывается вместе
     // с метками промпта, если она уже попала в списки.
-    private static void DropLastLine(List<string> lines, List<int> promptLines, List<string> promptTexts)
+    private static void DropLastLine(List<string> lines, List<int> promptLines,
+        List<string> promptTexts, List<long?> promptTimes)
     {
         if (lines.Count == 0) return;
         var last = lines.Count - 1;
@@ -331,6 +508,7 @@ public static class TranscriptBrancher
         {
             promptLines.RemoveAt(promptLines.Count - 1);
             promptTexts.RemoveAt(promptTexts.Count - 1);
+            promptTimes.RemoveAt(promptTimes.Count - 1);
         }
     }
 

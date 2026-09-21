@@ -27,6 +27,7 @@ public sealed class LiveLocalRunner(LocalBenchStand stand) : ICheapTextRunner
 {
     private readonly LlamaServerClient _client = stand.BuildClient();
     private readonly List<LocalBenchShot> _shots = [];
+    private readonly List<LocalBenchShot> _all = [];
     private readonly Lock _sync = new();
 
     public LocalBenchStand Stand { get; } = stand;
@@ -39,6 +40,13 @@ public sealed class LiveLocalRunner(LocalBenchStand stand) : ICheapTextRunner
 
     /// <summary>Забыть накопленное — между кейсами, чтобы трасса кейса не тянула хвост.</summary>
     public void ResetShots() { lock (_sync) _shots.Clear(); }
+
+    /// <summary>
+    /// ВСЕ вызовы прогона, включая прогревочные: <see cref="ResetShots"/> их не трогает.
+    /// По ним проверяется, что замер шёл последовательно — перекрывшиеся во времени
+    /// вызовы означают очередь в движке, а значит недостоверное время.
+    /// </summary>
+    public IReadOnlyList<LocalBenchShot> AllShots { get { lock (_sync) return _all.ToArray(); } }
 
     // Прогрев модели: первый вызов на холодных весах меряет загрузку, а не место.
     public Task WarmUpAsync(CancellationToken ct = default) => _client.WarmUpAsync(Stand.Model, ct);
@@ -85,6 +93,8 @@ public sealed class LiveLocalRunner(LocalBenchStand stand) : ICheapTextRunner
         var timeoutMs = (int)(timeoutOverride?.TotalMilliseconds ?? spec.TimeoutMs);
 
         Stand.ResetObserved();
+        // Метки монотонных часов процесса: по ним видно, перекрылись ли соседние вызовы.
+        var startedAt = Stopwatch.GetTimestamp();
         var sw = Stopwatch.StartNew();
         string? answer = null;
         string? error = null;
@@ -116,8 +126,10 @@ public sealed class LiveLocalRunner(LocalBenchStand stand) : ICheapTextRunner
             CompletionTokens: observed?.CompletionTokens ?? 0,
             NumPredict: numPredict,
             DurationMs: (long)sw.Elapsed.TotalMilliseconds,
-            Error: error);
-        lock (_sync) _shots.Add(shot);
+            Error: error,
+            StartedTicks: startedAt,
+            FinishedTicks: Stopwatch.GetTimestamp());
+        lock (_sync) { _shots.Add(shot); _all.Add(shot); }
         return answer;
     }
 
@@ -138,7 +150,8 @@ public sealed class LiveLocalRunner(LocalBenchStand stand) : ICheapTextRunner
 /// </summary>
 public sealed record LocalBenchShot(
     string ActionKey, string Prompt, string? RawAnswer, string? FinishReason, int StatusCode,
-    int PromptTokens, int CompletionTokens, int NumPredict, long DurationMs, string? Error)
+    int PromptTokens, int CompletionTokens, int NumPredict, long DurationMs, string? Error,
+    long StartedTicks = 0, long FinishedTicks = 0)
 {
     public bool Answered => !string.IsNullOrWhiteSpace(RawAnswer);
 

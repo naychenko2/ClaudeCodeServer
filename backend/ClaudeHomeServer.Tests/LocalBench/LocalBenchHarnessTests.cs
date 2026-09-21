@@ -118,6 +118,31 @@ public class LocalBenchHarnessTests
     }
 
     [Fact]
+    public void Перекрывшиеся_вызовы_видны_как_параллельные()
+    {
+        // Второй вызов стартовал до конца первого — значит оба стояли в очереди движка,
+        // и время в таблице мерило очередь, а не место.
+        var shots = new[] { Shot(started: 1_000, finished: 3_000), Shot(started: 2_000, finished: 4_000) };
+
+        LocalBenchLoop.FindOverlap(shots).Should().NotBeNull().And.Subject.As<string>()
+            .Should().Contain("начался до конца предыдущего");
+    }
+
+    [Fact]
+    public void Последовательные_вызовы_перекрытием_не_считаются()
+    {
+        var shots = new[] { Shot(started: 1_000, finished: 3_000), Shot(started: 3_000, finished: 5_000) };
+
+        LocalBenchLoop.FindOverlap(shots).Should().BeNull();
+    }
+
+    private static LocalBenchShot Shot(long started, long finished) => new(
+        ActionKey: LocalActionCatalog.TaskNormalizeTitle, Prompt: "…", RawAnswer: "{}",
+        FinishReason: "stop", StatusCode: 200, PromptTokens: 100, CompletionTokens: 20,
+        NumPredict: 256, DurationMs: 200, Error: null,
+        StartedTicks: started, FinishedTicks: finished);
+
+    [Fact]
     public void Каждый_бенч_класс_состоит_в_коллекции_LocalBench()
     {
         // Забытый атрибут коллекции у нового места — молчаливый дефект: класс полетит

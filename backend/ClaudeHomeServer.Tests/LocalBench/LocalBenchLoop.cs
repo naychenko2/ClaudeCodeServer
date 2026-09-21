@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -65,6 +66,34 @@ public static class LocalBenchLoop
                 CompletionTokens: shot.CompletionTokens,
                 Note: violation is null ? outcome : null));
         }
+
+        // Последовательность — не на веру: перекрывшиеся во времени вызовы означают, что
+        // замер мерил очередь в движке, а не место. Коллекция xUnit это предотвращает,
+        // проверка доказывает.
+        var overlap = FindOverlap(runner.AllShots);
+        Assert.True(overlap is null,
+            $"вызовы шли параллельно — интервалы перекрылись: {overlap}");
+        output.WriteLine($"Последовательность подтверждена: {runner.AllShots.Count} вызовов "
+                         + "(с прогревочными), перекрытий нет");
+
         return report;
     }
+
+    // Первое перекрытие соседних вызовов в хронологическом порядке. null — их нет.
+    internal static string? FindOverlap(IReadOnlyList<LocalBenchShot> shots)
+    {
+        var ordered = shots.Where(s => s.FinishedTicks > 0)
+            .OrderBy(s => s.StartedTicks).ToArray();
+        for (var i = 1; i < ordered.Length; i++)
+        {
+            var previous = ordered[i - 1];
+            var current = ordered[i];
+            if (current.StartedTicks < previous.FinishedTicks)
+                return $"вызов {i} ({current.ActionKey}) начался до конца предыдущего "
+                       + $"на {TicksToMs(previous.FinishedTicks - current.StartedTicks)} мс";
+        }
+        return null;
+    }
+
+    private static long TicksToMs(long ticks) => ticks * 1000 / Stopwatch.Frequency;
 }

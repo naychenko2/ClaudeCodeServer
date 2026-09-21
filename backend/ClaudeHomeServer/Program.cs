@@ -1293,6 +1293,10 @@ var app = builder.Build();
 // шаги (например, MigrateFromProjects в Knowledge) уже видели результат.
 app.UseSubsystems();
 
+// Доставка алертов о нечитаемых сторах (JsonFileStore статический, DI туда не дотягивается);
+// алерты, случившиеся до этой строки, придут прямо сейчас
+ClaudeHomeServer.Services.DataLossAlerts.Attach(app.Services);
+
 // Логгер статического парсера workflow-транскриптов (DI туда не дотягивается)
 ClaudeHomeServer.Services.Llm.WorkflowAgentParser.Log = app.Services.GetRequiredService<ILoggerFactory>()
     .CreateLogger(nameof(ClaudeHomeServer.Services.Llm.WorkflowAgentParser));

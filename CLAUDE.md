@@ -75,6 +75,18 @@ cd frontend; npm run build     # production-сборка (tsc -b + vite)
 не отдельный запуск: ход слот не занимает и не ждёт его никогда, поэтому дедлок «ход ждёт слот
 прогрева» невозможен по конструкции.
 
+**Основная защита от OOM — не гейт, а лимиты cgroup на `ccs-agents.slice`**
+(`MemoryHigh`/`MemoryMax` + `ManagedOOMMemoryPressure=kill`, плюс `ManagedOOMPreference=omit`
+на самом `ccs.service`). Лимит cgroup наследуется ВСЕМУ поддереву scope — включая сборки,
+которые агент запускает внутри хода своим Bash, то есть ровно те, что дали инцидент 21 сен
+(четыре scope по 4–5 GB, внутри `testhost.dll`, прогревов среди них не было). `BuildConcurrencyGate`
+закрывает только запуски с меткой `ProcessSpec.Heavy` — сегодня это один прогрев worktree, —
+и потому остаётся дополнением, а не заменой лимитов. Unit-файлы и drop-in'ы версионированы в
+[deploy/systemd/](deploy/systemd/), раскладка — `deploy/systemd/install-user-units.sh`
+(он же чистит перебивающие drop-in'ы из `user.control/`, куда пишет `systemctl set-property`).
+Сами значения машинно-специфичны — правило расчёта под конкретную машину в
+[deploy/systemd/README.md](deploy/systemd/README.md).
+
 **Перед правками в `Services/Execution/`, `SandboxManager`, `UserHomeResolver` — прочитай
 [docs/architecture/sandbox.md](docs/architecture/sandbox.md)** (монтирования, interrupt, MCP из песочницы, overrides).
 

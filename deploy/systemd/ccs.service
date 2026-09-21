@@ -1,0 +1,20 @@
+[Unit]
+Description=ClaudeHomeServer (Home AI, naychenko.me)
+Documentation=file:///home/an/Sources/ClaudeCodeServer/README.md
+# Сервер работает в графической сессии пользователя: ходы могут открывать приложения.
+# Старт — вместе с сессией GNOME (автовход GDM включён), остановка — при выходе из неё.
+After=graphical-session.target network-online.target docker.service
+PartOf=graphical-session.target
+
+[Service]
+WorkingDirectory=/opt/ccs/app
+Environment=ASPNETCORE_ENVIRONMENT=Production
+Environment=DOTNET_CLI_TELEMETRY_OPTOUT=1
+Environment=PATH=/home/an/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/dotnet /opt/ccs/app/ClaudeHomeServer.dll
+Restart=always
+RestartSec=5
+TimeoutStopSec=60
+
+[Install]
+WantedBy=graphical-session.target

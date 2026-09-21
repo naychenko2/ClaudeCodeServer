@@ -27,12 +27,21 @@ public static class LocalBenchLoop
     /// (project-icon: слова → выбор → повтор), и судить там надо итог всей цепочки.
     /// Одноходовому месту достаточно <see cref="LocalBenchTurns.Last"/>.
     /// </param>
+    /// <param name="reference">
+    /// Чем сверять выбор места с эталоном банка — ВТОРАЯ метрика, независимая от оракула.
+    /// null — эталона у места нет (в банке нет expect), и метрика честно не считается.
+    ///
+    /// Сверка идёт ОТДЕЛЬНЫМ делегатом, а не внутри judge, ровно потому, что вопросы
+    /// разные: «соблюдён ли формат» и «разумен ли выбор». Свяжи их — и правка банка
+    /// меняла бы вердикт по контракту.
+    /// </param>
     public static async Task<LocalBenchReport> RunAsync(
         LocalBenchCaseBank bank,
         BenchRunner runner,
         Func<LocalBenchCase, Task<string?>> invoke,
         Func<LocalBenchCase, LocalBenchTurns, string?> judge,
-        ITestOutputHelper output)
+        ITestOutputHelper output,
+        LocalBenchReference? reference = null)
     {
         // Прогрев весов: холостой вызов, чтобы модель загрузилась в память.
         await runner.WarmUpAsync();
@@ -49,7 +58,13 @@ public static class LocalBenchLoop
             : $"Прогрев места (в статистику не идёт): {warmup.DurationMs} мс, "
               + $"{warmup.CompletionTokens} ток, причина остановки {warmup.FinishReason ?? "-"}");
 
-        var report = new LocalBenchReport(bank.Place, runner.Describe);
+        var report = new LocalBenchReport(bank.Place, runner.Describe, reference);
+        output.WriteLine(reference is null
+            ? "Эталона у места нет: мерится только контракт"
+            : $"Эталон банка: {reference.What}; "
+              + (reference.Strength == LocalBenchReferenceStrength.Exact
+                  ? "однозначен — несовпадение считается ошибкой"
+                  : "один из верных ответов — совпадение работает нижней границей качества"));
         // Строго последовательно: правило 1 спецификации Батареи — не больше одной
         // активной задачи на локальную модель, иначе метрика времени недостоверна.
         foreach (var c in bank.Cases)
@@ -61,6 +76,11 @@ public static class LocalBenchLoop
             Assert.True(turns.Any, // место обязано сходить в модель — иначе замер ни о чём
                 $"кейс «{c.Id}»: место не сходило в модель ни разу");
             var violation = judge(c, turns);
+            // Сверка с эталоном идёт и у невалидного ответа: место, деградировавшее молча,
+            // отдало человеку не тот выбор — а это ровно то, что метрика и должна видеть.
+            var match = reference is null || c.Expect is null
+                ? LocalBenchMatch.None
+                : reference.Compare(c, turns);
             report.Add(new LocalBenchRow(
                 CaseId: c.Id,
                 Valid: violation is null,
@@ -72,7 +92,7 @@ public static class LocalBenchLoop
                 DurationMs: turns.DurationMs,
                 CompletionTokens: turns.CompletionTokens,
                 Turns: turns.Count,
-                Note: violation is null ? outcome : null));
+                Note: violation is null ? outcome : null) { Match = match });
         }
 
         // Последовательность — не на веру: перекрывшиеся во времени вызовы означают, что

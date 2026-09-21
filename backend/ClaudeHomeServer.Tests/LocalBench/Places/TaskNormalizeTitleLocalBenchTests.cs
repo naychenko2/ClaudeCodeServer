@@ -55,7 +55,8 @@ public class TaskNormalizeTitleLocalBenchTests(ITestOutputHelper output)
                        + (normalized.DueHint is null ? "" : $" [{normalized.DueHint}]");
             },
             judge: (_, turns) => TaskNormalizeTitleOracle.Violation(turns.Last.RawAnswer),
-            output);
+            output,
+            reference: PlaceReferences.TaskNormalizeTitle);
 
         report.WriteTo(output);
         Assert.Equal(bank.Cases.Count, report.Total);

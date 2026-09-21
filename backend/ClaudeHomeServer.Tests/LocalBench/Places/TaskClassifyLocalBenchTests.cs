@@ -50,7 +50,8 @@ public class TaskClassifyLocalBenchTests(ITestOutputHelper output)
                        + $"; в трекере {expected}";
             },
             judge: (_, turns) => TaskClassifyOracle.Violation(turns.Last.RawAnswer),
-            output);
+            output,
+            reference: PlaceReferences.TaskClassify);
 
         report.WriteTo(output);
         Assert.Equal(bank.Cases.Count, report.Total);

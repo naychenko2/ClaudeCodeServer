@@ -47,7 +47,8 @@ public class ProjectIconLocalBenchTests(ITestOutputHelper output)
                 return $"→ {shown}; у проекта {expected}";
             },
             judge: (_, turns) => ProjectIconOracle.Violation(turns),
-            output);
+            output,
+            reference: PlaceReferences.ProjectIcon);
 
         report.WriteTo(output);
         Assert.Equal(bank.Cases.Count, report.Total);

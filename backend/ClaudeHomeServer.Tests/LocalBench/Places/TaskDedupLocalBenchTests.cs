@@ -53,7 +53,8 @@ public class TaskDedupLocalBenchTests(ITestOutputHelper output)
             },
             judge: (c, turns) => TaskDedupOracle.Violation(turns.Last.RawAnswer,
                 Candidates(c).Select(x => x.Id).ToHashSet(StringComparer.Ordinal)),
-            output);
+            output,
+            reference: PlaceReferences.TaskDedup);
 
         report.WriteTo(output);
         Assert.Equal(bank.Cases.Count, report.Total);

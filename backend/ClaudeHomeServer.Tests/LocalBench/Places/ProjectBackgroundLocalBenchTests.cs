@@ -64,7 +64,8 @@ public class ProjectBackgroundLocalBenchTests(ITestOutputHelper output) : IDispo
                 return $"→ {state}; у проекта {expected}";
             },
             judge: (_, turns) => ProjectBackgroundOracle.Violation(turns.Last.RawAnswer),
-            output);
+            output,
+            reference: PlaceReferences.ProjectBackground);
 
         report.WriteTo(output);
         Assert.Equal(bank.Cases.Count, report.Total);

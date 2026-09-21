@@ -68,7 +68,8 @@ public class PersonaVoiceLocalBenchTests(ITestOutputHelper output)
                 return $"→ {shown}; у персоны {expected}";
             },
             judge: (_, turns) => PersonaVoiceOracle.Violation(turns.Last.RawAnswer),
-            output);
+            output,
+            reference: PlaceReferences.PersonaVoice);
 
         report.WriteTo(output);
         Assert.Equal(bank.Cases.Count, report.Total);

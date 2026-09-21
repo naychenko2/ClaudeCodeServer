@@ -448,4 +448,86 @@ public class TranscriptBrancherTests : IDisposable
         res.Ok.Should().BeTrue(res.Reason);
         res.CutLine.Should().Be(3);
     }
+
+    // --- include=beforePrompt: граница на самом якорном промпте ---
+
+    // Блокер финального ревью: без include резак всегда резал по концу хода, и у
+    // beforePrompt в памяти ветки оставались и якорный вопрос, и прежний ответ на него —
+    // ровно то, от чего пользователь уходит, нажимая «Ветвление» под своим сообщением.
+    [Fact]
+    public void BeforePrompt_ГраницаНаЯкорномПромпте_ХодЯкоряНеВходит()
+    {
+        var src = WriteScenario(out var a, out var b, out _);
+        var dst = Dst();
+
+        var res = TranscriptBrancher.Branch(src, [a, b], New, dst,
+            include: TranscriptBrancher.BranchInclude.BeforePrompt);
+
+        res.Ok.Should().BeTrue(res.Reason);
+        res.CutLine.Should().Be(5); // до строки u3=b (индекс 5): сам якорный промпт не входит
+        res.AnchorTurnExcluded.Should().BeFalse("отступа не было — это штатная граница beforePrompt");
+        var got = File.ReadAllLines(dst);
+        got.Should().HaveCount(5);
+        got.Should().NotContain(l => l.Contains(b));
+        got.Should().NotContain(l => l.Contains("ответ 3"));
+    }
+
+    // Тот же якорь с точным uuid: граница считается от промпта ЕГО хода, а не от записи-якоря
+    [Fact]
+    public void BeforePrompt_ТочныйЯкорь_ГраницаНаПромптеЕгоХода()
+    {
+        var src = WriteScenario(out _, out var b, out _);
+        var dst = Dst();
+
+        var res = TranscriptBrancher.Branch(src, ["да"], New, dst, anchorUuid: "a3",
+            include: TranscriptBrancher.BranchInclude.BeforePrompt);
+
+        res.Ok.Should().BeTrue(res.Reason);
+        res.CutLine.Should().Be(5);
+        File.ReadAllLines(dst).Should().NotContain(l => l.Contains(b));
+    }
+
+    // Якорь — первый промпт разговора: до него нет ни одного хода, транскрипт без ходов
+    // отдавать CLI нельзя — честный отказ вместо молча пустой памяти.
+    [Fact]
+    public void BeforePrompt_ЯкорьПервыйПромпт_Отказ()
+    {
+        var src = WriteScenario(out var a, out _, out _);
+        var dst = Dst();
+
+        var res = TranscriptBrancher.Branch(src, [a], New, dst,
+            include: TranscriptBrancher.BranchInclude.BeforePrompt);
+
+        res.Ok.Should().BeFalse();
+        res.Reason.Should().Contain("ветвить нечего");
+        File.Exists(dst).Should().BeFalse();
+    }
+
+    // Хвостовая проверка у beforePrompt считается по ПРЕДЫДУЩЕМУ ходу (якорный в ветку и
+    // так не входит): его непарный tool_use отправляет границу к началу этого хода.
+    [Fact]
+    public void BeforePrompt_НепарныйToolUseПредыдущегоХода_ОтступИПризнак()
+    {
+        var a = "альфа: первое сообщение разговора с запасом символов для якоря";
+        var b = "бета: второе сообщение разговора с запасом символов для якоря";
+        var c = "гамма: третье сообщение разговора с запасом символов для якоря";
+        var src = WriteFile("before-unbalanced.jsonl",
+            SysInit,
+            UserStr("u1", a),
+            AsstStr("a1", "ответ 1"),
+            // ход B оборван: tool_use t9 без результата
+            UserStr("u2", b),
+            AsstArr("a2", "[{\"type\":\"text\",\"text\":\"начал\"},{\"type\":\"tool_use\",\"id\":\"t9\",\"name\":\"Bash\",\"input\":{}}]"),
+            UserStr("u3", c),
+            AsstStr("a3", "ответ 3"));
+        var dst = Dst();
+
+        var res = TranscriptBrancher.Branch(src, [a, b, c], New, dst,
+            include: TranscriptBrancher.BranchInclude.BeforePrompt);
+
+        res.Ok.Should().BeTrue(res.Reason);
+        res.AnchorTurnExcluded.Should().BeTrue();
+        res.CutLine.Should().Be(3); // отступ к началу оборванного хода B (строка u2)
+        File.ReadAllLines(dst).Should().HaveCount(3);
+    }
 }

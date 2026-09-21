@@ -26,12 +26,20 @@ public static class TranscriptBrancher
     // кандидат принимается только при подтверждении соседом.
     private const int AnchorMinSignificantChars = 40;
 
+    // Что входит в ветку (зеркало SessionManager.ChatBranchInclude — резак живёт в Llm и
+    // ссылаться на Main не может): Turn — якорный ход целиком, BeforePrompt — всё ДО
+    // якорного промпта, сам промпт в префикс не входит (его текст уходит черновиком
+    // в композер). Без этого параметра резак всегда резал по концу хода, и у beforePrompt
+    // лента ветки расходилась с её транскриптом: на экране вопроса нет, в памяти модели —
+    // и вопрос, и прежний ответ на него.
+    public enum BranchInclude { Turn, BeforePrompt }
+
     // Результат резака. Ok — с позицией отреза (0-based, количество строк префикса);
     // Fail — с причиной для 409 (шаг 3 разворачивает). Молчаливой null без причины нет.
-    // AnchorTurnExcluded — якорный ход из ветки исключён: его tool_use остался без tool_result,
-    // граница отступила назад к началу хода и успех — не «по якорю». Успех без отступа — false.
-    // (Проброс в SessionManager/эндпоинт/UI — не этого шага; вызовы держат старый порядок полей,
-    // поэтому существующие продолжают компилироваться.)
+    // AnchorTurnExcluded — последний запрошенный ход из ветки исключён: его tool_use остался
+    // без tool_result, граница отступила назад к началу этого хода. Успех без отступа — false.
+    // Читает признак SessionManager.BranchAsync: он обрезает историю по ту же фактическую
+    // границу и возвращает текст прерванного сообщения черновиком.
     public sealed record BranchResult(bool Ok, int? CutLine, string? Reason,
         bool AnchorTurnExcluded = false)
     {
@@ -47,9 +55,12 @@ public static class TranscriptBrancher
     // anchorUuid — ТОЧНЫЙ якорь (шаг 5): uuid записи транскрипта, снятый на конце якорного
     // хода (StoredResultMessage.TranscriptTailUuid). Есть и найден в файле — граница берётся
     // точным сравнением, текстовое сопоставление не запускается вовсе; нет (исторический чат)
-    // или в этом файле не нашёлся — прежний текстовый путь со своими fail-closed условиями.
+    // или в этом файле не нашёлся — прежний текстовый путь со своими fail-closed условиями;
+    // include — что входит в ветку (см. BranchInclude): граница префикса считается от
+    // якорного промпта по-разному, но дальше оба пути общие.
     public static BranchResult Branch(string sourcePath, IEnumerable<string> anchorTexts,
-        string newSessionId, string dstPath, string? anchorUuid = null)
+        string newSessionId, string dstPath, string? anchorUuid = null,
+        BranchInclude include = BranchInclude.Turn)
     {
         if (!File.Exists(sourcePath))
             return BranchResult.Fail($"файл-источник {sourcePath} не найден");
@@ -122,7 +133,7 @@ public static class TranscriptBrancher
                 if (p > anchorUuidLine) break;
                 turnStart = p;
             }
-            return CutAndWrite(lines, promptLines, turnStart, anchorUuidLine, newSessionId, dstPath);
+            return CutAndWrite(lines, promptLines, turnStart, anchorUuidLine, newSessionId, dstPath, include);
         }
         if (uuidNeedles is not null)
             Console.Error.WriteLine(
@@ -164,7 +175,7 @@ public static class TranscriptBrancher
         }
 
         return CutAndWrite(lines, promptLines, promptLines[matched[^1]], promptLines[matched[^1]],
-            newSessionId, dstPath);
+            newSessionId, dstPath, include);
     }
 
     // Общий хвост обоих путей поиска границы (точного по uuid и текстового): K, хвостовая
@@ -173,21 +184,46 @@ public static class TranscriptBrancher
     // ищется следующий человеческий промпт (у текстового пути это тот же промпт якоря, у
     // точного — запись конца хода).
     private static BranchResult CutAndWrite(List<string> lines, List<int> promptLines,
-        int turnStartLine, int anchorLine, string newSessionId, string dstPath)
+        int turnStartLine, int anchorLine, string newSessionId, string dstPath,
+        BranchInclude include)
     {
-        // K = строка СЛЕДУЮЩЕГО человеческого промпта после якорного хода;
-        // если ветвимся от последнего хода — конец файла.
-        var k = lines.Count;
-        foreach (var p in promptLines)
-            if (p > anchorLine) { k = p; break; }
-
-        // Хвостовая проверка: последний ход префикса (промпт якорного → K) обязан
-        // завершать пары tool_use/tool_result. Прерванный ход (непарные) → отступить
-        // назад к предыдущей границе хода; синтетическим result НЕ чиним.
-        var anchorExcluded = false;
-        if (!LastTurnIsBalanced(lines, turnStartLine, k))
+        int k;          // граница префикса (количество строк)
+        int lastTurnStart;  // начало последнего хода префикса — левая граница хвостовой проверки
+        if (include == BranchInclude.BeforePrompt)
         {
+            // Ветка начинается ДО якорного промпта: он сам в префикс не входит, его текст
+            // уходит черновиком в композер. Последний ход префикса — ПРЕДЫДУЩИЙ, его и
+            // проверяем на парность хвоста.
             k = turnStartLine;
+            lastTurnStart = -1;
+            foreach (var p in promptLines)
+            {
+                if (p >= turnStartLine) break;
+                lastTurnStart = p;
+            }
+            // До якоря нет ни одного человеческого промпта: в ветке не осталось бы ни одного
+            // хода, а транскрипт без ходов подсовывать CLI нельзя (поведение --resume на нём
+            // неизвестно) — честный отказ вместо молчаливо пустой памяти.
+            if (lastTurnStart < 0)
+                return BranchResult.Fail("до этого сообщения в разговоре нет ни одного завершённого хода: ветвить нечего");
+        }
+        else
+        {
+            // K = строка СЛЕДУЮЩЕГО человеческого промпта после якорного хода;
+            // если ветвимся от последнего хода — конец файла.
+            k = lines.Count;
+            foreach (var p in promptLines)
+                if (p > anchorLine) { k = p; break; }
+            lastTurnStart = turnStartLine;
+        }
+
+        // Хвостовая проверка: последний ход префикса (его промпт → K) обязан завершать
+        // пары tool_use/tool_result. Прерванный ход (непарные) → отступить назад к началу
+        // этого хода; синтетическим result НЕ чиним.
+        var anchorExcluded = false;
+        if (!LastTurnIsBalanced(lines, lastTurnStart, k))
+        {
+            k = lastTurnStart;
             anchorExcluded = true;
             if (k == 0)
                 return BranchResult.Fail("последний ход ветки обрывается на непарном tool_use, а более ранней границы хода нет: в ветке не осталось ни одного завершённого хода");

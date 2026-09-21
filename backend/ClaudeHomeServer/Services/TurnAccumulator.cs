@@ -43,6 +43,15 @@ internal class TurnAccumulator
         _saveKey = saveKey;
     }
 
+    // Ключ, под которым история пишется СЕЙЧАС. Нужен в момент system/init: к этой секунде
+    // ClaudeSession уже переписал Session.ClaudeSessionId на пришедший от CLI, и прежний
+    // (подготовленный) csid живёт только здесь — по нему страховка ветвления опознаёт
+    // осиротевшую пару «транскрипт + история» (SessionManager.OnMessageAsync).
+    public string? SaveKey
+    {
+        get { lock (_lock) return _saveKey; }
+    }
+
     public void SetSaveKey(string claudeSessionId)
     {
         lock (_lock) _saveKey = claudeSessionId;

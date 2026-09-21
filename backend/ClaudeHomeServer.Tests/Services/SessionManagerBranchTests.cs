@@ -516,6 +516,162 @@ public class SessionManagerBranchTests : IDisposable
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*в памяти модели*");
     }
 
+    // --- Содержимое ТРАНСКРИПТА ветки (блокер финального ревью) ---
+
+    // Путь транскрипта ветки — тот же, что строит BranchAsync: профиль по умолчанию,
+    // projects/{уплощённый корень проекта}/{csid ветки}.jsonl
+    private string BranchTranscriptPath(Session branch, Project project) =>
+        Path.Combine(_llmProviders.UserProfileDir, "projects",
+            TranscriptMigrator.FlattenCwd(project.RootPath), branch.ClaudeSessionId + ".jsonl");
+
+    // До фикса резак получал вызов БЕЗ include и всегда резал по концу хода: история ветки
+    // обрывалась до якоря (правильно), а её транскрипт включал и якорный вопрос, и прежний
+    // ответ на него — модель помнила ровно то, от чего пользователь уходил.
+    [Fact]
+    public async Task Транскрипт_BeforePrompt_НеСодержитЯкорногоХода()
+    {
+        var (session, project, _, text1, text2) = await SeedBranchableChatAsync("transcript-before");
+
+        var result = await _sut.BranchAsync(session.Id, TestUserId, 1, text2,
+            SessionManager.ChatBranchInclude.BeforePrompt);
+
+        var transcript = await File.ReadAllTextAsync(BranchTranscriptPath(result.Session, project));
+        transcript.Should().Contain(text1).And.Contain("ответ 1");
+        transcript.Should().NotContain(text2,
+            "якорный промпт в память ветки не входит — его текст уходит черновиком в композер");
+        transcript.Should().NotContain("ответ 2",
+            "прежний ответ на якорный вопрос в памяти ветки остаться не может");
+    }
+
+    [Fact]
+    public async Task Транскрипт_Turn_СодержитЯкорныйХодЦеликом()
+    {
+        var (session, project, _, text1, text2) = await SeedBranchableChatAsync("transcript-turn");
+
+        var result = await _sut.BranchAsync(session.Id, TestUserId, 1, text2,
+            SessionManager.ChatBranchInclude.Turn);
+
+        var transcript = await File.ReadAllTextAsync(BranchTranscriptPath(result.Session, project));
+        transcript.Should().Contain(text1).And.Contain(text2).And.Contain("ответ 2");
+    }
+
+    // --- Прерванный якорный ход: AnchorTurnExcluded (блокер финального ревью) ---
+
+    // Затравка с оборванным вторым ходом: в транскрипте tool_use без tool_result, в истории
+    // ход есть. Резак на таком хвосте отступает к началу хода — история обязана уехать туда же.
+    private async Task<(Session Session, Project Project, string Text1, string Text2)>
+        SeedInterruptedChatAsync(string suffix)
+    {
+        const string text1 = "первый вопрос разговора с запасом символов для якоря";
+        const string text2 = "второй вопрос разговора с запасом символов для якоря";
+
+        var dir = MkProjectDir(suffix);
+        var project = _projectManager.Create("P-" + suffix, dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, name: "Прерванный чат " + suffix);
+        var csid = "csid-" + Guid.NewGuid().ToString("N")[..12];
+        var live = _sut.GetById(session.Id)!;
+        live.ClaudeSessionId = csid;
+
+        await _historyService.SaveAsync(csid,
+        [
+            new StoredUserMessage(text1),
+            new StoredTextMessage("ответ 1"),
+            new StoredResultMessage("success", 100, 1),
+            new StoredUserMessage(text2),
+            new StoredTextMessage("начал"),
+        ]);
+
+        var flat = TranscriptMigrator.FlattenCwd(project.RootPath);
+        var transcriptDir = Path.Combine(_llmProviders.UserProfileDir, "projects", flat);
+        Directory.CreateDirectory(transcriptDir);
+        var sb = new StringBuilder();
+        sb.Append("{\"type\":\"system\",\"subtype\":\"init\",\"sessionId\":\"" + csid + "\",\"uuid\":\"s0\"}\n");
+        sb.Append("{\"type\":\"user\",\"sessionId\":\"" + csid + "\",\"uuid\":\"u1\",\"message\":{\"role\":\"user\",\"content\":" + JsonStr(text1) + "}}\n");
+        sb.Append("{\"type\":\"assistant\",\"sessionId\":\"" + csid + "\",\"uuid\":\"a1\",\"message\":{\"role\":\"assistant\",\"content\":\"ответ 1\"}}\n");
+        sb.Append("{\"type\":\"user\",\"sessionId\":\"" + csid + "\",\"uuid\":\"u2\",\"message\":{\"role\":\"user\",\"content\":" + JsonStr(text2) + "}}\n");
+        // Оборванный ход: tool_use t9 без парного tool_result (кнопка «Стоп»)
+        sb.Append("{\"type\":\"assistant\",\"sessionId\":\"" + csid + "\",\"uuid\":\"a2\",\"message\":{\"role\":\"assistant\",\"content\":"
+            + "[{\"type\":\"text\",\"text\":\"начал\"},{\"type\":\"tool_use\",\"id\":\"t9\",\"name\":\"Bash\",\"input\":{}}]}}\n");
+        await File.WriteAllTextAsync(Path.Combine(transcriptDir, csid + ".jsonl"), sb.ToString(),
+            new UTF8Encoding(false));
+
+        return (live, project, text1, text2);
+    }
+
+    // Продуктовое решение: 409 не отдаём — история уезжает к фактической границе транскрипта,
+    // а текст прерванного сообщения возвращается черновиком в композер.
+    [Fact]
+    public async Task ПрерванныйХод_ИсторияСинхроннаТранскрипту_ТекстВЧерновик()
+    {
+        var (session, project, text1, text2) = await SeedInterruptedChatAsync("interrupted");
+
+        var result = await _sut.BranchAsync(session.Id, TestUserId, 1, text2,
+            SessionManager.ChatBranchInclude.Turn);
+
+        result.Draft.Should().Be(text2, "незавершённый ввод возвращается человеку, а не теряется");
+
+        var branchHistory = await _historyService.LoadAsync(result.Session.ClaudeSessionId!);
+        branchHistory.OfType<StoredUserMessage>().Should().ContainSingle()
+            .Which.Text.Should().Be(text1, "прерванный ход в ленте ветки не остался");
+        branchHistory.OfType<StoredTextMessage>().Should().NotContain(m => m.Text == "начал");
+
+        var transcript = await File.ReadAllTextAsync(BranchTranscriptPath(result.Session, project));
+        transcript.Should().Contain(text1);
+        transcript.Should().NotContain(text2, "лента и память ветки обрезаны по одной границе");
+        transcript.Should().NotContain("t9", "непарный tool_use в память ветки не попадает");
+    }
+
+    // --- Страховка на смену csid (Session.BranchedFromSessionId) ---
+
+    // Повторяет то, что делает ClaudeSession на system/init: сначала переписывает
+    // Session.ClaudeSessionId пришедшим от CLI значением, затем шлёт session_started.
+    private async Task SimulateCliInitAsync(string sessionId, string cliSessionId)
+    {
+        var entry = GetEntry(sessionId);
+        var acc = entry.GetType().GetField("Accumulator")!.GetValue(entry)!;
+        _sut.GetById(sessionId)!.ClaudeSessionId = cliSessionId;
+        var method = typeof(SessionManager).GetMethod("OnMessageAsync",
+            BindingFlags.NonPublic | BindingFlags.Instance)!;
+        await (Task)method.Invoke(_sut,
+            [sessionId, acc, new SessionStartedMessage(cliSessionId, true, "model", "auto"), 0L])!;
+    }
+
+    // Разведка шага 0: CLI 2.1.276 сессию по --resume не форкает. Поведение версионно-зависимое,
+    // поэтому подготовленная ветвлением пара «транскрипт + история» обязана убираться, если CLI
+    // всё-таки выдал свой session_id — иначе она пролежит мусором до плановой уборки CLI.
+    [Fact]
+    public async Task СтраховкаCsid_CliВыдалСвоюСессию_ОсиротевшаяПараУбрана()
+    {
+        var (session, project, _, text1, _) = await SeedBranchableChatAsync("csid-guard");
+        var branch = (await _sut.BranchAsync(session.Id, TestUserId, 0, text1,
+            SessionManager.ChatBranchInclude.Turn)).Session;
+        var prepared = branch.ClaudeSessionId!;
+        var preparedPath = BranchTranscriptPath(branch, project);
+        File.Exists(preparedPath).Should().BeTrue("затравка: ветвление подложило транскрипт под своим csid");
+        (await _historyService.LoadAsync(prepared)).Should().NotBeEmpty("затравка: история ветки подготовлена");
+
+        await SimulateCliInitAsync(branch.Id, "csid-" + Guid.NewGuid().ToString("N")[..12]);
+
+        File.Exists(preparedPath).Should().BeFalse("подготовленный транскрипт осиротел — его убирают");
+        (await _historyService.LoadAsync(prepared)).Should().BeEmpty("осиротевшая история ветки убрана");
+    }
+
+    // Контроль к тесту выше: у обычного чата (не ветки) гейт BranchedFromSessionId закрыт,
+    // и смена csid ничего не удаляет — иначе страховка сносила бы чужие транскрипты.
+    [Fact]
+    public async Task СтраховкаCsid_ОбычныйЧат_ТранскриптНеТрогает()
+    {
+        var (session, project, csid, _, _) = await SeedBranchableChatAsync("csid-guard-plain");
+        var path = Path.Combine(_llmProviders.UserProfileDir, "projects",
+            TranscriptMigrator.FlattenCwd(project.RootPath), csid + ".jsonl");
+        File.Exists(path).Should().BeTrue("затравка: транскрипт обычного чата на месте");
+
+        await SimulateCliInitAsync(session.Id, "csid-" + Guid.NewGuid().ToString("N")[..12]);
+
+        File.Exists(path).Should().BeTrue("чат не ветка — страховка к нему не применяется");
+        (await _historyService.LoadAsync(csid)).Should().NotBeEmpty();
+    }
+
     // Якорь берётся у ЯКОРНОГО хода, а не у последнего в чате: ветка от первого хода не
     // должна утащить второй.
     [Fact]

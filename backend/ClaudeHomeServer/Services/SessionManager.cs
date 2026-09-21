@@ -2603,8 +2603,14 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             if (history[i] is StoredResultMessage { TranscriptTailUuid: { } uuid }) anchorUuid = uuid;
         }
 
-        // §9.5 — границу не удалось сопоставить (отказ резака) — 409, резать наугад нельзя
-        var branchResult = Llm.TranscriptBrancher.Branch(srcPath, anchors, newCsid, dstPath, anchorUuid);
+        // §9.5 — границу не удалось сопоставить (отказ резака) — 409, резать наугад нельзя.
+        // include резак обязан знать: у beforePrompt граница транскрипта — сам якорный промпт
+        // (не включая), иначе лента ветки и её транскрипт расходятся — на экране вопроса нет,
+        // а в памяти модели и вопрос, и прежний ответ на него.
+        var branchResult = Llm.TranscriptBrancher.Branch(srcPath, anchors, newCsid, dstPath, anchorUuid,
+            include == ChatBranchInclude.BeforePrompt
+                ? Llm.TranscriptBrancher.BranchInclude.BeforePrompt
+                : Llm.TranscriptBrancher.BranchInclude.Turn);
         if (!branchResult.Ok)
         {
             Console.Error.WriteLine($"[SessionManager] Ветвление чата {sessionId} отказано резаком: {branchResult.Reason}");
@@ -2631,6 +2637,30 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             cutAt = history.Count;
             for (var i = anchorHistoryIndex + 1; i < history.Count; i++)
                 if (history[i] is StoredUserMessage or StoredBranchedFromMessage) { cutAt = i; break; }
+        }
+
+        // Резак отступил назад: хвост последнего хода префикса оказался непарным (прерванный
+        // ход, кнопка «Стоп») и фактическая граница транскрипта ушла к НАЧАЛУ этого хода.
+        // История обязана совпасть с ней шаг в шаг, иначе в ленте остался бы ход, которого
+        // нет в памяти модели. 409 тут не отдаём (продуктовое решение): отказывать за то, что
+        // разговор когда-то прервался, хуже, чем перенести незавершённый ввод в черновик —
+        // тем же путём, что уже работает у beforePrompt.
+        if (branchResult.AnchorTurnExcluded)
+        {
+            // Сообщение, начавшее исключённый ход: у turn это сам якорь, у beforePrompt —
+            // предыдущее сообщение пользователя (якорный ход в ветку и так не входил).
+            var droppedIndex = anchorHistoryIndex;
+            if (include == ChatBranchInclude.BeforePrompt)
+            {
+                droppedIndex = -1;
+                for (var i = anchorHistoryIndex - 1; i >= 0; i--)
+                    if (history[i] is StoredUserMessage) { droppedIndex = i; break; }
+                if (droppedIndex < 0)
+                    throw new InvalidOperationException(
+                        "Не удалось найти этот шаг в памяти модели; попробуйте ветвиться от другого сообщения");
+            }
+            cutAt = droppedIndex;
+            draft = (history[droppedIndex] as StoredUserMessage)?.Text;
         }
 
         var branchHistory = history.Take(cutAt).ToList();
@@ -8193,6 +8223,33 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         }
     }
 
+    // Подготовленная ветвлением пара «{csid}.jsonl + data/sessions/{csid}» осиротела: CLI на
+    // первом ходе ветки выдал другой session_id, и подложенный транскрипт уже никто не
+    // прочитает (история с этого момента пишется под новым ключом). Гейт общего разговора —
+    // тот же, что в DeleteAsync: пока на csid ссылается другой чат (двойник, созданный с тем
+    // же resumeSessionId), не трогаем ни историю, ни транскрипт. Сам чат-ветка под этот гейт
+    // уже не попадает — его ClaudeSessionId к этому моменту переписан на пришедший от CLI.
+    // Best-effort: уборка не должна ронять ход, все сбои — в лог (внутри DeleteTranscript).
+    private void CleanupOrphanBranchTranscript(Session info, string orphanCsid)
+    {
+        if (_sessions.Values.Any(e => e.Info.ClaudeSessionId == orphanCsid))
+        {
+            _log.LogInformation(
+                "Ветка {SessionId}: CLI сменил сессию на другую, но подготовленный {Csid} оставлен — на него ссылается другой чат",
+                info.Id, orphanCsid);
+            return;
+        }
+        _log.LogInformation(
+            "Ветка {SessionId}: CLI выдал свой session_id — убираем осиротевшую подготовленную сессию {Csid}",
+            info.Id, orphanCsid);
+        try { _history.Delete(orphanCsid); }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Историю осиротевшей сессии {Csid} убрать не удалось", orphanCsid);
+        }
+        DeleteTranscript(info, orphanCsid);
+    }
+
     // Уведомить клиентов об удалении чата (в т.ч. авто-удалении временного) —
     // адресация как у BroadcastStatusChangeAsync: проект или владелец чата
     private async Task BroadcastChatDeletedAsync(string sessionId, Session info)
@@ -8268,6 +8325,16 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             switch (msg)
             {
                 case SessionStartedMessage m:
+                    // Страховка ветвления: CLI 2.1.276 сессию по --resume не форкает (разведка
+                    // шага 0), но это поведение версионно-зависимое. Ветке мы подложили
+                    // транскрипт и историю под СВОИМ csid — если CLI выдал другой session_id,
+                    // подготовленная пара осиротела и её надо убрать, иначе она пролежит на
+                    // диске до плановой уборки CLI, а в data/sessions останется навсегда.
+                    // Гейт BranchedFromSessionId — у обычных чатов проверка бесплатна.
+                    if (entry is { Info.BranchedFromSessionId: not null }
+                        && acc.SaveKey is { Length: > 0 } preparedCsid
+                        && !string.Equals(preparedCsid, m.ClaudeSessionId, StringComparison.Ordinal))
+                        CleanupOrphanBranchTranscript(entry.Info, preparedCsid);
                     acc.SetSaveKey(m.ClaudeSessionId);
                     acc.OnSessionStarted(m.Model, m.Mode, m.TurnWorktree);
                     if (entry is not null)

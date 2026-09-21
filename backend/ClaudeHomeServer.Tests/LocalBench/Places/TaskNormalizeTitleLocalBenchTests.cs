@@ -34,21 +34,14 @@ public class TaskNormalizeTitleLocalBenchTests(ITestOutputHelper output)
     [Fact]
     public async Task Замер_нормализации_заголовка_задачи()
     {
-        var stand = new LocalBenchStand();
-        if (!await stand.AliveAsync())
-        {
-            output.WriteLine($"Локальный стенд {stand.BaseUrl} не поднят — замер пропущен");
-            return;
-        }
+        var runner = await BenchExecutor.CreateAsync(output);
+        if (runner is null) return;
 
         var bank = LocalBenchCases.Load(LocalActionCatalog.TaskNormalizeTitle);
-        var runner = new LiveLocalRunner(stand);
         var service = new TaskAiService(
             new Mock<IProjectManager>().Object,
             new ConfigurationBuilder().Build(),
             runner);
-
-        output.WriteLine($"Стенд {stand.BaseUrl}, модель {stand.Model}");
 
         var report = await LocalBenchLoop.RunAsync(bank, runner,
             invoke: async c =>
@@ -61,7 +54,7 @@ public class TaskNormalizeTitleLocalBenchTests(ITestOutputHelper output)
                 return $"→ «{normalized.Title}»"
                        + (normalized.DueHint is null ? "" : $" [{normalized.DueHint}]");
             },
-            judge: (_, shot) => TaskNormalizeTitleOracle.Violation(shot.RawAnswer),
+            judge: (_, turns) => TaskNormalizeTitleOracle.Violation(turns.Last.RawAnswer),
             output);
 
         report.WriteTo(output);

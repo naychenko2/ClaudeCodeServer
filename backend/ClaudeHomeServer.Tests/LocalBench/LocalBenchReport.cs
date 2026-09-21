@@ -18,11 +18,15 @@ namespace ClaudeHomeServer.Tests.LocalBench;
 /// сводку в выдумку. Минимум и максимум печатаются рядом — разброс сам по себе
 /// информативен: широкий говорит, что стенду верить нельзя, а не что место медленное.
 /// </summary>
-public sealed class LocalBenchReport(string place)
+public sealed class LocalBenchReport(string place, string executor = "")
 {
     private readonly List<LocalBenchRow> _rows = [];
 
     public string Place { get; } = place;
+
+    /// <summary>Кто исполнял ходы: без этого две таблицы прогона не отличить друг от друга.</summary>
+    public string Executor { get; } = executor;
+
     public IReadOnlyList<LocalBenchRow> Rows => _rows;
 
     public void Add(LocalBenchRow row) => _rows.Add(row);
@@ -37,15 +41,16 @@ public sealed class LocalBenchReport(string place)
 
     public void WriteTo(ITestOutputHelper output)
     {
-        output.WriteLine($"Место: {Place} — кейсов {Total}");
+        output.WriteLine($"Место: {Place} — кейсов {Total}"
+                         + (string.IsNullOrEmpty(Executor) ? "" : $"; исполнитель: {Executor}"));
         output.WriteLine("");
-        output.WriteLine($"{"кейс",-24} {"валиден",-9} {"обрыв",-7} {"мс",-7} {"ток",-5} причина / результат");
-        output.WriteLine(new string('-', 110));
+        output.WriteLine($"{"кейс",-24} {"валиден",-9} {"обрыв",-7} {"мс",-7} {"ток",-5} {"ход",-4} причина / результат");
+        output.WriteLine(new string('-', 115));
         foreach (var r in _rows)
             output.WriteLine(
                 $"{Cut(r.CaseId, 24),-24} {(r.Valid ? "да" : "НЕТ"),-9} {(r.Truncated ? "ДА" : "-"),-7} "
-                + $"{r.DurationMs,-7} {r.CompletionTokens,-5} {Cut(r.Note ?? r.Violation ?? "", 50)}");
-        output.WriteLine(new string('-', 110));
+                + $"{r.DurationMs,-7} {r.CompletionTokens,-5} {r.Turns,-4} {Cut(r.Note ?? r.Violation ?? "", 50)}");
+        output.WriteLine(new string('-', 115));
         output.WriteLine(
             $"Валидность {ValidCount}/{Total}; обрывов {TruncatedCount}/{Total}; "
             + $"молчаний {SilentCount}/{Total}; время медиана {MedianMs} мс "
@@ -73,7 +78,9 @@ public sealed class LocalBenchReport(string place)
 /// Строка таблицы «место × кейс × валидность × время».
 /// <paramref name="Violation"/> — чем именно нарушен контракт (пусто у валидного ответа).
 /// <paramref name="Note"/> — что место вернуло на выходе, для глазной проверки.
+/// <paramref name="Turns"/> — сколько ходов модели стоил кейс: у двухходового места
+/// (project-icon) третий ход означает сработавший повтор, и это видно только здесь.
 /// </summary>
 public sealed record LocalBenchRow(
     string CaseId, bool Valid, string? Violation, bool Truncated, bool Answered,
-    long DurationMs, int CompletionTokens, string? Note);
+    long DurationMs, int CompletionTokens, string? Note, int Turns = 1);

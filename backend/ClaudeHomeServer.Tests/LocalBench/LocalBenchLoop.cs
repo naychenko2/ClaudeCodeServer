@@ -19,15 +19,19 @@ public static class LocalBenchLoop
     /// выходе, — краткой строкой для колонки результата (её видит человек в продукте).
     /// </param>
     /// <param name="judge">
-    /// Оракул контракта: null — ответ валиден, иначе текст нарушения. Судит сырой ответ
+    /// Оракул контракта: null — ответ валиден, иначе текст нарушения. Судит сырые ответы
     /// модели, а не выход сервиса: место молча деградирует на исходные данные, и по его
-    /// выходу отказ локали неотличим от успеха.
+    /// выходу отказ модели неотличим от успеха.
+    ///
+    /// На вход идут ВСЕ ходы кейса, а не последний: место бывает многоходовым
+    /// (project-icon: слова → выбор → повтор), и судить там надо итог всей цепочки.
+    /// Одноходовому месту достаточно <see cref="LocalBenchTurns.Last"/>.
     /// </param>
     public static async Task<LocalBenchReport> RunAsync(
         LocalBenchCaseBank bank,
-        LiveLocalRunner runner,
+        BenchRunner runner,
         Func<LocalBenchCase, Task<string?>> invoke,
-        Func<LocalBenchCase, LocalBenchShot, string?> judge,
+        Func<LocalBenchCase, LocalBenchTurns, string?> judge,
         ITestOutputHelper output)
     {
         // Прогрев весов: холостой вызов, чтобы модель загрузилась в память.
@@ -45,7 +49,7 @@ public static class LocalBenchLoop
             : $"Прогрев места (в статистику не идёт): {warmup.DurationMs} мс, "
               + $"{warmup.CompletionTokens} ток, причина остановки {warmup.FinishReason ?? "-"}");
 
-        var report = new LocalBenchReport(bank.Place);
+        var report = new LocalBenchReport(bank.Place, runner.Describe);
         // Строго последовательно: правило 1 спецификации Батареи — не больше одной
         // активной задачи на локальную модель, иначе метрика времени недостоверна.
         foreach (var c in bank.Cases)
@@ -53,17 +57,21 @@ public static class LocalBenchLoop
             runner.ResetShots();
             var outcome = await invoke(c);
 
-            var shot = runner.LastShot;
-            Assert.NotNull(shot); // место обязано сходить в модель — иначе замер ни о чём
-            var violation = judge(c, shot);
+            var turns = new LocalBenchTurns(runner.Shots);
+            Assert.True(turns.Any, // место обязано сходить в модель — иначе замер ни о чём
+                $"кейс «{c.Id}»: место не сходило в модель ни разу");
+            var violation = judge(c, turns);
             report.Add(new LocalBenchRow(
                 CaseId: c.Id,
                 Valid: violation is null,
-                Violation: shot.Error is null ? violation : $"{violation} ({shot.Error})",
-                Truncated: shot.Truncated,
-                Answered: shot.Answered,
-                DurationMs: shot.DurationMs,
-                CompletionTokens: shot.CompletionTokens,
+                Violation: turns.Error is null ? violation : $"{violation} ({turns.Error})",
+                Truncated: turns.Truncated,
+                Answered: turns.Answered,
+                // Время кейса — сумма его ходов: у многоходового места человек ждёт всю
+                // цепочку, и последний ход в одиночку сказал бы о месте неправду.
+                DurationMs: turns.DurationMs,
+                CompletionTokens: turns.CompletionTokens,
+                Turns: turns.Count,
                 Note: violation is null ? outcome : null));
         }
 
@@ -96,4 +104,29 @@ public static class LocalBenchLoop
     }
 
     private static long TicksToMs(long ticks) => ticks * 1000 / Stopwatch.Frequency;
+}
+
+/// <summary>
+/// Ходы ОДНОГО кейса: у одноходового места их один, у двухходового project-icon — два
+/// или три (ход слов, ход выбора и, если выбор отвергнут, повтор).
+///
+/// Сводки считаются по всей цепочке намеренно: время кейса — сумма (человек ждёт всё),
+/// обрыв — по любому ходу (оборванный ход слов портит меню так же молча, как оборванный
+/// выбор), молчание — по последнему (на нём место и остаётся без результата).
+/// </summary>
+public sealed record LocalBenchTurns(IReadOnlyList<LocalBenchShot> Shots)
+{
+    public bool Any => Shots.Count > 0;
+    public int Count => Shots.Count;
+
+    /// <summary>Последний ход цепочки — он и даёт месту итоговый ответ.</summary>
+    public LocalBenchShot Last => Shots[^1];
+
+    public long DurationMs => Shots.Sum(s => s.DurationMs);
+    public int CompletionTokens => Shots.Sum(s => s.CompletionTokens);
+    public bool Truncated => Shots.Any(s => s.Truncated);
+    public bool Answered => Any && Last.Answered;
+
+    /// <summary>Первый сбой транспорта в цепочке, если он был.</summary>
+    public string? Error => Shots.Select(s => s.Error).FirstOrDefault(e => e is not null);
 }

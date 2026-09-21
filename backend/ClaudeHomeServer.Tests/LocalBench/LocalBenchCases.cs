@@ -66,17 +66,33 @@ public static class LocalBenchCases
     }
 }
 
-/// <summary>Банк кейсов одного места каталога.</summary>
+/// <summary>
+/// Банк кейсов одного места каталога.
+///
+/// <see cref="Shared"/> — вход, общий для всех кейсов банка: словарь меток владельца у
+/// task-classify, словарь тегов базы у notes-tags. Он часть входа места, но один на весь
+/// банк, и копия его в каждом кейсе была бы двадцатикратным дублем одного и того же
+/// списка. Форму знает оракул места, харнесс в неё не смотрит.
+/// </summary>
 public sealed record LocalBenchCaseBank(
     [property: JsonPropertyName("place")] string Place,
-    [property: JsonPropertyName("cases")] IReadOnlyList<LocalBenchCase> Cases);
+    [property: JsonPropertyName("cases")] IReadOnlyList<LocalBenchCase> Cases,
+    [property: JsonPropertyName("shared")] JsonElement? Shared = null);
 
 /// <summary>
 /// Один кейс: подставной вход места и (необязательно) эталон для метрики совпадения.
 /// <see cref="Expect"/> — сырой JSON: его смысл знает оракул конкретного места, поэтому
 /// новое место подключается своим банком, не трогая харнесс.
+///
+/// <see cref="Context"/> — остальной вход места, когда он не сводится к одной строке:
+/// кандидаты на дубль у task-dedup, роль и характер у persona-voice, пожелание владельца
+/// у project-icon. Форму знает оракул места, харнесс в неё не смотрит. Поле появилось
+/// на втором месте банка (task-classify) — вход из одной строки оказался мерой пилота,
+/// а не свойством мест; заводить ради этого по банку на каждый аргумент значило бы
+/// разнести один кейс по нескольким файлам.
 /// </summary>
 public sealed record LocalBenchCase(
     [property: JsonPropertyName("id")] string Id,
     [property: JsonPropertyName("input")] string Input,
-    [property: JsonPropertyName("expect")] JsonElement? Expect = null);
+    [property: JsonPropertyName("expect")] JsonElement? Expect = null,
+    [property: JsonPropertyName("context")] JsonElement? Context = null);

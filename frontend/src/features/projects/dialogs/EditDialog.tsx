@@ -18,6 +18,7 @@ import { ProjectSyncToggle } from '../../../components/ProjectSyncToggle';
 import { ProjectIconSection } from '../ProjectIconSection';
 import { McpProjectSection } from '../../mcp/McpProjectSection';
 import { DesktopFacetSection } from '../../desktop/DesktopFacetSection';
+import { ProjectMapSection } from './ProjectMapSection';
 import { BackgroundSection } from './BackgroundSection';
 import { AccordionSection, type AccordionSummaryTone } from './AccordionSection';
 import { ArchiveSettings } from '../../../components/ArchiveSettings';
@@ -245,6 +246,10 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
   // и запускаемый ею проход. Ручной архив, режим «Архивные» и сводка карточки
   // работают без тумблера — гейт скрывает лишь блок ArchiveSettings.
   const autoArchiveEnabled = useFeature(FLAGS.chatAutoArchive);
+  // Уборка карты проекта (флаг project-map-hygiene): аккордеон в настройках проекта
+  // с фактами скана. review/apply под этим же флагом закрыты на сервере (404),
+  // так что эндпоинты не провисают при выключенной фиче
+  const mapHygieneEnabled = useFeature(FLAGS.projectMapHygiene);
   const me = useMe();
   const isOwner = !project.ownerId || project.ownerId === me.userId;
   const [view, setView] = useState<View>('main');
@@ -569,6 +574,7 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
       <McpProjectSection project={project} onUpdated={onProjectUpdated} />
       {desktopEnabled && <DesktopFacetSection project={project} onUpdated={onProjectUpdated} />}
       <GitHistorySection project={project} />
+      {mapHygieneEnabled && <ProjectMapSection project={project} />}
       {isOwner && (
         <BackgroundSection
           project={project}

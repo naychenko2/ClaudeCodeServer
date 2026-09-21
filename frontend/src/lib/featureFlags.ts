@@ -29,6 +29,10 @@ export const FLAGS = {
   // Ветвление чата (docs/research/chat-branching-2026-09.md, §7): новый чат с копией
   // истории оригинала до выбранного шага.
   chatBranch: 'chat-branch',
+  // Уборка карты проекта (CLAUDE.md), фронтовая часть: аккордеон в настройках проекта
+  // и модалка с фактами сканера (мёртвые ссылки, длинные секции, вложенные карты).
+  // Тумблер скрывает и секцию, и модалку; review/apply под ним закрыты на сервере 404.
+  projectMapHygiene: 'project-map-hygiene',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

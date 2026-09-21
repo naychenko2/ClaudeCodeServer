@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 
@@ -77,6 +78,52 @@ public class ProjectMapControllerTests : IClassFixture<TestWebApplicationFactory
 
     // ─── review: формулировки модели поверх тех же фактов ───────────────────────
 
+    // Ручки review и apply закрыты фич-флагом (план Р11): пока он выключен, фичи для
+    // пользователя не существует — 404, а не 403 и не 501. Держим оба конца в одном
+    // тесте: гейт теряется именно при сведении веток, и «включённый флаг работает»
+    // без «выключенный отвечает 404» ловит только половину пропажи
+    [Fact]
+    public async Task Ревью_ГейтФичФлага_ВыключенныйФлагДаёт404_ВключённыйПускает()
+    {
+        var id = await SetupProjectAsync();
+        var scan = await ScanAsync(id);
+        var body = new { baseSha = scan.GetProperty("baseSha").GetString() };
+
+        await SetFeatureAsync(_client, false);
+        var closed = await _client.PostAsJsonAsync($"/api/projects/{id}/map-hygiene/review", body);
+        closed.StatusCode.Should().Be(HttpStatusCode.NotFound);
+
+        await SetFeatureAsync(_client, true);
+        var opened = await _client.PostAsJsonAsync($"/api/projects/{id}/map-hygiene/review", body);
+        opened.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    // apply — заглушка волны 4, но гейт на ней уже настоящий: ручка ПИШЕТ в CLAUDE.md,
+    // и открытой при выключенной фиче быть не должна ни на одном этапе
+    [Fact]
+    public async Task Применение_ВыключенныйФлаг_Возвращает404()
+    {
+        var id = await SetupProjectAsync();
+        await SetFeatureAsync(_client, false);
+
+        var response = await _client.PostAsJsonAsync($"/api/projects/{id}/map-hygiene/apply",
+            new { baseSha = "любой", ids = Array.Empty<string>() });
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // Скан флагом не закрыт (план §11): он ничего не меняет, и тест волны 1 флага не знает
+    [Fact]
+    public async Task Скан_ВыключенныйФлаг_ВсёРавноОтдаётФакты()
+    {
+        var id = await SetupProjectAsync();
+        await SetFeatureAsync(_client, false);
+
+        var response = await _client.GetAsync($"/api/projects/{id}/map-hygiene/scan");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
     // Заглушка раннера в тестовой фабрике отдаёт «[]» — не разбираемый как суждения
     // ответ. Это и есть штатный тихий фолбэк: факты сканера доезжают целиком, а причину
     // неполноты пишет СЕРВЕР. Пустой экран или 500 здесь были бы дефектом
@@ -85,6 +132,7 @@ public class ProjectMapControllerTests : IClassFixture<TestWebApplicationFactory
     {
         var id = await SetupProjectAsync();
         var scan = await ScanAsync(id);
+        await SetFeatureAsync(_client, true);
 
         var response = await _client.PostAsJsonAsync($"/api/projects/{id}/map-hygiene/review",
             new { baseSha = scan.GetProperty("baseSha").GetString() });
@@ -108,6 +156,7 @@ public class ProjectMapControllerTests : IClassFixture<TestWebApplicationFactory
     public async Task Ревью_УстаревшийBaseSha_Возвращает409()
     {
         var id = await SetupProjectAsync();
+        await SetFeatureAsync(_client, true);
 
         var response = await _client.PostAsJsonAsync($"/api/projects/{id}/map-hygiene/review",
             new { baseSha = "устарел" });
@@ -119,6 +168,9 @@ public class ProjectMapControllerTests : IClassFixture<TestWebApplicationFactory
         body.GetProperty("baseSha").GetString().Should().NotBeNullOrEmpty();
     }
 
+    // Флаг чужому владельцу включаем НАМЕРЕННО: иначе 404 пришёл бы от гейта фичи,
+    // проверка владения не выполнилась бы вовсе, а тест остался бы зелёным при любой
+    // дыре в изоляции
     [Fact]
     public async Task Ревью_ПроектЧужогоВладельца_Возвращает404()
     {
@@ -126,6 +178,7 @@ public class ProjectMapControllerTests : IClassFixture<TestWebApplicationFactory
         var scan = await ScanAsync(id);
         using var stranger = _factory.CreateAuthenticatedClient(
             TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
+        await SetFeatureAsync(stranger, true);
 
         var response = await stranger.PostAsJsonAsync($"/api/projects/{id}/map-hygiene/review",
             new { baseSha = scan.GetProperty("baseSha").GetString() });
@@ -138,6 +191,15 @@ public class ProjectMapControllerTests : IClassFixture<TestWebApplicationFactory
         var response = await _client.GetAsync($"/api/projects/{id}/map-hygiene/scan");
         response.EnsureSuccessStatusCode();
         return JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+    }
+
+    // Флаг per-user, значение живёт в users.json — выставляем тем же клиентом, чьи ручки
+    // потом дёргаем
+    private static async Task SetFeatureAsync(HttpClient client, bool enabled)
+    {
+        var response = await client.PutAsJsonAsync(
+            $"/api/feature-flags/{FeatureFlagKeys.ProjectMapHygiene}", new { enabled });
+        response.EnsureSuccessStatusCode();
     }
 
     [Fact]

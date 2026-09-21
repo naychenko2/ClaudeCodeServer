@@ -481,6 +481,10 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Docs.ProjectMapScanner>(
 // Фаза 2 той же уборки: суждение модели поверх фактов сканера. Состояния нет, ответ
 // модели нигде не кэшируется — факты пересчитываются на каждый запрос
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Docs.ProjectMapReviewService>();
+// Фаза 3: запись отмеченных человеком правок в CLAUDE.md. Синглтон не ради экономии —
+// лок на путь карты обязан быть общим для всех запросов процесса (два окна продукта у
+// одного человека правят одну карту)
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Docs.ProjectMapApplyService>();
 // Применение пресета каркаса знакомства v2: только добавляет поверх живой папки,
 // отчёт по каждому шагу; зависимости-синглтоны, сам тоже stateless-синглтон
 builder.Services.AddSingleton<ProjectPresetService>();

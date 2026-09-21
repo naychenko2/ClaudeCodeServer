@@ -66,9 +66,40 @@ public static class ClaudeMdExpander
         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var sb = new StringBuilder();
         Append(sb, path, visited, depth: 0, state);
-        return new ClaudeMdExpansion(sb.Length > 0 ? sb.ToString() : null,
-            state.ImportCount, state.Missing, state.Truncated, state.DepthExceeded);
+        return Result(sb, state);
     }
+
+    /// <summary>
+    /// То же раскрытие, но от УЖЕ ПРОЧИТАННОГО текста карты: path тут — путь этого файла,
+    /// он нужен только чтобы резолвить относительные импорты и ловить циклы.
+    ///
+    /// Нужна применению правок (Р10а): оно читает файл ровно один раз и обязано считать
+    /// хеш по тому же снимку, который потом запишет, — повторное чтение с диска на шаге
+    /// сверки открыло бы окно, в котором сверяется один текст, а перезаписывается другой.
+    /// Требование к паре методов — побайтовое равенство результатов
+    /// (<c>Expand(File.ReadAllText(p), p).Text == Expand(p).Text</c>), под тестом: две
+    /// разошедшиеся реализации давали бы 409 на КАЖДОМ применении, неотличимый для
+    /// человека от настоящей гонки.
+    /// </summary>
+    public static ClaudeMdExpansion Expand(string text, string path)
+    {
+        string full;
+        try { full = Path.GetFullPath(path); }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return new ClaudeMdExpansion(null, 0, [], false, false);
+        }
+
+        var state = new ExpandState();
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { full };
+        var sb = new StringBuilder();
+        AppendText(sb, text, full, visited, depth: 0, state);
+        return Result(sb, state);
+    }
+
+    private static ClaudeMdExpansion Result(StringBuilder sb, ExpandState state) =>
+        new(sb.Length > 0 ? sb.ToString() : null,
+            state.ImportCount, state.Missing, state.Truncated, state.DepthExceeded);
 
     // Что накопилось по дороге вглубь дерева импортов
     private sealed class ExpandState
@@ -104,6 +135,14 @@ public static class ClaudeMdExpander
             return;
         }
 
+        AppendText(sb, text, full, visited, depth, state);
+    }
+
+    // Разбор уже прочитанного текста: full — полный путь файла, из которого он взят
+    // (каталог для относительных импортов, имя для сообщений о цикле)
+    private static void AppendText(StringBuilder sb, string text, string full, HashSet<string> visited,
+        int depth, ExpandState state)
+    {
         var dir = Path.GetDirectoryName(full) ?? "";
         var fence = new MarkdownFence();
         foreach (var line in text.Split('\n'))

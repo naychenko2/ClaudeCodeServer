@@ -65,7 +65,9 @@ public class ProjectMapReviewServiceTests : IDisposable
     public async Task МодельПриславшаяApply_ПатчБерётсяИзФактаСканера()
     {
         var report = ScanTypicalMap();
-        var id = report.Suggestions.First(s => s.Kind == MapSuggestions.KindDeadLink).Id;
+        var fact = report.Suggestions.First(s => s.Kind == MapSuggestions.KindDeadLink);
+        var id = fact.Id;
+        fact.Apply.Should().NotBeNull("иначе тест вырождается: подделке нечего было бы вытеснять");
         // Подделка патча: модель пытается продиктовать замену в файле
         var answer = $$"""
             { "suggestions": [ { "id": "{{id}}", "severity": "high", "modelSays": "починить",
@@ -77,9 +79,10 @@ public class ProjectMapReviewServiceTests : IDisposable
         var result = await Service(_ => answer).ReviewAsync(report, ownerId: "u1");
 
         var suggestion = result.Suggestions.Single(s => s.Id == id);
-        // Патч — только из отчёта сканера; до волны 4 он там пуст, но главное, что
-        // присланный моделью не доехал ни в каком виде
-        suggestion.Apply.Should().BeNull();
+        // Патч — только из отчёта сканера: присланный моделью не доехал ни в каком виде,
+        // и «/etc/passwd» в замену не попал
+        suggestion.Apply.Should().Be(fact.Apply);
+        suggestion.Apply!.After.Should().Be("[флаги](backend/Core/Models/FeatureFlag.cs)");
         suggestion.ModelSays.Should().Be("починить");
     }
 

@@ -218,6 +218,53 @@ public class ClaudeMdExpanderTests : IDisposable
         text.Should().Contain("обрезано");
     }
 
+    // Применение правок к карте читает файл ровно один раз и раскрывает состав от уже
+    // прочитанного текста, а скан — от пути. Две реализации обязаны совпадать ПОБАЙТОВО:
+    // малейшее расхождение дало бы 409 на КАЖДОМ применении, а человек видел бы штатную
+    // плашку «файл изменился после проверки», неотличимую от настоящей гонки — фича
+    // выглядела бы рабочей и не применяла бы ничего никогда.
+    //
+    // Случаи не случайные: раскрыватель разбирает текст на строки и склеивает через '\n',
+    // то есть файл без финального перевода строки его приобретает, а CRLF переживает
+    // разбор по-своему
+    [Theory]
+    [InlineData("Заголовок\n@rules/git.md\nХвост\n")]
+    [InlineData("Заголовок\n@rules/git.md\nХвост без перевода строки в конце")]
+    [InlineData("Заголовок\r\n@rules/git.md\r\nХвост\r\n")]
+    [InlineData("Карта без импортов вовсе\n")]
+    [InlineData("")]
+    public void РаскрытиеОтТекстаИОтПути_СовпадаютПобайтово(string map)
+    {
+        Write(Path.Combine("rules", "git.md"), "Коммиты по-русски\n");
+        var root = Write("CLAUDE.md", map);
+
+        var fromPath = ClaudeMdExpander.Expand(root);
+        var fromText = ClaudeMdExpander.Expand(File.ReadAllText(root), root);
+
+        fromText.Text.Should().Be(fromPath.Text);
+        fromText.ImportCount.Should().Be(fromPath.ImportCount);
+        fromText.MissingImports.Should().HaveCount(fromPath.MissingImports.Count);
+        fromText.Truncated.Should().Be(fromPath.Truncated);
+        fromText.DepthExceeded.Should().Be(fromPath.DepthExceeded);
+    }
+
+    // Цикл ловится и на этом пути: карта импортирует сосед, сосед импортирует её саму.
+    // Оба файла в одной папке намеренно — выход выше папки не раскрывается вовсе, и на
+    // «@../CLAUDE.md» цикла не случилось бы, а тест оказался бы вырожденным.
+    // Путь от текста обязан стартовать с УЖЕ занятым корнем: иначе карта прочитается с
+    // диска вторым заходом, текст разойдётся с первым путём и apply будет отвечать 409
+    [Fact]
+    public void РаскрытиеОтТекста_ЦиклНеЗацикливается()
+    {
+        Write("sosed.md", "Сосед\n@CLAUDE.md\n");
+        var root = Write("CLAUDE.md", "Карта\n@sosed.md\n");
+
+        var fromText = ClaudeMdExpander.Expand(File.ReadAllText(root), root);
+
+        fromText.Text.Should().Contain("циклическая ссылка");
+        fromText.Text.Should().Be(ClaudeMdExpander.Expand(root).Text);
+    }
+
     [Fact]
     public void СсылкаВнутриТекста_НеСчитаетсяИмпортом()
     {

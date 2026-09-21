@@ -98,18 +98,99 @@ public class ProjectMapControllerTests : IClassFixture<TestWebApplicationFactory
         opened.StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
-    // apply — заглушка волны 4, но гейт на ней уже настоящий: ручка ПИШЕТ в CLAUDE.md,
-    // и открытой при выключенной фиче быть не должна ни на одном этапе
+    // Гейт на apply — настоящий и обязательный: ручка ПИШЕТ в CLAUDE.md, и открытой при
+    // выключенной фиче быть не должна ни на одном этапе. Держим оба конца в одном тесте:
+    // гейт теряется именно при сведении веток, и это уже случалось
     [Fact]
-    public async Task Применение_ВыключенныйФлаг_Возвращает404()
+    public async Task Применение_ГейтФичФлага_ВыключенныйФлагДаёт404_ВключённыйПускает()
     {
         var id = await SetupProjectAsync();
-        await SetFeatureAsync(_client, false);
+        var scan = await ScanAsync(id);
+        var body = new { baseSha = scan.GetProperty("baseSha").GetString(), ids = Array.Empty<string>() };
 
-        var response = await _client.PostAsJsonAsync($"/api/projects/{id}/map-hygiene/apply",
-            new { baseSha = "любой", ids = Array.Empty<string>() });
+        await SetFeatureAsync(_client, false);
+        var closed = await _client.PostAsJsonAsync($"/api/projects/{id}/map-hygiene/apply", body);
+        closed.StatusCode.Should().Be(HttpStatusCode.NotFound);
+
+        await SetFeatureAsync(_client, true);
+        var opened = await _client.PostAsJsonAsync($"/api/projects/{id}/map-hygiene/apply", body);
+        opened.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    // Флаг чужому владельцу включаем НАМЕРЕННО: иначе 404 пришёл бы от гейта фичи, а
+    // проверка владения могла бы отсутствовать вовсе — и чужой писал бы в чужой CLAUDE.md
+    [Fact]
+    public async Task Применение_ПроектЧужогоВладельца_Возвращает404()
+    {
+        var id = await SetupProjectAsync();
+        var scan = await ScanAsync(id);
+        using var stranger = _factory.CreateAuthenticatedClient(
+            TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
+        await SetFeatureAsync(stranger, true);
+
+        var response = await stranger.PostAsJsonAsync($"/api/projects/{id}/map-hygiene/apply",
+            new { baseSha = scan.GetProperty("baseSha").GetString(), ids = Array.Empty<string>() });
 
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // Живой путь целиком: отмеченная человеком правка чинит ссылку в файле, а ответ несёт
+    // отчёт по итоговому тексту — фронту не нужен второй запрос ради перерисовки шапки
+    [Fact]
+    public async Task Применение_ЧинитМёртвуюСсылкуВФайле()
+    {
+        var id = await SetupProjectAsync();
+        var root = await RootPathAsync(id);
+        // Одноимённый файл в проекте ровно один — условие механической починки
+        var candidate = Path.Combine(root, "backend", "Core", "Models");
+        Directory.CreateDirectory(candidate);
+        File.WriteAllText(Path.Combine(candidate, "FeatureFlag.cs"), "// код");
+        await SetFeatureAsync(_client, true);
+
+        var scan = await ScanAsync(id);
+        var suggestion = scan.GetProperty("suggestions").EnumerateArray()
+            .First(s => s.GetProperty("kind").GetString() == "dead-link");
+        suggestion.GetProperty("apply").GetProperty("after").GetString()
+            .Should().Be("[нет такого](backend/Core/Models/FeatureFlag.cs)");
+
+        var response = await _client.PostAsJsonAsync($"/api/projects/{id}/map-hygiene/apply",
+            new { baseSha = scan.GetProperty("baseSha").GetString(), ids = new[] { suggestion.GetProperty("id").GetString() } });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.GetProperty("applied").EnumerateArray().Should().HaveCount(1);
+        body.GetProperty("failed").EnumerateArray().Should().BeEmpty();
+        body.GetProperty("scan").GetProperty("deadLinkCount").GetInt32().Should().Be(0);
+        File.ReadAllText(Path.Combine(root, "CLAUDE.md"))
+            .Should().Contain("backend/Core/Models/FeatureFlag.cs");
+    }
+
+    // Карту дописали, пока отчёт был открыт: файл не тронут, человек видит плашку
+    // «файл изменился после проверки · Проверить заново»
+    [Fact]
+    public async Task Применение_УстаревшийBaseSha_Возвращает409_ФайлНеТронут()
+    {
+        var id = await SetupProjectAsync();
+        var root = await RootPathAsync(id);
+        await SetFeatureAsync(_client, true);
+        var before = File.ReadAllBytes(Path.Combine(root, "CLAUDE.md"));
+
+        var response = await _client.PostAsJsonAsync($"/api/projects/{id}/map-hygiene/apply",
+            new { baseSha = "устарел", ids = new[] { "deadbeefdeadbeef" } });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.GetProperty("error").GetString().Should().Be("staleBaseSha");
+        body.GetProperty("baseSha").GetString().Should().NotBeNullOrEmpty();
+        File.ReadAllBytes(Path.Combine(root, "CLAUDE.md")).Should().Equal(before);
+    }
+
+    private async Task<string> RootPathAsync(string id)
+    {
+        var response = await _client.GetAsync($"/api/projects/{id}");
+        response.EnsureSuccessStatusCode();
+        var json = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        return json.GetProperty("rootPath").GetString()!;
     }
 
     // Скан флагом не закрыт (план §11): он ничего не меняет, и тест волны 1 флага не знает

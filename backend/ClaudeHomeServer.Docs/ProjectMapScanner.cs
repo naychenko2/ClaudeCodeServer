@@ -152,6 +152,59 @@ public record MapHygieneReport
 }
 
 /// <summary>
+/// Поиск якорной подстроки в карте ВНЕ кодовых заборов — общий для обеих половин фичи:
+/// сканер решает по нему, рождается ли у предложения кнопка, а применение — куда писать.
+///
+/// Заборы не разбираются и на записи тоже: замена по подстроке иначе залезает в пример
+/// внутри ```-блока, а в карте про карты таких примеров много. Прямое следствие правила:
+/// цель, встречающаяся один раз в тексте и один раз в примере, — ОДИН кандидат, и замена
+/// состоится.
+///
+/// Разметка построчная, а текст при этом НЕ пересобирается из строк: наружу отдаются
+/// смещения в исходной строке текста. Пересборка через '\n' превратила бы CRLF-файл в LF
+/// одной правкой — дифф на весь файл вместо одной строки.
+/// </summary>
+public static class MapAnchorText
+{
+    /// <summary>Смещения всех вхождений якоря вне кодовых заборов, слева направо.</summary>
+    public static IReadOnlyList<int> Offsets(string text, string anchor)
+    {
+        var result = new List<int>();
+        if (string.IsNullOrEmpty(anchor)) return result;
+
+        var fence = new MarkdownFence();
+        var pos = 0;
+        while (true)
+        {
+            var nl = text.IndexOf('\n', pos);
+            var end = nl < 0 ? text.Length : nl;
+            // Строка без завершающего \r: якорь пришёл от сканера, который читал тот же
+            // текст построчно, и переноса внутри себя не содержит
+            var lineEnd = end > pos && text[end - 1] == '\r' ? end - 1 : end;
+            var line = text[pos..lineEnd];
+
+            if (!fence.Consume(line) && !fence.InFence)
+            {
+                var i = line.IndexOf(anchor, StringComparison.Ordinal);
+                while (i >= 0)
+                {
+                    result.Add(pos + i);
+                    i = line.IndexOf(anchor, i + 1, StringComparison.Ordinal);
+                }
+            }
+
+            if (nl < 0) break;
+            pos = nl + 1;
+        }
+        return result;
+    }
+
+    /// <summary>Замена подстроки по смещению — без пересборки текста, BOM и CRLF целы.</summary>
+    public static string ReplaceAt(string text, int offset, int length, string replacement) =>
+        string.Concat(text.AsSpan(0, offset), replacement, text.AsSpan(offset + length));
+}
+
+/// <summary>
 /// Общий словарь предложений: виды находок, градации серьёзности и формула id.
 /// Живёт отдельно от сканера, потому что нужен обеим половинам — той, что факты
 /// порождает, и той, что сшивает с ними суждение модели.
@@ -270,12 +323,26 @@ public sealed class ProjectMapScanner(IConfiguration? config = null)
     private const int FirstLineMax = 120;
 
     // ct — полный обход дерева идёт на каждый запрос: ушёл клиент, ушёл и обход
-    public MapHygieneReport Scan(string root, CancellationToken ct = default)
+    public MapHygieneReport Scan(string root, CancellationToken ct = default) =>
+        Scan(root, mainText: null, ct);
+
+    /// <summary>
+    /// Тот же скан, но корневая карта берётся из УЖЕ ПРОЧИТАННОГО текста, а не с диска.
+    ///
+    /// Нужен применению правок (Р10а): файл там читается ровно один раз, и сверка хеша,
+    /// поиск фактов и запись обязаны идти по одному снимку. Повторное чтение с диска
+    /// между сверкой и записью означало бы, что сверен один текст, а перезаписан другой —
+    /// чужая правка исчезла бы целиком, а сверка baseSha отработала бы «успешно».
+    /// </summary>
+    /// <param name="mainText">null — читать карту с диска обычным путём.</param>
+    public MapHygieneReport Scan(string root, string? mainText, CancellationToken ct = default)
     {
         var mainFull = Path.Combine(root, MainMapName);
 
         // Карты нет вовсе — штатный ответ, а не ошибка: у большинства проектов её и не будет
-        var main = SafeExists(mainFull) ? ParseMap(root, MainMapName) : null;
+        var main = mainText is not null
+            ? ParseText(MainMapName, mainText)
+            : SafeExists(mainFull) ? ParseMap(root, MainMapName) : null;
 
         // Указатель «имя файла → где он лежит» нужен ТОЛЬКО кандидатам починки, а они
         // бывают лишь у ссылок разобранных карт: нет карты — не держим в памяти путь
@@ -325,7 +392,11 @@ public sealed class ProjectMapScanner(IConfiguration? config = null)
                 docsRefs.GetValueOrDefault(s.StartLine), s.FirstLine))
             .ToList();
 
-        var expansion = ClaudeMdExpander.Expand(Path.Combine(root, MainMapName));
+        // Раскрытие от текста, когда он уже в руках: то же самое побайтово, но без
+        // второго чтения файла с диска (инвариант «читаем ровно один раз», Р10а)
+        var expansion = mainText is not null
+            ? ClaudeMdExpander.Expand(mainText, mainFull)
+            : ClaudeMdExpander.Expand(mainFull);
         var deadImports = DeadImportFindings(root, main, expansion);
 
         // Предложения собираются из ПОКАЗАННЫХ находок, а не из полных списков: факт,
@@ -338,7 +409,13 @@ public sealed class ProjectMapScanner(IConfiguration? config = null)
         {
             Path = MainMapName,
             Exists = true,
-            BaseSha = Sha256(main.Text),
+            // Отпечаток по РАСКРЫТОМУ составу, а не по одному файлу: правка импортированного
+            // rules/*.md не меняет в CLAUDE.md ни байта, и при хеше по файлу обе опирающиеся
+            // на baseSha проверки («тот ли файл я читал») врали бы ровно в том сценарии, ради
+            // которого раскрытие и заведено. Раскрытие считается ВСЕГДА, в том числе при нуле
+            // импортов — иначе у карты, в которую импорт добавили, хеш скакнул бы без единой
+            // содержательной правки. Точка правды одна: и review, и apply берут это поле
+            BaseSha = Sha256(expansion.Text ?? main.Text),
 
             Lines = main.Lines,
             Bytes = main.Bytes,
@@ -369,7 +446,8 @@ public sealed class ProjectMapScanner(IConfiguration? config = null)
             SkippedCount = skipped.Count,
             Skipped = Cap(skipped, _maxLinkFindingsInReport),
 
-            Suggestions = BuildSuggestions(deadShown, deadImportsShown, rootRelativeShown, sections),
+            Suggestions = BuildSuggestions(deadShown, deadImportsShown, rootRelativeShown, sections,
+                main.Text),
 
             UnclosedFence = main.UnclosedFence,
 
@@ -399,7 +477,8 @@ public sealed class ProjectMapScanner(IConfiguration? config = null)
     // позже, сшивкой по id; сам сканер про модель не знает вовсе
     private static IReadOnlyList<MapSuggestion> BuildSuggestions(
         IReadOnlyList<MapLinkFinding> dead, IReadOnlyList<MapLinkFinding> deadImports,
-        IReadOnlyList<MapLinkFinding> rootRelative, IReadOnlyList<MapSection> sections)
+        IReadOnlyList<MapLinkFinding> rootRelative, IReadOnlyList<MapSection> sections,
+        string mainText)
     {
         var result = new List<MapSuggestion>();
         // Id считается от содержимого, поэтому одна и та же ссылка, написанная дважды
@@ -416,7 +495,8 @@ public sealed class ProjectMapScanner(IConfiguration? config = null)
             Add(LinkSuggestion(f, MapSuggestions.KindDeadLink,
                 f.Candidates.Count == 1
                     ? $"ссылка на «{f.Target}» — файла нет; одноимённый файл в проекте один: {f.Candidates[0]}"
-                    : $"ссылка на «{f.Target}» — файла нет"));
+                    : $"ссылка на «{f.Target}» — файла нет",
+                BuildPatch(f, mainText)));
 
         foreach (var f in deadImports)
             Add(LinkSuggestion(f, MapSuggestions.KindDeadImport,
@@ -447,7 +527,8 @@ public sealed class ProjectMapScanner(IConfiguration? config = null)
         return result;
     }
 
-    private static MapSuggestion LinkSuggestion(MapLinkFinding f, string kind, string fact) =>
+    private static MapSuggestion LinkSuggestion(MapLinkFinding f, string kind, string fact,
+        MapApplyPatch? patch = null) =>
         new()
         {
             Id = MapSuggestions.Id(kind, f.AnchorText),
@@ -455,11 +536,59 @@ public sealed class ProjectMapScanner(IConfiguration? config = null)
             Severity = MapSuggestions.DefaultSeverity(kind),
             Fact = f.Path == MainMapName ? fact : $"{fact} (в {f.Path})",
             Anchor = new MapSuggestionAnchor(f.Line, f.Section),
-            // Патч пуст до волны 4: он рождается только у мёртвой ссылки с единственным
-            // кандидатом И уникальным вне кодовых заборов якорем — это контракт записи
-            // (Р10а), а не просто «взять кандидата»
-            Apply = null,
+            // Патч есть только у мёртвой ссылки, и только когда выполнены ОБА условия
+            // формулы Р10а (см. BuildPatch). У импортов, ссылок от корня и длинных секций
+            // он null по определению вида находки, а не «пока не реализован»
+            Apply = patch,
         };
+
+    /// <summary>
+    /// Патч механической починки мёртвой ссылки — или null, и тогда кнопки у предложения
+    /// нет вовсе.
+    ///
+    /// Формула Р10а из двух независимых условий: сканер нашёл РОВНО ОДНОГО одноимённого
+    /// кандидата (чем чинить) И якорь встречается в карте РОВНО ОДИН раз вне кодовых
+    /// заборов (где чинить). Реализовавший только первое получит запись не в ту строку,
+    /// только второе — кнопку, ведущую в никуда.
+    /// </summary>
+    private static MapApplyPatch? BuildPatch(MapLinkFinding f, string mainText)
+    {
+        // Предмет правки ровно один — корневая карта (Р4). Находка вложенной карты
+        // кнопки не получает: адреса файла в теле apply нет и не будет
+        if (f.Path != MainMapName || f.Candidates.Count != 1) return null;
+
+        var anchor = f.AnchorText;
+        if (anchor.Length == 0) return null;
+
+        var candidate = f.Candidates[0];
+        // Путь с пробелом, скобкой, решёткой или угловой скобкой в markdown-ссылку без
+        // экранирования не кладётся: «починка» сделала бы ссылку битой по-новому —
+        // «docs/C#-гайд.md» разберётся как адрес «docs/C» с фрагментом. Редкий случай,
+        // решение человека
+        if (candidate.Any(c => char.IsWhiteSpace(c) || c is '(' or ')' or '#' or '<' or '>' or '"'))
+            return null;
+
+        // Место замены — АДРЕС ссылки, и он ищется по структуре, а не поиском пути по
+        // тексту: в «[docs/a.md](docs/a.md)» путь стоит ещё и в подписи, а в
+        // «[x](a.md#a.md)» — ещё и в якоре, и поиск «последнего вхождения» переписал бы
+        // якорь вместо адреса. Адрес по CommonMark (и по LinkRegex) начинается сразу за
+        // «](» с точностью до пробелов
+        var open = anchor.LastIndexOf("](", StringComparison.Ordinal);
+        if (open < 0) return null;
+        var i = open + 2;
+        while (i < anchor.Length && char.IsWhiteSpace(anchor[i])) i++;
+        if (string.CompareOrdinal(anchor, i, f.Target, 0, f.Target.Length) != 0) return null;
+        var after = string.Concat(anchor.AsSpan(0, i), candidate, anchor.AsSpan(i + f.Target.Length));
+
+        // Второе условие формулы: неуникальный якорь не расширяется контекстом ради
+        // уникальности (человек видел бы в «было → стало» одно, а в файл уезжало бы
+        // другое), а обнуляет патч
+        if (MapAnchorText.Offsets(mainText, anchor).Count != 1) return null;
+
+        // Before и AnchorText — одна строка под двумя именами: первое для показа, второе
+        // для поиска в файле
+        return new MapApplyPatch(anchor, after, anchor);
+    }
 
     // Импорт, который не раскрылся: файла нет. Отдельная находка, а не «пропущено» —
     // человек уверен, что правило едет в контекст, и молчание тут дороже всего.
@@ -613,6 +742,14 @@ public sealed class ProjectMapScanner(IConfiguration? config = null)
             return null;
         }
 
+        return ParseText(relativePath, text, bytes);
+    }
+
+    // Разбор карты из текста. bytes — размер файла на диске; при разборе текста в памяти
+    // считается по кодировке (BOM в эту величину не входит, разница в три байта видна
+    // только в оценке токенов и там несущественна)
+    private static ParsedMap ParseText(string relativePath, string text, long? bytes = null)
+    {
         var sections = new List<RawSection>();
         var links = new List<RawLink>();
         var fence = new MarkdownFence();
@@ -675,7 +812,8 @@ public sealed class ProjectMapScanner(IConfiguration? config = null)
 
         CloseSection(curEnd);
 
-        return new ParsedMap(relativePath, text, CountLines(text), bytes, sections, links,
+        return new ParsedMap(relativePath, text, CountLines(text),
+            bytes ?? Encoding.UTF8.GetByteCount(text), sections, links,
             UnclosedFence: fence.InFence);
     }
 

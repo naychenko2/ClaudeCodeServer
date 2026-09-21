@@ -29,11 +29,16 @@ public class ProjectMapController(
     ProjectManager projects,
     ProjectMapScanner scanner,
     ProjectMapReviewService review,
+    ProjectMapApplyService apply,
     FeatureFlagService flags) : ControllerBase
 {
     // BaseSha — отпечаток карты с момента скана: по нему видно, что человек смотрит на
     // тот же файл, который сейчас разбирает сервер
     public record ReviewRequest(string? BaseSha);
+
+    // Ids — предложения, ОТМЕЧЕННЫЕ человеком в том же отчёте: автоприменения нет ни на
+    // одном пути, пустой список — штатный случай (применять нечего)
+    public record ApplyRequest(string? BaseSha, IReadOnlyList<string>? Ids);
 
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -83,16 +88,35 @@ public class ProjectMapController(
         return Ok(await review.ReviewAsync(report, UserId, ct));
     }
 
-    // Заглушка: полная реализация — задача волны 4 (контракт записи Р10а: read-verify-write
-    // под локом, temp + File.Move, уникальность якоря вне кодовых заборов, BOM и
-    // окончания строк). Здесь только гейт + 501 «сервер знает метод, но ещё не реализовал»,
-    // чтобы UI при выключенной фиче получал 404, а при включённой до волны 4 — 501
-    // (а не молчание или падение). Волна 4 заменит тело метода, гейт останется.
+    /// <summary>
+    /// Применить отмеченные человеком механические правки к карте (контракт записи Р10а).
+    ///
+    /// Отвечает честным отчётом, а не мнимой атомарностью: часть правок могла не найти
+    /// свой якорь, и об этом человеку говорят прямо. Адреса файла в теле нет и не будет —
+    /// предмет правки ровно один, корневой CLAUDE.md проекта (Р4).
+    /// </summary>
     [HttpPost("apply")]
-    public ActionResult Apply(string id, [FromBody] object? body, CancellationToken ct)
+    public async Task<ActionResult> Apply(string id, [FromBody] ApplyRequest? body, CancellationToken ct)
     {
+        // Гейт раньше владения — как на review: при выключенной фиче ответ одинаков для
+        // своего и чужого проекта. Ручка ПИШЕТ в CLAUDE.md, и открытой при выключенной
+        // фиче быть не должна ни на одном этапе
         if (!FeatureEnabled()) return NotFound();
-        // TODO(волна 4)
-        return StatusCode(StatusCodes.Status501NotImplemented);
+
+        var project = projects.GetById(id);
+        if (project is null || project.OwnerId != UserId) return NotFound();
+
+        var result = await apply.ApplyAsync(project.RootPath, body?.BaseSha, body?.Ids ?? [], ct);
+        // Отпечаток разошёлся (карту дописали или её не стало) — файл не тронут, человек
+        // видит плашку «файл изменился после проверки · Проверить заново»
+        if (result.Stale) return Conflict(new { error = "staleBaseSha", baseSha = result.NewSha });
+
+        return Ok(new
+        {
+            applied = result.Applied,
+            failed = result.Failed,
+            newSha = result.NewSha,
+            scan = result.Scan,
+        });
     }
 }

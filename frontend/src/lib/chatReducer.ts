@@ -221,7 +221,7 @@ export function normalizeHistory(raw: unknown[], opts?: { deriveSpeakers?: boole
     // Поля маркера подмены (model/previousModel/reason/details) переносятся как есть,
     // но пару «ошибка + подмена» из истории старых чатов схлопываем — см. appendModelSwitched
     else if (m.kind === 'model_switched') appendModelSwitched(items, m as unknown as ModelSwitchedItem);
-    else if (m.kind === 'text' || m.kind === 'user_message') {
+    else if (m.kind === 'text' || m.kind === 'user_message' || m.kind === 'interrupted') {
       // В истории поле называется timestamp (StoredMessage.Timestamp), в ленте — ts:
       // без перекладывания панель поста осталась бы без времени после перезагрузки
       const { timestamp, ...rest } = m as unknown as Record<string, unknown> & { timestamp?: number };
@@ -245,12 +245,17 @@ export function normalizeHistory(raw: unknown[], opts?: { deriveSpeakers?: boole
 // live-only элемент завышает длину клиента, серверная история навсегда признаётся
 // не новее, и оборванный посреди хода ответ залипает до перезагрузки страницы.
 // Список белый, а не чёрный, намеренно: новый вид элемента ленты по умолчанию
-// считается live-only и сверку не ломает. Сторож соответствия — chatReducer.test.ts.
+// считается live-only и сверку не ломает.
+// Сторож — `lib/chatReducer.test.ts`, describe «PERSISTED_KINDS ↔ StoredMessage.cs»: он
+// ЧИТАЕТ StoredMessage.cs, вынимает дискриминаторы [JsonDerivedType] и сверяет с этим
+// списком в обе стороны. Расхождение = красный тест; обе законные асимметрии (хранимый вид
+// без своей строки ленты — workflow_progress; вид ленты без C#-типа — сейчас таких нет)
+// перечислены там же поимённо, с объяснением каждой записи.
 export const PERSISTED_KINDS = new Set<ChatItem['kind']>([
   'user_message', 'session_started', 'text', 'thinking', 'tool_use',
   'ask_question', 'plan_review', 'team_plan', 'team_escalation',
   'file_changed', 'result', 'fal_cost', 'glif_cost', 'compact_boundary', 'error',
-  'work_loop_stopped', 'model_switched', 'branched_from',
+  'work_loop_stopped', 'model_switched', 'branched_from', 'interrupted',
 ]);
 
 // Стоит ли заменить живую ленту историей с сервера: сравнение длин БЕЗ live-only

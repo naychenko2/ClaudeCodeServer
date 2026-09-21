@@ -218,7 +218,7 @@ internal sealed class TeamBudgetService
         for (var steps = 0; cur is not null && steps < 8; steps++)
         {
             if (cur.TeamImplement is not null) return cur.Id;
-            if (cur.ParentSessionId is not { } parentId) return null;
+            if (_sessions.EffectiveParentSessionId(cur) is not { } parentId) return null;
             cur = _sessions.GetOwned(parentId, ownerId);
         }
         return null;

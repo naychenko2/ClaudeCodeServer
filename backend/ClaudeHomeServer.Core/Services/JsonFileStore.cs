@@ -6,7 +6,7 @@ namespace ClaudeHomeServer.Services;
 // Надёжная JSON-персистентность для файловых хранилищ:
 // - чтение не теряет данные: повреждённый файл переименовывается в .corrupt-*.bak, а не перезатирается;
 // - запись атомарна: сериализация во временный файл + File.Move с заменой (на Windows — атомарная замена),
-//   крэш посреди записи не портит целевой файл.
+//   крэш посреди записи не портит целевой файл; tmp сбрасывается на диск (fsync) до переноса.
 // Локов не берёт — синхронизация остаётся на стороне вызывающих.
 public static class JsonFileStore
 {
@@ -54,7 +54,15 @@ public static class JsonFileStore
         var tmpPath = $"{path}.{Guid.NewGuid():N}.tmp";
         try
         {
-            File.WriteAllText(tmpPath, JsonSerializer.Serialize(value, options));
+            // Данные tmp обязаны лечь на диск ДО переименования: иначе при внезапном
+            // выключении ФС (ext4 delalloc, NTFS) успевает сохранить rename, но не
+            // содержимое — и на месте стора остаётся файл нулевой длины или из нулей.
+            // Так дважды терялся sessions.json (17.09 и 19.09.2026).
+            using (var fs = new FileStream(tmpPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                JsonSerializer.Serialize(fs, value, options);
+                fs.Flush(flushToDisk: true);
+            }
             // Внутри процесса записи по одному пути выстраиваются в очередь: два
             // одновременных File.Move поверх одного файла на Windows дают Access denied.
             lock (LockFor(path)) MoveWithRetry(tmpPath, path);

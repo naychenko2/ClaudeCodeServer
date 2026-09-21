@@ -487,4 +487,28 @@ public class TurnErrorClassifierTests
     [Fact]
     public void PromptOverflow_WireName()
         => TurnErrorClassifier.WireName(FallbackErrorClass.PromptOverflow).Should().Be("prompt_overflow");
+
+    // ===== Исчерпание локальных ресурсов ОС (инцидент 2026-09-19) =====
+    // IOException лимита inotify из TurnFileWatcher.Start уходила в Unreachable (нет result),
+    // и фолбэк за 0,6 с сжёг три подписки. Локальная причина другой парой не лечится —
+    // None: честная ошибка хода без перебора цепочки.
+    [Theory]
+    [InlineData("The configured user limit (8192) on the number of inotify instances has been reached, or the per-process limit on the number of open file descriptors has been reached.")]
+    [InlineData("The configured user limit (65536) on the number of inotify watches has been reached, or the operating system failed to allocate a required resource.")]
+    [InlineData("The system limit on the number of inotify instances has been reached.")]
+    [InlineData("Too many open files")]
+    [InlineData("spawn claude EMFILE")]
+    [InlineData("ENFILE: file table overflow")]
+    public void ИсчерпаниеЛокальныхРесурсов_БезResult_НеUnreachable(string text)
+    {
+        var outcome = new TurnAttemptOutcome { HasResult = false, ErrorText = text };
+        TurnErrorClassifier.Classify(outcome).Should().Be(FallbackErrorClass.None,
+            "лимит ОС на этой машине — не мёртвый эндпоинт, перебор цепочки его не лечит");
+    }
+
+    // Обрыв сети без result по-прежнему Unreachable: новая ветка не перехватывает чужое
+    [Fact]
+    public void СетевойОбрыв_БезResult_ОстаётсяUnreachable()
+        => TurnErrorClassifier.Classify(new TurnAttemptOutcome { HasResult = false, ErrorText = "fetch failed: ECONNRESET" })
+            .Should().Be(FallbackErrorClass.Unreachable);
 }

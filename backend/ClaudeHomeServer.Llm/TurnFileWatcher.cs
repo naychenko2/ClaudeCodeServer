@@ -84,15 +84,27 @@ public sealed class TurnFileWatcher : IDisposable
         // Повторный Start без Stop (новый ход при опоздавшей финализации старого прогона)
         // не должен утекать прежним FileSystemWatcher
         _watcher?.Dispose();
-        _watcher = new FileSystemWatcher(_rootPath)
+        _watcher = null;
+        var watcher = new FileSystemWatcher(_rootPath)
         {
             IncludeSubdirectories = true,
             NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName,
-            EnableRaisingEvents = true,
         };
-        _watcher.Changed += OnFileSystemEvent;
-        _watcher.Created += OnFileSystemEvent;
+        watcher.Changed += OnFileSystemEvent;
+        watcher.Created += OnFileSystemEvent;
+        // Включение — отдельным шагом, а не в инициализаторе: бросок из EnableRaisingEvents
+        // (исчерпан лимит inotify) иначе оставлял созданный watcher неприсвоенным и неосвобождённым.
+        try { watcher.EnableRaisingEvents = true; }
+        catch
+        {
+            watcher.Dispose();
+            throw;
+        }
+        _watcher = watcher;
     }
+
+    // Для тестов: поднят ли наблюдатель сейчас.
+    internal bool IsWatching => _watcher is not null;
 
     public void Stop()
     {

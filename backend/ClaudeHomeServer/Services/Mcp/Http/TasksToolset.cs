@@ -1346,7 +1346,7 @@ public sealed class TasksToolset(
         var sourceSessionId = task.SourceSessionId!;
         var src = sessions.GetById(sourceSessionId);
         if (src is null) return;
-        string? stabId = src.TeamImplement != null ? sourceSessionId : src.ParentSessionId;
+        string? stabId = src.TeamImplement != null ? sourceSessionId : SessionTaskLinks.ParentSessionId(src, new TaskLookupAdapter(tasks));
         if (stabId is null) return;
         var taskId = task.Id;
         _ = Task.Run(async () =>

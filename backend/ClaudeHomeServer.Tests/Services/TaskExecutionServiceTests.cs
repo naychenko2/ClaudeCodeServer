@@ -266,6 +266,86 @@ public class TaskExecutionServiceTests
         prompt.Should().Contain("Задачу не завершай");
     }
 
+    // Блоки ПРАВИЛА и ДЕЛЕГИРОВАНИЕ вынесены в файл (SystemPrompts/task-executor-rules.md),
+    // чтобы правка текста не требовала пересборки и выкатки. Идентичность файла и встроенного
+    // фолбэка НЕ проверяем намеренно: файл по замыслу правится отдельно от кода, и такой
+    // сторож запрещал бы ровно то, ради чего вынос делался. Защищаем другое — что ОБА
+    // источника несут дисциплину, без которой постановка теряет смысл.
+    [Fact]
+    public void RulesTemplate_ФайлДефолта_НесётЗащищённуюДисциплину()
+    {
+        // Серверный дефолт рядом с exe — тот самый файл, что уезжает в publish
+        var template = TaskExecutionService.ReadRulesTemplate(projectRoot: null);
+        template.Should().NotBeNullOrWhiteSpace(
+            "шаблон обязан копироваться в output (csproj: SystemPrompts\\task-executor-rules.md)");
+
+        template.Should().Contain("## ПРАВИЛА").And.Contain("## ДЕЛЕГИРОВАНИЕ");
+        template.Should().Contain("НЕТ СВИДЕТЕЛЬСТВ = НЕ ГОТОВО");
+        template.Should().Contain("chats_report_up");
+        template.Should().Contain("tasks_complete");
+        // Язык отчёта. Пять проверочных прогонов локальной модели показали: правило,
+        // стоящее только в карте проекта, на язык рассуждений не влияет (русским был
+        // 1 прогон из 5), а требование из блока ПРАВИЛА исполняется — это единственный
+        // канал, доказавший влияние на поведение исполнителя.
+        template.Should().Contain("ПО-РУССКИ");
+        // Мутационная проверка и локальный коммит объявлены ЧАСТЬЮ верификации, а не
+        // работой сверх постановки: без этой оговорки их глушит стоп-сигнал строкой выше
+        // («ОСТАНОВИСЬ после первой успешной верификации») — проверено 4 прогонами.
+        template.Should().Contain("мутацией");
+        template.Should().Contain("worktree");
+        // Плейсхолдеры обязаны остаться: без них уровни моделей и путь к справочнику
+        // молча исчезнут из постановки, а подстановка сработает вхолостую
+        template.Should().Contain("{{TIER_LEVELS}}").And.Contain("{{CATEGORY_PROFILES}}");
+    }
+
+    // Механика подстановки: значения встают на место плейсхолдеров, а пустые убирают СТРОКУ
+    // целиком — иначе в постановке остаётся пустая строка там, где у владельца нет алиасов
+    // тиров или справочник категорий недоступен.
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void BuildPrompt_ПодстановкаПлейсхолдеров(bool withAliases, bool withProfiles)
+    {
+        const string template = "## ПРАВИЛА\n- правило\n\n## ДЕЛЕГИРОВАНИЕ\n- канал\n{{TIER_LEVELS}}\n{{CATEGORY_PROFILES}}\n";
+        var aliases = withAliases ? new ModelTierAliases("opus", "sonnet", "haiku") : ModelTierAliases.None;
+        var profiles = withProfiles
+            ? Path.Combine(Path.GetTempPath(), "cwd", ".claude", "delegation-categories.md")
+            : null;
+
+        var prompt = TaskExecutionService.BuildPrompt(
+            new TaskItem { Title = "t" }, new Persona { Name = "Вера" }, aliases, profiles, template);
+
+        prompt.Should().NotContain("{{").And.NotContain("}}");
+        prompt.Should().Contain("- правило").And.Contain("- канал");
+        if (withAliases) prompt.Should().Contain("сильная `opus`/`strong`");
+        if (withProfiles) prompt.Should().Contain("delegation-categories.md");
+        // Секция КОНТЕКСТ отделена ровно одной пустой строкой в любом сочетании
+        prompt.Should().Contain("\n\n## КОНТЕКСТ").And.NotContain("\n\n\n## КОНТЕКСТ");
+    }
+
+    // Проектный override перебивает серверный дефолт: правка правил в репозитории задачи
+    // видна сразу, без выкатки сервера.
+    [Fact]
+    public void ReadRulesTemplate_ФайлПроекта_СильнееСерверногоДефолта()
+    {
+        var projectRoot = Path.Combine(Path.GetTempPath(), $"rules-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(Path.Combine(projectRoot, "docs"));
+        try
+        {
+            var expected = "## ПРАВИЛА\n- правило проекта\n";
+            File.WriteAllText(
+                Path.Combine(projectRoot, "docs", TaskExecutionService.RulesTemplateFileName), expected);
+
+            TaskExecutionService.ReadRulesTemplate(projectRoot).Should().Be(expected);
+            // Без проектного файла — серверный дефолт, а не пустота
+            TaskExecutionService.ReadRulesTemplate(projectRoot: null)
+                .Should().NotBeNullOrWhiteSpace().And.NotBe(expected);
+        }
+        finally { Directory.Delete(projectRoot, recursive: true); }
+    }
+
     // Эскалация застрявшего исполнителя. Канал chats_report_up в продукте есть, но в
     // постановке о нём не говорилось — исполнитель о нём не знал и заканчивал ход молча,
     // оставляя задачу в inProgress. Правило обязано пережить следующие оптимизации промпта.
@@ -728,7 +808,7 @@ public class TaskExecutionServiceTests
         // Задача закрыта без запуска исполнителя — эффективного родителя взять неоткуда
         var source = Guid.NewGuid().ToString();
 
-        TaskExecutionService.ResolveReportTarget(null, source, out var fromFallback)
+        TaskExecutionService.ResolveReportTarget(null, source, null, out var fromFallback)
             .Should().Be(source);
         fromFallback.Should().BeFalse("нет чата-исполнителя — это нормальный путь, а не аномалия");
     }
@@ -742,7 +822,7 @@ public class TaskExecutionServiceTests
         var manual = Guid.NewGuid().ToString();
         var executorSession = new Session { TaskId = "t-1", ParentOverrideId = manual };
 
-        TaskExecutionService.ResolveReportTarget(executorSession, source, out var fromFallback)
+        TaskExecutionService.ResolveReportTarget(executorSession, source, null, out var fromFallback)
             .Should().Be(manual);
         fromFallback.Should().BeFalse("явная ручная группировка — не fallback");
     }
@@ -754,7 +834,7 @@ public class TaskExecutionServiceTests
         var executorSession = new Session { TaskId = "t-1", ParentDetached = true };
 
         TaskExecutionService.ResolveReportTarget(executorSession, Guid.NewGuid().ToString(),
-                out var fromFallback)
+                null, out var fromFallback)
             .Should().BeNull();
         fromFallback.Should().BeFalse("ParentDetached=true — гашение по решению пользователя, не аномалия");
     }
@@ -773,7 +853,7 @@ public class TaskExecutionServiceTests
         // это и есть «резолвер не дал ответа».
         var executorSession = new Session { TaskId = "t-orphan" };
 
-        TaskExecutionService.ResolveReportTarget(executorSession, source, out var fromFallback)
+        TaskExecutionService.ResolveReportTarget(executorSession, source, null, out var fromFallback)
             .Should().Be(source);
         fromFallback.Should().BeTrue("аномалия — резолвер по задаче не вернул id, это не detached");
     }
@@ -787,7 +867,7 @@ public class TaskExecutionServiceTests
         var source = Guid.NewGuid().ToString();
         var executorSession = new Session();  // ни TaskId, ни ParentOverrideId, ни ParentDetached
 
-        TaskExecutionService.ResolveReportTarget(executorSession, source, out var fromFallback)
+        TaskExecutionService.ResolveReportTarget(executorSession, source, null, out var fromFallback)
             .Should().BeNull("корневой чат без задачи — докладывать некуда, гасим как detached");
         fromFallback.Should().BeFalse("нет TaskId — это не аномалия резолвера, а просто корневой чат");
     }

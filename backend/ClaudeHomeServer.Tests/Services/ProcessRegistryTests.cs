@@ -91,7 +91,9 @@ public class ProcessRegistryTests
     public void Matches_ЧужойПроцессПодТемЖеPid_Нет()
     {
         using var self = Process.GetCurrentProcess();
-        var byName = new ProcessRegistry.TrackedProcess(self.Id, "чужак", self.StartTime);
+        // byName: время старта неизвестно — имя единственное свидетельство, «чужак» ≠ реальному
+        var byName = new ProcessRegistry.TrackedProcess(self.Id, "чужак", DateTime.MinValue);
+        // byTime: имя совпало, но время старта расходится за допуск — номер переиспользован
         var byTime = new ProcessRegistry.TrackedProcess(self.Id, self.ProcessName, self.StartTime.AddHours(-1));
 
         ProcessRegistry.Matches(byName, self).Should().BeFalse();
@@ -105,5 +107,30 @@ public class ProcessRegistryTests
         var entry = new ProcessRegistry.TrackedProcess(self.Id, self.ProcessName, DateTime.MinValue);
 
         ProcessRegistry.Matches(entry, self).Should().BeTrue();
+    }
+
+    // Блокер ревью (коммит 316183de): Register запоминает имя ИМЕННО того процесса,
+    // что .NET видит после Start. Под обёрткой systemd-run это «systemd-run» (кэш .NET
+    // до её exec), а живое имя уже «claude»/«node» — имя из записи нельзя сверять
+    // безусловно. Приоритет — время старта (exec не меняет start_time, и пара
+    // «PID + время старта» строже имени), имя — только если времени нет с одной стороны.
+    [Fact]
+    public void Matches_ИмяОбёртки_ВремяСтартаРеальное_Да()
+    {
+        using var self = Process.GetCurrentProcess();
+        var entry = new ProcessRegistry.TrackedProcess(self.Id, "systemd-run", self.StartTime);
+
+        ProcessRegistry.Matches(entry, self).Should().BeTrue(
+            "время старта совпало — имя из записи (кэш .NET до exec) не сверяем");
+    }
+
+    [Fact]
+    public void Matches_ИмяОбёртки_ВремяСтартаДругое_Нет()
+    {
+        using var self = Process.GetCurrentProcess();
+        var entry = new ProcessRegistry.TrackedProcess(self.Id, self.ProcessName, self.StartTime.AddHours(-1));
+
+        ProcessRegistry.Matches(entry, self).Should().BeFalse(
+            "время старта расходится — даже при совпадении имени номер переиспользован");
     }
 }

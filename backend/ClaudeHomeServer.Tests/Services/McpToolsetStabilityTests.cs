@@ -62,6 +62,11 @@ public class McpToolsetStabilityTests
     // ConsultantsEnabled открыты тулсетам, и за ними могут идти internal-соседи
     private static string MethodBody(string source, string signature)
     {
+        // Переводы строк нормализуем с обеих сторон: исходник на Windows-чекауте идёт с CRLF,
+        // на Linux (CI и прод-хост) — с LF, и сигнатура, записанная под одну платформу,
+        // на другой молча не находилась бы.
+        source = source.Replace("\r\n", "\n");
+        signature = signature.Replace("\r\n", "\n");
         var start = source.IndexOf(signature, StringComparison.Ordinal);
         start.Should().BeGreaterThan(0, $"метод «{signature}» обязан существовать");
         var end = source.IndexOf("\n    private ", start + signature.Length, StringComparison.Ordinal);

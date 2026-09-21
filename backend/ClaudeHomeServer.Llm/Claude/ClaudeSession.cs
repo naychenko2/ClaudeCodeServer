@@ -1824,6 +1824,30 @@ public class ClaudeSession : ILlmSessionAdapter
                 }
             }
 
+            // Финальный рубеж TrimMcpServers: гасим всё, чего нет в белом списке
+            // KeepMcpServers текущего провайдера, даже если сервер проскочил первый
+            // рубеж (hasX &= Keep выше) — например, через McpConfigPath или
+            // новый блок, добавленный без индивидуальной проверки Keep. Без этого
+            // однократная забывчивость навсегда оставляет лишний сервер в конфиге
+            // хода и пожирает контекст локальной модели.
+            if (trimMcp && provider is not null)
+            {
+                var allowed = new HashSet<string>(provider.KeepMcpServers, StringComparer.OrdinalIgnoreCase);
+                var removed = new List<string>();
+                foreach (var key in servers.Select(kv => kv.Key).ToList())
+                {
+                    if (allowed.Contains(key)) continue;
+                    removed.Add(key);
+                    servers.Remove(key);
+                    shapes.Remove(key);
+                }
+                if (removed.Count > 0)
+                {
+                    _log?.LogWarning(
+                        "TrimMcpServers: у провайдера {Provider} отрезаны серверы {Servers} (нет в KeepMcpServers)",
+                        provider.Key, string.Join(",", removed));
+                }
+            }
             if (servers.Count == 0) return (null, "", []);
             var combined = new System.Text.Json.Nodes.JsonObject { ["mcpServers"] = servers };
             // HostTempDir среды: для песочницы это bind-mount — процесс claude увидит файл

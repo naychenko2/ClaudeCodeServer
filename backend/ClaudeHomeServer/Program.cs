@@ -86,7 +86,35 @@ ClaudeHomeServer.Services.Diagnostics.FileLog.Attach(builder.Configuration, buil
 // без этого они копятся и съедают гигабайты памяти. Должно быть ДО первого Process.Start.
 // В инспекционной копии пропускаем: pid-файл лежит рядом с exe (а не в DataPath), то есть
 // принадлежит БОЕВОМУ серверу — чистка убила бы его MCP-серверы и идущие ходы.
-if (!inspectionMode) ProcessRegistry.Initialize();
+//
+// Execution:ProcessRegistry:Enabled (дефолт true) — вторая, та же по смыслу оговорка:
+// реестр процессов ПРОЦЕСС-ГЛОБАЛЕН (статика), а хост в процессе бывает не один. В бою
+// хост ровно один и владеет всеми порождёнными процессами машины; тестовый хост
+// (appsettings.Testing.json) — не владеет: он поднимается и гасится десятки раз за прогон
+// рядом с чужими процессами того же процесса ОС, и его ApplicationStopping вычищал реестр
+// и убивал процессы параллельно идущих тестов (доказано: подъём и Dispose тестового хоста
+// снимал с учёта и убивал заранее зарегистрированный живой процесс).
+var ownsProcessRegistry = !inspectionMode
+    && builder.Configuration.GetValue("Execution:ProcessRegistry:Enabled", true);
+if (ownsProcessRegistry) ProcessRegistry.Initialize();
+
+// Изоляция процессов local-среды по памяти (инцидент 2026-09-19: systemd-oomd дважды
+// убил прод ccs.service целиком, потому что сборки агентских CLI живут в cgroup прода).
+// Опции — секция Execution:Isolation (Enabled/Slice/MemoryHigh/MemoryMax). Дефолт
+// выключено: на Windows и в dev-контейнере user-шины нет, и там обёртка fail-open.
+// Выставить в appsettings.Local.json:
+//   "Execution": { "Isolation": { "Enabled": true, "Slice": "ccs-agents.slice",
+//     "MemoryHigh": "12G", "MemoryMax": "16G" } }
+ClaudeHomeServer.Services.Execution.IsolationOptions.Instance =
+    ClaudeHomeServer.Services.Execution.IsolationOptions.FromConfig(builder.Configuration);
+
+// Гашение scope висит на событии Exited и умирает вместе с процессом бэкенда: упал бэкенд —
+// scope с узлами сборки остался в slice, и увидеть его можно только отсюда, со следующего
+// старта. Как сирота отличается от scope живого соседнего инстанса — в ScopeOrphanSweeper.
+// Фоном: старт не должен ждать systemctl, а свои scope этого запуска сторож не тронет
+// (их владелец — мы, и мы живы).
+_ = Task.Run(() => ClaudeHomeServer.Services.Execution.ScopeOrphanSweeper.Sweep(
+    ClaudeHomeServer.Services.Execution.IsolationOptions.Instance));
 
 // Признак «сервер работает на этом каталоге data»: держится весь uptime и проверяется
 // восстановлением. Живой сервер во время restore продолжил бы писать в перемещённый
@@ -126,6 +154,12 @@ var mvcBuilder = builder.Services.AddControllers()
     .AddJsonOptions(o =>
         o.JsonSerializerOptions.Converters.Add(
             new JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase)));
+// Вычисленные «связи» сессии (parentSessionId/taskDone) дописываются на границе
+// сериализации — одним конвертером типа Session на все точки отдачи (см.
+// Services/SessionJsonConverter.cs). Только в опциях MVC: стор sessions.json пишется
+// своими опциями SessionManager, и вычисленные поля в файл не попадают.
+builder.Services.AddSingleton<Microsoft.Extensions.Options.IConfigureOptions<Microsoft.AspNetCore.Mvc.JsonOptions>,
+    ClaudeHomeServer.Services.SessionJsonOptionsSetup>();
 // Сборки вертикалей, собранные под `Microsoft.NET.Sdk.Web`, несут атрибут
     // `[assembly: ApplicationPart("...")]` — MSBuild дописывает его в сгенерированный
     // `obj/*/ClaudeHomeServer.MvcApplicationPartsAssemblyInfo.cs` ссылочного проекта
@@ -1979,6 +2013,11 @@ app.MapHub<ClaudeHomeServer.Services.Desktop.DeviceHub>("/hubs/devices");
 var shutdownSessions = app.Services.GetRequiredService<SessionManager>();
 var shutdownTerminals = app.Services.GetRequiredService<TerminalService>();
 var shutdownDevServers = app.Services.GetRequiredService<DevServerService>();
+// Стор задач пишется с дебаунсом (TaskManager.ScheduleSave) — несохранённое досбрасываем
+// руками. Dispose контейнера сделал бы то же самое, но он случается ПОСЛЕ остановки хоста,
+// а терять правки при штатной остановке нельзя даже в окне между двумя фазами.
+// GetService, а не GetRequiredService: подсистема задач отключаемая (Subsystems:tasks).
+var shutdownTasks = app.Services.GetService<ClaudeHomeServer.Services.Tasks.TaskManager>();
 
 app.Lifetime.ApplicationStopping.Register(() =>
 {
@@ -1989,11 +2028,13 @@ app.Lifetime.ApplicationStopping.Register(() =>
         catch (Exception ex) { Console.Error.WriteLine($"Shutdown: {what} — {ex.Message}"); }
     }
 
+    if (shutdownTasks is not null) Safe(shutdownTasks.Flush, "стор задач");
     Safe(shutdownSessions.KillAllProcesses, "процессы claude");
     Safe(shutdownTerminals.Dispose, "терминалы");
     Safe(shutdownDevServers.Dispose, "dev-серверы");
-    // Тот же pid-файл принадлежит боевому серверу — копия его не трогает
-    if (!inspectionMode) Safe(ProcessRegistry.KillAll, "реестр процессов");
+    // Тот же pid-файл принадлежит боевому серверу — копия его не трогает; не владеющий
+    // реестром хост (тестовый) тем более: KillAll бьёт по ВСЕМ процессам процесса ОС
+    if (ownsProcessRegistry) Safe(ProcessRegistry.KillAll, "реестр процессов");
 });
 
 app.Run();

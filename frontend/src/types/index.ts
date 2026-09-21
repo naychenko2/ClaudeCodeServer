@@ -1861,7 +1861,8 @@ export type ChatItem =
   | { kind: 'compact_boundary'; trigger: string; preTokens?: number; postTokens?: number }
   | { kind: 'truncated' }
   | { kind: 'redacted_thinking' }
-  | { kind: 'interrupted' }
+  // ts — момент остановки (история: StoredInterruptedMessage.Timestamp); в живой ленте нет
+  | { kind: 'interrupted'; ts?: number }
   | { kind: 'resumed' }
   | { kind: 'session_ended' }
   // Разделитель «сменился собеседник»: label задан явно (смена вручную / speaker_changed

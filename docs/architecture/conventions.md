@@ -129,6 +129,12 @@ Knowledge и Tasks. Сторож при этом остаётся зелёным
 - Метаданные сессий персистятся в `data/sessions.json`, история чата —
   `data/sessions/{claudeSessionId}/history.json`; процессы claude in-memory, resume через
   `--resume <claude-session-id>`.
+- Новый вид записи истории (`StoredMessage`) регистрируется в трёх местах: `JsonDerivedType` в
+  `StoredMessage.cs`, `PERSISTED_KINDS` в `chatReducer.ts` (сторож — `chatReducer.test.ts`) и,
+  если у записи есть время, перекладка `timestamp → ts` в `normalizeHistory`. Отметка
+  `interrupted` («Ход остановлен пользователем») пишется только на прерывании человеком
+  (`SessionManager.Interrupt`, перебой ради его сообщения) — остановка исполнителя штабом и
+  падение процесса её не оставляют.
 - Path traversal защита: примитив спины `SafePath.Join`
   (`backend/ClaudeHomeServer.Core/Services/SafePath.cs`) — все пути через неё.
   `FileService.SafeJoin`/`SafeJoinPublic` — тонкие форвардеры к нему. Из вертикали зови

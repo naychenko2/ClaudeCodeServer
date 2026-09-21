@@ -97,6 +97,21 @@ public static class BackupPaths
             return false;
         if (root.Equals(StagingDirName, StringComparison.OrdinalIgnoreCase)) return false;
 
+        // Встроенный Forgejo (forgejo/**): репозитории и gitea.db едут, но три подпапки нет.
+        // ssh — ключи хоста (приватные; контейнер создаёт их от root с правами 600, сервер
+        // их даже прочитать не может). gitea/queues (LevelDB) и gitea/indexers (bleve/bolt)
+        // живой контейнер держит под блокировкой, и копирование обрывало весь бэкап. Все три
+        // Forgejo пересоздаёт сам: ключи — при старте (сменится лишь отпечаток хоста),
+        // очередь и поисковый индекс — пересборкой.
+        if (root.Equals("forgejo", StringComparison.OrdinalIgnoreCase) && segments.Length >= 2)
+        {
+            if (segments[1].Equals("ssh", StringComparison.OrdinalIgnoreCase)) return false;
+            if (segments.Length >= 3 && segments[1].Equals("gitea", StringComparison.OrdinalIgnoreCase)
+                && (segments[2].Equals("queues", StringComparison.OrdinalIgnoreCase)
+                    || segments[2].Equals("indexers", StringComparison.OrdinalIgnoreCase)))
+                return false;
+        }
+
         // Кеш CodeGraph: code-graphs/{hash}/cache/ — не едет в облако (пересобирается).
         // «cache» — третий сегмент: code-graphs / {hash} / cache / …
         if (root.Equals("code-graphs", StringComparison.OrdinalIgnoreCase))

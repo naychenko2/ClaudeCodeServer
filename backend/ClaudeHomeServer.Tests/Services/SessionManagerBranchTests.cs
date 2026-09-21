@@ -19,7 +19,6 @@ namespace ClaudeHomeServer.Tests.Services;
 // SessionManager.BranchAsync (шаг 3 фичи chat-branch): восемь отказов §9, неизменность
 // оригинала, наследование полей §11, имя по умолчанию, draft у include=beforePrompt.
 // Документ-основание: docs/research/chat-branching-2026-09.md.
-[Collection(TestCollections.SessionStaticResolvers)]
 public class SessionManagerBranchTests : IDisposable
 {
     private const string TestUserId = "branch-test-user";

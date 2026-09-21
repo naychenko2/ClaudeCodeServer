@@ -83,9 +83,12 @@ jobs:
       # а итерация диагностики втрое быстрее, чем с 15 минутами.
       # Флаги vstest-консоли (--diagnostic и пр.) сюда нельзя: dotnet test в MSBuild-режиме
       # передаёт их MSBuild как неизвестные свитчи (MSB1001).
+      # Категория "LocalBench" — замеры мест каталога на живой локальной модели (Батарея II):
+      # движка в CI нет, а на машине разработчика он поднят постоянно, и общий прогон уходил
+      # бы в модель. Бенч гоняется ТОЛЬКО отдельно: --filter "Category=LocalBench".
         run: >
           dotnet test backend/ClaudeHomeServer.slnx --no-build
-          --filter "Category!=Node"
+          --filter "Category!=Node&Category!=LocalBench"
           --blame-hang-timeout 5m --blame-hang-dump-type full
       # Дампы и Sequence.xml blame складывает в TestResults — при падении выгружаем,
       # иначе они умирают вместе с раннером. После Этапа 3 артефакты тестов идут

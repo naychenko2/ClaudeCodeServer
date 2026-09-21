@@ -28,6 +28,17 @@ public static class TestCollections
     // «max_user_instances has been reached», под урезанным лимитом — на EMFILE, а замер
     // искажался чужими наблюдателями.
     public const string Inotify = "inotify";
+
+    // Замеры мест каталога на живой локальной модели (Батарея II, ось A). Модель одна,
+    // и параллельные вызовы встают в очередь движка: при maxParallelThreads=6 шесть
+    // бенч-классов исказили бы и время до первого токена, и скорость генерации — замер
+    // превратился бы в мусор. Коллекция сериализует бенч-классы между собой, а
+    // DisableParallelization разводит их с остальным набором: конкуренция за CPU и диск
+    // с параллельными проверками уже портила тайминг трёх тестов в прошлой батарее.
+    //
+    // Глобальный parallelizeTestCollections при этом остаётся true: обычный прогон
+    // проекта не должен платить скоростью за бенч, который в него и не идёт.
+    public const string LocalBench = "local-bench";
 }
 
 // Объявление коллекции (без фикстуры — общего состояния тестам не нужно, нужна только
@@ -38,3 +49,6 @@ public class ProcessGlobalStateCollection;
 
 [CollectionDefinition(TestCollections.Inotify, DisableParallelization = true)]
 public class InotifyCollection;
+
+[CollectionDefinition(TestCollections.LocalBench, DisableParallelization = true)]
+public class LocalBenchCollection;

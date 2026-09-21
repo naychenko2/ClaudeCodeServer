@@ -71,6 +71,9 @@ public class BackupPathsTests
     [InlineData("backup-state.json")]
     [InlineData("projects.json.abc123.tmp")]
     [InlineData("users.json.corrupt-20260101-000000.bak")]
+    // Копия исходника при частичном подъёме стора — дубликат живого файла (на проде
+    // sessions.json это ~2 МБ), в архив не едет
+    [InlineData("sessions.json.partial-20260921-153000.bak")]
     // Корзина синка профилей — мусорная зона с TTL, восстановлению не подлежит
     [InlineData(".sync-trash/deepseek/2026-09-02T11-30-00Z/CLAUDE.md")]
     [InlineData(".sync-trash/deepseek/2026-09-02T11-30-00Z/rules/extra.md")]

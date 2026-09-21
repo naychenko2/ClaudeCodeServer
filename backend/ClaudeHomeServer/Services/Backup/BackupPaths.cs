@@ -44,6 +44,9 @@ public static class BackupPaths
         if (fileName.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)) return false;
         if (fileName.EndsWith(".part", StringComparison.OrdinalIgnoreCase)) return false;
         if (fileName.Contains(".corrupt-", StringComparison.OrdinalIgnoreCase)) return false;
+        // Копия исходника при частичном подъёме стора (JsonFileStore.CopyAside): дубликат
+        // живого файла размером с него самого — в облачный архив ехать не должен
+        if (fileName.Contains(".partial-", StringComparison.OrdinalIgnoreCase)) return false;
         if (fileName.Equals(StateFileName, StringComparison.OrdinalIgnoreCase)) return false;
         if (fileName.Equals(PostRestoreMarker, StringComparison.OrdinalIgnoreCase)) return false;
 

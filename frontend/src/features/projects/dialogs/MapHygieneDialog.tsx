@@ -1,9 +1,14 @@
-import { useMemo, useState } from 'react';
-import type { MapHygieneReport, MapHygieneSuggestion, MapHygieneSeverity } from '../../../types';
+import { useEffect, useMemo, useState } from 'react';
+import type {
+  MapHygieneApplyFailure, MapHygieneApplyFailureReason,
+  MapHygieneReport, MapHygieneSuggestion, MapHygieneSeverity,
+} from '../../../types';
 import { C, FS, FONT, MODAL_W, R, SP } from '../../../lib/design';
-import { Badge, Button, Checkbox, Modal } from '../../../components/ui';
+import { Badge, Button, Checkbox, Modal, WaitingIndicator } from '../../../components/ui';
+import { api } from '../../../lib/api';
 
-// Модалка «Уборка карты проекта» с фактами сканера.
+// Модалка «Уборка карты проекта» с фактами сканера и (опционально) формулировками
+// модели.
 //
 // Структура отчёта:
 //  • Шапка — динамический подзаголовок «CLAUDE.md · N строк · N КБ · ≈N токенов…» и
@@ -16,37 +21,68 @@ import { Badge, Button, Checkbox, Modal } from '../../../components/ui';
 //    Табы прячут половину картины и дают ложное «я прибрался», когда закрыт только
 //    механический таб — а весь вес файла (длинные секции) сидит во второй группе.
 //  • У неприменимых предложений (`apply: null`) чекбокса нет вовсе — галочка, которая
-//    ничего не делает, врёт сильнее любой подписи. Счётчик «Применить отмеченное ·
-//    N» считает только применимое.
+//    ничего не делает, врёт сильнее любой подписи. Счётчик «Применить отмеченное · N»
+//    считает только применимое.
+//  • Раскладка строки внутри группы: факт сканера основным, формулировка модели
+//    (modelSays) — вторичным. Это не вкусовое: модель не читала карту целиком, её
+//    суждение — догадка по метаданным; поменяешь местами — человек снесёт живой
+//    раздел, поверив красивой фразе.
 //  • Подвал — «Ещё в проекте»: вложенные карты справочно, без плашек и без действий.
 //    Вложенная карта — не дефект, а правильный приём прогрессивного раскрытия.
 //
-// Состояние модели (формулировки, думает / отказала) и само применение правок —
-// волны 2 и 4. В этой волне модель не дёргается, поэтому группа 1 пуста до ответа
-// review, а действие apply — заглушка.
+// Состояния:
+//  • review идёт — WaitingIndicator на месте группы «Работа для чата», факты уже видны
+//  • review отказал — плашка с modelNote + «Повторить», без глухого «не удалось»
+//  • apply частичный — панель с applied/failed по строкам, причины на человеческом
+//    языке; шапка и группы перерисованы из scan того же ответа, второй запрос не нужен
+//  • 409 — плашка «файл изменился после проверки · Проверить заново», общая для обоих
+//    путей (review и apply)
 interface Props {
+  projectId: string;
   report: MapHygieneReport;
   /** Перезагрузка отчёта через эндпоинт scan — родительская секция уже умеет. */
   onReloaded?: () => Promise<unknown> | void;
+  /** Получен свежий отчёт (после review/apply) — родитель обновит сводку в аккордеоне. */
+  onReport?: (r: MapHygieneReport) => void;
   onClose: () => void;
 }
 
-export function MapHygieneDialog({ report, onClose, onReloaded }: Props) {
+export function MapHygieneDialog({ projectId, report, onClose, onReloaded, onReport }: Props) {
+  // Отчёт лежит в локальном state: после review/apply он обновляется из ответа сервера.
+  // Инициализируется из props один раз
+  const [current, setCurrent] = useState<MapHygieneReport>(report);
+
   // Чекбоксы — по умолчанию сняты: предотмеченная галочка это не «явное утверждение
   // человека», а дефолт, который прокликивают (план Р10.1)
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
 
-  // apply есть только у dead-link с единственным кандидатом И уникальным якорем
-  // (контракт записи Р10а). В этой волне scan приходит с apply: null у всех —
-  // заполнение на review (волна 2). Группа «Правки в один клик» уже создана
-  // структурно, чтобы место под неё было при появлении формулировок
-  void onReloaded; // зарезервировано под «Проверить заново» (плашка + кнопка — волна 4)
+  // Синхронизируем current с props.report по baseSha. Это нужно для двух сценариев:
+  //  • «Проверить заново» после 409 — родитель пересканирует, baseSha прыгает, диалог
+  //    подхватывает свежий отчёт без переоткрытия
+  //  • apply записал файл, но родитель ещё не успел обновить state через onReport —
+  //    следующий рендер принесёт новый report из props, и current синхронизируется
+  // Сбрасываем выбор: id привязаны к якорям прежнего снимка текста, и отметить что-то
+  // после записи — значит отметить не то
+  useEffect(() => {
+    setCurrent(report);
+    setSelected(new Set());
+  }, [report.baseSha]);
+
+  const [reviewing, setReviewing] = useState(false);
+  const [applying, setApplying] = useState(false);
+  // Баннер ошибки. stale отдельно от прочих — у него своё действие «Проверить заново»
+  const [banner, setBanner] = useState<{ kind: 'stale' | 'other'; msg: string } | null>(null);
+  // Результат последнего apply — applied[] и failed[] для построчной раскладки
+  const [lastApply, setLastApply] = useState<{
+    applied: string[]; failed: MapHygieneApplyFailure[];
+  } | null>(null);
+
   const { applicable, work } = useMemo(() => {
     const a: MapHygieneSuggestion[] = [];
     const w: MapHygieneSuggestion[] = [];
-    for (const s of report.suggestions) (s.apply ? a : w).push(s);
+    for (const s of current.suggestions) (s.apply ? a : w).push(s);
     return { applicable: a, work: w };
-  }, [report]);
+  }, [current]);
 
   const toggle = (id: string) => {
     setSelected(prev => {
@@ -58,11 +94,74 @@ export function MapHygieneDialog({ report, onClose, onReloaded }: Props) {
   const selectAll = () => setSelected(new Set(applicable.map(s => s.id)));
   const clearAll = () => setSelected(new Set());
 
+  // Модель уже разбирала карту — признак «можно вызвать review ещё раз». По modelNote
+  // тоже считаем: даже если ни одно суждение не прошло, серверный note показывает, что
+  // ход был
+  const modelReviewed = current.suggestions.some(s => s.modelSays !== null)
+    || current.modelNote != null;
+
+  // Текст ошибки с бэка. err.body?.error — у ProjectMap-ручек там строка;
+  // подстраховка — обычный Error.message
+  const errorText = (e: unknown): string => {
+    const err = e as { body?: { error?: string }; message?: string; status?: number };
+    return err?.body?.error || err?.message || 'Не удалось выполнить запрос';
+  };
+
+  // 409 — особый случай: файл изменился между сканом и запросом, шапку перерисует
+  // «Проверить заново», и до этого момента ничего не делаем (выбранные id могут
+  // указывать на старые строки)
+  const isStale = (e: unknown): boolean =>
+    (e as { status?: number } | null)?.status === 409;
+
+  const runReview = async () => {
+    if (reviewing || applying) return;
+    if (current.baseSha == null) {
+      setBanner({ kind: 'other', msg: 'Сначала отсканируйте карту заново' });
+      return;
+    }
+    setBanner(null);
+    setLastApply(null);
+    setReviewing(true);
+    try {
+      const next = await api.projects.mapHygiene.review(projectId, current.baseSha);
+      setCurrent(next);
+      onReport?.(next);
+    } catch (e) {
+      if (isStale(e)) setBanner({ kind: 'stale', msg: 'файл изменился' });
+      else setBanner({ kind: 'other', msg: errorText(e) });
+    } finally {
+      setReviewing(false);
+    }
+  };
+
+  const runApply = async () => {
+    if (reviewing || applying) return;
+    const ids = Array.from(selected);
+    if (ids.length === 0 || current.baseSha == null) return;
+    setBanner(null);
+    setApplying(true);
+    try {
+      const r = await api.projects.mapHygiene.apply(projectId, current.baseSha, ids);
+      setLastApply({ applied: r.applied, failed: r.failed });
+      // Отчёт из apply приходит свежим — шапка и группы перерисовываются без второго
+      // запроса (Р10.4). Сбрасываем выделение: id уже применённых ушли в прошлое, а
+      // выделение привязано к id, не к содержимому
+      setCurrent(r.scan);
+      onReport?.(r.scan);
+      setSelected(new Set());
+    } catch (e) {
+      if (isStale(e)) setBanner({ kind: 'stale', msg: 'файл изменился' });
+      else setBanner({ kind: 'other', msg: errorText(e) });
+    } finally {
+      setApplying(false);
+    }
+  };
+
   const subtitle = (
     <span>
-      CLAUDE.md · {report.lines.toLocaleString('ru')} строк ·{' '}
-      {Math.round(report.bytes / 1024).toLocaleString('ru')} КБ ·{' '}
-      ≈{report.approxTokens.toLocaleString('ru')} токенов в каждой сессии
+      CLAUDE.md · {current.lines.toLocaleString('ru')} строк ·{' '}
+      {Math.round(current.bytes / 1024).toLocaleString('ru')} КБ ·{' '}
+      ≈{current.approxTokens.toLocaleString('ru')} токенов в каждой сессии
     </span>
   );
 
@@ -71,9 +170,6 @@ export function MapHygieneDialog({ report, onClose, onReloaded }: Props) {
       title="Уборка карты проекта"
       subtitle={subtitle}
       width={MODAL_W.wide}
-      // Высота фиксированная — содержимое сильно разное (от одной секции до 257 строк),
-      // прыгающая карточка мешала бы сравнивать. Низ с действиями прижат, середина
-      // скроллится — это работа самого Modal через cc-modal-content (см. styles index.css)
       cardStyle={{ height: 'calc(100vh - 32px)' }}
       onClose={onClose}
       footer={
@@ -82,20 +178,39 @@ export function MapHygieneDialog({ report, onClose, onReloaded }: Props) {
           selectedCount={selected.size}
           onSelectAll={selectAll}
           onClearAll={clearAll}
-          // apply — волна 4 (POST .../apply). В этой волне только отметки сохраняются,
-          // кнопка disabled — человек видит, что выбор не потерян между состояниями
-          onApply={() => {}}
+          onApply={runApply}
+          applying={applying}
           onClose={onClose}
         />
       }
     >
-      {!report.exists ? (
+      {!current.exists ? (
         <EmptyState>Карты проекта пока нет. Ассистент создаст её при первом знакомстве с проектом.</EmptyState>
-      ) : report.suggestions.length === 0 ? (
+      ) : current.suggestions.length === 0 ? (
         <EmptyState>Карта в порядке</EmptyState>
       ) : (
         <>
-          <HeaderBadges report={report} />
+          <HeaderBadges report={current} />
+          {banner?.kind === 'stale' && (
+            <StaleBanner onRescan={() => {
+              setBanner(null);
+              setLastApply(null);
+              void onReloaded?.();
+            }} />
+          )}
+          {banner?.kind === 'other' && (
+            <ErrorBanner msg={banner.msg} onDismiss={() => setBanner(null)} />
+          )}
+          {current.modelNote && (
+            <ModelNoteBanner
+              msg={current.modelNote}
+              onRetry={runReview}
+              retrying={reviewing}
+            />
+          )}
+          {lastApply && (
+            <ApplyResultPanel applied={lastApply.applied} failed={lastApply.failed} />
+          )}
           <Group
             title="Правки в один клик"
             count={applicable.length}
@@ -110,34 +225,52 @@ export function MapHygieneDialog({ report, onClose, onReloaded }: Props) {
               />
             ))}
           </Group>
-          <Group title="Работа для чата" count={work.length}>
-            {work.map(s => (
+          <Group
+            title="Работа для чата"
+            count={work.length}
+            rightSlot={
+              reviewing ? (
+                <WaitingIndicator awaitingResponse hint="Модель думает" />
+              ) : (
+                <Button variant="ghost" size="xs" onClick={runReview}>
+                  {modelReviewed ? 'Переразобрать' : 'Разобрать моделью'}
+                </Button>
+              )
+            }
+          >
+            {reviewing ? null : work.map(s => (
               <SuggestionRow key={s.id} suggestion={s} />
             ))}
           </Group>
-          <MoreMapsPanel report={report} />
+          <MoreMapsPanel report={current} />
         </>
       )}
     </Modal>
   );
 }
 
-function Group({ title, count, empty, children }: {
+function Group({ title, count, empty, rightSlot, children }: {
   title: string;
   count: number;
   empty?: string;
+  rightSlot?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <section>
-      <h3 style={{
-        fontFamily: 'inherit',
-        fontSize: FS.sm, fontWeight: 600,
-        color: C.textSecondary, textTransform: 'uppercase', letterSpacing: '0.05em',
-        margin: 0, paddingBottom: SP.xs,
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        gap: SP.sm, paddingBottom: SP.xs,
       }}>
-        {title} · {count}
-      </h3>
+        <h3 style={{
+          fontFamily: 'inherit',
+          fontSize: FS.sm, fontWeight: 600, margin: 0,
+          color: C.textSecondary, textTransform: 'uppercase', letterSpacing: '0.05em',
+        }}>
+          {title} · {count}
+        </h3>
+        {rightSlot}
+      </div>
       {count === 0 && empty ? (
         <div style={{ fontSize: FS.base, color: C.textMuted, padding: `${SP.sm}px 0` }}>{empty}</div>
       ) : (
@@ -164,15 +297,120 @@ function HeaderBadges({ report }: { report: MapHygieneReport }) {
   );
 }
 
+// Плашка «Файл изменился после проверки» — единая для review и apply. Появляется,
+// когда сервер вернул 409 (staleBaseSha). Кнопка «Проверить заново» зовёт scan
+function StaleBanner({ onRescan }: { onRescan: () => void }) {
+  return (
+    <div style={{
+      marginTop: SP.sm, padding: SP.sm,
+      borderRadius: R.md,
+      background: C.warningBg, color: C.warningText,
+      fontSize: FS.sm, lineHeight: 1.5,
+      display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap',
+    }}>
+      <span style={{ flex: 1, minWidth: 200 }}>
+        Файл изменился после проверки — отметки могут указывать на старые строки.
+      </span>
+      <Button variant="ghost" size="sm" onClick={onRescan}>Проверить заново</Button>
+    </div>
+  );
+}
+
+// Прочие ошибки: показываем настоящую причину (текст с бэка) и кнопку «Закрыть плашку».
+// Глухое «не удалось» ничего не лечит — человек не починит «модель для разбора не настроена»
+function ErrorBanner({ msg, onDismiss }: { msg: string; onDismiss: () => void }) {
+  return (
+    <div style={{
+      marginTop: SP.sm, padding: SP.sm,
+      borderRadius: R.md,
+      background: C.dangerBg, color: C.dangerText,
+      fontSize: FS.sm, lineHeight: 1.5,
+      display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap',
+    }}>
+      <span style={{ flex: 1, minWidth: 200 }}>{msg}</span>
+      <Button variant="ghost" size="sm" onClick={onDismiss}>Закрыть</Button>
+    </div>
+  );
+}
+
+// Плашка «модель отказала» — показывает серверный modelNote дословно. По нему человек
+// понимает, что чинить: настроить модель, дать доступ к сети или просто повторить.
+// Кнопка «Повторить» запускает review ещё раз
+function ModelNoteBanner({ msg, onRetry, retrying }: {
+  msg: string; onRetry: () => void; retrying: boolean;
+}) {
+  return (
+    <div style={{
+      marginTop: SP.sm, padding: SP.sm,
+      borderRadius: R.md,
+      background: C.warningBg, color: C.warningText,
+      fontSize: FS.sm, lineHeight: 1.5,
+      display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap',
+    }}>
+      <span style={{ flex: 1, minWidth: 200 }}>
+        Модель не дала формулировок: <strong>{msg}</strong>
+      </span>
+      <Button variant="ghost" size="sm" onClick={onRetry} loading={retrying}>Повторить</Button>
+    </div>
+  );
+}
+
+// Раскладка строки «применили N, не вышло M» + построчный список причин по failed[].
+// applied скрывается, когда пуст (плашка по делу не появляется); failed показывается
+// всегда — это то, ради чего человек открыл панель
+function ApplyResultPanel({ applied, failed }: {
+  applied: string[]; failed: MapHygieneApplyFailure[];
+}) {
+  const appliedCount = applied.length;
+  const failedCount = failed.length;
+  if (appliedCount === 0 && failedCount === 0) return null;
+  return (
+    <div style={{
+      marginTop: SP.sm, padding: SP.sm,
+      borderRadius: R.md,
+      background: failedCount > 0 ? C.warningBg : C.successBg,
+      color: failedCount > 0 ? C.warningText : C.successText,
+      fontSize: FS.sm, lineHeight: 1.5,
+    }}>
+      <div style={{ fontWeight: 600, marginBottom: failedCount > 0 ? SP.xs : 0 }}>
+        {appliedCount > 0 && (
+          <span>Применили {appliedCount} {pluralRu(appliedCount, 'правку', 'правки', 'правок')}.</span>
+        )}
+        {failedCount > 0 && (
+          <span style={{ marginLeft: appliedCount > 0 ? SP.sm : 0 }}>
+            Не вышло: {failedCount} {pluralRu(failedCount, 'правка', 'правки', 'правок')}.
+          </span>
+        )}
+      </div>
+      {failedCount > 0 && (
+        <ul style={{ margin: 0, paddingLeft: SP.lg }}>
+          {failed.map((f, i) => (
+            <li key={`${f.id}-${i}`} style={{ fontSize: FS.sm }}>
+              <code style={{ fontFamily: FONT.mono, fontSize: FS.xs }}>{f.id.slice(0, 8)}</code>
+              {' — '}
+              {failureReasonText(f.reason)}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function failureReasonText(r: MapHygieneApplyFailureReason): string {
+  switch (r) {
+    case 'anchorNotFound': return 'якорь не найден в карте (правку уже внесли или текст переписали)';
+    case 'ambiguousAnchor': return 'якорь встречается несколько раз — куда писать решает человек';
+    case 'unknownId': return 'предложения с таким id нет в свежем скане';
+    case 'notApplicable': return 'механической правки у этого предложения нет по его виду';
+  }
+}
+
 function SuggestionRow({ suggestion, selected, onToggle }: {
   suggestion: MapHygieneSuggestion;
   selected?: boolean;
   onToggle?: () => void;
 }) {
-  // Факт — основной текст (план Р8: «поменять местами = человек снесёт живой раздел,
-  // поверив красивой фразе»). ModelSays — вторичный, выделен курсивом цветом secondary;
-  // сейчас modelSays всегда null (модель не зовётся в этой волне), но место оставлено
-  // под волну 2
   return (
     <div style={{
       display: 'flex', alignItems: 'flex-start', gap: SP.sm,
@@ -180,8 +418,6 @@ function SuggestionRow({ suggestion, selected, onToggle }: {
       border: `1px solid ${C.borderLight}`,
       background: C.bgWhite,
     }}>
-      {/* Чекбокс — только у применимых. У остальных (apply: null) чекбокса нет вовсе —
-          галочка, которая ничего не делает, врёт сильнее любой подписи */}
       {onToggle ? (
         <Checkbox checked={!!selected} onChange={() => onToggle()} ariaLabel={suggestion.fact} />
       ) : (
@@ -208,9 +444,6 @@ function SuggestionRow({ suggestion, selected, onToggle }: {
             {suggestion.modelSays}
           </div>
         )}
-        {/* Якорь замены (apply.before/after) показываем как «было → стало» на
-            токенах C.diffRemBg/C.diffAddBg. DiffView сюда не лезет — у него нет ни
-            потолка высоты, ни виртуализации (план Р9) */}
         {suggestion.apply && (
           <DiffBeforeAfter before={suggestion.apply.before} after={suggestion.apply.after} />
         )}
@@ -240,9 +473,6 @@ function DiffBeforeAfter({ before, after }: { before: string; after: string }) {
 }
 
 function MoreMapsPanel({ report }: { report: MapHygieneReport }) {
-  // Вложенные карты справочно — без плашек и без действий (план, Р4). Вложенная
-  // карта — правильный приём прогрессивного раскрытия, и плашка серьёзности
-  // отправила бы человека чинить здоровое
   const items: { path: string; lines: number }[] = [];
   if (report.secondMap) items.push({ path: report.secondMap.path, lines: report.secondMap.lines });
   if (report.localMap) items.push({ path: report.localMap.path, lines: report.localMap.lines });
@@ -269,19 +499,18 @@ function MoreMapsPanel({ report }: { report: MapHygieneReport }) {
   );
 }
 
-function Footer({ applicableCount, selectedCount, onSelectAll, onClearAll, onApply, onClose }: {
+function Footer({ applicableCount, selectedCount, onSelectAll, onClearAll, onApply, applying, onClose }: {
   applicableCount: number;
   selectedCount: number;
   onSelectAll: () => void;
   onClearAll: () => void;
   onApply: () => void;
+  applying: boolean;
   onClose: () => void;
 }) {
-  // «Применить отмеченное · N» считает только применимое (apply !== null). В этой
-  // волне POST ещё не реализован — кнопка disabled с подсказкой. Отметить все /
-  // снять — действующие кнопки, потому что отметки должны сохраняться между
-  // состояниями и человек должен иметь возможность снять
-  const canApply = selectedCount > 0;
+  // Кнопка активна, когда есть отмеченные и не идёт прямо сейчас apply. Дисейблится
+  // с подсказкой, чтобы не молча
+  const canApply = selectedCount > 0 && !applying;
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: SP.md, flexWrap: 'wrap',
@@ -300,7 +529,8 @@ function Footer({ applicableCount, selectedCount, onSelectAll, onClearAll, onApp
         variant="primary"
         size="md"
         disabled={!canApply}
-        title={canApply ? 'Появятся в следующей версии' : 'Отметьте хотя бы одну механическую правку'}
+        title={selectedCount === 0 ? 'Отметьте хотя бы одну механическую правку' : undefined}
+        loading={applying}
         onClick={onApply}
       >
         Применить отмеченное · {selectedCount}

@@ -288,6 +288,7 @@ function PostMeta({ model, ts, promptSnapshotId, turnContextTokens, turnCache }:
   const time = formatPostTime(ts);
   const timeFull = formatPostTimeFull(ts);
   const sessionId = useContext(ChatSessionContext);
+  const project = useContext(ChatProjectContext);
   const [snapshotOpen, setSnapshotOpen] = useState(false);
   const canOpen = !!(promptSnapshotId && sessionId);
   if (!model && !time && !canOpen) return null;
@@ -324,6 +325,7 @@ function PostMeta({ model, ts, promptSnapshotId, turnContextTokens, turnCache }:
       )}
       {snapshotOpen && sessionId && promptSnapshotId && (
         <PromptSnapshotDialog sessionId={sessionId} snapshotId={promptSnapshotId}
+          projectId={project?.id ?? null}
           contextTokens={turnContextTokens} turnCache={turnCache}
           onClose={() => setSnapshotOpen(false)} />
       )}

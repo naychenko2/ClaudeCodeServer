@@ -34,6 +34,14 @@ export function ProjectMapSection({ project }: Props) {
     }
   }, [project.id]);
 
+  // Применить новый отчёт (приехал из review/apply внутри модалки) к нашей сводке.
+  // Если модалка закрыта — отчёт не тронется, и при следующем открытии человек увидит
+  // устаревшую шапку; но это редкая ситуация, а лишний fetch при каждом обновлении —
+  // хуже: на rescan'е человек только что получил свежий отчёт
+  const applyReport = useCallback((r: MapHygieneReport) => {
+    setState({ kind: 'ready', report: r });
+  }, []);
+
   // Загрузка ОДИН раз на mount: отчёт дешёвый, и без неё открытие аккордеона
   // показало бы «пусто» до клика. Повторный fetch из модалки (по «Проверить заново»)
   // идёт через onReloaded
@@ -91,8 +99,10 @@ export function ProjectMapSection({ project }: Props) {
       </AccordionSection>
       {openDialog && state.kind === 'ready' && (
         <MapHygieneDialog
+          projectId={project.id}
           report={state.report}
           onReloaded={reload}
+          onReport={applyReport}
           onClose={() => setOpenDialog(false)}
         />
       )}

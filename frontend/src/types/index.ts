@@ -3773,6 +3773,11 @@ export interface MapHygieneReport {
   // модель ещё не зовётся (Р11: фич-флаг выключен). Волна 2 привезёт суждения.
   suggestions: MapHygieneSuggestion[];
 
+  // Текст, которым сервер объясняет неполноту разбора (модель не настроена, не дошла
+  // и т.п.). В UI показывается дословно — по глухому «не удалось» человек не починит
+  // «модель для разбора не настроена». Доступен после POST /map-hygiene/review.
+  modelNote?: string | null;
+
   secondMap: MapHygieneFileRef | null;
   nestedMapCount: number;
   nestedMaps: MapHygieneFileRef[];
@@ -3783,4 +3788,29 @@ export interface MapHygieneReport {
 
   walkTruncated: boolean;
   truncated: boolean;
+}
+
+// Причина, по которой правка не применилась. Закрытый белый список из четырёх значений
+// (MapApplyReasons на бэке): фронт по нему не ветвится, но человеку на каждый показывается
+// своя строка — «не удалось» без причины он не починит.
+export type MapHygieneApplyFailureReason =
+  | 'anchorNotFound'
+  | 'ambiguousAnchor'
+  | 'unknownId'
+  | 'notApplicable';
+
+export interface MapHygieneApplyFailure {
+  id: string;
+  reason: MapHygieneApplyFailureReason;
+}
+
+// Ответ POST /map-hygiene/apply: что применилось, что нет с причиной, новый sha карты
+// (если правки легли) и полный свежий отчёт сканера — шапка перерисовывается из него
+// без второго запроса (Р10.4 плана). Мнимой атомарности нет: applied[] и failed[] могут
+// быть непустыми одновременно.
+export interface MapHygieneApplyResult {
+  applied: string[];
+  failed: MapHygieneApplyFailure[];
+  newSha: string | null;
+  scan: MapHygieneReport;
 }

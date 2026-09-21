@@ -65,6 +65,65 @@ public class ClaudeMdExpanderTests : IDisposable
         text.Should().Contain("циклическая ссылка");
     }
 
+    // Импорта нет на диске — человек уверен, что правило уехало в контекст, а его там нет.
+    // Молчание тут дороже всего: раскрытие обязано доложить о потере наружу
+    [Fact]
+    public void ОтсутствующийИмпорт_ПопадаетВMissingImports()
+    {
+        Write(Path.Combine("rules", "git.md"), "Коммиты по-русски");
+        var root = Write("CLAUDE.md", "@rules/git.md\n@rules/typo.md\n");
+
+        var result = ClaudeMdExpander.Expand(root);
+
+        result.ImportCount.Should().Be(1);           // раскрылся только живой
+        result.MissingImports.Should().ContainSingle()
+            .Which.Target.Should().Be("rules/typo.md");
+        result.Text.Should().Contain("Коммиты по-русски");
+        result.Truncated.Should().BeFalse();
+        result.DepthExceeded.Should().BeFalse();
+    }
+
+    [Fact]
+    public void ПределВложенности_ПомечаетсяПризнаком()
+    {
+        // Цепочка глубже MaxDepth: последний импорт останется нераскрытым
+        for (var i = 0; i <= ClaudeMdExpander.MaxDepth + 1; i++)
+            Write(Path.Combine("rules", $"r{i}.md"), $"уровень {i}\n@r{i + 1}.md");
+        Write(Path.Combine("rules", $"r{ClaudeMdExpander.MaxDepth + 2}.md"), "дно");
+        var root = Write("CLAUDE.md", "@rules/r0.md");
+
+        var result = ClaudeMdExpander.Expand(root);
+
+        result.DepthExceeded.Should().BeTrue();
+        result.MissingImports.Should().BeEmpty();    // файлы на месте, дело в глубине
+    }
+
+    [Fact]
+    public void ПотолокРазмера_ПомечаетсяПризнаком()
+    {
+        Write(Path.Combine("rules", "big.md"), new string('я', ClaudeMdExpander.MaxTotalChars + 10));
+        var root = Write("CLAUDE.md", "@rules/big.md\nхвост");
+
+        var result = ClaudeMdExpander.Expand(root);
+
+        result.Truncated.Should().BeTrue();
+    }
+
+    [Fact]
+    public void ЗдороваяКарта_БезПризнаковПотерь()
+    {
+        Write(Path.Combine("rules", "git.md"), "Коммиты по-русски");
+        var root = Write("CLAUDE.md", "Заголовок\n@rules/git.md\n");
+
+        var result = ClaudeMdExpander.Expand(root);
+
+        result.MissingImports.Should().BeEmpty();
+        result.Truncated.Should().BeFalse();
+        result.DepthExceeded.Should().BeFalse();
+        // Read остаётся тонкой обёрткой над Expand — снимку промпта нужен только текст
+        ClaudeMdExpander.Read(root).Should().Be(result.Text);
+    }
+
     [Theory]
     // Домашний путь и абсолютный CLI понимает, но мы намеренно не резолвим
     [InlineData("@~/.claude/CLAUDE.md")]

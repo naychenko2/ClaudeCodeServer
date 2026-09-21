@@ -14,9 +14,10 @@ public record MapBudget(int RecommendedLines, bool OverBudget);
 // DocsRefs — сколько внутри живых ссылок на docs/*: признак пересказа готового документа.
 public record MapSection(string Title, int StartLine, int Lines, int DocsRefs, string FirstLine);
 
-// Находка по ссылке. Path — карта, в которой ссылка стоит (их в отчёте несколько).
+// Находка по ссылке или импорту. Path — карта, в которой она стоит (их в отчёте несколько).
 // Reason: notFound — цели нет нигде; rootRelativeOnly — резолвится только от корня проекта;
-// absolute — абсолютный путь, не проверяли; outsideProject — уводит за пределы проекта.
+// absolute — абсолютный путь, не проверяли; outsideProject — уводит за пределы проекта;
+// deadImport — @-импорт не раскрылся, файла нет (правило в контекст не едет вовсе).
 // Candidates — механическая починка: путь заполнен, только если одноимённый файл в проекте
 // ровно один. Ноль или два — решение человека, кандидатов не предлагаем.
 public record MapLinkFinding(string Path, string? Section, int Line, string Target,
@@ -26,25 +27,65 @@ public record MapLinkFinding(string Path, string? Section, int Line, string Targ
 public record MapFileRef(string Path, int Lines, long Bytes);
 
 // Отчёт сканера — факты без единого суждения модели (Р1 плана уборки карты).
-public record MapHygieneReport(
-    string Path,
-    bool Exists,
-    string? BaseSha,
-    int Lines,
-    long Bytes,
-    int ApproxTokens,
-    int ExpandedLines,
-    int ImportCount,
-    MapBudget Budget,
-    int SectionCount,
-    int LongSectionCount,
-    IReadOnlyList<MapSection> Sections,
-    IReadOnlyList<MapLinkFinding> DeadLinks,
-    IReadOnlyList<MapLinkFinding> RootRelativeLinks,
-    IReadOnlyList<MapLinkFinding> Skipped,
-    MapFileRef? SecondMap,
-    IReadOnlyList<MapFileRef> NestedMaps,
-    MapFileRef? LocalMap);
+//
+// У КАЖДОГО списка находок есть свой потолок и полный счётчик рядом: карта с сотней
+// дефектов обязана уложиться в то же окно, что и здоровая, — иначе отчёт разнесёт ровно
+// там, где фича нужнее всего (на нашем корпусе замер дал 161 мёртвую ссылку). Разница
+// «счётчик минус длина списка» и есть честное «и ещё N».
+//
+// Свойства init, а не позиционный record: полей за два десятка, и в конструкторе по
+// позициям их не прочитать — а ошибка порядка у однотипных int молча не заметится.
+public record MapHygieneReport
+{
+    public required string Path { get; init; }
+    public bool Exists { get; init; }
+    // Отпечаток содержимого: едет обратно в review и apply
+    public string? BaseSha { get; init; }
+
+    public int Lines { get; init; }
+    public long Bytes { get; init; }
+    // ОЦЕНКА, а не факт: токенизатор у каждой модели свой. Показывать её как точное число
+    // нельзя — первый же спор о цифре обесценит весь отчёт
+    public int ApproxTokens { get; init; }
+    public string ApproxTokensNote { get; init; } = TokensNote;
+
+    // Размер с раскрытыми @-импортами: платится именно он
+    public int ExpandedLines { get; init; }
+    public int ImportCount { get; init; }
+    // Раскрытие упёрлось в потолок объёма или вложенности — ExpandedLines занижен, и без
+    // этих признаков отчёт сказал бы «всё хорошо» у самой запущенной карты
+    public bool ExpansionTruncated { get; init; }
+    public bool ImportDepthExceeded { get; init; }
+
+    public required MapBudget Budget { get; init; }
+
+    public int SectionCount { get; init; }
+    public int LongSectionCount { get; init; }
+    public IReadOnlyList<MapSection> Sections { get; init; } = [];
+
+    public int DeadLinkCount { get; init; }
+    public IReadOnlyList<MapLinkFinding> DeadLinks { get; init; } = [];
+
+    public int DeadImportCount { get; init; }
+    public IReadOnlyList<MapLinkFinding> DeadImports { get; init; } = [];
+
+    public int RootRelativeCount { get; init; }
+    public IReadOnlyList<MapLinkFinding> RootRelativeLinks { get; init; } = [];
+
+    public int SkippedCount { get; init; }
+    public IReadOnlyList<MapLinkFinding> Skipped { get; init; } = [];
+
+    public MapFileRef? SecondMap { get; init; }
+    public int NestedMapCount { get; init; }
+    public IReadOnlyList<MapFileRef> NestedMaps { get; init; } = [];
+    public MapFileRef? LocalMap { get; init; }
+
+    // Хоть один список урезан потолком — читателю отчёта это видно одним полем,
+    // без сверки четырёх пар «счётчик против длины»
+    public bool Truncated { get; init; }
+
+    internal const string TokensNote = "оценка: байты ÷ 3, точное число зависит от токенизатора модели";
+}
 
 /// <summary>
 /// Гигиена карты проекта (CLAUDE.md): размер, длинные секции, мёртвые ссылки.
@@ -68,6 +109,12 @@ public sealed class ProjectMapScanner(IConfiguration? config = null)
         int.TryParse(config?["ProjectMap:TotalLineBudget"], out var b) && b > 0 ? b : 200;
     private readonly int _maxSectionsInReport =
         int.TryParse(config?["ProjectMap:MaxSectionsInReport"], out var m) && m > 0 ? m : 15;
+    // Потолок КАЖДОГО списка находок по ссылкам и импортам (dead, deadImports,
+    // rootRelative, skipped считаются отдельно): сотня дефектов не имеет права разнести отчёт
+    private readonly int _maxLinkFindingsInReport =
+        int.TryParse(config?["ProjectMap:MaxDeadLinksInReport"], out var d) && d > 0 ? d : 20;
+    private readonly int _maxNestedMaps =
+        int.TryParse(config?["ProjectMap:MaxNestedMaps"], out var n) && n > 0 ? n : 20;
 
     // Карта проекта — то, что реально собирает продукт (ClaudeSession): корневой файл и
     // его двойник в .claude/. Личный CLAUDE.md профиля CLI в отчёт не входит — он не про проект.
@@ -94,22 +141,18 @@ public sealed class ProjectMapScanner(IConfiguration? config = null)
         var walk = Walk(root);
 
         // Карты нет вовсе — штатный ответ, а не ошибка: у большинства проектов её и не будет
-        if (!SafeExists(mainFull))
-            return new MapHygieneReport(MainMapName, Exists: false, BaseSha: null,
-                Lines: 0, Bytes: 0, ApproxTokens: 0, ExpandedLines: 0, ImportCount: 0,
-                new MapBudget(_totalLineBudget, OverBudget: false),
-                SectionCount: 0, LongSectionCount: 0, Sections: [],
-                DeadLinks: [], RootRelativeLinks: [], Skipped: [],
-                SecondMap: null, NestedMaps: walk.NestedMaps, LocalMap: FileRef(root, LocalMapPath));
-
-        var main = ParseMap(root, MainMapName);
+        var main = SafeExists(mainFull) ? ParseMap(root, MainMapName) : null;
         if (main is null)
-            return new MapHygieneReport(MainMapName, Exists: false, BaseSha: null,
-                Lines: 0, Bytes: 0, ApproxTokens: 0, ExpandedLines: 0, ImportCount: 0,
-                new MapBudget(_totalLineBudget, OverBudget: false),
-                SectionCount: 0, LongSectionCount: 0, Sections: [],
-                DeadLinks: [], RootRelativeLinks: [], Skipped: [],
-                SecondMap: null, NestedMaps: walk.NestedMaps, LocalMap: FileRef(root, LocalMapPath));
+            return new MapHygieneReport
+            {
+                Path = MainMapName,
+                Exists = false,
+                Budget = new MapBudget(_totalLineBudget, OverBudget: false),
+                NestedMapCount = walk.NestedMaps.Count,
+                NestedMaps = Cap(walk.NestedMaps, _maxNestedMaps),
+                LocalMap = FileRef(root, LocalMapPath),
+                Truncated = walk.NestedMaps.Count > _maxNestedMaps,
+            };
 
         var dead = new List<MapLinkFinding>();
         var rootRelative = new List<MapLinkFinding>();
@@ -130,29 +173,112 @@ public sealed class ProjectMapScanner(IConfiguration? config = null)
         // Живые ссылки на docs/* внутри секции — признак пересказа готового документа
         var docsRefs = CountDocsRefs(root, main);
 
-        var sections = main.Sections
+        var longSections = main.Sections
             .Where(s => s.Lines > _sectionLineThreshold)
             .OrderByDescending(s => s.Lines)
             .ToList();
 
-        var report = sections
+        var sections = longSections
             .Take(_maxSectionsInReport)
             .Select(s => new MapSection(s.Title, s.StartLine, s.Lines,
                 docsRefs.GetValueOrDefault(s.StartLine), s.FirstLine))
             .ToList();
 
-        var (expandedLines, importCount) = Expand(Path.Combine(root, MainMapName), main.Text);
+        var expansion = ClaudeMdExpander.Expand(Path.Combine(root, MainMapName));
+        var deadImports = DeadImportFindings(root, maps, expansion);
 
-        return new MapHygieneReport(
-            MainMapName, Exists: true, BaseSha: Sha256(main.Text),
-            main.Lines, main.Bytes, ApproxTokens: (int)(main.Bytes / 3),
-            expandedLines, importCount,
-            new MapBudget(_totalLineBudget, main.Lines > _totalLineBudget),
-            SectionCount: main.Sections.Count, LongSectionCount: sections.Count, Sections: report,
-            DeadLinks: dead, RootRelativeLinks: rootRelative, Skipped: skipped,
-            SecondMap: second is null ? null : new MapFileRef(secondPath, second.Lines, second.Bytes),
-            NestedMaps: walk.NestedMaps,
-            LocalMap: FileRef(root, LocalMapPath));
+        return new MapHygieneReport
+        {
+            Path = MainMapName,
+            Exists = true,
+            BaseSha = Sha256(main.Text),
+
+            Lines = main.Lines,
+            Bytes = main.Bytes,
+            ApproxTokens = (int)(main.Bytes / 3),
+
+            // Ничего не раскрылось — размер равен исходному. Считать по тексту раскрытия
+            // и в этом случае нельзя: оно нормализует концовку файла и добавило бы строку,
+            // из-за чего отчёт показывал бы expandedLines > lines у карты без импортов
+            ExpandedLines = expansion.Text is null || expansion.ImportCount == 0
+                ? main.Lines
+                : CountLines(expansion.Text),
+            ImportCount = expansion.ImportCount,
+            ExpansionTruncated = expansion.Truncated,
+            ImportDepthExceeded = expansion.DepthExceeded,
+
+            Budget = new MapBudget(_totalLineBudget, main.Lines > _totalLineBudget),
+
+            SectionCount = main.Sections.Count,
+            LongSectionCount = longSections.Count,
+            Sections = sections,
+
+            DeadLinkCount = dead.Count,
+            DeadLinks = Cap(dead, _maxLinkFindingsInReport),
+            DeadImportCount = deadImports.Count,
+            DeadImports = Cap(deadImports, _maxLinkFindingsInReport),
+            RootRelativeCount = rootRelative.Count,
+            RootRelativeLinks = Cap(rootRelative, _maxLinkFindingsInReport),
+            SkippedCount = skipped.Count,
+            Skipped = Cap(skipped, _maxLinkFindingsInReport),
+
+            SecondMap = second is null ? null : new MapFileRef(secondPath, second.Lines, second.Bytes),
+            NestedMapCount = walk.NestedMaps.Count,
+            NestedMaps = Cap(walk.NestedMaps, _maxNestedMaps),
+            LocalMap = FileRef(root, LocalMapPath),
+
+            Truncated = longSections.Count > _maxSectionsInReport ||
+                dead.Count > _maxLinkFindingsInReport ||
+                deadImports.Count > _maxLinkFindingsInReport ||
+                rootRelative.Count > _maxLinkFindingsInReport ||
+                skipped.Count > _maxLinkFindingsInReport ||
+                walk.NestedMaps.Count > _maxNestedMaps,
+        };
+    }
+
+    private static IReadOnlyList<T> Cap<T>(IReadOnlyList<T> all, int max) =>
+        all.Count <= max ? all : [.. all.Take(max)];
+
+    // Импорт, который не раскрылся: файла нет. Отдельная находка, а не «пропущено» —
+    // человек уверен, что правило едет в контекст, и молчание тут дороже всего.
+    // Номер строки ищется в сыром тексте той карты, где импорт написан (вложенные импорты
+    // живут в чужих файлах — у них Line остаётся нулём, а Path указывает на источник)
+    private static List<MapLinkFinding> DeadImportFindings(string root,
+        IReadOnlyList<ParsedMap> maps, ClaudeMdExpansion expansion)
+    {
+        var result = new List<MapLinkFinding>();
+        foreach (var missing in expansion.MissingImports)
+        {
+            var sourceRelative = Relative(root, missing.SourceFile);
+            var map = maps.FirstOrDefault(m =>
+                string.Equals(m.Path, sourceRelative, StringComparison.OrdinalIgnoreCase));
+            var line = map is null ? 0 : ImportLine(map.Text, missing.Target);
+            result.Add(new MapLinkFinding(sourceRelative, null, line, missing.Target, "deadImport", []));
+        }
+        return result;
+    }
+
+    private static int ImportLine(string text, string target)
+    {
+        var lineNo = 0;
+        foreach (var raw in text.Split('\n'))
+        {
+            lineNo++;
+            var trimmed = raw.TrimEnd('\r').Trim();
+            if (trimmed.Length > 1 && trimmed[0] == '@' && trimmed[1..] == target) return lineNo;
+        }
+        return 0;
+    }
+
+    // Путь файла от корня проекта с прямыми слэшами; файл вне проекта отдаётся как есть
+    private static string Relative(string root, string fullPath)
+    {
+        try
+        {
+            var rel = Path.GetRelativePath(root, fullPath).Replace('\\', '/');
+            return rel.StartsWith("../", StringComparison.Ordinal) ? fullPath : rel;
+        }
+        catch (ArgumentException) { return fullPath; }
     }
 
     // ---------- ссылки ----------
@@ -323,27 +449,6 @@ public sealed class ProjectMapScanner(IConfiguration? config = null)
         if (text.Length == 0) return 0;
         var n = text.Count(c => c == '\n');
         return text[^1] == '\n' ? n : n + 1;
-    }
-
-    // Размер карты с раскрытыми @-импортами: проект с CLAUDE.md в 20 строк и пятью
-    // импортами платит за всё дерево, и без раскрытия отчёт соврал бы в пользу «всё хорошо»
-    private static (int ExpandedLines, int ImportCount) Expand(string fullPath, string text)
-    {
-        var imports = text.Split('\n').Count(l => IsImportLine(l.TrimEnd('\r')));
-        // Импортов нет — раскрывать нечего: лишний проход по файлу только добавил бы
-        // строку от нормализации концовки, и отчёт показал бы expandedLines > lines
-        if (imports == 0) return (CountLines(text), 0);
-        var expanded = ClaudeMdExpander.Read(fullPath);
-        return (expanded is null ? CountLines(text) : CountLines(expanded), imports);
-    }
-
-    // Строка-импорт — это `@путь` целиком, как их пишет CLI (правило ClaudeMdExpander:
-    // внутритекстовое «см. @rules/git.md» импортом не считается)
-    private static bool IsImportLine(string line)
-    {
-        var trimmed = line.Trim();
-        return trimmed.Length >= 2 && trimmed[0] == '@' &&
-            !trimmed.Contains(' ') && !trimmed.Contains('\t');
     }
 
     // ---------- обход дерева ----------

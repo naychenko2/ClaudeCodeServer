@@ -31,6 +31,16 @@ public class ProjectMapScannerTests : IDisposable
                 { ["ProjectMap:SectionLineThreshold"] = lines.ToString() })
             .Build());
 
+    // Потолки списков в отчёте — тоже настройка: у карты с сотней дефектов отчёт обязан
+    // остаться того же размера
+    private static ProjectMapScanner ScannerWithCaps(int? maxLinkFindings = null, int? maxNestedMaps = null)
+    {
+        var values = new Dictionary<string, string?>();
+        if (maxLinkFindings is { } l) values["ProjectMap:MaxDeadLinksInReport"] = l.ToString();
+        if (maxNestedMaps is { } n) values["ProjectMap:MaxNestedMaps"] = n.ToString();
+        return new ProjectMapScanner(new ConfigurationBuilder().AddInMemoryCollection(values).Build());
+    }
+
     private void Write(string content, params string[] segments)
     {
         var full = Path.Combine([_root, .. segments]);
@@ -232,6 +242,155 @@ public class ProjectMapScannerTests : IDisposable
 
         report.ImportCount.Should().Be(0);
         report.ExpandedLines.Should().Be(report.Lines);
+    }
+
+    // Мёртвый импорт — худший класс дефекта карты: правило в контекст не едет вовсе,
+    // а раньше оно молча оставалось строкой текста. Отдельная причина, не «пропущено»
+    [Fact]
+    public void МёртвыйИмпорт_ОтдельнаяНаходка_СНомеромСтроки()
+    {
+        Write("# Карта\n\n@rules/git.md\n@rules/typo.md\n", "CLAUDE.md");
+        Write("правило", "rules", "git.md");
+
+        var report = _scanner.Scan(_root);
+
+        report.ImportCount.Should().Be(1);
+        var finding = report.DeadImports.Should().ContainSingle().Subject;
+        finding.Reason.Should().Be("deadImport");
+        finding.Target.Should().Be("rules/typo.md");
+        finding.Path.Should().Be("CLAUDE.md");
+        finding.Line.Should().Be(4);
+        // В «пропущенное» такая находка не сваливается: там другие причины и другой смысл
+        report.Skipped.Should().BeEmpty();
+        report.DeadLinks.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void УсечениеРаскрытия_ВидноВОтчёте()
+    {
+        Write("# Карта\n\n@rules/big.md\n", "CLAUDE.md");
+        Write(new string('я', 300 * 1024), "rules", "big.md");
+
+        var report = _scanner.Scan(_root);
+
+        report.ExpansionTruncated.Should().BeTrue();
+    }
+
+    // ─── Потолки отчёта ─────────────────────────────────────────────────────
+
+    // Карта с сотней дефектов обязана уложиться в то же окно, что и здоровая: на нашем
+    // корпусе замер дал 161 мёртвую ссылку, и без потолков отчёт разнесло бы ровно там,
+    // где фича нужнее всего
+    [Fact]
+    public void МножествоМёртвыхСсылок_СписокУрезан_ПолныйСчётчикЧестен()
+    {
+        var links = string.Join('\n', Enumerable.Range(1, 30).Select(i => $"[нет{i}](docs/нет{i}.md)"));
+        Write($"# Карта\n\n{links}\n", "CLAUDE.md");
+        var capped = ScannerWithCaps(maxLinkFindings: 5);
+
+        var report = capped.Scan(_root);
+
+        report.DeadLinks.Should().HaveCount(5);
+        report.DeadLinkCount.Should().Be(30);       // «и ещё 25» читатель посчитает сам
+        report.Truncated.Should().BeTrue();
+    }
+
+    [Fact]
+    public void МножествоВложенныхКарт_СписокУрезан_ПолныйСчётчикЧестен()
+    {
+        Write("# Карта\n", "CLAUDE.md");
+        foreach (var i in Enumerable.Range(1, 7))
+            Write($"# Карта {i}\n", "backend", $"Sub{i}", "CLAUDE.md");
+        var capped = ScannerWithCaps(maxNestedMaps: 3);
+
+        var report = capped.Scan(_root);
+
+        report.NestedMaps.Should().HaveCount(3);
+        report.NestedMapCount.Should().Be(7);
+        report.Truncated.Should().BeTrue();
+    }
+
+    [Fact]
+    public void ЗдороваяКарта_ПризнакаУсеченияНет()
+    {
+        Write("# Карта\n\nтекст\n", "CLAUDE.md");
+
+        var report = _scanner.Scan(_root);
+
+        report.Truncated.Should().BeFalse();
+        report.DeadLinkCount.Should().Be(0);
+        report.DeadImportCount.Should().Be(0);
+    }
+
+    [Fact]
+    public void ОценкаТокенов_ПодписанаКакОценка()
+    {
+        Write("# Карта\n\nтекст\n", "CLAUDE.md");
+
+        var report = _scanner.Scan(_root);
+
+        // Число зависит от токенизатора модели — отчёт обязан называть его оценкой,
+        // иначе первый спор про цифру обесценит весь отчёт
+        report.ApproxTokensNote.Should().Contain("оценка");
+    }
+
+    // ─── Приёмка на фикстурном дереве ───────────────────────────────────────
+
+    // Сводная проверка на дереве с ЗАВЕДОМО известным набором дефектов. Живой репозиторий
+    // для этого не годится: обе его мёртвые ссылки чинятся этой же фичей в первый день,
+    // а число секций меняется каждой правкой карты — тест на нём протух бы сразу
+    [Fact]
+    public void ФикстурноеДерево_НаходитВесьЗаведомыйНабор_ИНичегоЛишнего()
+    {
+        var longSection = "## Раздутая\n\nпервая строка\n" + string.Join('\n', Enumerable.Repeat("тело", 50));
+        Write($"""
+            # Карта проекта
+
+            @rules/живое.md
+            @rules/мёртвое.md
+
+            ## Ссылки
+
+            [живая](docs/жив.md), [мёртвая](backend/Нет.cs), [переехавшая](backend/Старое/Файл.cs)
+            [внешняя](https://example.com), [схема](javascript:alert(1))
+            [абсолютная](/etc/passwd), [наружу](../../чужое.md)
+
+            ```md
+            [пример внутри забора](совсем/нет.md)
+            ## Заголовок внутри забора
+            ```
+
+            {longSection}
+            """, "CLAUDE.md");
+        Write("правило", "rules", "живое.md");
+        Write("# Жив", "docs", "жив.md");
+        Write("// код", "backend", "Новое", "Файл.cs");
+        Write("# Вложенная\n\n[от корня](docs/жив.md)\n", "backend", "Новое", "CLAUDE.md");
+
+        var report = _scanner.Scan(_root);
+
+        report.Exists.Should().BeTrue();
+        // Секции: «Ссылки» и «Раздутая», длинная одна
+        report.SectionCount.Should().Be(2);
+        report.LongSectionCount.Should().Be(1);
+        report.Sections.Should().ContainSingle().Which.Title.Should().Be("Раздутая");
+
+        // Мёртвых ровно две, и кандидат найден только у той, где одноимённый файл один
+        report.DeadLinkCount.Should().Be(2);
+        report.DeadLinks.Select(d => d.Target).Should()
+            .BeEquivalentTo(["backend/Нет.cs", "backend/Старое/Файл.cs"]);
+        report.DeadLinks.Single(d => d.Target == "backend/Старое/Файл.cs")
+            .Candidates.Should().BeEquivalentTo(["backend/Новое/Файл.cs"]);
+        report.DeadLinks.Single(d => d.Target == "backend/Нет.cs").Candidates.Should().BeEmpty();
+
+        // Мёртвый импорт — своей причиной, ссылка из вложенной карты — третьим исходом
+        report.DeadImports.Should().ContainSingle().Which.Target.Should().Be("rules/мёртвое.md");
+        report.RootRelativeLinks.Should().ContainSingle()
+            .Which.Path.Should().Be("backend/Новое/CLAUDE.md");
+
+        // Абсолютная и уводящая за корень — «не проверяли», внешние и примеры в заборе — тишина
+        report.Skipped.Select(s => s.Reason).Should().BeEquivalentTo(["absolute", "outsideProject"]);
+        report.Truncated.Should().BeFalse();
     }
 
     // ─── Прочие карты проекта ───────────────────────────────────────────────

@@ -50,11 +50,27 @@ public class ProjectMapControllerTests : IClassFixture<TestWebApplicationFactory
             .GetProperty("target").GetString().Should().Be("backend/Models/FeatureFlag.cs");
     }
 
-    // Кейс 9 плана: чужой проект — 404, существование не подтверждаем
+    // Кейс 9 плана: несуществующий проект — 404
     [Fact]
-    public async Task Скан_ЧужойПроект_Возвращает404()
+    public async Task Скан_НесуществующийПроект_Возвращает404()
     {
         var response = await _client.GetAsync($"/api/projects/{Guid.NewGuid()}/map-hygiene/scan");
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // Главный инвариант эндпоинта — изоляция по владельцу, и проверять его надо на РЕАЛЬНО
+    // существующем чужом проекте: по выдуманному id срабатывает ветка «проекта нет»,
+    // а проверка владельца при этом может отсутствовать вовсе. Чужой владелец иначе получил
+    // бы карту чужого репозитория — имена секций, пути файлов, вложенные карты
+    [Fact]
+    public async Task Скан_ПроектЧужогоВладельца_Возвращает404()
+    {
+        var id = await SetupProjectAsync();
+        using var stranger = _factory.CreateAuthenticatedClient(
+            TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
+
+        var response = await stranger.GetAsync($"/api/projects/{id}/map-hygiene/scan");
 
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }

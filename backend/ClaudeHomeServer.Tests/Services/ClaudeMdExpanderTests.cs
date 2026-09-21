@@ -42,6 +42,67 @@ public class ClaudeMdExpanderTests : IDisposable
         text.Should().Contain("Заголовок").And.Contain("Хвост");
     }
 
+    // Импорт внутри ```-забора CLI не раскрывает — это пример, а не директива. Наша
+    // реконструкция обязана совпадать с ним: иначе пример на существующий файл вклеивает
+    // в снимок промпта то, чего в контексте хода нет, а пример на несуществующий даёт
+    // ложную находку «правило в контекст не едет»
+    [Fact]
+    public void ИмпортВнутриЗабора_НеРаскрываетсяИНеСчитаетсяПотерянным()
+    {
+        Write(Path.Combine("rules", "git.md"), "Коммиты по-русски");
+        var root = Write("CLAUDE.md", """
+            Заголовок
+
+            ```md
+            @rules/git.md
+            @rules/опечатка.md
+            ```
+
+            Хвост
+            """);
+
+        var result = ClaudeMdExpander.Expand(root);
+
+        result.ImportCount.Should().Be(0);
+        result.MissingImports.Should().BeEmpty();
+        result.Text.Should().NotContain("Коммиты по-русски");
+        result.Text.Should().Contain("@rules/git.md");     // строка осталась как есть
+    }
+
+    // Забор закрывается по CommonMark: вложенный ``` внутри четырёх бэктиков внешний
+    // не закрывает, и импорт после него — всё ещё пример
+    [Fact]
+    public void ВложенныйЗабор_ВнутреннийНеОткрываетРазборИмпортов()
+    {
+        Write(Path.Combine("rules", "git.md"), "Коммиты по-русски");
+        var root = Write("CLAUDE.md", """
+            ````md
+            ```
+            @rules/git.md
+            ```
+            ````
+            """);
+
+        var result = ClaudeMdExpander.Expand(root);
+
+        result.ImportCount.Should().Be(0);
+        result.Text.Should().NotContain("Коммиты по-русски");
+    }
+
+    // Бэктик в записи импорта — примета примера, а не директивы: «@rules/git.md`»
+    // (code span, открытый строкой выше) давал ложную находку «импорт не найден»
+    // с целью «rules/git.md`», которой ни в одной карте нет
+    [Fact]
+    public void ЗаписьИмпортаСБэктиком_ИмпортомНеСчитается()
+    {
+        var root = Write("CLAUDE.md", "Правило подключается строкой `\n@rules/git.md`\n");
+
+        var result = ClaudeMdExpander.Expand(root);
+
+        result.ImportCount.Should().Be(0);
+        result.MissingImports.Should().BeEmpty();
+    }
+
     [Fact]
     public void ВложенныеИмпорты_РаскрываютсяРекурсивно()
     {

@@ -1729,6 +1729,11 @@ public class SubsystemBoundaryTests
         // нет, а в Main этот хелпер заставлял вертикали ходить в обход через SessionManager.
         "ClaudeHomeServer.Services.SessionTaskLinks",
         "ClaudeHomeServer.Services.ExecutorStopClassifier",
+        // Состояние ```-забора при построчном разборе markdown (правила CommonMark).
+        // В спине, а не в вертикали Docs: её зовут и сканер карты (Docs), и раскрытие
+        // @-импортов CLAUDE.md (Core, ClaudeMdExpander) — третий комплект правил
+        // разошёлся бы с двумя первыми. Прецедент SafePath: примитив без владения
+        "ClaudeHomeServer.Services.MarkdownFence",
         "ClaudeHomeServer.Services.PersonaLabel",
         "ClaudeHomeServer.Services.PersonaConsultantToolset",
         "ClaudeHomeServer.Services.SpecialtyCatalog",

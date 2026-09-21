@@ -105,6 +105,7 @@ public static class ClaudeMdExpander
         }
 
         var dir = Path.GetDirectoryName(full) ?? "";
+        var fence = new MarkdownFence();
         foreach (var line in text.Split('\n'))
         {
             if (sb.Length >= MaxTotalChars)
@@ -112,6 +113,15 @@ public static class ClaudeMdExpander
                 sb.Append("\n<!-- обрезано: превышен лимит размера -->\n");
                 state.Truncated = true;
                 return;
+            }
+
+            // Содержимое ```-забора CLI импортом не считает, и мы обязаны совпадать с ним:
+            // пример `@rules/typo.md` в блоке кода иначе даёт ложный «мёртвый импорт», а
+            // пример на существующий файл вклеивает в снимок промпта то, чего в контексте нет
+            if (fence.Consume(line) || fence.InFence)
+            {
+                sb.Append(line).Append('\n');
+                continue;
             }
 
             var import = ImportTarget(line);
@@ -154,12 +164,14 @@ public static class ClaudeMdExpander
 
     // Строка-импорт — это `@путь` целиком (так их пишет и сам CLI). Внутритекстовые
     // упоминания вида «см. @rules/git.md» намеренно не трогаем: там это ссылка, а не импорт.
+    // Бэктик в строке снимает импорт целиком: `@rules/git.md` в code span — это пример,
+    // CLI его не раскрывает (проверка на первый символ ловит лишь часть таких записей)
     private static string? ImportTarget(string line)
     {
         var trimmed = line.Trim();
         if (trimmed.Length < 2 || trimmed[0] != '@') return null;
         var target = trimmed[1..];
-        return target.Contains(' ') || target.Contains('\t') ? null : target;
+        return target.Contains(' ') || target.Contains('\t') || target.Contains('`') ? null : target;
     }
 
     private static bool ImportExists(string path)

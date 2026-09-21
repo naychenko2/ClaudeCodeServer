@@ -1,3 +1,4 @@
+using System.Security;
 using System.Security.Cryptography;
 using System.Text;
 using ClaudeHomeServer.Services.Llm.Claude;
@@ -75,10 +76,20 @@ public record MapHygieneReport
     public int SkippedCount { get; init; }
     public IReadOnlyList<MapLinkFinding> Skipped { get; init; } = [];
 
+    // Забор кода в карте не закрыт (опечатка вида ``` без пары): весь остаток файла
+    // разобран как содержимое блока, то есть секции и ссылки ниже не проверены вовсе.
+    // Отдельное поле, а не тишина — иначе отчёт рапортует «карта здорова» у половины файла
+    public bool UnclosedFence { get; init; }
+
     public MapFileRef? SecondMap { get; init; }
     public int NestedMapCount { get; init; }
     public IReadOnlyList<MapFileRef> NestedMaps { get; init; } = [];
     public MapFileRef? LocalMap { get; init; }
+
+    // Обход дерева упёрся в потолок файлов или вложенности: вложенные карты неполны,
+    // а кандидаты починки не отдаются вовсе — «одноимённый файл ровно один» на
+    // оборванном обходе не факт, а совпадение
+    public bool WalkTruncated { get; init; }
 
     // Хоть один список урезан потолком — читателю отчёта это видно одним полем,
     // без сверки четырёх пар «счётчик против длины»
@@ -102,19 +113,21 @@ public record MapHygieneReport
 /// </summary>
 public sealed class ProjectMapScanner(IConfiguration? config = null)
 {
-    // Пороги — настройка, а не константа: разные проекты живут с разной картой (Р6)
+    // Пороги — настройка, а не константа: разные проекты живут с разной картой (Р6).
+    // Ноль — осознанное значение («список в отчёт не класть вовсе», счётчик рядом остаётся
+    // честным), а не приглашение к дефолту: подменять его молча значит врать настройке
     private readonly int _sectionLineThreshold =
-        int.TryParse(config?["ProjectMap:SectionLineThreshold"], out var t) && t > 0 ? t : 40;
+        int.TryParse(config?["ProjectMap:SectionLineThreshold"], out var t) && t >= 0 ? t : 40;
     private readonly int _totalLineBudget =
-        int.TryParse(config?["ProjectMap:TotalLineBudget"], out var b) && b > 0 ? b : 200;
+        int.TryParse(config?["ProjectMap:TotalLineBudget"], out var b) && b >= 0 ? b : 200;
     private readonly int _maxSectionsInReport =
-        int.TryParse(config?["ProjectMap:MaxSectionsInReport"], out var m) && m > 0 ? m : 15;
+        int.TryParse(config?["ProjectMap:MaxSectionsInReport"], out var m) && m >= 0 ? m : 15;
     // Потолок КАЖДОГО списка находок по ссылкам и импортам (dead, deadImports,
     // rootRelative, skipped считаются отдельно): сотня дефектов не имеет права разнести отчёт
     private readonly int _maxLinkFindingsInReport =
-        int.TryParse(config?["ProjectMap:MaxDeadLinksInReport"], out var d) && d > 0 ? d : 20;
+        int.TryParse(config?["ProjectMap:MaxDeadLinksInReport"], out var d) && d >= 0 ? d : 20;
     private readonly int _maxNestedMaps =
-        int.TryParse(config?["ProjectMap:MaxNestedMaps"], out var n) && n > 0 ? n : 20;
+        int.TryParse(config?["ProjectMap:MaxNestedMaps"], out var n) && n >= 0 ? n : 20;
 
     // Карта проекта — то, что реально собирает продукт (ClaudeSession): корневой файл и
     // его двойник в .claude/. Личный CLAUDE.md профиля CLI в отчёт не входит — он не про проект.
@@ -129,19 +142,34 @@ public sealed class ProjectMapScanner(IConfiguration? config = null)
         { ".git", "node_modules", "bin", "obj", ".vs", ".idea" };
 
     // Предохранитель обхода: у чужого проекта дерево может быть любым, а отчёт нужен быстро.
-    // Упёрлись в потолок — вложенные карты и кандидаты неполны, но отчёт честно отдаётся
+    // Упёрлись в потолок — вложенные карты неполны, кандидатов не отдаём вовсе, а сам
+    // факт виден в отчёте полем WalkTruncated. Считаются и файлы, и КАТАЛОГИ: цикл из
+    // симлинков без единого файла иначе не упёрся бы в потолок никогда
     private const int MaxWalkFiles = 100_000;
+
+    // Предел вложенности обхода. Visit рекурсивна, а симлинк «latest -> .» или «static -> ..»
+    // в репозитории — обычное дело: без предела обход уходит в цикл и кончается
+    // StackOverflowException, который в .NET не ловится ни catch, ни middleware — падает
+    // весь процесс бэкенда со всеми чужими чатами и идущими ходами. Реальные деревья
+    // столько не вкладывают (у нас максимум — единицы уровней)
+    private const int MaxWalkDepth = 32;
 
     // Длина первой строки секции в отчёте: дальше начинается пересказ тела
     private const int FirstLineMax = 120;
 
-    public MapHygieneReport Scan(string root)
+    // ct — полный обход дерева идёт на каждый запрос: ушёл клиент, ушёл и обход
+    public MapHygieneReport Scan(string root, CancellationToken ct = default)
     {
         var mainFull = Path.Combine(root, MainMapName);
-        var walk = Walk(root);
 
         // Карты нет вовсе — штатный ответ, а не ошибка: у большинства проектов её и не будет
         var main = SafeExists(mainFull) ? ParseMap(root, MainMapName) : null;
+
+        // Указатель «имя файла → где он лежит» нужен ТОЛЬКО кандидатам починки, а они
+        // бывают лишь у ссылок разобранных карт: нет карты — не держим в памяти путь
+        // каждого файла чужого проекта
+        var walk = Walk(root, collectByName: main is not null, ct);
+
         if (main is null)
             return new MapHygieneReport
             {
@@ -151,7 +179,8 @@ public sealed class ProjectMapScanner(IConfiguration? config = null)
                 NestedMapCount = walk.NestedMaps.Count,
                 NestedMaps = Cap(walk.NestedMaps, _maxNestedMaps),
                 LocalMap = FileRef(root, LocalMapPath),
-                Truncated = walk.NestedMaps.Count > _maxNestedMaps,
+                WalkTruncated = walk.Truncated,
+                Truncated = walk.NestedMaps.Count > _maxNestedMaps || walk.Truncated,
             };
 
         var dead = new List<MapLinkFinding>();
@@ -185,7 +214,7 @@ public sealed class ProjectMapScanner(IConfiguration? config = null)
             .ToList();
 
         var expansion = ClaudeMdExpander.Expand(Path.Combine(root, MainMapName));
-        var deadImports = DeadImportFindings(root, maps, expansion);
+        var deadImports = DeadImportFindings(root, main, expansion);
 
         return new MapHygieneReport
         {
@@ -222,12 +251,16 @@ public sealed class ProjectMapScanner(IConfiguration? config = null)
             SkippedCount = skipped.Count,
             Skipped = Cap(skipped, _maxLinkFindingsInReport),
 
+            UnclosedFence = main.UnclosedFence,
+
             SecondMap = second is null ? null : new MapFileRef(secondPath, second.Lines, second.Bytes),
             NestedMapCount = walk.NestedMaps.Count,
             NestedMaps = Cap(walk.NestedMaps, _maxNestedMaps),
             LocalMap = FileRef(root, LocalMapPath),
 
-            Truncated = longSections.Count > _maxSectionsInReport ||
+            WalkTruncated = walk.Truncated,
+            Truncated = walk.Truncated ||
+                longSections.Count > _maxSectionsInReport ||
                 dead.Count > _maxLinkFindingsInReport ||
                 deadImports.Count > _maxLinkFindingsInReport ||
                 rootRelative.Count > _maxLinkFindingsInReport ||
@@ -241,30 +274,38 @@ public sealed class ProjectMapScanner(IConfiguration? config = null)
 
     // Импорт, который не раскрылся: файла нет. Отдельная находка, а не «пропущено» —
     // человек уверен, что правило едет в контекст, и молчание тут дороже всего.
-    // Номер строки ищется в сыром тексте той карты, где импорт написан (вложенные импорты
-    // живут в чужих файлах — у них Line остаётся нулём, а Path указывает на источник)
+    //
+    // Раскрывается ОДНА карта — корневая (именно её размер платится контекстом каждого
+    // хода), поэтому номер строки ищется в её сыром тексте. Импорт второго уровня живёт
+    // в чужом файле (`@rules/a.md` → `@rules/нет.md` внутри него): у такой находки Line
+    // остаётся нулём, а Path указывает на настоящий источник строки
     private static List<MapLinkFinding> DeadImportFindings(string root,
-        IReadOnlyList<ParsedMap> maps, ClaudeMdExpansion expansion)
+        ParsedMap main, ClaudeMdExpansion expansion)
     {
         var result = new List<MapLinkFinding>();
         foreach (var missing in expansion.MissingImports)
         {
             var sourceRelative = Relative(root, missing.SourceFile);
-            var map = maps.FirstOrDefault(m =>
-                string.Equals(m.Path, sourceRelative, StringComparison.OrdinalIgnoreCase));
-            var line = map is null ? 0 : ImportLine(map.Text, missing.Target);
+            var line = string.Equals(main.Path, sourceRelative, StringComparison.OrdinalIgnoreCase)
+                ? ImportLine(main.Text, missing.Target)
+                : 0;
             result.Add(new MapLinkFinding(sourceRelative, null, line, missing.Target, "deadImport", []));
         }
         return result;
     }
 
+    // Забор учитывается и здесь: внутри блока кода строка «@путь» импортом не является,
+    // и номер её строки указал бы на пример вместо настоящего импорта ниже
     private static int ImportLine(string text, string target)
     {
         var lineNo = 0;
+        var fence = new MarkdownFence();
         foreach (var raw in text.Split('\n'))
         {
             lineNo++;
-            var trimmed = raw.TrimEnd('\r').Trim();
+            var line = raw.TrimEnd('\r');
+            if (fence.Consume(line) || fence.InFence) continue;
+            var trimmed = line.Trim();
             if (trimmed.Length > 1 && trimmed[0] == '@' && trimmed[1..] == target) return lineNo;
         }
         return 0;
@@ -321,7 +362,9 @@ public sealed class ProjectMapScanner(IConfiguration? config = null)
                 continue;
             }
 
-            dead.Add(Finding(map, link, target, "notFound", walk.Candidates(target)));
+            // Кандидат ищется по РЕЗОЛВНУТОМУ пути, а не по сырому тексту ссылки:
+            // «docs/моя%20карта.md» дало бы имя с процент-энкодингом и кандидата не нашло
+            dead.Add(Finding(map, link, target, "notFound", walk.Candidates(resolved)));
         }
     }
 
@@ -359,7 +402,7 @@ public sealed class ProjectMapScanner(IConfiguration? config = null)
     private sealed record RawSection(string Title, int StartLine, int Lines, string FirstLine);
 
     private sealed record ParsedMap(string Path, string Text, int Lines, long Bytes,
-        IReadOnlyList<RawSection> Sections, IReadOnlyList<RawLink> Links);
+        IReadOnlyList<RawSection> Sections, IReadOnlyList<RawLink> Links, bool UnclosedFence);
 
     // relativePath — путь карты от корня проекта; null, если файла нет или он не читается
     private static ParsedMap? ParseMap(string root, string relativePath)
@@ -381,7 +424,7 @@ public sealed class ProjectMapScanner(IConfiguration? config = null)
 
         var sections = new List<RawSection>();
         var links = new List<RawLink>();
-        var inFence = false;
+        var fence = new MarkdownFence();
         var lineNo = 0;
 
         string? curTitle = null;
@@ -403,9 +446,10 @@ public sealed class ProjectMapScanner(IConfiguration? config = null)
             curEnd = lineNo;
 
             // Забор кода закрывает разбор ЦЕЛИКОМ — и заголовков, и ссылок. «## Пример»
-            // внутри примера markdown не секция, а [текст](путь) там — не связь
-            if (DocsIndexService.FenceRegex().IsMatch(line)) { inFence = !inFence; continue; }
-            if (inFence) continue;
+            // внутри примера markdown не секция, а [текст](путь) там — не связь.
+            // Закрытие по CommonMark (тот же символ, длина не меньше): карта, документирующая
+            // формат карт, содержит вложенные примеры заборов
+            if (fence.Consume(line) || fence.InFence) continue;
 
             var h = DocsIndexService.HeadingRegex().Match(line);
             if (h.Success)
@@ -440,7 +484,8 @@ public sealed class ProjectMapScanner(IConfiguration? config = null)
 
         CloseSection(curEnd);
 
-        return new ParsedMap(relativePath, text, CountLines(text), bytes, sections, links);
+        return new ParsedMap(relativePath, text, CountLines(text), bytes, sections, links,
+            UnclosedFence: fence.InFence);
     }
 
     // Строки как их считает wc -l: завершающий перевод строки новой строки не создаёт
@@ -453,33 +498,44 @@ public sealed class ProjectMapScanner(IConfiguration? config = null)
 
     // ---------- обход дерева ----------
 
-    // Вложенные карты и указатель «имя файла → где он лежит» для кандидатов починки
+    // Вложенные карты и указатель «имя файла → где он лежит» для кандидатов починки.
+    // Truncated — обход оборвался предохранителем, набор файлов неполон
     private sealed record WalkResult(IReadOnlyList<MapFileRef> NestedMaps,
-        IReadOnlyDictionary<string, List<string>> ByName)
+        IReadOnlyDictionary<string, List<string>> ByName, bool Truncated)
     {
         // Ровно один одноимённый файл ⇒ механическая починка возможна; ноль или два ⇒ пусто.
         // Кандидата ищет СКАНЕР, а не модель: обе мёртвые ссылки нашего репозитория
-        // чинятся при неработающей LLM
-        public IReadOnlyList<string> Candidates(string target)
+        // чинятся при неработающей LLM.
+        // resolvedPath — путь ссылки от корня проекта (уже декодированный и нормализованный)
+        public IReadOnlyList<string> Candidates(string resolvedPath)
         {
-            var name = target.Replace('\\', '/');
+            // Обход оборван — «файл в проекте ровно один» уже не факт, а совпадение: второй
+            // мог просто не попасть в обход, и механическая правка ушла бы на неверный файл
+            if (Truncated) return [];
+
+            var name = resolvedPath;
             var i = name.LastIndexOf('/');
             if (i >= 0) name = name[(i + 1)..];
             if (name.Length == 0 || !ByName.TryGetValue(name, out var paths) || paths.Count != 1)
                 return [];
-            return string.Equals(paths[0], target, StringComparison.OrdinalIgnoreCase) ? [] : paths;
+            // Сравнение ТОЧНОЕ: путь, отличающийся от ссылки только регистром, на Linux
+            // как раз и делает ссылку мёртвой — кандидат подсказывает верное написание
+            return string.Equals(paths[0], resolvedPath, StringComparison.Ordinal) ? [] : paths;
         }
     }
 
-    private static WalkResult Walk(string root)
+    private static WalkResult Walk(string root, bool collectByName, CancellationToken ct)
     {
         var nested = new List<MapFileRef>();
         var byName = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
         var seen = 0;
+        var truncated = false;
 
-        void Visit(string dir, string relativeDir)
+        void Visit(string dir, string relativeDir, int depth)
         {
-            if (seen >= MaxWalkFiles) return;
+            if (seen >= MaxWalkFiles) { truncated = true; return; }
+            if (depth > MaxWalkDepth) { truncated = true; return; }
+            ct.ThrowIfCancellationRequested();
 
             string[] entries;
             try { entries = Directory.GetFileSystemEntries(dir); }
@@ -487,7 +543,7 @@ public sealed class ProjectMapScanner(IConfiguration? config = null)
 
             foreach (var entry in entries)
             {
-                if (seen >= MaxWalkFiles) return;
+                if (seen >= MaxWalkFiles) { truncated = true; return; }
                 var name = Path.GetFileName(entry);
                 var rel = relativeDir.Length == 0 ? name : $"{relativeDir}/{name}";
 
@@ -495,19 +551,28 @@ public sealed class ProjectMapScanner(IConfiguration? config = null)
                 try { isDir = Directory.Exists(entry); }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { continue; }
 
+                // Каталоги считаются наравне с файлами: дерево из одних каталогов (или
+                // цикл симлинков без файлов) иначе не упёрся бы в потолок вовсе
+                seen++;
+
                 if (isDir)
                 {
                     if (SkipDirNames.Contains(name)) continue;
                     // Рабочие деревья агентов — копии репозитория целиком: в отчёте они
                     // дали бы вторые экземпляры всех карт и всех кандидатов
                     if (rel.Equals(".claude/worktrees", StringComparison.OrdinalIgnoreCase)) continue;
-                    Visit(entry, rel);
+                    // Символическая ссылка на каталог: Directory.Exists для неё true, и
+                    // «latest -> .» увёл бы обход в бесконечный цикл
+                    if (IsLink(entry)) continue;
+                    Visit(entry, rel, depth + 1);
                     continue;
                 }
 
-                seen++;
-                if (!byName.TryGetValue(name, out var paths)) byName[name] = paths = [];
-                paths.Add(rel);
+                if (collectByName)
+                {
+                    if (!byName.TryGetValue(name, out var paths)) byName[name] = paths = [];
+                    paths.Add(rel);
+                }
 
                 // Корневая карта и её двойник в .claude/ — не «вложенные»: они и есть предмет отчёта
                 if (!name.Equals(MainMapName, StringComparison.OrdinalIgnoreCase)) continue;
@@ -518,10 +583,23 @@ public sealed class ProjectMapScanner(IConfiguration? config = null)
             }
         }
 
-        try { Visit(root, ""); }
+        try { Visit(root, "", 0); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
 
-        return new WalkResult([.. nested.OrderBy(m => m.Path, StringComparer.OrdinalIgnoreCase)], byName);
+        return new WalkResult([.. nested.OrderBy(m => m.Path, StringComparer.OrdinalIgnoreCase)],
+            byName, truncated);
+    }
+
+    // Символическая ссылка или junction (reparse point). Не прочиталось — считаем обычным
+    // каталогом: пропустить настоящее поддерево дороже, чем лишний раз войти в него
+    private static bool IsLink(string path)
+    {
+        try { return new DirectoryInfo(path).LinkTarget is not null; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+            or ArgumentException or SecurityException)
+        {
+            return false;
+        }
     }
 
     // ---------- мелочи ----------

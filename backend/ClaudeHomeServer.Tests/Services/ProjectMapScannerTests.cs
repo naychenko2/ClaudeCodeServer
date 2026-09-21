@@ -177,6 +177,69 @@ public class ProjectMapScannerTests : IDisposable
         report.Skipped.Should().BeEmpty();
     }
 
+    // Карта, документирующая формат карт, — целевой класс документов этой фичи: вложенный
+    // пример забора там норма. Наивное «переключить флаг на любом маркере» закрывало
+    // внешний забор внутренним, и остаток файла разбирался как живой текст
+    [Fact]
+    public void ВложенныйЗабор_ВнутреннийНеЗакрываетВнешний()
+    {
+        Write("""
+            # Карта
+
+            ````md
+            ```
+            ## Заголовок из примера
+            [ссылка из примера](совсем/нет.md)
+            ```
+            ````
+
+            ## Настоящая секция
+            """, "CLAUDE.md");
+
+        var report = _scanner.Scan(_root);
+
+        report.SectionCount.Should().Be(1);
+        report.Sections.Should().BeEmpty();      // короткая
+        report.DeadLinks.Should().BeEmpty();
+        report.UnclosedFence.Should().BeFalse();
+    }
+
+    // Незакрытый забор молча выкидывал из разбора весь остаток файла, и отчёт рапортовал
+    // «карта здорова». Теперь это отдельный признак, а не тишина
+    [Fact]
+    public void НезакрытыйЗабор_ОтдельнымПризнакомВОтчёте()
+    {
+        Write("# Карта\n\n```md\nпример\n\n## Секция ниже разобрана не будет\n", "CLAUDE.md");
+
+        var report = _scanner.Scan(_root);
+
+        report.UnclosedFence.Should().BeTrue();
+        report.SectionCount.Should().Be(0);
+    }
+
+    // @-импорт внутри забора CLI не раскрывает: пример в блоке кода иначе дал бы ложный
+    // «мёртвый импорт» (правило якобы не едет в контекст), а пример на живой файл — завысил
+    // бы ImportCount и вклеил бы в снимок промпта то, чего там нет
+    [Fact]
+    public void ИмпортВнутриЗабора_НеРаскрываетсяИНеСчитаетсяМёртвым()
+    {
+        Write("""
+            # Карта
+
+            ```md
+            @rules/пример.md
+            ```
+
+            @rules/живое.md
+            """, "CLAUDE.md");
+        Write("правило", "rules", "живое.md");
+
+        var report = _scanner.Scan(_root);
+
+        report.ImportCount.Should().Be(1);
+        report.DeadImports.Should().BeEmpty();
+    }
+
     // ─── Размер и секции ────────────────────────────────────────────────────
 
     [Fact]
@@ -332,6 +395,135 @@ public class ProjectMapScannerTests : IDisposable
         // Число зависит от токенизатора модели — отчёт обязан называть его оценкой,
         // иначе первый спор про цифру обесценит весь отчёт
         report.ApproxTokensNote.Should().Contain("оценка");
+    }
+
+    [Fact]
+    public void ПотолокСпискаНоль_СписокВыключен_СчётчикЧестен()
+    {
+        Write("# Карта\n\n[нет](docs/нет.md)\n[и ещё](docs/тоже-нет.md)\n", "CLAUDE.md");
+        var off = ScannerWithCaps(maxLinkFindings: 0);
+
+        var report = off.Scan(_root);
+
+        // Ноль в настройке — «списка в отчёте не надо», а не приглашение к дефолту
+        report.DeadLinks.Should().BeEmpty();
+        report.DeadLinkCount.Should().Be(2);
+        report.Truncated.Should().BeTrue();
+    }
+
+    // ─── Обход дерева ───────────────────────────────────────────────────────
+
+    // Симлинк «self -> .» в репозитории — обычное дело. Обход шёл внутрь (Directory.Exists
+    // для ссылки на каталог отдаёт true), предела глубины не было, а потолок считал одни
+    // файлы — цикл без файлов не останавливался НИКОГДА и уносил процесс
+    // StackOverflowException, который не ловится ни catch, ни middleware
+    [Fact]
+    public void СимлинкЦикл_СканВозвращается_ПроцессНеПадает()
+    {
+        Write("# Карта\n", "CLAUDE.md");
+        Write("# Вложенная\n", "backend", "Video", "CLAUDE.md");
+        var loop = Path.Combine(_root, "петля");
+        Directory.CreateDirectory(loop);
+        try { Directory.CreateSymbolicLink(Path.Combine(loop, "self"), _root); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return;   // Windows без прав на симлинки; на Linux-CI тест настоящий
+        }
+
+        var report = _scanner.Scan(_root);
+
+        report.Exists.Should().BeTrue();
+        // Внутрь ссылки не пошли — вторых экземпляров карт в отчёте нет
+        report.NestedMaps.Select(m => m.Path).Should().BeEquivalentTo(["backend/Video/CLAUDE.md"]);
+    }
+
+    // Предел вложенности обхода: дерево глубже предела обрывается, и это видно в отчёте
+    [Fact]
+    public void ДеревоГлубжеПредела_ОбходУсечён_ВидноВОтчёте()
+    {
+        Write("# Карта\n", "CLAUDE.md");
+        var deep = Enumerable.Repeat("у", 40).ToArray();
+        Write("# Глубокая\n", [.. deep, "CLAUDE.md"]);
+
+        var report = _scanner.Scan(_root);
+
+        report.WalkTruncated.Should().BeTrue();
+        report.Truncated.Should().BeTrue();
+        report.NestedMaps.Should().BeEmpty();   // до дна обход не дошёл
+    }
+
+    // Инвариант кандидата — «одноимённый файл в проекте ровно один». На оборванном обходе
+    // это уже не факт, а совпадение: второй мог просто не попасть в обход, и механическая
+    // правка ушла бы на заведомо неверный файл
+    [Fact]
+    public void ОбходУсечён_КандидатовНеПредлагает()
+    {
+        Write("# Карта\n\n[флаги](backend/Models/FeatureFlag.cs)\n", "CLAUDE.md");
+        Write("// код", "backend", "Core", "Models", "FeatureFlag.cs");
+        Write("// глубоко", [.. Enumerable.Repeat("у", 40), "FeatureFlag.cs"]);
+
+        var report = _scanner.Scan(_root);
+
+        report.WalkTruncated.Should().BeTrue();
+        report.DeadLinks.Should().ContainSingle().Which.Candidates.Should().BeEmpty();
+    }
+
+    // Обход дерева идёт на каждый запрос — ушёл клиент, ушёл и обход
+    [Fact]
+    public void ОтменённыйТокен_ОбходПрерывается()
+    {
+        Write("# Карта\n", "CLAUDE.md");
+        Write("# Вложенная\n", "backend", "Video", "CLAUDE.md");
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        var scan = () => _scanner.Scan(_root, cts.Token);
+
+        scan.Should().Throw<OperationCanceledException>();
+    }
+
+    // Указатель «имя файла → путь» нужен только кандидатам, а кандидаты бывают лишь у
+    // ссылок разобранных карт: без карты он не собирается вовсе (снаружи это не видно,
+    // но обход вложенных карт от этого пострадать не имеет права)
+    [Fact]
+    public void КартыНет_ВложенныеКартыВсёРавноНайдены()
+    {
+        Write("# Просто проект", "README.md");
+        Write("# Видео\n", "backend", "Video", "CLAUDE.md");
+
+        var report = _scanner.Scan(_root);
+
+        report.Exists.Should().BeFalse();
+        report.NestedMaps.Select(m => m.Path).Should().BeEquivalentTo(["backend/Video/CLAUDE.md"]);
+        report.WalkTruncated.Should().BeFalse();
+    }
+
+    // Имя кандидата берётся из РЕЗОЛВНУТОГО пути: по сырому тексту ссылки процент-энкодинг
+    // дал бы имя «моя%20карта.md», которого нет ни у одного файла
+    [Fact]
+    public void СсылкаСПроцентЭнкодингом_КандидатНаходится()
+    {
+        Write("# Карта\n\n[карта](docs/моя%20карта.md)\n", "CLAUDE.md");
+        Write("# Карта", "notes", "моя карта.md");
+
+        var report = _scanner.Scan(_root);
+
+        report.DeadLinks.Should().ContainSingle()
+            .Which.Candidates.Should().BeEquivalentTo(["notes/моя карта.md"]);
+    }
+
+    // File.Exists на Linux регистрозависим, а указатель имён — нет: ссылка, промахнувшаяся
+    // регистром, получает кандидата с верным написанием вместо глухого «файла нет»
+    [Fact]
+    public void СсылкаПромахнуласьРегистром_КандидатПодсказываетНаписание()
+    {
+        Write("# Карта\n\n[адр](docs/ADR-005-Reader.md)\n", "CLAUDE.md");
+        Write("# АДР", "docs", "adr", "adr-005-reader.md");
+
+        var report = _scanner.Scan(_root);
+
+        report.DeadLinks.Should().ContainSingle()
+            .Which.Candidates.Should().BeEquivalentTo(["docs/adr/adr-005-reader.md"]);
     }
 
     // ─── Приёмка на фикстурном дереве ───────────────────────────────────────

@@ -21,13 +21,15 @@ public class ProjectMapController(ProjectManager projects, ProjectMapScanner sca
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
-    // Чужой проект — 404, а не 403: подтверждать его существование незачем (как у соседей)
+    // Чужой проект — 404, а не 403: подтверждать его существование незачем (как у соседей).
+    // ct — RequestAborted: скан обходит дерево проекта целиком, и ушедший клиент не должен
+    // оставлять обход работать
     [HttpGet("scan")]
-    public ActionResult Scan(string id)
+    public ActionResult Scan(string id, CancellationToken ct)
     {
         var project = projects.GetById(id);
         if (project is null || project.OwnerId != UserId) return NotFound();
 
-        return Ok(scanner.Scan(project.RootPath));
+        return Ok(scanner.Scan(project.RootPath, ct));
     }
 }

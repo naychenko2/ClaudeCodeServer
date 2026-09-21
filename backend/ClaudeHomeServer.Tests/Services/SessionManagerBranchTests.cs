@@ -620,6 +620,108 @@ public class SessionManagerBranchTests : IDisposable
         transcript.Should().NotContain("t9", "непарный tool_use в память ветки не попадает");
     }
 
+    // --- QA-тест для задачи d3e60bb6: что реально увидит модель в файле транскрипта ветки ---
+    //
+    // BranchAsync режет и history.json, и .jsonl транскрипта по одной границе. Файл транскрипта —
+    // это и есть «память модели» (CLI читает его через --resume на следующем ходе ветки), поэтому
+    // проверка на содержимом файла = проверка памяти. Два сценария — оба блокера, найденные
+    // Александром на финальном ревью (задача 19c60207): include='beforePrompt' и прерванный ход.
+    [Fact]
+    public async Task QA_ЧтоУвидитМодель_BeforePrompt_ИПрерванныйХод()
+    {
+        Console.WriteLine("========== СЦЕНАРИЙ 1: include='beforePrompt' ==========");
+        {
+            const string a1 = "Расскажи мне про историю Древнего Рима и ключевые события";
+            const string a2 = "А теперь подробнее про падение Западной Римской империи";
+            var (session, project, _, _, _) = await SeedBranchableChatAsync("qa-bp",
+                userText1: a1, userText2: a2, tailUuid1: "a1", tailUuid2: "a2");
+
+            var result = await _sut.BranchAsync(session.Id, TestUserId, 1, a2,
+                SessionManager.ChatBranchInclude.BeforePrompt);
+
+            var transcriptPath = BranchTranscriptPath(result.Session, project);
+            var transcript = await File.ReadAllTextAsync(transcriptPath);
+            var branchHistory = await _historyService.LoadAsync(result.Session.ClaudeSessionId!);
+
+            // Память модели (транскрипт): нет якорного вопроса, нет прежнего ответа на него;
+            // контекст ДО якоря — есть.
+            transcript.Should().NotContain(a2,
+                "якорный вопрос НЕ должен попасть в транскрипт ветки (include='beforePrompt')");
+            transcript.Should().NotContain("ответ 2",
+                "прежний ответ на якорный вопрос НЕ должен попасть в транскрипт ветки");
+            transcript.Should().Contain(a1, "контекст ДО якоря должен быть в транскрипте ветки");
+            transcript.Should().Contain("ответ 1", "ответ на ДО-якорный ход должен остаться в транскрипте");
+
+            // Лента (history.json): то же самое, плюс плашка «Ветка от …» как последняя запись.
+            branchHistory.Should().HaveCount(4,
+                "история ветки = user/answer/result до якоря + плашка BranchedFrom");
+            branchHistory.Last().Should().BeOfType<StoredBranchedFromMessage>(
+                "плашка «Ветка от …» — последняя запись истории ветки");
+
+            // Черновик в композере = текст якорного вопроса для редактирования.
+            result.Draft.Should().Be(a2, "draft = текст якорного сообщения для редактирования");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("========== СЦЕНАРИЙ 2: прерванный ход ==========");
+        {
+            const string a1 = "Первый вопрос про архитектуру современного процессора";
+            const string a2 = "А теперь подробнее про конвейер команд и предсказание переходов";
+            var dir = MkProjectDir("qa-int");
+            var project = _projectManager.Create("P-qa-int", dir, TestUserId, TestUsername);
+            var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, name: "Прерванный QA");
+            var csid = "csid-" + Guid.NewGuid().ToString("N")[..12];
+            var live = _sut.GetById(session.Id)!;
+            live.ClaudeSessionId = csid;
+
+            await _historyService.SaveAsync(csid,
+            [
+                new StoredUserMessage(a1),
+                new StoredTextMessage("ответ 1"),
+                new StoredResultMessage("success", 100, 1) { TranscriptTailUuid = "a1" },
+                new StoredUserMessage(a2),
+                new StoredTextMessage("начал"),
+            ]);
+
+            var flat = TranscriptMigrator.FlattenCwd(project.RootPath);
+            var transcriptDir = Path.Combine(_llmProviders.UserProfileDir, "projects", flat);
+            Directory.CreateDirectory(transcriptDir);
+            var sb = new StringBuilder();
+            sb.Append("{\"type\":\"system\",\"subtype\":\"init\",\"sessionId\":\"" + csid + "\",\"uuid\":\"s0\"}\n");
+            sb.Append("{\"type\":\"user\",\"sessionId\":\"" + csid + "\",\"uuid\":\"u1\",\"message\":{\"role\":\"user\",\"content\":" + JsonStr(a1) + "}}\n");
+            sb.Append("{\"type\":\"assistant\",\"sessionId\":\"" + csid + "\",\"uuid\":\"a1\",\"message\":{\"role\":\"assistant\",\"content\":\"ответ 1\"}}\n");
+            sb.Append("{\"type\":\"user\",\"sessionId\":\"" + csid + "\",\"uuid\":\"u2\",\"message\":{\"role\":\"user\",\"content\":" + JsonStr(a2) + "}}\n");
+            sb.Append("{\"type\":\"assistant\",\"sessionId\":\"" + csid + "\",\"uuid\":\"a2\",\"message\":{\"role\":\"assistant\",\"content\":"
+                + "[{\"type\":\"text\",\"text\":\"начал\"},{\"type\":\"tool_use\",\"id\":\"t9\",\"name\":\"Bash\",\"input\":{\"cmd\":\"sleep 1000\"}}]}}\n");
+            await File.WriteAllTextAsync(Path.Combine(transcriptDir, csid + ".jsonl"), sb.ToString(),
+                new UTF8Encoding(false));
+
+            // Ветвление от прерванного хода должно пройти без 409 (продуктовое решение):
+            // история обрезается по ту же границу, что и транскрипт, текст прерванного сообщения
+            // уходит черновиком.
+            var result = await _sut.BranchAsync(session.Id, TestUserId, 1, a2,
+                SessionManager.ChatBranchInclude.Turn);
+
+            var transcriptPath = Path.Combine(_llmProviders.UserProfileDir, "projects",
+                TranscriptMigrator.FlattenCwd(project.RootPath), result.Session.ClaudeSessionId + ".jsonl");
+            var transcript = await File.ReadAllTextAsync(transcriptPath);
+
+            // Память модели: ни прерванного вопроса, ни обрыва ответа, ни непарного tool_use.
+            transcript.Should().NotContain(a2,
+                "прерванный вопрос НЕ должен попасть в транскрипт ветки");
+            transcript.Should().NotContain("начал",
+                "обрыв ответа НЕ должен попасть в транскрипт ветки");
+            transcript.Should().NotContain("t9",
+                "непарный tool_use НЕ должен попасть в транскрипт ветки");
+            transcript.Should().Contain(a1, "контекст ДО прерванного хода должен быть в транскрипте");
+            transcript.Should().Contain("ответ 1", "ответ на ДО-прерванный ход должен остаться");
+
+            // Черновик = текст прерванного сообщения (тот же путь, что и для beforePrompt).
+            result.Draft.Should().Be(a2,
+                "draft = текст прерванного сообщения (продуктовое решение: не отказ 409, а черновик)");
+        }
+    }
+
     // --- Страховка на смену csid (Session.BranchedFromSessionId) ---
 
     // Повторяет то, что делает ClaudeSession на system/init: сначала переписывает

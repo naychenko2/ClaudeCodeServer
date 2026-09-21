@@ -796,6 +796,138 @@ public class ClaudeSessionBareArgsTests : IDisposable
             "путь карты не должен дублироваться в аргументах CLI");
     }
 
+    // ---------- BareMode-сторож первого хода (порог от карты, а не константа) ----------
+
+    // Размер серверной карты SystemPrompts/CLAUDE-local.md на 2026-09-20 — база фактуры,
+    // на которой сняты все 58 срабатываний прежнего порога 15 000.
+    private const long ProdMapBytes = 13_727;
+
+    // Предельный вход, который сторож ещё считает нормой, в самом строгом случае —
+    // без скидки на текст хода (turnInputChars: 0).
+    private static int ProdLimit(long mapBytes = ProdMapBytes) =>
+        ClaudeSession.BareModeExpectedInputTokens(mapBytes, turnInputChars: 0)
+        + ClaudeSession.BareModeAlarmMarginTokens;
+
+    /// <summary>
+    /// ФАКТУРА ПРОДА: за 16–21.09 прежний порог 15 000 сработал 58 раз на ходах
+    /// local-qwen со входом 15 802–25 532 токена — все ложные. Новый порог обязан
+    /// молчать на всём этом диапазоне даже без скидки на текст хода. Мутация
+    /// (возврат константы 15 000, уменьшение BareModeFixedOverheadTokens или
+    /// BareModeAlarmMarginTokens) → RED.
+    /// </summary>
+    [Theory]
+    [InlineData(15_802)] // минимум за период
+    [InlineData(16_402)]
+    [InlineData(18_091)] // максимум суток 20.09
+    [InlineData(25_532)] // максимум за период (16.09)
+    public void BareModeСторож_ФактураПрода_НеТревога(int tokens)
+    {
+        tokens.Should().BeLessThanOrEqualTo(ProdLimit(),
+            "вход {0} токенов при карте {1} Б — штатный первый ход local-qwen, а не поломка",
+            tokens, ProdMapBytes);
+    }
+
+    /// <summary>
+    /// НАСТОЯЩАЯ ПОЛОМКА: переменная CLAUDE_CODE_DISABLE_CLAUDE_MDS перестала работать —
+    /// поверх базы приезжает CLAUDE.md проекта (64 КБ ≈ 18 000 токенов). Сторож обязан
+    /// сработать даже на самой низкой наблюдавшейся базе. Мутация «поднять запас до
+    /// 18 000+» → RED: поломка перестанет отличаться от нормы.
+    /// </summary>
+    [Fact]
+    public void BareModeСторож_ПоверхБазыПриехалаПолнаяКарта_Тревога()
+    {
+        const int lowestObservedBase = 15_802;
+        const int projectClaudeMdTokens = 18_000;
+
+        (lowestObservedBase + projectClaudeMdTokens).Should().BeGreaterThan(ProdLimit(),
+            "база плюс CLAUDE.md проекта обязана пробивать порог — иначе сторож бесполезен");
+    }
+
+    /// <summary>
+    /// ПОРОГ ПРОИЗВОДНЫЙ: он растёт вместе с картой и с тем, что сервер сам кладёт в ход.
+    /// Мутация «игнорировать mapBytes / turnInputChars» (возврат к константе) → RED.
+    /// </summary>
+    [Fact]
+    public void BareModeСторож_БазаСчитаетсяОтКартыИТекстаХода()
+    {
+        var baseline = ClaudeSession.BareModeExpectedInputTokens(ProdMapBytes, 0);
+
+        ClaudeSession.BareModeExpectedInputTokens(ProdMapBytes * 2, 0)
+            .Should().BeGreaterThan(baseline, "карта вдвое больше — база обязана вырасти");
+        ClaudeSession.BareModeExpectedInputTokens(ProdMapBytes, 30_000)
+            .Should().BeGreaterThan(baseline, "длинное первое сообщение обязано поднимать базу");
+    }
+
+    // assistant-сообщение с usage — ровно то, что разбирает TrackContextTokens.
+    private static System.Text.Json.JsonElement UsageMessage(int inputTokens) =>
+        System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(
+            "{\"type\":\"assistant\",\"message\":{\"usage\":{\"input_tokens\":" + inputTokens + "}}}");
+
+    /// <summary>
+    /// СТОРОЖ ОДНОРАЗОВОСТИ (_bareModeWatchdogFired): при заведомо раздутом входе
+    /// предупреждение уходит в stderr РОВНО ОДИН раз за сессию, сколько бы
+    /// assistant-сообщений с usage ни пришло. Мутация «убрать латч» → RED (две строки).
+    /// Заодно сторож текста сообщения: в нём обязана быть база для сравнения.
+    /// </summary>
+    [Fact]
+    public async Task BareModeСторож_РаздутыйВход_СтреляетРовноОдинРаз()
+    {
+        var providers = LocalProviders(
+            localBareMode: true,
+            localSystemPromptFile: "SystemPrompts/CLAUDE-local.md");
+        var (_, session) = await RunTurnAsync(LocalModelId, providers);
+        session.LastBareModeApplied.Should().BeTrue("иначе сторож вообще не включается");
+
+        var originalErr = Console.Error;
+        var errCapture = new System.IO.StringWriter();
+        Console.SetError(errCapture);
+        try
+        {
+            session.TrackContextTokens(UsageMessage(90_000));
+            session.TrackContextTokens(UsageMessage(90_000));
+
+            var err = errCapture.ToString();
+            err.Split('\n').Count(l => l.Contains("BareMode-сторож")).Should().Be(1,
+                "латч _bareModeWatchdogFired обязан гасить повторные проверки");
+            err.Should().Contain("при ожидаемых до",
+                "сообщение обязано нести базу для сравнения, а не только факт");
+            err.Should().Contain("90000", "в сообщении обязан быть фактический вход");
+        }
+        finally
+        {
+            Console.SetError(originalErr);
+        }
+    }
+
+    /// <summary>
+    /// СКВОЗНОЙ ТЕСТ МОЛЧАНИЯ: вход 16 000 токенов (типичный первый ход local-qwen,
+    /// на котором прежний порог 15 000 кричал) не даёт ни строки в stderr.
+    /// Мутация «вернуть константу 15 000» → RED.
+    /// </summary>
+    [Fact]
+    public async Task BareModeСторож_ШтатныйВход_Молчит()
+    {
+        var providers = LocalProviders(
+            localBareMode: true,
+            localSystemPromptFile: "SystemPrompts/CLAUDE-local.md");
+        var (_, session) = await RunTurnAsync(LocalModelId, providers);
+
+        var originalErr = Console.Error;
+        var errCapture = new System.IO.StringWriter();
+        Console.SetError(errCapture);
+        try
+        {
+            session.TrackContextTokens(UsageMessage(16_000));
+
+            errCapture.ToString().Should().NotContain("BareMode-сторож",
+                "16 000 токенов — штатный вход BareMode-хода, тревоги быть не должно");
+        }
+        finally
+        {
+            Console.SetError(originalErr);
+        }
+    }
+
     // Тестовый logger, копит сообщения в список — для проверки логирования размера.
     private sealed class ListLogger(List<(string Category, string Message)> sink) : ILogger
     {

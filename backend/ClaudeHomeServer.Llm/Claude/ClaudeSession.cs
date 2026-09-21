@@ -103,10 +103,19 @@ public class ClaudeSession : ILlmSessionAdapter
     private bool _lastBareModeApplied;
     // Сторож на пропажу CLAUDE_CODE_DISABLE_CLAUDE_MDS: переменная недокументирована,
     // в любом обновлении CLI может исчезнуть. На первом ходу BareMode-сессии входные
-    // токены обязаны быть в пределах краткой карты (~2 000); если они превысили порог
-    // (64 КБ CLAUDE.md ≈ 18 000 токенов), переменная перестала работать. Одноразовый:
-    // после первого срабатывания (или первого хода) не повторяем.
+    // токены обязаны укладываться в ожидаемую базу (карта + тулсеты + текст хода,
+    // см. BareModeExpectedInputTokens); превышение на величину CLAUDE.md проекта
+    // означает, что переменная перестала работать. Одноразовый: после первого
+    // срабатывания (или первого хода) не повторяем.
     private volatile bool _bareModeWatchdogFired;
+    // Размер фактически применённой карты BareMode в байтах (0 — BareMode не применён).
+    // От него сторож считает ожидаемую базу входа: прежняя константа 15 000 была
+    // подобрана под карту в ~2 КБ и протухла, когда карта доросла до 13,7 КБ.
+    private long _lastBareModeMapBytes;
+    // Длина того, что сервер САМ положил во вход хода: --append-system-prompt плюс текст
+    // сообщения (с хвостом recall). Переменная часть базы сторожа — без неё длинное
+    // первое сообщение (описание задачи у исполнителя) выглядело бы как поломка.
+    private int _lastTurnInputChars;
     // Для тестов-сторожей (InternalsVisibleTo): мутация гейта или снимка обязана
     // краснеть на этом свойстве. Не часть публичного API.
     internal bool LastBareModeApplied => _lastBareModeApplied;
@@ -2653,7 +2662,8 @@ public class ClaudeSession : ILlmSessionAdapter
                     // (см. поле _sessionLog). Тесты без DI передают null — fallback на _log.
                     _sessionLog ?? (ILogger?)_log,
                     out var bareWarning,
-                    out _lastBareModeApplied);
+                    out _lastBareModeApplied,
+                    out _lastBareModeMapBytes);
                 if (bareWarning is not null)
                     Console.Error.WriteLine($"[ClaudeSession] {bareWarning}");
                 args.AddRange(bareArgs);
@@ -2667,6 +2677,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 // ДО bareModeEffective = true), иначе поле несёт значение предыдущего хода.
                 Console.Error.WriteLine($"[ClaudeSession] SystemPromptFile за пределами корня, ход без BareMode: {ex.Message}");
                 _lastBareModeApplied = false;
+                _lastBareModeMapBytes = 0;
             }
             catch (InvalidOperationException ex)
             {
@@ -2675,6 +2686,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 // про явный сброс _lastBareModeApplied.
                 Console.Error.WriteLine($"[ClaudeSession] SystemPromptFile недоступен в песочнице, ход без него: {ex.Message}");
                 _lastBareModeApplied = false;
+                _lastBareModeMapBytes = 0;
             }
 
             // Доп. деградация: BareMode сконфигурирован провайдером, но BuildBareModeArgs
@@ -2696,6 +2708,7 @@ public class ClaudeSession : ILlmSessionAdapter
             // Голый провайдер (облачный или родной Claude) — BareMode не задействован,
             // даже если в его LlmProviderConfig когда-то по ошибке что-то пропишут.
             _lastBareModeApplied = false;
+            _lastBareModeMapBytes = 0;
         }
 
         // Подсказка следующего сообщения: CLI после result испускает prompt_suggestion
@@ -3577,6 +3590,11 @@ public class ClaudeSession : ILlmSessionAdapter
             type = "user",
             message = new { role = "user", content }
         });
+
+        // Переменная часть входа для BareMode-сторожа: системный блок и текст сообщения —
+        // ровно то, что кладёт сервер (карта, схемы инструментов и MCP приходят от CLI и
+        // учтены в его базе отдельно). Картинки не считаем: у local-qwen их нет.
+        _lastTurnInputChars = (combinedPrompt?.Length ?? 0) + turnTextForCli.Length;
 
         var signature = BuildLaunchSignature(args, mcpServerKeys, envOverrides, personaLayerPrompt);
 
@@ -4473,7 +4491,7 @@ public class ClaudeSession : ILlmSessionAdapter
         out string? warning,
         out bool bareModeEffective)
         => BuildBareModeArgs(projectRoot, serverContentRoot, promptFilePath, bareTools,
-            paths, logger: null, out warning, out bareModeEffective);
+            paths, logger: null, out warning, out bareModeEffective, out _);
 
     internal static IReadOnlyList<string> BuildBareModeArgs(
         string projectRoot, string? serverContentRoot,
@@ -4482,9 +4500,23 @@ public class ClaudeSession : ILlmSessionAdapter
         ILogger? logger,
         out string? warning,
         out bool bareModeEffective)
+        => BuildBareModeArgs(projectRoot, serverContentRoot, promptFilePath, bareTools,
+            paths, logger, out warning, out bareModeEffective, out _);
+
+    // mapBytes — размер фактически взятой карты (0, если BareMode снят). Нужен сторожу
+    // первого хода: ожидаемая база входа считается от карты, а не от константы.
+    internal static IReadOnlyList<string> BuildBareModeArgs(
+        string projectRoot, string? serverContentRoot,
+        string promptFilePath, string[]? bareTools,
+        Execution.IPathMapper paths,
+        ILogger? logger,
+        out string? warning,
+        out bool bareModeEffective,
+        out long mapBytes)
     {
         warning = null;
         bareModeEffective = false;
+        mapBytes = 0;
         // BareMode без файла карты: --system-prompt-file без карты оставил бы модель
         // БЕЗ явной карты проекта. Асимметрия с веткой «файл не найден» ниже
         // (она снимает всё с warning) была неоправданна — модель идёт без
@@ -4509,11 +4541,12 @@ public class ClaudeSession : ILlmSessionAdapter
         }
         // Лог размера: важно для диагностики раздутого входа. Logger опциональный — тесты
         // BuildBareModeArgs передают null.
+        mapBytes = new FileInfo(resolved).Length;
         logger?.LogInformation(
             "BareMode: взята {Source} карта {Path} ({Bytes} байт)",
             projectLocalUsed ? "проектная" : "серверная",
             resolved,
-            new FileInfo(resolved).Length);
+            mapBytes);
         // Состав: (опц.) --tools → --system-prompt-file <путь>.
         // CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 (ставится в env, не args) заменяет
         // бывший флаг --bare: отключает автозагрузку CLAUDE.md, не трогая
@@ -5666,7 +5699,9 @@ public class ClaudeSession : ILlmSessionAdapter
     // запросу (в отличие от result, где всё сложено за ход), поэтому сумма входных токенов здесь
     // и есть текущее заполнение окна. Сабагентов пропускаем: у них свой контекст, к окну
     // основной сессии отношения не имеющий.
-    private void TrackContextTokens(JsonElement root)
+    // internal (а не private) ради теста одноразовости BareMode-сторожа: он подаёт
+    // assistant-сообщение с usage напрямую, минуя запуск настоящего CLI.
+    internal void TrackContextTokens(JsonElement root)
     {
         if (HasParentToolUseId(root)) return;
         if (!root.TryGetProperty("message", out var msg)) return;
@@ -5679,25 +5714,53 @@ public class ClaudeSession : ILlmSessionAdapter
 
         // Сторож на пропажу CLAUDE_CODE_DISABLE_CLAUDE_MDS: переменная не в claude --help,
         // в любом обновлении CLI она может исчезнуть/сменить имя. На первом ходу BareMode
-        // входные токены обязаны быть ~2 000 (краткая карта); если > 15 000 — CLAUDE.md
-        // проекта (64 КБ ≈ 18 тыс. токенов) уехал в контекст. WARN делает поломку видимой.
+        // входные токены сравниваем с ожидаемой базой (BareModeExpectedInputTokens), а не
+        // с константой: поломка — это база ПЛЮС CLAUDE.md проекта. WARN делает её видимой.
+        // Одноразовый в обе стороны: не сработал на первом ходу — дальше не проверяем.
         if (tokens > 0 && !_bareModeWatchdogFired && _lastBareModeApplied && SubmittedTurnSeq <= 1)
         {
-            if (tokens > 15_000)
+            _bareModeWatchdogFired = true;
+            var expected = BareModeExpectedInputTokens(_lastBareModeMapBytes, _lastTurnInputChars);
+            var limit = expected + BareModeAlarmMarginTokens;
+            if (tokens > limit)
             {
-                _bareModeWatchdogFired = true;
                 Console.Error.WriteLine(
-                    $"[ClaudeSession] BareMode-сторож: входные токены {tokens} на первом ходу — " +
-                    $"похоже, CLAUDE_CODE_DISABLE_CLAUDE_MDS больше не работает (обновление CLI?); " +
-                    $"молчаливая автозагрузка CLAUDE.md проекта раздувает контекст локальной модели");
-            }
-            else
-            {
-                // Не сработал: BareMode работает штатно, дальнейшие проверки не нужны.
-                _bareModeWatchdogFired = true;
+                    $"[ClaudeSession] BareMode-сторож: входные токены {tokens} на первом ходу " +
+                    $"при ожидаемых до {limit} (база {expected}: карта {_lastBareModeMapBytes} Б, " +
+                    $"тулсеты и MCP ≈ {BareModeFixedOverheadTokens}, текст хода {_lastTurnInputChars} симв.; " +
+                    $"запас {BareModeAlarmMarginTokens}) — похоже, CLAUDE_CODE_DISABLE_CLAUDE_MDS " +
+                    $"больше не работает (обновление CLI?); молчаливая автозагрузка CLAUDE.md проекта " +
+                    $"раздувает контекст локальной модели");
             }
         }
     }
+
+    // Оценка токенов по объёму текста. Грубость намеренная: сторож ловит РАЗНИЦУ
+    // в 18 000 токенов (CLAUDE.md проекта), а не считает биллинг. Три — для русского
+    // UTF-8 (два байта на букву) оценка сверху по байтам карты и снизу по символам хода.
+    private const int CharsPerTokenEstimate = 3;
+
+    // Фиксированная часть входа BareMode-хода, от карты не зависящая: системный промпт
+    // самого CLI, схемы BareTools (шесть инструментов = 17 580 символов тела запроса,
+    // замер 2026-09-15) и пять MCP-серверов из KeepMcpServers. Получена как остаток по
+    // фактуре прода: минимальный вход первого хода local-qwen 15 802 токена
+    // (лог 2026-09-20) минус карта 13,7 КБ ≈ 4 600 — около 11 200, округлено вверх.
+    // Пересчитывать при заметном изменении BareTools/KeepMcpServers, а не при росте карты:
+    // её вклад считается от файла.
+    internal const int BareModeFixedOverheadTokens = 12_000;
+
+    // Запас до тревоги. Настоящая поломка добавляет CLAUDE.md проекта (64 КБ ≈ 18 000
+    // токенов) и перекрывает запас с зазором; погрешность оценки текста хода — нет.
+    // Проверено на фактуре прода: все 58 срабатываний старого порога за 16–21.09
+    // (15 802–25 532 токена при карте 13 727 Б) в этот запас укладываются.
+    internal const int BareModeAlarmMarginTokens = 12_000;
+
+    // Ожидаемый вход первого хода BareMode-сессии: карта + фиксированная часть + то,
+    // что сервер сам положил в ход (системный блок и текст сообщения).
+    internal static int BareModeExpectedInputTokens(long mapBytes, int turnInputChars)
+        => (int)(Math.Max(0, mapBytes) / CharsPerTokenEstimate)
+           + BareModeFixedOverheadTokens
+           + Math.Max(0, turnInputChars) / CharsPerTokenEstimate;
 
     // Ход мог уйти в собственный git worktree через встроенный инструмент EnterWorktree —
     // это происходит мимо тумблера чата (Session.WorktreePath/SetWorktreeAsync), поэтому

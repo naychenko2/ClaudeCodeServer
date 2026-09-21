@@ -5,9 +5,10 @@
 
 ## Базовые возможности
 
-- Auth: реальная аутентификация по API-ключу — `[Authorize]` на всех API + хабе.
-  Ключ из `Auth:ApiKey` (env/config) или автоген в `data/auth-key.txt` (печатается в консоль).
-  Клиент: `Authorization: Bearer` (REST), `?access_token=` (WS); 401 → авто-логаут.
+- Auth: аутентификация по логину и паролю с выдачей **JWT** — `[Authorize]` на всех API + хабе.
+  Пользователи в `data/users.json`; на первом запуске заводится `admin` со случайным паролем
+  (печатается в консоль один раз). Клиент: `Authorization: Bearer` (REST),
+  `?access_token=` (WS); 401 → авто-логаут.
   Удалённый доступ (Tailscale + HTTPS): [remote-access.md](../operations/remote-access.md)
 - Проекты: CRUD, редактирование, выход
 - Сессии: создание с именем/режимом/моделью, редактирование названия и модели (шапка чата + список), статусы (starting/active/waiting/finished/error)

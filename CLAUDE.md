@@ -680,8 +680,10 @@ personas/memory) — прочитай [docs/architecture/personas.md](docs/archi
 
 ## REST API
 
-Все эндпоинты (кроме `/api/auth/ping`) и SignalR-хаб — под `[Authorize]` (API-ключ);
-`ping` дополнительно под rate-limit (`Auth:PingRateLimit`, дефолт 10/мин на IP).
+Все эндпоинты (кроме `/api/auth/login`) и SignalR-хаб — под `[Authorize]`; схема —
+**JWT Bearer**, токен выдаёт `POST /api/auth/login` по паре `{ username, password }`.
+Вход дополнительно под rate-limit (политика `auth-login`, ключ `Auth:LoginRateLimit`,
+дефолт 10/мин, партиция по адресу клиента; отказ — 429 с `Retry-After`).
 Полный справочник эндпоинтов — [docs/architecture/api.md](docs/architecture/api.md) (источник правды — контроллеры).
 Значения фич-флагов фронт получает из `GET /api/auth/me` (поле `featureFlags`).
 Удалённый доступ — [docs/operations/remote-access.md](docs/operations/remote-access.md).

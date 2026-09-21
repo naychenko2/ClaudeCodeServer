@@ -4,12 +4,13 @@
 > [backend/ClaudeHomeServer/Controllers/](../../backend/ClaudeHomeServer/Controllers/);
 > при расхождении верить коду и чинить этот файл.
 
-Все эндпоинты (кроме `/api/auth/ping`) и SignalR-хаб защищены `[Authorize]` —
-доступ только по API-ключу. `ping` дополнительно под rate-limit (`Auth:PingRateLimit`,
-по умолчанию 10/мин на IP). См. [remote-access.md](../operations/remote-access.md).
+Все эндпоинты (кроме `/api/auth/login`) и SignalR-хаб защищены `[Authorize]` —
+схема **JWT Bearer**. Вход дополнительно под rate-limit (политика `auth-login`,
+ключ `Auth:LoginRateLimit`, по умолчанию 10/мин, партиция по адресу клиента).
+См. [remote-access.md](../operations/remote-access.md).
 
 ```
-POST /api/auth/ping             { serverUrl, apiKey } → { ok } | 401 | 429  (ключ + rate-limit)
+POST /api/auth/login            { username, password } → { token, expiresAt, username, displayName } | 400 | 401 | 429
 GET/POST/PUT/DELETE /api/projects
 GET/POST/DELETE     /api/projects/{id}/sessions       POST body: { mode, name?, resumeSessionId?, model? }
 PUT                 /api/projects/{id}/sessions/{sid} body: { name?, model? } → обновлённая сессия

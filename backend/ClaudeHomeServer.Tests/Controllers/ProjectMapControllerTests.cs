@@ -75,6 +75,71 @@ public class ProjectMapControllerTests : IClassFixture<TestWebApplicationFactory
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
+    // ─── review: формулировки модели поверх тех же фактов ───────────────────────
+
+    // Заглушка раннера в тестовой фабрике отдаёт «[]» — не разбираемый как суждения
+    // ответ. Это и есть штатный тихий фолбэк: факты сканера доезжают целиком, а причину
+    // неполноты пишет СЕРВЕР. Пустой экран или 500 здесь были бы дефектом
+    [Fact]
+    public async Task Ревью_ОтветМоделиНеРазобрался_ОтдаётФактыИПричинуОтСервера()
+    {
+        var id = await SetupProjectAsync();
+        var scan = await ScanAsync(id);
+
+        var response = await _client.PostAsJsonAsync($"/api/projects/{id}/map-hygiene/review",
+            new { baseSha = scan.GetProperty("baseSha").GetString() });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.GetProperty("modelNote").GetString().Should().NotBeNullOrEmpty();
+        var suggestions = body.GetProperty("suggestions").EnumerateArray().ToList();
+        suggestions.Should().NotBeEmpty();
+        suggestions[0].GetProperty("kind").GetString().Should().Be("dead-link");
+        suggestions[0].GetProperty("id").GetString().Should().NotBeNullOrEmpty();
+        // Формулировки нет, а факт есть — принцип «факт важнее формулировки»
+        suggestions[0].GetProperty("modelSays").ValueKind.Should().Be(JsonValueKind.Null);
+        suggestions[0].GetProperty("fact").GetString().Should().Contain("FeatureFlag.cs");
+    }
+
+    // Ход модели идёт до минут, и за это время карту в общем дереве могут дописать:
+    // суждения приехали бы по новому составу поверх старых фактов на экране — с другими
+    // id, то есть с чекбоксами, тихо переставшими совпадать с находками
+    [Fact]
+    public async Task Ревью_УстаревшийBaseSha_Возвращает409()
+    {
+        var id = await SetupProjectAsync();
+
+        var response = await _client.PostAsJsonAsync($"/api/projects/{id}/map-hygiene/review",
+            new { baseSha = "устарел" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.GetProperty("error").GetString().Should().Be("staleBaseSha");
+        // Актуальный отпечаток отдаётся сразу: фронту не нужен второй запрос ради «Проверить заново»
+        body.GetProperty("baseSha").GetString().Should().NotBeNullOrEmpty();
+    }
+
+    [Fact]
+    public async Task Ревью_ПроектЧужогоВладельца_Возвращает404()
+    {
+        var id = await SetupProjectAsync();
+        var scan = await ScanAsync(id);
+        using var stranger = _factory.CreateAuthenticatedClient(
+            TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
+
+        var response = await stranger.PostAsJsonAsync($"/api/projects/{id}/map-hygiene/review",
+            new { baseSha = scan.GetProperty("baseSha").GetString() });
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    private async Task<JsonElement> ScanAsync(string id)
+    {
+        var response = await _client.GetAsync($"/api/projects/{id}/map-hygiene/scan");
+        response.EnsureSuccessStatusCode();
+        return JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+    }
+
     [Fact]
     public async Task Скан_БезАвторизации_Возвращает401()
     {

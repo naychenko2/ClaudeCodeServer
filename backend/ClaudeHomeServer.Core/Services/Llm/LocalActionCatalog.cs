@@ -125,6 +125,10 @@ public static class LocalActionCatalog
     // Значок проекта (ADR-009): имя иконки из белого списка lucide — разметки от модели
     // не приходит никогда. Место обслуживает ОБА хода подбора (слова → выбор из меню)
     public const string ProjectIcon = "project-icon";
+    // Уборка карты проекта: формулировки поверх готовых фактов сканера CLAUDE.md.
+    // Модель не видит карту целиком (100 КБ в окно не влезают) и ничего, кроме суждения,
+    // не диктует — патч, якорь и вид находки берутся из отчёта сканера
+    public const string ProjectMapHygiene = "project-map-hygiene";
 
     // Дефолты профилей. Переопределяются
     // Ollama:Profiles:{small|text|large}:{NumCtx|NumPredict|TimeoutMs|CloudTimeoutMs|CloudNumPredict}.
@@ -278,6 +282,16 @@ public static class LocalActionCatalog
         // потолок профиля для остальных Large-мест.
         new(ProjectIcon, "Значок проекта", "Проекты", CheapProfile.Large,
             DefaultLocal: false, Tier: ModelTier.Medium, CloudTimeoutMs: 180_000),
+        // Уборка карты проекта: Large — отчёт сканера по крупной карте это ~800 токенов
+        // плюс правила разбора, на Small/Text num_ctx срезал бы хвост списка фактов и
+        // модель начала бы судить о находках, которых не видела. Локаль выключена:
+        // продукт здесь и есть связный текст по-русски — «сойдёт за успех» дороже отказа.
+        // Ответ намеренно ужат до { id, severity, modelSays }: потолок вывода локали у
+        // профиля Large — 1024 токена, и полный объект с фактом и якорем в него не лезет,
+        // то есть при «Локальной» фича ВСЕГДА падала бы в тихий фолбэк. Agentic не ставим:
+        // ходить в файлы не нужно, все факты приносит сканер
+        new(ProjectMapHygiene, "Уборка карты проекта", "Проекты", CheapProfile.Large,
+            DefaultLocal: false, Tier: ModelTier.Medium),
     ];
 
     private static readonly Dictionary<string, LocalAction> ByKey =

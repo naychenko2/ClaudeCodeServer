@@ -478,6 +478,9 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Docs.DocsIndexService>()
 // Гигиена карты проекта (CLAUDE.md): детерминированный сканер без модели, пороги —
 // из секции ProjectMap конфигурации. Состояния нет, читает файлы по запросу
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Docs.ProjectMapScanner>();
+// Фаза 2 той же уборки: суждение модели поверх фактов сканера. Состояния нет, ответ
+// модели нигде не кэшируется — факты пересчитываются на каждый запрос
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Docs.ProjectMapReviewService>();
 // Применение пресета каркаса знакомства v2: только добавляет поверх живой папки,
 // отчёт по каждому шагу; зависимости-синглтоны, сам тоже stateless-синглтон
 builder.Services.AddSingleton<ProjectPresetService>();

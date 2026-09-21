@@ -21,11 +21,57 @@ public record MapSection(string Title, int StartLine, int Lines, int DocsRefs, s
 // deadImport — @-импорт не раскрылся, файла нет (правило в контекст не едет вовсе).
 // Candidates — механическая починка: путь заполнен, только если одноимённый файл в проекте
 // ровно один. Ноль или два — решение человека, кандидатов не предлагаем.
+// AnchorText — якорная строка находки: markdown-ссылка ЦЕЛИКОМ («[текст](путь)») либо
+// строка импорта («@rules/git.md»). Она же основание id предложения (Р8а.3) и она же
+// будущий якорь замены: голый путь для этого не годится — один и тот же путь стоит в
+// карте многократно, а полная ссылка с тем же текстом обычно один раз.
 public record MapLinkFinding(string Path, string? Section, int Line, string Target,
-    string Reason, IReadOnlyList<string> Candidates);
+    string Reason, IReadOnlyList<string> Candidates, string AnchorText = "");
 
 // Справочная строка о файле: путь от корня проекта, строки, байты
 public record MapFileRef(string Path, int Lines, long Bytes);
+
+// Где находка стоит в карте: номер строки и заголовок секции (у длинной секции — её
+// собственный заголовок, у ссылки — секция, внутри которой она написана)
+public record MapSuggestionAnchor(int Line, string? Heading);
+
+// Готовая механическая правка: замена подстроки AnchorText на After в корневой карте.
+// Before и AnchorText — одна и та же строка под двумя именами (первое для показа
+// человеку, второе для поиска в файле): расширять якорь контекстом ради уникальности
+// запрещено — человек в «было → стало» видел бы одно, а в файл уезжало бы другое (Р10а).
+public record MapApplyPatch(string Before, string After, string AnchorText);
+
+// Предложение к уборке: ФАКТ сканера плюс место под суждение модели.
+//
+// Всё, кроме ModelSays и Severity, модель знать не могла — она видит отчёт, а не файл,
+// и потому ничего из этого не диктует (Р8а.1). Sha-шный Id от содержимого, а не
+// порядковый номер: факты не кэшируются, apply сканирует карту заново, и присланные
+// фронтом ids обязаны находиться в СВЕЖЕМ скане — с номером человек применил бы не то
+// предложение, которое отметил, молча и с записью в файл (Р8а.3).
+public record MapSuggestion
+{
+    public required string Id { get; init; }
+    // dead-link | dead-import | root-relative | long-section — ровно четыре, и все
+    // выводятся из фактов сканера. «Секция пересказывает ADR» — это long-section плюс
+    // фраза в ModelSays, а не пятый вид находки
+    public required string Kind { get; init; }
+    // Единственное, что проходит из ответа модели как есть, и то через белый список трёх
+    // значений с дефолтом по виду: цена ошибки здесь — цвет плашки, а не правка файла
+    public required string Severity { get; init; }
+    // Факт сканера человеческим текстом. Показывается ОСНОВНЫМ: суждение модели — догадка
+    // по метаданным, и поменяв их местами, человек снесёт живой раздел, поверив фразе
+    public required string Fact { get; init; }
+    // Суждение модели, ≤ 120 символов. null — модель промолчала или не ответила вовсе;
+    // факт при этом показывается всё равно (принцип «факт важнее формулировки»)
+    public string? ModelSays { get; init; }
+    public required MapSuggestionAnchor Anchor { get; init; }
+    // Сколько строк карты освободит правка: у длинной секции — её размер, у ссылки 0
+    public int SavingLines { get; init; }
+    // null ⇒ кнопки «Применить» нет вовсе. Заполняется только у dead-link и только когда
+    // сканер нашёл ровно одного кандидата И якорь уникален вне кодовых заборов (Р10а) —
+    // это контракт записи, его достраивает волна 4 вместе с самим apply
+    public MapApplyPatch? Apply { get; init; }
+}
 
 // Отчёт сканера — факты без единого суждения модели (Р1 плана уборки карты).
 //
@@ -81,6 +127,13 @@ public record MapHygieneReport
     // Отдельное поле, а не тишина — иначе отчёт рапортует «карта здорова» у половины файла
     public bool UnclosedFence { get; init; }
 
+    // Список ДЕЙСТВИЙ поверх списков находок выше: те же факты, сведённые в одну форму с
+    // устойчивым id. Отдаёт их сам скан, а не только review: id адресует будущее
+    // применение правки, значит он обязан существовать до обращения к модели и приезжать
+    // человеку вместе с фактами. Фронт ничего не синтезирует из deadLinks сам — списки
+    // находок остаются фактурой, действия живут здесь
+    public IReadOnlyList<MapSuggestion> Suggestions { get; init; } = [];
+
     public MapFileRef? SecondMap { get; init; }
     public int NestedMapCount { get; init; }
     public IReadOnlyList<MapFileRef> NestedMaps { get; init; } = [];
@@ -96,6 +149,65 @@ public record MapHygieneReport
     public bool Truncated { get; init; }
 
     internal const string TokensNote = "оценка: байты ÷ 3, точное число зависит от токенизатора модели";
+}
+
+/// <summary>
+/// Общий словарь предложений: виды находок, градации серьёзности и формула id.
+/// Живёт отдельно от сканера, потому что нужен обеим половинам — той, что факты
+/// порождает, и той, что сшивает с ними суждение модели.
+/// </summary>
+public static class MapSuggestions
+{
+    public const string KindDeadLink = "dead-link";
+    public const string KindDeadImport = "dead-import";
+    public const string KindRootRelative = "root-relative";
+    public const string KindLongSection = "long-section";
+
+    // Ровно три градации: у Badge три подходящих тона (danger/warning/neutral),
+    // четвёртая потребовала бы нового цвета в обе темы
+    public const string SeverityHigh = "high";
+    public const string SeverityMedium = "medium";
+    public const string SeverityLow = "low";
+
+    public static readonly IReadOnlySet<string> Severities =
+        new HashSet<string>(StringComparer.Ordinal) { SeverityHigh, SeverityMedium, SeverityLow };
+
+    // Мёртвая ссылка — единственная находка, где что-то заведомо сломано: остальные
+    // требуют решения человека, а не починки
+    public static string DefaultSeverity(string kind) =>
+        kind == KindDeadLink ? SeverityHigh : SeverityMedium;
+
+    /// <summary>
+    /// Идентификатор находки — первые 8 байт SHA-256 от вида и якорной строки.
+    ///
+    /// От СОДЕРЖИМОГО, а не порядковый номер и не GUID: факты нигде не кэшируются,
+    /// применение правки сканирует карту заново, и присланные фронтом id обязаны
+    /// находиться в свежем скане. Порядковый номер съехал бы при любой правке выше по
+    /// файлу — человек применил бы не то предложение, которое отметил, молча и с записью
+    /// в файл. С хешем несовпадение даёт честный отказ по неизвестному id.
+    /// </summary>
+    public static string Id(string kind, string anchorText)
+    {
+        // Схлопывание пробелов и TrimEnd: перенос ссылки на другую строку или выравнивание
+        // отступа не должны менять идентификатор того же самого дефекта
+        var normalized = NormalizeAnchor(anchorText);
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes($"{kind}\n{normalized}"));
+        return Convert.ToHexString(hash.AsSpan(0, 8)).ToLowerInvariant();
+    }
+
+    internal static string NormalizeAnchor(string anchorText)
+    {
+        var sb = new StringBuilder(anchorText.Length);
+        var space = false;
+        foreach (var c in anchorText)
+        {
+            if (char.IsWhiteSpace(c)) { space = true; continue; }
+            if (space && sb.Length > 0) sb.Append(' ');
+            space = false;
+            sb.Append(c);
+        }
+        return sb.ToString();
+    }
 }
 
 /// <summary>
@@ -216,6 +328,12 @@ public sealed class ProjectMapScanner(IConfiguration? config = null)
         var expansion = ClaudeMdExpander.Expand(Path.Combine(root, MainMapName));
         var deadImports = DeadImportFindings(root, main, expansion);
 
+        // Предложения собираются из ПОКАЗАННЫХ находок, а не из полных списков: факт,
+        // не доехавший до отчёта из-за потолка, нечем ни объяснить человеку, ни применить
+        var deadShown = Cap(dead, _maxLinkFindingsInReport);
+        var deadImportsShown = Cap(deadImports, _maxLinkFindingsInReport);
+        var rootRelativeShown = Cap(rootRelative, _maxLinkFindingsInReport);
+
         return new MapHygieneReport
         {
             Path = MainMapName,
@@ -243,13 +361,15 @@ public sealed class ProjectMapScanner(IConfiguration? config = null)
             Sections = sections,
 
             DeadLinkCount = dead.Count,
-            DeadLinks = Cap(dead, _maxLinkFindingsInReport),
+            DeadLinks = deadShown,
             DeadImportCount = deadImports.Count,
-            DeadImports = Cap(deadImports, _maxLinkFindingsInReport),
+            DeadImports = deadImportsShown,
             RootRelativeCount = rootRelative.Count,
-            RootRelativeLinks = Cap(rootRelative, _maxLinkFindingsInReport),
+            RootRelativeLinks = rootRelativeShown,
             SkippedCount = skipped.Count,
             Skipped = Cap(skipped, _maxLinkFindingsInReport),
+
+            Suggestions = BuildSuggestions(deadShown, deadImportsShown, rootRelativeShown, sections),
 
             UnclosedFence = main.UnclosedFence,
 
@@ -272,6 +392,75 @@ public sealed class ProjectMapScanner(IConfiguration? config = null)
     private static IReadOnlyList<T> Cap<T>(IReadOnlyList<T> all, int max) =>
         all.Count <= max ? all : [.. all.Take(max)];
 
+    // ---------- предложения ----------
+
+    // Находки сводятся в один список действий с устойчивым id. Порядок — по весу вида:
+    // сломанное впереди, содержательная работа в хвосте. Суждения модели приедут сюда
+    // позже, сшивкой по id; сам сканер про модель не знает вовсе
+    private static IReadOnlyList<MapSuggestion> BuildSuggestions(
+        IReadOnlyList<MapLinkFinding> dead, IReadOnlyList<MapLinkFinding> deadImports,
+        IReadOnlyList<MapLinkFinding> rootRelative, IReadOnlyList<MapSection> sections)
+    {
+        var result = new List<MapSuggestion>();
+        // Id считается от содержимого, поэтому одна и та же ссылка, написанная дважды
+        // (в тексте и во вложенной карте, или просто повторённая), даёт один id — и это
+        // один дефект, а не два. Первым выигрывает корневая карта: её находки идут первыми
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        void Add(MapSuggestion s)
+        {
+            if (seen.Add(s.Id)) result.Add(s);
+        }
+
+        foreach (var f in dead)
+            Add(LinkSuggestion(f, MapSuggestions.KindDeadLink,
+                f.Candidates.Count == 1
+                    ? $"ссылка на «{f.Target}» — файла нет; одноимённый файл в проекте один: {f.Candidates[0]}"
+                    : $"ссылка на «{f.Target}» — файла нет"));
+
+        foreach (var f in deadImports)
+            Add(LinkSuggestion(f, MapSuggestions.KindDeadImport,
+                $"импорт «@{f.Target}» не раскрылся — файла нет, и правило в контекст не едет вовсе"));
+
+        foreach (var f in rootRelative)
+            Add(LinkSuggestion(f, MapSuggestions.KindRootRelative,
+                $"ссылка «{f.Target}» написана от корня проекта — по стандарту markdown она битая"));
+
+        foreach (var s in sections)
+        {
+            var fact = s.DocsRefs > 0
+                ? $"{s.Lines} строк, внутри {s.DocsRefs} живых ссылок на docs/*"
+                : $"{s.Lines} строк";
+            Add(new MapSuggestion
+            {
+                // Якорь секции — её заголовок: своего anchorText у неё нет, а без общей
+                // формулы исполнитель скатился бы к порядковому номеру (Р8а.3)
+                Id = MapSuggestions.Id(MapSuggestions.KindLongSection, s.Title),
+                Kind = MapSuggestions.KindLongSection,
+                Severity = MapSuggestions.DefaultSeverity(MapSuggestions.KindLongSection),
+                Fact = fact,
+                Anchor = new MapSuggestionAnchor(s.StartLine, s.Title),
+                SavingLines = s.Lines,
+            });
+        }
+
+        return result;
+    }
+
+    private static MapSuggestion LinkSuggestion(MapLinkFinding f, string kind, string fact) =>
+        new()
+        {
+            Id = MapSuggestions.Id(kind, f.AnchorText),
+            Kind = kind,
+            Severity = MapSuggestions.DefaultSeverity(kind),
+            Fact = f.Path == MainMapName ? fact : $"{fact} (в {f.Path})",
+            Anchor = new MapSuggestionAnchor(f.Line, f.Section),
+            // Патч пуст до волны 4: он рождается только у мёртвой ссылки с единственным
+            // кандидатом И уникальным вне кодовых заборов якорем — это контракт записи
+            // (Р10а), а не просто «взять кандидата»
+            Apply = null,
+        };
+
     // Импорт, который не раскрылся: файла нет. Отдельная находка, а не «пропущено» —
     // человек уверен, что правило едет в контекст, и молчание тут дороже всего.
     //
@@ -289,7 +478,8 @@ public sealed class ProjectMapScanner(IConfiguration? config = null)
             var line = string.Equals(main.Path, sourceRelative, StringComparison.OrdinalIgnoreCase)
                 ? ImportLine(main.Text, missing.Target)
                 : 0;
-            result.Add(new MapLinkFinding(sourceRelative, null, line, missing.Target, "deadImport", []));
+            result.Add(new MapLinkFinding(sourceRelative, null, line, missing.Target, "deadImport", [],
+                $"@{missing.Target}"));
         }
         return result;
     }
@@ -370,7 +560,7 @@ public sealed class ProjectMapScanner(IConfiguration? config = null)
 
     private static MapLinkFinding Finding(ParsedMap map, RawLink link, string target, string reason,
         IReadOnlyList<string>? candidates = null) =>
-        new(map.Path, link.Section, link.Line, target, reason, candidates ?? []);
+        new(map.Path, link.Section, link.Line, target, reason, candidates ?? [], link.Raw);
 
     // «/x», «\x», «C:\x» — абсолютные. Однобуквенная «схема» это диск Windows, поэтому
     // IsExternal её и не ловит (см. SchemeRegex)
@@ -397,7 +587,8 @@ public sealed class ProjectMapScanner(IConfiguration? config = null)
 
     // ---------- разбор карты ----------
 
-    private readonly record struct RawLink(string Target, int Line, string? Section, int? SectionStart);
+    // Raw — ссылка целиком, как она написана в карте («[текст](путь)»): якорь находки
+    private readonly record struct RawLink(string Target, string Raw, int Line, string? Section, int? SectionStart);
 
     private sealed record RawSection(string Title, int StartLine, int Lines, string FirstLine);
 
@@ -478,7 +669,7 @@ public sealed class ProjectMapScanner(IConfiguration? config = null)
             {
                 var target = m.Groups[2].Value.Trim();
                 if (target.Length == 0) continue;
-                links.Add(new RawLink(target, lineNo, curTitle, curTitle is null ? null : curStart));
+                links.Add(new RawLink(target, m.Value, lineNo, curTitle, curTitle is null ? null : curStart));
             }
         }
 

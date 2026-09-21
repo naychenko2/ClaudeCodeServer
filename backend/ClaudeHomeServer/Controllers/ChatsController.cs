@@ -544,6 +544,41 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
+    // Ветвление чата (шаг 4 плана «Ветвление чата», контракт §6
+    // docs/research/chat-branching-2026-09.md): новый чат с обрезанной по якорному
+    // сообщению историей и транскриптом CLI. Эндпоинт — тонкая обёртка: гейты §9,
+    // резак транскрипта и наследование полей §11 живут целиком в
+    // SessionManager.BranchAsync, здесь их не дублируем. Как migrate-provider, один
+    // эндпоинт покрывает и чаты вне проекта, и проектные сессии — GetOwned внутри
+    // BranchAsync резолвит владельца через проект.
+    // Коды: 404 — чат не найден/чужой (KeyNotFoundException из BranchAsync).
+    // 409 — ЛЮБОЙ отказ BranchAsync (InvalidOperationException → Conflict, конвенция
+    // SetArchivedAsync). Известное ограничение: BranchAsync кидает один и тот же тип
+    // исключения и для «идёт ход»/«граница не сопоставлена» (по документу — 409), и для
+    // «ветвить нечего» — нет ClaudeSessionId, десктопный чат, групповой/штаб, транскрипт
+    // не найден, потолок размера (по документу — 400); различить их в контроллере можно
+    // только парсингом текста ошибки, а это и есть «логика гейтов в контроллере»,
+    // которую задача прямо запрещает. Двойной клик — идемпотентности здесь нет
+    // сознательно, кнопку блокирует фронт (шаг 7).
+    [HttpPost("{id}/branch")]
+    public async Task<IActionResult> Branch(string id, [FromBody] BranchChatRequest req)
+    {
+        try
+        {
+            var result = await sessions.BranchAsync(
+                id, UserId, req.UserMessageIndex, req.AnchorText, req.Include, req.Name);
+            return Ok(new
+            {
+                chatId = result.Session.Id,
+                projectId = result.Session.ProjectId,
+                claudeSessionId = result.Session.ClaudeSessionId,
+                draft = result.Draft,
+            });
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (InvalidOperationException ex) { return Conflict(new { error = ex.Message }); }
+    }
+
     [HttpGet("{id}/history")]
     public async Task<IActionResult> GetHistory(string id)
     {
@@ -666,3 +701,8 @@ public record SetWorktreeRequest(bool Enabled, string? Branch = null, bool Force
 public record MigrateProviderRequest(string? Model, string? SubscriptionKey = null);
 
 public record SetModeRequest(string Mode);
+
+// Ветвление чата (шаг 4 плана «Ветвление чата», контракт §6 docs/research/chat-branching-2026-09.md).
+// AnchorText обязателен: индекс — договорённость двух счётчиков (клиент/сервер), сверка текста
+// на сервере страхует от расхождения (SessionManager.BranchAsync).
+public record BranchChatRequest(int UserMessageIndex, string AnchorText, string Include, string? Name = null);

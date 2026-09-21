@@ -1,5 +1,5 @@
 import { memo, useState, useCallback, useContext, useEffect, type ReactNode } from 'react';
-import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock, ScrollText, RefreshCw, ChevronDown, Ban } from 'lucide-react';
+import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock, ScrollText, RefreshCw, ChevronDown, Ban, GitFork, GitBranch } from 'lucide-react';
 import type { ChatItem, Persona, ProviderFallbackOption } from '../../types';
 import {
   splitFallbackOptions, formatSubscriptionMeta, providerSwitchReasonLabel, modelSwitchHeadline,
@@ -51,6 +51,7 @@ import { PlanReviewView } from './PlanReviewView';
 import { TeamPlanView } from './TeamPlanView';
 import { TeamEscalationView } from './TeamEscalationView';
 import { teamPlanningDoneText } from '../../lib/teamImplement';
+import { FLAGS, useFeature } from '../../lib/featureFlags';
 
 // Разбор input инструмента TodoWrite → пункты чек-листа (каждый вызов несет полный список)
 function parseTodoWriteInput(input: unknown): TodoItem[] {
@@ -383,16 +384,47 @@ function CopyButton({ text, label }: { text: string; label: string }) {
   );
 }
 
+// Кнопка «Ветвление» (фича chat-branch). Заводит новый чат с копией истории до якорного
+// user_message: под ответом ассистента — include='turn' (ветка с ходом целиком), под
+// сообщением человека — include='beforePrompt' (ветка без него, его текст ляжет в композер
+// новой ветки черновиком). Локальный pending держит disabled на время запроса, чтобы двойной
+// клик не заводил две ветки с двумя копиями транскрипта — серверной идемпотентности нет.
+// onClick обязан сам показывать ошибки пользователю (тостом); исключение из onClick кнопка
+// не обрабатывает, чтобы ChatPanel держал единый поток сообщений об отказе.
+function BranchButton({ onClick, label }: { onClick: () => Promise<unknown>; label: string }) {
+  const [pending, setPending] = useState(false);
+  const handleClick = useCallback(async () => {
+    if (pending) return;
+    setPending(true);
+    try {
+      await onClick();
+    } finally {
+      setPending(false);
+    }
+  }, [pending, onClick]);
+  return (
+    <button onClick={handleClick} disabled={pending}
+      style={{ ...postIconBtn, opacity: pending ? 0.5 : 1, cursor: pending ? 'default' : 'pointer' }}
+      title={label} aria-label={label} {...postIconHover}>
+      <GitBranch size={13} strokeWidth={2} style={{ flexShrink: 0 }} />
+    </button>
+  );
+}
+
 // Пузырь сообщения человека: та же панель по hover, но короче — копирование и время
 // (модель к своему сообщению отношения не имеет). Вынесен из switch, потому что
 // копирование и тап держат состояние, а хуки внутри case недопустимы.
 // Кнопки «что получила модель» тут нет намеренно: она описывает ход целиком и живёт
 // под ответом — там вопрос «на основании чего это написано» и возникает
-function UserMessageBubble({ text, ts, children }: {
+function UserMessageBubble({ text, ts, onBranch, children }: {
   text: string; ts?: number;
+  // Заводит ветку ДО этого сообщения пользователя; undefined = кнопка скрыта
+  // (нет фичи или чат без user_messages)
+  onBranch?: () => Promise<unknown>;
   children: React.ReactNode;
 }) {
   const { tapped, handleTap } = usePostTap();
+  const branchEnabled = useFeature(FLAGS.chatBranch);
   return (
     <div className={`cc-msg${tapped ? ' cc-msg--tapped' : ''}`} onClick={handleTap}
       style={{
@@ -404,6 +436,9 @@ function UserMessageBubble({ text, ts, children }: {
       {children}
       {/* Прижата вправо — по стороне, с которой стоит сам пузырь человека */}
       <PostActionBar align="right">
+        {branchEnabled && onBranch && (
+          <BranchButton onClick={onBranch} label="Ветвление от этого сообщения" />
+        )}
         <CopyButton text={text} label="Скопировать сообщение" />
         <PostMeta ts={ts} />
       </PostActionBar>
@@ -413,8 +448,9 @@ function UserMessageBubble({ text, ts, children }: {
 
 // Ответ ассистента. Панель «мета + Копировать/В заметку/Повторить» — оверлеем у нижней
 // кромки: десктоп — fade-in по hover на сообщении, мобайл (тач) — по тапу.
-function TextMessageView({ text, online, onRetry, streaming, model, ts, promptSnapshotId, turnContextTokens, turnCache, lead, footer }: {
-  text: string; online: boolean; onRetry: () => void; streaming?: boolean;
+function TextMessageView({ text, online, onRetry, onBranch, streaming, model, ts, promptSnapshotId, turnContextTokens, turnCache, lead, footer }: {
+  text: string; online: boolean; onRetry: () => void; onBranch?: () => Promise<unknown>;
+  streaming?: boolean;
   model?: string; ts?: number; promptSnapshotId?: string; turnContextTokens?: number | null;
   turnCache?: { read: number; creation: number } | null;
   // Плавающий элемент над текстом (аватар автора в персон-чате): первые строки ответа
@@ -431,6 +467,7 @@ function TextMessageView({ text, online, onRetry, streaming, model, ts, promptSn
   const project = useContext(ChatProjectContext);
   const iconBtn = postIconBtn;
   const { tapped, handleTap } = usePostTap();
+  const branchEnabled = useFeature(FLAGS.chatBranch);
   return (
     // Обёртка нужна, чтобы строка действий висела ПОД пузырём: у самого пузыря
     // overflow:hidden (обрезает контент), и вылезающую наружу строку он бы срезал
@@ -458,6 +495,9 @@ function TextMessageView({ text, online, onRetry, streaming, model, ts, promptSn
         <PostActionBar>
           <CopyButton text={text} label="Скопировать ответ" />
           {saveNoteC?.render?.({ text, projectId: project?.id, online })}
+          {branchEnabled && onBranch && (
+            <BranchButton onClick={onBranch} label="Ветвление от этого ответа" />
+          )}
           {online && (
             <button onClick={onRetry} style={iconBtn} title="Повторить последний запрос" aria-label="Повторить последний запрос"
               {...postIconHover}>
@@ -585,6 +625,17 @@ interface ItemProps {
   // выбранная модель). Возвращает ok=false + текст ошибки при 400/404 — карточка показывает
   // его под кнопкой, не молчит. undefined — обычная ошибка, кнопки нет
   onDropWindow1M?: () => Promise<{ ok: boolean; error?: string }>;
+  // Ветвление чата от этого шага (фича chat-branch): заводит новый чат с копией истории
+  // до якорного user_message. Под сообщением пользователя — include='beforePrompt', под
+  // ответом ассистента — include='turn'. undefined — кнопки нет (нет фичи, либо выше
+  // этого элемента нет user_message, на который можно опереться)
+  onBranch?: () => Promise<unknown>;
+  // Множество id чатов, загруженных на фронте — для плашки «Ветка от …». Если передан
+  // и id оригинала НЕ в нём — плашка деградирует в обычный текст, без ссылки и без
+  // клика: иначе клик по битой ссылке меняет URL-хеш на несуществующий чат молча
+  // (тихий битый переход). Не передан — поведение прежнее (ссылка); для случаев, где
+  // список на этом уровне ещё не доступен
+  availableChatIds?: Set<string>;
   // Агрегированный чек-лист TaskCreate/TaskUpdate — приходит только на последний task-вызов ленты
   taskPlan?: TodoItem[];
   // Пилюля прогресса плана: приходит на ПОСЛЕДНИЙ result, когда ход уже закончился, —
@@ -940,7 +991,7 @@ function ModelSwitchedPill({ item }: { item: Extract<ChatItem, { kind: 'model_sw
   );
 }
 
-export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, canRetryInterrupted, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, onMigrateProvider, onDropWindow1M, taskPlan, planPill, agentActivity, agentRenderChild, turnBoundaryKind, teamMechanicOffer, projectPresetOffer, promptSnapshotId, turnContextTokens, turnCache }: ItemProps) {
+export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, canRetryInterrupted, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, onMigrateProvider, onDropWindow1M, onBranch, availableChatIds, taskPlan, planPill, agentActivity, agentRenderChild, turnBoundaryKind, teamMechanicOffer, projectPresetOffer, promptSnapshotId, turnContextTokens, turnCache }: ItemProps) {
   const project = useContext(ChatProjectContext);
   const treePath = useContext(ChatTreePathContext);
   const persona = useContext(PersonaContext);
@@ -1054,7 +1105,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       }
       return (
         <div style={{ alignSelf: 'flex-end', maxWidth: '80%', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
-          <UserMessageBubble text={item.text} ts={item.ts}
+          <UserMessageBubble text={item.text} ts={item.ts} onBranch={onBranch}
           >
             {teamInfo ? (
               /* Командный ход механики: вместо сырой слэш-команды/JSON — карточка
@@ -1156,7 +1207,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       const msg = (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {report && <DelegationReportBadge title={report.title} />}
-          <TextMessageView text={bodyText} online={online} onRetry={onRetry} streaming={streaming}
+          <TextMessageView text={bodyText} online={online} onRetry={onRetry} onBranch={onBranch} streaming={streaming}
             model={item.model} ts={item.ts}
             promptSnapshotId={item.parentToolUseId ? undefined : promptSnapshotId}
             turnContextTokens={turnContextTokens} turnCache={turnCache}
@@ -1686,6 +1737,64 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
           <div style={{ flex: 1, minWidth: 24, height: 1, background: C.border }} />
         </div>
       );
+
+    case 'branched_from': {
+      // Плашка «Ветка от {sourceName}» (фича chat-branch). В отличие от provider_switched
+      // (live-only), приезжает из истории — поэтому обязана переживать F5. Клик ведёт
+      // в оригинальный чат: hash строится из ChatProjectContext (ветка наследует ProjectId
+      // оригинала по §11 документа, так что наличие project у текущей ветки почти всегда
+      // равно наличию project у оригинала). Вне проекта — глобальный #/chats/{id}. Хеш
+      // проходит через parseHash/App как обычный диплинк; переход на chat/проект = тот же
+      // канал, что и проактивные уведомления и форк чата.
+      // «Жив ли оригинал»: определяем по уже загруженному на фронте списку чатов
+      // (availableChatIds — прокидывает ChatPanel из ChatsPage/WorkspacePage и т. п.).
+      // Оригинал удалён → плашка деградирует в текст, иначе клик по битой ссылке
+      // меняет URL-хеш на несуществующий чат молча. Список ещё не передан — fallback
+      // к ссылке для совместимости со старыми местами монтирования
+      const sourceHash = project
+        ? `#/project/${encodeURIComponent(project.id)}/chat/${encodeURIComponent(item.sourceSessionId)}`
+        : `#/chats/${encodeURIComponent(item.sourceSessionId)}`;
+      const sourceAlive = !availableChatIds || availableChatIds.has(item.sourceSessionId);
+      const openSource = () => { window.location.hash = sourceHash; };
+      return (
+        <div style={{ alignSelf: 'center', display: 'flex', alignItems: 'center', gap: 8, maxWidth: '100%' }}>
+          <div style={{ flex: 1, minWidth: 24, height: 1, background: C.border }} />
+          {sourceAlive ? (
+            <a
+              href={sourceHash}
+              onClick={(e) => { e.preventDefault(); openSource(); }}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                fontSize: 12, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden',
+                textOverflow: 'ellipsis', padding: '3px 10px', borderRadius: 999,
+                background: C.bgSelected, border: `1px solid ${C.border}`,
+                textDecoration: 'none', cursor: 'pointer',
+              }}
+              title={`Открыть оригинал: ${item.sourceName}`}
+            >
+              <GitFork size={11} strokeWidth={2.4} color={C.textMuted} style={{ flexShrink: 0 }} />
+              Ветка от {item.sourceName}
+            </a>
+          ) : (
+            // Оригинал уже удалён: обычная плашка-текст без ссылки и без клика —
+            // иначе клик по битой ссылке молча менял бы URL-хеш
+            <span
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                fontSize: 12, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden',
+                textOverflow: 'ellipsis', padding: '3px 10px', borderRadius: 999,
+                background: C.bgSelected, border: `1px solid ${C.border}`,
+              }}
+              title={`Оригинал удалён: ${item.sourceName}`}
+            >
+              <GitFork size={11} strokeWidth={2.4} color={C.textMuted} style={{ flexShrink: 0 }} />
+              Ветка от {item.sourceName}
+            </span>
+          )}
+          <div style={{ flex: 1, minWidth: 24, height: 1, background: C.border }} />
+        </div>
+      );
+    }
 
     case 'model_switched':
       return <ModelSwitchedPill item={item} />;

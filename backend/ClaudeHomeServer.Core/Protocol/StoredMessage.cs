@@ -21,6 +21,7 @@ namespace ClaudeHomeServer.Protocol;
 [JsonDerivedType(typeof(StoredWorkflowProgressMessage), "workflow_progress")]
 [JsonDerivedType(typeof(StoredWorkLoopStoppedMessage), "work_loop_stopped")]
 [JsonDerivedType(typeof(StoredModelSwitchedMessage), "model_switched")]
+[JsonDerivedType(typeof(StoredBranchedFromMessage), "branched_from")]
 [JsonDerivedType(typeof(StoredInterruptedMessage), "interrupted")]
 public abstract class StoredMessage { }
 
@@ -139,6 +140,13 @@ public class StoredResultMessage(string subtype, long durationMs, int numTurns,
     // Время запросов к API за ход — см. ResultMessage.DurationApiMs. В историях до этого
     // поля null: скорость у старых ходов считается по полному времени хода.
     public long? DurationApiMs { get; init; } = durationApiMs;
+    // Точный якорь границы хода для ветвления чата (фича chat-branch, §4 документа-основания):
+    // uuid последней записи транскрипта CLI на момент конца этого хода
+    // (TranscriptProbe.LastRecordUuid). Пока его нет, границу приходится искать текстовым
+    // сопоставлением сообщений истории с промптами транскрипта — оно честно отказывает
+    // примерно на каждом десятом шаге. null — история до этого поля (исторические чаты
+    // так и ветвятся текстовым путём), транскрипт не найден либо хвост не прочитался.
+    public string? TranscriptTailUuid { get; init; }
 }
 
 public class StoredErrorMessage(string text) : StoredMessage
@@ -296,4 +304,16 @@ public class StoredModelSwitchedMessage : StoredMessage
     // Сырой текст промежуточной ошибки, погашенной этой подменой (ProviderSwitchedMessage.
     // ErrorDetails): без записи в историю после F5 «Подробности» маркера опустели бы.
     public string? Details { get; init; }
+}
+
+// Плашка «Ветка от {имя чата}» в ленте нового чата, созданного ветвлением (фича
+// chat-branch). Это запись ИСТОРИИ, а не живое событие: она обязана переживать F5 и
+// рестарт сервера (как model_switched, а не как provider_switched). SourceSessionId —
+// id оригинального чата, SourceName — его имя (снимок на момент ветвления), Timestamp —
+// Unix-мс UTC (см. StoredTextMessage.Timestamp).
+public class StoredBranchedFromMessage : StoredMessage
+{
+    public string SourceSessionId { get; init; } = "";
+    public string SourceName { get; init; } = "";
+    public long? Timestamp { get; init; }
 }

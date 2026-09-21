@@ -105,4 +105,65 @@ public class TranscriptProbeTests : IDisposable
         new FileInfo(path).Length.Should().BeGreaterThan(64 * 1024, "файл обязан быть больше хвоста");
         TranscriptProbe.LastUserText(path, tailBytes: 64 * 1024).Should().Be("Проверь");
     }
+
+    // --- LastRecordUuid: точный якорь границы хода для ветвления чата (§4) ---
+
+    private static string UuidLine(string uuid, string parentUuid = "") =>
+        $$$"""{"type":"assistant","parentUuid":"{{{parentUuid}}}","uuid":"{{{uuid}}}","message":{"role":"assistant","content":"ответ"}}""";
+
+    // Якорь хода = uuid ПОСЛЕДНЕЙ записи файла, независимо от её типа.
+    [Fact]
+    public void ПоследнийUuid_Возвращается()
+    {
+        var path = WriteTranscript(UuidLine("a1"), UserLine("Проверь"), UuidLine("a2", parentUuid: "a1"));
+        TranscriptProbe.LastRecordUuid(path).Should().Be("a2");
+    }
+
+    // Записи без собственного uuid (служебные строки CLI) пропускаются — берём ближайшую,
+    // у которой он есть: якорь обязан указывать на реальную запись файла.
+    [Fact]
+    public void ЗаписьБезUuid_Пропускается()
+    {
+        var path = WriteTranscript(UuidLine("a1"), AssistantLine);
+        TranscriptProbe.LastRecordUuid(path).Should().Be("a1");
+    }
+
+    // Недописанный хвост (kill посреди записи) — битая строка отбрасывается, якорь берётся
+    // с последней целой: иначе ветка получила бы якорь, которого в файле нет.
+    [Fact]
+    public void НедописаннаяПоследняяСтрока_Пропускается()
+    {
+        var path = Path.Combine(_root, $"{Guid.NewGuid():N}.jsonl");
+        File.WriteAllText(path, UuidLine("a1") + "\n" + """{"type":"assistant","uuid":"a""");
+        TranscriptProbe.LastRecordUuid(path).Should().Be("a1");
+    }
+
+    // Ни одного uuid в файле — null, а не исключение: вызывающий остаётся на текстовом пути.
+    [Fact]
+    public void БезUuidВовсе_Null()
+    {
+        var path = WriteTranscript(AssistantLine, UserLine("Проверь"));
+        TranscriptProbe.LastRecordUuid(path).Should().BeNull();
+    }
+
+    // Несуществующий файл и null-путь — тоже null (fail-open в сторону старого поведения).
+    [Fact]
+    public void ФайлаНет_UuidNull()
+    {
+        TranscriptProbe.LastRecordUuid(null).Should().BeNull();
+        TranscriptProbe.LastRecordUuid(Path.Combine(_root, "нет-такого.jsonl")).Should().BeNull();
+    }
+
+    // Длинный транскрипт: читается только хвост — якорь всё равно находится.
+    [Fact]
+    public void БольшойФайл_UuidИзХвоста()
+    {
+        var filler = string.Concat(Enumerable.Repeat("x", 200));
+        var lines = new List<string>();
+        for (var i = 0; i < 500; i++)
+            lines.Add($$$"""{"type":"assistant","uuid":"old-{{{i}}}","message":{"role":"assistant","content":"{{{filler}}}"}}""");
+        lines.Add(UuidLine("tail-uuid"));
+        var path = WriteTranscript(lines.ToArray());
+        TranscriptProbe.LastRecordUuid(path, tailBytes: 64 * 1024).Should().Be("tail-uuid");
+    }
 }

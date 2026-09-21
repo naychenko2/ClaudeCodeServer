@@ -2477,6 +2477,273 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         return entry.Info;
     }
 
+    // Значения include ветвления чата (docs/research/chat-branching-2026-09.md §5, §6):
+    // turn — история по конец хода (кнопка под ответом ассистента), beforePrompt — история
+    // до этого сообщения, а его текст возвращается как draft для композера (транскрипт
+    // обязан заканчиваться завершённым ходом — висящий промпт склеился бы со следующим).
+    public static class ChatBranchInclude
+    {
+        public const string Turn = "turn";
+        public const string BeforePrompt = "beforePrompt";
+    }
+
+    // Итог ветвления: новый чат + черновик композера (не null только у include=beforePrompt).
+    public sealed record ChatBranchResult(Session Session, string? Draft);
+
+    // Ветвление чата (шаг 3 плана chat-branch, документ-основание §3/§8/§9/§11): новый чат
+    // со своим ClaudeSessionId, которому подложены обрезанный транскрипт CLI и обрезанная
+    // history.json. Оригинал НЕ изменяется ни одним мутатором (ни SaveSessions по нему, ни
+    // UpdatedAt/ArchivedAt/ClaudeSessionId) — источник читается, не трогается.
+    //
+    // userMessageIndex — 0-based номер элемента StoredUserMessage в истории оригинала
+    // (включая служебные ходы auto/staffNote/systemDirective — они тоже user_message).
+    // anchorText — фрагмент текста этого сообщения от клиента; сервер сверяет его с
+    // найденным по индексу и на расхождении отказывает 409 (индекс — договорённость двух
+    // счётчиков, молча резать не там нельзя).
+    public async Task<ChatBranchResult> BranchAsync(string sessionId, string ownerId,
+        int userMessageIndex, string anchorText, string include, string? name = null)
+    {
+        if (GetOwned(sessionId, ownerId) is not { } source
+            || !_sessions.TryGetValue(sessionId, out var entry))
+            throw new KeyNotFoundException("Чат не найден");
+
+        // §9.1 — идёт ход или живут фоновые агенты (копируем файл, в который пишет CLI)
+        if (HasTurnInFlight(entry))
+            throw new InvalidOperationException(
+                "В чате идёт ход — дождитесь его завершения или прервите его, затем попробуйте снова");
+        if (entry.Process is { HasTrackedBg: true })
+            throw new InvalidOperationException(
+                "В чате работают фоновые агенты — дождитесь их завершения, затем попробуйте снова");
+
+        // §9.2 — нет ClaudeSessionId: на экране история есть, в памяти модели — нет
+        if (source.ClaudeSessionId is not string csid)
+            throw new InvalidOperationException("Чат ещё не обращался к модели: ветвить нечего");
+
+        // §9.3 — десктопный чат (ADR-008): его транскрипт с кадрами рабочего стола наружу
+        // не отдаём. DesktopChatGuard.Refuse тут не работает (ищет по совпадению
+        // resumeSessionId с чужим ClaudeSessionId, а у ветки id новый) — берём только текст.
+        if (source.DesktopChat)
+            throw new InvalidOperationException(Controllers.DesktopChatGuard.ResumeFromDesktop);
+
+        // §9.6 — групповой чат и режим штаба: их состояние волн/спикеров живёт в Session,
+        // а не в транскрипте — ветка унаследовала бы ленту без состояния
+        if (source.Participants is { Count: > 0 })
+            throw new InvalidOperationException(
+                "Групповой чат нельзя ветвить: состав спикеров живёт в чате, а не в транскрипте");
+        if (source.TeamImplement is not null)
+            throw new InvalidOperationException(
+                "Чат в режиме «Командная реализация» нельзя ветвить: состояние волн живёт в чате, а не в транскрипте");
+
+        // §9.8 — чат в отдельном worktree: скопированный контекст указывал бы на чужое
+        // дерево, которое сносится вместе с чатом-источником
+        if (source.WorktreePath is not null)
+            throw new InvalidOperationException(
+                "Чат в отдельном рабочем дереве нельзя ветвить: контекст ветки указывал бы на дерево, которое сносится вместе с чатом-источником");
+
+        if (include != ChatBranchInclude.Turn && include != ChatBranchInclude.BeforePrompt)
+            throw new InvalidOperationException($"Неизвестное значение include: «{include}»");
+
+        // §5 — адресация шага: тот же номер, что считает клиент по StoredUserMessage истории
+        var history = await _history.LoadAsync(csid);
+        var userMessages = history.OfType<StoredUserMessage>().ToList();
+        if (userMessageIndex < 0 || userMessageIndex >= userMessages.Count)
+            throw new InvalidOperationException(
+                $"Сообщение с индексом {userMessageIndex} не найдено в истории чата");
+        var anchorMessage = userMessages[userMessageIndex];
+
+        // Сверка текста с индексом — fail-closed: живая лента клиента и серверная история
+        // расходятся штатно, молча резать не там нельзя (§6 документа-основания)
+        var normalizedFound = Llm.TranscriptBrancher.Normalize(anchorMessage.Text);
+        var normalizedProvided = Llm.TranscriptBrancher.Normalize(anchorText);
+        if (normalizedProvided.Length == 0
+            || !normalizedFound.Contains(normalizedProvided, StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                "Индекс сообщения и присланный текст разошлись — обновите чат и попробуйте снова");
+
+        // §Резолв источника: самая длинная копия среди всех профилей (147 из 487 чатов имеют
+        // копии разной длины — короткая дала бы ветку без начала разговора), фолбэк — архив
+        // заархивированного чата. §9.4 — не найдено нигде — 400 (переносить нечего ≠ копировать
+        // нечего). Оригинал из архива не возвращаем — ArchivedAt не трогаем.
+        var searchRoots = TranscriptSearchRoots(source);
+        var hostCwd = TryResolveCwd(source);
+        var sourceCwd = hostCwd is null ? null : CwdForOwner(ownerId, hostCwd);
+
+        string? srcPath = null;
+        var bestLen = -1L;
+        foreach (var file in Llm.TranscriptMigrator.FindAllTranscripts(searchRoots, sourceCwd, csid))
+        {
+            var len = new FileInfo(file).Length;
+            if (len > bestLen) { bestLen = len; srcPath = file; }
+        }
+        srcPath ??= _archivedTranscripts.FindCopyPath(csid);
+
+        if (srcPath is null)
+            throw new InvalidOperationException(
+                "Память этого разговора уже убрана плановой уборкой CLI");
+
+        // §9.7 — потолок размера, тот же, что у ArchivedTranscriptStore.MaxCopyBytes
+        if (new FileInfo(srcPath).Length > _archivedTranscripts.MaxCopyBytes)
+            throw new InvalidOperationException(
+                "Транскрипт чата слишком большой для ветвления (потолок 512 МБ)");
+
+        // Новый csid — свой, не общий с оригиналом (иначе два чата делили бы один транскрипт
+        // и одну историю, и удаление одного унесло бы память другого)
+        var newCsid = Guid.NewGuid().ToString();
+
+        // Схема хранения (§3): профиль тот же, что у оригинала; cwd — ВЕТКИ, не оригинала
+        // (ветка не наследует WorktreePath — гейт §9.8 гарантирует, что у source его и нет,
+        // поэтому cwd ветки = корень проекта/чатов владельца)
+        var branchConfigRoot = ConfigRootFor(ownerId, source.Provider);
+        var branchRootPath = source.ProjectId is { } sourcePid
+            ? (_projects.GetById(sourcePid)?.RootPath
+                ?? throw new InvalidOperationException("Проект чата не найден"))
+            : ResolveChatRoot(ownerId);
+        var branchCwd = CwdForOwner(ownerId, branchRootPath);
+
+        var dstDir = Path.Combine(branchConfigRoot, "projects", Llm.TranscriptMigrator.FlattenCwd(branchCwd));
+        Directory.CreateDirectory(dstDir);
+        var dstPath = FileService.SafeJoin(dstDir, newCsid + ".jsonl");
+
+        // Якоря для резака: неслужебные сообщения истории до якоря (не включая его) +
+        // сам якорь последним (TranscriptBrancher трактует последний элемент как якорь шага)
+        var anchors = new List<string>();
+        for (var i = 0; i < userMessageIndex; i++)
+        {
+            var m = userMessages[i];
+            if (m.Auto == true || m.SystemDirective == true || m.StaffNote != null || m.ViaAgent == true)
+                continue;
+            anchors.Add(m.Text);
+        }
+        anchors.Add(anchorMessage.Text);
+
+        // Точный якорь (шаг 5): uuid хвоста транскрипта, записанный на конце ЯКОРНОГО хода —
+        // последний result этого хода, то есть до следующего сообщения пользователя. Есть —
+        // резак берёт границу точным сравнением; нет (чат до этого поля) — текстовый путь.
+        var anchorHistoryIndex = history.IndexOf(anchorMessage);
+        string? anchorUuid = null;
+        for (var i = anchorHistoryIndex + 1; i < history.Count; i++)
+        {
+            if (history[i] is StoredUserMessage) break;
+            if (history[i] is StoredResultMessage { TranscriptTailUuid: { } uuid }) anchorUuid = uuid;
+        }
+
+        // §9.5 — границу не удалось сопоставить (отказ резака) — 409, резать наугад нельзя.
+        // include резак обязан знать: у beforePrompt граница транскрипта — сам якорный промпт
+        // (не включая), иначе лента ветки и её транскрипт расходятся — на экране вопроса нет,
+        // а в памяти модели и вопрос, и прежний ответ на него.
+        var branchResult = Llm.TranscriptBrancher.Branch(srcPath, anchors, newCsid, dstPath, anchorUuid,
+            include == ChatBranchInclude.BeforePrompt
+                ? Llm.TranscriptBrancher.BranchInclude.BeforePrompt
+                : Llm.TranscriptBrancher.BranchInclude.Turn);
+        if (!branchResult.Ok)
+        {
+            Console.Error.WriteLine($"[SessionManager] Ветвление чата {sessionId} отказано резаком: {branchResult.Reason}");
+            throw new InvalidOperationException(
+                "Не удалось найти этот шаг в памяти модели; попробуйте ветвиться от другого сообщения");
+        }
+
+        // Обрезанная история ветки: turn — по конец хода (следующий user_message или конец
+        // файла), beforePrompt — до якорного сообщения (оно не входит, его текст — draft,
+        // иначе транскрипт заканчивался бы висящим промптом и следующий ход подклеил бы второй)
+        int cutAt;
+        string? draft = null;
+        if (include == ChatBranchInclude.BeforePrompt)
+        {
+            cutAt = anchorHistoryIndex;
+            draft = anchorMessage.Text;
+        }
+        else
+        {
+            // Граница — следующий user_message ИЛИ собственная плашка источника: когда
+            // ветвят саму ветку от её последнего хода, чужая плашка «Ветка от …» (§7 — она
+            // всегда последняя запись истории) попала бы в копию и встала бы второй рядом
+            // со свежей. Унаследованная плашка неверна: у новой ветки источник свой.
+            cutAt = history.Count;
+            for (var i = anchorHistoryIndex + 1; i < history.Count; i++)
+                if (history[i] is StoredUserMessage or StoredBranchedFromMessage) { cutAt = i; break; }
+        }
+
+        // Резак отступил назад: хвост последнего хода префикса оказался непарным (прерванный
+        // ход, кнопка «Стоп») и фактическая граница транскрипта ушла к НАЧАЛУ этого хода.
+        // История обязана совпасть с ней шаг в шаг, иначе в ленте остался бы ход, которого
+        // нет в памяти модели. 409 тут не отдаём (продуктовое решение): отказывать за то, что
+        // разговор когда-то прервался, хуже, чем перенести незавершённый ввод в черновик —
+        // тем же путём, что уже работает у beforePrompt.
+        if (branchResult.AnchorTurnExcluded)
+        {
+            // Сообщение, начавшее исключённый ход: у turn это сам якорь, у beforePrompt —
+            // предыдущее сообщение пользователя (якорный ход в ветку и так не входил).
+            var droppedIndex = anchorHistoryIndex;
+            if (include == ChatBranchInclude.BeforePrompt)
+            {
+                droppedIndex = -1;
+                for (var i = anchorHistoryIndex - 1; i >= 0; i--)
+                    if (history[i] is StoredUserMessage) { droppedIndex = i; break; }
+                if (droppedIndex < 0)
+                    throw new InvalidOperationException(
+                        "Не удалось найти этот шаг в памяти модели; попробуйте ветвиться от другого сообщения");
+            }
+            cutAt = droppedIndex;
+            draft = (history[droppedIndex] as StoredUserMessage)?.Text;
+        }
+
+        var branchHistory = history.Take(cutAt).ToList();
+        // Плашка «Ветка от …» — последней записью, ровно в точке расхождения (§7)
+        branchHistory.Add(new StoredBranchedFromMessage
+        {
+            SourceSessionId = sessionId,
+            SourceName = source.Name ?? "Чат",
+            Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
+        await _history.SaveAsync(newCsid, branchHistory);
+
+        // Имя по умолчанию — «{имя оригинала} (ветка)»; явно переданное имя перебивает
+        var branchName = string.IsNullOrWhiteSpace(name)
+            ? $"{(string.IsNullOrWhiteSpace(source.Name) ? "Чат" : source.Name)} (ветка)"
+            : name.Trim();
+
+        // Создание чата штатной фабрикой (§ «Создание чата»): выбор по ProjectId/PersonaId
+        // оригинала, resumeSessionId = новый csid — StartNewSessionAsync подхватит уже
+        // подготовленные транскрипт и историю
+        var branchSession = !string.IsNullOrWhiteSpace(source.PersonaId)
+            ? await CreatePersonaChatAsync(ownerId, source.PersonaId!, source.Mode,
+                resumeSessionId: newCsid, name: branchName, contextProjectId: source.ProjectId)
+            : source.ProjectId is not null
+                ? await CreateAsync(source.ProjectId, source.Mode, resumeSessionId: newCsid,
+                    name: branchName, model: source.Model, effort: source.Effort)
+                : await CreateChatAsync(ownerId, source.Mode, resumeSessionId: newCsid,
+                    name: branchName, model: source.Model, effort: source.Effort);
+
+        // §11 — наследование полей поверх созданного чата: фабрики персоны/проекта не берут
+        // все поля параметрами (персональная фабрика вовсе подставляет модель персоны, а не
+        // оригинала), поэтому модель/провайдер/effort и остальные поля таблицы §11
+        // принудительно переписываются на значения оригинала уже ПОСЛЕ создания.
+        if (_sessions.TryGetValue(branchSession.Id, out var branchEntry))
+        {
+            var b = branchEntry.Info;
+            // Наследуем: Model/Provider/Effort/Context/VoiceMode/VoiceStyle/NotificationsMuted —
+            // тот же разговор тем же собеседником; ExcludeFromDossiers — иначе ветвление
+            // обходит явный opt-out «не сохранять решения» (Session.cs:380-382).
+            b.Model = source.Model;
+            b.Provider = source.Provider;
+            b.Effort = source.Effort;
+            b.Context = [.. source.Context.Select(c => new SessionContextEntry
+                { Type = c.Type, Id = c.Id, Title = c.Title })];
+            b.VoiceMode = source.VoiceMode;
+            b.VoiceStyle = source.VoiceStyle;
+            b.NotificationsMuted = source.NotificationsMuted;
+            b.ExcludeFromDossiers = source.ExcludeFromDossiers;
+            // НЕ наследуем: AutoAllowTools (человек переспросит один раз, а не тихая эскалация
+            // прав), WorktreePath/WorktreeBranch/TaskId/TaskExecution/ExpiresAfterMinutes/
+            // ArchivedAt/ArchiveBatchId/LastReadAt — фабрика их и так не выставляет.
+            b.BranchedFromSessionId = sessionId;
+            SaveSessions();
+            branchSession = b;
+        }
+
+        return new ChatBranchResult(branchSession, draft);
+    }
+
     public Session? GetById(string id) =>
         _sessions.TryGetValue(id, out var entry) ? entry.Info : null;
 
@@ -8010,6 +8277,33 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         }
     }
 
+    // Подготовленная ветвлением пара «{csid}.jsonl + data/sessions/{csid}» осиротела: CLI на
+    // первом ходе ветки выдал другой session_id, и подложенный транскрипт уже никто не
+    // прочитает (история с этого момента пишется под новым ключом). Гейт общего разговора —
+    // тот же, что в DeleteAsync: пока на csid ссылается другой чат (двойник, созданный с тем
+    // же resumeSessionId), не трогаем ни историю, ни транскрипт. Сам чат-ветка под этот гейт
+    // уже не попадает — его ClaudeSessionId к этому моменту переписан на пришедший от CLI.
+    // Best-effort: уборка не должна ронять ход, все сбои — в лог (внутри DeleteTranscript).
+    private void CleanupOrphanBranchTranscript(Session info, string orphanCsid)
+    {
+        if (_sessions.Values.Any(e => e.Info.ClaudeSessionId == orphanCsid))
+        {
+            _log.LogInformation(
+                "Ветка {SessionId}: CLI сменил сессию на другую, но подготовленный {Csid} оставлен — на него ссылается другой чат",
+                info.Id, orphanCsid);
+            return;
+        }
+        _log.LogInformation(
+            "Ветка {SessionId}: CLI выдал свой session_id — убираем осиротевшую подготовленную сессию {Csid}",
+            info.Id, orphanCsid);
+        try { _history.Delete(orphanCsid); }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Историю осиротевшей сессии {Csid} убрать не удалось", orphanCsid);
+        }
+        DeleteTranscript(info, orphanCsid);
+    }
+
     // Уведомить клиентов об удалении чата (в т.ч. авто-удалении временного) —
     // адресация как у BroadcastStatusChangeAsync: проект или владелец чата
     private async Task BroadcastChatDeletedAsync(string sessionId, Session info)
@@ -8085,6 +8379,16 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             switch (msg)
             {
                 case SessionStartedMessage m:
+                    // Страховка ветвления: CLI 2.1.276 сессию по --resume не форкает (разведка
+                    // шага 0), но это поведение версионно-зависимое. Ветке мы подложили
+                    // транскрипт и историю под СВОИМ csid — если CLI выдал другой session_id,
+                    // подготовленная пара осиротела и её надо убрать, иначе она пролежит на
+                    // диске до плановой уборки CLI, а в data/sessions останется навсегда.
+                    // Гейт BranchedFromSessionId — у обычных чатов проверка бесплатна.
+                    if (entry is { Info.BranchedFromSessionId: not null }
+                        && acc.SaveKey is { Length: > 0 } preparedCsid
+                        && !string.Equals(preparedCsid, m.ClaudeSessionId, StringComparison.Ordinal))
+                        CleanupOrphanBranchTranscript(entry.Info, preparedCsid);
                     acc.SetSaveKey(m.ClaudeSessionId);
                     acc.OnSessionStarted(m.Model, m.Mode, m.TurnWorktree);
                     if (entry is not null)
@@ -8315,7 +8619,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                     acc.SetPromptSnapshot(m.SnapshotId);
                     break;
                 case ResultMessage m:
-                    await acc.OnResultAsync(m.Subtype, m.DurationMs, m.NumTurns, m.Usage, m.TotalCostUsd, m.ApiErrorStatus, m.PermissionDenials, _history, m.ContextTokens, m.UsageModel, m.DurationApiMs);
+                    // Точный якорь границы хода для ветвления (фича chat-branch, §4): uuid
+                    // последней записи транскрипта на КОНЕЦ хода. Снимается здесь, потому что
+                    // result — последнее событие хода, и дальше файл уже не растёт до
+                    // следующего. Не прочиталось — null, чат остаётся на текстовом пути.
+                    await acc.OnResultAsync(m.Subtype, m.DurationMs, m.NumTurns, m.Usage, m.TotalCostUsd, m.ApiErrorStatus, m.PermissionDenials, _history, m.ContextTokens, m.UsageModel, m.DurationApiMs,
+                        entry is not null ? Llm.Claude.TranscriptProbe.LastRecordUuid(FindResumeTranscript(entry)) : null);
                     if (entry is not null) entry.LoopTurnFailed = m.Subtype == "error";
                     SpendMapping.RecordTurnSpend(_spend, _llmProviders, ResolveOwnerId, _log, entry?.Info, m);
                     break;

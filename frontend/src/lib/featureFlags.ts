@@ -26,6 +26,9 @@ export const FLAGS = {
   // всегда.
   mcpCatalog: 'mcp-catalog',
   chatContext: 'chat-context',
+  // Ветвление чата (docs/research/chat-branching-2026-09.md, §7): новый чат с копией
+  // истории оригинала до выбранного шага.
+  chatBranch: 'chat-branch',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

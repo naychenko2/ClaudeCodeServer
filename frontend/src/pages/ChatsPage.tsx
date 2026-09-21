@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MessageCircle, Plus } from 'lucide-react';
 import type { AuthState, Session, SkillInfo } from '../types';
 import { api } from '../lib/api';
@@ -86,6 +86,11 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   const handleWorkflowRunning = useCallback((active: boolean, sessionId: string) => {
     setWorkflowRunningFor(prev => (active ? sessionId : prev === sessionId ? null : prev));
   }, []);
+
+  // Множество id чатов, загруженных на этом экране — для плашки «Ветка от …»:
+  // если оригинал не в нём, плашка в ChatItemView деградирует в обычный текст.
+  // Список и так сидит в chats для рендера ChatList; Set считаем из него
+  const availableChatIds = useMemo(() => new Set(chats.map(c => c.id)), [chats]);
 
   const refresh = () => api.chats.list().then(setChats).catch(() => {});
 
@@ -387,6 +392,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
               onAttachedFilesChange={setAttachedFiles}
               onSessionUpdated={handleChatEdited}
               onWorkflowRunning={handleWorkflowRunning}
+              availableChatIds={availableChatIds}
             />
           </div>
         ) : (
@@ -414,6 +420,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
       onAttachedFilesChange={setAttachedFiles}
       onSessionUpdated={handleChatEdited}
       onWorkflowRunning={handleWorkflowRunning}
+      availableChatIds={availableChatIds}
     />
   ) : (
     <>
@@ -513,6 +520,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
               onAttachedFilesChange={setAttachedFiles}
               onSessionUpdated={handleChatEdited}
               onWorkflowRunning={handleWorkflowRunning}
+              availableChatIds={availableChatIds}
             />
           ) : (
             <>

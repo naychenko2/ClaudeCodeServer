@@ -1484,6 +1484,27 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(subscriptionKey ? { model, subscriptionKey } : { model }),
       }),
+    // Ветвление чата (фича chat-branch): новый чат с копией истории до userMessageIndex
+    // (включительно или нет — задаёт include). anchorText — сверка «тот ли это шаг»: на
+    // расхождении текста сервер отдаёт 409, без молчаливого отреза не там. Имя опционально,
+    // дефолт — «{имя оригинала} — ветка». Ответ — chatId+claudeSessionId новой ветки и draft
+    // (null при include='turn', текст исходного промпта при include='beforePrompt' для
+    // композера). Серверные 400 «ветвить нечего» / 409 «идёт ход» / 409 «границу не
+    // сопоставить» несут человеческий текст — он доезжает до вызывающего кода через Error.message
+    // (request() пробрасывает server body как Error & { body })
+    branch: (
+      id: string,
+      body: {
+        userMessageIndex: number;
+        anchorText: string;
+        include: 'turn' | 'beforePrompt';
+        name?: string;
+      },
+    ) =>
+      request<{ chatId: string; projectId: string | null; claudeSessionId: string; draft: string | null }>(
+        `/chats/${id}/branch`,
+        { method: 'POST', body: JSON.stringify(body) },
+      ),
     // Режим прав: сохраняем сразу при выборе в Composer, иначе он доехал бы до сессии
     // только вместе со следующим сообщением и терялся при уходе со страницы
     setMode: (id: string, mode: string) =>

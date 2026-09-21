@@ -36,6 +36,10 @@ interface Props {
   onSelect: (session: Session, firstMessage?: string, autoSelect?: boolean) => void;
   onSessionUpdated?: (session: Session) => void;
   onSessionsChanged?: (count: number) => void;
+  // Полный список сессий, прокинутый владельцу (WorkspacePage) — нужен для плашки
+  // «Ветка от …», чтобы определить, жив ли оригинал. Не задан — старый лёгкий
+  // контракт с числом продолжает работать
+  onSessionsListChanged?: (sessions: Session[]) => void;
   // Список опустел (удалён последний чат) — центр показывает пустое состояние,
   // а не автосоздаёт новый чат. Владелец сбрасывает activeSession в null.
   onCleared?: () => void;
@@ -59,7 +63,7 @@ const orderBtnStyle = (disabled: boolean): React.CSSProperties => ({
   background: 'transparent', color: disabled ? C.border : C.textMuted,
 });
 
-export function SessionList({ project, activeSession, onSelect, onSessionUpdated, onSessionsChanged, onCleared, isMobile = false, workflowRunningFor, onTagsReorder, onAddToWall }: Props) {
+export function SessionList({ project, activeSession, onSelect, onSessionUpdated, onSessionsChanged, onSessionsListChanged, onCleared, isMobile = false, workflowRunningFor, onTagsReorder, onAddToWall }: Props) {
   // «Сохранить в заметки» доступно только при включённой подсистеме заметок — иначе
   // кнопка/пункт в ChatCard уйдёт в архив не сохранённой, а карточка не получит
   // ссылку SummaryNoteId (часть пункта меню «Сохранить в заметки» в ChatCard).
@@ -176,6 +180,13 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   };
 
   useEffect(() => { if (loaded) onSessionsChanged?.(sessions.length); }, [loaded, sessions.length, onSessionsChanged]);
+  // Полный список сессий прокидывается владельцу для плашки «Ветка от …»: при любом
+  // изменении списка (загрузка, удаление, realtime-обновление) ChatPanel выше должен
+  // знать, жив ли оригинал ветки. До первой загрузки дёргать бессмысленно — владелец
+  // сам отличит «пусто, потому что ещё не приехало» по отсутствию источника
+  // (загружать отдельно api.sessions.list ради этого он не должен: явный запрет постановки)
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- прокидывание списка наверх, не локальный setState
+  useEffect(() => { if (loaded) onSessionsListChanged?.(sessions); }, [loaded, sessions, onSessionsListChanged]);
 
   // Кнопка десктопного чата видна, когда фича включена у человека И грань включена
   // в этом проекте: без второй половины оси сервер откажет, а кнопка врала бы

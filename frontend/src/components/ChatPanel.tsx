@@ -43,12 +43,13 @@ import { voiceStyleFor, normalizeVoiceStyle, VOICE_STYLE_DIGEST, VOICE_STYLE_TAL
 import type { SpeechPhase } from '../hooks/useHandsFree';
 import { updateChatFields } from '../lib/chatUpdate';
 import { type Mode, ModeIcon, MODES, isDangerMode } from '../lib/modes';
-import { getDraft } from '../lib/drafts';
+import { getDraft, setDraft } from '../lib/drafts';
 import { useModelCaps, assistantName, planModelChange } from '../lib/models';
 import { Composer } from './Composer';
 import { ProjectGitBar } from './ProjectGitBar';
 import { C, R, SHADOW, SP, FS, PANEL_ANIM, CHAT_MAX_W, CHAT_GUTTER_L } from '../lib/design';
 import { VAR_PAD_R, VAR_SHIFT, VAR_W, useChatGutter } from '../lib/chatGutter';
+import { navPush, type NavSnapshot } from '../lib/nav';
 import { useIsTouch } from '../lib/breakpoints';
 import { setChatContext, AI_RECOMPUTE_EVENT } from '../lib/ai/chatContext';
 import { setFabObstacle } from '../lib/ai/fabObstacle';
@@ -136,6 +137,13 @@ interface Props {
   // колонку — так же, как за её ярлык. Тащить карточку принято за её верх, и шапка
   // чата — самая заметная его часть.
   headerDragProps?: HTMLAttributes<HTMLDivElement>;
+  // Множество id чатов, загруженных на этом экране — для плашки «Ветка от …».
+  // Если передан, и id оригинала НЕ в нём — плашка в ChatItemView деградирует в
+  // обычный текст, без ссылки и без клика. Не передан — поведение прежнее
+  // (ссылка). Источник — тот список чатов, что уже загружен владельцем экрана
+  // (ChatsPage.chats, WorkspacePage.sessions, wallStore.chats); нового запроса
+  // к серверу не заводим
+  availableChatIds?: Set<string>;
 }
 
 // Предел одной загрузки — совпадает с RequestSizeLimit эндпоинта загрузки вложений
@@ -209,7 +217,7 @@ function memoizedCacheEntry(
   return entry;
 }
 
-export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTaskAside, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, onAddToWall, onChatDeleted, skills, agents, attachedFiles, onAttachedFilesChange, greetingBubble, headerIsland, embedded, composerFocusSignal, contextBar, headerDragProps }: Props) {
+export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTaskAside, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, onAddToWall, onChatDeleted, skills, agents, attachedFiles, onAttachedFilesChange, greetingBubble, headerIsland, embedded, composerFocusSignal, contextBar, headerDragProps, availableChatIds }: Props) {
   const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, teamImplement: liveTeamImplement, teamPlanning: liveTeamPlanning, teamWavePulse, promptSuggestion, pending, composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending, preemptForPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
   // Открылся пустой чат (только что создан — своей истории у него нет) — курсор сразу
   // в поле ввода: сюда пришли писать, а не читать. Решение принимаем один раз на чат и
@@ -1200,6 +1208,29 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     onSessionUpdated?.(updated);
   }, [session.id, onSessionUpdated]);
 
+  // Ветвление чата от шага ленты (фича chat-branch). Сервер заводит новый чат с копией
+  // истории до userMessageIndex и кладёт его транскрипт в свою папку. Ошибки ВСЕ приходят
+  // 409 (контроллер сворачивает восемь отказов §9 в один код), но текст в err.message
+  // уже человеческий — его и показываем тостом, не разводя ветку по коду. draft из
+  // ответа (только при include='beforePrompt') кладём в стор черновика композера нового
+  // чата: пользователь должен успеть поправить текст, поэтому НЕ отправляем автоматически.
+  // include='turn' возвращает draft=null — композер новой ветки пуст. Навигация —
+  // navPush снимка; ветка наследует проект оригинала, объект Project берём из props.
+  const handleBranch = useCallback(async (target: { userMessageIndex: number; anchorText: string; include: 'turn' | 'beforePrompt' }) => {
+    try {
+      const result = await api.chats.branch(session.id, target);
+      if (result.draft) setDraft(result.chatId, result.draft);
+      const navDest: NavSnapshot = result.projectId
+        // На проектный чат: объект Project нужен снапшоту. Ветка наследует проект
+        // оригинала, и props.project для него совпадает (тот же ownerId).
+        ? { screen: 'project', project: project!, chatId: result.chatId, view: 'chat', file: null }
+        : { screen: 'chats', chatId: result.chatId };
+      navPush(navDest);
+    } catch (err) {
+      showToast('Ветвление', err instanceof Error ? err.message : 'Не удалось создать ветку чата');
+    }
+  }, [session.id, project]);
+
   // «Продолжить в стандартном окне 200K» под карточкой отказа Window1MUnavailable: снимает
   // суффикс [1m] с чата. Возврат { ok: false, error } при 400/404 — карточка показывает
   // серверный текст под кнопкой (не молчит). request() бросает Error с прикреплёнными
@@ -1792,11 +1823,43 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // Единый рендер одного элемента ленты (используется в основном рендере и в доке).
   // useCallback + React.memo на ChatItemView: при дописывании ленты неизменившиеся
   // элементы не перерендериваются (все пропсы-функции стабильны).
+  // Адрес якорного user_message для кнопки «Ветвление» (фича chat-branch). У ленты
+  // элементы не имеют стабильного id, а индексы items и messages расходятся штатно
+  // (normalizeHistory вливает workflow_progress в tool_use и группирует ошибки), поэтому
+  // сервер и фронт считают одно и то же множество — порядковый номер user_message.
+  // Для user_message: его собственный индекс. Для ответа ассистента: индекс ПОСЛЕДНЕГО
+  // user_message выше (то же значение, что у user_message). Нет user_message выше →
+  // кнопки нет. anchorText — первые ~120 символов текста этого сообщения: сервер
+  // сверяет его с найденным по индексу сообщением, на расхождении отвечает 409.
+  // useMemo от items — пересчёт только при изменении ленты, иначе renderItem пересоздавался
+  // бы на каждую стрим-дельту и ронял мемоизацию ChatItemView.
+  const branchAnchors = useMemo(() => {
+    const arr: ({ userMessageIdx: number; anchorText: string; include: 'turn' | 'beforePrompt' } | null)[] = [];
+    let count = 0;
+    let lastText = '';
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      if (it.kind === 'user_message') {
+        count++;
+        lastText = it.text.slice(0, 120);
+        arr[i] = { userMessageIdx: count - 1, anchorText: lastText, include: 'beforePrompt' };
+      } else {
+        arr[i] = count > 0 ? { userMessageIdx: count - 1, anchorText: lastText, include: 'turn' } : null;
+      }
+    }
+    return arr;
+  }, [items]);
+
   const renderItem = useCallback((item: ChatItem, i: number,
     extras?: {
       agentActivity?: ActivityEntry[];
       agentRenderChild?: (item: ChatItem, idx: number) => React.ReactNode;
-    }) => (
+    }) => {
+    const anchor = branchAnchors[i];
+    const onBranchForItem = anchor
+      ? () => handleBranch({ userMessageIndex: anchor.userMessageIdx, anchorText: anchor.anchorText, include: anchor.include })
+      : undefined;
+    return (
     <ChatItemView
       key={itemKey(item, i)}
       item={item}
@@ -1823,6 +1886,8 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       onRetry={handleRetry}
       onInterrupt={interrupt}
       onMigrateProvider={handleMigrateProvider}
+      onBranch={onBranchForItem}
+      availableChatIds={availableChatIds}
       taskPlan={batchByIndex.get(i)}
       agentActivity={extras?.agentActivity}
       agentRenderChild={extras?.agentRenderChild}
@@ -1860,14 +1925,15 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       turnCache={turnMeta.cache[i]}
       onDropWindow1M={handleDropWindow1M}
     />
-  ), [
+    );
+  }, [
     online, isWaiting, items.length, lastResultIndex, retryInterruptedIdx, toggleThinking, allowPermission,
     denyPermission, handleAllowAlways, answerQuestion, handleRespondPlan, planVersions,
     lastApprovedPlanIdx, mode, onOpenFile, project, handleRevert, handleRetry,
-    interrupt, handleMigrateProvider, handleDropWindow1M, batchByIndex, showWaiting, taskTodos, changeMode, turnBoundaries,
+    interrupt, handleMigrateProvider, handleBranch, handleDropWindow1M, branchAnchors, batchByIndex, showWaiting, taskTodos, changeMode, turnBoundaries,
     mechanicOffers, launchedByIndex, failedByIndex, declinedMechanicOffers, runTeamMechanic, scrollToMechanicLaunch,
     presetOffers, presetCardState, presetNote, presetError, presetBusy, applyPreset, declinePreset,
-    turnMeta,
+    turnMeta, availableChatIds,
   ]);
 
   // Блок действий: подряд идущие карточки инструментов + изменения файлов объединяем

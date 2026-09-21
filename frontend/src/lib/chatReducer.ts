@@ -227,6 +227,12 @@ export function normalizeHistory(raw: unknown[], opts?: { deriveSpeakers?: boole
       const { timestamp, ...rest } = m as unknown as Record<string, unknown> & { timestamp?: number };
       items.push({ ...rest, ...(timestamp !== undefined ? { ts: timestamp } : {}) } as unknown as ChatItem);
     }
+    else if (m.kind === 'branched_from') {
+      // Плашка «Ветка от …» (фича chat-branch): запись истории с sourceSessionId/sourceName,
+      // ts перекладываем так же, как у text/user_message — без этого дата в ленте потеряется
+      const { timestamp, ...rest } = m as unknown as Record<string, unknown> & { timestamp?: number };
+      items.push({ ...rest, ...(timestamp !== undefined ? { ts: timestamp } : {}) } as unknown as ChatItem);
+    }
     else items.push(m as unknown as ChatItem);
   }
   return items;
@@ -249,7 +255,7 @@ export const PERSISTED_KINDS = new Set<ChatItem['kind']>([
   'user_message', 'session_started', 'text', 'thinking', 'tool_use',
   'ask_question', 'plan_review', 'team_plan', 'team_escalation',
   'file_changed', 'result', 'fal_cost', 'glif_cost', 'compact_boundary', 'error',
-  'work_loop_stopped', 'model_switched', 'interrupted',
+  'work_loop_stopped', 'model_switched', 'branched_from', 'interrupted',
 ]);
 
 // Стоит ли заменить живую ленту историей с сервера: сравнение длин БЕЗ live-only

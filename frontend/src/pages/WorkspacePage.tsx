@@ -323,6 +323,14 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
     } catch { /* битый json — игнорируем */ }
     return loadWorkspaceState(project.id)?.activeSession ?? null;
   });
+  // Полный список сессий проекта — нужен ChatPanel для плашки «Ветка от …» (проверка,
+  // жив ли оригинал). Источник — SessionList ниже через callback onSessionsListChanged:
+  // он уже грузит api.sessions.list и сам обновляется, дублировать запрос запрещено
+  // (явный запрет постановки задачи). Set считается через useMemo — список маленький,
+  // но так быстрее по .has(id) при рендере длинных лент с ветками
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const handleSessionsListChanged = useCallback((list: Session[]) => setSessions(list), []);
+  const availableSessionIds = useMemo(() => new Set(sessions.map(s => s.id)), [sessions]);
   const [pendingMessage, setPendingMessage] = useState<string | undefined>();
   const [openFile, setOpenFile] = useState<string | null>(() => loadWorkspaceState(project.id)?.openFile ?? null);
   // Файл открыт из git-панели «Изменения» → FileViewer стартует на вкладке Diff
@@ -1689,7 +1697,7 @@ const windowWidth = useWindowWidth();
         <div style={{ flex: 1, display: !openFile && !readerOpenMobile && mobileView === 'sidebar' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
           <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             {leftTab === 'sessions'
-              ? <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} onCleared={handleClearSession} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} />
+              ? <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} onSessionsListChanged={handleSessionsListChanged} onCleared={handleClearSession} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} />
               : leftTab === 'changes'
               // onScopeChange не передаём: в одноколоночной раскладке он уводил бы
               // экран в чат на каждую смену скоупа
@@ -1751,7 +1759,7 @@ const windowWidth = useWindowWidth();
                 : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: C.textMuted, fontSize: 14 }}>Выберите задачу</div>)
             : activeSession
             ? (
-              <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} onOpenReader={handleOpenReader} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onBack={backFromChat} onWorkflowRunning={handleWorkflowRunning} skills={composerSkills} agents={skillsData?.agents} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} onChatDeleted={handleClearSession} contextBar={contextChipsMobile} />
+              <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} onOpenReader={handleOpenReader} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onBack={backFromChat} onWorkflowRunning={handleWorkflowRunning} skills={composerSkills} agents={skillsData?.agents} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} onChatDeleted={handleClearSession} contextBar={contextChipsMobile} availableChatIds={availableSessionIds} />
             )
             : NoSession
           }
@@ -1871,6 +1879,7 @@ const windowWidth = useWindowWidth();
           selectedPersonaId={selectedPersonaId}
           personaCreating={personaCreating}
           onOpenPersonaChat={handleOpenPersonaChat}
+          availableChatIds={availableSessionIds}
           onPersonaSelectAfterCreate={handlePersonaSelectAfterCreate}
           onPersonaCleared={handlePersonaCleared}
           teamCenterOpen={teamCenterOpen}

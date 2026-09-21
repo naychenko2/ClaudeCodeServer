@@ -137,6 +137,13 @@ interface Props {
   // колонку — так же, как за её ярлык. Тащить карточку принято за её верх, и шапка
   // чата — самая заметная его часть.
   headerDragProps?: HTMLAttributes<HTMLDivElement>;
+  // Множество id чатов, загруженных на этом экране — для плашки «Ветка от …».
+  // Если передан, и id оригинала НЕ в нём — плашка в ChatItemView деградирует в
+  // обычный текст, без ссылки и без клика. Не передан — поведение прежнее
+  // (ссылка). Источник — тот список чатов, что уже загружен владельцем экрана
+  // (ChatsPage.chats, WorkspacePage.sessions, wallStore.chats); нового запроса
+  // к серверу не заводим
+  availableChatIds?: Set<string>;
 }
 
 // Предел одной загрузки — совпадает с RequestSizeLimit эндпоинта загрузки вложений
@@ -210,7 +217,7 @@ function memoizedCacheEntry(
   return entry;
 }
 
-export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTaskAside, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, onAddToWall, onChatDeleted, skills, agents, attachedFiles, onAttachedFilesChange, greetingBubble, headerIsland, embedded, composerFocusSignal, contextBar, headerDragProps }: Props) {
+export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTaskAside, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, onAddToWall, onChatDeleted, skills, agents, attachedFiles, onAttachedFilesChange, greetingBubble, headerIsland, embedded, composerFocusSignal, contextBar, headerDragProps, availableChatIds }: Props) {
   const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, teamImplement: liveTeamImplement, teamPlanning: liveTeamPlanning, teamWavePulse, promptSuggestion, pending, composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending, preemptForPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
   // Открылся пустой чат (только что создан — своей истории у него нет) — курсор сразу
   // в поле ввода: сюда пришли писать, а не читать. Решение принимаем один раз на чат и
@@ -1880,6 +1887,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       onInterrupt={interrupt}
       onMigrateProvider={handleMigrateProvider}
       onBranch={onBranchForItem}
+      availableChatIds={availableChatIds}
       taskPlan={batchByIndex.get(i)}
       agentActivity={extras?.agentActivity}
       agentRenderChild={extras?.agentRenderChild}
@@ -1925,7 +1933,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     interrupt, handleMigrateProvider, handleBranch, handleDropWindow1M, branchAnchors, batchByIndex, showWaiting, taskTodos, changeMode, turnBoundaries,
     mechanicOffers, launchedByIndex, failedByIndex, declinedMechanicOffers, runTeamMechanic, scrollToMechanicLaunch,
     presetOffers, presetCardState, presetNote, presetError, presetBusy, applyPreset, declinePreset,
-    turnMeta,
+    turnMeta, availableChatIds,
   ]);
 
   // Блок действий: подряд идущие карточки инструментов + изменения файлов объединяем

@@ -630,6 +630,12 @@ interface ItemProps {
   // ответом ассистента — include='turn'. undefined — кнопки нет (нет фичи, либо выше
   // этого элемента нет user_message, на который можно опереться)
   onBranch?: () => Promise<unknown>;
+  // Множество id чатов, загруженных на фронте — для плашки «Ветка от …». Если передан
+  // и id оригинала НЕ в нём — плашка деградирует в обычный текст, без ссылки и без
+  // клика: иначе клик по битой ссылке меняет URL-хеш на несуществующий чат молча
+  // (тихий битый переход). Не передан — поведение прежнее (ссылка); для случаев, где
+  // список на этом уровне ещё не доступен
+  availableChatIds?: Set<string>;
   // Агрегированный чек-лист TaskCreate/TaskUpdate — приходит только на последний task-вызов ленты
   taskPlan?: TodoItem[];
   // Пилюля прогресса плана: приходит на ПОСЛЕДНИЙ result, когда ход уже закончился, —
@@ -985,7 +991,7 @@ function ModelSwitchedPill({ item }: { item: Extract<ChatItem, { kind: 'model_sw
   );
 }
 
-export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, canRetryInterrupted, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, onMigrateProvider, onDropWindow1M, onBranch, taskPlan, planPill, agentActivity, agentRenderChild, turnBoundaryKind, teamMechanicOffer, projectPresetOffer, promptSnapshotId, turnContextTokens, turnCache }: ItemProps) {
+export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, canRetryInterrupted, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, onMigrateProvider, onDropWindow1M, onBranch, availableChatIds, taskPlan, planPill, agentActivity, agentRenderChild, turnBoundaryKind, teamMechanicOffer, projectPresetOffer, promptSnapshotId, turnContextTokens, turnCache }: ItemProps) {
   const project = useContext(ChatProjectContext);
   const treePath = useContext(ChatTreePathContext);
   const persona = useContext(PersonaContext);
@@ -1739,30 +1745,52 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       // оригинала по §11 документа, так что наличие project у текущей ветки почти всегда
       // равно наличию project у оригинала). Вне проекта — глобальный #/chats/{id}. Хеш
       // проходит через parseHash/App как обычный диплинк; переход на chat/проект = тот же
-      // канал, что и проактивные уведомления и форк чата. Проверка «жив ли оригинал» —
-      // TODO шага 7, где ChatPanel принесёт chatsIndex через проп/контекст
+      // канал, что и проактивные уведомления и форк чата.
+      // «Жив ли оригинал»: определяем по уже загруженному на фронте списку чатов
+      // (availableChatIds — прокидывает ChatPanel из ChatsPage/WorkspacePage и т. п.).
+      // Оригинал удалён → плашка деградирует в текст, иначе клик по битой ссылке
+      // меняет URL-хеш на несуществующий чат молча. Список ещё не передан — fallback
+      // к ссылке для совместимости со старыми местами монтирования
       const sourceHash = project
         ? `#/project/${encodeURIComponent(project.id)}/chat/${encodeURIComponent(item.sourceSessionId)}`
         : `#/chats/${encodeURIComponent(item.sourceSessionId)}`;
+      const sourceAlive = !availableChatIds || availableChatIds.has(item.sourceSessionId);
       const openSource = () => { window.location.hash = sourceHash; };
       return (
         <div style={{ alignSelf: 'center', display: 'flex', alignItems: 'center', gap: 8, maxWidth: '100%' }}>
           <div style={{ flex: 1, minWidth: 24, height: 1, background: C.border }} />
-          <a
-            href={sourceHash}
-            onClick={(e) => { e.preventDefault(); openSource(); }}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 6,
-              fontSize: 12, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden',
-              textOverflow: 'ellipsis', padding: '3px 10px', borderRadius: 999,
-              background: C.bgSelected, border: `1px solid ${C.border}`,
-              textDecoration: 'none', cursor: 'pointer',
-            }}
-            title={`Открыть оригинал: ${item.sourceName}`}
-          >
-            <GitFork size={11} strokeWidth={2.4} color={C.textMuted} style={{ flexShrink: 0 }} />
-            Ветка от {item.sourceName}
-          </a>
+          {sourceAlive ? (
+            <a
+              href={sourceHash}
+              onClick={(e) => { e.preventDefault(); openSource(); }}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                fontSize: 12, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden',
+                textOverflow: 'ellipsis', padding: '3px 10px', borderRadius: 999,
+                background: C.bgSelected, border: `1px solid ${C.border}`,
+                textDecoration: 'none', cursor: 'pointer',
+              }}
+              title={`Открыть оригинал: ${item.sourceName}`}
+            >
+              <GitFork size={11} strokeWidth={2.4} color={C.textMuted} style={{ flexShrink: 0 }} />
+              Ветка от {item.sourceName}
+            </a>
+          ) : (
+            // Оригинал уже удалён: обычная плашка-текст без ссылки и без клика —
+            // иначе клик по битой ссылке молча менял бы URL-хеш
+            <span
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                fontSize: 12, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden',
+                textOverflow: 'ellipsis', padding: '3px 10px', borderRadius: 999,
+                background: C.bgSelected, border: `1px solid ${C.border}`,
+              }}
+              title={`Оригинал удалён: ${item.sourceName}`}
+            >
+              <GitFork size={11} strokeWidth={2.4} color={C.textMuted} style={{ flexShrink: 0 }} />
+              Ветка от {item.sourceName}
+            </span>
+          )}
           <div style={{ flex: 1, minWidth: 24, height: 1, background: C.border }} />
         </div>
       );

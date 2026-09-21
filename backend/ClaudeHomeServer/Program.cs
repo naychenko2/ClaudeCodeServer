@@ -108,6 +108,13 @@ if (ownsProcessRegistry) ProcessRegistry.Initialize();
 ClaudeHomeServer.Services.Execution.IsolationOptions.Instance =
     ClaudeHomeServer.Services.Execution.IsolationOptions.FromConfig(builder.Configuration);
 
+// Потолок одновременных ТЯЖЁЛЫХ запусков (сборки/тесты): пределы scope заданы per-scope, а
+// число одновременных scope не ограничивало ничто — инцидент oomd 2026-09-21, 18,1 GB в
+// четырёх параллельных прогонах. Ключ Execution:Isolation:MaxConcurrentBuilds, дефолт 2,
+// явный 0 — без ограничения (откат без пересборки).
+ClaudeHomeServer.Services.Execution.BuildConcurrencyGate.Configure(
+    ClaudeHomeServer.Services.Execution.BuildConcurrencyGate.LimitFromConfig(builder.Configuration));
+
 // Гашение scope висит на событии Exited и умирает вместе с процессом бэкенда: упал бэкенд —
 // scope с узлами сборки остался в slice, и увидеть его можно только отсюда, со следующего
 // старта. Как сирота отличается от scope живого соседнего инстанса — в ScopeOrphanSweeper.

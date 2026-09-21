@@ -65,6 +65,16 @@ cd frontend; npm run build     # production-сборка (tsc -b + vite)
 мёртв. Свежий worktree чата/задачи прогревается фоновой сборкой тестов
 (`Execution:WarmupBuild`).
 
+Пределы памяти заданы **per-scope**, а число одновременных scope ограничивает отдельный
+потолок `BuildConcurrencyGate` (`Execution:Isolation:MaxConcurrentBuilds`, дефолт 2, явный
+`0` — без ограничения): инцидент oomd 2026-09-21, `ccs-agents.slice` держал 18,1 GB в четырёх
+прогонах разом. Счётчик **единственный на процесс** — второй семафор где-то ещё делает потолок
+неправдой. Под него идут только spec с явной меткой `ProcessSpec.Heavy` (сегодня — прогрев);
+`git status`/`diff` проходят насквозь, очередь из них парализовала бы git-бар. Сборку, которую
+агент запускает ВНУТРИ хода своим Bash, потолок не видит — она потомок процесса claude CLI, а
+не отдельный запуск: ход слот не занимает и не ждёт его никогда, поэтому дедлок «ход ждёт слот
+прогрева» невозможен по конструкции.
+
 **Перед правками в `Services/Execution/`, `SandboxManager`, `UserHomeResolver` — прочитай
 [docs/architecture/sandbox.md](docs/architecture/sandbox.md)** (монтирования, interrupt, MCP из песочницы, overrides).
 

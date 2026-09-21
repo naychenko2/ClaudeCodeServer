@@ -3,6 +3,7 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Execution;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeHomeServer.Tests.Services;
@@ -51,14 +52,20 @@ public class WorktreeBuildWarmupTests : IDisposable
         }
     }
 
-    private (WorktreeBuildWarmup Warmup, RecordingLauncher Launcher, Factory Factory) Create(bool? enabled = null)
+    // Потолок тяжёлых запусков — СВОЙ на каждый тест (по умолчанию выключен): статический
+    // BuildConcurrencyGate.Instance общий на процесс, и занятый чужим тестом слот подвесил бы
+    // прогрев в фоне.
+    private (WorktreeBuildWarmup Warmup, RecordingLauncher Launcher, Factory Factory) Create(
+        bool? enabled = null, BuildConcurrencyGate? gate = null, ILogger? log = null)
     {
         var launcher = new RecordingLauncher();
         var factory = new Factory(launcher);
         var values = new Dictionary<string, string?>();
         if (enabled is { } e) values["Execution:WarmupBuild"] = e ? "true" : "false";
         var config = new ConfigurationBuilder().AddInMemoryCollection(values).Build();
-        return (new WorktreeBuildWarmup(factory, config, NullLogger.Instance), launcher, factory);
+        var warmup = new WorktreeBuildWarmup(
+            factory, config, log ?? NullLogger.Instance, gate ?? new BuildConcurrencyGate(0));
+        return (warmup, launcher, factory);
     }
 
     private string Tree(string name, bool withTests = true)
@@ -135,12 +142,97 @@ public class WorktreeBuildWarmupTests : IDisposable
     public void СбойРаннера_НеВыходитНаружу()
     {
         var factory = new ThrowingFactory();
-        var warmup = new WorktreeBuildWarmup(factory, new ConfigurationBuilder().Build(), NullLogger.Instance);
+        var gate = new BuildConcurrencyGate(1);
+        var warmup = new WorktreeBuildWarmup(
+            factory, new ConfigurationBuilder().Build(), NullLogger.Instance, gate);
 
         var act = () => warmup.TryStart("o", Tree("wt"));
 
         act.Should().NotThrow();
         warmup.TryStart("o", Tree("wt2")).Should().BeFalse();
+        gate.Available.Should().Be(1, "упавший старт возвращает слот, иначе потолок утекает");
+    }
+
+    [Fact]
+    public async Task СлотЗанят_ХодНеЖдёт_ПрогревСтартуетПоОсвобождении()
+    {
+        var gate = new BuildConcurrencyGate(1);
+        var (warmup, launcher, _) = Create(gate: gate);
+        var busy = gate.TryAcquire(WorktreeBuildWarmup.BuildSpec("/чужое/дерево"))!;
+        var tree = Tree("в-очереди");
+
+        // Заведение дерева идёт в ходе чата/задачи — оно обязано вернуться немедленно
+        warmup.TryStart("o", tree).Should().BeTrue("прогрев принят, хоть и ждёт слота");
+        launcher.Started.Should().BeEmpty("слот занят — сборка ещё не стартовала");
+
+        busy.Dispose();
+
+        (await WaitForStartAsync(launcher)).Should().BeTrue("освобождённый слот пустил прогрев");
+        launcher.Started.Should().ContainSingle().Which.WorkingDirectory.Should().Be(Path.GetFullPath(tree));
+        // Главный путь возврата слота — выход процесса, и он же самый дорогой при поломке:
+        // не отданный слот упавшей сборки опускает потолок навсегда, до рестарта. Поддельный
+        // процесс не запускается, наблюдатель падает на чтении потоков — это и есть ветка
+        // «прогрев кончился не по-хорошему», слот обязан вернуться и в ней
+        (await WaitForSlotFreeAsync(gate, 1)).Should().BeTrue("завершившийся прогрев вернул слот");
+    }
+
+    [Fact]
+    public async Task ПокаЖдалСлота_ДеревоНачалиСобирать_ПрогревОтменяется()
+    {
+        var gate = new BuildConcurrencyGate(1);
+        var log = new RecordingLogger();
+        var (warmup, launcher, _) = Create(gate: gate, log: log);
+        var busy = gate.TryAcquire(WorktreeBuildWarmup.BuildSpec("/чужое/дерево"))!;
+        var tree = Tree("перехваченное");
+
+        warmup.TryStart("o", tree).Should().BeTrue();
+        // Агент начал собирать это дерево сам, пока прогрев стоял в очереди
+        Directory.CreateDirectory(Path.Combine(tree, "backend", "ClaudeHomeServer.Tests", "obj"));
+        busy.Dispose();
+
+        // Ждём РЕШЕНИЯ фоновой задачи по её следу в логе: «слот освободился» наступает и без
+        // отмены (сорвавшийся прогрев вернёт слот сам), и на него проверку вешать нельзя
+        (await WaitForAsync(() => log.Contains("отменён"))).Should().BeTrue("прогрев отменён");
+        launcher.Started.Should().BeEmpty("прогрев дрался бы с идущей сборкой агента за obj/bin");
+        (await WaitForSlotFreeAsync(gate, 1)).Should().BeTrue("отменённый прогрев вернул слот");
+    }
+
+    // Фоновый старт ловим опросом: паузой фиксированной длины CI на голодном раннере флейчит
+    private static Task<bool> WaitForStartAsync(RecordingLauncher launcher) =>
+        WaitForAsync(() => { lock (launcher.Started) return launcher.Started.Count > 0; });
+
+    private static Task<bool> WaitForSlotFreeAsync(BuildConcurrencyGate gate, int expected) =>
+        WaitForAsync(() => gate.Available >= expected);
+
+    // Лог как наблюдаемая точка решения фоновой задачи
+    private sealed class RecordingLogger : ILogger
+    {
+        private readonly List<string> _lines = [];
+
+        public bool Contains(string fragment)
+        {
+            lock (_lines) return _lines.Any(l => l.Contains(fragment, StringComparison.Ordinal));
+        }
+
+        public void Log<TState>(LogLevel level, EventId id, TState state, Exception? ex,
+            Func<TState, Exception?, string> formatter)
+        {
+            lock (_lines) _lines.Add(formatter(state, ex));
+        }
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+    }
+
+    private static async Task<bool> WaitForAsync(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (condition()) return true;
+            await Task.Delay(15);
+        }
+        return condition();
     }
 
     private sealed class ThrowingFactory : ILauncherFactory

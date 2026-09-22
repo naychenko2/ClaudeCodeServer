@@ -56,6 +56,9 @@ PRUNE_MIN_TOKENS = int(os.environ.get("PRUNE_MIN_TOKENS", "20000"))
 # взято из замеров: чат на 133k живёт без автосжатия, и резать там нечего (скачок границы
 # пришлось бы оплатить впустую), а беда начиналась к 318k при окне модели 262k.
 PRUNE_MIN_CONTEXT_TOKENS = int(os.environ.get("PRUNE_MIN_CONTEXT_TOKENS", "150000"))
+# Разбор каждого запроса в журнал. ВЫКЛЮЧЕН по умолчанию: в лог попадает начало реплики,
+# то есть кусок чужого чата. Включать точечно, на время разбирательства.
+PRUNE_DEBUG = os.environ.get("PRUNE_DEBUG", "off")
 
 stats = {"requests": 0, "stripped": 0, "pruned_blocks": 0, "pruned_chars": 0}
 
@@ -287,6 +290,42 @@ def prune_tool_results(msgs, keep_tail_tokens=None, step_tokens=None, min_chars=
     return out, freed, len(victims)
 
 
+def _debug_dump(doc, msgs, body_len):
+    """Разбор запроса в журнал: зачем прунинг решил так, а не иначе.
+
+    Заведён под вопрос «почему запрос автосжатия проходит мимо прунинга» (замер 2026-09-22:
+    сжатие 253k→37k за 330 с, счётчик обрезки при этом не двинулся). По умолчанию ВЫКЛЮЧЕН:
+    сюда попадает начало реплики, то есть кусок чужого чата, и в журнале ему не место.
+    """
+    try:
+        выводы = [_prunable_size(b.get("content"))
+                  for m in msgs if isinstance(m, dict) and m.get("role") == "user"
+                  and isinstance(m.get("content"), list)
+                  for b in m["content"] if isinstance(b, dict) and b.get("type") == "tool_result"]
+        крупные = [s for s in выводы if s is not None and s >= PRUNE_MIN_CHARS]
+        системная = _system_chars(doc)
+        контекст = _context_chars(msgs, системная) // 4
+        _, freed, blocks = prune_tool_results(msgs, extra_chars=системная)
+        # хвост последнего сообщения: по нему и видно, ход это или запрос сжатия
+        хвост = ""
+        for m in reversed(msgs):
+            c = m.get("content") if isinstance(m, dict) else None
+            if isinstance(c, str):
+                хвост = c
+            elif isinstance(c, list):
+                хвост = " ".join(b.get("text") or "" for b in c
+                                 if isinstance(b, dict) and b.get("type") == "text")
+            if хвост.strip():
+                break
+        print(f"[отладка] тело {body_len // 1024} КБ | сообщений {len(msgs)} | "
+              f"выводов {len(выводы)} (крупных {len(крупные)} на {sum(крупные) // 4000}k ток) | "
+              f"системная часть {системная // 4000}k ток | контекст {контекст // 1000}k ток | "
+              f"прунинг: {blocks} блоков, {freed // 4000}k ток | "
+              f"хвост: {хвост.strip()[:160]!r}", file=sys.stderr, flush=True)
+    except Exception as e:  # отладка не смеет ломать проксирование
+        print(f"[отладка] не удалась: {e!r}", file=sys.stderr, flush=True)
+
+
 lock = threading.Lock()
 
 
@@ -353,6 +392,8 @@ class Handler(BaseHTTPRequestHandler):
                         if len(kept) != len(msgs):
                             doc["messages"] = kept
                             stripped = True
+                        if PRUNE_DEBUG == "on":
+                            _debug_dump(doc, kept, len(body))
                         if PRUNE_MODE == "on":
                             pruned_msgs, freed, blocks = prune_tool_results(
                                 kept, extra_chars=_system_chars(doc))

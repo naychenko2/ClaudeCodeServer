@@ -296,6 +296,24 @@ public class ProjectMapScannerTests : IDisposable
         report.ExpandedLines.Should().BeGreaterThan(20);
     }
 
+    // Приговор о бюджете — по раскрытому составу, а не по размеру самого файла. Карта
+    // владельца устроена ровно так: три десятка строк плюс восемь @rules/*.md, и при
+    // сравнении с порогом по main.Lines отчёт сказал бы «в порядке» самой запущенной
+    // карте — то есть соврал бы в том единственном сценарии, ради которого раскрытие
+    // и заведено
+    [Fact]
+    public void БюджетСтрок_СчитаетсяПоРаскрытомуСоставу_АНеПоРазмеруФайла()
+    {
+        Write("# Карта\n\n@rules/git.md\n", "CLAUDE.md");
+        Write(string.Join('\n', Enumerable.Repeat("правило", 250)), "rules", "git.md");
+
+        var report = _scanner.Scan(_root);
+
+        report.Lines.Should().BeLessThan(report.Budget.RecommendedLines);
+        report.ExpandedLines.Should().BeGreaterThan(report.Budget.RecommendedLines);
+        report.Budget.OverBudget.Should().BeTrue();
+    }
+
     [Fact]
     public void ИмпортовНет_РаскрытыйРазмерРавенИсходному()
     {

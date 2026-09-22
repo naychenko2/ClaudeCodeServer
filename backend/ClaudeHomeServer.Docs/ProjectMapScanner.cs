@@ -134,6 +134,13 @@ public record MapHygieneReport
     // находок остаются фактурой, действия живут здесь
     public IReadOnlyList<MapSuggestion> Suggestions { get; init; } = [];
 
+    // Чем сервер объясняет неполноту разбора моделью: «модель не ответила», «ответ не
+    // разобрался». Сам сканер его не заполняет никогда (он модель не зовёт) — поле живёт
+    // здесь, потому что review отдаёт ТОТ ЖЕ отчёт с вклеенными формулировками, а не
+    // отдельную тройку полей: одна форма ответа на все три ручки, и фронту нечему
+    // разъехаться с бэком. При успешном разборе — null
+    public string? ModelNote { get; init; }
+
     public MapFileRef? SecondMap { get; init; }
     public int NestedMapCount { get; init; }
     public IReadOnlyList<MapFileRef> NestedMaps { get; init; } = [];
@@ -407,6 +414,13 @@ public sealed class ProjectMapScanner(IConfiguration? config = null)
         var deadImportsShown = Cap(deadImports, _maxLinkFindingsInReport);
         var rootRelativeShown = Cap(rootRelative, _maxLinkFindingsInReport);
 
+        // Ничего не раскрылось — размер равен исходному. Считать по тексту раскрытия
+        // и в этом случае нельзя: оно нормализует концовку файла и добавило бы строку,
+        // из-за чего отчёт показывал бы expandedLines > lines у карты без импортов
+        var expandedLines = expansion.Text is null || expansion.ImportCount == 0
+            ? main.Lines
+            : CountLines(expansion.Text);
+
         return new MapHygieneReport
         {
             Path = MainMapName,
@@ -423,17 +437,16 @@ public sealed class ProjectMapScanner(IConfiguration? config = null)
             Bytes = main.Bytes,
             ApproxTokens = (int)(main.Bytes / 3),
 
-            // Ничего не раскрылось — размер равен исходному. Считать по тексту раскрытия
-            // и в этом случае нельзя: оно нормализует концовку файла и добавило бы строку,
-            // из-за чего отчёт показывал бы expandedLines > lines у карты без импортов
-            ExpandedLines = expansion.Text is null || expansion.ImportCount == 0
-                ? main.Lines
-                : CountLines(expansion.Text),
+            ExpandedLines = expandedLines,
             ImportCount = expansion.ImportCount,
             ExpansionTruncated = expansion.Truncated,
             ImportDepthExceeded = expansion.DepthExceeded,
 
-            Budget = new MapBudget(_totalLineBudget, main.Lines > _totalLineBudget),
+            // Приговор — по РАСКРЫТОМУ составу, а не по размеру самого файла: платится
+            // именно он. Карта на сорок строк, собранная из восьми @rules/*.md, съедает
+            // контекст как тысяча — и при сравнении с порогом по main.Lines отчёт врал бы
+            // «всё хорошо» ровно в том сценарии, ради которого раскрытие и заведено
+            Budget = new MapBudget(_totalLineBudget, expandedLines > _totalLineBudget),
 
             SectionCount = main.Sections.Count,
             LongSectionCount = longSections.Count,

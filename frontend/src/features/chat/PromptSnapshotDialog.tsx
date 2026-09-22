@@ -9,6 +9,7 @@ import { api } from '../../lib/api';
 import { useModelLabel } from '../../lib/models';
 import { C, FS, SP, R, FONT } from '../../lib/design';
 import { MapHygieneDialog } from '../projects/dialogs/MapHygieneDialog';
+import { useFeature, FLAGS } from '../../lib/featureFlags';
 import type { PromptSnapshot, PromptSection, CliSkill, MapHygieneReport } from '../../types';
 
 // Шторка «какой промпт ушёл»: посекционно то, что CCS собрал и передал claude CLI на этом
@@ -36,6 +37,26 @@ interface Props {
 // как «съедает контекст», и предлагаем прибраться. Меньше — карта ещё в рамках бюджета
 // Anthropic, и кнопка только мешала бы
 const TIDY_TRIGGER_BYTES = 50 * 1024;
+
+/**
+ * Видна ли кнопка «Прибраться» в строке файла слоя CLI. Отдельная функция, а не выражение
+ * в разметке: условие держит dark launch второго входа, а проверить его в рендере нечем —
+ * диалог грузит снимок эффектом. Флаг здесь ПЕРВЫМ и обязателен: без него при выключенной
+ * фиче кнопка была видна всем, вела в модалку, и «Разобрать моделью» отдавало 404 сырым
+ * текстом (тумблер обязан закрывать оба входа — и секцию настроек, и эту кнопку).
+ */
+export function showTidyButton(o: {
+  featureEnabled: boolean;
+  /** Сервер отдаёт корневому CLAUDE.md проекта ровно этот заголовок. */
+  fileTitle: string;
+  projectId?: string | null;
+  sizeBytes: number;
+}): boolean {
+  return o.featureEnabled
+    && o.fileTitle === 'CLAUDE.md проекта'
+    && !!o.projectId
+    && o.sizeBytes >= TIDY_TRIGGER_BYTES;
+}
 
 // Заголовок строки-раздела: серая подпись над блоком
 function SectionLabel({ children }: { children: React.ReactNode }) {
@@ -425,6 +446,10 @@ export function PromptSnapshotDialog({ sessionId, snapshotId, projectId, context
   const [tidyReport, setTidyReport] = useState<MapHygieneReport | null>(null);
   const [tidyLoading, setTidyLoading] = useState(false);
   const [tidyError, setTidyError] = useState<string | null>(null);
+  // Второй вход в уборку карты закрыт тем же флагом, что и секция в настройках проекта:
+  // review и apply под выключенным флагом отвечают 404, и кнопка вела бы в модалку,
+  // которая падает на первом же «Разобрать моделью» сырым текстом ошибки
+  const mapHygieneEnabled = useFeature(FLAGS.projectMapHygiene);
   // Блок разбора живёт в самом низу списка секций — после ответа подводим к нему сами
   const analysisRef = useRef<HTMLDivElement>(null);
   // Открыть снимок старта прогона вместо унаследованного (кнопка на плашке)
@@ -522,7 +547,7 @@ export function PromptSnapshotDialog({ sessionId, snapshotId, projectId, context
   const openTidy = () => {
     if (!projectId || tidyLoading) return;
     setTidyLoading(true);
-    api.projects.mapHygiene.scan(projectId)
+    return api.projects.mapHygiene.scan(projectId)
       .then(r => setTidyReport(r))
       .catch((e: unknown) => {
         const err = e as { body?: { error?: string }; message?: string };
@@ -564,9 +589,12 @@ export function PromptSnapshotDialog({ sessionId, snapshotId, projectId, context
       // это горячий момент для уборки: человек смотрит «кто съел контекст», видит
       // 98 КБ и ровно сейчас думает об уборке. Кнопка открывает модалку MapHygieneDialog
       // поверх шторки — без ухода со страницы чата
-      const isRootClaudeMd = f.title === 'CLAUDE.md проекта';
-      const sizeForTidy = f.size ?? f.text.length;
-      const showTidy = isRootClaudeMd && projectId && sizeForTidy >= TIDY_TRIGGER_BYTES;
+      const showTidy = showTidyButton({
+        featureEnabled: mapHygieneEnabled,
+        fileTitle: f.title,
+        projectId,
+        sizeBytes: f.size ?? f.text.length,
+      });
       return {
         key: f.key,
         size: sizeOf(f),
@@ -944,6 +972,11 @@ export function PromptSnapshotDialog({ sessionId, snapshotId, projectId, context
         модалки не двигают снимок — человек остаётся в контексте «что съело контекст» */}
     {tidyReport && projectId && (
       <MapHygieneDialog projectId={projectId} report={tidyReport}
+        // «Проверить заново» на плашке 409 — тот же скан, что открыл модалку: без него
+        // баннер исчезал, а отчёт оставался протухшим, и следующий apply снова ловил 409.
+        // onReport держит модалку в курсе review/apply — родитель здесь один и тот же state
+        onReloaded={openTidy}
+        onReport={setTidyReport}
         onClose={() => setTidyReport(null)} />
     )}
   </>

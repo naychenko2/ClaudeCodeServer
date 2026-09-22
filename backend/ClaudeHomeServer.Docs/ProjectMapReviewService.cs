@@ -6,15 +6,6 @@ using ClaudeHomeServer.Services.Llm;
 namespace ClaudeHomeServer.Services.Docs;
 
 /// <summary>
-/// Итог фазы 2: те же факты сканера, но с суждением модели у части из них.
-/// ModelNote пишет СЕРВЕР и только при неполноте — «модель не настроена», «ответ не
-/// разобрался», «не уложилась во время»: основной сценарий отказа тот, где ответа модели
-/// нет вовсе, и достать оттуда текст невозможно. При успехе — null.
-/// </summary>
-public sealed record MapReviewResult(
-    string? BaseSha, string? ModelNote, IReadOnlyList<MapSuggestion> Suggestions);
-
-/// <summary>
 /// Формулировки модели поверх готовых фактов сканера (фаза 2 уборки карты).
 ///
 /// Инвариант всей фичи: в предложение попадает только то, что посчитал детерминированный
@@ -50,15 +41,22 @@ public sealed class ProjectMapReviewService(
     internal const string NoteNoModel = "Модель не ответила — показываю факты сканера без формулировок.";
     internal const string NoteBadJson = "Ответ модели не удалось разобрать — показываю факты сканера без формулировок.";
 
+    /// <summary>
+    /// Отдаёт ТОТ ЖЕ отчёт, что пришёл от сканера, с вклеенными формулировками и
+    /// серверным <c>ModelNote</c>, а не отдельную тройку полей. Форма ответа одна на все
+    /// три ручки фичи (scan, review, apply): фронт кладёт ответ в то же состояние, что и
+    /// скан, и шапке отчёта нечему разъехаться с его содержимым. Тройка полей стоила нам
+    /// упавшего в рендере диалога при зелёных тестах и зелёном tsc.
+    /// </summary>
     /// <param name="report">Свежий отчёт сканера: источник всех фактов и id.</param>
     /// <param name="ownerId">Владелец проекта — по нему резолвится слот модели места.</param>
-    public async Task<MapReviewResult> ReviewAsync(
+    public async Task<MapHygieneReport> ReviewAsync(
         MapHygieneReport report, string? ownerId, CancellationToken ct = default)
     {
         var facts = report.Suggestions;
         // Находок нет — обращаться к модели не за чем: «карта в порядке» это готовый
         // ответ, а не повод потратить ход
-        if (facts.Count == 0) return new MapReviewResult(report.BaseSha, null, facts);
+        if (facts.Count == 0) return report;
 
         var turn = Stopwatch.StartNew();
         string raw;
@@ -72,7 +70,7 @@ public sealed class ProjectMapReviewService(
             turn.Stop();
             log.LogWarning(ex, "Уборка карты: модель не ответила ({Ms} мс), отдаю факты сканера",
                 (long)turn.Elapsed.TotalMilliseconds);
-            return new MapReviewResult(report.BaseSha, NoteNoModel, facts);
+            return report with { ModelNote = NoteNoModel };
         }
         turn.Stop();
 
@@ -81,13 +79,13 @@ public sealed class ProjectMapReviewService(
         {
             log.LogWarning("Уборка карты: ответ модели не разобрался как JSON ({Ms} мс), отдаю факты сканера",
                 (long)turn.Elapsed.TotalMilliseconds);
-            return new MapReviewResult(report.BaseSha, NoteBadJson, facts);
+            return report with { ModelNote = NoteBadJson };
         }
 
         var merged = Merge(facts, judgments, _maxSuggestions);
-        log.LogWarning("Уборка карты: {Facts} фактов, {Judged} с формулировкой ({Ms} мс)",
+        log.LogInformation("Уборка карты: {Facts} фактов, {Judged} с формулировкой ({Ms} мс)",
             facts.Count, merged.Count(s => s.ModelSays is not null), (long)turn.Elapsed.TotalMilliseconds);
-        return new MapReviewResult(report.BaseSha, null, merged);
+        return report with { Suggestions = merged };
     }
 
     // Суждение модели в разобранном виде — ровно то, что ей позволено сказать

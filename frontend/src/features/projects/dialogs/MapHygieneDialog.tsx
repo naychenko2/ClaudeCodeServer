@@ -146,8 +146,9 @@ export function MapHygieneDialog({ projectId, report, onClose, onReloaded, onRep
       // Отчёт из apply приходит свежим — шапка и группы перерисовываются без второго
       // запроса (Р10.4). Сбрасываем выделение: id уже применённых ушли в прошлое, а
       // выделение привязано к id, не к содержимому
-      setCurrent(r.scan);
-      onReport?.(r.scan);
+      const next = keepModelSays(current, r.scan);
+      setCurrent(next);
+      onReport?.(next);
       setSelected(new Set());
     } catch (e) {
       if (isStale(e)) setBanner({ kind: 'stale', msg: 'файл изменился' });
@@ -249,6 +250,30 @@ export function MapHygieneDialog({ projectId, report, onClose, onReloaded, onRep
   );
 }
 
+// Перенос формулировок модели в свежий отчёт сканера. Скан модель не зовёт, и в его
+// предложениях modelSays всегда null — без переноса человек, применивший одну ссылку,
+// терял бы все фразы, ради которых ждал ход модели. Переносим ПАРУ modelSays+severity:
+// severity у суждения тоже от модели, и фраза с дефолтным цветом плашки — рассинхрон.
+// Сопоставление по id: он считается от содержимого якоря, и предложение, пережившее
+// правку, сохраняет свой id — а исчезнувшее просто не найдётся.
+// modelNote не переносим: он объясняет неполноту ПОСЛЕДНЕГО разбора, а его тут не было
+function keepModelSays(prev: MapHygieneReport, next: MapHygieneReport): MapHygieneReport {
+  const said = new Map(prev.suggestions
+    .filter(s => s.modelSays !== null)
+    .map(s => [s.id, s] as const));
+  if (said.size === 0) return next;
+  return {
+    ...next,
+    suggestions: next.suggestions.map(s => {
+      const old = said.get(s.id);
+      // Свежая формулировка (её тут быть не может, но правило однозначное) важнее старой
+      return !old || s.modelSays !== null
+        ? s
+        : { ...s, modelSays: old.modelSays, severity: old.severity };
+    }),
+  };
+}
+
 function Group({ title, count, empty, rightSlot, children }: {
   title: string;
   count: number;
@@ -290,6 +315,14 @@ function HeaderBadges({ report }: { report: MapHygieneReport }) {
       <Badge tone="danger">
         {report.deadLinkCount} {pluralRu(report.deadLinkCount, 'мёртвая ссылка', 'мёртвые ссылки', 'мёртвых ссылок')}
       </Badge>
+      {/* Раскрытый размер — рядом с приговором о бюджете, и только когда импорты есть:
+          у карты из восьми @rules/*.md «40 строк» в шапке и «ориентир превышен» ниже
+          выглядели бы противоречием, хотя платится именно раскрытый состав */}
+      {report.importCount > 0 && (
+        <Badge tone={over ? 'warning' : 'neutral'}>
+          С импортами: {report.expandedLines.toLocaleString('ru')} строк
+        </Badge>
+      )}
       <Badge tone="neutral">
         Ориентир: до {report.budget.recommendedLines} строк{over ? ' · превышен' : ''}
       </Badge>

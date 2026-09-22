@@ -674,6 +674,11 @@ export const api = {
     mapHygiene: {
       scan: (id: string) =>
         request<MapHygieneReport>(`/projects/${encodeURIComponent(id)}/map-hygiene/scan`),
+      // Отдаёт ПОЛНЫЙ отчёт той же формы, что scan (и что поле scan в ответе apply) —
+      // с вклеенными suggestions[].modelSays и серверным modelNote. Generic здесь
+      // объявлен руками, tsc ему верит на слово: расхождение с бэком не ловится ничем,
+      // кроме живого запуска, — сторож на стороне сервера (ProjectMapControllerTests,
+      // «Ревью_ОтдаётПолныйОтчёт_ТойЖеФормыЧтоСкан»)
       review: (id: string, baseSha: string) =>
         request<MapHygieneReport>(`/projects/${encodeURIComponent(id)}/map-hygiene/review`, {
           method: 'POST', body: JSON.stringify({ baseSha }), timeoutMs: 180_000,

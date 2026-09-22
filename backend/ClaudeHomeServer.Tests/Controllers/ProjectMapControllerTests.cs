@@ -230,6 +230,36 @@ public class ProjectMapControllerTests : IClassFixture<TestWebApplicationFactory
         suggestions[0].GetProperty("fact").GetString().Should().Contain("FeatureFlag.cs");
     }
 
+    // Сторож шва с фронтом: review отвечает ПОЛНЫМ отчётом, той же формой, что scan.
+    // Раньше он отдавал тройку { baseSha, modelNote, suggestions }, фронт клал её в то же
+    // состояние, что и скан, и первый же живой вызов падал в рендере на report.lines —
+    // при зелёных тестах обеих сторон и зелёном tsc. Проверяем ИМЕНА полей в JSON:
+    // разъезжается контракт именно здесь, а не в типах C#
+    [Fact]
+    public async Task Ревью_ОтдаётПолныйОтчёт_ТойЖеФормыЧтоСкан()
+    {
+        var id = await SetupProjectAsync();
+        var scan = await ScanAsync(id);
+        await SetFeatureAsync(_client, true);
+
+        var response = await _client.PostAsJsonAsync($"/api/projects/{id}/map-hygiene/review",
+            new { baseSha = scan.GetProperty("baseSha").GetString() });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        // Каждое поле скана есть и в ответе review — иначе шапка отчёта осталась бы
+        // без чисел, а родительская сводка получила бы битый объект
+        foreach (var field in scan.EnumerateObject())
+            body.TryGetProperty(field.Name, out _).Should().BeTrue($"поле «{field.Name}» из скана обязано доехать");
+        body.GetProperty("path").GetString().Should().Be(scan.GetProperty("path").GetString());
+        body.GetProperty("lines").GetInt32().Should().Be(scan.GetProperty("lines").GetInt32());
+        body.GetProperty("bytes").GetInt64().Should().Be(scan.GetProperty("bytes").GetInt64());
+        body.GetProperty("approxTokens").GetInt32().Should().Be(scan.GetProperty("approxTokens").GetInt32());
+        body.GetProperty("budget").GetProperty("recommendedLines").GetInt32()
+            .Should().Be(scan.GetProperty("budget").GetProperty("recommendedLines").GetInt32());
+        body.GetProperty("baseSha").GetString().Should().Be(scan.GetProperty("baseSha").GetString());
+    }
+
     // Ход модели идёт до минут, и за это время карту в общем дереве могут дописать:
     // суждения приехали бы по новому составу поверх старых фактов на экране — с другими
     // id, то есть с чекбоксами, тихо переставшими совпадать с находками

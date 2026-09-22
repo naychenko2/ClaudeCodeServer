@@ -32,7 +32,8 @@ def _в_токенах(символов, вверх=False):
 BIG = "x" * 6000  # один «крупный» вывод
 P = dict(keep_tail_tokens=_в_токенах(20 * len(BIG)),
          step_tokens=_в_токенах(10 * len(BIG), вверх=True),
-         min_chars=2000, min_tokens=_в_токенах(80000), min_context_tokens=0)
+         min_chars=2000, min_tokens=_в_токенах(80000), min_context_tokens=0,
+         first_step_tokens=0)  # первая ступень = обычной: у неё свои тесты ниже
 
 
 def tool_use(i):
@@ -289,6 +290,58 @@ class PruneTests(unittest.TestCase):
         proxy.prune_tool_results(history(120), **dict(P, step_tokens=0))
 
 
+# Первая ступень 5 выводов при обычной 10; порог выгоды снят — он не предмет этих тестов.
+P1 = dict(P, first_step_tokens=_в_токенах(5 * len(BIG), вверх=True), min_tokens=0)
+
+
+class ПерваяСтупеньTests(unittest.TestCase):
+    """Первая граница встаёт раньше полной ступени, дальше квант обычный.
+
+    Зачем: при пороге первого срабатывания = ступени (121k) прунинг включался на 185–215k, а
+    автосжатие CLI — на 232k; один большой Read перепрыгивал окно (живой замер меры 4).
+    """
+
+    def test_первая_ступень_срабатывает_раньше_полной(self):
+        _, _, blocks = proxy.prune_tool_results(history(25), **P1)  # вне хвоста 5 выводов
+        self.assertEqual(blocks, 5)
+        _, _, blocks = proxy.prune_tool_results(history(24), **P1)  # 4 — первой ступени нет
+        self.assertEqual(blocks, 0)
+
+    def test_между_первой_и_полной_граница_стоит(self):
+        """Главное свойство сохраняется: пока полная ступень не набралась, префикс тот же."""
+        base, _, _ = proxy.prune_tool_results(history(25), **P1)
+        for extra in range(1, 5):
+            longer, _, blocks = proxy.prune_tool_results(history(25 + extra), **P1)
+            self.assertEqual(blocks, 5, f"граница поехала после {extra} дописанных вызовов")
+            self.assertEqual(longer[:len(base)], base)
+
+    def test_после_полной_ступени_квант_обычный(self):
+        _, _, blocks = proxy.prune_tool_results(history(30), **P1)   # 10 вне хвоста
+        self.assertEqual(blocks, 10)
+        _, _, blocks = proxy.prune_tool_results(history(39), **P1)   # 19 — вторая полная ещё нет
+        self.assertEqual(blocks, 10)
+        _, _, blocks = proxy.prune_tool_results(history(40), **P1)   # 20 — две полных
+        self.assertEqual(blocks, 20)
+
+    def test_первая_ступень_не_больше_обычной(self):
+        """Значение выше ступени обрезается до неё — иначе первая граница не наступала бы никогда."""
+        P2 = dict(P1, first_step_tokens=P["step_tokens"] * 3)
+        _, _, blocks = proxy.prune_tool_results(history(25), **P2)
+        self.assertEqual(blocks, 0)
+        _, _, blocks = proxy.prune_tool_results(history(30), **P2)
+        self.assertEqual(blocks, 10)
+
+    def test_ноль_выключает_первую_ступень(self):
+        _, _, blocks = proxy.prune_tool_results(history(29), **dict(P1, first_step_tokens=0))
+        self.assertEqual(blocks, 0)
+
+    def test_идемпотентность_на_первой_ступени(self):
+        once, _, _ = proxy.prune_tool_results(history(27), **P1)
+        twice, freed, blocks = proxy.prune_tool_results(once, **P1)
+        self.assertEqual(twice, once)
+        self.assertEqual((freed, blocks), (0, 0))
+
+
 # Реальные тела запросов локальной модели, снятые 2026-09-22 (протокол — в README):
 # символы частей и ФАКТ по токенизатору стенда `POST /tokenize`. Числа зашиты намеренно —
 # это и есть предмет проверки: вернёшь единый делитель 4, и набор покраснеет.
@@ -371,6 +424,11 @@ class МеркаTests(unittest.TestCase):
         self.assertAlmostEqual(хвост, 160_000, delta=160_000 * 0.02)
         self.assertAlmostEqual(ступень, 400_000, delta=400_000 * 0.02)
         self.assertAlmostEqual(выгода, 80_000, delta=80_000 * 0.02)
+        # первая ступень: половина обычной, чтобы первая граница вставала на пороге «чат уже
+        # большой» (150k), а не на 185–215k, и всегда выше порога выгоды — иначе он гасил бы её
+        первая = proxy.PRUNE_FIRST_STEP_TOKENS * proxy.CHARS_PER_TOKEN_HISTORY
+        self.assertAlmostEqual(первая, 200_000, delta=200_000 * 0.02)
+        self.assertGreater(proxy.PRUNE_FIRST_STEP_TOKENS, proxy.PRUNE_MIN_TOKENS)
 
 
 class КомпактРаспознаваниеTests(unittest.TestCase):

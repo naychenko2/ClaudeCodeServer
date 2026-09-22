@@ -102,6 +102,16 @@ PRUNE_KEEP_TAIL_TOKENS = int(os.environ.get("PRUNE_KEEP_TAIL_TOKENS", "48000"))
 # 121000, а не прежние 100000, по той же причине, что и хвост: 121000 * 3.3 = 399.3k символов
 # против прежних 400k (−0.2 %), то есть снятая живьём геометрия ступени сохранена.
 PRUNE_STEP_TOKENS = int(os.environ.get("PRUNE_STEP_TOKENS", "121000"))
+# Первая ступень — меньше обычной. Пока порог первого срабатывания равнялся ступени (121k),
+# прунинг включался лишь при контексте ~185–215k (системная часть + хвост 48k + 121k
+# обрезаемого), а автосжатие CLI с незаданной ручкой наступает на 232k: запас 17–45k, один
+# Read большого файла (25k+) его перепрыгивает. Живой замер меры 4 (2026-09-23) так и кончился:
+# к сжатию на 189k вне хвоста лежало 5 блоков на 82k — до ступени не хватило. С первой
+# ступенью 60k граница впервые встаёт уже при ~60k обрезаемого (контекст ~130–150k, а с
+# порогом «чат уже большой» — на 175k), дальше квант прежний: 121k, 242k… Цена — один
+# лишний сдвиг границы за чат (~80 с), выгода — прунинг гарантированно опережает сжатие.
+# 0 — выключить: первая ступень равна обычной. Значение выше ступени обрезается до неё.
+PRUNE_FIRST_STEP_TOKENS = int(os.environ.get("PRUNE_FIRST_STEP_TOKENS", "60000"))
 PRUNE_MIN_CHARS = int(os.environ.get("PRUNE_MIN_CHARS", "2000"))
 # Порог выгоды, тоже пересчитан к новому коэффициенту: 24000 * 3.3 = 79.2k символов против
 # прежних 20000 * 4 = 80k. Смысл прежний — ради мелочи префикс не рвём.
@@ -112,12 +122,16 @@ PRUNE_MIN_TOKENS = int(os.environ.get("PRUNE_MIN_TOKENS", "24000"))
 # замеров: чат на 133k живёт без автосжатия, и резать там нечего (скачок границы пришлось бы
 # оплатить впустую), а беда начиналась к 318k при окне модели 262k.
 #
-# 175000 вместо прежних 150000 — это то же самое место срабатывания, пересчитанное к честной
-# мерке, а не более поздний порог. Прежние 150k мерились делителем 4, то есть наступали при
-# 600k символов; новая оценка на тех же 600k даёт 173k токенов при боевом теле с MCP
-# (история 54 % / системная часть 46 %) и 178k при теле без MCP. Взята середина: точка
-# срабатывания в символах уезжает меньше чем на 2 % в любом из двух раскладов.
-PRUNE_MIN_CONTEXT_TOKENS = int(os.environ.get("PRUNE_MIN_CONTEXT_TOKENS", "175000"))
+# История порога: 150k при делителе 4 → 175k при честной мерке (то же место в символах,
+# 600k) → снова 150k, но уже по честной мерке, то есть РАНЬШЕ. Причина — живой замер меры 4
+# (2026-09-23): порог сравнивается с оценкой, где системная часть огрублена вниз до сотен
+# тысяч символов (см. ниже), и у прогона без MCP она обнулилась — прокси видел 167k, когда CLI
+# по usage видел 176k, и автосжатие (порог CLI 232k по умолчанию) пришло раньше прунинга.
+# Недосчёт из-за огрубления — до 27k токенов при боевом теле с MCP, и запас 232k − 175k не
+# покрывал его вместе с одним большим Read. 150k даёт запас 80k; чат на 133k, где резать
+# нечего, по-прежнему ниже порога. Первая ступень 60k (PRUNE_FIRST_STEP_TOKENS) к этому
+# моменту обычно уже набрана — хвост 48k плюс 60k обрезаемого укладываются в 150k.
+PRUNE_MIN_CONTEXT_TOKENS = int(os.environ.get("PRUNE_MIN_CONTEXT_TOKENS", "150000"))
 # Резать ли тела Write/Edit в аргументах вызовов — до 36 % контекста на задачах правки кода.
 # Отдельный флаг, потому что 22.09 его выключали по ложной тревоге: в живом прогоне модель
 # записала файл строкой «[Old tool input content cleared]», и это приняли за подражание
@@ -353,12 +367,15 @@ def _prune_input(inp, min_chars):
 
 def prune_tool_results(msgs, keep_tail_tokens=None, step_tokens=None, min_chars=None,
                        min_tokens=None, min_context_tokens=None, extra_chars=0,
-                       prune_thinking=None, prune_inputs=None):
+                       prune_thinking=None, prune_inputs=None, first_step_tokens=None):
     """Возвращает (сообщения, сколько символов освободили, сколько блоков обрезали). Вход не мутирует."""
     prune_thinking = (PRUNE_THINKING == "on") if prune_thinking is None else prune_thinking
     prune_inputs = (PRUNE_INPUTS == "on") if prune_inputs is None else prune_inputs
     keep_tail_tokens = PRUNE_KEEP_TAIL_TOKENS if keep_tail_tokens is None else keep_tail_tokens
     step_tokens = max(1, PRUNE_STEP_TOKENS if step_tokens is None else step_tokens)
+    first_step_tokens = PRUNE_FIRST_STEP_TOKENS if first_step_tokens is None else first_step_tokens
+    # первая ступень не больше обычной; 0 (и любое неположительное) = первая ступень обычная
+    first_step_tokens = step_tokens if first_step_tokens <= 0 else min(first_step_tokens, step_tokens)
     min_chars = PRUNE_MIN_CHARS if min_chars is None else min_chars
     min_tokens = PRUNE_MIN_TOKENS if min_tokens is None else min_tokens
     min_context_tokens = PRUNE_MIN_CONTEXT_TOKENS if min_context_tokens is None else min_context_tokens
@@ -414,6 +431,7 @@ def prune_tool_results(msgs, keep_tail_tokens=None, step_tokens=None, min_chars=
     # Разворачиваем ручки в символы коэффициентом ИСТОРИИ: режем мы её, а не системную часть.
     keep_chars = int(keep_tail_tokens * CHARS_PER_TOKEN_HISTORY)
     step_chars = max(1, int(step_tokens * CHARS_PER_TOKEN_HISTORY))  # ноль отсечён выше
+    first_chars = max(1, int(first_step_tokens * CHARS_PER_TOKEN_HISTORY))
 
     tail, protect_idx = 0, len(found)  # защищаем хвост по объёму: свежее модель ещё читает
     while protect_idx > 0 and tail < keep_chars:
@@ -428,7 +446,12 @@ def prune_tool_results(msgs, keep_tail_tokens=None, step_tokens=None, min_chars=
         return size is not None and size >= min_chars
 
     prunable = sum(size for _, _, size, _ in found[:protect_idx] if весомый(size))
-    target = prunable // step_chars * step_chars  # квантование вниз: редкие скачки
+    # Квантование вниз: редкие скачки. Ряд целей — первая ступень, затем кратные обычной
+    # (60k, 121k, 242k…): до полной ступени граница стоит на первой, дальше — как прежде.
+    if prunable < step_chars:
+        target = first_chars if prunable >= first_chars else 0
+    else:
+        target = prunable // step_chars * step_chars
     if target <= 0:
         return msgs, 0, 0
 
@@ -829,7 +852,8 @@ if __name__ == "__main__":
           + (f" (бюджет {THINKING_BUDGET})" if THINKING_MODE == "budget" else "")
           + f", вырезаю {STRIP_KEYS}, напоминания total_tokens и повторные # Environment"
           + (f", прунинг выводов вкл (хвост {PRUNE_KEEP_TAIL_TOKENS // 1000}k ток, ступень "
-             f"{PRUNE_STEP_TOKENS // 1000}k ток, порог контекста {PRUNE_MIN_CONTEXT_TOKENS // 1000}k)"
+             f"{PRUNE_STEP_TOKENS // 1000}k ток, первая {PRUNE_FIRST_STEP_TOKENS // 1000}k, "
+             f"порог контекста {PRUNE_MIN_CONTEXT_TOKENS // 1000}k)"
              if PRUNE_MODE == "on" else ", прунинг выводов выкл")
           + (f", автосжатие -> {COMPACT_MODEL} на {COMPACT_UPSTREAM} (порог "
              f"{COMPACT_MIN_CONTEXT_TOKENS // 1000}k ток)" if COMPACT_UPSTREAM

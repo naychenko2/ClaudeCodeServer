@@ -12,7 +12,7 @@
 # output_config срабатывает серверный дефолт, и ответ идёт сразу текстом.
 #
 # Всё остальное проксируется как есть, ответ — потоком (SSE). Невалидный JSON — fail-open.
-import http.client, json, os, re, sys, threading
+import http.client, json, os, re, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
@@ -185,8 +185,30 @@ COMPACT_SIGNATURE = os.environ.get(
 COMPACT_MIN_CONTEXT_TOKENS = int(os.environ.get("COMPACT_MIN_CONTEXT_TOKENS",
                                                 str(PRUNE_MIN_CONTEXT_TOKENS)))
 
+# --- Карточка в ленте чата: событие о сдвиге границы -----------------------------------------
+#
+# Сдвиг границы стоит полного пересчёта префикса (замеры 2026-09-22: 158k и 98k токенов мимо
+# кэша, 80–90 с). Для человека это неотличимо от зависшего чата, поэтому о нём рассказывает
+# карточка в ленте — как о штатном автосжатии CLI. Событие уходит ТОЛЬКО на сдвиге: между
+# сдвигами обрезка бесплатна (префикс тот же), и карточка на каждом ходу была бы шумом.
+#
+# Пусто = выключено: прокси остаётся прежним, пока адрес не задан в юните. Дефолт именно
+# такой, потому что служба запускается из рабочего дерева репозитория — код на ветке
+# разработки не должен менять поведение живого стенда до отмашки.
+BACKEND_EVENTS_URL = os.environ.get("BACKEND_EVENTS_URL", "")
+# Секрет ручки: тот же конфиг бэкенда, что и ключ облака, — вторую копию секрета в юните не
+# заводим по той же причине (разойдётся с первой).
+EVENT_SECRET_FILE = os.environ.get("EVENT_SECRET_FILE", COMPACT_KEY_FILE)
+EVENT_SECRET_PATH = os.environ.get("EVENT_SECRET_PATH", "LlmProxy.EventSecret")
+# Короткий таймаут: событие декоративное, ждать его дольше, чем идёт ответ модели, незачем.
+EVENT_TIMEOUT = float(os.environ.get("EVENT_TIMEOUT", "5"))
+# Заголовок с id сессии бэкенд доставляет через ANTHROPIC_CUSTOM_HEADERS процесса CLI —
+# проверено на стенде 2026-09-23: CLI дописывает его к каждому запросу к API.
+EVENT_SESSION_HEADER = os.environ.get("EVENT_SESSION_HEADER", "X-CCS-Session")
+
 stats = {"requests": 0, "stripped": 0, "pruned_blocks": 0, "pruned_chars": 0,
-         "compact_routed": 0, "compact_fallback": 0, "compact_signature_small": 0}
+         "compact_routed": 0, "compact_fallback": 0, "compact_signature_small": 0,
+         "events_sent": 0, "events_failed": 0}
 
 # CLI вставляет в историю system-сообщение "<total_tokens>N tokens left</total_tokens>" на
 # каждом шаге, и N каждый раз новое. Шаблон Qwen требует system только первым, поэтому
@@ -367,8 +389,15 @@ def _prune_input(inp, min_chars):
 
 def prune_tool_results(msgs, keep_tail_tokens=None, step_tokens=None, min_chars=None,
                        min_tokens=None, min_context_tokens=None, extra_chars=0,
-                       prune_thinking=None, prune_inputs=None, first_step_tokens=None):
-    """Возвращает (сообщения, сколько символов освободили, сколько блоков обрезали). Вход не мутирует."""
+                       prune_thinking=None, prune_inputs=None, first_step_tokens=None,
+                       kinds_out=None):
+    """Возвращает (сообщения, сколько символов освободили, сколько блоков обрезали). Вход не мутирует.
+
+    `kinds_out` — необязательный словарь, в который кладётся разбивка обрезанных блоков по
+    видам (`result`/`input`/`thinking`) для карточки в чате. Отдельным выходным параметром, а
+    не четвёртым элементом кортежа: разбивка нужна ровно одному вызывающему из трёх, а смена
+    формы возврата задела бы каждый вызов и каждый тест границы.
+    """
     prune_thinking = (PRUNE_THINKING == "on") if prune_thinking is None else prune_thinking
     prune_inputs = (PRUNE_INPUTS == "on") if prune_inputs is None else prune_inputs
     keep_tail_tokens = PRUNE_KEEP_TAIL_TOKENS if keep_tail_tokens is None else keep_tail_tokens
@@ -477,6 +506,10 @@ def prune_tool_results(msgs, keep_tail_tokens=None, step_tokens=None, min_chars=
     if estimate_tokens(freed) < min_tokens:
         return msgs, 0, 0
 
+    if kinds_out is not None:
+        for _, _, kind in victims:
+            kinds_out[kind] = kinds_out.get(kind, 0) + 1
+
     by_msg = {}
     for mi, bi, kind in victims:
         by_msg.setdefault(mi, {})[bi] = kind
@@ -565,6 +598,19 @@ def compact_body(doc):
     return json.dumps(dict(doc, model=COMPACT_MODEL), ensure_ascii=False).encode("utf-8")
 
 
+def _secret_from_config(файл, путь, зачем):
+    """Строка из json-конфига бэкенда по пути вида `A.B.C`; "" — не прочитали (с журналом)."""
+    try:
+        with open(файл, encoding="utf-8") as f:
+            узел = json.load(f)
+        for часть in путь.split("."):
+            узел = узел[часть]
+        return узел if isinstance(узел, str) else ""
+    except Exception as e:
+        print(f"{зачем} не прочитан ({файл}): {e!r}", file=sys.stderr, flush=True)
+        return ""
+
+
 _compact_key = None  # None — ещё не читали; "" — читать нечего, маршрут выключится сам
 
 
@@ -577,16 +623,8 @@ def compact_api_key():
     """
     global _compact_key
     if _compact_key is None:
-        try:
-            with open(COMPACT_KEY_FILE, encoding="utf-8") as f:
-                узел = json.load(f)
-            for часть in COMPACT_KEY_PATH.split("."):
-                узел = узел[часть]
-            _compact_key = узел if isinstance(узел, str) else ""
-        except Exception as e:
-            print(f"ключ для автосжатия не прочитан ({COMPACT_KEY_FILE}): {e!r}",
-                  file=sys.stderr, flush=True)
-            _compact_key = ""
+        _compact_key = _secret_from_config(COMPACT_KEY_FILE, COMPACT_KEY_PATH,
+                                           "ключ для автосжатия")
     return _compact_key
 
 
@@ -629,6 +667,129 @@ def open_compact(body, path, connector=None):
         if conn is not None:
             conn.close()
         return None
+
+
+# --- Событие о сдвиге границы: карточка в ленте чата -----------------------------------------
+
+_event_secret = None  # None — ещё не читали; "" — читать нечего, канал выключится сам
+
+
+def event_secret():
+    """Секрет ручки бэкенда из его же конфига. Кэш на процесс — по тем же мотивам, что у ключа.
+
+    Не-ASCII секрет отбрасываем ЗДЕСЬ, а не на отправке: http-заголовки кодируются latin-1, и
+    UnicodeEncodeError несёт в тексте саму строку — fail-open записал бы секрет в журнал.
+    """
+    global _event_secret
+    if _event_secret is None:
+        секрет = _secret_from_config(EVENT_SECRET_FILE, EVENT_SECRET_PATH, "секрет ручки событий")
+        if not секрет.isascii():
+            print("секрет ручки событий содержит не-ASCII символы — канал выключен "
+                  "(заголовок с ним не отправить); задай секрет латиницей",
+                  file=sys.stderr, flush=True)
+            секрет = ""
+        _event_secret = секрет
+    return _event_secret
+
+
+# Последняя граница прунинга по сессиям: сколько блоков было обрезано в прошлый раз. Только в
+# памяти процесса — переживать перезапуск этому состоянию не нужно (в худшем случае человек
+# увидит одну лишнюю карточку), а файл на диске стоил бы синхронизации.
+_boundaries = {}
+_boundaries_lock = threading.Lock()
+
+
+def boundary_shifted(session_id, blocks):
+    """Запоминает границу сессии и отвечает, сдвинулась ли она. Первое срабатывание — сдвиг.
+
+    Сравниваем число обрезанных блоков: граница квантована ступенью и между сдвигами стоит на
+    месте бит в бит, поэтому одно и то же число блоков = та же граница = обрезка бесплатна, и
+    карточке в ленте взяться неоткуда.
+    """
+    if not session_id or blocks <= 0:
+        return False
+    with _boundaries_lock:
+        прежняя = _boundaries.get(session_id)
+        if прежняя == blocks:
+            return False
+        _boundaries[session_id] = blocks
+        return True
+
+
+def usage_from_chunk(chunk):
+    """`(cache_read_input_tokens, весь промпт)` из `message_start` первого куска SSE.
+
+    `(None, None)` — если в куске его нет (частичное событие, чужой формат). Промпт — СУММА
+    трёх слагаемых usage: `input_tokens` считает только то, что прошло мимо кэша, и доля
+    `cache_read / input_tokens` вышла бы больше единицы.
+    """
+    try:
+        for строка in chunk.split(b"\n"):
+            if not строка.startswith(b"data:"):
+                continue
+            событие = json.loads(строка[5:].strip())
+            if событие.get("type") != "message_start":
+                continue
+            usage = (событие.get("message") or {}).get("usage") or {}
+            чтение = usage.get("cache_read_input_tokens")
+            промпт = sum(usage.get(k) or 0 for k in
+                         ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
+            return (чтение if isinstance(чтение, int) else None), (промпт or None)
+    except Exception:
+        pass  # чужой формат ответа карточку не ломает: уйдёт без цифр кэша
+    return None, None
+
+
+def post_event(payload, connector=None):
+    """Шлёт событие бэкенду. Fail-open: любой отказ — строка в журнал, ход продолжается.
+
+    Канал декоративный: недоступный бэкенд не смеет ни задержать поток пользователю, ни тем
+    более оборвать ход. Поэтому короткий таймаут, ловим всё и ничего не пробрасываем.
+    """
+    if not BACKEND_EVENTS_URL:
+        return False
+    секрет = event_secret()
+    if not секрет:
+        return False
+    conn = None
+    try:
+        адрес = urlsplit(BACKEND_EVENTS_URL if "//" in BACKEND_EVENTS_URL
+                         else "http://" + BACKEND_EVENTS_URL)
+        фабрика = connector or (http.client.HTTPSConnection if адрес.scheme == "https"
+                                else http.client.HTTPConnection)
+        conn = фабрика(адрес.hostname, адрес.port, timeout=EVENT_TIMEOUT)
+        тело = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        conn.request("POST", адрес.path or "/", body=тело, headers={
+            "Content-Type": "application/json", "Content-Length": str(len(тело)),
+            "X-Proxy-Secret": секрет})
+        ответ = conn.getresponse()
+        ответ.read()
+        if ответ.status >= 300:
+            raise RuntimeError(f"HTTP {ответ.status}")
+        with lock:
+            stats["events_sent"] += 1
+        return True
+    except Exception as e:
+        with lock:
+            stats["events_failed"] += 1
+        print(f"событие о сдвиге границы не доставлено ({e!r})", file=sys.stderr, flush=True)
+        return False
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+_last_event_thread = None  # нужен тестам: дождаться фоновой отправки, не заводя ожиданий по времени
+
+
+def send_event(payload):
+    """Отправка в фоновом потоке: поток ответа клиенту не ждёт бэкенда ни секунды."""
+    global _last_event_thread
+    if not BACKEND_EVENTS_URL:
+        return
+    поток = threading.Thread(target=post_event, args=(payload,), daemon=True)
+    _last_event_thread = поток
+    поток.start()
 
 
 def _debug_dump(doc, msgs, body_len):
@@ -703,6 +864,15 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(msg)
 
+    @staticmethod
+    def _событие_с_замером(событие, начало, chunk):
+        """Дописывает в заготовку замер prefill и цифры кэша из первого куска — и отправляет."""
+        чтение, промпт = usage_from_chunk(chunk)
+        событие["prefillSeconds"] = round(time.monotonic() - начало, 3)
+        событие["cacheReadTokens"] = чтение
+        событие["promptTokens"] = промпт
+        send_event(событие)
+
     def _proxy(self):
         # Счётчики наружу: замер «сколько на самом деле обрезали» снимать больше неоткуда.
         # Путь служебный, у Anthropic-роутера vLLM такого нет — с upstream не пересекается.
@@ -713,6 +883,9 @@ class Handler(BaseHTTPRequestHandler):
         original = body  # на откат: любая осечка разбора обязана вернуть тело нетронутым
         stripped = False
         compact = None  # тело для облака, если это запрос автосжатия
+        сессия = self.headers.get(EVENT_SESSION_HEADER) if BACKEND_EVENTS_URL else None
+        событие = None  # заготовка карточки: цифры замера допишем по первому байту ответа
+        compact_before = None
         if body and self.command == "POST":
             try:
                 doc = json.loads(body)
@@ -722,6 +895,7 @@ class Handler(BaseHTTPRequestHandler):
                         вердикт, оценка = compact_verdict(doc)
                         if вердикт == "route":
                             compact = compact_body(doc)
+                            compact_before = оценка
                         elif вердикт == "signature_small":
                             # Настройка стенда разъехалась: CLI сжимается раньше, чем история
                             # набирает порог. Молча отпускать такой запрос на локаль нельзя —
@@ -757,14 +931,37 @@ class Handler(BaseHTTPRequestHandler):
                         if PRUNE_DEBUG == "on":
                             _debug_dump(doc, kept, len(body))
                         if PRUNE_MODE == "on":
+                            виды = {}
+                            системная = _system_chars(doc)
                             pruned_msgs, freed, blocks = prune_tool_results(
-                                kept, extra_chars=_system_chars(doc))
+                                kept, extra_chars=системная, kinds_out=виды)
                             if blocks:
                                 doc["messages"] = pruned_msgs
                                 stripped = True
                                 with lock:
                                     stats["pruned_blocks"] += blocks
                                     stats["pruned_chars"] += freed
+                                # Карточка — только на СДВИГЕ границы. Решение принимаем здесь,
+                                # до запроса, а отправляем по первому байту ответа: замер
+                                # prefill — это и есть «сколько человек ждал».
+                                #
+                                # Запрос, уезжающий в облако, пропускаем целиком, вместе с
+                                # запоминанием границы: обрезанное тело туда не идёт (сводку
+                                # облако пишет по оригиналам), и замер получился бы облачный
+                                # при рассказе о локальном пересчёте. Границу не запоминаем
+                                # намеренно — ход с фолбэком на локаль покажет карточку
+                                # следующим шагом, с честным замером.
+                                if compact is None and boundary_shifted(сессия, blocks):
+                                    до = estimate_tokens(_context_chars(kept), системная,
+                                                         _signature_chars(kept))
+                                    событие = {
+                                        "sessionId": сессия, "kind": "prune",
+                                        "tokensBefore": до,
+                                        "tokensAfter": max(0, до - estimate_tokens(freed)),
+                                        "blocks": blocks,
+                                        "resultBlocks": виды.get("result", 0),
+                                        "inputBlocks": виды.get("input", 0),
+                                        "thinkingBlocks": виды.get("thinking", 0)}
                     if stripped:
                         body = json.dumps(doc, ensure_ascii=False).encode("utf-8")
             except Exception as e:
@@ -773,25 +970,41 @@ class Handler(BaseHTTPRequestHandler):
                 # клиент остаётся без ответа и висит до своего таймаута — то есть опечатка в
                 # разборе тела ломает ход пользователя молча. Тело чужое, доверять его форме
                 # нельзя: `{"type":"text","text":5}` достаточно, чтобы получить TypeError.
-                body, stripped, compact = original, False, None
+                body, stripped, compact, событие = original, False, None, None
                 print(f"тело пропущено без правок: {e!r}", file=sys.stderr, flush=True)
         with lock:
             stats["requests"] += 1
             stats["stripped"] += stripped
 
         conn = resp = первый = None
+        # Точка отсчёта prefill: время до первого байта ответа модели. Именно его человек и
+        # ждёт на сдвиге границы (замеры: 80–90 с), поэтому цифра в карточке — эта. Отсчёт
+        # ведём от отправки тела В ТОТ upstream, который в итоге отвечает: неудачная попытка
+        # облака к ожиданию локальной модели не относится, и её время в замер не идёт.
+        начало = time.monotonic()
         if compact is not None:
             попытка = open_compact(compact, self.path)
             with lock:
                 stats["compact_routed" if попытка else "compact_fallback"] += 1
             if попытка:
                 conn, resp, первый = попытка
+                # Сжатие ушло в облако — рассказываем и об этом: для человека это тот же
+                # «чат думает молча». Первый кусок уже прочитан внутри open_compact, поэтому
+                # замер включает и установку соединения — на фоне десятков секунд не важно.
+                if сессия:
+                    событие = {"sessionId": сессия, "kind": "compact_cloud",
+                               "tokensBefore": compact_before or 0, "tokensAfter": 0,
+                               "blocks": 0, "resultBlocks": 0, "inputBlocks": 0,
+                               "thinkingBlocks": 0}
+                    self._событие_с_замером(событие, начало, первый)
+                    событие = None  # уже отправлено, второй раз по первому чанку не шлём
         if resp is None:
             headers = {k: v for k, v in self.headers.items() if k.lower() not in HOP}
             if body:
                 headers["Content-Length"] = str(len(body))
             conn = http.client.HTTPConnection(UP_HOST, UP_PORT, timeout=None)
             try:
+                начало = time.monotonic()
                 conn.request(self.command, self.path, body=body or None, headers=headers)
                 resp = conn.getresponse()
             except OSError as e:
@@ -819,6 +1032,11 @@ class Handler(BaseHTTPRequestHandler):
                 chunk = resp.read1(65536)
                 if not chunk:
                     break
+                if событие is not None:
+                    # Первый байт ответа: замер готов, цифры кэша лежат в message_start этого
+                    # же куска. Отправка фоновая, поток пользователю не задерживается.
+                    self._событие_с_замером(событие, начало, chunk)
+                    событие = None
                 self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
                 self.wfile.flush()
             self.wfile.write(b"0\r\n\r\n")
@@ -857,5 +1075,7 @@ if __name__ == "__main__":
              if PRUNE_MODE == "on" else ", прунинг выводов выкл")
           + (f", автосжатие -> {COMPACT_MODEL} на {COMPACT_UPSTREAM} (порог "
              f"{COMPACT_MIN_CONTEXT_TOKENS // 1000}k ток)" if COMPACT_UPSTREAM
-             else ", автосжатие в облако выкл"), flush=True)
+             else ", автосжатие в облако выкл")
+          + (f", карточка сдвига границы -> {BACKEND_EVENTS_URL}" if BACKEND_EVENTS_URL
+             else ", карточка сдвига границы выкл"), flush=True)
     srv.serve_forever()

@@ -3428,6 +3428,15 @@ public class ClaudeSession : ILlmSessionAdapter
             foreach (var (k, v) in cliEnv)
                 envOverrides[k] = v;
         }
+
+        // Id сессии в заголовке КАЖДОГО запроса CLI к локальному провайдеру: по нему прокси
+        // локальной модели связывает сдвиг границы прунинга с чатом и просит бэкенд показать
+        // карточку в ленте. Проверено на стенде 2026-09-23 — CLI дописывает содержимое
+        // ANTHROPIC_CUSTOM_HEADERS к каждому обращению к API.
+        //
+        // Только у локального провайдера: наружу, чужому эндпоинту, id нашей сессии не нужен.
+        if (localProvider is not null)
+            envOverrides["ANTHROPIC_CUSTOM_HEADERS"] = $"X-CCS-Session: {Info.Id}";
         else if (_subscriptionPool?.HasExtra == true
             && _providers?.GetByKey(Info.Provider) is null)
         {

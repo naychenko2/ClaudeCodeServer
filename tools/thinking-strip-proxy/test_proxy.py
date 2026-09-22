@@ -10,6 +10,7 @@ import os
 import shutil
 import tempfile
 import threading
+import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -638,6 +639,158 @@ class КомпактМаршрутTests(unittest.TestCase):
             shutil.rmtree(каталог, ignore_errors=True)
 
 
+class ГраницаПамятьTests(unittest.TestCase):
+    """Память «сессия → последняя граница»: карточка только на сдвиге."""
+
+    def setUp(self):
+        proxy._boundaries.clear()
+
+    def test_первое_срабатывание_это_сдвиг(self):
+        self.assertTrue(proxy.boundary_shifted("сессия-1", 66))
+
+    def test_та_же_граница_второй_раз_не_сдвиг(self):
+        proxy.boundary_shifted("сессия-1", 66)
+        self.assertFalse(proxy.boundary_shifted("сессия-1", 66))
+        self.assertFalse(proxy.boundary_shifted("сессия-1", 66))
+
+    def test_новая_граница_это_сдвиг(self):
+        proxy.boundary_shifted("сессия-1", 66)
+        self.assertTrue(proxy.boundary_shifted("сессия-1", 133))
+        self.assertFalse(proxy.boundary_shifted("сессия-1", 133))
+
+    def test_сессии_не_мешают_друг_другу(self):
+        proxy.boundary_shifted("сессия-1", 66)
+        self.assertTrue(proxy.boundary_shifted("сессия-2", 66), "у второго чата своя граница")
+
+    def test_без_сессии_и_без_блоков_событий_нет(self):
+        self.assertFalse(proxy.boundary_shifted(None, 66), "нет заголовка — некому показывать")
+        self.assertFalse(proxy.boundary_shifted("", 66))
+        self.assertFalse(proxy.boundary_shifted("сессия-1", 0), "обрезки не было — и карточки нет")
+
+
+class РазбивкаПоВидамTests(unittest.TestCase):
+    def test_виды_считаются_отдельно(self):
+        msgs = history(40)  # меньше — не набирается порог выгоды, обрезать нечего
+        msgs.insert(1, {"role": "assistant", "content": [
+            {"type": "thinking", "thinking": BIG, "signature": "sig"}]})
+        msgs.insert(2, {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "w", "name": "Write",
+             "input": {"file_path": "/a.txt", "content": BIG}}]})
+        виды = {}
+        _, _, blocks = proxy.prune_tool_results(msgs, prune_inputs=True, prune_thinking=True,
+                                                kinds_out=виды, **P)
+        self.assertEqual(sum(виды.values()), blocks, "разбивка обязана сходиться с итогом")
+        self.assertEqual(виды.get("thinking"), 1)
+        self.assertEqual(виды.get("input"), 1)
+        self.assertGreater(виды.get("result", 0), 0)
+
+    def test_без_обрезки_разбивка_пустая(self):
+        виды = {}
+        proxy.prune_tool_results(history(3), kinds_out=виды, **P)
+        self.assertEqual(виды, {})
+
+
+class UsageИзОтветаTests(unittest.TestCase):
+    def сообщение(self, usage):
+        return ("event: message_start\ndata: "
+                + json.dumps({"type": "message_start", "message": {"usage": usage}})
+                + "\n\n").encode()
+
+    def test_промпт_это_сумма_трёх_слагаемых(self):
+        чтение, промпт = proxy.usage_from_chunk(self.сообщение(
+            {"input_tokens": 1000, "cache_read_input_tokens": 9000,
+             "cache_creation_input_tokens": 500}))
+        self.assertEqual(чтение, 9000)
+        self.assertEqual(промпт, 10500, "input_tokens считает только мимо кэша")
+
+    def test_без_кэша_цифры_всё_равно_есть(self):
+        чтение, промпт = proxy.usage_from_chunk(self.сообщение({"input_tokens": 1234}))
+        self.assertIsNone(чтение)
+        self.assertEqual(промпт, 1234)
+
+    def test_чужой_формат_не_роняет(self):
+        for кусок in (b"", "data: не json\n\n".encode(), b"event: ping\n\n",
+                      b'data: {"type":"content_block_delta"}\n\n', b"\x00\xff"):
+            with self.subTest(кусок):
+                self.assertEqual(proxy.usage_from_chunk(кусок), (None, None))
+
+
+class ОтправкаСобытияTests(unittest.TestCase):
+    """Канал до бэкенда: выключен без адреса и без секрета, fail-open при любом отказе."""
+
+    def setUp(self):
+        self.сохранено = (proxy.BACKEND_EVENTS_URL, proxy._event_secret, dict(proxy.stats))
+        proxy._event_secret = "секрет"
+        proxy.stats.update(events_sent=0, events_failed=0)
+
+    def tearDown(self):
+        proxy.BACKEND_EVENTS_URL, proxy._event_secret, стат = self.сохранено
+        proxy.stats.clear()
+        proxy.stats.update(стат)
+
+    def test_без_адреса_канал_молчит(self):
+        proxy.BACKEND_EVENTS_URL = ""
+        связь = СоединениеЗаглушка()
+        self.assertFalse(proxy.post_event({"kind": "prune"}, connector=связь.фабрика()))
+        self.assertIsNone(связь.запрос, "адрес не задан — никуда не стучимся вовсе")
+
+    def test_без_секрета_канал_молчит(self):
+        proxy.BACKEND_EVENTS_URL = "http://127.0.0.1:5000/api/internal/llm-proxy/events"
+        proxy._event_secret = ""
+        связь = СоединениеЗаглушка()
+        self.assertFalse(proxy.post_event({"kind": "prune"}, connector=связь.фабрика()))
+        self.assertIsNone(связь.запрос)
+
+    def test_не_ascii_секрет_не_попадает_в_журнал(self):
+        """Кириллический секрет заголовком не отправить — но и в журнале ему не место."""
+        каталог = tempfile.mkdtemp()
+        путь = os.path.join(каталог, "appsettings.Local.json")
+        with open(путь, "w", encoding="utf-8") as f:
+            json.dump({"LlmProxy": {"EventSecret": "секретище"}}, f)
+        файл_был, proxy.EVENT_SECRET_FILE = proxy.EVENT_SECRET_FILE, путь
+        try:
+            proxy._event_secret = None
+            журнал = io.StringIO()
+            with contextlib.redirect_stderr(журнал):
+                self.assertEqual(proxy.event_secret(), "", "канал выключается сам")
+            self.assertNotIn("секретище", журнал.getvalue())
+            self.assertIn("не-ASCII", журнал.getvalue())
+        finally:
+            proxy.EVENT_SECRET_FILE = файл_был
+            shutil.rmtree(каталог, ignore_errors=True)
+
+    def test_секрет_читается_из_конфига_бэкенда(self):
+        каталог = tempfile.mkdtemp()
+        путь = os.path.join(каталог, "appsettings.Local.json")
+        with open(путь, "w", encoding="utf-8") as f:
+            json.dump({"LlmProxy": {"EventSecret": "s3cr3t"}}, f)
+        файл_был, proxy.EVENT_SECRET_FILE = proxy.EVENT_SECRET_FILE, путь
+        try:
+            proxy._event_secret = None
+            self.assertEqual(proxy.event_secret(), "s3cr3t")
+            proxy._event_secret = None
+            proxy.EVENT_SECRET_FILE = os.path.join(каталог, "нет-такого.json")
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(proxy.event_secret(), "", "нет файла — канал выключается сам")
+        finally:
+            proxy.EVENT_SECRET_FILE = файл_был
+            shutil.rmtree(каталог, ignore_errors=True)
+
+    def test_отказ_бэкенда_не_ломает_ход(self):
+        """Fail-open: и сеть, и не-200 кончаются строкой в журнал, а не исключением."""
+        proxy.BACKEND_EVENTS_URL = "http://127.0.0.1:5000/api/internal/llm-proxy/events"
+        for связь in (СоединениеЗаглушка(ошибка=OSError("бэкенд лежит")),
+                      СоединениеЗаглушка(status=500), СоединениеЗаглушка(status=401)):
+            with self.subTest(связь.status):
+                журнал = io.StringIO()
+                with contextlib.redirect_stderr(журнал):
+                    self.assertFalse(proxy.post_event({"kind": "prune"},
+                                                      connector=связь.фабрика()))
+                self.assertIn("не доставлено", журнал.getvalue())
+        self.assertEqual(proxy.stats["events_failed"], 3)
+        self.assertEqual(proxy.stats["events_sent"], 0)
+
+
 class Заглушка(BaseHTTPRequestHandler):
     """Сервер-заглушка на localhost: изображает то облако, то локальный vLLM."""
     протокол_версия = "HTTP/1.1"
@@ -788,6 +941,184 @@ class КомпактСквознойTests(unittest.TestCase):
         self.assertIn("локальный".encode(), self.спросить(self.запрос_сжатия()))
         self.assertEqual(self.Облако.принятые, [])
         self.assertEqual((proxy.stats["compact_routed"], proxy.stats["compact_fallback"]), (0, 0))
+
+
+class МодельЗаглушка(Заглушка):
+    """vLLM-заглушка: отвечает SSE с `message_start`, помедлив — иначе prefill нечем мерить."""
+    задержка = 0.05
+    usage = {"input_tokens": 2000, "cache_read_input_tokens": 18000}
+    принятые = []
+
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        тело = self.rfile.read(n)
+        type(self).принятые.append((self.path, тело, dict(self.headers)))
+        начало = json.dumps({"type": "message_start",
+                             "message": {"usage": type(self).usage}})
+        ответ = (f"event: message_start\ndata: {начало}\n\n"
+                 "event: message_stop\ndata: {}\n\n").encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Content-Length", str(len(ответ)))
+        self.end_headers()
+        time.sleep(type(self).задержка)  # prefill: модель думает перед первым байтом
+        self.wfile.write(ответ)
+
+
+class БэкендЗаглушка(BaseHTTPRequestHandler):
+    """Ручка бэкенда /api/internal/llm-proxy/events: складывает принятые события."""
+    принятые = []
+    статус = 200
+
+    def log_message(self, *a):
+        pass
+
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        тело = self.rfile.read(n)
+        type(self).принятые.append((self.path, json.loads(тело), dict(self.headers)))
+        self.send_response(type(self).статус)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+
+class СобытиеСквозноеTests(unittest.TestCase):
+    """Полный путь карточки: CLI → прокси → ответ модели → событие на бэкенд.
+
+    Сети наружу нет: и «vLLM», и «бэкенд» — localhost-заглушки.
+    """
+
+    def setUp(self):
+        class Модель(МодельЗаглушка):
+            принятые = []
+
+        class Бэкенд(БэкендЗаглушка):
+            принятые = []
+
+        self.Модель, self.Бэкенд = Модель, Бэкенд
+        self.модель, self.бэкенд = поднять(Модель), поднять(Бэкенд)
+        self.прокси = поднять(proxy.Handler)
+        self.сохранено = (proxy.UP_HOST, proxy.UP_PORT, proxy.PRUNE_MODE, proxy.COMPACT_UPSTREAM,
+                          proxy.BACKEND_EVENTS_URL, proxy._event_secret, dict(proxy.stats),
+                          dict(proxy._boundaries))
+        proxy.UP_HOST, proxy.UP_PORT = "127.0.0.1", self.модель.server_address[1]
+        proxy.PRUNE_MODE, proxy.COMPACT_UPSTREAM = "on", ""
+        proxy.BACKEND_EVENTS_URL = (f"http://127.0.0.1:{self.бэкенд.server_address[1]}"
+                                    "/api/internal/llm-proxy/events")
+        proxy._event_secret = "secret-from-config"
+        proxy._boundaries.clear()
+        proxy.stats.update(events_sent=0, events_failed=0)
+
+    def tearDown(self):
+        (proxy.UP_HOST, proxy.UP_PORT, proxy.PRUNE_MODE, proxy.COMPACT_UPSTREAM,
+         proxy.BACKEND_EVENTS_URL, proxy._event_secret, стат, границы) = self.сохранено
+        proxy.stats.clear()
+        proxy.stats.update(стат)
+        proxy._boundaries.clear()
+        proxy._boundaries.update(границы)
+        for с in (self.модель, self.бэкенд, self.прокси):
+            с.shutdown()
+            с.server_close()
+
+    def спросить(self, msgs, сессия="sess-1"):
+        тело = json.dumps({"model": "qwen3.8-27b", "max_tokens": 8192,
+                           "messages": msgs}).encode()
+        заголовки = {"Content-Type": "application/json", "Content-Length": str(len(тело))}
+        if сессия is not None:
+            заголовки[proxy.EVENT_SESSION_HEADER] = сессия
+        c = http.client.HTTPConnection("127.0.0.1", self.прокси.server_address[1], timeout=30)
+        c.request("POST", "/v1/messages", body=тело, headers=заголовки)
+        ответ = c.getresponse().read()
+        c.close()
+        if proxy._last_event_thread is not None:
+            proxy._last_event_thread.join(timeout=10)  # отправка фоновая — дожидаемся её
+        return ответ
+
+    def test_событие_уходит_на_сдвиге_границы(self):
+        self.спросить(history(120))
+        self.assertEqual(len(self.Бэкенд.принятые), 1)
+        путь, событие, заголовки = self.Бэкенд.принятые[0]
+        self.assertEqual(путь, "/api/internal/llm-proxy/events")
+        self.assertEqual(заголовки.get("X-Proxy-Secret"), "secret-from-config")
+        self.assertEqual(событие["sessionId"], "sess-1")
+        self.assertEqual(событие["kind"], "prune")
+        self.assertEqual(событие["blocks"], 66)
+        self.assertEqual(событие["resultBlocks"], 66)
+        self.assertEqual((событие["inputBlocks"], событие["thinkingBlocks"]), (0, 0))
+        self.assertGreater(событие["tokensBefore"], событие["tokensAfter"])
+        self.assertEqual(proxy.stats["events_sent"], 1)
+
+    def test_замер_prefill_и_цифры_кэша_из_ответа(self):
+        self.спросить(history(120))
+        _, событие, _ = self.Бэкенд.принятые[0]
+        self.assertGreaterEqual(событие["prefillSeconds"], МодельЗаглушка.задержка,
+                                "замер обязан покрывать ожидание первого байта")
+        self.assertLess(событие["prefillSeconds"], 10)
+        self.assertEqual(событие["cacheReadTokens"], 18000)
+        self.assertEqual(событие["promptTokens"], 20000)
+
+    def test_между_сдвигами_карточки_нет(self):
+        """Граница стоит — обрезка бесплатна, и шуметь в ленте не о чем."""
+        self.спросить(history(120))
+        self.спросить(history(150))
+        self.спросить(history(160))
+        self.assertEqual(len(self.Бэкенд.принятые), 1, "одна граница — одна карточка")
+        self.спросить(history(200))  # следующая ступень
+        self.assertEqual(len(self.Бэкенд.принятые), 2)
+        self.assertEqual(self.Бэкенд.принятые[1][1]["blocks"], 133)
+
+    def test_у_каждого_чата_своя_граница(self):
+        self.спросить(history(120), сессия="sess-1")
+        self.спросить(history(120), сессия="sess-2")
+        self.assertEqual(len(self.Бэкенд.принятые), 2)
+        self.assertEqual({с["sessionId"] for _, с, _ in self.Бэкенд.принятые}, {"sess-1", "sess-2"})
+
+    def test_без_заголовка_сессии_событий_нет(self):
+        """Ход без заголовка проксируется как раньше — показывать карточку всё равно некому."""
+        self.спросить(history(120), сессия=None)
+        self.assertEqual(self.Бэкенд.принятые, [])
+        self.assertTrue(self.Модель.принятые, "сам ход при этом идёт как обычно")
+
+    def test_упавший_бэкенд_не_ломает_ход(self):
+        """Fail-open по-настоящему: ответ модели доходит до клиента целиком."""
+        self.бэкенд.shutdown()
+        self.бэкенд.server_close()
+        журнал = io.StringIO()
+        with contextlib.redirect_stderr(журнал):
+            ответ = self.спросить(history(120))
+        self.assertIn("message_start".encode(), ответ)
+        self.assertIn("message_stop".encode(), ответ)
+        self.assertEqual(proxy.stats["events_failed"], 1)
+        self.assertIn("не доставлено", журнал.getvalue())
+
+    def test_сжатие_в_облако_даёт_свою_карточку_а_не_прунинговую(self):
+        """В облако едет СЫРАЯ история, значит рассказывать надо про облако, а не про обрезку.
+
+        Иначе карточка «границу сдвинули, ждали столько-то» несла бы замер облачного ответа —
+        при том, что обрезанное тело туда не отправлялось вовсе.
+        """
+        облако = поднять(МодельЗаглушка)
+        proxy.COMPACT_UPSTREAM = f"http://127.0.0.1:{облако.server_address[1]}"
+        proxy._compact_key = "sk-test"
+        try:
+            msgs = history(120)
+            msgs.append({"role": "user", "content": proxy.COMPACT_SIGNATURE + " Summarize."})
+            self.спросить(msgs)
+        finally:
+            облако.shutdown()
+            облако.server_close()
+        self.assertEqual(len(self.Бэкенд.принятые), 1)
+        _, событие, _ = self.Бэкенд.принятые[0]
+        self.assertEqual(событие["kind"], "compact_cloud")
+        self.assertEqual(событие["blocks"], 0)
+        self.assertGreater(событие["tokensBefore"], 0, "размер истории на входе в сжатие")
+        self.assertEqual(proxy._boundaries, {}, "граница не запомнена — карточка ещё впереди")
+
+    def test_канал_выключен_по_умолчанию(self):
+        proxy.BACKEND_EVENTS_URL = ""
+        ответ = self.спросить(history(120))
+        self.assertIn("message_start".encode(), ответ)
+        self.assertEqual(self.Бэкенд.принятые, [], "без адреса прокси никуда не стучится")
 
 
 if __name__ == "__main__":

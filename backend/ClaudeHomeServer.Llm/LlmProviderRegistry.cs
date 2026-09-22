@@ -377,6 +377,7 @@ public class LlmProviderRegistry
         "CLAUDE_CODE_AUTO_COMPACT_WINDOW", // окно автокомпакта задают вместе с моделью 1M
         "CLAUDE_CODE_MAX_CONTEXT_TOKENS",  // окно контекста модели, ставим сами (см. BuildCliEnv)
         "MAX_THINKING_TOKENS", // лимит токенов на блок thinking (см. BuildCliEnv)
+        "ANTHROPIC_CUSTOM_HEADERS", // заголовки к запросам API, ставим сами (id сессии для прокси)
     ];
 
     // Что реально вычищаем на запуске. Аварийный выключатель Claude:InheritSystemEnv=true

@@ -201,6 +201,23 @@ public record RateLimitMessage(string LimitType, string? ResetsAt, string? Statu
 public record CompactBoundaryMessage(string Trigger, int? PreTokens, int? PostTokens = null)
     : ServerMessage("compact_boundary");
 
+// Обрезка контекста прокси локальной модели: сдвиг границы прунинга (Kind = "prune") либо уход
+// автосжатия в облако (Kind = "compact_cloud"). И то, и другое стоит человеку десятков секунд
+// тишины в чате, неотличимых от зависания, — карточка рассказывает, чем они заняты.
+// PrefillSeconds — время до первого байта ответа модели у ЭТОГО запроса, то есть ровно
+// «сколько ждали»; CacheReadTokens / PromptTokens — доля промпта, взятая из prefix cache.
+// Приходит ВНЕ потока хода, от прокси через /api/internal/llm-proxy/events.
+public record ContextPrunedMessage(
+    string Kind,
+    int TokensBefore,
+    int TokensAfter,
+    int Blocks,
+    int ResultBlocks, int InputBlocks, int ThinkingBlocks,
+    double? PrefillSeconds,
+    int? CacheReadTokens,
+    int? PromptTokens)
+    : ServerMessage("context_pruned");
+
 // Ход компакции (system/status): Status == "compacting" — началась;
 // CompactResult == "success"/"failed" (+ CompactError) — завершилась
 public record CompactStatusMessage(string? Status, string? CompactResult = null, string? CompactError = null)

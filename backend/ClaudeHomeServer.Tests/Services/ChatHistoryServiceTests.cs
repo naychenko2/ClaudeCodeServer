@@ -41,6 +41,40 @@ public class ChatHistoryServiceTests : IDisposable
             .Which.Timestamp.Should().Be(1_700_000_000_000);
     }
 
+    // Карточка обрезки контекста рядом с обычной репликой — и это не «ещё один тип за компанию».
+    // Вид карточки ("prune"/"compact_cloud") просится полем `kind`, но это имя занято
+    // дискриминатором полиморфизма StoredMessage. Резолвер System.Text.Json строится ОДИН раз
+    // на весь базовый тип, поэтому конфликт имён убивает запись и чтение history.json у ВСЕХ
+    // чатов, а не только у записи прунинга: StoredTextMessage в этом же наборе — проверка
+    // ровно на это. На диске поле называется `pruneKind` — как и у элемента ленты на фронте.
+    [Fact]
+    public async Task ContextPruned_СериализуетсяТудаОбратно_НеЛомаяОстальнуюИсторию()
+    {
+        var sessionId = Guid.NewGuid().ToString();
+        await _sut.SaveAsync(sessionId, [
+            new StoredTextMessage("обычная реплика"),
+            new StoredContextPrunedMessage("prune", 234_000, 46_000, 66, 64, 1, 1, 87.5, 18_000, 20_000)]);
+
+        var json = File.ReadAllText(
+            Directory.GetFiles(_tempDir, "history.json", SearchOption.AllDirectories).Single());
+        json.Should().Contain("\"kind\":\"context_pruned\"", "дискриминатор остаётся за kind");
+        json.Should().Contain("\"pruneKind\":\"prune\"", "вид карточки едет отдельным именем");
+
+        var loaded = await _sut.LoadAsync(sessionId);
+        loaded[0].Should().BeOfType<StoredTextMessage>();
+        var card = loaded[1].Should().BeOfType<StoredContextPrunedMessage>().Subject;
+        card.Kind.Should().Be("prune");
+        card.TokensBefore.Should().Be(234_000);
+        card.TokensAfter.Should().Be(46_000);
+        card.Blocks.Should().Be(66);
+        card.ResultBlocks.Should().Be(64);
+        card.InputBlocks.Should().Be(1);
+        card.ThinkingBlocks.Should().Be(1);
+        card.PrefillSeconds.Should().Be(87.5);
+        card.CacheReadTokens.Should().Be(18_000);
+        card.PromptTokens.Should().Be(20_000);
+    }
+
     [Fact]
     public async Task AppendTurnAborted_ХодОстановленПользователем_НеСчитаетсяОборванным()
     {

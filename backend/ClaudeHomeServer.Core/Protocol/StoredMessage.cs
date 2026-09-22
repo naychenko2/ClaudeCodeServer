@@ -17,6 +17,7 @@ namespace ClaudeHomeServer.Protocol;
 [JsonDerivedType(typeof(StoredFalCostMessage), "fal_cost")]
 [JsonDerivedType(typeof(StoredGlifCostMessage), "glif_cost")]
 [JsonDerivedType(typeof(StoredCompactBoundaryMessage), "compact_boundary")]
+[JsonDerivedType(typeof(StoredContextPrunedMessage), "context_pruned")]
 [JsonDerivedType(typeof(StoredErrorMessage), "error")]
 [JsonDerivedType(typeof(StoredWorkflowProgressMessage), "workflow_progress")]
 [JsonDerivedType(typeof(StoredWorkLoopStoppedMessage), "work_loop_stopped")]
@@ -189,6 +190,32 @@ public class StoredCompactBoundaryMessage(string trigger, int? preTokens, int? p
     public string Trigger { get; init; } = trigger;
     public int? PreTokens { get; init; } = preTokens;
     public int? PostTokens { get; init; } = postTokens;
+}
+
+// Обрезка контекста прокси локальной модели — чтобы карточка пережила перезагрузку страницы.
+// Поля — ровно как у ContextPrunedMessage (протокол): расхождение форм после перезагрузки
+// давало бы карточку без цифр.
+//
+// Единственное расхождение вынужденное: вид карточки ("prune"/"compact_cloud") в ЛЕНТЕ
+// приезжает полем `kind`, а в ИСТОРИИ — полем `pruneKind`. Имя `kind` здесь занято
+// дискриминатором полиморфизма StoredMessage, и свойство с таким же именем роняет
+// сериализацию ВСЕЙ истории целиком (InvalidOperationException при первом же сохранении),
+// а не только этой записи.
+public class StoredContextPrunedMessage(string kind, int tokensBefore, int tokensAfter, int blocks,
+    int resultBlocks, int inputBlocks, int thinkingBlocks, double? prefillSeconds = null,
+    int? cacheReadTokens = null, int? promptTokens = null) : StoredMessage
+{
+    [JsonPropertyName("pruneKind")]
+    public string Kind { get; init; } = kind;
+    public int TokensBefore { get; init; } = tokensBefore;
+    public int TokensAfter { get; init; } = tokensAfter;
+    public int Blocks { get; init; } = blocks;
+    public int ResultBlocks { get; init; } = resultBlocks;
+    public int InputBlocks { get; init; } = inputBlocks;
+    public int ThinkingBlocks { get; init; } = thinkingBlocks;
+    public double? PrefillSeconds { get; init; } = prefillSeconds;
+    public int? CacheReadTokens { get; init; } = cacheReadTokens;
+    public int? PromptTokens { get; init; } = promptTokens;
 }
 
 // Стоимость генерации fal.ai (фактически списанная), приходит вне хода — хранится отдельной записью

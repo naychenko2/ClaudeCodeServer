@@ -48,7 +48,8 @@ class PruneTests(unittest.TestCase):
         окажется сообщение ВНУТРИ него, и для vLLM это обрыв кэша на всю оставшуюся историю.
         """
         base = history(120)
-        pruned_base, _, _ = proxy.prune_tool_results(base, **P)
+        pruned_base, _, blocks = proxy.prune_tool_results(base, **P)
+        self.assertGreater(blocks, 0, "иначе тест сравнивает две нетронутые истории и всегда зелён")
         for extra in range(1, 10):  # внутри одного кванта граница обязана стоять
             longer, _, _ = proxy.prune_tool_results(history(120 + extra), **P)
             self.assertEqual(longer[:len(base)], pruned_base,
@@ -118,6 +119,15 @@ class PruneTests(unittest.TestCase):
                          [{"type": "text", "text": proxy.PRUNE_PLACEHOLDER}])
         self.assertEqual(pruned[4]["content"][0]["content"], proxy.PRUNE_PLACEHOLDER)
 
+    def test_блок_меняется_только_в_content(self):
+        """Потеря tool_use_id рвёт парность с tool_use — история станет невалидной."""
+        msgs = history(120)
+        msgs[2]["content"][0]["is_error"] = True
+        pruned, _, _ = proxy.prune_tool_results(msgs, **P)
+        self.assertEqual(pruned[2]["content"][0], {
+            "type": "tool_result", "tool_use_id": "t0", "is_error": True,
+            "content": proxy.PRUNE_PLACEHOLDER})
+
     def test_картинки_не_трогаем(self):
         msgs = history(120)
         image = [{"type": "image", "source": {"type": "base64", "data": "A" * 9000}}]
@@ -146,6 +156,17 @@ class PruneTests(unittest.TestCase):
         self.assertEqual(without, 0, "без системной части чат не дотягивает до порога")
         self.assertGreater(with_system, 0, "с ней — дотягивает")
 
+    def test_колебание_системной_части_не_мигает_решением(self):
+        """Системный блок пересобирается каждый ход; его дрожь не должна включать и выключать
+        прунинг — это мигание середины истории, то есть потеря кэша на каждом ходу."""
+        msgs = [{"role": "user", "content": "з"}]
+        for i in range(120):
+            msgs += [tool_use(i), tool_result(i, "y" * 4900)]  # история чуть ниже порога
+        big = dict(P, min_context_tokens=150000)
+        толще = proxy.prune_tool_results(msgs, extra_chars=15_000, **big)[2]
+        тоньше = proxy.prune_tool_results(msgs, extra_chars=5_000, **big)[2]
+        self.assertEqual(толще, тоньше, "решение поехало от дрожи системного блока")
+
     def test_большой_чат_трогаем(self):
         msgs = history(120)  # те же 120 вызовов, но выводы крупные: контекст ~180k токенов
         _, freed, blocks = proxy.prune_tool_results(msgs, **dict(P, min_context_tokens=150000))
@@ -160,6 +181,22 @@ class PruneTests(unittest.TestCase):
             out, freed, blocks = proxy.prune_tool_results(msgs, **P)
             self.assertIs(out, msgs)
             self.assertEqual((freed, blocks), (0, 0))
+
+    def test_мусор_в_полях_не_роняет_прунинг(self):
+        """Тело чужое: число вместо текста не должно кончаться исключением.
+
+        Исключение отсюда уходит в обработчик запроса, клиент остаётся без ответа и виснет —
+        то есть опечатка в разборе чужого тела ломает ход пользователя молча.
+        """
+        msgs = history(120)
+        msgs[2]["content"][0]["content"] = [{"type": "text", "text": 5}]
+        msgs.insert(1, {"role": "assistant", "content": [{"type": "text", "text": 42}]})
+        msgs.insert(1, {"role": "assistant", "content": [{"type": "thinking", "thinking": None}]})
+        proxy.prune_tool_results(msgs, **P)  # падение = провал теста
+        proxy._context_chars(msgs, 0)
+
+    def test_нулевой_квант_не_делит_на_ноль(self):
+        proxy.prune_tool_results(history(120), **dict(P, quantum=0))
 
 
 if __name__ == "__main__":

@@ -119,6 +119,11 @@ def _prunable_size(content):
     return None
 
 
+def _text_len(value):
+    """Длина текстового поля; чужое тело вправе прислать туда что угодно — не наша забота."""
+    return len(value) if isinstance(value, str) else 0
+
+
 def _context_chars(msgs, extra_chars=0):
     """Грубый размер контекста в символах — за один проход, без сериализации всего тела.
 
@@ -141,9 +146,9 @@ def _context_chars(msgs, extra_chars=0):
                 continue
             kind = b.get("type")
             if kind == "text":
-                total += len(b.get("text") or "")
+                total += _text_len(b.get("text"))
             elif kind == "thinking":
-                total += len(b.get("thinking") or "")
+                total += _text_len(b.get("thinking"))
             elif kind == "tool_result":
                 total += _prunable_size(b.get("content")) or 0
             elif kind == "tool_use":
@@ -158,7 +163,7 @@ def _system_chars(doc):
     if isinstance(system, str):
         total += len(system)
     elif isinstance(system, list):
-        total += sum(len(b.get("text") or "") for b in system if isinstance(b, dict))
+        total += sum(_text_len(b.get("text")) for b in system if isinstance(b, dict))
     tools = doc.get("tools")
     if isinstance(tools, list):
         total += len(json.dumps(tools, ensure_ascii=False))
@@ -175,15 +180,22 @@ def prune_tool_results(msgs, protect_last=None, quantum=None, min_chars=None, mi
                        min_context_tokens=None, extra_chars=0):
     """Возвращает (сообщения, сколько символов освободили, сколько блоков обрезали). Вход не мутирует."""
     protect_last = PRUNE_PROTECT_LAST if protect_last is None else protect_last
-    quantum = PRUNE_QUANTUM if quantum is None else quantum
+    quantum = max(1, PRUNE_QUANTUM if quantum is None else quantum)  # 0 из окружения = деление на ноль
     min_chars = PRUNE_MIN_CHARS if min_chars is None else min_chars
     min_tokens = PRUNE_MIN_TOKENS if min_tokens is None else min_tokens
     min_context_tokens = PRUNE_MIN_CONTEXT_TOKENS if min_context_tokens is None else min_context_tokens
 
     # Маленький чат не трогаем вовсе: автосжатие ему не грозит, а скачок границы он оплатит.
-    # Условие монотонно (прокси всегда получает от CLI полную историю, она только растёт),
-    # поэтому срабатывает один раз за чат — один разрыв кэша, а не разрыв на каждом ходу.
-    if _context_chars(msgs, extra_chars) // 4 < min_context_tokens:
+    #
+    # История append-only и только растёт, а вот системная часть НЕ обязана: секции промпта у
+    # этого продукта пересобираются каждый ход. Похудей системный блок — оценка ушла бы обратно
+    # под порог, прунинг выключился бы, и середина истории вернулась бы в полный вид: мигание
+    # на каждом ходу, то есть ровно потеря кэша. Поэтому огрубляем вниз НЕСТАБИЛЬНОЕ слагаемое,
+    # а не сумму (огрубление суммы до кратного порогу — тождество, оно ничего не даёт):
+    # колебания системной части в пределах сотни тысяч символов решение не меняют. Огрубление
+    # вниз занижает оценку, то есть включает прунинг позже — безопасная сторона ошибки.
+    stable_extra = max(0, extra_chars) // 100_000 * 100_000
+    if _context_chars(msgs, stable_extra) // 4 < min_context_tokens:
         return msgs, 0, 0
 
     found = []  # (номер сообщения, номер блока, размер) в порядке появления
@@ -267,6 +279,7 @@ class Handler(BaseHTTPRequestHandler):
             self._read_body()
             return self._stats()
         body = self._read_body()
+        original = body  # на откат: любая осечка разбора обязана вернуть тело нетронутым
         stripped = False
         if body and self.command == "POST":
             try:
@@ -304,8 +317,14 @@ class Handler(BaseHTTPRequestHandler):
                                     stats["pruned_chars"] += freed
                     if stripped:
                         body = json.dumps(doc, ensure_ascii=False).encode("utf-8")
-            except (ValueError, UnicodeDecodeError):
-                pass  # fail-open: не наш формат — отдаём как есть
+            except Exception as e:
+                # fail-open: не наш формат ИЛИ неожиданная структура внутри — отдаём тело как
+                # есть. Ловим всё намеренно: исключение отсюда уходит в handle_one_request,
+                # клиент остаётся без ответа и висит до своего таймаута — то есть опечатка в
+                # разборе тела ломает ход пользователя молча. Тело чужое, доверять его форме
+                # нельзя: `{"type":"text","text":5}` достаточно, чтобы получить TypeError.
+                body, stripped = original, False
+                print(f"тело пропущено без правок: {e!r}", file=sys.stderr, flush=True)
         with lock:
             stats["requests"] += 1
             stats["stripped"] += stripped
@@ -358,6 +377,9 @@ class Handler(BaseHTTPRequestHandler):
             import traceback
             traceback.print_exc(file=sys.stderr)
             sys.stderr.flush()
+            # Клиенту ответа уже не будет — рвём соединение, чтобы он увидел обрыв сразу,
+            # а не висел на keep-alive до собственного таймаута.
+            self.close_connection = True
 
     do_GET = do_POST = do_PUT = do_DELETE = do_PATCH = do_HEAD = do_OPTIONS = _proxy
 

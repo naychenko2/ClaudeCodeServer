@@ -406,7 +406,7 @@ personas/memory) — прочитай [docs/architecture/personas.md](docs/archi
 
 Пункт меню «Выкатить на бой» — сигнал трей-раннеру именованным событием Windows (не путать с выкаткой прода из чата, ADR-010).
 
-Инварианты и подробности — [backend/ClaudeHomeServer/Services/Deploy/CLAUDE.md](backend/ClaudeHomeServer/Services/Deploy/CLAUDE.md): файл подхватывается сам при работе с этой папкой; при правках со стороны фронтенда открой его руками.
+Инварианты и подробности — [backend/ClaudeHomeServer.Deploy/CLAUDE.md](backend/ClaudeHomeServer.Deploy/CLAUDE.md): файл подхватывается сам при работе с этой папкой; при правках со стороны фронтенда открой его руками.
 
 ## Питание машины из веб-морды (`Services/Power`)
 

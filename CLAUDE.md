@@ -20,11 +20,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```powershell
 # Контейнер (из корня проекта) — основной путь
-copy .env.example .env                       # один раз: пути, CLAUDE_EGRESS_PROXY
-docker compose -f docker-compose.claude.yml up -d --build   # сборка + запуск, http://localhost:5000
-docker exec -it claude-server claude login   # один раз: вход по подписке
-docker logs -f claude-server                  # логи
-docker compose -f docker-compose.claude.yml up -d --build claude-server  # пересборка после правок
+docker compose -f docker-compose.claude.yml up -d --build              # сборка + запуск, :5000
+docker compose -f docker-compose.claude.yml up -d --build claude-server # пересборка после правок
+docker logs -f claude-server
 ```
 
 ```powershell
@@ -33,15 +31,16 @@ cd backend; dotnet build
 cd backend; dotnet run --project ClaudeHomeServer   # порт 5000
 cd frontend; npm run dev       # порт 5173
 cd frontend; npm run build     # production-сборка (tsc -b + vite)
-# Vite (:5173) проксирует /api и /hubs (WebSocket) на :5000. Стенд :5000 раздаёт именно
-# frontend/dist ПОСЛЕДНЕЙ сборки: после правок .tsx нужен npm run build (или сиди на :5173);
-# wwwroot в репо не живёт — прод получает его из dist агентом выкатки. Детали: docs/operations/dev-stand-host.md
 ```
 
-Хостовый дев-стенд поднимаем **только через `dotnet run`** (или с явным
-`ASPNETCORE_ENVIRONMENT=Development`): порождённые процессы наследуют `Production`, а там
-`Kestrel:Endpoints` уводит стенд на занятый боевым инстансом :80, и `ASPNETCORE_URLS` это не
-чинит. Разбор и команда фонового запуска — [docs/operations/dev-stand-host.md](docs/operations/dev-stand-host.md).
+Первый запуск (`.env`, вход по подписке) и устройство контейнера —
+[docker.md](docs/operations/docker.md). Хостовый дев-стенд поднимаем **только через
+`dotnet run`** (или с явным `ASPNETCORE_ENVIRONMENT=Development`): порождённые процессы
+наследуют `Production`, а там `Kestrel:Endpoints` уводит стенд на занятый боевым инстансом
+:80, и `ASPNETCORE_URLS` это не чинит. Стенд :5000 раздаёт `frontend/dist` ПОСЛЕДНЕЙ сборки
+(`wwwroot` в репозитории не живёт) — после правок `.tsx` нужен `npm run build` или работа на
+:5173. Разбор и команда фонового запуска —
+[docs/operations/dev-stand-host.md](docs/operations/dev-stand-host.md).
 
 ## Среда исполнения пользователей (local / container)
 
@@ -96,32 +95,23 @@ Browser (React 18 + TypeScript)  →  SignalR WebSocket  →  ASP.NET Core 10 (:
 `ClaudeHomeServer.Llm` (отдельная сборка — слой LLM-провайдеров),
 `Protocol/ServerMessage` (record-типы WS-событий); фронт — `pages/`, `components/`, `hooks/`,
 `lib/` (`api.ts`, `signalr.ts`, `design.ts`), `types/`. Состав файлов смотри в дереве репозитория.
-## Дизайн-макеты
-
-Claude Design проект: `52adb1f7-312b-4f25-8c47-2bccfca9df94`. Ключевые файлы:
-`Claude Code Desktop.dc.html` (десктопные макеты, все состояния), `shots/*.png`.
 
 ## Дизайн-система
 
 **Полная конвенция — [docs/design/guidelines.md](docs/design/guidelines.md), обязательна
-для ЛЮБЫХ изменений UI.** Живой эталон — витрина UI-кита: в dev по `#/ui-kit` без
-авторизации, исходник [UiKitPage.tsx](frontend/src/dev/UiKitPage.tsx) (в production-бандл
-не попадает). Железные правила:
+для ЛЮБЫХ изменений UI**; живой эталон — витрина UI-кита (`#/ui-kit` в dev). Макеты Claude
+Design и их состав — [docs/design/audit.md](docs/design/audit.md). Железные правила:
 
 - Цвета — только токены `C.*` из [design.ts](frontend/src/lib/design.ts); сырой hex в `.tsx` —
   дефект; значения тем — в [theme.css](frontend/src/lib/theme.css) (новый цвет — в ОБЕ темы).
+  Размеры — из шкал `FS`, `SP`, `R`, `SHADOW`, `Z`, `MODAL_W`.
+- Контролы — только из `frontend/src/components/ui/`; самодельные кнопки/модалки из div — дефект.
 - **Проверяется линтом:** `cd frontend; npm run lint:design` обязан быть зелёным. Гейт стоит
   **перед коммитом**, а не после каждой правки; по ходу работы хватает `npx tsc -b`.
-- Размеры — из шкал `FS`, `SP`, `R`, `SHADOW`, `Z`, `MODAL_W`.
-- Контролы — только из `frontend/src/components/ui/`; самодельные кнопки/модалки из div — дефект.
-- Accent-дисциплина: оранжевый `C.accent` — только главное действие и активные состояния.
-- Шрифты: PT Serif (заголовки), Hanken Grotesk (UI), JetBrains Mono (код); иконки — lucide-react.
-- Стили: только inline-objects, без Tailwind/CSS-modules. Каждый экран живёт на мобиле (`useIsMobile`).
-- **Приоритетные устройства и их ширины** (интерфейс, виджеты, картинки) —
-  [docs/design/target-devices.md](docs/design/target-devices.md); считать в CSS-пикселях,
-  а не в паспортных: нижний ориентир 360 CSS, Fold 8 в развороте — пограничный для `MOBILE_MAX`.
-- Новый раздел — по «Рецепту нового раздела» из гайда (эталон — KnowledgePage); для заметного
-  UI перед коммитом **предложить** прогон через субагента `designer` и дождаться ответа.
+- Каждый экран живёт на мобиле (`useIsMobile`); ширины считать в CSS-пикселях, а не в
+  паспортных — [docs/design/target-devices.md](docs/design/target-devices.md).
+- Для заметного UI перед коммитом **предложить** прогон через субагента `designer` и
+  дождаться ответа.
 
 ## LLM-провайдеры (ClaudeHomeServer.Llm)
 

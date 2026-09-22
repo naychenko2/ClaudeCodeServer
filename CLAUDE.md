@@ -164,16 +164,11 @@ Claude Design проект: `52adb1f7-312b-4f25-8c47-2bccfca9df94`. Ключев
 
 ## Генератор картинок (Services/Images)
 
-Аватар персоны рисует слой драйверов `IImageGenerator` (fal.ai — синхронный,
-glif — `compose_project` + опрос джобы) за роутером `ImageGenerationService`. Провайдера
-(Автоматически | fal.ai | glif) и модель выбирает админ **отдельно для каждого места**
-(`ImagePlaces` — сейчас одно: `persona-avatar`) — секция «Картинки» вкладки «Применение»
-(`GET/PUT /api/image-generation`, стор `data/image-generation.json` поверх секции конфига
-`Images`). Модель выбирается только у fal; в «Автоматически» (порядок `glif` → `fal`) и у glif
-её подбирает сам генератор. Инвариант тот же, что у моделей:
-**явно выбранного провайдера не подменяем**, переход на другого — только в «Автоматически».
-Не нарисовалось (сервис не настроен, отказ) — сущность живёт на инициалах, а картинку догоняет
-очередь `ImageBackfillService` (`data/image-backfill.json`, событие `image_backfilled`).
+Аватар персоны рисует слой драйверов `IImageGenerator` (fal.ai, glif) за роутером
+`ImageGenerationService`; провайдера и модель выбирает админ отдельно для каждого места
+(`ImagePlaces` — сейчас одно: `persona-avatar`). Инвариант тот же, что у моделей: **явно
+выбранного провайдера не подменяем**, переход на другого — только в «Автоматически». Не
+нарисовалось — сущность живёт на инициалах, картинку догоняет очередь `ImageBackfillService`.
 Детали — [docs/features/image-generation.md](docs/features/image-generation.md).
 
 ## Раздел «Видео» (Services/Video)
@@ -184,27 +179,18 @@ glif — `compose_project` + опрос джобы) за роутером `Image
 
 ## Значок проекта (Services/ProjectIcons)
 
-Иконка проекта — **не картинка**: модель по названию проекта отдаёт имя иконки из белого
-списка lucide (`LucideGlyphs`, серверная копия полного набора установленного lucide-react),
-разметки от модели не приходит никогда. Подбор двухходовый («меню вместо памяти»): ход 1 —
-слова-понятия, сервер отбирает по ним реальные имена, ход 2 — выбор из этого короткого меню;
-ноль годных — ровно один повтор с перечислением отбракованных, без цикла. Место модели —
-`project-icon` в `LocalActionCatalog`, любой сбой молча оставляет инициалы. Контракт ответа,
-схема ходов, белый список и форма хранения — [ADR-009](docs/adr/ADR-009-project-icon-glyph.md);
-тексты интерфейса — [docs/features/project-icon-glyphs.md](docs/features/project-icon-glyphs.md).
+Иконка проекта — **не картинка**: модель отдаёт имя иконки из белого списка lucide
+(`LucideGlyphs`), разметки от модели не приходит никогда; любой сбой молча оставляет инициалы.
+Контракт ответа, двухходовая схема подбора, белый список и форма хранения —
+[ADR-009](docs/adr/ADR-009-project-icon-glyph.md); тексты интерфейса —
+[docs/features/project-icon-glyphs.md](docs/features/project-icon-glyphs.md).
 
 ## Уборка карты проекта (Services/Docs)
 
-Кнопка в настройках проекта проверяет корневой `CLAUDE.md`: размер, длинные секции, мёртвые
-ссылки, вложенные карты — и предлагает, что прибрать. Две фазы: детерминированный сканер
-(факты, без модели и без трат) и формулировки модели **по отчёту сканера, а не по самому
-файлу** — карта в окно не влезает. Механические правки формирует сканер: из ответа модели
-читаются ровно `id`, `severity`, `modelSays`, остальных полей в схеме разбора нет вовсе.
-Запись — только по явной отметке человека; **вынос секции кнопкой не делается никогда**
-(цена ошибки — потеря знания, оплаченного инцидентами), регулярной автоматики тоже нет (нет
-критерия «знание не потеряно»). Разбор ```-заборов — один примитив `MarkdownFence` в Core,
-новый построчный разбор markdown обязан звать его. За флагом `project-map-hygiene`
-(`Default: false`). Подробности —
+Кнопка в настройках проекта проверяет корневой `CLAUDE.md` (размер, длинные секции, мёртвые
+ссылки, вложенные карты) и предлагает, что прибрать; за флагом `project-map-hygiene`. Запись —
+только по явной отметке человека, а **вынос секции кнопкой не делается никогда** (цена ошибки —
+потеря знания, оплаченного инцидентами), регулярной автоматики тоже нет. Устройство двух фаз —
 [docs/features/project-map-hygiene.md](docs/features/project-map-hygiene.md), план —
 [project-map-hygiene-plan-2026-09.md](docs/research/project-map-hygiene-plan-2026-09.md).
 
@@ -274,16 +260,8 @@ MSBuild сам — изоляция маршрутов делается толь
 
 `ClaudeSession` запускает: `claude --print --output-format stream-json --input-format stream-json --include-partial-messages --permission-prompt-tool stdio [--resume <id>]`
 
-WorkingDirectory = `project.RootPath`
-
-**stream-json → WebSocket маппинг:**
-- `system { session_id }` → `session_started`
-- `assistant text_delta` → `text_delta`
-- `assistant thinking` → `thinking_delta`
-- `assistant tool_use` → `tool_use`
-- `user tool_result` → `tool_result`
-- `sdk_control_request` → `permission_request` (ждём → пишем `control_response` в stdin)
-- `result` → `result` + `exited`
+WorkingDirectory = `project.RootPath`. Маппинг `stream-json` → `ServerMessage` —
+[llm-providers.md](docs/architecture/llm-providers.md), раздел «Маппинг stream-json».
 
 ## MCP-серверы продукта (mcp/*)
 
@@ -321,35 +299,28 @@ WorkingDirectory = `project.RootPath`
 ## Заметки и Знания (Dify RAG)
 
 Заметки — Obsidian-совместимый markdown-vault (`[[wikilinks]]`, backlinks, граф): настоящие
-`.md` в личном vault `data/notes/{userId}` + `notes/` проектов; семантика — Dify-датасет
-`{username}:notes` (без `Dify:ApiKey` тихо выключена). Знания — менеджер Dify-датасетов
-(Dify — источник истины; каждый `{id}`-эндпоинт проверяет релевантность юзеру, иначе 403).
-Файлы проектов синкаются дифф-по-хешам с дебаунсом 15с (`ProjectKnowledgeSyncService`) +
-lifecycle-каскады. Контуры Dev/Prod на одном Dify разводит `Dify:Namespace`.
-Документы, упавшие на индексации (статус `error`), лечит фоновый реконсайлер
-(`Dify:Reconcile:Mode` = off | observe | heal, **дефолт off**): находит их у участников синка,
-сбрасывает хеши — штатный синк пересоздаёт из источника истины; несопоставимые со сторами
-(сироты, ручные документы) только показываются, не лечатся.
-**Перед правками — прочитай [docs/architecture/knowledge.md](docs/architecture/knowledge.md).**
+`.md` в личном vault `data/notes/{userId}` + `notes/` проектов. Знания — менеджер
+Dify-датасетов, и Dify тут источник истины. Ключ Dify общий на инстанс, поэтому единственная
+граница между владельцами — **проверка релевантности датасета на КАЖДОМ `{id}`-эндпоинте**
+(иначе 403); контуры Dev/Prod на одном Dify разводит `Dify:Namespace` — без него дев-стенд
+лезет в боевые датасеты.
+**Перед правками — прочитай [docs/architecture/knowledge.md](docs/architecture/knowledge.md)**
+(синк по хешам, lifecycle-каскады, реконсайлер упавших документов).
 
 ## Интеграция с мессенджерами (Max / Telegram) — не реализовано
 
-Оправдывающий сценарий: CCS крутится на сервере, юзер не за компьютером, нужно знать о
-завершении задач или реагировать на permission-запросы. Полноценный чат с Claude через
-мессенджер делать **не надо** — он не отрендерит diff/артефакты/виджеты. **Max для ботов
-закрыт** (только верифицированные юрлица РФ). Исследование, архитектура интеграции и решение
-по ботам — [docs/research/messenger-integration.md](docs/research/messenger-integration.md).
+Полноценный чат с Claude через мессенджер делать **не надо** — он не отрендерит
+diff/артефакты/виджеты; оправдывает интеграцию только уведомление о завершении задач и ответ
+на permission-запросы. **Max для ботов закрыт** (только верифицированные юрлица РФ).
+Исследование и архитектура — [docs/research/messenger-integration.md](docs/research/messenger-integration.md).
 
 ## Персоны
 
 «Персоны = контакты, Чаты = разговоры»: персона — отдельная per-owner сущность
-(`data/personas.json`, не .md-агент) с ролью/характером/аватаром/моделью/зоной/долгой памятью.
-Чат с персоной = `Session.PersonaId`: слой персоны (`PersonaPromptBuilder` + recall памяти)
-пересобирается каждый ход и переживает рестарт; зона определяет scope чата. Инварианты:
-
-- У задач `PersonaId != null ⇒ Assignee = Claude` (`TaskManager.NormalizePersonaAssignee`).
-- Доступы: `Persona.Access` (full/readOnly/custom) → `PersonaAccessPolicy` формирует
-  disallowed-инструменты; `Persona.Tools` гейтит tasks/notes/web.
+(`data/personas.json`, не .md-агент); чат с персоной = `Session.PersonaId`, слой персоны
+пересобирается каждый ход. Инварианты: у задач `PersonaId != null ⇒ Assignee = Claude`
+(`TaskManager.NormalizePersonaAssignee`); доступы — `Persona.Access` →
+`PersonaAccessPolicy` (disallowed-инструменты), `Persona.Tools` гейтит tasks/notes/web.
 
 **Перед правками в персонах (промпт, память, групповые чаты, пантеон OmO, аватары, MCP
 personas/memory) — прочитай [docs/architecture/personas.md](docs/architecture/personas.md).**
@@ -363,10 +334,9 @@ personas/memory) — прочитай [docs/architecture/personas.md](docs/archi
 ## Механики OmO в чатах
 
 Тексты — переводы oh-my-openagent ([docs/omo/adoption.md](docs/omo/adoption.md)); рантайм —
-`Services/Prompts/OmoPrompts*.cs` (генерируются скриптом docs/omo/gen-omo-prompts.ps1).
-Главное — цикл «до готово» (флаг `work-loop`): тумблер в композере, протокол маркера
-`<promise>ГОТОВО</promise>`, автопродолжение хода до маркера/лимита, затем верификационный
-ход. Детали — [docs/architecture/features.md](docs/architecture/features.md), раздел «Механики OmO».
+`OmoPrompts*.cs` в `ClaudeHomeServer.Prompts` (генерируются скриптом docs/omo/gen-omo-prompts.ps1).
+Главное — цикл «до готово» (флаг `work-loop`). Детали —
+[docs/architecture/features.md](docs/architecture/features.md), раздел «Механики OmO».
 
 ## REST API
 
@@ -490,6 +460,7 @@ override в `data/users.json`; фронт — стор [lib/featureFlags.ts](fro
 
 | Агент | Роль |
 |---|---|
+| `scout` | разведка по коду: «где в коде X», «кто ещё зовёт Y» — возвращает список файл:строка, читает вместо тебя, не засоряя твой контекст |
 | `designer` | ревью UI-изменений по [docs/design/guidelines.md](docs/design/guidelines.md); запускается только по явному согласию — перед коммитом заметного UI его предлагают, а не вызывают молча |
 
 ## Конфигурация

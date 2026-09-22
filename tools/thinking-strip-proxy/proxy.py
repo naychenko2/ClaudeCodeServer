@@ -56,8 +56,16 @@ PRUNE_MIN_TOKENS = int(os.environ.get("PRUNE_MIN_TOKENS", "20000"))
 # взято из замеров: чат на 133k живёт без автосжатия, и резать там нечего (скачок границы
 # пришлось бы оплатить впустую), а беда начиналась к 318k при окне модели 262k.
 PRUNE_MIN_CONTEXT_TOKENS = int(os.environ.get("PRUNE_MIN_CONTEXT_TOKENS", "150000"))
-# Резать ли старые размышления. Отдельный флаг: у thinking-блоков есть подпись, и как vLLM
-# отнесётся к блоку с изменённым текстом — проверяется живьём, а не предполагается.
+# Резать ли тела Write/Edit в аргументах вызовов. ВЫКЛЮЧЕНО: живой прогон 2026-09-22 показал,
+# что модель ПОДРАЖАЕТ плейсхолдеру. Увидев в истории свой прошлый Write с
+# «[Old tool input content cleared]» вместо текста, она записала следующий файл ровно этой
+# строкой — 32 байта вместо разбора на 15k. Выводы инструментов модель не копирует, а свой
+# собственный текст копирует. Включать только после того, как найден плейсхолдер, который
+# модель не воспроизводит, и это доказано живым прогоном с несколькими Write подряд.
+PRUNE_INPUTS = os.environ.get("PRUNE_INPUTS", "off")
+# Резать ли старые размышления. Отдельный флаг: у thinking-блоков есть подпись (vLLM блок без
+# неё принимает — проверено), но механизм подражания тот же, что у input: модель может начать
+# «думать» плейсхолдером. До живой проверки на чате с крупными размышлениями — выключено.
 PRUNE_THINKING = os.environ.get("PRUNE_THINKING", "off")
 # Разбор каждого запроса в журнал. ВЫКЛЮЧЕН по умолчанию: в лог попадает начало реплики,
 # то есть кусок чужого чата. Включать точечно, на время разбирательства.
@@ -231,9 +239,10 @@ def _prune_input(inp, min_chars):
 
 def prune_tool_results(msgs, keep_tail_tokens=None, step_tokens=None, min_chars=None,
                        min_tokens=None, min_context_tokens=None, extra_chars=0,
-                       prune_thinking=None):
+                       prune_thinking=None, prune_inputs=None):
     """Возвращает (сообщения, сколько символов освободили, сколько блоков обрезали). Вход не мутирует."""
     prune_thinking = (PRUNE_THINKING == "on") if prune_thinking is None else prune_thinking
+    prune_inputs = (PRUNE_INPUTS == "on") if prune_inputs is None else prune_inputs
     keep_tail_tokens = PRUNE_KEEP_TAIL_TOKENS if keep_tail_tokens is None else keep_tail_tokens
     step_tokens = max(1, PRUNE_STEP_TOKENS if step_tokens is None else step_tokens)
     min_chars = PRUNE_MIN_CHARS if min_chars is None else min_chars
@@ -273,7 +282,7 @@ def prune_tool_results(msgs, keep_tail_tokens=None, step_tokens=None, min_chars=
             kind = b.get("type")
             if role == "user" and kind == "tool_result":
                 found.append((mi, bi, _prunable_size(b.get("content")), "result"))
-            elif role == "assistant" and kind == "tool_use":
+            elif role == "assistant" and kind == "tool_use" and prune_inputs:
                 found.append((mi, bi, _input_size(b.get("input"), min_chars), "input"))
             elif role == "assistant" and kind == "thinking" and prune_thinking:
                 found.append((mi, bi, _text_len(b.get("thinking")) or None, "thinking"))

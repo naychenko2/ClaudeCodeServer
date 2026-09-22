@@ -110,8 +110,10 @@ Design и их состав — [docs/design/audit.md](docs/design/audit.md). Ж
 
 ## LLM-провайдеры (ClaudeHomeServer.Llm)
 
-Единственный рантайм — claude CLI (`Llm/Claude/ClaudeSession`); сторонние провайдеры
-(DeepSeek, GLM) подключаются env-оверрайдами процесса на каждый ход. Конфиг — секция
+Основной рантайм — claude CLI (`Llm/Claude/ClaudeSession`); сторонние провайдеры
+(DeepSeek, GLM) подключаются env-оверрайдами процесса на каждый ход. Мимо CLI ходит только
+локальный движок (`ILocalLlmClient` — Ollama или llama-server): фоновые one-shot действия и
+разговор с исполнителем «Локальная» идут прямым HTTP-вызовом. Конфиг — секция
 `LlmProviders`, ключи в appsettings.Local.json (пустой `ApiKey` = провайдер выключен);
 резолв, цены и возможности — `LlmProviderRegistry`. Фоновые one-shot действия (теги, сводки,
 память, changelog…) считаются дёшево по маршруту `LocalActionRouter` + `CheapTextRunner`;
@@ -252,9 +254,10 @@ WorkingDirectory = `project.RootPath`. Маппинг `stream-json` → `ServerM
 
 Транспорта два. Продуктовые серверы живут в Kestrel по **MCP-over-HTTP**
 ([ADR-012](docs/adr/ADR-012-mcp-over-http-transport.md)): тулсет в `Services/Mcp/Http` плюс
-общий `POST /mcp/{name}[/{хвост}]`, node-процесса нет вовсе. Хвост маршрута — сессия-вызыватель,
-по ней тулсет живьём резолвит проект/персону/привязки, а владелец берётся из claim `sub`
-сервисного JWT, не из маршрута. На stdio остался только `desktop` (capability-токен, ADR-008);
+общий `POST /mcp/{name}[/{хвост}]`, node-процесса нет вовсе. Хвост маршрута несёт контекст вызова
+(сессия-вызыватель, у `memory` — персона и проект), по нему тулсет живьём резолвит
+проект/персону/привязки; владелец берётся из claim `sub` сервисного JWT, не из маршрута.
+На stdio остался только `desktop` (capability-токен, ADR-008);
 у `watch` и `websearch` stdio-ветки отката нет вовсе. Замороженные `mcp/*-server/index.js` —
 ветки отката под `Mcp:HttpTransport=false`.
 

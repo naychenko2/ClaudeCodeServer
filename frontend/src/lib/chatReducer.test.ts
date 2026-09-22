@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import {
   serverHistoryNewer, PERSISTED_KINDS, applyServerMessage, normalizeHistory, initialChatState,
-  type ChatState,
+  resolveCardsFromHistory, type ChatState,
 } from './chatReducer';
 import type { ChatItem, ServerMessage } from '../types';
 
@@ -258,5 +258,141 @@ describe('team_wave_pulse: эфемерность', () => {
     const client = feed(initialChatState(), waveState(), wavePulse(), wavePulse());
     const server = snapshot({ kind: 'text', text: 'ответ, дописанный пока вкладка была в другом чате' });
     expect(serverHistoryNewer(server, client.items)).toBe(true);
+  });
+});
+
+// Ответ на карточку с ДРУГОГО устройства: своя копия формы обязана погаснуть.
+// Без события interaction_resolved форма висела активной до перезагрузки страницы —
+// перезагрузка истории тут не спасает, потому что ответ не добавляет элемент в ленту,
+// а дописывает решение в существующий, и сверка по длине даёт «сервер не новее».
+describe('interaction_resolved: ответ с другого устройства', () => {
+  const askItem = (s: ChatState) =>
+    s.items.find(i => i.kind === 'ask_question') as Extract<ChatItem, { kind: 'ask_question' }>;
+
+  it('гасит карточку вопроса и сохраняет выбранные ответы', () => {
+    const before = feed(initialChatState(),
+      { type: 'ask_question', toolUseId: 't-1', input: { questions: [] } });
+    expect(askItem(before).resolved).toBe(false);
+
+    const after = feed(before, {
+      type: 'interaction_resolved', kind: 'question', id: 't-1',
+      answers: { 'Подход': 'Первый' },
+    });
+    expect(askItem(after).resolved).toBe(true);
+    expect(askItem(after).answers).toEqual({ 'Подход': 'Первый' });
+  });
+
+  it('гасит карточку разрешения с вердиктом', () => {
+    const after = feed(initialChatState(),
+      { type: 'permission_request', requestId: 'r-1', toolName: 'Bash', toolInput: {} },
+      { type: 'interaction_resolved', kind: 'permission', id: 'r-1', decision: 'always' });
+    const item = after.items.find(i => i.kind === 'permission_request') as
+      Extract<ChatItem, { kind: 'permission_request' }>;
+    expect(item.resolved).toBe(true);
+    expect(item.decision).toBe('always');
+  });
+
+  it('гасит карточку плана с решением и комментарием', () => {
+    const after = feed(initialChatState(),
+      { type: 'plan_review', requestId: 'r-2', plan: 'план' },
+      { type: 'interaction_resolved', kind: 'plan', id: 'r-2', approved: false, feedback: 'доработать' });
+    const item = after.items.find(i => i.kind === 'plan_review') as
+      Extract<ChatItem, { kind: 'plan_review' }>;
+    expect(item.resolved).toBe(true);
+    expect(item.approved).toBe(false);
+    expect(item.feedback).toBe('доработать');
+  });
+
+  it('чужой id и уже погашенную карточку не трогает (возвращает прежнее состояние)', () => {
+    const before = feed(initialChatState(),
+      { type: 'ask_question', toolUseId: 't-1', input: { questions: [] } },
+      { type: 'interaction_resolved', kind: 'question', id: 't-1', answers: {} });
+    // Повторное событие и событие о чужой карточке — холостые
+    expect(feed(before, { type: 'interaction_resolved', kind: 'question', id: 't-1' })).toBe(before);
+    expect(feed(before, { type: 'interaction_resolved', kind: 'question', id: 'другой' })).toBe(before);
+  });
+
+  it('live-only: сверка «сервер новее?» не считает interaction_resolved', () => {
+    const client = feed(initialChatState(),
+      { type: 'ask_question', toolUseId: 't-1', input: { questions: [] } },
+      { type: 'interaction_resolved', kind: 'question', id: 't-1', answers: {} });
+    const server = snapshot({ kind: 'ask_question', toolUseId: 't-1', input: { questions: [] } });
+    expect(serverHistoryNewer(server, client.items)).toBe(false);
+  });
+});
+
+
+// Разрыв связи ровно в момент ответа с другого устройства: событие interaction_resolved
+// прошло мимо, остаётся перезагрузка истории. Гасим точечно, не подменяя ленту —
+// подмена унесла бы live-only карточку разрешения (permission_request в history не пишется).
+describe('resolveCardsFromHistory: догоняем пропущенный ответ', () => {
+  const openAsk = (id = 't-1') => ({ type: 'ask_question', toolUseId: id, input: { questions: [] } });
+
+  it('гасит вопрос и переносит выбранные ответы из истории', () => {
+    const client = feed(initialChatState(), openAsk());
+    const server = snapshot({
+      kind: 'ask_question', toolUseId: 't-1', input: { questions: [] },
+      resolved: true, answers: { 'Подход': 'Первый' },
+    });
+    const patched = resolveCardsFromHistory(server, client.items)!;
+    const card = patched.find(i => i.kind === 'ask_question') as Extract<ChatItem, { kind: 'ask_question' }>;
+    expect(card.resolved).toBe(true);
+    expect(card.answers).toEqual({ 'Подход': 'Первый' });
+  });
+
+  it('гасит карточку плана с решением и комментарием', () => {
+    const client = feed(initialChatState(), { type: 'plan_review', requestId: 'r-1', plan: 'план' });
+    const server = snapshot({
+      kind: 'plan_review', requestId: 'r-1', plan: 'план', resolved: true, approved: false, feedback: 'доработать',
+    });
+    const card = resolveCardsFromHistory(server, client.items)!
+      .find(i => i.kind === 'plan_review') as Extract<ChatItem, { kind: 'plan_review' }>;
+    expect(card.resolved).toBe(true);
+    expect(card.approved).toBe(false);
+    expect(card.feedback).toBe('доработать');
+  });
+
+  it('работает и когда живая лента ДЛИННЕЕ истории (снимок сервера ещё не догнал ход)', () => {
+    // Сверка длин тут молчит: prev длиннее. Без точечного гашения форма висела бы до конца хода
+    const client = feed(initialChatState(), openAsk(), { type: 'text_delta', text: 'продолжаю работу' });
+    const server = snapshot({
+      kind: 'ask_question', toolUseId: 't-1', input: { questions: [] }, resolved: true, answers: {},
+    });
+    expect(serverHistoryNewer(server, client.items)).toBe(false);
+    const patched = resolveCardsFromHistory(server, client.items)!;
+    expect((patched.find(i => i.kind === 'ask_question') as { resolved: boolean }).resolved).toBe(true);
+    // Хвост живой ленты на месте — историю мы не подменяли
+    expect(patched.some(i => i.kind === 'text' && i.text === 'продолжаю работу')).toBe(true);
+  });
+
+  it('живая карточка разрешения остаётся в ленте: её в истории нет вовсе', () => {
+    // Регрессия, ради которой гасим точечно: подмена ленты историей унесла бы кнопки
+    // permission с экрана, а отвечать было бы нечем — CLI ждёт до таймаута
+    const client = feed(initialChatState(), openAsk(),
+      { type: 'permission_request', requestId: 'r-1', toolName: 'Bash', toolInput: {} });
+    const server = snapshot({
+      kind: 'ask_question', toolUseId: 't-1', input: { questions: [] }, resolved: true, answers: {},
+    });
+    const patched = resolveCardsFromHistory(server, client.items)!;
+    const perm = patched.find(i => i.kind === 'permission_request') as
+      Extract<ChatItem, { kind: 'permission_request' }>;
+    expect(perm.resolved).toBe(false);
+  });
+
+  it('гасить нечего — возвращает null (лента остаётся прежней)', () => {
+    const client = feed(initialChatState(), openAsk('t-2'));
+    // Ни одной погашенной карточки в истории
+    expect(resolveCardsFromHistory(snapshot({ kind: 'text', text: 'ответ' }), client.items)).toBeNull();
+    // Погашена ЧУЖАЯ карточка
+    const foreign = snapshot({
+      kind: 'ask_question', toolUseId: 't-1', input: { questions: [] }, resolved: true, answers: {},
+    });
+    expect(resolveCardsFromHistory(foreign, client.items)).toBeNull();
+    // Наша карточка уже погашена — повтор холостой
+    const resolvedClient = feed(client, { type: 'interaction_resolved', kind: 'question', id: 't-2' });
+    const server = snapshot({
+      kind: 'ask_question', toolUseId: 't-2', input: { questions: [] }, resolved: true, answers: {},
+    });
+    expect(resolveCardsFromHistory(server, resolvedClient.items)).toBeNull();
   });
 });

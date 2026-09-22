@@ -271,6 +271,45 @@ export function serverHistoryNewer(serverItems: ChatItem[], prevItems: ChatItem[
   return p === null ? s.length > 0 : s.length > p.length;
 }
 
+// Погасить карточки, на которые ответили с ДРУГОГО устройства, пока событие
+// interaction_resolved шло мимо нас (разрыв WS ровно в момент ответа). Точечная правка
+// элементов, а НЕ подмена ленты историей — по двум причинам, каждая из которых сама по
+// себе решающая:
+//  • ответ длину ленты не меняет (он дописывает решение в существующий элемент), поэтому
+//    сверка serverHistoryNewer его не видит в принципе — ни при равной длине, ни когда
+//    живая лента успела уйти вперёд по дельтам ещё не сохранённого снимка;
+//  • подмена унесла бы с экрана live-only элементы, которых в истории нет: permission_request
+//    там не персистится вовсе, и живая карточка разрешения пропала бы вместе с кнопками —
+//    отвечать было бы нечем, а CLI ждал бы до таймаута.
+// Возвращает новый массив items или null, если гасить нечего (вызывающий оставит prev).
+export function resolveCardsFromHistory(serverItems: ChatItem[], prevItems: ChatItem[]): ChatItem[] | null {
+  const questions = new Map<string, Extract<ChatItem, { kind: 'ask_question' }>>();
+  const plans = new Map<string, Extract<ChatItem, { kind: 'plan_review' }>>();
+  for (const it of serverItems) {
+    if (it.kind === 'ask_question' && it.resolved) questions.set(it.toolUseId, it);
+    else if (it.kind === 'plan_review' && it.resolved) plans.set(it.requestId, it);
+  }
+  if (questions.size === 0 && plans.size === 0) return null;
+
+  let changed = false;
+  const next = prevItems.map(it => {
+    if (it.kind === 'ask_question' && !it.resolved) {
+      const src = questions.get(it.toolUseId);
+      if (!src) return it;
+      changed = true;
+      return { ...it, resolved: true, answers: src.answers };
+    }
+    if (it.kind === 'plan_review' && !it.resolved) {
+      const src = plans.get(it.requestId);
+      if (!src) return it;
+      changed = true;
+      return { ...it, resolved: true, approved: src.approved, feedback: src.feedback };
+    }
+    return it;
+  });
+  return changed ? next : null;
+}
+
 // Модель последнего session_started этого чата — точка сравнения для пометки «Ответила …»
 // (провалившаяся попытка перед фолбэк-подменой всегда успевает прислать свой session_started)
 function lastKnownModel(items: ChatItem[]): string | null {
@@ -561,6 +600,33 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
           resolved: false,
         }],
       };
+
+    // Ответ с другого устройства: гасим свою копию карточки и показываем принятое решение.
+    // На устройстве отвечавшего карточка уже resolved — тогда возвращаем prev, чтобы не
+    // дёргать лишний рендер. isWaiting не трогаем: ход продолжается, статус приедет
+    // отдельным status_changed (как и у отвечавшего клиента).
+    case 'interaction_resolved': {
+      let changed = false;
+      const items = prev.items.map(it => {
+        if (it.kind === 'ask_question' && msg.kind === 'question'
+          && it.toolUseId === msg.id && !it.resolved) {
+          changed = true;
+          return { ...it, resolved: true, answers: msg.answers };
+        }
+        if (it.kind === 'permission_request' && msg.kind === 'permission'
+          && it.requestId === msg.id && !it.resolved) {
+          changed = true;
+          return { ...it, resolved: true, decision: msg.decision };
+        }
+        if (it.kind === 'plan_review' && msg.kind === 'plan'
+          && it.requestId === msg.id && !it.resolved) {
+          changed = true;
+          return { ...it, resolved: true, approved: msg.approved, feedback: msg.feedback };
+        }
+        return it;
+      });
+      return changed ? { ...prev, items } : prev;
+    }
 
     case 'file_changed': {
       // Дедуп за ход: повторная правка того же файла обновляет существующую строку

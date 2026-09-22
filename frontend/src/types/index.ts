@@ -985,6 +985,13 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'permission_request'; requestId: string; toolName: string; toolInput: unknown }
   | { type: 'ask_question'; toolUseId: string; input: unknown }
   | { type: 'plan_review'; requestId: string; plan: string }
+  // Человек ответил на карточку (вопрос / разрешение / план) с ДРУГОГО устройства — гасим
+  // свою копию формы. У отвечающего клиента карточка уже погашена оптимистично, событие
+  // для него холостое. kind: question → id это toolUseId и решение в answers;
+  // permission → id это requestId и решение в decision; plan → requestId + approved/feedback
+  | { type: 'interaction_resolved'; kind: 'question' | 'permission' | 'plan'; id: string;
+      answers?: Record<string, string | string[]>; decision?: 'allowed' | 'denied' | 'always';
+      approved?: boolean; feedback?: string }
   // external — правку сделали не Edit/Write этого чата (человек в IDE, форматтер);
   // фронт снимает кнопку «Откатить» и помечает карточку «Изменение вне чата»
   | { type: 'file_changed'; path: string; added: number; removed: number; external?: boolean }

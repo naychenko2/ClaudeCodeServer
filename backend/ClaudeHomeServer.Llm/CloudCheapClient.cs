@@ -54,9 +54,19 @@ public sealed class CloudCheapClient
     // провайдеров, не принимающих 0: kimi на всех моделях каталога требует ровно 1 и падает
     // 400 «invalid temperature: only 1 is allowed» (прод 2026-08-12). Берётся из
     // CheapHttpSources:{key}:Temperature.
+    //
+    // DisableThinking — просьба к рассуждающей модели не писать ход мысли: в тело запроса
+    // уходит thinking:{type:"disabled"}. Нужна minimax: на OpenAI-совместимом маршруте
+    // MiniMax-M3 пишет рассуждение прямо в content тегом <think>…</think> и съедает лимит
+    // вывода — на входе консолидации памяти (~48 КБ) до ответа уже не доходит вовсе
+    // (прод 2026-09-22). Поле провайдер-специфичное, всем подряд слать нельзя: источник,
+    // который его не знает, ответит 400. Сделано настройкой источника, а не веткой
+    // по ключу «minimax» в коде, ровно по образцу Temperature выше: это тот же класс
+    // особенности (поле тела запроса, нужное одному провайдеру), и двух разных механизмов
+    // для него заводить незачем. Берётся из CheapHttpSources:{key}:DisableThinking.
     public record Source(
         string Key, string ProviderKey, string ApiBaseUrl, string ApiKey,
-        IReadOnlyList<string> Models, double Temperature = 0)
+        IReadOnlyList<string> Models, double Temperature = 0, bool DisableThinking = false)
     {
         public bool Configured => !string.IsNullOrWhiteSpace(ApiBaseUrl) && !string.IsNullOrWhiteSpace(ApiKey);
     }
@@ -87,10 +97,11 @@ public sealed class CloudCheapClient
             var temperature = double.TryParse(child["Temperature"],
                 NumberStyles.Float | NumberStyles.AllowThousands, CultureInfo.InvariantCulture, out var t)
                 ? t : 0;
+            var disableThinking = bool.TryParse(child["DisableThinking"], out var dt) && dt;
             _sources.Add(new Source(sourceKey, providerKey,
                 cfg?.ApiBaseUrl?.TrimEnd('/') ?? "",
                 cfg?.ApiKey ?? "",
-                models, temperature));
+                models, temperature, disableThinking));
         }
     }
 
@@ -155,16 +166,21 @@ public sealed class CloudCheapClient
             var client = _http.CreateClient("llm-provider");
             client.Timeout = timeout;
 
+            // Словарь, а не анонимный объект: thinking уходит только у источников с
+            // DisableThinking, остальным тело запроса менять нельзя (см. Source выше)
+            var body = new Dictionary<string, object?>
+            {
+                ["model"] = model,
+                ["stream"] = false,
+                ["temperature"] = source.Temperature,
+                ["max_tokens"] = maxTokens,
+                ["messages"] = new[] { new { role = "user", content = prompt } },
+            };
+            if (source.DisableThinking) body["thinking"] = new { type = "disabled" };
+
             using var req = new HttpRequestMessage(HttpMethod.Post, $"{source.ApiBaseUrl}/chat/completions")
             {
-                Content = JsonContent.Create(new
-                {
-                    model,
-                    stream = false,
-                    temperature = source.Temperature,
-                    max_tokens = maxTokens,
-                    messages = new[] { new { role = "user", content = prompt } },
-                }),
+                Content = JsonContent.Create(body),
             };
             req.Headers.Authorization =
                 new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", source.ApiKey);

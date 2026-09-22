@@ -201,8 +201,11 @@ public static class LocalActionCatalog
         // бесплатная цепочка (RunFreeAsync): при недоступности локали/адаптера — жёсткая
         // обрезка на стороне TeamMemoryService, платить claude за это не нужно.
         new(TeamMemoryCompress, "Сжатие авто-записи памяти команды", "Память", CheapProfile.Small, DefaultLocal: true),
-        new(PersonaMemoryConsolidate, "Консолидация памяти персон", "Память", CheapProfile.Text, DefaultLocal: true),
-        new(TeamMemoryConsolidate, "Консолидация памяти команды", "Память", CheapProfile.Text, DefaultLocal: true),
+        // Консолидации — Large, а не Text: на вход уходят десятки килобайт записей памяти,
+        // и на профиле Text (4096 вывод / 8192 контекст) локальный фолбэк резал промпт вдвое,
+        // теряя половину записей, которые должен был слить (прод 2026-09-22)
+        new(PersonaMemoryConsolidate, "Консолидация памяти персон", "Память", CheapProfile.Large, DefaultLocal: true),
+        new(TeamMemoryConsolidate, "Консолидация памяти команды", "Память", CheapProfile.Large, DefaultLocal: true),
         new(AutomationGate, "Гейт проактивности персон", "Персоны", CheapProfile.Small, DefaultLocal: true),
         new(DocSummary, "Краткое содержание документа", "Документы", CheapProfile.Large, DefaultLocal: true),
         new(DocExtract, "Выжимка из документа", "Документы", CheapProfile.Large, DefaultLocal: true),

@@ -192,7 +192,7 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
             {
                 // Корень обязан встать: без него наблюдения нет вовсе — это отказ старта,
                 // а не частичный отказ отдельного каталога.
-                if (!TryAddWatch(root))
+                if (TryAddWatch(root) != WatchAdd.Added)
                 {
                     var err = LastError($"inotify_add_watch({root})");
                     throw err;
@@ -239,9 +239,13 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
             write(_wakeFd, one, one.Length);
         }
 
-        // Подписка на каталог. false — не подписались (потолок или отказ ядра);
-        // причина отказа остаётся в errno для вызывающего.
-        private bool TryAddWatch(string dir)
+        /// <summary>Исход подписки: встала (в том числе повторно на тот же путь),
+        /// оказалась вторым именем уже наблюдаемого каталога, не встала вовсе.</summary>
+        private enum WatchAdd { Added, Alias, Failed }
+
+        // Подписка на каталог. Не Added — вглубь идти нельзя; причина отказа ядра
+        // остаётся в errno для вызывающего.
+        private WatchAdd TryAddWatch(string dir)
         {
             lock (_lock)
             {
@@ -249,13 +253,34 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
                 {
                     WarnOnce("max-watches",
                         $"достигнут потолок слежек ({_maxWatches}) — новые каталоги не наблюдаются");
-                    return false;
+                    return WatchAdd.Failed;
                 }
             }
             var wd = inotify_add_watch(_fd, dir, WatchMask);
-            if (wd < 0) return false;
-            lock (_lock) _paths[wd] = dir; // тот же каталог даёт тот же wd — запись просто обновится
-            return true;
+            if (wd < 0) return WatchAdd.Failed;
+            lock (_lock)
+            {
+                // Тот же inode даёт тот же wd. Если под ним уже записан ДРУГОЙ путь —
+                // это второе имя того же каталога внутри дерева (bind-mount): перезапись
+                // сделала бы путь живых событий фантомным, поэтому запись не трогаем и
+                // вглубь по второму имени не идём.
+                if (_paths.TryGetValue(wd, out var known)
+                    && !string.Equals(known, dir, StringComparison.Ordinal))
+                    return WatchAdd.Alias;
+                _paths[wd] = dir;
+            }
+            return WatchAdd.Added;
+        }
+
+        // Ссылка-на-каталог: .NET на Linux отдаёт её в GetDirectories как обычный каталог
+        // и идёт внутрь. Петля (`loop -> ..`) даёт бесконечную цепочку путей, которую
+        // потолок слежек НЕ останавливает (тот же inode — тот же wd, счёт не растёт), а
+        // ссылка наружу тратит бюджет на чужое дерево и отдаёт события по путям вне корня.
+        // Ссылки на ФАЙЛЫ тут ни при чём: слежка ставится только на каталоги.
+        private static bool IsSymlink(string dir)
+        {
+            try { return new DirectoryInfo(dir).LinkTarget is not null; }
+            catch { return true; } // не смогли определить — безопаснее пропустить
         }
 
         // Обход поддерева с обрезкой служебных каталогов. emitExistingFiles — для каталогов,
@@ -274,12 +299,20 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
                 foreach (var sub in subdirs)
                 {
                     if (_excludeDirs.Contains(Path.GetFileName(sub))) continue;
-                    if (!TryAddWatch(sub))
+                    if (IsSymlink(sub)) continue; // по ссылкам не ходим: петли и выход за корень
+                    switch (TryAddWatch(sub))
                     {
-                        WarnOnce("add-watch", $"не удалось завести слежку на {sub} — каталог пропущен");
-                        continue;
+                        case WatchAdd.Added:
+                            stack.Push(sub);
+                            break;
+                        case WatchAdd.Alias:
+                            WarnOnce("alias-watch",
+                                $"{sub} — второе имя уже наблюдаемого каталога, поддерево пропущено");
+                            break;
+                        default:
+                            WarnOnce("add-watch", $"не удалось завести слежку на {sub} — каталог пропущен");
+                            break;
                     }
-                    stack.Push(sub);
                 }
                 if (!emitExistingFiles) continue;
                 try
@@ -388,8 +421,20 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
                 var subdir = Path.Combine(dir, name);
                 if ((mask & (IN_CREATE | IN_MOVED_TO)) != 0)
                 {
-                    if (TryAddWatch(subdir)) AddSubtree(subdir, emitExistingFiles: true);
-                    else WarnOnce("add-watch", $"не удалось завести слежку на {subdir} — каталог пропущен");
+                    if (IsSymlink(subdir)) return; // по ссылкам не ходим — как и при обходе
+                    switch (TryAddWatch(subdir))
+                    {
+                        case WatchAdd.Added:
+                            AddSubtree(subdir, emitExistingFiles: true);
+                            break;
+                        case WatchAdd.Alias:
+                            WarnOnce("alias-watch",
+                                $"{subdir} — второе имя уже наблюдаемого каталога, поддерево пропущено");
+                            break;
+                        default:
+                            WarnOnce("add-watch", $"не удалось завести слежку на {subdir} — каталог пропущен");
+                            break;
+                    }
                 }
                 else if ((mask & (IN_DELETE | IN_MOVED_FROM)) != 0) RemoveSubtree(subdir);
                 return; // сами каталоги потребителю не интересны

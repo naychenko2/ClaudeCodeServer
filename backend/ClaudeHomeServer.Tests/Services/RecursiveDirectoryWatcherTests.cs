@@ -66,6 +66,60 @@ public class RecursiveDirectoryWatcherTests : IDisposable
     }
 
     [SkippableFact]
+    public async Task СимволическиеСсылки_НеОбходятсяИНеПодписываются()
+    {
+        Skip.IfNot(OperatingSystem.IsLinux(), "обход по ссылкам — только Linux");
+
+        // Настоящих каталогов 3 (src, src/a, src/b) плюс корень. Ссылка `loop -> ..`
+        // при обходе по ссылкам даёт бесконечную цепочку src/loop/src/loop/… (потолок
+        // слежек её не ловит: тот же inode — тот же wd), `ext -> outside` уводит слежку
+        // за пределы корня.
+        var src = Path.Combine(_root, "src");
+        Directory.CreateDirectory(Path.Combine(src, "a"));
+        Directory.CreateDirectory(Path.Combine(src, "b"));
+        var outside = Path.Combine(Path.GetTempPath(), "ccs-rdw-out-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(outside);
+        Directory.CreateSymbolicLink(Path.Combine(src, "loop"), "..");
+        Directory.CreateSymbolicLink(Path.Combine(_root, "ext"), outside);
+
+        var seen = new List<string>();
+        using var watcher = new RecursiveDirectoryWatcher(_root, Excludes,
+            (path, _) => { lock (seen) seen.Add(path); });
+        try
+        {
+            watcher.Start();
+
+            watcher.WatchCount.Should().Be(4,
+                "подписываются только настоящие каталоги: корень, src, src/a, src/b");
+
+            // Чужой файл создаётся ПЕРВЫМ: дождавшись события своего, мы знаем, что цикл
+            // чтения жив и чужое событие не «просто не успело».
+            await File.WriteAllTextAsync(Path.Combine(outside, "alien.txt"), "x");
+            var mine = Path.Combine(src, "a", "mine.txt");
+            await File.WriteAllTextAsync(mine, "x");
+
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while (DateTime.UtcNow < deadline)
+            {
+                lock (seen)
+                    if (seen.Contains(mine)) break;
+                await Task.Delay(50);
+            }
+
+            lock (seen)
+            {
+                seen.Should().Contain(mine, "за настоящим поддеревом наблюдение идёт");
+                seen.Should().NotContain(p => p.StartsWith(outside, StringComparison.Ordinal),
+                    "слежек вне корня нет — ссылка наружу не обходится");
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(outside, recursive: true); } catch { /* уборка */ }
+        }
+    }
+
+    [SkippableFact]
     public async Task ПеренесённыйКаталог_НеОставляетФантомныхСлежек()
     {
         Skip.IfNot(OperatingSystem.IsLinux(), "снятие слежек поддерева — только Linux");

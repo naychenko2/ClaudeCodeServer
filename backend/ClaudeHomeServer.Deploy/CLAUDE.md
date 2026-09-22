@@ -109,4 +109,5 @@ IndexedDB и при обрыве **молча возвращает сохран�
 `ITrayGate` и `IDeployHost` — швы ради тестов: реализации опираются на именованные объекты ядра
 Windows, git и планировщик задач, а бэкенд собирается и тестируется на Linux (CI). Прочие
 сознательные границы подсистемы (`IGitRepoChecker`, `Backup.InstanceLock`, сторы вне `data/`)
-перечислены в шапке [DeploySubsystem.cs](Services/Deploy/DeploySubsystem.cs).
+перечислены в шапке
+[DeploySubsystem.cs](backend/ClaudeHomeServer.Deploy/Services/Deploy/DeploySubsystem.cs).

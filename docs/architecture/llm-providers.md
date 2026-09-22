@@ -411,9 +411,10 @@ SHA-256 и сравнивается с `ClaudeSession._lastTurnRecallHash`; со
 **Сторож — `ClaudeSessionPromptSectionsOrderTests`**
 ([тесты](../../backend/ClaudeHomeServer.Tests/Services/ClaudeSessionPromptSectionsOrderTests.cs)):
 один тест держит порядок секций в системном блоке и пустой хвост после слоя персоны, второй —
-`[Theory]` по включённой и выключенной ручке: при включённой маркеры всех нестабильных секций
+`[Theory]` по включённой и выключенной ручке: при включённой маркеры нестабильных секций
 обязаны отсутствовать в фактическом аргументе `--append-system-prompt`, при выключенной —
-присутствовать, а стабильная секция остаётся в обоих случаях.
+присутствовать, а стабильная секция остаётся в обоих случаях. Проверяются четыре маркера из
+пяти — `dossier-recall` в наборе `[Theory]` нет, и добавить его туда стоило бы.
 
 ## Рантайм-слой `--settings`: хуки, браузер, ретенция
 
@@ -461,7 +462,7 @@ SHA-256 и сравнивается с `ClaudeSession._lastTurnRecallHash`; со
 | `user` | `ToolResult` (блоки `tool_result`); строковый content — уведомление задачи, в ленту не идёт |
 | `sdk_control_request` | `PermissionRequest`; ответ пишется в stdin как `control_response` |
 | `control_request` (`can_use_tool`) | `AskQuestion` (`AskUserQuestion`), `PlanReview` (`ExitPlanMode`), иначе — общий пайплайн разрешений. **Актуальные CLI шлют разрешения именно этим каналом**, а не `sdk_control_request` |
-| `rate_limit_event` | `RateLimit` (`ClaudeRateLimitParser`) + отметка в телеметрии хода; он же снимает пометку `MarkAuthDead` — это доказательство аутентификации |
+| `rate_limit_event` | `RateLimit` (`ClaudeRateLimitParser`) + отметка в телеметрии хода. Само событие — доказательство аутентификации, и пометку `auth-dead` с подписки снимает уже обработчик `RateLimitMessage` в `SessionManager`, а не эта ветка |
 | `result` | `Error` (при `is_error` с текстом), затем `Result` (длительность, ходы, usage, стоимость, отказы, токены контекста) |
 | `prompt_suggestion` | `PromptSuggestion` |
 

@@ -47,5 +47,8 @@ run install -m 0644 "$REPO_ROOT/deploy/sysctl.d/60-inotify.conf" /etc/sysctl.d/6
 run sysctl -q -p /etc/sysctl.d/60-inotify.conf
 
 echo "--- итог ---"
-run systemctl show 'user@1000.service' -p ManagedOOMMemoryPressure -p ManagedOOMMemoryPressureLimit
+# uid берём у ВЫЗВАВШЕГО (под sudo это SUDO_UID), а не 1000 жёстко: цикл выше generic,
+# и на машине, где продукт живёт не под первым пользователем, итог показывал бы чужой юнит.
+CALLER_UID="${SUDO_UID:-$(id -u)}"
+run systemctl show "user@${CALLER_UID}.service" -p ManagedOOMMemoryPressure -p ManagedOOMMemoryPressureLimit
 run sysctl fs.inotify.max_user_watches fs.inotify.max_user_instances

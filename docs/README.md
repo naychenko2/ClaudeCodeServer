@@ -35,6 +35,7 @@
 [llm-providers.md](architecture/llm-providers.md),
 [mcp-servers.md](architecture/mcp-servers.md),
 [knowledge.md](architecture/knowledge.md) (заметки и Dify),
+[file-watching.md](architecture/file-watching.md) (наблюдение за деревом файлов),
 [personas.md](architecture/personas.md),
 [onboarding-intro.md](architecture/onboarding-intro.md) (знакомство: личное и проектное v2),
 [team-implement-mode.md](architecture/team-implement-mode.md) (режим чата-штаба),

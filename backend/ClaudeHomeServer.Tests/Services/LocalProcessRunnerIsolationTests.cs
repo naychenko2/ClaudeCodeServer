@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Services.Execution;
 using FluentAssertions;
+using Microsoft.Extensions.Configuration;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -65,12 +66,26 @@ public class LocalProcessRunnerIsolationTests
     // при её отсутствии снаружи. А снаружи она как раз бывает: изолированным процессам её
     // ставит этот самый механизм, и тестраннер, запущенный под изоляцией, её наследует —
     // без снятия ассерт проверял бы среду прогона, а не код.
-    private static IDisposable NoAmbient(string name)
+    private static IDisposable NoAmbient(string name) => NoAmbient([name]);
+
+    private static IDisposable NoAmbient(IReadOnlyList<string> names)
     {
-        var prev = Environment.GetEnvironmentVariable(name);
-        Environment.SetEnvironmentVariable(name, null);
-        return new Restore(() => Environment.SetEnvironmentVariable(name, prev));
+        var prev = names.ToDictionary(n => n, Environment.GetEnvironmentVariable);
+        foreach (var n in names) Environment.SetEnvironmentVariable(n, null);
+        return new Restore(() =>
+        {
+            foreach (var (n, v) in prev) Environment.SetEnvironmentVariable(n, v);
+        });
     }
+
+    // Переменные сборки, которые ставит САМ этот механизм. Прогон ИЗНУТРИ агентского scope
+    // (обычный режим работы исполнителей) наследует их от процесса тестов, а раннер ставит
+    // свои через TryAdd — унаследованное значение он не перебьёт. Без снятия три теста
+    // проверяли бы среду прогона: на CI зелено, у агента красно, и прогону никто не верит.
+    private static IDisposable NoAmbientBuildEnv() => NoAmbient([
+        "MSBUILDNODEHANDSHAKESALT", "SharedCompilationId", "MSBUILDDISABLENODEREUSE",
+        "_MSBUILDTLENABLED", "DOTNET_CLI_USE_MSBUILD_SERVER", "UseSharedCompilation",
+    ]);
 
     [Fact]
     public void Включена_НеWindows_ЗапускИдётЧерезSystemdRun()
@@ -106,7 +121,7 @@ public class LocalProcessRunnerIsolationTests
     public void Выключена_ЗапускКакРаньше()
     {
         using var _ = Bus(present: true);
-        using var noAmbient = NoAmbient("MSBUILDDISABLENODEREUSE");
+        using var noAmbient = NoAmbientBuildEnv();
 
         var (psi, reason) = Build(Spec(args: ["--print"]), new IsolationOptions { Enabled = false });
 
@@ -253,6 +268,7 @@ public class LocalProcessRunnerIsolationTests
     public void РеюзВыключен_ЗапретыMsbuildДобавляютсяИНеПеребиваютЯвные()
     {
         using var _ = Bus(present: true);
+        using var noAmbient = NoAmbientBuildEnv();
 
         var (psi, _) = Build(
             Spec(env: new Dictionary<string, string> { ["UseSharedCompilation"] = "true" }),
@@ -268,6 +284,7 @@ public class LocalProcessRunnerIsolationTests
     public void Реюз_УзлыСборкиСолятсяИменемScope()
     {
         using var _ = Bus(present: true);
+        using var noAmbient = NoAmbientBuildEnv();
 
         var (psi, _) = Build(Spec(), On());
 
@@ -302,6 +319,44 @@ public class LocalProcessRunnerIsolationTests
         {
             Environment.SetEnvironmentVariable("MSBUILDDISABLENODEREUSE", prevReuse);
             Environment.SetEnvironmentVariable("UseSharedCompilation", prevShared);
+        }
+    }
+
+    // Запрет MemoryHigh держался на одной строке документации — а такой запрет не держится:
+    // значение возвращается в конфиг при первом же «кажется, сборка ест память». Под
+    // systemd-oomd дроссель сам становится источником PSI-давления и убивает scope агента
+    // целиком (разбор 2026-09-22), поэтому заполненный ключ обязан ругаться вслух.
+    [Fact]
+    public void MemoryHighВКонфиге_РугаетсяВStderr()
+    {
+        var prev = Console.Error;
+        var sink = new StringWriter();
+        Console.SetError(sink);
+        try
+        {
+            var filled = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Execution:Isolation:Enabled"] = "true",
+                ["Execution:Isolation:MemoryHigh"] = "12G",
+            }).Build();
+
+            var options = IsolationOptions.FromConfig(filled);
+
+            options.MemoryHigh.Should().Be("12G", "конфиг читается как есть — предупреждение, а не подмена");
+            sink.ToString().Should().Contain("MemoryHigh")
+                .And.Contain("oomd", "человеку нужна причина, иначе он вернёт значение обратно");
+
+            var empty = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Execution:Isolation:MemoryHigh"] = "",
+            }).Build();
+            var before = sink.ToString().Length;
+            IsolationOptions.FromConfig(empty);
+            sink.ToString().Length.Should().Be(before, "пустой ключ — штатное состояние, ругаться не на что");
+        }
+        finally
+        {
+            Console.SetError(prev);
         }
     }
 

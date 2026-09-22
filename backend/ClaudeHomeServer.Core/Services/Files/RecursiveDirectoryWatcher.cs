@@ -55,6 +55,13 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
     private readonly bool _includeDirectories;
     private readonly int _bufferBytes;
     private IWatchBackend? _backend;
+    // Start/Stop/Dispose сериализованы замком. Гонка тут не теоретическая: Start нового хода
+    // и Stop из HandleProcessExitedAsync приходят с разных потоков, и без сериализации два
+    // Dispose гасили бы ОДИН backend — второй проходил Join мгновенно и делал close(fd) на
+    // номер, уже выданный ядром другому владельцу (сокет Kestrel, inotify соседа). Замок
+    // строже Interlocked-обмена: он исключает ещё и обратный порядок «Stop не увидел
+    // наблюдателя, который Start поставил следом» — наблюдение после Stop оставалось бы жить.
+    private readonly Lock _stateLock = new();
 
     /// <param name="root">Корень дерева.</param>
     /// <param name="excludeDirs">Имена каталогов, которые не обходятся и не подписываются
@@ -89,17 +96,26 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
     /// исключение (лимит ОС, нет прав): ход идёт без карточек изменений, но не падает.</summary>
     public void Start()
     {
-        Stop();
-        if (!Directory.Exists(_root)) return;
-        _backend = OperatingSystem.IsLinux()
-            ? new InotifyBackend(_root, _excludeDirs, Emit, _maxWatches, Warn, _includeDirectories, Fail)
-            : new FileSystemWatcherBackend(_root, Emit, _includeDirectories, _bufferBytes, Fail);
+        lock (_stateLock)
+        {
+            StopLocked();
+            if (!Directory.Exists(_root)) return;
+            _backend = OperatingSystem.IsLinux()
+                ? new InotifyBackend(_root, _excludeDirs, Emit, _maxWatches, Warn, _includeDirectories, Fail)
+                : new FileSystemWatcherBackend(_root, Emit, _includeDirectories, _bufferBytes, Fail);
+        }
     }
 
     public void Stop()
     {
-        var backend = _backend;
-        _backend = null;
+        lock (_stateLock) StopLocked();
+    }
+
+    // Под _stateLock. Backend снимается с поля ДО гашения: повторный вход увидит null и не
+    // закроет его дескрипторы вторично.
+    private void StopLocked()
+    {
+        var backend = Interlocked.Exchange(ref _backend, null);
         backend?.Dispose();
     }
 
@@ -110,6 +126,10 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
     /// <summary>Сколько слежек держит наблюдатель сейчас (для тестов и диагностики);
     /// у FileSystemWatcher-ветки счёт ведёт ядро, поэтому -1.</summary>
     internal int WatchCount => _backend?.WatchCount ?? 0;
+
+    /// <summary>Пути, на которые сейчас стоит слежка (для тестов и диагностики); у ветки
+    /// FileSystemWatcher перечня нет — дерево там наблюдает ядро.</summary>
+    internal IReadOnlyCollection<string> Subscribed => _backend?.Subscribed ?? [];
 
     private void Emit(string path, DirectoryWatchKind kind)
     {
@@ -129,9 +149,10 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
         catch { /* реакция потребителя не должна ронять поток чтения */ }
     }
 
-    private interface IWatchBackend : IDisposable
+    internal interface IWatchBackend : IDisposable
     {
         int WatchCount { get; }
+        IReadOnlyCollection<string> Subscribed { get; }
     }
 
     // ── Windows/macOS: прежнее поведение. Дерево там наблюдается одним дескриптором ядра ──
@@ -173,12 +194,17 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
 
         public int WatchCount => -1;
 
+        public IReadOnlyCollection<string> Subscribed => [];
+
         public void Dispose() => _watcher.Dispose();
     }
 
     // ── Linux: один экземпляр inotify, слежки по явному перечню каталогов ──
-    private sealed class InotifyBackend : IWatchBackend
+    // internal (а не private) ради теста идемпотентности Dispose: проверять «второй Dispose
+    // не закрыл чужой дескриптор» можно только зная номер дескриптора этого backend'а.
+    internal sealed class InotifyBackend : IWatchBackend
     {
+        private const uint IN_ATTRIB = 0x00000004;
         private const uint IN_MODIFY = 0x00000002;
         private const uint IN_CLOSE_WRITE = 0x00000008;
         private const uint IN_MOVED_FROM = 0x00000040;
@@ -202,6 +228,10 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
         private const int O_NONBLOCK = 0x800;
         private const int O_CLOEXEC = 0x80000;
         private const short POLLIN = 0x001;
+        // Ошибки дескриптора: ядро возвращает их в revents НЕЗАВИСИМО от запрошенных events.
+        private const short POLLERR = 0x008;
+        private const short POLLHUP = 0x010;
+        private const short POLLNVAL = 0x020;
         private const int EINTR = 4;
         private const int EAGAIN = 11;
         private const int EventHeaderSize = 16; // wd(4) + mask(4) + cookie(4) + len(4)
@@ -215,12 +245,25 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
         private readonly Dictionary<int, string> _paths = new();
         private readonly Lock _lock = new();
         private readonly HashSet<string> _warned = new(StringComparer.Ordinal);
+        private readonly string _root;
+        // Слежка корня: её смерть — смерть всего наблюдения, а не выбывание одного каталога.
+        private readonly int _rootWd;
+        // Маска слежки: у наблюдателя дерева файлов в ней есть ещё IN_ATTRIB (см. WatchMask).
+        private readonly uint _mask;
         private readonly int _fd;
         private readonly int _wakeFd;
         private readonly Thread _reader;
         private volatile bool _stopping;
+        // Гашение — ровно одно: второй Dispose проскочил бы Join (поток уже вышел) и закрыл
+        // номера дескрипторов, которые ядро успело выдать другому владельцу.
+        private int _disposed;
 
-        public InotifyBackend(string root, HashSet<string> excludeDirs,
+        // Номер inotify-дескриптора — для теста идемпотентности Dispose: только зная его,
+        // можно занять освободившийся номер своим файлом и доказать, что второе гашение
+        // его не закрыло.
+        internal int FdForTests => _fd;
+
+        internal InotifyBackend(string root, HashSet<string> excludeDirs,
             Action<string, DirectoryWatchKind> emit, int maxWatches, Action<string> warn,
             bool includeDirectories, Action<DirectoryWatchFailure> fail)
         {
@@ -230,6 +273,12 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
             _fail = fail;
             _includeDirectories = includeDirectories;
             _maxWatches = maxWatches;
+            _root = root;
+            // IN_ATTRIB — только наблюдателю дерева файлов: .NET FileSystemWatcher с
+            // NotifyFilters.LastWrite ставил IN_ATTRIB|IN_MODIFY, и без него touch/chmod
+            // перестали бы давать Changed. Ватчеру хода это лишний шум: он на каждое
+            // событие читает файл и считает diff, а смена прав содержимого не меняет.
+            _mask = includeDirectories ? WatchMask | IN_ATTRIB : WatchMask;
 
             _fd = inotify_init1(O_NONBLOCK | O_CLOEXEC);
             if (_fd < 0) throw LastError("inotify_init1");
@@ -245,7 +294,7 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
             {
                 // Корень обязан встать: без него наблюдения нет вовсе — это отказ старта,
                 // а не частичный отказ отдельного каталога.
-                if (TryAddWatch(root) != WatchAdd.Added)
+                if (TryAddWatch(root, out _rootWd) != WatchAdd.Added)
                 {
                     var err = LastError($"inotify_add_watch({root})");
                     throw err;
@@ -269,12 +318,18 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
 
         public int WatchCount { get { lock (_lock) return _paths.Count; } }
 
+        public IReadOnlyCollection<string> Subscribed { get { lock (_lock) return _paths.Values.ToArray(); } }
+
         // Дескрипторы закрываются ТОЛЬКО после выхода потока чтения: закрытие fd под
         // ожиданием в poll/read — ровно та форма, что 19.09 оставила 8 076 брошенных
         // экземпляров inotify (поток висит в read, будить его нечем). Поэтому
         // пробуждение идёт через eventfd, а close — после Join.
         public void Dispose()
         {
+            // Идемпотентность — не аккуратность, а защита чужих дескрипторов: у второго
+            // вызова Join проходит мгновенно (поток уже вышел), и close(_fd) закрывает
+            // номер, который ядро между вызовами отдало новому владельцу.
+            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
             _stopping = true;
             Wake();
             if (!_reader.Join(TimeSpan.FromSeconds(5)))
@@ -296,20 +351,21 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
         /// оказалась вторым именем уже наблюдаемого каталога, не встала вовсе.</summary>
         private enum WatchAdd { Added, Alias, Failed }
 
+        private WatchAdd TryAddWatch(string dir) => TryAddWatch(dir, out _);
+
         // Подписка на каталог. Не Added — вглубь идти нельзя; причина отказа ядра
         // остаётся в errno для вызывающего.
-        private WatchAdd TryAddWatch(string dir)
+        private WatchAdd TryAddWatch(string dir, out int wd)
         {
-            lock (_lock)
+            wd = -1;
+            bool ceiling;
+            lock (_lock) ceiling = _paths.Count >= _maxWatches;
+            if (ceiling)
             {
-                if (_paths.Count >= _maxWatches)
-                {
-                    WarnOnce("max-watches",
-                        $"достигнут потолок слежек ({_maxWatches}) — новые каталоги не наблюдаются");
-                    return WatchAdd.Failed;
-                }
+                ReportCeiling();
+                return WatchAdd.Failed;
             }
-            var wd = inotify_add_watch(_fd, dir, WatchMask);
+            wd = inotify_add_watch(_fd, dir, _mask);
             if (wd < 0) return WatchAdd.Failed;
             lock (_lock)
             {
@@ -339,24 +395,37 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
         // Обход поддерева с обрезкой служебных каталогов. emitExistingFiles — для каталогов,
         // появившихся УЖЕ ПОСЛЕ старта: файлы внутри могли создаться до того, как слежка
         // встала, и их события иначе теряются молча.
+        //
+        // Обход ШИРИНОЙ, а не глубиной: под потолком слежек порядок решает, какая часть
+        // дерева останется без наблюдения. Стек снимал первым попавшийся подкаталог верхнего
+        // уровня и уходил в него до дна — на python-проекте с `.venv` (6–10 тыс. каталогов,
+        // и ни один список исключений его не знал) весь бюджет уходил внутрь окружения, а
+        // `src/` не подписывался вовсе. Очередь тратит бюджет по уровням: сначала всё, что
+        // близко к корню.
+        //
+        // Проверка _stopping — на каждом шаге: Dispose ждёт поток чтения 5 с, и обход
+        // большого дерева из HandleEvent успевал бы пережить это ожидание, оставляя слежки
+        // и вызовы _emit у потребителя, который наблюдателя уже похоронил.
         private void AddSubtree(string root, bool emitExistingFiles)
         {
-            var stack = new Stack<string>();
-            stack.Push(root);
-            while (stack.Count > 0)
+            var queue = new Queue<string>();
+            queue.Enqueue(root);
+            while (queue.Count > 0)
             {
-                var dir = stack.Pop();
+                if (_stopping) return;
+                var dir = queue.Dequeue();
                 string[] subdirs;
                 try { subdirs = Directory.GetDirectories(dir); }
                 catch { continue; } // каталог исчез или нет прав — не предмет наблюдения
                 foreach (var sub in subdirs)
                 {
+                    if (_stopping) return;
                     if (_excludeDirs.Contains(Path.GetFileName(sub))) continue;
                     if (IsSymlink(sub)) continue; // по ссылкам не ходим: петли и выход за корень
                     switch (TryAddWatch(sub))
                     {
                         case WatchAdd.Added:
-                            stack.Push(sub);
+                            queue.Enqueue(sub);
                             // Каталог появился уже после старта — потребителю дерева он нужен
                             // так же, как файлы внутри него.
                             if (emitExistingFiles && _includeDirectories)
@@ -374,7 +443,11 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
                 if (!emitExistingFiles) continue;
                 try
                 {
-                    foreach (var file in Directory.GetFiles(dir)) _emit(file, DirectoryWatchKind.Created);
+                    foreach (var file in Directory.GetFiles(dir))
+                    {
+                        if (_stopping) return;
+                        _emit(file, DirectoryWatchKind.Created);
+                    }
                 }
                 catch { /* каталог исчез между обходом и чтением */ }
             }
@@ -413,6 +486,14 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
                     return;
                 }
                 if ((fds[1].Revents & POLLIN) != 0) return; // Dispose
+                // Любой revents, кроме POLLIN, — непригодный дескриптор: POLLIN оттуда уже
+                // не придёт никогда, и прежний `continue` крутил бы пустой цикл на 100 % CPU,
+                // не сказав потребителю, что наблюдения больше нет.
+                if (((fds[0].Revents | fds[1].Revents) & (POLLERR | POLLHUP | POLLNVAL)) != 0)
+                {
+                    Die("poll");
+                    return;
+                }
                 if ((fds[0].Revents & POLLIN) == 0) continue;
 
                 var read = (int)ReadEvents(buffer);
@@ -422,7 +503,7 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
                     Die("read");
                     return;
                 }
-                ParseEvents(buffer, read);
+                if (!ParseEvents(buffer, read)) return; // корень исчез — наблюдения больше нет
             }
         }
 
@@ -441,7 +522,8 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
             catch { return -1; }
         }
 
-        private void ParseEvents(byte[] buffer, int length)
+        // false — наблюдение мертво (умер корневой wd), цикл чтения обязан выйти.
+        private bool ParseEvents(byte[] buffer, int length)
         {
             var offset = 0;
             while (offset + EventHeaderSize <= length)
@@ -457,11 +539,13 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
                     name = Encoding.UTF8.GetString(zero >= 0 ? raw[..zero] : raw);
                 }
                 offset += EventHeaderSize + nameLength;
-                HandleEvent(wd, mask, name);
+                if (!HandleEvent(wd, mask, name)) return false;
             }
+            return true;
         }
 
-        private void HandleEvent(int wd, uint mask, string? name)
+        // false — корневая слежка умерла: наблюдения больше нет, цикл чтения обязан выйти.
+        private bool HandleEvent(int wd, uint mask, string? name)
         {
             // Переполнение очереди: дескриптор остаётся годным, пересоздавать наблюдателя
             // нельзя (инцидент 19.09 — рекурсия пересозданий). Часть событий потеряна,
@@ -469,32 +553,46 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
             if ((mask & IN_Q_OVERFLOW) != 0)
             {
                 WarnOnce("overflow", "очередь inotify переполнена — часть изменений не показана");
-                // Наблюдатель жив: лечится пересинхронизацией у потребителя, а не
-                // пересозданием (пересоздание тут — ровно рекурсия инцидента 19.09).
+                // Вместе с событиями потеряны и IN_CREATE|IN_ISDIR новых каталогов: без
+                // повторного обхода они не подписались бы НИКОГДА (у долгоживущего
+                // FileWatcherService это `git checkout` ветки с новыми папками — правки в
+                // них не доходят ни до дерева, ни до синка знаний). Обход идемпотентен: тот
+                // же inode даёт тот же wd, уже наблюдаемые каталоги просто подтверждаются.
+                // Он же чинит ложный Alias от потерянной пары IN_MOVED_FROM/IN_MOVED_TO.
+                // Пересоздания наблюдателя тут по-прежнему нет — это была бы рекурсия 19.09.
+                AddSubtree(_root, emitExistingFiles: false);
+                // Наблюдатель жив: лечится пересинхронизацией у потребителя.
                 _fail(DirectoryWatchFailure.EventsLost);
-                return;
+                return true;
             }
 
             string? dir;
             lock (_lock)
-                if (!_paths.TryGetValue(wd, out dir)) return;
+                if (!_paths.TryGetValue(wd, out dir)) return true;
 
-            // Ядро сняло слежку само (каталог удалён/размонтирован) — чистим карту.
-            if ((mask & IN_IGNORED) != 0)
+            // Смерть слежки: ядро сняло её само (каталог удалён/размонтирован) либо каталог
+            // уехал. На КОРНЕ это конец наблюдения целиком — молчаливая чистка карты
+            // оставляла бы IsWatching=true без единого события (`rm -rf proj && git clone`
+            // у открытого проекта: дерево в UI не обновлялось до реконнекта).
+            if ((mask & (IN_IGNORED | IN_DELETE_SELF | IN_MOVE_SELF)) != 0)
             {
-                lock (_lock) _paths.Remove(wd);
-                return;
+                if (wd == _rootWd)
+                {
+                    Die("root-gone");
+                    return false;
+                }
+                if ((mask & IN_IGNORED) != 0) lock (_lock) _paths.Remove(wd);
+                return true; // на DELETE_SELF/MOVE_SELF обычного каталога IN_IGNORED придёт следом
             }
-            if ((mask & (IN_DELETE_SELF | IN_MOVE_SELF)) != 0) return; // IN_IGNORED придёт следом
 
-            if (name is null) return;
+            if (name is null) return true;
             if ((mask & IN_ISDIR) != 0)
             {
-                if (_excludeDirs.Contains(name)) return;
+                if (_excludeDirs.Contains(name)) return true;
                 var subdir = Path.Combine(dir, name);
                 if ((mask & (IN_CREATE | IN_MOVED_TO)) != 0)
                 {
-                    if (IsSymlink(subdir)) return; // по ссылкам не ходим — как и при обходе
+                    if (IsSymlink(subdir)) return true; // по ссылкам не ходим — как и при обходе
                     // Появление каталога отдаётся ДО подписки и независимо от её исхода:
                     // в дереве файлов он уже есть, даже если слежку на него завести не удалось.
                     if (_includeDirectories) _emit(subdir, DirectoryWatchKind.Created);
@@ -519,7 +617,7 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
                 }
                 // Дальше — только события файлов: сам каталог уже отдан, если потребителю
                 // нужны каталоги, и не нужен вовсе, если нет.
-                return;
+                return true;
             }
 
             var kind =
@@ -527,13 +625,26 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
                 (mask & (IN_DELETE | IN_MOVED_FROM)) != 0 ? DirectoryWatchKind.Deleted :
                 DirectoryWatchKind.Changed;
             _emit(Path.Combine(dir, name), kind);
+            return true;
         }
 
-        private void WarnOnce(string reason, string message)
+        // Потолок слежек достигнут: часть дерева не наблюдается, и для потребителя это ровно
+        // потеря событий (лечится полной пересинхронизацией), а не смерть наблюдения. Одной
+        // строки в stderr мало: молчаливая частичная подписка выглядит как «изменений нет».
+        private void ReportCeiling()
+        {
+            if (!WarnOnce("max-watches",
+                $"достигнут потолок слежек ({_maxWatches}) — новые каталоги не наблюдаются")) return;
+            _fail(DirectoryWatchFailure.EventsLost);
+        }
+
+        // true — сообщили впервые (причина ещё не звучала).
+        private bool WarnOnce(string reason, string message)
         {
             lock (_lock)
-                if (!_warned.Add(reason)) return;
+                if (!_warned.Add(reason)) return false;
             _warn(message);
+            return true;
         }
 
         private const int EMFILE = 24;
@@ -589,7 +700,9 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
         [DllImport("libc", SetLastError = true)]
         private static extern nint write(int fd, byte[] buf, nint count);
 
+        // nfds_t на glibc — unsigned long (8 байт на x86-64/arm64), поэтому nuint, а не uint:
+        // при uint верхняя половина регистра остаётся мусором вызывающего.
         [DllImport("libc", SetLastError = true)]
-        private static extern int poll([In, Out] PollFd[] fds, uint nfds, int timeout);
+        private static extern int poll([In, Out] PollFd[] fds, nuint nfds, int timeout);
     }
 }

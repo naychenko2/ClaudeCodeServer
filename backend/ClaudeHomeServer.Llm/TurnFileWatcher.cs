@@ -18,8 +18,12 @@ public sealed record FileWatcherOptions(
     bool RespectGitignore,
     int MaxWatches = RecursiveDirectoryWatcher.DefaultMaxWatches)
 {
+    // Базовый набор — общий с деревом файлов (TreeExcludes.Names): два независимых списка
+    // разъезжались бы при каждом пополнении, а цена расхождения — молчаливая потеря бюджета
+    // слежек на чужой `.venv`. Сверх него — служебные каталоги инструментов, которые в дереве
+    // файлов человеку показывать надо, а в ленту чата их правки слать не за чем.
     public static readonly FileWatcherOptions Default = new(
-        IgnoreDirs: [".git", ".omc", ".claude", ".cc-attachments", "node_modules", "obj", "bin", "dist", ".vs", ".idea", ".playwright"],
+        IgnoreDirs: [.. TreeExcludes.Names, ".omc", ".claude", ".playwright"],
         IgnoreFilePatterns: ["*~", "*.tmp", "*.tmp.*"],
         RespectGitignore: true);
 }

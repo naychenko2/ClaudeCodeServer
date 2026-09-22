@@ -13,10 +13,18 @@ public static class TreeExcludes
     // Служебная: исключена из дерева, ватчеров, дефолтного .gitignore и синка базы знаний.
     public const string AttachmentsDir = ".cc-attachments";
 
+    // Список работает ДВАЖДЫ: по нему обрезается обход дерева и по нему же не подписывается
+    // наблюдатель (RecursiveDirectoryWatcher). Поэтому чужие экосистемы тут не роскошь:
+    // под потолком слежек (4000) непрописанный `.venv` python-проекта на 6–10 тыс. каталогов
+    // съедал весь бюджет, и рабочие каталоги оставались без наблюдения молча.
     public static readonly HashSet<string> Names = new(StringComparer.OrdinalIgnoreCase)
     {
         ".git", "node_modules", "bin", "obj", "dist", "dev-dist",
         ".vs", ".idea", "publish", ".next", "target", ".cache",
+        // Python
+        ".venv", "venv", "site-packages", "__pycache__", ".tox",
+        // JVM/Go/PHP и общие каталоги сборки и отчётов
+        "build", "vendor", ".gradle", "coverage",
         AttachmentsDir,
     };
 

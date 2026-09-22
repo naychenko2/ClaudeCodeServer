@@ -112,20 +112,26 @@ public class FileWatcherService : IDisposable
         var project = _projects.GetById(projectId);
         if (project is null || !Directory.Exists(project.RootPath)) return false;
 
+        Entry entry;
+        RecursiveDirectoryWatcher? starting = null;
+        bool raised;
         lock (_lock)
         {
-            var entry = _entries.GetOrAdd(projectId,
+            entry = _entries.GetOrAdd(projectId,
                 _ => new Entry { Root = project.RootPath, ProjectId = projectId });
             entry.Connections.Add(connectionId);
             _byConnection.GetOrAdd(connectionId, _ => new HashSet<string>()).Add(projectId);
-            if (entry.Watcher is null && entry.Poll is null)
+            raised = entry.Watcher is null && entry.Poll is null;
+            if (raised)
             {
                 if (_usePolling) StartPolling(projectId, entry);
-                else StartWatcher(projectId, entry);
-                return true;
+                else starting = StartWatcher(projectId, entry);
             }
-            return false;
         }
+        // Подписка на дерево — вне замка: под ним она держала бы потоки чтения соседних
+        // наблюдателей (см. StartWatcher).
+        LaunchWatcher(projectId, entry, starting);
+        return raised;
     }
 
     // Клиент перестал смотреть проект
@@ -177,33 +183,42 @@ public class FileWatcherService : IDisposable
         if (!Directory.Exists(full)) return;
 
         RecursiveDirectoryWatcher? closing = null;
+        RecursiveDirectoryWatcher? starting = null;
+        Entry entry;
         lock (_lock)
         {
-            if (_entries.TryGetValue(key, out var existing))
+            var existing = _entries.TryGetValue(key, out var found) ? found : null;
+            // Тот же ключ на другом пути (чат пересоздал дерево) — перевешиваем watcher.
+            if (existing is not null && !string.Equals(existing.Root, full, StringComparison.OrdinalIgnoreCase))
             {
-                if (string.Equals(existing.Root, full, StringComparison.OrdinalIgnoreCase))
-                {
-                    existing.LastTouchUtc = DateTime.UtcNow;
-                    // Тот же путь без живого watcher'а и без заказанного пересоздания — поднимаем
-                    // на ЭТОЙ ЖЕ записи: подмена новой потеряла бы накопленные PendingPaths.
-                    if (existing.Watcher is null && existing.Poll is null && existing.Recreate is null)
-                    {
-                        if (_usePolling) StartPolling(key, existing);
-                        else StartWatcher(key, existing);
-                    }
-                    return;
-                }
-                // Тот же ключ на другом пути (чат пересоздал дерево) — перевешиваем watcher.
                 closing = DisposeEntry(key, existing);
+                existing = null;
             }
 
-            var entry = new Entry { Root = full, LastTouchUtc = DateTime.UtcNow };
-            _entries[key] = entry;
-            if (_usePolling) StartPolling(key, entry);
-            else StartWatcher(key, entry);
-            _idleSweep ??= new Timer(_ => SweepIdlePaths(), null, IdleSweepMs, IdleSweepMs);
+            if (existing is not null)
+            {
+                entry = existing;
+                entry.LastTouchUtc = DateTime.UtcNow;
+                // Тот же путь без живого watcher'а и без заказанного пересоздания — поднимаем
+                // на ЭТОЙ ЖЕ записи: подмена новой потеряла бы накопленные PendingPaths.
+                if (entry.Watcher is null && entry.Poll is null && entry.Recreate is null)
+                {
+                    if (_usePolling) StartPolling(key, entry);
+                    else starting = StartWatcher(key, entry);
+                }
+            }
+            else
+            {
+                entry = new Entry { Root = full, LastTouchUtc = DateTime.UtcNow };
+                _entries[key] = entry;
+                if (_usePolling) StartPolling(key, entry);
+                else starting = StartWatcher(key, entry);
+                _idleSweep ??= new Timer(_ => SweepIdlePaths(), null, IdleSweepMs, IdleSweepMs);
+            }
         }
         Close(closing);
+        // Подписка на дерево — вне замка (см. StartWatcher).
+        LaunchWatcher(key, entry, starting);
     }
 
     // Снять watcher произвольного пути (удаление чата, выключение отдельного дерева).
@@ -233,41 +248,51 @@ public class FileWatcherService : IDisposable
         if (closing is not null) foreach (var w in closing) Close(w);
     }
 
-    // Вызывается под _lock. entry.Watcher присваивается ДО старта: отказ слежки может прийти
-    // синхронно изнутри Start, и обработчик должен узнать в источнике текущий watcher.
-    private void StartWatcher(string key, Entry entry)
+    // Вызывается под _lock; САМ НАБЛЮДАТЕЛЬ ЗДЕСЬ НЕ ПОДНИМАЕТСЯ — вызывающий обязан
+    // передать результат в LaunchWatcher уже ВНЕ замка (образец — RecreateWatcher, который
+    // так же выносит из замка гашение). Причина: подписка обходит дерево и стоит syscall на
+    // каталог, а потоки чтения ВСЕХ остальных наблюдателей берут этот же _lock в OnFsEvent —
+    // открытие большого проекта под замком стопорило бы их потребление событий до
+    // переполнения очередей, то есть дарило бы соседям EventsLost и полные ресинки.
+    //
+    // entry.Watcher присваивается ДО старта: отказ слежки может прийти синхронно изнутри
+    // Start, и обработчик должен узнать в источнике текущий watcher.
+    private RecursiveDirectoryWatcher StartWatcher(string key, Entry entry)
     {
         RecursiveDirectoryWatcher? w = null;
+        // Служебные каталоги (TreeExcludes) не ПОДПИСЫВАЮТСЯ вовсе — тем же списком, по
+        // которому потом фильтруются события: второй список дал бы «подписались, но глушим».
+        w = new RecursiveDirectoryWatcher(entry.Root, TreeExcludes.Names,
+            (path, _) => OnFsEvent(key, entry, path),
+            onWarning: message => OnWatchWarning(key, message),
+            includeDirectories: true, // дерево файлов в UI показывает и каталоги
+            bufferBytes: PathBufferBytes,
+            onFailure: failure => OnWatchFailure(key, entry, w, failure));
+        entry.Watcher = w;
+        return w;
+    }
+
+    // Вне _lock: поднимает наблюдение и разбирает отказ. Конструктор наблюдателя ничего не
+    // трогает в ФС, поэтому под замком остаётся только он, а вся работа — здесь.
+    private void LaunchWatcher(string key, Entry entry, RecursiveDirectoryWatcher? w)
+    {
+        if (w is null) return;
         try
         {
-            // Конструктор — тоже под try: пересоздание идёт из таймера, и папка, удалённая за
-            // время паузы (ArgumentException), уронила бы процесс необработанным исключением.
-            // Служебные каталоги (TreeExcludes) не ПОДПИСЫВАЮТСЯ вовсе — тем же списком, по
-            // которому потом фильтруются события: второй список дал бы «подписались, но глушим».
-            w = new RecursiveDirectoryWatcher(entry.Root, TreeExcludes.Names,
-                (path, _) => OnFsEvent(key, entry, path),
-                onWarning: message => OnWatchWarning(key, message),
-                includeDirectories: true, // дерево файлов в UI показывает и каталоги
-                bufferBytes: PathBufferBytes,
-                onFailure: failure => OnWatchFailure(key, entry, w, failure));
-            entry.Watcher = w;
             w.Start();
             if (w.IsWatching) return;
             // Корня нет (папку удалили за время паузы перед пересозданием): наблюдение не
             // встало вовсе — снимаем пустой наблюдатель и повторяем по лестнице пауз.
-            // Гасить его под _lock безопасно: без поднятого наблюдения ждать нечего.
-            entry.Watcher = null;
-            w.Dispose();
-            ScheduleRecreate(key, entry);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
         {
             // Папки нет, нет прав на неё, исчерпан лимит inotify-экземпляров (EMFILE — IOException) —
             // без watcher'а, с повтором по той же лестнице пауз, что и после сбоя.
-            if (w is not null && ReferenceEquals(entry.Watcher, w)) entry.Watcher = null;
-            try { w?.Dispose(); } catch { }
-            ScheduleRecreate(key, entry);
         }
+        lock (_lock)
+            if (ReferenceEquals(entry.Watcher, w)) entry.Watcher = null;
+        Close(w);
+        lock (_lock) ScheduleRecreate(key, entry);
     }
 
     // Частичный отказ наблюдения (потолок слежек, отказ ядра на отдельном каталоге): само
@@ -477,11 +502,13 @@ public class FileWatcherService : IDisposable
         // заходит в _lock (OnFsEvent). Под замком это дало бы взаимоблокировку на всё время
         // ожидания и брошенные дескрипторы по его истечении.
         Close(closing);
+        RecursiveDirectoryWatcher? starting = null;
         lock (_lock)
         {
             if (!IsLive(key, entry)) return; // entry сняли, пока гасили прежний наблюдатель
-            if (entry.Watcher is null && entry.Poll is null) StartWatcher(key, entry);
+            if (entry.Watcher is null && entry.Poll is null) starting = StartWatcher(key, entry);
         }
+        LaunchWatcher(key, entry, starting);
         // За время сбоя watcher'а события ФС потеряны — списку файлов в UI нечем
         // компенсироваться.
         SendFullResync(entry);

@@ -100,11 +100,14 @@ if (ownsProcessRegistry) ProcessRegistry.Initialize();
 
 // Изоляция процессов local-среды по памяти (инцидент 2026-09-19: systemd-oomd дважды
 // убил прод ccs.service целиком, потому что сборки агентских CLI живут в cgroup прода).
-// Опции — секция Execution:Isolation (Enabled/Slice/MemoryHigh/MemoryMax). Дефолт
-// выключено: на Windows и в dev-контейнере user-шины нет, и там обёртка fail-open.
+// Опции — секция Execution:Isolation (Enabled/Slice/MemoryMax). Дефолт выключено: на
+// Windows и в dev-контейнере user-шины нет, и там обёртка fail-open.
 // Выставить в appsettings.Local.json:
 //   "Execution": { "Isolation": { "Enabled": true, "Slice": "ccs-agents.slice",
-//     "MemoryHigh": "12G", "MemoryMax": "16G" } }
+//     "MemoryMax": "16G" } }
+// MemoryHigh в примере нет намеренно: под systemd-oomd дроссель сам становится источником
+// PSI-давления и убивает наш же scope (разбор 2026-09-22). Заполненный ключ ругается в
+// stderr на старте — см. IsolationOptions.FromConfig.
 ClaudeHomeServer.Services.Execution.IsolationOptions.Instance =
     ClaudeHomeServer.Services.Execution.IsolationOptions.FromConfig(builder.Configuration);
 

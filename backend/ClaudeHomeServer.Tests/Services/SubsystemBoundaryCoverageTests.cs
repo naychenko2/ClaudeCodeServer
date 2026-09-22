@@ -274,6 +274,28 @@ public class SubsystemBoundaryCoverageTests
             .OrderBy(ns => ns, StringComparer.Ordinal)
             .ToList();
 
+        // Исключение `Services.Files` снято с namespace во ВСЕХ сборках, а оправдано оно
+        // ровно тем, что это Core-примитив ОС. Заведи кто-нибудь вертикаль под тем же именем
+        // в Main или в отдельном .csproj — она молча вышла бы из-под сторожа. Поэтому здесь
+        // утверждается место жительства: типы `Services.Files.*` есть только в Core.
+        var filesHomes = allTypes
+            .Where(t => t.Namespace is { } ns
+                        && (ns == "ClaudeHomeServer.Services.Files"
+                            || ns.StartsWith("ClaudeHomeServer.Services.Files.", StringComparison.Ordinal)))
+            .Select(t => t.Assembly.GetName().Name)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        filesHomes.Should().NotBeEmpty(
+            "примитив наблюдения за деревом (RecursiveDirectoryWatcher) живёт под " +
+            "ClaudeHomeServer.Services.Files — пустой набор означает, что сторож смотрит мимо");
+        filesHomes.Should().Equal(["ClaudeHomeServer.Core"],
+            "исключение `ClaudeHomeServer.Services.Files` действует на все сборки сразу и " +
+            "оправдано лишь тем, что это примитив ОС в Core. Типы под этим namespace " +
+            "появились ещё где-то — либо переноси их в Core, либо заводи вертикали строку " +
+            "в SubsystemBoundaryTests.Boundaries: иначе она выпала из-под границ молча. " +
+            "Сейчас: " + string.Join(", ", filesHomes));
+
         uncovered.Should().BeEmpty(
             "каждый namespace ClaudeHomeServer.Services.* с типами обязан иметь строку в " +
             "SubsystemBoundaryTests.Boundaries (см. комментарии у Video/Reader/.../Llm). " +

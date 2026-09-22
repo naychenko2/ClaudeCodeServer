@@ -30,13 +30,27 @@ public sealed class IsolationOptions
     // Опция конфига, а не константа: откат — правкой appsettings без пересборки.
     public bool BuildNodeReuse { get; init; } = true;
 
-    public static IsolationOptions FromConfig(IConfiguration config) => new()
+    // Текст предупреждения о заполненном MemoryHigh (проверяется тестом — формулировка
+    // обязана называть причину, иначе её прочитают как придирку и вернут значение обратно).
+    public const string MemoryHighWarning =
+        "[isolation] Execution:Isolation:MemoryHigh заполнен — под systemd-oomd дроссель " +
+        "становится источником PSI-давления и убивает scope агента целиком (разбор 2026-09-22). " +
+        "Ограничивать память нужно MemoryMax; значение лучше обнулить.";
+
+    public static IsolationOptions FromConfig(IConfiguration config)
     {
-        Enabled = config.GetValue("Execution:Isolation:Enabled", false),
-        Slice = config["Execution:Isolation:Slice"] is { Length: > 0 } s ? s : "ccs-agents.slice",
-        MemoryHigh = config["Execution:Isolation:MemoryHigh"],
-        MemoryMax = config["Execution:Isolation:MemoryMax"],
-        SystemdRunPath = config["Execution:Isolation:SystemdRunPath"],
-        BuildNodeReuse = config.GetValue("Execution:Isolation:BuildNodeReuse", true),
-    };
+        var memoryHigh = config["Execution:Isolation:MemoryHigh"];
+        // Запрет держался только на комментарии в документации, а такой запрет не держится
+        // вовсе: значение возвращается в конфиг при первом же подозрении на «зависает сборка».
+        if (!string.IsNullOrWhiteSpace(memoryHigh)) Console.Error.WriteLine(MemoryHighWarning);
+        return new IsolationOptions
+        {
+            Enabled = config.GetValue("Execution:Isolation:Enabled", false),
+            Slice = config["Execution:Isolation:Slice"] is { Length: > 0 } s ? s : "ccs-agents.slice",
+            MemoryHigh = memoryHigh,
+            MemoryMax = config["Execution:Isolation:MemoryMax"],
+            SystemdRunPath = config["Execution:Isolation:SystemdRunPath"],
+            BuildNodeReuse = config.GetValue("Execution:Isolation:BuildNodeReuse", true),
+        };
+    }
 }

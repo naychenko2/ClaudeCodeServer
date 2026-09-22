@@ -110,4 +110,4 @@ fi
 # 7. Самопроверка: выводим итоговые значения.
 echo "--- итог ---"
 run systemctl --user show ccs.service -p ManagedOOMPreference
-run systemctl --user show ccs-agents.slice -p MemoryHigh -p MemoryMax -p ManagedOOMMemoryPressure
+run systemctl --user show ccs-agents.slice -p MemoryHigh -p MemoryMax -p MemorySwapMax -p ManagedOOMMemoryPressure

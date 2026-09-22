@@ -15,8 +15,10 @@ public sealed class IsolationOptions
     // app.slice, и ccs.slice с app.slice — сиблинги под user@<uid>.service. Итог тот же:
     // scope агента вне cgroup прода.
     public string Slice { get; init; } = "ccs-agents.slice";
-    // Пределы памяти scope (MemoryHigh — мягкий, с троттлингом; MemoryMax — OOM внутри scope).
-    // Пусто — свойство не ставится.
+    // Пределы памяти scope. MemoryMax — OOM внутри scope (ядро убивает самый большой процесс,
+    // ход живёт). MemoryHigh — дроссель; под systemd-oomd его НЕ ставить: стойло в reclaim
+    // считается PSI-давлением, суммируется вверх до user@<uid>.service и oomd убивает scope
+    // целиком (разбор 2026-09-22, deploy/systemd/README.md). Пусто — свойство не ставится.
     public string? MemoryHigh { get; init; }
     public string? MemoryMax { get; init; }
     // Явный путь к systemd-run; пусто — поиск по PATH

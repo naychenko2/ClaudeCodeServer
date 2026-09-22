@@ -75,17 +75,25 @@ cd frontend; npm run build     # production-сборка (tsc -b + vite)
 не отдельный запуск: ход слот не занимает и не ждёт его никогда, поэтому дедлок «ход ждёт слот
 прогрева» невозможен по конструкции.
 
-**Основная защита от OOM — не гейт, а лимиты cgroup на `ccs-agents.slice`**
-(`MemoryHigh`/`MemoryMax` + `ManagedOOMMemoryPressure=kill`, плюс `ManagedOOMPreference=omit`
+**Основная защита от OOM — не гейт, а жёсткий потолок cgroup на `ccs-agents.slice`**
+(`MemoryMax` + `MemorySwapMax=0` + `ManagedOOMMemoryPressure=kill`, плюс `ManagedOOMPreference=omit`
 на самом `ccs.service`). Лимит cgroup наследуется ВСЕМУ поддереву scope — включая сборки,
 которые агент запускает внутри хода своим Bash, то есть ровно те, что дали инцидент 21 сен
 (четыре scope по 4–5 GB, внутри `testhost.dll`, прогревов среди них не было). `BuildConcurrencyGate`
 закрывает только запуски с меткой `ProcessSpec.Heavy` — сегодня это один прогрев worktree, —
-и потому остаётся дополнением, а не заменой лимитов. Unit-файлы и drop-in'ы версионированы в
-[deploy/systemd/](deploy/systemd/), раскладка — `deploy/systemd/install-user-units.sh`
-(он же чистит перебивающие drop-in'ы из `user.control/`, куда пишет `systemctl set-property`).
-Сами значения машинно-специфичны — правило расчёта под конкретную машину в
-[deploy/systemd/README.md](deploy/systemd/README.md).
+и потому остаётся дополнением, а не заменой лимитов. **`MemoryHigh` не ставим ни на slice, ни
+per-scope** (разбор 2026-09-22): дроссель гонит сборку в reclaim и swap, стойло считается
+PSI-давлением и суммируется вверх до `user@1000.service`, где systemd-oomd по дефолту Ubuntu
+убивает при 50 % — жертвой выходит наш же scope. После установки `MemoryHigh` 21.09 oomd убил
+ещё четыре scope за вечер, счётчик `memory.events high` на slice — 1,9 млн. Сессионный порог
+поднят до 80 % root-drop-in'ом на `user@.service`; число узлов MSBuild для любой сборки под
+`backend/` (в том числе из Bash агента) режет `backend/Directory.Build.rsp` (`-maxcpucount:6`):
+20 тестовых проектов на 24 ядрах давали до 20 testhost разом. Unit-файлы и drop-in'ы
+версионированы в [deploy/systemd/](deploy/systemd/): user-часть раскладывает
+`install-user-units.sh` (он же чистит перебивающие drop-in'ы из `user.control/`), root-часть
+(oomd на `user@.service`, лимиты inotify — бэкенд выедает 61 тыс. из 65 тыс. watch'ей по
+дефолту) — `install-system-tuning.sh`. Сами значения машинно-специфичны — правило расчёта
+под конкретную машину в [deploy/systemd/README.md](deploy/systemd/README.md).
 
 **Перед правками в `Services/Execution/`, `SandboxManager`, `UserHomeResolver` — прочитай
 [docs/architecture/sandbox.md](docs/architecture/sandbox.md)** (монтирования, interrupt, MCP из песочницы, overrides).

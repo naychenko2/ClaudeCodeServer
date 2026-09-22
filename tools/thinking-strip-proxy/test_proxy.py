@@ -10,7 +10,10 @@ import proxy
 # меняются на стенде, а тест обязан проверять поведение, а не текущую настройку.
 # min_context_tokens=0 — условие «чат уже большой» здесь отключено намеренно: у него свои
 # тесты ниже, а эти проверяют границу, и один тест должен проверять одну вещь.
-P = dict(protect_last=20, quantum=10, min_chars=2000, min_tokens=20000, min_context_tokens=0)
+# Ручки границы — в токенах. BIG = 6000 символов = 1500 токенов на вывод, поэтому хвост 30k
+# токенов = 20 последних выводов, ступень 15k = 10 выводов: в штуках счёт нагляднее.
+P = dict(keep_tail_tokens=30000, step_tokens=15000, min_chars=2000, min_tokens=20000,
+         min_context_tokens=0)
 BIG = "x" * 6000  # один «крупный» вывод ≈ 1500 токенов
 
 
@@ -195,8 +198,8 @@ class PruneTests(unittest.TestCase):
         proxy.prune_tool_results(msgs, **P)  # падение = провал теста
         proxy._context_chars(msgs, 0)
 
-    def test_нулевой_квант_не_делит_на_ноль(self):
-        proxy.prune_tool_results(history(120), **dict(P, quantum=0))
+    def test_нулевая_ступень_не_делит_на_ноль(self):
+        proxy.prune_tool_results(history(120), **dict(P, step_tokens=0))
 
 
 if __name__ == "__main__":

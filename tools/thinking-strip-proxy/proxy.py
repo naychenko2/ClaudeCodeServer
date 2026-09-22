@@ -32,14 +32,16 @@ HOP = {"connection", "keep-alive", "proxy-connection", "transfer-encoding", "te"
 
 # Прунинг старых выводов инструментов (по умолчанию ВЫКЛЮЧЕН, включаем вручную на замер).
 PRUNE_MODE = os.environ.get("PRUNE_TOOL_RESULTS", "off")
-PRUNE_PROTECT_LAST = int(os.environ.get("PRUNE_PROTECT_LAST", "10"))
-# Квант и защита задают не только частоту скачков границы, но и ПОРОГ первого срабатывания:
-# граница > 0 требует PROTECT_LAST + QUANTUM вызовов. Пара 20/50 (порог 70) провалила живой
-# замер 2026-09-22: чат упёрся в автосжатие на 53-м вызове при 234k токенов, прунинг не успел
-# включиться вовсе. Пара 10/25 (порог 35) на той же истории срабатывает за ~45k токенов до
-# точки сжатия и срезает ~100k. Квант меньше 25 не берём: скачок границы дорог, при 10 замер
-# давал ~13 с накладных на вызов, и прунинг проигрывал сам себе.
-PRUNE_QUANTUM = int(os.environ.get("PRUNE_QUANTUM", "25"))
+# Обе ручки границы — в ТОКЕНАХ, а не в штуках вызовов: 35 вызовов бывают и 20k токенов, и
+# 200k, то есть в вызовах задача не измеряется. Живой прогон 2026-09-22 на этом и погорел —
+# порог «70 вызовов» не наступил, пока чат не упёрся в автосжатие при 234k токенов.
+# Сколько свежего вывода не трогаем никогда:
+PRUNE_KEEP_TAIL_TOKENS = int(os.environ.get("PRUNE_KEEP_TAIL_TOKENS", "40000"))
+# Ступень границы, она же порог первого срабатывания: пока обрезаемого объёма меньше ступени,
+# прунинг молчит. Ступенчатость обязательна — непрерывная граница ползла бы на один вывод
+# каждый ход и рвала кэш каждый шаг. 50k — компромисс «скачки редкие» против «включается
+# вовремя»; при ступени в вызовах эквивалент 10 давал ~13 с накладных на вызов.
+PRUNE_STEP_TOKENS = int(os.environ.get("PRUNE_STEP_TOKENS", "50000"))
 PRUNE_MIN_CHARS = int(os.environ.get("PRUNE_MIN_CHARS", "2000"))
 PRUNE_MIN_TOKENS = int(os.environ.get("PRUNE_MIN_TOKENS", "20000"))
 # Явное условие «чат уже большой». Без него порог включения задавался АРИФМЕТИКОЙ кванта
@@ -105,8 +107,8 @@ def _is_budget_reminder(m):
 # двигает границу на КАЖДОМ ходу: очередное сообщение переезжает из живых в обрезанные,
 # середина истории меняется, prefix cache обрывается — ровно та беда, от которой заведён этот
 # прокси. Поэтому границу считаем от НАЧАЛА истории (порядковый номер вывода никогда не
-# меняется при дописывании хвоста) и квантуем вниз до кратного PRUNE_QUANTUM: префикс
-# перестраивается раз в PRUNE_QUANTUM вызовов, а не каждый шаг. Состояние по сессиям тут держать
+# меняется при дописывании хвоста) и квантуем её вниз по ступени в токенах: префикс
+# перестраивается раз в PRUNE_STEP_TOKENS, а не каждый шаг. Состояние по сессиям тут держать
 # негде — у запроса нет её идентификатора, — и оно не нужно: решение зависит только от тела.
 PRUNE_PLACEHOLDER = "[Old tool result content cleared]"
 
@@ -179,11 +181,11 @@ def _placeholder_like(content):
         {"type": "text", "text": PRUNE_PLACEHOLDER}]
 
 
-def prune_tool_results(msgs, protect_last=None, quantum=None, min_chars=None, min_tokens=None,
-                       min_context_tokens=None, extra_chars=0):
+def prune_tool_results(msgs, keep_tail_tokens=None, step_tokens=None, min_chars=None,
+                       min_tokens=None, min_context_tokens=None, extra_chars=0):
     """Возвращает (сообщения, сколько символов освободили, сколько блоков обрезали). Вход не мутирует."""
-    protect_last = PRUNE_PROTECT_LAST if protect_last is None else protect_last
-    quantum = max(1, PRUNE_QUANTUM if quantum is None else quantum)  # 0 из окружения = деление на ноль
+    keep_tail_tokens = PRUNE_KEEP_TAIL_TOKENS if keep_tail_tokens is None else keep_tail_tokens
+    step_tokens = max(1, PRUNE_STEP_TOKENS if step_tokens is None else step_tokens)
     min_chars = PRUNE_MIN_CHARS if min_chars is None else min_chars
     min_tokens = PRUNE_MIN_TOKENS if min_tokens is None else min_tokens
     min_context_tokens = PRUNE_MIN_CONTEXT_TOKENS if min_context_tokens is None else min_context_tokens
@@ -212,7 +214,43 @@ def prune_tool_results(msgs, protect_last=None, quantum=None, min_chars=None, mi
             if isinstance(b, dict) and b.get("type") == "tool_result":
                 found.append((mi, bi, _prunable_size(b.get("content"))))
 
-    boundary = ((len(found) - protect_last) // quantum) * quantum
+    # Граница в ТОКЕНАХ, а не в штуках вызовов. Мерить ступени в вызовах — мерить задачу не в
+    # той единице, в которой она стоит: 35 вызовов бывают и 20k токенов, и 200k. Живой прогон
+    # 2026-09-22 на этом и погорел — порог «70 вызовов» не наступил, пока чат не упёрся в
+    # автосжатие. Здесь обе ручки в токенах, скрытого второго порога больше нет.
+    #
+    # Ступенчатость остаётся обязательной: непрерывная граница ползла бы на один вывод каждый
+    # ход, меняя середину истории, — то есть рвала бы кэш каждый шаг. Стабильность даёт то,
+    # что target квантован, а размеры выводов ДО него уже не меняются: пока target тот же,
+    # граница стоит на месте бит в бит.
+    keep_chars = keep_tail_tokens * 4
+    step_chars = step_tokens * 4  # ноль отсечён при разборе аргументов
+
+    tail, protect_idx = 0, len(found)  # защищаем хвост по объёму: свежее модель ещё читает
+    while protect_idx > 0 and tail < keep_chars:
+        tail += found[protect_idx - 1][2] or 0
+        protect_idx -= 1
+
+    # Считаем ТОЛЬКО тот объём, который реально обрежем: мелкие выводы мы не трогаем (экономии
+    # нет, а кэш рвём), поэтому они не должны и двигать границу. Иначе чат с мелкими выводами
+    # набирает ступень штуками, а освобождает копейки — на истории 035c3dd7 (медиана вывода
+    # 1 КБ) такая схема не срабатывала вовсе при 217k контекста.
+    def весомый(size):
+        return size is not None and size >= min_chars
+
+    prunable = sum(size for _, _, size in found[:protect_idx] if весомый(size))
+    target = prunable // step_chars * step_chars  # квантование вниз: редкие скачки
+    if target <= 0:
+        return msgs, 0, 0
+
+    acc, boundary = 0, 0
+    for i in range(protect_idx):
+        size = found[i][2]
+        if весомый(size):
+            if acc + size > target:
+                break
+            acc += size
+        boundary = i + 1
     if boundary <= 0:
         return msgs, 0, 0
 
@@ -393,6 +431,7 @@ if __name__ == "__main__":
     print(f"thinking-strip-proxy: {LISTEN}:{PORT} -> {UP_HOST}:{UP_PORT}, режим размышлений {THINKING_MODE}"
           + (f" (бюджет {THINKING_BUDGET})" if THINKING_MODE == "budget" else "")
           + f", вырезаю {STRIP_KEYS}, напоминания total_tokens и повторные # Environment"
-          + (f", прунинг выводов вкл (защищаю последние {PRUNE_PROTECT_LAST}, квант {PRUNE_QUANTUM})"
+          + (f", прунинг выводов вкл (хвост {PRUNE_KEEP_TAIL_TOKENS // 1000}k ток, ступень "
+             f"{PRUNE_STEP_TOKENS // 1000}k ток, порог контекста {PRUNE_MIN_CONTEXT_TOKENS // 1000}k)"
              if PRUNE_MODE == "on" else ", прунинг выводов выкл"), flush=True)
     srv.serve_forever()

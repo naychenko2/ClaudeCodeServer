@@ -36,9 +36,13 @@ public sealed record CheapProfileSpec(
 // CloudTimeoutMs — пер-местный потолок ожидания ОБЛАЧНОГО шага вместо потолка профиля:
 // для мест, чей исполнитель отвечает дольше (или зависает дольше), чем допускает профиль,
 // не трогая общий потолок для всех остальных мест того же профиля. null = профиль.
+// CloudNumPredict — пер-местный потолок ВЫВОДА облачного шага (max_tokens) вместо
+// профильного CloudNumPredict: для мест, чей ответ не влезает в профильный лимит,
+// не трогая лимит остальных мест того же профиля. null = профиль.
 public sealed record LocalAction(
     string Key, string Title, string Group, CheapProfile Profile, bool DefaultLocal,
-    bool Agentic = false, ModelTier? Tier = null, int? CloudTimeoutMs = null);
+    bool Agentic = false, ModelTier? Tier = null, int? CloudTimeoutMs = null,
+    int? CloudNumPredict = null);
 
 // Каталог всех фоновых one-shot действий — единый источник правды для роутинга и UI.
 // Сюда НЕ входят технически неприменимые: задача-исполнитель (агентная сессия с
@@ -203,9 +207,16 @@ public static class LocalActionCatalog
         new(TeamMemoryCompress, "Сжатие авто-записи памяти команды", "Память", CheapProfile.Small, DefaultLocal: true),
         // Консолидации — Large, а не Text: на вход уходят десятки килобайт записей памяти,
         // и на профиле Text (4096 вывод / 8192 контекст) локальный фолбэк резал промпт вдвое,
-        // теряя половину записей, которые должен был слить (прод 2026-09-22)
-        new(PersonaMemoryConsolidate, "Консолидация памяти персон", "Память", CheapProfile.Large, DefaultLocal: true),
-        new(TeamMemoryConsolidate, "Консолидация памяти команды", "Память", CheapProfile.Large, DefaultLocal: true),
+        // теряя половину записей, которые должен был слить (прод 2026-09-22).
+        // Пер-местный лимит вывода 16384 (вдвое выше профильного 8192): на 200+ записях
+        // JSON merge-операций со сводным текстом ~1000 символов не влезал в профильный
+        // потолок — облачная модель обрезала ответ на незакрытый массив, ExtractJsonArray
+        // давал null, и весь merge был no-op (прод 22.09, MiniMax-M3). Калибровка: если
+        // провайдер отбивает 16384 400-м — вернуть 8192 и добавить батчинг BuildPrompt.
+        new(PersonaMemoryConsolidate, "Консолидация памяти персон", "Память", CheapProfile.Large,
+            DefaultLocal: true, CloudNumPredict: 16_384),
+        new(TeamMemoryConsolidate, "Консолидация памяти команды", "Память", CheapProfile.Large,
+            DefaultLocal: true, CloudNumPredict: 16_384),
         new(AutomationGate, "Гейт проактивности персон", "Персоны", CheapProfile.Small, DefaultLocal: true),
         new(DocSummary, "Краткое содержание документа", "Документы", CheapProfile.Large, DefaultLocal: true),
         new(DocExtract, "Выжимка из документа", "Документы", CheapProfile.Large, DefaultLocal: true),

@@ -58,9 +58,11 @@ public sealed class CheapTextRunner(
     // Потолок вывода для ОБЛАЧНЫХ шагов (direct-адаптер, RunDetailedAsync). Локальный
     // NumPredict — это num_predict Ollama (бережёт память GPU), для облачного маршрута он
     // мал: модель обрезала крупный JSON-план на полуслове, симптом неотличим от таймаута
-    // (прод 2026-08-05). CloudNumPredict — отдельное поле профиля (дефолты в каталоге).
+    // (прод 2026-08-05). Лимит — от роутера: пер-местное значение каталога, если место его
+    // задало, иначе профильный CloudNumPredict — единственная точка склейки, не дублируем
+    // здесь выбор «каталог → профиль».
     internal int CloudNumPredictFor(string actionKey) =>
-        router.ProfileFor(actionKey).CloudNumPredict;
+        router.CloudNumPredictFor(actionKey);
 
     // При маршруте-слоте исполнитель — модель слота ВЛАДЕЛЬЦА действия (сильная/средняя/слабая
     // из личного per-user слота, с откатом на глобальный AppSettings), а не модель действия из

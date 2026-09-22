@@ -153,6 +153,13 @@ public sealed class LocalActionRouter
         LocalActionCatalog.Find(actionKey)?.CloudTimeoutMs
             ?? ProfileFor(actionKey).CloudTimeoutMs;
 
+    // Эффективный потолок ВЫВОДА облачного шага (max_tokens): пер-местное значение из
+    // каталога (место, чей ответ не влезает в профильный лимит), иначе потолок профиля.
+    // Единственная точка склейки — CheapTextRunner берёт лимит только отсюда.
+    public int CloudNumPredictFor(string actionKey) =>
+        LocalActionCatalog.Find(actionKey)?.CloudNumPredict
+            ?? ProfileFor(actionKey).CloudNumPredict;
+
     // Модель, которой пойдёт локальный вызов (для UI использования)
     public string LocalModel => _ollama.TextModel;
 }

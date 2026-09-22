@@ -370,13 +370,12 @@ personas/memory) — прочитай [docs/architecture/personas.md](docs/archi
 
 ## REST API
 
-Все эндпоинты (кроме `/api/auth/login`) и SignalR-хаб — под `[Authorize]`; схема —
-**JWT Bearer**, токен выдаёт `POST /api/auth/login` по паре `{ username, password }`.
-Вход дополнительно под rate-limit (политика `auth-login`, ключ `Auth:LoginRateLimit`,
-дефолт 10/мин, партиция по адресу клиента; отказ — 429 с `Retry-After`).
-Полный справочник эндпоинтов — [docs/architecture/api.md](docs/architecture/api.md) (источник правды — контроллеры).
-Значения фич-флагов фронт получает из `GET /api/auth/me` (поле `featureFlags`).
-Удалённый доступ — [docs/operations/remote-access.md](docs/operations/remote-access.md).
+Все эндпоинты (кроме `/api/auth/login`) и SignalR-хаб `/hubs/session` — под `[Authorize]`;
+схема — **JWT Bearer**, токен выдаёт `POST /api/auth/login` по паре `{ username, password }`
+(вход под rate-limit). Новая ручка без `[Authorize]` — дыра наружу.
+Справочник эндпоинтов, методы хаба и события — [docs/architecture/api.md](docs/architecture/api.md)
+(источник правды — контроллеры); удалённый доступ —
+[docs/operations/remote-access.md](docs/operations/remote-access.md).
 
 ## Выкатка на бой из веб-морды (`Services/Deploy`)
 
@@ -387,30 +386,11 @@ personas/memory) — прочитай [docs/architecture/personas.md](docs/archi
 ## Питание машины из веб-морды (`Services/Power`)
 
 Пункт меню аватара «Питание компьютера» гасит, перезагружает или усыпляет машину, на которой
-крутится продукт: она стоит дома, а ходят в неё снаружи. Команду отдаёт САМ бэкенд
-(`shutdown /s|/r /f /t 0`, сон — `SetSuspendState` из powrprof.dll за швом `IPowerActions`,
-Linux-CI об эти вызовы не спотыкается), трей-раннер тут ни при чём — кнопка работает и при
-мёртвом трее.
+крутится продукт; команду отдаёт САМ бэкенд, трей-раннер тут ни при чём. Замков три и они
+независимы: роль admin, `PowerControl:Enabled` (false по умолчанию) и платформа —
+**скрывать пункт в UI без серверной проверки нельзя**, веб-морда торчит наружу.
 
-Замков три и они независимы: `[Authorize(Roles = "admin")]`, `PowerControl:Enabled` (false по
-умолчанию, живёт в машинном `appsettings.Local.json` вне git) и платформа (не Windows —
-`available: false`, пункта нет). Скрывать пункт в UI без серверной проверки нельзя: веб-морда
-торчит наружу.
-
-**Отсчёт ведёт сервер, а не `shutdown /t`.** Так все три действия отменяются одинаково (у сна
-встроенной отсрочки нет вовсе), отмена не гоняется с `shutdown /a` за право первой дойти до
-системы, а обратный отсчёт видят ВСЕ окна, а не только то, из которого нажали. Цена — отсчёт не
-переживает смерть процесса, и это ровно нужное поведение: упавший бэкенд не должен гасить машину
-«по памяти». Отсрочка (`DelaySeconds`, дефолт 60) — единственное окно, в которое можно
-передумать: пункт меню задевается промахом, а разбудить погашенную машину из соседней комнаты
-уже невозможно. Ключ `/f` там же по необходимости: несохранённый документ иначе остановил бы
-завершение работы экраном «программа не даёт завершить работу», а человека у монитора нет —
-тихий отказ хуже потерянного черновика.
-
-## SignalR Hub `/hubs/session`
-
-Клиент вызывает: `JoinSession`, `LeaveSession`, `SendMessage`, `RespondPermission`, `Interrupt`
-Сервер шлёт событие `message` с объектом `ServerMessage` (поле `type`).
+Инварианты и подробности — [backend/ClaudeHomeServer/Services/Power/CLAUDE.md](backend/ClaudeHomeServer/Services/Power/CLAUDE.md): файл подхватывается сам при работе с этой папкой; при правках со стороны фронтенда открой его руками.
 
 ## Observability (OpenTelemetry)
 
@@ -514,15 +494,10 @@ override в `data/users.json`; фронт — стор [lib/featureFlags.ts](fro
 
 ## Конфигурация
 
-Машинно-специфичные значения (локальные пути `DefaultProjectsPath`/`McpConfigPath`,
-секреты, локальные URL) **не правим в отслеживаемых `appsettings*.json`** — там лежат
-общие дефолты. Свои значения кладём в `backend/ClaudeHomeServer/appsettings.Local.json`
-(в `.gitignore`, не коммитится, у каждого свой). Образец —
-`appsettings.Local.example.json`: скопировать в `appsettings.Local.json` и вписать своё.
-
-Порядок загрузки (последний переопределяет): `appsettings.json` →
-`appsettings.{Environment}.json` → `appsettings.Local.json`. Подключается в
-[Program.cs](backend/ClaudeHomeServer/Program.cs) сразу после `CreateBuilder`.
+Машинно-специфичные значения (локальные пути, секреты, локальные URL) **не правим в
+отслеживаемых `appsettings*.json`** — только в `backend/ClaudeHomeServer/appsettings.Local.json`
+(в `.gitignore`, у каждого свой; образец — `appsettings.Local.example.json`). Порядок загрузки
+и подключение — [conventions.md](docs/architecture/conventions.md), раздел «Конфигурация».
 
 ## Соглашения
 

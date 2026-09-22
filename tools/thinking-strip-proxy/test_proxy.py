@@ -176,6 +176,72 @@ class PruneTests(unittest.TestCase):
         self.assertGreater(blocks, 0)
         self.assertGreater(freed, 0)
 
+    def test_тело_write_режется_а_путь_остаётся(self):
+        """На задачах правки кода тела Write/Edit — до 47 % контекста. Путь файла нужен модели,
+        чтобы помнить, ЧТО она писала; тело — нет, файл на диске."""
+        msgs = [{"role": "user", "content": "задача"}]
+        for i in range(120):  # выводы мелкие, вся масса — в аргументах Write
+            msgs += [{"role": "assistant", "content": [{"type": "tool_use", "id": f"t{i}", "name": "Write",
+                                                        "input": {"file_path": f"/x/{i}.cs", "content": BIG}}]},
+                     tool_result(i, "ok")]
+        pruned, freed, blocks = proxy.prune_tool_results(msgs, **P)
+        self.assertGreater(blocks, 0)
+        первый = pruned[1]["content"][0]
+        self.assertEqual(первый["input"]["file_path"], "/x/0.cs")
+        self.assertEqual(первый["input"]["content"], proxy.PRUNE_INPUT_PLACEHOLDER)
+        self.assertEqual(первый["id"], "t0", "парность с tool_result держится на id")
+        последний = pruned[-2]["content"][0]
+        self.assertEqual(последний["input"]["content"], BIG, "свежий хвост не тронут")
+
+    def test_edit_режет_обе_строки_multiedit_вложенные(self):
+        msgs = [{"role": "user", "content": "задача"}]
+        for i in range(120):
+            msgs += [{"role": "assistant", "content": [{"type": "tool_use", "id": f"t{i}", "name": "MultiEdit",
+                                                        "input": {"file_path": "/x.cs",
+                                                                  "edits": [{"old_string": BIG, "new_string": BIG},
+                                                                            {"old_string": "a", "new_string": "b"}]}}]},
+                     tool_result(i, "ok")]
+        pruned, _, blocks = proxy.prune_tool_results(msgs, **P)
+        self.assertGreater(blocks, 0)
+        правки = pruned[1]["content"][0]["input"]["edits"]
+        self.assertEqual(правки[0], {"old_string": proxy.PRUNE_INPUT_PLACEHOLDER,
+                                     "new_string": proxy.PRUNE_INPUT_PLACEHOLDER})
+        self.assertEqual(правки[1], {"old_string": "a", "new_string": "b"}, "короткие поля не трогаем")
+
+    def test_thinking_режется_только_по_флагу(self):
+        msgs = [{"role": "user", "content": "задача"}]
+        for i in range(120):
+            msgs += [{"role": "assistant", "content": [{"type": "thinking", "thinking": BIG, "signature": "sig"},
+                                                        {"type": "tool_use", "id": f"t{i}", "name": "Bash",
+                                                         "input": {"command": "ls"}}]},
+                     tool_result(i, "ok")]
+        выкл, _, blocks_off = proxy.prune_tool_results(msgs, prune_thinking=False, **P)
+        self.assertEqual(blocks_off, 0, "без флага размышления не трогаем")
+        вкл, _, blocks_on = proxy.prune_tool_results(msgs, prune_thinking=True, **P)
+        self.assertGreater(blocks_on, 0)
+        первый = вкл[1]["content"][0]
+        self.assertEqual(первый, {"type": "thinking", "thinking": proxy.PRUNE_THINKING_PLACEHOLDER},
+                         "текст в плейсхолдер, подпись снята — она к нему уже не относится")
+        self.assertEqual(вкл[1]["content"][1]["input"], {"command": "ls"}, "соседний tool_use цел")
+
+    def test_разные_виды_идут_в_одну_очередь_по_порядку(self):
+        """Ступень и хвост считаются по общему объёму всех видов, а не по каждому отдельно."""
+        msgs = [{"role": "user", "content": "задача"}]
+        for i in range(60):  # 60 Write по 1500 ток + 60 выводов по 1500 ток = 180k
+            msgs += [{"role": "assistant", "content": [{"type": "tool_use", "id": f"t{i}", "name": "Write",
+                                                        "input": {"file_path": "/x", "content": BIG}}]},
+                     tool_result(i)]
+        base, _, blocks = proxy.prune_tool_results(msgs, **P)
+        self.assertGreater(blocks, 0)
+        for extra in range(1, 5):
+            msgs2 = list(msgs)
+            for j in range(extra):
+                msgs2 += [{"role": "assistant", "content": [{"type": "tool_use", "id": f"e{j}", "name": "Write",
+                                                             "input": {"file_path": "/y", "content": BIG}}]},
+                          tool_result(100 + j)]
+            longer, _, _ = proxy.prune_tool_results(msgs2, **P)
+            self.assertEqual(longer[:len(msgs)], base, f"префикс поехал после {extra} дописанных пар")
+
     def test_незнакомая_структура_проходит_насквозь(self):
         for msgs in ([], [{"role": "user"}], [{"role": "user", "content": None}],
                      [{"role": "user", "content": [{"type": "tool_result"}]}] * 200,

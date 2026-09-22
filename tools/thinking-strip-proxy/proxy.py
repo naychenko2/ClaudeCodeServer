@@ -56,6 +56,9 @@ PRUNE_MIN_TOKENS = int(os.environ.get("PRUNE_MIN_TOKENS", "20000"))
 # взято из замеров: чат на 133k живёт без автосжатия, и резать там нечего (скачок границы
 # пришлось бы оплатить впустую), а беда начиналась к 318k при окне модели 262k.
 PRUNE_MIN_CONTEXT_TOKENS = int(os.environ.get("PRUNE_MIN_CONTEXT_TOKENS", "150000"))
+# Резать ли старые размышления. Отдельный флаг: у thinking-блоков есть подпись, и как vLLM
+# отнесётся к блоку с изменённым текстом — проверяется живьём, а не предполагается.
+PRUNE_THINKING = os.environ.get("PRUNE_THINKING", "off")
 # Разбор каждого запроса в журнал. ВЫКЛЮЧЕН по умолчанию: в лог попадает начало реплики,
 # то есть кусок чужого чата. Включать точечно, на время разбирательства.
 PRUNE_DEBUG = os.environ.get("PRUNE_DEBUG", "off")
@@ -120,6 +123,8 @@ def _is_budget_reminder(m):
 # перестраивается раз в PRUNE_STEP_TOKENS, а не каждый шаг. Состояние по сессиям тут держать
 # негде — у запроса нет её идентификатора, — и оно не нужно: решение зависит только от тела.
 PRUNE_PLACEHOLDER = "[Old tool result content cleared]"
+PRUNE_INPUT_PLACEHOLDER = "[Old tool input content cleared]"
+PRUNE_THINKING_PLACEHOLDER = "[Old thinking cleared]"
 
 
 def _prunable_size(content):
@@ -190,9 +195,45 @@ def _placeholder_like(content):
         {"type": "text", "text": PRUNE_PLACEHOLDER}]
 
 
+def _input_size(inp, min_chars):
+    """Обрезаемый объём аргументов вызова: сумма длинных строковых полей.
+
+    Без привязки к именам инструментов: у Write длинное поле content, у Edit — old_string и
+    new_string, у MultiEdit — вложенный список правок. Короткие поля (file_path, command)
+    не считаем: их оставляем, чтобы модель помнила, КАКОЙ файл она писала.
+    """
+    if not isinstance(inp, dict):
+        return None
+    total = 0
+    for v in inp.values():
+        if isinstance(v, str) and len(v) >= min_chars:
+            total += len(v)
+        elif isinstance(v, list):
+            for item in v:
+                if isinstance(item, dict):
+                    total += sum(len(x) for x in item.values() if isinstance(x, str) and len(x) >= min_chars)
+    return total or None
+
+
+def _prune_input(inp, min_chars):
+    """Те же длинные поля — в плейсхолдер; форма и короткие поля сохраняются."""
+    out = {}
+    for k, v in inp.items():
+        if isinstance(v, str) and len(v) >= min_chars:
+            out[k] = PRUNE_INPUT_PLACEHOLDER
+        elif isinstance(v, list):
+            out[k] = [{x: (PRUNE_INPUT_PLACEHOLDER if isinstance(y, str) and len(y) >= min_chars else y)
+                       for x, y in item.items()} if isinstance(item, dict) else item for item in v]
+        else:
+            out[k] = v
+    return out
+
+
 def prune_tool_results(msgs, keep_tail_tokens=None, step_tokens=None, min_chars=None,
-                       min_tokens=None, min_context_tokens=None, extra_chars=0):
+                       min_tokens=None, min_context_tokens=None, extra_chars=0,
+                       prune_thinking=None):
     """Возвращает (сообщения, сколько символов освободили, сколько блоков обрезали). Вход не мутирует."""
+    prune_thinking = (PRUNE_THINKING == "on") if prune_thinking is None else prune_thinking
     keep_tail_tokens = PRUNE_KEEP_TAIL_TOKENS if keep_tail_tokens is None else keep_tail_tokens
     step_tokens = max(1, PRUNE_STEP_TOKENS if step_tokens is None else step_tokens)
     min_chars = PRUNE_MIN_CHARS if min_chars is None else min_chars
@@ -212,16 +253,30 @@ def prune_tool_results(msgs, keep_tail_tokens=None, step_tokens=None, min_chars=
     if _context_chars(msgs, stable_extra) // 4 < min_context_tokens:
         return msgs, 0, 0
 
-    found = []  # (номер сообщения, номер блока, размер) в порядке появления
+    # (номер сообщения, номер блока, размер, вид) в порядке появления. Три вида обрезаемого:
+    #   result   — вывод инструмента (Bash/Grep/Read): до 97 % контекста на задачах чтения;
+    #   input    — тело Write/Edit в аргументах вызова: до 47 % на задачах правки кода, модель
+    #              записала файл, и весь его текст остался в истории навсегда;
+    #   thinking — старые размышления: 7–15 %, модели самой они не нужны.
+    # Разложение по четырём живым транскриптам 2026-09-22 — в README.
+    found = []
     for mi, m in enumerate(msgs):
-        if not isinstance(m, dict) or m.get("role") != "user":
+        if not isinstance(m, dict):
             continue
         content = m.get("content")
         if not isinstance(content, list):
             continue
+        role = m.get("role")
         for bi, b in enumerate(content):
-            if isinstance(b, dict) and b.get("type") == "tool_result":
-                found.append((mi, bi, _prunable_size(b.get("content"))))
+            if not isinstance(b, dict):
+                continue
+            kind = b.get("type")
+            if role == "user" and kind == "tool_result":
+                found.append((mi, bi, _prunable_size(b.get("content")), "result"))
+            elif role == "assistant" and kind == "tool_use":
+                found.append((mi, bi, _input_size(b.get("input"), min_chars), "input"))
+            elif role == "assistant" and kind == "thinking" and prune_thinking:
+                found.append((mi, bi, _text_len(b.get("thinking")) or None, "thinking"))
 
     # Граница в ТОКЕНАХ, а не в штуках вызовов. Мерить ступени в вызовах — мерить задачу не в
     # той единице, в которой она стоит: 35 вызовов бывают и 20k токенов, и 200k. Живой прогон
@@ -247,7 +302,7 @@ def prune_tool_results(msgs, keep_tail_tokens=None, step_tokens=None, min_chars=
     def весомый(size):
         return size is not None and size >= min_chars
 
-    prunable = sum(size for _, _, size in found[:protect_idx] if весомый(size))
+    prunable = sum(size for _, _, size, _ in found[:protect_idx] if весомый(size))
     target = prunable // step_chars * step_chars  # квантование вниз: редкие скачки
     if target <= 0:
         return msgs, 0, 0
@@ -265,9 +320,9 @@ def prune_tool_results(msgs, keep_tail_tokens=None, step_tokens=None, min_chars=
 
     # Мелкие выводы пропускаем: экономить на них нечего, а кэш ломаем. Плейсхолдер короче
     # порога, поэтому повторный прогон уже обрезанной истории ничего не меняет.
-    victims = [(mi, bi) for mi, bi, size in found[:boundary]
+    victims = [(mi, bi, kind) for mi, bi, size, kind in found[:boundary]
                if size is not None and size >= min_chars]
-    freed = sum(size - len(PRUNE_PLACEHOLDER) for _, _, size in found[:boundary]
+    freed = sum(size - len(PRUNE_PLACEHOLDER) for _, _, size, _ in found[:boundary]
                 if size is not None and size >= min_chars)
     # Порог выгоды (грубая оценка 4 символа на токен): ради мелочи префикс не рвём. Оценка
     # монотонна — граница только растёт, — поэтому порог срабатывает один раз за чат.
@@ -275,15 +330,21 @@ def prune_tool_results(msgs, keep_tail_tokens=None, step_tokens=None, min_chars=
         return msgs, 0, 0
 
     by_msg = {}
-    for mi, bi in victims:
-        by_msg.setdefault(mi, set()).add(bi)
+    for mi, bi, kind in victims:
+        by_msg.setdefault(mi, {})[bi] = kind
     out = list(msgs)
     for mi, blocks in by_msg.items():
         m = dict(out[mi])
         content = list(m["content"])
-        for bi in blocks:
+        for bi, kind in blocks.items():
             b = dict(content[bi])
-            b["content"] = _placeholder_like(b.get("content"))
+            if kind == "result":
+                b["content"] = _placeholder_like(b.get("content"))
+            elif kind == "input":
+                b["input"] = _prune_input(b.get("input"), min_chars)
+            else:  # thinking: текст в плейсхолдер, подпись вместе с ним теряет смысл
+                b["thinking"] = PRUNE_THINKING_PLACEHOLDER
+                b.pop("signature", None)
             content[bi] = b
         m["content"] = content
         out[mi] = m
@@ -303,6 +364,12 @@ def _debug_dump(doc, msgs, body_len):
                   and isinstance(m.get("content"), list)
                   for b in m["content"] if isinstance(b, dict) and b.get("type") == "tool_result"]
         крупные = [s for s in выводы if s is not None and s >= PRUNE_MIN_CHARS]
+        мысли = [_text_len(b.get("thinking"))
+                 for m in msgs if isinstance(m, dict) and isinstance(m.get("content"), list)
+                 for b in m["content"] if isinstance(b, dict) and b.get("type") == "thinking"]
+        входы = [_input_size(b.get("input"), PRUNE_MIN_CHARS) or 0
+                 for m in msgs if isinstance(m, dict) and isinstance(m.get("content"), list)
+                 for b in m["content"] if isinstance(b, dict) and b.get("type") == "tool_use"]
         системная = _system_chars(doc)
         контекст = _context_chars(msgs, системная) // 4
         _, freed, blocks = prune_tool_results(msgs, extra_chars=системная)
@@ -319,6 +386,8 @@ def _debug_dump(doc, msgs, body_len):
                 break
         print(f"[отладка] тело {body_len // 1024} КБ | сообщений {len(msgs)} | "
               f"выводов {len(выводы)} (крупных {len(крупные)} на {sum(крупные) // 4000}k ток) | "
+              f"thinking {len(мысли)} шт на {sum(мысли) // 4000}k ток | "
+              f"Write/Edit {sum(1 for x in входы if x)} шт на {sum(входы) // 4000}k ток | "
               f"системная часть {системная // 4000}k ток | контекст {контекст // 1000}k ток | "
               f"прунинг: {blocks} блоков, {freed // 4000}k ток | "
               f"хвост: {хвост.strip()[:160]!r}", file=sys.stderr, flush=True)

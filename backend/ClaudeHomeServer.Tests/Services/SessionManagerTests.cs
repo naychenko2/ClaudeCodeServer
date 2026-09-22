@@ -1760,6 +1760,90 @@ public class SessionManagerTests : IDisposable
         _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Working);
     }
 
+    // --- Ответ на карточку гасит её на ОСТАЛЬНЫХ устройствах чата ---
+    // Отвечающий клиент гасит свою копию оптимистично, остальным нужно событие: без него
+    // форма висела активной до перезагрузки страницы (перезагрузка истории не помогает —
+    // ответ не добавляет элемент в ленту, и сверка по длине даёт «сервер не новее»).
+
+    [Fact]
+    public async Task RespondPermission_КарточкаЖива_РассылаетРешениеОстальнымУстройствам()
+    {
+        var session = await MkBusySessionAsync("bcast-perm", SessionStatus.Waiting);
+        var entry = GetEntry(session.Id);
+        SetProcess(entry, StubAdapter(entry).Object);
+        SetPendingInteraction(entry, new PermissionRequestMessage("req-1", "Bash", new { }));
+        ClearSent();
+
+        _sut.RespondPermission(session.Id, "req-1", "allow_always");
+
+        await WaitForConditionAsync(() => Sent<InteractionResolvedMessage>().Count > 0,
+            TimeSpan.FromSeconds(2));
+        var msg = Sent<InteractionResolvedMessage>().Single();
+        msg.Kind.Should().Be("permission");
+        msg.Id.Should().Be("req-1");
+        msg.Decision.Should().Be("always");
+        msg.SessionId.Should().Be(session.Id);
+    }
+
+    [Fact]
+    public async Task AnswerQuestion_КарточкаЖива_РассылаетОтветОстальнымУстройствам()
+    {
+        var session = await MkBusySessionAsync("bcast-question", SessionStatus.Waiting);
+        var entry = GetEntry(session.Id);
+        SetProcess(entry, StubAdapter(entry).Object);
+        SetPendingInteraction(entry, new AskQuestionMessage("tool-1", new { }));
+        ClearSent();
+
+        _sut.AnswerQuestion(session.Id, "tool-1", "{\"answers\":{\"Подход\":\"Первый\"}}");
+
+        await WaitForConditionAsync(() => Sent<InteractionResolvedMessage>().Count > 0,
+            TimeSpan.FromSeconds(2));
+        var msg = Sent<InteractionResolvedMessage>().Single();
+        msg.Kind.Should().Be("question");
+        msg.Id.Should().Be("tool-1");
+        msg.Answers.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task RespondPlan_КарточкаЖива_РассылаетРешениеОстальнымУстройствам()
+    {
+        var session = await MkBusySessionAsync("bcast-plan", SessionStatus.Waiting);
+        var entry = GetEntry(session.Id);
+        SetProcess(entry, StubAdapter(entry).Object);
+        SetPendingInteraction(entry, new PlanReviewMessage("req-2", "план"));
+        ClearSent();
+
+        _sut.RespondPlan(session.Id, "req-2", approve: false, feedback: "доработать");
+
+        await WaitForConditionAsync(() => Sent<InteractionResolvedMessage>().Count > 0,
+            TimeSpan.FromSeconds(2));
+        var msg = Sent<InteractionResolvedMessage>().Single();
+        msg.Kind.Should().Be("plan");
+        msg.Id.Should().Be("req-2");
+        msg.Approved.Should().BeFalse();
+        msg.Feedback.Should().Be("доработать");
+    }
+
+    [Fact]
+    public async Task AnswerQuestion_КарточкиУжеНет_НичегоНеРассылает()
+    {
+        // Протухший ответ (ход уже оборван) не должен гасить чужие карточки
+        var session = await MkBusySessionAsync("bcast-stale", SessionStatus.Error);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        ClearSent();
+
+        _sut.AnswerQuestion(session.Id, "tool-1", "{\"answers\":[]}");
+
+        await Task.Delay(100);
+        // Ассерт на пустую рассылку сам по себе зеленел бы и на голодном раннере, не успевшем
+        // выполнить фоновую отправку. Проверка адаптера детерминированна: гейт стоит раньше
+        // обоих действий, и снятие гейта роняет тест независимо от таймингов CI.
+        adapter.Verify(a => a.AnswerQuestion(It.IsAny<string>(), It.IsAny<string>()), Times.Never());
+        Sent<InteractionResolvedMessage>().Should().BeEmpty();
+    }
+
     // --- «Разрешать всегда»: список живёт на сессии, а не в памяти адаптера ---
 
     // Инструменты «всегда разрешать» из стора для сессии session (PascalCase, как _jsonOpts)

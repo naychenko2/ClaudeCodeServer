@@ -5496,6 +5496,16 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         }
         entry.Process?.RespondPermission(requestId, behavior);
         entry.PendingInteraction = null;
+        // Вердикт — в тех же токенах, что хранит карточка на фронте (ChatItem.decision)
+        var decision = behavior switch
+        {
+            "allow" => "allowed",
+            "allow_always" => "always",
+            _ => "denied",
+        };
+        FireAndForget(BroadcastAsync(sessionId,
+                new InteractionResolvedMessage("permission", requestId, Decision: decision)),
+            $"рассылка ответа на permission ({sessionId})");
         FireAndForget(ApplyStatusAsync(sessionId, entry, SessionStatus.Working),
             $"смена статуса после permission ({sessionId})");
     }
@@ -7817,24 +7827,27 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         if (IsStaleInteractionAnswer(sessionId, entry, $"вопрос {toolUseId}")) return;
         entry.Process?.AnswerQuestion(toolUseId, answerText);
         entry.PendingInteraction = null;
+        object? answers = null;
+        try
+        {
+            using var doc = JsonDocument.Parse(answerText);
+            if (doc.RootElement.TryGetProperty("answers", out var a))
+                answers = JsonSerializer.Deserialize<object>(a.GetRawText());
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[SessionManager] Ответ на вопрос ({sessionId}) не распарсился: карточка погаснет без сводки выбора (и в историю, и в рассылку уйдёт без answers): {ex.Message}");
+        }
         // Фиксируем ответ в истории, чтобы карточка вопроса пережила перезагрузку
         if (entry.Accumulator is not null)
         {
-            object? answers = null;
-            try
-            {
-                using var doc = JsonDocument.Parse(answerText);
-                if (doc.RootElement.TryGetProperty("answers", out var a))
-                    answers = JsonSerializer.Deserialize<object>(a.GetRawText());
-            }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine($"[SessionManager] Ответ на вопрос ({sessionId}) не распарсился, в историю уйдёт без answers: {ex.Message}");
-            }
             entry.Accumulator.OnQuestionAnswered(toolUseId, answers);
             FireAndForget(entry.Accumulator.SaveSnapshotAsync(_history),
                 $"сохранение истории после ответа на вопрос ({sessionId})");
         }
+        FireAndForget(BroadcastAsync(sessionId,
+                new InteractionResolvedMessage("question", toolUseId, Answers: answers)),
+            $"рассылка ответа на вопрос ({sessionId})");
         FireAndForget(ApplyStatusAsync(sessionId, entry, SessionStatus.Working),
             $"смена статуса после ответа на вопрос ({sessionId})");
     }
@@ -7852,6 +7865,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             FireAndForget(entry.Accumulator.SaveSnapshotAsync(_history),
                 $"сохранение истории после решения по плану ({sessionId})");
         }
+        FireAndForget(BroadcastAsync(sessionId,
+                new InteractionResolvedMessage("plan", requestId, Approved: approve, Feedback: feedback)),
+            $"рассылка решения по плану ({sessionId})");
         FireAndForget(ApplyStatusAsync(sessionId, entry, SessionStatus.Working),
             $"смена статуса после решения по плану ({sessionId})");
     }

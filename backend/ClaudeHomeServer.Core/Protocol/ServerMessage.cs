@@ -137,6 +137,28 @@ public record AskQuestionMessage(string ToolUseId, object Input)
 public record PlanReviewMessage(string RequestId, string Plan)
     : ServerMessage("plan_review");
 
+// Человек ответил на интерактивную карточку (вопрос, запрос разрешения, план) — гасим её
+// у ОСТАЛЬНЫХ устройств того же чата. Отвечающий клиент гасит свою оптимистично, а другим
+// (телефон, планшет, комп) без этого события форма остаётся активной до перезагрузки
+// страницы: сверка «история сервера новее» идёт по числу элементов, а ответ элемента не
+// добавляет — он дописывает решение в существующий. Эфемерное: в history не пишется
+// (решение уже лежит в самой карточке), UpdatedAt не двигает.
+//  • Kind = "question"   — Id это ToolUseId, решение в Answers;
+//  • Kind = "permission" — Id это RequestId, решение в Decision (allowed|denied|always);
+//  • Kind = "plan"       — Id это RequestId, решение в Approved + Feedback.
+// Известное ограничение (шире этого события, не лечится им): SessionEntry.PendingInteraction —
+// один слот, поэтому при ДВУХ живых карточках одного хода ответ на первую обнуляет слот,
+// а вторая остаётся активной на всех устройствах и ответ на неё глушит IsStaleInteractionAnswer —
+// без всякого события. Синхронизация устройств тут ни при чём, это цена одного слота.
+public record InteractionResolvedMessage(
+        string Kind,
+        string Id,
+        object? Answers = null,
+        string? Decision = null,
+        bool? Approved = null,
+        string? Feedback = null)
+    : ServerMessage("interaction_resolved");
+
 // External — правка пришла не от модели этого чата (нет заявки FileChangeAttributor):
 // человек в IDE, форматтер, Bash-команда без Edit/Write. Фронт снимает кнопку «Откатить»
 // и показывает пометку «Изменение вне чата» — см. FileChangeAttributor.

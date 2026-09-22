@@ -308,259 +308,63 @@ glif — `compose_project` + опрос джобы) за роутером `Image
 
 Внутренние границы продукта — **подсистемы**, контракт
 [`IAppSubsystem.cs`](backend/ClaudeHomeServer.Core/Services/Composition/IAppSubsystem.cs)
-с `Key`/`Title`/`Register` и `AddSubsystems`. Не путать с **внешними модулями**
-YARP (`Services/Modules`, `IModule`/`ModuleRegistry`) — те живут в отдельном
-процессе за реверс-прокси, эти — внутри Microsoft DI, без выгрузки и hot-plug.
+(`Key`/`Title`/`Register` плюс `AddSubsystems`). Не путать с **внешними модулями** YARP
+(`Services/Modules`, `IModule`/`ModuleRegistry`): те живут в отдельном процессе за
+реверс-прокси, эти — внутри Microsoft DI, без выгрузки и hot-plug. Общая инфраструктура —
+`ClaudeHomeServer.Core` (ноль `PackageReference`), направление ссылок
+`Main → Vertical → Core`; швы заводятся по фактической потребности, не впрок.
 
-**Общая инфраструктура — `ClaudeHomeServer.Core`** (проект добавлен коммитом
-`14e474de`): контракт `IAppSubsystem` + хелперы `AddSubsystems`/`UseSubsystems`,
-`QuietHttpLogger`, `JsonFileStore`, `McpSecretStore`, `SsrfGuard`. Ноль
-`PackageReference`, направление ссылок `Main → Vertical → Core`. Швы
-(`ISessionDirectory` и пр.) заводятся по фактической потребности, не впрок.
+Курс — Этап 5: вынести в отдельные `.csproj` ВСЕ вертикали, критерий успеха — в `Services/`
+не остаётся ни одной папки вертикали, Main = композиция + контроллеры + ядро сессий. Статус,
+список вынесенного, метрика и разбор промахов оценки —
+[ADR-014](docs/adr/ADR-014-internal-subsystems.md). Состав таблицы `Boundaries` в карте не
+держим намеренно: источник правды — таблица в коде, а устаревший список хуже его отсутствия.
 
-**Реестры с разнонаправленными писателями/читателями — спина, а не питающая
-вертикаль.** Реестр, который наполняют разные слои, а читает REST-гейт,
-кладётся в спину, а не внутрь питающей вертикали. Этому правилу обязан своим
-появлением `Services/TranscriptRoots.cs` (волна 4): реестр корней транскриптов
-лежал внутри `WorkflowAgentParser`, который наполняли `Llm`, `Execution` и
-константа, а читал `WorkflowController` — оттуда вырос цикл `Llm ⇄ Execution`,
-и разрез через `TranscriptRoots` в спине стал лечением, а не записью в allow-list.
+**Правило зависимостей:** вертикаль зависит от спины (`Microsoft.*`, `Models`,
+`Services.Http`/`Composition`/`Mcp`) и от явных швов (например, `IDesktopChatDirectory`), но
+НИКОГДА от другой вертикали напрямую. Нужна связь — два пути: событие `TurnEventBus`
+([ADR-013](docs/adr/ADR-013-turn-event-bus.md)) либо явный интерфейс-шов. Держат правило
+сторожа `SubsystemBoundaryTests` и `SubsystemBoundaryCoverageTests` (default-deny +
+точечный allow-list, источник правды — сборка) плюс регрессия IL-скана
+`IlBoundaryRegressionTests`.
 
-**Курс после пилота физической изоляции** ([ADR-014](docs/adr/ADR-014-internal-subsystems.md),
-раздел «Курс после пилота»): **двадцать семь** вертикалей уже вынесены в отдельные
-`.csproj` — Backgrounds, Changelog, CodeGraph, Desktop, Diagnostics, Docs,
-Dossiers, Git, Knowledge, Llm, Memory, Modules, Notes, Personas, ProjectIcons,
-ProjectServices, Reader, Skills, Spend, Tasks, Terminal, Tray, Tts, Turn, Video,
-WebSearch, Yandex. Сначала плановый мерж
-пилота (Video, Yandex, Reader), затем по критерию готовности швов — CodeGraph,
-Skills, Git, Tts, а на Этапе 5 — все оставшиеся, включая `Llm`
-(мерж `e9bd6f74`, 2026-09-11).
+**Реестр, который наполняют разные слои, а читает REST-гейт, кладётся в спину, а не внутрь
+питающей вертикали** — иначе из него вырастает цикл между вертикалями (так и родился
+`Services/TranscriptRoots.cs`: реестр внутри `WorkflowAgentParser` дал цикл `Llm ⇄ Execution`).
 
-Трём вынос потребовал предварительной уборки: **Git** (`SafeJoin` →
-Core-примитив `SafePath.Join`, `Models.User` вон из контракта через read-метод
-`IForgejoAccountStore`, `Models/GitStatus.cs` → Core, возврат регистрации спинных
-реакторов в `Program.cs`), **Notes** (разрез ДВУХ циклов — с `Knowledge` и с
-`Tasks`, плюс снятие двух инверсий слоёв) и **Knowledge** (семь швов под
-фактические вызовы, DTO каталога из контроллера в вертикаль).
+Грабли, на которых сторож остаётся зелёным при сломанной границе:
 
-**Не вынесены и почему** (статус на master, 2026-09-11):
-- **Team** — 73 обращения к `SessionManager`, решение прежнее (ADR-014);
-- **Backup** — вычеркнут: инфраструктурный срез поперёк всех, не вертикаль;
-- **Prompts**, **Images**, **Auth** — не вынесены; объём не мерян честным методом
-  (пробная сборка / заглушки до сходимости).
+- **Дубль записи в `Boundaries` не ловит ни один сторож**: `ToHashSet()` по `NamespaceRoot`
+  схлопывает вторую запись, и покрытие считается выполненным. Видно только по расхождению
+  числа тестов.
+- **Без форс-загрузки сборок сторож проходит вакуумно** (мутацией доказано: 17/17 зелёных при
+  нулевом наборе) — новая вертикаль обязана добавить строку `typeof(...).Assembly` в
+  статические конструкторы сторожей.
+- **Объём выноса меряется заглушками до сходимости, а не одной пробной сборкой**: Roslyn
+  встаёт на фазе объявлений и не идёт в тела методов (на `Llm` первый прогон обещал 14 ошибок
+  вместо настоящих 90). Скрытое чаще оказывается **спиной**, а она лечится переносом в Core с
+  сохранением namespace, а не швом: ссылка `Vertical → Main` невозможна по построению.
+- Чего IL-скан не видит и не увидит: `Reflection.Emit`, `Type.GetType(string)` и рефлексия,
+  рантайм-резолвы по атрибутам. Устройство сторожей целиком — ADR-014, раздел «Устройство
+  сторожей границ».
 
-**Решение Андрея 2026-09-08 — Этап 5: вынести в отдельные `.csproj` ВСЕ
-оставшиеся вертикали**, критерий успеха — в `Services/` не остаётся ни одной папки
-вертикали, Main = композиция + контроллеры + ядро сессий. Прежний потолок «1–2
-новых шва» **перестал быть гейтом для ретро-переноса** (вопрос сменился с «стоит
-ли выносить» на «сколько стоит»); для НОВОЙ подсистемы он в силе. Обязательным
-вместо потолка осталось другое: каждый шов узок по ФАКТИЧЕСКИМ вызовам, а объём
-переноса доказывается компилятором, а не чтением кода. **Одной пробной сборки для
-этого мало:** Roslyn встаёт на фазе объявлений и не идёт в тела методов, пока не
-разрешены типы в сигнатурах, поэтому первый прогон показывает лишь первую волну
-(на `Llm` — 14 ошибок вместо настоящих 90). Честный замер — заглушки на недостающие
-типы и пересборка до сходимости. Второе следствие: бо́льшая часть скрытого — **спина,
-а не вертикали**; сторож на неё молчит честно (вертикали разрешено ссылаться на
-спину), но физический вынос этого не наследует — спина остаётся в Main, а ссылка
-`Vertical → Main` невозможна. Спина лечится переносом в Core с сохранением namespace
-(call-site'ы не меняются), а не швом. Подробности и разбор промахов оценки —
-в [ADR-014](docs/adr/ADR-014-internal-subsystems.md). Сторожа границ
-перестроены на перебор нескольких сборок (`AppDomain.CurrentDomain.GetAssemblies()`
-с фильтром `ClaudeHomeServer` и `ClaudeHomeServer.*`, минус `*.Tests`) и защищены
-от вакуумного прохода явными ассертами — иначе фильтр или порядок загрузки молча
-отдают пустой набор (доказано мутацией в ревью: 17/17 зелёных при нулевом наборе).
-Статические конструкторы сторожей (`SubsystemBoundaryTests`,
-`RootSubsystemBoundaryTests`, `SubsystemBoundaryCoverageTests`) форсят загрузку всех
-вертикальных сборок (все двадцать семь — список выше), иначе
-порядок тестов ложно рушит сторож при изолированном прогоне. **Дубль записи в
-`Boundaries` сторожа не ловят ни один:** `SubsystemBoundaryCoverageTests` сводит
-записи в `boundaryRoots` через `ToHashSet()` по `NamespaceRoot`, и вторая запись о
-той же вертикали молча схлопывается — покрытие считается выполненным. Поймать можно
-только по расхождению числа тестов: дублирующая запись добавляет лишний кейс в
-параметризованный `Vertical_НеСсылаетсяНаДругиеВертикали` (так и всплыло в ревью
-выноса Git — 48 ушедших тестов против 49 приехавших). В `IlBoundaryRegressionTests` статического
-конструктора нет — там защиту даёт fail-closed ассерт «тип не найден»: если Main
-не загружен, все 7 швов из таблицы вернутся как `null`, тест упадёт с понятным
-диагнозом вместо ложного «зелёного» (Глеб мутацией подтвердил, что форс-загрузка
-для этого теста избыточна).
+**Отключаемость подсистемы:** тумблер `Subsystems:{Key}:Enabled` (нет секции = включена),
+единственная точка чтения — `SubsystemGate.IsEnabled`, инлайновых `config.GetValue` не
+заводить. У выключенной подсистемы `Register` не вызывается, поэтому **обязательный параметр
+конструктора от отключаемой вертикали вне её самой — дефект**; легальны три формы (`?.`/`?? []`,
+ранний выход по `is null`, честный 503 с причиной), 500 и необработанное исключение — нет.
+Гейт ставится **на регистрацию**: пост-хок удаление дескрипторов не видит регистрацию через
+`ImplementationFactory`. `ApplicationPart` вертикали под `Microsoft.NET.Sdk.Web` подключается
+MSBuild сам — изоляция маршрутов делается только **удалением** части в `Program.cs` через
+`ConfigureApplicationPartManager`. Выводы пилота (Notes) — ADR-014, раздел «Пилот
+отключаемости».
 
-**Правило зависимостей:** вертикаль зависит от спины (`Microsoft.*`,
-`Models`, `Services.Http`/`Composition`/`Mcp`) и от явных швов (например,
-`IDesktopChatDirectory`), но НИКОГДА от другой вертикали напрямую.
-Нужна связь — два пути: событие `TurnEventBus` ([ADR-013](docs/adr/ADR-013-turn-event-bus.md))
-или явный интерфейс-шов. Удерживается двумя сторожами:
-- `SubsystemBoundaryTests` (рефлексия по сборке, источник правды — сборка,
-  не текст): default-deny + точечный allow-list. Контракт разделяет
-  «префикс поддерева» и «точное имя namespace»: `AllowedNamespacePrefixes`
-  открывает поддеревья (`X.` и `X`), `AllowedExactNamespaces` — ровно
-  указанный тип по `FullName` (полезно для nested-типов вроде
-  `SsrfGuard+AddressCheck` и для точечных синглтонов из корня `Services`
-  типа `PersonaManager`/`SessionManager`). Покрытие — все 35 записей в
-  `Boundaries` после волны 4 и выноса штаба: 20 реализаций `IAppSubsystem`
-  (`Backgrounds, Changelog, CodeGraph, Deploy, Dossiers, Git, Images,
-  Knowledge, Llm, Memory, Notes, ProjectIcons, ProjectServices, Reader,
-  Skills, Spend, Tasks, Tts, Video, Yandex`) плюс `Watchdog` и 14 других
-  вертикалей без подсистемы (`Auth, Backup, Desktop, Diagnostics, Docs,
-  Execution, Modules, Personas, Prompts, Team, Terminal, TriggerSources,
-  Turn, WebSearch`).
-- `SubsystemBoundaryCoverageTests`: каждая реализация `IAppSubsystem` в
-  сборке должна иметь строку в `Boundaries`; вертикали без подсистемы
-  перечисляются явно — список выше. Ловит «новая подсистема/вертикаль
-  забыта в таблице» — без этого теста свежее подразделение проходило молча,
-  и границы по нему не работали.
-
-Известное ограничение сторожей (задача `8beee75e`, волна 1, 2026-09-06,
-**закрыто**): оба сторожа теперь читают IL-опкоды тел методов через
-`BoundaryIlScanner` (`MethodBody.GetILAsByteArray()` + `Module.ResolveMember`),
-generic-аргументы инстанцированных методов (включая
-`sp.GetRequiredService<T>()`) и типы локальных переменных. Видимы:
-
-- статические вызовы из тел методов (`DeployHost → GitService.IsGitRepo`,
-  `DeployHost → Backup.InstanceLock.TryAcquireDeploy`,
-  `ReaderService → SsrfGuard.*`);
-- DI-резолвы (`Modules → Services.UserStore` через `GetRequiredService<T>`
-  в `ModuleGatewayMiddleware.cs:84`);
-- вызовы внутри async-методов и лямбд (обход nested-типов
-  `<...>d__NN`/`<>c__DisplayClass` обязателен — без него теряются 3 из 7
-  известных швов, а сторож остаётся на вид рабочим: проверено мутацией).
-
-Что НЕ видно (расширение до IL не закрывает):
-- тела методов, написанных на IL-ассемблере напрямую (в проекте таких нет,
-  но гипотетически — `Reflection.Emit`-генерация);
-- динамическая подмена типов через `Type.GetType(string)` или рефлексию
-  (`Assembly.LoadFrom`, `Activator.CreateInstance`);
-- рантайм-резолвы по атрибутам/маркерам (`[FromKeyedServices]`,
-  `[Inject]`-подобные — в проекте нет).
-
-Регрессия обхода nested-типов зафиксирована в `IlBoundaryRegressionTests` —
-7 известных швов проверяются на видимость при каждом прогоне.
-
-**Что гейт ловит (по факту, мутацией проверено):** единственная точка
-сбора типов — `BoundaryIlScanner.CollectAllReferencedTypes`, которую зовут
-одновременно сторожа (`SubsystemBoundaryTests`, `RootSubsystemBoundaryTests`)
-и регрессия `IlBoundaryRegressionTests`. Подмена обхода nested-типов
-(например, возврат к наивному `GetMethods(DeclaredOnly)`) роняет
-`IlBoundaryRegressionTests.IlScan_ВидитВсеСемьИзвестныхШвов` — больше
-ничего не краснеет, но сама точка подмены одна: обёрток больше нет.
-(задача `57b5e9bc`, шаг 5, закрыт.)
-
-Что НЕ сторожит:
-- **тела методов, написанные на IL-ассемблере напрямую** (в проекте таких нет,
-  но гипотетически — `Reflection.Emit`-генерация);
-- **динамическая подмена типов через `Type.GetType(string)` или рефлексию**
-  (`Assembly.LoadFrom`, `Activator.CreateInstance`): место, где вирусный код
-  мог бы подсунуть тип с произвольным списком зависимостей;
-- **рантайм-резолвы по атрибутам/маркерам** (`[FromKeyedServices]`,
-  `[Inject]`-подобные — в проекте нет).
-
-**Вертикаль `Services/Team` (штаб, «Командная реализация») — вынесена из
-`SessionManager` 2026-09-06**, семью волнами переезда: `TeamCoordinator`,
-`TeamStateService`, `TeamPlanService`, `TeamDecisionService`,
-`TeamBudgetService`, `TeamEnableService`, `TeamTurnCompletionService` плюс
-спутники (`TeamWaveService`, промпты, сторож волны). Ядро **10 124 → 8 999
-строк**; штабного кода в нём не осталось — только owning-обёртки.
-
-Швов ровно **четыре** (`ITeamSessionDirectory`, `ITeamHistoryStore`,
-`ITeamRunState`, `ITeamTurnIntake` в `Services/Team/TeamCoreSeams.cs`): новые
-не заводим, достраиваем существующие. Правило пережило проверку: в шаге 2г-4
-пятый шов завели, ревью показало, что он дублирует `ITeamHistoryStore` — четыре
-метода вернули туда, пятый выбросили как дубликат уже имевшегося. Цена
-решения — **10 фасадных обёрток** в ядре (их зовут `ChatsController`,
-`SessionHub`, `SessionMessagingService`, `DenyOnDelegatedTurnAttribute`) и пять
-публичных методов ядра (`GetById`, `GetOwned`, `ResolveOwnerId`,
-`ReportUpAsync`, `BroadcastAsync`).
-
-**Шаг 2г-4 (обёртки → DI):** четыре `Func`-свойства штаба с ядра сняты —
-обработчики волны живут в `TeamCoordinator`, ядро отдаёт его одной ссылкой.
-Обёрток в ядре 27 → **10 фасадных**: волна 3 (2026-09-11) сняла 11 снимаемых
-обёрток и три мёртвых метода (`ResolveTeamPlanRoot`, `StartTeamWorkAsync`,
-`CloseTeamTalkAsync`) — сервисы штаба зовут siblings напрямую через DI, ядро
-больше не доска объявлений для штабной логики (остались только базовые
-`GetById`/`BroadcastAsync`/`SaveSessions`). `HasLiveDelegatedTasks` осознанно
-остаётся `Func`: его ставит `TaskExecutionService` (чужая сторона, цикл
-настоящий), а прямая ссылка на `TaskManager` из спины уронила бы сторож границ.
-
-**Отдельным `.csproj` Team не выносится** (проверено по критерию ADR-014):
-67 обращений к типу `SessionManager` из вертикали, но после волны 3 все они —
-базовые операции ядра (`GetById`, `BroadcastAsync`, `SaveSessions`), а не
-штабная логика; швы тянут `Models` и `Protocol` из Main, на `InternalsVisibleTo`
-стоят все тесты. Вынос потребовал бы фасада на десятки методов (второй
-`LlmSessionContext`) — дороже оставляемого. Фактура и разбивка шага 2г-4 —
-[docs/research/team-di-migration-2026-09.md](docs/research/team-di-migration-2026-09.md),
-план выноса — [session-core-split-2026-09.md](docs/research/session-core-split-2026-09.md).
-
-**Разведка по кандидатам** ([ADR-014](docs/adr/ADR-014-internal-subsystems.md)):
-**Video — пилот** ✅ (`VideoSubsystem`, 1 контроллер, 0 hosted, 1 исходящая
-на `McpSecretStore`, 1 входящая мягкая на `Models/User.FavoriteVideoChannels`),
-**Desktop — отложен, но это настоящая цель** ⏳ (4 контроллера, ~3378 строк,
-три god-объекта: `SessionManager.cs:564` сам делает `new DesktopCapabilityTokenService`,
-`JwtService.cs:251,266` знает про `DesktopCaller`, `ClaudeSession.cs:1498`
-инъектит MCP-сервер `desktop`; готовые швы `IDesktopChatDirectory`/
-`IDesktopDeviceDirectory`/`IDesktopHandsNotifier`/`IDesktopCallCanceller` —
-за них и тянуть), **Backup — вычеркнут** ❌ (инфраструктурный срез поперёк
-всех, `BackupValidation` десериализует 6 чужих моделей, `BackupSchema.Version`
-— глобальный счётчик формата всех сторов, `BackupCli.TryHandle` работает
-в `Program.cs:40` ДО построения DI). Сборки и `AssemblyLoadContext` отвергнуты:
-Microsoft DI не выгружает контейнер по конструкции, отдельные сборки ломают
-`InternalsVisibleTo` (на нём стоят все тесты), в .NET сборка — не бесплатная
-папка как в pnpm-монорепе.
-
-**Метрика успеха:** три ряда, замерены на `master` (2026-09-11, после мержа
-`Llm` `e9bd6f74`):
-
-- **`Program.cs` = 1776 строк / 215 регистраций** (замер 2026-09-11, master).
-  Опорные точки: волна 4 — 1464 / 144, волна 3 — 1544 / 207,
-  merge-base `b8ce8f85` от `master` — 1616 / 246.
-  Считается так: `wc -l backend/ClaudeHomeServer/Program.cs` для строк и
-  `grep -c 'builder\.Services\.Add' backend/ClaudeHomeServer/Program.cs`
-  для регистраций.
-  Рост от 144 к 215 — регистрации новых вертикалей, добавленные в
-  `AddSubsystems` по мере выноса; каждая вынесенная вертикаль добавляет
-  строку, но не удаляет существующий код.
-- **`Services/*.cs` (верхний уровень, без подкаталогов) = 24 667 строк
-  / 67 файлов** (2026-09-11, master). Опорные точки: после волны 3 —
-  43 482 / 123, merge-base `b8ce8f85` — те же 43 482 / 123.
-  Δ от «после волны 3» = −18 815 строк, −56 файлов.
-  Считается так:
-  `find backend/ClaudeHomeServer/Services -maxdepth 1 -name '*.cs' | wc -l`
-  для числа файлов и
-  `find backend/ClaudeHomeServer/Services -maxdepth 1 -name '*.cs' | xargs wc -l | tail -1`
-  для строк.
-- **Размер Main-компиляции (все `.cs` в `backend/ClaudeHomeServer/`)
-  = 333 файла / 75 717 строк** (2026-09-11, master).
-  Было перед выносом `Llm` — 405 файла / 100 568 строк (Δ = −73 файла,
-  −23 191 строк). Эта величина отражает цель Этапа 5: Main = композиция
-  + контроллеры + ядро сессий, без папок вертикалей.
-  Считается так:
-  `find backend/ClaudeHomeServer -name '*.cs' | wc -l`
-  и `find backend/ClaudeHomeServer -name '*.cs' | xargs wc -l | tail -1`.
-
-Полный разбор баз и способа подсчёта — в
-[ADR-014](docs/adr/ADR-014-internal-subsystems.md), раздел «Метрика успеха».
-Цель по `Program.cs` — уход под 1000 строк и 150 регистраций по мере
-выделения следующих вертикалей. Цель по корню `Services` с этапа 1
-снята и перенесена на этап 4 (причина — в ADR-014).
-
-Вторая метрика — среднее число файлов, которое трогает новая фича:
-с подсистемами фича = 0 правок в `Program.cs` + 1 файл подсистемы +
-файлы раздела, цель — устойчиво ниже 3.
-
-**Отключаемость подсистемы** (пилот на Notes, 2026-09-10): тумблер
-`Subsystems:{Key}:Enabled` (нет секции = включена), единственная точка чтения —
-`SubsystemGate.IsEnabled`, инлайновых `config.GetValue("Subsystems:…")` не
-заводить. У выключенной подсистемы `Register` не вызывается, поэтому
-**обязательный параметр конструктора от отключаемой вертикали вне её самой —
-дефект**; легальных форм три: `?.` / `?? []` (no-op или пустая выдача), ранний
-выход по `is null`, честный отказ на границе со своим кодом (502/503) — 500 и
-необработанное исключение не годятся. Гейт ставится **на регистрацию**: пост-хок
-удаление дескрипторов не видит регистрацию через `ImplementationFactory`.
-Грабля, которая касается всех вынесенных вертикалей:
-`ApplicationPart` вертикали под `Microsoft.NET.Sdk.Web` подключается MSBuild
-сам, «добавить часть по гейту» — мёртвый код, изоляция маршрутов делается
-**удалением** части в `Program.cs` через `ConfigureApplicationPartManager`.
-Выводы пилота целиком, с ценой и коэффициентом планирования, —
-[ADR-014](docs/adr/ADR-014-internal-subsystems.md), раздел «Пилот
-отключаемости: что выяснилось».
+**Штаб (`Services/Team`) вынесен из `SessionManager`, но отдельным `.csproj` не выносится** —
+десятки обращений к базовым операциям ядра, фасад на них дороже оставляемого. Швов ровно
+**четыре** (`ITeamSessionDirectory`, `ITeamHistoryStore`, `ITeamRunState`, `ITeamTurnIntake`
+в `Services/Team/TeamCoreSeams.cs`): новые не заводим, достраиваем существующие. Фактура —
+[team-di-migration-2026-09.md](docs/research/team-di-migration-2026-09.md), решение и его
+цена — ADR-014.
 
 ## Claude Code CLI subprocess
 

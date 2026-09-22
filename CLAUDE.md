@@ -401,48 +401,22 @@ OpenTelemetry в двух режимах: dev → Aspire Dashboard, prod → Sig
 
 Dark launch: фича коммитится выключенной и включается per-user в меню «Экспериментальные
 функции». Реестр (source of truth) — в коде: `FeatureFlagCatalog.All`
-([Models/FeatureFlag.cs](backend/ClaudeHomeServer.Core/Models/FeatureFlag.cs)); хранение —
-override в `data/users.json`; фронт — стор [lib/featureFlags.ts](frontend/src/lib/featureFlags.ts),
-хук `useFeature(FLAGS.key)`. Большинство старых флажных фич включены безусловно
-(2026-08); в каталоге **десять флагов**: `workspace-destructive` (постоянный предохранитель от
-необратимого удаления), `change-dossiers-recall` (история решений по коду — подсказки
-персонам и выгрузка отдельной веткой, [ADR-004](docs/adr/ADR-004-change-dossiers.md)),
-`desktop-agent` (руки на машине пользователя: тип чата «Десктопный», тумблер грани в
-проекте, канал устройств — см. раздел «Десктопный агент»), `specialty-prompt-sections`
-(настраиваемые секции промпта и типовые умения по специальности персоны),
-`chat-auto-archive` (автоправило архива чатов; ручной архив, режим «Архивные» в списке
-чатов — отдельного раздела нет — и сводка карточки работают без флага — см. раздел
-«Архив чатов»), `mcp-catalog` (поиск MCP-серверов по официальному реестру и
-предзаполнение формы — см. раздел «Личный реестр MCP-серверов»), `visual-plan`
-(контекстные замечания к плану и разворот схемой), `chat-context` (материалы —
-файл/ссылка/задача — закрепляются за чатом явной кнопкой: полоса вкладок у чата плюс
-тул `context_list`; инварианты — раздел «Контекст чата» в
-[features.md](docs/architecture/features.md)), `chat-branch` (новый чат с копией истории
-оригинала до выбранного шага) и `project-map-hygiene` (уборка карты проекта: секция в
-настройках, модалка с фактами сканера и вход «Прибраться» из снимка промпта — тумблер
-закрывает ОБА входа, `review`/`apply` под ним отвечают 404; см. раздел «Уборка карты
-проекта»).
-Пометки «за флагом …» в доках — исторические; актуальный состав — в коде каталога.
+([Models/FeatureFlag.cs](backend/ClaudeHomeServer.Core/Models/FeatureFlag.cs)), там же у
+каждого ключа title и описание; хранение — override в `data/users.json`; фронт — стор
+[lib/featureFlags.ts](frontend/src/lib/featureFlags.ts), хук `useFeature(FLAGS.key)`.
+Перечня флагов карта не держит: он протухает быстрее всего остального.
+**Пометки «за флагом …» в доках — исторические**, актуальный состав только в каталоге кода
+(ADR-013, например, до сих пор описывает сторожей чатов как флажных — флаг снят 2026-09-01).
 
-Работают безусловно, без тумблера (флаги сняты 2026-08-21): **ассистент по умолчанию и
-знакомство** — заготовка персоны заводится при первом входе, знакомство приходит
-приглашением, а не обязательным экраном; проектное знакомство v2 раскладывает каркас папок
-и правил по подтверждению карточкой в ленте
-([docs/architecture/onboarding-intro.md](docs/architecture/onboarding-intro.md),
-[docs/features/project-onboarding-v2.md](docs/features/project-onboarding-v2.md));
-**фон проекта** — рисунок и цвет подбираются моделью по смыслу проекта, контракт генерации
-без разметки и форма хранения — [ADR-008](docs/adr/ADR-008-project-background-generation.md),
-тексты интерфейса — [docs/features/project-backgrounds.md](docs/features/project-backgrounds.md);
-**карточка доклада о завершённой задаче** в чате постановщика вместе с новым промптом
-реакции — [docs/features/task-completion-report.md](docs/features/task-completion-report.md);
-**серверные сторожа чатов** (флаг снят 2026-09-01, через две недели после dark launch) —
-см. раздел выше и [ADR-013](docs/adr/ADR-013-server-chat-watchdogs.md);
-**встроенная интеграция Higgsfield** (флаг снят 2026-09-08: OAuth-токен продлевается сам,
-повторный вход не нужен) — вход живёт в разделе «MCP-серверы», доставка сервера в ход идёт
-по записи реестра (рубильник `Enabled` + RO-гейт + живой токен). Доступный человеку
-предохранитель — кнопка **«Выйти»** в карточке: `Logout` чистит токены, `EnsureFresh`
-возвращает null, сервер снимается с хода с WARN. Рубильник `Enabled` из UI не
-переключается (`McpServerList` рисует `Toggle` только для своих записей).
+Флаги, снятые после dark launch, работают у всех безусловно: ассистент по умолчанию и
+знакомство ([onboarding-intro.md](docs/architecture/onboarding-intro.md),
+[project-onboarding-v2.md](docs/features/project-onboarding-v2.md)), фон проекта
+([ADR-008](docs/adr/ADR-008-project-background-generation.md),
+[project-backgrounds.md](docs/features/project-backgrounds.md)), карточка доклада о
+завершённой задаче ([task-completion-report.md](docs/features/task-completion-report.md)),
+серверные сторожа чатов ([ADR-013](docs/adr/ADR-013-server-chat-watchdogs.md)) и встроенная
+интеграция Higgsfield — её доставка в ход, предохранитель «Отключить» и отсутствие тумблера
+в интерфейсе разобраны в [mcp-registry.md](docs/architecture/mcp-registry.md).
 
 **Как добавить новый флаг (3 шага):**
 1. Бэк: добавить строку в `FeatureFlagCatalog.All` (`key`, `title`, `description`, `Default: false`, `stage`).

@@ -2,7 +2,14 @@
 # Тесты чистых функций прокси. Без сети и без поднятого vLLM:
 #   python3 -m unittest discover -s tools/thinking-strip-proxy
 import copy
+import http.client
+import json
+import os
+import shutil
+import tempfile
+import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import proxy
 
@@ -362,6 +369,311 @@ class МеркаTests(unittest.TestCase):
         self.assertAlmostEqual(хвост, 160_000, delta=160_000 * 0.02)
         self.assertAlmostEqual(ступень, 400_000, delta=400_000 * 0.02)
         self.assertAlmostEqual(выгода, 80_000, delta=80_000 * 0.02)
+
+
+class КомпактРаспознаваниеTests(unittest.TestCase):
+    """Запрос автосжатия отличается от обычного хода по ДВУМ признакам сразу."""
+
+    def тело(self, msgs, **поля):
+        return dict({"model": "qwen3.8-27b", "max_tokens": 8192, "messages": msgs}, **поля)
+
+    def большая_история(self):
+        """~220k токенов: столько набирает чат к моменту автосжатия."""
+        return history(120)
+
+    def test_запрос_сжатия_распознан(self):
+        msgs = self.большая_история()
+        msgs.append({"role": "user", "content": proxy.COMPACT_SIGNATURE + " Summarize the conversation."})
+        self.assertTrue(proxy.is_compact_request(self.тело(msgs)))
+
+    def test_обычный_ход_той_же_длины_не_распознан(self):
+        """Первая сторона ошибки: большой чат сам по себе сжатием не является."""
+        msgs = self.большая_история()
+        msgs.append({"role": "user", "content": "продолжай, проверь сборку"})
+        self.assertFalse(proxy.is_compact_request(self.тело(msgs)))
+
+    def test_сигнатура_в_маленьком_чате_не_распознана(self):
+        """Вторая сторона ошибки: строку можно процитировать, и тогда ход уехал бы в облако,
+        вернулся текстом без tool_use — агентная петля сбилась бы."""
+        msgs = [{"role": "user", "content": proxy.COMPACT_SIGNATURE + " (цитата из документации)"}]
+        self.assertFalse(proxy.is_compact_request(self.тело(msgs)))
+
+    def test_сигнатура_посреди_реплики_не_распознана(self):
+        msgs = self.большая_история()
+        msgs.append({"role": "user", "content": "в логе встретилось: " + proxy.COMPACT_SIGNATURE})
+        self.assertFalse(proxy.is_compact_request(self.тело(msgs)))
+
+    def test_сигнатура_в_ответе_ассистента_не_считается(self):
+        """Смотрим хвост ПОЛЬЗОВАТЕЛЬСКОГО сообщения: свой же текст модели признаком не является."""
+        msgs = self.большая_история()
+        msgs.append({"role": "assistant", "content": [{"type": "text", "text": proxy.COMPACT_SIGNATURE}]})
+        self.assertFalse(proxy.is_compact_request(self.тело(msgs)))
+
+    def test_сигнатура_блоками_и_системная_часть_в_зачёт(self):
+        """Хвост склеивается из текстовых блоков, а системная часть идёт в оценку контекста."""
+        msgs = [{"role": "user", "content": "задача"}]
+        for i in range(60):  # история ~110k токенов — одной её на порог не хватает
+            msgs += [tool_use(i), tool_result(i)]
+        msgs.append({"role": "user", "content": [
+            {"type": "text", "text": proxy.COMPACT_SIGNATURE + " Summarize."},
+            {"type": "text", "text": "хвостовой блок"}]})
+        self.assertFalse(proxy.is_compact_request(self.тело(msgs)))
+        с_тулсетом = self.тело(msgs, tools=[{"name": "Bash", "description": "d" * 300_000}])
+        self.assertTrue(proxy.is_compact_request(с_тулсетом))
+
+    def test_незнакомое_тело_не_распознаётся(self):
+        for doc in ({}, {"messages": []}, {"messages": "строка"},
+                    {"messages": [{"role": "user", "content": None}]}):
+            self.assertFalse(proxy.is_compact_request(doc))
+
+
+class КомпактТелоTests(unittest.TestCase):
+    def test_подменяется_только_модель(self):
+        doc = {"model": "qwen3.8-27b", "max_tokens": 8192, "stream": True,
+               "system": [{"type": "text", "text": "сис"}],
+               "tools": [{"name": "Bash"}], "output_config": {"effort": "high"},
+               "messages": history(4)}
+        готовое = json.loads(proxy.compact_body(doc))
+        self.assertEqual(готовое.pop("model"), proxy.COMPACT_MODEL)
+        исходное = dict(doc)
+        исходное.pop("model")
+        self.assertEqual(готовое, исходное, "в облако едет то же тело, только с другой моделью")
+
+    def test_история_не_прунится(self):
+        """Ради сырой истории маршрут и заведён: сводка пишется по оригиналам выводов."""
+        doc = {"model": "qwen3.8-27b", "messages": history(120)}
+        готовое = json.loads(proxy.compact_body(doc))
+        тексты = [b.get("content") for m in готовое["messages"] if isinstance(m["content"], list)
+                  for b in m["content"] if b.get("type") == "tool_result"]
+        self.assertTrue(тексты)
+        self.assertNotIn(proxy.PRUNE_PLACEHOLDER, тексты)
+
+    def test_вход_не_мутирует(self):
+        doc = {"model": "qwen3.8-27b", "messages": history(4)}
+        до = copy.deepcopy(doc)
+        proxy.compact_body(doc)
+        self.assertEqual(doc, до)
+
+
+class ОтветЗаглушка:
+    def __init__(self, status, куски=(b"data: {}\n\n",)):
+        self.status, self.reason, self._куски = status, "", list(куски)
+
+    def read(self, n=None):
+        return "ошибка провайдера".encode()
+
+    def read1(self, n):
+        return self._куски.pop(0) if self._куски else b""
+
+    def getheaders(self):
+        return [("Content-Type", "text/event-stream")]
+
+
+class СоединениеЗаглушка:
+    """Фейковый http.client-совместимый коннектор: сеть в тестах не трогаем."""
+    последний = None
+
+    def __init__(self, status=200, ошибка=None, куски=(b"data: {}\n\n",)):
+        self.status, self.ошибка, self.куски = status, ошибка, куски
+        self.запрос = None
+        СоединениеЗаглушка.последний = self
+
+    def фабрика(self):
+        def создать(host, port, timeout=None):
+            self.host, self.port, self.timeout = host, port, timeout
+            return self
+        return создать
+
+    def request(self, method, path, body=None, headers=None):
+        if self.ошибка:
+            raise self.ошибка
+        self.запрос = (method, path, body, headers)
+
+    def getresponse(self):
+        return ОтветЗаглушка(self.status, self.куски)
+
+    def close(self):
+        self.закрыто = True
+
+
+class КомпактМаршрутTests(unittest.TestCase):
+    def setUp(self):
+        self.ключ_был = proxy._compact_key
+        self.upstream_был = proxy.COMPACT_UPSTREAM
+        proxy._compact_key = "sk-test"
+        proxy.COMPACT_UPSTREAM = "https://api.minimax.io/anthropic"
+
+    def tearDown(self):
+        proxy._compact_key = self.ключ_был
+        proxy.COMPACT_UPSTREAM = self.upstream_был
+
+    def test_путь_базы_склеивается_с_путём_клиента(self):
+        связь = СоединениеЗаглушка()
+        итог = proxy.open_compact(b"{}", "/v1/messages", connector=связь.фабрика())
+        self.assertIsNotNone(итог)
+        метод, путь, тело, заголовки = связь.запрос
+        self.assertEqual((метод, путь), ("POST", "/anthropic/v1/messages"))
+        self.assertEqual(заголовки["x-api-key"], "sk-test")
+        self.assertEqual((связь.host, связь.port), ("api.minimax.io", None))
+
+    def test_первый_кусок_прочитан_до_ответа_клиенту(self):
+        связь = СоединениеЗаглушка(куски=(b"event: message_start\n",))
+        _, _, первый = proxy.open_compact(b"{}", "/v1/messages", connector=связь.фабрика())
+        self.assertEqual(первый, b"event: message_start\n")
+
+    def test_fail_closed_при_ошибке_сети(self):
+        связь = СоединениеЗаглушка(ошибка=OSError("сеть недоступна"))
+        self.assertIsNone(proxy.open_compact(b"{}", "/v1/messages", connector=связь.фабрика()))
+
+    def test_fail_closed_при_не_200(self):
+        """Неверный ключ — это 401, и он обязан кончаться фолбэком, а не ошибкой у клиента."""
+        for код in (401, 429, 500):
+            with self.subTest(код):
+                связь = СоединениеЗаглушка(status=код)
+                self.assertIsNone(proxy.open_compact(b"{}", "/v1/messages", connector=связь.фабрика()))
+
+    def test_fail_closed_при_пустом_ответе(self):
+        связь = СоединениеЗаглушка(куски=())
+        self.assertIsNone(proxy.open_compact(b"{}", "/v1/messages", connector=связь.фабрика()))
+
+    def test_без_ключа_маршрут_не_едет(self):
+        proxy._compact_key = ""
+        связь = СоединениеЗаглушка()
+        self.assertIsNone(proxy.open_compact(b"{}", "/v1/messages", connector=связь.фабрика()))
+        self.assertIsNone(связь.запрос, "без ключа в облако вообще не стучимся")
+
+    def test_ключ_читается_из_конфига_бэкенда(self):
+        каталог = tempfile.mkdtemp()
+        путь = os.path.join(каталог, "appsettings.Local.json")
+        with open(путь, "w", encoding="utf-8") as f:
+            json.dump({"LlmProviders": {"minimax": {"ApiKey": "sk-из-конфига"}}}, f)
+        файл_был, proxy.COMPACT_KEY_FILE = proxy.COMPACT_KEY_FILE, путь
+        try:
+            proxy._compact_key = None
+            self.assertEqual(proxy.compact_api_key(), "sk-из-конфига")
+            proxy._compact_key = None
+            proxy.COMPACT_KEY_FILE = os.path.join(каталог, "нет-такого.json")
+            self.assertEqual(proxy.compact_api_key(), "", "нет файла — маршрут выключается сам")
+        finally:
+            proxy.COMPACT_KEY_FILE = файл_был
+            shutil.rmtree(каталог, ignore_errors=True)
+
+
+class Заглушка(BaseHTTPRequestHandler):
+    """Сервер-заглушка на localhost: изображает то облако, то локальный vLLM."""
+    протокол_версия = "HTTP/1.1"
+    статус = 200
+    метка = "локальный".encode()
+    принятые = []
+
+    def log_message(self, *a):
+        pass
+
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        тело = self.rfile.read(n)
+        type(self).принятые.append((self.path, тело, dict(self.headers)))
+        ответ = b"data: " + type(self).метка + b"\n\n"
+        self.send_response(type(self).статус)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Content-Length", str(len(ответ)))
+        self.end_headers()
+        self.wfile.write(ответ)
+
+
+def поднять(обработчик):
+    сервер = ThreadingHTTPServer(("127.0.0.1", 0), обработчик)
+    сервер.daemon_threads = True
+    threading.Thread(target=сервер.serve_forever, daemon=True).start()
+    return сервер
+
+
+class КомпактСквознойTests(unittest.TestCase):
+    """Сквозная проверка через настоящий сокет: кто в итоге ответил клиенту.
+
+    Внешней сети нет — оба upstream'а это localhost-заглушки, поэтому тест можно гонять
+    где угодно, включая CI.
+    """
+
+    def setUp(self):
+        class Облако(Заглушка):
+            метка = "облако".encode()
+            принятые = []
+
+        class Локальный(Заглушка):
+            метка = "локальный".encode()
+            принятые = []
+
+        self.Облако, self.Локальный = Облако, Локальный
+        self.облако, self.локальный = поднять(Облако), поднять(Локальный)
+        self.прокси = поднять(proxy.Handler)
+        self.сохранено = (proxy.UP_HOST, proxy.UP_PORT, proxy.COMPACT_UPSTREAM,
+                          proxy._compact_key, dict(proxy.stats))
+        proxy.UP_HOST, proxy.UP_PORT = "127.0.0.1", self.локальный.server_address[1]
+        proxy.COMPACT_UPSTREAM = f"http://127.0.0.1:{self.облако.server_address[1]}"
+        proxy._compact_key = "sk-test"
+        proxy.stats.update(compact_routed=0, compact_fallback=0)
+
+    def tearDown(self):
+        (proxy.UP_HOST, proxy.UP_PORT, proxy.COMPACT_UPSTREAM,
+         proxy._compact_key, стат) = self.сохранено
+        proxy.stats.clear()
+        proxy.stats.update(стат)
+        for с in (self.облако, self.локальный, self.прокси):
+            с.shutdown()
+            с.server_close()
+
+    def спросить(self, msgs):
+        тело = json.dumps({"model": "qwen3.8-27b", "max_tokens": 8192,
+                           "messages": msgs}).encode()
+        c = http.client.HTTPConnection("127.0.0.1", self.прокси.server_address[1], timeout=30)
+        c.request("POST", "/v1/messages", body=тело,
+                  headers={"Content-Type": "application/json", "Content-Length": str(len(тело))})
+        ответ = c.getresponse().read()
+        c.close()
+        return ответ
+
+    def запрос_сжатия(self):
+        msgs = history(120)
+        msgs.append({"role": "user", "content": proxy.COMPACT_SIGNATURE + " Summarize."})
+        return msgs
+
+    def test_сжатие_уходит_в_облако(self):
+        ответ = self.спросить(self.запрос_сжатия())
+        self.assertIn("облако".encode(), ответ)
+        self.assertEqual(proxy.stats["compact_routed"], 1)
+        self.assertEqual(proxy.stats["compact_fallback"], 0)
+        путь, тело, _ = self.Облако.принятые[-1]
+        self.assertEqual(путь, "/v1/messages")
+        self.assertEqual(json.loads(тело)["model"], proxy.COMPACT_MODEL)
+
+    def test_обычный_ход_идёт_в_локальный_upstream(self):
+        msgs = history(120)
+        msgs.append({"role": "user", "content": "проверь сборку"})
+        self.assertIn("локальный".encode(), self.спросить(msgs))
+        self.assertEqual(self.Облако.принятые, [], "обычный ход в облако не ходит вовсе")
+        self.assertEqual(proxy.stats["compact_routed"], 0)
+
+    def test_облако_упало_сжатие_идёт_локально(self):
+        """Fail-closed целиком: клиент получает ответ локальной модели и разницы не видит."""
+        self.Облако.статус = 401  # неверный ключ
+        ответ = self.спросить(self.запрос_сжатия())
+        self.assertIn("локальный".encode(), ответ)
+        self.assertEqual(proxy.stats["compact_fallback"], 1)
+        self.assertEqual(proxy.stats["compact_routed"], 0)
+        self.assertTrue(self.Локальный.принятые, "фолбэк обязан дойти до локального upstream")
+
+    def test_облака_нет_вовсе_сжатие_идёт_локально(self):
+        self.облако.shutdown()
+        self.облако.server_close()
+        self.assertIn("локальный".encode(), self.спросить(self.запрос_сжатия()))
+        self.assertEqual(proxy.stats["compact_fallback"], 1)
+
+    def test_маршрут_выключен_по_умолчанию(self):
+        proxy.COMPACT_UPSTREAM = ""
+        self.assertIn("локальный".encode(), self.спросить(self.запрос_сжатия()))
+        self.assertEqual(self.Облако.принятые, [])
+        self.assertEqual((proxy.stats["compact_routed"], proxy.stats["compact_fallback"]), (0, 0))
 
 
 if __name__ == "__main__":

@@ -14,6 +14,7 @@
 # Всё остальное проксируется как есть, ответ — потоком (SSE). Невалидный JSON — fail-open.
 import http.client, json, os, re, sys, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlsplit
 
 UP_HOST = os.environ.get("UPSTREAM_HOST", "127.0.0.1")
 UP_PORT = int(os.environ.get("UPSTREAM_PORT", "18020"))
@@ -117,22 +118,58 @@ PRUNE_MIN_TOKENS = int(os.environ.get("PRUNE_MIN_TOKENS", "24000"))
 # (история 54 % / системная часть 46 %) и 178k при теле без MCP. Взята середина: точка
 # срабатывания в символах уезжает меньше чем на 2 % в любом из двух раскладов.
 PRUNE_MIN_CONTEXT_TOKENS = int(os.environ.get("PRUNE_MIN_CONTEXT_TOKENS", "175000"))
-# Резать ли тела Write/Edit в аргументах вызовов. ВЫКЛЮЧЕНО: живой прогон 2026-09-22 показал,
-# что модель ПОДРАЖАЕТ плейсхолдеру. Увидев в истории свой прошлый Write с
-# «[Old tool input content cleared]» вместо текста, она записала следующий файл ровно этой
-# строкой — 32 байта вместо разбора на 15k. Выводы инструментов модель не копирует, а свой
-# собственный текст копирует. Включать только после того, как найден плейсхолдер, который
-# модель не воспроизводит, и это доказано живым прогоном с несколькими Write подряд.
+# Резать ли тела Write/Edit в аргументах вызовов — до 36 % контекста на задачах правки кода.
+# Отдельный флаг, потому что 22.09 его выключали по ложной тревоге: в живом прогоне модель
+# записала файл строкой «[Old tool input content cleared]», и это приняли за подражание
+# плейсхолдеру. Повторы с честным лимитом вывода (8192, как у CLI; по три на вариант)
+# показали, что метка в истории на письмо не влияет: 14985 / 22193 / 13465 символов против
+# контроля 11309 / 12091 / 14802. Те 32 байта — единичный сбой генерации. Подражание
+# провоцирует только ИНФОРМАТИВНАЯ метка (с путём и размером — скопирована целиком), простая
+# безопасна. Дефолт off сохранён как предохранитель на смену модели; в бою включается через
+# mode.conf. Разбор с таблицами — README.
 PRUNE_INPUTS = os.environ.get("PRUNE_INPUTS", "off")
 # Резать ли старые размышления. Отдельный флаг: у thinking-блоков есть подпись (vLLM блок без
-# неё принимает — проверено), но механизм подражания тот же, что у input: модель может начать
-# «думать» плейсхолдером. До живой проверки на чате с крупными размышлениями — выключено.
+# неё принимает — проверено). Серия 22.09 по thinking результата не дала — шла с тем же
+# лимитом 2500 и вся ушла в обрывы; ставить заново на истории с крупными размышлениями.
 PRUNE_THINKING = os.environ.get("PRUNE_THINKING", "off")
 # Разбор каждого запроса в журнал. ВЫКЛЮЧЕН по умолчанию: в лог попадает начало реплики,
 # то есть кусок чужого чата. Включать точечно, на время разбирательства.
 PRUNE_DEBUG = os.environ.get("PRUNE_DEBUG", "off")
 
-stats = {"requests": 0, "stripped": 0, "pruned_blocks": 0, "pruned_chars": 0}
+# --- Маршрут запроса автосжатия на облачную модель -----------------------------------------
+#
+# Автосжатие у локальной модели стоит 330–430 с стоп-мира (замеры 2026-09-22: 253k → 37k за
+# 330 с). Раскладка: prefill всей истории 64 %, decode 11 %, повторные проходы из-за лимита
+# вывода 25 %. У облачной модели с окном 1M prefill 250k — секунды, повторных проходов нет.
+# Второй выигрыш — качество: сюда тело уходит БЕЗ прунинга, и сводка пишется по оригиналам
+# выводов, а не по плейсхолдерам.
+#
+# Это вторая точка маршрутизации мимо LlmProviderRegistry и осознанное исключение для стенда,
+# а НЕ паттерн: логики выбора провайдера у прокси нет и заводить её нельзя. Здесь одна явная
+# ручка на один распознаваемый тип запроса — на другие типы не расширять.
+COMPACT_UPSTREAM = os.environ.get("COMPACT_UPSTREAM", "")  # пусто = выключено
+COMPACT_MODEL = os.environ.get("COMPACT_MODEL", "MiniMax-M3")
+# Ключ берём из конфига бэкенда, а не из своего окружения: дублировать секрет в юнит прокси
+# значит завести вторую копию, которая разойдётся с первой.
+COMPACT_KEY_FILE = os.environ.get("COMPACT_KEY_FILE", "/opt/ccs/app/appsettings.Local.json")
+COMPACT_KEY_PATH = os.environ.get("COMPACT_KEY_PATH", "LlmProviders.minimax.ApiKey")
+COMPACT_ANTHROPIC_VERSION = os.environ.get("COMPACT_ANTHROPIC_VERSION", "2023-06-01")
+COMPACT_TIMEOUT = float(os.environ.get("COMPACT_TIMEOUT", "300"))
+# Сигнатура запроса сжатия, пойманная отладочным логом 2026-09-22: хвост последнего
+# user-сообщения начинается ровно с неё. Вынесена в ручку, потому что это чужой текст —
+# формулировка CLI может смениться с обновлением, и тогда маршрут просто перестанет
+# срабатывать (сжатие уйдёт в локаль), а не сломается.
+COMPACT_SIGNATURE = os.environ.get(
+    "COMPACT_SIGNATURE", "CRITICAL: Respond with TEXT ONLY. Do NOT call any tools")
+# Второй признак распознавания — «чат уже размером с окно». Отдельная ручка, а не
+# PRUNE_MIN_CONTEXT_TOKENS напрямую: порог автосжатия CLI двигается ручкой
+# CLAUDE_CODE_AUTO_COMPACT_WINDOW, и опустив его ниже порога прунинга, мы бы молча выключили
+# распознавание. По умолчанию — то же значение.
+COMPACT_MIN_CONTEXT_TOKENS = int(os.environ.get("COMPACT_MIN_CONTEXT_TOKENS",
+                                                str(PRUNE_MIN_CONTEXT_TOKENS)))
+
+stats = {"requests": 0, "stripped": 0, "pruned_blocks": 0, "pruned_chars": 0,
+         "compact_routed": 0, "compact_fallback": 0}
 
 # CLI вставляет в историю system-сообщение "<total_tokens>N tokens left</total_tokens>" на
 # каждом шаге, и N каждый раз новое. Шаблон Qwen требует system только первым, поэтому
@@ -436,6 +473,126 @@ def prune_tool_results(msgs, keep_tail_tokens=None, step_tokens=None, min_chars=
     return out, freed, len(victims)
 
 
+def _tail_text(msgs, role=None):
+    """Текст последнего непустого сообщения: по нему и видно, ход это или запрос сжатия.
+
+    Блоки склеиваются пробелом ровно так же, как в отладочном разборе, — сигнатура ловилась
+    именно на этой склейке. `role` сужает поиск до сообщений одной роли.
+    """
+    for m in reversed(msgs):
+        if not isinstance(m, dict) or (role is not None and m.get("role") != role):
+            continue
+        c = m.get("content")
+        if isinstance(c, str):
+            текст = c
+        elif isinstance(c, list):
+            текст = " ".join(b.get("text") or "" for b in c
+                             if isinstance(b, dict) and b.get("type") == "text")
+        else:
+            continue
+        if текст.strip():
+            return текст
+    return ""
+
+
+def is_compact_request(doc, min_context_tokens=None):
+    """Это запрос автосжатия истории, а не обычный ход агента?
+
+    Признака ДВА, и оба обязательны. По одной сигнатуре сработал бы и обычный ход, в котором
+    строка просто процитирована (человеком, файлом, выводом инструмента): такой ход уехал бы в
+    облако и вернулся текстом без tool_use — агентная петля сбилась бы. Второму признаку
+    (история уже размером с окно) обычный ход в норме не удовлетворяет: сжатие наступает
+    только у чата, дошедшего до потолка.
+    """
+    min_context_tokens = (COMPACT_MIN_CONTEXT_TOKENS if min_context_tokens is None
+                          else min_context_tokens)
+    msgs = doc.get("messages")
+    if not isinstance(msgs, list) or not msgs:
+        return False
+    if not _tail_text(msgs, role="user").lstrip().startswith(COMPACT_SIGNATURE):
+        return False
+    return estimate_tokens(_context_chars(msgs), _system_chars(doc),
+                           _signature_chars(msgs)) >= min_context_tokens
+
+
+def compact_body(doc):
+    """Тело для облака: то же самое, только `model` подменена. Вход не мутирует.
+
+    Прунинг сюда не применяется намеренно — сводку облачная модель пишет по ОРИГИНАЛАМ
+    выводов, ради этого маршрут заведён вторым по счёту выигрышем. Прочие правки прокси
+    (`output_config`, `<total_tokens>`, повторные «# Environment») тоже не применяются: они
+    лечат prefix cache vLLM, а здесь движок другой и запрос одноразовый. `output_config`
+    MiniMax принимает молча — проверено прямым запросом 2026-09-22 (HTTP 200).
+    """
+    return json.dumps(dict(doc, model=COMPACT_MODEL), ensure_ascii=False).encode("utf-8")
+
+
+_compact_key = None  # None — ещё не читали; "" — читать нечего, маршрут выключится сам
+
+
+def compact_api_key():
+    """Ключ облачного провайдера из конфига бэкенда. Читается один раз на процесс.
+
+    Кэш на процесс, а не на запрос: ключ меняется раз в годы, а чтение файла на каждом ходе —
+    лишний системный вызов на горячем пути. Сменился ключ — перезапуск службы, как и у любой
+    другой ручки прокси.
+    """
+    global _compact_key
+    if _compact_key is None:
+        try:
+            with open(COMPACT_KEY_FILE, encoding="utf-8") as f:
+                узел = json.load(f)
+            for часть in COMPACT_KEY_PATH.split("."):
+                узел = узел[часть]
+            _compact_key = узел if isinstance(узел, str) else ""
+        except Exception as e:
+            print(f"ключ для автосжатия не прочитан ({COMPACT_KEY_FILE}): {e!r}",
+                  file=sys.stderr, flush=True)
+            _compact_key = ""
+    return _compact_key
+
+
+def open_compact(body, path, connector=None):
+    """Шлёт тело в облачный upstream; возвращает (соединение, ответ, первый кусок) или None.
+
+    None — любая осечка: нет ключа, сеть, не-200, пустой ответ, таймаут. Клиенту к этому
+    моменту не отправлено ни байта, поэтому запрос уходит в локальный upstream штатным путём,
+    с прунингом, как раньше (fail-closed): пользователь разницы не видит, кроме времени.
+
+    Первый кусок читается ЗДЕСЬ, до ответа клиенту, намеренно: обрыв в начале потока — самый
+    вероятный из отказов, и он ещё лечится фолбэком. Дальше поток уже начат, и отказ середины
+    потока фолбэком не лечится ни при какой схеме — так же, как и у локального upstream.
+    """
+    key = compact_api_key()
+    if not key:
+        return None
+    адрес = urlsplit(COMPACT_UPSTREAM if "//" in COMPACT_UPSTREAM else "https://" + COMPACT_UPSTREAM)
+    conn = None
+    try:
+        фабрика = connector or (http.client.HTTPConnection if адрес.scheme == "http"
+                                else http.client.HTTPSConnection)
+        conn = фабрика(адрес.hostname, адрес.port, timeout=COMPACT_TIMEOUT)
+        conn.request("POST", адрес.path.rstrip("/") + path, body=body, headers={
+            "Content-Type": "application/json", "Content-Length": str(len(body)),
+            "anthropic-version": COMPACT_ANTHROPIC_VERSION, "x-api-key": key})
+        resp = conn.getresponse()
+        if resp.status != 200:
+            # Тело ошибки провайдера чужого чата не содержит — его в журнал брать можно.
+            raise RuntimeError(f"HTTP {resp.status}: {resp.read(300)!r}")
+        первый = resp.read1(65536)
+        if not первый:
+            raise RuntimeError("пустой ответ")
+        print(f"автосжатие -> {COMPACT_MODEL} ({адрес.hostname}), тело {len(body) // 1024} КБ",
+              file=sys.stderr, flush=True)
+        return conn, resp, первый
+    except Exception as e:
+        print(f"автосжатие: облако не ответило ({e!r}) — уходим в локальный upstream",
+              file=sys.stderr, flush=True)
+        if conn is not None:
+            conn.close()
+        return None
+
+
 def _debug_dump(doc, msgs, body_len):
     """Разбор запроса в журнал: зачем прунинг решил так, а не иначе.
 
@@ -460,17 +617,7 @@ def _debug_dump(doc, msgs, body_len):
         контекст = estimate_tokens(_context_chars(msgs), системная, подписи)
         потолок = estimate_tokens(_context_chars(msgs), системная, подписи, conservative=True)
         _, freed, blocks = prune_tool_results(msgs, extra_chars=системная)
-        # хвост последнего сообщения: по нему и видно, ход это или запрос сжатия
-        хвост = ""
-        for m in reversed(msgs):
-            c = m.get("content") if isinstance(m, dict) else None
-            if isinstance(c, str):
-                хвост = c
-            elif isinstance(c, list):
-                хвост = " ".join(b.get("text") or "" for b in c
-                                 if isinstance(b, dict) and b.get("type") == "text")
-            if хвост.strip():
-                break
+        хвост = _tail_text(msgs)
         print(f"[отладка] тело {body_len // 1024} КБ | сообщений {len(msgs)} | "
               f"выводов {len(выводы)} (крупных {len(крупные)} на "
               f"{estimate_tokens(sum(крупные)) // 1000}k ток) | "
@@ -510,7 +657,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _stats(self):
         with lock:
-            msg = json.dumps(dict(stats, prune=PRUNE_MODE, thinking=THINKING_MODE)).encode()
+            msg = json.dumps(dict(stats, prune=PRUNE_MODE, thinking=THINKING_MODE,
+                                  compact=COMPACT_MODEL if COMPACT_UPSTREAM else "off")).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(msg)))
@@ -526,10 +674,14 @@ class Handler(BaseHTTPRequestHandler):
         body = self._read_body()
         original = body  # на откат: любая осечка разбора обязана вернуть тело нетронутым
         stripped = False
+        compact = None  # тело для облака, если это запрос автосжатия
         if body and self.command == "POST":
             try:
                 doc = json.loads(body)
                 if isinstance(doc, dict):
+                    # Распознаём и снимаем копию ДО правок: в облако едет сырая история.
+                    if COMPACT_UPSTREAM and is_compact_request(doc):
+                        compact = compact_body(doc)
                     for k in STRIP_KEYS:
                         if k in doc:
                             del doc[k]
@@ -570,29 +722,37 @@ class Handler(BaseHTTPRequestHandler):
                 # клиент остаётся без ответа и висит до своего таймаута — то есть опечатка в
                 # разборе тела ломает ход пользователя молча. Тело чужое, доверять его форме
                 # нельзя: `{"type":"text","text":5}` достаточно, чтобы получить TypeError.
-                body, stripped = original, False
+                body, stripped, compact = original, False, None
                 print(f"тело пропущено без правок: {e!r}", file=sys.stderr, flush=True)
         with lock:
             stats["requests"] += 1
             stats["stripped"] += stripped
 
-        headers = {k: v for k, v in self.headers.items() if k.lower() not in HOP}
-        if body:
-            headers["Content-Length"] = str(len(body))
-        conn = http.client.HTTPConnection(UP_HOST, UP_PORT, timeout=None)
-        try:
-            conn.request(self.command, self.path, body=body or None, headers=headers)
-            resp = conn.getresponse()
-        except OSError as e:
-            print(f"upstream-ошибка {self.command} {self.path}: {e!r}", file=sys.stderr, flush=True)
-            msg = json.dumps({"type": "error", "error": {"type": "proxy_error",
-                              "message": f"upstream {UP_HOST}:{UP_PORT} недоступен: {e}"}}).encode()
-            self.send_response(502)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(msg)))
-            self.end_headers()
-            self.wfile.write(msg)
-            return
+        conn = resp = первый = None
+        if compact is not None:
+            попытка = open_compact(compact, self.path)
+            with lock:
+                stats["compact_routed" if попытка else "compact_fallback"] += 1
+            if попытка:
+                conn, resp, первый = попытка
+        if resp is None:
+            headers = {k: v for k, v in self.headers.items() if k.lower() not in HOP}
+            if body:
+                headers["Content-Length"] = str(len(body))
+            conn = http.client.HTTPConnection(UP_HOST, UP_PORT, timeout=None)
+            try:
+                conn.request(self.command, self.path, body=body or None, headers=headers)
+                resp = conn.getresponse()
+            except OSError as e:
+                print(f"upstream-ошибка {self.command} {self.path}: {e!r}", file=sys.stderr, flush=True)
+                msg = json.dumps({"type": "error", "error": {"type": "proxy_error",
+                                  "message": f"upstream {UP_HOST}:{UP_PORT} недоступен: {e}"}}).encode()
+                self.send_response(502)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(msg)))
+                self.end_headers()
+                self.wfile.write(msg)
+                return
 
         self.send_response(resp.status, resp.reason)
         for k, v in resp.getheaders():
@@ -601,6 +761,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Transfer-Encoding", "chunked")
         self.end_headers()
         try:
+            if первый:  # кусок, прочитанный ради fail-closed, отдаём первым
+                self.wfile.write(b"%x\r\n%s\r\n" % (len(первый), первый))
+                self.wfile.flush()
             while True:
                 chunk = resp.read1(65536)
                 if not chunk:
@@ -639,5 +802,8 @@ if __name__ == "__main__":
           + f", вырезаю {STRIP_KEYS}, напоминания total_tokens и повторные # Environment"
           + (f", прунинг выводов вкл (хвост {PRUNE_KEEP_TAIL_TOKENS // 1000}k ток, ступень "
              f"{PRUNE_STEP_TOKENS // 1000}k ток, порог контекста {PRUNE_MIN_CONTEXT_TOKENS // 1000}k)"
-             if PRUNE_MODE == "on" else ", прунинг выводов выкл"), flush=True)
+             if PRUNE_MODE == "on" else ", прунинг выводов выкл")
+          + (f", автосжатие -> {COMPACT_MODEL} на {COMPACT_UPSTREAM} (порог "
+             f"{COMPACT_MIN_CONTEXT_TOKENS // 1000}k ток)" if COMPACT_UPSTREAM
+             else ", автосжатие в облако выкл"), flush=True)
     srv.serve_forever()

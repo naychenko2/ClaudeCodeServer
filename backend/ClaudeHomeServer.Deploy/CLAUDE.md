@@ -5,7 +5,7 @@
 В вертикали **два контура**, сведённые в одну подсистему (`DeploySubsystem`) только потому,
 что по отдельности каждый слишком тонок для своего `IAppSubsystem`:
 
-1. **Выкатка прода из чата** ([ADR-010](docs/adr/ADR-010-deploy-from-chat.md)) — заявка в
+1. **Выкатка прода из чата** ([ADR-010](../../docs/adr/ADR-010-deploy-from-chat.md)) — заявка в
    журнал `deploy-state.json` и внешний агент планировщика (`DeployService`, `DeployHost`,
    `DeployReportService`, роут `api/deploy`, секция конфига `Deploy`).
 2. **Пункт меню «Выкатить на бой»** — сигнал трей-раннеру (`DeployLauncher`, `ITrayGate` /
@@ -110,4 +110,4 @@ IndexedDB и при обрыве **молча возвращает сохран�
 Windows, git и планировщик задач, а бэкенд собирается и тестируется на Linux (CI). Прочие
 сознательные границы подсистемы (`IGitRepoChecker`, `Backup.InstanceLock`, сторы вне `data/`)
 перечислены в шапке
-[DeploySubsystem.cs](backend/ClaudeHomeServer.Deploy/Services/Deploy/DeploySubsystem.cs).
+[DeploySubsystem.cs](Services/Deploy/DeploySubsystem.cs).

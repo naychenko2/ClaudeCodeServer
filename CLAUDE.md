@@ -87,7 +87,7 @@ Browser (React 18 + TypeScript)  →  SignalR WebSocket  →  ASP.NET Core 10 (:
 
 Слои бэкенда — `Controllers/`, `Hubs/SessionHub`, `Services/`,
 `ClaudeHomeServer.Llm` (отдельная сборка — слой LLM-провайдеров),
-`Protocol/ServerMessage` (record-типы WS-событий); фронт — `pages/`, `components/`, `hooks/`,
+`Core/Protocol/ServerMessage` (record-типы WS-событий); фронт — `pages/`, `components/`, `hooks/`,
 `lib/` (`api.ts`, `signalr.ts`, `design.ts`), `types/`. Состав файлов смотри в дереве репозитория.
 
 ## Дизайн-система
@@ -111,8 +111,9 @@ Design и их состав — [docs/design/audit.md](docs/design/audit.md). Ж
 
 Основной рантайм — claude CLI (`Llm/Claude/ClaudeSession`); сторонние провайдеры
 (DeepSeek, GLM) подключаются env-оверрайдами процесса на каждый ход. Мимо CLI ходит только
-локальный движок (`ILocalLlmClient` — Ollama или llama-server): фоновые one-shot действия и
-разговор с исполнителем «Локальная» идут прямым HTTP-вызовом. Конфиг — секция
+локальный движок (`ILocalLlmClient` — Ollama или llama-server): назначенные на локаль фоновые
+one-shot действия и разговор с исполнителем «Локальная» идут прямым HTTP-вызовом. Конфиг —
+секция
 `LlmProviders`, ключи в appsettings.Local.json (пустой `ApiKey` = провайдер выключен);
 резолв, цены и возможности — `LlmProviderRegistry`. Фоновые one-shot действия (теги, сводки,
 память, changelog…) считаются дёшево по маршруту `LocalActionRouter` + `CheapTextRunner`;
@@ -256,9 +257,9 @@ WorkingDirectory = `project.RootPath`. Маппинг `stream-json` → `ServerM
 общий `POST /mcp/{name}[/{хвост}]`, node-процесса нет вовсе. Хвост маршрута несёт контекст вызова
 (сессия-вызыватель, у `memory` — персона и проект), по нему тулсет живьём резолвит
 проект/персону/привязки; владелец берётся из claim `sub` сервисного JWT, не из маршрута.
-На stdio остался только `desktop` (capability-токен, ADR-008);
-у `watch` и `websearch` stdio-ветки отката нет вовсе. Замороженные `mcp/*-server/index.js` —
-ветки отката под `Mcp:HttpTransport=false`.
+На stdio остались только `desktop` (capability-токен, ADR-008) и внешние модули;
+у `watch`, `websearch` и `higgsfield` stdio-ветки отката нет вовсе. Замороженные
+`mcp/*-server/index.js` — ветки отката под `Mcp:HttpTransport=false`.
 
 - **Состав `tools/list` не зависит от ХОДА** (от свойств сессии — может): он входит в
   сигнатуру запуска CLI, и любая зависимость от свойства хода перезапускает процесс со ВСЕМИ
@@ -322,7 +323,8 @@ personas/memory) — прочитай [docs/architecture/personas.md](docs/archi
 
 Тексты — переводы oh-my-openagent ([docs/omo/adoption.md](docs/omo/adoption.md)); рантайм —
 `OmoPrompts*.cs` в `ClaudeHomeServer.Prompts` (генерируются скриптом docs/omo/gen-omo-prompts.ps1).
-Главное — цикл «до готово» (флаг `work-loop`). Детали —
+Главное — цикл «до готово»: фич-флага нет, работает у всех, включается тумблером поля ввода
+(`SetWorkLoopAsync` → `Session.WorkLoop`). Детали —
 [docs/architecture/features.md](docs/architecture/features.md), раздел «Механики OmO».
 
 ## REST API

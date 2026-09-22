@@ -56,44 +56,20 @@ cd frontend; npm run build     # production-сборка (tsc -b + vite)
 **Инварианты:** смена `ExecutionEnvironment` при существующих чатах запрещена; токен подписки
 доставляется в песочницу per-exec, а не запекается при создании контейнера.
 
-Изоляция local-процессов по памяти (`Execution:Isolation`, systemd-scope в `ccs-agents.slice`):
-узлы MSBuild и компилятор переиспользуются ВНУТРИ scope (соль — имя юнита), scope гасится
-по выходу процесса; прежние запреты реюза (`MSBUILDDISABLENODEREUSE` и др.) — за
-`BuildNodeReuse=false`. Гашение висит на событии `Exited` и умирает вместе с бэкендом,
-поэтому scope упавшего инстанса подметает `ScopeOrphanSweeper` при старте: имя юнита несёт
-отпечаток владельца (`ccs-run-<pid в hex>-<guid>.scope`), гасятся только те, чей владелец
-мёртв. Свежий worktree чата/задачи прогревается фоновой сборкой тестов
-(`Execution:WarmupBuild`).
+Local-процессы изолированы по памяти systemd-scope'ом в `ccs-agents.slice`
+(`Execution:Isolation`; реюз узлов MSBuild внутри scope, сторож сирот при старте, прогрев
+свежего worktree — всё в `sandbox.md`). Инварианты этой обвязки:
 
-Пределы памяти заданы **per-scope**, а число одновременных scope ограничивает отдельный
-потолок `BuildConcurrencyGate` (`Execution:Isolation:MaxConcurrentBuilds`, дефолт 2, явный
-`0` — без ограничения): инцидент oomd 2026-09-21, `ccs-agents.slice` держал 18,1 GB в четырёх
-прогонах разом. Счётчик **единственный на процесс** — второй семафор где-то ещё делает потолок
-неправдой. Под него идут только spec с явной меткой `ProcessSpec.Heavy` (сегодня — прогрев);
-`git status`/`diff` проходят насквозь, очередь из них парализовала бы git-бар. Сборку, которую
-агент запускает ВНУТРИ хода своим Bash, потолок не видит — она потомок процесса claude CLI, а
-не отдельный запуск: ход слот не занимает и не ждёт его никогда, поэтому дедлок «ход ждёт слот
-прогрева» невозможен по конструкции.
-
-**Основная защита от OOM — не гейт, а жёсткий потолок cgroup на `ccs-agents.slice`**
-(`MemoryMax` + `MemorySwapMax=0` + `ManagedOOMMemoryPressure=kill`, плюс `ManagedOOMPreference=omit`
-на самом `ccs.service`). Лимит cgroup наследуется ВСЕМУ поддереву scope — включая сборки,
-которые агент запускает внутри хода своим Bash, то есть ровно те, что дали инцидент 21 сен
-(четыре scope по 4–5 GB, внутри `testhost.dll`, прогревов среди них не было). `BuildConcurrencyGate`
-закрывает только запуски с меткой `ProcessSpec.Heavy` — сегодня это один прогрев worktree, —
-и потому остаётся дополнением, а не заменой лимитов. **`MemoryHigh` не ставим ни на slice, ни
-per-scope** (разбор 2026-09-22): дроссель гонит сборку в reclaim и swap, стойло считается
-PSI-давлением и суммируется вверх до `user@1000.service`, где systemd-oomd по дефолту Ubuntu
-убивает при 50 % — жертвой выходит наш же scope. После установки `MemoryHigh` 21.09 oomd убил
-ещё четыре scope за вечер, счётчик `memory.events high` на slice — 1,9 млн. Сессионный порог
-поднят до 80 % root-drop-in'ом на `user@.service`; число узлов MSBuild для любой сборки под
-`backend/` (в том числе из Bash агента) режет `backend/Directory.Build.rsp` (`-maxcpucount:6`):
-20 тестовых проектов на 24 ядрах давали до 20 testhost разом. Unit-файлы и drop-in'ы
-версионированы в [deploy/systemd/](deploy/systemd/): user-часть раскладывает
-`install-user-units.sh` (он же чистит перебивающие drop-in'ы из `user.control/`), root-часть
-(oomd на `user@.service`, лимиты inotify — бэкенд выедал 61 тыс. из 65 тыс. watch'ей по
-дефолту) — `install-system-tuning.sh`. Сами значения машинно-специфичны — правило расчёта
-под конкретную машину в [deploy/systemd/README.md](deploy/systemd/README.md).
+- **Основная защита от OOM — жёсткий потолок cgroup на `ccs-agents.slice`**, а не гейт: лимит
+  наследуется ВСЕМУ поддереву scope, включая сборки, которые агент запускает внутри хода своим
+  Bash (ровно они дали инцидент 21.09). `BuildConcurrencyGate` считает только spec с меткой
+  `ProcessSpec.Heavy` — дополнение, не замена лимитов; счётчик **единственный на процесс**,
+  второй семафор где-то ещё делает потолок неправдой.
+- **`MemoryHigh` не ставим ни на slice, ни per-scope** (разбор 2026-09-22): под systemd-oomd
+  дроссель сам становится источником PSI-давления и убивает наш же scope. Почему именно так —
+  [sandbox.md](docs/architecture/sandbox.md) и [deploy/systemd/README.md](deploy/systemd/README.md),
+  там же правило расчёта машинно-специфичных значений; unit-файлы и drop-in'ы — в
+  [deploy/systemd/](deploy/systemd/).
 
 **Наблюдение за деревом файлов не подписывается на служебные каталоги.** `FileSystemWatcher`
 с `IncludeSubdirectories` на Linux ставит inotify-слежку на КАЖДЫЙ каталог, а чёрные списки

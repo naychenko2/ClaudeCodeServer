@@ -254,7 +254,7 @@ export function normalizeHistory(raw: unknown[], opts?: { deriveSpeakers?: boole
 export const PERSISTED_KINDS = new Set<ChatItem['kind']>([
   'user_message', 'session_started', 'text', 'thinking', 'tool_use',
   'ask_question', 'plan_review', 'team_plan', 'team_escalation',
-  'file_changed', 'result', 'fal_cost', 'glif_cost', 'compact_boundary', 'error',
+  'file_changed', 'result', 'fal_cost', 'glif_cost', 'compact_boundary', 'context_pruned', 'error',
   'work_loop_stopped', 'model_switched', 'branched_from', 'interrupted',
 ]);
 
@@ -658,6 +658,20 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         compactNote: undefined,
         items: [...prev.items, { kind: 'compact_boundary', trigger: msg.trigger, preTokens: msg.preTokens, postTokens: msg.postTokens }],
       };
+
+    case 'context_pruned':
+      // Прокси локальной модели сдвинул контекст. Вид сдвига переименовываем kind → pruneKind:
+      // у элемента ленты kind занят дискриминатором (см. тип ChatItem). Состояние компакции
+      // не трогаем: сжатие в облаке ведёт прокси, индикатор «Сжимаю…» на него не заводился.
+      return withItems([...prev.items, {
+        kind: 'context_pruned', pruneKind: msg.kind,
+        tokensBefore: msg.tokensBefore, tokensAfter: msg.tokensAfter,
+        blocks: msg.blocks, resultBlocks: msg.resultBlocks,
+        inputBlocks: msg.inputBlocks, thinkingBlocks: msg.thinkingBlocks,
+        ...(msg.prefillSeconds !== undefined ? { prefillSeconds: msg.prefillSeconds } : {}),
+        ...(msg.cacheReadTokens !== undefined ? { cacheReadTokens: msg.cacheReadTokens } : {}),
+        ...(msg.promptTokens !== undefined ? { promptTokens: msg.promptTokens } : {}),
+      }]);
 
     case 'compact_status':
       // Ход компакции: compacting → началась; compact_result — завершилась.

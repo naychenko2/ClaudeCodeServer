@@ -21,6 +21,7 @@ import { personaTitleLines } from '../../lib/personas';
 import { AGENT_COLORS, agentDotColor } from '../AgentSelector';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset, worstWindow } from '../../lib/rateLimit';
 import { type ContextEstimate } from '../../lib/context';
+import { prunedSummaryText } from '../../lib/contextPruned';
 import { ContextThresholdsDialog } from '../ContextThresholdsDialog';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { C, FONT, R, SP, SHADOW, TB, CHAT_MAX_W, MODAL_W, GROUP_COLORS } from '../../lib/design';
@@ -457,6 +458,11 @@ function ContextPopoverBody({ estimate, isWaiting, isCompacting, canCompact, com
         <BadgeRow k="Сжатие истории" v={estimate.lastCompact.pre !== undefined
           ? `${fmtTokens(estimate.lastCompact.pre)} → ${fmtTokens(estimate.lastCompact.post)}`
           : fmtTokens(estimate.lastCompact.post)} />
+      )}
+      {estimate.pruned && (
+        // Итог обрезок прокси локальной модели за чат: сколько раз двигали контекст и
+        // сколько суммарно срезали. Каждый сдвиг отмечен карточкой в ленте, здесь — сумма
+        <BadgeRow k="Обрезка контекста" v={prunedSummaryText(estimate.pruned)} />
       )}
       <div style={{ fontFamily: FONT.sans, fontSize: 10.5, color: C.textMuted, marginTop: 6, lineHeight: 1.4 }}>
         Сжимает историю диалога в саммари, освобождая место в окне. При заполнении {assistantName} делает это автоматически.

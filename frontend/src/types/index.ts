@@ -1005,6 +1005,18 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'error'; text: string; details?: string; action?: string | null }
   | { type: 'rate_limit'; limitType: string; resetsAt?: string; status?: string; utilization?: number; isUsingOverage?: boolean; overageStatus?: string; overageResetsAt?: string }
   | { type: 'compact_boundary'; trigger: string; preTokens?: number; postTokens?: number }
+  // Прокси локальной модели обрезал историю хода (kind='prune') либо увёл сжатие в облако
+  // (kind='compact_cloud'). Приходит ПОСЛЕ первого байта ответа — до него лента молчит, и
+  // это нормально: своего «ожидания» у прунинга нет.
+  // blocks — сколько блоков выкинуто всего, дальше разбивка по видам (вывод инструмента,
+  // вход инструмента, размышление). prefillSeconds — сколько ждали пересчёт префикса после
+  // сдвига; cacheReadTokens/promptTokens — доля запроса, взятая из кэша (cacheRead/prompt).
+  | {
+      type: 'context_pruned'; kind: 'prune' | 'compact_cloud';
+      tokensBefore: number; tokensAfter: number;
+      blocks: number; resultBlocks: number; inputBlocks: number; thinkingBlocks: number;
+      prefillSeconds?: number; cacheReadTokens?: number; promptTokens?: number;
+    }
   | { type: 'compact_status'; status?: string; compactResult?: string; compactError?: string }
   | { type: 'truncated' }
   | { type: 'redacted_thinking' }
@@ -1859,6 +1871,16 @@ export type ChatItem =
   | { kind: 'glif_cost'; jobId: string; outputType?: string; mediaCount: number; credits?: number; model?: string }
   | { kind: 'rate_limit'; limitType: string; resetsAt?: string; status?: string }
   | { kind: 'compact_boundary'; trigger: string; preTokens?: number; postTokens?: number }
+  // Прокси локальной модели обрезал историю (см. wire-событие context_pruned). Вид сдвига
+  // лежит в pruneKind, а НЕ в kind: у элемента ленты и у записи истории kind — дискриминатор
+  // (TypeDiscriminatorPropertyName = "kind" в StoredMessage.cs), своего поля с тем же именем
+  // запись иметь не может. В wire-событии дискриминатор — type, поэтому там поле зовётся kind.
+  | {
+      kind: 'context_pruned'; pruneKind: 'prune' | 'compact_cloud';
+      tokensBefore: number; tokensAfter: number;
+      blocks: number; resultBlocks: number; inputBlocks: number; thinkingBlocks: number;
+      prefillSeconds?: number; cacheReadTokens?: number; promptTokens?: number;
+    }
   | { kind: 'truncated' }
   | { kind: 'redacted_thinking' }
   // ts — момент остановки (история: StoredInterruptedMessage.Timestamp); в живой ленте нет

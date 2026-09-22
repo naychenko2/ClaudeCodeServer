@@ -31,7 +31,7 @@ import { C, FONT, FS, SP, R, SHADOW, ISLAND, MODAL_W, GROUP_COLORS } from '../li
 import { AGENT_COLORS } from '../components/AgentSelector';
 import { ChatCard } from '../components/ChatCard';
 import { STATUS_CONFIG, STATUS_GLOW, type VisualStatus } from '../components/StatusIndicator';
-import { ProviderLimitCard } from '../components/chat/ChatItemView';
+import { ProviderLimitCard, ContextPrunedRow } from '../components/chat/ChatItemView';
 import type { Session, ChatItem, Persona, PlanMap } from '../types';
 import { MarkdownContent } from '../components/chat/MarkdownContent';
 import { PlanScheme } from '../components/plan/PlanScheme';
@@ -1820,6 +1820,29 @@ const DEMO_PROVIDER_LIMIT_ITEMS: Extract<ChatItem, { kind: 'provider_limit' }>[]
   },
 ];
 
+// Демо строк «контекст обрезан» (событие context_pruned прокси локальной модели):
+// обрезка с полной статистикой, обрезка без замеров и сжатие, ушедшее в облако.
+const DEMO_CONTEXT_PRUNED_ITEMS: Extract<ChatItem, { kind: 'context_pruned' }>[] = [
+  {
+    kind: 'context_pruned', pruneKind: 'prune',
+    tokensBefore: 171_000, tokensAfter: 113_000,
+    blocks: 25, resultBlocks: 20, inputBlocks: 3, thinkingBlocks: 2,
+    prefillSeconds: 87, cacheReadTokens: 0, promptTokens: 113_000,
+  },
+  {
+    kind: 'context_pruned', pruneKind: 'prune',
+    tokensBefore: 150_000, tokensAfter: 128_000,
+    blocks: 6, resultBlocks: 6, inputBlocks: 0, thinkingBlocks: 0,
+    prefillSeconds: 42, cacheReadTokens: 96_000, promptTokens: 128_000,
+  },
+  {
+    kind: 'context_pruned', pruneKind: 'compact_cloud',
+    tokensBefore: 0, tokensAfter: 0,
+    blocks: 0, resultBlocks: 0, inputBlocks: 0, thinkingBlocks: 0,
+    prefillSeconds: 21,
+  },
+];
+
 // Мета 9 панелей правой рельсы — копия PANEL_META из RightPanelStack (там
 // не экспортируется). Меняется только Icon и title; контент у каждого свой.
 const PANELS_DEMO: { key: string; title: string; Icon: LucideIcon; accent?: boolean }[] = [
@@ -2767,6 +2790,24 @@ function PanelsSection() {
           }}>
             {DEMO_PROVIDER_LIMIT_ITEMS.map((it, i) => (
               <ProviderLimitCard key={i} item={it} online={true} />
+            ))}
+          </div>
+        </SubBlock>
+
+        {/* Строка сдвига контекста из ленты чата: прокси локальной модели обрезал историю
+            хода либо увёл сжатие в облако. Служебный разделитель в тоне карточки сжатия;
+            виды блоков с нулём в подписи не перечисляются. */}
+        <SubBlock label="ContextPrunedRow — контекст обрезан / сжатие в облаке">
+          <div style={{
+            background: C.bgWhite,
+            borderRadius: R.xl,
+            padding: SP.md,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: SP.md,
+          }}>
+            {DEMO_CONTEXT_PRUNED_ITEMS.map((it, i) => (
+              <ContextPrunedRow key={i} item={it} />
             ))}
           </div>
         </SubBlock>

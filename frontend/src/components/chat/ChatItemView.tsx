@@ -11,7 +11,8 @@ import { api } from '../../lib/api';
 import type { TodoItem } from '../../hooks/useSessionArtifacts';
 import type { Mode } from '../../lib/modes';
 import { TodoList } from './TodoList';
-import { C, FONT, SHADOW, R } from '../../lib/design';
+import { C, FONT, SHADOW, R, FS, SP } from '../../lib/design';
+import { prunedHeadline, prunedDetails } from '../../lib/contextPruned';
 import { Button } from '../ui/Button';
 import { useIsMobile } from '../../lib/breakpoints';
 import { useModelLabel } from '../../lib/models';
@@ -917,6 +918,37 @@ export function ProviderLimitCard({ item, online, onMigrate }: {
   );
 }
 
+// Строка «контекст обрезан» — прокси локальной модели сдвинул контекст: обрезал историю
+// хода либо увёл сжатие в облако. Тон и вид — как у карточки сжатия (compact_boundary):
+// служебная строка-разделитель, а не сообщение ассистента. Пауза в полторы минуты, которую
+// человек уже отсидел, объяснена задним числом; внимания строка не требует.
+// Подробности идут ВТОРОЙ строкой под разделителем: в линию с ✂ они не влезают на мобиле,
+// а перенос внутри nowrap-строки разделителя невозможен.
+// export — для dev-витрины UiKitPage (демо обоих видов сдвига без живого прокси)
+export function ContextPrunedRow({ item }: { item: Extract<ChatItem, { kind: 'context_pruned' }> }) {
+  const details = prunedDetails(item);
+  return (
+    <div style={{ alignSelf: 'stretch', display: 'flex', flexDirection: 'column', gap: SP.xxs, margin: '2px 0' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, color: C.textMuted, fontSize: FS.xs }}>
+        <div style={{ flex: 1, height: 1, background: C.border }} />
+        <span style={{ display: 'flex', alignItems: 'center', gap: SP.xs, whiteSpace: 'nowrap' }}>
+          <span style={{ color: C.textMuted }}>✂</span>
+          {prunedHeadline(item)}
+        </span>
+        <div style={{ flex: 1, height: 1, background: C.border }} />
+      </div>
+      {details && (
+        <div style={{
+          textAlign: 'center', color: C.textMuted, fontSize: FS.xs, opacity: 0.7,
+          lineHeight: 1.4, padding: `0 ${SP.sm}px`, wordBreak: 'break-word',
+        }}>
+          {details}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Разделитель «X был перегружен — ответ продолжен на Y»: автоматическая подмена МОДЕЛИ
 // рантайм-фолбэком (см. chatReducer — отдельно от provider_switched, который остаётся тихим
 // или на пилюле «Продолжено на подписке» при ротации внутри провайдера). Ход состоялся,
@@ -1678,6 +1710,9 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
         </div>
       );
     }
+
+    case 'context_pruned':
+      return <ContextPrunedRow item={item} />;
 
     case 'resumed':
       // Разделитель «продолжение чата» убран — декоративный, без полезной нагрузки

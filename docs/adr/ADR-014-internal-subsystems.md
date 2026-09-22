@@ -976,8 +976,10 @@ var boundaryRoots = SubsystemBoundaryTests.Boundaries
 `SubsystemBoundaryCoverageTests` держит вторую, более широкую:
 **любой** namespace `ClaudeHomeServer.Services.*`, где есть хотя бы один
 top-level не-compiler-generated тип, обязан быть покрыт строкой в `Boundaries`
-(префиксно) либо явным исключением-спиной (`Services.Http`,
-`Services.Composition`, `Services.Mcp`, `Services.DynamicModules`).
+(префиксно) либо явным исключением-спиной (на 2026-09-22 это `Services.Http`,
+`Services.Composition`, `Services.Mcp`, `Services.DynamicModules`; список
+пополняется по мере переезда примитивов в спину, источник правды —
+`excludedNamespaces` в коде теста).
 
 Прецедент, ради которого она заведена: пять неймспейсов —
 `Services.Llm`, `Services.Docs`, `Services.Turn`, `Services.Prompts`,
@@ -1344,9 +1346,9 @@ namespace**. Тогда ни один call-site не меняется — ни `
 | Ф1 | `IMemoryEntry<T>` → Core (единственный блокер `Models`) | ✅ `361f1d4a` |
 | Ф2 | весь `Models` → Core | ✅ `361f1d4a` |
 | Ф3а | константы Desktop инвертированы, `LlmCapabilities` → Core | ✅ `0f43ad0b` |
-| Ф3б | `Protocol` → Core (снимает зависимость у 14 вертикалей) | в работе |
-| Ф4 | шов вещания вместо `Hubs` (13 вертикалей + 7 корневых сервисов) | план |
-| Ф5 | швы под god-объекты (`SessionManager` 8865, `PersonaManager` 1020, …) | план |
+| Ф3б | `Protocol` → Core (снимает зависимость у 14 вертикалей) | ✅ (в Main папки `Protocol/` нет, всё в `Core/Protocol/`) |
+| Ф4 | шов вещания вместо `Hubs` (13 вертикалей + 7 корневых сервисов) | ✅ `ISessionBroadcaster` в Core; `IHubContext<SessionHub>` вне Main и тестов не встречается |
+| Ф5 | швы под god-объекты (`SessionManager`, `PersonaManager`, …) | план (`SessionManager` — 9360 строк на 2026-09-22) |
 
 Ярус 1 — волны выноса по остаточной связности. Рабочего плана волн
 отдельным документом больше нет (`modularity-roadmap-2026-09.md`,

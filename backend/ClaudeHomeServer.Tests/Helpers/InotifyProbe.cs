@@ -23,6 +23,24 @@ internal static class InotifyProbe
 
     public static int CountOpenFds() => new DirectoryInfo("/proc/self/fd").EnumerateFileSystemInfos().Count();
 
+    // Число inotify-СЛЕЖЕК процесса (не экземпляров): на каждую слежку ядро печатает
+    // в /proc/self/fdinfo/<fd> экземпляра строку «inotify wd:<номер> …». Лимит
+    // fs.inotify.max_user_watches считается именно по ним и общий на пользователя ОС.
+    public static int CountWatches()
+    {
+        var n = 0;
+        foreach (var fd in InotifyFdNumbers())
+        {
+            try
+            {
+                foreach (var line in File.ReadLines($"/proc/self/fdinfo/{fd}"))
+                    if (line.StartsWith("inotify wd:", StringComparison.Ordinal)) n++;
+            }
+            catch { /* экземпляр закрылся между перечислением и чтением */ }
+        }
+        return n;
+    }
+
     // Ждём, пока число inotify-fd не опустится до limit (закрытие асинхронно — на потоке
     // чтения .NET). Возвращает последнее замеренное значение.
     public static async Task<int> WaitInotifyAtMost(int limit, TimeSpan timeout)

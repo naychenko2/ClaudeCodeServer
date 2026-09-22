@@ -112,7 +112,8 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         _fileWatcherOptions = new FileWatcherOptions(
             IgnoreDirs: fw.GetSection("IgnoreDirs").Get<string[]>() is { Length: > 0 } dirs ? dirs : d.IgnoreDirs,
             IgnoreFilePatterns: fw.GetSection("IgnoreFilePatterns").Get<string[]>() is { Length: > 0 } pats ? pats : d.IgnoreFilePatterns,
-            RespectGitignore: fw.GetValue("RespectGitignore", d.RespectGitignore));
+            RespectGitignore: fw.GetValue("RespectGitignore", d.RespectGitignore),
+            MaxWatches: fw.GetValue("MaxWatches", d.MaxWatches));
         // Потолок доживания процесса с фоновыми агентами после конца хода (минуты) —
         // прокидываем в каждый адаптер, а не мутируем глобальный static
         if (int.TryParse(config["Claude:BgLingerMinutes"], out var lingerMin) && lingerMin > 0)

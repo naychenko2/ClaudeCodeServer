@@ -91,9 +91,21 @@ PSI-давлением и суммируется вверх до `user@1000.serv
 20 тестовых проектов на 24 ядрах давали до 20 testhost разом. Unit-файлы и drop-in'ы
 версионированы в [deploy/systemd/](deploy/systemd/): user-часть раскладывает
 `install-user-units.sh` (он же чистит перебивающие drop-in'ы из `user.control/`), root-часть
-(oomd на `user@.service`, лимиты inotify — бэкенд выедает 61 тыс. из 65 тыс. watch'ей по
+(oomd на `user@.service`, лимиты inotify — бэкенд выедал 61 тыс. из 65 тыс. watch'ей по
 дефолту) — `install-system-tuning.sh`. Сами значения машинно-специфичны — правило расчёта
 под конкретную машину в [deploy/systemd/README.md](deploy/systemd/README.md).
+
+**Наблюдение за деревом файлов не подписывается на служебные каталоги.** `FileSystemWatcher`
+с `IncludeSubdirectories` на Linux ставит inotify-слежку на КАЖДЫЙ каталог, а чёрные списки
+проекта (`FileWatcherOptions.IgnoreDirs`, `TreeExcludes`) режут только события: на этом
+репозитории выходило 16 390 слежек на наблюдателя при 438 неслужебных каталогах. Поэтому
+наблюдение идёт через Core-примитив
+[RecursiveDirectoryWatcher](backend/ClaudeHomeServer.Core/Services/Files/RecursiveDirectoryWatcher.cs)
+— ОДИН экземпляр inotify на наблюдателя (разбиение дерева на поддеревья с отдельным
+`FileSystemWatcher` на каждое дало бы 178 экземпляров при дефолтном потолке ядра 128),
+подписка по перечню каталогов с обрезкой служебных и потолком `MaxWatches` (4000) как
+гарантией на чужом дереве. Ватчер хода переведён (439 слежек вместо 16 390),
+`FileWatcherService` — ещё нет. sysctl остаётся запасом, а не лекарством.
 
 **Перед правками в `Services/Execution/`, `SandboxManager`, `UserHomeResolver` — прочитай
 [docs/architecture/sandbox.md](docs/architecture/sandbox.md)** (монтирования, interrupt, MCP из песочницы, overrides).

@@ -1635,6 +1635,13 @@ public class SubsystemBoundaryTests
         // под `Prompts/OnboardingPrompts.cs` — не один файл-примитив. Чтобы
         // не раздувать CoreAllowedRootTypes, разрешаем namespace.
         "ClaudeHomeServer.Services.Prompts",
+        // Разбор OOM 2026-09-22: RecursiveDirectoryWatcher — примитив спины, наблюдение
+        // за деревом без подписки на служебные каталоги (FileSystemWatcher на Linux
+        // ставит слежку на КАЖДЫЙ каталог, чёрные списки режут только события).
+        // Владения вертикалью нет: сегодня его зовёт TurnFileWatcher (Llm), следом
+        // переедет FileWatcherService (Main) — из спины он доступен обоим, тогда как
+        // ссылка `Vertical → Main` невозможна в принципе.
+        "ClaudeHomeServer.Services.Files",
         // Этап 5, узкие швы Turn: DossierRecallRequest/DossierRecallResult — контрактные
         // DTO пассивного recall паспортов. Запрос собирает Turn (контрибьютор промпта),
         // исполняет Memory (PersonaMemoryService.BuildRecallAsync), владеет Dossiers.

@@ -231,6 +231,10 @@ public class SubsystemBoundaryCoverageTests
             // инфраструктура загрузки по манифесту секции "DynamicModules", не вертикаль-
             // подсистема (IAppSubsystem не имеет). Живёт в Main, потребляет его Program.cs.
             "ClaudeHomeServer.Services.DynamicModules",
+            // Спина: наблюдение за деревом каталогов (RecursiveDirectoryWatcher) — примитив
+            // ОС без владения вертикалью, живёт в Core. Его зовёт TurnFileWatcher (Llm),
+            // следом переедет FileWatcherService (Main) — подсистемой он не является.
+            "ClaudeHomeServer.Services.Files",
         };
 
         // Все namespace, покрытые через SubsystemBoundaryTests.Boundaries (по полю

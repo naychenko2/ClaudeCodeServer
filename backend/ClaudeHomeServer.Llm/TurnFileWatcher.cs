@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO.Enumeration;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Files;
 
 namespace ClaudeHomeServer.Services.Llm;
 
@@ -9,10 +10,13 @@ namespace ClaudeHomeServer.Services.Llm;
 // служебные каталоги инструментов (.omc, .claude), вложения чата (TreeExcludes.AttachmentsDir),
 // артефакты сборки и временные файлы, чтобы командные ходы (OmO, workflow) не спамили ленту
 // чата чужими изменениями, а загрузка вложения не выглядела правкой файла проекта.
+// IgnoreDirs работает ДВАЖДЫ: по нему обрезается обход при подписке (RecursiveDirectoryWatcher)
+// и фильтруются события. Список один сознательно — второй дал бы разъезд «подписались, но глушим».
 public sealed record FileWatcherOptions(
     IReadOnlyList<string> IgnoreDirs,
     IReadOnlyList<string> IgnoreFilePatterns,
-    bool RespectGitignore)
+    bool RespectGitignore,
+    int MaxWatches = RecursiveDirectoryWatcher.DefaultMaxWatches)
 {
     public static readonly FileWatcherOptions Default = new(
         IgnoreDirs: [".git", ".omc", ".claude", ".cc-attachments", "node_modules", "obj", "bin", "dist", ".vs", ".idea", ".playwright"],
@@ -48,7 +52,7 @@ public sealed class TurnFileWatcher : IDisposable
     private readonly Func<ServerMessage, Task> _onMessage;
     private readonly FileWatcherOptions _options;
     private readonly HashSet<string> _ignoreDirs;
-    private FileSystemWatcher? _watcher;
+    private RecursiveDirectoryWatcher? _watcher;
     private readonly ConcurrentDictionary<string, string?> _fileCache = new();
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _debounce = new();
     // Кэш вердикта git check-ignore по полному пути (живёт на сессию — файлы те же
@@ -82,19 +86,23 @@ public sealed class TurnFileWatcher : IDisposable
     {
         if (!Directory.Exists(_rootPath)) return;
         // Повторный Start без Stop (новый ход при опоздавшей финализации старого прогона)
-        // не должен утекать прежним FileSystemWatcher
+        // не должен утекать прежним наблюдателем
         _watcher?.Dispose();
         _watcher = null;
-        var watcher = new FileSystemWatcher(_rootPath)
-        {
-            IncludeSubdirectories = true,
-            NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName,
-        };
-        watcher.Changed += OnFileSystemEvent;
-        watcher.Created += OnFileSystemEvent;
-        // Включение — отдельным шагом, а не в инициализаторе: бросок из EnableRaisingEvents
-        // (исчерпан лимит inotify) иначе оставлял созданный watcher неприсвоенным и неосвобождённым.
-        try { watcher.EnableRaisingEvents = true; }
+        // Служебные каталоги не ПОДПИСЫВАЮТСЯ вовсе, а не просто глушатся на событии:
+        // FileSystemWatcher с IncludeSubdirectories на Linux ставил слежку на каждый
+        // каталог дерева (16 390 на этом репозитории при потолке ядра 65 536, разбор
+        // OOM 2026-09-22). Удалённые события (Deleted) ватчеру хода не нужны — карточку
+        // удаления он не рисует, а diff считается от кэша содержимого.
+        var watcher = new RecursiveDirectoryWatcher(_rootPath, _options.IgnoreDirs,
+            (path, kind) => { if (kind != DirectoryWatchKind.Deleted) OnPathEvent(path); },
+            _options.MaxWatches,
+            // Частичный отказ (потолок слежек, ENOSPC на каталоге) ход не валит: часть
+            // карточек не покажется, сам ход идёт.
+            warning => Console.Error.WriteLine($"[file-watcher] {warning}"));
+        // Старт — отдельным шагом, а не в конструкторе: бросок (исчерпан лимит inotify)
+        // иначе оставлял созданный наблюдатель неприсвоенным и неосвобождённым.
+        try { watcher.Start(); }
         catch
         {
             watcher.Dispose();
@@ -118,9 +126,8 @@ public sealed class TurnFileWatcher : IDisposable
 
     public void Dispose() => Stop();
 
-    private void OnFileSystemEvent(object _, FileSystemEventArgs e)
+    private void OnPathEvent(string fullPath)
     {
-        var fullPath = e.FullPath;
         // Дешёвый чёрный список (каталоги/маски имён) — до debounce и запуска git
         if (ShouldIgnore(fullPath)) return;
 

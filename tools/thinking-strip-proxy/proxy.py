@@ -1,0 +1,312 @@
+#!/usr/bin/env python3
+# Прокси между claude CLI и vLLM локальной модели: правит тело запроса ради prefix cache.
+#
+# Что делает: вырезает output_config (см. ниже), вырезает напоминания <total_tokens> и
+# повторные снимки «# Environment», по желанию обрезает старые выводы инструментов
+# (PRUNE_TOOL_RESULTS). Всё остальное проксируется как есть. Устройство и замеры — README.md.
+#
+# Зачем: CLI шлёт "output_config": {"effort": ...} на каждом ходу (без --effort — "high",
+# который шаблон модели отвергает 400). vLLM по любому допустимому effort сам подставляет
+# chat_template_kwargs.enable_thinking=true и перебивает серверный дефолт false — модель
+# уходит в размышления (замер 2026-09-19: ~100 с перед каждым шагом агента). Без
+# output_config срабатывает серверный дефолт, и ответ идёт сразу текстом.
+#
+# Всё остальное проксируется как есть, ответ — потоком (SSE). Невалидный JSON — fail-open.
+import http.client, json, os, re, sys, threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+UP_HOST = os.environ.get("UPSTREAM_HOST", "127.0.0.1")
+UP_PORT = int(os.environ.get("UPSTREAM_PORT", "18020"))
+LISTEN = os.environ.get("LISTEN_HOST", "0.0.0.0")
+PORT = int(os.environ.get("LISTEN_PORT", "18021"))
+# Режим размышлений (эксперимент 2026-09-19):
+#   off    — вырезаем output_config: vLLM не включает размышления (серверный дефолт false);
+#   on     — пропускаем output_config: размышления включены, длина не ограничена;
+#   budget — как on, плюс thinking_token_budget=THINKING_BUDGET (нужен патч Anthropic-роутера
+#            vLLM, иначе поле молча игнорируется — см. vllm-patch/).
+THINKING_MODE = os.environ.get("THINKING_MODE", "off")
+THINKING_BUDGET = int(os.environ.get("THINKING_BUDGET", "512"))
+STRIP_KEYS = ("output_config",) if THINKING_MODE == "off" else ()
+HOP = {"connection", "keep-alive", "proxy-connection", "transfer-encoding", "te",
+       "trailer", "upgrade", "content-length", "host"}
+
+# Прунинг старых выводов инструментов (по умолчанию ВЫКЛЮЧЕН, включаем вручную на замер).
+PRUNE_MODE = os.environ.get("PRUNE_TOOL_RESULTS", "off")
+PRUNE_PROTECT_LAST = int(os.environ.get("PRUNE_PROTECT_LAST", "20"))
+# Квант 50, а не 10: замер 2026-09-22 показал, что скачок границы на 180k контекста стоит
+# полного пересчёта (132 с), а экономия на обычном шаге — доли секунды. Частота скачков 1/50
+# уводит накладные к ~2.6 с на вызов; при 10 было ~13 с, и прунинг проигрывал сам себе.
+PRUNE_QUANTUM = int(os.environ.get("PRUNE_QUANTUM", "50"))
+PRUNE_MIN_CHARS = int(os.environ.get("PRUNE_MIN_CHARS", "2000"))
+PRUNE_MIN_TOKENS = int(os.environ.get("PRUNE_MIN_TOKENS", "20000"))
+
+stats = {"requests": 0, "stripped": 0, "pruned_blocks": 0, "pruned_chars": 0}
+
+# CLI вставляет в историю system-сообщение "<total_tokens>N tokens left</total_tokens>" на
+# каждом шаге, и N каждый раз новое. Шаблон Qwen требует system только первым, поэтому
+# vLLM (merge_inline_system) переносит ВСЕ такие сообщения в верхний системный блок — он
+# стоит сразу за инструментами, до истории. Новое напоминание меняет текст на ~14-тысячном
+# токене, и prefix cache обрывается: вся история пересчитывается на каждом шаге агента
+# (замер 2026-09-19: ~20 с на шаг при 47k контекста). Бюджет в 15M токенов локальной модели
+# ничего не сообщает — вырезаем только сообщения, целиком состоящие из этого напоминания.
+_BUDGET_RE = re.compile(r"^\s*<total_tokens>\d+ tokens left</total_tokens>\s*$")
+
+
+# Тот же перенос в системный блок у снимка окружения: после каждого `cd` CLI шлёт новое
+# system-сообщение "# Environment … (was …)", и история снова выпадает из кэша (замер
+# 2026-09-19: ~25 с на каждый переход каталога). Первый снимок стабилен и остаётся, повторные
+# вырезаем — о смене каталога модель знает сама: она его и меняла.
+def _is_environment(m):
+    return _system_text(m).lstrip().startswith("# Environment")
+
+
+# Повторный снимок вырезаем, ТОЛЬКО если он целиком состоит из заголовка «# Environment update»,
+# пунктов-строк и необязательного счётчика <total_tokens>: всё, что CLI однажды допишет туда
+# сверх этого, остаётся — лучше потерять кэш, чем информацию.
+_ENV_UPDATE_RE = re.compile(
+    r"^\s*# Environment update\s*\n(?:[ \t]*- [^\n]*\n?)+\s*"
+    r"(?:<total_tokens>\d+ tokens left</total_tokens>\s*)?$")
+
+
+def _is_env_update_only(m):
+    return bool(_ENV_UPDATE_RE.match(_system_text(m)))
+
+
+def _system_text(m):
+    if not isinstance(m, dict) or m.get("role") != "system":
+        return ""
+    c = m.get("content")
+    if isinstance(c, str):
+        return c
+    if isinstance(c, list) and all(isinstance(b, dict) and b.get("type") == "text" for b in c):
+        return "".join(b.get("text") or "" for b in c)
+    return ""
+
+
+def _is_budget_reminder(m):
+    return bool(_BUDGET_RE.match(_system_text(m)))
+
+
+# Прунинг старых выводов инструментов. Основную массу контекста агентного чата дают выводы
+# Bash/Grep/Read по 5–30 КБ: модель помнит, ЧТО она запускала (блоки tool_use остаются на
+# месте), а результат при надобности перечитает. Заменяем только поле content блока
+# tool_result — сам блок и парный tool_use живут дальше, иначе поедет связность истории.
+#
+# ГЛАВНОЕ ТРЕБОВАНИЕ — стабильность префикса. Прямолинейное «защищаем последние N токенов»
+# двигает границу на КАЖДОМ ходу: очередное сообщение переезжает из живых в обрезанные,
+# середина истории меняется, prefix cache обрывается — ровно та беда, от которой заведён этот
+# прокси. Поэтому границу считаем от НАЧАЛА истории (порядковый номер вывода никогда не
+# меняется при дописывании хвоста) и квантуем вниз до кратного PRUNE_QUANTUM: префикс
+# перестраивается раз в PRUNE_QUANTUM вызовов, а не каждый шаг. Состояние по сессиям тут держать
+# негде — у запроса нет её идентификатора, — и оно не нужно: решение зависит только от тела.
+PRUNE_PLACEHOLDER = "[Old tool result content cleared]"
+
+
+def _prunable_size(content):
+    """Длина вывода в символах или None, если форму не разбираем (картинки и прочее — не трогаем)."""
+    if isinstance(content, str):
+        return len(content)
+    if isinstance(content, list) and all(
+            isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str)
+            for b in content):
+        return sum(len(b["text"]) for b in content)
+    return None
+
+
+def _placeholder_like(content):
+    """Плейсхолдер той же формы, что и исходный content, — чтобы не менять форму блока."""
+    return PRUNE_PLACEHOLDER if isinstance(content, str) else [
+        {"type": "text", "text": PRUNE_PLACEHOLDER}]
+
+
+def prune_tool_results(msgs, protect_last=None, quantum=None, min_chars=None, min_tokens=None):
+    """Возвращает (сообщения, сколько символов освободили, сколько блоков обрезали). Вход не мутирует."""
+    protect_last = PRUNE_PROTECT_LAST if protect_last is None else protect_last
+    quantum = PRUNE_QUANTUM if quantum is None else quantum
+    min_chars = PRUNE_MIN_CHARS if min_chars is None else min_chars
+    min_tokens = PRUNE_MIN_TOKENS if min_tokens is None else min_tokens
+
+    found = []  # (номер сообщения, номер блока, размер) в порядке появления
+    for mi, m in enumerate(msgs):
+        if not isinstance(m, dict) or m.get("role") != "user":
+            continue
+        content = m.get("content")
+        if not isinstance(content, list):
+            continue
+        for bi, b in enumerate(content):
+            if isinstance(b, dict) and b.get("type") == "tool_result":
+                found.append((mi, bi, _prunable_size(b.get("content"))))
+
+    boundary = ((len(found) - protect_last) // quantum) * quantum
+    if boundary <= 0:
+        return msgs, 0, 0
+
+    # Мелкие выводы пропускаем: экономить на них нечего, а кэш ломаем. Плейсхолдер короче
+    # порога, поэтому повторный прогон уже обрезанной истории ничего не меняет.
+    victims = [(mi, bi) for mi, bi, size in found[:boundary]
+               if size is not None and size >= min_chars]
+    freed = sum(size - len(PRUNE_PLACEHOLDER) for _, _, size in found[:boundary]
+                if size is not None and size >= min_chars)
+    # Порог выгоды (грубая оценка 4 символа на токен): ради мелочи префикс не рвём. Оценка
+    # монотонна — граница только растёт, — поэтому порог срабатывает один раз за чат.
+    if freed // 4 < min_tokens:
+        return msgs, 0, 0
+
+    by_msg = {}
+    for mi, bi in victims:
+        by_msg.setdefault(mi, set()).add(bi)
+    out = list(msgs)
+    for mi, blocks in by_msg.items():
+        m = dict(out[mi])
+        content = list(m["content"])
+        for bi in blocks:
+            b = dict(content[bi])
+            b["content"] = _placeholder_like(b.get("content"))
+            content[bi] = b
+        m["content"] = content
+        out[mi] = m
+    return out, freed, len(victims)
+
+
+lock = threading.Lock()
+
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, fmt, *args):
+        pass
+
+    def _read_body(self):
+        if "chunked" in (self.headers.get("Transfer-Encoding") or "").lower():
+            parts = []
+            while True:
+                size = int(self.rfile.readline().split(b";")[0].strip() or b"0", 16)
+                if size == 0:
+                    self.rfile.readline()
+                    break
+                parts.append(self.rfile.read(size))
+                self.rfile.readline()
+            return b"".join(parts)
+        n = int(self.headers.get("Content-Length") or 0)
+        return self.rfile.read(n) if n else b""
+
+    def _stats(self):
+        with lock:
+            msg = json.dumps(dict(stats, prune=PRUNE_MODE, thinking=THINKING_MODE)).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(msg)))
+        self.end_headers()
+        self.wfile.write(msg)
+
+    def _proxy(self):
+        # Счётчики наружу: замер «сколько на самом деле обрезали» снимать больше неоткуда.
+        # Путь служебный, у Anthropic-роутера vLLM такого нет — с upstream не пересекается.
+        if self.command == "GET" and self.path.split("?")[0] == "/__proxy/stats":
+            self._read_body()
+            return self._stats()
+        body = self._read_body()
+        stripped = False
+        if body and self.command == "POST":
+            try:
+                doc = json.loads(body)
+                if isinstance(doc, dict):
+                    for k in STRIP_KEYS:
+                        if k in doc:
+                            del doc[k]
+                            stripped = True
+                    if THINKING_MODE == "budget" and "thinking_token_budget" not in doc:
+                        doc["thinking_token_budget"] = THINKING_BUDGET
+                        stripped = True
+                    msgs = doc.get("messages")
+                    if isinstance(msgs, list):
+                        kept, seen_env = [], False
+                        for m in msgs:
+                            if _is_budget_reminder(m):
+                                continue
+                            if _is_environment(m):
+                                if seen_env and _is_env_update_only(m):
+                                    continue
+                                seen_env = True
+                            kept.append(m)
+                        if len(kept) != len(msgs):
+                            doc["messages"] = kept
+                            stripped = True
+                        if PRUNE_MODE == "on":
+                            pruned_msgs, freed, blocks = prune_tool_results(kept)
+                            if blocks:
+                                doc["messages"] = pruned_msgs
+                                stripped = True
+                                with lock:
+                                    stats["pruned_blocks"] += blocks
+                                    stats["pruned_chars"] += freed
+                    if stripped:
+                        body = json.dumps(doc, ensure_ascii=False).encode("utf-8")
+            except (ValueError, UnicodeDecodeError):
+                pass  # fail-open: не наш формат — отдаём как есть
+        with lock:
+            stats["requests"] += 1
+            stats["stripped"] += stripped
+
+        headers = {k: v for k, v in self.headers.items() if k.lower() not in HOP}
+        if body:
+            headers["Content-Length"] = str(len(body))
+        conn = http.client.HTTPConnection(UP_HOST, UP_PORT, timeout=None)
+        try:
+            conn.request(self.command, self.path, body=body or None, headers=headers)
+            resp = conn.getresponse()
+        except OSError as e:
+            print(f"upstream-ошибка {self.command} {self.path}: {e!r}", file=sys.stderr, flush=True)
+            msg = json.dumps({"type": "error", "error": {"type": "proxy_error",
+                              "message": f"upstream {UP_HOST}:{UP_PORT} недоступен: {e}"}}).encode()
+            self.send_response(502)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(msg)))
+            self.end_headers()
+            self.wfile.write(msg)
+            return
+
+        self.send_response(resp.status, resp.reason)
+        for k, v in resp.getheaders():
+            if k.lower() not in HOP:
+                self.send_header(k, v)
+        self.send_header("Transfer-Encoding", "chunked")
+        self.end_headers()
+        try:
+            while True:
+                chunk = resp.read1(65536)
+                if not chunk:
+                    break
+                self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
+                self.wfile.flush()
+            self.wfile.write(b"0\r\n\r\n")
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # клиент ушёл (прерывание хода) — upstream закроется вместе с conn
+        finally:
+            conn.close()
+
+    def handle_one_request(self):
+        try:
+            super().handle_one_request()
+        except (ConnectionResetError, BrokenPipeError):
+            # клиент закрыл keep-alive соединение, пока мы ждали следующий запрос — штатно
+            self.close_connection = True
+        except Exception:
+            import traceback
+            traceback.print_exc(file=sys.stderr)
+            sys.stderr.flush()
+
+    do_GET = do_POST = do_PUT = do_DELETE = do_PATCH = do_HEAD = do_OPTIONS = _proxy
+
+
+if __name__ == "__main__":
+    srv = ThreadingHTTPServer((LISTEN, PORT), Handler)
+    srv.daemon_threads = True
+    print(f"thinking-strip-proxy: {LISTEN}:{PORT} -> {UP_HOST}:{UP_PORT}, режим размышлений {THINKING_MODE}"
+          + (f" (бюджет {THINKING_BUDGET})" if THINKING_MODE == "budget" else "")
+          + f", вырезаю {STRIP_KEYS}, напоминания total_tokens и повторные # Environment"
+          + (f", прунинг выводов вкл (защищаю последние {PRUNE_PROTECT_LAST}, квант {PRUNE_QUANTUM})"
+             if PRUNE_MODE == "on" else ", прунинг выводов выкл"), flush=True)
+    srv.serve_forever()

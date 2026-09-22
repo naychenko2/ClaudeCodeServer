@@ -1,0 +1,17 @@
+[Unit]
+Description=Прокси claude CLI -> vLLM локальной модели: правит тело запроса ради prefix cache
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+User=an
+# Запуск ИЗ РАБОЧЕГО ДЕРЕВА репозитория, а не из копии: разошедшиеся копии уже стоили нам
+# выкатки (health-проба switch-release.sh, 2026-09-22). Цена решения — прокси следует ветке:
+# на ветке без этого файла он падает и перезапускается каждые 2 с, пока файл не вернётся.
+ExecStart=/usr/bin/python3 /home/an/Sources/ClaudeCodeServer/tools/thinking-strip-proxy/proxy.py
+Environment=UPSTREAM_HOST=127.0.0.1 UPSTREAM_PORT=18020 LISTEN_HOST=0.0.0.0 LISTEN_PORT=18021
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

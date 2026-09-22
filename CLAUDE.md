@@ -14,9 +14,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Команды
 
-> **Стандарт: сборка и тестирование — в dev-контейнере.** По умолчанию собираем и
-> прогоняем приложение в контейнере (песочница для Claude + единое воспроизводимое
-> окружение), а не на хосте. Подробности — [docs/operations/docker.md](docs/operations/docker.md).
+> **Стандарт: сборка и прогон — в dev-контейнере**, а не на хосте (песочница для Claude плюс
+> воспроизводимое окружение). Первый запуск и устройство контейнера —
+> [docs/operations/docker.md](docs/operations/docker.md).
 
 ```powershell
 # Контейнер (из корня проекта) — основной путь
@@ -33,32 +33,27 @@ cd frontend; npm run dev       # порт 5173
 cd frontend; npm run build     # production-сборка (tsc -b + vite)
 ```
 
-Первый запуск (`.env`, вход по подписке) и устройство контейнера —
-[docker.md](docs/operations/docker.md). Хостовый дев-стенд поднимаем **только через
-`dotnet run`** (или с явным `ASPNETCORE_ENVIRONMENT=Development`): порождённые процессы
-наследуют `Production`, а там `Kestrel:Endpoints` уводит стенд на занятый боевым инстансом
-:80, и `ASPNETCORE_URLS` это не чинит. Стенд :5000 раздаёт `frontend/dist` ПОСЛЕДНЕЙ сборки
-(`wwwroot` в репозитории не живёт) — после правок `.tsx` нужен `npm run build` или работа на
-:5173. Разбор и команда фонового запуска —
+Хостовый дев-стенд поднимаем **только через `dotnet run`** (или с явным
+`ASPNETCORE_ENVIRONMENT=Development`): порождённые процессы наследуют `Production`, а там
+`Kestrel:Endpoints` уводит стенд на занятый боевым инстансом :80, и `ASPNETCORE_URLS` это не
+чинит. Стенд :5000 раздаёт `frontend/dist` ПОСЛЕДНЕЙ сборки (`wwwroot` в репозитории не
+живёт). Разбор и фоновый запуск —
 [docs/operations/dev-stand-host.md](docs/operations/dev-stand-host.md).
 
 ## Среда исполнения пользователей (local / container)
 
-Изоляция per-**пользователь**: `User.ExecutionEnvironment` = `local` (процессы на машине
-сервера) | `container` (общая docker-песочница `cc-sandbox`); бэкенд всегда НА ХОСТЕ (Windows).
-Все точки запуска процессов идут через `IProcessLauncher` / `ILauncherFactory.ForOwner(ownerId)`
-(драйверы `LocalProcessRunner` / `DockerProcessRunner`); системные one-shot — всегда local.
-Пути: бэкенд работает ТОЛЬКО с хостовыми, `IPathMapper` переводит в контейнерные в момент
-запуска. Домашние папки юзеров — единая точка
-[UserHomeResolver.cs](backend/ClaudeHomeServer/Services/UserHomeResolver.cs).
+Изоляция per-**пользователь**: `User.ExecutionEnvironment` = `local` | `container` (общая
+docker-песочница `cc-sandbox`); бэкенд всегда НА ХОСТЕ. Все запуски идут через
+`ILauncherFactory.ForOwner(ownerId)`, системные one-shot — всегда local; домашние папки —
+[UserHomeResolver.cs](backend/ClaudeHomeServer/Services/UserHomeResolver.cs). Инварианты:
 
-**Инварианты:** смена `ExecutionEnvironment` при существующих чатах запрещена; токен подписки
-доставляется в песочницу per-exec, а не запекается при создании контейнера.
+- Бэкенд работает ТОЛЬКО с хостовыми путями, `IPathMapper` переводит их в контейнерные в
+  момент запуска; смена `ExecutionEnvironment` при существующих чатах запрещена; токен
+  подписки доставляется в песочницу per-exec, а не запекается при создании контейнера.
 
-Local-процессы изолированы по памяти systemd-scope'ом в `ccs-agents.slice`
-(`Execution:Isolation`; реюз узлов MSBuild внутри scope, сторож сирот при старте, прогрев
-свежего worktree — всё в `sandbox.md`). Инварианты этой обвязки:
-
+- Local-процессы изолированы по памяти systemd-scope'ом в `ccs-agents.slice`
+  (`Execution:Isolation`): реюз узлов MSBuild внутри scope, сторож сирот при старте, прогрев
+  свежего worktree — всё в `sandbox.md`.
 - **Основная защита от OOM — жёсткий потолок cgroup на `ccs-agents.slice`**, а не гейт: лимит
   наследуется ВСЕМУ поддереву scope, включая сборки, которые агент запускает внутри хода своим
   Bash (ровно они дали инцидент 21.09). `BuildConcurrencyGate` считает только spec с меткой
@@ -441,10 +436,8 @@ Dark launch: фича коммитится выключенной и включ�
 
 - **ВАЖНО: CI гоняет тесты на Linux** (`ubuntu-latest`), а разработка идёт на Windows — тесты
   обязаны быть платформонезависимыми: пути от `Path.GetTempPath()` + `Path.Combine`, ожидание
-  **события** через `TaskCompletionSource`, а не `Task.Delay`.
-- **Категории тестов.** На итеративную правку — `dotnet test --filter "FullyQualifiedName~<Набор>"`,
-  полный прогон перед коммитом/PR. `Category!=Dns` — тесты с настоящим резолвом имён, на машине
-  с Proxifier они валятся пачкой (среда, не регрессия).
+  **события** через `TaskCompletionSource`, а не `Task.Delay`. На итеративную правку —
+  `dotnet test --filter "FullyQualifiedName~<Набор>"`, полный прогон перед коммитом/PR.
 - **Одна папка — один проект на владельца** (`ProjectManager.EnsureRootFree`, 400 при повторе):
   датасет Dify ключуется по `RootPath`. У разных владельцев общая папка допустима.
 - **Удаление чата уносит и транскрипт claude CLI** во всех профилях. Инвариант: только файл с
@@ -458,15 +451,11 @@ Dark launch: фича коммитится выключенной и включ�
 - **Новое хранилище → сверься с бэкапом**: всё в `data/` попадает в архив по умолчанию, секреты —
   в `BackupPaths.SecretFileNames`, сторы вне `data/` — в `BackupCore.CopyDataTo`, ломающее
   изменение формата = инкремент `BackupSchema.Version`.
-- **HTTP-клиент к опциональной зависимости — через `AddQuietHttpClient`**
-  ([QuietHttpLogger.cs](backend/ClaudeHomeServer.Core/Services/Http/QuietHttpLogger.cs)): дефолтный
-  логгер печатает каждый провал как Error со стектрейсом и забивает консоль.
-- Path traversal защита — примитив спины `SafePath.Join`
-  ([SafePath.cs](backend/ClaudeHomeServer.Core/Services/SafePath.cs)); из вертикали зови его
-  напрямую: обращение через форвардеры `FileService` — ссылка на чужую вертикаль, сторож
-  границ её ловит.
-- Разбор ```-заборов — один примитив `MarkdownFence` в Core; новый построчный разбор markdown
-  обязан звать его.
+- **Единственные точки, которые нельзя дублировать своей реализацией:** `SafePath.Join` —
+  защита от path traversal (из вертикали звать Core-примитив напрямую, обращение через
+  форвардеры `FileService` сторож границ ловит как ссылку на чужую вертикаль); `MarkdownFence` —
+  разбор ```-заборов; `AddQuietHttpClient` — HTTP-клиент к опциональной зависимости (дефолтный
+  логгер печатает каждый провал как Error со стектрейсом и забивает консоль).
 - Хранилище проектов — `data/projects.json`; метаданные сессий — `data/sessions.json`, история
   чата — `data/sessions/{claudeSessionId}/history.json`, resume через `--resume`.
 - Комментарии в коде по-русски.

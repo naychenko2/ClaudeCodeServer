@@ -21,7 +21,7 @@
 - **Изоляция local-процессов по памяти** (секция `Execution:Isolation`, по умолчанию выключена) —
   после инцидента 2026-09-19 (systemd-oomd дважды убил весь `ccs.service`: сборки агентов жили
   в cgroup прода). На не-Windows `LocalProcessRunner` запускает процесс как
-  `systemd-run --user --scope --quiet --collect --slice=<Slice> --property=MemoryHigh=… --property=MemoryMax=… -- <exe> <args…>`:
+  `systemd-run --user --scope --quiet --collect --slice=<Slice> --property=MemoryMax=… -- <exe> <args…>`:
   scope оказывается вне cgroup `ccs.service` — по умолчанию user-юниты живут в `app.slice`,
   а `ccs.slice`, которому подчинён `ccs-agents.slice`, его сиблинг под `user@<uid>.service`,
   — и при нехватке памяти умирает scope агента, а не прод. PID тот же, поэтому `Kill` и
@@ -39,6 +39,20 @@
   — процесс запускается напрямую, один warning с причиной.
   Оценка длины командной строки учитывает обёртку.
   `DockerProcessRunner` не затронут.
+
+  **`MemoryHigh` в этой команде не ставим — ни per-scope, ни на сам slice.** Ключ
+  `Execution:Isolation:MemoryHigh` существует (пустой = свойство не добавляется), но
+  заполнять его под `systemd-oomd` нельзя: дроссель гонит сборку в reclaim и swap, стойло в
+  reclaim считается PSI-давлением, а PSI суммируется вверх по иерархии до
+  `user@<uid>.service`, где oomd с дефолтом Ubuntu убивает при 50 % — и жертвой выбирается
+  самый «давящий» потомок, то есть наш же scope. Разбор 2026-09-22: после установки
+  `MemoryHigh` 21.09 (12G per-scope, 18G на slice) oomd убил ещё четыре scope за вечер,
+  счётчик `memory.events high` на slice за три дня — 1,9 млн, 7 из 9 убийств триггерились
+  давлением на сессию, а не на slice. `MemoryHigh` — лимит для сред без oomd. Ограничивает
+  память **`MemoryMax`**: ядро убивает самый большой процесс внутри scope (обычно
+  `testhost` или узел MSBuild), сборка падает с понятной ошибкой, ход и соседние scope живут.
+  Значения машинно-специфичны — правило расчёта в
+  [deploy/systemd/README.md](../../deploy/systemd/README.md).
 
   **Реюз узлов сборки внутри хода и гашение scope** (`Execution:Isolation:BuildNodeReuse`,
   дефолт true). Scope именуется `--unit=ccs-run-<pid бэкенда в hex>-<guid>.scope`
@@ -95,7 +109,16 @@
   соберёт параллельно с прогревом.
 - **Потолок одновременных тяжёлых запусков** (`BuildConcurrencyGate`,
   `Execution:Isolation:MaxConcurrentBuilds`, дефолт 2; явный `0` — без ограничения, откат
-  без пересборки). Инцидент 2026-09-21: `systemd-oomd` третий раз за три дня убил прод —
+  без пересборки). **Это дополнение к лимитам cgroup, а не замена им.** Основная защита от
+  OOM — жёсткий потолок на `ccs-agents.slice` (`MemoryMax` + `MemorySwapMax=0` +
+  `ManagedOOMMemoryPressure=kill`, плюс `ManagedOOMPreference=omit` на самом `ccs.service`):
+  лимит cgroup наследуется ВСЕМУ поддереву scope, включая сборки, которые агент запускает
+  внутри хода своим Bash, — а это ровно те, что дали инцидент 21 сентября (четыре scope по
+  4–5 GB, внутри `testhost.dll`, прогревов среди них не было). Гейт же считает только
+  запуски с явной меткой `ProcessSpec.Heavy`, сегодня это один прогрев worktree, и про
+  Bash агента не знает по конструкции. Путать приоритеты дорого: снять лимиты, понадеявшись
+  на гейт, значит остаться без защиты в том самом сценарии, который её потребовал.
+  Инцидент 2026-09-21: `systemd-oomd` третий раз за три дня убил прод —
   пределы памяти заданы **per-scope**, а число одновременных scope не ограничивало ничто, и
   `ccs-agents.slice` держал 18,1 GB в четырёх параллельных прогонах. Счётчик **единственный
   на процесс** (`Instance`, ставится из `Program.cs` через `Configure`): второй семафор

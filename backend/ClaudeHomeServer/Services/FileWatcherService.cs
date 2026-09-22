@@ -1,6 +1,7 @@
 ﻿using System.Collections.Concurrent;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Services.CodeGraph;
+using ClaudeHomeServer.Services.Files;
 using ClaudeHomeServer.Services.Knowledge;
 using Microsoft.AspNetCore.SignalR;
 
@@ -12,6 +13,12 @@ namespace ClaudeHomeServer.Services;
 // watcher'а после сбоя, либо reconnect после обрыва — Watch вернул true):
 // paths при нём пуст, клиент перезагружает всё раскрытое.
 // События тяжёлых/нерелевантных папок (.git, node_modules, bin, obj, …) отфильтрованы.
+//
+// Наблюдение идёт через Core-примитив RecursiveDirectoryWatcher: на Linux он подписывается
+// ровно на неслужебные каталоги, а не на всё дерево (FileSystemWatcher с IncludeSubdirectories
+// ставил слежку на КАЖДЫЙ каталог — 16 390 на этом репозитории, разбор OOM 2026-09-22).
+// Наблюдатели здесь ДОЛГОЖИВУЩИЕ — по одному на открытый проект и отдельное дерево, — поэтому
+// именно они и составляли постоянный расход бюджета слежек.
 //
 // Второй вид watcher'ов — по произвольному пути (WatchPath/UnwatchPath, ключ "worktree:{sessionId}"):
 // отдельное дерево чата лежит вне RootPath проекта, поэтому проектный watcher его не видит,
@@ -27,7 +34,10 @@ public class FileWatcherService : IDisposable
     // (Error → RecreateWatcher, часть событий теряется). Ставится ВСЕМ watcher'ам, не только
     // отдельным деревьям: массовые правки бывают и в RootPath проекта, а пересоздание
     // проектного watcher'а с дефолтным буфером давало цикл «переполнился → такой же → снова».
+    // Касается только не-Linux: на Linux буфер чтения держит сам примитив.
     private const int PathBufferBytes = 64 * 1024;
+    // Сколько частичных отказов наблюдения помнить для диагностики (тесты, разбор инцидентов).
+    private const int MaxRememberedWarnings = 20;
     // Автоснятие path-watcher'а по бездействию: к графу worktree давно не обращались —
     // гасим handle, при следующем запросе он поднимется лениво снова.
     private const int PathIdleMinutes = 30;
@@ -38,7 +48,7 @@ public class FileWatcherService : IDisposable
 
     private class Entry
     {
-        public FileSystemWatcher? Watcher;
+        public RecursiveDirectoryWatcher? Watcher;
         public Timer? Poll;                         // polling-режим (ФС без inotify: 9p/virtiofs bind-mount)
         public Dictionary<string, long>? Snapshot;  // rel -> LastWriteTicks (-1 = директория), для polling-диффа
         public string Root = "";
@@ -73,6 +83,12 @@ public class FileWatcherService : IDisposable
     private int _recreateCount;
     // Для тестов: сколько раз пересоздавался watcher (серия ошибок не должна давать шторм).
     internal int RecreateCount { get { lock (_lock) return _recreateCount; } }
+    // Частичные отказы наблюдения (потолок слежек, отказ ядра на отдельном каталоге).
+    // Хранятся с потолком: это диагностика, а не журнал.
+    private readonly List<string> _warnings = [];
+    // Для тестов: по ним видно, что сбой слежки реально случился, — без этого регрессия
+    // «отказ на каталоге не пересоздаёт наблюдателя» ничего не проверяла бы.
+    internal IReadOnlyList<string> Warnings { get { lock (_lock) return _warnings.ToArray(); } }
 
     public FileWatcherService(ProjectManager projects, IHubContext<SessionHub> hub,
         ProjectKnowledgeSyncService knowledgeSync, CodeGraphService codeGraphs, IConfiguration config)
@@ -115,20 +131,23 @@ public class FileWatcherService : IDisposable
     // Клиент перестал смотреть проект
     public void Unwatch(string projectId, string connectionId)
     {
+        RecursiveDirectoryWatcher? closing = null;
         lock (_lock)
         {
             if (_byConnection.TryGetValue(connectionId, out var set)) set.Remove(projectId);
             if (_entries.TryGetValue(projectId, out var entry))
             {
                 entry.Connections.Remove(connectionId);
-                if (entry.Connections.Count == 0) DisposeEntry(projectId, entry);
+                if (entry.Connections.Count == 0) closing = DisposeEntry(projectId, entry);
             }
         }
+        Close(closing);
     }
 
     // Клиент отключился — снимаем все его watch'и
     public void RemoveConnection(string connectionId)
     {
+        List<RecursiveDirectoryWatcher>? closing = null;
         lock (_lock)
         {
             if (!_byConnection.TryRemove(connectionId, out var projectIds)) return;
@@ -137,10 +156,12 @@ public class FileWatcherService : IDisposable
                 if (_entries.TryGetValue(pid, out var entry))
                 {
                     entry.Connections.Remove(connectionId);
-                    if (entry.Connections.Count == 0) DisposeEntry(pid, entry);
+                    if (entry.Connections.Count == 0 && DisposeEntry(pid, entry) is { } w)
+                        (closing ??= []).Add(w);
                 }
             }
         }
+        if (closing is not null) foreach (var w in closing) Close(w);
     }
 
     // Watcher произвольного пути (отдельное дерево чата): поднимается лениво при первом
@@ -155,6 +176,7 @@ public class FileWatcherService : IDisposable
         try { full = Path.GetFullPath(rootPath); } catch { return; }
         if (!Directory.Exists(full)) return;
 
+        RecursiveDirectoryWatcher? closing = null;
         lock (_lock)
         {
             if (_entries.TryGetValue(key, out var existing))
@@ -172,7 +194,7 @@ public class FileWatcherService : IDisposable
                     return;
                 }
                 // Тот же ключ на другом пути (чат пересоздал дерево) — перевешиваем watcher.
-                DisposeEntry(key, existing);
+                closing = DisposeEntry(key, existing);
             }
 
             var entry = new Entry { Root = full, LastTouchUtc = DateTime.UtcNow };
@@ -181,84 +203,101 @@ public class FileWatcherService : IDisposable
             else StartWatcher(key, entry);
             _idleSweep ??= new Timer(_ => SweepIdlePaths(), null, IdleSweepMs, IdleSweepMs);
         }
+        Close(closing);
     }
 
     // Снять watcher произвольного пути (удаление чата, выключение отдельного дерева).
     public void UnwatchPath(string key)
     {
+        RecursiveDirectoryWatcher? closing = null;
         lock (_lock)
         {
-            if (_entries.TryGetValue(key, out var entry)) DisposeEntry(key, entry);
+            if (_entries.TryGetValue(key, out var entry)) closing = DisposeEntry(key, entry);
         }
+        Close(closing);
     }
 
     // Гасим path-watcher'ы, к графу которых давно не обращались: иначе handle'ы копятся
     // от забытых чатов. Следующий запрос к графу поднимет watcher заново.
     private void SweepIdlePaths()
     {
+        List<RecursiveDirectoryWatcher>? closing = null;
         lock (_lock)
         {
             var cutoff = DateTime.UtcNow.AddMinutes(-PathIdleMinutes);
             foreach (var (key, entry) in _entries.ToArray())
-                if (entry.ProjectId is null && entry.LastTouchUtc < cutoff)
-                    DisposeEntry(key, entry);
+                if (entry.ProjectId is null && entry.LastTouchUtc < cutoff
+                    && DisposeEntry(key, entry) is { } w)
+                    (closing ??= []).Add(w);
         }
+        if (closing is not null) foreach (var w in closing) Close(w);
     }
 
-    // Вызывается под _lock. entry.Watcher присваивается ДО включения: на Linux ошибки старта
-    // (не удалось поставить слежку) приходят в Error синхронно, изнутри EnableRaisingEvents, —
-    // обработчик должен узнать в отправителе текущий watcher.
+    // Вызывается под _lock. entry.Watcher присваивается ДО старта: отказ слежки может прийти
+    // синхронно изнутри Start, и обработчик должен узнать в источнике текущий watcher.
     private void StartWatcher(string key, Entry entry)
     {
-        FileSystemWatcher? w = null;
+        RecursiveDirectoryWatcher? w = null;
         try
         {
             // Конструктор — тоже под try: пересоздание идёт из таймера, и папка, удалённая за
             // время паузы (ArgumentException), уронила бы процесс необработанным исключением.
-            w = new FileSystemWatcher(entry.Root)
-            {
-                IncludeSubdirectories = true,
-                NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName
-                             | NotifyFilters.LastWrite | NotifyFilters.Size,
-                InternalBufferSize = PathBufferBytes,
-            };
-            void OnChange(object _, FileSystemEventArgs e) => OnFsEvent(key, entry, e.FullPath);
-            w.Created += OnChange;
-            w.Changed += OnChange;
-            w.Deleted += OnChange;
-            w.Renamed += (_, e) => { OnFsEvent(key, entry, e.FullPath); OnFsEvent(key, entry, e.OldFullPath); };
-            w.Error += (sender, _) => OnWatcherError(key, entry, sender);
+            // Служебные каталоги (TreeExcludes) не ПОДПИСЫВАЮТСЯ вовсе — тем же списком, по
+            // которому потом фильтруются события: второй список дал бы «подписались, но глушим».
+            w = new RecursiveDirectoryWatcher(entry.Root, TreeExcludes.Names,
+                (path, _) => OnFsEvent(key, entry, path),
+                onWarning: message => OnWatchWarning(key, message),
+                includeDirectories: true, // дерево файлов в UI показывает и каталоги
+                bufferBytes: PathBufferBytes,
+                onFailure: failure => OnWatchFailure(key, entry, w, failure));
             entry.Watcher = w;
-            w.EnableRaisingEvents = true;
+            w.Start();
+            if (w.IsWatching) return;
+            // Корня нет (папку удалили за время паузы перед пересозданием): наблюдение не
+            // встало вовсе — снимаем пустой наблюдатель и повторяем по лестнице пауз.
+            // Гасить его под _lock безопасно: без поднятого наблюдения ждать нечего.
+            entry.Watcher = null;
+            w.Dispose();
+            ScheduleRecreate(key, entry);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
         {
             // Папки нет, нет прав на неё, исчерпан лимит inotify-экземпляров (EMFILE — IOException) —
-            // без watcher'а, с повтором по той же лестнице пауз, что и после Error.
+            // без watcher'а, с повтором по той же лестнице пауз, что и после сбоя.
             if (w is not null && ReferenceEquals(entry.Watcher, w)) entry.Watcher = null;
             try { w?.Dispose(); } catch { }
             ScheduleRecreate(key, entry);
         }
     }
 
-    // Error watcher'а (переполнение очереди, не удалось поставить слежку на новую папку) —
-    // только ЗАКАЗ пересоздания, не само пересоздание. Инцидент 2026-09-19: пересоздание прямо
-    // из колбэка при исчерпанном бюджете слежек (ENOSPC) давало рекурсию — новый watcher падал
-    // синхронно внутри своего же старта и заказывал следующий, и так до исчерпания лимита
-    // inotify-экземпляров (8076 штук). Каждый watcher, у которого не встала корневая слежка,
-    // держит inotify-fd навсегда: поток .NET висит в read(), будить его нечем, Dispose не
-    // помогает. Поэтому — пауза с удвоением на серию сбоев и не больше одного заказа на entry.
-    // Сам колбэк в _lock не лезет: .NET зовёт Error из-под своего внутреннего замка слежек,
-    // а Dispose под нашим _lock ждёт тот же замок — была бы взаимоблокировка.
-    private void OnWatcherError(string key, Entry entry, object? sender) =>
+    // Частичный отказ наблюдения (потолок слежек, отказ ядра на отдельном каталоге): само
+    // наблюдение живёт, пересоздавать его нельзя — ровно это дало рекурсию 2026-09-19.
+    private void OnWatchWarning(string key, string message)
+    {
+        Console.Error.WriteLine($"[file-watcher] {key}: {message}");
+        lock (_lock)
+            if (_warnings.Count < MaxRememberedWarnings) _warnings.Add(message);
+    }
+
+    // Сбой наблюдения — только ЗАКАЗ пересоздания, не само пересоздание. Инцидент 2026-09-19:
+    // пересоздание прямо из колбэка при исчерпанном бюджете слежек (ENOSPC) давало рекурсию —
+    // новый watcher падал синхронно внутри своего же старта и заказывал следующий, и так до
+    // исчерпания лимита inotify-экземпляров (8076 штук). Поэтому — пауза с удвоением на серию
+    // сбоев и не больше одного заказа на entry.
+    // Сам колбэк в _lock не лезет и потому уходит в пул: он зовётся с потока чтения событий,
+    // а Dispose наблюдателя (под нашим _lock) ждёт выхода этого потока — была бы взаимоблокировка.
+    private void OnWatchFailure(string key, Entry entry, object? source, DirectoryWatchFailure failure) =>
         ThreadPool.QueueUserWorkItem(_ =>
         {
             lock (_lock)
             {
-                // Ошибка снятого/заменённого watcher'а (досылка при Dispose) — не повод пересоздавать живой
-                if (!ReferenceEquals(sender, entry.Watcher)) return;
-                ScheduleRecreate(key, entry);
+                // Сбой снятого/заменённого наблюдателя (досылка при гашении) — живого не трогаем
+                if (!ReferenceEquals(source, entry.Watcher)) return;
+                // Потеря событий (переполнение очереди) лечится пересинхронизацией, а не
+                // пересозданием: наблюдатель жив, и новый потерял бы ровно столько же.
+                if (failure == DirectoryWatchFailure.Stopped) ScheduleRecreate(key, entry);
             }
+            if (failure == DirectoryWatchFailure.EventsLost) SendFullResync(entry);
         });
 
     // Вызывается под _lock.
@@ -423,6 +462,7 @@ public class FileWatcherService : IDisposable
 
     private void RecreateWatcher(string key, Entry entry)
     {
+        RecursiveDirectoryWatcher? closing;
         lock (_lock)
         {
             entry.Recreate?.Dispose();
@@ -430,20 +470,32 @@ public class FileWatcherService : IDisposable
             if (!IsLive(key, entry)) return; // entry снят, пока ждали паузу
             entry.LastRecreateUtc = DateTime.UtcNow;
             _recreateCount++;
-            try { entry.Watcher?.Dispose(); } catch { }
+            closing = entry.Watcher;
             entry.Watcher = null;
-            StartWatcher(key, entry);
+        }
+        // Гашение — ВНЕ _lock: Dispose наблюдателя ждёт выхода потока чтения, а тот на событии
+        // заходит в _lock (OnFsEvent). Под замком это дало бы взаимоблокировку на всё время
+        // ожидания и брошенные дескрипторы по его истечении.
+        Close(closing);
+        lock (_lock)
+        {
+            if (!IsLive(key, entry)) return; // entry сняли, пока гасили прежний наблюдатель
+            if (entry.Watcher is null && entry.Poll is null) StartWatcher(key, entry);
         }
         // За время сбоя watcher'а события ФС потеряны — списку файлов в UI нечем
-        // компенсироваться. Клиенту уходит сигнал полной пересинхронизации (пути неизвестны),
-        // синку знаний — полный проход без hints: перенос вне файлового API задетектится
-        // как delete+create вместо миграции, это приемлемая цена редкого сбоя.
-        if (entry.ProjectId is string projectId)
-        {
-            _ = _hub.Clients.Group(Composition.SessionHubBroadcaster.ProjectGroup(projectId))
-                .SendAsync("filesChanged", new { projectId, paths = Array.Empty<string>(), full = true });
-            _knowledgeSync.QueueSync(entry.Root);
-        }
+        // компенсироваться.
+        SendFullResync(entry);
+    }
+
+    // Полная пересинхронизация: клиенту — сигнал без путей (какие потеряны, неизвестно),
+    // синку знаний — полный проход без hints: перенос вне файлового API задетектится
+    // как delete+create вместо миграции, это приемлемая цена редкого сбоя.
+    private void SendFullResync(Entry entry)
+    {
+        if (entry.ProjectId is not string projectId) return;
+        _ = _hub.Clients.Group(Composition.SessionHubBroadcaster.ProjectGroup(projectId))
+            .SendAsync("filesChanged", new { projectId, paths = Array.Empty<string>(), full = true });
+        _knowledgeSync.QueueSync(entry.Root);
     }
 
     // internal для тестов (InternalsVisibleTo): пересоздание watcher'а по ключу —
@@ -464,38 +516,57 @@ public class FileWatcherService : IDisposable
     // состояние «запись жива, наблюдения нет», которое штатные пути сейчас не порождают.
     internal void DropWatcherKeepEntry(string key)
     {
+        RecursiveDirectoryWatcher? closing = null;
         lock (_lock)
         {
             if (!_entries.TryGetValue(key, out var e)) return;
-            try { e.Watcher?.Dispose(); } catch { }
+            closing = e.Watcher;
             e.Watcher = null;
             e.Recreate?.Dispose();
             e.Recreate = null;
         }
+        Close(closing);
     }
 
-    private void DisposeEntry(string key, Entry entry)
+    // Снимает запись и ОТДАЁТ её наблюдатель вызывающему: гасить его обязан тот, кто уже
+    // вышел из _lock (см. RecreateWatcher — Dispose ждёт поток чтения, а тот берёт _lock).
+    // Вызывается под _lock.
+    private RecursiveDirectoryWatcher? DisposeEntry(string key, Entry entry)
     {
-        try { entry.Watcher?.Dispose(); } catch { }
+        var watcher = entry.Watcher;
         entry.Watcher = null;
         entry.Poll?.Dispose();
         entry.Debounce?.Dispose();
         entry.Recreate?.Dispose();
         entry.Recreate = null;
         _entries.TryRemove(key, out _);
+        return watcher;
+    }
+
+    // Гашение наблюдателя вне замка.
+    private static void Close(RecursiveDirectoryWatcher? watcher)
+    {
+        if (watcher is null) return;
+        try { watcher.Dispose(); } catch { }
     }
 
     public void Dispose()
     {
         _idleSweep?.Dispose();
         _idleSweep = null;
-        foreach (var e in _entries.Values)
+        var closing = new List<RecursiveDirectoryWatcher>();
+        lock (_lock)
         {
-            try { e.Watcher?.Dispose(); } catch { }
-            e.Poll?.Dispose();
-            e.Debounce?.Dispose();
-            e.Recreate?.Dispose();
+            foreach (var e in _entries.Values)
+            {
+                if (e.Watcher is { } w) closing.Add(w);
+                e.Watcher = null;
+                e.Poll?.Dispose();
+                e.Debounce?.Dispose();
+                e.Recreate?.Dispose();
+            }
+            _entries.Clear();
         }
-        _entries.Clear();
+        foreach (var w in closing) Close(w);
     }
 }

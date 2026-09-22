@@ -7,6 +7,19 @@ namespace ClaudeHomeServer.Services.Files;
 public enum DirectoryWatchKind { Created, Changed, Deleted }
 
 /// <summary>
+/// Сбой наблюдения. Различать их обязательно: <see cref="EventsLost"/> лечится ТОЛЬКО
+/// пересинхронизацией у потребителя (наблюдатель жив, пересоздание тут — рекурсия
+/// инцидента 2026-09-19), <see cref="Stopped"/> — пересозданием наблюдателя.
+/// </summary>
+public enum DirectoryWatchFailure
+{
+    /// <summary>Часть событий потеряна (переполнение очереди), наблюдение продолжается.</summary>
+    EventsLost,
+    /// <summary>Наблюдения больше нет: дескриптор непригоден, события не придут вовсе.</summary>
+    Stopped,
+}
+
+/// <summary>
 /// Рекурсивное наблюдение за деревом каталогов БЕЗ подписки на служебные каталоги.
 ///
 /// Зачем свой примитив, а не <see cref="FileSystemWatcher"/> с IncludeSubdirectories:
@@ -37,7 +50,10 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
     private readonly HashSet<string> _excludeDirs;
     private readonly Action<string, DirectoryWatchKind> _onEvent;
     private readonly Action<string>? _onWarning;
+    private readonly Action<DirectoryWatchFailure>? _onFailure;
     private readonly int _maxWatches;
+    private readonly bool _includeDirectories;
+    private readonly int _bufferBytes;
     private IWatchBackend? _backend;
 
     /// <param name="root">Корень дерева.</param>
@@ -45,18 +61,28 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
     /// (на любой глубине). Тот же список, по которому потребитель фильтрует события:
     /// второй список стал бы второй точкой правды и дал бы «подписались, но глушим».</param>
     /// <param name="onEvent">Колбэк события по файлу. Зовётся с потока чтения — работа
-    /// в нём должна быть короткой.</param>
+    /// в нём должна быть короткой, а замки, под которыми гасится сам наблюдатель, брать
+    /// в нём нельзя: <see cref="Dispose"/> ждёт выхода этого потока.</param>
     /// <param name="maxWatches">Потолок слежек на наблюдатель (Linux).</param>
     /// <param name="onWarning">Куда сообщать о частичных отказах (по одному разу на причину).</param>
+    /// <param name="includeDirectories">Отдавать ли события самих каталогов. Нужно тем, кто
+    /// показывает дерево файлов (FileWatcherService); ватчеру хода каталоги не интересны.</param>
+    /// <param name="bufferBytes">Размер буфера событий FileSystemWatcher (не-Linux);
+    /// 0 — дефолт ОС. Дефолтные 8 КБ переполняются на git checkout / npm install.</param>
+    /// <param name="onFailure">Сбой наблюдения: потеря событий либо смерть наблюдателя.</param>
     public RecursiveDirectoryWatcher(string root, IEnumerable<string> excludeDirs,
         Action<string, DirectoryWatchKind> onEvent, int maxWatches = DefaultMaxWatches,
-        Action<string>? onWarning = null)
+        Action<string>? onWarning = null, bool includeDirectories = false,
+        int bufferBytes = 0, Action<DirectoryWatchFailure>? onFailure = null)
     {
         _root = root;
         _excludeDirs = new HashSet<string>(excludeDirs, StringComparer.OrdinalIgnoreCase);
         _onEvent = onEvent;
         _maxWatches = Math.Max(1, maxWatches);
         _onWarning = onWarning;
+        _includeDirectories = includeDirectories;
+        _bufferBytes = bufferBytes;
+        _onFailure = onFailure;
     }
 
     /// <summary>Поднять наблюдение. Повторный вызов снимает прежнее. Отказ на КОРНЕ —
@@ -66,8 +92,8 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
         Stop();
         if (!Directory.Exists(_root)) return;
         _backend = OperatingSystem.IsLinux()
-            ? new InotifyBackend(_root, _excludeDirs, Emit, _maxWatches, Warn)
-            : new FileSystemWatcherBackend(_root, Emit);
+            ? new InotifyBackend(_root, _excludeDirs, Emit, _maxWatches, Warn, _includeDirectories, Fail)
+            : new FileSystemWatcherBackend(_root, Emit, _includeDirectories, _bufferBytes, Fail);
     }
 
     public void Stop()
@@ -97,6 +123,12 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
         catch { /* диагностика не должна ронять поток чтения */ }
     }
 
+    private void Fail(DirectoryWatchFailure failure)
+    {
+        try { _onFailure?.Invoke(failure); }
+        catch { /* реакция потребителя не должна ронять поток чтения */ }
+    }
+
     private interface IWatchBackend : IDisposable
     {
         int WatchCount { get; }
@@ -107,16 +139,32 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
     {
         private readonly FileSystemWatcher _watcher;
 
-        public FileSystemWatcherBackend(string root, Action<string, DirectoryWatchKind> emit)
+        public FileSystemWatcherBackend(string root, Action<string, DirectoryWatchKind> emit,
+            bool includeDirectories, int bufferBytes, Action<DirectoryWatchFailure> fail)
         {
+            var filter = NotifyFilters.LastWrite | NotifyFilters.FileName;
+            // Имена каталогов и размер — только тому, кто показывает дерево: ватчеру хода
+            // события каталогов не нужны, а Size добавляет ему лишние Changed на записях файлов.
+            if (includeDirectories) filter |= NotifyFilters.DirectoryName | NotifyFilters.Size;
             _watcher = new FileSystemWatcher(root)
             {
                 IncludeSubdirectories = true,
-                NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName,
+                NotifyFilter = filter,
             };
+            if (bufferBytes > 0) _watcher.InternalBufferSize = bufferBytes;
             _watcher.Changed += (_, e) => emit(e.FullPath, DirectoryWatchKind.Changed);
             _watcher.Created += (_, e) => emit(e.FullPath, DirectoryWatchKind.Created);
             _watcher.Deleted += (_, e) => emit(e.FullPath, DirectoryWatchKind.Deleted);
+            // Переименование — пара Deleted+Created, как обещает контракт вида события:
+            // без неё старое имя оставалось бы в дереве файлов до ручного обновления.
+            _watcher.Renamed += (_, e) =>
+            {
+                emit(e.OldFullPath, DirectoryWatchKind.Deleted);
+                emit(e.FullPath, DirectoryWatchKind.Created);
+            };
+            // Переполнение внутреннего буфера и отказ слежки на новой папке .NET отдаёт
+            // одинаково — как Error; отличить их нечем, поэтому лечим пересозданием.
+            _watcher.Error += (_, _) => fail(DirectoryWatchFailure.Stopped);
             // Включение — отдельным шагом: бросок из EnableRaisingEvents (лимит ОС) иначе
             // оставил бы созданный наблюдатель неосвобождённым.
             try { _watcher.EnableRaisingEvents = true; }
@@ -161,6 +209,8 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
         private readonly HashSet<string> _excludeDirs;
         private readonly Action<string, DirectoryWatchKind> _emit;
         private readonly Action<string> _warn;
+        private readonly Action<DirectoryWatchFailure> _fail;
+        private readonly bool _includeDirectories;
         private readonly int _maxWatches;
         private readonly Dictionary<int, string> _paths = new();
         private readonly Lock _lock = new();
@@ -171,11 +221,14 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
         private volatile bool _stopping;
 
         public InotifyBackend(string root, HashSet<string> excludeDirs,
-            Action<string, DirectoryWatchKind> emit, int maxWatches, Action<string> warn)
+            Action<string, DirectoryWatchKind> emit, int maxWatches, Action<string> warn,
+            bool includeDirectories, Action<DirectoryWatchFailure> fail)
         {
             _excludeDirs = excludeDirs;
             _emit = emit;
             _warn = warn;
+            _fail = fail;
+            _includeDirectories = includeDirectories;
             _maxWatches = maxWatches;
 
             _fd = inotify_init1(O_NONBLOCK | O_CLOEXEC);
@@ -304,6 +357,10 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
                     {
                         case WatchAdd.Added:
                             stack.Push(sub);
+                            // Каталог появился уже после старта — потребителю дерева он нужен
+                            // так же, как файлы внутри него.
+                            if (emitExistingFiles && _includeDirectories)
+                                _emit(sub, DirectoryWatchKind.Created);
                             break;
                         case WatchAdd.Alias:
                             WarnOnce("alias-watch",
@@ -350,7 +407,10 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
                 if (ready < 0)
                 {
                     if (Marshal.GetLastPInvokeError() == EINTR) continue;
-                    return; // дескриптор непригоден — наблюдения больше нет
+                    // Дескриптор непригоден — наблюдения больше нет. Молча выйти нельзя:
+                    // потребитель считал бы, что изменений просто не происходит.
+                    Die("poll");
+                    return;
                 }
                 if ((fds[1].Revents & POLLIN) != 0) return; // Dispose
                 if ((fds[0].Revents & POLLIN) == 0) continue;
@@ -359,10 +419,20 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
                 if (read <= 0)
                 {
                     if (read < 0 && Marshal.GetLastPInvokeError() is EAGAIN or EINTR) continue;
+                    Die("read");
                     return;
                 }
                 ParseEvents(buffer, read);
             }
+        }
+
+        // Смерть цикла чтения: сообщается ОДИН раз и только если это не наш же Dispose
+        // (там поток выходит штатно по eventfd).
+        private void Die(string call)
+        {
+            if (_stopping) return;
+            WarnOnce("dead", $"наблюдение за деревом прервано ({call}) — события больше не приходят");
+            _fail(DirectoryWatchFailure.Stopped);
         }
 
         private nint ReadEvents(byte[] buffer)
@@ -399,6 +469,9 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
             if ((mask & IN_Q_OVERFLOW) != 0)
             {
                 WarnOnce("overflow", "очередь inotify переполнена — часть изменений не показана");
+                // Наблюдатель жив: лечится пересинхронизацией у потребителя, а не
+                // пересозданием (пересоздание тут — ровно рекурсия инцидента 19.09).
+                _fail(DirectoryWatchFailure.EventsLost);
                 return;
             }
 
@@ -422,6 +495,9 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
                 if ((mask & (IN_CREATE | IN_MOVED_TO)) != 0)
                 {
                     if (IsSymlink(subdir)) return; // по ссылкам не ходим — как и при обходе
+                    // Появление каталога отдаётся ДО подписки и независимо от её исхода:
+                    // в дереве файлов он уже есть, даже если слежку на него завести не удалось.
+                    if (_includeDirectories) _emit(subdir, DirectoryWatchKind.Created);
                     switch (TryAddWatch(subdir))
                     {
                         case WatchAdd.Added:
@@ -436,8 +512,14 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
                             break;
                     }
                 }
-                else if ((mask & (IN_DELETE | IN_MOVED_FROM)) != 0) RemoveSubtree(subdir);
-                return; // сами каталоги потребителю не интересны
+                else if ((mask & (IN_DELETE | IN_MOVED_FROM)) != 0)
+                {
+                    RemoveSubtree(subdir);
+                    if (_includeDirectories) _emit(subdir, DirectoryWatchKind.Deleted);
+                }
+                // Дальше — только события файлов: сам каталог уже отдан, если потребителю
+                // нужны каталоги, и не нужен вовсе, если нет.
+                return;
             }
 
             var kind =

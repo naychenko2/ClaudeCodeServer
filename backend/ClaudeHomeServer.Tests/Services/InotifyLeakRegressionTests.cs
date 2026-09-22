@@ -27,6 +27,12 @@ namespace ClaudeHomeServer.Tests.Services;
 /// (chmod 000) root обходит, а EMFILE при урезанном лимите fd бросается из старта
 /// исключением и Error не порождает вовсе. Шторм старого кода обрывается потолком
 /// дескрипторов процесса.
+///
+/// После перевода наблюдения на RecursiveDirectoryWatcher (2026-09-22) отказ слежки на
+/// ОТДЕЛЬНОМ каталоге вообще не поднимает пересоздания: он частичный (каталог пропущен,
+/// предупреждение потребителю), а наблюдатель живёт дальше. Пересоздание осталось только
+/// на смерть наблюдения целиком. Поэтому здесь и проверяется «сбой был, пересоздания не
+/// было» — исходную рекурсию это закрывает по конструкции, а не по лестнице пауз.
 /// </summary>
 [Collection(TestCollections.Inotify)]
 public class InotifyLeakRegressionTests : IDisposable
@@ -121,6 +127,7 @@ public class InotifyLeakRegressionTests : IDisposable
         // таймаутом: старый код, помимо шторма, ловил взаимоблокировку (пересоздание под _lock
         // из Error, который .NET зовёт из-под своего замка слежек), и тест вис бы навсегда.
         var hung = false;
+        var watchingAfterBurst = false;
         await InotifyProbe.WithFdLimit(InotifyProbe.HighestFd() + 300, async () =>
         {
             var scenario = Task.Run(async () =>
@@ -140,6 +147,7 @@ public class InotifyLeakRegressionTests : IDisposable
                     peak = Math.Max(peak, InotifyProbe.CountInotifyFds());
                     await Task.Delay(20);
                 }
+                watchingAfterBurst = svc.Inspect("worktree:leak")?.Watching == true;
                 svc.UnwatchPath("worktree:leak");
             });
             // Лимит снимается в любом случае — и при зависании, иначе посыпались бы соседние тесты
@@ -147,6 +155,8 @@ public class InotifyLeakRegressionTests : IDisposable
             if (!hung) await scenario;
         });
         hung.Should().BeFalse("наблюдение со сбойной слежкой не должно зависать (взаимоблокировка пересоздания)");
+        watchingAfterBurst.Should().BeTrue(
+            "сбойная слежка на одном каталоге не отменяет наблюдение за остальным деревом");
 
         var after = await InotifyProbe.WaitInotifyAtMost(baseline, TimeSpan.FromSeconds(10));
 
@@ -154,12 +164,11 @@ public class InotifyLeakRegressionTests : IDisposable
             "живой наблюдатель один (плюс закрывающийся предыдущий) — экземпляров inotify не больше");
         after.Should().BeLessThanOrEqualTo(baseline,
             "после снятия наблюдателя ни одного inotify-экземпляра не остаётся");
-        svc.RecreateCount.Should().BeGreaterThan(1,
-            "сценарий обязан реально гонять Error → пересоздание, иначе тест ничего не проверяет");
-        // Теория — порядка десятка за 2 с; граница с запасом на медленный раннер: смысл
-        // проверки — «нет шторма на сотни и тысячи», а не точное число.
-        svc.RecreateCount.Should().BeLessThan(100,
-            "пересоздание идёт по лестнице пауз, а не штормом из колбэка");
+        svc.Warnings.Should().Contain(w => w.Contains("не удалось завести слежку", StringComparison.Ordinal),
+            "сценарий обязан реально ронять слежку на каталоге, иначе тест ничего не проверяет");
+        svc.RecreateCount.Should().Be(0,
+            "отказ слежки на отдельном каталоге — частичный: наблюдатель живёт, пересоздавать его нельзя "
+            + "(ровно это дало рекурсию 19.09)");
     }
 
     [Fact]

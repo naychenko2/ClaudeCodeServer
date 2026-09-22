@@ -119,6 +119,67 @@ public class RecursiveDirectoryWatcherTests : IDisposable
         }
     }
 
+    // Дерево файлов в UI (FileWatcherService) обновляется и по САМИМ каталогам: без их событий
+    // созданная папка не появлялась бы в списке до ручного обновления. Ватчеру хода они,
+    // наоборот, не нужны — отсюда два режима, и оба проверяются здесь.
+    [SkippableTheory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task СозданиеИУдалениеКаталога_ОтдаётсяТолькоВРежимеIncludeDirectories(bool includeDirectories)
+    {
+        Skip.IfNot(OperatingSystem.IsLinux(), "события каталогов по перечню слежек — только Linux");
+
+        Directory.CreateDirectory(_root);
+        var seen = new List<(string Path, DirectoryWatchKind Kind)>();
+        using var watcher = new RecursiveDirectoryWatcher(_root, Excludes,
+            (path, kind) => { lock (seen) seen.Add((path, kind)); },
+            includeDirectories: includeDirectories);
+        watcher.Start();
+
+        var fresh = Path.Combine(_root, "fresh");
+        var probe = Path.Combine(fresh, "probe.txt");
+        Directory.CreateDirectory(fresh);
+        await Task.Delay(200); // слежка на новом каталоге должна встать до записи файла
+        await File.WriteAllTextAsync(probe, "x");
+        // Файл внутри нового каталога приходит в любом режиме: по нему видно, что цикл чтения
+        // жив и «события каталога нет» не означает «не успело».
+        (await Seen(seen, probe, DirectoryWatchKind.Created)).Should().BeTrue("подписка на новый каталог встала");
+
+        Directory.Delete(fresh, recursive: true);
+        (await Seen(seen, probe, DirectoryWatchKind.Deleted)).Should().BeTrue("удаление файла видно");
+
+        if (includeDirectories)
+        {
+            (await Seen(seen, fresh, DirectoryWatchKind.Created)).Should().BeTrue(
+                "появившийся каталог обязан дойти до дерева файлов");
+            (await Seen(seen, fresh, DirectoryWatchKind.Deleted)).Should().BeTrue(
+                "исчезнувший каталог тоже: иначе он висел бы в дереве до обновления руками");
+        }
+        else
+        {
+            // Событий каталога нет — при этом файловые по этому же каталогу уже пришли,
+            // то есть проверка не на «не успело».
+            (await Seen(seen, fresh, DirectoryWatchKind.Created)).Should().BeFalse(
+                "ватчеру хода каталоги не отдаются — только файлы");
+            (await Seen(seen, fresh, DirectoryWatchKind.Deleted)).Should().BeFalse(
+                "ватчеру хода каталоги не отдаются — только файлы");
+        }
+    }
+
+    // Пришло ли событие (ожидание с дедлайном: события читаются отдельным потоком).
+    private static async Task<bool> Seen(List<(string Path, DirectoryWatchKind Kind)> seen,
+        string path, DirectoryWatchKind kind)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(3);
+        while (DateTime.UtcNow < deadline)
+        {
+            lock (seen)
+                if (seen.Contains((path, kind))) return true;
+            await Task.Delay(50);
+        }
+        return false;
+    }
+
     [SkippableFact]
     public async Task ПеренесённыйКаталог_НеОставляетФантомныхСлежек()
     {

@@ -102,7 +102,7 @@ public class LocalModelSpeedLiveTests(ITestOutputHelper output)
         return sb.ToString(0, need);
     }
 
-    [Fact]
+    [Fact(Skip = "Живой замер: ходит в локальную модель и грузит стенд (все профили каталога, промпты под завязку). Снять Skip вручную для замера: dotnet test --filter \"FullyQualifiedName~LocalModelSpeedLive\".")]
     public async Task Замер_профилей_фоновых_действий()
     {
         if (!await AliveAsync()) { output.WriteLine("Локальный стенд не поднят — замер пропущен"); return; }
@@ -132,7 +132,7 @@ public class LocalModelSpeedLiveTests(ITestOutputHelper output)
         }
     }
 
-    [Fact]
+    [Fact(Skip = "Живой замер: ходит в локальную модель и грузит стенд (все профили каталога, промпты под завязку). Снять Skip вручную для замера: dotnet test --filter \"FullyQualifiedName~LocalModelSpeedLive\".")]
     public async Task Замер_большого_контекста()
     {
         if (!await AliveAsync()) { output.WriteLine("Локальный стенд не поднят — замер пропущен"); return; }
@@ -157,7 +157,7 @@ public class LocalModelSpeedLiveTests(ITestOutputHelper output)
         }
     }
 
-    [Fact]
+    [Fact(Skip = "Живой замер: ходит в локальную модель и грузит стенд (все профили каталога, промпты под завязку). Снять Skip вручную для замера: dotnet test --filter \"FullyQualifiedName~LocalModelSpeedLive\".")]
     public async Task Замер_параллельных_ходов()
     {
         if (!await AliveAsync()) { output.WriteLine("Локальный стенд не поднят — замер пропущен"); return; }

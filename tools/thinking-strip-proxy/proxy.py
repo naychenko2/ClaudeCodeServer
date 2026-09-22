@@ -172,7 +172,7 @@ COMPACT_MIN_CONTEXT_TOKENS = int(os.environ.get("COMPACT_MIN_CONTEXT_TOKENS",
                                                 str(PRUNE_MIN_CONTEXT_TOKENS)))
 
 stats = {"requests": 0, "stripped": 0, "pruned_blocks": 0, "pruned_chars": 0,
-         "compact_routed": 0, "compact_fallback": 0}
+         "compact_routed": 0, "compact_fallback": 0, "compact_signature_small": 0}
 
 # CLI вставляет в историю system-сообщение "<total_tokens>N tokens left</total_tokens>" на
 # каждом шаге, и N каждый раз новое. Шаблон Qwen требует system только первым, поэтому
@@ -498,24 +498,36 @@ def _tail_text(msgs, role=None):
     return ""
 
 
-def is_compact_request(doc, min_context_tokens=None):
-    """Это запрос автосжатия истории, а не обычный ход агента?
+def compact_verdict(doc, min_context_tokens=None):
+    """Разбор запроса на три исхода: `("route"|"signature_small"|"no", оценка контекста)`.
 
-    Признака ДВА, и оба обязательны. По одной сигнатуре сработал бы и обычный ход, в котором
-    строка просто процитирована (человеком, файлом, выводом инструмента): такой ход уехал бы в
-    облако и вернулся текстом без tool_use — агентная петля сбилась бы. Второму признаку
-    (история уже размером с окно) обычный ход в норме не удовлетворяет: сжатие наступает
-    только у чата, дошедшего до потолка.
+    Признака распознавания ДВА, и оба обязательны. По одной сигнатуре сработал бы и обычный
+    ход, в котором строка просто процитирована (человеком, файлом, выводом инструмента): такой
+    ход уехал бы в облако и вернулся текстом без tool_use — агентная петля сбилась бы. Второму
+    признаку (история уже размером с окно) обычный ход в норме не удовлетворяет: сжатие
+    наступает только у чата, дошедшего до потолка.
+
+    Отдельный исход `signature_small` — не оттенок «не распознали», а ДИАГНОЗ настройки:
+    сигнатура пришла, значит CLI действительно затеял сжатие, но тело до порога не доросло.
+    Живой замер 2026-09-23 показал, при чём это бывает: `CLAUDE_CODE_AUTO_COMPACT_WINDOW`
+    ниже ~196 192 заставляет CLI сжиматься раньше, чем история наберёт
+    `COMPACT_MIN_CONTEXT_TOKENS`. Без этого исхода сбой невидим: не растёт ни `compact_routed`,
+    ни `compact_fallback` — запрос молча уезжает на локальную модель на свои 330–430 с.
     """
     min_context_tokens = (COMPACT_MIN_CONTEXT_TOKENS if min_context_tokens is None
                           else min_context_tokens)
     msgs = doc.get("messages")
     if not isinstance(msgs, list) or not msgs:
-        return False
+        return "no", None
     if not _tail_text(msgs, role="user").lstrip().startswith(COMPACT_SIGNATURE):
-        return False
-    return estimate_tokens(_context_chars(msgs), _system_chars(doc),
-                           _signature_chars(msgs)) >= min_context_tokens
+        return "no", None
+    оценка = estimate_tokens(_context_chars(msgs), _system_chars(doc), _signature_chars(msgs))
+    return ("route" if оценка >= min_context_tokens else "signature_small"), оценка
+
+
+def is_compact_request(doc, min_context_tokens=None):
+    """Это запрос автосжатия истории, а не обычный ход агента?"""
+    return compact_verdict(doc, min_context_tokens)[0] == "route"
 
 
 def compact_body(doc):
@@ -683,8 +695,21 @@ class Handler(BaseHTTPRequestHandler):
                 doc = json.loads(body)
                 if isinstance(doc, dict):
                     # Распознаём и снимаем копию ДО правок: в облако едет сырая история.
-                    if COMPACT_UPSTREAM and is_compact_request(doc):
-                        compact = compact_body(doc)
+                    if COMPACT_UPSTREAM:
+                        вердикт, оценка = compact_verdict(doc)
+                        if вердикт == "route":
+                            compact = compact_body(doc)
+                        elif вердикт == "signature_small":
+                            # Настройка стенда разъехалась: CLI сжимается раньше, чем история
+                            # набирает порог. Молча отпускать такой запрос на локаль нельзя —
+                            # это те самые 330–430 с стоп-мира, ради которых маршрут заведён.
+                            with lock:
+                                stats["compact_signature_small"] += 1
+                            print(f"автосжатие: сигнатура есть, но тело {оценка} ток < порога "
+                                  f"{COMPACT_MIN_CONTEXT_TOKENS} — запрос уходит на локаль; "
+                                  f"подними CLAUDE_CODE_AUTO_COMPACT_WINDOW (>= 196192) или "
+                                  f"опусти COMPACT_MIN_CONTEXT_TOKENS",
+                                  file=sys.stderr, flush=True)
                     for k in STRIP_KEYS:
                         if k in doc:
                             del doc[k]

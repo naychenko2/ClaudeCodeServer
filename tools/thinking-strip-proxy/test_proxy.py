@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 # Тесты чистых функций прокси. Без сети и без поднятого vLLM:
 #   python3 -m unittest discover -s tools/thinking-strip-proxy
+import contextlib
 import copy
 import http.client
+import io
 import json
 import os
 import shutil
@@ -426,6 +428,25 @@ class КомпактРаспознаваниеTests(unittest.TestCase):
                     {"messages": [{"role": "user", "content": None}]}):
             self.assertFalse(proxy.is_compact_request(doc))
 
+    def test_сигнатура_с_малым_телом_это_отдельный_вердикт(self):
+        """Сигнатура пришла, а тело до порога не доросло — диагноз настройки, а не «не сжатие».
+
+        Так выглядит слишком низкий `CLAUDE_CODE_AUTO_COMPACT_WINDOW`: CLI уже затеял сжатие,
+        но история меньше порога распознавания. Отличать этот исход от обычного хода
+        обязательно — иначе сбой невиден по счётчикам.
+        """
+        msgs = [{"role": "user", "content": proxy.COMPACT_SIGNATURE + " Summarize."}]
+        вердикт, оценка = proxy.compact_verdict(self.тело(msgs))
+        self.assertEqual(вердикт, "signature_small")
+        self.assertLess(оценка, proxy.COMPACT_MIN_CONTEXT_TOKENS)
+        # Обычный ход того же размера в этот исход не попадает — только «не сжатие».
+        обычный = [{"role": "user", "content": "проверь сборку"}]
+        self.assertEqual(proxy.compact_verdict(self.тело(обычный)), ("no", None))
+        # А большое тело с сигнатурой — маршрут.
+        большое = self.большая_история()
+        большое.append({"role": "user", "content": proxy.COMPACT_SIGNATURE + " Summarize."})
+        self.assertEqual(proxy.compact_verdict(self.тело(большое))[0], "route")
+
 
 class КомпактТелоTests(unittest.TestCase):
     def test_подменяется_только_модель(self):
@@ -612,7 +633,7 @@ class КомпактСквознойTests(unittest.TestCase):
         proxy.UP_HOST, proxy.UP_PORT = "127.0.0.1", self.локальный.server_address[1]
         proxy.COMPACT_UPSTREAM = f"http://127.0.0.1:{self.облако.server_address[1]}"
         proxy._compact_key = "sk-test"
-        proxy.stats.update(compact_routed=0, compact_fallback=0)
+        proxy.stats.update(compact_routed=0, compact_fallback=0, compact_signature_small=0)
 
     def tearDown(self):
         (proxy.UP_HOST, proxy.UP_PORT, proxy.COMPACT_UPSTREAM,
@@ -668,6 +689,41 @@ class КомпактСквознойTests(unittest.TestCase):
         self.облако.server_close()
         self.assertIn("локальный".encode(), self.спросить(self.запрос_сжатия()))
         self.assertEqual(proxy.stats["compact_fallback"], 1)
+
+    def test_сигнатура_с_малым_телом_видна_в_счётчике_и_журнале(self):
+        """Молчаливый уход сжатия на локаль обязан оставлять след: счётчик плюс строка в журнал.
+
+        Сам маршрут при этом не меняется — запрос честно идёт на локальную модель, как и
+        раньше; чинится он настройкой стенда, а прокси только показывает, что чинить.
+        """
+        msgs = [{"role": "user", "content": proxy.COMPACT_SIGNATURE + " Summarize."}]
+        журнал = io.StringIO()
+        with contextlib.redirect_stderr(журнал):
+            ответ = self.спросить(msgs)
+        self.assertIn("локальный".encode(), ответ)
+        self.assertEqual(self.Облако.принятые, [], "нераспознанное сжатие в облако не ходит")
+        self.assertEqual(proxy.stats["compact_signature_small"], 1)
+        self.assertEqual((proxy.stats["compact_routed"], proxy.stats["compact_fallback"]), (0, 0))
+        строка = журнал.getvalue()
+        self.assertIn("автосжатие: сигнатура есть", строка)
+        self.assertIn(str(proxy.COMPACT_MIN_CONTEXT_TOKENS), строка, "порог в журнале обязателен")
+
+    def test_счётчик_нераспознанного_виден_в_stats(self):
+        """Счётчик заведён в самом словаре, а не появляется после первого случая.
+
+        Иначе наблюдать нечего до первого сбоя: `/__proxy/stats` свежего процесса ключа не
+        показал бы вовсе, и «ноль» было бы не отличить от «такого счётчика тут нет».
+        """
+        исходный = self.сохранено[4]  # снимок stats до подмены в setUp
+        self.assertIn("compact_signature_small", исходный)
+        msgs = [{"role": "user", "content": proxy.COMPACT_SIGNATURE + " Summarize."}]
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.спросить(msgs)
+        c = http.client.HTTPConnection("127.0.0.1", self.прокси.server_address[1], timeout=30)
+        c.request("GET", "/__proxy/stats")
+        отдано = json.loads(c.getresponse().read())
+        c.close()
+        self.assertEqual(отдано["compact_signature_small"], 1)
 
     def test_маршрут_выключен_по_умолчанию(self):
         proxy.COMPACT_UPSTREAM = ""

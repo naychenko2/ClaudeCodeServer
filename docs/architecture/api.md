@@ -98,3 +98,34 @@ GET                 /api/knowledge/{id}/search?q=&topK=&method=semantic|fulltext
 Эффективные значения флагов также возвращаются в `GET /api/auth/me` (поле `featureFlags`),
 чтобы фронт получал их тем же запросом, что и при старте. Подробнее — раздел «Фич-флаги»
 в [CLAUDE.md](../../CLAUDE.md).
+
+## SignalR-хаб `/hubs/session`
+
+Вторая половина контракта с фронтом: REST отдаёт состояние, хаб — живой ход. Источник правды —
+[Hubs/SessionHub.cs](../../backend/ClaudeHomeServer/Hubs/SessionHub.cs); хаб под тем же
+`[Authorize]`, что и REST.
+
+**Клиент вызывает** (основные методы; полный список — в коде):
+
+```
+JoinSession(sessionId)                      → подписка на чат; в ответ Caller получает догоняющие
+                                              события (статус хода, незавершённое сообщение, recall)
+LeaveSession(sessionId)                     → отписка
+SendMessage(sessionId, text,                → отправить ход; возвращает id созданного сообщения
+            attachedPaths?, mode?, auto?)
+RespondPermission(sessionId, requestId,     → ответ на permission_request (ждёт его CLI, см. ниже)
+                  behavior)
+Interrupt(sessionId)                        → прервать идущий ход
+```
+
+Рядом живут подписки на другие каналы того же хаба (`JoinProject`/`LeaveProject`,
+`JoinUser`/`LeaveUser`, `JoinPreviewLog`/`LeavePreviewLog`) и ходовые ответы штаба
+(`RespondTeamPlan`, `RespondTeamEscalation`), плюс `CompactSession`.
+
+**Сервер шлёт** единственное событие — `message` с объектом
+[`ServerMessage`](../../backend/ClaudeHomeServer.Core/Protocol/ServerMessage.cs), где вид
+события различается полем `type` (`text_delta`, `thinking_delta`, `tool_use`, `tool_result`,
+`permission_request`, `result`, `exited` и т.д.). Один канал с дискриминатором, а не метод на
+каждое событие: фронт разбирает поток в одном месте, а вертикаль может завести свой record и
+отправить его через `IHubContext<SessionHub>`, ни от кого не завися (см.
+[ADR-014](../adr/ADR-014-internal-subsystems.md), раздел про `ClaudeHomeServer.Protocol`).

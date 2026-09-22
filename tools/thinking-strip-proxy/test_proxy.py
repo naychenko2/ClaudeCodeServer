@@ -8,7 +8,9 @@ import proxy
 
 # Параметры прунинга в тестах задаём явно: дефолты живут в переменных окружения и
 # меняются на стенде, а тест обязан проверять поведение, а не текущую настройку.
-P = dict(protect_last=20, quantum=10, min_chars=2000, min_tokens=20000)
+# min_context_tokens=0 — условие «чат уже большой» здесь отключено намеренно: у него свои
+# тесты ниже, а эти проверяют границу, и один тест должен проверять одну вещь.
+P = dict(protect_last=20, quantum=10, min_chars=2000, min_tokens=20000, min_context_tokens=0)
 BIG = "x" * 6000  # один «крупный» вывод ≈ 1500 токенов
 
 
@@ -122,6 +124,33 @@ class PruneTests(unittest.TestCase):
         msgs[2]["content"][0]["content"] = image
         pruned, _, _ = proxy.prune_tool_results(msgs, **P)
         self.assertEqual(pruned[2]["content"][0]["content"], image)
+
+    def test_маленький_чат_не_трогаем_даже_при_многих_вызовах(self):
+        """Условие «чат уже большой» не зависит от числа вызовов — это отдельная ручка."""
+        msgs = [{"role": "user", "content": "задача"}]
+        for i in range(120):  # вызовов много, но выводы скромные: контекст ~75k токенов
+            msgs += [tool_use(i), tool_result(i, "y" * 2500)]
+        out, freed, blocks = proxy.prune_tool_results(
+            msgs, **dict(P, min_context_tokens=150000))
+        self.assertIs(out, msgs)
+        self.assertEqual((freed, blocks), (0, 0))
+
+    def test_системная_часть_идёт_в_зачёт_контекста(self):
+        """Системный промпт и тулсет весят как половина контекста — без них мерка врёт."""
+        msgs = [{"role": "user", "content": "задача"}]
+        for i in range(120):
+            msgs += [tool_use(i), tool_result(i, "y" * 2500)]  # сама история ~75k токенов
+        big = dict(P, min_context_tokens=150000)
+        _, _, without = proxy.prune_tool_results(msgs, **big)
+        _, _, with_system = proxy.prune_tool_results(msgs, extra_chars=400_000, **big)
+        self.assertEqual(without, 0, "без системной части чат не дотягивает до порога")
+        self.assertGreater(with_system, 0, "с ней — дотягивает")
+
+    def test_большой_чат_трогаем(self):
+        msgs = history(120)  # те же 120 вызовов, но выводы крупные: контекст ~180k токенов
+        _, freed, blocks = proxy.prune_tool_results(msgs, **dict(P, min_context_tokens=150000))
+        self.assertGreater(blocks, 0)
+        self.assertGreater(freed, 0)
 
     def test_незнакомая_структура_проходит_насквозь(self):
         for msgs in ([], [{"role": "user"}], [{"role": "user", "content": None}],

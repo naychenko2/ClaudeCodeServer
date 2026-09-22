@@ -39,6 +39,12 @@ PRUNE_PROTECT_LAST = int(os.environ.get("PRUNE_PROTECT_LAST", "20"))
 PRUNE_QUANTUM = int(os.environ.get("PRUNE_QUANTUM", "50"))
 PRUNE_MIN_CHARS = int(os.environ.get("PRUNE_MIN_CHARS", "2000"))
 PRUNE_MIN_TOKENS = int(os.environ.get("PRUNE_MIN_TOKENS", "20000"))
+# Явное условие «чат уже большой». Без него порог включения задавался АРИФМЕТИКОЙ кванта
+# (граница > 0 требует PROTECT_LAST + QUANTUM вызовов, то есть 70), и правка кванта ради
+# частоты скачков молча двигала бы и его — две разные вещи на одной ручке. Значение 150k
+# взято из замеров: чат на 133k живёт без автосжатия, и резать там нечего (скачок границы
+# пришлось бы оплатить впустую), а беда начиналась к 318k при окне модели 262k.
+PRUNE_MIN_CONTEXT_TOKENS = int(os.environ.get("PRUNE_MIN_CONTEXT_TOKENS", "150000"))
 
 stats = {"requests": 0, "stripped": 0, "pruned_blocks": 0, "pruned_chars": 0}
 
@@ -113,18 +119,72 @@ def _prunable_size(content):
     return None
 
 
+def _context_chars(msgs, extra_chars=0):
+    """Грубый размер контекста в символах — за один проход, без сериализации всего тела.
+
+    extra_chars — системная часть запроса (промпт и определения инструментов). Без неё мерка
+    врёт: на реальном чате она дала 71k против 133k настоящих токенов по usage, потому что
+    у агента системный блок и тулсет весят как половина истории.
+    """
+    total = extra_chars
+    for m in msgs:
+        if not isinstance(m, dict):
+            continue
+        content = m.get("content")
+        if isinstance(content, str):
+            total += len(content)
+            continue
+        if not isinstance(content, list):
+            continue
+        for b in content:
+            if not isinstance(b, dict):
+                continue
+            kind = b.get("type")
+            if kind == "text":
+                total += len(b.get("text") or "")
+            elif kind == "thinking":
+                total += len(b.get("thinking") or "")
+            elif kind == "tool_result":
+                total += _prunable_size(b.get("content")) or 0
+            elif kind == "tool_use":
+                total += len(json.dumps(b.get("input") or {}, ensure_ascii=False))
+    return total
+
+
+def _system_chars(doc):
+    """Размер системной части тела: системный промпт плюс определения инструментов."""
+    total = 0
+    system = doc.get("system")
+    if isinstance(system, str):
+        total += len(system)
+    elif isinstance(system, list):
+        total += sum(len(b.get("text") or "") for b in system if isinstance(b, dict))
+    tools = doc.get("tools")
+    if isinstance(tools, list):
+        total += len(json.dumps(tools, ensure_ascii=False))
+    return total
+
+
 def _placeholder_like(content):
     """Плейсхолдер той же формы, что и исходный content, — чтобы не менять форму блока."""
     return PRUNE_PLACEHOLDER if isinstance(content, str) else [
         {"type": "text", "text": PRUNE_PLACEHOLDER}]
 
 
-def prune_tool_results(msgs, protect_last=None, quantum=None, min_chars=None, min_tokens=None):
+def prune_tool_results(msgs, protect_last=None, quantum=None, min_chars=None, min_tokens=None,
+                       min_context_tokens=None, extra_chars=0):
     """Возвращает (сообщения, сколько символов освободили, сколько блоков обрезали). Вход не мутирует."""
     protect_last = PRUNE_PROTECT_LAST if protect_last is None else protect_last
     quantum = PRUNE_QUANTUM if quantum is None else quantum
     min_chars = PRUNE_MIN_CHARS if min_chars is None else min_chars
     min_tokens = PRUNE_MIN_TOKENS if min_tokens is None else min_tokens
+    min_context_tokens = PRUNE_MIN_CONTEXT_TOKENS if min_context_tokens is None else min_context_tokens
+
+    # Маленький чат не трогаем вовсе: автосжатие ему не грозит, а скачок границы он оплатит.
+    # Условие монотонно (прокси всегда получает от CLI полную историю, она только растёт),
+    # поэтому срабатывает один раз за чат — один разрыв кэша, а не разрыв на каждом ходу.
+    if _context_chars(msgs, extra_chars) // 4 < min_context_tokens:
+        return msgs, 0, 0
 
     found = []  # (номер сообщения, номер блока, размер) в порядке появления
     for mi, m in enumerate(msgs):
@@ -234,7 +294,8 @@ class Handler(BaseHTTPRequestHandler):
                             doc["messages"] = kept
                             stripped = True
                         if PRUNE_MODE == "on":
-                            pruned_msgs, freed, blocks = prune_tool_results(kept)
+                            pruned_msgs, freed, blocks = prune_tool_results(
+                                kept, extra_chars=_system_chars(doc))
                             if blocks:
                                 doc["messages"] = pruned_msgs
                                 stripped = True

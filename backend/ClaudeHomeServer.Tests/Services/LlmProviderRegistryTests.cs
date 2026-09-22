@@ -272,6 +272,24 @@ public class LlmProviderRegistryTests
         Create().EnvKeysToClear.Should().Contain("CLAUDE_CODE_MAX_CONTEXT_TOKENS");
     }
 
+    // Порог автосжатия CLI двигается переменной CLAUDE_CODE_AUTO_COMPACT_WINDOW, и она же
+    // стоит в ProviderEnvKeys. Противоречия тут нет: чистка применяется к УНАСЛЕДОВАННОМУ
+    // окружению хоста, а наш ExtraEnv кладётся поверх (LocalProcessRunner: сначала ClearEnv,
+    // потом Env). Тест держит единственное место, где это можно сломать молча, — порядок
+    // применения ExtraEnv в BuildCliEnv: перенеси его выше собственных ключей, и окно
+    // автосжатия перестанет доезжать до CLI, а порог тихо вернётся к штатному.
+    [Fact]
+    public void BuildCliEnv_ОкноАвтосжатияИзExtraEnv_ДоезжаетДоCLI()
+    {
+        var env = Create(new()
+        {
+            ["LlmProviders:deepseek:ExtraEnv:CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = "140000",
+        }).BuildCliEnv("deepseek-v4-pro")!;
+        env.Should().ContainKey("CLAUDE_CODE_AUTO_COMPACT_WINDOW")
+            .WhoseValue.Should().Be("140000");
+        LlmProviderRegistry.ProviderEnvKeys.Should().Contain("CLAUDE_CODE_AUTO_COMPACT_WINDOW");
+    }
+
     [Fact]
     public void BuildCliEnv_ПровайдерБезКлюча_Исключение()
     {

@@ -76,6 +76,9 @@ export interface RemoteCommandAction {
   // null — до первой проверки: после рестарта сервера кэш статуса пуст, и это честно видно
   checkedAt: string | null;
   lastExitCode: number | null;
+  // Ссылка «Открыть» из конфига действия (http/https) — например, vscode.dev/tunnel/имя
+  // для туннеля VS Code. Null — кнопки нет.
+  url: string | null;
 }
 
 export interface RemoteCommandsState {

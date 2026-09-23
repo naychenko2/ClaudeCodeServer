@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, Play, RefreshCw, Square } from 'lucide-react';
+import { ChevronDown, ChevronRight, ExternalLink, Play, RefreshCw, Square } from 'lucide-react';
 import { Badge, Button, Modal } from './ui';
 import type { BadgeTone } from './ui';
 import { api, type RemoteCommandAction, type RemoteCommandResult, type RemoteCommandState } from '../lib/api';
@@ -262,6 +262,20 @@ function ActionCard({ action, detail, pending, isMobile, outputOpen, output, onR
         >
           Обновить
         </Button>
+        {action.url && (
+          <Button
+            variant="ghost"
+            size={isMobile ? 'md' : 'sm'}
+            title={action.url}
+            // Ссылка из конфига действия (например, vscode.dev/tunnel/…): открывается в новой
+            // вкладке и не блокируется по busy — чтение страницы от состояния не зависит
+            href={action.url}
+            leftIcon={<ExternalLink size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+            style={{ flex: isMobile ? 1 : undefined }}
+          >
+            Открыть
+          </Button>
+        )}
       </div>
 
       <div>

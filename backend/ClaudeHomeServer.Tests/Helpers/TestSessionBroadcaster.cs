@@ -19,6 +19,7 @@ public sealed class TestSessionBroadcaster : ISessionBroadcaster
     private readonly object _lock = new();
     private readonly List<(string OwnerId, ServerMessage Message)> _owner = new();
     private readonly List<(string SessionId, ServerMessage Message)> _session = new();
+    private readonly List<(string SessionId, string ExceptConnectionId, ServerMessage Message)> _sessionExcept = new();
     private readonly List<(string ProjectId, ServerMessage Message)> _project = new();
     private readonly List<(string ProjectId, string ServiceId, ServerMessage Message)> _previewLog = new();
 
@@ -29,6 +30,13 @@ public sealed class TestSessionBroadcaster : ISessionBroadcaster
     public IReadOnlyList<(string SessionId, ServerMessage Message)> Session
     {
         get { lock (_lock) return _session.ToArray(); }
+    }
+
+    // Рассылка «всем, кроме отправителя» — отдельный список: тесты ручного ввода
+    // проверяют и адрес (исключённое соединение), и отсутствие дубля в Session
+    public IReadOnlyList<(string SessionId, string ExceptConnectionId, ServerMessage Message)> SessionExcept
+    {
+        get { lock (_lock) return _sessionExcept.ToArray(); }
     }
     public IReadOnlyList<(string ProjectId, ServerMessage Message)> Project
     {
@@ -45,6 +53,7 @@ public sealed class TestSessionBroadcaster : ISessionBroadcaster
         {
             _owner.Clear();
             _session.Clear();
+            _sessionExcept.Clear();
             _project.Clear();
             _previewLog.Clear();
         }
@@ -54,6 +63,12 @@ public sealed class TestSessionBroadcaster : ISessionBroadcaster
     public Task ToSession(string sessionId, ServerMessage message)
     {
         lock (_lock) _session.Add((sessionId, message));
+        return Task.CompletedTask;
+    }
+
+    public Task ToSessionExcept(string sessionId, string exceptConnectionId, ServerMessage message)
+    {
+        lock (_lock) _sessionExcept.Add((sessionId, exceptConnectionId, message));
         return Task.CompletedTask;
     }
 

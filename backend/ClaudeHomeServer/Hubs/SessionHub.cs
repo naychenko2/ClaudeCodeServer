@@ -180,7 +180,8 @@ public class SessionHub : Hub
         if (!OwnsSession(sessionId)) throw Denied();
         // auto — сообщение опубликовано автоматически (например, «Обсудить с командой»):
         // UI покажет источник вместо пузыря пользователя
-        var outcome = await _sessions.SendMessageAsync(sessionId, text, attachedPaths ?? [], mode, auto: auto);
+        var outcome = await _sessions.SendMessageAsync(sessionId, text, attachedPaths ?? [], mode, auto: auto,
+            senderConnectionId: Context.ConnectionId);
         return outcome switch
         {
             Services.SessionManager.SendUserOutcome.Started => "started",

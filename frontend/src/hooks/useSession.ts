@@ -577,8 +577,9 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
       // защита от потери группы при переподключении или переключении проекта
       await joinTracked(sessionId);
       const outcome = await sendMessage(sessionId, text, attachedPaths, mode, auto);
-      // 'started' — ход запущен: рисуем оптимистичный баллон (как раньше). Авто-ходы сервер
-      // рассылает user_message в session-группу, поэтому их не дублируем.
+      // 'started' — ход запущен: рисуем оптимистичный баллон (как раньше). Авто-ходы и
+      // чужой ручной ввод сервер рассылает user_message в session-группу (наше соединение
+      // исключено через GroupExcept), поэтому дублей здесь нет.
       // 'queued' — баллон не нужен: карточку даст pending_messages, isWaiting удержит ход.
       if (outcome === 'started' && !auto) {
         setState(sessionId, prev => ({ ...prev, items: [...prev.items, { kind: 'user_message', text, attachedPaths, ts: Date.now() }] }));

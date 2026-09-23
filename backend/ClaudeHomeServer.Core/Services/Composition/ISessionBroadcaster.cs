@@ -17,10 +17,14 @@ namespace ClaudeHomeServer.Services.Composition;
 // ServerMessage — record-иерархия в Core/Protocol/ServerMessage.cs.
 //
 // Покрытие:
-//   ToSession     — в конкретный чат (группа = sessionId);
-//   ToOwner       — во все вкладки владельца (группа = "user_" + ownerId);
-//   ToProject     — всем, подписанным на проект (группа = "project_" + projectId);
-//   ToPreviewLog  — подписчикам лога preview-сервиса проекта
+//   ToSession       — в конкретный чат (группа = sessionId);
+//   ToSessionExcept — той же session-группе, КРОМЕ соединения-отправителя:
+//                     ручной ввод пользователя отправитель уже нарисовал
+//                     оптимистично (useSession.send), эхо ему не нужно, а остальные
+//                     устройства того же чата должны видеть реплику live;
+//   ToOwner         — во все вкладки владельца (группа = "user_" + ownerId);
+//   ToProject       — всем, подписанным на проект (группа = "project_" + projectId);
+//   ToPreviewLog    — подписчикам лога preview-сервиса проекта
 //                   (группа = "preview_" + projectId + ":" + serviceId; см.
 //                   DevServerService.LogGroup). Адресация специфическая, формат
 //                   группы собирает шов, иначе префикс preview_ живёт в одном файле,
@@ -44,6 +48,7 @@ namespace ClaudeHomeServer.Services.Composition;
 public interface ISessionBroadcaster
 {
     Task ToSession(string sessionId, ServerMessage message);
+    Task ToSessionExcept(string sessionId, string exceptConnectionId, ServerMessage message);
     Task ToOwner(string ownerId, ServerMessage message);
     Task ToProject(string projectId, ServerMessage message);
     Task ToPreviewLog(string projectId, string serviceId, ServerMessage message);

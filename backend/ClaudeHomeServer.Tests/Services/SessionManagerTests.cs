@@ -85,6 +85,14 @@ public class SessionManagerTests : IDisposable
             return inner.ToSession(sessionId, message);
         }
 
+        // Except-канал — тот же единый поток чтения (Sent<T>): ручной ввод теперь
+        // приходит через него, тесты «в ленте есть user_message» не должны различать адрес
+        public Task ToSessionExcept(string sessionId, string exceptConnectionId, Protocol.ServerMessage message)
+        {
+            lock (sentLock) sentMessages.Add(message);
+            return inner.ToSessionExcept(sessionId, exceptConnectionId, message);
+        }
+
         public Task ToOwner(string ownerId, Protocol.ServerMessage message) =>
             inner.ToOwner(ownerId, message);
 
@@ -93,6 +101,10 @@ public class SessionManagerTests : IDisposable
 
         public Task ToPreviewLog(string projectId, string serviceId, Protocol.ServerMessage message) =>
             inner.ToPreviewLog(projectId, serviceId, message);
+
+        // Доступ к inner для проверки адресации каналов (Session vs SessionExcept):
+        // Sent<T> не различает, кому именно ушла реплика
+        public Helpers.TestSessionBroadcaster Inner => inner;
     }
 
     public SessionManagerTests()
@@ -2162,6 +2174,55 @@ public class SessionManagerTests : IDisposable
         await _sut.SendMessageAsync(session.Id, "ещё раз", []);
 
         _sut.GetPending(session.Id).Should().HaveCount(2);
+    }
+
+    // --- Синхронизация устройств: live-баллон ручного ввода ---
+
+    [Fact]
+    public async Task SendMessage_User_РучнойВвод_РассылаетсяВсемКромеОтправителя()
+    {
+        // Фикс синхронизации устройств: реплика, отправленная с устройства А, раньше не
+        // приезжала устройству Б live (только из истории по F5) — сервер не рассылал
+        // user_message для ручного ввода, потому что отправитель рисует баллон оптимистично.
+        // Теперь реплика идёт в session-группу с исключением соединения-отправителя:
+        // у А дубля нет, Б видит сообщение сразу.
+        var session = await MkFreeSessionWithStubAsync("live-except");
+        ClearSent();
+
+        await _sut.SendMessageAsync(session.Id, "привет с ноута", [], senderConnectionId: "conn-A");
+
+        var except = _broadcaster.Inner.SessionExcept.Should().ContainSingle().Subject;
+        except.SessionId.Should().Be(session.Id);
+        except.ExceptConnectionId.Should().Be("conn-A");
+        except.Message.Should().BeOfType<UserMessageMessage>().Which.Text.Should().Be("привет с ноута");
+        // В общий session-канал дубль не падал — эха отправителю нет
+        _broadcaster.Inner.Session.Select(t => t.Message).OfType<UserMessageMessage>().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task SendMessage_User_БезСоединения_РассылаетсяВсем()
+    {
+        // REST/сервисные вызовы (connectionId нет): оптимистичного баллона ни у кого нет —
+        // реплика уходит всем соединениям session-группы, исключать некого
+        var session = await MkFreeSessionWithStubAsync("live-rest");
+        ClearSent();
+
+        await _sut.SendMessageAsync(session.Id, "из REST", []);
+
+        _broadcaster.Inner.Session.Select(t => t.Message).OfType<UserMessageMessage>().Should().ContainSingle()
+            .Which.Text.Should().Be("из REST");
+        _broadcaster.Inner.SessionExcept.Should().BeEmpty();
+    }
+
+    // Свободный чат с заглушкой процесса: SendMessageAsync идёт в SendDirectAsync (Started),
+    // а не в очередь — паттерн «MkBusySessionAsync без занятости»
+    private async Task<Session> MkFreeSessionWithStubAsync(string suffix)
+    {
+        var session = await MkBusySessionAsync(suffix, SessionStatus.Active);
+        session.Name = "есть имя"; // иначе фоновый уточнятор заголовка полезет в локальную модель
+        var entry = GetEntry(session.Id);
+        SetProcess(entry, StubAdapter(entry).Object);
+        return session;
     }
 
     [Fact]

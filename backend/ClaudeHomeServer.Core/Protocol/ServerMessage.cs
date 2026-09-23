@@ -207,6 +207,13 @@ public record CompactBoundaryMessage(string Trigger, int? PreTokens, int? PostTo
 // PrefillSeconds — время до первого байта ответа модели у ЭТОГО запроса, то есть ровно
 // «сколько ждали»; CacheReadTokens / PromptTokens — доля промпта, взятая из prefix cache.
 // Приходит ВНЕ потока хода, от прокси через /api/internal/llm-proxy/events.
+//
+// EventId — личность сдвига, по ней фронт дедупит строку ленты (как fal_cost по RequestId).
+// Нужна потому, что внеходовая рассылка веерная: BroadcastSessionMessageAsync шлёт ОДНО
+// сообщение и в session-группу, и в project-группу, а вкладка открытого чата состоит в обеих
+// (useSession.joinSession + WorkspacePage.joinProject на одном соединении) — значит получает
+// его ДВА раза. Без личности редьюсер дописывал вторую строку с теми же числами, и два
+// РАЗНЫХ сдвига выглядели как один, показанный дважды (диагностика 2026-09-23).
 public record ContextPrunedMessage(
     string Kind,
     int TokensBefore,
@@ -215,7 +222,8 @@ public record ContextPrunedMessage(
     int ResultBlocks, int InputBlocks, int ThinkingBlocks,
     double? PrefillSeconds,
     int? CacheReadTokens,
-    int? PromptTokens)
+    int? PromptTokens,
+    string? EventId = null)
     : ServerMessage("context_pruned");
 
 // Ход компакции (system/status): Status == "compacting" — началась;

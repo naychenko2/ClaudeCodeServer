@@ -663,8 +663,18 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       // Прокси локальной модели сдвинул контекст. Вид сдвига переименовываем kind → pruneKind:
       // у элемента ленты kind занят дискриминатором (см. тип ChatItem). Состояние компакции
       // не трогаем: сжатие в облаке ведёт прокси, индикатор «Сжимаю…» на него не заводился.
+      //
+      // Дедуп по eventId — как у fal_cost по requestId и по той же причине: внеходовая
+      // рассылка веерная (BroadcastSessionMessageAsync → session-группа И project-группа), а
+      // вкладка открытого чата состоит в обеих, поэтому ОДНО событие приезжает сюда дважды.
+      // Дедупим по личности, а не по числам: два разных сдвига вправе совпасть числами, и
+      // показать надо оба. Личности нет (карточка из старой истории) — просто дописываем.
+      if (msg.eventId !== undefined
+        && prev.items.some(it => it.kind === 'context_pruned' && it.eventId === msg.eventId))
+        return prev;
       return withItems([...prev.items, {
         kind: 'context_pruned', pruneKind: msg.kind,
+        ...(msg.eventId !== undefined ? { eventId: msg.eventId } : {}),
         tokensBefore: msg.tokensBefore, tokensAfter: msg.tokensAfter,
         blocks: msg.blocks, resultBlocks: msg.resultBlocks,
         inputBlocks: msg.inputBlocks, thinkingBlocks: msg.thinkingBlocks,

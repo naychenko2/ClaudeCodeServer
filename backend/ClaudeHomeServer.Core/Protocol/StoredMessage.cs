@@ -201,12 +201,18 @@ public class StoredCompactBoundaryMessage(string trigger, int? preTokens, int? p
 // дискриминатором полиморфизма StoredMessage, и свойство с таким же именем роняет
 // сериализацию ВСЕЙ истории целиком (InvalidOperationException при первом же сохранении),
 // а не только этой записи.
+//
+// EventId — та же личность сдвига, что в ContextPrunedMessage: она едет и в историю, иначе
+// после перезагрузки страницы дедуп ленты потерял бы точку сравнения. У карточек, записанных
+// до её появления, поля нет — null, и дедуп по нему НЕ работает (две старые записи с
+// одинаковым null схлопнулись бы в одну).
 public class StoredContextPrunedMessage(string kind, int tokensBefore, int tokensAfter, int blocks,
     int resultBlocks, int inputBlocks, int thinkingBlocks, double? prefillSeconds = null,
-    int? cacheReadTokens = null, int? promptTokens = null) : StoredMessage
+    int? cacheReadTokens = null, int? promptTokens = null, string? eventId = null) : StoredMessage
 {
     [JsonPropertyName("pruneKind")]
     public string Kind { get; init; } = kind;
+    public string? EventId { get; init; } = eventId;
     public int TokensBefore { get; init; } = tokensBefore;
     public int TokensAfter { get; init; } = tokensAfter;
     public int Blocks { get; init; } = blocks;

@@ -31,18 +31,47 @@ public sealed class LocalActionRouter
     private readonly ILocalLlmClient _ollama;
     private readonly LocalActionOverridesStore _store;
     private readonly SpecialtySettingsStore? _specialty;
+    private readonly LocalEngineBusyTracker _busy;
+    private readonly bool _skipLocalWhileTurn;
     private readonly Dictionary<string, bool> _overrides;
     private readonly Dictionary<CheapProfile, CheapProfileSpec> _profiles;
     private readonly ILogger<LocalActionRouter> _log;
 
+    // Значение LocalLlm:BackgroundWhileTurn — что делать с фоновым действием, пока на
+    // локальном движке идёт ход исполнителя.
+    public const string WhileTurnFallback = "fallback";
+    public const string WhileTurnLocal = "local";
+
     public LocalActionRouter(ILocalLlmClient ollama, LocalActionOverridesStore store,
         IConfiguration config, ILogger<LocalActionRouter> log,
-        SpecialtySettingsStore? specialty = null)
+        SpecialtySettingsStore? specialty = null, LocalEngineBusyTracker? busy = null)
     {
         _ollama = ollama;
         _store = store;
         _specialty = specialty;
+        _busy = busy ?? LocalEngineBusyTracker.Instance;
         _log = log;
+
+        // Правило «локаль занята ходом»: fallback (по умолчанию) — фоновое действие пропускает
+        // шаг локали и идёт дальше по своей цепочке; local — прежнее поведение, действие лезет
+        // в движок вместе с ходом. Очереди тут нет намеренно (см. llm-providers.md): ход живёт
+        // десятки минут, а отложенные действия к его концу превратились бы в залп ровно в тот
+        // момент, когда человек начинает следующий ход.
+        //
+        // Ключ читаем здесь, а не в LocalLlmOptions: это правило МАРШРУТИЗАЦИИ фоновых мест
+        // (родня Ollama:Actions/Ollama:Profiles), а не транспорт движка. Незнакомое значение —
+        // дефолт плюс warning: молча получить «прежнее поведение» из-за опечатки хуже всего.
+        var whileTurn = config["LocalLlm:BackgroundWhileTurn"];
+        _skipLocalWhileTurn = true;
+        if (!string.IsNullOrWhiteSpace(whileTurn))
+        {
+            if (string.Equals(whileTurn, WhileTurnLocal, StringComparison.OrdinalIgnoreCase))
+                _skipLocalWhileTurn = false;
+            else if (!string.Equals(whileTurn, WhileTurnFallback, StringComparison.OrdinalIgnoreCase))
+                _log.LogWarning(
+                    "LocalLlm:BackgroundWhileTurn — неизвестное значение «{Value}», работаю как «{Default}»",
+                    whileTurn, WhileTurnFallback);
+        }
         _overrides = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
 
         // Ollama:Actions — словарь ключ→bool. Неизвестные ключи не молчим: это опечатка в конфиге.
@@ -79,6 +108,12 @@ public sealed class LocalActionRouter
     // ILocalLlmClient поэтому находит только легитимных прямых потребителей.
     public string LocalBaseUrl => _ollama.BaseUrl;
     public string LocalProviderKey => _ollama.ProviderKey;
+
+    // Занят ли локальный движок ходом исполнителя НАСТОЛЬКО, что фоновому действию туда
+    // нельзя. Единственная точка склейки «признак занятости + правило админа» — CheapTextRunner
+    // спрашивает только отсюда. У владельцев без локали признак не наступает никогда: ход на
+    // локальном провайдере просто некому начать, а шаг локали и так отсечён ollama.Enabled.
+    public bool LocalBlockedByTurn => _skipLocalWhileTurn && _busy.Busy;
 
     // Начинается ли действие с локальной модели. Требует настроенного Ollama; иначе — нет.
     public bool UsesLocal(string actionKey) =>

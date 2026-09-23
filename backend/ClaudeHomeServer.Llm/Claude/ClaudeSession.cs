@@ -741,6 +741,8 @@ public class ClaudeSession : ILlmSessionAdapter
     // Реестр CLI-провайдеров: env-оверрайды процесса (ANTHROPIC_BASE_URL и др.)
     // для сторонних моделей; null — всегда родной Claude
     private readonly LlmProviderRegistry? _providers;
+    // Признак «локальный движок занят ходом» — ставится на время хода на провайдере с IsLocal
+    private readonly LocalEngineBusyTracker _localEngineBusy;
     // Резолвер назначений моделей — нужен ради «модели по назначению места» (см. EffectiveModel);
     // null — адаптер собран без него (тесты), тогда пустая модель означает дефолт CLI, как раньше
     private readonly ModelAssignmentResolver? _assignments;
@@ -823,6 +825,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _externalMcpProvider = context.ExternalMcpProvider;
         _browserEnabled = context.BrowserEnabled;
         _launcher = context.Launcher ?? Execution.LocalProcessRunner.Instance;
+        _localEngineBusy = context.LocalEngineBusy ?? LocalEngineBusyTracker.Instance;
         // Запреты конфига + ограничения возможностей персоны (ExtraDisallowedTools)
         _disallowedTools = context.ExtraDisallowedTools is { Count: > 0 } extra
             ? [.. (disallowedTools ?? []), .. extra]
@@ -2590,6 +2593,17 @@ public class ClaudeSession : ILlmSessionAdapter
         // прогона, тогда тег перезапишется на реальную модель; см. HandleStreamJson.
         _turnActivity = turnActivity;
         _turnCliModel = null;
+
+        // Ход на ЛОКАЛЬНОМ провайдере занимает KV-бюджет движка целиком — на это время
+        // фоновые one-shot действия к локали не пускаем (LocalEngineBusyTracker, правило
+        // в LocalActionRouter.LocalBlockedByTurn). using на всё тело хода: освобождение
+        // обязано случиться на ЛЮБОМ выходе, включая исключение и отмену.
+        // Признак берём в начале хода по намерению — той же проверкой, что ставит env
+        // локального провайдера ниже; фолбэк на другую модель внутри хода признак не
+        // снимает намеренно: процесс CLI уже живёт с этим движком.
+        using var localEngineSlot = _providers?.ResolveByModel(EffectiveModel) is { IsLocal: true }
+            ? _localEngineBusy.Enter()
+            : null;
 
         // --print обязателен: без него --output-format/--input-format/--include-partial-messages/--permission-prompt-tool не работают
         // --input-format stream-json нужен: мы посылаем JSON-объекты в stdin, а не plain text

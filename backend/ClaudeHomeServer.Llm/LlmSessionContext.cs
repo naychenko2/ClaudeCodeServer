@@ -365,4 +365,10 @@ public sealed record LlmSessionContext(
     // CodeGraphContributor использует MainRootPath как fallback для slice графа кода
     // (ADR-003), пока граф worktree-ветки ещё не построен. null — чат вне проекта; равен
     // RootPath — обычный чат без worktree, fallback сводится к no-op.
-    string? MainRootPath = null);
+    string? MainRootPath = null,
+    // Признак «на локальном движке идёт ход»: ход на провайдере с IsLocal помечает его на
+    // своё время, фоновые one-shot действия по нему уходят мимо локали
+    // (LocalActionRouter.LocalBlockedByTurn). null — процесс-глобальный
+    // LocalEngineBusyTracker.Instance, тот же объект, что в DI; своим экземпляром
+    // пользуются только тесты, чтобы не делить признак между параллельными прогонами.
+    LocalEngineBusyTracker? LocalEngineBusy = null);

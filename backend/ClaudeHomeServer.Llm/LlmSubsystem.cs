@@ -198,6 +198,11 @@ public sealed class LlmSubsystem : IAppSubsystem
         // курируемый список OpenRouter:DirectModels).
         services.AddSingleton<CloudCheapClient>();
 
+        // Признак «на локальном движке идёт ход исполнителя»: ставит ClaudeSession, читает
+        // LocalActionRouter. Регистрируем ТОТ ЖЕ статический Instance — ClaudeSession создаётся
+        // руками и берёт его напрямую, а второй трекер сделал бы признак неправдой.
+        services.AddSingleton(LocalEngineBusyTracker.Instance);
+
         // Роутинг фоновых действий локаль(Ollama)/claude + единый «дешёвый»
         // текстовый раннер с фолбэком.
         services.AddSingleton<LocalActionOverridesStore>();

@@ -12,7 +12,7 @@
 # output_config срабатывает серверный дефолт, и ответ идёт сразу текстом.
 #
 # Всё остальное проксируется как есть, ответ — потоком (SSE). Невалидный JSON — fail-open.
-import http.client, json, os, re, sys, threading, time
+import gzip, http.client, json, os, re, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
@@ -152,6 +152,23 @@ PRUNE_THINKING = os.environ.get("PRUNE_THINKING", "off")
 # Разбор каждого запроса в журнал. ВЫКЛЮЧЕН по умолчанию: в лог попадает начало реплики,
 # то есть кусок чужого чата. Включать точечно, на время разбирательства.
 PRUNE_DEBUG = os.environ.get("PRUNE_DEBUG", "off")
+
+# --- Дамп тел запросов: разбор промахов prefix cache ----------------------------------------
+#
+# Заведён под промахи при НЕПОДВИЖНОЙ границе прунинга (живой прогон 2026-09-23: четыре из
+# шести промахов при границе 30 блоков, из кэша ровно системная часть ~13k). Отладочная строка
+# на такой вопрос не отвечает: она печатает размеры, а разошлись байты. Поэтому здесь на диск
+# ложится ТЕЛО ПОСЛЕ ПРАВОК прокси — ровно то, что ушло в движок, — плюс `usage` ответа и
+# время до первого байта. Разбирает дамп `diff_miss.py`.
+#
+# ВЫКЛЮЧЕНО по умолчанию и не должно включаться надолго: в файлах лежат чужие чаты целиком.
+DUMP_DIR = os.environ.get("PRUNE_DUMP_DIR", "")
+# Предохранитель на каталог. Не вкусовщина: дамп содержит переписку, и путь задаётся
+# переменной окружения в юните — опечатка вроде `PRUNE_DUMP_DIR=.` высыпала бы чужие чаты в
+# рабочее дерево репозитория, откуда они уехали бы в коммит. Поэтому разрешены ровно два
+# корня: `/tmp` (чистится сам) и `data/` репозитория (в .gitignore и под бэкапом).
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+DUMP_ALLOWED_ROOTS = ("/tmp", os.path.join(_REPO_ROOT, "data"))
 
 # --- Маршрут запроса автосжатия на облачную модель -----------------------------------------
 #
@@ -716,28 +733,46 @@ def boundary_shifted(session_id, blocks):
         return True
 
 
-def usage_from_chunk(chunk):
-    """`(cache_read_input_tokens, весь промпт)` из `message_start` первого куска SSE.
+def usage_dict_from_chunk(chunk):
+    """Сырой `usage` из куска SSE; `{}` — не нашли.
 
-    `(None, None)` — если в куске его нет (частичное событие, чужой формат). Промпт — СУММА
-    трёх слагаемых usage: `input_tokens` считает только то, что прошло мимо кэша, и доля
-    `cache_read / input_tokens` вышла бы больше единицы.
+    Смотрит и `message_start` (`message.usage`), и `message_delta` (`usage` рядом с
+    `delta`): роутер vLLM кладёт цифры кэша именно во второе событие, в конец потока.
+    Отдельно от `usage_from_chunk`, потому что у дампа и у карточки разные нужды: карточке
+    хватает двух чисел по первому байту, а разбору промахов нужны все слагаемые как есть.
     """
+    собранный = {}
     try:
         for строка in chunk.split(b"\n"):
             if not строка.startswith(b"data:"):
                 continue
             событие = json.loads(строка[5:].strip())
-            if событие.get("type") != "message_start":
-                continue
-            usage = (событие.get("message") or {}).get("usage") or {}
-            чтение = usage.get("cache_read_input_tokens")
-            промпт = sum(usage.get(k) or 0 for k in
-                         ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
-            return (чтение if isinstance(чтение, int) else None), (промпт or None)
+            usage = ((событие.get("message") or {}).get("usage")
+                     if событие.get("type") == "message_start" else событие.get("usage"))
+            if isinstance(usage, dict):
+                собранный.update(usage)
     except Exception:
         pass  # чужой формат ответа карточку не ломает: уйдёт без цифр кэша
-    return None, None
+    return собранный
+
+
+def usage_from_chunk(chunk):
+    """`(cache_read_input_tokens, весь промпт)` из usage первого куска SSE — для карточки.
+
+    `(None, None)` — если в куске его нет (частичное событие, чужой формат). Промпт — СУММА
+    трёх слагаемых usage: в `message_start` `input_tokens` считает только то, что прошло мимо
+    кэша, и доля `cache_read / input_tokens` вышла бы больше единицы.
+
+    Важное ограничение, снятое живьём 2026-09-23: цифр кэша в `message_start` роутера vLLM
+    НЕТ — они приходят в финальном `message_delta`, а карточка уходит по первому байту.
+    Значит на локальной модели она несёт `cacheReadTokens: null`; разбор этого случая и
+    возможная мера — в README, раздел «Отчего промахи на самом деле».
+    """
+    usage = usage_dict_from_chunk(chunk)
+    чтение = usage.get("cache_read_input_tokens")
+    промпт = sum(usage.get(k) or 0 for k in
+                 ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
+    return (чтение if isinstance(чтение, int) else None), (промпт or None)
 
 
 def post_event(payload, connector=None):
@@ -790,6 +825,131 @@ def send_event(payload):
     поток = threading.Thread(target=post_event, args=(payload,), daemon=True)
     _last_event_thread = поток
     поток.start()
+
+
+# --- Дамп тел на диск ------------------------------------------------------------------------
+
+_dump_dir = None  # None — ещё не готовили; "" — дамп выключен (или каталог не годится)
+_dump_seq = 0
+_dump_lock = threading.Lock()
+
+
+def prepare_dump_dir(путь=None):
+    """Готовит каталог дампа и возвращает его; "" — дамп выключен. Кэш на процесс.
+
+    Каталог сверяется с `DUMP_ALLOWED_ROOTS` — см. мотив у самой константы. Несогласный путь
+    не молчаливая осечка, а строка в журнал: человек включил дамп и обязан узнать, что записи
+    не будет, а не искать потом пустую папку.
+    """
+    global _dump_dir
+    if путь is not None:  # явный вызов (тесты, повторная настройка) кэш не переиспользует
+        _dump_dir = None
+    цель = DUMP_DIR if путь is None else путь
+    if _dump_dir is None:
+        _dump_dir = ""
+        if цель:
+            полный = os.path.realpath(цель)
+            разрешён = any(полный == корень or полный.startswith(корень + os.sep)
+                           for корень in DUMP_ALLOWED_ROOTS)
+            if not разрешён:
+                print(f"дамп тел выключен: каталог {полный} вне разрешённых "
+                      f"({', '.join(DUMP_ALLOWED_ROOTS)}) — в телах лежат чужие чаты",
+                      file=sys.stderr, flush=True)
+            else:
+                try:
+                    os.makedirs(полный, mode=0o700, exist_ok=True)
+                    _dump_dir = полный
+                    print(f"дамп тел запросов -> {полный} (в файлах чужие чаты — "
+                          f"выключи, как разберёшься)", file=sys.stderr, flush=True)
+                except OSError as e:
+                    print(f"дамп тел выключен: каталог {полный} не создан ({e!r})",
+                          file=sys.stderr, flush=True)
+    return _dump_dir
+
+
+class ЗаписьДампа:
+    """Дамп одного запроса: тело сразу, мета — в конце ответа.
+
+    Двумя файлами, а не одним: тело известно до отправки, а `usage` приходит последним
+    событием потока, и запиши мы всё разом в конце, тела оборванных запросов (а они-то и
+    интересны) не сохранились бы вовсе. Тело жмётся gzip: прогон — это 190 запросов по мегабайту.
+
+    Fail-open, как и всё остальное в прокси: любая осечка записи — строка в журнал, ход идёт
+    дальше. Дамп диагностический, и падать из-за него ходу пользователя не за что.
+    """
+
+    def __init__(self, каталог, seq, session, тело, мета):
+        self.мета_путь = ""
+        сейчас = time.time()
+        метка = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(сейчас))
+        self.мета = dict(мета, seq=seq, session=session or None, bodyBytes=len(тело),
+                         ts=f"{метка}.{int(сейчас * 1000) % 1000:03d}", epoch=round(сейчас, 3))
+        основа = os.path.join(каталог, f"{time.strftime('%H%M%S', time.localtime(сейчас))}-"
+                                       f"{seq:05d}-{(session or 'nosess')[:12]}")
+        try:
+            with gzip.open(основа + ".req.json.gz", "wb") as f:
+                f.write(тело)
+            os.chmod(основа + ".req.json.gz", 0o600)
+            self.мета["body"] = os.path.basename(основа) + ".req.json.gz"
+            self.мета_путь = основа + ".meta.json"
+        except Exception as e:
+            print(f"дамп тела не записан ({e!r})", file=sys.stderr, flush=True)
+
+    def первый_байт(self, chunk, начало):
+        """Замер prefill: время до первого байта. Второй раз ничего не делает."""
+        if "ttfbSeconds" in self.мета:
+            return
+        self.мета["ttfbSeconds"] = round(time.monotonic() - начало, 3)
+
+    def усвоить(self, chunk):
+        """Копит `usage` по ходу потока.
+
+        Цифры кэша в `message_start` роутера vLLM НЕ приходят — там только `input_tokens` и
+        `output_tokens` (снято живьём 2026-09-23); `cache_read_input_tokens` и
+        `cache_creation_input_tokens` появляются в финальном `message_delta`. Поэтому usage
+        собирается по всему потоку, а не по первому куску: иначе главная цифра разбора —
+        сколько взято из кэша — в дампе была бы пустой на КАЖДОМ запросе.
+
+        Слияние по максимуму: значения по ходу потока только растут (`output_tokens`
+        накапливается, цифры кэша приходят один раз), а нули промежуточных событий не должны
+        затирать уже известное.
+        """
+        свежий = usage_dict_from_chunk(chunk)
+        if not свежий:
+            return
+        копилка = self.мета.setdefault("usage", {})
+        for ключ, значение in свежий.items():
+            if isinstance(значение, int):
+                копилка[ключ] = max(значение, копилка.get(ключ) or 0)
+            elif ключ not in копилка:
+                копилка[ключ] = значение
+
+    def записать(self):
+        if not self.мета_путь:
+            return
+        путь, self.мета_путь = self.мета_путь, ""
+        try:
+            # Через временный файл с переименованием: мету пишет обработчик уже ПОСЛЕ ответа
+            # клиенту, а разбор могут запустить в любой момент — пусть видит либо готовый
+            # файл с правами 0600, либо ничего, но не половину.
+            with open(путь + ".tmp", "w", encoding="utf-8") as f:
+                json.dump(self.мета, f, ensure_ascii=False, indent=1)
+            os.chmod(путь + ".tmp", 0o600)
+            os.replace(путь + ".tmp", путь)
+        except Exception as e:
+            print(f"дамп меты не записан ({e!r})", file=sys.stderr, flush=True)
+
+
+def dump_request(тело, session, мета):
+    """Кладёт тело запроса в дамп и возвращает `ЗаписьДампа` (или None, если дамп выключен)."""
+    каталог = prepare_dump_dir()
+    if not каталог:
+        return None
+    global _dump_seq
+    with _dump_lock:
+        _dump_seq += 1
+        seq = _dump_seq
+    return ЗаписьДампа(каталог, seq, session, тело, мета)
 
 
 def _debug_dump(doc, msgs, body_len):
@@ -883,9 +1043,15 @@ class Handler(BaseHTTPRequestHandler):
         original = body  # на откат: любая осечка разбора обязана вернуть тело нетронутым
         stripped = False
         compact = None  # тело для облака, если это запрос автосжатия
-        сессия = self.headers.get(EVENT_SESSION_HEADER) if BACKEND_EVENTS_URL else None
+        # Заголовок чата нужен обоим потребителям — карточке и дампу: разбор промахов идёт
+        # ПО СЕССИЯМ (сравнивается соседняя пара запросов одного чата), и без него дамп
+        # прогона превращается в кашу из ходов исполнителя и фоновых действий продукта.
+        сессия = (self.headers.get(EVENT_SESSION_HEADER)
+                  if (BACKEND_EVENTS_URL or DUMP_DIR) else None)
         событие = None  # заготовка карточки: цифры замера допишем по первому байту ответа
+        дамп = None  # дамп тела, если включён PRUNE_DUMP_DIR
         compact_before = None
+        прунинг = {"blocks": 0, "freedChars": 0}
         if body and self.command == "POST":
             try:
                 doc = json.loads(body)
@@ -938,6 +1104,7 @@ class Handler(BaseHTTPRequestHandler):
                             if blocks:
                                 doc["messages"] = pruned_msgs
                                 stripped = True
+                                прунинг = {"blocks": blocks, "freedChars": freed}
                                 with lock:
                                     stats["pruned_blocks"] += blocks
                                     stats["pruned_chars"] += freed
@@ -988,6 +1155,11 @@ class Handler(BaseHTTPRequestHandler):
                 stats["compact_routed" if попытка else "compact_fallback"] += 1
             if попытка:
                 conn, resp, первый = попытка
+                дамп = dump_request(compact, сессия, dict(
+                    прунинг, path=self.path, upstream="cloud", stripped=False))
+                if дамп is not None:
+                    дамп.первый_байт(первый, начало)
+                    дамп.усвоить(первый)
                 # Сжатие ушло в облако — рассказываем и об этом: для человека это тот же
                 # «чат думает молча». Первый кусок уже прочитан внутри open_compact, поэтому
                 # замер включает и установку соединения — на фоне десятков секунд не важно.
@@ -1006,6 +1178,11 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 начало = time.monotonic()
                 conn.request(self.command, self.path, body=body or None, headers=headers)
+                # Дамп пишется ПОСЛЕ отправки тела и до чтения ответа: так сжатие мегабайта
+                # идёт, пока модель делает prefill, и замер `ttfbSeconds` остаётся честным —
+                # запись на диск в него не попадает.
+                дамп = dump_request(body, сессия, dict(
+                    прунинг, path=self.path, upstream="local", stripped=stripped))
                 resp = conn.getresponse()
             except OSError as e:
                 print(f"upstream-ошибка {self.command} {self.path}: {e!r}", file=sys.stderr, flush=True)
@@ -1016,6 +1193,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Content-Length", str(len(msg)))
                 self.end_headers()
                 self.wfile.write(msg)
+                if дамп is not None:
+                    дамп.записать()  # ответа не было — мета уходит без usage и замера
                 return
 
         self.send_response(resp.status, resp.reason)
@@ -1032,9 +1211,13 @@ class Handler(BaseHTTPRequestHandler):
                 chunk = resp.read1(65536)
                 if not chunk:
                     break
+                if дамп is not None:
+                    дамп.первый_байт(chunk, начало)  # второй раз метод ничего не делает
+                    дамп.усвоить(chunk)  # цифры кэша придут в конце потока, а не сейчас
                 if событие is not None:
-                    # Первый байт ответа: замер готов, цифры кэша лежат в message_start этого
-                    # же куска. Отправка фоновая, поток пользователю не задерживается.
+                    # Первый байт ответа: замер готов. Цифры кэша карточка берёт из этого же
+                    # куска — и у локальной модели не находит (см. `usage_from_chunk`).
+                    # Отправка фоновая, поток пользователю не задерживается.
                     self._событие_с_замером(событие, начало, chunk)
                     событие = None
                 self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
@@ -1044,6 +1227,8 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass  # клиент ушёл (прерывание хода) — upstream закроется вместе с conn
         finally:
+            if дамп is not None:
+                дамп.записать()  # оборванный ход: мета без usage, зато тело в дампе осталось
             conn.close()
 
     def handle_one_request(self):
@@ -1078,4 +1263,5 @@ if __name__ == "__main__":
              else ", автосжатие в облако выкл")
           + (f", карточка сдвига границы -> {BACKEND_EVENTS_URL}" if BACKEND_EVENTS_URL
              else ", карточка сдвига границы выкл"), flush=True)
+    prepare_dump_dir()  # сообщит в журнал, включён дамп или каталог не годится
     srv.serve_forever()

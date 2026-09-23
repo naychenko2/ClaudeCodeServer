@@ -14,6 +14,7 @@ import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import diff_miss
 import proxy
 
 # Параметры прунинга в тестах задаём явно: дефолты живут в переменных окружения и
@@ -1119,6 +1120,386 @@ class СобытиеСквозноеTests(unittest.TestCase):
         ответ = self.спросить(history(120))
         self.assertIn("message_start".encode(), ответ)
         self.assertEqual(self.Бэкенд.принятые, [], "без адреса прокси никуда не стучится")
+
+
+class ДампКаталогTests(unittest.TestCase):
+    """Предохранитель на каталог: в телах лежат чужие чаты, и мимо /tmp и data/ им хода нет."""
+
+    def tearDown(self):
+        proxy._dump_dir = None
+
+    def test_вне_разрешённых_корней_дамп_выключается(self):
+        каталог = tempfile.mkdtemp(dir=os.path.dirname(os.path.abspath(__file__)))
+        try:
+            журнал = io.StringIO()
+            with contextlib.redirect_stderr(журнал):
+                self.assertEqual(proxy.prepare_dump_dir(каталог), "")
+            self.assertIn("вне разрешённых", журнал.getvalue())
+            self.assertEqual(os.listdir(каталог), [], "и ничего туда не пишем")
+        finally:
+            shutil.rmtree(каталог, ignore_errors=True)
+
+    def test_пустая_настройка_это_выключенный_дамп(self):
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(proxy.prepare_dump_dir(""), "")
+
+    def test_каталог_под_tmp_годится_и_создаётся(self):
+        путь = os.path.join(tempfile.mkdtemp(dir="/tmp"), "вложенный")
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                готовый = proxy.prepare_dump_dir(путь)
+            self.assertEqual(готовый, os.path.realpath(путь))
+            self.assertTrue(os.path.isdir(путь))
+        finally:
+            shutil.rmtree(os.path.dirname(путь), ignore_errors=True)
+
+    def test_data_репозитория_тоже_годится(self):
+        корень = os.path.join(proxy.DUMP_ALLOWED_ROOTS[1], "prune-dump-тест")
+        try:
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(proxy.prepare_dump_dir(корень), os.path.realpath(корень))
+        finally:
+            shutil.rmtree(корень, ignore_errors=True)
+
+
+class ДампСквознойTests(unittest.TestCase):
+    """Дамп пишет ТО, ЧТО УШЛО В ДВИЖОК: тело после правок плюс usage и замер ответа."""
+
+    def setUp(self):
+        class Модель(МодельЗаглушка):
+            принятые = []
+
+        self.Модель = Модель
+        self.модель = поднять(Модель)
+        self.прокси = поднять(proxy.Handler)
+        self.каталог = tempfile.mkdtemp(dir="/tmp")
+        self.сохранено = (proxy.UP_HOST, proxy.UP_PORT, proxy.PRUNE_MODE, proxy.DUMP_DIR,
+                          proxy.COMPACT_UPSTREAM, proxy.BACKEND_EVENTS_URL, dict(proxy.stats))
+        proxy.UP_HOST, proxy.UP_PORT = "127.0.0.1", self.модель.server_address[1]
+        proxy.PRUNE_MODE, proxy.COMPACT_UPSTREAM, proxy.BACKEND_EVENTS_URL = "off", "", ""
+        proxy.DUMP_DIR = self.каталог
+        proxy._dump_dir = None
+        with contextlib.redirect_stderr(io.StringIO()):
+            proxy.prepare_dump_dir(self.каталог)
+
+    def tearDown(self):
+        (proxy.UP_HOST, proxy.UP_PORT, proxy.PRUNE_MODE, proxy.DUMP_DIR,
+         proxy.COMPACT_UPSTREAM, proxy.BACKEND_EVENTS_URL, стат) = self.сохранено
+        proxy.stats.clear()
+        proxy.stats.update(стат)
+        proxy._dump_dir = None
+        shutil.rmtree(self.каталог, ignore_errors=True)
+        for с in (self.модель, self.прокси):
+            с.shutdown()
+            с.server_close()
+
+    def спросить(self, msgs, сессия="sess-1"):
+        тело = json.dumps({"model": "qwen3.8-27b", "max_tokens": 8192,
+                           "messages": msgs}).encode()
+        заголовки = {"Content-Type": "application/json", "Content-Length": str(len(тело))}
+        if сессия is not None:
+            заголовки[proxy.EVENT_SESSION_HEADER] = сессия
+        c = http.client.HTTPConnection("127.0.0.1", self.прокси.server_address[1], timeout=30)
+        c.request("POST", "/v1/messages", body=тело, headers=заголовки)
+        ответ = c.getresponse().read()
+        c.close()
+        return ответ
+
+    def записи(self, сколько=1):
+        """Записи дампа, дождавшись их появления.
+
+        Мету прокси пишет в самом конце обработки — уже после того, как клиент получил
+        ответ, — поэтому без ожидания тест читал бы каталог наперегонки с обработчиком.
+        Ждём СОБЫТИЯ (файл появился), а не фиксированной паузы: на медленной машине пауза
+        всё равно оказалась бы то короткой, то лишней.
+        """
+        предел = time.monotonic() + 5
+        while time.monotonic() < предел:
+            найдено = diff_miss.загрузить(self.каталог)
+            if len(найдено) >= сколько:
+                return найдено
+            time.sleep(0.01)
+        return diff_miss.загрузить(self.каталог)
+
+    def test_тело_ложится_на_диск_уже_после_правок(self):
+        """Иначе дамп врал бы о самом главном: движок видит тело ПОСЛЕ прокси, а не до него."""
+        напоминание = {"role": "system",
+                       "content": "<total_tokens>15000000 tokens left</total_tokens>"}
+        self.спросить([{"role": "user", "content": "задача"}, напоминание])
+        записи = self.записи(1)
+        self.assertEqual(len(записи), 1)
+        тело = diff_miss.тело(записи[0])
+        self.assertEqual([m["role"] for m in тело["messages"]], ["user"],
+                         "напоминание вырезано прокси — в дампе его тоже быть не должно")
+        self.assertEqual(записи[0]["session"], "sess-1")
+        self.assertEqual(записи[0]["upstream"], "local")
+
+    def test_мета_несёт_usage_и_замер(self):
+        self.спросить([{"role": "user", "content": "задача"}])
+        мета = self.записи()[0]
+        self.assertEqual(мета["usage"]["cache_read_input_tokens"], 18000)
+        self.assertGreaterEqual(мета["ttfbSeconds"], МодельЗаглушка.задержка)
+        self.assertEqual(diff_miss.цифры(мета)[0], 20000, "промпт — сумма слагаемых usage")
+
+    def test_цифры_кэша_из_финального_message_delta(self):
+        """Снято живьём 2026-09-23: роутер vLLM кладёт цифры кэша в КОНЕЦ потока.
+
+        В `message_start` у него только `input_tokens` и `output_tokens`. Собирай дамп по
+        первому куску — и главная цифра разбора («сколько взято из кэша») была бы пустой на
+        каждом запросе; ровно так первый прогон дампа и вышел бесполезным.
+        """
+        class МодельСДельтой(МодельЗаглушка):
+            принятые = []
+
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length") or 0)
+                self.rfile.read(n)
+                начало = json.dumps({"type": "message_start", "message": {
+                    "usage": {"input_tokens": 445, "output_tokens": 0}}})
+                дельта = json.dumps({"type": "message_delta", "usage": {
+                    "input_tokens": 445, "cache_creation_input_tokens": 19872,
+                    "cache_read_input_tokens": 48816, "output_tokens": 557}})
+                ответ = (f"event: message_start\ndata: {начало}\n\n"
+                         f"event: message_delta\ndata: {дельта}\n\n").encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Content-Length", str(len(ответ)))
+                self.end_headers()
+                self.wfile.write(ответ)
+
+        модель = поднять(МодельСДельтой)
+        proxy.UP_PORT = модель.server_address[1]
+        try:
+            self.спросить([{"role": "user", "content": "задача"}])
+        finally:
+            модель.shutdown()
+            модель.server_close()
+        мета = self.записи()[0]
+        self.assertEqual(мета["usage"]["cache_read_input_tokens"], 48816)
+        self.assertEqual(мета["usage"]["output_tokens"], 557, "usage копится по всему потоку")
+        промпт, чтение, доля = diff_miss.цифры(мета)
+        self.assertEqual((промпт, чтение), (69133, 48816))
+        self.assertAlmostEqual(доля, 48816 / 69133)
+
+    def test_номера_растут_и_файлы_не_затирают_друг_друга(self):
+        for _ in range(3):
+            self.спросить([{"role": "user", "content": "задача"}])
+        записи = self.записи(3)
+        self.assertEqual(len(записи), 3)
+        self.assertEqual([з["seq"] for з in записи], sorted(з["seq"] for з in записи))
+        self.assertEqual(len({з["body"] for з in записи}), 3)
+
+    def test_файлы_дампа_закрыты_от_чужих(self):
+        """В теле чужая переписка — режим по умолчанию (0644) для неё не годится."""
+        self.спросить([{"role": "user", "content": "задача"}])
+        запись = self.записи()[0]
+        for путь in (запись["тело_файл"], os.path.join(self.каталог, запись["мета_файл"])):
+            self.assertEqual(os.stat(путь).st_mode & 0o777, 0o600, путь)
+
+    def test_без_настройки_дамп_не_пишется(self):
+        proxy.DUMP_DIR, proxy._dump_dir = "", None
+        self.спросить([{"role": "user", "content": "задача"}])
+        # Здесь ждать нечего — проверяем как раз отсутствие записи, поэтому читаем напрямую.
+        self.assertEqual(diff_miss.загрузить(self.каталог), [],
+                         "выключенный дамп не создаёт ни файла")
+
+
+class DiffMissTests(unittest.TestCase):
+    """Разбор синтетических пар тел: что именно инструмент называет причиной промаха."""
+
+    def тело(self, msgs, system="системный промпт", tools=None):
+        return {"model": "qwen3.8-27b", "system": system,
+                "tools": tools if tools is not None else [{"name": "Bash"}], "messages": msgs}
+
+    def test_дописанный_хвост_расхождением_не_считается(self):
+        разбор = diff_miss.сравнить(self.тело(history(10)), self.тело(history(12)))
+        self.assertEqual(разбор["вид"], "хвост")
+        self.assertEqual(разбор["совпало_сообщений"], len(history(10)))
+
+    def test_изменившаяся_системная_часть(self):
+        разбор = diff_miss.сравнить(self.тело(history(10)),
+                                    self.тело(history(10), system="системный промпт и ещё"))
+        self.assertEqual(разбор["вид"], "системная")
+        self.assertEqual(разбор["совпало_сообщений"], 0)
+        self.assertIn("системная часть разошлась", разбор["строки"][0])
+
+    def test_изменившийся_тулсет_это_тоже_системная_часть(self):
+        разбор = diff_miss.сравнить(self.тело(history(10)),
+                                    self.тело(history(10), tools=[{"name": "Read"}]))
+        self.assertEqual(разбор["вид"], "системная")
+
+    def test_вставка_сообщения_в_середину(self):
+        было = history(10)
+        стало = list(было)
+        стало.insert(5, {"role": "user", "content": "внезапное напоминание"})
+        разбор = diff_miss.сравнить(self.тело(было), self.тело(стало))
+        self.assertEqual(разбор["вид"], "вставка")
+        self.assertEqual(разбор["индекс"], 5)
+        self.assertIn("вставлено 1 сообщений перед #5", разбор["строки"][0])
+
+    def test_удаление_сообщения_из_середины(self):
+        было = history(10)
+        стало = [m for i, m in enumerate(было) if i != 4]
+        разбор = diff_miss.сравнить(self.тело(было), self.тело(стало))
+        self.assertEqual(разбор["вид"], "удаление")
+        self.assertEqual(разбор["индекс"], 4)
+
+    def test_замена_содержимого_показывает_первый_расходящийся_символ(self):
+        было = history(10)
+        стало = copy.deepcopy(было)
+        стало[6]["content"][0]["content"] = "x" * 3000 + "ИНОЕ" + "x" * 2996
+        разбор = diff_miss.сравнить(self.тело(было), self.тело(стало))
+        self.assertEqual(разбор["вид"], "замена")
+        self.assertEqual(разбор["индекс"], 6)
+        self.assertIn("ИНОЕ", разбор["строки"][2], "окно вокруг расхождения обязано его показать")
+        self.assertNotIn("ИНОЕ", разбор["строки"][1], "а в «было» его быть не должно")
+
+    def test_перестановка_ключей_блока_расхождением_не_считается(self):
+        """Движок читает JSON в объекты: порядок ключей на промпт не влияет, шуметь им нечего."""
+        было = [{"role": "user", "content": [{"type": "text", "text": "привет"}]}]
+        стало = [{"content": [{"text": "привет", "type": "text"}], "role": "user"}]
+        self.assertEqual(diff_miss.сравнить(self.тело(было), self.тело(стало))["вид"], "совпало")
+
+    def test_две_семантики_input_tokens_считаются_по_разному(self):
+        """Живой факт 2026-09-23: в `message_delta` роутера vLLM `input_tokens` — ВЕСЬ промпт.
+
+        Сложение слагаемых вслепую задваивает кэш: ход с 96 % попаданий читался как промах
+        на 48 %, и разбор показывал промахи там, где их не было.
+        """
+        полный = {"usage": {"input_tokens": 133808, "cache_read_input_tokens": 127872,
+                            "cache_creation_input_tokens": 5184}}
+        промпт, чтение, доля = diff_miss.цифры(полный)
+        self.assertEqual((промпт, чтение), (133808, 127872))
+        self.assertGreater(доля, 0.95)
+        мимо = {"usage": {"input_tokens": 2000, "cache_read_input_tokens": 18000}}
+        self.assertEqual(diff_miss.цифры(мимо)[0], 20000, "форма message_start — сумма")
+        пусто = {"usage": {"input_tokens": 500}}
+        self.assertEqual(diff_miss.цифры(пусто), (500, None, None))
+
+    def test_вердикт_разводит_расхождение_тела_и_вытеснение(self):
+        """Три исхода, и путать их нельзя: чинятся они в разных местах."""
+        self.assertTrue(diff_miss.вердикт(13000, 12960, "замена").startswith("ТЕЛО:"))
+        self.assertTrue(diff_miss.вердикт(126000, 12960, "хвост").startswith("ВЫТЕСНЕНИЕ:"))
+        self.assertTrue(diff_miss.вердикт(126000, 12960, "совпало").startswith("ВЫТЕСНЕНИЕ:"))
+        # Кэш отдал весь совпавший префикс, а доля мала лишь из-за жирного нового хвоста —
+        # это не промах вовсе. Без этой ветки разбор объявлял бы вытеснением здоровый ход
+        # с одним большим Read (живой случай 2026-09-23, запрос 23).
+        self.assertTrue(diff_miss.вердикт(19478, 20736, "хвост").startswith("НОРМА:"))
+        self.assertTrue(diff_miss.вердикт(20000, 18000, "хвост").startswith("НОРМА:"))
+        # Тела разошлись, но движок не отдал даже совпавшего — сложились обе причины.
+        self.assertTrue(diff_miss.вердикт(126000, 12960, "замена").startswith("ТЕЛО + ВЫТЕСНЕНИЕ"))
+        self.assertIn("usage", diff_miss.вердикт(126000, None, "замена"))
+
+    def test_совпавший_префикс_меряется_меркой_прокси(self):
+        тело = self.тело(history(10))
+        весь = diff_miss.токенов_совпало(тело, len(тело["messages"]))
+        часть = diff_miss.токенов_совпало(тело, 5)
+        self.assertGreater(весь, часть)
+        self.assertGreater(часть, 0, "системная часть входит в префикс всегда")
+
+
+class DiffMissОтчётTests(unittest.TestCase):
+    """Сквозной прогон по настоящей папке дампа: кого инструмент называет промахом и почему."""
+
+    def setUp(self):
+        self.каталог = tempfile.mkdtemp(dir="/tmp")
+
+    def tearDown(self):
+        shutil.rmtree(self.каталог, ignore_errors=True)
+
+    def положить(self, seq, msgs, usage, session="sess-1", system="системный промпт",
+                 path="/v1/messages"):
+        тело = json.dumps({"system": system, "tools": [{"name": "Bash"}],
+                           "messages": msgs}, ensure_ascii=False).encode()
+        запись = proxy.ЗаписьДампа(self.каталог, seq, session, тело,
+                                   {"path": path, "upstream": "local", "blocks": 0})
+        запись.мета["usage"] = usage
+        запись.мета["ttfbSeconds"] = 1.0
+        запись.записать()
+
+    def отчёт(self, **kw):
+        буфер = io.StringIO()
+        промахов = diff_miss.разобрать(self.каталог, вывод=буфер, **kw)
+        return промахов, буфер.getvalue()
+
+    def test_промах_при_дописанном_хвосте_объявлен_вытеснением(self):
+        """Ровно случай живого прогона: граница стоит, тело совпадает, а из кэша — крохи."""
+        self.положить(1, history(40), {"input_tokens": 500, "cache_read_input_tokens": 90000})
+        self.положить(2, history(42), {"input_tokens": 90000, "cache_read_input_tokens": 900})
+        промахов, текст = self.отчёт()
+        self.assertEqual(промахов, 1)
+        self.assertIn("расхождений нет: дописан хвост", текст)
+        self.assertIn("ВЫТЕСНЕНИЕ:", текст)
+        self.assertIn("граница НЕПОДВИЖНА", текст)
+
+    def test_промах_объяснённый_телом(self):
+        self.положить(1, history(40), {"input_tokens": 500, "cache_read_input_tokens": 90000})
+        self.положить(2, history(42), {"input_tokens": 90000, "cache_read_input_tokens": 900},
+                      system="другой системный промпт")
+        _, текст = self.отчёт()
+        self.assertIn("системная часть разошлась", текст)
+        self.assertIn("ТЕЛО:", текст)
+
+    def test_здоровые_ходы_в_разбор_не_попадают(self):
+        self.положить(1, history(40), {"input_tokens": 500, "cache_read_input_tokens": 90000})
+        self.положить(2, history(42), {"input_tokens": 900, "cache_read_input_tokens": 91000})
+        промахов, текст = self.отчёт()
+        self.assertEqual(промахов, 0)
+        self.assertIn("Промахов ниже 50% в дампе нет", текст)
+
+    def test_чужая_сессия_в_сравнение_не_лезет_но_считается_соседом(self):
+        """Сравнивать ход с фоновым одиночным запросом бессмысленно — а вот учесть его надо."""
+        self.положить(1, history(40), {"input_tokens": 500, "cache_read_input_tokens": 90000})
+        self.положить(2, [{"role": "user", "content": "сводка файла"}],
+                      {"input_tokens": 33000, "cache_read_input_tokens": 0}, session=None)
+        self.положить(3, history(42), {"input_tokens": 90000, "cache_read_input_tokens": 900})
+        промахов, текст = self.отчёт()
+        self.assertIn("расхождений нет: дописан хвост", текст, "сравнили с ходом 1, а не с фоном")
+        self.assertIn("между запросами прошло 1 чужих запросов на 33000 ток", текст)
+        self.assertEqual(промахов, 2, "фоновый запрос без кэша — тоже промах, но без пары")
+        self.assertIn("предыдущего запроса этой сессии в дампе нет", текст)
+
+    def test_без_заголовка_ход_и_фон_разводятся_по_системной_части(self):
+        """Заголовка в боевой сборке пока нет, а сравнивать ход с фоновым one-shot нельзя.
+
+        Без этого «предыдущим запросом» хода оказывается фоновое действие продукта, у которого
+        ни системной части, ни общей истории, — и разбор на каждом промахе показывал бы
+        расхождение с первого байта, то есть врал бы в главном.
+        """
+        ход = json.dumps({"system": "промпт", "tools": [{"name": "Bash"}],
+                          "messages": history(2)}, ensure_ascii=False).encode()
+        фон = json.dumps({"messages": [{"role": "user", "content": "сводка файла"}]},
+                         ensure_ascii=False).encode()
+        for seq, тело in ((1, ход), (2, фон)):
+            запись = proxy.ЗаписьДампа(self.каталог, seq, None, тело, {"upstream": "local"})
+            запись.записать()
+        записи = diff_miss.загрузить(self.каталог)
+        self.assertEqual([diff_miss.ключ_сессии(з) for з in записи], ["ход", "фон"])
+        записи[0]["session"] = "sess-1"  # заголовок появился — он и главнее
+        self.assertEqual(diff_miss.ключ_сессии(записи[0]), "sess-1")
+
+    def test_служебные_запросы_в_разбор_не_идут(self):
+        """`count_tokens` CLI шлёт десятками; они ничего не генерируют и промахом не бывают."""
+        self.положить(1, history(40), {"input_tokens": 500, "cache_read_input_tokens": 90000})
+        self.положить(2, history(40), {"input_tokens": 90000, "cache_read_input_tokens": 0},
+                      path="/v1/messages/count_tokens?beta=true")
+        self.положить(3, history(42), {"input_tokens": 91000, "cache_read_input_tokens": 90000})
+        промахов, текст = self.отчёт()
+        self.assertEqual(промахов, 0, "служебный запрос промахом не считается")
+        self.assertIn("плюс 1 служебных", текст)
+
+    def test_фильтр_по_сессии(self):
+        self.положить(1, history(40), {"input_tokens": 90000}, session="другая")
+        self.положить(2, history(40), {"input_tokens": 90000}, session="sess-1")
+        _, текст = self.отчёт(сессия="sess-1")
+        self.assertIn("sess-1", текст)
+        self.assertNotIn("другая", текст)
+
+    def test_таблица_всех_запросов(self):
+        self.положить(1, history(40), {"input_tokens": 500, "cache_read_input_tokens": 90000})
+        _, текст = self.отчёт(показать_все=True)
+        self.assertIn("из кэша", текст)
+        self.assertIn("99%", текст)
 
 
 if __name__ == "__main__":

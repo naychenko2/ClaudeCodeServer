@@ -36,9 +36,9 @@
 - **`X-Caller-Session-Id`** — тот же id сессии в заголовке; на нём держатся фильтр
   `[DenyOnDelegatedTurn]` и белый список `McpToolWhitelist`.
 
-В `backend/ClaudeHomeServer/Services/Mcp/Http/` 17 файлов: 11 тулсетов (9 файлов + 2
-файла `.Schemas` — partial-классы `PersonasToolset`/`WorkspaceToolset`)
-плюс 4 файла каркаса: [McpToolsetRegistry.cs](../../backend/ClaudeHomeServer/Services/Mcp/Http/McpToolsetRegistry.cs)
+В `backend/ClaudeHomeServer/Services/Mcp/Http/` 17 файлов: 11 тулсетов (13 файлов —
+11 основных плюс 2 файла `.Schemas`, partial-классы
+`PersonasToolset`/`WorkspaceToolset`) плюс 4 файла каркаса: [McpToolsetRegistry.cs](../../backend/ClaudeHomeServer/Services/Mcp/Http/McpToolsetRegistry.cs)
 (реестр имя → тулсет), [McpHttpTransport.cs](../../backend/ClaudeHomeServer/Services/Mcp/Http/McpHttpTransport.cs)
 (гейт схемы адреса + откат на stdio),
 [McpToolWhitelist.cs](../../backend/ClaudeHomeServer/Services/Mcp/Http/McpToolWhitelist.cs)
@@ -190,7 +190,7 @@
 
 | Инструмент | Назначение |
 |---|---|
-| `watch_start` | Поставить сторожа: сервер раз в интервал выполняет `poll_command` в рабочем каталоге проекта чата (exit 0 = условие выполнено); при выполнении или истчении потолка жизни чат-постановщик получает сообщение-будильник |
+| `watch_start` | Поставить сторожа: сервер раз в интервал выполняет `poll_command` в рабочем каталоге проекта чата (exit 0 = условие выполнено); при выполнении или истечении потолка жизни чат-постановщик получает сообщение-будильник |
 | `watch_list` | Сторожа этого чата: статус, последний опрос, флаг `undelivered` (терминальный сторож, чьё сообщение не дошло) |
 | `watch_cancel` | Снять сторожа по id; идущий прямо сейчас опрос прерывается немедленно |
 
@@ -241,7 +241,7 @@ reloadOnChange); (2) хвост `{sessionId}` + `GetOwned` — как у watch, 
 
 **Подводные камни:** (1) классы отказов `web_read` разведены **сознательно** (дефект
 2026-09-07): «сайт ответил и отверг» (с HTTP-кодом) / «соединиться не удалось» / «таймаут» /
-«страница не разбрана» — по одинаковому тексту модель не отличала «сайт защищается» от
+«страница не разобрана» — по одинаковому тексту модель не отличала «сайт защищается» от
 «сеть лежит»; исключение — `local-address` и `dns-failed` схлопнуты в ОДИН текст, иначе
 модель получала бы оракул внутренней сети (ADR-005 §6); (2) stdio-ветки отката **нет**
 (как у watch); (3) markdown обрезка — 20 000 символов, значение не вынесено в конфиг (это
@@ -517,7 +517,7 @@ JSON-RPC-фасад, повёрнутый напрямую к `NotesService`/`No
 **хинт**, сервис сам находит единственное дословное вхождение (verify-before-write;
 неуникально — честная ошибка без порчи файла); (4) `notes_daily`: дописывание эндпоинтом не
 поддержано — тулсет делает сам (читает текущий текст, PUT-ит склейку, как stdio);
-(5) `notes_promote_task`: чекбокс можно задать текстом — резолв по спислу задач заметки,
+(5) `notes_promote_task`: чекбокс можно задать текстом — резолв по списку задач заметки,
 несколько совпадений — отказ с перечнем строк; (6) `index.js` заморожен, паритет —
 `NotesToolsetParityTests`.
 

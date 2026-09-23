@@ -56,6 +56,24 @@ public class RemoteCommandsServiceTests
         service.List().Select(a => a.Key).Should().Equal("demo");
     }
 
+    // Url — ссылка кнопки «Открыть», не команда: обязана доехать до List как есть,
+    // а кривая схема — скрыться, не топя запись.
+    [Fact]
+    public void Url_ЕдетВСписок_КриваяСхемаСкрываетсяНеТопяЗапись()
+    {
+        var good = Oneshot("with-url"); good.Url = "https://vscode.dev/tunnel/grisha-home";
+        var badScheme = Oneshot("bad-url"); badScheme.Url = "javascript:alert(1)";
+        var notUrl = Oneshot("not-url"); notUrl.Url = "просто текст";
+
+        var service = Build(new FakeShellCommandRunner(), true, good, badScheme, notUrl);
+
+        var list = service.List();
+        list.Select(a => a.Key).Should().Equal("with-url", "bad-url", "not-url");
+        list[0].Url.Should().Be("https://vscode.dev/tunnel/grisha-home");
+        list[1].Url.Should().BeNull();
+        list[2].Url.Should().BeNull();
+    }
+
     [Fact]
     public void ПустойСписокДействий_ФичаСчитаетсяВыключенной()
     {

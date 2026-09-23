@@ -13,9 +13,10 @@ public enum RemoteCommandState
     Unknown,
 }
 
-/// <summary>Строка списка действий: тексты команд наружу не отдаются никогда.</summary>
+/// <summary>Строка списка действий: тексты команд наружу не отдаются никогда.
+/// <c>Url</c> — необязательная ссылка «Открыть» (http/https), не команда.</summary>
 public sealed record RemoteCommandView(string Key, string Title, string Mode, string State,
-    bool Busy, DateTimeOffset? CheckedAt, int? LastExitCode);
+    bool Busy, DateTimeOffset? CheckedAt, int? LastExitCode, string? Url = null);
 
 public enum RemoteCommandOperationStatus
 {
@@ -345,7 +346,7 @@ public sealed partial class RemoteCommandsService : IHostedService
 
     private static RemoteCommandView Snapshot(ActionRuntime a) => new(
         a.Config.Key, a.Config.Title, a.Mode.ToString().ToLowerInvariant(), Name(a.State),
-        IsBusy(a), a.CheckedAt, a.LastExitCode);
+        IsBusy(a), a.CheckedAt, a.LastExitCode, a.Config.Url);
 
     private static string Name(RemoteCommandState state) => state.ToString().ToLowerInvariant();
 
@@ -368,6 +369,18 @@ public sealed partial class RemoteCommandsService : IHostedService
         { Reject(key, "неизвестный Mode (ожидается oneshot или daemon)"); return; }
         if (mode == RemoteCommandMode.Oneshot && string.IsNullOrWhiteSpace(action.Status))
         { Reject(key, "режиму oneshot обязательна команда Status"); return; }
+        // Url — не команда, записи он не топит: кривая ссылка гасится с WARN, кнопка
+        // «Открыть» просто не появляется. Морда торчит наружу — в её href уезжает только http/https.
+        if (!string.IsNullOrWhiteSpace(action.Url))
+        {
+            var okUrl = Uri.TryCreate(action.Url.Trim(), UriKind.Absolute, out var url)
+                && (url.Scheme == Uri.UriSchemeHttp || url.Scheme == Uri.UriSchemeHttps);
+            if (!okUrl)
+            {
+                _log.LogWarning("Пульт: у действия {Key} Url не является http/https-ссылкой — кнопка «Открыть» скрыта.", key);
+                action.Url = null;
+            }
+        }
 
         action.Key = key;
         _actions.Add(new ActionRuntime(action, mode));

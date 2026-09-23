@@ -16,6 +16,7 @@ namespace ClaudeHomeServer.Models;
 //       "Stop": "code tunnel kill",
 //       "Status": "code tunnel status",
 //       "StatusRunningPattern": "\"tunnel\":\"Connected\"",
+//       "Url": "https://vscode.dev/tunnel/grisha-home",
 //       "TimeoutSeconds": 30
 //     }
 //   ]
@@ -73,6 +74,14 @@ public class RemoteCommandAction
     /// сюрпризов меньше. Держать ASCII — нативные утилиты Windows печатают в OEM.
     /// </summary>
     public string? StatusRunningPattern { get; set; }
+
+    /// <summary>
+    /// Ссылка действия, которую карточка пульта показывает кнопкой «Открыть» (например,
+    /// https://vscode.dev/tunnel/имя для туннеля VS Code). Это НЕ команда — строка не
+    /// исполняется на сервере, фронт просто открывает её в новой вкладке. Годятся только
+    /// http/https; кривая схема молча отбрасывается с WARN, как опечатка в Mode.
+    /// </summary>
+    public string? Url { get; set; }
 
     /// <summary>Рабочая папка команд; пусто — домашняя папка пользователя сервера.</summary>
     public string? WorkingDir { get; set; }

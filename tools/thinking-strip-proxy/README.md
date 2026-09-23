@@ -808,16 +808,16 @@ SW-группы драфтера, И mamba-state, поэтому обе част
 пересчёт при частичном префиксе < 14k токенов).
 
 **Включено в бой 2026-09-23 (~13:50), оба режима:** `.env` = `.env.kvsparse-tier30-mamba` без
-`log_store_sizes` — `--kv-offloading-size 30 --kv-transfer-config {"kv_connector":
+`log_store_sizes` — `--kv-offloading-size 26 --kv-transfer-config {"kv_connector":
 "OffloadingConnector","kv_role":"kv_both","kv_connector_extra_config":{"sparse_mamba":true}}`
 (`sparse_swa` включён по умолчанию, якорь — только граница промпта) плюс
-`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:False`. Старт 90 с, в логе `sparse store enabled
-(sparse_swa=True, sparse_mamba=True)`, mmap 30 ГиБ, GPU-кэш 317 016. Откат —
+`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:False`. Сначала шло с тиром 30 (замер 3b), через
+пять минут ужато до 26 ГиБ ради RAM: два кита по 193k = 1808 блоков ≈ 24 ГиБ, запас 9 %. В логе
+`sparse store enabled (sparse_swa=True, sparse_mamba=True)`, GPU-кэш ~300k. Откат —
 `.env.bak-pre-kvsparse-battle-20260923-1350` и `compose --profile single up -d single`.
-Цена по RAM на 64 ГБ хоста: mmap живёт в tmpfs и `drop_caches` его не трогает, доступной
-памяти при тире остаётся ~11 ГиБ — это предел, не запас; крупную нагрузку рядом (виртуалка,
-сборки вне cgroup-лимита) не ставить, либо ужимать тир до 26 ГиБ (два кита по 193k = 1808
-блоков ≈ 24 ГиБ, запас 9 %).
+Цена по RAM на 64 ГБ хоста: mmap живёт в tmpfs и `drop_caches` его не трогает; при тире 30
+доступной памяти оставалось ~11 ГиБ, при 26 — ~14. Это предел, не запас: крупную нагрузку
+рядом (виртуалка, сборки вне cgroup-лимита) не ставить, либо гасить модель на это время.
 
 ## Тесты
 

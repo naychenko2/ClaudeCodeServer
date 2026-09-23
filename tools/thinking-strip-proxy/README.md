@@ -784,6 +784,41 @@ hit обрезается до ближайшего сохранённого stat
 `.env.bak-pre-kvoffload-20260923-1024`; бенч с `cached_tokens` и метриками тира —
 `bench_kvoff.py` рядом с `bench_tier.py`, разбор — gotcha 42 образа.
 
+**Патч геометрии написан и проверен на картах (2026-09-23, вечер)** —
+`/home/an/llm/thinking-strip-proxy/vllm-patch/patched/offloading_scheduler.py` (оригинал в
+`orig/`, дифф `kv-tier-sparse-store.patch`, синтетика `test_offloading_scheduler.py` без vllm и
+карт), подключён bind-mount'ом в `docker-compose.override.yml` стенда и исполняется только при
+`--kv-offloading-size`. Разбор в шапке патча; главное — экономия SW-группы и попадания по
+частичному префиксу связаны: граница попадания следующего запроса должна иметь И окно
+SW-группы драфтера, И mamba-state, поэтому обе части сидят на одной «сетке якорей» (граница
+промпта запроса всегда; каждый N-й чанк — по `anchor_stride_chunks`). Параметры в
+`kv_connector_extra_config` (`--kv-transfer-config {"kv_connector":"OffloadingConnector",
+"kv_role":"kv_both","kv_connector_extra_config":{…}}` рядом с `--kv-offloading-size`):
+`sparse_swa` (вкл.), `sparse_mamba` (выкл.), `anchor_stride_chunks` (нет), `log_store_sizes`
+(INFO-лог `group_sizes` — по нему и считаются блоки). Замер: кит 193k = **1570 блоков вместо
+2010** (SW-группа 6 вместо 446, −22 %); с ужатым GPU-кэшем два кита по 60k тёплые из RAM за
+0,6 с (`ext_hits` = 60048); в рабочем профиле (GPU 316k, тир 30) два кита по 193k **холодные
+даже с патчем** — 2 × 1570 > 2275 блоков, LRU выбивает начало предыдущего кита, ровно как
+без патча; с `sparse_mamba=true` кит ≈ 900 блоков и **оба кита тёплые за 1,8 с** вместо
+165–175 с. Цена `sparse_mamba` без сетки — попадание по частичному префиксу уходит в 0
+(агентный ход с тем же промптом целиком попадает полностью, обрезка eagle на один чанк
+432 та же, что без патча). Сетка `anchor_stride_chunks=8` экономии не даёт: окно SW-группы
+7 чанков при шаге 8 хранит почти всё, а mamba и так лежит примерно на каждом четвёртом чанке;
+осмысленны либо «только граница промпта», либо шаг ≥ 32 (SW ≈ 100, mamba ≈ 170 блоков на кит,
+пересчёт при частичном префиксе < 14k токенов).
+
+**Включено в бой 2026-09-23 (~13:50), оба режима:** `.env` = `.env.kvsparse-tier30-mamba` без
+`log_store_sizes` — `--kv-offloading-size 30 --kv-transfer-config {"kv_connector":
+"OffloadingConnector","kv_role":"kv_both","kv_connector_extra_config":{"sparse_mamba":true}}`
+(`sparse_swa` включён по умолчанию, якорь — только граница промпта) плюс
+`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:False`. Старт 90 с, в логе `sparse store enabled
+(sparse_swa=True, sparse_mamba=True)`, mmap 30 ГиБ, GPU-кэш 317 016. Откат —
+`.env.bak-pre-kvsparse-battle-20260923-1350` и `compose --profile single up -d single`.
+Цена по RAM на 64 ГБ хоста: mmap живёт в tmpfs и `drop_caches` его не трогает, доступной
+памяти при тире остаётся ~11 ГиБ — это предел, не запас; крупную нагрузку рядом (виртуалка,
+сборки вне cgroup-лимита) не ставить, либо ужимать тир до 26 ГиБ (два кита по 193k = 1808
+блоков ≈ 24 ГиБ, запас 9 %).
+
 ## Тесты
 
 Без сети и без поднятого vLLM, одной командой из корня репозитория:

@@ -19,8 +19,6 @@ import proxy
 
 # Параметры прунинга в тестах задаём явно: дефолты живут в переменных окружения и
 # меняются на стенде, а тест обязан проверять поведение, а не текущую настройку.
-# min_context_tokens=0 — условие «чат уже большой» здесь отключено намеренно: у него свои
-# тесты ниже, а эти проверяют границу, и один тест должен проверять одну вещь.
 # Ручки границы — в ТОКЕНАХ, а рассуждает тест в выводах, поэтому переводим через тот же
 # коэффициент, что и прокси: хвост 120k символов = 20 последних выводов, ступень 60k = 10
 # выводов. Жёстко зашить числа в токенах нельзя — они поехали бы вместе с коэффициентом, и
@@ -32,10 +30,6 @@ def _в_токенах(символов, вверх=False):
 
 
 BIG = "x" * 6000  # один «крупный» вывод
-P = dict(keep_tail_tokens=_в_токенах(20 * len(BIG)),
-         step_tokens=_в_токенах(10 * len(BIG), вверх=True),
-         min_chars=2000, min_tokens=_в_токенах(80000), min_context_tokens=0,
-         first_step_tokens=0)  # первая ступень = обычной: у неё свои тесты ниже
 
 
 def tool_use(i):
@@ -56,6 +50,24 @@ def history(n_calls):
     return msgs
 
 
+def оценка(msgs, extra=0):
+    """Та же мерка контекста, по которой прокси считает полосу."""
+    return proxy.estimate_tokens(proxy._context_chars(msgs), extra, proxy._signature_chars(msgs))
+
+
+# Гейт подбирается ПОД историю, а не наоборот: с 2026-09-23 цель обрезки задаётся полосой
+# сырого контекста, поэтому «сколько обрежем» зависит от того, где история стоит относительно
+# гейта. `history(120)` ставим на 5000 токенов выше гейта — начало первой полосы с запасом:
+# запас меньше ступени (иначе тест стабильности внутри полосы стал бы тестом перехода) и
+# больше одного вывода (иначе замена вывода на короткий уводила бы историю под гейт, и тесты
+# «мелкие выводы не трогаем» зеленели бы вырожденно, вообще не доходя до границы).
+ЗАПАС_НАД_ГЕЙТОМ = 5000
+P = dict(keep_tail_tokens=_в_токенах(20 * len(BIG)),
+         step_tokens=_в_токенах(10 * len(BIG), вверх=True),
+         min_chars=2000, min_tokens=_в_токенах(30000),
+         min_context_tokens=оценка(history(120)) - ЗАПАС_НАД_ГЕЙТОМ)
+
+
 class PruneTests(unittest.TestCase):
     def test_детерминизм(self):
         msgs = history(120)
@@ -70,17 +82,22 @@ class PruneTests(unittest.TestCase):
         История дописывается в конец, поэтому history(120) — ровно префикс history(120+n).
         Сравниваем весь общий префикс: если граница поехала хоть на один вывод, обрезанным
         окажется сообщение ВНУТРИ него, и для vLLM это обрыв кэша на всю оставшуюся историю.
+
+        Семь дописанных вызовов — это ещё ПЕРВАЯ полоса контекста (запас над гейтом 5000
+        токенов плюс 7 × ~1825 меньше ступени 18182); восьмой уводит в следующую, и там
+        граница обязана сдвинуться — это соседний тест.
         """
         base = history(120)
         pruned_base, _, blocks = proxy.prune_tool_results(base, **P)
         self.assertGreater(blocks, 0, "иначе тест сравнивает две нетронутые истории и всегда зелён")
-        for extra in range(1, 10):  # внутри одного кванта граница обязана стоять
-            longer, _, _ = proxy.prune_tool_results(history(120 + extra), **P)
+        for extra in range(1, 8):  # внутри одной полосы граница обязана стоять
+            longer, _, ещё = proxy.prune_tool_results(history(120 + extra), **P)
+            self.assertEqual(ещё, blocks, f"граница поехала после {extra} дописанных вызовов")
             self.assertEqual(longer[:len(base)], pruned_base,
                              f"префикс поехал после {extra} дописанных вызовов")
 
     def test_граница_двигается_квантом(self):
-        """…и всё же двигается: через квант вызовов обрезанных блоков становится больше."""
+        """…и всё же двигается: полоса контекста сменилась — обрезанных блоков ровно на квант больше."""
         _, _, before = proxy.prune_tool_results(history(120), **P)
         _, _, after = proxy.prune_tool_results(history(130), **P)
         self.assertEqual(after - before, 10)
@@ -256,7 +273,7 @@ class PruneTests(unittest.TestCase):
                      tool_result(i)]
         base, _, blocks = proxy.prune_tool_results(msgs, prune_inputs=True, **P)
         self.assertGreater(blocks, 0)
-        for extra in range(1, 5):
+        for extra in range(1, 4):  # дописанная ПАРА тяжелее одиночного вывода: три — ещё та же полоса
             msgs2 = list(msgs)
             for j in range(extra):
                 msgs2 += [{"role": "assistant", "content": [{"type": "tool_use", "id": f"e{j}", "name": "Write",
@@ -292,54 +309,79 @@ class PruneTests(unittest.TestCase):
         proxy.prune_tool_results(history(120), **dict(P, step_tokens=0))
 
 
-# Первая ступень 5 выводов при обычной 10; порог выгоды снят — он не предмет этих тестов.
-P1 = dict(P, first_step_tokens=_в_токенах(5 * len(BIG), вверх=True), min_tokens=0)
+class ПолосыКонтекстаTests(unittest.TestCase):
+    """Цель обрезки задаётся полосой СЫРОГО КОНТЕКСТА, а не накопленным обрезаемым объёмом.
 
-
-class ПерваяСтупеньTests(unittest.TestCase):
-    """Первая граница встаёт раньше полной ступени, дальше квант обычный.
-
-    Зачем: при пороге первого срабатывания = ступени (121k) прунинг включался на 185–215k, а
-    автосжатие CLI — на 232k; один большой Read перепрыгивал окно (живой замер меры 4).
+    Зачем так (2026-09-23): обрезаемый объём растёт своим темпом, и пока порог первого
+    срабатывания равнялся ступени, чат успевал доехать до автосжатия CLI (232k) раньше, чем
+    набиралась ступень — живой замер меры 4 кончился ровно этим. Теперь шкала одна: сколько
+    ступеней контекста чат прошёл сверх гейта, столько ступеней и режем.
     """
 
-    def test_первая_ступень_срабатывает_раньше_полной(self):
-        _, _, blocks = proxy.prune_tool_results(history(25), **P1)  # вне хвоста 5 выводов
-        self.assertEqual(blocks, 5)
-        _, _, blocks = proxy.prune_tool_results(history(24), **P1)  # 4 — первой ступени нет
-        self.assertEqual(blocks, 0)
+    def test_ниже_гейта_не_режем_вовсе(self):
+        msgs = history(120)
+        высокий = dict(P, min_context_tokens=оценка(msgs) + 1)
+        out, freed, blocks = proxy.prune_tool_results(msgs, **высокий)
+        self.assertIs(out, msgs, "историю не трогали вовсе — вернули тот же объект")
+        self.assertEqual((freed, blocks), (0, 0))
 
-    def test_между_первой_и_полной_граница_стоит(self):
-        """Главное свойство сохраняется: пока полная ступень не набралась, префикс тот же."""
-        base, _, _ = proxy.prune_tool_results(history(25), **P1)
-        for extra in range(1, 5):
-            longer, _, blocks = proxy.prune_tool_results(history(25 + extra), **P1)
-            self.assertEqual(blocks, 5, f"граница поехала после {extra} дописанных вызовов")
-            self.assertEqual(longer[:len(base)], base)
+    def test_на_гейте_режем_ровно_ступень(self):
+        """Первая граница — сразу полная ступень: отдельной «первой ступени» больше нет."""
+        _, _, blocks = proxy.prune_tool_results(history(120), **P)
+        self.assertEqual(blocks, 10, "ступень = 10 выводов")
 
-    def test_после_полной_ступени_квант_обычный(self):
-        _, _, blocks = proxy.prune_tool_results(history(30), **P1)   # 10 вне хвоста
-        self.assertEqual(blocks, 10)
-        _, _, blocks = proxy.prune_tool_results(history(39), **P1)   # 19 — вторая полная ещё нет
-        self.assertEqual(blocks, 10)
-        _, _, blocks = proxy.prune_tool_results(history(40), **P1)   # 20 — две полных
+    def test_каждая_ступень_контекста_добавляет_ступень_обрезки(self):
+        for вызовов, ожидаем in ((120, 10), (130, 20), (140, 30)):
+            with self.subTest(вызовов):
+                _, _, blocks = proxy.prune_tool_results(history(вызовов), **P)
+                self.assertEqual(blocks, ожидаем)
+
+    EXTRA = 600_000  # системная часть, в разы тяжелее истории: контекст уходит в третью полосу
+
+    def дефицит(self):
+        """История, у которой цель обрезки заведомо больше всего обрезаемого вне хвоста.
+
+        45 вызовов: вне хвоста 25 выводов (150k символов), а цель третьей полосы — 30 (180k).
+        Гейт подобран так, чтобы история стояла в начале третьей полосы.
+        """
+        msgs = history(45)
+        гейт = оценка(msgs, self.EXTRA) - ЗАПАС_НАД_ГЕЙТОМ - 2 * P["step_tokens"]
+        return msgs, dict(P, min_context_tokens=гейт)
+
+    def test_недостижимая_цель_не_тащит_границу_за_хвостом(self):
+        """Регрессия: цель больше всего обрезаемого — граница обязана стоять, а не ползти.
+
+        Так бывает у чата с жирной системной частью: по контексту он уже в третьей полосе, а
+        история короче цели. Наивное «тогда режем всё обрезаемое вне хвоста» ставит границу на
+        НАЧАЛО защищённого хвоста, а он съезжает с каждым новым выводом — граница ползёт
+        каждый ход, и это ровно потеря кэша (симуляция: 52–67 сдвигов вместо 3).
+        """
+        msgs, ручки = self.дефицит()
+        base, _, blocks = proxy.prune_tool_results(msgs, extra_chars=self.EXTRA, **ручки)
+        вне_хвоста = 45 - 20
+        self.assertGreater(blocks, 0, "обрезать всё же есть что")
+        self.assertLess(blocks, вне_хвоста, "иначе это и есть «режем всё вне хвоста» — тест слеп")
+        for дописано in range(1, 4):
+            longer, _, ещё = proxy.prune_tool_results(history(45 + дописано),
+                                                      extra_chars=self.EXTRA, **ручки)
+            self.assertEqual(ещё, blocks, f"граница поехала после {дописано} дописанных вызовов")
+            self.assertEqual(longer[:len(msgs)], base)
+
+    def test_дефицит_режет_долю_цели_а_не_сколько_придётся(self):
+        """Обрезанное — ровно доля ступени, а не «сколько нашлось вне хвоста».
+
+        Полоса 3 при ступени в 10 выводов = цель 30 выводов, обрезаемого вне хвоста 25.
+        При трёх долях наибольшая достижимая — две трети цели, то есть ровно 20 выводов.
+        """
+        msgs, ручки = self.дефицит()
+        _, freed, blocks = proxy.prune_tool_results(msgs, extra_chars=self.EXTRA, **ручки)
+        self.assertEqual(proxy.PRUNE_DEFICIT_PARTS, 3, "арифметика теста считана с трёх долей")
         self.assertEqual(blocks, 20)
+        self.assertGreater(freed, 0)
 
-    def test_первая_ступень_не_больше_обычной(self):
-        """Значение выше ступени обрезается до неё — иначе первая граница не наступала бы никогда."""
-        P2 = dict(P1, first_step_tokens=P["step_tokens"] * 3)
-        _, _, blocks = proxy.prune_tool_results(history(25), **P2)
-        self.assertEqual(blocks, 0)
-        _, _, blocks = proxy.prune_tool_results(history(30), **P2)
-        self.assertEqual(blocks, 10)
-
-    def test_ноль_выключает_первую_ступень(self):
-        _, _, blocks = proxy.prune_tool_results(history(29), **dict(P1, first_step_tokens=0))
-        self.assertEqual(blocks, 0)
-
-    def test_идемпотентность_на_первой_ступени(self):
-        once, _, _ = proxy.prune_tool_results(history(27), **P1)
-        twice, freed, blocks = proxy.prune_tool_results(once, **P1)
+    def test_идемпотентность_в_полосе(self):
+        once, _, _ = proxy.prune_tool_results(history(120), **P)
+        twice, freed, blocks = proxy.prune_tool_results(once, **P)
         self.assertEqual(twice, once)
         self.assertEqual((freed, blocks), (0, 0))
 
@@ -426,11 +468,24 @@ class МеркаTests(unittest.TestCase):
         self.assertAlmostEqual(хвост, 160_000, delta=160_000 * 0.02)
         self.assertAlmostEqual(ступень, 400_000, delta=400_000 * 0.02)
         self.assertAlmostEqual(выгода, 80_000, delta=80_000 * 0.02)
-        # первая ступень: половина обычной, чтобы первая граница вставала на пороге «чат уже
-        # большой» (150k), а не на 185–215k, и всегда выше порога выгоды — иначе он гасил бы её
-        первая = proxy.PRUNE_FIRST_STEP_TOKENS * proxy.CHARS_PER_TOKEN_HISTORY
-        self.assertAlmostEqual(первая, 200_000, delta=200_000 * 0.02)
-        self.assertGreater(proxy.PRUNE_FIRST_STEP_TOKENS, proxy.PRUNE_MIN_TOKENS)
+
+    def test_гейт_оставляет_запас_до_автосжатия_CLI(self):
+        """Неравенство, которым выбран гейт: пока прунинг молчит, usage не доедет до 232k.
+
+        Слагаемых три: сам гейт, недосчёт огрубления системной части (оно занижает оценку, то
+        есть включает прунинг ПОЗЖЕ) и один большой `Read` (25k), который придёт следующим
+        ходом. Поднимешь гейт или огрубление, не пересчитав второе, — тест покраснеет.
+        """
+        недосчёт = proxy.SYSTEM_ROUNDING_CHARS / proxy.CHARS_PER_TOKEN_SYSTEM
+        большой_read = 25_000
+        self.assertLess(proxy.PRUNE_MIN_CONTEXT_TOKENS + недосчёт + большой_read, 232_000)
+        # …и гейт всё же не занижен до бессмыслицы: чат на 133k живёт без сжатия, резать там нечего
+        self.assertGreater(proxy.PRUNE_MIN_CONTEXT_TOKENS, 150_000)
+
+    def test_порог_распознавания_сжатия_не_привязан_к_гейту(self):
+        """Гейт прунинга двигали трижды; утащив за собой порог распознавания сжатия, он молча
+        отправил бы запросы автосжатия на локаль — те самые 330–430 с стоп-мира."""
+        self.assertEqual(proxy.COMPACT_MIN_CONTEXT_TOKENS, 150_000)
 
 
 class КомпактРаспознаваниеTests(unittest.TestCase):
@@ -671,7 +726,7 @@ class ГраницаПамятьTests(unittest.TestCase):
 
 class РазбивкаПоВидамTests(unittest.TestCase):
     def test_виды_считаются_отдельно(self):
-        msgs = history(40)  # меньше — не набирается порог выгоды, обрезать нечего
+        msgs = history(120)  # меньше — история не дотягивает до гейта, обрезать нечего
         msgs.insert(1, {"role": "assistant", "content": [
             {"type": "thinking", "thinking": BIG, "signature": "sig"}]})
         msgs.insert(2, {"role": "assistant", "content": [
@@ -692,20 +747,54 @@ class РазбивкаПоВидамTests(unittest.TestCase):
 
 
 class UsageИзОтветаTests(unittest.TestCase):
-    def сообщение(self, usage):
+    def начало(self, usage):
         return ("event: message_start\ndata: "
                 + json.dumps({"type": "message_start", "message": {"usage": usage}})
                 + "\n\n").encode()
 
+    def конец(self, usage):
+        return ("event: message_delta\ndata: "
+                + json.dumps({"type": "message_delta", "delta": {}, "usage": usage})
+                + "\n\n").encode()
+
+    def копилка(self, *куски):
+        собранный = {}
+        for кусок in куски:
+            proxy.merge_usage(собранный, кусок)
+        return собранный
+
     def test_промпт_это_сумма_трёх_слагаемых(self):
-        чтение, промпт = proxy.usage_from_chunk(self.сообщение(
+        """Форма `message_start`: `input_tokens` считает только то, что прошло МИМО кэша."""
+        чтение, промпт = proxy.usage_totals(self.копилка(self.начало(
             {"input_tokens": 1000, "cache_read_input_tokens": 9000,
-             "cache_creation_input_tokens": 500}))
+             "cache_creation_input_tokens": 500})))
         self.assertEqual(чтение, 9000)
-        self.assertEqual(промпт, 10500, "input_tokens считает только мимо кэша")
+        self.assertEqual(промпт, 10500)
+
+    def test_в_финальной_форме_input_tokens_это_весь_промпт(self):
+        """Форма `message_delta` роутера vLLM: слагаемые сложены — складывать их ещё раз нельзя."""
+        чтение, промпт = proxy.usage_totals(self.копилка(self.конец(
+            {"input_tokens": 10500, "cache_read_input_tokens": 9000})))
+        self.assertEqual(чтение, 9000)
+        self.assertEqual(промпт, 10500, "сложили бы вслепую — промпт удвоился бы, а доля соврала")
+
+    def test_цифры_кэша_берутся_из_конца_потока(self):
+        """Ровно то, из-за чего карточка ехала с `cacheReadTokens: null`: в `message_start`
+        роутера vLLM цифр кэша нет вовсе, они приходят последним событием.
+
+        Хвостовое событие с нулями — не выдумка: промежуточные `message_delta` приходят и
+        после главного, и слияние затиранием обнулило бы уже известное.
+        """
+        копилка = self.копилка(self.начало({"input_tokens": 2000, "output_tokens": 1}),
+                               b'data: {"type":"content_block_delta"}\n\n',
+                               self.конец({"input_tokens": 20000, "output_tokens": 40,
+                                           "cache_read_input_tokens": 18000}),
+                               self.конец({"output_tokens": 0}))
+        self.assertEqual(proxy.usage_totals(копилка), (18000, 20000))
+        self.assertEqual(копилка["output_tokens"], 40, "по ходу потока цифры только растут")
 
     def test_без_кэша_цифры_всё_равно_есть(self):
-        чтение, промпт = proxy.usage_from_chunk(self.сообщение({"input_tokens": 1234}))
+        чтение, промпт = proxy.usage_totals(self.копилка(self.начало({"input_tokens": 1234})))
         self.assertIsNone(чтение)
         self.assertEqual(промпт, 1234)
 
@@ -713,7 +802,7 @@ class UsageИзОтветаTests(unittest.TestCase):
         for кусок in (b"", "data: не json\n\n".encode(), b"event: ping\n\n",
                       b'data: {"type":"content_block_delta"}\n\n', b"\x00\xff"):
             with self.subTest(кусок):
-                self.assertEqual(proxy.usage_from_chunk(кусок), (None, None))
+                self.assertEqual(proxy.usage_totals(self.копилка(кусок)), (None, None))
 
 
 class ОтправкаСобытияTests(unittest.TestCase):
@@ -945,9 +1034,17 @@ class КомпактСквознойTests(unittest.TestCase):
 
 
 class МодельЗаглушка(Заглушка):
-    """vLLM-заглушка: отвечает SSE с `message_start`, помедлив — иначе prefill нечем мерить."""
+    """vLLM-заглушка: отвечает SSE с `message_start`, помедлив — иначе prefill нечем мерить.
+
+    Цифры кэша кладёт в ФИНАЛЬНЫЙ `message_delta`, как настоящий Anthropic-роутер vLLM
+    (снято живьём 2026-09-23): в `message_start` у него только `input_tokens` мимо кэша и
+    `output_tokens`. Заглушка, отдающая кэш сразу, скрыла бы ровно тот дефект, из-за которого
+    карточка ехала с `cacheReadTokens: null`.
+    """
     задержка = 0.05
-    usage = {"input_tokens": 2000, "cache_read_input_tokens": 18000}
+    usage_старт = {"input_tokens": 2000, "output_tokens": 1}
+    usage_конец = {"input_tokens": 20000, "output_tokens": 40,
+                   "cache_read_input_tokens": 18000}
     принятые = []
 
     def do_POST(self):
@@ -955,15 +1052,24 @@ class МодельЗаглушка(Заглушка):
         тело = self.rfile.read(n)
         type(self).принятые.append((self.path, тело, dict(self.headers)))
         начало = json.dumps({"type": "message_start",
-                             "message": {"usage": type(self).usage}})
-        ответ = (f"event: message_start\ndata: {начало}\n\n"
-                 "event: message_stop\ndata: {}\n\n").encode()
+                             "message": {"usage": type(self).usage_старт}})
+        конец = json.dumps({"type": "message_delta", "delta": {"stop_reason": "end_turn"},
+                            "usage": type(self).usage_конец})
+        # Двумя кусками с паузой, а не одним: иначе `message_start` и финальный
+        # `message_delta` приехали бы в прокси одним чтением, и тест не отличил бы «копим
+        # usage по всему потоку» от «взяли из первого куска» — то есть не проверял бы главное.
+        куски = [f"event: message_start\ndata: {начало}\n\n".encode(),
+                 (f"event: message_delta\ndata: {конец}\n\n"
+                  "event: message_stop\ndata: {}\n\n").encode()]
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
-        self.send_header("Content-Length", str(len(ответ)))
+        self.send_header("Content-Length", str(sum(len(к) for к in куски)))
         self.end_headers()
         time.sleep(type(self).задержка)  # prefill: модель думает перед первым байтом
-        self.wfile.write(ответ)
+        for кусок in куски:
+            self.wfile.write(кусок)
+            self.wfile.flush()
+            time.sleep(0.02)  # decode: ответ идёт потоком, а не мгновением
 
 
 class БэкендЗаглушка(BaseHTTPRequestHandler):
@@ -1021,7 +1127,15 @@ class СобытиеСквозноеTests(unittest.TestCase):
             с.shutdown()
             с.server_close()
 
-    def спросить(self, msgs, сессия="sess-1"):
+    def спросить(self, msgs, сессия="sess-1", ждать_карточку=True):
+        """Ход через прокси. `ждать_карточку` — дожидаться ли отправки события бэкенду.
+
+        Ждать приходится ПОСЛЕ чтения ответа: карточка уходит по концу потока (цифры кэша
+        приезжают финальным `message_delta`), то есть позже последнего байта, который прочитал
+        клиент. Отправка вдобавок фоновая. Тест, где карточки быть не должно, просто даёт
+        прокси мгновение — лишнее событие успело бы прийти и попасться.
+        """
+        прежний = proxy._last_event_thread
         тело = json.dumps({"model": "qwen3.8-27b", "max_tokens": 8192,
                            "messages": msgs}).encode()
         заголовки = {"Content-Type": "application/json", "Content-Length": str(len(тело))}
@@ -1031,8 +1145,11 @@ class СобытиеСквозноеTests(unittest.TestCase):
         c.request("POST", "/v1/messages", body=тело, headers=заголовки)
         ответ = c.getresponse().read()
         c.close()
-        if proxy._last_event_thread is not None:
-            proxy._last_event_thread.join(timeout=10)  # отправка фоновая — дожидаемся её
+        срок = time.monotonic() + (10 if ждать_карточку else 0.3)
+        while time.monotonic() < срок and proxy._last_event_thread is прежний:
+            time.sleep(0.005)
+        if proxy._last_event_thread is not прежний and proxy._last_event_thread is not None:
+            proxy._last_event_thread.join(timeout=10)
         return ответ
 
     def test_событие_уходит_на_сдвиге_границы(self):
@@ -1061,10 +1178,10 @@ class СобытиеСквозноеTests(unittest.TestCase):
     def test_между_сдвигами_карточки_нет(self):
         """Граница стоит — обрезка бесплатна, и шуметь в ленте не о чем."""
         self.спросить(history(120))
-        self.спросить(history(150))
-        self.спросить(history(160))
+        self.спросить(history(150), ждать_карточку=False)
+        self.спросить(history(160), ждать_карточку=False)
         self.assertEqual(len(self.Бэкенд.принятые), 1, "одна граница — одна карточка")
-        self.спросить(history(200))  # следующая ступень
+        self.спросить(history(200))  # следующая полоса контекста
         self.assertEqual(len(self.Бэкенд.принятые), 2)
         self.assertEqual(self.Бэкенд.принятые[1][1]["blocks"], 133)
 
@@ -1076,7 +1193,7 @@ class СобытиеСквозноеTests(unittest.TestCase):
 
     def test_без_заголовка_сессии_событий_нет(self):
         """Ход без заголовка проксируется как раньше — показывать карточку всё равно некому."""
-        self.спросить(history(120), сессия=None)
+        self.спросить(history(120), сессия=None, ждать_карточку=False)
         self.assertEqual(self.Бэкенд.принятые, [])
         self.assertTrue(self.Модель.принятые, "сам ход при этом идёт как обычно")
 
@@ -1117,7 +1234,7 @@ class СобытиеСквозноеTests(unittest.TestCase):
 
     def test_канал_выключен_по_умолчанию(self):
         proxy.BACKEND_EVENTS_URL = ""
-        ответ = self.спросить(history(120))
+        ответ = self.спросить(history(120), ждать_карточку=False)
         self.assertIn("message_start".encode(), ответ)
         self.assertEqual(self.Бэкенд.принятые, [], "без адреса прокси никуда не стучится")
 

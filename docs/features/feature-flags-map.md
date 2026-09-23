@@ -120,7 +120,7 @@
 - **Что за флагом:**
   - **Бэк:** сценарные секции промпта специальности доходят до хода только под флагом
     ([PromptSectionsContributor.cs:54-55](../../backend/ClaudeHomeServer.Turn/PromptSectionsContributor.cs));
-    блок досье выносится из recall-секции в отдельную `dossier-recall` (единай dark launch
+    блок досье выносится из recall-секции в отдельную `dossier-recall` (единый dark launch
     с prompt-sections) — [PersonaRecallContributor.cs:102](../../backend/ClaudeHomeServer.Turn/PersonaRecallContributor.cs).
   - **Фронт:** **`useFeature` не найден** — UI каталога секций в настройках специальностей
     рендерится без гейта; флаг работает только на стороне сборки промпта.
@@ -153,14 +153,16 @@
 - **Ключ во фронте `FLAGS`:** есть (`FLAGS.chatAutoArchive`).
 - **Источник:** план «Архив чатов» v4 (локальный файл, ссылка в шапке
   [archive-chats-proposal.md](../mockups/archive-chats-proposal.md)); продуктовое
-  описание — [archive-chats.md](archive-chats.md). ADR или раздел CLAUDE.md
+  описание — [archive-chats.md](../product/archive-chats.md). ADR или раздел CLAUDE.md
   с записанным решением — не найдены.
 
 ### `visual-plan` — Замечания к плану и разворот схемой
 
 - **Описание (из каталога):** Замечания к плану оставляются прямо на разделе
   и уходят планировщику с его адресом — больше не нужно угадывать, какое место
-  имеется в виду. Часть B (разворот схемой) — под тем же флагом.
+  имеется в виду. (Про часть B — разворот схемой под тем же флагом — сказано не в
+  `Description`, а в комментарии над определением,
+  [FeatureFlag.cs:137-139](../../backend/ClaudeHomeServer.Core/Models/FeatureFlag.cs).)
 - **Дефолт / стадия:** false / dev.
 - **Что за флагом:** слой контекстных замечаний и переключатель «Текстом / Схемой»:
   [PlanSection.tsx:82](../../frontend/src/components/artifacts/PlanSection.tsx) (замечания
@@ -204,10 +206,17 @@
 - **Дефолт / стадия:** false / dev.
 - **Что за флагом:** бэк — единственная серверная проверка
   ([SessionManager.cs:3443](../../backend/ClaudeHomeServer/Services/SessionManager.cs),
-  `ChatContextEnabled`): инструмент `context_list` в составе wsp-сервера и подсказка хода
-  гейтятся флагом **владельца** (не хода) — иначе состав `tools/list` мерцал бы между
-  ходами (инвариант, сторож `McpToolsetStabilityTests`); эндпоинты `GET/PUT
-  {sessionId}/context` гейтом **не** закрыты. Фронт — вкладки/чипы материалов у чата:
+  `ChatContextEnabled`); решение принимается по **владельцу** (не по ходу) — иначе состав
+  `tools/list` мерцал бы между ходами (инвариант, сторож `McpToolsetStabilityTests`).
+  Даёт флаг две вещи, и обе — не инструмент: подсказку хода `mcp-context`
+  ([ClaudeSession.cs:3199](../../backend/ClaudeHomeServer.Llm/Claude/ClaudeSession.cs),
+  текст — [ChatContextPrompts.cs](../../backend/ClaudeHomeServer.Core/Services/Prompts/ChatContextPrompts.cs))
+  и env `WORKSPACE_CHAT_CONTEXT` в stdio-конфиге wsp
+  ([ClaudeSession.cs:1534](../../backend/ClaudeHomeServer.Llm/Claude/ClaudeSession.cs)).
+  Сам инструмент `context_list` живёт **только на ветке отката** `Mcp:HttpTransport=false`
+  — в замороженном [workspace-server/index.js:898, :928, :945](../../mcp/workspace-server/index.js);
+  в C#-тулсете `WorkspaceToolset` его нет вовсе, и в HTTP-ветке конфига хода env с флагом
+  не передаётся. Эндпоинты `GET/PUT {sessionId}/context` гейтом **не** закрыты. Фронт — вкладки/чипы материалов у чата:
   [WorkspacePage.tsx:1640](../../frontend/src/pages/WorkspacePage.tsx) (мобильные чипы),
   [DesktopWorkspace.tsx:276](../../frontend/src/pages/workspace/DesktopWorkspace.tsx)
   (полоса контекста в сплите), кнопка «в контекст чата»
@@ -256,29 +265,33 @@
 
 ## Упоминания снятых флагов в документах
 
-Проходка: `grep -rn "за флагом" docs/ CLAUDE.md` (2026-09-23), каждое упоминание
-сверено с `FeatureFlagCatalog.All` (10 ключей) и `FLAGS` фронта (10 ключей).
-Снятые флаги — те, кого в обоих реестрах уже нет, а пометка осталась:
+Проходка: `grep -rn "за флагом" docs/ CLAUDE.md` (2026-09-23) — 33 строки вне самой этой
+карты, каждая сверена с `FeatureFlagCatalog.All` (10 ключей) и `FLAGS` фронта (10 ключей).
+Снятые флаги — те, кого в обоих реестрах уже нет, а пометка осталась. Две строки из 33 —
+**мета**, к конкретному флагу их не относим: [CLAUDE.md:401](../../CLAUDE.md) (само правило
+«пометки „за флагом …“ в доках — исторические») и
+[claude-md-cleanup-2026-09.md:339](../research/claude-md-cleanup-2026-09.md) (продолжение
+уже разобранного пункта 13 про ADR-013).
 
 | Пометка (файл:строка) | Ключ | Статус |
 |---|---|---|
 | [ADR-006-reader-embed-check.md:25](../adr/ADR-006-reader-embed-check.md) | `link-reader` | **снят** — ридер работает по умолчанию; подтверждено паттерном «фича дожила до снятия флага» ([adr-index.md:207-209](../architecture/adr-index.md), `link-reader` в числе снятых) и списком снятых флагов в [CLAUDE.md](../../CLAUDE.md) |
 | [ADR-008-project-background-generation.md:19](../adr/ADR-008-project-background-generation.md) | `project-backgrounds` | **снят** — фоны работают по умолчанию; подтверждено [adr-index.md:103](../architecture/adr-index.md) и [CLAUDE.md](../../CLAUDE.md) |
 | [edit-project-compact-proposal.md:33, :92](../mockups/edit-project-compact-proposal.md) | (без ключа: «фон — только владельцу за флагом») | **снят** — то же `project-backgrounds` (секция фона проекта) |
-| [ADR-013-server-chat-watchdogs.md:1, :3, :174](../adr/ADR-013-server-chat-watchdogs.md) | `chat-watchdogs` | **снят** 2026-09-01 — нет ни в каталоге, ни в `FLAGS`; сторожа работают по умолчанию. Подтверждено [adr-index.md:159, :211](../architecture/adr-index.md) и [claude-md-cleanup-2026-09.md:338](../research/claude-md-cleanup-2026-09.md) |
+| [ADR-013-server-chat-watchdogs.md:1, :3, :177](../adr/ADR-013-server-chat-watchdogs.md) | `chat-watchdogs` | **снят** 2026-09-01 — нет ни в каталоге, ни в `FLAGS`; сторожа работают по умолчанию. Та же пометка живёт и в указателе: [adr-index.md:155](../architecture/adr-index.md) цитирует статус ADR-013 «dark launch за флагом» как есть. Подтверждено [adr-index.md:159, :211](../architecture/adr-index.md) и [claude-md-cleanup-2026-09.md:338](../research/claude-md-cleanup-2026-09.md) |
 | [mcp-allowlist-plan.md:123, :125, :199, :230, :244, :254, :267](../research/mcp-allowlist-plan.md) | `mcp-allowlist` | **снят** — allow-list стал единственной моделью ([CLAUDE.md](../../CLAUDE.md), раздел о личном реестре; «deny-модель умерла вместе с флагом mcp-allowlist» — [McpToolsetStabilityTests.cs:166](../../backend/ClaudeHomeServer.Tests/Services/McpToolsetStabilityTests.cs)) |
 | [personas.md:191](../architecture/personas.md) | `persona-memory-consolidation` | **нет в текущем каталоге** — имя упоминается только в комментариях кода ([PersonaMemoryConsolidationService.cs:7](../../backend/ClaudeHomeServer.Memory/PersonaMemoryConsolidationService.cs), [PersonaMemoryAutolearnService.cs:150](../../backend/ClaudeHomeServer.Memory/PersonaMemoryAutolearnService.cs)); поимённой проверки ключа в коде не найдено |
 
 Пометки на **живые** флаги (сверка прошла успешно, в каталоге есть):
 `mcp-catalog` ([mcp-catalog.md:85](mcp-catalog.md)), `chat-auto-archive`
 ([archive-chats-proposal.md:6](../mockups/archive-chats-proposal.md),
-[features.md:1895](../architecture/features.md), [archive-chats.md:193, :260](archive-chats.md)),
+[features.md:1895](../architecture/features.md), [archive-chats.md:193, :260](../product/archive-chats.md)),
 `project-map-hygiene` ([project-map-hygiene-plan-2026-09.md:3](../research/project-map-hygiene-plan-2026-09.md),
 [CLAUDE.md:182](../../CLAUDE.md)), `specialty-prompt-sections`
 ([specialties-personalization.md:121](../product/specialties-personalization.md)),
 `desktop-agent` ([CLAUDE.md:320, :322](../../CLAUDE.md)).
 
-Безымяннные «опция за флагом» (ключ в тексте не назван, гипотетический будущий
+Безымянные «опция за флагом» (ключ в тексте не назван, гипотетический будущий
 тумблер, не снятый флаг): approval-режим Chrome 144 —
 [ADR-008-desktop-agent.md:269](../adr/ADR-008-desktop-agent.md) и
 «турбо-режим» браузера — [browser-channel.md:84](../research/browser-channel.md).

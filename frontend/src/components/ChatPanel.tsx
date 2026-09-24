@@ -2078,6 +2078,9 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     }
     // Дочерние элементы субагента (не-Workflow, не inline) — рисуем единой линией-коннектором слева
     const isSubItem = (it: ChatItem) => !!parentOf(it) && !suppressedByWorkflow.has(it) && !suppressedByAgentParent.has(it);
+    // Пустая реплика (локальные модели шлют "\n" между вызовами инструментов) — это
+    // аватар персоны без текста; не рисуем её и не даём ей рвать стопку действий
+    const isBlankText = (it: ChatItem) => it.kind === 'text' && it.text.trim() === '';
     // Узлы ленты с пометкой стартового индекса — нужно для обёртки success-коннектором
     const nodes: RenderedNode[] = [];
     const pushNode = (node: React.ReactNode, start: number) => nodes.push({ node, start });
@@ -2126,7 +2129,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       // lookahead-цикла ниже. Гашение здесь нужно только чтобы САМОМУ
       // подавленному элементу не выделился data-feed-index — иначе баннер
       // «К карточке» найдёт его в DOM как обычный и прыгнет не туда
-      if (suppressedByTeamNoise.has(i)) { i++; continue; }
+      if (suppressedByTeamNoise.has(i) || isBlankText(display[i])) { i++; continue; }
       // Элементы, отрисованные внутри WorkflowBlockView или inline под родителем-агентом,
       // в основной ленте пропускаем (любой kind: инструменты, текст, thinking)
       if (suppressedByWorkflow.has(display[i]) || suppressedByAgentParent.has(display[i])) {
@@ -2163,7 +2166,8 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         // теперь ВИДИМ (разделитель «ход в дереве агента»/«ход вернулся в проект»)
         // и обязан рвать стопку действий, как любой другой видимый элемент
         const isInvisible = (it: ChatItem, idx: number) =>
-          (it.kind === 'session_started' && !turnBoundaries.has(idx)) || it.kind === 'resumed' || it.kind === 'fal_cost' || it.kind === 'glif_cost';
+          (it.kind === 'session_started' && !turnBoundaries.has(idx)) || it.kind === 'resumed' || it.kind === 'fal_cost' || it.kind === 'glif_cost'
+          || isBlankText(it);
         // Размышления верхнего уровня прячем внутрь группы, если они стоят МЕЖДУ действиями
         const isThought = (it: ChatItem) => (it.kind === 'thinking' && !it.parentToolUseId) || it.kind === 'redacted_thinking';
         // isSuppressed включает и гашение штабного шума по индексу — иначе

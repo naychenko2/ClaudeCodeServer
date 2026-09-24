@@ -327,6 +327,13 @@ public sealed class LlmSubsystem : IAppSubsystem
         services.AddSingleton(sp => new Gateway.TurnTokenService(
             sp.GetRequiredService<Turn.ITurnEventBus>(),
             log: sp.GetService<ILogger<Gateway.TurnTokenService>>()));
+        // Шлюз MCP ходит в свой же Kestrel: без прокси (адрес локальный) и без таймаута —
+        // streamable HTTP и долгие инструменты живут столько, сколько запрос клиента.
+        // Логгеры HttpClient сняты: каждый вызов инструмента печатался бы строкой Information.
+        services.AddHttpClient(Gateway.McpGatewayEndpoints.HttpClientName)
+            .RemoveAllLoggers()
+            .WithoutEgressProxy()
+            .ConfigureHttpClient(c => c.Timeout = Timeout.InfiniteTimeSpan);
 
         // WorkflowAgentParser / WorkflowWatcher / WorkflowMetaResolver — статические
         // парсеры транскриптов; DI не нужны (Program.cs:~788-792 ставит логгеры

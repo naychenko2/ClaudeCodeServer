@@ -945,7 +945,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // упираются в ERR_TLS_CERT_ALTNAME_INVALID (localhost/127.0.0.1 нет в SAN).
     // Если http-адреса нет вообще, поднимите локальный http-эндпоинт и пропишите
     // McpTasksApiUrl явно — иначе все MCP-прокси (tasks/notes/memory/wsp) отвалятся.
-    private string ResolveTasksApiUrl(string? ownerId = null)
+    internal string ResolveTasksApiUrl(string? ownerId = null)
     {
         if (ownerId is not null && _launchers.ForOwner(ownerId).McpApiUrlOverride is { } sandboxUrl)
             return sandboxUrl.TrimEnd('/');
@@ -973,7 +973,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
 
     // Единый сервисный токен владельца для MCP-серверов (tasks/notes/memory/personas/…):
     // per-owner JWT с перевыпуском за сутки до истечения (сервер может жить дольше срока токена).
-    private string GetServiceToken(string ownerId) =>
+    internal string GetServiceToken(string ownerId) =>
         _serviceTokens.AddOrUpdate(ownerId,
             id => (_jwt.IssueServiceToken(id), DateTime.UtcNow),
             (id, old) => DateTime.UtcNow - old.IssuedAt > JwtService.ServiceTokenLifetime - TimeSpan.FromDays(1)

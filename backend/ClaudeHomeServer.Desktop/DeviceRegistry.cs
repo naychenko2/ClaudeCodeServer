@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Protocol;
 
 namespace ClaudeHomeServer.Services.Desktop;
 
@@ -201,6 +202,31 @@ public sealed class DeviceRegistry
             MarkSeenLocked(device);
             return device;
         }
+    }
+
+    /// <summary>
+    /// Сведения агента из Hello (ADR-016): платформа, версии агента и управляемой копии CLI,
+    /// возможности. Hello без версии агента (клиент рук ADR-008) их не трогает. null —
+    /// устройства нет, оно отозвано или чужое.
+    /// </summary>
+    public DesktopDevice? UpdateAgentInfo(string ownerId, string deviceId, DeviceHello hello)
+    {
+        if (string.IsNullOrWhiteSpace(hello.AgentVersion)) return Get(ownerId, deviceId);
+
+        lock (_lock)
+        {
+            var device = _devices.FirstOrDefault(d => d.OwnerId == ownerId && d.Id == deviceId && !d.Revoked);
+            if (device is null) return null;
+
+            device.Platform = Trimmed(hello.Platform);
+            device.AgentVersion = Trimmed(hello.AgentVersion);
+            device.CliVersion = Trimmed(hello.CliVersion);
+            device.Capabilities = DeviceCapabilities.Normalize(hello.Capabilities);
+            Save();
+            return device;
+        }
+
+        static string? Trimmed(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     }
 
     /// <summary>Нормализация человеческого имени: обрезка и схлопывание пробелов.</summary>

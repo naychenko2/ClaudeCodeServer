@@ -1030,6 +1030,10 @@ public class SubsystemBoundaryTests
         // закрыты швами спины (ISessionDirectory/IFeatureFlagGate/IPersonaResolver/
         // IProjectManager/IUserStore/IDesktopCapabilityTokens), хаб устройств переехал
         // в саму вертикаль, а Protocol.* проходит по сборке Core.
+        // ADR-016 (задача 2.1): Desktop РЕАЛИЗУЕТ Core-шов `Services.Execution.IDeviceExecChannel`
+        // (канал исполнения на устройстве, WebSocket /api/devices/exec), потребитель —
+        // Execution (`RemoteProcessRunner`, задача 2.3). Прямого ребра Execution ⇄ Desktop нет:
+        // шов проходит по сборке Core, отдельного допуска не требует.
         new object[]
         {
             new VerticalBoundary(

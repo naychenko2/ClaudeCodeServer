@@ -16,6 +16,12 @@ public interface IDesktopDeviceClient
 
     /// <summary>Отмена: гасит ожидание и невыполненные шаги.</summary>
     Task Cancel(DesktopCancelCommand cancel);
+
+    /// <summary>
+    /// Открыть канал исполнения (ADR-016): устройство подключается WebSocket'ом к
+    /// /api/devices/exec с этим execId.
+    /// </summary>
+    Task ExecOpen(DeviceExecOpenCommand command);
 }
 
 /// <summary>
@@ -37,7 +43,8 @@ public interface IDesktopDeviceClient
 /// маршрутизатор пушит в хаб через <c>IHubContext&lt;DeviceHub&gt;</c>.
 /// </summary>
 [Authorize(AuthenticationSchemes = DesktopProtocol.DeviceTokenScheme)]
-public sealed class DeviceHub(DesktopCallRouter router, ILogger<DeviceHub> log) : Hub<IDesktopDeviceClient>
+public sealed class DeviceHub(DesktopCallRouter router, DeviceExecChannel exec, ILogger<DeviceHub> log)
+    : Hub<IDesktopDeviceClient>
 {
     private string? OwnerId => Context.User?.FindFirstValue(DesktopProtocol.OwnerIdClaim);
     private string? DeviceId => Context.User?.FindFirstValue(DesktopProtocol.DeviceIdClaim);
@@ -66,6 +73,9 @@ public sealed class DeviceHub(DesktopCallRouter router, ILogger<DeviceHub> log) 
     /// <summary>
     /// Представление устройства: версия протокола объявляется явно, поддерживаемые типы шагов
     /// сервер не додумывает. До Hello устройство командам недоступно.
+    /// Агент локальных проектов (ADR-016) дополнительно объявляет платформу, версии и
+    /// возможности, а в ответ получает требуемую версию CLI и вердикт «харнес готов»;
+    /// поставив нужную копию CLI, он повторяет Hello.
     /// </summary>
     public async Task<DeviceHelloAck> Hello(DeviceHello hello)
     {
@@ -77,7 +87,8 @@ public sealed class DeviceHub(DesktopCallRouter router, ILogger<DeviceHub> log) 
                 $"Версия протокола {hello.ProtocolVersion} не поддерживается: сервер говорит на версии {DesktopProtocol.Version}");
         }
 
-        return await router.HelloAsync(Context.ConnectionId, hello, Context.ConnectionAborted);
+        return await exec.HelloAsync(
+            Context.ConnectionId, OwnerId ?? "", DeviceId ?? "", hello, Context.ConnectionAborted);
     }
 
     /// <summary>Подтверждение приёма команды. Не пришло за 2 с — вызов кончается честной ошибкой.</summary>

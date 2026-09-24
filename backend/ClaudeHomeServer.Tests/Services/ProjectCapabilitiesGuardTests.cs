@@ -110,7 +110,8 @@ public class ProjectCapabilitiesGuardTests
         // Разрешение, под которым вхождений стало меньше, — дыра на будущее: туда молча
         // встанет новая проверка. Число правится вниз вместе с кодом.
         var stale = Allowed
-            .Where(a => !hits.TryGetValue(a.Key, out var n) || n < a.Value.Count)
+            // Запись с числом 0 («строго ни одного») протухнуть не может — она и есть ноль
+            .Where(a => hits.GetValueOrDefault(a.Key) < a.Value.Count)
             .Select(a => $"{a.Key}: ожидалось {a.Value.Count}, найдено {hits.GetValueOrDefault(a.Key)}")
             .ToList();
 

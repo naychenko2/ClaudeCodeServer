@@ -24,6 +24,15 @@ const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 
 // ---------- фейковый агент ----------
 
+// Узкий билет потока фейкового агента: свой на каждый путь
+const streamTicketFor = (path: string) => `narrow-${Buffer.from(path).toString('hex')}`;
+const PNG_1X1 = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+const STREAM_FILES: Record<string, { mime: string; bytes: Buffer }> = {
+  'logo.png': { mime: 'image/png', bytes: PNG_1X1 },
+  'clip.mp4': { mime: 'video/mp4', bytes: Buffer.alloc(64) },
+};
+const README = '# Локальный README\n\n![Логотип](logo.png)\n';
+
 interface SeenRequest { method: string; url: string; ticket?: string; authorization?: string; origin?: string }
 
 function startFakeAgent(origin: string, seen: SeenRequest[]): Promise<Server> {
@@ -48,12 +57,41 @@ function startFakeAgent(origin: string, seen: SeenRequest[]): Promise<Server> {
     const json = (status: number, body: unknown) => {
       res.writeHead(status, { 'Content-Type': 'application/json' }).end(JSON.stringify(body));
     };
-    if (req.headers['x-agent-ticket'] !== TICKET) { json(401, { error: 'Билет к агенту недействителен или истёк' }); return; }
-    const path = (req.url ?? '').split('?')[0].replace(/^\/api\/projects\/[^/]+\//, '');
-    const now = new Date().toISOString();
-    if (req.method === 'GET' && (path === 'files' || path === 'files/tree')) {
-      json(200, [{ name: 'agent-readme.md', path: 'agent-readme.md', isDirectory: false, size: 12, modified: now, isModified: false }]);
+    const url = new URL(req.url ?? '/', 'http://agent');
+    const path = url.pathname.replace(/^\/api\/projects\/[^/]+\//, '');
+    // Поток — как у агента: без заголовка, только по узкому билету на тот же путь; основной
+    // билет в URL отвергается
+    if (req.method === 'GET' && path === 'files/stream' && !req.headers['x-agent-ticket']) {
+      const file = url.searchParams.get('path') ?? '';
+      if (url.searchParams.get('streamTicket') !== streamTicketFor(file)) { json(401, { error: 'Билет к агенту недействителен или истёк' }); return; }
+      const body = STREAM_FILES[file];
+      if (!body) { json(404, { error: 'Не найдено' }); return; }
+      res.writeHead(200, { 'Content-Type': body.mime, 'Content-Length': body.bytes.length }).end(body.bytes);
       return;
+    }
+    if (req.headers['x-agent-ticket'] !== TICKET) { json(401, { error: 'Билет к агенту недействителен или истёк' }); return; }
+    const now = new Date().toISOString();
+    if (req.method === 'POST' && path === 'agent/stream-ticket') {
+      const chunks: Buffer[] = [];
+      req.on('data', c => chunks.push(c as Buffer));
+      req.on('end', () => {
+        const file = (JSON.parse(Buffer.concat(chunks).toString() || '{}') as { path?: string }).path ?? '';
+        if (file.startsWith('..')) { json(403, { error: 'Путь вне проекта' }); return; }
+        json(200, { streamTicket: streamTicketFor(file), expiresAt: new Date(Date.now() + 60_000).toISOString() });
+      });
+      return;
+    }
+    if (req.method === 'GET' && (path === 'files' || path === 'files/tree')) {
+      json(200, [
+        { name: 'agent-readme.md', path: 'agent-readme.md', isDirectory: false, size: 12, modified: now, isModified: false },
+        { name: 'clip.mp4', path: 'clip.mp4', isDirectory: false, size: STREAM_FILES['clip.mp4'].bytes.length, modified: now, isModified: false },
+      ]);
+      return;
+    }
+    if (req.method === 'GET' && path === 'files/content') {
+      const file = url.searchParams.get('path');
+      if (file === 'agent-readme.md') { json(200, { content: README, isBinary: false, isImage: false }); return; }
+      if (file === 'clip.mp4') { json(200, { content: null, isBinary: true, isImage: false, isVideo: true, mimeType: 'video/mp4', fileSize: STREAM_FILES['clip.mp4'].bytes.length }); return; }
     }
     if (req.method === 'GET' && path === 'git/status') {
       json(200, {
@@ -171,6 +209,32 @@ test.describe('локальный проект через агента устр�
     expect(seen.some(s => s.url.startsWith(`/api/projects/${projectId}/git/status`))).toBe(true);
     // Публикации у агента нет — кнопка скрыта, а не падает при нажатии
     await expect(page.getByRole('button', { name: 'Опубликовать' })).toHaveCount(0);
+  });
+
+  test('картинка markdown и видео идут потоком по узкому билету, основной в URL не попадает', async ({ page }) => {
+    await asLocalProject(page, origin, projectId, { kind: 'ok' });
+    await openTab(page, projectId, token, 'Файлы');
+
+    await page.getByText('agent-readme.md').click();
+    const img = page.getByRole('img', { name: 'Логотип' });
+    await expect(img).toHaveAttribute('src', new RegExp(`^http://127\\.0\\.0\\.1:${AGENT_PORT}/api/projects/${projectId}/files/stream\\?`));
+    await expect.poll(() => img.evaluate(el => (el as HTMLImageElement).naturalWidth)).toBe(1);
+
+    await page.getByText('clip.mp4').click();
+    await expect(page.locator('video source')).toHaveAttribute('src', /streamTicket=narrow-/);
+    await expect.poll(() => seen.some(s => s.url.includes('files/stream?path=clip.mp4'))).toBe(true);
+
+    const streams = seen.filter(s => s.url.includes('/files/stream'));
+    expect(streams.map(s => new URL(s.url, 'http://agent').searchParams.get('path')).sort()).toEqual(expect.arrayContaining(['clip.mp4', 'logo.png']));
+    for (const s of streams) {
+      expect(s.url).not.toContain(TICKET);
+      expect(s.ticket).toBeUndefined();
+      expect(s.authorization).toBeUndefined();
+    }
+    // Узкие билеты выданы агентом по основному билету в заголовке
+    const issued = seen.filter(s => s.method === 'POST' && s.url.endsWith('/agent/stream-ticket'));
+    expect(issued.length).toBeGreaterThanOrEqual(2);
+    for (const s of issued) expect(s.ticket).toBe(TICKET);
   });
 
   test('агент не найден — понятное состояние и повтор', async ({ page }) => {

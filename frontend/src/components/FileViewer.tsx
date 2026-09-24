@@ -25,6 +25,8 @@ import { basename } from '../lib/paths';
 import { useContextButton } from '../features/chatContext/useContextButton';
 import { resolveDocImage, resolveDocLink, sliceSection, slugify } from '../lib/docsLinks';
 import { OfflineError, readStoredToken } from '../lib/offline';
+import { agentStreamUrl } from '../lib/deviceAgent';
+import { projectFilesRoute } from '../lib/projectCapabilities';
 import { useGitState, ensureGit, gitRestoreFile, loadGitRemote } from '../lib/git';
 import { parseDiffToHunks, buildHunkPatch, buildLinesPatch } from '../lib/gitPatch';
 import { relTime } from '../lib/gitFormat';
@@ -148,6 +150,70 @@ function streamUrl(projectId: string, filePath: string): string {
   return `/api/projects/${projectId}/files/stream?${params}`;
 }
 
+// Прозрачный пиксель вместо картинки markdown, пока агент выдаёт узкий билет: сырой
+// относительный src ушёл бы запросом на адрес страницы
+const BLANK_IMAGE = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
+
+interface MediaHandlers {
+  onPlay?: (e: React.SyntheticEvent<HTMLMediaElement>) => void;
+  onLoadedMetadata?: (e: React.SyntheticEvent<HTMLMediaElement>) => void;
+  onSourceError?: (e: React.SyntheticEvent<HTMLSourceElement>) => void;
+}
+
+// Источник <video>/<audio>. Серверный проект — URL сервера сразу. Локальный — URL агента с
+// узким билетом: он выдаётся асинхронно и живёт ≤60 с, поэтому на каждом запуске
+// воспроизведения и на отказе элемента билет перевыпускается, а позиция и воспроизведение
+// восстанавливаются на новом элементе (key = src пересоздаёт его — <source> сам не перечитывается).
+function useMediaStream(projectId: string, filePath: string, viaAgent: boolean, active: boolean) {
+  const [agentSrc, setAgentSrc] = useState<{ key: string; url: string } | null>(null);
+  const [agentError, setAgentError] = useState<{ key: string; text: string } | null>(null);
+  const resume = useRef<{ time: number; play: boolean } | null>(null);
+  const errorRenews = useRef(0);
+  const key = `${projectId}\n${filePath}`;
+
+  useEffect(() => {
+    if (!viaAgent || !active) return;
+    let alive = true;
+    errorRenews.current = 0;
+    agentStreamUrl(projectId, filePath).then(
+      url => { if (alive) setAgentSrc({ key, url }); },
+      e => { if (alive) setAgentError({ key, text: e instanceof Error ? e.message : 'Агент не отдал файл' }); });
+    return () => { alive = false; };
+  }, [projectId, filePath, key, viaAgent, active]);
+
+  if (!viaAgent) return { src: streamUrl(projectId, filePath), error: null, handlers: {} as MediaHandlers };
+
+  const src = agentSrc?.key === key ? agentSrc.url : undefined;
+  const renew = (el: HTMLMediaElement | null, force: boolean, play: boolean) => {
+    const time = el?.currentTime ?? 0;
+    agentStreamUrl(projectId, filePath, force).then(url => {
+      if (url === src) return;
+      el?.pause();
+      resume.current = { time, play };
+      setAgentSrc({ key, url });
+    }, e => setAgentError({ key, text: e instanceof Error ? e.message : 'Агент не отдал файл' }));
+  };
+  const handlers: MediaHandlers = {
+    // Истёкший билет виден по кэшу: свежий URL тот же — ничего не меняем
+    onPlay: e => renew(e.currentTarget, false, true),
+    onLoadedMetadata: e => {
+      errorRenews.current = 0;
+      const r = resume.current;
+      resume.current = null;
+      if (!r) return;
+      e.currentTarget.currentTime = r.time;
+      if (r.play) void e.currentTarget.play().catch(() => {});
+    },
+    // Отказ на докачке (билет истёк посреди воспроизведения) — один перевыпуск подряд
+    onSourceError: e => {
+      if (errorRenews.current++ > 0) return;
+      const el = e.currentTarget.parentElement as HTMLMediaElement | null;
+      renew(el, true, !!el && !el.paused);
+    },
+  };
+  return { src, error: agentError?.key === key ? agentError.text : null, handlers };
+}
+
 type ViewTab = 'file' | 'diff' | 'blame' | 'history';
 // Вкладка «Код» — HTML-файл в исходнике: отдельный сегмент того же трека, что и остальные
 // вкладки (раньше рядом стоял второй, одинаковый по форме, переключатель «Просмотр | Код»)
@@ -208,8 +274,8 @@ const CloudGlyph = ({ filled }: { filled?: boolean }) => (
 
 // Рендер unified-diff вынесен в общий модуль DiffView.tsx
 
-function AudioFilePlayer({ src, mimeType, fileName, fileSizeMb }: {
-  src: string; mimeType?: string; fileName: string; fileSizeMb: string | null;
+function AudioFilePlayer({ src, mimeType, fileName, fileSizeMb, handlers }: {
+  src: string; mimeType?: string; fileName: string; fileSizeMb: string | null; handlers?: MediaHandlers;
 }) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [playing, setPlaying] = useState(false);
@@ -260,13 +326,13 @@ function AudioFilePlayer({ src, mimeType, fileName, fileSizeMb }: {
     }}>
       <audio
         ref={audioRef}
-        onPlay={() => setPlaying(true)}
+        onPlay={e => { setPlaying(true); handlers?.onPlay?.(e); }}
         onPause={() => setPlaying(false)}
         onEnded={() => { setPlaying(false); setCurrentTime(0); }}
         onTimeUpdate={() => setCurrentTime(audioRef.current?.currentTime ?? 0)}
-        onLoadedMetadata={() => setDuration(audioRef.current?.duration ?? 0)}
+        onLoadedMetadata={e => { setDuration(audioRef.current?.duration ?? 0); handlers?.onLoadedMetadata?.(e); }}
       >
-        <source src={src} type={mimeType} />
+        <source src={src} type={mimeType} onError={handlers?.onSourceError} />
       </audio>
 
       {/* Иконка + имя файла */}
@@ -424,6 +490,30 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const [loadForbidden, setLoadForbidden] = useState(false);
   const [diff, setDiff] = useState<string | null>(null);
   const [tab, setTab] = useState<ViewTab>('file');
+  // Локальный проект: поток и картинки markdown отдаёт агент по узкому билету на путь
+  const viaAgent = projectFilesRoute(project) === 'agent';
+  const media = useMediaStream(project.id, filePath, viaAgent,
+    !isHostMode && tab === 'file' && !!(fileContent?.isVideo || fileContent?.isAudio));
+  // Картинки markdown у локального проекта: билет на каждый путь приходит асинхронно, до
+  // него — прозрачный пиксель. Набор сбрасывается со сменой файла и вкладки: <img> тогда
+  // монтируется заново, а билет прежнего набора мог истечь
+  const imagesKey = `${project.id}\n${filePath}\n${tab}`;
+  const [agentImages, setAgentImages] = useState<{ key: string; urls: Record<string, string> }>({ key: '', urls: {} });
+  const agentImagesAsked = useRef<{ key: string; paths: Set<string> }>({ key: '', paths: new Set() });
+  const resolveAgentImage = (target: string): string => {
+    if (agentImages.key === imagesKey && agentImages.urls[target]) return agentImages.urls[target];
+    if (agentImagesAsked.current.key !== imagesKey) agentImagesAsked.current = { key: imagesKey, paths: new Set() };
+    if (!agentImagesAsked.current.paths.has(target)) {
+      agentImagesAsked.current.paths.add(target);
+      const key = imagesKey;
+      agentStreamUrl(project.id, target).then(url => {
+        // Ответ для уже закрытого набора не должен вытеснить текущий
+        if (agentImagesAsked.current.key !== key) return;
+        setAgentImages(prev => ({ key, urls: { ...(prev.key === key ? prev.urls : {}), [target]: url } }));
+      }, () => {});
+    }
+    return BLANK_IMAGE;
+  };
   // Git: репо-статус (гейт вкладки «Авторы»), blame-кэш и busy зернистого stage
   const gitSt = useGitState(project.id);
   useEffect(() => { ensureGit(project.id); }, [project.id]);
@@ -1872,12 +1962,19 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
                 проекта не сработает, показываем как обычный бинарник со скачиванием */}
             {fileContent?.isVideo && !isHostMode && (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, padding: 16 }}>
-                <video
-                  controls
-                  style={{ maxWidth: '100%', borderRadius: 8, boxShadow: SHADOW.card }}
-                >
-                  <source src={streamUrl(project.id, filePath)} type={fileContent.mimeType} />
-                </video>
+                {media.error
+                  ? <span style={{ fontSize: 13, color: C.textMuted }}>{media.error}</span>
+                  : media.src && (
+                    <video
+                      key={media.src}
+                      controls
+                      style={{ maxWidth: '100%', borderRadius: 8, boxShadow: SHADOW.card }}
+                      onPlay={media.handlers.onPlay}
+                      onLoadedMetadata={media.handlers.onLoadedMetadata}
+                    >
+                      <source src={media.src} type={fileContent.mimeType} onError={media.handlers.onSourceError} />
+                    </video>
+                  )}
                 <div style={{ fontSize: 12, color: C.textMuted, fontFamily: FONT.mono, display: 'flex', gap: 7, flexWrap: 'wrap', justifyContent: 'center' }}>
                   <span>{(fileContent.mimeType?.split('/')[1] ?? fileName.split('.').pop() ?? '').toUpperCase()}</span>
                   {fileSizeMb && <><span style={{ opacity: 0.5 }}>·</span><span>{fileSizeMb} МБ</span></>}
@@ -1885,12 +1982,17 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
               </div>
             )}
 
-            {fileContent?.isAudio && !isHostMode && (
+            {fileContent?.isAudio && !isHostMode && media.error && (
+              <div style={{ display: 'flex', justifyContent: 'center', padding: 20, fontSize: 13, color: C.textMuted }}>{media.error}</div>
+            )}
+            {fileContent?.isAudio && !isHostMode && !media.error && media.src && (
               isMobile
                 ? (
                   <div style={{ display: 'flex', justifyContent: 'center', padding: 20 }}>
                     <AudioFilePlayer
-                      src={streamUrl(project.id, filePath)}
+                      key={media.src}
+                      src={media.src}
+                      handlers={media.handlers}
                       mimeType={fileContent.mimeType}
                       fileName={fileName}
                       fileSizeMb={fileSizeMb}
@@ -1915,8 +2017,9 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
                         </span>
                       </div>
                       <div style={{ borderRadius: 8, overflow: 'hidden' }}>
-                        <audio controls style={{ width: '100%', height: 40, outline: 'none', display: 'block' }}>
-                          <source src={streamUrl(project.id, filePath)} type={fileContent.mimeType} />
+                        <audio key={media.src} controls style={{ width: '100%', height: 40, outline: 'none', display: 'block' }}
+                          onPlay={media.handlers.onPlay} onLoadedMetadata={media.handlers.onLoadedMetadata}>
+                          <source src={media.src} type={fileContent.mimeType} onError={media.handlers.onSourceError} />
                         </audio>
                       </div>
                       <div style={{ fontSize: 11, color: C.textMuted, fontFamily: FONT.mono, display: 'flex', gap: 6 }}>
@@ -2095,7 +2198,8 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
                           onDocLink: handleDocLink,
                           resolveImageSrc: src => {
                             const target = resolveDocImage(filePath, src);
-                            return target ? api.files.fileUrl(project.id, target) : undefined;
+                            if (!target) return undefined;
+                            return viaAgent ? resolveAgentImage(target) : api.files.fileUrl(project.id, target);
                           },
                         })}
                         {/* На узком просмотрщике блок уезжает под текст — там же,

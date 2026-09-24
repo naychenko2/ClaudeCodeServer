@@ -1858,7 +1858,7 @@ export const api = {
     // на них относительным путём, а base64 из files/content для <img src> не подходит
     fileUrl: (projectId: string, path: string): string => {
       // Локальный проект: поток отдаёт агент по узкому билету на путь, а его выдача
-      // асинхронна — синхронного URL нет (точка — agentStreamUrl в deviceAgent.ts, 4.2б).
+      // асинхронна — синхронного URL нет (точка — agentStreamUrl в deviceAgent.ts).
       // Основной билет проекта в URL не кладём никогда
       if (projectRouteOf(projectId) === 'agent') return '';
       const token = readStoredToken();

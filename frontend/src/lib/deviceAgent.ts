@@ -207,17 +207,47 @@ export function assertServerRoute(projectId: string, method: string, path: strin
     throw new DeviceAgentError('unsupported', DEVICE_AGENT_UNSUPPORTED_TEXT);
 }
 
-// URL отдачи файла потоком для <img>/<video> — ЕДИНСТВЕННАЯ точка на фронте. Тег не шлёт
-// заголовков, поэтому билет едет в запросе, но основной билет проекта туда класть нельзя
-// (ревью 4.5): агент примет в ?ticket= только узкий билет — короткий (≤60 с) и на один путь.
-// Асинхронно, потому что узкий билет выдаётся на каждый путь отдельно.
-// TODO(4.2б): выдать узкий билет у сервера и собрать из него URL — контракт выдачи придёт
-// с 4.2б; меняется только тело этой функции. До того поток у локального проекта недоступен.
-export const DEVICE_AGENT_STREAM_PENDING_TEXT = 'Просмотр потоком у локального проекта появится со следующей версией агента';
+// ---------- поток: узкий билет на один путь ----------
 
-export async function agentStreamUrl(projectId: string, path: string): Promise<string> {
-  void projectId; void path;
-  throw new DeviceAgentError('unsupported', DEVICE_AGENT_STREAM_PENDING_TEXT);
+// Маршрут выдачи и параметр — DeviceAgentApi.StreamTicketRoute/StreamTicketQuery. Маршрут
+// вне контракта файлов сервера, поэтому в deviceAgentRoutes его нет
+const STREAM_TICKET_ROUTE = 'agent/stream-ticket';
+const STREAM_TICKET_QUERY = 'streamTicket';
+// Узкий билет живёт ≤60 с; отдаём элементу, только если ему осталось больше этого запаса
+const STREAM_REUSE_MARGIN_MS = 15_000;
+
+interface StreamGrant { url: string; expiresAt: number }
+const streamGrants = new Map<string, StreamGrant>();
+const pendingStreams = new Map<string, Promise<string>>();
+const streamKey = (projectId: string, path: string) => `${projectId}\n${path}`;
+
+function streamFresh(g: StreamGrant | undefined): g is StreamGrant {
+  return !!g && g.expiresAt - Date.now() > STREAM_REUSE_MARGIN_MS;
+}
+
+// URL отдачи файла потоком для <img>/<video>/<audio> — ЕДИНСТВЕННАЯ точка на фронте. Тег не
+// шлёт заголовков, поэтому билет едет в запросе, но основной билет проекта туда не кладётся
+// никогда (история, логи, Referer): агент по основному билету в заголовке выдаёт узкий —
+// ≤60 с, на один путь, принимается только в GET files/stream. force — перевыпустить, даже
+// если прежний ещё числится живым (элемент получил на нём отказ).
+export function agentStreamUrl(projectId: string, path: string, force = false): Promise<string> {
+  const key = streamKey(projectId, path);
+  const cached = streamGrants.get(key);
+  if (!force && streamFresh(cached)) return Promise.resolve(cached.url);
+  const pending = pendingStreams.get(key);
+  if (pending) return pending;
+  const p = (async () => {
+    const r = await agentRequest<{ streamTicket: string; expiresAt: string }>(projectId, STREAM_TICKET_ROUTE, {
+      method: 'POST', body: JSON.stringify({ path }),
+    });
+    const t = await getAgentTicket(projectId);
+    const params = new URLSearchParams({ path, [STREAM_TICKET_QUERY]: r.streamTicket });
+    const url = `${agentBase(t)}/api/projects/${encodeURIComponent(projectId)}/files/stream?${params}`;
+    streamGrants.set(key, { url, expiresAt: Date.parse(r.expiresAt) });
+    return url;
+  })().finally(() => pendingStreams.delete(key));
+  pendingStreams.set(key, p);
+  return p;
 }
 
 // ---------- проверка связи ----------
@@ -278,4 +308,6 @@ export function resetDeviceAgentForTests(): void {
   tickets.clear();
   pendingTickets.clear();
   probes.clear();
+  streamGrants.clear();
+  pendingStreams.clear();
 }

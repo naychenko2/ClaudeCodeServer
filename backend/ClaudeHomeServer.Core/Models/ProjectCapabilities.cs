@@ -1,0 +1,195 @@
+using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Execution;
+
+namespace ClaudeHomeServer.Models;
+
+/// <summary>
+/// Где работает группа подсистем проекта (ADR-016 §4): на сервере, на устройстве (в агенте)
+/// или нигде. Строки, а не enum: в DTO едут как есть, фронт сравнивает их литералами.
+/// </summary>
+public static class CapabilityHost
+{
+    public const string Server = "server";
+    public const string Device = "device";
+    public const string Off = "off";
+}
+
+/// <summary>Состояние одной группы подсистем у конкретного проекта.</summary>
+/// <param name="Host">Где группа работает — <see cref="CapabilityHost"/>.</param>
+/// <param name="Available">Можно ли пользоваться группой прямо сейчас.</param>
+/// <param name="Reason">Почему недоступна — готовый текст для человека; null, если доступна.</param>
+/// <param name="Features">Состав группы — ключи <see cref="ProjectFeatures"/>.</param>
+public sealed record ProjectCapabilityGroup(string Host, bool Available, string? Reason, IReadOnlyList<string> Features);
+
+/// <summary>Можно ли запускать ход проекта прямо сейчас.</summary>
+public sealed record ProjectExecCapability(bool Available, string? Reason);
+
+/// <summary>
+/// Ключи подсистем проекта для матрицы (ADR-016 §4). Фронт скрывает панели по группе, в
+/// которую входит ключ, а не по <c>deviceId</c> проекта.
+/// </summary>
+public static class ProjectFeatures
+{
+    // Привязаны к файлам проекта
+    public const string Files = "files";
+    public const string Diff = "diff";
+    public const string Git = "git";
+    public const string FileWatcher = "fileWatcher";
+    public const string Terminal = "terminal";
+    public const string DevServers = "devServers";
+    public const string Skills = "skills";
+    public const string Attachments = "attachments";
+
+    // Платформа
+    public const string Chat = "chat";
+    public const string History = "history";
+    public const string Tasks = "tasks";
+    public const string Memory = "memory";
+    public const string Personas = "personas";
+    public const string Notes = "notes";
+    public const string Costs = "costs";
+    public const string Tts = "tts";
+
+    // Нужен контент проекта на сервере
+    public const string Knowledge = "knowledge";
+    public const string CodeGraph = "codeGraph";
+    public const string Dossiers = "dossiers";
+    public const string Docs = "docs";
+    public const string MapHygiene = "mapHygiene";
+
+    public static readonly IReadOnlyList<string> FileBound =
+        [Files, Diff, Git, FileWatcher, Terminal, DevServers, Skills, Attachments];
+
+    public static readonly IReadOnlyList<string> Platform =
+        [Chat, History, Tasks, Memory, Personas, Notes, Costs, Tts];
+
+    public static readonly IReadOnlyList<string> ServerContent =
+        [Knowledge, CodeGraph, Dossiers, Docs, MapHygiene];
+}
+
+/// <summary>
+/// Матрица возможностей проекта (ADR-016 §4) — ЕДИНСТВЕННАЯ точка правды о том, серверный
+/// проект или локальный и что из этого следует, для фронта и серверных guard'ов. Инлайновых
+/// проверок локальности (<c>DeviceId != null</c>, <c>IsLocal</c>) вне этого файла не заводим:
+/// их ловит сторож G10 (<c>ProjectCapabilitiesGuardTests</c>).
+///
+/// Три группы: <see cref="Files"/> — подсистемы, привязанные к файлам (у локального проекта —
+/// в агенте устройства), <see cref="Platform"/> — всегда на сервере, <see cref="ServerContent"/>
+/// — нужен контент проекта на сервере (у локального выключены).
+/// </summary>
+public sealed record ProjectCapabilities(
+    string Host,
+    string? DeviceId,
+    ProjectCapabilityGroup Files,
+    ProjectCapabilityGroup Platform,
+    ProjectCapabilityGroup ServerContent,
+    ProjectExecCapability Exec)
+{
+    public const string DeviceMissingReason = "Устройство проекта не найдено или отозвано";
+    public const string DeviceOfflineReason = "Устройство офлайн";
+    public const string NoExecReason = "На устройстве нет агента локальных проектов, умеющего запускать ходы";
+    public const string NoFilesReason = "Агент устройства пока не открывает файлы проекта";
+    public const string ServerContentOffReason = "Нужен контент проекта на сервере — у локального проекта недоступно";
+
+    /// <summary>Проект привязан к устройству. Единственная проверка локальности во всём коде.</summary>
+    public static bool IsDeviceBound(Project project) => project.DeviceId is not null;
+
+    /// <summary>Файлы проекта лежат на диске сервера — вход серверной файловой подсистемы допустим.</summary>
+    public static bool FilesOnServer(Project project) => !IsDeviceBound(project);
+
+    /// <summary>Работает ли у проекта группа «нужен контент на сервере» (Dify, CodeGraph, досье, Docs, уборка карты).</summary>
+    public static bool ServerContentEnabled(Project project) => !IsDeviceBound(project);
+
+    /// <summary>
+    /// Ключ папки проекта — пара «устройство + путь» (ADR-016 §1): одна и та же строка пути на
+    /// сервере и на устройстве даёт разные ключи. У серверного проекта ключ совпадает с
+    /// прежним <see cref="PathNormalizer.NormalizePath"/> — сторы на диске не мигрируют.
+    /// </summary>
+    public static string FolderKey(Project project) => FolderKey(project.DeviceId, project.RootPath);
+
+    public static string FolderKey(string? deviceId, string rootPath) =>
+        deviceId is null
+            ? PathNormalizer.NormalizePath(rootPath)
+            // Путь чужой машины: GetFullPath сервера его исказил бы (Windows-путь на Linux),
+            // поэтому только разделители, хвост и регистр
+            : "device:" + deviceId + ":" + NormalizeDevicePath(rootPath).ToLowerInvariant();
+
+    /// <summary>
+    /// Ключ датасета знаний проекта. null — у проекта нет серверного датасета вовсе (локальный:
+    /// группа «контент на сервере» выключена), поэтому одноимённая серверная папка не делит с
+    /// ним базу знаний.
+    /// </summary>
+    public static string? KnowledgeRoot(Project project) =>
+        ServerContentEnabled(project) ? project.RootPath : null;
+
+    /// <summary>
+    /// Путь на устройстве в каноничной форме: абсолютный (корень диска Windows или «/»), без
+    /// сегментов «.»/«..», единый разделитель по виду пути, без хвостового разделителя. На
+    /// сервере не существует — проверять его наличие некому, кроме агента.
+    /// </summary>
+    public static string NormalizeDevicePath(string rootPath)
+    {
+        var raw = rootPath.Trim();
+        var windows = raw.Length >= 3 && char.IsAsciiLetter(raw[0]) && raw[1] == ':' && raw[2] is '\\' or '/';
+        if (!windows && !raw.StartsWith('/'))
+            throw new ArgumentException("Путь на устройстве должен быть абсолютным: «C:\\папка» или «/папка»");
+        var sep = windows ? '\\' : '/';
+        var segments = raw.Split(['\\', '/'], StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Any(s => s is "." or ".."))
+            throw new ArgumentException("Путь на устройстве не должен содержать «.» и «..»");
+        return windows
+            ? segments.Length == 1 ? segments[0] + sep : string.Join(sep, segments)
+            : "/" + string.Join(sep, segments);
+    }
+
+    /// <summary>
+    /// Можно ли привязать проект к устройству: флаг <c>local-projects</c> владельца и возможность
+    /// <c>exec</c> у устройства. null — можно, иначе готовый текст отказа. Онлайн не требуется:
+    /// возможность хранится у устройства и в офлайне.
+    /// </summary>
+    public static string? BindRefusal(bool localProjectsEnabled, DeviceExecStatus? device)
+    {
+        if (!localProjectsEnabled) return "Локальные проекты выключены (экспериментальная функция «Локальные проекты»)";
+        if (device is null) return DeviceMissingReason;
+        if (!device.HasCapability(DeviceCapabilities.Exec)) return NoExecReason;
+        return null;
+    }
+
+    /// <summary>
+    /// Матрица для проекта. <paramref name="device"/> — состояние устройства проекта из шва
+    /// <see cref="IDeviceExecChannel"/>; у серверного проекта не нужен, у локального null
+    /// означает «устройства нет» (отозвано или канал недоступен).
+    /// </summary>
+    public static ProjectCapabilities For(Project project, DeviceExecStatus? device)
+    {
+        var platform = new ProjectCapabilityGroup(CapabilityHost.Server, true, null, ProjectFeatures.Platform);
+        if (!IsDeviceBound(project))
+            return new ProjectCapabilities(
+                CapabilityHost.Server, null,
+                new ProjectCapabilityGroup(CapabilityHost.Server, true, null, ProjectFeatures.FileBound),
+                platform,
+                new ProjectCapabilityGroup(CapabilityHost.Server, true, null, ProjectFeatures.ServerContent),
+                new ProjectExecCapability(true, null));
+
+        string? filesReason =
+            device is null ? DeviceMissingReason
+            : !device.Online ? DeviceOfflineReason
+            : !device.HasCapability(DeviceCapabilities.Files) ? NoFilesReason
+            : null;
+
+        string? execReason =
+            device is null ? DeviceMissingReason
+            : !device.Online ? DeviceOfflineReason
+            : !device.HasCapability(DeviceCapabilities.Exec) ? NoExecReason
+            : !device.HarnessReady ? device.HarnessProblem ?? "Харнес устройства не готов"
+            : null;
+
+        return new ProjectCapabilities(
+            CapabilityHost.Device, project.DeviceId,
+            new ProjectCapabilityGroup(CapabilityHost.Device, filesReason is null, filesReason, ProjectFeatures.FileBound),
+            platform,
+            new ProjectCapabilityGroup(CapabilityHost.Off, false, ServerContentOffReason, ProjectFeatures.ServerContent),
+            new ProjectExecCapability(execReason is null, execReason));
+    }
+}

@@ -1,20 +1,18 @@
-﻿namespace ClaudeHomeServer.Services;
+﻿using ClaudeHomeServer.Services.Composition;
 
-public record FileEntry(string Name, string Path, bool IsDirectory, long? Size, DateTime Modified, bool IsModified, string? Synced = null, bool IsNew = false);
-
-// Вид мутации файла через файловый сервис — для подписчиков OnMutated
-public enum FileMutationKind { Write, Create, Delete, Rename }
+namespace ClaudeHomeServer.Services.Files;
 
 public class FileService(
-    ClaudeHomeServer.Services.Git.GitService? git = null,
-    ProjectManager? projects = null,
+    IGitWorkingTree? git = null,
+    IProjectManager? projects = null,
     ILogger<FileService>? logger = null)
 {
     private readonly ILogger<FileService>? _logger = logger;
 
     // git/projects/logger опциональны (DI подставляет): git-операции идут через слой Execution
     // с резолвом владельца по корню — статусы/дифф/револт честны и для container-юзеров.
-    // Без них (юнит-тесты) — прежний прямой запуск git на хосте и тихое логирование.
+    // Без них (юнит-тесты, выключенная подсистема Git) — прежний прямой запуск git на хосте
+    // и тихое логирование.
 
     // Владелец по корню проекта: у соседей по папке владелец один по построению
     private string? OwnerOf(string rootPath) =>
@@ -26,8 +24,8 @@ public class FileService(
     public event Action<string, string, FileMutationKind, string?>? OnMutated;
 
     // Уведомление подписчиков; сбой подписчика не должен ронять файловую операцию.
-    // internal — дёргают и точки записи мимо FileService (Upload/SaveFromUrl в FilesController).
-    internal void NotifyMutated(string root, string rel, FileMutationKind kind, string? newRel = null)
+    // Публичный — дёргают и точки записи мимо FileService (Upload/SaveFromUrl в FilesController).
+    public void NotifyMutated(string root, string rel, FileMutationKind kind, string? newRel = null)
     {
         try { OnMutated?.Invoke(root, rel, kind, newRel); }
         catch { /* синк знаний best-effort */ }
@@ -55,9 +53,8 @@ public class FileService(
 
     // Защита от path traversal — форвардер к Core-примитиву (Этап 3, уборка Git).
     // Реализация и обоснование граничных случаев (`..`, абсолютный путь, символы диска)
-    // живут в `ClaudeHomeServer.Core/Services/SafePath.cs`. Форвардеры оставлены:
-    // десятки вызывающих внутри Main, и смена имени сломала бы полпроекта; SafePath.Join
-    // остаётся прямой точкой для нового кода вроде `GitService.ValidateRel`.
+    // живут в `ClaudeHomeServer.Core/Services/SafePath.cs`. Внутренний форвардер — для кода
+    // самой вертикали; снаружи зовут SafePath.Join или SafeJoinPublic.
     internal static string SafeJoin(string root, string relativePath) =>
         SafePath.Join(root, relativePath);
 

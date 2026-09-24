@@ -6,6 +6,7 @@ using System.Security.Claims;
 using System.Text;
 using ClaudeHomeServer.Services;
 using Microsoft.AspNetCore.Authentication;
+using ClaudeHomeServer.Services.Files;
 
 namespace ClaudeHomeServer.WebDav;
 
@@ -120,7 +121,9 @@ public static class WebDavHandler
         // Ищем проект по имени только среди проектов текущего пользователя,
         // чтобы не попасть на чужой проект с тем же именем.
         var project = projects.GetByOwner(davUserId)
-            .FirstOrDefault(p => string.Equals(p.Name, projectName, StringComparison.OrdinalIgnoreCase));
+            // Локальный проект WebDav сервера не отдаёт: его файлы на устройстве (ADR-016 §4)
+            .FirstOrDefault(p => string.Equals(p.Name, projectName, StringComparison.OrdinalIgnoreCase)
+                && Models.ProjectCapabilities.FilesOnServer(p));
         if (project is null)
         {
             ctx.Response.StatusCode = 404;
@@ -326,7 +329,7 @@ public static class WebDavHandler
         var depth = ctx.Request.Headers["Depth"].ToString();
         if (depth == "1")
         {
-            foreach (var p in projects.GetByOwner(davUserId))
+            foreach (var p in projects.GetByOwner(davUserId).Where(Models.ProjectCapabilities.FilesOnServer))
             {
                 var pHref = $"{ctx.Request.Scheme}://{ctx.Request.Host}{pb}/projects/{Uri.EscapeDataString(p.Name)}/";
                 DateTime pModified = now, pCreated = now;

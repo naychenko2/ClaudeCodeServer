@@ -5,6 +5,7 @@ using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Skills;
+using ClaudeHomeServer.Services.Files;
 
 namespace ClaudeHomeServer.Services;
 
@@ -956,6 +957,8 @@ public class PersonaBindingsService : IPersonaServerToolGate
         if (string.IsNullOrWhiteSpace(binding.Path)) return null;
         var project = _projects.GetById(binding.Target);
         if (project is null || project.OwnerId != ownerId) return null;
+        // Файл локального проекта на устройстве — выжимку сервер не читает (ADR-016 §4)
+        if (!Composition.ProjectCapabilityGuard.Allows(project, Composition.ProjectCapabilityArea.FileBound)) return null;
         var capBytes = int.TryParse(_config["Persona:BindingsFileCapBytes"], out var c) ? c : 16384;
 
         var full = FileService.SafeJoinPublic(project.RootPath, binding.Path);

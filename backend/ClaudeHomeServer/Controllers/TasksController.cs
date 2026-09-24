@@ -15,6 +15,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace ClaudeHomeServer.Controllers;
 
 // Задачи внутри проекта
+[ProjectCapability(ProjectCapabilityArea.Platform)]
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/tasks")]
@@ -88,6 +89,7 @@ public class ProjectTasksController(
 }
 
 // Задачи пользователя без привязки к конкретному проекту: календарь + операции по id
+[ProjectCapability(ProjectCapabilityArea.Platform)]
 [ApiController]
 [Authorize]
 [Route("api/tasks")]

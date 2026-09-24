@@ -9,6 +9,7 @@ using ClaudeHomeServer.Tests.Helpers;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Dossiers;
+using ClaudeHomeServer.Services.Files;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Memory;
 using FluentAssertions;

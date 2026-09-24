@@ -1,4 +1,5 @@
-﻿using System.Collections.Concurrent;
+﻿using ClaudeHomeServer.Services.Composition;
+using System.Collections.Concurrent;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Services.CodeGraph;
 using ClaudeHomeServer.Services.Files;
@@ -110,7 +111,9 @@ public class FileWatcherService : IDisposable
     public bool Watch(string projectId, string connectionId)
     {
         var project = _projects.GetById(projectId);
-        if (project is null || !Directory.Exists(project.RootPath)) return false;
+        // Файлы локального проекта на устройстве: ватчер сервера туда не смотрит (ADR-016 §4)
+        if (project is null || !ProjectCapabilityGuard.Allows(project, ProjectCapabilityArea.FileBound)
+            || !Directory.Exists(project.RootPath)) return false;
 
         Entry entry;
         RecursiveDirectoryWatcher? starting = null;

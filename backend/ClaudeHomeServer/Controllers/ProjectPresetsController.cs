@@ -5,6 +5,7 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Core.Telemetry;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Controllers;
 
@@ -13,6 +14,7 @@ namespace ClaudeHomeServer.Controllers;
 /// тело строго { presetKey }, никаких путей и имён папок снаружи — состав лежит в
 /// PresetCatalog и пишется через ProjectPresetService.
 /// </summary>
+[ProjectCapability(ProjectCapabilityArea.Platform, ProjectKey = "id")]
 [ApiController]
 [Authorize]
 [Route("api/projects/{id}/preset")]
@@ -32,6 +34,8 @@ public class ProjectPresetsController(ProjectManager projects, ProjectPresetServ
     // ({ presetKey: "none" }). Идемпотентность: PresetKey != "pending" → 409 —
     // действует и на применение, и на отказ, и на проекты, созданные до фичи (null).
     [HttpPost]
+    // Раскладывает папки и файлы пресета в папку проекта
+    [ProjectCapability(ProjectCapabilityArea.FileBound, ProjectKey = "id")]
     public ActionResult Apply(string id, [FromBody] ApplyPresetRequest req)
     {
         if (Owned(id) is not { } project) return NotFound();

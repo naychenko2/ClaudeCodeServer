@@ -5,6 +5,7 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Docs;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Controllers;
 
@@ -22,6 +23,7 @@ namespace ClaudeHomeServer.Controllers;
 /// не существует (NotFound, не Forbid). <c>apply</c> пишет в CLAUDE.md, и открытая
 /// ручка записи при выключенной фиче была бы лишним риском.
 /// </summary>
+[ProjectCapability(ProjectCapabilityArea.ServerContent, ProjectKey = "id")]
 [ApiController]
 [Authorize]
 [Route("api/projects/{id}/map-hygiene")]

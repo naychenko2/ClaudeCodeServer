@@ -22,7 +22,9 @@ public sealed class AutomationRootResolver(IProjectManager projects, IHomePathRe
         if (!string.IsNullOrWhiteSpace(projectId))
         {
             var project = projects.GetById(projectId);
-            if (project is not null && !string.IsNullOrWhiteSpace(project.RootPath))
+            // Папка локального проекта на устройстве — серверный опрос её не видит (ADR-016 §4)
+            if (project is not null && !string.IsNullOrWhiteSpace(project.RootPath)
+                && ProjectCapabilities.FilesOnServer(project))
                 return (project.RootPath, $"«{project.Name}»");
             return (null, "");
         }

@@ -4,9 +4,11 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.ProjectServices;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Controllers;
 
+[ProjectCapability(ProjectCapabilityArea.FileBound)]
 [ApiController]
 [Authorize]
 public class PreviewController : ControllerBase

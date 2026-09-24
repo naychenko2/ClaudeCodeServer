@@ -5,6 +5,7 @@ using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Services.Llm.Claude;
 using FluentAssertions;
 using Xunit;
+using ClaudeHomeServer.Services.Files;
 
 namespace ClaudeHomeServer.Tests.Services;
 

@@ -29,6 +29,7 @@ using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.StaticFiles;
 using Yarp.ReverseProxy.Forwarder;
+using ClaudeHomeServer.Services.Files;
 
 JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
 
@@ -160,7 +161,9 @@ builder.Services.AddExceptionHandler<ClaudeHomeServer.Services.Http.UnhandledExc
 // Держим IMvcBuilder в переменной: ниже, после загрузки динамических модулей (ModuleLoader),
 // на том же builder'е подключаем их контроллеры (AddApplicationPart-эквивалент —
 // ConfigureApplicationPartManager, единственный доступный на IServiceCollection-уровне путь).
-var mvcBuilder = builder.Services.AddControllers()
+// Отказ локального проекта из глубины сервиса (ProjectCapabilityGuard.ServerRoot) — 409 с
+// кодом local_project, а не 500 (ADR-016 §4, G1)
+var mvcBuilder = builder.Services.AddControllers(o => o.Filters.Add(new LocalProjectExceptionFilter()))
     .AddJsonOptions(o =>
         o.JsonSerializerOptions.Converters.Add(
             new JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase)));
@@ -275,6 +278,8 @@ builder.Services.AddSignalR(o =>
         o.KeepAliveInterval = TimeSpan.FromSeconds(15);
         // Медленное рукопожатие на плохом канале не должно ронять подключение
         o.HandshakeTimeout = TimeSpan.FromSeconds(30);
+        // Отказ файловой группы для локального проекта (ADR-016 §4, G1) на методах хабов
+        Microsoft.AspNetCore.SignalR.HubOptionsExtensions.AddFilter(o, new ProjectCapabilityHubFilter());
     })
     .AddJsonProtocol(o =>
         o.PayloadSerializerOptions.Converters.Add(
@@ -475,6 +480,8 @@ builder.Services.AddSingleton<ChatDigestService>();
 // TaskManager/TaskAiService/BoardService/DailyBriefingService/TaskSchedulerService
 // — DI в подсистеме `TasksSubsystem` (волна 4C, шаг 1).
 builder.Services.AddSingleton<FileService>();
+// Шов файлов проекта (ADR-016): async и с ключом «проект», guard файловой группы внутри.
+builder.Services.AddSingleton<IProjectFiles, ProjectFiles>();
 // Резолв контекста чата (фича chat-context): признак «не найден» считает одна точка
 // для REST фронта и MCP-тула context_list
 builder.Services.AddSingleton<SessionContextResolver>();

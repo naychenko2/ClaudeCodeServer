@@ -30,6 +30,10 @@ internal static class BoundaryIlScanner
 
     static BoundaryIlScanner()
     {
+        // Files — отдельная сборка (ADR-016, задача 4.1): сканер зовут все сторожа границ,
+        // форс-загрузка здесь страхует их от вакуумного прохода по вертикали Files.
+        _ = typeof(ClaudeHomeServer.Services.Files.FileService).Assembly;
+
         foreach (var f in typeof(OpCodes).GetFields(BindingFlags.Public | BindingFlags.Static))
         {
             if (f.GetValue(null) is not OpCode op) continue;

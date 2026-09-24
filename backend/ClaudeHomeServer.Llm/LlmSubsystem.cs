@@ -328,6 +328,14 @@ public sealed class LlmSubsystem : IAppSubsystem
             sp.GetRequiredService<Turn.ITurnEventBus>(),
             log: sp.GetService<ILogger<Gateway.TurnTokenService>>()));
 
+        // Шлюз LLM (ADR-016): тумблеры секции LlmGateway читаются живьём (IOptionsMonitor);
+        // учёт лимитов — единая точка SubscriptionLimitRecorder, её же зовёт SessionManager.
+        // Таймаута у клиента нет: SSE хода живёт столько, сколько генерирует модель.
+        services.AddOptions<Gateway.LlmGatewayOptions>().Bind(config.GetSection(Gateway.LlmGatewayOptions.Section));
+        services.AddSingleton<SubscriptionLimitRecorder>();
+        services.AddSingleton<Gateway.UpstreamSelector>();
+        services.AddHttpClient(Gateway.LlmGatewayEndpoints.HttpClientName, c => c.Timeout = Timeout.InfiniteTimeSpan);
+
         // WorkflowAgentParser / WorkflowWatcher / WorkflowMetaResolver — статические
         // парсеры транскриптов; DI не нужны (Program.cs:~788-792 ставит логгеры
         // и кеш корней после Build).

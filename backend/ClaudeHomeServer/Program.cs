@@ -2037,6 +2037,10 @@ app.MapHub<TerminalHub>("/hubs/terminal");
 // Канал десктопного агента (ADR-008): исходящее соединение клиента с машины пользователя,
 // push команды в конкретное соединение. Схема авторизации — токен устройства, а не общий JWT
 app.MapHub<ClaudeHomeServer.Services.Desktop.DeviceHub>("/hubs/devices");
+// Шлюз LLM локальных проектов (ADR-016): авторизация — токен хода, а не JWT; выключен
+// тумблером LlmGateway:Enabled (404). Подсистема llm отключаемая — маппим только при ней.
+if (app.Services.GetService<ClaudeHomeServer.Services.Llm.Gateway.UpstreamSelector>() is not null)
+    ClaudeHomeServer.Services.Llm.Gateway.LlmGatewayEndpoints.MapLlmGateway(app);
 
 // Graceful shutdown: гасим все живые процессы claude, терминалы и dev-серверы.
 //

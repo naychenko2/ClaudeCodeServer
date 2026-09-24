@@ -210,3 +210,21 @@ export function deviceOfflineLabel(project: Project | null | undefined): string 
   }
   return null;
 }
+
+// Бейдж локального проекта для шапки чата: «на устройстве · имя · офлайн». null — проект
+// серверный. offline — устройство не в сети или агент не готов: тогда бейдж предупреждает,
+// а в title полная причина из deviceOfflineLabel. short — для узкой шапки, где длинный
+// текст обрезался бы как раз на состоянии
+export function projectDeviceBadge(project: Project | null | undefined): { text: string; short: string; offline: boolean; title: string } | null {
+  if (!isLocalProject(project)) return null;
+  const problem = deviceOfflineLabel(project);
+  const name = project?.device?.name;
+  const state = !problem ? null : project?.device?.online === false ? 'офлайн' : 'не готово';
+  const where = `Проект живёт на устройстве${name ? ` «${name}»` : ''}`;
+  return {
+    text: ['на устройстве', name, state].filter(Boolean).join(' · '),
+    short: state ? `устройство ${state}` : 'на устройстве',
+    offline: problem !== null,
+    title: problem ? `${where}. ${problem}` : where,
+  };
+}

@@ -1,4 +1,4 @@
-import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
+import { test, expect, type APIRequestContext, type Page, type Route } from '@playwright/test';
 
 // E2E локального проекта (ADR-016 §3.4): флаг `local-projects` включён,
 // диалог создания проекта показывает сегмент «Локальный», выбор устройства
@@ -96,27 +96,157 @@ test.describe('локальный проект (ADR-016 §3.4)', () => {
     const submit = dialog.getByRole('button', { name: /Создать|Добавить/ });
     await expect(submit).toBeDisabled();
   });
+});
 
-  test('секция git и знаний скрыты под офлайн-устройством (через capabilities)', async ({ page, context }) => {
-    // Этот сценарий проверяет UI-уровневый гейт: без живого устройства нельзя
-    // построить матрицу capabilities.files.available=false — мы лишь открываем
-    // существующий серверный проект и убеждаемся, что табы/панели рендерятся.
-    // Полноценная проверка «устройство офлайн → панели скрыты» требует бэка,
-    // который присылает capabilities с host='off'; этот случай покрывается юнитами.
-    await context.addInitScript((tk) => localStorage.setItem('cc_token', tk as string), token);
-    await page.goto('/#/projects');
+// Локальный проект с офлайн-устройством (ADR-016 §3.4, дизайн-ревью 4.7 S3/S4). Живого
+// устройства в e2e нет, поэтому серверный проект подменяется в ответе /api/projects на
+// локальный: матрица host=device, файлы и ход недоступны, серверного контента нет.
+// Сравнение «локальный против серверного» идёт на одном и том же проекте — без подмены
+// он остаётся серверным
+const OFFLINE = 'Устройство офлайн';
+const OFFLINE_NAME = `E2E офлайн ${RUN}`;
+
+async function asOfflineLocalProject(page: Page, projectId: string) {
+  await page.route('**/api/projects', async (route: Route) => {
+    if (route.request().method() !== 'GET') return route.fallback();
+    const response = await route.fetch();
+    const list = (await response.json()) as Array<Record<string, unknown>>;
+    const patched = list.map(p => p.id !== projectId ? p : {
+      ...p,
+      deviceId: 'fake-device',
+      device: { id: 'fake-device', name: 'Домашний ПК', online: false, platform: 'linux', agentVersion: '0.0.0', harnessReady: true, harnessProblem: null },
+      capabilities: {
+        host: 'device', deviceId: 'fake-device',
+        files: { host: 'device', available: false, reason: OFFLINE, features: ['files', 'diff', 'git', 'fileWatcher', 'terminal', 'devServers', 'skills', 'attachments'] },
+        platform: { host: 'server', available: true, reason: null, features: ['chat', 'history', 'tasks', 'memory', 'personas', 'notes', 'costs', 'tts'] },
+        serverContent: { host: 'off', available: false, reason: 'Нужен контент проекта на сервере — у локального проекта недоступно', features: ['knowledge', 'codeGraph', 'dossiers', 'docs', 'mapHygiene'] },
+        exec: { available: false, reason: OFFLINE },
+      },
+    });
+    await route.fulfill({ response, json: patched });
+  });
+}
+
+test.describe('локальный проект с офлайн-устройством (ADR-016, 4.7 S3/S4)', () => {
+  let token: string;
+  let projectId: string;
+  let sessionId: string;
+  let flagsWere: Record<string, boolean> = {};
+
+  test.beforeAll(async ({ playwright, baseURL }) => {
+    const request = await playwright.request.newContext({ baseURL });
+    token = await login(request);
+    // Карта проекта — серверный контент под своим флагом: без него секции нет ни у кого
+    flagsWere = {
+      'local-projects': await setFlag(request, token, 'local-projects', true),
+      'project-map-hygiene': await setFlag(request, token, 'project-map-hygiene', true),
+    };
+    const r = await request.post('/api/projects', {
+      headers: auth(token),
+      data: { name: OFFLINE_NAME, rootPath: `/tmp/e2e-offline-${RUN}`, createDirectory: true },
+    });
+    expect(r.ok(), `проект создаётся: ${r.status()} ${await r.text()}`).toBeTruthy();
+    projectId = (await r.json()).id as string;
+    const s = await request.post(`/api/projects/${projectId}/sessions`, { headers: auth(token), data: { mode: 'acceptEdits' } });
+    expect(s.ok(), `чат создаётся: ${s.status()} ${await s.text()}`).toBeTruthy();
+    sessionId = (await s.json()).id as string;
+    await request.dispose();
+  });
+
+  test.afterAll(async ({ playwright, baseURL }) => {
+    if (!token) return;
+    const request = await playwright.request.newContext({ baseURL });
+    if (projectId) await request.delete(`/api/projects/${projectId}`, { headers: auth(token) });
+    for (const [key, was] of Object.entries(flagsWere)) await setFlag(request, token, key, was);
+    await request.dispose();
+  });
+
+  test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: 'ignoreErrors' }); });
+
+  const openChat = async (page: Page) => {
+    await page.context().addInitScript(tk => localStorage.setItem('cc_token', tk as string), token);
+    await page.goto(`/#/project/${projectId}/chat/${sessionId}`);
+    await expect(page.locator('textarea').first()).toBeVisible();
+  };
+
+  const openEditDialog = async (page: Page) => {
+    await page.getByRole('button', { name: 'Настройки проекта' }).first().click();
+    const dialog = modal(page, 'Редактировать проект');
+    await expect(dialog).toBeVisible();
+    return dialog;
+  };
+
+  test('диалог правки: у локального нет секции git и карты проекта, у серверного есть', async ({ page }) => {
+    // Тот же проект без подмены — серверный: обе секции на месте
+    await openChat(page);
+    let dialog = await openEditDialog(page);
+    await expect(dialog.getByText('История файлов (Git)')).toBeVisible();
+    await expect(dialog.getByText('Карта проекта (CLAUDE.md)')).toBeVisible();
+    await dialog.getByRole('button', { name: 'Отмена' }).click();
+
+    await asOfflineLocalProject(page, projectId);
+    await page.reload();
+    await expect(page.locator('textarea').first()).toBeVisible();
+    dialog = await openEditDialog(page);
+    // Секция устройства говорит, что проект локальный — значит, подмена доехала до диалога
+    await expect(dialog.getByText('Домашний ПК').first()).toBeVisible();
+    await expect(dialog.getByText('История файлов (Git)')).toHaveCount(0);
+    await expect(dialog.getByText('Карта проекта (CLAUDE.md)')).toHaveCount(0);
+  });
+
+  test('композер: кнопка отправки недоступна, Enter не шлёт, баннер говорит, что делать', async ({ page }) => {
+    await asOfflineLocalProject(page, projectId);
+    await openChat(page);
+
+    const gate = page.locator('[data-composer-exec-gate]');
+    await expect(gate).toContainText('Сообщение не отправится, пока устройство не в сети');
+    await expect(gate).toContainText('Задачи и отложенные сообщения дождутся устройства сами');
+
+    const box = page.locator('textarea').first();
+    const text = `не должно уйти ${RUN}`;
+    await box.fill(text);
+    const send = page.locator('[data-composer-send]');
+    await expect(send).toBeDisabled();
+    await expect(send).toHaveAttribute('title', new RegExp(OFFLINE));
+
+    await box.press('Enter');
+    // Ушедшее сообщение очищает поле и оседает в истории чата на сервере — ни того, ни другого
     await page.waitForTimeout(1500);
+    await expect(box).toHaveValue(text);
+    const history = await page.request.get(`/api/projects/${projectId}/sessions/${sessionId}/history`, { headers: auth(token) });
+    expect(history.ok(), `история читается: ${history.status()}`).toBeTruthy();
+    expect(JSON.stringify(await history.json())).not.toContain(text);
+  });
 
-    // Открываем первый серверный проект (не локальный)
-    const serverProject = page.getByRole('button', { name: /^(?!.*локальный).*$/ }).first();
-    // Если вообще нет проектов — тест считаем пройденным, проверять нечего
-    if (await serverProject.count() === 0) {
-      test.skip(true, 'нет серверных проектов для проверки');
-      return;
-    }
-    await serverProject.click().catch(() => {});
-    // Проверяем, что воркспейс хоть что-то отрисовывает — сам факт открытия
-    await expect(page.locator('body')).toBeVisible();
+  test('шапка чата: бейдж «на устройстве · имя · офлайн»', async ({ page }) => {
+    await asOfflineLocalProject(page, projectId);
+    await openChat(page);
+    await expect(page.locator('[data-project-device-badge]')).toHaveText('на устройстве · Домашний ПК · офлайн');
+  });
+
+  test.describe('телефон, 360 CSS-пикселей', () => {
+    test.use({ viewport: { width: 360, height: 780 }, isMobile: true, hasTouch: true });
+
+    test('вкладка «Файлы» не пропадает и показывает причину, бейдж виден в шапке чата', async ({ page }) => {
+      await asOfflineLocalProject(page, projectId);
+      await page.context().addInitScript(tk => localStorage.setItem('cc_token', tk as string), token);
+      await page.goto(`/#/project/${projectId}`);
+      // Вкладка может уехать в «⋯», если не влезла по ширине — ищем там же
+      // Вкладка на месте: раньше у офлайн-устройства она пропадала молча
+      await page.getByRole('button', { name: /^Файлы(:|$)/ }).filter({ visible: true }).first().click();
+      const gate = page.locator(`[data-capability-gate="files"]`);
+      await expect(gate).toBeVisible();
+      await expect(gate.getByText(OFFLINE)).toBeVisible();
+
+      // Смена одного hash страницу не перезагружает, а диплинк на чат читается при загрузке
+      await page.goto(`/#/project/${projectId}/chat/${sessionId}`);
+      await page.reload();
+      await expect(page.locator('[data-project-device-badge]')).toHaveText('устройство офлайн');
+      // При пустом поле на месте отправки кнопка голоса — вводим текст
+      await page.locator('textarea').first().fill('проверка');
+      await expect(page.locator('[data-composer-send]')).toBeDisabled();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth), 'страница не шире экрана').toBeLessThanOrEqual(360);
+    });
   });
 });
 

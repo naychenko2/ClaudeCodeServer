@@ -776,42 +776,32 @@ const windowWidth = useWindowWidth();
 
   // Переход из карточки задачи в связанный диалог — объявлен ниже, после handleSelectSession
 
-  // Гейт табов по матрице (ADR-016 §3.4): скрываем табы, чья возможность выключена.
-  // Источник — capabilities проекта. Панели/табы ниже НЕ должны спрашивать
-  // project.deviceId руками — всё через projectCapabilities.ts
-  const filesAvail = useProjectFeature(project, ProjectFeature.Files);
-  const gitAvail = useProjectFeature(project, ProjectFeature.Git);
+  // Гейт табов по матрице (ADR-016 §3.4). Файлы, изменения, навыки и инструменты НЕ
+  // прячем: у локального проекта с офлайн-устройством вкладка остаётся и открывает ту же
+  // плашку с причиной, что панель на десктопе (панели гейтят себя сами, с другого
+  // устройства — ретранслятор). Пропавшая молча вкладка выглядит поломкой. Прячем только
+  // то, чего у проекта нет в принципе. Панели/табы НЕ спрашивают project.deviceId руками
   const tasksAvail = useProjectFeature(project, ProjectFeature.Tasks);
   const knowledgeAvail = useProjectFeature(project, ProjectFeature.Knowledge);
   const personasAvail = useProjectFeature(project, ProjectFeature.Personas);
-  const skillsAvail = useProjectFeature(project, ProjectFeature.Skills);
-  const terminalAvail = useProjectFeature(project, ProjectFeature.Terminal);
-  const devServersAvail = useProjectFeature(project, ProjectFeature.DevServers);
 
   const leftTabOptions: { value: LeftTab; label: string; icon?: ReactNode }[] = [
     { value: 'sessions', label: 'Чаты', icon: LEFT_TAB_ICONS.sessions },
-    // Файлы и git — в группе files. Один таб прячем вместе — у локального проекта
-    // с офлайн-устройством оба недоступны. Если files недоступен — изменения
-    // показывать тоже бессмысленно (рельс «Изменения» живёт на git)
-    ...(filesAvail ? [{ value: 'files' as const, label: 'Файлы', icon: LEFT_TAB_ICONS.files }] : []),
-    ...(gitAvail ? [{ value: 'changes' as const, label: 'Изменения', icon: LEFT_TAB_ICONS.changes }] : []),
+    { value: 'files', label: 'Файлы', icon: LEFT_TAB_ICONS.files },
+    { value: 'changes', label: 'Изменения', icon: LEFT_TAB_ICONS.changes },
     ...(tasksAvail ? [{ value: 'tasks' as const, label: 'Задачи', icon: LEFT_TAB_ICONS.tasks }] : []),
     ...(knowledgeAvail ? [{ value: 'knowledge' as const, label: 'Знания', icon: LEFT_TAB_ICONS.knowledge }] : []),
     ...(personasAvail ? [{ value: 'personas' as const, label: 'Команда', icon: LEFT_TAB_ICONS.personas }] : []),
     // На десктопе навыки живут панелью в рельсе; на мобиле рельсы панелей проекта нет,
     // поэтому им нужна своя вкладка — иначе доступ к ним с телефона пропадает совсем
-    ...(skillsAvail ? [{ value: 'skills' as const, label: 'Навыки', icon: LEFT_TAB_ICONS.skills }] : []),
+    { value: 'skills', label: 'Навыки', icon: LEFT_TAB_ICONS.skills },
     // На мобиле рельсы панелей проекта нет, и ящик рельсы не работает — поэтому
-    // Терминал/Сервисы доступны только через эту вкладку (на десктопе они панелями).
-    // Скрываем вкладку, если обе её подсистемы недоступны — иначе внутри ToolsSidebar
-    // покажется общая плашка «недоступно», но мобильный таббар останется
-    ...((terminalAvail || devServersAvail)
-      ? [{ value: 'tools' as const, label: 'Инструменты', icon: LEFT_TAB_ICONS.tools }]
-      : []),
+    // Терминал/Сервисы доступны только через эту вкладку (на десктопе они панелями)
+    { value: 'tools', label: 'Инструменты', icon: LEFT_TAB_ICONS.tools },
   ];
 
-  // Если текущий таб внезапно стал недоступен (capabilities обновились) — откатываемся
-  // на «Чаты». Это защищает от «застрял в пустой вкладке» при выходе устройства из офлайна
+  // Если текущий таб внезапно пропал (capabilities обновились) — откатываемся на «Чаты»,
+  // чтобы не застрять в пустой вкладке
   useEffect(() => {
     if (leftTab !== 'sessions' && !leftTabOptions.some(o => o.value === leftTab)) {
       setLeftTab('sessions');

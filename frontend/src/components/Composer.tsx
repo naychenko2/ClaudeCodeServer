@@ -659,9 +659,10 @@ export function Composer({
   // Гейт хода (ADR-016 §3.4): локальный проект с офлайн-устройством. Пересчёт по
   // смене project.capabilities или project.deviceId. Используем и в баннере, и в handleSend
   const execGate = useMemo(() => canRunTurn(project), [project?.capabilities, project?.deviceId]);
-  // Текст для мягкого отказа отправки (ADR-016 §3.4): офлайн-устройство, нет харнеса.
-  // Чистится при первой попытке ввода, чтобы баннер не висел вечно
-  const [sendError, setSendError] = useState<string | null>(null);
+  // Прямой ввод человека при закрытом гейте получает честный отказ, а не очередь: ждать
+  // устройство умеет только фоновая работа (ADR-016 §5). Кнопка видно недоступна
+  const execBlocked = !!project && !execGate.available;
+  const execDeviceOffline = project?.device?.online === false;
   // Опасный режим (bypass) ждёт подтверждения в модалке перед применением
   const [pendingMode, setPendingMode] = useState<Mode | null>(null);
   // Штаб «Командной реализации» думает (Э8): стадии интервью/планирования держат чат
@@ -1005,12 +1006,8 @@ export function Composer({
   // Возвращает, ушёл ли ход: петля разговора по false возвращается слушать
   const handleSend = async (overrideText?: string): Promise<boolean> => {
     // ADR-016 §3.4: локальный проект с недоступной exec (устройство офлайн/нет
-    // харнеса) — мягкий отказ с понятным текстом. Баннер выше уже показал причину,
-    // здесь мы только гасим Enter и кнопку отправки, не дёргая toast повторно
-    if (project && !execGate.available) {
-      setSendError(execGate.reason ?? 'Ход сейчас недоступен');
-      return false;
-    }
+    // харнеса). Причину уже показал баннер над полем, здесь только гасим Enter
+    if (execBlocked) return false;
     const t = (overrideText ?? text).trim();
     // Обычная отправка руками снимает пометку голосового хода: её текст человек писал сам,
     // и вернуть его в поле при прерывании — правильное поведение
@@ -2041,17 +2038,20 @@ export function Composer({
       type="button"
       onClick={() => void handleSend()}
       onContextMenu={(e) => e.preventDefault()}
-      disabled={!canSend}
-      title={isMobile ? 'Отправить' : 'Отправить (Enter) · Shift+Enter — новая строка'}
+      disabled={!canSend || execBlocked}
+      data-composer-send
+      title={execBlocked
+        ? `Не отправится: ${execGate.reason ?? 'ход сейчас недоступен'}`
+        : isMobile ? 'Отправить' : 'Отправить (Enter) · Shift+Enter — новая строка'}
       style={{
         ...iconBtnGuard,
         width: isMobile ? 38 : 34,
         height: isMobile ? 38 : 34,
         borderRadius: R.pill,
         border: 'none',
-        background: canSend ? C.accent : C.bgSelected,
-        color: canSend ? C.onAccent : C.textMuted,
-        cursor: canSend ? 'pointer' : 'default',
+        background: canSend && !execBlocked ? C.accent : C.bgSelected,
+        color: canSend && !execBlocked ? C.onAccent : C.textMuted,
+        cursor: canSend && !execBlocked ? 'pointer' : 'not-allowed',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -2249,22 +2249,22 @@ export function Composer({
       onDragOver={handleDragOver}
       onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragOver(false); }}
     >
-      {/* Баннер «устройство офлайн» (ADR-016 §3.4): у локального проекта с недоступной
-          exec показываем причину над полем ввода. Кнопка отправки гасится в handleSend,
-          чтобы Enter не слал сообщение в никуда — там же, где проверяется project.exec */}
-      {project && !execGate.available && (
-        <Notice data-composer-exec-gate icon={Unplug} style={{ margin: `0 ${SP.sm}px ${SP.xs}px` }}>
-          {execGate.reason ?? 'Ход сейчас недоступен'}
+      {/* Баннер закрытого гейта хода (ADR-016 §3.4): у локального проекта с недоступной
+          exec говорим, что сообщение не уйдёт и что с этим делать. Кнопка отправки при
+          этом недоступна, Enter гасится в handleSend */}
+      {execBlocked && (
+        <Notice
+          data-composer-exec-gate
+          icon={Unplug}
+          title={execDeviceOffline
+            ? 'Сообщение не отправится, пока устройство не в сети'
+            : 'Сообщение сейчас не отправится'}
+          style={{ margin: `0 ${SP.sm}px ${SP.xs}px` }}
+        >
+          {!execDeviceOffline && execGate.reason && <>{execGate.reason.replace(/\.$/, '')}. </>}
+          Включите компьютер проекта и запустите на нём агента устройства.
+          Задачи и отложенные сообщения дождутся устройства сами.
         </Notice>
-      )}
-      {sendError && !project && (
-        <div data-composer-send-error style={{
-          padding: '6px 10px', margin: '0 8px 4px',
-          background: C.dangerBg, color: C.dangerText,
-          borderRadius: R.md, fontSize: FS.xs, lineHeight: 1.4,
-        }}>
-          {sendError}
-        </div>
       )}
       {/* Раскрывашка «Обсудить с командой» — над полем композера */}
       {canDiscuss && (

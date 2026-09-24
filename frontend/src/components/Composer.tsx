@@ -2257,7 +2257,7 @@ export function Composer({
           data-composer-exec-gate
           icon={Unplug}
           title={execDeviceOffline
-            ? 'Сообщение не отправится, пока устройство не в сети'
+            ? 'Сообщение не отправится, пока устройство проекта не в сети'
             : 'Сообщение сейчас не отправится'}
           style={{ margin: `0 ${SP.sm}px ${SP.xs}px` }}
         >

@@ -17,8 +17,8 @@ const render = (items: PendingChatMessage[]) =>
 
 describe('очередь чата: ожидание устройства', () => {
   it('ждущий устройство элемент помечен, обычный — нет', () => {
-    expect(render([item('a', { waitingForDevice: true })])).toContain('ждёт устройство');
-    expect(render([item('a')])).not.toContain('ждёт устройство');
+    expect(render([item('a', { waitingForDevice: true })])).toContain('Ждёт устройство');
+    expect(render([item('a')])).not.toContain('Ждёт устройство');
   });
 
   it('крестик снятия есть и у ждущего устройство', () => {

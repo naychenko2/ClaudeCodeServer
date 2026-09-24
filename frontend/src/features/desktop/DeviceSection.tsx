@@ -7,7 +7,7 @@ import { Button, ConfirmDialog, Select, TextField } from '../../components/ui';
 import { AccordionSection } from '../projects/dialogs/AccordionSection';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { invalidateProjectsCache } from '../projects/useAllProjects';
-import { deviceLabel, isLocalProjectDevice } from './deviceOptions';
+import { deviceLabel, isLocalProjectDevice, useNoDevicesHint } from './deviceOptions';
 
 // Секция «Устройство» в настройках проекта (ADR-016 §3.4): показывает привязку и
 // позволяет перепривязать/отвязать. Скрывается через флаг `local-projects` снаружи.
@@ -26,22 +26,23 @@ interface Props {
   onUpdated?: (updated: Project) => void;
 }
 
-// Текст статуса: «На сервере» / «Привязан · онлайн» / «Привязан · офлайн» / «Привязан
+// Текст статуса: «На сервере» / «Привязан · в сети» / «Привязан · не в сети» / «Привязан
 // к отозванному устройству» (device=null при deviceId != null). summary — короткая
 // строка в шапке аккордеона, summaryTone — цвет
 function describeDevice(project: Project): { text: string; tone: 'ok' | 'err' | 'neutral' } {
   if (!hasDevice(project)) return { text: 'На сервере', tone: 'neutral' };
   // device=null при deviceId != null — устройство отозвано
   if (!project.device) return { text: 'Устройство отозвано', tone: 'err' };
-  if (!project.device.online) return { text: `На устройстве · ${project.device.name} · офлайн`, tone: 'err' };
+  if (!project.device.online) return { text: `На устройстве · ${project.device.name} · не в сети`, tone: 'err' };
   if (!project.device.harnessReady) {
-    return { text: `На устройстве · ${project.device.name} · харнес не готов`, tone: 'err' };
+    return { text: `На устройстве · ${project.device.name} · агент не готов`, tone: 'err' };
   }
   return { text: `На устройстве · ${project.device.name}`, tone: 'ok' };
 }
 
 export function DeviceSection({ project, onUpdated }: Props) {
   const [devices, setDevices] = useState<DesktopDevice[] | null>(null);
+  const noDevicesHint = useNoDevicesHint();
   const [picked, setPicked] = useState('');
   const [devicePath, setDevicePath] = useState('');
   const [busy, setBusy] = useState(false);
@@ -118,10 +119,10 @@ export function DeviceSection({ project, onUpdated }: Props) {
               {project.device.name}
             </div>
             <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: 2 }}>
-              {project.device.online ? 'Онлайн' : 'Офлайн'}
+              {project.device.online ? 'В сети' : 'Не в сети'}
               {project.device.platform ? ` · ${project.device.platform}` : ''}
               {project.device.agentVersion ? ` · агент ${project.device.agentVersion}` : ''}
-              {!project.device.harnessReady ? ` · ${project.device.harnessProblem ?? 'харнес не готов'}` : ''}
+              {!project.device.harnessReady ? ` · ${project.device.harnessProblem ?? 'агент устройства не готов'}` : ''}
             </div>
           </div>
           <Button
@@ -145,7 +146,7 @@ export function DeviceSection({ project, onUpdated }: Props) {
           <div style={{ fontSize: FS.xs, color: C.textMuted }}>Загружаем устройства…</div>
         ) : devices.length === 0 ? (
           <div style={{ fontSize: FS.xs, color: C.textSecondary }}>
-            Нет устройств с агентом локальных проектов. Сопрягите устройство в меню «Устройства».
+            {noDevicesHint}
           </div>
         ) : (
           <>
@@ -189,7 +190,7 @@ export function DeviceSection({ project, onUpdated }: Props) {
         <ConfirmDialog
           onCancel={() => setConfirmUnbind(false)}
           title="Отвязать проект от устройства?"
-          subtitle="Проект снова станет серверным. Если в проекте есть чаты — сервер откажет с понятной ошибкой."
+          subtitle="Проект снова станет серверным. Нельзя, если в проекте уже есть чаты."
           confirmLabel="Отвязать"
           confirmVariant="danger"
           onConfirm={unbind}
@@ -199,7 +200,7 @@ export function DeviceSection({ project, onUpdated }: Props) {
         <ConfirmDialog
           onCancel={() => setConfirmRebind(false)}
           title="Перепривязать проект?"
-          subtitle="Файлы проекта теперь живут на выбранном устройстве. Если в проекте есть чаты — сервер откажет с понятной ошибкой."
+          subtitle="Файлы проекта будут браться с выбранного устройства. Нельзя, если в проекте уже есть чаты."
           confirmLabel="Перепривязать"
           confirmVariant="primary"
           onConfirm={rebind}

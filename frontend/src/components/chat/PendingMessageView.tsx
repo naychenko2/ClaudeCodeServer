@@ -131,7 +131,7 @@ function PendingMessageRow({ item, onCancel, onPreempt, isMobile, leaving, sessi
         {deviceWait && (
           <Badge tone="warning" size="xs" title="Уйдёт в работу, когда устройство проекта выйдет на связь"
             icon={<Unplug size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden />}>
-            ждёт устройство
+            Ждёт устройство
           </Badge>
         )}
 

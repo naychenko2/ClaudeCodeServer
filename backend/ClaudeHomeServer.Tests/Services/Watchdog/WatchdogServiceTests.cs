@@ -491,7 +491,7 @@ public class WatchdogServiceTests : IDisposable
     {
         // Устройство ушло офлайн между проверкой и запуском: раннер вернул отказ канала
         var runner = new FakeRunner();
-        for (var i = 0; i < 5; i++) runner.Enqueue(PollOutcome.DeviceUnavailable("Устройство «Ноутбук» офлайн — ход не запущен."));
+        for (var i = 0; i < 5; i++) runner.Enqueue(PollOutcome.DeviceUnavailable("Устройство «Ноутбук» не в сети — сообщение не взято в работу."));
         var (sut, _, _, env) = Setup(runner: runner);
         var w = NewWatchdog(env, intervalSec: 30);
         var start = DateTime.UtcNow;
@@ -501,6 +501,6 @@ public class WatchdogServiceTests : IDisposable
         w.Status.Should().Be(WatchdogStatus.Active, "три отказа офлайн-устройства подряд не гасят сторож");
         w.ConsecutiveLaunchFailures.Should().Be(0);
         w.DeviceSkippedSince.Should().Be(start);
-        w.LastOutput.Should().Contain("офлайн");
+        w.LastOutput.Should().Contain("не в сети");
     }
 }

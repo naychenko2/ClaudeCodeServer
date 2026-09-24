@@ -38,10 +38,10 @@ function serverCaps(): ProjectCapabilitiesView {
 function offlineDeviceCaps(): ProjectCapabilitiesView {
   return {
     host: 'device', deviceId: 'd1',
-    files: { host: 'device', available: false, reason: 'Устройство офлайн', features: [ProjectFeature.Files, ProjectFeature.Diff, ProjectFeature.Git, ProjectFeature.Terminal, ProjectFeature.DevServers, ProjectFeature.Skills, ProjectFeature.Attachments] },
+    files: { host: 'device', available: false, reason: 'Устройство проекта не в сети', features: [ProjectFeature.Files, ProjectFeature.Diff, ProjectFeature.Git, ProjectFeature.Terminal, ProjectFeature.DevServers, ProjectFeature.Skills, ProjectFeature.Attachments] },
     platform: { host: 'server', available: true, reason: null, features: [ProjectFeature.Chat, ProjectFeature.Tasks, ProjectFeature.Personas] },
-    serverContent: { host: 'off', available: false, reason: 'Нужен контент проекта на сервере', features: [ProjectFeature.Knowledge, ProjectFeature.CodeGraph, ProjectFeature.Dossiers, ProjectFeature.Docs, ProjectFeature.MapHygiene] },
-    exec: { available: false, reason: 'Устройство офлайн' },
+    serverContent: { host: 'off', available: false, reason: 'У локального проекта недоступно: его файлы лежат на устройстве, а не на сервере', features: [ProjectFeature.Knowledge, ProjectFeature.CodeGraph, ProjectFeature.Dossiers, ProjectFeature.Docs, ProjectFeature.MapHygiene] },
+    exec: { available: false, reason: 'Устройство проекта не в сети' },
   };
 }
 
@@ -50,7 +50,7 @@ function revokedDeviceCaps(): ProjectCapabilitiesView {
     host: 'device', deviceId: 'd1',
     files: { host: 'off', available: false, reason: 'Устройство проекта не найдено или отозвано', features: [] },
     platform: { host: 'server', available: true, reason: null, features: [ProjectFeature.Chat, ProjectFeature.Tasks, ProjectFeature.Personas] },
-    serverContent: { host: 'off', available: false, reason: 'Нужен контент проекта на сервере', features: [] },
+    serverContent: { host: 'off', available: false, reason: 'У локального проекта недоступно: его файлы лежат на устройстве, а не на сервере', features: [] },
     exec: { available: false, reason: 'Устройство проекта не найдено или отозвано' },
   };
 }
@@ -132,8 +132,8 @@ describe('featureReason — текст причины для UI', () => {
   });
   it('готовый текст причины когда недоступно', () => {
     const p = localProject(offlineDeviceCaps());
-    expect(featureReason(p, ProjectFeature.Files)).toBe('Устройство офлайн');
-    expect(featureReason(p, ProjectFeature.Knowledge)).toBe('Нужен контент проекта на сервере');
+    expect(featureReason(p, ProjectFeature.Files)).toBe('Устройство проекта не в сети');
+    expect(featureReason(p, ProjectFeature.Knowledge)).toBe('У локального проекта недоступно: его файлы лежат на устройстве, а не на сервере');
   });
   it('ключ вне групп — явный текст «не в этой версии» (защита от тихих регрессий)', () => {
     // Не null: не показывать человеку «нет причины», когда мы реально не знаем ключа.
@@ -162,10 +162,10 @@ describe('canRunTurn — можно ли отправить ход', () => {
     expect(canRunTurn(emptyProject()).available).toBe(true);
     expect(canRunTurn(emptyProject()).reason).toBeNull();
   });
-  it('локальный офлайн → нельзя, причина «Устройство офлайн»', () => {
+  it('локальный офлайн → нельзя, причина «Устройство проекта не в сети»', () => {
     const r = canRunTurn(localProject(offlineDeviceCaps()));
     expect(r.available).toBe(false);
-    expect(r.reason).toBe('Устройство офлайн');
+    expect(r.reason).toBe('Устройство проекта не в сети');
   });
   it('локальный отозван → нельзя, причина «не найдено»', () => {
     const r = canRunTurn(localProject(revokedDeviceCaps(), null));
@@ -178,13 +178,13 @@ describe('deviceOfflineLabel — баннер в композере', () => {
   it('null если нет device', () => {
     expect(deviceOfflineLabel(emptyProject())).toBeNull();
   });
-  it('"Устройство офлайн" когда device.online=false', () => {
-    expect(deviceOfflineLabel(localProject(offlineDeviceCaps()))).toBe('Устройство офлайн');
+  it('"Устройство проекта не в сети" когда device.online=false', () => {
+    expect(deviceOfflineLabel(localProject(offlineDeviceCaps()))).toBe('Устройство проекта не в сети');
   });
-  it('готовый текст проблемы харнеса когда harnessReady=false и online=true', () => {
+  it('готовый текст проблемы агента устройства, когда harnessReady=false и online=true', () => {
     const cap: ProjectCapabilitiesView = {
       ...offlineDeviceCaps(),
-      exec: { available: false, reason: 'Харнес устройства не готов' },
+      exec: { available: false, reason: 'Агент устройства не готов' },
     };
     const p: Project = {
       ...localProject(cap),
@@ -192,7 +192,7 @@ describe('deviceOfflineLabel — баннер в композере', () => {
     };
     expect(deviceOfflineLabel(p)).toBe('обновите агента');
   });
-  it('null если device онлайн и харнес готов', () => {
+  it('null если device онлайн и агент готов', () => {
     const cap: ProjectCapabilitiesView = {
       ...offlineDeviceCaps(),
       exec: { available: true, reason: null },
@@ -230,7 +230,7 @@ describe('локальный проект с живым устройством �
   });
 
   it('офлайн-устройство: терминал недоступен с причиной группы', () => {
-    expect(featureReason(localProject(offlineDeviceCaps()), ProjectFeature.Terminal)).toBe('Устройство офлайн');
+    expect(featureReason(localProject(offlineDeviceCaps()), ProjectFeature.Terminal)).toBe('Устройство проекта не в сети');
   });
 
   it('маршрут файлов: локальный — агент, серверный — сервер', () => {
@@ -265,7 +265,7 @@ describe('локальный проект с живым устройством �
 });
 
 describe('группа транскрипта CLI (ADR-016 3.7)', () => {
-  const transcriptOff = 'Транскрипт разговора локального проекта живёт на устройстве';
+  const transcriptOff = 'У локального проекта недоступно: подробная история чата хранится на его устройстве';
 
   it('бэк без группы транскрипта — механики доступны, как у серверного проекта', () => {
     const project = localProject(serverCaps(), null);

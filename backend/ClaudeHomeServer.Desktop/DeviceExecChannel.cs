@@ -112,18 +112,18 @@ public sealed class DeviceExecChannel : IDeviceExecChannel, IDeviceRelayChannel
 
         var name = $"Устройство «{status.DeviceName}»";
         if (!status.Online)
-            throw new DeviceExecRefusedException(DeviceExecRefusal.Offline, $"{name} офлайн — ход не запущен.");
+            throw new DeviceExecRefusedException(DeviceExecRefusal.Offline, $"{name} не в сети — сообщение не взято в работу.");
         if (!status.HasCapability(DeviceCapabilities.Exec))
             throw new DeviceExecRefusedException(DeviceExecRefusal.NoExecCapability,
-                $"{name} не исполняет ходы: агент локальных проектов не подключён или не объявил возможность exec.");
+                $"{name} не может работать с чатами проекта: на нём нет агента AI Home для локальных проектов или его нужно обновить.");
         if (!status.HarnessReady)
             throw new DeviceExecRefusedException(DeviceExecRefusal.HarnessNotReady, $"{name}: {status.HarnessProblem}.");
 
         var connection = _router.Find(ownerId, deviceId)
-            ?? throw new DeviceExecRefusedException(DeviceExecRefusal.Offline, $"{name} офлайн — ход не запущен.");
+            ?? throw new DeviceExecRefusedException(DeviceExecRefusal.Offline, $"{name} не в сети — сообщение не взято в работу.");
 
         return await OpenStreamAsync(connection, purpose: null, maxOutage: null, ct,
-            $"{name} не открыло канал исполнения за {(int)DeviceExecProtocol.OpenTimeout.TotalSeconds} с — ход не запущен.");
+            $"{name} не открыло канал исполнения за {(int)DeviceExecProtocol.OpenTimeout.TotalSeconds} с — сообщение не взято в работу.");
     }
 
     /// <summary>
@@ -138,13 +138,13 @@ public sealed class DeviceExecChannel : IDeviceExecChannel, IDeviceRelayChannel
 
         var name = $"Устройство «{status.DeviceName}»";
         if (!status.Online)
-            throw new DeviceExecRefusedException(DeviceExecRefusal.Offline, $"{name} офлайн.");
+            throw new DeviceExecRefusedException(DeviceExecRefusal.Offline, $"{name} не в сети.");
         if (!status.HasCapability(DeviceCapabilities.Relay))
             throw new DeviceExecRefusedException(DeviceExecRefusal.NoRelayCapability,
                 $"{name}: агент не объявил ретранслятор чтения — обнови агента.");
 
         var connection = _router.Find(ownerId, deviceId)
-            ?? throw new DeviceExecRefusedException(DeviceExecRefusal.Offline, $"{name} офлайн.");
+            ?? throw new DeviceExecRefusedException(DeviceExecRefusal.Offline, $"{name} не в сети.");
 
         return await OpenStreamAsync(connection, DeviceExecPurposes.Relay, RelayProtocol.MaxOutage, ct,
             $"{name} не ответило за {(int)DeviceExecProtocol.OpenTimeout.TotalSeconds} с.");

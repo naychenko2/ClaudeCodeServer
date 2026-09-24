@@ -113,7 +113,7 @@ public class DeviceExecChannelTests : IDisposable
         var open = () => rig.Channel.OpenAsync(Owner, rig.Device.Id);
         var refused = await open.Should().ThrowAsync<DeviceExecRefusedException>();
         refused.Which.Reason.Should().Be(DeviceExecRefusal.HarnessNotReady);
-        refused.Which.Message.Should().Contain("Харнес не готов").And.Contain(RequiredCli);
+        refused.Which.Message.Should().Contain(DeviceHarnessPolicy.NotReadyPrefix).And.Contain(RequiredCli);
         rig.Opener.Calls.Should().Be(0, "до устройства команда открытия не доходит — отказ случается раньше");
     }
 

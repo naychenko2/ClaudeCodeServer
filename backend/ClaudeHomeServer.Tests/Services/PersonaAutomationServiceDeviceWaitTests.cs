@@ -70,7 +70,7 @@ public class PersonaAutomationServiceDeviceWaitTests : IDisposable
         await FireAsync(persona, rule, "Тик 10:00");
 
         var state = _state.GetRule(persona.Id, rule.Id);
-        state.LastResult.Should().StartWith("skipped").And.Contain("офлайн");
+        state.LastResult.Should().StartWith("skipped").And.Contain("не в сети");
         state.DeviceSkippedAt.Should().NotBeNull();
         state.DeviceSkippedSummary.Should().Be("Тик 10:00", "периодика не копится — хранится одно последнее");
         state.SessionId.Should().BeNull("чат правила не создаётся под обречённый ход");

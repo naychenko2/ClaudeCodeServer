@@ -47,7 +47,7 @@ public class LauncherFactoryForProjectTests : IDisposable
         public Task<IDeviceExecStream> OpenAsync(string ownerId, string deviceId, CancellationToken ct = default)
         {
             Interlocked.Increment(ref Opens);
-            throw new DeviceExecRefusedException(DeviceExecRefusal.Offline, "Устройство «Ноутбук» офлайн — ход не запущен.");
+            throw new DeviceExecRefusedException(DeviceExecRefusal.Offline, "Устройство «Ноутбук» не в сети — сообщение не взято в работу.");
         }
     }
 
@@ -122,7 +122,7 @@ public class LauncherFactoryForProjectTests : IDisposable
         done.Should().Be(error.Task, "отказ устройства обязан закончить ход ошибкой");
 
         var e = await error.Task;
-        e.Text.Should().Contain("офлайн");
+        e.Text.Should().Contain("не в сети");
         e.Details.Should().StartWith(TurnErrorClassifier.DeviceRefusedMarker);
         channel.Opens.Should().Be(1);
         lock (sent) sent.OfType<ResultMessage>().Should().BeEmpty("ход не дошёл до CLI — штатного результата нет");

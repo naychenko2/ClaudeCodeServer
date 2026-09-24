@@ -109,8 +109,8 @@ internal sealed class AgentCoordinator : IAsyncDisposable
             var ack = await _control.HelloAsync(hello, _stopping.Token);
             _announced = true;
             _announcedCli = hello.CliVersion;
-            if (ack.HarnessReady) _log.LogInformation("Сервер принял агента: харнес готов (CLI {Version})", hello.CliVersion);
-            else _log.LogInformation("Сервер принял агента: {Problem}", ack.HarnessProblem ?? "харнес не готов");
+            if (ack.HarnessReady) _log.LogInformation("Сервер принял агента: готов к работе (CLI {Version})", hello.CliVersion);
+            else _log.LogInformation("Сервер принял агента: {Problem}", ack.HarnessProblem ?? "агент устройства не готов");
             _harness.SetRequiredVersion(ack.RequiredCliVersion);
         }
         finally

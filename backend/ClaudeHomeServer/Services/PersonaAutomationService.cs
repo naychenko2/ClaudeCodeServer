@@ -176,7 +176,7 @@ public sealed class PersonaAutomationService : IDisposable, Execution.IDeviceOnl
                     state.DeviceSkippedAt = now;
                     state.DeviceSkippedSummary = ev.Summary;
                 }
-                MarkResult(state, $"skipped: {deviceGate.Reason ?? "устройство офлайн"}");
+                MarkResult(state, $"skipped: {deviceGate.Reason ?? "устройство проекта не в сети"}");
             }
             else
                 MarkResult(state, $"error: {deviceGate.Reason}");
@@ -320,7 +320,7 @@ public sealed class PersonaAutomationService : IDisposable, Execution.IDeviceOnl
 
                 _log.LogInformation("Правило {RuleId} персоны {PersonaId}: догоняю срабатывание, пропущенное офлайн", rule.Id, persona.Id);
                 var ev = new TriggerEvent(rule.Id, rule.Trigger.Type,
-                    $"Срабатывание пропущено, пока устройство проекта было офлайн (последнее — {skippedAt:yyyy-MM-dd HH:mm} UTC): {summary}",
+                    $"Срабатывание пропущено, пока устройство проекта было не в сети (последнее — {skippedAt:yyyy-MM-dd HH:mm} UTC): {summary}",
                     null);
                 await FireAsync(persona, rule, ResolveTz(ownerId), ev, ct);
             }

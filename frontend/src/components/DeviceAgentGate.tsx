@@ -22,9 +22,9 @@ function describe(status: DeviceAgentStatus): View {
     case 'ready':
       return null;
     case 'checking':
-      return { icon: <Loader2 size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} style={{ animation: 'spin 1s linear infinite' }} />, title: 'Подключаемся к агенту', subtitle: 'Файлы, терминал и сервисы локального проекта открываются через агента AI Home на этом компьютере' };
+      return { icon: <Loader2 size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} style={{ animation: 'spin 1s linear infinite' }} />, title: 'Ищем агент AI Home на этом компьютере', subtitle: 'Файлы, терминал и сервисы локального проекта открываются через агента AI Home на этом компьютере' };
     case 'unreachable':
-      return { icon: icon(Unplug), title: 'Агент устройства не найден', subtitle: 'Файлы, терминал и сервисы локального проекта доступны только на его компьютере с запущенным агентом AI Home. Запустите агента или откройте проект с машины проекта' };
+      return { icon: icon(Unplug), title: 'Агент AI Home на этом компьютере не найден', subtitle: 'Файлы, терминал и сервисы локального проекта доступны только на его компьютере с запущенным агентом AI Home. Запустите агента или откройте проект с машины проекта' };
     case 'refused':
       return { icon: icon(ShieldAlert), title: 'Доступ к проекту на устройстве не выдан', subtitle: status.reason };
     case 'rejected':
@@ -48,7 +48,7 @@ export function DeviceAgentGate({ project, children, relayTitle }: Props) {
     </Button>
   );
   if (relayTitle !== undefined && status.kind === 'relay') return <>{children}</>;
-  // Устройство офлайн или агент без ретранслятора — та же плашка «недоступно с причиной», что у матрицы
+  // Устройство не в сети или агент без ретранслятора — та же плашка «недоступно с причиной», что у матрицы
   if (relayTitle !== undefined && status.kind === 'relay-unavailable')
     return <CapabilityUnavailable feature="relay" title={relayTitle} reason={status.reason} action={retry} />;
   const view = describe(status);

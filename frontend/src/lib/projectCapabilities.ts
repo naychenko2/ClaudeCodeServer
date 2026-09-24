@@ -168,7 +168,7 @@ export function hostFor(project: Project | null | undefined, feature: ProjectFea
 }
 
 // Можно ли запускать ход прямо сейчас (chat send). reason — готовый текст «Устройство
-// офлайн» и т.п., который UI кладёт в баннер отправки и в карточку ошибки.
+// проекта не в сети» и т.п., который UI кладёт в баннер отправки и в карточку ошибки.
 export function canRunTurn(project: Project | null | undefined): { available: boolean; reason: string | null } {
   const cap = getProjectCapabilities(project);
   return cap.exec;
@@ -198,20 +198,20 @@ export function useProjectFeature(project: Project | null | undefined, feature: 
   return useMemo(() => isFeatureAvailable(project, feature), [project?.capabilities, project?.deviceId, feature]);
 }
 
-// Бейдж «устройство офлайн» / «не готово»: project.device?.online=false или
+// Бейдж «устройство не в сети» / «не готово»: project.device?.online=false или
 // harnessReady=false. Возвращает короткую строку для UI; null если всё хорошо.
 // Зовётся в шапке чата и в диалогах — НЕ в панелях (у панелей свои причины через
 // featureReason).
 export function deviceOfflineLabel(project: Project | null | undefined): string | null {
   if (!project?.device) return null;
-  if (!project.device.online) return 'Устройство офлайн';
+  if (!project.device.online) return 'Устройство проекта не в сети';
   if (!project.device.harnessReady) {
     return project.device.harnessProblem ?? 'Агент устройства не готов';
   }
   return null;
 }
 
-// Бейдж локального проекта для шапки чата: «на устройстве · имя · офлайн». null — проект
+// Бейдж локального проекта для шапки чата: «на устройстве · имя · не в сети». null — проект
 // серверный. offline — устройство не в сети или агент не готов: тогда бейдж предупреждает,
 // а в title полная причина из deviceOfflineLabel. short — для узкой шапки, где длинный
 // текст обрезался бы как раз на состоянии
@@ -219,7 +219,7 @@ export function projectDeviceBadge(project: Project | null | undefined): { text:
   if (!isLocalProject(project)) return null;
   const problem = deviceOfflineLabel(project);
   const name = project?.device?.name;
-  const state = !problem ? null : project?.device?.online === false ? 'офлайн' : 'не готово';
+  const state = !problem ? null : project?.device?.online === false ? 'не в сети' : 'не готово';
   const where = `Проект живёт на устройстве${name ? ` «${name}»` : ''}`;
   return {
     text: ['на устройстве', name, state].filter(Boolean).join(' · '),

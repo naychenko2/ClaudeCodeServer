@@ -223,7 +223,7 @@ public class TurnExecutorUnixTests
     {
         var launched = 0;
         Skip.If(OperatingSystem.IsWindows());
-        await using var h = new TurnHarness("/nonexistent/claude", "Харнес не готов: на устройстве нет CLI 2.1.0",
+        await using var h = new TurnHarness("/nonexistent/claude", "Агент устройства не готов: на устройстве нет CLI 2.1.0",
             launcher: l => { launched++; throw new InvalidOperationException("не должен запускаться"); });
 
         await h.StartAsync(h.Spawn());
@@ -232,8 +232,8 @@ public class TurnExecutorUnixTests
 
         var exit = TurnHarness.ExitOf(frames);
         exit.Code.Should().Be(TurnExecutor.RefusedExitCode);
-        exit.Error.Should().StartWith("Харнес не готов");
-        TurnHarness.Text(frames, DeviceExecFrameChannel.Stderr).Should().Contain("Харнес не готов: на устройстве нет CLI 2.1.0");
+        exit.Error.Should().StartWith("Агент устройства не готов");
+        TurnHarness.Text(frames, DeviceExecFrameChannel.Stderr).Should().Contain("Агент устройства не готов: на устройстве нет CLI 2.1.0");
         launched.Should().Be(0);
         Directory.Exists(Path.Combine(h.TurnsRoot, "turn1")).Should().BeFalse();
     }

@@ -42,7 +42,7 @@ public sealed record HarnessStatus(
 /// </summary>
 public sealed partial class ManagedCli
 {
-    public const string NotReadyPrefix = "Харнес не готов";
+    public const string NotReadyPrefix = "Агент устройства не готов";
 
     internal static readonly TimeSpan BackoffBase = TimeSpan.FromSeconds(30);
     internal static readonly TimeSpan BackoffMax = TimeSpan.FromHours(1);

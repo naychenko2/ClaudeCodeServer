@@ -25,7 +25,7 @@ public class AgentCoordinatorTests
                 if (Hellos.Count >= 2) SecondHello.TrySetResult(true);
             }
             return Task.FromResult(new DeviceHelloAck(1, 2, 1024, 10, RequiredCli, hello.CliVersion == RequiredCli,
-                hello.CliVersion == RequiredCli ? null : "Харнес не готов"));
+                hello.CliVersion == RequiredCli ? null : "Агент устройства не готов"));
         }
 
         public Task RaiseExecOpen(DeviceExecOpenCommand c) => ExecOpen!.Invoke(c);

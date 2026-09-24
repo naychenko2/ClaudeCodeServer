@@ -13,7 +13,7 @@ public sealed class DeviceHarnessPolicy(IConfiguration config)
 {
     public const string CliVersionKey = "DeviceAgent:CliVersion";
 
-    public const string NotReadyPrefix = "Харнес не готов";
+    public const string NotReadyPrefix = "Агент устройства не готов";
 
     public string? RequiredCliVersion => Normalize(config[CliVersionKey]);
 

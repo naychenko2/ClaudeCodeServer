@@ -52,7 +52,7 @@ public sealed class LauncherFactory(IUserStore users, SandboxManager sandbox,
 
         public Task<IDeviceExecStream> OpenAsync(string ownerId, string deviceId, CancellationToken ct = default) =>
             throw new DeviceExecRefusedException(DeviceExecRefusal.UnknownDevice,
-                ProjectCapabilities.DeviceMissingReason + " — ход не запущен.");
+                ProjectCapabilities.DeviceMissingReason + " — сообщение не взято в работу.");
     }
 
     // Шлюз хода недоступен (вертикаль Llm не зарегистрирована): маршрута и токена ходу не выдать

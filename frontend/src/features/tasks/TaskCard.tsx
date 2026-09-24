@@ -122,7 +122,7 @@ export function TaskCard({ task, selected, onClick, compact, projectName, device
             {task.personaId && <TaskPersonaBadge personaId={task.personaId} />}
             {deviceWaiting && (
               <StateChip tone="warning" title={task.deviceWaitReason ?? 'Устройство проекта не в сети — задача запустится, когда оно выйдет на связь'}>
-                {deviceName ? `Ждёт «${deviceName}»` : 'Ждёт устройство'} · {deviceWaitDuration(task.deviceWaitSince!)}
+                {deviceName ? `Ждёт устройство «${deviceName}»` : 'Ждёт устройство проекта'} · {deviceWaitDuration(task.deviceWaitSince!)}
               </StateChip>
             )}
             {deviceWaitExpired && (

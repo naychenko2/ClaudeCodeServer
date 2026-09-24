@@ -18,7 +18,7 @@ public class WatchdogCommandRunnerDeviceTests
     {
         var launcher = new Mock<IProcessLauncher>();
         launcher.Setup(l => l.Start(It.IsAny<ProcessSpec>()))
-            .Throws(new DeviceExecRefusedException(reason, "Устройство «Ноутбук» офлайн — ход не запущен."));
+            .Throws(new DeviceExecRefusedException(reason, "Устройство «Ноутбук» не в сети — сообщение не взято в работу."));
         var factory = new Mock<ILauncherFactory>();
         factory.Setup(f => f.ForProject(It.Is<Project>(p => p.Id == Local.Id))).Returns(launcher.Object);
         var projects = new Mock<IProjectManager>();
@@ -35,7 +35,7 @@ public class WatchdogCommandRunnerDeviceTests
         var outcome = await RunnerRefusing(reason).RunAsync("owner-1", Local.Id, Local.RootPath, "test -f x", 10, default);
 
         outcome.Kind.Should().Be(PollOutcomeKind.DeviceUnavailable);
-        outcome.Failure.Should().Contain("офлайн");
+        outcome.Failure.Should().Contain("не в сети");
     }
 
     [Fact]

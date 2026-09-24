@@ -397,7 +397,7 @@ export const PersonaTaskView = memo(function PersonaTaskView({ item, online, onO
   // Локальный проект: текст фонового агента живёт в его транскрипте на устройстве и в ленту
   // не доходит — пустой ответ объясняем этим, а не молчим
   const emptyAnswerNote = settledBg && lastTextIdx < 0 && item.bgAborted !== true && project?.transcriptReason
-    ? project.transcriptReason
+    ? 'У локального проекта ответ фонового агента хранится на его устройстве и здесь не показывается'
     : bgEmptyAnswerNote({
       settledNoText: settledBg && lastTextIdx < 0,
       bgAborted: item.bgAborted,

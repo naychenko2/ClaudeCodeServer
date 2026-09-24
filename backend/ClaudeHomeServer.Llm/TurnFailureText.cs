@@ -110,7 +110,7 @@ public static class TurnFailureText
         {
             if (inner is IOException io && LooksLikePipeClosing(io))
                 return PipeClosing;
-            // Отказ устройства локального проекта («… офлайн — ход не запущен.») — текст уже
+            // Отказ устройства локального проекта («… не в сети — сообщение не взято в работу.») — текст уже
             // человеческий и единственный, по которому понятно, что включить
             if (inner is Execution.DeviceExecRefusedException refused)
                 return refused.Message;

@@ -10,7 +10,7 @@ import { ProjectIconSection, type DraftGlyph } from '../ProjectIconSection';
 import { invalidateProjectsCache } from '../useAllProjects';
 import { basename } from '../../../lib/paths';
 import { FLAGS, useFeature } from '../../../lib/featureFlags';
-import { deviceLabel, isLocalProjectDevice } from '../../desktop/deviceOptions';
+import { deviceLabel, isLocalProjectDevice, useNoDevicesHint } from '../../desktop/deviceOptions';
 
 interface Props {
   groups: ProjectGroup[];
@@ -33,6 +33,7 @@ type Placement = 'server' | 'device';
 // локальный проект создаётся с привязкой к устройству (ADR-016 §4).
 export function AddProjectDialog({ groups, defaultGroupId, onSuccess, onClose }: Props) {
   const localProjects = useFeature(FLAGS.localProjects);
+  const noDevicesHint = useNoDevicesHint();
   const [mode, setMode] = useState<Mode>('new');
   const [placement, setPlacement] = useState<Placement>('server');
   const [name, setName] = useState('');
@@ -230,7 +231,7 @@ export function AddProjectDialog({ groups, defaultGroupId, onSuccess, onClose }:
               />
             ) : (
               <div style={{ fontSize: FS.base, color: C.textSecondary, padding: `${SP.sm}px 0` }}>
-                Нет устройств с агентом локальных проектов. Сопрягите устройство в меню «Устройства».
+                {noDevicesHint}
               </div>
             )}
           </Field>

@@ -32,6 +32,6 @@ public sealed class WatchdogEnvironment(
     public string? DeviceWaitReason(WatchdogRecord w) =>
         w.ProjectId is { } pid && projects.GetById(pid) is { } project
             && deviceGate?.Check(project) is { MustWait: true } gate
-            ? gate.Reason ?? "устройство проекта офлайн"
+            ? gate.Reason ?? "устройство проекта не в сети"
             : null;
 }

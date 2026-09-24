@@ -366,7 +366,9 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
           {/* Ничего нет; у локального проекта — всегда причина, почему нет хода агентов */}
           {(transcriptReason || (agents.length === 0 && phases.length === 0)) && !transcriptLoading && !transcriptAgents?.length && (
             <div style={{ padding: '10px 14px', fontFamily: FONT.sans, fontSize: 12, color: C.textMuted }}>
-              {transcriptReason ?? (isDone ? 'Детали недоступны' : 'Запуск субагентов…')}
+              {transcriptReason
+                ? 'У локального проекта шаги субагентов хранятся на его устройстве и здесь не показываются'
+                : (isDone ? 'Детали недоступны' : 'Запуск субагентов…')}
             </div>
           )}
         </div>

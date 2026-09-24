@@ -200,7 +200,7 @@ public class WatchdogService : BackgroundService
                 // Отказ пришёл уже от канала (устройство не открыло поток) — интервал съеден,
                 // иначе каждый тик ждал бы таймаута открытия заново
                 w.LastPollAt = nowUtc;
-                SkipForDevice(w, nowUtc, outcome.Failure ?? "устройство проекта офлайн");
+                SkipForDevice(w, nowUtc, outcome.Failure ?? "устройство проекта не в сети");
                 return;
             }
             // Опрос на устройстве состоялся — полоса пропусков закончилась

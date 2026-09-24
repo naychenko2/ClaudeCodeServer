@@ -3336,7 +3336,7 @@ function ToolbarAndEmptySection() {
             <CapabilityUnavailable
               feature="files"
               title="Файлы недоступны"
-              reason="Устройство офлайн"
+              reason="Устройство проекта не в сети"
             />
           </div>
         </SubBlock>
@@ -3344,7 +3344,7 @@ function ToolbarAndEmptySection() {
         {/* Notice — баннер причины во всю ширину: «ждёт устройство», «ход недоступен» */}
         <SubBlock label="Notice — баннер причины (warning / danger)">
           <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
-            <Notice icon={Unplug}>Устройство офлайн</Notice>
+            <Notice icon={Unplug}>Устройство проекта не в сети</Notice>
             <Notice icon={Unplug} title="Ждёт устройство «Ноутбук» · 12 мин">
               Задача запустится, когда устройство выйдет на связь; через 24 часа ожидание снимется.
             </Notice>

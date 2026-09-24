@@ -120,15 +120,14 @@ public sealed record ProjectCapabilities(
     ProjectExecCapability Exec)
 {
     public const string DeviceMissingReason = "Устройство проекта не найдено или отозвано";
-    public const string DeviceOfflineReason = "Устройство офлайн";
-    public const string NoExecReason = "На устройстве нет агента локальных проектов, умеющего запускать ходы";
-    public const string NoFilesReason = "Агент устройства пока не открывает файлы проекта";
-    public const string NoRelayReason = "Агент устройства не умеет показывать файлы проекта на других устройствах: обнови агента";
+    public const string DeviceOfflineReason = "Устройство проекта не в сети";
+    public const string NoExecReason = "На устройстве нет агента AI Home для локальных проектов: чаты проекта не могут работать";
+    public const string NoFilesReason = "Агент устройства пока не открывает файлы проекта: обновите агента";
+    public const string NoRelayReason = "Агент устройства не умеет показывать файлы проекта на других устройствах: обновите агента";
     public const string NotDeviceBoundReason = "Проект не локальный: его файлы на сервере";
-    public const string ServerContentOffReason = "Нужен контент проекта на сервере — у локального проекта недоступно";
+    public const string ServerContentOffReason = "У локального проекта недоступно: его файлы лежат на устройстве, а не на сервере";
     public const string TranscriptOnDeviceReason =
-        "Транскрипт разговора локального проекта живёт на устройстве — живой поток субагентов, "
-        + "ход workflow и ответвление чата недоступны";
+        "У локального проекта недоступно: подробная история чата хранится на его устройстве";
 
     /// <summary>Проект привязан к устройству. Единственная проверка локальности во всём коде.</summary>
     public static bool IsDeviceBound(Project project) => project.DeviceId is not null;

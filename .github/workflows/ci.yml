@@ -98,6 +98,44 @@ jobs:
           name: test-hang-artifacts
           path: backend/**/TestResults/**
 
+  # ADR-016 2.5. Агент устройства (`backend/ClaudeHomeServer.DeviceAgent`) работает на
+  # Linux и Windows, но основная задача `backend` гоняет только ubuntu-latest — платформенные
+  # ветки (Job Object, DPAPI, `claude.cmd`, пути с буквами дисков, `FileSystemWatcher`)
+  # проверялись бы только руками. Задача собирает и тестирует ТОЛЬКО DeviceAgent + .Tests
+  # (не весь `slnx` — дорого и не нужно), отдельным прогоном на windows-latest. Общие
+  # триггеры с `backend`, без `continue-on-error` — падение валит CI.
+  device-agent-windows:
+    name: DeviceAgent (windows)
+    runs-on: windows-latest
+    # 10 минут по требованию задачи: проект маленький (одна зависимость
+    # `Microsoft.Extensions.Logging.Abstractions` плюс xunit), встроенный NuGet-кеш
+    # `setup-dotnet` держит холодный старт ниже потолка. Превышение — сигнал поломки
+    # кеша или неожиданной тяжёлой зависимости.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          # Тот же SDK, что у Linux-задачи `backend`: проекты на net10.0.
+          dotnet-version: 10.0.x
+          # Встроенный NuGet-кеш setup-dotnet: ключ по csproj двух проектов — попадание
+          # в кеш не зависит от правок в остальной части репозитория. `cache: true` для
+          # setup-dotnet работает на всех ОС, включая Windows.
+          cache: true
+          cache-dependency-path: |
+            backend/ClaudeHomeServer.DeviceAgent/ClaudeHomeServer.DeviceAgent.csproj
+            backend/ClaudeHomeServer.DeviceAgent.Tests/ClaudeHomeServer.DeviceAgent.Tests.csproj
+      # Сборка тестового проекта (DeviceAgent.Tests) подтянет DeviceAgent по ProjectReference
+      # транзитивно. Отдельный шаг сборки основного проекта не нужен — он уже в графе.
+      - name: Build
+        run: dotnet build backend/ClaudeHomeServer.DeviceAgent.Tests/ClaudeHomeServer.DeviceAgent.Tests.csproj -warnaserror --no-restore
+      # console;verbosity=normal — имена тестов в логе. Счётчик skipped валится глазами,
+      # как требует задача: на windows-latest пропускаются `На_Unix_копия_исполняемая`
+      # (права Unix) и `Платформа_Linux_определяется_ключом_манифеста` (ветка Linux), а
+      # `Платформа_Windows_определяется_ключом_манифеста` — passed.
+      - name: Test
+        run: dotnet test backend/ClaudeHomeServer.DeviceAgent.Tests/ClaudeHomeServer.DeviceAgent.Tests.csproj --no-build --logger "console;verbosity=normal"
+
   frontend:
     name: Frontend (lint + typecheck + build)
     runs-on: ubuntu-latest

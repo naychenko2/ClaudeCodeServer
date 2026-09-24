@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Агент устройства локальных проектов (ADR-016). Проект заведён задачей 2.6 ради
+         управляемой копии CLI (Cli/); точку входа, исполнение и сайдкар добавляет 2.2. -->
+    <RootNamespace>ClaudeHomeServer.DeviceAgent</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Проверка OpenPGP-подписи манифеста выпуска CLI (задача 2.7): внешнего gpg на Windows нет. -->
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.7.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="ClaudeHomeServer.DeviceAgent.Tests" />
+  </ItemGroup>
+
+</Project>

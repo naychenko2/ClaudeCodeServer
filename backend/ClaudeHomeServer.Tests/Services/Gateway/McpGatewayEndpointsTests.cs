@@ -11,6 +11,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace ClaudeHomeServer.Tests.Services.Gateway;
 
@@ -51,6 +52,14 @@ public sealed class McpGatewayEndpointsTests : IAsyncLifetime
             await ctx.Response.Body.FlushAsync();
             await _releaseStream.Task;
             await ctx.Response.WriteAsync("data: второе\n\n");
+        });
+        // Чат «creds» — бэкенд пытается выставить куки и затеять аутентификацию
+        _upstream.Map("/mcp/tasks/creds", async ctx =>
+        {
+            foreach (var name in LlmGatewayEndpointTests.CredentialResponseHeaders)
+                ctx.Response.Headers[name] = "backend-value";
+            ctx.Response.Headers["Mcp-Session-Id"] = "s-1";
+            await ctx.Response.WriteAsync("{}");
         });
         _upstream.Map("/{**path}", async ctx =>
         {
@@ -263,6 +272,67 @@ public sealed class McpGatewayEndpointsTests : IAsyncLifetime
         await _client.SendAsync(Req(HttpMethod.Post, $"/gw/t/{t.Grant.TurnId}/mcp/notes/chat-9", t.Token, InitBody));
 
         _seen.Single().Authorization.Should().Be("Bearer jwt-of-owner-2");
+    }
+
+    [Fact]
+    public async Task УчётныеЗаголовкиОтветаБэкенда_ДоКлиентаНеДоходят()
+    {
+        var t = _tokens.Issue("owner-1", "creds");
+
+        var resp = await _client.SendAsync(Req(HttpMethod.Post, $"/gw/t/{t.Grant.TurnId}/mcp/tasks/creds", t.Token, InitBody));
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        resp.Headers.GetValues("Mcp-Session-Id").Should().Equal("s-1");
+        foreach (var name in LlmGatewayEndpointTests.CredentialResponseHeaders)
+            resp.Headers.Contains(name).Should().BeFalse($"{name} не должен дойти до клиента");
+    }
+
+    [Fact]
+    public async Task БэкендНеОтветил_502_ОшибкаВЛогеОднойСтрокойСПотолком()
+    {
+        var sink = new CollectingLogSink();
+        var gw = WebApplication.CreateBuilder();
+        gw.WebHost.UseTestServer();
+        gw.Services.AddSingleton(_tokens);
+        gw.Services.AddSingleton<IMcpBackendAccess, FakeBackend>();
+        gw.Services.AddSingleton<ILoggerProvider>(sink);
+        var message = "первая строка\r\nподдельная запись" + new string('x', 5000);
+        gw.Services.AddHttpClient(McpGatewayEndpoints.HttpClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => new ThrowingHandler(message));
+        await using var app = gw.Build();
+        app.MapMcpGateway();
+        await app.StartAsync();
+        var t = _tokens.Issue("owner-1", "chat-1");
+
+        var resp = await app.GetTestClient().SendAsync(
+            Req(HttpMethod.Post, $"/gw/t/{t.Grant.TurnId}/mcp/tasks/chat-1", t.Token, InitBody));
+
+        resp.StatusCode.Should().Be(HttpStatusCode.BadGateway);
+        var line = sink.Entries.Should().ContainSingle(e => e.Contains("бэкенд не ответил")).Subject;
+        line.Should().NotContain("\r").And.NotContain("\n");
+        line.Should().Contain("первая строка  поддельная запись");
+        line.Length.Should().BeLessThan(1000, "текст ошибки обрезан");
+    }
+
+    private sealed class ThrowingHandler(string message) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
+            throw new HttpRequestException(message);
+    }
+
+    private sealed class CollectingLogSink : ILoggerProvider
+    {
+        public ConcurrentQueue<string> Entries { get; } = new();
+        public ILogger CreateLogger(string categoryName) => new Logger(this);
+        public void Dispose() { }
+
+        private sealed class Logger(CollectingLogSink sink) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+            public bool IsEnabled(LogLevel logLevel) => true;
+            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+                Func<TState, Exception?, string> formatter) => sink.Entries.Enqueue(formatter(state, exception));
+        }
     }
 
     [Fact]

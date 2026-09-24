@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Collections.Frozen;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Services.Llm.Claude;
@@ -38,10 +39,13 @@ public static class LlmGatewayEndpoints
         "Transfer-Encoding", "Upgrade", "Content-Length", "Cookie",
     };
 
-    private static readonly HashSet<string> DropResponseHeaders = new(StringComparer.OrdinalIgnoreCase)
+    // Общий для обоих шлюзов (LLM и MCP): hop-by-hop и всё, чем upstream мог бы выставить
+    // куки или затеять аутентификацию на стороне устройства — клиент шлюза знает только токен хода.
+    internal static readonly FrozenSet<string> DroppedResponseHeaders = new[]
     {
         "Connection", "Keep-Alive", "Proxy-Connection", "TE", "Trailer", "Transfer-Encoding", "Upgrade",
-    };
+        "Set-Cookie", "Set-Cookie2", "WWW-Authenticate", "Proxy-Authenticate", "Authentication-Info",
+    }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
 
     public static IEndpointConventionBuilder MapLlmGateway(this IEndpointRouteBuilder app) =>
         app.Map(Route, HandleAsync)
@@ -106,7 +110,7 @@ public static class LlmGatewayEndpoints
 
             ctx.Response.StatusCode = (int)response.StatusCode;
             foreach (var (name, values) in response.Headers.Concat(response.Content.Headers))
-                if (!DropResponseHeaders.Contains(name))
+                if (!DroppedResponseHeaders.Contains(name))
                     ctx.Response.Headers[name] = values.ToArray();
 
             ctx.Features.Get<IHttpResponseBodyFeature>()?.DisableBuffering();

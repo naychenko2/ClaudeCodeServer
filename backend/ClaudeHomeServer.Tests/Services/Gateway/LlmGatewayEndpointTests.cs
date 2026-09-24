@@ -223,6 +223,32 @@ public sealed class LlmGatewayEndpointTests : IAsyncDisposable
         _kit.Pool.PickCalls.Should().Be(0);
     }
 
+    // Куки и вызовы аутентификации upstream до устройства не доезжают: у него нет ничего,
+    // кроме токена хода, а Set-Cookie от чужого хоста осел бы в его клиенте.
+    internal static readonly string[] CredentialResponseHeaders =
+        ["Set-Cookie", "Set-Cookie2", "WWW-Authenticate", "Proxy-Authenticate", "Authentication-Info"];
+
+    [Fact]
+    public async Task УчётныеЗаголовкиОтветаUpstream_ДоКлиентаНеДоходят()
+    {
+        var t = Start("sonnet");
+        _upstream.Respond = _ =>
+        {
+            var r = new HttpResponseMessage(HttpStatusCode.Unauthorized) { Content = new StringContent("{}") };
+            foreach (var name in CredentialResponseHeaders)
+                r.Headers.TryAddWithoutValidation(name, "upstream-value").Should().BeTrue(name);
+            r.Headers.TryAddWithoutValidation("X-Upstream", "ok");
+            return r;
+        };
+
+        var resp = await _client.SendAsync(Req(HttpMethod.Post, t, "v1/messages", "{}"));
+
+        resp.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        resp.Headers.GetValues("X-Upstream").Should().Equal(["ok"], "обычные заголовки едут как есть");
+        foreach (var name in CredentialResponseHeaders)
+            resp.Headers.Contains(name).Should().BeFalse($"{name} не должен дойти до клиента");
+    }
+
     [Fact]
     public async Task ПодпискиВыключеныПосредиХода_ЯвныйОтказ_UpstreamНеВызван_ПулНеСпрошен()
     {

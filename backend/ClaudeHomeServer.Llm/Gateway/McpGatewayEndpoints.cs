@@ -1,5 +1,6 @@
 using System.Collections.Frozen;
 using System.Net.Http.Headers;
+using ClaudeHomeServer.Core.Telemetry;
 using ClaudeHomeServer.Services.Composition;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.Logging;
@@ -40,10 +41,8 @@ public static class McpGatewayEndpoints
         "Transfer-Encoding", "Upgrade",
     }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
 
-    private static readonly FrozenSet<string> DroppedResponseHeaders = new[]
-    {
-        "Connection", "Keep-Alive", "Transfer-Encoding", "Trailer", "Upgrade", "Proxy-Connection",
-    }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
+    // Текст ошибки HttpClient несёт адрес и ответ бэкенда — в лог идёт с потолком
+    private const int MaxLoggedErrorLength = 500;
 
     public static IEndpointConventionBuilder MapMcpGateway(this IEndpointRouteBuilder app) =>
         app.Map(RoutePattern, HandleAsync)
@@ -110,7 +109,7 @@ public static class McpGatewayEndpoints
         }
         catch (HttpRequestException ex)
         {
-            Logger(http).LogWarning("Шлюз MCP: бэкенд не ответил на «{Server}»: {Error}", name, ex.Message);
+            Logger(http).LogWarning("Шлюз MCP: бэкенд не ответил на «{Server}»: {Error}", name, LogText.OneLine(ex.Message, MaxLoggedErrorLength));
             http.Response.StatusCode = StatusCodes.Status502BadGateway;
             return;
         }
@@ -123,7 +122,7 @@ public static class McpGatewayEndpoints
         {
             http.Response.StatusCode = (int)response.StatusCode;
             foreach (var (key, values) in response.Headers.Concat(response.Content.Headers))
-                if (!DroppedResponseHeaders.Contains(key))
+                if (!LlmGatewayEndpoints.DroppedResponseHeaders.Contains(key))
                     http.Response.Headers[key] = values.ToArray();
 
             // Стрим без буфера: событие SSE уходит клиенту, как только пришло от бэкенда

@@ -13,6 +13,7 @@ import { C, FONT, R, SP, FS } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { IconButton } from '../ui/IconButton';
 import { Button } from '../ui/Button';
+import { Badge } from '../ui/Badge';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { MarkdownContent } from './MarkdownContent';
 import { MessageOriginChip } from '../MessageOriginChip';
@@ -128,18 +129,10 @@ function PendingMessageRow({ item, onCancel, onPreempt, isMobile, leaving, sessi
         </span>
 
         {deviceWait && (
-          <span
-            title="Уйдёт в работу, когда устройство проекта выйдет на связь"
-            style={{
-              display: 'inline-flex', alignItems: 'center', gap: 4, flex: '0 0 auto',
-              fontSize: FS.xs, fontWeight: 600, color: C.warningText,
-              background: C.warningBg, border: `1px solid ${C.warning}`,
-              padding: '1px 6px', borderRadius: R.sm, whiteSpace: 'nowrap',
-            }}
-          >
-            <Unplug size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden />
+          <Badge tone="warning" size="xs" title="Уйдёт в работу, когда устройство проекта выйдет на связь"
+            icon={<Unplug size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden />}>
             ждёт устройство
-          </span>
+          </Badge>
         )}
 
         {!isUser && item.senderOrigin && <MessageOriginChip origin={item.senderOrigin} style={{ flex: '0 0 auto' }} />}

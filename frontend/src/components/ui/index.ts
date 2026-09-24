@@ -46,6 +46,8 @@ export { Dot } from './Dot';
 export { IntroDot } from './IntroDot';
 export { Badge, TONE_DOT } from './Badge';
 export type { BadgeTone, BadgeSize } from './Badge';
+export { Notice } from './Notice';
+export type { NoticeTone } from './Notice';
 export { SidebarSection } from './SidebarSection';
 export { BackButton } from './BackButton';
 export { WaitingIndicator } from './WaitingIndicator';

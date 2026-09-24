@@ -13,7 +13,7 @@ import type { Task } from '../../types';
 import { Bug, Check, Repeat, SquareStack, Unplug } from 'lucide-react';
 import { C, FONT, FS, SHADOW } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
-import { Menu, MenuItem } from '../../components/ui';
+import { Badge, Menu, MenuItem } from '../../components/ui';
 import { useLongPress } from '../../hooks/useLongPress';
 import { deviceWaitDuration, executorStopText, isDeviceWaiting, projectColor } from '../../lib/tasks';
 import { useContextButton } from '../chatContext/useContextButton';
@@ -34,22 +34,10 @@ interface Props {
 
 // Плашка состояния исполнителя: тон warning — «стоит и ждёт», danger — «встал насовсем»
 function StateChip({ tone, title, children }: { tone: 'warning' | 'danger'; title?: string; children: React.ReactNode }) {
-  const warn = tone === 'warning';
   return (
-    <span
-      title={title}
-      style={{
-        display: 'inline-flex', alignItems: 'center', gap: 4, minWidth: 0, maxWidth: '100%',
-        fontFamily: FONT.sans, fontSize: 11, fontWeight: 600,
-        color: warn ? C.warningText : C.dangerText,
-        background: warn ? C.warningBg : C.dangerBg,
-        border: `1px solid ${warn ? C.warning : C.dangerBorder}`,
-        padding: '2px 7px', borderRadius: 6,
-      }}
-    >
-      <Unplug size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{children}</span>
-    </span>
+    <Badge tone={tone} size="xs" title={title} icon={<Unplug size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />}>
+      {children}
+    </Badge>
   );
 }
 

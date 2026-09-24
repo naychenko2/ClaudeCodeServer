@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
-import { BookOpen, Database, Info, RotateCcw, Search, Tag, Trash2, X, Lock } from 'lucide-react';
+import { BookOpen, Database, Info, RotateCcw, Search, Tag, Trash2, X } from 'lucide-react';
 import type { Project } from '../types';
 import { ProjectFeature } from '../types';
 import type { DifyDocument } from '../lib/api';
@@ -8,6 +8,7 @@ import { useProjectFeature, featureReason } from '../lib/projectCapabilities';
 import { onMessage } from '../lib/signalr';
 import { C, R, SHADOW, FONT } from '../lib/design';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
+import { CapabilityUnavailable } from './CapabilityGate';
 import { EmptyState, IconButton, PanelHeaderSlot, useHasPanelHeader, usePanelHeaderHold } from './ui';
 import { useListAutoFocus } from '../lib/listAutoFocus';
 import { NO_AUTOFILL } from '../lib/noAutofill';
@@ -423,26 +424,7 @@ export function KnowledgePanel(props: Props) {
   const kbGate = useProjectFeature(props.project, ProjectFeature.Knowledge);
   const kbGateReason = featureReason(props.project, ProjectFeature.Knowledge);
   if (!kbGate) {
-    return (
-      <div
-        role="status"
-        data-capability-gate="knowledge"
-        style={{
-          padding: '24px 16px', margin: 16,
-          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10,
-          color: C.textMuted, background: C.bgPanel,
-          borderRadius: 8, border: `1px dashed ${C.border}`,
-        }}
-      >
-        <Lock size={20} strokeWidth={ICON_STROKE} />
-        <div style={{ fontSize: 13, color: C.textPrimary, fontWeight: 600 }}>
-          База знаний недоступна
-        </div>
-        <div style={{ fontSize: 11, textAlign: 'center', maxWidth: 320, lineHeight: 1.5 }}>
-          {kbGateReason ?? 'Контент проекта не хранится на сервере'}
-        </div>
-      </div>
-    );
+    return <CapabilityUnavailable feature={ProjectFeature.Knowledge} title="База знаний недоступна" reason={kbGateReason ?? 'Контент проекта не хранится на сервере'} />;
   }
 
   return <KnowledgePanelBody {...props} />;

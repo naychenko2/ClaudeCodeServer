@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, memo, type ReactNode } from 'react';
-import { X, Folder, FolderPlus, ChevronRight, SquarePen, Trash2, ArrowRight, Paperclip, BookOpen, Search, Plus, Check, Copy, Upload, Monitor, Server, GitBranch, ArrowDownWideNarrow, FoldVertical, UnfoldVertical, Lightbulb, StickyNote, AlertTriangle, CloudOff, RefreshCw, Workflow, SquareStack, Lock } from 'lucide-react';
-import type { Project, FileEntry, ProjectFeatureKey } from '../types';
+import { X, Folder, FolderPlus, ChevronRight, SquarePen, Trash2, ArrowRight, Paperclip, BookOpen, Search, Plus, Check, Copy, Upload, Monitor, Server, GitBranch, ArrowDownWideNarrow, FoldVertical, UnfoldVertical, Lightbulb, StickyNote, AlertTriangle, CloudOff, RefreshCw, Workflow, SquareStack } from 'lucide-react';
+import type { Project, FileEntry } from '../types';
 import { ProjectFeature } from '../types';
 import { api } from '../lib/api';
 import { useProjectFeature, featureReason, projectSupportsRoute } from '../lib/projectCapabilities';
@@ -40,36 +40,11 @@ import { useOnline } from '../hooks/useOnline';
 import { useContextButton } from '../features/chatContext/useContextButton';
 import { EmptyState } from './EmptyState';
 import { DeviceAgentGate } from './DeviceAgentGate';
+import { CapabilityUnavailable } from './CapabilityGate';
 import { C, R, FS, SP, FONT, MODAL_W } from '../lib/design';
 import { Modal, ModalActions, TextField, IconButton, Button, Menu, MenuItem, PanelHeaderSlot, FileTypeTile, FileStatusBadge, SegmentedControl, useHasPanelHeader, usePanelHeaderHold } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { NO_AUTOFILL } from '../lib/noAutofill';
-
-// Плашка «подсистема недоступна» (ADR-016 §3.4). Внутренняя — чтобы не зависеть от
-// рендер-цикла CapabilityGate и соблюсти Rules of Hooks (хук useProjectFeature уже
-// вызван ДО условного return)
-function CapabilityGateFallback({ feature, reason }: { feature: ProjectFeatureKey; reason: string | null }) {
-  return (
-    <div
-      role="status"
-      data-capability-gate={feature}
-      style={{
-        padding: '24px 16px', margin: 16,
-        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10,
-        color: C.textMuted, background: C.bgPanel,
-        borderRadius: R.lg, border: `1px dashed ${C.border}`,
-      }}
-    >
-      <Lock size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />
-      <div style={{ fontSize: FS.sm, color: C.textPrimary, fontWeight: 600 }}>
-        Подсистема недоступна
-      </div>
-      <div style={{ fontSize: FS.xs, textAlign: 'center', maxWidth: 320, lineHeight: 1.5 }}>
-        {reason ?? 'Подсистема выключена для этого проекта'}
-      </div>
-    </div>
-  );
-}
 
 interface Props {
   project: Project;
@@ -751,7 +726,7 @@ const FileRow = memo(function FileRow(p: FileRowProps) {
 export function FileExplorer(props: Props) {
   const fileGate = useProjectFeature(props.project, ProjectFeature.Files);
   if (!fileGate) {
-    return <CapabilityGateFallback feature={ProjectFeature.Files} reason={featureReason(props.project, ProjectFeature.Files)} />;
+    return <CapabilityUnavailable feature={ProjectFeature.Files} title="Файлы недоступны" reason={featureReason(props.project, ProjectFeature.Files)} />;
   }
   return <DeviceAgentGate project={props.project}><FileExplorerBody {...props} /></DeviceAgentGate>;
 }

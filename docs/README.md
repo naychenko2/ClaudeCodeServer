@@ -113,7 +113,9 @@
 [ADR-014](adr/ADR-014-internal-subsystems.md) (внутренние подсистемы: контракт `IAppSubsystem`,
 пилот Video, правило зависимостей между вертикалями),
 [ADR-015](adr/ADR-015-cli-profile-sync-zones.md) (зоны профилей CLI и правила синхронизации:
-кто источник истины для каждой зоны, удаление только по манифесту доставки);
+кто источник истины для каждой зоны, удаление только по манифесту доставки),
+[ADR-016](adr/ADR-016-local-projects.md) (локальные проекты: харнес на устройстве, секреты
+только на сервере, набор функций по матрице возможностей проекта);
 [model-resolution-and-fallback.md](adr/model-resolution-and-fallback.md) — приложение к ADR-007
 (резолв модели и фолбэк хода по цепочке),
 [specialties-personalization-review.md](adr/specialties-personalization-review.md) — приложение

@@ -3,7 +3,7 @@ import { X, Folder, FolderPlus, ChevronRight, SquarePen, Trash2, ArrowRight, Pap
 import type { Project, FileEntry, ProjectFeatureKey } from '../types';
 import { ProjectFeature } from '../types';
 import { api } from '../lib/api';
-import { useProjectFeature, featureReason } from '../lib/projectCapabilities';
+import { useProjectFeature, featureReason, projectSupportsRoute } from '../lib/projectCapabilities';
 import { OfflineError } from '../lib/offline';
 import { DIAGRAM_KINDS, DIAGRAM_META, diagramFileName, retargetDiagramExt, type DiagramKind } from '../lib/diagramTemplates';
 
@@ -39,6 +39,7 @@ import { useGitState, ensureGit } from '../lib/git';
 import { useOnline } from '../hooks/useOnline';
 import { useContextButton } from '../features/chatContext/useContextButton';
 import { EmptyState } from './EmptyState';
+import { DeviceAgentGate } from './DeviceAgentGate';
 import { C, R, FS, SP, FONT, MODAL_W } from '../lib/design';
 import { Modal, ModalActions, TextField, IconButton, Button, Menu, MenuItem, PanelHeaderSlot, FileTypeTile, FileStatusBadge, SegmentedControl, useHasPanelHeader, usePanelHeaderHold } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
@@ -741,17 +742,25 @@ const FileRow = memo(function FileRow(p: FileRowProps) {
   );
 });
 
-export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = false, alwaysShowIcons = false, onAddToKnowledge, onAddFolderToKnowledge, onRemoveFromKnowledge, indexedFileNames, indexingFiles, indexingFolders, onAttachToChat, onOpenDossiers }: Props) {
-  // Гейт по матрице возможностей (ADR-016 §3.4): если у проекта выключена группа
-  // files (например, локальный с офлайн-устройством) — показываем причину, а не
-  // пустое дерево. Саму проверку локальности делает projectCapabilities.ts — здесь
-  // только матрица. Все хуки ВЫШЕ раннего return (Rules of Hooks)
-  const fileGate = useProjectFeature(project, ProjectFeature.Files);
-  const fileGateReason = featureReason(project, ProjectFeature.Files);
-  const online = useOnline();
+// Гейт по матрице возможностей (ADR-016 §3.4): если у проекта выключена группа
+// files (например, локальный с офлайн-устройством) — показываем причину, а не
+// пустое дерево. Саму проверку локальности делает projectCapabilities.ts — здесь
+// только матрица. У локального проекта дерево открывается через агента на этой машине —
+// пока он не ответил, DeviceAgentGate показывает состояние связи. Хуки дерева живут в
+// FileExplorerBody, поэтому ранние выходы гейтов не ломают Rules of Hooks
+export function FileExplorer(props: Props) {
+  const fileGate = useProjectFeature(props.project, ProjectFeature.Files);
   if (!fileGate) {
-    return <CapabilityGateFallback feature={ProjectFeature.Files} reason={fileGateReason} />;
+    return <CapabilityGateFallback feature={ProjectFeature.Files} reason={featureReason(props.project, ProjectFeature.Files)} />;
   }
+  return <DeviceAgentGate project={props.project}><FileExplorerBody {...props} /></DeviceAgentGate>;
+}
+
+function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = false, alwaysShowIcons = false, onAddToKnowledge, onAddFolderToKnowledge, onRemoveFromKnowledge, indexedFileNames, indexingFiles, indexingFolders, onAttachToChat, onOpenDossiers }: Props) {
+  const online = useOnline();
+  // Действия, которых нет у агента устройства, у локального проекта не показываем
+  const canUpload = projectSupportsRoute(project, 'POST files/upload');
+  const canToMarkdown = projectSupportsRoute(project, 'POST files/document/to-markdown');
   const hasPanelHeader = useHasPanelHeader();
   const marks = useSyncMarks(project.id);
   // Гейт по подсистеме заметок: при выключенной — бейджи заметок у файлов и
@@ -1658,12 +1667,12 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         label="Папка"
         onClick={() => { setCreateMenu(null); if (isMobile) setCreateInDir(mobileDir); setShowCreateDir(true); }}
       />
-      <MenuItem
+      {canUpload && <MenuItem
         icon={uploading ? <span style={{ width: 14, height: 14, borderRadius: '50%', border: `2px solid ${C.track}`, borderTopColor: C.accent, animation: 'spin 0.6s linear infinite', display: 'inline-block' }} /> : <Upload size={15} strokeWidth={ICON_STROKE} />}
         label={uploading ? 'Загружаю…' : 'Загрузить файлы'}
         disabled={uploading}
         onClick={() => { setCreateMenu(null); uploadInputRef.current?.click(); }}
-      />
+      />}
       {/* Куда попадёт созданное — подписью в подвале меню, а не отдельной строкой
           под тулбаром: вопрос возникает ровно в момент создания. Целевая папка —
           последняя, которую открыли в дереве, и вернуться в корень иначе было
@@ -2120,7 +2129,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           <MenuItem key="attach" icon={<MI_Attach />} label="Прикрепить к чату" onClick={() => { close(); onAttachToChat!(entry.path); }} />);
         add(!entry.isDirectory && /\.(md|mdx)$/i.test(entry.name),
           <MenuItem key="copy-md" icon={<MI_Copy />} label="Копировать Markdown" onClick={() => { close(); void copyMdFromTree(entry.path); }} />);
-        add(!entry.isDirectory && online && isMdConvertible(entry.name),
+        add(!entry.isDirectory && online && canToMarkdown && isMdConvertible(entry.name),
           <MenuItem key="to-md" icon={<MI_Copy />} label="Трансформировать в Markdown…" onClick={() => { close(); setMdEntry(entry); }} />);
         add(!entry.isDirectory && !inNotesVault(entry.path) && onAddToKnowledge && !isKb && isKnowledgeIndexable(entry.name),
           <MenuItem key="kb-add" icon={<MI_BookPlus />} label="Добавить в знания" onClick={() => { close(); onAddToKnowledge!(entry.path); }} />);

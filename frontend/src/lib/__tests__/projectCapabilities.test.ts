@@ -7,6 +7,9 @@ import {
   canRunTurn,
   isLocalProject,
   deviceOfflineLabel,
+  projectFilesRoute,
+  projectSupportsRoute,
+  DEVICE_NOT_YET_REASON,
 } from '../projectCapabilities';
 import type { Project, ProjectCapabilitiesView, ProjectFeatureKey, ProjectDeviceView } from '../../types';
 import { ProjectFeature } from '../../types';
@@ -197,6 +200,40 @@ describe('deviceOfflineLabel — баннер в композере', () => {
       device: { ...deviceView(), online: true, harnessReady: true, harnessProblem: null },
     };
     expect(deviceOfflineLabel(p)).toBeNull();
+  });
+});
+
+describe('локальный проект с живым устройством — что умеет браузер через агента (4.4)', () => {
+  function onlineDeviceCaps(): ProjectCapabilitiesView {
+    const c = offlineDeviceCaps();
+    return { ...c, files: { ...c.files, available: true, reason: null } };
+  }
+
+  it('файлы и git доступны, терминал/сервисы/навыки — нет, с причиной', () => {
+    const p = localProject(onlineDeviceCaps());
+    expect(isFeatureAvailable(p, ProjectFeature.Files)).toBe(true);
+    expect(isFeatureAvailable(p, ProjectFeature.Git)).toBe(true);
+    expect(isFeatureAvailable(p, ProjectFeature.Terminal)).toBe(false);
+    expect(isFeatureAvailable(p, ProjectFeature.DevServers)).toBe(false);
+    expect(isFeatureAvailable(p, ProjectFeature.Skills)).toBe(false);
+    expect(featureReason(p, ProjectFeature.Terminal)).toBe(DEVICE_NOT_YET_REASON);
+    expect(featureReason(p, ProjectFeature.Files)).toBeNull();
+  });
+
+  it('офлайн-устройство: причина группы важнее «пока не умеет»', () => {
+    expect(featureReason(localProject(offlineDeviceCaps()), ProjectFeature.Terminal)).toBe('Устройство офлайн');
+  });
+
+  it('маршрут файлов: локальный — агент, серверный — сервер', () => {
+    expect(projectFilesRoute(localProject(onlineDeviceCaps()))).toBe('agent');
+    expect(projectFilesRoute(emptyProject())).toBe('server');
+    expect(projectFilesRoute(null)).toBe('server');
+  });
+
+  it('действие без маршрута у агента скрыто только у локального проекта', () => {
+    expect(projectSupportsRoute(localProject(onlineDeviceCaps()), 'POST git/push')).toBe(false);
+    expect(projectSupportsRoute(localProject(onlineDeviceCaps()), 'POST git/commit')).toBe(true);
+    expect(projectSupportsRoute(emptyProject(), 'POST git/push')).toBe(true);
   });
 });
 

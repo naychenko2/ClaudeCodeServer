@@ -42,6 +42,8 @@ public sealed class ProjectFilesTests : IDisposable
         new object[] { "Rename", (Func<IProjectFiles, Project, Task>)((f, p) => f.RenameAsync(p, "a.txt", "b.txt")) },
         new object[] { "GetDiff", (Func<IProjectFiles, Project, Task>)((f, p) => f.GetDiffAsync(p, "a.txt")) },
         new object[] { "RevertFile", (Func<IProjectFiles, Project, Task>)((f, p) => f.RevertFileAsync(p, "a.txt")) },
+        new object[] { "GetContent", (Func<IProjectFiles, Project, Task>)((f, p) => f.GetContentAsync(p, "a.txt")) },
+        new object[] { "OpenRead", (Func<IProjectFiles, Project, Task>)((f, p) => f.OpenReadAsync(p, "a.txt")) },
     };
 
     [Theory]

@@ -90,7 +90,7 @@ internal sealed class AgentCoordinator : IAsyncDisposable
         Platform: PlatformName,
         AgentVersion: _agentVersion,
         CliVersion: _harness.ActiveVersion,
-        Capabilities: [DeviceCapabilities.Exec]);
+        Capabilities: [DeviceCapabilities.Exec, DeviceCapabilities.Files]);
 
     /// <summary>Hello; force = false — только если активная копия поменялась с прошлого раза.</summary>
     public async Task HelloAsync(bool force = true)

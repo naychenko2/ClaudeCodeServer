@@ -285,6 +285,15 @@ public class FileService(
         return File.ReadAllBytes(path);
     }
 
+    // Поток на чтение для отдачи без загрузки в память. Запись и удаление не блокируются:
+    // харнес может править файл, пока его читают.
+    public FileStream OpenRead(string rootPath, string relativePath)
+    {
+        var path = SafeJoin(rootPath, relativePath);
+        return new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete,
+            bufferSize: 81920, useAsync: true);
+    }
+
     // Документы: PDF рендерится на клиенте (pdf.js), Office-форматы — через OnlyOffice DS.
     private static readonly Dictionary<string, (string Kind, string Mime)> ViewableDocuments = new(StringComparer.OrdinalIgnoreCase)
     {

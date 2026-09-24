@@ -59,6 +59,16 @@ public sealed class ProjectFiles : IProjectFiles
     public Task<bool> RevertFileAsync(Project project, string relativePath, CancellationToken ct = default) =>
         Run(project, root => _files.RevertFile(root, relativePath));
 
+    public Task<FileContentView> GetContentAsync(Project project, string relativePath, CancellationToken ct = default) =>
+        Run(project, root => FileContentReader.Read(_files, root, relativePath));
+
+    public Task<ProjectFileStream> OpenReadAsync(Project project, string relativePath, CancellationToken ct = default) =>
+        Run(project, root =>
+        {
+            var stream = _files.OpenRead(root, relativePath);
+            return new ProjectFileStream(stream, stream.Length);
+        });
+
     // Синхронные операции FileService под асинхронным контрактом: исключение (в том числе
     // отказ guard'а) уходит в задачу, а не бросается из вызова метода.
     private static Task<T> Run<T>(Project project, Func<string, T> op)

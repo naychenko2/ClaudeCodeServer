@@ -1,3 +1,4 @@
+using ClaudeHomeServer.DeviceAgent.Composition;
 using ClaudeHomeServer.DeviceAgent.Sidecar;
 using ClaudeHomeServer.Protocol;
 using Microsoft.AspNetCore.Http.Connections;
@@ -11,7 +12,7 @@ namespace ClaudeHomeServer.DeviceAgent.Hosting;
 /// только токеном устройства плюс отпечаток. Имена методов — часть протокола
 /// (<c>IDesktopDeviceClient</c> на сервере).
 /// </summary>
-internal sealed class HubControlConnection : IControlConnection, IAsyncDisposable
+internal sealed class HubControlConnection : IControlConnection, IAgentTicketIntrospector, IFilesChangedSink, IAsyncDisposable
 {
     private readonly HubConnection _connection;
     private readonly ILogger _log;
@@ -59,6 +60,18 @@ internal sealed class HubControlConnection : IControlConnection, IAsyncDisposabl
 
     public Task<DeviceHelloAck> HelloAsync(DeviceHello hello, CancellationToken ct) =>
         _connection.InvokeAsync<DeviceHelloAck>("Hello", hello, ct);
+
+    /// <summary>Интроспекция билета localhost-API; канал не поднят — билет не принят.</summary>
+    public Task<AgentTicketIntrospection?> IntrospectAsync(string ticket, CancellationToken ct) =>
+        _connection.State == HubConnectionState.Connected
+            ? _connection.InvokeAsync<AgentTicketIntrospection?>(DeviceAgentApi.IntrospectMethod, ticket, ct)
+            : Task.FromResult<AgentTicketIntrospection?>(null);
+
+    /// <summary>Донесение ватчера; канал не поднят — теряется, веб-морда перечитает дерево при открытии.</summary>
+    public Task ReportAsync(DeviceFilesChanged report, CancellationToken ct) =>
+        _connection.State == HubConnectionState.Connected
+            ? _connection.InvokeAsync(DeviceAgentApi.FilesChangedMethod, report, ct)
+            : Task.CompletedTask;
 
     public ValueTask DisposeAsync() => _connection.DisposeAsync();
 

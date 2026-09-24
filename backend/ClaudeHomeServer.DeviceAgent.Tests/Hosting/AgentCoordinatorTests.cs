@@ -56,7 +56,7 @@ public class AgentCoordinatorTests
 
         var hello = control.Hellos.Single();
         hello.ProtocolVersion.Should().Be(DesktopProtocol.Version);
-        hello.Capabilities.Should().Equal(DeviceCapabilities.Exec);
+        hello.Capabilities.Should().Equal(DeviceCapabilities.Exec, DeviceCapabilities.Files);
         hello.CliVersion.Should().Be("2.0.9");
         hello.AgentVersion.Should().Be("0.9.0");
         hello.Platform.Should().NotBeNullOrEmpty();

@@ -1,12 +1,16 @@
 using System.Reflection;
 using System.Runtime.InteropServices;
 using ClaudeHomeServer.DeviceAgent.Cli;
+using ClaudeHomeServer.DeviceAgent.Composition;
 using ClaudeHomeServer.DeviceAgent.Credentials;
 using ClaudeHomeServer.DeviceAgent.Exec;
 using ClaudeHomeServer.DeviceAgent.Hosting;
 using ClaudeHomeServer.DeviceAgent.Pairing;
 using ClaudeHomeServer.DeviceAgent.Processes;
 using ClaudeHomeServer.DeviceAgent.Sidecar;
+using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Files;
+using ClaudeHomeServer.Services.Git;
 using Microsoft.Extensions.Logging;
 
 namespace ClaudeHomeServer.DeviceAgent;
@@ -15,6 +19,7 @@ namespace ClaudeHomeServer.DeviceAgent;
 /// Точка входа агента устройства (ADR-016).
 ///
 ///   ai-home-agent pair --server https://host --code ABCD2345 [--name "Ноутбук"]
+///   ai-home-agent roots add|remove ПУТЬ | roots list
 ///   ai-home-agent [run]
 ///
 /// Класс назван не <c>Program</c> и без top-level statements: иначе глобальный
@@ -37,6 +42,7 @@ public static class AgentProgram
             return (args.FirstOrDefault() ?? "run") switch
             {
                 "pair" => await PairAsync(args[1..], paths, store, log),
+                "roots" => Roots(args[1..], paths),
                 "run" => await RunAsync(paths, store, loggers, log),
                 _ => Usage(),
             };
@@ -51,8 +57,31 @@ public static class AgentProgram
     private static int Usage()
     {
         Console.Error.WriteLine("ai-home-agent pair --server https://host --code КОД [--name ИМЯ]");
+        Console.Error.WriteLine("ai-home-agent roots add|remove ПУТЬ");
+        Console.Error.WriteLine("ai-home-agent roots list");
         Console.Error.WriteLine("ai-home-agent [run]");
         return 64;
+    }
+
+    // Корни, под которыми агент открывает файлы проектов: правит только человек на машине
+    private static int Roots(string[] args, AgentPaths paths)
+    {
+        var roots = new AgentRootsStore(paths.RootsFile);
+        switch (args)
+        {
+            case ["list"] or []:
+                foreach (var r in roots.Roots) Console.WriteLine(r);
+                return 0;
+            case ["add", var path]:
+                roots.Add(path);
+                Console.WriteLine($"Разрешён корень {Path.GetFullPath(path)}");
+                return 0;
+            case ["remove", var path]:
+                Console.WriteLine(roots.Remove(path) ? "Корень убран" : "Такого корня нет");
+                return 0;
+            default:
+                return Usage();
+        }
     }
 
     private static string Version =>
@@ -119,6 +148,29 @@ public static class AgentProgram
         AppDomain.CurrentDomain.ProcessExit += (_, _) => executor.KillAll();
 
         await using var control = new HubControlConnection(device, log);
+
+        // Вторая композиция файловых вертикалей (задача 4.2): та же Files и Git, что на
+        // сервере, за политикой корней машины; localhost-API — только для веб-морды сервера
+        var policy = new AgentPathPolicy(new AgentRootsStore(paths.RootsFile));
+        var git = new GitService(AgentLauncherFactory.Instance, loggers.CreateLogger<GitService>());
+        var projectFiles = new AgentProjectFiles(new FileService(git, logger: loggers.CreateLogger<FileService>()), policy);
+        using var watchers = new AgentFileWatchers(control, loggers.CreateLogger<AgentFileWatchers>());
+        var tickets = new AgentTicketCache(control);
+        var port = int.TryParse(Environment.GetEnvironmentVariable("AI_HOME_AGENT_PORT"), out var p) ? p : DeviceAgentApi.DefaultPort;
+        await using var localApi = LocalApi.Build(
+            new LocalApiOptions(port, LocalApiOptions.OriginOf(registration.ServerUrl), Version),
+            projectFiles, git, tickets, watchers, loggers);
+        try
+        {
+            await localApi.StartAsync(stop.Token);
+            log.LogInformation("Файлы проектов: http://127.0.0.1:{Port}, разрешённых корней — {Count}",
+                port, policy.RootCount);
+        }
+        // Порт занят — ходы работают и без файлов: агент не падает, веб-морда покажет «агент не найден»
+        catch (IOException e)
+        {
+            log.LogError("localhost-API не поднялся на порту {Port}: {Error}", port, e.Message);
+        }
         await using var coordinator = new AgentCoordinator(control, new ManagedCliHarness(managedCli),
             new ExecSocketConnector(device), executor.RunAsync, Version, log);
 

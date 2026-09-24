@@ -1864,11 +1864,14 @@ export const api = {
       // Локальный проект: поток отдаёт агент по узкому билету на путь, а его выдача
       // асинхронна — синхронного URL нет (точка — agentStreamUrl в deviceAgent.ts).
       // Основной билет проекта в URL не кладём никогда
-      if (projectRouteOf(projectId) === 'agent') return '';
+      const route = projectRouteOf(projectId);
+      if (route === 'agent') return '';
       const token = readStoredToken();
       const params = new URLSearchParams({ path });
       if (token) params.set('access_token', token);
-      return `/api/projects/${encodeURIComponent(projectId)}/files/stream?${params}`;
+      // С другого устройства файл отдаёт ретранслятор — целиком, без Range, под тем же JWT
+      const base = route === 'relay' ? 'relay/files/stream' : 'files/stream';
+      return `/api/projects/${encodeURIComponent(projectId)}/${base}?${params}`;
     },
     list: (projectId: string, path = '') =>
       projectRequest<FileEntry[]>(`/projects/${projectId}/files?path=${encodeURIComponent(path)}`),

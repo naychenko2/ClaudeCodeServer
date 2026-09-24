@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DEVICE_AGENT_SHARED, DEVICE_AGENT_UNSUPPORTED, DEVICE_AGENT_ONLY, agentServesPath } from '../deviceAgentRoutes';
+import { DEVICE_AGENT_SHARED, DEVICE_AGENT_UNSUPPORTED, DEVICE_AGENT_ONLY, RELAY_ROUTES, agentServesPath, relayServesPath } from '../deviceAgentRoutes';
 
 // Контракт фронт/бэк: списки маршрутов агента на фронте — ровно DeviceAgentRoutes.Shared и
 // .Unsupported из ProjectFilesApiContract.cs. Бэк сам сторожит, что каждый серверный маршрут
@@ -10,6 +10,17 @@ import { DEVICE_AGENT_SHARED, DEVICE_AGENT_UNSUPPORTED, DEVICE_AGENT_ONLY, agent
 
 const here = dirname(fileURLToPath(import.meta.url));
 const csFile = resolve(here, '../../../../backend/ClaudeHomeServer.Core/Protocol/ProjectFilesApiContract.cs');
+const relayCsFile = resolve(here, '../../../../backend/ClaudeHomeServer.Core/Protocol/RelayProtocol.cs');
+
+// RelayProtocol.Routes: new("шаблон", RelayOperations.X[, RelayVariants.Y]) — все маршруты GET
+function readRelayRoutes(): string[] {
+  const src = readFileSync(relayCsFile, 'utf-8');
+  const start = src.indexOf('IReadOnlyList<RelayRoute> Routes =');
+  expect(start, 'список Routes не найден в RelayProtocol.cs').toBeGreaterThan(-1);
+  const end = src.indexOf('];', start);
+  expect(end, 'конец списка Routes не найден').toBeGreaterThan(start);
+  return [...src.slice(start, end).matchAll(/new\("([^"]+)",\s*RelayOperations\./g)].map(m => `GET ${m[1]}`);
+}
 
 function readBackendList(name: 'Shared' | 'Unsupported' | 'AgentOnly'): string[] {
   const src = readFileSync(csFile, 'utf-8');
@@ -36,6 +47,29 @@ describe('контракт маршрутов агента устройства 
 
   it('DEVICE_AGENT_ONLY совпадает с DeviceAgentRoutes.AgentOnly', () => {
     expect([...DEVICE_AGENT_ONLY].sort()).toEqual(readBackendList('AgentOnly').sort());
+  });
+
+  it('RELAY_ROUTES совпадает с RelayProtocol.Routes (5.2)', () => {
+    const backend = readRelayRoutes();
+    expect(backend.length, 'регэксп разбора RelayProtocol.Routes сломан').toBeGreaterThan(0);
+    expect([...RELAY_ROUTES].sort()).toEqual(backend.sort());
+  });
+});
+
+describe('relayServesPath', () => {
+  it('узнаёт чтение, включая коммит по sha', () => {
+    expect(relayServesPath('GET', 'files/tree')).toBe(true);
+    expect(relayServesPath('get', 'files/stream')).toBe(true);
+    expect(relayServesPath('GET', 'git/commits/abc123/diff')).toBe(true);
+    expect(relayServesPath('GET', 'files/stat')).toBe(true);
+  });
+
+  it('запись и незнакомое — нет, даже на пути чтения', () => {
+    expect(relayServesPath('PUT', 'files/content')).toBe(false);
+    expect(relayServesPath('DELETE', 'files')).toBe(false);
+    expect(relayServesPath('POST', 'git/commit')).toBe(false);
+    expect(relayServesPath('GET', 'git/branches')).toBe(false);
+    expect(relayServesPath('GET', 'services')).toBe(false);
   });
 });
 

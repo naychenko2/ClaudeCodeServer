@@ -3,14 +3,16 @@
 // форма ответов те же, что у контроллеров сервера, меняется только база адреса и способ входа — вместо
 // JWT сервера короткий билет, который выдаёт сервер (POST /api/projects/{id}/device-agent/ticket).
 //
-// «Сервер или агент» решает матрица (projectFilesRoute в projectCapabilities.ts); здесь только
-// память о решении по id проекта — api.ts знает id, а не сам проект.
+// «Сервер, агент или ретранслятор» решает projectFilesRoute в projectCapabilities.ts; здесь только
+// его входы по id проекта (проект и ответ агента «этот ли компьютер») — api.ts знает id, а не сам
+// проект. Ретранслятор (задача 5.2) — проект открыт с другого устройства: чтение через сервер
+// под api/projects/{id}/relay/…, записи нет.
 
-import { useEffect, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useSyncExternalStore } from 'react';
 import type { Project } from '../types';
 import { request } from './offline';
-import { projectFilesRoute, type ProjectFilesRoute } from './projectCapabilities';
-import { agentServesPath } from './deviceAgentRoutes';
+import { projectFilesRoute, routeSupports, RELAY_ROUTE_REASON, type DevicePresence, type ProjectFilesRoute } from './projectCapabilities';
+import { agentServesPath, relayServesPath, type ProjectRoute } from './deviceAgentRoutes';
 
 export const DEVICE_AGENT_DEFAULT_PORT = 47318;
 const DEFAULT_TICKET_HEADER = 'X-Agent-Ticket';
@@ -20,25 +22,36 @@ const TICKET_KEEPALIVE_MS = 60_000;
 const AGENT_TIMEOUT_MS = 30_000;
 
 export const DEVICE_AGENT_UNSUPPORTED_TEXT = 'У локального проекта это действие пока недоступно: агент устройства его не умеет';
+export const RELAY_READ_ONLY_TEXT = RELAY_ROUTE_REASON;
 
 // ---------- маршрут проекта ----------
 
-interface ProjectRouting { route: ProjectFilesRoute; showHidden: boolean }
+interface ProjectRouting { project: Project; showHidden: boolean }
 const routing = new Map<string, ProjectRouting>();
+// Этот ли компьютер — машина проекта (ответ агента на localhost). Живёт до перезагрузки
+// страницы: заново спрашивает только «Проверить снова», иначе каждая панель на телефоне
+// начинала бы с напрасного похода на localhost и мигания «подключаемся»
+const presences = new Map<string, DevicePresence>();
 
 // Запомнить, куда ходят файлы проекта. Зовётся на каждом ответе сервера с проектом (api.ts)
 // и из панелей (useDeviceAgent) — у кого проект на руках, тот и обновляет.
 export function noteProject(project: Project | null | undefined): void {
   if (!project) return;
-  routing.set(project.id, { route: projectFilesRoute(project), showHidden: project.showHiddenFiles === true });
+  routing.set(project.id, { project, showHidden: project.showHiddenFiles === true });
 }
 
 export function noteProjects(projects: Project[]): void {
   for (const p of projects) noteProject(p);
 }
 
+export function devicePresenceOf(projectId: string): DevicePresence {
+  return presences.get(projectId) ?? 'unknown';
+}
+
+// Решение «сервер / агент / ретранслятор» принимает projectFilesRoute, здесь только его входы
 export function projectRouteOf(projectId: string): ProjectFilesRoute {
-  return routing.get(projectId)?.route ?? 'server';
+  const r = routing.get(projectId);
+  return r ? projectFilesRoute(r.project, devicePresenceOf(projectId)) : 'server';
 }
 
 // ---------- состояние связи с агентом ----------
@@ -51,21 +64,56 @@ export type DeviceAgentStatus =
   // Сервер не выдал билет (флаг выключен, устройство офлайн, нет доступа)
   | { kind: 'refused'; reason: string }
   // Агент ответил, но билет не принял: это агент другого устройства или корень не разрешён
-  | { kind: 'rejected'; reason: string };
+  | { kind: 'rejected'; reason: string }
+  // Проект открыт не с его машины: файлы и git читаются через ретранслятор сервера
+  | { kind: 'relay' }
+  // Ретранслятор отказал (409 relay_unavailable): устройство офлайн, старый агент, связь оборвалась
+  | { kind: 'relay-unavailable'; reason: string };
+
+type RelayStatus = Extract<DeviceAgentStatus, { kind: 'relay' | 'relay-unavailable' }>;
 
 const CHECKING: DeviceAgentStatus = { kind: 'checking' };
+const RELAY: RelayStatus = { kind: 'relay' };
 const statuses = new Map<string, DeviceAgentStatus>();
+const relayStatuses = new Map<string, RelayStatus>();
 const listeners = new Set<() => void>();
+// Номер изменения любого из состояний выше — снимок для useSyncExternalStore
+let version = 0;
+
+function emit(): void {
+  version++;
+  listeners.forEach(l => l());
+}
+
+function sameStatus(a: DeviceAgentStatus | undefined, b: DeviceAgentStatus): boolean {
+  return !!a && a.kind === b.kind && ('reason' in a ? a.reason : null) === ('reason' in b ? b.reason : null);
+}
 
 function setStatus(projectId: string, status: DeviceAgentStatus): void {
-  const prev = statuses.get(projectId);
-  if (prev && prev.kind === status.kind && ('reason' in prev ? prev.reason : null) === ('reason' in status ? status.reason : null)) return;
+  if (sameStatus(statuses.get(projectId), status)) return;
   statuses.set(projectId, status);
-  listeners.forEach(l => l());
+  emit();
+}
+
+function setPresence(projectId: string, presence: DevicePresence): void {
+  if (presences.get(projectId) === presence) return;
+  presences.set(projectId, presence);
+  emit();
+}
+
+function setRelayStatus(projectId: string, status: RelayStatus): void {
+  if (sameStatus(relayStatuses.get(projectId), status)) return;
+  relayStatuses.set(projectId, status);
+  emit();
 }
 
 export function getDeviceAgentStatus(projectId: string): DeviceAgentStatus {
   return statuses.get(projectId) ?? CHECKING;
+}
+
+// Состояние ретранслятора проекта (с другого устройства): отдаёт ли устройство файлы
+export function relayStatusOf(projectId: string): RelayStatus {
+  return relayStatuses.get(projectId) ?? RELAY;
 }
 
 export class DeviceAgentError extends Error {
@@ -144,7 +192,9 @@ async function agentFetch(projectId: string, pathAndQuery: string, init: Request
       },
     });
   } catch {
+    // Агента на этом компьютере нет — значит, это не машина проекта: читать будем через ретранслятор
     setStatus(projectId, { kind: 'unreachable' });
+    setPresence(projectId, 'elsewhere');
     throw new DeviceAgentError('unreachable', 'Агент устройства не отвечает на этом компьютере');
   } finally {
     clearTimeout(timer);
@@ -157,7 +207,9 @@ async function agentFetch(projectId: string, pathAndQuery: string, init: Request
     }
     const body = await res.json().catch(() => null) as { error?: string } | null;
     const reason = body?.error ?? 'Агент на этом компьютере не принял доступ к проекту';
+    // Билет проекта не принял агент ДРУГОГО устройства: машина проекта не эта
     setStatus(projectId, { kind: 'rejected', reason });
+    setPresence(projectId, 'elsewhere');
     throw new DeviceAgentError('rejected', reason, 401);
   }
   return res;
@@ -167,6 +219,7 @@ async function agentFetch(projectId: string, pathAndQuery: string, init: Request
 export async function agentRequest<T>(projectId: string, pathAndQuery: string, init: RequestInit = {}): Promise<T> {
   const res = await agentFetch(projectId, pathAndQuery, init);
   setStatus(projectId, { kind: 'ready' });
+  setPresence(projectId, 'here');
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText })) as { error?: string };
     const httpErr = new Error(err.error ?? res.statusText) as Error & { status?: number; body?: unknown };
@@ -189,10 +242,17 @@ export function projectRequest<T>(url: string, options?: RequestInit & { timeout
   const m = PROJECT_FILES_URL.exec(url);
   if (!m) return request<T>(url, options);
   const projectId = decodeURIComponent(m[1]);
-  if (projectRouteOf(projectId) !== 'agent') return request<T>(url, options);
+  const route = projectRouteOf(projectId);
+  if (route === 'server') return request<T>(url, options);
 
   const method = (options?.method ?? 'GET').toUpperCase();
   const path = m[2];
+  if (route === 'relay') {
+    // Записи в ретрансляторе нет вовсе: такой запрос отказывает до сети
+    if (!relayServesPath(method, path))
+      return Promise.reject(new DeviceAgentError('unsupported', RELAY_READ_ONLY_TEXT));
+    return relayRequest<T>(projectId, path + (m[3] ?? ''), options);
+  }
   if (!agentServesPath(method, path))
     return Promise.reject(new DeviceAgentError('unsupported', DEVICE_AGENT_UNSUPPORTED_TEXT));
   let query = m[3] ?? '';
@@ -205,8 +265,40 @@ export function projectRequest<T>(url: string, options?: RequestInit & { timeout
 
 // Проверка, что маршрут проекта с этим методом доступен сейчас (для прямых fetch вне request).
 export function assertServerRoute(projectId: string, method: string, path: string): void {
-  if (projectRouteOf(projectId) === 'agent' && !agentServesPath(method, path))
+  const route = projectRouteOf(projectId);
+  if (route === 'relay') throw new DeviceAgentError('unsupported', RELAY_READ_ONLY_TEXT);
+  if (route === 'agent' && !agentServesPath(method, path))
     throw new DeviceAgentError('unsupported', DEVICE_AGENT_UNSUPPORTED_TEXT);
+}
+
+// ---------- ретранслятор: проект открыт с другого устройства ----------
+
+// База ретранслятора — RelayProtocol.RouteSegment: те же маршруты и ответы, что у сервера, вход по
+// обычному JWT пользователя
+const RELAY_SEGMENT = 'relay';
+// RelayProtocol.UnavailableCode: устройство сейчас не отдаёт файлы — состояние проекта, не ошибка запроса
+export const RELAY_UNAVAILABLE_CODE = 'relay_unavailable';
+
+function relayPath(projectId: string, pathAndQuery: string): string {
+  return `/projects/${encodeURIComponent(projectId)}/${RELAY_SEGMENT}/${pathAndQuery}`;
+}
+
+function relayRequest<T>(projectId: string, pathAndQuery: string, options?: RequestInit & { timeoutMs?: number; live?: boolean }): Promise<T> {
+  // live: ретранслятор — только онлайн (ADR-016 §5), прошлый ответ из кэша выдал бы файлы
+  // офлайн-устройства за живые
+  return request<T>(relayPath(projectId, pathAndQuery), { ...options, method: 'GET', live: true }).then(
+    r => { setRelayStatus(projectId, RELAY); return r; },
+    (e: unknown) => {
+      const err = e as { status?: number; body?: { code?: string; error?: string } } | null;
+      if (err?.status === 409 && err.body?.code === RELAY_UNAVAILABLE_CODE)
+        setRelayStatus(projectId, { kind: 'relay-unavailable', reason: err.body.error ?? 'Устройство проекта сейчас недоступно' });
+      throw e;
+    });
+}
+
+// Проверить ретранслятор корнем проекта: так «Проверить снова» узнаёт, вернулось ли устройство
+export function probeRelay(projectId: string): Promise<void> {
+  return relayRequest<unknown>(projectId, 'files?path=').then(() => undefined, () => undefined);
 }
 
 // ---------- поток: узкий билет на один путь ----------
@@ -345,6 +437,8 @@ export function probeDeviceAgent(projectId: string): Promise<void> {
       if (!(e instanceof DeviceAgentError))
         setStatus(projectId, { kind: 'rejected', reason: e instanceof Error ? e.message : 'Агент не открыл проект' });
     })
+    // Не машина проекта — заодно узнаём, отдаёт ли устройство файлы через сервер
+    .then(() => (devicePresenceOf(projectId) === 'elsewhere' ? probeRelay(projectId) : undefined))
     .finally(() => probes.delete(projectId));
   probes.set(projectId, p);
   return p;
@@ -355,14 +449,17 @@ function subscribe(l: () => void): () => void {
   return () => { listeners.delete(l); };
 }
 
-// Состояние связи с агентом для панели локального проекта. У серверного проекта — всегда
-// ready: ему агент не нужен. Пока панель открыта, билет перевыпускается заранее, чтобы
-// запросы панели не упирались в выдачу билета.
+// Состояние связи с устройством для панели локального проекта. У серверного проекта — всегда
+// ready: ему агент не нужен. С машины проекта — состояние агента; с другого устройства — состояние
+// ретранслятора. Пока панель открыта у агента, билет перевыпускается заранее, чтобы запросы панели
+// не упирались в выдачу билета.
 export function useDeviceAgent(project: Project | null | undefined, enabled = true): DeviceAgentStatus {
   noteProject(project);
   const projectId = project?.id ?? '';
-  const viaAgent = enabled && projectFilesRoute(project) === 'agent';
-  const status = useSyncExternalStore(subscribe, () => getDeviceAgentStatus(projectId));
+  useSyncExternalStore(subscribe, () => version);
+  const route = projectFilesRoute(project, devicePresenceOf(projectId));
+  const deviceBound = enabled && route !== 'server';
+  const viaAgent = deviceBound && route === 'agent';
 
   useEffect(() => {
     if (!viaAgent || !projectId) return;
@@ -373,14 +470,38 @@ export function useDeviceAgent(project: Project | null | undefined, enabled = tr
     return () => clearInterval(timer);
   }, [viaAgent, projectId]);
 
-  return viaAgent ? status : READY;
+  if (!deviceBound) return READY;
+  if (route === 'relay') return relayStatusOf(projectId);
+  return getDeviceAgentStatus(projectId);
 }
 
 const READY: DeviceAgentStatus = { kind: 'ready' };
 
+// Маршрут файлов проекта с учётом того, где открыт браузер, — для компонентов (перерисуются, когда
+// выяснится, что это не машина проекта)
+export function useProjectFilesRoute(project: Project | null | undefined): ProjectFilesRoute {
+  const projectId = project?.id ?? '';
+  useSyncExternalStore(subscribe, () => version);
+  return projectFilesRoute(project, devicePresenceOf(projectId));
+}
+
+export interface ProjectRoutes {
+  route: ProjectFilesRoute;
+  // Есть ли у проекта сейчас действие на этом маршруте. Контрол записи панель рисует только по
+  // этому ответу: с другого устройства его источник — RELAY_ROUTES, где записи нет вовсе
+  can: (route: ProjectRoute) => boolean;
+}
+
+export function useProjectRoutes(project: Project | null | undefined): ProjectRoutes {
+  const route = useProjectFilesRoute(project);
+  return useMemo(() => ({ route, can: (r: ProjectRoute) => routeSupports(route, r) }), [route]);
+}
+
 // Для тестов: сбросить всё запомненное
 export function resetDeviceAgentForTests(): void {
   routing.clear();
+  presences.clear();
+  relayStatuses.clear();
   statuses.clear();
   tickets.clear();
   pendingTickets.clear();

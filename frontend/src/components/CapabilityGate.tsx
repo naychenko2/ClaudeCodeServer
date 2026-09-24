@@ -11,13 +11,15 @@ interface UnavailableProps {
   // Заголовок по панели: «Файлы недоступны», «Изменения недоступны»…
   title: string;
   reason: string | null | undefined;
+  // Действие под причиной — например, «Проверить снова», когда состояние может пройти само
+  action?: ReactNode;
 }
 
 // Плашка «недоступно с причиной» (ADR-016 §3.4) — единственная на весь продукт. Стоит на
 // EmptyState compact, как и состояния DeviceAgentGate: одна панель не должна менять вид
 // в зависимости от того, какой гейт сработал. Без хуков — панели зовут её ранним return
 // из обёртки, где хук useProjectFeature уже вызван
-export function CapabilityUnavailable({ feature, title, reason }: UnavailableProps) {
+export function CapabilityUnavailable({ feature, title, reason, action }: UnavailableProps) {
   return (
     <div role="status" data-capability-gate={feature} style={{ height: '100%' }}>
       <EmptyState
@@ -25,6 +27,7 @@ export function CapabilityUnavailable({ feature, title, reason }: UnavailablePro
         icon={<Lock size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />}
         title={title}
         subtitle={reason ?? 'Недоступно для этого проекта'}
+        action={action}
       />
     </div>
   );

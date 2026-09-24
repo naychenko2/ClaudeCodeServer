@@ -375,17 +375,6 @@ test.describe('локальный проект через агента устр�
     for (const s of issued) expect(s.ticket).toBe(TICKET);
   });
 
-  test('агент не найден — понятное состояние и повтор', async ({ page }) => {
-    // Билет указывает на порт, где никто не слушает: так выглядит машина без агента
-    await asLocalProject(page, origin, projectId, { kind: 'ok', port: AGENT_PORT + 2 });
-    await openTab(page, projectId, token, 'Файлы');
-
-    const state = page.locator('[data-device-agent-state="unreachable"]');
-    await expect(state).toBeVisible();
-    await expect(state.getByText('Агент устройства не найден')).toBeVisible();
-    await expect(state.getByRole('button', { name: 'Проверить снова' })).toBeVisible();
-  });
-
   test('сервер не выдал билет — причина сервера вместо пустой панели', async ({ page }) => {
     await asLocalProject(page, origin, projectId, { kind: 'refused', status: 409, error: 'Устройство офлайн' });
     await openTab(page, projectId, token, 'Файлы');
@@ -476,12 +465,15 @@ test.describe('локальный проект через агента устр�
     await expect(page.getByText('note.txt').first()).toBeVisible();
   });
 
-  test('агент не найден — терминал показывает понятное состояние', async ({ page }) => {
+  // Агента на этом компьютере нет — значит, проект открыт не с его машины (5.2). Файлы и изменения
+  // тогда читаются через ретранслятор (local-project-relay.spec.ts), а терминалу ретранслятора нет
+  test('агент не найден — терминал только на компьютере проекта', async ({ page }) => {
     await asLocalProject(page, origin, projectId, { kind: 'ok', port: AGENT_PORT + 2 });
     await openTab(page, projectId, token, 'Терминал');
 
-    const state = page.locator('[data-device-agent-state="unreachable"]');
+    const state = page.locator('[data-device-agent-state="relay"]');
     await expect(state).toBeVisible();
-    await expect(state.getByText('Агент устройства не найден')).toBeVisible();
+    await expect(state.getByText('Только на компьютере проекта')).toBeVisible();
+    await expect(state.getByRole('button', { name: 'Проверить снова' })).toBeVisible();
   });
 });

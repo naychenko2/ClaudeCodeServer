@@ -9,6 +9,7 @@ import {
   deviceOfflineLabel,
   projectFilesRoute,
   projectSupportsRoute,
+  RELAY_ROUTE_REASON,
   DEVICE_ROUTE_REASON,
   projectRouteReason,
 } from '../projectCapabilities';
@@ -236,6 +237,24 @@ describe('локальный проект с живым устройством �
     expect(projectFilesRoute(localProject(onlineDeviceCaps()))).toBe('agent');
     expect(projectFilesRoute(emptyProject())).toBe('server');
     expect(projectFilesRoute(null)).toBe('server');
+  });
+
+  it('маршрут файлов с другого устройства — ретранслятор; у серверного присутствие ничего не меняет (5.2)', () => {
+    const local = localProject(onlineDeviceCaps());
+    expect(projectFilesRoute(local, 'unknown')).toBe('agent');
+    expect(projectFilesRoute(local, 'here')).toBe('agent');
+    expect(projectFilesRoute(local, 'elsewhere')).toBe('relay');
+    expect(projectFilesRoute(emptyProject(), 'elsewhere')).toBe('server');
+  });
+
+  it('с другого устройства запись скрыта с причиной «только просмотр», чтение есть (5.2)', () => {
+    const local = localProject(onlineDeviceCaps());
+    expect(projectSupportsRoute(local, 'GET files/tree', 'elsewhere')).toBe(true);
+    expect(projectSupportsRoute(local, 'GET git/commits/{sha}/diff', 'elsewhere')).toBe(true);
+    expect(projectSupportsRoute(local, 'PUT files/content', 'elsewhere')).toBe(false);
+    expect(projectSupportsRoute(local, 'POST git/commit', 'elsewhere')).toBe(false);
+    expect(projectRouteReason(local, 'DELETE files', 'elsewhere')).toBe(RELAY_ROUTE_REASON);
+    expect(projectRouteReason(local, 'GET files', 'elsewhere')).toBeNull();
   });
 
   it('действие без маршрута у агента скрыто только у локального проекта', () => {

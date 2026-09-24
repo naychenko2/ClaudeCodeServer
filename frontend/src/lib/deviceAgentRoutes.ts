@@ -113,7 +113,30 @@ export const DEVICE_AGENT_UNSUPPORTED = [
   'POST preview/external-link',
 ] as const;
 
+// Маршруты ретранслятора чтения (ADR-016 §5, задача 5.2): проект открыт не с его машины, запрос идёт
+// на сервер под api/projects/{id}/relay/…, дальше — агенту устройства. Зеркало RelayProtocol.Routes из
+// backend/ClaudeHomeServer.Core/Protocol/RelayProtocol.cs (контракт-тест тот же). Записи здесь нет
+// по построению — и этот список ЕДИНСТВЕННЫЙ источник того, что панель прячет с другого устройства:
+// контрол, маршрута которого тут нет, не рисуется
+export const RELAY_ROUTES = [
+  'GET files',
+  'GET files/tree',
+  'GET files/content',
+  'GET files/stream',
+  'GET files/stat',
+  'GET files/search',
+  'GET files/diff',
+  'GET git/status',
+  'GET git/diff',
+  'GET git/log',
+  'GET git/commits/{sha}',
+  'GET git/commits/{sha}/diff',
+  'GET git/commits/{sha}/file',
+] as const;
+
 export type DeviceAgentRoute = (typeof DEVICE_AGENT_SHARED)[number] | (typeof DEVICE_AGENT_UNSUPPORTED)[number];
+// Любой маршрут файлов/git проекта, о котором панель спрашивает «есть ли он сейчас»
+export type ProjectRoute = DeviceAgentRoute | (typeof RELAY_ROUTES)[number];
 
 function templateRegex(route: string): RegExp {
   const [method, template] = route.split(' ');
@@ -134,6 +157,18 @@ export function agentServesPath(method: string, path: string): boolean {
 }
 
 // Есть ли у агента маршрут по его шаблону из списков выше — для гейта кнопок в панелях.
-export function agentSupports(route: DeviceAgentRoute): boolean {
+export function agentSupports(route: ProjectRoute): boolean {
   return (DEVICE_AGENT_SHARED as readonly string[]).includes(route);
+}
+
+const RELAY_RE = RELAY_ROUTES.map(templateRegex);
+
+// Есть ли у ретранслятора конкретный запрос (метод и путь без query). Незнакомое — «нет»
+export function relayServesPath(method: string, path: string): boolean {
+  const key = `${method.toUpperCase()} ${path.replace(/^\/+|\/+$/g, '')}`;
+  return RELAY_RE.some(re => re.test(key));
+}
+
+export function relaySupports(route: ProjectRoute): boolean {
+  return (RELAY_ROUTES as readonly string[]).includes(route);
 }

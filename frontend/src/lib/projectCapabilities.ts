@@ -17,7 +17,7 @@ import type {
   ProjectCapabilityGroup,
 } from '../types';
 import { ProjectFeature } from '../types';
-import { agentSupports, type DeviceAgentRoute } from './deviceAgentRoutes';
+import { agentSupports, relaySupports, type ProjectRoute } from './deviceAgentRoutes';
 
 // Состав групп возможностей — зеркало ProjectFeatures.FileBound/Platform/ServerContent
 // на бэке. Менять синхронно с ProjectFeatures.cs при расширении.
@@ -118,28 +118,44 @@ export function featureReason(project: Project | null | undefined, feature: Proj
   return null;
 }
 
-// Куда ходят запросы файлов, git, сервисов и навыков проекта: на сервер или в агента устройства на этой
-// машине. ЕДИНСТВЕННОЕ место этого решения — api.ts берёт его отсюда через deviceAgent.ts.
-export type ProjectFilesRoute = 'server' | 'agent';
+// Куда ходят запросы файлов, git, сервисов и навыков проекта: на сервер, в агента устройства на этой
+// машине или через ретранслятор сервера (проект открыт с другого устройства, только чтение).
+// ЕДИНСТВЕННОЕ место этого решения — api.ts берёт его отсюда через deviceAgent.ts.
+export type ProjectFilesRoute = 'server' | 'agent' | 'relay';
 
-export function projectFilesRoute(project: Project | null | undefined): ProjectFilesRoute {
-  return getProjectCapabilities(project).host === 'device' ? 'agent' : 'server';
+// Где браузер относительно машины проекта. Узнать это можно только у агента: here — агент на этом
+// компьютере ответил; elsewhere — не ответил или это агент другого устройства; unknown — ещё не
+// спрашивали (тогда сначала пробуем агента). Помнит ответ deviceAgent.ts
+export type DevicePresence = 'unknown' | 'here' | 'elsewhere';
+
+export function projectFilesRoute(project: Project | null | undefined, presence: DevicePresence = 'unknown'): ProjectFilesRoute {
+  if (getProjectCapabilities(project).host !== 'device') return 'server';
+  return presence === 'elsewhere' ? 'relay' : 'agent';
 }
 
-// Есть ли у проекта действие на маршруте файлов/git. У серверного — все, у локального — только
-// то, что умеет агент (список в deviceAgentRoutes.ts). Кнопку без маршрута панель прячет.
-export function projectSupportsRoute(project: Project | null | undefined, route: DeviceAgentRoute): boolean {
-  return projectFilesRoute(project) === 'server' || agentSupports(route);
+// Есть ли действие на маршруте: у сервера — все, у агента — его список, у ретранслятора — только
+// чтение из RELAY_ROUTES (deviceAgentRoutes.ts). Кнопку без маршрута панель прячет — так и
+// получается «ни одного контрола записи» с другого устройства без проверок в самих панелях
+export function routeSupports(filesRoute: ProjectFilesRoute, route: ProjectRoute): boolean {
+  if (filesRoute === 'server') return true;
+  return filesRoute === 'relay' ? relaySupports(route) : agentSupports(route);
+}
+
+export function projectSupportsRoute(project: Project | null | undefined, route: ProjectRoute, presence: DevicePresence = 'unknown'): boolean {
+  return routeSupports(projectFilesRoute(project, presence), route);
 }
 
 // Почему действия нет у проекта (null — есть). Текст — для title недоступной кнопки.
-const ROUTE_REASONS: Partial<Record<DeviceAgentRoute, string>> = {
+const ROUTE_REASONS: Partial<Record<ProjectRoute, string>> = {
   'POST preview/external-link': 'Доступ снаружи идёт через поддомен сервера, а сервис локального проекта работает на его компьютере',
 };
 export const DEVICE_ROUTE_REASON = 'У локального проекта это действие недоступно: агент устройства его не умеет';
+export const RELAY_ROUTE_REASON = 'С другого устройства локальный проект открыт только для просмотра: изменить его можно на компьютере проекта';
 
-export function projectRouteReason(project: Project | null | undefined, route: DeviceAgentRoute): string | null {
-  if (projectSupportsRoute(project, route)) return null;
+export function projectRouteReason(project: Project | null | undefined, route: ProjectRoute, presence: DevicePresence = 'unknown'): string | null {
+  const filesRoute = projectFilesRoute(project, presence);
+  if (routeSupports(filesRoute, route)) return null;
+  if (filesRoute === 'relay') return RELAY_ROUTE_REASON;
   return ROUTE_REASONS[route] ?? DEVICE_ROUTE_REASON;
 }
 

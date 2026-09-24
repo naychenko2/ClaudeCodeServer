@@ -73,6 +73,13 @@
   Поиск — на агенте, потолки — `AgentLimits`, JSON-ответ — не больше
   `RelayProtocol.MaxJsonBytes`.
 - Диапазонов (`Range`) поток ретранслятора не поддерживает: отдаёт файл целиком.
+- **Фронт (задача 5.2)** выбирает путь в одном месте — `projectFilesRoute` в
+  `projectCapabilities.ts`: «этот ли компьютер» узнаётся только пробой агента (не ответил или
+  отверг билет — значит, ретранслятор). Что спрятать с другого устройства, решает список
+  `RELAY_ROUTES` (`deviceAgentRoutes.ts`, контракт-тест с `RelayProtocol.Routes`): панели гейтят
+  каждый контрол записи через `useProjectRoutes().can(маршрут)`, сторож —
+  `relayReadOnly.guard.test.ts`. Отказ 409 `relay_unavailable` — плашка `CapabilityUnavailable`
+  с причиной и повтором, а не ошибка.
 - **Git только читает и в `.git` не пишет**: read-only методы `GitService` идут через
   `RunReadAsync` с `GIT_OPTIONAL_LOCKS=0` (без него `git status` вправе взять `index.lock`
   и переписать индекс), а дифф рабочего дерева строится плюмбингом `diff-files`/`diff-index`,

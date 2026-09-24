@@ -4,12 +4,13 @@ import { ProjectFeature } from '../../types';
 
 // Сервер (request из offline.ts) подменяем целиком: билет и серверные маршруты
 const { request } = vi.hoisted(() => ({ request: vi.fn() }));
-vi.mock('../offline', () => ({ request }));
+vi.mock('../offline', () => ({ request, readStoredToken: () => 'jwt-1' }));
 
 import {
   noteProject, projectRequest, probeDeviceAgent, getDeviceAgentStatus, agentStreamUrl,
   agentHubTicket, agentHubUrl, agentPreviewUrl, uploadAgentAttachment,
-  DeviceAgentError, resetDeviceAgentForTests,
+  DeviceAgentError, resetDeviceAgentForTests, projectRouteOf, devicePresenceOf, probeRelay,
+  RELAY_READ_ONLY_TEXT, relayStatusOf,
 } from '../deviceAgent';
 
 const FILE_FEATURES = [ProjectFeature.Files, ProjectFeature.Diff, ProjectFeature.Git, ProjectFeature.FileWatcher, ProjectFeature.Terminal];
@@ -325,5 +326,105 @@ describe('api.files.fileUrl у локального проекта', () => {
     const url = api.files.fileUrl('l1', 'img/a.png');
     expect(url).not.toContain('main-ticket');
     expect(url).not.toContain('ticket=');
+  });
+});
+
+// Проект открыт не с его машины (5.2): агента на localhost нет — чтение идёт через ретранслятор
+describe('ретранслятор — проект с другого устройства', () => {
+  const relayError = (status: number, body: unknown) =>
+    Object.assign(new Error((body as { error?: string }).error ?? 'err'), { status, body });
+
+  // Как это выглядит на телефоне: билет выдан, но агента на этом компьютере нет
+  async function openFromPhone(id = 'l1') {
+    noteProject(project(id, 'device'));
+    request.mockResolvedValueOnce(ticketResponse());
+    fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
+    request.mockResolvedValueOnce([]); // проба ретранслятора после пробы агента
+    await probeDeviceAgent(id);
+    request.mockReset();
+    fetchMock.mockReset();
+  }
+
+  it('пока агента не спрашивали — агент; ответил — агент; не ответил — ретранслятор', async () => {
+    noteProject(project('l1', 'device'));
+    expect(projectRouteOf('l1')).toBe('agent');
+    await openFromPhone('l1');
+    expect(devicePresenceOf('l1')).toBe('elsewhere');
+    expect(projectRouteOf('l1')).toBe('relay');
+    noteProject(project('s1', 'server'));
+    expect(projectRouteOf('s1')).toBe('server');
+  });
+
+  it('агент другого устройства не принял билет — тоже ретранслятор', async () => {
+    noteProject(project('l1', 'device'));
+    // Билет выдаётся дважды (перевыпуск после 401), затем проба ретранслятора
+    request.mockResolvedValue(ticketResponse());
+    fetchMock.mockResolvedValue(res(401, { error: 'чужой билет' }));
+    await probeDeviceAgent('l1');
+    expect(projectRouteOf('l1')).toBe('relay');
+  });
+
+  it('с машины проекта маршрут остаётся у агента', async () => {
+    noteProject(project('l1', 'device'));
+    request.mockResolvedValue(ticketResponse());
+    fetchMock.mockResolvedValue(res(200, []));
+    await probeDeviceAgent('l1');
+    expect(devicePresenceOf('l1')).toBe('here');
+    expect(projectRouteOf('l1')).toBe('agent');
+  });
+
+  it('чтение уходит на сервер под relay/ с тем же путём и query, без офлайн-кэша', async () => {
+    await openFromPhone();
+    request.mockResolvedValue([{ name: 'a.md' }]);
+    await expect(projectRequest('/projects/l1/files/tree?path=src')).resolves.toEqual([{ name: 'a.md' }]);
+    expect(request).toHaveBeenCalledWith('/projects/l1/relay/files/tree?path=src', expect.objectContaining({ method: 'GET', live: true }));
+    await projectRequest('/projects/l1/git/commits/abc/diff?path=a.md');
+    expect(request).toHaveBeenLastCalledWith('/projects/l1/relay/git/commits/abc/diff?path=a.md', expect.anything());
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('запись отказывает до сети текстом «только для просмотра»', async () => {
+    await openFromPhone();
+    for (const [url, method] of [
+      ['/projects/l1/files/content?path=a.md', 'PUT'],
+      ['/projects/l1/files/create', 'POST'],
+      ['/projects/l1/files?path=a.md', 'DELETE'],
+      ['/projects/l1/git/commit', 'POST'],
+      ['/projects/l1/git/stage', 'POST'],
+    ] as const) {
+      await expect(projectRequest(url, { method, body: '{}' })).rejects.toMatchObject({ kind: 'unsupported', message: RELAY_READ_ONLY_TEXT });
+    }
+    // Чтение, которого у ретранслятора нет (ветки, сервисы), — тоже до сети
+    await expect(projectRequest('/projects/l1/git/branches')).rejects.toBeInstanceOf(DeviceAgentError);
+    await expect(projectRequest('/projects/l1/services')).rejects.toBeInstanceOf(DeviceAgentError);
+    expect(request.mock.calls).toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('409 relay_unavailable — состояние проекта с причиной; ответ ретранслятора его снимает', async () => {
+    await openFromPhone();
+    request.mockRejectedValueOnce(relayError(409, { error: 'Устройство офлайн', code: 'relay_unavailable' }));
+    await expect(projectRequest('/projects/l1/files?path=')).rejects.toMatchObject({ status: 409 });
+    expect(relayStatusOf('l1')).toEqual({ kind: 'relay-unavailable', reason: 'Устройство офлайн' });
+    // Вернулось устройство — «Проверить снова» (проба ретранслятора) снимает состояние
+    request.mockResolvedValueOnce([]);
+    await probeRelay('l1');
+    expect(request).toHaveBeenLastCalledWith('/projects/l1/relay/files?path=', expect.anything());
+    expect(relayStatusOf('l1')).toEqual({ kind: 'relay' });
+  });
+
+  it('прочие ошибки ретранслятора доходят до вызывающего как у request()', async () => {
+    await openFromPhone();
+    request.mockRejectedValueOnce(relayError(404, { error: 'Не найдено' }));
+    await expect(projectRequest('/projects/l1/files/content?path=nope')).rejects.toMatchObject({ status: 404, message: 'Не найдено' });
+  });
+
+  it('URL потока для <img>/<video> — ретранслятор с JWT в query, без билета агента', async () => {
+    const { api } = await import('../api');
+    await openFromPhone();
+    const url = api.files.fileUrl('l1', 'img/a.png');
+    expect(url).toMatch(/^\/api\/projects\/l1\/relay\/files\/stream\?path=img%2Fa\.png/);
+    expect(url).toContain('access_token=jwt-1');
+    expect(url).not.toContain('ticket');
   });
 });

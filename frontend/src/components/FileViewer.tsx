@@ -24,9 +24,8 @@ import { api } from '../lib/api';
 import { basename } from '../lib/paths';
 import { useContextButton } from '../features/chatContext/useContextButton';
 import { resolveDocImage, resolveDocLink, sliceSection, slugify } from '../lib/docsLinks';
-import { OfflineError, readStoredToken } from '../lib/offline';
-import { agentStreamUrl } from '../lib/deviceAgent';
-import { projectFilesRoute } from '../lib/projectCapabilities';
+import { OfflineError } from '../lib/offline';
+import { agentStreamUrl, useProjectRoutes } from '../lib/deviceAgent';
 import { useGitState, ensureGit, gitRestoreFile, loadGitRemote } from '../lib/git';
 import { parseDiffToHunks, buildHunkPatch, buildLinesPatch } from '../lib/gitPatch';
 import { relTime } from '../lib/gitFormat';
@@ -143,11 +142,9 @@ interface FileContent {
   fileSize?: number;
 }
 
+// Сервер или ретранслятор — решает api.files.fileUrl (у агента поток идёт мимо, см. agentStreamUrl)
 function streamUrl(projectId: string, filePath: string): string {
-  const token = readStoredToken();
-  const params = new URLSearchParams({ path: filePath });
-  if (token) params.set('access_token', token);
-  return `/api/projects/${projectId}/files/stream?${params}`;
+  return api.files.fileUrl(projectId, filePath);
 }
 
 // Прозрачный пиксель вместо картинки markdown, пока агент выдаёт узкий билет: сырой
@@ -490,8 +487,18 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const [loadForbidden, setLoadForbidden] = useState(false);
   const [diff, setDiff] = useState<string | null>(null);
   const [tab, setTab] = useState<ViewTab>('file');
-  // Локальный проект: поток и картинки markdown отдаёт агент по узкому билету на путь
-  const viaAgent = projectFilesRoute(project) === 'agent';
+  // Локальный проект: с его машины поток и картинки markdown отдаёт агент по узкому билету на
+  // путь; с другого устройства — ретранслятор сервера, и тогда у файла нет ни одного действия
+  // записи. Каждое такое действие рисуется только при своём маршруте (deviceAgentRoutes.ts)
+  const { route: filesRoute, can } = useProjectRoutes(project);
+  const viaAgent = filesRoute === 'agent';
+  const canEdit = can('PUT files/content');
+  const canDelete = can('DELETE files');
+  const canRevert = can('POST files/revert');
+  const canStageHunk = can('POST git/stage-hunk');
+  const canRestoreVersion = can('POST git/commits/{sha}/restore-file');
+  const canToMarkdown = can('POST files/document/to-markdown');
+  const canOfficeEdit = canEdit && can('POST files/office-force-save') && can('POST files/office-discard');
   const media = useMediaStream(project.id, filePath, viaAgent,
     !isHostMode && tab === 'file' && !!(fileContent?.isVideo || fileContent?.isAudio));
   // Картинки markdown у локального проекта: билет на каждый путь приходит асинхронно, до
@@ -979,7 +986,8 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
       else if (a === 'file.extract') void runDocAi('extract');
       else if (a === 'file.tags') void runDocAi('tags');
       else if (a === 'file.convert') void runDocAi('convert');
-      else if (a === 'file.toMarkdown' && !isHostMode) void (async () => {
+      // Результат ложится файлом рядом: с другого устройства записи нет
+      else if (a === 'file.toMarkdown' && !isHostMode && canToMarkdown) void (async () => {
         beginAiBusy();
         try {
           const r = await api.files.toMarkdown(project.id, filePath);
@@ -991,7 +999,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     window.addEventListener('cc-ai-run', onRun);
     return () => window.removeEventListener('cc-ai-run', onRun);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filePath, fileContent]);
+  }, [filePath, fileContent, canToMarkdown]);
 
   const handleClose = async () => {
     // draw.io / Excalidraw в режиме edit — сохраняем текущие правки перед закрытием.
@@ -1285,7 +1293,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const { mainAction, cancelAction } = (() => {
   let mainAction: ToolbarAction | null = null;
   let cancelAction: ToolbarAction | null = null;
-  if (!loading && !loadError) {
+  if (!loading && !loadError && canEdit) {
     if (editing) {
       mainAction = {
         key: 'save', label: 'Сохранить', primary: true, disabled: !online,
@@ -1297,7 +1305,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
         key: 'cancel-edit', label: 'Отмена', title: 'Отменить правки',
         icon: <DiscardIcon />, onClick: cancelEdit,
       };
-    } else if (isOfficeFile && !isVisioFile) {
+    } else if (isOfficeFile && !isVisioFile && canOfficeEdit) {
       if (officeSwitching) {
         mainAction = { key: 'office-wait', label: 'Открываю…', icon: null, disabled: true, loading: true, onClick: () => {} };
       } else if (officeMode === 'view') {
@@ -1466,7 +1474,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
         },
       });
     }
-    if (!loadError && online && !editing && !fileContent?.isBinary && diff) {
+    if (!loadError && online && !editing && !fileContent?.isBinary && diff && canRevert) {
       secondary.push({
         key: 'revert',
         node: (
@@ -1536,7 +1544,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
         item: { key: 'download', icon: <Download size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />, label: 'Скачать', onClick: handleDownload },
       });
     }
-    if (online && !editing && !isHostMode) {
+    if (online && !editing && !isHostMode && canDelete) {
       secondary.push({
         key: 'delete',
         node: (
@@ -2258,7 +2266,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
                 )}
                 <DiffView
                   diff={diff}
-                  staging={gitStagePath ? { busy: stageBusy, onStageHunk: handleStageHunk, onStageLines: handleStageLines } : undefined}
+                  staging={gitStagePath && canStageHunk ? { busy: stageBusy, onStageHunk: handleStageHunk, onStageLines: handleStageLines } : undefined}
                 />
               </div>
             : <div style={{ color: C.textMuted, fontSize: 13, padding: 16 }}>Файл не изменён</div>
@@ -2305,7 +2313,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
                       <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.accent, background: C.accentLight, padding: '1px 6px', borderRadius: 4, flexShrink: 0 }}>{v.shortSha}</span>
                       <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: active ? C.textHeading : C.textPrimary, fontWeight: active ? 600 : 400, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={v.subject}>{v.subject}</span>
                       <span style={{ fontSize: 11, color: C.textMuted, flexShrink: 0 }}>{v.author} · {relTime(v.date)}</span>
-                      {active && (
+                      {active && canRestoreVersion && (
                         <button
                           onClick={e => { e.stopPropagation(); setRestoreConfirmSha(v.sha); }}
                           style={{
@@ -2367,7 +2375,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
 
       {/* Плавающая кнопка редактирования на мобиле (MA4). ЛЕВЫЙ нижний угол — правый занят
           глобальным AiLauncher (⌘/Ctrl+K), чтобы кнопки не накладывались. */}
-      {isMobile && online && !editing && !isHostMode && tab === 'file' && fileContent && !fileContent.isBinary && !fileContent.isImage && !fileContent.isDocument && !fileContent.isVideo && !fileContent.isAudio && !isDrawio && !isExcalidraw && !(isHtml && htmlTab === 'preview') && (
+      {isMobile && online && canEdit && !editing && !isHostMode && tab === 'file' && fileContent && !fileContent.isBinary && !fileContent.isImage && !fileContent.isDocument && !fileContent.isVideo && !fileContent.isAudio && !isDrawio && !isExcalidraw && !(isHtml && htmlTab === 'preview') && (
         <button
           onClick={() => { setEditing(true); setTab('file'); }}
           title="Редактировать"

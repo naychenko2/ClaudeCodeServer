@@ -30,6 +30,43 @@ public static class DeviceAgentApi
     /// <summary>Выдача билета потока, относительно <c>api/projects/{projectId}/</c>; вне контракта файлов сервера.</summary>
     public const string StreamTicketRoute = "agent/stream-ticket";
 
+    /// <summary>
+    /// Порт превью дев-серверов (задача 4.3): отдельный от API, чтобы страница дев-сайта не
+    /// оказалась одного origin с localhost-API агента. Слушается тоже только loopback.
+    /// </summary>
+    public const int DefaultPreviewPort = DefaultPort + 1;
+
+    /// <summary>Хаб агента: терминалы и логи дев-серверов — те же методы, что у серверных хабов.</summary>
+    public const string HubPath = "/hubs/agent";
+
+    /// <summary>
+    /// Выдача билета хаба (относительно <c>api/projects/{projectId}/</c>): WebSocket из браузера
+    /// заголовок не ставит, и подключение несёт в URL узкий билет, а не основной.
+    /// </summary>
+    public const string HubTicketRoute = "agent/hub-ticket";
+
+    /// <summary>Срок билета хаба: только на рукопожатие, переподключение берёт новый.</summary>
+    public static readonly TimeSpan HubTicketLifetime = TimeSpan.FromSeconds(60);
+
+    /// <summary>Выдача билета превью (относительно <c>api/projects/{projectId}/</c>).</summary>
+    public const string PreviewTicketRoute = "agent/preview-ticket";
+
+    /// <summary>Параметр адреса iframe с билетом превью: первая загрузка ставит по нему куку.</summary>
+    public const string PreviewTicketQuery = "previewTicket";
+
+    /// <summary>Кука превью на пути <c>/preview/{projectId}/</c>: её несут подресурсы дев-сайта.</summary>
+    public const string PreviewCookie = "cc_agent_preview";
+
+    /// <summary>
+    /// Срок билета превью. Не привязан к основному: превью — это страница, которую смотрят
+    /// часами, а сам дев-сервер слушает loopback без всякой защиты, и билет не открывает
+    /// ничего сверх того, что любой локальный процесс видит и так.
+    /// </summary>
+    public static readonly TimeSpan PreviewTicketLifetime = TimeSpan.FromHours(8);
+
+    /// <summary>Приём вложения чата локального проекта (относительно <c>api/projects/{projectId}/</c>).</summary>
+    public const string AttachmentsRoute = "agent/attachments";
+
     /// <summary>Метод хаба устройств: интроспекция билета (устройство → сервер).</summary>
     public const string IntrospectMethod = "IntrospectAgentTicket";
 

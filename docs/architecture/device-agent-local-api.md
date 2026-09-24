@@ -1,10 +1,40 @@
 # localhost-API агента устройства
 
 Браузер на машине локального проекта ([ADR-016](../adr/ADR-016-local-projects.md) §5)
-работает с файлами и git проекта напрямую через агента: `http://127.0.0.1:47318`
-(`DeviceAgentApi.DefaultPort`). Маршруты и форма ответов — те же, что у
-`FilesController`/`GitController` сервера (контракт `DeviceAgentRoutes`, сторож
-`DeviceAgentApiContractTests`). Код — `ClaudeHomeServer.DeviceAgent/Composition/LocalApi.cs`.
+работает с файлами, git, терминалом, дев-серверами и навыками проекта напрямую через агента:
+`http://127.0.0.1:47318` (`DeviceAgentApi.DefaultPort`). Маршруты и форма ответов — те же, что
+у `FilesController`/`GitController`/`PreviewController`/`SkillsController` сервера (контракт
+`DeviceAgentRoutes`: `Shared`, `Unsupported`, `AgentOnly`; сторож
+`DeviceAgentApiContractTests`, он же сверяет методы хаба агента с `TerminalHub` и
+`SessionHub.JoinPreviewLog`). Код — `ClaudeHomeServer.DeviceAgent/Composition/LocalApi.cs`.
+
+## Рабочие подсистемы (задача 4.3)
+
+Вторая композиция тех же вертикалей, своей версии нет (`CompositionOnlyGuardTests`):
+
+- **Сервисы проекта** — маршруты раздела живут в вертикали (`ProjectServicesApi`), их
+  зовут и `PreviewController`, и агент. Разбор манифестов и `.claude/launch.json` у агента
+  идёт через `IProjectFiles` (`ProjectFilesTree`): манифест по ссылке наружу не виден,
+  рабочий каталог дев-сервера проверяется по реальному пути.
+- **Превью** — отдельный loopback-порт `DefaultPreviewPort` (47319), чтобы дев-сайт не был
+  одного origin с API. Проброс — `DevServerPreviewForwarder` вертикали (он же у сервера).
+  Вход — билет превью (`agent/preview-ticket`, 8 ч, не привязан к сроку основного: дев-сервер
+  и так слушает loopback без защиты), первая загрузка кладёт его в куку
+  `cc_agent_preview` (`HttpOnly; Secure; SameSite=None; Partitioned`, путь проекта) и срезает
+  из адреса; дев-серверу не уходят ни параметр, ни кука. Host и Origin проверяются, как у API.
+- **Терминал и логи дев-серверов** — хаб `/hubs/agent` (`AgentHub`), методы как у серверных
+  хабов. WebSocket заголовок не ставит, поэтому подключение несёт узкий билет хаба
+  (`agent/hub-ticket`, 60 с, на один проект) в `access_token`/`Authorization`; основной билет
+  там отвергается. Клиенту SignalR нужен `withCredentials: false`: агент не разрешает
+  credentials в CORS (кук у API нет), а по умолчанию клиент зовёт negotiate с ними.
+- **Процессы** терминала и дев-серверов (`ProcessSpec.Track`) запускаются как ход: Unix —
+  своя группа через `setsid`, Windows — Job Object; пишутся в журнал ходов и добиваются при
+  следующем старте агента. Мост псевдотерминала — `pty-bridge` (собирается рядом с агентом
+  компилятором `cc`, без него — bash с перенаправлением) и `ConPtyBridge.exe` на Windows.
+- **Навыки и агенты проекта** читаются и пишутся через `IProjectFiles`; глобальные навыки —
+  из профиля CLI агента (их и увидит ход), не из `~/.claude` машины.
+- **Вложения чата** локального проекта — `agent/attachments` в `.cc-attachments/{guid}/{имя}`
+  с правилом в `.git/info/exclude`; сервер на `api/chats/{id}/files/upload` отвечает отказом G1.
 
 ## Периметр, по порядку
 
@@ -13,7 +43,7 @@
 2. Заголовок `Host` — только loopback с нашим портом (против DNS-rebinding), иначе 421.
 3. `Origin`, если есть, — только origin веб-морды сервера; preflight отвечает согласием
    Private Network Access только ему.
-4. Билет сервера на проект маршрута.
+4. Билет сервера на проект маршрута (у хаба и превью — узкий билет агента, см. выше).
 5. Корень проекта — под корнями, разрешёнными на машине (`ai-home-agent roots add`), по
    реальному пути; затем путь внутри проекта (G7, `AgentPathPolicy`) и сверка открытого
    дескриптора (ниже).

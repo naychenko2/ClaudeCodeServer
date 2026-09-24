@@ -67,35 +67,47 @@ internal sealed class AgentTicketCache(IAgentTicketIntrospector introspector, Ti
 }
 
 /// <summary>
-/// Билеты потока (ревью 4.5, MAJOR #4): только они ездят в URL. Выдаются агентом по
-/// основному билету, привязаны к проекту и одному пути, живут
-/// <see cref="DeviceAgentApi.StreamTicketLifetime"/> и не дольше основного. Многоразовые в
-/// пределах срока: плеер докачивает диапазонами одним и тем же адресом.
+/// Билеты в URL — только они туда и попадают, основной билет никогда (ревью 4.5, MAJOR #4).
+/// Выдаются агентом по основному билету, привязаны к его гранту (владелец, проект) и к одной
+/// «сфере»: поток одного пути (<c>&lt;video src&gt;</c>), подключение к хабу (WebSocket заголовок
+/// не ставит), превью дев-сервера (iframe). Многоразовые в пределах срока: плеер докачивает
+/// диапазонами, клиент SignalR ходит negotiate + connect, превью грузит подресурсы.
 /// </summary>
-internal sealed class AgentStreamTickets(TimeProvider? time = null)
+internal sealed class AgentUrlTickets(TimeProvider? time = null)
 {
+    public const string HubScope = "hub";
+    public const string PreviewScope = "preview";
+
     private const int MaxEntries = 4096;
 
-    private readonly ConcurrentDictionary<string, (AgentTicketIntrospection Grant, string Path, DateTimeOffset Until)> _tickets = new();
+    private readonly ConcurrentDictionary<string, (AgentTicketIntrospection Grant, string Scope, DateTimeOffset Until)> _tickets = new();
     private readonly TimeProvider _time = time ?? TimeProvider.System;
 
-    public (string Ticket, DateTimeOffset ExpiresAt) Issue(AgentTicketIntrospection grant, string path)
+    public static string StreamScope(string path) => "stream:" + path;
+
+    /// <summary>Билет потока одного пути: <see cref="DeviceAgentApi.StreamTicketLifetime"/>, не дольше основного.</summary>
+    public (string Ticket, DateTimeOffset ExpiresAt) IssueStream(AgentTicketIntrospection grant, string path) =>
+        Issue(grant, StreamScope(path), DeviceAgentApi.StreamTicketLifetime);
+
+    /// <param name="capByGrant">Не дольше основного билета. Снимается только у превью —
+    /// почему, см. <see cref="DeviceAgentApi.PreviewTicketLifetime"/>.</param>
+    public (string Ticket, DateTimeOffset ExpiresAt) Issue(AgentTicketIntrospection grant, string scope, TimeSpan lifetime,
+        bool capByGrant = true)
     {
         var now = _time.GetUtcNow();
         if (_tickets.Count >= MaxEntries) Prune(now);
         var ticket = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
             .TrimEnd('=').Replace('+', '-').Replace('/', '_');
-        var until = grant.ExpiresAt < now + DeviceAgentApi.StreamTicketLifetime
-            ? grant.ExpiresAt
-            : now + DeviceAgentApi.StreamTicketLifetime;
-        _tickets[Hash(ticket)] = (grant, path, until);
+        var until = now + lifetime;
+        if (capByGrant && grant.ExpiresAt < until) until = grant.ExpiresAt;
+        _tickets[Hash(ticket)] = (grant, scope, until);
         return (ticket, until);
     }
 
-    /// <summary>Грант основного билета — только для того же пути и в пределах срока.</summary>
-    public AgentTicketIntrospection? Validate(string? ticket, string? path)
+    /// <summary>Грант основного билета — только для той же сферы и в пределах срока.</summary>
+    public AgentTicketIntrospection? Validate(string? ticket, string? scope)
     {
-        if (string.IsNullOrEmpty(ticket) || ticket.Length > 128 || path is null) return null;
+        if (string.IsNullOrEmpty(ticket) || ticket.Length > 128 || scope is null) return null;
         var key = Hash(ticket);
         if (!_tickets.TryGetValue(key, out var entry)) return null;
         if (entry.Until <= _time.GetUtcNow())
@@ -103,7 +115,7 @@ internal sealed class AgentStreamTickets(TimeProvider? time = null)
             _tickets.TryRemove(key, out _);
             return null;
         }
-        return string.Equals(entry.Path, path, StringComparison.Ordinal) ? entry.Grant : null;
+        return string.Equals(entry.Scope, scope, StringComparison.Ordinal) ? entry.Grant : null;
     }
 
     private void Prune(DateTimeOffset now)

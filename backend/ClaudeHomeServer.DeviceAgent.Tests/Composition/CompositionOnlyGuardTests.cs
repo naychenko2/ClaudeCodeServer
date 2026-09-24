@@ -4,6 +4,9 @@ using ClaudeHomeServer.DeviceAgent.Composition;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Files;
 using ClaudeHomeServer.Services.Git;
+using ClaudeHomeServer.Services.ProjectServices;
+using ClaudeHomeServer.Services.Skills;
+using ClaudeHomeServer.Services.Terminal;
 
 namespace ClaudeHomeServer.DeviceAgent.Tests.Composition;
 
@@ -81,6 +84,21 @@ public sealed class CompositionOnlyGuardTests
         agent.GetTypes().Where(t => typeof(IProjectFiles).IsAssignableFrom(t) && !t.IsInterface)
             .Should().Equal(typeof(AgentProjectFiles));
         agent.GetTypes().Should().NotContain(t => t.Name.Contains("FileService") || t.Name.Contains("GitService"));
+    }
+
+    [Fact]
+    public void РабочиеПодсистемы_ИзВертикалей_АНеКопииВАгенте()
+    {
+        // Задача 4.3: терминал, дев-серверы и превью, навыки — те же сборки, что на сервере
+        typeof(TerminalService).Assembly.GetName().Name.Should().Be("ClaudeHomeServer.Terminal");
+        typeof(DevServerService).Assembly.GetName().Name.Should().Be("ClaudeHomeServer.ProjectServices");
+        typeof(ProjectServicesApi).Assembly.Should().BeSameAs(typeof(DevServerService).Assembly);
+        typeof(DevServerPreviewForwarder).Assembly.Should().BeSameAs(typeof(DevServerService).Assembly);
+        typeof(SkillsService).Assembly.GetName().Name.Should().Be("ClaudeHomeServer.Skills");
+
+        typeof(AgentProjectFiles).Assembly.GetTypes().Should().NotContain(t =>
+            t.Name.Contains("TerminalService") || t.Name.Contains("DevServer") || t.Name.Contains("Discovery")
+            || t.Name.Contains("LaunchConfig") || t.Name.Contains("SkillsService") || t.Name.Contains("Forwarder"));
     }
 
     private static bool IsIoType(Type t) =>

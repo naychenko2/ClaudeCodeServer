@@ -157,21 +157,29 @@ public static class AgentProgram
         await using var control = new HubControlConnection(device, log);
 
         // Вторая композиция файловых вертикалей (задача 4.2): та же Files и Git, что на
-        // сервере, за политикой корней машины; localhost-API — только для веб-морды сервера
+        // сервере, за политикой корней машины; localhost-API — только для веб-морды сервера.
+        // Терминалы и дев-серверы (задача 4.3) живут группой/Job Object в журнале ходов:
+        // переживших агента добьёт зачистка при следующем старте (SweepLeftovers выше)
+        var launchers = new AgentLauncherFactory(journal);
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => launchers.KillAll();
         var policy = new AgentPathPolicy(new AgentRootsStore(paths.RootsFile));
-        var git = new GitService(AgentLauncherFactory.Instance, loggers.CreateLogger<GitService>());
+        var git = new GitService(launchers, loggers.CreateLogger<GitService>());
         var projectFiles = new AgentProjectFiles(new FileService(git, logger: loggers.CreateLogger<FileService>()), policy);
         using var watchers = new AgentFileWatchers(control, loggers.CreateLogger<AgentFileWatchers>());
         var tickets = new AgentTicketCache(control);
         var port = int.TryParse(Environment.GetEnvironmentVariable("AI_HOME_AGENT_PORT"), out var p) ? p : DeviceAgentApi.DefaultPort;
+        var previewPort = int.TryParse(Environment.GetEnvironmentVariable("AI_HOME_AGENT_PREVIEW_PORT"), out var pp)
+            ? pp
+            : DeviceAgentApi.DefaultPreviewPort;
         await using var localApi = LocalApi.Build(
             new LocalApiOptions(port, LocalApiOptions.OriginOf(registration.ServerUrl), Version),
-            projectFiles, git, tickets, watchers, loggers);
+            projectFiles, git, tickets, watchers, loggers,
+            workbench: new AgentWorkbench(paths.DataDirectory, paths.CliProfile, previewPort, launchers));
         try
         {
             await localApi.StartAsync(stop.Token);
-            log.LogInformation("Файлы проектов: http://127.0.0.1:{Port}, разрешённых корней — {Count}",
-                port, policy.RootCount);
+            log.LogInformation("Проекты: http://127.0.0.1:{Port}, превью — :{PreviewPort}, разрешённых корней — {Count}",
+                port, previewPort, policy.RootCount);
         }
         // Порт занят — ходы работают и без файлов: агент не падает, веб-морда покажет «агент не найден»
         catch (IOException e)
@@ -192,6 +200,7 @@ public static class AgentProgram
         finally
         {
             executor.KillAll();
+            launchers.KillAll();
             try { await cliLoop; } catch (OperationCanceledException) { }
         }
 

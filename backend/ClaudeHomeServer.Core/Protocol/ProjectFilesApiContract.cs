@@ -28,11 +28,13 @@ public sealed record ProjectApiRoute(string Method, string Template)
 }
 
 /// <summary>
-/// Какие маршруты файлов и git есть у агента устройства. Источник правды для матрицы
-/// возможностей локального проекта и фронта (4.4): действие на маршруте из
-/// <see cref="Unsupported"/> у локального проекта прячется. Каждый маршрут серверных
-/// контроллеров обязан стоять ровно в одном списке — это сторожит контракт-тест: новый
-/// серверный маршрут без решения «есть ли он у агента» красит сборку.
+/// Какие маршруты проекта есть у агента устройства: файлы и git (4.2а), сервисы и превью,
+/// навыки и агенты проекта (4.3). Источник правды для матрицы возможностей локального
+/// проекта и фронта (4.4): действие на маршруте из <see cref="Unsupported"/> у локального
+/// проекта прячется. Каждый маршрут серверных контроллеров Files/Git/Preview/Skills обязан
+/// стоять ровно в одном списке — это сторожит контракт-тест: новый серверный маршрут без
+/// решения «есть ли он у агента» красит сборку. <see cref="AgentOnly"/> — маршруты, которых
+/// у сервера нет по построению (узкие билеты в URL, приём вложения чата на устройстве).
 /// </summary>
 public static class DeviceAgentRoutes
 {
@@ -59,6 +61,33 @@ public static class DeviceAgentRoutes
         new("POST", "git/unstage"),
         new("POST", "git/discard"),
         new("POST", "git/commit"),
+
+        // Сервисы проекта и превью (PreviewController)
+        new("GET", "services"),
+        new("GET", "preview/status"),
+        new("POST", "preview/start"),
+        new("POST", "preview/stop"),
+        new("POST", "preview/stop-external"),
+        new("POST", "preview/active"),
+        new("POST", "preview/active-external"),
+        new("GET", "launch-config"),
+        new("PUT", "launch-config"),
+
+        // Навыки и агенты проекта (SkillsController)
+        new("GET", "skills"),
+        new("GET", "agents/{agentName}"),
+        new("PUT", "agents/{agentName}"),
+        new("POST", "agents"),
+    ];
+
+    public static readonly IReadOnlyList<ProjectApiRoute> AgentOnly =
+    [
+        new("POST", "agent/stream-ticket"),
+        new("POST", "agent/hub-ticket"),
+        new("POST", "agent/preview-ticket"),
+        // Вложение чата локального проекта: у сервера это api/chats/{id}/files/upload, и для
+        // локального проекта он отвечает отказом G1
+        new("POST", "agent/attachments"),
     ];
 
     public static readonly IReadOnlyList<ProjectApiRoute> Unsupported =
@@ -122,5 +151,9 @@ public static class DeviceAgentRoutes
         new("POST", "git/ai/stash-name"),
         new("GET", "git/commit-prompt"),
         new("PUT", "git/commit-prompt"),
+
+        // Внешний доступ к дев-серверу — поддомен сервера, опубликованный наружу: с машины
+        // проекта его нет по смыслу (агент наружу не открывается)
+        new("POST", "preview/external-link"),
     ];
 }

@@ -23,8 +23,18 @@ public class SkillsController(
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
-    private string GetRoot(string projectId) =>
-        (projects.GetById(projectId) ?? throw new KeyNotFoundException($"Проект не найден: {projectId}")).RootPath;
+    // Владельца сверяем ЗДЕСЬ: ProjectManager.GetById проверяет только существование, и без
+    // этой сверки по чужому projectId читались и перезаписывались агенты чужого проекта
+    // (а текст агента — инструкции, которые попадут в ход его владельца). 404, а не 403:
+    // существование чужого проекта не подтверждаем. Форма — как у соседей (KnowledgeController,
+    // DocsController, FilesController).
+    private string GetRoot(string projectId)
+    {
+        var p = projects.GetById(projectId);
+        if (p is null || p.OwnerId != UserId)
+            throw new KeyNotFoundException($"Проект не найден: {projectId}");
+        return p.RootPath;
+    }
 
     // Список скиллов: глобальные + проектные + агенты проекта + workflow-скрипты + плагины
     [HttpGet("api/projects/{projectId}/skills")]

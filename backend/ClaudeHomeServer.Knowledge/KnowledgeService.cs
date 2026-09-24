@@ -380,14 +380,16 @@ public class KnowledgeService : IKnowledgeIndex
     // в одной папке.
     public async Task<string> EnsureDatasetAsync(Project project, string username)
     {
-        var wk = _workspaceStore.GetOrCreate(project.RootPath);
+        // У локального проекта серверного датасета нет вовсе (ADR-016 §4) — отказ до стора
+        var root = Composition.ProjectCapabilityGuard.ServerRoot(project, Composition.ProjectCapabilityArea.ServerContent);
+        var wk = _workspaceStore.GetOrCreate(root);
         if (!string.IsNullOrEmpty(wk.DifyDatasetId))
             return wk.DifyDatasetId;
 
         await _createLock.WaitAsync();
         try
         {
-            wk = _workspaceStore.GetOrCreate(project.RootPath);
+            wk = _workspaceStore.GetOrCreate(root);
             if (!string.IsNullOrEmpty(wk.DifyDatasetId))
                 return wk.DifyDatasetId;
 

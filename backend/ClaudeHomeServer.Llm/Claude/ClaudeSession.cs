@@ -79,6 +79,7 @@ public class ClaudeSession : ILlmSessionAdapter
     // null — чат вне проекта; равен _rootPath — обычный чат без worktree, fallback
     // сводится к no-op в CodeGraphPromptProvider.GetSliceAsync.
     private readonly string? _mainRootPath;
+    private readonly bool _serverContent;
     // Логгер BareMode-диагностики: размер взятой карты, oversized-отступ и т.п.
     // Опциональный — тесты/старые вызовы передают null, лог просто не пишется.
     private readonly ILogger? _log;
@@ -789,6 +790,7 @@ public class ClaudeSession : ILlmSessionAdapter
         Info = info;
         _rootPath = context.RootPath;
         _mainRootPath = context.MainRootPath;
+        _serverContent = context.ServerContent;
         _serverContentRoot = context.ContentRootPath;
         _onMessage = context.OnMessage;
         _mcpConfigPath = mcpConfigPath;
@@ -2753,7 +2755,9 @@ public class ClaudeSession : ILlmSessionAdapter
         }
 
         // MCP-конфиг: создаём каждый ход с актуальным dataset id (мог появиться после создания сессии)
-        var currentWk = _wkStore?.ForRoot(_rootPath);
+        // Локальный проект: датасета по рабочей папке нет (ADR-016 §4) — совпавшая строка
+        // серверной папки не должна подсунуть ходу чужую базу знаний
+        var currentWk = _serverContent ? _wkStore?.ForRoot(_rootPath) : null;
         var currentDatasetId = currentWk?.DatasetId;
         var (turnMcpPath, mcpServerKeys, mcpServerNames) = BuildTurnMcpConfig(currentDatasetId, personaAgents);
         // Секции промпта про MCP-серверы вешаются на ФАКТ доставки сервера в конфиг ЭТОГО хода,
@@ -2892,7 +2896,8 @@ public class ClaudeSession : ILlmSessionAdapter
                     HasNotesMcp: _notesMcp is not null,
                     HasMemoryMcp: _memoryMcp is not null,
                     HasWorkspaceMcp: _workspaceMcp is not null,
-                    WorkspaceSections: _workspaceMcp?.Sections ?? Array.Empty<string>());
+                    WorkspaceSections: _workspaceMcp?.Sections ?? Array.Empty<string>(),
+                    ServerContent: _serverContent);
                 var assembling = new Turn.PromptAssembling(
                     turn: CurrentTurnContext(), session: promptContext, turnText: text);
                 try

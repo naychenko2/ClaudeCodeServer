@@ -16,6 +16,7 @@ using ClaudeHomeServer.Services.Tts;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Controllers;
 
@@ -23,6 +24,7 @@ namespace ClaudeHomeServer.Controllers;
 // Тяжёлая оркестрация (создание/правка/удаление/дефолт, AI-команда, подбор привязок,
 // аватар, автоматизации) живёт в PersonasCrudService — общий код с http-тулсетом персон
 // (ADR-012, фаза 2 волна 2); экшены ниже — тонкие обёртки, читающие UserId и заголовок.
+[ProjectCapability(ProjectCapabilityArea.Platform)]
 [ApiController]
 [Authorize]
 [Route("api/personas")]
@@ -1387,7 +1389,10 @@ public class PersonasController(
                 case "projectpath":
                     {
                         var project = _projects.GetById(target);
-                        if (project is null || project.OwnerId != UserId || !Directory.Exists(project.RootPath))
+                        // Папка локального проекта на устройстве — превью сервер не строит (ADR-016 §4)
+                        if (project is null || project.OwnerId != UserId
+                            || !ProjectCapabilityGuard.Allows(project, ProjectCapabilityArea.FileBound)
+                            || !Directory.Exists(project.RootPath))
                             return null;
                         var dir = string.IsNullOrWhiteSpace(path)
                             ? project.RootPath

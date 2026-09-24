@@ -14,9 +14,11 @@ using ClaudeHomeServer.Services.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Controllers;
 
+[ProjectCapability(ProjectCapabilityArea.Platform, ProjectKey = "id")]
 [ApiController]
 [Authorize]
 [Route("api/projects")]
@@ -325,7 +327,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     // При существующих чатах запрещена — по образцу смены среды исполнения (UsersController):
     // resume-транскрипты и рабочие деревья чатов живут на машине прежней привязки.
     [HttpPut("{id}/device")]
-    public IActionResult SetDevice(string id, [FromBody] SetProjectDeviceRequest req)
+    public async Task<IActionResult> SetDevice(string id, [FromBody] SetProjectDeviceRequest req)
     {
         var p = projects.GetById(id);
         if (p is null || p.OwnerId != UserId) return NotFound();
@@ -334,12 +336,39 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
             return BadRequest(new { error = refusal });
         if (!string.Equals(p.DeviceId, deviceId, StringComparison.Ordinal) && sessions.CountByProject(id) > 0)
             return Conflict(new { error = "Нельзя сменить устройство проекта: у проекта уже есть чаты. Удалите их и повторите." });
-        try
-        {
-            return Ok(WithCount(projects.SetDevice(id, deviceId, req.RootPath)));
-        }
+        var oldKnowledgeRoot = ProjectCapabilities.KnowledgeRoot(p);
+        Project moved;
+        try { moved = projects.SetDevice(id, deviceId, req.RootPath); }
         catch (DirectoryNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
+
+        // Переезд с сервера на устройство: серверная папка больше не проект — её знания
+        // снимаются тем же каскадом, что при удалении, иначе запись и датасет сиротеют
+        // (docs/architecture/knowledge.md). Соседа по папке каскад не трогает сам.
+        if (oldKnowledgeRoot is not null && ProjectCapabilities.KnowledgeRoot(moved) is null)
+        {
+            await DropKnowledgeIfOrphanAsync(oldKnowledgeRoot);
+            // Заметки notes/ серверной папки выпали из источников — вычистить их из индекса
+            notesKb?.QueueSync(UserId);
+        }
+        return Ok(WithCount(moved));
+    }
+
+    // База знаний серверной папки: Dify-датасет + запись WorkspaceKnowledge. Датасет общий для
+    // проектов в одной папке — чистим, только если папка больше никем не используется
+    private async Task DropKnowledgeIfOrphanAsync(string knowledgeRoot)
+    {
+        if (projects.GetByRootPath(knowledgeRoot).Count > 0) return;
+        var wk = wkStore.GetByPath(knowledgeRoot);
+        if (wk is null) return;
+        if (!string.IsNullOrEmpty(wk.DifyDatasetId))
+        {
+            try { await knowledge.DeleteDatasetAsync(wk.DifyDatasetId); }
+            catch { /* датасет мог быть удалён в Dify — снимаем только запись */ }
+            await hub.Clients.Group("user_" + UserId)
+                .SendAsync("message", new KnowledgeChangedMessage("deleted", wk.DifyDatasetId));
+        }
+        wkStore.Delete(knowledgeRoot);
     }
 
     // Тумблер грани десктопного агента в проекте (ADR-008, «Два уровня, которые нельзя
@@ -461,7 +490,9 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         // но их деревья без проекта — мусор на диске и записи в .git/worktrees главной репы.
         // Явный обход обязателен — автокаскада сессий нет. Best-effort + force: судьба
         // незакоммиченных правок решена удалением самого проекта.
-        foreach (var s in sessions.GetByProject(id).Where(s => s.WorktreePath is not null).ToList())
+        // Деревья локального проекта живут на устройстве — серверному git до них не дотянуться
+        foreach (var s in sessions.GetByProject(id).Where(s => s.WorktreePath is not null
+                     && ProjectCapabilityGuard.Allows(p, ProjectCapabilityArea.FileBound)).ToList())
         {
             try { await git.WorktreeRemoveAsync(p.OwnerId, p.RootPath, s.WorktreePath!, force: true); }
             catch { /* дерево могло быть удалено руками — запись подчистит prune */ }
@@ -469,22 +500,8 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
 
         // База знаний проекта: Dify-датасет + запись WorkspaceKnowledge. Датасет общий для
         // проектов в одной папке — чистим, только если RootPath больше никем не используется
-        if (ProjectCapabilities.KnowledgeRoot(p) is { } deletedKnowledgeRoot
-            && projects.GetByRootPath(deletedKnowledgeRoot).Count == 0)
-        {
-            var wk = wkStore.GetByPath(deletedKnowledgeRoot);
-            if (wk is not null)
-            {
-                if (!string.IsNullOrEmpty(wk.DifyDatasetId))
-                {
-                    try { await knowledge.DeleteDatasetAsync(wk.DifyDatasetId); }
-                    catch { /* датасет мог быть удалён в Dify — снимаем только запись */ }
-                    await hub.Clients.Group("user_" + UserId)
-                        .SendAsync("message", new KnowledgeChangedMessage("deleted", wk.DifyDatasetId));
-                }
-                wkStore.Delete(deletedKnowledgeRoot);
-            }
-        }
+        if (ProjectCapabilities.KnowledgeRoot(p) is { } deletedKnowledgeRoot)
+            await DropKnowledgeIfOrphanAsync(deletedKnowledgeRoot);
 
         // Заметки notes/ проекта выпали из alive-set — вычистить их из «{user}:notes» сразу,
         // не дожидаясь следующей несвязанной правки заметок

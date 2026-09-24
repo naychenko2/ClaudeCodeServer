@@ -166,6 +166,51 @@ public sealed partial class WorkspaceToolset(
             ["deploy_rollback"] = "deploy",
         };
 
+    // Инструмент с параметром projectId → группа матрицы ADR-016 §4 (сторож G1: инструмент
+    // с projectId без записи здесь краснеет). Для локального проекта не-платформенные
+    // инструменты отказывают в CallAsync ДО секции — до диска и до Dify.
+    internal static readonly IReadOnlyDictionary<string, ProjectCapabilityArea> ToolCapability =
+        new Dictionary<string, ProjectCapabilityArea>(StringComparer.Ordinal)
+        {
+            ["projects_get"] = ProjectCapabilityArea.Platform,
+            ["projects_update"] = ProjectCapabilityArea.Platform,
+            ["tags_apply"] = ProjectCapabilityArea.Platform,
+            ["tags_remove"] = ProjectCapabilityArea.Platform,
+            ["files_tree"] = ProjectCapabilityArea.FileBound,
+            ["files_read"] = ProjectCapabilityArea.FileBound,
+            ["files_document_read"] = ProjectCapabilityArea.FileBound,
+            ["files_document_summary"] = ProjectCapabilityArea.FileBound,
+            ["files_document_extract"] = ProjectCapabilityArea.FileBound,
+            ["files_to_markdown"] = ProjectCapabilityArea.FileBound,
+            ["files_write"] = ProjectCapabilityArea.FileBound,
+            ["files_search"] = ProjectCapabilityArea.FileBound,
+            ["files_mkdir"] = ProjectCapabilityArea.FileBound,
+            ["files_rename"] = ProjectCapabilityArea.FileBound,
+            ["files_delete"] = ProjectCapabilityArea.FileBound,
+            ["git_status"] = ProjectCapabilityArea.FileBound,
+            ["git_diff"] = ProjectCapabilityArea.FileBound,
+            ["git_log"] = ProjectCapabilityArea.FileBound,
+            ["git_commit"] = ProjectCapabilityArea.FileBound,
+            ["git_stage"] = ProjectCapabilityArea.FileBound,
+            ["knowledge_search"] = ProjectCapabilityArea.ServerContent,
+            ["knowledge_status"] = ProjectCapabilityArea.ServerContent,
+            ["knowledge_index"] = ProjectCapabilityArea.ServerContent,
+            ["chats_list"] = ProjectCapabilityArea.Platform,
+            ["chats_create"] = ProjectCapabilityArea.Platform,
+        };
+
+    // Отказ группы для проекта из аргумента. Чужой/неизвестный проект — null: «не найден»
+    // ответит сама секция, отказ не должен раскрывать чужие проекты
+    private string? CapabilityDenied(string tool, JsonObject arguments, McpToolCallContext context)
+    {
+        if (!ToolCapability.TryGetValue(tool, out var area) || area == ProjectCapabilityArea.Platform) return null;
+        var project = projects.GetById(StringArg(arguments, "projectId"));
+        if (project is null || project.OwnerId != context.OwnerId) return null;
+        return ProjectCapabilityGuard.Refusal(project, area) is { } reason
+            ? ProjectCapabilityGuard.HubMessage(reason)
+            : null;
+    }
+
     /// <summary>Хвост маршрута для конфига хода: единая точка с TryParseRoute.</summary>
     internal static string RouteTail(string sessionId) => sessionId;
 
@@ -278,6 +323,8 @@ public sealed partial class WorkspaceToolset(
             return Deny($"Неизвестный инструмент: {tool}");
         if (!plan.Sections.Contains(section))
             return Deny($"Инструмент {tool} недоступен: секция {section} выключена для этой сессии");
+        if (CapabilityDenied(tool, arguments, context) is { } localProject)
+            return Deny(localProject);
 
         return section switch
         {
@@ -404,7 +451,8 @@ public sealed partial class WorkspaceToolset(
                     if (!string.Equals(oldName, updated.Name, StringComparison.Ordinal))
                     {
                         var username = users.GetById(context.OwnerId)?.Username ?? context.OwnerId;
-                        var datasetId = workspaceStore.GetByPath(updated.RootPath)?.DifyDatasetId;
+                        var datasetId = ProjectCapabilities.KnowledgeRoot(updated) is { } knowledgeRoot
+                            ? workspaceStore.GetByPath(knowledgeRoot)?.DifyDatasetId : null;
                         if (!string.IsNullOrEmpty(datasetId))
                             try { await knowledge.RenameDatasetAsync(datasetId, $"{username}:{updated.Name}"); }
                             catch { /* стухшее имя не критично */ }

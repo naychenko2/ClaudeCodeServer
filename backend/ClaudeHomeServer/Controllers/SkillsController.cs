@@ -5,9 +5,11 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Skills;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Controllers;
 
+[ProjectCapability(ProjectCapabilityArea.FileBound)]
 [ApiController]
 [Authorize]
 public class SkillsController(
@@ -33,7 +35,8 @@ public class SkillsController(
         var p = projects.GetById(projectId);
         if (p is null || p.OwnerId != UserId)
             throw new KeyNotFoundException($"Проект не найден: {projectId}");
-        return p.RootPath;
+        // projectId бывает и в теле запроса — атрибут группы его не видит, отказ здесь
+        return ProjectCapabilityGuard.ServerRoot(p);
     }
 
     // Список скиллов: глобальные + проектные + агенты проекта + workflow-скрипты + плагины

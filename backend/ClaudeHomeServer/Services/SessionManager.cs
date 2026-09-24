@@ -1141,6 +1141,11 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
             () => GetServiceToken(ownerId), UseHttp: HttpEndpointUsable(apiUrl));
     }
 
+    // Работает ли у проекта чата группа «нужен контент на сервере» (ADR-016 §4). Чат вне
+    // проекта — да: его папка серверная
+    private bool ServerContentFor(string? projectId) =>
+        projectId is null || _projects.GetById(projectId) is not { } p || ProjectCapabilities.ServerContentEnabled(p);
+
     // Контекст MCP-сервера графа кода: инструменты codegraph_* доступны только в чате проекта —
     // граф ключуется проектом (в чате вне проекта искать нечего). Тот же сервисный токен
     // владельца, что у tasks/notes; владение проектом дополнительно проверяет CodeGraphController.
@@ -1152,6 +1157,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         string? rootPath, Persona? persona)
     {
         if (ownerId is null || string.IsNullOrEmpty(projectId)) return null;
+        // CodeGraph — группа «контент на сервере»: у локального проекта инструмента нет
+        if (!ServerContentFor(projectId)) return null;
         if (!_bindings.ServerToolEnabled(ownerId, persona, "codegraph")) return null;
         var apiUrl = ResolveTasksApiUrl(ownerId);
         return new CodeGraphMcpContext(apiUrl, () => GetServiceToken(ownerId), projectId, sessionId, rootPath,
@@ -3937,7 +3944,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             // Корень ГЛАВНОЙ ветки проекта — fallback для slice графа кода, пока свой граф
             // worktree-ветки не построен (ADR-003). У не-worktree чата совпадает с rootPath,
             // fallback сводится к no-op в CodeGraphPromptProvider.GetSliceAsync.
-            MainRootPath: projectRoot));
+            MainRootPath: projectRoot,
+            ServerContent: ServerContentFor(session.ProjectId)));
         entry.Process = adapter;
         entry.RunId = runId;
 
@@ -5337,7 +5345,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 HiggsfieldMcp: higgsfieldMcp,
                 // Корень ГЛАВНОЙ ветки проекта — fallback для slice графа кода, пока свой граф
                 // worktree-ветки не построен (ADR-003).
-                MainRootPath: projectRoot);
+                MainRootPath: projectRoot,
+                ServerContent: ProjectCapabilities.ServerContentEnabled(project));
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;

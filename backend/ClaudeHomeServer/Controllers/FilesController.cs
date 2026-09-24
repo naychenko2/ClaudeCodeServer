@@ -6,9 +6,12 @@ using ClaudeHomeServer.Services.Docs;
 using ClaudeHomeServer.Services.Notes;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using ClaudeHomeServer.Services.Composition;
+using FileMutationKind = ClaudeHomeServer.Services.FileMutationKind;
 
 namespace ClaudeHomeServer.Controllers;
 
+[ProjectCapability(ProjectCapabilityArea.FileBound)]
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/files")]

@@ -8,9 +8,11 @@ using ClaudeHomeServer.Services.Knowledge;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Controllers;
 
+[ProjectCapability(ProjectCapabilityArea.ServerContent)]
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/knowledge")]

@@ -5,9 +5,11 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Controllers;
 
+[ProjectCapability(ProjectCapabilityArea.Platform)]
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/sessions")]

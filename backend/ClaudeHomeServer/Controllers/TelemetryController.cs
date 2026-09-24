@@ -66,7 +66,7 @@ public class TelemetryController : ControllerBase
         // порядка кнопка вела бы то в один проект, то в другой — от перезапуска к перезапуску.
         var candidates = _projects.GetAll()
             .Where(p => p.OwnerId is null || p.OwnerId == ownerId)
-            .Where(p => !string.IsNullOrWhiteSpace(p.RootPath))
+            .Where(p => !string.IsNullOrWhiteSpace(p.RootPath) && Models.ProjectCapabilities.FilesOnServer(p))
             .OrderBy(p => p.OwnerId == ownerId ? 0 : 1)
             .ThenBy(p => p.Id, StringComparer.Ordinal);
 

@@ -56,7 +56,10 @@ public sealed record PromptSessionContext(
     bool HasWorkspaceMcp = false,
     // Секции workspace-MCP, реально смонтированные сессией (для PersonaBindings:
     // привязки типов без своей секции пропускаются).
-    IReadOnlyList<string>? WorkspaceSections = null);
+    IReadOnlyList<string>? WorkspaceSections = null,
+    // Группа «нужен контент проекта на сервере» работает (ADR-016 §4); false — локальный
+    // проект, контрибьюторы CodeGraph и досье молчат
+    bool ServerContent = true);
 
 // Контракт контрибьютора секции системного промпта (этап 2 плана «Шина событий хода»,
 // ADR-013). Реестр собирается Filter-событием prompt/assembling; регистрация — через

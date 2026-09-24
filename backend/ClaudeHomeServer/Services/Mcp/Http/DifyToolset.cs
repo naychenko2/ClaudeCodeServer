@@ -384,7 +384,7 @@ public sealed class DifyToolset(
         // Username — из стора (сервисный JWT может не нести claim Name), как у wsp
         username = users.GetById(context.OwnerId)?.Username ?? context.OwnerId;
         if (session.ProjectId is { } pid && projects.GetById(pid) is { OwnerId: var owner } project
-            && owner == context.OwnerId)
+            && owner == context.OwnerId && ProjectCapabilities.ServerContentEnabled(project))
         {
             var root = SessionManager.EffectiveRoot(session, project.RootPath);
             defaultDatasetId = workspaceStore.GetByPath(root)?.DifyDatasetId;

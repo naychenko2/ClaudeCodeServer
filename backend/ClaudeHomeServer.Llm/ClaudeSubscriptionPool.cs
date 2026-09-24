@@ -178,7 +178,26 @@ public class ClaudeSubscriptionPool
     /// спилл на них же; все исчерпаны — из способных по модели берётся тот, чьё окно сбросится
     /// РАНЬШЕ (лучше упереться в лимит на правильном аккаунте, чем гарантированно упасть на
     /// неправильном).
-    public string Pick(string? model = null) => PickCore(model, deterministic: false);
+    public virtual string Pick(string? model = null) => PickCore(model, deterministic: false);
+
+    /// <summary>Выбор аккаунта для локального хода (ADR-016 §2): только setup-token.</summary>
+    /// Те же пороги, тарифы, пометки исчерпания и auth-dead, что у Pick, но набор заранее
+    /// сужен до записей с OAuthToken и без ApiKey. null — подходящего нет: ни PrimaryKey
+    /// (интерактивный логин), ни API-ключ, ни исчерпанный аккаунт «кто воскреснет раньше»
+    /// сюда не попадают — ход без подходящего аккаунта отказывает с причиной. Ротация
+    /// посреди хода — повторный вызов после пометки: он остаётся внутри того же набора.
+    public virtual string? PickSetupToken(string? model = null)
+    {
+        var keys = _subscriptions.Where(s => s.IsSetupToken).Select(s => s.Key).ToList();
+        // Сердцевина выбора на вырожденных данных умеет вернуть PrimaryKey — сюда он не пройдёт.
+        return PickLive(keys, model, deterministic: false) is { } key && keys.Contains(key) ? key : null;
+    }
+
+    /// <summary>Токен setup-token аккаунта строго из конфига; null — ключ не setup-token.</summary>
+    /// Профиль CLI (.credentials.json) не читается никогда: токен оттуда обновляет серверный
+    /// CLI, и в чужих руках он переживёт отзыв доступа.
+    public string? SetupTokenOf(string key) =>
+        _subscriptions.FirstOrDefault(s => s.Key == key && s.IsSetupToken)?.OAuthToken;
 
     /// <summary>Куда фактически ушёл бы новый чат сейчас — цель роутинга для экрана usage.</summary>
     /// Та же логика, что Pick (модель не учитываем), но при равной утилизации берётся первый
@@ -191,20 +210,25 @@ public class ClaudeSubscriptionPool
         if (_subscriptions.Count == 0)
             return PrimaryKey;
 
-        var candidates = AllKeys().Where(k => !IsExhausted(k) && !IsAuthDead(k) && IsPairUsable(k, model)).ToList();
-        if (candidates.Count > 0)
-        {
-            // Приоритет свободным (ниже порога) — крупный, но перегруженный тариф уступает
-            // свободному мелкому; если свободных нет — выбираем среди всех кандидатов.
-            var healthy = candidates.Where(k => !IsOverloaded(k)).ToList();
-            return PickTopTier(healthy.Count > 0 ? healthy : candidates, deterministic);
-        }
+        if (PickLive(AllKeys(), model, deterministic) is { } live)
+            return live;
 
         // Живых кандидатов нет — сверяемся только со способностью ПЛАНА (SupportsModel):
         // временные пометки пар тут fail-open, иначе помеченная пара выбрасывала бы аккаунт
         // из последнего варианта, и Pick возвращал бы заведомо неспособный по тарифу.
         var capable = AllKeys().Where(k => SupportsModel(k, model)).ToList();
         return PickSoonestRecovery(capable.Count > 0 ? capable : AllKeys(), deterministic);
+    }
+
+    // Живой кандидат из набора: не исчерпан, не auth-dead, пара с моделью пригодна. null — живых нет.
+    private string? PickLive(IReadOnlyList<string> keys, string? model, bool deterministic)
+    {
+        var candidates = keys.Where(k => !IsExhausted(k) && !IsAuthDead(k) && IsPairUsable(k, model)).ToList();
+        if (candidates.Count == 0) return null;
+        // Приоритет свободным (ниже порога) — крупный, но перегруженный тариф уступает
+        // свободному мелкому; если свободных нет — выбираем среди всех кандидатов.
+        var healthy = candidates.Where(k => !IsOverloaded(k)).ToList();
+        return PickTopTier(healthy.Count > 0 ? healthy : candidates, deterministic);
     }
 
     // Из набора ключей — высший тариф, при равенстве тарифа — наименее загруженный.

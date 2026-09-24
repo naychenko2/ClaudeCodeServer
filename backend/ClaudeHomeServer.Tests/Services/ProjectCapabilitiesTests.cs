@@ -29,6 +29,8 @@ public class ProjectCapabilitiesTests
         caps.Files.Should().Match<ProjectCapabilityGroup>(g => g.Host == CapabilityHost.Server && g.Available);
         caps.Platform.Should().Match<ProjectCapabilityGroup>(g => g.Host == CapabilityHost.Server && g.Available);
         caps.ServerContent.Should().Match<ProjectCapabilityGroup>(g => g.Host == CapabilityHost.Server && g.Available);
+        caps.Transcript.Should().Match<ProjectCapabilityGroup>(g => g.Host == CapabilityHost.Server && g.Available);
+        ProjectCapabilities.TranscriptOnServer(Server()).Should().BeTrue();
         caps.Exec.Available.Should().BeTrue();
     }
 
@@ -46,6 +48,13 @@ public class ProjectCapabilitiesTests
         caps.ServerContent.Host.Should().Be(CapabilityHost.Off);
         caps.ServerContent.Available.Should().BeFalse();
         caps.ServerContent.Reason.Should().NotBeNullOrEmpty();
+        // Транскрипт CLI на устройстве: механики, читающие его с диска сервера, выключены с причиной
+        caps.Transcript.Host.Should().Be(CapabilityHost.Off);
+        caps.Transcript.Available.Should().BeFalse();
+        caps.Transcript.Reason.Should().Be(ProjectCapabilities.TranscriptOnDeviceReason);
+        caps.Transcript.Features.Should().BeEquivalentTo(
+            [ProjectFeatures.LiveSubagents, ProjectFeatures.WorkflowView, ProjectFeatures.ChatBranch]);
+        ProjectCapabilities.TranscriptOnServer(Local()).Should().BeFalse();
         caps.Exec.Available.Should().BeTrue();
     }
 
@@ -53,7 +62,8 @@ public class ProjectCapabilitiesTests
     public void ГруппыПокрываютВсеКлючиФичРовноОдинРаз()
     {
         var caps = ProjectCapabilities.For(Server(), null);
-        var all = caps.Files.Features.Concat(caps.Platform.Features).Concat(caps.ServerContent.Features).ToList();
+        var all = caps.Files.Features.Concat(caps.Platform.Features).Concat(caps.ServerContent.Features)
+            .Concat(caps.Transcript.Features).ToList();
 
         all.Should().OnlyHaveUniqueItems();
         all.Should().Contain([ProjectFeatures.Files, ProjectFeatures.Git, ProjectFeatures.Terminal,
@@ -153,4 +163,41 @@ public class ProjectCapabilitiesTests
     [Fact]
     public void Привязка_ФлагИExec_ДажеОфлайн_Можно() =>
         ProjectCapabilities.BindRefusal(true, Device(online: false)).Should().BeNull();
+
+    // --- Вердикт для фоновой работы (ADR-016, вариант А плана §5) ---
+
+    [Fact]
+    public void BackgroundGate_СерверныйПроект_Готов()
+    {
+        ProjectCapabilities.BackgroundGate(Server(), device: null).IsReady.Should().BeTrue();
+    }
+
+    [Fact]
+    public void BackgroundGate_ГотовоеУстройство_Готов()
+    {
+        var gate = ProjectCapabilities.BackgroundGate(Local(), Device(caps: DeviceCapabilities.Exec));
+
+        gate.IsReady.Should().BeTrue();
+        gate.DeviceId.Should().Be("dev-1");
+    }
+
+    [Fact]
+    public void BackgroundGate_ОфлайнИлиНеготовыйХарнес_Ждать()
+    {
+        var offline = ProjectCapabilities.BackgroundGate(Local(), Device(online: false, caps: DeviceCapabilities.Exec));
+        offline.MustWait.Should().BeTrue();
+        offline.Reason.Should().Be(ProjectCapabilities.DeviceOfflineReason);
+
+        ProjectCapabilities.BackgroundGate(Local(), Device(harnessReady: false, caps: DeviceCapabilities.Exec))
+            .MustWait.Should().BeTrue();
+    }
+
+    [Fact]
+    public void BackgroundGate_УстройстваНет_ЖдатьНечего()
+    {
+        var gate = ProjectCapabilities.BackgroundGate(Local(), device: null);
+
+        gate.Verdict.Should().Be(ProjectBackgroundVerdict.DeviceGone);
+        gate.MustWait.Should().BeFalse();
+    }
 }

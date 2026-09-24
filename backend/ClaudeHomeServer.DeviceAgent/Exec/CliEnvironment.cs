@@ -51,12 +51,15 @@ internal static class CliEnvironment
 
     /// <param name="inherited">Окружение агента (источник наследуемых значений).</param>
     /// <param name="sidecarTurnUrl">Адрес хода в сайдкаре: <c>http://127.0.0.1:{порт}/t/{ход}</c>.</param>
-    /// <param name="sidecarUrl">Адрес сайдкара как прокси: <c>http://127.0.0.1:{порт}</c>.</param>
+    /// <param name="sidecarProxyUrl">
+    /// Адрес сайдкара как прокси, с учёткой хода: <c>http://turn:{ключ}@127.0.0.1:{порт}</c>
+    /// (<see cref="DeviceEgressRoutes.ProxyUrl"/>) — по ней сайдкар опознаёт ход CONNECT.
+    /// </param>
     public static Dictionary<string, string> Build(
         bool windows,
         IReadOnlyDictionary<string, string> inherited,
         string configDir,
-        string sidecarUrl,
+        string sidecarProxyUrl,
         string sidecarTurnUrl,
         IReadOnlyDictionary<string, string>? fromServer)
     {
@@ -75,7 +78,7 @@ internal static class CliEnvironment
         env["CLAUDE_CONFIG_DIR"] = configDir;
         env["ANTHROPIC_BASE_URL"] = $"{sidecarTurnUrl}/{DeviceSidecarRoutes.Llm}";
         env["ANTHROPIC_AUTH_TOKEN"] = AuthPlaceholder;
-        env["HTTPS_PROXY"] = sidecarUrl;
+        env["HTTPS_PROXY"] = sidecarProxyUrl;
         // Сайдкар сам на loopback: запрос к нему через прокси ушёл бы по кругу
         env["NO_PROXY"] = "127.0.0.1,localhost";
 

@@ -8,12 +8,14 @@ namespace ClaudeHomeServer.Services.Watchdog;
 // ExitCode — запуск СОСТОЯЛСЯ и завершился (0 = дождались, != 0 = «ещё нет»);
 // LaunchFailed — запуск не состоялся вовсе (процесс не стартовал / каталог исчез /
 // песочница недоступна); PollTimeout — запуск состоялся, но не уложился в свой
-// таймаут и был убит (считается «ещё нет», НЕ сбоем запуска).
+// таймаут и был убит (считается «ещё нет», НЕ сбоем запуска). DeviceUnavailable —
+// устройство локального проекта не готово (ADR-016, план §5): опрос пропущен, НЕ сбой запуска.
 public enum PollOutcomeKind
 {
     ExitCode,
     LaunchFailed,
     PollTimeout,
+    DeviceUnavailable,
 }
 
 public sealed record PollOutcome(PollOutcomeKind Kind, int ExitCode = 0,
@@ -24,6 +26,8 @@ public sealed record PollOutcome(PollOutcomeKind Kind, int ExitCode = 0,
         new(PollOutcomeKind.ExitCode, code, output);
     public static PollOutcome LaunchFailed(string reason) =>
         new(PollOutcomeKind.LaunchFailed, Failure: reason);
+    public static PollOutcome DeviceUnavailable(string reason) =>
+        new(PollOutcomeKind.DeviceUnavailable, Failure: reason);
 }
 
 /// <summary>
@@ -32,21 +36,24 @@ public sealed record PollOutcome(PollOutcomeKind Kind, int ExitCode = 0,
 /// </summary>
 public interface IWatchdogCommandRunner
 {
-    Task<PollOutcome> RunAsync(string ownerId, string workDir, string command,
+    Task<PollOutcome> RunAsync(string ownerId, string? projectId, string workDir, string command,
         int timeoutSeconds, CancellationToken ct);
 }
 
-// Реальный раннер: запуск через среду исполнения владельца (IProcessLauncher.ForOwner),
+// Реальный раннер: запуск через среду исполнения проекта сторожа (ILauncherFactory.ForProject:
+// локальный проект — на устройстве), чат вне проектов — среда владельца (ForOwner);
 // per-poll таймаут с kill — по образцу GitService.RunAsync (короткоживущая утилита:
 // Track = false, свой Kill). Оболочка — по платформе ЦЕЛЕВОЙ среды владельца
 // (TargetIsWindows; песочница всегда Linux): cmd.exe /c либо bash -lc (логин-шелл —
 // PATH профильного окружения, без него py/nvm в песочнице не видны).
-public sealed class WatchdogCommandRunner(ILauncherFactory launchers) : IWatchdogCommandRunner
+public sealed class WatchdogCommandRunner(ILauncherFactory launchers, IProjectManager? projects = null)
+    : IWatchdogCommandRunner
 {
-    public async Task<PollOutcome> RunAsync(string ownerId, string workDir, string command,
+    public async Task<PollOutcome> RunAsync(string ownerId, string? projectId, string workDir, string command,
         int timeoutSeconds, CancellationToken ct)
     {
-        var launcher = launchers.ForOwner(ownerId);
+        var project = projectId is null ? null : projects?.GetById(projectId);
+        var launcher = project is not null ? launchers.ForProject(project) : launchers.ForOwner(ownerId);
         var windows = launcher.TargetIsWindows;
         var spec = new ProcessSpec
         {
@@ -70,6 +77,11 @@ public sealed class WatchdogCommandRunner(ILauncherFactory launchers) : IWatchdo
 
         Process proc;
         try { proc = launcher.Start(spec); }
+        // Устройство локального проекта не готово (ушло офлайн между проверкой и запуском) —
+        // пропуск, а не сбой запуска: три таких подряд не должны гасить живой сторож.
+        // Отозванное устройство — наоборот, настоящий сбой: ждать нечего.
+        catch (DeviceExecRefusedException ex) when (ex.Reason != DeviceExecRefusal.UnknownDevice)
+        { return PollOutcome.DeviceUnavailable(ex.Message); }
         catch (Exception ex) { return PollOutcome.LaunchFailed(ex.Message); }
 
         try

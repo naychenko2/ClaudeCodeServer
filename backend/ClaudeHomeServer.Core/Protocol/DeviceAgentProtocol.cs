@@ -17,6 +17,19 @@ public static class DeviceAgentApi
     /// <summary>Срок жизни билета: короткий, фронт перевыпускает его до истечения.</summary>
     public static readonly TimeSpan TicketLifetime = TimeSpan.FromMinutes(5);
 
+    /// <summary>
+    /// Параметр запроса с билетом потока: <c>&lt;video src&gt;</c>/<c>&lt;img src&gt;</c> заголовок не
+    /// ставят, а основной билет в URL не попадает никогда (история, логи, Referer). Билет потока
+    /// выдаёт сам агент по основному билету, на один путь и на <see cref="StreamTicketLifetime"/>.
+    /// </summary>
+    public const string StreamTicketQuery = "streamTicket";
+
+    /// <summary>Срок билета потока: хватает, чтобы плеер начал и докачивал диапазонами.</summary>
+    public static readonly TimeSpan StreamTicketLifetime = TimeSpan.FromSeconds(60);
+
+    /// <summary>Выдача билета потока, относительно <c>api/projects/{projectId}/</c>; вне контракта файлов сервера.</summary>
+    public const string StreamTicketRoute = "agent/stream-ticket";
+
     /// <summary>Метод хаба устройств: интроспекция билета (устройство → сервер).</summary>
     public const string IntrospectMethod = "IntrospectAgentTicket";
 

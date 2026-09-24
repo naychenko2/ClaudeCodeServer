@@ -299,8 +299,13 @@ builder.Services.AddSingleton<IForgejoAccountStore>(sp => sp.GetRequiredService<
 builder.Services.AddSingleton<IUserStore, UserStoreAdapter>();
 // Драйверы среды исполнения процессов пользователей (local / docker-песочница)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.SandboxManager>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.ILauncherFactory,
-    ClaudeHomeServer.Services.Execution.LauncherFactory>();
+// Канал устройств и шлюз хода (ADR-016) — ленивым резолвом: прямая зависимость замыкала граф синглтонов
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.ILauncherFactory>(sp =>
+    new ClaudeHomeServer.Services.Execution.LauncherFactory(
+        sp.GetRequiredService<IUserStore>(),
+        sp.GetRequiredService<ClaudeHomeServer.Services.Execution.SandboxManager>(),
+        () => sp.GetService<ClaudeHomeServer.Services.Execution.IDeviceExecChannel>(),
+        () => sp.GetService<ClaudeHomeServer.Services.Execution.IDeviceTurnGateway>()));
 // Узкий шов пула preview-портов песочницы для вертикали ProjectServices
 // (Этап 5, волна C, шаг 2): DevServerService в отдельной сборке
 // получает только диапазон, всё остальное в SandboxManager остаётся
@@ -762,6 +767,10 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DesktopHandsSess
 // Разрыв соединения — один из поводов погасить сеанс: маршрутизатор канала знает о нём
 // первым, поэтому сеансы подписаны на него наблюдателем, а не наоборот (форвард на тот же
 // синглтон, не второй экземпляр).
+// Второй наблюдатель — диспетчер выхода устройства в онлайн (ADR-016, план §5; регистрация
+// блоком ниже). Стоит ДО службы сеансов: одиночный резолв наблюдателя обязан отдавать её.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDeviceConnectionObserver>(
+    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Composition.DeviceOnlineDispatcher>());
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDeviceConnectionObserver>(
     sp => sp.GetRequiredService<ClaudeHomeServer.Services.Desktop.DesktopHandsSessionService>());
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DesktopAccessGate>();
@@ -778,6 +787,24 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IDeviceExecCha
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.AgentTicketService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.IProjectFilesChangedNotifier,
     ClaudeHomeServer.Services.Composition.ProjectFilesChangedNotifier>();
+
+// Фоновая работа при офлайн-устройстве (ADR-016, вариант А плана §5): гейт готовности
+// устройства проекта для пяти механизмов, диспетчер выхода устройства в онлайн (наблюдатель
+// маршрутизатора + поминутный проход с потолком 24 ч) и его обработчики — исполнитель задач
+// (с под-задачами штаба), очередь чата, автоматизации персон. Сторожа догоняют своим тиком.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IProjectDeviceGate>(
+    sp => new ClaudeHomeServer.Services.Execution.ProjectDeviceGate(
+        () => sp.GetService<ClaudeHomeServer.Services.Execution.IDeviceExecChannel>()));
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.DeviceOnlineDispatcher>();
+builder.Services.AddGatedHostedFrom(builder.Configuration,
+    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Composition.DeviceOnlineDispatcher>());
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.ChatDeviceWaitHandler>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IDeviceOnlineHandler>(
+    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Composition.ChatDeviceWaitHandler>());
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IDeviceOnlineHandler>(
+    sp => sp.GetRequiredService<TaskExecutionService>());
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IDeviceOnlineHandler>(
+    sp => sp.GetRequiredService<PersonaAutomationService>());
 // Сторож сеансов: 15 минут простоя, потолок 2 часа, исчезнувший чат, снятый тумблер грани
 builder.Services.AddGatedHostedService<ClaudeHomeServer.Services.Desktop.DesktopSessionReaper>(builder.Configuration);
 // TaskSchedulerService — DI в подсистеме `TasksSubsystem` (волна 4C, шаг 1).
@@ -2068,7 +2095,11 @@ if (app.Services.GetService<ClaudeHomeServer.Services.Llm.Gateway.UpstreamSelect
 // Шлюз MCP для хода на устройстве (ADR-016): вход по токену хода, а не по JWT.
 // Подсистема llm отключаемая — без неё нет и токенов хода.
 if (app.Services.GetService<ClaudeHomeServer.Services.Llm.Gateway.TurnTokenService>() is not null)
+{
     ClaudeHomeServer.Services.Llm.Gateway.McpGatewayEndpoints.MapMcpGateway(app);
+    // Туннель выхода собственного трафика CLI устройства: тумблер LlmGateway:Egress:Enabled
+    ClaudeHomeServer.Services.Llm.Gateway.EgressGatewayEndpoints.MapEgressGateway(app);
+}
 
 // Потоковый канал исполнения устройства (ADR-016): WebSocket, та же схема токена устройства
 app.MapDeviceExecChannel();

@@ -187,7 +187,8 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
             context.EnqueueBypass, context.OrchestrationDone,
             contextSource: BuildContextSource(claudeSession),
             egress: _egress, events: context.Events,
-            localProbe: _localProbe);
+            localProbe: _localProbe,
+            transcriptOnServer: context.TranscriptOnServer);
         return fallback;
     }
 

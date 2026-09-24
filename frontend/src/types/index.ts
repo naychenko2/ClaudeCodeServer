@@ -64,6 +64,8 @@ export interface ProjectCapabilitiesView {
   files: ProjectCapabilityGroup;
   platform: ProjectCapabilityGroup;
   serverContent: ProjectCapabilityGroup;
+  // Механики, читающие транскрипт CLI с диска сервера; у старого бэка поля нет
+  transcript?: ProjectCapabilityGroup;
   exec: { available: boolean; reason: string | null };
 }
 
@@ -92,6 +94,9 @@ export const ProjectFeature = {
   Dossiers: 'dossiers',
   Docs: 'docs',
   MapHygiene: 'mapHygiene',
+  LiveSubagents: 'liveSubagents',
+  WorkflowView: 'workflowView',
+  ChatBranch: 'chatBranch',
 } as const;
 export type ProjectFeatureKey = (typeof ProjectFeature)[keyof typeof ProjectFeature];
 
@@ -548,6 +553,9 @@ export interface Task {
   // (см. ExecutorStopClassifier). executorStoppedAt != null — карточка ждёт человека.
   executorStoppedAt?: string;
   executorStopReason?: string;
+  /** Исполнитель ждёт устройство локального проекта (ADR-016): с какого момента и почему */
+  deviceWaitSince?: string | null;
+  deviceWaitReason?: string | null;
   // Метка снятия человеком по карточке блокера (DropSubtaskAsync): если стоит —
   // карточка закрыта человеком, правка статуса от агента отвергается. Человек может
   // снять метку, перетащив задачу обратно в Todo/InProgress.
@@ -1200,7 +1208,7 @@ export type ServerMessage = { sessionId: string } & (
   // Полный снимок очереди сообщений занятой сессии (постановка/отмена/доставка).
   // kind: 'user' — сообщение человека из «честной очереди» (рисуется карточкой «Вы» с
   // вложениями и режимом, который вернётся в композер по «Стоп»); 'agent' — chats_send.
-  | { type: 'pending_messages'; items: { id: string; text: string; senderPersonaId?: string; senderOrigin?: string; enqueuedAt: string; senderChatName?: string; kind?: 'user' | 'agent'; attachedPaths?: string[]; mode?: string | null }[] }
+  | { type: 'pending_messages'; items: { id: string; text: string; senderPersonaId?: string; senderOrigin?: string; enqueuedAt: string; senderChatName?: string; kind?: 'user' | 'agent'; attachedPaths?: string[]; mode?: string | null; waitingForDevice?: boolean }[] }
   // «Стоп» вернул прерванное пользовательское сообщение в композер (фича «честная
   // очередь»). text=null — восстанавливать нечего (прерван авто/агентский ход, очередь
   // пуста): композер не трогаем. Иначе — текст, вложения и режим, которые подставятся

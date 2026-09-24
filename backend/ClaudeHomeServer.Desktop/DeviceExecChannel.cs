@@ -122,7 +122,8 @@ public sealed class DeviceExecChannel : IDeviceExecChannel
         var connection = _router.Find(ownerId, deviceId)
             ?? throw new DeviceExecRefusedException(DeviceExecRefusal.Offline, $"{name} офлайн — ход не запущен.");
 
-        var stream = new DeviceExecStream(DesktopProtocol.NewCallId(), ownerId, deviceId, s => _streams.TryRemove(s.ExecId, out _));
+        var stream = new DeviceExecStream(DesktopProtocol.NewCallId(), ownerId, deviceId, s => _streams.TryRemove(s.ExecId, out _),
+            time: _time);
         _streams[stream.ExecId] = stream;
 
         try

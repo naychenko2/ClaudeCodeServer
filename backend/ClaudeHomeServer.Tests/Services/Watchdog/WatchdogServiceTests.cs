@@ -39,6 +39,10 @@ public class WatchdogServiceTests : IDisposable
 
         public string? ResolveWorkDir(WatchdogRecord w) => WorkDir;
         public void RaiseChatDeleted(Session s) => _chatDeleted?.Invoke(s);
+
+        // Фейковый онлайн-статус устройства локального проекта: не null — офлайн с причиной
+        public string? DeviceWait { get; set; }
+        public string? DeviceWaitReason(WatchdogRecord w) => DeviceWait;
     }
 
     // Фейковый раннер: скрипт исходов по вызовам (какие команды, с каким каталогом).
@@ -61,7 +65,7 @@ public class WatchdogServiceTests : IDisposable
         public void Enqueue(Func<Task<PollOutcome>> factory) => _script.Enqueue(_ => factory());
         public void Enqueue(Func<CancellationToken, Task<PollOutcome>> factory) => _script.Enqueue(factory);
 
-        public async Task<PollOutcome> RunAsync(string ownerId, string workDir, string command,
+        public async Task<PollOutcome> RunAsync(string ownerId, string? projectId, string workDir, string command,
             int timeoutSeconds, CancellationToken ct)
         {
             Calls.Add((ownerId, workDir, command));
@@ -421,5 +425,82 @@ public class WatchdogServiceTests : IDisposable
     public void Dispose()
     {
         try { Directory.Delete(_tempDir, recursive: true); } catch { /* временный каталог — мусор не критичен */ }
+    }
+
+    // --- Устройство локального проекта офлайн (ADR-016, вариант А плана §5) ---
+
+    [Fact]
+    public async Task Tick_УстройствоОфлайн_ОпросПропущенСОтметкойИНеСчитаетсяСбоем()
+    {
+        var env = new FakeEnvironment { DeviceWait = "Устройство офлайн" };
+        var (sut, runner, alarm, _) = Setup(env: env);
+        var w = NewWatchdog(env, intervalSec: 30);
+        var start = DateTime.UtcNow;
+
+        // Много тиков подряд: без пропуска три «несостоявшихся запуска» дали бы launch_failed
+        for (var i = 0; i < 10; i++)
+            await sut.TickAsync(start.AddSeconds(i * 40));
+
+        runner.Calls.Should().BeEmpty("опрос локального проекта идёт на устройстве, а оно офлайн");
+        w.Status.Should().Be(WatchdogStatus.Active);
+        w.ConsecutiveLaunchFailures.Should().Be(0);
+        w.DeviceSkippedSince.Should().Be(start, "отметка ставится первым пропуском полосы");
+        w.LastOutput.Should().Contain("пропущен").And.Contain("офлайн");
+        alarm.Delivered.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Tick_УстройствоВернулось_ДогоняетсяОдинОпрос()
+    {
+        var env = new FakeEnvironment { DeviceWait = "Устройство офлайн" };
+        var runner = new FakeRunner();
+        runner.Enqueue(PollOutcome.Exited(1, "pending"));
+        var (sut, _, _, _) = Setup(runner: runner, env: env);
+        var w = NewWatchdog(env, intervalSec: 30);
+        var start = DateTime.UtcNow;
+        for (var i = 0; i < 5; i++) await sut.TickAsync(start.AddSeconds(i * 40));
+
+        env.DeviceWait = null;
+        var online = start.AddSeconds(205);
+        await sut.TickAsync(online);
+        // Следующий тик сразу за онлайном: интервал съеден догоном, второго опроса нет
+        await sut.TickAsync(online.AddSeconds(5));
+
+        runner.Calls.Should().ContainSingle("за офлайн копится не пачка опросов, а один догон");
+        w.LastPollAt.Should().Be(online);
+        w.DeviceSkippedSince.Should().BeNull();
+        w.Status.Should().Be(WatchdogStatus.Active);
+    }
+
+    [Fact]
+    public async Task Tick_УстройствоОфлайн_ПотолокЖизниТикаетКакОбычно()
+    {
+        var env = new FakeEnvironment { DeviceWait = "Устройство офлайн" };
+        var (sut, runner, alarm, _) = Setup(env: env);
+        var w = NewWatchdog(env, intervalSec: 30, ttlMin: 1);
+
+        await sut.TickAsync(w.CreatedAt.AddMinutes(2));
+
+        w.Status.Should().Be(WatchdogStatus.TimedOut);
+        runner.Calls.Should().BeEmpty();
+        alarm.Delivered.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task Tick_КаналОтказалПриЗапуске_ПропускАНеСбойЗапуска()
+    {
+        // Устройство ушло офлайн между проверкой и запуском: раннер вернул отказ канала
+        var runner = new FakeRunner();
+        for (var i = 0; i < 5; i++) runner.Enqueue(PollOutcome.DeviceUnavailable("Устройство «Ноутбук» офлайн — ход не запущен."));
+        var (sut, _, _, env) = Setup(runner: runner);
+        var w = NewWatchdog(env, intervalSec: 30);
+        var start = DateTime.UtcNow;
+
+        for (var i = 0; i < 5; i++) await sut.TickAsync(start.AddSeconds(i * 40));
+
+        w.Status.Should().Be(WatchdogStatus.Active, "три отказа офлайн-устройства подряд не гасят сторож");
+        w.ConsecutiveLaunchFailures.Should().Be(0);
+        w.DeviceSkippedSince.Should().Be(start);
+        w.LastOutput.Should().Contain("офлайн");
     }
 }

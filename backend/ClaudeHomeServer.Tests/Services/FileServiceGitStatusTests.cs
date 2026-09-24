@@ -57,6 +57,7 @@ public class FileServiceGitStatusTests : IAsyncLifetime, IDisposable
     {
         public IProcessLauncher Local => launcher;
         public IProcessLauncher ForOwner(string? ownerId) => launcher;
+        public IProcessLauncher ForProject(ClaudeHomeServer.Models.Project project) => launcher;
     }
 
     private readonly string _repo;

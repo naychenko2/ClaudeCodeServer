@@ -10,12 +10,12 @@ import type { Task } from '../../types';
 // Иконки: Bug — дефект (волна 2 фичи карточек дефектов),
 // Check/SquareStack — контекстное меню «В контекст чата» (фича chat-context).
 // Объединяем импорты обеих веток.
-import { Bug, Check, Repeat, SquareStack } from 'lucide-react';
+import { Bug, Check, Repeat, SquareStack, Unplug } from 'lucide-react';
 import { C, FONT, FS, SHADOW } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { Menu, MenuItem } from '../../components/ui';
 import { useLongPress } from '../../hooks/useLongPress';
-import { projectColor } from '../../lib/tasks';
+import { deviceWaitDuration, executorStopText, isDeviceWaiting, projectColor } from '../../lib/tasks';
 import { useContextButton } from '../chatContext/useContextButton';
 import { AssigneeBadge, DueChip, LabelChip, PriorityFlag, SubtaskCheck } from './bits';
 import { TaskPersonaBadge } from './TaskPersonaBadge';
@@ -28,15 +28,41 @@ interface Props {
   compact?: boolean;
   // Имя проекта — показывается в кросс-проектных контекстах (календарь)
   projectName?: string;
+  // Имя устройства локального проекта — в плашке «ждёт устройство» (ADR-016)
+  deviceName?: string;
 }
 
-export function TaskCard({ task, selected, onClick, compact, projectName }: Props) {
+// Плашка состояния исполнителя: тон warning — «стоит и ждёт», danger — «встал насовсем»
+function StateChip({ tone, title, children }: { tone: 'warning' | 'danger'; title?: string; children: React.ReactNode }) {
+  const warn = tone === 'warning';
+  return (
+    <span
+      title={title}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 4, minWidth: 0, maxWidth: '100%',
+        fontFamily: FONT.sans, fontSize: 11, fontWeight: 600,
+        color: warn ? C.warningText : C.dangerText,
+        background: warn ? C.warningBg : C.dangerBg,
+        border: `1px solid ${warn ? C.warning : C.dangerBorder}`,
+        padding: '2px 7px', borderRadius: 6,
+      }}
+    >
+      <Unplug size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{children}</span>
+    </span>
+  );
+}
+
+export function TaskCard({ task, selected, onClick, compact, projectName, deviceName }: Props) {
   const color = projectColor(task.projectId);
   const done = task.status === 'done';
   const doneSubs = task.subtasks.filter(s => s.isDone).length;
   // Дефект: верхний ряд получает Bug-метку; закрытый внутренним путём — доп. плашку
   const isDefect = task.kind === 'defect';
   const closedWithoutCheck = task.outcome === 'closedWithoutCheck';
+  // Исполнитель ждёт устройство (запуска ещё не было) либо так его и не дождался
+  const deviceWaiting = isDeviceWaiting(task);
+  const deviceWaitExpired = !done && task.executorStopReason === 'device_wait_expired';
 
   // «В контекст чата» (фича chat-context) — контекстным меню карточки: hover-иконку
   // сюда не поставить, правый верхний угол занят значком исполнителя. Меню
@@ -103,9 +129,19 @@ export function TaskCard({ task, selected, onClick, compact, projectName }: Prop
 
         {/* Нижняя строка: чипы + доп. плашка «Закрыт без проверки» для дефектов,
             снятых по Outcome=closedWithoutCheck (без отдельного Verification) */}
-        {(task.personaId || task.dueDate || closedWithoutCheck || (!compact && (task.subtasks.length > 0 || task.labels.length > 0)) || projectName) && (
+        {(task.personaId || task.dueDate || closedWithoutCheck || deviceWaiting || deviceWaitExpired || (!compact && (task.subtasks.length > 0 || task.labels.length > 0)) || projectName) && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
             {task.personaId && <TaskPersonaBadge personaId={task.personaId} />}
+            {deviceWaiting && (
+              <StateChip tone="warning" title={task.deviceWaitReason ?? 'Устройство проекта не в сети — задача запустится, когда оно выйдет на связь'}>
+                {deviceName ? `Ждёт «${deviceName}»` : 'Ждёт устройство'} · {deviceWaitDuration(task.deviceWaitSince!)}
+              </StateChip>
+            )}
+            {deviceWaitExpired && (
+              <StateChip tone="danger" title={executorStopText(task.executorStopReason, deviceName)}>
+                Не запускалась: устройство не в сети
+              </StateChip>
+            )}
             <DueChip task={task} />
             {/* Плашка «Закрыт без проверки»: тот же danger-bg, что у горящего срока,
                 приглушённый (только цвет dangerText на прозрачной подложке), чтобы

@@ -67,6 +67,8 @@ export function TaskBoard({
   );
 
   const projectNameOf = (t: Task) => (t.projectId ? projectsById.get(t.projectId)?.name : undefined);
+  // Имя устройства локального проекта — для плашки «ждёт устройство» на карточке
+  const deviceNameOf = (t: Task) => (t.projectId ? projectsById.get(t.projectId)?.device?.name : undefined);
   const columnById = useMemo(() => new Map(columns.map(c => [c.id, c])), [columns]);
 
   // Фильтрация (клиентская, по стору)
@@ -278,6 +280,7 @@ export function TaskBoard({
                   cellId={`${lane.key}::${col.id}`}
                   cards={cellCards.get(`${lane.key}::${col.id}`) ?? []}
                   projectNameOf={projectNameOf}
+                  deviceNameOf={deviceNameOf}
                   onOpen={onOpenTask}
                   onQuickAdd={grouped ? undefined : title => void createTask(quickAddProjectId, { title, status: col.category, columnId: scope === 'project' ? col.id : undefined })}
                   minEmptyHeight={minEmptyHeight}
@@ -332,7 +335,7 @@ export function TaskBoard({
       <DragOverlay dropAnimation={null}>
         {activeTask ? (
           <div style={{ cursor: 'grabbing', width: 300 }}>
-            <TaskCard task={activeTask} projectName={projectNameOf(activeTask)} onClick={() => {}} />
+            <TaskCard task={activeTask} projectName={projectNameOf(activeTask)} deviceName={deviceNameOf(activeTask)} onClick={() => {}} />
           </div>
         ) : null}
       </DragOverlay>

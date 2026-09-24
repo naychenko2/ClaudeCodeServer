@@ -1,7 +1,9 @@
 using ClaudeHomeServer.Services.Llm.Gateway;
 using ClaudeHomeServer.Services.Turn;
 using FluentAssertions;
+using ClaudeHomeServer.Services.Desktop;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Tests.Services.Gateway;
 
@@ -9,7 +11,7 @@ namespace ClaudeHomeServer.Tests.Services.Gateway;
 /// Токен хода шлюза (ADR-016, сторож G4): живёт ровно столько, сколько ход, — без TTL,
 /// только в памяти, отзывается по turn/completed и явными отзывами.
 /// </summary>
-public class TurnTokenServiceTests
+public sealed class TurnTokenServiceTests : IDisposable
 {
     private sealed class ManualTime(DateTimeOffset now) : TimeProvider
     {
@@ -21,7 +23,16 @@ public class TurnTokenServiceTests
     private readonly TurnEventBus _bus = new();
     private readonly ManualTime _time = new(new DateTimeOffset(2026, 9, 24, 10, 0, 0, TimeSpan.Zero));
 
+    private readonly GatewayTestDevice _device = new();
+    private ServiceProvider? _services;
+
     private TurnTokenService Create() => new(_bus, _time);
+
+    public void Dispose()
+    {
+        _services?.Dispose();
+        _device.Dispose();
+    }
 
     private Task CompleteTurnAsync(string sessionId, string outcome = "success") =>
         _bus.PublishAsync(new TurnCompleted(new TurnContext(sessionId, "owner-1", 1, 0), outcome));
@@ -88,6 +99,40 @@ public class TurnTokenServiceTests
         sut.Validate(t.Grant.TurnId, t.Token).Should().BeNull();
     }
 
+    // ADR-016 §2: токен хода на устройстве живёт, пока жив процесс CLI, — а процесс
+    // обслуживает много ходов
+    [Fact]
+    public async Task ТокенПроцесса_КонецХодаНеОтзывает_ОтзывПоКонцуПроцессаИУдалениюЧата()
+    {
+        var sut = Create();
+        var proc = sut.Issue("owner-1", "chat-1", "device-1", lifetime: TurnTokenLifetime.Process);
+        var turn = sut.Issue("owner-1", "chat-1");
+
+        await CompleteTurnAsync("chat-1");
+        await CompleteTurnAsync("chat-1", "interrupted");
+
+        sut.Validate(proc.Grant.TurnId, proc.Token, "device-1").Should().NotBeNull("второй ход того же процесса");
+        sut.Validate(turn.Grant.TurnId, turn.Token).Should().BeNull("токен хода по-прежнему гаснет с концом хода");
+
+        sut.RevokeTurn(proc.Grant.TurnId).Should().BeTrue("выход, kill или сбой запуска процесса");
+        sut.Validate(proc.Grant.TurnId, proc.Token, "device-1").Should().BeNull();
+
+        var deleted = sut.Issue("owner-1", "chat-2", "device-1", lifetime: TurnTokenLifetime.Process);
+        sut.RevokeSession("chat-2").Should().Be(1);
+        sut.Validate(deleted.Grant.TurnId, deleted.Token, "device-1").Should().BeNull("чат удалён");
+    }
+
+    [Fact]
+    public void ТокенПроцесса_ПотолокЖизниСнимает()
+    {
+        var sut = Create();
+        var t = sut.Issue("owner-1", "chat-1", "device-1", lifetime: TurnTokenLifetime.Process);
+
+        _time.Advance(TurnTokenService.DefaultMaxLifetime);
+
+        sut.Validate(t.Grant.TurnId, t.Token, "device-1").Should().BeNull("страховочный потолок действует и на токен процесса");
+    }
+
     [Fact]
     public void ХодДольшеШестиЧасов_ТокенЖив_ПотолокСнимает()
     {
@@ -141,7 +186,7 @@ public class TurnTokenServiceTests
     public async Task ФильтрШлюза_ДоКонцаХодаПропускает_ПослеОтзыва401()
     {
         var sut = Create();
-        var t = sut.Issue("owner-1", "chat-1");
+        var t = sut.Issue("owner-1", "chat-1", _device.Id);
         var filter = new TurnTokenEndpointFilter(sut);
 
         var (passed, result, http) = await InvokeFilterAsync(filter, t.Grant.TurnId, t.Token);
@@ -161,12 +206,42 @@ public class TurnTokenServiceTests
             .Which.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
     }
 
-    private static async Task<(bool Passed, object? Result, HttpContext Http)> InvokeFilterAsync(
-        TurnTokenEndpointFilter filter, string turnId, string? token)
+    [Fact]
+    public async Task ФильтрШлюза_ЧужоеИНепредъявленноеУстройство_ТокенБезУстройства_401()
     {
-        var http = new DefaultHttpContext();
+        var sut = Create();
+        var filter = new TurnTokenEndpointFilter(sut);
+        var mine = sut.Issue("owner-1", "chat-1", _device.Id);
+        var (_, otherToken) = _device.Register("owner-1", "чужое", new string('a', 64));
+        var unbound = sut.Issue("owner-1", "chat-1");
+
+        (await InvokeFilterAsync(filter, mine.Grant.TurnId, mine.Token)).Passed.Should().BeTrue();
+        (await InvokeFilterAsync(filter, mine.Grant.TurnId, mine.Token, device: (otherToken, new string('a', 64))))
+            .Passed.Should().BeFalse("токен привязан к другому устройству");
+        (await InvokeFilterAsync(filter, mine.Grant.TurnId, mine.Token, device: (null, null)))
+            .Passed.Should().BeFalse("учётка устройства не предъявлена");
+        (await InvokeFilterAsync(filter, unbound.Grant.TurnId, unbound.Token))
+            .Passed.Should().BeFalse("токен без привязки к устройству");
+    }
+
+    // device: null — учётка тестового устройства; (null, null) — без учётки вовсе
+    private async Task<(bool Passed, object? Result, HttpContext Http)> InvokeFilterAsync(
+        TurnTokenEndpointFilter filter, string turnId, string? token, (string? Token, string? Fingerprint)? device = null)
+    {
+        if (_services is null)
+        {
+            var services = new ServiceCollection().AddLogging();
+            _device.AddTo(services);
+            _services = services.BuildServiceProvider();
+        }
+        // Скоуп на запрос, как в ASP.NET: обработчик схемы живёт в скоупе и помнит свой HttpContext
+        await using var scope = _services.CreateAsyncScope();
+        var http = new DefaultHttpContext { RequestServices = scope.ServiceProvider };
         http.Request.RouteValues[TurnTokenEndpointFilter.RouteKey] = turnId;
         if (token is not null) http.Request.Headers[TurnTokenEndpointFilter.HeaderName] = token;
+        var (deviceToken, fingerprint) = device ?? (_device.Token, GatewayTestDevice.Fingerprint);
+        if (deviceToken is not null) http.Request.Headers.Authorization = DesktopDeviceAuthHandler.TokenPrefix + deviceToken;
+        if (fingerprint is not null) http.Request.Headers[TurnTokenEndpointFilter.DeviceFingerprintHeader] = fingerprint;
         var passed = false;
         var result = await filter.InvokeAsync(new DefaultEndpointFilterInvocationContext(http),
             _ => { passed = true; return ValueTask.FromResult<object?>(Results.Ok()); });

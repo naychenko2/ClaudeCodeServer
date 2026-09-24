@@ -15,6 +15,8 @@ internal sealed class AgentLauncherFactory : ILauncherFactory
 
     public IProcessLauncher Local { get; } = new AgentProcessLauncher();
     public IProcessLauncher ForOwner(string? ownerId) => Local;
+    // Агент исполняет всё у себя: проект, пришедший на устройство, живёт здесь же
+    public IProcessLauncher ForProject(Models.Project project) => Local;
 
     private sealed class AgentProcessLauncher : IProcessLauncher
     {

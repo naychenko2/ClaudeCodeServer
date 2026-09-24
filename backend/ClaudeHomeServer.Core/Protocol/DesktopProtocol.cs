@@ -335,6 +335,12 @@ public static class DeviceExecProtocol
     /// <summary>Сколько сервер ждёт подключения устройства к каналу после команды открытия.</summary>
     public static readonly TimeSpan OpenTimeout = TimeSpan.FromSeconds(10);
 
+    /// <summary>
+    /// Потолок простоя исполнения без соединения: столько обе стороны ждут реконнекта,
+    /// дальше исполнение считается оборванным (агент гасит CLI, сервер закрывает поток).
+    /// </summary>
+    public static readonly TimeSpan MaxOutage = TimeSpan.FromMinutes(10);
+
     public static bool IsSupportedClientVersion(int version) =>
         version >= MinClientVersion && version <= Version;
 }

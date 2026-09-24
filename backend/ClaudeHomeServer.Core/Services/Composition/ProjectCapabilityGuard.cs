@@ -18,6 +18,8 @@ public enum ProjectCapabilityArea
     FileBound,
     /// <summary>Нужен контент проекта на сервере (Dify, CodeGraph, досье, Docs, уборка карты).</summary>
     ServerContent,
+    /// <summary>Нужен транскрипт CLI на диске сервера (ответвление чата, архивная копия, ватчеры).</summary>
+    Transcript,
 }
 
 /// <summary>
@@ -51,6 +53,8 @@ public static class ProjectCapabilityGuard
         ProjectCapabilityArea.FileBound when !ProjectCapabilities.FilesOnServer(project) => FilesOnDeviceReason,
         ProjectCapabilityArea.ServerContent when !ProjectCapabilities.ServerContentEnabled(project) =>
             ProjectCapabilities.ServerContentOffReason,
+        ProjectCapabilityArea.Transcript when !ProjectCapabilities.TranscriptOnServer(project) =>
+            ProjectCapabilities.TranscriptOnDeviceReason,
         _ => null,
     };
 

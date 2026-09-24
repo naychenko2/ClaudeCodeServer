@@ -92,6 +92,28 @@ public static class DeviceSidecarRoutes
     public static string TurnUrl(string sidecarUrl, string key) => $"{sidecarUrl}/{TurnSegment}/{key}";
 }
 
+/// <summary>
+/// Выход наружу собственного трафика CLI (ADR-016 §2, задача 2.9): <c>CONNECT host:port</c>,
+/// пришедший в сайдкар по <c>HTTPS_PROXY</c>, едет на сервер WebSocket'ом
+/// <c>/gw/t/{ход}/egress?host=…&amp;port=…</c> с токеном устройства и токеном хода, наружу его
+/// выпускает сервер. Ход в CONNECT сайдкар узнаёт по <c>Proxy-Authorization</c>: CLI шлёт её
+/// из учётки в адресе прокси, паролем в ней стоит ключ хода сайдкара.
+/// </summary>
+public static class DeviceEgressRoutes
+{
+    public const string Segment = "egress";
+    public const string HostQuery = "host";
+    public const string PortQuery = "port";
+    public const string ProxyUser = "turn";
+
+    /// <summary>Путь входа шлюза относительно адреса сервера, без ведущего слэша.</summary>
+    public static string GatewayPath(string turnId) => $"gw/t/{Uri.EscapeDataString(turnId)}/{Segment}";
+
+    /// <summary><c>HTTPS_PROXY</c> хода: адрес сайдкара с учёткой <c>turn:{ключ}</c>.</summary>
+    public static string ProxyUrl(string sidecarUrl, string key) =>
+        sidecarUrl.Replace("://", $"://{ProxyUser}:{key}@", StringComparison.Ordinal);
+}
+
 /// <summary>Подстановки, которые агент разворачивает у себя.</summary>
 public static class DeviceExecPlaceholders
 {

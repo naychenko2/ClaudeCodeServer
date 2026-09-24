@@ -29,18 +29,18 @@ internal sealed class SidecarHost : IAsyncDisposable
 
     public static async Task<SidecarHost> StartAsync(
         TurnGrants grants, IDeviceIdentity device, ILoggerFactory loggers, int port = 0,
-        HttpMessageHandler? gatewayHandler = null, CancellationToken ct = default)
+        HttpMessageHandler? gatewayHandler = null, IEgressTunnelOpener? egress = null, CancellationToken ct = default)
     {
         var builder = WebApplication.CreateSlimBuilder();
         // Свой логгер у сайдкара — агента; журнал запросов Kestrel не нужен (в нём адреса ходов)
         builder.Logging.ClearProviders();
 
         var tunnelLog = loggers.CreateLogger("ClaudeHomeServer.DeviceAgent.Sidecar.ConnectTunnel");
-        var boundPort = 0;
+        egress ??= new ServerEgressTunnelOpener(device);
         builder.WebHost.ConfigureKestrel(k =>
         {
             k.AddServerHeader = false;
-            k.Listen(IPAddress.Loopback, port, listen => listen.Use(ConnectTunnel.Middleware(tunnelLog, () => boundPort)));
+            k.Listen(IPAddress.Loopback, port, listen => listen.Use(ConnectTunnel.Middleware(tunnelLog, grants, egress)));
         });
 
         // К шлюзу — без системного прокси: адрес сервера задан явно, а прокси машины
@@ -56,8 +56,7 @@ internal sealed class SidecarHost : IAsyncDisposable
         await app.StartAsync(ct);
 
         var address = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.First();
-        boundPort = new Uri(address).Port;
-        return new SidecarHost(app, $"http://127.0.0.1:{boundPort}");
+        return new SidecarHost(app, $"http://127.0.0.1:{new Uri(address).Port}");
     }
 
     public async ValueTask DisposeAsync()

@@ -14,6 +14,10 @@ namespace ClaudeHomeServer.Services.Desktop;
 /// уходит заново по порядку. Входящие кадры с номером не больше последнего принятого —
 /// дубли досылки: не отдаются потребителю, но подтверждаются снова. Пропуск номера —
 /// сбой протокола, соединение закрывается.
+///
+/// Ожидание реконнекта ограничено потолком простоя <see cref="DeviceExecProtocol.MaxOutage"/>
+/// (тем же, что у связи агента): устройство не вернулось — поток закрывается. Иначе мост
+/// раннера ждал бы кадров вечно, а токен хода жил бы до своего суточного потолка.
 /// </summary>
 internal sealed class DeviceExecStream : IDeviceExecStream
 {
@@ -25,19 +29,25 @@ internal sealed class DeviceExecStream : IDeviceExecStream
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
     private readonly TaskCompletionSource _attached = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly CancellationTokenSource _closed = new();
+    private readonly TimeSpan _maxOutage;
+    private readonly TimeProvider _time;
 
     private WebSocket? _socket;
     private ulong _lastSent;
     private ulong _lastReceived;
     private long _unackedBytes;
     private TaskCompletionSource _ackSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private ITimer? _outage;
 
-    public DeviceExecStream(string execId, string ownerId, string deviceId, Action<DeviceExecStream> onDisposed)
+    public DeviceExecStream(string execId, string ownerId, string deviceId, Action<DeviceExecStream> onDisposed,
+        TimeSpan? maxOutage = null, TimeProvider? time = null)
     {
         ExecId = execId;
         OwnerId = ownerId;
         DeviceId = deviceId;
         _onDisposed = onDisposed;
+        _maxOutage = maxOutage ?? DeviceExecProtocol.MaxOutage;
+        _time = time ?? TimeProvider.System;
     }
 
     public string ExecId { get; }
@@ -114,6 +124,8 @@ internal sealed class DeviceExecStream : IDeviceExecStream
             {
                 previous = _socket;
                 _socket = socket;
+                _outage?.Dispose();
+                _outage = null;
                 backlog = _unacked.Select(u => u.Frame).ToArray();
                 received = _lastReceived;
             }
@@ -152,6 +164,8 @@ internal sealed class DeviceExecStream : IDeviceExecStream
             socket = _socket;
             _socket = null;
             _ackSignal.TrySetResult();
+            _outage?.Dispose();
+            _outage = null;
         }
 
         _incoming.Writer.TryComplete();
@@ -303,8 +317,22 @@ internal sealed class DeviceExecStream : IDeviceExecStream
     {
         lock (_lock)
         {
-            if (ReferenceEquals(_socket, socket)) _socket = null;
+            if (!ReferenceEquals(_socket, socket)) return;
+            _socket = null;
+            if (_closed.IsCancellationRequested) return;
+            _outage?.Dispose();
+            _outage = _time.CreateTimer(_ => OnOutageElapsed(), null, _maxOutage, Timeout.InfiniteTimeSpan);
         }
+    }
+
+    // Устройство не вернулось за потолок простоя — исполнения больше нет
+    private void OnOutageElapsed()
+    {
+        lock (_lock)
+        {
+            if (_socket is not null || _outage is null) return;
+        }
+        _ = DisposeAsync().AsTask();
     }
 
     private static async Task CloseQuietlyAsync(WebSocket socket, WebSocketCloseStatus status, string description)

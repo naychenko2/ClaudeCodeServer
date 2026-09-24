@@ -23,6 +23,7 @@ public class WatchdogCommandRunnerTests : IDisposable
     {
         public IProcessLauncher Local => LocalProcessRunner.Instance;
         public IProcessLauncher ForOwner(string? ownerId) => LocalProcessRunner.Instance;
+        public IProcessLauncher ForProject(ClaudeHomeServer.Models.Project project) => LocalProcessRunner.Instance;
     }
 
     public WatchdogCommandRunnerTests() => Directory.CreateDirectory(_workDir);
@@ -69,19 +70,19 @@ public class WatchdogCommandRunnerTests : IDisposable
         var probe = Path.Combine(_workDir, "ready.txt");
         var wrapper = $@"powershell -NoProfile -Command ""if (Test-Path '{probe}') {{ exit 0 }} else {{ exit 1 }}""";
 
-        var pending = await runner.RunAsync("owner", _workDir, wrapper, 15, CancellationToken.None);
+        var pending = await runner.RunAsync("owner", null, _workDir, wrapper, 15, CancellationToken.None);
         pending.Kind.Should().Be(PollOutcomeKind.ExitCode);
         pending.ExitCode.Should().Be(1, "файла нет — «ещё нет», никакого эха тела команды");
         pending.Output.Should().BeEmpty();
 
         await File.WriteAllTextAsync(probe, "ok");
-        var done = await runner.RunAsync("owner", _workDir, wrapper, 15, CancellationToken.None);
+        var done = await runner.RunAsync("owner", null, _workDir, wrapper, 15, CancellationToken.None);
         done.Kind.Should().Be(PollOutcomeKind.ExitCode);
         done.ExitCode.Should().Be(0, "файл появился — сторож честно срабатывает");
 
         File.Delete(probe);
         var cmdStyle = $@"if exist ""{probe}"" (exit 0) else (exit 1)";
-        var shell = await runner.RunAsync("owner", _workDir, cmdStyle, 15, CancellationToken.None);
+        var shell = await runner.RunAsync("owner", null, _workDir, cmdStyle, 15, CancellationToken.None);
         shell.ExitCode.Should().Be(1, "cmd-синтаксис (сценарий smoke Киры) не сломан фиксом");
         shell.Output.Should().BeEmpty();
     }

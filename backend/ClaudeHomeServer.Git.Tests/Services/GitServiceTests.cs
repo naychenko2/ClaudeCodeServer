@@ -17,6 +17,7 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
     {
         public IProcessLauncher Local => LocalProcessRunner.Instance;
         public IProcessLauncher ForOwner(string? ownerId) => Local;
+        public IProcessLauncher ForProject(ClaudeHomeServer.Models.Project project) => Local;
     }
 
     private readonly string _repo;

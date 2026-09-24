@@ -22,6 +22,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -38,14 +39,16 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
     private static readonly TimeSpan Wait = TimeSpan.FromSeconds(30);
 
     private const string SetupToken = "sk-ant-oat01-E2E-SETUP-TOKEN-5d1e";
-    private const string DeviceToken = "device-token-E2E-77aa";
     private const string ServiceJwt = "eyJhbGciOiJIUzI1NiJ9.E2E-SERVICE-JWT.sig";
     private const string SessionId = "chat-e2e";
     private const string UpstreamText = "привет от upstream";
 
     private readonly string _root = Path.Combine(Path.GetTempPath(), "device-e2e-" + Guid.NewGuid().ToString("N")[..10]);
     private readonly GatewayTestKit _kit = new(("st1", SetupToken, null));
-    private readonly TurnTokenService _tokens = new(new TurnEventBus());
+    private readonly TurnEventBus _bus = new();
+    private readonly TurnTokenService _tokens;
+    // Настоящая учётка устройства: шлюз пускает токен хода только вместе с ней
+    private readonly GatewayTestDevice _device = new("owner-e2e");
     private readonly FakeUpstream _upstream = new();
     private readonly TurnGrants _grants = new();
 
@@ -79,9 +82,11 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
     {
         public DeviceExecGateway? Issued { get; private set; }
         public TaskCompletionSource<string> Ended { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public List<(string OwnerId, string SessionId, string DeviceId)> Started { get; } = [];
 
         public DeviceTurnGatewayStart StartTurn(string ownerId, string sessionId, string deviceId, string? model)
         {
+            lock (Started) Started.Add((ownerId, sessionId, deviceId));
             var start = inner.StartTurn(ownerId, sessionId, deviceId, model);
             Issued = start.Gateway;
             return start;
@@ -94,12 +99,14 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
         }
     }
 
-    private sealed class Identity : IDeviceIdentity
+    private sealed class Identity(string deviceToken) : IDeviceIdentity
     {
         public Uri ServerUri { get; } = new("http://localhost/");
-        public string DeviceToken => RemoteProcessRunnerDeviceAgentE2ETests.DeviceToken;
-        public string Fingerprint => "fp-e2e";
+        public string DeviceToken => deviceToken;
+        public string Fingerprint => GatewayTestDevice.Fingerprint;
     }
+
+    public RemoteProcessRunnerDeviceAgentE2ETests() => _tokens = new TurnTokenService(_bus);
 
     private sealed class CliSource(string path) : ICliLeaseSource
     {
@@ -123,6 +130,9 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
     {
         public int Opened;
         public readonly List<Task> Runs = [];
+        public readonly List<(ExecLink Link, LoopbackConnector Connector)> Links = [];
+        // Потолок простоя серверного потока: null — боевой
+        public TimeSpan? ServerMaxOutage;
 
         public DeviceExecStatus? GetStatus(string ownerId, string deviceId) =>
             new(deviceId, "e2e", Online: true, "linux", "1.0", "9.9.9-e2e", "9.9.9-e2e",
@@ -132,9 +142,11 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
         {
             Interlocked.Increment(ref Opened);
             var execId = Guid.NewGuid().ToString("N");
-            var stream = new DeviceExecStream(execId, ownerId, deviceId, _ => { });
-            var link = new ExecLink(execId, new LoopbackConnector(stream), TimeSpan.FromSeconds(20));
+            var stream = new DeviceExecStream(execId, ownerId, deviceId, _ => { }, ServerMaxOutage);
+            var connector = new LoopbackConnector(stream);
+            var link = new ExecLink(execId, connector, TimeSpan.FromSeconds(20));
             await link.StartAsync(ct);
+            lock (Links) Links.Add((link, connector));
             lock (Runs) Runs.Add(Task.Run(() => executor.RunAsync(link, CancellationToken.None)));
             return stream;
         }
@@ -142,8 +154,12 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
 
     private sealed class LoopbackConnector(DeviceExecStream stream) : IExecSocketConnector
     {
+        // Устройство потеряло сеть: переподключения не проходят
+        public volatile bool Unreachable;
+
         public async Task<WebSocket> ConnectAsync(string execId, CancellationToken ct)
         {
+            if (Unreachable) throw new IOException("устройство без сети");
             using var listener = new TcpListener(IPAddress.Loopback, 0);
             listener.Start();
             var client = new TcpClient();
@@ -158,7 +174,9 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
     }
 
     // Фейковый CLI: пишет свой env/argv/файлы в рабочий каталог, порождает внука, по строке
-    // stdin «llm» зовёт LLM через ANTHROPIC_BASE_URL, по «mcp» — MCP tasks из конфига хода
+    // stdin «llm» зовёт LLM через ANTHROPIC_BASE_URL, по «mcp» — MCP tasks из конфига хода,
+    // на user-сообщение stream-json (ход ClaudeSession) зовёт LLM и отвечает result'ом; первый
+    // такой ход взводит фоновую задачу — прогон доживает, и следующий ход идёт тем же процессом
     private const string FakeCli = """
         #!/usr/bin/env node
         const fs = require('fs');
@@ -171,12 +189,25 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
         const out = o => process.stdout.write(JSON.stringify(o) + '\n');
         out({ type: 'system', subtype: 'init', pid: process.pid, grandchild: child.pid });
         const mcpUrl = () => JSON.parse(Object.values(files).find(t => t.includes('mcpServers'))).mcpServers.tasks.url;
+        const llm = () => fetch(process.env.ANTHROPIC_BASE_URL + '/v1/messages?beta=true', { method: 'POST',
+          headers: { 'content-type': 'application/json', authorization: 'Bearer ' + process.env.ANTHROPIC_AUTH_TOKEN },
+          body: JSON.stringify({ model: 'claude-opus-5-5', max_tokens: 1 }) });
+        let bgStarted = false;
+        function userMessage(line) { try { return JSON.parse(line).type === 'user'; } catch { return false; } }
         async function handle(line) {
           if (line === 'llm') {
-            const r = await fetch(process.env.ANTHROPIC_BASE_URL + '/v1/messages?beta=true', { method: 'POST',
-              headers: { 'content-type': 'application/json', authorization: 'Bearer ' + process.env.ANTHROPIC_AUTH_TOKEN },
-              body: JSON.stringify({ model: 'claude-opus-5-5', max_tokens: 1 }) });
+            const r = await llm();
             out({ type: 'llm', status: r.status, body: await r.text() });
+          } else if (userMessage(line)) {
+            if (!bgStarted) {
+              bgStarted = true;
+              out({ type: 'system', subtype: 'task_started', task_id: 'bg-1', tool_use_id: 'toolu-bg-1', description: 'bg',
+                subagent_type: 'general-purpose', task_type: 'local_agent', prompt: 'p' });
+            }
+            const r = await llm();
+            const ok = r.status === 200;
+            out({ type: 'result', subtype: ok ? 'success' : 'error_during_execution', is_error: !ok,
+              duration_ms: 1, num_turns: 1, result: ok ? 'ok' : await r.text() });
           } else if (line === 'mcp') {
             const r = await fetch(mcpUrl(), { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
             out({ type: 'mcp', status: r.status, body: await r.text() });
@@ -216,6 +247,7 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
         builder.Services.AddSingleton(_kit.Selector);
         builder.Services.AddSingleton(new SubscriptionLimitRecorder(_kit.Usage, _kit.Pool));
         builder.Services.AddHttpClient(LlmGatewayEndpoints.HttpClientName).ConfigurePrimaryHttpMessageHandler(() => _upstream);
+        _device.AddTo(builder.Services);
         _gatewayApp = builder.Build();
         _gatewayApp.MapLlmGateway();
         _gatewayApp.Map("/gw/t/{" + TurnTokenEndpointFilter.RouteKey + "}/mcp/{**rest}",
@@ -223,7 +255,7 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
             .AddEndpointFilter<TurnTokenEndpointFilter>();
         await _gatewayApp.StartAsync();
 
-        _sidecar = await SidecarHost.StartAsync(_grants, new Identity(), NullLoggerFactory.Instance,
+        _sidecar = await SidecarHost.StartAsync(_grants, new Identity(_device.Token), NullLoggerFactory.Instance,
             gatewayHandler: _gatewayApp.GetTestServer().CreateHandler());
 
         var inherited = new Dictionary<string, string>
@@ -245,7 +277,7 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
 
         _gateway = new SpyTurnGateway(new DeviceTurnGateway(_kit.Selector, _tokens));
         _channel = new AgentChannel(_executor);
-        _runner = new RemoteProcessRunner(_channel, _gateway, "owner-e2e", "dev-e2e");
+        _runner = new RemoteProcessRunner(_channel, _gateway, "owner-e2e", _device.Id);
     }
 
     public async Task DisposeAsync()
@@ -257,6 +289,7 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
         await _sidecar.DisposeAsync();
         await _gatewayApp.DisposeAsync();
         _kit.Dispose();
+        _device.Dispose();
         try { Directory.Delete(_root, recursive: true); } catch { }
     }
 
@@ -338,7 +371,8 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
 
         var issued = _gateway.Issued!;
         issued.Should().NotBeNull();
-        _tokens.Validate(issued.TurnId, issued.Token).Should().NotBeNull("токен выдан настоящим StartTurn");
+        _tokens.Validate(issued.TurnId, issued.Token, _device.Id).Should().NotBeNull("токен выдан настоящим StartTurn");
+        _tokens.Validate(issued.TurnId, issued.Token, "чужое-устройство").Should().BeNull("токен привязан к устройству хода");
 
         // LLM: CLI → сайдкар (/t/{ключ}/llm) → шлюз (/gw/t/{ход}/llm) → upstream с setup-token
         var llm = await AskAsync(p, "llm");
@@ -364,9 +398,7 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
         (await _gateway.Ended.Task.WaitAsync(Wait)).Should().Be(issued.TurnId);
         _tokens.ActiveCount.Should().Be(0);
         using var gw = _gatewayApp.GetTestClient();
-        using var late = new HttpRequestMessage(HttpMethod.Get, $"/gw/t/{issued.TurnId}/llm/api/hello");
-        late.Headers.TryAddWithoutValidation(TurnTokenEndpointFilter.HeaderName, issued.Token);
-        (await gw.SendAsync(late)).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        (await gw.SendAsync(GatewayRequest(issued))).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
 
         // Адресация сайдкара на обеих сторонах одна: env и конфиг MCP смотрят на /t/{ключ}
         var dump = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(_projectDir, "cli-dump.json")))!;
@@ -384,7 +416,7 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
             ["turnToken"] = issued.Token,
             ["setupToken"] = SetupToken,
             ["serviceJwt"] = ServiceJwt,
-            ["deviceToken"] = DeviceToken,
+            ["deviceToken"] = _device.Token,
             ["agentEnvKey"] = "sk-ant-api-AGENT-ENV-SECRET",
         };
         var report = DeviceSecretScanner.Scan(secrets, _deviceDir);
@@ -407,7 +439,7 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
 
         // Kill ищет ход по владельцу и TurnId, а не по объекту процесса
         using var unrelated = Process.Start(new ProcessStartInfo("node", ["-e", "setTimeout(()=>{}, 60000)"]))!;
-        new RemoteProcessRunner(_channel, _gateway, "owner-e2e", "dev-e2e").Kill(unrelated, "turn-e2e-kill");
+        new RemoteProcessRunner(_channel, _gateway, "owner-e2e", _device.Id).Kill(unrelated, "turn-e2e-kill");
 
         await p.WaitForExitAsync().WaitAsync(Wait);
         p.ExitCode.Should().NotBe(0);
@@ -416,8 +448,88 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
 
         var issued = _gateway.Issued!;
         (await _gateway.Ended.Task.WaitAsync(Wait)).Should().Be(issued.TurnId);
-        _tokens.Validate(issued.TurnId, issued.Token).Should().BeNull();
+        _tokens.Validate(issued.TurnId, issued.Token, _device.Id).Should().BeNull();
         _executor.LiveCount.Should().Be(0);
+    }
+
+    // Ретранслятор — дочерний процесс бэкенда; его SIGKILL закрывает loopback-сокет, мост
+    // видит конец и доходит до finally с отзывом токена. Потолок — минута (задача ревью 2.4)
+    [SkippableFact]
+    public async Task KillМинус9Ретранслятора_ТокенОтзываетсяНеПозжеМинуты_ХодНаУстройствеУбит()
+    {
+        Skip.If(OperatingSystem.IsWindows(), "фейковый CLI — скрипт с shebang, дерево процессов — группа Unix");
+
+        using var p = _runner.Start(Spec("turn-e2e-relay-kill9"));
+        var init = await ReadJsonAsync(p);
+        var cliPid = (int)init["pid"]!;
+        var issued = _gateway.Issued!;
+        _tokens.Validate(issued.TurnId, issued.Token, _device.Id).Should().NotBeNull();
+
+        using (var kill = Process.Start("kill", ["-9", p.Id.ToString(System.Globalization.CultureInfo.InvariantCulture)])!)
+            await kill.WaitForExitAsync();
+
+        (await _gateway.Ended.Task.WaitAsync(TimeSpan.FromMinutes(1))).Should().Be(issued.TurnId);
+        _tokens.Validate(issued.TurnId, issued.Token, _device.Id).Should().BeNull();
+        await WaitDeadAsync(cliPid);
+    }
+
+    // Устройство пропало из сети посреди хода и не вернулось, ретранслятор жив и держит свой
+    // сокет. Серверный поток ждёт реконнекта не дольше потолка простоя, затем закрывается:
+    // ретранслятор выходит с ошибкой, токен отзывается
+    [SkippableFact]
+    public async Task ОбрывКаналаУстройстваБезВозврата_РетрансляторЖив_ТокенОтзываетсяПоПотолкуПростоя()
+    {
+        Skip.If(OperatingSystem.IsWindows(), "фейковый CLI — скрипт с shebang, дерево процессов — группа Unix");
+        _channel.ServerMaxOutage = TimeSpan.FromSeconds(2);
+
+        using var p = _runner.Start(Spec("turn-e2e-device-lost"));
+        ((string?)(await ReadJsonAsync(p))["subtype"]).Should().Be("init");
+        var issued = _gateway.Issued!;
+
+        var (link, connector) = _channel.Links.Single();
+        connector.Unreachable = true;
+        link.AbortConnection();
+
+        (await _gateway.Ended.Task.WaitAsync(TimeSpan.FromMinutes(1))).Should().Be(issued.TurnId);
+        _tokens.Validate(issued.TurnId, issued.Token, _device.Id).Should().BeNull();
+        await p.WaitForExitAsync().WaitAsync(Wait);
+        p.ExitCode.Should().NotBe(0, "процесс на устройстве кода выхода не прислал");
+    }
+
+    // Прямой звонок шлюзу с учёткой устройства хода: 401 здесь — только из-за токена
+    private HttpRequestMessage GatewayRequest(DeviceExecGateway issued)
+    {
+        var req = _device.Sign(new HttpRequestMessage(HttpMethod.Get, $"/gw/t/{issued.TurnId}/llm/api/hello"));
+        req.Headers.TryAddWithoutValidation(TurnTokenEndpointFilter.HeaderName, issued.Token);
+        return req;
+    }
+
+    // ADR-016 §2: ClaudeSession держит один процесс CLI на много ходов — токен живёт по
+    // процессу, а не по ходу: конец хода его не гасит, kill процесса — гасит
+    [SkippableFact]
+    public async Task ДваХодаВОдномПроцессе_ОбаПроходятШлюз_ПослеKillПроцесса401()
+    {
+        Skip.If(OperatingSystem.IsWindows(), "фейковый CLI — скрипт с shebang, дерево процессов — группа Unix");
+
+        using var p = _runner.Start(Spec("turn-e2e-two"));
+        ((string?)(await ReadJsonAsync(p))["subtype"]).Should().Be("init");
+        var issued = _gateway.Issued!;
+
+        var first = await AskAsync(p, "llm");
+        ((int?)first["status"]).Should().Be(200, (string?)first["body"]);
+        await _bus.PublishAsync(new TurnCompleted(new TurnContext(SessionId, "owner-e2e", 1, 0), "success"));
+
+        var second = await AskAsync(p, "llm");
+        ((int?)second["status"]).Should().Be(200, "второй ход того же процесса: " + (string?)second["body"]);
+        var mcp = await AskAsync(p, "mcp");
+        ((int?)mcp["status"]).Should().Be(200, (string?)mcp["body"]);
+        lock (_upstream.Calls) _upstream.Calls.Should().HaveCount(2);
+
+        _runner.Kill(p, "turn-e2e-two");
+        await p.WaitForExitAsync().WaitAsync(Wait);
+        (await _gateway.Ended.Task.WaitAsync(Wait)).Should().Be(issued.TurnId);
+        using var gw = _gatewayApp.GetTestClient();
+        (await gw.SendAsync(GatewayRequest(issued))).StatusCode.Should().Be(HttpStatusCode.Unauthorized, "процесс убит");
     }
 
     [Fact]
@@ -434,5 +546,82 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
         _executor.LiveCount.Should().Be(0);
         _tokens.ActiveCount.Should().Be(0);
         Directory.Exists(Path.Combine(_deviceDir, "turns")).Should().BeFalse("каталог хода на устройстве не создан");
+    }
+
+    // ADR-016, задача 3.2а: настоящий ход чата локального проекта. Раннер берёт боевая фабрика
+    // (ForProject), ClaudeSession сам ставит в spec свой чат — по нему шлюз выдаёт токен.
+    // Два хода идут одним процессом CLI на устройстве, и оба проходят шлюз LLM.
+    [SkippableFact]
+    public async Task ХодЧатаЛокальногоПроекта_ЧерезForProject_ТокенСЧатомИУстройством_ДваХодаОднимПроцессом()
+    {
+        Skip.If(OperatingSystem.IsWindows(), "фейковый CLI — скрипт с shebang, дерево процессов — группа Unix");
+
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(_serverTmp, "data", "projects.json"),
+                ["Sandbox:ProjectsRoot"] = Path.Combine(_serverTmp, "sandbox"),
+            }).Build();
+        var factory = new LauncherFactory(
+            new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance),
+            new SandboxManager(config, NullLogger<SandboxManager>.Instance),
+            () => _channel, () => _gateway);
+        var project = new ClaudeHomeServer.Models.Project { OwnerId = "owner-e2e", DeviceId = _device.Id, RootPath = _projectDir };
+        var launcher = factory.ForProject(project);
+        launcher.Should().BeOfType<RemoteProcessRunner>();
+
+        var results = System.Threading.Channels.Channel.CreateUnbounded<ResultMessage>();
+        var errors = new List<ErrorMessage>();
+        var context = new LlmSessionContext(
+            RootPath: _projectDir,
+            OnMessage: m =>
+            {
+                if (m is ResultMessage r) results.Writer.TryWrite(r);
+                if (m is ErrorMessage e) lock (errors) errors.Add(e);
+                return Task.CompletedTask;
+            },
+            RawSystemPrompt: null, BuiltInSystemPrompt: ProjectManager.BuiltInSystemPrompt,
+            PermissionRules: null,
+            TasksMcp: null,
+            Launcher: launcher);
+        var chat = new ClaudeHomeServer.Models.Session { ProjectId = "p-local" };
+        var session = new ClaudeHomeServer.Services.Llm.Claude.ClaudeSession(chat, context);
+        await using (session)
+        {
+            await session.SendMessageAsync("первый ход");
+            var first = await ReadResultAsync(results, errors);
+            first.Subtype.Should().Be("success");
+
+            lock (_gateway.Started)
+                _gateway.Started.Should().Equal([("owner-e2e", chat.Id, _device.Id)], "токен выдан чату и устройству этого проекта");
+            var issued = _gateway.Issued!;
+            _tokens.Validate(issued.TurnId, issued.Token, _device.Id)!.SessionId.Should().Be(chat.Id);
+
+            await session.SendMessageAsync("второй ход");
+            var second = await ReadResultAsync(results, errors);
+            second.Subtype.Should().Be("success", "второй ход того же процесса проходит шлюз тем же токеном");
+
+            _channel.Opened.Should().Be(1, "оба хода — один процесс CLI на устройстве");
+            lock (_gateway.Started) _gateway.Started.Should().HaveCount(1);
+            lock (_upstream.Calls) _upstream.Calls.Should().HaveCount(2);
+            lock (errors) errors.Should().BeEmpty();
+        }
+
+        // Чат закрыт — процесс на устройстве убит, токен отозван
+        (await _gateway.Ended.Task.WaitAsync(Wait)).Should().Be(_gateway.Issued!.TurnId);
+        _tokens.ActiveCount.Should().Be(0);
+    }
+
+    private static async Task<ResultMessage> ReadResultAsync(
+        System.Threading.Channels.Channel<ResultMessage> results, List<ErrorMessage> errors)
+    {
+        try
+        {
+            return await results.Reader.ReadAsync().AsTask().WaitAsync(Wait);
+        }
+        catch (TimeoutException)
+        {
+            lock (errors) throw new TimeoutException("ход не дошёл до result: " + string.Join(" | ", errors.Select(e => e.Text + " " + e.Details)));
+        }
     }
 }

@@ -5,6 +5,9 @@ using System.Text;
 using ClaudeHomeServer.DeviceAgent.Exec;
 using ClaudeHomeServer.DeviceAgent.Sidecar;
 using ClaudeHomeServer.Protocol;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeHomeServer.DeviceAgent.Tests.Sidecar;
@@ -31,12 +34,26 @@ public class SidecarTests
         }
     }
 
-    private static async Task<(SidecarHost Host, TurnGrants Grants, string Key)> StartAsync(FakeGateway gateway, DeviceExecGateway? grant)
+    private static async Task<(SidecarHost Host, TurnGrants Grants, string Key)> StartAsync(
+        FakeGateway gateway, DeviceExecGateway? grant, IEgressTunnelOpener? egress = null, IDeviceIdentity? device = null)
     {
         var grants = new TurnGrants();
         var key = grants.Register(grant);
-        var host = await SidecarHost.StartAsync(grants, TestDevice, NullLoggerFactory.Instance, gatewayHandler: gateway);
+        var host = await SidecarHost.StartAsync(grants, device ?? TestDevice, NullLoggerFactory.Instance,
+            gatewayHandler: gateway, egress: egress ?? new FakeEgress((_, _, _) => Task.FromResult(new EgressTunnel(null, 502))));
         return (host, grants, key);
+    }
+
+    /// <summary>Фейковый сервер выхода: запоминает, что просили, туннель — по функции.</summary>
+    private sealed class FakeEgress(Func<DeviceExecGateway, string, int, Task<EgressTunnel>> open) : IEgressTunnelOpener
+    {
+        public List<(DeviceExecGateway Grant, string Host, int Port)> Calls { get; } = [];
+
+        public Task<EgressTunnel> OpenAsync(DeviceExecGateway grant, string host, int port, CancellationToken ct)
+        {
+            lock (Calls) Calls.Add((grant, host, port));
+            return open(grant, host, port);
+        }
     }
 
     private static HttpClient Client() => new(new SocketsHttpHandler { UseProxy = false });
@@ -172,44 +189,158 @@ public class SidecarTests
         }
     }
 
-    [Fact]
-    public async Task CONNECT_туннелирует_HTTPS_PROXY_насквозь()
+    // Эхо-сервер на loopback: отвечает префиксом, по которому видно, кто на том конце
+    private static (TcpListener Listener, int Port) Echo(string prefix)
     {
-        using var echo = new TcpListener(IPAddress.Loopback, 0);
-        echo.Start();
-        var echoPort = ((IPEndPoint)echo.LocalEndpoint).Port;
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
         _ = Task.Run(async () =>
         {
-            using var c = await echo.AcceptTcpClientAsync();
-            var s = c.GetStream();
-            var buf = new byte[64];
-            var n = await s.ReadAsync(buf);
-            await s.WriteAsync(Encoding.ASCII.GetBytes("pong:" + Encoding.ASCII.GetString(buf, 0, n)));
+            try
+            {
+                using var c = await listener.AcceptTcpClientAsync();
+                var s = c.GetStream();
+                var buf = new byte[64];
+                var n = await s.ReadAsync(buf);
+                await s.WriteAsync(Encoding.ASCII.GetBytes(prefix + Encoding.ASCII.GetString(buf, 0, n)));
+                await Task.Delay(500);
+            }
+            catch (Exception) { /* слушатель остановлен тестом */ }
         });
+        return (listener, ((IPEndPoint)listener.LocalEndpoint).Port);
+    }
 
-        var (host, _, _) = await StartAsync(new FakeGateway(_ => Task.FromResult(new HttpResponseMessage())), null);
-        await using var _h = host;
+    private static string ProxyAuth(string key) =>
+        "Proxy-Authorization: Basic " + Convert.ToBase64String(Encoding.ASCII.GetBytes($"turn:{key}")) + "\r\n";
 
-        using var client = new TcpClient();
+    private static async Task<TcpClient> ConnectAsync(SidecarHost host, string target, string extraHeaders)
+    {
+        var client = new TcpClient();
         await client.ConnectAsync(IPAddress.Loopback, host.Port);
-        var stream = client.GetStream();
-        await stream.WriteAsync(Encoding.ASCII.GetBytes($"CONNECT 127.0.0.1:{echoPort} HTTP/1.1\r\nHost: 127.0.0.1:{echoPort}\r\n\r\n"));
-        var head = await ReadAsync(stream, "\r\n\r\n");
-        head.Should().StartWith("HTTP/1.1 200");
-
-        await stream.WriteAsync("ping"u8.ToArray());
-        (await ReadAsync(stream, "ping")).Should().Be("pong:ping");
+        await client.GetStream().WriteAsync(Encoding.ASCII.GetBytes($"CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n{extraHeaders}\r\n"));
+        return client;
     }
 
     [Fact]
-    public async Task CONNECT_на_сам_сайдкар_отвергается()
+    public async Task CONNECT_едет_через_сервер_а_не_напрямую_с_машины()
     {
-        var (host, _, _) = await StartAsync(new FakeGateway(_ => Task.FromResult(new HttpResponseMessage())), null);
+        // Цель CONNECT слушает на этой же машине — прямой туннель сайдкара дошёл бы до неё
+        var (direct, directPort) = Echo("direct:");
+        var (server, serverPort) = Echo("via-server:");
+        using var _d = direct.Server;
+        using var _s = server.Server;
+        var egress = new FakeEgress(async (_, _, _) =>
+        {
+            var toServer = new TcpClient();
+            await toServer.ConnectAsync(IPAddress.Loopback, serverPort);
+            return new EgressTunnel(toServer.GetStream(), 0);
+        });
+        var (host, _, key) = await StartAsync(new FakeGateway(_ => Task.FromResult(new HttpResponseMessage())),
+            new DeviceExecGateway("gw-turn-5", TurnToken), egress);
         await using var _h = host;
-        using var client = new TcpClient();
-        await client.ConnectAsync(IPAddress.Loopback, host.Port);
-        await client.GetStream().WriteAsync(Encoding.ASCII.GetBytes($"CONNECT 127.0.0.1:{host.Port} HTTP/1.1\r\n\r\n"));
-        (await ReadAsync(client.GetStream(), "\r\n\r\n")).Should().StartWith("HTTP/1.1 403");
+
+        using var client = await ConnectAsync(host, $"127.0.0.1:{directPort}", ProxyAuth(key));
+        var stream = client.GetStream();
+        (await ReadAsync(stream, "\r\n\r\n")).Should().StartWith("HTTP/1.1 200");
+        await stream.WriteAsync("ping"u8.ToArray());
+        (await ReadAsync(stream, "ping")).Should().Be("via-server:ping");
+
+        egress.Calls.Should().ContainSingle().Which.Should().Be((new DeviceExecGateway("gw-turn-5", TurnToken), "127.0.0.1", directPort));
+        direct.Pending().Should().BeFalse("с машины наружу сайдкар сам не ходит");
+    }
+
+    [Fact]
+    public async Task CONNECT_без_учётки_хода_или_с_чужой_отвергается_407_без_похода_на_сервер()
+    {
+        var egress = new FakeEgress((_, _, _) => Task.FromResult(new EgressTunnel(null, 502)));
+        var (host, _, _) = await StartAsync(new FakeGateway(_ => Task.FromResult(new HttpResponseMessage())),
+            new DeviceExecGateway("gw-1", TurnToken), egress);
+        await using var _h = host;
+
+        foreach (var headers in new[] { "", ProxyAuth("0123456789abcdef0123456789abcdef"), "Proxy-Authorization: Bearer x\r\n" })
+        {
+            using var client = await ConnectAsync(host, "example.com:443", headers);
+            (await ReadAsync(client.GetStream(), "\r\n\r\n")).Should().StartWith("HTTP/1.1 407");
+        }
+        egress.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CONNECT_хода_без_выдачи_шлюза_получает_503()
+    {
+        var egress = new FakeEgress((_, _, _) => Task.FromResult(new EgressTunnel(null, 502)));
+        var (host, _, key) = await StartAsync(new FakeGateway(_ => Task.FromResult(new HttpResponseMessage())), null, egress);
+        await using var _h = host;
+
+        using var client = await ConnectAsync(host, "example.com:443", ProxyAuth(key));
+        (await ReadAsync(client.GetStream(), "\r\n\r\n")).Should().StartWith("HTTP/1.1 503");
+        egress.Calls.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(403, "HTTP/1.1 403")]
+    [InlineData(401, "HTTP/1.1 502")]
+    [InlineData(502, "HTTP/1.1 502")]
+    public async Task Отказ_сервера_доходит_до_CLI_кодом_CONNECT(int serverStatus, string expected)
+    {
+        var egress = new FakeEgress((_, _, _) => Task.FromResult(new EgressTunnel(null, serverStatus)));
+        var (host, _, key) = await StartAsync(new FakeGateway(_ => Task.FromResult(new HttpResponseMessage())),
+            new DeviceExecGateway("gw-1", TurnToken), egress);
+        await using var _h = host;
+
+        using var client = await ConnectAsync(host, "example.com:443", ProxyAuth(key));
+        (await ReadAsync(client.GetStream(), "\r\n\r\n")).Should().StartWith(expected);
+    }
+
+    [Fact]
+    public async Task Туннель_уходит_на_сервер_WebSocketом_с_токенами_устройства_и_хода()
+    {
+        var seen = new TaskCompletionSource<HttpRequest>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.WebHost.UseKestrel(k => k.Listen(IPAddress.Loopback, 0));
+        await using var fakeServer = builder.Build();
+        fakeServer.UseWebSockets();
+        fakeServer.Map("/gw/t/{turnId}/egress", async (HttpContext http) =>
+        {
+            seen.TrySetResult(http.Request);
+            if (http.Request.Query["host"] == "denied.example")
+            {
+                http.Response.StatusCode = 403;
+                return;
+            }
+            using var ws = await http.WebSockets.AcceptWebSocketAsync();
+            var buf = new byte[64];
+            var got = await ws.ReceiveAsync(buf, CancellationToken.None);
+            await ws.SendAsync(Encoding.ASCII.GetBytes("ws:" + Encoding.ASCII.GetString(buf, 0, got.Count)),
+                System.Net.WebSockets.WebSocketMessageType.Binary, true, CancellationToken.None);
+            try { await ws.ReceiveAsync(buf, CancellationToken.None); }
+            catch (System.Net.WebSockets.WebSocketException) { /* сайдкар закрыл туннель */ }
+        });
+        await fakeServer.StartAsync();
+        var serverUri = new Uri(fakeServer.Urls.First() + "/");
+
+        var device = new Device(serverUri, DeviceToken, "fp-abc");
+        var (host, _, key) = await StartAsync(new FakeGateway(_ => Task.FromResult(new HttpResponseMessage())),
+            new DeviceExecGateway("gw-turn-7", TurnToken), new ServerEgressTunnelOpener(device), device);
+        await using var _h = host;
+
+        using var client = await ConnectAsync(host, "api.example.com:443", ProxyAuth(key));
+        var stream = client.GetStream();
+        (await ReadAsync(stream, "\r\n\r\n")).Should().StartWith("HTTP/1.1 200");
+        await stream.WriteAsync("ping"u8.ToArray());
+        (await ReadAsync(stream, "ping")).Should().Be("ws:ping");
+
+        var request = await seen.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        request.RouteValues["turnId"].Should().Be("gw-turn-7");
+        request.Query["host"].ToString().Should().Be("api.example.com");
+        request.Query["port"].ToString().Should().Be("443");
+        request.Headers.Authorization.ToString().Should().Be(SidecarProxy.DeviceAuthPrefix + DeviceToken);
+        request.Headers[SidecarProxy.FingerprintHeader].ToString().Should().Be("fp-abc");
+        request.Headers[SidecarProxy.TurnTokenHeader].ToString().Should().Be(TurnToken);
+        request.Headers.ContainsKey("Proxy-Authorization").Should().BeFalse();
+
+        using var denied = await ConnectAsync(host, "denied.example:443", ProxyAuth(key));
+        (await ReadAsync(denied.GetStream(), "\r\n\r\n")).Should().StartWith("HTTP/1.1 403");
     }
 
     [Fact]

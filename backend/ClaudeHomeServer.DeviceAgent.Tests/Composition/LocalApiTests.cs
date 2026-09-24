@@ -22,6 +22,7 @@ public sealed class LocalApiTests : IAsyncLifetime
 
     private readonly AgentSandbox _box = new();
     private readonly FakeIntrospector _introspector = new();
+    private readonly Clock _clock = new();
     private WebApplication _app = null!;
     private int _port;
     private HttpClient _http = null!;
@@ -38,6 +39,12 @@ public sealed class LocalApiTests : IAsyncLifetime
         }
     }
 
+    private sealed class Clock : TimeProvider
+    {
+        public TimeSpan Shift;
+        public override DateTimeOffset GetUtcNow() => DateTimeOffset.UtcNow + Shift;
+    }
+
     public async Task InitializeAsync()
     {
         _introspector.Grant = new AgentTicketIntrospection("owner-1", "p1", _box.Project, DateTimeOffset.UtcNow.AddMinutes(5));
@@ -45,7 +52,8 @@ public sealed class LocalApiTests : IAsyncLifetime
         var git = new GitService(AgentLauncherFactory.Instance);
         var files = new AgentProjectFiles(new FileService(git), _box.Policy(new AgentLimits { MaxReadBytes = 1024 }));
         _app = LocalApi.Build(new LocalApiOptions(_port, ServerOrigin, "test"), files, git,
-            new AgentTicketCache(_introspector), watchers: null, NullLoggerFactory.Instance);
+            new AgentTicketCache(_introspector), watchers: null, NullLoggerFactory.Instance,
+            streamTickets: new AgentStreamTickets(_clock));
         await _app.StartAsync();
         _http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{_port}") };
     }
@@ -165,20 +173,88 @@ public sealed class LocalApiTests : IAsyncLifetime
         (await leak.Content.ReadAsStringAsync()).Should().NotContain("секрет");
     }
 
+    private async Task<HttpResponseMessage> IssueStreamTicket(string path)
+    {
+        var r = new HttpRequestMessage(HttpMethod.Post, "/api/projects/p1/" + DeviceAgentApi.StreamTicketRoute)
+        {
+            Content = JsonContent.Create(new { path }),
+        };
+        r.Headers.Add(DeviceAgentApi.TicketHeader, Ticket);
+        r.Headers.Add("Origin", ServerOrigin);
+        return await _http.SendAsync(r);
+    }
+
+    private async Task<string> StreamTicket(string path)
+    {
+        var response = await IssueStreamTicket(path);
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        return (await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>()).GetProperty("streamTicket").GetString()!;
+    }
+
     [Fact]
-    public async Task ОтдачаПотоком_СДиапазоном_БилетВЗапросеТолькоДляПотока()
+    public async Task ОтдачаПотоком_ПоУзкомуБилету_СДиапазоном()
     {
         File.WriteAllBytes(Path.Combine(_box.Project, "clip.mp4"), Enumerable.Range(0, 100_000).Select(i => (byte)i).ToArray());
+        var streamTicket = await StreamTicket("clip.mp4");
 
-        var ranged = Get($"/api/projects/p1/files/stream?path=clip.mp4&ticket={Ticket}", ticket: null);
+        var ranged = Get($"/api/projects/p1/files/stream?path=clip.mp4&{DeviceAgentApi.StreamTicketQuery}={streamTicket}", ticket: null);
         ranged.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(10, 19);
         var response = await _http.SendAsync(ranged);
-        var listByQuery = await _http.SendAsync(Get($"/api/projects/p1/files?ticket={Ticket}", ticket: null));
 
         response.StatusCode.Should().Be(HttpStatusCode.PartialContent);
         response.Content.Headers.ContentType!.MediaType.Should().Be("video/mp4");
         (await response.Content.ReadAsByteArrayAsync()).Should().Equal(Enumerable.Range(10, 10).Select(i => (byte)i));
-        listByQuery.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task ОсновнойБилетВЗапросе_Отвергается_ДажеДляПотока()
+    {
+        File.WriteAllBytes(Path.Combine(_box.Project, "clip.mp4"), new byte[16]);
+
+        var stream = await _http.SendAsync(Get($"/api/projects/p1/files/stream?path=clip.mp4&ticket={Ticket}", ticket: null));
+        var streamAsNarrow = await _http.SendAsync(Get($"/api/projects/p1/files/stream?path=clip.mp4&{DeviceAgentApi.StreamTicketQuery}={Ticket}", ticket: null));
+        var list = await _http.SendAsync(Get($"/api/projects/p1/files?ticket={Ticket}", ticket: null));
+
+        stream.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        streamAsNarrow.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        list.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task УзкийБилет_ТолькоСвойПуть_ТолькоПоток_НеДольше60Секунд()
+    {
+        File.WriteAllText(Path.Combine(_box.Project, "b.txt"), "другой");
+        var streamTicket = await StreamTicket("a.txt");
+        string Stream(string path) => $"/api/projects/p1/files/stream?path={path}&{DeviceAgentApi.StreamTicketQuery}={streamTicket}";
+
+        var own = await _http.SendAsync(Get(Stream("a.txt"), ticket: null));
+        var otherPath = await _http.SendAsync(Get(Stream("b.txt"), ticket: null));
+        var asHeader = await _http.SendAsync(Get("/api/projects/p1/files/content?path=a.txt", ticket: streamTicket));
+        var asQueryOnContent = await _http.SendAsync(Get(
+            $"/api/projects/p1/files/content?path=a.txt&{DeviceAgentApi.StreamTicketQuery}={streamTicket}", ticket: null));
+        _clock.Shift = DeviceAgentApi.StreamTicketLifetime + TimeSpan.FromSeconds(1);
+        var expired = await _http.SendAsync(Get(Stream("a.txt"), ticket: null));
+
+        own.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await own.Content.ReadAsStringAsync()).Should().Be("привет");
+        otherPath.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        asHeader.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        asQueryOnContent.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        expired.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        DeviceAgentApi.StreamTicketLifetime.Should().BeLessThanOrEqualTo(TimeSpan.FromSeconds(60));
+    }
+
+    [SkippableFact]
+    public async Task УзкийБилет_НаПутьНаружу_НеВыдаётся_БезОсновногоБилета_401()
+    {
+        _box.Link(Path.Combine(_box.Project, "leak.txt"), Path.Combine(_box.Outside, "secret.txt"), directory: false);
+
+        (await IssueStreamTicket("leak.txt")).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        var anonymous = new HttpRequestMessage(HttpMethod.Post, "/api/projects/p1/" + DeviceAgentApi.StreamTicketRoute)
+        {
+            Content = JsonContent.Create(new { path = "a.txt" }),
+        };
+        (await _http.SendAsync(anonymous)).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 
     [Fact]

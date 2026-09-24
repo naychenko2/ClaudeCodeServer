@@ -441,6 +441,11 @@ public class Session
     public bool DesktopChat { get; set; }
     // Цикл «до готово» (флаг work-loop): не null — ход автопродолжается до маркера завершения
     public SessionWorkLoop? WorkLoop { get; set; }
+    // Сообщения, ждущие устройство локального проекта (ADR-016, вариант А плана §5): фоновые
+    // и отложенные доставки, пришедшие, когда устройство офлайн. Живут на сессии, а не в
+    // памятной очереди Pending — рестарт их не стирает. Уходят в работу при выходе устройства
+    // в онлайн; старше 24 ч — снимаются с уведомлением. null/пусто — ждущих нет.
+    public List<DeviceWaitMessage>? DeviceWaitQueue { get; set; }
     // Режим «Командная реализация»: не null — чат работает как
     // штаб фичи (план, задачи на исполнителей, волны, проверка).
     public SessionTeamImplement? TeamImplement { get; set; }
@@ -535,4 +540,30 @@ public class Session
     // ArchivedAt) возвращает чат сама. Исключения «не-активности» (значки тем, переименование,
     // правка name/model/effort/tags) UpdatedAt у архивного чата не двигают — см. SessionManager.
     public bool IsArchived => ArchivedAt is DateTime archived && UpdatedAt <= archived;
+}
+
+/// <summary>
+/// Сообщение, ждущее устройство локального проекта (<see cref="Session.DeviceWaitQueue"/>).
+/// Route — каким путём его доставить после выхода устройства в онлайн: <c>auto</c> — серверный
+/// ход (исполнитель, доклад, цикл), <c>agent</c> — сообщение агента или будильника (chats_send),
+/// <c>user</c> — пользовательское из серверной очереди.
+/// </summary>
+public sealed record DeviceWaitMessage(
+    string Id,
+    string Text,
+    string Route,
+    DateTime QueuedAt,
+    string? SenderPersonaId = null,
+    string? SenderOrigin = null,
+    int AgentDepth = 0,
+    bool SystemDirective = false,
+    bool SuppressTasksExecute = false,
+    string? SenderChatName = null,
+    string? StaffNote = null,
+    IReadOnlyList<string>? AttachedPaths = null,
+    string? Mode = null)
+{
+    public const string RouteAuto = "auto";
+    public const string RouteAgent = "agent";
+    public const string RouteUser = "user";
 }

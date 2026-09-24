@@ -10,6 +10,7 @@ import { agentDotColor } from './AgentSelector';
 import { SkillSearchDialog } from './SkillSearchDialog';
 import { SkillGenerateDialog } from './SkillGenerateDialog';
 import { ConfirmDialog } from './ui';
+import { DeviceAgentGate } from './DeviceAgentGate';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { showToast } from '../lib/toast';
 
@@ -33,7 +34,15 @@ const skillHeadBtn: CSSProperties = {
   cursor: 'pointer', fontFamily: FONT.sans, transition: 'border-color 0.15s, color 0.15s',
 };
 
-export function SkillsPanel({ projectId, project, onChanged }: Props) {
+// Навыки локального проекта читаются у агента устройства на этой машине: пока он не ответил,
+// DeviceAgentGate показывает состояние связи. Недоступную группу объясняет само тело панели
+export function SkillsPanel(props: Props) {
+  const skillsGate = useProjectFeature(props.project, ProjectFeature.Skills);
+  if (!props.project || !skillsGate) return <SkillsPanelBody {...props} />;
+  return <DeviceAgentGate project={props.project}><SkillsPanelBody {...props} /></DeviceAgentGate>;
+}
+
+function SkillsPanelBody({ projectId, project, onChanged }: Props) {
   // Гейт по матрице (ADR-016 §3.4): скиллы лежат в .claude/skills проекта; у
   // локального с офлайн-устройством чтение недоступно. Все хуки ВЫШЕ раннего return
   const skillsGate = useProjectFeature(project, ProjectFeature.Skills);

@@ -1,6 +1,6 @@
 import type { Me, Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, ModelUnavailableMark, FalAccountResponse, GlifAccountResponse, YandexAccountResponse, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, TtsVoicesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, DossierEntry, DesktopDevice, DesktopPairingCode, DesktopHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, QuickPhrase, VideoProviderInfo, VideoChannelsResponse, VideoFeedResponse, PlanMap, VideoFavoritesResponse, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult } from '../types';
 import { readStoredToken, request } from './offline';
-import { assertServerRoute, noteProject, noteProjects, projectRequest, projectRouteOf } from './deviceAgent';
+import { assertServerRoute, noteProject, noteProjects, projectRequest, projectRouteOf, uploadAgentAttachment } from './deviceAgent';
 
 // Личные/админские слоты моделей: сильная/средняя/слабая.
 // null = наследовать глобальный слот, string = override, "" = сброс к наследованию.
@@ -827,30 +827,31 @@ export const api = {
     // поэтому таймаут запроса поднят до 3 минут (дефолтный 30с перехватил бы сборку).
     codeGraphBuild: (id: string) =>
       request<void>(`/projects/${encodeURIComponent(id)}/code-graph/build`, { method: 'POST', timeoutMs: 180_000 }),
-    // Preview: сервисы проекта (инференс из манифестов + сохранённые в .claude/launch.json)
+    // Preview: сервисы проекта (инференс из манифестов + сохранённые в .claude/launch.json).
+    // У локального проекта — у агента устройства (projectRequest); внешнего доступа там нет
     services: (id: string) =>
-      request<{ services: ProjectService[]; activeServiceId: string | null }>(`/projects/${id}/services`),
+      projectRequest<{ services: ProjectService[]; activeServiceId: string | null }>(`/projects/${id}/services`),
     previewStart: (id: string, svc: {
       serviceId: string; name: string; command: string; args: string[];
       cwd?: string; port?: number; autoPort?: boolean; env?: Record<string, string>;
     }) =>
-      request<{ status: string; port?: number; error?: string; serviceId: string }>(`/projects/${id}/preview/start`, {
+      projectRequest<{ status: string; port?: number; error?: string; serviceId: string }>(`/projects/${id}/preview/start`, {
         method: 'POST', body: JSON.stringify(svc),
       }),
     previewStop: (id: string, serviceId: string) =>
-      request<{ status: string }>(`/projects/${id}/preview/stop`, {
+      projectRequest<{ status: string }>(`/projects/${id}/preview/stop`, {
         method: 'POST', body: JSON.stringify({ serviceId }),
       }),
     previewStatus: (id: string) =>
-      request<{ running: { serviceId: string; name: string; port: number | null; status: string; error: string | null }[]; activeServiceId: string | null }>(`/projects/${id}/preview/status`),
+      projectRequest<{ running: { serviceId: string; name: string; port: number | null; status: string; error: string | null }[]; activeServiceId: string | null }>(`/projects/${id}/preview/status`),
     previewActive: (id: string, serviceId: string) =>
-      request<{ activeServiceId: string }>(`/projects/${id}/preview/active`, {
+      projectRequest<{ activeServiceId: string }>(`/projects/${id}/preview/active`, {
         method: 'POST', body: JSON.stringify({ serviceId }),
       }),
     // Сервис поднят вне продукта (Rider, терминал) — показать его в превью.
     // Порт выбирает сервер по конфигурации сервиса, клиент его не передаёт.
     previewActiveExternal: (id: string, serviceId: string) =>
-      request<{ activeServiceId: string; port: number }>(`/projects/${id}/preview/active-external`, {
+      projectRequest<{ activeServiceId: string; port: number }>(`/projects/${id}/preview/active-external`, {
         method: 'POST', body: JSON.stringify({ serviceId }),
       }),
     // Внешний доступ: ссылка на сервис по отдельному поддомену. Порт, как и выше, выбирает
@@ -858,17 +859,17 @@ export const api = {
     // Остановить процесс, поднятый вне продукта. 409 с needsConfirm — порт держит чужой
     // процесс, и гасить его можно только после явного согласия человека.
     previewStopExternal: (id: string, serviceId: string, confirm = false) =>
-      request<{ status: string; pid: number }>(`/projects/${id}/preview/stop-external`, {
+      projectRequest<{ status: string; pid: number }>(`/projects/${id}/preview/stop-external`, {
         method: 'POST', body: JSON.stringify({ serviceId, confirm }),
       }),
     previewExternalLink: (id: string, serviceId: string) =>
-      request<ExternalLinkIssued>(`/projects/${id}/preview/external-link`, {
+      projectRequest<ExternalLinkIssued>(`/projects/${id}/preview/external-link`, {
         method: 'POST', body: JSON.stringify({ serviceId }),
       }),
     getLaunchConfig: (id: string) =>
-      request<{ configurations: LaunchConfigEntry[] }>(`/projects/${id}/launch-config`),
+      projectRequest<{ configurations: LaunchConfigEntry[] }>(`/projects/${id}/launch-config`),
     putLaunchConfig: (id: string, configurations: LaunchConfigEntry[]) =>
-      request<{ configurations: LaunchConfigEntry[] }>(`/projects/${id}/launch-config`, {
+      projectRequest<{ configurations: LaunchConfigEntry[] }>(`/projects/${id}/launch-config`, {
         method: 'PUT', body: JSON.stringify({ configurations }),
       }),
   },
@@ -1636,7 +1637,10 @@ export const api = {
       request<Session>(`/chats/${id}/window-1m/drop`, { method: 'POST' }),
     delete: (id: string) => request<void>(`/chats/${id}`, { method: 'DELETE' }),
     getHistory: (id: string) => request<unknown[]>(`/chats/${id}/history`),
-    uploadFile: async (id: string, file: File): Promise<{ path: string }> => {
+    // Вложение локального проекта ложится на машину проекта через агента: сервер на свой
+    // маршрут для него отвечает отказом G1
+    uploadFile: async (id: string, file: File, projectId?: string): Promise<{ path: string }> => {
+      if (projectId && projectRouteOf(projectId) === 'agent') return uploadAgentAttachment(projectId, file);
       const token = readStoredToken();
       const form = new FormData();
       form.append('file', file);
@@ -2154,7 +2158,7 @@ export const api = {
   },
 
   skills: {
-    list: (projectId: string) => request<SkillsData>(`/projects/${projectId}/skills`),
+    list: (projectId: string) => projectRequest<SkillsData>(`/projects/${projectId}/skills`),
     // Глобальные скиллы без привязки к проекту (для чатов вне проекта)
     listGlobal: () => request<SkillInfo[]>('/skills'),
     getSkill: (skillName: string) => request<{ content: string }>(`/skills/${skillName}`),
@@ -2163,11 +2167,11 @@ export const api = {
     createSkill: (name: string, content: string) =>
       request<{ name: string }>('/skills', { method: 'POST', body: JSON.stringify({ name, content }) }),
     getAgent: (projectId: string, agentName: string) =>
-      request<{ content: string }>(`/projects/${projectId}/agents/${agentName}`),
+      projectRequest<{ content: string }>(`/projects/${projectId}/agents/${agentName}`),
     saveAgent: (projectId: string, agentName: string, content: string) =>
-      request<void>(`/projects/${projectId}/agents/${agentName}`, { method: 'PUT', body: JSON.stringify({ content }) }),
+      projectRequest<void>(`/projects/${projectId}/agents/${agentName}`, { method: 'PUT', body: JSON.stringify({ content }) }),
     createAgent: (projectId: string, name: string, content: string) =>
-      request<{ name: string }>(`/projects/${projectId}/agents`, { method: 'POST', body: JSON.stringify({ name, content }) }),
+      projectRequest<{ name: string }>(`/projects/${projectId}/agents`, { method: 'POST', body: JSON.stringify({ name, content }) }),
 
     // --- Реестр skills.sh (обёртка npx skills) ---
     // Поиск навыков по реестру; owner — опциональное сужение по GitHub-владельцу.

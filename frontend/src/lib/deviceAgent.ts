@@ -1,6 +1,6 @@
-// Клиент localhost-API агента устройства (ADR-016 §5, задача 4.4). Файлы и git локального
-// проекта браузер берёт не у сервера, а у агента на своей машине: маршруты и форма ответов те
-// же, что у FilesController/GitController, меняется только база адреса и способ входа — вместо
+// Клиент localhost-API агента устройства (ADR-016 §5, задачи 4.4 и 4.4б). Файлы, git, сервисы
+// и навыки локального проекта браузер берёт не у сервера, а у агента на своей машине: маршруты и
+// форма ответов те же, что у контроллеров сервера, меняется только база адреса и способ входа — вместо
 // JWT сервера короткий билет, который выдаёт сервер (POST /api/projects/{id}/device-agent/ticket).
 //
 // «Сервер или агент» решает матрица (projectFilesRoute в projectCapabilities.ts); здесь только
@@ -138,7 +138,8 @@ async function agentFetch(projectId: string, pathAndQuery: string, init: Request
       body: init.body,
       signal: controller.signal,
       headers: {
-        ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+        // FormData тип с границей ставит сам браузер
+        ...(init.body && !(init.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}),
         [t.header]: t.ticket,
       },
     });
@@ -177,10 +178,11 @@ export async function agentRequest<T>(projectId: string, pathAndQuery: string, i
   return (text ? JSON.parse(text) : undefined) as T;
 }
 
-// Путь к файлам/git проекта: /projects/{id}/files… или /projects/{id}/git…
-const PROJECT_FILES_URL = /^\/projects\/([^/?]+)\/((?:files|git)(?:\/[^?]*)?)(\?.*)?$/;
+// Путь к рабочим подсистемам проекта: /projects/{id}/files…, git…, services, preview…,
+// launch-config, skills, agents…
+const PROJECT_FILES_URL = /^\/projects\/([^/?]+)\/((?:files|git|services|preview|launch-config|skills|agents)(?:\/[^?]*)?)(\?.*)?$/;
 
-// Замена request() для маршрутов файлов и git: у локального проекта запрос уходит в агента,
+// Замена request() для маршрутов файлов, git, сервисов и навыков: у локального проекта запрос уходит в агента,
 // у серверного — как раньше. Маршрут, которого агент не умеет, отказывает понятным текстом
 // до сети, а не падает там 404.
 export function projectRequest<T>(url: string, options?: RequestInit & { timeoutMs?: number; live?: boolean }): Promise<T> {
@@ -250,6 +252,81 @@ export function agentStreamUrl(projectId: string, path: string, force = false): 
   return p;
 }
 
+// ---------- хаб агента: узкий билет на подключение ----------
+
+// Маршрут выдачи — DeviceAgentApi.HubTicketRoute. Билет только на рукопожатие (≤60 с, один
+// проект): клиент SignalR кладёт его в access_token, основной билет туда не годится
+const HUB_TICKET_ROUTE = 'agent/hub-ticket';
+const HUB_PATH = '/hubs/agent';
+
+interface HubGrant { ticket: string; expiresAt: number }
+const hubGrants = new Map<string, HubGrant>();
+const pendingHubTickets = new Map<string, Promise<string>>();
+
+// Билет хаба — ЕДИНСТВЕННАЯ точка на фронте. Negotiate и сам WebSocket зовут фабрику токена
+// подряд, поэтому свежий билет отдаётся повторно, пока ему осталось больше запаса.
+export function agentHubTicket(projectId: string): Promise<string> {
+  const cached = hubGrants.get(projectId);
+  if (cached && cached.expiresAt - Date.now() > STREAM_REUSE_MARGIN_MS) return Promise.resolve(cached.ticket);
+  const pending = pendingHubTickets.get(projectId);
+  if (pending) return pending;
+  const p = agentRequest<{ hubTicket: string; expiresAt: string }>(projectId, HUB_TICKET_ROUTE, { method: 'POST' })
+    .then(r => {
+      hubGrants.set(projectId, { ticket: r.hubTicket, expiresAt: Date.parse(r.expiresAt) });
+      return r.hubTicket;
+    })
+    .finally(() => pendingHubTickets.delete(projectId));
+  pendingHubTickets.set(projectId, p);
+  return p;
+}
+
+// Адрес хаба агента: порт — из основного билета, как у API
+export async function agentHubUrl(projectId: string): Promise<string> {
+  return `${agentBase(await getAgentTicket(projectId))}${HUB_PATH}`;
+}
+
+// ---------- превью: билет на отдельный порт ----------
+
+// Маршрут выдачи — DeviceAgentApi.PreviewTicketRoute. Агент отвечает готовым адресом iframe на
+// своём порту превью (47319) с билетом в параметре; первая загрузка кладёт его в
+// секционированную куку и срезает из адреса, подресурсы дев-сайта идут уже по куке
+const PREVIEW_TICKET_ROUTE = 'agent/preview-ticket';
+// Билет превью живёт часы; перевыпускаем заранее, чтобы iframe не открылся на истёкшем
+const PREVIEW_REUSE_MARGIN_MS = 10 * 60_000;
+
+interface PreviewGrant { url: string; expiresAt: number }
+const previewGrants = new Map<string, PreviewGrant>();
+const pendingPreviews = new Map<string, Promise<string>>();
+
+// Адрес iframe превью локального проекта — ЕДИНСТВЕННАЯ точка на фронте. force — перевыпустить
+// (агент перезапущен и прежний билет не узнаёт).
+export function agentPreviewUrl(projectId: string, force = false): Promise<string> {
+  const cached = previewGrants.get(projectId);
+  if (!force && cached && cached.expiresAt - Date.now() > PREVIEW_REUSE_MARGIN_MS) return Promise.resolve(cached.url);
+  const pending = pendingPreviews.get(projectId);
+  if (pending) return pending;
+  const p = agentRequest<{ previewTicket: string; expiresAt: string; url: string }>(projectId, PREVIEW_TICKET_ROUTE, { method: 'POST' })
+    .then(r => {
+      previewGrants.set(projectId, { url: r.url, expiresAt: Date.parse(r.expiresAt) });
+      return r.url;
+    })
+    .finally(() => pendingPreviews.delete(projectId));
+  pendingPreviews.set(projectId, p);
+  return p;
+}
+
+// ---------- вложения чата ----------
+
+// Маршрут — DeviceAgentApi.AttachmentsRoute. Вложение локального проекта ложится на машину
+// проекта (сервер для него отвечает отказом G1); ответ тот же, что у сервера: путь от корня
+const ATTACHMENTS_ROUTE = 'agent/attachments';
+
+export function uploadAgentAttachment(projectId: string, file: File): Promise<{ path: string }> {
+  const form = new FormData();
+  form.append('file', file);
+  return agentRequest<{ path: string }>(projectId, ATTACHMENTS_ROUTE, { method: 'POST', body: form });
+}
+
 // ---------- проверка связи ----------
 
 const probes = new Map<string, Promise<void>>();
@@ -310,4 +387,8 @@ export function resetDeviceAgentForTests(): void {
   probes.clear();
   streamGrants.clear();
   pendingStreams.clear();
+  hubGrants.clear();
+  pendingHubTickets.clear();
+  previewGrants.clear();
+  pendingPreviews.clear();
 }

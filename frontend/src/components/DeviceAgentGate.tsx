@@ -16,11 +16,11 @@ function describe(status: DeviceAgentStatus): { icon: ReactNode; title: string; 
     case 'ready':
       return null;
     case 'checking':
-      return { icon: <Loader2 size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} style={{ animation: 'spin 1s linear infinite' }} />, title: 'Подключаемся к агенту', subtitle: 'Файлы локального проекта открываются через агента AI Home на этом компьютере' };
+      return { icon: <Loader2 size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} style={{ animation: 'spin 1s linear infinite' }} />, title: 'Подключаемся к агенту', subtitle: 'Файлы, терминал и сервисы локального проекта открываются через агента AI Home на этом компьютере' };
     case 'unreachable':
-      return { icon: icon(Unplug), title: 'Агент устройства не найден', subtitle: 'Файлы локального проекта доступны только на его компьютере с запущенным агентом AI Home. Запустите агента или откройте проект с машины проекта' };
+      return { icon: icon(Unplug), title: 'Агент устройства не найден', subtitle: 'Файлы, терминал и сервисы локального проекта доступны только на его компьютере с запущенным агентом AI Home. Запустите агента или откройте проект с машины проекта' };
     case 'refused':
-      return { icon: icon(ShieldAlert), title: 'Доступ к файлам не выдан', subtitle: status.reason };
+      return { icon: icon(ShieldAlert), title: 'Доступ к проекту на устройстве не выдан', subtitle: status.reason };
     case 'rejected':
       return { icon: icon(MonitorOff), title: 'Это не компьютер проекта', subtitle: status.reason };
   }

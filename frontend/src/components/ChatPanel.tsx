@@ -1174,12 +1174,12 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     for (const file of files) {
       if (file.size > MAX_UPLOAD_BYTES) { showToast('Вложение', TOO_BIG_MSG); continue; }
       try {
-        const { path } = await api.chats.uploadFile(session.id, file);
+        const { path } = await api.chats.uploadFile(session.id, file, project?.id);
         added.push(path);
       } catch { showToast('Вложение', UPLOAD_FAIL_MSG); }
     }
     if (added.length) onAttachedFilesChange([...attachedFiles, ...added]);
-  }, [session.id, attachedFiles, onAttachedFilesChange]);
+  }, [session.id, project?.id, attachedFiles, onAttachedFilesChange]);
 
   // Единая точка загрузки с устройства (вставка, перетаскивание, кнопка пикера):
   // гейт по зрению модели сужен до картинок — pdf и документы claude читает с диска

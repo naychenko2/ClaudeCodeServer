@@ -85,6 +85,9 @@ internal sealed class AgentProjectFiles : IProjectFiles
             _files.WriteFileBytes(root, relativePath, content);
         });
 
+    /// <summary>Запись такого объёма допустима — проверка до того, как тело прочитано в память.</summary>
+    public void EnsureWritable(long bytes) => _policy.EnsureWritable(bytes);
+
     public Task CreateFileAsync(Project project, string relativePath, string content = "", CancellationToken ct = default) =>
         Run(project, relativePath, (root, _) =>
         {

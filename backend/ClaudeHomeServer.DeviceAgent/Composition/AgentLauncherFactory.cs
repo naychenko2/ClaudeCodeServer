@@ -80,7 +80,9 @@ internal sealed class AgentLauncherFactory : ILauncherFactory
 
             var process = new Process { StartInfo = psi, EnableRaisingEvents = spec.EnableRaisingEvents };
             process.Start();
-            if (grouped) Track(process, spec.TurnId ?? Guid.NewGuid().ToString("N"));
+            // Без TurnId ключ записи — сам процесс: зачистка при старте сверяет pid и время
+            // старта, а не ключ, так что такой процесс она находит и добивает так же
+            if (grouped) Track(process, spec.TurnId ?? $"proc-{process.Id}");
             return process;
         }
 

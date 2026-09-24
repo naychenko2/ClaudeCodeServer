@@ -23,6 +23,7 @@ public sealed class WorkbenchTests : IAsyncLifetime
 {
     private const string ServerOrigin = "https://home.example";
     private const string Ticket = "good-ticket";
+    private const int WriteLimit = 1024 * 1024;
 
     private readonly AgentSandbox _box = new();
     private readonly AgentLauncherFactory _launchers = new();
@@ -44,7 +45,7 @@ public sealed class WorkbenchTests : IAsyncLifetime
         _port = FreePort();
         _previewPort = FreePort();
         var git = new GitService(_launchers);
-        var files = new AgentProjectFiles(new FileService(git), _box.Policy());
+        var files = new AgentProjectFiles(new FileService(git), _box.Policy(new AgentLimits { MaxWriteBytes = WriteLimit }));
         _app = LocalApi.Build(new LocalApiOptions(_port, ServerOrigin, "test"), files, git,
             new AgentTicketCache(new Introspector(_box.Project)), watchers: null, NullLoggerFactory.Instance,
             workbench: new AgentWorkbench(Path.Combine(_box.Base, "data"), Path.Combine(_box.Base, "profile"), _previewPort, _launchers));
@@ -139,6 +140,30 @@ public sealed class WorkbenchTests : IAsyncLifetime
         _launchers.TrackedCount.Should().Be(0);
     }
 
+    [Fact]
+    public async Task Хаб_ЧужойOriginИЧужойHost_Отказ_ДоБилета()
+    {
+        var token = (await Json(HttpMethod.Post, "/api/projects/p1/" + DeviceAgentApi.HubTicketRoute)).GetProperty("hubTicket").GetString();
+        HttpRequestMessage Negotiate(string? origin = null, string? host = null)
+        {
+            var r = new HttpRequestMessage(HttpMethod.Post, $"{DeviceAgentApi.HubPath}/negotiate?negotiateVersion=1");
+            r.Headers.Add("Authorization", "Bearer " + token);
+            if (origin is not null) r.Headers.Add("Origin", origin);
+            if (host is not null) r.Headers.Host = host;
+            return r;
+        }
+
+        (await _http.SendAsync(Negotiate(ServerOrigin))).StatusCode.Should().Be(HttpStatusCode.OK, "контроль: свой origin с билетом проходит");
+        (await _http.SendAsync(Negotiate("https://evil.example"))).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await _http.SendAsync(Negotiate(ServerOrigin, host: $"evil.example:{_port}"))).StatusCode
+            .Should().Be(HttpStatusCode.MisdirectedRequest, "DNS-rebinding на хаб");
+
+        var preflight = new HttpRequestMessage(HttpMethod.Options, $"{DeviceAgentApi.HubPath}/negotiate");
+        preflight.Headers.Add("Origin", "https://evil.example");
+        preflight.Headers.Add("Access-Control-Request-Method", "POST");
+        (await _http.SendAsync(preflight)).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
     // ---------- сервисы и превью ----------
 
     [Fact]
@@ -147,7 +172,7 @@ public sealed class WorkbenchTests : IAsyncLifetime
         var devPort = FreePort();
         await using var dev = WebApplication.CreateSlimBuilder().Build();
         dev.Urls.Add($"http://127.0.0.1:{devPort}");
-        dev.Run(ctx => ctx.Response.WriteAsync($"dev:{ctx.Request.Path}{ctx.Request.QueryString}|cookie:{ctx.Request.Headers.Cookie}"));
+        dev.Run(ctx => ctx.Response.WriteAsync($"dev:{ctx.Request.Path}{ctx.Request.QueryString}|cookie:{ctx.Request.Headers.Cookie}|auth:{ctx.Request.Headers.Authorization}"));
         await dev.StartAsync();
 
         await Json(HttpMethod.Put, "/api/projects/p1/launch-config", new
@@ -166,15 +191,17 @@ public sealed class WorkbenchTests : IAsyncLifetime
         var first = await browser.GetAsync(new Uri(url, "page?x=1&" + DeviceAgentApi.PreviewTicketQuery + "=" + issued.GetProperty("previewTicket").GetString()));
         var body = await first.Content.ReadAsStringAsync();
         first.StatusCode.Should().Be(HttpStatusCode.OK, body);
-        body.Should().StartWith("dev:/page?x=1|cookie:").And.NotContain(issued.GetProperty("previewTicket").GetString()!);
+        body.Should().Be("dev:/page?x=1|cookie:|auth:").And.NotContain(issued.GetProperty("previewTicket").GetString()!);
         var cookie = first.Headers.GetValues("Set-Cookie").Single();
         cookie.Should().Contain(DeviceAgentApi.PreviewCookie).And.Contain("httponly").And.Contain("samesite=none")
             .And.Contain("secure").And.Contain("Partitioned").And.Contain("path=/preview/p1/");
 
+        // Браузер прикладывает к loopback куки всех сервисов на 127.0.0.1 — дев-серверу не уходит ни одна
         var sub = new HttpRequestMessage(HttpMethod.Get, new Uri(url, "asset.js"));
-        sub.Headers.Add("Cookie", cookie.Split(';')[0] + "; other=1");
+        sub.Headers.Add("Cookie", "dify_session=s3cr3t; " + cookie.Split(';')[0] + "; admin_token=adm1n; other=1");
+        sub.Headers.Add("Authorization", "Bearer foreign-token");
         var subBody = await (await browser.SendAsync(sub)).Content.ReadAsStringAsync();
-        subBody.Should().Be("dev:/asset.js|cookie:other=1", "подресурс идёт по куке, а сама кука дев-серверу не уходит");
+        subBody.Should().Be("dev:/asset.js|cookie:|auth:", "подресурс идёт по куке, а дев-серверу не уходит ни одна кука и учётка");
 
         (await browser.GetAsync(new Uri(url, "asset.js"))).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
         (await browser.GetAsync($"http://127.0.0.1:{_previewPort}/api/projects/p1/files")).StatusCode
@@ -263,5 +290,58 @@ public sealed class WorkbenchTests : IAsyncLifetime
 
         var anonymous = new HttpRequestMessage(HttpMethod.Post, "/api/projects/p1/" + DeviceAgentApi.AttachmentsRoute) { Content = form };
         (await _http.SendAsync(anonymous)).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [SkippableFact]
+    public async Task Вложение_CcAttachmentsСсылкаНаружу_Отказ_ВнеКорняПусто()
+    {
+        var outsideAttachments = Path.Combine(_box.Outside, "att");
+        Directory.CreateDirectory(outsideAttachments);
+        _box.Link(Path.Combine(_box.Project, ".cc-attachments"), outsideAttachments, directory: true);
+
+        using var form = new MultipartFormDataContent();
+        form.Add(new ByteArrayContent("данные"u8.ToArray()), "file", "отчёт.txt");
+        var request = new HttpRequestMessage(HttpMethod.Post, "/api/projects/p1/" + DeviceAgentApi.AttachmentsRoute) { Content = form };
+        request.Headers.Add(DeviceAgentApi.TicketHeader, Ticket);
+        var response = await _http.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden, await response.Content.ReadAsStringAsync());
+        Directory.EnumerateFileSystemEntries(outsideAttachments, "*", SearchOption.AllDirectories)
+            .Should().BeEmpty("за корнем проекта не появилось ничего");
+    }
+
+    [Fact]
+    public async Task Вложение_БольшеПотолкаПоContentLength_413_ДоЧтенияТела()
+    {
+        // Сырой сокет: объявляем тело больше потолка, шлём только начало и ждём ответа.
+        // Отказ обязан прийти, не дожидаясь остального тела — его может и не быть
+        using var tcp = new TcpClient();
+        await tcp.ConnectAsync(IPAddress.Loopback, _port);
+        var stream = tcp.GetStream();
+        var head = $"POST /api/projects/p1/{DeviceAgentApi.AttachmentsRoute} HTTP/1.1\r\n" +
+                   $"Host: 127.0.0.1:{_port}\r\n" +
+                   $"{DeviceAgentApi.TicketHeader}: {Ticket}\r\n" +
+                   "Content-Type: multipart/form-data; boundary=b\r\n" +
+                   $"Content-Length: {WriteLimit * 4}\r\n\r\n" +
+                   "--b\r\nContent-Disposition: form-data; name=\"file\"; filename=\"big.bin\"\r\n\r\n";
+        await stream.WriteAsync(System.Text.Encoding.UTF8.GetBytes(head));
+        await stream.WriteAsync(new byte[64 * 1024]);
+
+        using var reader = new StreamReader(stream);
+        var status = await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        status.Should().StartWith("HTTP/1.1 413");
+        Directory.Exists(Path.Combine(_box.Project, ".cc-attachments")).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Вложение_ФайлБольшеПотолка_413_НичегоНеЗаписано()
+    {
+        using var form = new MultipartFormDataContent();
+        form.Add(new ByteArrayContent(new byte[WriteLimit + 1]), "file", "big.bin");
+        var request = new HttpRequestMessage(HttpMethod.Post, "/api/projects/p1/" + DeviceAgentApi.AttachmentsRoute) { Content = form };
+        request.Headers.Add(DeviceAgentApi.TicketHeader, Ticket);
+
+        (await _http.SendAsync(request)).StatusCode.Should().Be(HttpStatusCode.RequestEntityTooLarge);
+        Directory.Exists(Path.Combine(_box.Project, ".cc-attachments")).Should().BeFalse();
     }
 }

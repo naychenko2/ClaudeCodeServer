@@ -76,17 +76,25 @@ internal sealed class PreviewGate(int port, string serverOrigin, AgentUrlTickets
             ctx.Response.Cookies.Append(DeviceAgentApi.PreviewCookie, fromQuery, CookieFor(projectId));
             request.QueryString = WithoutTicket(request.Query);
         }
-        // Своя кука дев-серверу не нужна: билет не уходит дальше агента ни адресом, ни кукой
-        var otherCookies = string.Join("; ", request.Headers.Cookie.ToString()
-            .Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
-            .Where(c => !c.StartsWith(DeviceAgentApi.PreviewCookie + "=", StringComparison.Ordinal)));
-        if (otherCookies.Length > 0) request.Headers.Cookie = otherCookies;
-        else request.Headers.Remove("Cookie");
+        StripCredentials(request);
 
         await DevServerPreviewForwarder.ForwardAsync(ctx,
             ctx.RequestServices.GetRequiredService<DevServerService>(),
             ctx.RequestServices.GetRequiredService<IHttpForwarder>(),
             _invoker, projectId, restPath);
+    }
+
+    /// <summary>
+    /// Дев-серверу не уходит ни одна кука и ни одна учётка: браузер прикладывает к loopback
+    /// куки ВСЕХ сервисов на 127.0.0.1 (Dify, админки, соседние дев-серверы), а дев-сервер —
+    /// код из зависимостей проекта, доверия ему меньше, чем пользователю. Своя авторизация
+    /// дев-сайту не нужна — он и так за билетом агента.
+    /// </summary>
+    internal static void StripCredentials(HttpRequest request)
+    {
+        request.Headers.Remove("Cookie");
+        request.Headers.Remove("Authorization");
+        request.Headers.Remove("Proxy-Authorization");
     }
 
     private bool IsOwnOrigin(string origin) =>

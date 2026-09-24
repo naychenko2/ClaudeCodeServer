@@ -472,10 +472,14 @@ internal static class LocalApi
         {
             if (!ctx.Request.HasFormContentType)
                 return Results.BadRequest(new { error = "Файл не выбран или пустой" });
+            // Заведомо большое тело отбиваем по заголовку, не читая: запас — на обёртку multipart
+            if (ctx.Request.ContentLength is { } declared) files.EnsureWritable(declared - MultipartOverheadBytes);
+            // Форма сверх малого порога буферизуется на диск, в память файл попадает только ниже потолка
             var form = await ctx.Request.ReadFormAsync(ctx.RequestAborted);
             var file = form.Files.GetFile("file");
             if (file is null || file.Length == 0)
                 return Results.BadRequest(new { error = "Файл не выбран или пустой" });
+            files.EnsureWritable(file.Length);
             if (AttachmentsGitExclude.AttachmentPath(file.FileName) is not { } rel)
                 return Results.BadRequest(new { error = "Некорректное имя файла" });
 
@@ -484,11 +488,15 @@ internal static class LocalApi
             try { await AttachmentsGitExclude.EnsureAsync(files, project, ctx.RequestAborted); }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
 
-            using var buffer = new MemoryStream();
-            await file.CopyToAsync(buffer, ctx.RequestAborted);
-            await files.WriteFileBytesAsync(project, rel, buffer.ToArray(), ctx.RequestAborted);
+            // Ровно один буфер размера файла, без роста MemoryStream и копии ToArray
+            var content = new byte[file.Length];
+            await using (var input = file.OpenReadStream())
+                await input.ReadExactlyAsync(content, ctx.RequestAborted);
+            await files.WriteFileBytesAsync(project, rel, content, ctx.RequestAborted);
             return Results.Ok(new { path = rel });
         });
+
+    private const long MultipartOverheadBytes = 64 * 1024;
 
     // ---------- git: контракт GitController (подмножество рабочего дерева) ----------
     // Мутации, как у сервера, отвечают свежим статусом: панель изменений перерисовывается по нему

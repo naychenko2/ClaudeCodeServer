@@ -68,6 +68,36 @@ public sealed class AgentLauncherFactoryTests : IDisposable
 
     [SkippableFact]
     [UnsupportedOSPlatform("windows")]
+    public async Task Unix_ДолгоживущийБезTurnId_ВЖурналеПоPid_ЗачисткаПослеСмертиАгентаДобивает()
+    {
+        Skip.If(OperatingSystem.IsWindows());
+        Skip.If(UnixGroupProcess.FindSetsid() is null, "нет setsid");
+        var journalDir = Path.Combine(_dir, "journal");
+        var launchers = new AgentLauncherFactory(new TurnJournal(journalDir));
+        var pidFile = Path.Combine(_dir, "grandchild.pid");
+
+        var process = launchers.Local.Start(new ProcessSpec
+        {
+            FileName = "/bin/sh",
+            Args = ["-c", $"sleep 600 & echo $! > '{pidFile}'; wait"],
+            WorkingDirectory = _dir,
+            EnableRaisingEvents = true,
+        });
+        var grandchild = await ReadPidAsync(pidFile);
+        new TurnJournal(journalDir).ReadAll().Should().ContainSingle(e => e.TurnId == $"proc-{process.Id}" && e.Pid == process.Id);
+
+        // Агент умер, не убив процесс: новая жизнь читает журнал с диска
+        var killed = new TurnJournal(journalDir).SweepLeftovers(new SessionFileJanitor(Path.Combine(_dir, "profile")));
+        await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        await WaitAsync(() => !UnixGroupProcess.IsAlive(grandchild));
+
+        killed.Should().Be(1);
+        UnixGroupProcess.IsAlive(grandchild).Should().BeFalse("зачистка бьёт группу целиком");
+        new TurnJournal(journalDir).ReadAll().Should().BeEmpty();
+    }
+
+    [SkippableFact]
+    [UnsupportedOSPlatform("windows")]
     public async Task Unix_Короткий_БезСвоейГруппыИЖурнала()
     {
         Skip.If(OperatingSystem.IsWindows());

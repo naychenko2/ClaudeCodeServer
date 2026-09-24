@@ -9,12 +9,15 @@ namespace ClaudeHomeServer.Services.Llm.Gateway;
 // Привязка токена хода: чей ход, в каком чате, какой по счёту (TurnId — идентификатор для
 // маршрута шлюза /gw/t/{turnId}/…) и с какого устройства он может звонить. DeviceId = null —
 // ход не привязан к устройству (серверный проект), проверку устройства шлюз не делает.
+// Route — маршрут шлюза LLM (провайдер, аккаунт, модель), решённый при выдаче токена;
+// null — шлюзу LLM этот ход не обслуживать (токен выдан только для MCP).
 public sealed record TurnTokenGrant(
     string TurnId,
     string OwnerId,
     string SessionId,
     string? DeviceId,
-    DateTimeOffset IssuedAt);
+    DateTimeOffset IssuedAt,
+    GatewayRoute? Route = null);
 
 // Выданный токен: секрет отдаётся ровно один раз, сервер хранит только его хеш.
 public sealed record IssuedTurnToken(string Token, TurnTokenGrant Grant);
@@ -57,7 +60,7 @@ public sealed class TurnTokenService
 
     public int ActiveCount => _byTurn.Count;
 
-    public IssuedTurnToken Issue(string ownerId, string sessionId, string? deviceId = null)
+    public IssuedTurnToken Issue(string ownerId, string sessionId, string? deviceId = null, GatewayRoute? route = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(ownerId);
         ArgumentException.ThrowIfNullOrEmpty(sessionId);
@@ -65,7 +68,7 @@ public sealed class TurnTokenService
         var turnId = Guid.NewGuid().ToString("N");
         var token = Base64Url(RandomNumberGenerator.GetBytes(32));
         var grant = new TurnTokenGrant(turnId, ownerId, sessionId,
-            string.IsNullOrEmpty(deviceId) ? null : deviceId, _time.GetUtcNow());
+            string.IsNullOrEmpty(deviceId) ? null : deviceId, _time.GetUtcNow(), route);
         _byTurn[turnId] = new Entry(Hash(token), grant);
         return new IssuedTurnToken(token, grant);
     }
@@ -87,6 +90,19 @@ public sealed class TurnTokenService
         if (entry.Grant.DeviceId is not null && !string.Equals(entry.Grant.DeviceId, deviceId, StringComparison.Ordinal))
             return null;
         return entry.Grant;
+    }
+
+    // Ротация аккаунта посреди хода (исчерпание, auth-dead): шлюз перевешивает маршрут живого
+    // токена. Отозванный токен не воскрешается — false.
+    public bool Reroute(string turnId, GatewayRoute route)
+    {
+        ArgumentNullException.ThrowIfNull(route);
+        while (_byTurn.TryGetValue(turnId, out var entry))
+        {
+            var updated = entry with { Grant = entry.Grant with { Route = route } };
+            if (_byTurn.TryUpdate(turnId, updated, entry)) return true;
+        }
+        return false;
     }
 
     // Сбой запуска до адаптера: оркестрации не было, turn/completed не придёт.

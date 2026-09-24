@@ -385,6 +385,9 @@ builder.Services.AddSingleton<JwtValidatorGateway>();
 // своим кешем/состоянием (см. DuplicateSingletonRegistrationTests).
 builder.Services.AddSingleton<IUserTokenValidator>(sp => sp.GetRequiredService<JwtValidatorGateway>());
 builder.Services.AddSingleton<IPreviewTokenValidator>(sp => sp.GetRequiredService<JwtValidatorGateway>());
+// Шов шлюза MCP (ADR-016): адрес бэкенда и сервисный JWT владельца — теми же функциями,
+// что у конфига серверного хода.
+builder.Services.AddSingleton<IMcpBackendAccess, ClaudeHomeServer.Services.Composition.McpBackendAccess>();
 // Шов для Modules (Этап 5, волна C, шаг 1б): вместо прямой зависимости от
 // FeatureFlagService — узкий контракт на проверку одного флага. Адаптер в
 // `Services/FeatureFlagGateway` идёт через `FeatureFlagService` — Modules
@@ -2045,6 +2048,16 @@ app.MapHub<TerminalHub>("/hubs/terminal");
 // Канал десктопного агента (ADR-008): исходящее соединение клиента с машины пользователя,
 // push команды в конкретное соединение. Схема авторизации — токен устройства, а не общий JWT
 app.MapHub<ClaudeHomeServer.Services.Desktop.DeviceHub>("/hubs/devices");
+// Шлюз LLM локальных проектов (ADR-016): авторизация — токен хода, а не JWT; выключен
+// тумблером LlmGateway:Enabled (404). Подсистема llm отключаемая — маппим только при ней.
+if (app.Services.GetService<ClaudeHomeServer.Services.Llm.Gateway.UpstreamSelector>() is not null)
+    ClaudeHomeServer.Services.Llm.Gateway.LlmGatewayEndpoints.MapLlmGateway(app);
+
+// Шлюз MCP для хода на устройстве (ADR-016): вход по токену хода, а не по JWT.
+// Подсистема llm отключаемая — без неё нет и токенов хода.
+if (app.Services.GetService<ClaudeHomeServer.Services.Llm.Gateway.TurnTokenService>() is not null)
+    ClaudeHomeServer.Services.Llm.Gateway.McpGatewayEndpoints.MapMcpGateway(app);
+
 // Потоковый канал исполнения устройства (ADR-016): WebSocket, та же схема токена устройства
 app.MapDeviceExecChannel();
 

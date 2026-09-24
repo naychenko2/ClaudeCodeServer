@@ -577,6 +577,10 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // Время последней фактической активности аккаунта пула (живой ход/пинг) для идл-пинга
     // подписок (SubscriptionUsageWarmupService); null — в тестах, тогда просто не трогаем.
     private readonly SubscriptionActivityTracker? _activity;
+    // Учёт лимитов подписок по rate_limit_event хода: та же точка, что у шлюза LLM. Состояние
+    // рекордер не держит (оно в _usage и _subscriptionPool), поэтому свой экземпляр тут не
+    // второй счётчик.
+    private readonly SubscriptionLimitRecorder _limitRecorder;
     private readonly ILogger<SessionManager> _log;
     // Прогрев сборки свежего worktree (SetWorktreeAsync/AttachWorktreeAsync)
     private readonly WorktreeBuildWarmup _warmup;
@@ -849,6 +853,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // не получила null в конструкторе).
         _bindings = bindings;
         _subscriptionPool = subscriptionPool;
+        _limitRecorder = new SubscriptionLimitRecorder(_usage, subscriptionPool, _activity);
         _log = log;
         _warmup = new WorktreeBuildWarmup(launchers, config, log);
 
@@ -945,7 +950,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // упираются в ERR_TLS_CERT_ALTNAME_INVALID (localhost/127.0.0.1 нет в SAN).
     // Если http-адреса нет вообще, поднимите локальный http-эндпоинт и пропишите
     // McpTasksApiUrl явно — иначе все MCP-прокси (tasks/notes/memory/wsp) отвалятся.
-    private string ResolveTasksApiUrl(string? ownerId = null)
+    internal string ResolveTasksApiUrl(string? ownerId = null)
     {
         if (ownerId is not null && _launchers.ForOwner(ownerId).McpApiUrlOverride is { } sandboxUrl)
             return sandboxUrl.TrimEnd('/');
@@ -973,7 +978,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
 
     // Единый сервисный токен владельца для MCP-серверов (tasks/notes/memory/personas/…):
     // per-owner JWT с перевыпуском за сутки до истечения (сервер может жить дольше срока токена).
-    private string GetServiceToken(string ownerId) =>
+    internal string GetServiceToken(string ownerId) =>
         _serviceTokens.AddOrUpdate(ownerId,
             id => (_jwt.IssueServiceToken(id), DateTime.UtcNow),
             (id, old) => DateTime.UtcNow - old.IssuedAt > JwtService.ServiceTokenLifetime - TimeSpan.FromDays(1)
@@ -8675,74 +8680,24 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                         acc.OnModelSwitched(m.Model, acc.LastStartedModel(), m.Reason, m.ErrorDetails);
                     break;
                 case RateLimitMessage m:
-                    _usage.Record(m.LimitType, m.Utilization, m.Status, m.IsUsingOverage, m.ResetsAt, m.OverageStatus, m.OverageResetsAt, subscriptionKey: entry?.Info.Provider, source: "turn", overageDisabledReason: m.OverageDisabledReason);
-                    _activity?.Touch(entry?.Info.Provider);
-                    // P31: rate_limit_event от подписки — доказательство аутентификации (до лимитов
-                    // запрос не дошёл бы). Снимаем auth-dead независимо от окна и исчерпания: иначе
-                    // транзитный 401 + перевход (claude setup-token) выключали подписку до рестарта
-                    // процесса, хотя токен уже починили (блокер ревью P29). По любому окну, не только
-                    // exhaustion-окну: заголовки лимитов приходят с каждым ответом авторизованного API.
-                    if (entry is not null && _subscriptionPool.IsAuthDead(entry.Info.Provider))
                     {
-                        _subscriptionPool.ClearAuthDead(entry.Info.Provider);
-                        Console.WriteLine($"[SessionManager] Подписка «{entry.Info.Provider}» отвечает (ход {sessionId}) — снята пометка auth-dead");
-                    }
-                    // Состояние пула правим только по известным окнам (IsExhaustionWindow):
-                    // rejected неизвестного окна — транзитная телеметрия CLI, она попадает
-                    // в usage для экрана, но ротацию не трогает.
-                    if (entry is not null && ClaudeSubscriptionPool.IsExhaustionWindow(m.LimitType))
-                    {
-                        // Исчерпание лимита подписки → помечаем exhausted в пуле, чтобы новые чаты
-                        // пошли на другую подписку. "rejected" — CLI отклонил ход; utilization >= 1.0
-                        // без overage — окно выбрано (с overage ходы ещё проходят).
-                        if (m.Status == "rejected" || (m.Utilization >= 1.0 && !m.IsUsingOverage))
+                        // Учёт лимита — единая точка SubscriptionLimitRecorder (её же зовёт шлюз
+                        // LLM по заголовкам anthropic-ratelimit-unified-*). Здесь — только реакция
+                        // на свой ход. Подавленное событие выходит из обработчика целиком, как и
+                        // до выноса: дальше для rate_limit делать нечего.
+                        var limit = _limitRecorder.Record(entry?.Info.Provider, m, "turn",
+                            () => entry?.Process is FallbackLlmSessionAdapter fb && fb.FallbackTurnActive,
+                            $"ход {sessionId}");
+                        if (limit == LimitRecordOutcome.Suppressed)
+                            return;
+                        if (limit == LimitRecordOutcome.Exhausted && entry is not null)
                         {
-                            // Отказ по НЕДОСТУПНОЙ модели (кредиты модели / нет доступа) только что
-                            // случился на этой подписке — событие про её ОКНО не метит подписку
-                            // исчерпанной: Sonnet/Opus на ней работают, ложный бан выводил бы её из
-                            // ротации до сброса окна (инцидент 2026-09-09, чат «Анализ документов
-                            // ВФЛА»). Природа та же, что у проверки FallbackTurnActive ниже, —
-                            // позднее событие от отбитой попытки; но окно шире хода, потому что
-                            // rate_limit_event умеет прийти уже ПОСЛЕ его финала. Пару (подписка ×
-                            // модель) помечает адаптер в ResolveNextTarget: здесь события несут
-                            // окно, а не модель, и пара нам неизвестна. По полям телеметрии этот
-                            // случай не распознаётся в принципе — разбор в HadRecentModelRejection.
-                            // Спрашиваем БЕЗ ключа подписки намеренно: entry.Info.Provider к этому
-                            // моменту уже переставлен тихой ротацией на соседний здоровый аккаунт,
-                            // и вопрос по нему промахнулся бы мимо пометки — как раз тот ложный бан,
-                            // ради которого подавление и заведено (та же гонка, что у FallbackTurnActive).
-                            if (_subscriptionPool.HadRecentModelRejection())
-                                return;
-                            // M1: под фолбэк-оркестрацией ротацией владеет адаптер —
-                            // помечать провайдер исчерпанным и переключать пул тут
-                            // нельзя. Не только потому, что будет дубль provider_switched:
-                            // поздний rate_limit от УЖЕ прерванной попытки придёт после
-                            // ApplyTarget и Info.Provider уже сменён на здоровый — пометив
-                            // его, мы загубим только что выбранную подписку. Провайдер
-                            // этой попытки адаптер сам отметит в ResolveNextTarget.
-                            if (entry.Process is FallbackLlmSessionAdapter fb && fb.FallbackTurnActive)
-                                return;
-                            var resetsAt = m.ResetsAt is not null && DateTime.TryParse(m.ResetsAt, out var dt)
-                                ? (DateTime?)dt.ToUniversalTime() : null;
-                            _subscriptionPool.MarkExhausted(entry.Info.Provider, resetsAt);
                             // Сразу перевозим чат на здоровый аккаунт пула — кнопка «Повторить»
                             // упавшего хода пойдёт уже через него. Если переключиться некуда,
                             // а ход реально отбит — предлагаем сторонний провайдер карточкой.
                             TryPoolFailover(sessionId, entry);
                             if (m.Status == "rejected")
                                 await OfferProviderFallbackAsync(sessionId, m.ResetsAt);
-                        }
-                        // Самолечение: живой ход через аккаунт — сильнейший сигнал, что он
-                        // работает; снимаем пометку, как это делает идл-пинг warmup
-                        // (RecordAndGuard). Без этого ложный бан висел до resetsAt: активные
-                        // аккаунты warmup не пингует, а ходовой обработчик только маркировал.
-                        // Компромисс осознанный: allowed по five_hour снимет пометку и при
-                        // реально выбранном seven_day — следующий ход тут же перемаркирует,
-                        // false-negative на минуты дешевле false-positive на сутки.
-                        else if (_subscriptionPool.IsExhausted(entry.Info.Provider))
-                        {
-                            _subscriptionPool.Reset(entry.Info.Provider);
-                            Console.WriteLine($"[SessionManager] Подписка «{entry.Info.Provider}» отвечает (ход {sessionId}) — снята пометка исчерпания");
                         }
                     }
                     break;

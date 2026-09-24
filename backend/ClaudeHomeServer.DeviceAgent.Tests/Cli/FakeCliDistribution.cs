@@ -6,7 +6,7 @@ namespace ClaudeHomeServer.DeviceAgent.Tests.Cli;
 /// <summary>Источник раздачи без сети: выпуски в памяти плюс рычаги поломок.</summary>
 internal sealed class FakeCliDistribution : ICliDistribution
 {
-    private readonly Dictionary<string, (CliManifest Manifest, byte[] Bytes)> _releases = new();
+    private readonly Dictionary<string, (byte[] Manifest, byte[] Bytes)> _releases = new();
 
     public string Name => "fake-dist";
     public int ManifestCalls { get; private set; }
@@ -24,6 +24,15 @@ internal sealed class FakeCliDistribution : ICliDistribution
     /// <summary>Отдать эти байты вместо настоящих (подмена бинаря).</summary>
     public byte[]? Tamper { get; set; }
 
+    /// <summary>Чем подписывать манифест; по умолчанию — ключ, которому доверяют тесты.</summary>
+    public TestPgpKey Signer { get; set; } = TestPgpKey.Trusted;
+
+    /// <summary>manifest.json.sig в раздаче нет.</summary>
+    public bool OmitSignature { get; set; }
+
+    /// <summary>Подменить манифест ПОСЛЕ подписи: подпись настоящая, байты — нет.</summary>
+    public Func<byte[], byte[]>? TamperManifest { get; set; }
+
     public static byte[] Payload(string version) =>
         System.Text.Encoding.UTF8.GetBytes($"#!/bin/sh\necho '{version} (Claude Code)'\n" + new string('x', 200_000));
 
@@ -32,18 +41,26 @@ internal sealed class FakeCliDistribution : ICliDistribution
     {
         var bytes = Payload(version);
         var build = new CliPlatformBuild(binary, sha256 ?? Convert.ToHexStringLower(SHA256.HashData(bytes)), size ?? bytes.Length);
-        var manifest = new CliManifest(manifestVersion ?? version,
-            new Dictionary<string, CliPlatformBuild> { [platform] = build });
-        _releases[version] = (manifest, bytes);
+        var manifest = new
+        {
+            version = manifestVersion ?? version,
+            platforms = new Dictionary<string, object>
+            {
+                [platform] = new { binary = build.Binary, checksum = build.Sha256, size = build.Size },
+            },
+        };
+        _releases[version] = (System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(manifest), bytes);
     }
 
-    public Task<CliManifest> GetManifestAsync(string version, CancellationToken ct)
+    public Task<SignedCliManifest> GetManifestAsync(string version, CancellationToken ct)
     {
         ManifestCalls++;
         if (Offline) throw new HttpRequestException("Name or service not known (fake-dist:443)");
         if (!_releases.TryGetValue(version, out var r))
             throw new HttpRequestException("Not Found", null, System.Net.HttpStatusCode.NotFound);
-        return Task.FromResult(r.Manifest);
+        var signature = OmitSignature ? null : Signer.Sign(r.Manifest);
+        var manifest = TamperManifest is { } tamper ? tamper(r.Manifest) : r.Manifest;
+        return Task.FromResult(new SignedCliManifest(manifest, signature));
     }
 
     public Task<Stream> OpenBinaryAsync(string version, string platform, string binary, CancellationToken ct)

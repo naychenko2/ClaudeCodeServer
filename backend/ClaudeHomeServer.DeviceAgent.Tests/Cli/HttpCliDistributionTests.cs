@@ -32,12 +32,18 @@ public sealed class HttpCliDistributionTests
     [Fact]
     public async Task Манифест_и_бинарь_берутся_по_раскладке_официального_установщика()
     {
-        var handler = new Handler(r => r.RequestUri!.AbsolutePath.EndsWith("manifest.json")
-            ? new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(ManifestJson, Encoding.UTF8) }
-            : new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent([1, 2, 3]) });
+        var handler = new Handler(r => r.RequestUri!.AbsolutePath switch
+        {
+            var p when p.EndsWith("manifest.json") =>
+                new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(ManifestJson, Encoding.UTF8) },
+            var p when p.EndsWith("manifest.json.sig") =>
+                new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent([7, 7]) },
+            _ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent([1, 2, 3]) },
+        });
         var dist = new HttpCliDistribution(new HttpClient(handler));
 
-        var manifest = await dist.GetManifestAsync("2.1.273", default);
+        var signed = await dist.GetManifestAsync("2.1.273", default);
+        var manifest = CliManifest.Parse(signed.Manifest);
         await using (var bin = await dist.OpenBinaryAsync("2.1.273", "win32-x64", "claude.exe", default))
         {
             var buffer = new MemoryStream();
@@ -45,11 +51,14 @@ public sealed class HttpCliDistributionTests
             buffer.ToArray().Should().Equal(1, 2, 3);
         }
 
+        signed.Manifest.Should().Equal(Encoding.UTF8.GetBytes(ManifestJson));
+        signed.Signature.Should().Equal(7, 7);
         manifest.Version.Should().Be("2.1.273");
         manifest.Platforms["win32-x64"].Should().Be(new CliPlatformBuild("claude.exe",
             "19654006672b6da7c945115eea99ca10051796016df563a65b3f0c7d72720ef0", 231776416));
         handler.Requests.Select(u => u.AbsoluteUri).Should().Equal(
             "https://downloads.claude.ai/claude-code-releases/2.1.273/manifest.json",
+            "https://downloads.claude.ai/claude-code-releases/2.1.273/manifest.json.sig",
             "https://downloads.claude.ai/claude-code-releases/2.1.273/win32-x64/claude.exe");
         dist.Name.Should().Be("downloads.claude.ai");
     }
@@ -65,13 +74,31 @@ public sealed class HttpCliDistributionTests
     }
 
     [Fact]
-    public async Task Мусор_вместо_манифеста_это_отказ_целостности()
+    public async Task Нет_подписи_в_раздаче_это_null_а_не_сетевая_ошибка()
     {
-        var dist = new HttpCliDistribution(new HttpClient(new Handler(_ =>
-            new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("<html>blocked</html>") })));
+        var dist = new HttpCliDistribution(new HttpClient(new Handler(r => r.RequestUri!.AbsolutePath.EndsWith(".sig")
+            ? new HttpResponseMessage(HttpStatusCode.NotFound)
+            : new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(ManifestJson) })));
+
+        (await dist.GetManifestAsync("2.1.273", default)).Signature.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Огромная_подпись_не_дочитывается()
+    {
+        var dist = new HttpCliDistribution(new HttpClient(new Handler(r => r.RequestUri!.AbsolutePath.EndsWith(".sig")
+            ? new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(new byte[CliManifestVerifier.MaxSignatureBytes + 1]) }
+            : new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(ManifestJson) })));
 
         await FluentActions.Awaiting(() => dist.GetManifestAsync("2.1.273", default))
-            .Should().ThrowAsync<CliIntegrityException>();
+            .Should().ThrowAsync<CliIntegrityException>().WithMessage("*подпись манифеста*");
+    }
+
+    [Fact]
+    public void Мусор_вместо_манифеста_это_отказ_целостности()
+    {
+        FluentActions.Invoking(() => CliManifest.Parse(Encoding.UTF8.GetBytes("<html>blocked</html>")))
+            .Should().Throw<CliIntegrityException>();
     }
 
     [SkippableFact]

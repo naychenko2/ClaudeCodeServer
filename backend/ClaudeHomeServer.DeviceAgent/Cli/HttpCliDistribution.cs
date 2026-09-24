@@ -1,11 +1,9 @@
-using System.Text.Json;
-
 namespace ClaudeHomeServer.DeviceAgent.Cli;
 
 /// <summary>
 /// Официальная раздача нативных сборок Claude Code: та же корзина, из которой качают
 /// install.sh / install.ps1. Раскладка: <c>{base}/{version}/manifest.json</c> и
-/// <c>{base}/{version}/{platform}/{binary}</c>.
+/// <c>{base}/{version}/manifest.json.sig</c> и <c>{base}/{version}/{platform}/{binary}</c>.
 /// </summary>
 public sealed class HttpCliDistribution(HttpClient http, Uri? baseUri = null) : ICliDistribution
 {
@@ -18,26 +16,13 @@ public sealed class HttpCliDistribution(HttpClient http, Uri? baseUri = null) : 
 
     public string Name => _base.Host;
 
-    public async Task<CliManifest> GetManifestAsync(string version, CancellationToken ct)
+    public async Task<SignedCliManifest> GetManifestAsync(string version, CancellationToken ct)
     {
-        using var response = await http.GetAsync(new Uri(_base, $"{version}/manifest.json"),
-            HttpCompletionOption.ResponseHeadersRead, ct);
-        response.EnsureSuccessStatusCode();
-        if (response.Content.Headers.ContentLength > MaxManifestBytes)
-            throw new CliIntegrityException("манифест выпуска подозрительно большой");
-
-        await using var body = await response.Content.ReadAsStreamAsync(ct);
-        using var buffer = new MemoryStream();
-        var chunk = new byte[16 * 1024];
-        int read;
-        while ((read = await body.ReadAsync(chunk, ct)) > 0)
-        {
-            if (buffer.Length + read > MaxManifestBytes)
-                throw new CliIntegrityException("манифест выпуска подозрительно большой");
-            buffer.Write(chunk, 0, read);
-        }
-
-        return Parse(buffer.ToArray());
+        var manifest = await DownloadSmallAsync($"{version}/manifest.json", MaxManifestBytes, "манифест выпуска", optional: false, ct);
+        // Нет подписи — не ошибка сети, а отказ проверки: решает верификатор, не источник.
+        var signature = await DownloadSmallAsync($"{version}/manifest.json.sig", CliManifestVerifier.MaxSignatureBytes,
+            "подпись манифеста", optional: true, ct);
+        return new SignedCliManifest(manifest!, signature);
     }
 
     public async Task<Stream> OpenBinaryAsync(string version, string platform, string binary, CancellationToken ct)
@@ -56,30 +41,25 @@ public sealed class HttpCliDistribution(HttpClient http, Uri? baseUri = null) : 
         }
     }
 
-    internal static CliManifest Parse(byte[] json)
+    private async Task<byte[]?> DownloadSmallAsync(string path, int maxBytes, string what, bool optional, CancellationToken ct)
     {
-        try
-        {
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-            var version = root.GetProperty("version").GetString()
-                ?? throw new CliIntegrityException("в манифесте нет версии");
+        using var response = await http.GetAsync(new Uri(_base, path), HttpCompletionOption.ResponseHeadersRead, ct);
+        if (optional && response.StatusCode == System.Net.HttpStatusCode.NotFound) return null;
+        response.EnsureSuccessStatusCode();
+        if (response.Content.Headers.ContentLength > maxBytes)
+            throw new CliIntegrityException($"{what}: подозрительно большой размер");
 
-            var platforms = new Dictionary<string, CliPlatformBuild>(StringComparer.Ordinal);
-            foreach (var p in root.GetProperty("platforms").EnumerateObject())
-            {
-                if (!p.Value.TryGetProperty("binary", out var bin) ||
-                    !p.Value.TryGetProperty("checksum", out var sum) ||
-                    !p.Value.TryGetProperty("size", out var size))
-                    continue;
-                platforms[p.Name] = new CliPlatformBuild(bin.GetString() ?? "", sum.GetString() ?? "", size.GetInt64());
-            }
-            return new CliManifest(version, platforms);
-        }
-        catch (Exception e) when (e is JsonException or KeyNotFoundException or InvalidOperationException or FormatException)
+        await using var body = await response.Content.ReadAsStreamAsync(ct);
+        using var buffer = new MemoryStream();
+        var chunk = new byte[16 * 1024];
+        int read;
+        while ((read = await body.ReadAsync(chunk, ct)) > 0)
         {
-            throw new CliIntegrityException($"манифест выпуска не читается: {e.Message}");
+            if (buffer.Length + read > maxBytes)
+                throw new CliIntegrityException($"{what}: подозрительно большой размер");
+            buffer.Write(chunk, 0, read);
         }
+        return buffer.ToArray();
     }
 
     private static Uri EnsureTrailingSlash(Uri uri) =>

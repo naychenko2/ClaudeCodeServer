@@ -27,9 +27,11 @@ public sealed record HarnessStatus(
 /// попадает, версию задаёт сервер (<c>DeviceHelloAck.RequiredCliVersion</c>).
 ///
 /// Установка атомарная: скачивание в <c>{root}/staging/</c> со сверкой SHA256 и размера по
-/// манифесту выпуска, затем один rename каталога в <c>versions/</c>. Каталог версии либо
-/// есть целиком и проверенным, либо его нет; прерванная установка оставляет только мусор в
-/// staging, который вычищается при старте.
+/// манифесту выпуска, затем один rename каталога в <c>versions/</c>. Манифесту верим только
+/// после проверки его GPG-подписи закреплённым ключом Anthropic, бинарю на Windows — ещё и
+/// после Authenticode: без них HTTPS + SHA256 из того же канала ничего не доказывают.
+/// Каталог версии либо есть целиком и проверенным, либо его нет; прерванная установка
+/// оставляет только мусор в staging, который вычищается при старте.
 ///
 /// Ход берёт копию арендой (<see cref="TryAcquire"/>): смена версии переводит на новую
 /// только СЛЕДУЮЩИЕ ходы, живой ход дорабатывает на своей, а старый каталог удаляется,
@@ -51,6 +53,8 @@ public sealed partial class ManagedCli
     private readonly string _stagingDir;
     private readonly string _activeFile;
     private readonly ICliDistribution _distribution;
+    private readonly CliManifestVerifier _manifestVerifier;
+    private readonly IExecutableSignatureCheck _executableCheck;
     private readonly CliPlatform _platform;
     private readonly TimeProvider _time;
     private readonly ILogger _logger;
@@ -69,13 +73,18 @@ public sealed partial class ManagedCli
     private int _failures;
     private DateTimeOffset? _nextAttemptAt;
 
+    /// <param name="manifestVerifier">По умолчанию — закреплённый ключ Anthropic.</param>
+    /// <param name="executableCheck">По умолчанию — Authenticode на Windows, ничего на прочих ОС.</param>
     public ManagedCli(string rootDirectory, ICliDistribution distribution, CliPlatform platform,
-        TimeProvider? time = null, ILogger<ManagedCli>? logger = null)
+        TimeProvider? time = null, ILogger<ManagedCli>? logger = null,
+        CliManifestVerifier? manifestVerifier = null, IExecutableSignatureCheck? executableCheck = null)
     {
         _versionsDir = Path.Combine(rootDirectory, "versions");
         _stagingDir = Path.Combine(rootDirectory, "staging");
         _activeFile = Path.Combine(rootDirectory, "active");
         _distribution = distribution;
+        _manifestVerifier = manifestVerifier ?? CliManifestVerifier.Anthropic;
+        _executableCheck = executableCheck ?? ExecutableSignatureCheck.ForCurrentOs();
         _platform = platform;
         _time = time ?? TimeProvider.System;
         _logger = (ILogger?)logger ?? NullLogger.Instance;
@@ -252,7 +261,9 @@ public sealed partial class ManagedCli
 
     private async Task<string> InstallAsync(string version, CancellationToken ct)
     {
-        var manifest = await _distribution.GetManifestAsync(version, ct);
+        var signed = await _distribution.GetManifestAsync(version, ct);
+        _manifestVerifier.Verify(signed.Manifest, signed.Signature);
+        var manifest = CliManifest.Parse(signed.Manifest);
         if (!string.Equals(manifest.Version, version, StringComparison.Ordinal))
             throw new CliIntegrityException($"манифест выдан для версии {manifest.Version}, запрошена {version}");
         if (!manifest.Platforms.TryGetValue(_platform.Key, out var build))
@@ -266,6 +277,7 @@ public sealed partial class ManagedCli
         {
             var binaryPath = Path.Combine(staging, build.Binary);
             await DownloadVerifiedAsync(version, build, binaryPath, ct);
+            _executableCheck.Verify(binaryPath);
 
             if (!OperatingSystem.IsWindows())
                 File.SetUnixFileMode(binaryPath,

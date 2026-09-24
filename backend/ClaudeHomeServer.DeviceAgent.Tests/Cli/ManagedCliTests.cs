@@ -15,7 +15,12 @@ public sealed class ManagedCliTests : IDisposable
         try { Directory.Delete(_root, recursive: true); } catch (DirectoryNotFoundException) { }
     }
 
-    private ManagedCli Create(CliPlatform? platform = null) => new(_root, _dist, platform ?? Linux, _time);
+    private static readonly CliManifestVerifier TrustedVerifier = TestPgpKey.Trusted.Verifier();
+
+    private IExecutableSignatureCheck _executableCheck = ExecutableSignatureCheck.None;
+
+    private ManagedCli Create(CliPlatform? platform = null) =>
+        new(_root, _dist, platform ?? Linux, _time, manifestVerifier: TrustedVerifier, executableCheck: _executableCheck);
 
     private string VersionDir(string v) => Path.Combine(_root, "versions", v);
     private string[] Staging() => Directory.GetFileSystemEntries(Path.Combine(_root, "staging"));
@@ -85,6 +90,82 @@ public sealed class ManagedCliTests : IDisposable
         cli.SetRequiredVersion("2.1.281");
         (await cli.EnsureAsync()).Problem.Should().Contain("SHA256 не совпал");
         Directory.Exists(VersionDir("2.1.281")).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Без_подписи_манифеста_копия_не_ставится_и_бинарь_не_качается()
+    {
+        _dist.Publish("2.1.281");
+        _dist.OmitSignature = true;
+        var cli = Create();
+
+        cli.SetRequiredVersion("2.1.281");
+        var status = await cli.EnsureAsync();
+
+        status.State.Should().Be(HarnessState.NotReady);
+        status.Problem.Should().StartWith(ManagedCli.NotReadyPrefix).And.Contain("нет подписи manifest.json.sig");
+        _dist.BinaryCalls.Should().Be(0);
+        Directory.Exists(VersionDir("2.1.281")).Should().BeFalse();
+        cli.TryAcquire(out var problem).Should().BeNull();
+        problem.Should().Contain("нет подписи");
+    }
+
+    [Fact]
+    public async Task Манифест_подписанный_чужим_ключом_отвергается()
+    {
+        _dist.Publish("2.1.281");
+        _dist.Signer = TestPgpKey.Stranger;
+        var cli = Create();
+
+        cli.SetRequiredVersion("2.1.281");
+        var status = await cli.EnsureAsync();
+
+        status.State.Should().Be(HarnessState.NotReady);
+        status.Problem.Should().Contain("чужим ключом");
+        _dist.BinaryCalls.Should().Be(0);
+        Directory.Exists(VersionDir("2.1.281")).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Подменённый_манифест_при_настоящей_подписи_отвергается()
+    {
+        // Злоумышленник на канале подставил свою SHA256 и свой бинарь, а .sig оставил настоящий.
+        var evil = FakeCliDistribution.Payload("evil");
+        _dist.Publish("2.1.281");
+        _dist.TamperManifest = m => System.Text.Encoding.UTF8.GetBytes(System.Text.Encoding.UTF8.GetString(m)
+            .Replace(Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(FakeCliDistribution.Payload("2.1.281"))),
+                Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(evil))));
+        var cli = Create();
+
+        cli.SetRequiredVersion("2.1.281");
+        var status = await cli.EnsureAsync();
+
+        status.State.Should().Be(HarnessState.NotReady);
+        status.Problem.Should().Contain("проверка целостности").And.Contain("подпись манифеста не сходится");
+        _dist.BinaryCalls.Should().Be(0);
+        Directory.Exists(VersionDir("2.1.281")).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Отказ_платформенной_подписи_бинаря_не_даёт_копии()
+    {
+        _dist.Publish("2.1.281");
+        _executableCheck = new RejectingCheck();
+        var cli = Create();
+
+        cli.SetRequiredVersion("2.1.281");
+        var status = await cli.EnsureAsync();
+
+        status.State.Should().Be(HarnessState.NotReady);
+        status.Problem.Should().Contain("подписан «Mallory»");
+        Directory.Exists(VersionDir("2.1.281")).Should().BeFalse();
+        Staging().Should().BeEmpty();
+    }
+
+    private sealed class RejectingCheck : IExecutableSignatureCheck
+    {
+        public void Verify(string executablePath) =>
+            throw new CliIntegrityException($"{Path.GetFileName(executablePath)} подписан «Mallory», ожидался «Anthropic, PBC»");
     }
 
     [Fact]

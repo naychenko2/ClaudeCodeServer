@@ -59,6 +59,12 @@ public class Project
     public string Id { get; init; } = Guid.NewGuid().ToString();
     public string Name { get; set; } = "";
     public string RootPath { get; set; } = "";
+    // Устройство локального проекта (ADR-016): null — серверный проект, иначе id устройства
+    // владельца (DesktopDevice.Id), и RootPath — путь НА ЭТОМ устройстве, а не на сервере.
+    // Спрашивать «локальный ли проект» — только через ProjectCapabilities (сторож G10).
+    // Смена при существующих чатах запрещена (409). Nullable-поле: старые записи
+    // projects.json читаются серверными, BackupSchema.Version не двигается.
+    public string? DeviceId { get; set; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
     public string? OwnerId { get; set; }

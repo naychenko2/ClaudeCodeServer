@@ -153,4 +153,41 @@ public class ProjectCapabilitiesTests
     [Fact]
     public void Привязка_ФлагИExec_ДажеОфлайн_Можно() =>
         ProjectCapabilities.BindRefusal(true, Device(online: false)).Should().BeNull();
+
+    // --- Вердикт для фоновой работы (ADR-016, вариант А плана §5) ---
+
+    [Fact]
+    public void BackgroundGate_СерверныйПроект_Готов()
+    {
+        ProjectCapabilities.BackgroundGate(Server(), device: null).IsReady.Should().BeTrue();
+    }
+
+    [Fact]
+    public void BackgroundGate_ГотовоеУстройство_Готов()
+    {
+        var gate = ProjectCapabilities.BackgroundGate(Local(), Device(caps: DeviceCapabilities.Exec));
+
+        gate.IsReady.Should().BeTrue();
+        gate.DeviceId.Should().Be("dev-1");
+    }
+
+    [Fact]
+    public void BackgroundGate_ОфлайнИлиНеготовыйХарнес_Ждать()
+    {
+        var offline = ProjectCapabilities.BackgroundGate(Local(), Device(online: false, caps: DeviceCapabilities.Exec));
+        offline.MustWait.Should().BeTrue();
+        offline.Reason.Should().Be(ProjectCapabilities.DeviceOfflineReason);
+
+        ProjectCapabilities.BackgroundGate(Local(), Device(harnessReady: false, caps: DeviceCapabilities.Exec))
+            .MustWait.Should().BeTrue();
+    }
+
+    [Fact]
+    public void BackgroundGate_УстройстваНет_ЖдатьНечего()
+    {
+        var gate = ProjectCapabilities.BackgroundGate(Local(), device: null);
+
+        gate.Verdict.Should().Be(ProjectBackgroundVerdict.DeviceGone);
+        gate.MustWait.Should().BeFalse();
+    }
 }

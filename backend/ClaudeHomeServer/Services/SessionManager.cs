@@ -361,6 +361,10 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // сравниваются только прогоны одной сессии, глобальная уникальность лишь упрощает отладку
     private static long _runSeq;
     private readonly ProjectManager _projects;
+    // Готовность устройства локального проекта (ADR-016, вариант А плана §5): фоновые и
+    // отложенные доставки в чат офлайн-устройства паркуются в Session.DeviceWaitQueue вместо
+    // хода, обречённого на отказ. null — проверки нет (тесты без неё): ход идёт как раньше.
+    private readonly Execution.IProjectDeviceGate? _deviceGate;
     // Шов Ф4 (Этап 5): заменяет _hub.Clients.Group(...).SendAsync — префиксы
     // собираются внутри SessionHubBroadcaster, а не в вызывающем коде.
     private readonly Composition.ISessionBroadcaster _broadcaster;
@@ -744,8 +748,11 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // Опционально (в тестах не передаётся): фабрика логгеров — нужна вертикали
         // TeamPlanService с собственным типизированным логгером (волна В). Без неё
         // TeamPlanService работает на NullLogger.
-        ILoggerFactory? loggerFactory = null)
+        ILoggerFactory? loggerFactory = null,
+        // Опционально (в тестах не передаётся): готовность устройства локального проекта
+        Execution.IProjectDeviceGate? deviceGate = null)
     {
+        _deviceGate = deviceGate;
         _turnEvents = turnEvents;
         _loggerFactory = loggerFactory;
         _taskLookup = tasks is null ? null : new Composition.TaskLookupAdapter(tasks);
@@ -4116,6 +4123,21 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         // cause — атрибуция callsite внутри auto/fromQueue (drain/WorkLoop/обход байпаса/…):
         // pinpoint'ит источник повторных доставок, прежде неразличимых при пустом origin.
         // Дубли видны как повторные строки с одинаковым/похожим text — pinpoint'ят источник.
+        // Фоновая или отложенная доставка в чат локального проекта с офлайн-устройством: хода
+        // не будет (канал отказал бы до старта) — сообщение ждёт устройство на самой сессии.
+        // Прямой ввод человека и системные директивы цикла сюда не попадают: человек у экрана
+        // и получает честный отказ хода, директива без своего цикла смысла не имеет.
+        if (!systemDirective && (auto || fromQueue) && DeviceWaitGate(entry) is { } deviceGate)
+        {
+            await ParkForDeviceAsync(sessionId, entry, deviceGate, new DeviceWaitMessage(
+                Guid.NewGuid().ToString("N"), text,
+                fromQueue && !auto ? DeviceWaitMessage.RouteUser : DeviceWaitMessage.RouteAuto,
+                DateTime.UtcNow, senderPersonaId, senderOrigin,
+                SuppressTasksExecute: suppressTasksExecute, StaffNote: staffNote,
+                AttachedPaths: attachedPaths.Count > 0 ? attachedPaths : null, Mode: mode));
+            return;
+        }
+
         var deliverySrc = fromQueue ? "fromQueue" : auto ? "auto" : "hub";
         var effectiveCause = cause != DeliveryCause.Unknown ? cause : !auto ? DeliveryCause.User : DeliveryCause.Unknown;
         _log.LogInformation("Доставка хода {Session}: src={Src} cause={Cause} origin={Origin} mode={Mode} text=\"{Text}\"",
@@ -4571,6 +4593,13 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             return queued;
         }
 
+        // Чат локального проекта, устройство офлайн: агентское сообщение (chats_send,
+        // будильник сторожа) ждёт устройство на сессии — принято, но хода пока не будет
+        if (DeviceWaitGate(entry) is { } deviceGate)
+            return await ParkForDeviceAsync(sessionId, entry, deviceGate, new DeviceWaitMessage(
+                Guid.NewGuid().ToString("N"), text, DeviceWaitMessage.RouteAgent, DateTime.UtcNow,
+                senderPersonaId, senderOrigin, agentDepth, SenderChatName: senderChatName));
+
         await EnsureProcessAsync(sessionId, entry);
         entry.Accumulator?.SetPersona(entry.Info.PersonaId);
 
@@ -4857,7 +4886,19 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return false;
         bool removed;
-        lock (entry.PendingLock) removed = entry.Pending.RemoveAll(p => p.Id == messageId) > 0;
+        var removedWaiting = false;
+        lock (entry.PendingLock)
+        {
+            removed = entry.Pending.RemoveAll(p => p.Id == messageId) > 0;
+            // Крестик на карточке «ждёт устройство» — снимает сообщение с сессии
+            if (!removed && entry.Info.DeviceWaitQueue is { } waiting && waiting.Any(m => m.Id == messageId))
+            {
+                var rest = waiting.Where(m => m.Id != messageId).ToList();
+                entry.Info.DeviceWaitQueue = rest.Count > 0 ? rest : null;
+                removed = removedWaiting = true;
+            }
+        }
+        if (removedWaiting) SaveSessions();
         if (removed) await BroadcastPendingAsync(sessionId, entry);
         return removed;
     }
@@ -5116,13 +5157,114 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     private Task BroadcastPendingAsync(string sessionId, SessionEntry entry) =>
         BroadcastSessionMessageAsync(sessionId, new PendingMessagesMessage(VisiblePending(entry)));
 
+    // Ждущие устройство идут впереди обычной очереди: они пришли раньше и уйдут в работу
+    // первыми (ReleaseDeviceWaitAsync ставит их в голову Pending).
     private static IReadOnlyList<PendingMessageDto> VisiblePending(SessionEntry entry)
     {
         lock (entry.PendingLock)
-            return [.. entry.Pending.Where(p => !p.Silent).Select(p => new PendingMessageDto(
-                p.Id, p.Text, p.SenderPersonaId, p.SenderOrigin, p.EnqueuedAt, p.SenderChatName,
-                p.Kind == PendingKind.User ? "user" : "agent",
-                p.AttachedPaths, p.Kind == PendingKind.User ? p.Mode : null))];
+            return [
+                .. (entry.Info.DeviceWaitQueue ?? []).Select(m => new PendingMessageDto(
+                    m.Id, m.Text, m.SenderPersonaId, m.SenderOrigin, m.QueuedAt, m.SenderChatName,
+                    m.Route == DeviceWaitMessage.RouteUser ? "user" : "agent",
+                    m.AttachedPaths, m.Route == DeviceWaitMessage.RouteUser ? m.Mode : null,
+                    WaitingForDevice: true)),
+                .. entry.Pending.Where(p => !p.Silent).Select(p => new PendingMessageDto(
+                    p.Id, p.Text, p.SenderPersonaId, p.SenderOrigin, p.EnqueuedAt, p.SenderChatName,
+                    p.Kind == PendingKind.User ? "user" : "agent",
+                    p.AttachedPaths, p.Kind == PendingKind.User ? p.Mode : null)),
+            ];
+    }
+
+    // === Ожидание устройства локального проекта (ADR-016, вариант А плана §5) ===
+
+    // Вердикт «ждать устройство» для чата: только проектный чат локального проекта, чьё
+    // устройство не готово. Устройства нет вовсе (отозвано) — не ждём: ход откажет честно.
+    private ProjectBackgroundGate? DeviceWaitGate(SessionEntry entry)
+    {
+        if (_deviceGate is null || entry.Info.ProjectId is not { } pid) return null;
+        if (_projects.GetById(pid) is not { } project) return null;
+        var gate = _deviceGate.Check(project);
+        return gate.MustWait ? gate : null;
+    }
+
+    // Парковка на сессии: список заменяется целиком (копия с добавлением) — SaveSessions
+    // сериализует Info без лока очереди и не должен застать список посреди правки. Дедуп
+    // агентских — как у Pending: наивный ретрай агента не множит одинаковые ходы.
+    private async Task<SendAndWaitResult> ParkForDeviceAsync(string sessionId, SessionEntry entry,
+        ProjectBackgroundGate gate, DeviceWaitMessage message)
+    {
+        int position;
+        lock (entry.PendingLock)
+        {
+            var queue = entry.Info.DeviceWaitQueue ?? [];
+            if (message.Route == DeviceWaitMessage.RouteAgent
+                && queue.Any(m => m.Route == DeviceWaitMessage.RouteAgent && m.Text == message.Text
+                    && m.SenderPersonaId == message.SenderPersonaId))
+                return new SendAndWaitResult.Queued(queue.Count, Duplicate: true);
+            entry.Info.DeviceWaitQueue = [.. queue, message];
+            position = entry.Info.DeviceWaitQueue.Count;
+        }
+        SaveSessions();
+        await BroadcastPendingAsync(sessionId, entry);
+        _log.LogInformation("Чат {Session}: сообщение ждёт устройство {Device} ({Reason}), в ожидании {Count}",
+            sessionId, gate.DeviceId, gate.Reason, position);
+        return new SendAndWaitResult.Queued(position, Duplicate: false);
+    }
+
+    /// <summary>Чаты, у которых есть сообщения, ждущие устройство.</summary>
+    public IReadOnlyList<Session> GetDeviceWaitingSessions() =>
+        [.. _sessions.Values.Select(e => e.Info).Where(i => i.DeviceWaitQueue is { Count: > 0 })];
+
+    /// <summary>
+    /// Устройство готово: ждавшие сообщения встают в голову обычной очереди (порядок прихода
+    /// сохраняется) и разбираются штатным drain — первое сразу, если чат свободен, остальные
+    /// по концу хода. Возвращает число выпущенных сообщений.
+    /// </summary>
+    public async Task<int> ReleaseDeviceWaitAsync(string sessionId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return 0;
+        List<DeviceWaitMessage> released;
+        bool dispatchNow;
+        lock (entry.PendingLock)
+        {
+            released = entry.Info.DeviceWaitQueue ?? [];
+            if (released.Count == 0) return 0;
+            entry.Info.DeviceWaitQueue = null;
+            entry.Pending.InsertRange(0, released.Select(m => new QueuedMessage(
+                m.Id, m.Text, m.SenderPersonaId, m.SenderOrigin, m.AgentDepth, m.QueuedAt,
+                SuppressTasksExecute: m.SuppressTasksExecute, SenderChatName: m.SenderChatName,
+                Kind: m.Route == DeviceWaitMessage.RouteUser ? PendingKind.User : PendingKind.Agent,
+                AttachedPaths: m.AttachedPaths, Mode: m.Mode, StaffNote: m.StaffNote)));
+            dispatchNow = !entry.QueueFrozen
+                && entry.Info.Status is not (SessionStatus.Working or SessionStatus.Waiting)
+                && entry.Process?.OrchestrationActive != true;
+        }
+        SaveSessions();
+        await BroadcastPendingAsync(sessionId, entry);
+        _log.LogInformation("Чат {Session}: устройство готово, в работу {Count} ждавших сообщений", sessionId, released.Count);
+        if (dispatchNow) _ = Task.Run(() => DrainNextPendingAsync(sessionId));
+        return released.Count;
+    }
+
+    /// <summary>
+    /// Снять сообщения, ждущие устройство дольше потолка (поставлены раньше <paramref name="olderThanUtc"/>).
+    /// Возвращает снятые — уведомление владельцу шлёт вызывающий.
+    /// </summary>
+    public async Task<IReadOnlyList<DeviceWaitMessage>> ExpireDeviceWaitAsync(string sessionId, DateTime olderThanUtc)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return [];
+        List<DeviceWaitMessage> expired;
+        lock (entry.PendingLock)
+        {
+            var queue = entry.Info.DeviceWaitQueue ?? [];
+            expired = [.. queue.Where(m => m.QueuedAt <= olderThanUtc)];
+            if (expired.Count == 0) return [];
+            var rest = queue.Where(m => m.QueuedAt > olderThanUtc).ToList();
+            entry.Info.DeviceWaitQueue = rest.Count > 0 ? rest : null;
+        }
+        SaveSessions();
+        await BroadcastPendingAsync(sessionId, entry);
+        return expired;
     }
 
     // Есть ли в очереди сообщение, продолжающее цикл. User — следующая итерация цикла;

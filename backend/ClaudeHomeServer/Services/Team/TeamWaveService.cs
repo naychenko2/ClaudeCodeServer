@@ -132,6 +132,9 @@ public class TeamWaveService
         _tasks.TaskCompleted += OnTaskDone;
         // Провал хода исполнителя: одна перевыдача, второй провал — эскалация
         if (_exec is not null) _exec.TeamTaskFailed = OnTaskFailedAsync;
+        // Под-задача так и не стартовала: устройство локального проекта не вышло в онлайн за
+        // потолок ожидания (ADR-016, план §5) — карточка в ленте штаба, без перевыдачи
+        if (_exec is not null) _exec.TeamTaskNotLaunched = OnTaskNotLaunchedAsync;
         // Волна 2 team-blocker-honest: страховка молчания исполнителя должна отличать
         // «молчит» от «ждёт ответа по блокеру» — для этого ей нужен признак открытой
         // карточки блокера по задаче. Резолв идёт по тому же ITeamHistoryStore, через
@@ -356,7 +359,15 @@ public class TeamWaveService
     {
         foreach (var task in tasks)
         {
-            try { await _exec!.ExecuteAsync(task, auto: true); }
+            try
+            {
+                // Устройство локального проекта офлайн — под-задача не падает, а ждёт его:
+                // состояние «ждёт устройство» на самой задаче, запуск — по выходу в онлайн
+                var launched = await _exec!.ExecuteAsync(task, auto: true);
+                if (launched.DeviceWaitSince is not null)
+                    _log.LogInformation("Под-задача {TaskId} «{Title}» ждёт устройство: {Reason}",
+                        task.Id, task.Title, launched.DeviceWaitReason);
+            }
             catch (Exception ex)
             {
                 _log.LogError(ex, "Запуск исполнителя по задаче {TaskId} «{Title}» не удался", task.Id, task.Title);
@@ -368,7 +379,24 @@ public class TeamWaveService
     // Карточка в ленту штаба: исполнитель не стартовал вовсе (модель недоступна, лимит
     // провайдера, задача удалена). Kind — TaskFailed: для человека это ровно тот же случай
     // «работа по под-задаче не идёт», и кнопки карточки те же.
-    internal async Task RaiseLaunchFailedAsync(Session session, TaskItem task, Exception ex)
+    internal Task RaiseLaunchFailedAsync(Session session, TaskItem task, Exception ex) =>
+        RaiseLaunchFailedAsync(session, task, $"Исполнитель по под-задаче «{task.Title}» не запустился: {ex.Message}.\n\n"
+            + "Работа по ней не идёт. Проверьте модель исполнителя и доступность провайдера, "
+            + "затем перевыдайте задачу.");
+
+    // Под-задача ждала устройство локального проекта и не дождалась (хук
+    // TaskExecutionService.TeamTaskNotLaunched). Перевыдачи нет: она упёрлась бы в то же устройство.
+    internal async Task OnTaskNotLaunchedAsync(TaskItem task, string reason)
+    {
+        var (session, _, _) = await ResolveContextAsync(task);
+        if (session is null) return;
+        await RaiseLaunchFailedAsync(session, task,
+            $"Исполнитель по под-задаче «{task.Title}» не запустился: {reason}.\n\n"
+            + "Работа по ней не идёт. Включите устройство проекта (агент локальных проектов в сети), "
+            + "затем перевыдайте задачу.");
+    }
+
+    private async Task RaiseLaunchFailedAsync(Session session, TaskItem task, string details)
     {
         var wave = session.TeamImplement?.WaveNumber ?? 0;
         try
@@ -377,9 +405,7 @@ public class TeamWaveService
             {
                 Kind = TeamEscalationKind.TaskFailed,
                 Title = TeamImplementPrompts.EscalationTitle(TeamEscalationKind.TaskFailed, task.Title),
-                Details = $"Исполнитель по под-задаче «{task.Title}» не запустился: {ex.Message}.\n\n"
-                          + "Работа по ней не идёт. Проверьте модель исполнителя и доступность провайдера, "
-                          + "затем перевыдайте задачу.",
+                Details = details,
                 TaskId = task.Id,
                 Wave = wave,
                 Actions = TeamEscalationActions.For(TeamEscalationKind.TaskFailed),

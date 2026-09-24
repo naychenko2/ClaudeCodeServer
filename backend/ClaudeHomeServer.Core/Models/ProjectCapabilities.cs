@@ -25,6 +25,29 @@ public sealed record ProjectCapabilityGroup(string Host, bool Available, string?
 /// <summary>Можно ли запускать ход проекта прямо сейчас.</summary>
 public sealed record ProjectExecCapability(bool Available, string? Reason);
 
+/// <summary>Вердикт для фоновой работы по проекту (ADR-016, план §5).</summary>
+public enum ProjectBackgroundVerdict
+{
+    /// <summary>Запускать можно: серверный проект или готовое устройство.</summary>
+    Ready,
+    /// <summary>Устройство не готово (офлайн, нет exec, харнес) — ждать его выхода в онлайн.</summary>
+    WaitDevice,
+    /// <summary>Устройства нет или оно отозвано — ждать нечего.</summary>
+    DeviceGone,
+}
+
+/// <summary>
+/// Вердикт фоновой работы с устройством проекта. <see cref="DeviceId"/> — устройство
+/// локального проекта (null у серверного), <see cref="Reason"/> — текст для человека.
+/// </summary>
+public sealed record ProjectBackgroundGate(ProjectBackgroundVerdict Verdict, string? DeviceId, string? Reason)
+{
+    public static readonly ProjectBackgroundGate Ready = new(ProjectBackgroundVerdict.Ready, null, null);
+
+    public bool IsReady => Verdict == ProjectBackgroundVerdict.Ready;
+    public bool MustWait => Verdict == ProjectBackgroundVerdict.WaitDevice;
+}
+
 /// <summary>
 /// Ключи подсистем проекта для матрицы (ADR-016 §4). Фронт скрывает панели по группе, в
 /// которую входит ключ, а не по <c>deviceId</c> проекта.
@@ -154,6 +177,29 @@ public sealed record ProjectCapabilities(
         if (device is null) return DeviceMissingReason;
         if (!device.HasCapability(DeviceCapabilities.Exec)) return NoExecReason;
         return null;
+    }
+
+    /// <summary>
+    /// Потолок ожидания устройства для разовой фоновой работы (ADR-016, вариант А плана §5):
+    /// то же окно, что у автозапуска задач по сроку. Истёк — отказ с уведомлением, а не тишина.
+    /// </summary>
+    public static readonly TimeSpan DeviceWaitCeiling = TimeSpan.FromHours(24);
+
+    /// <summary>
+    /// Можно ли фоновой работе (исполнитель задачи, волна штаба, очередь чата, автоматизация,
+    /// опрос сторожа) запускать ход проекта прямо сейчас. Серверный проект — всегда да.
+    /// Локальный: устройство готово — да; устройства нет (отозвано) — ждать нечего, отказ;
+    /// иначе (офлайн, нет exec, харнес не готов) — ждать выхода устройства в онлайн.
+    /// </summary>
+    public static ProjectBackgroundGate BackgroundGate(Project project, DeviceExecStatus? device)
+    {
+        if (!IsDeviceBound(project)) return ProjectBackgroundGate.Ready;
+        if (device is null)
+            return new ProjectBackgroundGate(ProjectBackgroundVerdict.DeviceGone, project.DeviceId, DeviceMissingReason);
+        var exec = For(project, device).Exec;
+        return exec.Available
+            ? new ProjectBackgroundGate(ProjectBackgroundVerdict.Ready, project.DeviceId, null)
+            : new ProjectBackgroundGate(ProjectBackgroundVerdict.WaitDevice, project.DeviceId, exec.Reason);
     }
 
     /// <summary>

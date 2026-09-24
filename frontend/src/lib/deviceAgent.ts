@@ -207,13 +207,17 @@ export function assertServerRoute(projectId: string, method: string, path: strin
     throw new DeviceAgentError('unsupported', DEVICE_AGENT_UNSUPPORTED_TEXT);
 }
 
-// URL отдачи файла потоком для <img>/<video>: тег не шлёт заголовков, билет едет в ?ticket=.
-// Билета ещё нет — null: панель к этому моменту уже прошла проверку связи и билет держит.
-export function agentStreamUrl(projectId: string, path: string): string | null {
-  const t = tickets.get(projectId);
-  if (!t) return null;
-  const params = new URLSearchParams({ path, ticket: t.ticket });
-  return `${agentBase(t)}/api/projects/${encodeURIComponent(projectId)}/files/stream?${params}`;
+// URL отдачи файла потоком для <img>/<video> — ЕДИНСТВЕННАЯ точка на фронте. Тег не шлёт
+// заголовков, поэтому билет едет в запросе, но основной билет проекта туда класть нельзя
+// (ревью 4.5): агент примет в ?ticket= только узкий билет — короткий (≤60 с) и на один путь.
+// Асинхронно, потому что узкий билет выдаётся на каждый путь отдельно.
+// TODO(4.2б): выдать узкий билет у сервера и собрать из него URL — контракт выдачи придёт
+// с 4.2б; меняется только тело этой функции. До того поток у локального проекта недоступен.
+export const DEVICE_AGENT_STREAM_PENDING_TEXT = 'Просмотр потоком у локального проекта появится со следующей версией агента';
+
+export async function agentStreamUrl(projectId: string, path: string): Promise<string> {
+  void projectId; void path;
+  throw new DeviceAgentError('unsupported', DEVICE_AGENT_STREAM_PENDING_TEXT);
 }
 
 // ---------- проверка связи ----------
@@ -245,8 +249,8 @@ function subscribe(l: () => void): () => void {
 }
 
 // Состояние связи с агентом для панели локального проекта. У серверного проекта — всегда
-// ready: ему агент не нужен. Пока панель открыта, билет перевыпускается заранее, чтобы ссылки
-// на поток (картинки, видео) не протухали.
+// ready: ему агент не нужен. Пока панель открыта, билет перевыпускается заранее, чтобы
+// запросы панели не упирались в выдачу билета.
 export function useDeviceAgent(project: Project | null | undefined, enabled = true): DeviceAgentStatus {
   noteProject(project);
   const projectId = project?.id ?? '';

@@ -8,7 +8,7 @@ vi.mock('../offline', () => ({ request }));
 
 import {
   noteProject, projectRequest, probeDeviceAgent, getDeviceAgentStatus, agentStreamUrl,
-  DeviceAgentError, resetDeviceAgentForTests,
+  DeviceAgentError, resetDeviceAgentForTests, DEVICE_AGENT_STREAM_PENDING_TEXT,
 } from '../deviceAgent';
 
 const FILE_FEATURES = [ProjectFeature.Files, ProjectFeature.Diff, ProjectFeature.Git, ProjectFeature.FileWatcher, ProjectFeature.Terminal];
@@ -167,17 +167,43 @@ describe('probeDeviceAgent — понятные состояния вместо 
     expect(getDeviceAgentStatus('l1')).toEqual({ kind: 'rejected', reason: 'Билет к агенту недействителен или истёк' });
   });
 
-  it('агент ответил — ready, и поток файла идёт с билетом в запросе', async () => {
+  it('агент ответил — ready', async () => {
     noteProject(project('l1', 'device'));
     request.mockResolvedValue(ticketResponse('tk'));
     fetchMock.mockResolvedValue(res(200, []));
     await probeDeviceAgent('l1');
     expect(getDeviceAgentStatus('l1').kind).toBe('ready');
-    expect(agentStreamUrl('l1', 'img/a b.png'))
-      .toBe('http://127.0.0.1:47318/api/projects/l1/files/stream?path=img%2Fa+b.png&ticket=tk');
   });
 
   it('DeviceAgentError различает виды отказа', () => {
     expect(new DeviceAgentError('unreachable', 'x').kind).toBe('unreachable');
+  });
+});
+
+describe('agentStreamUrl — единственная точка URL потока', () => {
+  // TODO(4.2б): заменить на проверку узкого билета (≤60 с, один путь), когда придёт контракт
+  it('до 4.2б отказывает понятным текстом и не кладёт основной билет в URL', async () => {
+    noteProject(project('l1', 'device'));
+    request.mockResolvedValue(ticketResponse('main-ticket'));
+    fetchMock.mockResolvedValue(res(200, []));
+    await probeDeviceAgent('l1');
+
+    await expect(agentStreamUrl('l1', 'img/a.png'))
+      .rejects.toMatchObject({ kind: 'unsupported', message: DEVICE_AGENT_STREAM_PENDING_TEXT });
+    // Ни одного обращения к агенту с основным билетом в строке запроса
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('main-ticket'))).toBe(false);
+  });
+});
+
+describe('api.files.fileUrl у локального проекта', () => {
+  it('не отдаёт URL с основным билетом проекта', async () => {
+    const { api } = await import('../api');
+    noteProject(project('l1', 'device'));
+    request.mockResolvedValue(ticketResponse('main-ticket'));
+    fetchMock.mockResolvedValue(res(200, []));
+    await probeDeviceAgent('l1');
+    const url = api.files.fileUrl('l1', 'img/a.png');
+    expect(url).not.toContain('main-ticket');
+    expect(url).not.toContain('ticket=');
   });
 });

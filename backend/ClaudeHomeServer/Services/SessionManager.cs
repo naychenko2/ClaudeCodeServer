@@ -2609,7 +2609,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
         var dstDir = Path.Combine(branchConfigRoot, "projects", Llm.TranscriptMigrator.FlattenCwd(branchCwd));
         Directory.CreateDirectory(dstDir);
-        var dstPath = FileService.SafeJoin(dstDir, newCsid + ".jsonl");
+        var dstPath = SafePath.Join(dstDir, newCsid + ".jsonl");
 
         // Якоря для резака: неслужебные сообщения истории до якоря (не включая его) +
         // сам якорь последним (TranscriptBrancher трактует последний элемент как якорь шага)

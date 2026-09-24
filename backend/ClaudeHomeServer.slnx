@@ -15,6 +15,7 @@
   <Project Path="ClaudeHomeServer.Dossiers.Tests/ClaudeHomeServer.Dossiers.Tests.csproj" />
   <Project Path="ClaudeHomeServer.Memory/ClaudeHomeServer.Memory.csproj" />
   <Project Path="ClaudeHomeServer.Memory.Tests/ClaudeHomeServer.Memory.Tests.csproj" />
+  <Project Path="ClaudeHomeServer.Files/ClaudeHomeServer.Files.csproj" />
   <Project Path="ClaudeHomeServer.Git/ClaudeHomeServer.Git.csproj" />
   <Project Path="ClaudeHomeServer.Git.Tests/ClaudeHomeServer.Git.Tests.csproj" />
   <Project Path="ClaudeHomeServer.Images/ClaudeHomeServer.Images.csproj" />

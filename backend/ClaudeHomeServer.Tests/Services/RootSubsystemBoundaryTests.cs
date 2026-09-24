@@ -41,7 +41,7 @@ namespace ClaudeHomeServer.Tests.Services;
 ///   <c>SharedAllowedPrefixes</c> или в точечных allow-list каждой вертикали
 ///   (<c>PersonaManager</c>, <c>ProjectManager</c>, <c>SessionManager</c>,
 ///   <c>UserStore</c>, <c>ChatHistoryService</c>,
-///   <c>FileService</c>, <c>NotificationService</c>, <c>NotificationStore</c>).
+///   <c>NotificationService</c>, <c>NotificationStore</c>).
 ///   <c>TaskManager</c> уехал в вертикаль <c>Services.Tasks</c> (волна 4C, шаг 1) —
 ///   его держит собственный подсистемный сторож <c>SubsystemBoundaryTests</c>,
 ///   а из root-исключений он снят, чтобы пустая запись не глушила проверку
@@ -169,6 +169,10 @@ public class RootSubsystemBoundaryTests
         // ITriggerSource. PersonaAutomationService опирается на них напрямую.
         // 3 пары — кандидат на сужение, оставлен префиксом ради новых источников.
         "ClaudeHomeServer.Services.TriggerSources",
+        // Файлы проекта: FileService и FileEntry (вертикаль Files, ADR-016, задача 4.1).
+        // До выноса FileService жил в корне и стоял в ExcludedRootTypes; корневые сервисы
+        // (сессии, пресеты, привязки персон, ватчер) зовут его как общую инфраструктуру.
+        "ClaudeHomeServer.Services.Files",
     };
 
     /// <summary>Точечные типы, на которые root-типы имеют право ссылаться,
@@ -309,7 +313,6 @@ public class RootSubsystemBoundaryTests
         // его границы ловит SubsystemBoundaryTests по строке `Tasks` в Boundaries,
         // здесь он больше не исключение.
         "ClaudeHomeServer.Services.ChatHistoryService",
-        "ClaudeHomeServer.Services.FileService",
         "ClaudeHomeServer.Services.NotificationService",
         "ClaudeHomeServer.Services.NotificationStore",
         // Знаниевых типов в корне БОЛЬШЕ НЕТ: шаги 6 и 8 волны 3 перенесли

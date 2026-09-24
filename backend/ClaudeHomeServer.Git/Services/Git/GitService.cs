@@ -42,7 +42,7 @@ public sealed class GitConflictException(string message, IReadOnlyList<string> f
 // (commit-on-plumbing): запись полного дерева, резолв рефа, чтение списка файлов и
 // содержимого, tip с автором, push. Имя ветки и идентичность коммита — на стороне
 // вызывающей вертикали (см. DossierBranch), GitService про конкретные ветки не знает.
-public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? logger = null) : IGitRefSnapshotStore, IGitRepoChecker
+public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? logger = null) : IGitRefSnapshotStore, IGitRepoChecker, IGitWorkingTree
 {
     // Сериализация write-операций одного репозитория: git из UI, авто-коммит хода и
     // сессия Claude могут столкнуться на .git/index.lock. Чтение (status/log/diff) — без блокировки.

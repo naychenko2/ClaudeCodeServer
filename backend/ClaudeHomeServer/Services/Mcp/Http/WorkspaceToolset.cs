@@ -12,6 +12,7 @@ using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Tasks;
+using ClaudeHomeServer.Services.Files;
 
 namespace ClaudeHomeServer.Services.Mcp.Http;
 

@@ -175,6 +175,7 @@
     <ProjectReference Include="..\ClaudeHomeServer.Docs\ClaudeHomeServer.Docs.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Dossiers\ClaudeHomeServer.Dossiers.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Execution\ClaudeHomeServer.Execution.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Files\ClaudeHomeServer.Files.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Memory\ClaudeHomeServer.Memory.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Skills\ClaudeHomeServer.Skills.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Git\ClaudeHomeServer.Git.csproj" />

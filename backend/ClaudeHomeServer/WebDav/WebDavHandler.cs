@@ -6,6 +6,7 @@ using System.Security.Claims;
 using System.Text;
 using ClaudeHomeServer.Services;
 using Microsoft.AspNetCore.Authentication;
+using ClaudeHomeServer.Services.Files;
 
 namespace ClaudeHomeServer.WebDav;
 

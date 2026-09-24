@@ -7,7 +7,8 @@ using ClaudeHomeServer.Services.Notes;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using ClaudeHomeServer.Services.Composition;
-using FileMutationKind = ClaudeHomeServer.Services.FileMutationKind;
+using ClaudeHomeServer.Services.Files;
+using FileMutationKind = ClaudeHomeServer.Services.Composition.FileMutationKind;
 
 namespace ClaudeHomeServer.Controllers;
 

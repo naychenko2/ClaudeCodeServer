@@ -7,6 +7,7 @@ using ClaudeHomeServer.Services.Team;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Files;
 
 namespace ClaudeHomeServer.Controllers;
 

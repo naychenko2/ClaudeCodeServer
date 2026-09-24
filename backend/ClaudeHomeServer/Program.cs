@@ -29,6 +29,7 @@ using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.StaticFiles;
 using Yarp.ReverseProxy.Forwarder;
+using ClaudeHomeServer.Services.Files;
 
 JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
 
@@ -479,6 +480,8 @@ builder.Services.AddSingleton<ChatDigestService>();
 // TaskManager/TaskAiService/BoardService/DailyBriefingService/TaskSchedulerService
 // — DI в подсистеме `TasksSubsystem` (волна 4C, шаг 1).
 builder.Services.AddSingleton<FileService>();
+// Шов файлов проекта (ADR-016): async и с ключом «проект», guard файловой группы внутри.
+builder.Services.AddSingleton<IProjectFiles, ProjectFiles>();
 // Резолв контекста чата (фича chat-context): признак «не найден» считает одна точка
 // для REST фронта и MCP-тула context_list
 builder.Services.AddSingleton<SessionContextResolver>();

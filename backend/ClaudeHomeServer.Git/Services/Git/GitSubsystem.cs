@@ -39,6 +39,8 @@ public sealed class GitSubsystem : IAppSubsystem
         // IGitRepoChecker — узкий шов для Deploy (HEAD + dirty-дерево), паттерн
         // вчерашних трёх швов: контракт в Core, реализация — сам GitService.
         services.AddSingleton<IGitRepoChecker>(sp => sp.GetRequiredService<GitService>());
+        // IGitWorkingTree — шов для вертикали Files (git-статус дерева, дифф и откат файла).
+        services.AddSingleton<IGitWorkingTree>(sp => sp.GetRequiredService<GitService>());
         services.AddSingleton<GitServerService>();
 
         services.AddSingleton<GitAiService>();

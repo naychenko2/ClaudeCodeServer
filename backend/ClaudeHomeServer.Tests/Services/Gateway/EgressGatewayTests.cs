@@ -27,11 +27,13 @@ public sealed class EgressGatewayTests : IDisposable
         foreach (var d in _cleanup) d.Dispose();
     }
 
-    private TestWebApplicationFactory Factory(bool egress = true, EgressConnector? connector = null)
+    private TestWebApplicationFactory Factory(bool egress = true, EgressConnector? connector = null,
+        Dictionary<string, string>? limits = null)
     {
         var factory = new TestWebApplicationFactory();
         factory.ExtraConfig["LlmGateway:Enabled"] = "true";
         factory.ExtraConfig["LlmGateway:Egress:Enabled"] = egress ? "true" : "false";
+        foreach (var (key, value) in limits ?? []) factory.ExtraConfig["LlmGateway:Egress:" + key] = value;
         if (connector is not null) factory.ExtraServices = s => s.AddSingleton(connector);
         _cleanup.Add(factory);
         return factory;
@@ -182,6 +184,165 @@ public sealed class EgressGatewayTests : IDisposable
         opened.Stream.Should().BeNull();
         opened.Status.Should().Be(StatusCodes.Status502BadGateway);
         opened.Outcome.Should().Contain("403");
+    }
+
+    // ---- G12: потолки туннеля ----
+
+    [Fact]
+    public async Task G12_Туннель_без_активности_закрывается_по_бездействию()
+    {
+        var factory = Factory(connector: new SinkConnector(), limits: new() { ["InactivityTimeout"] = "00:00:00.500" });
+        var (device, turn) = Turn(factory);
+        using var socket = await OpenTunnelAsync(factory, device, turn);
+
+        (await ClosedWithinAsync(socket, TimeSpan.FromSeconds(10))).Should().BeTrue("сервер обязан закрыть туннель без байт");
+    }
+
+    [Fact]
+    public async Task G12_Туннель_с_потоком_данных_закрывается_по_потолку_жизни()
+    {
+        var factory = Factory(connector: new SinkConnector(), limits: new()
+        {
+            ["InactivityTimeout"] = "00:00:05",
+            ["MaxLifetime"] = "00:00:01",
+        });
+        var (device, turn) = Turn(factory);
+        using var socket = await OpenTunnelAsync(factory, device, turn);
+        using var stop = new CancellationTokenSource();
+        var started = DateTime.UtcNow;
+        var feeder = Task.Run(async () =>
+        {
+            while (!stop.IsCancellationRequested && socket.State == WebSocketState.Open)
+            {
+                try { await socket.SendAsync("x"u8.ToArray(), WebSocketMessageType.Binary, true, stop.Token); }
+                catch (Exception) { return; }
+                await Task.Delay(50, CancellationToken.None);
+            }
+        });
+
+        var closed = await ClosedWithinAsync(socket, TimeSpan.FromSeconds(10));
+        await stop.CancelAsync();
+        await feeder;
+
+        closed.Should().BeTrue("поток данных не продлевает жизнь туннеля сверх потолка");
+        (DateTime.UtcNow - started).Should().BeGreaterThan(TimeSpan.FromMilliseconds(800));
+    }
+
+    [Fact]
+    public async Task G12_Туннель_закрывается_по_потолку_байтов()
+    {
+        var factory = Factory(connector: new SinkConnector(), limits: new() { ["MaxBytesPerTunnel"] = "1024" });
+        var (device, turn) = Turn(factory);
+        using var socket = await OpenTunnelAsync(factory, device, turn);
+
+        await socket.SendAsync(new byte[2048], WebSocketMessageType.Binary, true, CancellationToken.None);
+
+        (await ClosedWithinAsync(socket, TimeSpan.FromSeconds(10))).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task G12_Девятый_одновременный_туннель_хода_429()
+    {
+        var factory = Factory(connector: new SinkConnector());
+        var (device, turn) = Turn(factory);
+        var open = new List<WebSocket>();
+        for (var i = 0; i < 8; i++) open.Add(await OpenTunnelAsync(factory, device, turn));
+
+        var response = await factory.CreateClient().SendAsync(Request(turn, "93.184.216.34", 443, device));
+
+        response.StatusCode.Should().Be(HttpStatusCode.TooManyRequests);
+        foreach (var s in open) s.Dispose();
+    }
+
+    [Fact]
+    public async Task G12_Семнадцатый_одновременный_туннель_устройства_429()
+    {
+        var factory = Factory(connector: new SinkConnector());
+        var (device, first) = Turn(factory);
+        var tokens = factory.Services.GetRequiredService<TurnTokenService>();
+        var second = tokens.Issue("owner-1", "chat-2", device.Id);
+        var third = tokens.Issue("owner-1", "chat-3", device.Id);
+        var open = new List<WebSocket>();
+        for (var i = 0; i < 8; i++) open.Add(await OpenTunnelAsync(factory, device, first));
+        for (var i = 0; i < 8; i++) open.Add(await OpenTunnelAsync(factory, device, second));
+
+        var response = await factory.CreateClient().SendAsync(Request(third, "93.184.216.34", 443, device));
+
+        response.StatusCode.Should().Be(HttpStatusCode.TooManyRequests);
+        foreach (var s in open) s.Dispose();
+    }
+
+    [Fact]
+    public void G12_Место_возвращается_по_концу_туннеля()
+    {
+        var limiter = new EgressTunnelLimiter();
+        var leases = Enumerable.Range(0, 2).Select(_ => limiter.TryAcquire("t", "d", 2, 16)).ToList();
+        limiter.TryAcquire("t", "d", 2, 16).Should().BeNull();
+
+        leases[0]!.Dispose();
+        leases[0]!.Dispose();
+
+        limiter.TryAcquire("t", "d", 2, 16).Should().NotBeNull();
+        limiter.TryAcquire("t", "d", 2, 16).Should().BeNull("повторный Dispose не освобождает место дважды");
+    }
+
+    private static async Task<WebSocket> OpenTunnelAsync(TestWebApplicationFactory factory, GatewayTestDevice device, IssuedTurnToken turn)
+    {
+        var ws = ((TestServer)factory.Server).CreateWebSocketClient();
+        ws.ConfigureRequest = r =>
+        {
+            r.Headers["Authorization"] = DesktopDeviceAuthHandler.TokenPrefix + device.Token;
+            r.Headers[TurnTokenEndpointFilter.DeviceFingerprintHeader] = GatewayTestDevice.Fingerprint;
+            r.Headers[TurnTokenEndpointFilter.HeaderName] = turn.Token;
+        };
+        return await ws.ConnectAsync(
+            new Uri($"ws://localhost/{DeviceEgressRoutes.GatewayPath(turn.Grant.TurnId)}?host=93.184.216.34&port=443"),
+            CancellationToken.None);
+    }
+
+    // Закрытие сервером: пришёл Close или сокет оборван. false — туннель жив дольше потолка ожидания
+    private static async Task<bool> ClosedWithinAsync(WebSocket socket, TimeSpan limit)
+    {
+        using var timeout = new CancellationTokenSource(limit);
+        var buffer = new byte[256];
+        try
+        {
+            while (true)
+            {
+                var got = await socket.ReceiveAsync(buffer, timeout.Token);
+                if (got.MessageType == WebSocketMessageType.Close) return true;
+            }
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested) { return false; }
+        catch (Exception) { return true; }
+    }
+
+    // Соединение наружу без сети: пишет в никуда и молчит до отмены
+    private sealed class SinkConnector() : EgressConnector(null, new EgressAddressPolicy())
+    {
+        public override Task<Opened> ConnectAsync(IPAddress[] addresses, int port, CancellationToken ct) =>
+            Task.FromResult(new Opened(new SinkStream(), 0, ""));
+    }
+
+    private sealed class SinkStream : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) { }
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken ct = default) => ValueTask.CompletedTask;
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default)
+        {
+            await Task.Delay(Timeout.Infinite, ct);
+            return 0;
+        }
     }
 
     // HTTP-прокси на loopback: запоминает заголовок CONNECT, отвечает заданной строкой и при

@@ -32,4 +32,15 @@ public sealed class EgressGatewayOptions
     public int[]? AllowedPorts { get; set; }
 
     public IReadOnlyList<int> EffectivePorts => AllowedPorts is { Length: > 0 } ports ? ports : DefaultPorts;
+
+    // Потолки туннелей. Одновременных — на ход и на устройство (сверх — 429 до соединения).
+    public int MaxConcurrentPerTurn { get; set; } = 8;
+    public int MaxConcurrentPerDevice { get; set; } = 16;
+
+    // Туннель закрывается, если байт не было ни в одну сторону дольше InactivityTimeout,
+    // если он прожил MaxLifetime независимо от активности или передал больше MaxBytesPerTunnel
+    // (сумма обеих сторон).
+    public TimeSpan InactivityTimeout { get; set; } = TimeSpan.FromSeconds(60);
+    public TimeSpan MaxLifetime { get; set; } = TimeSpan.FromMinutes(5);
+    public long MaxBytesPerTunnel { get; set; } = 1L << 30;
 }

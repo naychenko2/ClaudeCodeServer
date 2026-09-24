@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Globalization;
 using System.Net.WebSockets;
 using ClaudeHomeServer.Protocol;
@@ -17,7 +18,9 @@ namespace ClaudeHomeServer.Services.Llm.Gateway;
 // - порт — из LlmGateway:Egress:AllowedPorts (по умолчанию только 443);
 // - адрес проверяется ПОСЛЕ разрешения имени (EgressConnector/EgressAddressPolicy), соединение
 //   идёт на проверенный адрес;
-// - тумблер LlmGateway:Egress:Enabled выключен — 403 с причиной, прямого выхода взамен нет.
+// - тумблер LlmGateway:Egress:Enabled выключен — 403 с причиной, прямого выхода взамен нет;
+// - одновременных туннелей не больше потолка на ход и на устройство (429), а сам туннель
+//   закрывается по бездействию, потолку жизни и потолку байтов (сторож G12).
 // В лог — только хост:порт и исход: содержимое туннеля (TLS насквозь) шлюз не видит и не пишет.
 // Отказ отвечается кодом ДО апгрейда: сайдкар по нему отвечает CLI на CONNECT.
 public static class EgressGatewayEndpoints
@@ -73,6 +76,16 @@ public static class EgressGatewayEndpoints
             return;
         }
 
+        var egress = options.Egress;
+        using var lease = services.GetRequiredService<EgressTunnelLimiter>()
+            .TryAcquire(grant.TurnId, grant.DeviceId!, egress.MaxConcurrentPerTurn, egress.MaxConcurrentPerDevice);
+        if (lease is null)
+        {
+            log.LogWarning("Шлюз выхода: {Host}:{Port} — потолок одновременных туннелей хода или устройства", host, port);
+            await RefuseAsync(http, StatusCodes.Status429TooManyRequests, "Слишком много одновременных туннелей выхода.");
+            return;
+        }
+
         var connector = services.GetRequiredService<EgressConnector>();
         var resolved = await connector.ResolveAsync(host, http.RequestAborted);
         if (resolved.Addresses is null)
@@ -99,8 +112,8 @@ public static class EgressGatewayEndpoints
         await using var remote = opened.Stream;
         using var socket = await http.WebSockets.AcceptWebSocketAsync();
         log.LogInformation("Шлюз выхода: {Host}:{Port} — туннель открыт", host, port);
-        await PumpAsync(socket, remote, http.RequestAborted);
-        log.LogDebug("Шлюз выхода: {Host}:{Port} — туннель закрыт", host, port);
+        var reason = await PumpAsync(socket, remote, egress, http.RequestAborted);
+        log.LogInformation("Шлюз выхода: {Host}:{Port} — туннель закрыт: {Reason}", host, port, reason);
     }
 
     private static async Task RefuseAsync(HttpContext http, int status, string reason)
@@ -110,22 +123,80 @@ public static class EgressGatewayEndpoints
     }
 
     // Байты туннеля — двоичными сообщениями в обе стороны; конец любой стороны — конец туннеля.
-    // Закрытие потока закрывает и WebSocket — штатно, с потолком ожидания.
-    private static async Task PumpAsync(WebSocket socket, Stream remote, CancellationToken ct)
+    // Сторож закрывает туннель по бездействию и потолку жизни, копирование — по потолку байтов.
+    // Закрытие потока закрывает и WebSocket — штатно, с потолком ожидания. Возвращает причину.
+    private static async Task<string> PumpAsync(WebSocket socket, Stream remote, EgressGatewayOptions limits, CancellationToken ct)
     {
         await using var ws = WebSocketStream.Create(socket, WebSocketMessageType.Binary, TimeSpan.FromSeconds(2));
         using var done = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        var up = ws.CopyToAsync(remote, done.Token);
-        var down = remote.CopyToAsync(ws, done.Token);
+        var meter = new TunnelMeter(limits.MaxBytesPerTunnel);
+        var up = CopyAsync(ws, remote, meter, done.Token);
+        var down = CopyAsync(remote, ws, meter, done.Token);
+        var watch = WatchAsync(meter, limits, done.Token);
         try
         {
-            await Task.WhenAny(up, down);
+            await Task.WhenAny(up, down, watch);
         }
         finally
         {
             await done.CancelAsync();
-            try { await Task.WhenAll(up, down); }
+            try { await Task.WhenAll(up, down, watch); }
             catch (Exception) { /* одна сторона закрылась — туннель окончен */ }
         }
+        return meter.Reason ?? (ct.IsCancellationRequested ? "запрос прерван" : "сторона закрыла соединение");
+    }
+
+    private static async Task CopyAsync(Stream from, Stream to, TunnelMeter meter, CancellationToken ct)
+    {
+        var buffer = ArrayPool<byte>.Shared.Rent(81920);
+        try
+        {
+            int read;
+            while ((read = await from.ReadAsync(buffer, ct)) > 0)
+            {
+                if (!meter.Count(read)) return;
+                await to.WriteAsync(buffer.AsMemory(0, read), ct);
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    private static async Task WatchAsync(TunnelMeter meter, EgressGatewayOptions limits, CancellationToken ct)
+    {
+        var started = Environment.TickCount64;
+        var lifetime = (long)limits.MaxLifetime.TotalMilliseconds;
+        var inactivity = (long)limits.InactivityTimeout.TotalMilliseconds;
+        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(Math.Clamp(Math.Min(lifetime, inactivity) / 4, 10, 1000)));
+        while (await timer.WaitForNextTickAsync(ct))
+        {
+            var now = Environment.TickCount64;
+            if (now - started >= lifetime) { meter.Stop("потолок жизни туннеля"); return; }
+            if (now - meter.LastActivity >= inactivity) { meter.Stop("бездействие"); return; }
+        }
+    }
+
+    // Байты и время последней активности туннеля — общие для обеих сторон
+    private sealed class TunnelMeter(long maxBytes)
+    {
+        private long _bytes;
+        private long _lastActivity = Environment.TickCount64;
+        private string? _reason;
+
+        public long LastActivity => Interlocked.Read(ref _lastActivity);
+        public string? Reason => Volatile.Read(ref _reason);
+
+        // false — потолок байтов превышен, порцию не пропускаем
+        public bool Count(int read)
+        {
+            Interlocked.Exchange(ref _lastActivity, Environment.TickCount64);
+            if (Interlocked.Add(ref _bytes, read) <= maxBytes) return true;
+            Stop("потолок байтов");
+            return false;
+        }
+
+        public void Stop(string reason) => Interlocked.CompareExchange(ref _reason, reason, null);
     }
 }

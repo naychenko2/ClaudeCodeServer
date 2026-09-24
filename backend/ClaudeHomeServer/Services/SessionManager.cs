@@ -3924,7 +3924,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             NotificationsMcp: notificationsMcp,
             WorkspaceMcp: workspace,
             PersonaAgentsProvider: BuildPersonaAgentsProvider(ownerId, session, persona.Persona),
-            Launcher: _launchers.ForOwner(ownerId),
+            // Проектный чат — среда проекта (ADR-016: локальный проект исполняется на устройстве)
+            Launcher: session.ProjectId is { } launchProjectId && _projects.GetById(launchProjectId) is { } launchProject
+                ? _launchers.ForProject(launchProject)
+                : _launchers.ForOwner(ownerId),
             ModulesMcp: BuildModulesContext(ownerId),
             WidgetsMcp: widgetsMcp,
             CodeGraphMcp: codeGraphMcp,
@@ -5328,7 +5331,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 NotificationsMcp: notificationsMcp,
                 WorkspaceMcp: workspace,
                 PersonaAgentsProvider: BuildPersonaAgentsProvider(project.OwnerId, entry.Info, persona.Persona),
-                Launcher: _launchers.ForOwner(project.OwnerId),
+                Launcher: _launchers.ForProject(project),
                 ModulesMcp: BuildModulesContext(project.OwnerId),
                 WidgetsMcp: widgetsMcp,
                 CodeGraphMcp: codeGraphMcp,
@@ -7625,7 +7628,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
             entry.Info.WorktreePath = wtPath;
             entry.Info.WorktreeBranch = branchName;
-            _warmup.TryStart(ownerId, wtPath);
+            _warmup.TryStart(project, wtPath);
         }
         else
         {
@@ -7705,7 +7708,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         SaveSessions();
         // Дерево задачи заводит не сервер, а человек/агент, — прогрев здесь, при первой привязке;
         // уже собранное (obj/ есть) или уже прогретое дерево прогрев пропускает сам
-        _warmup.TryStart(ResolveOwnerId(entry.Info), path);
+        _warmup.TryStart(project, path);
         return true;
     }
 

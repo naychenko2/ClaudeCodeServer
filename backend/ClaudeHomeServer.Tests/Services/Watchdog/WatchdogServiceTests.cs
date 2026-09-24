@@ -61,7 +61,7 @@ public class WatchdogServiceTests : IDisposable
         public void Enqueue(Func<Task<PollOutcome>> factory) => _script.Enqueue(_ => factory());
         public void Enqueue(Func<CancellationToken, Task<PollOutcome>> factory) => _script.Enqueue(factory);
 
-        public async Task<PollOutcome> RunAsync(string ownerId, string workDir, string command,
+        public async Task<PollOutcome> RunAsync(string ownerId, string? projectId, string workDir, string command,
             int timeoutSeconds, CancellationToken ct)
         {
             Calls.Add((ownerId, workDir, command));

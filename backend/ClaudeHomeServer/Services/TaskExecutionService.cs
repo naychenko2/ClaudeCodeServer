@@ -53,6 +53,8 @@ public class TaskExecutionService
     // Среда исполнения владельца: путь справочника в постановке должен быть адресуем
     // ИЗ неё, а не с хоста. null — считаем среду локальной (перевод тождественный).
     private readonly Execution.ILauncherFactory? _launchers;
+    // Проект задачи — для среды исполнения проекта (ADR-016: локальный проект — на устройстве)
+    private readonly IProjectManager? _projects;
     // Стор настроек специальностей: матрицы моделей по уровням и DefaultTier специальности
     // (ADR-007 §2). null — настройка не подключена, матрицы специальности не участвуют.
     private readonly SpecialtySettingsStore? _specialtySettings;
@@ -107,7 +109,8 @@ public class TaskExecutionService
         Llm.Claude.SubagentRunLog? subagentRuns = null,
         // Подсистема Notes отключаемая: null — блок «релевантные заметки» в постановке
         // исполнителя тихо пропускается (BuildNotesContextAsync).
-        INoteSemanticIndex? kb = null)
+        INoteSemanticIndex? kb = null,
+        IProjectManager? projects = null)
     {
         _staleAfter = TimeSpan.FromMinutes(
             int.TryParse(config["Tasks:ExecutorStaleMinutes"], out var stale) && stale > 0 ? stale : 15);
@@ -117,6 +120,7 @@ public class TaskExecutionService
         _providers = providers;
         _agentFiles = agentFiles;
         _launchers = launchers;
+        _projects = projects;
         _specialtySettings = specialtySettings;
         _assignments = assignments;
         _tasks = tasks;
@@ -345,7 +349,9 @@ public class TaskExecutionService
     {
         var hostPath = _agentFiles?.EnsureCategoryProfiles(task.OwnerId!, task.ProjectId);
         if (hostPath is null) return null;
-        var paths = _launchers?.ForOwner(task.OwnerId).Paths ?? Execution.IdentityPathMapper.Instance;
+        var project = task.ProjectId is { } pid ? _projects?.GetById(pid) : null;
+        var launcher = project is not null ? _launchers?.ForProject(project) : _launchers?.ForOwner(task.OwnerId);
+        var paths = launcher?.Paths ?? Execution.IdentityPathMapper.Instance;
         var runtimePath = ToRuntimeOrNull(paths, hostPath);
         if (runtimePath is null)
             _log.LogDebug("Справочник категорий {Path} недоступен в среде исполнения владельца {Owner} — " +

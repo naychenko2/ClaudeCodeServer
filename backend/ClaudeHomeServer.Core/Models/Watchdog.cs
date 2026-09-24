@@ -47,8 +47,8 @@ public static class WatchdogLimits
 // Серверный сторож чата: «дожидаюсь условия и бужу этот чат».
 // Сервис бэкенда крутит цикл опроса, переживая ходы, рестарты и смерть процесса CLI —
 // в отличие от Monitor/run_in_background харнесса, живущих внутри процесса claude.
-// Исполнение poll-команды — через ILauncherFactory.ForOwner(OwnerId): среда владельца
-// (local/песочница), WorkingDirectory резолвится живьём на каждый опрос (rootPath проекта
+// Исполнение poll-команды — в среде проекта сторожа (ILauncherFactory.ForProject; чат вне
+// проектов — ForOwner(OwnerId): local/песочница владельца), WorkingDirectory резолвится живьём на каждый опрос (rootPath проекта
 // по ProjectId; чат вне проектов — домашняя папка владельца).
 // Хранение — data/watchdogs.json (WatchdogStore); в архив бэкапа попадает автоматически.
 public class WatchdogRecord

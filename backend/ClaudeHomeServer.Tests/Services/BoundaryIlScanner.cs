@@ -57,15 +57,47 @@ internal static class BoundaryIlScanner
         foreach (var local in body.LocalVariables)
             foreach (var t in Expand(local.LocalType)) yield return t;
 
+        var module = method.Module;
+        var (typeArgs, methodArgs) = GenericContext(method);
+        foreach (var token in MetadataTokens(body))
+            foreach (var t in ResolveToken(module, token, typeArgs, methodArgs))
+                yield return t;
+    }
+
+    /// <summary>Методы, вызванные (call/callvirt/newobj/ldftn…) из тела метода — для
+    /// сторожей, которым важен конкретный вызов, а не тип (G8: <c>ILauncherFactory.ForOwner</c>).</summary>
+    public static IEnumerable<MethodBase> CalledMethods(MethodBase method)
+    {
+        MethodBody? body;
+        try { body = method.GetMethodBody(); }
+        catch { yield break; }
+        if (body is null) yield break;
+
+        var module = method.Module;
+        var (typeArgs, methodArgs) = GenericContext(method);
+        foreach (var token in MetadataTokens(body))
+        {
+            MethodBase? called = null;
+            try { called = module.ResolveMethod(token, typeArgs, methodArgs); } catch { }
+            if (called is not null) yield return called;
+        }
+    }
+
+    private static (Type[]? TypeArgs, Type[]? MethodArgs) GenericContext(MethodBase method)
+    {
+        Type[]? typeArgs = null, methodArgs = null;
+        try { typeArgs = method.DeclaringType?.IsGenericType == true ? method.DeclaringType.GetGenericArguments() : null; } catch { }
+        try { methodArgs = method.IsGenericMethod ? method.GetGenericArguments() : null; } catch { }
+        return (typeArgs, methodArgs);
+    }
+
+    // Метаданные-операнды (field/method/type/tok) тела метода по порядку опкодов
+    private static IEnumerable<int> MetadataTokens(MethodBody body)
+    {
         byte[]? il;
         try { il = body.GetILAsByteArray(); }
         catch { yield break; }
         if (il is null) yield break;
-
-        var module = method.Module;
-        Type[]? typeArgs = null, methodArgs = null;
-        try { typeArgs = method.DeclaringType?.IsGenericType == true ? method.DeclaringType.GetGenericArguments() : null; } catch { }
-        try { methodArgs = method.IsGenericMethod ? method.GetGenericArguments() : null; } catch { }
 
         var pos = 0;
         while (pos < il.Length)
@@ -108,8 +140,7 @@ internal static class BoundaryIlScanner
                         if (pos + 4 > il.Length) { pos = il.Length; break; }
                         var token = BitConverter.ToInt32(il, pos);
                         pos += 4;
-                        foreach (var t in ResolveToken(module, token, typeArgs, methodArgs))
-                            yield return t;
+                        yield return token;
                         break;
                     }
                 default: pos = il.Length; break;

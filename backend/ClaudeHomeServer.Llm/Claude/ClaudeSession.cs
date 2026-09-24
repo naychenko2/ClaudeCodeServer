@@ -2102,6 +2102,13 @@ public class ClaudeSession : ILlmSessionAdapter
                         details = $"[Win32:206]{ex.Message}";
                         text = TurnFailureText.PromptOverflow;
                     }
+                    else if (ex is Execution.DeviceExecRefusedException)
+                    {
+                        // Отказ устройства локального проекта: текст отказа — человеку, маркер —
+                        // классификатору фолбэка (другая пара не лечит офлайн-устройство)
+                        details = TurnErrorClassifier.DeviceRefusedMarker + ex.Message;
+                        text = TurnFailureText.ForException(ex);
+                    }
                     else if (ex is System.ComponentModel.Win32Exception w32)
                     {
                         details = $"[Win32:{w32.NativeErrorCode}]{ex.Message}";

@@ -118,7 +118,7 @@ export function AddProjectDialog({ groups, defaultGroupId, onSuccess, onClose }:
         }
         const p = await api.projects.create(name.trim(), null, false, groupId || null, undefined, color, {
           deviceId,
-          deviceRootPath: devicePath.trim(),
+          rootPath: devicePath.trim(),
         });
         let created = p;
         if (draftGlyph && draftGlyph.name) {

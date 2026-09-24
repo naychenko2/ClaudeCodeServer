@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react';
 import { Laptop, Unlink } from 'lucide-react';
 import type { DesktopDevice, Project } from '../../types';
 import { api } from '../../lib/api';
-import { C, FS, SP } from '../../lib/design';
-import { Button, ConfirmDialog } from '../../components/ui';
+import { C, FONT, FS, SP } from '../../lib/design';
+import { Button, ConfirmDialog, TextField } from '../../components/ui';
 import { AccordionSection } from '../projects/dialogs/AccordionSection';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { invalidateProjectsCache } from '../projects/useAllProjects';
@@ -42,6 +42,7 @@ function describeDevice(project: Project): { text: string; tone: 'ok' | 'err' | 
 export function DeviceSection({ project, onUpdated }: Props) {
   const [devices, setDevices] = useState<DesktopDevice[] | null>(null);
   const [picked, setPicked] = useState('');
+  const [devicePath, setDevicePath] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [confirmUnbind, setConfirmUnbind] = useState(false);
@@ -64,12 +65,17 @@ export function DeviceSection({ project, onUpdated }: Props) {
 
   const rebind = async () => {
     if (!picked) { setErr('Выберите устройство'); return; }
+    // Без пути бэк оставил бы прежний, а он у серверного проекта — серверный путь, у
+    // локального — путь на другой машине. Поэтому при привязке путь обязателен
+    const rootPath = devicePath.trim();
+    if (!rootPath) { setErr('Укажите абсолютный путь к папке на устройстве'); return; }
     setBusy(true); setErr('');
     try {
-      const updated = await api.projects.setDevice(project.id, { deviceId: picked });
+      const updated = await api.projects.setDevice(project.id, { deviceId: picked, rootPath });
       invalidateProjectsCache();
       onUpdated?.(updated);
       setPicked('');
+      setDevicePath('');
     } catch (e: unknown) {
       setErr(e instanceof Error && e.message ? e.message : 'Не удалось перепривязать');
     } finally {
@@ -160,6 +166,13 @@ export function DeviceSection({ project, onUpdated }: Props) {
                 </option>
               ))}
             </select>
+            <TextField
+              value={devicePath}
+              onChange={setDevicePath}
+              placeholder="Путь на устройстве, например C:\Sources\my-project"
+              disabled={busy}
+              mono
+            />
             <Button
               variant="ghostAccent"
               size="sm"
@@ -174,12 +187,11 @@ export function DeviceSection({ project, onUpdated }: Props) {
       </div>
 
       {err && <div style={{ fontSize: FS.xs, color: C.dangerText, marginTop: SP.sm }}>{err}</div>}
-      {/* Подсказка про путь на устройстве: задаётся в момент привязки и в диалоге
-          создания. Здесь редактировать его нельзя (бэк требует повторной привязки) */}
+      {/* Путь на устройстве задаётся при каждой привязке: сменить папку — перепривязать с новым путём */}
       {attached && project.device && (
         <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: SP.sm, lineHeight: 1.5 }}>
-          Путь к папке проекта хранится на устройстве и в его сессионном контексте.
-          Чтобы сменить папку — отвяжите проект и создайте заново с новым путём.
+          Сейчас папка проекта: <span style={{ fontFamily: FONT.mono }}>{project.rootPath}</span>.
+          Чтобы сменить её — перепривяжите проект с новым путём.
         </div>
       )}
 

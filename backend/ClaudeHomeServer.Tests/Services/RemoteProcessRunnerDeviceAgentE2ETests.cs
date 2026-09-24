@@ -130,6 +130,9 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
     {
         public int Opened;
         public readonly List<Task> Runs = [];
+        public readonly List<(ExecLink Link, LoopbackConnector Connector)> Links = [];
+        // Потолок простоя серверного потока: null — боевой
+        public TimeSpan? ServerMaxOutage;
 
         public DeviceExecStatus? GetStatus(string ownerId, string deviceId) =>
             new(deviceId, "e2e", Online: true, "linux", "1.0", "9.9.9-e2e", "9.9.9-e2e",
@@ -139,9 +142,11 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
         {
             Interlocked.Increment(ref Opened);
             var execId = Guid.NewGuid().ToString("N");
-            var stream = new DeviceExecStream(execId, ownerId, deviceId, _ => { });
-            var link = new ExecLink(execId, new LoopbackConnector(stream), TimeSpan.FromSeconds(20));
+            var stream = new DeviceExecStream(execId, ownerId, deviceId, _ => { }, ServerMaxOutage);
+            var connector = new LoopbackConnector(stream);
+            var link = new ExecLink(execId, connector, TimeSpan.FromSeconds(20));
             await link.StartAsync(ct);
+            lock (Links) Links.Add((link, connector));
             lock (Runs) Runs.Add(Task.Run(() => executor.RunAsync(link, CancellationToken.None)));
             return stream;
         }
@@ -149,8 +154,12 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
 
     private sealed class LoopbackConnector(DeviceExecStream stream) : IExecSocketConnector
     {
+        // Устройство потеряло сеть: переподключения не проходят
+        public volatile bool Unreachable;
+
         public async Task<WebSocket> ConnectAsync(string execId, CancellationToken ct)
         {
+            if (Unreachable) throw new IOException("устройство без сети");
             using var listener = new TcpListener(IPAddress.Loopback, 0);
             listener.Start();
             var client = new TcpClient();
@@ -441,6 +450,50 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
         (await _gateway.Ended.Task.WaitAsync(Wait)).Should().Be(issued.TurnId);
         _tokens.Validate(issued.TurnId, issued.Token, _device.Id).Should().BeNull();
         _executor.LiveCount.Should().Be(0);
+    }
+
+    // Ретранслятор — дочерний процесс бэкенда; его SIGKILL закрывает loopback-сокет, мост
+    // видит конец и доходит до finally с отзывом токена. Потолок — минута (задача ревью 2.4)
+    [SkippableFact]
+    public async Task KillМинус9Ретранслятора_ТокенОтзываетсяНеПозжеМинуты_ХодНаУстройствеУбит()
+    {
+        Skip.If(OperatingSystem.IsWindows(), "фейковый CLI — скрипт с shebang, дерево процессов — группа Unix");
+
+        using var p = _runner.Start(Spec("turn-e2e-relay-kill9"));
+        var init = await ReadJsonAsync(p);
+        var cliPid = (int)init["pid"]!;
+        var issued = _gateway.Issued!;
+        _tokens.Validate(issued.TurnId, issued.Token, _device.Id).Should().NotBeNull();
+
+        using (var kill = Process.Start("kill", ["-9", p.Id.ToString(System.Globalization.CultureInfo.InvariantCulture)])!)
+            await kill.WaitForExitAsync();
+
+        (await _gateway.Ended.Task.WaitAsync(TimeSpan.FromMinutes(1))).Should().Be(issued.TurnId);
+        _tokens.Validate(issued.TurnId, issued.Token, _device.Id).Should().BeNull();
+        await WaitDeadAsync(cliPid);
+    }
+
+    // Устройство пропало из сети посреди хода и не вернулось, ретранслятор жив и держит свой
+    // сокет. Серверный поток ждёт реконнекта не дольше потолка простоя, затем закрывается:
+    // ретранслятор выходит с ошибкой, токен отзывается
+    [SkippableFact]
+    public async Task ОбрывКаналаУстройстваБезВозврата_РетрансляторЖив_ТокенОтзываетсяПоПотолкуПростоя()
+    {
+        Skip.If(OperatingSystem.IsWindows(), "фейковый CLI — скрипт с shebang, дерево процессов — группа Unix");
+        _channel.ServerMaxOutage = TimeSpan.FromSeconds(2);
+
+        using var p = _runner.Start(Spec("turn-e2e-device-lost"));
+        ((string?)(await ReadJsonAsync(p))["subtype"]).Should().Be("init");
+        var issued = _gateway.Issued!;
+
+        var (link, connector) = _channel.Links.Single();
+        connector.Unreachable = true;
+        link.AbortConnection();
+
+        (await _gateway.Ended.Task.WaitAsync(TimeSpan.FromMinutes(1))).Should().Be(issued.TurnId);
+        _tokens.Validate(issued.TurnId, issued.Token, _device.Id).Should().BeNull();
+        await p.WaitForExitAsync().WaitAsync(Wait);
+        p.ExitCode.Should().NotBe(0, "процесс на устройстве кода выхода не прислал");
     }
 
     // Прямой звонок шлюзу с учёткой устройства хода: 401 здесь — только из-за токена

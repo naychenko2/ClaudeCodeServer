@@ -49,7 +49,7 @@ internal sealed class ManagedCliHarness(ManagedCli cli) : IHarness
 /// </summary>
 internal sealed class AgentCoordinator : IAsyncDisposable
 {
-    public static readonly TimeSpan DefaultMaxOutage = TimeSpan.FromMinutes(10);
+    public static readonly TimeSpan DefaultMaxOutage = DeviceExecProtocol.MaxOutage;
 
     private readonly IControlConnection _control;
     private readonly IHarness _harness;

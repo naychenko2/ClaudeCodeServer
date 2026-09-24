@@ -758,6 +758,14 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DesktopHandsSess
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDeviceConnectionObserver>(
     sp => sp.GetRequiredService<ClaudeHomeServer.Services.Desktop.DesktopHandsSessionService>());
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DesktopAccessGate>();
+// Канал исполнения локальных проектов (ADR-016): шов IDeviceExecChannel (Core) — форвард
+// на тот же синглтон, который обслуживает WebSocket /api/devices/exec и Hello хаба.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DeviceHarnessPolicy>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDeviceExecOpenSender,
+    ClaudeHomeServer.Services.Desktop.DeviceHubExecOpenSender>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DeviceExecChannel>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IDeviceExecChannel>(
+    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Desktop.DeviceExecChannel>());
 // Сторож сеансов: 15 минут простоя, потолок 2 часа, исчезнувший чат, снятый тумблер грани
 builder.Services.AddGatedHostedService<ClaudeHomeServer.Services.Desktop.DesktopSessionReaper>(builder.Configuration);
 // TaskSchedulerService — DI в подсистеме `TasksSubsystem` (волна 4C, шаг 1).
@@ -2044,6 +2052,9 @@ app.MapHub<ClaudeHomeServer.Services.Desktop.DeviceHub>("/hubs/devices");
 // Подсистема llm отключаемая — без неё нет и токенов хода.
 if (app.Services.GetService<ClaudeHomeServer.Services.Llm.Gateway.TurnTokenService>() is not null)
     ClaudeHomeServer.Services.Llm.Gateway.McpGatewayEndpoints.MapMcpGateway(app);
+
+// Потоковый канал исполнения устройства (ADR-016): WebSocket, та же схема токена устройства
+app.MapDeviceExecChannel();
 
 // Graceful shutdown: гасим все живые процессы claude, терминалы и dev-серверы.
 //

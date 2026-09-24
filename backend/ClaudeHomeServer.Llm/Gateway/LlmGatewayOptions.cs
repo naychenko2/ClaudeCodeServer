@@ -15,4 +15,21 @@ public sealed class LlmGatewayOptions
 
     // Эндпоинт Anthropic для подписок.
     public string AnthropicBaseUrl { get; set; } = "https://api.anthropic.com";
+
+    // Выход наружу собственного трафика CLI устройства (задача 2.9).
+    public EgressGatewayOptions Egress { get; set; } = new();
+}
+
+public sealed class EgressGatewayOptions
+{
+    public static readonly IReadOnlyList<int> DefaultPorts = [443];
+
+    // false — туннель отвечает 403 с причиной; прямого выхода с устройства взамен нет.
+    public bool Enabled { get; set; }
+
+    // Порты назначения. Пусто — только 443. Массив не инициализирован намеренно: биндер
+    // дописал бы значения конфига к значению по умолчанию, а не заменил его.
+    public int[]? AllowedPorts { get; set; }
+
+    public IReadOnlyList<int> EffectivePorts => AllowedPorts is { Length: > 0 } ports ? ports : DefaultPorts;
 }

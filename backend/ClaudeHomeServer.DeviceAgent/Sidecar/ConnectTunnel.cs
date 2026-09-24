@@ -1,7 +1,7 @@
 using System.Buffers;
 using System.IO.Pipelines;
-using System.Net.Sockets;
 using System.Text;
+using ClaudeHomeServer.Protocol;
 using Microsoft.AspNetCore.Connections;
 using Microsoft.Extensions.Logging;
 
@@ -14,8 +14,11 @@ namespace ClaudeHomeServer.DeviceAgent.Sidecar;
 /// первые байты подсматриваются, <c>CONNECT</c> обслуживается здесь, всё прочее уходит в
 /// обычный HTTP-конвейер сайдкара нетронутым.
 ///
-/// Это маршрутизация, а не граница (ADR-016: трафик Bash харнеса мимо прокси допустим):
-/// туннель ведёт наружу напрямую с машины, учётных данных в нём нет — TLS идёт насквозь.
+/// Наружу с машины сайдкар сам не ходит (задача 2.9): туннель едет на сервер
+/// (<see cref="IEgressTunnelOpener"/>), и уже сервер решает, куда его пустить. Ход CONNECT
+/// опознаётся по <c>Proxy-Authorization</c> — CLI берёт её из учётки в адресе прокси
+/// (<see cref="DeviceEgressRoutes.ProxyUrl"/>). TLS идёт насквозь, содержимого сайдкар не видит.
+/// Трафик Bash харнеса мимо прокси по-прежнему возможен: это маршрутизация, а не граница.
 /// </summary>
 internal static class ConnectTunnel
 {
@@ -23,7 +26,7 @@ internal static class ConnectTunnel
     private static readonly byte[] ConnectPrefix = "CONNECT "u8.ToArray();
     private static readonly byte[] HeadEnd = "\r\n\r\n"u8.ToArray();
 
-    public static Func<ConnectionDelegate, ConnectionDelegate> Middleware(ILogger log, Func<int> ownPort) =>
+    public static Func<ConnectionDelegate, ConnectionDelegate> Middleware(ILogger log, TurnGrants grants, IEgressTunnelOpener egress) =>
         next => async context =>
         {
             var input = context.Transport.Input;
@@ -49,7 +52,7 @@ internal static class ConnectTunnel
 
                 var head = Encoding.ASCII.GetString(buffer.Slice(0, headLength).ToArray());
                 input.AdvanceTo(buffer.GetPosition(headLength));
-                await ServeAsync(context, head, log, ownPort());
+                await ServeAsync(context, head, log, grants, egress);
                 return;
             }
         };
@@ -88,7 +91,30 @@ internal static class ConnectTunnel
         return host.Length > 0 && Uri.CheckHostName(host) != UriHostNameType.Unknown;
     }
 
-    private static async Task ServeAsync(ConnectionContext context, string head, ILogger log, int ownPort)
+    // Ключ хода сайдкара из Proxy-Authorization: Basic base64("turn:{ключ}")
+    internal static string? ProxyKey(string head)
+    {
+        foreach (var line in head.Split("\r\n").Skip(1))
+        {
+            var colon = line.IndexOf(':');
+            if (colon <= 0 || !line[..colon].Trim().Equals("Proxy-Authorization", StringComparison.OrdinalIgnoreCase)) continue;
+            var value = line[(colon + 1)..].Trim();
+            if (!value.StartsWith("Basic ", StringComparison.OrdinalIgnoreCase)) return null;
+            try
+            {
+                var pair = Encoding.UTF8.GetString(Convert.FromBase64String(value[6..].Trim()));
+                var sep = pair.IndexOf(':');
+                return sep > 0 && pair[..sep] == DeviceEgressRoutes.ProxyUser ? pair[(sep + 1)..] : null;
+            }
+            catch (FormatException)
+            {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private static async Task ServeAsync(ConnectionContext context, string head, ILogger log, TurnGrants grants, IEgressTunnelOpener egress)
     {
         var output = context.Transport.Output;
         if (!TryParseTarget(head, out var host, out var port))
@@ -97,31 +123,40 @@ internal static class ConnectTunnel
             return;
         }
 
-        // Туннель на самого себя — петля, а не маршрут
-        if (port == ownPort && host is "127.0.0.1" or "localhost" or "::1")
+        if (ProxyKey(head) is not { } key || !grants.TryGet(key, out var grant))
         {
-            await WriteStatusAsync(output, "403 Forbidden");
+            await WriteStatusAsync(output, "407 Proxy Authentication Required", "Proxy-Authenticate: Basic realm=\"ai-home\"\r\n");
+            return;
+        }
+        if (grant is null)
+        {
+            // Сервер не выдал ходу шлюз — выпускать наружу некому, а прямого выхода нет
+            await WriteStatusAsync(output, "503 Service Unavailable");
             return;
         }
 
-        using var client = new TcpClient();
-        try
+        EgressTunnel tunnel;
+        using (var openTimeout = CancellationTokenSource.CreateLinkedTokenSource(context.ConnectionClosed))
         {
-            using var connectTimeout = CancellationTokenSource.CreateLinkedTokenSource(context.ConnectionClosed);
-            connectTimeout.CancelAfter(TimeSpan.FromSeconds(15));
-            await client.ConnectAsync(host, port, connectTimeout.Token);
+            openTimeout.CancelAfter(TimeSpan.FromSeconds(30));
+            tunnel = await egress.OpenAsync(grant, host, port, openTimeout.Token);
         }
-        catch (Exception e) when (e is SocketException or OperationCanceledException)
+        if (tunnel.Stream is null)
         {
-            log.LogInformation("Сайдкар: CONNECT {Host}:{Port} не удался: {Error}", host, port, e.Message);
-            await WriteStatusAsync(output, "502 Bad Gateway");
+            log.LogInformation("Сайдкар: CONNECT {Host}:{Port} — сервер отказал ({Status})", host, port, tunnel.Status);
+            await WriteStatusAsync(output, tunnel.Status switch
+            {
+                403 => "403 Forbidden",
+                504 => "504 Gateway Timeout",
+                _ => "502 Bad Gateway",
+            });
             return;
         }
 
-        log.LogDebug("Сайдкар: туннель CONNECT {Host}:{Port}", host, port);
+        log.LogDebug("Сайдкар: туннель CONNECT {Host}:{Port} через сервер", host, port);
         await WriteStatusAsync(output, "200 Connection Established");
 
-        var remote = client.GetStream();
+        await using var remote = tunnel.Stream;
         using var done = CancellationTokenSource.CreateLinkedTokenSource(context.ConnectionClosed);
         var up = context.Transport.Input.CopyToAsync(remote, done.Token);
         var down = remote.CopyToAsync(context.Transport.Output, done.Token);
@@ -137,9 +172,9 @@ internal static class ConnectTunnel
         }
     }
 
-    private static async Task WriteStatusAsync(PipeWriter output, string status)
+    private static async Task WriteStatusAsync(PipeWriter output, string status, string headers = "")
     {
-        await output.WriteAsync(Encoding.ASCII.GetBytes($"HTTP/1.1 {status}\r\n\r\n"));
+        await output.WriteAsync(Encoding.ASCII.GetBytes($"HTTP/1.1 {status}\r\n{headers}\r\n"));
         await output.FlushAsync();
     }
 }

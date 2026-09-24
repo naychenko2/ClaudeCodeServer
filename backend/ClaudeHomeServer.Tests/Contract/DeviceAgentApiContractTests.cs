@@ -109,7 +109,7 @@ public sealed class DeviceAgentApiContractTests : IClassFixture<TestWebApplicati
 
     // Одинаковое дерево на обеих сторонах: git-репозиторий с коммитом и правкой поверх;
     // манифест с дев-скриптом, агент и навык проекта — для сервисов и панели навыков
-    private static void SeedProject(string root)
+    internal static void SeedProject(string root)
     {
         Directory.CreateDirectory(Path.Combine(root, "sub"));
         Directory.CreateDirectory(Path.Combine(root, ".claude", "agents"));
@@ -258,7 +258,7 @@ public sealed class DeviceAgentApiContractTests : IClassFixture<TestWebApplicati
     /// null — не вид, а отсутствие значения: необязательное поле на стороне, где оно пустое,
     /// с непустым не спорит, но само поле обязано быть в наборе.
     /// </summary>
-    private static string ShapeOf(JsonElement root)
+    internal static string ShapeOf(JsonElement root)
     {
         var shape = new SortedDictionary<string, SortedSet<string>>(StringComparer.Ordinal);
         void Walk(JsonElement e, string path)
@@ -284,7 +284,7 @@ public sealed class DeviceAgentApiContractTests : IClassFixture<TestWebApplicati
     }
 
     // Формы совпадают: тот же набор путей, у путей с непустыми видами на обеих сторонах — те же виды
-    private static bool SameShape(string? a, string? b)
+    internal static bool SameShape(string? a, string? b)
     {
         if (a is null || b is null) return a == b;
         static Dictionary<string, string> Parse(string s) => s.Split("; ").Select(x => x.Split(':', 2)).ToDictionary(x => x[0], x => x[1]);

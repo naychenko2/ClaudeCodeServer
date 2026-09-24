@@ -42,8 +42,8 @@ public class AgentCoordinatorTests
     }
 
     private static AgentCoordinator Create(FakeControl control, FakeHarness harness, IExecSocketConnector? connector = null,
-        Func<ExecLink, CancellationToken, Task>? run = null) =>
-        new(control, harness, connector ?? new ExecTestServer(), run ?? ((_, _) => Task.CompletedTask), "0.9.0");
+        Func<ExecLink, CancellationToken, Task>? run = null, Func<ExecLink, CancellationToken, Task>? relay = null) =>
+        new(control, harness, connector ?? new ExecTestServer(), run ?? ((_, _) => Task.CompletedTask), "0.9.0", runRelay: relay);
 
     [Fact]
     public async Task Hello_объявляет_exec_платформу_и_версию_управляемой_копии()
@@ -118,5 +118,49 @@ public class AgentCoordinatorTests
 
         (await started.Task.WaitAsync(TimeSpan.FromSeconds(10))).Should().Be("exec-42");
         server.Connections.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task С_ретранслятором_hello_объявляет_relay()
+    {
+        var control = new FakeControl();
+        await using var coordinator = Create(control, new FakeHarness(), relay: (_, _) => Task.CompletedTask);
+
+        await coordinator.HelloAsync();
+
+        control.Hellos.Single().Capabilities.Should().Equal(DeviceCapabilities.Exec, DeviceCapabilities.Files, DeviceCapabilities.Relay);
+    }
+
+    [Fact]
+    public async Task Назначение_relay_уходит_ретранслятору_а_не_ходу()
+    {
+        var control = new FakeControl();
+        var server = new ExecTestServer();
+        var turn = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var relay = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var coordinator = Create(control, new FakeHarness(), server,
+            (link, _) => { turn.TrySetResult(link.ExecId); return Task.CompletedTask; },
+            (link, _) => { relay.TrySetResult(link.ExecId); return Task.CompletedTask; });
+
+        await control.RaiseExecOpen(new DeviceExecOpenCommand("r-1", DeviceExecProtocol.Version, DeviceExecPurposes.Relay));
+        await control.RaiseExecOpen(new DeviceExecOpenCommand("t-1", DeviceExecProtocol.Version));
+
+        (await relay.Task.WaitAsync(TimeSpan.FromSeconds(10))).Should().Be("r-1");
+        (await turn.Task.WaitAsync(TimeSpan.FromSeconds(10))).Should().Be("t-1");
+    }
+
+    [Fact]
+    public async Task Незнакомое_назначение_канал_не_открывает()
+    {
+        var control = new FakeControl();
+        var server = new ExecTestServer();
+        var ran = false;
+        await using var coordinator = Create(control, new FakeHarness(), server,
+            (_, _) => { ran = true; return Task.CompletedTask; }, (_, _) => { ran = true; return Task.CompletedTask; });
+
+        await control.RaiseExecOpen(new DeviceExecOpenCommand("x-1", DeviceExecProtocol.Version, "write"));
+
+        server.Connections.Should().Be(0);
+        ran.Should().BeFalse();
     }
 }

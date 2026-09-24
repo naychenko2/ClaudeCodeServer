@@ -13,13 +13,16 @@ namespace ClaudeHomeServer.DeviceAgent.Tests.Composition;
 /// <summary>
 /// Сторож «только композиция» (ADR-016, задача 4.2): у агента нет второй версии файловых
 /// сервисов. Код <c>DeviceAgent.Composition</c> файлы не читает, не пишет, не перечисляет и
-/// не удаляет сам — всё это делает вертикаль Files (<see cref="FileService"/>) и Git. Себе
+/// не удаляет сам — всё это делает вертикаль Files (<see cref="FileService"/>) и Git. То же —
+/// ретранслятор чтения (<c>DeviceAgent.Relay</c>, задача 5.1): он композиция поверх
+/// <see cref="AgentProjectFiles"/>, своего чтения файлов у него нет. Себе
 /// композиция оставляет только метаданные для политики путей: существование, длину, цель
 /// ссылки. IL-скан по вызовам: новый <c>File.ReadAllText</c> в композиции — красный.
 /// </summary>
 public sealed class CompositionOnlyGuardTests
 {
-    private const string CompositionNamespace = "ClaudeHomeServer.DeviceAgent.Composition";
+    private static readonly string[] CompositionNamespaces =
+        ["ClaudeHomeServer.DeviceAgent.Composition", "ClaudeHomeServer.DeviceAgent.Relay"];
 
     private static readonly HashSet<Type> IoTypes =
     [
@@ -71,6 +74,9 @@ public sealed class CompositionOnlyGuardTests
 
         called.Should().Contain(m => m.DeclaringType == typeof(FileService) && m.Name == nameof(FileService.ReadFile));
         called.Should().Contain(m => m.DeclaringType == typeof(FileSystemInfo) && m.Name == "get_LinkTarget");
+        // Ретранслятор тоже в скане: он зовёт шов агента, а не файловый API
+        CompositionMethods().Where(m => m.DeclaringType!.Namespace == CompositionNamespaces[1]).SelectMany(CalledMembers)
+            .Should().Contain(m => m.DeclaringType == typeof(AgentProjectFiles) && m.Name == nameof(AgentProjectFiles.OpenReadAsync));
     }
 
     [Fact]
@@ -106,7 +112,7 @@ public sealed class CompositionOnlyGuardTests
 
     private static IEnumerable<MethodBase> CompositionMethods() =>
         typeof(AgentProjectFiles).Assembly.GetTypes()
-            .Where(t => t.Namespace == CompositionNamespace)
+            .Where(t => CompositionNamespaces.Contains(t.Namespace))
             .SelectMany(t => t.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly)
                 .Cast<MethodBase>()
                 .Concat(t.GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static)));

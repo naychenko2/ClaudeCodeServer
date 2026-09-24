@@ -36,7 +36,7 @@ public sealed class DeviceHubExecOpenSender(IHubContext<DeviceHub, IDesktopDevic
 /// Авторизация WebSocket — только токен устройства плюс отпечаток: дефолтная JwtBearer и
 /// сервисный JWT владельца канал не открывают (та же граница, что у /api/devices/*).
 /// </summary>
-public sealed class DeviceExecChannel : IDeviceExecChannel
+public sealed class DeviceExecChannel : IDeviceExecChannel, IDeviceRelayChannel
 {
     private readonly DeviceRegistry _registry;
     private readonly DesktopCallRouter _router;
@@ -122,23 +122,54 @@ public sealed class DeviceExecChannel : IDeviceExecChannel
         var connection = _router.Find(ownerId, deviceId)
             ?? throw new DeviceExecRefusedException(DeviceExecRefusal.Offline, $"{name} офлайн — ход не запущен.");
 
-        var stream = new DeviceExecStream(DesktopProtocol.NewCallId(), ownerId, deviceId, s => _streams.TryRemove(s.ExecId, out _),
-            time: _time);
+        return await OpenStreamAsync(connection, purpose: null, maxOutage: null, ct,
+            $"{name} не открыло канал исполнения за {(int)DeviceExecProtocol.OpenTimeout.TotalSeconds} с — ход не запущен.");
+    }
+
+    /// <summary>
+    /// Канал одного запроса ретранслятора чтения (ADR-016 §5): тот же WebSocket исполнения, но
+    /// с назначением <see cref="DeviceExecPurposes.Relay"/> и коротким потолком простоя.
+    /// Харнес не нужен — CLI здесь не запускается; нужна объявленная возможность relay.
+    /// </summary>
+    public async Task<IDeviceExecStream> OpenRelayAsync(string ownerId, string deviceId, CancellationToken ct = default)
+    {
+        var status = GetStatus(ownerId, deviceId)
+            ?? throw new DeviceExecRefusedException(DeviceExecRefusal.UnknownDevice, "Устройство не найдено или отозвано.");
+
+        var name = $"Устройство «{status.DeviceName}»";
+        if (!status.Online)
+            throw new DeviceExecRefusedException(DeviceExecRefusal.Offline, $"{name} офлайн.");
+        if (!status.HasCapability(DeviceCapabilities.Relay))
+            throw new DeviceExecRefusedException(DeviceExecRefusal.NoRelayCapability,
+                $"{name}: агент не объявил ретранслятор чтения — обнови агента.");
+
+        var connection = _router.Find(ownerId, deviceId)
+            ?? throw new DeviceExecRefusedException(DeviceExecRefusal.Offline, $"{name} офлайн.");
+
+        return await OpenStreamAsync(connection, DeviceExecPurposes.Relay, RelayProtocol.MaxOutage, ct,
+            $"{name} не ответило за {(int)DeviceExecProtocol.OpenTimeout.TotalSeconds} с.");
+    }
+
+    private async Task<IDeviceExecStream> OpenStreamAsync(DeviceConnection connection, string? purpose, TimeSpan? maxOutage,
+        CancellationToken ct, string noResponse)
+    {
+        var stream = new DeviceExecStream(DesktopProtocol.NewCallId(), connection.OwnerId, connection.DeviceId,
+            s => _streams.TryRemove(s.ExecId, out _), maxOutage, _time);
         _streams[stream.ExecId] = stream;
 
         try
         {
             await _opener.SendExecOpenAsync(
-                connection.ConnectionId, new DeviceExecOpenCommand(stream.ExecId, DeviceExecProtocol.Version), ct);
+                connection.ConnectionId, new DeviceExecOpenCommand(stream.ExecId, DeviceExecProtocol.Version, purpose), ct);
             await stream.Attached.WaitAsync(DeviceExecProtocol.OpenTimeout, _time, ct);
             return stream;
         }
         catch (Exception ex) when (ex is TimeoutException or HubException or IOException or InvalidOperationException)
         {
             await stream.DisposeAsync();
-            _log.LogWarning(ex, "Устройство {DeviceId} не открыло канал исполнения {ExecId}", deviceId, stream.ExecId);
-            throw new DeviceExecRefusedException(DeviceExecRefusal.NoResponse,
-                $"{name} не открыло канал исполнения за {(int)DeviceExecProtocol.OpenTimeout.TotalSeconds} с — ход не запущен.");
+            _log.LogWarning(ex, "Устройство {DeviceId} не открыло канал {ExecId} ({Purpose})",
+                connection.DeviceId, stream.ExecId, purpose ?? "ход");
+            throw new DeviceExecRefusedException(DeviceExecRefusal.NoResponse, noResponse);
         }
         catch
         {

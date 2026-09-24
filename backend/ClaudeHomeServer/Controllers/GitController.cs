@@ -152,8 +152,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         try
         {
             var p = GetProject(projectId);
-            var diff = await git.CommitFileDiffAsync(Owner(p), RootFor(p), sha, path, ct);
-            return Ok(new { diff });
+            return Ok(new DiffResponse(await git.CommitFileDiffAsync(Owner(p), RootFor(p), sha, path, ct)));
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return BadRequest(new { error = "Недопустимый путь" }); }
@@ -301,8 +300,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         try
         {
             var p = GetProject(projectId);
-            var content = await git.FileAtCommitAsync(Owner(p), RootFor(p), sha, path, ct);
-            return Ok(new { content });
+            return Ok(new CommitFileResponse(await git.FileAtCommitAsync(Owner(p), RootFor(p), sha, path, ct)));
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return BadRequest(new { error = "Недопустимый путь" }); }

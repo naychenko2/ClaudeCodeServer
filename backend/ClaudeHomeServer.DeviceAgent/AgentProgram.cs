@@ -7,6 +7,7 @@ using ClaudeHomeServer.DeviceAgent.Exec;
 using ClaudeHomeServer.DeviceAgent.Hosting;
 using ClaudeHomeServer.DeviceAgent.Pairing;
 using ClaudeHomeServer.DeviceAgent.Processes;
+using ClaudeHomeServer.DeviceAgent.Relay;
 using ClaudeHomeServer.DeviceAgent.Sidecar;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Files;
@@ -186,8 +187,10 @@ public static class AgentProgram
         {
             log.LogError("localhost-API не поднялся на порту {Port}: {Error}", port, e.Message);
         }
+        // Ретранслятор чтения для других устройств (задача 5.1) — поверх тех же файлов и git
+        var relay = new RelayHandler(projectFiles, git, loggers.CreateLogger<RelayHandler>());
         await using var coordinator = new AgentCoordinator(control, new ManagedCliHarness(managedCli),
-            new ExecSocketConnector(device), executor.RunAsync, Version, log);
+            new ExecSocketConnector(device), executor.RunAsync, Version, log, runRelay: relay.RunAsync);
 
         try
         {

@@ -55,6 +55,7 @@ internal sealed class AgentCoordinator : IAsyncDisposable
     private readonly IHarness _harness;
     private readonly IExecSocketConnector _connector;
     private readonly Func<ExecLink, CancellationToken, Task> _runTurn;
+    private readonly Func<ExecLink, CancellationToken, Task>? _runRelay;
     private readonly string _agentVersion;
     private readonly ILogger _log;
     private readonly TimeSpan _maxOutage;
@@ -65,12 +66,14 @@ internal sealed class AgentCoordinator : IAsyncDisposable
     private bool _announced;
 
     public AgentCoordinator(IControlConnection control, IHarness harness, IExecSocketConnector connector,
-        Func<ExecLink, CancellationToken, Task> runTurn, string agentVersion, ILogger? log = null, TimeSpan? maxOutage = null)
+        Func<ExecLink, CancellationToken, Task> runTurn, string agentVersion, ILogger? log = null, TimeSpan? maxOutage = null,
+        Func<ExecLink, CancellationToken, Task>? runRelay = null)
     {
         _control = control;
         _harness = harness;
         _connector = connector;
         _runTurn = runTurn;
+        _runRelay = runRelay;
         _agentVersion = agentVersion;
         _log = log ?? NullLogger.Instance;
         _maxOutage = maxOutage ?? DefaultMaxOutage;
@@ -90,7 +93,9 @@ internal sealed class AgentCoordinator : IAsyncDisposable
         Platform: PlatformName,
         AgentVersion: _agentVersion,
         CliVersion: _harness.ActiveVersion,
-        Capabilities: [DeviceCapabilities.Exec, DeviceCapabilities.Files]);
+        Capabilities: _runRelay is null
+            ? [DeviceCapabilities.Exec, DeviceCapabilities.Files]
+            : [DeviceCapabilities.Exec, DeviceCapabilities.Files, DeviceCapabilities.Relay]);
 
     /// <summary>Hello; force = false — только если активная копия поменялась с прошлого раза.</summary>
     public async Task HelloAsync(bool force = true)
@@ -136,7 +141,21 @@ internal sealed class AgentCoordinator : IAsyncDisposable
             return;
         }
 
-        var link = new ExecLink(command.ExecId, _connector, _maxOutage, _log);
+        // Назначение выбирает обработчик ДО первого кадра: канал ретранслятора ход не запустит
+        var (run, maxOutage) = command.Purpose switch
+        {
+            null => (_runTurn, _maxOutage),
+            DeviceExecPurposes.Relay when _runRelay is not null => (_runRelay, RelayProtocol.MaxOutage),
+            _ => ((Func<ExecLink, CancellationToken, Task>?)null, TimeSpan.Zero),
+        };
+        if (run is null)
+        {
+            _log.LogWarning("Сервер просит канал {ExecId} с назначением «{Purpose}», агент его не обслуживает",
+                command.ExecId, command.Purpose);
+            return;
+        }
+
+        var link = new ExecLink(command.ExecId, _connector, maxOutage, _log);
         try
         {
             await link.StartAsync(_stopping.Token);
@@ -150,7 +169,7 @@ internal sealed class AgentCoordinator : IAsyncDisposable
 
         var turn = Task.Run(async () =>
         {
-            try { await _runTurn(link, _stopping.Token); }
+            try { await run(link, _stopping.Token); }
             catch (Exception e) { _log.LogError(e, "Исполнение {ExecId} упало", command.ExecId); }
         });
         lock (_turns)

@@ -18,6 +18,9 @@ public record GitCommitRequest(string Message, bool Amend = false);
 /// <summary>Дифф файла: <c>files/diff</c> и <c>git/diff</c>. null — изменений нет.</summary>
 public sealed record DiffResponse(string? Diff);
 
+/// <summary>Файл в версии коммита, <c>git/commits/{sha}/file</c>: null — бинарный или нет такого.</summary>
+public sealed record CommitFileResponse(string? Content);
+
 /// <summary>Ответ <c>git/commit</c>: sha созданного коммита.</summary>
 public sealed record CommitResponse(string Sha);
 

@@ -70,6 +70,8 @@ public enum DeviceExecRefusal
     NoResponse,
     /// <summary>Шлюз не выдал ходу маршрут: нет setup-token, подписки выключены, нет провайдера.</summary>
     GatewayRefused,
+    /// <summary>Агент устройства не объявил ретранслятор чтения (старая версия).</summary>
+    NoRelayCapability,
 }
 
 /// <summary>Отказ открыть канал исполнения; <see cref="Exception.Message"/> — готовый текст для человека.</summary>

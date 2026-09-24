@@ -248,8 +248,18 @@ public sealed record DeviceHelloAck(
 /// Открыть канал исполнения: устройство отвечает WebSocket-подключением на
 /// /api/devices/exec?execId={ExecId}. Что именно запускать, едет первым кадром
 /// <see cref="DeviceExecFrameChannel.Control"/> уже по самому каналу.
+/// <see cref="Purpose"/> — зачем открыт канал: null — ход CLI, <see cref="DeviceExecPurposes.Relay"/>
+/// — запрос ретранслятора чтения (ADR-016 §5). Назначение выбирает обработчик на агенте ДО
+/// первого кадра: канал ретранслятора ход не запустит, канал хода чтение не исполнит.
 /// </summary>
-public sealed record DeviceExecOpenCommand(string ExecId, int ExecProtocolVersion);
+public sealed record DeviceExecOpenCommand(string ExecId, int ExecProtocolVersion, string? Purpose = null);
+
+/// <summary>Назначения канала исполнения, кроме хода CLI (у него назначение null).</summary>
+public static class DeviceExecPurposes
+{
+    /// <summary>Ретранслятор чтения для других устройств: протокол — <see cref="RelayProtocol"/>.</summary>
+    public const string Relay = "relay";
+}
 
 // ---------- устройство → сервер ----------
 

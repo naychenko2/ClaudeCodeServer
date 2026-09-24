@@ -36,10 +36,12 @@ public class DeviceExecChannelTests : IDisposable
     private sealed class CountingOpener : IDeviceExecOpenSender
     {
         public int Calls;
+        public DeviceExecOpenCommand? Last;
 
         public Task SendExecOpenAsync(string connectionId, DeviceExecOpenCommand command, CancellationToken ct = default)
         {
             Interlocked.Increment(ref Calls);
+            Last = command;
             return Task.CompletedTask;
         }
     }
@@ -155,6 +157,43 @@ public class DeviceExecChannelTests : IDisposable
 
         ack.HarnessReady.Should().BeTrue();
         rig.Channel.GetStatus(Owner, rig.Device.Id)!.CanExec.Should().BeTrue();
+    }
+
+    // ---------- ретранслятор чтения (задача 5.1): тот же канал, другое назначение ----------
+
+    [Fact]
+    public async Task Ретранслятор_Офлайн_ОтказСразу()
+    {
+        var rig = NewRig();
+        rig.Registry.UpdateAgentInfo(Owner, rig.Device.Id, AgentHello(RequiredCli, DeviceCapabilities.Relay));
+
+        var open = () => rig.Channel.OpenRelayAsync(Owner, rig.Device.Id);
+        (await open.Should().ThrowAsync<DeviceExecRefusedException>()).Which.Reason.Should().Be(DeviceExecRefusal.Offline);
+        rig.Opener.Calls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Ретранслятор_АгентБезRelay_ОтказСразу()
+    {
+        var rig = NewRig();
+        await ConnectAsync(rig, AgentHello(RequiredCli, DeviceCapabilities.Exec, DeviceCapabilities.Files));
+
+        var open = () => rig.Channel.OpenRelayAsync(Owner, rig.Device.Id);
+        (await open.Should().ThrowAsync<DeviceExecRefusedException>()).Which.Reason.Should().Be(DeviceExecRefusal.NoRelayCapability);
+        rig.Opener.Calls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Ретранслятор_ХарнесНеНужен_КомандаОткрытияСНазначениемRelay()
+    {
+        var rig = NewRig();
+        // Копии CLI нет — ход бы отказал, а чтению харнес не нужен
+        await ConnectAsync(rig, AgentHello(null, DeviceCapabilities.Relay));
+
+        var open = () => rig.Channel.OpenRelayAsync(Owner, rig.Device.Id);
+        (await open.Should().ThrowAsync<DeviceExecRefusedException>()).Which.Reason.Should().Be(DeviceExecRefusal.NoResponse);
+        rig.Opener.Calls.Should().Be(1);
+        rig.Opener.Last!.Purpose.Should().Be(DeviceExecPurposes.Relay);
     }
 
     [Fact]

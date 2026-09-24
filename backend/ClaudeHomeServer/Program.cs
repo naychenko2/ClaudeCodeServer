@@ -782,6 +782,9 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDeviceExecOpenS
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DeviceExecChannel>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IDeviceExecChannel>(
     sp => sp.GetRequiredService<ClaudeHomeServer.Services.Desktop.DeviceExecChannel>());
+// Ретранслятор чтения для других устройств (ADR-016 §5) — тот же канал исполнения
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IDeviceRelayChannel>(
+    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Desktop.DeviceExecChannel>());
 // Билеты браузера к localhost-API агента и доставка событий его ватчера в веб-морду
 // (ADR-016, задача 4.2): только память, рестарт бэкенда отзывает все билеты.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.AgentTicketService>();

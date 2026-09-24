@@ -123,6 +123,8 @@ public sealed record ProjectCapabilities(
     public const string DeviceOfflineReason = "Устройство офлайн";
     public const string NoExecReason = "На устройстве нет агента локальных проектов, умеющего запускать ходы";
     public const string NoFilesReason = "Агент устройства пока не открывает файлы проекта";
+    public const string NoRelayReason = "Агент устройства не умеет показывать файлы проекта на других устройствах: обнови агента";
+    public const string NotDeviceBoundReason = "Проект не локальный: его файлы на сервере";
     public const string ServerContentOffReason = "Нужен контент проекта на сервере — у локального проекта недоступно";
     public const string TranscriptOnDeviceReason =
         "Транскрипт разговора локального проекта живёт на устройстве — живой поток субагентов, "
@@ -221,6 +223,18 @@ public sealed record ProjectCapabilities(
             ? new ProjectBackgroundGate(ProjectBackgroundVerdict.Ready, project.DeviceId, null)
             : new ProjectBackgroundGate(ProjectBackgroundVerdict.WaitDevice, project.DeviceId, exec.Reason);
     }
+
+    /// <summary>
+    /// Чтение файлов проекта с другого устройства через ретранслятор (ADR-016 §5): только у
+    /// локального проекта и только пока его устройство онлайн и объявило ретранслятор.
+    /// null — можно, иначе причина для человека.
+    /// </summary>
+    public static string? RelayRefusal(Project project, DeviceExecStatus? device) =>
+        !IsDeviceBound(project) ? NotDeviceBoundReason
+        : device is null ? DeviceMissingReason
+        : !device.Online ? DeviceOfflineReason
+        : !device.HasCapability(DeviceCapabilities.Relay) ? NoRelayReason
+        : null;
 
     /// <summary>
     /// Матрица для проекта. <paramref name="device"/> — состояние устройства проекта из шва

@@ -43,6 +43,7 @@ public class DeployHostTests : IDisposable
     {
         public IProcessLauncher Local => LocalProcessRunner.Instance;
         public IProcessLauncher ForOwner(string? ownerId) => Local;
+        public IProcessLauncher ForProject(ClaudeHomeServer.Models.Project project) => Local;
     }
 
     private static string RunRawGit(string cwd, params string[] args)

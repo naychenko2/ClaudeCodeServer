@@ -28,6 +28,7 @@ public class McpProbeServiceTests : IDisposable
     {
         public IProcessLauncher Local => LocalProcessRunner.Instance;
         public IProcessLauncher ForOwner(string? ownerId) => LocalProcessRunner.Instance;
+        public IProcessLauncher ForProject(ClaudeHomeServer.Models.Project project) => LocalProcessRunner.Instance;
     }
 
     private sealed class PlainHttpClientFactory : IHttpClientFactory

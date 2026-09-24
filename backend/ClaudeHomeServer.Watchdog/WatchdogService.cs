@@ -168,7 +168,7 @@ public class WatchdogService : BackgroundService
             PollOutcome outcome;
             try
             {
-                outcome = await _runner.RunAsync(w.OwnerId, workDir, w.PollCommand,
+                outcome = await _runner.RunAsync(w.OwnerId, w.ProjectId, workDir, w.PollCommand,
                     w.PollTimeoutSeconds, pollCts.Token);
             }
             catch (OperationCanceledException) when (pollCts.IsCancellationRequested && !ct.IsCancellationRequested)

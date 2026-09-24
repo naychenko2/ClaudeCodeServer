@@ -1,4 +1,6 @@
 using System.Net;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Composition;
@@ -49,6 +51,9 @@ internal static class LocalApi
         builder.Logging.ClearProviders();
         builder.Services.AddSingleton(loggers);
         builder.Services.AddRoutingCore();
+        // Сериализация как у MVC сервера: перечисления строкой в camelCase
+        builder.Services.ConfigureHttpJsonOptions(o =>
+            o.SerializerOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase)));
         builder.WebHost.ConfigureKestrel(k =>
         {
             k.Listen(IPAddress.Loopback, options.Port);
@@ -185,11 +190,6 @@ internal static class LocalApi
 
     // ---------- файлы: контракт FilesController ----------
 
-    public sealed record SaveContentRequest(string Content);
-    public sealed record PathRequest(string Path);
-    public sealed record CreateFileRequest(string Path, string? Content);
-    public sealed record RenameRequest(string OldPath, string NewPath);
-
     private static void MapFiles(RouteGroupBuilder g, AgentProjectFiles files)
     {
         g.MapGet("", async (HttpContext ctx, string? path, bool? showHidden) =>
@@ -209,7 +209,7 @@ internal static class LocalApi
             return Results.Ok();
         });
         g.MapGet("/diff", async (HttpContext ctx, string path) =>
-            Results.Ok(new { diff = await files.GetDiffAsync(ProjectOf(ctx), path, ctx.RequestAborted) }));
+            Results.Ok(new DiffResponse(await files.GetDiffAsync(ProjectOf(ctx), path, ctx.RequestAborted))));
         g.MapPost("/revert", async (HttpContext ctx, PathRequest req) =>
             await files.RevertFileAsync(ProjectOf(ctx), req.Path, ctx.RequestAborted)
                 ? Results.Ok()
@@ -242,12 +242,17 @@ internal static class LocalApi
     }
 
     // ---------- git: контракт GitController (подмножество рабочего дерева) ----------
-
-    public sealed record GitPathRequest(string Path);
-    public sealed record GitCommitRequest(string Message, bool Amend = false);
+    // Мутации, как у сервера, отвечают свежим статусом: панель изменений перерисовывается по нему
 
     private static void MapGit(RouteGroupBuilder g, AgentProjectFiles files, GitService git)
     {
+        // Отказ по пути у git-маршрутов сервера — 400 «Недопустимый путь», а не 403 файлов
+        g.AddEndpointFilter(async (ctx, next) =>
+        {
+            try { return await next(ctx); }
+            catch (UnauthorizedAccessException) { return Results.BadRequest(new { error = "Недопустимый путь" }); }
+        });
+
         // Путь внутри репозитория проходит ту же политику, что файлы: git сам ссылки не раскрывает
         string Checked(HttpContext ctx, string path)
         {
@@ -259,30 +264,30 @@ internal static class LocalApi
         // и результат молча потерялся бы (пустой 200)
         g.MapGet("/status", async (HttpContext ctx, CancellationToken ct) => Results.Ok(await git.StatusAsync(null, RootOf(ctx), ct)));
         g.MapGet("/diff", async (HttpContext ctx, string path, bool? staged) =>
-            Results.Ok(new { diff = await git.DiffFileAsync(null, RootOf(ctx), Checked(ctx, path), staged ?? false, ctx.RequestAborted) }));
+            Results.Ok(new DiffResponse(await git.DiffFileAsync(null, RootOf(ctx), Checked(ctx, path), staged ?? false, ctx.RequestAborted))));
         g.MapGet("/log", async (HttpContext ctx, int? limit, string? branch) =>
             Results.Ok(await git.LogAsync(null, RootOf(ctx), Math.Clamp(limit ?? 100, 1, 1000), branch, ctx.RequestAborted)));
         g.MapGet("/branches", async (HttpContext ctx, CancellationToken ct) => Results.Ok(await git.BranchesAsync(null, RootOf(ctx), ct)));
         g.MapPost("/stage", async (HttpContext ctx, GitPathRequest body) =>
         {
             await git.StageAsync(null, RootOf(ctx), Checked(ctx, body.Path), ctx.RequestAborted);
-            return Results.Ok();
+            return Results.Ok(await git.StatusAsync(null, RootOf(ctx), ctx.RequestAborted));
         });
         g.MapPost("/unstage", async (HttpContext ctx, GitPathRequest body) =>
         {
             await git.UnstageAsync(null, RootOf(ctx), Checked(ctx, body.Path), ctx.RequestAborted);
-            return Results.Ok();
+            return Results.Ok(await git.StatusAsync(null, RootOf(ctx), ctx.RequestAborted));
         });
         g.MapPost("/discard", async (HttpContext ctx, GitPathRequest body) =>
         {
             await git.DiscardAsync(null, RootOf(ctx), Checked(ctx, body.Path), ctx.RequestAborted);
-            return Results.Ok();
+            return Results.Ok(await git.StatusAsync(null, RootOf(ctx), ctx.RequestAborted));
         });
         g.MapPost("/commit", async (HttpContext ctx, GitCommitRequest body) =>
         {
             if (string.IsNullOrWhiteSpace(body.Message)) return Results.BadRequest(new { error = "Пустое сообщение коммита" });
             var sha = await git.CommitAsync(null, RootOf(ctx), body.Message, body.Amend, ctx.RequestAborted);
-            return Results.Ok(new { sha });
+            return Results.Ok(new CommitResponse(sha));
         });
     }
 }

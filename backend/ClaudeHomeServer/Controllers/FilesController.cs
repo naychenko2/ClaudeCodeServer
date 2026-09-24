@@ -1,6 +1,7 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Filters;
+using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Docs;
 using ClaudeHomeServer.Services.Notes;
@@ -64,6 +65,8 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (DirectoryNotFoundException) { return NotFound(); }
+        // Путь вне корня проекта — отказ, как у соседних маршрутов, а не 500
+        catch (UnauthorizedAccessException) { return StatusCode(403); }
     }
 
     [HttpGet("tree")]
@@ -76,6 +79,8 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (DirectoryNotFoundException) { return NotFound(); }
+        // Путь вне корня проекта — отказ, как у соседних маршрутов, а не 500
+        catch (UnauthorizedAccessException) { return StatusCode(403); }
     }
 
     [HttpGet("search")]
@@ -246,8 +251,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     {
         try
         {
-            var diff = await files.GetDiffAsync(GetRoot(projectId), path);
-            return Ok(new { diff });
+            return Ok(new DiffResponse(await files.GetDiffAsync(GetRoot(projectId), path)));
         }
         catch (KeyNotFoundException) { return NotFound(); }
     }
@@ -720,12 +724,6 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
 }
 
 public record ChangedByRequest(List<string>? Paths);
-public record SaveContentRequest(string Content);
-public record PathRequest(string Path);
-// Создание файла: Content == null → пустой файл (старый контракт { path } работает);
-// существующий путь → 409, без тихой перезаписи
-public record CreateFileRequest(string Path, string? Content = null);
-public record RenameRequest(string OldPath, string NewPath);
 public record SaveFromUrlRequest(string Url, string Path);
 public record ToMarkdownRequest(string Path, string? TargetDir = null, bool Enhance = false);
 public record OOCallbackPayload(int Status, string? Url, string? Key);

@@ -7,7 +7,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Bell, ChevronRight, Check, MessageCircle, Repeat, SquarePen, SquareStack, Trash2, Unplug, X } from 'lucide-react';
 import type { Project, Session, Task, TaskStatus, TaskPriority, UpdateTaskDto } from '../../types';
 import { C, FONT, FS, R, SHADOW, SP } from '../../lib/design';
-import { Button, IconButton, Modal, BackButton } from '../../components/ui';
+import { Button, IconButton, Modal, BackButton, Notice } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { useNarrowContainer } from '../../hooks/useContainerWidth';
 import { Toolbar } from '../../components/Toolbar';
@@ -404,29 +404,21 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
 
       {/* Исполнитель ждёт устройство локального проекта либо так его и не дождался */}
       {(deviceWaiting || deviceWaitExpired) && (
-        <div role="status" style={{
-          display: 'flex', alignItems: 'flex-start', gap: SP.sm, marginBottom: 12,
-          padding: '8px 12px', borderRadius: R.md,
-          border: `1px solid ${deviceWaiting ? C.warning : C.dangerBorder}`,
-          background: deviceWaiting ? C.warningBg : C.dangerBg,
-          fontFamily: FONT.sans, fontSize: FS.sm, lineHeight: 1.45,
-          color: deviceWaiting ? C.warningText : C.dangerText,
-        }}>
-          <Unplug size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, marginTop: 2 }} />
-          {deviceWaiting ? (
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontWeight: 600 }}>
-                {deviceName ? `Ждёт устройство «${deviceName}»` : 'Ждёт устройство проекта'} · {deviceWaitDuration(task.deviceWaitSince!)}
-              </div>
-              <div>
-                {task.deviceWaitReason ? `${task.deviceWaitReason.replace(/[.\s]+$/, '')}. ` : ''}
-                Задача запустится, когда устройство выйдет на связь; через 24 часа ожидание снимется.
-              </div>
+        <Notice
+          tone={deviceWaiting ? 'warning' : 'danger'}
+          icon={Unplug}
+          title={deviceWaiting
+            ? <>{deviceName ? `Ждёт устройство «${deviceName}»` : 'Ждёт устройство проекта'} · {deviceWaitDuration(task.deviceWaitSince!)}</>
+            : executorStopText(task.executorStopReason, deviceName)}
+          style={{ marginBottom: SP.md }}
+        >
+          {deviceWaiting && (
+            <div>
+              {task.deviceWaitReason ? `${task.deviceWaitReason.replace(/[.\s]+$/, '')}. ` : ''}
+              Задача запустится, когда устройство выйдет на связь; через 24 часа ожидание снимется.
             </div>
-          ) : (
-            <div style={{ minWidth: 0, fontWeight: 600 }}>{executorStopText(task.executorStopReason, deviceName)}</div>
           )}
-        </div>
+        </Notice>
       )}
 
       {/* Ряд чипов */}

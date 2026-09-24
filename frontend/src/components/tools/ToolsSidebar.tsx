@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
 import { createPortal } from 'react-dom'
-import { Plus, Terminal, Monitor, Square, Play, RefreshCw, ChevronRight, Globe, GlobeLock, X, Lock } from 'lucide-react'
+import { Plus, Terminal, Monitor, Square, Play, RefreshCw, ChevronRight, Globe, GlobeLock, X } from 'lucide-react'
 import { C, R, FONT, FS, SP, SHADOW, Z } from '../../lib/design'
 import { Dot, EmptyState, IconButton, Button, ConfirmDialog, PanelHeaderSlot, useHasPanelHeader } from '../ui'
 import { ListDateDivider } from '../ListDateDivider'
@@ -12,6 +12,7 @@ import { api } from '../../lib/api'
 import { saveExternalUrl, clearExternalUrl, clearAllExternalUrls } from '../../lib/externalPreviewUrls'
 import { useProjectFeature, featureReason, projectRouteReason } from '../../lib/projectCapabilities'
 import { DeviceAgentGate } from '../DeviceAgentGate'
+import { CapabilityUnavailable } from '../CapabilityGate'
 import type * as ts from '../../lib/terminalSignalr'
 import type { Project, ProjectService } from '../../types'
 import { ProjectFeature } from '../../types'
@@ -71,10 +72,18 @@ export function groupServices(services: ProjectService[]): [string, ProjectServi
 }
 
 // Терминал и сервисы локального проекта живут в агенте устройства на этой машине: пока он не
-// ответил, DeviceAgentGate показывает состояние связи. Недоступную группу объясняет тело
+// ответил, DeviceAgentGate показывает состояние связи. Гейт группы files — здесь, а все
+// хуки — в ToolsSidebarBody: ранний выход в теле нарушал бы Rules of Hooks
 export function ToolsSidebar(props: Props) {
+  // Гейт по матрице (ADR-016 §3.4): терминал и dev-серверы требуют доступ к файлам.
+  // Серверный эндпоинт проксирует запросы к агенту устройства при файлах в группе
+  // files. Если группа недоступна (например, офлайн-устройство) — оба раздела пустые
   const filesGate = useProjectFeature(props.project, ProjectFeature.Files);
-  if (!props.project || !filesGate) return <ToolsSidebarBody {...props} />;
+  const filesGateReason = featureReason(props.project, ProjectFeature.Files);
+  if (props.project && !filesGate) {
+    return <CapabilityUnavailable feature="tools" title="Терминал и сервисы недоступны" reason={filesGateReason ?? 'Файлы проекта недоступны'} />;
+  }
+  if (!props.project) return <ToolsSidebarBody {...props} />;
   return <DeviceAgentGate project={props.project}><ToolsSidebarBody {...props} /></DeviceAgentGate>;
 }
 
@@ -86,35 +95,11 @@ function ToolsSidebarBody({
   onRefreshServices, onStartService, onStopService, onSelectPreview,
   terminalBusy,
 }: Props) {
-  // Гейт по матрице (ADR-016 §3.4): терминал и dev-серверы требуют доступ к файлам.
-  // Серверный эндпоинт проксирует запросы к агенту устройства при файлах в группе
-  // files. Если группа недоступна (например, офлайн-устройство) — оба раздела пустые
-  const filesGate = useProjectFeature(project, ProjectFeature.Files);
-  const filesGateReason = featureReason(project, ProjectFeature.Files);
+  // Группа files здесь уже доступна (гейт в обёртке); отдельные подсистемы — нет гарантии
   const terminalGate = useProjectFeature(project, ProjectFeature.Terminal);
   const terminalGateReason = featureReason(project, ProjectFeature.Terminal);
   const previewGate = useProjectFeature(project, ProjectFeature.DevServers);
   const previewGateReason = featureReason(project, ProjectFeature.DevServers);
-  if (project && !filesGate) {
-    return (
-      <div role="status" data-capability-gate="tools"
-        style={{
-          padding: '24px 16px', margin: 16,
-          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10,
-          color: C.textMuted, background: C.bgPanel,
-          borderRadius: R.md, border: `1px dashed ${C.border}`,
-        }}
-      >
-        <Lock size={20} strokeWidth={ICON_STROKE} />
-        <div style={{ fontSize: FS.sm, color: C.textPrimary, fontWeight: 600 }}>
-          Терминал и сервисы недоступны
-        </div>
-        <div style={{ fontSize: FS.xs, textAlign: 'center', maxWidth: 320, lineHeight: 1.5 }}>
-          {filesGateReason ?? 'Файлы проекта недоступны'}
-        </div>
-      </div>
-    );
-  }
   // Инлайн-переименование: id редактируемого терминала + текущее значение поля
   const [renaming, setRenaming] = useState<{ id: string; value: string } | null>(null)
   // Per-tab reason для tooltip'а кнопки таба (когда files доступны, но конкретная
@@ -164,14 +149,8 @@ function ToolsSidebarBody({
         // группе files (например, terminal отдельно от preview). Плашка причины —
         // вместо списка терминалов
         project && !terminalGate ? (
-          <div role="status" data-capability-gate="terminal"
-            style={{ padding: '24px 16px', margin: 16, textAlign: 'center',
-              color: C.textMuted, fontSize: FS.xs, lineHeight: 1.5 }}>
-            <Lock size={20} strokeWidth={ICON_STROKE} style={{ marginBottom: 8 }} />
-            <div style={{ fontSize: FS.sm, color: C.textPrimary, fontWeight: 600, marginBottom: 4 }}>
-              Терминал недоступен
-            </div>
-            {terminalDisabledReason}
+          <div style={{ flex: 1, minHeight: 0 }}>
+            <CapabilityUnavailable feature="terminal" title="Терминал недоступен" reason={terminalDisabledReason} />
           </div>
         ) : (
         <div style={{ flex: 1, overflowY: 'auto', padding: '8px 10px' }}>
@@ -235,14 +214,8 @@ function ToolsSidebarBody({
       {/* Список сервисов Preview */}
       {activeTab === 'preview' && (
         project && !previewGate ? (
-          <div role="status" data-capability-gate="preview"
-            style={{ padding: '24px 16px', margin: 16, textAlign: 'center',
-              color: C.textMuted, fontSize: FS.xs, lineHeight: 1.5 }}>
-            <Lock size={20} strokeWidth={ICON_STROKE} style={{ marginBottom: 8 }} />
-            <div style={{ fontSize: FS.sm, color: C.textPrimary, fontWeight: 600, marginBottom: 4 }}>
-              Сервисы недоступны
-            </div>
-            {previewDisabledReason}
+          <div style={{ flex: 1, minHeight: 0 }}>
+            <CapabilityUnavailable feature="preview" title="Сервисы недоступны" reason={previewDisabledReason} />
           </div>
         ) : (
         <PreviewServiceList

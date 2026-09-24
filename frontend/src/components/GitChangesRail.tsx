@@ -12,13 +12,14 @@ import {
   GitBranch, GitCommit, ChevronDown, ChevronRight, RefreshCw, ArrowDownToLine,
   Settings, Sparkles, Undo2, Pencil, X, List, ListTree, ListFilter, Folder,
   ListChecks, CheckCheck, FoldVertical, UnfoldVertical, MessageSquarePlus, MessageSquare, MessageSquareDot, MessagesSquare,
-  Check, Plus, Archive, ArchiveRestore, Trash2, UploadCloud, ExternalLink, FileDiff, User, Lock,
+  Check, Plus, Archive, ArchiveRestore, Trash2, UploadCloud, ExternalLink, FileDiff, User,
 } from 'lucide-react';
-import type { Project, GitFileChange, GitLogEntry, GitStashEntry, ChangedBySession, ProjectFeatureKey } from '../types';
+import type { Project, GitFileChange, GitLogEntry, GitStashEntry, ChangedBySession } from '../types';
 import { ProjectFeature } from '../types';
 import { api } from '../lib/api';
 import { useProjectFeature, featureReason, projectSupportsRoute } from '../lib/projectCapabilities';
 import { DeviceAgentGate } from './DeviceAgentGate';
+import { CapabilityUnavailable } from './CapabilityGate';
 import { C, R, FS, SP, FONT, MODAL_W } from '../lib/design';
 import {
   useGitState, ensureGit, loadUnpushedLog, loadGitLog, loadGitRemote, loadGitBranches, loadGitStash,
@@ -227,7 +228,7 @@ function buildTree(files: RowFile[]): TreeNode[] {
 // состояние связи (DeviceAgentGate). Хуки панели — в GitChangesRailBody
 export function GitChangesRail(props: Props) {
   const gitGate = useProjectFeature(props.project, ProjectFeature.Git);
-  if (!gitGate) return <CapabilityGateFallback feature={ProjectFeature.Git} reason={featureReason(props.project, ProjectFeature.Git)} />;
+  if (!gitGate) return <CapabilityUnavailable feature={ProjectFeature.Git} title="Изменения недоступны" reason={featureReason(props.project, ProjectFeature.Git)} />;
   return <DeviceAgentGate project={props.project}><GitChangesRailBody {...props} /></DeviceAgentGate>;
 }
 
@@ -1704,31 +1705,6 @@ function GitChangesRailBody({ project, onOpenDiff, onOpenFile, onOpenCommit, act
       )}
 
       {promptOpen && <CommitPromptDialog project={project} onClose={() => setPromptOpen(false)} />}
-    </div>
-  );
-}
-
-// Плашка «подсистема недоступна» — локальная для этого модуля (ADR-016 §3.4).
-// Ранний return ВЫШЕ вызывает её без хуков, поэтому сам компонент — без useMemo/Effect
-function CapabilityGateFallback({ feature, reason }: { feature: ProjectFeatureKey; reason: string | null }) {
-  return (
-    <div
-      role="status"
-      data-capability-gate={feature}
-      style={{
-        padding: '24px 16px', margin: 16,
-        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10,
-        color: C.textMuted, background: C.bgPanel,
-        borderRadius: R.lg, border: `1px dashed ${C.border}`,
-      }}
-    >
-      <Lock size={20} strokeWidth={ICON_STROKE} />
-      <div style={{ fontSize: FS.sm, color: C.textPrimary, fontWeight: 600 }}>
-        Подсистема недоступна
-      </div>
-      <div style={{ fontSize: FS.xs, textAlign: 'center', maxWidth: 320, lineHeight: 1.5 }}>
-        {reason ?? 'Подсистема выключена для этого проекта'}
-      </div>
     </div>
   );
 }

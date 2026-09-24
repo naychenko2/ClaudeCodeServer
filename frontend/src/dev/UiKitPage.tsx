@@ -26,7 +26,7 @@ import {
   Calendar, Share2, MessageCircle,
   Network, FileText, AlertCircle, Loader2,
 } from 'lucide-react';
-import { Rows3, Pin, FolderOpen, Bell, List, ListTree, ArrowRightToLine } from 'lucide-react';
+import { Rows3, Pin, FolderOpen, Bell, List, ListTree, ArrowRightToLine, Unplug } from 'lucide-react';
 import { C, FONT, FS, SP, R, SHADOW, ISLAND, MODAL_W, GROUP_COLORS } from '../lib/design';
 import { AGENT_COLORS } from '../components/AgentSelector';
 import { ChatCard } from '../components/ChatCard';
@@ -46,8 +46,9 @@ import {
   Menu, MenuItem, BackButton, WaitingIndicator,
   IslandScaffold, Splitter, SidebarSplitter, IslandSplitter, IslandSidebarSplitter,
   TextField, TextArea, IconField, Field, FieldLabel,
-  PanelShell, PanelHeaderSlot, useHasPanelHeader, RailFlyout,
+  PanelShell, PanelHeaderSlot, useHasPanelHeader, RailFlyout, Notice,
 } from '../components/ui';
+import { CapabilityUnavailable } from '../components/CapabilityGate';
 import { InlineSegmented } from '../components/ui/InlineSegmented';
 import { ICON_SIZE, ICON_STROKE, ICON_PROPS } from '../components/ui/icons';
 import { Toolbar, ToolbarIconButton } from '../components/Toolbar';
@@ -3309,6 +3310,29 @@ function ToolbarAndEmptySection() {
                 </Button>
               }
             />
+          </div>
+        </SubBlock>
+
+        {/* Плашка «недоступно с причиной» (ADR-016 §3.4) — единственная на все панели:
+            тот же EmptyState compact, что у состояний связи с агентом устройства */}
+        <SubBlock label="CapabilityUnavailable — панель недоступна для проекта">
+          <div style={{ background: C.bgPanel, borderRadius: R.xl, minHeight: SP.xxxl * 5 }}>
+            <CapabilityUnavailable
+              feature="files"
+              title="Файлы недоступны"
+              reason="Устройство офлайн"
+            />
+          </div>
+        </SubBlock>
+
+        {/* Notice — баннер причины во всю ширину: «ждёт устройство», «ход недоступен» */}
+        <SubBlock label="Notice — баннер причины (warning / danger)">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+            <Notice icon={Unplug}>Устройство офлайн</Notice>
+            <Notice icon={Unplug} title="Ждёт устройство «Ноутбук» · 12 мин">
+              Задача запустится, когда устройство выйдет на связь; через 24 часа ожидание снимется.
+            </Notice>
+            <Notice tone="danger" icon={Unplug} title="Не запускалась: устройство так и не вышло на связь" />
           </div>
         </SubBlock>
       </div>

@@ -514,6 +514,14 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     }
     return BLANK_IMAGE;
   };
+  // Логотип и скриншоты README лежат рядом в репозитории: путь в src относителен документа,
+  // грузить их надо через файловый эндпоинт. Нужен обеим веткам рендера markdown — и с
+  // комментариями к документу, и без модуля заметок
+  const resolveMarkdownImage = (src: string): string | undefined => {
+    const target = resolveDocImage(filePath, src);
+    if (!target) return undefined;
+    return viaAgent ? resolveAgentImage(target) : api.files.fileUrl(project.id, target);
+  };
   // Git: репо-статус (гейт вкладки «Авторы»), blame-кэш и busy зернистого stage
   const gitSt = useGitState(project.id);
   useEffect(() => { ensureGit(project.id); }, [project.id]);
@@ -2164,7 +2172,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
                   // Подсистемы заметок нет (выключена или не зарегистрирована):
                   // комментариев к документу нет, вклад doc-commented-markdown пуст —
                   // обычный MarkdownViewer
-                  ? <div data-selection-scope="doc" data-selection-priority="2"><MarkdownViewer content={content} onDocLink={handleDocLink} /></div>
+                  ? <div data-selection-scope="doc" data-selection-priority="2"><MarkdownViewer content={content} onDocLink={handleDocLink} resolveImageSrc={resolveMarkdownImage} /></div>
                   : isMarkdown
                   ? (
                     // Свойства и комментарии — ОДНИМ блоком справа (на узком просмотрщике
@@ -2191,16 +2199,10 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
                           // неё — рельс маркеров уводим на левое поле. Уехала карточка под
                           // текст (узкий просмотрщик) — правое поле снова свободно
                           railSide: stackSide ? 'right' : 'left',
-                          // Логотип и скриншоты README лежат рядом в репозитории: путь в src
-                          // относителен документа, грузить их надо через файловый эндпоинт.
                           // onDocLink — переход по md-ссылкам внутри файла (другой файл/якорь),
                           // иначе клик уводил бы браузер из SPA на главный экран
                           onDocLink: handleDocLink,
-                          resolveImageSrc: src => {
-                            const target = resolveDocImage(filePath, src);
-                            if (!target) return undefined;
-                            return viaAgent ? resolveAgentImage(target) : api.files.fileUrl(project.id, target);
-                          },
+                          resolveImageSrc: resolveMarkdownImage,
                         })}
                         {/* На узком просмотрщике блок уезжает под текст — там же,
                             где его ждут глазами */}

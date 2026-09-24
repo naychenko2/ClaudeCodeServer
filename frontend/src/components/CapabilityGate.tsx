@@ -2,20 +2,44 @@ import type { ReactNode } from 'react';
 import { Lock } from 'lucide-react';
 import type { Project, ProjectFeatureKey } from '../types';
 import { useProjectFeature, featureReason } from '../lib/projectCapabilities';
-import { C, FS, R, SP } from '../lib/design';
+import { EmptyState } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
+
+interface UnavailableProps {
+  // Ключ возможности или панели — в data-capability-gate для тестов
+  feature: string;
+  // Заголовок по панели: «Файлы недоступны», «Изменения недоступны»…
+  title: string;
+  reason: string | null | undefined;
+}
+
+// Плашка «недоступно с причиной» (ADR-016 §3.4) — единственная на весь продукт. Стоит на
+// EmptyState compact, как и состояния DeviceAgentGate: одна панель не должна менять вид
+// в зависимости от того, какой гейт сработал. Без хуков — панели зовут её ранним return
+// из обёртки, где хук useProjectFeature уже вызван
+export function CapabilityUnavailable({ feature, title, reason }: UnavailableProps) {
+  return (
+    <div role="status" data-capability-gate={feature} style={{ height: '100%' }}>
+      <EmptyState
+        compact
+        icon={<Lock size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />}
+        title={title}
+        subtitle={reason ?? 'Недоступно для этого проекта'}
+      />
+    </div>
+  );
+}
 
 interface Props {
   project: Project | null | undefined;
   feature: ProjectFeatureKey;
-  // Пустой стейт при недоступности. По умолчанию — компактная плашка «недоступно»
-  // с иконкой замка и причиной. Для панелей удобнее empty state с большим текстом —
-  // передавайте свой
+  // Заголовок плашки по умолчанию — по панели, которую закрывает гейт
+  title: string;
   children: ReactNode;
   // Если да — на недоступности рендерится children=null вместо плашки. Полезно там,
   // где родитель САМ решает, что показать (например, скрыть таб целиком)
   hideWhenUnavailable?: boolean;
-  // Кастомный empty state. Если не передан — рисуем дефолтную плашку с причиной
+  // Кастомный empty state. Если не передан — рисуем CapabilityUnavailable
   fallback?: ReactNode;
 }
 
@@ -26,36 +50,10 @@ interface Props {
 // Шаблон «доступно»: feature есть в группе, группа available=true. Матрица —
 // единственная точка правды, сторож G10 (ProjectCapabilitiesGuardTests) ловит любые
 // обращения к project.deviceId вне lib/projectCapabilities.
-export function CapabilityGate({ project, feature, children, hideWhenUnavailable, fallback }: Props) {
+export function CapabilityGate({ project, feature, title, children, hideWhenUnavailable, fallback }: Props) {
   const available = useProjectFeature(project, feature);
   if (available) return <>{children}</>;
   if (hideWhenUnavailable) return null;
   if (fallback !== undefined) return <>{fallback}</>;
-  const reason = featureReason(project, feature) ?? 'Подсистема недоступна для этого проекта';
-  return (
-    <div
-      role="status"
-      data-capability-gate={feature}
-      style={{
-        padding: '20px 16px',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        gap: SP.sm,
-        color: C.textMuted,
-        background: C.bgPanel,
-        borderRadius: R.lg,
-        border: `1px dashed ${C.border}`,
-        margin: SP.md,
-      }}
-    >
-      <Lock size={ICON_SIZE.md} strokeWidth={ICON_STROKE} style={{ color: C.textMuted }} />
-      <div style={{ fontSize: FS.sm, color: C.textPrimary, fontWeight: 600 }}>
-        Подсистема недоступна
-      </div>
-      <div style={{ fontSize: FS.xs, textAlign: 'center', maxWidth: 320, lineHeight: 1.5 }}>
-        {reason}
-      </div>
-    </div>
-  );
+  return <CapabilityUnavailable feature={feature} title={title} reason={featureReason(project, feature)} />;
 }

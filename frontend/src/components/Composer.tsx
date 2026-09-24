@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, type ReactNode } from 'react';
 import type { Project } from '../types';
 import { canRunTurn } from '../lib/projectCapabilities';
-import { AlertTriangle, AudioLines, Ban, ArrowUp, Check, ChevronDown, Eye, EyeOff, FolderGit2, Lock, Mic, Paperclip, Plus, RefreshCw, ShieldCheck, Users, VolumeX, WifiOff, X } from 'lucide-react';
+import { AlertTriangle, AudioLines, Ban, ArrowUp, Check, ChevronDown, Eye, EyeOff, FolderGit2, Lock, Mic, Paperclip, Plus, RefreshCw, ShieldCheck, Users, VolumeX, Unplug, WifiOff, X } from 'lucide-react';
 import { C, R, FS, FONT, MODAL_W, SHADOW, SP, Z } from '../lib/design';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset } from '../lib/rateLimit';
 import { SkillsDropdown } from './SkillsDropdown';
@@ -34,7 +34,7 @@ import { Waveform, fmtRecTime } from './chat/VoiceRecordingRow';
 import { getDraft, setDraft } from '../lib/drafts';
 import { middleEllipsis } from '../lib/paths';
 import { showToast } from '../lib/toast';
-import { IconButton, Modal } from './ui';
+import { IconButton, Modal, Notice } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { useVoiceInput } from '../hooks/useVoiceInput';
 import { useHandsFree, type SpeechPhase } from '../hooks/useHandsFree';
@@ -2253,19 +2253,9 @@ export function Composer({
           exec показываем причину над полем ввода. Кнопка отправки гасится в handleSend,
           чтобы Enter не слал сообщение в никуда — там же, где проверяется project.exec */}
       {project && !execGate.available && (
-        <div
-          data-composer-exec-gate
-          style={{
-            display: 'flex', alignItems: 'center', gap: 8,
-            padding: '8px 12px', margin: '0 8px 4px',
-            background: C.warningBg, color: C.warningText,
-            border: `1px solid ${C.border}`, borderRadius: R.md,
-            fontSize: FS.xs, lineHeight: 1.4,
-          }}
-        >
-          <WifiOff size={14} strokeWidth={ICON_STROKE} />
-          <span>{execGate.reason ?? 'Ход сейчас недоступен'}</span>
-        </div>
+        <Notice data-composer-exec-gate icon={Unplug} style={{ margin: `0 ${SP.sm}px ${SP.xs}px` }}>
+          {execGate.reason ?? 'Ход сейчас недоступен'}
+        </Notice>
       )}
       {sendError && !project && (
         <div data-composer-send-error style={{

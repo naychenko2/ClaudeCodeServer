@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { CSSProperties } from 'react';
-import { Search, Trash2, Lock } from 'lucide-react';
+import { Search, Trash2 } from 'lucide-react';
 import type { AgentInfo, Project, SkillInfo, SkillsData } from '../types';
 import { ProjectFeature } from '../types';
-import { C, R, FONT, FS } from '../lib/design';
+import { C, R, FONT } from '../lib/design';
 import { api } from '../lib/api';
 import { useProjectFeature, featureReason } from '../lib/projectCapabilities';
 import { agentDotColor } from './AgentSelector';
@@ -11,6 +11,7 @@ import { SkillSearchDialog } from './SkillSearchDialog';
 import { SkillGenerateDialog } from './SkillGenerateDialog';
 import { ConfirmDialog } from './ui';
 import { DeviceAgentGate } from './DeviceAgentGate';
+import { CapabilityUnavailable } from './CapabilityGate';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { showToast } from '../lib/toast';
 
@@ -73,26 +74,7 @@ function SkillsPanelBody({ projectId, project, onChanged }: Props) {
 
   // Ранний return для гейта (ADR-016 §3.4). Порядок хуков выше не нарушен
   if (project && !skillsGate) {
-    return (
-      <div
-        role="status"
-        data-capability-gate="skills"
-        style={{
-          padding: '24px 16px', margin: 16,
-          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10,
-          color: C.textMuted, background: C.bgPanel,
-          borderRadius: R.lg, border: `1px dashed ${C.border}`,
-        }}
-      >
-        <Lock size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />
-        <div style={{ fontSize: FS.sm, color: C.textPrimary, fontWeight: 600 }}>
-          Навыки недоступны
-        </div>
-        <div style={{ fontSize: FS.xs, textAlign: 'center', maxWidth: 320, lineHeight: 1.5 }}>
-          {skillsGateReason ?? 'Навыки проекта недоступны'}
-        </div>
-      </div>
-    );
+    return <CapabilityUnavailable feature="skills" title="Навыки недоступны" reason={skillsGateReason} />;
   }
 
   const confirmRemoveSkill = async () => {

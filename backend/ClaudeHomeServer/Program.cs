@@ -2046,6 +2046,11 @@ app.MapHub<ClaudeHomeServer.Services.Desktop.DeviceHub>("/hubs/devices");
 // ObjectDisposedException — гасить процессы было уже нечем. Все три сервиса —
 // синглтоны, так что заранее взятая ссылка та же самая.
 var shutdownSessions = app.Services.GetRequiredService<SessionManager>();
+// Токен хода (ADR-016): резолв здесь создаёт экземпляр, а с ним — подписку на
+// turn/completed; удаление чата отзывает его токены явно (ход мог и не начаться).
+// GetService: подсистема llm отключаемая.
+if (app.Services.GetService<ClaudeHomeServer.Services.Llm.Gateway.TurnTokenService>() is { } turnTokens)
+    shutdownSessions.OnSessionDeleted += s => turnTokens.RevokeSession(s.Id);
 var shutdownTerminals = app.Services.GetRequiredService<TerminalService>();
 var shutdownDevServers = app.Services.GetRequiredService<DevServerService>();
 // Стор задач пишется с дебаунсом (TaskManager.ScheduleSave) — несохранённое досбрасываем

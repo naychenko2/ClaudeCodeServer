@@ -321,6 +321,13 @@ public sealed class LlmSubsystem : IAppSubsystem
         services.AddSingleton<SubscriptionOAuthUsageService>();
         services.AddGatedHostedFrom(config, sp => sp.GetRequiredService<SubscriptionOAuthUsageService>());
 
+        // Токен хода для шлюза LLM/MCP (ADR-016): в памяти, отзыв по turn/completed —
+        // подписка в конструкторе, поэтому экземпляр создаётся при старте в Program.cs
+        // (там же явный отзыв по удалению чата).
+        services.AddSingleton(sp => new Gateway.TurnTokenService(
+            sp.GetRequiredService<Turn.ITurnEventBus>(),
+            log: sp.GetService<ILogger<Gateway.TurnTokenService>>()));
+
         // WorkflowAgentParser / WorkflowWatcher / WorkflowMetaResolver — статические
         // парсеры транскриптов; DI не нужны (Program.cs:~788-792 ставит логгеры
         // и кеш корней после Build).

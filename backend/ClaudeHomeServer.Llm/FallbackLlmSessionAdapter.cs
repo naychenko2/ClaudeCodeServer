@@ -1128,11 +1128,12 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
 // не имеет права ронять ход: вся публикация под try, шина сама гасит исключения подписчиков.
             if (_events is not null)
             {
+                var errorClass = lastClass is { } lc ? TurnErrorClassifier.WireName(lc) : null;
+                TurnRunPassport? passport = null;
                 try
                 {
                     var endedAt = DateTime.UtcNow;
-                    var errorClass = lastClass is { } lc ? TurnErrorClassifier.WireName(lc) : null;
-                    var passport = new TurnRunPassport(
+                    passport = new TurnRunPassport(
                         SessionId: Info.Id,
                         StartedAt: startedAt,
                         EndedAt: endedAt,
@@ -1150,6 +1151,15 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                         LastError: lastEnd?.ErrorText ?? lastEnd?.Result?.ApiErrorStatus,
                         ContextTokens: ContextEstimate(),
                         RecordedAt: endedAt);
+                }
+                catch (Exception ex)
+                {
+                    LogWarn($"Паспорт хода не записан ({Info.Id}): {ex.Message}");
+                }
+                // Событие уходит и без паспорта: по нему отзывается токен хода шлюза
+                // (TurnTokenService), и сбой диагностики не должен оставить токен жить.
+                try
+                {
                     // Fire-and-forget: подписчик SessionManager.HandleTurnCompleted пишет
                     // в TurnRunLog (единственный источник), PublishAsync не бросает.
                     _ = _events.PublishAsync(new TurnCompleted(
@@ -1165,7 +1175,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 }
                 catch (Exception ex)
                 {
-                    LogWarn($"Паспорт хода не записан ({Info.Id}): {ex.Message}");
+                    LogWarn($"Конец хода не опубликован ({Info.Id}): {ex.Message}");
                 }
             }
         }

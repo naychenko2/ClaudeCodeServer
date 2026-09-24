@@ -8,6 +8,8 @@ namespace ClaudeHomeServer.DeviceAgent.Hosting;
 internal sealed record AgentPaths(string ConfigDirectory, string DataDirectory)
 {
     public string RegistrationFile => Path.Combine(ConfigDirectory, "agent.json");
+    /// <summary>Корни, под которыми агент открывает файлы проектов (ADR-016 §5).</summary>
+    public string RootsFile => Path.Combine(ConfigDirectory, "roots.json");
     public string CliRoot => Path.Combine(DataDirectory, "cli");
     /// <summary><c>CLAUDE_CONFIG_DIR</c> ходов: транскрипты для --resume живут только здесь.</summary>
     public string CliProfile => Path.Combine(DataDirectory, "claude-profile");

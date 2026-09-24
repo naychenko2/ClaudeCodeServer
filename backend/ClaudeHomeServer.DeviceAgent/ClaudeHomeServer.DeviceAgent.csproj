@@ -22,9 +22,13 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Только спинка: протокол канала устройства (кадры exec, hello) — единый источник
-         правды для обеих сторон. Ссылок на Main и вертикали сервера у агента нет. -->
+    <!-- Спинка: протокол канала устройства (кадры exec, hello) — единый источник правды для
+         обеих сторон — и RecursiveDirectoryWatcher. Файловые вертикали Files и Git — вторая
+         композиция того же кода (ADR-016, задача 4.2): агент их не переписывает, а собирает.
+         Ссылки на Main у агента нет. -->
     <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Files\ClaudeHomeServer.Files.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Git\ClaudeHomeServer.Git.csproj" />
   </ItemGroup>
 
   <ItemGroup>

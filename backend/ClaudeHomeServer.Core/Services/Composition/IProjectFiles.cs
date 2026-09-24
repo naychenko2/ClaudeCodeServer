@@ -30,5 +30,20 @@ public interface IProjectFiles
     Task<string?> GetDiffAsync(Project project, string relativePath, CancellationToken ct = default);
     Task<bool> RevertFileAsync(Project project, string relativePath, CancellationToken ct = default);
 
+    // Отдача потоком (ADR-016, сторож G7): большой файл не читается в память целиком.
+    // Поток открыт на чтение с разделением записи и удаления — правка файла харнесом во
+    // время отдачи не падает. Закрывает поток вызывающий.
+    // Содержимое для панели файлов: текст, картинка/документ base64 или метаданные бинарника.
+    Task<FileContentView> GetContentAsync(Project project, string relativePath, CancellationToken ct = default);
+
+    Task<ProjectFileStream> OpenReadAsync(Project project, string relativePath, CancellationToken ct = default);
+
     event Action<string, string, FileMutationKind, string?>? OnMutated;
+}
+
+/// <summary>Открытый на чтение файл проекта: поток и его длина на момент открытия.</summary>
+public sealed record ProjectFileStream(Stream Content, long Length) : IAsyncDisposable, IDisposable
+{
+    public ValueTask DisposeAsync() => Content.DisposeAsync();
+    public void Dispose() => Content.Dispose();
 }

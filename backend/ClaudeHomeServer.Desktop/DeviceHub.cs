@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using ClaudeHomeServer.Protocol;
 using Microsoft.AspNetCore.Authorization;
+using ClaudeHomeServer.Services.Composition;
 using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services.Desktop;
@@ -43,7 +44,12 @@ public interface IDesktopDeviceClient
 /// маршрутизатор пушит в хаб через <c>IHubContext&lt;DeviceHub&gt;</c>.
 /// </summary>
 [Authorize(AuthenticationSchemes = DesktopProtocol.DeviceTokenScheme)]
-public sealed class DeviceHub(DesktopCallRouter router, DeviceExecChannel exec, ILogger<DeviceHub> log)
+public sealed class DeviceHub(
+    DesktopCallRouter router,
+    DeviceExecChannel exec,
+    ILogger<DeviceHub> log,
+    AgentTicketService? agentTickets = null,
+    IProjectFilesChangedNotifier? filesChanged = null)
     : Hub<IDesktopDeviceClient>
 {
     private string? OwnerId => Context.User?.FindFirstValue(DesktopProtocol.OwnerIdClaim);
@@ -127,6 +133,37 @@ public sealed class DeviceHub(DesktopCallRouter router, DeviceExecChannel exec, 
     {
         if (!router.Progress(callId, Context.ConnectionId, lastAppliedStep)) throw UnknownCall(callId);
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Интроспекция билета localhost-API (ADR-016, задача 4.2): агент спрашивает, кому
+    /// сервер выдал билет, пришедший от браузера. Ответ — только устройству, к которому билет
+    /// привязан; во всех остальных случаях null, без различения причин.
+    /// </summary>
+    [HubMethodName(DeviceAgentApi.IntrospectMethod)]
+    public AgentTicketIntrospection? IntrospectAgentTicket(string ticket)
+    {
+        if (agentTickets is null || OwnerId is not { Length: > 0 } ownerId || DeviceId is not { Length: > 0 } deviceId)
+            return null;
+        return agentTickets.Introspect(ownerId, deviceId, ticket);
+    }
+
+    /// <summary>
+    /// Донесение ватчера агента: дерево локального проекта изменилось. Уходит в веб-морду
+    /// тем же событием, что у серверного ватчера, — но только по проекту, привязанному к
+    /// этому устройству: чужой проект устройство «пошевелить» не может.
+    /// </summary>
+    [HubMethodName(DeviceAgentApi.FilesChangedMethod)]
+    public async Task ProjectFilesChanged(DeviceFilesChanged report)
+    {
+        if (agentTickets is null || filesChanged is null) return;
+        if (OwnerId is not { Length: > 0 } ownerId || DeviceId is not { Length: > 0 } deviceId) return;
+        if (agentTickets.ProjectOnDevice(ownerId, deviceId, report.ProjectId) is null)
+            throw new HubException($"Проект {report.ProjectId} к этому устройству не привязан");
+
+        var paths = report.Paths ?? [];
+        var full = report.Full || paths.Count > DeviceAgentApi.MaxChangedPaths;
+        await filesChanged.FilesChangedAsync(report.ProjectId, full ? [] : paths, full);
     }
 
     // Донесение по чужому или неизвестному callId — не «тихо ок»: устройство обязано увидеть отказ.

@@ -101,8 +101,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         try
         {
             var p = GetProject(projectId);
-            var diff = await git.DiffFileAsync(Owner(p), RootFor(p), path, staged, ct);
-            return Ok(new { diff });
+            return Ok(new DiffResponse(await git.DiffFileAsync(Owner(p), RootFor(p), path, staged, ct)));
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return BadRequest(new { error = "Недопустимый путь" }); }
@@ -483,7 +482,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
             var message = AppendDossierTrailer(body.Message);
             var sha = await git.CommitAsync(Owner(p), RootFor(p), message, body.Amend, ct);
             await NotifyChanged(projectId);
-            return Ok(new { sha });
+            return Ok(new CommitResponse(sha));
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
@@ -693,11 +692,9 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
     }
 }
 
-public record GitPathRequest(string Path);
 public record GitPatchRequest(string Patch);
 public record GitStashRequest(string? Message = null);
 public record GitAutoCommitRequest(bool Enabled, bool Push = false);
-public record GitCommitRequest(string Message, bool Amend = false);
 public record GitCheckoutRequest(string Branch);
 // Адрес удалённого репозитория, введённый человеком (валидация — в SetRemote)
 public record GitSetRemoteRequest(string? Url);

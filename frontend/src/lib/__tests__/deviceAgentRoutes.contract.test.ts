@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DEVICE_AGENT_SHARED, DEVICE_AGENT_UNSUPPORTED, agentServesPath } from '../deviceAgentRoutes';
+import { DEVICE_AGENT_SHARED, DEVICE_AGENT_UNSUPPORTED, DEVICE_AGENT_ONLY, agentServesPath } from '../deviceAgentRoutes';
 
 // Контракт фронт/бэк: списки маршрутов агента на фронте — ровно DeviceAgentRoutes.Shared и
 // .Unsupported из ProjectFilesApiContract.cs. Бэк сам сторожит, что каждый серверный маршрут
@@ -11,7 +11,7 @@ import { DEVICE_AGENT_SHARED, DEVICE_AGENT_UNSUPPORTED, agentServesPath } from '
 const here = dirname(fileURLToPath(import.meta.url));
 const csFile = resolve(here, '../../../../backend/ClaudeHomeServer.Core/Protocol/ProjectFilesApiContract.cs');
 
-function readBackendList(name: 'Shared' | 'Unsupported'): string[] {
+function readBackendList(name: 'Shared' | 'Unsupported' | 'AgentOnly'): string[] {
   const src = readFileSync(csFile, 'utf-8');
   const start = src.indexOf(`ProjectApiRoute> ${name} =`);
   expect(start, `список ${name} не найден в ProjectFilesApiContract.cs`).toBeGreaterThan(-1);
@@ -33,6 +33,10 @@ describe('контракт маршрутов агента устройства 
   it('DEVICE_AGENT_UNSUPPORTED совпадает с DeviceAgentRoutes.Unsupported', () => {
     expect([...DEVICE_AGENT_UNSUPPORTED].sort()).toEqual(readBackendList('Unsupported').sort());
   });
+
+  it('DEVICE_AGENT_ONLY совпадает с DeviceAgentRoutes.AgentOnly', () => {
+    expect([...DEVICE_AGENT_ONLY].sort()).toEqual(readBackendList('AgentOnly').sort());
+  });
 });
 
 describe('agentServesPath', () => {
@@ -40,6 +44,8 @@ describe('agentServesPath', () => {
     expect(agentServesPath('GET', 'files/tree')).toBe(true);
     expect(agentServesPath('delete', 'files')).toBe(true);
     expect(agentServesPath('POST', 'git/commit')).toBe(true);
+    expect(agentServesPath('POST', 'preview/start')).toBe(true);
+    expect(agentServesPath('PUT', 'agents/reviewer')).toBe(true);
   });
 
   it('метод входит в маршрут: GET и POST одного пути различаются', () => {
@@ -51,5 +57,6 @@ describe('agentServesPath', () => {
     expect(agentServesPath('POST', 'files/upload')).toBe(false);
     expect(agentServesPath('GET', 'git/commits/abc123/diff')).toBe(false);
     expect(agentServesPath('GET', 'git/whatever')).toBe(false);
+    expect(agentServesPath('POST', 'preview/external-link')).toBe(false);
   });
 });

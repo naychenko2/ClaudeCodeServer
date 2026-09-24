@@ -8,6 +8,7 @@ vi.mock('../offline', () => ({ request }));
 
 import {
   noteProject, projectRequest, probeDeviceAgent, getDeviceAgentStatus, agentStreamUrl,
+  agentHubTicket, agentHubUrl, agentPreviewUrl, uploadAgentAttachment,
   DeviceAgentError, resetDeviceAgentForTests,
 } from '../deviceAgent';
 
@@ -235,6 +236,82 @@ describe('agentStreamUrl — единственная точка URL поток�
   it('путь вне корня — 403 агента доходит до вызывающего', async () => {
     fetchMock.mockResolvedValue(res(403, { error: 'Путь вне проекта' }));
     await expect(agentStreamUrl('l1', '../x')).rejects.toMatchObject({ status: 403, message: 'Путь вне проекта' });
+  });
+});
+
+describe('сервисы, превью и навыки локального проекта (4.4б)', () => {
+  beforeEach(() => {
+    noteProject(project('l1', 'device'));
+    request.mockResolvedValue(ticketResponse());
+  });
+
+  it('сервисы и навыки идут в агента, серверный проект — на сервер', async () => {
+    fetchMock.mockResolvedValue(res(200, { services: [], activeServiceId: null }));
+    await projectRequest('/projects/l1/services');
+    await projectRequest('/projects/l1/preview/start', { method: 'POST', body: '{}' });
+    await projectRequest('/projects/l1/skills');
+    await projectRequest('/projects/l1/agents/reviewer', { method: 'PUT', body: '{}' });
+    expect(fetchMock.mock.calls.map(c => c[0])).toEqual([
+      'http://127.0.0.1:47318/api/projects/l1/services',
+      'http://127.0.0.1:47318/api/projects/l1/preview/start',
+      'http://127.0.0.1:47318/api/projects/l1/skills',
+      'http://127.0.0.1:47318/api/projects/l1/agents/reviewer',
+    ]);
+
+    noteProject(project('s1', 'server'));
+    request.mockResolvedValue({ services: [] });
+    await projectRequest('/projects/s1/services');
+    expect(request).toHaveBeenLastCalledWith('/projects/s1/services', undefined);
+  });
+
+  it('внешний доступ к сервису у локального проекта отказывает до сети', async () => {
+    await expect(projectRequest('/projects/l1/preview/external-link', { method: 'POST', body: '{}' }))
+      .rejects.toMatchObject({ kind: 'unsupported' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('билет хаба выдаёт агент по основному в заголовке; адрес хаба — на порту агента', async () => {
+    fetchMock.mockResolvedValue(res(200, { hubTicket: 'hub-1', expiresAt: new Date(Date.now() + 60_000).toISOString() }));
+    expect(await agentHubTicket('l1')).toBe('hub-1');
+    // negotiate и WebSocket берут билет подряд — второй раз агент не спрашиваем
+    expect(await agentHubTicket('l1')).toBe('hub-1');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('http://127.0.0.1:47318/api/projects/l1/agent/hub-ticket');
+    expect(init.method).toBe('POST');
+    expect(init.headers['X-Agent-Ticket']).toBe('t-1');
+    expect(await agentHubUrl('l1')).toBe('http://127.0.0.1:47318/hubs/agent');
+  });
+
+  it('истекающий билет хаба перевыпускается', async () => {
+    fetchMock
+      .mockResolvedValueOnce(res(200, { hubTicket: 'hub-old', expiresAt: new Date(Date.now() + 5_000).toISOString() }))
+      .mockResolvedValueOnce(res(200, { hubTicket: 'hub-new', expiresAt: new Date(Date.now() + 60_000).toISOString() }));
+    expect(await agentHubTicket('l1')).toBe('hub-old');
+    expect(await agentHubTicket('l1')).toBe('hub-new');
+  });
+
+  it('адрес превью — готовый адрес агента, переиспользуется до конца срока', async () => {
+    const url = 'http://127.0.0.1:47319/preview/l1/?previewTicket=p-1';
+    fetchMock.mockResolvedValue(res(200, { previewTicket: 'p-1', expiresAt: new Date(Date.now() + 8 * 3600_000).toISOString(), url }));
+    expect(await agentPreviewUrl('l1')).toBe(url);
+    expect(await agentPreviewUrl('l1')).toBe(url);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe('http://127.0.0.1:47318/api/projects/l1/agent/preview-ticket');
+    await agentPreviewUrl('l1', true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('вложение уходит формой в агента, без JSON-заголовка', async () => {
+    fetchMock.mockResolvedValue(res(200, { path: '.cc-attachments/g/a.png' }));
+    const file = new File(['x'], 'a.png', { type: 'image/png' });
+    expect(await uploadAgentAttachment('l1', file)).toEqual({ path: '.cc-attachments/g/a.png' });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('http://127.0.0.1:47318/api/projects/l1/agent/attachments');
+    expect(init.body).toBeInstanceOf(FormData);
+    expect((init.body as FormData).get('file')).toBeInstanceOf(File);
+    expect(init.headers['Content-Type']).toBeUndefined();
+    expect(init.headers['X-Agent-Ticket']).toBe('t-1');
   });
 });
 

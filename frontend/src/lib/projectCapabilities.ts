@@ -54,17 +54,6 @@ const TRANSCRIPT_FEATURES: ProjectFeatureKey[] = [
   ProjectFeature.ChatBranch,
 ];
 
-// Что из группы files браузер уже умеет у локального проекта — через localhost-API агента
-// (задача 4.4). Терминал, дев-серверы, навыки и вложения агент пока не поднимает (4.3):
-// бэк считает их доступными вместе с группой, но фронту до них не достучаться — прячем.
-const DEVICE_AGENT_FEATURES: ProjectFeatureKey[] = [
-  ProjectFeature.Files,
-  ProjectFeature.Diff,
-  ProjectFeature.Git,
-  ProjectFeature.FileWatcher,
-];
-export const DEVICE_NOT_YET_REASON = 'У локального проекта пока недоступно: агент устройства этого ещё не умеет';
-
 // Серверный проект без capabilities (старый бэк): всё доступно, матрица пустая.
 // Это ЕДИНСТВЕННОЕ место, где мы «придумываем» матрицу; остальной код видит то,
 // что вернёт getProjectCapabilities, и больше про deviceId не спрашивает.
@@ -115,7 +104,6 @@ export function isFeatureAvailable(project: Project | null | undefined, feature:
   const cap = getProjectCapabilities(project);
   const group = findGroup(cap, feature);
   if (!group) return false;
-  if (group.host === 'device' && !DEVICE_AGENT_FEATURES.includes(feature)) return false;
   return group.available && group.features.includes(feature);
 }
 
@@ -127,11 +115,10 @@ export function featureReason(project: Project | null | undefined, feature: Proj
   if (!group) return 'Возможность недоступна в этой версии';
   if (!group.features.includes(feature)) return null; // ключ не в этой группе — не показываем
   if (!group.available) return group.reason;
-  if (group.host === 'device' && !DEVICE_AGENT_FEATURES.includes(feature)) return DEVICE_NOT_YET_REASON;
   return null;
 }
 
-// Куда ходят запросы файлов и git проекта: на сервер или в агента устройства на этой
+// Куда ходят запросы файлов, git, сервисов и навыков проекта: на сервер или в агента устройства на этой
 // машине. ЕДИНСТВЕННОЕ место этого решения — api.ts берёт его отсюда через deviceAgent.ts.
 export type ProjectFilesRoute = 'server' | 'agent';
 
@@ -143,6 +130,17 @@ export function projectFilesRoute(project: Project | null | undefined): ProjectF
 // то, что умеет агент (список в deviceAgentRoutes.ts). Кнопку без маршрута панель прячет.
 export function projectSupportsRoute(project: Project | null | undefined, route: DeviceAgentRoute): boolean {
   return projectFilesRoute(project) === 'server' || agentSupports(route);
+}
+
+// Почему действия нет у проекта (null — есть). Текст — для title недоступной кнопки.
+const ROUTE_REASONS: Partial<Record<DeviceAgentRoute, string>> = {
+  'POST preview/external-link': 'Доступ снаружи идёт через поддомен сервера, а сервис локального проекта работает на его компьютере',
+};
+export const DEVICE_ROUTE_REASON = 'У локального проекта это действие недоступно: агент устройства его не умеет';
+
+export function projectRouteReason(project: Project | null | undefined, route: DeviceAgentRoute): string | null {
+  if (projectSupportsRoute(project, route)) return null;
+  return ROUTE_REASONS[route] ?? DEVICE_ROUTE_REASON;
 }
 
 // Где работает ключ — сервер/устройство/выключено. Полезно для бейджей («на устройстве»).

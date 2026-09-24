@@ -1,4 +1,4 @@
-// Маршруты файлов и git, которые умеет localhost-API агента устройства (ADR-016, задача 4.4).
+// Маршруты файлов, git, сервисов и навыков, которые умеет localhost-API агента устройства (ADR-016, задача 4.4).
 // Зеркало DeviceAgentRoutes из backend/ClaudeHomeServer.Core/Protocol/ProjectFilesApiContract.cs:
 // рассинхрон ловит контракт-тест deviceAgentRoutes.contract.test.ts. Это ЕДИНСТВЕННЫЙ список
 // на фронте — компоненты спрашивают agentSupports(), а не держат свои перечни.
@@ -28,6 +28,32 @@ export const DEVICE_AGENT_SHARED = [
   'POST git/unstage',
   'POST git/discard',
   'POST git/commit',
+
+  // Сервисы проекта и превью
+  'GET services',
+  'GET preview/status',
+  'POST preview/start',
+  'POST preview/stop',
+  'POST preview/stop-external',
+  'POST preview/active',
+  'POST preview/active-external',
+  'GET launch-config',
+  'PUT launch-config',
+
+  // Навыки и агенты проекта
+  'GET skills',
+  'GET agents/{agentName}',
+  'PUT agents/{agentName}',
+  'POST agents',
+] as const;
+
+// Маршруты, которых у сервера нет вовсе: билеты для тегов без заголовков и вложения чата.
+// Зеркало DeviceAgentRoutes.AgentOnly
+export const DEVICE_AGENT_ONLY = [
+  'POST agent/stream-ticket',
+  'POST agent/hub-ticket',
+  'POST agent/preview-ticket',
+  'POST agent/attachments',
 ] as const;
 
 export const DEVICE_AGENT_UNSUPPORTED = [
@@ -82,6 +108,9 @@ export const DEVICE_AGENT_UNSUPPORTED = [
   'POST git/ai/stash-name',
   'GET git/commit-prompt',
   'PUT git/commit-prompt',
+
+  // Внешний доступ к дев-серверу — поддомен сервера, с машины проекта его нет по смыслу
+  'POST preview/external-link',
 ] as const;
 
 export type DeviceAgentRoute = (typeof DEVICE_AGENT_SHARED)[number] | (typeof DEVICE_AGENT_UNSUPPORTED)[number];

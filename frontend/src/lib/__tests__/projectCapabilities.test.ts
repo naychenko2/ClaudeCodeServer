@@ -9,7 +9,8 @@ import {
   deviceOfflineLabel,
   projectFilesRoute,
   projectSupportsRoute,
-  DEVICE_NOT_YET_REASON,
+  DEVICE_ROUTE_REASON,
+  projectRouteReason,
 } from '../projectCapabilities';
 import type { Project, ProjectCapabilitiesView, ProjectFeatureKey, ProjectDeviceView } from '../../types';
 import { ProjectFeature } from '../../types';
@@ -209,18 +210,25 @@ describe('локальный проект с живым устройством �
     return { ...c, files: { ...c.files, available: true, reason: null } };
   }
 
-  it('файлы и git доступны, терминал/сервисы/навыки — нет, с причиной', () => {
+  it('вся группа файлов доступна через агента: терминал, сервисы, навыки и вложения тоже (4.4б)', () => {
     const p = localProject(onlineDeviceCaps());
-    expect(isFeatureAvailable(p, ProjectFeature.Files)).toBe(true);
-    expect(isFeatureAvailable(p, ProjectFeature.Git)).toBe(true);
-    expect(isFeatureAvailable(p, ProjectFeature.Terminal)).toBe(false);
-    expect(isFeatureAvailable(p, ProjectFeature.DevServers)).toBe(false);
-    expect(isFeatureAvailable(p, ProjectFeature.Skills)).toBe(false);
-    expect(featureReason(p, ProjectFeature.Terminal)).toBe(DEVICE_NOT_YET_REASON);
-    expect(featureReason(p, ProjectFeature.Files)).toBeNull();
+    for (const f of [ProjectFeature.Files, ProjectFeature.Git, ProjectFeature.Terminal, ProjectFeature.DevServers,
+      ProjectFeature.Skills, ProjectFeature.Attachments]) {
+      expect(isFeatureAvailable(p, f)).toBe(true);
+      expect(featureReason(p, f)).toBeNull();
+    }
   });
 
-  it('офлайн-устройство: причина группы важнее «пока не умеет»', () => {
+  it('внешний доступ к сервису у локального проекта скрыт с причиной, у серверного есть', () => {
+    const local = localProject(onlineDeviceCaps());
+    expect(projectSupportsRoute(local, 'POST preview/external-link')).toBe(false);
+    expect(projectRouteReason(local, 'POST preview/external-link')).toMatch(/поддомен сервера/);
+    expect(projectRouteReason(local, 'POST git/push')).toBe(DEVICE_ROUTE_REASON);
+    expect(projectRouteReason(local, 'POST preview/start')).toBeNull();
+    expect(projectRouteReason(emptyProject(), 'POST preview/external-link')).toBeNull();
+  });
+
+  it('офлайн-устройство: терминал недоступен с причиной группы', () => {
     expect(featureReason(localProject(offlineDeviceCaps()), ProjectFeature.Terminal)).toBe('Устройство офлайн');
   });
 

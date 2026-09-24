@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ProjectService } from '../types';
 import { api } from '../lib/api';
-import { onMessage } from '../lib/signalr';
+import { onPreviewMessage } from '../lib/signalr';
 
 export function useProjectServices(projectId: string, opts?: { onStarted?: (svc: ProjectService) => void }) {
   const [services, setServices] = useState<ProjectService[]>([]);
@@ -71,16 +71,16 @@ export function useProjectServices(projectId: string, opts?: { onStarted?: (svc:
     setServices(prev => prev.map(s => s.id === serviceId ? { ...s, status: 'stopped', runningPort: null } : s));
   }, [projectId]);
 
-  // Живой статус сервисов из broadcast preview_status (группа user_*)
+  // Живой статус сервисов из broadcast preview_status (группа user_*; у локального проекта — хаб агента)
   useEffect(() => {
-    return onMessage(msg => {
+    return onPreviewMessage(projectId, msg => {
       if (msg.type !== 'preview_status' || !msg.serviceId) return;
       const sid = msg.serviceId;
       setServices(prev => prev.map(s => s.id === sid
         ? { ...s, status: msg.status, runningPort: msg.port ?? s.runningPort, error: msg.error ?? null }
         : s));
     });
-  }, []);
+  }, [projectId]);
 
   return { services, activePreviewId, setActivePreviewId, activate, refresh, start, stop };
 }

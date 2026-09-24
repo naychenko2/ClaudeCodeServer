@@ -10,7 +10,8 @@ import { AddServiceDialog } from '../preview/AddServiceDialog'
 import { useExternalPreviewLinks } from '../../hooks/useExternalPreviewLinks'
 import { api } from '../../lib/api'
 import { saveExternalUrl, clearExternalUrl, clearAllExternalUrls } from '../../lib/externalPreviewUrls'
-import { useProjectFeature, featureReason } from '../../lib/projectCapabilities'
+import { useProjectFeature, featureReason, projectRouteReason } from '../../lib/projectCapabilities'
+import { DeviceAgentGate } from '../DeviceAgentGate'
 import type * as ts from '../../lib/terminalSignalr'
 import type { Project, ProjectService } from '../../types'
 import { ProjectFeature } from '../../types'
@@ -69,7 +70,15 @@ export function groupServices(services: ProjectService[]): [string, ProjectServi
   return [...map.entries()].sort((a, b) => sourceMeta(a[0]).order - sourceMeta(b[0]).order)
 }
 
-export function ToolsSidebar({
+// Терминал и сервисы локального проекта живут в агенте устройства на этой машине: пока он не
+// ответил, DeviceAgentGate показывает состояние связи. Недоступную группу объясняет тело
+export function ToolsSidebar(props: Props) {
+  const filesGate = useProjectFeature(props.project, ProjectFeature.Files);
+  if (!props.project || !filesGate) return <ToolsSidebarBody {...props} />;
+  return <DeviceAgentGate project={props.project}><ToolsSidebarBody {...props} /></DeviceAgentGate>;
+}
+
+function ToolsSidebarBody({
   projectId, project, activeTab, onTabChange,
   terminals, onCreateTerminal, onStopTerminal, onRenameTerminal,
   onSelectTerminal, activeTerminalId,
@@ -238,6 +247,7 @@ export function ToolsSidebar({
         ) : (
         <PreviewServiceList
           projectId={projectId}
+          project={project}
           groups={groups}
           hasAny={previewServices.length > 0}
           activePreviewId={activePreviewId}
@@ -254,10 +264,12 @@ export function ToolsSidebar({
 // Список сервисов проекта с группировкой по источникам — экспортирован: его же
 // рендерит панелька «Сервисы» нового интерфейса (workspace-cc-panels)
 export function PreviewServiceList({
-  projectId, groups, hasAny, activePreviewId,
+  projectId, project, groups, hasAny, activePreviewId,
   onRefreshServices, onStartService, onStopService, onSelectPreview,
 }: {
   projectId: string
+  // Проект — для решения, есть ли у него внешний доступ (у локального нет)
+  project?: Project | null
   groups: [string, ProjectService[]][]
   hasAny: boolean
   activePreviewId: string | null
@@ -270,6 +282,8 @@ export function PreviewServiceList({
   // Ссылки внешнего доступа: список сквозной по проектам владельца, поэтому живёт здесь,
   // а не в состоянии проекта
   const { enabled: extEnabled, links: extLinks, refresh: refreshLinks, revoke, revokeAll } = useExternalPreviewLinks()
+  // У локального проекта внешнего доступа нет: кнопка остаётся недоступной с причиной
+  const shareReason = extEnabled ? projectRouteReason(project, 'POST preview/external-link') : null
   const [shareError, setShareError] = useState<string | null>(null)
   const [shareNote, setShareNote] = useState<string | null>(null)
   // Чужой процесс на порту: гасим только после явного согласия — там может оказаться
@@ -469,7 +483,8 @@ export function PreviewServiceList({
                     onStop={() => onStopService(svc.id)}
                     onSelect={() => onSelectPreview(svc.id)}
                     shared={sharedHere.has(svc.id)}
-                    onShare={extEnabled ? () => void share(svc) : undefined}
+                    onShare={extEnabled && !shareReason ? () => void share(svc) : undefined}
+                    shareUnavailable={shareReason}
                     onStopExternal={() => void stopExternal(svc)}
                     onUnshare={() => {
                       const jti = sharedHere.get(svc.id)
@@ -488,7 +503,8 @@ export function PreviewServiceList({
                       onStop={() => onStopService(member.id)}
                       onSelect={() => onSelectPreview(member.id)}
                       shared={sharedHere.has(member.id)}
-                      onShare={extEnabled ? () => void share(member) : undefined}
+                      onShare={extEnabled && !shareReason ? () => void share(member) : undefined}
+                      shareUnavailable={shareReason}
                       onStopExternal={() => void stopExternal(member)}
                       onUnshare={() => {
                         const jti = sharedHere.get(member.id)
@@ -557,7 +573,7 @@ const saveCollapsed = (projectId: string, value: Set<string>) => {
   try { localStorage.setItem(collapsedKey(projectId), JSON.stringify([...value])) } catch { /* ignore */ }
 }
 
-function ServiceRow({ svc, memberNames, active, onStart, onStop, onSelect, shared, onShare, onUnshare, onStopExternal, nested }: {
+function ServiceRow({ svc, memberNames, active, onStart, onStop, onSelect, shared, onShare, shareUnavailable, onUnshare, onStopExternal, nested }: {
   svc: ProjectService
   memberNames?: string[]
   // Строка — участник составной конфигурации: рисуется под ней со сдвигом и направляющей
@@ -569,6 +585,8 @@ function ServiceRow({ svc, memberNames, active, onStart, onStop, onSelect, share
   // Открыт ли сервис наружу по ссылке и можно ли это менять (фича включена на сервере)
   shared?: boolean
   onShare?: () => void
+  // Почему открыть наружу нельзя — кнопка показывается недоступной с этой подсказкой
+  shareUnavailable?: string | null
   onUnshare?: () => void
   // Остановка процесса, поднятого вне продукта: своего объекта процесса у нас нет,
   // поэтому путь отдельный от обычного «Стоп»
@@ -669,6 +687,11 @@ function ServiceRow({ svc, memberNames, active, onStart, onStop, onSelect, share
           и есть то, что этот значок должен ловить */}
       {shared && (
         <Globe size={12} style={{ flexShrink: 0, color: C.warning }} aria-label="открыт наружу" />
+      )}
+      {hover && shareUnavailable && (running || external) && (
+        <IconButton size="xs" variant="soft" disabled title={shareUnavailable}>
+          <Globe size={12} />
+        </IconButton>
       )}
       {hover && onShare && (running || external) && (
         shared

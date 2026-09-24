@@ -4,7 +4,7 @@
 // узкую колонку (280-560px): полоса чипов сверху + рабочая область.
 import { useEffect, useState } from 'react';
 import { Plus, Terminal, X } from 'lucide-react';
-import type { ProjectService } from '../../types';
+import type { Project, ProjectService } from '../../types';
 import { C, FONT, R } from '../../lib/design';
 import { Button, EmptyState } from '../../components/ui';
 import { ICON_STROKE } from '../../components/ui/icons';
@@ -120,8 +120,9 @@ export function TerminalPanelContent({ terminals, activeTerminalId, onSelect, on
 // ToolsSidebar): группировка по источникам, обновление, форма «Добавить свой…».
 // Само окно превью живёт в центральной области воркспейса: клик по запущенному
 // сервису открывает его там (повторный — закрывает), запуск кнопкой ▶ открывает сразу.
-export function PreviewPanelContent({ projectId, services, activePreviewId, onSelect, onStart, onStop, onRefresh }: {
+export function PreviewPanelContent({ projectId, project, services, activePreviewId, onSelect, onStart, onStop, onRefresh }: {
   projectId: string;
+  project?: Project | null;
   services: ProjectService[];
   activePreviewId: string | null;
   onSelect: (id: string | null) => void;
@@ -135,6 +136,7 @@ export function PreviewPanelContent({ projectId, services, activePreviewId, onSe
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <PreviewServiceList
         projectId={projectId}
+        project={project}
         groups={groupServices(services)}
         hasAny={services.length > 0}
         activePreviewId={activePreviewId}

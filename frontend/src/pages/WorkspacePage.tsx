@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect, useReducer, type ReactNode } from 'react';
 import { Plus, MessageCircle, Network, Puzzle, GitCompare, BookOpen } from 'lucide-react';
 import type { Project, Session, SkillsData, AuthState, Task, ProjectService, SessionContextEntry } from '../types';
+import { DeviceAgentGate } from '../components/DeviceAgentGate';
 import { ProjectFeature } from '../types';
 import { useProjectFeature } from '../lib/projectCapabilities';
 import { SessionList } from '../components/SessionList';
@@ -1945,8 +1946,10 @@ const windowWidth = useWindowWidth();
             // skillsData, откуда композер берёт «/»-команды: установка навыка в панели
             // видна в подсказке сразу, без перезагрузки страницы
             skills: <SkillsPanel projectId={project.id} project={project} onChanged={setSkillsData} />,
-            terminal: <TerminalPanelContent terminals={terminals} activeTerminalId={activeTerminalId} onSelect={handleSelectTerminal} onCreate={handleCreateTerminal} onStop={handleStopTerminal} onActivity={setTerminalBusy} />,
-            preview: <PreviewPanelContent projectId={project.id} services={previewServices} activePreviewId={activePreviewId} onSelect={handleSelectPreview} onStart={startService} onStop={stopService} onRefresh={refreshServices} />,
+            // Терминал и сервисы локального проекта — у агента устройства: до его ответа гейт
+            // показывает состояние связи (серверному проекту гейт прозрачен)
+            terminal: <DeviceAgentGate project={project}><TerminalPanelContent terminals={terminals} activeTerminalId={activeTerminalId} onSelect={handleSelectTerminal} onCreate={handleCreateTerminal} onStop={handleStopTerminal} onActivity={setTerminalBusy} /></DeviceAgentGate>,
+            preview: <DeviceAgentGate project={project}><PreviewPanelContent projectId={project.id} project={project} services={previewServices} activePreviewId={activePreviewId} onSelect={handleSelectPreview} onStart={startService} onStop={stopService} onRefresh={refreshServices} /></DeviceAgentGate>,
             video: <VideoPanel />,
           }}
         />

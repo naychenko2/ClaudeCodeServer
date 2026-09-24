@@ -84,6 +84,14 @@ public class SessionManagerTests : IDisposable
             return inner.ToSession(sessionId, message);
         }
 
+        // Except-канал — тот же единый поток чтения (Sent<T>): ручной ввод теперь
+        // приходит через него, тесты «в ленте есть user_message» не должны различать адрес
+        public Task ToSessionExcept(string sessionId, string exceptConnectionId, Protocol.ServerMessage message)
+        {
+            lock (sentLock) sentMessages.Add(message);
+            return inner.ToSessionExcept(sessionId, exceptConnectionId, message);
+        }
+
         public Task ToOwner(string ownerId, Protocol.ServerMessage message) =>
             inner.ToOwner(ownerId, message);
 
@@ -92,6 +100,10 @@ public class SessionManagerTests : IDisposable
 
         public Task ToPreviewLog(string projectId, string serviceId, Protocol.ServerMessage message) =>
             inner.ToPreviewLog(projectId, serviceId, message);
+
+        // Доступ к inner для проверки адресации каналов (Session vs SessionExcept):
+        // Sent<T> не различает, кому именно ушла реплика
+        public Helpers.TestSessionBroadcaster Inner => inner;
     }
 
     public SessionManagerTests()
@@ -181,25 +193,10 @@ public class SessionManagerTests : IDisposable
 
     public void Dispose()
     {
-        if (!Directory.Exists(_tempDir)) return;
-
-        // Запись history.json идёт из fire-and-forget обработчиков SessionManager: после
-        // ускорения прогона (нет CLI-прогревов) тест доходит до Dispose раньше дописывания,
-        // и на Linux Directory.Delete падал «Directory not empty». Ретрай по паттерну
-        // TestWebApplicationFactory.Dispose — уборка temp не предмет теста.
-        for (var i = 1; ; i++)
-        {
-            try
-            {
-                Directory.Delete(_tempDir, recursive: true);
-                return;
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                if (i >= 5) return;
-                Thread.Sleep(50 * i);
-            }
-        }
+        // Запись history.json идёт из fire-and-forget обработчиков SessionManager: тест
+        // доходит до Dispose раньше дописывания — отсюда «Directory not empty» на Linux и
+        // занятый {path}.{guid}.tmp на Windows. Ретрай живёт в общем хелпере.
+        Helpers.TestFs.DeleteDirectoryResilient(_tempDir);
     }
 
     private string MkProjectDir(string suffix) =>
@@ -1865,6 +1862,90 @@ public class SessionManagerTests : IDisposable
         _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Working);
     }
 
+    // --- Ответ на карточку гасит её на ОСТАЛЬНЫХ устройствах чата ---
+    // Отвечающий клиент гасит свою копию оптимистично, остальным нужно событие: без него
+    // форма висела активной до перезагрузки страницы (перезагрузка истории не помогает —
+    // ответ не добавляет элемент в ленту, и сверка по длине даёт «сервер не новее»).
+
+    [Fact]
+    public async Task RespondPermission_КарточкаЖива_РассылаетРешениеОстальнымУстройствам()
+    {
+        var session = await MkBusySessionAsync("bcast-perm", SessionStatus.Waiting);
+        var entry = GetEntry(session.Id);
+        SetProcess(entry, StubAdapter(entry).Object);
+        SetPendingInteraction(entry, new PermissionRequestMessage("req-1", "Bash", new { }));
+        ClearSent();
+
+        _sut.RespondPermission(session.Id, "req-1", "allow_always");
+
+        await WaitForConditionAsync(() => Sent<InteractionResolvedMessage>().Count > 0,
+            TimeSpan.FromSeconds(2));
+        var msg = Sent<InteractionResolvedMessage>().Single();
+        msg.Kind.Should().Be("permission");
+        msg.Id.Should().Be("req-1");
+        msg.Decision.Should().Be("always");
+        msg.SessionId.Should().Be(session.Id);
+    }
+
+    [Fact]
+    public async Task AnswerQuestion_КарточкаЖива_РассылаетОтветОстальнымУстройствам()
+    {
+        var session = await MkBusySessionAsync("bcast-question", SessionStatus.Waiting);
+        var entry = GetEntry(session.Id);
+        SetProcess(entry, StubAdapter(entry).Object);
+        SetPendingInteraction(entry, new AskQuestionMessage("tool-1", new { }));
+        ClearSent();
+
+        _sut.AnswerQuestion(session.Id, "tool-1", "{\"answers\":{\"Подход\":\"Первый\"}}");
+
+        await WaitForConditionAsync(() => Sent<InteractionResolvedMessage>().Count > 0,
+            TimeSpan.FromSeconds(2));
+        var msg = Sent<InteractionResolvedMessage>().Single();
+        msg.Kind.Should().Be("question");
+        msg.Id.Should().Be("tool-1");
+        msg.Answers.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task RespondPlan_КарточкаЖива_РассылаетРешениеОстальнымУстройствам()
+    {
+        var session = await MkBusySessionAsync("bcast-plan", SessionStatus.Waiting);
+        var entry = GetEntry(session.Id);
+        SetProcess(entry, StubAdapter(entry).Object);
+        SetPendingInteraction(entry, new PlanReviewMessage("req-2", "план"));
+        ClearSent();
+
+        _sut.RespondPlan(session.Id, "req-2", approve: false, feedback: "доработать");
+
+        await WaitForConditionAsync(() => Sent<InteractionResolvedMessage>().Count > 0,
+            TimeSpan.FromSeconds(2));
+        var msg = Sent<InteractionResolvedMessage>().Single();
+        msg.Kind.Should().Be("plan");
+        msg.Id.Should().Be("req-2");
+        msg.Approved.Should().BeFalse();
+        msg.Feedback.Should().Be("доработать");
+    }
+
+    [Fact]
+    public async Task AnswerQuestion_КарточкиУжеНет_НичегоНеРассылает()
+    {
+        // Протухший ответ (ход уже оборван) не должен гасить чужие карточки
+        var session = await MkBusySessionAsync("bcast-stale", SessionStatus.Error);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        ClearSent();
+
+        _sut.AnswerQuestion(session.Id, "tool-1", "{\"answers\":[]}");
+
+        await Task.Delay(100);
+        // Ассерт на пустую рассылку сам по себе зеленел бы и на голодном раннере, не успевшем
+        // выполнить фоновую отправку. Проверка адаптера детерминированна: гейт стоит раньше
+        // обоих действий, и снятие гейта роняет тест независимо от таймингов CI.
+        adapter.Verify(a => a.AnswerQuestion(It.IsAny<string>(), It.IsAny<string>()), Times.Never());
+        Sent<InteractionResolvedMessage>().Should().BeEmpty();
+    }
+
     // --- «Разрешать всегда»: список живёт на сессии, а не в памяти адаптера ---
 
     // Инструменты «всегда разрешать» из стора для сессии session (PascalCase, как _jsonOpts)
@@ -2183,6 +2264,55 @@ public class SessionManagerTests : IDisposable
         await _sut.SendMessageAsync(session.Id, "ещё раз", []);
 
         _sut.GetPending(session.Id).Should().HaveCount(2);
+    }
+
+    // --- Синхронизация устройств: live-баллон ручного ввода ---
+
+    [Fact]
+    public async Task SendMessage_User_РучнойВвод_РассылаетсяВсемКромеОтправителя()
+    {
+        // Фикс синхронизации устройств: реплика, отправленная с устройства А, раньше не
+        // приезжала устройству Б live (только из истории по F5) — сервер не рассылал
+        // user_message для ручного ввода, потому что отправитель рисует баллон оптимистично.
+        // Теперь реплика идёт в session-группу с исключением соединения-отправителя:
+        // у А дубля нет, Б видит сообщение сразу.
+        var session = await MkFreeSessionWithStubAsync("live-except");
+        ClearSent();
+
+        await _sut.SendMessageAsync(session.Id, "привет с ноута", [], senderConnectionId: "conn-A");
+
+        var except = _broadcaster.Inner.SessionExcept.Should().ContainSingle().Subject;
+        except.SessionId.Should().Be(session.Id);
+        except.ExceptConnectionId.Should().Be("conn-A");
+        except.Message.Should().BeOfType<UserMessageMessage>().Which.Text.Should().Be("привет с ноута");
+        // В общий session-канал дубль не падал — эха отправителю нет
+        _broadcaster.Inner.Session.Select(t => t.Message).OfType<UserMessageMessage>().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task SendMessage_User_БезСоединения_РассылаетсяВсем()
+    {
+        // REST/сервисные вызовы (connectionId нет): оптимистичного баллона ни у кого нет —
+        // реплика уходит всем соединениям session-группы, исключать некого
+        var session = await MkFreeSessionWithStubAsync("live-rest");
+        ClearSent();
+
+        await _sut.SendMessageAsync(session.Id, "из REST", []);
+
+        _broadcaster.Inner.Session.Select(t => t.Message).OfType<UserMessageMessage>().Should().ContainSingle()
+            .Which.Text.Should().Be("из REST");
+        _broadcaster.Inner.SessionExcept.Should().BeEmpty();
+    }
+
+    // Свободный чат с заглушкой процесса: SendMessageAsync идёт в SendDirectAsync (Started),
+    // а не в очередь — паттерн «MkBusySessionAsync без занятости»
+    private async Task<Session> MkFreeSessionWithStubAsync(string suffix)
+    {
+        var session = await MkBusySessionAsync(suffix, SessionStatus.Active);
+        session.Name = "есть имя"; // иначе фоновый уточнятор заголовка полезет в локальную модель
+        var entry = GetEntry(session.Id);
+        SetProcess(entry, StubAdapter(entry).Object);
+        return session;
     }
 
     [Fact]

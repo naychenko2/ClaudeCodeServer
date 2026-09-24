@@ -3954,7 +3954,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // дописывает уточнение, а не просит остановиться. Для «перебить сейчас» есть явные
     // действия: кнопка «Стоп» и PreemptForPending (кнопка на карточке очереди).
     // Возвращаемый исход (Started/Queued) говорит клиенту, рисовать ли оптимистичный баллон.
-    public async Task<SendUserOutcome> SendMessageAsync(string sessionId, string text, IReadOnlyList<string> attachedPaths, string? mode = null, bool systemDirective = false, bool auto = false, string? senderPersonaId = null, bool suppressTasksExecute = false, string? senderOrigin = null, string? staffNote = null, DeliveryCause cause = DeliveryCause.Unknown)
+    public async Task<SendUserOutcome> SendMessageAsync(string sessionId, string text, IReadOnlyList<string> attachedPaths, string? mode = null, bool systemDirective = false, bool auto = false, string? senderPersonaId = null, bool suppressTasksExecute = false, string? senderOrigin = null, string? senderConnectionId = null, string? staffNote = null, DeliveryCause cause = DeliveryCause.Unknown)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry))
             throw new InvalidOperationException("Сессия не найдена");
@@ -4081,7 +4081,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         }
 
         await SendDirectAsync(sessionId, entry, text, attachedPaths, mode, systemDirective, auto,
-            senderPersonaId, suppressTasksExecute, senderOrigin, staffNote: staffNote, cause: cause);
+            senderPersonaId, suppressTasksExecute, senderOrigin, senderConnectionId: senderConnectionId, staffNote: staffNote, cause: cause);
         return SendUserOutcome.Started;
     }
 
@@ -4090,8 +4090,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // призраком, поэтому live-баллон бродкастим так же, как для сервер-инициированных отправок.
     private async Task SendDirectAsync(string sessionId, SessionEntry entry, string text,
         IReadOnlyList<string> attachedPaths, string? mode, bool systemDirective, bool auto,
-        string? senderPersonaId, bool suppressTasksExecute, string? senderOrigin, bool fromQueue = false,
-        string? staffNote = null, DeliveryCause cause = DeliveryCause.Unknown)
+        string? senderPersonaId, bool suppressTasksExecute, string? senderOrigin, string? senderConnectionId = null,
+        bool fromQueue = false, string? staffNote = null, DeliveryCause cause = DeliveryCause.Unknown)
     {
         // ДИАГНОСТИКА повторных доставок (инцидент 2026-08-10): каждая доставка хода в
         // процесс проходит через эту точку. src различает источник — hub (пользователь
@@ -4149,14 +4149,28 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         // тихо перевозим его на здоровую подписку пула (та же модель и эндпоинт)
         TryPoolFailover(sessionId, entry);
 
-        // Авто-отправка (командный ход, автоматизация, задача) и доставка пользовательского
-        // из очереди (fromQueue — клиент рисовал призрак, а не баллон): клиент не добавлял
-        // её оптимистично — показываем сразу, до тяжёлого старта CLI-процесса. ТОЛЬКО в
-        // session-группу: клиент открытого чата состоит и в user_/project_-группе, широкая
-        // рассылка дублировала сообщение в ленте (см. комментарий у внутриходовых событий).
-        if ((auto || fromQueue) && !systemDirective)
-            await BroadcastAsync(sessionId,
-                new UserMessageMessage(text, attachedPaths.Count > 0 ? attachedPaths : null, senderPersonaId, auto, senderOrigin, StaffNote: staffNote));
+        // Live-баллон пользовательского сообщения — в session-группу, до тяжёлого старта
+        // CLI-процесса. Адресация зависит от того, кто рисовал реплику оптимистично:
+        //  • авто-отправка (командный ход, автоматизация, задача) и доставка из очереди
+        //    (fromQueue — клиент рисовал призрак, а не баллон): клиент не добавлял её в
+        //    ленту сам — рассылаем всем;
+        //  • ручной ввод из хаба (senderConnectionId): отправитель уже нарисовал баллон
+        //    по исходу 'started' (useSession.send), его соединение исключаем — а остальным
+        //    устройствам того же чата реплику отдаём live. Раньше они не получали её вовсе
+        //    и видели только ответ «в пустоту» до перезагрузки страницы;
+        //  • ручной ввод без соединения (REST/сервисные вызовы): оптимистичного баллона
+        //    нет ни у кого — рассылаем всем.
+        // ТОЛЬКО в session-группу: клиент открытого чата состоит и в user_/project_-группе,
+        // широкая рассылка дублировала сообщение в ленте (см. комментарий у внутриходовых событий).
+        if (!systemDirective)
+        {
+            var userMsg = new UserMessageMessage(text, attachedPaths.Count > 0 ? attachedPaths : null,
+                senderPersonaId, auto, senderOrigin, StaffNote: staffNote);
+            if (!auto && !fromQueue && senderConnectionId is not null)
+                await BroadcastExceptAsync(sessionId, senderConnectionId, userMsg);
+            else
+                await BroadcastAsync(sessionId, userMsg);
+        }
 
         // Локальный голосовой ход (место chat-voice на «Локальная»): CLI-процесс не нужен,
         // достаточно аккумулятора истории — ответ принесёт RunLocalVoiceTurnAsync. Гейт
@@ -5784,6 +5798,16 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         }
         entry.Process?.RespondPermission(requestId, behavior);
         entry.PendingInteraction = null;
+        // Вердикт — в тех же токенах, что хранит карточка на фронте (ChatItem.decision)
+        var decision = behavior switch
+        {
+            "allow" => "allowed",
+            "allow_always" => "always",
+            _ => "denied",
+        };
+        FireAndForget(BroadcastAsync(sessionId,
+                new InteractionResolvedMessage("permission", requestId, Decision: decision)),
+            $"рассылка ответа на permission ({sessionId})");
         FireAndForget(ApplyStatusAsync(sessionId, entry, SessionStatus.Working),
             $"смена статуса после permission ({sessionId})");
     }
@@ -8130,24 +8154,27 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         if (IsStaleInteractionAnswer(sessionId, entry, $"вопрос {toolUseId}")) return;
         entry.Process?.AnswerQuestion(toolUseId, answerText);
         entry.PendingInteraction = null;
+        object? answers = null;
+        try
+        {
+            using var doc = JsonDocument.Parse(answerText);
+            if (doc.RootElement.TryGetProperty("answers", out var a))
+                answers = JsonSerializer.Deserialize<object>(a.GetRawText());
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[SessionManager] Ответ на вопрос ({sessionId}) не распарсился: карточка погаснет без сводки выбора (и в историю, и в рассылку уйдёт без answers): {ex.Message}");
+        }
         // Фиксируем ответ в истории, чтобы карточка вопроса пережила перезагрузку
         if (entry.Accumulator is not null)
         {
-            object? answers = null;
-            try
-            {
-                using var doc = JsonDocument.Parse(answerText);
-                if (doc.RootElement.TryGetProperty("answers", out var a))
-                    answers = JsonSerializer.Deserialize<object>(a.GetRawText());
-            }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine($"[SessionManager] Ответ на вопрос ({sessionId}) не распарсился, в историю уйдёт без answers: {ex.Message}");
-            }
             entry.Accumulator.OnQuestionAnswered(toolUseId, answers);
             FireAndForget(entry.Accumulator.SaveSnapshotAsync(_history),
                 $"сохранение истории после ответа на вопрос ({sessionId})");
         }
+        FireAndForget(BroadcastAsync(sessionId,
+                new InteractionResolvedMessage("question", toolUseId, Answers: answers)),
+            $"рассылка ответа на вопрос ({sessionId})");
         FireAndForget(ApplyStatusAsync(sessionId, entry, SessionStatus.Working),
             $"смена статуса после ответа на вопрос ({sessionId})");
     }
@@ -8165,6 +8192,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             FireAndForget(entry.Accumulator.SaveSnapshotAsync(_history),
                 $"сохранение истории после решения по плану ({sessionId})");
         }
+        FireAndForget(BroadcastAsync(sessionId,
+                new InteractionResolvedMessage("plan", requestId, Approved: approve, Feedback: feedback)),
+            $"рассылка решения по плану ({sessionId})");
         FireAndForget(ApplyStatusAsync(sessionId, entry, SessionStatus.Working),
             $"смена статуса после решения по плану ({sessionId})");
     }
@@ -9298,6 +9328,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // который дополнительно вещает в project_/user_-группу — для чат-карточек в списке.
     internal Task BroadcastAsync(string sessionId, ServerMessage msg) =>
         _broadcaster.ToSession(sessionId, msg with { SessionId = sessionId });
+
+    // Рассылка в session-группу КРОМЕ соединения-отправителя — ручной ввод пользователя:
+    // отправитель уже нарисовал баллон оптимистично (см. точку рассылки в SendDirectAsync),
+    // эхо продублировало бы реплику в его ленте. Тот же проставщик SessionId.
+    internal Task BroadcastExceptAsync(string sessionId, string exceptConnectionId, ServerMessage msg) =>
+        _broadcaster.ToSessionExcept(sessionId, exceptConnectionId, msg with { SessionId = sessionId });
 
     // Публильный broadcast внеходового сообщения сессии: session-группа + project_/user_-группа
     // (по образцу BroadcastStatusChangeAsync). Используется роутингом группового чата и совещаниями.

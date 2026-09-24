@@ -106,7 +106,11 @@ public class VoiceLocalTurnTests : IDisposable
 
     public void Dispose()
     {
-        if (Directory.Exists(_tempDir)) Directory.Delete(_tempDir, recursive: true);
+        // История чата пишется из fire-and-forget обработчиков хода, а JsonFileStore.Save
+        // делает это атомарно — через временный {path}.{guid}.tmp рядом. Голый
+        // Directory.Delete(recursive) успевал наткнуться на этот tmp («используется другим
+        // процессом») и ронял тест под параллельной нагрузкой полного прогона.
+        TestFs.DeleteDirectoryResilient(_tempDir);
     }
 
     private async Task<Session> MakeVoiceChatAsync(bool local = true)

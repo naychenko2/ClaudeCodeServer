@@ -3,7 +3,7 @@ import { C, FS, R, SHADOW, Z } from '../../lib/design';
 import { ConnectionStatus } from '../../components/ConnectionStatus';
 import { SegmentedControl } from '../../components/ui';
 import { useThemeMode, setThemeMode, type ThemeMode } from '../../lib/themeMode';
-import { Bell, History, Book, BriefcaseBusiness, Box, Gauge, Users, Lock, FlaskConical, LogOut, Mic, Coins, MonitorSmartphone, Palette, Plug, Power, Rocket, SquareDashedMousePointer } from 'lucide-react';
+import { Bell, History, Book, BriefcaseBusiness, Box, Gauge, Users, Lock, FlaskConical, LogOut, Mic, Coins, MonitorSmartphone, Palette, Plug, Power, Rocket, SlidersHorizontal, SquareDashedMousePointer } from 'lucide-react';
 import { ICON_SIZE } from '../../components/ui/icons';
 import { isMicKeyboardFallback, clearMicKeyboardFallback } from '../../lib/voiceInput';
 import { showToast } from '../../lib/toast';
@@ -92,9 +92,13 @@ interface Props {
   // «Питание компьютера» — выключить/перезагрузить/усыпить машину, на которой крутится
   // продукт. Те же условия, что у выкатки: админ И включено в конфиге сервера
   onShowPower?: () => void;
+  // «Пульт управления» — запуск/остановка заранее объявленных в конфиге сервера действий
+  // (туннель VS Code, Dify, службы). Те же условия, что у питания: админ И включённый
+  // рубильник; серверная проверка всё равно идёт на каждый вызов — морда торчит наружу
+  onShowRemoteCommands?: () => void;
 }
 
-export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout, onShowChangePassword, onShowFeatureFlags, onShowUserManagement, hideStatus, onShowHistory, historyBadge = 0, historyNeverSeen = false, historyActive = false, onOpenKnowledge, onOpenSpecialties, onShowModelsSpend, onOpenSpend, onShowMcpServers, onShowDevices, onShowDeploy, onShowSubsystems, onShowPower, onOpenNotifications, notifBadge = 0, notifActive = false }: Props) {
+export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout, onShowChangePassword, onShowFeatureFlags, onShowUserManagement, hideStatus, onShowHistory, historyBadge = 0, historyNeverSeen = false, historyActive = false, onOpenKnowledge, onOpenSpecialties, onShowModelsSpend, onOpenSpend, onShowMcpServers, onShowDevices, onShowDeploy, onShowSubsystems, onShowPower, onShowRemoteCommands, onOpenNotifications, notifBadge = 0, notifActive = false }: Props) {
   // Как обращаемся к пользователю; логин остаётся видимым отдельной строкой,
   // чтобы было понятно, под каким аккаунтом сидишь
   const name = displayName?.trim() || username;
@@ -379,6 +383,15 @@ export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout
             >
               <Power size={ICON_SIZE.xs} strokeWidth={2} />
               Питание компьютера
+            </button>
+          )}
+          {onShowRemoteCommands && (
+            <button
+              onClick={() => { setOpen(false); onShowRemoteCommands(); }}
+              style={dropdownItem}
+            >
+              <SlidersHorizontal size={ICON_SIZE.xs} strokeWidth={2} />
+              Пульт управления
             </button>
           )}
           <MenuDivider />

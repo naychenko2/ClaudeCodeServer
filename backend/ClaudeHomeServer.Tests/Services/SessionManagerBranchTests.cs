@@ -100,6 +100,7 @@ public class SessionManagerBranchTests : IDisposable
     private sealed class TrackingNoopBroadcaster : ISessionBroadcaster
     {
         public Task ToSession(string sessionId, ServerMessage message) => Task.CompletedTask;
+        public Task ToSessionExcept(string sessionId, string exceptConnectionId, ServerMessage message) => Task.CompletedTask;
         public Task ToOwner(string ownerId, ServerMessage message) => Task.CompletedTask;
         public Task ToProject(string projectId, ServerMessage message) => Task.CompletedTask;
         public Task ToPreviewLog(string projectId, string serviceId, ServerMessage message) => Task.CompletedTask;

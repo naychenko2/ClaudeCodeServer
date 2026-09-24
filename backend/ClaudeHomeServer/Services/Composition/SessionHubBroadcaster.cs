@@ -48,6 +48,11 @@ public sealed class SessionHubBroadcaster(IHubContext<SessionHub> hub) : ISessio
     public Task ToSession(string sessionId, ServerMessage message) =>
         hub.Clients.Group(sessionId).SendAsync("message", message);
 
+    // Той же session-группе, кроме соединения-отправителя: ручной ввод пользователь
+    // уже видит оптимистичным баллоном, эхо дублировало бы его в ленте
+    public Task ToSessionExcept(string sessionId, string exceptConnectionId, ServerMessage message) =>
+        hub.Clients.GroupExcept(sessionId, exceptConnectionId).SendAsync("message", message);
+
     public Task ToOwner(string ownerId, ServerMessage message) =>
         hub.Clients.Group(OwnerGroup(ownerId)).SendAsync("message", message);
 

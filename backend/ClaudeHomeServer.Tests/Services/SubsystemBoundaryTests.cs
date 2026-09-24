@@ -1373,6 +1373,25 @@ public class SubsystemBoundaryTests
                     .ToArray(),
                 Array.Empty<string>()),
         },
+        // RemoteCommands — пульт удалённых команд (запуск/остановка объявленных в конфиге
+        // действий на машине сервера). Микро-вертикаль без IAppSubsystem, как Power:
+        // регистрации в Program.cs хоста, сервисы живут в Main
+        // (`backend/ClaudeHomeServer/Services/RemoteCommands/`). Независимых рёбер нет:
+        // опции — `ClaudeHomeServer.Models` (Core), буфер вывода — `OutputRingBuffer` и
+        // формула шелла — `ShellCommandLine`, оба в Core.dll (допуск по сборке). Готовый
+        // `WatchdogCommandRunner` сознательно НЕ переиспользован: он исполняет команду в
+        // среде владельца (вплоть до контейнера), пульту нужен всегда хост, а ссылка
+        // «вертикаль → вертикаль» тут же покраснела бы у этого сторожа.
+        new object[]
+        {
+            new VerticalBoundary(
+                "RemoteCommands",
+                "ClaudeHomeServer.Services.RemoteCommands",
+                SharedAllowedPrefixes
+                    .Concat(new[] { "ClaudeHomeServer.Services.RemoteCommands" })
+                    .ToArray(),
+                Array.Empty<string>()),
+        },
     };
 
     [Theory]
@@ -1713,6 +1732,9 @@ public class SubsystemBoundaryTests
         "ClaudeHomeServer.Services.SpecialtyDefaultBinding",
         // ── Static spine primitives (stateless helpers, no vertical ownership) ──
         "ClaudeHomeServer.Services.SafePath",
+        // Формула запуска строки в системном шелле (cmd /s /c сырой строкой / bash -lc):
+        // общая у сторожей чатов и пульта удалённых команд, дубль тут однажды стоил прода
+        "ClaudeHomeServer.Services.ShellCommandLine",
         "ClaudeHomeServer.Services.TreeExcludes",
         "ClaudeHomeServer.Services.Slugifier",
         "ClaudeHomeServer.Services.PathNormalizer",

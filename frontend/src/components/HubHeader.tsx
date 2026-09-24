@@ -21,6 +21,7 @@ import { DevicesModal } from '../features/desktop/DevicesModal';
 import { useFeature, FLAGS } from '../lib/featureFlags';
 import { DeployModal } from './DeployModal';
 import { PowerModal } from './PowerModal';
+import { RemoteCommandsModal } from './RemoteCommandsModal';
 import { api } from '../lib/api';
 import { subscribeModelProvidersNav } from '../lib/modelProvidersNav';
 import { getUnreadCount, subscribeToNotifications, ensureNotificationsSubscribed, ensureUnreadCountLoaded } from '../lib/notifications';
@@ -72,6 +73,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
   const [showDevices, setShowDevices] = useState(false);
   const [showDeploy, setShowDeploy] = useState(false);
   const [showPower, setShowPower] = useState(false);
+  const [showRemoteCommands, setShowRemoteCommands] = useState(false);
   // «Даже компактный ряд табов не влезает в центр таббара» — на планшете
   // переключаем набор с полного (5 разделов) на сокращённый (3 primary + «⋯ Разделы»).
   // Замер делаем сами, по ПОСТОЯННОМУ скрытому эталону полного набора 5 табов —
@@ -203,6 +205,20 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
     let alive = true;
     api.power.status()
       .then(s => { if (alive) setPowerEnabled(s.enabled && s.available); })
+      .catch(() => { /* нет ответа — считаем, что фичи нет */ });
+    return () => { alive = false; };
+  }, [isAdmin]);
+
+  // Пульт удалённых команд. Замок тот же, что у питания (админ И включённый в конфиге
+  // сервера рубильник), плюс третье условие: пустой список действий — та же «фичи нет»,
+  // пункт открывал бы окно ни с чем. Статус-эндпоинт отвечает 200 и при выключенном
+  // рубильнике — специально, чтобы монтирование шапки не шумело ошибкой в консоли.
+  const [remoteCommandsEnabled, setRemoteCommandsEnabled] = useState(false);
+  useEffect(() => {
+    if (!isAdmin) return;
+    let alive = true;
+    api.remoteCommands.status()
+      .then(s => { if (alive) setRemoteCommandsEnabled(s.enabled && s.actions.length > 0); })
       .catch(() => { /* нет ответа — считаем, что фичи нет */ });
     return () => { alive = false; };
   }, [isAdmin]);
@@ -551,6 +567,8 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
           onShowDeploy={isAdmin && deployEnabled ? () => setShowDeploy(true) : undefined}
           // Питание машины: тот же двойной замок, что и у выкатки
           onShowPower={isAdmin && powerEnabled ? () => setShowPower(true) : undefined}
+          // Пульт управления: тот же двойной замок плюс непустой список действий
+          onShowRemoteCommands={isAdmin && remoteCommandsEnabled ? () => setShowRemoteCommands(true) : undefined}
           onShowHistory={openHistory}
           historyBadge={historyBadge}
           historyNeverSeen={neverSeen}
@@ -573,6 +591,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
       {showDevices && <DevicesModal onClose={() => setShowDevices(false)} />}
       {showDeploy && <DeployModal onClose={() => setShowDeploy(false)} />}
       {showPower && <PowerModal onClose={() => setShowPower(false)} />}
+      {showRemoteCommands && <RemoteCommandsModal onClose={() => setShowRemoteCommands(false)} />}
     </div>
   );
 }

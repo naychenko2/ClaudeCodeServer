@@ -4,7 +4,7 @@ import { joinSession, joinProject, leaveSession, onMessage, onReconnected, sendM
 import { setRecallManifest } from '../lib/recallManifest';
 import { requestWakeLock, releaseWakeLock } from '../lib/wakeLock';
 import { api } from '../lib/api';
-import { applyServerMessage, normalizeHistory, serverHistoryNewer, initialChatState, consumeComposerRestore, teamImplementSnapshot, turnAlreadyEnded, type ChatState, type PendingChatMessage, type ComposerRestore } from '../lib/chatReducer';
+import { applyServerMessage, normalizeHistory, serverHistoryNewer, resolveCardsFromHistory, initialChatState, consumeComposerRestore, teamImplementSnapshot, turnAlreadyEnded, type ChatState, type PendingChatMessage, type ComposerRestore } from '../lib/chatReducer';
 
 // --- Модульный персистентный стор ---
 // Состояние живёт на уровне модуля и переживает переключение между сессиями.
@@ -60,8 +60,15 @@ async function reloadHistory(sid: string, projectId?: string) {
     const raw = await loadHistory(sid, projectId);
     const items = normalizeFor(sid, raw);
     setState(sid, prev => {
-      if (!serverHistoryNewer(items, prev.items)) return prev;
-      return { ...prev, items, isWaiting: historyTurnFinished(items) ? false : prev.isWaiting };
+      if (serverHistoryNewer(items, prev.items))
+        return { ...prev, items, isWaiting: historyTurnFinished(items) ? false : prev.isWaiting };
+      // Ленту сервер не обгоняет, но в его истории может быть карточка, погашенная
+      // ответом с другого устройства: событие interaction_resolved могло пройти мимо
+      // (разрыв WS в момент ответа), а сверка длин такой ответ не видит — он элемента
+      // не добавляет. Гасим точечно; подменять ленту нельзя, она несёт live-only
+      // элементы, которых в истории нет (permission_request не персистится).
+      const patched = resolveCardsFromHistory(items, prev.items);
+      return patched ? { ...prev, items: patched } : prev;
     });
   } catch { /* история недоступна — не блокируем */ }
 }
@@ -270,7 +277,11 @@ function ensureHandler() {
             if (items.length > 0) {
               setState(sid, prev => ({
                 ...prev,
-                items: serverHistoryNewer(items, prev.items) ? items : prev.items,
+                // Разрыв — ровно тот случай, когда ответ с другого устройства прошёл мимо:
+                // историей не обгоняет (ответ элемента не добавляет), поэтому гасим точечно
+                items: serverHistoryNewer(items, prev.items)
+                  ? items
+                  : (resolveCardsFromHistory(items, prev.items) ?? prev.items),
               }));
             }
           } catch { /* история недоступна — не блокируем */ }
@@ -567,8 +578,9 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
       // защита от потери группы при переподключении или переключении проекта
       await joinTracked(sessionId);
       const outcome = await sendMessage(sessionId, text, attachedPaths, mode, auto);
-      // 'started' — ход запущен: рисуем оптимистичный баллон (как раньше). Авто-ходы сервер
-      // рассылает user_message в session-группу, поэтому их не дублируем.
+      // 'started' — ход запущен: рисуем оптимистичный баллон (как раньше). Авто-ходы и
+      // чужой ручной ввод сервер рассылает user_message в session-группу (наше соединение
+      // исключено через GroupExcept), поэтому дублей здесь нет.
       // 'queued' — баллон не нужен: карточку даст pending_messages, isWaiting удержит ход.
       if (outcome === 'started' && !auto) {
         setState(sessionId, prev => ({ ...prev, items: [...prev.items, { kind: 'user_message', text, attachedPaths, ts: Date.now() }] }));

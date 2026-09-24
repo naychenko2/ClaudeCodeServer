@@ -58,6 +58,50 @@ export interface PowerState {
   pending: PowerPending | null;
 }
 
+// Пульт удалённых команд (docs/research/remote-commands-plan.md §7). Список действий
+// объявлен в конфиге сервера на диске; по HTTP ездит только `key`, тексты команд наружу
+// не отдаются никогда.
+export type RemoteCommandMode = 'oneshot' | 'daemon';
+
+// `unknown` — «проверить не удалось» (команду не запустить, таймаут, опечатка в конфиге),
+// а НЕ «остановлен»: у пульта это два разных факта, и путать их нельзя.
+export type RemoteCommandState = 'running' | 'stopped' | 'unknown';
+
+export interface RemoteCommandAction {
+  key: string;
+  title: string;
+  mode: RemoteCommandMode;
+  state: RemoteCommandState;
+  busy: boolean;
+  // null — до первой проверки: после рестарта сервера кэш статуса пуст, и это честно видно
+  checkedAt: string | null;
+  lastExitCode: number | null;
+  // Ссылка «Открыть» из конфига действия (http/https) — например, vscode.dev/tunnel/имя
+  // для туннеля VS Code. Null — кнопки нет.
+  url: string | null;
+}
+
+export interface RemoteCommandsState {
+  enabled: boolean;
+  actions: RemoteCommandAction[];
+}
+
+// Ответ start/stop/refresh. `busy` приходит от refresh при чужой идущей операции (он не
+// берёт gate и отдаёт кэш), `detail` — короткая причина и хвост вывода при провале.
+export interface RemoteCommandResult {
+  ok: boolean;
+  state: RemoteCommandState;
+  busy?: boolean;
+  detail?: string | null;
+  checkedAt?: string | null;
+  lastExitCode?: number | null;
+}
+
+// Потолок ожидания ответа на операцию пульта. Больше самого щедрого серверного
+// TimeoutSeconds из примера конфига (Dify — 180 с) с запасом на дорогу: обрывать запрос
+// раньше, чем сервер закончит команду, значит показывать «нет связи» поверх живого старта.
+const REMOTE_COMMAND_TIMEOUT_MS = 200_000;
+
 // Журнал выкатки ИЗ ЧАТА (ADR-010) — другая механика, чем трей-раннер выше: заявку
 // исполняет внешний агент планировщика, а журнал deploy-state.json пишет он же.
 // Формат чужой и версионируется отдельно от сервера: незнакомые поля игнорируем,
@@ -483,6 +527,29 @@ export const api = {
       request<{ action: PowerActionKind; runAt: string; secondsLeft: number }>(
         '/admin/power', { method: 'POST', body: JSON.stringify({ action }) }),
     cancel: () => request<{ cancelled: boolean }>('/admin/power/cancel', { method: 'POST' }),
+  },
+
+  remoteCommands: {
+    // live: true — по той же причине, что у питания и выкатки: важен сам факт ответа сервера.
+    // Подставленный из офлайн-кэша список сказал бы «туннель запущен» поверх машины, до
+    // которой уже не достучаться, — а пульт для того и нужен, чтобы этому верить.
+    // GET не исполняет ни одной команды (инвариант §9.3): отдаётся кэш статуса.
+    status: () => request<RemoteCommandsState>('/admin/remote-commands', { cache: 'no-store', live: true }),
+    // Операции синхронные в пределах серверного TimeoutSeconds (у долгих действий вроде Dify
+    // это 180 с), поэтому фронту нужен свой запас: с дефолтным лимитом запрос оборвался бы
+    // раньше сервера, и человек увидел бы «нет связи» поверх идущего старта.
+    start: (key: string) =>
+      request<RemoteCommandResult>(`/admin/remote-commands/${encodeURIComponent(key)}/start`,
+        { method: 'POST', timeoutMs: REMOTE_COMMAND_TIMEOUT_MS, live: true }),
+    stop: (key: string) =>
+      request<RemoteCommandResult>(`/admin/remote-commands/${encodeURIComponent(key)}/stop`,
+        { method: 'POST', timeoutMs: REMOTE_COMMAND_TIMEOUT_MS, live: true }),
+    refresh: (key: string) =>
+      request<RemoteCommandResult>(`/admin/remote-commands/${encodeURIComponent(key)}/refresh`,
+        { method: 'POST', timeoutMs: REMOTE_COMMAND_TIMEOUT_MS, live: true }),
+    output: (key: string) =>
+      request<{ text: string }>(`/admin/remote-commands/${encodeURIComponent(key)}/output`,
+        { cache: 'no-store', live: true }),
   },
 
   deploy: {

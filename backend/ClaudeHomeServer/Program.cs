@@ -978,6 +978,17 @@ builder.Services.Configure<ClaudeHomeServer.Models.PowerControlOptions>(builder.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Power.IPowerActions,
     ClaudeHomeServer.Services.Power.WindowsPowerActions>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Power.PowerControlService>();
+// Пульт удалённых команд (запуск/остановка объявленных в конфиге действий на машине сервера):
+// тот же приём, что у питания — по умолчанию выключено, реестр действий только из
+// appsettings.Local.json. Hosted-регистрация ФОРВАРДИТСЯ на тот же синглтон, а не
+// AddHostedService<T>(): тот создал бы второй экземпляр, и StopAsync гасил бы daemon-детей
+// у пустышки, оставляя настоящих сиротами.
+builder.Services.Configure<ClaudeHomeServer.Models.RemoteCommandsOptions>(builder.Configuration.GetSection(ClaudeHomeServer.Models.RemoteCommandsOptions.Section));
+builder.Services.AddSingleton<ClaudeHomeServer.Services.RemoteCommands.IShellCommandRunner,
+    ClaudeHomeServer.Services.RemoteCommands.LocalShellCommandRunner>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.RemoteCommands.RemoteCommandsService>();
+builder.Services.AddSingleton<IHostedService>(sp =>
+    sp.GetRequiredService<ClaudeHomeServer.Services.RemoteCommands.RemoteCommandsService>());
 // Секция DifyOptions + KnowledgeService + ProjectKnowledgeSyncService (singleton + hosted
 // мост ProjectKnowledgeTurnSync) + UserKnowledgeCascade + IKnowledgeAlertNotifier +
 // KnowledgeIndexReconciler (singleton + hosted) — DI в подсистеме `KnowledgeSubsystem`

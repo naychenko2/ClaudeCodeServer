@@ -355,6 +355,16 @@ personas/memory) — прочитай [docs/architecture/personas.md](docs/archi
 
 Инварианты и подробности — [backend/ClaudeHomeServer/Services/Power/CLAUDE.md](backend/ClaudeHomeServer/Services/Power/CLAUDE.md): файл подхватывается сам при работе с этой папкой; при правках со стороны фронтенда открой его руками.
 
+## Пульт удалённых команд (`Services/RemoteCommands`)
+
+Пункт меню аватара «Пульт управления» запускает и останавливает машинные процессы хоста
+(туннель VS Code, Dify, службы Windows). Реестр действий живёт **только** в машинном
+`appsettings.Local.json`: из веб-морды команды не заводятся никогда — поле произвольной
+команды = RCE, по HTTP ездит один лишь `Key`. Замков два: роль admin и `RemoteCommands:Enabled`
+(false по умолчанию).
+
+Инварианты и подробности — [backend/ClaudeHomeServer/Services/RemoteCommands/CLAUDE.md](backend/ClaudeHomeServer/Services/RemoteCommands/CLAUDE.md): файл подхватывается сам при работе с этой папкой; при правках со стороны фронтенда открой его руками.
+
 ## Observability (OpenTelemetry)
 
 OpenTelemetry в двух режимах: dev → Aspire Dashboard, prod → SigNoz; алерты приезжают в уведомления, инциденты разбираются детерминированным кодом.

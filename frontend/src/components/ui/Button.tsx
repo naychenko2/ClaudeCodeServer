@@ -56,34 +56,54 @@ interface ButtonProps {
   type?: 'button' | 'submit';
   title?: string;
   style?: CSSProperties;
+  // Задан — вместо <button> рендерится честная <a> в новой вкладке: работает средний клик
+  // и «открыть в новой вкладке». Ссылки на внешние ресурсы — только через этот путь.
+  href?: string;
   children: ReactNode;
 }
 
 export function Button({
   variant = 'primary', size = 'md', fullWidth, loading = false,
-  disabled, glow, pill, leftIcon, onClick, type = 'button', title, style, children,
+  disabled, glow, pill, leftIcon, onClick, type = 'button', title, style, href, children,
 }: ButtonProps) {
   const isDisabled = disabled || loading;
+  const baseStyle: CSSProperties = {
+    ...SIZE[size],
+    ...variantStyle(variant, loading),
+    ...(pill ? { borderRadius: R.max } : {}),
+    width: fullWidth ? '100%' : undefined,
+    fontWeight: 600,
+    fontFamily: FONT.sans,
+    cursor: isDisabled ? 'not-allowed' : 'pointer',
+    opacity: disabled && !loading ? 0.7 : 1,
+    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+    textDecoration: 'none',
+    boxShadow: glow && variant === 'primary' ? SHADOW.button : 'none',
+    transition: 'background 0.15s, color 0.15s, opacity 0.15s',
+    ...style,
+  };
+  if (href) {
+    return (
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        title={title}
+        onClick={onClick}
+        style={baseStyle}
+      >
+        {loading ? <Spinner /> : leftIcon}
+        {children}
+      </a>
+    );
+  }
   return (
     <button
       type={type}
       title={title}
       disabled={isDisabled}
       onClick={onClick}
-      style={{
-        ...SIZE[size],
-        ...variantStyle(variant, loading),
-        ...(pill ? { borderRadius: R.max } : {}),
-        width: fullWidth ? '100%' : undefined,
-        fontWeight: 600,
-        fontFamily: FONT.sans,
-        cursor: isDisabled ? 'not-allowed' : 'pointer',
-        opacity: disabled && !loading ? 0.7 : 1,
-        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-        boxShadow: glow && variant === 'primary' ? SHADOW.button : 'none',
-        transition: 'background 0.15s, color 0.15s, opacity 0.15s',
-        ...style,
-      }}
+      style={baseStyle}
     >
       {loading ? <Spinner /> : leftIcon}
       {children}

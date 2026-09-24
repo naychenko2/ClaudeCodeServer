@@ -1,9 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { CSSProperties } from 'react';
-import { Search, Trash2 } from 'lucide-react';
-import type { AgentInfo, SkillInfo, SkillsData } from '../types';
-import { C, R, FONT } from '../lib/design';
+import { Search, Trash2, Lock } from 'lucide-react';
+import type { AgentInfo, Project, SkillInfo, SkillsData } from '../types';
+import { ProjectFeature } from '../types';
+import { C, R, FONT, FS } from '../lib/design';
 import { api } from '../lib/api';
+import { useProjectFeature, featureReason } from '../lib/projectCapabilities';
 import { agentDotColor } from './AgentSelector';
 import { SkillSearchDialog } from './SkillSearchDialog';
 import { SkillGenerateDialog } from './SkillGenerateDialog';
@@ -13,6 +15,10 @@ import { showToast } from '../lib/toast';
 
 interface Props {
   projectId: string;
+  // Опциональный проект для гейта по capabilities (ADR-016 §3.4): у локального
+  // проекта с офлайн-устройством чтение скиллов недоступно. Если не передан —
+  // гейт отключён (старый путь вызова), панель всегда показывается
+  project?: Project | null;
   // Состав навыков/агентов перечитан (загрузка, установка, удаление). Панель живёт
   // рядом с композером, который держит СВОЙ снимок того же списка для «/»-команд:
   // без этого сигнала установленный навык не появлялся бы в подсказке до перезагрузки.
@@ -27,7 +33,11 @@ const skillHeadBtn: CSSProperties = {
   cursor: 'pointer', fontFamily: FONT.sans, transition: 'border-color 0.15s, color 0.15s',
 };
 
-export function SkillsPanel({ projectId, onChanged }: Props) {
+export function SkillsPanel({ projectId, project, onChanged }: Props) {
+  // Гейт по матрице (ADR-016 §3.4): скиллы лежат в .claude/skills проекта; у
+  // локального с офлайн-устройством чтение недоступно. Все хуки ВЫШЕ раннего return
+  const skillsGate = useProjectFeature(project, ProjectFeature.Skills);
+  const skillsGateReason = featureReason(project, ProjectFeature.Skills);
   const [data, setData] = useState<SkillsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -51,6 +61,30 @@ export function SkillsPanel({ projectId, onChanged }: Props) {
 
   // eslint-disable-next-line react-hooks/set-state-in-effect -- начальная загрузка списка скиллов
   useEffect(() => { void load(); }, [load]);
+
+  // Ранний return для гейта (ADR-016 §3.4). Порядок хуков выше не нарушен
+  if (project && !skillsGate) {
+    return (
+      <div
+        role="status"
+        data-capability-gate="skills"
+        style={{
+          padding: '24px 16px', margin: 16,
+          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10,
+          color: C.textMuted, background: C.bgPanel,
+          borderRadius: R.lg, border: `1px dashed ${C.border}`,
+        }}
+      >
+        <Lock size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />
+        <div style={{ fontSize: FS.sm, color: C.textPrimary, fontWeight: 600 }}>
+          Навыки недоступны
+        </div>
+        <div style={{ fontSize: FS.xs, textAlign: 'center', maxWidth: 320, lineHeight: 1.5 }}>
+          {skillsGateReason ?? 'Навыки проекта недоступны'}
+        </div>
+      </div>
+    );
+  }
 
   const confirmRemoveSkill = async () => {
     if (!pendingDelete) return;

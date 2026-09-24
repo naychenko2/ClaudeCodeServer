@@ -666,10 +666,26 @@ export const api = {
     removeTeamMemory: (id: string, entryId: string) =>
       request<void>(`/projects/${encodeURIComponent(id)}/team-memory/${encodeURIComponent(entryId)}`, { method: 'DELETE' }),
     create: (name: string, rootPath: string | null, createDirectory = false, groupId?: string | null,
-      git?: { enableGit?: boolean; gitAutoCommit?: boolean; gitAutoPush?: boolean }, color?: string | null) =>
-      request<Project>('/projects', { method: 'POST', body: JSON.stringify({ name, rootPath, createDirectory, groupId, ...git, color }) }),
+      git?: { enableGit?: boolean; gitAutoCommit?: boolean; gitAutoPush?: boolean }, color?: string | null,
+      // ADR-016 §3.4: локальный проект создаётся с привязкой к устройству. deviceId
+      // берётся из реестра ADR-008. Контракт 3.1 (CreateProjectRequest): путь НА устройстве
+      // едет в том же rootPath, отдельного поля под него нет — local.rootPath заменяет
+      // аргумент rootPath. Передавать ТОЛЬКО когда флаг `local-projects` включён; иначе бэк откажет 400.
+      local?: { deviceId: string; rootPath: string }) =>
+      request<Project>('/projects', { method: 'POST', body: JSON.stringify({
+        name, rootPath: local ? local.rootPath : rootPath, createDirectory, groupId, ...git, color,
+        deviceId: local?.deviceId,
+      }) }),
     update: (id: string, data: { name?: string; rootPath?: string; systemPrompt?: string; showHiddenFiles?: boolean; permissionRules?: PermissionRule[]; groupId?: string | null; color?: string | null; mcpServersOn?: string[]; autoImportDossiers?: boolean; mcpCatalogConfirmed?: boolean }) =>
       request<Project>(`/projects/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    // Перепривязка устройства (ADR-016 §3.4): deviceId=null — отвязать проект
+    // (сделать серверным). При существующих чатах — 409 с `{error}`. rootPath — новый путь
+    // (на устройстве при привязке); без него бэк оставит прежний. Возвращает обновлённый
+    // Project с пересобранной матрицей capabilities.
+    setDevice: (id: string, body: { deviceId: string | null; rootPath?: string }) =>
+      request<Project>(`/projects/${encodeURIComponent(id)}/device`, {
+        method: 'PUT', body: JSON.stringify(body),
+      }),
     // Тумблер грани десктопного агента в проекте (ADR-008). Отдельная ручка, а не поле
     // update: выключение — рубильник, сервер гасит живые сеансы рук проекта и отвечает,
     // сколько погасил (состав инструментов зафиксирован на запуске CLI, и запущенный ход

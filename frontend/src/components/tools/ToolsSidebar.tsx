@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
 import { createPortal } from 'react-dom'
-import { Plus, Terminal, Monitor, Square, Play, RefreshCw, ChevronRight, Globe, GlobeLock, X } from 'lucide-react'
+import { Plus, Terminal, Monitor, Square, Play, RefreshCw, ChevronRight, Globe, GlobeLock, X, Lock } from 'lucide-react'
 import { C, R, FONT, FS, SP, SHADOW, Z } from '../../lib/design'
 import { Dot, EmptyState, IconButton, Button, ConfirmDialog, PanelHeaderSlot, useHasPanelHeader } from '../ui'
 import { ListDateDivider } from '../ListDateDivider'
@@ -10,14 +10,20 @@ import { AddServiceDialog } from '../preview/AddServiceDialog'
 import { useExternalPreviewLinks } from '../../hooks/useExternalPreviewLinks'
 import { api } from '../../lib/api'
 import { saveExternalUrl, clearExternalUrl, clearAllExternalUrls } from '../../lib/externalPreviewUrls'
+import { useProjectFeature, featureReason } from '../../lib/projectCapabilities'
 import type * as ts from '../../lib/terminalSignalr'
-import type { ProjectService } from '../../types'
+import type { Project, ProjectService } from '../../types'
+import { ProjectFeature } from '../../types'
 import { NO_AUTOFILL } from '../../lib/noAutofill';
 
 type ToolsTab = 'terminal' | 'preview'
 
 interface Props {
   projectId: string
+  // Опциональный проект для гейта по capabilities (ADR-016 §3.4): терминал и
+  // дев-серверы работают с файлами проекта, у локального с офлайн-устройством
+  // недоступны. Если не передан — старый путь вызова, гейт отключён
+  project?: Project | null
   activeTab: ToolsTab
   onTabChange: (t: ToolsTab) => void
   // Список терминалов и операции подняты в WorkspacePage (нужны и хедеру ToolsPane)
@@ -64,15 +70,48 @@ export function groupServices(services: ProjectService[]): [string, ProjectServi
 }
 
 export function ToolsSidebar({
-  projectId, activeTab, onTabChange,
+  projectId, project, activeTab, onTabChange,
   terminals, onCreateTerminal, onStopTerminal, onRenameTerminal,
   onSelectTerminal, activeTerminalId,
   activePreviewId, previewServices,
   onRefreshServices, onStartService, onStopService, onSelectPreview,
   terminalBusy,
 }: Props) {
+  // Гейт по матрице (ADR-016 §3.4): терминал и dev-серверы требуют доступ к файлам.
+  // Серверный эндпоинт проксирует запросы к агенту устройства при файлах в группе
+  // files. Если группа недоступна (например, офлайн-устройство) — оба раздела пустые
+  const filesGate = useProjectFeature(project, ProjectFeature.Files);
+  const filesGateReason = featureReason(project, ProjectFeature.Files);
+  const terminalGate = useProjectFeature(project, ProjectFeature.Terminal);
+  const terminalGateReason = featureReason(project, ProjectFeature.Terminal);
+  const previewGate = useProjectFeature(project, ProjectFeature.DevServers);
+  const previewGateReason = featureReason(project, ProjectFeature.DevServers);
+  if (project && !filesGate) {
+    return (
+      <div role="status" data-capability-gate="tools"
+        style={{
+          padding: '24px 16px', margin: 16,
+          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10,
+          color: C.textMuted, background: C.bgPanel,
+          borderRadius: R.md, border: `1px dashed ${C.border}`,
+        }}
+      >
+        <Lock size={20} strokeWidth={ICON_STROKE} />
+        <div style={{ fontSize: FS.sm, color: C.textPrimary, fontWeight: 600 }}>
+          Терминал и сервисы недоступны
+        </div>
+        <div style={{ fontSize: FS.xs, textAlign: 'center', maxWidth: 320, lineHeight: 1.5 }}>
+          {filesGateReason ?? 'Файлы проекта недоступны'}
+        </div>
+      </div>
+    );
+  }
   // Инлайн-переименование: id редактируемого терминала + текущее значение поля
   const [renaming, setRenaming] = useState<{ id: string; value: string } | null>(null)
+  // Per-tab reason для tooltip'а кнопки таба (когда files доступны, но конкретная
+  // подсистема нет)
+  const terminalDisabledReason = !terminalGate ? (terminalGateReason ?? 'Терминал недоступен') : null;
+  const previewDisabledReason = !previewGate ? (previewGateReason ?? 'Сервисы недоступны') : null;
 
   const commitRename = useCallback(() => {
     setRenaming(prev => {
@@ -95,11 +134,15 @@ export function ToolsSidebar({
       {/* Вкладки */}
       <div style={{ flexShrink: 0, padding: '10px 12px', borderBottom: `1px solid ${C.border}` }}>
         <div style={{ display: 'flex', gap: 4, background: C.bgInset, borderRadius: R.md, padding: 2 }}>
-          <TabButton active={activeTab === 'terminal'} onClick={() => onTabChange('terminal')}>
+          <TabButton active={activeTab === 'terminal'} onClick={() => onTabChange('terminal')}
+            disabled={project ? !terminalGate : false}
+            disabledReason={terminalDisabledReason}>
             <Terminal size={14} strokeWidth={2} />
             Терминал
           </TabButton>
-          <TabButton active={activeTab === 'preview'} onClick={() => onTabChange('preview')}>
+          <TabButton active={activeTab === 'preview'} onClick={() => onTabChange('preview')}
+            disabled={project ? !previewGate : false}
+            disabledReason={previewDisabledReason}>
             <Monitor size={14} strokeWidth={2} />
             Сервисы
           </TabButton>
@@ -108,6 +151,20 @@ export function ToolsSidebar({
 
       {/* Список терминалов */}
       {activeTab === 'terminal' && (
+        // ADR-016 §3.4: конкретная подсистема может быть недоступна при доступной
+        // группе files (например, terminal отдельно от preview). Плашка причины —
+        // вместо списка терминалов
+        project && !terminalGate ? (
+          <div role="status" data-capability-gate="terminal"
+            style={{ padding: '24px 16px', margin: 16, textAlign: 'center',
+              color: C.textMuted, fontSize: FS.xs, lineHeight: 1.5 }}>
+            <Lock size={20} strokeWidth={ICON_STROKE} style={{ marginBottom: 8 }} />
+            <div style={{ fontSize: FS.sm, color: C.textPrimary, fontWeight: 600, marginBottom: 4 }}>
+              Терминал недоступен
+            </div>
+            {terminalDisabledReason}
+          </div>
+        ) : (
         <div style={{ flex: 1, overflowY: 'auto', padding: '8px 10px' }}>
           {terminals.map(t => (
             <div
@@ -164,10 +221,21 @@ export function ToolsSidebar({
             Новый терминал
           </Button>
         </div>
-      )}
+        ))}
 
       {/* Список сервисов Preview */}
       {activeTab === 'preview' && (
+        project && !previewGate ? (
+          <div role="status" data-capability-gate="preview"
+            style={{ padding: '24px 16px', margin: 16, textAlign: 'center',
+              color: C.textMuted, fontSize: FS.xs, lineHeight: 1.5 }}>
+            <Lock size={20} strokeWidth={ICON_STROKE} style={{ marginBottom: 8 }} />
+            <div style={{ fontSize: FS.sm, color: C.textPrimary, fontWeight: 600, marginBottom: 4 }}>
+              Сервисы недоступны
+            </div>
+            {previewDisabledReason}
+          </div>
+        ) : (
         <PreviewServiceList
           projectId={projectId}
           groups={groups}
@@ -178,7 +246,7 @@ export function ToolsSidebar({
           onStopService={onStopService}
           onSelectPreview={onSelectPreview}
         />
-      )}
+        ))}
     </div>
   )
 }
@@ -732,16 +800,26 @@ function ServiceHoverCard({ anchorRef, svc, cmd, statusText, port, note, externa
   )
 }
 
-function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+function TabButton({ active, onClick, disabled, disabledReason, children }: {
+  active: boolean; onClick: () => void; children: React.ReactNode;
+  // ADR-016 §3.4: недоступная вкладка — кликабельна, чтобы человек мог открыть
+  // пустую секцию с плашкой причины, но визуально приглушена и в title — причина
+  disabled?: boolean; disabledReason?: string | null;
+}) {
   return (
-    <button onClick={onClick} style={{
-      flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-      padding: '6px 10px', borderRadius: R.sm, border: 'none', cursor: 'pointer',
-      fontSize: 12, fontWeight: 600,
-      background: active ? C.bgWhite : 'transparent',
-      color: active ? C.textHeading : C.textSecondary,
-      fontFamily: FONT.sans,
-    }}>
+    <button
+      onClick={onClick}
+      title={disabled && disabledReason ? disabledReason : undefined}
+      style={{
+        flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+        padding: '6px 10px', borderRadius: R.sm, border: 'none',
+        cursor: 'pointer', fontSize: 12, fontWeight: 600,
+        background: active ? C.bgWhite : 'transparent',
+        color: disabled ? C.textMuted : (active ? C.textHeading : C.textSecondary),
+        fontFamily: FONT.sans,
+        opacity: disabled ? 0.6 : 1,
+      }}
+    >
       {children}
     </button>
   )

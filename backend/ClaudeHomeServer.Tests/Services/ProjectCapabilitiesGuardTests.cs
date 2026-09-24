@@ -43,6 +43,10 @@ public class ProjectCapabilitiesGuardTests
         ["backend/ClaudeHomeServer.Llm/Claude/ClaudeSession.cs"] = (4, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Llm/FallbackLlmSessionAdapter.cs"] = (2, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Llm/Gateway/UpstreamSelector.cs"] = (1, "LLM-провайдер"),
+        // Фронт: единственное место, где легальны обращения к project.deviceId —
+        // матрица capabilities (ADR-016 §4). Число строго 0: даже в комментариях
+        // примеры запрещённых форм не пишем (regex матчит и комментарии)
+        ["frontend/src/lib/projectCapabilities.ts"] = (0, "центральный модуль матрицы"),
     };
 
     private static string RepoRoot()

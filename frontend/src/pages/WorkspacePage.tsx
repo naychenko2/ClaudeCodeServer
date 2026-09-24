@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect, useReducer, type ReactNode } from 'react';
 import { Plus, MessageCircle, Network, Puzzle, GitCompare, BookOpen } from 'lucide-react';
 import type { Project, Session, SkillsData, AuthState, Task, ProjectService, SessionContextEntry } from '../types';
+import { ProjectFeature } from '../types';
+import { useProjectFeature } from '../lib/projectCapabilities';
 import { SessionList } from '../components/SessionList';
 import { FileExplorer } from '../components/FileExplorer';
 import { ChatPanel } from '../components/ChatPanel';
@@ -773,23 +775,47 @@ const windowWidth = useWindowWidth();
 
   // Переход из карточки задачи в связанный диалог — объявлен ниже, после handleSelectSession
 
+  // Гейт табов по матрице (ADR-016 §3.4): скрываем табы, чья возможность выключена.
+  // Источник — capabilities проекта. Панели/табы ниже НЕ должны спрашивать
+  // project.deviceId руками — всё через projectCapabilities.ts
+  const filesAvail = useProjectFeature(project, ProjectFeature.Files);
+  const gitAvail = useProjectFeature(project, ProjectFeature.Git);
+  const tasksAvail = useProjectFeature(project, ProjectFeature.Tasks);
+  const knowledgeAvail = useProjectFeature(project, ProjectFeature.Knowledge);
+  const personasAvail = useProjectFeature(project, ProjectFeature.Personas);
+  const skillsAvail = useProjectFeature(project, ProjectFeature.Skills);
+  const terminalAvail = useProjectFeature(project, ProjectFeature.Terminal);
+  const devServersAvail = useProjectFeature(project, ProjectFeature.DevServers);
+
   const leftTabOptions: { value: LeftTab; label: string; icon?: ReactNode }[] = [
     { value: 'sessions', label: 'Чаты', icon: LEFT_TAB_ICONS.sessions },
-    { value: 'files', label: 'Файлы', icon: LEFT_TAB_ICONS.files },
-    // Порядок тот же, что у панелей в рельсе (PANEL_KEYS): файлы → их изменения →
-    // задачи по ним, дальше справочное. На десктопе это панели, здесь рельсы нет —
-    // иначе git и знания с телефона недоступны совсем
-    { value: 'changes' as LeftTab, label: 'Изменения', icon: LEFT_TAB_ICONS.changes },
-    { value: 'tasks', label: 'Задачи', icon: LEFT_TAB_ICONS.tasks },
-    { value: 'knowledge' as LeftTab, label: 'Знания', icon: LEFT_TAB_ICONS.knowledge },
-    { value: 'personas' as LeftTab, label: 'Команда', icon: LEFT_TAB_ICONS.personas },
+    // Файлы и git — в группе files. Один таб прячем вместе — у локального проекта
+    // с офлайн-устройством оба недоступны. Если files недоступен — изменения
+    // показывать тоже бессмысленно (рельс «Изменения» живёт на git)
+    ...(filesAvail ? [{ value: 'files' as const, label: 'Файлы', icon: LEFT_TAB_ICONS.files }] : []),
+    ...(gitAvail ? [{ value: 'changes' as const, label: 'Изменения', icon: LEFT_TAB_ICONS.changes }] : []),
+    ...(tasksAvail ? [{ value: 'tasks' as const, label: 'Задачи', icon: LEFT_TAB_ICONS.tasks }] : []),
+    ...(knowledgeAvail ? [{ value: 'knowledge' as const, label: 'Знания', icon: LEFT_TAB_ICONS.knowledge }] : []),
+    ...(personasAvail ? [{ value: 'personas' as const, label: 'Команда', icon: LEFT_TAB_ICONS.personas }] : []),
     // На десктопе навыки живут панелью в рельсе; на мобиле рельсы панелей проекта нет,
     // поэтому им нужна своя вкладка — иначе доступ к ним с телефона пропадает совсем
-    { value: 'skills' as LeftTab, label: 'Навыки', icon: LEFT_TAB_ICONS.skills },
+    ...(skillsAvail ? [{ value: 'skills' as const, label: 'Навыки', icon: LEFT_TAB_ICONS.skills }] : []),
     // На мобиле рельсы панелей проекта нет, и ящик рельсы не работает — поэтому
-    // Терминал/Сервисы доступны только через эту вкладку (на десктопе они панелями)
-    { value: 'tools' as LeftTab, label: 'Инструменты', icon: LEFT_TAB_ICONS.tools },
+    // Терминал/Сервисы доступны только через эту вкладку (на десктопе они панелями).
+    // Скрываем вкладку, если обе её подсистемы недоступны — иначе внутри ToolsSidebar
+    // покажется общая плашка «недоступно», но мобильный таббар останется
+    ...((terminalAvail || devServersAvail)
+      ? [{ value: 'tools' as const, label: 'Инструменты', icon: LEFT_TAB_ICONS.tools }]
+      : []),
   ];
+
+  // Если текущий таб внезапно стал недоступен (capabilities обновились) — откатываемся
+  // на «Чаты». Это защищает от «застрял в пустой вкладке» при выходе устройства из офлайна
+  useEffect(() => {
+    if (leftTab !== 'sessions' && !leftTabOptions.some(o => o.value === leftTab)) {
+      setLeftTab('sessions');
+    }
+  }, [leftTab, leftTabOptions]);
 
   // Мобильный таббар проекта: показываем столько вкладок, сколько влезает по ширине
   // шапки, остальное + «Использование» — в «⋯» (как «⋯ Разделы» в HubHeader). Количество
@@ -1707,9 +1733,9 @@ const windowWidth = useWindowWidth();
               : leftTab === 'personas'
               ? <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} onShowTeam={handleShowTeam} teamActive={!selectedPersonaId && !personaCreating} />
               : leftTab === 'skills'
-              ? <SkillsPanel projectId={project.id} onChanged={setSkillsData} />
+              ? <SkillsPanel projectId={project.id} project={project} onChanged={setSkillsData} />
               : leftTab === 'tools'
-              ? <ToolsSidebar projectId={project.id} activeTab={toolsTab} onTabChange={setToolsTab}
+              ? <ToolsSidebar projectId={project.id} project={project} activeTab={toolsTab} onTabChange={setToolsTab}
                   terminals={terminals} onCreateTerminal={handleCreateTerminal}
                   onStopTerminal={handleStopTerminal} onRenameTerminal={handleRenameTerminal}
                   activeTerminalId={activeTerminalId} onSelectTerminal={handleSelectTerminal}
@@ -1918,7 +1944,7 @@ const windowWidth = useWindowWidth();
             // Навыки и агенты рабочей папки. onChanged кладёт свежий состав в тот же
             // skillsData, откуда композер берёт «/»-команды: установка навыка в панели
             // видна в подсказке сразу, без перезагрузки страницы
-            skills: <SkillsPanel projectId={project.id} onChanged={setSkillsData} />,
+            skills: <SkillsPanel projectId={project.id} project={project} onChanged={setSkillsData} />,
             terminal: <TerminalPanelContent terminals={terminals} activeTerminalId={activeTerminalId} onSelect={handleSelectTerminal} onCreate={handleCreateTerminal} onStop={handleStopTerminal} onActivity={setTerminalBusy} />,
             preview: <PreviewPanelContent projectId={project.id} services={previewServices} activePreviewId={activePreviewId} onSelect={handleSelectPreview} onStart={startService} onStop={stopService} onRefresh={refreshServices} />,
             video: <VideoPanel />,

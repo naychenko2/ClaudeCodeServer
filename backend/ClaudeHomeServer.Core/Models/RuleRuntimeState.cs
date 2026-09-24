@@ -15,6 +15,11 @@ public sealed class RuleRuntimeState
     public int RunCount { get; set; }
     // Закреплённый чат правила: создаётся при первом срабатывании, переиспользуется далее.
     public string? SessionId { get; set; }
+    // Срабатывание пропущено: устройство локального проекта правила офлайн (ADR-016, вариант А
+    // плана §5). Периодика не копится — храним ОДНО последнее пропущенное событие, после выхода
+    // устройства в онлайн оно догоняется единственным ходом. null — пропусков нет.
+    public DateTime? DeviceSkippedAt { get; set; }
+    public string? DeviceSkippedSummary { get; set; }
     // Per-source снапшоты для дифф-детекции (какой из них валиден — зависит от Trigger.Type правила):
     public Dictionary<string, string>? TaskStatusSnapshot { get; set; }  // taskId → status
     public string? LastGitHeadSha { get; set; }                          // HEAD проекта, который смотрит правило

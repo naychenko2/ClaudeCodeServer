@@ -32,6 +32,12 @@ public static class ExecutorStopClassifier
     public const string SubagentStuckReason = "subagent_stuck";
 
     /// <summary>
+    /// Исполнитель так и не стартовал: устройство локального проекта не вышло в онлайн за
+    /// потолок ожидания (ADR-016, вариант А плана §5). Терминальная: дальше решает человек.
+    /// </summary>
+    public const string DeviceWaitExpiredReason = "device_wait_expired";
+
+    /// <summary>
     /// Сабагенты хода: None — обрывов не было; Truncated — оборвался, добивание в пути;
     /// Stuck — обрывается раз за разом, попытки добивания исчерпаны.
     /// </summary>

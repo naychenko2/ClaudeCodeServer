@@ -33,7 +33,7 @@ internal sealed record TaskPromptMetrics(int TotalChars, int TotalTokensEst,
 // Claude-исполнитель задач: запускает отдельную чат-сессию по задаче (кнопкой или
 // автозапуском по сроку), следит за её ходом через SessionManager.OnSessionMessage
 // и уведомляет пользователя (тост + push) о завершении и запросах разрешений.
-public class TaskExecutionService
+public class TaskExecutionService : Execution.IDeviceOnlineHandler
 {
     private readonly TaskManager _tasks;
     private readonly SessionManager _sessions;
@@ -55,6 +55,9 @@ public class TaskExecutionService
     private readonly Execution.ILauncherFactory? _launchers;
     // Проект задачи — для среды исполнения проекта (ADR-016: локальный проект — на устройстве)
     private readonly IProjectManager? _projects;
+    // Готовность устройства локального проекта (ADR-016, вариант А плана §5): офлайн —
+    // задача встаёт в «ждёт устройство» ДО создания чата. null — проверки нет (тесты без неё).
+    private readonly Execution.IProjectDeviceGate? _deviceGate;
     // Стор настроек специальностей: матрицы моделей по уровням и DefaultTier специальности
     // (ADR-007 §2). null — настройка не подключена, матрицы специальности не участвуют.
     private readonly SpecialtySettingsStore? _specialtySettings;
@@ -110,8 +113,10 @@ public class TaskExecutionService
         // Подсистема Notes отключаемая: null — блок «релевантные заметки» в постановке
         // исполнителя тихо пропускается (BuildNotesContextAsync).
         INoteSemanticIndex? kb = null,
-        IProjectManager? projects = null)
+        IProjectManager? projects = null,
+        Execution.IProjectDeviceGate? deviceGate = null)
     {
+        _deviceGate = deviceGate;
         _staleAfter = TimeSpan.FromMinutes(
             int.TryParse(config["Tasks:ExecutorStaleMinutes"], out var stale) && stale > 0 ? stale : 15);
         _subagentRuns = subagentRuns;
@@ -183,6 +188,11 @@ public class TaskExecutionService
     // null — режима нет либо сервис не поднят: провал остаётся обычным (тост владельцу).
     public Func<TaskItem, Task>? TeamTaskFailed { get; set; }
 
+    // Хук «под-задача так и не стартовала» (устройство не вышло в онлайн за потолок ожидания):
+    // TeamWaveService поднимает карточку в ленте штаба. Отдельно от TeamTaskFailed: перевыдача
+    // тут бессмысленна — она упрётся в то же офлайн-устройство ещё на сутки.
+    public Func<TaskItem, string, Task>? TeamTaskNotLaunched { get; set; }
+
     /// <summary>
     /// Запуск выполнения задачи Claude-ом: отдельная сессия в проекте задачи
     /// (личная — чат вне проекта) в режиме acceptEdits, первым сообщением — постановка.
@@ -234,6 +244,17 @@ public class TaskExecutionService
             _sessions.GetById(task.LinkedSessionId) is { } linked &&
             linked.Status is SessionStatus.Starting or SessionStatus.Working or SessionStatus.Waiting)
             throw new InvalidOperationException("По задаче уже работает сессия");
+
+        // Устройство локального проекта не готово — запуска не делаем вовсе: ни чата, ни
+        // отметки ClaudeStartedAt (иначе упавший старт выглядел бы начатым, а страховка
+        // молчала). Задача встаёт в «ждёт устройство» и стартует по выходу устройства в онлайн.
+        if (task.ProjectId is { } gateProjectId && _projects?.GetById(gateProjectId) is { } gateProject
+            && _deviceGate?.Check(gateProject) is { IsReady: false } gate)
+        {
+            if (!gate.MustWait)
+                throw new InvalidOperationException(gate.Reason ?? ProjectCapabilities.DeviceMissingReason);
+            return await EnterDeviceWaitAsync(task, gate.Reason);
+        }
 
         // Персона-исполнитель: чужая/удалённая — мягкая деградация в обычный режим
         Persona? persona = null;
@@ -297,7 +318,19 @@ public class TaskExecutionService
             metrics.TaskSectionChars, metrics.ExpectedResultChars, metrics.ToolsChars,
             metrics.MandatoryChars, metrics.RestrictionsChars, metrics.DelegationChars,
             metrics.OmOChars, metrics.ContextChars, metrics.NotesContextChars));
-        await _sessions.SendMessageAsync(session.Id, prompt, [], auto: true, senderPersonaId: persona?.Id);
+        try
+        {
+            await _sessions.SendMessageAsync(session.Id, prompt, [], auto: true, senderPersonaId: persona?.Id);
+        }
+        catch (Exception ex)
+        {
+            // Отметка запуска уже стоит (без неё первые события хода не нашли бы задачу), а
+            // постановка не ушла: итог «error», чтобы задача не выглядела идущей в работе
+            _log.LogError(ex, "Постановка исполнителю задачи {TaskId} не отправлена", task.Id);
+            if (_tasks.MarkClaudeResult(task.Id, "error") is { } failed)
+                await _broadcaster.ToOwner(task.OwnerId, new TaskChangedMessage("updated", failed));
+            throw;
+        }
 
         if (auto)
             await NotifyAsync(updated, new NotificationMessage(
@@ -313,6 +346,96 @@ public class TaskExecutionService
         _log.LogInformation("Claude-исполнитель запущен ({Trigger}): задача {TaskId} «{Title}», сессия {SessionId}",
             auto ? "автозапуск" : "вручную", updated.Id, updated.Title, session.Id);
         return updated;
+    }
+
+    // --- Ожидание устройства локального проекта (ADR-016, вариант А плана §5) ---
+
+    // Задача встаёт в «ждёт устройство»: отметка на самой задаче (переживает рестарт) и одно
+    // уведомление на всё ожидание — повторные попытки (ручной запуск, тик) его не повторяют.
+    private async Task<TaskItem> EnterDeviceWaitAsync(TaskItem task, string? reason)
+    {
+        var first = _tasks.GetById(task.Id)?.DeviceWaitSince is null;
+        var updated = _tasks.MarkDeviceWait(task.Id, DateTime.UtcNow, reason)
+            ?? throw new InvalidOperationException("Задача удалена");
+        await _broadcaster.ToOwner(task.OwnerId!, new TaskChangedMessage("updated", updated));
+        if (first)
+        {
+            await NotifyAsync(updated, new NotificationMessage(
+                Title: "Задача ждёт устройство",
+                Body: $"{updated.Title}: {reason ?? "устройство проекта недоступно"}. Исполнитель запустится, " +
+                      $"когда устройство выйдет в сеть (ждём до {(int)ProjectCapabilities.DeviceWaitCeiling.TotalHours} ч)",
+                Url: TaskUrl.Of(updated),
+                Kind: "info",
+                PersonaId: updated.PersonaId,
+                ProjectId: updated.ProjectId,
+                TaskId: updated.Id,
+                Tag: "Исполнитель"));
+            _log.LogInformation("Задача {TaskId} «{Title}» ждёт устройство: {Reason}", updated.Id, updated.Title, reason);
+        }
+        return updated;
+    }
+
+    public async Task OnDeviceOnlineAsync(string ownerId, string deviceId, CancellationToken ct = default)
+    {
+        foreach (var task in _tasks.GetDeviceWaiting())
+            if (task.OwnerId == ownerId)
+                await ResumeDeviceWaitAsync(task, DateTime.UtcNow, deviceId);
+    }
+
+    public async Task SweepAsync(DateTime nowUtc, CancellationToken ct = default)
+    {
+        foreach (var task in _tasks.GetDeviceWaiting())
+            await ResumeDeviceWaitAsync(task, nowUtc, onlineDeviceId: null);
+    }
+
+    // Ждущая задача: истёк потолок — остановка с причиной; устройство готово — запуск.
+    // onlineDeviceId — событие конкретного устройства (задачи на других не трогаем).
+    private async Task ResumeDeviceWaitAsync(TaskItem task, DateTime nowUtc, string? onlineDeviceId)
+    {
+        try
+        {
+            if (task.DeviceWaitSince is { } since && nowUtc - since >= ProjectCapabilities.DeviceWaitCeiling)
+            {
+                await ExpireDeviceWaitAsync(task);
+                return;
+            }
+            if (task.ProjectId is null || _projects?.GetById(task.ProjectId) is not { } project || _deviceGate is null)
+                return;
+            var gate = _deviceGate.Check(project);
+            if (onlineDeviceId is not null && gate.DeviceId != onlineDeviceId) return;
+            if (gate.Verdict == ProjectBackgroundVerdict.DeviceGone)
+            {
+                await ExpireDeviceWaitAsync(task, gate.Reason);
+                return;
+            }
+            if (!gate.IsReady) return;
+            _log.LogInformation("Устройство проекта готово — запускаю ждавшую задачу {TaskId} «{Title}»", task.Id, task.Title);
+            await ExecuteAsync(task, auto: true);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Запуск ждавшей устройство задачи {TaskId} «{Title}» не удался", task.Id, task.Title);
+        }
+    }
+
+    // Ожидание кончилось без запуска: пометка «исполнитель остановился» с причиной, уведомление
+    // владельцу и (у под-задачи штаба) карточка в ленте штаба — не тишина.
+    private async Task ExpireDeviceWaitAsync(TaskItem task, string? detail = null)
+    {
+        var cleared = _tasks.ClearDeviceWait(task.Id);
+        if (cleared is null) return;
+        await HandleExecutorStoppedAsync(cleared, ExecutorStopClassifier.DeviceWaitExpiredReason);
+        if (TeamTaskNotLaunched is { } onNotLaunched)
+        {
+            try
+            {
+                await onNotLaunched(cleared, detail ?? ExecutorStopText(ExecutorStopClassifier.DeviceWaitExpiredReason));
+            }
+            catch (Exception ex)
+            {
+                _log.LogError(ex, "Карточка штаба о несостоявшемся запуске задачи {TaskId} не поднята", cleared.Id);
+            }
+        }
     }
 
     /// <summary>
@@ -878,6 +1001,8 @@ public class TaskExecutionService
         ExecutorStopClassifier.AuthFailedReason => "не удалось авторизоваться у провайдера модели",
         ExecutorStopClassifier.SubagentStuckReason =>
             "сабагент раз за разом обрывается посреди работы, добить его не удалось",
+        ExecutorStopClassifier.DeviceWaitExpiredReason =>
+            "устройство локального проекта так и не стало доступно — исполнитель не запускался",
         _ => "исполнение прервано",
     };
 

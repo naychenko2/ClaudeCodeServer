@@ -767,6 +767,10 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DesktopHandsSess
 // Разрыв соединения — один из поводов погасить сеанс: маршрутизатор канала знает о нём
 // первым, поэтому сеансы подписаны на него наблюдателем, а не наоборот (форвард на тот же
 // синглтон, не второй экземпляр).
+// Второй наблюдатель — диспетчер выхода устройства в онлайн (ADR-016, план §5; регистрация
+// блоком ниже). Стоит ДО службы сеансов: одиночный резолв наблюдателя обязан отдавать её.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDeviceConnectionObserver>(
+    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Composition.DeviceOnlineDispatcher>());
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDeviceConnectionObserver>(
     sp => sp.GetRequiredService<ClaudeHomeServer.Services.Desktop.DesktopHandsSessionService>());
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DesktopAccessGate>();
@@ -783,6 +787,24 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IDeviceExecCha
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.AgentTicketService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.IProjectFilesChangedNotifier,
     ClaudeHomeServer.Services.Composition.ProjectFilesChangedNotifier>();
+
+// Фоновая работа при офлайн-устройстве (ADR-016, вариант А плана §5): гейт готовности
+// устройства проекта для пяти механизмов, диспетчер выхода устройства в онлайн (наблюдатель
+// маршрутизатора + поминутный проход с потолком 24 ч) и его обработчики — исполнитель задач
+// (с под-задачами штаба), очередь чата, автоматизации персон. Сторожа догоняют своим тиком.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IProjectDeviceGate>(
+    sp => new ClaudeHomeServer.Services.Execution.ProjectDeviceGate(
+        () => sp.GetService<ClaudeHomeServer.Services.Execution.IDeviceExecChannel>()));
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.DeviceOnlineDispatcher>();
+builder.Services.AddGatedHostedFrom(builder.Configuration,
+    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Composition.DeviceOnlineDispatcher>());
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.ChatDeviceWaitHandler>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IDeviceOnlineHandler>(
+    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Composition.ChatDeviceWaitHandler>());
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IDeviceOnlineHandler>(
+    sp => sp.GetRequiredService<TaskExecutionService>());
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IDeviceOnlineHandler>(
+    sp => sp.GetRequiredService<PersonaAutomationService>());
 // Сторож сеансов: 15 минут простоя, потолок 2 часа, исчезнувший чат, снятый тумблер грани
 builder.Services.AddGatedHostedService<ClaudeHomeServer.Services.Desktop.DesktopSessionReaper>(builder.Configuration);
 // TaskSchedulerService — DI в подсистеме `TasksSubsystem` (волна 4C, шаг 1).

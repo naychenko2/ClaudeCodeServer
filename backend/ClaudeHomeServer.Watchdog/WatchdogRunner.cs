@@ -8,12 +8,14 @@ namespace ClaudeHomeServer.Services.Watchdog;
 // ExitCode — запуск СОСТОЯЛСЯ и завершился (0 = дождались, != 0 = «ещё нет»);
 // LaunchFailed — запуск не состоялся вовсе (процесс не стартовал / каталог исчез /
 // песочница недоступна); PollTimeout — запуск состоялся, но не уложился в свой
-// таймаут и был убит (считается «ещё нет», НЕ сбоем запуска).
+// таймаут и был убит (считается «ещё нет», НЕ сбоем запуска). DeviceUnavailable —
+// устройство локального проекта не готово (ADR-016, план §5): опрос пропущен, НЕ сбой запуска.
 public enum PollOutcomeKind
 {
     ExitCode,
     LaunchFailed,
     PollTimeout,
+    DeviceUnavailable,
 }
 
 public sealed record PollOutcome(PollOutcomeKind Kind, int ExitCode = 0,
@@ -24,6 +26,8 @@ public sealed record PollOutcome(PollOutcomeKind Kind, int ExitCode = 0,
         new(PollOutcomeKind.ExitCode, code, output);
     public static PollOutcome LaunchFailed(string reason) =>
         new(PollOutcomeKind.LaunchFailed, Failure: reason);
+    public static PollOutcome DeviceUnavailable(string reason) =>
+        new(PollOutcomeKind.DeviceUnavailable, Failure: reason);
 }
 
 /// <summary>
@@ -73,6 +77,11 @@ public sealed class WatchdogCommandRunner(ILauncherFactory launchers, IProjectMa
 
         Process proc;
         try { proc = launcher.Start(spec); }
+        // Устройство локального проекта не готово (ушло офлайн между проверкой и запуском) —
+        // пропуск, а не сбой запуска: три таких подряд не должны гасить живой сторож.
+        // Отозванное устройство — наоборот, настоящий сбой: ждать нечего.
+        catch (DeviceExecRefusedException ex) when (ex.Reason != DeviceExecRefusal.UnknownDevice)
+        { return PollOutcome.DeviceUnavailable(ex.Message); }
         catch (Exception ex) { return PollOutcome.LaunchFailed(ex.Message); }
 
         try

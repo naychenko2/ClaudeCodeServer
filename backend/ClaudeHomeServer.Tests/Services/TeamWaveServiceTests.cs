@@ -284,6 +284,24 @@ public class TeamWaveServiceTests : IDisposable
             "карточка эскалации ставит практику на ожидание решения — молчаливых пауз не бывает");
     }
 
+    // ADR-016, вариант А плана §5: под-задача ждала устройство локального проекта и не
+    // дождалась за потолок — карточка в ленте штаба с причиной, не тишина
+    [Fact]
+    public async Task ПодЗадачаНеДождаласьУстройства_КарточкаСПричинойВЛентеШтаба()
+    {
+        var (session, plan) = await MakeRunningStabAsync("wave-device-wait");
+        var created = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
+        var task = created[0];
+
+        await _sut.OnTaskNotLaunchedAsync(task, "устройство локального проекта так и не стало доступно");
+
+        var card = (await ((ITeamHistoryStore)_sessions).GetOpenTeamEscalationsAsync(session.Id))
+            .Should().ContainSingle(c => c.TaskId == task.Id).Which;
+        card.Kind.Should().Be(TeamEscalationKind.TaskFailed);
+        card.Details.Should().Contain("так и не стало доступно").And.Contain("устройство проекта");
+        _sessions.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.AwaitingDecision);
+    }
+
     [Fact]
     public async Task StartWave_ВтораяВолнаЖдётЗакрытияПервой()
     {

@@ -495,7 +495,12 @@ public sealed class TasksToolset(
                         title = executed.Title,
                         status = executed.Status,
                         executorSessionId = executed.LinkedSessionId,
-                        note = "Исполнитель запущен и работает в фоне — прогресс виден в связанной сессии и статусе задачи.",
+                        deviceWaitReason = executed.DeviceWaitReason,
+                        // Устройство локального проекта офлайн (ADR-016, план §5): запуска не было
+                        note = executed.DeviceWaitSince is not null
+                            ? $"Исполнитель ещё не запущен: {executed.DeviceWaitReason ?? "устройство проекта недоступно"}. " +
+                              "Задача ждёт устройство и стартует сама, когда оно выйдет в сеть (ожидание до 24 ч); повторно запускать не нужно."
+                            : "Исполнитель запущен и работает в фоне — прогресс виден в связанной сессии и статусе задачи.",
                     });
                 }
                 catch (InvalidOperationException ex)

@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Desktop;
 using ClaudeHomeServer.Services.Llm.Gateway;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
@@ -27,6 +28,10 @@ public sealed class McpGatewayIntegrationTests : IDisposable
 
     public void Dispose() => _factory.Dispose();
 
+    // Устройство в боевом реестре хоста: вход шлюза пускает токен хода только с его учёткой
+    private GatewayTestDevice Device(string ownerId) =>
+        new(ownerId, _factory.Services.GetRequiredService<DeviceRegistry>());
+
     private const string ToolsList = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}";
 
     private static StringContent Json(string body) => new(body, Encoding.UTF8, "application/json");
@@ -46,7 +51,8 @@ public sealed class McpGatewayIntegrationTests : IDisposable
     {
         var ownerId = _factory.Services.GetRequiredService<UserStore>()
             .FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
-        var turn = _factory.Services.GetRequiredService<TurnTokenService>().Issue(ownerId, "chat-1");
+        using var dev = Device(ownerId);
+        var turn = _factory.Services.GetRequiredService<TurnTokenService>().Issue(ownerId, "chat-1", dev.Id);
 
         var direct = _factory.CreateClient();
         direct.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer",
@@ -59,6 +65,7 @@ public sealed class McpGatewayIntegrationTests : IDisposable
             Content = Json(ToolsList),
         };
         req.Headers.Add(TurnTokenEndpointFilter.HeaderName, turn.Token);
+        dev.Sign(req);
         var viaGateway = await device.SendAsync(req);
 
         viaServer.StatusCode.Should().Be(HttpStatusCode.OK);
@@ -72,14 +79,21 @@ public sealed class McpGatewayIntegrationTests : IDisposable
     [Fact]
     public async Task ЧужойХвостНаБоевомХосте_403_БезТокена_401()
     {
-        var turn = _factory.Services.GetRequiredService<TurnTokenService>().Issue("owner-x", "chat-1");
+        using var dev = Device("owner-x");
+        var turn = _factory.Services.GetRequiredService<TurnTokenService>().Issue("owner-x", "chat-1", dev.Id);
         var device = _factory.CreateClient();
 
         var foreign = new HttpRequestMessage(HttpMethod.Post, $"/gw/t/{turn.Grant.TurnId}/mcp/tasks/chat-2") { Content = Json(ToolsList) };
         foreign.Headers.Add(TurnTokenEndpointFilter.HeaderName, turn.Token);
+        dev.Sign(foreign);
         (await device.SendAsync(foreign)).StatusCode.Should().Be(HttpStatusCode.Forbidden);
 
-        (await device.PostAsync($"/gw/t/{turn.Grant.TurnId}/mcp/tasks/chat-1", Json(ToolsList)))
-            .StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        (await device.SendAsync(dev.Sign(new HttpRequestMessage(HttpMethod.Post, $"/gw/t/{turn.Grant.TurnId}/mcp/tasks/chat-1")
+            { Content = Json(ToolsList) }))).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+
+        // Токен хода без учётки устройства на боевом хосте тоже не проходит
+        var bare = new HttpRequestMessage(HttpMethod.Post, $"/gw/t/{turn.Grant.TurnId}/mcp/tasks/chat-1") { Content = Json(ToolsList) };
+        bare.Headers.Add(TurnTokenEndpointFilter.HeaderName, turn.Token);
+        (await device.SendAsync(bare)).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 }

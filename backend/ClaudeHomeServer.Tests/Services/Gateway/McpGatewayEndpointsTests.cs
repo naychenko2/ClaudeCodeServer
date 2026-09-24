@@ -23,7 +23,7 @@ namespace ClaudeHomeServer.Tests.Services.Gateway;
 public sealed class McpGatewayEndpointsTests : IAsyncLifetime
 {
     private sealed record Seen(string Method, string Path, string? Authorization, string? Caller,
-        string? TurnToken, string? Cookie, string Body);
+        string? TurnToken, string? Cookie, string Body, string? Fingerprint = null);
 
     private sealed class FakeBackend : IMcpBackendAccess
     {
@@ -34,6 +34,7 @@ public sealed class McpGatewayEndpointsTests : IAsyncLifetime
     private readonly ConcurrentQueue<Seen> _seen = new();
     private readonly TaskCompletionSource _releaseStream = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TurnEventBus _bus = new();
+    private readonly GatewayTestDevice _device = new();
     private TurnTokenService _tokens = null!;
     private WebApplication _upstream = null!;
     private WebApplication _gateway = null!;
@@ -66,7 +67,8 @@ public sealed class McpGatewayEndpointsTests : IAsyncLifetime
             var body = await new StreamReader(ctx.Request.Body).ReadToEndAsync();
             _seen.Enqueue(new Seen(ctx.Request.Method, ctx.Request.Path.Value!,
                 Header(ctx, "Authorization"), Header(ctx, McpEndpoints.CallerSessionHeader),
-                Header(ctx, TurnTokenEndpointFilter.HeaderName), Header(ctx, "Cookie"), body));
+                Header(ctx, TurnTokenEndpointFilter.HeaderName), Header(ctx, "Cookie"), body,
+                Header(ctx, TurnTokenEndpointFilter.DeviceFingerprintHeader)));
             if (ctx.Request.Method == "GET")
             {
                 ctx.Response.StatusCode = 405;
@@ -85,6 +87,7 @@ public sealed class McpGatewayEndpointsTests : IAsyncLifetime
         gw.Services.AddSingleton<IMcpBackendAccess, FakeBackend>();
         gw.Services.AddHttpClient(McpGatewayEndpoints.HttpClientName)
             .ConfigurePrimaryHttpMessageHandler(() => _upstream.GetTestServer().CreateHandler());
+        _device.AddTo(gw.Services);
         _gateway = gw.Build();
         _gateway.MapMcpGateway();
         await _gateway.StartAsync();
@@ -96,14 +99,16 @@ public sealed class McpGatewayEndpointsTests : IAsyncLifetime
         _releaseStream.TrySetResult();
         await _gateway.DisposeAsync();
         await _upstream.DisposeAsync();
+        _device.Dispose();
     }
 
     private static string? Header(HttpContext ctx, string name) =>
         ctx.Request.Headers.TryGetValue(name, out var v) ? v.ToString() : null;
 
-    private static HttpRequestMessage Req(HttpMethod method, string path, string? token, string? body = null)
+    private HttpRequestMessage Req(HttpMethod method, string path, string? token, string? body = null, bool device = true)
     {
         var req = new HttpRequestMessage(method, path);
+        if (device) _device.Sign(req);
         if (token is not null) req.Headers.Add(TurnTokenEndpointFilter.HeaderName, token);
         if (body is not null) req.Content = new StringContent(body, Encoding.UTF8, "application/json");
         return req;
@@ -116,7 +121,7 @@ public sealed class McpGatewayEndpointsTests : IAsyncLifetime
     [Fact]
     public async Task БезТокенаХода_401_ИБэкендНеВызван()
     {
-        var t = _tokens.Issue("owner-1", "chat-1");
+        var t = _tokens.Issue("owner-1", "chat-1", _device.Id);
 
         var resp = await _client.SendAsync(Req(HttpMethod.Post, $"/gw/t/{t.Grant.TurnId}/mcp/tasks/chat-1", null, InitBody));
 
@@ -124,10 +129,35 @@ public sealed class McpGatewayEndpointsTests : IAsyncLifetime
         _seen.Should().BeEmpty();
     }
 
+    // ADR-016 §2: токен хода принимается только вместе с учёткой устройства, к которому он привязан
+    [Fact]
+    public async Task ВалидныйТокен_БезУчёткиЧужоеОтозванноеУстройство_401_ИБэкендНеВызван()
+    {
+        var t = _tokens.Issue("owner-1", "chat-1", _device.Id);
+        var path = $"/gw/t/{t.Grant.TurnId}/mcp/tasks/chat-1";
+
+        (await _client.SendAsync(Req(HttpMethod.Post, path, t.Token, InitBody, device: false)))
+            .StatusCode.Should().Be(HttpStatusCode.Unauthorized, "без учётки устройства");
+
+        var otherFp = new string('e', 64);
+        var (_, otherToken) = _device.Register("owner-1", "чужое", otherFp);
+        var foreign = GatewayTestDevice.Sign(Req(HttpMethod.Post, path, t.Token, InitBody, device: false), otherToken, otherFp);
+        (await _client.SendAsync(foreign)).StatusCode.Should().Be(HttpStatusCode.Unauthorized, "токен привязан к другому устройству");
+
+        var unbound = _tokens.Issue("owner-1", "chat-1");
+        (await _client.SendAsync(Req(HttpMethod.Post, $"/gw/t/{unbound.Grant.TurnId}/mcp/tasks/chat-1", unbound.Token, InitBody)))
+            .StatusCode.Should().Be(HttpStatusCode.Unauthorized, "токен без привязки к устройству");
+
+        _device.Registry.Revoke("owner-1", _device.Id).Should().BeTrue();
+        (await _client.SendAsync(Req(HttpMethod.Post, path, t.Token, InitBody)))
+            .StatusCode.Should().Be(HttpStatusCode.Unauthorized, "устройство отозвано");
+        _seen.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task ВыдуманныйТокен_401_ИБэкендНеВызван()
     {
-        var t = _tokens.Issue("owner-1", "chat-1");
+        var t = _tokens.Issue("owner-1", "chat-1", _device.Id);
 
         var resp = await _client.SendAsync(Req(HttpMethod.Post, $"/gw/t/{t.Grant.TurnId}/mcp/tasks/chat-1", "выдуманный", InitBody));
 
@@ -138,7 +168,7 @@ public sealed class McpGatewayEndpointsTests : IAsyncLifetime
     [Fact]
     public async Task НеизвестныйХод_401()
     {
-        var t = _tokens.Issue("owner-1", "chat-1");
+        var t = _tokens.Issue("owner-1", "chat-1", _device.Id);
 
         var resp = await _client.SendAsync(Req(HttpMethod.Post, "/gw/t/нет-такого/mcp/tasks/chat-1", t.Token, InitBody));
 
@@ -149,7 +179,7 @@ public sealed class McpGatewayEndpointsTests : IAsyncLifetime
     [Fact]
     public async Task ОтозванныйТокен_401()
     {
-        var t = _tokens.Issue("owner-1", "chat-1");
+        var t = _tokens.Issue("owner-1", "chat-1", _device.Id);
         await _bus.PublishAsync(new TurnCompleted(new TurnContext("chat-1", "owner-1", 1, 0), "success"));
 
         var resp = await _client.SendAsync(Req(HttpMethod.Post, $"/gw/t/{t.Grant.TurnId}/mcp/tasks/chat-1", t.Token, InitBody));
@@ -171,8 +201,8 @@ public sealed class McpGatewayEndpointsTests : IAsyncLifetime
     [InlineData("wsp")]
     public async Task ВалидныйТокенИЧужойХвост_403_ИБэкендНеВызван(string server)
     {
-        var t = _tokens.Issue("owner-1", "chat-1");
-        _tokens.Issue("owner-1", "chat-2");
+        var t = _tokens.Issue("owner-1", "chat-1", _device.Id);
+        _tokens.Issue("owner-1", "chat-2", _device.Id);
 
         foreach (var tail in new[] { "/chat-2", "", "/chat-1/chat-2", "/chat-1%2F..%2Fchat-2" })
         {
@@ -185,7 +215,7 @@ public sealed class McpGatewayEndpointsTests : IAsyncLifetime
     [Fact]
     public async Task НезнакомыйСервер_404_ИБэкендНеВызван()
     {
-        var t = _tokens.Issue("owner-1", "chat-1");
+        var t = _tokens.Issue("owner-1", "chat-1", _device.Id);
 
         var resp = await _client.SendAsync(Req(HttpMethod.Post, $"/gw/t/{t.Grant.TurnId}/mcp/evil/chat-1", t.Token, InitBody));
 
@@ -198,9 +228,8 @@ public sealed class McpGatewayEndpointsTests : IAsyncLifetime
     [Fact]
     public async Task ДоБэкендаЕдутJwtВладельцаИЧатТокена_КлиентскиеВыброшены()
     {
-        var t = _tokens.Issue("owner-1", "chat-1");
+        var t = _tokens.Issue("owner-1", "chat-1", _device.Id);
         var req = Req(HttpMethod.Post, $"/gw/t/{t.Grant.TurnId}/mcp/tasks/chat-1", t.Token, InitBody);
-        req.Headers.TryAddWithoutValidation("Authorization", "Bearer чужой-jwt");
         req.Headers.Add(McpEndpoints.CallerSessionHeader, "chat-2");
         req.Headers.Add("Cookie", "auth=секрет");
         req.Headers.Add("Mcp-Session-Id", "s-1");
@@ -220,13 +249,14 @@ public sealed class McpGatewayEndpointsTests : IAsyncLifetime
         seen.Caller.Should().Be("chat-1");
         seen.TurnToken.Should().BeNull("токен хода дальше шлюза не едет");
         seen.Cookie.Should().BeNull();
+        seen.Fingerprint.Should().BeNull("учётка устройства дальше шлюза не едет");
         seen.Body.Should().Be(InitBody);
     }
 
     [Fact]
     public async Task ВиджетыБезХвоста_Проходят_СХвостом_403()
     {
-        var t = _tokens.Issue("owner-1", "chat-1");
+        var t = _tokens.Issue("owner-1", "chat-1", _device.Id);
 
         (await _client.SendAsync(Req(HttpMethod.Post, $"/gw/t/{t.Grant.TurnId}/mcp/widgets", t.Token, InitBody)))
             .StatusCode.Should().Be(HttpStatusCode.OK);
@@ -239,7 +269,7 @@ public sealed class McpGatewayEndpointsTests : IAsyncLifetime
     [Fact]
     public async Task ПамятьСХвостомПерсонаПроект_Проходит_КриваяФорма_403()
     {
-        var t = _tokens.Issue("owner-1", "chat-1");
+        var t = _tokens.Issue("owner-1", "chat-1", _device.Id);
 
         (await _client.SendAsync(Req(HttpMethod.Post, $"/gw/t/{t.Grant.TurnId}/mcp/memory/p-1/-", t.Token, InitBody)))
             .StatusCode.Should().Be(HttpStatusCode.OK);
@@ -253,7 +283,7 @@ public sealed class McpGatewayEndpointsTests : IAsyncLifetime
     [Fact]
     public async Task GetИПрочиеМетоды_ПроходятНасквозь()
     {
-        var t = _tokens.Issue("owner-1", "chat-1");
+        var t = _tokens.Issue("owner-1", "chat-1", _device.Id);
 
         var get = await _client.SendAsync(Req(HttpMethod.Get, $"/gw/t/{t.Grant.TurnId}/mcp/tasks/chat-1", t.Token));
         var del = await _client.SendAsync(Req(HttpMethod.Delete, $"/gw/t/{t.Grant.TurnId}/mcp/tasks/chat-1", t.Token));
@@ -267,7 +297,7 @@ public sealed class McpGatewayEndpointsTests : IAsyncLifetime
     [Fact]
     public async Task ДругойВладелец_ПолучаетСвойJwt()
     {
-        var t = _tokens.Issue("owner-2", "chat-9");
+        var t = _tokens.Issue("owner-2", "chat-9", _device.Id);
 
         await _client.SendAsync(Req(HttpMethod.Post, $"/gw/t/{t.Grant.TurnId}/mcp/notes/chat-9", t.Token, InitBody));
 
@@ -277,7 +307,7 @@ public sealed class McpGatewayEndpointsTests : IAsyncLifetime
     [Fact]
     public async Task УчётныеЗаголовкиОтветаБэкенда_ДоКлиентаНеДоходят()
     {
-        var t = _tokens.Issue("owner-1", "creds");
+        var t = _tokens.Issue("owner-1", "creds", _device.Id);
 
         var resp = await _client.SendAsync(Req(HttpMethod.Post, $"/gw/t/{t.Grant.TurnId}/mcp/tasks/creds", t.Token, InitBody));
 
@@ -296,13 +326,14 @@ public sealed class McpGatewayEndpointsTests : IAsyncLifetime
         gw.Services.AddSingleton(_tokens);
         gw.Services.AddSingleton<IMcpBackendAccess, FakeBackend>();
         gw.Services.AddSingleton<ILoggerProvider>(sink);
+        _device.AddTo(gw.Services);
         var message = "первая строка\r\nподдельная запись" + new string('x', 5000);
         gw.Services.AddHttpClient(McpGatewayEndpoints.HttpClientName)
             .ConfigurePrimaryHttpMessageHandler(() => new ThrowingHandler(message));
         await using var app = gw.Build();
         app.MapMcpGateway();
         await app.StartAsync();
-        var t = _tokens.Issue("owner-1", "chat-1");
+        var t = _tokens.Issue("owner-1", "chat-1", _device.Id);
 
         var resp = await app.GetTestClient().SendAsync(
             Req(HttpMethod.Post, $"/gw/t/{t.Grant.TurnId}/mcp/tasks/chat-1", t.Token, InitBody));
@@ -338,7 +369,7 @@ public sealed class McpGatewayEndpointsTests : IAsyncLifetime
     [Fact]
     public async Task Стрим_ДоходитПоМереПрихода_БезБуфера()
     {
-        var t = _tokens.Issue("owner-1", "stream");
+        var t = _tokens.Issue("owner-1", "stream", _device.Id);
         var req = Req(HttpMethod.Post, $"/gw/t/{t.Grant.TurnId}/mcp/tasks/stream", t.Token, InitBody);
 
         var resp = await _client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead)

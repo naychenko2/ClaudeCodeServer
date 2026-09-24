@@ -37,6 +37,7 @@ public static class McpGatewayEndpoints
     private static readonly FrozenSet<string> DroppedRequestHeaders = new[]
     {
         "Authorization", "Cookie", "Host", TurnTokenEndpointFilter.HeaderName, McpEndpoints.CallerSessionHeader,
+        TurnTokenEndpointFilter.DeviceFingerprintHeader,
         "Connection", "Keep-Alive", "Proxy-Authorization", "Proxy-Connection", "TE", "Trailer",
         "Transfer-Encoding", "Upgrade",
     }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);

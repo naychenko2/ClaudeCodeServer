@@ -17,7 +17,19 @@ public sealed record TurnTokenGrant(
     string SessionId,
     string? DeviceId,
     DateTimeOffset IssuedAt,
-    GatewayRoute? Route = null);
+    GatewayRoute? Route = null,
+    TurnTokenLifetime Lifetime = TurnTokenLifetime.Turn);
+
+// Чем кончается жизнь токена. Turn — концом хода чата (turn/completed). Process — концом
+// процесса CLI, которому токен выдан: ClaudeSession держит один процесс на много ходов, и
+// отзыв по turn/completed дал бы второму ходу того же процесса 401. Такой токен отзывает
+// выдавший (RevokeTurn) по выходу, kill или сбою запуска процесса; удаление чата и потолок
+// жизни действуют на оба вида.
+public enum TurnTokenLifetime
+{
+    Turn,
+    Process,
+}
 
 // Выданный токен: секрет отдаётся ровно один раз, сервер хранит только его хеш.
 public sealed record IssuedTurnToken(string Token, TurnTokenGrant Grant);
@@ -26,8 +38,9 @@ public sealed record IssuedTurnToken(string Token, TurnTokenGrant Grant);
 //
 // Живёт ТОЛЬКО в памяти процесса: рестарт бэкенда отзывает всё без отдельного кода.
 // TTL нет намеренно — ход может идти часами (долгие сборки, цикл «до готово»), и токен,
-// умерший посреди хода, рвёт его на полуслове. Жизнь токена = жизнь хода: отзыв по
-// turn/completed, а удаление чата и сбой запуска ДО адаптера отзываются явно
+// умерший посреди хода, рвёт его на полуслове. Жизнь токена задаёт TurnTokenLifetime:
+// Turn — отзыв по turn/completed, Process (ход на устройстве, ADR-016 §2) — по концу
+// процесса CLI явным RevokeTurn. Удаление чата и сбой запуска ДО адаптера отзываются явно
 // (RevokeSession / RevokeTurn). Потолок жизни — только страховка от потерянного события,
 // а не срок годности.
 //
@@ -60,7 +73,8 @@ public sealed class TurnTokenService
 
     public int ActiveCount => _byTurn.Count;
 
-    public IssuedTurnToken Issue(string ownerId, string sessionId, string? deviceId = null, GatewayRoute? route = null)
+    public IssuedTurnToken Issue(string ownerId, string sessionId, string? deviceId = null, GatewayRoute? route = null,
+        TurnTokenLifetime lifetime = TurnTokenLifetime.Turn)
     {
         ArgumentException.ThrowIfNullOrEmpty(ownerId);
         ArgumentException.ThrowIfNullOrEmpty(sessionId);
@@ -68,7 +82,7 @@ public sealed class TurnTokenService
         var turnId = Guid.NewGuid().ToString("N");
         var token = Base64Url(RandomNumberGenerator.GetBytes(32));
         var grant = new TurnTokenGrant(turnId, ownerId, sessionId,
-            string.IsNullOrEmpty(deviceId) ? null : deviceId, _time.GetUtcNow(), route);
+            string.IsNullOrEmpty(deviceId) ? null : deviceId, _time.GetUtcNow(), route, lifetime);
         _byTurn[turnId] = new Entry(Hash(token), grant);
         return new IssuedTurnToken(token, grant);
     }
@@ -121,7 +135,7 @@ public sealed class TurnTokenService
     private Task OnTurnCompleted(TurnCompleted e)
     {
         var cutoff = _time.GetUtcNow();
-        RevokeWhere(g => g.SessionId == e.Turn.SessionId && g.IssuedAt <= cutoff);
+        RevokeWhere(g => g.Lifetime == TurnTokenLifetime.Turn && g.SessionId == e.Turn.SessionId && g.IssuedAt <= cutoff);
         return Task.CompletedTask;
     }
 

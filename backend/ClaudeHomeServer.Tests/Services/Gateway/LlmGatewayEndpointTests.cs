@@ -3,6 +3,7 @@ using System.IO.Pipelines;
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using ClaudeHomeServer.Services.Desktop;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Llm.Gateway;
 using ClaudeHomeServer.Services.Turn;
@@ -39,6 +40,7 @@ public sealed class LlmGatewayEndpointTests : IAsyncDisposable
     private readonly GatewayTestKit _kit;
     private readonly FakeUpstream _upstream = new();
     private readonly TurnTokenService _tokens = new(new TurnEventBus());
+    private readonly GatewayTestDevice _device = new("owner");
     private readonly WebApplication _app;
     private readonly HttpClient _client;
 
@@ -54,6 +56,7 @@ public sealed class LlmGatewayEndpointTests : IAsyncDisposable
         builder.Services.AddSingleton(new SubscriptionLimitRecorder(_kit.Usage, _kit.Pool));
         builder.Services.AddHttpClient(LlmGatewayEndpoints.HttpClientName)
             .ConfigurePrimaryHttpMessageHandler(() => _upstream);
+        _device.AddTo(builder.Services);
         _app = builder.Build();
         _app.MapLlmGateway();
         _app.StartAsync().GetAwaiter().GetResult();
@@ -64,18 +67,19 @@ public sealed class LlmGatewayEndpointTests : IAsyncDisposable
     {
         await _app.DisposeAsync();
         _kit.Dispose();
+        _device.Dispose();
     }
 
     private IssuedTurnToken Start(string model)
     {
-        var start = _kit.Selector.StartTurn(_tokens, "owner", "chat", null, model);
+        var start = _kit.Selector.StartTurn(_tokens, "owner", "chat", _device.Id, model);
         start.Token.Should().NotBeNull(start.FailureText);
         return start.Token!;
     }
 
-    private static HttpRequestMessage Req(HttpMethod method, IssuedTurnToken t, string path, string? json = null)
+    private HttpRequestMessage Req(HttpMethod method, IssuedTurnToken t, string path, string? json = null)
     {
-        var r = new HttpRequestMessage(method, $"/gw/t/{t.Grant.TurnId}/llm/{path}");
+        var r = _device.Sign(new HttpRequestMessage(method, $"/gw/t/{t.Grant.TurnId}/llm/{path}"));
         r.Headers.TryAddWithoutValidation(TurnTokenEndpointFilter.HeaderName, t.Token);
         if (json is not null) r.Content = new StringContent(json, Encoding.UTF8, "application/json");
         return r;
@@ -96,11 +100,50 @@ public sealed class LlmGatewayEndpointTests : IAsyncDisposable
     public async Task БезТокена_401_ВыдуманныйТокен_401()
     {
         var t = Start("sonnet");
-        (await _client.GetAsync($"/gw/t/{t.Grant.TurnId}/llm/v1/models")).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
-        var r = new HttpRequestMessage(HttpMethod.Get, $"/gw/t/{t.Grant.TurnId}/llm/v1/models");
+        (await _client.SendAsync(_device.Sign(new HttpRequestMessage(HttpMethod.Get, $"/gw/t/{t.Grant.TurnId}/llm/v1/models"))))
+            .StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        var r = _device.Sign(new HttpRequestMessage(HttpMethod.Get, $"/gw/t/{t.Grant.TurnId}/llm/v1/models"));
         r.Headers.TryAddWithoutValidation(TurnTokenEndpointFilter.HeaderName, "выдуманный");
         (await _client.SendAsync(r)).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
         _upstream.Calls.Should().BeEmpty();
+    }
+
+    // ADR-016 §2: токен хода принимается только вместе с учёткой устройства, к которому он привязан
+    [Fact]
+    public async Task ВалидныйТокен_БезУчёткиУстройства_ЧужоеИОтозванноеУстройство_401()
+    {
+        var t = Start("sonnet");
+        (await _client.SendAsync(Req(HttpMethod.Get, t, "api/hello"))).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var bare = new HttpRequestMessage(HttpMethod.Get, $"/gw/t/{t.Grant.TurnId}/llm/api/hello");
+        bare.Headers.TryAddWithoutValidation(TurnTokenEndpointFilter.HeaderName, t.Token);
+        (await _client.SendAsync(bare)).StatusCode.Should().Be(HttpStatusCode.Unauthorized, "без учётки устройства");
+
+        var noPrint = new HttpRequestMessage(HttpMethod.Get, $"/gw/t/{t.Grant.TurnId}/llm/api/hello");
+        noPrint.Headers.TryAddWithoutValidation("Authorization", DesktopDeviceAuthHandler.TokenPrefix + _device.Token);
+        noPrint.Headers.TryAddWithoutValidation(TurnTokenEndpointFilter.HeaderName, t.Token);
+        (await _client.SendAsync(noPrint)).StatusCode.Should().Be(HttpStatusCode.Unauthorized, "без отпечатка машины");
+
+        var otherFp = new string('f', 64);
+        var (_, otherToken) = _device.Register("owner", "чужое", otherFp);
+        var foreign = GatewayTestDevice.Sign(
+            new HttpRequestMessage(HttpMethod.Get, $"/gw/t/{t.Grant.TurnId}/llm/api/hello"), otherToken, otherFp);
+        foreign.Headers.TryAddWithoutValidation(TurnTokenEndpointFilter.HeaderName, t.Token);
+        (await _client.SendAsync(foreign)).StatusCode.Should().Be(HttpStatusCode.Unauthorized, "токен привязан к другому устройству");
+
+        _device.Registry.Revoke("owner", _device.Id).Should().BeTrue();
+        (await _client.SendAsync(Req(HttpMethod.Get, t, "api/hello"))).StatusCode
+            .Should().Be(HttpStatusCode.Unauthorized, "устройство отозвано");
+        _upstream.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ТокенБезПривязкиКУстройству_401()
+    {
+        var start = _kit.Selector.StartTurn(_tokens, "owner", "chat", null, "sonnet");
+
+        (await _client.SendAsync(Req(HttpMethod.Get, start.Token!, "api/hello"))).StatusCode
+            .Should().Be(HttpStatusCode.Unauthorized, "шлюз принимает только токен, привязанный к устройству");
     }
 
     [Fact]
@@ -122,7 +165,6 @@ public sealed class LlmGatewayEndpointTests : IAsyncDisposable
         var t = Start("claude-opus-5-5");
         var req = Req(new HttpMethod(method), t, "v1/messages?beta=true",
             method is "GET" or "DELETE" ? null : """{"model":"claude-opus-5-5","max_tokens":1}""");
-        req.Headers.TryAddWithoutValidation("Authorization", "Bearer device-placeholder");
         req.Headers.TryAddWithoutValidation("x-api-key", "device-placeholder");
         req.Headers.TryAddWithoutValidation("anthropic-beta", "fine-grained-tool-streaming-2025-05-14");
 
@@ -136,6 +178,7 @@ public sealed class LlmGatewayEndpointTests : IAsyncDisposable
         up.Headers.GetValues("Authorization").Should().Equal($"Bearer tok-{key}");
         up.Headers.Contains("x-api-key").Should().BeFalse();
         up.Headers.Contains(TurnTokenEndpointFilter.HeaderName).Should().BeFalse("токен хода upstream не нужен");
+        up.Headers.Contains(TurnTokenEndpointFilter.DeviceFingerprintHeader).Should().BeFalse("учётка устройства upstream не нужна");
         string.Join(",", up.Headers.GetValues("anthropic-beta")).Split(',')
             .Should().Contain([LlmGatewayEndpoints.OAuthBeta, "fine-grained-tool-streaming-2025-05-14"]);
     }

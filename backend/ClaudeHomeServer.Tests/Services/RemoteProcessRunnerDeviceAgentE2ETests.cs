@@ -38,14 +38,16 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
     private static readonly TimeSpan Wait = TimeSpan.FromSeconds(30);
 
     private const string SetupToken = "sk-ant-oat01-E2E-SETUP-TOKEN-5d1e";
-    private const string DeviceToken = "device-token-E2E-77aa";
     private const string ServiceJwt = "eyJhbGciOiJIUzI1NiJ9.E2E-SERVICE-JWT.sig";
     private const string SessionId = "chat-e2e";
     private const string UpstreamText = "привет от upstream";
 
     private readonly string _root = Path.Combine(Path.GetTempPath(), "device-e2e-" + Guid.NewGuid().ToString("N")[..10]);
     private readonly GatewayTestKit _kit = new(("st1", SetupToken, null));
-    private readonly TurnTokenService _tokens = new(new TurnEventBus());
+    private readonly TurnEventBus _bus = new();
+    private readonly TurnTokenService _tokens;
+    // Настоящая учётка устройства: шлюз пускает токен хода только вместе с ней
+    private readonly GatewayTestDevice _device = new("owner-e2e");
     private readonly FakeUpstream _upstream = new();
     private readonly TurnGrants _grants = new();
 
@@ -94,12 +96,14 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
         }
     }
 
-    private sealed class Identity : IDeviceIdentity
+    private sealed class Identity(string deviceToken) : IDeviceIdentity
     {
         public Uri ServerUri { get; } = new("http://localhost/");
-        public string DeviceToken => RemoteProcessRunnerDeviceAgentE2ETests.DeviceToken;
-        public string Fingerprint => "fp-e2e";
+        public string DeviceToken => deviceToken;
+        public string Fingerprint => GatewayTestDevice.Fingerprint;
     }
+
+    public RemoteProcessRunnerDeviceAgentE2ETests() => _tokens = new TurnTokenService(_bus);
 
     private sealed class CliSource(string path) : ICliLeaseSource
     {
@@ -216,6 +220,7 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
         builder.Services.AddSingleton(_kit.Selector);
         builder.Services.AddSingleton(new SubscriptionLimitRecorder(_kit.Usage, _kit.Pool));
         builder.Services.AddHttpClient(LlmGatewayEndpoints.HttpClientName).ConfigurePrimaryHttpMessageHandler(() => _upstream);
+        _device.AddTo(builder.Services);
         _gatewayApp = builder.Build();
         _gatewayApp.MapLlmGateway();
         _gatewayApp.Map("/gw/t/{" + TurnTokenEndpointFilter.RouteKey + "}/mcp/{**rest}",
@@ -223,7 +228,7 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
             .AddEndpointFilter<TurnTokenEndpointFilter>();
         await _gatewayApp.StartAsync();
 
-        _sidecar = await SidecarHost.StartAsync(_grants, new Identity(), NullLoggerFactory.Instance,
+        _sidecar = await SidecarHost.StartAsync(_grants, new Identity(_device.Token), NullLoggerFactory.Instance,
             gatewayHandler: _gatewayApp.GetTestServer().CreateHandler());
 
         var inherited = new Dictionary<string, string>
@@ -245,7 +250,7 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
 
         _gateway = new SpyTurnGateway(new DeviceTurnGateway(_kit.Selector, _tokens));
         _channel = new AgentChannel(_executor);
-        _runner = new RemoteProcessRunner(_channel, _gateway, "owner-e2e", "dev-e2e");
+        _runner = new RemoteProcessRunner(_channel, _gateway, "owner-e2e", _device.Id);
     }
 
     public async Task DisposeAsync()
@@ -257,6 +262,7 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
         await _sidecar.DisposeAsync();
         await _gatewayApp.DisposeAsync();
         _kit.Dispose();
+        _device.Dispose();
         try { Directory.Delete(_root, recursive: true); } catch { }
     }
 
@@ -338,7 +344,8 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
 
         var issued = _gateway.Issued!;
         issued.Should().NotBeNull();
-        _tokens.Validate(issued.TurnId, issued.Token).Should().NotBeNull("токен выдан настоящим StartTurn");
+        _tokens.Validate(issued.TurnId, issued.Token, _device.Id).Should().NotBeNull("токен выдан настоящим StartTurn");
+        _tokens.Validate(issued.TurnId, issued.Token, "чужое-устройство").Should().BeNull("токен привязан к устройству хода");
 
         // LLM: CLI → сайдкар (/t/{ключ}/llm) → шлюз (/gw/t/{ход}/llm) → upstream с setup-token
         var llm = await AskAsync(p, "llm");
@@ -364,9 +371,7 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
         (await _gateway.Ended.Task.WaitAsync(Wait)).Should().Be(issued.TurnId);
         _tokens.ActiveCount.Should().Be(0);
         using var gw = _gatewayApp.GetTestClient();
-        using var late = new HttpRequestMessage(HttpMethod.Get, $"/gw/t/{issued.TurnId}/llm/api/hello");
-        late.Headers.TryAddWithoutValidation(TurnTokenEndpointFilter.HeaderName, issued.Token);
-        (await gw.SendAsync(late)).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        (await gw.SendAsync(GatewayRequest(issued))).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
 
         // Адресация сайдкара на обеих сторонах одна: env и конфиг MCP смотрят на /t/{ключ}
         var dump = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(_projectDir, "cli-dump.json")))!;
@@ -384,7 +389,7 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
             ["turnToken"] = issued.Token,
             ["setupToken"] = SetupToken,
             ["serviceJwt"] = ServiceJwt,
-            ["deviceToken"] = DeviceToken,
+            ["deviceToken"] = _device.Token,
             ["agentEnvKey"] = "sk-ant-api-AGENT-ENV-SECRET",
         };
         var report = DeviceSecretScanner.Scan(secrets, _deviceDir);
@@ -407,7 +412,7 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
 
         // Kill ищет ход по владельцу и TurnId, а не по объекту процесса
         using var unrelated = Process.Start(new ProcessStartInfo("node", ["-e", "setTimeout(()=>{}, 60000)"]))!;
-        new RemoteProcessRunner(_channel, _gateway, "owner-e2e", "dev-e2e").Kill(unrelated, "turn-e2e-kill");
+        new RemoteProcessRunner(_channel, _gateway, "owner-e2e", _device.Id).Kill(unrelated, "turn-e2e-kill");
 
         await p.WaitForExitAsync().WaitAsync(Wait);
         p.ExitCode.Should().NotBe(0);
@@ -416,8 +421,44 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
 
         var issued = _gateway.Issued!;
         (await _gateway.Ended.Task.WaitAsync(Wait)).Should().Be(issued.TurnId);
-        _tokens.Validate(issued.TurnId, issued.Token).Should().BeNull();
+        _tokens.Validate(issued.TurnId, issued.Token, _device.Id).Should().BeNull();
         _executor.LiveCount.Should().Be(0);
+    }
+
+    // Прямой звонок шлюзу с учёткой устройства хода: 401 здесь — только из-за токена
+    private HttpRequestMessage GatewayRequest(DeviceExecGateway issued)
+    {
+        var req = _device.Sign(new HttpRequestMessage(HttpMethod.Get, $"/gw/t/{issued.TurnId}/llm/api/hello"));
+        req.Headers.TryAddWithoutValidation(TurnTokenEndpointFilter.HeaderName, issued.Token);
+        return req;
+    }
+
+    // ADR-016 §2: ClaudeSession держит один процесс CLI на много ходов — токен живёт по
+    // процессу, а не по ходу: конец хода его не гасит, kill процесса — гасит
+    [SkippableFact]
+    public async Task ДваХодаВОдномПроцессе_ОбаПроходятШлюз_ПослеKillПроцесса401()
+    {
+        Skip.If(OperatingSystem.IsWindows(), "фейковый CLI — скрипт с shebang, дерево процессов — группа Unix");
+
+        using var p = _runner.Start(Spec("turn-e2e-two"));
+        ((string?)(await ReadJsonAsync(p))["subtype"]).Should().Be("init");
+        var issued = _gateway.Issued!;
+
+        var first = await AskAsync(p, "llm");
+        ((int?)first["status"]).Should().Be(200, (string?)first["body"]);
+        await _bus.PublishAsync(new TurnCompleted(new TurnContext(SessionId, "owner-e2e", 1, 0), "success"));
+
+        var second = await AskAsync(p, "llm");
+        ((int?)second["status"]).Should().Be(200, "второй ход того же процесса: " + (string?)second["body"]);
+        var mcp = await AskAsync(p, "mcp");
+        ((int?)mcp["status"]).Should().Be(200, (string?)mcp["body"]);
+        lock (_upstream.Calls) _upstream.Calls.Should().HaveCount(2);
+
+        _runner.Kill(p, "turn-e2e-two");
+        await p.WaitForExitAsync().WaitAsync(Wait);
+        (await _gateway.Ended.Task.WaitAsync(Wait)).Should().Be(issued.TurnId);
+        using var gw = _gatewayApp.GetTestClient();
+        (await gw.SendAsync(GatewayRequest(issued))).StatusCode.Should().Be(HttpStatusCode.Unauthorized, "процесс убит");
     }
 
     [Fact]

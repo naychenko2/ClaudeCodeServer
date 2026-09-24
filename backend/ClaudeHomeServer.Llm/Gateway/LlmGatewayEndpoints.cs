@@ -34,7 +34,8 @@ public static class LlmGatewayEndpoints
     // токен хода и hop-by-hop. anthropic-beta собирается отдельно.
     private static readonly HashSet<string> DropRequestHeaders = new(StringComparer.OrdinalIgnoreCase)
     {
-        "Host", "Authorization", "x-api-key", TurnTokenEndpointFilter.HeaderName, "anthropic-beta",
+        "Host", "Authorization", "x-api-key", TurnTokenEndpointFilter.HeaderName,
+        TurnTokenEndpointFilter.DeviceFingerprintHeader, "anthropic-beta",
         "Connection", "Keep-Alive", "Proxy-Authorization", "Proxy-Connection", "TE", "Trailer",
         "Transfer-Encoding", "Upgrade", "Content-Length", "Cookie",
     };

@@ -66,12 +66,12 @@ public class UpstreamSelector(
     // Точка входа старта хода через шлюз: маршрут решается и привязывается к токену ДО запуска
     // CLI. Подходящего маршрута нет — токена нет, ход не стартует.
     public GatewayTurnStart StartTurn(TurnTokenService tokens, string ownerId, string sessionId,
-        string? deviceId, string? model)
+        string? deviceId, string? model, TurnTokenLifetime lifetime = TurnTokenLifetime.Turn)
     {
         var decision = SelectRoute(model);
         return decision.Route is null
             ? new(null, decision.FailureText)
-            : new(tokens.Issue(ownerId, sessionId, deviceId, decision.Route), null);
+            : new(tokens.Issue(ownerId, sessionId, deviceId, decision.Route, lifetime), null);
     }
 
     public GatewayUpstreamDecision ResolveUpstream(GatewayRoute route)

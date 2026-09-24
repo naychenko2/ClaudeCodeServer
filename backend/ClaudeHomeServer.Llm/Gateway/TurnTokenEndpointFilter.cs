@@ -22,6 +22,16 @@ public sealed class TurnTokenEndpointFilter(TurnTokenService tokens) : IEndpoint
     public async ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
     {
         var http = context.HttpContext;
+        var grant = await AuthorizeAsync(http, tokens);
+        if (grant is null) return Results.Unauthorized();
+        http.Items[typeof(TurnTokenGrant)] = grant;
+        return await next(context);
+    }
+
+    // Та же проверка для входов, которые живут не на фильтре эндпоинта (туннель выхода — ветка
+    // с WebSocket-мидлварой). null — отказ, 401 отвечает вызывающий.
+    internal static async Task<TurnTokenGrant?> AuthorizeAsync(HttpContext http, TurnTokenService tokens)
+    {
         var deviceId = await AuthenticatedDeviceAsync(http);
         var grant = deviceId is null
             ? null
@@ -30,10 +40,7 @@ public sealed class TurnTokenEndpointFilter(TurnTokenService tokens) : IEndpoint
                 http.Request.Headers[HeaderName].ToString(),
                 deviceId);
         // Validate пропускает токен без привязки к устройству — шлюзу такой не годится
-        if (grant is null || !string.Equals(grant.DeviceId, deviceId, StringComparison.Ordinal))
-            return Results.Unauthorized();
-        http.Items[typeof(TurnTokenGrant)] = grant;
-        return await next(context);
+        return grant is not null && string.Equals(grant.DeviceId, deviceId, StringComparison.Ordinal) ? grant : null;
     }
 
     private static async Task<string?> AuthenticatedDeviceAsync(HttpContext http)

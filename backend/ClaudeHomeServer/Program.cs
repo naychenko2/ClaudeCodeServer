@@ -2068,7 +2068,11 @@ if (app.Services.GetService<ClaudeHomeServer.Services.Llm.Gateway.UpstreamSelect
 // Шлюз MCP для хода на устройстве (ADR-016): вход по токену хода, а не по JWT.
 // Подсистема llm отключаемая — без неё нет и токенов хода.
 if (app.Services.GetService<ClaudeHomeServer.Services.Llm.Gateway.TurnTokenService>() is not null)
+{
     ClaudeHomeServer.Services.Llm.Gateway.McpGatewayEndpoints.MapMcpGateway(app);
+    // Туннель выхода собственного трафика CLI устройства: тумблер LlmGateway:Egress:Enabled
+    ClaudeHomeServer.Services.Llm.Gateway.EgressGatewayEndpoints.MapEgressGateway(app);
+}
 
 // Потоковый канал исполнения устройства (ADR-016): WebSocket, та же схема токена устройства
 app.MapDeviceExecChannel();

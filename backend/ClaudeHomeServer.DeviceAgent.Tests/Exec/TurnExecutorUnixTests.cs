@@ -72,7 +72,10 @@ public class TurnExecutorUnixTests
 
         dumped["ANTHROPIC_BASE_URL"].Should().StartWith(TurnHarness.SidecarUrl + "/t/").And.EndWith("/llm");
         dumped["ANTHROPIC_AUTH_TOKEN"].Should().Be(CliEnvironment.AuthPlaceholder);
-        dumped["HTTPS_PROXY"].Should().Be(TurnHarness.SidecarUrl);
+        // Прокси — тот же сайдкар с учёткой хода: по ней сайдкар опознаёт ход CONNECT
+        var turnKey = dumped["ANTHROPIC_BASE_URL"].Split('/')[^2];
+        dumped["HTTPS_PROXY"].Should().Be(DeviceEgressRoutes.ProxyUrl(TurnHarness.SidecarUrl, turnKey))
+            .And.Be($"http://turn:{turnKey}@127.0.0.1:65000");
         dumped["CLAUDE_CONFIG_DIR"].Should().Be(h.Profile);
         dumped["DISABLE_AUTOUPDATER"].Should().Be("1");
         dumped["DISABLE_UPDATES"].Should().Be("1");

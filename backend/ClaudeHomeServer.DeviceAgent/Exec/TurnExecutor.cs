@@ -238,7 +238,7 @@ internal sealed class TurnExecutor
             var args = workspace.ResolveArgs(spawn.Args);
             Directory.CreateDirectory(_options.ConfigDirectory);
             var env = CliEnvironment.Build(_options.IsWindows, _options.InheritedEnvironment(),
-                _options.ConfigDirectory, sidecarUrl, sidecarTurnUrl, spawn.Env);
+                _options.ConfigDirectory, DeviceEgressRoutes.ProxyUrl(sidecarUrl, grantKey), sidecarTurnUrl, spawn.Env);
 
             return new TurnSetup(cli, workspace, _grants, grantKey,
                 new TurnLaunch(cli.ExecutablePath, args, workingDirectory, env));

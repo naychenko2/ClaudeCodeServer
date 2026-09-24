@@ -125,8 +125,16 @@ jobs:
           cache-dependency-path: |
             backend/ClaudeHomeServer.DeviceAgent/ClaudeHomeServer.DeviceAgent.csproj
             backend/ClaudeHomeServer.DeviceAgent.Tests/ClaudeHomeServer.DeviceAgent.Tests.csproj
+      # Явный restore отдельным шагом: без него `dotnet build --no-restore` ниже упадёт
+      # на отсутствующем project.assets.json — на чистом раннере obj/ нет. Тот же csproj,
+      # что и Build, чтобы NuGet-кеш `setup-dotnet` (cache-dependency-path выше) попал
+      # точно в прогрев. Вынос restore из build держит его лог читаемым при разборе падений.
+      - name: Restore
+        run: dotnet restore backend/ClaudeHomeServer.DeviceAgent.Tests/ClaudeHomeServer.DeviceAgent.Tests.csproj
       # Сборка тестового проекта (DeviceAgent.Tests) подтянет DeviceAgent по ProjectReference
       # транзитивно. Отдельный шаг сборки основного проекта не нужен — он уже в графе.
+      # --no-restore обязателен: без него restore сольётся с build в один лог и провал
+      # restore в общем потоке не разобрать.
       - name: Build
         run: dotnet build backend/ClaudeHomeServer.DeviceAgent.Tests/ClaudeHomeServer.DeviceAgent.Tests.csproj -warnaserror --no-restore
       # console;verbosity=normal — имена тестов в логе. Счётчик skipped валится глазами,

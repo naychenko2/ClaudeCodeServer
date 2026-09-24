@@ -38,6 +38,10 @@ public class EgressAddressPolicy
             return IsForbiddenV4(new IPAddress(bytes[12..16]));
         if (bytes[0] == 0x20 && bytes[1] == 0x02)
             return IsForbiddenV4(new IPAddress(bytes[2..6]));
+        // Teredo 2001::/32 закрыт целиком: сервер Teredo и клиентский IPv4 в адресе ведут в
+        // туннель. Сравниваются ровно 32 бита — по 16 отрезали бы публичный 2001:4860:: и др.
+        if (bytes[0] == 0x20 && bytes[1] == 0x01 && bytes[2] == 0x00 && bytes[3] == 0x00)
+            return true;
         return false;
     }
 

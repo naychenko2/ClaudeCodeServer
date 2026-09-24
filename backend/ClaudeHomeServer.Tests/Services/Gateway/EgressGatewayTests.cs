@@ -74,6 +74,8 @@ public sealed class EgressGatewayTests : IDisposable
     [InlineData("::ffff:169.254.169.254")]
     [InlineData("64:ff9b::a00:1")]
     [InlineData("2002:c0a8:101::1")]
+    [InlineData("2001::1")]
+    [InlineData("2001:0:53aa:64c::1")]
     public void Внутренние_адреса_и_метаданные_облака_запрещены(string address) =>
         new EgressAddressPolicy().IsForbidden(IPAddress.Parse(address)).Should().BeTrue();
 
@@ -82,6 +84,9 @@ public sealed class EgressGatewayTests : IDisposable
     [InlineData("93.184.216.34")]
     [InlineData("172.32.0.1")]
     [InlineData("2606:4700::1111")]
+    [InlineData("2001:4860:4860::8888")]
+    [InlineData("2001:1::1")]
+    [InlineData("2001:db8::1")]
     public void Публичные_адреса_разрешены(string address) =>
         EgressAddressPolicy.IsForbiddenRange(IPAddress.Parse(address)).Should().BeFalse();
 

@@ -19,7 +19,7 @@ namespace ClaudeHomeServer.DeviceAgent;
 /// Точка входа агента устройства (ADR-016).
 ///
 ///   ai-home-agent pair --server https://host --code ABCD2345 [--name "Ноутбук"]
-///   ai-home-agent roots add|remove ПУТЬ | roots list
+///   ai-home-agent roots add ПУТЬ [--force] | roots remove ПУТЬ | roots list
 ///   ai-home-agent [run]
 ///
 /// Класс назван не <c>Program</c> и без top-level statements: иначе глобальный
@@ -57,7 +57,8 @@ public static class AgentProgram
     private static int Usage()
     {
         Console.Error.WriteLine("ai-home-agent pair --server https://host --code КОД [--name ИМЯ]");
-        Console.Error.WriteLine("ai-home-agent roots add|remove ПУТЬ");
+        Console.Error.WriteLine("ai-home-agent roots add ПУТЬ [--force]");
+        Console.Error.WriteLine("ai-home-agent roots remove ПУТЬ");
         Console.Error.WriteLine("ai-home-agent roots list");
         Console.Error.WriteLine("ai-home-agent [run]");
         return 64;
@@ -72,8 +73,14 @@ public static class AgentProgram
             case ["list"] or []:
                 foreach (var r in roots.Roots) Console.WriteLine(r);
                 return 0;
-            case ["add", var path]:
-                roots.Add(path);
+            case ["add", ..] when args[1..].Where(a => a != "--force").ToArray() is [var path]:
+                Console.Error.WriteLine("Внимание: " + AgentRootsStore.SharedWriteWarning);
+                try { roots.Add(path, force: args.Contains("--force")); }
+                catch (SharedRootException e)
+                {
+                    Console.Error.WriteLine(e.Message);
+                    return 1;
+                }
                 Console.WriteLine($"Разрешён корень {Path.GetFullPath(path)}");
                 return 0;
             case ["remove", var path]:

@@ -11,6 +11,10 @@ namespace ClaudeHomeServer.DeviceAgent.Composition;
 /// агента (<see cref="AgentPathPolicy"/>): разрешённые корни машины, реальный путь, потолки.
 /// Здесь ни одной собственной файловой операции — только проверка и делегирование
 /// <see cref="FileService"/>; это сторожит тест «только композиция».
+///
+/// Проверка пути (<see cref="Check"/>) и открытие — два шага, между ними ссылку можно
+/// подменить (TOCTOU). Поэтому <see cref="FileService"/> здесь всегда со сверщиком
+/// <see cref="AgentOpenedPathGuard"/>: судит то, что реально открылось, по дескриптору.
 /// </summary>
 internal sealed class AgentProjectFiles : IProjectFiles
 {
@@ -19,12 +23,15 @@ internal sealed class AgentProjectFiles : IProjectFiles
 
     public AgentProjectFiles(FileService files, AgentPathPolicy policy)
     {
-        _files = files;
+        _files = files.WithOpenedPathGuard(new AgentOpenedPathGuard());
         _policy = policy;
         _files.OnMutated += (root, rel, kind, newRel) => OnMutated?.Invoke(root, rel, kind, newRel);
     }
 
     public event Action<string, string, FileMutationKind, string?>? OnMutated;
+
+    /// <summary>Тестовый шов: между проверкой пути и операцией — окно TOCTOU.</summary>
+    internal Action<string>? AfterCheck { get; set; }
 
     public Task<IReadOnlyList<FileEntry>> ListAsync(Project project, string relativePath = "", bool showHidden = false, CancellationToken ct = default) =>
         Run(project, relativePath, (root, _) => _policy.Filter(root, _files.List(root, relativePath, showHidden)));
@@ -92,11 +99,7 @@ internal sealed class AgentProjectFiles : IProjectFiles
         Run(project, relativePath, (root, _) => _files.Delete(root, relativePath));
 
     public Task RenameAsync(Project project, string oldRelative, string newRelative, CancellationToken ct = default) =>
-        Run(project, oldRelative, (root, _) =>
-        {
-            _policy.Resolve(root, newRelative);
-            _files.Rename(root, oldRelative, newRelative);
-        });
+        Run(project, oldRelative, (root, _) => _files.Rename(root, oldRelative, newRelative), alsoCheck: newRelative);
 
     public async Task<string?> GetDiffAsync(Project project, string relativePath, CancellationToken ct = default)
     {
@@ -115,16 +118,28 @@ internal sealed class AgentProjectFiles : IProjectFiles
     }
 
     // Как у серверной реализации: исключение (включая отказ политики) уходит в задачу
-    private Task<T> Run<T>(Project project, string relativePath, Func<string, string, T> op)
+    private Task<T> Run<T>(Project project, string relativePath, Func<string, string, T> op, string? alsoCheck = null)
     {
         try
         {
             var (root, full) = Check(project, relativePath);
+            if (alsoCheck is not null) _policy.Resolve(root, alsoCheck);
+            AfterCheck?.Invoke(full);
             return Task.FromResult(op(root, full));
         }
         catch (Exception ex) { return Task.FromException<T>(ex); }
     }
 
-    private Task Run(Project project, string relativePath, Action<string, string> op) =>
-        Run<object?>(project, relativePath, (root, full) => { op(root, full); return null; });
+    private Task Run(Project project, string relativePath, Action<string, string> op, string? alsoCheck = null) =>
+        Run<object?>(project, relativePath, (root, full) => { op(root, full); return null; }, alsoCheck);
+}
+
+/// <summary>Открытый файл или каталог обязан лежать под реальным корнем проекта.</summary>
+internal sealed class AgentOpenedPathGuard : IOpenedPathGuard
+{
+    public void Verify(string rootPath, string openedPath)
+    {
+        if (!AgentPathPolicy.IsUnder(openedPath, rootPath))
+            throw new AgentPathRefusedException("Открылся файл за пределами проекта: ссылку подменили после проверки");
+    }
 }

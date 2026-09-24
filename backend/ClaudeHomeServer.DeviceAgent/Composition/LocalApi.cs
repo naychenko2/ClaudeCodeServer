@@ -37,6 +37,7 @@ internal static class LocalApi
 {
     public const string ProjectItem = "agent.project";
     public const string RootItem = "agent.root";
+    public const string GrantItem = "agent.grant";
 
     public static WebApplication Build(
         LocalApiOptions options,
@@ -45,8 +46,10 @@ internal static class LocalApi
         AgentTicketCache tickets,
         AgentFileWatchers? watchers,
         ILoggerFactory loggers,
-        Action<WebApplicationBuilder>? configure = null)
+        Action<WebApplicationBuilder>? configure = null,
+        AgentStreamTickets? streamTickets = null)
     {
+        streamTickets ??= new AgentStreamTickets();
         var builder = WebApplication.CreateSlimBuilder();
         builder.Logging.ClearProviders();
         builder.Services.AddSingleton(loggers);
@@ -66,11 +69,12 @@ internal static class LocalApi
         var log = loggers.CreateLogger("ai-home-agent.local-api");
 
         app.Use((ctx, next) => Perimeter(ctx, next, options));
-        app.Use((ctx, next) => Authorize(ctx, next, files, tickets, watchers));
+        app.Use((ctx, next) => Authorize(ctx, next, files, tickets, streamTickets, watchers));
         app.Use((ctx, next) => MapErrors(ctx, next, log));
 
         app.MapGet("/api/agent/health", () => Results.Ok(new { agent = "ai-home-agent", version = options.AgentVersion }));
         MapFiles(app.MapGroup("/api/projects/{projectId}/files"), files);
+        MapStreamTicket(app.MapGroup("/api/projects/{projectId}"), files, streamTickets);
         MapGit(app.MapGroup("/api/projects/{projectId}/git"), files, git);
         return app;
     }
@@ -124,7 +128,7 @@ internal static class LocalApi
     }
 
     private static async Task Authorize(HttpContext ctx, Func<Task> next, AgentProjectFiles files,
-        AgentTicketCache tickets, AgentFileWatchers? watchers)
+        AgentTicketCache tickets, AgentStreamTickets streamTickets, AgentFileWatchers? watchers)
     {
         var segments = ctx.Request.Path.Value?.Split('/', StringSplitOptions.RemoveEmptyEntries) ?? [];
         if (segments is not ["api", "projects", var projectId, ..])
@@ -133,12 +137,12 @@ internal static class LocalApi
             return;
         }
 
+        // Основной билет — только в заголовке. <video src>/<img src> заголовок не ставят: для
+        // отдачи потоком в URL едет отдельный узкий билет на один путь (DeviceAgentApi.StreamTicketQuery)
         var ticket = ctx.Request.Headers[DeviceAgentApi.TicketHeader].ToString();
-        // <video src>/<img src> заголовок не ставят: для отдачи потоком билет можно в запросе
-        if (ticket.Length == 0 && HttpMethods.IsGet(ctx.Request.Method) && segments is [.., "files", "stream"])
-            ticket = ctx.Request.Query["ticket"].ToString();
-
-        var grant = await tickets.ValidateAsync(ticket, ctx.RequestAborted);
+        var grant = ticket.Length == 0 && HttpMethods.IsGet(ctx.Request.Method) && segments is [_, _, _, "files", "stream"]
+            ? streamTickets.Validate(ctx.Request.Query[DeviceAgentApi.StreamTicketQuery], ctx.Request.Query["path"])
+            : await tickets.ValidateAsync(ticket, ctx.RequestAborted);
         if (grant is null)
         {
             await Error(ctx, StatusCodes.Status401Unauthorized, "Билет к агенту недействителен или истёк");
@@ -158,6 +162,7 @@ internal static class LocalApi
 
         ctx.Items[ProjectItem] = project;
         ctx.Items[RootItem] = root;
+        ctx.Items[GrantItem] = grant;
         watchers?.Touch(project.Id, root);
         await next();
     }
@@ -240,6 +245,17 @@ internal static class LocalApi
             return Results.Stream(file.Content, FileContentReader.StreamMime(path), enableRangeProcessing: true);
         });
     }
+
+    // ---------- билет потока: только агент, вне контракта FilesController ----------
+
+    private static void MapStreamTicket(RouteGroupBuilder g, AgentProjectFiles files, AgentStreamTickets streamTickets) =>
+        g.MapPost("/" + DeviceAgentApi.StreamTicketRoute, (HttpContext ctx, PathRequest req) =>
+        {
+            // Путь проходит ту же политику, что и сам поток: на путь наружу билета не будет
+            files.Check(ProjectOf(ctx), req.Path);
+            var (ticket, expiresAt) = streamTickets.Issue((AgentTicketIntrospection)ctx.Items[GrantItem]!, req.Path);
+            return Results.Ok(new { streamTicket = ticket, expiresAt });
+        });
 
     // ---------- git: контракт GitController (подмножество рабочего дерева) ----------
     // Мутации, как у сервера, отвечают свежим статусом: панель изменений перерисовывается по нему

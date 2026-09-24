@@ -80,4 +80,20 @@ public sealed class AgentTicketCacheTests
         await cache.ValidateAsync("bad", default);
         introspector.Calls.Should().Be(2);
     }
+
+    [Fact]
+    public async Task СбойКанала_КэшируетсяКакОтказ_ПовторНеБьётВСервер()
+    {
+        var clock = new Clock(T0);
+        var introspector = new Introspector(_ => throw new InvalidOperationException("канал упал"));
+        var cache = new AgentTicketCache(introspector, clock);
+
+        (await cache.ValidateAsync("t", default)).Should().BeNull();
+        (await cache.ValidateAsync("t", default)).Should().BeNull();
+        introspector.Calls.Should().Be(1);
+
+        clock.Now = T0.AddSeconds(11);
+        await cache.ValidateAsync("t", default);
+        introspector.Calls.Should().Be(2);
+    }
 }

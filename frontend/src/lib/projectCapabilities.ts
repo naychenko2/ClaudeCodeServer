@@ -17,6 +17,7 @@ import type {
   ProjectCapabilityGroup,
 } from '../types';
 import { ProjectFeature } from '../types';
+import { agentSupports, type DeviceAgentRoute } from './deviceAgentRoutes';
 
 // Состав групп возможностей — зеркало ProjectFeatures.FileBound/Platform/ServerContent
 // на бэке. Менять синхронно с ProjectFeatures.cs при расширении.
@@ -47,6 +48,17 @@ const SERVER_CONTENT_FEATURES: ProjectFeatureKey[] = [
   ProjectFeature.Docs,
   ProjectFeature.MapHygiene,
 ];
+
+// Что из группы files браузер уже умеет у локального проекта — через localhost-API агента
+// (задача 4.4). Терминал, дев-серверы, навыки и вложения агент пока не поднимает (4.3):
+// бэк считает их доступными вместе с группой, но фронту до них не достучаться — прячем.
+const DEVICE_AGENT_FEATURES: ProjectFeatureKey[] = [
+  ProjectFeature.Files,
+  ProjectFeature.Diff,
+  ProjectFeature.Git,
+  ProjectFeature.FileWatcher,
+];
+export const DEVICE_NOT_YET_REASON = 'У локального проекта пока недоступно: агент устройства этого ещё не умеет';
 
 // Серверный проект без capabilities (старый бэк): всё доступно, матрица пустая.
 // Это ЕДИНСТВЕННОЕ место, где мы «придумываем» матрицу; остальной код видит то,
@@ -91,6 +103,7 @@ export function isFeatureAvailable(project: Project | null | undefined, feature:
   const cap = getProjectCapabilities(project);
   const group = findGroup(cap, feature);
   if (!group) return false;
+  if (group.host === 'device' && !DEVICE_AGENT_FEATURES.includes(feature)) return false;
   return group.available && group.features.includes(feature);
 }
 
@@ -101,8 +114,23 @@ export function featureReason(project: Project | null | undefined, feature: Proj
   const group = findGroup(cap, feature);
   if (!group) return 'Возможность недоступна в этой версии';
   if (!group.features.includes(feature)) return null; // ключ не в этой группе — не показываем
-  if (group.available) return null;
-  return group.reason;
+  if (!group.available) return group.reason;
+  if (group.host === 'device' && !DEVICE_AGENT_FEATURES.includes(feature)) return DEVICE_NOT_YET_REASON;
+  return null;
+}
+
+// Куда ходят запросы файлов и git проекта: на сервер или в агента устройства на этой
+// машине. ЕДИНСТВЕННОЕ место этого решения — api.ts берёт его отсюда через deviceAgent.ts.
+export type ProjectFilesRoute = 'server' | 'agent';
+
+export function projectFilesRoute(project: Project | null | undefined): ProjectFilesRoute {
+  return getProjectCapabilities(project).host === 'device' ? 'agent' : 'server';
+}
+
+// Есть ли у проекта действие на маршруте файлов/git. У серверного — все, у локального — только
+// то, что умеет агент (список в deviceAgentRoutes.ts). Кнопку без маршрута панель прячет.
+export function projectSupportsRoute(project: Project | null | undefined, route: DeviceAgentRoute): boolean {
+  return projectFilesRoute(project) === 'server' || agentSupports(route);
 }
 
 // Где работает ключ — сервер/устройство/выключено. Полезно для бейджей («на устройстве»).

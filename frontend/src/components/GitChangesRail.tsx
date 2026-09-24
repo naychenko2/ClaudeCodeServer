@@ -17,7 +17,8 @@ import {
 import type { Project, GitFileChange, GitLogEntry, GitStashEntry, ChangedBySession, ProjectFeatureKey } from '../types';
 import { ProjectFeature } from '../types';
 import { api } from '../lib/api';
-import { useProjectFeature, featureReason } from '../lib/projectCapabilities';
+import { useProjectFeature, featureReason, projectSupportsRoute } from '../lib/projectCapabilities';
+import { DeviceAgentGate } from './DeviceAgentGate';
 import { C, R, FS, SP, FONT, MODAL_W } from '../lib/design';
 import {
   useGitState, ensureGit, loadUnpushedLog, loadGitLog, loadGitRemote, loadGitBranches, loadGitStash,
@@ -221,13 +222,25 @@ function buildTree(files: RowFile[]): TreeNode[] {
   return sortRec(root.children);
 }
 
-export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, activeFilePath, activeCommitSha, onCommit, onScopeChange, changedBy }: Props) {
-  // Гейт по матрице (ADR-016 §3.4): git у локального проекта живёт в агенте устройства,
-  // не на сервере — здесь показываем причину. Все хуки ВЫШЕ условного return
-  const gitGate = useProjectFeature(project, ProjectFeature.Git);
-  const gitGateReason = featureReason(project, ProjectFeature.Git);
+// Гейт по матрице (ADR-016 §3.4): git у локального проекта живёт в агенте устройства —
+// недоступен он, показываем причину; доступен, но агент на этой машине не ответил —
+// состояние связи (DeviceAgentGate). Хуки панели — в GitChangesRailBody
+export function GitChangesRail(props: Props) {
+  const gitGate = useProjectFeature(props.project, ProjectFeature.Git);
+  if (!gitGate) return <CapabilityGateFallback feature={ProjectFeature.Git} reason={featureReason(props.project, ProjectFeature.Git)} />;
+  return <DeviceAgentGate project={props.project}><GitChangesRailBody {...props} /></DeviceAgentGate>;
+}
+
+function GitChangesRailBody({ project, onOpenDiff, onOpenFile, onOpenCommit, activeFilePath, activeCommitSha, onCommit, onScopeChange, changedBy }: Props) {
   const st = useGitState(project.id);
-  if (!gitGate) return <CapabilityGateFallback feature={ProjectFeature.Git} reason={gitGateReason} />;
+  // Действия, которых нет у агента устройства, у локального проекта не показываем
+  // (список — deviceAgentRoutes.ts); у серверного проекта доступно всё
+  const canRemote = projectSupportsRoute(project, 'POST git/push');
+  const canBranchOps = projectSupportsRoute(project, 'POST git/checkout');
+  const canDiscardAll = projectSupportsRoute(project, 'POST git/discard-all');
+  const canAiMessage = projectSupportsRoute(project, 'POST git/ai/commit-message');
+  const canSaveNow = projectSupportsRoute(project, 'POST git/save-now');
+  const canRepoSettings = projectSupportsRoute(project, 'GET git/commit-prompt');
   const status = st.status;
   // Пути активного чата (lowercase) — тогл «только файлы чата» и признак mine у бейджа.
   // Серверный источник (changed-by: история чата минус зафиксированное в git) — фронтовый
@@ -900,10 +913,10 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
             дереве, когда формы фиксации (её прежней точки входа) на экране нет.
             anchor-режим меню — слот шапки лежит внутри карточки с transform,
             и absolute-позиционирование уехало бы вместе с ней */}
-        <IconButton size="xs" title="Настройки репозитория" active={!!repoMenu}
+        {canRepoSettings && <IconButton size="xs" title="Настройки репозитория" active={!!repoMenu}
           onClick={e => setRepoMenu(repoMenu ? null : e.currentTarget.getBoundingClientRect())}>
           <Settings size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-        </IconButton>
+        </IconButton>}
     </>
   );
 
@@ -1166,7 +1179,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
               ? 'Все изменения сохранены — история ведётся автоматически'
               : `Изменений: ${pendingCount} — сохранятся после хода ИИ`}
           </span>
-          {pendingCount > 0 && (
+          {pendingCount > 0 && canSaveNow && (
             <Button size="sm" variant="primary" disabled={savingNow || st.busy} onClick={() => void handleSaveNow()}>
               {savingNow ? 'Сохраняю…' : 'Сохранить сейчас'}
             </Button>
@@ -1195,7 +1208,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
               minHeight={commitBodyH}
               style={{ paddingRight: 34 }}
             />
-            <span
+            {canAiMessage && <span
               onClick={() => { if (!aiBusy) void handleAi(); }}
               title="Сгенерировать описание"
               style={{ position: 'absolute', right: 9, top: 9, cursor: 'pointer', display: 'flex' }}
@@ -1203,7 +1216,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
               {aiBusy
                 ? <span style={{ width: 13, height: 13, borderRadius: '50%', border: `2px solid ${C.track}`, borderTopColor: C.accent, animation: 'cc-spin 0.6s linear infinite' }} />
                 : <Sparkles size={15} strokeWidth={ICON_STROKE} color={C.accent} />}
-            </span>
+            </span>}
           </div>
           {/* Действия: настройки слева; делегирование чату + «Зафиксировать» справа
               в один ряд. nowrap + primary flexShrink:0 — «Зафиксировать» всегда стоит
@@ -1277,10 +1290,10 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
                     Главное действие — крайним справа, разрушительное перед ним */}
                 {workingFiles.length > 0 && isWorking && (
                   <>
-                    <IconButton size="xs" title="Отменить все изменения"
+                    {canDiscardAll && <IconButton size="xs" title="Отменить все изменения"
                       onClick={e => { e.stopPropagation(); setDiscardAllConfirm(true); }}>
                       <Undo2 size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-                    </IconButton>
+                    </IconButton>}
                     <button
                       onClick={e => { e.stopPropagation(); void openCommitForm(); }}
                       title="Зафиксировать изменения"
@@ -1415,6 +1428,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
               </div>
               {/* Вертикальный разделитель отбивает стрелку от тела — видно, что это
                   отдельное действие (меню веток), а не часть выбора скоупа */}
+              {canBranchOps && <>
               <div style={{ width: 1, flexShrink: 0, background: (isBranch || branchMenu) ? C.accentMuted : C.border }} />
               <button
                 onClick={e => { e.stopPropagation(); openBranchMenu(e.currentTarget.getBoundingClientRect()); }}
@@ -1427,6 +1441,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
               >
                 <ChevronDown size={14} strokeWidth={ICON_STROKE} color={(branchMenu || isBranch) ? C.accent : C.textMuted} />
               </button>
+              </>}
             </div>
             {/* anchor-режим (портал по якорю стрелки): панель живёт в карточке с
                 transform, и absolute-меню обрезалось её рамками — как у repoMenu */}
@@ -1451,6 +1466,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
           </div>
           {/* Обмен с remote по нарастанию: сначала лёгкий fetch, за ним pull */}
           {/* Габарит кнопок ряда — ровно ROW_H, как у капсулы слева и строк скоупов выше */}
+          {canRemote && <>
           <IconButton size="xs" title="Проверить обновления (fetch)" disabled={st.busy}
             style={{ width: ROW_H, height: ROW_H }} onClick={() => void gitFetch(project.id)}>
             <RefreshCw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
@@ -1481,6 +1497,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
             <UploadCloud size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
             {!compactActions && 'Опубликовать'}
           </button>
+          </>}
         </div>
       </div>
       )}

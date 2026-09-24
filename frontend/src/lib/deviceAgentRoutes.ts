@@ -1,0 +1,110 @@
+// Маршруты файлов и git, которые умеет localhost-API агента устройства (ADR-016, задача 4.4).
+// Зеркало DeviceAgentRoutes из backend/ClaudeHomeServer.Core/Protocol/ProjectFilesApiContract.cs:
+// рассинхрон ловит контракт-тест deviceAgentRoutes.contract.test.ts. Это ЕДИНСТВЕННЫЙ список
+// на фронте — компоненты спрашивают agentSupports(), а не держат свои перечни.
+//
+// Шаблон — путь относительно api/projects/{projectId}/, параметры в фигурных скобках
+// ({sha}, {index:int}) совпадают с любым одним сегментом.
+
+export const DEVICE_AGENT_SHARED = [
+  'GET files',
+  'GET files/tree',
+  'GET files/search',
+  'GET files/content',
+  'PUT files/content',
+  'GET files/diff',
+  'POST files/revert',
+  'POST files/create',
+  'POST files/mkdir',
+  'POST files/rename',
+  'DELETE files',
+  'GET files/stream',
+
+  'GET git/status',
+  'GET git/diff',
+  'GET git/log',
+  'GET git/branches',
+  'POST git/stage',
+  'POST git/unstage',
+  'POST git/discard',
+  'POST git/commit',
+] as const;
+
+export const DEVICE_AGENT_UNSUPPORTED = [
+  'POST files/upload',
+  'POST files/save-from-url',
+  'POST files/changed-by',
+  'GET files/office-download',
+  'GET files/office-config',
+  'POST files/office-callback',
+  'POST files/office-discard',
+  'POST files/office-force-save',
+  'GET files/office-version',
+  'POST files/document/convert',
+  'POST files/document/summary',
+  'POST files/document/extract',
+  'POST files/document/to-markdown',
+  'POST files/document/tags',
+
+  'GET git/unpushed',
+  'GET git/commits/{sha}',
+  'GET git/commits/{sha}/diff',
+  'GET git/commits/{sha}/file',
+  'POST git/commits/{sha}/restore-file',
+  'POST git/commits/{sha}/revert',
+  'GET git/file-log',
+  'GET git/blame',
+  'POST git/stage-all',
+  'POST git/discard-all',
+  'POST git/stage-hunk',
+  'POST git/unstage-hunk',
+  'POST git/save-now',
+  'GET git/stash',
+  'GET git/stash/{index:int}',
+  'POST git/stash',
+  'POST git/stash/{index:int}/pop',
+  'DELETE git/stash/{index:int}',
+  'POST git/checkout',
+  'POST git/branches',
+  'POST git/fetch',
+  'POST git/pull',
+  'POST git/push',
+  'POST git/sync',
+  'POST git/init',
+  'GET git/remote',
+  'POST git/remote',
+  'POST git/remote/server',
+  'GET git/forgejo-credentials',
+  'POST git/forgejo-credentials/reset',
+  'PUT git/auto-commit',
+  'POST git/ai/commit-message',
+  'POST git/ai/detect-commit-style',
+  'POST git/ai/stash-name',
+  'GET git/commit-prompt',
+  'PUT git/commit-prompt',
+] as const;
+
+export type DeviceAgentRoute = (typeof DEVICE_AGENT_SHARED)[number] | (typeof DEVICE_AGENT_UNSUPPORTED)[number];
+
+function templateRegex(route: string): RegExp {
+  const [method, template] = route.split(' ');
+  const body = template.split('/')
+    .map(seg => (seg.startsWith('{') ? '[^/]+' : seg.replace(/[.*+?^$()|[\]\\]/g, '\\$&')))
+    .join('/');
+  return new RegExp(`^${method} ${body}$`);
+}
+
+const SHARED_RE = DEVICE_AGENT_SHARED.map(templateRegex);
+
+// Есть ли у агента конкретный запрос: метод и путь относительно api/projects/{id}/ без query.
+// Незнакомый маршрут — «нет»: новый серверный маршрут без решения по агенту не уедет в агента
+// и не упадёт там невнятным 404.
+export function agentServesPath(method: string, path: string): boolean {
+  const key = `${method.toUpperCase()} ${path.replace(/^\/+|\/+$/g, '')}`;
+  return SHARED_RE.some(re => re.test(key));
+}
+
+// Есть ли у агента маршрут по его шаблону из списков выше — для гейта кнопок в панелях.
+export function agentSupports(route: DeviceAgentRoute): boolean {
+  return (DEVICE_AGENT_SHARED as readonly string[]).includes(route);
+}

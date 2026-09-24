@@ -1,0 +1,145 @@
+using System.Buffers;
+using System.IO.Pipelines;
+using System.Net.Sockets;
+using System.Text;
+using Microsoft.AspNetCore.Connections;
+using Microsoft.Extensions.Logging;
+
+namespace ClaudeHomeServer.DeviceAgent.Sidecar;
+
+/// <summary>
+/// <c>HTTPS_PROXY</c> CLI смотрит в сайдкар (ADR-016 §2): прочий HTTPS-трафик CLI (WebFetch,
+/// телеметрия) приходит сюда запросом <c>CONNECT host:port</c>. Kestrel такой запрос
+/// принимает, но сырого потока не отдаёт, поэтому туннель живёт на уровне соединения:
+/// первые байты подсматриваются, <c>CONNECT</c> обслуживается здесь, всё прочее уходит в
+/// обычный HTTP-конвейер сайдкара нетронутым.
+///
+/// Это маршрутизация, а не граница (ADR-016: трафик Bash харнеса мимо прокси допустим):
+/// туннель ведёт наружу напрямую с машины, учётных данных в нём нет — TLS идёт насквозь.
+/// </summary>
+internal static class ConnectTunnel
+{
+    private const int MaxHeadBytes = 8 * 1024;
+    private static readonly byte[] ConnectPrefix = "CONNECT "u8.ToArray();
+    private static readonly byte[] HeadEnd = "\r\n\r\n"u8.ToArray();
+
+    public static Func<ConnectionDelegate, ConnectionDelegate> Middleware(ILogger log, Func<int> ownPort) =>
+        next => async context =>
+        {
+            var input = context.Transport.Input;
+            while (true)
+            {
+                var result = await input.ReadAsync(context.ConnectionClosed);
+                var buffer = result.Buffer;
+                var decided = Decide(buffer, out var isConnect, out var headLength);
+
+                if (!decided && !result.IsCompleted && buffer.Length < MaxHeadBytes)
+                {
+                    // Мало байт для решения — ничего не потребляем, ждём ещё
+                    input.AdvanceTo(buffer.Start, buffer.End);
+                    continue;
+                }
+
+                if (!decided || !isConnect)
+                {
+                    input.AdvanceTo(buffer.Start);
+                    await next(context);
+                    return;
+                }
+
+                var head = Encoding.ASCII.GetString(buffer.Slice(0, headLength).ToArray());
+                input.AdvanceTo(buffer.GetPosition(headLength));
+                await ServeAsync(context, head, log, ownPort());
+                return;
+            }
+        };
+
+    // Решено ли по уже пришедшим байтам: не CONNECT — сразу по префиксу; CONNECT — когда
+    // пришёл весь заголовок запроса
+    internal static bool Decide(ReadOnlySequence<byte> buffer, out bool isConnect, out int headLength)
+    {
+        isConnect = false;
+        headLength = 0;
+        var probeLength = (int)Math.Min(buffer.Length, ConnectPrefix.Length);
+        var probe = buffer.Slice(0, probeLength).ToArray();
+        if (!ConnectPrefix.AsSpan(0, probeLength).SequenceEqual(probe)) return true;
+        if (probeLength < ConnectPrefix.Length) return false;
+
+        var reader = new SequenceReader<byte>(buffer);
+        if (!reader.TryReadTo(out ReadOnlySequence<byte> _, HeadEnd, advancePastDelimiter: true)) return false;
+        isConnect = true;
+        headLength = (int)reader.Consumed;
+        return true;
+    }
+
+    internal static bool TryParseTarget(string head, out string host, out int port)
+    {
+        host = "";
+        port = 0;
+        var firstLine = head.Split("\r\n", 2)[0];
+        var parts = firstLine.Split(' ');
+        if (parts.Length != 3 || parts[0] != "CONNECT" || !parts[2].StartsWith("HTTP/1.", StringComparison.Ordinal))
+            return false;
+
+        var authority = parts[1];
+        var colon = authority.LastIndexOf(':');
+        if (colon <= 0 || !int.TryParse(authority[(colon + 1)..], out port) || port is < 1 or > 65535) return false;
+        host = authority[..colon].Trim('[', ']');
+        return host.Length > 0 && Uri.CheckHostName(host) != UriHostNameType.Unknown;
+    }
+
+    private static async Task ServeAsync(ConnectionContext context, string head, ILogger log, int ownPort)
+    {
+        var output = context.Transport.Output;
+        if (!TryParseTarget(head, out var host, out var port))
+        {
+            await WriteStatusAsync(output, "400 Bad Request");
+            return;
+        }
+
+        // Туннель на самого себя — петля, а не маршрут
+        if (port == ownPort && host is "127.0.0.1" or "localhost" or "::1")
+        {
+            await WriteStatusAsync(output, "403 Forbidden");
+            return;
+        }
+
+        using var client = new TcpClient();
+        try
+        {
+            using var connectTimeout = CancellationTokenSource.CreateLinkedTokenSource(context.ConnectionClosed);
+            connectTimeout.CancelAfter(TimeSpan.FromSeconds(15));
+            await client.ConnectAsync(host, port, connectTimeout.Token);
+        }
+        catch (Exception e) when (e is SocketException or OperationCanceledException)
+        {
+            log.LogInformation("Сайдкар: CONNECT {Host}:{Port} не удался: {Error}", host, port, e.Message);
+            await WriteStatusAsync(output, "502 Bad Gateway");
+            return;
+        }
+
+        log.LogDebug("Сайдкар: туннель CONNECT {Host}:{Port}", host, port);
+        await WriteStatusAsync(output, "200 Connection Established");
+
+        var remote = client.GetStream();
+        using var done = CancellationTokenSource.CreateLinkedTokenSource(context.ConnectionClosed);
+        var up = context.Transport.Input.CopyToAsync(remote, done.Token);
+        var down = remote.CopyToAsync(context.Transport.Output, done.Token);
+        try
+        {
+            await Task.WhenAny(up, down);
+        }
+        finally
+        {
+            await done.CancelAsync();
+            try { await Task.WhenAll(up, down); }
+            catch (Exception) { /* одна сторона закрылась — туннель окончен */ }
+        }
+    }
+
+    private static async Task WriteStatusAsync(PipeWriter output, string status)
+    {
+        await output.WriteAsync(Encoding.ASCII.GetBytes($"HTTP/1.1 {status}\r\n\r\n"));
+        await output.FlushAsync();
+    }
+}

@@ -1,18 +1,30 @@
-<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <!-- Агент устройства локальных проектов (ADR-016). Проект заведён задачей 2.6 ради
-         управляемой копии CLI (Cli/); точку входа, исполнение и сайдкар добавляет 2.2. -->
+    <!-- Агент устройства локальных проектов (ADR-016): хост на 127.0.0.1 — канал
+         управления (SignalR), канал исполнения, сайдкар. Управляемая копия CLI — Cli/
+         (задача 2.6), исполнение и сайдкар — задача 2.2. -->
+    <OutputType>Exe</OutputType>
     <RootNamespace>ClaudeHomeServer.DeviceAgent</RootNamespace>
+    <AssemblyName>ai-home-agent</AssemblyName>
+    <EnableDefaultContentItems>false</EnableDefaultContentItems>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
     <!-- Проверка OpenPGP-подписи манифеста выпуска CLI (задача 2.7): внешнего gpg на Windows нет. -->
     <PackageReference Include="BouncyCastle.Cryptography" Version="2.7.0" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
+    <!-- Канал управления — тот же хаб /hubs/devices, что у клиента рук ADR-008. -->
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Только спинка: протокол канала устройства (кадры exec, hello) — единый источник
+         правды для обеих сторон. Ссылок на Main и вертикали сервера у агента нет. -->
+    <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>

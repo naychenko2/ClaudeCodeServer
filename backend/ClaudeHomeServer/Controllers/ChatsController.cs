@@ -630,14 +630,9 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
         var root = sessions.GetChatRoot(id, UserId);
         if (root is null) return NotFound();
 
-        // Path.GetFileName защищает от path-сегментов в имени файла (../evil)
-        var safeName = Path.GetFileName(file.FileName);
-        if (string.IsNullOrEmpty(safeName))
+        // Правило пути одно с агентом устройства: {AttachmentsDir}/{guid}/{имя файла}
+        if (AttachmentsGitExclude.AttachmentPath(file.FileName) is not { } rel)
             return BadRequest(new { error = "Некорректное имя файла" });
-
-        // Уникальность — через подпапку с GUID, чтобы сохранить оригинальное имя файла
-        // (на плашке в чате показывается basename = оригинальное имя, и Claude видит его же)
-        var rel = $"{FileService.AttachmentsDir}/{Guid.NewGuid():N}/{safeName}";
 
         // Вложения не должны светиться в git-статусе проекта и уезжать в историю по `git add -A`.
         // Лениво, до записи файла: у проекта со своим .gitignore дефолтный игнор не создавался.

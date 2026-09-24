@@ -1,3 +1,6 @@
+using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Composition;
+
 namespace ClaudeHomeServer.Services.Skills;
 
 public class SkillInfo
@@ -50,9 +53,18 @@ public class SkillsService
     // (например /panel-of-experts). Метаданные — из литерала `export const meta = {...}`
     // в начале скрипта (name/description); парсим эвристикой по строковым литералам,
     // полноценный JS-парсер не нужен (meta по контракту — чистый литерал).
-    public IReadOnlyList<SkillInfo> GetGlobalWorkflows()
+    public IReadOnlyList<SkillInfo> GetGlobalWorkflows() => ReadWorkflowsFrom(GlobalWorkflowsDir);
+
+    // Workflow-скрипты и плагины конкретного профиля CLI — как GetSkillsInConfigRoot: у агента
+    // устройства CLI ходит со своим CLAUDE_CONFIG_DIR, и каталог хоста ему не указ (ADR-016)
+    public IReadOnlyList<SkillInfo> GetWorkflowsInConfigRoot(string configRoot) =>
+        ReadWorkflowsFrom(Path.Combine(configRoot, "workflows"));
+
+    public IReadOnlyList<SkillInfo> GetPluginSkillsInConfigRoot(string configRoot) =>
+        ReadPluginSkillsFrom(Path.Combine(configRoot, "plugins", "installed_plugins.json"));
+
+    private static IReadOnlyList<SkillInfo> ReadWorkflowsFrom(string dir)
     {
-        var dir = GlobalWorkflowsDir;
         if (!Directory.Exists(dir)) return [];
 
         var result = new List<SkillInfo>();
@@ -82,9 +94,10 @@ public class SkillsService
     // Источник — ~/.claude/plugins/installed_plugins.json (v2): plugins → "имя@marketplace" →
     // [{ installPath }]. Имена отдаём с namespace «плагин:имя» — ровно так их вызывает CLI
     // (/oh-my-claudecode:autopilot), поэтому вставка из попапа «/» работает как есть.
-    public IReadOnlyList<SkillInfo> GetPluginSkills()
+    public IReadOnlyList<SkillInfo> GetPluginSkills() => ReadPluginSkillsFrom(InstalledPluginsManifest);
+
+    private static IReadOnlyList<SkillInfo> ReadPluginSkillsFrom(string manifest)
     {
-        var manifest = InstalledPluginsManifest;
         if (!File.Exists(manifest)) return [];
 
         var result = new List<SkillInfo>();
@@ -169,21 +182,22 @@ public class SkillsService
         {
             var skillFile = Path.Combine(skillDir, "SKILL.md");
             if (!File.Exists(skillFile)) continue;
-            try
-            {
-                var content = File.ReadAllText(skillFile);
-                var meta = ParseFrontmatter(content);
-                result.Add(new SkillInfo
-                {
-                    Name = meta.TryGetValue("name", out var n) ? n : Path.GetFileName(skillDir),
-                    Description = meta.TryGetValue("description", out var d) ? d : "",
-                    ArgumentHint = meta.TryGetValue("argument-hint", out var ah) ? ah : null,
-                    FilePath = skillFile,
-                });
-            }
+            try { result.Add(SkillFrom(File.ReadAllText(skillFile), Path.GetFileName(skillDir), skillFile)); }
             catch { }
         }
         return result;
+    }
+
+    private static SkillInfo SkillFrom(string content, string folderName, string filePath)
+    {
+        var meta = ParseFrontmatter(content);
+        return new SkillInfo
+        {
+            Name = meta.TryGetValue("name", out var n) ? n : folderName,
+            Description = meta.TryGetValue("description", out var d) ? d : "",
+            ArgumentHint = meta.TryGetValue("argument-hint", out var ah) ? ah : null,
+            FilePath = filePath,
+        };
     }
 
     public IReadOnlyList<AgentInfo> GetProjectAgents(string projectRootPath)
@@ -194,26 +208,90 @@ public class SkillsService
         var result = new List<AgentInfo>();
         foreach (var file in Directory.GetFiles(dir, "*.md"))
         {
-            try
-            {
-                var content = File.ReadAllText(file);
-                var meta = ParseFrontmatter(content);
-                var toolsStr = meta.TryGetValue("tools", out var t) ? t : null;
-                result.Add(new AgentInfo
-                {
-                    Name = meta.TryGetValue("name", out var n) ? n : Path.GetFileNameWithoutExtension(file),
-                    Description = meta.TryGetValue("description", out var d) ? d : "",
-                    Color = meta.TryGetValue("color", out var c) ? c : null,
-                    Tools = toolsStr != null
-                        ? toolsStr.Split(',').Select(s => s.Trim()).Where(s => s.Length > 0).ToArray()
-                        : [],
-                    PermissionMode = meta.TryGetValue("permissionMode", out var pm) ? pm : null,
-                    FileName = Path.GetFileNameWithoutExtension(file),
-                });
-            }
+            try { result.Add(AgentFrom(File.ReadAllText(file), Path.GetFileNameWithoutExtension(file))); }
             catch { }
         }
         return result;
+    }
+
+    private static AgentInfo AgentFrom(string content, string fileName)
+    {
+        var meta = ParseFrontmatter(content);
+        var toolsStr = meta.TryGetValue("tools", out var t) ? t : null;
+        return new AgentInfo
+        {
+            Name = meta.TryGetValue("name", out var n) ? n : fileName,
+            Description = meta.TryGetValue("description", out var d) ? d : "",
+            Color = meta.TryGetValue("color", out var c) ? c : null,
+            Tools = toolsStr != null
+                ? toolsStr.Split(',').Select(s => s.Trim()).Where(s => s.Length > 0).ToArray()
+                : [],
+            PermissionMode = meta.TryGetValue("permissionMode", out var pm) ? pm : null,
+            FileName = fileName,
+        };
+    }
+
+    // --- Навыки и агенты проекта через шов файлов (ADR-016, задача 4.3) ---
+    // Маршруты панели навыков у сервера и у агента устройства — один код: файлы проекта
+    // читаются и пишутся через IProjectFiles. У сервера за ним папка на диске сервера (и
+    // отказ G1 для локального проекта), у агента — корни машины и сверка дескриптора.
+
+    private const string ProjectSkillsRel = ".claude/skills";
+    private const string ProjectAgentsRel = ".claude/agents";
+
+    public async Task<IReadOnlyList<SkillInfo>> GetProjectSkillsAsync(IProjectFiles files, Project project, CancellationToken ct = default)
+    {
+        var result = new List<SkillInfo>();
+        foreach (var dir in await ListOrEmptyAsync(files, project, ProjectSkillsRel, ct))
+        {
+            if (!dir.IsDirectory) continue;
+            var rel = $"{ProjectSkillsRel}/{dir.Name}/SKILL.md";
+            try
+            {
+                var content = await files.ReadFileAsync(project, rel, ct);
+                result.Add(SkillFrom(content, dir.Name, Path.Combine(project.RootPath, ".claude", "skills", dir.Name, "SKILL.md")));
+            }
+            catch (Exception e) when (e is not OperationCanceledException) { }
+        }
+        return result;
+    }
+
+    public async Task<IReadOnlyList<AgentInfo>> GetProjectAgentsAsync(IProjectFiles files, Project project, CancellationToken ct = default)
+    {
+        var result = new List<AgentInfo>();
+        foreach (var file in await ListOrEmptyAsync(files, project, ProjectAgentsRel, ct))
+        {
+            if (file.IsDirectory || !file.Name.EndsWith(".md", StringComparison.OrdinalIgnoreCase)) continue;
+            try
+            {
+                var content = await files.ReadFileAsync(project, $"{ProjectAgentsRel}/{file.Name}", ct);
+                result.Add(AgentFrom(content, Path.GetFileNameWithoutExtension(file.Name)));
+            }
+            catch (Exception e) when (e is not OperationCanceledException) { }
+        }
+        return result;
+    }
+
+    /// <summary>Текст агента проекта; null — такого нет. Имя — только имя файла, без пути.</summary>
+    public async Task<string?> GetAgentContentAsync(IProjectFiles files, Project project, string agentFileName, CancellationToken ct = default)
+    {
+        var name = Path.GetFileName(agentFileName ?? "");
+        if (string.IsNullOrEmpty(name) || name is "." or "..") return null;
+        try { return await files.ReadFileAsync(project, $"{ProjectAgentsRel}/{name}.md", ct); }
+        catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { return null; }
+    }
+
+    public async Task SaveProjectAgentAsync(IProjectFiles files, Project project, string agentFileName, string fileContent, CancellationToken ct = default)
+    {
+        var safeFileName = Path.GetFileNameWithoutExtension(agentFileName) + ".md";
+        await files.CreateDirectoryAsync(project, ProjectAgentsRel, ct);
+        await files.WriteFileAsync(project, $"{ProjectAgentsRel}/{safeFileName}", fileContent, ct);
+    }
+
+    private static async Task<IReadOnlyList<Files.FileEntry>> ListOrEmptyAsync(IProjectFiles files, Project project, string rel, CancellationToken ct)
+    {
+        try { return await files.ListAsync(project, rel, showHidden: true, ct); }
+        catch (Exception e) when (e is DirectoryNotFoundException or FileNotFoundException) { return []; }
     }
 
     // --- Получение содержимого файла ---

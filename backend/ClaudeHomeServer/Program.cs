@@ -1762,24 +1762,15 @@ app.Use(async (ctx, next) =>
 }
 
 // Dev-server preview proxy: /preview/{projectId}/{**path} → http://127.0.0.1:{port}
+// Сам проброс — DevServerPreviewForwarder вертикали (им же пользуется агент устройства),
+// здесь только вход: кто вправе смотреть превью проекта.
 {
-    var previewInvoker = new HttpMessageInvoker(new SocketsHttpHandler
-    {
-        UseProxy = false,
-        AllowAutoRedirect = false,
-        AutomaticDecompression = DecompressionMethods.None,
-        UseCookies = false,
-    });
+    var previewInvoker = DevServerPreviewForwarder.CreateInvoker();
 
     app.Use(async (ctx, next) =>
     {
-        var path = ctx.Request.Path.Value ?? "";
-        var match = System.Text.RegularExpressions.Regex.Match(path, @"^/preview/([^/]+)(/.*)?$");
-        if (match.Success)
+        if (DevServerPreviewForwarder.TryParse(ctx.Request.Path.Value, out var projectId, out var restPath))
         {
-            var projectId = match.Groups[1].Value;
-            var restPath = match.Groups[2].Value ?? "/";
-
             // Аутентификация: middleware выполняется ДО endpoint routing, поэтому [Authorize]
             // тут не действует и ctx.User для iframe-запроса пуст. Токен берём из cookie
             // cc_preview (её ставит фронт перед загрузкой iframe — уходит и с сабресурсами),
@@ -1818,40 +1809,18 @@ app.Use(async (ctx, next) =>
                 await ctx.Response.WriteAsync("{\"error\":\"Доступ запрещён\"}");
                 return;
             }
-
-            var devServer = ctx.RequestServices.GetRequiredService<DevServerService>();
-            // Порт активного для превью сервиса проекта; если ни один не запущен — 503.
-            var port = devServer.GetActivePreviewPort(projectId);
-            if (port is null)
+            // Превью локального проекта отдаёт агент устройства (ADR-016, G1), не сервер
+            if (ProjectCapabilityGuard.Refusal(previewProject, ProjectCapabilityArea.FileBound) is { } refusal)
             {
-                ctx.Response.StatusCode = 503;
-                await ctx.Response.WriteAsync("{\"error\":\"Dev-сервер не запущен\"}");
+                ctx.Response.StatusCode = StatusCodes.Status409Conflict;
+                await ctx.Response.WriteAsJsonAsync(new { error = refusal, code = ProjectCapabilityGuard.Code });
                 return;
             }
 
-            // HttpTransformer.Default сам дописывает к префиксу Path и QueryString запроса,
-            // поэтому в префиксе пути быть не должно (иначе /preview/{id} уедет на дев-сервер
-            // дважды и тот ответит 404). Срезаем свой префикс прямо в запросе.
-            ctx.Request.Path = restPath.Length == 0 ? "/" : restPath;
-            // Семью loopback-адресов выбирает LoopbackResolver, а не литерал: dev-сервер
-            // на Node 17+ слушает ТОЛЬКО ::1, и прежний 127.0.0.1 до него не доставал —
-            // живой сервис отдавал «соединение отвергнуто» при работающем порте.
-            var previewBase = await LoopbackResolver.ResolveBaseAsync(port.Value);
-            if (previewBase is null)
-            {
-                ctx.Response.StatusCode = 503;
-                await ctx.Response.WriteAsync("{\"error\":\"Dev-сервер не отвечает\"}");
-                return;
-            }
-
-            var forwarder = ctx.RequestServices.GetRequiredService<IHttpForwarder>();
-            var previewError = await forwarder.SendAsync(ctx, previewBase, previewInvoker,
-                ForwarderRequestConfig.Empty, HttpTransformer.Default);
-            // До назначения не достучались — процесс мог смениться на слушающий по другой
-            // семье, поэтому выбор семьи забываем, а не держим до истечения TTL. Отмены
-            // клиентом сюда не попадают: они ничего не говорят о живости назначения.
-            if (previewError is ForwarderError.Request or ForwarderError.RequestTimedOut)
-                LoopbackResolver.Invalidate(port.Value);
+            await DevServerPreviewForwarder.ForwardAsync(ctx,
+                ctx.RequestServices.GetRequiredService<DevServerService>(),
+                ctx.RequestServices.GetRequiredService<IHttpForwarder>(),
+                previewInvoker, projectId, restPath);
             return;
         }
         await next();

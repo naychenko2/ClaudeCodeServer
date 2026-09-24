@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Services.ProjectServices;
 
@@ -46,12 +47,15 @@ public sealed class ProjectServiceDiscovery
         _log = log;
     }
 
-    public async Task<List<ProjectServiceInfo>> DiscoverAsync(Project project)
+    /// <param name="files">Шов файлов проекта; null — папка на этой машине напрямую (сервер).
+    /// Агент устройства передаёт свой шов: там корни машины и сверка открытого дескриптора.</param>
+    public async Task<List<ProjectServiceInfo>> DiscoverAsync(Project project, IProjectFiles? files = null)
     {
         if (_cache.TryGetValue(project.Id, out var c) && DateTime.UtcNow - c.At < CacheTtl)
             return c.Items;
 
         var root = project.RootPath;
+        IProjectTree fs = files is null ? PhysicalProjectTree.Instance : new ProjectFilesTree(files, project);
         var result = new List<ProjectServiceInfo>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         // Занятые Id — отдельно от сигнатур. Дедупликация схлопывает ОДИН И ТОТ ЖЕ запуск,
@@ -61,7 +65,7 @@ public sealed class ProjectServiceDiscovery
         var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         // 1) Сохранённые из launch.json — приоритет.
-        foreach (var saved in await ReadSavedAsync(project))
+        foreach (var saved in await ReadSavedAsync(project, files))
         {
             AddUnique(saved);
         }
@@ -69,14 +73,14 @@ public sealed class ProjectServiceDiscovery
         // 2) Инференс из манифестов; дубли (по сигнатуре) отбрасываем в пользу saved.
         // Конфигурации Rider идут первыми среди инференса: это явное намерение человека
         // с осмысленным именем («Backend»), а разбор манифестов — догадка («dev»).
-        if (Directory.Exists(root))
+        if (fs.DirectoryExists(root))
         {
-            foreach (var svc in SafeParse(() => ParseRider(root), "конфигурации Rider")
-                .Concat(SafeParse(() => ParseNode(root), "package.json"))
-                .Concat(SafeParse(() => ParseDotnet(root), "launchSettings.json"))
-                .Concat(SafeParse(() => ParseCompose(root), "docker-compose"))
-                .Concat(SafeParse(() => ParseProcfile(root), "Procfile"))
-                .Concat(SafeParse(() => ParseMakefile(root), "Makefile")))
+            foreach (var svc in SafeParse(() => ParseRider(root, fs), "конфигурации Rider")
+                .Concat(SafeParse(() => ParseNode(root, fs), "package.json"))
+                .Concat(SafeParse(() => ParseDotnet(root, fs), "launchSettings.json"))
+                .Concat(SafeParse(() => ParseCompose(root, fs), "docker-compose"))
+                .Concat(SafeParse(() => ParseProcfile(root, fs), "Procfile"))
+                .Concat(SafeParse(() => ParseMakefile(root, fs), "Makefile")))
             {
                 AddUnique(svc);
             }
@@ -129,9 +133,9 @@ public sealed class ProjectServiceDiscovery
     /// третья копия в маршруте внешнего доступа означала бы, что «показать снаружи» и
     /// «показать в панели» однажды начнут указывать на разные порты.
     /// </summary>
-    public async Task<int?> ResolvePortAsync(Project project, string serviceId)
+    public async Task<int?> ResolvePortAsync(Project project, string serviceId, IProjectFiles? files = null)
     {
-        var known = await DiscoverAsync(project);
+        var known = await DiscoverAsync(project, files);
         var svc = known.FirstOrDefault(s => s.Id == serviceId);
         if (svc is null) return null;
         if (svc.Members is not { Length: > 0 }) return svc.SuggestedPort is > 0 ? svc.SuggestedPort : null;
@@ -148,9 +152,9 @@ public sealed class ProjectServiceDiscovery
     /// <summary>Сбросить кэш проекта (после записи launch.json).</summary>
     public void Invalidate(string projectId) => _cache.TryRemove(projectId, out _);
 
-    private async Task<List<ProjectServiceInfo>> ReadSavedAsync(Project project)
+    private async Task<List<ProjectServiceInfo>> ReadSavedAsync(Project project, IProjectFiles? files)
     {
-        var entries = await _launch.ReadAsync(project);
+        var entries = await _launch.ReadAsync(project, files);
         var list = new List<ProjectServiceInfo>();
         foreach (var e in entries)
         {
@@ -195,17 +199,17 @@ public sealed class ProjectServiceDiscovery
     // Поддерживаем три типа. Остальные пропускаем осознанно: `multilaunch` — это
     // несколько процессов разом, а у нас «один сервис — один процесс»; скриптовые
     // (ShConfigurationType, PowerShellRunType) неотличимы от несерверных.
-    private List<ProjectServiceInfo> ParseRider(string root)
+    private List<ProjectServiceInfo> ParseRider(string root, IProjectTree fs)
     {
         var list = new List<ProjectServiceInfo>();
         // Составные разбираем вторым проходом: их ссылки указывают на конфигурации из
         // ДРУГИХ файлов, поэтому резолвить их можно только когда собраны все простые.
         var compound = new List<(string Name, List<string> Refs)>();
 
-        foreach (var (file, projectDir) in FindRiderConfigs(root))
+        foreach (var (file, projectDir) in FindRiderConfigs(root, fs))
         {
             XDocument doc;
-            try { doc = XDocument.Load(file); }
+            try { doc = XDocument.Parse(fs.ReadAllText(file)); }
             catch (Exception ex)
             {
                 _log.LogDebug(ex, "Не разобрана конфигурация Rider {File}", file);
@@ -232,8 +236,8 @@ public sealed class ProjectServiceDiscovery
 
                 var svc = type switch
                 {
-                    "LaunchSettings" => RiderLaunchSettings(root, projectDir, cfg, name),
-                    "js.build_tools.npm" => RiderNpm(root, projectDir, cfg, name),
+                    "LaunchSettings" => RiderLaunchSettings(root, projectDir, cfg, name, fs),
+                    "js.build_tools.npm" => RiderNpm(root, projectDir, cfg, name, fs),
                     "docker-deploy" => RiderCompose(root, projectDir, cfg, name),
                     "NodeJSConfigurationType" => RiderNodeJs(root, projectDir, cfg, name),
                     // Скриптовые типы (ShConfigurationType, PowerShellRunType) пропускаем:
@@ -286,23 +290,23 @@ public sealed class ProjectServiceDiscovery
     }
 
     /// <summary>Файлы конфигураций вместе с их $PROJECT_DIR$ (папкой, где лежит .run/.idea).</summary>
-    private static List<(string File, string ProjectDir)> FindRiderConfigs(string root)
+    private static List<(string File, string ProjectDir)> FindRiderConfigs(string root, IProjectTree fs)
     {
         var results = new List<(string, string)>();
 
         void Collect(string dir)
         {
             var run = Path.Combine(dir, ".run");
-            if (Directory.Exists(run))
-                foreach (var f in SafeGetFiles(run, "*.run.xml")) results.Add((f, dir));
+            if (fs.DirectoryExists(run))
+                foreach (var f in SafeGetFiles(fs, run, "*.run.xml")) results.Add((f, dir));
 
             var idea = Path.Combine(dir, ".idea");
-            if (!Directory.Exists(idea)) return;
+            if (!fs.DirectoryExists(idea)) return;
             // Папка runConfigurations лежит на неизвестной глубине внутри .idea
             try
             {
-                foreach (var rc in Directory.GetDirectories(idea, "runConfigurations", SearchOption.AllDirectories))
-                    foreach (var f in SafeGetFiles(rc, "*.xml")) results.Add((f, dir));
+                foreach (var rc in FindDirectories(fs, idea, "runConfigurations"))
+                    foreach (var f in SafeGetFiles(fs, rc, "*.xml")) results.Add((f, dir));
             }
             catch { /* нет прав/битые ссылки — конфигураций просто нет */ }
         }
@@ -311,8 +315,8 @@ public sealed class ProjectServiceDiscovery
         {
             Collect(dir);
             if (depth >= 2) return;   // solution обычно в корне или на уровень ниже
-            string[] dirs;
-            try { dirs = Directory.GetDirectories(dir); }
+            IReadOnlyList<string> dirs;
+            try { dirs = fs.GetDirectories(dir); }
             catch { return; }
             foreach (var d in dirs)
             {
@@ -327,10 +331,27 @@ public sealed class ProjectServiceDiscovery
         return results;
     }
 
-    private static string[] SafeGetFiles(string dir, string pattern)
+    private static IReadOnlyList<string> SafeGetFiles(IProjectTree fs, string dir, string pattern)
     {
-        try { return Directory.GetFiles(dir, pattern); }
+        try { return fs.GetFiles(dir, pattern); }
         catch { return []; }
+    }
+
+    // Все вложенные каталоги с данным именем (как GetDirectories с SearchOption.AllDirectories).
+    // Потолок глубины — против петель ссылок: у .idea вложенность от силы три уровня
+    private static List<string> FindDirectories(IProjectTree fs, string dir, string name, int maxDepth = 8)
+    {
+        var found = new List<string>();
+        void Walk(string current, int depth)
+        {
+            foreach (var d in fs.GetDirectories(current))
+            {
+                if (string.Equals(Path.GetFileName(d), name, StringComparison.OrdinalIgnoreCase)) found.Add(d);
+                if (depth < maxDepth) Walk(d, depth + 1);
+            }
+        }
+        Walk(dir, 0);
+        return found;
     }
 
     private static string? RiderOption(XElement cfg, string name) =>
@@ -369,7 +390,7 @@ public sealed class ProjectServiceDiscovery
     // Профиль launchSettings.json: `dotnet run --project X --launch-profile Y`.
     // Ровно то же, что собирает ParseDotnet, — вид аргументов обязан совпадать,
     // иначе дедуп по сигнатуре не сработает и в списке будет два одинаковых запуска.
-    private ProjectServiceInfo? RiderLaunchSettings(string root, string projectDir, XElement cfg, string name)
+    private ProjectServiceInfo? RiderLaunchSettings(string root, string projectDir, XElement cfg, string name, IProjectTree fs)
     {
         var csproj = ResolveRiderPath(root, projectDir, RiderOption(cfg, "LAUNCH_PROFILE_PROJECT_FILE_PATH"));
         if (csproj is null) return null;
@@ -387,19 +408,19 @@ public sealed class ProjectServiceDiscovery
             Command: "dotnet",
             Args: args,
             Cwd: null,
-            SuggestedPort: string.IsNullOrWhiteSpace(profile) ? null : LaunchProfilePort(csproj, profile),
+            SuggestedPort: string.IsNullOrWhiteSpace(profile) ? null : LaunchProfilePort(csproj, profile, fs),
             AutoPort: false,
             Saved: false);
     }
 
     /// <summary>Порт профиля из launchSettings.json рядом с csproj (http предпочтительнее https).</summary>
-    private static int? LaunchProfilePort(string csprojPath, string profileName)
+    private static int? LaunchProfilePort(string csprojPath, string profileName, IProjectTree fs)
     {
         try
         {
             var path = Path.Combine(Path.GetDirectoryName(csprojPath)!, "Properties", "launchSettings.json");
-            if (!File.Exists(path)) return null;
-            using var doc = JsonDocument.Parse(File.ReadAllText(path));
+            if (!fs.FileExists(path)) return null;
+            using var doc = JsonDocument.Parse(fs.ReadAllText(path));
             if (!doc.RootElement.TryGetProperty("profiles", out var profiles)) return null;
             if (!profiles.TryGetProperty(profileName, out var profile)) return null;
             if (!profile.TryGetProperty("applicationUrl", out var url) || url.ValueKind != JsonValueKind.String) return null;
@@ -408,7 +429,7 @@ public sealed class ProjectServiceDiscovery
         catch { return null; }
     }
 
-    private ProjectServiceInfo? RiderNpm(string root, string projectDir, XElement cfg, string name)
+    private ProjectServiceInfo? RiderNpm(string root, string projectDir, XElement cfg, string name, IProjectTree fs)
     {
         var pkg = ResolveRiderPath(root, projectDir, cfg.Element("package-json")?.Attribute("value")?.Value);
         if (pkg is null) return null;
@@ -418,7 +439,7 @@ public sealed class ProjectServiceDiscovery
         var command = cfg.Element("command")?.Attribute("value")?.Value ?? "run";
         var pkgDir = Path.GetDirectoryName(pkg)!;
         var cwd = RelCwd(root, pkgDir);
-        var mgr = DetectPackageManager(pkgDir, root);
+        var mgr = DetectPackageManager(pkgDir, root, fs);
         // Как в ParseNode: npm требует «run <script>», у pnpm/yarn скрипт идёт сам по себе
         var args = mgr == "npm" ? new[] { command, script } : new[] { script };
 
@@ -544,18 +565,18 @@ public sealed class ProjectServiceDiscovery
     }
 
     // ── package.json scripts ──────────────────────────────────────────────
-    private List<ProjectServiceInfo> ParseNode(string root)
+    private List<ProjectServiceInfo> ParseNode(string root, IProjectTree fs)
     {
         var list = new List<ProjectServiceInfo>();
-        foreach (var pkgPath in FindFiles(root, n => n.Equals("package.json", StringComparison.OrdinalIgnoreCase), maxDepth: 2))
+        foreach (var pkgPath in FindFiles(fs, root, n => n.Equals("package.json", StringComparison.OrdinalIgnoreCase), maxDepth: 2))
         {
-            using var doc = JsonDocument.Parse(File.ReadAllText(pkgPath));
+            using var doc = JsonDocument.Parse(fs.ReadAllText(pkgPath));
             if (!doc.RootElement.TryGetProperty("scripts", out var scripts) || scripts.ValueKind != JsonValueKind.Object)
                 continue;
 
             var pkgDir = Path.GetDirectoryName(pkgPath)!;
             var cwd = RelCwd(root, pkgDir);
-            var mgr = DetectPackageManager(pkgDir, root);
+            var mgr = DetectPackageManager(pkgDir, root, fs);
 
             foreach (var s in scripts.EnumerateObject())
             {
@@ -576,10 +597,10 @@ public sealed class ProjectServiceDiscovery
         return list;
     }
 
-    private static string DetectPackageManager(string dir, string root)
+    private static string DetectPackageManager(string dir, string root, IProjectTree fs)
     {
         bool Has(string file) =>
-            File.Exists(Path.Combine(dir, file)) || File.Exists(Path.Combine(root, file));
+            fs.FileExists(Path.Combine(dir, file)) || fs.FileExists(Path.Combine(root, file));
         if (Has("pnpm-lock.yaml")) return "pnpm";
         if (Has("yarn.lock")) return "yarn";
         return "npm";
@@ -595,20 +616,20 @@ public sealed class ProjectServiceDiscovery
     }
 
     // ── ASP.NET Core launchSettings.json ─────────────────────────────────
-    private List<ProjectServiceInfo> ParseDotnet(string root)
+    private List<ProjectServiceInfo> ParseDotnet(string root, IProjectTree fs)
     {
         var list = new List<ProjectServiceInfo>();
-        foreach (var lsPath in FindFiles(root, n => n.Equals("launchSettings.json", StringComparison.OrdinalIgnoreCase), maxDepth: 4))
+        foreach (var lsPath in FindFiles(fs, root, n => n.Equals("launchSettings.json", StringComparison.OrdinalIgnoreCase), maxDepth: 4))
         {
             var propsDir = Path.GetDirectoryName(lsPath)!;
             if (!Path.GetFileName(propsDir).Equals("Properties", StringComparison.OrdinalIgnoreCase))
                 continue;
             var projDir = Path.GetDirectoryName(propsDir)!;
-            var csproj = Directory.GetFiles(projDir, "*.csproj").FirstOrDefault();
+            var csproj = fs.GetFiles(projDir, "*.csproj").FirstOrDefault();
             var projRef = csproj != null ? RelCwd(root, csproj) ?? Path.GetFileName(csproj) : RelCwd(root, projDir) ?? ".";
             var projName = Path.GetFileName(projDir);
 
-            using var doc = JsonDocument.Parse(File.ReadAllText(lsPath));
+            using var doc = JsonDocument.Parse(fs.ReadAllText(lsPath));
             if (!doc.RootElement.TryGetProperty("profiles", out var profiles) || profiles.ValueKind != JsonValueKind.Object)
                 continue;
 
@@ -637,15 +658,15 @@ public sealed class ProjectServiceDiscovery
     }
 
     // ── docker-compose ────────────────────────────────────────────────────
-    private List<ProjectServiceInfo> ParseCompose(string root)
+    private List<ProjectServiceInfo> ParseCompose(string root, IProjectTree fs)
     {
         var list = new List<ProjectServiceInfo>();
         string[] names = ["docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"];
         foreach (var file in names)
         {
             var path = Path.Combine(root, file);
-            if (!File.Exists(path)) continue;
-            foreach (var (svc, port) in ParseComposeServices(File.ReadAllLines(path)))
+            if (!fs.FileExists(path)) continue;
+            foreach (var (svc, port) in ParseComposeServices(Lines(fs.ReadAllText(path))))
             {
                 list.Add(new ProjectServiceInfo(
                     Id: Slug($"compose-{file}-{svc}"),
@@ -744,12 +765,12 @@ public sealed class ProjectServiceDiscovery
     }
 
     // ── Procfile ──────────────────────────────────────────────────────────
-    private List<ProjectServiceInfo> ParseProcfile(string root)
+    private List<ProjectServiceInfo> ParseProcfile(string root, IProjectTree fs)
     {
         var list = new List<ProjectServiceInfo>();
         var path = Path.Combine(root, "Procfile");
-        if (!File.Exists(path)) return list;
-        foreach (var raw in File.ReadAllLines(path))
+        if (!fs.FileExists(path)) return list;
+        foreach (var raw in Lines(fs.ReadAllText(path)))
         {
             var line = raw.Trim();
             if (line.Length == 0 || line.StartsWith('#')) continue;
@@ -774,14 +795,14 @@ public sealed class ProjectServiceDiscovery
     }
 
     // ── Makefile ──────────────────────────────────────────────────────────
-    private List<ProjectServiceInfo> ParseMakefile(string root)
+    private List<ProjectServiceInfo> ParseMakefile(string root, IProjectTree fs)
     {
         var list = new List<ProjectServiceInfo>();
         string[] names = ["Makefile", "makefile", "GNUmakefile"];
-        var path = names.Select(n => Path.Combine(root, n)).FirstOrDefault(File.Exists);
+        var path = names.Select(n => Path.Combine(root, n)).FirstOrDefault(fs.FileExists);
         if (path == null) return list;
 
-        foreach (var raw in File.ReadAllLines(path))
+        foreach (var raw in Lines(fs.ReadAllText(path)))
         {
             if (raw.Length == 0 || raw[0] == '\t' || raw[0] == '#' || raw.StartsWith('.')) continue;
             var m = Regex.Match(raw, @"^([A-Za-z0-9_-]+)\s*:(?!=)");
@@ -812,20 +833,27 @@ public sealed class ProjectServiceDiscovery
     // ── helpers ───────────────────────────────────────────────────────────
 
     /// <summary>Bounded-обход: файлы по имени, пропуская тяжёлые и скрытые папки.</summary>
-    private static List<string> FindFiles(string root, Func<string, bool> nameMatch, int maxDepth)
+    // Строки как у File.ReadAllLines: разделители \n, \r\n и \r, без хвостовой пустой строки
+    private static string[] Lines(string text)
+    {
+        var lines = text.Split(["\r\n", "\r", "\n"], StringSplitOptions.None);
+        return lines.Length > 0 && lines[^1].Length == 0 ? lines[..^1] : lines;
+    }
+
+    private static List<string> FindFiles(IProjectTree fs, string root, Func<string, bool> nameMatch, int maxDepth)
     {
         var results = new List<string>();
         void Walk(string dir, int depth)
         {
-            string[] files;
-            try { files = Directory.GetFiles(dir); }
+            IReadOnlyList<string> files;
+            try { files = fs.GetFiles(dir); }
             catch { return; }
             foreach (var f in files)
                 if (nameMatch(Path.GetFileName(f))) results.Add(f);
 
             if (depth >= maxDepth) return;
-            string[] dirs;
-            try { dirs = Directory.GetDirectories(dir); }
+            IReadOnlyList<string> dirs;
+            try { dirs = fs.GetDirectories(dir); }
             catch { return; }
             foreach (var d in dirs)
             {

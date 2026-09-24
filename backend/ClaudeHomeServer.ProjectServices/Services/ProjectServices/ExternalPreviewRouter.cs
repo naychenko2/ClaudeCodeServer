@@ -80,26 +80,8 @@ public sealed class ExternalPreviewRouter(
     /// У составной конфигурации своего порта нет: идём по участникам и берём первого,
     /// которому есть что показать, — тем же правилом панель считает порт группе.
     /// </summary>
-    public async Task<int?> ResolveServicePortAsync(Project project, string serviceId, string userId)
-    {
-        var known = await discovery.DiscoverAsync(project);
-        var svc = known.FirstOrDefault(s => s.Id == serviceId);
-        if (svc is null) return null;
-
-        // У составной конфигурации берём ПОСЛЕДНЕГО участника с портом. В multilaunch
-        // зависимости поднимаются первыми, а приложение-агрегатор ждёт их (waitPortOpened)
-        // и потому стоит в конце: смотреть надо именно его. Правило «первый с портом»
-        // показывало вместо витрины её первый модуль-панель.
-        var ids = svc.Members is { Length: > 0 } ? svc.Members.Reverse() : [svc.Id];
-        var byId = known.ToDictionary(s => s.Id);
-        foreach (var id in ids)
-        {
-            if (devServer.GetRunningPort(project.Id, id, userId) is > 0 and var running) return running;
-            if (byId.TryGetValue(id, out var member) && member.SuggestedPort is > 0) return member.SuggestedPort;
-            if (portMemory.Get(project.Id, id) is > 0 and var remembered) return remembered;
-        }
-        return null;
-    }
+    public Task<int?> ResolveServicePortAsync(Project project, string serviceId, string userId) =>
+        ProjectServicesApi.ResolveServicePortAsync(discovery, devServer, portMemory, project, serviceId, userId);
 
     /// <summary>
     /// Полная проверка запроса на поддомене. Порядок проверок — от самой дешёвой и грубой

@@ -1,17 +1,25 @@
 using System.Net;
+using System.Security.Claims;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Files;
 using ClaudeHomeServer.Services.Git;
+using ClaudeHomeServer.Services.ProjectServices;
+using ClaudeHomeServer.Services.Skills;
+using ClaudeHomeServer.Services.Terminal;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Yarp.ReverseProxy.Forwarder;
 
 namespace ClaudeHomeServer.DeviceAgent.Composition;
 
@@ -22,16 +30,27 @@ internal sealed record LocalApiOptions(int Port, string ServerOrigin, string Age
 }
 
 /// <summary>
-/// localhost-API агента (ADR-016 §5, задача 4.2): браузер на машине проекта работает с
-/// файлами и git напрямую. Маршруты и форма ответов — те же, что у серверных
-/// <c>FilesController</c>/<c>GitController</c>, фронту меняется только база адреса;
-/// под маршрутами — та же вертикаль Files через шов <see cref="IProjectFiles"/> и тот же
-/// <see cref="GitService"/>.
+/// Рабочие подсистемы проекта на машине (задача 4.3): терминал, дев-серверы и превью, навыки,
+/// вложения чата. <see cref="DataDirectory"/> — служебные данные агента (память портов
+/// дев-серверов), <see cref="CliProfile"/> — профиль CLI агента: глобальные навыки те, что
+/// видит ход, а не каталог хоста. <see cref="PreviewPort"/> — отдельный loopback-порт превью.
+/// </summary>
+internal sealed record AgentWorkbench(string DataDirectory, string CliProfile, int PreviewPort, AgentLauncherFactory Launchers);
+
+/// <summary>
+/// localhost-API агента (ADR-016 §5, задачи 4.2 и 4.3): браузер на машине проекта работает с
+/// файлами, git, терминалом, дев-серверами и навыками напрямую. Маршруты и форма ответов — те
+/// же, что у серверных контроллеров (контракт <see cref="DeviceAgentRoutes"/>), фронту
+/// меняется только база адреса; под маршрутами — те же вертикали: Files через шов
+/// <see cref="IProjectFiles"/>, <see cref="GitService"/>, <see cref="ProjectServicesApi"/>,
+/// <see cref="TerminalService"/>, <see cref="SkillsService"/>.
 ///
 /// Периметр, по порядку: слушаем только loopback; заголовок <c>Host</c> — только loopback с
 /// нашим портом (DNS-rebinding); <c>Origin</c>, если есть, — только origin сервера (CORS и
 /// preflight Private Network Access); затем билет сервера, привязанный к проекту маршрута,
-/// и корень проекта под разрешёнными корнями машины.
+/// и корень проекта под разрешёнными корнями машины. Превью дев-серверов — на отдельном
+/// loopback-порту со своим периметром (<see cref="PreviewGate"/>): страница дев-сайта не
+/// должна стать одного origin с API.
 /// </summary>
 internal static class LocalApi
 {
@@ -47,9 +66,11 @@ internal static class LocalApi
         AgentFileWatchers? watchers,
         ILoggerFactory loggers,
         Action<WebApplicationBuilder>? configure = null,
-        AgentStreamTickets? streamTickets = null)
+        AgentUrlTickets? urlTickets = null,
+        AgentWorkbench? workbench = null)
     {
-        streamTickets ??= new AgentStreamTickets();
+        urlTickets ??= new AgentUrlTickets();
+        var directory = new AgentProjectDirectory();
         var builder = WebApplication.CreateSlimBuilder();
         builder.Logging.ClearProviders();
         builder.Services.AddSingleton(loggers);
@@ -60,23 +81,64 @@ internal static class LocalApi
         builder.WebHost.ConfigureKestrel(k =>
         {
             k.Listen(IPAddress.Loopback, options.Port);
+            if (workbench is not null) k.Listen(IPAddress.Loopback, workbench.PreviewPort);
             // Потолок записи плюс запас на JSON-обёртку
             k.Limits.MaxRequestBodySize = new AgentLimits().MaxWriteBytes * 2 + 1024 * 1024;
         });
+        if (workbench is not null) AddWorkbench(builder, workbench, directory);
         configure?.Invoke(builder);
 
         var app = builder.Build();
         var log = loggers.CreateLogger("ai-home-agent.local-api");
 
+        if (workbench is not null)
+        {
+            // Порт превью — свой периметр и только проброс на дев-сервер: API там нет вовсе
+            var gate = new PreviewGate(workbench.PreviewPort, options.ServerOrigin, urlTickets, files, directory);
+            app.Use((ctx, next) => ctx.Connection.LocalPort == workbench.PreviewPort ? gate.HandleAsync(ctx) : next());
+        }
         app.Use((ctx, next) => Perimeter(ctx, next, options));
-        app.Use((ctx, next) => Authorize(ctx, next, files, tickets, streamTickets, watchers));
+        app.Use((ctx, next) => Authorize(ctx, next, files, tickets, urlTickets, watchers, directory));
         app.Use((ctx, next) => MapErrors(ctx, next, log));
 
         app.MapGet("/api/agent/health", () => Results.Ok(new { agent = "ai-home-agent", version = options.AgentVersion }));
         MapFiles(app.MapGroup("/api/projects/{projectId}/files"), files);
-        MapStreamTicket(app.MapGroup("/api/projects/{projectId}"), files, streamTickets);
+        MapStreamTicket(app.MapGroup("/api/projects/{projectId}"), files, urlTickets);
         MapGit(app.MapGroup("/api/projects/{projectId}/git"), files, git);
+        if (workbench is not null)
+        {
+            var project = app.MapGroup("/api/projects/{projectId}");
+            MapUrlTickets(project, urlTickets, workbench);
+            MapProjectServices(project, files);
+            MapSkills(project, files, workbench);
+            MapAttachments(project, files);
+            app.MapHub<AgentHub>(DeviceAgentApi.HubPath);
+        }
         return app;
+    }
+
+    // Вертикали рабочих подсистем — теми же регистрациями, что на сервере; реализации швов
+    // хоста (проекты, процессы, доставка событий) — агентские
+    private static void AddWorkbench(WebApplicationBuilder builder, AgentWorkbench workbench, AgentProjectDirectory directory)
+    {
+        builder.Configuration["DataPath"] = Path.Combine(workbench.DataDirectory, "projects.json");
+        var services = builder.Services;
+        services.AddSingleton<IProjectManager>(directory);
+        services.AddSingleton<ILauncherFactory>(workbench.Launchers);
+        services.AddSingleton<ISandboxPortRange, NoSandboxPorts>();
+        services.AddSingleton<AgentHubNotifier>();
+        services.AddSingleton<ITerminalHubNotifier>(sp => sp.GetRequiredService<AgentHubNotifier>());
+        services.AddSingleton<ISessionBroadcaster>(sp => sp.GetRequiredService<AgentHubNotifier>());
+        services.AddSingleton<DevServerPortMemory>();
+        services.AddSingleton<DevServerService>();
+        services.AddSingleton<LaunchConfigService>();
+        services.AddSingleton<ProjectServiceDiscovery>();
+        services.AddSingleton<ProjectServicesApi>();
+        services.AddSingleton<TerminalService>();
+        services.AddSingleton<SkillsService>();
+        services.AddHttpForwarder();
+        services.AddSignalR().AddJsonProtocol(o =>
+            o.PayloadSerializerOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase)));
     }
 
     // ---------- периметр ----------
@@ -114,7 +176,9 @@ internal static class LocalApi
                 return;
             }
             response.Headers.AccessControlAllowMethods = "GET, POST, PUT, DELETE";
-            response.Headers.AccessControlAllowHeaders = DeviceAgentApi.TicketHeader + ", Content-Type";
+            // Authorization и X-SignalR-* — рукопожатие хаба (negotiate) клиентом SignalR
+            response.Headers.AccessControlAllowHeaders =
+                DeviceAgentApi.TicketHeader + ", Content-Type, Authorization, X-Requested-With, X-SignalR-User-Agent";
             response.Headers.AccessControlMaxAge = "600";
             // Private Network Access: публичная страница сервера стучится в loopback — браузер
             // требует явного согласия в ответе на preflight
@@ -128,8 +192,14 @@ internal static class LocalApi
     }
 
     private static async Task Authorize(HttpContext ctx, Func<Task> next, AgentProjectFiles files,
-        AgentTicketCache tickets, AgentStreamTickets streamTickets, AgentFileWatchers? watchers)
+        AgentTicketCache tickets, AgentUrlTickets urlTickets, AgentFileWatchers? watchers, AgentProjectDirectory directory)
     {
+        if (ctx.Request.Path.StartsWithSegments(DeviceAgentApi.HubPath))
+        {
+            await AuthorizeHub(ctx, next, files, urlTickets, directory);
+            return;
+        }
+
         var segments = ctx.Request.Path.Value?.Split('/', StringSplitOptions.RemoveEmptyEntries) ?? [];
         if (segments is not ["api", "projects", var projectId, ..])
         {
@@ -141,7 +211,8 @@ internal static class LocalApi
         // отдачи потоком в URL едет отдельный узкий билет на один путь (DeviceAgentApi.StreamTicketQuery)
         var ticket = ctx.Request.Headers[DeviceAgentApi.TicketHeader].ToString();
         var grant = ticket.Length == 0 && HttpMethods.IsGet(ctx.Request.Method) && segments is [_, _, _, "files", "stream"]
-            ? streamTickets.Validate(ctx.Request.Query[DeviceAgentApi.StreamTicketQuery], ctx.Request.Query["path"])
+            ? urlTickets.Validate(ctx.Request.Query[DeviceAgentApi.StreamTicketQuery],
+                AgentUrlTickets.StreamScope(ctx.Request.Query["path"].ToString()))
             : await tickets.ValidateAsync(ticket, ctx.RequestAborted);
         if (grant is null)
         {
@@ -154,16 +225,53 @@ internal static class LocalApi
             return;
         }
 
+        if (await AdmitAsync(ctx, grant, files, directory) is not { } admitted) return;
+
+        ctx.Items[ProjectItem] = admitted.Project;
+        ctx.Items[RootItem] = admitted.Root;
+        ctx.Items[GrantItem] = grant;
+        watchers?.Touch(admitted.Project.Id, admitted.Root);
+        await next();
+    }
+
+    /// <summary>
+    /// Проект гранта, если его корень под корнями машины: для вертикалей рабочих подсистем он
+    /// запоминается с РЕАЛЬНЫМ корнем — процессы терминала и дев-серверов стартуют в нём, а не
+    /// в пути, который прислал сервер. null — отказ уже записан в ответ.
+    /// </summary>
+    private static async Task<(Project Project, string Root)?> AdmitAsync(HttpContext ctx, AgentTicketIntrospection grant,
+        AgentProjectFiles files, AgentProjectDirectory directory)
+    {
         var project = new Project { Id = grant.ProjectId, OwnerId = grant.OwnerId, RootPath = grant.RootPath };
         string root;
         try { (root, _) = files.Check(project, ""); }
-        catch (AgentPathRefusedException e) { await Error(ctx, StatusCodes.Status403Forbidden, e.Message); return; }
-        catch (DirectoryNotFoundException e) { await Error(ctx, StatusCodes.Status404NotFound, e.Message); return; }
+        catch (AgentPathRefusedException e) { await Error(ctx, StatusCodes.Status403Forbidden, e.Message); return null; }
+        catch (DirectoryNotFoundException e) { await Error(ctx, StatusCodes.Status404NotFound, e.Message); return null; }
+        directory.Remember(new Project { Id = grant.ProjectId, OwnerId = grant.OwnerId, RootPath = root });
+        return (project, root);
+    }
 
-        ctx.Items[ProjectItem] = project;
-        ctx.Items[RootItem] = root;
-        ctx.Items[GrantItem] = grant;
-        watchers?.Touch(project.Id, root);
+    // Хаб: WebSocket из браузера заголовок не ставит, клиент SignalR кладёт билет в access_token
+    // (подключение) или в Authorization (negotiate). Это узкий билет хаба, основной сюда не годится
+    private static async Task AuthorizeHub(HttpContext ctx, Func<Task> next, AgentProjectFiles files,
+        AgentUrlTickets urlTickets, AgentProjectDirectory directory)
+    {
+        var auth = ctx.Request.Headers.Authorization.ToString();
+        var token = auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
+            ? auth["Bearer ".Length..].Trim()
+            : ctx.Request.Query["access_token"].ToString();
+        if (urlTickets.Validate(token, AgentUrlTickets.HubScope) is not { } grant)
+        {
+            await Error(ctx, StatusCodes.Status401Unauthorized, "Билет хаба недействителен или истёк");
+            return;
+        }
+        if (await AdmitAsync(ctx, grant, files, directory) is null) return;
+
+        ctx.User = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim(ClaimTypes.NameIdentifier, grant.OwnerId),
+            new Claim(AgentHub.ProjectClaim, grant.ProjectId),
+        ], authenticationType: "agent-hub-ticket"));
         await next();
     }
 
@@ -248,13 +356,138 @@ internal static class LocalApi
 
     // ---------- билет потока: только агент, вне контракта FilesController ----------
 
-    private static void MapStreamTicket(RouteGroupBuilder g, AgentProjectFiles files, AgentStreamTickets streamTickets) =>
+    private static void MapStreamTicket(RouteGroupBuilder g, AgentProjectFiles files, AgentUrlTickets urlTickets) =>
         g.MapPost("/" + DeviceAgentApi.StreamTicketRoute, (HttpContext ctx, PathRequest req) =>
         {
             // Путь проходит ту же политику, что и сам поток: на путь наружу билета не будет
             files.Check(ProjectOf(ctx), req.Path);
-            var (ticket, expiresAt) = streamTickets.Issue((AgentTicketIntrospection)ctx.Items[GrantItem]!, req.Path);
+            var (ticket, expiresAt) = urlTickets.IssueStream(GrantOf(ctx), req.Path);
             return Results.Ok(new { streamTicket = ticket, expiresAt });
+        });
+
+    private static AgentTicketIntrospection GrantOf(HttpContext ctx) => (AgentTicketIntrospection)ctx.Items[GrantItem]!;
+    private static string OwnerOf(HttpContext ctx) => GrantOf(ctx).OwnerId;
+
+    // Проект для вертикалей рабочих подсистем: с реальным корнем (см. AdmitAsync)
+    private static Project WorkProject(HttpContext ctx) =>
+        new() { Id = ProjectOf(ctx).Id, OwnerId = ProjectOf(ctx).OwnerId, RootPath = RootOf(ctx) };
+
+    private static IResult ToResult(ProjectServicesResult r) =>
+        r.Body is null ? Results.StatusCode(r.Status) : Results.Json(r.Body, statusCode: r.Status);
+
+    // ---------- билеты хаба и превью: только агент ----------
+
+    private static void MapUrlTickets(RouteGroupBuilder g, AgentUrlTickets urlTickets, AgentWorkbench workbench)
+    {
+        g.MapPost("/" + DeviceAgentApi.HubTicketRoute, (HttpContext ctx) =>
+        {
+            var (ticket, expiresAt) = urlTickets.Issue(GrantOf(ctx), AgentUrlTickets.HubScope, DeviceAgentApi.HubTicketLifetime);
+            return Results.Ok(new { hubTicket = ticket, expiresAt });
+        });
+        g.MapPost("/" + DeviceAgentApi.PreviewTicketRoute, (HttpContext ctx) =>
+        {
+            var (ticket, expiresAt) = urlTickets.Issue(GrantOf(ctx), AgentUrlTickets.PreviewScope,
+                DeviceAgentApi.PreviewTicketLifetime, capByGrant: false);
+            var id = Uri.EscapeDataString(ProjectOf(ctx).Id);
+            var url = $"http://127.0.0.1:{workbench.PreviewPort}/preview/{id}/?{DeviceAgentApi.PreviewTicketQuery}={ticket}";
+            return Results.Ok(new { previewTicket = ticket, expiresAt, url });
+        });
+    }
+
+    // ---------- сервисы проекта: контракт PreviewController ----------
+
+    private static void MapProjectServices(RouteGroupBuilder g, AgentProjectFiles files)
+    {
+        static ProjectServicesApi Api(HttpContext ctx) => ctx.RequestServices.GetRequiredService<ProjectServicesApi>();
+
+        // Рабочий каталог дев-сервера — реальный путь под корнем (лексика пропускает симлинк наружу)
+        static Func<string?, bool> CwdAllowed(HttpContext ctx, AgentProjectFiles files) => cwd =>
+        {
+            if (string.IsNullOrWhiteSpace(cwd)) return true;
+            try { files.Check(ProjectOf(ctx), cwd); return true; }
+            catch (UnauthorizedAccessException) { return false; }
+        };
+
+        g.MapGet("/services", async (HttpContext ctx, CancellationToken ct) =>
+            ToResult(await Api(ctx).ServicesAsync(WorkProject(ctx), OwnerOf(ctx), files)));
+        g.MapPost("/preview/active-external", async (HttpContext ctx, PreviewActiveRequest req) =>
+            ToResult(await Api(ctx).SetActiveExternalAsync(WorkProject(ctx), req, files)));
+        g.MapPost("/preview/start", async (HttpContext ctx, PreviewStartRequest req) =>
+            ToResult(await Api(ctx).StartAsync(WorkProject(ctx), OwnerOf(ctx), req, files, CwdAllowed(ctx, files))));
+        g.MapPost("/preview/stop", async (HttpContext ctx, PreviewStopRequest? req) =>
+            ToResult(await Api(ctx).StopAsync(WorkProject(ctx), OwnerOf(ctx), req, files)));
+        g.MapPost("/preview/stop-external", async (HttpContext ctx, StopExternalRequest req) =>
+            ToResult(await Api(ctx).StopExternalAsync(WorkProject(ctx), OwnerOf(ctx), req, files, ctx.RequestAborted)));
+        g.MapGet("/preview/status", (HttpContext ctx, CancellationToken ct) =>
+            ToResult(Api(ctx).Status(WorkProject(ctx), OwnerOf(ctx))));
+        g.MapPost("/preview/active", (HttpContext ctx, PreviewActiveRequest req) =>
+            ToResult(Api(ctx).SetActive(WorkProject(ctx), req)));
+        g.MapGet("/launch-config", async (HttpContext ctx, CancellationToken ct) =>
+            ToResult(await Api(ctx).GetLaunchConfigAsync(WorkProject(ctx), files)));
+        g.MapPut("/launch-config", async (HttpContext ctx, LaunchConfigPutRequest req) =>
+            ToResult(await Api(ctx).PutLaunchConfigAsync(WorkProject(ctx), req, files)));
+    }
+
+    // ---------- навыки и агенты проекта: контракт SkillsController ----------
+
+    private static void MapSkills(RouteGroupBuilder g, AgentProjectFiles files, AgentWorkbench workbench)
+    {
+        static SkillsService Skills(HttpContext ctx) => ctx.RequestServices.GetRequiredService<SkillsService>();
+
+        // Глобальная часть — профиль CLI агента: ровно то, что увидит ход на этой машине
+        g.MapGet("/skills", async (HttpContext ctx, CancellationToken ct) =>
+        {
+            var skills = Skills(ctx);
+            return Results.Ok(new
+            {
+                skills = skills.GetSkillsInConfigRoot(workbench.CliProfile),
+                projectSkills = await skills.GetProjectSkillsAsync(files, WorkProject(ctx), ct),
+                agents = await skills.GetProjectAgentsAsync(files, WorkProject(ctx), ct),
+                workflows = skills.GetWorkflowsInConfigRoot(workbench.CliProfile),
+                plugins = skills.GetPluginSkillsInConfigRoot(workbench.CliProfile),
+            });
+        });
+        g.MapGet("/agents/{agentName}", async (HttpContext ctx, string agentName, CancellationToken ct) =>
+            await Skills(ctx).GetAgentContentAsync(files, WorkProject(ctx), agentName, ct) is { } content
+                ? Results.Ok(new { content })
+                : Results.NotFound());
+        g.MapPut("/agents/{agentName}", async (HttpContext ctx, string agentName, SkillContentRequest req) =>
+        {
+            await Skills(ctx).SaveProjectAgentAsync(files, WorkProject(ctx), agentName, req.Content, ctx.RequestAborted);
+            return Results.Ok();
+        });
+        g.MapPost("/agents", async (HttpContext ctx, CreateSkillRequest req) =>
+        {
+            if (string.IsNullOrWhiteSpace(req.Name))
+                return Results.BadRequest(new { error = "Имя агента не может быть пустым" });
+            await Skills(ctx).SaveProjectAgentAsync(files, WorkProject(ctx), req.Name.Trim(), req.Content, ctx.RequestAborted);
+            return Results.Ok(new { name = req.Name.Trim() });
+        });
+    }
+
+    // ---------- вложения чата локального проекта: вместо ChatsController.Upload ----------
+
+    private static void MapAttachments(RouteGroupBuilder g, AgentProjectFiles files) =>
+        g.MapPost("/" + DeviceAgentApi.AttachmentsRoute, async (HttpContext ctx) =>
+        {
+            if (!ctx.Request.HasFormContentType)
+                return Results.BadRequest(new { error = "Файл не выбран или пустой" });
+            var form = await ctx.Request.ReadFormAsync(ctx.RequestAborted);
+            var file = form.Files.GetFile("file");
+            if (file is null || file.Length == 0)
+                return Results.BadRequest(new { error = "Файл не выбран или пустой" });
+            if (AttachmentsGitExclude.AttachmentPath(file.FileName) is not { } rel)
+                return Results.BadRequest(new { error = "Некорректное имя файла" });
+
+            var project = ProjectOf(ctx);
+            // Вложения не должны светиться в git-статусе проекта (как у сервера) — best effort
+            try { await AttachmentsGitExclude.EnsureAsync(files, project, ctx.RequestAborted); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+
+            using var buffer = new MemoryStream();
+            await file.CopyToAsync(buffer, ctx.RequestAborted);
+            await files.WriteFileBytesAsync(project, rel, buffer.ToArray(), ctx.RequestAborted);
+            return Results.Ok(new { path = rel });
         });
 
     // ---------- git: контракт GitController (подмножество рабочего дерева) ----------

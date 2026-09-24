@@ -53,7 +53,7 @@ public sealed class LocalApiTests : IAsyncLifetime
         var files = new AgentProjectFiles(new FileService(git), _box.Policy(new AgentLimits { MaxReadBytes = 1024 }));
         _app = LocalApi.Build(new LocalApiOptions(_port, ServerOrigin, "test"), files, git,
             new AgentTicketCache(_introspector), watchers: null, NullLoggerFactory.Instance,
-            streamTickets: new AgentStreamTickets(_clock));
+            urlTickets: new AgentUrlTickets(_clock));
         await _app.StartAsync();
         _http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{_port}") };
     }

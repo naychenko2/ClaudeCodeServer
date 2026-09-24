@@ -29,7 +29,30 @@
     <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Files\ClaudeHomeServer.Files.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Git\ClaudeHomeServer.Git.csproj" />
+    <!-- Рабочие подсистемы проекта (задача 4.3) — тоже композиция, а не своя версия:
+         терминал, дев-серверы и превью, навыки и агенты проекта. -->
+    <ProjectReference Include="..\ClaudeHomeServer.Terminal\ClaudeHomeServer.Terminal.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.ProjectServices\ClaudeHomeServer.ProjectServices.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Skills\ClaudeHomeServer.Skills.csproj" />
+    <!-- Мост псевдоконсоли Windows-терминала: TerminalService ищет ConPtyBridge.exe рядом со
+         сборкой (ConPtyBridgeLocator), как у сервера -->
+    <ProjectReference Include="..\ConPtyBridge\ConPtyBridge.csproj" Condition="'$(OS)' == 'Windows_NT'" ReferenceOutputAssembly="false" />
   </ItemGroup>
+
+  <Target Name="CopyConPtyBridge" AfterTargets="Build" Condition="'$(OS)' == 'Windows_NT'">
+    <ItemGroup>
+      <ConPtyBridgeFiles Include="..\ConPtyBridge\bin\$(Configuration)\net10.0\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(ConPtyBridgeFiles)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
+
+  <!-- Linux/macOS: pty-bridge терминала собирается из исходника рядом с агентом (у сервера
+       это делают Dockerfile и publish-linux.sh). Нет компилятора — предупреждение, не ошибка:
+       терминал тогда деградирует в bash с перенаправлением, как и на сервере без моста. -->
+  <Target Name="BuildPtyBridge" AfterTargets="Build" Condition="'$(OS)' != 'Windows_NT'"
+          Inputs="$(MSBuildThisFileDirectory)../pty-bridge/pty-bridge.c" Outputs="$(OutDir)pty-bridge">
+    <Exec Command="cc -O2 -o &quot;$(OutDir)pty-bridge&quot; &quot;$(MSBuildThisFileDirectory)../pty-bridge/pty-bridge.c&quot; -lutil" ContinueOnError="WarnAndContinue" />
+  </Target>
 
   <ItemGroup>
     <InternalsVisibleTo Include="ClaudeHomeServer.DeviceAgent.Tests" />

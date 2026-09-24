@@ -58,6 +58,35 @@ internal sealed class WindowsJobProcess : TurnProcess
         }
     }
 
+    /// <summary>
+    /// Посадить уже запущенный процесс в свой Job Object (терминал, дев-сервер — задача 4.3):
+    /// то же, что у хода, только процесс стартовал чужим кодом. Возвращает хэндл job: его
+    /// закрытие добивает всё дерево, как и смерть агента.
+    /// </summary>
+    internal static Job AttachToNewJob(Process process)
+    {
+        var job = CreateKillOnCloseJob();
+        if (!AssignProcessToJobObject(job, process.Handle))
+        {
+            var error = Marshal.GetLastPInvokeError();
+            job.Dispose();
+            throw new Win32Exception(error, "процесс не посажен в Job Object");
+        }
+        return new Job(job);
+    }
+
+    /// <summary>Job Object процесса: убить дерево целиком или отпустить хэндл.</summary>
+    internal sealed class Job : IDisposable
+    {
+        private readonly SafeJobHandle _handle;
+
+        internal Job(SafeJobHandle handle) => _handle = handle;
+
+        public bool Terminate() => !_handle.IsClosed && TerminateJobObject(_handle, 1);
+
+        public void Dispose() => _handle.Dispose();
+    }
+
     public override void KillTree()
     {
         if (Interlocked.Exchange(ref _killed, 1) == 1) return;
@@ -152,7 +181,7 @@ internal sealed class WindowsJobProcess : TurnProcess
         public UIntPtr PeakJobMemoryUsed;
     }
 
-    private sealed class SafeJobHandle() : SafeHandleZeroOrMinusOneIsInvalid(ownsHandle: true)
+    internal sealed class SafeJobHandle() : SafeHandleZeroOrMinusOneIsInvalid(ownsHandle: true)
     {
         protected override bool ReleaseHandle() => CloseHandle(handle);
     }

@@ -7,6 +7,8 @@ using ClaudeHomeServer.DeviceAgent.Composition;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Files;
 using ClaudeHomeServer.Services.Git;
+using ClaudeHomeServer.Services.ProjectServices;
+using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
@@ -18,11 +20,11 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace ClaudeHomeServer.Tests.Contract;
 
 /// <summary>
-/// Контракт маршрутов файлов и git (ADR-016, задача 4.2а): фронт ходит одним клиентом то к
+/// Контракт маршрутов проекта (ADR-016, задачи 4.2а и 4.3): фронт ходит одним клиентом то к
 /// серверу, то к localhost-API агента устройства. Один и тот же сценарий идёт на серверные
-/// FilesController/GitController (живой хост) и на <see cref="LocalApi"/> (живой Kestrel) на
-/// одинаковых деревьях проекта: успешные ответы обязаны совпасть набором полей и типами JSON,
-/// отказы — кодом. Формы ответов — общие типы из <c>Protocol/ProjectFilesApiContract.cs</c>;
+/// FilesController/GitController/PreviewController/SkillsController (живой хост) и на
+/// <see cref="LocalApi"/> (живой Kestrel) на одинаковых деревьях проекта: успешные ответы
+/// обязаны совпасть набором полей и типами JSON, отказы — кодом. Формы ответов — общие типы из <c>Protocol/ProjectFilesApiContract.cs</c>;
 /// тест добивает то, что компилятор не видит: анонимный объект на одной стороне, коды, пустое
 /// тело против тела.
 ///
@@ -77,8 +79,12 @@ public sealed class DeviceAgentApiContractTests : IClassFixture<TestWebApplicati
         var port = FreePort();
         var git = new GitService(AgentLauncherFactory.Instance);
         var files = new AgentProjectFiles(new FileService(git), new AgentPathPolicy(new AllowedRoots(AgentAllowed)));
+        // Глобальные навыки агент берёт из профиля CLI, сервер — из ~/.claude: для сравнения
+        // формы профилем агента служит тот же каталог
+        var cliProfile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude");
         _agentApp = LocalApi.Build(new LocalApiOptions(port, ServerOrigin, "contract"), files, git,
-            new AgentTicketCache(new Introspector(AgentRoot)), watchers: null, NullLoggerFactory.Instance);
+            new AgentTicketCache(new Introspector(AgentRoot)), watchers: null, NullLoggerFactory.Instance,
+            workbench: new AgentWorkbench(Path.Combine(_base, "agent-data"), cliProfile, FreePort(), new AgentLauncherFactory()));
         await _agentApp.StartAsync();
         _agent = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}") };
         _agent.DefaultRequestHeaders.Add(DeviceAgentApi.TicketHeader, Ticket);
@@ -101,10 +107,16 @@ public sealed class DeviceAgentApiContractTests : IClassFixture<TestWebApplicati
         return port;
     }
 
-    // Одинаковое дерево на обеих сторонах: git-репозиторий с коммитом и правкой поверх
+    // Одинаковое дерево на обеих сторонах: git-репозиторий с коммитом и правкой поверх;
+    // манифест с дев-скриптом, агент и навык проекта — для сервисов и панели навыков
     private static void SeedProject(string root)
     {
         Directory.CreateDirectory(Path.Combine(root, "sub"));
+        Directory.CreateDirectory(Path.Combine(root, ".claude", "agents"));
+        Directory.CreateDirectory(Path.Combine(root, ".claude", "skills", "demo"));
+        File.WriteAllText(Path.Combine(root, "package.json"), """{ "scripts": { "dev": "vite", "build": "vite build" } }""");
+        File.WriteAllText(Path.Combine(root, ".claude", "agents", "scout.md"), "---\nname: scout\ndescription: разведка\ntools: Read, Grep\n---\nтело");
+        File.WriteAllText(Path.Combine(root, ".claude", "skills", "demo", "SKILL.md"), "---\nname: demo\ndescription: навык\n---\nтело");
         File.WriteAllText(Path.Combine(root, "a.txt"), "привет\n");
         File.WriteAllText(Path.Combine(root, "sub", "b.txt"), "b\n");
         File.WriteAllText(Path.Combine(root, "clip.mp4"), new string('x', 64));
@@ -184,6 +196,38 @@ public sealed class DeviceAgentApiContractTests : IClassFixture<TestWebApplicati
         C("коммит: нечего коммитить", "POST", "git/commit", "git/commit", new GitCommitRequest("пусто")),
         C("сброс правок", "POST", "git/discard", "git/discard", new GitPathRequest("clip.mp4")),
         C("сброс правок: вне корня", "POST", "git/discard", "git/discard", new GitPathRequest("../outside.txt")),
+
+        C("сервисы", "GET", "services", "services"),
+        C("статус превью", "GET", "preview/status", "preview/status"),
+        C("запуск: без команды", "POST", "preview/start", "preview/start", new PreviewStartRequest("")),
+        C("запуск: нет такой команды", "POST", "preview/start", "preview/start",
+            new PreviewStartRequest("ai-home-contract-no-such-command", ServiceId: "ghost")),
+        C("запуск: каталог вне корня", "POST", "preview/start", "preview/start",
+            new PreviewStartRequest("node", ServiceId: "escape", Cwd: "../outside.txt")),
+        C("остановка: без сервиса", "POST", "preview/stop", "preview/stop", new PreviewStopRequest(null)),
+        C("остановка", "POST", "preview/stop", "preview/stop", new PreviewStopRequest("ghost")),
+        C("остановка внешнего: порт неизвестен", "POST", "preview/stop-external", "preview/stop-external",
+            new StopExternalRequest("ghost")),
+        C("активный: без сервиса", "POST", "preview/active", "preview/active", new PreviewActiveRequest("")),
+        C("активный", "POST", "preview/active", "preview/active", new PreviewActiveRequest("npm-dev")),
+        C("внешний: нет сервиса", "POST", "preview/active-external", "preview/active-external", new PreviewActiveRequest("nope")),
+        C("launch.json: пусто", "GET", "launch-config", "launch-config"),
+        C("launch.json: запись", "PUT", "launch-config", "launch-config", new LaunchConfigPutRequest(
+        [
+            new LaunchConfigEntry { Name = "web", RuntimeExecutable = "npm", RuntimeArgs = ["run", "dev"], Port = 1 },
+        ])),
+        C("launch.json: чтение", "GET", "launch-config", "launch-config"),
+        C("сервисы после записи", "GET", "services", "services"),
+        C("внешний: порт не слушается", "POST", "preview/active-external", "preview/active-external",
+            new PreviewActiveRequest("launch-web")),
+
+        C("навыки", "GET", "skills", "skills"),
+        C("агент", "GET", "agents/{agentName}", "agents/scout"),
+        C("агент: нет такого", "GET", "agents/{agentName}", "agents/nope"),
+        C("агент: запись", "PUT", "agents/{agentName}", "agents/scout", new SkillContentRequest("---\nname: scout\n---\nновое")),
+        C("агент: создание", "POST", "agents", "agents", new CreateSkillRequest("helper", "тело")),
+        C("агент: пустое имя", "POST", "agents", "agents", new CreateSkillRequest(" ", "тело")),
+        C("навыки после записи", "GET", "skills", "skills"),
     ];
 
     private sealed record Outcome(int Status, string? Shape, string? ContentType)
@@ -280,24 +324,46 @@ public sealed class DeviceAgentApiContractTests : IClassFixture<TestWebApplicati
             var template = endpoint.RoutePattern.RawText!.Trim('/');
             if (!template.StartsWith(prefix, StringComparison.Ordinal)) continue;
             var relative = template[prefix.Length..].TrimEnd('/');
-            if (!relative.StartsWith("files", StringComparison.Ordinal) && !relative.StartsWith("git", StringComparison.Ordinal)) continue;
             foreach (var method in endpoint.Metadata.GetMetadata<HttpMethodMetadata>()?.HttpMethods ?? [])
                 yield return new ProjectApiRoute(method, relative);
         }
     }
 
+    // Контроллеры, чьи маршруты проекта обслуживает и агент
+    private static readonly string[] SharedControllers = ["Files", "Git", "Preview", "Skills"];
+
     [Fact]
     public void КаждыйСерверныйМаршрут_ЛибоОбщий_ЛибоВСпискеНеподдержанных()
     {
         var server = ProjectRoutes(_factory.Services.GetServices<EndpointDataSource>(), e =>
-            e.Metadata.GetMetadata<Microsoft.AspNetCore.Mvc.Controllers.ControllerActionDescriptor>()?.ControllerName is "Files" or "Git")
+            SharedControllers.Contains(e.Metadata.GetMetadata<Microsoft.AspNetCore.Mvc.Controllers.ControllerActionDescriptor>()?.ControllerName))
             .ToHashSet();
         var agent = ProjectRoutes(((IEndpointRouteBuilder)_agentApp).DataSources, _ => true).ToHashSet();
 
         DeviceAgentRoutes.Shared.Intersect(DeviceAgentRoutes.Unsupported).Should().BeEmpty("маршрут не может быть и общим, и неподдержанным");
+        DeviceAgentRoutes.AgentOnly.Intersect(DeviceAgentRoutes.Shared.Concat(DeviceAgentRoutes.Unsupported)).Should()
+            .BeEmpty("маршрут только агента не может быть серверным");
         server.Should().BeEquivalentTo(DeviceAgentRoutes.Shared.Concat(DeviceAgentRoutes.Unsupported),
-            "каждый маршрут FilesController/GitController обязан стоять ровно в одном списке DeviceAgentRoutes");
-        agent.Should().BeEquivalentTo(DeviceAgentRoutes.Shared,
-            "у агента ровно общие маршруты: лишний — вне контракта, недостающий — ложь матрицы возможностей");
+            "каждый маршрут проекта у Files/Git/Preview/SkillsController обязан стоять ровно в одном списке DeviceAgentRoutes");
+        agent.Should().BeEquivalentTo(DeviceAgentRoutes.Shared.Concat(DeviceAgentRoutes.AgentOnly),
+            "у агента ровно общие маршруты и свои билеты: лишний — вне контракта, недостающий — ложь матрицы возможностей");
+    }
+
+    /// <summary>
+    /// Хаб агента: те же методы, что клиент зовёт у серверных TerminalHub и SessionHub
+    /// (логи дев-серверов), — имя, параметры и результат. Клиенту меняется только адрес.
+    /// </summary>
+    [Fact]
+    public void ХабАгента_ТеЖеМетоды_ЧтоУСерверныхХабов()
+    {
+        static IEnumerable<string> Signatures(Type hub, Func<System.Reflection.MethodInfo, bool>? only = null) =>
+            hub.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.DeclaredOnly)
+                .Where(m => !m.IsSpecialName && m.Name is not ("OnConnectedAsync" or "OnDisconnectedAsync") && (only is null || only(m)))
+                .Select(m => $"{m.ReturnType} {m.Name}({string.Join(", ", m.GetParameters().Select(p => p.ParameterType + " " + p.Name))})");
+
+        var server = Signatures(typeof(ClaudeHomeServer.Hubs.TerminalHub))
+            .Concat(Signatures(typeof(ClaudeHomeServer.Hubs.SessionHub), m => m.Name is "JoinPreviewLog" or "LeavePreviewLog"));
+
+        Signatures(typeof(AgentHub)).Should().BeEquivalentTo(server);
     }
 }

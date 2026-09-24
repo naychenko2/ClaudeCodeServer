@@ -343,6 +343,7 @@ public sealed class LlmSubsystem : IAppSubsystem
         services.AddSingleton<Gateway.UpstreamSelector>();
         // Туннель выхода CLI устройства (задача 2.9): SSRF-проверка и тот же прокси, что у серверного CLI
         services.AddSingleton<Gateway.EgressConnector>();
+        services.AddSingleton<Gateway.EgressTunnelLimiter>();
         // Шов для удалённого раннера (Execution): выдача маршрута и токена хода на устройстве
         services.AddSingleton<ClaudeHomeServer.Services.Execution.IDeviceTurnGateway, Gateway.DeviceTurnGateway>();
         services.AddHttpClient(Gateway.LlmGatewayEndpoints.HttpClientName, c => c.Timeout = Timeout.InfiniteTimeSpan);

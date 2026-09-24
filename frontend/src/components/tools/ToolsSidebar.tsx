@@ -71,31 +71,15 @@ export function groupServices(services: ProjectService[]): [string, ProjectServi
 }
 
 // Терминал и сервисы локального проекта живут в агенте устройства на этой машине: пока он не
-// ответил, DeviceAgentGate показывает состояние связи. Недоступную группу объясняет тело
+// ответил, DeviceAgentGate показывает состояние связи. Гейт группы files — здесь, а все
+// хуки — в ToolsSidebarBody: ранний выход в теле нарушал бы Rules of Hooks
 export function ToolsSidebar(props: Props) {
-  const filesGate = useProjectFeature(props.project, ProjectFeature.Files);
-  if (!props.project || !filesGate) return <ToolsSidebarBody {...props} />;
-  return <DeviceAgentGate project={props.project}><ToolsSidebarBody {...props} /></DeviceAgentGate>;
-}
-
-function ToolsSidebarBody({
-  projectId, project, activeTab, onTabChange,
-  terminals, onCreateTerminal, onStopTerminal, onRenameTerminal,
-  onSelectTerminal, activeTerminalId,
-  activePreviewId, previewServices,
-  onRefreshServices, onStartService, onStopService, onSelectPreview,
-  terminalBusy,
-}: Props) {
   // Гейт по матрице (ADR-016 §3.4): терминал и dev-серверы требуют доступ к файлам.
   // Серверный эндпоинт проксирует запросы к агенту устройства при файлах в группе
   // files. Если группа недоступна (например, офлайн-устройство) — оба раздела пустые
-  const filesGate = useProjectFeature(project, ProjectFeature.Files);
-  const filesGateReason = featureReason(project, ProjectFeature.Files);
-  const terminalGate = useProjectFeature(project, ProjectFeature.Terminal);
-  const terminalGateReason = featureReason(project, ProjectFeature.Terminal);
-  const previewGate = useProjectFeature(project, ProjectFeature.DevServers);
-  const previewGateReason = featureReason(project, ProjectFeature.DevServers);
-  if (project && !filesGate) {
+  const filesGate = useProjectFeature(props.project, ProjectFeature.Files);
+  const filesGateReason = featureReason(props.project, ProjectFeature.Files);
+  if (props.project && !filesGate) {
     return (
       <div role="status" data-capability-gate="tools"
         style={{
@@ -115,6 +99,23 @@ function ToolsSidebarBody({
       </div>
     );
   }
+  if (!props.project) return <ToolsSidebarBody {...props} />;
+  return <DeviceAgentGate project={props.project}><ToolsSidebarBody {...props} /></DeviceAgentGate>;
+}
+
+function ToolsSidebarBody({
+  projectId, project, activeTab, onTabChange,
+  terminals, onCreateTerminal, onStopTerminal, onRenameTerminal,
+  onSelectTerminal, activeTerminalId,
+  activePreviewId, previewServices,
+  onRefreshServices, onStartService, onStopService, onSelectPreview,
+  terminalBusy,
+}: Props) {
+  // Группа files здесь уже доступна (гейт в обёртке); отдельные подсистемы — нет гарантии
+  const terminalGate = useProjectFeature(project, ProjectFeature.Terminal);
+  const terminalGateReason = featureReason(project, ProjectFeature.Terminal);
+  const previewGate = useProjectFeature(project, ProjectFeature.DevServers);
+  const previewGateReason = featureReason(project, ProjectFeature.DevServers);
   // Инлайн-переименование: id редактируемого терминала + текущее значение поля
   const [renaming, setRenaming] = useState<{ id: string; value: string } | null>(null)
   // Per-tab reason для tooltip'а кнопки таба (когда files доступны, но конкретная

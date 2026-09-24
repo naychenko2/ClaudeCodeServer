@@ -33,6 +33,7 @@ public class ProjectCapabilitiesGuardTests
         ["backend/ClaudeHomeServer.Core/Models/ProjectCapabilities.cs"] = (2, "сама матрица и её описание"),
         ["backend/ClaudeHomeServer/Controllers/ProjectsController.cs"] = (2, "разбор req.DeviceId в создании и перепривязке"),
         ["backend/ClaudeHomeServer.Llm/Gateway/TurnTokenService.cs"] = (1, "привязка токена хода к устройству"),
+        ["backend/ClaudeHomeServer.DeviceAgent/Pairing/DevicePairing.cs"] = (1, "ответ сопряжения устройства, не проект"),
         // IsLocal — признак локального LLM-провайдера, к проектам не относится
         ["backend/ClaudeHomeServer.Core/Models/LlmProviderConfig.cs"] = (2, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Core/Services/Mcp/Http/LoopbackProxyBypass.cs"] = (1, "LLM-провайдер"),
@@ -41,6 +42,7 @@ public class ProjectCapabilitiesGuardTests
         ["backend/ClaudeHomeServer.Llm/LlmProviderRegistry.cs"] = (5, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Llm/Claude/ClaudeSession.cs"] = (4, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Llm/FallbackLlmSessionAdapter.cs"] = (2, "LLM-провайдер"),
+        ["backend/ClaudeHomeServer.Llm/Gateway/UpstreamSelector.cs"] = (1, "LLM-провайдер"),
     };
 
     private static string RepoRoot()

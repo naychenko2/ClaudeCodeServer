@@ -22,6 +22,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -81,9 +82,11 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
     {
         public DeviceExecGateway? Issued { get; private set; }
         public TaskCompletionSource<string> Ended { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public List<(string OwnerId, string SessionId, string DeviceId)> Started { get; } = [];
 
         public DeviceTurnGatewayStart StartTurn(string ownerId, string sessionId, string deviceId, string? model)
         {
+            lock (Started) Started.Add((ownerId, sessionId, deviceId));
             var start = inner.StartTurn(ownerId, sessionId, deviceId, model);
             Issued = start.Gateway;
             return start;
@@ -162,7 +165,9 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
     }
 
     // Фейковый CLI: пишет свой env/argv/файлы в рабочий каталог, порождает внука, по строке
-    // stdin «llm» зовёт LLM через ANTHROPIC_BASE_URL, по «mcp» — MCP tasks из конфига хода
+    // stdin «llm» зовёт LLM через ANTHROPIC_BASE_URL, по «mcp» — MCP tasks из конфига хода,
+    // на user-сообщение stream-json (ход ClaudeSession) зовёт LLM и отвечает result'ом; первый
+    // такой ход взводит фоновую задачу — прогон доживает, и следующий ход идёт тем же процессом
     private const string FakeCli = """
         #!/usr/bin/env node
         const fs = require('fs');
@@ -175,12 +180,25 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
         const out = o => process.stdout.write(JSON.stringify(o) + '\n');
         out({ type: 'system', subtype: 'init', pid: process.pid, grandchild: child.pid });
         const mcpUrl = () => JSON.parse(Object.values(files).find(t => t.includes('mcpServers'))).mcpServers.tasks.url;
+        const llm = () => fetch(process.env.ANTHROPIC_BASE_URL + '/v1/messages?beta=true', { method: 'POST',
+          headers: { 'content-type': 'application/json', authorization: 'Bearer ' + process.env.ANTHROPIC_AUTH_TOKEN },
+          body: JSON.stringify({ model: 'claude-opus-5-5', max_tokens: 1 }) });
+        let bgStarted = false;
+        function userMessage(line) { try { return JSON.parse(line).type === 'user'; } catch { return false; } }
         async function handle(line) {
           if (line === 'llm') {
-            const r = await fetch(process.env.ANTHROPIC_BASE_URL + '/v1/messages?beta=true', { method: 'POST',
-              headers: { 'content-type': 'application/json', authorization: 'Bearer ' + process.env.ANTHROPIC_AUTH_TOKEN },
-              body: JSON.stringify({ model: 'claude-opus-5-5', max_tokens: 1 }) });
+            const r = await llm();
             out({ type: 'llm', status: r.status, body: await r.text() });
+          } else if (userMessage(line)) {
+            if (!bgStarted) {
+              bgStarted = true;
+              out({ type: 'system', subtype: 'task_started', task_id: 'bg-1', tool_use_id: 'toolu-bg-1', description: 'bg',
+                subagent_type: 'general-purpose', task_type: 'local_agent', prompt: 'p' });
+            }
+            const r = await llm();
+            const ok = r.status === 200;
+            out({ type: 'result', subtype: ok ? 'success' : 'error_during_execution', is_error: !ok,
+              duration_ms: 1, num_turns: 1, result: ok ? 'ok' : await r.text() });
           } else if (line === 'mcp') {
             const r = await fetch(mcpUrl(), { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
             out({ type: 'mcp', status: r.status, body: await r.text() });
@@ -475,5 +493,82 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
         _executor.LiveCount.Should().Be(0);
         _tokens.ActiveCount.Should().Be(0);
         Directory.Exists(Path.Combine(_deviceDir, "turns")).Should().BeFalse("каталог хода на устройстве не создан");
+    }
+
+    // ADR-016, задача 3.2а: настоящий ход чата локального проекта. Раннер берёт боевая фабрика
+    // (ForProject), ClaudeSession сам ставит в spec свой чат — по нему шлюз выдаёт токен.
+    // Два хода идут одним процессом CLI на устройстве, и оба проходят шлюз LLM.
+    [SkippableFact]
+    public async Task ХодЧатаЛокальногоПроекта_ЧерезForProject_ТокенСЧатомИУстройством_ДваХодаОднимПроцессом()
+    {
+        Skip.If(OperatingSystem.IsWindows(), "фейковый CLI — скрипт с shebang, дерево процессов — группа Unix");
+
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(_serverTmp, "data", "projects.json"),
+                ["Sandbox:ProjectsRoot"] = Path.Combine(_serverTmp, "sandbox"),
+            }).Build();
+        var factory = new LauncherFactory(
+            new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance),
+            new SandboxManager(config, NullLogger<SandboxManager>.Instance),
+            () => _channel, () => _gateway);
+        var project = new ClaudeHomeServer.Models.Project { OwnerId = "owner-e2e", DeviceId = _device.Id, RootPath = _projectDir };
+        var launcher = factory.ForProject(project);
+        launcher.Should().BeOfType<RemoteProcessRunner>();
+
+        var results = System.Threading.Channels.Channel.CreateUnbounded<ResultMessage>();
+        var errors = new List<ErrorMessage>();
+        var context = new LlmSessionContext(
+            RootPath: _projectDir,
+            OnMessage: m =>
+            {
+                if (m is ResultMessage r) results.Writer.TryWrite(r);
+                if (m is ErrorMessage e) lock (errors) errors.Add(e);
+                return Task.CompletedTask;
+            },
+            RawSystemPrompt: null, BuiltInSystemPrompt: ProjectManager.BuiltInSystemPrompt,
+            PermissionRules: null,
+            TasksMcp: null,
+            Launcher: launcher);
+        var chat = new ClaudeHomeServer.Models.Session { ProjectId = "p-local" };
+        var session = new ClaudeHomeServer.Services.Llm.Claude.ClaudeSession(chat, context);
+        await using (session)
+        {
+            await session.SendMessageAsync("первый ход");
+            var first = await ReadResultAsync(results, errors);
+            first.Subtype.Should().Be("success");
+
+            lock (_gateway.Started)
+                _gateway.Started.Should().Equal([("owner-e2e", chat.Id, _device.Id)], "токен выдан чату и устройству этого проекта");
+            var issued = _gateway.Issued!;
+            _tokens.Validate(issued.TurnId, issued.Token, _device.Id)!.SessionId.Should().Be(chat.Id);
+
+            await session.SendMessageAsync("второй ход");
+            var second = await ReadResultAsync(results, errors);
+            second.Subtype.Should().Be("success", "второй ход того же процесса проходит шлюз тем же токеном");
+
+            _channel.Opened.Should().Be(1, "оба хода — один процесс CLI на устройстве");
+            lock (_gateway.Started) _gateway.Started.Should().HaveCount(1);
+            lock (_upstream.Calls) _upstream.Calls.Should().HaveCount(2);
+            lock (errors) errors.Should().BeEmpty();
+        }
+
+        // Чат закрыт — процесс на устройстве убит, токен отозван
+        (await _gateway.Ended.Task.WaitAsync(Wait)).Should().Be(_gateway.Issued!.TurnId);
+        _tokens.ActiveCount.Should().Be(0);
+    }
+
+    private static async Task<ResultMessage> ReadResultAsync(
+        System.Threading.Channels.Channel<ResultMessage> results, List<ErrorMessage> errors)
+    {
+        try
+        {
+            return await results.Reader.ReadAsync().AsTask().WaitAsync(Wait);
+        }
+        catch (TimeoutException)
+        {
+            lock (errors) throw new TimeoutException("ход не дошёл до result: " + string.Join(" | ", errors.Select(e => e.Text + " " + e.Details)));
+        }
     }
 }

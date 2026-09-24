@@ -153,6 +153,53 @@ describe('applyServerMessage: context_pruned', () => {
     expect(next.items[0]).toMatchObject({ kind: 'context_pruned', pruneKind: 'compact_cloud' });
   });
 
+  // Диагностика 2026-09-23: на экране две строки сдвига показывали одни и те же числа.
+  // Механизм — веерная внеходовая рассылка: BroadcastSessionMessageAsync шлёт ОДНО событие
+  // и в session-группу, и в project-группу, а вкладка открытого чата состоит в обеих
+  // (useSession.joinSession + WorkspacePage.joinProject на одном соединении signalr.ts).
+  // То есть редьюсер видел одно событие дважды и дописывал вторую строку с его числами.
+  describe('веер session+project: повторная доставка не задваивает строку', () => {
+    it('одно событие, доставленное дважды, даёт одну строку', () => {
+      const событие = wire({ eventId: 'ev-1' });
+      const после = applyServerMessage(applyServerMessage(initialChatState(), событие), событие);
+      expect(после.items.filter(i => i.kind === 'context_pruned')).toHaveLength(1);
+    });
+
+    it('два разных сдвига — две строки, у каждой свои числа', () => {
+      let s = initialChatState();
+      s = applyServerMessage(s, wire({
+        eventId: 'ev-1', tokensBefore: 258_707, tokensAfter: 184_041, blocks: 37,
+        resultBlocks: 24, inputBlocks: 13, thinkingBlocks: 0,
+        prefillSeconds: 2.64, cacheReadTokens: 198_720, promptTokens: 200_000,
+      }));
+      s = applyServerMessage(s, wire({
+        eventId: 'ev-2', tokensBefore: 277_778, tokensAfter: 163_968, blocks: 47,
+        resultBlocks: 31, inputBlocks: 16, thinkingBlocks: 0,
+        prefillSeconds: 153.6, cacheReadTokens: 0, promptTokens: 180_000,
+      }));
+      // Каждая доставка приходит дважды — как в бою
+      s = applyServerMessage(s, wire({ eventId: 'ev-1', tokensBefore: 258_707, tokensAfter: 184_041 }));
+      s = applyServerMessage(s, wire({ eventId: 'ev-2', tokensBefore: 277_778, tokensAfter: 163_968 }));
+
+      const строки = s.items.filter(i => i.kind === 'context_pruned') as PrunedItem[];
+      expect(строки).toHaveLength(2);
+      expect(строки.map(prunedHeadline)).toEqual([
+        'контекст обрезан · 259k → 184k',
+        'контекст обрезан · 278k → 164k',
+      ]);
+      expect(строки.map(prunedDetails)).toEqual([
+        '37 блоков (выводов 24, входов 13) · пересчёт 3 с · из кэша 99%',
+        '47 блоков (выводов 31, входов 16) · пересчёт 154 с · из кэша 0%',
+      ]);
+    });
+
+    it('личности нет (карточка старой истории) — строки не схлопываются', () => {
+      let s = applyServerMessage(initialChatState(), wire({ tokensBefore: 100_000 }));
+      s = applyServerMessage(s, wire({ tokensBefore: 200_000 }));
+      expect(s.items.filter(i => i.kind === 'context_pruned')).toHaveLength(2);
+    });
+  });
+
   it('необязательных полей нет — в элементе их тоже нет', () => {
     const next = applyServerMessage(initialChatState(),
       wire({ prefillSeconds: undefined, cacheReadTokens: undefined, promptTokens: undefined }));

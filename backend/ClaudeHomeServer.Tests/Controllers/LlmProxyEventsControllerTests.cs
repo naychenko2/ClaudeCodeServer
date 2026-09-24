@@ -4,6 +4,7 @@ using System.Text.Json;
 using ClaudeHomeServer.Controllers;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -128,6 +129,69 @@ public class LlmProxyEventsControllerTests
         card.GetProperty("resultBlocks").GetInt32().Should().Be(64);
         card.GetProperty("prefillSeconds").GetDouble().Should().Be(87.5);
         card.GetProperty("cacheReadTokens").GetInt32().Should().Be(18_000);
+    }
+
+    // МЕХАНИЗМ ЗАДВОЕНИЯ (диагностика 2026-09-23): одно принятое событие уезжает в ДВЕ группы
+    // одним и тем же сообщением — в session-группу чата и в project-группу проекта
+    // (SessionManager.BroadcastSessionMessageAsync). Вкладка открытого чата состоит в обеих
+    // (useSession.joinSession + WorkspacePage.joinProject на ОДНОМ соединении signalr.ts),
+    // поэтому получает событие дважды и без дедупа рисует вторую строку с теми же числами.
+    //
+    // Веер тут не дефект (он страхует вкладку, не успевшую войти в session-группу) — дефектом
+    // было отсутствие ЛИЧНОСТИ у карточки: различить вторую доставку от второго сдвига было
+    // нечем. Тест держит и веер, и одинаковый eventId в обеих доставках.
+    [Fact]
+    public async Task КарточкаУезжаетВДвеГруппы_ОднимСобытиемИСОднойЛичностью()
+    {
+        var broadcaster = new TestSessionBroadcaster();
+        using var factory = WithSecret(Secret);
+        factory.ExtraServices = s => s.AddSingleton<ISessionBroadcaster>(broadcaster);
+        var owner = factory.CreateAuthenticatedClient();
+        var (projectId, sessionId) = await CreateSessionAsync(factory, owner);
+        broadcaster.Clear();
+
+        var client = Anonymous(factory);
+        client.DefaultRequestHeaders.Add(LlmProxyEventsController.SecretHeader, Secret);
+        (await client.PostAsJsonAsync(Url, Body(sessionId))).EnsureSuccessStatusCode();
+
+        var вСессию = broadcaster.Session.Where(t => t.SessionId == sessionId)
+            .Select(t => t.Message).OfType<ContextPrunedMessage>().ToList();
+        var вПроект = broadcaster.Project.Where(t => t.ProjectId == projectId)
+            .Select(t => t.Message).OfType<ContextPrunedMessage>().ToList();
+        вСессию.Should().HaveCount(1);
+        вПроект.Should().HaveCount(1, "веер: то же событие уходит и в project-группу");
+        вПроект[0].Should().BeSameAs(вСессию[0],
+            "обе доставки — ОДНО сообщение: вкладка в двух группах получает его дважды");
+        вСессию[0].EventId.Should().NotBeNullOrEmpty(
+            "личность сдвига — единственный способ отличить вторую доставку от второго сдвига");
+
+        // Личность едет и в историю: после перезагрузки страницы дедупу нужна та же точка сравнения
+        var history = await owner.GetFromJsonAsync<JsonElement>(
+            $"/api/projects/{projectId}/sessions/{sessionId}/history");
+        var card = history.EnumerateArray()
+            .Single(m => m.GetProperty("kind").GetString() == "context_pruned");
+        card.GetProperty("eventId").GetString().Should().Be(вСессию[0].EventId);
+    }
+
+    [Fact]
+    public async Task ДваСдвига_ПолучаютРазныеЛичности()
+    {
+        var broadcaster = new TestSessionBroadcaster();
+        using var factory = WithSecret(Secret);
+        factory.ExtraServices = s => s.AddSingleton<ISessionBroadcaster>(broadcaster);
+        var owner = factory.CreateAuthenticatedClient();
+        var (_, sessionId) = await CreateSessionAsync(factory, owner);
+
+        var client = Anonymous(factory);
+        client.DefaultRequestHeaders.Add(LlmProxyEventsController.SecretHeader, Secret);
+        (await client.PostAsJsonAsync(Url, Body(sessionId))).EnsureSuccessStatusCode();
+        (await client.PostAsJsonAsync(Url, Body(sessionId))).EnsureSuccessStatusCode();
+
+        var карточки = broadcaster.Session.Select(t => t.Message)
+            .OfType<ContextPrunedMessage>().ToList();
+        карточки.Should().HaveCount(2);
+        карточки[0].EventId.Should().NotBe(карточки[1].EventId,
+            "два сдвига — две строки, даже если числа совпали");
     }
 
     // Сессия с посеянной историей — как в SessionsControllerTests: без реального хода и claude.exe.

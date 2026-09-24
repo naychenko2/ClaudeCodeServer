@@ -65,12 +65,18 @@ public class LlmProxyEventsController(
         // успели удалить: это не ошибка, а гонка, и лечится она молчанием.
         if (sessions.GetSessionInfo(body.SessionId) is null) return NotFound();
 
+        // Личность сдвига: одна на принятое событие, одинаковая в записи истории и в рассылке.
+        // Рассылка веерная (session- + project-группа), а вкладка открытого чата состоит в
+        // обеих — по этому ключу фронт понимает, что перед ним ВТОРАЯ ДОСТАВКА одного события,
+        // а не второй сдвиг. Свои числа для различения не годятся: два сдвига могут совпасть
+        // числами, а показать их надо оба.
+        var eventId = Guid.NewGuid().ToString("N");
         var stored = new StoredContextPrunedMessage(kind, body.TokensBefore, body.TokensAfter,
             body.Blocks, body.ResultBlocks, body.InputBlocks, body.ThinkingBlocks,
-            body.PrefillSeconds, body.CacheReadTokens, body.PromptTokens);
+            body.PrefillSeconds, body.CacheReadTokens, body.PromptTokens, eventId);
         var broadcast = new ContextPrunedMessage(kind, body.TokensBefore, body.TokensAfter,
             body.Blocks, body.ResultBlocks, body.InputBlocks, body.ThinkingBlocks,
-            body.PrefillSeconds, body.CacheReadTokens, body.PromptTokens);
+            body.PrefillSeconds, body.CacheReadTokens, body.PromptTokens, eventId);
 
         // Ход в этот момент ИДЁТ: AppendStoredAsync кладёт запись в аккумулятор текущего хода
         // (или прямо в историю, если чат не активен) и рассылает сообщение клиентам сессии.

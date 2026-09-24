@@ -1011,8 +1011,11 @@ export type ServerMessage = { sessionId: string } & (
   // blocks — сколько блоков выкинуто всего, дальше разбивка по видам (вывод инструмента,
   // вход инструмента, размышление). prefillSeconds — сколько ждали пересчёт префикса после
   // сдвига; cacheReadTokens/promptTokens — доля запроса, взятая из кэша (cacheRead/prompt).
+  // eventId — личность сдвига: внеходовая рассылка веерная (session- + project-группа), и
+  // вкладка открытого чата состоит в обеих, то есть получает одно событие дважды. По eventId
+  // редьюсер отличает вторую доставку от второго сдвига (карточки до появления поля — без него)
   | {
-      type: 'context_pruned'; kind: 'prune' | 'compact_cloud';
+      type: 'context_pruned'; kind: 'prune' | 'compact_cloud'; eventId?: string;
       tokensBefore: number; tokensAfter: number;
       blocks: number; resultBlocks: number; inputBlocks: number; thinkingBlocks: number;
       prefillSeconds?: number; cacheReadTokens?: number; promptTokens?: number;
@@ -1875,8 +1878,11 @@ export type ChatItem =
   // лежит в pruneKind, а НЕ в kind: у элемента ленты и у записи истории kind — дискриминатор
   // (TypeDiscriminatorPropertyName = "kind" в StoredMessage.cs), своего поля с тем же именем
   // запись иметь не может. В wire-событии дискриминатор — type, поэтому там поле зовётся kind.
+  // eventId — личность сдвига (StoredContextPrunedMessage.EventId / wire-поле eventId):
+  // по ней дедупится повторная доставка одного события. Необязательно: у карточек,
+  // записанных до её появления, поля нет
   | {
-      kind: 'context_pruned'; pruneKind: 'prune' | 'compact_cloud';
+      kind: 'context_pruned'; pruneKind: 'prune' | 'compact_cloud'; eventId?: string;
       tokensBefore: number; tokensAfter: number;
       blocks: number; resultBlocks: number; inputBlocks: number; thinkingBlocks: number;
       prefillSeconds?: number; cacheReadTokens?: number; promptTokens?: number;

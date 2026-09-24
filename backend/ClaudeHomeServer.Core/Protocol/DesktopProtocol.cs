@@ -226,23 +226,184 @@ public sealed record DesktopGoCommand(string CallId, int DeadlineSeconds);
 /// <summary>Отмена: гасит ожидание и невыполненные шаги; уже отправленный ввод не откатывается.</summary>
 public sealed record DesktopCancelCommand(string CallId, string Reason);
 
-/// <summary>Ответ на Hello: версия сервера и потолки протокола.</summary>
+/// <summary>
+/// Ответ на Hello: версия сервера и потолки протокола. Поля агента локальных проектов
+/// (ADR-016) — аддитивные: клиент рук ADR-008 их не читает.
+/// <see cref="RequiredCliVersion"/> — версия управляемой копии CLI, которую агент обязан
+/// держать (null — сервер её не задал); <see cref="HarnessReady"/> и
+/// <see cref="HarnessProblem"/> — вердикт сервера по объявленной копии. Поставив нужную
+/// версию, агент повторяет Hello — вердикт пересчитывается.
+/// </summary>
 public sealed record DeviceHelloAck(
     int ProtocolVersion,
     int AckTimeoutSeconds,
     int MaxResultBytes,
-    int MaxBatchSteps);
+    int MaxBatchSteps,
+    string? RequiredCliVersion = null,
+    bool HarnessReady = false,
+    string? HarnessProblem = null,
+    int ExecProtocolVersion = DeviceExecProtocol.Version);
+
+/// <summary>
+/// Открыть канал исполнения: устройство отвечает WebSocket-подключением на
+/// /api/devices/exec?execId={ExecId}. Что именно запускать, едет первым кадром
+/// <see cref="DeviceExecFrameChannel.Control"/> уже по самому каналу.
+/// </summary>
+public sealed record DeviceExecOpenCommand(string ExecId, int ExecProtocolVersion);
 
 // ---------- устройство → сервер ----------
 
 /// <summary>
 /// Представление устройства при подключении: версия протокола и поддерживаемые типы шагов
 /// (сервер не додумывает состав — устройство объявляет его само).
+///
+/// Хвост — агент локальных проектов (ADR-016): признак агента — непустой
+/// <see cref="AgentVersion"/>; клиент рук ADR-008 эти поля не шлёт, и сохранённые
+/// сведения об агенте его Hello не затирает. <see cref="CliVersion"/> — версия
+/// УПРАВЛЯЕМОЙ копии CLI в каталоге агента (null — копии нет), а не CLI из PATH.
 /// </summary>
 public sealed record DeviceHello(
     int ProtocolVersion,
     IReadOnlyList<string>? SupportedSteps,
-    string? ClientVersion);
+    string? ClientVersion,
+    string? Platform = null,
+    string? AgentVersion = null,
+    string? CliVersion = null,
+    IReadOnlyList<string>? Capabilities = null);
+
+/// <summary>
+/// Возможности агента устройства (ADR-016). Устройство объявляет их само; незнакомые
+/// значения сервер не хранит.
+/// </summary>
+public static class DeviceCapabilities
+{
+    /// <summary>Исполнение процессов (CLI хода) через канал /api/devices/exec.</summary>
+    public const string Exec = "exec";
+
+    /// <summary>Файловые подсистемы на localhost (этап 4).</summary>
+    public const string Files = "files";
+
+    /// <summary>Ретранслятор чтения для других устройств (этап 5).</summary>
+    public const string Relay = "relay";
+
+    public static readonly IReadOnlyList<string> All = [Exec, Files, Relay];
+
+    /// <summary>Только известные значения, без дублей, в порядке <see cref="All"/>.</summary>
+    public static List<string> Normalize(IEnumerable<string>? declared)
+    {
+        var set = new HashSet<string>(
+            (declared ?? []).Select(c => (c ?? "").Trim().ToLowerInvariant()), StringComparer.Ordinal);
+        return All.Where(set.Contains).ToList();
+    }
+}
+
+// ---------- канал исполнения /api/devices/exec (ADR-016) ----------
+
+/// <summary>
+/// Протокол потокового канала исполнения. Версия своя, отдельная от версии хаба: хаб — канал
+/// управления, и его клиент рук ADR-008 о кадрах exec не знает. Устройство называет версию
+/// заголовком <see cref="VersionHeader"/> при подключении; несовместимая — явный отказ 400
+/// с кодом <see cref="UnsupportedVersionError"/> до апгрейда WebSocket.
+/// </summary>
+public static class DeviceExecProtocol
+{
+    public const int Version = 1;
+
+    public const int MinClientVersion = 1;
+
+    public const string Path = "/api/devices/exec";
+
+    public const string VersionHeader = "X-Device-Exec-Protocol";
+
+    public const string UnsupportedVersionError = "unsupported_exec_protocol";
+
+    /// <summary>
+    /// Заголовок кадра: канал (1 байт), номер (8 байт BE), длина (4 байта BE).
+    /// Спайк нёс [канал][длина][данные]; номер добавлен ради досылки после реконнекта.
+    /// </summary>
+    public const int HeaderBytes = 1 + 8 + 4;
+
+    /// <summary>Потолок данных одного кадра: крупный вывод режется отправителем на части.</summary>
+    public const int MaxPayloadBytes = 1024 * 1024;
+
+    /// <summary>
+    /// Потолок неподтверждённого вывода одного исполнения: дальше отправитель ждёт
+    /// подтверждений, а не растит буфер досылки без предела.
+    /// </summary>
+    public const long MaxUnackedBytes = 32L * 1024 * 1024;
+
+    /// <summary>Сколько сервер ждёт подключения устройства к каналу после команды открытия.</summary>
+    public static readonly TimeSpan OpenTimeout = TimeSpan.FromSeconds(10);
+
+    public static bool IsSupportedClientVersion(int version) =>
+        version >= MinClientVersion && version <= Version;
+}
+
+/// <summary>
+/// Логический канал кадра. Номера каналов данных — как в спайке
+/// (tools/local-projects-spike/frames.mjs); <see cref="Ack"/> добавлен для досылки.
+/// </summary>
+public enum DeviceExecFrameChannel : byte
+{
+    Stdin = 0,
+    Stdout = 1,
+    Stderr = 2,
+    Exit = 3,
+    StdinEof = 4,
+    Info = 5,
+    Control = 9,
+
+    /// <summary>
+    /// Подтверждение: номер кадра — последний принятый подряд номер встречной стороны
+    /// (кумулятивно), данных нет. Сами подтверждения не нумеруются и не подтверждаются.
+    /// </summary>
+    Ack = 10,
+}
+
+/// <summary>Кадр канала исполнения. Номера данных идут с 1 подряд, у каждой стороны свои.</summary>
+public readonly record struct DeviceExecFrame(DeviceExecFrameChannel Channel, ulong Sequence, ReadOnlyMemory<byte> Payload);
+
+/// <summary>Кадровка [канал:1][номер:8 BE][длина:4 BE][данные]. Одно WS-сообщение — один кадр.</summary>
+public static class DeviceExecFrames
+{
+    public static byte[] Encode(DeviceExecFrameChannel channel, ulong sequence, ReadOnlySpan<byte> payload)
+    {
+        if (payload.Length > DeviceExecProtocol.MaxPayloadBytes)
+            throw new ArgumentOutOfRangeException(nameof(payload), "Кадр длиннее потолка канала исполнения");
+
+        var buffer = new byte[DeviceExecProtocol.HeaderBytes + payload.Length];
+        buffer[0] = (byte)channel;
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt64BigEndian(buffer.AsSpan(1, 8), sequence);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(buffer.AsSpan(9, 4), (uint)payload.Length);
+        payload.CopyTo(buffer.AsSpan(DeviceExecProtocol.HeaderBytes));
+        return buffer;
+    }
+
+    public static byte[] Ack(ulong sequence) => Encode(DeviceExecFrameChannel.Ack, sequence, []);
+
+    /// <summary>
+    /// Разбор ровно одного кадра. Ложь — битый кадр: неизвестный канал, длина не совпала с
+    /// данными, данные сверх потолка, ненулевые данные у подтверждения.
+    /// </summary>
+    public static bool TryDecode(ReadOnlyMemory<byte> message, out DeviceExecFrame frame)
+    {
+        frame = default;
+        if (message.Length < DeviceExecProtocol.HeaderBytes) return false;
+
+        var span = message.Span;
+        var channel = (DeviceExecFrameChannel)span[0];
+        if (!Enum.IsDefined(channel)) return false;
+
+        var sequence = System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(span.Slice(1, 8));
+        var length = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(span.Slice(9, 4));
+        if (length > DeviceExecProtocol.MaxPayloadBytes) return false;
+        if (message.Length - DeviceExecProtocol.HeaderBytes != length) return false;
+        if (channel == DeviceExecFrameChannel.Ack && length != 0) return false;
+
+        frame = new DeviceExecFrame(channel, sequence, message[DeviceExecProtocol.HeaderBytes..]);
+        return true;
+    }
+}
 
 /// <summary>
 /// Результат вызова. Приезжает HTTP-POST'ом мимо 32-КБ лимита сообщения хаба.

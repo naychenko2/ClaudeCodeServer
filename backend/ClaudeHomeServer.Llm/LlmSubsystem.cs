@@ -327,6 +327,13 @@ public sealed class LlmSubsystem : IAppSubsystem
         services.AddSingleton(sp => new Gateway.TurnTokenService(
             sp.GetRequiredService<Turn.ITurnEventBus>(),
             log: sp.GetService<ILogger<Gateway.TurnTokenService>>()));
+        // Шлюз MCP ходит в свой же Kestrel: без прокси (адрес локальный) и без таймаута —
+        // streamable HTTP и долгие инструменты живут столько, сколько запрос клиента.
+        // Логгеры HttpClient сняты: каждый вызов инструмента печатался бы строкой Information.
+        services.AddHttpClient(Gateway.McpGatewayEndpoints.HttpClientName)
+            .RemoveAllLoggers()
+            .WithoutEgressProxy()
+            .ConfigureHttpClient(c => c.Timeout = Timeout.InfiniteTimeSpan);
 
         // Шлюз LLM (ADR-016): тумблеры секции LlmGateway читаются живьём (IOptionsMonitor);
         // учёт лимитов — единая точка SubscriptionLimitRecorder, её же зовёт SessionManager.

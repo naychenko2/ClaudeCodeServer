@@ -299,12 +299,13 @@ builder.Services.AddSingleton<IForgejoAccountStore>(sp => sp.GetRequiredService<
 builder.Services.AddSingleton<IUserStore, UserStoreAdapter>();
 // Драйверы среды исполнения процессов пользователей (local / docker-песочница)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.SandboxManager>();
-// Канал устройств (ADR-016) — ленивым резолвом: прямая зависимость замыкала граф синглтонов
+// Канал устройств и шлюз хода (ADR-016) — ленивым резолвом: прямая зависимость замыкала граф синглтонов
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.ILauncherFactory>(sp =>
     new ClaudeHomeServer.Services.Execution.LauncherFactory(
         sp.GetRequiredService<IUserStore>(),
         sp.GetRequiredService<ClaudeHomeServer.Services.Execution.SandboxManager>(),
-        () => sp.GetService<ClaudeHomeServer.Services.Execution.IDeviceExecChannel>()));
+        () => sp.GetService<ClaudeHomeServer.Services.Execution.IDeviceExecChannel>(),
+        () => sp.GetService<ClaudeHomeServer.Services.Execution.IDeviceTurnGateway>()));
 // Узкий шов пула preview-портов песочницы для вертикали ProjectServices
 // (Этап 5, волна C, шаг 2): DevServerService в отдельной сборке
 // получает только диапазон, всё остальное в SandboxManager остаётся

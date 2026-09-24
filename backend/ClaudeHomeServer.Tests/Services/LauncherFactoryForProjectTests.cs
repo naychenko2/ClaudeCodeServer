@@ -20,7 +20,7 @@ public class LauncherFactoryForProjectTests : IDisposable
 
     public void Dispose() => Helpers.TestFs.DeleteDirectoryResilient(_tmp);
 
-    private (LauncherFactory Factory, UserStore Users) Create(IDeviceExecChannel? channel)
+    private (LauncherFactory Factory, UserStore Users) Create(IDeviceExecChannel? channel, IDeviceTurnGateway? gateway = null)
     {
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
@@ -29,7 +29,7 @@ public class LauncherFactoryForProjectTests : IDisposable
         }).Build();
         var users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         var sandbox = new SandboxManager(config, NullLogger<SandboxManager>.Instance);
-        return (new LauncherFactory(users, sandbox, channel is null ? null : () => channel), users);
+        return (new LauncherFactory(users, sandbox, channel is null ? null : () => channel, () => gateway ?? new FakeDeviceTurnGateway()), users);
     }
 
     private static string NewOwner(UserStore users, string environment) =>
@@ -85,7 +85,7 @@ public class LauncherFactoryForProjectTests : IDisposable
 
         var launcher = factory.ForProject(project);
         launcher.Should().NotBeSameAs(LocalProcessRunner.Instance, "проект устройства не исполняется на сервере никогда");
-        var start = () => launcher.Start(new ProcessSpec { FileName = "claude", WorkingDirectory = "/app" });
+        var start = () => launcher.Start(new ProcessSpec { FileName = "claude", WorkingDirectory = "/app", SessionId = "chat-1" });
         start.Should().Throw<DeviceExecRefusedException>().WithMessage("*не найдено*");
     }
 

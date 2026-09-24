@@ -3733,6 +3733,8 @@ public class ClaudeSession : ILlmSessionAdapter
                 ClearEnv = _providers?.EnvKeysToClear ?? LlmProviderRegistry.ProviderEnvKeys,
                 StdioEncoding = utf8NoBom,
                 TurnId = _currentTurnId,
+                // Раннер устройства привязывает к чату токен шлюза (ADR-016 §2); local/docker поле не читают
+                SessionId = Info.Id,
                 // Событие Exited — единственный надёжный сигнал смерти процесса: закрытие stdout
                 // может не наступить (дочерние node-процессы MCP наследуют и держат pipe). Без него
                 // обрыв хода зависает в «ожидании» без диагностики (инцидент P27).

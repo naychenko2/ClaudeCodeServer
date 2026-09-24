@@ -1151,6 +1151,12 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     private bool ServerContentFor(string? projectId) =>
         projectId is null || _projects.GetById(projectId) is not { } p || ProjectCapabilities.ServerContentEnabled(p);
 
+    // Лежит ли транскрипт CLI чата на диске сервера (ADR-016). У чата локального проекта — нет:
+    // сервер не ищет, не копирует и не удаляет его по своему пути, промах поиска значил бы
+    // «транскрипта нет» там, где он просто на другой машине. Чат вне проекта — серверный.
+    private bool TranscriptOnServer(Session info) =>
+        info.ProjectId is null || _projects.GetById(info.ProjectId) is not { } p || ProjectCapabilities.TranscriptOnServer(p);
+
     // Контекст MCP-сервера графа кода: инструменты codegraph_* доступны только в чате проекта —
     // граф ключуется проектом (в чате вне проекта искать нечего). Тот же сервисный токен
     // владельца, что у tasks/notes; владение проектом дополнительно проверяет CodeGraphController.
@@ -1645,6 +1651,9 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         try
         {
             if (info.ClaudeSessionId is not string csid) return;
+            // Локальный проект: транскрипт на устройстве, копировать с диска сервера нечего —
+            // поиск по своему пути нашёл бы разве что чужой файл
+            if (!TranscriptOnServer(info)) return;
             _archivedTranscripts.Archive(csid, info.DesktopChat, TranscriptSearchRoots(info), TryResolveCwd(info));
         }
         catch (Exception ex)
@@ -1661,6 +1670,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         try
         {
             if (info.ClaudeSessionId is not string csid) return;
+            // Локальный проект копию при архивации не делал — возвращать нечего
+            if (!TranscriptOnServer(info)) return;
             var hostCwd = TryResolveCwd(info);
             if (hostCwd is null) return;
             var ownerId = ResolveOwnerId(info);
@@ -2253,7 +2264,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         if (pick == current || _subscriptionPool.IsExhausted(pick)) return; // переключаться некуда
 
         var ownerId = ResolveOwnerId(entry.Info);
-        if (entry.Info.ClaudeSessionId is not null)
+        // Локальный проект: транскрипт на устройстве, профиль CLI там один — переносить нечего
+        if (entry.Info.ClaudeSessionId is not null && TranscriptOnServer(entry.Info))
         {
             var hostCwd = TryResolveCwd(entry.Info);
             if (hostCwd is null) return;
@@ -2418,7 +2430,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         // Разделитель «Продолжено на …» ставим только по факту переноса: в чате, где
         // переносить было нечего, продолжать тоже нечего — карточка врала бы.
         var transcriptMoved = false;
-        if (entry.Info.ClaudeSessionId is not null)
+        // Локальный проект: транскрипт живёт на устройстве в единственном профиле CLI,
+        // провайдера выбирает шлюз — разговор продолжится без переноса
+        if (entry.Info.ClaudeSessionId is not null && !TranscriptOnServer(entry.Info))
+            transcriptMoved = true;
+        else if (entry.Info.ClaudeSessionId is not null)
         {
             var hostCwd = TryResolveCwd(entry.Info)
                 ?? throw new InvalidOperationException("Не удалось определить рабочую папку чата");
@@ -2526,6 +2542,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         if (entry.Process is { HasTrackedBg: true })
             throw new InvalidOperationException(
                 "В чате работают фоновые агенты — дождитесь их завершения, затем попробуйте снова");
+
+        // Локальный проект: транскрипт-источник на устройстве, копировать его серверу неоткуда
+        if (source.ProjectId is { } branchProjectId && _projects.GetById(branchProjectId) is { } branchProject)
+            Composition.ProjectCapabilityGuard.EnsureAllowed(branchProject, Composition.ProjectCapabilityArea.Transcript);
 
         // §9.2 — нет ClaudeSessionId: на экране история есть, в памяти модели — нет
         if (source.ClaudeSessionId is not string csid)
@@ -3953,7 +3973,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             // worktree-ветки не построен (ADR-003). У не-worktree чата совпадает с rootPath,
             // fallback сводится к no-op в CodeGraphPromptProvider.GetSliceAsync.
             MainRootPath: projectRoot,
-            ServerContent: ServerContentFor(session.ProjectId)));
+            ServerContent: ServerContentFor(session.ProjectId),
+            TranscriptOnServer: TranscriptOnServer(session)));
         entry.Process = adapter;
         entry.RunId = runId;
 
@@ -5354,7 +5375,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 // Корень ГЛАВНОЙ ветки проекта — fallback для slice графа кода, пока свой граф
                 // worktree-ветки не построен (ADR-003).
                 MainRootPath: projectRoot,
-                ServerContent: ProjectCapabilities.ServerContentEnabled(project));
+                ServerContent: ProjectCapabilities.ServerContentEnabled(project),
+                TranscriptOnServer: ProjectCapabilities.TranscriptOnServer(project));
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;
@@ -6128,8 +6150,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // Транскрипт resume-якоря чата: null — якоря нет или файл не найден (проверку
     // целостности тогда пропускаем). Обе точки RestartStuckTurnAsync — гейт
     // спасательной ветки и валидация перед resume — ищут файл одним путём.
+    // У локального проекта всегда null: транскрипт на устройстве, его целость проверит сам CLI
+    // на --resume и честно уронит ход (TurnFailureText.ResumeTranscriptMissing), а промах
+    // поиска по серверному пути нельзя путать с «транскрипта нет».
     private string? FindResumeTranscript(SessionEntry entry) =>
-        entry.Info.ClaudeSessionId is { } csid
+        entry.Info.ClaudeSessionId is { } csid && TranscriptOnServer(entry.Info)
             ? Llm.Claude.TranscriptProbe.FindMainTranscript(ResolveTurnCwd(entry.Info), csid)
             : null;
 
@@ -7575,6 +7600,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             throw new InvalidOperationException("Отдельное дерево доступно только в чате проекта");
         var project = _projects.GetById(projectId)
             ?? throw new InvalidOperationException("Проект не найден");
+        // Дерево и перенос транскрипта под новый cwd — git и диск проекта: у локального
+        // проекта они на устройстве, отказ до обращения к диску
+        Composition.ProjectCapabilityGuard.EnsureAllowed(project, Composition.ProjectCapabilityArea.FileBound);
 
         // Идемпотентность: повторное включение/выключение — no-op
         if (enabled == (entry.Info.WorktreePath is not null)) return entry.Info;
@@ -8256,10 +8284,15 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             else
             {
                 _history.Delete(csid);
-                DeleteTranscript(entry.Info, csid);
-                // Архивная копия транскрипта уходит вместе с чатом — иначе переписка
-                // переживёт его и в data, и в бэкапе. Гейт тот же (общий csid у чата-двойника)
-                _archivedTranscripts.Delete(csid);
+                // Локальный проект: транскрипт на устройстве, архивной копии сервер не делал —
+                // искать и удалять файл по своему пути значило бы задеть чужой
+                if (TranscriptOnServer(entry.Info))
+                {
+                    DeleteTranscript(entry.Info, csid);
+                    // Архивная копия транскрипта уходит вместе с чатом — иначе переписка
+                    // переживёт его и в data, и в бэкапе. Гейт тот же (общий csid у чата-двойника)
+                    _archivedTranscripts.Delete(csid);
+                }
             }
         }
         // Снимки промпта ключуются id ЧАТА, а не транскриптом, — гейт общего разговора выше

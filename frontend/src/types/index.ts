@@ -64,6 +64,8 @@ export interface ProjectCapabilitiesView {
   files: ProjectCapabilityGroup;
   platform: ProjectCapabilityGroup;
   serverContent: ProjectCapabilityGroup;
+  // Механики, читающие транскрипт CLI с диска сервера; у старого бэка поля нет
+  transcript?: ProjectCapabilityGroup;
   exec: { available: boolean; reason: string | null };
 }
 
@@ -92,6 +94,9 @@ export const ProjectFeature = {
   Dossiers: 'dossiers',
   Docs: 'docs',
   MapHygiene: 'mapHygiene',
+  LiveSubagents: 'liveSubagents',
+  WorkflowView: 'workflowView',
+  ChatBranch: 'chatBranch',
 } as const;
 export type ProjectFeatureKey = (typeof ProjectFeature)[keyof typeof ProjectFeature];
 

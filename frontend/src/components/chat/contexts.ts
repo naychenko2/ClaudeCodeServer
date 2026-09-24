@@ -1,8 +1,10 @@
 import { createContext, useContext } from 'react';
 import type { Persona, Task, TeamImplementBudget, TeamPlanDecision } from '../../types';
 
-// Контекст текущего проекта — для резолва локальных путей картинок в сообщениях
-export const ChatProjectContext = createContext<{ id: string; rootPath: string } | null>(null);
+// Контекст текущего проекта — для резолва локальных путей картинок в сообщениях.
+// transcriptReason — почему недоступны механики транскрипта CLI (живой поток субагентов,
+// ход workflow): у локального проекта транскрипт на устройстве; null — доступны
+export const ChatProjectContext = createContext<{ id: string; rootPath: string; transcriptReason?: string | null } | null>(null);
 
 // Корень активного git-дерева (worktree) хода/чата — пути в ленте сначала пробуют
 // относительность к нему (короче и без префикса .claude/worktrees/…), и только

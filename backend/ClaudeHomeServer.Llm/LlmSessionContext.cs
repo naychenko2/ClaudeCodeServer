@@ -376,4 +376,10 @@ public sealed record LlmSessionContext(
     // проекта чата работает. false — локальный проект: ход не цепляет датасет по рабочей
     // папке и не зовёт серверные контрибьюторы контента, даже если строка пути совпала
     // с серверной папкой. Считает SessionManager по ProjectCapabilities.
-    bool ServerContent = true);
+    bool ServerContent = true,
+    // Транскрипт CLI чата лежит на диске сервера (ADR-016). false — локальный проект:
+    // транскрипт живёт только на устройстве, поэтому ход не ищет его у себя (хвост
+    // task-notification, живой поток субагентов, ватчер workflow, вес истории в снимке) и
+    // фолбэк не переносит его между профилями — провайдера выбирает шлюз, профиль один.
+    // Считает SessionManager по ProjectCapabilities.
+    bool TranscriptOnServer = true);

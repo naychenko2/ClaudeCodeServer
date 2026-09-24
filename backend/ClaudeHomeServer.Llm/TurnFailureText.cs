@@ -120,6 +120,25 @@ public static class TurnFailureText
 
     // Текст для ленты по сырому тексту ошибки CLI. null — формулировки нет: вызывающий
     // оставляет сырой текст видимым (лучше непонятный, но настоящий текст, чем выдуманный).
+    // CLI не нашёл разговор для --resume там, где запущен: транскрипт убрала плановая уборка
+    // CLI или он живёт на другой машине (у локального проекта — только на его устройстве,
+    // ADR-016). Сервер --resume не снимает и чат с чистого листа молча не начинает: решение
+    // о потере контекста — за человеком. Смена модели не лечит — resume тот же.
+    public const string ResumeTranscriptMissing =
+        "Память этого разговора не найдена там, где запускается модель — ход не выполнен.\n\n"
+        + "Транскрипт CLI удалён или остался на другой машине (у локального проекта он живёт только на его устройстве). "
+        + "Продолжить с прежним контекстом нельзя — начните новый чат.";
+
+    // Маркер отказа CLI в result.errors: «No conversation found with session ID: <id>»
+    private const string NoConversationMarker = "No conversation found with session ID";
+
+    // Человеческий текст по списку result.errors CLI (subtype error_during_execution): null —
+    // среди ошибок нет распознанной, показывать как есть
+    public static string? ForResultErrors(IEnumerable<string> errors) =>
+        errors.Any(e => e.Contains(NoConversationMarker, StringComparison.OrdinalIgnoreCase))
+            ? ResumeTranscriptMissing
+            : null;
+
     public static string? ForCliError(string? raw)
     {
         if (string.IsNullOrWhiteSpace(raw)) return null;

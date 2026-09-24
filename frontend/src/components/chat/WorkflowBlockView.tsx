@@ -47,6 +47,8 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
   useEffect(() => { void ensurePersonasLoaded(); }, []);
   const personas = usePersonas();
   const project = useContext(ChatProjectContext);
+  // Локальный проект: папка workflow на устройстве — ватчера нет, REST её не прочитает
+  const transcriptReason = project?.transcriptReason ?? null;
 
   // Локальный фоллбэк — используется только для старых сессий без серверного ватчера
   const [localAgents, setLocalAgents] = useState<WorkflowAgentInfo[] | null>(null);
@@ -71,7 +73,9 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
   // isDone» между волнами не значит завершение (сервер держит 45с-выдержку тишины).
   // Эвристика every(isDone) — лишь фолбэк для старых историй без флага (REST-путь).
   const isSettled = isAborted || (isDone && (
-    typeof serverDone === 'boolean'
+    transcriptReason
+      ? workflow.bgDone === true
+      : typeof serverDone === 'boolean'
       ? serverDone === true || workflow.bgDone === true
       : (
           !hasTranscriptDir ||
@@ -120,6 +124,7 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
   // Фоллбэк-загрузка для старых сессий (где серверный ватчер не работал)
   useEffect(() => {
     if (serverAgents !== undefined) return; // сервер уже обрабатывает
+    if (transcriptReason) return;
     if (!isDone || localAgents !== null) return;
     const dir = parseTranscriptDir(workflow.result as string | undefined);
     if (!dir) return;
@@ -129,7 +134,7 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
       .then(r => setLocalAgents(r.agents))
       .catch(() => setLocalAgents([]))
       .finally(() => setLocalLoading(false));
-  }, [isDone, localAgents, workflow.result, serverAgents]);
+  }, [isDone, localAgents, workflow.result, serverAgents, transcriptReason]);
 
   const toggleAgent = (id: string) => setExpandedAgents(prev => {
     const next = new Set(prev);
@@ -358,10 +363,10 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
               )}
             </div>
           )}
-          {/* Ничего нет */}
-          {agents.length === 0 && phases.length === 0 && !transcriptLoading && !transcriptAgents?.length && (
+          {/* Ничего нет; у локального проекта — всегда причина, почему нет хода агентов */}
+          {(transcriptReason || (agents.length === 0 && phases.length === 0)) && !transcriptLoading && !transcriptAgents?.length && (
             <div style={{ padding: '10px 14px', fontFamily: FONT.sans, fontSize: 12, color: C.textMuted }}>
-              {isDone ? 'Детали недоступны' : 'Запуск субагентов…'}
+              {transcriptReason ?? (isDone ? 'Детали недоступны' : 'Запуск субагентов…')}
             </div>
           )}
         </div>

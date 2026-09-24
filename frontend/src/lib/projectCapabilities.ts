@@ -47,6 +47,11 @@ const SERVER_CONTENT_FEATURES: ProjectFeatureKey[] = [
   ProjectFeature.Docs,
   ProjectFeature.MapHygiene,
 ];
+const TRANSCRIPT_FEATURES: ProjectFeatureKey[] = [
+  ProjectFeature.LiveSubagents,
+  ProjectFeature.WorkflowView,
+  ProjectFeature.ChatBranch,
+];
 
 // Серверный проект без capabilities (старый бэк): всё доступно, матрица пустая.
 // Это ЕДИНСТВЕННОЕ место, где мы «придумываем» матрицу; остальной код видит то,
@@ -62,7 +67,12 @@ function makeServerGroup(features: ProjectFeatureKey[]): ProjectCapabilityGroup 
 // «всё на сервере» для совместимости со старым бэком. Никаких выводов про deviceId —
 // только матрица.
 export function getProjectCapabilities(project: Project | null | undefined): ProjectCapabilitiesView {
-  if (project?.capabilities) return project.capabilities;
+  if (project?.capabilities) {
+    // Бэк без группы транскрипта — серверный транскрипт, как было до неё
+    return project.capabilities.transcript
+      ? project.capabilities
+      : { ...project.capabilities, transcript: makeServerGroup(TRANSCRIPT_FEATURES) };
+  }
   // Совместимость со старым бэком: трактуем проект как серверный с полным набором.
   return {
     host: 'server',
@@ -70,6 +80,7 @@ export function getProjectCapabilities(project: Project | null | undefined): Pro
     files: makeServerGroup(FILE_FEATURES),
     platform: makeServerGroup(PLATFORM_FEATURES),
     serverContent: makeServerGroup(SERVER_CONTENT_FEATURES),
+    transcript: makeServerGroup(TRANSCRIPT_FEATURES),
     exec: { available: true, reason: null },
   };
 }
@@ -81,6 +92,7 @@ function findGroup(cap: ProjectCapabilitiesView, feature: ProjectFeatureKey): Pr
   if (FILE_FEATURES.includes(feature)) return cap.files;
   if (PLATFORM_FEATURES.includes(feature)) return cap.platform;
   if (SERVER_CONTENT_FEATURES.includes(feature)) return cap.serverContent;
+  if (TRANSCRIPT_FEATURES.includes(feature)) return cap.transcript ?? makeServerGroup(TRANSCRIPT_FEATURES);
   return null;
 }
 

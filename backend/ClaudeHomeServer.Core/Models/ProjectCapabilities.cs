@@ -58,6 +58,11 @@ public static class ProjectFeatures
     public const string Docs = "docs";
     public const string MapHygiene = "mapHygiene";
 
+    // Нужен транскрипт CLI на сервере (ADR-016: у локального проекта он живёт на устройстве)
+    public const string LiveSubagents = "liveSubagents";
+    public const string WorkflowView = "workflowView";
+    public const string ChatBranch = "chatBranch";
+
     public static readonly IReadOnlyList<string> FileBound =
         [Files, Diff, Git, FileWatcher, Terminal, DevServers, Skills, Attachments];
 
@@ -66,6 +71,9 @@ public static class ProjectFeatures
 
     public static readonly IReadOnlyList<string> ServerContent =
         [Knowledge, CodeGraph, Dossiers, Docs, MapHygiene];
+
+    public static readonly IReadOnlyList<string> Transcript =
+        [LiveSubagents, WorkflowView, ChatBranch];
 }
 
 /// <summary>
@@ -74,9 +82,10 @@ public static class ProjectFeatures
 /// проверок локальности (<c>DeviceId != null</c>, <c>IsLocal</c>) вне этого файла не заводим:
 /// их ловит сторож G10 (<c>ProjectCapabilitiesGuardTests</c>).
 ///
-/// Три группы: <see cref="Files"/> — подсистемы, привязанные к файлам (у локального проекта —
+/// Четыре группы: <see cref="Files"/> — подсистемы, привязанные к файлам (у локального проекта —
 /// в агенте устройства), <see cref="Platform"/> — всегда на сервере, <see cref="ServerContent"/>
-/// — нужен контент проекта на сервере (у локального выключены).
+/// — нужен контент проекта на сервере (у локального выключены), <see cref="Transcript"/> —
+/// механики, читающие транскрипт CLI с диска сервера (у локального выключены).
 /// </summary>
 public sealed record ProjectCapabilities(
     string Host,
@@ -84,6 +93,7 @@ public sealed record ProjectCapabilities(
     ProjectCapabilityGroup Files,
     ProjectCapabilityGroup Platform,
     ProjectCapabilityGroup ServerContent,
+    ProjectCapabilityGroup Transcript,
     ProjectExecCapability Exec)
 {
     public const string DeviceMissingReason = "Устройство проекта не найдено или отозвано";
@@ -91,6 +101,9 @@ public sealed record ProjectCapabilities(
     public const string NoExecReason = "На устройстве нет агента локальных проектов, умеющего запускать ходы";
     public const string NoFilesReason = "Агент устройства пока не открывает файлы проекта";
     public const string ServerContentOffReason = "Нужен контент проекта на сервере — у локального проекта недоступно";
+    public const string TranscriptOnDeviceReason =
+        "Транскрипт разговора локального проекта живёт на устройстве — живой поток субагентов, "
+        + "ход workflow и ответвление чата недоступны";
 
     /// <summary>Проект привязан к устройству. Единственная проверка локальности во всём коде.</summary>
     public static bool IsDeviceBound(Project project) => project.DeviceId is not null;
@@ -100,6 +113,13 @@ public sealed record ProjectCapabilities(
 
     /// <summary>Работает ли у проекта группа «нужен контент на сервере» (Dify, CodeGraph, досье, Docs, уборка карты).</summary>
     public static bool ServerContentEnabled(Project project) => !IsDeviceBound(project);
+
+    /// <summary>
+    /// Транскрипты CLI (<c>.jsonl</c>) чатов проекта лежат на диске сервера. У локального проекта
+    /// они живут только на устройстве: сервер их не ищет, не копирует и не удаляет — промах
+    /// поиска по своему пути он принял бы за «транскрипта нет».
+    /// </summary>
+    public static bool TranscriptOnServer(Project project) => !IsDeviceBound(project);
 
     /// <summary>
     /// Ключ папки проекта — пара «устройство + путь» (ADR-016 §1): одна и та же строка пути на
@@ -170,6 +190,7 @@ public sealed record ProjectCapabilities(
                 new ProjectCapabilityGroup(CapabilityHost.Server, true, null, ProjectFeatures.FileBound),
                 platform,
                 new ProjectCapabilityGroup(CapabilityHost.Server, true, null, ProjectFeatures.ServerContent),
+                new ProjectCapabilityGroup(CapabilityHost.Server, true, null, ProjectFeatures.Transcript),
                 new ProjectExecCapability(true, null));
 
         string? filesReason =
@@ -190,6 +211,7 @@ public sealed record ProjectCapabilities(
             new ProjectCapabilityGroup(CapabilityHost.Device, filesReason is null, filesReason, ProjectFeatures.FileBound),
             platform,
             new ProjectCapabilityGroup(CapabilityHost.Off, false, ServerContentOffReason, ProjectFeatures.ServerContent),
+            new ProjectCapabilityGroup(CapabilityHost.Off, false, TranscriptOnDeviceReason, ProjectFeatures.Transcript),
             new ProjectExecCapability(execReason is null, execReason));
     }
 }

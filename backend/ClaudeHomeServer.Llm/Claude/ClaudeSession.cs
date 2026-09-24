@@ -80,6 +80,10 @@ public class ClaudeSession : ILlmSessionAdapter
     // сводится к no-op в CodeGraphPromptProvider.GetSliceAsync.
     private readonly string? _mainRootPath;
     private readonly bool _serverContent;
+    // Транскрипт CLI на диске сервера (LlmSessionContext.TranscriptOnServer). false — локальный
+    // проект: транскрипт на устройстве, ход его у себя не ищет — ни хвоста task-notification,
+    // ни живого потока субагентов, ни ватчера workflow, ни веса истории в снимке
+    private readonly bool _transcriptOnServer;
     // Логгер BareMode-диагностики: размер взятой карты, oversized-отступ и т.п.
     // Опциональный — тесты/старые вызовы передают null, лог просто не пишется.
     private readonly ILogger? _log;
@@ -791,6 +795,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _rootPath = context.RootPath;
         _mainRootPath = context.MainRootPath;
         _serverContent = context.ServerContent;
+        _transcriptOnServer = context.TranscriptOnServer;
         _serverContentRoot = context.ContentRootPath;
         _onMessage = context.OnMessage;
         _mcpConfigPath = mcpConfigPath;
@@ -4420,7 +4425,8 @@ public class ClaudeSession : ILlmSessionAdapter
     // в снимок не тащим (это вся переписка) — только размер и число сообщений.
     private (long? Bytes, int? Messages) TranscriptStats()
     {
-        if (_cliConfigRoot is not { Length: > 0 } root || Info.ClaudeSessionId is not { } csid)
+        if (!_transcriptOnServer
+            || _cliConfigRoot is not { Length: > 0 } root || Info.ClaudeSessionId is not { } csid)
             return (null, null);
         try
         {
@@ -4487,12 +4493,27 @@ public class ClaudeSession : ILlmSessionAdapter
         => !lastTurnResolved && lastSubmitWasNewProcess
            && lastSubmittedText is not null && text == lastSubmittedText;
 
-    // Последний user-текст главного транскрипта этой сессии (null — файла нет/ошибка/вложение)
+    // Последний user-текст главного транскрипта этой сессии (null — файла нет/ошибка/вложение).
+    // У локального проекта всегда null: durable-ность прошлого submit на устройстве не
+    // проверить, и ре-аттемпт идёт обычным submit — возможный дубль виден, пустой ход нет
     private string? ReadLastTranscriptUserText()
-        => TranscriptProbe.LastUserText(
-            Info.ClaudeSessionId is { } csid
-                ? TranscriptProbe.FindMainTranscript(_rootPath, csid)
-                : null);
+        => _transcriptOnServer
+            ? TranscriptProbe.LastUserText(
+                Info.ClaudeSessionId is { } csid
+                    ? TranscriptProbe.FindMainTranscript(_rootPath, csid)
+                    : null)
+            : null;
+
+    // Строки result.errors CLI (пусто — поля нет или оно не массив строк)
+    internal static IReadOnlyList<string> ResultErrors(JsonElement result)
+    {
+        if (!result.TryGetProperty("errors", out var errors) || errors.ValueKind != JsonValueKind.Array)
+            return [];
+        return errors.EnumerateArray()
+            .Where(e => e.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(e.GetString()))
+            .Select(e => e.GetString()!)
+            .ToList();
+    }
 
     // Пустой result CLI: «success» без единого хода модели и без токенов — служебный маркер
     // «модель не вызывалась» (микро-ход task-notification на --resume; запуск без submit при
@@ -4795,8 +4816,13 @@ public class ClaudeSession : ILlmSessionAdapter
                     // часть контекста: новый процесс под другим CLAUDE_CONFIG_DIR (фолбэк сменил
                     // провайдера) пишет транскрипты в другую папку, старый ватчер с закешированной
                     // папкой их не увидит.
-                    if (_subagentWatcher is null
-                        || !_subagentWatcher.Matches(cwd ?? _rootPath, Info.ClaudeSessionId!, _turnConfigRoot))
+                    // Локальный проект: транскрипты на устройстве — живого потока субагентов и
+                    // хвоста task-notification нет (фронт показывает причину по матрице,
+                    // ProjectFeatures.LiveSubagents); завершения фоновых задач ловятся по stdout
+                    // и TaskOutput, иначе прогон доживает до потолка BgLingerTimeout
+                    if (_transcriptOnServer
+                        && (_subagentWatcher is null
+                            || !_subagentWatcher.Matches(cwd ?? _rootPath, Info.ClaudeSessionId!, _turnConfigRoot)))
                     {
                         if (_subagentWatcher is not null)
                         {
@@ -4813,7 +4839,7 @@ public class ClaudeSession : ILlmSessionAdapter
 
                     // Ридер notification'ов — один на прогон (init повторяется на каждом ходе
                     // нового CLI; пересоздание сбросило бы офсет и пропустило завершения)
-                    if (_transcriptTailer is null)
+                    if (_transcriptTailer is null && _transcriptOnServer)
                     {
                         _transcriptTailer = new MainTranscriptTailer(
                             cwd ?? _rootPath, Info.ClaudeSessionId!, HandleTaskNotification);
@@ -4974,6 +5000,15 @@ public class ClaudeSession : ILlmSessionAdapter
                     var humanError = TurnFailureText.ForCliError(rawError);
                     await _onMessage(new ErrorMessage(humanError ?? rawError, ExpectResultFollows: true,
                         Details: humanError is null ? null : rawError));
+                }
+                // Отказ до вызова модели (error_during_execution): текста в result нет, причины —
+                // в errors. Главная — --resume без транскрипта там, где идёт ход: без ошибки
+                // человек увидел бы пустой провалившийся ход без объяснения
+                else if (isErrorFlag && ResultErrors(root) is { Count: > 0 } resultErrors)
+                {
+                    var rawErrors = string.Join("\n", resultErrors);
+                    await _onMessage(new ErrorMessage(TurnFailureText.ForResultErrors(resultErrors) ?? rawErrors,
+                        ExpectResultFollows: true, Details: rawErrors));
                 }
                 // Статус Error/Active выставит SessionManager по ResultMessage
                 var ctxTokens = _lastContextTokens > 0 ? _lastContextTokens : (int?)null;
@@ -5160,8 +5195,10 @@ public class ClaudeSession : ILlmSessionAdapter
             if (_subagentWatcher is { IsDisposed: false } doneWatcher && !IsBgPending(run, toolUseId))
                 await doneWatcher.FinalizeAsync([toolUseId], "tool_result");
 
-            // Если это результат Workflow с транскриптом — запускаем watcher
-            if (!isError && resultContent.Contains("Transcript dir:"))
+            // Если это результат Workflow с транскриптом — запускаем watcher. У локального
+            // проекта папка workflow на устройстве: ватчера нет, карточка показывает причину
+            // по матрице (ProjectFeatures.WorkflowView)
+            if (_transcriptOnServer && !isError && resultContent.Contains("Transcript dir:"))
             {
                 var m = System.Text.RegularExpressions.Regex.Match(resultContent, @"Transcript dir:\s*(.+)");
                 if (m.Success)

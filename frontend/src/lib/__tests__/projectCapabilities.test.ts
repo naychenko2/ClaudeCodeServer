@@ -199,3 +199,28 @@ describe('deviceOfflineLabel — баннер в композере', () => {
     expect(deviceOfflineLabel(p)).toBeNull();
   });
 });
+
+describe('группа транскрипта CLI (ADR-016 3.7)', () => {
+  const transcriptOff = 'Транскрипт разговора локального проекта живёт на устройстве';
+
+  it('бэк без группы транскрипта — механики доступны, как у серверного проекта', () => {
+    const project = localProject(serverCaps(), null);
+    expect(isFeatureAvailable(project, ProjectFeature.ChatBranch)).toBe(true);
+    expect(featureReason(project, ProjectFeature.WorkflowView)).toBeNull();
+  });
+
+  it('у локального проекта ветка, workflow и живые субагенты выключены с причиной', () => {
+    const project = localProject({
+      ...offlineDeviceCaps(),
+      transcript: {
+        host: 'off', available: false, reason: transcriptOff,
+        features: [ProjectFeature.LiveSubagents, ProjectFeature.WorkflowView, ProjectFeature.ChatBranch],
+      },
+    });
+    for (const f of [ProjectFeature.LiveSubagents, ProjectFeature.WorkflowView, ProjectFeature.ChatBranch]) {
+      expect(isFeatureAvailable(project, f)).toBe(false);
+      expect(featureReason(project, f)).toBe(transcriptOff);
+      expect(hostFor(project, f)).toBe('off');
+    }
+  });
+});

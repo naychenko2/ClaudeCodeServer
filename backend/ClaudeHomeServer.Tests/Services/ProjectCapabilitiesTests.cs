@@ -29,6 +29,8 @@ public class ProjectCapabilitiesTests
         caps.Files.Should().Match<ProjectCapabilityGroup>(g => g.Host == CapabilityHost.Server && g.Available);
         caps.Platform.Should().Match<ProjectCapabilityGroup>(g => g.Host == CapabilityHost.Server && g.Available);
         caps.ServerContent.Should().Match<ProjectCapabilityGroup>(g => g.Host == CapabilityHost.Server && g.Available);
+        caps.Transcript.Should().Match<ProjectCapabilityGroup>(g => g.Host == CapabilityHost.Server && g.Available);
+        ProjectCapabilities.TranscriptOnServer(Server()).Should().BeTrue();
         caps.Exec.Available.Should().BeTrue();
     }
 
@@ -46,6 +48,13 @@ public class ProjectCapabilitiesTests
         caps.ServerContent.Host.Should().Be(CapabilityHost.Off);
         caps.ServerContent.Available.Should().BeFalse();
         caps.ServerContent.Reason.Should().NotBeNullOrEmpty();
+        // Транскрипт CLI на устройстве: механики, читающие его с диска сервера, выключены с причиной
+        caps.Transcript.Host.Should().Be(CapabilityHost.Off);
+        caps.Transcript.Available.Should().BeFalse();
+        caps.Transcript.Reason.Should().Be(ProjectCapabilities.TranscriptOnDeviceReason);
+        caps.Transcript.Features.Should().BeEquivalentTo(
+            [ProjectFeatures.LiveSubagents, ProjectFeatures.WorkflowView, ProjectFeatures.ChatBranch]);
+        ProjectCapabilities.TranscriptOnServer(Local()).Should().BeFalse();
         caps.Exec.Available.Should().BeTrue();
     }
 
@@ -53,7 +62,8 @@ public class ProjectCapabilitiesTests
     public void ГруппыПокрываютВсеКлючиФичРовноОдинРаз()
     {
         var caps = ProjectCapabilities.For(Server(), null);
-        var all = caps.Files.Features.Concat(caps.Platform.Features).Concat(caps.ServerContent.Features).ToList();
+        var all = caps.Files.Features.Concat(caps.Platform.Features).Concat(caps.ServerContent.Features)
+            .Concat(caps.Transcript.Features).ToList();
 
         all.Should().OnlyHaveUniqueItems();
         all.Should().Contain([ProjectFeatures.Files, ProjectFeatures.Git, ProjectFeatures.Terminal,

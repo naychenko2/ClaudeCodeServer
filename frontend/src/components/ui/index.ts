@@ -29,6 +29,8 @@ export { ModalActions } from './ModalActions';
 export { useIsMobileModal } from './useIsMobileModal';
 export { ConfirmDialog } from './ConfirmDialog';
 export { Field, FieldLabel, TextField, TextArea, IconField } from './Field';
+export { Select } from './Select';
+export type { SelectOption } from './Select';
 export { SegmentedControl } from './Segmented';
 export { InlineSegmented } from './InlineSegmented';
 export { IconSegmented } from './IconSegmented';

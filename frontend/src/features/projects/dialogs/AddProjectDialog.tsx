@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { Project, ProjectGroup, DesktopDevice } from '../../../types';
 import { api } from '../../../lib/api';
-import { C, MODAL_W } from '../../../lib/design';
-import { Modal, ModalActions, TextField, Field, SegmentedControl } from '../../../components/ui';
+import { C, FS, MODAL_W, SP } from '../../../lib/design';
+import { Modal, ModalActions, TextField, Field, SegmentedControl, Select } from '../../../components/ui';
 import { GroupSelect } from '../GroupSelect';
 import { SyncToggleRow } from '../components/SyncToggleRow';
 import { GIT_MODES, GitModeCard, GitPushRow, type GitMode } from '../components/GitModeCards';
@@ -10,6 +10,7 @@ import { ProjectIconSection, type DraftGlyph } from '../ProjectIconSection';
 import { invalidateProjectsCache } from '../useAllProjects';
 import { basename } from '../../../lib/paths';
 import { FLAGS, useFeature } from '../../../lib/featureFlags';
+import { deviceLabel, isLocalProjectDevice } from '../../desktop/deviceOptions';
 
 interface Props {
   groups: ProjectGroup[];
@@ -76,31 +77,18 @@ export function AddProjectDialog({ groups, defaultGroupId, onSuccess, onClose }:
     if (p === 'device' && !devices) void loadDevices();
   };
 
-  // Список устройств берём фильтрованно: для локального проекта годится только
-  // устройство с возможностью exec (агент локальных проектов). revoked=false — живое;
-  // harnessReady — без него привязка возможна, но ход не пройдёт — помечаем в пикере
+  // Список устройств — только годные для локального проекта (см. isLocalProjectDevice)
   const loadDevices = async () => {
     setDevicesLoading(true);
     try {
       const list = await api.devices.list();
-      // Тип capabilities у DesktopDevice — опциональный (старый бэк); трактуем
-      // отсутствие как «exec неизвестен», т.е. не показываем (безопасный дефолт)
-      const eligible = list.filter(d => !d.revoked && d.capabilities?.exec === true);
-      setDevices(eligible);
+      setDevices(list.filter(isLocalProjectDevice));
     } catch {
       setDevices([]);
     } finally {
       setDevicesLoading(false);
     }
   };
-
-  // Первое открытие под флагом: сегмент скрыт по умолчанию, но если флаг включён,
-  // пользователь может переключиться — подгружаем устройства. Запрос ленивый
-  // (см. handlePlacementChange), поэтому при mount не дёргаем
-  useEffect(() => {
-    if (!localProjects) return;
-    // ничего — пользователь сам выберет «Локальный»
-  }, [localProjects]);
 
   const localPlacement = placement === 'device';
 
@@ -185,19 +173,25 @@ export function AddProjectDialog({ groups, defaultGroupId, onSuccess, onClose }:
         />
       }
     >
-      {error && <div style={{ color: C.danger, fontSize: 13 }}>{error}</div>}
+      {error && <div style={{ color: C.danger, fontSize: FS.base }}>{error}</div>}
 
-      <SegmentedControl<Mode>
-        value={mode}
-        onChange={handleModeChange}
-        options={[{ value: 'new', label: 'Новый' }, { value: 'existing', label: 'Существующий' }]}
-      />
-
+      {/* Размещение — первым: от него зависит, что вообще спрашивать дальше */}
       {placementOptions.length > 0 && (
-        <SegmentedControl<Placement>
-          value={placement}
-          onChange={handlePlacementChange}
-          options={placementOptions}
+        <Field label="Где живут файлы">
+          <SegmentedControl<Placement>
+            value={placement}
+            onChange={handlePlacementChange}
+            options={placementOptions}
+          />
+        </Field>
+      )}
+
+      {/* «Новый / Существующий» у локального ни на что не влияет — папку задаёт путь на устройстве */}
+      {!localPlacement && (
+        <SegmentedControl<Mode>
+          value={mode}
+          onChange={handleModeChange}
+          options={[{ value: 'new', label: 'Новый' }, { value: 'existing', label: 'Существующий' }]}
         />
       )}
 
@@ -224,28 +218,18 @@ export function AddProjectDialog({ groups, defaultGroupId, onSuccess, onClose }:
 
       {localPlacement ? (
         <>
-          <Field label="Устройство" hint="Где живут файлы проекта — машина из реестра устройств">
+          <Field label="Устройство" hint="Машина из реестра устройств, на которой лежит папка проекта">
             {devicesLoading ? (
-              <div style={{ fontSize: 13, color: C.textMuted, padding: '8px 0' }}>Загружаем устройства…</div>
+              <div style={{ fontSize: FS.base, color: C.textMuted, padding: `${SP.sm}px 0` }}>Загружаем устройства…</div>
             ) : devices && devices.length > 0 ? (
-              <select
+              <Select
                 value={deviceId}
-                onChange={e => setDeviceId(e.target.value)}
-                style={{
-                  width: '100%', height: 34, padding: '0 10px', borderRadius: 6,
-                  border: `1px solid ${C.border}`, background: C.bgWhite,
-                  color: C.textPrimary, fontFamily: 'inherit', fontSize: 13,
-                }}
-              >
-                <option value="">Выберите устройство</option>
-                {devices.map(d => (
-                  <option key={d.id} value={d.id}>
-                    {d.name}{d.platform ? ` (${d.platform})` : ''}{d.online ? '' : ' · офлайн'}
-                  </option>
-                ))}
-              </select>
+                onChange={setDeviceId}
+                placeholder="Выберите устройство"
+                options={devices.map(d => ({ value: d.id, label: deviceLabel(d) }))}
+              />
             ) : (
-              <div style={{ fontSize: 13, color: C.textSecondary, padding: '8px 0' }}>
+              <div style={{ fontSize: FS.base, color: C.textSecondary, padding: `${SP.sm}px 0` }}>
                 Нет устройств с агентом локальных проектов. Сопрягите устройство в меню «Устройства».
               </div>
             )}

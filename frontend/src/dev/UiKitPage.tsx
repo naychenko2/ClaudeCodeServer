@@ -45,7 +45,7 @@ import {
   Button, IconButton, Modal, ModalActions, ConfirmDialog,
   Menu, MenuItem, BackButton, WaitingIndicator,
   IslandScaffold, Splitter, SidebarSplitter, IslandSplitter, IslandSidebarSplitter,
-  TextField, TextArea, IconField, Field, FieldLabel,
+  TextField, TextArea, IconField, Field, FieldLabel, Select,
   PanelShell, PanelHeaderSlot, useHasPanelHeader, RailFlyout, Notice,
 } from '../components/ui';
 import { CapabilityUnavailable } from '../components/CapabilityGate';
@@ -661,6 +661,7 @@ function FieldsSection() {
   const [iconMail, setIconMail] = useState('');
   const [iconSearch, setIconSearch] = useState('');
   const [fielded, setFielded] = useState('');
+  const [selected, setSelected] = useState('');
 
   return (
     <Island>
@@ -695,6 +696,21 @@ function FieldsSection() {
             placeholder="Disabled поле"
             disabled
           />
+        </div>
+
+        {/* Select — выпадающий список в стиле полей: с плейсхолдером + disabled */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+          <FieldLabel>Select</FieldLabel>
+          <Select
+            value={selected}
+            onChange={setSelected}
+            placeholder="Выберите устройство"
+            options={[
+              { value: 'laptop', label: 'Ноутбук (windows)' },
+              { value: 'desktop', label: 'Десктоп (linux) · офлайн' },
+            ]}
+          />
+          <Select value="" onChange={() => {}} placeholder="Disabled список" options={[]} disabled />
         </div>
 
         {/* TextArea — многострочный ввод с авто-ростом: обычное + disabled */}

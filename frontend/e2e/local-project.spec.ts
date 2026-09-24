@@ -86,6 +86,8 @@ test.describe('локальный проект (ADR-016 §3.4)', () => {
     await page.getByRole('button', { name: 'Добавить проект' }).first().click();
     const dialog = modal(page, 'Добавить проект');
     await dialog.getByRole('button', { name: 'Локальный' }).click();
+    // У локального «Новый / Существующий» ни на что не влияет — сегмент скрыт (дизайн-ревью 4.7 S6)
+    await expect(dialog.getByRole('button', { name: 'Новый', exact: true })).toHaveCount(0);
 
     // Подсказка: либо список устройств, либо empty state, если их нет.
     // В чистом dev-инстансе устройств обычно нет — empty state должен быть виден

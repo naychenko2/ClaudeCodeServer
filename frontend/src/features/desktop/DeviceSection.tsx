@@ -2,11 +2,12 @@ import { useEffect, useState } from 'react';
 import { Laptop, Unlink } from 'lucide-react';
 import type { DesktopDevice, Project } from '../../types';
 import { api } from '../../lib/api';
-import { C, FONT, FS, SP } from '../../lib/design';
-import { Button, ConfirmDialog, TextField } from '../../components/ui';
+import { C, FONT, FS, R, SP } from '../../lib/design';
+import { Button, ConfirmDialog, Select, TextField } from '../../components/ui';
 import { AccordionSection } from '../projects/dialogs/AccordionSection';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { invalidateProjectsCache } from '../projects/useAllProjects';
+import { deviceLabel, isLocalProjectDevice } from './deviceOptions';
 
 // Секция «Устройство» в настройках проекта (ADR-016 §3.4): показывает привязку и
 // позволяет перепривязать/отвязать. Скрывается через флаг `local-projects` снаружи.
@@ -51,7 +52,7 @@ export function DeviceSection({ project, onUpdated }: Props) {
   const load = async () => {
     try {
       const list = await api.devices.list();
-      setDevices(list);
+      setDevices(list.filter(isLocalProjectDevice));
     } catch {
       setDevices([]);
     }
@@ -107,7 +108,7 @@ export function DeviceSection({ project, onUpdated }: Props) {
     >
       {attached && project.device && (
         <div style={{
-          padding: '10px 12px', borderRadius: 8,
+          padding: `${SP.sm}px ${SP.md}px`, borderRadius: R.md,
           background: C.bgPanel, border: `1px solid ${C.borderLight}`,
           display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: SP.md,
           marginBottom: SP.md,
@@ -144,28 +145,17 @@ export function DeviceSection({ project, onUpdated }: Props) {
           <div style={{ fontSize: FS.xs, color: C.textMuted }}>Загружаем устройства…</div>
         ) : devices.length === 0 ? (
           <div style={{ fontSize: FS.xs, color: C.textSecondary }}>
-            Нет устройств. Сопрягите устройство в меню «Устройства».
+            Нет устройств с агентом локальных проектов. Сопрягите устройство в меню «Устройства».
           </div>
         ) : (
           <>
-            <select
+            <Select
               value={picked}
-              onChange={e => setPicked(e.target.value)}
+              onChange={setPicked}
               disabled={busy}
-              style={{
-                width: '100%', height: 34, padding: '0 10px', borderRadius: 6,
-                border: `1px solid ${C.border}`, background: C.bgWhite,
-                color: C.textPrimary, fontFamily: 'inherit', fontSize: FS.sm,
-              }}
-            >
-              <option value="">Выберите устройство</option>
-              {devices.filter(d => !d.revoked).map(d => (
-                <option key={d.id} value={d.id}>
-                  {d.name}{d.platform ? ` (${d.platform})` : ''}{d.online ? '' : ' · офлайн'}
-                  {d.capabilities?.exec ? '' : ' · нет агента локальных проектов'}
-                </option>
-              ))}
-            </select>
+              placeholder="Выберите устройство"
+              options={devices.map(d => ({ value: d.id, label: deviceLabel(d) }))}
+            />
             <TextField
               value={devicePath}
               onChange={setDevicePath}

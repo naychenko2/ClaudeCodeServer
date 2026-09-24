@@ -38,6 +38,76 @@ export interface BackgroundResult {
   failReason?: string | null;
 }
 
+// Группа возможностей проекта (ADR-016 §4). ЕДИНСТВЕННАЯ точка правды о доступности
+// подсистемы у конкретного проекта — компоненты спрашивают «есть ли мой ключ в features
+// и доступна ли группа», а НЕ deviceId. Сторож G10 (ProjectCapabilitiesGuardTests) ловит
+// инлайновые проверки локальности вне lib/projectCapabilities.ts.
+export type ProjectCapabilityHost = 'server' | 'device' | 'off';
+
+export interface ProjectCapabilityGroup {
+  host: ProjectCapabilityHost;
+  available: boolean;
+  // Готовый текст для человека, почему группа недоступна (например «Устройство офлайн»);
+  // null если доступна
+  reason: string | null;
+  // Состав группы — ключи возможностей (см. ниже)
+  features: string[];
+}
+
+// Матрица возможностей проекта (ADR-016 §4) — фронтовая проекция ProjectCapabilities.cs
+// бэка. host: где работает ход (сервер или устройство); deviceId: id устройства для
+// локального, null для серверного. exec: можно ли запустить ход прямо сейчас (reason —
+// готовый текст причины).
+export interface ProjectCapabilitiesView {
+  host: 'server' | 'device';
+  deviceId: string | null;
+  files: ProjectCapabilityGroup;
+  platform: ProjectCapabilityGroup;
+  serverContent: ProjectCapabilityGroup;
+  exec: { available: boolean; reason: string | null };
+}
+
+// Ключи возможностей (ADR-016 §4, ключи ProjectFeatures на бэке). Фронт держит свой
+// enum-литерал рядом с DTO: менять его синхронно с ProjectFeatures.cs при расширении.
+// Состав групп зафиксирован контрактом DTO из 3.1.
+export const ProjectFeature = {
+  Files: 'files',
+  Diff: 'diff',
+  Git: 'git',
+  FileWatcher: 'fileWatcher',
+  Terminal: 'terminal',
+  DevServers: 'devServers',
+  Skills: 'skills',
+  Attachments: 'attachments',
+  Chat: 'chat',
+  History: 'history',
+  Tasks: 'tasks',
+  Memory: 'memory',
+  Personas: 'personas',
+  Notes: 'notes',
+  Costs: 'costs',
+  Tts: 'tts',
+  Knowledge: 'knowledge',
+  CodeGraph: 'codeGraph',
+  Dossiers: 'dossiers',
+  Docs: 'docs',
+  MapHygiene: 'mapHygiene',
+} as const;
+export type ProjectFeatureKey = (typeof ProjectFeature)[keyof typeof ProjectFeature];
+
+// Устройство проекта глазами веб-морды (ADR-008 + ADR-016 §4): null у серверного проекта
+// и у локального с отозванным устройством. Доп. поля нужны для отображения статуса в
+// диалогах и хедере — «устройство офлайн» видно и в проекте, и в чате
+export interface ProjectDeviceView {
+  id: string;
+  name: string;
+  online: boolean;
+  platform: string | null;
+  agentVersion: string | null;
+  harnessReady: boolean;
+  harnessProblem: string | null;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -82,6 +152,16 @@ export interface Project {
   // chat-auto-archive). null/отсутствует — своего порога нет, наследуется личный
   // порог владельца; настройка проекта личный порог не трогает
   archiveAfterDays?: number | null;
+  // Локальный проект (ADR-016 §4): null — серверный. У локального — id устройства из
+  // реестра ADR-008. САМО поле читать нельзя — только через projectCapabilities.ts
+  deviceId?: string | null;
+  // Карточка устройства для UI; null у серверного проекта и у локального с отозванным
+  // устройством. Через неё показываем имя/онлайн/харнес — она же идёт в «устройство
+  // офлайн» в шапке чата
+  device?: ProjectDeviceView | null;
+  // Матрица возможностей проекта (ADR-016 §4). Обязательна у новых ответов; для старого
+  // бэка может быть null — тогда capabilities вырождаются в «серверный проект, всё доступно»
+  capabilities?: ProjectCapabilitiesView | null;
 }
 
 // Иконка проекта (ADR-009): initials — две буквы на цветной плитке; glyph — значок из
@@ -3602,6 +3682,9 @@ export interface VideoFeedResponse {
 
 // Устройство владельца из GET /api/devices. Отпечаток наружу урезан до 12 символов —
 // он служит человеку приметой «это та самая машина», а не проверкой.
+// online/platform/agentVersion/harnessReady/harnessProblem/capabilities — поля для
+// локальных проектов (ADR-016 §4): показываем «устройство офлайн» и решаем, годится ли
+// оно для запуска хода (capabilities.exec)
 export interface DesktopDevice {
   id: string;
   name: string;
@@ -3612,6 +3695,23 @@ export interface DesktopDevice {
   revoked: boolean;
   revokedAt?: string | null;
   tokenVersion: number;
+  // Текущий статус: true — клиент в сети и пингует шлюз. Отсутствует у старого бэка —
+  // тогда считаем false (не показываем как доступное для привязки)
+  online?: boolean;
+  // Платформа клиента ("windows" | "macos" | "linux" | ...) — только для карточки
+  platform?: string | null;
+  // Версия агента устройства (semver) — для диагностики и подсказки «обновите»
+  agentVersion?: string | null;
+  // Готовность харнеса локальных проектов: false — привязка возможна, но ходы не пойдут,
+  // пока владелец не дособерёт (см. harnessProblem)
+  harnessReady?: boolean;
+  harnessProblem?: string | null;
+  // Что устройство сейчас умеет (для пикера привязки в AddProjectDialog). exec — может
+  // ли запускать ход локального проекта (Agent локальных проектов ADR-016)
+  capabilities?: {
+    exec?: boolean;
+    files?: boolean;
+  } | null;
 }
 
 // Заявка на сопряжение: код из 8 символов живёт 5 минут и принадлежит ЭТОЙ веб-сессии.

@@ -2863,6 +2863,8 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             // стора черновиков (getDraft) уже под новый sessionId.
             key={session.id}
             sessionId={session.id}
+            // ADR-016 §3.4: проект чата — для гейта отправки и баннера «устройство офлайн»
+            project={project}
             voicePersonaId={session.personaId ?? undefined}
             offline={!online}
             onSend={handleSend}

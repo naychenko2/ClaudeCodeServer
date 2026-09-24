@@ -1,4 +1,6 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, type ReactNode } from 'react';
+import type { Project } from '../types';
+import { canRunTurn } from '../lib/projectCapabilities';
 import { AlertTriangle, AudioLines, Ban, ArrowUp, Check, ChevronDown, Eye, EyeOff, FolderGit2, Lock, Mic, Paperclip, Plus, RefreshCw, ShieldCheck, Users, VolumeX, WifiOff, X } from 'lucide-react';
 import { C, R, FS, FONT, MODAL_W, SHADOW, SP, Z } from '../lib/design';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset } from '../lib/rateLimit';
@@ -46,6 +48,9 @@ import type { SkillInfo, AgentInfo, Persona, WorkLoopState, SessionTeamImplement
 export interface ComposerProps {
   // Ключ чата — под него хранится черновик недовведённого текста
   sessionId: string;
+  // ADR-016 §3.4: проект чата — для гейта отправки (exec) и баннера «устройство офлайн».
+  // Не передаётся — гейт отключён (старый путь вызова)
+  project?: Project | null;
   onSend: (text: string, attachments: string[], opts?: { auto?: boolean }) => void;
   onStop: () => void;
   onAttach: () => void;
@@ -558,6 +563,10 @@ export function Composer({
   onStopTeamImplement,
   onEnableTeamImplement,
   isProjectChat = false,
+  // ADR-016 §3.4: проект чата — для гейта отправки. Если exec недоступна
+  // (например, локальный проект с офлайн-устройством), поле ввода блокируется
+  // и показывается баннер с причиной. Не передаётся — гейт отключён (старый путь)
+  project = null,
   onboarding = false,
   worktreeBranch = null,
   onToggleWorktree,
@@ -647,6 +656,12 @@ export function Composer({
 
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  // Гейт хода (ADR-016 §3.4): локальный проект с офлайн-устройством. Пересчёт по
+  // смене project.capabilities или project.deviceId. Используем и в баннере, и в handleSend
+  const execGate = useMemo(() => canRunTurn(project), [project?.capabilities, project?.deviceId]);
+  // Текст для мягкого отказа отправки (ADR-016 §3.4): офлайн-устройство, нет харнеса.
+  // Чистится при первой попытке ввода, чтобы баннер не висел вечно
+  const [sendError, setSendError] = useState<string | null>(null);
   // Опасный режим (bypass) ждёт подтверждения в модалке перед применением
   const [pendingMode, setPendingMode] = useState<Mode | null>(null);
   // Штаб «Командной реализации» думает (Э8): стадии интервью/планирования держат чат
@@ -989,6 +1004,13 @@ export function Composer({
   // черновик пользователя вместе с высотой поля.
   // Возвращает, ушёл ли ход: петля разговора по false возвращается слушать
   const handleSend = async (overrideText?: string): Promise<boolean> => {
+    // ADR-016 §3.4: локальный проект с недоступной exec (устройство офлайн/нет
+    // харнеса) — мягкий отказ с понятным текстом. Баннер выше уже показал причину,
+    // здесь мы только гасим Enter и кнопку отправки, не дёргая toast повторно
+    if (project && !execGate.available) {
+      setSendError(execGate.reason ?? 'Ход сейчас недоступен');
+      return false;
+    }
     const t = (overrideText ?? text).trim();
     // Обычная отправка руками снимает пометку голосового хода: её текст человек писал сам,
     // и вернуть его в поле при прерывании — правильное поведение
@@ -2227,6 +2249,33 @@ export function Composer({
       onDragOver={handleDragOver}
       onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragOver(false); }}
     >
+      {/* Баннер «устройство офлайн» (ADR-016 §3.4): у локального проекта с недоступной
+          exec показываем причину над полем ввода. Кнопка отправки гасится в handleSend,
+          чтобы Enter не слал сообщение в никуда — там же, где проверяется project.exec */}
+      {project && !execGate.available && (
+        <div
+          data-composer-exec-gate
+          style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            padding: '8px 12px', margin: '0 8px 4px',
+            background: C.warningBg, color: C.warningText,
+            border: `1px solid ${C.border}`, borderRadius: R.md,
+            fontSize: FS.xs, lineHeight: 1.4,
+          }}
+        >
+          <WifiOff size={14} strokeWidth={ICON_STROKE} />
+          <span>{execGate.reason ?? 'Ход сейчас недоступен'}</span>
+        </div>
+      )}
+      {sendError && !project && (
+        <div data-composer-send-error style={{
+          padding: '6px 10px', margin: '0 8px 4px',
+          background: C.dangerBg, color: C.dangerText,
+          borderRadius: R.md, fontSize: FS.xs, lineHeight: 1.4,
+        }}>
+          {sendError}
+        </div>
+      )}
       {/* Раскрывашка «Обсудить с командой» — над полем композера */}
       {canDiscuss && (
         <TeamDrawer

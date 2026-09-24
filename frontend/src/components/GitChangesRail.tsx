@@ -12,10 +12,12 @@ import {
   GitBranch, GitCommit, ChevronDown, ChevronRight, RefreshCw, ArrowDownToLine,
   Settings, Sparkles, Undo2, Pencil, X, List, ListTree, ListFilter, Folder,
   ListChecks, CheckCheck, FoldVertical, UnfoldVertical, MessageSquarePlus, MessageSquare, MessageSquareDot, MessagesSquare,
-  Check, Plus, Archive, ArchiveRestore, Trash2, UploadCloud, ExternalLink, FileDiff, User,
+  Check, Plus, Archive, ArchiveRestore, Trash2, UploadCloud, ExternalLink, FileDiff, User, Lock,
 } from 'lucide-react';
-import type { Project, GitFileChange, GitLogEntry, GitStashEntry, ChangedBySession } from '../types';
+import type { Project, GitFileChange, GitLogEntry, GitStashEntry, ChangedBySession, ProjectFeatureKey } from '../types';
+import { ProjectFeature } from '../types';
 import { api } from '../lib/api';
+import { useProjectFeature, featureReason } from '../lib/projectCapabilities';
 import { C, R, FS, SP, FONT, MODAL_W } from '../lib/design';
 import {
   useGitState, ensureGit, loadUnpushedLog, loadGitLog, loadGitRemote, loadGitBranches, loadGitStash,
@@ -220,7 +222,12 @@ function buildTree(files: RowFile[]): TreeNode[] {
 }
 
 export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, activeFilePath, activeCommitSha, onCommit, onScopeChange, changedBy }: Props) {
+  // Гейт по матрице (ADR-016 §3.4): git у локального проекта живёт в агенте устройства,
+  // не на сервере — здесь показываем причину. Все хуки ВЫШЕ условного return
+  const gitGate = useProjectFeature(project, ProjectFeature.Git);
+  const gitGateReason = featureReason(project, ProjectFeature.Git);
   const st = useGitState(project.id);
+  if (!gitGate) return <CapabilityGateFallback feature={ProjectFeature.Git} reason={gitGateReason} />;
   const status = st.status;
   // Пути активного чата (lowercase) — тогл «только файлы чата» и признак mine у бейджа.
   // Серверный источник (changed-by: история чата минус зафиксированное в git) — фронтовый
@@ -1680,6 +1687,31 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
       )}
 
       {promptOpen && <CommitPromptDialog project={project} onClose={() => setPromptOpen(false)} />}
+    </div>
+  );
+}
+
+// Плашка «подсистема недоступна» — локальная для этого модуля (ADR-016 §3.4).
+// Ранний return ВЫШЕ вызывает её без хуков, поэтому сам компонент — без useMemo/Effect
+function CapabilityGateFallback({ feature, reason }: { feature: ProjectFeatureKey; reason: string | null }) {
+  return (
+    <div
+      role="status"
+      data-capability-gate={feature}
+      style={{
+        padding: '24px 16px', margin: 16,
+        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10,
+        color: C.textMuted, background: C.bgPanel,
+        borderRadius: R.lg, border: `1px dashed ${C.border}`,
+      }}
+    >
+      <Lock size={20} strokeWidth={ICON_STROKE} />
+      <div style={{ fontSize: FS.sm, color: C.textPrimary, fontWeight: 600 }}>
+        Подсистема недоступна
+      </div>
+      <div style={{ fontSize: FS.xs, textAlign: 'center', maxWidth: 320, lineHeight: 1.5 }}>
+        {reason ?? 'Подсистема выключена для этого проекта'}
+      </div>
     </div>
   );
 }

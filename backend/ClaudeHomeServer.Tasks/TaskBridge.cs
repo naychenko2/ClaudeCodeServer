@@ -13,8 +13,8 @@ namespace ClaudeHomeServer.Services.Tasks;
 // Core ради двух полей — overkill.
 public sealed class TaskBridge(TaskManager tasks) : INoteTaskBridge
 {
-    public IReadOnlyList<NoteTaskRef> GetBySourceNote(string noteId) =>
-        tasks.GetBySourceNote(noteId)
+    public IReadOnlyList<NoteTaskRef> GetBySourceNote(string ownerId, string noteId) =>
+        tasks.GetBySourceNote(ownerId, noteId)
             .Select(MapToCore)
             .ToList();
 
@@ -30,14 +30,18 @@ public sealed class TaskBridge(TaskManager tasks) : INoteTaskBridge
         return MapToCore(task);
     }
 
-    public NoteTaskRef? Update(string taskId, NoteTaskUpdateRequest req)
+    public NoteTaskRef? Update(string ownerId, string taskId, NoteTaskUpdateRequest req)
     {
         // Outcome для дефектов выставляется здесь, в мосте — NoteTaskSyncService
         // держит только Core-тип NoteTaskUpdateRequest без Kind. Загружаем задачу
         // через bridge.GetBySourceNote не нужно: достаточно прочитать kind из TaskManager
         // (GetById уже в TaskManager).
+        //
+        // Сверка владельца — защита в глубину: путь из заметок уже фильтрует задачи по
+        // ownerId, но правка по голому id мимо этой проверки означала бы правку чужой
+        // карточки. Чужая задача отвечает тем же null, что и несуществующая.
         var existing = tasks.GetById(taskId);
-        if (existing is null) return null;
+        if (existing is null || existing.OwnerId != ownerId) return null;
         var outcome = req.Status == NoteTaskStatus.Done && existing.Kind == TaskKind.Defect
             ? DefectOutcome.ClosedWithoutCheck
             : (DefectOutcome?)null;
@@ -48,13 +52,13 @@ public sealed class TaskBridge(TaskManager tasks) : INoteTaskBridge
         return task is null ? null : MapToCore(task);
     }
 
-    public NoteTaskRef? SpawnNextOccurrence(string completedTaskId)
+    public NoteTaskRef? SpawnNextOccurrence(string ownerId, string completedTaskId)
     {
         // NoteTaskRef хранит id; для Spawn нужен полный TaskItem. Догружаем через
         // GetBySourceNote неэффективно — даём прямой доступ к TaskManager.
         // TaskManager.Update(...) нам недоступен по id без загрузки, поэтому:
         var completed = tasks.GetById(completedTaskId);
-        if (completed is null) return null;
+        if (completed is null || completed.OwnerId != ownerId) return null;
         var next = tasks.SpawnNextOccurrence(completed);
         return next is null ? null : MapToCore(next);
     }

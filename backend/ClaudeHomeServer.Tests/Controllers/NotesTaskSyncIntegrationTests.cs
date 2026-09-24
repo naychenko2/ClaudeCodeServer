@@ -15,25 +15,30 @@ namespace ClaudeHomeServer.Tests.Controllers;
 public class NotesTaskSyncIntegrationTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly HttpClient _client;
+    private readonly HttpClient _second;
 
     public NotesTaskSyncIntegrationTests(TestWebApplicationFactory factory)
     {
         // Синхронизация задач из заметок работает безусловно (гейт снят)
         _client = factory.CreateAuthenticatedClient();
+        // Второй владелец — для проверок per-owner изоляции
+        _second = factory.CreateAuthenticatedClient(
+            TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
     }
 
     private static string Url(string id) => $"/api/notes/{Uri.EscapeDataString(id)}";
 
-    private async Task<string> CreateNoteAsync(string title, string content)
+    private async Task<string> CreateNoteAsync(string title, string content, HttpClient? client = null)
     {
-        var resp = await _client.PostAsJsonAsync("/api/notes", new { title, content, source = "personal" });
+        var resp = await (client ?? _client).PostAsJsonAsync("/api/notes",
+            new { title, content, source = "personal" });
         resp.StatusCode.Should().Be(HttpStatusCode.OK);
         return (await resp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
     }
 
-    private async Task<List<JsonElement>> NoteTasksAsync(string id)
+    private async Task<List<JsonElement>> NoteTasksAsync(string id, HttpClient? client = null)
     {
-        var resp = await _client.GetAsync($"{Url(id)}/tasks");
+        var resp = await (client ?? _client).GetAsync($"{Url(id)}/tasks");
         resp.StatusCode.Should().Be(HttpStatusCode.OK);
         return (await resp.Content.ReadFromJsonAsync<JsonElement>()).EnumerateArray().ToList();
     }
@@ -45,8 +50,15 @@ public class NotesTaskSyncIntegrationTests : IClassFixture<TestWebApplicationFac
         return (await resp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("content").GetString()!;
     }
 
-    private async Task<JsonElement> GetTaskAsync(string taskId) =>
-        await (await _client.GetAsync($"/api/tasks/{taskId}")).Content.ReadFromJsonAsync<JsonElement>();
+    private async Task<JsonElement> GetTaskAsync(string taskId, HttpClient? client = null) =>
+        await (await (client ?? _client).GetAsync($"/api/tasks/{taskId}")).Content.ReadFromJsonAsync<JsonElement>();
+
+    private async Task<string> PromoteAsync(string noteId, int line, HttpClient? client = null)
+    {
+        var resp = await (client ?? _client).PostAsJsonAsync($"{Url(noteId)}/tasks/promote", new { line });
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        return (await resp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+    }
 
     // ─── Разбор чекбоксов ──────────────────────────────────────────────────────
 
@@ -173,5 +185,99 @@ public class NotesTaskSyncIntegrationTests : IClassFixture<TestWebApplicationFac
         task.TryGetProperty("outcome", out var outcome).Should().BeTrue("API отдаёт outcome даже у обычных задач");
         outcome.ValueKind.Should().Be(JsonValueKind.Null,
             "обычная задача, закрытая галочкой в заметке, не должна получать Outcome=ClosedWithoutCheck");
+    }
+
+    // ─── C-1: per-owner изоляция при совпадающем noteId ────────────────────────
+    //
+    // id заметки личного vault — base64 от «personal|{относительный путь}», владельца
+    // в нём нет: у двух пользователей заметка по одному пути даёт побайтово одинаковый
+    // noteId (в бою это дневник Journal/{дата}.md — у всех на одну дату один id).
+    // Связанная задача обязана резолвиться по паре (владелец, noteId), иначе ручки
+    // заметок отдают и правят карточки соседа.
+
+    [Fact]
+    public async Task ЗаметкаДвухВладельцевСОдинаковымId_ЗадачиНеПересекаются()
+    {
+        const string title = "Дневник изоляции";
+        const string content = "- [ ] Общее по названию дело";
+
+        var mineId = await CreateNoteAsync(title, content);
+        var theirsId = await CreateNoteAsync(title, content, _second);
+        theirsId.Should().Be(mineId, "id личной заметки не содержит владельца — это и есть механизм дефекта");
+
+        var myLine = (await NoteTasksAsync(mineId))[0].GetProperty("line").GetInt32();
+        var myTaskId = await PromoteAsync(mineId, myLine);
+        var theirLine = (await NoteTasksAsync(theirsId, _second))[0].GetProperty("line").GetInt32();
+        var theirTaskId = await PromoteAsync(theirsId, theirLine, _second);
+
+        theirTaskId.Should().NotBe(myTaskId, "у каждого владельца своя задача, промоут чужую не переиспользует");
+
+        // GET …/tasks отдаёт только свою связь
+        (await NoteTasksAsync(mineId))[0].GetProperty("taskId").GetString().Should().Be(myTaskId);
+        (await NoteTasksAsync(theirsId, _second))[0].GetProperty("taskId").GetString().Should().Be(theirTaskId);
+    }
+
+    [Fact]
+    public async Task Toggle_ПриСовпадающемId_НеТрогаетЗадачуДругогоВладельца()
+    {
+        const string title = "Дневник тоггла";
+        const string content = "- [ ] Закрыть у себя";
+
+        var mineId = await CreateNoteAsync(title, content);
+        var theirsId = await CreateNoteAsync(title, content, _second);
+        theirsId.Should().Be(mineId);
+
+        var myTaskId = await PromoteAsync(mineId, (await NoteTasksAsync(mineId))[0].GetProperty("line").GetInt32());
+        var theirTaskId = await PromoteAsync(theirsId,
+            (await NoteTasksAsync(theirsId, _second))[0].GetProperty("line").GetInt32(), _second);
+
+        // Второй владелец закрывает чекбокс в СВОЕЙ заметке
+        var line = (await NoteTasksAsync(theirsId, _second))[0].GetProperty("line").GetInt32();
+        var resp = await _second.PostAsJsonAsync($"{Url(theirsId)}/tasks/toggle", new { line, done = true });
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        (await GetTaskAsync(theirTaskId, _second)).GetProperty("status").GetString().Should().Be("done");
+        (await GetTaskAsync(myTaskId)).GetProperty("status").GetString()
+            .Should().Be("todo", "статус чужой задачи менять нельзя");
+    }
+
+    [Fact]
+    public async Task SetDue_ПриСовпадающемId_НеТрогаетСрокЗадачиДругогоВладельца()
+    {
+        const string title = "Дневник срока";
+        const string content = "- [ ] Дело без срока";
+
+        var mineId = await CreateNoteAsync(title, content);
+        var theirsId = await CreateNoteAsync(title, content, _second);
+        theirsId.Should().Be(mineId);
+
+        var myTaskId = await PromoteAsync(mineId, (await NoteTasksAsync(mineId))[0].GetProperty("line").GetInt32());
+        var theirTaskId = await PromoteAsync(theirsId,
+            (await NoteTasksAsync(theirsId, _second))[0].GetProperty("line").GetInt32(), _second);
+
+        var line = (await NoteTasksAsync(theirsId, _second))[0].GetProperty("line").GetInt32();
+        var resp = await _second.PostAsJsonAsync($"{Url(theirsId)}/tasks/set-due",
+            new { line, due = "2026-12-31" });
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        (await GetTaskAsync(theirTaskId, _second)).GetProperty("dueDate").GetString().Should().Be("2026-12-31");
+        (await GetTaskAsync(myTaskId)).GetProperty("dueDate").ValueKind
+            .Should().Be(JsonValueKind.Null, "срок чужой задачи менять нельзя");
+    }
+
+    [Fact]
+    public async Task ЧужойId_НетСвоейЗаметки_ОтдаётNotFound()
+    {
+        // Заметка есть только у первого владельца — у второго по этому id своего файла нет.
+        var id = await CreateNoteAsync("Только моя заметка", "- [ ] Моё дело");
+        await PromoteAsync(id, (await NoteTasksAsync(id))[0].GetProperty("line").GetInt32());
+
+        (await _second.GetAsync($"{Url(id)}/tasks")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await _second.PostAsJsonAsync($"{Url(id)}/tasks/promote", new { line = 0 }))
+            .StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await _second.PostAsJsonAsync($"{Url(id)}/tasks/toggle", new { line = 0, done = true }))
+            .StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await _second.PostAsJsonAsync($"{Url(id)}/tasks/set-due", new { line = 0, due = "2026-12-31" }))
+            .StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 }

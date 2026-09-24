@@ -23,7 +23,7 @@ public sealed class NoteTaskSyncService(
             ?? throw new KeyNotFoundException("Заметка не найдена");
 
         var byLine = new Dictionary<int, NoteTaskRef>();
-        foreach (var t in tasks.GetBySourceNote(noteId))
+        foreach (var t in tasks.GetBySourceNote(userId, noteId))
             if (t.SourceNoteLine is int ln) byLine[ln] = t; // последняя выигрывает
 
         return NoteTaskParser.Parse(note.Content).Select(l =>
@@ -43,7 +43,7 @@ public sealed class NoteTaskSyncService(
         var parsed = NoteTaskParser.Parse(note.Content).FirstOrDefault(l => l.Line == line)
             ?? throw new InvalidOperationException("На этой строке нет задачи-чекбокса");
 
-        var existing = tasks.GetBySourceNote(noteId).FirstOrDefault(t => t.SourceNoteLine == line);
+        var existing = tasks.GetBySourceNote(userId, noteId).FirstOrDefault(t => t.SourceNoteLine == line);
         if (existing is not null) return existing;
 
         // Проектная заметка → задача проекта; личный vault / read-only источник → личная
@@ -79,7 +79,7 @@ public sealed class NoteTaskSyncService(
         kb.QueueSync(userId);
         await notifier.BroadcastNotesChangedAsync(userId, "updated", noteId);
 
-        var linked = tasks.GetBySourceNote(noteId).FirstOrDefault(t => t.SourceNoteLine == line);
+        var linked = tasks.GetBySourceNote(userId, noteId).FirstOrDefault(t => t.SourceNoteLine == line);
         if (linked is not null)
             await ApplyTaskStatusAsync(userId, linked, done);
 
@@ -102,10 +102,10 @@ public sealed class NoteTaskSyncService(
         await notifier.BroadcastNotesChangedAsync(userId, "updated", noteId);
 
         // Синхронизируем срок связанной задачи (пусто → очистить).
-        var linked = tasks.GetBySourceNote(noteId).FirstOrDefault(t => t.SourceNoteLine == line);
+        var linked = tasks.GetBySourceNote(userId, noteId).FirstOrDefault(t => t.SourceNoteLine == line);
         if (linked is not null)
         {
-            var updated = tasks.Update(linked.Id,
+            var updated = tasks.Update(userId, linked.Id,
                 new NoteTaskUpdateRequest(Status: linked.Status, DueDate: due));
             if (updated is not null) await notifier.BroadcastTaskChangedAsync(userId, "updated", updated.Id);
         }
@@ -159,13 +159,13 @@ public sealed class NoteTaskSyncService(
         // его быть не должно (галочка закрывает обычную задачу без чужого признака исхода).
         // Outcome транслируется внутри bridge.Update: для дефектных карточек мост выставляет
         // DefectOutcome.ClosedWithoutCheck, для обычных — нет.
-        var updated = tasks.Update(task.Id, new NoteTaskUpdateRequest(newStatus));
+        var updated = tasks.Update(userId, task.Id, new NoteTaskUpdateRequest(newStatus));
         if (updated is null) return;
         await notifier.BroadcastTaskChangedAsync(userId, "updated", updated.Id);
 
         if (!wasDone && done && updated.Recurrence is not null)
         {
-            var next = tasks.SpawnNextOccurrence(updated.Id);
+            var next = tasks.SpawnNextOccurrence(userId, updated.Id);
             if (next is not null) await notifier.BroadcastTaskChangedAsync(userId, "created", next.Id);
         }
     }

@@ -122,9 +122,14 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         _tasks.Values.Where(t => t.ProjectId == projectId)
             .OrderBy(t => t.DueDate ?? "9999").ThenBy(t => t.CreatedAt).ToList();
 
-    // Задачи, промоутнутые из чекбоксов конкретной заметки (флаг notes-task-sync)
-    public IReadOnlyCollection<TaskItem> GetBySourceNote(string noteId) =>
-        _tasks.Values.Where(t => t.SourceNoteId == noteId).ToList();
+    // Задачи ВЛАДЕЛЬЦА, промоутнутые из чекбоксов конкретной заметки.
+    // Фильтр по ownerId обязателен: id заметки личного vault владельца не содержит —
+    // это base64 от «personal|{относительный путь}», поэтому у двух пользователей
+    // заметка по одному пути (например дневник Journal/{дата}.md) даёт побайтово
+    // одинаковый noteId. Без фильтра чужой пользователь читал и правил бы задачи
+    // соседа через ручки заметок.
+    public IReadOnlyCollection<TaskItem> GetBySourceNote(string ownerId, string noteId) =>
+        _tasks.Values.Where(t => t.OwnerId == ownerId && t.SourceNoteId == noteId).ToList();
 
     public TaskItem Create(string? projectId, string ownerId, CreateTaskRequest req,
         BoardColumn? targetColumn = null)

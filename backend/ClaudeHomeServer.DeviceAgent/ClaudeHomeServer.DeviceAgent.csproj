@@ -29,6 +29,8 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="ClaudeHomeServer.DeviceAgent.Tests" />
+    <!-- Сквозной тест сервер ↔ агент (задача 2.8) живёт в серверных тестах -->
+    <InternalsVisibleTo Include="ClaudeHomeServer.Tests" />
   </ItemGroup>
 
 </Project>

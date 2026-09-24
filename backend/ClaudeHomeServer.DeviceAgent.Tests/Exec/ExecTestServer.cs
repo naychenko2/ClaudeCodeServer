@@ -83,8 +83,8 @@ internal sealed class ExecTestServer : IExecSocketConnector, IAsyncDisposable
         }
     }
 
-    public Task SendControlAsync(ExecControl control) =>
-        SendAsync(DeviceExecFrameChannel.Control, ExecJson.Serialize(control));
+    public Task SendControlAsync(DeviceExecControl control) =>
+        SendAsync(DeviceExecFrameChannel.Control, DeviceExecJson.Serialize(control));
 
     public void Break()
     {

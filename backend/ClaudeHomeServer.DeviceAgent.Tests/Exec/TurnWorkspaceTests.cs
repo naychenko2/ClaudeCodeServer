@@ -1,4 +1,5 @@
 using ClaudeHomeServer.DeviceAgent.Exec;
+using ClaudeHomeServer.Protocol;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeHomeServer.DeviceAgent.Tests.Exec;
@@ -22,7 +23,7 @@ public class TurnWorkspaceTests : IDisposable
     public void Имя_файла_spec_с_путём_отвергается(string name)
     {
         using var ws = TurnWorkspace.Create(_root, "t1", NullLogger.Instance);
-        var act = () => ws.Materialize([new ExecFile("f1", name, "x")], "http://127.0.0.1:1/t/k");
+        var act = () => ws.Materialize([new DeviceExecFile("f1", name, "x")], "http://127.0.0.1:1/t/k");
         act.Should().Throw<ExecRefusedException>();
         Directory.EnumerateFileSystemEntries(_root, "*", SearchOption.AllDirectories)
             .Should().OnlyContain(p => p.StartsWith(ws.Directory));
@@ -41,7 +42,7 @@ public class TurnWorkspaceTests : IDisposable
     public void Аргумент_на_несуществующий_файл_spec_отвергается()
     {
         using var ws = TurnWorkspace.Create(_root, "t1", NullLogger.Instance);
-        var act = () => ws.ResolveArgs(["--mcp-config", ExecSpawnRules.FilePlaceholder("nope")]);
+        var act = () => ws.ResolveArgs(["--mcp-config", DeviceExecPlaceholders.File("nope")]);
         act.Should().Throw<ExecRefusedException>();
     }
 
@@ -52,8 +53,8 @@ public class TurnWorkspaceTests : IDisposable
         using (var ws = TurnWorkspace.Create(_root, "t1", NullLogger.Instance))
         {
             dir = ws.Directory;
-            ws.Materialize([new ExecFile("f1", "a.json", "1"), new ExecFile("f2", "a.json", "2")], "http://s");
-            var args = ws.ResolveArgs([ExecSpawnRules.FilePlaceholder("f1"), ExecSpawnRules.FilePlaceholder("f2"), "-p"]);
+            ws.Materialize([new DeviceExecFile("f1", "a.json", "1"), new DeviceExecFile("f2", "a.json", "2")], "http://s");
+            var args = ws.ResolveArgs([DeviceExecPlaceholders.File("f1"), DeviceExecPlaceholders.File("f2"), "-p"]);
             File.ReadAllText(args[0]).Should().Be("1");
             File.ReadAllText(args[1]).Should().Be("2");
             args[2].Should().Be("-p");

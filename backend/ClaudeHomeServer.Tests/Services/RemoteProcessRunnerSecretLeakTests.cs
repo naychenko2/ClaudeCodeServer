@@ -117,16 +117,19 @@ public class RemoteProcessRunnerSecretLeakTests : IDisposable
             StdioEncoding = new UTF8Encoding(false),
             EnableRaisingEvents = true,
             TurnId = turnId,
+            SessionId = "sess-1",
         };
     }
 
     private static readonly IReadOnlyList<string> LlmProviderRegistryKeys =
         ClaudeHomeServer.Services.Llm.LlmProviderRegistry.ProviderEnvKeys;
 
-    private async Task<(DeviceSecretScanner.Report Report, JsonNode Dump)> RunTurnAsync(ProcessSpec spec)
+    private async Task<(DeviceSecretScanner.Report Report, JsonNode Dump)> RunTurnAsync(ProcessSpec spec,
+        bool agentLeaksGateway = false)
     {
-        var agent = new FakeDeviceAgent(_deviceDir, _fakeCli);
-        var runner = new RemoteProcessRunner(new InProcessDeviceExecChannel { Agent = agent.RunAsync }, "owner-g3", "dev-1");
+        var agent = new FakeDeviceAgent(_deviceDir, _fakeCli) { LeakGatewayToDisk = agentLeaksGateway };
+        var runner = new RemoteProcessRunner(new InProcessDeviceExecChannel { Agent = agent.RunAsync },
+            new FakeDeviceTurnGateway { Token = Secrets["turnToken"] }, "owner-g3", "dev-1");
 
         using var p = runner.Start(spec);
         (await p.StandardOutput.ReadLineAsync().WaitAsync(Wait)).Should().Contain("init");
@@ -136,6 +139,10 @@ public class RemoteProcessRunnerSecretLeakTests : IDisposable
         p.StandardInput.Close();
         await p.WaitForExitAsync().WaitAsync(Wait);
         p.ExitCode.Should().Be(0);
+
+        // Токен хода (выдан шлюзом, а не взят из spec) доехал до агента своим полем кадра —
+        // сканер ниже проверяет, что больше он не попал никуда
+        agent.ReceivedGateway?.Token.Should().Be(Secrets["turnToken"]);
 
         var dumpPath = Path.Combine(_projectDir, "cli-dump.json");
         File.Exists(dumpPath).Should().BeTrue("фейковый CLI обязан был реально отработать на устройстве");
@@ -168,5 +175,15 @@ public class RemoteProcessRunnerSecretLeakTests : IDisposable
             ServerStyleSpec("turn-g3-mut", "--append-system-prompt", "token " + Secrets["serviceJwt"]));
 
         report.Hits.Select(h => h.Secret).Should().Contain("serviceJwt");
+    }
+
+    [Fact]
+    public async Task Контроль_АгентЗаписалВыдачуШлюзаНаДиск_СканерНаходитТокенХода()
+    {
+        // Мутация сторожа на пути токена хода: он едет в кадре spawn, и агент, сохранивший
+        // кадр целиком, обязан покраснеть
+        var (report, _) = await RunTurnAsync(ServerStyleSpec("turn-g3-gw"), agentLeaksGateway: true);
+
+        report.Hits.Select(h => h.Secret).Should().Contain("turnToken");
     }
 }

@@ -1,4 +1,5 @@
 using ClaudeHomeServer.DeviceAgent.Cli;
+using ClaudeHomeServer.Protocol;
 
 namespace ClaudeHomeServer.DeviceAgent.Exec;
 
@@ -72,7 +73,7 @@ internal static class CliEnvironment
 
         env.TryAdd("LANG", DefaultLang);
         env["CLAUDE_CONFIG_DIR"] = configDir;
-        env["ANTHROPIC_BASE_URL"] = sidecarTurnUrl + "/llm";
+        env["ANTHROPIC_BASE_URL"] = $"{sidecarTurnUrl}/{DeviceSidecarRoutes.Llm}";
         env["ANTHROPIC_AUTH_TOKEN"] = AuthPlaceholder;
         env["HTTPS_PROXY"] = sidecarUrl;
         // Сайдкар сам на loopback: запрос к нему через прокси ушёл бы по кругу

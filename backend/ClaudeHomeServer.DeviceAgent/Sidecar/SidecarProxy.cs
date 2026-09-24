@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using ClaudeHomeServer.Protocol;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 
@@ -44,7 +45,8 @@ internal sealed partial class SidecarProxy(TurnGrants grants, IDeviceIdentity de
         "Connection", "Keep-Alive", "Transfer-Encoding", "TE", "Trailer", "Upgrade", "Proxy-Authenticate",
     };
 
-    [GeneratedRegex("^/t/(?<key>[0-9a-f]{32})/(?<kind>llm|mcp)(?<rest>/.*)?$")]
+    [GeneratedRegex("^/" + DeviceSidecarRoutes.TurnSegment + "/(?<key>[0-9a-f]{32})/(?<kind>"
+        + DeviceSidecarRoutes.Llm + "|" + DeviceSidecarRoutes.Mcp + ")(?<rest>/.*)?$")]
     private static partial Regex RouteRegex();
 
     public async Task HandleAsync(HttpContext context)

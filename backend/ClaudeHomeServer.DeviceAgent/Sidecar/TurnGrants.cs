@@ -1,6 +1,6 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
-using ClaudeHomeServer.DeviceAgent.Exec;
+using ClaudeHomeServer.Protocol;
 
 namespace ClaudeHomeServer.DeviceAgent.Sidecar;
 
@@ -11,17 +11,17 @@ namespace ClaudeHomeServer.DeviceAgent.Sidecar;
 /// </summary>
 internal sealed class TurnGrants
 {
-    private readonly ConcurrentDictionary<string, ExecGatewayGrant?> _byKey = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, DeviceExecGateway?> _byKey = new(StringComparer.Ordinal);
 
     /// <summary>Регистрирует ход; grant = null — сервер шлюз не выдал, сайдкар ответит отказом.</summary>
-    public string Register(ExecGatewayGrant? grant)
+    public string Register(DeviceExecGateway? grant)
     {
         var key = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
         _byKey[key] = grant;
         return key;
     }
 
-    public bool TryGet(string key, out ExecGatewayGrant? grant) => _byKey.TryGetValue(key, out grant);
+    public bool TryGet(string key, out DeviceExecGateway? grant) => _byKey.TryGetValue(key, out grant);
 
     public void Remove(string key) => _byKey.TryRemove(key, out _);
 

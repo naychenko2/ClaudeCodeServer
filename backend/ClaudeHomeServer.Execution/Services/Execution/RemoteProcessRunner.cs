@@ -20,6 +20,10 @@ namespace ClaudeHomeServer.Services.Execution;
 // из BuildCliEnv/BuildOAuthCliEnv не едут никогда: маршрут и авторизацию ставит шлюз через
 // сайдкар агента). MCP-конфиг переписывается: остаются только http-серверы нашего бэкенда,
 // адрес — на сайдкар, заголовков нет вовсе; stdio и сторонние серверы отбрасываются.
+//
+// Маршрут и токен хода выдаёт шлюз (шов IDeviceTurnGateway) ДО открытия канала: отказ —
+// ход не стартует на устройстве вовсе. Токен едет только полем Gateway кадра spawn, мимо
+// spec, и отзывается по концу исполнения.
 public sealed class RemoteProcessRunner : IProcessLauncher
 {
     /// <summary>Ключи env, которые допускается передать CLI на устройстве. Остальное отбрасывается.</summary>
@@ -52,15 +56,17 @@ public sealed class RemoteProcessRunner : IProcessLauncher
     private static readonly ConcurrentDictionary<string, RemoteExec> Execs = new();
 
     private readonly IDeviceExecChannel _channel;
+    private readonly IDeviceTurnGateway _gateway;
     private readonly string _ownerId;
     private readonly string _deviceId;
     private readonly string _relayScript;
     private readonly string _nodePath;
 
-    public RemoteProcessRunner(IDeviceExecChannel channel, string ownerId, string deviceId,
+    public RemoteProcessRunner(IDeviceExecChannel channel, IDeviceTurnGateway gateway, string ownerId, string deviceId,
         string? relayScriptPath = null, string? nodePath = null)
     {
         _channel = channel;
+        _gateway = gateway;
         _ownerId = ownerId;
         _deviceId = deviceId;
         _relayScript = relayScriptPath ?? Path.Combine(AppContext.BaseDirectory, "exec-relay.mjs");
@@ -76,7 +82,7 @@ public sealed class RemoteProcessRunner : IProcessLauncher
     // Путь проекта локального проекта — уже путь устройства
     public IPathMapper Paths => IdentityPathMapper.Instance;
     // Агент запускает свою управляемую копию CLI по этому имени
-    public string ClaudeCliCommand => "claude";
+    public string ClaudeCliCommand => DeviceExecCli.Name;
     public string? McpApiUrlOverride => null;
 
     public string HostTempDir
@@ -96,28 +102,60 @@ public sealed class RemoteProcessRunner : IProcessLauncher
             throw new NotSupportedException("RawArguments — только local-раннер (cmd /s /c); на устройство едет только Args");
 
         var turnId = spec.TurnId ?? NewTurnId();
-        var control = DeviceExecJson.Serialize(
-            new DeviceExecControl(DeviceExecControlOps.Spawn, turnId, BuildSpawn(spec)));
-        if (control.Length > DeviceExecProtocol.MaxPayloadBytes)
-            throw new InvalidOperationException(
-                $"Запуск на устройстве не помещается в кадр канала: {control.Length} байт при потолке {DeviceExecProtocol.MaxPayloadBytes}");
-
-        // Отказ неготового устройства — DeviceExecRefusedException с причиной, до старта ретранслятора
-        var stream = _channel.OpenAsync(_ownerId, _deviceId).GetAwaiter().GetResult();
+        var spawn = BuildSpawn(spec);
+        // Отказ шлюза — DeviceExecRefusedException с его текстом, до канала и ретранслятора
+        var gateway = StartGatewayTurn(spec);
+        IDeviceExecStream? stream = null;
         try
         {
+            var control = DeviceExecJson.Serialize(
+                new DeviceExecControl(DeviceExecControlOps.Spawn, turnId, spawn, gateway));
+            if (control.Length > DeviceExecProtocol.MaxPayloadBytes)
+                throw new InvalidOperationException(
+                    $"Запуск на устройстве не помещается в кадр канала: {control.Length} байт при потолке {DeviceExecProtocol.MaxPayloadBytes}");
+
+            // Отказ неготового устройства — DeviceExecRefusedException с причиной, до старта ретранслятора
+            stream = _channel.OpenAsync(_ownerId, _deviceId).GetAwaiter().GetResult();
             stream.SendAsync(DeviceExecFrameChannel.Control, control).AsTask().GetAwaiter().GetResult();
             var exec = RemoteExec.Launch(ExecKey(turnId), turnId, stream, spec, _nodePath, _relayScript);
             Execs[exec.Key] = exec;
-            exec.Run(() => Execs.TryRemove(new KeyValuePair<string, RemoteExec>(exec.Key, exec)));
+            exec.Run(() =>
+            {
+                Execs.TryRemove(new KeyValuePair<string, RemoteExec>(exec.Key, exec));
+                _gateway.EndTurn(gateway.TurnId);
+            });
             if (spec.Track) ProcessRegistry.Register(exec.Relay);
             return exec.Relay;
         }
         catch
         {
-            _ = stream.DisposeAsync().AsTask();
+            _gateway.EndTurn(gateway.TurnId);
+            if (stream is not null) _ = stream.DisposeAsync().AsTask();
             throw;
         }
+    }
+
+    // Маршрут и токен хода — до запуска на устройстве. Модель — подсказка из --model: провайдера
+    // и итоговую модель решает шлюз
+    private DeviceExecGateway StartGatewayTurn(ProcessSpec spec)
+    {
+        if (string.IsNullOrEmpty(spec.SessionId))
+            throw new DeviceExecRefusedException(DeviceExecRefusal.GatewayRefused,
+                "Ход на устройстве без чата: токен шлюза не к чему привязать.");
+        var start = _gateway.StartTurn(_ownerId, spec.SessionId, _deviceId, ModelOf(spec.Args));
+        return start.Gateway
+            ?? throw new DeviceExecRefusedException(DeviceExecRefusal.GatewayRefused,
+                start.FailureText ?? "Шлюз не выдал ходу маршрут.");
+    }
+
+    internal static string? ModelOf(IReadOnlyList<string> args)
+    {
+        for (var i = 0; i < args.Count; i++)
+        {
+            if (args[i] == "--model" && i + 1 < args.Count) return args[i + 1];
+            if (args[i].StartsWith("--model=", StringComparison.Ordinal)) return args[i]["--model=".Length..];
+        }
+        return null;
     }
 
     public void Kill(Process process, string? turnId = null)
@@ -226,7 +264,7 @@ public sealed class RemoteProcessRunner : IProcessLauncher
         var server = tail.Split('/')[0];
         if (!BackendMcpServers.Contains(server)) return null;
         // Строка запроса отбрасывается: у наших эндпоинтов её нет, а токен в ней был бы утечкой
-        return DeviceExecPlaceholders.Sidecar + path[idx..];
+        return $"{DeviceExecPlaceholders.Sidecar}/{DeviceSidecarRoutes.Mcp}/{tail}";
     }
 
     private static string ResolveNode()

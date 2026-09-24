@@ -68,6 +68,8 @@ public enum DeviceExecRefusal
     NoExecCapability,
     HarnessNotReady,
     NoResponse,
+    /// <summary>Шлюз не выдал ходу маршрут: нет setup-token, подписки выключены, нет провайдера.</summary>
+    GatewayRefused,
 }
 
 /// <summary>Отказ открыть канал исполнения; <see cref="Exception.Message"/> — готовый текст для человека.</summary>

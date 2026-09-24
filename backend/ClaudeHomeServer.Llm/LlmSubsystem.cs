@@ -341,6 +341,8 @@ public sealed class LlmSubsystem : IAppSubsystem
         services.AddOptions<Gateway.LlmGatewayOptions>().Bind(config.GetSection(Gateway.LlmGatewayOptions.Section));
         services.AddSingleton<SubscriptionLimitRecorder>();
         services.AddSingleton<Gateway.UpstreamSelector>();
+        // Шов для удалённого раннера (Execution): выдача маршрута и токена хода на устройстве
+        services.AddSingleton<ClaudeHomeServer.Services.Execution.IDeviceTurnGateway, Gateway.DeviceTurnGateway>();
         services.AddHttpClient(Gateway.LlmGatewayEndpoints.HttpClientName, c => c.Timeout = Timeout.InfiniteTimeSpan);
 
         // WorkflowAgentParser / WorkflowWatcher / WorkflowMetaResolver — статические

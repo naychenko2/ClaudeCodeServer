@@ -129,6 +129,10 @@
       сторожей форс-загружают сборку через typeof(LlmSubsystem).Assembly.
     -->
     <ProjectReference Include="..\ClaudeHomeServer.Llm\ClaudeHomeServer.Llm.csproj" />
+    <!-- Агент устройства: сквозной тест хода на устройстве (ADR-016, задача 2.8) гоняет
+         настоящие стороны в одном процессе — серверный RemoteProcessRunner и исполнитель
+         агента с сайдкаром (internals) -->
+    <ProjectReference Include="..\ClaudeHomeServer.DeviceAgent\ClaudeHomeServer.DeviceAgent.csproj" />
     <!-- Мост: юниты парсера кадров (internals) + интеграционные тесты гоняют exe из bin -->
     <ProjectReference Include="..\ConPtyBridge\ConPtyBridge.csproj" />
   </ItemGroup>

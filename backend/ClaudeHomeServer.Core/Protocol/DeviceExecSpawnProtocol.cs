@@ -14,8 +14,28 @@ public static class DeviceExecControlOps
     public const string Kill = "kill";
 }
 
-/// <summary>Кадр управления исполнением: JSON в данных кадра <see cref="DeviceExecFrameChannel.Control"/>.</summary>
-public sealed record DeviceExecControl(string Op, string TurnId, DeviceExecSpawn? Spawn = null);
+/// <summary>
+/// Кадр управления исполнением: JSON в данных кадра <see cref="DeviceExecFrameChannel.Control"/>.
+/// Один тип для обеих сторон канала: сервер (<c>RemoteProcessRunner</c>) его собирает, агент
+/// устройства разбирает. <see cref="Gateway"/> едет только в spawn.
+/// </summary>
+public sealed record DeviceExecControl(
+    string Op,
+    string TurnId,
+    DeviceExecSpawn? Spawn = null,
+    DeviceExecGateway? Gateway = null);
+
+/// <summary>
+/// Выдача шлюза на ход: <see cref="TurnId"/> — ход в маршруте шлюза (<c>/gw/t/{TurnId}/…</c>),
+/// <see cref="Token"/> — его секрет. Секрет едет только этим полем кадра spawn и живёт в
+/// памяти агента: в env, argv и файлы CLI он не попадает (сторож G3). <see cref="TurnId"/>
+/// шлюза — не <see cref="DeviceExecControl.TurnId"/> исполнения: у них разные хозяева.
+/// </summary>
+public sealed record DeviceExecGateway(string TurnId, string Token)
+{
+    // Секрет не печатается ни в лог, ни в исключение
+    public override string ToString() => $"DeviceExecGateway {{ TurnId = {TurnId} }}";
+}
 
 /// <summary>
 /// Что запустить на устройстве. Собирает <c>RemoteProcessRunner</c> по allow-list: учётных
@@ -27,7 +47,10 @@ public sealed record DeviceExecControl(string Op, string TurnId, DeviceExecSpawn
 /// в <see cref="Files"/>; в <see cref="Args"/> на их месте стоит
 /// <see cref="DeviceExecPlaceholders.File"/> — агент материализует файл во временном
 /// каталоге хода и подставляет его путь. В содержимом файлов агент подставляет адрес своего
-/// сайдкара вместо <see cref="DeviceExecPlaceholders.Sidecar"/>.
+/// хода в сайдкаре вместо <see cref="DeviceExecPlaceholders.Sidecar"/>.
+///
+/// <see cref="FileName"/> агент не исполняет как есть: запускается только его управляемая
+/// копия CLI, а имя сверяется с <see cref="DeviceExecCli.Name"/>.
 /// </summary>
 public sealed record DeviceExecSpawn(
     string FileName,
@@ -40,13 +63,42 @@ public sealed record DeviceExecSpawn(
 /// <summary>Файл spec для материализации на устройстве. <see cref="Name"/> — только имя, без пути.</summary>
 public sealed record DeviceExecFile(string Id, string Name, string Content);
 
-/// <summary>Данные кадра <see cref="DeviceExecFrameChannel.Exit"/>: код выхода или сигнал.</summary>
-public sealed record DeviceExecExit(int? Code, string? Signal = null);
+/// <summary>
+/// Данные кадра <see cref="DeviceExecFrameChannel.Exit"/>: код выхода или сигнал.
+/// <see cref="Error"/> — причина, по которой ход не запустился на устройстве.
+/// </summary>
+public sealed record DeviceExecExit(int? Code, string? Signal = null, string? Error = null);
+
+/// <summary>Что агент согласен запускать по команде сервера.</summary>
+public static class DeviceExecCli
+{
+    /// <summary>Единственная программа spawn: управляемая копия CLI агента.</summary>
+    public const string Name = "claude";
+}
+
+/// <summary>
+/// Адресация хода в сайдкаре агента: <c>{сайдкар}/t/{ключ}/{llm|mcp}/…</c>. Ключ — случайность
+/// агента, а не id хода сервера. Одно определение для обеих сторон: сервер пишет адреса
+/// MCP через <see cref="DeviceExecPlaceholders.Sidecar"/>, агент разворачивает плейсхолдер в
+/// <see cref="TurnUrl"/> и принимает запросы по тем же сегментам.
+/// </summary>
+public static class DeviceSidecarRoutes
+{
+    public const string TurnSegment = "t";
+    public const string Llm = "llm";
+    public const string Mcp = "mcp";
+
+    /// <summary>Адрес хода в сайдкаре: <c>{sidecarUrl}/t/{key}</c>, без завершающего слэша.</summary>
+    public static string TurnUrl(string sidecarUrl, string key) => $"{sidecarUrl}/{TurnSegment}/{key}";
+}
 
 /// <summary>Подстановки, которые агент разворачивает у себя.</summary>
 public static class DeviceExecPlaceholders
 {
-    /// <summary>Базовый адрес сайдкара агента (<c>http://127.0.0.1:{порт}</c>), без завершающего слэша.</summary>
+    /// <summary>
+    /// Адрес хода в сайдкаре агента, <see cref="DeviceSidecarRoutes.TurnUrl"/>, без завершающего
+    /// слэша. Сервер дописывает к нему <c>/mcp/{имя}/…</c> или <c>/llm/…</c>.
+    /// </summary>
     public const string Sidecar = "{{ccs-sidecar}}";
 
     public const string FilePrefix = "{{ccs-file:";

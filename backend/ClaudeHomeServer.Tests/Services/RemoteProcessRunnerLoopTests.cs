@@ -97,13 +97,15 @@ public class RemoteProcessRunnerLoopTests
         StdioEncoding = new UTF8Encoding(false),
         EnableRaisingEvents = true,
         TurnId = turnId,
+        SessionId = "chat-1",
     };
 
-    private static (RemoteProcessRunner Runner, InProcessDeviceExecChannel Channel, ScriptedAgent Agent) Create(string owner = "owner-1")
+    private static (RemoteProcessRunner Runner, InProcessDeviceExecChannel Channel, ScriptedAgent Agent) Create(
+        string owner = "owner-1", FakeDeviceTurnGateway? gateway = null)
     {
         var agent = new ScriptedAgent();
         var channel = new InProcessDeviceExecChannel { Agent = agent.RunAsync };
-        return (new RemoteProcessRunner(channel, owner, "dev-1"), channel, agent);
+        return (new RemoteProcessRunner(channel, gateway ?? new FakeDeviceTurnGateway(), owner, "dev-1"), channel, agent);
     }
 
     private static async Task<string> ReadLineAsync(Process p)
@@ -181,7 +183,7 @@ public class RemoteProcessRunnerLoopTests
 
         // ClaudeSession мог получить раннер заново от фабрики — ход находится по владельцу и
         // TurnId, а не по объекту процесса: передаём заведомо посторонний процесс
-        var other = new RemoteProcessRunner(channel, "owner-kill", "dev-1");
+        var other = new RemoteProcessRunner(channel, new FakeDeviceTurnGateway(), "owner-kill", "dev-1");
         using var unrelated = Process.Start(new ProcessStartInfo("node", ["-e", "setTimeout(()=>{}, 60000)"]))!;
         other.Kill(unrelated, "turn-kill");
 
@@ -201,7 +203,7 @@ public class RemoteProcessRunnerLoopTests
         (await ReadLineAsync(p)).Should().Contain("\"init\"");
 
         using var stranger = Process.Start(new ProcessStartInfo("node", ["-e", "setTimeout(()=>{}, 60000)"]))!;
-        new RemoteProcessRunner(channel, "owner-b", "dev-1").Kill(stranger, "turn-shared");
+        new RemoteProcessRunner(channel, new FakeDeviceTurnGateway(), "owner-b", "dev-1").Kill(stranger, "turn-shared");
 
         // Kill отправляет кадр синхронно и раньше конца stdin: ошибись поиск — агент
         // получил бы kill первым и ход вышел бы по сигналу
@@ -231,7 +233,7 @@ public class RemoteProcessRunnerLoopTests
         {
             Refuse = new DeviceExecRefusedException(DeviceExecRefusal.Offline, "Устройство не в сети"),
         };
-        var runner = new RemoteProcessRunner(channel, "owner-1", "dev-1");
+        var runner = new RemoteProcessRunner(channel, new FakeDeviceTurnGateway(), "owner-1", "dev-1");
 
         var act = () => runner.Start(ClaudeSpec("turn-off"));
 
@@ -240,10 +242,84 @@ public class RemoteProcessRunnerLoopTests
     }
 
     [Fact]
+    public async Task Spawn_НесётВыдачуШлюза_ТокенТолькоВПолеGateway_ОтзывПоКонцуИсполнения()
+    {
+        var gateway = new FakeDeviceTurnGateway { Token = "tt_SECRET-gateway-token-1" };
+        var (runner, _, agent) = Create("owner-gw", gateway);
+        var p = runner.Start(ClaudeSpec("turn-gw", "--model", "claude-opus-5-5"));
+
+        var spawn = await agent.Spawned.Task.WaitAsync(Wait);
+        gateway.Started.Should().ContainSingle().Which.Should().Be(("owner-gw", "chat-1", "dev-1", "claude-opus-5-5"));
+        spawn.Gateway.Should().Be(new DeviceExecGateway("gw-1", "tt_SECRET-gateway-token-1"));
+        Encoding.UTF8.GetString(DeviceExecJson.Serialize(spawn.Spawn)).Should().NotContain(gateway.Token,
+            "токен едет только полем Gateway: ни в env, ни в argv, ни в файлы spec");
+        spawn.Gateway!.ToString().Should().NotContain(gateway.Token, "секрет не печатается в лог");
+        gateway.Ended.Should().BeEmpty("ход ещё идёт");
+
+        (await ReadLineAsync(p)).Should().Contain("\"init\"");
+        p.StandardInput.Close();
+        await p.WaitForExitAsync().WaitAsync(Wait);
+        (await gateway.FirstEnded.Task.WaitAsync(Wait)).Should().Be("gw-1");
+    }
+
+    [Theory]
+    [InlineData("Для локальных проектов нужна подписка на claude setup-token.")]
+    [InlineData("Подписки Claude через шлюз выключены.")]
+    public void ОтказШлюза_ХодНеСтартует_ТекстОтказаВИсключении(string failure)
+    {
+        var gateway = new FakeDeviceTurnGateway { Refuse = failure };
+        var (runner, channel, agent) = Create("owner-refused", gateway);
+
+        var act = () => runner.Start(ClaudeSpec("turn-refused"));
+
+        var refused = act.Should().Throw<DeviceExecRefusedException>().Which;
+        refused.Reason.Should().Be(DeviceExecRefusal.GatewayRefused);
+        refused.Message.Should().Be(failure);
+        channel.Opened.Should().BeEmpty("до устройства ход не доходит");
+        agent.Spawned.Task.IsCompleted.Should().BeFalse();
+    }
+
+    [Fact]
+    public void ХодБезЧата_ОтказДоШлюза()
+    {
+        var gateway = new FakeDeviceTurnGateway();
+        var (runner, channel, _) = Create("owner-nochat", gateway);
+
+        var act = () => runner.Start(ClaudeSpec("turn-nochat") with { SessionId = null });
+
+        act.Should().Throw<DeviceExecRefusedException>().Which.Reason.Should().Be(DeviceExecRefusal.GatewayRefused);
+        gateway.Started.Should().BeEmpty();
+        channel.Opened.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ОтказКанала_ПослеВыдачи_ТокенОтозван()
+    {
+        var gateway = new FakeDeviceTurnGateway();
+        var channel = new InProcessDeviceExecChannel
+        {
+            Refuse = new DeviceExecRefusedException(DeviceExecRefusal.Offline, "Устройство не в сети"),
+        };
+        var runner = new RemoteProcessRunner(channel, gateway, "owner-1", "dev-1");
+
+        var act = () => runner.Start(ClaudeSpec("turn-off-gw"));
+
+        act.Should().Throw<DeviceExecRefusedException>().Which.Reason.Should().Be(DeviceExecRefusal.Offline);
+        gateway.Ended.Should().Equal("gw-1");
+    }
+
+    [Theory]
+    [InlineData(new[] { "--print", "--model", "sonnet" }, "sonnet")]
+    [InlineData(new[] { "--model=deepseek-v4-pro", "--print" }, "deepseek-v4-pro")]
+    [InlineData(new[] { "--print" }, null)]
+    public void МодельДляШлюза_ИзАргументов(string[] args, string? model) =>
+        RemoteProcessRunner.ModelOf(args).Should().Be(model);
+
+    [Fact]
     public void Раннер_ОбъявляетСредуУстройства()
     {
         var runner = new RemoteProcessRunner(
-            new InProcessDeviceExecChannel { Platform = "windows" }, "owner-1", "dev-1");
+            new InProcessDeviceExecChannel { Platform = "windows" }, new FakeDeviceTurnGateway(), "owner-1", "dev-1");
 
         runner.IsSandboxed.Should().BeTrue();
         runner.TargetIsWindows.Should().BeTrue();
@@ -255,7 +331,7 @@ public class RemoteProcessRunnerLoopTests
     [Fact]
     public void RawArguments_НеПоддерживаются()
     {
-        var runner = new RemoteProcessRunner(new InProcessDeviceExecChannel(), "owner-1", "dev-1");
+        var runner = new RemoteProcessRunner(new InProcessDeviceExecChannel(), new FakeDeviceTurnGateway(), "owner-1", "dev-1");
         var act = () => runner.Start(new ProcessSpec { FileName = "cmd", RawArguments = "/s /c \"x\"" });
         act.Should().Throw<NotSupportedException>();
     }

@@ -78,7 +78,7 @@ internal sealed class TurnExecutor
     public async Task RunAsync(ExecLink link, CancellationToken ct)
     {
         await using var _ = link;
-        ExecControl? control;
+        DeviceExecControl? control;
         try
         {
             control = await ReadSpawnAsync(link, ct);
@@ -121,7 +121,7 @@ internal sealed class TurnExecutor
         }
     }
 
-    private async Task DriveAsync(ExecLink link, ExecControl control, TurnSetup setup, TurnProcess process, CancellationToken ct)
+    private async Task DriveAsync(ExecLink link, DeviceExecControl control, TurnSetup setup, TurnProcess process, CancellationToken ct)
     {
         var turnId = control.TurnId;
         _live[turnId] = process;
@@ -139,7 +139,7 @@ internal sealed class TurnExecutor
         try
         {
             await link.SendAsync(DeviceExecFrameChannel.Info,
-                ExecJson.Serialize(new { pid = process.Id, cliVersion = setup.Cli.Version }), ct);
+                DeviceExecJson.Serialize(new { pid = process.Id, cliVersion = setup.Cli.Version }), ct);
 
             var stdout = PumpAsync(process.StandardOutput, DeviceExecFrameChannel.Stdout, link);
             var stderr = PumpAsync(process.StandardError, DeviceExecFrameChannel.Stderr, link);
@@ -161,11 +161,11 @@ internal sealed class TurnExecutor
             await Task.WhenAll(stdout, stderr);
 
             var exit = Volatile.Read(ref killed) == 1
-                ? new ExecExit(process.ExitCode, "SIGKILL")
-                : new ExecExit(process.ExitCode);
+                ? new DeviceExecExit(process.ExitCode, "SIGKILL")
+                : new DeviceExecExit(process.ExitCode);
             if (!link.Finished.IsCompleted)
             {
-                await link.SendAsync(DeviceExecFrameChannel.Exit, ExecJson.Serialize(exit), CancellationToken.None);
+                await link.SendAsync(DeviceExecFrameChannel.Exit, DeviceExecJson.Serialize(exit), CancellationToken.None);
                 if (!await link.DrainAsync(_options.DrainTimeout))
                     _log.LogWarning("Ход {TurnId}: сервер не подтвердил конец вывода за {Timeout}", turnId, _options.DrainTimeout);
             }
@@ -188,18 +188,18 @@ internal sealed class TurnExecutor
         }
     }
 
-    private async Task<ExecControl?> ReadSpawnAsync(ExecLink link, CancellationToken ct)
+    private async Task<DeviceExecControl?> ReadSpawnAsync(ExecLink link, CancellationToken ct)
     {
         await foreach (var frame in link.ReadAllAsync(ct))
         {
             if (frame.Channel != DeviceExecFrameChannel.Control)
                 throw new ExecRefusedException("первым кадром исполнения обязан быть spawn");
 
-            ExecControl? control;
-            try { control = ExecJson.Deserialize<ExecControl>(frame.Payload.Span); }
+            DeviceExecControl? control;
+            try { control = DeviceExecJson.Deserialize<DeviceExecControl>(frame.Payload.Span); }
             catch (System.Text.Json.JsonException) { throw new ExecRefusedException("кадр spawn не разобран"); }
 
-            if (control is null || control.Op != ExecControlOps.Spawn || control.Spawn is null)
+            if (control is null || control.Op != DeviceExecControlOps.Spawn || control.Spawn is null)
                 throw new ExecRefusedException("первым кадром исполнения обязан быть spawn");
             if (!TurnWorkspace.IsSafeSegment(control.TurnId))
                 throw new ExecRefusedException("недопустимый идентификатор хода");
@@ -208,10 +208,10 @@ internal sealed class TurnExecutor
         return null;
     }
 
-    private TurnSetup Prepare(ExecControl control)
+    private TurnSetup Prepare(DeviceExecControl control)
     {
         var spawn = control.Spawn!;
-        if (!string.Equals(spawn.FileName, ExecSpawnRules.CliName, StringComparison.Ordinal))
+        if (!string.Equals(spawn.FileName, DeviceExecCli.Name, StringComparison.Ordinal))
             throw new ExecRefusedException($"агент запускает только claude, а не «{spawn.FileName}»");
         if (_live.ContainsKey(control.TurnId))
             throw new ExecRefusedException($"ход {control.TurnId} уже идёт на устройстве");
@@ -232,7 +232,7 @@ internal sealed class TurnExecutor
             workspace = TurnWorkspace.Create(_options.TurnsRoot, control.TurnId, _log);
             grantKey = _grants.Register(control.Gateway);
             var sidecarUrl = _options.SidecarUrl();
-            var sidecarTurnUrl = $"{sidecarUrl}/t/{grantKey}";
+            var sidecarTurnUrl = DeviceSidecarRoutes.TurnUrl(sidecarUrl, grantKey);
 
             workspace.Materialize(spawn.Files ?? [], sidecarTurnUrl);
             var args = workspace.ResolveArgs(spawn.Args);
@@ -257,7 +257,7 @@ internal sealed class TurnExecutor
         try
         {
             await link.SendAsync(DeviceExecFrameChannel.Stderr, Encoding.UTF8.GetBytes(reason + "\n"));
-            await link.SendAsync(DeviceExecFrameChannel.Exit, ExecJson.Serialize(new ExecExit(RefusedExitCode, Error: reason)));
+            await link.SendAsync(DeviceExecFrameChannel.Exit, DeviceExecJson.Serialize(new DeviceExecExit(RefusedExitCode, Error: reason)));
             await link.DrainAsync(TimeSpan.FromSeconds(10));
         }
         catch (OperationCanceledException) { }
@@ -294,8 +294,8 @@ internal sealed class TurnExecutor
                         process.StandardInput.Close();
                         break;
                     case DeviceExecFrameChannel.Control:
-                        var control = ExecJson.Deserialize<ExecControl>(frame.Payload.Span);
-                        if (control?.Op == ExecControlOps.Kill && control.TurnId == turnId) kill("kill от сервера");
+                        var control = DeviceExecJson.Deserialize<DeviceExecControl>(frame.Payload.Span);
+                        if (control?.Op == DeviceExecControlOps.Kill && control.TurnId == turnId) kill("kill от сервера");
                         else _log.LogWarning("Ход {TurnId}: непонятный кадр управления отброшен", turnId);
                         break;
                 }

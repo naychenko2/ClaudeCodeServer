@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using System.Text;
 using ClaudeHomeServer.DeviceAgent.Exec;
 using ClaudeHomeServer.DeviceAgent.Sidecar;
+using ClaudeHomeServer.Protocol;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeHomeServer.DeviceAgent.Tests.Sidecar;
@@ -30,7 +31,7 @@ public class SidecarTests
         }
     }
 
-    private static async Task<(SidecarHost Host, TurnGrants Grants, string Key)> StartAsync(FakeGateway gateway, ExecGatewayGrant? grant)
+    private static async Task<(SidecarHost Host, TurnGrants Grants, string Key)> StartAsync(FakeGateway gateway, DeviceExecGateway? grant)
     {
         var grants = new TurnGrants();
         var key = grants.Register(grant);
@@ -56,7 +57,7 @@ public class SidecarTests
         {
             Content = new StringContent("""{"ok":true}""", Encoding.UTF8, "application/json"),
         }));
-        var (host, _, key) = await StartAsync(gateway, new ExecGatewayGrant("gw-turn-9", TurnToken));
+        var (host, _, key) = await StartAsync(gateway, new DeviceExecGateway("gw-turn-9", TurnToken));
         await using var _h = host;
 
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{host.Url}/t/{key}/llm/v1/messages?beta=true")
@@ -96,7 +97,7 @@ public class SidecarTests
     public async Task MCP_пропускает_любой_метод(string method)
     {
         var gateway = new FakeGateway(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.Accepted)));
-        var (host, _, key) = await StartAsync(gateway, new ExecGatewayGrant("gw-1", TurnToken));
+        var (host, _, key) = await StartAsync(gateway, new DeviceExecGateway("gw-1", TurnToken));
         await using var _h = host;
 
         using var request = new HttpRequestMessage(new HttpMethod(method), $"{host.Url}/t/{key}/mcp/tasks/s1");
@@ -112,7 +113,7 @@ public class SidecarTests
     public async Task Неизвестный_ход_и_ход_без_выдачи_шлюза_получают_отказ()
     {
         var gateway = new FakeGateway(_ => Task.FromResult(new HttpResponseMessage()));
-        var (host, grants, _) = await StartAsync(gateway, new ExecGatewayGrant("gw-1", TurnToken));
+        var (host, grants, _) = await StartAsync(gateway, new DeviceExecGateway("gw-1", TurnToken));
         await using var _h = host;
         var noGrant = grants.Register(null);
 
@@ -142,7 +143,7 @@ public class SidecarTests
             content.Headers.ContentType = new MediaTypeHeaderValue("text/event-stream");
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = content });
         });
-        var (host, _, key) = await StartAsync(gateway, new ExecGatewayGrant("gw-1", TurnToken));
+        var (host, _, key) = await StartAsync(gateway, new DeviceExecGateway("gw-1", TurnToken));
         await using var _h = host;
 
         try
@@ -214,8 +215,8 @@ public class SidecarTests
     [Fact]
     public void Выдача_шлюза_не_печатает_токен()
     {
-        new ExecGatewayGrant("gw-1", TurnToken).ToString().Should().NotContain(TurnToken);
-        new ExecControl(ExecControlOps.Spawn, "t", null, new ExecGatewayGrant("gw-1", TurnToken)).ToString()
+        new DeviceExecGateway("gw-1", TurnToken).ToString().Should().NotContain(TurnToken);
+        new DeviceExecControl(DeviceExecControlOps.Spawn, "t", null, new DeviceExecGateway("gw-1", TurnToken)).ToString()
             .Should().NotContain(TurnToken);
     }
 

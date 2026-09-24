@@ -89,9 +89,9 @@ public class TurnExecutorUnixTests
     {
         await using var h = NewHarness();
         var mcp = """{"mcpServers":{"tasks":{"type":"http","url":"{{ccs-sidecar}}/mcp/tasks/s1"}}}""";
-        var files = new[] { new ExecFile("f1", "mcp.json", mcp), new ExecFile("f2", "prompt.md", "Системный промпт") };
-        var args = new[] { "-p", "--mcp-config", ExecSpawnRules.FilePlaceholder("f1"),
-            "--append-system-prompt-file", ExecSpawnRules.FilePlaceholder("f2") };
+        var files = new[] { new DeviceExecFile("f1", "mcp.json", mcp), new DeviceExecFile("f2", "prompt.md", "Системный промпт") };
+        var args = new[] { "-p", "--mcp-config", DeviceExecPlaceholders.File("f1"),
+            "--append-system-prompt-file", DeviceExecPlaceholders.File("f2") };
 
         await h.StartAsync(h.Spawn(args, files));
         await h.WaitStdoutAsync("\"init\"", new StringBuilder(), Wait);
@@ -136,8 +136,8 @@ public class TurnExecutorUnixTests
         File.Exists(Path.Combine(sessions, $"{cliPid}.json")).Should().BeTrue();
 
         // Чужой ход того же устройства kill не трогает
-        await h.Server.SendControlAsync(new ExecControl(ExecControlOps.Kill, "other-turn"));
-        await h.Server.SendControlAsync(new ExecControl(ExecControlOps.Kill, "turn-kill"));
+        await h.Server.SendControlAsync(new DeviceExecControl(DeviceExecControlOps.Kill, "other-turn"));
+        await h.Server.SendControlAsync(new DeviceExecControl(DeviceExecControlOps.Kill, "turn-kill"));
         var frames = await h.Server.ReadUntilExitAsync(Wait);
         await h.Run!.WaitAsync(Wait);
 
@@ -254,15 +254,15 @@ public class TurnExecutorUnixTests
     public async Task Токен_хода_не_попадает_ни_в_лог_ни_в_файлы_устройства()
     {
         await using var h = NewHarness();
-        var files = new[] { new ExecFile("f1", "mcp.json", """{"mcpServers":{}}""") };
-        await h.StartAsync(h.Spawn(["--mcp-config", ExecSpawnRules.FilePlaceholder("f1")], files));
+        var files = new[] { new DeviceExecFile("f1", "mcp.json", """{"mcpServers":{}}""") };
+        await h.StartAsync(h.Spawn(["--mcp-config", DeviceExecPlaceholders.File("f1")], files));
         await h.WaitStdoutAsync("\"init\"", new StringBuilder(), Wait);
 
         var onDisk = Directory.EnumerateFiles(h.Root, "*", SearchOption.AllDirectories)
             .Select(f => { try { return File.ReadAllText(f); } catch (IOException) { return ""; } });
         onDisk.Should().NotContain(text => text.Contains(TurnHarness.TurnToken));
 
-        await h.Server.SendControlAsync(new ExecControl(ExecControlOps.Kill, "turn1"));
+        await h.Server.SendControlAsync(new DeviceExecControl(DeviceExecControlOps.Kill, "turn1"));
         await h.Server.ReadUntilExitAsync(Wait);
         await h.Run!.WaitAsync(Wait);
 

@@ -17,12 +17,23 @@ internal sealed class FakeDeviceAgent(string deviceDir, string fakeCliScript)
 
     public ConcurrentQueue<string> ReceivedControl { get; } = new();
 
+    /// <summary>Выдача шлюза из кадра spawn — как у настоящего агента, только в памяти.</summary>
+    public DeviceExecGateway? ReceivedGateway { get; private set; }
+
+    /// <summary>
+    /// Мутация для контроля сканера: агент, который пишет выдачу шлюза в журнал на диске.
+    /// Настоящий так не делает.
+    /// </summary>
+    public bool LeakGatewayToDisk { get; init; }
+
     public async Task RunAsync(InProcessExecStream stream)
     {
         var first = await stream.FromServer.ReadAsync();
-        var controlText = Encoding.UTF8.GetString(first.Payload.Span);
-        Record(controlText);
         var control = DeviceExecJson.Deserialize<DeviceExecControl>(first.Payload.Span)!;
+        ReceivedGateway = control.Gateway;
+        Record(LeakGatewayToDisk
+            ? Encoding.UTF8.GetString(first.Payload.Span)
+            : Encoding.UTF8.GetString(DeviceExecJson.Serialize(control with { Gateway = null })));
         var spawn = control.Spawn!;
 
         var turnDir = Path.Combine(deviceDir, "agent", "turns", control.TurnId);

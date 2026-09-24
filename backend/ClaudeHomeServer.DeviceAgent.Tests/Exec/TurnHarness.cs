@@ -64,17 +64,18 @@ internal sealed class TurnHarness : IAsyncDisposable
     public ExecLink? Link { get; private set; }
     public Task? Run { get; private set; }
 
-    public ExecSpawn Spawn(IReadOnlyList<string>? args = null, IReadOnlyList<ExecFile>? files = null,
+    public DeviceExecSpawn Spawn(IReadOnlyList<string>? args = null, IReadOnlyList<DeviceExecFile>? files = null,
         IReadOnlyDictionary<string, string>? env = null, string fileName = "claude") =>
-        new(fileName, args ?? ["-p", "--output-format", "stream-json"], WorkDir, env, files);
+        new(fileName, args ?? ["-p", "--output-format", "stream-json"], WorkDir,
+            env ?? new Dictionary<string, string>(), files ?? [], RedirectStdin: true);
 
-    public async Task StartAsync(ExecSpawn spawn, string turnId = "turn1", ExecGatewayGrant? grant = null, TimeSpan? maxOutage = null)
+    public async Task StartAsync(DeviceExecSpawn spawn, string turnId = "turn1", DeviceExecGateway? grant = null, TimeSpan? maxOutage = null)
     {
         Link = new ExecLink("exec-" + turnId, Server, maxOutage ?? TimeSpan.FromSeconds(20));
         await Link.StartAsync(CancellationToken.None);
         Run = Executor.RunAsync(Link, CancellationToken.None);
-        await Server.SendControlAsync(new ExecControl(ExecControlOps.Spawn, turnId, spawn,
-            grant ?? new ExecGatewayGrant("gw-turn-1", TurnToken)));
+        await Server.SendControlAsync(new DeviceExecControl(DeviceExecControlOps.Spawn, turnId, spawn,
+            grant ?? new DeviceExecGateway("gw-turn-1", TurnToken)));
     }
 
     public Task SendStdinAsync(string text) =>
@@ -97,8 +98,8 @@ internal sealed class TurnHarness : IAsyncDisposable
     public static string Text(IEnumerable<DeviceExecFrame> frames, DeviceExecFrameChannel channel) =>
         string.Concat(frames.Where(f => f.Channel == channel).Select(f => Encoding.UTF8.GetString(f.Payload.Span)));
 
-    public static ExecExit ExitOf(IEnumerable<DeviceExecFrame> frames) =>
-        ExecJson.Deserialize<ExecExit>(frames.Single(f => f.Channel == DeviceExecFrameChannel.Exit).Payload.Span)!;
+    public static DeviceExecExit ExitOf(IEnumerable<DeviceExecFrame> frames) =>
+        DeviceExecJson.Deserialize<DeviceExecExit>(frames.Single(f => f.Channel == DeviceExecFrameChannel.Exit).Payload.Span)!;
 
     public int ReadPid(string file) => int.Parse(File.ReadAllText(Path.Combine(WorkDir, file)).Trim());
 

@@ -1,4 +1,5 @@
 using System.Text;
+using ClaudeHomeServer.Protocol;
 using Microsoft.Extensions.Logging;
 using ClaudeHomeServer.DeviceAgent.Processes;
 
@@ -36,7 +37,7 @@ internal sealed class TurnWorkspace : IDisposable
     }
 
     /// <summary>Пишет файлы spec, подставляя адрес хода в сайдкаре вместо плейсхолдера.</summary>
-    public void Materialize(IEnumerable<ExecFile> files, string sidecarTurnUrl)
+    public void Materialize(IEnumerable<DeviceExecFile> files, string sidecarTurnUrl)
     {
         foreach (var file in files)
         {
@@ -46,7 +47,7 @@ internal sealed class TurnWorkspace : IDisposable
 
             // Два файла с одним именем не затирают друг друга: имя — с префиксом id
             var path = Path.Combine(Directory, file.Id + "-" + file.Name);
-            var content = file.Content.Replace(ExecSpawnRules.SidecarPlaceholder, sidecarTurnUrl, StringComparison.Ordinal);
+            var content = file.Content.Replace(DeviceExecPlaceholders.Sidecar, sidecarTurnUrl, StringComparison.Ordinal);
             var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write };
             if (!OperatingSystem.IsWindows()) options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
             using (var stream = new FileStream(path, options))
@@ -61,10 +62,10 @@ internal sealed class TurnWorkspace : IDisposable
         var result = new List<string>();
         foreach (var arg in args)
         {
-            if (arg.StartsWith(ExecSpawnRules.FilePrefix, StringComparison.Ordinal)
-                && arg.EndsWith(ExecSpawnRules.FileSuffix, StringComparison.Ordinal))
+            if (arg.StartsWith(DeviceExecPlaceholders.FilePrefix, StringComparison.Ordinal)
+                && arg.EndsWith(DeviceExecPlaceholders.FileSuffix, StringComparison.Ordinal))
             {
-                var id = arg[ExecSpawnRules.FilePrefix.Length..^ExecSpawnRules.FileSuffix.Length];
+                var id = arg[DeviceExecPlaceholders.FilePrefix.Length..^DeviceExecPlaceholders.FileSuffix.Length];
                 if (!_files.TryGetValue(id, out var path))
                     throw new ExecRefusedException($"аргумент ссылается на файл spec «{id}», которого нет");
                 result.Add(path);

@@ -276,11 +276,15 @@
     background: var(--c-bg-card); color: var(--c-text-primary); padding: 9px 10px; font: inherit; font-size: 14px; line-height: 1.45; }
   textarea.q:focus { outline: none; border-color: var(--c-accent); box-shadow: var(--shadow-focus); }
   textarea.q::placeholder { color: var(--c-text-muted); }
-  .lock { display: flex; gap: 8px; align-items: flex-start; font-size: 12px; line-height: 1.4; color: var(--c-info);
-    background: var(--c-info-bg); border-radius: 10px; padding: 7px 10px; }
-  .lock svg.i { flex: 0 0 auto; margin-top: 1px; }
+  .ctx-hint { display: flex; gap: 6px; align-items: flex-start; font-size: 11px; line-height: 1.4; color: var(--c-text-muted); margin-top: 6px; }
+  .ctx-hint svg.i { flex: 0 0 auto; margin-top: 1px; }
   .helper { border: 1px solid var(--c-border); background: var(--c-bg-card); border-radius: 12px; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
   .helper .t { font-size: 13px; line-height: 1.5; color: var(--c-text-primary); background: var(--c-bg-inset); border-radius: 8px; padding: 8px; }
+  .helper .me { align-self: flex-end; max-width: 90%; font-size: 12px; line-height: 1.45; background: var(--c-accent-light); border-radius: 10px 10px 2px 10px; padding: 6px 8px; display: flex; gap: 6px; align-items: center; }
+  .helper .me .pic { width: 44px; flex: 0 0 44px; border-radius: 5px; overflow: hidden; border: 1px solid var(--c-border); }
+  .helper .me .pic svg { display: block; width: 100%; height: auto; }
+  .helper .who { font-size: 11px; font-weight: 600; color: var(--c-text-secondary); }
+  .helper code { font-family: 'JetBrains Mono', monospace; font-size: 11px; background: var(--c-bg-selected); border-radius: 4px; padding: 0 4px; }
   .model-h { display: flex; align-items: center; gap: 6px; border: none; background: transparent; color: var(--c-text-secondary);
     padding: 4px 0; cursor: pointer; font-size: 12px; }
   .model-h b { color: var(--c-text-heading); font-weight: 600; }
@@ -383,8 +387,8 @@
 <div class="page">
   <h1 class="doc">Редактор картинок в проекте</h1>
   <p class="lead">Кликабельный макет AI Home: открыть картинку из файлов проекта, отметить место, описать правку,
-    получить варианты, сравнить «до / после» и сохранить новую версию рядом с оригиналом. Модель рисования
-    видит только картинку, пометки, образцы и запрос — не файлы проекта. Описание — <code>image-editor-proposal.md</code>.</p>
+    получить варианты, сравнить «до / после» и сохранить новую версию рядом с оригиналом. Claude
+    подсказывает запрос с учётом материалов проекта: кнопка «Обсудить с Claude» отправляет картинку, пометки и запрос в чат проекта. Описание — <code>image-editor-proposal.md</code>.</p>
 
   <div class="demo" id="demo"></div>
   <div class="frame"><div class="app" id="app"></div></div>
@@ -408,7 +412,6 @@ const IC = {
   hand: '<path d="M18 11V6a2 2 0 0 0-4 0v5"/><path d="M14 10V4a2 2 0 0 0-4 0v6"/><path d="M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/>',
   plus: '<path d="M12 5v14M5 12h14"/>', minus: '<path d="M5 12h14"/>',
   fit: '<path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3"/>',
-  lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
   spark: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 17l.7 1.8 1.8.7-1.8.7L19 22l-.7-1.8-1.8-.7 1.8-.7z"/>',
   wand: '<path d="m15 4-1 1M20 9l-1 1M18 3v2M21 6h-2"/><path d="m3 21 12-12 2 2L5 23z"/>',
   hist: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/>',
@@ -425,6 +428,7 @@ const IC = {
   hd: '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M7 9v6M11 9v6M7 12h4M15 9v6h1.5a2.5 2.5 0 0 0 0-5H15"/>',
   alert: '<path d="m21.7 18-8-14a2 2 0 0 0-3.5 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3z"/><path d="M12 9v4M12 17h.01"/>',
   coin: '<circle cx="12" cy="12" r="9"/><path d="M14.5 9.5c-.5-1-1.5-1.5-2.5-1.5-1.7 0-3 1-3 2.2 0 2.8 6 1.4 6 4.3 0 1.2-1.3 2.3-3 2.3-1.1 0-2.2-.6-2.7-1.6M12 6.5v11"/>',
+  chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
   layers: '<path d="m12 2 10 5-10 5L2 7z"/><path d="m2 17 10 5 10-5M2 12l10 5 10-5"/>',
 };
 const ic = (n, s) => `<svg class="i${s ? ' s' : ''}" viewBox="0 0 24 24">${IC[n]}</svg>`;
@@ -687,13 +691,15 @@ function askView() {
   const samples = `<div><div class="sec-l">Образцы</div><div class="samples">
       ${S.samples.map((s, i) => `<div class="smp"><div class="pic">${sampleSVG(s.kind)}</div><div class="cap">${esc(s.cap)}</div><button class="x" data-act="smpx:${i}" title="Убрать образец">${ic('x', 1)}</button></div>`).join('')}
       ${S.samples.length < 4 ? `<button class="smp-add" data-act="smpmenu">${ic('plus', 1)}Образец</button>` : ''}
-      ${S.sampleMenu ? `<div class="menu" style="top:70px;left:0"><button data-act="smpfile">${ic('upload', 1)}<span>С компьютера<small>Файл уйдёт только в модель рисования</small></span></button><button data-act="smpproj">${ic('folder', 1)}<span>Из файлов проекта…<small>Вы выберете один конкретный файл</small></span></button></div>` : ''}
+      ${S.sampleMenu ? `<div class="menu" style="top:70px;left:0"><button data-act="smpfile">${ic('upload', 1)}<span>С компьютера<small>Файл с вашего компьютера</small></span></button><button data-act="smpproj">${ic('folder', 1)}<span>Из файлов проекта…<small>Любая картинка из этого проекта</small></span></button></div>` : ''}
     </div><div class="muted" style="font-size:11px;margin-top:6px">Стиль, предмет или человек — модель возьмёт их за пример.</div></div>`;
   const helper = S.helpOpen ? `<div class="helper">
-      <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--c-text-secondary)">${ic('wand', 1)} Помощник переписал запрос по вашим пометкам</div>
-      <div class="t">Поставь напольный торшер с тёплым светом в правый угол, у стрелки. Картину в рамке оставь как есть, диван и окно не трогай. Свет — как на образце «тёплый свет».</div>
-      <div style="display:flex;gap:6px;justify-content:flex-end"><button class="btn sm ghost" data-act="helpx">Не надо</button><button class="btn sm pri" data-act="helpok">Подставить</button></div>
-      <div class="muted" style="font-size:11px">Помощник видит то же, что и модель: картинку, пометки, образцы и ваш текст.</div></div>` : '';
+      <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--c-text-secondary)">${ic('chat', 1)} Обсуждение в чате проекта «Сайт студии»<span class="grow"></span><button class="ib" data-act="helpx" title="Закрыть" style="width:24px;height:24px">${ic('x', 1)}</button></div>
+      <div class="me"><span class="pic">${scene(curD())}</span><span>Картинка, ${S.marks.length} ${plural(S.marks.length, 'пометка', 'пометки', 'пометок')} и запрос${S.prompt ? ': «' + esc(S.prompt.slice(0, 50)) + (S.prompt.length > 50 ? '…' : '') + '»' : ''}</span></div>
+      <div class="who">Claude</div>
+      <div class="t" style="background:none;padding:0">В <code>docs/brand.md</code> палитра тёплая, латунь и дерево, а на странице «О студии» уже стоит латунный торшер (<code>images/about.jpg</code>). Предлагаю такой запрос:</div>
+      <div class="t">Поставь в правый угол, у стрелки, латунный напольный торшер как на images/about.jpg, с тёплым светом. Картину в рамке оставь как есть, диван и окно не трогай.</div>
+      <div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap"><button class="btn sm ghost" data-act="chatopen">Открыть чат</button><button class="btn sm pri" data-act="helpok">Подставить в запрос</button></div></div>` : '';
   const m = MODELS.find(x => x.id === S.model);
   const model = `<div><button class="model-h" data-act="model">Модель: <b>${m.name.toLowerCase()}</b> ${ic(S.modelOpen ? 'up' : 'down', 1)}</button>
     ${S.modelOpen ? `<div class="models">${MODELS.map(x => `<label class="${x.id === S.model ? 'on' : ''}" data-act="setmodel:${x.id}"><input type="radio" name="mdl" ${x.id === S.model ? 'checked' : ''} style="accent-color:var(--c-accent)"><span class="grow">${x.name}<br><small>${x.hint}</small></span><small>×${x.k}</small></label>`).join('')}</div>` : ''}</div>`;
@@ -708,11 +714,11 @@ function askView() {
         <div class="sec-l">${creating ? 'Что нарисовать' : 'Запрос'}</div>
         <textarea class="q" id="q" placeholder="${ph}" ${busy ? 'disabled' : ''}>${esc(S.prompt)}</textarea>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;gap:6px">
-          <button class="btn sm ghost" data-act="help" ${busy || creating && !S.prompt ? 'disabled' : ''}>${ic('wand', 1)} Помочь с запросом</button>
+          <button class="btn sm ghost" data-act="help" ${busy || creating && !S.prompt ? 'disabled' : ''}>${ic('chat', 1)} Обсудить с Claude</button>
         </div>
+        <div class="ctx-hint">${ic('spark', 1)}<span>Claude учитывает материалы проекта — стиль, тексты, другие картинки</span></div>
       </div>
       ${helper}
-      <div class="lock">${ic('lock', 1)}<span>Модель видит только эту картинку, ваши пометки и образцы — не файлы проекта</span></div>
       ${samples}
       ${quick}
       ${model}
@@ -790,9 +796,8 @@ function pickView() {
   return `<div class="ovl" data-act="pickx"><div class="modal" data-stop="1">
     <div class="modal-h"><h3>${forBase ? 'Открыть картинку из проекта' : 'Образец из файлов проекта'}</h3><button class="ib" data-act="pickx">${ic('x')}</button></div>
     <div class="modal-b">
-      <div class="muted" style="font-size:12px">Папка images/ · выберите один файл</div>
+      <div class="muted" style="font-size:12px">Папка images/</div>
       <div class="pick-grid">${imgs.map(f => `<button class="pick ${S.pickSel === f.name ? 'on' : ''}" data-act="picksel:${f.name}">${f.svg ? f.svg() : scene(f.d)}<span>${f.name}</span></button>`).join('')}</div>
-      ${sel ? `<div class="lock">${ic('lock', 1)}<span>В модель уйдёт только <b>${sel.name}</b>. Остальные файлы проекта она не увидит.</span></div>` : ''}
     </div>
     <div class="modal-f"><button class="btn ghost" data-act="pickx">Отмена</button><button class="btn pri" data-act="pickok" ${sel ? '' : 'disabled'}>${forBase ? 'Открыть' : 'Добавить образец'}</button></div>
   </div></div>`;
@@ -956,7 +961,8 @@ document.addEventListener('click', e => {
     case 'setmodel': S.model = v; break;
     case 'help': S.helpOpen = true; break;
     case 'helpx': S.helpOpen = false; break;
-    case 'helpok': S.prompt = 'Поставь напольный торшер с тёплым светом в правый угол, у стрелки. Картину в рамке оставь как есть, диван и окно не трогай. Свет — как на образце «тёплый свет».'; S.helpOpen = false; break;
+    case 'helpok': S.prompt = 'Поставь в правый угол, у стрелки, латунный напольный торшер как на images/about.jpg, с тёплым светом. Картину в рамке оставь как есть, диван и окно не трогай.'; S.helpOpen = false; break;
+    case 'chatopen': S.toast = null; break;
     case 'smpmenu': S.sampleMenu = !S.sampleMenu; break;
     case 'smpfile': S.samples.push({ kind: 'lamp', cap: 'Предмет: торшер', from: 'С компьютера' }); S.sampleMenu = false; break;
     case 'smpproj': S.sampleMenu = false; S.pickFor = 'sample'; S.pickOpen = true; S.pickSel = null; break;

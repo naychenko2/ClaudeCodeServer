@@ -4513,6 +4513,15 @@ public class SessionManagerTests : IDisposable
         // обязан решать по нему, а не по одному Outcome.
         var (session, _, _) = await MakeInterviewStabAsync("wire-crashed-failclosed");
         var entry = GetEntry(session.Id);
+        // Стаб ставит вводную в очередь. Терминал ниже выводит чат из Working, очередь поднимает
+        // настоящий ход, и он падает в тестовом окружении. Если его SessionStartedMessage не
+        // дошёл до result, LastTurnSeq остаётся 7 (выставлен рукой ниже), и его пустой план ложится
+        // под ключ 7 уже ПОСЛЕ изъятия нашего. Изымать его некому: шина публикует тот ход под
+        // своим TurnSeq. На медленном CI проверка слота ловила этот чужой план, поэтому очередь
+        // снимаем: здесь проверяется только разбор нашего хода.
+        foreach (var pending in _sut.GetPending(session.Id))
+            await _sut.CancelPendingAsync(session.Id, pending.Id);
+        _sut.GetPending(session.Id).Should().BeEmpty("предусловие: постороннего хода из очереди не будет");
         _sut.GetById(session.Id)!.Status = SessionStatus.Working;
         SetLastTurnSeq(entry, 7);
 

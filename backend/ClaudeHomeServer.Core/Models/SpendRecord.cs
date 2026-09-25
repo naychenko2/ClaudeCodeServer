@@ -60,6 +60,9 @@ public sealed class SpendRecord
     // Отдельное поле, а не пересчёт в доллары: курс пришлось бы выдумывать, и врал бы он тем
     // сильнее, чем старше запись. Валюты не складываются нигде — ни здесь, ни в агрегатах.
     public double? CostRub { get; init; }
+    // Стоимость в КРЕДИТАХ поставщика (Higgsfield в редакторе картинок, ADR-017 §4) — третья
+    // валюта по образцу CostRub: с долларами и рублями не складывается нигде
+    public double? CostCredits { get; init; }
     // Счётчик вызовов без токенов: генерации fal.ai/glif и запросы синтеза речи (SpeechKit
     // тарифицируется ЗА ЗАПРОС, так что это ровно единицы тарификации); у остальных 0
     public int Generations { get; init; }
@@ -93,6 +96,7 @@ public sealed class DailySpendRow
     public long CacheCreationTokens { get; set; }
     public double CostUsd { get; set; }
     public double CostRub { get; set; }
+    public double CostCredits { get; set; }
     public int Generations { get; set; }
     // Количество свёрнутых записей (ходов/вызовов)
     public int Turns { get; set; }

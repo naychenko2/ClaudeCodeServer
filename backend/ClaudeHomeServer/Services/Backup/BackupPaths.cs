@@ -98,6 +98,12 @@ public static class BackupPaths
         if (root.Equals("spend", StringComparison.OrdinalIgnoreCase)
             && fileName.Equals("task-prompts.jsonl", StringComparison.OrdinalIgnoreCase))
             return false;
+        // Рабочая папка редактора картинок (ADR-017, раздел 5): варианты и маски сеансов —
+        // кеш на 7 дней весом до гигабайт. Журнал трат редактора лежит рядом, в корне data
+        // (image-editor-spend.jsonl), и в архив едет: это деньги, других копий у них нет.
+        if (segments.Length > 1
+            && root.Equals(Images.Editing.ImageEditWorkspace.DirName, StringComparison.OrdinalIgnoreCase))
+            return false;
         if (root.Equals(StagingDirName, StringComparison.OrdinalIgnoreCase)) return false;
 
         // Встроенный Forgejo (forgejo/**): репозитории и gitea.db едут, но три подпапки нет.

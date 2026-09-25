@@ -4,15 +4,19 @@ namespace ClaudeHomeServer.Services.Images;
 // иконка проекта ушла из картинок: значок подбирается текстовым местом модели и
 // собирается как SVG (ADR-009). Ключи стабильные: уходят в API и в UI и совпадают с
 // ImageBackfillKinds.* — заявка очереди сама называет своё место.
+// Редактор картинок (ADR-017): настройка места — лишь умолчание, которое редактор
+// предвыбирает при открытии; поставщика и модель дальше выбирает человек.
 public static class ImagePlaces
 {
     public const string PersonaAvatar = "persona-avatar";
+    public const string ImageEditor = "image-editor";
 
-    public static readonly string[] All = [PersonaAvatar];
+    public static readonly string[] All = [PersonaAvatar, ImageEditor];
 
     public static string TitleOf(string? place) => place switch
     {
         PersonaAvatar => "Аватар персоны",
+        ImageEditor => "Редактор картинок",
         _ => place ?? "",
     };
 

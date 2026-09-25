@@ -59,6 +59,7 @@ import { ToolbarOverflowMenu, type OverflowItem } from './ToolbarOverflowMenu';
 import { useToolbarOverflow } from '../hooks/useToolbarOverflow';
 import { BackButton, Modal, ModalActions, Button, ConfirmDialog, FileTypeTile, useIsMobileModal, Menu as UiMenu, MenuItem } from './ui';
 import { DiffView } from './DiffView';
+import { ImageEditorEntryButton } from './imageEditor';
 import { registerCopyDoc, copyMarkdown, copyRenderedHtml } from '../lib/selectionScope';
 // Тумблер панели «Оглавление» правит раскладку зон напрямую — тем же каналом, что
 // кнопка «Открыть изменения» в git-баре над композером (ProjectGitBar)
@@ -1971,6 +1972,12 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
                   {imgDims && <><span style={{ opacity: 0.5 }}>·</span><span>{imgDims.w}×{imgDims.h}</span></>}
                   {fileSizeMb && <><span style={{ opacity: 0.5 }}>·</span><span>{fileSizeMb} МБ</span></>}
                 </div>
+                {/* Вход в редактор: без флага image-editor и у нерастровых форматов кнопки нет */}
+                {!isHostMode && online && (
+                  <ImageEditorEntryButton projectId={project.id} projectName={project.name}
+                    target={{ kind: 'edit', path: filePath }}
+                    onShowInFiles={onOpenFile ? path => onOpenFile(path) : undefined} />
+                )}
               </div>
             )}
 

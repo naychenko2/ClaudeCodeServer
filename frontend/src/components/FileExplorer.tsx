@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, memo, type ReactNode } from 'react';
-import { X, Folder, FolderPlus, ChevronRight, SquarePen, Trash2, ArrowRight, Paperclip, BookOpen, Search, Plus, Check, Copy, Upload, Monitor, Server, GitBranch, ArrowDownWideNarrow, FoldVertical, UnfoldVertical, Lightbulb, StickyNote, AlertTriangle, CloudOff, RefreshCw, Workflow, SquareStack } from 'lucide-react';
+import { X, Folder, FolderPlus, ChevronRight, SquarePen, Trash2, ArrowRight, Paperclip, BookOpen, Search, Plus, Check, Copy, Upload, Monitor, Server, GitBranch, ArrowDownWideNarrow, FoldVertical, UnfoldVertical, Lightbulb, StickyNote, AlertTriangle, CloudOff, RefreshCw, Workflow, SquareStack, Pencil, Sparkles } from 'lucide-react';
 import type { Project, FileEntry } from '../types';
 import { ProjectFeature } from '../types';
 import { api } from '../lib/api';
@@ -46,6 +46,8 @@ import { C, R, FS, SP, FONT, MODAL_W } from '../lib/design';
 import { Modal, ModalActions, TextField, IconButton, Button, Menu, MenuItem, PanelHeaderSlot, FileTypeTile, FileStatusBadge, SegmentedControl, useHasPanelHeader, usePanelHeaderHold } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { NO_AUTOFILL } from '../lib/noAutofill';
+import { FLAGS, useFeature } from '../lib/featureFlags';
+import { ImageEditorLayer, isEditableImage, type ImageEditorTarget } from './imageEditor';
 
 interface Props {
   project: Project;
@@ -897,6 +899,10 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
   // === Трансформация в Markdown (markitdown) — выбор папки назначения ===
   const [mdEntry, setMdEntry] = useState<FileEntry | null>(null);
   const [mdEnhance, setMdEnhance] = useState(false);
+
+  // === Редактор картинок: «Редактировать» у картинки, «Нарисовать картинку» у папки ===
+  const imageEditorOn = useFeature(FLAGS.imageEditor);
+  const [imageEditorTarget, setImageEditorTarget] = useState<ImageEditorTarget | null>(null);
   const doTransformMd = async (entry: FileEntry, targetDir: string | null) => {
     const enhance = mdEnhance;
     setMdEntry(null);
@@ -2112,6 +2118,12 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
         add(chatContextBtn.available,
           <MenuItem key="chat-context" icon={chatContextBtn.inContext ? <MI_Check /> : <MI_Context />}
             label={chatContextBtn.title} onClick={() => { close(); chatContextBtn.toggle(); }} />);
+        add(imageEditorOn && online && !entry.isDirectory && isEditableImage(entry.path),
+          <MenuItem key="image-edit" icon={<Pencil size={15} strokeWidth={ICON_STROKE} />} label="Редактировать"
+            onClick={() => { close(); setImageEditorTarget({ kind: 'edit', path: entry.path }); }} />);
+        add(imageEditorOn && online && entry.isDirectory && !inNotesVault(entry.path),
+          <MenuItem key="image-create" icon={<Sparkles size={15} strokeWidth={ICON_STROKE} />} label="Нарисовать картинку"
+            onClick={() => { close(); setImageEditorTarget({ kind: 'create', folder: entry.path }); }} />);
         add(!entry.isDirectory && onAttachToChat,
           <MenuItem key="attach" icon={<MI_Attach />} label="Прикрепить к чату" onClick={() => { close(); onAttachToChat!(entry.path); }} />);
         add(!entry.isDirectory && /\.(md|mdx)$/i.test(entry.name),
@@ -2169,6 +2181,11 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
         const anchor = new DOMRect(contextMenu.x, contextMenu.y, W, 0);
         return <Menu anchor={anchor} minWidth={W} maxHeight={320} gap={2} onClose={close}>{items}</Menu>;
       })()}
+
+      {imageEditorTarget && (
+        <ImageEditorLayer projectId={project.id} projectName={project.name} target={imageEditorTarget}
+          onShowInFiles={path => onOpenFile(path)} onClose={() => setImageEditorTarget(null)} />
+      )}
 
       {/* Диалог «Новая заметка» из раздела файлов (папка vault → source=проект;
           file — «Заметка о файле» с привязкой frontmatter file:) — вклад слота

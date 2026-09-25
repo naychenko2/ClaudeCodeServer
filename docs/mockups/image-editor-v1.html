@@ -379,6 +379,21 @@
     border-radius: 12px; padding: 10px 12px 10px 14px; display: flex; align-items: center; gap: 12px; box-shadow: var(--shadow-modal); font-size: 13px; max-width: calc(100% - 24px); }
   .toast button { border: none; background: transparent; color: var(--c-accent-muted); font-weight: 600; cursor: pointer; padding: 4px; white-space: nowrap; }
   .toast .x { color: var(--c-bg-main); opacity: .7; }
+  /* Лента чата проекта */
+  .chat { flex: 1; min-height: 0; }
+  .feed { flex: 1; overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 14px; max-width: 760px; width: 100%; margin: 0 auto; }
+  .msg-me { align-self: flex-end; max-width: 80%; background: var(--c-accent-light); border-radius: 14px 14px 4px 14px; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+  .msg-me .att { position: relative; width: 300px; max-width: 100%; border-radius: 8px; overflow: hidden; border: 1px solid var(--c-border); }
+  .msg-me .att svg { display: block; width: 100%; height: auto; }
+  .msg-me .att svg.ov { position: absolute; inset: 0; height: 100%; }
+  .msg-me .att .tag { position: absolute; left: 6px; bottom: 6px; font-size: 11px; color: var(--c-on-dark); background: var(--c-media-scrim); border-radius: 6px; padding: 1px 6px; }
+  .msg-me .txt { font-size: 14px; line-height: 1.5; padding: 0 4px; }
+  .msg-ai { background: var(--c-bg-card); border: 1px solid var(--c-border-light); border-radius: 14px; padding: 10px 12px; font-size: 14px; line-height: 1.6; }
+  .msg-ai code { font-family: 'JetBrains Mono', monospace; font-size: 12px; background: var(--c-bg-selected); border-radius: 4px; padding: 0 4px; }
+  .msg-ai .read { font-size: 12px; color: var(--c-text-muted); margin-bottom: 6px; display: flex; gap: 6px; flex-wrap: wrap; }
+  .msg-ai blockquote { margin: 8px 0; padding: 6px 10px; border-left: 3px solid var(--c-accent); background: var(--c-bg-inset); border-radius: 0 8px 8px 0; }
+  .composer { border-top: 1px solid var(--c-border-light); padding: 10px 12px; background: var(--c-bg-inset); display: flex; gap: 8px; align-items: center; }
+  .composer .fake { flex: 1; height: 38px; border-radius: 10px; border: 1px solid var(--c-border); background: var(--c-bg-card); color: var(--c-text-muted); display: flex; align-items: center; padding: 0 10px; font-size: 13px; }
   .demo-note { margin-top: 18px; font-size: 12px; color: var(--c-text-secondary); line-height: 1.6; max-width: 900px; }
   .demo-note b { color: var(--c-text-heading); }
 </style>
@@ -548,7 +563,7 @@ function render() {
   document.documentElement.dataset.theme = S.theme;
   app.classList.toggle('mobile', S.mobile);
   renderDemo();
-  app.innerHTML = S.screen === 'files' ? filesView() : editorView();
+  app.innerHTML = S.screen === 'files' ? filesView() : S.screen === 'chat' ? chatView() : editorView();
   applyTransform();
 }
 
@@ -571,6 +586,28 @@ function screenNo() {
   if (!S.hasImage) return '2';
   if (S.history.length > 1 && (S.histOpen && !S.mobile || S.histSheet)) return '6';
   return '3';
+}
+
+// Чат проекта: обсуждение из редактора приходит сообщением с размеченной картинкой
+function chatView() {
+  const q = S.chatPrompt || 'Хочу поставить сюда лампу. Какой лучше?';
+  return `<div class="island chat">
+    <div class="ih"><button class="ib" data-act="tofiles" title="К файлам">${ic('back')}</button>${ic('chat')}<div class="grow"><div class="ttl">Картинка ${esc(S.fileName)}: правка</div><div class="sub">Чат проекта · Сайт студии</div></div>
+      <button class="btn sm pri" data-act="backed">${ic('img', 1)} Вернуться в редактор</button></div>
+    <div class="feed">
+      <div class="msg-me">
+        <div class="att">${scene(curD())}<svg class="ov" viewBox="0 0 640 400" preserveAspectRatio="none">${marksSVG()}</svg><span class="tag">${esc(S.folder)}/${esc(S.fileName)} · ${S.marks.length} ${plural(S.marks.length, 'пометка', 'пометки', 'пометок')}</span></div>
+        <div class="txt">${esc(q)}</div>
+      </div>
+      <div class="msg-ai">
+        <div class="read">${ic('file', 1)} Прочитал: <code>docs/brand.md</code> <code>images/about.jpg</code> <code>index.html</code></div>
+        По брендбуку у студии тёплая палитра: латунь, дерево, мягкий свет. На странице «О студии» уже стоит латунный торшер — логично повторить его здесь, чтобы страницы выглядели одной серией. Картина в рамке — работа из портфолио, её лучше не трогать.
+        <blockquote>Поставь в правый угол, у стрелки, латунный напольный торшер как на images/about.jpg, с тёплым светом. Картину в рамке оставь как есть, диван и окно не трогай.</blockquote>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px"><button class="btn sm pri" data-act="chatuse">Подставить в редактор</button><button class="btn sm" data-act="chatsample">Добавить about.jpg образцом</button></div>
+      </div>
+    </div>
+    <div class="composer"><span class="fake">Ответить Claude…</span><button class="ib">${ic('upload', 1)}</button></div>
+  </div>`;
 }
 
 function filesView() {
@@ -962,7 +999,10 @@ document.addEventListener('click', e => {
     case 'help': S.helpOpen = true; break;
     case 'helpx': S.helpOpen = false; break;
     case 'helpok': S.prompt = 'Поставь в правый угол, у стрелки, латунный напольный торшер как на images/about.jpg, с тёплым светом. Картину в рамке оставь как есть, диван и окно не трогай.'; S.helpOpen = false; break;
-    case 'chatopen': S.toast = null; break;
+    case 'chatopen': S.chatPrompt = S.prompt; S.helpOpen = false; S.screen = 'chat'; break;
+    case 'backed': S.screen = 'editor'; break;
+    case 'chatuse': S.prompt = 'Поставь в правый угол, у стрелки, латунный напольный торшер как на images/about.jpg, с тёплым светом. Картину в рамке оставь как есть, диван и окно не трогай.'; S.screen = 'editor'; S.helpOpen = false; break;
+    case 'chatsample': if (!S.samples.some(x => x.cap === 'Из проекта: about.jpg')) S.samples.push({ kind: 'lamp', cap: 'Из проекта: about.jpg' }); S.screen = 'editor'; break;
     case 'smpmenu': S.sampleMenu = !S.sampleMenu; break;
     case 'smpfile': S.samples.push({ kind: 'lamp', cap: 'Предмет: торшер', from: 'С компьютера' }); S.sampleMenu = false; break;
     case 'smpproj': S.sampleMenu = false; S.pickFor = 'sample'; S.pickOpen = true; S.pickSel = null; break;

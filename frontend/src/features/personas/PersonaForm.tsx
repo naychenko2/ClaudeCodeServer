@@ -382,14 +382,16 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   const parseLines = (s: string) => s.split('\n').map(l => l.trim()).filter(Boolean);
 
   // Текущий контракт из стейтов формы — для сохранения и как current при AI-улучшении
+  // Пустой слот уходит пустой строкой, а не undefined: сервер мержит контракт по слотам
+  // (отсутствующий слот = «не менять»), и очистка поля в карточке иначе не сохранилась бы
   const buildContract = (): PersonaContract => ({
-    character: character.trim() || undefined,
-    tone: tone.trim() || undefined,
+    character: character.trim(),
+    tone: tone.trim(),
     mustDo: parseLines(mustDo),
     mustNot: parseLines(mustNot),
-    outputFormat: outputFormat.trim() || undefined,
+    outputFormat: outputFormat.trim(),
     speechExamples: speechExamples.map(s => s.trim()).filter(Boolean),
-    instructions: instructions.trim() || undefined,
+    instructions: instructions.trim(),
   });
 
   // Заполнен ли хоть один слот контракта — от этого зависит доступность «Улучшить»

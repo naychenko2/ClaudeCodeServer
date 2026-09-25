@@ -35,8 +35,12 @@
     <ProjectReference Include="..\ClaudeHomeServer.ProjectServices\ClaudeHomeServer.ProjectServices.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Skills\ClaudeHomeServer.Skills.csproj" />
     <!-- Мост псевдоконсоли Windows-терминала: TerminalService ищет ConPtyBridge.exe рядом со
-         сборкой (ConPtyBridgeLocator), как у сервера -->
-    <ProjectReference Include="..\ConPtyBridge\ConPtyBridge.csproj" Condition="'$(OS)' == 'Windows_NT'" ReferenceOutputAssembly="false" />
+         сборкой (ConPtyBridgeLocator), как у сервера. Private="false" обязателен: без него SDK
+         как ссылку на exe-проект кладёт в выход ССЫЛАЮЩИХСЯ на агент проектов (тесты) и в
+         publish агента apphost ConPtyBridge.exe без ConPtyBridge.dll — локатор находит exe,
+         мост падает на старте, а до фолбэка на powershell дело не доходит. Целый мост в bin
+         агента кладёт таргет CopyConPtyBridge ниже -->
+    <ProjectReference Include="..\ConPtyBridge\ConPtyBridge.csproj" Condition="'$(OS)' == 'Windows_NT'" ReferenceOutputAssembly="false" Private="false" />
   </ItemGroup>
 
   <Target Name="CopyConPtyBridge" AfterTargets="Build" Condition="'$(OS)' == 'Windows_NT'">

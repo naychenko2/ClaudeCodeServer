@@ -41,8 +41,10 @@ sudo ./deploy/systemd/install-system-tuning.sh     # root-часть: oomd, inot
 ./deploy/systemd/install-*.sh --dry-run            # показать, что будет сделано
 ```
 
-Требования к user-части: user-шина systemd доступна (запуск из графической
-сессии пользователя, под которым крутится ccs.service), не root. Root-часть —
+Требования к user-части: user-шина systemd доступна (запуск из сессии
+пользователя, под которым крутится ccs.service), не root, включён linger
+(`loginctl enable-linger`) — `ccs.service` висит на `default.target` и живёт
+без входа в стол. Root-часть —
 наоборот, только под `sudo`; она ставит значение и уже работающему
 `user@<uid>.service` через `set-property --runtime` (иначе — до перелогина).
 

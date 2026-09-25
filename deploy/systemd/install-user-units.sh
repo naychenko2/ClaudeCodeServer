@@ -100,6 +100,13 @@ done
 # 5. Повторный reload — иначе systemd всё ещё видит вычищенные drop-in'ы.
 run systemctl --user daemon-reload
 
+# 5a. Переснять симлинки автозапуска по [Install]: убирает устаревшую ссылку из
+#     graphical-session.target.wants/. Работающий сервис не останавливается.
+run systemctl --user reenable ccs.service
+if [[ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null)" != "yes" ]]; then
+  echo "ВНИМАНИЕ: linger выключен — ccs.service не стартует без входа пользователя. Включить: sudo loginctl enable-linger $USER" >&2
+fi
+
 # 6. Рестарт — только по явному флагу: скрипт применяется и во время обычной
 #    выкатки, и как отдельная задача, и прерывать прод ради настройки лимитов
 #    памяти на slice агентов нет причин.

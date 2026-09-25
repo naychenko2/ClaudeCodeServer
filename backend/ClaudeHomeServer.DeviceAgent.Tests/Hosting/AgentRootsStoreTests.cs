@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using ClaudeHomeServer.DeviceAgent.Hosting;
 
 namespace ClaudeHomeServer.DeviceAgent.Tests.Hosting;
@@ -19,6 +20,7 @@ public sealed class AgentRootsStoreTests : IDisposable
 
     private AgentRootsStore Store => new(Path.Combine(_base, "roots.json"));
 
+    [UnsupportedOSPlatform("windows")]
     private string Dir(string name, UnixFileMode mode)
     {
         var dir = Path.Combine(_base, name);
@@ -30,6 +32,7 @@ public sealed class AgentRootsStoreTests : IDisposable
     private const UnixFileMode Private = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
 
     [SkippableFact]
+    [UnsupportedOSPlatform("windows")]
     public void ЗаписьГруппеИлиВсем_БезForce_Отказ_СForce_Добавляется()
     {
         Skip.If(OperatingSystem.IsWindows(), "На Windows права — ACL, проверка только предупреждением");
@@ -46,6 +49,7 @@ public sealed class AgentRootsStoreTests : IDisposable
     }
 
     [SkippableFact]
+    [UnsupportedOSPlatform("windows")]
     public void ТолькоВладелец_ДобавляетсяБезForce()
     {
         Skip.If(OperatingSystem.IsWindows(), "На Windows права — ACL, проверка только предупреждением");

@@ -191,7 +191,7 @@ public sealed class PersonasCrudService(
         if (req.Contract is not null || req.SystemPrompt is not null)
         {
             var currentSize = PersonaManager.ContractSize(current.Contract, current.SystemPrompt);
-            if (PersonaManager.ExceedsContractLimit(req.Contract ?? current.Contract,
+            if (PersonaManager.ExceedsContractLimit(PersonaManager.MergeContract(current.Contract, req.Contract),
                     req.SystemPrompt ?? current.SystemPrompt, currentSize, out var tooBig))
                 return BadRequest(new { error = tooBig });
         }

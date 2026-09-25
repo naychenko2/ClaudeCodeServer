@@ -109,7 +109,43 @@ export interface ImageEditJobInput {
   source?: Blob;
   mask?: Blob;
   annotated?: Blob;
+  // Подключённый персонаж проекта: сервер добавит его фото образцами с ролью Character
+  characterSlug?: string;
 }
+
+// Персонаж — папка characters/<slug>/ в проекте (ADR-016, раздел 10)
+export interface ImageEditCharacterPhoto { file: string; primary?: boolean | null; angle?: string | null }
+
+export interface ImageEditCharacter {
+  slug: string;
+  name: string;
+  description?: string | null;
+  // Папка персонажа от корня проекта: characters/<slug>
+  path: string;
+  photos: ImageEditCharacterPhoto[];
+  createdAt: string;
+}
+
+export interface ImageEditCharacterInput {
+  name: string;
+  description?: string;
+  // Имена уже лежащих фото, которые убрать (только при правке)
+  removePhotos?: string[];
+  photos: Blob[];
+}
+
+// «Обсудить с Claude»: текст сообщения собирает фронт, сервер создаёт (или
+// переиспользует) чат проекта с размеченной копией во вложении и дописывает путь
+// к папке персонажа
+export interface ImageEditDiscussInput {
+  text: string;
+  annotated: Blob;
+  sourcePath?: string;
+  characterSlug?: string;
+  sessionId?: string;
+}
+
+export interface ImageEditDiscussResult { sessionId: string; created: boolean; attachments: string[] }
 
 export interface ImageEditSaveRequest {
   jobId: string;
@@ -145,9 +181,31 @@ export interface ImageEditorApi {
   variantUrl(projectId: string, jobId: string, n: number): string;
   save(projectId: string, req: ImageEditSaveRequest): Promise<{ path: string }>;
   subscribe(handler: (e: ImageEditEvent) => void): () => void;
+  listCharacters(projectId: string): Promise<ImageEditCharacter[]>;
+  createCharacter(projectId: string, input: ImageEditCharacterInput): Promise<ImageEditCharacter>;
+  updateCharacter(projectId: string, slug: string, input: ImageEditCharacterInput): Promise<ImageEditCharacter>;
+  deleteCharacter(projectId: string, slug: string): Promise<void>;
+  characterPhotoUrl(projectId: string, slug: string, file: string): string;
+  discuss(projectId: string, input: ImageEditDiscussInput): Promise<ImageEditDiscussResult>;
 }
 
 const base = (projectId: string) => `/projects/${encodeURIComponent(projectId)}/image-editor`;
+
+const withToken = (url: string) => {
+  const token = readStoredToken();
+  return token ? `${url}?access_token=${encodeURIComponent(token)}` : url;
+};
+
+function characterForm(input: ImageEditCharacterInput): FormData {
+  const form = new FormData();
+  form.append('name', input.name);
+  if (input.description) form.append('description', input.description);
+  input.removePhotos?.forEach(f => form.append('removePhotos', f));
+  input.photos.forEach((b, i) => form.append('photos', b, b instanceof File ? b.name : `photo-${i + 1}.jpg`));
+  return form;
+}
+
+const charBase = (projectId: string) => `${base(projectId)}/characters`;
 
 const IMAGE_EDIT_EVENTS = new Set(['image_edit_progress', 'image_edit_completed', 'image_edit_failed']);
 
@@ -164,23 +222,40 @@ const liveApi: ImageEditorApi = {
     if (input.source) form.append('source', input.source, 'source');
     if (input.mask) form.append('mask', input.mask, 'mask.png');
     if (input.annotated) form.append('annotated', input.annotated, 'annotated.png');
+    if (input.characterSlug) form.append('characterSlug', input.characterSlug);
     return request<{ jobId: string }>(`${base(projectId)}/jobs`, { method: 'POST', body: form, timeoutMs: 120_000 });
   },
   getJob: (projectId, jobId) =>
     request<ImageEditJob>(`${base(projectId)}/jobs/${encodeURIComponent(jobId)}`, { live: true }),
   cancelJob: (projectId, jobId) =>
     request<ImageEditJob>(`${base(projectId)}/jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' }),
-  variantUrl: (projectId, jobId, n) => {
-    const token = readStoredToken();
-    const q = token ? `?access_token=${encodeURIComponent(token)}` : '';
-    return `/api${base(projectId)}/jobs/${encodeURIComponent(jobId)}/variants/${n}${q}`;
-  },
+  variantUrl: (projectId, jobId, n) =>
+    withToken(`/api${base(projectId)}/jobs/${encodeURIComponent(jobId)}/variants/${n}`),
   save: (projectId, req) =>
     request<{ path: string }>(`${base(projectId)}/save`, { method: 'POST', body: JSON.stringify(req) }),
   subscribe: handler => onMessage(msg => {
     const m = msg as unknown as { type?: string };
     if (m.type && IMAGE_EDIT_EVENTS.has(m.type)) handler(m as unknown as ImageEditEvent);
   }),
+  listCharacters: projectId => request<ImageEditCharacter[]>(charBase(projectId), { live: true }),
+  createCharacter: (projectId, input) =>
+    request<ImageEditCharacter>(charBase(projectId), { method: 'POST', body: characterForm(input), timeoutMs: 120_000 }),
+  updateCharacter: (projectId, slug, input) =>
+    request<ImageEditCharacter>(`${charBase(projectId)}/${encodeURIComponent(slug)}`,
+      { method: 'PUT', body: characterForm(input), timeoutMs: 120_000 }),
+  deleteCharacter: (projectId, slug) =>
+    request<void>(`${charBase(projectId)}/${encodeURIComponent(slug)}`, { method: 'DELETE' }),
+  characterPhotoUrl: (projectId, slug, file) =>
+    withToken(`/api${charBase(projectId)}/${encodeURIComponent(slug)}/photos/${encodeURIComponent(file)}`),
+  discuss: (projectId, input) => {
+    const form = new FormData();
+    form.append('text', input.text);
+    form.append('annotated', input.annotated, 'annotated.png');
+    if (input.sourcePath) form.append('sourcePath', input.sourcePath);
+    if (input.characterSlug) form.append('characterSlug', input.characterSlug);
+    if (input.sessionId) form.append('sessionId', input.sessionId);
+    return request<ImageEditDiscussResult>(`${base(projectId)}/discuss`, { method: 'POST', body: form, timeoutMs: 120_000 });
+  },
 };
 
 // ── Мок ───────────────────────────────────────────────────────────────────────
@@ -221,6 +296,7 @@ function createMockApi(mode: 'fal' | 'all'): ImageEditorApi {
   const emit = (e: ImageEditEvent) => listeners.forEach(fn => fn(e));
   const quotes = new Map<string, ImageEditQuote & { count: number }>();
   const jobs = new Map<string, { job: ImageEditJob; timers: number[] }>();
+  let characters: { character: ImageEditCharacter; urls: Map<string, string> }[] = [];
   const delay = <T,>(v: T, ms = 150) => new Promise<T>(r => setTimeout(() => r(v), ms));
   let seq = 0;
 
@@ -309,6 +385,64 @@ function createMockApi(mode: 'fal' | 'all'): ImageEditorApi {
       listeners.add(handler);
       return () => { listeners.delete(handler); };
     },
+    // Персонажи мока живут в памяти вкладки, фото — object URL загруженных файлов
+    listCharacters: () => delay(characters.map(c => c.character)),
+    createCharacter: async (_projectId, input) => {
+      const taken = new Set(characters.map(c => c.character.slug));
+      const root = characterSlug(input.name);
+      let slug = root;
+      for (let i = 2; taken.has(slug); i++) slug = `${root}-${i}`;
+      const urls = new Map<string, string>();
+      const character = mockCharacter(slug, input, [], urls);
+      characters.push({ character, urls });
+      return delay(character, 300);
+    },
+    updateCharacter: async (_projectId, slug, input) => {
+      const e = characters.find(c => c.character.slug === slug);
+      if (!e) throw Object.assign(new Error('Персонаж не найден'), { status: 404 });
+      const kept = e.character.photos.filter(p => !input.removePhotos?.includes(p.file));
+      e.character = mockCharacter(slug, input, kept, e.urls);
+      return delay(e.character, 300);
+    },
+    deleteCharacter: async (_projectId, slug) => {
+      characters = characters.filter(c => c.character.slug !== slug);
+      return delay(undefined);
+    },
+    characterPhotoUrl: (_projectId, slug, file) =>
+      characters.find(c => c.character.slug === slug)?.urls.get(file) ?? '',
+    // Мок-чат не создаётся: панель ответа покажет пустое ожидание
+    discuss: async (_projectId, input) =>
+      delay({ sessionId: input.sessionId ?? `mock-chat-${++seq}`, created: !input.sessionId, attachments: [] }, 300),
+  };
+}
+
+// Имя папки персонажа: транслит имени, как в макете («Аня» → anya)
+const TRANSLIT: Record<string, string> = {
+  а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh', з: 'z', и: 'i', й: 'y', к: 'k', л: 'l', м: 'm',
+  н: 'n', о: 'o', п: 'p', р: 'r', с: 's', т: 't', у: 'u', ф: 'f', х: 'h', ц: 'ts', ч: 'ch', ш: 'sh', щ: 'sch',
+  ъ: '', ы: 'y', ь: '', э: 'e', ю: 'yu', я: 'ya',
+};
+
+export function characterSlug(name: string): string {
+  const s = name.trim().toLowerCase().split('')
+    .map(ch => TRANSLIT[ch] ?? (/[a-z0-9]/.test(ch) ? ch : /[\s_-]/.test(ch) ? '-' : ''))
+    .join('').replace(/-+/g, '-').replace(/^-|-$/g, '');
+  return s || 'character';
+}
+
+function mockCharacter(slug: string, input: ImageEditCharacterInput, kept: ImageEditCharacterPhoto[], urls: Map<string, string>): ImageEditCharacter {
+  const photos = [...kept];
+  let n = 0;
+  for (const blob of input.photos) {
+    let file: string;
+    do file = `face-${String(++n).padStart(2, '0')}.jpg`; while (photos.some(p => p.file === file));
+    urls.set(file, URL.createObjectURL(blob));
+    photos.push({ file });
+  }
+  photos.forEach((p, i) => { p.primary = i === 0; });
+  return {
+    slug, name: input.name.trim(), description: input.description?.trim() || null,
+    path: `characters/${slug}`, photos, createdAt: new Date().toISOString(),
   };
 }
 

@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
-  ArrowLeft, Brush, Eraser, Hand, Image as ImageIcon, MoveUpRight, Sparkles, SquareDashed, Trash2, Type, Upload, X,
+  ArrowLeft, Brush, Eraser, Hand, Image as ImageIcon, MessageSquare, MoveUpRight, Sparkles, SquareDashed, Trash2, Type, Upload, X,
 } from 'lucide-react';
 import { Button, EmptyState, Field, IconButton, Island, Modal, ModalActions, SegmentedControl, TextArea, TextField } from '../ui';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
@@ -17,12 +17,16 @@ import { showToast } from '../../lib/toast';
 import { AUTO_MODEL, imageEditorApi, type ImageEditCatalog, type ImageEditQuoteRequest } from '../../api/imageEditor';
 import { EditorCanvas } from './EditorCanvas';
 import { exportAnnotated, exportMask, hasMaskMark, marksToJson, type Mark, type Tool } from './marks';
-import { effectiveProvider, modelBlockReason, money, nextVersionName, pickOp, priceText, splitPath, variantsWord, type ProviderChoice } from './format';
+import { effectiveProvider, modelBlockReason, money, nextVersionName, pickOp, plural, priceText, splitPath, variantsWord, type ProviderChoice } from './format';
 import { currentModel, PriceLine, ProviderModelPicker, SectionLabel } from './ProviderModelPicker';
 import { useQuote } from './useQuote';
 import { useImageEditJob } from './useImageEditJob';
 import { ErrorView, GenerationView, VariantsView } from './ResultViews';
 import { SaveDialog } from './SaveDialog';
+import { CharacterChip, CharacterSection, useCharacterDialogs, useCharacters } from './characters/CharacterPicker';
+import { DiscussPanel, openProjectChat, type DiscussState } from './discuss/DiscussPanel';
+import { buildDiscussText } from './discuss/discussText';
+import { discussSnapshot } from './discuss/snapshot';
 
 export type ImageEditorTarget =
   | { kind: 'edit'; path: string }       // «Редактировать» у картинки проекта
@@ -70,6 +74,13 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
   const [saveOpen, setSaveOpen] = useState(false);
   const [savedPath, setSavedPath] = useState<string | null>(null);
 
+  const chars = useCharacters(api, projectId);
+  const charDialogs = useCharacterDialogs(api, projectId, chars);
+  const character = chars.active;
+  const [discuss, setDiscuss] = useState<DiscussState | null>(null);
+  // Чат обсуждения переиспользуется внутри одного сеанса редактора
+  const discussSession = useRef<string | null>(null);
+
   const job = useImageEditJob(api, projectId);
   const busy = job.phase === 'starting' || job.phase === 'running';
   // Номера вариантов даёт сервер: выбранный по умолчанию — первый готовый
@@ -97,7 +108,7 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
 
   const quoteReq: ImageEditQuoteRequest | null = pv && m && !blocked ? {
     provider: pv.key, model: m.id, mode: 'auto', op: pickOp(hasImage, hasMask), count,
-    hasMask, references: 0, hasCharacter: false, width: size?.w ?? null, height: size?.h ?? null,
+    hasMask, references: 0, hasCharacter: !!character, width: size?.w ?? null, height: size?.h ?? null,
   } : null;
   const { quote, error: quoteError, loading: quoteLoading } = useQuote(api, projectId, quoteReq);
 
@@ -122,7 +133,7 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
     if (!q || n !== count || Date.parse(q.expiresAt) - Date.now() < 30_000) {
       q = await api.quote(projectId, {
         provider: pv.key, model: m.id, mode: 'auto', op: pickOp(hasImage, hasMask), count: n,
-        hasMask, references: 0, hasCharacter: false, width: size?.w ?? null, height: size?.h ?? null,
+        hasMask, references: 0, hasCharacter: !!character, width: size?.w ?? null, height: size?.h ?? null,
       }).catch(() => null);
       if (!q) return;
     }
@@ -138,9 +149,43 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
     await job.start({
       quoteId: q.quoteId, prompt: prompt.trim(),
       marks: marks.length && size ? marksToJson(marks, size.w, size.h) : undefined,
-      sourcePath: sourcePath ?? undefined, source, mask, annotated,
+      sourcePath: sourcePath ?? undefined, source, mask, annotated, characterSlug: character?.slug,
     }, n, q.expectedSeconds);
-  }, [api, projectId, pv, m, quote, count, hasImage, hasMask, size, src, marks, prompt, sourcePath, job]);
+  }, [api, projectId, pv, m, quote, count, hasImage, hasMask, size, src, marks, prompt, sourcePath, character, job]);
+
+  const startDiscuss = async () => {
+    // Ручка обсуждения без картинки с пометками не работает: кнопка активна только при картинке
+    const img = imgRef.current;
+    if (!img || !size) return;
+    const annotated = await discussSnapshot(img, marks, size.w, size.h).catch(() => null);
+    const q = prompt.trim();
+    const marksWord = marks.length ? `, ${marks.length} ${plural(marks.length, 'пометка', 'пометки', 'пометок')}` : '';
+    setDiscuss(d => {
+      if (d?.thumbUrl) URL.revokeObjectURL(d.thumbUrl);
+      return {
+        sessionId: null, error: annotated ? null : 'Не удалось собрать картинку с пометками',
+        thumbUrl: annotated ? URL.createObjectURL(annotated) : null,
+        summary: `${hasImage ? 'Картинка' : 'Новая картинка'}${marksWord} и запрос${q ? `: «${q.length > 50 ? `${q.slice(0, 50)}…` : q}»` : ''}`,
+      };
+    });
+    if (!annotated) return;
+    try {
+      const res = await api.discuss(projectId, {
+        text: buildDiscussText({ fileName: sourcePath ? splitPath(sourcePath).name : null, prompt, marks, size }),
+        annotated, sourcePath: sourcePath ?? undefined, characterSlug: character?.slug,
+        sessionId: discussSession.current ?? undefined,
+      });
+      discussSession.current = res.sessionId;
+      setDiscuss(d => (d ? { ...d, sessionId: res.sessionId } : d));
+    } catch (e) {
+      setDiscuss(d => (d ? { ...d, error: (e as Error).message } : d));
+    }
+  };
+
+  const closeDiscuss = () => setDiscuss(d => {
+    if (d?.thumbUrl) URL.revokeObjectURL(d.thumbUrl);
+    return null;
+  });
 
   const takeAsBase = () => {
     if (!job.jobId) return;
@@ -227,14 +272,35 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
       <div style={{ flex: 1, overflow: mobile ? undefined : 'auto', padding: SP.md, display: 'flex', flexDirection: 'column', gap: SP.md }}>
         <div>
           <SectionLabel>{hasImage ? 'Запрос' : 'Что нарисовать'}</SectionLabel>
+          {character && (
+            <CharacterChip api={api} projectId={projectId} character={character} disabled={busy}
+              onOpen={() => charDialogs.openCard(character.slug)} onOff={() => chars.setActive(null)} />
+          )}
           <TextArea value={prompt} onChange={setPrompt} disabled={busy} minHeight={96} autoGrow maxHeight={220}
-            placeholder={hasImage
-              ? 'Что изменить? Отметьте место на картинке или просто опишите'
-              : 'Опишите, что нарисовать: например, «светлая гостиная, синий диван, торшер в углу, утро»'} />
+            placeholder={character
+              ? `Где и что делает ${character.name}? Например, «${character.name} сидит в кафе у окна»`
+              : hasImage
+                ? 'Что изменить? Отметьте место на картинке или просто опишите'
+                : 'Опишите, что нарисовать: например, «светлая гостиная, синий диван, торшер в углу, утро»'} />
+          <div style={{ display: 'flex', marginTop: SP.sm }}>
+            <Button variant="ghost" size="sm" leftIcon={ic(MessageSquare, ICON_SIZE.xs)}
+              disabled={busy || !hasImage || !size} title={hasImage ? undefined : 'Сначала загрузите картинку'}
+              onClick={() => { void startDiscuss(); }}>
+              Обсудить с Claude
+            </Button>
+          </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, marginTop: SP.sm, fontSize: FS.sm, color: C.textMuted }}>
             {ic(Sparkles, ICON_SIZE.xs)}<span>Claude учитывает описание проекта</span>
           </div>
         </div>
+        {discuss && (
+          <DiscussPanel projectId={projectId} projectName={projectName} state={discuss}
+            onUsePrompt={text => setPrompt(text)}
+            onOpenChat={sid => { openProjectChat(projectId, sid); onClose(); }}
+            onClose={closeDiscuss} />
+        )}
+        <CharacterSection api={api} projectId={projectId} chars={chars} disabled={busy}
+          onNew={charDialogs.openNew} onCard={charDialogs.openCard} />
         {catalogError && <div style={{ fontSize: FS.sm, color: C.dangerText }}>{catalogError}</div>}
         {notConfigured && (
           <EmptyState compact inline icon={ic(ImageIcon, ICON_SIZE.lg)} title="Рисование не настроено" />
@@ -318,6 +384,7 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
           </Field>
         </Modal>
       )}
+      {charDialogs.dialog}
       {saveOpen && job.jobId && (
         <SaveDialog mode={sourcePath ? 'edit' : 'create'} sourcePath={sourcePath}
           suggestedName={sourcePath ? nextVersionName(splitPath(sourcePath).name) : initial.name}

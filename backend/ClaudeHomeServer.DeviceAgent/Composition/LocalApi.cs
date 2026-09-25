@@ -27,6 +27,30 @@ namespace ClaudeHomeServer.DeviceAgent.Composition;
 internal sealed record LocalApiOptions(int Port, string ServerOrigin, string AgentVersion)
 {
     public static string OriginOf(string serverUrl) => new Uri(serverUrl).GetLeftPart(UriPartial.Authority);
+
+    /// <summary>
+    /// Origin запроса — веб-морда сервера. Сравнение точное, кроме одного: loopback-имена
+    /// <c>localhost</c>, <c>127.0.0.1</c> и <c>[::1]</c> при равных схеме и порте — один origin
+    /// (сопряжение по localhost, а веб-морда открыта по 127.0.0.1). Других послаблений нет.
+    /// </summary>
+    public bool IsServerOrigin(string origin) => SameOrigin(origin, ServerOrigin);
+
+    internal static bool SameOrigin(string origin, string serverOrigin)
+    {
+        if (string.Equals(origin, serverOrigin, StringComparison.OrdinalIgnoreCase)) return true;
+        if (!TryParseOrigin(origin, out var a) || !TryParseOrigin(serverOrigin, out var b)) return false;
+        return string.Equals(a.Scheme, b.Scheme, StringComparison.OrdinalIgnoreCase)
+            && a.Port == b.Port
+            && IsLoopbackName(a.Host) && IsLoopbackName(b.Host);
+    }
+
+    private static bool TryParseOrigin(string value, out Uri uri) =>
+        Uri.TryCreate(value, UriKind.Absolute, out uri!)
+        && uri.UserInfo.Length == 0 && uri.PathAndQuery == "/" && uri.Fragment.Length == 0
+        && value.TrimEnd('/').Equals(uri.GetLeftPart(UriPartial.Authority), StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsLoopbackName(string host) =>
+        host.ToLowerInvariant() is "localhost" or "127.0.0.1" or "[::1]";
 }
 
 /// <summary>
@@ -46,7 +70,7 @@ internal sealed record AgentWorkbench(string DataDirectory, string CliProfile, i
 /// <see cref="TerminalService"/>, <see cref="SkillsService"/>.
 ///
 /// Периметр, по порядку: слушаем только loopback; заголовок <c>Host</c> — только loopback с
-/// нашим портом (DNS-rebinding); <c>Origin</c>, если есть, — только origin сервера (CORS и
+/// нашим портом (DNS-rebinding); <c>Origin</c>, если есть, — только origin сервера (loopback-имена равны; CORS и
 /// preflight Private Network Access); затем билет сервера, привязанный к проекту маршрута,
 /// и корень проекта под разрешёнными корнями машины. Превью дев-серверов — на отдельном
 /// loopback-порту со своим периметром (<see cref="PreviewGate"/>): страница дев-сайта не
@@ -159,7 +183,7 @@ internal static class LocalApi
         var origin = request.Headers.Origin.ToString();
         if (origin.Length > 0)
         {
-            if (!string.Equals(origin, options.ServerOrigin, StringComparison.OrdinalIgnoreCase))
+            if (!options.IsServerOrigin(origin))
             {
                 response.StatusCode = StatusCodes.Status403Forbidden;
                 return;

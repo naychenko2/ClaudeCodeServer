@@ -36,7 +36,7 @@ internal sealed class PreviewGate(int port, string serverOrigin, AgentUrlTickets
 
         // Свой origin (запросы самого дев-сайта) или веб-морда; остальным — отказ
         var origin = request.Headers.Origin.ToString();
-        if (origin.Length > 0 && !IsOwnOrigin(origin) && !string.Equals(origin, serverOrigin, StringComparison.OrdinalIgnoreCase))
+        if (origin.Length > 0 && !IsOwnOrigin(origin) && !LocalApiOptions.SameOrigin(origin, serverOrigin))
         {
             ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
             return;

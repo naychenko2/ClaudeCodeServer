@@ -25,10 +25,20 @@ public record ImageEditProviderDto(
 
 public record ImageEditLimitsDto(int MaxFileMb, int MaxReferences, int MaxCount);
 
+// Reason — почему список поставщиков пуст (ImageEditCatalogReasons); null, если есть хоть один
 public record ImageEditCatalogDto(
     ImageEditDefaultDto Default,
     IReadOnlyList<ImageEditProviderDto> Providers,
-    ImageEditLimitsDto Limits);
+    ImageEditLimitsDto Limits,
+    string? Reason = null);
+
+public static class ImageEditCatalogReasons
+{
+    // Ни fal, ни Higgsfield не настроены
+    public const string NoProviderConfigured = "no_provider_configured";
+    // Подсистема картинок выключена тумблером Subsystems:images:Enabled
+    public const string SubsystemDisabled = "subsystem_disabled";
+}
 
 // ── Котировка: POST …/quote ────────────────────────────────────────────────────
 

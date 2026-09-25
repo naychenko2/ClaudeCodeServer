@@ -52,7 +52,11 @@ export interface ImageEditCatalog {
   default: { provider: string | null; model: string };
   providers: ImageEditProvider[];
   limits: { maxFileMb: number; maxReferences: number; maxCount: number };
+  // Почему поставщиков нет; null — есть хотя бы один
+  reason: ImageEditCatalogReason | null;
 }
+
+export type ImageEditCatalogReason = 'no_provider_configured' | 'subsystem_disabled';
 
 export interface ImageEditQuoteRequest {
   provider: string;
@@ -308,6 +312,7 @@ function createMockApi(mode: 'fal' | 'all'): ImageEditorApi {
       default: { provider: providers.at(-1)?.key ?? null, model: AUTO_MODEL },
       providers,
       limits: { maxFileMb: 20, maxReferences: 6, maxCount: 4 },
+      reason: providers.length ? null : 'no_provider_configured',
     }),
     quote: async (_projectId, req) => {
       const p = providers.find(x => x.key === req.provider);

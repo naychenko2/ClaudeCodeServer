@@ -41,6 +41,11 @@ public class ClaudeSubscriptionConfig
 
     // Провайдер включён при наличии хотя бы одного способа аутентификации
     public bool Enabled => !string.IsNullOrWhiteSpace(OAuthToken) || !string.IsNullOrWhiteSpace(ApiKey);
+
+    // Аккаунт на `claude setup-token`: токен задан в конфиге, API-ключа нет (ключ перебил бы
+    // токен, ApiKey > OAuthToken). Только такие ходят через шлюз локальных проектов (ADR-016 §2):
+    // интерактивный логин обновляет серверный CLI, а у локального проекта его нет.
+    public bool IsSetupToken => !string.IsNullOrWhiteSpace(OAuthToken) && string.IsNullOrWhiteSpace(ApiKey);
 }
 
 // Нормализация и ранжирование тарифов подписки для приоритизации в пуле.

@@ -1,0 +1,63 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Агент устройства локальных проектов (ADR-016): хост на 127.0.0.1 — канал
+         управления (SignalR), канал исполнения, сайдкар. Управляемая копия CLI — Cli/
+         (задача 2.6), исполнение и сайдкар — задача 2.2. -->
+    <OutputType>Exe</OutputType>
+    <RootNamespace>ClaudeHomeServer.DeviceAgent</RootNamespace>
+    <AssemblyName>ai-home-agent</AssemblyName>
+    <EnableDefaultContentItems>false</EnableDefaultContentItems>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Проверка OpenPGP-подписи манифеста выпуска CLI (задача 2.7): внешнего gpg на Windows нет. -->
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.7.0" />
+    <!-- Канал управления — тот же хаб /hubs/devices, что у клиента рук ADR-008. -->
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Спинка: протокол канала устройства (кадры exec, hello) — единый источник правды для
+         обеих сторон — и RecursiveDirectoryWatcher. Файловые вертикали Files и Git — вторая
+         композиция того же кода (ADR-016, задача 4.2): агент их не переписывает, а собирает.
+         Ссылки на Main у агента нет. -->
+    <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Files\ClaudeHomeServer.Files.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Git\ClaudeHomeServer.Git.csproj" />
+    <!-- Рабочие подсистемы проекта (задача 4.3) — тоже композиция, а не своя версия:
+         терминал, дев-серверы и превью, навыки и агенты проекта. -->
+    <ProjectReference Include="..\ClaudeHomeServer.Terminal\ClaudeHomeServer.Terminal.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.ProjectServices\ClaudeHomeServer.ProjectServices.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Skills\ClaudeHomeServer.Skills.csproj" />
+    <!-- Мост псевдоконсоли Windows-терминала: TerminalService ищет ConPtyBridge.exe рядом со
+         сборкой (ConPtyBridgeLocator), как у сервера -->
+    <ProjectReference Include="..\ConPtyBridge\ConPtyBridge.csproj" Condition="'$(OS)' == 'Windows_NT'" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <Target Name="CopyConPtyBridge" AfterTargets="Build" Condition="'$(OS)' == 'Windows_NT'">
+    <ItemGroup>
+      <ConPtyBridgeFiles Include="..\ConPtyBridge\bin\$(Configuration)\net10.0\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(ConPtyBridgeFiles)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
+
+  <!-- Linux/macOS: pty-bridge терминала собирается из исходника рядом с агентом (у сервера
+       это делают Dockerfile и publish-linux.sh). Нет компилятора — предупреждение, не ошибка:
+       терминал тогда деградирует в bash с перенаправлением, как и на сервере без моста. -->
+  <Target Name="BuildPtyBridge" AfterTargets="Build" Condition="'$(OS)' != 'Windows_NT'"
+          Inputs="$(MSBuildThisFileDirectory)../pty-bridge/pty-bridge.c" Outputs="$(OutDir)pty-bridge">
+    <Exec Command="cc -O2 -o &quot;$(OutDir)pty-bridge&quot; &quot;$(MSBuildThisFileDirectory)../pty-bridge/pty-bridge.c&quot; -lutil" ContinueOnError="WarnAndContinue" />
+  </Target>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="ClaudeHomeServer.DeviceAgent.Tests" />
+    <!-- Сквозной тест сервер ↔ агент (задача 2.8) живёт в серверных тестах -->
+    <InternalsVisibleTo Include="ClaudeHomeServer.Tests" />
+  </ItemGroup>
+
+</Project>

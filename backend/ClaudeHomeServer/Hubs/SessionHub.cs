@@ -7,6 +7,7 @@ using ClaudeHomeServer.Services.ProjectServices;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http.Connections.Features;
 using Microsoft.AspNetCore.SignalR;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Hubs;
 
@@ -118,6 +119,8 @@ public class SessionHub : Hub
         return Task.CompletedTask;
     }
 
+    // Группа проекта — платформа (списки чатов, задачи); ватчер файлов отказывает сам
+    [ProjectCapability(ProjectCapabilityArea.Platform)]
     public async Task JoinProject(string projectId)
     {
         if (!OwnsProject(projectId)) throw Denied();
@@ -133,6 +136,7 @@ public class SessionHub : Hub
         }
     }
 
+    [ProjectCapability(ProjectCapabilityArea.Platform)]
     public async Task LeaveProject(string projectId)
     {
         await Groups.RemoveFromGroupAsync(Context.ConnectionId, "project_" + projectId);
@@ -149,6 +153,7 @@ public class SessionHub : Hub
     //
     // Снимок берём ДО входа в группу: строка, пришедшая ровно в этот зазор, потеряется,
     // но задвоиться не может. Из двух зол в логе виднее второе.
+    [ProjectCapability(ProjectCapabilityArea.FileBound)]
     public async Task<string?> JoinPreviewLog(string projectId, string serviceId)
     {
         if (!OwnsProject(projectId)) throw Denied();
@@ -157,6 +162,7 @@ public class SessionHub : Hub
         return buffered;
     }
 
+    [ProjectCapability(ProjectCapabilityArea.Platform)]
     public Task LeavePreviewLog(string projectId, string serviceId) =>
         Groups.RemoveFromGroupAsync(Context.ConnectionId, DevServerService.LogGroup(projectId, serviceId));
 

@@ -147,7 +147,7 @@ public sealed class TerminalService : IDisposable
 
         // Шелл выбираем по ОС ЦЕЛЕВОЙ среды: powershell на Windows-хосте,
         // pty-bridge/bash на Linux (в т.ч. внутри песочницы)
-        var launcher = _launchers.ForOwner(project.OwnerId);
+        var launcher = _launchers.ForProject(project);
         var isWindows = launcher.TargetIsWindows;
         var usesPtyBridge = false;
         var turnId = Guid.NewGuid().ToString("N")[..12];

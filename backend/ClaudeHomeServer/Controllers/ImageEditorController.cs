@@ -2,6 +2,8 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Files;
 using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.Images;
 using ClaudeHomeServer.Services.Images.Editing;
@@ -18,6 +20,7 @@ namespace ClaudeHomeServer.Controllers;
 // доступен (409 provider_unavailable) → исполнитель задач подключён (503). Всё, что
 // приходит из Images, — nullable: подсистема отключаемая (ADR-014), её выключение
 // обязано давать честный ответ, а не 500.
+[ProjectCapability(ProjectCapabilityArea.FileBound)]
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/image-editor")]

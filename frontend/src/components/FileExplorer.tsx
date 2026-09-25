@@ -1,7 +1,10 @@
 import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, memo, type ReactNode } from 'react';
 import { X, Folder, FolderPlus, ChevronRight, SquarePen, Trash2, ArrowRight, Paperclip, BookOpen, Search, Plus, Check, Copy, Upload, Monitor, Server, GitBranch, ArrowDownWideNarrow, FoldVertical, UnfoldVertical, Lightbulb, StickyNote, AlertTriangle, CloudOff, RefreshCw, Workflow, SquareStack } from 'lucide-react';
 import type { Project, FileEntry } from '../types';
+import { ProjectFeature } from '../types';
 import { api } from '../lib/api';
+import { useProjectFeature, featureReason } from '../lib/projectCapabilities';
+import { useProjectRoutes } from '../lib/deviceAgent';
 import { OfflineError } from '../lib/offline';
 import { DIAGRAM_KINDS, DIAGRAM_META, diagramFileName, retargetDiagramExt, type DiagramKind } from '../lib/diagramTemplates';
 
@@ -37,6 +40,8 @@ import { useGitState, ensureGit } from '../lib/git';
 import { useOnline } from '../hooks/useOnline';
 import { useContextButton } from '../features/chatContext/useContextButton';
 import { EmptyState } from './EmptyState';
+import { DeviceAgentGate } from './DeviceAgentGate';
+import { CapabilityUnavailable } from './CapabilityGate';
 import { C, R, FS, SP, FONT, MODAL_W } from '../lib/design';
 import { Modal, ModalActions, TextField, IconButton, Button, Menu, MenuItem, PanelHeaderSlot, FileTypeTile, FileStatusBadge, SegmentedControl, useHasPanelHeader, usePanelHeaderHold } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
@@ -451,6 +456,8 @@ interface FileRowProps {
   expanded: boolean;
   loading: boolean;
   renaming: boolean;
+  // Переименование и перенос мышью: нет маршрута files/rename (другое устройство) — строка их не предлагает
+  canRename: boolean;
   isDropTarget: boolean;
   dragging: boolean;
   pressing: boolean;
@@ -543,9 +550,9 @@ const FileRow = memo(function FileRow(p: FileRowProps) {
 
   return (
     <div
-      draggable={!touch && !p.renaming && !notesRoot}
+      draggable={!touch && !p.renaming && !notesRoot && p.canRename}
       onClick={() => { if (!p.renaming) p.onOpen(entry); }}
-      onDoubleClick={!isMobile && !entry.isDirectory ? e => { e.stopPropagation(); p.onRename(entry); } : undefined}
+      onDoubleClick={!isMobile && !entry.isDirectory && p.canRename ? e => { e.stopPropagation(); p.onRename(entry); } : undefined}
       onContextMenu={e => p.onContextMenu(e, entry)}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
@@ -713,8 +720,33 @@ const FileRow = memo(function FileRow(p: FileRowProps) {
   );
 });
 
-export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = false, alwaysShowIcons = false, onAddToKnowledge, onAddFolderToKnowledge, onRemoveFromKnowledge, indexedFileNames, indexingFiles, indexingFolders, onAttachToChat, onOpenDossiers }: Props) {
+// Гейт по матрице возможностей (ADR-016 §3.4): если у проекта выключена группа
+// files (например, локальный с офлайн-устройством) — показываем причину, а не
+// пустое дерево. Саму проверку локальности делает projectCapabilities.ts — здесь
+// только матрица. У локального проекта дерево открывается через агента на этой машине, а с
+// другого устройства — через ретранслятор, только на чтение; пока связи нет, DeviceAgentGate
+// показывает состояние. Хуки дерева живут в
+// FileExplorerBody, поэтому ранние выходы гейтов не ломают Rules of Hooks
+export function FileExplorer(props: Props) {
+  const fileGate = useProjectFeature(props.project, ProjectFeature.Files);
+  if (!fileGate) {
+    return <CapabilityUnavailable feature={ProjectFeature.Files} title="Файлы недоступны" reason={featureReason(props.project, ProjectFeature.Files)} />;
+  }
+  return <DeviceAgentGate project={props.project} relayTitle="Файлы недоступны"><FileExplorerBody {...props} /></DeviceAgentGate>;
+}
+
+function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = false, alwaysShowIcons = false, onAddToKnowledge, onAddFolderToKnowledge, onRemoveFromKnowledge, indexedFileNames, indexingFiles, indexingFolders, onAttachToChat, onOpenDossiers }: Props) {
   const online = useOnline();
+  // Контрол записи рисуется, только если у проекта сейчас есть его маршрут: у агента — не все,
+  // с другого устройства (ретранслятор) — ни одного. Список маршрутов — deviceAgentRoutes.ts
+  const { can } = useProjectRoutes(project);
+  const canUpload = can('POST files/upload');
+  const canToMarkdown = can('POST files/document/to-markdown');
+  const canCreateFile = can('POST files/create');
+  const canMkdir = can('POST files/mkdir');
+  const canRename = can('POST files/rename');
+  const canDelete = can('DELETE files');
+  const canCreate = canCreateFile || canMkdir || canUpload;
   const hasPanelHeader = useHasPanelHeader();
   const marks = useSyncMarks(project.id);
   // Гейт по подсистеме заметок: при выключенной — бейджи заметок у файлов и
@@ -1471,6 +1503,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         expanded={expanded.has(entry.path)}
         loading={loadingDirs.has(entry.path)}
         renaming={renamingPath === entry.path}
+        canRename={canRename}
         isDropTarget={dropTarget === entry.path}
         dragging={dragPath === entry.path}
         pressing={pressingPath === entry.path}
@@ -1559,7 +1592,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   // Главное действие панели — в ЗАКРЕПЛЁННОМ слоте: оно видно всегда, а не только
   // под курсором (как «+ Чат» и «+ Задача» у соседей). На пустом дереве иначе
   // непонятно, чем его наполнить
-  const createControl = online ? (
+  const createControl = online && canCreate ? (
     <Button
       size="xs"
       variant="primary"
@@ -1603,30 +1636,30 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           onClick={() => { setCreateMenu(null); setNoteDialog({ folder: noteFolderOf(targetDir) }); }}
         />
       )}
-      <MenuItem
+      {canCreateFile && <MenuItem
         icon={<Plus size={15} strokeWidth={ICON_STROKE} />}
         label="Файл"
         onClick={() => { setCreateMenu(null); if (isMobile) setCreateInDir(mobileDir); setShowCreateFile(true); }}
-      />
+      />}
       {/* Диаграммы — файлы проекта: в vault заметок пункта нет */}
-      {!inNotes && (
+      {!inNotes && canCreateFile && (
         <MenuItem
           icon={<Workflow size={15} strokeWidth={ICON_STROKE} />}
           label="Диаграмма"
           onClick={() => { setCreateMenu(null); if (isMobile) setCreateInDir(mobileDir); setDiagramName(diagramFileName(diagramKind)); setDiagramError(null); setShowCreateDiagram(true); }}
         />
       )}
-      <MenuItem
+      {canMkdir && <MenuItem
         icon={<FolderPlusIcon />}
         label="Папка"
         onClick={() => { setCreateMenu(null); if (isMobile) setCreateInDir(mobileDir); setShowCreateDir(true); }}
-      />
-      <MenuItem
+      />}
+      {canUpload && <MenuItem
         icon={uploading ? <span style={{ width: 14, height: 14, borderRadius: '50%', border: `2px solid ${C.track}`, borderTopColor: C.accent, animation: 'spin 0.6s linear infinite', display: 'inline-block' }} /> : <Upload size={15} strokeWidth={ICON_STROKE} />}
         label={uploading ? 'Загружаю…' : 'Загрузить файлы'}
         disabled={uploading}
         onClick={() => { setCreateMenu(null); uploadInputRef.current?.click(); }}
-      />
+      />}
       {/* Куда попадёт созданное — подписью в подвале меню, а не отдельной строкой
           под тулбаром: вопрос возникает ровно в момент создания. Целевая папка —
           последняя, которую открыли в дереве, и вернуться в корень иначе было
@@ -2083,7 +2116,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           <MenuItem key="attach" icon={<MI_Attach />} label="Прикрепить к чату" onClick={() => { close(); onAttachToChat!(entry.path); }} />);
         add(!entry.isDirectory && /\.(md|mdx)$/i.test(entry.name),
           <MenuItem key="copy-md" icon={<MI_Copy />} label="Копировать Markdown" onClick={() => { close(); void copyMdFromTree(entry.path); }} />);
-        add(!entry.isDirectory && online && isMdConvertible(entry.name),
+        add(!entry.isDirectory && online && canToMarkdown && isMdConvertible(entry.name),
           <MenuItem key="to-md" icon={<MI_Copy />} label="Трансформировать в Markdown…" onClick={() => { close(); setMdEntry(entry); }} />);
         add(!entry.isDirectory && !inNotesVault(entry.path) && onAddToKnowledge && !isKb && isKnowledgeIndexable(entry.name),
           <MenuItem key="kb-add" icon={<MI_BookPlus />} label="Добавить в знания" onClick={() => { close(); onAddToKnowledge!(entry.path); }} />);
@@ -2104,12 +2137,15 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           <MenuItem key="note-about" icon={<MI_NotePlus />} label="Заметка о файле" onClick={() => { close(); setNoteDialog({ file: entry.path }); }} />);
 
         // «Заметки» (vault) не переименовываем/не удаляем — сломается база знаний
-        if (!isNotesRoot(entry) && online) {
+        if (!isNotesRoot(entry) && online && (canRename || canDelete)) {
           sep('sep-1');
-          items.push(<MenuItem key="rename" icon={<MI_Rename />} label="Переименовать" onClick={() => startRename(entry)} />);
-          items.push(<MenuItem key="move" icon={<MI_Move />} label="Переместить в…" onClick={() => { close(); setMovingEntry(entry); setShowMoveModal(true); }} />);
-          sep('sep-2');
-          items.push(<MenuItem key="delete" icon={<MI_Trash />} label="Удалить" danger onClick={() => { close(); setDeleteConfirm(entry); }} />);
+          if (canRename) {
+            items.push(<MenuItem key="rename" icon={<MI_Rename />} label="Переименовать" onClick={() => startRename(entry)} />);
+            items.push(<MenuItem key="move" icon={<MI_Move />} label="Переместить в…" onClick={() => { close(); setMovingEntry(entry); setShowMoveModal(true); }} />);
+          }
+          if (canRename && canDelete) sep('sep-2');
+          if (canDelete)
+            items.push(<MenuItem key="delete" icon={<MI_Trash />} label="Удалить" danger onClick={() => { close(); setDeleteConfirm(entry); }} />);
         }
 
         // Мобила и планшет — шторка Modal с именем файла в заголовке

@@ -512,11 +512,45 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         // получает и своё напоминание, и своё уведомление человеку (по одному на запуск).
         task.ExecutorNudgedAt = null;
         task.ExecutorStaleAlertedAt = null;
+        // Запуск состоялся — ожидание устройства закончено
+        task.DeviceWaitSince = null;
+        task.DeviceWaitReason = null;
         if (task.Status == TaskItemStatus.Todo) task.Status = TaskItemStatus.InProgress;
         task.UpdatedAt = DateTime.UtcNow;
         ScheduleSave();
         return task;
     }
+
+    // Исполнитель ждёт устройство локального проекта (ADR-016, план §5): момент постановки в
+    // ожидание фиксируется ПЕРВЫМ разом — от него считается потолок, повторные попытки его не
+    // сдвигают; причина обновляется (офлайн → «обновите агента»). Статус не трогаем: задача
+    // остаётся в todo, запуска не было.
+    public TaskItem? MarkDeviceWait(string id, DateTime atUtc, string? reason)
+    {
+        var task = _tasks.GetValueOrDefault(id);
+        if (task is null) return null;
+        task.DeviceWaitSince ??= atUtc;
+        task.DeviceWaitReason = reason;
+        task.UpdatedAt = DateTime.UtcNow;
+        ScheduleSave();
+        return task;
+    }
+
+    // Ожидание устройства снято без запуска (истёк потолок)
+    public TaskItem? ClearDeviceWait(string id)
+    {
+        var task = _tasks.GetValueOrDefault(id);
+        if (task is null) return null;
+        task.DeviceWaitSince = null;
+        task.DeviceWaitReason = null;
+        task.UpdatedAt = DateTime.UtcNow;
+        ScheduleSave();
+        return task;
+    }
+
+    // Все задачи, ждущие устройство (для DeviceOnlineDispatcher: запуск и потолок ожидания)
+    public IReadOnlyCollection<TaskItem> GetDeviceWaiting() =>
+        _tasks.Values.Where(t => t.DeviceWaitSince is not null && t.Status != TaskItemStatus.Done).ToList();
 
     // Итог хода Claude-исполнителя (success/error)
     public TaskItem? MarkClaudeResult(string id, string result)

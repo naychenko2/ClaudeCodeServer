@@ -6,11 +6,13 @@ using ClaudeHomeServer.Services.Docs;
 using ClaudeHomeServer.Services.Notes;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Controllers;
 
 // Документация проекта для панели «Доки»: README.md + docs/**. Отдельно от FilesController,
 // потому что отдаёт не файлы, а корпус — заголовки, якоря и связи между документами.
+[ProjectCapability(ProjectCapabilityArea.ServerContent)]
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/docs")]

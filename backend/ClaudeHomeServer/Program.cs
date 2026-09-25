@@ -29,6 +29,7 @@ using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.StaticFiles;
 using Yarp.ReverseProxy.Forwarder;
+using ClaudeHomeServer.Services.Files;
 
 JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
 
@@ -160,7 +161,9 @@ builder.Services.AddExceptionHandler<ClaudeHomeServer.Services.Http.UnhandledExc
 // Держим IMvcBuilder в переменной: ниже, после загрузки динамических модулей (ModuleLoader),
 // на том же builder'е подключаем их контроллеры (AddApplicationPart-эквивалент —
 // ConfigureApplicationPartManager, единственный доступный на IServiceCollection-уровне путь).
-var mvcBuilder = builder.Services.AddControllers()
+// Отказ локального проекта из глубины сервиса (ProjectCapabilityGuard.ServerRoot) — 409 с
+// кодом local_project, а не 500 (ADR-016 §4, G1)
+var mvcBuilder = builder.Services.AddControllers(o => o.Filters.Add(new LocalProjectExceptionFilter()))
     .AddJsonOptions(o =>
         o.JsonSerializerOptions.Converters.Add(
             new JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase)));
@@ -193,19 +196,19 @@ builder.Services.AddSingleton<Microsoft.Extensions.Options.IConfigureOptions<Mic
 //
 // Честный ILogger<ModuleLoader> (M10): на этом этапе builder.Build() ещё не вызван, а
 // WebApplicationBuilder в .NET 10 не отдаёт готовый ILoggerFactory/ServiceProvider (builder.Logging
-// — ILoggingBuilder, CreateLogger<T> на нём не резолвится). Поэтому собираем ОДНОРАЗОВЫЙ
-// провайдер из builder.Services (в нём уже зарегистрированы реальные лог-провайдеры, поставленные
-// WebApplication.CreateBuilder) и берём оттуда ILoggerFactory: «модуль не загрузился» уходит
-// в консоль, а не теряется в no-op-фабрике (раньше здесь был new LoggerFactory() без провайдеров).
-// Логирование происходит сразу, в LoadAll, внутри using — одноразовый провайдер к тому моменту жив.
+// — ILoggingBuilder, CreateLogger<T> на нём не резолвится). Поэтому заводим ОДНОРАЗОВУЮ
+// консольную фабрику с той же секцией Logging, что у хоста: «модуль не загрузился» уходит
+// в консоль, а не теряется в no-op-фабрике. Временный BuildServiceProvider здесь не годится
+// (ASP0000: второй контейнер синглтонов). Логирование идёт сразу, в LoadAll, внутри using.
 // Стор подсистем: регистрируем ДО LoadAll, чтобы ModuleLoader записал в него
 // динамические модули (RecordActive/RecordDisabled) и AddSubsystems переиспользовал
 // тот же инстанс.
 var dynamicModuleStore = new ClaudeHomeServer.Services.Composition.SubsystemStateStore();
 builder.Services.AddSingleton(dynamicModuleStore);
-using (var dynamicModuleLogProvider = builder.Services.BuildServiceProvider())
+using (var dynamicModuleLogFactory = LoggerFactory.Create(logging => logging
+    .AddConfiguration(builder.Configuration.GetSection("Logging"))
+    .AddConsole()))
 {
-    var dynamicModuleLogFactory = dynamicModuleLogProvider.GetRequiredService<ILoggerFactory>();
     var dynamicModuleRegistry = new ClaudeHomeServer.Services.DynamicModules.ModuleRegistry(builder.Configuration);
     var dynamicModuleLoader = new ClaudeHomeServer.Services.DynamicModules.ModuleLoader(
         dynamicModuleRegistry,
@@ -275,6 +278,8 @@ builder.Services.AddSignalR(o =>
         o.KeepAliveInterval = TimeSpan.FromSeconds(15);
         // Медленное рукопожатие на плохом канале не должно ронять подключение
         o.HandshakeTimeout = TimeSpan.FromSeconds(30);
+        // Отказ файловой группы для локального проекта (ADR-016 §4, G1) на методах хабов
+        Microsoft.AspNetCore.SignalR.HubOptionsExtensions.AddFilter(o, new ProjectCapabilityHubFilter());
     })
     .AddJsonProtocol(o =>
         o.PayloadSerializerOptions.Converters.Add(
@@ -294,8 +299,13 @@ builder.Services.AddSingleton<IForgejoAccountStore>(sp => sp.GetRequiredService<
 builder.Services.AddSingleton<IUserStore, UserStoreAdapter>();
 // Драйверы среды исполнения процессов пользователей (local / docker-песочница)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.SandboxManager>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.ILauncherFactory,
-    ClaudeHomeServer.Services.Execution.LauncherFactory>();
+// Канал устройств и шлюз хода (ADR-016) — ленивым резолвом: прямая зависимость замыкала граф синглтонов
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.ILauncherFactory>(sp =>
+    new ClaudeHomeServer.Services.Execution.LauncherFactory(
+        sp.GetRequiredService<IUserStore>(),
+        sp.GetRequiredService<ClaudeHomeServer.Services.Execution.SandboxManager>(),
+        () => sp.GetService<ClaudeHomeServer.Services.Execution.IDeviceExecChannel>(),
+        () => sp.GetService<ClaudeHomeServer.Services.Execution.IDeviceTurnGateway>()));
 // Узкий шов пула preview-портов песочницы для вертикали ProjectServices
 // (Этап 5, волна C, шаг 2): DevServerService в отдельной сборке
 // получает только диапазон, всё остальное в SandboxManager остаётся
@@ -385,6 +395,9 @@ builder.Services.AddSingleton<JwtValidatorGateway>();
 // своим кешем/состоянием (см. DuplicateSingletonRegistrationTests).
 builder.Services.AddSingleton<IUserTokenValidator>(sp => sp.GetRequiredService<JwtValidatorGateway>());
 builder.Services.AddSingleton<IPreviewTokenValidator>(sp => sp.GetRequiredService<JwtValidatorGateway>());
+// Шов шлюза MCP (ADR-016): адрес бэкенда и сервисный JWT владельца — теми же функциями,
+// что у конфига серверного хода.
+builder.Services.AddSingleton<IMcpBackendAccess, ClaudeHomeServer.Services.Composition.McpBackendAccess>();
 // Шов для Modules (Этап 5, волна C, шаг 1б): вместо прямой зависимости от
 // FeatureFlagService — узкий контракт на проверку одного флага. Адаптер в
 // `Services/FeatureFlagGateway` идёт через `FeatureFlagService` — Modules
@@ -472,6 +485,8 @@ builder.Services.AddSingleton<ChatDigestService>();
 // TaskManager/TaskAiService/BoardService/DailyBriefingService/TaskSchedulerService
 // — DI в подсистеме `TasksSubsystem` (волна 4C, шаг 1).
 builder.Services.AddSingleton<FileService>();
+// Шов файлов проекта (ADR-016): async и с ключом «проект», guard файловой группы внутри.
+builder.Services.AddSingleton<IProjectFiles, ProjectFiles>();
 // Резолв контекста чата (фича chat-context): признак «не найден» считает одна точка
 // для REST фронта и MCP-тула context_list
 builder.Services.AddSingleton<SessionContextResolver>();
@@ -755,9 +770,47 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DesktopHandsSess
 // Разрыв соединения — один из поводов погасить сеанс: маршрутизатор канала знает о нём
 // первым, поэтому сеансы подписаны на него наблюдателем, а не наоборот (форвард на тот же
 // синглтон, не второй экземпляр).
+// Второй наблюдатель — диспетчер выхода устройства в онлайн (ADR-016, план §5; регистрация
+// блоком ниже). Стоит ДО службы сеансов: одиночный резолв наблюдателя обязан отдавать её.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDeviceConnectionObserver>(
+    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Composition.DeviceOnlineDispatcher>());
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDeviceConnectionObserver>(
     sp => sp.GetRequiredService<ClaudeHomeServer.Services.Desktop.DesktopHandsSessionService>());
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DesktopAccessGate>();
+// Канал исполнения локальных проектов (ADR-016): шов IDeviceExecChannel (Core) — форвард
+// на тот же синглтон, который обслуживает WebSocket /api/devices/exec и Hello хаба.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DeviceHarnessPolicy>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDeviceExecOpenSender,
+    ClaudeHomeServer.Services.Desktop.DeviceHubExecOpenSender>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DeviceExecChannel>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IDeviceExecChannel>(
+    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Desktop.DeviceExecChannel>());
+// Ретранслятор чтения для других устройств (ADR-016 §5) — тот же канал исполнения
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IDeviceRelayChannel>(
+    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Desktop.DeviceExecChannel>());
+// Билеты браузера к localhost-API агента и доставка событий его ватчера в веб-морду
+// (ADR-016, задача 4.2): только память, рестарт бэкенда отзывает все билеты.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.AgentTicketService>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.IProjectFilesChangedNotifier,
+    ClaudeHomeServer.Services.Composition.ProjectFilesChangedNotifier>();
+
+// Фоновая работа при офлайн-устройстве (ADR-016, вариант А плана §5): гейт готовности
+// устройства проекта для пяти механизмов, диспетчер выхода устройства в онлайн (наблюдатель
+// маршрутизатора + поминутный проход с потолком 24 ч) и его обработчики — исполнитель задач
+// (с под-задачами штаба), очередь чата, автоматизации персон. Сторожа догоняют своим тиком.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IProjectDeviceGate>(
+    sp => new ClaudeHomeServer.Services.Execution.ProjectDeviceGate(
+        () => sp.GetService<ClaudeHomeServer.Services.Execution.IDeviceExecChannel>()));
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.DeviceOnlineDispatcher>();
+builder.Services.AddGatedHostedFrom(builder.Configuration,
+    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Composition.DeviceOnlineDispatcher>());
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.ChatDeviceWaitHandler>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IDeviceOnlineHandler>(
+    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Composition.ChatDeviceWaitHandler>());
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IDeviceOnlineHandler>(
+    sp => sp.GetRequiredService<TaskExecutionService>());
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IDeviceOnlineHandler>(
+    sp => sp.GetRequiredService<PersonaAutomationService>());
 // Сторож сеансов: 15 минут простоя, потолок 2 часа, исчезнувший чат, снятый тумблер грани
 builder.Services.AddGatedHostedService<ClaudeHomeServer.Services.Desktop.DesktopSessionReaper>(builder.Configuration);
 // TaskSchedulerService — DI в подсистеме `TasksSubsystem` (волна 4C, шаг 1).
@@ -1715,24 +1768,15 @@ app.Use(async (ctx, next) =>
 }
 
 // Dev-server preview proxy: /preview/{projectId}/{**path} → http://127.0.0.1:{port}
+// Сам проброс — DevServerPreviewForwarder вертикали (им же пользуется агент устройства),
+// здесь только вход: кто вправе смотреть превью проекта.
 {
-    var previewInvoker = new HttpMessageInvoker(new SocketsHttpHandler
-    {
-        UseProxy = false,
-        AllowAutoRedirect = false,
-        AutomaticDecompression = DecompressionMethods.None,
-        UseCookies = false,
-    });
+    var previewInvoker = DevServerPreviewForwarder.CreateInvoker();
 
     app.Use(async (ctx, next) =>
     {
-        var path = ctx.Request.Path.Value ?? "";
-        var match = System.Text.RegularExpressions.Regex.Match(path, @"^/preview/([^/]+)(/.*)?$");
-        if (match.Success)
+        if (DevServerPreviewForwarder.TryParse(ctx.Request.Path.Value, out var projectId, out var restPath))
         {
-            var projectId = match.Groups[1].Value;
-            var restPath = match.Groups[2].Value ?? "/";
-
             // Аутентификация: middleware выполняется ДО endpoint routing, поэтому [Authorize]
             // тут не действует и ctx.User для iframe-запроса пуст. Токен берём из cookie
             // cc_preview (её ставит фронт перед загрузкой iframe — уходит и с сабресурсами),
@@ -1771,40 +1815,18 @@ app.Use(async (ctx, next) =>
                 await ctx.Response.WriteAsync("{\"error\":\"Доступ запрещён\"}");
                 return;
             }
-
-            var devServer = ctx.RequestServices.GetRequiredService<DevServerService>();
-            // Порт активного для превью сервиса проекта; если ни один не запущен — 503.
-            var port = devServer.GetActivePreviewPort(projectId);
-            if (port is null)
+            // Превью локального проекта отдаёт агент устройства (ADR-016, G1), не сервер
+            if (ProjectCapabilityGuard.Refusal(previewProject, ProjectCapabilityArea.FileBound) is { } refusal)
             {
-                ctx.Response.StatusCode = 503;
-                await ctx.Response.WriteAsync("{\"error\":\"Dev-сервер не запущен\"}");
+                ctx.Response.StatusCode = StatusCodes.Status409Conflict;
+                await ctx.Response.WriteAsJsonAsync(new { error = refusal, code = ProjectCapabilityGuard.Code });
                 return;
             }
 
-            // HttpTransformer.Default сам дописывает к префиксу Path и QueryString запроса,
-            // поэтому в префиксе пути быть не должно (иначе /preview/{id} уедет на дев-сервер
-            // дважды и тот ответит 404). Срезаем свой префикс прямо в запросе.
-            ctx.Request.Path = restPath.Length == 0 ? "/" : restPath;
-            // Семью loopback-адресов выбирает LoopbackResolver, а не литерал: dev-сервер
-            // на Node 17+ слушает ТОЛЬКО ::1, и прежний 127.0.0.1 до него не доставал —
-            // живой сервис отдавал «соединение отвергнуто» при работающем порте.
-            var previewBase = await LoopbackResolver.ResolveBaseAsync(port.Value);
-            if (previewBase is null)
-            {
-                ctx.Response.StatusCode = 503;
-                await ctx.Response.WriteAsync("{\"error\":\"Dev-сервер не отвечает\"}");
-                return;
-            }
-
-            var forwarder = ctx.RequestServices.GetRequiredService<IHttpForwarder>();
-            var previewError = await forwarder.SendAsync(ctx, previewBase, previewInvoker,
-                ForwarderRequestConfig.Empty, HttpTransformer.Default);
-            // До назначения не достучались — процесс мог смениться на слушающий по другой
-            // семье, поэтому выбор семьи забываем, а не держим до истечения TTL. Отмены
-            // клиентом сюда не попадают: они ничего не говорят о живости назначения.
-            if (previewError is ForwarderError.Request or ForwarderError.RequestTimedOut)
-                LoopbackResolver.Invalidate(port.Value);
+            await DevServerPreviewForwarder.ForwardAsync(ctx,
+                ctx.RequestServices.GetRequiredService<DevServerService>(),
+                ctx.RequestServices.GetRequiredService<IHttpForwarder>(),
+                previewInvoker, projectId, restPath);
             return;
         }
         await next();
@@ -2040,6 +2062,22 @@ app.MapHub<TerminalHub>("/hubs/terminal");
 // Канал десктопного агента (ADR-008): исходящее соединение клиента с машины пользователя,
 // push команды в конкретное соединение. Схема авторизации — токен устройства, а не общий JWT
 app.MapHub<ClaudeHomeServer.Services.Desktop.DeviceHub>("/hubs/devices");
+// Шлюз LLM локальных проектов (ADR-016): авторизация — токен хода, а не JWT; выключен
+// тумблером LlmGateway:Enabled (404). Подсистема llm отключаемая — маппим только при ней.
+if (app.Services.GetService<ClaudeHomeServer.Services.Llm.Gateway.UpstreamSelector>() is not null)
+    ClaudeHomeServer.Services.Llm.Gateway.LlmGatewayEndpoints.MapLlmGateway(app);
+
+// Шлюз MCP для хода на устройстве (ADR-016): вход по токену хода, а не по JWT.
+// Подсистема llm отключаемая — без неё нет и токенов хода.
+if (app.Services.GetService<ClaudeHomeServer.Services.Llm.Gateway.TurnTokenService>() is not null)
+{
+    ClaudeHomeServer.Services.Llm.Gateway.McpGatewayEndpoints.MapMcpGateway(app);
+    // Туннель выхода собственного трафика CLI устройства: тумблер LlmGateway:Egress:Enabled
+    ClaudeHomeServer.Services.Llm.Gateway.EgressGatewayEndpoints.MapEgressGateway(app);
+}
+
+// Потоковый канал исполнения устройства (ADR-016): WebSocket, та же схема токена устройства
+app.MapDeviceExecChannel();
 
 // Graceful shutdown: гасим все живые процессы claude, терминалы и dev-серверы.
 //
@@ -2049,6 +2087,11 @@ app.MapHub<ClaudeHomeServer.Services.Desktop.DeviceHub>("/hubs/devices");
 // ObjectDisposedException — гасить процессы было уже нечем. Все три сервиса —
 // синглтоны, так что заранее взятая ссылка та же самая.
 var shutdownSessions = app.Services.GetRequiredService<SessionManager>();
+// Токен хода (ADR-016): резолв здесь создаёт экземпляр, а с ним — подписку на
+// turn/completed; удаление чата отзывает его токены явно (ход мог и не начаться).
+// GetService: подсистема llm отключаемая.
+if (app.Services.GetService<ClaudeHomeServer.Services.Llm.Gateway.TurnTokenService>() is { } turnTokens)
+    shutdownSessions.OnSessionDeleted += s => turnTokens.RevokeSession(s.Id);
 var shutdownTerminals = app.Services.GetRequiredService<TerminalService>();
 var shutdownDevServers = app.Services.GetRequiredService<DevServerService>();
 // Стор задач пишется с дебаунсом (TaskManager.ScheduleSave) — несохранённое досбрасываем

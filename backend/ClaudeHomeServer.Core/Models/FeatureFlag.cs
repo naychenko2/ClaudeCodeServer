@@ -73,6 +73,10 @@ public static class FeatureFlagKeys
     // Редактор картинок в проекте (ADR-017): экран правки из дерева файлов. Флаг гейтит и
     // серверные ручки api/projects/{id}/image-editor/* — при выключенном они отвечают 404.
     public const string ImageEditor = "image-editor";
+    // Локальные проекты (ADR-016): проект, привязанный к устройству владельца, — ход идёт
+    // на его машине через агента. Флаг закрывает создание и перепривязку локальных проектов
+    // и весь UI; шлюз LLM у него свой тумблер (LlmGateway:Enabled), флагом не закрывается.
+    public const string LocalProjects = "local-projects";
 }
 
 /// <summary>
@@ -188,6 +192,14 @@ public static class FeatureFlagCatalog
             Key: FeatureFlagKeys.ImageEditor,
             Title: "Редактор картинок",
             Description: "Картинку из проекта можно поправить словами и пометками: обвести место, показать стрелкой, приложить образец. Цена видна до запуска, результат ложится рядом новым файлом, оригинал не трогается.",
+            Default: false,
+            Stage: "dev"),
+
+        // Локальные проекты (ADR-016): создание проекта на устройстве с агентом AI Home.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.LocalProjects,
+            Title: "Локальные проекты",
+            Description: "Проект может жить на вашем компьютере, а не на сервере: Claude работает с его файлами через агента AI Home на этой машине. Чат и задачи такого проекта видны отовсюду, а ход идёт, только пока компьютер в сети.",
             Default: false,
             Stage: "dev"),
     ];

@@ -50,7 +50,7 @@ public sealed partial class NotesService
         if (string.IsNullOrWhiteSpace(project.RootPath))
             throw new InvalidOperationException("У проекта нет корневой папки");
         var canWrite = rel.StartsWith("notes/", StringComparison.OrdinalIgnoreCase);
-        return (SafePath.Join(project.RootPath, rel), canWrite);
+        return (SafePath.Join(Composition.ProjectCapabilityGuard.ServerRoot(project), rel), canWrite);
     }
 
     // --- Создание комментария ---

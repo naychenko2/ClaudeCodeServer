@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Tasks;
+using ClaudeHomeServer.Services.Files;
 
 namespace ClaudeHomeServer.Services;
 
@@ -27,22 +28,26 @@ public class SessionContextResolver(ProjectManager projects, TaskManager tasks)
     /// </summary>
     public IReadOnlyList<SessionContextItem> Resolve(Session session, string ownerId)
     {
-        var rootPath = session.ProjectId is { } projectId
-            ? projects.GetById(projectId)?.RootPath
-            : null;
+        var project = session.ProjectId is { } projectId ? projects.GetById(projectId) : null;
+        // Файлы локального проекта на устройстве: сервер их наличие не проверяет и запись
+        // «битой» не объявляет (ADR-016 §4) — диск сервера по пути устройства не трогаем
+        var filesOnDevice = project is not null
+            && !Composition.ProjectCapabilityGuard.Allows(project, Composition.ProjectCapabilityArea.FileBound);
+        var rootPath = filesOnDevice ? null : project?.RootPath;
 
         return session.Context
             .Select(e => new SessionContextItem(e.Type, e.Id, e.Title,
-                Missing: IsMissing(e, rootPath, session.ProjectId, ownerId)))
+                Missing: IsMissing(e, rootPath, filesOnDevice, session.ProjectId, ownerId)))
             .ToList();
     }
 
-    private bool IsMissing(SessionContextEntry entry, string? rootPath, string? projectId, string ownerId) =>
+    private bool IsMissing(SessionContextEntry entry, string? rootPath, bool filesOnDevice, string? projectId,
+        string ownerId) =>
         entry.Type switch
         {
             // Файл адресуется относительно корня проекта: чат вне проекта такую запись
             // развернуть не может — она «не найдена», а не молча валидна.
-            SessionContextTypes.File => rootPath is null || !FileExistsInProject(rootPath, entry.Id),
+            SessionContextTypes.File => !filesOnDevice && (rootPath is null || !FileExistsInProject(rootPath, entry.Id)),
             SessionContextTypes.Task => tasks.GetById(entry.Id) is not { } t
                 || t.ProjectId != projectId || t.OwnerId != ownerId,
             _ => false,

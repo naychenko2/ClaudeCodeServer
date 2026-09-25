@@ -1,3 +1,6 @@
+using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Composition;
+
 namespace ClaudeHomeServer.Services;
 
 // Примитив спины: гарантировать, что вложения чата (FileService.AttachmentsDir)
@@ -31,10 +34,51 @@ public static class AttachmentsGitExclude
         if (HasAttachmentsRule(exclude) || HasAttachmentsRule(gitignore)) return;
 
         Directory.CreateDirectory(Path.Combine(commonDir, "info"));
+        File.AppendAllText(excludeFile, RuleAppendix(exclude));
+    }
+
+    // Та же гарантия через шов файлов проекта — у локального проекта (ADR-016) файлы на
+    // устройстве, и агент пишет в них только через IProjectFiles со сверкой дескриптора.
+    // Только главное дерево (.git — папка внутри проекта): git-dir linked worktree лежит
+    // вне корня проекта, туда шов не пустит, и правило просто не пишется.
+    public static async Task EnsureAsync(IProjectFiles files, Project project, CancellationToken ct = default)
+    {
+        // .git листинг корня не показывает (служебный каталог) — спрашиваем его самого:
+        // папка — главное дерево, файл или нет — не наш случай
+        try { await files.ListAsync(project, ".git", showHidden: true, ct); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return; }
+
+        const string excludeRel = ".git/info/exclude";
+        var exclude = await ReadOrEmptyAsync(files, project, excludeRel, ct);
+        var gitignore = await ReadOrEmptyAsync(files, project, ".gitignore", ct);
+        if (HasAttachmentsRule(exclude) || HasAttachmentsRule(gitignore)) return;
+
+        await files.CreateDirectoryAsync(project, ".git/info", ct);
+        await files.WriteFileAsync(project, excludeRel, exclude + RuleAppendix(exclude), ct);
+    }
+
+    private static async Task<string> ReadOrEmptyAsync(IProjectFiles files, Project project, string rel, CancellationToken ct)
+    {
+        try { return await files.ReadFileAsync(project, rel, ct); }
+        catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { return ""; }
+    }
+
+    private static string RuleAppendix(string exclude)
+    {
         var lead = exclude.Length == 0 || exclude.EndsWith('\n') ? "" : "\n";
-        File.AppendAllText(excludeFile,
-            $"{lead}# Вложения чата (TreeExcludes.AttachmentsDir) — файлы сообщений, не история проекта\n" +
-            $"{TreeExcludes.AttachmentsDir}/\n");
+        return $"{lead}# Вложения чата (TreeExcludes.AttachmentsDir) — файлы сообщений, не история проекта\n" +
+               $"{TreeExcludes.AttachmentsDir}/\n";
+    }
+
+    // Путь нового вложения чата относительно рабочей папки: {AttachmentsDir}/{guid}/{имя}.
+    // Уникальность — подпапкой с GUID, чтобы сохранить оригинальное имя файла (на плашке в
+    // чате показывается basename, и Claude видит его же). null — имени нет или оно не имя
+    // файла: Path.GetFileName срезает path-сегменты (../evil). Одно правило на сервер и агента.
+    public static string? AttachmentPath(string? fileName)
+    {
+        var safeName = Path.GetFileName(fileName ?? "");
+        if (string.IsNullOrEmpty(safeName) || safeName is "." or "..") return null;
+        return $"{TreeExcludes.AttachmentsDir}/{Guid.NewGuid():N}/{safeName}";
     }
 
     // Идемпотентность: правило уже записано (в любом из вариантов написания) — не дублируем

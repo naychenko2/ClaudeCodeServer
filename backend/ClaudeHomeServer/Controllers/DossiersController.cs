@@ -7,6 +7,7 @@ using ClaudeHomeServer.Services.Dossiers;
 using ClaudeHomeServer.Services.Git;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Controllers;
 
@@ -14,6 +15,7 @@ namespace ClaudeHomeServer.Controllers;
 // для MCP dossier_lookup и полная запись для dossier_get (этап 2 §5; изоляция —
 // владелец проекта, сервисный JWT памяти резолвит того же владельца) и выгрузка
 // в ветку ccs/dossiers/v1 (этап 3). Всё, кроме List, — за флагом change-dossiers-recall.
+[ProjectCapability(ProjectCapabilityArea.ServerContent, ProjectKey = "id")]
 [ApiController]
 [Authorize]
 [Route("api/projects")]

@@ -113,7 +113,7 @@ public static class TeamPlanFileRenderer
         var rel = RelativePath(chatName, sessionId, iteration, plan.Version);
         try
         {
-            var full = FileService.SafeJoinPublic(rootPath, rel);
+            var full = SafePath.Join(rootPath, rel);
             Directory.CreateDirectory(Path.GetDirectoryName(full)!);
             File.WriteAllText(full, Render(plan, executorLabel));
             return rel;

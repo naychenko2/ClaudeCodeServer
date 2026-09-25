@@ -2,6 +2,7 @@ using System.Net;
 using System.Text.Json;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Files;
 using ClaudeHomeServer.Tests.Helpers;
 using ClaudeHomeServer.Tests.ImageEditor.Characters;
 using FluentAssertions;

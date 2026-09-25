@@ -42,6 +42,24 @@ public class DesktopDevice
     /// <summary>Версия клиента, назвавшаяся при сопряжении (диагностика поддержки).</summary>
     public string? ClientVersion { get; set; }
 
+    // Сведения агента локальных проектов (ADR-016) — из его Hello. Поля аддитивные: у
+    // записей до ADR-016 и у клиентов рук ADR-008 они пустые.
+
+    /// <summary>Платформа агента (win-x64, linux-x64, osx-arm64…) — как её назвал агент.</summary>
+    public string? Platform { get; set; }
+
+    /// <summary>Версия агента локальных проектов; null — это не агент (клиент рук ADR-008).</summary>
+    public string? AgentVersion { get; set; }
+
+    /// <summary>
+    /// Версия управляемой копии CLI в каталоге агента (null — копии нет). С требуемой
+    /// версией сервера сверяется вживую, вердикт «харнес не готов» не хранится.
+    /// </summary>
+    public string? CliVersion { get; set; }
+
+    /// <summary>Возможности агента (<c>exec</c>, <c>files</c>, <c>relay</c>) — только известные значения.</summary>
+    public List<string> Capabilities { get; set; } = [];
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     /// <summary>Последнее успешное обращение устройства (обновляется с троттлингом).</summary>

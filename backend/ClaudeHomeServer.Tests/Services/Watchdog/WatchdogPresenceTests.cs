@@ -177,7 +177,7 @@ public class WatchdogPresenceTests : IDisposable
     private sealed class FakeRunner : IWatchdogCommandRunner
     {
         public PollOutcome Next { get; set; } = PollOutcome.ExitedZero;
-        public Task<PollOutcome> RunAsync(string ownerId, string workDir, string command,
+        public Task<PollOutcome> RunAsync(string ownerId, string? projectId, string workDir, string command,
             int timeoutSeconds, CancellationToken ct) => Task.FromResult(Next);
     }
 

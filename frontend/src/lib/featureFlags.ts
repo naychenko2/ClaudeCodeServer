@@ -36,6 +36,9 @@ export const FLAGS = {
   // Редактор картинок в проекте (ADR-017): вход «Редактировать» / «Нарисовать картинку»
   // и сам экран. Серверные ручки image-editor/* под этим же флагом отвечают 404.
   imageEditor: 'image-editor',
+  // Локальные проекты (ADR-016): проект на устройстве владельца, ход идёт через агента.
+  // Что доступно у такого проекта, решает матрица capabilities из DTO проекта, а не флаг.
+  localProjects: 'local-projects',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

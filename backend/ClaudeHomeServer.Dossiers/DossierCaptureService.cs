@@ -116,6 +116,8 @@ public sealed class DossierCaptureService : BackgroundService
         if (msg is not ResultMessage || string.IsNullOrEmpty(session.ProjectId)) return Task.CompletedTask;
         var project = _projects.GetById(session.ProjectId);
         if (project is null || string.IsNullOrEmpty(project.OwnerId)) return Task.CompletedTask;
+        // Досье — группа «контент на сервере»: у локального проекта фоновой работы нет (ADR-016 §4)
+        if (!ProjectCapabilities.ServerContentEnabled(project)) return Task.CompletedTask;
 
         var root = session.WorktreePath ?? project.RootPath;
         _ = Task.Run(() => TickRootSafeAsync(project, root));
@@ -128,7 +130,7 @@ public sealed class DossierCaptureService : BackgroundService
     {
         foreach (var project in _projects.GetAll())
         {
-            if (string.IsNullOrEmpty(project.OwnerId)) continue;
+            if (string.IsNullOrEmpty(project.OwnerId) || !ProjectCapabilities.ServerContentEnabled(project)) continue;
 
             var roots = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { project.RootPath };
             foreach (var s in _sessions.GetAll())

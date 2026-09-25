@@ -190,7 +190,7 @@ public sealed class PersonaAgentFileSync
     {
         try
         {
-            var root = projectId is not null ? _projects.GetById(projectId)?.RootPath : ChatRoot(ownerId);
+            var root = projectId is not null ? ServerRootOf(_projects.GetById(projectId)) : ChatRoot(ownerId);
             if (root is null) return null;
             var path = CategoryProfilesPath(root);
             return WriteCategoryProfiles(path) ? path : null;
@@ -244,16 +244,15 @@ public sealed class PersonaAgentFileSync
         // Проектная персона → только её проект
         if (persona.Scope == PersonaScope.Project && persona.ProjectId is not null)
         {
-            var project = _projects.GetById(persona.ProjectId);
-            if (project?.RootPath is not null)
-                yield return Path.Combine(project.RootPath, ".claude", "agents", persona.Handle + ".md");
+            if (ServerRootOf(_projects.GetById(persona.ProjectId)) is { } projectRoot)
+                yield return Path.Combine(projectRoot, ".claude", "agents", persona.Handle + ".md");
             yield break;
         }
 
         // Глобальная персона → все проекты владельца
         foreach (var p in _projects.GetByOwner(ownerId))
-            if (p.RootPath is not null)
-                yield return Path.Combine(p.RootPath, ".claude", "agents", persona.Handle + ".md");
+            if (ServerRootOf(p) is { } projectRoot)
+                yield return Path.Combine(projectRoot, ".claude", "agents", persona.Handle + ".md");
 
         // Чат вне проекта: {домашняя папка}/Chats/.claude/agents/{handle}.md
         // CLI использует эту папку как cwd для чатов вне проекта, поэтому agent() находит их.
@@ -271,12 +270,17 @@ public sealed class PersonaAgentFileSync
     private IEnumerable<string> CategoryProfileRoots(string ownerId)
     {
         foreach (var p in _projects.GetByOwner(ownerId))
-            if (p.RootPath is not null)
-                yield return p.RootPath;
+            if (ServerRootOf(p) is { } projectRoot)
+                yield return projectRoot;
         if (ChatRoot(ownerId) is { } chatRoot)
             yield return chatRoot;
         yield return OwnerDir(ownerId, SharedDirKey);
     }
+
+    // Папка проекта на диске сервера; у локального проекта — null: .claude/agents живут на
+    // устройстве, запись по пути чужой машины на сервере — мусор или чужая папка (ADR-016 §4)
+    private static string? ServerRootOf(Project? project) =>
+        project?.RootPath is not null && ProjectCapabilities.FilesOnServer(project) ? project.RootPath : null;
 
     // Cwd для чатов без проекта: {домашняя папка владельца}/Chats
     // (как SessionManager.ResolveChatRoot — общий резолв в UserHomeResolver)
@@ -307,7 +311,7 @@ public sealed class PersonaAgentFileSync
         // или сменили scope с project на global и надо убрать из чужих проектов)
         foreach (var p in _projects.GetByOwner(persona.OwnerId))
         {
-            if (p.Id == persona.ProjectId) continue;
+            if (p.Id == persona.ProjectId || ServerRootOf(p) is null) continue;
             var path = Path.Combine(p.RootPath ?? "", ".claude", "agents", persona.Handle + ".md");
             if (!keepSet.Contains(path)) TryDelete(path);
         }

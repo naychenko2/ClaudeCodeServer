@@ -115,6 +115,9 @@ public class SubsystemBoundaryTests
         // чтобы сторож видел типы Prompts (OmoPrompts, SubagentPrompts, OmcPersonaRouting)
         // и проверял границы по Prompts.dll.
         _ = typeof(ClaudeHomeServer.Services.Prompts.OmoPrompts).Assembly;
+        // Files — отдельная сборка (ADR-016, задача 4.1): форс-загрузка нужна, чтобы
+        // сторож видел FileService и проверял границы вертикали по Files.dll.
+        _ = typeof(ClaudeHomeServer.Services.Files.FileService).Assembly;
     }
 
     /// <summary>Запись границы одной вертикали: имя (для отчёта), корневой namespace
@@ -675,11 +678,6 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.NotificationService",
                     "ClaudeHomeServer.Services.SessionManager",
                     "ClaudeHomeServer.Services.SessionManager+ReportUpResult",
-                    // === IL-видимость (задача `8beee75e`, волна 1).
-                    // `TeamPlanFileRenderer.cs:112` зовёт `FileService.SafeJoin(...)`
-                    // static-метод из тела метода — точечный допуск по образцу
-                    // `Tasks → FileService` (вертикаль → спинка).
-                    "ClaudeHomeServer.Services.FileService",
                     // `TeamPlanningService.cs:146` материализует `SpecialtyCatalog`
                     // (статический класс из корня) в async-state. По прецеденту Llm
                     // (тоже `SpecialtyCatalog`) — фиксируем шов явно, иначе IL-скан
@@ -787,7 +785,6 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.Skills.SkillInfo",
                     "ClaudeHomeServer.Services.AppSettingsService",
                     "ClaudeHomeServer.Services.ChatHistoryService",
-                    "ClaudeHomeServer.Services.FileService",
                     "ClaudeHomeServer.Services.SessionSummaryService",
                     // `Notes.NotesService` снят (Этап 5, 2026-09-12): прямых ссылок
                     // из Llm на сервис вертикали Notes не осталось (замечание сторожа
@@ -886,8 +883,8 @@ public class SubsystemBoundaryTests
         // 1) Префикс-шов `Services.Llm` — `ICheapTextRunner` для ИИ-помощи (summary/extract/tags/
         //    enhance) и `LocalActionCatalog.DocFormat/Summary/Extract/Tags`. Тот же шов,
         //    что у `Backgrounds`/`Git`/`Deploy`/`Changelog`.
-        // 2) Точечный допуск к корню Services — `FileService`: DocsIndexService читает каталог
-        //    `docs/` и кеширует индекс, DocumentAiService читает файлы по хосту через FilesController.
+        // 2) Файлы проекта — через шов IProjectFileGateway (Core): допуск к FileService
+        //    снят, когда он уехал в вертикаль Files (ADR-016, задача 4.1).
         new object[]
         {
             new VerticalBoundary(
@@ -899,10 +896,7 @@ public class SubsystemBoundaryTests
                         "ClaudeHomeServer.Services.Docs",
                     })
                     .ToArray(),
-                new[]
-                {
-                    "ClaudeHomeServer.Services.FileService",
-                }),
+                Array.Empty<string>()),
         },
         // Turn — шина событий хода + контрибьюторы секций системного промпта.
         // Все внешние допуски точечные (префиксов-швов нет): root Services, Dossiers
@@ -1030,6 +1024,10 @@ public class SubsystemBoundaryTests
         // закрыты швами спины (ISessionDirectory/IFeatureFlagGate/IPersonaResolver/
         // IProjectManager/IUserStore/IDesktopCapabilityTokens), хаб устройств переехал
         // в саму вертикаль, а Protocol.* проходит по сборке Core.
+        // ADR-016 (задача 2.1): Desktop РЕАЛИЗУЕТ Core-шов `Services.Execution.IDeviceExecChannel`
+        // (канал исполнения на устройстве, WebSocket /api/devices/exec), потребитель —
+        // Execution (`RemoteProcessRunner`, задача 2.3). Прямого ребра Execution ⇄ Desktop нет:
+        // шов проходит по сборке Core, отдельного допуска не требует.
         new object[]
         {
             new VerticalBoundary(
@@ -1139,8 +1137,8 @@ public class SubsystemBoundaryTests
         // проектов + фоновый прогрев кеша. Внешние зависимости:
         // 1) Префикс-шов `Services.Llm` — `ICheapTextRunner` для дневной сводки (тот же шов,
         //    что у `Backgrounds`/`Git`/`Deploy`/`Docs`).
-        // 2) Точечный допуск к корню Services — `FileService`: чтение git-вывода и
-        //    `data/changelog/product.json` (ChangelogService).
+        // 2) Лог коммитов — через шов ICommitLogReader (Core): допуск к FileService снят,
+        //    когда он уехал в вертикаль Files (ADR-016, задача 4.1).
         new object[]
         {
             new VerticalBoundary(
@@ -1152,10 +1150,7 @@ public class SubsystemBoundaryTests
                         "ClaudeHomeServer.Services.Changelog",
                     })
                     .ToArray(),
-                new[]
-                {
-                    "ClaudeHomeServer.Services.FileService",
-                }),
+                Array.Empty<string>()),
         },
         // Terminal — вертикаль PTY-терминала (Этап 5, волна C, шаг 2; вертикаль без
         // IAppSubsystem — регистрация одна, прецедент `Services.Watchdog`).
@@ -1354,6 +1349,22 @@ public class SubsystemBoundaryTests
                     {
                         "ClaudeHomeServer.Services.Git",
                     })
+                    .ToArray(),
+                Array.Empty<string>()),
+        },
+        // Files — файловый сервис проекта (ADR-016, задача 4.1): FileService и серверная
+        // реализация шва IProjectFiles. Вертикаль без IAppSubsystem: от FileService
+        // обязательными параметрами зависят десятки входов Main, а обязательный параметр
+        // от отключаемой вертикали — дефект. Git и владелец проекта — через швы Core
+        // (IGitWorkingTree, IProjectManager), поэтому allow-list дефолтный. Под тем же
+        // namespace в Core живут FileEntry и примитив RecursiveDirectoryWatcher.
+        new object[]
+        {
+            new VerticalBoundary(
+                "Files",
+                "ClaudeHomeServer.Services.Files",
+                SharedAllowedPrefixes
+                    .Concat(new[] { "ClaudeHomeServer.Services.Files" })
                     .ToArray(),
                 Array.Empty<string>()),
         },

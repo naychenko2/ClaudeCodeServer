@@ -1,6 +1,7 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.ImageEditor.Versioning;
+using ClaudeHomeServer.Services.Files;
 
 namespace ClaudeHomeServer.Services;
 

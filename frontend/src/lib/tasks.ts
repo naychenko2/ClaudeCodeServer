@@ -520,6 +520,39 @@ export const OUTCOME_LABEL: Record<DefectOutcome, string> = {
   closedWithoutCheck: 'Снято без проверки',
 };
 
+// === Исполнитель ждёт устройство / остановился (ADR-016, вариант А) ===
+
+// Задача ждёт выхода устройства локального проекта в онлайн: запуска ещё не было,
+// поэтому это НЕ «в работе». У закрытой задачи отметка не значит ничего.
+export function isDeviceWaiting(task: Pick<Task, 'deviceWaitSince' | 'status'>): boolean {
+  return !!task.deviceWaitSince && task.status !== 'done';
+}
+
+// Длительность ожидания: «5 мин», «3 ч 20 мин» — потолок 24 ч, дни не нужны
+export function deviceWaitDuration(sinceIso: string, now: number = Date.now()): string {
+  const min = Math.max(0, Math.floor((now - new Date(sinceIso).getTime()) / 60000));
+  if (min < 1) return 'меньше минуты';
+  if (min < 60) return `${min} мин`;
+  const h = Math.floor(min / 60);
+  const rest = min % 60;
+  return rest ? `${h} ч ${rest} мин` : `${h} ч`;
+}
+
+// Причина остановки исполнителя человеческим языком — зеркало ExecutorStopText на бэке.
+// Неизвестная причина (пометку поставил более новый бэк) — общая формулировка, не ключ.
+export function executorStopText(reason: string | null | undefined, deviceName?: string | null): string {
+  switch (reason) {
+    case 'device_wait_expired':
+      return `${deviceName ? `Устройство «${deviceName}»` : 'Устройство проекта'} не вышло на связь за 24 часа — задача не запускалась`;
+    case 'auth_failed':
+      return 'Не удалось авторизоваться у провайдера модели';
+    case 'subagent_stuck':
+      return 'Сабагент раз за разом обрывается посреди работы, добить его не удалось';
+    default:
+      return 'Исполнение прервано';
+  }
+}
+
 // Role == "review" у колонки доски — триггер правила «дефект в ревью без шагов = отказ».
 export const REVIEW_COLUMN_ROLE = 'review';
 

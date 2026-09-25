@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Crown, Folder, GitBranch, Lock, Sparkles, X } from 'lucide-react';
 import type { Project, ProjectGroup, PermissionRule, SystemPromptPart } from '../../../types';
+import { ProjectFeature } from '../../../types';
+import { useProjectFeature } from '../../../lib/projectCapabilities';
 import { api } from '../../../lib/api';
 import { useOnline } from '../../../hooks/useOnline';
 import { C, FONT, FS, R, SP } from '../../../lib/design';
@@ -18,6 +20,7 @@ import { ProjectSyncToggle } from '../../../components/ProjectSyncToggle';
 import { ProjectIconSection } from '../ProjectIconSection';
 import { McpProjectSection } from '../../mcp/McpProjectSection';
 import { DesktopFacetSection } from '../../desktop/DesktopFacetSection';
+import { DeviceSection } from '../../desktop/DeviceSection';
 import { ProjectMapSection } from './ProjectMapSection';
 import { BackgroundSection } from './BackgroundSection';
 import { AccordionSection, type AccordionSummaryTone } from './AccordionSection';
@@ -242,6 +245,9 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
   // условием, чтобы не показывать недоступное действие.
   // Грань десктопа за флагом: без него секции нет — включать нечего, сервер откажет
   const desktopEnabled = useFeature(FLAGS.desktopAgent);
+  // Локальные проекты (ADR-016 §3.4): секция привязки к устройству — за флагом.
+  // Без флага секция не рисуется — ручка PUT /projects/{id}/device закрыта на бэке 404
+  const localProjectsEnabled = useFeature(FLAGS.localProjects);
   // Автоправило архива (флаг chat-auto-archive): закрывает ТОЛЬКО настройку правила
   // и запускаемый ею проход. Ручной архив, режим «Архивные» и сводка карточки
   // работают без тумблера — гейт скрывает лишь блок ArchiveSettings.
@@ -250,6 +256,8 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
   // с фактами скана. review/apply под этим же флагом закрыты на сервере (404),
   // так что эндпоинты не провисают при выключенной фиче
   const mapHygieneEnabled = useFeature(FLAGS.projectMapHygiene);
+  const gitAvail = useProjectFeature(project, ProjectFeature.Git);
+  const mapAvail = useProjectFeature(project, ProjectFeature.MapHygiene);
   const me = useMe();
   const isOwner = !project.ownerId || project.ownerId === me.userId;
   const [view, setView] = useState<View>('main');
@@ -573,8 +581,15 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
       {showLeadSection && <ProjectLeadSection project={project} onClose={onClose} />}
       <McpProjectSection project={project} onUpdated={onProjectUpdated} />
       {desktopEnabled && <DesktopFacetSection project={project} onUpdated={onProjectUpdated} />}
-      <GitHistorySection project={project} />
-      {mapHygieneEnabled && <ProjectMapSection project={project} />}
+      {/* Секция привязки к устройству (ADR-016 §3.4) — за флагом local-projects.
+          Внутри показ/скрытие деталей идёт через поле project.device (а не deviceId
+          руками), иначе сторож G10 краснеет на каждом обращении */}
+      {localProjectsEnabled && <DeviceSection project={project} onUpdated={onProjectUpdated} />}
+      {/* Секции по матрице возможностей (ADR-016 §4): у локального проекта с офлайн-
+          устройством git недоступен, а карта проекта — серверный контент, которого у
+          локального проекта нет вовсе. Пустая секция с ошибкой загрузки — хуже, чем никакой */}
+      {gitAvail && <GitHistorySection project={project} />}
+      {mapHygieneEnabled && mapAvail && <ProjectMapSection project={project} />}
       {isOwner && (
         <BackgroundSection
           project={project}

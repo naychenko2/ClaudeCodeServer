@@ -5,6 +5,7 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Backgrounds;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Controllers;
 
@@ -12,6 +13,7 @@ namespace ClaudeHomeServer.Controllers;
 /// Фон рабочего пространства проекта (ADR-008 §7): генерация, возврат к стандартному
 /// и отдача собранного сервером тайла. Генерация и сброс — только владельцу проекта.
 /// </summary>
+[ProjectCapability(ProjectCapabilityArea.Platform, ProjectKey = "id")]
 [ApiController]
 [Authorize]
 [Route("api/projects/{id}/background")]

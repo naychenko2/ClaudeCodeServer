@@ -6,10 +6,13 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Team;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Files;
 
 namespace ClaudeHomeServer.Controllers;
 
 // Чаты вне проекта: сессии Claude без привязки к проекту, рабочая папка — {домашняя папка}/Chats (UserHomeResolver)
+[ProjectCapability(ProjectCapabilityArea.Platform)]
 [ApiController]
 [Authorize]
 [Route("api/chats")]
@@ -616,21 +619,20 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     [RequestSizeLimit(100 * 1024 * 1024)] // 100 МБ
     public async Task<IActionResult> Upload(string id, IFormFile? file = null)
     {
-        if (sessions.GetOwned(id, UserId) is null) return NotFound();
+        if (sessions.GetOwned(id, UserId) is not { } chat) return NotFound();
+        // Вложения локального проекта принимает агент устройства, не сервер (ADR-016 §4)
+        if (chat.ProjectId is { } pid && projects.GetById(pid) is { } project
+            && ProjectCapabilityGuard.Refusal(project, ProjectCapabilityArea.FileBound) is { } refusal)
+            return ProjectCapabilityGuard.Denied(refusal);
         if (file == null || file.Length == 0)
             return BadRequest(new { error = "Файл не выбран или пустой" });
 
         var root = sessions.GetChatRoot(id, UserId);
         if (root is null) return NotFound();
 
-        // Path.GetFileName защищает от path-сегментов в имени файла (../evil)
-        var safeName = Path.GetFileName(file.FileName);
-        if (string.IsNullOrEmpty(safeName))
+        // Правило пути одно с агентом устройства: {AttachmentsDir}/{guid}/{имя файла}
+        if (AttachmentsGitExclude.AttachmentPath(file.FileName) is not { } rel)
             return BadRequest(new { error = "Некорректное имя файла" });
-
-        // Уникальность — через подпапку с GUID, чтобы сохранить оригинальное имя файла
-        // (на плашке в чате показывается basename = оригинальное имя, и Claude видит его же)
-        var rel = $"{FileService.AttachmentsDir}/{Guid.NewGuid():N}/{safeName}";
 
         // Вложения не должны светиться в git-статусе проекта и уезжать в историю по `git add -A`.
         // Лениво, до записи файла: у проекта со своим .gitignore дефолтный игнор не создавался.

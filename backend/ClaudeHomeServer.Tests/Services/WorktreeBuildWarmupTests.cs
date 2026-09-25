@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Execution;
 using FluentAssertions;
@@ -41,13 +42,18 @@ public class WorktreeBuildWarmupTests : IDisposable
         public int EstimateCommandLineLength(ProcessSpec spec) => 0;
     }
 
+    private static readonly Project P1 = new() { Id = "p-1", OwnerId = "owner-1" };
+    private static readonly Project P = new() { Id = "p", OwnerId = "o" };
+
     private sealed class Factory(RecordingLauncher launcher) : ILauncherFactory
     {
-        public List<string?> Owners { get; } = [];
+        public List<string?> Projects { get; } = [];
         public IProcessLauncher Local => launcher;
-        public IProcessLauncher ForOwner(string? ownerId)
+        public IProcessLauncher ForOwner(string? ownerId) =>
+            throw new InvalidOperationException("прогрев дерева проекта идёт в среде проекта, не владельца");
+        public IProcessLauncher ForProject(Project project)
         {
-            Owners.Add(ownerId);
+            Projects.Add(project.Id);
             return launcher;
         }
     }
@@ -82,17 +88,17 @@ public class WorktreeBuildWarmupTests : IDisposable
         var (warmup, launcher, factory) = Create();
         var tree = Tree("wt");
 
-        warmup.TryStart("owner-1", tree).Should().BeTrue();
+        warmup.TryStart(P1, tree).Should().BeTrue();
         // Повторная привязка того же дерева (в том числе путём с хвостовым разделителем) — не запускать
-        warmup.TryStart("owner-1", tree).Should().BeFalse();
-        warmup.TryStart("owner-1", tree + Path.DirectorySeparatorChar).Should().BeFalse();
+        warmup.TryStart(P1, tree).Should().BeFalse();
+        warmup.TryStart(P1, tree + Path.DirectorySeparatorChar).Should().BeFalse();
 
         var spec = launcher.Started.Should().ContainSingle().Subject;
         spec.FileName.Should().Be("dotnet");
         spec.Args.Should().Equal("build", "backend/ClaudeHomeServer.Tests", "-m:4", "-v:q", "-nologo");
         spec.WorkingDirectory.Should().Be(Path.GetFullPath(tree));
         spec.RedirectStdin.Should().BeFalse();
-        factory.Owners.Should().Equal(["owner-1"], "прогрев идёт в среде владельца — та же изоляция, что у ходов");
+        factory.Projects.Should().Equal(["p-1"], "прогрев идёт в среде проекта — та же изоляция, что у ходов");
     }
 
     [Fact]
@@ -100,8 +106,8 @@ public class WorktreeBuildWarmupTests : IDisposable
     {
         var (warmup, launcher, _) = Create();
 
-        warmup.TryStart("o", Tree("a")).Should().BeTrue();
-        warmup.TryStart("o", Tree("b")).Should().BeTrue();
+        warmup.TryStart(P, Tree("a")).Should().BeTrue();
+        warmup.TryStart(P, Tree("b")).Should().BeTrue();
 
         launcher.Started.Select(s => s.WorkingDirectory).Should().HaveCount(2).And.OnlyHaveUniqueItems();
     }
@@ -111,7 +117,7 @@ public class WorktreeBuildWarmupTests : IDisposable
     {
         var (warmup, launcher, _) = Create();
 
-        warmup.TryStart("o", Tree("чужое", withTests: false)).Should().BeFalse();
+        warmup.TryStart(P, Tree("чужое", withTests: false)).Should().BeFalse();
 
         launcher.Started.Should().BeEmpty();
     }
@@ -123,7 +129,7 @@ public class WorktreeBuildWarmupTests : IDisposable
         var tree = Tree("собранное");
         Directory.CreateDirectory(Path.Combine(tree, "backend", "ClaudeHomeServer.Tests", "obj"));
 
-        warmup.TryStart("o", tree).Should().BeFalse("прогрев дрался бы с идущей сборкой агента за obj/bin");
+        warmup.TryStart(P, tree).Should().BeFalse("прогрев дрался бы с идущей сборкой агента за obj/bin");
 
         launcher.Started.Should().BeEmpty();
     }
@@ -133,7 +139,7 @@ public class WorktreeBuildWarmupTests : IDisposable
     {
         var (warmup, launcher, _) = Create(enabled: false);
 
-        warmup.TryStart("o", Tree("wt")).Should().BeFalse();
+        warmup.TryStart(P, Tree("wt")).Should().BeFalse();
 
         launcher.Started.Should().BeEmpty();
     }
@@ -146,10 +152,10 @@ public class WorktreeBuildWarmupTests : IDisposable
         var warmup = new WorktreeBuildWarmup(
             factory, new ConfigurationBuilder().Build(), NullLogger.Instance, gate);
 
-        var act = () => warmup.TryStart("o", Tree("wt"));
+        var act = () => warmup.TryStart(P, Tree("wt"));
 
         act.Should().NotThrow();
-        warmup.TryStart("o", Tree("wt2")).Should().BeFalse();
+        warmup.TryStart(P, Tree("wt2")).Should().BeFalse();
         gate.Available.Should().Be(1, "упавший старт возвращает слот, иначе потолок утекает");
     }
 
@@ -162,7 +168,7 @@ public class WorktreeBuildWarmupTests : IDisposable
         var tree = Tree("в-очереди");
 
         // Заведение дерева идёт в ходе чата/задачи — оно обязано вернуться немедленно
-        warmup.TryStart("o", tree).Should().BeTrue("прогрев принят, хоть и ждёт слота");
+        warmup.TryStart(P, tree).Should().BeTrue("прогрев принят, хоть и ждёт слота");
         launcher.Started.Should().BeEmpty("слот занят — сборка ещё не стартовала");
 
         busy.Dispose();
@@ -185,7 +191,7 @@ public class WorktreeBuildWarmupTests : IDisposable
         var busy = gate.TryAcquire(WorktreeBuildWarmup.BuildSpec("/чужое/дерево"))!;
         var tree = Tree("перехваченное");
 
-        warmup.TryStart("o", tree).Should().BeTrue();
+        warmup.TryStart(P, tree).Should().BeTrue();
         // Агент начал собирать это дерево сам, пока прогрев стоял в очереди
         Directory.CreateDirectory(Path.Combine(tree, "backend", "ClaudeHomeServer.Tests", "obj"));
         busy.Dispose();
@@ -239,5 +245,6 @@ public class WorktreeBuildWarmupTests : IDisposable
     {
         public IProcessLauncher Local => throw new InvalidOperationException("нет среды");
         public IProcessLauncher ForOwner(string? ownerId) => throw new InvalidOperationException("нет среды");
+        public IProcessLauncher ForProject(Project project) => throw new InvalidOperationException("нет среды");
     }
 }

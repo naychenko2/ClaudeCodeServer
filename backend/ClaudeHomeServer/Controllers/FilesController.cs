@@ -1,14 +1,19 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Filters;
+using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Docs;
 using ClaudeHomeServer.Services.Notes;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Files;
+using FileMutationKind = ClaudeHomeServer.Services.Composition.FileMutationKind;
 
 namespace ClaudeHomeServer.Controllers;
 
+[ProjectCapability(ProjectCapabilityArea.FileBound)]
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/files")]
@@ -60,6 +65,8 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (DirectoryNotFoundException) { return NotFound(); }
+        // Путь вне корня проекта — отказ, как у соседних маршрутов, а не 500
+        catch (UnauthorizedAccessException) { return StatusCode(403); }
     }
 
     [HttpGet("tree")]
@@ -72,6 +79,8 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (DirectoryNotFoundException) { return NotFound(); }
+        // Путь вне корня проекта — отказ, как у соседних маршрутов, а не 500
+        catch (UnauthorizedAccessException) { return StatusCode(403); }
     }
 
     [HttpGet("search")]
@@ -89,101 +98,9 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
             var root = GetRoot(projectId);
             if (IsDirectoryPath(root, path)) return NotFound();
 
-            // Просматриваемые документы (pdf/docx/xlsx) — отдаём base64 для клиентского рендеринга
-            var doc = files.GetDocumentInfo(path);
-            if (doc is { } d)
-            {
-                var size = files.GetFileSize(root, path);
-                // Слишком большой документ — только метаданные + скачивание, без base64
-                var docBase64 = size > FileService.MaxDocumentBytes ? null : files.GetFileBase64(root, path);
-                return Ok(new
-                {
-                    content = (string?)null,
-                    isBinary = true,
-                    isImage = false,
-                    isDocument = true,
-                    docKind = d.Kind,
-                    mimeType = d.Mime,
-                    base64 = docBase64,
-                    fileSize = size
-                });
-            }
-
-            if (files.IsBinaryFile(root, path))
-            {
-                if (files.IsImageFile(root, path))
-                {
-                    var ext = System.IO.Path.GetExtension(path).TrimStart('.').ToLower();
-                    var mime = ext == "svg" ? "image/svg+xml" : $"image/{ext}";
-                    return Ok(new
-                    {
-                        content = (string?)null,
-                        isBinary = true,
-                        isImage = true,
-                        mimeType = mime,
-                        base64 = files.GetFileBase64(root, path)
-                    });
-                }
-                if (FileService.IsVideoFile(path))
-                {
-                    var ext = System.IO.Path.GetExtension(path).TrimStart('.').ToLower();
-                    var mime = ext switch
-                    {
-                        "mp4" => "video/mp4",
-                        "webm" => "video/webm",
-                        "mov" => "video/quicktime",
-                        "avi" => "video/x-msvideo",
-                        "mkv" => "video/x-matroska",
-                        _ => "video/mp4"
-                    };
-                    var info = new System.IO.FileInfo(System.IO.Path.Combine(root, path));
-                    return Ok(new
-                    {
-                        content = (string?)null,
-                        isBinary = true,
-                        isImage = false,
-                        isVideo = true,
-                        mimeType = mime,
-                        fileSize = info.Length
-                    });
-                }
-                if (FileService.IsAudioFile(path))
-                {
-                    var ext = System.IO.Path.GetExtension(path).TrimStart('.').ToLower();
-                    var mime = ext switch
-                    {
-                        "mp3" => "audio/mpeg",
-                        "wav" => "audio/wav",
-                        "ogg" => "audio/ogg",
-                        "flac" => "audio/flac",
-                        "aac" => "audio/aac",
-                        "m4a" => "audio/mp4",
-                        "opus" => "audio/opus",
-                        "weba" => "audio/webm",
-                        _ => "audio/mpeg"
-                    };
-                    var info = new System.IO.FileInfo(System.IO.Path.Combine(root, path));
-                    return Ok(new
-                    {
-                        content = (string?)null,
-                        isBinary = true,
-                        isImage = false,
-                        isAudio = true,
-                        mimeType = mime,
-                        fileSize = info.Length
-                    });
-                }
-                var fileInfo = new System.IO.FileInfo(System.IO.Path.Combine(root, path));
-                return Ok(new
-                {
-                    content = (string?)null,
-                    isBinary = true,
-                    isImage = false,
-                    mimeType = "application/octet-stream",
-                    fileSize = fileInfo.Length
-                });
-            }
-            return Ok(new { content = files.ReadFile(root, path), isBinary = false, isImage = false });
+            // Вид файла и способ отдачи — общий с агентом устройства (вертикаль Files):
+            // документ base64 для клиентского рендера, картинка, видео/аудио потоком, текст.
+            return Ok(FileContentReader.Read(files, root, path));
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (FileNotFoundException) { return NotFound(); }
@@ -334,8 +251,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     {
         try
         {
-            var diff = await files.GetDiffAsync(GetRoot(projectId), path);
-            return Ok(new { diff });
+            return Ok(new DiffResponse(await files.GetDiffAsync(GetRoot(projectId), path)));
         }
         catch (KeyNotFoundException) { return NotFound(); }
     }
@@ -461,22 +377,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
             var root = GetRoot(projectId);
             var safePath = FileService.SafeJoinPublic(root, path);
             if (!System.IO.File.Exists(safePath)) return NotFound();
-            var ext = System.IO.Path.GetExtension(path).TrimStart('.').ToLower();
-            var mime = ext switch
-            {
-                "mp4" => "video/mp4",
-                "webm" => "video/webm",
-                "mov" => "video/quicktime",
-                "avi" => "video/x-msvideo",
-                "mkv" => "video/x-matroska",
-                // Картинки: эндпоинт отдаёт их для <img src> в markdown (README с
-                // относительными путями). Без типа браузер угадывает по содержимому,
-                // а SVG в таком режиме не рендерится вовсе
-                "png" or "gif" or "bmp" or "webp" or "avif" => $"image/{ext}",
-                "jpg" or "jpeg" => "image/jpeg",
-                "svg" => "image/svg+xml",
-                _ => "application/octet-stream"
-            };
+            var mime = FileContentReader.StreamMime(path);
             return PhysicalFile(safePath, mime, enableRangeProcessing: true);
         }
         catch (KeyNotFoundException) { return NotFound(); }
@@ -823,12 +724,6 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
 }
 
 public record ChangedByRequest(List<string>? Paths);
-public record SaveContentRequest(string Content);
-public record PathRequest(string Path);
-// Создание файла: Content == null → пустой файл (старый контракт { path } работает);
-// существующий путь → 409, без тихой перезаписи
-public record CreateFileRequest(string Path, string? Content = null);
-public record RenameRequest(string OldPath, string NewPath);
 public record SaveFromUrlRequest(string Url, string Path);
 public record ToMarkdownRequest(string Path, string? TargetDir = null, bool Enhance = false);
 public record OOCallbackPayload(int Status, string? Url, string? Key);

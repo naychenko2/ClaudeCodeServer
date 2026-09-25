@@ -36,6 +36,7 @@
 [mcp-servers.md](architecture/mcp-servers.md),
 [knowledge.md](architecture/knowledge.md) (заметки и Dify),
 [file-watching.md](architecture/file-watching.md) (наблюдение за деревом файлов),
+[device-agent-local-api.md](architecture/device-agent-local-api.md) (localhost-API агента устройства и модель угроз),
 [personas.md](architecture/personas.md),
 [onboarding-intro.md](architecture/onboarding-intro.md) (знакомство: личное и проектное v2),
 [team-implement-mode.md](architecture/team-implement-mode.md) (режим чата-штаба),
@@ -114,6 +115,8 @@
 пилот Video, правило зависимостей между вертикалями),
 [ADR-015](adr/ADR-015-cli-profile-sync-zones.md) (зоны профилей CLI и правила синхронизации:
 кто источник истины для каждой зоны, удаление только по манифесту доставки),
+[ADR-016](adr/ADR-016-local-projects.md) (локальные проекты: харнес на устройстве, секреты
+только на сервере, набор функций по матрице возможностей проекта);
 [ADR-017](adr/ADR-017-image-editor.md) (редактор картинок в проекте: контракт правки
 `IImageEditor`, котировка вместо тихого фолбэка, сохранение новым файлом, персонажи — черновик);
 [model-resolution-and-fallback.md](adr/model-resolution-and-fallback.md) — приложение к ADR-007
@@ -147,6 +150,11 @@ CLI-провайдер: проверенная конфигурация стен
 [team-di-migration-2026-09.md](research/team-di-migration-2026-09.md)
 (что реально снимается при переводе штаба на DI: 17 обёрток против 10 фасадных,
 почему Team не выносится отдельным `.csproj`),
+[local-projects-spike-2026-09.md](research/local-projects-spike-2026-09.md) (спайк
+ADR-016: CLI на устройстве через LLM-шлюз и сайдкар без секретов на клиенте, условия
+Anthropic для OAuth подписки через прокси),
+[local-projects-plan-2026-09.md](research/local-projects-plan-2026-09.md) (план этапов 1–5
+ADR-016: задачи с владением файлами, сторожа, развилка по фоновой автоматике офлайн),
 [chat-branching-2026-09.md](research/chat-branching-2026-09.md) (архитектурный разрез
 «Ветвления чата»: ветка как обычный чат с префиксом транскрипта, почему обход по
 `parentUuid` ломает контекст и почему граница ищется текстовым якорем — с замерами

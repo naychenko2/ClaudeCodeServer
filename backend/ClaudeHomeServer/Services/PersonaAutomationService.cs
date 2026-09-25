@@ -14,7 +14,7 @@ namespace ClaudeHomeServer.Services;
 // большой промпт с контекстом срабатывания (## секции + объекты-триггеры; для файлов — пути и
 // содержимое) запускает ход персоны в закреплённом чате правила (acceptEdits). Weight=Work —
 // действовать/править; Gate — оценить и ответить. Троттлинг: тихие часы + MinInterval + потолок N/час.
-public sealed class PersonaAutomationService : IDisposable
+public sealed class PersonaAutomationService : IDisposable, Execution.IDeviceOnlineHandler
 {
     private readonly PersonaManager _personas;
     private readonly SessionManager _sessions;
@@ -29,6 +29,9 @@ public sealed class PersonaAutomationService : IDisposable
     private readonly IConfiguration _config;
     private readonly Llm.ICheapTextRunner _cheap;
     private readonly ILogger<PersonaAutomationService> _log;
+    // Готовность устройства проекта правила (ADR-016, вариант А плана §5): офлайн — срабатывание
+    // пропускается с отметкой, после онлайна догоняется одно последнее. null — проверки нет.
+    private readonly Execution.IProjectDeviceGate? _deviceGate;
 
     private int DefaultMinIntervalMinutes => _config.GetValue("Persona:AutomationMinIntervalMinutes", 5);
     private int HourlyCap => _config.GetValue("Persona:AutomationHourlyCap", 8);
@@ -49,8 +52,10 @@ public sealed class PersonaAutomationService : IDisposable
         NotificationService notif,
         AutomationStateStore state, MentionTriggerSource mentions, ProjectManager projects,
         UserStore users, AutomationRootResolver roots, IEnumerable<ITriggerSource> sources,
-        IConfiguration config, Llm.ICheapTextRunner cheap, ILogger<PersonaAutomationService> log)
+        IConfiguration config, Llm.ICheapTextRunner cheap, ILogger<PersonaAutomationService> log,
+        Execution.IProjectDeviceGate? deviceGate = null)
     {
+        _deviceGate = deviceGate;
         _personas = personas; _sessions = sessions; _push = push; _notif = notif;
         _state = state; _mentions = mentions; _projects = projects; _users = users; _roots = roots;
         _config = config; _cheap = cheap; _log = log;
@@ -159,6 +164,25 @@ public sealed class PersonaAutomationService : IDisposable
             return;
         }
 
+        // 0-0. Устройство локального проекта правила офлайн: периодика не копится — отметка
+        // пропуска и одно последнее событие на догон после выхода устройства в онлайн. До
+        // троттлинга: пропуск не тратит ни кулдаун, ни часовой потолок.
+        if (RuleDeviceGate(persona) is { } deviceGate)
+        {
+            if (deviceGate.MustWait)
+            {
+                lock (state)
+                {
+                    state.DeviceSkippedAt = now;
+                    state.DeviceSkippedSummary = ev.Summary;
+                }
+                MarkResult(state, $"skipped: {deviceGate.Reason ?? "устройство проекта не в сети"}");
+            }
+            else
+                MarkResult(state, $"error: {deviceGate.Reason}");
+            return;
+        }
+
         // 0-1. Троттлинг (fail-fast до LLM) + mark-fired ДО запуска. Проверка и установка
         // LastFiredAt — атомарно под локом state: Mention (push) и тик конкурируют за одно
         // правило, без лока два потока проходили throttle-проверку и дублировали реакцию.
@@ -247,6 +271,60 @@ public sealed class PersonaAutomationService : IDisposable
         state.SessionId = chat.Id;
         _state.Save();
         return chat.Id;
+    }
+
+    // ─── Устройство локального проекта (ADR-016, вариант А плана §5) ─────────────
+
+    // Не готово ли устройство проекта правила. Чат правила проектный только у проектной
+    // персоны (EnsureRuleChatAsync), глобальная работает вне проектов — там устройства нет.
+    private ProjectBackgroundGate? RuleDeviceGate(Persona persona)
+    {
+        if (_deviceGate is null || persona.Scope != PersonaScope.Project || persona.ProjectId is not { } pid) return null;
+        if (_projects.GetById(pid) is not { } project) return null;
+        var gate = _deviceGate.Check(project);
+        return gate.IsReady ? null : gate;
+    }
+
+    public Task OnDeviceOnlineAsync(string ownerId, string deviceId, CancellationToken ct = default) =>
+        CatchUpDeviceSkippedAsync(ownerId, deviceId, ct);
+
+    public async Task SweepAsync(DateTime nowUtc, CancellationToken ct = default)
+    {
+        foreach (var user in _users.GetAll())
+            await CatchUpDeviceSkippedAsync(user.Id, deviceId: null, ct);
+    }
+
+    // Догон пропущенного: ОДНО последнее событие на правило, отметка снимается до запуска —
+    // повторное онлайн-событие или тик того же хода не дублируют
+    private async Task CatchUpDeviceSkippedAsync(string ownerId, string? deviceId, CancellationToken ct)
+    {
+        foreach (var persona in _personas.GetByOwner(ownerId))
+        {
+            foreach (var rule in persona.AutomationRules ?? [])
+            {
+                var state = _state.GetRule(persona.Id, rule.Id);
+                if (state.DeviceSkippedAt is not { } skippedAt) continue;
+                if (persona.ProjectId is null || _projects.GetById(persona.ProjectId) is not { } project
+                    || _deviceGate?.Check(project) is not { IsReady: true } gate)
+                    continue;
+                if (deviceId is not null && gate.DeviceId != deviceId) continue;
+
+                var summary = state.DeviceSkippedSummary;
+                lock (state)
+                {
+                    state.DeviceSkippedAt = null;
+                    state.DeviceSkippedSummary = null;
+                }
+                _state.Save();
+                if (!rule.Enabled) continue;
+
+                _log.LogInformation("Правило {RuleId} персоны {PersonaId}: догоняю срабатывание, пропущенное офлайн", rule.Id, persona.Id);
+                var ev = new TriggerEvent(rule.Id, rule.Trigger.Type,
+                    $"Срабатывание пропущено, пока устройство проекта было не в сети (последнее — {skippedAt:yyyy-MM-dd HH:mm} UTC): {summary}",
+                    null);
+                await FireAsync(persona, rule, ResolveTz(ownerId), ev, ct);
+            }
+        }
     }
 
     // Ручной прогон правила (UX «Проверить» в UI): синтетическое событие, байпас троттлинга.

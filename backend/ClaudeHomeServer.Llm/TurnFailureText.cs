@@ -54,6 +54,21 @@ public static class TurnFailureText
         + "Дождитесь сброса лимита или продолжите чат на другом провайдере. "
         + "Если разговор короткий, его можно продолжить в стандартном окне 200 тысяч токенов — кнопка ниже.";
 
+    // Локальный проект (ADR-016 §2): через шлюз ходят только подписки на `claude setup-token`,
+    // а живого такого аккаунта в пуле нет. На API-ключ ход сам не переходит — это решает владелец.
+    public const string LocalProjectsNeedSetupToken =
+        "Для локальных проектов нужна подписка на `claude setup-token`: живого аккаунта с таким токеном сейчас нет.\n\n"
+        + "Подключите подписку через `claude setup-token` в настройках пула или выберите модель стороннего провайдера.";
+
+    // Тумблер LlmGateway:AllowSubscriptions выключен: подписки через шлюз не ходят вовсе.
+    public const string GatewaySubscriptionsDisabled =
+        "Подписки Claude через шлюз локальных проектов выключены администратором.\n\n"
+        + "Выберите модель стороннего провайдера или попросите включить подписки.";
+
+    // Модель хода резолвится в сторонний провайдер, но у него нет ключа или адреса.
+    public const string GatewayProviderNotConfigured =
+        "Провайдер выбранной модели не настроен на сервере, ход через шлюз не пройдёт.";
+
     // Перерасход командной строки: ClaudeSession не смог стартовать процесс CLI
     // (Win32 ERROR_FILENAME_EXCED_RANGE, код 206) — итоговая длина аргументов
     // (--append-system-prompt + --resume + --mcp-config + путь к exe)
@@ -92,13 +107,38 @@ public static class TurnFailureText
     public static string ForException(Exception? ex)
     {
         foreach (var inner in Unwrap(ex))
+        {
             if (inner is IOException io && LooksLikePipeClosing(io))
                 return PipeClosing;
+            // Отказ устройства локального проекта («… не в сети — сообщение не взято в работу.») — текст уже
+            // человеческий и единственный, по которому понятно, что включить
+            if (inner is Execution.DeviceExecRefusedException refused)
+                return refused.Message;
+        }
         return Generic;
     }
 
     // Текст для ленты по сырому тексту ошибки CLI. null — формулировки нет: вызывающий
     // оставляет сырой текст видимым (лучше непонятный, но настоящий текст, чем выдуманный).
+    // CLI не нашёл разговор для --resume там, где запущен: транскрипт убрала плановая уборка
+    // CLI или он живёт на другой машине (у локального проекта — только на его устройстве,
+    // ADR-016). Сервер --resume не снимает и чат с чистого листа молча не начинает: решение
+    // о потере контекста — за человеком. Смена модели не лечит — resume тот же.
+    public const string ResumeTranscriptMissing =
+        "Память этого разговора не найдена там, где запускается модель — ход не выполнен.\n\n"
+        + "Транскрипт CLI удалён или остался на другой машине (у локального проекта он живёт только на его устройстве). "
+        + "Продолжить с прежним контекстом нельзя — начните новый чат.";
+
+    // Маркер отказа CLI в result.errors: «No conversation found with session ID: <id>»
+    private const string NoConversationMarker = "No conversation found with session ID";
+
+    // Человеческий текст по списку result.errors CLI (subtype error_during_execution): null —
+    // среди ошибок нет распознанной, показывать как есть
+    public static string? ForResultErrors(IEnumerable<string> errors) =>
+        errors.Any(e => e.Contains(NoConversationMarker, StringComparison.OrdinalIgnoreCase))
+            ? ResumeTranscriptMissing
+            : null;
+
     public static string? ForCliError(string? raw)
     {
         if (string.IsNullOrWhiteSpace(raw)) return null;

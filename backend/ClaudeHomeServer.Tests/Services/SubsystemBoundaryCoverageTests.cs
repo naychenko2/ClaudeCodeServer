@@ -66,6 +66,9 @@ public class SubsystemBoundaryCoverageTests
         // Prompts — отдельная сборка (Этап 5, вынос Prompts): без typeof набор
         // сборок её не содержит, и проверка полноты Boundaries по ней ничего не проверяет.
         _ = typeof(ClaudeHomeServer.Services.Prompts.OmoPrompts).Assembly;
+        // Files — отдельная сборка (ADR-016, задача 4.1): форс-загрузка нужна, чтобы
+        // сторож видел FileService и проверял границы вертикали по Files.dll.
+        _ = typeof(ClaudeHomeServer.Services.Files.FileService).Assembly;
     }
 
     [Fact]
@@ -231,10 +234,10 @@ public class SubsystemBoundaryCoverageTests
             // инфраструктура загрузки по манифесту секции "DynamicModules", не вертикаль-
             // подсистема (IAppSubsystem не имеет). Живёт в Main, потребляет его Program.cs.
             "ClaudeHomeServer.Services.DynamicModules",
-            // Спина: наблюдение за деревом каталогов (RecursiveDirectoryWatcher) — примитив
-            // ОС без владения вертикалью, живёт в Core. Его зовёт TurnFileWatcher (Llm),
-            // следом переедет FileWatcherService (Main) — подсистемой он не является.
-            "ClaudeHomeServer.Services.Files",
+            // `ClaudeHomeServer.Services.Files` здесь больше нет: под ним живёт вертикаль Files
+            // (ADR-016, задача 4.1) со своей строкой в Boundaries. Core-типы того же namespace
+            // (RecursiveDirectoryWatcher, FileEntry) проверяются её сторожем, а другим
+            // вертикалям доступны как спина по сборке Core.
             // Спина: общий язык редактора картинок (ADR-017) — контракт IImageEditor, DTO,
             // каталог и швы в Core. Контроллер в Main, драйверы в вертикали Images;
             // своего поведения-вертикали у неймспейса нет.
@@ -277,28 +280,6 @@ public class SubsystemBoundaryCoverageTests
             .Where(ns => !IsCovered(ns) && !IsExcluded(ns))
             .OrderBy(ns => ns, StringComparer.Ordinal)
             .ToList();
-
-        // Исключение `Services.Files` снято с namespace во ВСЕХ сборках, а оправдано оно
-        // ровно тем, что это Core-примитив ОС. Заведи кто-нибудь вертикаль под тем же именем
-        // в Main или в отдельном .csproj — она молча вышла бы из-под сторожа. Поэтому здесь
-        // утверждается место жительства: типы `Services.Files.*` есть только в Core.
-        var filesHomes = allTypes
-            .Where(t => t.Namespace is { } ns
-                        && (ns == "ClaudeHomeServer.Services.Files"
-                            || ns.StartsWith("ClaudeHomeServer.Services.Files.", StringComparison.Ordinal)))
-            .Select(t => t.Assembly.GetName().Name)
-            .Distinct(StringComparer.Ordinal)
-            .ToList();
-
-        filesHomes.Should().NotBeEmpty(
-            "примитив наблюдения за деревом (RecursiveDirectoryWatcher) живёт под " +
-            "ClaudeHomeServer.Services.Files — пустой набор означает, что сторож смотрит мимо");
-        filesHomes.Should().Equal(["ClaudeHomeServer.Core"],
-            "исключение `ClaudeHomeServer.Services.Files` действует на все сборки сразу и " +
-            "оправдано лишь тем, что это примитив ОС в Core. Типы под этим namespace " +
-            "появились ещё где-то — либо переноси их в Core, либо заводи вертикали строку " +
-            "в SubsystemBoundaryTests.Boundaries: иначе она выпала из-под границ молча. " +
-            "Сейчас: " + string.Join(", ", filesHomes));
 
         uncovered.Should().BeEmpty(
             "каждый namespace ClaudeHomeServer.Services.* с типами обязан иметь строку в " +

@@ -33,6 +33,9 @@ export const FLAGS = {
   // и модалка с фактами сканера (мёртвые ссылки, длинные секции, вложенные карты).
   // Тумблер скрывает и секцию, и модалку; review/apply под ним закрыты на сервере 404.
   projectMapHygiene: 'project-map-hygiene',
+  // Редактор картинок в проекте (ADR-016): вход «Редактировать» / «Нарисовать картинку»
+  // и сам экран. Серверные ручки image-editor/* под этим же флагом отвечают 404.
+  imageEditor: 'image-editor',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

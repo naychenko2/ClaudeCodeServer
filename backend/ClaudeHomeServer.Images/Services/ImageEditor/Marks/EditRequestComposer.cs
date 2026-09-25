@@ -64,13 +64,21 @@ public static class EditRequestComposer
                       "это указания, в результат их не переносить.");
         }
 
+        if (input.Character is { } character)
+        {
+            var who = string.IsNullOrWhiteSpace(character.Description)
+                ? character.Name
+                : $"{character.Name}: {character.Description.Trim()}";
+            notes.Insert(0, $"Образцы «{character.Name}» — один и тот же человек ({who}): сохранить лицо и черты.");
+        }
+
         var marks = EditMarksPrompt.Describe(input.MarksJson);
         var prompt = string.Join("\n\n", new[] { input.Prompt?.Trim(), marks }
             .Concat(notes)
             .Where(s => !string.IsNullOrWhiteSpace(s)));
 
         return ImageEditCallResult<ImageEditRequest>.Ok(new ImageEditRequest(
-            op, prompt, source, maskChannel, references, count, aspectRatio, null, model.Id, null));
+            op, prompt, source, maskChannel, references, count, aspectRatio, null, model.Id, input.Character));
     }
 
     private static ImageEditCallResult<ImageEditRequest> Invalid(string error) =>

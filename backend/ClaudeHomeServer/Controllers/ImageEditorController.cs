@@ -4,6 +4,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.Images;
+using ClaudeHomeServer.Services.Images.Editing;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -118,6 +119,17 @@ public class ImageEditorController(
             references.Add(new ReferenceImage(await System.IO.File.ReadAllBytesAsync(full, ct),
                 ContentTypeByExtension(full), RoleAt(form.ReferencePathRoles, i), info.Name));
         }
+        // Персонаж — фото из его папки образцами с ролью Character, первыми по порядку
+        CharacterRef? character = null;
+        if (form.CharacterSlug is { Length: > 0 } slug)
+        {
+            var found = CharacterStore.ForRequest(project.RootPath, slug);
+            if (found is null)
+                return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
+                    "Персонаж не найден");
+            character = found.Ref;
+            references.InsertRange(0, found.Photos);
+        }
         if (references.Count > limits.MaxReferences)
             return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
                 $"Образцов не больше {limits.MaxReferences}");
@@ -134,7 +146,8 @@ public class ImageEditorController(
             await ToBytesAsync(form.Mask, ct),
             await ToBytesAsync(form.Annotated, ct),
             references,
-            form.SourcePath);
+            form.SourcePath,
+            character);
 
         var started = await jobs.StartAsync(UserId, projectId, input, ct);
         return Map(started, created => StatusCode(StatusCodes.Status202Accepted, created));
@@ -204,6 +217,138 @@ public class ImageEditorController(
         public List<string>? ReferenceRoles { get; set; }
         public List<string>? ReferencePaths { get; set; }
         public List<string>? ReferencePathRoles { get; set; }
+        // Подключённый персонаж проекта (characters/<slug>/)
+        public string? CharacterSlug { get; set; }
+    }
+
+    // ── Персонажи (ADR-016, раздел 10) ─────────────────────────────────────────────
+    // Папка проекта characters/<slug>/. Чужой проект — 404 на гейте, поэтому фото
+    // персонажа видит только владелец проекта. Невалидный slug неотличим от отсутствующего.
+
+    // Потолок тела формы персонажа: 10 фото по 8 МБ плюс поля
+    private const long MaxCharacterBodyBytes = 100L * 1024 * 1024;
+
+    [HttpGet("characters")]
+    public IActionResult Characters(string projectId)
+    {
+        if (Gate(projectId, out var project) is { } denied) return denied;
+        return Ok(CharacterStore.List(project.RootPath).Select(CharacterDto.From));
+    }
+
+    [HttpGet("characters/{slug}")]
+    public IActionResult Character(string projectId, string slug)
+    {
+        if (Gate(projectId, out var project) is { } denied) return denied;
+        var manifest = CharacterStore.Get(project.RootPath, slug);
+        return manifest is null ? CharacterNotFound() : Ok(CharacterDto.From(manifest));
+    }
+
+    [HttpPost("characters")]
+    [RequestSizeLimit(MaxCharacterBodyBytes)]
+    [RequestFormLimits(MultipartBodyLengthLimit = MaxCharacterBodyBytes)]
+    public async Task<IActionResult> CreateCharacter(string projectId, [FromForm] CharacterForm form, CancellationToken ct)
+    {
+        if (Gate(projectId, out var project) is { } denied) return denied;
+        var photos = await PhotosAsync(form.Photos, form.Angles, ct);
+        var draft = new CharacterDraft(form.Name ?? "", form.Description, photos);
+        var created = CharacterStore.Create(project.RootPath, draft, DateTime.UtcNow);
+        if (created.Value is { } change) Notify(project.RootPath, change, FileMutationKind.Create);
+        return Map(created, c => StatusCode(StatusCodes.Status201Created, CharacterDto.From(c.Manifest)));
+    }
+
+    [HttpPut("characters/{slug}")]
+    [RequestSizeLimit(MaxCharacterBodyBytes)]
+    [RequestFormLimits(MultipartBodyLengthLimit = MaxCharacterBodyBytes)]
+    public async Task<IActionResult> UpdateCharacter(string projectId, string slug, [FromForm] CharacterForm form, CancellationToken ct)
+    {
+        if (Gate(projectId, out var project) is { } denied) return denied;
+        var photos = await PhotosAsync(form.Photos, form.Angles, ct);
+        var patch = new CharacterPatch(form.Name, form.Description, photos, form.RemovePhotos ?? [], form.PrimaryPhoto);
+        var updated = CharacterStore.Update(project.RootPath, slug, patch);
+        if (updated is null) return CharacterNotFound();
+        if (updated.Value is { } change) Notify(project.RootPath, change, FileMutationKind.Write);
+        return Map(updated, c => Ok(CharacterDto.From(c.Manifest)));
+    }
+
+    [HttpDelete("characters/{slug}")]
+    public IActionResult DeleteCharacter(string projectId, string slug)
+    {
+        if (Gate(projectId, out var project) is { } denied) return denied;
+        if (!CharacterStore.Delete(project.RootPath, slug)) return CharacterNotFound();
+        files?.NotifyMutated(project.RootPath, $"{CharacterStore.Folder}/{slug}", FileMutationKind.Delete);
+        return NoContent();
+    }
+
+    [HttpGet("characters/{slug}/photos/{file}")]
+    public IActionResult CharacterPhoto(string projectId, string slug, string file)
+    {
+        if (Gate(projectId, out var project) is { } denied) return denied;
+        var photo = CharacterStore.OpenPhoto(project.RootPath, slug, file);
+        return photo is null ? CharacterNotFound() : File(photo.Bytes, photo.ContentType);
+    }
+
+    // Поля формы персонажа. Angles — параллельный список к Photos (front, three-quarter…).
+    // В PUT пустое поле — не менять; RemovePhotos — имена файлов из манифеста.
+    public sealed class CharacterForm
+    {
+        public string? Name { get; set; }
+        public string? Description { get; set; }
+        public List<IFormFile>? Photos { get; set; }
+        public List<string>? Angles { get; set; }
+        public List<string>? RemovePhotos { get; set; }
+        public string? PrimaryPhoto { get; set; }
+    }
+
+    // ── «Обсудить с Claude» (ADR-016, раздел 6) ────────────────────────────────────
+
+    [HttpPost("discuss")]
+    [RequestSizeLimit(MaxJobBodyBytes)]
+    [RequestFormLimits(MultipartBodyLengthLimit = MaxJobBodyBytes)]
+    public async Task<IActionResult> Discuss(string projectId, [FromForm] DiscussForm form, CancellationToken ct)
+    {
+        if (Gate(projectId, out var project) is { } denied) return denied;
+
+        if (form.Annotated is null || form.Annotated.Length == 0)
+            return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
+                "Нет картинки с пометками");
+        var maxFileBytes = ImageEditCatalog.DefaultLimits.MaxFileMb * 1024L * 1024L;
+        if (form.Annotated.Length > maxFileBytes)
+            return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
+                $"Файл больше {ImageEditCatalog.DefaultLimits.MaxFileMb} МБ");
+
+        string? sourcePath = null;
+        if (form.SourcePath is { Length: > 0 } rel)
+        {
+            if (!TryJoinInside(project.RootPath, rel, out var full))
+                return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
+                    "Исходник вне папки проекта");
+            if (System.IO.File.Exists(full))
+                sourcePath = Path.GetRelativePath(project.RootPath, full).Replace('\\', '/');
+        }
+
+        ImageDiscussCharacter? character = null;
+        if (form.CharacterSlug is { Length: > 0 } slug)
+        {
+            var manifest = CharacterStore.Get(project.RootPath, slug);
+            if (manifest is null) return CharacterNotFound();
+            character = new ImageDiscussCharacter(manifest.Name, CharacterDto.From(manifest).Path);
+        }
+
+        var service = ActivatorUtilities.CreateInstance<ImageDiscussService>(HttpContext.RequestServices);
+        var input = new ImageDiscussInput(form.Text ?? "",
+            new ImageBytes(await ReadAsync(form.Annotated, ct), ContentTypeOf(form.Annotated)),
+            sourcePath, character, form.SessionId);
+        return Map(await service.StartAsync(UserId, project, input, ct), Ok);
+    }
+
+    // SessionId — чат этого сеанса редактора, если он уже был: переиспользуется
+    public sealed class DiscussForm
+    {
+        public string? Text { get; set; }
+        public IFormFile? Annotated { get; set; }
+        public string? SourcePath { get; set; }
+        public string? CharacterSlug { get; set; }
+        public string? SessionId { get; set; }
     }
 
     // null — можно работать; иначе готовый отказ. Выключенный флаг и чужой проект
@@ -245,6 +390,27 @@ public class ImageEditorController(
         Error(StatusCodes.Status503ServiceUnavailable, ImageEditErrorCodes.Unavailable,
             "Редактор картинок недоступен на этом сервере");
 
+    private IActionResult CharacterNotFound() =>
+        Error(StatusCodes.Status404NotFound, ImageEditErrorCodes.CharacterNotFound, "Персонаж не найден");
+
+    private void Notify(string root, CharacterChange change, FileMutationKind kind)
+    {
+        if (files is null) return;
+        foreach (var rel in change.Written) files.NotifyMutated(root, rel, kind);
+        foreach (var rel in change.Deleted) files.NotifyMutated(root, rel, FileMutationKind.Delete);
+    }
+
+    private static async Task<List<CharacterPhotoUpload>> PhotosAsync(
+        List<IFormFile>? photos, List<string>? angles, CancellationToken ct)
+    {
+        var result = new List<CharacterPhotoUpload>();
+        var list = photos ?? [];
+        for (var i = 0; i < list.Count; i++)
+            result.Add(new CharacterPhotoUpload(await ReadAsync(list[i], ct),
+                angles is not null && i < angles.Count ? angles[i] : null));
+        return result;
+    }
+
     private IActionResult JobNotFound() =>
         Error(StatusCodes.Status404NotFound, ImageEditErrorCodes.JobNotFound, "Задача не найдена");
 
@@ -255,7 +421,8 @@ public class ImageEditorController(
         var status = code switch
         {
             ImageEditErrorCodes.ProviderUnavailable => StatusCodes.Status409Conflict,
-            ImageEditErrorCodes.QuoteNotFound or ImageEditErrorCodes.JobNotFound => StatusCodes.Status404NotFound,
+            ImageEditErrorCodes.QuoteNotFound or ImageEditErrorCodes.JobNotFound
+                or ImageEditErrorCodes.CharacterNotFound => StatusCodes.Status404NotFound,
             ImageEditErrorCodes.TooManyJobs => StatusCodes.Status429TooManyRequests,
             ImageEditErrorCodes.Unavailable => StatusCodes.Status503ServiceUnavailable,
             _ => StatusCodes.Status400BadRequest,

@@ -71,6 +71,7 @@ public static class ImageEditEstimateSources
 
 // То, что контроллер собрал из multipart: байты уже прочитаны, пути образцов из проекта
 // уже разрешены через SafePath.Join. Вертикаль ProjectManager не видит.
+// Character — подключённый персонаж; его фото уже лежат в References с ролью Character.
 public record ImageEditJobInput(
     string QuoteId,
     string Prompt,
@@ -79,7 +80,8 @@ public record ImageEditJobInput(
     ImageBytes? Mask,
     ImageBytes? Annotated,
     IReadOnlyList<ReferenceImage> References,
-    string? SourcePath);
+    string? SourcePath,
+    CharacterRef? Character = null);
 
 public record ImageEditJobCreatedDto(string JobId);
 
@@ -127,6 +129,8 @@ public static class ImageEditErrorCodes
     public const string QuoteNotFound = "quote_not_found";
     // 404: задача не найдена или чужая (чужая неотличима от несуществующей)
     public const string JobNotFound = "job_not_found";
+    // 404: персонажа нет в проекте (или slug не проходит белый список)
+    public const string CharacterNotFound = "character_not_found";
     // 429: потолок одновременных задач владельца или инстанса
     public const string TooManyJobs = "too_many_jobs";
     // 503: подсистема картинок выключена на этом сервере

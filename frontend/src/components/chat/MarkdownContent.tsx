@@ -123,7 +123,7 @@ function ChatImage({ src, alt }: { src?: string; alt?: string }) {
   const finalSrc = isRemote ? src : cached ?? resolved;
 
   if (failed) return <span style={{ fontSize: 13, color: C.textMuted }}>🖼 {alt || src}</span>;
-  if (!finalSrc) return <span style={{ fontSize: 13, color: C.textMuted }}>Загрузка изображения…</span>;
+  if (!finalSrc) return <span ref={wrapRef} style={{ fontSize: 13, color: C.textMuted }}>Загрузка изображения…</span>;
 
   return (
     <a ref={wrapRef} href={finalSrc} target="_blank" rel="noopener noreferrer" style={{ display: 'block', margin: '6px 0' }}>

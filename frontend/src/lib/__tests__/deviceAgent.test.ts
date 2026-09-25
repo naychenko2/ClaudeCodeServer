@@ -177,6 +177,31 @@ describe('probeDeviceAgent — понятные состояния вместо 
     expect(getDeviceAgentStatus('l1').kind).toBe('ready');
   });
 
+  it('свой таймаут — ошибка timeout, присутствие и статус не меняются', async () => {
+    noteProject(project('l1', 'device'));
+    request.mockResolvedValue(ticketResponse());
+    fetchMock.mockResolvedValueOnce(res(200, []));
+    await projectRequest('/projects/l1/files/tree?path=');
+    expect(devicePresenceOf('l1')).toBe('here');
+
+    // fetch висит, пока его не оборвёт наш AbortController
+    fetchMock.mockImplementationOnce((_url: string, init: RequestInit) => new Promise((_, reject) => {
+      init.signal!.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+    }));
+    const p = projectRequest('/projects/l1/preview/start', { method: 'POST', body: '{}', timeoutMs: 20 });
+    await expect(p).rejects.toMatchObject({ kind: 'timeout', message: 'Агент не ответил за 0 с' });
+    expect(devicePresenceOf('l1')).toBe('here');
+    expect(getDeviceAgentStatus('l1').kind).toBe('ready');
+  });
+
+  it('сетевой отказ без ответа — присутствие elsewhere', async () => {
+    noteProject(project('l1', 'device'));
+    request.mockResolvedValue(ticketResponse());
+    fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
+    await expect(projectRequest('/projects/l1/files/tree?path=')).rejects.toMatchObject({ kind: 'unreachable' });
+    expect(devicePresenceOf('l1')).toBe('elsewhere');
+  });
+
   it('DeviceAgentError различает виды отказа', () => {
     expect(new DeviceAgentError('unreachable', 'x').kind).toBe('unreachable');
   });

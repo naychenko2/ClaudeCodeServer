@@ -117,7 +117,7 @@ export function relayStatusOf(projectId: string): RelayStatus {
 }
 
 export class DeviceAgentError extends Error {
-  readonly kind: 'unreachable' | 'refused' | 'rejected' | 'unsupported';
+  readonly kind: 'unreachable' | 'refused' | 'rejected' | 'unsupported' | 'timeout';
   readonly status?: number;
   constructor(kind: DeviceAgentError['kind'], message: string, status?: number) {
     super(message);
@@ -174,10 +174,10 @@ function agentBase(t: AgentTicket): string {
 
 // ---------- запросы к агенту ----------
 
-async function agentFetch(projectId: string, pathAndQuery: string, init: RequestInit, retried = false): Promise<Response> {
+async function agentFetch(projectId: string, pathAndQuery: string, init: RequestInit, timeoutMs = AGENT_TIMEOUT_MS, retried = false): Promise<Response> {
   const t = await getAgentTicket(projectId);
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), AGENT_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   let res: Response;
   try {
     // JWT сервера агенту не шлём никогда: у него свой билет в отдельном заголовке
@@ -192,6 +192,9 @@ async function agentFetch(projectId: string, pathAndQuery: string, init: Request
       },
     });
   } catch {
+    // Оборвали сами по таймауту: агент на связи, просто операция долгая — присутствие не меняется
+    if (controller.signal.aborted)
+      throw new DeviceAgentError('timeout', `Агент не ответил за ${Math.round(timeoutMs / 1000)} с`);
     // Агента на этом компьютере нет — значит, это не машина проекта: читать будем через ретранслятор
     setStatus(projectId, { kind: 'unreachable' });
     setPresence(projectId, 'elsewhere');
@@ -203,7 +206,7 @@ async function agentFetch(projectId: string, pathAndQuery: string, init: Request
     // Билет протух раньше срока (перезапуск агента, часы) — один перевыпуск и повтор
     if (!retried) {
       tickets.delete(projectId);
-      return agentFetch(projectId, pathAndQuery, init, true);
+      return agentFetch(projectId, pathAndQuery, init, timeoutMs, true);
     }
     const body = await res.json().catch(() => null) as { error?: string } | null;
     const reason = body?.error ?? 'Агент на этом компьютере не принял доступ к проекту';
@@ -216,8 +219,8 @@ async function agentFetch(projectId: string, pathAndQuery: string, init: Request
 }
 
 // Запрос к агенту с тем же контрактом ошибок, что request() в offline.ts: Error с status и body.
-export async function agentRequest<T>(projectId: string, pathAndQuery: string, init: RequestInit = {}): Promise<T> {
-  const res = await agentFetch(projectId, pathAndQuery, init);
+export async function agentRequest<T>(projectId: string, pathAndQuery: string, init: RequestInit = {}, timeoutMs?: number): Promise<T> {
+  const res = await agentFetch(projectId, pathAndQuery, init, timeoutMs);
   setStatus(projectId, { kind: 'ready' });
   setPresence(projectId, 'here');
   if (!res.ok) {
@@ -260,7 +263,7 @@ export function projectRequest<T>(url: string, options?: RequestInit & { timeout
   if (method === 'GET' && (path === 'files' || path === 'files/tree') && !/[?&]showHidden=/.test(query)
       && routing.get(projectId)?.showHidden)
     query += `${query ? '&' : '?'}showHidden=true`;
-  return agentRequest<T>(projectId, path + query, { method, body: options?.body });
+  return agentRequest<T>(projectId, path + query, { method, body: options?.body }, options?.timeoutMs);
 }
 
 // Проверка, что маршрут проекта с этим методом доступен сейчас (для прямых fetch вне request).

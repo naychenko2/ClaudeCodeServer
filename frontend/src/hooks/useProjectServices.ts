@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ProjectService } from '../types';
 import { api } from '../lib/api';
+import { DeviceAgentError } from '../lib/deviceAgent';
 import { onPreviewMessage } from '../lib/signalr';
 
 export function useProjectServices(projectId: string, opts?: { onStarted?: (svc: ProjectService) => void }) {
@@ -43,8 +44,10 @@ export function useProjectServices(projectId: string, opts?: { onStarted?: (svc:
       setServices(prev => prev.map(s => s.id === svc.id
         ? { ...s, status: r.status, runningPort: r.port ?? null, error: r.error ?? null }
         : s));
-    } catch {
-      setServices(prev => prev.map(s => s.id === svc.id ? { ...s, status: 'error' } : s));
+    } catch (e) {
+      // Отказ агента (в том числе «не ответил за N с») показываем текстом ошибки сервиса
+      const error = e instanceof DeviceAgentError ? e.message : null;
+      setServices(prev => prev.map(s => s.id === svc.id ? { ...s, status: 'error', error } : s));
     }
   }, [projectId, onStarted]);
 

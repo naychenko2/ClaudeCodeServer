@@ -103,6 +103,12 @@ export interface RemoteCommandResult {
 // раньше, чем сервер закончит команду, значит показывать «нет связи» поверх живого старта.
 const REMOTE_COMMAND_TIMEOUT_MS = 200_000;
 
+// Потолок ожидания preview/start. DevServerService.StartAsync (у сервера и у агента один) ждёт
+// порт 60 попыток: пауза 500 мс плюс проба соединения — до 400 мс на IPv4 и столько же на IPv6
+// (LoopbackResolver.ConnectTimeout). Сверху запас на старт процесса и дорогу.
+const DEV_SERVER_PORT_WAIT_MS = 60 * (500 + 2 * 400);
+const PREVIEW_START_TIMEOUT_MS = DEV_SERVER_PORT_WAIT_MS + 30_000;
+
 // Журнал выкатки ИЗ ЧАТА (ADR-010) — другая механика, чем трей-раннер выше: заявку
 // исполняет внешний агент планировщика, а журнал deploy-state.json пишет он же.
 // Формат чужой и версионируется отдельно от сервера: незнакомые поля игнорируем,
@@ -836,7 +842,7 @@ export const api = {
       cwd?: string; port?: number; autoPort?: boolean; env?: Record<string, string>;
     }) =>
       projectRequest<{ status: string; port?: number; error?: string; serviceId: string }>(`/projects/${id}/preview/start`, {
-        method: 'POST', body: JSON.stringify(svc),
+        method: 'POST', body: JSON.stringify(svc), timeoutMs: PREVIEW_START_TIMEOUT_MS,
       }),
     previewStop: (id: string, serviceId: string) =>
       projectRequest<{ status: string }>(`/projects/${id}/preview/stop`, {

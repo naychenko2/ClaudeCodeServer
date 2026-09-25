@@ -104,16 +104,9 @@ public class ImageEditorController(
         var paths = form.ReferencePaths ?? [];
         for (var i = 0; i < paths.Count; i++)
         {
-            string full;
-            try
-            {
-                full = SafePath.Join(project.RootPath, paths[i]);
-            }
-            catch (UnauthorizedAccessException)
-            {
+            if (!TryJoinInside(project.RootPath, paths[i], out var full))
                 return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
                     "Образец вне папки проекта");
-            }
             var info = new FileInfo(full);
             if (!info.Exists)
                 return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
@@ -128,18 +121,9 @@ public class ImageEditorController(
             return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
                 $"Образцов не больше {limits.MaxReferences}");
 
-        if (form.SourcePath is { Length: > 0 } sourcePath)
-        {
-            try
-            {
-                SafePath.Join(project.RootPath, sourcePath);
-            }
-            catch (UnauthorizedAccessException)
-            {
-                return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
-                    "Исходник вне папки проекта");
-            }
-        }
+        if (form.SourcePath is { Length: > 0 } sourcePath && !TryJoinInside(project.RootPath, sourcePath, out _))
+            return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
+                "Исходник вне папки проекта");
 
         var input = new ImageEditJobInput(
             form.QuoteId.Trim(),
@@ -181,7 +165,7 @@ public class ImageEditorController(
     }
 
     [HttpPost("save")]
-    public IActionResult Save(string projectId, [FromBody] ImageEditSaveRequest req)
+    public IActionResult Save(string projectId, [FromBody] ImageEditSaveRequest req, CancellationToken ct)
     {
         if (Gate(projectId, out var project) is { } denied) return denied;
         if (jobs is null || saver is null) return JobsUnavailable();
@@ -189,15 +173,9 @@ public class ImageEditorController(
         foreach (var rel in new[] { req.SourcePath, req.Folder })
         {
             if (string.IsNullOrWhiteSpace(rel)) continue;
-            try
-            {
-                SafePath.Join(project.RootPath, rel);
-            }
-            catch (UnauthorizedAccessException)
-            {
+            if (!TryJoinInside(project.RootPath, rel, out _))
                 return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
                     "Путь вне папки проекта");
-            }
         }
 
         var image = jobs.OpenVariant(UserId, projectId, req.JobId, req.Variant);
@@ -236,6 +214,24 @@ public class ImageEditorController(
             return NotFound(new { error = "Проект не найден" });
         project = found;
         return null;
+    }
+
+    // Путь из запроса — только относительный: SafePath срезает ведущий «/» и молча приклеил
+    // бы «/etc/passwd» к корню проекта вместо отказа
+    private static bool TryJoinInside(string root, string relativePath, out string full)
+    {
+        full = "";
+        if (Path.IsPathRooted(relativePath) || relativePath.StartsWith('/') || relativePath.StartsWith('\\'))
+            return false;
+        try
+        {
+            full = SafePath.Join(root, relativePath);
+            return true;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     private ObjectResult Error(int status, string code, string error) =>

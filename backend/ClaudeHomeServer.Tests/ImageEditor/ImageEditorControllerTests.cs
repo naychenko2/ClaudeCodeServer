@@ -63,11 +63,27 @@ public class ImageEditorControllerTests : IDisposable
             return Task.FromResult<ImageEditJobDto?>(Dto(jobId, projectId, true));
         }
 
-        public EditedImage? OpenVariant(string ownerId, string projectId, string jobId, int variant) => null;
+        // Готовый вариант для ручки save; null — варианта нет
+        public EditedImage? Variant;
+
+        public EditedImage? OpenVariant(string ownerId, string projectId, string jobId, int variant) => Variant;
 
         private static ImageEditJobDto Dto(string id, string projectId, bool cancelled) =>
             new(id, projectId, cancelled ? ImageEditJobStatus.Cancelled : ImageEditJobStatus.Running,
                 "fal", "fal-ai/nano-banana-2/edit", [], null, null, null, null, null, DateTime.UtcNow);
+    }
+
+    // Запись результата: только фиксирует вызов — путь вне проекта до неё дойти не должен
+    private sealed class FakeSaver : IImageEditSaver
+    {
+        public readonly ConcurrentQueue<ImageEditSaveRequest> Calls = new();
+
+        public ImageEditCallResult<ImageEditSaveResultDto> Save(
+            string projectRoot, ImageEditSaveRequest request, EditedImage image)
+        {
+            Calls.Enqueue(request);
+            return ImageEditCallResult<ImageEditSaveResultDto>.Ok(new ImageEditSaveResultDto("hero.v2.png"));
+        }
     }
 
     private sealed class ImagesDisabledFactory : TestWebApplicationFactory
@@ -80,13 +96,14 @@ public class ImageEditorControllerTests : IDisposable
     }
 
     private TestWebApplicationFactory Factory(IImageEditor[]? editors = null, FakeJobs? jobs = null,
-        bool imagesDisabled = false)
+        bool imagesDisabled = false, FakeSaver? saver = null)
     {
         TestWebApplicationFactory factory = imagesDisabled ? new ImagesDisabledFactory() : new TestWebApplicationFactory();
         factory.ExtraServices = services =>
         {
             foreach (var editor in editors ?? []) services.AddSingleton(editor);
             if (jobs is not null) services.AddSingleton<IImageEditJobs>(jobs);
+            if (saver is not null) services.AddSingleton<IImageEditSaver>(saver);
         };
         _factories.Add(factory);
         return factory;
@@ -281,5 +298,69 @@ public class ImageEditorControllerTests : IDisposable
         (await client.DeleteAsync($"{root}/jobs/any")).StatusCode.Should().Be(HttpStatusCode.NotFound);
         (await client.PostAsJsonAsync($"{root}/save", new { jobId = "any", variant = 1 }))
             .StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+    }
+
+    // ── Path traversal (ADR-016 §8): пути из запроса обязаны проходить SafePath.Join ──
+
+    private static readonly string[] EscapePaths = ["../etc/passwd", "/etc/passwd", "images/../../escape.png"];
+
+    private static TheoryData<string, string> Cross(params string[] fields)
+    {
+        var data = new TheoryData<string, string>();
+        foreach (var field in fields)
+            foreach (var path in EscapePaths)
+                data.Add(field, path);
+        return data;
+    }
+
+    public static TheoryData<string, string> SaveFields() => Cross("sourcePath", "folder");
+    public static TheoryData<string, string> JobFields() => Cross("sourcePath", "referencePaths");
+
+    [Theory]
+    [MemberData(nameof(SaveFields))]
+    public async Task Save_путь_вне_проекта_400_и_запись_не_вызывается(string field, string path)
+    {
+        var jobs = new FakeJobs { Variant = new EditedImage([0x89, 0x50, 0x4E, 0x47], "image/png") };
+        var saver = new FakeSaver();
+        var factory = Factory([new FakeImageEditor("fal", models: FakeImageEditor.Model("m"))], jobs, saver: saver);
+        EnableFlag(factory, TestWebApplicationFactory.TestUsername);
+        var projectId = CreateProject(factory, TestWebApplicationFactory.TestUsername);
+        var client = factory.CreateAuthenticatedClient();
+
+        var body = new Dictionary<string, object?>
+        {
+            ["jobId"] = "any", ["variant"] = 1, ["fileName"] = "escape.png", [field] = path,
+        };
+        var resp = await client.PostAsJsonAsync($"/api/projects/{projectId}/image-editor/save", body);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var error = await Json(resp);
+        error.GetProperty("code").GetString().Should().Be(ImageEditErrorCodes.InvalidRequest);
+        error.GetProperty("error").GetString().Should().Contain("вне папки проекта");
+        saver.Calls.Should().BeEmpty("путь вне проекта не должен дойти до записи файла");
+    }
+
+    [Theory]
+    [MemberData(nameof(JobFields))]
+    public async Task Запуск_путь_вне_проекта_400_и_задача_не_создаётся(string field, string path)
+    {
+        var jobs = new FakeJobs();
+        var factory = Factory([new FakeImageEditor("fal", models: FakeImageEditor.Model("m"))], jobs);
+        EnableFlag(factory, TestWebApplicationFactory.TestUsername);
+        var projectId = CreateProject(factory, TestWebApplicationFactory.TestUsername);
+        // Приманка рядом с папкой проекта: ровно туда ведёт images/../../escape.png
+        File.WriteAllBytes(Path.Combine(factory.TempDir, "escape.png"), [0x89, 0x50, 0x4E, 0x47]);
+        var client = factory.CreateAuthenticatedClient();
+
+        var form = JobForm();
+        form.Add(new StringContent(path), field);
+        var resp = await client.PostAsync($"/api/projects/{projectId}/image-editor/jobs", form);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var error = await Json(resp);
+        error.GetProperty("code").GetString().Should().Be(ImageEditErrorCodes.InvalidRequest);
+        error.GetProperty("error").GetString().Should().Contain("вне папки проекта",
+            "отказ обязан прийти от проверки пути, а не от того, что файла случайно нет");
+        jobs.Jobs.Should().BeEmpty("файл вне проекта не должен уйти поставщику");
     }
 }

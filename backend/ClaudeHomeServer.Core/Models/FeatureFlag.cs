@@ -70,6 +70,9 @@ public static class FeatureFlagKeys
     // закрыты review/apply эндпоинты — `apply` пишет в файл, и открытая ручка записи
     // при выключенной фиче была бы лишним риском (план §11).
     public const string ProjectMapHygiene = "project-map-hygiene";
+    // Редактор картинок в проекте (ADR-016): экран правки из дерева файлов. Флаг гейтит и
+    // серверные ручки api/projects/{id}/image-editor/* — при выключенном они отвечают 404.
+    public const string ImageEditor = "image-editor";
 }
 
 /// <summary>
@@ -178,6 +181,13 @@ public static class FeatureFlagCatalog
             Key: FeatureFlagKeys.ProjectMapHygiene,
             Title: "Уборка карты проекта",
             Description: "Кнопка в настройках проекта проверит CLAUDE.md: размер, длинные секции, мёртвые ссылки, вложенные карты — и предложит, что прибрать. Часть правок кнопкой «Применить», часть — работой для чата.",
+            Default: false,
+            Stage: "dev"),
+        // Редактор картинок (ADR-016): сервер гасит все ручки редактора, пока флаг выключен
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.ImageEditor,
+            Title: "Редактор картинок",
+            Description: "Картинку из проекта можно поправить словами и пометками: обвести место, показать стрелкой, приложить образец. Цена видна до запуска, результат ложится рядом новым файлом, оригинал не трогается.",
             Default: false,
             Stage: "dev"),
     ];

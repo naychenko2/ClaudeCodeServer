@@ -33,6 +33,8 @@ public class ImageGenerationControllerTests : IClassFixture<ImageProvidersFactor
 {
     private const string Url = "/api/image-generation";
     private const string Avatar = "persona-avatar";
+    // Умолчание редактора картинок (ADR-016): то же место настройки, что у аватара
+    private const string ImageEditorPlace = "image-editor";
 
     private readonly HttpClient _admin;
     private readonly HttpClient _user;
@@ -89,8 +91,8 @@ public class ImageGenerationControllerTests : IClassFixture<ImageProvidersFactor
 
         // Место — с названием, режимом и вычисленным активным провайдером
         body.GetProperty("places").EnumerateArray()
-            .Select(p => p.GetProperty("key").GetString()).Should().Equal(Avatar);
-        foreach (var key in new[] { Avatar })
+            .Select(p => p.GetProperty("key").GetString()).Should().Equal(Avatar, ImageEditorPlace);
+        foreach (var key in new[] { Avatar, ImageEditorPlace })
         {
             var place = Place(body, key);
             place.GetProperty("title").GetString().Should().NotBeNullOrWhiteSpace();

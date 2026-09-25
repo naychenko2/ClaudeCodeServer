@@ -1,0 +1,285 @@
+using System.Collections.Concurrent;
+using System.Net;
+using System.Net.Http.Json;
+using System.Text.Json;
+using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.ImageEditor;
+using ClaudeHomeServer.Tests.Helpers;
+using FluentAssertions;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace ClaudeHomeServer.Tests.ImageEditor;
+
+// Ручки редактора картинок api/projects/{id}/image-editor/* (ADR-016, разделы 1, 7, 8):
+// флаг гейтит сервер, ненастроенный поставщик скрыт и не даёт 500, запуск — 202 с id или
+// понятный отказ, чужая задача неотличима от несуществующей, выключенная подсистема
+// картинок не роняет хост.
+public class ImageEditorControllerTests : IDisposable
+{
+    private readonly List<TestWebApplicationFactory> _factories = [];
+
+    public void Dispose()
+    {
+        foreach (var f in _factories) f.Dispose();
+        GC.SuppressFinalize(this);
+    }
+
+    // Исполнитель задач в памяти: владение сверяется по паре (владелец, проект), как
+    // обязан делать настоящий ImageEditJobService
+    private sealed class FakeJobs : IImageEditJobs
+    {
+        public readonly ConcurrentDictionary<string, (string Owner, string Project, bool Cancelled)> Jobs = new();
+
+        public Task<ImageEditCallResult<ImageEditQuoteDto>> QuoteAsync(
+            string ownerId, string projectId, ImageEditQuoteRequest request, CancellationToken ct) =>
+            Task.FromResult(ImageEditCallResult<ImageEditQuoteDto>.Ok(new ImageEditQuoteDto(
+                "q-1", request.Provider, "fal-ai/nano-banana-2/edit",
+                new ImageEditEstimateDto(0.08 * request.Count, ImageEditPriceUnits.Usd, false, ImageEditEstimateSources.Catalog),
+                DateTime.UtcNow.AddMinutes(10), 20)));
+
+        public Task<ImageEditCallResult<ImageEditJobCreatedDto>> StartAsync(
+            string ownerId, string projectId, ImageEditJobInput input, CancellationToken ct)
+        {
+            if (input.QuoteId != "q-1")
+                return Task.FromResult(ImageEditCallResult<ImageEditJobCreatedDto>.Fail(
+                    ImageEditErrorCodes.QuoteNotFound, "Котировка устарела"));
+            var id = Guid.NewGuid().ToString("N");
+            Jobs[id] = (ownerId, projectId, false);
+            return Task.FromResult(ImageEditCallResult<ImageEditJobCreatedDto>.Ok(new ImageEditJobCreatedDto(id)));
+        }
+
+        public ImageEditJobDto? Get(string ownerId, string projectId, string jobId) =>
+            Jobs.TryGetValue(jobId, out var j) && j.Owner == ownerId && j.Project == projectId
+                ? Dto(jobId, j.Project, j.Cancelled)
+                : null;
+
+        public Task<ImageEditJobDto?> CancelAsync(string ownerId, string projectId, string jobId, CancellationToken ct)
+        {
+            if (!Jobs.TryGetValue(jobId, out var j) || j.Owner != ownerId || j.Project != projectId)
+                return Task.FromResult<ImageEditJobDto?>(null);
+            Jobs[jobId] = j with { Cancelled = true };
+            return Task.FromResult<ImageEditJobDto?>(Dto(jobId, projectId, true));
+        }
+
+        public EditedImage? OpenVariant(string ownerId, string projectId, string jobId, int variant) => null;
+
+        private static ImageEditJobDto Dto(string id, string projectId, bool cancelled) =>
+            new(id, projectId, cancelled ? ImageEditJobStatus.Cancelled : ImageEditJobStatus.Running,
+                "fal", "fal-ai/nano-banana-2/edit", [], null, null, null, null, null, DateTime.UtcNow);
+    }
+
+    private sealed class ImagesDisabledFactory : TestWebApplicationFactory
+    {
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            base.ConfigureWebHost(builder);
+            builder.UseSetting("Subsystems:images:Enabled", "false");
+        }
+    }
+
+    private TestWebApplicationFactory Factory(IImageEditor[]? editors = null, FakeJobs? jobs = null,
+        bool imagesDisabled = false)
+    {
+        TestWebApplicationFactory factory = imagesDisabled ? new ImagesDisabledFactory() : new TestWebApplicationFactory();
+        factory.ExtraServices = services =>
+        {
+            foreach (var editor in editors ?? []) services.AddSingleton(editor);
+            if (jobs is not null) services.AddSingleton<IImageEditJobs>(jobs);
+        };
+        _factories.Add(factory);
+        return factory;
+    }
+
+    private static string EnableFlag(TestWebApplicationFactory factory, string username)
+    {
+        var users = factory.Services.GetRequiredService<UserStore>();
+        var user = users.FindByUsername(username)!;
+        users.SetFeatureFlag(user.Id, FeatureFlagKeys.ImageEditor, true).Should().BeTrue();
+        return user.Id;
+    }
+
+    private static string CreateProject(TestWebApplicationFactory factory, string username)
+    {
+        var users = factory.Services.GetRequiredService<UserStore>();
+        var user = users.FindByUsername(username)!;
+        var dir = Path.Combine(factory.TempDir, "img_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        return factory.Services.GetRequiredService<ProjectManager>()
+            .Create("img-" + Guid.NewGuid().ToString("N")[..6], dir, user.Id, username).Id;
+    }
+
+    private static MultipartFormDataContent JobForm(string quoteId = "q-1")
+    {
+        var form = new MultipartFormDataContent
+        {
+            { new StringContent(quoteId), "quoteId" },
+            { new StringContent("убрать провод"), "prompt" },
+        };
+        var png = new ByteArrayContent([0x89, 0x50, 0x4E, 0x47]);
+        png.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/png");
+        form.Add(png, "source", "hero.png");
+        return form;
+    }
+
+    private static async Task<JsonElement> Json(HttpResponseMessage resp) =>
+        JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync());
+
+    private static object Quote(string provider) => new
+    {
+        provider, model = "auto", mode = "fast", op = "edit", count = 2,
+        hasMask = false, references = 0, hasCharacter = false, width = 1024, height = 768,
+    };
+
+    [Fact]
+    public async Task Флаг_выключен_все_ручки_404()
+    {
+        var jobs = new FakeJobs();
+        var factory = Factory([new FakeImageEditor("fal", models: FakeImageEditor.Model("m"))], jobs);
+        var projectId = CreateProject(factory, TestWebApplicationFactory.TestUsername);
+        var client = factory.CreateAuthenticatedClient();
+        var root = $"/api/projects/{projectId}/image-editor";
+
+        var responses = new[]
+        {
+            await client.GetAsync($"{root}/catalog"),
+            await client.PostAsJsonAsync($"{root}/quote", Quote("fal")),
+            await client.PostAsync($"{root}/jobs", JobForm()),
+            await client.GetAsync($"{root}/jobs/any"),
+            await client.DeleteAsync($"{root}/jobs/any"),
+            await client.GetAsync($"{root}/jobs/any/variants/1"),
+            await client.PostAsJsonAsync($"{root}/save", new { jobId = "any", variant = 1 }),
+        };
+
+        responses.Select(r => r.StatusCode).Should().AllBeEquivalentTo(HttpStatusCode.NotFound);
+        jobs.Jobs.Should().BeEmpty("при выключенном флаге запуск не должен дойти до исполнителя");
+    }
+
+    [Fact]
+    public async Task Ненастроенный_поставщик_отсутствует_в_каталоге_и_котировка_409()
+    {
+        var factory = Factory(
+        [
+            new FakeImageEditor("higgsfield", enabled: false, models: FakeImageEditor.Model("nano_banana_2")),
+            new FakeImageEditor("fal", models: FakeImageEditor.Model("fal-ai/nano-banana-2/edit")),
+        ], new FakeJobs());
+        EnableFlag(factory, TestWebApplicationFactory.TestUsername);
+        var projectId = CreateProject(factory, TestWebApplicationFactory.TestUsername);
+        var client = factory.CreateAuthenticatedClient();
+
+        var catalog = await client.GetAsync($"/api/projects/{projectId}/image-editor/catalog");
+        catalog.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await Json(catalog);
+        body.GetProperty("providers").EnumerateArray().Select(p => p.GetProperty("key").GetString())
+            .Should().Equal("fal");
+        body.GetProperty("default").GetProperty("provider").GetString().Should().Be("fal");
+        body.GetProperty("providers")[0].GetProperty("models")[0].GetProperty("modes")[0].GetString()
+            .Should().Be("fast", "enum'ы уходят строками в camelCase — на это рассчитывает фронт");
+
+        var quote = await client.PostAsJsonAsync($"/api/projects/{projectId}/image-editor/quote", Quote("higgsfield"));
+        quote.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await Json(quote)).GetProperty("code").GetString().Should().Be(ImageEditErrorCodes.ProviderUnavailable);
+    }
+
+    [Fact]
+    public async Task Без_драйверов_каталог_пуст_а_запуск_понятный_отказ()
+    {
+        var factory = Factory();
+        EnableFlag(factory, TestWebApplicationFactory.TestUsername);
+        var projectId = CreateProject(factory, TestWebApplicationFactory.TestUsername);
+        var client = factory.CreateAuthenticatedClient();
+
+        var catalog = await client.GetAsync($"/api/projects/{projectId}/image-editor/catalog");
+        catalog.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await Json(catalog);
+        body.GetProperty("providers").GetArrayLength().Should().Be(0);
+        body.GetProperty("default").GetProperty("provider").ValueKind.Should().Be(JsonValueKind.Null);
+
+        var start = await client.PostAsync($"/api/projects/{projectId}/image-editor/jobs", JobForm());
+        start.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var error = await Json(start);
+        error.GetProperty("code").GetString().Should().Be(ImageEditErrorCodes.ProviderUnavailable);
+        error.GetProperty("error").GetString().Should().Contain("не настроен");
+    }
+
+    [Fact]
+    public async Task Запуск_по_котировке_202_с_id_задачи()
+    {
+        var jobs = new FakeJobs();
+        var factory = Factory([new FakeImageEditor("fal", models: FakeImageEditor.Model("fal-ai/nano-banana-2/edit"))], jobs);
+        EnableFlag(factory, TestWebApplicationFactory.TestUsername);
+        var projectId = CreateProject(factory, TestWebApplicationFactory.TestUsername);
+        var client = factory.CreateAuthenticatedClient();
+        var root = $"/api/projects/{projectId}/image-editor";
+
+        var quote = await client.PostAsJsonAsync($"{root}/quote", Quote("fal"));
+        quote.StatusCode.Should().Be(HttpStatusCode.OK);
+        var quoteBody = await Json(quote);
+        quoteBody.GetProperty("estimate").GetProperty("unit").GetString().Should().Be("usd");
+
+        var start = await client.PostAsync($"{root}/jobs", JobForm(quoteBody.GetProperty("quoteId").GetString()!));
+        start.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        var jobId = (await Json(start)).GetProperty("jobId").GetString();
+        jobId.Should().NotBeNullOrEmpty();
+        jobs.Jobs.Should().ContainKey(jobId!);
+
+        var state = await client.GetAsync($"{root}/jobs/{jobId}");
+        state.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await Json(state)).GetProperty("status").GetString().Should().Be("running");
+
+        var stale = await client.PostAsync($"{root}/jobs", JobForm("q-old"));
+        stale.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await Json(stale)).GetProperty("code").GetString().Should().Be(ImageEditErrorCodes.QuoteNotFound);
+    }
+
+    [Fact]
+    public async Task DELETE_чужой_задачи_отклоняется()
+    {
+        var jobs = new FakeJobs();
+        var factory = Factory([new FakeImageEditor("fal", models: FakeImageEditor.Model("m"))], jobs);
+        EnableFlag(factory, TestWebApplicationFactory.TestUsername);
+        EnableFlag(factory, TestWebApplicationFactory.SecondUsername);
+        var ownProject = CreateProject(factory, TestWebApplicationFactory.TestUsername);
+        var foreignProject = CreateProject(factory, TestWebApplicationFactory.SecondUsername);
+        var owner = factory.CreateAuthenticatedClient(TestWebApplicationFactory.SecondUsername,
+            TestWebApplicationFactory.SecondPassword);
+        var stranger = factory.CreateAuthenticatedClient();
+
+        var start = await owner.PostAsync($"/api/projects/{foreignProject}/image-editor/jobs", JobForm());
+        start.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        var jobId = (await Json(start)).GetProperty("jobId").GetString()!;
+
+        // Чужой проект — 404 на гейте проекта; свой проект с чужим jobId — 404 у исполнителя
+        (await stranger.DeleteAsync($"/api/projects/{foreignProject}/image-editor/jobs/{jobId}"))
+            .StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await stranger.DeleteAsync($"/api/projects/{ownProject}/image-editor/jobs/{jobId}"))
+            .StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await stranger.GetAsync($"/api/projects/{ownProject}/image-editor/jobs/{jobId}"))
+            .StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await stranger.GetAsync($"/api/projects/{foreignProject}/image-editor/catalog"))
+            .StatusCode.Should().Be(HttpStatusCode.NotFound, "чужой проект не открывается ни одной ручкой");
+        jobs.Jobs[jobId].Cancelled.Should().BeFalse("чужой DELETE не должен отменить задачу");
+
+        var own = await owner.DeleteAsync($"/api/projects/{foreignProject}/image-editor/jobs/{jobId}");
+        own.StatusCode.Should().Be(HttpStatusCode.OK);
+        jobs.Jobs[jobId].Cancelled.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Подсистема_картинок_выключена_хост_жив_и_ручки_без_500()
+    {
+        var factory = Factory(imagesDisabled: true);
+        EnableFlag(factory, TestWebApplicationFactory.TestUsername);
+        var projectId = CreateProject(factory, TestWebApplicationFactory.TestUsername);
+        var client = factory.CreateAuthenticatedClient();
+        var root = $"/api/projects/{projectId}/image-editor";
+
+        (await client.GetAsync($"{root}/catalog")).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await client.PostAsJsonAsync($"{root}/quote", Quote("fal"))).StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await client.PostAsync($"{root}/jobs", JobForm())).StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await client.DeleteAsync($"{root}/jobs/any")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await client.PostAsJsonAsync($"{root}/save", new { jobId = "any", variant = 1 }))
+            .StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+    }
+}

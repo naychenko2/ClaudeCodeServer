@@ -350,7 +350,8 @@
   .err .kept { font-size: 12px; color: var(--c-success-text); }
 
   /* Модалки, шторки, тост */
-  .ovl { position: absolute; inset: 0; background: var(--c-overlay); z-index: 30; display: grid; place-items: center; padding: 16px; }
+  .ovl { position: absolute; inset: 0; background: var(--c-overlay); z-index: 30; display: grid; place-items: center; padding: 16px;
+    grid-template-columns: minmax(0, 440px); justify-content: center; }
   .modal { width: 440px; max-width: 100%; background: var(--c-bg-card); border-radius: 16px; box-shadow: var(--shadow-modal); display: flex; flex-direction: column; max-height: 100%; }
   .modal-h { padding: 16px 18px 8px; display: flex; align-items: center; gap: 8px; }
   .modal-h h3 { margin: 0; font-size: 16px; color: var(--c-text-heading); flex: 1; }
@@ -396,6 +397,63 @@
   .composer .fake { flex: 1; height: 38px; border-radius: 10px; border: 1px solid var(--c-border); background: var(--c-bg-card); color: var(--c-text-muted); display: flex; align-items: center; padding: 0 10px; font-size: 13px; }
   .demo-note { margin-top: 18px; font-size: 12px; color: var(--c-text-secondary); line-height: 1.6; max-width: 900px; }
   .demo-note b { color: var(--c-text-heading); }
+
+  /* Персонажи и роли образцов */
+  .smp .role { display: flex; align-items: center; justify-content: space-between; gap: 2px; width: 100%; height: 20px; margin-top: 4px; padding: 0 4px;
+    border-radius: 6px; border: 1px solid var(--c-border); background: var(--c-bg-card); color: var(--c-text-secondary); font-size: 10px; cursor: pointer; }
+  .smp .role.face { border-color: var(--c-accent); color: var(--c-accent); background: var(--c-accent-light); }
+  .smp .role svg.i.s { width: 10px; height: 10px; }
+  .smp .role:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+  .role-pop { margin-top: 8px; padding: 6px; border-radius: 10px; background: var(--c-bg-card); border: 1px solid var(--c-border); }
+  .role-pop .t { font-size: 11px; color: var(--c-text-muted); padding: 2px 8px 4px; }
+  .chars { display: flex; flex-direction: column; gap: 4px; }
+  .chr { display: flex; align-items: center; gap: 2px; border: 1px solid var(--c-border); border-radius: 10px; background: var(--c-bg-card); padding: 2px; }
+  .chr.on { border-color: var(--c-accent); background: var(--c-accent-light); }
+  .chr-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; border: none; background: transparent; color: var(--c-text-primary);
+    cursor: pointer; padding: 4px; text-align: left; font-size: 13px; border-radius: 8px; }
+  .chr-main .st { margin-left: auto; font-size: 11px; color: var(--c-text-muted); white-space: nowrap; }
+  .chr.on .chr-main .st { color: var(--c-accent); font-weight: 600; }
+  .av { width: 32px; height: 32px; flex: 0 0 32px; border-radius: 50%; overflow: hidden; border: 1px solid var(--c-border); }
+  .av svg { display: block; width: 100%; height: 100%; }
+  .av.lg { width: 40px; height: 40px; flex-basis: 40px; }
+  .char-empty { display: flex; gap: 10px; align-items: center; border: 1.5px dashed var(--c-dashed); border-radius: 10px; padding: 10px;
+    font-size: 12px; line-height: 1.4; color: var(--c-text-secondary); }
+  .char-empty .big { width: 32px; height: 32px; flex: 0 0 32px; border-radius: 10px; background: var(--c-accent-light); color: var(--c-accent); display: grid; place-items: center; }
+  .char-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+  .char-chip { padding: 0 2px 0 3px; gap: 2px; cursor: default; }
+  .char-chip button { border: none; background: transparent; color: inherit; display: inline-flex; align-items: center; gap: 5px; padding: 0 3px;
+    cursor: pointer; font: inherit; height: 26px; border-radius: 999px; }
+  .char-chip button:hover { background: var(--c-bg-card); }
+  .char-chip .av { width: 22px; height: 22px; flex-basis: 22px; }
+  .ph-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(62px, 1fr)); gap: 10px; }
+  .ph { position: relative; aspect-ratio: 1; }
+  .ph .pic { width: 100%; height: 100%; border-radius: 10px; overflow: hidden; border: 1px solid var(--c-border); }
+  .ph .pic svg { display: block; width: 100%; height: 100%; }
+  .ph .x { position: absolute; top: -6px; right: -6px; width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--c-border);
+    background: var(--c-bg-card); color: var(--c-text-secondary); display: grid; place-items: center; cursor: pointer; padding: 0; }
+  .ph-grid .smp-add { width: auto; height: auto; aspect-ratio: 1; }
+  .cnt { font-size: 12px; color: var(--c-warning-text); }
+  .cnt.ok { color: var(--c-success-text); }
+  .soon { font-size: 10px; font-weight: 600; border-radius: 6px; padding: 1px 6px; background: var(--c-info-bg); color: var(--c-info); white-space: nowrap; }
+  .train { display: flex; flex-direction: column; gap: 6px; padding: 10px; border-radius: 10px; background: var(--c-bg-inset); }
+  .train .r { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .same-face { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--c-success-text); background: var(--c-success-bg);
+    border-radius: 8px; padding: 3px 8px; }
+  .same-face .av { width: 20px; height: 20px; flex-basis: 20px; }
+
+  /* Поставщик и модель */
+  .pm { display: flex; flex-direction: column; align-items: flex-start; }
+  .pm .models { align-self: stretch; margin-bottom: 4px; }
+  .models label.dis { cursor: not-allowed; opacity: .55; }
+  .models label.dis:hover { background: transparent; }
+  .models label .soon { align-self: center; }
+  .pm-warn { display: flex; gap: 6px; align-items: flex-start; font-size: 11px; line-height: 1.4; color: var(--c-warning-text);
+    background: var(--c-warning-bg); border-radius: 8px; padding: 6px 8px; margin-top: 6px; }
+  .pm-warn svg.i { flex: 0 0 auto; margin-top: 1px; }
+  .pm-btn { display: flex; align-items: center; gap: 6px; width: 100%; height: 36px; padding: 0 10px; border-radius: 10px; border: 1px solid var(--c-border);
+    background: var(--c-bg-card); color: var(--c-text-secondary); cursor: pointer; font-size: 13px; text-align: left; }
+  .pm-btn b { color: var(--c-text-heading); font-weight: 600; }
+  .pm-btn:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
 </style>
 </head>
 <body>
@@ -411,7 +469,11 @@
   <div class="demo-note">
     <b>Как пройти все экраны кликами:</b> «Файлы» → «Редактировать» у <i>hero.png</i> (экран 3) или «Нарисовать картинку» у папки (экран 2)
     → «Сгенерировать» (экран 4) → варианты и шторка «до / после» (экран 5) → «Взять за основу» пополняет историю (экран 6)
-    → «Применить» открывает сохранение (экран 7) → тост «Показать в файлах». Экран 8 — переключите «Исход генерации» на отказ и нажмите «Сгенерировать».
+    → «Применить» открывает сохранение (экран 7) → тост «Показать в файлах». Экран 8 — переключите «Исход генерации» на отказ и нажмите «Сгенерировать».<br>
+    <b>Персонажи:</b> в панели образцов «Персонажи проекта» сначала пусты → «+ Персонаж» (экран 9): имя, «Загрузить» добавляет 4 фото лица, «Ещё фото» по одному, крестик убирает
+    → «Сохранить персонажа» → тост «Персонаж сохранён в проект: characters/anya/», у запроса чип «Аня ×». Клик по персонажу в списке подключает или отключает его, «⋯» открывает карточку
+    с неактивным «Улучшить сходство». Под каждым образцом — роль: лицо, стиль или предмет. Экран 10 — пустой редактор, подключена Аня, «Аня сидит в кафе у окна» → варианты с одним лицом.<br>
+    <b>Поставщик и модель:</b> внизу панели «Поставщик ▾» → «Модель ▾», цена у кнопки в единицах поставщика. С кистью на картинке модели без маски серые; на телефоне оба выбора в одной шторке.
   </div>
 </div>
 
@@ -445,6 +507,8 @@ const IC = {
   coin: '<circle cx="12" cy="12" r="9"/><path d="M14.5 9.5c-.5-1-1.5-1.5-2.5-1.5-1.7 0-3 1-3 2.2 0 2.8 6 1.4 6 4.3 0 1.2-1.3 2.3-3 2.3-1.1 0-2.2-.6-2.7-1.6M12 6.5v11"/>',
   chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
   layers: '<path d="m12 2 10 5-10 5L2 7z"/><path d="m2 17 10 5 10-5M2 12l10 5 10-5"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  userplus: '<circle cx="10" cy="8" r="4"/><path d="M2 21a8 8 0 0 1 13.3-6"/><path d="M19 15v6M16 18h6"/>',
 };
 const ic = (n, s) => `<svg class="i${s ? ' s' : ''}" viewBox="0 0 24 24">${IC[n]}</svg>`;
 
@@ -452,6 +516,7 @@ const ic = (n, s) => `<svg class="i${s ? ' s' : ''}" viewBox="0 0 24 24">${IC[n]
 let uid = 0;
 // d: { lamp: null|0..3, bg: bool, painting: bool, wide: bool, sharp: bool }
 function scene(d = {}) {
+  if (d.cafe != null) return cafeSVG(d);
   const k = 'g' + (++uid);
   const bg = d.bg !== false, painting = d.painting !== false;
   const vb = d.wide ? '-100 0 840 400' : '0 0 640 400';
@@ -498,6 +563,7 @@ function scene(d = {}) {
     <rect x="180" y="236" width="24" height="26" rx="4" fill="#E9E1D3"/>
     <path d="M40 300 Q30 250 50 220 Q60 260 58 300Z M58 300 Q70 240 95 215 Q80 265 72 300Z" fill="#5E8B4E"/>
     <rect x="36" y="296" width="44" height="34" rx="5" fill="#B7704E"/>` : ''}
+  ${d.person != null ? personSVG([450, 395, 505, 430][d.person % 4], 172, .78) : ''}
   </g>
   ${d.sharp ? '' : ''}
 </svg>`;
@@ -510,6 +576,61 @@ function sampleSVG(kind) {
   return `<svg viewBox="0 0 64 64"><rect width="64" height="64" fill="#9FB7C6"/><circle cx="24" cy="26" r="8" fill="#F3D7BD"/><circle cx="42" cy="28" r="8" fill="#E7C3A4"/><rect x="12" y="38" width="42" height="26" rx="10" fill="#5E7E95"/></svg>`;
 }
 
+// Персонаж: одно лицо, одни волосы и свитер во всех фото и сценах — так видно «узнаваемость»
+const HAIR = '#7A3B22', SKIN = '#F1C7A5', SWEATER = '#3F7F74';
+const FACE_BG = ['#DCE6EE', '#EFE3CF', '#D9D2E6', '#E8D8C8', '#CFE0D2', '#F0D9C4', '#D6DEE8', '#E4E0D2', '#E9D4D4', '#D3E3E6'];
+const FACE_DX = [0, -5, 5, -2, 3, 0, -4, 4, -1, 2];
+// Фото лица: разный фон, поворот и освещение (i — номер фото)
+function faceSVG(i = 0) {
+  const n = i % 10, light = n % 3 === 1 ? '#FFF4D6' : n % 3 === 2 ? '#1B2230' : null;
+  return `<svg viewBox="0 0 64 64"><rect width="64" height="64" fill="${FACE_BG[n]}"/>
+    <g transform="translate(${FACE_DX[n]} 0)">
+      <path d="M14 64 Q16 46 32 45 Q48 46 50 64Z" fill="${SWEATER}"/>
+      <rect x="28" y="38" width="8" height="9" fill="${SKIN}"/>
+      <path d="M17 30 Q16 11 32 10 Q48 11 47 30 L49 50 Q42 46 40 38 L24 38 Q22 46 15 50Z" fill="${HAIR}"/>
+      <ellipse cx="32" cy="29" rx="11" ry="13" fill="${SKIN}"/>
+      <path d="M21 25 Q24 14 34 15 Q41 16 43 24 Q36 19 28 22 Q24 23 21 25Z" fill="${HAIR}"/>
+      <circle cx="28" cy="29" r="1.3" fill="#3A2A20"/><circle cx="36" cy="29" r="1.3" fill="#3A2A20"/>
+      <path d="M29 35 Q32 37 35 35" stroke="#B0674F" stroke-width="1.2" fill="none" stroke-linecap="round"/>
+    </g>${light ? `<rect width="64" height="64" fill="${light}" opacity=".2"/>` : ''}</svg>`;
+}
+// Персонаж в сцене (координаты сцены 640×400)
+function personSVG(x, y, s = 1) {
+  return `<g transform="translate(${x} ${y}) scale(${s})">
+    <path d="M-46 120 Q-44 58 0 54 Q44 58 46 120Z" fill="${SWEATER}"/>
+    <rect x="-9" y="36" width="18" height="20" fill="${SKIN}"/>
+    <path d="M-30 4 Q-32 -40 0 -42 Q32 -40 30 4 L34 50 Q20 44 16 30 L-16 30 Q-20 44 -34 50Z" fill="${HAIR}"/>
+    <ellipse cx="0" cy="2" rx="22" ry="27" fill="${SKIN}"/>
+    <path d="M-22 -6 Q-16 -30 4 -28 Q18 -26 22 -8 Q8 -18 -6 -14 Q-14 -12 -22 -6Z" fill="${HAIR}"/>
+    <circle cx="-8" cy="2" r="2.4" fill="#3A2A20"/><circle cx="8" cy="2" r="2.4" fill="#3A2A20"/>
+    <path d="M-6 13 Q0 17 6 13" stroke="#B0674F" stroke-width="2" fill="none" stroke-linecap="round"/>
+  </g>`;
+}
+// Сцена «кафе у окна»: варианты различаются видом за окном и ракурсом, лицо одно
+function cafeSVG(d) {
+  const k = 'c' + (++uid), v = d.cafe % 4;
+  const sky = [['#9ECBE8', '#E6F0F2'], ['#E9A77A', '#5B4C6E'], ['#8B98A6', '#C9D0D6'], ['#BFD9E8', '#F4EEDC']][v];
+  const px = [440, 410, 465, 395][v], cup = ['#F3EDE2', '#C9704E', '#E9E1D3', '#6F8FA6'][v];
+  const rain = v === 2 ? Array.from({ length: 14 }, (_, i) => `<path d="M${70 + i * 18} ${60 + (i % 3) * 30} l-6 18" stroke="#EEF2F5" stroke-width="2" opacity=".7"/>`).join('') : '';
+  const lamps = v === 1 ? '<circle cx="120" cy="150" r="7" fill="#FFE3A8"/><circle cx="250" cy="140" r="7" fill="#FFE3A8"/>' : '';
+  return `<svg class="img" viewBox="0 0 640 400" xmlns="http://www.w3.org/2000/svg">
+    <defs><linearGradient id="${k}s" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${sky[0]}"/><stop offset="1" stop-color="${sky[1]}"/></linearGradient></defs>
+    <rect width="640" height="400" fill="#E6D3B8"/>
+    <rect x="40" y="36" width="300" height="240" rx="4" fill="#5B4A3A"/>
+    <rect x="50" y="46" width="280" height="220" fill="url(#${k}s)"/>
+    <path d="M50 266 L50 190 L90 190 L90 160 L140 160 L140 205 L190 205 L190 170 L240 170 L240 215 L290 215 L290 180 L330 180 L330 266Z" fill="${v === 1 ? '#3A3450' : '#8C98A2'}" opacity=".8"/>
+    ${lamps}${rain}
+    <rect x="186" y="46" width="8" height="220" fill="#5B4A3A"/>
+    <rect x="360" y="40" width="240" height="18" rx="3" fill="#B98A5E"/>
+    <circle cx="410" cy="36" r="10" fill="#5E8B4E"/><circle cx="470" cy="36" r="10" fill="#5E8B4E"/>
+    ${personSVG(px, 190, 1)}
+    <rect x="300" y="300" width="340" height="16" rx="4" fill="#8A6444"/>
+    <rect x="0" y="316" width="640" height="84" fill="#9C7650"/>
+    <rect x="${px - 70}" y="276" width="34" height="26" rx="5" fill="${cup}"/><path d="M${px - 36} 282 q10 0 10 8 q0 8 -10 8" stroke="${cup}" stroke-width="4" fill="none"/>
+    <rect x="${px + 40}" y="286" width="60" height="14" rx="3" fill="#F4ECE1"/>
+  </svg>`;
+}
+
 // ---------- Состояние ----------
 const DEFAULT_MARKS = () => ([
   { type: 'mask', w: 46, d: 'M596 118 Q606 150 598 190 Q592 240 604 285' },
@@ -517,13 +638,33 @@ const DEFAULT_MARKS = () => ([
   { type: 'arrow', x1: 505, y1: 72, x2: 572, y2: 128 },
   { type: 'text', x: 400, y: 40, t: 'сюда лампу' },
 ]);
-const MODELS = [
-  { id: 'auto', name: 'Авто', hint: 'подберём под задачу', k: 1 },
-  { id: 'fast', name: 'Быстрая', hint: 'черновики, дешевле', k: 0.5 },
-  { id: 'precise', name: 'Точная правка', hint: 'бережёт всё вне пометок', k: 1.5 },
-  { id: 'photo', name: 'Фотореализм', hint: 'для фото людей и вещей', k: 2 },
+// Поставщики и их модели. Цены и возможности условные — для макета.
+// per — цена одного варианта в единицах поставщика; mask — умеет править по маске; needImage — только правка готовой картинки
+const PROVIDERS = [
+  { id: 'fal', name: 'fal', hint: 'оплата в долларах', unit: 'usd', models: [
+    { id: 'auto', name: 'Авто', hint: 'подберём под задачу', per: 0.04, mask: true },
+    { id: 'nb2', name: 'Nano Banana 2', hint: 'правка словами, держит лица', per: 0.04, mask: false },
+    { id: 'kontext', name: 'FLUX Kontext', hint: 'правка по описанию', per: 0.04, mask: false },
+    { id: 'fill', name: 'FLUX Fill', hint: 'точно по маске, остальное не трогает', per: 0.05, mask: true, needImage: true },
+  ] },
+  { id: 'hf', name: 'Higgsfield', hint: 'оплата в кредитах', unit: 'cr', models: [
+    { id: 'auto', name: 'Авто', hint: 'подберём под задачу', per: 2, mask: true },
+    { id: 'gpt25', name: 'GPT Image 2.5', hint: 'фото, текст на картинке, маска', per: 2, mask: true },
+    { id: 'soul', name: 'Soul', hint: 'портреты и люди', per: 3, mask: false },
+    { id: 'nb', name: 'Nano Banana', hint: 'правка словами, быстро', per: 1, mask: false },
+  ] },
+  { id: 'glif', name: 'glif', hint: 'подключим позже', soon: true, models: [] },
 ];
-const BASE_PRICE = { 1: 2, 2: 3, 3: 4, 4: 5 };
+const ADMIN_PROVIDER = 'hf';
+const effProv = () => PROVIDERS.find(p => p.id === (S.provider === 'settings' ? ADMIN_PROVIDER : S.provider));
+const curModel = () => effProv().models.find(m => m.id === S.model) || effProv().models[0];
+// Почему модель недоступна для текущей задачи (или пусто — доступна)
+const modelBlock = m => {
+  if (m.needImage && !S.hasImage) return 'Только правит готовую картинку — сначала загрузите её';
+  if (!m.mask && S.hasImage && S.marks.some(x => x.type === 'mask')) return 'Не правит по маске — сотрите кисть или возьмите другую модель';
+  return '';
+};
+const money = (n, unit) => unit === 'usd' ? `$${n.toFixed(2)}` : `${n} ${plural(n, 'кредит', 'кредита', 'кредитов')}`;
 const FILES_IMG = [
   { name: 'hero.png', d: {} },
   { name: 'logo.png', svg: () => sampleSVG('logo') },
@@ -537,8 +678,9 @@ const S = {
   mode: 'edit', fileName: 'hero.png', folder: 'images', hasImage: true, dragOver: false,
   phase: 'idle', errKind: 'provider', progress: [], timer: null,
   tool: 'mask', marks: DEFAULT_MARKS(), zoom: 1, panX: 0, panY: 0,
-  prompt: '', count: 3, model: 'auto', modelOpen: false,
-  samples: [{ kind: 'light', cap: 'Стиль: тёплый свет', from: 'С компьютера' }],
+  prompt: '', count: 3, provider: 'settings', model: 'auto', modelOpen: false, provOpen: false, pmSheet: false,
+  samples: [{ kind: 'light', name: 'тёплый свет', role: 'style' }], roleEdit: null,
+  characters: [], charOn: null, charNew: null, charCard: null, toastKind: null, toastChar: null,
   sampleMenu: false, pickOpen: false, pickSel: null,
   helpOpen: false, outpaintOpen: false, ratio: '16:9', lastAction: { kind: 'prompt' },
   variants: [], selVar: 0, compare: 'slider', showAfter: true, slider: 50,
@@ -547,10 +689,17 @@ const S = {
 };
 
 const plural = (n, a, b, c) => { const m10 = n % 10, m100 = n % 100; return m10 === 1 && m100 !== 11 ? a : (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20) ? b : c); };
-const price = () => Math.max(1, Math.round(BASE_PRICE[S.count] * MODELS.find(m => m.id === S.model).k));
-const priceText = () => { const p = price(); return `≈ ${p} ${plural(p, 'кредит', 'кредита', 'кредитов')} · ${S.count} ${plural(S.count, 'вариант', 'варианта', 'вариантов')}`; };
+const price = (n = S.count) => { const p = curModel().per * n; return effProv().unit === 'usd' ? Math.round(p * 100) / 100 : p; };
+const priceText = () => `≈ ${money(price(), effProv().unit)} · ${S.count} ${plural(S.count, 'вариант', 'варианта', 'вариантов')}`;
 const curD = () => S.history[S.cur].d;
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const ROLES = [['face', 'Персонаж — сохранить лицо', 'Лицо'], ['style', 'Стиль', 'Стиль'], ['object', 'Предмет', 'Предмет']];
+const roleShort = r => ROLES.find(x => x[0] === r)[2];
+const charById = id => S.characters.find(c => c.id === id);
+const TR = { а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh', з: 'z', и: 'i', й: 'y', к: 'k', л: 'l', м: 'm', н: 'n', о: 'o', п: 'p', р: 'r', с: 's', т: 't', у: 'u', ф: 'f', х: 'h', ц: 'ts', ч: 'ch', ш: 'sh', щ: 'sch', ы: 'y', э: 'e', ю: 'yu', я: 'ya' };
+// Имя папки персонажа: транслит имени, «Аня» → anya
+const slug = s => s.trim().toLowerCase().split('').map(ch => TR[ch] ?? (/[a-z0-9]/.test(ch) ? ch : ch === ' ' ? '-' : '')).join('') || 'character';
+const ANYA = () => ({ id: 'anya', name: 'Аня', folder: 'characters/anya/', photos: [0, 1, 2, 3, 4] });
 const nextName = () => {
   if (S.mode === 'create') return 'новая-картинка.png';
   const m = S.fileName.match(/^(.*?)(?:\.v(\d+))?\.(\w+)$/);
@@ -573,16 +722,17 @@ function renderDemo() {
   document.getElementById('demo').innerHTML = `
     <div class="grp"><span class="lbl">Тема</span>${b(S.theme === 'light', 'theme:light', 'Светлая')}${b(S.theme === 'dark', 'theme:dark', 'Тёмная')}</div>
     <div class="grp"><span class="lbl">Ширина</span>${b(!S.mobile, 'w:desk', 'Десктоп')}${b(S.mobile, 'w:mob', 'Телефон 390')}</div>
-    <div class="grp"><span class="lbl">Экран</span>${[['1', 'Файлы'], ['2', 'Пустой'], ['3', 'Редактор'], ['4', 'Генерация'], ['5', 'Варианты'], ['6', 'История'], ['7', 'Сохранение'], ['8', 'Ошибка']]
+    <div class="grp"><span class="lbl">Экран</span>${[['1', 'Файлы'], ['2', 'Пустой'], ['3', 'Редактор'], ['4', 'Генерация'], ['5', 'Варианты'], ['6', 'История'], ['7', 'Сохранение'], ['8', 'Ошибка'], ['9', 'Новый персонаж'], ['10', 'Сцена с персонажем']]
       .map(([n, t]) => b(cur === n, 'jump:' + n, n + ' · ' + t)).join('')}</div>
     <div class="grp"><span class="lbl">Исход генерации</span>${b(S.outcome === 'ok', 'out:ok', 'Успех')}${b(S.outcome === 'provider', 'out:provider', 'Сервис отказал')}${b(S.outcome === 'credits', 'out:credits', 'Нет кредитов')}</div>`;
 }
 function screenNo() {
   if (S.screen === 'files') return '1';
   if (S.saveOpen) return '7';
+  if (S.charNew) return '9';
   if (S.phase === 'error') return '8';
   if (S.phase === 'gen') return '4';
-  if (S.phase === 'variants') return '5';
+  if (S.phase === 'variants') return S.lastAction.char ? '10' : '5';
   if (!S.hasImage) return '2';
   if (S.history.length > 1 && (S.histOpen && !S.mobile || S.histSheet)) return '6';
   return '3';
@@ -624,6 +774,7 @@ function filesView() {
     <div class="island tree">
       <div class="ih">${ic('folder')}<span class="ttl grow">Файлы · Сайт студии</span><button class="ib" title="Ещё">${ic('more')}</button></div>
       <div class="tree-body">
+        ${S.characters.length ? `<div class="row">${ic('folder', 1)}<span class="nm">characters</span><span class="sub muted" style="font-size:11px">${S.characters.map(c => esc(c.name)).join(', ')}</span></div>` : ''}
         <div class="row">${ic('folder', 1)}<span class="nm">docs</span></div>
         <div class="row" data-act="ctx">${ic('folder', 1)}<span class="nm"><b>images</b></span>
           <span class="acts"><button class="btn sm" data-act="create">${ic('spark', 1)} Нарисовать картинку</button><button class="ib" data-act="ctx" title="Действия с папкой">${ic('more', 1)}</button></span>
@@ -669,7 +820,10 @@ function editorView() {
     ${S.mobile && S.histSheet ? `<div class="sheet-ovl" data-act="hist"><div class="sheet" data-stop="1"><div class="grab"></div><div class="ih" style="background:none;border:none"><span class="ttl grow">История шагов</span><button class="ib" data-act="hist">${ic('x')}</button></div>${histBody()}</div></div>` : ''}
     ${S.pickOpen ? pickView() : ''}
     ${S.saveOpen ? saveView() : ''}
-    ${S.toast ? `<div class="toast">${ic('check', 1)}<span>${esc(S.toast)}</span><button data-act="showfile">Показать в файлах</button><button class="x" data-act="toastx">${ic('x', 1)}</button></div>` : ''}
+    ${S.mobile && S.pmSheet ? pmSheetView() : ''}
+    ${S.charNew ? charNewView() : ''}
+    ${S.charCard ? charCardView() : ''}
+    ${S.toast ? `<div class="toast">${ic('check', 1)}<span>${esc(S.toast)}</span>${S.toastKind === 'char' ? `<button data-act="charcard:${S.toastChar}">Карточка</button>` : '<button data-act="showfile">Показать в файлах</button>'}<button class="x" data-act="toastx">${ic('x', 1)}</button></div>` : ''}
   </div>`;
 }
 
@@ -717,7 +871,10 @@ function marksSVG() {
 function askView() {
   const busy = S.phase === 'gen';
   const creating = !S.hasImage;
-  const ph = creating ? 'Опишите, что нарисовать: например, «светлая гостиная, синий диван, торшер в углу, утро»' : 'Что изменить? Отметьте место на картинке или просто опишите';
+  const chOn = charById(S.charOn);
+  const ph = chOn ? `Где и что делает ${chOn.name}? Например, «${chOn.name} сидит в кафе у окна»`
+    : creating ? 'Опишите, что нарисовать: например, «светлая гостиная, синий диван, торшер в углу, утро»' : 'Что изменить? Отметьте место на картинке или просто опишите';
+  const chips = chOn ? `<div class="char-chips"><span class="chip on char-chip"><button data-act="charcard:${chOn.id}" title="Карточка персонажа"><span class="av">${faceSVG(chOn.photos[0])}</span>${esc(chOn.name)}</button><button data-act="charoff" title="Отключить персонажа" aria-label="Отключить персонажа" ${busy ? 'disabled' : ''}>${ic('x', 1)}</button></span></div>` : '';
   const quick = creating ? '' : `<div><div class="sec-l">Быстрые действия</div><div class="qa">
       <button class="chip" data-act="quick:bg" ${busy ? 'disabled' : ''}>${ic('layers', 1)} Убрать фон</button>
       <button class="chip" data-act="quick:upscale" ${busy ? 'disabled' : ''}>${ic('hd', 1)} Улучшить качество</button>
@@ -726,10 +883,17 @@ function askView() {
     </div>
     ${S.outpaintOpen ? `<div class="ratio-pop"><span class="muted" style="font-size:12px">Пропорции</span><div class="seg">${['1:1', '16:9', '9:16'].map(r => `<button class="${S.ratio === r ? 'on' : ''}" data-act="ratio:${r}">${r}</button>`).join('')}</div><button class="btn sm pri" data-act="quick:outpaint">Дорисовать</button></div>` : ''}</div>`;
   const samples = `<div><div class="sec-l">Образцы</div><div class="samples">
-      ${S.samples.map((s, i) => `<div class="smp"><div class="pic">${sampleSVG(s.kind)}</div><div class="cap">${esc(s.cap)}</div><button class="x" data-act="smpx:${i}" title="Убрать образец">${ic('x', 1)}</button></div>`).join('')}
+      ${S.samples.map((s, i) => `<div class="smp"><div class="pic">${sampleSVG(s.kind)}</div><button class="role ${s.role === 'face' ? 'face' : ''}" data-act="role:${i}" title="Роль образца">${roleShort(s.role)}${ic(S.roleEdit === i ? 'up' : 'down', 1)}</button><div class="cap">${esc(s.name)}</div><button class="x" data-act="smpx:${i}" title="Убрать образец">${ic('x', 1)}</button></div>`).join('')}
       ${S.samples.length < 4 ? `<button class="smp-add" data-act="smpmenu">${ic('plus', 1)}Образец</button>` : ''}
+      <button class="smp-add" data-act="charnew" ${busy ? 'disabled' : ''}>${ic('userplus', 1)}Персонаж</button>
       ${S.sampleMenu ? `<div class="menu" style="top:70px;left:0"><button data-act="smpfile">${ic('upload', 1)}<span>С компьютера<small>Файл с вашего компьютера</small></span></button><button data-act="smpproj">${ic('folder', 1)}<span>Из файлов проекта…<small>Любая картинка из этого проекта</small></span></button></div>` : ''}
-    </div><div class="muted" style="font-size:11px;margin-top:6px">Стиль, предмет или человек — модель возьмёт их за пример.</div></div>`;
+    </div>
+    ${S.roleEdit != null && S.samples[S.roleEdit] ? `<div class="role-pop models"><div class="t">Как модели использовать «${esc(S.samples[S.roleEdit].name)}»</div>${ROLES.map(([id, full]) => `<label class="${S.samples[S.roleEdit].role === id ? 'on' : ''}" data-act="setrole:${id}"><input type="radio" name="role" ${S.samples[S.roleEdit].role === id ? 'checked' : ''} style="accent-color:var(--c-accent)"><span class="grow">${full}</span></label>`).join('')}</div>` : ''}
+    <div class="muted" style="font-size:11px;margin-top:6px">Стиль, предмет или человек — модель возьмёт их за пример. Роль задаётся под образцом.</div>
+    <div class="sec-l" style="margin-top:14px">Персонажи проекта</div>
+    ${S.characters.length ? `<div class="chars">${S.characters.map(c => `<div class="chr ${S.charOn === c.id ? 'on' : ''}"><button class="chr-main" data-act="charon:${c.id}" ${busy ? 'disabled' : ''}><span class="av">${faceSVG(c.photos[0])}</span><span>${esc(c.name)}</span><span class="st">${S.charOn === c.id ? 'в генерации' : 'подключить'}</span></button><button class="ib" data-act="charcard:${c.id}" title="Карточка персонажа" aria-label="Карточка персонажа">${ic('more', 1)}</button></div>`).join('')}</div>`
+      : `<div class="char-empty"><span class="big">${ic('user')}</span><span class="grow">Добавьте персонажа — и он будет узнаваем во всех сценах</span><button class="btn sm" data-act="charnew">${ic('plus', 1)} Персонаж</button></div>`}
+    </div>`;
   const helper = S.helpOpen ? `<div class="helper">
       <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--c-text-secondary)">${ic('chat', 1)} Обсуждение в чате проекта «Сайт студии»<span class="grow"></span><button class="ib" data-act="helpx" title="Закрыть" style="width:24px;height:24px">${ic('x', 1)}</button></div>
       <div class="me"><span class="pic">${scene(curD())}</span><span>Картинка, ${S.marks.length} ${plural(S.marks.length, 'пометка', 'пометки', 'пометок')} и запрос${S.prompt ? ': «' + esc(S.prompt.slice(0, 50)) + (S.prompt.length > 50 ? '…' : '') + '»' : ''}</span></div>
@@ -737,23 +901,31 @@ function askView() {
       <div class="t" style="background:none;padding:0">В <code>docs/brand.md</code> палитра тёплая, латунь и дерево, а на странице «О студии» уже стоит латунный торшер (<code>images/about.jpg</code>). Предлагаю такой запрос:</div>
       <div class="t">Поставь в правый угол, у стрелки, латунный напольный торшер как на images/about.jpg, с тёплым светом. Картину в рамке оставь как есть, диван и окно не трогай.</div>
       <div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap"><button class="btn sm ghost" data-act="chatopen">Открыть чат</button><button class="btn sm pri" data-act="helpok">Подставить в запрос</button></div></div>` : '';
-  const m = MODELS.find(x => x.id === S.model);
-  const model = `<div><button class="model-h" data-act="model">Модель: <b>${m.name.toLowerCase()}</b> ${ic(S.modelOpen ? 'up' : 'down', 1)}</button>
-    ${S.modelOpen ? `<div class="models">${MODELS.map(x => `<label class="${x.id === S.model ? 'on' : ''}" data-act="setmodel:${x.id}"><input type="radio" name="mdl" ${x.id === S.model ? 'checked' : ''} style="accent-color:var(--c-accent)"><span class="grow">${x.name}<br><small>${x.hint}</small></span><small>×${x.k}</small></label>`).join('')}</div>` : ''}</div>`;
+  const pv = effProv(), m = curModel(), blocked = modelBlock(m);
+  const provName = S.provider === 'settings' ? `как в настройках (${pv.name})` : pv.name;
+  const warn = blocked ? `<div class="pm-warn">${ic('alert', 1)}<span>${m.name}: ${blocked.toLowerCase()}</span></div>` : '';
+  const model = S.mobile
+    ? `<div><div class="sec-l">Чем рисовать</div><button class="pm-btn" data-act="pmsheet"><span class="grow">${pv.name} · <b>${m.name}</b></span>${ic('down', 1)}</button>${warn}</div>`
+    : `<div class="pm">
+        <button class="model-h" data-act="prov">Поставщик: <b>${provName}</b> ${ic(S.provOpen ? 'up' : 'down', 1)}</button>
+        ${S.provOpen ? provList() : ''}
+        <button class="model-h" data-act="model">Модель: <b>${m.name}</b> ${ic(S.modelOpen ? 'up' : 'down', 1)}</button>
+        ${S.modelOpen ? modelList() : ''}${warn}</div>`;
   const foot = busy
     ? `<div class="gen-row"><span class="price grow">Рисуем ${S.count} ${plural(S.count, 'вариант', 'варианта', 'вариантов')}…</span><button class="btn" data-act="cancel">${ic('x', 1)} Отменить</button></div>`
     : `<div class="gen-row"><span class="muted" style="font-size:12px">Вариантов</span><div class="seg">${[1, 2, 3, 4].map(n => `<button class="${S.count === n ? 'on' : ''}" data-act="count:${n}">${n}</button>`).join('')}</div>
          <span class="grow"></span><span class="price">${ic('coin', 1)} <b>${priceText()}</b></span></div>
-       <button class="btn pri lg" style="width:100%" data-act="generate">${ic('spark', 1)} Сгенерировать</button>`;
+       <button class="btn pri lg" style="width:100%" data-act="generate" ${blocked ? `disabled title="${blocked}"` : ''}>${ic('spark', 1)} Сгенерировать</button>`;
   return `<div class="ask">
     <div class="ask-body">
       <div>
         <div class="sec-l">${creating ? 'Что нарисовать' : 'Запрос'}</div>
+        ${chips}
         <textarea class="q" id="q" placeholder="${ph}" ${busy ? 'disabled' : ''}>${esc(S.prompt)}</textarea>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;gap:6px">
           <button class="btn sm ghost" data-act="help" ${busy || creating && !S.prompt ? 'disabled' : ''}>${ic('chat', 1)} Обсудить с Claude</button>
         </div>
-        <div class="ctx-hint">${ic('spark', 1)}<span>Claude учитывает материалы проекта — стиль, тексты, другие картинки</span></div>
+        <div class="ctx-hint">${ic('spark', 1)}<span>Claude учитывает описание проекта</span></div>
       </div>
       ${helper}
       ${samples}
@@ -764,8 +936,27 @@ function askView() {
   </div>`;
 }
 
+// Списки поставщиков и моделей: одни и те же в боковой панели и в шторке телефона
+function provList() {
+  const row = (id, name, hint, extra = '', dis = false) => `<label class="${S.provider === id ? 'on' : ''} ${dis ? 'dis' : ''}" ${dis ? '' : `data-act="setprov:${id}"`}><input type="radio" name="prv" ${S.provider === id ? 'checked' : ''} ${dis ? 'disabled' : ''} style="accent-color:var(--c-accent)"><span class="grow">${name}<br><small>${hint}</small></span>${extra}</label>`;
+  const admin = PROVIDERS.find(p => p.id === ADMIN_PROVIDER);
+  return `<div class="models">${row('settings', 'Как в настройках', `сейчас ${admin.name} — выбрал администратор`)}${PROVIDERS.map(p => row(p.id, p.name, p.hint, p.soon ? '<span class="soon">Скоро</span>' : '', p.soon)).join('')}</div>`;
+}
+function modelList() {
+  const pv = effProv();
+  return `<div class="models">${pv.models.map(x => { const why = modelBlock(x); return `<label class="${x.id === S.model ? 'on' : ''} ${why ? 'dis' : ''}" ${why ? `title="${why}"` : `data-act="setmodel:${x.id}"`}><input type="radio" name="mdl" ${x.id === S.model ? 'checked' : ''} ${why ? 'disabled' : ''} style="accent-color:var(--c-accent)"><span class="grow">${x.name}<br><small>${why || x.hint}</small></span><small>${money(x.per, pv.unit)}</small></label>`; }).join('')}</div>`;
+}
+function pmSheetView() {
+  return `<div class="sheet-ovl" data-act="pmsheet"><div class="sheet" data-stop="1"><div class="grab"></div>
+    <div class="ih" style="background:none;border:none"><span class="ttl grow">Чем рисовать</span><button class="ib" data-act="pmsheet">${ic('x')}</button></div>
+    <div class="ask-body" style="gap:10px"><div><div class="sec-l">Поставщик</div>${provList()}</div><div><div class="sec-l">Модель · ${effProv().name}</div>${modelList()}</div>
+      <div class="price">${ic('coin', 1)} <b>${priceText()}</b></div></div>
+    <div class="ask-foot"><button class="btn pri lg" style="width:100%" data-act="pmsheet">Готово</button></div></div></div>`;
+}
+
 function genView() {
-  const label = { prompt: 'по вашему запросу', bg: 'убираем фон', upscale: 'улучшаем качество', remove: 'убираем отмеченное', outpaint: 'дорисовываем за края ' + (S.lastAction.ratio || '') }[S.lastAction.kind];
+  const label = { prompt: 'по вашему запросу', bg: 'убираем фон', upscale: 'улучшаем качество', remove: 'убираем отмеченное', outpaint: 'дорисовываем за края ' + (S.lastAction.ratio || '') }[S.lastAction.kind]
+    + (charById(S.lastAction.char) ? ' · персонаж ' + charById(S.lastAction.char).name : '');
   return `<div class="gen-area">
     <div class="gen-head"><span class="t">Рисуем ${S.count} ${plural(S.count, 'вариант', 'варианта', 'вариантов')}</span><span class="muted">${label} · обычно 20–40 секунд</span><span class="grow"></span><button class="btn" data-act="cancel">${ic('x', 1)} Отменить</button></div>
     <div class="skels" style="${S.mobile ? 'grid-template-columns:1fr 1fr' : ''}">${S.progress.map((p, i) => `<div class="skel"><span class="pct">Вариант ${i + 1} · ${Math.floor(p)}%</span><div class="bar"><i style="width:${p}%" id="pb${i}"></i></div></div>`).join('')}</div>
@@ -786,8 +977,10 @@ function variantsView() {
   } else {
     cmp = `<div class="cmp">${S.showAfter ? after : before}<span class="tag" style="left:8px">${S.showAfter ? 'После' : 'До'}</span></div>`;
   }
+  const ch = charById(S.lastAction.char);
   return `<div class="gen-area">
-    <div class="gen-head"><span class="t">Готово: ${S.variants.length} ${plural(S.variants.length, 'вариант', 'варианта', 'вариантов')}</span><span class="grow"></span>
+    <div class="gen-head"><span class="t">Готово: ${S.variants.length} ${plural(S.variants.length, 'вариант', 'варианта', 'вариантов')}</span>
+      ${ch ? `<span class="same-face"><span class="av">${faceSVG(ch.photos[0])}</span>${esc(ch.name)}: лицо одно во всех вариантах</span>` : ''}<span class="grow"></span>
       ${noBefore ? '' : `<div class="seg"><button class="${S.compare === 'slider' ? 'on' : ''}" data-act="cmp:slider">Шторка</button><button class="${S.compare === 'toggle' ? 'on' : ''}" data-act="cmp:toggle">До / после</button></div>`}
       ${!noBefore && S.compare === 'toggle' ? `<button class="btn sm" data-act="flip">${S.showAfter ? 'Показать «до»' : 'Показать «после»'}</button>` : ''}</div>
     ${cmp}
@@ -806,14 +999,14 @@ function errorView() {
   const credits = S.errKind === 'credits';
   return `<div class="gen-area"><div class="err">
     <div class="ic">${ic(credits ? 'coin' : 'alert')}</div>
-    <h3>${credits ? 'Не хватает кредитов' : 'Сервис рисования не ответил'}</h3>
+    <h3>${credits ? (effProv().unit === 'usd' ? `Не хватает денег на балансе ${effProv().name}` : 'Не хватает кредитов') : 'Сервис рисования не ответил'}</h3>
     <p>${credits
-      ? `На этот запуск нужно ${priceText().replace(' · ', ', ')}, а на счёте осталось 1 кредит. Можно попросить меньше вариантов или пополнить счёт.`
+      ? `На этот запуск нужно ${priceText().replace(' · ', ', ')}, а на счёте ${effProv().name} осталось ${money(effProv().unit === 'usd' ? 0.03 : 1, effProv().unit)}. Можно попросить меньше вариантов или пополнить счёт.`
       : 'Сервис, который рисует картинки, сейчас отказал. Так бывает при большой нагрузке — обычно помогает повтор через минуту.'}</p>
     <div class="kept">${ic('check', 1)} Запрос, пометки и образцы сохранены. Кредиты не списаны.</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       <button class="btn pri" data-act="retry">Повторить</button>
-      ${credits ? `<button class="btn" data-act="retry1">Нарисовать 1 вариант (≈ ${Math.max(1, Math.round(BASE_PRICE[1] * MODELS.find(m => m.id === S.model).k))} кредита)</button>` : `<button class="btn" data-act="discard">Изменить запрос</button>`}
+      ${credits ? `<button class="btn" data-act="retry1">Нарисовать 1 вариант (≈ ${money(price(1), effProv().unit)})</button>` : `<button class="btn" data-act="discard">Изменить запрос</button>`}
     </div></div></div>`;
 }
 
@@ -851,6 +1044,43 @@ function saveView() {
       <label class="chk"><input type="checkbox" id="saveHist" ${S.saveHistory ? 'checked' : ''}><span>Сохранить историю правок<br><span class="muted" style="font-size:11px">Рядом появится папка ${esc(S.saveName.replace(/\.\w+$/, ''))}.history с шагами и запросами — к ним можно вернуться позже</span></span></label>
     </div>
     <div class="modal-f"><button class="btn ghost" data-act="savex">Отмена</button><button class="btn pri" data-act="saveok">Сохранить в проект</button></div>
+  </div></div>`;
+}
+
+const charValid = () => S.charNew.name.trim() && S.charNew.photos.length >= 3;
+const charCount = () => { const n = S.charNew.photos.length; return n >= 3 ? `${n} фото из 10` : `${n} из 10 · нужно ещё ${3 - n}`; };
+function charNewView() {
+  const c = S.charNew, n = c.photos.length;
+  return `<div class="ovl" data-act="charnewx"><div class="modal" data-stop="1">
+    <div class="modal-h">${ic('userplus')}<h3>Новый персонаж</h3><button class="ib" data-act="charnewx">${ic('x')}</button></div>
+    <div class="modal-b">
+      <div class="fld"><label>Имя</label><input type="text" id="charName" value="${esc(c.name)}" placeholder="Например, Аня"></div>
+      <div class="fld"><label>Фото лица · от 3 до 10</label>
+        <div class="ph-grid">${c.photos.map((p, i) => `<div class="ph"><div class="pic">${faceSVG(p)}</div><button class="x" data-act="charphx:${i}" title="Убрать фото" aria-label="Убрать фото">${ic('x', 1)}</button></div>`).join('')}
+          ${n < 10 ? `<button class="smp-add" data-act="charph">${ic('upload', 1)}${n ? 'Ещё фото' : 'Загрузить'}</button>` : ''}</div>
+        <div class="h">Лучше разные ракурсы и освещение, лицо крупно.</div>
+      </div>
+      <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><span class="cnt ${n >= 3 ? 'ok' : ''}" id="charCnt">${charCount()}</span>
+        <span class="muted" style="font-size:12px" id="charPath">Папка: characters/${esc(slug(c.name || 'имя'))}/</span></div>
+    </div>
+    <div class="modal-f"><button class="btn ghost" data-act="charnewx">Отмена</button><button class="btn pri" id="charSave" data-act="charsave" ${charValid() ? '' : 'disabled'}>Сохранить персонажа</button></div>
+  </div></div>`;
+}
+function charCardView() {
+  const c = charById(S.charCard);
+  if (!c) return '';
+  const on = S.charOn === c.id;
+  return `<div class="ovl" data-act="charcardx"><div class="modal" data-stop="1">
+    <div class="modal-h"><span class="av lg">${faceSVG(c.photos[0])}</span><div class="grow"><h3>${esc(c.name)}</h3><div class="muted" style="font-size:12px">${esc(c.folder)} · ${c.photos.length} фото</div></div><button class="ib" data-act="charcardx">${ic('x')}</button></div>
+    <div class="modal-b">
+      <div class="ph-grid">${c.photos.map(p => `<div class="ph"><div class="pic">${faceSVG(p)}</div></div>`).join('')}</div>
+      <div class="muted" style="font-size:12px;line-height:1.5">Фото лежат в проекте. Подключённый персонаж уходит в генерацию вместе с запросом — модель держит его лицо.</div>
+      <div class="train">
+        <div class="r"><button class="btn" disabled>${ic('spark', 1)} Улучшить сходство (обучение, ~10 мин)</button><span class="soon">Скоро</span></div>
+        <div class="muted" style="font-size:11px;line-height:1.4">Модель дообучится на фото персонажа — лицо станет узнаваемым и в сложных ракурсах.</div>
+      </div>
+    </div>
+    <div class="modal-f"><button class="btn ghost" data-act="charcardx">Закрыть</button><button class="btn ${on ? '' : 'pri'}" data-act="charon:${c.id}">${on ? 'Отключить от генерации' : 'Подключить к генерации'}</button></div>
   </div></div>`;
 }
 
@@ -915,6 +1145,12 @@ app.addEventListener('drop', e => { if (e.target.closest('#drop')) { e.preventDe
 app.addEventListener('input', e => {
   if (e.target.id === 'q') S.prompt = e.target.value;
   if (e.target.id === 'saveName') S.saveName = e.target.value;
+  // Имя персонажа: без перерисовки, чтобы не терять фокус, — обновляем только кнопку и путь
+  if (e.target.id === 'charName') {
+    S.charNew.name = e.target.value;
+    document.getElementById('charSave').disabled = !charValid();
+    document.getElementById('charPath').textContent = `Папка: characters/${slug(S.charNew.name || 'имя')}/`;
+  }
 });
 app.addEventListener('change', e => {
   if (e.target.id === 'saveFolder') S.saveFolder = e.target.value;
@@ -924,7 +1160,7 @@ app.addEventListener('change', e => {
 // ---------- Генерация ----------
 function startGen(kind, extra = {}) {
   S.lastAction = { kind, ...extra };
-  S.phase = 'gen'; S.helpOpen = false; S.outpaintOpen = false; S.modelOpen = false; S.sampleMenu = false;
+  S.phase = 'gen'; S.helpOpen = false; S.outpaintOpen = false; S.modelOpen = false; S.sampleMenu = false; S.roleEdit = null;
   S.progress = Array.from({ length: S.count }, () => 0);
   const speeds = S.progress.map(() => 2.2 + Math.random() * 2.5);
   clearInterval(S.timer);
@@ -939,7 +1175,10 @@ function startGen(kind, extra = {}) {
 }
 function finishGen() {
   const base = curD(), k = S.lastAction.kind;
+  const fromScratch = S.mode === 'create' && S.history.length === 1;
   S.variants = Array.from({ length: Math.max(S.count, 1) }, (_, i) => {
+    // С персонажем: с нуля — сцена в кафе, поверх картинки — персонаж в комнате; лицо одно
+    if (k === 'prompt' && S.lastAction.char) return fromScratch ? { cafe: i } : { ...base, person: i };
     if (k === 'prompt') return { ...base, lamp: (i + (base.lamp != null ? base.lamp + 1 : 0)) % 4 };
     if (k === 'bg') return { ...base, bg: false };
     if (k === 'upscale') return { ...base, sharp: true };
@@ -962,11 +1201,13 @@ function loadImage(name) {
 }
 function openEditor(name) {
   Object.assign(S, { screen: 'editor', mode: 'edit', fileName: name, folder: 'images', hasImage: true, phase: 'idle', marks: DEFAULT_MARKS(), prompt: '',
-    history: [{ title: 'Оригинал', d: {} }], cur: 0, zoom: 1, panX: 0, panY: 0, tool: 'mask', ctxOpen: false, toast: null, histSheet: false, saveOpen: false, helpOpen: false });
+    history: [{ title: 'Оригинал', d: {} }], cur: 0, zoom: 1, panX: 0, panY: 0, tool: 'mask', ctxOpen: false, toast: null, histSheet: false, saveOpen: false, helpOpen: false,
+    charOn: null, charNew: null, charCard: null, roleEdit: null });
 }
 function openCreate() {
   Object.assign(S, { screen: 'editor', mode: 'create', fileName: 'новая-картинка.png', folder: 'images', hasImage: false, phase: 'idle', marks: [], prompt: '',
-    history: [{ title: 'Оригинал', d: {} }], cur: 0, ctxOpen: false, toast: null, histSheet: false, saveOpen: false, helpOpen: false });
+    history: [{ title: 'Оригинал', d: {} }], cur: 0, ctxOpen: false, toast: null, histSheet: false, saveOpen: false, helpOpen: false,
+    charOn: null, charNew: null, charCard: null, roleEdit: null });
 }
 
 // ---------- Клики ----------
@@ -980,7 +1221,7 @@ document.addEventListener('click', e => {
   e.stopPropagation();
   switch (a) {
     case 'theme': S.theme = v; break;
-    case 'w': S.mobile = v === 'mob'; S.histSheet = false; break;
+    case 'w': S.mobile = v === 'mob'; S.histSheet = false; S.pmSheet = false; break;
     case 'out': S.outcome = v; break;
     case 'jump': jump(v); break;
     case 'ctx': S.ctxOpen = !S.ctxOpen; break;
@@ -994,35 +1235,60 @@ document.addEventListener('click', e => {
     case 'clearmarks': S.marks = []; break;
     case 'zoom': S.zoom = v === 'fit' ? 1 : Math.min(4, Math.max(.25, S.zoom * (v === '+' ? 1.25 : 0.8))); if (v === 'fit') { S.panX = 0; S.panY = 0; } break;
     case 'count': S.count = +v; break;
-    case 'model': S.modelOpen = !S.modelOpen; break;
-    case 'setmodel': S.model = v; break;
+    case 'model': S.modelOpen = !S.modelOpen; S.provOpen = false; break;
+    case 'prov': S.provOpen = !S.provOpen; S.modelOpen = false; break;
+    // Сменился поставщик — модель сбрасывается на «Авто»: список моделей у него свой
+    case 'setprov': if (S.provider !== v) { S.provider = v; S.model = 'auto'; } S.provOpen = false; if (!S.mobile) S.modelOpen = true; break;
+    case 'setmodel': S.model = v; if (!S.mobile) S.modelOpen = false; break;
+    case 'pmsheet': S.pmSheet = !S.pmSheet; break;
     case 'help': S.helpOpen = true; break;
     case 'helpx': S.helpOpen = false; break;
     case 'helpok': S.prompt = 'Поставь в правый угол, у стрелки, латунный напольный торшер как на images/about.jpg, с тёплым светом. Картину в рамке оставь как есть, диван и окно не трогай.'; S.helpOpen = false; break;
     case 'chatopen': S.chatPrompt = S.prompt; S.helpOpen = false; S.screen = 'chat'; break;
     case 'backed': S.screen = 'editor'; break;
     case 'chatuse': S.prompt = 'Поставь в правый угол, у стрелки, латунный напольный торшер как на images/about.jpg, с тёплым светом. Картину в рамке оставь как есть, диван и окно не трогай.'; S.screen = 'editor'; S.helpOpen = false; break;
-    case 'chatsample': if (!S.samples.some(x => x.cap === 'Из проекта: about.jpg')) S.samples.push({ kind: 'lamp', cap: 'Из проекта: about.jpg' }); S.screen = 'editor'; break;
+    case 'chatsample': if (!S.samples.some(x => x.name === 'about.jpg')) S.samples.push({ kind: 'lamp', name: 'about.jpg', role: 'object' }); S.screen = 'editor'; break;
     case 'smpmenu': S.sampleMenu = !S.sampleMenu; break;
-    case 'smpfile': S.samples.push({ kind: 'lamp', cap: 'Предмет: торшер', from: 'С компьютера' }); S.sampleMenu = false; break;
+    case 'smpfile': S.samples.push({ kind: 'lamp', name: 'торшер', role: 'object' }); S.sampleMenu = false; break;
     case 'smpproj': S.sampleMenu = false; S.pickFor = 'sample'; S.pickOpen = true; S.pickSel = null; break;
-    case 'smpx': S.samples.splice(+v, 1); break;
+    case 'smpx': S.samples.splice(+v, 1); S.roleEdit = null; break;
+    case 'role': S.roleEdit = S.roleEdit === +v ? null : +v; break;
+    case 'setrole': S.samples[S.roleEdit].role = v; S.roleEdit = null; break;
+    case 'charnew': S.charNew = { name: '', photos: [] }; S.sampleMenu = false; S.toast = null; break;
+    case 'charnewx': S.charNew = null; break;
+    // Первое «Загрузить» — как выбор нескольких файлов сразу, дальше по одному
+    case 'charph': { const p = S.charNew.photos, next = p.length ? Math.max(...p) + 1 : 0;
+      p.push(...(p.length ? [next] : [0, 1, 2, 3])); p.splice(10); break; }
+    case 'charphx': S.charNew.photos.splice(+v, 1); break;
+    case 'charsave': {
+      if (!charValid()) break;
+      const name = S.charNew.name.trim(); let id = slug(name);
+      while (charById(id)) id += '-2';
+      S.characters.push({ id, name, folder: `characters/${id}/`, photos: [...S.charNew.photos] });
+      S.charOn = id; S.charNew = null;
+      S.toast = `Персонаж сохранён в проект: characters/${id}/`; S.toastKind = 'char'; S.toastChar = id;
+      break;
+    }
+    case 'charon': S.charOn = S.charOn === v ? null : v; break;
+    case 'charoff': S.charOn = null; break;
+    case 'charcard': S.charCard = v; S.toast = null; break;
+    case 'charcardx': S.charCard = null; break;
     case 'picksel': S.pickSel = v; break;
     case 'pickx': S.pickOpen = false; break;
     case 'pickok': {
       S.pickOpen = false;
       if (S.pickFor === 'base') { loadImage(S.pickSel); S.mode = 'edit'; return render(); }
       const kind = { 'logo.png': 'logo', 'team-photo.jpg': 'team', 'lamp-ref.png': 'lamp' }[S.pickSel] || 'light';
-      S.samples.push({ kind, cap: 'Из проекта: ' + S.pickSel });
+      S.samples.push({ kind, name: S.pickSel, role: kind === 'team' ? 'face' : kind === 'light' ? 'style' : 'object' });
       break;
     }
     case 'outpaint': S.outpaintOpen = !S.outpaintOpen; break;
     case 'ratio': S.ratio = v; break;
     case 'quick': startGen(v, v === 'outpaint' ? { ratio: S.ratio } : {}); return;
     case 'generate':
-      if (!S.hasImage && !S.prompt) S.prompt = 'Светлая гостиная, синий диван, торшер в углу, утро';
+      if (!S.hasImage && !S.prompt) S.prompt = charById(S.charOn) ? `${charById(S.charOn).name} сидит в кафе у окна` : 'Светлая гостиная, синий диван, торшер в углу, утро';
       if (!S.hasImage) { S.hasImage = true; S.history = [{ title: 'Оригинал', d: { lamp: null } }]; }
-      startGen('prompt'); return;
+      startGen('prompt', S.charOn ? { char: S.charOn } : {}); return;
     case 'cancel': clearInterval(S.timer); S.phase = 'idle'; break;
     case 'retry': startGen(S.lastAction.kind, S.lastAction); return;
     case 'retry1': S.count = 1; startGen(S.lastAction.kind, S.lastAction); return;
@@ -1039,7 +1305,7 @@ document.addEventListener('click', e => {
       if (S.saveFrom === 'variant') pushStep(S.variants[S.selVar]);
       const folder = S.saveFolder === '(корень проекта)' ? '' : S.saveFolder + '/';
       S.saveOpen = false; S.phase = 'idle'; S.marks = [];
-      S.toast = `Сохранено в проект: ${folder}${S.saveName}`;
+      S.toast = `Сохранено в проект: ${folder}${S.saveName}`; S.toastKind = null;
       S.newFile = S.saveName; S.fileName = S.saveName; S.mode = 'edit';
       break;
     }
@@ -1053,9 +1319,18 @@ document.addEventListener('click', e => {
 
 function jump(n) {
   clearInterval(S.timer);
-  S.saveOpen = false; S.toast = null; S.pickOpen = false; S.histSheet = false;
+  S.saveOpen = false; S.toast = null; S.pickOpen = false; S.histSheet = false; S.pmSheet = false;
   if (n === '1') { S.screen = 'files'; S.ctxOpen = true; return; }
   if (n === '2') return openCreate();
+  if (n === '9') { openEditor('hero.png'); S.charNew = { name: 'Аня', photos: [0, 1, 2, 3] }; return; }
+  if (n === '10') {
+    openCreate();
+    if (!charById('anya')) S.characters.push(ANYA());
+    S.charOn = 'anya'; S.prompt = 'Аня сидит в кафе у окна'; S.count = 3;
+    S.lastAction = { kind: 'prompt', char: 'anya' };
+    S.variants = [0, 1, 2].map(i => ({ cafe: i })); S.hasImage = true;
+    S.selVar = 0; S.phase = 'variants'; return;
+  }
   openEditor('hero.png');
   if (n === '3') return;
   if (n === '4') { S.prompt = 'Поставь торшер в угол у стрелки'; setTimeout(() => startGen('prompt'), 0); return; }

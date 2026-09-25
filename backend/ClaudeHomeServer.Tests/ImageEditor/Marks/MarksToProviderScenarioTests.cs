@@ -149,28 +149,122 @@ public class MarksToProviderScenarioTests
             .And.Contain("подпись посередине слева (x 30 %, y 65 %): «сюда кота»");
     }
 
-    [Fact]
-    public async Task КистьСтрелкаПодпись_ИсходникКопияМаска_ПоПорядку()
-    {
-        var sent = await RunFal("добавь кота", brush: true, ArrowJson, LabelJson);
+    // ── Кисть вместе с пометками: два запроса ───────────────────────────────────
+    // Дефект B (живой прогон 2026-09-26): в одном запросе nano-banana рисовал кота по стрелке,
+    // а закрашенную кружку оставлял, 2 из 2. Теперь сначала правка по маске, затем по пометкам
+    // поверх её результата
 
-        sent.Model.Should().Be(FalImageEditor.NanoBananaEdit);
-        sent.Body.TryGetProperty("mask_url", out _).Should().BeFalse();
-        ImageUrls(sent.Body).Should().Equal(Uri(Source), Uri(Annotated), Uri(Mask));
-        sent.Prompt.Should().Contain("выделено кистью в центре (x 35–65 %, y 35–55 %)")
-            .And.Contain("стрелка от (x 10 %, y 90 %)")
-            .And.Contain("3) маска: белое — область, которую менять")
-            .And.Contain("Менять только отмеченные места первой картинки");
+    private static readonly byte[] Cleaned = TestImages.Png(20, 10, tail: 4);
+    private static readonly byte[] Final = TestImages.Png(20, 10, tail: 5);
+
+    private sealed record TwoPass(FakeHttp Http, ImageEditResult Result, JsonElement First, JsonElement Second);
+
+    private static async Task<TwoPass> RunFalTwoPass(string prompt, int count, Func<int, HttpResponseMessage>? result = null)
+    {
+        var posts = 0;
+        var http = new FakeHttp(c => c switch
+        {
+            _ when c.Method == HttpMethod.Post => Ticket(++posts),
+            _ when c.Url.EndsWith("/status") => FakeHttp.Json("""{"status":"COMPLETED"}"""),
+            _ when c.Url == $"{Queue}/r1" => result?.Invoke(1) ?? FakeHttp.Json("""{"images":[{"url":"https://cdn.test/cleaned.png"}]}"""),
+            _ when c.Url == $"{Queue}/r2" => result?.Invoke(2) ?? FakeHttp.Json(
+                """{"images":[{"url":"https://cdn.test/final.png"},{"url":"https://cdn.test/final.png"}]}"""),
+            _ when c.Url == "https://cdn.test/cleaned.png" => FakeHttp.Bytes(Cleaned),
+            _ when c.Url == "https://cdn.test/final.png" => FakeHttp.Bytes(Final),
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+        });
+        var editor = new FalImageEditor(http, TestImages.Config(("Fal:ApiKey", "k"), ("Fal:QueueBase", Queue)),
+            NullLogger<FalImageEditor>.Instance) { PollInterval = TimeSpan.Zero };
+
+        var removal = EditIntent.IsRemoval(prompt);
+        var model = editor.PickModel(ImageEditOp.Inpaint, EditMode.Auto, new EditTraits(true, 0, false, true, removal))!;
+        var input = new ImageEditJobInput("q", prompt, $"[{BrushJson},{ArrowJson},{LabelJson}]",
+            new ImageBytes(Source, "image/png"), new ImageBytes(Mask, "image/png"),
+            new ImageBytes(Annotated, "image/png"), [], "images/hero.png");
+        var request = EditRequestComposer.Compose(input, ImageEditOp.Inpaint, model, count).Value!;
+
+        var run = await editor.RunAsync(request, new SyncProgress(_ => { }), default);
+
+        var bodies = http.Calls.Where(c => c.Method == HttpMethod.Post)
+            .Select(c => JsonDocument.Parse(c.Body).RootElement).ToList();
+        return new TwoPass(http, run, bodies[0], bodies.ElementAtOrDefault(1));
+    }
+
+    private static HttpResponseMessage Ticket(int n) => FakeHttp.Json(
+        $$"""{"request_id":"r{{n}}","status_url":"{{Queue}}/r{{n}}/status","response_url":"{{Queue}}/r{{n}}","cancel_url":"{{Queue}}/r{{n}}/cancel"}""");
+
+    [Theory]
+    [InlineData("удали закрашенное, а по стрелке посади кота")]
+    [InlineData("добавь кота")]
+    public async Task КистьСтрелкаПодпись_СначалаПравкаПоМаске_ПотомПометкиПоверхЕёРезультата(string prompt)
+    {
+        var run = await RunFalTwoPass(prompt, count: 2);
+
+        run.Result.Outcome.Should().Be(EditOutcome.Ok);
+        run.Result.Images.Select(i => i.Bytes).Should().AllBeEquivalentTo(Final);
+        var calls = run.Http.Calls.ToList();
+        calls.Where(c => c.Method == HttpMethod.Post).Select(c => c.Url)
+            .Should().Equal($"{Queue}/{FalImageEditor.NanoBananaEdit}", $"{Queue}/{FalImageEditor.NanoBananaEdit}");
+        // Второй запрос уходит только после того, как скачан результат первого
+        calls.FindIndex(c => c.Url == "https://cdn.test/cleaned.png")
+            .Should().BeLessThan(calls.FindLastIndex(c => c.Method == HttpMethod.Post));
+
+        // Первый: исходник и маска, один вариант, только кисть
+        ImageUrls(run.First).Should().Equal(Uri(Source), Uri(Mask));
+        run.First.GetProperty("num_images").GetInt32().Should().Be(1);
+        run.First.TryGetProperty("mask_url", out _).Should().BeFalse();
+        run.First.GetProperty("prompt").GetString().Should().StartWith(prompt)
+            .And.Contain("выделено кистью в центре (x 35–65 %, y 35–55 %)")
+            .And.Contain("2) маска: белое — область, которую менять")
+            .And.Contain("первый шаг правки")
+            .And.NotContain("стрелка от").And.NotContain("сюда кота");
+
+        // Второй: результат первого вместо исходника, размеченная копия, без маски, все варианты
+        ImageUrls(run.Second).Should().Equal(Uri(Cleaned), Uri(Annotated));
+        run.Second.GetProperty("num_images").GetInt32().Should().Be(2);
+        run.Second.GetProperty("prompt").GetString().Should().StartWith(prompt)
+            .And.Contain("стрелка от (x 10 %, y 90 %) к (x 30 %, y 70 %)")
+            .And.Contain("подпись посередине слева (x 30 %, y 65 %): «сюда кота»")
+            .And.Contain("2) картинка с пометками поверх")
+            .And.Contain("второй шаг правки")
+            .And.NotContain("выделено кистью").And.NotContain("маска");
     }
 
     [Fact]
-    public async Task УдалениеСоСтрелкой_ИдётВМодельСОбразцами_ЗапросЧеловекаСохранён()
+    public async Task ДваЗапроса_ПервыйНеУдался_ВторойНеЗапускается()
     {
-        var sent = await RunFal("удали", brush: true, ArrowJson);
+        var run = await RunFalTwoPass("удали", count: 1,
+            n => FakeHttp.Json("""{"detail":"Image failed content policy check"}""", HttpStatusCode.UnprocessableEntity));
 
-        sent.Model.Should().Be(FalImageEditor.NanoBananaEdit);
-        ImageUrls(sent.Body).Should().Equal(Uri(Source), Uri(Annotated), Uri(Mask));
-        sent.Prompt.Should().StartWith("удали").And.Contain("выделено кистью");
+        run.Result.Outcome.Should().Be(EditOutcome.Rejected);
+        run.Result.Charged.Should().BeFalse();
+        run.Http.Calls.Count(c => c.Method == HttpMethod.Post).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ДваЗапроса_ВторойНеУдался_ПервыйВсёРавноТарифицирован()
+    {
+        var run = await RunFalTwoPass("удали", count: 1, n => n == 1
+            ? FakeHttp.Json("""{"images":[{"url":"https://cdn.test/cleaned.png"}]}""")
+            : FakeHttp.Json("""{"detail":"boom"}""", HttpStatusCode.InternalServerError));
+
+        run.Result.Outcome.Should().Be(EditOutcome.Failed);
+        run.Result.Charged.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ДваЗапроса_КотировкаСчитаетЛишнююКартинкуПервогоПрохода()
+    {
+        var editor = new FalImageEditor(new FakeHttp(_ => FakeHttp.Json(
+                """{"prices":[{"endpoint_id":"fal-ai/nano-banana-2/edit","unit_price":0.08,"unit":"images"}]}""")),
+            TestImages.Config(("Fal:ApiKey", "k")), NullLogger<FalImageEditor>.Instance);
+        var model = editor.Models.Single(m => m.Id == FalImageEditor.NanoBananaEdit);
+        var both = new ImageEditQuoteRequest("fal", model.Id, EditMode.Auto, ImageEditOp.Inpaint, 2, true, 0, false,
+            null, null, HasAnnotations: true);
+
+        (await editor.EstimateAsync(model, both, default)).Amount.Should().BeApproximately(0.24, 1e-9);
+        (await editor.EstimateAsync(model, both with { HasAnnotations = false }, default)).Amount
+            .Should().BeApproximately(0.16, 1e-9);
     }
 
     [Fact]

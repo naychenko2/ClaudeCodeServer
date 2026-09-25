@@ -59,8 +59,8 @@ public sealed class FalImageEditor : IImageEditor, IImageEditQuoter
     // и маской (сверено с живым каталогом fal 2026-09-25, цены — get_pricing)
     private static readonly IReadOnlyList<ImageEditModelInfo> Catalog =
     [
-        Model(NanoBananaEdit, "Nano Banana 2", [ImageEditOp.Edit, ImageEditOp.Inpaint], MaskSupport.AsReference, 3, 4, true, 0.08, "image"),
-        Model(NanoBananaProEdit, "Nano Banana Pro", [ImageEditOp.Edit, ImageEditOp.Inpaint], MaskSupport.AsReference, 3, 4, true, 0.15, "image"),
+        Model(NanoBananaEdit, "Nano Banana 2", [ImageEditOp.Edit, ImageEditOp.Inpaint], MaskSupport.AsReference, 3, 4, true, 0.08, "image", maskPass: true),
+        Model(NanoBananaProEdit, "Nano Banana Pro", [ImageEditOp.Edit, ImageEditOp.Inpaint], MaskSupport.AsReference, 3, 4, true, 0.15, "image", maskPass: true),
         Model(KontextPro, "FLUX Kontext Pro", [ImageEditOp.Edit], MaskSupport.None, 0, 4, false, 0.04, "image"),
         Model(KontextMaxMulti, "FLUX Kontext Max Multi", [ImageEditOp.Edit, ImageEditOp.Inpaint], MaskSupport.AsReference, 3, 4, false, 0.08, "image"),
         Model(FluxFill, "FLUX Pro Fill (инпейнт)", [ImageEditOp.Inpaint], MaskSupport.Native, 0, 4, false, 0.05, "megapixel"),
@@ -70,8 +70,8 @@ public sealed class FalImageEditor : IImageEditor, IImageEditQuoter
     ];
 
     private static ImageEditModelInfo Model(string id, string label, ImageEditOp[] ops, MaskSupport mask,
-        int maxRefs, int maxCount, bool face, double price, string per) =>
-        new(id, label, new ImageEditCaps(ops, mask, maxRefs, maxCount, face),
+        int maxRefs, int maxCount, bool face, double price, string per, bool maskPass = false) =>
+        new(id, label, new ImageEditCaps(ops, mask, maxRefs, maxCount, face, maskPass),
             new ImageEditPriceHint(price, ImageEditPriceUnits.Usd, per));
 
     public ImageEditModelInfo? PickModel(ImageEditOp op, EditMode mode, EditTraits traits)
@@ -114,6 +114,10 @@ public sealed class FalImageEditor : IImageEditor, IImageEditQuoter
     public async Task<ImageEditEstimateDto> EstimateAsync(
         ImageEditModelInfo model, ImageEditQuoteRequest request, CancellationToken ct)
     {
+        // Кисть вместе с пометками — два запроса: первый проход по маске даёт ещё одну картинку
+        if (model.Caps.SeparateMaskPass && request.HasMask && request.HasAnnotations)
+            request = request with { Count = request.Count + 1 };
+
         var price = await PriceAsync(model.Id, ct);
         if (price is null) return ImageEditEstimates.FromHint(model, request, PriceUnit);
 
@@ -160,7 +164,27 @@ public sealed class FalImageEditor : IImageEditor, IImageEditQuoter
     public async Task<ImageEditResult> RunAsync(ImageEditRequest req, IProgress<EditProgress> progress, CancellationToken ct)
     {
         if (!Enabled) return Fail(EditOutcome.Unavailable, false, null, "fal.ai не настроен: нет ключа");
+        if (req.MaskPass is not { } pass) return await RunQueuedAsync(req, progress, ct);
 
+        // Два прохода: сначала по маске, её первый вариант — исходник правки по пометкам.
+        // «Скачиваем» первого прохода для человека ещё работа, а не финиш
+        var first = await RunQueuedAsync(pass with { MaskPass = null }, new MaskPassProgress(progress), ct);
+        if (first.Outcome != EditOutcome.Ok || first.Images.Count == 0) return first;
+        var cleaned = first.Images[0];
+        var second = await RunQueuedAsync(
+            req with { Source = new ImageBytes(cleaned.Bytes, cleaned.ContentType), MaskPass = null }, progress, ct);
+        // Первый проход уже тарифицирован, что бы ни случилось со вторым
+        return second.Outcome == EditOutcome.Ok ? second : second with { Charged = true };
+    }
+
+    private sealed class MaskPassProgress(IProgress<EditProgress> inner) : IProgress<EditProgress>
+    {
+        public void Report(EditProgress value) =>
+            inner.Report(value.Stage == EditStage.Downloading ? new EditProgress(EditStage.Running) : value);
+    }
+
+    private async Task<ImageEditResult> RunQueuedAsync(ImageEditRequest req, IProgress<EditProgress> progress, CancellationToken ct)
+    {
         Dictionary<string, object?> body;
         try
         {

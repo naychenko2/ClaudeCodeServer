@@ -22,7 +22,7 @@ public static class EditMarksPrompt
     private const int MaxMarks = 20;
     private const int MaxTextLength = 200;
 
-    public static string Describe(string? marksJson)
+    public static string Describe(string? marksJson, MarksScope scope = MarksScope.All)
     {
         if (string.IsNullOrWhiteSpace(marksJson)) return "";
 
@@ -51,10 +51,10 @@ public static class EditMarksPrompt
             if (mark.ValueKind != JsonValueKind.Object) continue;
             if (Str(mark, "type")?.Trim().ToLowerInvariant() is "mask" or "brush")
             {
-                if (StrokeBox(mark) is { } box) brush.Add(box);
+                if (scope != MarksScope.WithoutBrush && StrokeBox(mark) is { } box) brush.Add(box);
                 continue;
             }
-            if (lines.Count >= MaxMarks) continue;
+            if (scope == MarksScope.BrushOnly || lines.Count >= MaxMarks) continue;
             var line = DescribeMark(mark);
             if (line is not null) lines.Add(line);
         }
@@ -180,3 +180,6 @@ public static class EditMarksPrompt
             ? d
             : null;
 }
+
+// Какие пометки описывать: при правке в два запроса кисть уходит в первый, остальное — во второй
+public enum MarksScope { All, BrushOnly, WithoutBrush }

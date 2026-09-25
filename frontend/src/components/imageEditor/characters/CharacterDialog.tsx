@@ -4,14 +4,14 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { ShieldAlert, Trash2, Upload, UserPlus, X } from 'lucide-react';
-import { Button, ConfirmDialog, Field, IconButton, Modal, TextArea, TextField } from '../../ui';
+import { Button, Checkbox, ConfirmDialog, Field, IconButton, Modal, TextArea, TextField } from '../../ui';
 import { ICON_SIZE, ICON_STROKE } from '../../ui/icons';
 import { C, FS, R, SP } from '../../../lib/design';
 import { characterSlug, type ImageEditCharacter, type ImageEditorApi } from '../../../api/imageEditor';
 import { MAX_PHOTO_MB, MAX_PHOTOS, MIN_PHOTOS, photosCountText, shrinkPhoto } from './photos';
 
 export const CHARACTER_PHOTOS_NOTICE =
-  'Фото отправляются в сервис генерации и сохраняются в папке проекта. Если проект в git — подумайте, стоит ли их коммитить';
+  'Фото будут отправляться выбранному сервису рисования при каждой генерации. У Higgsfield они попадут в общий аккаунт администратора. Загружайте фото чужих людей только с их согласия';
 
 type Photo = { key: string; url: string } & ({ kind: 'kept'; file: string } | { kind: 'new'; blob: Blob });
 
@@ -37,6 +37,8 @@ export function CharacterDialog({ api, projectId, character, connected, onSaved,
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // Согласие не запоминается: фото уезжают при каждой генерации, подтверждать при каждом сохранении
+  const [consent, setConsent] = useState(false);
   const input = useRef<HTMLInputElement>(null);
 
   // object URL новых фото живут, пока открыт диалог
@@ -64,7 +66,7 @@ export function CharacterDialog({ api, projectId, character, connected, onSaved,
     setPhotos(ps => [...ps, ...added].slice(0, MAX_PHOTOS));
   };
 
-  const valid = !!name.trim() && photos.length >= MIN_PHOTOS;
+  const valid = !!name.trim() && photos.length >= MIN_PHOTOS && consent;
   const slug = character?.slug ?? characterSlug(name || 'имя');
 
   const submit = async () => {
@@ -176,6 +178,10 @@ export function CharacterDialog({ api, projectId, character, connected, onSaved,
             </span>
             <span>{CHARACTER_PHOTOS_NOTICE}</span>
           </div>
+          <label style={{ display: 'flex', gap: SP.xs, alignItems: 'center', fontSize: FS.sm, color: C.textPrimary }}>
+            <Checkbox checked={consent} onChange={setConsent} disabled={busy} ariaLabel="Согласие на отправку фото" />
+            <span>Понимаю, у людей на фото есть согласие</span>
+          </label>
           {error && <div style={{ fontSize: FS.sm, color: C.dangerText }}>{error}</div>}
         </div>
       </Modal>

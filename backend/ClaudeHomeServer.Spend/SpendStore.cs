@@ -79,8 +79,10 @@ public sealed class SpendStore : ISpendCollector, ISpendDetailReader
 
     public void Record(SpendRecord record)
     {
-        // Пустые записи не копим: ни токенов, ни генераций — аналитике нечего показать
-        if (record.TotalTokens == 0 && record.Generations == 0) return;
+        // Пустые записи не копим: ни токенов, ни генераций, ни суммы — аналитике нечего
+        // показать. Сумма без генераций — догоняющая запись редактора картинок, её терять нельзя
+        if (record.TotalTokens == 0 && record.Generations == 0
+            && (record.CostUsd ?? 0) == 0 && (record.CostRub ?? 0) == 0 && (record.CostCredits ?? 0) == 0) return;
 
         // Дедуп по Id: повторный импорт той же записи (оборванный backfill) — тихий no-op
         if (!_ids.TryAdd(record.Id, 0)) return;
@@ -213,6 +215,7 @@ public sealed class SpendStore : ISpendCollector, ISpendDetailReader
             row.CacheCreationTokens += r.CacheCreationTokens;
             row.CostUsd += r.CostUsd ?? 0;
             row.CostRub += r.CostRub ?? 0;
+            row.CostCredits += r.CostCredits ?? 0;
             row.Generations += r.Generations;
             row.Turns += 1;
         }

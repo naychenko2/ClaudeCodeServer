@@ -1,8 +1,9 @@
 using System.Collections.Concurrent;
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.ImageEditor;
-using ClaudeHomeServer.Services.ImageEditor.Spending;
+using ClaudeHomeServer.Services.Spend;
 
 namespace ClaudeHomeServer.Services.Images.Editing;
 
@@ -13,9 +14,13 @@ namespace ClaudeHomeServer.Services.Images.Editing;
 // - запуск только по котировке и ровно на её паре «поставщик + модель». Поставщик отказал
 //   или пропал — отказ и, если есть сосед, НОВАЯ котировка соседа (retryQuote); сам
 //   исполнитель на соседа не переходит никогда;
-// - трата пишется на того, кто запустил (ownerId задачи), в момент принятия задачи
-//   поставщиком: отмена и сбой после принятия её не отменяют. Поставщик честно сказал
-//   «не списано» — компенсирующая запись с минусом, журнал только дописывается;
+// - трата пишется в общий учёт (ISpendCollector → SpendStore) на того, кто запустил
+//   (ownerId задачи), в момент принятия задачи поставщиком — ВСЕГДА, даже с неизвестной
+//   суммой: сумма догоняется отдельной записью. Отмена и сбой после принятия запись не
+//   отменяют. Поставщик честно сказал «не списано» — компенсирующая запись с минусом,
+//   журнал только дописывается;
+// - кредиты администратора без цены не тратятся: у поставщика в кредитах котировка без
+//   суммы — отказ, а запуск по такой котировке невозможен;
 // - чужая задача и чужая котировка неотличимы от несуществующих.
 public sealed class ImageEditJobService : IImageEditJobs, IDisposable
 {
@@ -26,7 +31,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
 
     private readonly IEnumerable<IImageEditor> _editors;
     private readonly ISessionBroadcaster? _broadcaster;
-    private readonly IImageEditSpendStore _spend;
+    private readonly ISpendCollector? _spend;
     private readonly ImageEditWorkspace _workspace;
     private readonly ILogger<ImageEditJobService> _log;
     private readonly TimeProvider _time;
@@ -37,9 +42,9 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
 
     public ImageEditJobService(
         IEnumerable<IImageEditor> editors,
-        IImageEditSpendStore spend,
         ImageEditWorkspace workspace,
         ILogger<ImageEditJobService> log,
+        ISpendCollector? spend = null,
         ISessionBroadcaster? broadcaster = null,
         TimeProvider? time = null)
     {
@@ -73,6 +78,8 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         public string? Error { get; set; }
         // Поставщик принял задачу: с этого момента возможна трата
         public bool Accepted { get; set; }
+        // Запись траты уже лежит в учёте; RecordedAmount — её сумма, null — неизвестна
+        public bool SpendWritten { get; set; }
         public double? RecordedAmount { get; set; }
         public Task Completion { get; set; } = Task.CompletedTask;
 
@@ -115,6 +122,8 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         {
             return Fail<ImageEditQuoteDto>(ImageEditErrorCodes.ProviderUnavailable, ex.Message);
         }
+        if (NeedsKnownPrice(editor, estimate))
+            return Fail<ImageEditQuoteDto>(ImageEditErrorCodes.ProviderUnavailable, UnknownPriceError(editor));
 
         var quote = new Quote(Guid.NewGuid().ToString("N"), ownerId, projectId, editor.Key, model, op, request.Count,
             estimate, Now() + QuoteTtl, (editor as IImageEditQuoter)?.ExpectedSeconds(model));
@@ -138,6 +147,9 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         if (editor is null)
             return Task.FromResult(Fail<ImageEditJobCreatedDto>(ImageEditErrorCodes.ProviderUnavailable,
                 $"Поставщик «{quote.Provider}» больше недоступен"));
+        if (NeedsKnownPrice(editor, quote.Estimate))
+            return Task.FromResult(Fail<ImageEditJobCreatedDto>(ImageEditErrorCodes.ProviderUnavailable,
+                UnknownPriceError(editor)));
 
         var composed = EditRequestComposer.Compose(input, quote.Op, quote.Model, quote.Count);
         if (composed.Value is not { } request)
@@ -225,11 +237,17 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
     private async Task FailAsync(Job job, IImageEditor editor, ImageEditResult result)
     {
         bool? charged;
+        bool written;
+        double? recorded;
         lock (job.Gate)
+        {
             charged = result.Charged ?? (job.Accepted ? null : false);
+            written = job.SpendWritten;
+            recorded = job.RecordedAmount;
+        }
 
-        if (charged == false && job.RecordedAmount is { } recorded)
-            WriteSpend(job, -recorded);
+        if (charged == false && written)
+            WriteSpend(job, -recorded, -job.Quote.Count);
         else if (charged == true)
             RecordSpend(job, (result.ActualCost ?? EstimateCost(job.Quote))?.Amount);
 
@@ -258,9 +276,10 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             var count = Math.Min(q.Count, model.Caps.MaxCount);
             var request = new ImageEditQuoteRequest(other.Key, model.Id, EditMode.Auto, q.Op, count,
                 q.Op == ImageEditOp.Inpaint, 0, false, null, null);
+            var estimate = ImageEditEstimates.FromHint(model, request, other.PriceUnit);
+            if (NeedsKnownPrice(other, estimate)) continue;
             var retry = new Quote(Guid.NewGuid().ToString("N"), job.OwnerId, job.ProjectId, other.Key, model, q.Op, count,
-                ImageEditEstimates.FromHint(model, request, other.PriceUnit), Now() + QuoteTtl,
-                (other as IImageEditQuoter)?.ExpectedSeconds(model));
+                estimate, Now() + QuoteTtl, (other as IImageEditQuoter)?.ExpectedSeconds(model));
             _quotes[retry.Id] = retry;
             return ToDto(retry);
         }
@@ -278,30 +297,53 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         RecordSpend(job, job.Quote.Estimate.Amount);
     }
 
+    // Первая запись — всегда, с числом вариантов и суммой, если она известна. Сумма, ставшая
+    // известной позже, догоняет её отдельной записью без генераций.
     private void RecordSpend(Job job, double? amount)
     {
+        int generations;
         lock (job.Gate)
         {
             job.Accepted = true;
-            if (job.RecordedAmount is not null) return;
-            if (amount is not { } a)
+            if (!job.SpendWritten)
             {
-                _log.LogInformation("Редактор картинок: сумма задачи {JobId} неизвестна, трата не записана", job.Id);
-                return;
+                job.SpendWritten = true;
+                job.RecordedAmount = amount;
+                generations = job.Quote.Count;
             }
-            job.RecordedAmount = a;
+            else if (job.RecordedAmount is null && amount is not null)
+            {
+                job.RecordedAmount = amount;
+                generations = 0;
+            }
+            else return;
         }
-        WriteSpend(job, amount.Value);
+        WriteSpend(job, amount, generations);
     }
 
-    private void WriteSpend(Job job, double amount)
+    private void WriteSpend(Job job, double? amount, int generations)
     {
+        if (_spend is null)
+        {
+            _log.LogWarning("Редактор картинок: учёт расхода выключен, трата задачи {JobId} не записана", job.Id);
+            return;
+        }
+        var credits = job.Quote.Estimate.Unit == ImageEditPriceUnits.Credits;
         try
         {
-            _spend.Record(new ImageEditSpendRecord(
-                Guid.NewGuid().ToString("N"), job.OwnerId, job.Quote.Provider, job.Quote.Model.Id, amount,
-                job.Quote.Estimate.Unit == ImageEditPriceUnits.Credits ? ImageEditSpendUnit.Credits : ImageEditSpendUnit.Usd,
-                Now(), job.Id));
+            _spend.Record(new SpendRecord
+            {
+                Timestamp = Now(),
+                OwnerId = job.OwnerId,
+                ProjectId = job.ProjectId,
+                Provider = job.Quote.Provider,
+                Model = job.Quote.Model.Id,
+                Source = job.Quote.Provider,
+                CostUsd = credits ? null : amount,
+                CostCredits = credits ? amount : null,
+                Generations = generations,
+                Label = SpendLabel,
+            });
         }
         catch (Exception ex)
         {
@@ -384,6 +426,16 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             _log.LogDebug(ex, "Редактор картинок: событие {Type} не доставлено", message.Type);
         }
     }
+
+    // Подпись записи в общем учёте: по ней трата редактора отличима от генерации из чата
+    public const string SpendLabel = "image-editor";
+
+    // Кредиты — общий аккаунт администратора: без суммы в котировке их не тратим (C1)
+    private static bool NeedsKnownPrice(IImageEditor editor, ImageEditEstimateDto estimate) =>
+        editor.PriceUnit == ImageEditPriceUnits.Credits && estimate.Amount is null;
+
+    private static string UnknownPriceError(IImageEditor editor) =>
+        $"{editor.Label} не назвал цену правки, а без цены кредиты не тратим. Попробуйте ещё раз или выберите другого поставщика";
 
     private static EditCost? EstimateCost(Quote q) =>
         q.Estimate.Amount is { } a ? new EditCost(a, q.Estimate.Unit) : null;

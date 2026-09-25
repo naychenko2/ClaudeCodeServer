@@ -1,5 +1,5 @@
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.ImageEditor;
-using ClaudeHomeServer.Services.ImageEditor.Spending;
 using ClaudeHomeServer.Services.ImageEditor.Versioning;
 using ClaudeHomeServer.Services.Images.Editing;
 using ClaudeHomeServer.Tests.ImageEditor.Fakes;
@@ -29,8 +29,8 @@ public class ImageEditJobServiceTests : IDisposable
 
     private ImageEditJobService Service(params IImageEditor[] editors)
     {
-        var service = new ImageEditJobService(editors, _spend, new ImageEditWorkspace(Path.Combine(_dir, "image-editor")),
-            NullLogger<ImageEditJobService>.Instance, _broadcaster);
+        var service = new ImageEditJobService(editors, new ImageEditWorkspace(Path.Combine(_dir, "image-editor")),
+            NullLogger<ImageEditJobService>.Instance, _spend, _broadcaster);
         _services.Add(service);
         return service;
     }
@@ -77,10 +77,13 @@ public class ImageEditJobServiceTests : IDisposable
         job.Cost.Should().Be(new EditCost(3.0, ImageEditPriceUnits.Credits));
         var record = _spend.Records.Should().ContainSingle().Subject;
         record.OwnerId.Should().Be("user-b");
+        record.ProjectId.Should().Be(Project);
         record.Provider.Should().Be("higgsfield");
-        record.Unit.Should().Be(ImageEditSpendUnit.Credits);
-        record.Amount.Should().Be(3.0);
-        record.TaskId.Should().Be(jobId);
+        record.Source.Should().Be(SpendSources.Higgsfield);
+        record.Label.Should().Be(ImageEditJobService.SpendLabel);
+        record.CostCredits.Should().Be(3.0);
+        record.CostUsd.Should().BeNull("кредиты с долларами не складываются");
+        record.Generations.Should().Be(2);
         _broadcaster.ToOwnerCalls.Should().Contain(c => c.OwnerId == "user-b" && c.Message is ImageEditCompletedMessage);
         _broadcaster.ToOwnerCalls.Should().OnlyContain(c => c.OwnerId == "user-b");
     }
@@ -138,9 +141,72 @@ public class ImageEditJobServiceTests : IDisposable
         cancelled.Outcome.Should().Be(EditOutcome.Cancelled);
         // Higgsfield работу не останавливает: списание неизвестно, трата по котировке остаётся
         cancelled.Charged.Should().BeNull();
-        _spend.Records.Should().ContainSingle(r => r.OwnerId == "user-a" && r.Amount == 3.0);
+        _spend.Records.Should().ContainSingle(r => r.OwnerId == "user-a" && r.CostCredits == 3.0 && r.Generations == 2);
         _broadcaster.ToOwnerCalls.Select(c => c.Message).OfType<ImageEditFailedMessage>()
             .Should().ContainSingle(m => m.JobId == jobId && m.Outcome == EditOutcome.Cancelled);
+    }
+
+    // C1: кредиты администратора без цены не тратятся — отказ ещё на котировке, и до
+    // поставщика дело не доходит
+    [Fact]
+    public async Task Higgsfield_БезЦеныВКотировке_ОтказИПоставщикНеВызывается()
+    {
+        var higgsfield = new ScriptedEditor("higgsfield", (_, _, _) =>
+            Task.FromResult(new ImageEditResult(EditOutcome.Ok, [new EditedImage(TestImages.Png(2, 2), "image/png")], null, true, "r", null)),
+            price: null);
+        var service = Service(higgsfield);
+
+        var quote = await service.QuoteAsync("user-a", Project, Quote("higgsfield", count: 2), default);
+
+        quote.Value.Should().BeNull();
+        quote.ErrorCode.Should().Be(ImageEditErrorCodes.ProviderUnavailable);
+        higgsfield.Runs.Should().Be(0);
+        _spend.Records.Should().BeEmpty();
+    }
+
+    // Сосед-Higgsfield без цены не предлагается повтором: по такой котировке нельзя запуститься
+    [Fact]
+    public async Task ПовторЧерезHiggsfieldБезЦены_НеПредлагается()
+    {
+        var fal = new ScriptedEditor("fal", (_, _, _) =>
+            Task.FromResult(new ImageEditResult(EditOutcome.Failed, [], null, false, null, "сбой")));
+        var higgsfield = new ScriptedEditor("higgsfield", (_, _, _) => throw new InvalidOperationException(), price: null);
+        var service = Service(fal, higgsfield);
+
+        var job = await WaitDone(service, "user-a", await StartAsync(service, "user-a", "fal"));
+
+        job.Status.Should().Be(ImageEditJobStatus.Failed);
+        _broadcaster.ToOwnerCalls.Select(c => c.Message).OfType<ImageEditFailedMessage>().Single()
+            .RetryQuote.Should().BeNull();
+        higgsfield.Runs.Should().Be(0);
+    }
+
+    // Сумма неизвестна (fal без прайса) — запись всё равно ложится при принятии, на
+    // запустившего и с числом вариантов; фактическая цена догоняет её отдельной записью
+    [Fact]
+    public async Task НеизвестнаяСумма_ТратаВсёРавноЗаписанаИСуммаДогоняется()
+    {
+        var editor = new ScriptedEditor("fal", (_, progress, _) =>
+        {
+            progress.Report(new EditProgress(EditStage.Running));
+            return Task.FromResult(new ImageEditResult(EditOutcome.Ok,
+                [new EditedImage(TestImages.Png(2, 2), "image/png"), new EditedImage(TestImages.Png(2, 2), "image/png")],
+                new EditCost(0.16, ImageEditPriceUnits.Usd), true, "r", null));
+        }, price: null);
+        var service = Service(editor);
+
+        var job = await WaitDone(service, "user-a", await StartAsync(service, "user-a", "fal", count: 2));
+
+        job.Status.Should().Be(ImageEditJobStatus.Completed);
+        _spend.Records.Should().HaveCount(2);
+        var accepted = _spend.Records.First();
+        accepted.OwnerId.Should().Be("user-a");
+        accepted.Generations.Should().Be(2);
+        accepted.CostUsd.Should().BeNull();
+        var topUp = _spend.Records.Last();
+        topUp.OwnerId.Should().Be("user-a");
+        topUp.Generations.Should().Be(0);
+        topUp.CostUsd.Should().Be(0.16);
     }
 
     [Fact]
@@ -230,13 +296,15 @@ public class ImageEditJobServiceTests : IDisposable
         gate.SetResult();
     }
 
-    // Драйвер со сценарием: цена по ориентиру 1.5 за вариант, счётчик запусков
+    // Драйвер со сценарием: цена по ориентиру (по умолчанию 1.5 за вариант, null — прайса
+    // нет), счётчик запусков
     private sealed class ScriptedEditor(
-        string key, Func<ImageEditRequest, IProgress<EditProgress>, CancellationToken, Task<ImageEditResult>> run) : IImageEditor
+        string key, Func<ImageEditRequest, IProgress<EditProgress>, CancellationToken, Task<ImageEditResult>> run,
+        double? price = 1.5) : IImageEditor
     {
-        private static readonly ImageEditModelInfo Model = new("m-" + Guid.NewGuid().ToString("N")[..4], "M",
+        private readonly ImageEditModelInfo _model = new("m-" + Guid.NewGuid().ToString("N")[..4], "M",
             new ImageEditCaps([ImageEditOp.Edit, ImageEditOp.Inpaint], MaskSupport.AsReference, 3, 4, true),
-            new ImageEditPriceHint(1.5, ImageEditPriceUnits.Credits, "image"));
+            price is { } p ? new ImageEditPriceHint(p, ImageEditPriceUnits.Credits, "image") : null);
 
         private int _runs;
         public int Runs => _runs;
@@ -246,8 +314,8 @@ public class ImageEditJobServiceTests : IDisposable
         public string Label => key;
         public string PriceUnit => key == "higgsfield" ? ImageEditPriceUnits.Credits : ImageEditPriceUnits.Usd;
         public bool Enabled => true;
-        public IReadOnlyList<ImageEditModelInfo> Models => [Model];
-        public ImageEditModelInfo? PickModel(ImageEditOp op, EditMode mode, EditTraits traits) => Model;
+        public IReadOnlyList<ImageEditModelInfo> Models => [_model];
+        public ImageEditModelInfo? PickModel(ImageEditOp op, EditMode mode, EditTraits traits) => _model;
 
         public async Task<ImageEditResult> RunAsync(ImageEditRequest req, IProgress<EditProgress> progress, CancellationToken ct)
         {

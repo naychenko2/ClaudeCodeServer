@@ -2,10 +2,11 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Text;
 using System.Text.Json.Nodes;
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.ImageEditor;
-using ClaudeHomeServer.Services.ImageEditor.Spending;
+using ClaudeHomeServer.Services.Spend;
 using Microsoft.Extensions.Configuration;
 
 namespace ClaudeHomeServer.Tests.ImageEditor.Fakes;
@@ -94,14 +95,11 @@ internal sealed class RecordingBroadcaster : ISessionBroadcaster
     }
 }
 
-internal sealed class MemorySpendStore : IImageEditSpendStore
+internal sealed class MemorySpendStore : ISpendCollector
 {
-    public ConcurrentQueue<ImageEditSpendRecord> Records { get; } = new();
+    public ConcurrentQueue<SpendRecord> Records { get; } = new();
 
-    public void Record(ImageEditSpendRecord record) => Records.Enqueue(record);
-
-    public IReadOnlyList<ImageEditSpendRecord> Query(string ownerId, bool isAdmin) =>
-        [.. Records.Where(r => isAdmin || r.OwnerId == ownerId)];
+    public void Record(SpendRecord record) => Records.Enqueue(record);
 }
 
 internal static class TestImages

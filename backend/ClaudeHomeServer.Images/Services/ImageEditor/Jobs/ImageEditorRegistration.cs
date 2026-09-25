@@ -1,6 +1,5 @@
 using ClaudeHomeServer.Services.Http;
 using ClaudeHomeServer.Services.ImageEditor;
-using ClaudeHomeServer.Services.ImageEditor.Spending;
 using ClaudeHomeServer.Services.ImageEditor.Versioning;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -28,10 +27,8 @@ public static class ImageEditorRegistration
         services.TryAddSingleton<IVersionedImageStore, VersionedImageStore>();
         services.AddSingleton<IImageEditSaver, ImageEditSaver>();
         services.AddSingleton(sp => ImageEditWorkspace.FromConfig(sp.GetRequiredService<IConfiguration>()));
-        // Журнал трат — в корне data (data/image-editor-spend.jsonl), а не в рабочей папке
-        // image-editor/: это деньги, он едет в бэкап, а рабочая папка — нет
-        services.TryAddSingleton<IImageEditSpendStore>(sp =>
-            new ImageEditSpendStore(Path.GetDirectoryName(sp.GetRequiredService<ImageEditWorkspace>().Root)!));
+        // Траты пишутся в общий учёт ISpendCollector (вертикаль Spend); выключенный Spend —
+        // null, исполнитель тогда только предупреждает в лог
         services.AddSingleton<ImageEditJobService>();
         services.AddSingleton<IImageEditJobs>(sp => sp.GetRequiredService<ImageEditJobService>());
         return services;

@@ -1,14 +1,18 @@
 // Вход в редактор (экран 1 макета): «Редактировать» у картинки и «Нарисовать картинку»
 // у папки. Без флага image-editor входа нет вовсе — кнопка не рендерится.
-// Редактор открывается слоем поверх раскладки проекта.
+// Редактор открывается слоем поверх раскладки проекта. Слой живёт в хосте уровня
+// приложения, а не у кнопки: уход с экрана проекта размонтирует и дерево файлов, и
+// просмотр файла — без хоста спросить про несохранённые варианты было бы некому.
 
-import { useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { createPortal } from 'react-dom';
 import { Pencil, Sparkles } from 'lucide-react';
-import { Button } from '../ui';
+import { Button, ConfirmDialog } from '../ui';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { ISLAND, Z } from '../../lib/design';
 import { useIsMobile } from '../../lib/breakpoints';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
+import { NAV_CHANGE_EVENT, parseHash } from '../../lib/nav';
 import { ImageEditor, type ImageEditorTarget } from './ImageEditor';
 import { isEditableImage } from './format';
 
@@ -22,37 +26,105 @@ interface EntryProps {
 
 export function ImageEditorEntryButton({ projectId, projectName, target, onShowInFiles, size = 'sm' }: EntryProps) {
   const enabled = useFeature(FLAGS.imageEditor);
-  const [open, setOpen] = useState(false);
   if (!enabled) return null;
   if (target.kind === 'edit' && !isEditableImage(target.path)) return null;
   const Icon = target.kind === 'edit' ? Pencil : Sparkles;
   return (
-    <>
-      <Button size={size} variant={target.kind === 'edit' ? 'secondary' : 'ghost'}
-        leftIcon={<Icon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
-        onClick={e => { e.stopPropagation(); setOpen(true); }}>
-        {target.kind === 'edit' ? 'Редактировать' : 'Нарисовать картинку'}
-      </Button>
-      {open && (
-        <ImageEditorLayer projectId={projectId} projectName={projectName} target={target}
-          onShowInFiles={onShowInFiles} onClose={() => setOpen(false)} />
-      )}
-    </>
+    <Button size={size} variant={target.kind === 'edit' ? 'secondary' : 'ghost'}
+      leftIcon={<Icon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+      onClick={e => { e.stopPropagation(); openImageEditor({ projectId, projectName, target, onShowInFiles }); }}>
+      {target.kind === 'edit' ? 'Редактировать' : 'Нарисовать картинку'}
+    </Button>
   );
 }
 
-// Слой на весь экран: редактор на месте рабочей области проекта
-export function ImageEditorLayer({ onClose, ...props }: Omit<EntryProps, 'size'> & { onClose: () => void }) {
+function sameScreen(a: string, b: string): boolean {
+  const x = parseHash(a), y = parseHash(b);
+  return !!x && !!y && x.screen === y.screen && x.projectId === y.projectId;
+}
+
+// ── Хост слоя: один на приложение ──
+type EditorRequest = Omit<EntryProps, 'size'> & { seq: number };
+let request: EditorRequest | null = null;
+let seq = 0;
+const listeners = new Set<() => void>();
+const emit = () => listeners.forEach(fn => fn());
+
+export function openImageEditor(req: Omit<EntryProps, 'size'>): void {
+  request = { ...req, seq: ++seq };
+  emit();
+}
+
+function closeImageEditor(): void {
+  request = null;
+  emit();
+}
+
+// Монтируется в App под авторизацией; размонтирование (выход) закрывает редактор
+export function ImageEditorHost() {
+  const req = useSyncExternalStore(
+    fn => { listeners.add(fn); return () => { listeners.delete(fn); }; },
+    () => request,
+  );
+  useEffect(() => closeImageEditor, []);
+  if (!req) return null;
+  const { seq: key, ...props } = req;
+  return <ImageEditorLayer key={key} {...props} onClose={closeImageEditor} />;
+}
+
+// Слой на весь экран: редактор на месте рабочей области проекта. Портал в body —
+// иначе position: fixed внутри трансформированной панели файлов сжимается до её размеров.
+// Уход с экрана (смена адреса) закрывает слой; несохранённые варианты — через подтверждение,
+// а «Остаться» возвращает прежний адрес.
+function ImageEditorLayer({ onClose, ...props }: Omit<EntryProps, 'size'> & { onClose: () => void }) {
   const enabled = useFeature(FLAGS.imageEditor);
   const mobile = useIsMobile();
+  const dirty = useRef(false);
+  const [leaveAsk, setLeaveAsk] = useState(false);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+
+  const home = useRef(window.location.hash);
+  // После «Остаться» приложение может уточнить восстановленный адрес — это не уход
+  const restoringUntil = useRef(0);
+
+  useEffect(() => {
+    const onNav = () => {
+      const hash = window.location.hash;
+      if (hash === home.current) return;
+      if (Date.now() < restoringUntil.current && sameScreen(hash, home.current)) { home.current = hash; return; }
+      if (dirty.current) setLeaveAsk(true);
+      else closeRef.current();
+    };
+    window.addEventListener(NAV_CHANGE_EVENT, onNav);
+    window.addEventListener('popstate', onNav);
+    window.addEventListener('hashchange', onNav);
+    return () => {
+      window.removeEventListener(NAV_CHANGE_EVENT, onNav);
+      window.removeEventListener('popstate', onNav);
+      window.removeEventListener('hashchange', onNav);
+    };
+  }, []);
+
   if (!enabled) return null;
-  return (
+  return createPortal(
     <div style={{
       position: 'fixed', inset: 0, zIndex: Z.overlay, background: ISLAND.canvas,
       padding: mobile ? 0 : ISLAND.pad, display: 'flex', flexDirection: 'column',
     }}>
-      <ImageEditor {...props} onClose={onClose}
+      <ImageEditor {...props} onClose={onClose} onDirtyChange={d => { dirty.current = d; }}
         onShowInFiles={props.onShowInFiles ? path => { onClose(); props.onShowInFiles?.(path); } : undefined} />
-    </div>
+      {leaveAsk && (
+        <ConfirmDialog title="Закрыть редактор?" subtitle="Несохранённые варианты пропадут."
+          confirmLabel="Закрыть" confirmVariant="danger" cancelLabel="Остаться"
+          onConfirm={onClose}
+          onCancel={() => {
+            setLeaveAsk(false);
+            restoringUntil.current = Date.now() + 1500;
+            if (window.location.hash !== home.current) window.location.hash = home.current;
+          }} />
+      )}
+    </div>,
+    document.body,
   );
 }

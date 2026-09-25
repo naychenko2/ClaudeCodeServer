@@ -47,7 +47,7 @@ import { Modal, ModalActions, TextField, IconButton, Button, Menu, MenuItem, Pan
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { NO_AUTOFILL } from '../lib/noAutofill';
 import { FLAGS, useFeature } from '../lib/featureFlags';
-import { ImageEditorLayer, isEditableImage, type ImageEditorTarget } from './imageEditor';
+import { isEditableImage, openImageEditor, type ImageEditorTarget } from './imageEditor';
 
 interface Props {
   project: Project;
@@ -902,7 +902,8 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
 
   // === Редактор картинок: «Редактировать» у картинки, «Нарисовать картинку» у папки ===
   const imageEditorOn = useFeature(FLAGS.imageEditor);
-  const [imageEditorTarget, setImageEditorTarget] = useState<ImageEditorTarget | null>(null);
+  const openEditor = (target: ImageEditorTarget) =>
+    openImageEditor({ projectId: project.id, projectName: project.name, target, onShowInFiles: path => onOpenFile(path) });
   const doTransformMd = async (entry: FileEntry, targetDir: string | null) => {
     const enhance = mdEnhance;
     setMdEntry(null);
@@ -2119,11 +2120,11 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
           <MenuItem key="chat-context" icon={chatContextBtn.inContext ? <MI_Check /> : <MI_Context />}
             label={chatContextBtn.title} onClick={() => { close(); chatContextBtn.toggle(); }} />);
         add(imageEditorOn && online && !entry.isDirectory && isEditableImage(entry.path),
-          <MenuItem key="image-edit" icon={<Pencil size={15} strokeWidth={ICON_STROKE} />} label="Редактировать"
-            onClick={() => { close(); setImageEditorTarget({ kind: 'edit', path: entry.path }); }} />);
+          <MenuItem key="image-edit" icon={<Pencil size={15} strokeWidth={ICON_STROKE} />} label="Редактировать картинку"
+            onClick={() => { close(); openEditor({ kind: 'edit', path: entry.path }); }} />);
         add(imageEditorOn && online && entry.isDirectory && !inNotesVault(entry.path),
           <MenuItem key="image-create" icon={<Sparkles size={15} strokeWidth={ICON_STROKE} />} label="Нарисовать картинку"
-            onClick={() => { close(); setImageEditorTarget({ kind: 'create', folder: entry.path }); }} />);
+            onClick={() => { close(); openEditor({ kind: 'create', folder: entry.path }); }} />);
         add(!entry.isDirectory && onAttachToChat,
           <MenuItem key="attach" icon={<MI_Attach />} label="Прикрепить к чату" onClick={() => { close(); onAttachToChat!(entry.path); }} />);
         add(!entry.isDirectory && /\.(md|mdx)$/i.test(entry.name),
@@ -2181,11 +2182,6 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
         const anchor = new DOMRect(contextMenu.x, contextMenu.y, W, 0);
         return <Menu anchor={anchor} minWidth={W} maxHeight={320} gap={2} onClose={close}>{items}</Menu>;
       })()}
-
-      {imageEditorTarget && (
-        <ImageEditorLayer projectId={project.id} projectName={project.name} target={imageEditorTarget}
-          onShowInFiles={path => onOpenFile(path)} onClose={() => setImageEditorTarget(null)} />
-      )}
 
       {/* Диалог «Новая заметка» из раздела файлов (папка vault → source=проект;
           file — «Заметка о файле» с привязкой frontmatter file:) — вклад слота

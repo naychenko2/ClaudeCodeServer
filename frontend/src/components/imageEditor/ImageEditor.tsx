@@ -14,7 +14,9 @@ import { C, FS, ISLAND, R, SP } from '../../lib/design';
 import { useIsMobile } from '../../lib/breakpoints';
 import { api as appApi } from '../../lib/api';
 import { showToast } from '../../lib/toast';
-import { AUTO_MODEL, imageEditorApi, type ImageEditCatalog, type ImageEditQuoteRequest } from '../../api/imageEditor';
+import { useMe } from '../../lib/defaultPersona';
+import { ModelsSpendModal } from '../../features/modelsSpend/ModelsSpendModal';
+import { AUTO_MODEL, imageEditorApi, type ImageEditCatalog, type ImageEditCatalogReason, type ImageEditQuoteRequest } from '../../api/imageEditor';
 import { EditorCanvas } from './EditorCanvas';
 import { exportAnnotated, exportMask, hasMaskMark, marksToJson, type Mark, type Tool } from './marks';
 import { effectiveProvider, modelBlockReason, money, nextVersionName, pickOp, plural, priceText, splitPath, variantsWord, type ProviderChoice } from './format';
@@ -41,11 +43,13 @@ const TOOLS: { id: Tool; icon: typeof Brush; title: string }[] = [
   { id: 'text', icon: Type, title: 'Подпись' },
 ];
 
-export function ImageEditor({ projectId, projectName, target, onClose, onShowInFiles }: {
+export function ImageEditor({ projectId, projectName, target, onClose, onShowInFiles, onDirtyChange }: {
   projectId: string;
   projectName: string;
   target: ImageEditorTarget;
   onClose: () => void;
+  // Есть варианты, которые пропадут при закрытии (рисуются или не сохранены)
+  onDirtyChange?: (dirty: boolean) => void;
   // «Показать в файлах» в тосте после сохранения
   onShowInFiles?: (path: string) => void;
 }) {
@@ -73,6 +77,7 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
   const [selected, setSelected] = useState(0);
   const [saveOpen, setSaveOpen] = useState(false);
   const [savedPath, setSavedPath] = useState<string | null>(null);
+  const [savedJobId, setSavedJobId] = useState<string | null>(null);
 
   const chars = useCharacters(api, projectId);
   const charDialogs = useCharacterDialogs(api, projectId, chars);
@@ -81,10 +86,15 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
   // Чат обсуждения переиспользуется внутри одного сеанса редактора
   const discussSession = useRef<string | null>(null);
 
+  const me = useMe();
+  const [providersOpen, setProvidersOpen] = useState(false);
+
   const job = useImageEditJob(api, projectId);
   const busy = job.phase === 'starting' || job.phase === 'running';
   // Номера вариантов даёт сервер: выбранный по умолчанию — первый готовый
   const sel = job.variants.includes(selected) ? selected : job.variants[0] ?? 0;
+  const dirty = busy || (job.phase === 'variants' && !!job.jobId && job.jobId !== savedJobId);
+  useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
 
   useEffect(() => {
     let alive = true;
@@ -204,6 +214,7 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
       : { jobId: job.jobId, variant: sel, folder: folder || undefined, fileName });
     setSaveOpen(false);
     setSavedPath(res.path);
+    setSavedJobId(job.jobId);
     // Дальше правим уже сохранённый файл: следующая версия ляжет рядом с ним
     setSourcePath(res.path);
     showToast(`Сохранено в проект: ${res.path}`, '', 'info',
@@ -261,7 +272,7 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
   );
 
   // ── Панель запроса ──
-  const notConfigured = catalog && !catalog.providers.length;
+  const notConfigured = !!catalog && !catalog.providers.length;
   const ask = (
     <div style={{
       display: 'flex', flexDirection: 'column', minHeight: 0,
@@ -280,7 +291,7 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
             placeholder={character
               ? `Где и что делает ${character.name}? Например, «${character.name} сидит в кафе у окна»`
               : hasImage
-                ? 'Что изменить? Отметьте место на картинке или просто опишите'
+                ? 'Что изменить?'
                 : 'Опишите, что нарисовать: например, «светлая гостиная, синий диван, торшер в углу, утро»'} />
           <div style={{ display: 'flex', marginTop: SP.sm }}>
             <Button variant="ghost" size="sm" leftIcon={ic(MessageSquare, ICON_SIZE.xs)}
@@ -302,8 +313,8 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
         <CharacterSection api={api} projectId={projectId} chars={chars} disabled={busy}
           onNew={charDialogs.openNew} onCard={charDialogs.openCard} />
         {catalogError && <div style={{ fontSize: FS.sm, color: C.dangerText }}>{catalogError}</div>}
-        {notConfigured && (
-          <EmptyState compact inline icon={ic(ImageIcon, ICON_SIZE.lg)} title="Рисование не настроено" />
+        {notConfigured && catalog && (
+          <NotConfigured reason={catalogReason(catalog)} isAdmin={me.role === 'admin'} onSetup={() => setProvidersOpen(true)} />
         )}
         {catalog && !notConfigured && (
           <ProviderModelPicker catalog={catalog} provider={provider} model={m?.id ?? model}
@@ -385,12 +396,33 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
         </Modal>
       )}
       {charDialogs.dialog}
+      {providersOpen && <ModelsSpendModal initialTab="apply" onClose={() => setProvidersOpen(false)} />}
       {saveOpen && job.jobId && (
         <SaveDialog mode={sourcePath ? 'edit' : 'create'} sourcePath={sourcePath}
           suggestedName={sourcePath ? nextVersionName(splitPath(sourcePath).name) : initial.name}
           folder={folder} onSave={save} onClose={() => setSaveOpen(false)} />
       )}
     </Island>
+  );
+}
+
+// Причина пустого каталога. Старый бэкенд поля reason не присылает: пустой список = не настроено
+function catalogReason(c: ImageEditCatalog): ImageEditCatalogReason | null {
+  return c.reason ?? (c.providers.length ? null : 'no_provider_configured');
+}
+
+// Рисовать нечем: админу — путь к настройке, остальным — к кому идти
+function NotConfigured({ reason, isAdmin, onSetup }: { reason: ImageEditCatalogReason | null; isAdmin: boolean; onSetup: () => void }) {
+  const disabled = reason === 'subsystem_disabled';
+  return (
+    <EmptyState compact inline icon={ic(ImageIcon, ICON_SIZE.lg)}
+      title={disabled ? 'Рисование выключено' : 'Рисование не настроено'}
+      subtitle={isAdmin
+        ? disabled ? 'Подсистема картинок выключена в настройках сервера' : 'Подключите fal.ai или Higgsfield'
+        : 'Попросите администратора подключить сервис рисования'}
+      action={isAdmin && !disabled
+        ? <Button size="sm" variant="secondary" onClick={onSetup}>Настроить поставщиков</Button>
+        : undefined} />
   );
 }
 

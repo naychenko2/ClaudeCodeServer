@@ -1715,6 +1715,11 @@ public class SubsystemBoundaryTests
         // поставщиков, события задачи и швы IHiggsfieldAccess/IImageEditJobs. Контроллер
         // живёт в Main, драйверы — в вертикали Images, общий язык у них должен быть в спине.
         "ClaudeHomeServer.Services.ImageEditor",
+        // ADR-016, разделы 4 и 5: версионное сохранение (FileMode.CreateNew, hero.v2.png) и
+        // журнал трат редактора per-user — примитивы спины, их зовут и контроллер Main, и
+        // исполнитель задач в вертикали Images.
+        "ClaudeHomeServer.Services.ImageEditor.Versioning",
+        "ClaudeHomeServer.Services.ImageEditor.Spending",
     ];
 
     /// <summary>

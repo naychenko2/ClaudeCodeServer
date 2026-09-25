@@ -48,7 +48,7 @@ describe('карточка задачи', () => {
   it('в ожидании показывает устройство и сколько ждёт', () => {
     const since = new Date(Date.now() - 90 * 60000).toISOString();
     const html = render(task({ deviceWaitSince: since, deviceWaitReason: 'Устройство офлайн' }), 'Ноутбук');
-    expect(html).toContain('Ждёт «Ноутбук» · 1 ч 30 мин');
+    expect(html).toContain('Ждёт устройство «Ноутбук» · 1 ч 30 мин');
     expect(html).toContain('title="Устройство офлайн"');
   });
 

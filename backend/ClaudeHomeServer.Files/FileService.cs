@@ -15,7 +15,7 @@ public class FileService(
     /// дескриптору (агент устройства): проверка пути до открытия подмену ссылки не ловит.
     /// </summary>
     public FileService WithOpenedPathGuard(IOpenedPathGuard guard) =>
-        new(git, projects, logger, guard) { GitStatusComputer = GitStatusComputer };
+        new(git, projects, _logger, guard) { GitStatusComputer = GitStatusComputer };
 
     // git/projects/logger опциональны (DI подставляет): git-операции идут через слой Execution
     // с резолвом владельца по корню — статусы/дифф/револт честны и для container-юзеров.

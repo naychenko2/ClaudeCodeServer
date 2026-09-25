@@ -26,7 +26,8 @@ public class ImageEditorController(
     IEnumerable<IImageEditor> editors,
     ImageGenerationSettingsStore? placeSettings = null,
     IImageEditJobs? jobs = null,
-    IImageEditSaver? saver = null) : ControllerBase
+    IImageEditSaver? saver = null,
+    FileService? files = null) : ControllerBase
 {
     // Потолок тела запуска: исходник, маска, размеченная копия и до MaxReferences образцов
     private const long MaxJobBodyBytes = 200L * 1024 * 1024;
@@ -180,7 +181,10 @@ public class ImageEditorController(
 
         var image = jobs.OpenVariant(UserId, projectId, req.JobId, req.Variant);
         if (image is null) return JobNotFound();
-        return Map(saver.Save(project.RootPath, req, image), Ok);
+        var saved = saver.Save(project.RootPath, req, image);
+        // Новый файл — обычная запись в проект: синк знаний и ватчеры узнают о нём сразу
+        if (saved.Value is { } result) files?.NotifyMutated(project.RootPath, result.Path, FileMutationKind.Write);
+        return Map(saved, Ok);
     }
 
     // Поля multipart запуска. Роли образцов — параллельные списки к файлам и путям

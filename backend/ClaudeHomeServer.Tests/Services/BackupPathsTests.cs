@@ -116,6 +116,15 @@ public class BackupPathsTests
     }
 
     [Fact]
+    public void РедакторКартинок_РабочаяПапкаИсключена_ЖурналТратЕдет()
+    {
+        // Варианты и маски сеансов правки — кеш на 7 дней весом до гигабайт
+        BackupPaths.ShouldInclude("image-editor/user-1/job-1/v1.png").Should().BeFalse();
+        // Траты редактора — деньги, других копий у них нет: журнал в корне data едет в архив
+        BackupPaths.ShouldInclude("image-editor-spend.jsonl").Should().BeTrue();
+    }
+
+    [Fact]
     public void СтатусыMcpСерверов_Исключены()
     {
         // Наблюдение, а не настройка: восстановленное из архива, оно описывает состояние

@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Images.Editing;
 
 namespace ClaudeHomeServer.Services.Images;
 
@@ -33,5 +34,7 @@ public sealed class ImagesSubsystem : IAppSubsystem
         // (`AddImageDriver<FalImageService>()`) — отдельный AddSingleton дал бы второй
         // экземпляр того же типа.
         services.AddImageGeneration();
+        // Редактор картинок (ADR-016): драйверы правки, исполнитель задач, сохранение, траты
+        services.AddImageEditor();
     }
 }

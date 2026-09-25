@@ -58,7 +58,8 @@ public static class ImageEditCatalog
             def = new ImageEditDefaultDto(providers.FirstOrDefault()?.Key, AutoModelId);
         }
 
-        return new ImageEditCatalogDto(def, providers, limits ?? DefaultLimits);
+        var reason = providers.Count == 0 ? ImageEditCatalogReasons.NoProviderConfigured : null;
+        return new ImageEditCatalogDto(def, providers, limits ?? DefaultLimits, reason);
     }
 
     // Модель есть в каталоге поставщика («auto» есть всегда)

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, lazy, Suspense } from 'react'
 import type { Project, AuthState } from './types'
 import { C } from './lib/design'
+import { ImageEditorHost } from './components/imageEditor'
 import { LoginPage } from './pages/LoginPage'
 import { ProjectListPage } from './pages/ProjectListPage'
 import { ChatsPage } from './pages/ChatsPage'
@@ -1253,6 +1254,9 @@ export default function App() {
           остров отдают ему только место, а iframe живёт здесь и переживает
           перемонтаж страницы при смене проекта. */}
       {auth && <VideoStageFrame />}
+      {/* Редактор картинок — тоже НАД страницами: уход с проекта должен спросить про
+          несохранённые варианты, а не молча размонтировать редактор вместе с деревом файлов */}
+      {auth && !authChecking && <ImageEditorHost />}
       {authChecking
         ? <LoadingScreen hint="Проверяю вход" />
         : !auth

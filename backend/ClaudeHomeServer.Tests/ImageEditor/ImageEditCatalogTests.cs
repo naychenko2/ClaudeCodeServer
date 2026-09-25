@@ -76,5 +76,15 @@ public class ImageEditCatalogTests
         catalog.Providers.Should().BeEmpty();
         catalog.Default.Provider.Should().BeNull();
         catalog.Limits.Should().Be(ImageEditCatalog.DefaultLimits);
+        catalog.Reason.Should().Be(ImageEditCatalogReasons.NoProviderConfigured);
+    }
+
+    [Fact]
+    public void Есть_один_поставщик_причины_нет()
+    {
+        var catalog = ImageEditCatalog.Build([HiggsfieldOff, Fal], null, null);
+
+        catalog.Providers.Should().ContainSingle();
+        catalog.Reason.Should().BeNull();
     }
 }

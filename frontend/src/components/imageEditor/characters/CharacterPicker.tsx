@@ -167,7 +167,7 @@ export function CharacterSection({ api, projectId, chars, disabled, onNew, onCar
             width: 32, height: 32, flex: '0 0 32px', borderRadius: R.lg, background: C.accentLight, color: C.accent,
             display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
           }}>{ic(User)}</span>
-          <span style={{ flex: 1, minWidth: 0 }}>Добавьте персонажа — и он будет узнаваем во всех сценах</span>
+          <span style={{ flex: 1, minWidth: 0 }}>Добавьте персонажа — лицо сохранится во всех сценах</span>
           <Button variant="ghost" size="sm" leftIcon={ic(Plus, ICON_SIZE.xs)} disabled={disabled} onClick={onNew}>Персонаж</Button>
         </div>
       )}

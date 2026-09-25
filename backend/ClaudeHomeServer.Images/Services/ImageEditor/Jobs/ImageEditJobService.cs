@@ -96,7 +96,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             return Fail<ImageEditQuoteDto>(ImageEditErrorCodes.ProviderUnavailable,
                 $"Поставщик «{request.Provider}» не настроен или отключён администратором");
 
-        var traits = new EditTraits(request.HasMask, request.References, request.HasCharacter);
+        var traits = new EditTraits(request.HasMask, request.References, request.HasCharacter, request.HasAnnotations, request.Removal);
         var op = request.HasMask && request.Op == ImageEditOp.Edit ? ImageEditOp.Inpaint : request.Op;
         var model = string.Equals(request.Model?.Trim(), ImageEditCatalog.AutoModelId, StringComparison.OrdinalIgnoreCase)
             ? editor.PickModel(op, request.Mode, traits)

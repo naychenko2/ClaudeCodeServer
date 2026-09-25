@@ -25,14 +25,26 @@ public record ImageEditProviderDto(
 
 public record ImageEditLimitsDto(int MaxFileMb, int MaxReferences, int MaxCount);
 
+// Reason — почему список поставщиков пуст (ImageEditCatalogReasons); null, если есть хоть один
 public record ImageEditCatalogDto(
     ImageEditDefaultDto Default,
     IReadOnlyList<ImageEditProviderDto> Providers,
-    ImageEditLimitsDto Limits);
+    ImageEditLimitsDto Limits,
+    string? Reason = null);
+
+public static class ImageEditCatalogReasons
+{
+    // Ни fal, ни Higgsfield не настроены
+    public const string NoProviderConfigured = "no_provider_configured";
+    // Подсистема картинок выключена тумблером Subsystems:images:Enabled
+    public const string SubsystemDisabled = "subsystem_disabled";
+}
 
 // ── Котировка: POST …/quote ────────────────────────────────────────────────────
 
 // Выбор человека (поставщик + модель или «auto» с режимом) и признаки запроса.
+// HasAnnotations — стрелки, рамки, подписи на холсте (кисть сюда не входит — это HasMask);
+// Removal — запрос просит стереть отмеченное (фронт считает так же, как EditIntent.IsRemoval).
 // Ничего не тратит.
 public record ImageEditQuoteRequest(
     string Provider,
@@ -44,7 +56,9 @@ public record ImageEditQuoteRequest(
     int References,
     bool HasCharacter,
     int? Width,
-    int? Height);
+    int? Height,
+    bool HasAnnotations = false,
+    bool Removal = false);
 
 // Source: ImageEditEstimateSources.*; Amount = null — «цена станет известна после запуска»
 public record ImageEditEstimateDto(double? Amount, string Unit, bool Approx, string Source);

@@ -191,6 +191,7 @@ public class ImageEditorControllerTests : IDisposable
         body.GetProperty("providers").EnumerateArray().Select(p => p.GetProperty("key").GetString())
             .Should().Equal("fal");
         body.GetProperty("default").GetProperty("provider").GetString().Should().Be("fal");
+        body.GetProperty("reason").ValueKind.Should().Be(JsonValueKind.Null);
         body.GetProperty("providers")[0].GetProperty("models")[0].GetProperty("modes")[0].GetString()
             .Should().Be("fast", "enum'ы уходят строками в camelCase — на это рассчитывает фронт");
 
@@ -212,6 +213,7 @@ public class ImageEditorControllerTests : IDisposable
         var body = await Json(catalog);
         body.GetProperty("providers").GetArrayLength().Should().Be(0);
         body.GetProperty("default").GetProperty("provider").ValueKind.Should().Be(JsonValueKind.Null);
+        body.GetProperty("reason").GetString().Should().Be(ImageEditCatalogReasons.NoProviderConfigured);
 
         var start = await client.PostAsync($"/api/projects/{projectId}/image-editor/jobs", JobForm());
         start.StatusCode.Should().Be(HttpStatusCode.Conflict);
@@ -292,7 +294,9 @@ public class ImageEditorControllerTests : IDisposable
         var client = factory.CreateAuthenticatedClient();
         var root = $"/api/projects/{projectId}/image-editor";
 
-        (await client.GetAsync($"{root}/catalog")).StatusCode.Should().Be(HttpStatusCode.OK);
+        var catalog = await client.GetAsync($"{root}/catalog");
+        catalog.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await Json(catalog)).GetProperty("reason").GetString().Should().Be(ImageEditCatalogReasons.SubsystemDisabled);
         (await client.PostAsJsonAsync($"{root}/quote", Quote("fal"))).StatusCode.Should().Be(HttpStatusCode.Conflict);
         (await client.PostAsync($"{root}/jobs", JobForm())).StatusCode.Should().Be(HttpStatusCode.Conflict);
         (await client.DeleteAsync($"{root}/jobs/any")).StatusCode.Should().Be(HttpStatusCode.NotFound);

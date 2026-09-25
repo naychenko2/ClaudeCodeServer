@@ -73,6 +73,8 @@ export function MarksLayer({ marks, k, onPick }: {
 }
 
 export const hasMaskMark = (marks: Mark[]) => marks.some(m => m.type === 'mask');
+// Стрелка, рамка или подпись — они едут только размеченной копией
+export const hasAnnotationMark = (marks: Mark[]) => marks.some(m => m.type !== 'mask');
 
 // marks.json: тип, координаты в долях 0…1, текст подписи
 export function marksToJson(marks: Mark[], w: number, h: number): string {

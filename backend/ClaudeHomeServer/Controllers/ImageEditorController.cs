@@ -46,7 +46,11 @@ public class ImageEditorController(
         var place = ImagePlaces.ImageEditor;
         var adminProvider = placeSettings?.ProviderFor(place);
         var adminModel = adminProvider is null ? null : placeSettings?.ModelFor(place, adminProvider);
-        return Ok(ImageEditCatalog.Build(editors, adminProvider, adminModel));
+        var catalog = ImageEditCatalog.Build(editors, adminProvider, adminModel);
+        // Исполнитель задач регистрирует только подсистема картинок: его нет — она выключена.
+        // Ответ остаётся 200, чтобы фронт показал причину, а не общий сбой
+        if (jobs is null) catalog = catalog with { Reason = ImageEditCatalogReasons.SubsystemDisabled };
+        return Ok(catalog);
     }
 
     [HttpPost("quote")]

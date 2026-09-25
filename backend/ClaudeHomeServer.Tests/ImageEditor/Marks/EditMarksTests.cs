@@ -65,7 +65,7 @@ public class EditMarksTests
         req.Source!.Bytes.Should().BeSameAs(source);
         source.Should().Equal(sourceCopy);
         req.References.Should().ContainSingle(r => r.Label == EditRequestComposer.AnnotatedLabel && r.Bytes == annotated);
-        req.Prompt.Should().StartWith("убрать провод").And.Contain("«сюда»").And.Contain("«annotated»");
+        req.Prompt.Should().StartWith("убрать провод").And.Contain("«сюда»").And.Contain("с пометками поверх");
         req.Op.Should().Be(ImageEditOp.Edit);
     }
 
@@ -90,7 +90,7 @@ public class EditMarksTests
 
         req.Mask.Should().BeNull();
         req.References.Should().ContainSingle(r => r.Label == EditRequestComposer.MaskLabel);
-        req.Prompt.Should().Contain("только область");
+        req.Prompt.Should().Contain("белое — область, которую менять");
     }
 
     [Fact]

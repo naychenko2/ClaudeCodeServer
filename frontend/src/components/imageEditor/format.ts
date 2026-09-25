@@ -37,6 +37,12 @@ export function pickOp(hasImage: boolean, hasMask: boolean): ImageEditOp {
   return hasMask ? 'inpaint' : 'edit';
 }
 
+// Запрос просит стереть отмеченное — копия EditIntent.IsRemoval на сервере, менять вместе.
+// Нужен котировке: чистый инпейнт (FLUX Fill) удалять не умеет, сервер берёт другую модель
+const REMOVAL = /(?<!\p{L})(удал|убер|убра|сотр|стер|стира|избав|remove|erase|delete|get rid)/iu;
+const OTHER_ACTION = /(?<!\p{L})(добав|замен|встав|нарисуй|дорисуй|постав|полож|сдела|превра|перекрас|add|replace|insert|put|draw|turn|make)/iu;
+export const isRemovalPrompt = (prompt: string) => REMOVAL.test(prompt) && !OTHER_ACTION.test(prompt);
+
 // Почему модель недоступна для текущей задачи (пусто — доступна). «Авто» подбирается
 // сервером и недоступной не бывает.
 export function modelBlockReason(m: ImageEditModel, hasImage: boolean, hasMask: boolean): string {

@@ -196,19 +196,19 @@ builder.Services.AddSingleton<Microsoft.Extensions.Options.IConfigureOptions<Mic
 //
 // Честный ILogger<ModuleLoader> (M10): на этом этапе builder.Build() ещё не вызван, а
 // WebApplicationBuilder в .NET 10 не отдаёт готовый ILoggerFactory/ServiceProvider (builder.Logging
-// — ILoggingBuilder, CreateLogger<T> на нём не резолвится). Поэтому собираем ОДНОРАЗОВЫЙ
-// провайдер из builder.Services (в нём уже зарегистрированы реальные лог-провайдеры, поставленные
-// WebApplication.CreateBuilder) и берём оттуда ILoggerFactory: «модуль не загрузился» уходит
-// в консоль, а не теряется в no-op-фабрике (раньше здесь был new LoggerFactory() без провайдеров).
-// Логирование происходит сразу, в LoadAll, внутри using — одноразовый провайдер к тому моменту жив.
+// — ILoggingBuilder, CreateLogger<T> на нём не резолвится). Поэтому заводим ОДНОРАЗОВУЮ
+// консольную фабрику с той же секцией Logging, что у хоста: «модуль не загрузился» уходит
+// в консоль, а не теряется в no-op-фабрике. Временный BuildServiceProvider здесь не годится
+// (ASP0000: второй контейнер синглтонов). Логирование идёт сразу, в LoadAll, внутри using.
 // Стор подсистем: регистрируем ДО LoadAll, чтобы ModuleLoader записал в него
 // динамические модули (RecordActive/RecordDisabled) и AddSubsystems переиспользовал
 // тот же инстанс.
 var dynamicModuleStore = new ClaudeHomeServer.Services.Composition.SubsystemStateStore();
 builder.Services.AddSingleton(dynamicModuleStore);
-using (var dynamicModuleLogProvider = builder.Services.BuildServiceProvider())
+using (var dynamicModuleLogFactory = LoggerFactory.Create(logging => logging
+    .AddConfiguration(builder.Configuration.GetSection("Logging"))
+    .AddConsole()))
 {
-    var dynamicModuleLogFactory = dynamicModuleLogProvider.GetRequiredService<ILoggerFactory>();
     var dynamicModuleRegistry = new ClaudeHomeServer.Services.DynamicModules.ModuleRegistry(builder.Configuration);
     var dynamicModuleLoader = new ClaudeHomeServer.Services.DynamicModules.ModuleLoader(
         dynamicModuleRegistry,

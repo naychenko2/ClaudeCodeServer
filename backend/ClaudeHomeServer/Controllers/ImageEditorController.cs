@@ -111,7 +111,7 @@ public class ImageEditorController(
         {
             if (!TryJoinInside(project.RootPath, paths[i], out var full))
                 return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
-                    "Образец вне папки проекта");
+                    "Образец вне папки проекта или идёт через символическую ссылку");
             var info = new FileInfo(full);
             if (!info.Exists)
                 return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
@@ -139,7 +139,7 @@ public class ImageEditorController(
 
         if (form.SourcePath is { Length: > 0 } sourcePath && !TryJoinInside(project.RootPath, sourcePath, out _))
             return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
-                "Исходник вне папки проекта");
+                "Исходник вне папки проекта или идёт через символическую ссылку");
 
         var input = new ImageEditJobInput(
             form.QuoteId.Trim(),
@@ -368,22 +368,12 @@ public class ImageEditorController(
         return null;
     }
 
-    // Путь из запроса — только относительный: SafePath срезает ведущий «/» и молча приклеил
-    // бы «/etc/passwd» к корню проекта вместо отказа
+    // Строковой проверки SafePath мало: символическая ссылка внутри проекта (refs → /etc)
+    // лексически лежит в корне, и бэкенд прочитал бы файл хоста и отдал его поставщику
     private static bool TryJoinInside(string root, string relativePath, out string full)
     {
-        full = "";
-        if (Path.IsPathRooted(relativePath) || relativePath.StartsWith('/') || relativePath.StartsWith('\\'))
-            return false;
-        try
-        {
-            full = SafePath.Join(root, relativePath);
-            return true;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return false;
-        }
+        full = ProjectLinkGuard.ResolveInside(root, relativePath) ?? "";
+        return full.Length > 0;
     }
 
     private ObjectResult Error(int status, string code, string error) =>

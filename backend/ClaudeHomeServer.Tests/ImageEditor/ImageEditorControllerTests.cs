@@ -363,4 +363,63 @@ public class ImageEditorControllerTests : IDisposable
             "отказ обязан прийти от проверки пути, а не от того, что файла случайно нет");
         jobs.Jobs.Should().BeEmpty("файл вне проекта не должен уйти поставщику");
     }
+
+    // ── Символические ссылки (ADR-017 §8): SafePath.Join их не видит ─────────────────
+
+    public static TheoryData<string, string> LinkCases()
+    {
+        var data = new TheoryData<string, string>();
+        foreach (var field in new[] { "sourcePath", "referencePaths" })
+            foreach (var kind in new[] { "file", "dir", "dangling" })
+                data.Add(field, kind);
+        return data;
+    }
+
+    [Theory]
+    [MemberData(nameof(LinkCases))]
+    public async Task Запуск_путь_через_ссылку_наружу_400_и_задача_не_создаётся(string field, string kind)
+    {
+        var jobs = new FakeJobs();
+        var factory = Factory([new FakeImageEditor("fal", models: FakeImageEditor.Model("m"))], jobs);
+        EnableFlag(factory, TestWebApplicationFactory.TestUsername);
+        var projectId = CreateProject(factory, TestWebApplicationFactory.TestUsername);
+        var root = factory.Services.GetRequiredService<ProjectManager>().GetById(projectId)!.RootPath;
+        var outside = Path.Combine(factory.TempDir, "outside_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(outside);
+        File.WriteAllBytes(Path.Combine(outside, "secret.png"), [0x89, 0x50, 0x4E, 0x47]);
+
+        string path;
+        try
+        {
+            switch (kind)
+            {
+                case "file":
+                    File.CreateSymbolicLink(Path.Combine(root, "leak.png"), Path.Combine(outside, "secret.png"));
+                    path = "leak.png";
+                    break;
+                case "dir":
+                    Directory.CreateSymbolicLink(Path.Combine(root, "refs"), outside);
+                    path = "refs/secret.png";
+                    break;
+                default:
+                    File.CreateSymbolicLink(Path.Combine(root, "dangling.png"), Path.Combine(outside, "nope.png"));
+                    path = "dangling.png";
+                    break;
+            }
+        }
+        // Windows без прав на ссылки — проверка идёт в CI на Linux
+        catch (Exception e) when (e is UnauthorizedAccessException or IOException) { return; }
+        var client = factory.CreateAuthenticatedClient();
+
+        var form = JobForm();
+        form.Add(new StringContent(path), field);
+        var resp = await client.PostAsync($"/api/projects/{projectId}/image-editor/jobs", form);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var error = await Json(resp);
+        error.GetProperty("code").GetString().Should().Be(ImageEditErrorCodes.InvalidRequest);
+        error.GetProperty("error").GetString().Should().Contain("символическую ссылку",
+            "отказ обязан прийти от проверки ссылки, а не от того, что файла нет");
+        jobs.Jobs.Should().BeEmpty("файл хоста через ссылку не должен уйти поставщику");
+    }
 }

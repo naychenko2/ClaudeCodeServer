@@ -70,6 +70,10 @@ public static class FeatureFlagKeys
     // закрыты review/apply эндпоинты — `apply` пишет в файл, и открытая ручка записи
     // при выключенной фиче была бы лишним риском (план §11).
     public const string ProjectMapHygiene = "project-map-hygiene";
+    // Локальные проекты (ADR-016): проект, привязанный к устройству владельца, — ход идёт
+    // на его машине через агента. Флаг закрывает создание и перепривязку локальных проектов
+    // и весь UI; шлюз LLM у него свой тумблер (LlmGateway:Enabled), флагом не закрывается.
+    public const string LocalProjects = "local-projects";
 }
 
 /// <summary>
@@ -178,6 +182,14 @@ public static class FeatureFlagCatalog
             Key: FeatureFlagKeys.ProjectMapHygiene,
             Title: "Уборка карты проекта",
             Description: "Кнопка в настройках проекта проверит CLAUDE.md: размер, длинные секции, мёртвые ссылки, вложенные карты — и предложит, что прибрать. Часть правок кнопкой «Применить», часть — работой для чата.",
+            Default: false,
+            Stage: "dev"),
+
+        // Локальные проекты (ADR-016): создание проекта на устройстве с агентом AI Home.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.LocalProjects,
+            Title: "Локальные проекты",
+            Description: "Проект может жить на вашем компьютере, а не на сервере: Claude работает с его файлами через агента AI Home на этой машине. Чат и задачи такого проекта видны отовсюду, а ход идёт, только пока компьютер в сети.",
             Default: false,
             Stage: "dev"),
     ];

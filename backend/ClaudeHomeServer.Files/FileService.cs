@@ -1,20 +1,26 @@
-﻿namespace ClaudeHomeServer.Services;
+﻿using ClaudeHomeServer.Services.Composition;
 
-public record FileEntry(string Name, string Path, bool IsDirectory, long? Size, DateTime Modified, bool IsModified, string? Synced = null, bool IsNew = false);
-
-// Вид мутации файла через файловый сервис — для подписчиков OnMutated
-public enum FileMutationKind { Write, Create, Delete, Rename }
+namespace ClaudeHomeServer.Services.Files;
 
 public class FileService(
-    ClaudeHomeServer.Services.Git.GitService? git = null,
-    ProjectManager? projects = null,
-    ILogger<FileService>? logger = null)
+    IGitWorkingTree? git = null,
+    IProjectManager? projects = null,
+    ILogger<FileService>? logger = null,
+    IOpenedPathGuard? openedPathGuard = null)
 {
     private readonly ILogger<FileService>? _logger = logger;
 
+    /// <summary>
+    /// Тот же сервис, но каждый открытый файл и каталог-родитель сверяются с корнем по
+    /// дескриптору (агент устройства): проверка пути до открытия подмену ссылки не ловит.
+    /// </summary>
+    public FileService WithOpenedPathGuard(IOpenedPathGuard guard) =>
+        new(git, projects, logger, guard) { GitStatusComputer = GitStatusComputer };
+
     // git/projects/logger опциональны (DI подставляет): git-операции идут через слой Execution
     // с резолвом владельца по корню — статусы/дифф/револт честны и для container-юзеров.
-    // Без них (юнит-тесты) — прежний прямой запуск git на хосте и тихое логирование.
+    // Без них (юнит-тесты, выключенная подсистема Git) — прежний прямой запуск git на хосте
+    // и тихое логирование.
 
     // Владелец по корню проекта: у соседей по папке владелец один по построению
     private string? OwnerOf(string rootPath) =>
@@ -26,8 +32,8 @@ public class FileService(
     public event Action<string, string, FileMutationKind, string?>? OnMutated;
 
     // Уведомление подписчиков; сбой подписчика не должен ронять файловую операцию.
-    // internal — дёргают и точки записи мимо FileService (Upload/SaveFromUrl в FilesController).
-    internal void NotifyMutated(string root, string rel, FileMutationKind kind, string? newRel = null)
+    // Публичный — дёргают и точки записи мимо FileService (Upload/SaveFromUrl в FilesController).
+    public void NotifyMutated(string root, string rel, FileMutationKind kind, string? newRel = null)
     {
         try { OnMutated?.Invoke(root, rel, kind, newRel); }
         catch { /* синк знаний best-effort */ }
@@ -55,9 +61,8 @@ public class FileService(
 
     // Защита от path traversal — форвардер к Core-примитиву (Этап 3, уборка Git).
     // Реализация и обоснование граничных случаев (`..`, абсолютный путь, символы диска)
-    // живут в `ClaudeHomeServer.Core/Services/SafePath.cs`. Форвардеры оставлены:
-    // десятки вызывающих внутри Main, и смена имени сломала бы полпроекта; SafePath.Join
-    // остаётся прямой точкой для нового кода вроде `GitService.ValidateRel`.
+    // живут в `ClaudeHomeServer.Core/Services/SafePath.cs`. Внутренний форвардер — для кода
+    // самой вертикали; снаружи зовут SafePath.Join или SafeJoinPublic.
     internal static string SafeJoin(string root, string relativePath) =>
         SafePath.Join(root, relativePath);
 
@@ -249,7 +254,85 @@ public class FileService(
     public string ReadFile(string rootPath, string relativePath)
     {
         var path = SafeJoin(rootPath, relativePath);
-        return File.ReadAllText(path);
+        using var reader = new StreamReader(OpenVerified(rootPath, path), System.Text.Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        return reader.ReadToEnd();
+    }
+
+    // ---------- сверка открытого (IOpenedPathGuard) ----------
+    // Без сверщика (сервер) — обычное открытие. Со сверщиком решает то, что открылось, а не
+    // путь до открытия: ни байта не читается и не пишется, пока дескриптор не сверен.
+
+    private FileStream OpenVerified(string rootPath, string path, int bufferSize = 4096, bool useAsync = false)
+    {
+        var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, bufferSize, useAsync);
+        return Verified(rootPath, stream);
+    }
+
+    // Запись без усечения при открытии: FileMode.Create обнулил бы файл за подменённой
+    // ссылкой ещё до сверки. Новый файл — CreateNew: он не идёт по ссылке в последнем
+    // сегменте (висячая ссылка наружу даёт «уже существует», а не файл снаружи).
+    private FileStream OpenForWrite(string rootPath, string path, bool createNew)
+    {
+        VerifyParent(rootPath, path);
+        FileStream stream;
+        if (createNew) stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
+        else
+        {
+            try { stream = new FileStream(path, FileMode.Open, FileAccess.Write, FileShare.Read); }
+            catch (FileNotFoundException) { stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read); }
+        }
+        Verified(rootPath, stream).SetLength(0);
+        return stream;
+    }
+
+    private FileStream Verified(string rootPath, FileStream stream)
+    {
+        if (openedPathGuard is null) return stream;
+        try
+        {
+            openedPathGuard.Verify(rootPath, OpenedPaths.Of(stream.SafeFileHandle));
+            return stream;
+        }
+        catch
+        {
+            stream.Dispose();
+            throw;
+        }
+    }
+
+    // Каталог, в котором создаём, переименовываем или удаляем, — по его дескриптору
+    private void VerifyParent(string rootPath, string path) =>
+        VerifyDirectory(rootPath, Path.GetDirectoryName(path)!);
+
+    private void VerifyDirectory(string rootPath, string directory)
+    {
+        if (openedPathGuard is null) return;
+        using var handle = OpenedPaths.OpenDirectory(directory);
+        openedPathGuard.Verify(rootPath, OpenedPaths.Of(handle));
+    }
+
+    // Создание каталога со всеми недостающими предками: сверяется ближайший существующий
+    // предок (в нём появится новое) и сам созданный каталог
+    private void CreateDirectoryVerified(string rootPath, string directory)
+    {
+        if (openedPathGuard is not null)
+        {
+            var existing = directory;
+            while (!Directory.Exists(existing)) existing = Path.GetDirectoryName(existing)!;
+            VerifyDirectory(rootPath, existing);
+        }
+        Directory.CreateDirectory(directory);
+        VerifyDirectory(rootPath, directory);
+    }
+
+    private static byte[] ReadAll(FileStream stream)
+    {
+        using (stream)
+        using (var buffer = new MemoryStream())
+        {
+            stream.CopyTo(buffer);
+            return buffer.ToArray();
+        }
     }
 
     public bool IsBinaryFile(string rootPath, string relativePath)
@@ -285,7 +368,15 @@ public class FileService(
     public byte[] ReadFileBytes(string rootPath, string relativePath)
     {
         var path = SafeJoin(rootPath, relativePath);
-        return File.ReadAllBytes(path);
+        return ReadAll(OpenVerified(rootPath, path));
+    }
+
+    // Поток на чтение для отдачи без загрузки в память. Запись и удаление не блокируются:
+    // харнес может править файл, пока его читают.
+    public FileStream OpenRead(string rootPath, string relativePath)
+    {
+        var path = SafeJoin(rootPath, relativePath);
+        return OpenVerified(rootPath, path, bufferSize: 81920, useAsync: true);
     }
 
     // Документы: PDF рендерится на клиенте (pdf.js), Office-форматы — через OnlyOffice DS.
@@ -316,27 +407,31 @@ public class FileService(
     public long GetFileSize(string rootPath, string relativePath)
     {
         var path = SafeJoin(rootPath, relativePath);
-        return new FileInfo(path).Length;
+        if (openedPathGuard is null) return new FileInfo(path).Length;
+        using var stream = OpenVerified(rootPath, path);
+        return stream.Length;
     }
 
     public string GetFileBase64(string rootPath, string relativePath)
     {
         var path = SafeJoin(rootPath, relativePath);
-        return Convert.ToBase64String(File.ReadAllBytes(path));
+        return Convert.ToBase64String(ReadAll(OpenVerified(rootPath, path)));
     }
 
     public void WriteFile(string rootPath, string relativePath, string content)
     {
         var path = SafeJoin(rootPath, relativePath);
-        File.WriteAllText(path, content);
+        using (var writer = new StreamWriter(OpenForWrite(rootPath, path, createNew: false), new System.Text.UTF8Encoding(false)))
+            writer.Write(content);
         NotifyMutated(rootPath, relativePath, FileMutationKind.Write);
     }
 
     public void WriteFileBytes(string rootPath, string relativePath, byte[] content)
     {
         var path = SafeJoin(rootPath, relativePath);
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.WriteAllBytes(path, content);
+        CreateDirectoryVerified(rootPath, Path.GetDirectoryName(path)!);
+        using (var stream = OpenForWrite(rootPath, path, createNew: false))
+            stream.Write(content);
         NotifyMutated(rootPath, relativePath, FileMutationKind.Write);
     }
 
@@ -351,20 +446,22 @@ public class FileService(
     {
         var path = SafeJoin(rootPath, relativePath);
         if (File.Exists(path)) throw new InvalidOperationException("файл уже существует");
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.WriteAllText(path, content);
+        CreateDirectoryVerified(rootPath, Path.GetDirectoryName(path)!);
+        using (var writer = new StreamWriter(OpenForWrite(rootPath, path, createNew: true), new System.Text.UTF8Encoding(false)))
+            writer.Write(content);
         NotifyMutated(rootPath, relativePath, FileMutationKind.Create);
     }
 
     public void CreateDirectory(string rootPath, string relativePath)
     {
         var path = SafeJoin(rootPath, relativePath);
-        Directory.CreateDirectory(path);
+        CreateDirectoryVerified(rootPath, path);
     }
 
     public void Delete(string rootPath, string relativePath)
     {
         var path = SafeJoin(rootPath, relativePath);
+        VerifyParent(rootPath, path);
         if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
         else if (File.Exists(path)) File.Delete(path);
         else throw new FileNotFoundException();
@@ -375,6 +472,8 @@ public class FileService(
     {
         var src = SafeJoin(rootPath, oldRelative);
         var dst = SafeJoin(rootPath, newRelative);
+        VerifyParent(rootPath, src);
+        VerifyParent(rootPath, dst);
         if (Directory.Exists(src)) Directory.Move(src, dst);
         else File.Move(src, dst);
         NotifyMutated(rootPath, oldRelative, FileMutationKind.Rename, newRelative);

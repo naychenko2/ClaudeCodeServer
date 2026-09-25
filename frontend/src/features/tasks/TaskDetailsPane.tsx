@@ -4,10 +4,10 @@
 // (мобила). Режим редактирования — инлайн, вместо деталей (TaskEditForm).
 
 import { useEffect, useMemo, useState } from 'react';
-import { Bell, ChevronRight, Check, MessageCircle, Repeat, SquarePen, SquareStack, Trash2, X } from 'lucide-react';
+import { Bell, ChevronRight, Check, MessageCircle, Repeat, SquarePen, SquareStack, Trash2, Unplug, X } from 'lucide-react';
 import type { Project, Session, Task, TaskStatus, TaskPriority, UpdateTaskDto } from '../../types';
 import { C, FONT, FS, R, SHADOW, SP } from '../../lib/design';
-import { Button, IconButton, Modal, BackButton } from '../../components/ui';
+import { Button, IconButton, Modal, BackButton, Notice } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { useNarrowContainer } from '../../hooks/useContainerWidth';
 import { Toolbar } from '../../components/Toolbar';
@@ -17,7 +17,8 @@ import { showToast } from '../../lib/toast';
 import { beginAiBusy, endAiBusy } from '../../lib/ai/busy';
 import {
   NO_PROJECT_COLOR, NO_PROJECT_LABEL, PRIORITY_LABEL, STATUS_DOT, STATUS_LABEL,
-  deleteTask, dueLabel, projectColor, projectInitial, recurrenceLabel, reminderLabel, updateTask,
+  deleteTask, deviceWaitDuration, dueLabel, executorStopText, isDeviceWaiting, projectColor, projectInitial,
+  recurrenceLabel, reminderLabel, updateTask,
 } from '../../lib/tasks';
 import {
   ClaudeBadge, DueChip, ExtBadge, LabelChip, MeBadge,
@@ -205,7 +206,11 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
   };
 
   // Живая сессия по задаче уже идёт — не показываем кнопку повторного запуска
-  const claudeRunning = !!task.claudeStartedAt && !task.claudeResult && task.status !== 'done';
+  // Ожидание устройства (ADR-016) — запуска ещё не было, «в работе» не показываем
+  const deviceWaiting = isDeviceWaiting(task);
+  const deviceName = project?.device?.name ?? null;
+  const deviceWaitExpired = task.status !== 'done' && task.executorStopReason === 'device_wait_expired';
+  const claudeRunning = !!task.claudeStartedAt && !task.claudeResult && task.status !== 'done' && !deviceWaiting;
 
   // AI-хаб: контекстные действия задачи из палитры/подсказки. «Выполнить» — тот же
   // обработчик, что и кнопка (со стейтом «Запуск…»); генерация — вход в правку + авто-запуск.
@@ -395,6 +400,25 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
           <span className="tool-spinner" style={{ width: 11, height: 11, flexShrink: 0 }} />
           AI работает над задачей
         </div>
+      )}
+
+      {/* Исполнитель ждёт устройство локального проекта либо так его и не дождался */}
+      {(deviceWaiting || deviceWaitExpired) && (
+        <Notice
+          tone={deviceWaiting ? 'warning' : 'danger'}
+          icon={Unplug}
+          title={deviceWaiting
+            ? <>{deviceName ? `Ждёт устройство «${deviceName}»` : 'Ждёт устройство проекта'} · {deviceWaitDuration(task.deviceWaitSince!)}</>
+            : executorStopText(task.executorStopReason, deviceName)}
+          style={{ marginBottom: SP.md }}
+        >
+          {deviceWaiting && (
+            <div>
+              {task.deviceWaitReason ? `${task.deviceWaitReason.replace(/[.\s]+$/, '')}. ` : ''}
+              Задача запустится, когда устройство выйдет на связь; через 24 часа ожидание снимется.
+            </div>
+          )}
+        </Notice>
       )}
 
       {/* Ряд чипов */}

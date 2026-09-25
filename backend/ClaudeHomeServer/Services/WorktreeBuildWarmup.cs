@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Execution;
 
 namespace ClaudeHomeServer.Services;
@@ -6,7 +7,7 @@ namespace ClaudeHomeServer.Services;
 // Прогрев сборки свежего worktree: холодная сборка дерева занимает 60–90 с (restore + полный
 // компил), и без прогрева её оплачивает модель первым же dotnet build хода. Сразу после
 // заведения дерева под чат/задачу фоном запускается сборка тестового проекта — в среде
-// владельца (ForOwner: та же изоляция и пределы памяти, что у ходов). Fire-and-forget:
+// проекта (ForProject: та же изоляция и пределы памяти, что у ходов). Fire-and-forget:
 // ход её не ждёт, результат — только в лог, исключения наружу не выходят.
 //
 // Не более одного прогрева на дерево за жизнь процесса, и только для дерева, где тестовый
@@ -55,7 +56,7 @@ public sealed class WorktreeBuildWarmup(
 
     // true — прогрев принят: процесс стартовал либо ждёт слота в фоне. Вызывающий не ждёт ни в
     // одном из случаев.
-    public bool TryStart(string? ownerId, string worktreeRoot)
+    public bool TryStart(Project project, string worktreeRoot)
     {
         try
         {
@@ -69,12 +70,12 @@ public sealed class WorktreeBuildWarmup(
             // Слот на месте — стартуем прямо здесь: типичный случай не платит уходом в фон
             if (Gate.TryAcquire(spec) is { } slot)
             {
-                Start(ownerId, root, spec, slot);
+                Start(project, root, spec, slot);
                 return true;
             }
             log.LogInformation(
                 "Прогрев сборки дерева {Root} ждёт слота (занято {Limit} тяжёлых запусков)", root, Gate.Limit);
-            _ = Task.Run(() => WaitAndStartAsync(ownerId, root, spec));
+            _ = Task.Run(() => WaitAndStartAsync(project, root, spec));
             return true;
         }
         catch (Exception ex)
@@ -84,21 +85,21 @@ public sealed class WorktreeBuildWarmup(
         }
     }
 
-    private void Start(string? ownerId, string root, ProcessSpec spec, IDisposable slot)
+    private void Start(Project project, string root, ProcessSpec spec, IDisposable slot)
     {
-        // Слот освобождаем на ЛЮБОМ сбое старта, включая резолв среды владельца: не отданный
+        // Слот освобождаем на ЛЮБОМ сбое старта, включая резолв среды проекта: не отданный
         // слот утекает до рестарта и навсегда опускает потолок. Дальше его держит наблюдатель
         // до выхода процесса.
         try
         {
-            var launcher = launchers.ForOwner(ownerId);
+            var launcher = launchers.ForProject(project);
             var process = launcher.Start(spec);
             _ = Task.Run(() => WatchAsync(launcher, process, root, slot));
         }
         catch { slot.Dispose(); throw; }
     }
 
-    private async Task WaitAndStartAsync(string? ownerId, string root, ProcessSpec spec)
+    private async Task WaitAndStartAsync(Project project, string root, ProcessSpec spec)
     {
         try
         {
@@ -116,7 +117,7 @@ public sealed class WorktreeBuildWarmup(
                         : "дерева больше нет");
                 return;
             }
-            Start(ownerId, root, spec, slot);
+            Start(project, root, spec, slot);
         }
         catch (Exception ex)
         {

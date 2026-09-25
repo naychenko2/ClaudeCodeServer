@@ -1,7 +1,7 @@
 namespace ClaudeHomeServer.Services.Composition;
 
-// Действие файлового мутатора. Дублирует FileService.FileMutationKind — нужен в Core,
-// чтобы IProjectFileGateway мог объявить событие OnMutated без зависимости от Main.
+// Действие файлового мутатора — единый вид для FileService (вертикаль Files) и швов
+// IProjectFileGateway/IProjectFiles: событие OnMutated объявлено в Core.
 public enum FileMutationKind { Write, Create, Delete, Rename }
 
 public static class ProjectFileGatewayConstants

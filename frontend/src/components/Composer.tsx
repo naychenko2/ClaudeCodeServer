@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, type ReactNode } from 'react';
-import { AlertTriangle, AudioLines, Ban, ArrowUp, Check, ChevronDown, Eye, EyeOff, FolderGit2, Lock, Mic, Paperclip, Plus, RefreshCw, ShieldCheck, Users, VolumeX, WifiOff, X } from 'lucide-react';
+import type { Project } from '../types';
+import { canRunTurn } from '../lib/projectCapabilities';
+import { AlertTriangle, AudioLines, Ban, ArrowUp, Check, ChevronDown, Eye, EyeOff, FolderGit2, Lock, Mic, Paperclip, Plus, RefreshCw, ShieldCheck, Users, VolumeX, Unplug, WifiOff, X } from 'lucide-react';
 import { C, R, FS, FONT, MODAL_W, SHADOW, SP, Z } from '../lib/design';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset } from '../lib/rateLimit';
 import { SkillsDropdown } from './SkillsDropdown';
@@ -32,7 +34,7 @@ import { Waveform, fmtRecTime } from './chat/VoiceRecordingRow';
 import { getDraft, setDraft } from '../lib/drafts';
 import { middleEllipsis } from '../lib/paths';
 import { showToast } from '../lib/toast';
-import { IconButton, Modal } from './ui';
+import { IconButton, Modal, Notice } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { useVoiceInput } from '../hooks/useVoiceInput';
 import { useHandsFree, type SpeechPhase } from '../hooks/useHandsFree';
@@ -46,6 +48,9 @@ import type { SkillInfo, AgentInfo, Persona, WorkLoopState, SessionTeamImplement
 export interface ComposerProps {
   // Ключ чата — под него хранится черновик недовведённого текста
   sessionId: string;
+  // ADR-016 §3.4: проект чата — для гейта отправки (exec) и баннера «устройство офлайн».
+  // Не передаётся — гейт отключён (старый путь вызова)
+  project?: Project | null;
   onSend: (text: string, attachments: string[], opts?: { auto?: boolean }) => void;
   onStop: () => void;
   onAttach: () => void;
@@ -558,6 +563,10 @@ export function Composer({
   onStopTeamImplement,
   onEnableTeamImplement,
   isProjectChat = false,
+  // ADR-016 §3.4: проект чата — для гейта отправки. Если exec недоступна
+  // (например, локальный проект с офлайн-устройством), поле ввода блокируется
+  // и показывается баннер с причиной. Не передаётся — гейт отключён (старый путь)
+  project = null,
   onboarding = false,
   worktreeBranch = null,
   onToggleWorktree,
@@ -647,6 +656,13 @@ export function Composer({
 
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  // Гейт хода (ADR-016 §3.4): локальный проект с офлайн-устройством. Пересчёт по
+  // смене project.capabilities или project.deviceId. Используем и в баннере, и в handleSend
+  const execGate = useMemo(() => canRunTurn(project), [project?.capabilities, project?.deviceId]);
+  // Прямой ввод человека при закрытом гейте получает честный отказ, а не очередь: ждать
+  // устройство умеет только фоновая работа (ADR-016 §5). Кнопка видно недоступна
+  const execBlocked = !!project && !execGate.available;
+  const execDeviceOffline = project?.device?.online === false;
   // Опасный режим (bypass) ждёт подтверждения в модалке перед применением
   const [pendingMode, setPendingMode] = useState<Mode | null>(null);
   // Штаб «Командной реализации» думает (Э8): стадии интервью/планирования держат чат
@@ -989,6 +1005,9 @@ export function Composer({
   // черновик пользователя вместе с высотой поля.
   // Возвращает, ушёл ли ход: петля разговора по false возвращается слушать
   const handleSend = async (overrideText?: string): Promise<boolean> => {
+    // ADR-016 §3.4: локальный проект с недоступной exec (устройство офлайн/нет
+    // харнеса). Причину уже показал баннер над полем, здесь только гасим Enter
+    if (execBlocked) return false;
     const t = (overrideText ?? text).trim();
     // Обычная отправка руками снимает пометку голосового хода: её текст человек писал сам,
     // и вернуть его в поле при прерывании — правильное поведение
@@ -2019,17 +2038,20 @@ export function Composer({
       type="button"
       onClick={() => void handleSend()}
       onContextMenu={(e) => e.preventDefault()}
-      disabled={!canSend}
-      title={isMobile ? 'Отправить' : 'Отправить (Enter) · Shift+Enter — новая строка'}
+      disabled={!canSend || execBlocked}
+      data-composer-send
+      title={execBlocked
+        ? `Не отправится: ${execGate.reason ?? 'ход сейчас недоступен'}`
+        : isMobile ? 'Отправить' : 'Отправить (Enter) · Shift+Enter — новая строка'}
       style={{
         ...iconBtnGuard,
         width: isMobile ? 38 : 34,
         height: isMobile ? 38 : 34,
         borderRadius: R.pill,
         border: 'none',
-        background: canSend ? C.accent : C.bgSelected,
-        color: canSend ? C.onAccent : C.textMuted,
-        cursor: canSend ? 'pointer' : 'default',
+        background: canSend && !execBlocked ? C.accent : C.bgSelected,
+        color: canSend && !execBlocked ? C.onAccent : C.textMuted,
+        cursor: canSend && !execBlocked ? 'pointer' : 'not-allowed',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -2227,6 +2249,23 @@ export function Composer({
       onDragOver={handleDragOver}
       onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragOver(false); }}
     >
+      {/* Баннер закрытого гейта хода (ADR-016 §3.4): у локального проекта с недоступной
+          exec говорим, что сообщение не уйдёт и что с этим делать. Кнопка отправки при
+          этом недоступна, Enter гасится в handleSend */}
+      {execBlocked && (
+        <Notice
+          data-composer-exec-gate
+          icon={Unplug}
+          title={execDeviceOffline
+            ? 'Сообщение не отправится, пока устройство проекта не в сети'
+            : 'Сообщение сейчас не отправится'}
+          style={{ margin: `0 ${SP.sm}px ${SP.xs}px` }}
+        >
+          {!execDeviceOffline && execGate.reason && <>{execGate.reason.replace(/\.$/, '')}. </>}
+          Включите компьютер проекта и запустите на нём агента устройства.
+          Задачи и отложенные сообщения дождутся устройства сами.
+        </Notice>
+      )}
       {/* Раскрывашка «Обсудить с командой» — над полем композера */}
       {canDiscuss && (
         <TeamDrawer

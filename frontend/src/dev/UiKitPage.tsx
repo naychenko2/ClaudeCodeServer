@@ -26,7 +26,7 @@ import {
   Calendar, Share2, MessageCircle,
   Network, FileText, AlertCircle, Loader2,
 } from 'lucide-react';
-import { Rows3, Pin, FolderOpen, Bell, List, ListTree, ArrowRightToLine } from 'lucide-react';
+import { Rows3, Pin, FolderOpen, Bell, List, ListTree, ArrowRightToLine, Unplug } from 'lucide-react';
 import { C, FONT, FS, SP, R, SHADOW, ISLAND, MODAL_W, GROUP_COLORS } from '../lib/design';
 import { AGENT_COLORS } from '../components/AgentSelector';
 import { ChatCard } from '../components/ChatCard';
@@ -45,9 +45,10 @@ import {
   Button, IconButton, Modal, ModalActions, ConfirmDialog,
   Menu, MenuItem, BackButton, WaitingIndicator,
   IslandScaffold, Splitter, SidebarSplitter, IslandSplitter, IslandSidebarSplitter,
-  TextField, TextArea, IconField, Field, FieldLabel,
-  PanelShell, PanelHeaderSlot, useHasPanelHeader, RailFlyout,
+  TextField, TextArea, IconField, Field, FieldLabel, Select,
+  PanelShell, PanelHeaderSlot, useHasPanelHeader, RailFlyout, Notice,
 } from '../components/ui';
+import { CapabilityUnavailable } from '../components/CapabilityGate';
 import { InlineSegmented } from '../components/ui/InlineSegmented';
 import { ICON_SIZE, ICON_STROKE, ICON_PROPS } from '../components/ui/icons';
 import { Toolbar, ToolbarIconButton } from '../components/Toolbar';
@@ -660,6 +661,7 @@ function FieldsSection() {
   const [iconMail, setIconMail] = useState('');
   const [iconSearch, setIconSearch] = useState('');
   const [fielded, setFielded] = useState('');
+  const [selected, setSelected] = useState('');
 
   return (
     <Island>
@@ -694,6 +696,21 @@ function FieldsSection() {
             placeholder="Disabled поле"
             disabled
           />
+        </div>
+
+        {/* Select — выпадающий список в стиле полей: с плейсхолдером + disabled */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+          <FieldLabel>Select</FieldLabel>
+          <Select
+            value={selected}
+            onChange={setSelected}
+            placeholder="Выберите устройство"
+            options={[
+              { value: 'laptop', label: 'Ноутбук (windows)' },
+              { value: 'desktop', label: 'Десктоп (linux) · офлайн' },
+            ]}
+          />
+          <Select value="" onChange={() => {}} placeholder="Disabled список" options={[]} disabled />
         </div>
 
         {/* TextArea — многострочный ввод с авто-ростом: обычное + disabled */}
@@ -3309,6 +3326,29 @@ function ToolbarAndEmptySection() {
                 </Button>
               }
             />
+          </div>
+        </SubBlock>
+
+        {/* Плашка «недоступно с причиной» (ADR-016 §3.4) — единственная на все панели:
+            тот же EmptyState compact, что у состояний связи с агентом устройства */}
+        <SubBlock label="CapabilityUnavailable — панель недоступна для проекта">
+          <div style={{ background: C.bgPanel, borderRadius: R.xl, minHeight: SP.xxxl * 5 }}>
+            <CapabilityUnavailable
+              feature="files"
+              title="Файлы недоступны"
+              reason="Устройство проекта не в сети"
+            />
+          </div>
+        </SubBlock>
+
+        {/* Notice — баннер причины во всю ширину: «ждёт устройство», «ход недоступен» */}
+        <SubBlock label="Notice — баннер причины (warning / danger)">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+            <Notice icon={Unplug}>Устройство проекта не в сети</Notice>
+            <Notice icon={Unplug} title="Ждёт устройство «Ноутбук» · 12 мин">
+              Задача запустится, когда устройство выйдет на связь; через 24 часа ожидание снимется.
+            </Notice>
+            <Notice tone="danger" icon={Unplug} title="Не запускалась: устройство так и не вышло на связь" />
           </div>
         </SubBlock>
       </div>

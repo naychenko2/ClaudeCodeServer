@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Services.ProjectServices;
 
@@ -45,50 +46,32 @@ public sealed class LaunchConfigService
 
     public LaunchConfigService(ILogger<LaunchConfigService> log) => _log = log;
 
+    private const string RelativePath = ".claude/launch.json";
+
     // Защита пути через Core-примитив SafePath.Join: ссылка на FileService — это ссылка
     // на чужую вертикаль, сторож границ её ловит. CLAUDE.md «Соглашения».
     private static string PathFor(Project project) =>
-        SafePath.Join(project.RootPath, ".claude/launch.json");
+        SafePath.Join(project.RootPath, RelativePath);
 
     /// <summary>Прочитать конфигурации. Файла нет / битый — пустой список.</summary>
-    public async Task<List<LaunchConfigEntry>> ReadAsync(Project project)
+    /// <param name="files">Шов файлов проекта; null — папка на этой машине напрямую (сервер).</param>
+    public async Task<List<LaunchConfigEntry>> ReadAsync(Project project, IProjectFiles? files = null)
     {
         try
         {
-            var path = PathFor(project);
-            if (!File.Exists(path)) return [];
-            var json = await File.ReadAllTextAsync(path);
-            if (string.IsNullOrWhiteSpace(json)) return [];
-
-            using var doc = JsonDocument.Parse(json, new JsonDocumentOptions
+            string json;
+            if (files is null)
             {
-                CommentHandling = JsonCommentHandling.Skip,
-                AllowTrailingCommas = true,
-            });
-            var root = doc.RootElement;
-
-            // Формат Claude Desktop: { "configurations": [ ... ] }.
-            // Терпимо принимаем и одиночный объект, и голый массив.
-            JsonElement arr = root;
-            if (root.ValueKind == JsonValueKind.Object &&
-                root.TryGetProperty("configurations", out var configs))
-                arr = configs;
-
-            var list = new List<LaunchConfigEntry>();
-            if (arr.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var el in arr.EnumerateArray())
-                {
-                    var e = el.Deserialize<LaunchConfigEntry>(ReadOpts);
-                    if (e != null) list.Add(e);
-                }
+                var path = PathFor(project);
+                if (!File.Exists(path)) return [];
+                json = await File.ReadAllTextAsync(path);
             }
-            else if (arr.ValueKind == JsonValueKind.Object)
+            else
             {
-                var e = arr.Deserialize<LaunchConfigEntry>(ReadOpts);
-                if (e != null) list.Add(e);
+                try { json = await files.ReadFileAsync(project, RelativePath); }
+                catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { return []; }
             }
-            return list;
+            return Parse(json);
         }
         catch (Exception ex)
         {
@@ -97,13 +80,53 @@ public sealed class LaunchConfigService
         }
     }
 
-    /// <summary>Записать конфигурации в <c>{configurations:[...]}</c>, создав <c>.claude/</c> при необходимости.</summary>
-    public async Task WriteAsync(Project project, List<LaunchConfigEntry> configs)
+    private static List<LaunchConfigEntry> Parse(string json)
     {
-        var path = PathFor(project);
-        var dir = Path.GetDirectoryName(path)!;
-        Directory.CreateDirectory(dir);
+        if (string.IsNullOrWhiteSpace(json)) return [];
+
+        using var doc = JsonDocument.Parse(json, new JsonDocumentOptions
+        {
+            CommentHandling = JsonCommentHandling.Skip,
+            AllowTrailingCommas = true,
+        });
+        var root = doc.RootElement;
+
+        // Формат Claude Desktop: { "configurations": [ ... ] }.
+        // Терпимо принимаем и одиночный объект, и голый массив.
+        JsonElement arr = root;
+        if (root.ValueKind == JsonValueKind.Object &&
+            root.TryGetProperty("configurations", out var configs))
+            arr = configs;
+
+        var list = new List<LaunchConfigEntry>();
+        if (arr.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var el in arr.EnumerateArray())
+            {
+                var e = el.Deserialize<LaunchConfigEntry>(ReadOpts);
+                if (e != null) list.Add(e);
+            }
+        }
+        else if (arr.ValueKind == JsonValueKind.Object)
+        {
+            var e = arr.Deserialize<LaunchConfigEntry>(ReadOpts);
+            if (e != null) list.Add(e);
+        }
+        return list;
+    }
+
+    /// <summary>Записать конфигурации в <c>{configurations:[...]}</c>, создав <c>.claude/</c> при необходимости.</summary>
+    public async Task WriteAsync(Project project, List<LaunchConfigEntry> configs, IProjectFiles? files = null)
+    {
         var json = JsonSerializer.Serialize(new { configurations = configs }, WriteOpts);
+        if (files is not null)
+        {
+            await files.CreateDirectoryAsync(project, ".claude");
+            await files.WriteFileAsync(project, RelativePath, json);
+            return;
+        }
+        var path = PathFor(project);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         await File.WriteAllTextAsync(path, json);
     }
 }

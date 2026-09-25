@@ -2211,6 +2211,47 @@ public class FallbackLlmSessionAdapterTests
         finally { if (Directory.Exists(baseDir)) Directory.Delete(baseDir, recursive: true); }
     }
 
+    // ADR-016 3.7: у локального проекта транскрипт живёт на устройстве, провайдера выбирает
+    // шлюз — фолбэк не ищет и не копирует файл по серверному пути. Ловушка: одноимённый
+    // транскрипт в профиле acc-a на сервере; ротация на acc-b обязана пройти без копии.
+    [Fact]
+    public async Task ЛокальныйПроект_РотацияПула_ТранскриптНеПереносится()
+    {
+        var baseDir = Path.Combine(Path.GetTempPath(), "ccs_fb_local_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(baseDir);
+        try
+        {
+            var providers = BuildProvidersInDir(baseDir);
+            var pool = BuildPool("acc-a", "acc-b");
+            var rootPath = Path.Combine(baseDir, "workdir");
+            const string csid = "csid-local";
+            var flat = TranscriptMigrator.FlattenCwd(rootPath);
+            var accAFile = Path.Combine(baseDir, "claude-profiles", "sub-acc-a", "projects", flat, csid + ".jsonl");
+            var accBFile = Path.Combine(baseDir, "claude-profiles", "sub-acc-b", "projects", flat, csid + ".jsonl");
+            Directory.CreateDirectory(Path.GetDirectoryName(accAFile)!);
+            File.WriteAllText(accAFile, "TRAP");
+
+            var session = new Session { Model = "sonnet", Provider = "acc-a", ClaudeSessionId = csid };
+            var inner = new FakeInnerAdapter(session);
+            var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
+                msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
+                pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                effectiveChain: () => new[] { "sonnet" }, transcriptOnServer: false);
+            inner.Sink = sut.HandleMessageAsync;
+            inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+            inner.Scripts.Enqueue(() => inner.Emit(Success()));
+
+            await sut.SendMessageAsync("сделай");
+            await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+            await WaitForAsync(() => !sut.FallbackTurnActive, "restore");
+
+            session.Provider.Should().Be("acc-b", "ротация проходит — переносить на сервере нечего");
+            File.Exists(accBFile).Should().BeFalse("файл по серверному пути локальному чату чужой");
+            File.ReadAllText(accAFile).Should().Be("TRAP");
+        }
+        finally { if (Directory.Exists(baseDir)) Directory.Delete(baseDir, recursive: true); }
+    }
+
     // (б) Смена типа поставщика (шаг цепочки): Model/Provider восстановлены И транскрипт перенесён
     // обратно в профиль исходного провайдера. Проверяем факт наличия файла во временных профилях,
     // а не поле в памяти: acc-a после хода должен содержать свежий ответ, скопированный из deepseek.

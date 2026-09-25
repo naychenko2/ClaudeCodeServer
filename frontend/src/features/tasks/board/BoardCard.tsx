@@ -6,9 +6,10 @@ import { CSS } from '@dnd-kit/utilities';
 import type { Task } from '../../../types';
 import { TaskCard } from '../TaskCard';
 
-export function BoardCard({ task, projectName, onOpen }: {
+export function BoardCard({ task, projectName, deviceName, onOpen }: {
   task: Task;
   projectName?: string;
+  deviceName?: string;
   onOpen: () => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id });
@@ -23,7 +24,7 @@ export function BoardCard({ task, projectName, onOpen }: {
       {...attributes}
       {...listeners}
     >
-      <TaskCard task={task} projectName={projectName} onClick={onOpen} />
+      <TaskCard task={task} projectName={projectName} deviceName={deviceName} onClick={onOpen} />
     </div>
   );
 }

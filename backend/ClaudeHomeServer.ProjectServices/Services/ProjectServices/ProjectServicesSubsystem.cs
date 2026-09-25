@@ -31,6 +31,8 @@ public sealed class ProjectServicesSubsystem : IAppSubsystem
         services.AddSingleton<DevServerService>();
         services.AddSingleton<LaunchConfigService>();
         services.AddSingleton<ProjectServiceDiscovery>();
+        // Маршруты раздела без привязки к хосту: их зовут и PreviewController, и агент устройства
+        services.AddSingleton<ProjectServicesApi>();
         // Внешний доступ к дев-серверу проекта по отдельному поддомену. По умолчанию ВЫКЛЮЧЕН —
         // см. ExternalPreviewOptions: код уезжает всем, у кого свой инстанс, поэтому защита
         // обязана быть конфигурацией, а не отсутствием кода.

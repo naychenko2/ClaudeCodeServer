@@ -5,9 +5,11 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Skills;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Controllers;
 
+[ProjectCapability(ProjectCapabilityArea.FileBound)]
 [ApiController]
 [Authorize]
 public class SkillsController(
@@ -19,7 +21,8 @@ public class SkillsController(
     PluginSkillLocalizer pluginLocalizer,
     PersonaManager personas,
     PersonaBindingsService bindings,
-    ProjectManager projects) : ControllerBase
+    ProjectManager projects,
+    IProjectFiles projectFiles) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -28,26 +31,31 @@ public class SkillsController(
     // (а текст агента — инструкции, которые попадут в ход его владельца). 404, а не 403:
     // существование чужого проекта не подтверждаем. Форма — как у соседей (KnowledgeController,
     // DocsController, FilesController).
-    private string GetRoot(string projectId)
+    private Project OwnedProject(string projectId)
     {
         var p = projects.GetById(projectId);
         if (p is null || p.OwnerId != UserId)
             throw new KeyNotFoundException($"Проект не найден: {projectId}");
-        return p.RootPath;
+        return p;
     }
 
-    // Список скиллов: глобальные + проектные + агенты проекта + workflow-скрипты + плагины
+    private string GetRoot(string projectId) =>
+        // projectId бывает и в теле запроса — атрибут группы его не видит, отказ здесь
+        ProjectCapabilityGuard.ServerRoot(OwnedProject(projectId));
+
+    // Список скиллов: глобальные + проектные + агенты проекта + workflow-скрипты + плагины.
+    // Проектная часть — через шов файлов тем же кодом, что у агента устройства (ADR-016)
     [HttpGet("api/projects/{projectId}/skills")]
-    public IActionResult List(string projectId)
+    public async Task<IActionResult> List(string projectId, CancellationToken ct)
     {
         try
         {
-            var root = GetRoot(projectId);
+            var project = OwnedProject(projectId);
             return Ok(new
             {
                 skills = skills.GetGlobalSkills(),
-                projectSkills = skills.GetProjectSkills(root),
-                agents = skills.GetProjectAgents(root),
+                projectSkills = await skills.GetProjectSkillsAsync(projectFiles, project, ct),
+                agents = await skills.GetProjectAgentsAsync(projectFiles, project, ct),
                 workflows = skills.GetGlobalWorkflows(),
                 plugins = pluginLocalizer.Localize(skills.GetPluginSkills()),
             });
@@ -237,12 +245,11 @@ public class SkillsController(
     }
 
     [HttpGet("api/projects/{projectId}/agents/{agentName}")]
-    public IActionResult GetAgent(string projectId, string agentName)
+    public async Task<IActionResult> GetAgent(string projectId, string agentName, CancellationToken ct)
     {
         try
         {
-            var root = GetRoot(projectId);
-            var content = skills.GetAgentContent(root, agentName);
+            var content = await skills.GetAgentContentAsync(projectFiles, OwnedProject(projectId), agentName, ct);
             if (content is null) return NotFound();
             return Ok(new { content });
         }
@@ -250,36 +257,34 @@ public class SkillsController(
     }
 
     [HttpPut("api/projects/{projectId}/agents/{agentName}")]
-    public IActionResult SaveAgent(string projectId, string agentName, [FromBody] SkillContentRequest req)
+    public async Task<IActionResult> SaveAgent(string projectId, string agentName, [FromBody] SkillContentRequest req, CancellationToken ct)
     {
         try
         {
-            var root = GetRoot(projectId);
-            skills.SaveProjectAgent(root, agentName, req.Content);
+            await skills.SaveProjectAgentAsync(projectFiles, OwnedProject(projectId), agentName, req.Content, ct);
             return Ok();
         }
         catch (KeyNotFoundException) { return NotFound(); }
+        catch (LocalProjectException) { throw; }
         catch (Exception ex) { return StatusCode(500, new { error = ex.Message }); }
     }
 
     [HttpPost("api/projects/{projectId}/agents")]
-    public IActionResult CreateAgent(string projectId, [FromBody] CreateSkillRequest req)
+    public async Task<IActionResult> CreateAgent(string projectId, [FromBody] CreateSkillRequest req, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(req.Name))
             return BadRequest(new { error = "Имя агента не может быть пустым" });
         try
         {
-            var root = GetRoot(projectId);
-            skills.SaveProjectAgent(root, req.Name.Trim(), req.Content);
+            await skills.SaveProjectAgentAsync(projectFiles, OwnedProject(projectId), req.Name.Trim(), req.Content, ct);
             return Ok(new { name = req.Name.Trim() });
         }
         catch (KeyNotFoundException) { return NotFound(); }
+        catch (LocalProjectException) { throw; }
         catch (Exception ex) { return StatusCode(500, new { error = ex.Message }); }
     }
 }
 
-public record SkillContentRequest(string Content);
-public record CreateSkillRequest(string Name, string Content);
 public record InstallSkillRequest(string Source, string Skill, string? Scope, string? ProjectId);
 public record InstallForPersonaRequest(string Source, string Skill);
 public record SuggestSkillsRequest(string? PersonaId, string? ProjectId, string? Query);

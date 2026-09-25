@@ -1,14 +1,16 @@
 import { useState } from 'react';
-import type { Project, ProjectGroup } from '../../../types';
+import type { Project, ProjectGroup, DesktopDevice } from '../../../types';
 import { api } from '../../../lib/api';
-import { C, MODAL_W } from '../../../lib/design';
-import { Modal, ModalActions, TextField, Field, SegmentedControl } from '../../../components/ui';
+import { C, FS, MODAL_W, SP } from '../../../lib/design';
+import { Modal, ModalActions, TextField, Field, SegmentedControl, Select } from '../../../components/ui';
 import { GroupSelect } from '../GroupSelect';
 import { SyncToggleRow } from '../components/SyncToggleRow';
 import { GIT_MODES, GitModeCard, GitPushRow, type GitMode } from '../components/GitModeCards';
 import { ProjectIconSection, type DraftGlyph } from '../ProjectIconSection';
 import { invalidateProjectsCache } from '../useAllProjects';
 import { basename } from '../../../lib/paths';
+import { FLAGS, useFeature } from '../../../lib/featureFlags';
+import { deviceLabel, isLocalProjectDevice, useNoDevicesHint } from '../../desktop/deviceOptions';
 
 interface Props {
   groups: ProjectGroup[];
@@ -18,12 +20,22 @@ interface Props {
 }
 
 type Mode = 'new' | 'existing';
+// Тип размещения проекта (ADR-016 §3.4): 'server' — обычный проект на хосте сервера,
+// 'device' — локальный, привязан к устройству из реестра ADR-008. Сегмент показывается
+// ТОЛЬКО под флагом `local-projects`; без флага поле скрыто и сразу подставляется
+// 'server' — старые пути создания не меняются.
+type Placement = 'server' | 'device';
 
 // Единый диалог добавления проекта: сегмент «Новый / Существующий».
 //  • Новый — создаём новую папку под путём по умолчанию (path = null).
 //  • Существующий — привязываем существующую папку по пути.
+// Под флагом `local-projects` добавляется второй сегмент «Серверный / Локальный»:
+// локальный проект создаётся с привязкой к устройству (ADR-016 §4).
 export function AddProjectDialog({ groups, defaultGroupId, onSuccess, onClose }: Props) {
+  const localProjects = useFeature(FLAGS.localProjects);
+  const noDevicesHint = useNoDevicesHint();
   const [mode, setMode] = useState<Mode>('new');
+  const [placement, setPlacement] = useState<Placement>('server');
   const [name, setName] = useState('');
   const [path, setPath] = useState('');
   const [groupId, setGroupId] = useState(defaultGroupId ?? '');
@@ -35,6 +47,13 @@ export function AddProjectDialog({ groups, defaultGroupId, onSuccess, onClose }:
   // null — не подбирали: у проекта будут инициалы (как до фичи, ADR-009 §7).
   const [draftGlyph, setDraftGlyph] = useState<DraftGlyph | null>(null);
   const [error, setError] = useState('');
+  // Состояние секции устройства (ADR-016 §3.4): id выбранного устройства + путь
+  // НА НЁМ. Список устройств подгружается только когда сегмент переключили на
+  // «Локальный» — без этого лишний запрос на каждом открытии диалога
+  const [devices, setDevices] = useState<DesktopDevice[] | null>(null);
+  const [deviceId, setDeviceId] = useState('');
+  const [devicePath, setDevicePath] = useState('');
+  const [devicesLoading, setDevicesLoading] = useState(false);
   // Имя, набранное руками: пока его нет, для существующей папки название
   // подставляется из последнего сегмента пути (очистка поля снова включает автоподстановку).
   const [nameTouched, setNameTouched] = useState(false);
@@ -54,24 +73,62 @@ export function AddProjectDialog({ groups, defaultGroupId, onSuccess, onClose }:
     if (m === 'existing' && !nameTouched) setName(basename(path.trim()));
   };
 
+  const handlePlacementChange = (p: Placement) => {
+    setPlacement(p);
+    if (p === 'device' && !devices) void loadDevices();
+  };
+
+  // Список устройств — только годные для локального проекта (см. isLocalProjectDevice)
+  const loadDevices = async () => {
+    setDevicesLoading(true);
+    try {
+      const list = await api.devices.list();
+      setDevices(list.filter(isLocalProjectDevice));
+    } catch {
+      setDevices([]);
+    } finally {
+      setDevicesLoading(false);
+    }
+  };
+
+  const localPlacement = placement === 'device';
+
   const handleConfirm = async () => {
     setError('');
     try {
+      if (localPlacement) {
+        if (!deviceId) {
+          setError('Выберите устройство');
+          return;
+        }
+        if (!devicePath.trim()) {
+          setError('Укажите абсолютный путь к папке на устройстве');
+          return;
+        }
+        const p = await api.projects.create(name.trim(), null, false, groupId || null, undefined, color, {
+          deviceId,
+          rootPath: devicePath.trim(),
+        });
+        let created = p;
+        if (draftGlyph && draftGlyph.name) {
+          try {
+            created = await api.projects.selectIcon(p.id, { name: draftGlyph.name });
+          } catch { /* проект создан, иконку можно доставить в настройках */ }
+        }
+        invalidateProjectsCache();
+        onSuccess(created);
+        return;
+      }
       const rootPath = mode === 'existing' ? (path.trim() || null) : null;
       const p = await api.projects.create(name.trim(), rootPath, false, groupId || null, {
         enableGit: gitMode !== 'none',
         gitAutoCommit: gitMode === 'auto',
         gitAutoPush: gitMode === 'auto' && gitPush,
       }, color);
-      // Значок досылаем best-effort тем же selectIcon, что и в Edit (ADR-009 §8): тот
-      // же валидатор на входе, тот же контракт. Сбой не отменяет создание — значок
-      // можно подобрать в «Редактировать проект» (как раньше с генеративной иконкой).
       let created = p;
       if (draftGlyph && draftGlyph.name) {
         try {
-          created = await api.projects.selectIcon(p.id, {
-            name: draftGlyph.name,
-          });
+          created = await api.projects.selectIcon(p.id, { name: draftGlyph.name });
         } catch { /* проект создан, иконку можно доставить в настройках проекта */ }
       }
       if (sync) api.sync.add(p.id, '', true).catch(() => {});
@@ -82,6 +139,24 @@ export function AddProjectDialog({ groups, defaultGroupId, onSuccess, onClose }:
     }
   };
 
+  // Сегмент размещения: показываем только под флагом local-projects. ВАЖНО — это
+  // НЕ сегмент «локальный/серверный» вообще, а переключатель «что именно создаём»:
+  // «Серверный» = старый сценарий, «Локальный» = новый
+  const placementOptions: { value: Placement; label: string }[] = localProjects
+    ? [
+        { value: 'server', label: 'Серверный' },
+        { value: 'device', label: 'Локальный' },
+      ]
+    : [];
+
+  // Локальные проекты не ведут git со стороны сервера — агент устройства сам
+  // управляет файлами. Скрываем секцию git, чтобы не обещать лишнего
+  const showGitSection = !localPlacement;
+  // У локального путь НА устройстве обязателен и задаётся отдельным полем — старого
+  // поля «путь к папке» для режима существующего нет: папка либо создаётся устройством,
+  // либо должна существовать на нём (агент проверит при первом ходе)
+  const showServerPath = !localPlacement && mode === 'existing';
+
   return (
     <Modal
       title="Добавить проект"
@@ -89,23 +164,40 @@ export function AddProjectDialog({ groups, defaultGroupId, onSuccess, onClose }:
       onClose={onClose}
       footer={
         <ModalActions
-          confirmLabel={mode === 'existing' ? 'Добавить' : 'Создать'}
-          confirmDisabled={!name.trim() || (mode === 'existing' && !path.trim())}
+          confirmLabel={localPlacement ? 'Создать' : (mode === 'existing' ? 'Добавить' : 'Создать')}
+          confirmDisabled={
+            !name.trim() ||
+            (localPlacement ? (!deviceId || !devicePath.trim()) : (mode === 'existing' && !path.trim()))
+          }
           onConfirm={handleConfirm}
           onCancel={onClose}
         />
       }
     >
-      {error && <div style={{ color: C.danger, fontSize: 13 }}>{error}</div>}
+      {error && <div style={{ color: C.danger, fontSize: FS.base }}>{error}</div>}
 
-      <SegmentedControl<Mode>
-        value={mode}
-        onChange={handleModeChange}
-        options={[{ value: 'new', label: 'Новый' }, { value: 'existing', label: 'Существующий' }]}
-      />
+      {/* Размещение — первым: от него зависит, что вообще спрашивать дальше */}
+      {placementOptions.length > 0 && (
+        <Field label="Где живут файлы">
+          <SegmentedControl<Placement>
+            value={placement}
+            onChange={handlePlacementChange}
+            options={placementOptions}
+          />
+        </Field>
+      )}
+
+      {/* «Новый / Существующий» у локального ни на что не влияет — папку задаёт путь на устройстве */}
+      {!localPlacement && (
+        <SegmentedControl<Mode>
+          value={mode}
+          onChange={handleModeChange}
+          options={[{ value: 'new', label: 'Новый' }, { value: 'existing', label: 'Существующий' }]}
+        />
+      )}
 
       {/* Иконка + название проекта (тот же блок, что в «Редактировать проект»). В режиме
-          создания значок держится в draftGlyph (name lucide) и крепится через selectIcon
+          создания значок держим в draftGlyph (name lucide) и крепится через selectIcon
           после create(). Черновой Project несёт актуальные name/color для превью. */}
       <ProjectIconSection
         creating
@@ -125,11 +217,38 @@ export function AddProjectDialog({ groups, defaultGroupId, onSuccess, onClose }:
         onDraftGlyphChange={setDraftGlyph}
       />
 
-      {mode === 'existing' && (
+      {localPlacement ? (
+        <>
+          <Field label="Устройство" hint="Машина из реестра устройств, на которой лежит папка проекта">
+            {devicesLoading ? (
+              <div style={{ fontSize: FS.base, color: C.textMuted, padding: `${SP.sm}px 0` }}>Загружаем устройства…</div>
+            ) : devices && devices.length > 0 ? (
+              <Select
+                value={deviceId}
+                onChange={setDeviceId}
+                placeholder="Выберите устройство"
+                options={devices.map(d => ({ value: d.id, label: deviceLabel(d) }))}
+              />
+            ) : (
+              <div style={{ fontSize: FS.base, color: C.textSecondary, padding: `${SP.sm}px 0` }}>
+                {noDevicesHint}
+              </div>
+            )}
+          </Field>
+          <Field label="Путь на устройстве" hint="Абсолютный путь к папке проекта на машине — например C:\Sources\my-project или /home/user/my-project">
+            <TextField
+              value={devicePath}
+              onChange={setDevicePath}
+              placeholder="C:\Sources\my-project"
+              mono
+            />
+          </Field>
+        </>
+      ) : showServerPath ? (
         <Field label="Путь к папке" hint="Абсолютный путь к существующей папке проекта">
           <TextField value={path} onChange={handlePathChange} placeholder="C:\Sources\my-project" mono />
         </Field>
-      )}
+      ) : null}
 
       {groups.length > 0 && (
         <Field label="Группа">
@@ -139,23 +258,29 @@ export function AddProjectDialog({ groups, defaultGroupId, onSuccess, onClose }:
 
       {/* Ведение истории файлов (git): без истории / ручной (код) / авто (документы).
           Карточки однострочные (подсказка в title) — тот же компактный паттерн, что и
-          в «Редактировать проект» (GitModeCards), иначе секция разносит диалог по высоте. */}
-      <Field label="История файлов (Git)">
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-          {GIT_MODES.map(m => (
-            <GitModeCard
-              key={m.value}
-              active={gitMode === m.value}
-              label={m.label}
-              hint={m.hint}
-              onClick={() => setGitMode(m.value)}
-            />
-          ))}
-          {gitMode === 'auto' && <GitPushRow checked={gitPush} onChange={setGitPush} />}
-        </div>
-      </Field>
+          в «Редактировать проект» (GitModeCards), иначе секция разносит диалог по высоте.
+          У ЛОКАЛЬНОГО проекта секция скрыта: историю ведёт агент устройства, серверный
+          git к нему не относится (см. ADR-016 §4) */}
+      {showGitSection && (
+        <Field label="История файлов (Git)">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+            {GIT_MODES.map(m => (
+              <GitModeCard
+                key={m.value}
+                active={gitMode === m.value}
+                label={m.label}
+                hint={m.hint}
+                onClick={() => setGitMode(m.value)}
+              />
+            ))}
+            {gitMode === 'auto' && <GitPushRow checked={gitPush} onChange={setGitPush} />}
+          </div>
+        </Field>
+      )}
 
-      <SyncToggleRow enabled={sync} onChange={setSync} />
+      {/* Синк офлайн — серверная штука, локальному проекту не нужен (агент работает
+          с файлами сам). У ЛОКАЛЬНОГО тоже скрываем, чтобы не обещать лишнего */}
+      {!localPlacement && <SyncToggleRow enabled={sync} onChange={setSync} />}
     </Modal>
   );
 }

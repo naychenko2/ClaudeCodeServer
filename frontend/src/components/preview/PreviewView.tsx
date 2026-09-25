@@ -6,6 +6,7 @@ import { PreviewLogView, type LogSource } from './PreviewLogView'
 import type { ProjectService } from '../../types'
 import { readStoredToken } from '../../lib/offline'
 import { getExternalUrl } from '../../lib/externalPreviewUrls'
+import { agentPreviewUrl, projectRouteOf } from '../../lib/deviceAgent'
 
 interface Props {
   service: ProjectService
@@ -68,10 +69,25 @@ export function PreviewView({ service, projectId, onStop, onClose, services }: P
   // Открыт доступ снаружи — показываем ИМЕННО его: там сайт живёт в корне, и всё, что
   // ссылается на «/» (ассеты, чанки Module Federation), наконец грузится. Через префикс
   // /preview/{id}/ такие сайты разъезжаются, и панель для них бесполезна.
-  const externalUrl = getExternalUrl(projectId, service.id)
+  // Локальный проект: дев-сервер на машине проекта, превью отдаёт агент устройства со своего
+  // порта по билету превью (дальше — его кука). Внешнего доступа у такого проекта нет
+  const viaAgent = projectRouteOf(projectId) === 'agent'
+  const showPage = started || external
+  const [agentUrl, setAgentUrl] = useState<string | null>(null)
+  useEffect(() => {
+    if (!viaAgent || !showPage) return
+    let alive = true
+    agentPreviewUrl(projectId)
+      .then(url => { if (alive) setAgentUrl(url) })
+      .catch(() => { if (alive) setAgentUrl(null) })
+    return () => { alive = false }
+  }, [viaAgent, showPage, projectId])
+  const externalUrl = viaAgent ? null : getExternalUrl(projectId, service.id)
   // Кука cc_preview нужна только своему прокси; у поддомена своя, её ставит /__preview-auth
-  if (!externalUrl && (started || external)) ensurePreviewCookie()
-  const previewUrl = externalUrl ?? (started || external ? `/preview/${projectId}/` : null)
+  if (!viaAgent && !externalUrl && showPage) ensurePreviewCookie()
+  const previewUrl = viaAgent
+    ? (showPage ? agentUrl : null)
+    : externalUrl ?? (showPage ? `/preview/${projectId}/` : null)
   const port = service.runningPort ?? service.suggestedPort
 
   return (

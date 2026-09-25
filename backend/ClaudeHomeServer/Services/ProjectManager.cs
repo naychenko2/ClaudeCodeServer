@@ -74,15 +74,74 @@ public class ProjectManager : IProjectManager
     // «c:\GIT\x»), а датасет знаний в Dify общий на RootPath: два проекта начинают спорить за
     // одну базу. У РАЗНЫХ владельцев общая папка допустима — на этом держатся каскады
     // «соседей по папке» (GetByRootPath).
-    private void EnsureRootFree(string userId, string rootPath, string? exceptProjectId = null)
+    // Ключ — пара «устройство + путь» (ADR-016 §1): одинаковая строка пути на сервере и на
+    // устройстве — две разные папки и два разных проекта.
+    private void EnsureRootFree(string userId, string? deviceId, string rootPath, string? exceptProjectId = null)
     {
-        var key = WorkspaceKnowledgeStore.NormalizePath(rootPath);
+        var key = ProjectCapabilities.FolderKey(deviceId, rootPath);
         var taken = _projects.Values.FirstOrDefault(p =>
             p.OwnerId == userId
             && p.Id != exceptProjectId
-            && WorkspaceKnowledgeStore.NormalizePath(p.RootPath) == key);
+            && ProjectCapabilities.FolderKey(p) == key);
         if (taken is not null)
             throw new ArgumentException($"Эта папка уже подключена как проект «{taken.Name}»");
+    }
+
+    // Путь серверного проекта: каноничная форма, папка обязана существовать на сервере
+    private string ResolveServerRoot(string userId, string rootPath)
+    {
+        rootPath = Path.GetFullPath(rootPath);
+        if (!Directory.Exists(rootPath))
+            throw new DirectoryNotFoundException($"Папка не найдена: {rootPath}");
+        EnsureRootAllowed(userId, rootPath);
+        return rootPath;
+    }
+
+    // Локальный проект (ADR-016): папка живёт на устройстве, сервер её не видит и не создаёт.
+    // Флаг и возможность exec у устройства проверяет вызывающий (ProjectCapabilities.BindRefusal):
+    // устройства принадлежат вертикали Desktop, у менеджера проектов ссылки на неё нет.
+    public Project CreateLocal(string name, string rootPath, string userId, string deviceId,
+        string? groupId = null, string? color = null)
+    {
+        if (string.IsNullOrWhiteSpace(deviceId))
+            throw new ArgumentException("Не указано устройство проекта");
+        if (string.IsNullOrWhiteSpace(rootPath))
+            throw new ArgumentException("Укажите путь к папке на устройстве");
+        rootPath = ProjectCapabilities.NormalizeDevicePath(rootPath);
+        EnsureRootFree(userId, deviceId, rootPath);
+
+        var project = new Project
+        {
+            Name = name,
+            RootPath = rootPath,
+            DeviceId = deviceId,
+            OwnerId = userId,
+            GroupId = string.IsNullOrEmpty(groupId) ? null : groupId,
+            Icon = new ProjectIcon { Color = string.IsNullOrEmpty(color) ? null : color },
+            PresetKey = ProjectPreset.Pending,
+        };
+        _projects[project.Id] = project;
+        Save();
+        return project;
+    }
+
+    // Перепривязка проекта к устройству (deviceId) или обратно на сервер (null), с новым путём
+    // или прежним. Запрет при существующих чатах — на вызывающем (409 в контроллере): у менеджера
+    // проектов нет доступа к сессиям.
+    public Project SetDevice(string id, string? deviceId, string? rootPath = null)
+    {
+        var project = _projects.GetValueOrDefault(id)
+            ?? throw new KeyNotFoundException($"Проект не найден: {id}");
+        var ownerId = project.OwnerId ?? throw new InvalidOperationException("У проекта нет владельца");
+        deviceId = string.IsNullOrWhiteSpace(deviceId) ? null : deviceId;
+        var path = string.IsNullOrWhiteSpace(rootPath) ? project.RootPath : rootPath;
+        path = deviceId is null ? ResolveServerRoot(ownerId, path) : ProjectCapabilities.NormalizeDevicePath(path);
+        EnsureRootFree(ownerId, deviceId, path, exceptProjectId: project.Id);
+        project.DeviceId = deviceId;
+        project.RootPath = path;
+        project.UpdatedAt = DateTime.UtcNow;
+        Save();
+        return project;
     }
 
     public Project Create(string name, string? rootPath, string userId, string username, bool createDirectory = false, string? groupId = null, string? color = null)
@@ -110,7 +169,7 @@ public class ProjectManager : IProjectManager
         // как разные проекты, хотя это одна папка (Windows схлопывает двойные разделители сам)
         rootPath = Path.GetFullPath(rootPath);
         EnsureRootAllowed(userId, rootPath);
-        EnsureRootFree(userId, rootPath);
+        EnsureRootFree(userId, null, rootPath);
 
         // «Новый проект» обязан получить НОВУЮ папку. Раньше домашняя папка была отдельной
         // ({база}/{логин}), и совпасть с рабочей репой не могла; с override домашней папкой
@@ -151,14 +210,20 @@ public class ProjectManager : IProjectManager
         if (name is not null) project.Name = name;
         if (rootPath is not null)
         {
-            rootPath = Path.GetFullPath(rootPath);
-            if (!Directory.Exists(rootPath))
-                throw new DirectoryNotFoundException($"Папка не найдена: {rootPath}");
+            if (!ProjectCapabilities.FilesOnServer(project))
+                // Путь на устройстве: сервер его не видит, проверить наличие может только агент
+                rootPath = ProjectCapabilities.NormalizeDevicePath(rootPath);
+            else
+            {
+                rootPath = Path.GetFullPath(rootPath);
+                if (!Directory.Exists(rootPath))
+                    throw new DirectoryNotFoundException($"Папка не найдена: {rootPath}");
+            }
             if (project.OwnerId is { } ownerId)
             {
-                EnsureRootAllowed(ownerId, rootPath);
+                if (ProjectCapabilities.FilesOnServer(project)) EnsureRootAllowed(ownerId, rootPath);
                 // сам проект из проверки исключаем: сохранение без смены папки — не дубль
-                EnsureRootFree(ownerId, rootPath, exceptProjectId: project.Id);
+                EnsureRootFree(ownerId, project.DeviceId, rootPath, exceptProjectId: project.Id);
             }
             project.RootPath = rootPath;
         }
@@ -474,12 +539,14 @@ public class ProjectManager : IProjectManager
     }
 
     // Все проекты, чей RootPath указывает на ту же папку (датасет знаний общий per-RootPath):
-    // каскад удаления и события синка знаний должны учитывать соседей по папке
+    // каскад удаления и события синка знаний должны учитывать соседей по папке.
+    // rootPath — путь НА СЕРВЕРЕ, поэтому локальные проекты (ADR-016) в соседи не попадают
+    // никогда: их папка на другой машине, даже если строка пути совпала.
     public IReadOnlyCollection<Project> GetByRootPath(string rootPath)
     {
-        var key = WorkspaceKnowledgeStore.NormalizePath(rootPath);
+        var key = ProjectCapabilities.FolderKey(null, rootPath);
         return _projects.Values
-            .Where(p => WorkspaceKnowledgeStore.NormalizePath(p.RootPath) == key)
+            .Where(p => ProjectCapabilities.FolderKey(p) == key)
             .ToList();
     }
 

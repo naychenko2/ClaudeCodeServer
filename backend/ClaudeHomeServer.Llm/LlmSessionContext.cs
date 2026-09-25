@@ -371,4 +371,15 @@ public sealed record LlmSessionContext(
     // (LocalActionRouter.LocalBlockedByTurn). null — процесс-глобальный
     // LocalEngineBusyTracker.Instance, тот же объект, что в DI; своим экземпляром
     // пользуются только тесты, чтобы не делить признак между параллельными прогонами.
-    LocalEngineBusyTracker? LocalEngineBusy = null);
+    LocalEngineBusyTracker? LocalEngineBusy = null,
+    // Группа «нужен контент проекта на сервере» (ADR-016 §4: Dify, CodeGraph, досье) у
+    // проекта чата работает. false — локальный проект: ход не цепляет датасет по рабочей
+    // папке и не зовёт серверные контрибьюторы контента, даже если строка пути совпала
+    // с серверной папкой. Считает SessionManager по ProjectCapabilities.
+    bool ServerContent = true,
+    // Транскрипт CLI чата лежит на диске сервера (ADR-016). false — локальный проект:
+    // транскрипт живёт только на устройстве, поэтому ход не ищет его у себя (хвост
+    // task-notification, живой поток субагентов, ватчер workflow, вес истории в снимке) и
+    // фолбэк не переносит его между профилями — провайдера выбирает шлюз, профиль один.
+    // Считает SessionManager по ProjectCapabilities.
+    bool TranscriptOnServer = true);

@@ -8,4 +8,5 @@ internal sealed class TestLauncherFactory : ILauncherFactory
     public static readonly TestLauncherFactory Instance = new();
     public IProcessLauncher Local => LocalProcessRunner.Instance;
     public IProcessLauncher ForOwner(string? ownerId) => LocalProcessRunner.Instance;
+    public IProcessLauncher ForProject(ClaudeHomeServer.Models.Project project) => LocalProcessRunner.Instance;
 }

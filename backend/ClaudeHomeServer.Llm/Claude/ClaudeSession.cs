@@ -79,6 +79,11 @@ public class ClaudeSession : ILlmSessionAdapter
     // null — чат вне проекта; равен _rootPath — обычный чат без worktree, fallback
     // сводится к no-op в CodeGraphPromptProvider.GetSliceAsync.
     private readonly string? _mainRootPath;
+    private readonly bool _serverContent;
+    // Транскрипт CLI на диске сервера (LlmSessionContext.TranscriptOnServer). false — локальный
+    // проект: транскрипт на устройстве, ход его у себя не ищет — ни хвоста task-notification,
+    // ни живого потока субагентов, ни ватчера workflow, ни веса истории в снимке
+    private readonly bool _transcriptOnServer;
     // Логгер BareMode-диагностики: размер взятой карты, oversized-отступ и т.п.
     // Опциональный — тесты/старые вызовы передают null, лог просто не пишется.
     private readonly ILogger? _log;
@@ -789,6 +794,8 @@ public class ClaudeSession : ILlmSessionAdapter
         Info = info;
         _rootPath = context.RootPath;
         _mainRootPath = context.MainRootPath;
+        _serverContent = context.ServerContent;
+        _transcriptOnServer = context.TranscriptOnServer;
         _serverContentRoot = context.ContentRootPath;
         _onMessage = context.OnMessage;
         _mcpConfigPath = mcpConfigPath;
@@ -2100,6 +2107,13 @@ public class ClaudeSession : ILlmSessionAdapter
                         details = $"[Win32:206]{ex.Message}";
                         text = TurnFailureText.PromptOverflow;
                     }
+                    else if (ex is Execution.DeviceExecRefusedException)
+                    {
+                        // Отказ устройства локального проекта: текст отказа — человеку, маркер —
+                        // классификатору фолбэка (другая пара не лечит офлайн-устройство)
+                        details = TurnErrorClassifier.DeviceRefusedMarker + ex.Message;
+                        text = TurnFailureText.ForException(ex);
+                    }
                     else if (ex is System.ComponentModel.Win32Exception w32)
                     {
                         details = $"[Win32:{w32.NativeErrorCode}]{ex.Message}";
@@ -2753,7 +2767,9 @@ public class ClaudeSession : ILlmSessionAdapter
         }
 
         // MCP-конфиг: создаём каждый ход с актуальным dataset id (мог появиться после создания сессии)
-        var currentWk = _wkStore?.ForRoot(_rootPath);
+        // Локальный проект: датасета по рабочей папке нет (ADR-016 §4) — совпавшая строка
+        // серверной папки не должна подсунуть ходу чужую базу знаний
+        var currentWk = _serverContent ? _wkStore?.ForRoot(_rootPath) : null;
         var currentDatasetId = currentWk?.DatasetId;
         var (turnMcpPath, mcpServerKeys, mcpServerNames) = BuildTurnMcpConfig(currentDatasetId, personaAgents);
         // Секции промпта про MCP-серверы вешаются на ФАКТ доставки сервера в конфиг ЭТОГО хода,
@@ -2892,7 +2908,8 @@ public class ClaudeSession : ILlmSessionAdapter
                     HasNotesMcp: _notesMcp is not null,
                     HasMemoryMcp: _memoryMcp is not null,
                     HasWorkspaceMcp: _workspaceMcp is not null,
-                    WorkspaceSections: _workspaceMcp?.Sections ?? Array.Empty<string>());
+                    WorkspaceSections: _workspaceMcp?.Sections ?? Array.Empty<string>(),
+                    ServerContent: _serverContent);
                 var assembling = new Turn.PromptAssembling(
                     turn: CurrentTurnContext(), session: promptContext, turnText: text);
                 try
@@ -3721,6 +3738,8 @@ public class ClaudeSession : ILlmSessionAdapter
                 ClearEnv = _providers?.EnvKeysToClear ?? LlmProviderRegistry.ProviderEnvKeys,
                 StdioEncoding = utf8NoBom,
                 TurnId = _currentTurnId,
+                // Раннер устройства привязывает к чату токен шлюза (ADR-016 §2); local/docker поле не читают
+                SessionId = Info.Id,
                 // Событие Exited — единственный надёжный сигнал смерти процесса: закрытие stdout
                 // может не наступить (дочерние node-процессы MCP наследуют и держат pipe). Без него
                 // обрыв хода зависает в «ожидании» без диагностики (инцидент P27).
@@ -4406,7 +4425,8 @@ public class ClaudeSession : ILlmSessionAdapter
     // в снимок не тащим (это вся переписка) — только размер и число сообщений.
     private (long? Bytes, int? Messages) TranscriptStats()
     {
-        if (_cliConfigRoot is not { Length: > 0 } root || Info.ClaudeSessionId is not { } csid)
+        if (!_transcriptOnServer
+            || _cliConfigRoot is not { Length: > 0 } root || Info.ClaudeSessionId is not { } csid)
             return (null, null);
         try
         {
@@ -4473,12 +4493,27 @@ public class ClaudeSession : ILlmSessionAdapter
         => !lastTurnResolved && lastSubmitWasNewProcess
            && lastSubmittedText is not null && text == lastSubmittedText;
 
-    // Последний user-текст главного транскрипта этой сессии (null — файла нет/ошибка/вложение)
+    // Последний user-текст главного транскрипта этой сессии (null — файла нет/ошибка/вложение).
+    // У локального проекта всегда null: durable-ность прошлого submit на устройстве не
+    // проверить, и ре-аттемпт идёт обычным submit — возможный дубль виден, пустой ход нет
     private string? ReadLastTranscriptUserText()
-        => TranscriptProbe.LastUserText(
-            Info.ClaudeSessionId is { } csid
-                ? TranscriptProbe.FindMainTranscript(_rootPath, csid)
-                : null);
+        => _transcriptOnServer
+            ? TranscriptProbe.LastUserText(
+                Info.ClaudeSessionId is { } csid
+                    ? TranscriptProbe.FindMainTranscript(_rootPath, csid)
+                    : null)
+            : null;
+
+    // Строки result.errors CLI (пусто — поля нет или оно не массив строк)
+    internal static IReadOnlyList<string> ResultErrors(JsonElement result)
+    {
+        if (!result.TryGetProperty("errors", out var errors) || errors.ValueKind != JsonValueKind.Array)
+            return [];
+        return errors.EnumerateArray()
+            .Where(e => e.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(e.GetString()))
+            .Select(e => e.GetString()!)
+            .ToList();
+    }
 
     // Пустой result CLI: «success» без единого хода модели и без токенов — служебный маркер
     // «модель не вызывалась» (микро-ход task-notification на --resume; запуск без submit при
@@ -4781,8 +4816,13 @@ public class ClaudeSession : ILlmSessionAdapter
                     // часть контекста: новый процесс под другим CLAUDE_CONFIG_DIR (фолбэк сменил
                     // провайдера) пишет транскрипты в другую папку, старый ватчер с закешированной
                     // папкой их не увидит.
-                    if (_subagentWatcher is null
-                        || !_subagentWatcher.Matches(cwd ?? _rootPath, Info.ClaudeSessionId!, _turnConfigRoot))
+                    // Локальный проект: транскрипты на устройстве — живого потока субагентов и
+                    // хвоста task-notification нет (фронт показывает причину по матрице,
+                    // ProjectFeatures.LiveSubagents); завершения фоновых задач ловятся по stdout
+                    // и TaskOutput, иначе прогон доживает до потолка BgLingerTimeout
+                    if (_transcriptOnServer
+                        && (_subagentWatcher is null
+                            || !_subagentWatcher.Matches(cwd ?? _rootPath, Info.ClaudeSessionId!, _turnConfigRoot)))
                     {
                         if (_subagentWatcher is not null)
                         {
@@ -4799,7 +4839,7 @@ public class ClaudeSession : ILlmSessionAdapter
 
                     // Ридер notification'ов — один на прогон (init повторяется на каждом ходе
                     // нового CLI; пересоздание сбросило бы офсет и пропустило завершения)
-                    if (_transcriptTailer is null)
+                    if (_transcriptTailer is null && _transcriptOnServer)
                     {
                         _transcriptTailer = new MainTranscriptTailer(
                             cwd ?? _rootPath, Info.ClaudeSessionId!, HandleTaskNotification);
@@ -4960,6 +5000,15 @@ public class ClaudeSession : ILlmSessionAdapter
                     var humanError = TurnFailureText.ForCliError(rawError);
                     await _onMessage(new ErrorMessage(humanError ?? rawError, ExpectResultFollows: true,
                         Details: humanError is null ? null : rawError));
+                }
+                // Отказ до вызова модели (error_during_execution): текста в result нет, причины —
+                // в errors. Главная — --resume без транскрипта там, где идёт ход: без ошибки
+                // человек увидел бы пустой провалившийся ход без объяснения
+                else if (isErrorFlag && ResultErrors(root) is { Count: > 0 } resultErrors)
+                {
+                    var rawErrors = string.Join("\n", resultErrors);
+                    await _onMessage(new ErrorMessage(TurnFailureText.ForResultErrors(resultErrors) ?? rawErrors,
+                        ExpectResultFollows: true, Details: rawErrors));
                 }
                 // Статус Error/Active выставит SessionManager по ResultMessage
                 var ctxTokens = _lastContextTokens > 0 ? _lastContextTokens : (int?)null;
@@ -5146,8 +5195,10 @@ public class ClaudeSession : ILlmSessionAdapter
             if (_subagentWatcher is { IsDisposed: false } doneWatcher && !IsBgPending(run, toolUseId))
                 await doneWatcher.FinalizeAsync([toolUseId], "tool_result");
 
-            // Если это результат Workflow с транскриптом — запускаем watcher
-            if (!isError && resultContent.Contains("Transcript dir:"))
+            // Если это результат Workflow с транскриптом — запускаем watcher. У локального
+            // проекта папка workflow на устройстве: ватчера нет, карточка показывает причину
+            // по матрице (ProjectFeatures.WorkflowView)
+            if (_transcriptOnServer && !isError && resultContent.Contains("Transcript dir:"))
             {
                 var m = System.Text.RegularExpressions.Regex.Match(resultContent, @"Transcript dir:\s*(.+)");
                 if (m.Success)

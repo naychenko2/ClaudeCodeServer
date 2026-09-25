@@ -73,7 +73,7 @@ public sealed class ArchivedTranscriptStore
                 return false;
             }
 
-            var dstFile = FileService.SafeJoin(_root, claudeSessionId + ".jsonl");
+            var dstFile = SafePath.Join(_root, claudeSessionId + ".jsonl");
             // Не затираем более полную копию усечённым источником (та же страховка, что
             // preserveLongerDestination в TryMigrate): после возврата и новых ходов источник
             // длиннее и перезапишет, а короче бывает только у повреждённого/пустого профиля
@@ -87,7 +87,7 @@ public sealed class ArchivedTranscriptStore
             // TranscriptMigrator)
             var srcSessionDir = Path.Combine(Path.GetDirectoryName(src)!, claudeSessionId!);
             if (Directory.Exists(srcSessionDir))
-                CopyDirectory(srcSessionDir, FileService.SafeJoin(_root, claudeSessionId!));
+                CopyDirectory(srcSessionDir, SafePath.Join(_root, claudeSessionId!));
             return true;
         }
         catch (Exception ex)
@@ -110,7 +110,7 @@ public sealed class ArchivedTranscriptStore
         if (!TranscriptMigrator.IsSafeSessionId(claudeSessionId)) return false;
         try
         {
-            var archived = FileService.SafeJoin(_root, claudeSessionId + ".jsonl");
+            var archived = SafePath.Join(_root, claudeSessionId + ".jsonl");
             if (!File.Exists(archived)) return false;
 
             // Правила TryRelocateCwd: целевая папка считается от ТЕКУЩЕГО cwd (у TryMigrate
@@ -126,7 +126,7 @@ public sealed class ArchivedTranscriptStore
 
             File.Copy(archived, dstFile, overwrite: true);
 
-            var archivedDir = FileService.SafeJoin(_root, claudeSessionId);
+            var archivedDir = SafePath.Join(_root, claudeSessionId);
             if (Directory.Exists(archivedDir))
                 CopyDirectory(archivedDir, Path.Combine(dstDir, claudeSessionId));
             // Копию из архива не удаляем: при повторной архивации перезапишется, а срыв
@@ -143,7 +143,7 @@ public sealed class ArchivedTranscriptStore
     /// <summary>Есть ли архивная копия (для карточки: без неё «контекст мог устареть»).</summary>
     public bool HasCopy(string? claudeSessionId) =>
         TranscriptMigrator.IsSafeSessionId(claudeSessionId)
-        && File.Exists(FileService.SafeJoin(_root, claudeSessionId + ".jsonl"));
+        && File.Exists(SafePath.Join(_root, claudeSessionId + ".jsonl"));
 
     /// <summary>
     /// Путь к архивной копии транскрипта — фолбэк источника для ветвления чата (шаг 3
@@ -151,7 +151,7 @@ public sealed class ArchivedTranscriptStore
     /// профилей CLI мог уже вычистить плановой уборкой. null — копии нет либо ключ небезопасен.
     /// </summary>
     public string? FindCopyPath(string? claudeSessionId) =>
-        HasCopy(claudeSessionId) ? FileService.SafeJoin(_root, claudeSessionId + ".jsonl") : null;
+        HasCopy(claudeSessionId) ? SafePath.Join(_root, claudeSessionId + ".jsonl") : null;
 
     /// <summary>
     /// Унести копию при удалении чата — иначе переписка переживёт сам чат и в data, и в
@@ -162,8 +162,8 @@ public sealed class ArchivedTranscriptStore
         if (!TranscriptMigrator.IsSafeSessionId(claudeSessionId)) return;
         try
         {
-            File.Delete(FileService.SafeJoin(_root, claudeSessionId + ".jsonl"));
-            var dir = FileService.SafeJoin(_root, claudeSessionId);
+            File.Delete(SafePath.Join(_root, claudeSessionId + ".jsonl"));
+            var dir = SafePath.Join(_root, claudeSessionId);
             if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
         }
         catch (Exception ex)

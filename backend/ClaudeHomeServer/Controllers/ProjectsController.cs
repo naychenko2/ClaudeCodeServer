@@ -14,13 +14,15 @@ using ClaudeHomeServer.Services.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Controllers;
 
+[ProjectCapability(ProjectCapabilityArea.Platform, ProjectKey = "id")]
 [ApiController]
 [Authorize]
 [Route("api/projects")]
-public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, UserStore users, UserHomeResolver homes, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory, ClaudeHomeServer.Services.Dossiers.DossierStore dossiers, KnowledgeService knowledge, PersonaManager personas, PersonaMemoryService personaMemory, ClaudeHomeServer.Services.Git.GitService git, ClaudeHomeServer.Services.Git.GitServerService gitServer, ClaudeHomeServer.Services.ProjectIcons.ProjectIconGlyphService iconGlyphs, FeatureFlagService flags, ClaudeHomeServer.Services.Desktop.DesktopHandsSessionService desktopHands, Services.Mcp.McpRegistry mcpRegistry, ChatArchiveService autoArchive, ILogger<ProjectsController> logger, IHubContext<SessionHub> hub, INoteSemanticIndex? notesKb = null) : ControllerBase
+public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, UserStore users, UserHomeResolver homes, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory, ClaudeHomeServer.Services.Dossiers.DossierStore dossiers, KnowledgeService knowledge, PersonaManager personas, PersonaMemoryService personaMemory, ClaudeHomeServer.Services.Git.GitService git, ClaudeHomeServer.Services.Git.GitServerService gitServer, ClaudeHomeServer.Services.ProjectIcons.ProjectIconGlyphService iconGlyphs, FeatureFlagService flags, ClaudeHomeServer.Services.Desktop.DesktopHandsSessionService desktopHands, Services.Mcp.McpRegistry mcpRegistry, ChatArchiveService autoArchive, ILogger<ProjectsController> logger, IHubContext<SessionHub> hub, INoteSemanticIndex? notesKb = null, ClaudeHomeServer.Services.Execution.IDeviceExecChannel? deviceExec = null) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -33,14 +35,38 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         // Путь показываем относительно домашней папки владельца — с учётом override она может
         // не совпадать с DefaultProjectsPath (иначе получилось бы «..\..\GIT\myproj»)
         var basePath = homes.Resolve(users.GetById(UserId)) ?? appSettings.Get().DefaultProjectsPath;
-        var relativePath = string.IsNullOrEmpty(basePath) ? p.RootPath : Path.GetRelativePath(basePath, p.RootPath);
+        // У локального проекта путь — на устройстве, относительно серверной домашней папки он не считается
+        var relativePath = string.IsNullOrEmpty(basePath) || !ProjectCapabilities.FilesOnServer(p)
+            ? p.RootPath : Path.GetRelativePath(basePath, p.RootPath);
+        var device = DeviceStatusOf(p);
         // Дефолт-персона проекта. Сирота (персона удалена в обход проверки преемника)
         // нормализуется в null — онбординг-гейт фронта сам чинит
         // осиротевший дефолт (как в AuthController.Me для личной)
         var defaultPersonaId = p.DefaultPersonaId is { } dpid && personas.Get(dpid, UserId) is not null
             ? dpid : null;
-        return new { p.Id, p.Name, p.RootPath, RelativePath = relativePath, p.CreatedAt, p.UpdatedAt, p.GroupId, p.SystemPrompt, p.ShowHiddenFiles, p.PermissionRules, p.BoardColumns, p.TagRegistry, Icon = ProjectIconDto(p.Icon), p.McpServersOn, p.DesktopAgentEnabled, Background = Services.Backgrounds.ProjectBackgroundView.Of(p), BuiltInSystemPrompt = ProjectManager.BuiltInSystemPrompt, SessionCount = sessions.CountByProject(p.Id), DefaultPersonaId = defaultPersonaId, p.OnboardingSessionId, p.PresetKey, p.AutoImportDossiers, p.ArchiveAfterDays };
+        return new { p.Id, p.Name, p.RootPath, RelativePath = relativePath, p.CreatedAt, p.UpdatedAt, p.GroupId, p.SystemPrompt, p.ShowHiddenFiles, p.PermissionRules, p.BoardColumns, p.TagRegistry, Icon = ProjectIconDto(p.Icon), p.McpServersOn, p.DesktopAgentEnabled, Background = Services.Backgrounds.ProjectBackgroundView.Of(p), BuiltInSystemPrompt = ProjectManager.BuiltInSystemPrompt, SessionCount = sessions.CountByProject(p.Id), DefaultPersonaId = defaultPersonaId, p.OnboardingSessionId, p.PresetKey, p.AutoImportDossiers, p.ArchiveAfterDays, p.DeviceId, Device = DeviceDto(device), Capabilities = ProjectCapabilities.For(p, device) };
     }
+
+    // Состояние устройства локального проекта (ADR-016); у серверного — null. Канала нет
+    // (подсистема устройств выключена) — устройство считается ненайденным, а не падает.
+    private ClaudeHomeServer.Services.Execution.DeviceExecStatus? DeviceStatusOf(Project p) =>
+        ProjectCapabilities.IsDeviceBound(p) ? deviceExec?.GetStatus(UserId, p.DeviceId!) : null;
+
+    // DTO устройства проекта для фронта (контракт задачи 3.4): онлайн и готовность харнеса
+    private static object? DeviceDto(ClaudeHomeServer.Services.Execution.DeviceExecStatus? d) => d is null ? null : new
+    {
+        Id = d.DeviceId,
+        Name = d.DeviceName,
+        d.Online,
+        d.Platform,
+        d.AgentVersion,
+        d.HarnessReady,
+        d.HarnessProblem,
+    };
+
+    // Отказ привязать проект к устройству: флаг local-projects + возможность exec (ADR-016 §1)
+    private string? BindRefusal(string deviceId) => ProjectCapabilities.BindRefusal(
+        flags.IsEnabled(UserId, FeatureFlagKeys.LocalProjects), deviceExec?.GetStatus(UserId, deviceId));
 
     // DTO иконки (ADR-009 §4): значок едет ДАННЫМИ — имя рисует компонент lucide фронта,
     // разметки фронт не получает. Поле v — версия содержимого значка (ADR-009 §8).
@@ -71,7 +97,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     {
         var p = projects.GetById(id);
         if (p is null || p.OwnerId != UserId) return NotFound();
-        var wk = wkStore.GetByPath(p.RootPath);
+        var wk = ProjectCapabilities.KnowledgeRoot(p) is { } knowledgeRoot ? wkStore.GetByPath(knowledgeRoot) : null;
         var parts = Services.Llm.SystemPromptComposer.GetSystemPromptParts(
             ProjectManager.BuiltInSystemPrompt, p.SystemPrompt, wk?.DifyDatasetId != null, wk?.DocumentTags);
         return Ok(new { parts });
@@ -188,11 +214,20 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         try
         {
             var username = User.FindFirstValue(ClaimTypes.Name) ?? UserId;
-            var p = projects.Create(req.Name, req.RootPath, UserId, username, req.CreateDirectory, req.GroupId, req.Color);
+            Project p;
+            if (!string.IsNullOrWhiteSpace(req.DeviceId))
+            {
+                // Локальный проект (ADR-016): только за флагом и только на устройстве с exec
+                if (BindRefusal(req.DeviceId) is { } refusal) return BadRequest(new { error = refusal });
+                p = projects.CreateLocal(req.Name, req.RootPath ?? "", UserId, req.DeviceId, req.GroupId, req.Color);
+            }
+            else
+                p = projects.Create(req.Name, req.RootPath, UserId, username, req.CreateDirectory, req.GroupId, req.Color);
 
             // Git-режим из диалога создания: init (+ Forgejo-репо при настроенном сервере).
-            // Best-effort: сбой git/Forgejo не отменяет создание проекта — подключить можно позже
-            if (req.EnableGit)
+            // Best-effort: сбой git/Forgejo не отменяет создание проекта — подключить можно позже.
+            // Папка локального проекта на устройстве — серверному git до неё не дотянуться
+            if (req.EnableGit && ProjectCapabilities.FilesOnServer(p))
             {
                 try
                 {
@@ -263,15 +298,17 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
 
             // Смена папки проекта: перенести запись знаний под новый ключ — иначе запись сиротеет,
             // для нового пути создаётся дубль-датасет, а mcp dify молча теряет dataset_id
-            if (WorkspaceKnowledgeStore.NormalizePath(oldRoot) != WorkspaceKnowledgeStore.NormalizePath(updated.RootPath))
-                wkStore.Move(oldRoot, updated.RootPath);
+            if (ProjectCapabilities.KnowledgeRoot(updated) is { } newKnowledgeRoot
+                && WorkspaceKnowledgeStore.NormalizePath(oldRoot) != WorkspaceKnowledgeStore.NormalizePath(newKnowledgeRoot))
+                wkStore.Move(oldRoot, newKnowledgeRoot);
 
             // Переименование проекта: best-effort освежить имена Dify-датасетов
             // ({user}:{project} и {user}:team:{project}); сбой не ломает работу по id
             if (!string.Equals(oldName, updated.Name, StringComparison.Ordinal))
             {
                 var username = User.FindFirstValue(ClaimTypes.Name) ?? UserId;
-                var datasetId = wkStore.GetByPath(updated.RootPath)?.DifyDatasetId;
+                var datasetId = ProjectCapabilities.KnowledgeRoot(updated) is { } knowledgeRoot
+                    ? wkStore.GetByPath(knowledgeRoot)?.DifyDatasetId : null;
                 if (!string.IsNullOrEmpty(datasetId))
                     try { await knowledge.RenameDatasetAsync(datasetId, $"{username}:{updated.Name}"); }
                     catch { /* стухшее имя не критично */ }
@@ -284,6 +321,54 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         catch (DirectoryNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
         // папка вне песочницы либо уже занята другим проектом владельца — это ошибка ввода, не 500
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
+    }
+
+    // Перепривязка проекта к устройству (ADR-016 §1) или обратно на сервер (deviceId = null).
+    // При существующих чатах запрещена — по образцу смены среды исполнения (UsersController):
+    // resume-транскрипты и рабочие деревья чатов живут на машине прежней привязки.
+    [HttpPut("{id}/device")]
+    public async Task<IActionResult> SetDevice(string id, [FromBody] SetProjectDeviceRequest req)
+    {
+        var p = projects.GetById(id);
+        if (p is null || p.OwnerId != UserId) return NotFound();
+        var deviceId = string.IsNullOrWhiteSpace(req.DeviceId) ? null : req.DeviceId;
+        if (deviceId is not null && BindRefusal(deviceId) is { } refusal)
+            return BadRequest(new { error = refusal });
+        if (!string.Equals(p.DeviceId, deviceId, StringComparison.Ordinal) && sessions.CountByProject(id) > 0)
+            return Conflict(new { error = "Нельзя сменить устройство проекта: у проекта уже есть чаты. Удалите их и повторите." });
+        var oldKnowledgeRoot = ProjectCapabilities.KnowledgeRoot(p);
+        Project moved;
+        try { moved = projects.SetDevice(id, deviceId, req.RootPath); }
+        catch (DirectoryNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
+        catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
+
+        // Переезд с сервера на устройство: серверная папка больше не проект — её знания
+        // снимаются тем же каскадом, что при удалении, иначе запись и датасет сиротеют
+        // (docs/architecture/knowledge.md). Соседа по папке каскад не трогает сам.
+        if (oldKnowledgeRoot is not null && ProjectCapabilities.KnowledgeRoot(moved) is null)
+        {
+            await DropKnowledgeIfOrphanAsync(oldKnowledgeRoot);
+            // Заметки notes/ серверной папки выпали из источников — вычистить их из индекса
+            notesKb?.QueueSync(UserId);
+        }
+        return Ok(WithCount(moved));
+    }
+
+    // База знаний серверной папки: Dify-датасет + запись WorkspaceKnowledge. Датасет общий для
+    // проектов в одной папке — чистим, только если папка больше никем не используется
+    private async Task DropKnowledgeIfOrphanAsync(string knowledgeRoot)
+    {
+        if (projects.GetByRootPath(knowledgeRoot).Count > 0) return;
+        var wk = wkStore.GetByPath(knowledgeRoot);
+        if (wk is null) return;
+        if (!string.IsNullOrEmpty(wk.DifyDatasetId))
+        {
+            try { await knowledge.DeleteDatasetAsync(wk.DifyDatasetId); }
+            catch { /* датасет мог быть удалён в Dify — снимаем только запись */ }
+            await hub.Clients.Group("user_" + UserId)
+                .SendAsync("message", new KnowledgeChangedMessage("deleted", wk.DifyDatasetId));
+        }
+        wkStore.Delete(knowledgeRoot);
     }
 
     // Тумблер грани десктопного агента в проекте (ADR-008, «Два уровня, которые нельзя
@@ -405,7 +490,9 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         // но их деревья без проекта — мусор на диске и записи в .git/worktrees главной репы.
         // Явный обход обязателен — автокаскада сессий нет. Best-effort + force: судьба
         // незакоммиченных правок решена удалением самого проекта.
-        foreach (var s in sessions.GetByProject(id).Where(s => s.WorktreePath is not null).ToList())
+        // Деревья локального проекта живут на устройстве — серверному git до них не дотянуться
+        foreach (var s in sessions.GetByProject(id).Where(s => s.WorktreePath is not null
+                     && ProjectCapabilityGuard.Allows(p, ProjectCapabilityArea.FileBound)).ToList())
         {
             try { await git.WorktreeRemoveAsync(p.OwnerId, p.RootPath, s.WorktreePath!, force: true); }
             catch { /* дерево могло быть удалено руками — запись подчистит prune */ }
@@ -413,21 +500,8 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
 
         // База знаний проекта: Dify-датасет + запись WorkspaceKnowledge. Датасет общий для
         // проектов в одной папке — чистим, только если RootPath больше никем не используется
-        if (projects.GetByRootPath(p.RootPath).Count == 0)
-        {
-            var wk = wkStore.GetByPath(p.RootPath);
-            if (wk is not null)
-            {
-                if (!string.IsNullOrEmpty(wk.DifyDatasetId))
-                {
-                    try { await knowledge.DeleteDatasetAsync(wk.DifyDatasetId); }
-                    catch { /* датасет мог быть удалён в Dify — снимаем только запись */ }
-                    await hub.Clients.Group("user_" + UserId)
-                        .SendAsync("message", new KnowledgeChangedMessage("deleted", wk.DifyDatasetId));
-                }
-                wkStore.Delete(p.RootPath);
-            }
-        }
+        if (ProjectCapabilities.KnowledgeRoot(p) is { } deletedKnowledgeRoot)
+            await DropKnowledgeIfOrphanAsync(deletedKnowledgeRoot);
 
         // Заметки notes/ проекта выпали из alive-set — вычистить их из «{user}:notes» сразу,
         // не дожидаясь следующей несвязанной правки заметок
@@ -543,7 +617,11 @@ public record SelectIconRequest(string? Name, List<string>? Paths = null);
 public record SetIconModeRequest(string? Kind);
 
 public record CreateProjectRequest(string Name, string? RootPath, bool CreateDirectory = false, string? GroupId = null,
-    bool EnableGit = false, bool GitAutoCommit = false, bool GitAutoPush = false, string? Color = null);
+    bool EnableGit = false, bool GitAutoCommit = false, bool GitAutoPush = false, string? Color = null,
+    // Устройство локального проекта (ADR-016); null — серверный проект. RootPath тогда — путь на устройстве
+    string? DeviceId = null);
+// Перепривязка проекта: DeviceId = null — вернуть на сервер; RootPath = null — оставить прежний путь
+public record SetProjectDeviceRequest(string? DeviceId, string? RootPath = null);
 // McpServersOn — ключи включённых серверов личного реестра (allow-модель доступа;
 // null = не менять, пустой список = «никто не включён»).
 // Enabled — грань десктопного агента в проекте (ADR-008): выключение гасит сеансы рук

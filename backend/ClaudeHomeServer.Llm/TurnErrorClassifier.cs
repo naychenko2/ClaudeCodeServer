@@ -114,6 +114,10 @@ public static class TurnErrorClassifier
         return text.StartsWith(prefix, StringComparison.Ordinal);
     }
 
+    // Маркер отказа устройства локального проекта (ADR-016): ClaudeSession ставит его первым
+    // токеном Details, когда раннер устройства отказал в запуске (офлайн, нет exec, харнес не готов)
+    public const string DeviceRefusedMarker = "[Device:refused]";
+
     public static FallbackErrorClass Classify(TurnAttemptOutcome outcome)
     {
         // Остановка пользователем — не ошибка доставки
@@ -151,6 +155,12 @@ public static class TurnErrorClassifier
         // IOException лимита inotify из TurnFileWatcher.Start ушла в Unreachable, и фолбэк за 0,6 с
         // сжёг три подписки, хотя сеть ни при чём. Другая пара это не лечит — честная ошибка хода.
         if (LooksLocalResourceExhausted(outcome.ErrorText)) return FallbackErrorClass.None;
+
+        // Устройство локального проекта не приняло запуск — тоже ДО ветки "без result →
+        // Unreachable": соседняя пара «модель × подписка» пойдёт на то же офлайн-устройство,
+        // фолбэк лишь сжёг бы цепочку. Честная ошибка хода с текстом отказа
+        if (outcome.ErrorText?.StartsWith(DeviceRefusedMarker, StringComparison.Ordinal) == true)
+            return FallbackErrorClass.None;
 
         // Процесс умер без result — любой обрыв потока, включая посреди начатого ответа
         if (!outcome.HasResult) return FallbackErrorClass.Unreachable;

@@ -65,8 +65,11 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         {
             new(PersonalKey, PersonalLabel, Path.Combine(_dataDir, "notes", userId)),
         };
+        // Заметки проекта лежат в его папке: у локального проекта она на устройстве, сервер
+        // её не читает — такой источник в списке не участвует (ADR-016 §4, search_unified)
         foreach (var p in _projects.GetByOwner(userId))
-            if (!string.IsNullOrWhiteSpace(p.RootPath))
+            if (!string.IsNullOrWhiteSpace(p.RootPath)
+                && Composition.ProjectCapabilityGuard.Allows(p, Composition.ProjectCapabilityArea.FileBound))
                 list.Add(new(p.Id, p.Name, Path.Combine(p.RootPath, "notes"), p.RootPath));
         return list;
     }
@@ -1161,7 +1164,7 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
             throw new UnauthorizedAccessException("Проект не принадлежит пользователю");
         if (string.IsNullOrWhiteSpace(project.RootPath))
             throw new InvalidOperationException("У проекта нет корневой папки");
-        return Path.Combine(project.RootPath, "notes");
+        return Path.Combine(Composition.ProjectCapabilityGuard.ServerRoot(project), "notes");
     }
 
     // --- Утилиты ---

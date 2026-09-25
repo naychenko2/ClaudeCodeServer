@@ -12,6 +12,7 @@ using ClaudeHomeServer.Core.Telemetry;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Controllers;
 
@@ -20,6 +21,7 @@ namespace ClaudeHomeServer.Controllers;
 // сессия существующего рантайма со спец-промптом (Session.OnboardingKind → врезка в
 // SessionManager.BuildPersonaLayer); финализация — make-default из этой сессии
 // (PersonasController.MakeDefault → FinalizeOnboardingAsync).
+[ProjectCapability(ProjectCapabilityArea.Platform)]
 [ApiController]
 [Authorize]
 [Route("api/onboarding")]

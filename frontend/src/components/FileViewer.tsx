@@ -24,7 +24,8 @@ import { api } from '../lib/api';
 import { basename } from '../lib/paths';
 import { useContextButton } from '../features/chatContext/useContextButton';
 import { resolveDocImage, resolveDocLink, sliceSection, slugify } from '../lib/docsLinks';
-import { OfflineError, readStoredToken } from '../lib/offline';
+import { OfflineError } from '../lib/offline';
+import { agentStreamUrl, useProjectRoutes } from '../lib/deviceAgent';
 import { useGitState, ensureGit, gitRestoreFile, loadGitRemote } from '../lib/git';
 import { parseDiffToHunks, buildHunkPatch, buildLinesPatch } from '../lib/gitPatch';
 import { relTime } from '../lib/gitFormat';
@@ -141,11 +142,73 @@ interface FileContent {
   fileSize?: number;
 }
 
+// Сервер или ретранслятор — решает api.files.fileUrl (у агента поток идёт мимо, см. agentStreamUrl)
 function streamUrl(projectId: string, filePath: string): string {
-  const token = readStoredToken();
-  const params = new URLSearchParams({ path: filePath });
-  if (token) params.set('access_token', token);
-  return `/api/projects/${projectId}/files/stream?${params}`;
+  return api.files.fileUrl(projectId, filePath);
+}
+
+// Прозрачный пиксель вместо картинки markdown, пока агент выдаёт узкий билет: сырой
+// относительный src ушёл бы запросом на адрес страницы
+const BLANK_IMAGE = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
+
+interface MediaHandlers {
+  onPlay?: (e: React.SyntheticEvent<HTMLMediaElement>) => void;
+  onLoadedMetadata?: (e: React.SyntheticEvent<HTMLMediaElement>) => void;
+  onSourceError?: (e: React.SyntheticEvent<HTMLSourceElement>) => void;
+}
+
+// Источник <video>/<audio>. Серверный проект — URL сервера сразу. Локальный — URL агента с
+// узким билетом: он выдаётся асинхронно и живёт ≤60 с, поэтому на каждом запуске
+// воспроизведения и на отказе элемента билет перевыпускается, а позиция и воспроизведение
+// восстанавливаются на новом элементе (key = src пересоздаёт его — <source> сам не перечитывается).
+function useMediaStream(projectId: string, filePath: string, viaAgent: boolean, active: boolean) {
+  const [agentSrc, setAgentSrc] = useState<{ key: string; url: string } | null>(null);
+  const [agentError, setAgentError] = useState<{ key: string; text: string } | null>(null);
+  const resume = useRef<{ time: number; play: boolean } | null>(null);
+  const errorRenews = useRef(0);
+  const key = `${projectId}\n${filePath}`;
+
+  useEffect(() => {
+    if (!viaAgent || !active) return;
+    let alive = true;
+    errorRenews.current = 0;
+    agentStreamUrl(projectId, filePath).then(
+      url => { if (alive) setAgentSrc({ key, url }); },
+      e => { if (alive) setAgentError({ key, text: e instanceof Error ? e.message : 'Агент не отдал файл' }); });
+    return () => { alive = false; };
+  }, [projectId, filePath, key, viaAgent, active]);
+
+  if (!viaAgent) return { src: streamUrl(projectId, filePath), error: null, handlers: {} as MediaHandlers };
+
+  const src = agentSrc?.key === key ? agentSrc.url : undefined;
+  const renew = (el: HTMLMediaElement | null, force: boolean, play: boolean) => {
+    const time = el?.currentTime ?? 0;
+    agentStreamUrl(projectId, filePath, force).then(url => {
+      if (url === src) return;
+      el?.pause();
+      resume.current = { time, play };
+      setAgentSrc({ key, url });
+    }, e => setAgentError({ key, text: e instanceof Error ? e.message : 'Агент не отдал файл' }));
+  };
+  const handlers: MediaHandlers = {
+    // Истёкший билет виден по кэшу: свежий URL тот же — ничего не меняем
+    onPlay: e => renew(e.currentTarget, false, true),
+    onLoadedMetadata: e => {
+      errorRenews.current = 0;
+      const r = resume.current;
+      resume.current = null;
+      if (!r) return;
+      e.currentTarget.currentTime = r.time;
+      if (r.play) void e.currentTarget.play().catch(() => {});
+    },
+    // Отказ на докачке (билет истёк посреди воспроизведения) — один перевыпуск подряд
+    onSourceError: e => {
+      if (errorRenews.current++ > 0) return;
+      const el = e.currentTarget.parentElement as HTMLMediaElement | null;
+      renew(el, true, !!el && !el.paused);
+    },
+  };
+  return { src, error: agentError?.key === key ? agentError.text : null, handlers };
 }
 
 type ViewTab = 'file' | 'diff' | 'blame' | 'history';
@@ -208,8 +271,8 @@ const CloudGlyph = ({ filled }: { filled?: boolean }) => (
 
 // Рендер unified-diff вынесен в общий модуль DiffView.tsx
 
-function AudioFilePlayer({ src, mimeType, fileName, fileSizeMb }: {
-  src: string; mimeType?: string; fileName: string; fileSizeMb: string | null;
+function AudioFilePlayer({ src, mimeType, fileName, fileSizeMb, handlers }: {
+  src: string; mimeType?: string; fileName: string; fileSizeMb: string | null; handlers?: MediaHandlers;
 }) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [playing, setPlaying] = useState(false);
@@ -260,13 +323,13 @@ function AudioFilePlayer({ src, mimeType, fileName, fileSizeMb }: {
     }}>
       <audio
         ref={audioRef}
-        onPlay={() => setPlaying(true)}
+        onPlay={e => { setPlaying(true); handlers?.onPlay?.(e); }}
         onPause={() => setPlaying(false)}
         onEnded={() => { setPlaying(false); setCurrentTime(0); }}
         onTimeUpdate={() => setCurrentTime(audioRef.current?.currentTime ?? 0)}
-        onLoadedMetadata={() => setDuration(audioRef.current?.duration ?? 0)}
+        onLoadedMetadata={e => { setDuration(audioRef.current?.duration ?? 0); handlers?.onLoadedMetadata?.(e); }}
       >
-        <source src={src} type={mimeType} />
+        <source src={src} type={mimeType} onError={handlers?.onSourceError} />
       </audio>
 
       {/* Иконка + имя файла */}
@@ -424,6 +487,48 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const [loadForbidden, setLoadForbidden] = useState(false);
   const [diff, setDiff] = useState<string | null>(null);
   const [tab, setTab] = useState<ViewTab>('file');
+  // Локальный проект: с его машины поток и картинки markdown отдаёт агент по узкому билету на
+  // путь; с другого устройства — ретранслятор сервера, и тогда у файла нет ни одного действия
+  // записи. Каждое такое действие рисуется только при своём маршруте (deviceAgentRoutes.ts)
+  const { route: filesRoute, can } = useProjectRoutes(project);
+  const viaAgent = filesRoute === 'agent';
+  const canEdit = can('PUT files/content');
+  const canDelete = can('DELETE files');
+  const canRevert = can('POST files/revert');
+  const canStageHunk = can('POST git/stage-hunk');
+  const canRestoreVersion = can('POST git/commits/{sha}/restore-file');
+  const canToMarkdown = can('POST files/document/to-markdown');
+  const canOfficeEdit = canEdit && can('POST files/office-force-save') && can('POST files/office-discard');
+  const media = useMediaStream(project.id, filePath, viaAgent,
+    !isHostMode && tab === 'file' && !!(fileContent?.isVideo || fileContent?.isAudio));
+  // Картинки markdown у локального проекта: билет на каждый путь приходит асинхронно, до
+  // него — прозрачный пиксель. Набор сбрасывается со сменой файла и вкладки: <img> тогда
+  // монтируется заново, а билет прежнего набора мог истечь
+  const imagesKey = `${project.id}\n${filePath}\n${tab}`;
+  const [agentImages, setAgentImages] = useState<{ key: string; urls: Record<string, string> }>({ key: '', urls: {} });
+  const agentImagesAsked = useRef<{ key: string; paths: Set<string> }>({ key: '', paths: new Set() });
+  const resolveAgentImage = (target: string): string => {
+    if (agentImages.key === imagesKey && agentImages.urls[target]) return agentImages.urls[target];
+    if (agentImagesAsked.current.key !== imagesKey) agentImagesAsked.current = { key: imagesKey, paths: new Set() };
+    if (!agentImagesAsked.current.paths.has(target)) {
+      agentImagesAsked.current.paths.add(target);
+      const key = imagesKey;
+      agentStreamUrl(project.id, target).then(url => {
+        // Ответ для уже закрытого набора не должен вытеснить текущий
+        if (agentImagesAsked.current.key !== key) return;
+        setAgentImages(prev => ({ key, urls: { ...(prev.key === key ? prev.urls : {}), [target]: url } }));
+      }, () => {});
+    }
+    return BLANK_IMAGE;
+  };
+  // Логотип и скриншоты README лежат рядом в репозитории: путь в src относителен документа,
+  // грузить их надо через файловый эндпоинт. Нужен обеим веткам рендера markdown — и с
+  // комментариями к документу, и без модуля заметок
+  const resolveMarkdownImage = (src: string): string | undefined => {
+    const target = resolveDocImage(filePath, src);
+    if (!target) return undefined;
+    return viaAgent ? resolveAgentImage(target) : api.files.fileUrl(project.id, target);
+  };
   // Git: репо-статус (гейт вкладки «Авторы»), blame-кэш и busy зернистого stage
   const gitSt = useGitState(project.id);
   useEffect(() => { ensureGit(project.id); }, [project.id]);
@@ -881,7 +986,8 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
       else if (a === 'file.extract') void runDocAi('extract');
       else if (a === 'file.tags') void runDocAi('tags');
       else if (a === 'file.convert') void runDocAi('convert');
-      else if (a === 'file.toMarkdown' && !isHostMode) void (async () => {
+      // Результат ложится файлом рядом: с другого устройства записи нет
+      else if (a === 'file.toMarkdown' && !isHostMode && canToMarkdown) void (async () => {
         beginAiBusy();
         try {
           const r = await api.files.toMarkdown(project.id, filePath);
@@ -893,7 +999,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     window.addEventListener('cc-ai-run', onRun);
     return () => window.removeEventListener('cc-ai-run', onRun);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filePath, fileContent]);
+  }, [filePath, fileContent, canToMarkdown]);
 
   const handleClose = async () => {
     // draw.io / Excalidraw в режиме edit — сохраняем текущие правки перед закрытием.
@@ -1187,7 +1293,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const { mainAction, cancelAction } = (() => {
   let mainAction: ToolbarAction | null = null;
   let cancelAction: ToolbarAction | null = null;
-  if (!loading && !loadError) {
+  if (!loading && !loadError && canEdit) {
     if (editing) {
       mainAction = {
         key: 'save', label: 'Сохранить', primary: true, disabled: !online,
@@ -1199,7 +1305,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
         key: 'cancel-edit', label: 'Отмена', title: 'Отменить правки',
         icon: <DiscardIcon />, onClick: cancelEdit,
       };
-    } else if (isOfficeFile && !isVisioFile) {
+    } else if (isOfficeFile && !isVisioFile && canOfficeEdit) {
       if (officeSwitching) {
         mainAction = { key: 'office-wait', label: 'Открываю…', icon: null, disabled: true, loading: true, onClick: () => {} };
       } else if (officeMode === 'view') {
@@ -1368,7 +1474,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
         },
       });
     }
-    if (!loadError && online && !editing && !fileContent?.isBinary && diff) {
+    if (!loadError && online && !editing && !fileContent?.isBinary && diff && canRevert) {
       secondary.push({
         key: 'revert',
         node: (
@@ -1438,7 +1544,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
         item: { key: 'download', icon: <Download size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />, label: 'Скачать', onClick: handleDownload },
       });
     }
-    if (online && !editing && !isHostMode) {
+    if (online && !editing && !isHostMode && canDelete) {
       secondary.push({
         key: 'delete',
         node: (
@@ -1872,12 +1978,19 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
                 проекта не сработает, показываем как обычный бинарник со скачиванием */}
             {fileContent?.isVideo && !isHostMode && (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, padding: 16 }}>
-                <video
-                  controls
-                  style={{ maxWidth: '100%', borderRadius: 8, boxShadow: SHADOW.card }}
-                >
-                  <source src={streamUrl(project.id, filePath)} type={fileContent.mimeType} />
-                </video>
+                {media.error
+                  ? <span style={{ fontSize: 13, color: C.textMuted }}>{media.error}</span>
+                  : media.src && (
+                    <video
+                      key={media.src}
+                      controls
+                      style={{ maxWidth: '100%', borderRadius: 8, boxShadow: SHADOW.card }}
+                      onPlay={media.handlers.onPlay}
+                      onLoadedMetadata={media.handlers.onLoadedMetadata}
+                    >
+                      <source src={media.src} type={fileContent.mimeType} onError={media.handlers.onSourceError} />
+                    </video>
+                  )}
                 <div style={{ fontSize: 12, color: C.textMuted, fontFamily: FONT.mono, display: 'flex', gap: 7, flexWrap: 'wrap', justifyContent: 'center' }}>
                   <span>{(fileContent.mimeType?.split('/')[1] ?? fileName.split('.').pop() ?? '').toUpperCase()}</span>
                   {fileSizeMb && <><span style={{ opacity: 0.5 }}>·</span><span>{fileSizeMb} МБ</span></>}
@@ -1885,12 +1998,17 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
               </div>
             )}
 
-            {fileContent?.isAudio && !isHostMode && (
+            {fileContent?.isAudio && !isHostMode && media.error && (
+              <div style={{ display: 'flex', justifyContent: 'center', padding: 20, fontSize: 13, color: C.textMuted }}>{media.error}</div>
+            )}
+            {fileContent?.isAudio && !isHostMode && !media.error && media.src && (
               isMobile
                 ? (
                   <div style={{ display: 'flex', justifyContent: 'center', padding: 20 }}>
                     <AudioFilePlayer
-                      src={streamUrl(project.id, filePath)}
+                      key={media.src}
+                      src={media.src}
+                      handlers={media.handlers}
                       mimeType={fileContent.mimeType}
                       fileName={fileName}
                       fileSizeMb={fileSizeMb}
@@ -1915,8 +2033,9 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
                         </span>
                       </div>
                       <div style={{ borderRadius: 8, overflow: 'hidden' }}>
-                        <audio controls style={{ width: '100%', height: 40, outline: 'none', display: 'block' }}>
-                          <source src={streamUrl(project.id, filePath)} type={fileContent.mimeType} />
+                        <audio key={media.src} controls style={{ width: '100%', height: 40, outline: 'none', display: 'block' }}
+                          onPlay={media.handlers.onPlay} onLoadedMetadata={media.handlers.onLoadedMetadata}>
+                          <source src={media.src} type={fileContent.mimeType} onError={media.handlers.onSourceError} />
                         </audio>
                       </div>
                       <div style={{ fontSize: 11, color: C.textMuted, fontFamily: FONT.mono, display: 'flex', gap: 6 }}>
@@ -2061,7 +2180,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
                   // Подсистемы заметок нет (выключена или не зарегистрирована):
                   // комментариев к документу нет, вклад doc-commented-markdown пуст —
                   // обычный MarkdownViewer
-                  ? <div data-selection-scope="doc" data-selection-priority="2"><MarkdownViewer content={content} onDocLink={handleDocLink} /></div>
+                  ? <div data-selection-scope="doc" data-selection-priority="2"><MarkdownViewer content={content} onDocLink={handleDocLink} resolveImageSrc={resolveMarkdownImage} /></div>
                   : isMarkdown
                   ? (
                     // Свойства и комментарии — ОДНИМ блоком справа (на узком просмотрщике
@@ -2088,15 +2207,10 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
                           // неё — рельс маркеров уводим на левое поле. Уехала карточка под
                           // текст (узкий просмотрщик) — правое поле снова свободно
                           railSide: stackSide ? 'right' : 'left',
-                          // Логотип и скриншоты README лежат рядом в репозитории: путь в src
-                          // относителен документа, грузить их надо через файловый эндпоинт.
                           // onDocLink — переход по md-ссылкам внутри файла (другой файл/якорь),
                           // иначе клик уводил бы браузер из SPA на главный экран
                           onDocLink: handleDocLink,
-                          resolveImageSrc: src => {
-                            const target = resolveDocImage(filePath, src);
-                            return target ? api.files.fileUrl(project.id, target) : undefined;
-                          },
+                          resolveImageSrc: resolveMarkdownImage,
                         })}
                         {/* На узком просмотрщике блок уезжает под текст — там же,
                             где его ждут глазами */}
@@ -2152,7 +2266,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
                 )}
                 <DiffView
                   diff={diff}
-                  staging={gitStagePath ? { busy: stageBusy, onStageHunk: handleStageHunk, onStageLines: handleStageLines } : undefined}
+                  staging={gitStagePath && canStageHunk ? { busy: stageBusy, onStageHunk: handleStageHunk, onStageLines: handleStageLines } : undefined}
                 />
               </div>
             : <div style={{ color: C.textMuted, fontSize: 13, padding: 16 }}>Файл не изменён</div>
@@ -2199,7 +2313,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
                       <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.accent, background: C.accentLight, padding: '1px 6px', borderRadius: 4, flexShrink: 0 }}>{v.shortSha}</span>
                       <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: active ? C.textHeading : C.textPrimary, fontWeight: active ? 600 : 400, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={v.subject}>{v.subject}</span>
                       <span style={{ fontSize: 11, color: C.textMuted, flexShrink: 0 }}>{v.author} · {relTime(v.date)}</span>
-                      {active && (
+                      {active && canRestoreVersion && (
                         <button
                           onClick={e => { e.stopPropagation(); setRestoreConfirmSha(v.sha); }}
                           style={{
@@ -2261,7 +2375,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
 
       {/* Плавающая кнопка редактирования на мобиле (MA4). ЛЕВЫЙ нижний угол — правый занят
           глобальным AiLauncher (⌘/Ctrl+K), чтобы кнопки не накладывались. */}
-      {isMobile && online && !editing && !isHostMode && tab === 'file' && fileContent && !fileContent.isBinary && !fileContent.isImage && !fileContent.isDocument && !fileContent.isVideo && !fileContent.isAudio && !isDrawio && !isExcalidraw && !(isHtml && htmlTab === 'preview') && (
+      {isMobile && online && canEdit && !editing && !isHostMode && tab === 'file' && fileContent && !fileContent.isBinary && !fileContent.isImage && !fileContent.isDocument && !fileContent.isVideo && !fileContent.isAudio && !isDrawio && !isExcalidraw && !(isHtml && htmlTab === 'preview') && (
         <button
           onClick={() => { setEditing(true); setTab('file'); }}
           title="Редактировать"

@@ -5,6 +5,7 @@ using System.Text.Json;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
+using ClaudeHomeServer.Services.Files;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 

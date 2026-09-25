@@ -2,6 +2,8 @@ import { setAudioFocus } from '../lib/audioFocus';
 import { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback, Fragment, type HTMLAttributes } from 'react';
 import { ArrowDown, ArrowUp, RotateCw, CircleHelp, Archive, ArchiveRestore } from 'lucide-react';
 import type { Project, Session, ChatItem, SkillInfo, AgentInfo, ClaudeBilling, Persona, Task, WorkLoopState, SessionTeamImplement, TeamPlanDecision } from '../types';
+import { ProjectFeature } from '../types';
+import { featureReason, useProjectFeature } from '../lib/projectCapabilities';
 import { useSession } from '../hooks/useSession';
 import { usePersonasVersion, getPersonaById, getPersonasSnapshot, ensurePersonasLoaded, personaLabel } from '../lib/personas';
 import { findConsultedPersona } from './chat/PersonaTaskView';
@@ -815,7 +817,11 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     return () => { root.style.setProperty('--cc-fab-bottom', '20px'); };
   }, [composerH, embedded]);
   // Контекст проекта для резолва локальных путей картинок в сообщениях
-  const projectCtx = useMemo(() => project ? { id: project.id, rootPath: project.rootPath } : null, [project]);
+  const projectCtx = useMemo(() => project
+    ? { id: project.id, rootPath: project.rootPath, transcriptReason: featureReason(project, ProjectFeature.WorkflowView) }
+    : null, [project]);
+  // Ветка копирует транскрипт CLI на сервере — у локального проекта кнопок ветвления нет
+  const branchAvailable = useProjectFeature(project, ProjectFeature.ChatBranch);
 
   // Накопительная стоимость/токены сессии — сумма по всем result-элементам ленты.
   // Источник правды — история (грузится с бэка), поэтому переживает перезагрузку.
@@ -1168,12 +1174,12 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     for (const file of files) {
       if (file.size > MAX_UPLOAD_BYTES) { showToast('Вложение', TOO_BIG_MSG); continue; }
       try {
-        const { path } = await api.chats.uploadFile(session.id, file);
+        const { path } = await api.chats.uploadFile(session.id, file, project?.id);
         added.push(path);
       } catch { showToast('Вложение', UPLOAD_FAIL_MSG); }
     }
     if (added.length) onAttachedFilesChange([...attachedFiles, ...added]);
-  }, [session.id, attachedFiles, onAttachedFilesChange]);
+  }, [session.id, project?.id, attachedFiles, onAttachedFilesChange]);
 
   // Единая точка загрузки с устройства (вставка, перетаскивание, кнопка пикера):
   // гейт по зрению модели сужен до картинок — pdf и документы claude читает с диска
@@ -1856,7 +1862,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       agentRenderChild?: (item: ChatItem, idx: number) => React.ReactNode;
     }) => {
     const anchor = branchAnchors[i];
-    const onBranchForItem = anchor
+    const onBranchForItem = anchor && branchAvailable
       ? () => handleBranch({ userMessageIndex: anchor.userMessageIdx, anchorText: anchor.anchorText, include: anchor.include })
       : undefined;
     return (
@@ -1930,7 +1936,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     online, isWaiting, items.length, lastResultIndex, retryInterruptedIdx, toggleThinking, allowPermission,
     denyPermission, handleAllowAlways, answerQuestion, handleRespondPlan, planVersions,
     lastApprovedPlanIdx, mode, onOpenFile, project, handleRevert, handleRetry,
-    interrupt, handleMigrateProvider, handleBranch, handleDropWindow1M, branchAnchors, batchByIndex, showWaiting, taskTodos, changeMode, turnBoundaries,
+    interrupt, handleMigrateProvider, handleBranch, branchAvailable, handleDropWindow1M, branchAnchors, batchByIndex, showWaiting, taskTodos, changeMode, turnBoundaries,
     mechanicOffers, launchedByIndex, failedByIndex, declinedMechanicOffers, runTeamMechanic, scrollToMechanicLaunch,
     presetOffers, presetCardState, presetNote, presetError, presetBusy, applyPreset, declinePreset,
     turnMeta, availableChatIds,
@@ -2867,6 +2873,8 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             // стора черновиков (getDraft) уже под новый sessionId.
             key={session.id}
             sessionId={session.id}
+            // ADR-016 §3.4: проект чата — для гейта отправки и баннера «устройство офлайн»
+            project={project}
             voicePersonaId={session.personaId ?? undefined}
             offline={!online}
             onSend={handleSend}

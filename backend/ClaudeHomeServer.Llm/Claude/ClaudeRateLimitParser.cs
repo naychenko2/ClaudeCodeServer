@@ -69,10 +69,64 @@ public static class ClaudeRateLimitParser
         {
             if (ra.ValueKind == JsonValueKind.String) return ra.GetString();
             if (ra.ValueKind == JsonValueKind.Number && ra.TryGetInt64(out var n))
-                return (n > 100_000_000_000
-                    ? DateTimeOffset.FromUnixTimeMilliseconds(n)
-                    : DateTimeOffset.FromUnixTimeSeconds(n)).ToString("o");
+                return UnixToIso(n);
         }
         return null;
+    }
+
+    private static string UnixToIso(long n) =>
+        (n > 100_000_000_000
+            ? DateTimeOffset.FromUnixTimeMilliseconds(n)
+            : DateTimeOffset.FromUnixTimeSeconds(n)).ToString("o");
+
+    public const string UnifiedHeaderPrefix = "anthropic-ratelimit-unified-";
+
+    // Окна заголовков → имена окон rate_limit_event: одни и те же сущности, записанные по-разному.
+    private static readonly (string Header, string LimitType)[] UnifiedWindows =
+        [("5h", "five_hour"), ("7d", "seven_day")];
+
+    /// <summary>
+    /// Разбор заголовков <c>anthropic-ratelimit-unified-*</c> ответа Anthropic (их видит шлюз
+    /// LLM, ADR-016) в те же <see cref="RateLimitMessage"/>, что даёт rate_limit_event CLI, —
+    /// по одному на окно. Дальше оба пути идут в SubscriptionLimitRecorder.
+    /// header — чтение заголовка без учёта регистра; нет заголовков — пустой список.
+    /// </summary>
+    /// Статус окна — из <c>{окно}-status</c>; нет его — общий <c>status</c>, но только для окна
+    /// из <c>representative-claim</c>: общий статус говорит про то окно, что решило исход.
+    /// Флага «идёт перерасход» в заголовках нет, он выводится: окно выбрано (utilization ≥ 1),
+    /// а перерасход разрешён — запросы проходят, исчерпанием это не считается.
+    public static IReadOnlyList<RateLimitMessage> FromUnifiedHeaders(Func<string, string?> header)
+    {
+        string? H(string name) => header(UnifiedHeaderPrefix + name) is { Length: > 0 } v ? v.Trim() : null;
+
+        var unifiedStatus = H("status");
+        var claim = H("representative-claim");
+        var overageStatus = H("overage-status");
+        var overageResetsAt = ParseUnix(H("overage-reset"));
+        var overageDisabledReason = H("overage-disabled-reason");
+        var overageAllowed = overageStatus is "allowed" or "allowed_warning";
+
+        var result = new List<RateLimitMessage>();
+        foreach (var (w, limitType) in UnifiedWindows)
+        {
+            var utilization = double.TryParse(H($"{w}-utilization"), System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var u) ? u : (double?)null;
+            var status = H($"{w}-status") ?? (string.Equals(claim, limitType, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(claim, w, StringComparison.OrdinalIgnoreCase) ? unifiedStatus : null);
+            var resetsAt = ParseUnix(H($"{w}-reset"));
+            if (utilization is null && status is null && resetsAt is null) continue;
+            result.Add(new RateLimitMessage(limitType, resetsAt, status, utilization,
+                IsUsingOverage: overageAllowed && utilization >= 1.0,
+                overageStatus, overageResetsAt, overageDisabledReason));
+        }
+        return result;
+    }
+
+    // Сброс в заголовках — unix-время (сек/мс); на всякий случай принимаем и ISO-строку.
+    private static string? ParseUnix(string? value)
+    {
+        if (value is null) return null;
+        return long.TryParse(value, System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture, out var n) ? UnixToIso(n) : value;
     }
 }

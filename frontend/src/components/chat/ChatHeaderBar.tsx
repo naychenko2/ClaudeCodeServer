@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, type ReactNode } from 'react';
-import { Plus, Menu as MenuIcon, Tags, Bell, BellOff, History, Hourglass, ListChecks, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore } from 'lucide-react';
+import { Plus, Menu as MenuIcon, Tags, Bell, BellOff, History, Hourglass, ListChecks, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore, HardDrive } from 'lucide-react';
 import type { Project, Session, ClaudeBilling, Persona, ProjectTag } from '../../types';
 import { api } from '../../lib/api';
 import { isArchivedChat } from '../../lib/chatFilters';
@@ -28,7 +28,7 @@ import { C, FONT, R, SP, SHADOW, TB, CHAT_MAX_W, MODAL_W, GROUP_COLORS } from '.
 import { useWindowWidth, MOBILE_MAX, TABLET_WIDE_MIN } from '../../lib/breakpoints';
 import { Toolbar, ToolbarIconButton } from '../Toolbar';
 import { ToolbarOverflowMenu, type OverflowItem } from '../ToolbarOverflowMenu';
-import { BackButton, ChatTopicIcon, Modal, ModalActions, ConfirmDialog, TextField, Menu, MenuItem, MenuSep } from '../ui';
+import { Badge, BackButton, ChatTopicIcon, Modal, ModalActions, ConfirmDialog, TextField, Menu, MenuItem, MenuSep } from '../ui';
 import { createTask } from '../../lib/tasks';
 import { showToast } from '../../lib/toast';
 import { beginAiBusy, endAiBusy } from '../../lib/ai/busy';
@@ -39,6 +39,7 @@ import { ChatOriginBadge } from '../ChatOriginBadge';
 import { TeamMechanicBadge } from '../../features/team/TeamMechanicBadge';
 import type { TeamMechanicId } from '../../features/team/teamMechanics';
 import { resolveChatOrigin } from '../../lib/chatOrigin';
+import { projectDeviceBadge } from '../../lib/projectCapabilities';
 import { type GlifGenStats, fmtCredits } from './glifStats';
 import { useActionVisibility } from '../../hooks/useActionVisibility';
 import { CHAT_ACTION_ORDER, CHAT_BADGE_ORDER, CHAT_BADGE_LABELS, HEADER_ACTIONS_HIDDEN_BY_DEFAULT, HEADER_COMPACT_HIDDEN_BY_DEFAULT, WALL_ACTIONS_HIDDEN_BY_DEFAULT, type ChatActionKey, type ChatBadgeKey } from '../../lib/chatActions';
@@ -1070,6 +1071,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // Происхождение чата (задача/автоматизация) — рисуется в мета-строке заголовка
   // (см. metaRow): на мобиле компактной иконкой, на десктопе коротким бейджем.
   const origin = resolveChatOrigin(session);
+  const deviceBadge = projectDeviceBadge(project);
   // Блок названия чата. На мобиле он целиком кликабелен как «назад».
   // Кликабельный стек аватаров группового чата (активный спикер — с цветным
   // кольцом) + поповер управления составом. Размер аватара параметром: компактный
@@ -1185,6 +1187,16 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     // Десктопный чат: руки, их устройство и «Стоп». Компонент сам решает, показываться
     // ли — у обычного чата он пуст, поэтому условия типа чата здесь нет
     slots.push(<HandsBadge key="hands" session={session} />);
+    // Локальный проект (ADR-016): где живут файлы и в сети ли устройство — иначе
+    // закрытый гейт хода и пропавшие панели выглядят поломкой
+    if (deviceBadge) slots.push(
+      <span key="device" data-project-device-badge style={{ display: 'inline-flex', minWidth: 0, maxWidth: 240 }}>
+        <Badge size="xs" tone={deviceBadge.offline ? 'warning' : 'neutral'} title={deviceBadge.title}
+          icon={<HardDrive size={11} strokeWidth={ICON_STROKE} aria-hidden />}>
+          {isCompact ? deviceBadge.short : deviceBadge.text}
+        </Badge>
+      </span>
+    );
     // Происхождение живёт здесь в ОБОИХ размерах и на обеих платформах: в правом
     // ряду длинный заголовок задачи выдавливал чипы и резался на 220px
     if (origin) slots.push(

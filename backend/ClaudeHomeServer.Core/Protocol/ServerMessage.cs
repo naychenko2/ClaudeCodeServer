@@ -53,9 +53,12 @@ public record PendingMessagesMessage(IReadOnlyList<PendingMessageDto> Items)
 // Kind — "user" (сообщение человека, ждёт в серверной очереди) или "agent" (chats_send);
 // AttachedPaths/Mode заполнены только у пользовательских — клиент рисует их на карточке
 // и (Mode) применяет при возврате в композер.
+// WaitingForDevice — сообщение ждёт устройство локального проекта (ADR-016, план §5): лежит
+// на сессии, уйдёт в работу при выходе устройства в онлайн.
 public record PendingMessageDto(string Id, string Text, string? SenderPersonaId,
     string? SenderOrigin, DateTime EnqueuedAt, string? SenderChatName = null,
-    string Kind = "agent", IReadOnlyList<string>? AttachedPaths = null, string? Mode = null);
+    string Kind = "agent", IReadOnlyList<string>? AttachedPaths = null, string? Mode = null,
+    bool WaitingForDevice = false);
 
 // «Стоп» вернул текст в композер (фича «честная очередь»). Payload null — восстанавливать
 // нечего (прерван авто/агентский ход, пользовательских в очереди не было): клиент просто

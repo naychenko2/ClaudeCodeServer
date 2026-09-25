@@ -1,6 +1,6 @@
 namespace ClaudeHomeServer.Services.ImageEditor;
 
-// REST-контракт редактора картинок (ADR-016, разделы 2, 4, 5, 7). Маршруты —
+// REST-контракт редактора картинок (ADR-017, разделы 2, 4, 5, 7). Маршруты —
 // api/projects/{projectId}/image-editor/*, см. ImageEditorController. Enum'ы уходят
 // строками в camelCase (глобальный JsonStringEnumConverter хоста).
 

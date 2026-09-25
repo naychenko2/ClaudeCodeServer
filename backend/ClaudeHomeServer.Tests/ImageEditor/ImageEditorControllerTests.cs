@@ -12,7 +12,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Tests.ImageEditor;
 
-// Ручки редактора картинок api/projects/{id}/image-editor/* (ADR-016, разделы 1, 7, 8):
+// Ручки редактора картинок api/projects/{id}/image-editor/* (ADR-017, разделы 1, 7, 8):
 // флаг гейтит сервер, ненастроенный поставщик скрыт и не даёт 500, запуск — 202 с id или
 // понятный отказ, чужая задача неотличима от несуществующей, выключенная подсистема
 // картинок не роняет хост.
@@ -300,7 +300,7 @@ public class ImageEditorControllerTests : IDisposable
             .StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
     }
 
-    // ── Path traversal (ADR-016 §8): пути из запроса обязаны проходить SafePath.Join ──
+    // ── Path traversal (ADR-017 §8): пути из запроса обязаны проходить SafePath.Join ──
 
     private static readonly string[] EscapePaths = ["../etc/passwd", "/etc/passwd", "images/../../escape.png"];
 

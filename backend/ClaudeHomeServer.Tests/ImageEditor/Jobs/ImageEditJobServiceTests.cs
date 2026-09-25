@@ -9,7 +9,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeHomeServer.Tests.ImageEditor.Jobs;
 
-// Исполнитель задач редактора (ADR-016, разделы 4, 7, 8): запуск только по котировке и
+// Исполнитель задач редактора (ADR-017, разделы 4, 7, 8): запуск только по котировке и
 // только у её поставщика, трата — на запустившего, отмена останавливает задачу и шлёт
 // событие, чужая задача неотличима от несуществующей
 public class ImageEditJobServiceTests : IDisposable

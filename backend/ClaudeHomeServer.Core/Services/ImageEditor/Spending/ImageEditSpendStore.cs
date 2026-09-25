@@ -3,7 +3,7 @@ using System.Text.Json.Serialization;
 
 namespace ClaudeHomeServer.Services.ImageEditor.Spending;
 
-// Точка записи и чтения трат редактора картинок (ADR-016, раздел 4). Самостоятельный
+// Точка записи и чтения трат редактора картинок (ADR-017, раздел 4). Самостоятельный
 // сервис Core, не привязан к существующему ISpendCollector/SpendStore — интеграция
 // с общей аналитикой расхода делается отдельной задачей на слое контрактов.
 public interface IImageEditSpendStore

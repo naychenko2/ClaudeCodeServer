@@ -5,7 +5,7 @@ using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.ImageEditor.Marks;
 
-// Пометки → модель (ADR-016, раздел 3): маска отдельным каналом или образцом, размеченная
+// Пометки → модель (ADR-017, раздел 3): маска отдельным каналом или образцом, размеченная
 // копия — образцом, исходник уходит чистым, текст marks.json — в запрос
 public class EditMarksTests
 {

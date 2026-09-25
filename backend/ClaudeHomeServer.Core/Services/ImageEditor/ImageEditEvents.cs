@@ -2,7 +2,7 @@ using ClaudeHomeServer.Protocol;
 
 namespace ClaudeHomeServer.Services.ImageEditor;
 
-// SignalR-события задачи редактора (ADR-016, раздел 7). Уходят в группу владельца через
+// SignalR-события задачи редактора (ADR-017, раздел 7). Уходят в группу владельца через
 // ISessionBroadcaster.ToOwner. Потерянное событие фронт догоняет GET …/jobs/{jobId}
 // на onReconnected и при монтировании.
 public static class ImageEditEventNames

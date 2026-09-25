@@ -6,7 +6,7 @@ using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.ImageEditor.Providers;
 
-// Драйвер Higgsfield на фейковом MCP (ADR-016, раздел 2а). Фикстуры — живые ответы
+// Драйвер Higgsfield на фейковом MCP (ADR-017, раздел 2а). Фикстуры — живые ответы
 // mcp.higgsfield.ai от 2026-09-25 (get_cost, media_upload) и боевые образцы jobs_wait /
 // generate_image из mediaExtract.test.ts.
 public class HiggsfieldImageEditorTests

@@ -2,7 +2,7 @@ using ClaudeHomeServer.Services.ImageEditor;
 
 namespace ClaudeHomeServer.Services.Images.Editing;
 
-// Котировка драйвера (ADR-016, раздел 4): оценка в единицах поставщика — $ у fal,
+// Котировка драйвера (ADR-017, раздел 4): оценка в единицах поставщика — $ у fal,
 // кредиты у Higgsfield — уже умноженная на число вариантов. Драйвер без этого шва
 // котируется по PriceHint модели.
 public interface IImageEditQuoter

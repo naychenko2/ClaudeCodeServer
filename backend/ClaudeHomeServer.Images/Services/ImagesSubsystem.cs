@@ -34,7 +34,7 @@ public sealed class ImagesSubsystem : IAppSubsystem
         // (`AddImageDriver<FalImageService>()`) — отдельный AddSingleton дал бы второй
         // экземпляр того же типа.
         services.AddImageGeneration();
-        // Редактор картинок (ADR-016): драйверы правки, исполнитель задач, сохранение, траты
+        // Редактор картинок (ADR-017): драйверы правки, исполнитель задач, сохранение, траты
         services.AddImageEditor();
     }
 }

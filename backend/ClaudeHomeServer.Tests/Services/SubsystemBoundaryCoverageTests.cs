@@ -235,7 +235,7 @@ public class SubsystemBoundaryCoverageTests
             // ОС без владения вертикалью, живёт в Core. Его зовёт TurnFileWatcher (Llm),
             // следом переедет FileWatcherService (Main) — подсистемой он не является.
             "ClaudeHomeServer.Services.Files",
-            // Спина: общий язык редактора картинок (ADR-016) — контракт IImageEditor, DTO,
+            // Спина: общий язык редактора картинок (ADR-017) — контракт IImageEditor, DTO,
             // каталог и швы в Core. Контроллер в Main, драйверы в вертикали Images;
             // своего поведения-вертикали у неймспейса нет.
             "ClaudeHomeServer.Services.ImageEditor",

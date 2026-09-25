@@ -11,7 +11,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Tests.ImageEditor.Characters;
 
-// Ручки персонажей api/projects/{id}/image-editor/characters* (ADR-016, разделы 1 и 10):
+// Ручки персонажей api/projects/{id}/image-editor/characters* (ADR-017, разделы 1 и 10):
 // флаг гейтит сервер, фото видит только владелец проекта, slug с обходом пути — 404,
 // выбранный персонаж уходит в запуск генерации.
 public class CharacterEndpointsTests : IDisposable

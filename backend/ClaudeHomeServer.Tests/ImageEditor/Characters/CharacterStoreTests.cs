@@ -5,7 +5,7 @@ using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.ImageEditor.Characters;
 
-// Хранилище персонажей characters/<slug>/ (ADR-016, раздел 10): граница проекта, формат
+// Хранилище персонажей characters/<slug>/ (ADR-017, раздел 10): граница проекта, формат
 // character.json с заделом providers.higgsfield, «существующее не перетираем», персонаж
 // доходит до запроса драйвера.
 public class CharacterStoreTests : IDisposable

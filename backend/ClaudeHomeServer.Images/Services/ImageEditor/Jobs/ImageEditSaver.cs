@@ -3,7 +3,7 @@ using ClaudeHomeServer.Services.ImageEditor.Versioning;
 
 namespace ClaudeHomeServer.Services.Images.Editing;
 
-// Запись варианта в проект новым файлом (ADR-016, раздел 5). Флага перезаписи нет по
+// Запись варианта в проект новым файлом (ADR-017, раздел 5). Флага перезаписи нет по
 // построению: правка файла идёт через версионное сохранение (hero.png → hero.v2.png,
 // FileMode.CreateNew), «Нарисовать картинку» — новым именем в папке, занятое даёт -2, -3.
 public sealed class ImageEditSaver(IVersionedImageStore versions) : IImageEditSaver

@@ -7,7 +7,7 @@ using ClaudeHomeServer.Services.ImageEditor;
 
 namespace ClaudeHomeServer.Services.Images.Editing;
 
-// Тонкий JSON-RPC-клиент бэкенда к mcp.higgsfield.ai/mcp (ADR-016, раздел 2а). REST API под
+// Тонкий JSON-RPC-клиент бэкенда к mcp.higgsfield.ai/mcp (ADR-017, раздел 2а). REST API под
 // наш OAuth-токен у Higgsfield нет, MCP-эндпоинт и есть их API. Прокси хода
 // HiggsfieldToolset не переиспользуем: он привязан к сессии чата. initialize не нужен —
 // сервер отвечает без Mcp-Session-Id.

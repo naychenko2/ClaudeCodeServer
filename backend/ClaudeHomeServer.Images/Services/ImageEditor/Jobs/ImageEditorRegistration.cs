@@ -6,7 +6,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace ClaudeHomeServer.Services.Images.Editing;
 
-// Регистрация редактора картинок внутри подсистемы images (ADR-016, раздел 1): выключенная
+// Регистрация редактора картинок внутри подсистемы images (ADR-017, раздел 1): выключенная
 // подсистема не регистрирует ничего, и контроллер Main получает null → 503. Шов
 // IHiggsfieldAccess регистрирует Main (адаптер над HiggsfieldOAuthService); без него
 // драйвер Higgsfield просто недоступен.

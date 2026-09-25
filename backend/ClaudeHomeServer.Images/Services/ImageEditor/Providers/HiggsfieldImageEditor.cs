@@ -5,7 +5,7 @@ using ClaudeHomeServer.Services.ImageEditor;
 
 namespace ClaudeHomeServer.Services.Images.Editing;
 
-// Драйвер правки Higgsfield (ADR-016, раздел 2а) поверх HiggsfieldMcpClient. Платит
+// Драйвер правки Higgsfield (ADR-017, раздел 2а) поверх HiggsfieldMcpClient. Платит
 // инстансный аккаунт админа, учёт трат per-user ведёт исполнитель задач: сюда владелец не
 // доходит вовсе, AdminOwnerId шов IHiggsfieldAccess не отдаёт по построению.
 //

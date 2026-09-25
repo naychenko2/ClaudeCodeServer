@@ -4,7 +4,7 @@ using ClaudeHomeServer.Services.ImageEditor.Versioning;
 
 namespace ClaudeHomeServer.Services;
 
-// «Обсудить с Claude» из редактора картинок (ADR-016, раздел 6). Новой механики нет:
+// «Обсудить с Claude» из редактора картинок (ADR-017, раздел 6). Новой механики нет:
 // новый чат проекта + вложение в .cc-attachments + обычное сообщение пользователя. Ответ
 // фронт читает существующими событиями чата по возвращённому sessionId.
 //

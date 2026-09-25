@@ -7,7 +7,7 @@ using ClaudeHomeServer.Services.ImageEditor;
 
 namespace ClaudeHomeServer.Services.Images.Editing;
 
-// Драйвер правки fal.ai (ADR-016, разделы 2 и 4). Транспорт — очередь queue.fal.run, а не
+// Драйвер правки fal.ai (ADR-017, разделы 2 и 4). Транспорт — очередь queue.fal.run, а не
 // синхронный fal.run: только она даёт стадии «в очереди / рисуем» и отмену. Входные
 // картинки уходят data: URI. Цена до запуска — прайс API (/v1/models/pricing) с кешем на
 // сутки; нет ответа — ориентир каталога. Тот же ключ Fal:ApiKey и тот же тихий

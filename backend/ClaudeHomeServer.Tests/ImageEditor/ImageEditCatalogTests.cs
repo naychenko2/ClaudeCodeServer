@@ -3,7 +3,7 @@ using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.ImageEditor;
 
-// Каталог редактора (ADR-016, раздел 2): в списке только доступные поставщики,
+// Каталог редактора (ADR-017, раздел 2): в списке только доступные поставщики,
 // ненастроенный скрыт, а не роняет ответ; умолчание админа — лишь предвыбор.
 public class ImageEditCatalogTests
 {

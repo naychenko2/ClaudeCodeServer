@@ -9,7 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Tests.ImageEditor.Discuss;
 
-// «Обсудить с Claude» (ADR-016, раздел 6): новый чат проекта с размеченной копией
+// «Обсудить с Claude» (ADR-017, раздел 6): новый чат проекта с размеченной копией
 // вложением и исходником вторым вложением, id чата — в ответе. Ход уходит в стаб LLM
 // тестового хоста, claude CLI не запускается.
 public class ImageDiscussEndpointTests : IDisposable

@@ -1,4 +1,4 @@
-// API редактора картинок (ADR-016). Контракт — DTO и маршруты из
+// API редактора картинок (ADR-017). Контракт — DTO и маршруты из
 // backend/ClaudeHomeServer.Core/Services/ImageEditor (волна 1), база
 // api/projects/{projectId}/image-editor. Enum'ы приходят строками в camelCase.
 //
@@ -113,7 +113,7 @@ export interface ImageEditJobInput {
   characterSlug?: string;
 }
 
-// Персонаж — папка characters/<slug>/ в проекте (ADR-016, раздел 10)
+// Персонаж — папка characters/<slug>/ в проекте (ADR-017, раздел 10)
 export interface ImageEditCharacterPhoto { file: string; primary?: boolean | null; angle?: string | null }
 
 export interface ImageEditCharacter {

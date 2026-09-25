@@ -1,7 +1,7 @@
 namespace ClaudeHomeServer.Services.ImageEditor.Versioning;
 
 // Определяет формат картинки по сигнатуре байтов результата, а не по имени исходника
-// (ADR-016, раздел 5): поставщик правки может вернуть PNG там, где исходник был .jpg.
+// (ADR-017, раздел 5): поставщик правки может вернуть PNG там, где исходник был .jpg.
 public static class ImageFormatSniffer
 {
     public static string? DetectExtension(byte[] bytes)

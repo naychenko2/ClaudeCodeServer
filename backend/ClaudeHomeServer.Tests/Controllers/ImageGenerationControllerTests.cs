@@ -33,7 +33,7 @@ public class ImageGenerationControllerTests : IClassFixture<ImageProvidersFactor
 {
     private const string Url = "/api/image-generation";
     private const string Avatar = "persona-avatar";
-    // Умолчание редактора картинок (ADR-016): то же место настройки, что у аватара
+    // Умолчание редактора картинок (ADR-017): то же место настройки, что у аватара
     private const string ImageEditorPlace = "image-editor";
 
     private readonly HttpClient _admin;

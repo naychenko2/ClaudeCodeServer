@@ -1,6 +1,6 @@
 namespace ClaudeHomeServer.Services.ImageEditor.Spending;
 
-// Единица суммы траты — своей валюты у AI Home нет (ADR-016, раздел 4): показываем
+// Единица суммы траты — своей валюты у AI Home нет (ADR-017, раздел 4): показываем
 // провайдерскую сумму как есть, доллары и кредиты нигде не складываются.
 public enum ImageEditSpendUnit { Usd, Credits }
 

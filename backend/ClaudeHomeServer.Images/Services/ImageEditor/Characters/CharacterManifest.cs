@@ -5,7 +5,7 @@ using ClaudeHomeServer.Services.ImageEditor;
 
 namespace ClaudeHomeServer.Services.Images.Editing;
 
-// Формат characters/<slug>/character.json (ADR-016, раздел 10). Персонаж — папка в проекте,
+// Формат characters/<slug>/character.json (ADR-017, раздел 10). Персонаж — папка в проекте,
 // а не запись в data/: он переносится вместе с проектом и виден Claude в чате.
 //
 // Providers — задел под Soul ID без переделки формата: ключ — поставщик, значение — его

@@ -8,7 +8,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeHomeServer.Tests.ImageEditor.Providers;
 
-// Драйвер fal на фейковом HTTP (ADR-016, разделы 2 и 4): котировка «$ × варианты» по прайс
+// Драйвер fal на фейковом HTTP (ADR-017, разделы 2 и 4): котировка «$ × варианты» по прайс
 // API, очередь queue.fal.run со стадиями и отменой, неуспех не тарифицируется
 public class FalImageEditorTests
 {

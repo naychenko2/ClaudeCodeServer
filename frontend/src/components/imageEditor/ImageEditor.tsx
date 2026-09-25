@@ -18,8 +18,8 @@ import { useMe } from '../../lib/defaultPersona';
 import { ModelsSpendModal } from '../../features/modelsSpend/ModelsSpendModal';
 import { AUTO_MODEL, imageEditorApi, type ImageEditCatalog, type ImageEditCatalogReason, type ImageEditQuoteRequest } from '../../api/imageEditor';
 import { EditorCanvas } from './EditorCanvas';
-import { exportAnnotated, exportMask, hasMaskMark, marksToJson, type Mark, type Tool } from './marks';
-import { effectiveProvider, modelBlockReason, money, nextVersionName, pickOp, plural, priceText, splitPath, variantsWord, type ProviderChoice } from './format';
+import { exportAnnotated, exportMask, hasAnnotationMark, hasMaskMark, marksToJson, type Mark, type Tool } from './marks';
+import { effectiveProvider, isRemovalPrompt, modelBlockReason, money, nextVersionName, pickOp, plural, priceText, splitPath, variantsWord, type ProviderChoice } from './format';
 import { currentModel, PriceLine, ProviderModelPicker, SectionLabel } from './ProviderModelPicker';
 import { useQuote } from './useQuote';
 import { useImageEditJob } from './useImageEditJob';
@@ -112,13 +112,15 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
 
   const hasImage = !!src;
   const hasMask = hasImage && hasMaskMark(marks);
+  const hasAnnotations = hasImage && hasAnnotationMark(marks);
+  const removal = hasMask && isRemovalPrompt(prompt);
   const pv = catalog ? effectiveProvider(catalog, provider) : null;
   const m = currentModel(pv, model);
   const blocked = m ? modelBlockReason(m, hasImage, hasMask) : '';
 
   const quoteReq: ImageEditQuoteRequest | null = pv && m && !blocked ? {
     provider: pv.key, model: m.id, mode: 'auto', op: pickOp(hasImage, hasMask), count,
-    hasMask, references: 0, hasCharacter: !!character, width: size?.w ?? null, height: size?.h ?? null,
+    hasMask, hasAnnotations, removal, references: 0, hasCharacter: !!character, width: size?.w ?? null, height: size?.h ?? null,
   } : null;
   const { quote, error: quoteError, loading: quoteLoading } = useQuote(api, projectId, quoteReq);
 
@@ -143,7 +145,7 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
     if (!q || n !== count || Date.parse(q.expiresAt) - Date.now() < 30_000) {
       q = await api.quote(projectId, {
         provider: pv.key, model: m.id, mode: 'auto', op: pickOp(hasImage, hasMask), count: n,
-        hasMask, references: 0, hasCharacter: !!character, width: size?.w ?? null, height: size?.h ?? null,
+        hasMask, hasAnnotations, removal, references: 0, hasCharacter: !!character, width: size?.w ?? null, height: size?.h ?? null,
       }).catch(() => null);
       if (!q) return;
     }
@@ -161,7 +163,7 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
       marks: marks.length && size ? marksToJson(marks, size.w, size.h) : undefined,
       sourcePath: sourcePath ?? undefined, source, mask, annotated, characterSlug: character?.slug,
     }, n, q.expectedSeconds);
-  }, [api, projectId, pv, m, quote, count, hasImage, hasMask, size, src, marks, prompt, sourcePath, character, job]);
+  }, [api, projectId, pv, m, quote, count, hasImage, hasMask, hasAnnotations, removal, size, src, marks, prompt, sourcePath, character, job]);
 
   const startDiscuss = async () => {
     // Ручка обсуждения без картинки с пометками не работает: кнопка активна только при картинке

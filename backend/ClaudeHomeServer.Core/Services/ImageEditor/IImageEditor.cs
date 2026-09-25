@@ -48,7 +48,10 @@ public enum EditOutcome { Ok, Failed, InsufficientCredits, Rejected, Cancelled, 
 
 public enum EditStage { Queued, Running, Downloading }
 
-public record EditTraits(bool HasMask, int References, bool HasCharacter);
+// HasAnnotations — на холсте есть стрелка, рамка или подпись: их видно только на размеченной
+// копии, поэтому модели нужен канал образцов. Removal — запрос просит стереть отмеченное:
+// чистый инпейнт по маске дорисовывает, а не стирает
+public record EditTraits(bool HasMask, int References, bool HasCharacter, bool HasAnnotations = false, bool Removal = false);
 
 // Возможности МОДЕЛИ, а не поставщика: недоступные операции UI показывает серыми
 public record ImageEditCaps(

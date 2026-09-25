@@ -43,6 +43,8 @@ public static class ImageEditCatalogReasons
 // ── Котировка: POST …/quote ────────────────────────────────────────────────────
 
 // Выбор человека (поставщик + модель или «auto» с режимом) и признаки запроса.
+// HasAnnotations — стрелки, рамки, подписи на холсте (кисть сюда не входит — это HasMask);
+// Removal — запрос просит стереть отмеченное (фронт считает так же, как EditIntent.IsRemoval).
 // Ничего не тратит.
 public record ImageEditQuoteRequest(
     string Provider,
@@ -54,7 +56,9 @@ public record ImageEditQuoteRequest(
     int References,
     bool HasCharacter,
     int? Width,
-    int? Height);
+    int? Height,
+    bool HasAnnotations = false,
+    bool Removal = false);
 
 // Source: ImageEditEstimateSources.*; Amount = null — «цена станет известна после запуска»
 public record ImageEditEstimateDto(double? Amount, string Unit, bool Approx, string Source);

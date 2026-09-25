@@ -69,6 +69,10 @@ export interface ImageEditQuoteRequest {
   hasCharacter: boolean;
   width?: number | null;
   height?: number | null;
+  // Стрелки, рамки, подписи: без них сервер может выбрать модель без канала образцов
+  hasAnnotations?: boolean;
+  // Запрос просит стереть отмеченное кистью
+  removal?: boolean;
 }
 
 export interface ImageEditEstimate {

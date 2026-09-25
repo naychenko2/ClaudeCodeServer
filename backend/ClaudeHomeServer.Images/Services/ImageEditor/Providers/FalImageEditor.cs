@@ -82,7 +82,14 @@ public sealed class FalImageEditor : IImageEditor, IImageEditQuoter
             ImageEditOp.Outpaint => BriaExpand,
             ImageEditOp.RemoveBackground => BriaRemoveBackground,
             ImageEditOp.Upscale => null,
-            // Маска без образцов и персонажа — настоящий инпейнт; иначе маска едет образцом
+            // Стрелки, рамки и подписи видны только на размеченной копии — нужна модель с
+            // каналом образцов; у FLUX Fill его нет, и копия выпала бы из запроса
+            _ when traits.HasAnnotations => mode == EditMode.Photoreal ? NanoBananaProEdit : NanoBananaEdit,
+            // Стереть отмеченное: FLUX Fill дорисовывает в маске новый предмет вместо фона (живой
+            // прогон 2026-09-26 заменил кружку другой кружкой), nano-banana по маске-образцу
+            // стирает чисто и, в отличие от bria/eraser, умеет несколько вариантов
+            _ when traits.HasMask && traits.Removal => mode == EditMode.Photoreal ? NanoBananaProEdit : NanoBananaEdit,
+            // Одна кисть без образцов и персонажа — настоящий инпейнт; иначе маска едет образцом
             _ when traits.HasMask && traits.References == 0 && !traits.HasCharacter && mode != EditMode.Photoreal => FluxFill,
             _ when traits.HasCharacter || traits.HasMask => mode == EditMode.Photoreal ? NanoBananaProEdit : NanoBananaEdit,
             _ => mode switch
@@ -280,7 +287,7 @@ public sealed class FalImageEditor : IImageEditor, IImageEditQuoter
         switch (id)
         {
             case FluxFill:
-                if (req.Mask is null) throw new ArgumentException("Инпейнт без маски");
+                if (req.Mask is null) throw new ArgumentException("Модели FLUX Fill нужна маска: выделите место кистью");
                 body["prompt"] = req.Prompt;
                 body["image_url"] = RequireSource();
                 body["mask_url"] = DataUri(req.Mask.Bytes, req.Mask.ContentType);

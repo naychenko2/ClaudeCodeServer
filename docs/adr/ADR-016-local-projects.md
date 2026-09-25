@@ -1,6 +1,6 @@
 # ADR-016: Локальные проекты — харнес на машине пользователя, платформа на сервере
 
-**Статус:** Предложено (реализация — по этапам §«Порядок работ», первый — спайк)
+**Статус:** Принято, реализовано (этапы 1–5, приёмка 2026-09-25; включение флага `local-projects` не только для себя — после установщика агента и прогона на Windows)
 **Дата:** 2026-09-24
 **Принимающие решение:** Андрей (владелец продукта), Александр (архитектор)
 **Связанные артефакты:**
@@ -10,7 +10,7 @@
 [IProcessLauncher.cs](../../backend/ClaudeHomeServer.Core/Services/Execution/IProcessLauncher.cs),
 [DockerProcessRunner.cs](../../backend/ClaudeHomeServer.Execution/Services/Execution/DockerProcessRunner.cs),
 [IProjectFileGateway.cs](../../backend/ClaudeHomeServer.Core/Services/Composition/IProjectFileGateway.cs),
-[FileService.cs](../../backend/ClaudeHomeServer/Services/FileService.cs).
+[FileService.cs](../../backend/ClaudeHomeServer.Files/FileService.cs).
 
 ## Контекст
 

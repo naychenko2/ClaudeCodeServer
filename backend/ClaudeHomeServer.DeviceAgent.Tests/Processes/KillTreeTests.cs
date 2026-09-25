@@ -47,11 +47,25 @@ public class KillTreeTests
         {
             var powershell = Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe");
             var pidFile = Path.Combine(dir, "grandchild.pid");
-            // Сын — powershell, внук — ping на 10 минут; сын ждёт, пока его не убьют
-            var script = $"$p = Start-Process -FilePath ping.exe -ArgumentList '-n','600','127.0.0.1' -PassThru -WindowStyle Hidden; " +
+            // Сын — powershell, внук — ping на 10 минут; сын ждёт, пока его не убьют.
+            // -NoNewWindow: внук рождается CreateProcess'ом, как потомки настоящего CLI, а не
+            // через ShellExecute
+            var script = $"$p = Start-Process -FilePath ping.exe -ArgumentList '-n','600','127.0.0.1' -PassThru -NoNewWindow; " +
                          $"Set-Content -Path '{pidFile}' -Value $p.Id; Start-Sleep -Seconds 600";
-            using var process = TurnProcess.Start(new TurnLaunch(powershell, ["-NoProfile", "-Command", script], dir, WindowsEnv()));
-            var grandchild = await ReadPidAsync(pidFile);
+            using var process = TurnProcess.Start(new TurnLaunch(powershell, ["-NoProfile", "-NonInteractive", "-Command", script], dir, WindowsEnv()));
+            // stdin фейковому CLI не нужен — закрываем, чтобы исключить зависание powershell на
+            // открытом перенаправленном stdin. Вывод собираем: без него таймаут на CI немой
+            process.Process.StandardInput.Close();
+            var log = new System.Text.StringBuilder();
+            process.Process.OutputDataReceived += (_, e) => { if (e.Data is not null) lock (log) log.AppendLine(e.Data); };
+            process.Process.ErrorDataReceived += (_, e) => { if (e.Data is not null) lock (log) log.AppendLine("err: " + e.Data); };
+            process.Process.BeginOutputReadLine();
+            process.Process.BeginErrorReadLine();
+            var grandchild = await ReadPidAsync(pidFile, () =>
+            {
+                var state = process.Process.HasExited ? $"вышел с кодом {process.ExitCode}" : "жив";
+                lock (log) return $"powershell {state}; вывод:\n{log}";
+            });
             WindowsIsAlive(grandchild).Should().BeTrue();
 
             process.KillTree();
@@ -101,14 +115,15 @@ public class KillTreeTests
         catch (InvalidOperationException) { return false; }
     }
 
-    private static async Task<int> ReadPidAsync(string file)
+    // 30 с: холодный старт Windows PowerShell на раннере CI бывает долгим
+    private static async Task<int> ReadPidAsync(string file, Func<string>? diagnostics = null)
     {
-        for (var i = 0; i < 200; i++)
+        for (var i = 0; i < 600; i++)
         {
             if (File.Exists(file) && int.TryParse((await File.ReadAllTextAsync(file)).Trim(), out var pid)) return pid;
             await Task.Delay(50);
         }
-        throw new TimeoutException($"фейковый CLI не записал {file}");
+        throw new TimeoutException($"фейковый CLI не записал {file}" + (diagnostics is null ? "" : $"; {diagnostics()}"));
     }
 
     private static async Task WaitAsync(Func<bool> condition)

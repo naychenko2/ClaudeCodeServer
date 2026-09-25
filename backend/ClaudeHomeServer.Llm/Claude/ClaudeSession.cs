@@ -595,6 +595,26 @@ public class ClaudeSession : ILlmSessionAdapter
     private static readonly string[] BrowserTools =
         ["mcp__plugin_playwright_playwright__*", "mcp__microsoft_playwright-mcp__*"];
 
+    // Настройки MCP-сервера плагина playwright через env процесса CLI (сервер наследует его):
+    // по умолчанию @playwright/mcp запускает браузер окном на DISPLAY, а на сервере без
+    // RDP-входа дисплея нет и запуск падает; общий постоянный профиль ловит «browser is
+    // already in use» у двух параллельных ходов; скриншоты кладём в .cc-attachments/,
+    // откуда их можно показать в ленте. Решение зависит только от персоны и корня хода —
+    // сигнатура запуска стабильна между ходами. Песочнице не ставим: хостовый путь там
+    // неверен, а браузера в cc-sandbox может не быть вовсе.
+    internal static IReadOnlyDictionary<string, string> PlaywrightMcpEnv(
+        bool browserEnabled, bool sandboxed, string rootPath)
+    {
+        if (!browserEnabled || sandboxed)
+            return new Dictionary<string, string>();
+        return new Dictionary<string, string>
+        {
+            ["PLAYWRIGHT_MCP_HEADLESS"] = "true",
+            ["PLAYWRIGHT_MCP_ISOLATED"] = "true",
+            ["PLAYWRIGHT_MCP_OUTPUT_DIR"] = Path.Combine(rootPath, ".cc-attachments", "playwright"),
+        };
+    }
+
     // Инструменты правки файлов — используются для атрибуции file_changed
     // (FileChangeAttributor.Claim), чтобы TurnFileWatcher чужого чата того же rootPath
     // не показал карточку правки, сделанной этой сессией. NotebookEdit — единственный
@@ -3491,6 +3511,9 @@ public class ClaudeSession : ILlmSessionAdapter
         // найдена), иначе у облачного провайдера переменная была бы лишним шумом.
         if (_lastBareModeApplied)
             envOverrides["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] = "1";
+
+        foreach (var (k, v) in PlaywrightMcpEnv(_browserEnabled, _launcher.IsSandboxed, _rootPath))
+            envOverrides[k] = v;
 
         // Родной Claude (подписка — основной аккаунт или аккаунт пула): объявляем окно
         // контекста сами, как сторонним провайдерам это делает BuildCliEnv. Считаем по модели

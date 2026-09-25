@@ -31,6 +31,8 @@ public sealed class VersionedImageStore : IVersionedImageStore
             var fileName = $"{stem}.v{n}{ext}";
             var candidateRel = string.IsNullOrEmpty(dir) ? fileName : $"{dir}/{fileName}";
             var absolute = SafePath.Join(projectRoot, candidateRel);
+            // Папка оригинала ссылкой наружу — CreateNew записал бы файл вне проекта
+            ProjectLinkGuard.EnsureNoLink(projectRoot, absolute);
 
             try
             {

@@ -38,6 +38,7 @@ public sealed class ImageEditSaver(IVersionedImageStore versions) : IImageEditSa
             var name = n == 1 ? $"{stem}{ext}" : $"{stem}-{n}{ext}";
             var rel = dir.Length == 0 ? name : $"{dir}/{name}";
             var full = SafePath.Join(root, rel);
+            ProjectLinkGuard.EnsureNoLink(root, full);
             try
             {
                 using var fs = new FileStream(full, FileMode.CreateNew, FileAccess.Write);

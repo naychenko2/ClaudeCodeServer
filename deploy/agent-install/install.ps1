@@ -77,8 +77,9 @@ function Show-Usage {
 Каталог данных агента:
     %LOCALAPPDATA%\AiHomeAgent\versions\{version}
 
-Коды возврата: 0 — успех, 2 — аргументы, 3 — сервер, 4 — целостность архива,
-                5 — нет инструмента, 10 — install вернул ошибку.
+Коды возврата: 0 — успех (в том числе «запустится при следующем входе» и
+                «сервер пока не принял» — с предупреждением), 2 — аргументы, 3 — сервер,
+                4 — целостность архива, 5 — нет инструмента, 10 — install вернул ошибку.
 "@
 }
 
@@ -228,8 +229,9 @@ if (-not (Test-Path -LiteralPath $AgentBin)) {
 }
 
 # ---------- запуск install ----------
-$InstallArgs = @('install', '-Server', $Server, '-Code', $Code)
-if ($Name) { $InstallArgs += @('-Name', $Name) }
+# Аргументы агента — в его синтаксисе (--server), а не в синтаксисе параметров PowerShell
+$InstallArgs = @('install', '--server', $Server, '--code', $Code)
+if ($Name) { $InstallArgs += @('--name', $Name) }
 
 Write-Info "$AgentBin $($InstallArgs -join ' ')"
 
@@ -243,8 +245,12 @@ try {
     Exit-With $ExitInstall "не удалось запустить ai-home-agent install: $($_.Exception.Message)"
 }
 
-if ($proc.ExitCode -ne 0) {
-    Exit-With $ExitInstall "ai-home-agent install вернул код $($proc.ExitCode)"
+# 20 и 21 — агент установлен, но есть что сказать человеку (коды InstallExitCodes агента)
+switch ($proc.ExitCode) {
+    0 { }
+    20 { Write-Warn "агент установлен, но сейчас не запущен: окно установки не отпускает дочерние процессы. Он запустится сам при следующем входе в систему" }
+    21 { Write-Warn "агент запущен, но сервер его пока не принял; агент продолжит попытки сам. Проверьте раздел «Устройства» в веб-интерфейсе" }
+    default { Exit-With $ExitInstall "ai-home-agent install вернул код $($proc.ExitCode)" }
 }
 
 Write-Good "готово: $VersionDir"

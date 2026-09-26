@@ -105,6 +105,50 @@ public class SkiaImageRasterTests
         IndexOf(outcome.Image.Bytes, ExifHeader).Should().Be(-1);
     }
 
+    // Все восемь EXIF-ориентаций. В файле 40×20 четыре четверти: R — левая верхняя, G — правая
+    // верхняя, B — левая нижняя, Y — правая нижняя. Ожидание — какие цвета окажутся в углах
+    // показанной картинки в порядке «левый верх, правый верх, левый низ, правый низ».
+    // 5 и 7 — транспонирование: одним поворотом их не получить, поэтому их ловит только эта таблица
+    [Theory]
+    [InlineData(1, "RGBY", 40, 20)]
+    [InlineData(2, "GRYB", 40, 20)]
+    [InlineData(3, "YBGR", 40, 20)]
+    [InlineData(4, "BYRG", 40, 20)]
+    [InlineData(5, "RBGY", 20, 40)]
+    [InlineData(6, "BRYG", 20, 40)]
+    [InlineData(7, "YGBR", 20, 40)]
+    [InlineData(8, "GYRB", 20, 40)]
+    public void EXIF_ориентация_применяется_к_пикселям(int orientation, string corners, int w, int h)
+    {
+        var colors = new Dictionary<char, SKColor>
+        {
+            ['R'] = SKColors.Red, ['G'] = SKColors.Lime, ['B'] = SKColors.Blue, ['Y'] = SKColors.Yellow,
+        };
+        var stored = Solid(40, 20, colors['R']);
+        using (var canvas = new SKCanvas(stored))
+        {
+            void Fill(SKColor c, float x, float y) { using var p = new SKPaint { Color = c, IsAntialias = false }; canvas.DrawRect(x, y, 20, 10, p); }
+            Fill(colors['G'], 20, 0);
+            Fill(colors['B'], 0, 10);
+            Fill(colors['Y'], 20, 10);
+        }
+        var source = WithExif(Jpeg(stored, quality: 100), orientation, withGps: false);
+
+        var outcome = _raster.Apply(source, [], new ImageEncodeSpec(ImageEncodeFormat.Png));
+
+        outcome.Ok.Should().BeTrue(outcome.Message);
+        (outcome.Image!.Width, outcome.Image.Height).Should().Be((w, h));
+        using var decoded = SKBitmap.Decode(outcome.Image.Bytes);
+        var probes = new[] { (4, 4), (w - 5, 4), (4, h - 5), (w - 5, h - 5) };
+        for (var i = 0; i < 4; i++)
+        {
+            var (x, y) = probes[i];
+            var actual = decoded.GetPixel(x, y);
+            IsNear(actual, colors[corners[i]]).Should().BeTrue(
+                $"ориентация {orientation}: в углу {i} ждали {corners[i]}, а там {actual}");
+        }
+    }
+
     [Theory]
     [InlineData(600, 400, 205, 137)]
     [InlineData(100, 50, 603, 301)]
@@ -227,7 +271,7 @@ public class SkiaImageRasterTests
         using (bitmap)
         using (var pixmap = bitmap.PeekPixels())
         using (var data = pixmap.Encode(new SKPngEncoderOptions(SKPngEncoderFilterFlags.AllFilters, 6)))
-            return data.ToArray();
+            return data!.ToArray();
     }
 
     private static byte[] Jpeg(SKBitmap bitmap, int quality = 90)
@@ -235,7 +279,7 @@ public class SkiaImageRasterTests
         using (bitmap)
         using (var pixmap = bitmap.PeekPixels())
         using (var data = pixmap.Encode(new SKJpegEncoderOptions(quality, SKJpegEncoderDownsample.Downsample444, SKJpegEncoderAlphaOption.Ignore)))
-            return data.ToArray();
+            return data!.ToArray();
     }
 
     // Вставляет сегмент APP1/EXIF сразу после SOI: IFD0 с Orientation и, по желанию, GPS IFD с

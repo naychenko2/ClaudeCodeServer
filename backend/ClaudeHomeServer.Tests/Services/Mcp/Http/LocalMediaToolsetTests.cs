@@ -90,6 +90,22 @@ public class LocalMediaToolsetTests : IDisposable
             "состав статичный — не зависит ни от хода, ни от вызова");
     }
 
+    // Дефект 2 QA 1e099019: после локальной генерации модель звала local_generate_image на
+    // «Нарисуй котика» без «локально». Запрет — первым предложением у каждого генерирующего
+    [Fact]
+    public void ГенерирующиеИнструменты_ПервоеПредложение_ТолькоПоЯвнойПросьбе()
+    {
+        var env = Build();
+        var service = new HashSet<string> { "local_job_status", "local_jobs_wait", "local_models" };
+
+        var generating = env.Toolset.ToolsFor(env.Context).Where(t => !service.Contains(t.Name)).ToList();
+
+        generating.Should().HaveCount(8);
+        generating.Should().OnlyContain(t => t.Description.StartsWith(
+            "Вызывай ТОЛЬКО если пользователь явно попросил локальную генерацию (локально / нашими моделями / "
+            + "на своей видеокарте / бесплатно) в ТЕКУЩЕЙ просьбе; иначе используй glif/fal."));
+    }
+
     [Fact]
     public async Task ЧужаяСессия_НиСостава_НиВызова()
     {

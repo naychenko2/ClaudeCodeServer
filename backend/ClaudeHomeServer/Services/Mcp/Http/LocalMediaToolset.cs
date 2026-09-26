@@ -367,14 +367,19 @@ public sealed class LocalMediaToolset(
         "Путь файла проекта от его корня (например, .cc-attachments/local-media/2026-09-26/lm_…-1.png) "
         + "или job_id завершённой задачи local_* в этом же проекте";
 
+    // Первое предложение КАЖДОГО генерирующего инструмента: модель, только что звавшая local_* в
+    // этом чате, иначе продолжает звать его и на «нарисуй» без «локально» (QA 1e099019, дефект 2)
+    internal const string ExplicitOnly =
+        "Вызывай ТОЛЬКО если пользователь явно попросил локальную генерацию (локально / нашими моделями / "
+        + "на своей видеокарте / бесплатно) в ТЕКУЩЕЙ просьбе; иначе используй glif/fal. ";
+
     private static IEnumerable<McpToolSchema> Schemas()
     {
         var aspects = new JsonArray([.. ComfyWorkflows.ImageSizes.Keys.Select(k => (JsonNode)k)]);
 
         yield return Tool("local_generate_image",
-            "Сгенерировать картинку по тексту НАШЕЙ моделью Qwen-Image 2.1 на своей GPU (бесплатно, асинхронно). "
-            + "Вызывай ТОЛЬКО когда пользователь явно просит локально / нашими моделями / бесплатно; "
-            + "иначе — облачные генераторы. Возвращает job_id; результат жди через local_jobs_wait.",
+            ExplicitOnly + "Сгенерировать картинку по тексту НАШЕЙ моделью Qwen-Image 2.1 на своей GPU (бесплатно, "
+            + "асинхронно). Возвращает job_id; результат жди через local_jobs_wait.",
             new JsonObject
             {
                 ["type"] = "object",
@@ -408,9 +413,9 @@ public sealed class LocalMediaToolset(
             });
 
         yield return Tool("local_edit_image",
-            "Отредактировать картинку НАШЕЙ моделью Qwen-Image 2.1 на своей GPU по 1–16 референсам: первая картинка — "
-            + "основная (холст), остальные — дополнительные референсы (персонаж, предмет, стиль). Только по явной "
-            + "просьбе сделать локально. Возвращает job_id; результат жди через local_jobs_wait.",
+            ExplicitOnly + "Отредактировать картинку НАШЕЙ моделью Qwen-Image 2.1 на своей GPU по 1–16 референсам: "
+            + "первая картинка — основная (холст), остальные — дополнительные референсы (персонаж, предмет, стиль). "
+            + "Возвращает job_id; результат жди через local_jobs_wait.",
             new JsonObject
             {
                 ["type"] = "object",
@@ -437,8 +442,8 @@ public sealed class LocalMediaToolset(
             });
 
         yield return Tool("local_face_detail",
-            "Довести лица на готовой картинке (FaceDetailer: находит лица и перерисовывает их детальнее) НАШЕЙ "
-            + "моделью на своей GPU. Только по явной просьбе сделать локально. Возвращает job_id.",
+            ExplicitOnly + "Довести лица на готовой картинке (FaceDetailer: находит лица и перерисовывает их "
+            + "детальнее) НАШЕЙ моделью на своей GPU. Возвращает job_id.",
             new JsonObject
             {
                 ["type"] = "object",
@@ -451,9 +456,9 @@ public sealed class LocalMediaToolset(
             });
 
         yield return Tool("local_text_to_video",
-            "Сгенерировать видео со звуком по тексту НАШЕЙ моделью MiniMax H3 на своей GPU. prompt описывает сцену, "
-            + "движение, камеру, реплики и звук. Долго (" + T2vEtaText + ") — только по явной просьбе сделать "
-            + "локально. Результат можно потом увеличить local_video_upscale. Возвращает job_id; жди через local_jobs_wait.",
+            ExplicitOnly + "Сгенерировать видео со звуком по тексту НАШЕЙ моделью MiniMax H3 на своей GPU. prompt "
+            + "описывает сцену, движение, камеру, реплики и звук. Долго (" + T2vEtaText + "). Результат можно "
+            + "потом увеличить local_video_upscale. Возвращает job_id; жди через local_jobs_wait.",
             new JsonObject
             {
                 ["type"] = "object",
@@ -470,10 +475,10 @@ public sealed class LocalMediaToolset(
             });
 
         yield return Tool("local_image_to_video",
-            "Оживить картинку в видео со звуком НАШЕЙ моделью MiniMax H3 на своей GPU: первый кадр — картинка, "
-            + "необязательный last_frame — последний кадр; prompt описывает движение, камеру, речь и звук. Долго ("
-            + I2vEtaText + ") — только по явной просьбе сделать локально. Результат можно потом увеличить "
-            + "local_video_upscale. Возвращает job_id; жди через local_jobs_wait.",
+            ExplicitOnly + "Оживить картинку в видео со звуком НАШЕЙ моделью MiniMax H3 на своей GPU: первый кадр — "
+            + "картинка, необязательный last_frame — последний кадр; prompt описывает движение, камеру, речь и звук. "
+            + "Долго (" + I2vEtaText + "). Результат можно потом увеличить local_video_upscale. Возвращает job_id; "
+            + "жди через local_jobs_wait.",
             new JsonObject
             {
                 ["type"] = "object",
@@ -497,10 +502,10 @@ public sealed class LocalMediaToolset(
             });
 
         yield return Tool("local_reference_to_video",
-            "Сгенерировать видео со звуком по референсам НАШЕЙ моделью MiniMax H3 на своей GPU: 1–9 картинок "
-            + "(персонажи, предметы, стиль), до 3 видео (2–15 с) и до 3 звуков из проекта. В prompt ссылайся на них "
-            + "как <Picture 1>, <Video 1>, <Audio 1>. Только по явной просьбе сделать локально. identity=max — тяжёлая "
-            + "задача (одна за раз). Возвращает job_id; жди через local_jobs_wait.",
+            ExplicitOnly + "Сгенерировать видео со звуком по референсам НАШЕЙ моделью MiniMax H3 на своей GPU: 1–9 "
+            + "картинок (персонажи, предметы, стиль), до 3 видео (2–15 с) и до 3 звуков из проекта. В prompt ссылайся "
+            + "на них как <Picture 1>, <Video 1>, <Audio 1>. identity=max — тяжёлая задача (одна за раз). Возвращает "
+            + "job_id; жди через local_jobs_wait.",
             new JsonObject
             {
                 ["type"] = "object",
@@ -530,7 +535,7 @@ public sealed class LocalMediaToolset(
             });
 
         yield return Tool("local_video_upscale",
-            "Увеличить видео прошлой задачи local_text_to_video или local_image_to_video (размер full) до 1440p или 2K "
+            ExplicitOnly + "Увеличить видео прошлой задачи local_text_to_video или local_image_to_video (размер full) до 1440p или 2K "
             + "НАШИМ латентным апскейлером на своей GPU. Работает только по job_id такой задачи, произвольный mp4 "
             + "не принимает. Тяжёлая задача: одна за раз. Возвращает job_id; жди через local_jobs_wait.",
             new JsonObject
@@ -552,7 +557,7 @@ public sealed class LocalMediaToolset(
             });
 
         yield return Tool("local_video_inpaint",
-            "Перерисовать область видео по маске НАШЕЙ моделью MiniMax H3 (Fun ControlNet) на своей GPU: белое на маске "
+            ExplicitOnly + "Перерисовать область видео по маске НАШЕЙ моделью MiniMax H3 (Fun ControlNet) на своей GPU: белое на маске "
             + "перегенерируется по prompt, вне маски кадры и звук берутся из исходника. Видео — mp4 1344×768 или 864×480 "
             + "(или портретное), до 10 с; маска — PNG того же размера. Тяжёлая задача: одна за раз. Возвращает job_id.",
             new JsonObject

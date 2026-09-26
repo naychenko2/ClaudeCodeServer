@@ -2,7 +2,7 @@
 // (экран 5) и ошибка (экран 8). Тексты — дословно из макета image-editor-v1.
 
 import { useRef, useState, type PointerEvent as RPointerEvent } from 'react';
-import { AlertTriangle, Check, Coins, Pencil, Sparkles, X } from 'lucide-react';
+import { AlertTriangle, Check, Coins, Pencil, Save, Sparkles, X } from 'lucide-react';
 import { Button, SegmentedControl, ICON_SIZE, ICON_STROKE, C, FS, R, SHADOW, SP } from 'aihome_shell/kit';
 import type { EditCost } from './api';
 import type { JobFailure } from './useImageEditJob';
@@ -81,7 +81,7 @@ function Tag({ side, children }: { side: 'left' | 'right'; children: string }) {
   );
 }
 
-export function VariantsView({ variants, variantUrl, before, cost, selected, onSelect, onApply, onBase, onMore, onBack, mobile }: {
+export function VariantsView({ variants, variantUrl, before, cost, selected, onSelect, onApply, onSaveAs, onBase, onMore, onBack, mobile }: {
   variants: number[];
   variantUrl: (n: number) => string;
   // Исходник для сравнения; null — рисовали с нуля, сравнивать не с чем
@@ -89,7 +89,9 @@ export function VariantsView({ variants, variantUrl, before, cost, selected, onS
   cost: EditCost | null;
   selected: number;
   onSelect: (n: number) => void;
+  // «Применить» — сразу следующей версией рядом, «Сохранить как…» — диалог
   onApply: () => void;
+  onSaveAs: () => void;
   onBase: () => void;
   onMore: () => void;
   onBack: () => void;
@@ -154,12 +156,13 @@ export function VariantsView({ variants, variantUrl, before, cost, selected, onS
 
       <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap' }}>
         <Button variant="primary" leftIcon={icon(Check)} onClick={onApply}>Применить</Button>
+        <Button variant="secondary" leftIcon={icon(Save)} onClick={onSaveAs}>Сохранить как…</Button>
         <Button variant="secondary" leftIcon={icon(Pencil)} onClick={onBase}>Взять за основу</Button>
         <Button variant="secondary" leftIcon={icon(Sparkles)} onClick={onMore}>Ещё варианты</Button>
         <Button variant="ghost" onClick={onBack}>Вернуться к правке</Button>
       </div>
       <div style={{ fontSize: FS.sm, color: C.textMuted, textAlign: 'center' }}>
-        «Применить» сохранит вариант новым файлом рядом с оригиналом. «Взять за основу» — продолжить править этот вариант.
+        «Применить» сразу сохранит вариант следующей версией рядом. «Сохранить как…» — своё имя и папка. «Взять за основу» — новый шаг истории, правка продолжается.
       </div>
     </div>
   );

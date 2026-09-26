@@ -1,8 +1,9 @@
 // Секции левой панели редактора v2 (макет image-editor-v2): «Образцы» с ролями,
-// «Быстрые действия» и «История шагов». Логика входа задачи — в editorInputs.ts.
+// «Быстрые действия», «История шагов» и кнопки сохранения шага в шапке.
+// Логика входа задачи — в editorInputs.ts.
 
 import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
-import { ChevronDown, ChevronUp, Expand, FolderOpen, Image as ImageIcon, Layers, Plus, Scissors, Search, Sparkles, Upload, X } from 'lucide-react';
+import { Check, ChevronDown, ChevronUp, Expand, FolderOpen, Image as ImageIcon, Layers, Plus, Save, Scissors, Search, Sparkles, Upload, X } from 'lucide-react';
 import { Button, EmptyState, IconButton, IconField, Menu, MenuItem, Modal, ModalActions, SegmentedControl, ICON_SIZE, ICON_STROKE, C, FS, R, SP, api as appApi } from 'aihome_shell/kit';
 import type { ReferenceRole } from './api';
 import { SectionHint } from './EditorSections';
@@ -260,6 +261,37 @@ export function HistorySteps({ history, disabled, onStep }: {
         </div>
       )}
       <SectionHint>{hint}</SectionHint>
+    </div>
+  );
+}
+
+// ── Сохранение шага: шапка редактора ──
+
+// «Сохранить» — сразу следующей версией рядом, «Сохранить как…» — своё имя и папка
+export function SaveButtons({ mobile, disabled, onSave, onSaveAs }: {
+  mobile: boolean;
+  disabled: boolean;
+  onSave: () => void;
+  onSaveAs: () => void;
+}) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexShrink: 0 }}>
+      {mobile
+        ? (
+          <IconButton title="Сохранить как…" ariaLabel="Сохранить как…" disabled={disabled} onClick={onSaveAs}>
+            {ic(Save, ICON_SIZE.sm)}
+          </IconButton>
+        )
+        : (
+          <Button size="sm" variant="secondary" leftIcon={ic(Save)} disabled={disabled} onClick={onSaveAs}
+            title="Сохранить под другим именем или в другую папку">
+            Сохранить как…
+          </Button>
+        )}
+      <Button size="sm" variant="primary" leftIcon={ic(Check)} disabled={disabled} onClick={onSave}
+        title="Сохранить следующей версией рядом">
+        Сохранить
+      </Button>
     </div>
   );
 }

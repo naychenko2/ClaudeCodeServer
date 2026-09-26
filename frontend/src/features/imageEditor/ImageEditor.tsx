@@ -4,21 +4,21 @@
 // На телефоне холст на весь экран, промпт внизу, «Инструменты» и «Чат» — шторки.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ArrowLeft, Brush, Image as ImageIcon, MessageSquare, Save, Upload, Wrench } from 'lucide-react';
+import { ArrowLeft, Brush, Image as ImageIcon, MessageSquare, Upload, Wrench } from 'lucide-react';
 import {
   Button, EmptyState, Field, IconButton, Island, Modal, ModalActions, SegmentedControl, TextField, Toggle, ICON_SIZE, ICON_STROKE,
-  C, FS, ISLAND, R, SHADOW, SP, useIsMobile, api as appApi, showToast, useMe, ModelsSpendModal,
+  C, FS, ISLAND, R, SHADOW, SP, useIsMobile, api as appApi, showToast, useMe, ModelsSpendModal, getNav, navPush, type NavSnapshot,
 } from 'aihome_shell/kit';
 import {
-  AUTO_MODEL, imageEditorApi, type ImageEditCatalog, type ImageEditCatalogReason, type ImageEditQuoteRequest,
+  AUTO_MODEL, imageEditorApi, type ImageEditCatalog, type ImageEditCatalogReason, type ImageEditQuoteRequest, type ImageEditSaveRequest,
   type ImageEncodeFormat, type ImageEncodeSpec, type ImageFractionRect, type ImageTransformBase, type ImageTransformOp,
 } from './api';
 import { EditorCanvas } from './EditorCanvas';
 import { exportAnnotated, exportMask, hasAnnotationMark, hasMaskMark, marksToJson, type Mark, type Tool } from './marks';
-import { effectiveProvider, isRemovalPrompt, modelBlockReason, money, nextVersionName, pickOp, plural, priceSum, priceText, splitPath, variantsWord, type ProviderChoice } from './format';
+import { effectiveProvider, isRemovalPrompt, modelBlockReason, money, pickOp, plural, priceSum, priceText, splitPath, variantsWord, type ProviderChoice } from './format';
 import { currentModel, ProviderModelPicker } from './ProviderModelPicker';
 import { EditorSections, MarksTools, MobileToolbar, SectionHint, useEditorSections, type EditorSection } from './EditorSections';
-import { HistorySteps, ProjectImagePicker, QuickActions, SamplesSection } from './PanelSections';
+import { HistorySteps, ProjectImagePicker, QuickActions, SamplesSection, SaveButtons } from './PanelSections';
 import {
   actionTitle, currentSrc, dropStepsFrom, EMPTY_HISTORY, goToStep, maxSamples, panelJobInput, patchStep, pushStep, quickBlockReason, quickPlan,
   stepSaveSource, type History, type HistoryStep, type LaunchAction, type LaunchPlan, type OutpaintRatio, type QuickAction, type Sample, type SaveSource,
@@ -31,7 +31,8 @@ import { PromptCard } from './PromptCard';
 import { useQuote } from './useQuote';
 import { useImageEditJob } from './useImageEditJob';
 import { ErrorView, GenerationView, VariantsView } from './ResultViews';
-import { SaveDialog } from './SaveDialog';
+import { SaveAsDialog } from './SaveAsDialog';
+import { defaultStem, nameStem } from './saveAs';
 import { CharacterChip, CharacterSection, useCharacterDialogs, useCharacters } from './characters/CharacterPicker';
 import { DiscussPanel, openProjectChat, type DiscussState } from './discuss/DiscussPanel';
 import { buildDiscussText } from './discuss/discussText';
@@ -87,7 +88,8 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
   const [prompt, setPrompt] = useState('');
   const [count, setCount] = useState(3);
   const [selected, setSelected] = useState(0);
-  const [saveSrc, setSaveSrc] = useState<SaveSource | null>(null);
+  // Открытый «Сохранить как…»: источник и формат результата (от него расширение)
+  const [saveAs, setSaveAs] = useState<{ from: SaveSource; format: ImageEncodeFormat } | null>(null);
   const [compress, setCompress] = useState(false);
   const [heavy, setHeavy] = useState<{ bytes: number; webpBytes: number | null } | null>(null);
   // «Вернуть размер оригинала» (ADR-018 §9): по умолчанию включён
@@ -381,29 +383,36 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
     return null;
   });
 
-  const takeAsBase = () => {
-    if (!job.jobId) return;
-    const url = api.variantUrl(projectId, job.jobId, sel);
-    const base: ImageTransformBase = { jobId: job.jobId, variant: sel };
+  // Вариант становится шагом истории: «Взять за основу» и сохранение варианта
+  const pushVariantStep = (jobId: string, variant: number) => {
+    const url = api.variantUrl(projectId, jobId, variant);
+    const base: ImageTransformBase = { jobId, variant };
     setHistory(h => pushStep(h, {
       id: `s${++stepSeq.current}`, original: false, title: actionTitle(lastAction.current), src: url, base, ready: Promise.resolve(base),
     }));
     setSize(null);
     setMarks([]);
-    setPrompt('');
     job.reset();
   };
 
-  // Диалог сохранения: вариант задачи или шаг истории. Тяжёлый файл (больше HeavyFileMb) —
+  const takeAsBase = () => {
+    if (!job.jobId) return;
+    pushVariantStep(job.jobId, sel);
+    setPrompt('');
+  };
+
+  // «Сохранить как…»: вариант задачи или шаг истории. Тяжёлый файл (больше HeavyFileMb) —
   // предупреждение с оценкой WebP; блокировки нет (ADR-018 §9)
-  const openSave = (from: SaveSource, knownBytes?: number) => {
-    setSaveSrc(from);
+  const openSaveAs = (from: SaveSource, known?: { bytes?: number; format?: ImageEncodeFormat | null }) => {
+    setSaveAs({ from, format: known?.format ?? 'png' });
     setCompress(false);
     setHeavy(null);
     const limit = (catalog?.limits.heavyFileMb ?? 5) * 1024 * 1024;
-    const bytesOf = knownBytes != null ? Promise.resolve(knownBytes)
-      : 'jobId' in from ? fetch(api.variantUrl(projectId, from.jobId, from.variant)).then(r => r.blob()).then(b => b.size) : Promise.resolve(null);
-    void bytesOf.then(async bytes => {
+    const info = 'jobId' in from
+      ? fetch(api.variantUrl(projectId, from.jobId, from.variant)).then(r => r.blob()).then(b => ({ bytes: b.size, format: formatOf(b.type) }))
+      : Promise.resolve({ bytes: known?.bytes ?? null, format: null });
+    void info.then(async ({ bytes, format }) => {
+      if (format) setSaveAs(v => (v && v.from === from ? { ...v, format } : v));
       if (bytes == null || bytes <= limit) return;
       setHeavy(h => h ?? { bytes, webpBytes: null });
       const r = await api.transform(projectId, { base: from, ops: [], encode: HEAVY_ENCODE }, { dryRun: true }).catch(() => null);
@@ -411,20 +420,53 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
     }).catch(() => {});
   };
 
-  const save = async ({ fileName, folder }: { fileName: string; folder: string }) => {
-    if (!saveSrc) return;
-    const src0 = 'jobId' in saveSrc ? { jobId: saveSrc.jobId, variant: saveSrc.variant } : { stepId: saveSrc.stepId, variant: 0 };
-    const encode = compress ? HEAVY_ENCODE : undefined;
-    const res = await api.save(projectId, sourcePath
-      ? { ...src0, sourcePath, encode }
-      : { ...src0, folder: folder || undefined, fileName, encode });
-    setSaveSrc(null);
-    setSavedPath(res.path);
-    if ('jobId' in saveSrc) setSavedJobId(saveSrc.jobId);
-    // Дальше правим уже сохранённый файл: следующая версия ляжет рядом с ним
-    setSourcePath(res.path);
-    showToast(`Сохранено в проект: ${res.path}`, '', 'info',
-      onShowInFiles ? { label: 'Показать в файлах', onClick: () => onShowInFiles(res.path) } : undefined);
+  const saveSource = (from: SaveSource) => ('jobId' in from ? { jobId: from.jobId, variant: from.variant } : { stepId: from.stepId, variant: 0 });
+
+  // Редактор переходит на сохранённый файл: следующая версия ляжет уже рядом с ним.
+  // Вариант с экрана вариантов становится шагом истории; шаг из шапки уже в истории
+  const afterSave = (from: SaveSource, path: string) => {
+    setSavedPath(path);
+    setSourcePath(path);
+    if ('jobId' in from) setSavedJobId(from.jobId);
+    if ('jobId' in from && job.phase === 'variants' && job.jobId === from.jobId) pushVariantStep(from.jobId, from.variant);
+    showToast(`Сохранено в проект: ${path}`, '', 'info', { label: 'Показать в дереве', onClick: () => showInTree(path) });
+  };
+
+  // «Применить» / «Сохранить» — сразу, без диалога, следующей версией рядом
+  const saveNext = async (from: SaveSource) => {
+    const req: ImageEditSaveRequest = sourcePath
+      ? { ...saveSource(from), mode: 'next-version', sourcePath }
+      : { ...saveSource(from), mode: 'next-version', folder: initial.folder || undefined, fileName: initial.name };
+    try {
+      afterSave(from, (await api.save(projectId, req)).path);
+    } catch (e) {
+      showToast(`Не сохранено: ${(e as Error).message}`, '', 'error');
+    }
+  };
+
+  const saveAsFormat: ImageEncodeFormat = compress ? 'webp' : saveAs?.format ?? 'png';
+  const checkName = useCallback((folder: string, name: string) =>
+    api.saveCheck(projectId, { folder: folder || undefined, name, format: saveAsFormat }), [api, projectId, saveAsFormat]);
+
+  // Ошибка (в том числе 409 name_taken) уходит в диалог: он покажет подсказку свободного имени
+  const saveAsFile = async ({ folder, fileName }: { folder: string; fileName: string }) => {
+    if (!saveAs) return;
+    const res = await api.save(projectId, {
+      ...saveSource(saveAs.from), mode: 'as', folder: folder || undefined, fileName, encode: compress ? HEAVY_ENCODE : undefined,
+    });
+    setSaveAs(null);
+    afterSave(saveAs.from, res.path);
+  };
+
+  // «Показать в дереве»: экран проекта открывает файл и панель файлов так же, как по
+  // «назад/вперёд», а дерево раскрывает папки до него и подсвечивает строку
+  const showInTree = (path: string) => {
+    const nav = getNav();
+    if (nav?.screen !== 'project' || nav.project?.id !== projectId) { onShowInFiles?.(path); return; }
+    const snap: NavSnapshot = { ...nav, view: 'sidebar', file: path, task: null, board: false, revealInTree: true };
+    onClose();
+    navPush(snap);
+    window.dispatchEvent(new PopStateEvent('popstate', { state: snap }));
   };
 
   const title = !hasImage && target.kind === 'create' ? 'Новая картинка' : splitPath(sourcePath ?? initial.name).name;
@@ -439,7 +481,8 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
     center = (
       <VariantsView variants={job.variants} variantUrl={n => api.variantUrl(projectId, jobId, n)}
         before={src} cost={job.cost} selected={sel}
-        onSelect={setSelected} onApply={() => openSave({ jobId, variant: sel })} onBase={takeAsBase}
+        onSelect={setSelected} onApply={() => { void saveNext({ jobId, variant: sel }); }}
+        onSaveAs={() => openSaveAs({ jobId, variant: sel })} onBase={takeAsBase}
         onMore={() => { void launch(lastAction.current); }} onBack={job.reset} mobile={mobile} />
     );
   } else if (job.phase === 'error' && job.failure) {
@@ -648,10 +691,9 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
           </div>
         </div>
         {saveFromStep && !crop && (
-          <Button size="sm" variant="secondary" leftIcon={ic(Save, ICON_SIZE.xs)} disabled={transforming}
-            onClick={() => openSave(saveFromStep, curStep?.bytes)}>
-            {mobile ? 'Сохранить' : 'Сохранить в проект'}
-          </Button>
+          <SaveButtons mobile={mobile} disabled={transforming}
+            onSave={() => { void saveNext(saveFromStep); }}
+            onSaveAs={() => openSaveAs(saveFromStep, { bytes: curStep?.bytes, format: fileInfo?.src === src ? fileInfo.format : null })} />
         )}
         {savedPath && !mobile && (
           <span style={{ fontSize: FS.sm, color: C.successText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 280 }}>
@@ -686,10 +728,10 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
           onPick={p => { addSamplePaths([p]); setPickerOpen(false); }} onClose={() => setPickerOpen(false)} />
       )}
       {providersOpen && <ModelsSpendModal initialTab="apply" onClose={() => setProvidersOpen(false)} />}
-      {saveSrc && (
-        <SaveDialog mode={sourcePath ? 'edit' : 'create'} sourcePath={sourcePath}
-          suggestedName={withExt(sourcePath ? nextVersionName(splitPath(sourcePath).name) : initial.name, compress ? 'webp' : null)}
-          folder={folder} onSave={save} onClose={() => setSaveSrc(null)}
+      {saveAs && (
+        <SaveAsDialog projectId={projectId} sourcePath={sourcePath}
+          defaultName={sourcePath ? defaultStem(splitPath(sourcePath).name) : nameStem(initial.name)}
+          folder={folder} format={saveAsFormat} onCheck={checkName} onSave={saveAsFile} onClose={() => setSaveAs(null)}
           heavy={heavy && { ...heavy, compress, onCompress: setCompress }} />
       )}
     </Island>
@@ -707,9 +749,6 @@ function loadImage(url: string): Promise<HTMLImageElement> {
   img.src = url;
   return img.decode().then(() => img);
 }
-
-// Расширение имени по формату перекодирования: hero.v2.png → hero.v2.webp
-const withExt = (name: string, ext: string | null) => (ext ? name.replace(/\.\w+$/, '') + `.${ext}` : name);
 
 const CROP_LABEL: Record<CropRatio, string> = { free: 'Свободно', '1:1': '1:1', '16:9': '16:9', '9:16': '9:16' };
 

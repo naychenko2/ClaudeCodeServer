@@ -1039,6 +1039,29 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
   const expandedRef = useRef(expanded);
   expandedRef.current = expanded;
 
+  // Файл открыли извне дерева («Показать в дереве» у сохранённой картинки): раскрываем
+  // папки до него, перечитываем его папку (файл может быть новым) и подсвечиваем строку.
+  // Уже видимый файл (клик по строке) не трогаем. Панель, открытая вместе с файлом,
+  // тоже показывает его: поэтому стартуем с пустого пути, а не с текущего
+  const revealedRef = useRef('');
+  useEffect(() => {
+    if (activeNorm === revealedRef.current) return;
+    revealedRef.current = activeNorm;
+    if (!activeNorm || isMobile) return;
+    const parts = activeNorm.split('/').slice(0, -1);
+    const dirs = parts.map((_, i) => parts.slice(0, i + 1).join('/'));
+    const parent = dirs[dirs.length - 1] ?? '';
+    const listed = dirCacheRef.current.get(parent)?.some(e => normPath(e.path) === activeNorm);
+    if (listed && dirs.every(d => expandedRef.current.has(d))) return;
+    void (async () => {
+      await Promise.all(dirs.slice(0, -1).filter(d => !dirCacheRef.current.has(d)).map(loadDir));
+      await invalidateDir(parent);
+      setExpanded(prev => { const n = new Set(prev); for (const d of dirs) n.add(d); return n; });
+      setNewlyCreatedPath(activeNorm);
+      setTimeout(() => setNewlyCreatedPath(null), 1500);
+    })();
+  }, [activeNorm, isMobile, loadDir, invalidateDir]);
+
   const handleToggleDir = async (entry: FileEntry) => {
     const { path } = entry;
     setCreateInDir(path);

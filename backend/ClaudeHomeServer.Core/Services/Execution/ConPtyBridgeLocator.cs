@@ -17,16 +17,39 @@ public static class ConPtyBridgeLocator
     /// <summary>Минимальный билд Windows с ConPTY API — Win10 1809.</summary>
     internal const int MinConPtyBuild = 17763;
 
-    public static string? Find()
-        => !OperatingSystem.IsWindows()
-            ? null
-            : Find(AppContext.BaseDirectory, Environment.OSVersion.Version.Build);
+    public static string? Find() => Find(out _);
+
+    /// <summary>
+    /// То же, плюс причина отказа для лога: без неё «не найден» и «Windows без ConPTY»
+    /// в логе неразличимы, а каталог поиска приходится угадывать.
+    /// </summary>
+    public static string? Find(out string reason)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            reason = "не Windows";
+            return null;
+        }
+        return Find(AppContext.BaseDirectory, Environment.OSVersion.Version.Build, out reason);
+    }
 
     /// <summary>Тестируемая перегрузка: чистая функция от папки и билда ОС.</summary>
-    internal static string? Find(string baseDir, int osBuild)
+    internal static string? Find(string baseDir, int osBuild) => Find(baseDir, osBuild, out _);
+
+    internal static string? Find(string baseDir, int osBuild, out string reason)
     {
-        if (osBuild < MinConPtyBuild) return null;
+        if (osBuild < MinConPtyBuild)
+        {
+            reason = $"билд Windows {osBuild} старше {MinConPtyBuild} (1809), ConPTY нет";
+            return null;
+        }
         var path = Path.Combine(baseDir, "ConPtyBridge.exe");
-        return File.Exists(path) ? path : null;
+        if (!File.Exists(path))
+        {
+            reason = $"нет {path}";
+            return null;
+        }
+        reason = "";
+        return path;
     }
 }

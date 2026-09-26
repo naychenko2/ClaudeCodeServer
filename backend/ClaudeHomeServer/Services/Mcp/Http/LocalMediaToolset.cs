@@ -214,24 +214,36 @@ public sealed class LocalMediaToolset(
             ["max_active_jobs_per_user"] = options.MaxQueuedPerOwner,
             ["max_heavy_jobs_per_user"] = 1,
             ["video_fast_default"] = options.VideoFastDefault,
+            ["upscale_1440_mode"] = options.Upscale1440Tiled ? "tiled" : "single",
+            ["eta_note"] = EtaNote,
             ["operations"] = new JsonArray
             {
                 Operation("local_generate_image", "Qwen-Image 2.1", "картинка по тексту, 1–4 варианта", "≈45 с на картинку при 25 шагах"),
                 Operation("local_edit_image", "Qwen-Image 2.1 (правка)", "правка по 1–16 референсам", "≈60 с"),
                 Operation("local_face_detail", "FaceDetailer (YOLOv8 + Qwen-Image)", "доводка лиц на готовой картинке", "≈25 с"),
                 Operation("local_text_to_video", "MiniMax H3 fl2va + turbo-LoRA 8 шагов",
-                    $"видео со звуком по тексту, до {options.MaxVideoSeconds} с, 24 fps", VideoEtaText),
+                    $"видео со звуком по тексту, до {options.MaxVideoSeconds} с, 24 fps", T2vEtaText,
+                    new JsonObject { ["full_5s"] = 310, ["full_10s"] = null, ["half_5s"] = null }),
                 Operation("local_image_to_video", "MiniMax H3 fl2va + turbo-LoRA 8 шагов",
                     $"видео со звуком от первого кадра (и необязательно последнего), до {options.MaxVideoSeconds} с, 24 fps",
-                    VideoEtaText),
+                    I2vEtaText,
+                    new JsonObject
+                    {
+                        ["full_5s"] = 333, ["full_5s_fast"] = 234, ["full_10s"] = 943, ["full_10s_fast"] = 585,
+                        ["half_5s"] = 94, ["half_10s"] = null,
+                    }),
                 Operation("local_reference_to_video", "MiniMax H3 ref2va + turbo-LoRA 4 шага",
                     "видео по референсам: 1–9 картинок, до 3 видео (2–15 с) и до 3 звуков; identity=max — тяжёлая",
-                    "замеряется"),
+                    "не замерено"),
                 Operation("local_video_upscale", "MiniMax H3 Latent Upscaler 3D + донастройка 3 шага",
                     "апскейл видео прошлой задачи до 1440p (2528×1440) или 2K (2688×1536) по её латенту; тяжёлая",
-                    "замеряется"),
+                    "1440p ролика 5 с: по тайлам ≈ 15 мин, одним проходом ≈ 18 мин; 2K — не замерено",
+                    new JsonObject { ["1440p_tiled_5s"] = 915, ["1440p_single_5s"] = 1065, ["2k"] = null }),
                 Operation("local_video_inpaint", "MiniMax H3 ref2va + Fun ControlNet Union, 4 шага",
-                    $"перерисовать область видео по маске, видео до {options.MaxVideoSeconds} с; тяжёлая", "замеряется"),
+                    $"перерисовать область видео по маске, вне маски остаётся исходник и его звук; видео до "
+                    + $"{options.MaxVideoSeconds} с; тяжёлая",
+                    "864×480, 5 с ≈ 1,5 мин; 1344×768 — не замерено",
+                    new JsonObject { ["half_5s"] = 98, ["full_5s"] = null }),
             },
             ["aspects"] = new JsonArray([.. ComfyWorkflows.ImageSizes.Select(s =>
                 (JsonNode)$"{s.Key} ({s.Value.Width}×{s.Value.Height})")]),
@@ -240,13 +252,18 @@ public sealed class LocalMediaToolset(
             ["upscale_targets"] = new JsonArray { "1440p (2528×1440)", "2k (2688×1536)" },
         };
 
-        static JsonObject Operation(string tool, string model, string what, string eta) => new()
+        static JsonObject Operation(string tool, string model, string what, string eta, JsonObject? etaSeconds = null)
         {
-            ["tool"] = tool,
-            ["model"] = model,
-            ["what"] = what,
-            ["eta"] = eta,
-        };
+            var op = new JsonObject
+            {
+                ["tool"] = tool,
+                ["model"] = model,
+                ["what"] = what,
+                ["eta"] = eta,
+            };
+            if (etaSeconds is not null) op["eta_seconds"] = etaSeconds;
+            return op;
+        }
     }
 
     // --- Маршрут и контекст: /mcp/local-media/{sessionId} ---
@@ -435,7 +452,7 @@ public sealed class LocalMediaToolset(
 
         yield return Tool("local_text_to_video",
             "Сгенерировать видео со звуком по тексту НАШЕЙ моделью MiniMax H3 на своей GPU. prompt описывает сцену, "
-            + "движение, камеру, реплики и звук. Долго (" + VideoEtaText + ") — только по явной просьбе сделать "
+            + "движение, камеру, реплики и звук. Долго (" + T2vEtaText + ") — только по явной просьбе сделать "
             + "локально. Результат можно потом увеличить local_video_upscale. Возвращает job_id; жди через local_jobs_wait.",
             new JsonObject
             {
@@ -455,7 +472,7 @@ public sealed class LocalMediaToolset(
         yield return Tool("local_image_to_video",
             "Оживить картинку в видео со звуком НАШЕЙ моделью MiniMax H3 на своей GPU: первый кадр — картинка, "
             + "необязательный last_frame — последний кадр; prompt описывает движение, камеру, речь и звук. Долго ("
-            + VideoEtaText + ") — только по явной просьбе сделать локально. Результат можно потом увеличить "
+            + I2vEtaText + ") — только по явной просьбе сделать локально. Результат можно потом увеличить "
             + "local_video_upscale. Возвращает job_id; жди через local_jobs_wait.",
             new JsonObject
             {
@@ -536,7 +553,7 @@ public sealed class LocalMediaToolset(
 
         yield return Tool("local_video_inpaint",
             "Перерисовать область видео по маске НАШЕЙ моделью MiniMax H3 (Fun ControlNet) на своей GPU: белое на маске "
-            + "перегенерируется по prompt, остальное остаётся как в исходнике. Видео — mp4 1344×768 или 864×480 "
+            + "перегенерируется по prompt, вне маски кадры и звук берутся из исходника. Видео — mp4 1344×768 или 864×480 "
             + "(или портретное), до 10 с; маска — PNG того же размера. Тяжёлая задача: одна за раз. Возвращает job_id.",
             new JsonObject
             {
@@ -591,7 +608,15 @@ public sealed class LocalMediaToolset(
             new JsonObject { ["type"] = "object", ["properties"] = new JsonObject() });
     }
 
-    private const string VideoEtaText = "1344×768: 5 с ≈ 5,5 мин (fast ≈ 4 мин), 10 с ≈ 15,5 мин";
+    // Замер d653be60, зачётные прогоны на одной RTX 3090
+    private const string I2vEtaText =
+        "1344×768: 5 с ≈ 5,5 мин (fast ≈ 4 мин), 10 с ≈ 15,5 мин (fast ≈ 10 мин); 864×480, 5 с ≈ 1,5 мин";
+
+    private const string T2vEtaText = "1344×768, 5 с ≈ 5 мин; другие длины и размеры не замерены";
+
+    private const string EtaNote = "Время — зачётный прогон на одной RTX 3090 с уже загруженными моделями; первый "
+        + "прогон после простоя (загрузка моделей) идёт примерно столько же. Плюс ожидание очереди. "
+        + "null — не замерено, время не обещаем.";
 
     private static JsonObject VideoDuration() => new()
     {

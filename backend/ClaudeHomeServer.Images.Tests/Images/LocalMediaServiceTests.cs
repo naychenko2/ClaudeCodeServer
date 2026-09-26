@@ -415,7 +415,7 @@ public class LocalMediaServiceTests : IDisposable
         Graph(_comfy)["lat_save_v"]!["inputs"]!["filename_prefix"]!.GetValue<string>()
             .Should().Be($"ccs-local-media/latents/{job.Id}_video");
         Graph(_comfy).AsObject().ContainsKey("sparse").Should().BeFalse("fast по умолчанию выключен");
-        result.View.EtaSeconds.Should().Be(333, "замер стенда: 5 с 1344×768 в режиме A");
+        result.View.EtaSeconds.Should().Be(310, "замер d653be60: T2V 5 с 1344×768");
         store.Get(job.Id, Owner)!.Prompt.Should().Be("гавань на закате");
         store.Get(job.Id, Owner)!.Frames.Should().Be(124);
     }
@@ -425,12 +425,43 @@ public class LocalMediaServiceTests : IDisposable
     {
         var (service, _) = Build(fastDefault: true);
 
-        (await service.SubmitAsync(TextVideo(), default)).View!.EtaSeconds.Should().Be(234);
+        (await service.SubmitAsync(TextVideo(), default)).View!.EtaSeconds.Should().Be(310, "fast у T2V не мерен — время обычного");
         Graph(_comfy)["ms"]!["inputs"]!["sparse_attention"]!.GetValue<bool>().Should().BeTrue();
         Graph(_comfy)["sparse"]!["class_type"]!.GetValue<string>().Should().Be("BlockSparseAttention");
 
         await service.SubmitAsync(TextVideo(fast: false), default);
         Graph(_comfy).AsObject().ContainsKey("sparse").Should().BeFalse();
+    }
+
+    [Fact]
+    public void Время_ТолькоИзмеренное()
+    {
+        (int, int) full = (1344, 768), half = (864, 480);
+
+        LocalMediaService.ImageToVideoEta(full, 5, false).Should().Be(333);
+        LocalMediaService.ImageToVideoEta(full, 5, true).Should().Be(234);
+        LocalMediaService.ImageToVideoEta((768, 1344), 10, false).Should().Be(943);
+        LocalMediaService.ImageToVideoEta(full, 10, true).Should().Be(585);
+        LocalMediaService.ImageToVideoEta(full, 3, false).Should().Be(333, "короче 5 с — не дольше 5-секундного");
+        LocalMediaService.ImageToVideoEta(half, 5, false).Should().Be(94);
+        LocalMediaService.ImageToVideoEta(half, 10, false).Should().BeNull("10 с на half не мерены");
+        LocalMediaService.TextToVideoEta(full, 5).Should().Be(310);
+        LocalMediaService.TextToVideoEta(full, 10).Should().BeNull();
+        LocalMediaService.TextToVideoEta(half, 5).Should().BeNull();
+        LocalMediaService.InpaintEta(half, 5).Should().Be(98);
+        LocalMediaService.InpaintEta(full, 5).Should().BeNull();
+        LocalMediaService.Upscale1440Eta(124, tiled: true).Should().Be(915);
+        LocalMediaService.Upscale1440Eta(124, tiled: false).Should().Be(1065);
+        LocalMediaService.Upscale1440Eta(243, tiled: true).Should().BeNull();
+    }
+
+    [Fact]
+    public void Настройки_УмолчанияПоЗамерам()
+    {
+        var options = LocalMediaOptions.Read(new ConfigurationBuilder().Build());
+
+        options.VideoFastDefault.Should().BeTrue("sparse — та же картинка в 1,4–1,6 раза быстрее");
+        options.Upscale1440Tiled.Should().BeTrue("tiled быстрее single и не впритык по видеопамяти");
     }
 
     [Fact]
@@ -496,9 +527,9 @@ public class LocalMediaServiceTests : IDisposable
     }
 
     [Theory]
-    [InlineData("single", "SamplerCustomAdvanced")]
-    [InlineData("tiled", "MMH3SplitUpscale")]
-    public async Task Апскейл1440_РежимИзНастроек(string mode, string refineClass)
+    [InlineData("single", "SamplerCustomAdvanced", 1065)]
+    [InlineData("tiled", "MMH3SplitUpscale", 915)]
+    public async Task Апскейл1440_РежимИзНастроек(string mode, string refineClass, int eta)
     {
         var (service, _) = Build(upscale1440: mode);
         var source = await CompletedVideoAsync(service, TextVideo());
@@ -508,6 +539,7 @@ public class LocalMediaServiceTests : IDisposable
 
         result.Error.Should().BeNull();
         Graph(_comfy)["refine"]!["class_type"]!.GetValue<string>().Should().Be(refineClass);
+        result.View!.EtaSeconds.Should().Be(eta);
         Graph(_comfy)["i2v_hi"]!["inputs"]!["width"]!.GetValue<int>().Should().Be(2528);
         Graph(_comfy).AsObject().ContainsKey("img").Should().BeFalse("у видео по тексту первого кадра нет");
     }

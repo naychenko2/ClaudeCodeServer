@@ -24,12 +24,14 @@ public sealed class LocalMediaOptions
     public int MaxVideoSeconds { get; set; } = 10;
 
     // Ускоренный режим видео (sol-attn, режим AS бенча), когда агент не передал fast явно.
-    // Временно false: значение фиксируется по замерам качества (задача d653be60)
-    public bool VideoFastDefault { get; set; }
+    // По замеру d653be60: картинка та же на глаз, в 1,4–1,6 раза быстрее; меняет тайминг
+    // движения, поэтому для точного повтора ролика по seed нужен fast=false
+    public bool VideoFastDefault { get; set; } = true;
 
     // Донастройка апскейла до 1440p: single — одним проходом, tiled — тайлами (MMH3SplitUpscale).
-    // 2K идёт только тайлами. Временно single — до итогов тех же замеров
-    public string Upscale1440Mode { get; set; } = "single";
+    // 2K идёт только тайлами. По замеру d653be60 tiled быстрее (915 с против 1065) при той же
+    // картинке, а single влезает в видеопамять впритык
+    public string Upscale1440Mode { get; set; } = "tiled";
 
     public bool Upscale1440Tiled => string.Equals(Upscale1440Mode?.Trim(), "tiled", StringComparison.OrdinalIgnoreCase);
 

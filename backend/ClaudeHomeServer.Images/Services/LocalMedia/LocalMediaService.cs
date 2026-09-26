@@ -207,7 +207,7 @@ public sealed class LocalMediaService(
                 var frames = ComfyWorkflows.FramesFor(seconds);
                 RememberVideo(job, prompt, size, seconds, frames, fast);
                 return (ComfyWorkflows.TextToVideo(prompt, size.Width, size.Height, frames, seed, fast, prefix,
-                    LatentPrefix(job)), VideoEta(size, seconds, fast));
+                    LatentPrefix(job)), TextToVideoEta(size, seconds));
             }
             case LocalMediaOps.ImageToVideo:
             {
@@ -229,10 +229,10 @@ public sealed class LocalMediaService(
                 RememberVideo(job, prompt, size, seconds, frames, fast);
                 job.ComfyFirstFrame = firstName;
                 return (ComfyWorkflows.ImageToVideo(firstName, lastName, prompt, size.Width, size.Height, frames, seed,
-                    fast, prefix, LatentPrefix(job)), VideoEta(size, seconds, fast));
+                    fast, prefix, LatentPrefix(job)), ImageToVideoEta(size, seconds, fast));
             }
             case LocalMediaOps.VideoUpscale:
-                return (await BuildUpscaleAsync(request, job, prefix, options, ct), null);
+                return await BuildUpscaleAsync(request, job, prefix, options, ct);
             case LocalMediaOps.VideoInpaint:
             {
                 if (string.IsNullOrWhiteSpace(request.Video) || string.IsNullOrWhiteSpace(request.Mask))
@@ -257,7 +257,7 @@ public sealed class LocalMediaService(
                 job.Height = info.Height;
                 job.DurationSeconds = seconds;
                 return (ComfyWorkflows.InpaintVideo(videoName, maskName, prompt, info.Width, info.Height, frames, seed,
-                    prefix), null);
+                    prefix), InpaintEta((info.Width, info.Height), seconds));
             }
             case LocalMediaOps.ReferenceToVideo:
             {
@@ -303,7 +303,7 @@ public sealed class LocalMediaService(
     // Апскейл по латенту прошлой видеозадачи ЭТОГО владельца и проекта. Произвольный mp4 не
     // принимается: латентный апскейлер работает только со своим же латентом. Латенты едут из
     // output ComfyUI в корень input под именем с jobId (LoadLatent видит только корень)
-    private async Task<JsonObject> BuildUpscaleAsync(LocalMediaRequest request, LocalMediaJob job, string prefix,
+    private async Task<(JsonObject Graph, int? EtaSeconds)> BuildUpscaleAsync(LocalMediaRequest request, LocalMediaJob job, string prefix,
         LocalMediaOptions options, CancellationToken ct)
     {
         var sourceId = (request.SourceJobId ?? "").Trim();
@@ -343,8 +343,9 @@ public sealed class LocalMediaService(
         job.Height = size.Height;
         job.DurationSeconds = source.DurationSeconds;
         job.Frames = source.Frames;
-        return ComfyWorkflows.UpscaleVideo(latentVideo, latentAudio, source.ComfyFirstFrame, source.Prompt,
-            size.Width, size.Height, source.Frames.Value, job.Seed, tiled, prefix);
+        return (ComfyWorkflows.UpscaleVideo(latentVideo, latentAudio, source.ComfyFirstFrame, source.Prompt,
+            size.Width, size.Height, source.Frames.Value, job.Seed, tiled, prefix),
+            target == "2k" ? null : Upscale1440Eta(source.Frames.Value, tiled));
     }
 
     private async Task<string> CopyLatentAsync(string outputPath, string inputName, CancellationToken ct)
@@ -404,15 +405,32 @@ public sealed class LocalMediaService(
 
     private static string LatentPrefix(LocalMediaJob job) => $"{ComfyWorkflows.OutputFolder}/latents/{job.Id}";
 
-    // Время по замерам стенда (одна RTX 3090, 1344×768): 5 с — 333 с в режиме A и 234 с в
-    // ускоренном AS, 10 с в режиме A — ≈930 с. Промежуточные длины — по прямой, AS для 10 с —
-    // тем же отношением. half и остальные операции ещё не замерены: время не обещаем
-    public static int? VideoEta((int Width, int Height) size, int seconds, bool fast)
+    // Время — зачётные прогоны замера d653be60 (одна RTX 3090, модели уже загружены); первый
+    // прогон после простоя идёт примерно столько же. Где замера нет — null: время не обещаем.
+    // Короче 5 с — по 5-секундному замеру (потолок), между 5 и 10 с — по прямой
+    public static int? ImageToVideoEta((int Width, int Height) size, int seconds, bool fast)
     {
-        var full = ComfyWorkflows.VideoSizes["full"];
-        if (size != full && size != (full.Height, full.Width)) return null;
-        var normal = seconds <= 5 ? 333.0 : 333 + (seconds - 5) * (930 - 333) / 5.0;
-        return (int)Math.Round(fast ? normal * 234 / 333 : normal);
+        if (IsVideoSize(size, "half")) return seconds <= 5 ? 94 : null; // fast на half не мерен — время обычного
+        if (!IsVideoSize(size, "full")) return null;
+        var (at5, at10) = fast ? (234, 585) : (333, 943);
+        return seconds <= 5 ? at5 : (int)Math.Round(at5 + (seconds - 5) * (at10 - at5) / 5.0);
+    }
+
+    // T2V замерен только на 5 с full и только в обычном режиме: fast не медленнее, берём его же
+    public static int? TextToVideoEta((int Width, int Height) size, int seconds) =>
+        IsVideoSize(size, "full") && seconds <= 5 ? 310 : null;
+
+    public static int? InpaintEta((int Width, int Height) size, int seconds) =>
+        IsVideoSize(size, "half") && seconds <= 5 ? 98 : null;
+
+    // Апскейл 1440p по латенту 5-секундного full; 2K по тайлам не замерен
+    public static int? Upscale1440Eta(int frames, bool tiled) =>
+        frames <= ComfyWorkflows.FramesFor(5) ? (tiled ? 915 : 1065) : null;
+
+    private static bool IsVideoSize((int Width, int Height) size, string key)
+    {
+        var known = ComfyWorkflows.VideoSizes[key];
+        return size == known || size == (known.Height, known.Width);
     }
 
     private static (int Width, int Height) AspectSize(string aspect) =>

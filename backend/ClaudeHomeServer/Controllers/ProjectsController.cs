@@ -22,7 +22,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects")]
-public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, UserStore users, UserHomeResolver homes, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory, ClaudeHomeServer.Services.Dossiers.DossierStore dossiers, KnowledgeService knowledge, PersonaManager personas, PersonaMemoryService personaMemory, ClaudeHomeServer.Services.Git.GitService git, ClaudeHomeServer.Services.Git.GitServerService gitServer, ClaudeHomeServer.Services.ProjectIcons.ProjectIconGlyphService iconGlyphs, FeatureFlagService flags, ClaudeHomeServer.Services.Desktop.DesktopHandsSessionService desktopHands, Services.Mcp.McpRegistry mcpRegistry, ChatArchiveService autoArchive, ILogger<ProjectsController> logger, IHubContext<SessionHub> hub, INoteSemanticIndex? notesKb = null, ClaudeHomeServer.Services.Execution.IDeviceExecChannel? deviceExec = null) : ControllerBase
+public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, UserStore users, UserHomeResolver homes, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory, ClaudeHomeServer.Services.Dossiers.DossierStore dossiers, KnowledgeService knowledge, PersonaManager personas, PersonaMemoryService personaMemory, ClaudeHomeServer.Services.Git.GitService git, ClaudeHomeServer.Services.Git.GitServerService gitServer, ClaudeHomeServer.Services.ProjectIcons.ProjectIconGlyphService iconGlyphs, FeatureFlagService flags, ClaudeHomeServer.Services.Desktop.DesktopHandsSessionService desktopHands, Services.Mcp.McpRegistry mcpRegistry, ChatArchiveService autoArchive, ILogger<ProjectsController> logger, IHubContext<SessionHub> hub, INoteSemanticIndex? notesKb = null, ClaudeHomeServer.Services.Execution.IDeviceExecChannel? deviceExec = null, ClaudeHomeServer.Services.Execution.IDeviceRelayChannel? deviceRelay = null) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -67,6 +67,17 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     // Отказ привязать проект к устройству: флаг local-projects + возможность exec (ADR-016 §1)
     private string? BindRefusal(string deviceId) => ProjectCapabilities.BindRefusal(
         flags.IsEnabled(UserId, FeatureFlagKeys.LocalProjects), deviceExec?.GetStatus(UserId, deviceId));
+
+    // Годится ли папка на устройстве под проект — спрашивает агента (DeviceFolderCheck).
+    // null — годится или агент старый и проверку пропустили (с предупреждением в лог)
+    private async Task<string?> DeviceFolderRefusalAsync(string deviceId, string devicePath)
+    {
+        if (deviceExec?.GetStatus(UserId, deviceId) is not { } device) return null; // отказал бы BindRefusal
+        var verdict = await DeviceFolderCheck.CheckAsync(deviceRelay, UserId, device, devicePath, HttpContext.RequestAborted);
+        if (verdict.Warning is { } warning)
+            logger.LogWarning("Папка {Path} на устройстве {DeviceId} не проверена: {Warning}", devicePath, deviceId, warning);
+        return verdict.Refusal;
+    }
 
     // DTO иконки (ADR-009 §4): значок едет ДАННЫМИ — имя рисует компонент lucide фронта,
     // разметки фронт не получает. Поле v — версия содержимого значка (ADR-009 §8).
@@ -219,6 +230,11 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
             {
                 // Локальный проект (ADR-016): только за флагом и только на устройстве с exec
                 if (BindRefusal(req.DeviceId) is { } refusal) return BadRequest(new { error = refusal });
+                // Папку проверяет агент до сохранения: иначе ошибка всплывает первым ходом.
+                // Пустой путь отвергнет CreateLocal своим текстом
+                if (!string.IsNullOrWhiteSpace(req.RootPath)
+                    && await DeviceFolderRefusalAsync(req.DeviceId, ProjectCapabilities.NormalizeDevicePath(req.RootPath)) is { } folderRefusal)
+                    return BadRequest(new { error = folderRefusal });
                 p = projects.CreateLocal(req.Name, req.RootPath ?? "", UserId, req.DeviceId, req.GroupId, req.Color);
             }
             else
@@ -336,6 +352,17 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
             return BadRequest(new { error = refusal });
         if (!string.Equals(p.DeviceId, deviceId, StringComparison.Ordinal) && sessions.CountByProject(id) > 0)
             return Conflict(new { error = "Нельзя сменить устройство проекта: у проекта уже есть чаты. Удалите их и повторите." });
+        if (deviceId is not null)
+        {
+            string devicePath;
+            try { devicePath = ProjectCapabilities.NormalizeDevicePath(string.IsNullOrWhiteSpace(req.RootPath) ? p.RootPath : req.RootPath); }
+            catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
+            // Привязка не меняется — спрашивать устройство незачем (и офлайн не мешает)
+            var unchanged = string.Equals(p.DeviceId, deviceId, StringComparison.Ordinal)
+                && string.Equals(p.RootPath, devicePath, StringComparison.Ordinal);
+            if (!unchanged && await DeviceFolderRefusalAsync(deviceId, devicePath) is { } folderRefusal)
+                return BadRequest(new { error = folderRefusal });
+        }
         var oldKnowledgeRoot = ProjectCapabilities.KnowledgeRoot(p);
         Project moved;
         try { moved = projects.SetDevice(id, deviceId, req.RootPath); }

@@ -18,8 +18,10 @@ namespace ClaudeHomeServer.Tests.Contract;
 /// </summary>
 public sealed class RelayProtocolGuardTests
 {
+    // check-path — вердикт политики корней по папке проекта (exists/isDirectory/insideRoots),
+    // только чтение: создание и перепривязка локального проекта спрашивают агента до сохранения
     private static readonly string[] AllowedOperations =
-        ["list", "read", "stat", "search", "git-status", "git-diff", "git-log", "git-show"];
+        ["list", "read", "stat", "search", "git-status", "git-diff", "git-log", "git-show", "check-path"];
 
     // Поля запроса: ни одно не несёт данных для записи (содержимого, нового имени, сообщения коммита)
     private static readonly string[] AllowedRequestFields =

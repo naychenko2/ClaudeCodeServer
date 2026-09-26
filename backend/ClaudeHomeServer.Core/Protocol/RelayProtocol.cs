@@ -23,7 +23,14 @@ public static class RelayOperations
     public const string GitLog = "git-log";
     public const string GitShow = "git-show";
 
-    public static readonly IReadOnlyList<string> All = [List, Read, Stat, Search, GitStatus, GitDiff, GitLog, GitShow];
+    /// <summary>
+    /// Годится ли папка под локальный проект (создание и перепривязка): есть ли она, каталог ли
+    /// и под разрешёнными корнями ли машины. Путь — в <see cref="RelayRequest.RootPath"/>, ответ —
+    /// <see cref="RelayPathCheck"/>. Маршрута у операции нет: её зовёт только сервер.
+    /// </summary>
+    public const string CheckPath = "check-path";
+
+    public static readonly IReadOnlyList<string> All = [List, Read, Stat, Search, GitStatus, GitDiff, GitLog, GitShow, CheckPath];
 
     public static bool IsKnown(string? operation) => operation is not null && All.Contains(operation);
 }
@@ -75,6 +82,12 @@ public sealed record RelayRequest(
 /// Отказ — код не 2xx и тело <c>{ "error": "…" }</c>.
 /// </summary>
 public sealed record RelayResponseHead(int Status, string? ContentType = null, long? Length = null);
+
+/// <summary>
+/// Ответ <see cref="RelayOperations.CheckPath"/>: вердикт политики корней агента по реальному
+/// пути. Отказ агент не шлёт — сервер сам выбирает текст по полям.
+/// </summary>
+public sealed record RelayPathCheck(bool Exists, bool IsDirectory, bool InsideRoots);
 
 /// <summary>Маршрут ретранслятора относительно <c>api/projects/{projectId}/relay/</c>: всегда GET.</summary>
 public sealed record RelayRoute(string Template, string Operation, string? Variant = null)

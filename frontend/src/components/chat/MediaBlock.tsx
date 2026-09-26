@@ -194,6 +194,11 @@ export function extractMediaFromResult(result: string): MediaItem[] {
     for (const arr of [value.images, value.videos, value.audio_files, value.audios, value.assets, value.media, value.jobs, value.results]) {
       if (Array.isArray(arr)) for (const item of arr) push(item);
     }
+    // Задания со вложенными медиа: local_jobs_wait кладёт images/videos внутрь jobs[i],
+    // у самого задания url нет (у Higgsfield он прямо в элементе — его взял push выше)
+    for (const arr of [value.jobs, value.results]) {
+      if (Array.isArray(arr)) for (const item of arr) scan(item, depth + 1);
+    }
     // Одиночные объекты
     for (const key of ['video', 'audio', 'audio_file', 'image'] as const) push(value[key]);
     // MCP CallToolResult: content-блоки; text-блоки могут нести JSON (glif-хвосты)

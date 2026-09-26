@@ -26,8 +26,9 @@ internal sealed record InstallRequest(Uri Server, string Code, string DeviceName
 /// <summary>
 /// <c>install --server --code [--name] [--always-on]</c>: вся логика установки, скрипт лишь
 /// распаковал версию в <c>versions/{v}</c> и вызвал её (Р10). Шаги:
-/// сопряжение → выбор хранилища токена → указатель <c>active</c> → автозапуск →
-/// отсоединённый запуск супервизора → ожидание первого успешного hello, не дольше 30 с.
+/// сопряжение → выбор хранилища токена → указатель <c>active</c> → команда <c>ai-home-agent</c>
+/// по имени → автозапуск → отсоединённый запуск супервизора → ожидание первого успешного
+/// hello, не дольше 30 с.
 /// Переустановка поверх работающего агента — новое сопряжение, старый супервизор гасится.
 /// </summary>
 internal sealed class AgentInstaller(
@@ -35,6 +36,7 @@ internal sealed class AgentInstaller(
     AgentLayout layout,
     string ownVersion,
     IAutostart autostart,
+    ICommandShim shim,
     ISupervisorControl supervisors,
     Func<InstallRequest, IDeviceTokenStore, Task<DeviceRegistration>> pair,
     TextWriter output,
@@ -66,12 +68,15 @@ internal sealed class AgentInstaller(
         layout.SetActive(ownVersion);
         output.WriteLine($"Активная версия — {ownVersion}");
 
-        // 4. Автозапуск
+        // 4. Шим после active: на Linux он смотрит в симлинк current, который SetActive и ставит
+        foreach (var note in CommandShimNotes.Install(shim)) output.WriteLine(note);
+
+        // 5. Автозапуск
         var registered = autostart.Register(ownVersion, request.AlwaysOn);
         if (registered.Registered) output.WriteLine($"Автозапуск: {autostart.Describe}");
         foreach (var note in registered.Notes) output.WriteLine(note);
 
-        // 5. Супервизор — отсоединённо от окна и сессии установки
+        // 6. Супервизор — отсоединённо от окна и сессии установки
         var start = autostart.StartNow(ownVersion);
         output.WriteLine(start.Message);
         switch (start.Status)
@@ -80,7 +85,7 @@ internal sealed class AgentInstaller(
             case SupervisorStartStatus.Manual: return InstallExitCodes.Ok;
         }
 
-        // 6. Первый успешный hello — дочерний пишет маркер healthy после ack сервера
+        // 7. Первый успешный hello — дочерний пишет маркер healthy после ack сервера
         if (await WaitHealthyAsync(ct))
         {
             output.WriteLine("Агент на связи с сервером");
@@ -105,13 +110,14 @@ internal sealed class AgentInstaller(
 
 /// <summary>
 /// <c>uninstall [--purge]</c> (Р12): снять автозапуск, погасить супервизор, отозвать своё
-/// устройство на сервере, стереть токен. <c>--purge</c> — ещё и данные: копии CLI, журнал,
+/// устройство на сервере, стереть токен, снять команду <c>ai-home-agent</c>. <c>--purge</c> — ещё и данные: копии CLI, журнал,
 /// профиль CLI с транскриптами, версии агента.
 /// </summary>
 internal sealed class AgentUninstaller(
     AgentPaths paths,
     AgentLayout layout,
     IAutostart autostart,
+    ICommandShim shim,
     ISupervisorControl supervisors,
     ISelfRevoke revoke,
     Func<string?, IDeviceTokenStore> openStore,
@@ -152,6 +158,16 @@ internal sealed class AgentUninstaller(
             output.WriteLine("Агент не был сопряжён — отзывать на сервере нечего");
         }
 
+        try
+        {
+            shim.Remove();
+            output.WriteLine($"Команда ai-home-agent снята: {shim.Location}");
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            output.WriteLine($"Команда ai-home-agent не снята ({e.Message}) — удали {shim.Location} руками");
+        }
+
         if (purge) Purge();
         output.WriteLine("Агент удалён");
         return 0;
@@ -172,6 +188,25 @@ internal sealed class AgentUninstaller(
             {
                 output.WriteLine($"Удалено не всё в {dir} ({e.Message}) — удали остаток руками после выхода");
             }
+        }
+    }
+}
+
+internal static class CommandShimNotes
+{
+    /// <summary>
+    /// Поставить шим, не роняя вызывающего: без команды по имени агент работает, просто
+    /// подсказки UI придётся выполнять по полному пути.
+    /// </summary>
+    public static IReadOnlyList<string> Install(ICommandShim shim)
+    {
+        try
+        {
+            return shim.Install();
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return [$"Команда ai-home-agent по имени не поставлена ({e.Message}); агент работает, запускай его по полному пути"];
         }
     }
 }

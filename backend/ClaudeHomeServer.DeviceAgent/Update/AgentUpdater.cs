@@ -187,8 +187,9 @@ internal sealed class AgentUpdater : Hosting.IAgentUpdates
         var holding = _activity.Describe();
         if (holding is not null || !_activity.TrySeal())
         {
+            // В reason — только причина: префикс «Обновление ждёт» приклеивает интерфейс.
             SetStatus(new DeviceAgentUpdate(DeviceAgentUpdateStates.WaitingIdle, target,
-                $"обновление ждёт: {holding ?? "идёт работа"}"));
+                holding ?? "идёт работа"));
             return false;
         }
 

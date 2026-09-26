@@ -73,7 +73,7 @@ public sealed class AgentUpdaterTests : IDisposable
 
         updater.Status.State.Should().Be(DeviceAgentUpdateStates.WaitingIdle);
         updater.Status.TargetVersion.Should().Be("2.0.0");
-        updater.Status.Reason.Should().Contain("идёт ход");
+        updater.Status.Reason.Should().Be("идёт ход", "префикс «Обновление ждёт» добавляет интерфейс");
         Layout.ReadActive().Should().Be(Own, "пока идёт ход, active не трогаем");
         _repointed.Should().BeEmpty();
         Layout.IsInstalled("2.0.0").Should().BeTrue("скачать можно и под ходом");

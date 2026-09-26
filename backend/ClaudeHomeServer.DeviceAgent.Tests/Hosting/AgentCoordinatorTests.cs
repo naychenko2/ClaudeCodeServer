@@ -186,7 +186,7 @@ public class AgentCoordinatorTests
         control.Hellos.Single().AgentUpdate.Should().Be(new DeviceAgentUpdate(DeviceAgentUpdateStates.Idle));
         updates.Acks.Should().ContainSingle();
 
-        updates.Status = new DeviceAgentUpdate(DeviceAgentUpdateStates.WaitingIdle, "2.0.0", "обновление ждёт: идёт ход");
+        updates.Status = new DeviceAgentUpdate(DeviceAgentUpdateStates.WaitingIdle, "2.0.0", "идёт ход");
         updates.Raise();
 
         (await control.SecondHello.Task.WaitAsync(TimeSpan.FromSeconds(10))).Should().BeTrue();

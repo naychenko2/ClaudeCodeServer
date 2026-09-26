@@ -356,7 +356,11 @@ Bearer-токеном инстанса (`HiggsfieldOAuthService`). Состав 
 | `local_generate_image` | Картинка по тексту (Qwen-Image 2.1): prompt, negative_prompt, aspect из белого списка, steps 4–40, count 1–4, seed |
 | `local_edit_image` | Правка по 1–16 референсам (пути файлов проекта или `job_id`), первая — холст |
 | `local_face_detail` | Доводка лиц на готовой картинке (FaceDetailer) |
-| `local_image_to_video` | Видео со звуком от первого кадра (MiniMax H3), 1–`MaxVideoSeconds` с, `full`/`half` |
+| `local_text_to_video` | Видео со звуком по тексту (MiniMax H3), 1–`MaxVideoSeconds` с, `full`/`half`, `orientation`, `fast` |
+| `local_image_to_video` | Видео со звуком от первого кадра (плюс необязательный `last_frame`), `full`/`half`, `fast` |
+| `local_reference_to_video` | Видео по референсам: 1–9 картинок, до 3 видео (2–15 с) и 3 звуков, `identity` match/max |
+| `local_video_upscale` | Апскейл видео прошлой t2v/i2v-задачи по её латенту до 1440p или 2K; тяжёлая |
+| `local_video_inpaint` | Перерисовка видео по маске (Fun ControlNet), видео из белого списка размеров; тяжёлая |
 | `local_job_status` | Статус задачи; готовая несёт `images`/`videos` с `url` и `path` |
 | `local_jobs_wait` | Ожидание до 15 с за вызов, до 12 задач; `all_done`, `not_found` |
 | `local_models` | Операции, размеры, ориентировочное время, длина очереди ComfyUI |
@@ -365,8 +369,9 @@ Bearer-токеном инстанса (`HiggsfieldOAuthService`). Состав 
 `LocalMedia:Enabled` и включённой подсистеме `images`, в чате проекта с файлами на сервере
 (`ProjectCapabilities.FilesOnServer`) и у персоны не ReadOnly. На КАЖДЫЙ вызов тулсет
 повторяет проверки: хвост + `GetOwned` (fail-closed), тумблер, проект сессии владельца на
-сервере. Задачи ключуются владельцем из `sub`: чужой `job_id` — «не найдена». Лимиты
-`MaxQueuedPerOwner` и `MaxComfyQueue` отказывают текстом до постановки. `DelegatedTurnGate`
+сервере. Задачи ключуются владельцем из `sub`: чужой `job_id` — «не найдена», в том числе
+как источник апскейла. Лимиты `MaxQueuedPerOwner`, `MaxComfyQueue` и «одна тяжёлая задача на
+владельца» отказывают текстом до постановки. `DelegatedTurnGate`
 не ставится: инструменты ход не запускают.
 
 **Контекст вызова:** `POST /mcp/local-media/{sessionId}`; адрес ComfyUI в конфиг хода не

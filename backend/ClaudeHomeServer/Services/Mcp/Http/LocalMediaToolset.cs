@@ -29,7 +29,7 @@ public sealed class LocalMediaToolset(
     public const string ServerName = McpEndpoints.LocalMediaName;
 
     public string Name => ServerName;
-    public string Version => "1.0.0";
+    public string Version => "2.0.0";
 
     public IReadOnlyList<McpToolSchema> ToolsFor(McpToolCallContext context) =>
         TryResolveSession(context, out _, out _) ? Tools : [];
@@ -68,14 +68,54 @@ public sealed class LocalMediaToolset(
                     Seed: LongArg(arguments, "seed"),
                     Images: [StringArg(arguments, "image") ?? ""]), ct);
 
+            case "local_text_to_video":
+                return await SubmitAsync(new LocalMediaRequest(context.OwnerId, project.Id, session.Id,
+                    LocalMediaOps.TextToVideo,
+                    Prompt: StringArg(arguments, "prompt"),
+                    Seed: LongArg(arguments, "seed"),
+                    VideoSize: StringArg(arguments, "size"),
+                    Orientation: StringArg(arguments, "orientation"),
+                    DurationSeconds: IntArg(arguments, "duration_seconds"),
+                    Fast: BoolArg(arguments, "fast")), ct);
+
             case "local_image_to_video":
                 return await SubmitAsync(new LocalMediaRequest(context.OwnerId, project.Id, session.Id,
                     LocalMediaOps.ImageToVideo,
                     Prompt: StringArg(arguments, "prompt"),
                     Seed: LongArg(arguments, "seed"),
                     Images: [StringArg(arguments, "image") ?? ""],
+                    LastFrame: StringArg(arguments, "last_frame"),
                     VideoSize: StringArg(arguments, "size"),
-                    DurationSeconds: IntArg(arguments, "duration_seconds")), ct);
+                    DurationSeconds: IntArg(arguments, "duration_seconds"),
+                    Fast: BoolArg(arguments, "fast")), ct);
+
+            case "local_reference_to_video":
+                return await SubmitAsync(new LocalMediaRequest(context.OwnerId, project.Id, session.Id,
+                    LocalMediaOps.ReferenceToVideo,
+                    Prompt: StringArg(arguments, "prompt"),
+                    Seed: LongArg(arguments, "seed"),
+                    Images: StringListArg(arguments, "ref_images"),
+                    RefVideos: StringListArg(arguments, "ref_videos"),
+                    RefAudios: StringListArg(arguments, "ref_audios"),
+                    VideoSize: StringArg(arguments, "size"),
+                    Orientation: StringArg(arguments, "orientation"),
+                    DurationSeconds: IntArg(arguments, "duration_seconds"),
+                    Identity: StringArg(arguments, "identity")), ct);
+
+            case "local_video_upscale":
+                return await SubmitAsync(new LocalMediaRequest(context.OwnerId, project.Id, session.Id,
+                    LocalMediaOps.VideoUpscale,
+                    Seed: LongArg(arguments, "seed"),
+                    SourceJobId: StringArg(arguments, "job_id"),
+                    UpscaleTarget: StringArg(arguments, "target")), ct);
+
+            case "local_video_inpaint":
+                return await SubmitAsync(new LocalMediaRequest(context.OwnerId, project.Id, session.Id,
+                    LocalMediaOps.VideoInpaint,
+                    Prompt: StringArg(arguments, "prompt"),
+                    Seed: LongArg(arguments, "seed"),
+                    Video: StringArg(arguments, "video"),
+                    Mask: StringArg(arguments, "mask")), ct);
 
             case "local_job_status":
             {
@@ -131,6 +171,7 @@ public sealed class LocalMediaToolset(
             ["status"] = job.Status,
             ["seed"] = job.Seed,
         };
+        if (job.Heavy) json["heavy"] = true;
         if (view.Position is { } position && !LocalMediaStatuses.IsTerminal(job.Status)) json["position"] = position;
         if (view.EtaSeconds is { } eta) json["eta_seconds"] = eta;
         if (job.Error is { } error) json["error"] = error;
@@ -171,19 +212,32 @@ public sealed class LocalMediaToolset(
             ["queue_length"] = queue,
             ["queue_limit"] = options.MaxComfyQueue,
             ["max_active_jobs_per_user"] = options.MaxQueuedPerOwner,
+            ["max_heavy_jobs_per_user"] = 1,
+            ["video_fast_default"] = options.VideoFastDefault,
             ["operations"] = new JsonArray
             {
                 Operation("local_generate_image", "Qwen-Image 2.1", "картинка по тексту, 1–4 варианта", "≈45 с на картинку при 25 шагах"),
                 Operation("local_edit_image", "Qwen-Image 2.1 (правка)", "правка по 1–16 референсам", "≈60 с"),
                 Operation("local_face_detail", "FaceDetailer (YOLOv8 + Qwen-Image)", "доводка лиц на готовой картинке", "≈25 с"),
-                Operation("local_image_to_video", "MiniMax H3 + turbo-LoRA 8 шагов",
-                    $"видео со звуком от первого кадра, до {options.MaxVideoSeconds} с, 24 fps", "5 с ≈ 2 мин, 10 с ≈ 7 мин"),
+                Operation("local_text_to_video", "MiniMax H3 fl2va + turbo-LoRA 8 шагов",
+                    $"видео со звуком по тексту, до {options.MaxVideoSeconds} с, 24 fps", VideoEtaText),
+                Operation("local_image_to_video", "MiniMax H3 fl2va + turbo-LoRA 8 шагов",
+                    $"видео со звуком от первого кадра (и необязательно последнего), до {options.MaxVideoSeconds} с, 24 fps",
+                    VideoEtaText),
+                Operation("local_reference_to_video", "MiniMax H3 ref2va + turbo-LoRA 4 шага",
+                    "видео по референсам: 1–9 картинок, до 3 видео (2–15 с) и до 3 звуков; identity=max — тяжёлая",
+                    "замеряется"),
+                Operation("local_video_upscale", "MiniMax H3 Latent Upscaler 3D + донастройка 3 шага",
+                    "апскейл видео прошлой задачи до 1440p (2528×1440) или 2K (2688×1536) по её латенту; тяжёлая",
+                    "замеряется"),
+                Operation("local_video_inpaint", "MiniMax H3 ref2va + Fun ControlNet Union, 4 шага",
+                    $"перерисовать область видео по маске, видео до {options.MaxVideoSeconds} с; тяжёлая", "замеряется"),
             },
             ["aspects"] = new JsonArray([.. ComfyWorkflows.ImageSizes.Select(s =>
                 (JsonNode)$"{s.Key} ({s.Value.Width}×{s.Value.Height})")]),
             ["video_sizes"] = new JsonArray([.. ComfyWorkflows.VideoSizes.Select(s =>
                 (JsonNode)$"{s.Key} ({s.Value.Width}×{s.Value.Height}, портретный кадр — стороны меняются местами)")]),
-            ["not_available"] = "видео по тексту без картинки, апскейл, инпейнт по маске",
+            ["upscale_targets"] = new JsonArray { "1440p (2528×1440)", "2k (2688×1536)" },
         };
 
         static JsonObject Operation(string tool, string model, string what, string eta) => new()
@@ -265,6 +319,9 @@ public sealed class LocalMediaToolset(
 
     private static string? StringArg(JsonObject arguments, string name) =>
         arguments[name] is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
+
+    private static bool? BoolArg(JsonObject arguments, string name) =>
+        arguments[name] is JsonValue v && v.TryGetValue<bool>(out var b) ? b : null;
 
     private static int? IntArg(JsonObject arguments, string name) =>
         arguments[name] is JsonValue v && v.TryGetValue<int>(out var i) ? i : null;
@@ -376,10 +433,30 @@ public sealed class LocalMediaToolset(
                 },
             });
 
+        yield return Tool("local_text_to_video",
+            "Сгенерировать видео со звуком по тексту НАШЕЙ моделью MiniMax H3 на своей GPU. prompt описывает сцену, "
+            + "движение, камеру, реплики и звук. Долго (" + VideoEtaText + ") — только по явной просьбе сделать "
+            + "локально. Результат можно потом увеличить local_video_upscale. Возвращает job_id; жди через local_jobs_wait.",
+            new JsonObject
+            {
+                ["type"] = "object",
+                ["required"] = new JsonArray { "prompt" },
+                ["properties"] = new JsonObject
+                {
+                    ["prompt"] = Str("Сцена, движение, камера, реплики (в кавычках), звук"),
+                    ["duration_seconds"] = VideoDuration(),
+                    ["size"] = VideoSizeSchema(),
+                    ["orientation"] = Orientation(),
+                    ["fast"] = Fast(),
+                    ["seed"] = Seed(),
+                },
+            });
+
         yield return Tool("local_image_to_video",
             "Оживить картинку в видео со звуком НАШЕЙ моделью MiniMax H3 на своей GPU: первый кадр — картинка, "
-            + "prompt описывает движение, камеру, речь и звук. Видео по тексту без картинки нет. Долго (5 с ≈ 2 мин, "
-            + "10 с ≈ 7 мин) — только по явной просьбе сделать локально. Возвращает job_id; жди через local_jobs_wait.",
+            + "необязательный last_frame — последний кадр; prompt описывает движение, камеру, речь и звук. Долго ("
+            + VideoEtaText + ") — только по явной просьбе сделать локально. Результат можно потом увеличить "
+            + "local_video_upscale. Возвращает job_id; жди через local_jobs_wait.",
             new JsonObject
             {
                 ["type"] = "object",
@@ -387,14 +464,9 @@ public sealed class LocalMediaToolset(
                 ["properties"] = new JsonObject
                 {
                     ["image"] = Str(ImageRefDescription),
+                    ["last_frame"] = Str("Последний кадр (необязательно): " + ImageRefDescription),
                     ["prompt"] = Str("Что происходит в кадре: движение, камера, реплики (в кавычках), звук"),
-                    ["duration_seconds"] = new JsonObject
-                    {
-                        ["type"] = "integer",
-                        ["minimum"] = 1,
-                        ["maximum"] = 10,
-                        ["description"] = "Длительность, с (по умолчанию 5, максимум 10)",
-                    },
+                    ["duration_seconds"] = VideoDuration(),
                     ["size"] = new JsonObject
                     {
                         ["type"] = "string",
@@ -402,6 +474,79 @@ public sealed class LocalMediaToolset(
                         ["description"] = "full — 1344×768 (по умолчанию), half — 864×480 (быстрее); "
                             + "у портретной картинки стороны меняются местами",
                     },
+                    ["fast"] = Fast(),
+                    ["seed"] = Seed(),
+                },
+            });
+
+        yield return Tool("local_reference_to_video",
+            "Сгенерировать видео со звуком по референсам НАШЕЙ моделью MiniMax H3 на своей GPU: 1–9 картинок "
+            + "(персонажи, предметы, стиль), до 3 видео (2–15 с) и до 3 звуков из проекта. В prompt ссылайся на них "
+            + "как <Picture 1>, <Video 1>, <Audio 1>. Только по явной просьбе сделать локально. identity=max — тяжёлая "
+            + "задача (одна за раз). Возвращает job_id; жди через local_jobs_wait.",
+            new JsonObject
+            {
+                ["type"] = "object",
+                ["required"] = new JsonArray { "prompt", "ref_images" },
+                ["properties"] = new JsonObject
+                {
+                    ["prompt"] = Str("Сцена со ссылками на референсы: <Picture 1>, <Video 1>, <Audio 1>"),
+                    ["ref_images"] = RefList(1, ComfyWorkflows.MaxRefImages, ImageRefDescription,
+                        "Картинки-референсы, по порядку <Picture 1>…"),
+                    ["ref_videos"] = RefList(0, ComfyWorkflows.MaxRefVideos,
+                        "Путь mp4 в проекте (2–15 с, 24 fps) или job_id готового видео",
+                        "Видео-референсы (необязательно), их звук тоже идёт референсом"),
+                    ["ref_audios"] = RefList(0, ComfyWorkflows.MaxRefAudios,
+                        "Путь WAV/MP3/FLAC/OGG в проекте", "Звук-референсы (необязательно): голос, музыка"),
+                    ["duration_seconds"] = VideoDuration(),
+                    ["size"] = VideoSizeSchema(),
+                    ["orientation"] = Orientation(),
+                    ["identity"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["enum"] = new JsonArray { "match", "max" },
+                        ["description"] = "match — референсы в размере кадра (по умолчанию); max — 2048 px по короткой "
+                            + "стороне: точнее сходство, но в разы медленнее и считается тяжёлой задачей",
+                    },
+                    ["seed"] = Seed(),
+                },
+            });
+
+        yield return Tool("local_video_upscale",
+            "Увеличить видео прошлой задачи local_text_to_video или local_image_to_video (размер full) до 1440p или 2K "
+            + "НАШИМ латентным апскейлером на своей GPU. Работает только по job_id такой задачи, произвольный mp4 "
+            + "не принимает. Тяжёлая задача: одна за раз. Возвращает job_id; жди через local_jobs_wait.",
+            new JsonObject
+            {
+                ["type"] = "object",
+                ["required"] = new JsonArray { "job_id" },
+                ["properties"] = new JsonObject
+                {
+                    ["job_id"] = Str("job_id завершённой задачи local_text_to_video или local_image_to_video в этом проекте"),
+                    ["target"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["enum"] = new JsonArray { "1440p", "2k" },
+                        ["description"] = "1440p — 2528×1440 (по умолчанию), 2k — 2688×1536; у портретного видео "
+                            + "стороны меняются местами",
+                    },
+                    ["seed"] = Seed(),
+                },
+            });
+
+        yield return Tool("local_video_inpaint",
+            "Перерисовать область видео по маске НАШЕЙ моделью MiniMax H3 (Fun ControlNet) на своей GPU: белое на маске "
+            + "перегенерируется по prompt, остальное остаётся как в исходнике. Видео — mp4 1344×768 или 864×480 "
+            + "(или портретное), до 10 с; маска — PNG того же размера. Тяжёлая задача: одна за раз. Возвращает job_id.",
+            new JsonObject
+            {
+                ["type"] = "object",
+                ["required"] = new JsonArray { "video", "mask", "prompt" },
+                ["properties"] = new JsonObject
+                {
+                    ["video"] = Str("Путь mp4 в проекте или job_id готового видео этого проекта"),
+                    ["mask"] = Str("PNG-маска того же размера, что видео: белое — перерисовать. " + ImageRefDescription),
+                    ["prompt"] = Str("Вся сцена целиком, включая то, что должно появиться в области маски, и звук"),
                     ["seed"] = Seed(),
                 },
             });
@@ -445,6 +590,45 @@ public sealed class LocalMediaToolset(
             "Что умеют наши локальные модели: операции, размеры, ориентировочное время и длина очереди локальной GPU.",
             new JsonObject { ["type"] = "object", ["properties"] = new JsonObject() });
     }
+
+    private const string VideoEtaText = "1344×768: 5 с ≈ 5,5 мин (fast ≈ 4 мин), 10 с ≈ 15,5 мин";
+
+    private static JsonObject VideoDuration() => new()
+    {
+        ["type"] = "integer",
+        ["minimum"] = 1,
+        ["maximum"] = 10,
+        ["description"] = "Длительность, с (по умолчанию 5, максимум 10)",
+    };
+
+    private static JsonObject VideoSizeSchema() => new()
+    {
+        ["type"] = "string",
+        ["enum"] = new JsonArray { "full", "half" },
+        ["description"] = "full — 1344×768 (по умолчанию), half — 864×480 (быстрее)",
+    };
+
+    private static JsonObject Orientation() => new()
+    {
+        ["type"] = "string",
+        ["enum"] = new JsonArray { "landscape", "portrait" },
+        ["description"] = "landscape — альбомное (по умолчанию), portrait — стороны меняются местами",
+    };
+
+    private static JsonObject Fast() => new()
+    {
+        ["type"] = "boolean",
+        ["description"] = "Ускоренный режим (sparse attention, ≈на 30 % быстрее); не задан — настройка сервера",
+    };
+
+    private static JsonObject RefList(int min, int max, string item, string description) => new()
+    {
+        ["type"] = "array",
+        ["minItems"] = min,
+        ["maxItems"] = max,
+        ["items"] = Str(item),
+        ["description"] = description,
+    };
 
     private static JsonObject Str(string description) =>
         new() { ["type"] = "string", ["description"] = description };

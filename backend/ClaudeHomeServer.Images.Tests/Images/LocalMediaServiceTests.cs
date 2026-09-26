@@ -33,10 +33,12 @@ public class LocalMediaServiceTests : IDisposable
     }
 
     private (LocalMediaService Service, LocalMediaJobStore Store) Build(bool enabled = true, int maxPerOwner = 2,
-        int maxQueue = 4)
+        int maxQueue = 4, bool fastDefault = false, string upscale1440 = "single")
     {
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
+            ["LocalMedia:VideoFastDefault"] = fastDefault ? "true" : "false",
+            ["LocalMedia:Upscale1440Mode"] = upscale1440,
             ["DataPath"] = Path.Combine(_tempDir, "data", "projects.json"),
             ["LocalMedia:Enabled"] = enabled ? "true" : "false",
             ["LocalMedia:ComfyUrl"] = "http://comfy.test:8188",
@@ -365,5 +367,322 @@ public class LocalMediaServiceTests : IDisposable
         (await restarted.CollectPendingAsync(default)).Should().Be(1);
 
         store.Get(job.Id, Owner)!.Status.Should().Be(LocalMediaStatuses.Completed);
+    }
+
+    // ─── MiniMax H3: видео по тексту, латенты, апскейл, инпейнт, референсы ────
+
+    private static JsonNode Graph(FakeComfy comfy, int index = -1) =>
+        comfy.Prompts[index < 0 ? comfy.Prompts.Count + index : index]["prompt"]!;
+
+    private static LocalMediaRequest TextVideo(string? orientation = null, bool? fast = null, string size = "full") =>
+        new(Owner, ProjectId, null, LocalMediaOps.TextToVideo, Prompt: "гавань на закате", VideoSize: size,
+            Orientation: orientation, Fast: fast);
+
+    // Завершённая видеозадача с латентами — источник для апскейла
+    private async Task<LocalMediaJob> CompletedVideoAsync(LocalMediaService service, LocalMediaRequest request,
+        bool withLatents = true)
+    {
+        var job = (await service.SubmitAsync(request, default)).View!.Job;
+        _comfy.CompleteVideo(job.PromptId, job.Id, LocalMediaTestImages.Mp4(job.Width!.Value, job.Height!.Value, 5.17),
+            withLatents);
+        return (await service.GetAsync(Owner, job.Id, default))!.Job;
+    }
+
+    [Fact]
+    public async Task ТекстВВидео_ПортретИЛатентПодJobId_ВремяПоЗамерам()
+    {
+        var (service, store) = Build();
+
+        var result = await service.SubmitAsync(TextVideo(orientation: "portrait"), default);
+
+        result.Error.Should().BeNull();
+        var t2v = Graph(_comfy)["t2v"]!["inputs"]!;
+        t2v["width"]!.GetValue<int>().Should().Be(768);
+        t2v["height"]!.GetValue<int>().Should().Be(1344);
+        t2v.AsObject().ContainsKey("first_frame").Should().BeFalse();
+        var job = result.View!.Job;
+        Graph(_comfy)["lat_save_v"]!["inputs"]!["filename_prefix"]!.GetValue<string>()
+            .Should().Be($"ccs-local-media/latents/{job.Id}_video");
+        Graph(_comfy).AsObject().ContainsKey("sparse").Should().BeFalse("fast по умолчанию выключен");
+        result.View.EtaSeconds.Should().Be(333, "замер стенда: 5 с 1344×768 в режиме A");
+        store.Get(job.Id, Owner)!.Prompt.Should().Be("гавань на закате");
+        store.Get(job.Id, Owner)!.Frames.Should().Be(124);
+    }
+
+    [Fact]
+    public async Task Видео_FastПоУмолчаниюИзНастроек_ЯвныйFastСильнее()
+    {
+        var (service, _) = Build(fastDefault: true);
+
+        (await service.SubmitAsync(TextVideo(), default)).View!.EtaSeconds.Should().Be(234);
+        Graph(_comfy)["ms"]!["inputs"]!["sparse_attention"]!.GetValue<bool>().Should().BeTrue();
+        Graph(_comfy)["sparse"]!["class_type"]!.GetValue<string>().Should().Be("BlockSparseAttention");
+
+        await service.SubmitAsync(TextVideo(fast: false), default);
+        Graph(_comfy).AsObject().ContainsKey("sparse").Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task КартинкаВВидео_ПоследнийКадрПоJobId()
+    {
+        File.WriteAllBytes(Path.Combine(_root, "first.png"), LocalMediaTestImages.Png(1344, 768));
+        var (service, _) = Build(maxPerOwner: 3);
+        var last = (await service.SubmitAsync(Generate(), default)).View!.Job;
+        _comfy.Complete(last.PromptId, ($"{last.Id}_00001_.png", LocalMediaTestImages.Png(64, 64)));
+        await service.GetAsync(Owner, last.Id, default);
+
+        var result = await service.SubmitAsync(new LocalMediaRequest(Owner, ProjectId, null, LocalMediaOps.ImageToVideo,
+            Prompt: "она оборачивается", Images: ["first.png"], LastFrame: last.Id), default);
+
+        result.Error.Should().BeNull();
+        var job = result.View!.Job;
+        Graph(_comfy)["i2v"]!["inputs"]!["last_frame"]!.ToJsonString().Should().Be("[\"img_last\",0]");
+        Graph(_comfy)["img_last"]!["inputs"]!["image"]!.GetValue<string>().Should().Be($"ccs-local-media/{job.Id}-last.png");
+    }
+
+    [Fact]
+    public async Task ГотовоеВидео_ЛатентВСтореНоНеВПроекте()
+    {
+        var (service, store) = Build();
+
+        var job = await CompletedVideoAsync(service, TextVideo());
+
+        job.Status.Should().Be(LocalMediaStatuses.Completed);
+        job.Outputs.Should().ContainSingle().Which.ContentType.Should().Be("video/mp4");
+        job.LatentVideo.Should().Be($"ccs-local-media/latents/{job.Id}_video_00001_.latent");
+        job.LatentAudio.Should().Be($"ccs-local-media/latents/{job.Id}_audio_00001_.latent");
+        Directory.EnumerateFiles(_root, "*.latent", SearchOption.AllDirectories).Should().BeEmpty();
+        _projects.Notified.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task Апскейл_ЛатентВКореньInput_ГрафПоИсходнойЗадаче()
+    {
+        File.WriteAllBytes(Path.Combine(_root, "frame.png"), LocalMediaTestImages.Png(768, 1344));
+        var (service, store) = Build();
+        var source = await CompletedVideoAsync(service, new LocalMediaRequest(Owner, ProjectId, null,
+            LocalMediaOps.ImageToVideo, Prompt: "идёт снег", Images: ["frame.png"], Seed: 77));
+
+        var result = await service.SubmitAsync(new LocalMediaRequest(Owner, ProjectId, null, LocalMediaOps.VideoUpscale,
+            SourceJobId: source.Id, UpscaleTarget: "2k"), default);
+
+        result.Error.Should().BeNull();
+        var job = result.View!.Job;
+        job.Heavy.Should().BeTrue();
+        job.Seed.Should().Be(77, "без явного seed апскейл берёт seed исходной задачи");
+        var latentName = $"ccs-local-media-{job.Id}-video.latent";
+        _comfy.UploadPaths.Should().Contain(latentName, "LoadLatent видит только корень input");
+        _comfy.UploadedBytes[latentName].Should().Equal(_comfy.Files[$"ccs-local-media/latents/{source.Id}_video_00001_.latent"]);
+
+        var graph = Graph(_comfy);
+        graph["lat_v"]!["inputs"]!["latent"]!.GetValue<string>().Should().Be(latentName);
+        graph["lat_a"]!["inputs"]!["latent"]!.GetValue<string>().Should().Be($"ccs-local-media-{job.Id}-audio.latent");
+        graph["img"]!["inputs"]!["image"]!.GetValue<string>().Should().Be(store.Get(source.Id, Owner)!.ComfyFirstFrame);
+        graph["i2v_hi"]!["inputs"]!["prompt"]!.GetValue<string>().Should().Be("идёт снег");
+        graph["i2v_hi"]!["inputs"]!["width"]!.GetValue<int>().Should().Be(1536, "портретное видео — стороны переставлены");
+        graph["i2v_hi"]!["inputs"]!["height"]!.GetValue<int>().Should().Be(2688);
+        graph["refine"]!["class_type"]!.GetValue<string>().Should().Be("MMH3SplitUpscale", "2K — только тайлами");
+    }
+
+    [Theory]
+    [InlineData("single", "SamplerCustomAdvanced")]
+    [InlineData("tiled", "MMH3SplitUpscale")]
+    public async Task Апскейл1440_РежимИзНастроек(string mode, string refineClass)
+    {
+        var (service, _) = Build(upscale1440: mode);
+        var source = await CompletedVideoAsync(service, TextVideo());
+
+        var result = await service.SubmitAsync(new LocalMediaRequest(Owner, ProjectId, null, LocalMediaOps.VideoUpscale,
+            SourceJobId: source.Id), default);
+
+        result.Error.Should().BeNull();
+        Graph(_comfy)["refine"]!["class_type"]!.GetValue<string>().Should().Be(refineClass);
+        Graph(_comfy)["i2v_hi"]!["inputs"]!["width"]!.GetValue<int>().Should().Be(2528);
+        Graph(_comfy).AsObject().ContainsKey("img").Should().BeFalse("у видео по тексту первого кадра нет");
+    }
+
+    [Fact]
+    public async Task Апскейл_ЧужойJobId_НеНайден()
+    {
+        var (service, _) = Build();
+        var source = await CompletedVideoAsync(service, TextVideo());
+        _projects.Roots[("owner-2", ProjectId)] = _root;
+        var before = _comfy.Prompts.Count;
+
+        var result = await service.SubmitAsync(new LocalMediaRequest("owner-2", ProjectId, null, LocalMediaOps.VideoUpscale,
+            SourceJobId: source.Id), default);
+
+        result.Error.Should().Be($"Задача {source.Id} не найдена.");
+        _comfy.Prompts.Should().HaveCount(before);
+        _comfy.UploadPaths.Should().NotContain(p => p.EndsWith(".latent"));
+    }
+
+    [Fact]
+    public async Task Апскейл_ПоКартинке_Отказ()
+    {
+        var (service, _) = Build();
+        var image = (await service.SubmitAsync(Generate(), default)).View!.Job;
+        _comfy.Complete(image.PromptId, ($"{image.Id}_00001_.png", LocalMediaTestImages.Png(64, 64)));
+        await service.GetAsync(Owner, image.Id, default);
+
+        var result = await service.SubmitAsync(new LocalMediaRequest(Owner, ProjectId, null, LocalMediaOps.VideoUpscale,
+            SourceJobId: image.Id), default);
+
+        result.Error.Should().Contain("только для видео");
+        _comfy.Prompts.Should().HaveCount(1);
+    }
+
+    [Fact]
+    public async Task Апскейл_ПоловинныйРазмерИлиБезЛатента_Отказ()
+    {
+        var (service, _) = Build(maxPerOwner: 4);
+        var half = await CompletedVideoAsync(service, TextVideo(size: "half"));
+        var noLatent = await CompletedVideoAsync(service, TextVideo(), withLatents: false);
+
+        (await service.SubmitAsync(new LocalMediaRequest(Owner, ProjectId, null, LocalMediaOps.VideoUpscale,
+            SourceJobId: half.Id), default)).Error.Should().Contain("только для видео размера full");
+        (await service.SubmitAsync(new LocalMediaRequest(Owner, ProjectId, null, LocalMediaOps.VideoUpscale,
+            SourceJobId: noLatent.Id), default)).Error.Should().Contain("нет сохранённого латента");
+    }
+
+    [Fact]
+    public async Task ТяжёлыеЗадачи_НеБольшеОднойУВладельца_ЛёгкиеИдут()
+    {
+        File.WriteAllBytes(Path.Combine(_root, "clip.mp4"), LocalMediaTestImages.Mp4(864, 480, 5.17));
+        File.WriteAllBytes(Path.Combine(_root, "mask.png"), LocalMediaTestImages.Png(864, 480));
+        File.WriteAllBytes(Path.Combine(_root, "ref.png"), LocalMediaTestImages.Png(512, 512));
+        var (service, store) = Build(maxPerOwner: 4);
+        var inpaint = new LocalMediaRequest(Owner, ProjectId, null, LocalMediaOps.VideoInpaint,
+            Prompt: "на подоконнике цветок", Video: "clip.mp4", Mask: "mask.png");
+
+        (await service.SubmitAsync(inpaint, default)).View!.Job.Heavy.Should().BeTrue();
+        var maxRefs = await service.SubmitAsync(new LocalMediaRequest(Owner, ProjectId, null,
+            LocalMediaOps.ReferenceToVideo, Prompt: "<Picture 1> машет рукой", Images: ["ref.png"], Identity: "max"), default);
+        var light = await service.SubmitAsync(TextVideo(), default);
+
+        maxRefs.Error.Should().Contain("тяжёлая");
+        light.Error.Should().BeNull("лёгкая задача тяжёлым лимитом не ограничена");
+        store.ActiveHeavyCount(Owner).Should().Be(1);
+
+        // Чужая тяжёлая задача лимит этого владельца не занимает
+        _projects.Roots[("owner-2", ProjectId)] = _root;
+        (await service.SubmitAsync(inpaint with { OwnerId = "owner-2" }, default)).Error.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Инпейнт_ГрафИДлинаПоВидео()
+    {
+        File.WriteAllBytes(Path.Combine(_root, "clip.mp4"), LocalMediaTestImages.Mp4(480, 864, 10.125));
+        File.WriteAllBytes(Path.Combine(_root, "mask.png"), LocalMediaTestImages.Png(480, 864));
+        var (service, _) = Build();
+
+        var result = await service.SubmitAsync(new LocalMediaRequest(Owner, ProjectId, null, LocalMediaOps.VideoInpaint,
+            Prompt: "x", Video: "clip.mp4", Mask: "mask.png"), default);
+
+        result.Error.Should().BeNull();
+        var job = result.View!.Job;
+        var r2v = Graph(_comfy)["r2v"]!["inputs"]!;
+        r2v["width"]!.GetValue<int>().Should().Be(480);
+        r2v["length"]!.GetValue<int>().Should().Be(243);
+        Graph(_comfy)["src"]!["inputs"]!["file"]!.GetValue<string>().Should().Be($"ccs-local-media/{job.Id}-video.mp4");
+        Graph(_comfy)["mask"]!["inputs"]!["image"]!.GetValue<string>().Should().Be($"ccs-local-media/{job.Id}-mask.png");
+    }
+
+    [Theory]
+    [InlineData(1344, 768, 12.0, 1344, 768, "секунд")]
+    [InlineData(1280, 720, 5.0, 1280, 720, "размер")]
+    [InlineData(864, 480, 5.0, 1344, 768, "Маска")]
+    public async Task Инпейнт_НевалидныйВход_Отказ(int w, int h, double seconds, int maskW, int maskH, string error)
+    {
+        File.WriteAllBytes(Path.Combine(_root, "clip.mp4"), LocalMediaTestImages.Mp4(w, h, seconds));
+        File.WriteAllBytes(Path.Combine(_root, "mask.png"), LocalMediaTestImages.Png(maskW, maskH));
+        var (service, _) = Build();
+
+        var result = await service.SubmitAsync(new LocalMediaRequest(Owner, ProjectId, null, LocalMediaOps.VideoInpaint,
+            Prompt: "x", Video: "clip.mp4", Mask: "mask.png"), default);
+
+        result.Error.Should().Contain(error);
+        _comfy.Prompts.Should().BeEmpty();
+        _comfy.Uploads.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("../outside.mp4", "mask.png")]
+    [InlineData("clip.mp4", "../outside.png")]
+    public async Task Инпейнт_ВходВнеПроекта_Отказ(string video, string mask)
+    {
+        File.WriteAllBytes(Path.Combine(_tempDir, "outside.mp4"), LocalMediaTestImages.Mp4(864, 480, 5));
+        File.WriteAllBytes(Path.Combine(_tempDir, "outside.png"), LocalMediaTestImages.Png(864, 480));
+        File.WriteAllBytes(Path.Combine(_root, "clip.mp4"), LocalMediaTestImages.Mp4(864, 480, 5));
+        File.WriteAllBytes(Path.Combine(_root, "mask.png"), LocalMediaTestImages.Png(864, 480));
+        var (service, _) = Build();
+
+        var result = await service.SubmitAsync(new LocalMediaRequest(Owner, ProjectId, null, LocalMediaOps.VideoInpaint,
+            Prompt: "x", Video: video, Mask: mask), default);
+
+        result.Error.Should().Contain("вне папки проекта");
+        _comfy.Uploads.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Референсы_КартинкиВидеоЗвук_ЗагружаютсяИСвязываются()
+    {
+        File.WriteAllBytes(Path.Combine(_root, "a.png"), LocalMediaTestImages.Png(512, 512));
+        File.WriteAllBytes(Path.Combine(_root, "b.png"), LocalMediaTestImages.Png(512, 512));
+        File.WriteAllBytes(Path.Combine(_root, "ref.mp4"), LocalMediaTestImages.Mp4(1344, 768, 6));
+        File.WriteAllBytes(Path.Combine(_root, "voice.wav"), LocalMediaTestImages.Wav());
+        var (service, _) = Build();
+
+        var result = await service.SubmitAsync(new LocalMediaRequest(Owner, ProjectId, null, LocalMediaOps.ReferenceToVideo,
+            Prompt: "<Picture 1> и <Picture 2> говорят голосом <Audio 1>", Images: ["a.png", "b.png"],
+            RefVideos: ["ref.mp4"], RefAudios: ["voice.wav"], DurationSeconds: 10), default);
+
+        result.Error.Should().BeNull();
+        var job = result.View!.Job;
+        job.Heavy.Should().BeFalse("identity по умолчанию — match");
+        _comfy.Uploads.Should().Equal($"{job.Id}-ref1.png", $"{job.Id}-ref2.png", $"{job.Id}-refvid1.mp4", $"{job.Id}-refaud1.wav");
+        var r2v = Graph(_comfy)["r2v"]!["inputs"]!;
+        r2v["ref_image_size"]!.GetValue<string>().Should().Be("match");
+        r2v["length"]!.GetValue<int>().Should().Be(243);
+        r2v["ref_audios.ref_audio_0"]!.ToJsonString().Should().Be("[\"ref_aud0\",0]");
+    }
+
+    [Theory]
+    [InlineData("short.mp4", null, "от 2 до 15 секунд")]
+    [InlineData(null, "notes.txt", "не звук")]
+    public async Task Референсы_НевалидныйВход_Отказ(string? video, string? audio, string error)
+    {
+        File.WriteAllBytes(Path.Combine(_root, "a.png"), LocalMediaTestImages.Png(512, 512));
+        File.WriteAllBytes(Path.Combine(_root, "short.mp4"), LocalMediaTestImages.Mp4(864, 480, 1.2));
+        File.WriteAllText(Path.Combine(_root, "notes.txt"), "не звук, а текст длиннее двенадцати байт");
+        var (service, _) = Build();
+
+        var result = await service.SubmitAsync(new LocalMediaRequest(Owner, ProjectId, null, LocalMediaOps.ReferenceToVideo,
+            Prompt: "x", Images: ["a.png"], RefVideos: video is null ? [] : [video], RefAudios: audio is null ? [] : [audio]),
+            default);
+
+        result.Error.Should().Contain(error);
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Референсы_НеизвестныйIdentity_Отказ()
+    {
+        File.WriteAllBytes(Path.Combine(_root, "a.png"), LocalMediaTestImages.Png(512, 512));
+        var (service, _) = Build();
+
+        var result = await service.SubmitAsync(new LocalMediaRequest(Owner, ProjectId, null, LocalMediaOps.ReferenceToVideo,
+            Prompt: "x", Images: ["a.png"], Identity: "ultra"), default);
+
+        result.Error.Should().Contain("identity");
+    }
+
+    [Fact]
+    public void Mp4Проба_РазмерИДлительность_НеMp4Null()
+    {
+        MediaProbe.ReadMp4(LocalMediaTestImages.Mp4(1344, 768, 5.17))
+            .Should().Be(new MediaProbe.VideoInfo(1344, 768, 5.17));
+        MediaProbe.ReadMp4(LocalMediaTestImages.Png(10, 10)).Should().BeNull();
+        MediaProbe.DetectAudioExtension(LocalMediaTestImages.Wav()).Should().Be(".wav");
     }
 }

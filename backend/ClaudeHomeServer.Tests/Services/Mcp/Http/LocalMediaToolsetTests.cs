@@ -21,7 +21,7 @@ namespace ClaudeHomeServer.Tests.Services.Mcp.Http;
 /// <summary>
 /// Тулсет local-media: гейты на каждый вызов (сессия владельца, тумблер, чат проекта, проект на
 /// сервере по ProjectCapabilities) и сквозной путь «поставить → дождаться → файл в проекте» на
-/// фейковом ComfyUI. Состав постоянный: 7 инструментов, не зависящих от хода.
+/// фейковом ComfyUI. Состав постоянный: 11 инструментов, не зависящих от хода.
 /// </summary>
 public class LocalMediaToolsetTests : IDisposable
 {
@@ -77,14 +77,15 @@ public class LocalMediaToolsetTests : IDisposable
     }
 
     [Fact]
-    public void СвояСессия_СемьИнструментов_ОдинаковыйСостав()
+    public void СвояСессия_ОдиннадцатьИнструментов_ОдинаковыйСостав()
     {
         var env = Build();
 
         var names = env.Toolset.ToolsFor(env.Context).Select(t => t.Name).ToList();
 
         names.Should().Equal("local_generate_image", "local_edit_image", "local_face_detail",
-            "local_image_to_video", "local_job_status", "local_jobs_wait", "local_models");
+            "local_text_to_video", "local_image_to_video", "local_reference_to_video", "local_video_upscale",
+            "local_video_inpaint", "local_job_status", "local_jobs_wait", "local_models");
         env.Toolset.ToolsFor(env.Context).Should().BeSameAs(env.Toolset.ToolsFor(env.Context),
             "состав статичный — не зависит ни от хода, ни от вызова");
     }
@@ -202,7 +203,10 @@ public class LocalMediaToolsetTests : IDisposable
         var json = JsonNode.Parse(result.Text)!.AsObject();
         json["comfy_available"]!.GetValue<bool>().Should().BeTrue();
         json["queue_length"]!.GetValue<int>().Should().Be(1);
-        json["operations"]!.AsArray().Should().HaveCount(4);
+        // Каждая операция генерации описана в local_models
+        var generating = env.Toolset.ToolsFor(env.Context).Select(t => t.Name)
+            .Where(n => n is not ("local_job_status" or "local_jobs_wait" or "local_models"));
+        json["operations"]!.AsArray().Select(o => o!["tool"]!.GetValue<string>()).Should().Equal(generating);
     }
 
     [Fact]

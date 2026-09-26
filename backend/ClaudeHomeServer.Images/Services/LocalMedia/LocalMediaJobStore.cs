@@ -8,8 +8,16 @@ public static class LocalMediaOps
     public const string EditImage = "edit_image";
     public const string FaceDetail = "face_detail";
     public const string ImageToVideo = "image_to_video";
+    public const string TextToVideo = "text_to_video";
+    public const string VideoUpscale = "video_upscale";
+    public const string VideoInpaint = "video_inpaint";
+    public const string ReferenceToVideo = "reference_to_video";
 
-    public static bool IsKnown(string? op) => op is GenerateImage or EditImage or FaceDetail or ImageToVideo;
+    public static bool IsKnown(string? op) => op is GenerateImage or EditImage or FaceDetail or ImageToVideo
+        or TextToVideo or VideoUpscale or VideoInpaint or ReferenceToVideo;
+
+    // Видео, чей латент сохраняется и годится для апскейла
+    public static bool KeepsLatent(string? op) => op is TextToVideo or ImageToVideo;
 }
 
 public static class LocalMediaStatuses
@@ -45,6 +53,17 @@ public sealed class LocalMediaJob
     public int? Width { get; set; }
     public int? Height { get; set; }
     public int? DurationSeconds { get; set; }
+    // Тяжёлая операция (апскейл, инпейнт, референсы в max): у владельца одновременно одна
+    public bool Heavy { get; set; }
+    public bool Fast { get; set; }
+    // Для апскейла видео по тексту/кадру: промпт, число кадров и первый кадр (имя в input
+    // ComfyUI) — conditioning пересобирается под новый размер
+    public string? Prompt { get; set; }
+    public int? Frames { get; set; }
+    public string? ComfyFirstFrame { get; set; }
+    // Латенты видео и аудио в output ComfyUI («подпапка/файл»). Служебные: в проект не идут
+    public string? LatentVideo { get; set; }
+    public string? LatentAudio { get; set; }
     public string? Error { get; set; }
     public List<LocalMediaOutput> Outputs { get; set; } = [];
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
@@ -107,6 +126,12 @@ public sealed class LocalMediaJobStore
     {
         lock (_writeLock)
             return _jobs.Count(j => j.OwnerId == ownerId && !LocalMediaStatuses.IsTerminal(j.Status));
+    }
+
+    public int ActiveHeavyCount(string ownerId)
+    {
+        lock (_writeLock)
+            return _jobs.Count(j => j.OwnerId == ownerId && j.Heavy && !LocalMediaStatuses.IsTerminal(j.Status));
     }
 
     public IReadOnlyList<LocalMediaJob> Active()

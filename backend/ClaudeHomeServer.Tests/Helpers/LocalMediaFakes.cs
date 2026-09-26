@@ -15,6 +15,9 @@ public sealed class FakeComfy : HttpMessageHandler
     public Dictionary<string, byte[]> Files { get; } = [];
     public List<JsonObject> Prompts { get; } = [];
     public List<string> Uploads { get; } = [];
+    // Куда легла загрузка: «подпапка/файл», у корня input — просто файл
+    public List<string> UploadPaths { get; } = [];
+    public Dictionary<string, byte[]> UploadedBytes { get; } = [];
     public List<string> Requests { get; } = [];
     public bool Down { get; set; }
     public string? RejectPrompt { get; set; }
@@ -53,8 +56,14 @@ public sealed class FakeComfy : HttpMessageHandler
             var form = (MultipartFormDataContent)request.Content!;
             var file = form.First(c => c.Headers.ContentDisposition?.Name?.Trim('"') == "image");
             var name = file.Headers.ContentDisposition!.FileName!.Trim('"');
+            var sub = form.FirstOrDefault(c => c.Headers.ContentDisposition?.Name?.Trim('"') == "subfolder") is { } part
+                ? await part.ReadAsStringAsync(ct)
+                : "";
             Uploads.Add(name);
-            return Json(new JsonObject { ["name"] = name, ["subfolder"] = "ccs-local-media", ["type"] = "input" });
+            var at = sub.Length == 0 ? name : $"{sub}/{name}";
+            UploadPaths.Add(at);
+            UploadedBytes[at] = await file.ReadAsByteArrayAsync(ct);
+            return Json(new JsonObject { ["name"] = name, ["subfolder"] = sub, ["type"] = "input" });
         }
 
         if (request.Method == HttpMethod.Get && path.StartsWith("/history/", StringComparison.Ordinal))
@@ -95,6 +104,26 @@ public sealed class FakeComfy : HttpMessageHandler
                 },
             },
         };
+    }
+
+    // Видеозадача закончилась: mp4 в images у SaveVideo и два латента у SaveLatent (как у t2v/i2v)
+    public void CompleteVideo(string promptId, string jobId, byte[] mp4, bool withLatents = true)
+    {
+        Complete(promptId, ($"{jobId}_00001_.mp4", mp4));
+        if (!withLatents) return;
+        var outputs = History[promptId]["outputs"]!.AsObject();
+        foreach (var (node, kind) in new[] { ("lat_save_v", "video"), ("lat_save_a", "audio") })
+        {
+            var name = $"{jobId}_{kind}_00001_.latent";
+            Files[$"ccs-local-media/latents/{name}"] = Encoding.ASCII.GetBytes($"latent-{kind}-{jobId}");
+            outputs[node] = new JsonObject
+            {
+                ["latents"] = new JsonArray(new JsonObject
+                {
+                    ["filename"] = name, ["subfolder"] = "ccs-local-media/latents", ["type"] = "output",
+                }),
+            };
+        }
     }
 
     public void Fail(string promptId, string message)
@@ -154,4 +183,51 @@ public static class LocalMediaTestImages
 
         static byte[] BigEndian(int v) => [(byte)(v >> 24), (byte)(v >> 16), (byte)(v >> 8), (byte)v];
     }
+
+    // Минимальный mp4: ftyp + moov (mvhd, trak с tkhd и hdlr vide, звуковая дорожка) + mdat —
+    // ровно то, что читает MediaProbe
+    public static byte[] Mp4(int width, int height, double seconds)
+    {
+        const uint timescale = 1000;
+        var mvhd = new byte[100];
+        Put(mvhd, 12, timescale);
+        Put(mvhd, 16, (uint)Math.Round(seconds * timescale));
+        var tkhd = new byte[84];
+        Put(tkhd, 76, (uint)width << 16);
+        Put(tkhd, 80, (uint)height << 16);
+        var audioTkhd = new byte[84];
+        return
+        [
+            .. Box("ftyp", [.. "isom"u8.ToArray(), 0, 0, 2, 0, .. "isomavc1"u8.ToArray()]),
+            .. Box("moov",
+            [
+                .. Box("mvhd", mvhd),
+                .. Box("trak", [.. Box("tkhd", audioTkhd), .. Box("mdia", Box("hdlr", Handler("soun")))]),
+                .. Box("trak", [.. Box("tkhd", tkhd), .. Box("mdia", Box("hdlr", Handler("vide")))]),
+            ]),
+            .. Box("mdat", new byte[64]),
+        ];
+
+        static byte[] Handler(string type) => [0, 0, 0, 0, 0, 0, 0, 0, .. Encoding.ASCII.GetBytes(type), .. new byte[13]];
+
+        static byte[] Box(string type, byte[] body)
+        {
+            var box = new byte[8 + body.Length];
+            Put(box, 0, (uint)box.Length);
+            Encoding.ASCII.GetBytes(type).CopyTo(box, 4);
+            body.CopyTo(box, 8);
+            return box;
+        }
+
+        static void Put(byte[] target, int offset, uint value)
+        {
+            target[offset] = (byte)(value >> 24);
+            target[offset + 1] = (byte)(value >> 16);
+            target[offset + 2] = (byte)(value >> 8);
+            target[offset + 3] = (byte)value;
+        }
+    }
+
+    // Заголовок WAV — сигнатуры хватает MediaProbe
+    public static byte[] Wav() => [.. "RIFF"u8.ToArray(), 36, 0, 0, 0, .. "WAVEfmt "u8.ToArray(), .. new byte[28]];
 }

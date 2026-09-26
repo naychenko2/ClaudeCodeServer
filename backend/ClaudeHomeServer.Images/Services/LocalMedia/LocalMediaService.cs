@@ -5,7 +5,8 @@ using ClaudeHomeServer.Services.Images.Editing;
 
 namespace ClaudeHomeServer.Services.Images.LocalMedia;
 
-// Заявка на генерацию. Images — пути файлов проекта или job_id прошлых задач
+// Заявка на генерацию. Images (у референсов — ref_images), LastFrame, Video, Mask, RefVideos,
+// RefAudios — пути файлов проекта или job_id прошлых задач; SourceJobId — видео для апскейла
 public sealed record LocalMediaRequest(
     string OwnerId,
     string ProjectId,
@@ -19,7 +20,17 @@ public sealed record LocalMediaRequest(
     long? Seed = null,
     IReadOnlyList<string>? Images = null,
     string? VideoSize = null,
-    int? DurationSeconds = null);
+    int? DurationSeconds = null,
+    string? LastFrame = null,
+    bool? Fast = null,
+    string? Orientation = null,
+    string? SourceJobId = null,
+    string? UpscaleTarget = null,
+    string? Video = null,
+    string? Mask = null,
+    IReadOnlyList<string>? RefVideos = null,
+    IReadOnlyList<string>? RefAudios = null,
+    string? Identity = null);
 
 // Задача и её живое положение: Position — сколько задач ComfyUI впереди (0 — идёт),
 // Warning — временный сбой опроса (ComfyUI недоступен), задача при этом жива
@@ -43,6 +54,10 @@ public sealed class LocalMediaService(
     // Папка результатов в проекте: скрыта из дерева, из синка знаний и из git
     public const string ResultsFolder = ".cc-attachments/local-media";
     public const int MaxInputBytes = 30 * 1024 * 1024;
+    // Видео и звук: потолок загрузки ComfyUI — 100 МБ вместе с обёрткой multipart
+    public const int MaxMediaInputBytes = 90 * 1024 * 1024;
+    public const double MinRefVideoSeconds = 2;
+    public const double MaxRefVideoSeconds = 15;
     public const int MaxWaitSeconds = 15;
     public const int MaxWaitJobs = 12;
     private const string JobIdPrefix = "lm_";
@@ -67,7 +82,7 @@ public sealed class LocalMediaService(
         if (!LocalMediaOps.IsKnown(request.Op)) return LocalMediaCallResult.Fail("Неизвестная операция.");
 
         var prompt = (request.Prompt ?? "").Trim();
-        if (request.Op != LocalMediaOps.FaceDetail && prompt.Length == 0)
+        if (request.Op is not (LocalMediaOps.FaceDetail or LocalMediaOps.VideoUpscale) && prompt.Length == 0)
             return LocalMediaCallResult.Fail("Нужен prompt — описание того, что сгенерировать.");
         if (prompt.Length > ComfyWorkflows.MaxPromptLength
             || (request.NegativePrompt?.Length ?? 0) > ComfyWorkflows.MaxPromptLength)
@@ -86,6 +101,12 @@ public sealed class LocalMediaService(
             if (store.ActiveCount(request.OwnerId) >= options.MaxQueuedPerOwner)
                 return LocalMediaCallResult.Fail($"У тебя уже {options.MaxQueuedPerOwner} незавершённые локальные задачи — "
                     + "дождись их (local_jobs_wait) и повтори.");
+
+            // Тяжёлые операции держат GPU десятки минут: у владельца одновременно одна
+            var heavy = IsHeavy(request);
+            if (heavy && store.ActiveHeavyCount(request.OwnerId) > 0)
+                return LocalMediaCallResult.Fail("У тебя уже идёт тяжёлая локальная задача (апскейл, инпейнт или "
+                    + "референсы с identity=max) — дождись её (local_jobs_wait) и повтори.");
 
             ComfyQueueState queue;
             try
@@ -108,11 +129,12 @@ public sealed class LocalMediaService(
                 SessionId = request.SessionId,
                 Op = request.Op,
                 Seed = seed,
+                Heavy = heavy,
             };
             var prefix = $"{ComfyWorkflows.OutputFolder}/{jobId}";
 
             JsonObject graph;
-            int eta;
+            int? eta;
             try
             {
                 (graph, eta) = await BuildGraphAsync(request, job, root, prompt, seed, prefix, options, ct);
@@ -145,7 +167,7 @@ public sealed class LocalMediaService(
         }
     }
 
-    private async Task<(JsonObject Graph, int EtaSeconds)> BuildGraphAsync(LocalMediaRequest request,
+    private async Task<(JsonObject Graph, int? EtaSeconds)> BuildGraphAsync(LocalMediaRequest request,
         LocalMediaJob job, string root, string prompt, long seed, string prefix, LocalMediaOptions options,
         CancellationToken ct)
     {
@@ -168,41 +190,229 @@ public sealed class LocalMediaService(
                 var size = string.IsNullOrWhiteSpace(request.Aspect) ? ((int, int)?)null : AspectSize(request.Aspect);
                 var names = new List<string>();
                 for (var k = 0; k < images.Count; k++)
-                    names.Add(await UploadInputAsync(request, root, images[k], $"{job.Id}-in{k + 1}", ct));
+                    names.Add(await UploadInputAsync(request, root, images[k], MediaKind.Image, $"{job.Id}-in{k + 1}", ct));
                 return (ComfyWorkflows.EditImage(prompt, names, size, seed, prefix), 60 + 10 * (images.Count - 1));
             }
             case LocalMediaOps.FaceDetail:
             {
                 if (images.Count != 1) throw new LocalMediaInputException("Нужна ровно одна картинка (image).");
-                var name = await UploadInputAsync(request, root, images[0], $"{job.Id}-in1", ct);
+                var name = await UploadInputAsync(request, root, images[0], MediaKind.Image, $"{job.Id}-in1", ct);
                 return (ComfyWorkflows.FaceDetail(name, seed, prefix), 25);
+            }
+            case LocalMediaOps.TextToVideo:
+            {
+                var seconds = VideoSeconds(request, options);
+                var size = VideoSize(request.VideoSize, request.Orientation);
+                var fast = request.Fast ?? options.VideoFastDefault;
+                var frames = ComfyWorkflows.FramesFor(seconds);
+                RememberVideo(job, prompt, size, seconds, frames, fast);
+                return (ComfyWorkflows.TextToVideo(prompt, size.Width, size.Height, frames, seed, fast, prefix,
+                    LatentPrefix(job)), VideoEta(size, seconds, fast));
             }
             case LocalMediaOps.ImageToVideo:
             {
                 if (images.Count != 1) throw new LocalMediaInputException("Нужна ровно одна картинка — первый кадр (image).");
-                var seconds = request.DurationSeconds ?? 5;
-                if (seconds < 1 || seconds > options.MaxVideoSeconds)
-                    throw new LocalMediaInputException($"Длительность — от 1 до {options.MaxVideoSeconds} секунд.");
-                var sizeKey = string.IsNullOrWhiteSpace(request.VideoSize) ? "full" : request.VideoSize.Trim();
-                if (!ComfyWorkflows.VideoSizes.TryGetValue(sizeKey, out var size))
-                    throw new LocalMediaInputException("size — full (1344×768) или half (864×480).");
+                var seconds = VideoSeconds(request, options);
+                var size = VideoSize(request.VideoSize, null);
+                var fast = request.Fast ?? options.VideoFastDefault;
 
-                var (bytes, _) = ReadInput(request, root, images[0]);
+                var first = ReadInput(request, root, images[0], MediaKind.Image);
                 // Портретный кадр — портретное видео: стороны переставляются, а не кадр режется
-                if (ImageDimensions.Read(bytes) is { } dims && dims.Height > dims.Width)
+                if (ImageDimensions.Read(first.Bytes) is { } dims && dims.Height > dims.Width)
                     size = (size.Height, size.Width);
-                var name = await comfy.UploadImageAsync(bytes, $"{job.Id}-in1{Extension(bytes)}", ct);
+                var firstName = await comfy.UploadImageAsync(first.Bytes, $"{job.Id}-in1{first.Extension}", ct);
+                string? lastName = null;
+                if (!string.IsNullOrWhiteSpace(request.LastFrame))
+                    lastName = await UploadInputAsync(request, root, request.LastFrame, MediaKind.Image, $"{job.Id}-last", ct);
+
+                var frames = ComfyWorkflows.FramesFor(seconds);
+                RememberVideo(job, prompt, size, seconds, frames, fast);
+                job.ComfyFirstFrame = firstName;
+                return (ComfyWorkflows.ImageToVideo(firstName, lastName, prompt, size.Width, size.Height, frames, seed,
+                    fast, prefix, LatentPrefix(job)), VideoEta(size, seconds, fast));
+            }
+            case LocalMediaOps.VideoUpscale:
+                return (await BuildUpscaleAsync(request, job, prefix, options, ct), null);
+            case LocalMediaOps.VideoInpaint:
+            {
+                if (string.IsNullOrWhiteSpace(request.Video) || string.IsNullOrWhiteSpace(request.Mask))
+                    throw new LocalMediaInputException("Для инпейнта нужны video (mp4 в проекте) и mask (PNG, белое — перерисовать).");
+                var video = ReadInput(request, root, request.Video, MediaKind.Video);
+                var info = video.Video!;
+                if (!IsAllowedVideoSize(info.Width, info.Height))
+                    throw new LocalMediaInputException($"Видео {info.Width}×{info.Height}: для инпейнта нужен размер "
+                        + "1344×768 или 864×480 (либо портретный с переставленными сторонами).");
+                var seconds = (int)Math.Round(info.Seconds);
+                if (seconds < 1 || seconds > options.MaxVideoSeconds)
+                    throw new LocalMediaInputException($"Видео для инпейнта — от 1 до {options.MaxVideoSeconds} секунд, "
+                        + $"а это ≈{info.Seconds:0.#} с.");
+                var mask = ReadInput(request, root, request.Mask, MediaKind.Image);
+                if (ImageDimensions.Read(mask.Bytes) is not { } maskDims || maskDims != (info.Width, info.Height))
+                    throw new LocalMediaInputException($"Маска должна быть того же размера, что видео ({info.Width}×{info.Height}).");
+
+                var videoName = await comfy.UploadImageAsync(video.Bytes, $"{job.Id}-video.mp4", ct);
+                var maskName = await comfy.UploadImageAsync(mask.Bytes, $"{job.Id}-mask{mask.Extension}", ct);
+                var frames = ComfyWorkflows.FramesFor(seconds);
+                job.Width = info.Width;
+                job.Height = info.Height;
+                job.DurationSeconds = seconds;
+                return (ComfyWorkflows.InpaintVideo(videoName, maskName, prompt, info.Width, info.Height, frames, seed,
+                    prefix), null);
+            }
+            case LocalMediaOps.ReferenceToVideo:
+            {
+                var refVideos = request.RefVideos ?? [];
+                var refAudios = request.RefAudios ?? [];
+                if (images.Count is < 1 or > ComfyWorkflows.MaxRefImages)
+                    throw new LocalMediaInputException("Нужно от 1 до 9 картинок-референсов (ref_images).");
+                if (refVideos.Count > ComfyWorkflows.MaxRefVideos)
+                    throw new LocalMediaInputException("Референс-видео — не больше трёх (ref_videos).");
+                if (refAudios.Count > ComfyWorkflows.MaxRefAudios)
+                    throw new LocalMediaInputException("Референсного звука — не больше трёх (ref_audios).");
+                var maxIdentity = IsMaxIdentity(request.Identity);
+                var seconds = VideoSeconds(request, options);
+                var size = VideoSize(request.VideoSize, request.Orientation);
+
+                var imageNames = new List<string>();
+                for (var k = 0; k < images.Count; k++)
+                    imageNames.Add(await UploadInputAsync(request, root, images[k], MediaKind.Image, $"{job.Id}-ref{k + 1}", ct));
+                var videoNames = new List<string>();
+                for (var k = 0; k < refVideos.Count; k++)
+                {
+                    var video = ReadInput(request, root, refVideos[k], MediaKind.Video);
+                    if (video.Video!.Seconds is < MinRefVideoSeconds or > MaxRefVideoSeconds)
+                        throw new LocalMediaInputException($"Референс-видео «{refVideos[k]}» — ≈{video.Video.Seconds:0.#} с, "
+                            + "а нужно от 2 до 15 секунд.");
+                    videoNames.Add(await comfy.UploadImageAsync(video.Bytes, $"{job.Id}-refvid{k + 1}.mp4", ct));
+                }
+                var audioNames = new List<string>();
+                for (var k = 0; k < refAudios.Count; k++)
+                    audioNames.Add(await UploadInputAsync(request, root, refAudios[k], MediaKind.Audio, $"{job.Id}-refaud{k + 1}", ct));
 
                 job.Width = size.Width;
                 job.Height = size.Height;
                 job.DurationSeconds = seconds;
-                var eta = seconds <= 5 ? 110 : 110 + (seconds - 5) * 60;
-                return (ComfyWorkflows.ImageToVideo(name, prompt, size.Width, size.Height,
-                    ComfyWorkflows.FramesFor(seconds), seed, prefix), eta);
+                return (ComfyWorkflows.ReferenceToVideo(prompt, imageNames, videoNames, audioNames, size.Width, size.Height,
+                    ComfyWorkflows.FramesFor(seconds), maxIdentity, seed, prefix), null);
             }
             default:
                 throw new LocalMediaInputException("Неизвестная операция.");
         }
+    }
+
+    // Апскейл по латенту прошлой видеозадачи ЭТОГО владельца и проекта. Произвольный mp4 не
+    // принимается: латентный апскейлер работает только со своим же латентом. Латенты едут из
+    // output ComfyUI в корень input под именем с jobId (LoadLatent видит только корень)
+    private async Task<JsonObject> BuildUpscaleAsync(LocalMediaRequest request, LocalMediaJob job, string prefix,
+        LocalMediaOptions options, CancellationToken ct)
+    {
+        var sourceId = (request.SourceJobId ?? "").Trim();
+        if (sourceId.Length == 0)
+            throw new LocalMediaInputException("Для апскейла нужен job_id завершённой задачи local_text_to_video или local_image_to_video.");
+        var source = LooksLikeJobId(sourceId) ? store.Get(sourceId, request.OwnerId) : null;
+        if (source is null || source.ProjectId != request.ProjectId)
+            throw new LocalMediaInputException($"Задача {sourceId} не найдена.");
+        if (!LocalMediaOps.KeepsLatent(source.Op))
+            throw new LocalMediaInputException("Апскейл — только для видео из local_text_to_video или local_image_to_video: "
+                + "он работает по сохранённому латенту задачи, а не по готовому файлу.");
+        if (source.Status != LocalMediaStatuses.Completed || source.LatentVideo is null || source.LatentAudio is null
+            || source.Prompt is null || source.Frames is null)
+            throw new LocalMediaInputException($"У задачи {sourceId} нет сохранённого латента: она не завершена "
+                + "или поставлена до появления апскейла.");
+
+        var landscape = (source.Width, source.Height) == ComfyWorkflows.VideoSizes["full"];
+        var portrait = (source.Height, source.Width) == ComfyWorkflows.VideoSizes["full"];
+        if (!landscape && !portrait)
+            throw new LocalMediaInputException("Апскейл — только для видео размера full (1344×768 или портретного 768×1344).");
+
+        var target = (request.UpscaleTarget ?? "1440p").Trim().ToLowerInvariant();
+        (int Width, int Height) size = target switch
+        {
+            "1440p" or "1440" => ComfyWorkflows.Upscale1440,
+            "2k" => ComfyWorkflows.Upscale2k,
+            _ => throw new LocalMediaInputException("target — 1440p (2528×1440) или 2k (2688×1536)."),
+        };
+        if (portrait) size = (size.Height, size.Width);
+        var tiled = target == "2k" || options.Upscale1440Tiled;
+
+        var latentVideo = await CopyLatentAsync(source.LatentVideo, $"{ComfyClient.InputFolder}-{job.Id}-video.latent", ct);
+        var latentAudio = await CopyLatentAsync(source.LatentAudio, $"{ComfyClient.InputFolder}-{job.Id}-audio.latent", ct);
+
+        if (request.Seed is not >= 0) job.Seed = source.Seed;
+        job.Width = size.Width;
+        job.Height = size.Height;
+        job.DurationSeconds = source.DurationSeconds;
+        job.Frames = source.Frames;
+        return ComfyWorkflows.UpscaleVideo(latentVideo, latentAudio, source.ComfyFirstFrame, source.Prompt,
+            size.Width, size.Height, source.Frames.Value, job.Seed, tiled, prefix);
+    }
+
+    private async Task<string> CopyLatentAsync(string outputPath, string inputName, CancellationToken ct)
+    {
+        var slash = outputPath.LastIndexOf('/');
+        var file = new ComfyOutputFile(outputPath[(slash + 1)..], slash < 0 ? "" : outputPath[..slash], "output");
+        var bytes = await comfy.DownloadAsync(file, ct);
+        return await comfy.UploadInputAsync(bytes, inputName, "", ct);
+    }
+
+    public static bool IsHeavy(LocalMediaRequest request) =>
+        request.Op is LocalMediaOps.VideoUpscale or LocalMediaOps.VideoInpaint
+        || (request.Op == LocalMediaOps.ReferenceToVideo
+            && string.Equals(request.Identity?.Trim(), "max", StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsMaxIdentity(string? identity) => (identity?.Trim().ToLowerInvariant()) switch
+    {
+        null or "" or "match" => false,
+        "max" => true,
+        _ => throw new LocalMediaInputException("identity — match (быстрее) или max (точнее сходство, в разы медленнее)."),
+    };
+
+    private static int VideoSeconds(LocalMediaRequest request, LocalMediaOptions options)
+    {
+        var seconds = request.DurationSeconds ?? 5;
+        if (seconds < 1 || seconds > options.MaxVideoSeconds)
+            throw new LocalMediaInputException($"Длительность — от 1 до {options.MaxVideoSeconds} секунд.");
+        return seconds;
+    }
+
+    private static (int Width, int Height) VideoSize(string? key, string? orientation)
+    {
+        var sizeKey = string.IsNullOrWhiteSpace(key) ? "full" : key.Trim();
+        if (!ComfyWorkflows.VideoSizes.TryGetValue(sizeKey, out var size))
+            throw new LocalMediaInputException("size — full (1344×768) или half (864×480).");
+        return (orientation?.Trim().ToLowerInvariant()) switch
+        {
+            null or "" or "landscape" => size,
+            "portrait" => (size.Height, size.Width),
+            _ => throw new LocalMediaInputException("orientation — landscape или portrait."),
+        };
+    }
+
+    private static bool IsAllowedVideoSize(int width, int height) =>
+        ComfyWorkflows.VideoSizes.Values.Any(s => (s.Width, s.Height) == (width, height) || (s.Height, s.Width) == (width, height));
+
+    private static void RememberVideo(LocalMediaJob job, string prompt, (int Width, int Height) size, int seconds,
+        int frames, bool fast)
+    {
+        job.Width = size.Width;
+        job.Height = size.Height;
+        job.DurationSeconds = seconds;
+        job.Frames = frames;
+        job.Prompt = prompt;
+        job.Fast = fast;
+    }
+
+    private static string LatentPrefix(LocalMediaJob job) => $"{ComfyWorkflows.OutputFolder}/latents/{job.Id}";
+
+    // Время по замерам стенда (одна RTX 3090, 1344×768): 5 с — 333 с в режиме A и 234 с в
+    // ускоренном AS, 10 с в режиме A — ≈930 с. Промежуточные длины — по прямой, AS для 10 с —
+    // тем же отношением. half и остальные операции ещё не замерены: время не обещаем
+    public static int? VideoEta((int Width, int Height) size, int seconds, bool fast)
+    {
+        var full = ComfyWorkflows.VideoSizes["full"];
+        if (size != full && size != (full.Height, full.Width)) return null;
+        var normal = seconds <= 5 ? 333.0 : 333 + (seconds - 5) * (930 - 333) / 5.0;
+        return (int)Math.Round(fast ? normal * 234 / 333 : normal);
     }
 
     private static (int Width, int Height) AspectSize(string aspect) =>
@@ -211,20 +421,28 @@ public sealed class LocalMediaService(
             : throw new LocalMediaInputException("aspect — одно из: " + string.Join(", ", ComfyWorkflows.ImageSizes.Keys) + ".");
 
     private async Task<string> UploadInputAsync(LocalMediaRequest request, string root, string reference,
-        string stem, CancellationToken ct)
+        MediaKind kind, string stem, CancellationToken ct)
     {
-        var (bytes, _) = ReadInput(request, root, reference);
-        return await comfy.UploadImageAsync(bytes, stem + Extension(bytes), ct);
+        var input = ReadInput(request, root, reference, kind);
+        return await comfy.UploadImageAsync(input.Bytes, stem + input.Extension, ct);
     }
 
-    private static string Extension(byte[] bytes) => ImageFormatSniffer.DetectExtension(bytes) ?? ".png";
+    private enum MediaKind { Image, Video, Audio }
+
+    private sealed record InputFile(byte[] Bytes, string Extension, MediaProbe.VideoInfo? Video);
 
     // Вход — путь файла проекта или job_id прошлой задачи этого же владельца и проекта.
     // Только из проекта чата: SafePath + запрет символических ссылок (ProjectLinkGuard)
-    private (byte[] Bytes, string Path) ReadInput(LocalMediaRequest request, string root, string reference)
+    private InputFile ReadInput(LocalMediaRequest request, string root, string reference, MediaKind kind)
     {
         var value = (reference ?? "").Trim();
-        if (value.Length == 0) throw new LocalMediaInputException("Пустая ссылка на картинку.");
+        var (what, result) = kind switch
+        {
+            MediaKind.Video => ("видео", "готового видео"),
+            MediaKind.Audio => ("звук", "готового звука"),
+            _ => ("картинку", "готовой картинки"),
+        };
+        if (value.Length == 0) throw new LocalMediaInputException($"Пустая ссылка на {what}.");
 
         string relative;
         if (LooksLikeJobId(value))
@@ -232,9 +450,11 @@ public sealed class LocalMediaService(
             var source = store.Get(value, request.OwnerId);
             if (source is null || source.ProjectId != request.ProjectId)
                 throw new LocalMediaInputException($"Задача {value} не найдена.");
-            var output = source.Outputs.FirstOrDefault(o => o.ContentType.StartsWith("image/", StringComparison.Ordinal));
+            var type = kind == MediaKind.Video ? "video/" : "image/";
+            var output = kind == MediaKind.Audio ? null
+                : source.Outputs.FirstOrDefault(o => o.ContentType.StartsWith(type, StringComparison.Ordinal));
             if (source.Status != LocalMediaStatuses.Completed || output is null)
-                throw new LocalMediaInputException($"У задачи {value} нет готовой картинки.");
+                throw new LocalMediaInputException($"У задачи {value} нет {result}.");
             relative = output.Path;
         }
         else
@@ -247,11 +467,25 @@ public sealed class LocalMediaService(
             ?? throw new LocalMediaInputException($"Путь «{value}» вне папки проекта.");
         var info = new FileInfo(full);
         if (!info.Exists) throw new LocalMediaInputException($"Файл «{value}» не найден в проекте.");
-        if (info.Length > MaxInputBytes) throw new LocalMediaInputException($"Файл «{value}» больше 30 МБ.");
+        var limit = kind == MediaKind.Image ? MaxInputBytes : MaxMediaInputBytes;
+        if (info.Length > limit) throw new LocalMediaInputException($"Файл «{value}» больше {limit / 1024 / 1024} МБ.");
         var bytes = File.ReadAllBytes(full);
-        if (ImageFormatSniffer.DetectExtension(bytes) is null)
-            throw new LocalMediaInputException($"Файл «{value}» — не картинка (нужен PNG, JPEG или WebP).");
-        return (bytes, relative);
+
+        switch (kind)
+        {
+            case MediaKind.Video:
+                var video = MediaProbe.ReadMp4(bytes)
+                    ?? throw new LocalMediaInputException($"Файл «{value}» — не видео mp4 (или в нём нет видеодорожки).");
+                return new InputFile(bytes, ".mp4", video);
+            case MediaKind.Audio:
+                var audio = MediaProbe.DetectAudioExtension(bytes)
+                    ?? throw new LocalMediaInputException($"Файл «{value}» — не звук (нужен WAV, MP3, FLAC или OGG).");
+                return new InputFile(bytes, audio, null);
+            default:
+                var image = ImageFormatSniffer.DetectExtension(bytes)
+                    ?? throw new LocalMediaInputException($"Файл «{value}» — не картинка (нужен PNG, JPEG или WebP).");
+                return new InputFile(bytes, image, null);
+        }
     }
 
     // Длина общей очереди ComfyUI; null — ComfyUI недоступен
@@ -329,7 +563,7 @@ public sealed class LocalMediaService(
                 return new LocalMediaJobView(Fail(job, history.Error ?? "ComfyUI завершил задачу ошибкой."));
             if (!history.Completed)
                 return new LocalMediaJobView(job, 0);
-            return new LocalMediaJobView(await CollectAsync(job, history.Files, ct));
+            return new LocalMediaJobView(await CollectAsync(job, history, ct));
         }
         catch (ComfyException ex)
         {
@@ -343,9 +577,9 @@ public sealed class LocalMediaService(
         }
     }
 
-    private async Task<LocalMediaJob> CollectAsync(LocalMediaJob job, IReadOnlyList<ComfyOutputFile> files,
-        CancellationToken ct)
+    private async Task<LocalMediaJob> CollectAsync(LocalMediaJob job, ComfyHistoryEntry history, CancellationToken ct)
     {
+        var files = history.Files;
         await _collectGate.WaitAsync(ct);
         try
         {
@@ -387,10 +621,17 @@ public sealed class LocalMediaService(
                 });
             }
 
+            // Латент видео — вход будущего апскейла: остаётся в output ComfyUI, в сторе только путь
+            var (latentVideo, latentAudio) = LocalMediaOps.KeepsLatent(current.Op)
+                ? (LatentPath(history.Latents, "_video_"), LatentPath(history.Latents, "_audio_"))
+                : (null, null);
+
             return store.Update(current.Id, j =>
             {
                 j.Status = LocalMediaStatuses.Completed;
                 j.Outputs = outputs;
+                j.LatentVideo = latentVideo;
+                j.LatentAudio = latentAudio;
                 j.FinishedAt = DateTime.UtcNow;
             }) ?? current;
         }
@@ -408,6 +649,11 @@ public sealed class LocalMediaService(
             _collectGate.Release();
         }
     }
+
+    private static string? LatentPath(IReadOnlyList<ComfyOutputFile> latents, string marker) =>
+        latents.FirstOrDefault(l => l.FileName.Contains(marker, StringComparison.Ordinal)) is { } file
+            ? (file.Subfolder.Length == 0 ? file.FileName : $"{file.Subfolder}/{file.FileName}")
+            : null;
 
     public static string? ContentTypeOf(string extension) => extension.ToLowerInvariant() switch
     {

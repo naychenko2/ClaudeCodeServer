@@ -13,7 +13,9 @@ public sealed record ComfyQueued(string PromptId);
 // Файл-выход ноды: SaveImage и SaveVideo оба кладут его в outputs.{node}.images
 public sealed record ComfyOutputFile(string FileName, string Subfolder, string Type);
 
-public sealed record ComfyHistoryEntry(bool Completed, bool Failed, string? Error, IReadOnlyList<ComfyOutputFile> Files);
+// Latents — файлы SaveLatent (outputs.{node}.latents): служебные, в проект не идут
+public sealed record ComfyHistoryEntry(bool Completed, bool Failed, string? Error, IReadOnlyList<ComfyOutputFile> Files,
+    IReadOnlyList<ComfyOutputFile> Latents);
 
 // Снимок очереди: id задач по порядку — идущая первой
 public sealed record ComfyQueueState(IReadOnlyList<string> Running, IReadOnlyList<string> Pending)
@@ -46,21 +48,27 @@ public sealed class ComfyClient(IHttpClientFactory http, IConfiguration config)
     }
 
     // Загрузка картинки в input ComfyUI; результат — имя для LoadImage («подпапка/файл»)
-    public async Task<string> UploadImageAsync(byte[] bytes, string fileName, CancellationToken ct)
+    public Task<string> UploadImageAsync(byte[] bytes, string fileName, CancellationToken ct) =>
+        UploadInputAsync(bytes, fileName, InputFolder, ct);
+
+    // Загрузка любого входа (видео, звук, латент) через тот же /upload/image — ComfyUI не
+    // проверяет формат. subfolder "" — корень input: LoadLatent без VALIDATE_INPUTS видит
+    // только файлы корня, подпапку он отвергает на валидации
+    public async Task<string> UploadInputAsync(byte[] bytes, string fileName, string subfolder, CancellationToken ct)
     {
         using var form = new MultipartFormDataContent();
         var file = new ByteArrayContent(bytes);
         file.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
         form.Add(file, "image", fileName);
         form.Add(new StringContent("input"), "type");
-        form.Add(new StringContent(InputFolder), "subfolder");
+        form.Add(new StringContent(subfolder), "subfolder");
         form.Add(new StringContent("true"), "overwrite");
 
-        var json = await SendJsonAsync(c => c.PostAsync("upload/image", form, ct), "загрузка картинки", ct);
+        var json = await SendJsonAsync(c => c.PostAsync("upload/image", form, ct), "загрузка входа", ct);
         var name = json?["name"]?.GetValue<string>();
         if (string.IsNullOrEmpty(name)) throw new ComfyException("ComfyUI не вернул имя загруженного файла");
-        var subfolder = json?["subfolder"]?.GetValue<string>() ?? "";
-        return subfolder.Length == 0 ? name : $"{subfolder}/{name}";
+        var saved = json?["subfolder"]?.GetValue<string>() ?? "";
+        return saved.Length == 0 ? name : $"{saved}/{name}";
     }
 
     // preview_method=latent2rgb — ОБЯЗАТЕЛЬНО: без него TAEHV-превью под DynamicVRAM роняет
@@ -106,9 +114,10 @@ public sealed class ComfyClient(IHttpClientFactory http, IConfiguration config)
                 }
 
         var files = new List<ComfyOutputFile>();
+        var latents = new List<ComfyOutputFile>();
         if (entry["outputs"] is JsonObject outputs)
             foreach (var (_, output) in outputs)
-                foreach (var key in new[] { "images", "gifs", "videos" })
+                foreach (var key in new[] { "images", "gifs", "videos", "latents" })
                     if (output?[key] is JsonArray list)
                         foreach (var item in list)
                         {
@@ -117,10 +126,12 @@ public sealed class ComfyClient(IHttpClientFactory http, IConfiguration config)
                             // temp-выходы — превью, в результат не идут
                             var type = item?["type"]?.GetValue<string>() ?? "output";
                             if (type != "output") continue;
-                            files.Add(new ComfyOutputFile(name, item?["subfolder"]?.GetValue<string>() ?? "", type));
+                            var file = new ComfyOutputFile(name, item?["subfolder"]?.GetValue<string>() ?? "", type);
+                            (key == "latents" ? latents : files).Add(file);
                         }
 
-        return new ComfyHistoryEntry(completed && !failed, failed, error ?? (failed ? "ComfyUI завершил задачу ошибкой" : null), files);
+        return new ComfyHistoryEntry(completed && !failed, failed, error ?? (failed ? "ComfyUI завершил задачу ошибкой" : null),
+            files, latents);
     }
 
     public async Task<byte[]> DownloadAsync(ComfyOutputFile file, CancellationToken ct)

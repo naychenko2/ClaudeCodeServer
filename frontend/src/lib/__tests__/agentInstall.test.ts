@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentInstallCommand, guessAgentOs, isRootNotAllowed, rootsAddCommand } from '../agentInstall';
+import { agentInstallCommand, guessAgentOs, isRootNotAllowed, isSecureAgentOrigin, rootsAddCommand } from '../agentInstall';
 
 describe('agentInstallCommand', () => {
   it('Windows — scriptblock с параметрами -Server/-Code', () => {
@@ -42,5 +42,27 @@ describe('rootsAddCommand', () => {
   it('без платформы узнаёт Windows по букве диска', () => {
     expect(rootsAddCommand('D:\\work\\$x', null)).toBe('ai-home-agent roots add "D:\\work\\`$x"');
     expect(rootsAddCommand('/srv/$x', null)).toBe('ai-home-agent roots add "/srv/\\$x"');
+  });
+});
+
+describe('isSecureAgentOrigin', () => {
+  it('https — всегда', () => {
+    expect(isSecureAgentOrigin('https://home.example.com')).toBe(true);
+    expect(isSecureAgentOrigin('https://192.168.1.5:5001')).toBe(true);
+  });
+
+  it('http — только на петле', () => {
+    expect(isSecureAgentOrigin('http://localhost:5001')).toBe(true);
+    expect(isSecureAgentOrigin('http://127.0.0.1:5000')).toBe(true);
+    expect(isSecureAgentOrigin('http://[::1]:5000')).toBe(true);
+  });
+
+  it('открытый http из сети и мусор — нет', () => {
+    expect(isSecureAgentOrigin('http://192.168.1.5')).toBe(false);
+    expect(isSecureAgentOrigin('http://home.example.com:5000')).toBe(false);
+    expect(isSecureAgentOrigin('http://localhost.evil.example')).toBe(false);
+    expect(isSecureAgentOrigin('http://localhost@evil.example')).toBe(false);
+    expect(isSecureAgentOrigin('ftp://localhost')).toBe(false);
+    expect(isSecureAgentOrigin('null')).toBe(false);
   });
 });

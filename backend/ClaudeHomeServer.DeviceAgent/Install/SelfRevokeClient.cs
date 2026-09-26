@@ -1,4 +1,5 @@
 using System.Net;
+using ClaudeHomeServer.DeviceAgent.Pairing;
 using ClaudeHomeServer.DeviceAgent.Sidecar;
 
 namespace ClaudeHomeServer.DeviceAgent.Install;
@@ -20,8 +21,8 @@ internal sealed class SelfRevokeClient(HttpClient http) : ISelfRevoke
         Uri server, string deviceToken, string fingerprint, CancellationToken ct)
     {
         // Токен по открытому каналу не уходит, как и при сопряжении; loopback — дев-стенд
-        if (server.Scheme != Uri.UriSchemeHttps && !server.IsLoopback)
-            return (SelfRevokeStatus.Failed, "сервер не по HTTPS: токен устройства по открытому каналу не отправляется");
+        if (!ServerChannel.IsSecure(server))
+            return (SelfRevokeStatus.Failed, ServerChannel.InsecureError);
 
         using var request = new HttpRequestMessage(HttpMethod.Delete, new Uri(server, "api/devices/self"));
         request.Headers.TryAddWithoutValidation("Authorization", SidecarProxy.DeviceAuthPrefix + deviceToken);

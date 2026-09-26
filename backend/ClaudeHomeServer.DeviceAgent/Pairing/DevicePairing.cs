@@ -61,8 +61,8 @@ internal sealed class PairingClient(HttpClient http)
         Uri server, string code, string deviceName, string clientVersion, IDeviceTokenStore store, CancellationToken ct = default)
     {
         // По открытому каналу код и токен не выдаются (ADR-008); loopback — дев-стенд
-        if (server.Scheme != Uri.UriSchemeHttps && !server.IsLoopback)
-            throw new PairingException("сопряжение только по HTTPS: по открытому каналу код и токен не выдаются");
+        if (!ServerChannel.IsSecure(server))
+            throw new PairingException("сопряжение только по HTTPS: " + ServerChannel.InsecureError);
 
         var fingerprint = MachineIdentity.Fingerprint();
         using var response = await http.PostAsJsonAsync(new Uri(server, "api/devices/pair"),

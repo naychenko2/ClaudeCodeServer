@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.WebSockets;
 using ClaudeHomeServer.DeviceAgent.Cli;
 using ClaudeHomeServer.DeviceAgent.Exec;
+using ClaudeHomeServer.DeviceAgent.Pairing;
 using ClaudeHomeServer.DeviceAgent.Sidecar;
 using ClaudeHomeServer.DeviceAgent.Update;
 using ClaudeHomeServer.Protocol;
@@ -248,6 +249,8 @@ internal sealed class ExecSocketConnector(IDeviceIdentity device) : IExecSocketC
 {
     public async Task<WebSocket> ConnectAsync(string execId, CancellationToken ct)
     {
+        if (!ServerChannel.IsSecure(device.ServerUri)) throw new ExecLinkRefusedException(ServerChannel.InsecureError);
+
         var socket = new ClientWebSocket();
         socket.Options.CollectHttpResponseDetails = true;
         socket.Options.SetRequestHeader("Authorization", SidecarProxy.DeviceAuthPrefix + device.DeviceToken);

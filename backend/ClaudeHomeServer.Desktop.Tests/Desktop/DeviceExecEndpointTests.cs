@@ -77,6 +77,50 @@ public class DeviceExecEndpointTests : IDisposable
         return request;
     }
 
+    // ---------- канал: только HTTPS или петля, как у сопряжения ----------
+
+    // Запрос пришёл через прокси без https: петля соединения ничего не доказывает
+    private static HttpRequestMessage ViaPlainProxy(HttpRequestMessage request)
+    {
+        request.Headers.Add("X-Forwarded-For", "192.168.1.5");
+        return request;
+    }
+
+    private HttpRequestMessage HubNegotiate()
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, "/hubs/devices/negotiate?negotiateVersion=1");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Device", _deviceToken);
+        request.Headers.Add(DesktopDeviceAuthHandler.FingerprintHeader, _fingerprint);
+        return request;
+    }
+
+    [Fact]
+    public async Task КаналИсполненияПоОткрытомуКаналу_403()
+    {
+        using var client = _factory.CreateClient();
+        var response = await client.SendAsync(ViaPlainProxy(DeviceRequest()));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await response.Content.ReadAsStringAsync()).Should().Contain("HTTPS");
+    }
+
+    [Fact]
+    public async Task ХабУстройствПоОткрытомуКаналу_403()
+    {
+        using var client = _factory.CreateClient();
+        var response = await client.SendAsync(ViaPlainProxy(HubNegotiate()));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await response.Content.ReadAsStringAsync()).Should().Contain("HTTPS");
+    }
+
+    [Fact]
+    public async Task ХабУстройствНаПетле_Пускает()
+    {
+        using var client = _factory.CreateClient();
+        (await client.SendAsync(HubNegotiate())).StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
     // ---------- авторизация ----------
 
     [Fact]

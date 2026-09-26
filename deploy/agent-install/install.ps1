@@ -88,12 +88,54 @@ if ($Help) { Show-Usage; exit $ExitOk }
 # ---------- URL без хвостового слэша ----------
 if ($Server.EndsWith('/')) { $Server = $Server.TrimEnd('/') }
 
+# ---------- канал: https или петля ----------
+# До любой загрузки: по открытому http атакующий в сети подменит архив, и чужой бинарь
+# выполнится раньше, чем сервер откажет в сопряжении. Правило то же, что у сервера
+# (DeviceChannelGuard) и агента (ServerChannel): https, либо http на петле.
+function Test-SecureServer([string]$url) {
+    $uri = $null
+    if (-not [Uri]::TryCreate($url, [UriKind]::Absolute, [ref]$uri)) { return $false }
+    if ($uri.Scheme -eq 'https') { return $true }
+    return ($uri.Scheme -eq 'http' -and $uri.IsLoopback)
+}
+
+if (-not (Test-SecureServer $Server)) {
+    Exit-With $ExitUsage ("адрес сервера должен быть https:// (http допустим только для localhost, 127.0.0.1 и [::1]): '$Server'. " +
+        "Откройте веб-интерфейс по https-адресу и скопируйте команду оттуда")
+}
+
+# Редирект не должен опускать протокол: ответ, пришедший не с запрошенного адреса, годится только по https
+function Assert-SecureResponse($resp, [string]$url) {
+    # Упавший запрос PowerShell отдаёт из .Result как $null — это сетевой отказ, его разбирает catch
+    if ($null -eq $resp) { throw "сервер не ответил" }
+    $final = $resp.RequestMessage.RequestUri
+    if ($final.AbsoluteUri -ne ([Uri]$url).AbsoluteUri -and $final.Scheme -ne 'https') {
+        Exit-With $ExitDownload "сервер перенаправил на незащищённый адрес $final — загрузка остановлена"
+    }
+}
+
 # RID — только win-x64
 $Rid = 'win-x64'
 
 # ---------- временный каталог ----------
 $TempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("ccs-agent-install-" + [guid]::NewGuid().ToString('N'))
-$null = New-Item -ItemType Directory -Path $TempDir -Force
+if ($PSVersionTable.PSVersion.Major -ge 6 -and -not $IsWindows) {
+    # Не Windows (прогон тестов под pwsh): ACL Windows тут нет, у GetTempPath свои права
+    $null = New-Item -ItemType Directory -Path $TempDir
+} else {
+    # Доступ только текущему пользователю, без наследования от %TEMP%: соседний процесс
+    # не подменит архив между проверкой SHA-256 и распаковкой. Каталог создаётся сразу с ACL
+    $Acl = New-Object System.Security.AccessControl.DirectorySecurity
+    $Acl.SetAccessRuleProtection($true, $false)
+    $Me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+    $Acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+        $Me, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
+    if ($PSVersionTable.PSVersion.Major -ge 6) {
+        $null = [System.IO.FileSystemAclExtensions]::Create([System.IO.DirectoryInfo]::new($TempDir), $Acl)
+    } else {
+        $null = [System.IO.Directory]::CreateDirectory($TempDir, $Acl)
+    }
+}
 
 # ---------- скачивание через HttpClient (одинаково в PS 5.1 и 7) ----------
 # Invoke-WebRequest в PS 5.1 плохо обрабатывает тело ошибки при 5xx; HttpClient всегда
@@ -106,6 +148,7 @@ function Get-Manifest([string]$url, [string]$localPath) {
     # Возвращает PSCustomObject с .StatusCode (int) и .Body (string).
     try {
         $resp = $HttpClient.GetAsync($url).Result
+        Assert-SecureResponse $resp $url
         $body = $resp.Content.ReadAsStringAsync().Result
         return [pscustomobject]@{ StatusCode = [int]$resp.StatusCode; Body = $body }
     } catch {
@@ -120,6 +163,7 @@ function Get-Archive([string]$url, [string]$localPath) {
     $HttpClient.Timeout = [TimeSpan]::FromSeconds(300)
     try {
         $resp = $HttpClient.GetAsync($url).Result
+        Assert-SecureResponse $resp $url
         $bytes = $resp.Content.ReadAsByteArrayAsync().Result
         if (-not $resp.IsSuccessStatusCode) {
             # Попробуем разобрать как JSON для нормального сообщения

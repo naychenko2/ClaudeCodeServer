@@ -41,6 +41,16 @@ public class SessionImageChatTests
         session.ImageChat.DraftFolder.Should().BeNull();
     }
 
+    // Чат картинки без поля currentPath — черновик (null), а не «файл по пустому пути»
+    [Fact]
+    public void ЧатКартинкиБезCurrentPath_ЧитаетсяЧерновиком()
+    {
+        const string record = """{"id":"s1","ImageChat":{"DraftFolder":"art","Lineage":[]}}""";
+        var session = JsonSerializer.Deserialize<Session>(record, StoreJson)!;
+        session.ImageChat!.CurrentPath.Should().BeNull();
+        new SessionImageChat().CurrentPath.Should().BeNull("новый чат картинки по умолчанию — черновик");
+    }
+
     [Fact]
     public void ЧерновикКартинки_ПереживаетКругСериализацииИУходитНаФронт()
     {

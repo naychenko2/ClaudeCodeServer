@@ -143,7 +143,8 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         Project project, CancellationToken ct)
     {
         var current = _states.Get(ownerId, session.Id);
-        var chatPath = session.ImageChat!.CurrentPath;
+        // Пустая строка — не путь: у черновика исходника нет, и в задачу она уйти не должна
+        var chatPath = session.ImageChat!.CurrentPath is { Length: > 0 } boundPath ? boundPath : null;
 
         // Что не передано — из состояния редактора, а поставщик по умолчанию — как у каталога
         var provider = Str(args, "provider") ?? current.Provider ?? DefaultProvider();

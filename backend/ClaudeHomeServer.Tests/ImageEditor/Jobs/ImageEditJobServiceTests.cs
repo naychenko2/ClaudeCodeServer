@@ -146,27 +146,44 @@ public class ImageEditJobServiceTests : IDisposable
             .Should().ContainSingle(m => m.JobId == jobId && m.Outcome == EditOutcome.Cancelled);
     }
 
-    // C1: кредиты администратора без цены не тратятся — отказ ещё на котировке, и до
-    // поставщика дело не доходит
+    // C1 пересмотрен (хотфикс 2026-09-26): котировка без цены запуск не запрещает. Трата
+    // ложится на запустившего при принятии с пометкой «сумма уточняется», фактическая сумма
+    // из ответа поставщика догоняет её отдельной записью
     [Fact]
-    public async Task Higgsfield_БезЦеныВКотировке_ОтказИПоставщикНеВызывается()
+    public async Task Higgsfield_БезЦены_ЗапускИдёт_ТратаНаЗапустившегоСуммаДогоняется()
     {
-        var higgsfield = new ScriptedEditor("higgsfield", (_, _, _) =>
-            Task.FromResult(new ImageEditResult(EditOutcome.Ok, [new EditedImage(TestImages.Png(2, 2), "image/png")], null, true, "r", null)),
-            price: null);
+        var higgsfield = new ScriptedEditor("higgsfield", (_, progress, _) =>
+        {
+            progress.Report(new EditProgress(EditStage.Queued));
+            return Task.FromResult(new ImageEditResult(EditOutcome.Ok, [new EditedImage(TestImages.Png(2, 2), "image/png")],
+                new EditCost(3.0, ImageEditPriceUnits.Credits), true, "r", null));
+        }, price: null);
         var service = Service(higgsfield);
 
         var quote = await service.QuoteAsync("user-a", Project, Quote("higgsfield", count: 2), default);
+        quote.Value!.Estimate.Amount.Should().BeNull();
+        var job = await WaitDone(service, "user-a", await StartAsync(service, "user-a", "higgsfield", count: 2));
 
-        quote.Value.Should().BeNull();
-        quote.ErrorCode.Should().Be(ImageEditErrorCodes.ProviderUnavailable);
-        higgsfield.Runs.Should().Be(0);
-        _spend.Records.Should().BeEmpty();
+        job.Status.Should().Be(ImageEditJobStatus.Completed);
+        higgsfield.Runs.Should().Be(1);
+        job.Cost.Should().Be(new EditCost(3.0, ImageEditPriceUnits.Credits));
+        _spend.Records.Should().HaveCount(2);
+        var accepted = _spend.Records.First();
+        accepted.OwnerId.Should().Be("user-a");
+        accepted.Provider.Should().Be("higgsfield");
+        accepted.Generations.Should().Be(2);
+        accepted.CostCredits.Should().BeNull();
+        accepted.Label.Should().Be(ImageEditJobService.SpendLabelPendingAmount);
+        var topUp = _spend.Records.Last();
+        topUp.OwnerId.Should().Be("user-a");
+        topUp.Generations.Should().Be(0);
+        topUp.CostCredits.Should().Be(3.0);
+        topUp.Label.Should().Be(ImageEditJobService.SpendLabel);
     }
 
-    // Сосед-Higgsfield без цены не предлагается повтором: по такой котировке нельзя запуститься
+    // Сосед-Higgsfield без цены теперь предлагается повтором: по такой котировке можно запуститься
     [Fact]
-    public async Task ПовторЧерезHiggsfieldБезЦены_НеПредлагается()
+    public async Task ПовторЧерезHiggsfieldБезЦены_Предлагается()
     {
         var fal = new ScriptedEditor("fal", (_, _, _) =>
             Task.FromResult(new ImageEditResult(EditOutcome.Failed, [], null, false, null, "сбой")));
@@ -176,9 +193,28 @@ public class ImageEditJobServiceTests : IDisposable
         var job = await WaitDone(service, "user-a", await StartAsync(service, "user-a", "fal"));
 
         job.Status.Should().Be(ImageEditJobStatus.Failed);
-        _broadcaster.ToOwnerCalls.Select(c => c.Message).OfType<ImageEditFailedMessage>().Single()
-            .RetryQuote.Should().BeNull();
+        var retry = _broadcaster.ToOwnerCalls.Select(c => c.Message).OfType<ImageEditFailedMessage>().Single().RetryQuote;
+        retry!.Provider.Should().Be("higgsfield");
+        retry.Estimate.Amount.Should().BeNull();
         higgsfield.Runs.Should().Be(0);
+    }
+
+    // Потолки одновременных задач на Higgsfield не действуют: работа идёт у поставщика
+    [Fact]
+    public async Task ПотолокЗадач_НаHiggsfieldНеДействует()
+    {
+        var gate = new TaskCompletionSource();
+        var editor = new ScriptedEditor("higgsfield", async (_, _, ct) =>
+        {
+            await gate.Task.WaitAsync(ct);
+            return new ImageEditResult(EditOutcome.Failed, [], null, false, null, "x");
+        });
+        var service = Service(editor);
+
+        for (var i = 0; i < ImageEditJobService.MaxJobsPerInstance + 1; i++)
+            await StartAsync(service, "owner", "higgsfield");
+
+        gate.SetResult();
     }
 
     // Сумма неизвестна (fal без прайса) — запись всё равно ложится при принятии, на

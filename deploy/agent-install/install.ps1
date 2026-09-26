@@ -57,9 +57,32 @@ function Write-Good([string]$msg) {
     Write-Host ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $msg) -ForegroundColor Green
 }
 
+# ---------- завершение ----------
+# Команда из веб-интерфейса вставляется прямо в открытое окно PowerShell как scriptblock, и
+# exit там закрыл бы само окно вместе с текстом ошибки. Поэтому exit — только при запуске
+# файлом (-File, тесты), а в окне код остаётся в $LASTEXITCODE, скрипт кончается return.
+$FromFile = [bool]$MyInvocation.MyCommand.Path
+
+function Set-InstallExitCode([int]$code) {
+    if ($FromFile) { exit $code }
+    $global:LASTEXITCODE = $code
+}
+
+# Ошибка установки — исключение с кодом: его ловит trap ниже, где бы оно ни случилось
 function Exit-With([int]$code, [string]$msg) {
-    if ($code -eq $ExitOk) { Write-Good $msg } else { Write-Bad "ошибка: $msg" }
-    exit $code
+    $abort = New-Object System.Exception $msg
+    $abort.Data['InstallExitCode'] = $code
+    throw $abort
+}
+
+# Локальные catch пропускают его дальше, иначе своя ошибка подменится общей
+function Test-InstallAbort($err) { $err.Exception.Data.Contains('InstallExitCode') }
+
+trap {
+    $code = if (Test-InstallAbort $_) { $_.Exception.Data['InstallExitCode'] } else { 1 }
+    Write-Bad "ошибка: $($_.Exception.Message)"
+    Set-InstallExitCode $code
+    return
 }
 
 function Show-Usage {
@@ -83,7 +106,7 @@ function Show-Usage {
 "@
 }
 
-if ($Help) { Show-Usage; exit $ExitOk }
+if ($Help) { Show-Usage; Set-InstallExitCode $ExitOk; return }
 
 # ---------- URL без хвостового слэша ----------
 if ($Server.EndsWith('/')) { $Server = $Server.TrimEnd('/') }
@@ -160,6 +183,7 @@ function Get-Manifest([string]$url, [string]$localPath) {
         $body = $resp.Content.ReadAsStringAsync().Result
         return [pscustomobject]@{ StatusCode = [int]$resp.StatusCode; Body = $body }
     } catch {
+        if (Test-InstallAbort $_) { throw }
         # Таймаут, разрыв соединения, DNS, TLS — всё сюда
         Write-Bad "HTTP-запрос к $url провалился: $($_.Exception.Message)"
         Exit-With $ExitDownload "манифест недоступен: $url"
@@ -182,12 +206,13 @@ function Get-Archive([string]$url, [string]$localPath) {
                     Write-Bad "сервер ответил $($resp.StatusCode): $($errJson.error)"
                     Exit-With $ExitDownload "архив не отдан: $($errJson.error)"
                 }
-            } catch { }
+            } catch { if (Test-InstallAbort $_) { throw } }
             Write-Bad "сервер ответил $($resp.StatusCode): $([System.Text.Encoding]::UTF8.GetString($bytes, 0, [Math]::Min($bytes.Length, 200)))"
             Exit-With $ExitDownload "архив недоступен: $url"
         }
         [System.IO.File]::WriteAllBytes($localPath, $bytes)
     } catch {
+        if (Test-InstallAbort $_) { throw }
         Exit-With $ExitDownload "не удалось скачать архив: $url ($($_.Exception.Message))"
     } finally {
         $archiveClient.Dispose()
@@ -307,4 +332,40 @@ switch ($proc.ExitCode) {
 }
 
 Write-Good "готово: $VersionDir"
-exit $ExitOk
+
+# ---------- что дальше ----------
+# Имя — то же, что агент отдал серверу при сопряжении (Environment.MachineName по умолчанию)
+$DeviceName = if ($Name) { $Name } else { [Environment]::MachineName }
+# Корни от прошлой установки переживают переустановку — показываем их, чтобы чужое было видно
+$Roots = @()
+try { $Roots = @(& $AgentBin roots list 2>$null | Where-Object { $_ }) } catch { }
+
+$StepDevice = "Компьютер подключён как «$DeviceName» — он уже виден в разделе «Устройства» веб-интерфейса."
+$StepProject = "В веб-интерфейсе: «Новый проект → На этом компьютере»."
+$StepRoots = @(
+    "Разрешите папки с проектами — агент открывает файлы только под ними. В НОВОМ окне терминала",
+    "   (команда ai-home-agent появится в PATH только в нём):",
+    "       ai-home-agent roots add <папка>"
+)
+function Write-Step([int]$n, [string[]]$lines) {
+    Write-Host ("{0}. {1}" -f $n, $lines[0])
+    $lines | Select-Object -Skip 1 | ForEach-Object { Write-Host $_ }
+}
+
+Write-Host ""
+Write-Host "Что дальше:" -ForegroundColor Green
+if ($Roots.Count -eq 0) {
+    # Без разрешённых папок проект на устройстве не создать — это главный шаг, он первый
+    $StepRoots += "   Сейчас разрешённых папок нет: без этого шага проект на компьютере не создать."
+    Write-Step 1 $StepRoots
+    Write-Step 2 $StepDevice
+} else {
+    $StepRoots += "   Сейчас разрешены:"
+    $StepRoots += @($Roots | ForEach-Object { "       $_" })
+    $StepRoots += "   Лишнюю убрать: ai-home-agent roots remove <папка>"
+    Write-Step 1 $StepDevice
+    Write-Step 2 $StepRoots
+}
+Write-Step 3 $StepProject
+
+Set-InstallExitCode $ExitOk

@@ -122,6 +122,12 @@ publish_one_agent() {
   case "$rid" in
     win-x64)
       [[ -f "$out_dir/ai-home-agent.exe" ]] || return 1
+      # Без моста ConPTY терминал агента молча уходит в упрощённый фолбэк (без цветов и
+      # Clear-Host) у всех клиентов — такой выпуск не выпускаем
+      local f
+      for f in ConPtyBridge.exe ConPtyBridge.dll; do
+        [[ -f "$out_dir/$f" ]] || { log "нет $f в publish агента win-x64" >&2; return 1; }
+      done
       ;;
     linux-x64)
       [[ -f "$out_dir/ai-home-agent" ]] || return 1

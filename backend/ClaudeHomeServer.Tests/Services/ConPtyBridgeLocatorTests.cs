@@ -48,4 +48,18 @@ public class ConPtyBridgeLocatorTests : IDisposable
         ConPtyBridgeLocator.Find(_dir, ConPtyBridgeLocator.MinConPtyBuild).Should().NotBeNull();
         ConPtyBridgeLocator.Find(_dir, ConPtyBridgeLocator.MinConPtyBuild - 1).Should().BeNull();
     }
+
+    [Fact]
+    public void Причина_отказа_называет_каталог_поиска_или_билд()
+    {
+        ConPtyBridgeLocator.Find(_dir, 22631, out var missing).Should().BeNull();
+        missing.Should().Contain(Path.Combine(_dir, "ConPtyBridge.exe"));
+
+        PutExe();
+        ConPtyBridgeLocator.Find(_dir, 17000, out var oldBuild).Should().BeNull();
+        oldBuild.Should().Contain("17000");
+
+        ConPtyBridgeLocator.Find(_dir, 22631, out var ok).Should().NotBeNull();
+        ok.Should().BeEmpty();
+    }
 }

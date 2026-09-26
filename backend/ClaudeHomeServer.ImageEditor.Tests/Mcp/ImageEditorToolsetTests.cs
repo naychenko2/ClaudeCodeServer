@@ -149,10 +149,14 @@ public class ImageEditorToolsetTests : IDisposable
     }
 
     // ADR-018 §7: агент в чате владельца B запускает Higgsfield → одна запись траты на B,
-    // инициатор — агент, SessionId — чат. Не на персону и не на админа Higgsfield
-    [Fact]
-    public async Task Трата_агента_ложится_на_владельца_чата_с_инициатором_агент()
+    // инициатор — агент, SessionId — чат. Не на персону и не на админа Higgsfield: чат, который
+    // ведёт персона, платит тем же владельцем
+    [Theory]
+    [InlineData(null)]
+    [InlineData("persona-artist")]
+    public async Task Трата_агента_ложится_на_владельца_чата_с_инициатором_агент(string? personaId)
     {
+        _sessions[ChatId].PersonaId = personaId;
         var toolset = Toolset();
 
         var result = await Call(toolset, ImageEditorToolset.ToolGenerate, new JsonObject { ["prompt"] = "фон" });

@@ -177,20 +177,21 @@ dotnet publish $csproj -c Release -r win-x64 --self-contained false -o $PublishD
 if ($LASTEXITCODE -ne 0) { throw "Публикация бэка упала (exit $LASTEXITCODE)" }
 
 # Проверка динамических модулей: ModuleLoader резолвит их по пути из appsettings.json
-# (modules/notes и modules/spend). Если csproj потеряет копию при publish — INoteSemanticIndex
+# (modules/notes, modules/spend и modules/image-editor). Если csproj потеряет копию при publish — INoteSemanticIndex
 # и ISpendCollector не зарегистрируются, форвардер Knowledge роняет старт, /api/spend/*
 # отдаёт 404. Раньше отлавливалось уже в продакшене (задача H4). Ловим здесь, пока сервер
 # ещё не тронут: падаем с понятным сообщением, а не выкатываем мёртвый хост.
 foreach ($mod in @(
     @{ Name = 'notes'; Dll = 'ClaudeHomeServer.Notes.dll' },
-    @{ Name = 'spend'; Dll = 'ClaudeHomeServer.Spend.dll' })) {
+    @{ Name = 'spend'; Dll = 'ClaudeHomeServer.Spend.dll' },
+    @{ Name = 'image-editor'; Dll = 'ClaudeHomeServer.ImageEditor.dll' })) {
     $dllPath = Join-Path $PublishDir "modules\$($mod.Name)\$($mod.Dll)"
     if (-not (Test-Path $dllPath)) {
         Write-Host ''
         Write-Host "ОСТАНОВЛЕНО: после publish нет $dllPath" -ForegroundColor Red
         Write-Host '  Динамический модуль не попал в выходную папку. ModuleLoader не найдёт' -ForegroundColor Yellow
         Write-Host '  его на старте — INoteSemanticIndex / ISpendCollector не зарегистрируются.' -ForegroundColor Yellow
-        Write-Host '  Скорее всего csproj снова отрезал модуль при publish (см. CopyNotesModule/CopySpendModule).' -ForegroundColor Yellow
+        Write-Host '  Скорее всего csproj снова отрезал модуль при publish (см. цели копирования модулей в ClaudeHomeServer.csproj).' -ForegroundColor Yellow
         Write-Host ''
         exit 1
     }

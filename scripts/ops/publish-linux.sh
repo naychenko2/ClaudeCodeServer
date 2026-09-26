@@ -335,6 +335,12 @@ main() {
   # уезжает в PUBLISH_DIR вместе со всем сервером.
   if [[ "${AGENT_ONLY:-0}" != 1 ]]; then
     switch_server
+  else
+    # Сервер не переключается, staging снесёт ловушка EXIT — указатель кладём прямо в
+    # PUBLISH_DIR: его подхватит стенд с этим каталогом содержимого или DeviceAgent:ReleasePointerPath.
+    mkdir -p "$PUBLISH_DIR"
+    cp "$STAGING/agent-release.json" "$PUBLISH_DIR/agent-release.json"
+    log "указатель: $PUBLISH_DIR/agent-release.json"
   fi
 }
 

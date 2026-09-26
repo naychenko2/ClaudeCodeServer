@@ -167,14 +167,10 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         }
         else
         {
-            var full = ProjectLinkGuard.ResolveInside(project.RootPath, chatPath);
-            var info = full is null ? null : new FileInfo(full);
-            if (info is not { Exists: true })
-                return Deny($"Файл чата {chatPath} не найден или идёт через символическую ссылку.");
-            if (info.Length > ImageEditCatalog.DefaultLimits.MaxFileMb * 1024L * 1024L)
-                return Deny($"Файл больше {ImageEditCatalog.DefaultLimits.MaxFileMb} МБ.");
-            source = new ImageBytes(await File.ReadAllBytesAsync(full!, ct),
-                ImageEditLaunchAssembler.ContentTypeByExtension(full!));
+            // Тот же путь чтения, что у образцов человека: проверки пути и лимита одни
+            var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(project.RootPath, chatPath, "Файл чата", ct);
+            if (read.Value is not { } image) return Deny(read.Error!);
+            source = image;
         }
         var mask = _states.ReadMask(ownerId, session.Id) is { Length: > 0 } maskBytes
             ? new ImageBytes(maskBytes, "image/png")

@@ -311,6 +311,27 @@ public class ImageEditorToolsetTests : IDisposable
         _states.Get(Owner, ChatId).References.Should().BeEmpty("отвергнутый запуск не пишет образцы в состояние");
     }
 
+    // Исходник чата читается общим путём сборщика (ReadProjectImageAsync): ссылка наружу
+    // отвергается до котировки, а не доезжает байтами чужого файла до поставщика
+    [Fact]
+    public async Task Файл_чата_через_символическую_ссылку_отвергается_до_котировки()
+    {
+        var outside = Path.Combine(_dir, "outside.png");
+        File.WriteAllBytes(outside, TestImages.Png(4, 4));
+        var link = Path.Combine(_root, "images", "linked.png");
+        try { File.CreateSymbolicLink(link, outside); }
+        catch (Exception e) when (e is UnauthorizedAccessException or IOException) { return; } // Windows без прав — проверка идёт в CI на Linux
+        AddChat(ChatId, Owner, ProjectId, "images/linked.png");
+        var toolset = Toolset();
+
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate, new JsonObject { ["prompt"] = "фон" });
+
+        result.IsError.Should().BeTrue();
+        result.Text.Should().Be("Файл чата вне папки проекта или идёт через символическую ссылку");
+        JobsOfChat().Should().BeEmpty();
+        _spend.Records.Should().BeEmpty();
+    }
+
     // Отказ поставщика — котировка соседа в результате; второго вызова драйвера нет
     [Fact]
     public async Task Недоступный_поставщик_даёт_retryQuote_соседа_без_запуска()

@@ -64,28 +64,19 @@ public sealed class ImageEditLaunchAssembler(
             return Invalid($"Пропорции {aspectRatio} не поддерживаются: только {string.Join(", ", AspectRatios)}");
 
         var limits = ImageEditCatalog.DefaultLimits;
-        var maxFileBytes = limits.MaxFileMb * 1024L * 1024L;
         var sizes = new[] { req.Source?.Bytes, req.Mask?.Bytes, req.Annotated?.Bytes }
             .Concat(req.Uploaded.Select(r => r.Bytes))
             .Where(b => b is not null);
-        if (sizes.Any(b => b!.LongLength > maxFileBytes))
+        if (sizes.Any(b => b!.LongLength > MaxFileBytes))
             return Invalid($"Файл больше {limits.MaxFileMb} МБ");
 
         var references = new List<ReferenceImage>(req.Uploaded);
 
-        // Образцы из проекта — по пути, строго внутри корня и не через символическую ссылку
         foreach (var (path, role) in req.ReferencePaths)
         {
-            var full = ProjectLinkGuard.ResolveInside(project.RootPath, path);
-            if (full is null)
-                return Invalid("Образец вне папки проекта или идёт через символическую ссылку");
-            var info = new FileInfo(full);
-            if (!info.Exists)
-                return Invalid($"Образец не найден: {path}");
-            if (info.Length > maxFileBytes)
-                return Invalid($"Файл больше {limits.MaxFileMb} МБ");
-            references.Add(new ReferenceImage(await File.ReadAllBytesAsync(full, ct),
-                ContentTypeByExtension(full), role, info.Name));
+            var read = await ReadProjectImageAsync(project.RootPath, path, "Образец", ct);
+            if (read.Value is not { } image) return Fail<ImageEditJobInput>(read.ErrorCode, read.Error);
+            references.Add(new ReferenceImage(image.Bytes, image.ContentType, role, Path.GetFileName(path)));
         }
         // Персонаж — фото из его папки образцами с ролью Character, первыми по порядку
         CharacterRef? character = null;
@@ -117,6 +108,28 @@ public sealed class ImageEditLaunchAssembler(
             Initiator: req.Initiator,
             BaseStepId: req.BaseStepId,
             AspectRatio: aspectRatio));
+    }
+
+    private static long MaxFileBytes => ImageEditCatalog.DefaultLimits.MaxFileMb * 1024L * 1024L;
+
+    // Картинка проекта по пути — единственное чтение с диска для запуска (образцы и исходник
+    // чата у агента): строго внутри корня, не через символическую ссылку, в пределах лимита.
+    // what — чем картинка служит, для текста отказа («Образец», «Файл чата»)
+    public static async Task<ImageEditCallResult<ImageBytes>> ReadProjectImageAsync(
+        string projectRoot, string path, string what, CancellationToken ct)
+    {
+        var full = ProjectLinkGuard.ResolveInside(projectRoot, path);
+        if (full is null)
+            return Fail<ImageBytes>(ImageEditErrorCodes.InvalidRequest,
+                $"{what} вне папки проекта или идёт через символическую ссылку");
+        var info = new FileInfo(full);
+        if (!info.Exists)
+            return Fail<ImageBytes>(ImageEditErrorCodes.InvalidRequest, $"{what} не найден: {path}");
+        if (info.Length > MaxFileBytes)
+            return Fail<ImageBytes>(ImageEditErrorCodes.InvalidRequest,
+                $"Файл больше {ImageEditCatalog.DefaultLimits.MaxFileMb} МБ");
+        return ImageEditCallResult<ImageBytes>.Ok(
+            new ImageBytes(await File.ReadAllBytesAsync(full, ct), ContentTypeByExtension(full)));
     }
 
     // Свой чат картинки этого проекта (проект уже свой — его проверил вызывающий) или null

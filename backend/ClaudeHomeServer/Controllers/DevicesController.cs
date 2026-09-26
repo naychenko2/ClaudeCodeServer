@@ -3,6 +3,7 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Desktop;
 using Microsoft.AspNetCore.Authorization;
@@ -23,7 +24,8 @@ namespace ClaudeHomeServer.Controllers;
 [Authorize]
 [Route("api/devices")]
 public class DevicesController(
-    DeviceRegistry registry, DevicePairingService pairing, UserStore users) : ControllerBase
+    DeviceRegistry registry, DevicePairingService pairing, UserStore users,
+    DesktopCallRouter router) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -156,7 +158,9 @@ public class DevicesController(
         };
     }
 
-    private static object ToDto(DesktopDevice device) => new
+    // Имена полей — контракт с DesktopDevice во frontend/src/types: пикер локального проекта
+    // пускает устройство только при capabilities.exec === true (сторож — DevicesControllerDtoTests)
+    private object ToDto(DesktopDevice device) => new
     {
         id = device.Id,
         name = device.Name,
@@ -171,6 +175,13 @@ public class DevicesController(
         revoked = device.Revoked,
         revokedAt = device.RevokedAt,
         tokenVersion = device.TokenVersion,
+        online = router.IsOnline(device.OwnerId, device.Id),
+        platform = device.Platform,
+        capabilities = new
+        {
+            exec = device.Capabilities.Contains(DeviceCapabilities.Exec),
+            files = device.Capabilities.Contains(DeviceCapabilities.Files),
+        },
         agentVersion = device.AgentVersion,
         agentUpdate = device.AgentUpdate is { } update
             ? new { state = update.State, targetVersion = update.TargetVersion, reason = update.Reason }

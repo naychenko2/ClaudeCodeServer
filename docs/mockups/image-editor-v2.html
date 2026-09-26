@@ -1,0 +1,1307 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Редактор картинок — v2: инструменты слева, промпт и чат справа</title>
+<style>
+  /* Токены — копия theme.css (значения обеих тем), чтобы макет был самодостаточным */
+  :root {
+    --c-bg-main:     #F4F0E8;
+    --c-bg-panel:    #EDE7DC;
+    --c-bg-card:     #FBF8F2;
+    --c-bg-white:    #FFFFFF;
+    --c-bg-selected: #E8E1D4;
+    --c-bg-inset:    #E7E0D2;
+    --c-text-heading:   #2A251F;
+    --c-text-primary:   #39332B;
+    --c-text-secondary: #756B5E;
+    --c-text-muted:     #9A8F7E;
+    --c-on-accent:      #FBF8F2;
+    --c-on-dark:        #FFFFFF;
+    --c-accent:       #D97757;
+    --c-accent-light: #F4ECE1;
+    --c-accent-muted: #EAD3C5;
+    --c-border:       #E0D7C8;
+    --c-border-light: #E8E1D4;
+    --c-divider:      #DDD4C4;
+    --c-dashed:       #D0C6B4;
+    --c-track:        #D8CFBE;
+    --c-overlay: rgba(23, 19, 15, 0.42);
+    --c-media-scrim: rgba(0, 0, 0, 0.55);
+    --c-success:      #5E8B4E;
+    --c-success-bg:   #E9F1E8;
+    --c-success-text: #3F7A4F;
+    --c-warning:      #C9923E;
+    --c-warning-bg:   #FBEFE0;
+    --c-warning-text: #8A6A28;
+    --c-danger:        #B4452F;
+    --c-danger-bg:     #FBF1EC;
+    --c-danger-text:   #B4452F;
+    --c-danger-border: #F5C6BF;
+    --c-info:    #3E7CA6;
+    --c-info-bg: #E7EFF5;
+    --shadow-focus:    0 0 0 3px rgba(217, 119, 87, 0.14);
+    --shadow-card:     0 2px 8px rgba(60, 50, 35, 0.05);
+    --shadow-island:   0 1px 2px rgba(60, 50, 35, 0.06), 0 6px 20px rgba(60, 50, 35, 0.10);
+    --shadow-dropdown: 0 8px 28px rgba(60, 50, 35, 0.16);
+    --shadow-modal:    0 24px 60px rgba(23, 19, 15, 0.40);
+    --shadow-sheet:    0 -8px 40px rgba(23, 19, 15, 0.22);
+    --shadow-button:   0 4px 14px rgba(217, 119, 87, 0.30);
+    --c-skeleton: #E4DCCC;
+    --canvas-ink: 42, 37, 31;
+  }
+  [data-theme="dark"] {
+    --c-bg-main:     #201C18;
+    --c-bg-panel:    #272320;
+    --c-bg-card:     #2E2A25;
+    --c-bg-white:    #2E2A25;
+    --c-bg-selected: #38332D;
+    --c-bg-inset:    #1B1815;
+    --c-text-heading:   #F2ECE1;
+    --c-text-primary:   #EDE6DB;
+    --c-text-secondary: #B3A897;
+    --c-text-muted:     #8A8072;
+    --c-on-accent:      #201C18;
+    --c-accent:       #E38A6A;
+    --c-accent-light: #3A2E27;
+    --c-accent-muted: #4A362C;
+    --c-border:       #3D3830;
+    --c-border-light: #34302A;
+    --c-divider:      #454037;
+    --c-dashed:       #4A443B;
+    --c-track:        #454037;
+    --c-overlay: rgba(0, 0, 0, 0.58);
+    --c-success:      #7CB86A;
+    --c-success-bg:   #1F2B1C;
+    --c-success-text: #8FC47E;
+    --c-warning:      #E0A955;
+    --c-warning-bg:   #322717;
+    --c-warning-text: #E7B96E;
+    --c-danger:        #E8785E;
+    --c-danger-bg:     #331F1B;
+    --c-danger-text:   #EE8A72;
+    --c-danger-border: #5A302A;
+    --c-info:    #5FA0CC;
+    --c-info-bg: #1E2A33;
+    --shadow-focus:    0 0 0 3px rgba(227, 138, 106, 0.24);
+    --shadow-card:     0 2px 10px rgba(0, 0, 0, 0.35);
+    --shadow-island:   0 1px 2px rgba(0,0,0,.30), 0 8px 24px rgba(0,0,0,.45);
+    --shadow-dropdown: 0 10px 32px rgba(0, 0, 0, 0.5);
+    --shadow-modal:    0 24px 60px rgba(0, 0, 0, 0.6);
+    --shadow-sheet:    0 -10px 46px rgba(0, 0, 0, 0.55);
+    --shadow-button:   0 4px 16px rgba(227, 138, 106, 0.34);
+    --c-skeleton: #38332D;
+    --canvas-ink: 237, 230, 219;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 20px 16px 64px;
+    background: var(--c-bg-main); color: var(--c-text-primary);
+    font-family: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 13px;
+  }
+  button, textarea, input, select { font: inherit; }
+  .page { max-width: 1360px; margin: 0 auto; }
+  h1.doc { font-family: 'PT Serif', Georgia, serif; font-size: 28px; color: var(--c-text-heading); margin: 0 0 6px; }
+  p.lead { color: var(--c-text-secondary); margin: 0 0 14px; max-width: 880px; line-height: 1.6; }
+  code { font-family: 'JetBrains Mono', monospace; font-size: 12px; background: var(--c-bg-selected); border-radius: 4px; padding: 0 4px; }
+
+  /* Панель демо-управления макетом (не часть продукта) */
+  .demo { position: sticky; top: 0; z-index: 50; background: var(--c-bg-main);
+    display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; padding: 8px 0 12px; }
+  .demo .grp { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+  .demo .lbl { font-size: 11px; color: var(--c-text-muted); margin-right: 2px; }
+  .tbtn { font-size: 12px; cursor: pointer; border: 1px solid var(--c-border);
+    background: var(--c-bg-card); color: var(--c-text-primary); border-radius: 10px; padding: 5px 10px; }
+  .tbtn[aria-pressed="true"] { background: var(--c-accent); color: var(--c-on-accent); border-color: transparent; }
+
+  .frame { background: var(--c-bg-main); border: 1px solid var(--c-border); border-radius: 14px;
+    padding: 12px; box-shadow: var(--shadow-card); position: relative; overflow: hidden; }
+  .app { position: relative; margin: 0 auto; height: 820px; display: flex; flex-direction: column; }
+  .app.mobile { width: 390px; height: 800px; border: 1px solid var(--c-border); border-radius: 22px; overflow: hidden; }
+  .caption { font-size: 11px; color: var(--c-text-muted); margin: 8px 0 0; }
+
+  /* Остров */
+  .island { background: var(--c-bg-panel); border: 1px solid var(--c-border-light); border-radius: 14px;
+    box-shadow: var(--shadow-island); display: flex; flex-direction: column; overflow: hidden; min-height: 0; position: relative; }
+  .app.mobile .island { border-radius: 0; border: none; box-shadow: none; }
+  .ih { height: 48px; flex: 0 0 48px; background: var(--c-bg-inset); border-bottom: 1px solid var(--c-border-light);
+    display: flex; align-items: center; gap: 8px; padding: 0 8px 0 10px; }
+  .ih .ttl { font-size: 13px; font-weight: 600; color: var(--c-text-heading); min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ih .sub { font-size: 11px; color: var(--c-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .grow { flex: 1; min-width: 0; }
+
+  /* Кнопки (по мотивам components/ui/Button) */
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px;
+    border-radius: 10px; border: 1px solid var(--c-border); background: var(--c-bg-card); color: var(--c-text-primary);
+    cursor: pointer; font-size: 13px; white-space: nowrap; }
+  .btn:hover { background: var(--c-bg-selected); }
+  .btn:focus-visible, .ib:focus-visible, .chip:focus-visible, .sec-h:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+  .btn.pri { background: var(--c-accent); color: var(--c-on-accent); border-color: transparent; box-shadow: var(--shadow-button); font-weight: 600; }
+  .btn.pri:hover { filter: brightness(1.05); }
+  .btn.ghost { background: transparent; border-color: transparent; color: var(--c-text-secondary); }
+  .btn.ghost:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .btn.sm { height: 28px; padding: 0 9px; font-size: 12px; border-radius: 8px; }
+  .btn.lg { height: 40px; padding: 0 16px; font-size: 14px; }
+  .btn[disabled] { opacity: .5; cursor: default; box-shadow: none; }
+  .ib { width: 32px; height: 32px; border-radius: 8px; border: none; background: transparent; color: var(--c-text-muted);
+    display: inline-grid; place-items: center; cursor: pointer; flex: 0 0 auto; padding: 0; }
+  .ib:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .ib.on { background: var(--c-accent-light); color: var(--c-accent); }
+  .ib[disabled] { opacity: .45; cursor: default; }
+  svg.i { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+  svg.i.s { width: 14px; height: 14px; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border-radius: 999px;
+    border: 1px solid var(--c-border); background: var(--c-bg-card); color: var(--c-text-primary); cursor: pointer; font-size: 12px; white-space: nowrap; }
+  .chip:hover { border-color: var(--c-accent-muted); background: var(--c-accent-light); }
+  .chip[disabled] { opacity: .5; cursor: default; }
+  .chip.on { border-color: var(--c-accent); color: var(--c-accent); background: var(--c-accent-light); }
+  .seg { display: inline-flex; background: var(--c-bg-inset); border-radius: 10px; padding: 2px; gap: 2px; }
+  .seg button { border: none; background: transparent; color: var(--c-text-secondary); height: 26px; min-width: 28px;
+    padding: 0 8px; border-radius: 8px; cursor: pointer; font-size: 12px; }
+  .seg button.on { background: var(--c-bg-card); color: var(--c-text-heading); box-shadow: var(--shadow-card); font-weight: 600; }
+  .muted { color: var(--c-text-muted); }
+  .sec-l { font-size: 11px; font-weight: 600; color: var(--c-text-muted); text-transform: uppercase; letter-spacing: .04em; margin: 0 0 6px; }
+
+  /* ===== Раскладка редактора ===== */
+  .ed { flex: 1; min-height: 0; }
+  .ed-body { flex: 1; display: flex; min-height: 0; }
+  .app.mobile .ed-body { flex-direction: column; }
+
+  /* Левая панель инструментов */
+  .lp { width: 272px; flex: 0 0 272px; border-right: 1px solid var(--c-border-light); display: flex; flex-direction: column; min-height: 0; background: var(--c-bg-panel); }
+  .lp-body { flex: 1; overflow: auto; }
+  .sec { border-bottom: 1px solid var(--c-border-light); }
+  .sec-h { display: flex; align-items: center; gap: 8px; width: 100%; height: 40px; padding: 0 12px; border: none; background: transparent;
+    color: var(--c-text-heading); font-size: 13px; font-weight: 600; cursor: pointer; text-align: left; }
+  .sec-h:hover { background: var(--c-bg-selected); }
+  .sec-h .meta { font-size: 11px; font-weight: 400; color: var(--c-text-muted); white-space: nowrap; }
+  .sec-h .chev { color: var(--c-text-muted); display: inline-flex; transition: transform .15s; }
+  .sec.closed .sec-h .chev { transform: rotate(-90deg); }
+  .sec-b { padding: 2px 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+  .sec.closed .sec-b { display: none; }
+  .tool-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+  .tool { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 6px 2px; border-radius: 10px; border: 1px solid transparent;
+    background: var(--c-bg-card); color: var(--c-text-secondary); cursor: pointer; font-size: 10.5px; }
+  .tool:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .tool.on { border-color: var(--c-accent); background: var(--c-accent-light); color: var(--c-accent); }
+  .tool[disabled] { opacity: .45; cursor: default; }
+  .brush-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--c-text-secondary); }
+  .brush-row input { flex: 1; accent-color: var(--c-accent); }
+  .hint { font-size: 11px; color: var(--c-text-muted); line-height: 1.4; }
+
+  /* Образцы */
+  .samples { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 8px; position: relative; }
+  .smp { position: relative; min-width: 0; }
+  .smp .pic { aspect-ratio: 1; border-radius: 10px; overflow: hidden; border: 1px solid var(--c-border); }
+  .smp .pic svg { width: 100%; height: 100%; display: block; }
+  .smp .cap { font-size: 10px; color: var(--c-text-secondary); margin-top: 3px; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .smp .x { position: absolute; top: -6px; right: -6px; width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--c-border);
+    background: var(--c-bg-card); color: var(--c-text-secondary); display: grid; place-items: center; cursor: pointer; padding: 0; }
+  .smp .x:hover { color: var(--c-danger); border-color: var(--c-danger-border); }
+  .smp .role { display: flex; align-items: center; justify-content: space-between; gap: 2px; width: 100%; height: 20px; margin-top: 4px; padding: 0 4px;
+    border-radius: 6px; border: 1px solid var(--c-border); background: var(--c-bg-card); color: var(--c-text-secondary); font-size: 10px; cursor: pointer; }
+  .smp .role.face { border-color: var(--c-accent); color: var(--c-accent); background: var(--c-accent-light); }
+  .smp-add { aspect-ratio: 1; width: 100%; border-radius: 10px; border: 1.5px dashed var(--c-dashed); background: transparent; color: var(--c-text-secondary);
+    cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font-size: 11px; }
+  .smp-add:hover { border-color: var(--c-accent); color: var(--c-accent); }
+  .smp-add[disabled] { opacity: .5; cursor: default; }
+  .smp-empty { grid-column: 1 / -1; display: flex; gap: 10px; align-items: center; border: 1.5px dashed var(--c-dashed); border-radius: 10px; padding: 10px;
+    font-size: 12px; line-height: 1.4; color: var(--c-text-secondary); }
+  .menu { position: absolute; z-index: 20; background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 10px;
+    box-shadow: var(--shadow-dropdown); padding: 4px; min-width: 230px; }
+  .menu button { display: flex; align-items: flex-start; gap: 8px; width: 100%; border: none; background: transparent; color: var(--c-text-primary);
+    padding: 7px 8px; border-radius: 6px; cursor: pointer; text-align: left; font-size: 13px; }
+  .menu button:hover, .menu button.on { background: var(--c-bg-selected); }
+  .menu small { display: block; color: var(--c-text-muted); font-size: 11px; margin-top: 1px; }
+  .opts { display: flex; flex-direction: column; gap: 4px; }
+  .opts label { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; cursor: pointer; font-size: 13px; }
+  .opts label:hover { background: var(--c-bg-selected); }
+  .opts label.on { background: var(--c-accent-light); }
+  .opts label.dis { cursor: not-allowed; opacity: .55; }
+  .opts small { color: var(--c-text-muted); font-size: 11px; }
+  .role-pop { padding: 6px; border-radius: 10px; background: var(--c-bg-card); border: 1px solid var(--c-border); }
+  .role-pop .t { font-size: 11px; color: var(--c-text-muted); padding: 2px 8px 4px; }
+
+  /* Персонажи */
+  .chars { display: flex; flex-direction: column; gap: 4px; }
+  .chr { display: flex; align-items: center; gap: 2px; border: 1px solid var(--c-border); border-radius: 10px; background: var(--c-bg-card); padding: 2px; }
+  .chr.on { border-color: var(--c-accent); background: var(--c-accent-light); }
+  .chr-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; border: none; background: transparent; color: var(--c-text-primary);
+    cursor: pointer; padding: 4px; text-align: left; font-size: 13px; border-radius: 8px; }
+  .chr-main .st { margin-left: auto; font-size: 11px; color: var(--c-text-muted); white-space: nowrap; }
+  .chr.on .chr-main .st { color: var(--c-accent); font-weight: 600; }
+  .av { width: 32px; height: 32px; flex: 0 0 32px; border-radius: 50%; overflow: hidden; border: 1px solid var(--c-border); display: inline-block; }
+  .av svg { display: block; width: 100%; height: 100%; }
+  .av.xs { width: 22px; height: 22px; flex-basis: 22px; }
+  .av.txt { display: inline-grid; place-items: center; font-size: 11px; font-weight: 700; color: var(--c-on-accent); border: none; }
+  .char-empty { display: flex; gap: 10px; align-items: center; border: 1.5px dashed var(--c-dashed); border-radius: 10px; padding: 10px;
+    font-size: 12px; line-height: 1.4; color: var(--c-text-secondary); }
+  .big { width: 32px; height: 32px; flex: 0 0 32px; border-radius: 10px; background: var(--c-accent-light); color: var(--c-accent); display: grid; place-items: center; }
+
+  /* Быстрые действия, поставщик */
+  .qa { display: flex; flex-wrap: wrap; gap: 6px; }
+  .ratio-pop { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px; border-radius: 10px;
+    background: var(--c-bg-card); border: 1px solid var(--c-border); }
+  .pm-btn { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 36px; padding: 6px 10px; border-radius: 10px; border: 1px solid var(--c-border);
+    background: var(--c-bg-card); color: var(--c-text-secondary); cursor: pointer; font-size: 13px; text-align: left; }
+  .pm-btn b { color: var(--c-text-heading); font-weight: 600; }
+  .pm-warn { display: flex; gap: 6px; align-items: flex-start; font-size: 11px; line-height: 1.4; color: var(--c-warning-text);
+    background: var(--c-warning-bg); border-radius: 8px; padding: 6px 8px; }
+  .soon { font-size: 10px; font-weight: 600; border-radius: 6px; padding: 1px 6px; background: var(--c-info-bg); color: var(--c-info); white-space: nowrap; }
+
+  /* История шагов */
+  .steps { display: flex; flex-direction: column; gap: 4px; }
+  .step { display: flex; gap: 8px; align-items: center; border: 1px solid transparent; border-radius: 10px; padding: 4px; cursor: pointer; background: transparent; text-align: left; color: var(--c-text-primary); width: 100%; }
+  .step:hover { background: var(--c-bg-selected); }
+  .step.on { border-color: var(--c-accent); background: var(--c-accent-light); }
+  .step.after { opacity: .5; }
+  .step .pic { width: 64px; flex: 0 0 64px; border-radius: 6px; overflow: hidden; border: 1px solid var(--c-border); }
+  .step .pic svg { display: block; width: 100%; height: auto; }
+  .step .n { font-size: 11px; color: var(--c-text-muted); display: block; }
+  .step .d { font-size: 12px; line-height: 1.3; display: block; }
+
+  /* Центр: холст */
+  .center { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+  .stage { flex: 1; position: relative; overflow: hidden; min-height: 0; background-color: var(--c-bg-inset);
+    background-image: radial-gradient(rgba(var(--canvas-ink), .10) 1px, transparent 1px); background-size: 16px 16px; }
+  .board { position: absolute; left: 50%; top: 50%; width: 600px; transform-origin: 0 0; }
+  .app.mobile .board { width: 360px; }
+  .board .imgwrap { position: relative; border-radius: 6px; overflow: hidden; box-shadow: var(--shadow-island); }
+  .board svg.img, .board svg.ov { display: block; width: 100%; height: auto; }
+  .board svg.ov { position: absolute; inset: 0; height: 100%; touch-action: none; }
+  .stage[data-tool="hand"] svg.ov { cursor: grab; }
+  .stage[data-tool="mask"] svg.ov, .stage[data-tool="rect"] svg.ov, .stage[data-tool="arrow"] svg.ov { cursor: crosshair; }
+  .stage[data-tool="text"] svg.ov { cursor: text; }
+  .stage[data-tool="eraser"] svg.ov { cursor: not-allowed; }
+  .stage[data-tool="eraser"] .mk { cursor: pointer; }
+  .stage[data-tool="eraser"] .mk:hover { opacity: .45; }
+  .mk-mask { fill: none; stroke: var(--c-accent); stroke-opacity: .38; stroke-linecap: round; stroke-linejoin: round; }
+  .mk-rect { fill: none; stroke: var(--c-accent); stroke-width: 3; stroke-dasharray: 8 5; }
+  .mk-arrow { stroke: var(--c-accent); stroke-width: 3.5; fill: none; stroke-linecap: round; }
+  .mk-head { fill: var(--c-accent); }
+  .mk-lbl rect { fill: var(--c-accent); }
+  .mk-lbl text { fill: var(--c-on-accent); font: 600 15px 'Hanken Grotesk', 'Segoe UI', sans-serif; }
+  .zoombar { position: absolute; right: 10px; bottom: 10px; display: flex; align-items: center; gap: 2px; padding: 2px;
+    background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 10px; box-shadow: var(--shadow-card); }
+  .zoombar .v { font-size: 12px; min-width: 42px; text-align: center; color: var(--c-text-secondary); }
+  .hint-top { position: absolute; left: 10px; top: 10px; font-size: 12px; color: var(--c-text-secondary); max-width: calc(100% - 20px);
+    background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 8px; padding: 4px 8px; box-shadow: var(--shadow-card); }
+  /* Плавающая мини-панель пометок на телефоне: холст на весь экран, инструменты — в шторке */
+  .mtool { position: absolute; left: 10px; bottom: 10px; display: flex; gap: 2px; padding: 2px; background: var(--c-bg-card);
+    border: 1px solid var(--c-border); border-radius: 10px; box-shadow: var(--shadow-card); }
+
+  /* Центр: генерация, варианты, ошибка */
+  .gen-area { flex: 1; overflow: auto; padding: 16px; background: var(--c-bg-inset); display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+  .app.mobile .gen-area { padding: 12px; }
+  .gen-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .gen-head .t { font-weight: 600; color: var(--c-text-heading); font-size: 14px; }
+  .by { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--c-accent); background: var(--c-accent-light); border-radius: 6px; padding: 2px 7px; white-space: nowrap; }
+  .skels { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  .skel { border-radius: 10px; background: var(--c-skeleton); aspect-ratio: 16/10; position: relative; overflow: hidden; }
+  .skel::after { content: ''; position: absolute; inset: 0; background: linear-gradient(100deg, transparent 20%, rgba(255,255,255,.28) 50%, transparent 80%);
+    animation: shim 1.3s linear infinite; transform: translateX(-100%); }
+  @keyframes shim { to { transform: translateX(100%); } }
+  .bar { height: 4px; border-radius: 4px; background: var(--c-track); overflow: hidden; }
+  .bar i { display: block; height: 100%; border-radius: 4px; background: var(--c-accent); transition: width .12s linear; }
+  .skel .bar { position: absolute; left: 10px; right: 10px; bottom: 10px; }
+  .skel .pct { position: absolute; left: 10px; bottom: 20px; font-size: 11px; color: var(--c-text-secondary); }
+  .cmp { position: relative; border-radius: 10px; overflow: hidden; box-shadow: var(--shadow-island); user-select: none; max-width: 640px; width: 100%; margin: 0 auto; flex: 0 0 auto; }
+  .cmp svg { display: block; width: 100%; height: auto; }
+  .cmp .top { position: absolute; inset: 0; overflow: hidden; }
+  .cmp .top svg { position: absolute; left: 0; top: 0; height: 100%; }
+  .cmp .handle { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--c-on-dark); box-shadow: 0 0 0 1px rgba(0,0,0,.25); cursor: ew-resize; }
+  .cmp .handle::after { content: '↔'; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 30px; height: 30px; border-radius: 50%;
+    background: var(--c-on-dark); color: #2A251F; display: grid; place-items: center; font-size: 14px; box-shadow: 0 1px 4px rgba(0,0,0,.35); }
+  .cmp .tag { position: absolute; top: 8px; font-size: 11px; color: var(--c-on-dark); background: var(--c-media-scrim); border-radius: 6px; padding: 2px 7px; }
+  .vars { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 2px; justify-content: center; flex: 0 0 auto; }
+  .app.mobile .vars { justify-content: flex-start; }
+  .var { width: 120px; flex: 0 0 120px; border: 2px solid transparent; border-radius: 10px; padding: 0; cursor: pointer; background: transparent; position: relative; }
+  .app.mobile .var { width: 96px; flex-basis: 96px; }
+  .var svg { display: block; width: 100%; height: auto; border-radius: 8px; }
+  .var.on { border-color: var(--c-accent); }
+  .var .no { position: absolute; left: 6px; top: 6px; font-size: 11px; color: var(--c-on-dark); background: var(--c-media-scrim); border-radius: 6px; padding: 1px 6px; }
+  .var-acts { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+  .err { max-width: 440px; margin: auto; background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 14px; padding: 20px;
+    display: flex; flex-direction: column; gap: 10px; box-shadow: var(--shadow-card); }
+  .err .ic { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; background: var(--c-warning-bg); color: var(--c-warning-text); }
+  .err h3 { margin: 0; font-size: 16px; color: var(--c-text-heading); }
+  .err p { margin: 0; color: var(--c-text-secondary); line-height: 1.5; }
+  .err .kept { font-size: 12px; color: var(--c-success-text); }
+
+  /* Правая колонка: промпт сверху, чат под ним */
+  .rc { width: 384px; flex: 0 0 384px; border-left: 1px solid var(--c-border-light); display: flex; flex-direction: column; min-height: 0; background: var(--c-bg-panel); }
+  .pcard { flex: 0 0 auto; padding: 10px 12px 12px; border-bottom: 1px solid var(--c-border-light); background: var(--c-bg-panel); display: flex; flex-direction: column; gap: 8px; }
+  .app.mobile .pcard { border-bottom: none; border-top: 1px solid var(--c-border-light); padding: 8px 10px 10px; gap: 6px; }
+  .pcard-h { display: flex; align-items: center; gap: 6px; min-height: 22px; }
+  .pbox { position: relative; border-radius: 12px; border: 1px solid var(--c-border); background: var(--c-bg-card); transition: border-color .2s, box-shadow .2s; }
+  .pbox:focus-within { border-color: var(--c-accent); box-shadow: var(--shadow-focus); }
+  .pbox.flash { animation: flash 1.4s ease-out; }
+  @keyframes flash { 0% { box-shadow: 0 0 0 4px var(--c-accent-muted); border-color: var(--c-accent); } 100% { box-shadow: none; } }
+  textarea.q { display: block; width: 100%; min-height: 64px; max-height: 240px; resize: none; border: none; background: transparent; border-radius: 12px;
+    color: var(--c-text-primary); padding: 9px 10px; font-size: 14px; line-height: 1.45; overflow-y: auto; }
+  .app.mobile textarea.q { min-height: 42px; max-height: 132px; font-size: 16px; }
+  textarea.q:focus { outline: none; }
+  textarea.q::placeholder { color: var(--c-text-muted); }
+  .pbox .lines { position: absolute; right: 8px; bottom: 4px; font-size: 10px; color: var(--c-text-muted); pointer-events: none; }
+  .gen-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .price { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--c-text-secondary); white-space: nowrap; }
+  .price b { color: var(--c-text-heading); }
+  .char-chip { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 2px 0 3px; border-radius: 999px; font-size: 12px;
+    border: 1px solid var(--c-accent); color: var(--c-accent); background: var(--c-accent-light); }
+  .char-chip .av { width: 18px; height: 18px; flex-basis: 18px; }
+  .char-chip button { border: none; background: transparent; color: inherit; display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; cursor: pointer; padding: 0; }
+
+  /* Чат */
+  .chat { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .chat-h { height: 44px; flex: 0 0 44px; display: flex; align-items: center; gap: 6px; padding: 0 6px 0 8px; border-bottom: 1px solid var(--c-border-light); background: var(--c-bg-inset); position: relative; }
+  .pers-btn { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 6px 0 3px; border-radius: 999px; border: 1px solid var(--c-border);
+    background: var(--c-bg-card); color: var(--c-text-heading); cursor: pointer; font-size: 13px; font-weight: 600; max-width: 100%; }
+  .pers-btn:hover { border-color: var(--c-accent-muted); }
+  .chat-h .ctitle { font-size: 11px; color: var(--c-text-muted); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.25; }
+  .feed { flex: 1; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+  .sysline { align-self: center; text-align: center; font-size: 11px; color: var(--c-text-muted); line-height: 1.4; max-width: 300px; }
+  .m-me { align-self: flex-end; max-width: 88%; background: var(--c-accent-light); border-radius: 14px 14px 4px 14px; padding: 7px 10px; font-size: 13px; line-height: 1.5;
+    display: flex; flex-direction: column; gap: 5px; }
+  .m-me .att { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--c-text-secondary); }
+  .m-me .att .pic { width: 40px; border-radius: 4px; overflow: hidden; border: 1px solid var(--c-border); }
+  .m-me .att .pic svg { display: block; width: 100%; height: auto; }
+  .m-ai { display: flex; gap: 8px; align-items: flex-start; }
+  .m-ai .body { flex: 1; min-width: 0; font-size: 13px; line-height: 1.55; color: var(--c-text-primary); display: flex; flex-direction: column; gap: 8px; }
+  .m-ai .who { font-size: 11px; font-weight: 600; color: var(--c-text-secondary); }
+  .m-ai .read { font-size: 11px; color: var(--c-text-muted); display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
+  .m-ai .read code { font-size: 10.5px; }
+  .typing { display: inline-flex; gap: 3px; padding: 6px 0; }
+  .typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--c-text-muted); animation: blink 1s infinite; }
+  .typing i:nth-child(2) { animation-delay: .2s; } .typing i:nth-child(3) { animation-delay: .4s; }
+  @keyframes blink { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
+  .card { border: 1px solid var(--c-border); background: var(--c-bg-card); border-radius: 12px; padding: 10px; display: flex; flex-direction: column; gap: 8px; box-shadow: var(--shadow-card); }
+  .card .ch { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--c-text-heading); flex-wrap: wrap; }
+  .card .ch .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--c-accent); animation: blink 1s infinite; }
+  .card .ch .meta { font-weight: 400; color: var(--c-text-secondary); }
+  .card.ok { border-color: var(--c-success); }
+  .card.ok .ch { color: var(--c-success-text); }
+  .card.off { opacity: .75; }
+  .card .ptxt { font-size: 13px; line-height: 1.5; background: var(--c-bg-inset); border-radius: 8px; padding: 8px; color: var(--c-text-primary); }
+  .card .acts { display: flex; gap: 6px; flex-wrap: wrap; }
+  .sugg { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+  .sugg .chip { height: auto; min-height: 30px; white-space: normal; text-align: left; padding: 5px 10px; line-height: 1.35; border-radius: 12px; }
+
+  /* Композер — по мотивам components/Composer.tsx */
+  .comp { flex: 0 0 auto; padding: 8px 10px 10px; border-top: 1px solid var(--c-border-light); background: var(--c-bg-panel); position: relative; }
+  .comp-box { border: 1px solid var(--c-border); border-radius: 14px; background: var(--c-bg-white); box-shadow: var(--shadow-card); }
+  .comp-box:focus-within { border-color: var(--c-accent); box-shadow: var(--shadow-focus); }
+  .atts { display: flex; gap: 6px; flex-wrap: wrap; padding: 8px 8px 0; }
+  .att-chip { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 3px 0 4px; border-radius: 8px; border: 1px solid var(--c-border);
+    background: var(--c-bg-inset); font-size: 11px; color: var(--c-text-secondary); max-width: 100%; }
+  .att-chip .pic { width: 26px; height: 18px; border-radius: 3px; overflow: hidden; flex: 0 0 26px; }
+  .att-chip .pic svg { display: block; width: 100%; height: 100%; }
+  .att-chip.auto { border-style: dashed; }
+  .att-chip span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .att-chip button { border: none; background: transparent; color: inherit; width: 18px; height: 18px; display: grid; place-items: center; border-radius: 4px; cursor: pointer; padding: 0; }
+  textarea.ci { display: block; width: 100%; border: none; outline: none; resize: none; background: transparent; color: var(--c-text-primary);
+    font-size: 14px; line-height: 1.5; padding: 8px 10px 4px; min-height: 34px; max-height: 160px; overflow-y: auto; }
+  .app.mobile textarea.ci { font-size: 16px; }
+  textarea.ci::placeholder { color: var(--c-text-muted); }
+  .strip { display: flex; align-items: center; gap: 2px; padding: 2px 4px 4px; }
+  .strip .ib { width: 30px; height: 30px; }
+  .mode-btn { display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 8px; border-radius: 8px; border: none; background: transparent; color: var(--c-text-secondary); cursor: pointer; font-size: 12px; }
+  .mode-btn:hover { background: var(--c-bg-selected); }
+  .send { width: 32px; height: 32px; border-radius: 10px; border: none; background: var(--c-accent); color: var(--c-on-accent); display: grid; place-items: center; cursor: pointer; }
+  .send[disabled] { opacity: .45; cursor: default; }
+  .mic.rec { background: var(--c-danger-bg); color: var(--c-danger); }
+  .rec-line { display: flex; align-items: center; gap: 8px; padding: 8px 10px 4px; font-size: 13px; color: var(--c-danger-text); }
+  .rec-line .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--c-danger); animation: blink 1s infinite; }
+
+  /* Телефон: вкладки над промптом, шторки */
+  .mtabs { flex: 0 0 auto; display: flex; gap: 6px; padding: 6px 10px 0; background: var(--c-bg-panel); border-top: 1px solid var(--c-border-light); }
+  .mtabs .btn { flex: 1; position: relative; }
+  .mtabs .badge { position: absolute; top: 5px; right: 10px; width: 8px; height: 8px; border-radius: 50%; background: var(--c-accent); }
+  .sheet-ovl { position: absolute; inset: 0; background: var(--c-overlay); z-index: 30; display: flex; align-items: flex-end; }
+  .sheet { width: 100%; height: 86%; background: var(--c-bg-panel); border-radius: 18px 18px 0 0; box-shadow: var(--shadow-sheet); display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+  .sheet .grab { width: 36px; height: 4px; border-radius: 4px; background: var(--c-track); margin: 8px auto 2px; flex: 0 0 auto; }
+  .sheet-h { display: flex; align-items: center; gap: 8px; padding: 0 8px 0 14px; height: 40px; flex: 0 0 40px; }
+  .sheet-h .ttl { font-size: 14px; font-weight: 600; color: var(--c-text-heading); }
+
+  /* Модалки, тост */
+  .ovl { position: absolute; inset: 0; background: var(--c-overlay); z-index: 35; display: grid; place-items: center; padding: 16px;
+    grid-template-columns: minmax(0, 440px); justify-content: center; }
+  .modal { width: 440px; max-width: 100%; background: var(--c-bg-card); border-radius: 16px; box-shadow: var(--shadow-modal); display: flex; flex-direction: column; max-height: 100%; }
+  .modal-h { padding: 16px 18px 8px; display: flex; align-items: center; gap: 8px; }
+  .modal-h h3 { margin: 0; font-size: 16px; color: var(--c-text-heading); flex: 1; }
+  .modal-b { padding: 4px 18px 12px; display: flex; flex-direction: column; gap: 12px; overflow: auto; }
+  .modal-f { padding: 12px 18px 16px; display: flex; justify-content: flex-end; gap: 8px; border-top: 1px solid var(--c-border-light); }
+  .fld label { display: block; font-size: 12px; color: var(--c-text-secondary); margin-bottom: 4px; }
+  .fld input[type=text], .fld select { width: 100%; height: 36px; border-radius: 10px; border: 1px solid var(--c-border); background: var(--c-bg-white);
+    color: var(--c-text-primary); padding: 0 10px; font-size: 14px; }
+  .fld input:focus, .fld select:focus { outline: none; border-color: var(--c-accent); box-shadow: var(--shadow-focus); }
+  .fld .h { font-size: 11px; color: var(--c-text-muted); margin-top: 4px; line-height: 1.4; }
+  .chk { display: flex; gap: 8px; align-items: flex-start; cursor: pointer; font-size: 13px; }
+  .chk input { margin-top: 2px; accent-color: var(--c-accent); }
+  .note-ok { font-size: 12px; background: var(--c-success-bg); color: var(--c-success-text); border-radius: 8px; padding: 7px 10px; }
+  .pick-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .pick { border: 2px solid transparent; border-radius: 10px; padding: 4px; background: var(--c-bg-inset); cursor: pointer; text-align: left; color: var(--c-text-primary); }
+  .pick.on { border-color: var(--c-accent); background: var(--c-accent-light); }
+  .pick svg { display: block; width: 100%; height: auto; border-radius: 6px; aspect-ratio: 16/10; }
+  .pick span { display: block; font-size: 11px; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ph-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(62px, 1fr)); gap: 10px; }
+  .ph { position: relative; aspect-ratio: 1; }
+  .ph .pic { width: 100%; height: 100%; border-radius: 10px; overflow: hidden; border: 1px solid var(--c-border); }
+  .ph .pic svg { display: block; width: 100%; height: 100%; }
+  .ph .x { position: absolute; top: -6px; right: -6px; width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--c-border);
+    background: var(--c-bg-card); color: var(--c-text-secondary); display: grid; place-items: center; cursor: pointer; padding: 0; }
+  .cnt { font-size: 12px; color: var(--c-warning-text); } .cnt.ok { color: var(--c-success-text); }
+  .toast { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 40; background: var(--c-text-heading); color: var(--c-bg-main);
+    border-radius: 12px; padding: 10px 12px 10px 14px; display: flex; align-items: center; gap: 12px; box-shadow: var(--shadow-modal); font-size: 13px; max-width: calc(100% - 24px); }
+  .toast button { border: none; background: transparent; color: var(--c-accent-muted); font-weight: 600; cursor: pointer; padding: 4px; white-space: nowrap; }
+  .toast .x { color: var(--c-bg-main); opacity: .7; }
+
+  /* Экран «Проект»: список чатов и файлы — показать, что чат картинки живёт в проекте */
+  .proj { flex: 1; display: flex; gap: 10px; min-height: 0; }
+  .app.mobile .proj { flex-direction: column; gap: 0; overflow: auto; }
+  .proj .island { flex: 1; }
+  .app.mobile .proj .island { flex: 0 0 auto; }
+  .row { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 8px; border-radius: 8px; color: var(--c-text-primary); cursor: pointer; border: none; background: transparent; width: 100%; text-align: left; }
+  .row:hover, .row.sel { background: var(--c-bg-selected); }
+  .row .nm { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .sub { font-size: 11px; color: var(--c-text-muted); white-space: nowrap; }
+  .thumb { width: 28px; height: 20px; border-radius: 4px; overflow: hidden; flex: 0 0 28px; border: 1px solid var(--c-border); }
+  .thumb svg { width: 100%; height: 100%; display: block; }
+  .tag-img { font-size: 10px; border-radius: 6px; padding: 1px 6px; background: var(--c-accent-light); color: var(--c-accent); white-space: nowrap; }
+  .demo-note { margin-top: 18px; font-size: 12px; color: var(--c-text-secondary); line-height: 1.6; max-width: 960px; }
+  .demo-note b { color: var(--c-text-heading); }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1 class="doc">Редактор картинок — v2</h1>
+  <p class="lead">Новая раскладка: слева — все инструменты сворачиваемыми секциями, в центре — холст, справа сверху — поле
+    промпта, под ним — настоящий чат проекта, привязанный к картинке. «Обсудить с Claude» больше нет: его заменяет чат,
+    из которого агент сам запускает генерацию или предлагает промпт. Описание — <code>image-editor-v2-proposal.md</code>.</p>
+  <div class="demo" id="demo"></div>
+  <div class="frame"><div class="app" id="app"></div></div>
+  <p class="caption">Верхняя строка — управление макетом, не часть продукта. На холсте можно рисовать по-настоящему.</p>
+  <div class="demo-note">
+    <b>Сценарий А — агент запускает сам:</b> в чате нажмите подсказку «Убери вон ту лампу и сделай вечер» (или напишите своё и отправьте)
+    → ответ агента, промпт появляется в поле сверху, в ленте карточка «Запущена генерация · ≈ $0.24 · 3 варианта» с «Отменить»
+    → по готовности «Показать варианты».<br>
+    <b>Сценарий Б — агент предлагает:</b> подсказка «Придумай промпт для обложки блога» (или любое сообщение со словом «придумай»)
+    → карточка промпта с «Вставить в промпт» и «Сгенерировать».<br>
+    <b>Остальное:</b> секции слева сворачиваются по заголовку; «Образцы» → «+ Образец» → «С компьютера» / «Из файлов проекта…», роль под
+    образцом, крестик удаляет. Композер: «+» — вложения, чип персоны и шапка чата — выбор персоны, микрофон — голос.
+    Стрелка «назад» в шапке → экран проекта: чат картинки виден в списке чатов, «Редактировать» открывает его снова.
+    На «Телефон 390» — холст на весь экран, промпт снизу, «Инструменты» и «Чат» — шторки.
+  </div>
+</div>
+
+<script>
+// ---------- Иконки (контуры в духе lucide) ----------
+const IC = {
+  brush: '<path d="M9.06 11.9 17.1 3.86a2.1 2.1 0 0 1 3 3l-8.05 8.05"/><path d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-2.5 1.52-2 2.02 1.08 1.1 2.49 2.02 4 2.02 2.2 0 4-1.8 4-4.04a3.01 3.01 0 0 0-3-3.02z"/>',
+  arrow: '<path d="M5 19 19 5"/><path d="M9 5h10v10"/>',
+  rect: '<rect x="3.5" y="5.5" width="17" height="13" rx="1.5" stroke-dasharray="3 2.5"/>',
+  text: '<path d="M4 7V5h16v2"/><path d="M9 19h6"/><path d="M12 5v14"/>',
+  eraser: '<path d="m7 21-4.3-4.3a1 1 0 0 1 0-1.4l10-10a1 1 0 0 1 1.4 0l5.6 5.6a1 1 0 0 1 0 1.4L11 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/>',
+  trash: '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+  hand: '<path d="M18 11V6a2 2 0 0 0-4 0v5"/><path d="M14 10V4a2 2 0 0 0-4 0v6"/><path d="M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>', minus: '<path d="M5 12h14"/>',
+  fit: '<path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3"/>',
+  spark: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 17l.7 1.8 1.8.7-1.8.7L19 22l-.7-1.8-1.8-.7 1.8-.7z"/>',
+  hist: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/>',
+  img: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/>',
+  folder: '<path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.7-.9l-.8-1.2A2 2 0 0 0 7.9 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z"/>',
+  file: '<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/><path d="M14 2v6h6"/>',
+  upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/>',
+  x: '<path d="M18 6 6 18M6 6l12 12"/>', check: '<path d="M20 6 9 17l-5-5"/>',
+  down: '<path d="m6 9 6 6 6-6"/>', up: '<path d="m18 15-6-6-6 6"/>', back: '<path d="m15 18-6-6 6-6"/>',
+  pencil: '<path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/>',
+  more: '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
+  scissors: '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 8.1 15.9M14.5 14.5 20 20M8.1 8.1 12 12"/>',
+  expand: '<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>',
+  hd: '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M7 9v6M11 9v6M7 12h4M15 9v6h1.5a2.5 2.5 0 0 0 0-5H15"/>',
+  alert: '<path d="m21.7 18-8-14a2 2 0 0 0-3.5 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3z"/><path d="M12 9v4M12 17h.01"/>',
+  coin: '<circle cx="12" cy="12" r="9"/><path d="M14.5 9.5c-.5-1-1.5-1.5-2.5-1.5-1.7 0-3 1-3 2.2 0 2.8 6 1.4 6 4.3 0 1.2-1.3 2.3-3 2.3-1.1 0-2.2-.6-2.7-1.6M12 6.5v11"/>',
+  chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  layers: '<path d="m12 2 10 5-10 5L2 7z"/><path d="m2 17 10 5 10-5M2 12l10 5 10-5"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  userplus: '<circle cx="10" cy="8" r="4"/><path d="M2 21a8 8 0 0 1 13.3-6"/><path d="M19 15v6M16 18h6"/>',
+  mic: '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4"/>',
+  send: '<path d="M12 19V5M5 12l7-7 7 7"/>',
+  stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
+  zap: '<path d="M13 2 3 14h9l-1 8 10-12h-9z"/>',
+  sliders: '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>',
+  ext: '<path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
+  wrench: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
+  camera: '<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z"/><circle cx="12" cy="13" r="3"/>',
+};
+const ic = (n, s) => `<svg class="i${s ? ' s' : ''}" viewBox="0 0 24 24">${IC[n]}</svg>`;
+
+// ---------- Картинки сцены (это «фото», от темы не зависят) ----------
+let uid = 0;
+// d: { lamp: null|0..3, bg, painting, wide, evening: null|0..3 }
+function scene(d = {}) {
+  const k = 'g' + (++uid);
+  const bg = d.bg !== false, painting = d.painting !== false;
+  const vb = d.wide ? '-100 0 840 400' : '0 0 640 400';
+  const ev = d.evening;
+  const sky = ev == null ? ['#9ECBE8', '#E6F0F2'] : [['#2B3A67', '#E7976A'], ['#1E2748', '#8E6C8A'], ['#3B4E7A', '#F0B27A'], ['#232C4A', '#C98B6B']][ev % 4];
+  const lampColors = ['#C9A25A', '#F3E6CF', '#3C4A5A', '#B85C3C'];
+  const lamp = d.lamp == null ? '' : (() => {
+    const c = lampColors[d.lamp % 4];
+    const shade = d.lamp % 2 === 0
+      ? `<path d="M572 132 L628 132 L616 96 L584 96 Z" fill="${c}"/>`
+      : `<ellipse cx="600" cy="112" rx="30" ry="22" fill="${c}"/>`;
+    return `<circle cx="600" cy="150" r="95" fill="url(#${k}glow)"/>
+      <rect x="597" y="126" width="6" height="176" fill="#3A332B"/>
+      <ellipse cx="600" cy="303" rx="26" ry="6" fill="#3A332B"/>${shade}`;
+  })();
+  return `<svg class="img" viewBox="${vb}" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="${k}w" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#E9DCC6"/><stop offset="1" stop-color="#D8C6A8"/></linearGradient>
+    <linearGradient id="${k}f" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#9C7650"/><stop offset="1" stop-color="#7A5A3C"/></linearGradient>
+    <linearGradient id="${k}s" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${sky[0]}"/><stop offset="1" stop-color="${sky[1]}"/></linearGradient>
+    <radialGradient id="${k}glow"><stop offset="0" stop-color="#FFE3A8" stop-opacity=".75"/><stop offset="1" stop-color="#FFE3A8" stop-opacity="0"/></radialGradient>
+    <radialGradient id="${k}warm" cx=".3" cy=".6"><stop offset="0" stop-color="#FFB870" stop-opacity=".35"/><stop offset="1" stop-color="#FFB870" stop-opacity="0"/></radialGradient>
+    <pattern id="${k}ch" width="20" height="20" patternUnits="userSpaceOnUse"><rect width="20" height="20" fill="#FFFFFF"/><rect width="10" height="10" fill="#DDDDDD"/><rect x="10" y="10" width="10" height="10" fill="#DDDDDD"/></pattern>
+  </defs>
+  ${bg ? `<rect x="-100" y="0" width="840" height="300" fill="url(#${k}w)"/>
+    <rect x="-100" y="300" width="840" height="100" fill="url(#${k}f)"/>
+    <rect x="60" y="50" width="150" height="160" rx="4" fill="#F6F0E4"/>
+    <rect x="70" y="60" width="130" height="140" fill="url(#${k}s)"/>
+    <circle cx="170" cy="95" r="14" fill="${ev == null ? '#FFF6D6' : '#F8E7B0'}"/>
+    <path d="M70 170 Q110 140 150 165 T200 160 L200 200 L70 200Z" fill="${ev == null ? '#8DB38A' : '#3F5A4A'}"/>
+    <rect x="135" y="60" width="4" height="140" fill="#F6F0E4"/>
+    ${d.wide ? `<rect x="-80" y="80" width="60" height="120" rx="3" fill="#C7B08F"/><rect x="660" y="60" width="50" height="240" fill="#CDB896"/>` : ''}
+    ${painting ? `<rect x="300" y="70" width="120" height="84" rx="2" fill="#5B4A3A"/><rect x="306" y="76" width="108" height="72" fill="#C98B6B"/><circle cx="340" cy="104" r="12" fill="#F2C28B"/><path d="M306 148 L350 118 L380 138 L414 112 L414 148Z" fill="#7F5B45"/>` : ''}`
+  : `<rect x="-100" y="0" width="840" height="400" fill="url(#${k}ch)"/>`}
+  ${lamp}
+  <rect x="330" y="235" width="240" height="60" rx="16" fill="#6F8FA6"/>
+  <rect x="340" y="200" width="220" height="50" rx="14" fill="#86A5BA"/>
+  <rect x="318" y="228" width="30" height="72" rx="10" fill="#5E7E95"/>
+  <rect x="552" y="228" width="30" height="72" rx="10" fill="#5E7E95"/>
+  <rect x="340" y="295" width="8" height="18" fill="#3A332B"/><rect x="552" y="295" width="8" height="18" fill="#3A332B"/>
+  ${bg ? `<ellipse cx="200" cy="330" rx="70" ry="12" fill="#5C4330" opacity=".35"/>
+    <rect x="150" y="262" width="100" height="10" rx="3" fill="#4C3A2C"/>
+    <rect x="160" y="272" width="6" height="52" fill="#4C3A2C"/><rect x="234" y="272" width="6" height="52" fill="#4C3A2C"/>
+    <rect x="180" y="236" width="24" height="26" rx="4" fill="#E9E1D3"/>
+    <path d="M40 300 Q30 250 50 220 Q60 260 58 300Z M58 300 Q70 240 95 215 Q80 265 72 300Z" fill="#5E8B4E"/>
+    <rect x="36" y="296" width="44" height="34" rx="5" fill="#B7704E"/>` : ''}
+  ${ev != null ? `<rect x="-100" y="0" width="840" height="400" fill="#141A33" opacity="${[.3, .38, .24, .34][ev % 4]}"/><rect x="-100" y="0" width="840" height="400" fill="url(#${k}warm)"/>` : ''}
+</svg>`;
+}
+function sampleSVG(kind) {
+  if (kind === 'light') return `<svg viewBox="0 0 64 64"><defs><radialGradient id="sl${++uid}" cx=".5" cy=".4"><stop offset="0" stop-color="#FFE8B0"/><stop offset="1" stop-color="#B8733F"/></radialGradient></defs><rect width="64" height="64" fill="url(#sl${uid})"/><circle cx="32" cy="24" r="9" fill="#FFF6DA"/></svg>`;
+  if (kind === 'lamp') return `<svg viewBox="0 0 64 64"><rect width="64" height="64" fill="#EFE6D6"/><path d="M20 22h24l-5-12H25z" fill="#C9A25A"/><rect x="30.5" y="22" width="3" height="32" fill="#3A332B"/><ellipse cx="32" cy="55" rx="10" ry="3" fill="#3A332B"/></svg>`;
+  if (kind === 'logo') return `<svg viewBox="0 0 64 64"><rect width="64" height="64" fill="#2F3B48"/><circle cx="32" cy="32" r="16" fill="none" stroke="#D97757" stroke-width="6"/></svg>`;
+  if (kind === 'dusk') return `<svg viewBox="0 0 64 64"><defs><linearGradient id="sd${++uid}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2B3A67"/><stop offset="1" stop-color="#E7976A"/></linearGradient></defs><rect width="64" height="64" fill="url(#sd${uid})"/><path d="M0 48 L14 40 L26 46 L40 36 L64 44 L64 64 L0 64Z" fill="#1E2240"/></svg>`;
+  return `<svg viewBox="0 0 64 64"><rect width="64" height="64" fill="#9FB7C6"/><circle cx="24" cy="26" r="8" fill="#F3D7BD"/><circle cx="42" cy="28" r="8" fill="#E7C3A4"/><rect x="12" y="38" width="42" height="26" rx="10" fill="#5E7E95"/></svg>`;
+}
+// Лицо персонажа (фото из набора)
+const FACE_BG = ['#DCE6EE', '#EFE3CF', '#D9D2E6', '#E8D8C8', '#CFE0D2', '#F0D9C4', '#D6DEE8', '#E4E0D2', '#E9D4D4', '#D3E3E6'];
+function faceSVG(i = 0) {
+  return `<svg viewBox="0 0 64 64"><rect width="64" height="64" fill="${FACE_BG[i % 10]}"/>
+    <path d="M14 64 Q16 46 32 45 Q48 46 50 64Z" fill="#3F7F74"/><rect x="28" y="38" width="8" height="9" fill="#F1C7A5"/>
+    <path d="M17 30 Q16 11 32 10 Q48 11 47 30 L49 50 Q42 46 40 38 L24 38 Q22 46 15 50Z" fill="#7A3B22"/>
+    <ellipse cx="32" cy="29" rx="11" ry="13" fill="#F1C7A5"/>
+    <path d="M21 25 Q24 14 34 15 Q41 16 43 24 Q36 19 28 22 Q24 23 21 25Z" fill="#7A3B22"/>
+    <circle cx="28" cy="29" r="1.3" fill="#3A2A20"/><circle cx="36" cy="29" r="1.3" fill="#3A2A20"/></svg>`;
+}
+
+// ---------- Данные ----------
+const DEFAULT_MARKS = () => ([
+  { type: 'mask', w: 46, d: 'M596 118 Q606 150 598 190 Q592 240 604 285' },
+  { type: 'arrow', x1: 505, y1: 72, x2: 572, y2: 118 },
+  { type: 'text', x: 420, y: 40, t: 'вот эту' },
+]);
+// Цены условные: per — цена одного варианта в единицах поставщика
+const PROVIDERS = [
+  { id: 'fal', name: 'fal', hint: 'оплата в долларах', unit: 'usd', models: [
+    { id: 'auto', name: 'Авто', hint: 'подберём под задачу', per: 0.08, mask: true },
+    { id: 'nb2', name: 'Nano Banana 2', hint: 'правка словами, держит лица', per: 0.08, mask: false },
+    { id: 'kontext', name: 'FLUX Kontext', hint: 'правка по описанию', per: 0.04, mask: false },
+    { id: 'fill', name: 'FLUX Fill', hint: 'точно по маске, остальное не трогает', per: 0.05, mask: true },
+  ] },
+  { id: 'hf', name: 'Higgsfield', hint: 'оплата в кредитах', unit: 'cr', models: [
+    { id: 'auto', name: 'Авто', hint: 'подберём под задачу', per: 2, mask: true },
+    { id: 'gpt25', name: 'GPT Image 2.5', hint: 'фото, текст на картинке, маска', per: 2, mask: true },
+    { id: 'soul', name: 'Soul', hint: 'портреты и люди', per: 3, mask: false },
+  ] },
+  { id: 'glif', name: 'glif', hint: 'подключим позже', soon: true, models: [] },
+];
+const ADMIN_PROVIDER = 'fal';
+const PERSONAS = [
+  { id: 'claude', name: 'Claude', acc: 'Claude', role: 'ассистент по умолчанию', color: '#D97757' },
+  { id: 'kira', name: 'Кира', acc: 'Киру', role: 'дизайн интерфейсов', color: '#5E8B4E' },
+  { id: 'sofya', name: 'Софья', acc: 'Софью', role: 'тексты и смысл', color: '#3E7CA6' },
+];
+const PROJECT_IMGS = [
+  { name: 'about.jpg', kind: 'lamp', role: 'object' },
+  { name: 'logo.png', kind: 'logo', role: 'object' },
+  { name: 'team-photo.jpg', kind: 'team', role: 'face' },
+  { name: 'dusk-ref.png', kind: 'dusk', role: 'style' },
+];
+const ROLES = [['face', 'Персонаж — сохранить лицо', 'Лицо'], ['style', 'Стиль', 'Стиль'], ['object', 'Предмет', 'Предмет']];
+const TOOLS = [['hand', 'hand', 'Рука'], ['mask', 'brush', 'Кисть'], ['arrow', 'arrow', 'Стрелка'], ['rect', 'rect', 'Рамка'], ['text', 'text', 'Подпись'], ['eraser', 'eraser', 'Ластик']];
+const AGENT_PROMPT_A = 'Убери напольный торшер справа у дивана (отмечен кистью), на его месте — продолжение стены и пола. Сделай вечер: за окном сумерки, в комнате тёплый приглушённый свет от окна. Диван, картину и растение не меняй.';
+const AGENT_PROMPT_B = 'Уютная гостиная студии вечером: тёплый свет из окна, латунный торшер у дивана, мягкие тени, спокойная палитра дерева и латуни как в брендбуке. Фотореализм, кадр 16:9, слева свободное место под заголовок статьи.';
+const LONG_PROMPT = 'Убери напольный торшер справа у дивана, на его месте продолжи стену и пол так, чтобы шов не был заметен. Сделай вечер: за окном сумерки с тёплой полосой заката у горизонта, небо от глубокого синего к персиковому. В комнате — тёплый приглушённый свет, как от лампы за кадром слева, мягкие длинные тени от дивана и столика. Картину в рамке не трогай, растение в горшке оставь, но пусть листья чуть подсвечены закатом. Диван остаётся голубым, без новых подушек. Общая палитра — дерево, латунь, песочный, как в docs/brand.md. Без людей и без текста на картинке. Если что-то приходится дорисовывать за краем, продолжай стену в том же тоне.';
+
+const S = {
+  theme: 'light', mobile: false, screen: 'editor', outcome: 'ok',
+  fileName: 'hero.png', folder: 'images',
+  phase: 'idle', errKind: 'provider', progress: [], timer: null, lastAction: { kind: 'prompt' },
+  tool: 'mask', brush: 30, marks: DEFAULT_MARKS(), zoom: 1, panX: 0, panY: 0,
+  prompt: '', promptBy: null, flash: false, count: 3, provider: 'settings', model: 'auto', provOpen: false, modelOpen: false,
+  samples: [{ kind: 'light', name: 'тёплый свет', role: 'style' }], sampleMenu: false, roleEdit: null,
+  characters: [{ id: 'anya', name: 'Аня', photos: [0, 1, 2, 3, 4] }], charOn: null, charNew: null,
+  outpaintOpen: false, ratio: '16:9',
+  open: { marks: true, samples: true, chars: false, quick: true, model: false, hist: true },
+  variants: [], selVar: 0, compare: 'slider', showAfter: true, slider: 50,
+  history: [{ title: 'Оригинал', d: { lamp: 0 } }], cur: 0,
+  // Чат картинки: обычный чат проекта с привязкой к файлу
+  chatCreated: false, persona: 'claude', persMenu: false, msgs: [], typing: false, chatText: '', atts: [], autoAtt: true, attMenu: false, rec: false, recSec: 0, recTimer: null,
+  genCard: null, sheet: null, chatUnread: false,
+  pickOpen: false, pickSel: null, saveOpen: false, saveName: '', saveFolder: 'images', saveHistory: true, toast: null, toastAct: null,
+};
+
+const plural = (n, a, b, c) => { const m10 = n % 10, m100 = n % 100; return m10 === 1 && m100 !== 11 ? a : (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20) ? b : c); };
+const variantsWord = n => `${n} ${plural(n, 'вариант', 'варианта', 'вариантов')}`;
+const marksWord = n => `${n} ${plural(n, 'пометка', 'пометки', 'пометок')}`;
+const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const effProv = () => PROVIDERS.find(p => p.id === (S.provider === 'settings' ? ADMIN_PROVIDER : S.provider));
+const curModel = () => effProv().models.find(m => m.id === S.model) || effProv().models[0];
+const modelBlock = m => (!m.mask && S.marks.some(x => x.type === 'mask')) ? 'Не правит по маске — сотрите кисть или возьмите другую модель' : '';
+const money = (n, unit) => unit === 'usd' ? `$${n.toFixed(2)}` : `${n} ${plural(n, 'кредит', 'кредита', 'кредитов')}`;
+const price = (n = S.count) => { const p = curModel().per * n; return effProv().unit === 'usd' ? Math.round(p * 100) / 100 : p; };
+const priceText = (n = S.count) => `≈ ${money(price(n), effProv().unit)} · ${variantsWord(n)}`;
+const curD = () => S.history[S.cur].d;
+const persona = () => PERSONAS.find(p => p.id === S.persona);
+const charById = id => S.characters.find(c => c.id === id);
+const roleShort = r => ROLES.find(x => x[0] === r)[2];
+const busy = () => S.phase === 'gen';
+// Род глагола для персоны: Claude — «написал», Кира и Софья — «написала»
+const g = (m, f) => S.persona === 'claude' ? m : f;
+const personaAv = (p, cls = '') => `<span class="av txt ${cls}" style="background:${p.color}">${p.name[0]}</span>`;
+
+// ---------- Отрисовка ----------
+const app = document.getElementById('app');
+function render() {
+  document.documentElement.dataset.theme = S.theme;
+  app.classList.toggle('mobile', S.mobile);
+  renderDemo();
+  // Сохраняем прокрутку панелей: перерисовка не должна прыгать к началу
+  const keep = {};
+  app.querySelectorAll('[data-scroll]').forEach(el => keep[el.dataset.scroll] = el.scrollTop);
+  app.innerHTML = S.screen === 'project' ? projectView() : editorView();
+  app.querySelectorAll('[data-scroll]').forEach(el => { if (keep[el.dataset.scroll] != null) el.scrollTop = keep[el.dataset.scroll]; });
+  app.querySelectorAll('.feed').forEach(f => f.scrollTop = f.scrollHeight);
+  app.querySelectorAll('textarea.q, textarea.ci').forEach(autosize);
+  applyTransform();
+  if (S.flash) setTimeout(() => { S.flash = false; }, 50);
+}
+function autosize(t) {
+  t.style.height = 'auto';
+  t.style.height = t.scrollHeight + 2 + 'px';
+  if (t.classList.contains('q')) {
+    const lines = t.parentElement.querySelector('.lines');
+    if (lines) lines.textContent = t.scrollHeight > t.clientHeight + 4 ? 'прокрутите ↓' : '';
+  }
+}
+
+function renderDemo() {
+  const b = (on, act, txt) => `<button class="tbtn" aria-pressed="${on}" data-act="${act}">${txt}</button>`;
+  document.getElementById('demo').innerHTML = `
+    <div class="grp"><span class="lbl">Тема</span>${b(S.theme === 'light', 'theme:light', 'Светлая')}${b(S.theme === 'dark', 'theme:dark', 'Тёмная')}</div>
+    <div class="grp"><span class="lbl">Ширина</span>${b(!S.mobile, 'w:desk', 'Десктоп')}${b(S.mobile, 'w:mob', 'Телефон 390')}</div>
+    <div class="grp"><span class="lbl">Сразу к</span>${[['1', 'Редактор'], ['2', 'А: агент запускает'], ['3', 'Б: агент предлагает'], ['4', 'Варианты'], ['5', 'Длинный промпт'], ['6', 'История'], ['7', 'Ошибка'], ['8', 'Проект и чаты']]
+      .map(([n, t]) => b(false, 'jump:' + n, n + ' · ' + t)).join('')}</div>
+    <div class="grp"><span class="lbl">Исход генерации</span>${b(S.outcome === 'ok', 'out:ok', 'Успех')}${b(S.outcome === 'provider', 'out:provider', 'Сервис отказал')}</div>`;
+}
+
+function editorView() {
+  const center = S.phase === 'gen' ? genView() : S.phase === 'variants' ? variantsView() : S.phase === 'error' ? errorView() : canvasView();
+  const stepLbl = S.history.length > 1 && !S.mobile ? `<span class="sub">шаг ${S.cur} из ${S.history.length - 1}</span>` : '';
+  const body = S.mobile
+    ? `<div class="center">${center}</div>
+       <div class="mtabs"><button class="btn sm" data-act="sheet:tools">${ic('wrench', 1)} Инструменты</button>
+         <button class="btn sm" data-act="sheet:chat">${ic('chat', 1)} Чат${S.chatUnread ? '<span class="badge"></span>' : ''}</button></div>
+       ${promptCard()}`
+    : `<div class="lp"><div class="lp-body" data-scroll="lp">${toolSections()}</div></div>
+       <div class="center">${center}</div>
+       <div class="rc">${promptCard()}${chatBox()}</div>`;
+  return `<div class="island ed">
+    <div class="ih">
+      <button class="ib" data-act="toproject" title="К проекту" aria-label="К проекту">${ic('back')}</button>
+      ${S.mobile ? '' : ic('img')}
+      <div class="grow"><div class="ttl">${esc(S.fileName)}</div><div class="sub">${S.folder}/ · Сайт студии</div></div>
+      ${stepLbl}
+      ${S.history.length > 1 && S.phase === 'idle' ? `<button class="btn sm pri" data-act="applycur">${ic('check', 1)} Сохранить</button>` : ''}
+    </div>
+    <div class="ed-body">${body}</div>
+    ${S.mobile && S.sheet ? sheetView() : ''}
+    ${S.pickOpen ? pickView() : ''}
+    ${S.saveOpen ? saveView() : ''}
+    ${S.charNew ? charNewView() : ''}
+    ${S.toast ? `<div class="toast">${ic('check', 1)}<span>${esc(S.toast)}</span>${S.toastAct ? `<button data-act="${S.toastAct[0]}">${S.toastAct[1]}</button>` : ''}<button class="x" data-act="toastx" aria-label="Закрыть">${ic('x', 1)}</button></div>` : ''}
+  </div>`;
+}
+
+function sheetView() {
+  const tools = S.sheet === 'tools';
+  return `<div class="sheet-ovl" data-act="sheet:"><div class="sheet" data-stop="1"><div class="grab"></div>
+    <div class="sheet-h"><span class="ttl grow">${tools ? 'Инструменты' : 'Чат картинки'}</span><button class="ib" data-act="sheet:" aria-label="Закрыть">${ic('x')}</button></div>
+    ${tools ? `<div class="lp-body" data-scroll="lps" style="border-top:1px solid var(--c-border-light)">${toolSections()}</div>` : chatBox()}
+  </div></div>`;
+}
+
+// ---------- Левая панель: секции ----------
+function section(id, title, meta, body) {
+  return `<div class="sec ${S.open[id] ? '' : 'closed'}"><button class="sec-h" data-act="sec:${id}" aria-expanded="${!!S.open[id]}"><span class="chev">${ic('down', 1)}</span><span class="grow">${title}</span><span class="meta">${meta}</span></button><div class="sec-b">${body}</div></div>`;
+}
+function toolSections() {
+  const b = busy();
+  const hint = { hand: 'Тяните картинку, колесо — масштаб', mask: 'Закрасьте место, которое нужно изменить', arrow: 'Проведите стрелку к нужному месту', rect: 'Обведите рамкой область', text: 'Нажмите на картинку, чтобы добавить подпись', eraser: 'Нажмите на пометку, чтобы убрать её' }[S.tool];
+  const marks = `<div class="tool-grid">${TOOLS.map(([id, icn, name]) => `<button class="tool ${S.tool === id ? 'on' : ''}" data-act="tool:${id}" ${b ? 'disabled' : ''}>${ic(icn)}${name}</button>`).join('')}
+      <button class="tool" data-act="clearmarks" ${b || !S.marks.length ? 'disabled' : ''}>${ic('trash')}Очистить</button></div>
+    ${S.tool === 'mask' ? `<label class="brush-row">Размер кисти<input type="range" min="10" max="80" value="${S.brush}" id="brush"><span id="brushV">${S.brush}</span></label>` : ''}
+    <div class="hint">${hint}. Пометки видит и модель, и агент в чате.</div>`;
+
+  const samples = `<div class="samples">
+      ${S.samples.map((s, i) => `<div class="smp"><div class="pic">${sampleSVG(s.kind)}</div><button class="role ${s.role === 'face' ? 'face' : ''}" data-act="role:${i}" title="Роль образца">${roleShort(s.role)}${ic(S.roleEdit === i ? 'up' : 'down', 1)}</button><div class="cap" title="${esc(s.name)}">${esc(s.name)}</div><button class="x" data-act="smpx:${i}" title="Убрать образец" aria-label="Убрать образец">${ic('x', 1)}</button></div>`).join('')}
+      ${S.samples.length < 6 ? `<button class="smp-add" data-act="smpmenu" ${b ? 'disabled' : ''}>${ic('plus', 1)}Образец</button>` : ''}
+      ${S.sampleMenu ? `<div class="menu" style="top:calc(100% + 4px);left:0;right:0;min-width:0"><button data-act="smpfile">${ic('upload', 1)}<span>С компьютера<small>PNG, JPG или WebP до 20 МБ</small></span></button><button data-act="smpproj">${ic('folder', 1)}<span>Из файлов проекта…<small>Любая картинка этого проекта</small></span></button></div>` : ''}
+    </div>
+    ${S.roleEdit != null && S.samples[S.roleEdit] ? `<div class="role-pop opts"><div class="t">Как модели использовать «${esc(S.samples[S.roleEdit].name)}»</div>${ROLES.map(([id, full]) => `<label class="${S.samples[S.roleEdit].role === id ? 'on' : ''}" data-act="setrole:${id}"><input type="radio" name="role" ${S.samples[S.roleEdit].role === id ? 'checked' : ''} style="accent-color:var(--c-accent)"><span class="grow">${full}</span></label>`).join('')}</div>` : ''}
+    <div class="hint">Модель возьмёт образец за пример. Роль — под миниатюрой: лицо, стиль или предмет. Картинку можно перетащить сюда из файлов.</div>`;
+
+  const chars = `${S.characters.length ? `<div class="chars">${S.characters.map(c => `<div class="chr ${S.charOn === c.id ? 'on' : ''}"><button class="chr-main" data-act="charon:${c.id}" ${b ? 'disabled' : ''}><span class="av">${faceSVG(c.photos[0])}</span><span>${esc(c.name)}</span><span class="st">${S.charOn === c.id ? 'в генерации' : 'подключить'}</span></button></div>`).join('')}</div>` : ''}
+    <button class="btn sm" data-act="charnew" style="align-self:flex-start" ${b ? 'disabled' : ''}>${ic('userplus', 1)} Новый персонаж</button>
+    <div class="hint">Персонаж — набор фото лица в <code>characters/</code>. Подключённый узнаваем во всех вариантах.</div>`;
+
+  const quick = `<div class="qa">
+      <button class="chip" data-act="quick:bg" ${b ? 'disabled' : ''}>${ic('layers', 1)} Убрать фон</button>
+      <button class="chip" data-act="quick:upscale" ${b ? 'disabled' : ''}>${ic('hd', 1)} Улучшить качество</button>
+      <button class="chip" data-act="quick:remove" ${b || !S.marks.length ? 'disabled title="Сначала отметьте, что убрать"' : ''}>${ic('scissors', 1)} Убрать отмеченное</button>
+      <button class="chip ${S.outpaintOpen ? 'on' : ''}" data-act="outpaint" ${b ? 'disabled' : ''}>${ic('expand', 1)} Дорисовать за края</button>
+    </div>
+    ${S.outpaintOpen ? `<div class="ratio-pop"><span class="muted" style="font-size:12px">Пропорции</span><div class="seg">${['1:1', '16:9', '9:16'].map(r => `<button class="${S.ratio === r ? 'on' : ''}" data-act="ratio:${r}">${r}</button>`).join('')}</div><button class="btn sm pri" data-act="quick:outpaint">Дорисовать</button></div>` : ''}
+    <div class="hint">Запускаются сразу, без промпта. Число вариантов и цена — как в поле промпта.</div>`;
+
+  const pv = effProv(), m = curModel(), blocked = modelBlock(m);
+  const provName = S.provider === 'settings' ? `Как в настройках (${pv.name})` : pv.name;
+  const model = `<div class="sec-l" style="margin:0">Поставщик</div>
+    <button class="pm-btn" data-act="prov"><span class="grow"><b>${provName}</b></span>${ic(S.provOpen ? 'up' : 'down', 1)}</button>
+    ${S.provOpen ? provList() : ''}
+    <div class="sec-l" style="margin:0">Модель</div>
+    <button class="pm-btn" data-act="model"><span class="grow"><b>${m.name}</b> · ${money(m.per, pv.unit)} за вариант</span>${ic(S.modelOpen ? 'up' : 'down', 1)}</button>
+    ${S.modelOpen ? modelList() : ''}
+    ${blocked ? `<div class="pm-warn">${ic('alert', 1)}<span>${m.name}: ${blocked.toLowerCase()}</span></div>` : ''}`;
+
+  const hist = `<div class="steps">${S.history.map((h, i) => `<button class="step ${i === S.cur ? 'on' : ''} ${i > S.cur ? 'after' : ''}" data-act="step:${i}" ${b ? 'disabled' : ''}>
+      <span class="pic">${scene(h.d)}</span><span class="grow"><span class="n">${i === 0 ? 'Оригинал' : 'Шаг ' + i}</span>${i ? `<span class="d">${esc(h.title)}</span>` : ''}</span></button>`).join('')}</div>
+    <div class="hint">${S.cur < S.history.length - 1 ? `Вы на шаге ${S.cur === 0 ? '«Оригинал»' : S.cur}. Следующая правка заменит шаги после него.` : S.history.length === 1 ? 'Здесь появятся шаги правки. На любой можно вернуться.' : 'Нажмите на шаг, чтобы откатиться к нему.'}</div>`;
+
+  return section('marks', 'Пометки', marksWord(S.marks.length), marks)
+    + section('samples', 'Образцы', S.samples.length ? String(S.samples.length) : 'нет', samples)
+    + section('chars', 'Персонажи', S.charOn ? 'подключена ' + charById(S.charOn).name : String(S.characters.length), chars)
+    + section('quick', 'Быстрые действия', '', quick)
+    + section('model', 'Чем рисовать', `${pv.name} · ${m.name}`, model)
+    + section('hist', 'История шагов', S.history.length > 1 ? `${S.history.length - 1} ${plural(S.history.length - 1, 'шаг', 'шага', 'шагов')}` : '', hist);
+}
+function provList() {
+  const row = (id, name, hint, extra = '', dis = false) => `<label class="${S.provider === id ? 'on' : ''} ${dis ? 'dis' : ''}" ${dis ? '' : `data-act="setprov:${id}"`}><input type="radio" name="prv" ${S.provider === id ? 'checked' : ''} ${dis ? 'disabled' : ''} style="accent-color:var(--c-accent)"><span class="grow">${name}<br><small>${hint}</small></span>${extra}</label>`;
+  const admin = PROVIDERS.find(p => p.id === ADMIN_PROVIDER);
+  return `<div class="opts">${row('settings', 'Как в настройках', `сейчас ${admin.name} — выбрал администратор`)}${PROVIDERS.map(p => row(p.id, p.name, p.hint, p.soon ? '<span class="soon">Скоро</span>' : '', p.soon)).join('')}</div>`;
+}
+function modelList() {
+  const pv = effProv();
+  return `<div class="opts">${pv.models.map(x => { const why = modelBlock(x); return `<label class="${x.id === S.model ? 'on' : ''} ${why ? 'dis' : ''}" ${why ? `title="${why}"` : `data-act="setmodel:${x.id}"`}><input type="radio" name="mdl" ${x.id === S.model ? 'checked' : ''} ${why ? 'disabled' : ''} style="accent-color:var(--c-accent)"><span class="grow">${x.name}<br><small>${why || x.hint}</small></span><small>${money(x.per, pv.unit)}</small></label>`; }).join('')}</div>`;
+}
+
+// ---------- Поле промпта (справа сверху, на телефоне — снизу) ----------
+function promptCard() {
+  const b = busy(), ch = charById(S.charOn), blocked = modelBlock(curModel());
+  const ph = ch ? `Где и что делает ${ch.name}?` : 'Что изменить? Отметьте место на картинке или просто опишите';
+  const head = `<div class="pcard-h"><span class="sec-l" style="margin:0">Промпт</span>
+      ${S.promptBy ? `<span class="by">${ic('spark', 1)} написал${S.promptBy === 'claude' ? '' : 'а'} ${esc(PERSONAS.find(x => x.id === S.promptBy).name)}</span>` : ''}
+      ${ch ? `<span class="char-chip"><span class="av">${faceSVG(ch.photos[0])}</span>${esc(ch.name)}<button data-act="charoff" title="Отключить персонажа" aria-label="Отключить персонажа">${ic('x', 1)}</button></span>` : ''}
+      <span class="grow"></span>
+      ${S.prompt && !b ? `<button class="ib" data-act="pclear" title="Очистить промпт" aria-label="Очистить промпт" style="width:24px;height:24px">${ic('x', 1)}</button>` : ''}</div>`;
+  const foot = b
+    ? `<div class="gen-row"><span class="price grow">Рисуем ${variantsWord(S.count)}…</span><button class="btn sm" data-act="cancel">${ic('x', 1)} Отменить</button></div>`
+    : `<div class="gen-row">${S.mobile ? '' : '<span class="muted" style="font-size:12px">Вариантов</span>'}<div class="seg" title="Сколько вариантов">${[1, 2, 3, 4].map(n => `<button class="${S.count === n ? 'on' : ''}" data-act="count:${n}">${n}</button>`).join('')}</div>
+         <span class="grow"></span><span class="price">${ic('coin', 1)} <b>≈ ${money(price(), effProv().unit)}</b></span>
+         ${S.mobile ? `<button class="btn pri" data-act="generate" ${blocked ? `disabled title="${blocked}"` : ''} >${ic('spark', 1)} Сгенерировать</button>` : ''}</div>
+       ${S.mobile ? '' : `<button class="btn pri lg" style="width:100%" data-act="generate" ${blocked ? `disabled title="${blocked}"` : ''}>${ic('spark', 1)} Сгенерировать</button>`}`;
+  return `<div class="pcard">${head}
+    <div class="pbox ${S.flash ? 'flash' : ''}"><textarea class="q" id="q" rows="2" placeholder="${ph}" ${b ? 'readonly' : ''} aria-label="Промпт">${esc(S.prompt)}</textarea><span class="lines"></span></div>
+    ${foot}</div>`;
+}
+
+// ---------- Чат картинки ----------
+function chatBox() {
+  const p = persona();
+  const head = `<div class="chat-h">
+      <button class="pers-btn" data-act="persmenu" title="Собеседник">${personaAv(p, 'xs')}<span>${esc(p.name)}</span>${ic('down', 1)}</button>
+      <div class="grow ctitle">${S.chatCreated ? `Чат «${esc(S.fileName)} · правка»<br>в списке чатов проекта` : 'Новый чат картинки<br>появится в списке после первого сообщения'}</div>
+      <button class="ib" data-act="openfull" title="Открыть в полном чате" aria-label="Открыть в полном чате" ${S.chatCreated ? '' : 'disabled'}>${ic('ext', 1)}</button>
+      ${S.persMenu ? persMenu('top:42px;left:6px') : ''}
+    </div>`;
+  const hasUser = S.msgs.some(m => m.who === 'me');
+  const feed = `<div class="feed">
+      <div class="sysline">${ic('img', 1)} Чат привязан к <b>${S.folder}/${esc(S.fileName)}</b>. ${esc(p.name)} видит картинку, пометки, образцы и промпт — и может сам запустить генерацию.</div>
+      ${S.msgs.map(msgView).join('')}
+      ${S.typing ? `<div class="m-ai">${personaAv(p, 'xs')}<div class="body"><span class="typing"><i></i><i></i><i></i></span></div></div>` : ''}
+      ${!hasUser && !S.typing ? `<div class="sugg"><span class="muted" style="font-size:11px">Например:</span>
+        <button class="chip" data-act="say:a">${ic('zap', 1)} Убери вон ту лампу и сделай вечер</button>
+        <button class="chip" data-act="say:b">${ic('spark', 1)} Придумай промпт для обложки блога</button></div>` : ''}
+    </div>`;
+  return `<div class="chat">${head}${feed}${composer()}</div>`;
+}
+function persMenu(pos) {
+  return `<div class="menu" style="${pos}" data-stop="1">${PERSONAS.map(x => `<button class="${x.id === S.persona ? 'on' : ''}" data-act="setpers:${x.id}">${personaAv(x, 'xs')}<span class="grow">${x.name}<small>${x.role}</small></span>${x.id === S.persona ? ic('check', 1) : ''}</button>`).join('')}</div>`;
+}
+function msgView(m) {
+  const p = PERSONAS.find(x => x.id === m.pers) || persona();
+  if (m.who === 'me') return `<div class="m-me">${m.att ? `<span class="att"><span class="pic">${scene(m.att.d)}</span>${esc(m.att.label)}</span>` : ''}${m.extra ? `<span class="att">${ic('file', 1)} ${esc(m.extra)}</span>` : ''}<span>${esc(m.text)}</span></div>`;
+  let card = '';
+  const c = m.card;
+  if (c && c.type === 'launch') {
+    const st = c.status;
+    card = `<div class="card ${st === 'done' ? 'ok' : st === 'cancel' || st === 'error' ? 'off' : ''}">
+      <div class="ch">${st === 'run' ? '<span class="dot"></span> Запущена генерация' : st === 'done' ? ic('check', 1) + ' Готово' : st === 'cancel' ? 'Генерация отменена' : ic('alert', 1) + ' Генерация не удалась'}<span class="meta">· ${esc(c.price)} · ${variantsWord(c.count)}</span></div>
+      ${st === 'run' ? `<div class="bar"><i id="cardbar" style="width:${Math.floor(Math.min(...(S.progress.length ? S.progress : [0])))}%"></i></div>` : ''}
+      ${st === 'cancel' ? '<div class="muted" style="font-size:12px">Деньги не списаны. Промпт остался в поле сверху.</div>' : ''}
+      ${st === 'error' ? '<div class="muted" style="font-size:12px">Сервис рисования отказал. Деньги не списаны.</div>' : ''}
+      <div class="acts">${st === 'run' ? `<button class="btn sm" data-act="cancel">${ic('x', 1)} Отменить</button>` : ''}
+        ${st === 'done' ? `<button class="btn sm pri" data-act="showvars">Показать варианты</button>` : ''}
+        ${st === 'cancel' || st === 'error' ? `<button class="btn sm" data-act="relaunch:${m.id}" ${busy() ? 'disabled' : ''}>Запустить снова</button>` : ''}</div></div>`;
+  }
+  if (c && c.type === 'suggest') {
+    card = `<div class="card"><div class="ch">${ic('spark', 1)} Промпт</div><div class="ptxt">${esc(c.prompt)}</div>
+      <div class="acts"><button class="btn sm" data-act="insert:${m.id}" ${busy() ? 'disabled' : ''}>${c.inserted ? ic('check', 1) + ' Вставлено' : 'Вставить в промпт'}</button>
+        <button class="btn sm pri" data-act="suggen:${m.id}" ${busy() ? 'disabled' : ''}>${ic('spark', 1)} Сгенерировать · ${esc(priceText())}</button></div></div>`;
+  }
+  return `<div class="m-ai">${personaAv(p, 'xs')}<div class="body"><span class="who">${esc(p.name)}</span>
+    ${m.read ? `<span class="read">${ic('file', 1)} Прочитано: ${m.read.map(f => `<code>${f}</code>`).join(' ')}</span>` : ''}
+    <span>${esc(m.text)}</span>${card}</div></div>`;
+}
+function composer() {
+  const p = persona(), mk = S.marks.length;
+  const atts = [
+    ...(S.autoAtt ? [`<span class="att-chip auto" title="Прикладывается к каждому сообщению: текущий шаг и пометки"><span class="pic">${scene(curD())}</span><span>${esc(S.fileName)}${mk ? ' · ' + marksWord(mk) : ''}</span><button data-act="autoattx" title="Не прикладывать картинку" aria-label="Не прикладывать картинку">${ic('x', 1)}</button></span>`] : []),
+    ...S.atts.map((a, i) => `<span class="att-chip">${ic('file', 1)}<span>${esc(a)}</span><button data-act="attx:${i}" aria-label="Убрать вложение">${ic('x', 1)}</button></span>`),
+  ];
+  return `<div class="comp">
+    <div class="comp-box">
+      ${atts.length ? `<div class="atts">${atts.join('')}</div>` : ''}
+      ${S.rec ? `<div class="rec-line"><span class="dot"></span>Говорите… 0:0${S.recSec}<span class="grow"></span><span class="muted" style="font-size:11px">нажмите микрофон, чтобы закончить</span></div>`
+        : `<textarea class="ci" id="ci" rows="1" placeholder="Спросите ${esc(p.acc)}…" aria-label="Сообщение">${esc(S.chatText)}</textarea>`}
+      <div class="strip">
+        <button class="ib" data-act="attmenu" title="Прикрепить файл" aria-label="Прикрепить файл">${ic('plus', 1)}</button>
+        <button class="mode-btn" title="Режим работы: Авто-правки">${ic('zap', 1)}${S.mobile ? '' : 'Авто-правки'}</button>
+        <button class="mode-btn" data-act="persmenu2" title="Собеседник">${personaAv(p, 'xs')}${esc(p.name)}</button>
+        <span class="grow"></span>
+        <button class="ib mic ${S.rec ? 'rec' : ''}" data-act="mic" title="${S.rec ? 'Закончить запись' : 'Голосом'}" aria-label="Голосом">${ic(S.rec ? 'stop' : 'mic', 1)}</button>
+        <button class="send" data-act="send" title="Отправить" aria-label="Отправить" ${S.rec ? 'disabled' : ''}>${ic('send', 1)}</button>
+      </div>
+    </div>
+    ${S.attMenu ? `<div class="menu" style="bottom:calc(100% - 4px);left:10px" data-stop="1"><button data-act="attadd:скриншот-сайта.png">${ic('upload', 1)}<span>Файл с компьютера<small>Добавить файл к сообщению</small></span></button><button data-act="attadd:docs/brand.md">${ic('folder', 1)}<span>Из файлов проекта<small>Например, docs/brand.md</small></span></button>${S.autoAtt ? '' : `<button data-act="autoatton">${ic('camera', 1)}<span>Снимок холста с пометками<small>Прикладывать к каждому сообщению</small></span></button>`}</div>` : ''}
+    ${S.persMenu2 ? persMenu('bottom:calc(100% - 4px);left:60px') : ''}
+  </div>`;
+}
+
+// ---------- Центр ----------
+function canvasView() {
+  const hint = { hand: 'Тяните картинку, колесо — масштаб', mask: 'Закрасьте место, которое нужно изменить', arrow: 'Проведите стрелку к нужному месту', rect: 'Обведите рамкой область', text: 'Нажмите, чтобы добавить подпись', eraser: 'Нажмите на пометку, чтобы убрать её' }[S.tool];
+  const t = (id, icn, title) => `<button class="ib ${S.tool === id ? 'on' : ''}" data-act="tool:${id}" title="${title}" aria-label="${title}">${ic(icn, 1)}</button>`;
+  return `<div class="stage" id="stage" data-tool="${S.tool}">
+    <div class="board" id="board"><div class="imgwrap">${scene(curD())}<svg class="ov" id="ov" viewBox="0 0 640 400" preserveAspectRatio="none">${marksSVG()}</svg></div></div>
+    <div class="hint-top">${hint}</div>
+    ${S.mobile ? `<div class="mtool">${t('hand', 'hand', 'Рука')}${t('mask', 'brush', 'Кисть')}${t('arrow', 'arrow', 'Стрелка')}${t('eraser', 'eraser', 'Ластик')}</div>` : ''}
+    <div class="zoombar"><button class="ib" data-act="zoom:-" title="Уменьшить" aria-label="Уменьшить">${ic('minus', 1)}</button><span class="v">${Math.round(S.zoom * 100)}%</span><button class="ib" data-act="zoom:+" title="Увеличить" aria-label="Увеличить">${ic('plus', 1)}</button><button class="ib" data-act="zoom:fit" title="Вписать" aria-label="Вписать">${ic('fit', 1)}</button></div>
+  </div>`;
+}
+function marksSVG() {
+  return S.marks.map((m, i) => {
+    if (m.type === 'mask') return `<path class="mk mk-mask" data-i="${i}" d="${m.d}" stroke-width="${m.w}"/>`;
+    if (m.type === 'rect') return `<rect class="mk mk-rect" data-i="${i}" x="${m.x}" y="${m.y}" width="${m.w}" height="${m.h}" rx="4"/>`;
+    if (m.type === 'arrow') {
+      const a = Math.atan2(m.y2 - m.y1, m.x2 - m.x1), L = 16;
+      const p1 = [m.x2 - L * Math.cos(a - .45), m.y2 - L * Math.sin(a - .45)], p2 = [m.x2 - L * Math.cos(a + .45), m.y2 - L * Math.sin(a + .45)];
+      return `<g class="mk" data-i="${i}"><line class="mk-arrow" x1="${m.x1}" y1="${m.y1}" x2="${m.x2 - 8 * Math.cos(a)}" y2="${m.y2 - 8 * Math.sin(a)}"/><path class="mk-head" d="M${m.x2} ${m.y2} L${p1} L${p2}Z"/></g>`;
+    }
+    const w = m.t.length * 8.4 + 20;
+    return `<g class="mk mk-lbl" data-i="${i}"><rect x="${m.x}" y="${m.y}" width="${w}" height="28" rx="14"/><text x="${m.x + 10}" y="${m.y + 19}">${esc(m.t)}</text></g>`;
+  }).join('');
+}
+function actionLabel() {
+  return { prompt: 'по промпту', bg: 'убираем фон', upscale: 'улучшаем качество', remove: 'убираем отмеченное', outpaint: 'дорисовываем за края ' + (S.lastAction.ratio || '') }[S.lastAction.kind];
+}
+function genView() {
+  return `<div class="gen-area" data-scroll="gen">
+    <div class="gen-head"><span class="t">Рисуем ${variantsWord(S.count)}</span>${S.lastAction.agent ? `<span class="by">${ic('spark', 1)} запустил${S.persona === 'claude' ? '' : 'а'} ${esc(persona().name)}</span>` : ''}<span class="muted">${actionLabel()} · обычно 20–40 секунд</span><span class="grow"></span><button class="btn" data-act="cancel">${ic('x', 1)} Отменить</button></div>
+    <div class="skels">${S.progress.map((p, i) => `<div class="skel"><span class="pct" id="pp${i}">Вариант ${i + 1} · ${Math.floor(p)}%</span><div class="bar"><i style="width:${p}%" id="pb${i}"></i></div></div>`).join('')}</div>
+    <div class="muted" style="font-size:12px">Пока рисуется, можно писать в чат и готовить следующую правку. Отмена до конца генерации деньги не списывает.</div>
+  </div>`;
+}
+function variantsView() {
+  const v = S.variants[S.selVar];
+  const before = scene(curD()), after = scene(v);
+  const cmp = S.compare === 'slider'
+    ? `<div class="cmp" id="cmp">${after}<div class="top" style="width:${S.slider}%"><div style="width:${100 / S.slider * 100}%;position:relative;height:100%">${before}</div></div>
+      <div class="handle" id="handle" style="left:${S.slider}%"></div><span class="tag" style="left:8px">До</span><span class="tag" style="right:8px">После</span></div>`
+    : `<div class="cmp">${S.showAfter ? after : before}<span class="tag" style="left:8px">${S.showAfter ? 'После' : 'До'}</span></div>`;
+  return `<div class="gen-area" data-scroll="vars">
+    <div class="gen-head"><span class="t">Готово: ${variantsWord(S.variants.length)}</span><span class="grow"></span>
+      <div class="seg"><button class="${S.compare === 'slider' ? 'on' : ''}" data-act="cmp:slider">Шторка</button><button class="${S.compare === 'toggle' ? 'on' : ''}" data-act="cmp:toggle">До / после</button></div>
+      ${S.compare === 'toggle' ? `<button class="btn sm" data-act="flip">${S.showAfter ? 'Показать «до»' : 'Показать «после»'}</button>` : ''}</div>
+    ${cmp}
+    <div class="vars">${S.variants.map((d, i) => `<button class="var ${i === S.selVar ? 'on' : ''}" data-act="var:${i}"><span class="no">${i + 1}</span>${scene(d)}</button>`).join('')}</div>
+    <div class="var-acts">
+      <button class="btn pri ${S.mobile ? '' : 'lg'}" data-act="apply">${ic('check', 1)} Применить</button>
+      <button class="btn ${S.mobile ? '' : 'lg'}" data-act="base">${ic('pencil', 1)} Взять за основу</button>
+      <button class="btn ${S.mobile ? '' : 'lg'}" data-act="more">${ic('spark', 1)} Ещё варианты</button>
+      <button class="btn ghost ${S.mobile ? '' : 'lg'}" data-act="discard">Вернуться к правке</button>
+    </div>
+    <div class="muted" style="font-size:12px;text-align:center">«Применить» сохранит вариант новым файлом рядом с оригиналом. «Взять за основу» — новый шаг истории, правка продолжается.</div>
+  </div>`;
+}
+function errorView() {
+  return `<div class="gen-area"><div class="err">
+    <div class="ic">${ic('alert')}</div><h3>Сервис рисования не ответил</h3>
+    <p>Сервис, который рисует картинки, сейчас отказал. Так бывает при большой нагрузке — обычно помогает повтор через минуту.</p>
+    <div class="kept">${ic('check', 1)} Промпт, пометки и образцы сохранены. Деньги не списаны.</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn pri" data-act="retry">Повторить</button><button class="btn" data-act="discard">Изменить промпт</button></div>
+  </div></div>`;
+}
+
+// ---------- Модалки ----------
+function pickView() {
+  const sel = PROJECT_IMGS.find(f => f.name === S.pickSel);
+  return `<div class="ovl" data-act="pickx"><div class="modal" data-stop="1">
+    <div class="modal-h"><h3>Образец из файлов проекта</h3><button class="ib" data-act="pickx" aria-label="Закрыть">${ic('x')}</button></div>
+    <div class="modal-b"><div class="muted" style="font-size:12px">Папка images/</div>
+      <div class="pick-grid">${PROJECT_IMGS.map(f => `<button class="pick ${S.pickSel === f.name ? 'on' : ''}" data-act="picksel:${f.name}">${sampleSVG(f.kind)}<span>${f.name}</span></button>`).join('')}</div></div>
+    <div class="modal-f"><button class="btn ghost" data-act="pickx">Отмена</button><button class="btn pri" data-act="pickok" ${sel ? '' : 'disabled'}>Добавить образец</button></div>
+  </div></div>`;
+}
+function saveView() {
+  return `<div class="ovl" data-act="savex"><div class="modal" data-stop="1">
+    <div class="modal-h"><h3>Сохранить в проект</h3><button class="ib" data-act="savex" aria-label="Закрыть">${ic('x')}</button></div>
+    <div class="modal-b">
+      <div class="fld"><label>Имя файла</label><input type="text" id="saveName" value="${esc(S.saveName)}"></div>
+      <div class="fld"><label>Папка</label><select id="saveFolder">${['images', 'images/generated', '(корень проекта)'].map(f => `<option ${f === S.saveFolder ? 'selected' : ''}>${f}</option>`).join('')}</select></div>
+      <div class="note-ok">Оригинал ${esc(S.folder)}/${esc(S.fileName)} не изменится — новая версия ляжет рядом.</div>
+      <label class="chk"><input type="checkbox" id="saveHist" ${S.saveHistory ? 'checked' : ''}><span>Сохранить историю правок</span></label>
+    </div>
+    <div class="modal-f"><button class="btn ghost" data-act="savex">Отмена</button><button class="btn pri" data-act="saveok">Сохранить в проект</button></div>
+  </div></div>`;
+}
+function charNewView() {
+  const c = S.charNew, n = c.photos.length, ok = c.name.trim() && n >= 3;
+  return `<div class="ovl" data-act="charnewx"><div class="modal" data-stop="1">
+    <div class="modal-h">${ic('userplus')}<h3>Новый персонаж</h3><button class="ib" data-act="charnewx" aria-label="Закрыть">${ic('x')}</button></div>
+    <div class="modal-b">
+      <div class="fld"><label>Имя</label><input type="text" id="charName" value="${esc(c.name)}" placeholder="Например, Лёша"></div>
+      <div class="fld"><label>Фото лица · от 3 до 10</label>
+        <div class="ph-grid">${c.photos.map((p, i) => `<div class="ph"><div class="pic">${faceSVG(p)}</div><button class="x" data-act="charphx:${i}" aria-label="Убрать фото">${ic('x', 1)}</button></div>`).join('')}
+          ${n < 10 ? `<button class="smp-add" data-act="charph">${ic('upload', 1)}${n ? 'Ещё фото' : 'Загрузить'}</button>` : ''}</div>
+        <div class="h">Лучше разные ракурсы и освещение, лицо крупно.</div></div>
+      <span class="cnt ${n >= 3 ? 'ok' : ''}">${n >= 3 ? `${n} фото из 10` : `${n} из 10 · нужно ещё ${3 - n}`}</span>
+    </div>
+    <div class="modal-f"><button class="btn ghost" data-act="charnewx">Отмена</button><button class="btn pri" id="charSave" data-act="charsave" ${ok ? '' : 'disabled'}>Сохранить персонажа</button></div>
+  </div></div>`;
+}
+
+// ---------- Экран проекта: чат картинки в общем списке чатов ----------
+function projectView() {
+  const chats = [
+    ...(S.chatCreated ? [{ img: true, name: `${S.fileName} · правка`, sub: 'только что' }] : []),
+    { name: 'Тексты для страницы «О студии»', sub: 'вчера' },
+    { name: 'Вёрстка шапки сайта', sub: '24 сен' },
+  ];
+  return `<div class="proj">
+    <div class="island"><div class="ih">${ic('chat')}<span class="ttl grow">Чаты · Сайт студии</span></div>
+      <div style="padding:6px;overflow:auto">${chats.map(c => `<button class="row" ${c.img ? 'data-act="reopen"' : ''}>${c.img ? `<span class="thumb">${scene(curD())}</span>` : ic('chat', 1)}<span class="nm">${esc(c.name)}</span>${c.img ? '<span class="tag-img">картинка</span>' : ''}<span class="sub">${c.sub}</span></button>`).join('')}
+        ${S.chatCreated ? '' : '<div class="muted" style="font-size:12px;padding:8px">Чата картинки пока нет: он появится после первого сообщения в редакторе.</div>'}</div></div>
+    <div class="island"><div class="ih">${ic('folder')}<span class="ttl grow">Файлы · images/</span></div>
+      <div style="padding:6px;overflow:auto">
+        <div class="row sel"><span class="thumb">${scene(S.history[0].d)}</span><span class="nm">hero.png</span>${S.chatCreated ? `<span title="Есть чат правки">${ic('chat', 1)}</span>` : ''}<button class="btn sm" data-act="reopen">${ic('pencil', 1)} Редактировать</button></div>
+        ${PROJECT_IMGS.map(f => `<div class="row"><span class="thumb">${sampleSVG(f.kind)}</span><span class="nm">${f.name}</span></div>`).join('')}
+      </div></div>
+  </div>`;
+}
+
+// ---------- Холст: масштаб, перемещение, рисование ----------
+function applyTransform() {
+  const board = document.getElementById('board');
+  if (!board) return;
+  const w = board.offsetWidth, h = board.offsetHeight;
+  board.style.transform = `translate(${S.panX - w * S.zoom / 2}px, ${S.panY - h * S.zoom / 2}px) scale(${S.zoom})`;
+}
+function svgPt(svg, e) { const p = svg.createSVGPoint(); p.x = e.clientX; p.y = e.clientY; return p.matrixTransform(svg.getScreenCTM().inverse()); }
+let drag = null;
+app.addEventListener('pointerdown', e => {
+  if (e.target.closest('#handle, #cmp')) { drag = { kind: 'cmp' }; moveCmp(e); return; }
+  const ov = e.target.closest('#ov');
+  if (!ov) return;
+  e.preventDefault();
+  const pt = svgPt(ov, e);
+  if (S.tool === 'hand') { drag = { kind: 'pan', x: e.clientX, y: e.clientY, px: S.panX, py: S.panY }; return; }
+  if (S.tool === 'eraser') { const mk = e.target.closest('.mk'); if (mk) { S.marks.splice(+mk.dataset.i, 1); render(); } return; }
+  if (S.tool === 'text') { const t = prompt('Подпись на картинке', 'сюда'); if (t) { S.marks.push({ type: 'text', x: pt.x, y: pt.y - 14, t }); render(); } return; }
+  ov.setPointerCapture(e.pointerId);
+  drag = { kind: S.tool, ov, x0: pt.x, y0: pt.y, pts: [[pt.x, pt.y]] };
+});
+app.addEventListener('pointermove', e => {
+  if (!drag) return;
+  if (drag.kind === 'cmp') return moveCmp(e);
+  if (drag.kind === 'pan') { S.panX = drag.px + e.clientX - drag.x; S.panY = drag.py + e.clientY - drag.y; applyTransform(); return; }
+  const pt = svgPt(drag.ov, e);
+  let m;
+  if (drag.kind === 'mask') { drag.pts.push([pt.x, pt.y]); m = { type: 'mask', w: S.brush, d: 'M' + drag.pts.map(p => p.join(' ')).join(' L') }; }
+  if (drag.kind === 'rect') m = { type: 'rect', x: Math.min(drag.x0, pt.x), y: Math.min(drag.y0, pt.y), w: Math.abs(pt.x - drag.x0), h: Math.abs(pt.y - drag.y0) };
+  if (drag.kind === 'arrow') m = { type: 'arrow', x1: drag.x0, y1: drag.y0, x2: pt.x, y2: pt.y };
+  drag.mark = m;
+  const keep = S.marks; S.marks = [...keep, m]; drag.ov.innerHTML = marksSVG(); S.marks = keep;
+});
+app.addEventListener('pointerup', () => { if (drag && drag.mark) { S.marks.push(drag.mark); render(); } drag = null; });
+function moveCmp(e) {
+  const cmp = document.getElementById('cmp'); if (!cmp) return;
+  const r = cmp.getBoundingClientRect();
+  S.slider = Math.min(96, Math.max(4, (e.clientX - r.left) / r.width * 100));
+  cmp.querySelector('.top').style.width = S.slider + '%';
+  cmp.querySelector('.top > div').style.width = (100 / S.slider * 100) + '%';
+  document.getElementById('handle').style.left = S.slider + '%';
+}
+app.addEventListener('wheel', e => {
+  if (!e.target.closest('#stage')) return;
+  e.preventDefault();
+  S.zoom = Math.min(4, Math.max(.25, S.zoom * (e.deltaY < 0 ? 1.1 : 0.9)));
+  applyTransform(); const v = app.querySelector('.zoombar .v'); if (v) v.textContent = Math.round(S.zoom * 100) + '%';
+}, { passive: false });
+app.addEventListener('input', e => {
+  const t = e.target;
+  if (t.id === 'q') { S.prompt = t.value; S.promptBy = null; autosize(t); }
+  if (t.id === 'ci') { S.chatText = t.value; autosize(t); }
+  if (t.id === 'brush') { S.brush = +t.value; document.getElementById('brushV').textContent = t.value; }
+  if (t.id === 'saveName') S.saveName = t.value;
+  if (t.id === 'charName') { S.charNew.name = t.value; document.getElementById('charSave').disabled = !(t.value.trim() && S.charNew.photos.length >= 3); }
+});
+app.addEventListener('change', e => {
+  if (e.target.id === 'saveFolder') S.saveFolder = e.target.value;
+  if (e.target.id === 'saveHist') S.saveHistory = e.target.checked;
+});
+// Enter в композере отправляет, Shift+Enter — перенос строки
+app.addEventListener('keydown', e => {
+  if (e.target.id === 'ci' && e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(S.chatText); }
+});
+
+// ---------- Генерация ----------
+function startGen(kind, extra = {}) {
+  S.lastAction = { kind, ...extra };
+  S.phase = 'gen'; S.outpaintOpen = false; S.modelOpen = false; S.provOpen = false; S.sampleMenu = false; S.roleEdit = null;
+  S.progress = Array.from({ length: S.count }, () => 0);
+  const speeds = S.progress.map(() => 1.6 + Math.random() * 1.8);
+  clearInterval(S.timer);
+  render();
+  S.timer = setInterval(() => {
+    if (S.phase !== 'gen') { clearInterval(S.timer); return; }
+    S.progress = S.progress.map((p, i) => Math.min(100, p + speeds[i]));
+    S.progress.forEach((p, i) => { const b = document.getElementById('pb' + i); if (b) { b.style.width = p + '%'; document.getElementById('pp' + i).textContent = `Вариант ${i + 1} · ${Math.floor(p)}%`; } });
+    const cb = document.getElementById('cardbar'); if (cb) cb.style.width = Math.min(...S.progress) + '%';
+    if (S.outcome !== 'ok' && Math.min(...S.progress) > 45) { clearInterval(S.timer); S.phase = 'error'; setCard('error'); render(); }
+    else if (S.progress.every(p => p >= 100)) { clearInterval(S.timer); finishGen(); }
+  }, 100);
+}
+function makeVariants() {
+  const base = curD(), k = S.lastAction.kind;
+  return Array.from({ length: S.count }, (_, i) => {
+    if (k === 'prompt' && S.lastAction.scene === 'evening') return { ...base, lamp: null, evening: i };
+    if (k === 'prompt' && S.lastAction.scene === 'cover') return { ...base, lamp: 0, evening: (i + 2) % 4 };
+    if (k === 'prompt') return { ...base, lamp: (i + (base.lamp != null ? base.lamp + 1 : 0)) % 4 };
+    if (k === 'bg') return { ...base, bg: false };
+    if (k === 'upscale') return { ...base };
+    if (k === 'remove') return { ...base, lamp: null };
+    return { ...base, wide: true };
+  });
+}
+function finishGen() {
+  S.variants = makeVariants();
+  S.selVar = 0; S.slider = 50; S.showAfter = true; S.phase = 'variants';
+  setCard('done');
+  render();
+}
+function setCard(status) {
+  const m = S.msgs.find(x => x.id === S.genCard);
+  if (m) { m.card.status = status; if (S.mobile && S.sheet !== 'chat') S.chatUnread = true; }
+  if (status !== 'run') S.genCard = null;
+}
+const actionTitle = () => ({ prompt: S.prompt ? S.prompt.slice(0, 40) + (S.prompt.length > 40 ? '…' : '') : 'Правка', bg: 'Убран фон', upscale: 'Улучшено качество', remove: 'Убрано отмеченное', outpaint: 'Дорисовано до ' + (S.lastAction.ratio || '') }[S.lastAction.kind]);
+function pushStep(d) {
+  S.history = S.history.slice(0, S.cur + 1);
+  S.history.push({ title: actionTitle(), d });
+  S.cur = S.history.length - 1;
+}
+// Сцена генерации по тексту промпта: для макета — по ключевым словам
+const sceneOf = t => /вечер|сумерк/i.test(t) ? 'evening' : /обложк|гостиная студии/i.test(t) ? 'cover' : null;
+
+// ---------- Чат: имитация ответов агента ----------
+let msgId = 0;
+function send(text) {
+  text = (text || '').trim();
+  if (!text) return;
+  S.chatCreated = true;
+  S.msgs.push({ id: ++msgId, who: 'me', text, att: S.autoAtt ? { d: curD(), label: `${S.fileName}${S.marks.length ? ' · ' + marksWord(S.marks.length) : ''}` } : null, extra: S.atts.length ? S.atts.join(', ') : null });
+  S.chatText = ''; S.atts = []; S.typing = true; S.attMenu = false;
+  render();
+  const suggest = /придумай|предложи|какой промпт/i.test(text);
+  setTimeout(() => {
+    S.typing = false;
+    if (suggest) {
+      S.msgs.push({ id: ++msgId, who: 'ai', pers: S.persona, read: ['docs/brand.md', 'images/about.jpg'], text: `Вот промпт для обложки — палитра и торшер как в брендбуке и на странице «О студии». Место под заголовок ${g('оставил', 'оставила')} слева.`, card: { type: 'suggest', prompt: AGENT_PROMPT_B, inserted: false } });
+      if (S.mobile && S.sheet !== 'chat') S.chatUnread = true;
+      render();
+    } else agentLaunch(AGENT_PROMPT_A, 'evening', `Вижу пометку кистью справа — это торшер у дивана. Промпт ${g('поставил', 'поставила')} в поле ${S.mobile ? 'промпта' : 'сверху'}, ${variantsWord(S.count)} уже ${S.count === 1 ? 'рисуется' : 'рисуются'}.`);
+  }, 800);
+}
+// Агент сам запускает генерацию: промпт — в поле, карточка — в ленту
+function agentLaunch(promptText, sceneKind, reply) {
+  S.prompt = promptText; S.promptBy = S.persona; S.flash = true;
+  if (S.phase !== 'idle') S.phase = 'idle';
+  const id = ++msgId;
+  S.msgs.push({ id, who: 'ai', pers: S.persona, text: reply, card: { type: 'launch', status: 'run', count: S.count, price: '≈ ' + money(price(), effProv().unit) } });
+  S.genCard = id;
+  startGen('prompt', { agent: true, scene: sceneKind });
+}
+
+// ---------- Клики ----------
+document.addEventListener('click', e => {
+  const el = e.target.closest('[data-act]');
+  if (!el) {
+    if (S.sampleMenu || S.persMenu || S.persMenu2 || S.attMenu) { S.sampleMenu = S.persMenu = S.persMenu2 = S.attMenu = false; render(); }
+    return;
+  }
+  const stop = e.target.closest('[data-stop]');
+  if (stop && el.contains(stop)) return;
+  const [a, v] = el.dataset.act.split(/:(.*)/);
+  e.stopPropagation();
+  const closeMenus = () => { S.sampleMenu = false; S.persMenu = false; S.persMenu2 = false; S.attMenu = false; };
+  if (!['smpmenu', 'persmenu', 'persmenu2', 'attmenu'].includes(a)) closeMenus();
+  switch (a) {
+    case 'theme': S.theme = v; break;
+    case 'w': S.mobile = v === 'mob'; S.sheet = null; break;
+    case 'out': S.outcome = v; break;
+    case 'jump': jump(v); break;
+    case 'sec': S.open[v] = !S.open[v]; break;
+    case 'tool': S.tool = v; break;
+    case 'clearmarks': S.marks = []; break;
+    case 'zoom': S.zoom = v === 'fit' ? 1 : Math.min(4, Math.max(.25, S.zoom * (v === '+' ? 1.25 : 0.8))); if (v === 'fit') { S.panX = 0; S.panY = 0; } break;
+    case 'count': S.count = +v; break;
+    case 'prov': S.provOpen = !S.provOpen; S.modelOpen = false; break;
+    case 'model': S.modelOpen = !S.modelOpen; S.provOpen = false; break;
+    case 'setprov': if (S.provider !== v) { S.provider = v; S.model = 'auto'; } S.provOpen = false; break;
+    case 'setmodel': S.model = v; S.modelOpen = false; break;
+    case 'smpmenu': S.sampleMenu = !S.sampleMenu; break;
+    case 'smpfile': S.samples.push({ kind: 'lamp', name: 'торшер-референс.jpg', role: 'object' }); S.open.samples = true; break;
+    case 'smpproj': S.pickOpen = true; S.pickSel = null; break;
+    case 'smpx': S.samples.splice(+v, 1); S.roleEdit = null; break;
+    case 'role': S.roleEdit = S.roleEdit === +v ? null : +v; break;
+    case 'setrole': S.samples[S.roleEdit].role = v; S.roleEdit = null; break;
+    case 'picksel': S.pickSel = v; break;
+    case 'pickx': S.pickOpen = false; break;
+    case 'pickok': { const f = PROJECT_IMGS.find(x => x.name === S.pickSel); S.samples.push({ kind: f.kind, name: f.name, role: f.role }); S.pickOpen = false; break; }
+    case 'charon': S.charOn = S.charOn === v ? null : v; break;
+    case 'charoff': S.charOn = null; break;
+    case 'charnew': S.charNew = { name: '', photos: [] }; break;
+    case 'charnewx': S.charNew = null; break;
+    case 'charph': { const p = S.charNew.photos; p.push(...(p.length ? [p.length + 5] : [5, 6, 7, 8])); p.splice(10); break; }
+    case 'charphx': S.charNew.photos.splice(+v, 1); break;
+    case 'charsave': { const name = S.charNew.name.trim(); const id = 'c' + Date.now(); S.characters.push({ id, name, photos: [...S.charNew.photos] }); S.charOn = id; S.charNew = null; S.open.chars = true;
+      S.toast = `Персонаж сохранён в проект: characters/${name.toLowerCase()}/`; S.toastAct = null; break; }
+    case 'outpaint': S.outpaintOpen = !S.outpaintOpen; break;
+    case 'ratio': S.ratio = v; break;
+    case 'quick': S.sheet = null; startGen(v, v === 'outpaint' ? { ratio: S.ratio } : {}); return;
+    case 'pclear': S.prompt = ''; S.promptBy = null; break;
+    case 'generate': {
+      if (modelBlock(curModel())) break;
+      if (!S.prompt.trim()) S.prompt = 'Замени торшер на латунный, с тёплым светом';
+      S.sheet = null;
+      startGen('prompt', { scene: sceneOf(S.prompt) }); return;
+    }
+    // Повтор из карточки: та же карточка снова «идёт», промпт берётся из поля
+    case 'relaunch': { const m = S.msgs.find(x => x.id === +v); m.card.status = 'run'; m.card.count = S.count; m.card.price = '≈ ' + money(price(), effProv().unit); S.genCard = m.id;
+      startGen('prompt', { agent: true, scene: sceneOf(S.prompt) }); return; }
+    case 'cancel': clearInterval(S.timer); S.phase = 'idle'; setCard('cancel'); break;
+    case 'retry': startGen(S.lastAction.kind, S.lastAction); return;
+    case 'discard': S.phase = 'idle'; break;
+    case 'cmp': S.compare = v; break;
+    case 'flip': S.showAfter = !S.showAfter; break;
+    case 'var': S.selVar = +v; break;
+    case 'more': startGen(S.lastAction.kind, S.lastAction); return;
+    case 'base': pushStep(S.variants[S.selVar]); S.phase = 'idle'; S.marks = []; S.prompt = ''; S.promptBy = null; break;
+    case 'showvars': S.sheet = null; if (S.variants.length) S.phase = 'variants'; break;
+    case 'apply': S.saveName = 'hero.v2.png'; S.saveOpen = true; S.saveFrom = 'variant'; break;
+    case 'applycur': S.saveName = 'hero.v2.png'; S.saveOpen = true; S.saveFrom = 'cur'; break;
+    case 'savex': S.saveOpen = false; break;
+    case 'saveok': if (S.saveFrom === 'variant') pushStep(S.variants[S.selVar]); S.saveOpen = false; S.phase = 'idle'; S.marks = [];
+      S.toast = `Сохранено в проект: ${S.saveFolder}/${S.saveName}`; S.toastAct = null; break;
+    case 'toastx': S.toast = null; break;
+    case 'step': S.cur = +v; S.marks = []; S.phase = 'idle'; break;
+    // Чат
+    case 'persmenu': S.persMenu = !S.persMenu; S.persMenu2 = false; break;
+    case 'persmenu2': S.persMenu2 = !S.persMenu2; S.persMenu = false; break;
+    case 'setpers': S.persona = v; break;
+    case 'attmenu': S.attMenu = !S.attMenu; break;
+    case 'attadd': if (!S.atts.includes(v)) S.atts.push(v); break;
+    case 'attx': S.atts.splice(+v, 1); break;
+    case 'autoattx': S.autoAtt = false; break;
+    case 'autoatton': S.autoAtt = true; break;
+    case 'mic':
+      if (!S.rec) { S.rec = true; S.recSec = 0; clearInterval(S.recTimer); S.recTimer = setInterval(() => { S.recSec = Math.min(9, S.recSec + 1); const l = app.querySelector('.rec-line'); if (l) l.firstChild.nextSibling.textContent = `Говорите… 0:0${S.recSec}`; }, 1000); }
+      else { S.rec = false; clearInterval(S.recTimer); S.chatText = (S.chatText ? S.chatText + ' ' : '') + 'убери вон ту лампу и сделай вечер'; }
+      break;
+    case 'send': send(S.chatText); return;
+    case 'say': send(v === 'a' ? 'Убери вон ту лампу и сделай вечер' : 'Придумай промпт для обложки блога'); return;
+    case 'insert': { const m = S.msgs.find(x => x.id === +v); S.prompt = m.card.prompt; S.promptBy = m.pers; S.flash = true; m.card.inserted = true; if (S.mobile) S.sheet = null; break; }
+    case 'suggen': { const m = S.msgs.find(x => x.id === +v); m.card.inserted = true;
+      agentLaunch(m.card.prompt, 'cover', 'Запускаю по этому промпту.'); return; }
+    case 'openfull': S.toast = `Откроется чат «${S.fileName} · правка» во вкладке «Чаты» — с той же лентой`; S.toastAct = null; break;
+    case 'sheet': S.sheet = v || null; if (v === 'chat') S.chatUnread = false; break;
+    // Проект
+    case 'toproject': clearInterval(S.timer); if (S.phase === 'gen') { S.phase = 'idle'; setCard('cancel'); } S.screen = 'project'; S.toast = null; S.sheet = null; break;
+    case 'reopen': S.screen = 'editor';
+      if (S.chatCreated) { S.toast = `Открыт чат этой картинки: «${S.fileName} · правка»`; S.toastAct = null; } break;
+  }
+  render();
+});
+
+function reset() {
+  clearInterval(S.timer); clearInterval(S.recTimer);
+  Object.assign(S, { screen: 'editor', phase: 'idle', tool: 'mask', marks: DEFAULT_MARKS(), zoom: 1, panX: 0, panY: 0, prompt: '', promptBy: null,
+    history: [{ title: 'Оригинал', d: { lamp: 0 } }], cur: 0, msgs: [], typing: false, chatText: '', atts: [], autoAtt: true, rec: false,
+    chatCreated: false, genCard: null, sheet: null, toast: null, saveOpen: false, pickOpen: false, charNew: null, variants: [], count: 3 });
+}
+function jump(n) {
+  reset();
+  if (n === '2') { setTimeout(() => { if (S.mobile) { S.sheet = 'chat'; } send('Убери вон ту лампу и сделай вечер'); }, 0); return; }
+  if (n === '3') { setTimeout(() => { if (S.mobile) { S.sheet = 'chat'; } send('Придумай промпт для обложки блога'); }, 0); return; }
+  if (n === '4') { S.prompt = AGENT_PROMPT_A; S.lastAction = { kind: 'prompt', scene: 'evening' }; S.variants = makeVariants(); S.phase = 'variants'; return; }
+  if (n === '5') { S.prompt = LONG_PROMPT; return; }
+  if (n === '6') {
+    S.history = [{ title: 'Оригинал', d: { lamp: 0 } }, { title: 'Убран торшер, вечер', d: { lamp: null, evening: 0 } }, { title: 'Убрана картина', d: { lamp: null, evening: 0, painting: false } }, { title: 'Дорисовано до 16:9', d: { lamp: null, evening: 0, painting: false, wide: true } }];
+    S.cur = 3; S.marks = []; S.open.hist = true; if (S.mobile) S.sheet = 'tools'; return;
+  }
+  if (n === '7') { S.prompt = AGENT_PROMPT_A; S.phase = 'error'; return; }
+  if (n === '8') { S.chatCreated = true; S.msgs = [{ id: ++msgId, who: 'me', text: 'Убери вон ту лампу и сделай вечер' }]; S.screen = 'project'; }
+}
+
+render();
+window.addEventListener('resize', applyTransform);
+</script>
+</body>
+</html>

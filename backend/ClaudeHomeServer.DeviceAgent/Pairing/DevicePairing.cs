@@ -12,7 +12,9 @@ namespace ClaudeHomeServer.DeviceAgent.Pairing;
 /// человек выпускает в вебе одноразовый код, агент меняет его на токен устройства через
 /// <c>POST /api/devices/pair</c>. Никаких других учётных данных у агента нет и не будет.
 /// </summary>
-internal sealed record DeviceRegistration(string ServerUrl, string DeviceId, string DeviceName, string Fingerprint)
+/// <param name="TokenStore">Где лежит токен (<c>DeviceTokenStores.*Kind</c>); null — сопряжение до записи выбора.</param>
+internal sealed record DeviceRegistration(
+    string ServerUrl, string DeviceId, string DeviceName, string Fingerprint, string? TokenStore = null)
 {
     public static DeviceRegistration? Load(string file)
     {

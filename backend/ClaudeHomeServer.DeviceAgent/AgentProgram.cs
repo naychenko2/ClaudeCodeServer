@@ -5,10 +5,12 @@ using ClaudeHomeServer.DeviceAgent.Composition;
 using ClaudeHomeServer.DeviceAgent.Credentials;
 using ClaudeHomeServer.DeviceAgent.Exec;
 using ClaudeHomeServer.DeviceAgent.Hosting;
+using ClaudeHomeServer.DeviceAgent.Install;
 using ClaudeHomeServer.DeviceAgent.Pairing;
 using ClaudeHomeServer.DeviceAgent.Processes;
 using ClaudeHomeServer.DeviceAgent.Relay;
 using ClaudeHomeServer.DeviceAgent.Sidecar;
+using ClaudeHomeServer.DeviceAgent.Supervision;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Files;
 using ClaudeHomeServer.Services.Git;
@@ -19,8 +21,11 @@ namespace ClaudeHomeServer.DeviceAgent;
 /// <summary>
 /// Точка входа агента устройства (ADR-016).
 ///
-///   ai-home-agent pair --server https://host --code ABCD2345 [--name "Ноутбук"]
+///   ai-home-agent install --server https://host --code ABCD2345 [--name "Ноутбук"] [--always-on]
+///   ai-home-agent uninstall [--purge]
+///   ai-home-agent pair --server https://host --code ABCD2345 [--name "Ноутбук"] [--always-on]
 ///   ai-home-agent roots add ПУТЬ [--force] | roots remove ПУТЬ | roots list
+///   ai-home-agent supervise
 ///   ai-home-agent [run]
 ///   ai-home-agent --version
 ///
@@ -39,21 +44,28 @@ public static class AgentProgram
             return 0;
         }
 
+        // Дочерний супервизора гибнет вместе с ним: взводится до всего остального
+        var command = args.FirstOrDefault() ?? "run";
+        if (command == "run" && !SupervisedRun.ArmParentDeath()) return 0;
+
+        var paths = AgentPaths.ForCurrentUser();
+        if (command == "supervise") return await SuperviseAsync(paths);
+
         using var loggers = LoggerFactory.Create(b => b
             .AddSimpleConsole(o => { o.SingleLine = true; o.TimestampFormat = "HH:mm:ss "; })
             .SetMinimumLevel(LogLevel.Information));
         var log = loggers.CreateLogger("ai-home-agent");
-        var paths = AgentPaths.ForCurrentUser();
 
         try
         {
             paths.Ensure();
-            var store = DeviceTokenStores.ForCurrentOs(paths.ConfigDirectory);
-            return (args.FirstOrDefault() ?? "run") switch
+            return command switch
             {
-                "pair" => await PairAsync(args[1..], paths, store, log),
+                "install" => await InstallAsync(args[1..], paths),
+                "uninstall" when args[1..] is [] or ["--purge"] => await UninstallAsync(args.Contains("--purge"), paths),
+                "pair" => await PairAsync(args[1..], paths, log),
                 "roots" => Roots(args[1..], paths),
-                "run" => await RunAsync(paths, store, loggers, log),
+                "run" => await RunAsync(paths, loggers, log),
                 _ => Usage(),
             };
         }
@@ -66,13 +78,114 @@ public static class AgentProgram
 
     private static int Usage()
     {
-        Console.Error.WriteLine("ai-home-agent pair --server https://host --code КОД [--name ИМЯ]");
+        Console.Error.WriteLine("ai-home-agent install --server https://host --code КОД [--name ИМЯ] [--always-on]");
+        Console.Error.WriteLine("ai-home-agent uninstall [--purge]");
+        Console.Error.WriteLine("ai-home-agent pair --server https://host --code КОД [--name ИМЯ] [--always-on]");
         Console.Error.WriteLine("ai-home-agent roots add ПУТЬ [--force]");
         Console.Error.WriteLine("ai-home-agent roots remove ПУТЬ");
         Console.Error.WriteLine("ai-home-agent roots list");
+        Console.Error.WriteLine("ai-home-agent supervise");
         Console.Error.WriteLine("ai-home-agent [run]");
         Console.Error.WriteLine("ai-home-agent --version");
         return 64;
+    }
+
+    /// <summary>Разбор <c>--server --code [--name] [--always-on]</c>; null — аргументы не те.</summary>
+    internal static InstallRequest? ParsePairing(string[] args)
+    {
+        var values = new Dictionary<string, string>();
+        var alwaysOn = false;
+        for (var i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--always-on":
+                    alwaysOn = true;
+                    break;
+                case "--server" or "--code" or "--name" when i + 1 < args.Length && !values.ContainsKey(args[i]):
+                    values[args[i]] = args[++i];
+                    break;
+                default:
+                    return null;
+            }
+        }
+        if (!values.TryGetValue("--server", out var server) || !values.TryGetValue("--code", out var code)) return null;
+        if (!Uri.TryCreate(server.EndsWith('/') ? server : server + "/", UriKind.Absolute, out var serverUri)) return null;
+        return new InstallRequest(serverUri, code, values.GetValueOrDefault("--name") ?? Environment.MachineName, alwaysOn);
+    }
+
+    private static async Task<DeviceRegistration> PairWithServerAsync(InstallRequest request, IDeviceTokenStore store)
+    {
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        return await new PairingClient(http).PairAsync(request.Server, request.Code, request.DeviceName, Version, store);
+    }
+
+    private static async Task<int> InstallAsync(string[] args, AgentPaths paths)
+    {
+        if (ParsePairing(args) is not { } request) return Usage();
+        if (AgentLayout.OwnVersion() is not { } own)
+        {
+            Console.Error.WriteLine("install запускается из каталога versions/{версия} — его готовит скрипт установки (/agent/install.ps1, /agent/install.sh)");
+            return InstallExitCodes.Failed;
+        }
+
+        var layout = AgentLayout.Resolve(paths);
+        var installer = new AgentInstaller(paths, layout, own, Autostarts.ForCurrentOs(layout),
+            new PidFileSupervisorControl(layout), PairWithServerAsync, Console.Out);
+        try
+        {
+            return await installer.RunAsync(request, CancellationToken.None);
+        }
+        catch (Exception e) when (e is InvalidOperationException or IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine($"Установка не завершена: {e.Message}");
+            return InstallExitCodes.Failed;
+        }
+    }
+
+    private static async Task<int> UninstallAsync(bool purge, AgentPaths paths)
+    {
+        var layout = AgentLayout.Resolve(paths);
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        var uninstaller = new AgentUninstaller(paths, layout, Autostarts.ForCurrentOs(layout), new PidFileSupervisorControl(layout),
+            new SelfRevokeClient(http), kind => DeviceTokenStores.Open(kind, paths.ConfigDirectory), Console.Out);
+        return await uninstaller.RunAsync(purge, CancellationToken.None);
+    }
+
+    /// <summary>
+    /// Супервизор (Р7): один на установку, журнал — в {root}/logs, дочерний — <c>run</c>
+    /// активной версии. SIGTERM и Ctrl+C гасят дочерний вежливо.
+    /// </summary>
+    private static async Task<int> SuperviseAsync(AgentPaths paths)
+    {
+        var detached = OperatingSystem.IsWindows() && ConsoleDetach.IfSoleOwner();
+        var layout = AgentLayout.Resolve(paths);
+        var supervisorLog = new RotatingFileLog(Path.Combine(layout.LogDirectory, "supervisor.log"));
+        var agentLog = new RotatingFileLog(Path.Combine(layout.LogDirectory, "agent.log"));
+
+        using var loggers = LoggerFactory.Create(b =>
+        {
+            // Отцепившемуся от консоли писать в неё нечем — только файл
+            if (!detached) b.AddSimpleConsole(o => { o.SingleLine = true; o.TimestampFormat = "HH:mm:ss "; });
+            b.AddProvider(new FileLoggerProvider(supervisorLog)).SetMinimumLevel(LogLevel.Information);
+        });
+        var log = loggers.CreateLogger("ai-home-agent supervise");
+
+        using var single = SupervisorLock.TryAcquire(layout);
+        if (single is null)
+        {
+            log.LogInformation("Супервизор этой установки уже работает ({Root}) — выхожу", layout.Root);
+            return 0;
+        }
+        log.LogInformation("Супервизор {Version} стартовал из {Dir}, корень {Root}", Version, AppContext.BaseDirectory, layout.Root);
+
+        using var stop = new CancellationTokenSource();
+        using var sigterm = PosixSignalRegistration.Create(PosixSignal.SIGTERM, c => { c.Cancel = true; stop.Cancel(); });
+        Console.CancelKeyPress += (_, e) => { e.Cancel = true; stop.Cancel(); };
+
+        var autostart = Autostarts.ForCurrentOs(layout);
+        var supervisor = new AgentSupervisor(layout, new ProcessChildLauncher(agentLog.Append), autostart.Repoint, log);
+        return await supervisor.RunAsync(stop.Token);
     }
 
     // Корни, под которыми агент открывает файлы проектов: правит только человек на машине
@@ -106,27 +219,18 @@ public static class AgentProgram
         typeof(AgentProgram).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
         ?? "0.0.0";
 
-    private static async Task<int> PairAsync(string[] args, AgentPaths paths, IDeviceTokenStore store, ILogger log)
+    private static async Task<int> PairAsync(string[] args, AgentPaths paths, ILogger log)
     {
-        string? Option(string name)
-        {
-            var i = Array.IndexOf(args, name);
-            return i >= 0 && i + 1 < args.Length ? args[i + 1] : null;
-        }
-
-        if (Option("--server") is not { } server || Option("--code") is not { } code) return Usage();
-        var name = Option("--name") ?? Environment.MachineName;
-        var serverUri = new Uri(server.EndsWith('/') ? server : server + "/");
-
-        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-        var registration = await new PairingClient(http).PairAsync(serverUri, code, name, Version, store);
+        if (ParsePairing(args) is not { } request) return Usage();
+        var (store, kind) = DeviceTokenStores.Choose(paths.ConfigDirectory, request.AlwaysOn);
+        var registration = await PairWithServerAsync(request, store) with { TokenStore = kind };
         registration.Save(paths.RegistrationFile);
         log.LogInformation("Устройство «{Name}» сопряжено с {Server}; токен — {Store}",
             registration.DeviceName, registration.ServerUrl, store.Describe);
         return 0;
     }
 
-    private static async Task<int> RunAsync(AgentPaths paths, IDeviceTokenStore store, ILoggerFactory loggers, ILogger log)
+    private static async Task<int> RunAsync(AgentPaths paths, ILoggerFactory loggers, ILogger log)
     {
         var registration = DeviceRegistration.Load(paths.RegistrationFile);
         if (registration is null)
@@ -134,6 +238,7 @@ public static class AgentProgram
             log.LogError("Агент не сопряжён: выпусти код в веб-интерфейсе и выполни «ai-home-agent pair --server … --code …»");
             return 2;
         }
+        var store = DeviceTokenStores.Open(registration.TokenStore, paths.ConfigDirectory);
         var token = store.Read(registration.DeviceId);
         if (token is null)
         {
@@ -206,6 +311,8 @@ public static class AgentProgram
         {
             await control.ConnectAsync(stop.Token);
             await coordinator.HelloAsync();
+            // Успешный ack — версия здорова: супервизор её не откатит, install дождался
+            SupervisedRun.MarkHealthy();
             log.LogInformation("Агент на связи с {Server} как «{Name}»", registration.ServerUrl, registration.DeviceName);
             await Task.Delay(Timeout.Infinite, stop.Token);
         }

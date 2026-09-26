@@ -35,6 +35,8 @@ public static class ImageEditorRegistration
         // null, исполнитель тогда только предупреждает в лог
         services.AddSingleton<ImageEditJobService>();
         services.AddSingleton<IImageEditJobs>(sp => sp.GetRequiredService<ImageEditJobService>());
+        // Правки без ИИ и шаги истории: ручка transform (ADR-018 §9)
+        services.AddSingleton<ImageEditSteps>();
         return services;
     }
 }

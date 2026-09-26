@@ -23,7 +23,9 @@ public record ImageEditProviderDto(
     string PriceUnit,
     IReadOnlyList<ImageEditModelDto> Models);
 
-public record ImageEditLimitsDto(int MaxFileMb, int MaxReferences, int MaxCount);
+// HeavyFileMb — порог «тяжёлого файла» для диалога сохранения (ImageEditor:HeavyFileMb,
+// ADR-018 §9): больше — предложить сжатие, но не блокировать
+public record ImageEditLimitsDto(int MaxFileMb, int MaxReferences, int MaxCount, int HeavyFileMb = 5);
 
 // Reason — почему список поставщиков пуст (ImageEditCatalogReasons); null, если есть хоть один
 public record ImageEditCatalogDto(
@@ -100,7 +102,9 @@ public record ImageEditJobInput(
     bool MatchSourceSize = true,
     // Чат картинки, из которого запущена задача (ADR-018 §2); null — запуск вне чата
     string? ChatSessionId = null,
-    ImageEditInitiator Initiator = ImageEditInitiator.Human);
+    ImageEditInitiator Initiator = ImageEditInitiator.Human,
+    // Шаг истории, с которого запущена правка: родитель шагов из её вариантов (ADR-018 §9)
+    string? BaseStepId = null);
 
 public record ImageEditJobCreatedDto(string JobId);
 
@@ -126,7 +130,15 @@ public record ImageEditJobDto(
     int? QueuePosition,
     DateTime CreatedAt,
     string? ChatSessionId = null,
-    ImageEditInitiator Initiator = ImageEditInitiator.Human);
+    ImageEditInitiator Initiator = ImageEditInitiator.Human,
+    string? BaseStepId = null,
+    // Пометка возврата размера (ImageEditSizeNotes.*); null — размер приведён или не требовался
+    string? SizeNote = null);
+
+public static class ImageEditSizeNotes
+{
+    public const string AspectMismatch = "Размер не приведён: другие пропорции";
+}
 
 // ── Сохранение: POST …/save, GET …/save/check ──────────────────────────────────
 
@@ -197,8 +209,10 @@ public sealed record FlipOp(ImageFlipAxis Axis) : ImageTransformOp;
 public sealed record ResizeOp(int? Width = null, int? Height = null, double? Percent = null, bool LockAspect = true)
     : ImageTransformOp;
 
-// База правки: файл проекта (Path) или шаг истории сеанса (StepId) — ровно одно из двух
-public record ImageTransformBase(string? Path = null, string? StepId = null);
+// База правки — ровно одно из трёх: файл проекта (Path), шаг истории (StepId) или вариант
+// задачи (JobId + Variant). Вариант с пустым Ops — «применить вариант»: он становится шагом
+// той же ленты, родитель — BaseStepId задачи
+public record ImageTransformBase(string? Path = null, string? StepId = null, string? JobId = null, int? Variant = null);
 
 public record ImageTransformRequest(
     ImageTransformBase Base,
@@ -271,6 +285,8 @@ public static class ImageEditErrorCodes
     public const string QuoteNotFound = "quote_not_found";
     // 404: задача не найдена или чужая (чужая неотличима от несуществующей)
     public const string JobNotFound = "job_not_found";
+    // 404: шага истории нет, он истёк по TTL или чужой
+    public const string StepNotFound = "step_not_found";
     // 404: персонажа нет в проекте (или slug не проходит белый список)
     public const string CharacterNotFound = "character_not_found";
     // 429: потолок одновременных задач владельца или инстанса

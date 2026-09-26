@@ -31,8 +31,14 @@ public class ImageEditorController(
     ImageGenerationSettingsStore? placeSettings = null,
     IImageEditJobs? jobs = null,
     IImageEditSaver? saver = null,
-    FileService? files = null) : ControllerBase
+    FileService? files = null,
+    ImageEditSteps? steps = null,
+    IConfiguration? config = null) : ControllerBase
 {
+    // Потолок файла проекта, который ручка transform читает в память; дальше решает растр (100 Мп)
+    private const long MaxTransformFileBytes = 100L * 1024 * 1024;
+    private const int DefaultHeavyFileMb = 5;
+
     // Потолок тела запуска: исходник, маска, размеченная копия и до MaxReferences образцов
     private const long MaxJobBodyBytes = 200L * 1024 * 1024;
 
@@ -46,7 +52,9 @@ public class ImageEditorController(
         var place = ImagePlaces.ImageEditor;
         var adminProvider = placeSettings?.ProviderFor(place);
         var adminModel = adminProvider is null ? null : placeSettings?.ModelFor(place, adminProvider);
-        var catalog = ImageEditCatalog.Build(editors, adminProvider, adminModel);
+        var heavy = config?.GetValue("ImageEditor:HeavyFileMb", DefaultHeavyFileMb) ?? DefaultHeavyFileMb;
+        var limits = ImageEditCatalog.DefaultLimits with { HeavyFileMb = heavy > 0 ? heavy : DefaultHeavyFileMb };
+        var catalog = ImageEditCatalog.Build(editors, adminProvider, adminModel, limits);
         // Исполнитель задач регистрирует только подсистема картинок: его нет — она выключена.
         // Ответ остаётся 200, чтобы фронт показал причину, а не общий сбой
         if (jobs is null) catalog = catalog with { Reason = ImageEditCatalogReasons.SubsystemDisabled };
@@ -154,7 +162,9 @@ public class ImageEditorController(
             await ToBytesAsync(form.Annotated, ct),
             references,
             form.SourcePath,
-            character);
+            character,
+            MatchSourceSize: form.MatchSourceSize ?? true,
+            BaseStepId: form.BaseStepId);
 
         var started = await jobs.StartAsync(UserId, projectId, input, ct);
         return Map(started, created => StatusCode(StatusCodes.Status202Accepted, created));
@@ -227,6 +237,48 @@ public class ImageEditorController(
         public List<string>? ReferencePathRoles { get; set; }
         // Подключённый персонаж проекта (characters/<slug>/)
         public string? CharacterSlug { get; set; }
+        // Возврат размера оригинала после скачивания; не передано — true (ADR-018 §9)
+        public bool? MatchSourceSize { get; set; }
+        // Шаг истории, с которого запущена правка: родитель шагов из её вариантов
+        public string? BaseStepId { get; set; }
+    }
+
+    // ── Правки без ИИ и шаги истории (ADR-018 §9) ──────────────────────────────────
+
+    [HttpPost("transform")]
+    public async Task<IActionResult> Transform(string projectId, [FromBody] ImageTransformRequest req,
+        [FromQuery] bool dryRun, CancellationToken ct)
+    {
+        if (Gate(projectId, out var project) is { } denied) return denied;
+        if (steps is null) return JobsUnavailable();
+
+        ProjectImage? file = null;
+        if (req.Base?.Path is { Length: > 0 } rel)
+        {
+            if (!TryJoinInside(project.RootPath, rel, out var full))
+                return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
+                    "Путь вне папки проекта или идёт через символическую ссылку");
+            var info = new FileInfo(full);
+            if (!info.Exists)
+                return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest, $"Файл не найден: {rel}");
+            if (info.Length > MaxTransformFileBytes)
+                return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
+                    $"Файл больше {MaxTransformFileBytes / 1024 / 1024} МБ");
+            file = new ProjectImage(Path.GetRelativePath(project.RootPath, full).Replace('\\', '/'),
+                await System.IO.File.ReadAllBytesAsync(full, ct));
+        }
+
+        return Map(steps.Transform(UserId, projectId, req, file, dryRun), Ok);
+    }
+
+    // Картинка шага истории — для холста и миниатюр; токен через ?access_token=, как у вариантов
+    [HttpGet("steps/{stepId}")]
+    public IActionResult Step(string projectId, string stepId)
+    {
+        if (Gate(projectId, out _) is { } denied) return denied;
+        if (steps?.Open(UserId, projectId, stepId) is not { } found)
+            return Error(StatusCodes.Status404NotFound, ImageEditErrorCodes.StepNotFound, "Шаг истории не найден");
+        return File(found.Image.Bytes, found.Image.ContentType);
     }
 
     // ── Персонажи (ADR-017, раздел 10) ─────────────────────────────────────────────
@@ -420,7 +472,7 @@ public class ImageEditorController(
         {
             ImageEditErrorCodes.ProviderUnavailable => StatusCodes.Status409Conflict,
             ImageEditErrorCodes.QuoteNotFound or ImageEditErrorCodes.JobNotFound
-                or ImageEditErrorCodes.CharacterNotFound => StatusCodes.Status404NotFound,
+                or ImageEditErrorCodes.CharacterNotFound or ImageEditErrorCodes.StepNotFound => StatusCodes.Status404NotFound,
             ImageEditErrorCodes.TooManyJobs => StatusCodes.Status429TooManyRequests,
             ImageEditErrorCodes.Unavailable => StatusCodes.Status503ServiceUnavailable,
             _ => StatusCodes.Status400BadRequest,

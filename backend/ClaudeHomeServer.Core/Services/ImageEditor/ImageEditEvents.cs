@@ -21,8 +21,9 @@ public record ImageEditProgressMessage(string JobId, string ProjectId, EditStage
     string? ChatSessionId = null, ImageEditInitiator Initiator = ImageEditInitiator.Human)
     : ServerMessage(ImageEditEventNames.Progress);
 
+// SizeNote — как в ImageEditJobDto: варианты не приведены к размеру исходника
 public record ImageEditCompletedMessage(string JobId, string ProjectId, IReadOnlyList<int> Variants, EditCost? Cost,
-    string? ChatSessionId = null, ImageEditInitiator Initiator = ImageEditInitiator.Human)
+    string? ChatSessionId = null, ImageEditInitiator Initiator = ImageEditInitiator.Human, string? SizeNote = null)
     : ServerMessage(ImageEditEventNames.Completed);
 
 // RetryQuote — котировка соседнего доступного поставщика: UI предлагает «Повторить через …»
@@ -42,9 +43,11 @@ public record ImageEditFailedMessage(
 // ("prompt", "model", "count"…), From/To — значения для метки «✦ модель сменил Claude»
 public record ImageChatStateChange(string Field, System.Text.Json.JsonElement? From, System.Text.Json.JsonElement? To);
 
-// Уходит в группу владельца (ISessionBroadcaster.ToOwner). Чат — в базовом SessionId
-// (заполняется при создании: new ImageChatStateMessage(…) { SessionId = chatId }), редактор
-// применяет событие, только если открыт именно этот чат. ChangedBy — кто поменял.
+// Уходит в группу владельца (ISessionBroadcaster.ToOwner). Базовый SessionId здесь — id
+// САМОГО чата картинки, чьё состояние сменилось (заполняется при создании:
+// new ImageChatStateMessage(…) { SessionId = chatId }); редактор применяет событие, только если
+// открыт именно этот чат. Не путать с ChatSessionId в ImageEditJob*: там SessionId пуст, а
+// ChatSessionId — чат, к которому привязана задача. ChangedBy — кто поменял.
 public record ImageChatStateMessage(
     string ProjectId,
     long Revision,

@@ -3,6 +3,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.ImageEditor;
+using ClaudeHomeServer.Services.Images.Editing.Raster;
 using ClaudeHomeServer.Services.Spend;
 
 namespace ClaudeHomeServer.Services.Images.Editing;
@@ -21,7 +22,10 @@ namespace ClaudeHomeServer.Services.Images.Editing;
 //   журнал только дописывается;
 // - кредиты администратора без цены не тратятся: у поставщика в кредитах котировка без
 //   суммы — отказ, а запуск по такой котировке невозможен;
-// - чужая задача и чужая котировка неотличимы от несуществующих.
+// - чужая задача и чужая котировка неотличимы от несуществующих;
+// - вход перед драйвером ужимается под лимиты модели (InputFitter), а варианты после
+//   скачивания приводятся к размеру исходника (MatchSourceSize, ADR-018 §9). Оригинал в
+//   проекте не трогается: сервис его не видит, работает с байтами запроса.
 public sealed class ImageEditJobService : IImageEditJobs, IDisposable
 {
     public const int MaxJobsPerOwner = 2;
@@ -35,6 +39,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
     private readonly ImageEditWorkspace _workspace;
     private readonly ILogger<ImageEditJobService> _log;
     private readonly TimeProvider _time;
+    private readonly InputFitter? _fitter;
     private readonly ConcurrentDictionary<string, Quote> _quotes = new();
     private readonly ConcurrentDictionary<string, Job> _jobs = new();
     private readonly CancellationTokenSource _shutdown = new();
@@ -46,8 +51,10 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         ILogger<ImageEditJobService> log,
         ISpendCollector? spend = null,
         ISessionBroadcaster? broadcaster = null,
-        TimeProvider? time = null)
+        TimeProvider? time = null,
+        IImageRaster? raster = null)
     {
+        _fitter = raster is null ? null : new InputFitter(raster);
         _editors = editors;
         _spend = spend;
         _workspace = workspace;
@@ -62,6 +69,10 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
 
     private sealed class Job(string id, string ownerId, string projectId, Quote quote, CancellationTokenSource cts)
     {
+        // Размер исходника до ужатия: к нему приводятся варианты; null — приводить не к чему
+        public (int Width, int Height)? MatchSize { get; init; }
+        public string? BaseStepId { get; init; }
+        public string? SizeNote { get; set; }
         public readonly Lock Gate = new();
         public string Id { get; } = id;
         public string OwnerId { get; } = ownerId;
@@ -134,47 +145,65 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
 
     // ── Запуск ───────────────────────────────────────────────────────────────────
 
-    public Task<ImageEditCallResult<ImageEditJobCreatedDto>> StartAsync(
+    public async Task<ImageEditCallResult<ImageEditJobCreatedDto>> StartAsync(
         string ownerId, string projectId, ImageEditJobInput input, CancellationToken ct)
     {
         if (!_quotes.TryGetValue(input.QuoteId, out var quote)
             || quote.OwnerId != ownerId || quote.ProjectId != projectId || quote.ExpiresAt < Now())
-            return Task.FromResult(Fail<ImageEditJobCreatedDto>(ImageEditErrorCodes.QuoteNotFound,
-                "Котировка устарела — цена пересчитается автоматически"));
+            return Fail<ImageEditJobCreatedDto>(ImageEditErrorCodes.QuoteNotFound,
+                "Котировка устарела — цена пересчитается автоматически");
 
         // Ровно поставщик котировки: пропал — отказ, а не сосед
         var editor = ImageEditCatalog.FindAvailable(_editors, quote.Provider);
         if (editor is null)
-            return Task.FromResult(Fail<ImageEditJobCreatedDto>(ImageEditErrorCodes.ProviderUnavailable,
-                $"Поставщик «{quote.Provider}» больше недоступен"));
+            return Fail<ImageEditJobCreatedDto>(ImageEditErrorCodes.ProviderUnavailable,
+                $"Поставщик «{quote.Provider}» больше недоступен");
         if (NeedsKnownPrice(editor, quote.Estimate))
-            return Task.FromResult(Fail<ImageEditJobCreatedDto>(ImageEditErrorCodes.ProviderUnavailable,
-                UnknownPriceError(editor)));
+            return Fail<ImageEditJobCreatedDto>(ImageEditErrorCodes.ProviderUnavailable, UnknownPriceError(editor));
+
+        // Ужатие до Compose: сверка размеров маски и исходника идёт уже по ужатым
+        (int Width, int Height)? matchSize = null;
+        if (_fitter is not null)
+        {
+            var fitted = await _fitter.FitAsync(input, ImageEditCatalog.WithInputLimits(quote.Model).Caps, ct);
+            if (fitted.Value is not { } fit)
+                return Fail<ImageEditJobCreatedDto>(fitted.ErrorCode ?? ImageEditErrorCodes.InvalidRequest,
+                    fitted.Error ?? "Картинку не удалось подготовить");
+            input = fit.Input;
+            // «Дорисовать за края» и «Улучшить качество» меняют размер по смыслу — возврата нет
+            if (input.MatchSourceSize && quote.Op is not (ImageEditOp.Outpaint or ImageEditOp.Upscale)
+                && fit.SourceWidth is { } w && fit.SourceHeight is { } h)
+                matchSize = (w, h);
+        }
 
         var composed = EditRequestComposer.Compose(input, quote.Op, quote.Model, quote.Count);
         if (composed.Value is not { } request)
-            return Task.FromResult(Fail<ImageEditJobCreatedDto>(composed.ErrorCode ?? ImageEditErrorCodes.InvalidRequest,
-                composed.Error ?? "Неверный запрос"));
+            return Fail<ImageEditJobCreatedDto>(composed.ErrorCode ?? ImageEditErrorCodes.InvalidRequest,
+                composed.Error ?? "Неверный запрос");
 
         Job job;
         lock (_startLock)
         {
             var active = _jobs.Values.Where(j => j.IsActive).ToList();
             if (active.Count(j => j.OwnerId == ownerId) >= MaxJobsPerOwner || active.Count >= MaxJobsPerInstance)
-                return Task.FromResult(Fail<ImageEditJobCreatedDto>(ImageEditErrorCodes.TooManyJobs,
-                    "Уже идёт слишком много генераций — дождитесь окончания текущих"));
+                return Fail<ImageEditJobCreatedDto>(ImageEditErrorCodes.TooManyJobs,
+                    "Уже идёт слишком много генераций — дождитесь окончания текущих");
             if (!_quotes.TryRemove(quote.Id, out _))
-                return Task.FromResult(Fail<ImageEditJobCreatedDto>(ImageEditErrorCodes.QuoteNotFound,
-                    "Котировка уже использована"));
+                return Fail<ImageEditJobCreatedDto>(ImageEditErrorCodes.QuoteNotFound, "Котировка уже использована");
 
             job = new Job(Guid.NewGuid().ToString("N"), ownerId, projectId, quote,
-                CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token)) { CreatedAt = Now() };
+                CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token))
+            {
+                CreatedAt = Now(),
+                MatchSize = matchSize,
+                BaseStepId = string.IsNullOrWhiteSpace(input.BaseStepId) ? null : input.BaseStepId.Trim(),
+            };
             _jobs[job.Id] = job;
             job.Completion = Task.Run(() => RunAsync(job, editor, request));
         }
 
         _workspace.Sweep(Now());
-        return Task.FromResult(ImageEditCallResult<ImageEditJobCreatedDto>.Ok(new ImageEditJobCreatedDto(job.Id)));
+        return ImageEditCallResult<ImageEditJobCreatedDto>.Ok(new ImageEditJobCreatedDto(job.Id));
     }
 
     private async Task RunAsync(Job job, IImageEditor editor, ImageEditRequest request)
@@ -217,8 +246,18 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
 
     private async Task CompleteAsync(Job job, ImageEditResult result)
     {
+        string? sizeNote = null;
         for (var i = 0; i < result.Images.Count; i++)
-            _workspace.SaveVariant(job.OwnerId, job.Id, i + 1, result.Images[i]);
+        {
+            var image = result.Images[i];
+            if (job.MatchSize is { } size && _fitter is not null)
+            {
+                var match = await _fitter.MatchSizeAsync(image, size.Width, size.Height, CancellationToken.None);
+                image = match.Image;
+                if (match.Mismatch) sizeNote = ImageEditSizeNotes.AspectMismatch;
+            }
+            _workspace.SaveVariant(job.OwnerId, job.Id, i + 1, image);
+        }
 
         var cost = result.ActualCost ?? EstimateCost(job.Quote);
         // Поставщик вернул результат, не сообщив о принятии, — трата всё равно была
@@ -229,9 +268,11 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             job.Cost = cost;
             job.Outcome = EditOutcome.Ok;
             job.Charged = result.Charged ?? true;
+            job.SizeNote = sizeNote;
             job.Status = ImageEditJobStatus.Completed;
         }
-        await Broadcast(job.OwnerId, new ImageEditCompletedMessage(job.Id, job.ProjectId, [.. job.Variants], cost));
+        await Broadcast(job.OwnerId, new ImageEditCompletedMessage(job.Id, job.ProjectId, [.. job.Variants], cost,
+            SizeNote: sizeNote));
     }
 
     private async Task FailAsync(Job job, IImageEditor editor, ImageEditResult result)
@@ -447,7 +488,8 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
     {
         lock (j.Gate)
             return new ImageEditJobDto(j.Id, j.ProjectId, j.Status, j.Quote.Provider, j.Quote.Model.Id,
-                [.. j.Variants], j.Cost, j.Outcome, j.Charged, j.Error, j.QueuePosition, j.CreatedAt);
+                [.. j.Variants], j.Cost, j.Outcome, j.Charged, j.Error, j.QueuePosition, j.CreatedAt,
+                BaseStepId: j.BaseStepId, SizeNote: j.SizeNote);
     }
 
     private void PruneQuotes()

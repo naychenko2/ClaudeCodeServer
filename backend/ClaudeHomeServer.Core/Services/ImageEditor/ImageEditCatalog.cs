@@ -16,6 +16,52 @@ public static class ImageEditCatalog
 
     public static readonly ImageEditLimitsDto DefaultLimits = new(MaxFileMb: 20, MaxReferences: 6, MaxCount: 4);
 
+    // Лимиты входа моделей для автоуменьшения (ADR-018 §9): длинная сторона, мегапиксели, вес.
+    // Курируются здесь, а не в драйверах, как и остальные caps каталога. Значения
+    // консервативные: 2048 px по длинной стороне модели правки держат без потери качества
+    // результата, а 48 Мп с телефона гонять к поставщику незачем. Модели улучшения качества
+    // (Topaz) нет в таблице намеренно: ужатие входа съело бы смысл операции.
+    private static readonly (int Side, double Megapixels, double Mb) EditInput = (2048, 4.2, 10);
+
+    public static readonly IReadOnlyDictionary<string, (int Side, double Megapixels, double Mb)> InputLimits =
+        new Dictionary<string, (int, double, double)>(StringComparer.OrdinalIgnoreCase)
+        {
+            // fal
+            ["fal-ai/nano-banana-2/edit"] = EditInput,
+            ["fal-ai/nano-banana-pro/edit"] = EditInput,
+            ["fal-ai/flux-pro/kontext"] = EditInput,
+            ["fal-ai/flux-pro/kontext/max/multi"] = EditInput,
+            ["fal-ai/flux-pro/v1/fill"] = EditInput,
+            ["fal-ai/bria/expand"] = EditInput,
+            ["fal-ai/bria/background/remove"] = EditInput,
+            ["fal-ai/nano-banana-2"] = EditInput,
+            // Higgsfield
+            ["nano_banana_2"] = EditInput,
+            ["nano_banana_2_lite"] = EditInput,
+            ["nano_banana_pro"] = EditInput,
+            ["gpt_image_2_5"] = EditInput,
+            ["flux_kontext"] = EditInput,
+            ["seedream_v5_pro"] = EditInput,
+            ["flux_2_pro_outpaint"] = EditInput,
+            ["image_background_remover"] = EditInput,
+        };
+
+    // Модель с курируемыми лимитами входа; лимит, заданный драйвером явно, не перетирается
+    public static ImageEditModelInfo WithInputLimits(ImageEditModelInfo model)
+    {
+        if (!InputLimits.TryGetValue(model.Id, out var limit)) return model;
+        var caps = model.Caps;
+        return model with
+        {
+            Caps = caps with
+            {
+                MaxInputSide = caps.MaxInputSide ?? limit.Side,
+                MaxInputMegapixels = caps.MaxInputMegapixels ?? limit.Megapixels,
+                MaxInputMb = caps.MaxInputMb ?? limit.Mb,
+            },
+        };
+    }
+
     // Режимы переключателя при модели «Авто»
     public static readonly IReadOnlyList<EditMode> AutoModes = [EditMode.Fast, EditMode.Precise, EditMode.Photoreal];
 
@@ -74,7 +120,8 @@ public static class ImageEditCatalog
         {
             new(AutoModelId, AutoModelLabel, AutoModes, null, null),
         };
-        models.AddRange(SafeModels(editor).Select(m => new ImageEditModelDto(m.Id, m.Label, null, m.Caps, m.PriceHint)));
+        models.AddRange(SafeModels(editor).Select(WithInputLimits)
+            .Select(m => new ImageEditModelDto(m.Id, m.Label, null, m.Caps, m.PriceHint)));
         return new ImageEditProviderDto(editor.Key, editor.Label, editor.PriceUnit, models);
     }
 

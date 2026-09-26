@@ -361,11 +361,12 @@ public class StoredBranchedFromMessage : StoredMessage
 
 // Тихая строка «Вы запустили: «…» · FLUX Fill · ≈ $0.10 · 2 варианта» в чате картинки
 // (ADR-018 §2). Пишется в history.json, а не в транскрипт CLI: модель её НЕ видит, о ручном
-// запуске она узнаёт из блока состояния хода. By — ImageEditInitiator строкой ("human" |
-// "agent"): у истории нет конвертера enum'ов. Estimate — котировка на момент запуска.
+// запуске она узнаёт из блока состояния хода. By — кто запустил, значение SpendInitiators.*
+// ("human" | "agent"; тот же словарь, что у SpendRecord.Initiator): у истории нет конвертера
+// enum'ов, поэтому строка, а не ImageEditInitiator. Estimate — котировка на момент запуска.
 public class StoredImageLaunchMessage : StoredMessage
 {
-    public string By { get; init; } = "human";
+    public string By { get; init; } = Models.SpendInitiators.Human;
     public string Prompt { get; init; } = "";
     public string Provider { get; init; } = "";
     public string Model { get; init; } = "";

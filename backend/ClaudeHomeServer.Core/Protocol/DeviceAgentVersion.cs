@@ -15,7 +15,7 @@ namespace ClaudeHomeServer.Protocol;
 /// упорядочены штампом. Других пре-релизных хвостов выкатка не выпускает — они не
 /// разбираются, чтобы в имя каталога не просочилось ничего, кроме цифр и точек.
 /// </summary>
-public sealed partial class DeviceAgentVersion : IEquatable<DeviceAgentVersion>, IComparable<DeviceAgentVersion>
+public sealed class DeviceAgentVersion : IEquatable<DeviceAgentVersion>, IComparable<DeviceAgentVersion>
 {
     private DeviceAgentVersion(int major, int minor, int patch, string? dirtyStamp, string? build)
     {
@@ -42,7 +42,7 @@ public sealed partial class DeviceAgentVersion : IEquatable<DeviceAgentVersion>,
     {
         version = null;
         if (text is null) return false;
-        var m = Pattern().Match(text);
+        var m = Pattern.Match(text);
         if (!m.Success) return false;
         if (!int.TryParse(m.Groups["major"].ValueSpan, NumberStyles.None, CultureInfo.InvariantCulture, out var major)
             || !int.TryParse(m.Groups["minor"].ValueSpan, NumberStyles.None, CultureInfo.InvariantCulture, out var minor)
@@ -95,8 +95,12 @@ public sealed partial class DeviceAgentVersion : IEquatable<DeviceAgentVersion>,
     public static bool operator <=(DeviceAgentVersion a, DeviceAgentVersion b) => a.CompareTo(b) <= 0;
     public static bool operator >=(DeviceAgentVersion a, DeviceAgentVersion b) => a.CompareTo(b) >= 0;
 
-    [GeneratedRegex(@"^(?<major>0|[1-9]\d{0,8})\.(?<minor>0|[1-9]\d{0,8})\.(?<patch>0|[1-9]\d{0,8})(?:-dirty\.(?<dirty>\d{14}))?(?:\+(?<build>[0-9A-Za-z][0-9A-Za-z.-]{0,63}))?\z")]
-    private static partial Regex Pattern();
+    // Обычный Regex, а не [GeneratedRegex]: генератор кладёт свои типы в namespace
+    // System.Text.RegularExpressions.Generated, а Core.dll держит сторож разрешённых
+    // неймспейсов (SubsystemBoundaryTests.CoreDll_СодержитТолькоРазрешённыеНеймспейсы)
+    private static readonly Regex Pattern = new(
+        @"^(?<major>0|[1-9]\d{0,8})\.(?<minor>0|[1-9]\d{0,8})\.(?<patch>0|[1-9]\d{0,8})(?:-dirty\.(?<dirty>\d{14}))?(?:\+(?<build>[0-9A-Za-z][0-9A-Za-z.-]{0,63}))?\z",
+        RegexOptions.CultureInvariant);
 }
 
 /// <summary>

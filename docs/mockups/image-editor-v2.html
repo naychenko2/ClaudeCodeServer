@@ -357,11 +357,7 @@
 
   /* Чат */
   .chat { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-  .chat-h { height: 44px; flex: 0 0 44px; display: flex; align-items: center; gap: 6px; padding: 0 6px 0 8px; border-bottom: 1px solid var(--c-border-light); background: var(--c-bg-inset); position: relative; }
-  .pers-btn { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 6px 0 3px; border-radius: 999px; border: 1px solid var(--c-border);
-    background: var(--c-bg-card); color: var(--c-text-heading); cursor: pointer; font-size: 13px; font-weight: 600; max-width: 100%; }
-  .pers-btn:hover { border-color: var(--c-accent-muted); }
-  .chat-h .ctitle { font-size: 11px; color: var(--c-text-muted); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.25; }
+  .chat-acts { display: flex; gap: 4px; justify-content: center; flex-wrap: wrap; margin-top: -6px; }
   .feed { flex: 1; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; min-height: 0; }
   .sysline { align-self: center; text-align: center; font-size: 11px; color: var(--c-text-muted); line-height: 1.4; max-width: 300px; }
   .m-me { align-self: flex-end; max-width: 88%; background: var(--c-accent-light); border-radius: 14px 14px 4px 14px; padding: 7px 10px; font-size: 13px; line-height: 1.5;
@@ -385,6 +381,9 @@
   .card.ok { border-color: var(--c-success); }
   .card.ok .ch { color: var(--c-success-text); }
   .card.off { opacity: .75; }
+  .card .chg { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--c-text-secondary); }
+  .card .chg b { color: var(--c-text-heading); font-weight: 600; }
+  .seg.agent { box-shadow: inset 0 0 0 1px var(--c-accent); }
   .card .ptxt { font-size: 13px; line-height: 1.5; background: var(--c-bg-inset); border-radius: 8px; padding: 8px; color: var(--c-text-primary); }
   .card .acts { display: flex; gap: 6px; flex-wrap: wrap; }
   .sugg { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
@@ -400,6 +399,8 @@
   .att-chip .pic { width: 26px; height: 18px; border-radius: 3px; overflow: hidden; flex: 0 0 26px; }
   .att-chip .pic svg { display: block; width: 100%; height: 100%; }
   .att-chip.auto { border-style: dashed; }
+  .att-chip.same { color: var(--c-text-muted); }
+  .att-chip.same .pic { opacity: .5; }
   .att-chip span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .att-chip button { border: none; background: transparent; color: inherit; width: 18px; height: 18px; display: grid; place-items: center; border-radius: 4px; cursor: pointer; padding: 0; }
   textarea.ci { display: block; width: 100%; border: none; outline: none; resize: none; background: transparent; color: var(--c-text-primary);
@@ -441,6 +442,22 @@
   .fld .h { font-size: 11px; color: var(--c-text-muted); margin-top: 4px; line-height: 1.4; }
   .chk { display: flex; gap: 8px; align-items: flex-start; cursor: pointer; font-size: 13px; }
   .chk input { margin-top: 2px; accent-color: var(--c-accent); }
+  .name-row { display: flex; align-items: stretch; }
+  .fld .name-row input[type=text] { border-radius: 10px 0 0 10px; min-width: 0; }
+  .name-row .ext { display: inline-flex; align-items: center; padding: 0 10px; border: 1px solid var(--c-border); border-left: none; border-radius: 0 10px 10px 0;
+    background: var(--c-bg-inset); color: var(--c-text-secondary); font-size: 14px; }
+  .folds { display: flex; flex-direction: column; gap: 2px; border: 1px solid var(--c-border); border-radius: 10px; padding: 4px; background: var(--c-bg-white); }
+  .fold { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 8px; border-radius: 8px; border: none; background: transparent;
+    color: var(--c-text-primary); cursor: pointer; text-align: left; font-size: 13px; width: 100%; }
+  .fold:hover { background: var(--c-bg-selected); }
+  .fold.on { background: var(--c-accent-light); color: var(--c-accent); font-weight: 600; }
+  .fold .cnt2 { margin-left: auto; font-size: 11px; color: var(--c-text-muted); font-weight: 400; }
+  .warn-box { display: flex; flex-direction: column; gap: 6px; font-size: 12px; line-height: 1.45; background: var(--c-warning-bg); color: var(--c-warning-text);
+    border-radius: 8px; padding: 8px 10px; }
+  .warn-box .t { display: flex; gap: 6px; align-items: flex-start; font-weight: 600; }
+  .row.hl { background: var(--c-accent-light); box-shadow: inset 0 0 0 1px var(--c-accent); animation: flash 1.6s ease-out; }
+  .tree-f { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; color: var(--c-text-muted); padding: 8px 8px 2px; }
+  .tree-in { padding-left: 14px; }
   .note-ok { font-size: 12px; background: var(--c-success-bg); color: var(--c-success-text); border-radius: 8px; padding: 7px 10px; }
   .pick-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
   .pick { border: 2px solid transparent; border-radius: 10px; padding: 4px; background: var(--c-bg-inset); cursor: pointer; text-align: left; color: var(--c-text-primary); }
@@ -486,12 +503,20 @@
   <p class="caption">Верхняя строка — управление макетом, не часть продукта. На холсте можно рисовать по-настоящему.</p>
   <div class="demo-note">
     <b>Сценарий А — агент запускает сам:</b> в чате нажмите подсказку «Убери вон ту лампу и сделай вечер» (или напишите своё и отправьте)
-    → ответ агента, промпт появляется в поле сверху, в ленте карточка «Запущена генерация · ≈ $0.24 · 3 варианта» с «Отменить»
-    → по готовности «Показать варианты».<br>
+    → ответ агента, промпт появляется в поле сверху, агент сам меняет модель и число вариантов (видно слева в «Чем рисовать» и у поля
+    «Вариантов»), в ленте карточка «Запущена генерация · ≈ $0.10 · 2 варианта» со строкой «Изменил: модель → FLUX Fill, вариантов: 2»
+    и «Отменить» → по готовности «Показать варианты».<br>
+    <b>Сохранить как:</b> в вариантах (или «Сохранить как…» в шапке) → диалог: имя, папка, расширение по формату. Выберите папку
+    <code>images/generated/</code> — имя <code>hero.v2.png</code> там занято: предупреждение и «Взять hero.v3.png». Впишите своё имя
+    и выберите <code>images/blog/</code> → тост «Сохранено в проект: …» → «Показать в дереве» подсвечивает файл. Редактор и чат
+    переходят на новый файл — это видно в первой строке ленты чата. «Применить» сохраняет сразу, без диалога, следующей версией рядом.<br>
+    <b>Тихие строки:</b> ручной запуск «Сгенерировать» или быстрого действия пишет в ленту «Вы запустили: …». Снимок холста
+    прикладывается к сообщению, только если холст изменился с прошлого сообщения — иначе чип в композере «без изменений».<br>
     <b>Сценарий Б — агент предлагает:</b> подсказка «Придумай промпт для обложки блога» (или любое сообщение со словом «придумай»)
     → карточка промпта с «Вставить в промпт» и «Сгенерировать».<br>
     <b>Остальное:</b> секции слева сворачиваются по заголовку; «Образцы» → «+ Образец» → «С компьютера» / «Из файлов проекта…», роль под
-    образцом, крестик удаляет. Композер: «+» — вложения, чип персоны и шапка чата — выбор персоны, микрофон — голос.
+    образцом, крестик удаляет. Композер: «+» — вложения, чип персоны — выбор собеседника (только здесь, как в основном чате),
+    микрофон — голос. Шапки у чата нет: текущий файл назван в первой строке ленты, под ней после первого сообщения — «Новый чат» и «↗ Открыть в полном чате».
     Стрелка «назад» в шапке → экран проекта: чат картинки виден в списке чатов, «Редактировать» открывает его снова.
     На «Телефон 390» — холст на весь экран, промпт снизу, «Инструменты» и «Чат» — шторки.
   </div>
@@ -536,6 +561,8 @@ const IC = {
   ext: '<path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
   wrench: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
   camera: '<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z"/><circle cx="12" cy="13" r="3"/>',
+  save: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/>',
+  chatplus: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M12 7v6M9 10h6"/>',
 };
 const ic = (n, s) => `<svg class="i${s ? ' s' : ''}" viewBox="0 0 24 24">${IC[n]}</svg>`;
 
@@ -643,6 +670,14 @@ const PROJECT_IMGS = [
   { name: 'team-photo.jpg', kind: 'team', role: 'face' },
   { name: 'dusk-ref.png', kind: 'dusk', role: 'style' },
 ];
+// Файлы проекта по папкам: для «Сохранить как…» и дерева на экране проекта. '' — корень
+const FILES0 = () => ({
+  '': [{ n: 'README.md', doc: true }],
+  images: [{ n: 'hero.png', d: { lamp: 0 } }, ...PROJECT_IMGS.map(f => ({ n: f.name, k: f.kind }))],
+  'images/generated': [{ n: 'hero.v2.png', d: { lamp: 2 } }],
+  'images/blog': [],
+});
+const RESULT_EXT = 'png'; // формат результата генерации — от него расширение
 const ROLES = [['face', 'Персонаж — сохранить лицо', 'Лицо'], ['style', 'Стиль', 'Стиль'], ['object', 'Предмет', 'Предмет']];
 const TOOLS = [['hand', 'hand', 'Рука'], ['mask', 'brush', 'Кисть'], ['arrow', 'arrow', 'Стрелка'], ['rect', 'rect', 'Рамка'], ['text', 'text', 'Подпись'], ['eraser', 'eraser', 'Ластик']];
 const AGENT_PROMPT_A = 'Убери напольный торшер справа у дивана (отмечен кистью), на его месте — продолжение стены и пола. Сделай вечер: за окном сумерки, в комнате тёплый приглушённый свет от окна. Диван, картину и растение не меняй.';
@@ -662,9 +697,12 @@ const S = {
   variants: [], selVar: 0, compare: 'slider', showAfter: true, slider: 50,
   history: [{ title: 'Оригинал', d: { lamp: 0 } }], cur: 0,
   // Чат картинки: обычный чат проекта с привязкой к файлу
-  chatCreated: false, persona: 'claude', persMenu: false, msgs: [], typing: false, chatText: '', atts: [], autoAtt: true, attMenu: false, rec: false, recSec: 0, recTimer: null,
+  chatCreated: false, chatName: '', oldChats: [], persona: 'claude', msgs: [], typing: false, chatText: '', atts: [], autoAtt: true, attMenu: false, rec: false, recSec: 0, recTimer: null,
   genCard: null, sheet: null, chatUnread: false,
-  pickOpen: false, pickSel: null, saveOpen: false, saveName: '', saveFolder: 'images', saveHistory: true, toast: null, toastAct: null,
+  lastSnap: null, // снимок холста, который агент уже видел: прикладываем новый, только если холст изменился
+  agentSet: null, // какие настройки поменял агент — подсветка слева и у числа вариантов
+  files: FILES0(), hlFile: null,
+  pickOpen: false, pickSel: null, saveOpen: false, saveBase: '', saveFolder: 'images', saveHistory: true, saveFrom: 'cur', toast: null, toastAct: null,
 };
 
 const plural = (n, a, b, c) => { const m10 = n % 10, m100 = n % 100; return m10 === 1 && m100 !== 11 ? a : (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20) ? b : c); };
@@ -684,6 +722,18 @@ const roleShort = r => ROLES.find(x => x[0] === r)[2];
 const busy = () => S.phase === 'gen';
 // Род глагола для персоны: Claude — «написал», Кира и Софья — «написала»
 const g = (m, f) => S.persona === 'claude' ? m : f;
+// Имена файлов для сохранения: hero.png → hero.v2, hero.v2.png → hero.v3; прочее — name-2, name-3
+const stem = n => n.replace(/\.[^.]+$/, '');
+const pathOf = (folder, name) => folder ? `${folder}/${name}` : name;
+const folderLabel = f => f ? f + '/' : '/ (корень проекта)';
+const nameTaken = (folder, base) => (S.files[folder] || []).some(f => f.n.toLowerCase() === `${base}.${RESULT_EXT}`.toLowerCase());
+const bumpName = base => { const v = base.match(/^(.*)\.v(\d+)$/); if (v) return `${v[1]}.v${+v[2] + 1}`; const d = base.match(/^(.*)-(\d+)$/); return d ? `${d[1]}-${+d[2] + 1}` : base + '-2'; };
+const versionName = n => { const s = stem(n); return /\.v\d+$/.test(s) ? bumpName(s) : s + '.v2'; };
+const freeName = (folder, base) => { let b = base; while (nameTaken(folder, b)) b = bumpName(b); return b; };
+const cleanBase = s => s.trim().replace(new RegExp(`\\.${RESULT_EXT}$`, 'i'), '');
+// Ключ холста: пометки, текущий шаг и файл. Совпал с прошлым сообщением — снимок не прикладываем
+const snapKey = () => JSON.stringify([S.marks, S.cur, S.folder, S.fileName]);
+const canvasChanged = () => snapKey() !== S.lastSnap;
 const personaAv = (p, cls = '') => `<span class="av txt ${cls}" style="background:${p.color}">${p.name[0]}</span>`;
 
 // ---------- Отрисовка ----------
@@ -701,6 +751,7 @@ function render() {
   app.querySelectorAll('textarea.q, textarea.ci').forEach(autosize);
   applyTransform();
   if (S.flash) setTimeout(() => { S.flash = false; }, 50);
+  const hl = app.querySelector('.row.hl'); if (hl) hl.scrollIntoView({ block: 'nearest' });
 }
 function autosize(t) {
   t.style.height = 'auto';
@@ -716,7 +767,7 @@ function renderDemo() {
   document.getElementById('demo').innerHTML = `
     <div class="grp"><span class="lbl">Тема</span>${b(S.theme === 'light', 'theme:light', 'Светлая')}${b(S.theme === 'dark', 'theme:dark', 'Тёмная')}</div>
     <div class="grp"><span class="lbl">Ширина</span>${b(!S.mobile, 'w:desk', 'Десктоп')}${b(S.mobile, 'w:mob', 'Телефон 390')}</div>
-    <div class="grp"><span class="lbl">Сразу к</span>${[['1', 'Редактор'], ['2', 'А: агент запускает'], ['3', 'Б: агент предлагает'], ['4', 'Варианты'], ['5', 'Длинный промпт'], ['6', 'История'], ['7', 'Ошибка'], ['8', 'Проект и чаты']]
+    <div class="grp"><span class="lbl">Сразу к</span>${[['1', 'Редактор'], ['2', 'А: агент запускает'], ['3', 'Б: агент предлагает'], ['4', 'Варианты'], ['5', 'Длинный промпт'], ['6', 'История'], ['7', 'Ошибка'], ['8', 'Проект и чаты'], ['9', 'Сохранить как']]
       .map(([n, t]) => b(false, 'jump:' + n, n + ' · ' + t)).join('')}</div>
     <div class="grp"><span class="lbl">Исход генерации</span>${b(S.outcome === 'ok', 'out:ok', 'Успех')}${b(S.outcome === 'provider', 'out:provider', 'Сервис отказал')}</div>`;
 }
@@ -738,7 +789,10 @@ function editorView() {
       ${S.mobile ? '' : ic('img')}
       <div class="grow"><div class="ttl">${esc(S.fileName)}</div><div class="sub">${S.folder}/ · Сайт студии</div></div>
       ${stepLbl}
-      ${S.history.length > 1 && S.phase === 'idle' ? `<button class="btn sm pri" data-act="applycur">${ic('check', 1)} Сохранить</button>` : ''}
+      ${S.phase === 'idle' ? (S.mobile
+        ? `<button class="ib" data-act="saveas:cur" title="Сохранить как…" aria-label="Сохранить как…">${ic('save')}</button>`
+        : `<button class="btn sm" data-act="saveas:cur" title="Сохранить под другим именем или в другую папку">${ic('save', 1)} Сохранить как…</button>`) : ''}
+      ${S.history.length > 1 && S.phase === 'idle' ? `<button class="btn sm pri" data-act="applycur" title="Сохранить следующей версией рядом: ${esc(pathOf(S.folder, freeName(S.folder, versionName(S.fileName)) + '.' + RESULT_EXT))}">${ic('check', 1)} Сохранить</button>` : ''}
     </div>
     <div class="ed-body">${body}</div>
     ${S.mobile && S.sheet ? sheetView() : ''}
@@ -792,7 +846,9 @@ function toolSections() {
 
   const pv = effProv(), m = curModel(), blocked = modelBlock(m);
   const provName = S.provider === 'settings' ? `Как в настройках (${pv.name})` : pv.name;
-  const model = `<div class="sec-l" style="margin:0">Поставщик</div>
+  const ag = S.agentSet, agP = ag && PERSONAS.find(x => x.id === ag.pers);
+  const model = `${ag && ag.model ? `<span class="by" style="align-self:flex-start">${ic('spark', 1)} модель ${agP.id === 'claude' ? 'сменил' : 'сменила'} ${esc(agP.name)}</span>` : ''}
+    <div class="sec-l" style="margin:0">Поставщик</div>
     <button class="pm-btn" data-act="prov"><span class="grow"><b>${provName}</b></span>${ic(S.provOpen ? 'up' : 'down', 1)}</button>
     ${S.provOpen ? provList() : ''}
     <div class="sec-l" style="margin:0">Модель</div>
@@ -808,7 +864,7 @@ function toolSections() {
     + section('samples', 'Образцы', S.samples.length ? String(S.samples.length) : 'нет', samples)
     + section('chars', 'Персонажи', S.charOn ? 'подключена ' + charById(S.charOn).name : String(S.characters.length), chars)
     + section('quick', 'Быстрые действия', '', quick)
-    + section('model', 'Чем рисовать', `${pv.name} · ${m.name}`, model)
+    + section('model', 'Чем рисовать', `${ag && ag.model ? '✦ ' : ''}${pv.name} · ${m.name}`, model)
     + section('hist', 'История шагов', S.history.length > 1 ? `${S.history.length - 1} ${plural(S.history.length - 1, 'шаг', 'шага', 'шагов')}` : '', hist);
 }
 function provList() {
@@ -832,7 +888,7 @@ function promptCard() {
       ${S.prompt && !b ? `<button class="ib" data-act="pclear" title="Очистить промпт" aria-label="Очистить промпт" style="width:24px;height:24px">${ic('x', 1)}</button>` : ''}</div>`;
   const foot = b
     ? `<div class="gen-row"><span class="price grow">Рисуем ${variantsWord(S.count)}…</span><button class="btn sm" data-act="cancel">${ic('x', 1)} Отменить</button></div>`
-    : `<div class="gen-row">${S.mobile ? '' : '<span class="muted" style="font-size:12px">Вариантов</span>'}<div class="seg" title="Сколько вариантов">${[1, 2, 3, 4].map(n => `<button class="${S.count === n ? 'on' : ''}" data-act="count:${n}">${n}</button>`).join('')}</div>
+    : `<div class="gen-row">${S.mobile ? '' : '<span class="muted" style="font-size:12px">Вариантов</span>'}<div class="seg ${S.agentSet && S.agentSet.count ? 'agent' : ''}" title="${S.agentSet && S.agentSet.count ? 'Число вариантов поменял агент' : 'Сколько вариантов'}">${[1, 2, 3, 4].map(n => `<button class="${S.count === n ? 'on' : ''}" data-act="count:${n}">${n}</button>`).join('')}</div>
          <span class="grow"></span><span class="price">${ic('coin', 1)} <b>≈ ${money(price(), effProv().unit)}</b></span>
          ${S.mobile ? `<button class="btn pri" data-act="generate" ${blocked ? `disabled title="${blocked}"` : ''} >${ic('spark', 1)} Сгенерировать</button>` : ''}</div>
        ${S.mobile ? '' : `<button class="btn pri lg" style="width:100%" data-act="generate" ${blocked ? `disabled title="${blocked}"` : ''}>${ic('spark', 1)} Сгенерировать</button>`}`;
@@ -844,35 +900,34 @@ function promptCard() {
 // ---------- Чат картинки ----------
 function chatBox() {
   const p = persona();
-  const head = `<div class="chat-h">
-      <button class="pers-btn" data-act="persmenu" title="Собеседник">${personaAv(p, 'xs')}<span>${esc(p.name)}</span>${ic('down', 1)}</button>
-      <div class="grow ctitle">${S.chatCreated ? `Чат «${esc(S.fileName)} · правка»<br>в списке чатов проекта` : 'Новый чат картинки<br>появится в списке после первого сообщения'}</div>
-      <button class="ib" data-act="openfull" title="Открыть в полном чате" aria-label="Открыть в полном чате" ${S.chatCreated ? '' : 'disabled'}>${ic('ext', 1)}</button>
-      ${S.persMenu ? persMenu('top:42px;left:6px') : ''}
-    </div>`;
+  // Шапки у чата нет: собеседник — в композере, текущий файл — в первой строке ленты (она идёт за редактором)
   const hasUser = S.msgs.some(m => m.who === 'me');
-  const feed = `<div class="feed">
-      <div class="sysline">${ic('img', 1)} Чат привязан к <b>${S.folder}/${esc(S.fileName)}</b>. ${esc(p.name)} видит картинку, пометки, образцы и промпт — и может сам запустить генерацию.</div>
+  const feed = `<div class="feed" id="feed">
+      <div class="sysline" id="chatTitle">${ic('img', 1)} Чат привязан к <b>${esc(pathOf(S.folder, S.fileName))}</b>. ${esc(p.name)} видит картинку, пометки, образцы и промпт — и может сам запустить генерацию.</div>
+      ${S.chatCreated ? `<div class="chat-acts"><button class="btn sm ghost" data-act="newchat" title="Новый чат по этой картинке">${ic('chatplus', 1)} Новый чат</button><button class="btn sm ghost" data-act="openfull" title="Открыть в полном чате">${ic('ext', 1)} Открыть в полном чате</button></div>` : ''}
       ${S.msgs.map(msgView).join('')}
       ${S.typing ? `<div class="m-ai">${personaAv(p, 'xs')}<div class="body"><span class="typing"><i></i><i></i><i></i></span></div></div>` : ''}
       ${!hasUser && !S.typing ? `<div class="sugg"><span class="muted" style="font-size:11px">Например:</span>
         <button class="chip" data-act="say:a">${ic('zap', 1)} Убери вон ту лампу и сделай вечер</button>
         <button class="chip" data-act="say:b">${ic('spark', 1)} Придумай промпт для обложки блога</button></div>` : ''}
     </div>`;
-  return `<div class="chat">${head}${feed}${composer()}</div>`;
+  return `<div class="chat">${feed}${composer()}</div>`;
 }
 function persMenu(pos) {
   return `<div class="menu" style="${pos}" data-stop="1">${PERSONAS.map(x => `<button class="${x.id === S.persona ? 'on' : ''}" data-act="setpers:${x.id}">${personaAv(x, 'xs')}<span class="grow">${x.name}<small>${x.role}</small></span>${x.id === S.persona ? ic('check', 1) : ''}</button>`).join('')}</div>`;
 }
 function msgView(m) {
   const p = PERSONAS.find(x => x.id === m.pers) || persona();
-  if (m.who === 'me') return `<div class="m-me">${m.att ? `<span class="att"><span class="pic">${scene(m.att.d)}</span>${esc(m.att.label)}</span>` : ''}${m.extra ? `<span class="att">${ic('file', 1)} ${esc(m.extra)}</span>` : ''}<span>${esc(m.text)}</span></div>`;
+  // Тихая строка ленты: ручной запуск, переход на другой файл
+  if (m.who === 'sys') return `<div class="sysline">${ic(m.icon || 'zap', 1)} ${esc(m.text)}</div>`;
+  if (m.who === 'me') return `<div class="m-me">${m.att ? `<span class="att"><span class="pic">${scene(m.att.d)}</span>${esc(m.att.label)}</span>` : ''}${m.same ? `<span class="att">${ic('camera', 1)} холст не менялся — снимок не приложен</span>` : ''}${m.extra ? `<span class="att">${ic('file', 1)} ${esc(m.extra)}</span>` : ''}<span>${esc(m.text)}</span></div>`;
   let card = '';
   const c = m.card;
   if (c && c.type === 'launch') {
     const st = c.status;
     card = `<div class="card ${st === 'done' ? 'ok' : st === 'cancel' || st === 'error' ? 'off' : ''}">
       <div class="ch">${st === 'run' ? '<span class="dot"></span> Запущена генерация' : st === 'done' ? ic('check', 1) + ' Готово' : st === 'cancel' ? 'Генерация отменена' : ic('alert', 1) + ' Генерация не удалась'}<span class="meta">· ${esc(c.price)} · ${variantsWord(c.count)}</span></div>
+      ${c.changed ? `<div class="chg">${ic('sliders', 1)} ${esc(c.changed)}</div>` : ''}
       ${st === 'run' ? `<div class="bar"><i id="cardbar" style="width:${Math.floor(Math.min(...(S.progress.length ? S.progress : [0])))}%"></i></div>` : ''}
       ${st === 'cancel' ? '<div class="muted" style="font-size:12px">Деньги не списаны. Промпт остался в поле сверху.</div>' : ''}
       ${st === 'error' ? '<div class="muted" style="font-size:12px">Сервис рисования отказал. Деньги не списаны.</div>' : ''}
@@ -890,9 +945,9 @@ function msgView(m) {
     <span>${esc(m.text)}</span>${card}</div></div>`;
 }
 function composer() {
-  const p = persona(), mk = S.marks.length;
+  const p = persona(), mk = S.marks.length, ch = canvasChanged();
   const atts = [
-    ...(S.autoAtt ? [`<span class="att-chip auto" title="Прикладывается к каждому сообщению: текущий шаг и пометки"><span class="pic">${scene(curD())}</span><span>${esc(S.fileName)}${mk ? ' · ' + marksWord(mk) : ''}</span><button data-act="autoattx" title="Не прикладывать картинку" aria-label="Не прикладывать картинку">${ic('x', 1)}</button></span>`] : []),
+    ...(S.autoAtt ? [`<span class="att-chip auto ${ch ? '' : 'same'}" title="${ch ? 'Холст изменился с прошлого сообщения — снимок с пометками приложится' : 'Холст не менялся с прошлого сообщения — снимок не приложится, агент его уже видел'}"><span class="pic">${scene(curD())}</span><span>${esc(S.fileName)}${ch ? (mk ? ' · ' + marksWord(mk) : '') : ' · без изменений'}</span><button data-act="autoattx" title="Не прикладывать картинку" aria-label="Не прикладывать картинку">${ic('x', 1)}</button></span>`] : []),
     ...S.atts.map((a, i) => `<span class="att-chip">${ic('file', 1)}<span>${esc(a)}</span><button data-act="attx:${i}" aria-label="Убрать вложение">${ic('x', 1)}</button></span>`),
   ];
   return `<div class="comp">
@@ -903,13 +958,13 @@ function composer() {
       <div class="strip">
         <button class="ib" data-act="attmenu" title="Прикрепить файл" aria-label="Прикрепить файл">${ic('plus', 1)}</button>
         <button class="mode-btn" title="Режим работы: Авто-правки">${ic('zap', 1)}${S.mobile ? '' : 'Авто-правки'}</button>
-        <button class="mode-btn" data-act="persmenu2" title="Собеседник">${personaAv(p, 'xs')}${esc(p.name)}</button>
+        <button class="mode-btn" data-act="persmenu2" title="Собеседник">${personaAv(p, 'xs')}${esc(p.name)}${ic('down', 1)}</button>
         <span class="grow"></span>
         <button class="ib mic ${S.rec ? 'rec' : ''}" data-act="mic" title="${S.rec ? 'Закончить запись' : 'Голосом'}" aria-label="Голосом">${ic(S.rec ? 'stop' : 'mic', 1)}</button>
         <button class="send" data-act="send" title="Отправить" aria-label="Отправить" ${S.rec ? 'disabled' : ''}>${ic('send', 1)}</button>
       </div>
     </div>
-    ${S.attMenu ? `<div class="menu" style="bottom:calc(100% - 4px);left:10px" data-stop="1"><button data-act="attadd:скриншот-сайта.png">${ic('upload', 1)}<span>Файл с компьютера<small>Добавить файл к сообщению</small></span></button><button data-act="attadd:docs/brand.md">${ic('folder', 1)}<span>Из файлов проекта<small>Например, docs/brand.md</small></span></button>${S.autoAtt ? '' : `<button data-act="autoatton">${ic('camera', 1)}<span>Снимок холста с пометками<small>Прикладывать к каждому сообщению</small></span></button>`}</div>` : ''}
+    ${S.attMenu ? `<div class="menu" style="bottom:calc(100% - 4px);left:10px" data-stop="1"><button data-act="attadd:скриншот-сайта.png">${ic('upload', 1)}<span>Файл с компьютера<small>Добавить файл к сообщению</small></span></button><button data-act="attadd:docs/brand.md">${ic('folder', 1)}<span>Из файлов проекта<small>Например, docs/brand.md</small></span></button>${S.autoAtt ? '' : `<button data-act="autoatton">${ic('camera', 1)}<span>Снимок холста с пометками<small>Прикладывать, когда холст изменился</small></span></button>`}</div>` : ''}
     ${S.persMenu2 ? persMenu('bottom:calc(100% - 4px);left:60px') : ''}
   </div>`;
 }
@@ -963,11 +1018,12 @@ function variantsView() {
     <div class="vars">${S.variants.map((d, i) => `<button class="var ${i === S.selVar ? 'on' : ''}" data-act="var:${i}"><span class="no">${i + 1}</span>${scene(d)}</button>`).join('')}</div>
     <div class="var-acts">
       <button class="btn pri ${S.mobile ? '' : 'lg'}" data-act="apply">${ic('check', 1)} Применить</button>
+      <button class="btn ${S.mobile ? '' : 'lg'}" data-act="saveas:variant">${ic('save', 1)} Сохранить как…</button>
       <button class="btn ${S.mobile ? '' : 'lg'}" data-act="base">${ic('pencil', 1)} Взять за основу</button>
       <button class="btn ${S.mobile ? '' : 'lg'}" data-act="more">${ic('spark', 1)} Ещё варианты</button>
       <button class="btn ghost ${S.mobile ? '' : 'lg'}" data-act="discard">Вернуться к правке</button>
     </div>
-    <div class="muted" style="font-size:12px;text-align:center">«Применить» сохранит вариант новым файлом рядом с оригиналом. «Взять за основу» — новый шаг истории, правка продолжается.</div>
+    <div class="muted" style="font-size:12px;text-align:center">«Применить» сразу сохранит вариант следующей версией рядом: <b>${esc(pathOf(S.folder, freeName(S.folder, versionName(S.fileName)) + '.' + RESULT_EXT))}</b>. «Сохранить как…» — своё имя и папка. «Взять за основу» — новый шаг истории, правка продолжается.</div>
   </div>`;
 }
 function errorView() {
@@ -989,16 +1045,30 @@ function pickView() {
     <div class="modal-f"><button class="btn ghost" data-act="pickx">Отмена</button><button class="btn pri" data-act="pickok" ${sel ? '' : 'disabled'}>Добавить образец</button></div>
   </div></div>`;
 }
+// «Сохранить как…»: имя, папка, расширение по формату результата. Перезаписи нет — занятое имя блокирует кнопку
+function saveWarnHTML() {
+  const base = cleanBase(S.saveBase);
+  if (!base) return `<div class="hint">Введите имя файла.</div>`;
+  if (!nameTaken(S.saveFolder, base)) return `<div class="hint">Файл ляжет сюда: <b>${esc(pathOf(S.saveFolder, base + '.' + RESULT_EXT))}</b></div>`;
+  const free = freeName(S.saveFolder, base);
+  return `<div class="warn-box"><span class="t">${ic('alert', 1)} Такой файл уже есть: ${esc(pathOf(S.saveFolder, base + '.' + RESULT_EXT))}</span>
+    <span>Перезаписать нельзя — возьмите другое имя. Свободное рядом: <b>${esc(free)}.${RESULT_EXT}</b></span>
+    <button class="btn sm" data-act="usefree" style="align-self:flex-start">Взять «${esc(free)}.${RESULT_EXT}»</button></div>`;
+}
+const saveBlocked = () => { const b = cleanBase(S.saveBase); return !b || nameTaken(S.saveFolder, b); };
 function saveView() {
   return `<div class="ovl" data-act="savex"><div class="modal" data-stop="1">
-    <div class="modal-h"><h3>Сохранить в проект</h3><button class="ib" data-act="savex" aria-label="Закрыть">${ic('x')}</button></div>
+    <div class="modal-h">${ic('save')}<h3>Сохранить как…</h3><button class="ib" data-act="savex" aria-label="Закрыть">${ic('x')}</button></div>
     <div class="modal-b">
-      <div class="fld"><label>Имя файла</label><input type="text" id="saveName" value="${esc(S.saveName)}"></div>
-      <div class="fld"><label>Папка</label><select id="saveFolder">${['images', 'images/generated', '(корень проекта)'].map(f => `<option ${f === S.saveFolder ? 'selected' : ''}>${f}</option>`).join('')}</select></div>
-      <div class="note-ok">Оригинал ${esc(S.folder)}/${esc(S.fileName)} не изменится — новая версия ляжет рядом.</div>
+      <div class="fld"><label for="saveName">Имя файла</label><div class="name-row"><input type="text" id="saveName" value="${esc(S.saveBase)}" spellcheck="false"><span class="ext" title="Расширение — по формату результата">.${RESULT_EXT}</span></div>
+        <div class="h">Расширение подставляется по формату результата — сейчас PNG.</div></div>
+      <div class="fld"><label>Папка проекта</label>
+        <div class="folds">${Object.keys(S.files).map(f => `<button class="fold ${f === S.saveFolder ? 'on' : ''}" data-act="savefold:${f}">${ic('folder', 1)}<span>${esc(folderLabel(f))}</span><span class="cnt2">${f === S.folder ? 'здесь сейчас · ' : ''}${S.files[f].length} ${plural(S.files[f].length, 'файл', 'файла', 'файлов')}</span></button>`).join('')}</div></div>
+      <div id="saveWarn">${saveWarnHTML()}</div>
+      <div class="note-ok">Исходный ${esc(pathOf(S.folder, S.fileName))} не изменится. Редактор и чат перейдут на новый файл.</div>
       <label class="chk"><input type="checkbox" id="saveHist" ${S.saveHistory ? 'checked' : ''}><span>Сохранить историю правок</span></label>
     </div>
-    <div class="modal-f"><button class="btn ghost" data-act="savex">Отмена</button><button class="btn pri" data-act="saveok">Сохранить в проект</button></div>
+    <div class="modal-f"><button class="btn ghost" data-act="savex">Отмена</button><button class="btn pri" id="saveOk" data-act="saveok" ${saveBlocked() ? 'disabled' : ''}>Сохранить</button></div>
   </div></div>`;
 }
 function charNewView() {
@@ -1020,18 +1090,27 @@ function charNewView() {
 // ---------- Экран проекта: чат картинки в общем списке чатов ----------
 function projectView() {
   const chats = [
-    ...(S.chatCreated ? [{ img: true, name: `${S.fileName} · правка`, sub: 'только что' }] : []),
+    ...(S.chatCreated ? [{ img: true, name: S.chatName, sub: 'только что' }] : []),
+    ...S.oldChats.map(n => ({ img: true, old: true, name: n, sub: 'сегодня' })),
     { name: 'Тексты для страницы «О студии»', sub: 'вчера' },
     { name: 'Вёрстка шапки сайта', sub: '24 сен' },
   ];
   return `<div class="proj">
     <div class="island"><div class="ih">${ic('chat')}<span class="ttl grow">Чаты · Сайт студии</span></div>
-      <div style="padding:6px;overflow:auto">${chats.map(c => `<button class="row" ${c.img ? 'data-act="reopen"' : ''}>${c.img ? `<span class="thumb">${scene(curD())}</span>` : ic('chat', 1)}<span class="nm">${esc(c.name)}</span>${c.img ? '<span class="tag-img">картинка</span>' : ''}<span class="sub">${c.sub}</span></button>`).join('')}
+      <div style="padding:6px;overflow:auto">${chats.map(c => `<button class="row" ${c.img && !c.old ? 'data-act="reopen"' : ''}>${c.img ? `<span class="thumb">${scene(curD())}</span>` : ic('chat', 1)}<span class="nm">${esc(c.name)}</span>${c.img ? '<span class="tag-img">картинка</span>' : ''}<span class="sub">${c.sub}</span></button>`).join('')}
         ${S.chatCreated ? '' : '<div class="muted" style="font-size:12px;padding:8px">Чата картинки пока нет: он появится после первого сообщения в редакторе.</div>'}</div></div>
-    <div class="island"><div class="ih">${ic('folder')}<span class="ttl grow">Файлы · images/</span></div>
-      <div style="padding:6px;overflow:auto">
-        <div class="row sel"><span class="thumb">${scene(S.history[0].d)}</span><span class="nm">hero.png</span>${S.chatCreated ? `<span title="Есть чат правки">${ic('chat', 1)}</span>` : ''}<button class="btn sm" data-act="reopen">${ic('pencil', 1)} Редактировать</button></div>
-        ${PROJECT_IMGS.map(f => `<div class="row"><span class="thumb">${sampleSVG(f.kind)}</span><span class="nm">${f.name}</span></div>`).join('')}
+    <div class="island"><div class="ih">${ic('folder')}<span class="ttl grow">Файлы · Сайт студии</span></div>
+      <div style="padding:6px;overflow:auto" id="tree">${Object.keys(S.files).map(folder => {
+        const rows = S.files[folder].map(f => {
+          const path = pathOf(folder, f.n), cur = folder === S.folder && f.n === S.fileName;
+          return `<div class="row ${path === S.hlFile ? 'hl' : cur ? 'sel' : ''}" data-path="${esc(path)}">
+            ${f.doc ? ic('file', 1) : `<span class="thumb">${f.d ? scene(f.d) : sampleSVG(f.k)}</span>`}<span class="nm">${esc(f.n)}</span>
+            ${path === S.hlFile ? '<span class="tag-img">новый</span>' : ''}
+            ${cur && S.chatCreated ? `<span title="Есть чат правки">${ic('chat', 1)}</span>` : ''}
+            ${cur ? `<button class="btn sm" data-act="reopen">${ic('pencil', 1)} Редактировать</button>` : ''}</div>`;
+        }).join('');
+        return folder ? `<div class="tree-f">${ic('folder', 1)} ${esc(folder)}/</div><div class="tree-in">${rows || '<div class="muted" style="font-size:11px;padding:4px 8px">пусто</div>'}</div>` : rows;
+      }).join('')}
       </div></div>
   </div>`;
 }
@@ -1089,16 +1168,17 @@ app.addEventListener('input', e => {
   if (t.id === 'q') { S.prompt = t.value; S.promptBy = null; autosize(t); }
   if (t.id === 'ci') { S.chatText = t.value; autosize(t); }
   if (t.id === 'brush') { S.brush = +t.value; document.getElementById('brushV').textContent = t.value; }
-  if (t.id === 'saveName') S.saveName = t.value;
+  // Имя проверяем на лету, без перерисовки: иначе поле теряет фокус
+  if (t.id === 'saveName') { S.saveBase = t.value; document.getElementById('saveWarn').innerHTML = saveWarnHTML(); document.getElementById('saveOk').disabled = saveBlocked(); }
   if (t.id === 'charName') { S.charNew.name = t.value; document.getElementById('charSave').disabled = !(t.value.trim() && S.charNew.photos.length >= 3); }
 });
 app.addEventListener('change', e => {
-  if (e.target.id === 'saveFolder') S.saveFolder = e.target.value;
   if (e.target.id === 'saveHist') S.saveHistory = e.target.checked;
 });
 // Enter в композере отправляет, Shift+Enter — перенос строки
 app.addEventListener('keydown', e => {
   if (e.target.id === 'ci' && e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(S.chatText); }
+  if (e.target.id === 'saveName' && e.key === 'Enter' && !saveBlocked()) { e.preventDefault(); document.getElementById('saveOk').click(); }
 });
 
 // ---------- Генерация ----------
@@ -1155,8 +1235,11 @@ let msgId = 0;
 function send(text) {
   text = (text || '').trim();
   if (!text) return;
-  S.chatCreated = true;
-  S.msgs.push({ id: ++msgId, who: 'me', text, att: S.autoAtt ? { d: curD(), label: `${S.fileName}${S.marks.length ? ' · ' + marksWord(S.marks.length) : ''}` } : null, extra: S.atts.length ? S.atts.join(', ') : null });
+  if (!S.chatCreated) { S.chatCreated = true; S.chatName = `${S.fileName} · правка`; }
+  // Снимок холста — только если холст изменился с прошлого сообщения
+  const snap = S.autoAtt && canvasChanged();
+  S.msgs.push({ id: ++msgId, who: 'me', text, att: snap ? { d: curD(), label: `${S.fileName}${S.marks.length ? ' · ' + marksWord(S.marks.length) : ''}` } : null, same: S.autoAtt && !snap, extra: S.atts.length ? S.atts.join(', ') : null });
+  if (snap) S.lastSnap = snapKey();
   S.chatText = ''; S.atts = []; S.typing = true; S.attMenu = false;
   render();
   const suggest = /придумай|предложи|какой промпт/i.test(text);
@@ -1166,32 +1249,63 @@ function send(text) {
       S.msgs.push({ id: ++msgId, who: 'ai', pers: S.persona, read: ['docs/brand.md', 'images/about.jpg'], text: `Вот промпт для обложки — палитра и торшер как в брендбуке и на странице «О студии». Место под заголовок ${g('оставил', 'оставила')} слева.`, card: { type: 'suggest', prompt: AGENT_PROMPT_B, inserted: false } });
       if (S.mobile && S.sheet !== 'chat') S.chatUnread = true;
       render();
-    } else agentLaunch(AGENT_PROMPT_A, 'evening', `Вижу пометку кистью справа — это торшер у дивана. Промпт ${g('поставил', 'поставила')} в поле ${S.mobile ? 'промпта' : 'сверху'}, ${variantsWord(S.count)} уже ${S.count === 1 ? 'рисуется' : 'рисуются'}.`);
+    } else {
+      // Правка по маске: агент сам берёт модель, которая правит по маске, и 2 варианта
+      const chg = { model: effProv().id === 'fal' ? 'fill' : 'gpt25', count: 2 };
+      agentLaunch(AGENT_PROMPT_A, 'evening', () => `Вижу пометку кистью справа — это торшер у дивана. Для правки по маске ${g('взял', 'взяла')} ${curModel().name}, ${variantsWord(S.count)} хватит, чтобы выбрать. Промпт ${g('поставил', 'поставила')} в поле ${S.mobile ? 'промпта' : 'сверху'}, уже ${S.count === 1 ? 'рисуется' : 'рисуются'}.`, chg);
+    }
   }, 800);
 }
-// Агент сам запускает генерацию: промпт — в поле, карточка — в ленту
-function agentLaunch(promptText, sceneKind, reply) {
+// Агент сам запускает генерацию, всегда без вопроса: промпт — в поле, карточка с «Отменить» — в ленту.
+// Может поменять и настройки (модель, число вариантов) — они видны слева и в строке «Изменил: …» карточки
+function agentLaunch(promptText, sceneKind, reply, changes) {
   S.prompt = promptText; S.promptBy = S.persona; S.flash = true;
   if (S.phase !== 'idle') S.phase = 'idle';
+  let changed = '';
+  if (changes) {
+    const parts = [], set = { pers: S.persona };
+    if (changes.model && changes.model !== S.model && effProv().models.some(x => x.id === changes.model)) { S.model = changes.model; parts.push(`модель → ${curModel().name}`); set.model = true; S.open.model = true; }
+    if (changes.count && changes.count !== S.count) { S.count = changes.count; parts.push(`вариантов: ${S.count}`); set.count = true; }
+    if (parts.length) { S.agentSet = set; changed = `${g('Изменил', 'Изменила')}: ${parts.join(', ')}`; }
+  }
   const id = ++msgId;
-  S.msgs.push({ id, who: 'ai', pers: S.persona, text: reply, card: { type: 'launch', status: 'run', count: S.count, price: '≈ ' + money(price(), effProv().unit) } });
+  S.msgs.push({ id, who: 'ai', pers: S.persona, text: typeof reply === 'function' ? reply() : reply, card: { type: 'launch', status: 'run', count: S.count, price: '≈ ' + money(price(), effProv().unit), changed } });
   S.genCard = id;
   startGen('prompt', { agent: true, scene: sceneKind });
 }
+// Ручной запуск — тихой строкой в ленту, чтобы агент знал, что делалось без него
+function logManual(what) {
+  S.msgs.push({ id: ++msgId, who: 'sys', icon: 'zap', text: `Вы запустили: ${what} · ${curModel().name} · ${priceText()}` });
+}
+const QUICK_LABEL = { bg: 'Убрать фон', upscale: 'Улучшить качество', remove: 'Убрать отмеченное', outpaint: 'Дорисовать за края' };
+
+// ---------- Сохранение: «Применить» — сразу следующей версией рядом, «Сохранить как…» — диалог ----------
+function commitSave(folder, base, from) {
+  const name = `${base}.${RESULT_EXT}`, path = pathOf(folder, name);
+  if (from === 'variant') pushStep(S.variants[S.selVar]);
+  S.files[folder].push({ n: name, d: curD() });
+  S.folder = folder; S.fileName = name;
+  S.saveOpen = false; S.phase = 'idle'; S.marks = [];
+  // Чат идёт за редактором: переход на новую версию — тихой строкой в ленте, имя файла — в шапке
+  S.msgs.push({ id: ++msgId, who: 'sys', icon: 'img', text: `Сохранено как ${path}. Редактор перешёл на этот файл, чат — вместе с ним` });
+  S.hlFile = path;
+  S.toast = `Сохранено в проект: ${path}`; S.toastAct = ['showfile', 'Показать в дереве'];
+}
+const quickSave = from => commitSave(S.folder, freeName(S.folder, versionName(S.fileName)), from);
 
 // ---------- Клики ----------
 document.addEventListener('click', e => {
   const el = e.target.closest('[data-act]');
   if (!el) {
-    if (S.sampleMenu || S.persMenu || S.persMenu2 || S.attMenu) { S.sampleMenu = S.persMenu = S.persMenu2 = S.attMenu = false; render(); }
+    if (S.sampleMenu || S.persMenu2 || S.attMenu) { S.sampleMenu = S.persMenu2 = S.attMenu = false; render(); }
     return;
   }
   const stop = e.target.closest('[data-stop]');
   if (stop && el.contains(stop)) return;
   const [a, v] = el.dataset.act.split(/:(.*)/);
   e.stopPropagation();
-  const closeMenus = () => { S.sampleMenu = false; S.persMenu = false; S.persMenu2 = false; S.attMenu = false; };
-  if (!['smpmenu', 'persmenu', 'persmenu2', 'attmenu'].includes(a)) closeMenus();
+  const closeMenus = () => { S.sampleMenu = false; S.persMenu2 = false; S.attMenu = false; };
+  if (!['smpmenu', 'persmenu2', 'attmenu'].includes(a)) closeMenus();
   switch (a) {
     case 'theme': S.theme = v; break;
     case 'w': S.mobile = v === 'mob'; S.sheet = null; break;
@@ -1201,11 +1315,11 @@ document.addEventListener('click', e => {
     case 'tool': S.tool = v; break;
     case 'clearmarks': S.marks = []; break;
     case 'zoom': S.zoom = v === 'fit' ? 1 : Math.min(4, Math.max(.25, S.zoom * (v === '+' ? 1.25 : 0.8))); if (v === 'fit') { S.panX = 0; S.panY = 0; } break;
-    case 'count': S.count = +v; break;
+    case 'count': S.count = +v; if (S.agentSet) S.agentSet.count = false; break;
     case 'prov': S.provOpen = !S.provOpen; S.modelOpen = false; break;
     case 'model': S.modelOpen = !S.modelOpen; S.provOpen = false; break;
-    case 'setprov': if (S.provider !== v) { S.provider = v; S.model = 'auto'; } S.provOpen = false; break;
-    case 'setmodel': S.model = v; S.modelOpen = false; break;
+    case 'setprov': if (S.provider !== v) { S.provider = v; S.model = 'auto'; if (S.agentSet) S.agentSet.model = false; } S.provOpen = false; break;
+    case 'setmodel': S.model = v; S.modelOpen = false; if (S.agentSet) S.agentSet.model = false; break;
     case 'smpmenu': S.sampleMenu = !S.sampleMenu; break;
     case 'smpfile': S.samples.push({ kind: 'lamp', name: 'торшер-референс.jpg', role: 'object' }); S.open.samples = true; break;
     case 'smpproj': S.pickOpen = true; S.pickSel = null; break;
@@ -1225,12 +1339,13 @@ document.addEventListener('click', e => {
       S.toast = `Персонаж сохранён в проект: characters/${name.toLowerCase()}/`; S.toastAct = null; break; }
     case 'outpaint': S.outpaintOpen = !S.outpaintOpen; break;
     case 'ratio': S.ratio = v; break;
-    case 'quick': S.sheet = null; startGen(v, v === 'outpaint' ? { ratio: S.ratio } : {}); return;
+    case 'quick': S.sheet = null; logManual(QUICK_LABEL[v] + (v === 'outpaint' ? ' ' + S.ratio : '')); startGen(v, v === 'outpaint' ? { ratio: S.ratio } : {}); return;
     case 'pclear': S.prompt = ''; S.promptBy = null; break;
     case 'generate': {
       if (modelBlock(curModel())) break;
       if (!S.prompt.trim()) S.prompt = 'Замени торшер на латунный, с тёплым светом';
       S.sheet = null;
+      logManual(`«${S.prompt.slice(0, 48)}${S.prompt.length > 48 ? '…' : ''}»`);
       startGen('prompt', { scene: sceneOf(S.prompt) }); return;
     }
     // Повтор из карточки: та же карточка снова «идёт», промпт берётся из поля
@@ -1242,19 +1357,21 @@ document.addEventListener('click', e => {
     case 'cmp': S.compare = v; break;
     case 'flip': S.showAfter = !S.showAfter; break;
     case 'var': S.selVar = +v; break;
-    case 'more': startGen(S.lastAction.kind, S.lastAction); return;
+    case 'more': logManual('ещё варианты'); startGen(S.lastAction.kind, S.lastAction); return;
     case 'base': pushStep(S.variants[S.selVar]); S.phase = 'idle'; S.marks = []; S.prompt = ''; S.promptBy = null; break;
     case 'showvars': S.sheet = null; if (S.variants.length) S.phase = 'variants'; break;
-    case 'apply': S.saveName = 'hero.v2.png'; S.saveOpen = true; S.saveFrom = 'variant'; break;
-    case 'applycur': S.saveName = 'hero.v2.png'; S.saveOpen = true; S.saveFrom = 'cur'; break;
+    case 'apply': quickSave('variant'); break;
+    case 'applycur': quickSave('cur'); break;
+    case 'saveas': S.saveFrom = v; S.saveBase = versionName(S.fileName); S.saveFolder = S.folder; S.saveOpen = true; S.toast = null; break;
+    case 'savefold': S.saveFolder = v; break;
+    case 'usefree': S.saveBase = freeName(S.saveFolder, cleanBase(S.saveBase)); break;
     case 'savex': S.saveOpen = false; break;
-    case 'saveok': if (S.saveFrom === 'variant') pushStep(S.variants[S.selVar]); S.saveOpen = false; S.phase = 'idle'; S.marks = [];
-      S.toast = `Сохранено в проект: ${S.saveFolder}/${S.saveName}`; S.toastAct = null; break;
+    case 'saveok': if (saveBlocked()) break; commitSave(S.saveFolder, cleanBase(S.saveBase), S.saveFrom); break;
+    case 'showfile': S.screen = 'project'; S.toast = null; S.sheet = null; break;
     case 'toastx': S.toast = null; break;
     case 'step': S.cur = +v; S.marks = []; S.phase = 'idle'; break;
     // Чат
-    case 'persmenu': S.persMenu = !S.persMenu; S.persMenu2 = false; break;
-    case 'persmenu2': S.persMenu2 = !S.persMenu2; S.persMenu = false; break;
+    case 'persmenu2': S.persMenu2 = !S.persMenu2; break;
     case 'setpers': S.persona = v; break;
     case 'attmenu': S.attMenu = !S.attMenu; break;
     case 'attadd': if (!S.atts.includes(v)) S.atts.push(v); break;
@@ -1270,12 +1387,15 @@ document.addEventListener('click', e => {
     case 'insert': { const m = S.msgs.find(x => x.id === +v); S.prompt = m.card.prompt; S.promptBy = m.pers; S.flash = true; m.card.inserted = true; if (S.mobile) S.sheet = null; break; }
     case 'suggen': { const m = S.msgs.find(x => x.id === +v); m.card.inserted = true;
       agentLaunch(m.card.prompt, 'cover', 'Запускаю по этому промпту.'); return; }
-    case 'openfull': S.toast = `Откроется чат «${S.fileName} · правка» во вкладке «Чаты» — с той же лентой`; S.toastAct = null; break;
+    case 'openfull': S.toast = `Откроется чат «${S.chatName}» во вкладке «Чаты» — с той же лентой`; S.toastAct = null; break;
+    case 'newchat': { const old = S.chatName; if (S.chatCreated) S.oldChats.unshift(old);
+      S.msgs = []; S.chatCreated = false; S.chatName = ''; S.lastSnap = null; S.genCard = null;
+      S.toast = `Новый чат по ${S.fileName}. Прежний «${old}» остался в списке чатов проекта`; S.toastAct = null; break; }
     case 'sheet': S.sheet = v || null; if (v === 'chat') S.chatUnread = false; break;
     // Проект
     case 'toproject': clearInterval(S.timer); if (S.phase === 'gen') { S.phase = 'idle'; setCard('cancel'); } S.screen = 'project'; S.toast = null; S.sheet = null; break;
-    case 'reopen': S.screen = 'editor';
-      if (S.chatCreated) { S.toast = `Открыт чат этой картинки: «${S.fileName} · правка»`; S.toastAct = null; } break;
+    case 'reopen': S.screen = 'editor'; S.hlFile = null;
+      if (S.chatCreated) { S.toast = `Открыт чат этой картинки: «${S.chatName}»`; S.toastAct = null; } break;
   }
   render();
 });
@@ -1284,7 +1404,8 @@ function reset() {
   clearInterval(S.timer); clearInterval(S.recTimer);
   Object.assign(S, { screen: 'editor', phase: 'idle', tool: 'mask', marks: DEFAULT_MARKS(), zoom: 1, panX: 0, panY: 0, prompt: '', promptBy: null,
     history: [{ title: 'Оригинал', d: { lamp: 0 } }], cur: 0, msgs: [], typing: false, chatText: '', atts: [], autoAtt: true, rec: false,
-    chatCreated: false, genCard: null, sheet: null, toast: null, saveOpen: false, pickOpen: false, charNew: null, variants: [], count: 3 });
+    chatCreated: false, chatName: '', oldChats: [], genCard: null, sheet: null, toast: null, saveOpen: false, pickOpen: false, charNew: null, variants: [], count: 3,
+    fileName: 'hero.png', folder: 'images', files: FILES0(), hlFile: null, agentSet: null, lastSnap: null, model: 'auto' });
 }
 function jump(n) {
   reset();
@@ -1297,7 +1418,9 @@ function jump(n) {
     S.cur = 3; S.marks = []; S.open.hist = true; if (S.mobile) S.sheet = 'tools'; return;
   }
   if (n === '7') { S.prompt = AGENT_PROMPT_A; S.phase = 'error'; return; }
-  if (n === '8') { S.chatCreated = true; S.msgs = [{ id: ++msgId, who: 'me', text: 'Убери вон ту лампу и сделай вечер' }]; S.screen = 'project'; }
+  if (n === '9') { S.prompt = AGENT_PROMPT_A; S.lastAction = { kind: 'prompt', scene: 'evening' }; S.variants = makeVariants(); S.phase = 'variants';
+    S.saveFrom = 'variant'; S.saveBase = versionName(S.fileName); S.saveFolder = S.folder; S.saveOpen = true; return; }
+  if (n === '8') { S.chatCreated = true; S.chatName = `${S.fileName} · правка`; S.msgs = [{ id: ++msgId, who: 'me', text: 'Убери вон ту лампу и сделай вечер' }]; S.screen = 'project'; }
 }
 
 render();

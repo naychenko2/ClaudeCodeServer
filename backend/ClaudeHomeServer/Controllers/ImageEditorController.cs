@@ -99,6 +99,11 @@ public class ImageEditorController(
             return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
                 "Не указана котировка: сначала запросите цену");
 
+        var aspectRatio = string.IsNullOrWhiteSpace(form.AspectRatio) ? null : form.AspectRatio.Trim();
+        if (aspectRatio is not null && !AspectRatios.Contains(aspectRatio))
+            return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
+                $"Пропорции {aspectRatio} не поддерживаются: только {string.Join(", ", AspectRatios)}");
+
         var limits = ImageEditCatalog.DefaultLimits;
         var maxFileBytes = limits.MaxFileMb * 1024L * 1024L;
         var files = new[] { form.Source, form.Mask, form.Annotated }
@@ -164,7 +169,8 @@ public class ImageEditorController(
             form.SourcePath,
             character,
             MatchSourceSize: form.MatchSourceSize ?? true,
-            BaseStepId: form.BaseStepId);
+            BaseStepId: form.BaseStepId,
+            AspectRatio: aspectRatio);
 
         var started = await jobs.StartAsync(UserId, projectId, input, ct);
         return Map(started, created => StatusCode(StatusCodes.Status202Accepted, created));
@@ -241,7 +247,11 @@ public class ImageEditorController(
         public bool? MatchSourceSize { get; set; }
         // Шаг истории, с которого запущена правка: родитель шагов из её вариантов
         public string? BaseStepId { get; set; }
+        // Пропорции «Дорисовать за края» (AspectRatios); не передано — на усмотрение драйвера
+        public string? AspectRatio { get; set; }
     }
+
+    private static readonly string[] AspectRatios = ["1:1", "16:9", "9:16"];
 
     // ── Правки без ИИ и шаги истории (ADR-018 §9) ──────────────────────────────────
 

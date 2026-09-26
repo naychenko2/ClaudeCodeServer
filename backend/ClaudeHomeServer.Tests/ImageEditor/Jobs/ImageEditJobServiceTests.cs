@@ -89,6 +89,31 @@ public class ImageEditJobServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ДорисоватьЗаКрая_ПропорцииИзФормыДоходятДоДрайвера()
+    {
+        var (higgsfield, http, _) = HiggsfieldImageEditorTests.Create();
+        var service = Service(higgsfield);
+        var quote = await service.QuoteAsync("user-a", Project,
+            new ImageEditQuoteRequest("higgsfield", "auto", EditMode.Fast, ImageEditOp.Outpaint, 1, false, 0, false, null, null),
+            default);
+        quote.Value.Should().NotBeNull(quote.Error);
+
+        var started = await service.StartAsync("user-a", Project,
+            Input(quote.Value!.QuoteId) with { AspectRatio = "16:9" }, default);
+        started.Value.Should().NotBeNull(started.Error);
+        var job = await WaitDone(service, "user-a", started.Value!.JobId);
+
+        job.Status.Should().Be(ImageEditJobStatus.Completed);
+        var args = http.Calls
+            .Where(c => FakeHttp.Tool(c) == "generate_image")
+            .Select(FakeHttp.Arguments)
+            .Single(a => a?["get_cost"] is null)!;
+        args["model"]!.GetValue<string>().Should().Be(HiggsfieldImageEditor.Outpaint);
+        var ratio = args["aspect_ratio"]?.GetValue<string>();
+        ratio.Should().Be("16:9", "иначе «Дорисовать 16:9» даёт квадрат");
+    }
+
+    [Fact]
     public async Task ОтказHiggsfield_FalНеВызывается_ПредложенаКотировкаСоседа()
     {
         var higgsfield = new ScriptedEditor("higgsfield", (_, _, _) =>

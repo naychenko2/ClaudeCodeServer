@@ -176,7 +176,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
                 matchSize = (w, h);
         }
 
-        var composed = EditRequestComposer.Compose(input, quote.Op, quote.Model, quote.Count);
+        var composed = EditRequestComposer.Compose(input, quote.Op, quote.Model, quote.Count, input.AspectRatio);
         if (composed.Value is not { } request)
             return Fail<ImageEditJobCreatedDto>(composed.ErrorCode ?? ImageEditErrorCodes.InvalidRequest,
                 composed.Error ?? "Неверный запрос");

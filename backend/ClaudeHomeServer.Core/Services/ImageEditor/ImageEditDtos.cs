@@ -104,7 +104,9 @@ public record ImageEditJobInput(
     string? ChatSessionId = null,
     ImageEditInitiator Initiator = ImageEditInitiator.Human,
     // Шаг истории, с которого запущена правка: родитель шагов из её вариантов (ADR-018 §9)
-    string? BaseStepId = null);
+    string? BaseStepId = null,
+    // Пропорции результата («Дорисовать за края»): 1:1, 16:9, 9:16; null — на усмотрение драйвера
+    string? AspectRatio = null);
 
 public record ImageEditJobCreatedDto(string JobId);
 

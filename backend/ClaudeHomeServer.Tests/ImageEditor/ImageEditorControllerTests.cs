@@ -31,6 +31,7 @@ public class ImageEditorControllerTests : IDisposable
     private sealed class FakeJobs : IImageEditJobs
     {
         public readonly ConcurrentDictionary<string, (string Owner, string Project, bool Cancelled)> Jobs = new();
+        public ImageEditJobInput? LastInput;
 
         public Task<ImageEditCallResult<ImageEditQuoteDto>> QuoteAsync(
             string ownerId, string projectId, ImageEditQuoteRequest request, CancellationToken ct) =>
@@ -42,6 +43,7 @@ public class ImageEditorControllerTests : IDisposable
         public Task<ImageEditCallResult<ImageEditJobCreatedDto>> StartAsync(
             string ownerId, string projectId, ImageEditJobInput input, CancellationToken ct)
         {
+            LastInput = input;
             if (input.QuoteId != "q-1")
                 return Task.FromResult(ImageEditCallResult<ImageEditJobCreatedDto>.Fail(
                     ImageEditErrorCodes.QuoteNotFound, "Котировка устарела"));
@@ -342,6 +344,43 @@ public class ImageEditorControllerTests : IDisposable
         error.GetProperty("code").GetString().Should().Be(ImageEditErrorCodes.InvalidRequest);
         error.GetProperty("error").GetString().Should().Contain("вне папки проекта");
         saver.Calls.Should().BeEmpty("путь вне проекта не должен дойти до записи файла");
+    }
+
+    [Fact]
+    public async Task Запуск_пропорции_из_формы_доходят_до_исполнителя()
+    {
+        var jobs = new FakeJobs();
+        var factory = Factory([new FakeImageEditor("fal", models: FakeImageEditor.Model("m"))], jobs);
+        EnableFlag(factory, TestWebApplicationFactory.TestUsername);
+        var projectId = CreateProject(factory, TestWebApplicationFactory.TestUsername);
+        var client = factory.CreateAuthenticatedClient();
+
+        var form = JobForm();
+        form.Add(new StringContent("16:9"), "aspectRatio");
+        var resp = await client.PostAsync($"/api/projects/{projectId}/image-editor/jobs", form);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        jobs.LastInput!.AspectRatio.Should().Be("16:9");
+    }
+
+    [Theory]
+    [InlineData("4:3")]
+    [InlineData("16:9; drop")]
+    public async Task Запуск_незнакомые_пропорции_400_и_задача_не_создаётся(string ratio)
+    {
+        var jobs = new FakeJobs();
+        var factory = Factory([new FakeImageEditor("fal", models: FakeImageEditor.Model("m"))], jobs);
+        EnableFlag(factory, TestWebApplicationFactory.TestUsername);
+        var projectId = CreateProject(factory, TestWebApplicationFactory.TestUsername);
+        var client = factory.CreateAuthenticatedClient();
+
+        var form = JobForm();
+        form.Add(new StringContent(ratio), "aspectRatio");
+        var resp = await client.PostAsync($"/api/projects/{projectId}/image-editor/jobs", form);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await Json(resp)).GetProperty("code").GetString().Should().Be(ImageEditErrorCodes.InvalidRequest);
+        jobs.Jobs.Should().BeEmpty();
     }
 
     [Theory]

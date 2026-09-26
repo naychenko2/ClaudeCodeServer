@@ -91,23 +91,41 @@ public static class EditRequestComposer
             }
         }
 
+        // Роль у каждой картинки своя и по её номеру: фото персонажа — одной строкой на диапазон,
+        // иначе модель рисует по человеку на каждое фото (живой прогон 2026-09-26, Qwen-Image:
+        // три фото — три одинаковых человека на скамейке)
         var userRefs = input.References ?? [];
-        references.AddRange(userRefs);
-        if (userRefs.Count > 0)
-            roles.Add(userRefs.Count == 1 ? "образец для правки" : $"ещё {userRefs.Count} — образцы для правки");
-
-        // Нумерация ролей имеет смысл, только если картинок больше одной
-        if (roles.Count > 1)
-            notes.Add(Roles(roles, references.Any(r => r.Label is AnnotatedLabel or MaskLabel),
-                split ? SecondPassNote : null));
-
-        if (input.Character is { } character)
+        var character = input.Character;
+        // Модель, которая рисует по человеку на фото, получает лишь первые (primary идёт первым)
+        var facePhotos = character is null ? [] : userRefs.Where(r => r.Role == ReferenceRole.Character)
+            .Take(model.Caps.MaxCharacterPhotos is > 0 and var max ? max : int.MaxValue).ToList();
+        var otherRefs = userRefs.Where(r => character is null || r.Role != ReferenceRole.Character).ToList();
+        var faces = facePhotos.Count;
+        var others = otherRefs.Count;
+        references.AddRange(facePhotos);
+        references.AddRange(otherRefs);
+        for (var i = 0; i < roles.Count; i++) roles[i] = $"{i + 1}) {roles[i]}";
+        var next = roles.Count + 1;
+        if (faces > 0)
         {
-            var who = string.IsNullOrWhiteSpace(character.Description)
+            var who = string.IsNullOrWhiteSpace(character!.Description)
                 ? character.Name
                 : $"{character.Name}: {character.Description.Trim()}";
-            notes.Insert(0, $"Образцы «{character.Name}» — один и тот же человек ({who}): сохранить лицо и черты.");
+            roles.Add($"{Range(next, faces)}) {(faces == 1 ? "фото лица" : $"{faces} фото лица одного и того же человека с разных ракурсов")} — " +
+                      $"персонаж «{character.Name}» ({who}); сохранить его лицо и черты. " +
+                      (faces == 1 ? "Это образец внешности, в результат его фон и позу не переносить"
+                                  : "Это образцы внешности, а не разные люди: на результате он один, повторять его по числу фото нельзя"));
+            next += faces;
         }
+        if (others > 0)
+            roles.Add($"{Range(next, others)}) {(others == 1 ? "образец для правки" : "образцы для правки")}");
+
+        // Нумерация ролей имеет смысл, только если картинок больше одной
+        if (roles.Count > 1 || faces > 0)
+            notes.Add(Roles(roles, references.Any(r => r.Label is AnnotatedLabel or MaskLabel),
+                split ? SecondPassNote : null));
+        else if (character is not null)
+            notes.Add($"Персонаж «{character.Name}»: сохранить лицо и черты.");
 
         var marks = pureInpaint ? "" : EditMarksPrompt.Describe(input.MarksJson, split ? MarksScope.WithoutBrush : MarksScope.All);
         var prompt = Join(input.Prompt, marks, notes);
@@ -117,7 +135,7 @@ public static class EditRequestComposer
         var maskPass = split
             ? new ImageEditRequest(ImageEditOp.Inpaint,
                 Join(input.Prompt, EditMarksPrompt.Describe(input.MarksJson, MarksScope.BrushOnly),
-                    [Roles(["исходная картинка, её и нужно править", MaskRole], true, FirstPassNote)]),
+                    [Roles(["1) исходная картинка, её и нужно править", $"2) {MaskRole}"], true, FirstPassNote)]),
                 source, null, [new ReferenceImage(mask!.Bytes, mask.ContentType, ReferenceRole.Object, MaskLabel)],
                 1, null, null, model.Id, null)
             : null;
@@ -137,10 +155,12 @@ public static class EditRequestComposer
         "Это второй шаг правки: закрашенное кистью место уже обработано, его не трогать и не возвращать как было. " +
         "Выполнить только ту часть запроса, которая относится к стрелкам, рамкам и подписям.";
 
+    private static string Range(int from, int count) => count == 1 ? $"{from}" : $"{from}–{from + count - 1}";
+
     private static string Roles(IReadOnlyList<string> roles, bool marked, string? pass)
     {
         var sb = new System.Text.StringBuilder("Картинки в запросе:");
-        for (var i = 0; i < roles.Count; i++) sb.Append($"\n{i + 1}) {roles[i]}");
+        foreach (var role in roles) sb.Append('\n').Append(role);
         if (pass is not null) sb.Append('\n').Append(pass);
         if (marked) sb.Append("\nМенять только отмеченные места первой картинки, всё остальное оставить как есть.");
         return sb.ToString();

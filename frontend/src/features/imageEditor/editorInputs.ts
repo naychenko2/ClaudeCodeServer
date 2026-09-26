@@ -43,6 +43,23 @@ export function samplesToJobInput(samples: Sample[]): {
   return { references, referencePaths };
 }
 
+// Образцы из состояния агента: в нём только образцы из проекта, так что его список — полная
+// правда о них. Образца проекта нет у агента — убран; новый — дописывается в конец. Образцы
+// с компьютера агент не видит и не трогает, порядок у пользователя сохраняется
+export function applyAgentReferences(
+  list: Sample[],
+  refs: ImageEditProjectReference[],
+  make: (ref: ImageEditProjectReference) => Sample,
+): Sample[] {
+  const kept = list.flatMap((s): Sample[] => {
+    if (s.source === 'upload') return [s];
+    const r = refs.find(x => x.path === s.path);
+    return r ? [{ ...s, role: r.role }] : [];
+  });
+  const added = refs.filter(r => !list.some(s => s.source === 'project' && s.path === r.path)).map(make);
+  return [...kept, ...added];
+}
+
 // ── Быстрые действия ──
 
 export type QuickAction = 'removeBackground' | 'upscale' | 'removeMarked' | 'outpaint' | 'enhanceFaces';

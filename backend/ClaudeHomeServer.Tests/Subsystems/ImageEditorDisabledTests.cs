@@ -100,6 +100,9 @@ public class ImageEditorDisabledTests : IDisposable
     [InlineData("POST", "chats")]
     [InlineData("GET", "chats?path=images/hero.png")]
     [InlineData("PUT", "chats/any/path")]
+    [InlineData("GET", "chats/any/state")]
+    [InlineData("PUT", "chats/any/state")]
+    [InlineData("POST", "save")]
     public async Task Ручки_редактора_при_выключенном_модуле_404_а_не_500(string method, string tail)
     {
         CharacterEndpointsTests.EnableFlag(_disabled, TestWebApplicationFactory.TestUsername);

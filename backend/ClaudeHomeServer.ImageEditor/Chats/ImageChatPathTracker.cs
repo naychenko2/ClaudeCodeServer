@@ -50,9 +50,11 @@ public sealed class ImageChatPathTracker(
         foreach (var session in directory.GetAll())
         {
             if (session.ImageChat is not { } chat || session.ProjectId is not { } pid || !projectIds.Contains(pid)) continue;
-            var current = Move(chat.CurrentPath, from, to);
+            // У черновика файла ещё нет — переписывать нечего
+            if (chat.CurrentPath is not { } currentPath) continue;
+            var current = Move(currentPath, from, to);
             var lineage = chat.Lineage.Select(p => Move(p, from, to)).ToList();
-            if (current == chat.CurrentPath && lineage.SequenceEqual(chat.Lineage)) continue;
+            if (current == currentPath && lineage.SequenceEqual(chat.Lineage)) continue;
             chats!.RewritePaths(session.Id, current, lineage);
         }
     }

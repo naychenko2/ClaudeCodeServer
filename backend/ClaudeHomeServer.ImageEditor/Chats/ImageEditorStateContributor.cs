@@ -40,17 +40,23 @@ public sealed class ImageEditorStateContributor(
         var (state, fresh) = store.TakeForTurn(ownerId, session.Id);
         var text = Render(chat.CurrentPath, state, fresh, jobId => session.ProjectId is { } projectId
             ? jobs?.Get(ownerId, projectId, jobId)
-            : null);
+            : null, chat.DraftFolder);
         return Task.FromResult<PromptSectionContribution?>(new PromptSectionContribution(
             [new PromptSection(Key, text, Title, InTurnTail: true)]));
     }
 
-    public static string Render(string currentPath, ImageChatState state, IReadOnlyList<ImageChatEvent> fresh,
-        Func<string, ImageEditJobDto?> job)
+    // currentPath == null — черновик «Нарисовать картинку»: файла ещё нет, есть папка назначения
+    public static string Render(string? currentPath, ImageChatState state, IReadOnlyList<ImageChatEvent> fresh,
+        Func<string, ImageEditJobDto?> job, string? draftFolder = null)
     {
         var sb = new StringBuilder();
         sb.AppendLine("## Состояние редактора картинки");
-        sb.AppendLine($"Файл: {currentPath}");
+        sb.AppendLine(currentPath is { Length: > 0 } ? $"Файл: {currentPath}"
+            : state.CurrentStepId is { Length: > 0 }
+                ? $"Файл: ещё не сохранён — новая картинка уже открыта в редакторе, человек сохранит её в "
+                  + $"{DraftFolderText(draftFolder)}. image_generate правит открытую картинку"
+                : $"Файл: картинки ещё нет — это новая картинка, человек сохранит её в {DraftFolderText(draftFolder)}. "
+                  + "image_generate нарисует её по тексту");
         sb.AppendLine(string.IsNullOrWhiteSpace(state.Prompt)
             ? "Промпт: пусто"
             : $"Промпт ({(state.PromptAuthor == ImageEditInitiator.Agent ? "написал ты" : "написал человек")}): «{state.Prompt.Trim()}»");
@@ -76,6 +82,9 @@ public sealed class ImageEditorStateContributor(
         }
         return sb.ToString().TrimEnd();
     }
+
+    public static string DraftFolderText(string? folder) =>
+        string.IsNullOrEmpty(folder) ? "корень проекта" : $"папку {folder}";
 
     private static string Outcome(ImageEditJobDto? job) => job switch
     {

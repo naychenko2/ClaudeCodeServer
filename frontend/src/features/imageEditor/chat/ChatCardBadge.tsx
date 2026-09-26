@@ -9,12 +9,16 @@ export function ImageChatCardBadge({ ctx }: { ctx: ChatCardBadgeCtx }) {
   const enabled = useFeature(FLAGS.imageEditor);
   const { session } = ctx;
   const path = session.imageChat?.currentPath;
-  if (!enabled || !path || !session.projectId) return null;
+  // Черновик «Нарисовать картинку»: миниатюры ещё нет, метка — есть
+  const draft = !path && session.imageChat?.draftFolder != null;
+  if (!enabled || (!path && !draft) || !session.projectId) return null;
   return (
     <>
-      <img data-image-chat-thumb="" src={appApi.files.fileUrl(session.projectId, path)} alt="" loading="lazy"
-        style={{ width: 18, height: 18, borderRadius: R.sm, objectFit: 'cover', flexShrink: 0, background: C.bgInset }} />
-      <span data-image-chat-tag="" title={`Чат картинки ${path}: откроется в редакторе`} style={{
+      {path && (
+        <img data-image-chat-thumb="" src={appApi.files.fileUrl(session.projectId, path)} alt="" loading="lazy"
+          style={{ width: 18, height: 18, borderRadius: R.sm, objectFit: 'cover', flexShrink: 0, background: C.bgInset }} />
+      )}
+      <span data-image-chat-tag="" title={path ? `Чат картинки ${path}: откроется в редакторе` : 'Новая картинка: откроется в редакторе'} style={{
         flexShrink: 0, fontSize: FS.xs, lineHeight: 1, padding: '2px 6px', borderRadius: R.sm,
         background: C.accentLight, color: C.accent, whiteSpace: 'nowrap',
       }}>

@@ -146,6 +146,19 @@ describe('мок чатов картинки', () => {
     expect((await api.findChats('other', 'images/hero.v2.png')).current).toBeNull();
   });
 
+  it('черновик по папке: без файла, первое сохранение с chatSessionId привязывает к файлу', async () => {
+    const api = createMockApi('fal');
+    const chat = await api.createChat(P, { folder: 'images' });
+    expect(chat.name).toBe('Новая картинка · images');
+    expect(chat.imageChat).toEqual({ currentPath: null, draftFolder: 'images', lineage: [] });
+
+    const jobId = await mockJob(api);
+    const { path } = await api.save(P, { jobId, variant: 0, mode: 'next-version', folder: 'images', fileName: 'кот.png', chatSessionId: chat.id });
+    expect(path).toBe('images/кот.png');
+    const found = await api.findChats(P, 'images/кот.png');
+    expect(found.current?.imageChat).toEqual({ currentPath: 'images/кот.png', lineage: [] });
+  });
+
   it('состояние: запись со старой revision — 409', async () => {
     const api = createMockApi('fal');
     const chat = await api.createChat(P, { sourcePath: 'hero.png' });

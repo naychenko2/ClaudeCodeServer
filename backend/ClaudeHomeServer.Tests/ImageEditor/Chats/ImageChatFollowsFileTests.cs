@@ -138,6 +138,37 @@ public class ImageChatFollowsFileTests : IDisposable
         (await Continued("images/hero.png")).Should().Equal([chat.Id], "по старому пути чат находится через Lineage");
     }
 
+    // Черновик «Нарисовать картинку»: первое сохранение с чатом привязывает его к новому файлу
+    [Theory]
+    [InlineData("next-version")]
+    [InlineData("as")]
+    public async Task Первое_сохранение_черновика_привязывает_чат_к_файлу(string mode)
+    {
+        Directory.CreateDirectory(Path.Combine(_root, "art"));
+        var resp = await _client.PostAsJsonAsync($"{Editor()}/chats", new { folder = "art" });
+        resp.StatusCode.Should().Be(HttpStatusCode.Created, await resp.Content.ReadAsStringAsync());
+        var chat = Sessions.GetById((await Json(resp)).GetProperty("id").GetString()!)!;
+        chat.ClaudeSessionId = Guid.NewGuid().ToString();
+        chat.ImageChat!.CurrentPath.Should().BeNull();
+
+        var save = await _client.PostAsJsonAsync($"{Editor()}/save",
+            new { jobId = OneVariantJobs.JobId, variant = 1, folder = "art", fileName = "cat", mode, chatSessionId = chat.Id });
+
+        save.StatusCode.Should().Be(HttpStatusCode.OK, await save.Content.ReadAsStringAsync());
+        var path = (await Json(save)).GetProperty("path").GetString()!;
+        path.Should().StartWith("art/cat");
+        chat.ImageChat.CurrentPath.Should().Be(path);
+        chat.ImageChat.DraftFolder.Should().BeNull("черновик стал чатом по файлу");
+        chat.ImageChat.Lineage.Should().BeEmpty("до первого сохранения файла не было");
+        var moved = (await Sessions.GetHistoryAsync(chat.Id)).OfType<StoredImageFileMovedMessage>()
+            .Should().ContainSingle().Subject;
+        moved.From.Should().BeEmpty();
+        moved.To.Should().Be(path);
+
+        var found = await _client.GetAsync($"{Editor()}/chats?path={Uri.EscapeDataString(path)}");
+        (await Json(found)).GetProperty("current").GetProperty("id").GetString().Should().Be(chat.Id);
+    }
+
     [Fact]
     public async Task Чужой_и_обычный_чат_в_save_файл_сохранён_чат_не_тронут_ответ_тот_же()
     {

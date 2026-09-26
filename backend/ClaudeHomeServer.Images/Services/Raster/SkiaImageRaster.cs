@@ -94,16 +94,24 @@ public sealed class SkiaImageRaster : IImageRaster
         {
             using (bitmap)
             {
-                // Маска маленькая и уже проверена по размеру вызывающим: декодируем её без второго
-                // места в семафоре — вложенный Run мог бы упереться в собственный потолок
+                // Маску декодируем без второго места в семафоре — вложенный Run мог бы упереться в
+                // собственный потолок. Зато потолок мегапикселей и сверка размера — по заголовку, до
+                // декодирования: маленький файл маски может развернуться в гигабайты пикселей
                 using var codec = CreateCodec(mask)
                     ?? throw new RasterFailure(RasterError.Unsupported, "Формат маски не распознан");
+                var header = codec.Info;
+                if ((long)header.Width * header.Height > _maxPixels)
+                    throw new RasterFailure(RasterError.TooLarge,
+                        $"Маска слишком большая: {header.Width}×{header.Height}, потолок — {_maxPixels / 1_000_000} Мп");
+                var (maskWidth, maskHeight) = (int)codec.EncodedOrigin is >= 5 and <= 8
+                    ? (header.Height, header.Width)
+                    : (header.Width, header.Height);
+                if (maskWidth != bitmap.Width || maskHeight != bitmap.Height)
+                    throw new RasterFailure(RasterError.InvalidOp,
+                        $"Размер маски {maskWidth}×{maskHeight} не совпадает с картинкой {bitmap.Width}×{bitmap.Height}");
                 var decoded = Decode(codec, unpremul: true);
                 using var maskBitmap = Orient(decoded, codec.EncodedOrigin);
                 if (!ReferenceEquals(maskBitmap, decoded)) decoded.Dispose();
-                if (maskBitmap.Width != bitmap.Width || maskBitmap.Height != bitmap.Height)
-                    throw new RasterFailure(RasterError.InvalidOp,
-                        $"Размер маски {maskBitmap.Width}×{maskBitmap.Height} не совпадает с картинкой {bitmap.Width}×{bitmap.Height}");
 
                 var pixels = bitmap.GetPixelSpan();
                 var marks = maskBitmap.GetPixelSpan();
@@ -153,6 +161,12 @@ public sealed class SkiaImageRaster : IImageRaster
         catch (RasterFailure f)
         {
             return RasterOutcome.Fail(f.Error, f.Message);
+        }
+        // Контракт IImageRaster — ошибки ответом, а не исключением: сбой Skia, нехватка памяти
+        // или битый вход не должны превращаться у вызывающего в 500
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return RasterOutcome.Fail(RasterError.Unsupported, "Картинку не удалось обработать: " + ex.GetType().Name);
         }
         finally
         {

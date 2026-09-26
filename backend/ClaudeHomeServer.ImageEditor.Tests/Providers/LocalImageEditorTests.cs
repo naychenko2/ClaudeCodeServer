@@ -246,4 +246,98 @@ public class LocalImageEditorTests : IDisposable
         job.Charged.Should().BeFalse();
         _spend.Records.Should().BeEmpty("задача не принята — учитывать нечего");
     }
+
+    // ── Персонаж (живой прогон 2026-09-26: три фото — три одинаковых человека в кадре) ──
+
+    private static readonly CharacterRef Timur = new("timur", "Тимур", null);
+
+    private static List<ReferenceImage> Faces(int n) =>
+        [.. Enumerable.Range(0, n).Select(i => new ReferenceImage(TestImages.Png(8, 8, (byte)(40 + i)), "image/png",
+            ReferenceRole.Character, "Тимур"))];
+
+    private static ImageEditQuoteRequest CharacterQuote(ImageEditOp op, bool mask = false, bool annotations = false) =>
+        new(LocalImageEditor.ProviderKey, "auto", EditMode.Auto, op, 1, mask, 0, true, null, null, annotations);
+
+    [Fact]
+    public async Task ПерсонажПоТексту_УходитОднимФото_ВПравкуНаПустомХолсте()
+    {
+        var media = new FakeMedia();
+        var service = Service(Editor(media));
+        var faces = Faces(3);
+
+        var job = await RunAsync(service, CharacterQuote(ImageEditOp.Generate),
+            new ImageEditJobInput("", "Тимур сидит в кафе", null, null, null, null, faces, null, Timur));
+
+        job.Status.Should().Be(ImageEditJobStatus.Completed, job.Error);
+        var sent = media.Submitted.Should().ContainSingle().Subject;
+        sent.Op.Should().Be(LocalImageOp.Generate, "с образцами адаптер строит граф правки на пустом холсте");
+        sent.Images.Should().ContainSingle("Qwen-Image рисует по человеку на каждое фото")
+            .Which.Should().Equal(faces[0].Bytes, "первым идёт primary-фото");
+        sent.Prompt.Should().Contain("1) фото лица — персонаж «Тимур»").And.Contain("сохранить его лицо и черты");
+    }
+
+    [Fact]
+    public async Task ПерсонажПоТексту_ВремяСчитаетФотоПерсонажа()
+    {
+        var service = Service(Editor(new FakeMedia()));
+
+        var quote = await service.QuoteAsync("user-a", Project, CharacterQuote(ImageEditOp.Generate), default);
+
+        quote.Value!.Estimate.EtaSeconds.Should().Be(60, "фото персонажа — прогон графа правки, а не генерации по тексту (40)");
+    }
+
+    [Fact]
+    public async Task ПерсонажИПометки_ПорядокИсходникКопияМаскаФото_РолиПоНомерам()
+    {
+        var media = new FakeMedia();
+        var service = Service(Editor(media));
+        var source = TestImages.Png(8, 8, 1);
+        var annotated = TestImages.Png(8, 8, 2);
+        var mask = TestImages.Png(8, 8, 3);
+        var faces = Faces(3);
+
+        var job = await RunAsync(service, CharacterQuote(ImageEditOp.Edit, mask: true, annotations: true),
+            new ImageEditJobInput("", "поставь сюда Тимура", null, new ImageBytes(source, "image/png"),
+                new ImageBytes(mask, "image/png"), new ImageBytes(annotated, "image/png"), faces, "images/hero.png", Timur));
+
+        job.Status.Should().Be(ImageEditJobStatus.Completed, job.Error);
+        var sent = media.Submitted.Should().ContainSingle().Subject;
+        sent.Images.Should().HaveCount(4);
+        sent.Images[0].Should().Equal(source, "холст — исходник, а не фото персонажа");
+        sent.Images[1].Should().Equal(annotated);
+        sent.Images[2].Should().Equal(mask);
+        sent.Images[3].Should().Equal(faces[0].Bytes);
+        sent.Prompt.Should().Contain("1) исходная картинка").And.Contain("2) та же картинка с пометками")
+            .And.Contain("3) маска").And.Contain("4) фото лица — персонаж «Тимур»");
+    }
+
+    [Fact]
+    public async Task БольшеШестнадцатиКартинок_ЧестныйОтказДоОчереди()
+    {
+        var media = new FakeMedia();
+        var refs = Faces(16);
+        var request = new ImageEditRequest(ImageEditOp.Edit, "поставь сюда Тимура",
+            new ImageBytes(TestImages.Png(8, 8), "image/png"), null, refs, 1, null, null, LocalImageEditor.QwenImage, Timur);
+
+        var result = await Editor(media).RunAsync(request, new Progress<EditProgress>(), default);
+
+        result.Outcome.Should().Be(EditOutcome.Failed);
+        result.Error.Should().Contain("не больше 16 картинок").And.Contain("в запросе 17");
+        media.Submitted.Should().BeEmpty("молча обрезать нельзя — пропал бы персонаж или образец");
+    }
+
+    // У модели без потолка (nano-banana) фото персонажа едут все, одной ролью на диапазон
+    [Fact]
+    public void Композер_БезПотолкаФото_ВсеФотоОднойРолью()
+    {
+        var model = new ImageEditModelInfo("nano", "Nano",
+            new ImageEditCaps([ImageEditOp.Edit], MaskSupport.AsReference, 6, 4, true));
+        var input = new ImageEditJobInput("", "поставь сюда Тимура", null, new ImageBytes(TestImages.Png(8, 8), "image/png"),
+            null, null, Faces(3), null, Timur);
+
+        var request = EditRequestComposer.Compose(input, ImageEditOp.Edit, model, 1).Value!;
+
+        request.References.Should().HaveCount(3);
+        request.Prompt.Should().Contain("2–4) 3 фото лица одного и того же человека").And.Contain("на результате он один");
+    }
 }

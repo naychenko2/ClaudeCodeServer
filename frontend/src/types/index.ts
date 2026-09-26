@@ -728,7 +728,9 @@ export interface FeatureFlagDefinition {
 
 // Привязка чата картинки к файлу проекта (ADR-018 §1). Пути — от корня проекта через «/»
 export interface SessionImageChat {
-  currentPath: string;
+  // null — чат-черновик «Нарисовать картинку»: файла ещё нет, есть папка назначения
+  currentPath: string | null;
+  draftFolder?: string | null;
   // Прежние пути, старые первыми: по ним поиск отдаёт «разговор продолжился на новой версии»
   lineage: string[];
 }

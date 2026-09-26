@@ -22,10 +22,15 @@ export function money(amount: number, unit: string): string {
   return `${n} ${plural(n, 'кредит', 'кредита', 'кредитов')}`;
 }
 
-// «≈ $0.12 · 3 варианта»; сумма неизвестна — честно так и пишем
+// Только сумма: «≈ $0.12»; сумма неизвестна — честно так и пишем
+export function priceSum(amount: number | null | undefined, unit: string, approx: boolean): string {
+  if (amount == null) return 'Цена станет известна после запуска';
+  return `${approx ? '≈ ' : ''}${money(amount, unit)}`;
+}
+
+// «≈ $0.12 · 3 варианта»
 export function priceText(amount: number | null | undefined, unit: string, approx: boolean, count: number): string {
-  if (amount == null) return `Цена станет известна после запуска · ${variantsWord(count)}`;
-  return `${approx ? '≈ ' : ''}${money(amount, unit)} · ${variantsWord(count)}`;
+  return `${priceSum(amount, unit, approx)} · ${variantsWord(count)}`;
 }
 
 export const providerHint = (p: ImageEditProvider) =>

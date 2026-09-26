@@ -16,9 +16,14 @@ import { ModelsSpendModal } from '../../features/modelsSpend/ModelsSpendModal';
 import { AUTO_MODEL, imageEditorApi, type ImageEditCatalog, type ImageEditCatalogReason, type ImageEditQuoteRequest } from '../../api/imageEditor';
 import { EditorCanvas } from './EditorCanvas';
 import { exportAnnotated, exportMask, hasAnnotationMark, hasMaskMark, marksToJson, type Mark, type Tool } from './marks';
-import { effectiveProvider, isRemovalPrompt, modelBlockReason, money, nextVersionName, pickOp, plural, priceText, splitPath, variantsWord, type ProviderChoice } from './format';
+import { effectiveProvider, isRemovalPrompt, modelBlockReason, money, nextVersionName, pickOp, plural, priceSum, priceText, splitPath, variantsWord, type ProviderChoice } from './format';
 import { currentModel, ProviderModelPicker } from './ProviderModelPicker';
-import { EditorSections, MarksTools, MobileToolbar, SectionHint, SoonBadge, useEditorSections, type EditorSection } from './EditorSections';
+import { EditorSections, MarksTools, MobileToolbar, SectionHint, useEditorSections, type EditorSection } from './EditorSections';
+import { HistorySteps, ProjectImagePicker, QuickActions, SamplesSection } from './PanelSections';
+import {
+  actionTitle, currentSrc, EMPTY_HISTORY, goToStep, maxSamples, panelJobInput, pushStep, quickBlockReason, quickPlan,
+  type History, type LaunchAction, type LaunchPlan, type OutpaintRatio, type QuickAction, type Sample,
+} from './editorInputs';
 import { PromptCard } from './PromptCard';
 import { useQuote } from './useQuote';
 import { useImageEditJob } from './useImageEditJob';
@@ -50,9 +55,13 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
 
   const initial = target.kind === 'edit' ? splitPath(target.path) : { folder: target.folder, name: 'новая-картинка.png' };
   const [sourcePath, setSourcePath] = useState<string | null>(target.kind === 'edit' ? target.path : null);
-  const [src, setSrc] = useState<string | null>(target.kind === 'edit' ? appApi.files.fileUrl(projectId, target.path) : null);
-  // Нарисованное с нуля до «Взять за основу» не с чем сравнивать
-  const [hasBefore, setHasBefore] = useState(target.kind === 'edit');
+  // История шагов: оригинал и каждое «Взять за основу». Холст показывает текущий шаг,
+  // его же байты уходят в генерацию. Нарисованное с нуля до первого шага не с чем сравнивать
+  const [history, setHistory] = useState<History>(() => target.kind === 'edit'
+    ? { steps: [{ id: 'original', original: true, title: 'Оригинал', src: appApi.files.fileUrl(projectId, target.path) }], cur: 0 }
+    : EMPTY_HISTORY);
+  const src = currentSrc(history);
+  const stepSeq = useRef(0);
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
 
@@ -70,6 +79,12 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
   const [saveOpen, setSaveOpen] = useState(false);
   const [savedPath, setSavedPath] = useState<string | null>(null);
   const [savedJobId, setSavedJobId] = useState<string | null>(null);
+
+  const [samples, setSamples] = useState<Sample[]>([]);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [ratio, setRatio] = useState<OutpaintRatio>('16:9');
+  // Что запускали последним: «Ещё варианты», повтор после ошибки и заголовок шага истории
+  const lastAction = useRef<LaunchAction>({ kind: 'prompt', prompt: '' });
 
   const chars = useCharacters(api, projectId);
   const charDialogs = useCharacterDialogs(api, projectId, chars);
@@ -111,11 +126,15 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
   const removal = hasMask && isRemovalPrompt(prompt);
   const pv = catalog ? effectiveProvider(catalog, provider) : null;
   const m = currentModel(pv, model);
-  const blocked = m ? modelBlockReason(m, hasImage, hasMask) : '';
+  const notConfigured = !!catalog && !catalog.providers.length;
+  const explicitModel = m && m.id !== AUTO_MODEL ? m : null;
+  const samplesMax = maxSamples(catalog?.limits.maxReferences ?? 6, explicitModel?.caps?.maxReferences);
+  const blocked = (m ? modelBlockReason(m, hasImage, hasMask) : '')
+    || (samples.length > samplesMax ? `Модель берёт не больше ${samplesMax} ${plural(samplesMax, 'образца', 'образцов', 'образцов')} — уберите лишние` : '');
 
   const quoteReq: ImageEditQuoteRequest | null = pv && m && !blocked ? {
     provider: pv.key, model: m.id, mode: 'auto', op: pickOp(hasImage, hasMask), count,
-    hasMask, hasAnnotations, removal, references: 0, hasCharacter: !!character, width: size?.w ?? null, height: size?.h ?? null,
+    hasMask, hasAnnotations, removal, references: samples.length, hasCharacter: !!character, width: size?.w ?? null, height: size?.h ?? null,
   } : null;
   const { quote, error: quoteError, loading: quoteLoading } = useQuote(api, projectId, quoteReq);
 
@@ -124,6 +143,9 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
     ? priceText(quote.estimate.amount, unit, quote.estimate.approx, count)
     // Пока котировка едет — ориентир из каталога, чтобы цена не мигала
     : m?.priceHint ? priceText(m.priceHint.amount * count, m.priceHint.unit, true, count) : `… · ${variantsWord(count)}`;
+  const priceSumLabel = quote
+    ? priceSum(quote.estimate.amount, unit, quote.estimate.approx)
+    : m?.priceHint ? priceSum(m.priceHint.amount * count, m.priceHint.unit, true) : '…';
 
   const onProvider = (p: ProviderChoice) => {
     // Сменился поставщик — модель сбрасывается на «Авто»: список моделей у него свой
@@ -133,15 +155,26 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
 
   const canGenerate = !!quote && !quoteLoading && !blocked && !busy && (hasImage || !!prompt.trim());
 
-  const generate = useCallback(async (n: number = count) => {
+  const planOf = useCallback((a: LaunchAction): LaunchPlan => (a.kind === 'prompt'
+    ? { op: pickOp(hasImage, hasMask), prompt: a.prompt, useMask: true, removal }
+    : quickPlan(a.kind, a.kind === 'outpaint' ? a.ratio ?? ratio : ratio)), [hasImage, hasMask, removal, ratio]);
+
+  // Запуск по промпту или быстрым действием. Быстрое действие — своя операция, поэтому
+  // котировка у него всегда свежая
+  const launch = useCallback(async (action: LaunchAction, n: number = count) => {
     if (!pv || !m) return;
-    let q = quote;
+    const plan = planOf(action);
+    const withMask = plan.useMask && hasMask;
+    // Стрелки и подписи поясняют правку по промпту; фону, качеству и краям они ни к чему
+    const withMarks = action.kind === 'prompt' || action.kind === 'removeMarked';
+    let q = action.kind === 'prompt' ? quote : null;
     // Другое число вариантов («Нарисовать 1 вариант») или протухшая котировка — берём свежую
     if (!q || n !== count || Date.parse(q.expiresAt) - Date.now() < 30_000) {
       q = await api.quote(projectId, {
-        provider: pv.key, model: m.id, mode: 'auto', op: pickOp(hasImage, hasMask), count: n,
-        hasMask, hasAnnotations, removal, references: 0, hasCharacter: !!character, width: size?.w ?? null, height: size?.h ?? null,
-      }).catch(() => null);
+        provider: pv.key, model: m.id, mode: 'auto', op: plan.op, count: n,
+        hasMask: withMask, hasAnnotations: withMarks && hasAnnotations, removal: plan.removal, references: samples.length,
+        hasCharacter: !!character, width: size?.w ?? null, height: size?.h ?? null,
+      }).catch((e: Error) => { showToast(e.message, '', 'error'); return null; });
       if (!q) return;
     }
     let source: Blob | undefined;
@@ -149,16 +182,70 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
     let annotated: Blob | undefined;
     if (src && size) {
       source = await fetch(src).then(r => r.blob()).catch(() => undefined);
-      mask = (await exportMask(marks, size.w, size.h)) ?? undefined;
-      if (imgRef.current) annotated = (await exportAnnotated(imgRef.current, marks, size.w, size.h).catch(() => null)) ?? undefined;
+      if (withMask) mask = (await exportMask(marks, size.w, size.h)) ?? undefined;
+      if (withMarks && imgRef.current) annotated = (await exportAnnotated(imgRef.current, marks, size.w, size.h).catch(() => null)) ?? undefined;
     }
+    lastAction.current = action;
     setSelected(-1);
     await job.start({
-      quoteId: q.quoteId, prompt: prompt.trim(),
-      marks: marks.length && size ? marksToJson(marks, size.w, size.h) : undefined,
+      quoteId: q.quoteId, prompt: plan.prompt.trim(),
+      marks: withMarks && marks.length && size ? marksToJson(marks, size.w, size.h) : undefined,
       sourcePath: sourcePath ?? undefined, source, mask, annotated, characterSlug: character?.slug,
+      ...panelJobInput(samples, plan),
     }, n, q.expectedSeconds);
-  }, [api, projectId, pv, m, quote, count, hasImage, hasMask, hasAnnotations, removal, size, src, marks, prompt, sourcePath, character, job]);
+  }, [api, projectId, pv, m, quote, count, planOf, hasMask, hasAnnotations, size, src, marks, sourcePath, character, samples, job]);
+
+  const generate = () => launch({ kind: 'prompt', prompt });
+  const runQuick = (a: QuickAction) => { setSheet(null); void launch(a === 'outpaint' ? { kind: a, ratio } : { kind: a }); };
+
+  const quickBlock = (a: QuickAction) => {
+    if (busy) return 'Идёт генерация';
+    if (!pv || !m || notConfigured) return 'Рисовать нечем — см. «Чем рисовать»';
+    return quickBlockReason(a, hasImage && !!size, hasMask, explicitModel?.caps?.ops ?? null)
+      || (samples.length > samplesMax ? blocked : '');
+  };
+
+  // ── Образцы ──
+  const samplesRef = useRef(samples);
+  samplesRef.current = samples;
+  // Уходя, отпускаем object URL образцов с компьютера
+  useEffect(() => () => samplesRef.current.forEach(s => { if (s.source === 'upload') URL.revokeObjectURL(s.url); }), []);
+
+  const addSampleFiles = (files: File[]) => {
+    const maxBytes = (catalog?.limits.maxFileMb ?? 20) * 1024 * 1024;
+    const ok = files.filter(f => /^image\/(png|jpeg|webp)$/.test(f.type) && f.size <= maxBytes);
+    if (ok.length < files.length) showToast('Образец — PNG, JPG или WebP до 20 МБ', '', 'error');
+    const room = Math.max(0, samplesMax - samples.length);
+    setSamples(list => [...list, ...ok.slice(0, room).map((f): Sample => ({
+      id: `u${++stepSeq.current}`, source: 'upload', name: f.name, role: 'object', file: f, url: URL.createObjectURL(f),
+    }))]);
+  };
+  const addSamplePaths = (paths: string[]) => {
+    const room = Math.max(0, samplesMax - samples.length);
+    const fresh = paths.filter(p => !samples.some(s => s.source === 'project' && s.path === p)).slice(0, room);
+    setSamples(list => [...list, ...fresh.map((p): Sample => ({
+      id: `p${++stepSeq.current}`, source: 'project', name: splitPath(p).name, role: 'object', path: p, url: appApi.files.fileUrl(projectId, p),
+    }))]);
+  };
+  const removeSample = (id: string) => setSamples(list => list.filter(s => {
+    if (s.id !== id) return true;
+    if (s.source === 'upload') URL.revokeObjectURL(s.url);
+    return false;
+  }));
+
+  // ── История шагов ──
+  const startFrom = (url: string) => {
+    setHistory({ steps: [{ id: `o${++stepSeq.current}`, original: true, title: 'Оригинал', src: url }], cur: 0 });
+    setSize(null);
+    setMarks([]);
+  };
+  const goStep = (i: number) => {
+    if (i === history.cur) return;
+    setHistory(h => goToStep(h, i));
+    // Размер подхватит холст, когда шаг загрузится
+    setSize(null);
+    setSheet(null);
+  };
 
   const startDiscuss = async () => {
     // Ручка обсуждения без картинки с пометками не работает: кнопка активна только при картинке
@@ -196,11 +283,11 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
 
   const takeAsBase = () => {
     if (!job.jobId) return;
-    setSrc(api.variantUrl(projectId, job.jobId, sel));
+    const url = api.variantUrl(projectId, job.jobId, sel);
+    setHistory(h => pushStep(h, { id: `s${++stepSeq.current}`, original: false, title: actionTitle(lastAction.current), src: url }));
     setSize(null);
     setMarks([]);
     setPrompt('');
-    setHasBefore(true);
     job.reset();
   };
 
@@ -229,9 +316,9 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
     const jobId = job.jobId;
     center = (
       <VariantsView variants={job.variants} variantUrl={n => api.variantUrl(projectId, jobId, n)}
-        before={hasBefore ? src : null} cost={job.cost} selected={sel}
+        before={src} cost={job.cost} selected={sel}
         onSelect={setSelected} onApply={() => setSaveOpen(true)} onBase={takeAsBase}
-        onMore={() => generate()} onBack={job.reset} mobile={mobile} />
+        onMore={() => { void launch(lastAction.current); }} onBack={job.reset} mobile={mobile} />
     );
   } else if (job.phase === 'error' && job.failure) {
     const perOne = quote?.estimate.amount != null ? quote.estimate.amount / Math.max(1, count) : null;
@@ -239,7 +326,8 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
       <ErrorView failure={job.failure} providerLabel={pv?.label ?? ''} priceUnit={unit}
         needText={quote?.estimate.amount != null ? priceLabel.replace(' · ', ', ') : null}
         oneVariantPrice={perOne != null ? `≈ ${money(perOne, unit)}` : null}
-        onRetry={() => generate()} onRetryOne={() => { setCount(1); generate(1); }} onEdit={job.reset} mobile={mobile} />
+        onRetry={() => { void launch(lastAction.current); }} onRetryOne={() => { setCount(1); void launch(lastAction.current, 1); }}
+        onEdit={job.reset} mobile={mobile} />
     );
   } else if (src) {
     center = (
@@ -248,11 +336,11 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
         onImageLoad={img => { imgRef.current = img; setSize({ w: img.naturalWidth, h: img.naturalHeight }); }} />
     );
   } else {
-    center = <DropZone folder={folder} mobile={mobile} onFile={f => { setSrc(URL.createObjectURL(f)); setSize(null); setMarks([]); }} />;
+    center = <DropZone folder={folder} mobile={mobile} onFile={f => startFrom(URL.createObjectURL(f))} />;
   }
 
-  const notConfigured = !!catalog && !catalog.providers.length;
   const marksOn = hasImage && job.phase === 'idle';
+  const doneSteps = history.steps.filter(x => !x.original).length;
 
   // ── Левая панель: шесть секций ──
   const sections: EditorSection[] = [
@@ -262,8 +350,13 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
       body: <MarksTools tool={tool} onTool={setTool} marksCount={marks.length} onClear={() => setMarks([])} disabled={!marksOn} />,
     },
     {
-      id: 'samples', title: 'Образцы', meta: <SoonBadge />,
-      body: <SectionHint>Модель возьмёт образец за пример. Роль — под миниатюрой: лицо, стиль или предмет. Картинку можно перетащить сюда из файлов.</SectionHint>,
+      id: 'samples', title: 'Образцы', meta: samples.length ? String(samples.length) : 'нет',
+      body: (
+        <SamplesSection samples={samples} max={samplesMax} disabled={busy}
+          onAddFiles={addSampleFiles} onAddPaths={addSamplePaths} onRemove={removeSample}
+          onRole={(id, role) => setSamples(list => list.map(x => (x.id === id ? { ...x, role } : x)))}
+          onPickProject={() => setPickerOpen(true)} />
+      ),
     },
     {
       id: 'chars', title: 'Персонажи',
@@ -277,8 +370,8 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
       ),
     },
     {
-      id: 'quick', title: 'Быстрые действия', meta: <SoonBadge />,
-      body: <SectionHint>Запускаются сразу, без промпта. Число вариантов и цена — как в поле промпта.</SectionHint>,
+      id: 'quick', title: 'Быстрые действия',
+      body: <QuickActions blockReason={quickBlock} ratio={ratio} onRatio={setRatio} onRun={runQuick} />,
     },
     {
       id: 'model', title: 'Чем рисовать',
@@ -298,8 +391,9 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
       ),
     },
     {
-      id: 'hist', title: 'История шагов', meta: <SoonBadge />,
-      body: <SectionHint>Здесь появятся шаги правки. На любой можно вернуться.</SectionHint>,
+      id: 'hist', title: 'История шагов',
+      meta: doneSteps ? `${doneSteps} ${plural(doneSteps, 'шаг', 'шага', 'шагов')}` : undefined,
+      body: <HistorySteps history={history} disabled={busy} onStep={goStep} />,
     },
   ];
   const toolPanel = <EditorSections sections={sections} open={sectionsState.open} onToggle={sectionsState.toggle} />;
@@ -307,8 +401,8 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
   // ── Поле промпта ──
   const promptCard = (
     <PromptCard prompt={prompt} onPrompt={setPrompt} busy={busy} busyCount={job.count} onCancel={job.cancel}
-      count={count} onCount={setCount} priceLabel={notConfigured ? null : priceLabel}
-      canGenerate={canGenerate} blockedReason={blocked} onGenerate={() => generate()} mobile={mobile}
+      count={count} onCount={setCount} priceSum={notConfigured ? null : priceSumLabel}
+      canGenerate={canGenerate} blockedReason={blocked} onGenerate={() => { void generate(); }} mobile={mobile}
       placeholder={character
         ? `Где и что делает ${character.name}? Например, «${character.name} сидит в кафе у окна»`
         : hasImage
@@ -420,6 +514,11 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
         </Modal>
       )}
       {charDialogs.dialog}
+      {pickerOpen && (
+        <ProjectImagePicker projectId={projectId}
+          taken={samples.flatMap(x => (x.source === 'project' ? [x.path] : []))}
+          onPick={p => { addSamplePaths([p]); setPickerOpen(false); }} onClose={() => setPickerOpen(false)} />
+      )}
       {providersOpen && <ModelsSpendModal initialTab="apply" onClose={() => setProvidersOpen(false)} />}
       {saveOpen && job.jobId && (
         <SaveDialog mode={sourcePath ? 'edit' : 'create'} sourcePath={sourcePath}

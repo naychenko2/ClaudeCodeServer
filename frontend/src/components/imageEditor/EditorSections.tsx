@@ -3,7 +3,7 @@
 
 import { useCallback, useState, type ReactNode } from 'react';
 import { Brush, Eraser, Hand, MoveUpRight, SquareDashed, Trash2, Type } from 'lucide-react';
-import { Badge, Button, IconButton, SidebarSection } from '../ui';
+import { Button, IconButton, SidebarSection } from '../ui';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { C, FS, R, SP } from '../../lib/design';
 import { parseSections, sectionsStorageKey, toggleSection, type SectionId, type SectionState } from './layout';
@@ -72,8 +72,6 @@ function SectionMeta({ children }: { children: ReactNode }) {
     </span>
   );
 }
-
-export const SoonBadge = () => <Badge tone="info" size="xs">Скоро</Badge>;
 
 export function SectionHint({ children }: { children: ReactNode }) {
   return <div style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.45 }}>{children}</div>;

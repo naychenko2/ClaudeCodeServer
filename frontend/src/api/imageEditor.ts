@@ -131,9 +131,43 @@ export interface ImageEditJobInput {
   annotated?: Blob;
   // Подключённый персонаж проекта: сервер добавит его фото образцами с ролью Character
   characterSlug?: string;
+  // Образцы с компьютера (байты) и из проекта (путь от корня) — у каждого своя роль
+  references?: ImageEditUploadedReference[];
+  referencePaths?: ImageEditProjectReference[];
+  // Пропорции «Дорисовать за края»: 1:1, 16:9, 9:16
+  aspectRatio?: string;
   // Вернуть размер оригинала после скачивания (ADR-018 §9); по умолчанию сервер — true
   matchSourceSize?: boolean;
   chatSessionId?: string;
+}
+
+export interface ImageEditUploadedReference { file: Blob; name: string; role: ReferenceRole }
+export interface ImageEditProjectReference { path: string; role: ReferenceRole }
+
+// multipart запуска задачи. Роли образцов — параллельные списки к файлам и к путям
+// (StartJobForm на сервере): referenceRoles[i] — роль references[i], и так же для путей
+export function jobForm(input: ImageEditJobInput): FormData {
+  const form = new FormData();
+  form.append('quoteId', input.quoteId);
+  form.append('prompt', input.prompt);
+  if (input.marks) form.append('marks', input.marks);
+  if (input.sourcePath) form.append('sourcePath', input.sourcePath);
+  if (input.source) form.append('source', input.source, 'source');
+  if (input.mask) form.append('mask', input.mask, 'mask.png');
+  if (input.annotated) form.append('annotated', input.annotated, 'annotated.png');
+  if (input.characterSlug) form.append('characterSlug', input.characterSlug);
+  for (const r of input.references ?? []) {
+    form.append('references', r.file, r.name);
+    form.append('referenceRoles', r.role);
+  }
+  for (const r of input.referencePaths ?? []) {
+    form.append('referencePaths', r.path);
+    form.append('referencePathRoles', r.role);
+  }
+  if (input.aspectRatio) form.append('aspectRatio', input.aspectRatio);
+  if (input.matchSourceSize != null) form.append('matchSourceSize', String(input.matchSourceSize));
+  if (input.chatSessionId) form.append('chatSessionId', input.chatSessionId);
+  return form;
 }
 
 // Персонаж — папка characters/<slug>/ в проекте (ADR-017, раздел 10)
@@ -384,20 +418,8 @@ const liveApi: ImageEditorApi = {
   catalog: projectId => request<ImageEditCatalog>(`${base(projectId)}/catalog`, { live: true }),
   quote: (projectId, req) =>
     request<ImageEditQuote>(`${base(projectId)}/quote`, { method: 'POST', body: JSON.stringify(req), timeoutMs: 60_000 }),
-  startJob: (projectId, input) => {
-    const form = new FormData();
-    form.append('quoteId', input.quoteId);
-    form.append('prompt', input.prompt);
-    if (input.marks) form.append('marks', input.marks);
-    if (input.sourcePath) form.append('sourcePath', input.sourcePath);
-    if (input.source) form.append('source', input.source, 'source');
-    if (input.mask) form.append('mask', input.mask, 'mask.png');
-    if (input.annotated) form.append('annotated', input.annotated, 'annotated.png');
-    if (input.characterSlug) form.append('characterSlug', input.characterSlug);
-    if (input.matchSourceSize != null) form.append('matchSourceSize', String(input.matchSourceSize));
-    if (input.chatSessionId) form.append('chatSessionId', input.chatSessionId);
-    return request<{ jobId: string }>(`${base(projectId)}/jobs`, { method: 'POST', body: form, timeoutMs: 120_000 });
-  },
+  startJob: (projectId, input) =>
+    request<{ jobId: string }>(`${base(projectId)}/jobs`, { method: 'POST', body: jobForm(input), timeoutMs: 120_000 }),
   getJob: (projectId, jobId) =>
     request<ImageEditJob>(`${base(projectId)}/jobs/${encodeURIComponent(jobId)}`, { live: true }),
   cancelJob: (projectId, jobId) =>

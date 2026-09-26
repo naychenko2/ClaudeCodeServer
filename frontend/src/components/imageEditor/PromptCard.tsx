@@ -14,7 +14,7 @@ import { PROMPT_MIN_H, promptHeight, promptOverflows } from './layout';
 const ic = (I: typeof X, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
 
 export function PromptCard({
-  prompt, onPrompt, placeholder, busy, busyCount, onCancel, count, onCount, priceLabel,
+  prompt, onPrompt, placeholder, busy, busyCount, onCancel, count, onCount, priceSum,
   canGenerate, blockedReason, onGenerate, above, below, mobile,
 }: {
   prompt: string;
@@ -25,8 +25,9 @@ export function PromptCard({
   onCancel: () => void;
   count: number;
   onCount: (n: number) => void;
-  // null — цену не показываем (рисовать нечем)
-  priceLabel: string | null;
+  // Только сумма: число вариантов видно рядом, в переключателе. null — цену не
+  // показываем (рисовать нечем)
+  priceSum: string | null;
   canGenerate: boolean;
   blockedReason: string;
   onGenerate: () => void;
@@ -61,7 +62,7 @@ export function PromptCard({
   );
 
   return (
-    <div data-prompt-card="" style={{
+    <div data-prompt-card="true" style={{
       flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: mobile ? SP.xs : SP.sm, background: C.bgPanel,
       padding: mobile ? `${SP.sm}px ${SP.md}px` : `${SP.md}px`,
       [mobile ? 'borderTop' : 'borderBottom']: `1px solid ${C.borderLight}`,
@@ -95,8 +96,7 @@ export function PromptCard({
             {!mobile && <span style={{ fontSize: FS.sm, color: C.textMuted }}>Вариантов</span>}
             {countPicker}
             <span style={{ flex: 1 }} />
-            {/* Число вариантов видно рядом — в цене только сумма, как в макете */}
-            {priceLabel && <PriceLine text={priceLabel.split(' · ')[0]} />}
+            {priceSum && <PriceLine text={priceSum} />}
             {mobile && generateBtn}
           </div>
           {!mobile && generateBtn}

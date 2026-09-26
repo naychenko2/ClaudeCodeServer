@@ -38,7 +38,7 @@ public record TextDeltaMessage(string Text)
 // StoredUserMessage.DelegationTaskId): связь с задачей структурная, не из текста.
 public record UserMessageMessage(string Text, IReadOnlyList<string>? AttachedPaths, string? SenderPersonaId, bool Auto,
     string? SenderOrigin = null, string? SenderChatName = null, string? StaffNote = null,
-    long? Timestamp = null, string? DelegationTaskId = null)
+    long? Timestamp = null, string? DelegationTaskId = null, StoredImageSnapshot? ImageSnapshot = null)
     : ServerMessage("user_message");
 
 // Очередь сообщений занятой сессии — полный снимок при каждом изменении (постановка,

@@ -13,7 +13,7 @@ namespace ClaudeHomeServer.Services.ImageEditor;
 //
 // Что берём из спины (всё — Core-швы): IImageRaster и IImagePlaceSettings от Images,
 // IHiggsfieldAccess, IProjectManager, IFeatureFlagGate, IProjectFiles, ISessionBroadcaster,
-// ISpendCollector и временный IImageDiscussStarter от Main. Растр необязателен: без Images
+// ISpendCollector, IImageChatSessions и ISessionDirectory от Main. Растр необязателен: без Images
 // ручки transform и jobs отвечают 503 raster_unavailable, а не 500.
 public sealed class ImageEditorSubsystem : IAppSubsystem
 {

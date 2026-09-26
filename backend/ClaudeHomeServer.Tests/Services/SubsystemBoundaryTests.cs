@@ -1739,8 +1739,8 @@ public class SubsystemBoundaryTests
         // больше не ссылается на ServerMetrics/Main напрямую) + DifyErrorCategorizer
         // (43 строки чистой функции, нужны и Knowledge, и Memory, обе вертикали).
         "ClaudeHomeServer.Core.Telemetry",
-        // ADR-018 §10.1: швы модуля редактора картинок в спине — IHiggsfieldAccess, временный
-        // IImageDiscussStarter, имя рабочей папки для бэкапа и записи операций растра.
+        // ADR-018 §10.1: швы модуля редактора картинок в спине — IHiggsfieldAccess,
+        // IImageChatSessions (чат картинки), имя рабочей папки для бэкапа и записи операций растра.
         // Сам редактор (контракты, задачи, драйверы) — в модуле ClaudeHomeServer.ImageEditor.
         "ClaudeHomeServer.Services.ImageEditor",
         // ADR-018 §10.1: шов растра. Реализация (SkiaImageRaster) в Images, потребитель —

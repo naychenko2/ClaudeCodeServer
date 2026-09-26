@@ -93,7 +93,7 @@ public class CharacterEndpointsTests : IDisposable
         JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync());
 
     [Fact]
-    public async Task Флаг_выключен_ручки_персонажей_и_обсуждения_404()
+    public async Task Флаг_выключен_ручки_персонажей_404()
     {
         var factory = Factory();
         var (projectId, root) = CreateProject(factory, TestWebApplicationFactory.TestUsername);
@@ -104,9 +104,6 @@ public class CharacterEndpointsTests : IDisposable
         var client = factory.CreateAuthenticatedClient();
         var api = $"/api/projects/{projectId}/image-editor";
 
-        var discuss = new MultipartFormDataContent { { new StringContent("что поправить?"), "text" } };
-        discuss.Add(new ByteArrayContent(TestImages.Jpeg(1)), "annotated", "annotated.jpg");
-
         var responses = new[]
         {
             await client.GetAsync($"{api}/characters"),
@@ -115,13 +112,10 @@ public class CharacterEndpointsTests : IDisposable
             await client.PutAsync($"{api}/characters/anya", CharacterForm("Аня", 0)),
             await client.DeleteAsync($"{api}/characters/anya"),
             await client.GetAsync($"{api}/characters/anya/photos/face-01.jpg"),
-            await client.PostAsync($"{api}/discuss", discuss),
         };
 
         responses.Select(r => r.StatusCode).Should().AllBeEquivalentTo(HttpStatusCode.NotFound);
         Directory.Exists(Path.Combine(root, "characters")).Should().BeFalse("при выключенном флаге запись не доходит до диска");
-        factory.Services.GetRequiredService<SessionManager>().GetByProject(projectId)
-            .Should().BeEmpty("при выключенном флаге чат не создаётся");
     }
 
     [Fact]

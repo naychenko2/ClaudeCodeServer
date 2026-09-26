@@ -1,4 +1,5 @@
 using System.Net;
+using ClaudeHomeServer.Services.Mcp.Http;
 using ClaudeHomeServer.Tests.Helpers;
 using ClaudeHomeServer.Tests.ImageEditor.Characters;
 using FluentAssertions;
@@ -53,11 +54,26 @@ public class ImageEditorDisabledTests : IDisposable
             "контроль: включённый модуль отдаёт ручки редактора");
     }
 
+    // Мёртвый MCP-сервер в конфиге хода дал бы «fetch failed» у всех инструментов (ADR-018 §10.5,
+    // риск 8). Контрольной половины пока нет: тулсет image-editor регистрируется в шаге 13, там же
+    // появится BuildImageEditorContext с гейтом «тулсет есть в реестре» и его проверка → null.
+    [Fact]
+    public void Выключенный_модуль_не_даёт_тулсета_image_editor()
+    {
+        var registry = _disabled.Services.GetRequiredService<McpToolsetRegistry>();
+
+        registry.Find("image-editor").Should().BeNull();
+        registry.Names.Should().NotContain("image-editor");
+    }
+
     [Theory]
     [InlineData("GET", "catalog")]
     [InlineData("POST", "quote")]
     [InlineData("POST", "transform")]
     [InlineData("GET", "characters")]
+    [InlineData("POST", "chats")]
+    [InlineData("GET", "chats?path=images/hero.png")]
+    [InlineData("PUT", "chats/any/path")]
     public async Task Ручки_редактора_при_выключенном_модуле_404_а_не_500(string method, string tail)
     {
         CharacterEndpointsTests.EnableFlag(_disabled, TestWebApplicationFactory.TestUsername);
@@ -65,7 +81,7 @@ public class ImageEditorDisabledTests : IDisposable
         var client = _disabled.CreateAuthenticatedClient();
 
         using var request = new HttpRequestMessage(new HttpMethod(method), $"/api/projects/{projectId}/image-editor/{tail}");
-        if (method == "POST") request.Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
+        if (method is "POST" or "PUT") request.Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
         var response = await client.SendAsync(request);
 
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);

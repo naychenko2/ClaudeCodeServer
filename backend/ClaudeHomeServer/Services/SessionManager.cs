@@ -316,7 +316,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         string Id, string Text, string? SenderPersonaId, string? SenderOrigin,
         int AgentDepth, DateTime EnqueuedAt, bool Silent = false, bool SuppressTasksExecute = false,
         string? SenderChatName = null, PendingKind Kind = PendingKind.Agent,
-        IReadOnlyList<string>? AttachedPaths = null, string? Mode = null, string? StaffNote = null);
+        IReadOnlyList<string>? AttachedPaths = null, string? Mode = null, string? StaffNote = null,
+        StoredImageSnapshot? ImageSnapshot = null);
 
     // Вид ожидающего сообщения. Report отделён от Agent: при активном цикле «до готово» Report
     // будит ждущий цикл (как User), а обычные Agent-сообщения посторонних агентов продолжают
@@ -1811,6 +1812,22 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         return entry.Info;
     }
 
+    // Перепривязать чат картинки к файлу (ADR-018 §1): прежний путь уходит в Lineage, новый
+    // из Lineage убирается (вернулись к старой версии — она снова текущая). UpdatedAt не
+    // трогаем по той же причине, что в SetExpiry: это настройка, а не активность, и она не
+    // должна поднимать чат наверх и выводить его из архива. null — чата нет или он не картинки.
+    public Session? SetImageChatPath(string sessionId, string path)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry) || entry.Info.ImageChat is not { } chat) return null;
+        if (chat.CurrentPath == path) return entry.Info;
+        if (chat.CurrentPath.Length > 0 && !chat.Lineage.Contains(chat.CurrentPath))
+            chat.Lineage.Add(chat.CurrentPath);
+        chat.Lineage.Remove(path);
+        chat.CurrentPath = path;
+        SaveSessions();
+        return entry.Info;
+    }
+
     // Заглушить/включить уведомления по чату (браузерные «нужно решение» / «ход завершён»).
     // UpdatedAt не трогаем по той же причине, что в SetExpiry: это настройка, а не активность.
     public Session? SetNotificationsMuted(string sessionId, bool muted)
@@ -2909,7 +2926,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     public async Task<Session> CreateAsync(string projectId, ClaudeMode mode,
         string? resumeSessionId = null, string? name = null, string? model = null, string? agentName = null,
         string? effort = null, string? personaId = null, bool taskExecution = false, string? taskId = null,
-        string? onboardingKind = null, bool desktopChat = false)
+        string? onboardingKind = null, bool desktopChat = false, SessionImageChat? imageChat = null,
+        IReadOnlyList<string>? autoAllowTools = null)
     {
         var project = _projects.GetById(projectId)
             ?? throw new KeyNotFoundException($"Проект не найден: {projectId}");
@@ -2934,6 +2952,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             // Тип чата «Десктопный» (ADR-008): задаётся при СОЗДАНИИ и дальше не меняется —
             // состав грани фиксируется на момент запуска CLI
             DesktopChat = desktopChat,
+            // Чат картинки (ADR-018 §1): тип — с создания, по той же причине, что DesktopChat.
+            // Имя у него явное («hero.png · правка») — авто-заголовок и миграции тем его не трогают
+            ImageChat = imageChat,
+            NameLocked = imageChat is not null && !string.IsNullOrWhiteSpace(name),
+            AutoAllowTools = autoAllowTools is null ? [] : [.. autoAllowTools],
             // Онбординг-сессия: задаётся ДО старта — BuildPersonaLayer читает поле при сборке слоя
             OnboardingKind = onboardingKind,
         };
@@ -3998,7 +4021,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // дописывает уточнение, а не просит остановиться. Для «перебить сейчас» есть явные
     // действия: кнопка «Стоп» и PreemptForPending (кнопка на карточке очереди).
     // Возвращаемый исход (Started/Queued) говорит клиенту, рисовать ли оптимистичный баллон.
-    public async Task<SendUserOutcome> SendMessageAsync(string sessionId, string text, IReadOnlyList<string> attachedPaths, string? mode = null, bool systemDirective = false, bool auto = false, string? senderPersonaId = null, bool suppressTasksExecute = false, string? senderOrigin = null, string? senderConnectionId = null, string? staffNote = null, DeliveryCause cause = DeliveryCause.Unknown)
+    public async Task<SendUserOutcome> SendMessageAsync(string sessionId, string text, IReadOnlyList<string> attachedPaths, string? mode = null, bool systemDirective = false, bool auto = false, string? senderPersonaId = null, bool suppressTasksExecute = false, string? senderOrigin = null, string? senderConnectionId = null, string? staffNote = null, DeliveryCause cause = DeliveryCause.Unknown, StoredImageSnapshot? imageSnapshot = null)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry))
             throw new InvalidOperationException("Сессия не найдена");
@@ -4061,7 +4084,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 // иначе форсаж dispatchNow и разбор по концу хода упёрлись бы в QueueFrozen
                 entry.QueueFrozen = false;
                 var enqueued = await EnqueuePendingAsync(sessionId, entry, text, senderPersonaId, senderOrigin,
-                    agentDepth: 0, kind: PendingKind.User, attachedPaths: attachedPaths, mode: mode);
+                    agentDepth: 0, kind: PendingKind.User, attachedPaths: attachedPaths, mode: mode,
+                    imageSnapshot: imageSnapshot);
                 if (enqueued is SendAndWaitResult.QueueFull f)
                     throw new InvalidOperationException(
                         $"В очереди чата уже {f.Limit} сообщений — дождитесь, пока она разберётся");
@@ -4113,7 +4137,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                     // Потолок не пробивается: голова изъята до добавления
                     entry.Pending.Add(new QueuedMessage(Guid.NewGuid().ToString("N"), text, senderPersonaId,
                         senderOrigin, AgentDepth: 0, DateTime.UtcNow, Kind: PendingKind.User,
-                        AttachedPaths: attachedPaths, Mode: mode));
+                        AttachedPaths: attachedPaths, Mode: mode, ImageSnapshot: imageSnapshot));
                 }
             }
             if (head is not null)
@@ -4125,7 +4149,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         }
 
         await SendDirectAsync(sessionId, entry, text, attachedPaths, mode, systemDirective, auto,
-            senderPersonaId, suppressTasksExecute, senderOrigin, senderConnectionId: senderConnectionId, staffNote: staffNote, cause: cause);
+            senderPersonaId, suppressTasksExecute, senderOrigin, senderConnectionId: senderConnectionId, staffNote: staffNote, cause: cause,
+            imageSnapshot: imageSnapshot);
         return SendUserOutcome.Started;
     }
 
@@ -4135,7 +4160,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     private async Task SendDirectAsync(string sessionId, SessionEntry entry, string text,
         IReadOnlyList<string> attachedPaths, string? mode, bool systemDirective, bool auto,
         string? senderPersonaId, bool suppressTasksExecute, string? senderOrigin, string? senderConnectionId = null,
-        bool fromQueue = false, string? staffNote = null, DeliveryCause cause = DeliveryCause.Unknown)
+        bool fromQueue = false, string? staffNote = null, DeliveryCause cause = DeliveryCause.Unknown,
+        StoredImageSnapshot? imageSnapshot = null)
     {
         // ДИАГНОСТИКА повторных доставок (инцидент 2026-08-10): каждая доставка хода в
         // процесс проходит через эту точку. src различает источник — hub (пользователь
@@ -4224,7 +4250,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         if (!systemDirective)
         {
             var userMsg = new UserMessageMessage(text, attachedPaths.Count > 0 ? attachedPaths : null,
-                senderPersonaId, auto, senderOrigin, StaffNote: staffNote);
+                senderPersonaId, auto, senderOrigin, StaffNote: staffNote, ImageSnapshot: imageSnapshot);
             if (!auto && !fromQueue && senderConnectionId is not null)
                 await BroadcastExceptAsync(sessionId, senderConnectionId, userMsg);
             else
@@ -4265,7 +4291,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
         await ApplyStatusAsync(sessionId, entry, SessionStatus.Working);
 
-        entry.Accumulator?.OnUserMessage(text, attachedPaths, systemDirective: systemDirective, auto: auto, senderPersonaId: senderPersonaId, senderOrigin: senderOrigin, staffNote: staffNote);
+        entry.Accumulator?.OnUserMessage(text, attachedPaths, systemDirective: systemDirective, auto: auto, senderPersonaId: senderPersonaId, senderOrigin: senderOrigin, staffNote: staffNote,
+            imageSnapshot: imageSnapshot);
         // Сообщение пользователя = начало нового хода в основном дереве (зеркало
         // сброса skippingWorktreeTurn в SessionChangedPaths.Extract)
         entry.TurnInWorktree = false;
@@ -4671,7 +4698,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         string text, string? senderPersonaId, string? senderOrigin, int agentDepth,
         bool silent = false, bool suppressTasksExecute = false, string? senderChatName = null,
         PendingKind kind = PendingKind.Agent, IReadOnlyList<string>? attachedPaths = null,
-        string? mode = null, string? staffNote = null)
+        string? mode = null, string? staffNote = null, StoredImageSnapshot? imageSnapshot = null)
     {
         bool dispatchNow;
         int position;
@@ -4685,7 +4712,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
             entry.Pending.Add(new QueuedMessage(Guid.NewGuid().ToString("N"), text, senderPersonaId,
                 senderOrigin, agentDepth, DateTime.UtcNow, silent, suppressTasksExecute, senderChatName,
-                kind, attachedPaths, mode, staffNote));
+                kind, attachedPaths, mode, staffNote, imageSnapshot));
             position = entry.Pending.Count;
 
             // Защита от гонки TOCTOU: статус занятости читается БЕЗ лока выше (в SendMessageAsync/
@@ -5152,7 +5179,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 await SendDirectAsync(sessionId, entry, next.Text,
                     next.AttachedPaths ?? [], mode: next.Mode, systemDirective: false, auto: false,
                     senderPersonaId: next.SenderPersonaId, suppressTasksExecute: next.SuppressTasksExecute,
-                    senderOrigin: next.SenderOrigin, fromQueue: true, cause: DeliveryCause.QueueUser);
+                    senderOrigin: next.SenderOrigin, fromQueue: true, cause: DeliveryCause.QueueUser,
+                    imageSnapshot: next.ImageSnapshot);
             else
                 await SendMessageAsync(sessionId, next.Text, [], auto: true,
                     senderPersonaId: next.SenderPersonaId, senderOrigin: next.SenderOrigin,

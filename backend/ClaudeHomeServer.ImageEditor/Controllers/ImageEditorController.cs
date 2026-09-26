@@ -31,8 +31,7 @@ public class ImageEditorController(
     IProjectFiles? files = null,
     ImageEditSteps? steps = null,
     IConfiguration? config = null,
-    IImageRaster? raster = null,
-    IImageDiscussStarter? discuss = null) : ControllerBase
+    IImageRaster? raster = null) : ControllerBase
 {
     // Потолок файла проекта, который ручка transform читает в память; дальше решает растр (100 Мп)
     private const long MaxTransformFileBytes = 100L * 1024 * 1024;
@@ -438,59 +437,6 @@ public class ImageEditorController(
         public List<string>? Angles { get; set; }
         public List<string>? RemovePhotos { get; set; }
         public string? PrimaryPhoto { get; set; }
-    }
-
-    // ── «Обсудить с Claude» (ADR-017, раздел 6) ────────────────────────────────────
-
-    [HttpPost("discuss")]
-    [RequestSizeLimit(MaxJobBodyBytes)]
-    [RequestFormLimits(MultipartBodyLengthLimit = MaxJobBodyBytes)]
-    public async Task<IActionResult> Discuss(string projectId, [FromForm] DiscussForm form, CancellationToken ct)
-    {
-        if (Gate(projectId, out var project) is { } denied) return denied;
-
-        if (form.Annotated is null || form.Annotated.Length == 0)
-            return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
-                "Нет картинки с пометками");
-        var maxFileBytes = ImageEditCatalog.DefaultLimits.MaxFileMb * 1024L * 1024L;
-        if (form.Annotated.Length > maxFileBytes)
-            return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
-                $"Файл больше {ImageEditCatalog.DefaultLimits.MaxFileMb} МБ");
-
-        string? sourcePath = null;
-        if (form.SourcePath is { Length: > 0 } rel)
-        {
-            if (!TryJoinInside(project.RootPath, rel, out var full))
-                return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
-                    "Исходник вне папки проекта");
-            if (System.IO.File.Exists(full))
-                sourcePath = Path.GetRelativePath(project.RootPath, full).Replace('\\', '/');
-        }
-
-        ImageDiscussCharacter? character = null;
-        if (form.CharacterSlug is { Length: > 0 } slug)
-        {
-            var manifest = CharacterStore.Get(project.RootPath, slug);
-            if (manifest is null) return CharacterNotFound();
-            character = new ImageDiscussCharacter(manifest.Name, CharacterDto.From(manifest).Path);
-        }
-
-        if (discuss is null) return JobsUnavailable();
-        var annotated = await ReadAsync(form.Annotated, ct);
-        var input = new ImageDiscussInput(form.Text ?? "", annotated, ImageFormatSniffer.DetectExtension(annotated),
-            sourcePath, character, form.SessionId);
-        var outcome = await discuss.StartAsync(UserId, project, input, ct);
-        return Map(new ImageEditCallResult<ImageDiscussResultDto>(outcome.Value, outcome.ErrorCode, outcome.Error), Ok);
-    }
-
-    // SessionId — чат этого сеанса редактора, если он уже был: переиспользуется
-    public sealed class DiscussForm
-    {
-        public string? Text { get; set; }
-        public IFormFile? Annotated { get; set; }
-        public string? SourcePath { get; set; }
-        public string? CharacterSlug { get; set; }
-        public string? SessionId { get; set; }
     }
 
     // null — можно работать; иначе готовый отказ. Выключенный флаг и чужой проект

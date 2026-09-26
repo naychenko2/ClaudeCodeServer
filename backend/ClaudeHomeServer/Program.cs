@@ -576,9 +576,9 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.HiggsfieldOAuthServi
 // Шов для драйвера Higgsfield редактора картинок (ADR-017): токен без AdminOwnerId
 builder.Services.AddSingleton<ClaudeHomeServer.Services.ImageEditor.IHiggsfieldAccess,
     ClaudeHomeServer.Services.Mcp.HiggsfieldAccessAdapter>();
-// «Обсудить с Claude» для модуля редактора (ADR-018 §10.1): ручка в модуле, чат создаёт Main.
-// Временный шов — сносится вместе с ручкой в шаге 10
-builder.Services.AddSingleton<ClaudeHomeServer.Services.ImageEditor.IImageDiscussStarter, ImageDiscussService>();
+// Чат картинки для модуля редактора (ADR-018 §1, §10.1): ручки в модуле, сессии создаёт и
+// правит ядро — адаптер над SessionManager
+builder.Services.AddSingleton<ClaudeHomeServer.Services.ImageEditor.IImageChatSessions, ImageChatSessions>();
 builder.Services.AddQuietHttpClient(
     ClaudeHomeServer.Services.Mcp.HiggsfieldOAuthService.HttpClientName,
     new QuietHttpClientProfile(

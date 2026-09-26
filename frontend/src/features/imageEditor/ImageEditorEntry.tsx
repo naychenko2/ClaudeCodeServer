@@ -4,7 +4,7 @@
 // приложения, а не у кнопки: уход с экрана проекта размонтирует и дерево файлов, и
 // просмотр файла — без хоста спросить про несохранённые варианты было бы некому.
 
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { Pencil, Sparkles } from 'lucide-react';
 import { Button, ConfirmDialog, ICON_SIZE, ICON_STROKE, ISLAND, Z, useIsMobile, FLAGS, useFeature, NAV_CHANGE_EVENT, parseHash } from 'aihome_shell/kit';
@@ -77,7 +77,7 @@ function ImageEditorLayer({ onClose, ...props }: Omit<EntryProps, 'size'> & { on
   const dirty = useRef(false);
   const [leaveAsk, setLeaveAsk] = useState(false);
   const closeRef = useRef(onClose);
-  closeRef.current = onClose;
+  useLayoutEffect(() => { closeRef.current = onClose; });
 
   const home = useRef(window.location.hash);
   // После «Остаться» приложение может уточнить восстановленный адрес — это не уход

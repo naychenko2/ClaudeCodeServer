@@ -3,8 +3,12 @@ import type { Persona, Task, TeamImplementBudget, TeamPlanDecision } from '../..
 
 // Контекст текущего проекта — для резолва локальных путей картинок в сообщениях.
 // transcriptReason — почему недоступны механики транскрипта CLI (живой поток субагентов,
-// ход workflow): у локального проекта транскрипт на устройстве; null — доступны
-export const ChatProjectContext = createContext<{ id: string; rootPath: string; transcriptReason?: string | null } | null>(null);
+// ход workflow): у локального проекта транскрипт на устройстве; null — доступны.
+// local/devicePlatform — для подсказки `roots add`, когда агент отказал в папке проекта
+export const ChatProjectContext = createContext<{
+  id: string; rootPath: string; transcriptReason?: string | null;
+  local?: boolean; devicePlatform?: string | null;
+} | null>(null);
 
 // Корень активного git-дерева (worktree) хода/чата — пути в ленте сначала пробуют
 // относительность к нему (короче и без префикса .claude/worktrees/…), и только

@@ -3710,6 +3710,8 @@ export interface DesktopDevice {
   platform?: string | null;
   // Версия агента устройства (semver) — для диагностики и подсказки «обновите»
   agentVersion?: string | null;
+  // Самообновление агента (agent-distribution AD-3/AD-5); null — агент о нём не сообщал
+  agentUpdate?: DeviceAgentUpdate | null;
   // Готовность харнеса локальных проектов: false — привязка возможна, но ходы не пойдут,
   // пока владелец не дособерёт (см. harnessProblem)
   harnessReady?: boolean;
@@ -3720,6 +3722,13 @@ export interface DesktopDevice {
     exec?: boolean;
     files?: boolean;
   } | null;
+}
+
+// Состояние самообновления агента (DeviceAgentUpdateStates на бэке): reason — текст с устройства
+export interface DeviceAgentUpdate {
+  state: 'idle' | 'downloading' | 'waiting-idle' | 'failed';
+  targetVersion?: string | null;
+  reason?: string | null;
 }
 
 // Заявка на сопряжение: код из 8 символов живёт 5 минут и принадлежит ЭТОЙ веб-сессии.

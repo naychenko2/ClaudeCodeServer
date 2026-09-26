@@ -333,6 +333,8 @@ public static class AgentProgram
             // Успешный ack — версия здорова: супервизор её не откатит, install дождался
             SupervisedRun.MarkHealthy();
             log.LogInformation("Агент на связи с {Server} как «{Name}»", registration.ServerUrl, registration.DeviceName);
+            // Раздачу могли переоткрыть без рестарта сервера (AGENT_ONLY=1): ack без переподключения — только так
+            if (updater is not null) _ = coordinator.RunUpdateChecksAsync(UpdateCheckPeriod(), stop.Token);
             // Цикл обновления завершается true, только переключив active: выходим с 75, супервизор поднимет новую версию
             if (await updateLoop.WaitAsync(stop.Token)) exitCode = SupervisorContract.SwitchExitCode;
         }
@@ -367,6 +369,11 @@ public static class AgentProgram
             activity, autostart.Repoint, () => SupervisedRun.SupervisorVersion(layout),
             log: loggers.CreateLogger<AgentUpdater>());
     }
+
+    private static TimeSpan UpdateCheckPeriod() =>
+        int.TryParse(Environment.GetEnvironmentVariable("AI_HOME_AGENT_UPDATE_CHECK_MINUTES"), out var minutes) && minutes > 0
+            ? TimeSpan.FromMinutes(minutes)
+            : AgentCoordinator.DefaultUpdateCheckPeriod;
 
     // Сбой самого цикла обновления агента не валит: работаем на текущей версии дальше
     private static async Task<bool> RunUpdaterAsync(AgentUpdater updater, ILogger log, CancellationToken ct)

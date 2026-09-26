@@ -1862,10 +1862,12 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     {
         if (!_sessions.TryGetValue(sessionId, out var entry) || entry.Info.ImageChat is not { } chat) return null;
         if (chat.CurrentPath == path) return entry.Info;
-        if (chat.CurrentPath.Length > 0 && !chat.Lineage.Contains(chat.CurrentPath))
-            chat.Lineage.Add(chat.CurrentPath);
+        if (chat.CurrentPath is { Length: > 0 } previous && !chat.Lineage.Contains(previous))
+            chat.Lineage.Add(previous);
         chat.Lineage.Remove(path);
         chat.CurrentPath = path;
+        // Черновик получил файл — папка назначения больше не нужна
+        chat.DraftFolder = null;
         SaveSessions();
         return entry.Info;
     }
@@ -1873,11 +1875,12 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // Чат идёт за редактором (ADR-018 §1): редактор сохранил картинку в новый файл. Путь
     // меняется как в SetImageChatPath, а в ленту ложится тихая запись image_file_moved — и
     // она, в отличие от смены пути, двигает UpdatedAt: человек что-то сделал в этом чате.
-    // null — чата нет или он не картинки; тот же путь — ничего не пишем.
+    // null — чата нет или он не картинки; тот же путь — ничего не пишем. У черновика («Нарисовать
+    // картинку») это первое сохранение: From в записи пустой — файла до него не было.
     public async Task<Session?> MoveImageChatToFileAsync(string sessionId, string path)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry) || entry.Info.ImageChat is not { } chat) return null;
-        var from = chat.CurrentPath;
+        var from = chat.CurrentPath ?? "";
         if (from == path) return entry.Info;
 
         SetImageChatPath(sessionId, path);

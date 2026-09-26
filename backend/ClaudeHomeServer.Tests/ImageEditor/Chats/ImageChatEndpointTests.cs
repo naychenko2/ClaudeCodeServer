@@ -117,6 +117,78 @@ public class ImageChatEndpointTests : IAsyncLifetime
         Sessions.GetByProject(_projectId).Should().BeEmpty();
     }
 
+    // ── Черновик «Нарисовать картинку» ──────────────────────────────────────────
+
+    [Theory]
+    [InlineData("images", "images", "Новая картинка · images")]
+    [InlineData("", "", "Новая картинка · корень проекта")]
+    public async Task Создание_черновика_по_папке_без_файла(string folder, string stored, string name)
+    {
+        var resp = await _client.PostAsJsonAsync(Api(), new { folder });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.Created, await resp.Content.ReadAsStringAsync());
+        var body = await Json(resp);
+        body.GetProperty("imageChat").GetProperty("currentPath").ValueKind.Should().Be(JsonValueKind.Null);
+        body.GetProperty("imageChat").GetProperty("draftFolder").GetString().Should().Be(stored);
+
+        var session = Sessions.GetById(body.GetProperty("id").GetString()!)!;
+        session.Name.Should().Be(name);
+        session.NameLocked.Should().BeTrue();
+        session.ImageChat!.CurrentPath.Should().BeNull();
+        session.ImageChat.DraftFolder.Should().Be(stored);
+        session.PersonaId.Should().NotBeNullOrEmpty();
+        session.AutoAllowTools.Should().BeEquivalentTo(ImageChatDefaults.AutoAllowTools);
+        (await Sessions.GetHistoryAsync(session.Id)).Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("../outside")]
+    [InlineData("/etc")]
+    [InlineData("images/nope")]
+    [InlineData("images/hero.png")]
+    public async Task Черновик_с_папкой_мимо_проекта_400_и_чата_нет(string folder)
+    {
+        var resp = await _client.PostAsJsonAsync(Api(), new { folder });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        Sessions.GetByProject(_projectId).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Черновик_через_ссылку_наружу_400()
+    {
+        var outside = Path.Combine(Path.GetTempPath(), "ie-out-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(outside);
+        try
+        {
+            Directory.CreateSymbolicLink(Path.Combine(_root, "link"), outside);
+            (await _client.PostAsJsonAsync(Api(), new { folder = "link" })).StatusCode.Should().Be(HttpStatusCode.BadRequest);
+            Sessions.GetByProject(_projectId).Should().BeEmpty();
+        }
+        finally { Directory.Delete(outside, recursive: true); }
+    }
+
+    [Fact]
+    public async Task Черновик_в_чужом_проекте_404_и_чата_нет()
+    {
+        var (foreignProject, foreignRoot) = CharacterEndpointsTests.CreateProject(_factory, TestWebApplicationFactory.SecondUsername);
+        Directory.CreateDirectory(Path.Combine(foreignRoot, "images"));
+
+        var resp = await _client.PostAsJsonAsync(Api(foreignProject), new { folder = "images" });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        Sessions.GetByProject(foreignProject).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Файл_и_папка_вместе_400()
+    {
+        var resp = await _client.PostAsJsonAsync(Api(), new { sourcePath = "images/hero.png", folder = "images" });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        Sessions.GetByProject(_projectId).Should().BeEmpty();
+    }
+
     [Fact]
     public async Task Собеседник_руководитель_проекта_если_он_назначен()
     {
@@ -296,6 +368,7 @@ public class ImageChatEndpointTests : IAsyncLifetime
         var responses = new[]
         {
             await _client.PostAsJsonAsync(Api(), new { sourcePath = "images/hero.png" }),
+            await _client.PostAsJsonAsync(Api(), new { folder = "images" }),
             await _client.GetAsync($"{Api()}?path=images/hero.png"),
             await _client.PutAsJsonAsync($"{Api()}/{chat.Id}/path", new { path = "images/hero.v2.png" }),
         };

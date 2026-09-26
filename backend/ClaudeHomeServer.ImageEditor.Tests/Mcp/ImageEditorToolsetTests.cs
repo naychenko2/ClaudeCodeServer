@@ -393,6 +393,78 @@ public class ImageEditorToolsetTests : IDisposable
         body["providers"]!.AsArray().Should().NotBeEmpty();
     }
 
+    // ── Черновик «Нарисовать картинку»: файла ещё нет ───────────────────────────
+
+    private void MakeDraft(string folder = "art") =>
+        _sessions[ChatId].ImageChat = new SessionImageChat { CurrentPath = null, DraftFolder = folder };
+
+    [Fact]
+    public async Task Черновик_image_generate_рисует_по_тексту_и_пишет_трату_на_владельца()
+    {
+        MakeDraft();
+        var media = new LocalImageEditorTests.FakeMedia();
+        var toolset = Toolset([new LocalImageEditor(media) { PollInterval = TimeSpan.FromMilliseconds(1) }]);
+
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate,
+            new JsonObject { ["prompt"] = "кот в шляпе", ["provider"] = "local" });
+
+        result.IsError.Should().BeFalse(result.Text);
+        var job = await WaitDone(Parse(result)["jobId"]!.GetValue<string>());
+        job.Status.Should().Be(ImageEditJobStatus.Completed);
+        job.ChatSessionId.Should().Be(ChatId, "варианты черновика попадают в его ленту и редактор");
+        var submitted = media.Submitted.Should().ContainSingle().Subject;
+        submitted.Op.Should().Be(LocalImageOp.Generate);
+        submitted.Images.Should().BeEmpty("у черновика исходника нет — генерация по тексту");
+        var record = _spend.Records.Should().ContainSingle().Subject;
+        record.OwnerId.Should().Be(Owner);
+        record.Initiator.Should().Be(SpendInitiators.Agent);
+        record.SessionId.Should().Be(ChatId);
+        _states.Get(Owner, ChatId).Events.Should().Contain(e => e.JobId == job.JobId);
+    }
+
+    [Fact]
+    public async Task Черновик_правка_без_картинки_отказ_без_задачи_и_лимит_цел()
+    {
+        MakeDraft();
+        var toolset = Toolset();
+
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate,
+            new JsonObject { ["prompt"] = "убери фон", ["op"] = "removeBackground" });
+
+        result.IsError.Should().BeTrue();
+        result.Text.Should().Contain("Картинки ещё нет");
+        _spend.Records.Should().BeEmpty();
+        (await Call(toolset, ImageEditorToolset.ToolGenerate, new JsonObject { ["prompt"] = "кот" }))
+            .IsError.Should().BeFalse("отказ не расходует лимит хода");
+        (await Call(toolset, ImageEditorToolset.ToolGenerate, new JsonObject { ["prompt"] = "кот 2" }))
+            .IsError.Should().BeFalse();
+        (await Call(toolset, ImageEditorToolset.ToolGenerate, new JsonObject { ["prompt"] = "кот 3" }))
+            .Text.Should().Contain("не больше 2", "лимит 2 за ход действует и у черновика");
+    }
+
+    [Fact]
+    public async Task Черновик_image_state_честно_говорит_что_картинки_нет()
+    {
+        MakeDraft("art/heroes");
+        var toolset = Toolset();
+
+        var result = await Call(toolset, ImageEditorToolset.ToolState);
+
+        result.IsError.Should().BeFalse(result.Text);
+        var body = Parse(result);
+        body["file"].Should().BeNull();
+        body["draft"]!["folder"]!.GetValue<string>().Should().Be("art/heroes");
+        body["draft"]!["note"]!.GetValue<string>().Should().Contain("Картинки ещё нет");
+    }
+
+    [Fact]
+    public void Черновик_блок_состояния_хода_без_файла()
+    {
+        var text = ImageEditorStateContributor.Render(null, ImageChatStateStore.Empty, [], _ => null, "art");
+
+        text.Should().Contain("Файл: картинки ещё нет").And.Contain("папку art");
+    }
+
     // Имена в AutoAllowTools чата картинки (Core) обязаны совпадать со схемами тулсета
     [Fact]
     public void Автоматически_разрешённые_инструменты_есть_в_схемах()

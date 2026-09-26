@@ -31,6 +31,30 @@ public class SessionImageChatTests
         session.ImageChat.Should().BeNull("аддитивное поле: старый sessions.json читается без миграции");
     }
 
+    // Записи чатов картинки до черновиков: DraftFolder нет — это чат по файлу, как раньше
+    [Fact]
+    public void СтарыйЧатКартинкиБезDraftFolder_ЧитаетсяКакЧатПоФайлу()
+    {
+        const string legacy = """{"id":"s1","ImageChat":{"CurrentPath":"images/hero.png","Lineage":[]}}""";
+        var session = JsonSerializer.Deserialize<Session>(legacy, StoreJson)!;
+        session.ImageChat!.CurrentPath.Should().Be("images/hero.png");
+        session.ImageChat.DraftFolder.Should().BeNull();
+    }
+
+    [Fact]
+    public void ЧерновикКартинки_ПереживаетКругСериализацииИУходитНаФронт()
+    {
+        var original = new Session { Id = "s1", ImageChat = new SessionImageChat { CurrentPath = null, DraftFolder = "art" } };
+
+        var restored = JsonSerializer.Deserialize<Session>(JsonSerializer.Serialize(original, StoreJson), StoreJson)!;
+        restored.ImageChat!.CurrentPath.Should().BeNull();
+        restored.ImageChat.DraftFolder.Should().Be("art");
+
+        var wire = JsonSerializer.SerializeToElement(original, WireJson).GetProperty("imageChat");
+        wire.GetProperty("currentPath").ValueKind.Should().Be(JsonValueKind.Null);
+        wire.GetProperty("draftFolder").GetString().Should().Be("art");
+    }
+
     [Fact]
     public void ЧатКартинки_ПереживаетКругСериализацииСтора()
     {

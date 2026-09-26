@@ -8,8 +8,8 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace ClaudeHomeServer.Services.ImageEditor.Controllers;
 
-// Чаты картинки (ADR-018 §1): создание по первому сообщению, поиск чата редактором по пути и
-// перепривязка к файлу. Сессии создаёт и правит ядро через шов IImageChatSessions, поиск —
+// Чаты картинки (ADR-018 §1): создание по первому сообщению (по файлу или черновиком «Нарисовать
+// картинку» по папке), поиск чата редактором по пути и перепривязка к файлу. Сессии создаёт и правит ядро через шов IImageChatSessions, поиск —
 // линейный проход по ISessionDirectory.GetAll с фильтром по проекту.
 //
 // Гейты те же, что у остальных ручек редактора: флаг и чужой проект — одинаково 404. Чужой,
@@ -32,10 +32,24 @@ public class ImageChatsController(
     public async Task<IActionResult> Create(string projectId, [FromBody] ImageChatCreateRequest req, CancellationToken ct)
     {
         if (Gate(projectId, out var project) is { } denied) return denied;
-        if (ExistingFile(project, req.SourcePath) is not { } sourcePath) return PathRejected();
-        if (chats is null) return Unavailable();
 
-        var created = await chats.CreateAsync(UserId, project, sourcePath, req.PersonaId, ct);
+        // Ровно одно: файл проекта (чат правки) или папка назначения (черновик «Нарисовать картинку»)
+        ImageChatCreateOutcome created;
+        if (req.Folder is not null)
+        {
+            if (!string.IsNullOrWhiteSpace(req.SourcePath))
+                return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
+                    "Укажите что-то одно: файл картинки или папку новой картинки");
+            if (ExistingFolder(project, req.Folder) is not { } folder) return FolderRejected();
+            if (chats is null) return Unavailable();
+            created = await chats.CreateDraftAsync(UserId, project, folder, req.PersonaId, ct);
+        }
+        else
+        {
+            if (ExistingFile(project, req.SourcePath) is not { } sourcePath) return PathRejected();
+            if (chats is null) return Unavailable();
+            created = await chats.CreateAsync(UserId, project, sourcePath, req.PersonaId, ct);
+        }
         if (created.Session is { } session) return StatusCode(StatusCodes.Status201Created, session);
         var status = created.ErrorCode == ImageChatCreateOutcome.Unavailable
             ? StatusCodes.Status503ServiceUnavailable
@@ -169,6 +183,14 @@ public class ImageChatsController(
         return rel == "." ? null : rel;
     }
 
+    // Папка проекта от корня через «/» ("" — корень) или null: вне проекта, через ссылку, нет такой
+    private static string? ExistingFolder(Project project, string folder)
+    {
+        var trimmed = folder.Trim().Replace('\\', '/').TrimEnd('/');
+        if (trimmed is "" or ".") return project.RootPath is { Length: > 0 } && Directory.Exists(project.RootPath) ? "" : null;
+        return InsideProject(project, trimmed) is { } rel && Directory.Exists(Path.Combine(project.RootPath, rel)) ? rel : null;
+    }
+
     private static string? ExistingFile(Project project, string? path) =>
         InsideProject(project, path) is { } rel && System.IO.File.Exists(Path.Combine(project.RootPath, rel)) ? rel : null;
 
@@ -193,13 +215,19 @@ public class ImageChatsController(
         Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
             "Файл не найден, вне папки проекта или идёт через символическую ссылку");
 
+    private IActionResult FolderRejected() =>
+        Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
+            "Папка не найдена, вне папки проекта или идёт через символическую ссылку");
+
     private IActionResult Unavailable() =>
         Error(StatusCodes.Status503ServiceUnavailable, ImageEditErrorCodes.Unavailable,
             "Чат картинки недоступен на этом сервере");
 }
 
-// PersonaId — собеседник, выбранный в композере; не передан — руководитель проекта или ассистент
-public sealed record ImageChatCreateRequest(string? SourcePath, string? PersonaId = null);
+// SourcePath — файл проекта (чат правки) ИЛИ Folder — папка новой картинки (черновик «Нарисовать
+// картинку»; "" — корень проекта). PersonaId — собеседник, выбранный в композере; не передан —
+// руководитель проекта или ассистент
+public sealed record ImageChatCreateRequest(string? SourcePath, string? PersonaId = null, string? Folder = null);
 
 public sealed record ImageChatPathRequest(string? Path);
 

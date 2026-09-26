@@ -157,7 +157,8 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         var references = ReferencesArg(args) ?? current.References;
         var marksJson = current.Marks?.GetRawText();
 
-        // Исходник — текущий шаг истории редактора, иначе файл чата с диска проекта
+        // Исходник — текущий шаг истории редактора, иначе файл чата с диска проекта. У черновика
+        // «Нарисовать картинку» без шага исходника нет вовсе: рисуем новую по тексту
         ImageBytes? source = null;
         string? baseStepId = null;
         if (current.CurrentStepId is { Length: > 0 } stepId && _steps?.Open(ownerId, project.Id, stepId) is { } step)
@@ -165,18 +166,21 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             source = new ImageBytes(step.Image.Bytes, step.Image.ContentType);
             baseStepId = stepId;
         }
-        else
+        else if (chatPath is { Length: > 0 })
         {
             // Тот же путь чтения, что у образцов человека: проверки пути и лимита одни
             var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(project.RootPath, chatPath, "Файл чата", ct);
             if (read.Value is not { } image) return Deny(read.Error!);
             source = image;
         }
-        var mask = _states.ReadMask(ownerId, session.Id) is { Length: > 0 } maskBytes
+        var op = Enum<ImageEditOp>(args, "op") ?? (source is null ? ImageEditOp.Generate : ImageEditOp.Edit);
+        if (source is null && op != ImageEditOp.Generate)
+            return Deny("Картинки ещё нет: это новая картинка. Сначала нарисуй её — op generate или без op.");
+        // Маска холста без картинки не к чему: у черновика её нет
+        var mask = source is not null && _states.ReadMask(ownerId, session.Id) is { Length: > 0 } maskBytes
             ? new ImageBytes(maskBytes, "image/png")
             : null;
-        var op = Enum<ImageEditOp>(args, "op") ?? ImageEditOp.Edit;
-        var size = ImageDimensions.Read(source.Bytes);
+        var size = source is null ? null : ImageDimensions.Read(source.Bytes);
 
         var quoteRequest = new ImageEditQuoteRequest(provider, model, mode, op, count,
             HasMask: mask is not null,
@@ -311,8 +315,9 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
     private object DescribeState(string ownerId, Session session, Project project)
     {
         var state = _states.Get(ownerId, session.Id);
-        var chatPath = session.ImageChat!.CurrentPath;
-        var full = ProjectLinkGuard.ResolveInside(project.RootPath, chatPath);
+        var chat = session.ImageChat!;
+        var chatPath = chat.CurrentPath;
+        var full = chatPath is { Length: > 0 } ? ProjectLinkGuard.ResolveInside(project.RootPath, chatPath) : null;
         (int Width, int Height)? size = null;
         if (full is not null && File.Exists(full))
         {
@@ -329,7 +334,15 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
 
         return new
         {
-            file = new { path = chatPath, width = size?.Width, height = size?.Height },
+            // Черновик «Нарисовать картинку»: файла ещё нет, file — null, а draft говорит, куда сохранится
+            file = chatPath is { Length: > 0 } ? new { path = chatPath, width = size?.Width, height = size?.Height } : null,
+            draft = chatPath is { Length: > 0 } ? null : new
+            {
+                folder = chat.DraftFolder ?? "",
+                note = "Картинки ещё нет: это новая картинка, человек сохранит её в "
+                    + ImageEditorStateContributor.DraftFolderText(chat.DraftFolder)
+                    + ". image_generate без op нарисует её по тексту.",
+            },
             state.Prompt,
             state.PromptAuthor,
             provider = state.Provider ?? catalog.Default.Provider,

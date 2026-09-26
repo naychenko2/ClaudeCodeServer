@@ -190,6 +190,33 @@ public class SkiaImageRasterTests
             "маска другого размера — отказ, а не сдвиг заливки");
     }
 
+    // Потолок мегапикселей у маски — как у картинки: по заголовку, до декодирования пикселей
+    [Fact]
+    public void Стирание_маской_больше_потолка_отказ_по_заголовку()
+    {
+        var image = Png(Solid(4, 4, SKColors.Red));
+        var mask = HugeBlankPng(12_000, 9_000); // 108 Мп, в файле — десятки килобайт
+
+        var outcome = _raster.EraseMasked(image, mask);
+
+        outcome.Ok.Should().BeFalse();
+        outcome.Error.Should().Be(RasterError.TooLarge);
+        outcome.Message.Should().Contain("Маска слишком большая");
+    }
+
+    // Неожиданное исключение внутри операции — отказ ответом, а не исключение наружу (500)
+    [Fact]
+    public void Сбой_внутри_операции_отдаётся_отказом_а_не_исключением()
+    {
+        var image = Png(Solid(4, 4, SKColors.Red));
+
+        var outcome = _raster.EraseMasked(image, null!);
+
+        outcome.Ok.Should().BeFalse();
+        outcome.Error.Should().Be(RasterError.Unsupported);
+        outcome.StatusCode.Should().Be(400);
+    }
+
     [Fact]
     public void Ресайз_ступенями_размеры_и_пропорции()
     {

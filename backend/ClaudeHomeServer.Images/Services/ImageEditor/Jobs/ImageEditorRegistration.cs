@@ -1,6 +1,7 @@
 using ClaudeHomeServer.Services.Http;
 using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.ImageEditor.Versioning;
+using ClaudeHomeServer.Services.Images.Editing.Raster;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace ClaudeHomeServer.Services.Images.Editing;
@@ -23,6 +24,9 @@ public static class ImageEditorRegistration
         services.AddSingleton<HiggsfieldImageEditor>();
         services.AddSingleton<IImageEditor>(sp => sp.GetRequiredService<FalImageEditor>());
         services.AddSingleton<IImageEditor>(sp => sp.GetRequiredService<HiggsfieldImageEditor>());
+
+        // Один экземпляр на инстанс: внутри семафор на 2 одновременные операции (ADR-018 §9)
+        services.AddSingleton<IImageRaster, SkiaImageRaster>();
 
         services.TryAddSingleton<IVersionedImageStore, VersionedImageStore>();
         services.AddSingleton<IImageEditSaver, ImageEditSaver>();

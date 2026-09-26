@@ -250,14 +250,15 @@ public class SubsystemBoundaryTests
         // на внешние типы уходят в Core-интерфейсы: `IPersonaLookup`/`IPersonaAvatarStore`
         // (аватар персоны), `ServerMessage` (ImageBackfilledMessage), `ImageAssetHelper`
         // (ExtFor) — все в ClaudeHomeServer.Core.dll, покрываются `IsCoreAssembly`.
-        // Допусков за пределами спинки и своего namespace не осталось.
+        // `SkiaSharp.*` — third-party растр редактора (ADR-018 §9, `SkiaImageRaster`);
+        // пакет живёт только в Images, остальным вертикалям допуска нет.
         new object[]
         {
             new VerticalBoundary(
                 "Images",
                 "ClaudeHomeServer.Services.Images",
                 SharedAllowedPrefixes
-                    .Concat(new[] { "ClaudeHomeServer.Services.Images" })
+                    .Concat(new[] { "ClaudeHomeServer.Services.Images", "SkiaSharp" })
                     .ToArray(),
                 Array.Empty<string>()),
         },

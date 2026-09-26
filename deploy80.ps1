@@ -172,7 +172,8 @@ Start-Sleep -Milliseconds 700
 
 # --- 3. Публикация бэка ---
 Write-Host '[3/9] Публикация бэка (dotnet publish -c Release)...' -ForegroundColor Yellow
-dotnet publish $csproj -c Release -o $PublishDir
+# RID обязателен: без него нативка SkiaSharp (растр редактора) едет под все платформы, ~0,4 ГБ
+dotnet publish $csproj -c Release -r win-x64 --self-contained false -o $PublishDir
 if ($LASTEXITCODE -ne 0) { throw "Публикация бэка упала (exit $LASTEXITCODE)" }
 
 # Проверка динамических модулей: ModuleLoader резолвит их по пути из appsettings.json

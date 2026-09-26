@@ -985,7 +985,8 @@ try {
     Complete-DeployStep $h 'ok' ''
 
     $h = Add-DeployStep 'publish-backend'
-    dotnet publish (Join-Path $RepoDir 'backend\ClaudeHomeServer\ClaudeHomeServer.csproj') -c Release -o $StagingDir
+    # RID обязателен: без него нативка SkiaSharp (растр редактора) едет под все платформы, ~0,4 ГБ
+    dotnet publish (Join-Path $RepoDir 'backend\ClaudeHomeServer\ClaudeHomeServer.csproj') -c Release -r win-x64 --self-contained false -o $StagingDir
     if ($LASTEXITCODE -ne 0) { Complete-DeployStep $h 'failed' "dotnet exit $LASTEXITCODE"; throw "публикация бэка упала (exit $LASTEXITCODE)" }
     # Проверка динамических модулей: ModuleLoader резолвит их по пути из appsettings.json
     # (modules/notes и modules/spend). Если csproj потеряет копию при publish — INoteSemanticIndex

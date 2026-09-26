@@ -149,6 +149,16 @@
           SkipUnchangedFiles="true" Condition="Exists('..\ClaudeHomeServer.Spend\bin\$(Configuration)\net10.0\ClaudeHomeServer.Spend.dll')" />
   </Target>
 
+  <!-- Нативный libSkiaSharp.pdb из SkiaSharp.NativeAssets.Win32 весит ~84 МБ и в выкладке не
+       нужен: без этой цели публикация win-x64 вырастает почти на 0,1 ГБ (ADR-018 §9, размер
+       публикации). Символы остаются в пакете NuGet, если понадобится разбор дампа. -->
+  <Target Name="DropSkiaNativePdb" AfterTargets="ComputeResolvedFilesToPublishList">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)"
+                             Condition="'%(Filename)%(Extension)' == 'libSkiaSharp.pdb'" />
+    </ItemGroup>
+  </Target>
+
   <!-- === Модульность (Этап 3+, Этап 5)
        Вертикали Video/Yandex/Reader/CodeGraph/Skills/Git/Personas/Spend/Knowledge/
        Changelog/Diagnostics/Docs/Tts/WebSearch/Tasks/Modules/ProjectServices/Backgrounds

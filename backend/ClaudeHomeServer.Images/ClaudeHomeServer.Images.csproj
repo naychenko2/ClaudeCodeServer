@@ -28,4 +28,14 @@
     <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Растр редактора (ADR-018 §9). Пакеты — только здесь: Core остаётся без пакетов
+         (сторож CorePackageReferenceGuardTests). Нативка Linux — вариант NoDependencies:
+         fontconfig не нужен, текст мы не рисуем; на Windows SkiaSharp сам тянет Win32.
+         Публикация — строго с RID (-r linux-x64 / -r win-x64), иначе в runtimes/ уедет
+         ~0,4 ГБ нативки под все платформы. -->
+    <PackageReference Include="SkiaSharp" Version="3.119.2" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="3.119.2" />
+  </ItemGroup>
+
 </Project>

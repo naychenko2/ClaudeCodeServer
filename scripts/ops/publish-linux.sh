@@ -22,7 +22,8 @@ rm -rf "$STAGING"
 mkdir -p "$STAGING"
 
 echo "== publish-backend"
-dotnet publish "$REPO/backend/ClaudeHomeServer/ClaudeHomeServer.csproj" -c Release -o "$STAGING" --nologo -v quiet
+# RID обязателен: без него нативка SkiaSharp едет под все платформы (~0,4 ГБ)
+dotnet publish "$REPO/backend/ClaudeHomeServer/ClaudeHomeServer.csproj" -c Release -r linux-x64 --self-contained false -o "$STAGING" --nologo -v quiet
 # Динамические модули ModuleLoader резолвит по пути — без них старт падает (см. deploy-agent.ps1)
 for mod in notes/ClaudeHomeServer.Notes.dll spend/ClaudeHomeServer.Spend.dll; do
   [[ -f "$STAGING/modules/$mod" ]] || { echo "нет modules/$mod после publish" >&2; exit 1; }

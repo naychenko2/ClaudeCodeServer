@@ -61,10 +61,19 @@ internal interface IAgentUpdates
 /// (<see cref="DeviceHello.AgentUpdate"/>), смена состояния повторяет hello. Каждый канал
 /// исполнения — ход или запрос ретранслятора — держит аренду <see cref="ActivityRegistry"/>
 /// до конца работы: пока она открыта, агент на новую версию не переключается.
+/// Ack приходит только на hello, а hello — только при подключении, поэтому
+/// <see cref="RunUpdateChecksAsync"/> повторяет его раз в период: сервер, переоткрывший
+/// раздачу без рестарта, назовёт новую версию и без переподключения агента.
 /// </summary>
 internal sealed class AgentCoordinator : IAsyncDisposable
 {
     public static readonly TimeSpan DefaultMaxOutage = DeviceExecProtocol.MaxOutage;
+
+    /// <summary>Период повторной проверки обновления по умолчанию (<c>AI_HOME_AGENT_UPDATE_CHECK_MINUTES</c>).</summary>
+    public static readonly TimeSpan DefaultUpdateCheckPeriod = TimeSpan.FromMinutes(30);
+
+    /// <summary>Разброс периода: ±10 %, чтобы агенты, поднятые одной выкаткой, не стучались разом.</summary>
+    public const double UpdateCheckJitter = 0.1;
 
     private readonly IControlConnection _control;
     private readonly IHarness _harness;
@@ -76,6 +85,7 @@ internal sealed class AgentCoordinator : IAsyncDisposable
     private readonly string _agentVersion;
     private readonly ILogger _log;
     private readonly TimeSpan _maxOutage;
+    private readonly TimeProvider _time;
     private readonly SemaphoreSlim _helloLock = new(1, 1);
     private readonly CancellationTokenSource _stopping = new();
     private readonly List<Task> _turns = [];
@@ -85,8 +95,10 @@ internal sealed class AgentCoordinator : IAsyncDisposable
 
     public AgentCoordinator(IControlConnection control, IHarness harness, IExecSocketConnector connector,
         Func<ExecLink, CancellationToken, Task> runTurn, string agentVersion, ILogger? log = null, TimeSpan? maxOutage = null,
-        Func<ExecLink, CancellationToken, Task>? runRelay = null, IAgentUpdates? updates = null, ActivityRegistry? activity = null)
+        Func<ExecLink, CancellationToken, Task>? runRelay = null, IAgentUpdates? updates = null, ActivityRegistry? activity = null,
+        TimeProvider? time = null)
     {
+        _time = time ?? TimeProvider.System;
         _control = control;
         _harness = harness;
         _connector = connector;
@@ -148,6 +160,32 @@ internal sealed class AgentCoordinator : IAsyncDisposable
             _helloLock.Release();
         }
     }
+
+    /// <summary>
+    /// Раз в <paramref name="period"/> (с разбросом) — hello ради свежего ack. Канал лежит —
+    /// hello не уходит, это не ошибка: после реконнекта его пошлёт <see cref="IControlConnection.Reconnected"/>.
+    /// </summary>
+    public async Task RunUpdateChecksAsync(TimeSpan period, CancellationToken ct)
+    {
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _stopping.Token);
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(Jittered(period, Random.Shared.NextDouble()), _time, linked.Token);
+                try { await HelloAsync(force: true); }
+                catch (Exception e) when (e is not OperationCanceledException)
+                {
+                    _log.LogInformation("Проверка обновления агента не ушла: {Error}", e.Message);
+                }
+            }
+        }
+        catch (OperationCanceledException) when (linked.IsCancellationRequested) { }
+    }
+
+    /// <summary>Период с разбросом; <paramref name="sample"/> ∈ [0, 1) растягивается на ±<see cref="UpdateCheckJitter"/>.</summary>
+    internal static TimeSpan Jittered(TimeSpan period, double sample) =>
+        period * (1 - UpdateCheckJitter + 2 * UpdateCheckJitter * sample);
 
     private void OnHarnessChanged(HarnessStatus status) => RepeatHello("смены копии CLI");
 

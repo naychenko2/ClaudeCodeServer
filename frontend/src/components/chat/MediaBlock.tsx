@@ -157,15 +157,15 @@ export function extractMediaFromResult(result: string): MediaItem[] {
     const url = obj.url ?? obj.uri ?? obj.result_url;
     if (typeof url !== 'string') return;
     // Только абсолютные http(s) и строгий локальный stream-URL — никаких иных относительных
-    const isLocal = isLocalStreamUrl(url);
-    if (!isLocal && !/^https?:\/\//i.test(url)) return;
+    const isStream = isLocalStreamUrl(url);
+    if (!isStream && !/^https?:\/\//i.test(url)) return;
     // Входные изображения пользователя (uploaded) — не выход генерации
     if (obj.source === 'uploaded' || url.includes('glifchat-image-input-production')) return;
     const kind = classifyUrl(obj);
     if (!kind) return;
     if (items.some(m => m.url === url)) return;
     const fileNameRaw = obj.file_name ?? obj.fileName ?? obj.filename ?? obj.name ?? obj.title;
-    const fileName = typeof fileNameRaw === 'string' ? fileNameRaw : isLocal ? localFileName(url) : undefined;
+    const fileName = typeof fileNameRaw === 'string' ? fileNameRaw : isStream ? localFileName(url) : undefined;
     // Размеры: fal кладёт в корень элемента, glif assets — в metadata.{width,height};
     // в view_media media[] размеров нет — блок рендерится без них, это ок
     const meta = asObj(obj.metadata);

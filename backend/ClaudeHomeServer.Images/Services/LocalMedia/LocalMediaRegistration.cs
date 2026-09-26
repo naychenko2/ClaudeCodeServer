@@ -21,6 +21,7 @@ public static class LocalMediaRegistration
         services.AddSingleton<ComfyClient>();
         services.AddSingleton<LocalMediaJobStore>();
         services.AddSingleton<LocalMediaService>();
+        services.AddSingleton<LocalMediaCleanup>();
         services.AddGatedHostedService<LocalMediaCollector>(config, "images");
         return services;
     }

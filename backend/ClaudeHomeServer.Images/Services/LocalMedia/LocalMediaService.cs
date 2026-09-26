@@ -190,13 +190,13 @@ public sealed class LocalMediaService(
                 var size = string.IsNullOrWhiteSpace(request.Aspect) ? ((int, int)?)null : AspectSize(request.Aspect);
                 var names = new List<string>();
                 for (var k = 0; k < images.Count; k++)
-                    names.Add(await UploadInputAsync(request, root, images[k], MediaKind.Image, $"{job.Id}-in{k + 1}", ct));
+                    names.Add(await UploadInputAsync(request, job, root, images[k], MediaKind.Image, $"{job.Id}-in{k + 1}", ct));
                 return (ComfyWorkflows.EditImage(prompt, names, size, seed, prefix), 60 + 10 * (images.Count - 1));
             }
             case LocalMediaOps.FaceDetail:
             {
                 if (images.Count != 1) throw new LocalMediaInputException("Нужна ровно одна картинка (image).");
-                var name = await UploadInputAsync(request, root, images[0], MediaKind.Image, $"{job.Id}-in1", ct);
+                var name = await UploadInputAsync(request, job, root, images[0], MediaKind.Image, $"{job.Id}-in1", ct);
                 return (ComfyWorkflows.FaceDetail(name, seed, prefix), 25);
             }
             case LocalMediaOps.TextToVideo:
@@ -220,10 +220,10 @@ public sealed class LocalMediaService(
                 // Портретный кадр — портретное видео: стороны переставляются, а не кадр режется
                 if (ImageDimensions.Read(first.Bytes) is { } dims && dims.Height > dims.Width)
                     size = (size.Height, size.Width);
-                var firstName = await comfy.UploadImageAsync(first.Bytes, $"{job.Id}-in1{first.Extension}", ct);
+                var firstName = await UploadAsync(job, first.Bytes, $"{job.Id}-in1{first.Extension}", ct);
                 string? lastName = null;
                 if (!string.IsNullOrWhiteSpace(request.LastFrame))
-                    lastName = await UploadInputAsync(request, root, request.LastFrame, MediaKind.Image, $"{job.Id}-last", ct);
+                    lastName = await UploadInputAsync(request, job, root, request.LastFrame, MediaKind.Image, $"{job.Id}-last", ct);
 
                 var frames = ComfyWorkflows.FramesFor(seconds);
                 RememberVideo(job, prompt, size, seconds, frames, fast);
@@ -250,8 +250,8 @@ public sealed class LocalMediaService(
                 if (ImageDimensions.Read(mask.Bytes) is not { } maskDims || maskDims != (info.Width, info.Height))
                     throw new LocalMediaInputException($"Маска должна быть того же размера, что видео ({info.Width}×{info.Height}).");
 
-                var videoName = await comfy.UploadImageAsync(video.Bytes, $"{job.Id}-video.mp4", ct);
-                var maskName = await comfy.UploadImageAsync(mask.Bytes, $"{job.Id}-mask{mask.Extension}", ct);
+                var videoName = await UploadAsync(job, video.Bytes, $"{job.Id}-video.mp4", ct);
+                var maskName = await UploadAsync(job, mask.Bytes, $"{job.Id}-mask{mask.Extension}", ct);
                 var frames = ComfyWorkflows.FramesFor(seconds);
                 job.Width = info.Width;
                 job.Height = info.Height;
@@ -275,7 +275,7 @@ public sealed class LocalMediaService(
 
                 var imageNames = new List<string>();
                 for (var k = 0; k < images.Count; k++)
-                    imageNames.Add(await UploadInputAsync(request, root, images[k], MediaKind.Image, $"{job.Id}-ref{k + 1}", ct));
+                    imageNames.Add(await UploadInputAsync(request, job, root, images[k], MediaKind.Image, $"{job.Id}-ref{k + 1}", ct));
                 var videoNames = new List<string>();
                 for (var k = 0; k < refVideos.Count; k++)
                 {
@@ -283,11 +283,11 @@ public sealed class LocalMediaService(
                     if (video.Video!.Seconds is < MinRefVideoSeconds or > MaxRefVideoSeconds)
                         throw new LocalMediaInputException($"Референс-видео «{refVideos[k]}» — ≈{video.Video.Seconds:0.#} с, "
                             + "а нужно от 2 до 15 секунд.");
-                    videoNames.Add(await comfy.UploadImageAsync(video.Bytes, $"{job.Id}-refvid{k + 1}.mp4", ct));
+                    videoNames.Add(await UploadAsync(job, video.Bytes, $"{job.Id}-refvid{k + 1}.mp4", ct));
                 }
                 var audioNames = new List<string>();
                 for (var k = 0; k < refAudios.Count; k++)
-                    audioNames.Add(await UploadInputAsync(request, root, refAudios[k], MediaKind.Audio, $"{job.Id}-refaud{k + 1}", ct));
+                    audioNames.Add(await UploadInputAsync(request, job, root, refAudios[k], MediaKind.Audio, $"{job.Id}-refaud{k + 1}", ct));
 
                 job.Width = size.Width;
                 job.Height = size.Height;
@@ -335,8 +335,8 @@ public sealed class LocalMediaService(
         if (portrait) size = (size.Height, size.Width);
         var tiled = target == "2k" || options.Upscale1440Tiled;
 
-        var latentVideo = await CopyLatentAsync(source.LatentVideo, $"{ComfyClient.InputFolder}-{job.Id}-video.latent", ct);
-        var latentAudio = await CopyLatentAsync(source.LatentAudio, $"{ComfyClient.InputFolder}-{job.Id}-audio.latent", ct);
+        var latentVideo = await CopyLatentAsync(job, source.LatentVideo, $"{ComfyClient.InputFolder}-{job.Id}-video.latent", ct);
+        var latentAudio = await CopyLatentAsync(job, source.LatentAudio, $"{ComfyClient.InputFolder}-{job.Id}-audio.latent", ct);
 
         if (request.Seed is not >= 0) job.Seed = source.Seed;
         job.Width = size.Width;
@@ -348,12 +348,22 @@ public sealed class LocalMediaService(
             target == "2k" ? null : Upscale1440Eta(source.Frames.Value, tiled));
     }
 
-    private async Task<string> CopyLatentAsync(string outputPath, string inputName, CancellationToken ct)
+    private async Task<string> CopyLatentAsync(LocalMediaJob job, string outputPath, string inputName, CancellationToken ct)
     {
         var slash = outputPath.LastIndexOf('/');
         var file = new ComfyOutputFile(outputPath[(slash + 1)..], slash < 0 ? "" : outputPath[..slash], "output");
         var bytes = await comfy.DownloadAsync(file, ct);
-        return await comfy.UploadInputAsync(bytes, inputName, "", ct);
+        var name = await comfy.UploadInputAsync(bytes, inputName, "", ct);
+        job.ComfyInputs.Add(name);
+        return name;
+    }
+
+    // Каждая загрузка в input ComfyUI записывается в задачу: по этому списку её потом убирает чистка
+    private async Task<string> UploadAsync(LocalMediaJob job, byte[] bytes, string fileName, CancellationToken ct)
+    {
+        var name = await comfy.UploadImageAsync(bytes, fileName, ct);
+        job.ComfyInputs.Add(name);
+        return name;
     }
 
     public static bool IsHeavy(LocalMediaRequest request) =>
@@ -438,11 +448,11 @@ public sealed class LocalMediaService(
             ? size
             : throw new LocalMediaInputException("aspect — одно из: " + string.Join(", ", ComfyWorkflows.ImageSizes.Keys) + ".");
 
-    private async Task<string> UploadInputAsync(LocalMediaRequest request, string root, string reference,
-        MediaKind kind, string stem, CancellationToken ct)
+    private async Task<string> UploadInputAsync(LocalMediaRequest request, LocalMediaJob job, string root,
+        string reference, MediaKind kind, string stem, CancellationToken ct)
     {
         var input = ReadInput(request, root, reference, kind);
-        return await comfy.UploadImageAsync(input.Bytes, stem + input.Extension, ct);
+        return await UploadAsync(job, input.Bytes, stem + input.Extension, ct);
     }
 
     private enum MediaKind { Image, Video, Audio }
@@ -578,7 +588,7 @@ public sealed class LocalMediaService(
             }
 
             if (history.Failed)
-                return new LocalMediaJobView(Fail(job, history.Error ?? "ComfyUI завершил задачу ошибкой."));
+                return new LocalMediaJobView(Fail(job, history.Error ?? "ComfyUI завершил задачу ошибкой.", history.Files));
             if (!history.Completed)
                 return new LocalMediaJobView(job, 0);
             return new LocalMediaJobView(await CollectAsync(job, history, ct));
@@ -606,10 +616,10 @@ public sealed class LocalMediaService(
             if (LocalMediaStatuses.IsTerminal(current.Status)) return current;
 
             var root = projects.ResolveRoot(current.OwnerId, current.ProjectId);
-            if (root is null) return Fail(current, "Проект задачи недоступен — результат некуда сохранить.");
+            if (root is null) return Fail(current, "Проект задачи недоступен — результат некуда сохранить.", files);
 
             var wanted = files.Where(f => ContentTypeOf(Path.GetExtension(f.FileName)) is not null).ToList();
-            if (wanted.Count == 0) return Fail(current, "ComfyUI не вернул файлов результата.");
+            if (wanted.Count == 0) return Fail(current, "ComfyUI не вернул файлов результата.", files);
 
             var folder = $"{ResultsFolder}/{current.CreatedAt:yyyy-MM-dd}";
             var outputs = new List<LocalMediaOutput>();
@@ -650,17 +660,18 @@ public sealed class LocalMediaService(
                 j.Outputs = outputs;
                 j.LatentVideo = latentVideo;
                 j.LatentAudio = latentAudio;
+                j.ComfyOutputs = ComfyNames(files);
                 j.FinishedAt = DateTime.UtcNow;
             }) ?? current;
         }
         catch (UnauthorizedAccessException)
         {
-            return Fail(job, "Папка результатов идёт через символическую ссылку или вне проекта — результат не сохранён.");
+            return Fail(job, "Папка результатов идёт через символическую ссылку или вне проекта — результат не сохранён.", files);
         }
         catch (IOException ex)
         {
             log.LogWarning(ex, "Не удалось записать результат задачи {JobId}", job.Id);
-            return Fail(job, "Не удалось записать результат в папку проекта.");
+            return Fail(job, "Не удалось записать результат в папку проекта.", files);
         }
         finally
         {
@@ -683,16 +694,22 @@ public sealed class LocalMediaService(
         _ => null,
     };
 
-    private LocalMediaJob Fail(LocalMediaJob job, string error) =>
+    private static List<string> ComfyNames(IReadOnlyList<ComfyOutputFile> files) =>
+        files.Select(f => f.Subfolder.Length == 0 ? f.FileName : $"{f.Subfolder}/{f.FileName}").ToList();
+
+    // files — что ComfyUI успел положить в output: их убирает чистка
+    private LocalMediaJob Fail(LocalMediaJob job, string error, IReadOnlyList<ComfyOutputFile>? files = null) =>
         store.Update(job.Id, job.OwnerId, j =>
         {
             j.Status = LocalMediaStatuses.Failed;
             j.Error = error;
             j.FinishedAt = DateTime.UtcNow;
+            if (files is not null) j.ComfyOutputs = ComfyNames(files);
         }) ?? job;
 
     // Сбор висящих задач фоном: результат попадает в проект, даже если агент не спрашивает.
-    // Возвращает число задач, дошедших до конца
+    // Возвращает число задач, дошедших до конца. Забывание старых задач и чистка ComfyUI —
+    // в LocalMediaCleanup
     public async Task<int> CollectPendingAsync(CancellationToken ct)
     {
         var done = 0;
@@ -702,8 +719,6 @@ public sealed class LocalMediaService(
             var view = await RefreshAsync(job, ct);
             if (LocalMediaStatuses.IsTerminal(view.Job.Status)) done++;
         }
-        var options = Options;
-        store.Prune(TimeSpan.FromDays(Math.Max(1, options.JobRetentionDays)), DateTime.UtcNow);
         return done;
     }
 }

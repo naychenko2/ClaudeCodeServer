@@ -41,6 +41,13 @@ public sealed class LocalMediaOptions
     // Сколько дней помнить завершённые задачи (файлы в проекте остаются)
     public int JobRetentionDays { get; set; } = 7;
 
+    // Хостовые каталоги input и output ComfyUI — для чистки наших промежуточных файлов
+    // (входы задач, копии результатов, латенты). Пусто хотя бы одно — чистка выключена
+    public string ComfyInputDir { get; set; } = "";
+    public string ComfyOutputDir { get; set; } = "";
+
+    public bool CleanupEnabled => !string.IsNullOrWhiteSpace(ComfyInputDir) && !string.IsNullOrWhiteSpace(ComfyOutputDir);
+
     public static LocalMediaOptions Read(IConfiguration config)
     {
         var options = new LocalMediaOptions();

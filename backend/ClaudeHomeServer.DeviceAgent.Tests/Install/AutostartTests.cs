@@ -96,10 +96,35 @@ public sealed class AutostartTests : IDisposable
     }
 
     [Fact]
-    public void Unit_systemd_запускает_supervise_через_симлинк_current()
+    public void Unit_systemd_живёт_в_графической_сессии_и_запускает_supervise_через_симлинк_current()
     {
         var unit = SystemdUserAutostart.RenderUnit("/home/ivan/.local/share/ai-home-agent/current/ai-home-agent",
-            new Dictionary<string, string> { ["XDG_DATA_HOME"] = "/data/ivan" });
+            new Dictionary<string, string> { ["XDG_DATA_HOME"] = "/data/ivan" }, alwaysOn: false);
+
+        unit.Should().Be("""
+            [Unit]
+            Description=AI Home: агент устройства
+            After=graphical-session.target
+            PartOf=graphical-session.target
+
+            [Service]
+            Type=simple
+            ExecStart="/home/ivan/.local/share/ai-home-agent/current/ai-home-agent" supervise
+            Restart=on-failure
+            RestartSec=5
+            Environment="XDG_DATA_HOME=/data/ivan"
+
+            [Install]
+            WantedBy=graphical-session.target
+
+            """.Replace("\r\n", "\n"));
+    }
+
+    [Fact]
+    public void Unit_always_on_без_графики_остаётся_на_default_target()
+    {
+        var unit = SystemdUserAutostart.RenderUnit("/home/ivan/.local/share/ai-home-agent/current/ai-home-agent",
+            new Dictionary<string, string> { ["XDG_DATA_HOME"] = "/data/ivan" }, alwaysOn: true);
 
         unit.Should().Be("""
             [Unit]
@@ -121,10 +146,10 @@ public sealed class AutostartTests : IDisposable
     [Fact]
     public void Unit_экранирует_то_что_systemd_раскрыл_бы_сам()
     {
-        var unit = SystemdUserAutostart.RenderUnit("/home/a b/$HOME/100%/\"q\"/ai-home-agent", new Dictionary<string, string>());
+        var unit = SystemdUserAutostart.RenderUnit("/home/a b/$HOME/100%/\"q\"/ai-home-agent", new Dictionary<string, string>(), alwaysOn: false);
         unit.Should().Contain("""ExecStart="/home/a b/$$HOME/100%%/\"q\"/ai-home-agent" supervise""");
 
-        var act = () => SystemdUserAutostart.RenderUnit("/x\n[Service]\nExecStartPre=/bin/evil", new Dictionary<string, string>());
+        var act = () => SystemdUserAutostart.RenderUnit("/x\n[Service]\nExecStartPre=/bin/evil", new Dictionary<string, string>(), alwaysOn: false);
         act.Should().Throw<ArgumentException>("перевод строки дописал бы в unit свою секцию");
     }
 
@@ -159,6 +184,26 @@ public sealed class AutostartTests : IDisposable
         result.Registered.Should().BeTrue("linger не включился, но автозапуск при входе прописан");
         runner.Commands.Should().Contain("loginctl enable-linger");
         result.Notes.Should().ContainSingle().Which.Should().Contain("sudo loginctl enable-linger");
+        File.ReadAllText(autostart.UnitFile).Should().Contain("WantedBy=default.target");
+    }
+
+    [Fact]
+    public void Смена_режима_переписывает_unit_и_перевключает_его_а_не_копит_ссылки()
+    {
+        var runner = new FakeCommandRunner();
+        var autostart = new SystemdUserAutostart(_install.Layout, runner, _unitDir, new Dictionary<string, string>());
+        autostart.Register("1.2.0", alwaysOn: false);
+        runner.Commands.Clear();
+
+        autostart.Register("1.2.0", alwaysOn: true);
+        autostart.Register("1.2.0", alwaysOn: true);
+
+        File.ReadAllText(autostart.UnitFile).Should().Contain("WantedBy=default.target");
+        runner.Commands.Where(c => c.StartsWith("systemctl")).Should().Equal(
+            "systemctl --user daemon-reload",
+            "systemctl --user reenable ai-home-agent.service",
+            "systemctl --user daemon-reload",
+            "systemctl --user enable ai-home-agent.service");
     }
 
     [Fact]

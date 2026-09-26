@@ -54,6 +54,8 @@ internal sealed class SystemdUserAutostart(
 {
     public const string UnitName = "ai-home-agent.service";
 
+    private const string GraphicalTarget = "graphical-session.target";
+
     /// <summary>Переменные, которые определяют каталоги агента: у менеджера systemd они бывают другими, чем в терминале.</summary>
     private static readonly string[] InheritedVariables = ["XDG_CONFIG_HOME", "XDG_DATA_HOME"];
 
@@ -79,12 +81,20 @@ internal sealed class SystemdUserAutostart(
 
     public string ExecutablePath => Path.Combine(layout.CurrentLink, SupervisorContract.ExecutableName);
 
-    /// <summary>Текст unit: путь — через симлинк current, переменные каталогов — из окружения установки.</summary>
-    public static string RenderUnit(string executable, IReadOnlyDictionary<string, string> environment)
+    /// <summary>
+    /// Текст unit: путь — через симлинк current, переменные каталогов — из окружения установки.
+    /// Обычный режим живёт в графической сессии: от <c>default.target</c> у агента нет
+    /// <c>DISPLAY</c>/<c>WAYLAND_DISPLAY</c>, и приложения из хода не открываются. Режим
+    /// <paramref name="alwaysOn"/> (linger, без входа) графики не ждёт — остаётся на <c>default.target</c>.
+    /// </summary>
+    public static string RenderUnit(string executable, IReadOnlyDictionary<string, string> environment, bool alwaysOn)
     {
         var text = new StringBuilder()
             .AppendLine("[Unit]")
-            .AppendLine("Description=AI Home: агент устройства")
+            .AppendLine("Description=AI Home: агент устройства");
+        if (!alwaysOn)
+            text.AppendLine($"After={GraphicalTarget}").AppendLine($"PartOf={GraphicalTarget}");
+        text
             .AppendLine()
             .AppendLine("[Service]")
             .AppendLine("Type=simple")
@@ -96,7 +106,7 @@ internal sealed class SystemdUserAutostart(
         return text
             .AppendLine()
             .AppendLine("[Install]")
-            .AppendLine("WantedBy=default.target")
+            .AppendLine($"WantedBy={(alwaysOn ? "default.target" : GraphicalTarget)}")
             .ToString()
             .Replace("\r\n", "\n");
     }
@@ -105,13 +115,17 @@ internal sealed class SystemdUserAutostart(
     {
         if (!IsAvailable()) return new AutostartResult(false, [ManualInstruction()]);
 
-        var unit = RenderUnit(ExecutablePath, environment);
+        var unit = RenderUnit(ExecutablePath, environment, alwaysOn);
         Directory.CreateDirectory(unitDirectory);
-        if (!File.Exists(UnitFile) || File.ReadAllText(UnitFile) != unit) AgentLayout.WriteAtomic(UnitFile, unit);
+        var existed = File.Exists(UnitFile);
+        var changed = !existed || File.ReadAllText(UnitFile) != unit;
+        if (changed) AgentLayout.WriteAtomic(UnitFile, unit);
 
         var notes = new List<string>();
         Require(Systemctl("daemon-reload"), "daemon-reload");
-        Require(Systemctl("enable", UnitName), "enable");
+        // Сменился WantedBy (режим --always-on) — enable оставил бы ссылку в старом *.wants
+        var enable = existed && changed ? "reenable" : "enable";
+        Require(Systemctl(enable, UnitName), enable);
         if (alwaysOn)
         {
             var (code, output) = runner.Run("loginctl", ["enable-linger"]);

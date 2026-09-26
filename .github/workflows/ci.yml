@@ -55,7 +55,7 @@ jobs:
               sys.exit(1)
           print(f'OK: {sum(1 for r,_,fs in os.walk(\"backend\") for f in fs if f.endswith(\".cs\"))} файлов .cs — валидный UTF-8')
           "
-          shell: bash
+        shell: bash
       # Blame-режим: молчание тестового процесса дольше 5 минут — VSTest снимает дамп,
       # пишет в лог ИМЕНА тестов, выполнявшихся в этот момент, и валит шаг. По mini-дампу
       # дедлок не разобрать (dumpasync требует метаданных, которых в mini нет) — берём full.

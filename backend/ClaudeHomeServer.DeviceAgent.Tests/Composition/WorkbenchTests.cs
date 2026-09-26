@@ -117,8 +117,23 @@ public sealed class WorkbenchTests : IAsyncLifetime
         var terminal = await hub.InvokeAsync<JsonElement>("CreateTerminal", "p1", 80, 24, null);
         var id = terminal.GetProperty("id").GetString()!;
         _launchers.TrackedCount.Should().Be(1, "терминал живёт группой/Job Object, как ход");
-        await hub.InvokeAsync("TerminalInput", id, "pwd; echo agent-$((40+2))\n");
-        await seen.Task.WaitAsync(TimeSpan.FromSeconds(20));
+        // Маркер складывается оболочкой, чтобы не совпасть с эхом ввода. На Windows оболочка —
+        // powershell (через ConPTY-мост или перенаправление): путь без таблицы pwd, Enter — \r
+        // (под ConPTY голый \n — это Ctrl+Enter, PSReadLine строку не выполнит)
+        var input = OperatingSystem.IsWindows()
+            ? "(Get-Location).Path; echo \"agent-$(40+2)\"\r\n"
+            : "pwd; echo agent-$((40+2))\n";
+        await hub.InvokeAsync("TerminalInput", id, input);
+        try
+        {
+            await seen.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        }
+        catch (TimeoutException)
+        {
+            string got;
+            lock (output) got = output.ToString();
+            throw new TimeoutException($"маркер agent-42 не пришёл; вывод терминала:\n{got}");
+        }
 
         lock (output) output.ToString().Should().Contain(AgentPathPolicy.RealPath(_box.Project));
         (await hub.InvokeAsync<List<JsonElement>>("ListTerminals", "p1")).Should().ContainSingle();

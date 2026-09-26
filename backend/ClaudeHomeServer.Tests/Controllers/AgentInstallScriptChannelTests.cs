@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.Versioning;
 using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Controllers;
@@ -30,8 +31,10 @@ public class AgentInstallScriptChannelTests : IDisposable
     [InlineData("http://localhost.evil.example")]
     [InlineData("ftp://localhost")]
     [InlineData("localhost:5001")]
+    [UnsupportedOSPlatform("windows")]
     public async Task Sh_ОткрытыйКаналИзСети_ОтказДоЗагрузки(string server)
     {
+        Skip.If(OperatingSystem.IsWindows(), "install.sh — только Linux");
         var (code, stderr) = await RunShAsync(server);
 
         code.Should().Be(2, stderr);
@@ -45,8 +48,10 @@ public class AgentInstallScriptChannelTests : IDisposable
     [InlineData("http://localhost:5001", "=http,https")]
     [InlineData("http://127.0.0.1:5000/", "=http,https")]
     [InlineData("http://[::1]:5000", "=http,https")]
+    [UnsupportedOSPlatform("windows")]
     public async Task Sh_HttpsИлиПетля_ИдётКЗагрузкеСЗапретомПониженияПротокола(string server, string proto)
     {
+        Skip.If(OperatingSystem.IsWindows(), "install.sh — только Linux");
         var (code, stderr) = await RunShAsync(server);
 
         // Подставной curl отвечает ошибкой — дальше честное «манифест недоступен»
@@ -72,6 +77,7 @@ public class AgentInstallScriptChannelTests : IDisposable
         code.Should().Be(expected, output);
     }
 
+    [UnsupportedOSPlatform("windows")]
     private async Task<(int Code, string Stderr)> RunShAsync(string server)
     {
         Skip.IfNot(OperatingSystem.IsLinux(), "install.sh — только Linux");

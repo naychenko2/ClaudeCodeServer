@@ -1,12 +1,12 @@
 // Экран редактора картинок, раскладка v2 (макет docs/mockups/image-editor-v2.html):
 // слева шесть секций инструментов, в центре холст или генерация / варианты, справа
-// сверху поле промпта, под ним место чата картинки (пока там «Обсудить» из v1).
+// сверху поле промпта, под ним чат картинки (ядро отдаёт его компонентом ImageChat).
 // На телефоне холст на весь экран, промпт внизу, «Инструменты» и «Чат» — шторки.
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react';
 import { ArrowLeft, Brush, Image as ImageIcon, MessageSquare, Upload, Wrench } from 'lucide-react';
 import {
-  Button, EmptyState, Field, IconButton, Island, Modal, ModalActions, SegmentedControl, TextField, Toggle, ICON_SIZE, ICON_STROKE,
+  Button, Dot, EmptyState, Field, IconButton, Island, Modal, ModalActions, SegmentedControl, TextField, Toggle, ICON_SIZE, ICON_STROKE,
   C, FS, ISLAND, R, SHADOW, SP, useIsMobile, api as appApi, showToast, useMe, ModelsSpendModal, getNav, navPush, type NavSnapshot,
 } from 'aihome_shell/kit';
 import {
@@ -34,9 +34,8 @@ import { ErrorView, GenerationView, VariantsView } from './ResultViews';
 import { SaveAsDialog } from './SaveAsDialog';
 import { defaultStem, nameStem } from './saveAs';
 import { CharacterChip, CharacterSection, useCharacterDialogs, useCharacters } from './characters/CharacterPicker';
-import { DiscussPanel, openProjectChat, type DiscussState } from './discuss/DiscussPanel';
-import { buildDiscussText } from './discuss/discussText';
-import { discussSnapshot } from './discuss/snapshot';
+import { useImageChat } from './chat/useImageChat';
+import type { ImageChatSlotProps } from '../../lib/subsystems/registryCore';
 
 export type ImageEditorTarget =
   | { kind: 'edit'; path: string }       // «Редактировать» у картинки проекта
@@ -44,11 +43,17 @@ export type ImageEditorTarget =
 
 const ic = (I: typeof Brush, size: number = ICON_SIZE.sm) => <I size={size} strokeWidth={ICON_STROKE} />;
 
-export function ImageEditor({ projectId, projectName, target, onClose, onShowInFiles, onDirtyChange }: {
+export function ImageEditor({ projectId, projectName, target, sessionId: openSessionId, ImageChat, onClose, onOpenPath, onShowInFiles, onDirtyChange }: {
   projectId: string;
   projectName: string;
   target: ImageEditorTarget;
+  // Чат картинки, с которым открыли редактор (карточка чата)
+  sessionId?: string | null;
+  // Чат картинки ядра (контекст слота app-overlay): своей копии ChatPanel у модуля нет
+  ImageChat: ComponentType<ImageChatSlotProps>;
   onClose: () => void;
+  // Открыть в редакторе другой файл проекта («Разговор продолжился на …»)
+  onOpenPath: (path: string) => void;
   // Есть варианты, которые пропадут при закрытии (рисуются или не сохранены)
   onDirtyChange?: (dirty: boolean) => void;
   // «Показать в файлах» в тосте после сохранения
@@ -107,9 +112,6 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
   const chars = useCharacters(api, projectId);
   const charDialogs = useCharacterDialogs(api, projectId, chars);
   const character = chars.active;
-  const [discuss, setDiscuss] = useState<DiscussState | null>(null);
-  // Чат обсуждения переиспользуется внутри одного сеанса редактора
-  const discussSession = useRef<string | null>(null);
 
   const me = useMe();
   const [providersOpen, setProvidersOpen] = useState(false);
@@ -349,38 +351,11 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
     return () => { alive = false; };
   }, [infoSrc]);
 
-  const startDiscuss = async () => {
-    // Ручка обсуждения без картинки с пометками не работает: кнопка активна только при картинке
-    const img = imgRef.current;
-    if (!img || !size) return;
-    const annotated = await discussSnapshot(img, marks, size.w, size.h).catch(() => null);
-    const q = prompt.trim();
-    const marksWord = marks.length ? `, ${marks.length} ${plural(marks.length, 'пометка', 'пометки', 'пометок')}` : '';
-    setDiscuss(d => {
-      if (d?.thumbUrl) URL.revokeObjectURL(d.thumbUrl);
-      return {
-        sessionId: null, error: annotated ? null : 'Не удалось собрать картинку с пометками',
-        thumbUrl: annotated ? URL.createObjectURL(annotated) : null,
-        summary: `${hasImage ? 'Картинка' : 'Новая картинка'}${marksWord} и запрос${q ? `: «${q.length > 50 ? `${q.slice(0, 50)}…` : q}»` : ''}`,
-      };
-    });
-    if (!annotated) return;
-    try {
-      const res = await api.discuss(projectId, {
-        text: buildDiscussText({ fileName: sourcePath ? splitPath(sourcePath).name : null, prompt, marks, size }),
-        annotated, sourcePath: sourcePath ?? undefined, characterSlug: character?.slug,
-        sessionId: discussSession.current ?? undefined,
-      });
-      discussSession.current = res.sessionId;
-      setDiscuss(d => (d ? { ...d, sessionId: res.sessionId } : d));
-    } catch (e) {
-      setDiscuss(d => (d ? { ...d, error: (e as Error).message } : d));
-    }
-  };
-
-  const closeDiscuss = () => setDiscuss(d => {
-    if (d?.thumbUrl) URL.revokeObjectURL(d.thumbUrl);
-    return null;
+  // ── Чат картинки ──
+  const chat = useImageChat({
+    api, projectId, sourcePath, openSessionId, chatVisible: !mobile || sheet === 'chat',
+    canvas: { imgRef, marks, size, stepId: curStep && !curStep.pending ? curStep.id : null },
+    onClose, onOpenPath,
   });
 
   // Вариант становится шагом истории: «Взять за основу» и сохранение варианта
@@ -434,8 +409,9 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
 
   // «Применить» / «Сохранить» — сразу, без диалога, следующей версией рядом
   const saveNext = async (from: SaveSource) => {
+    // Чат картинки переезжает на новый файл вместе с редактором (ADR-018 §1)
     const req: ImageEditSaveRequest = sourcePath
-      ? { ...saveSource(from), mode: 'next-version', sourcePath }
+      ? { ...saveSource(from), mode: 'next-version', sourcePath, chatSessionId: chat.sessionId }
       : { ...saveSource(from), mode: 'next-version', folder: initial.folder || undefined, fileName: initial.name };
     try {
       afterSave(from, (await api.save(projectId, req)).path);
@@ -453,6 +429,7 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
     if (!saveAs) return;
     const res = await api.save(projectId, {
       ...saveSource(saveAs.from), mode: 'as', folder: folder || undefined, fileName, encode: compress ? HEAVY_ENCODE : undefined,
+      chatSessionId: chat.sessionId,
     });
     setSaveAs(null);
     afterSave(saveAs.from, res.path);
@@ -623,25 +600,14 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
       )} />
   );
 
-  // ── Место чата картинки: пока живёт «Обсудить» из v1 ──
-  const chatArea = (
-    <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: SP.md, display: 'flex', flexDirection: 'column', gap: SP.md }}>
-      <div style={{ fontSize: FS.sm, color: C.textMuted, lineHeight: 1.45, textAlign: 'center' }}>
-        Здесь будет чат картинки. Пока можно обсудить её с Claude: ответ придёт сюда, а весь разговор откроется в чатах проекта.
-      </div>
-      <div style={{ display: 'flex', justifyContent: 'center' }}>
-        <Button variant="ghost" size="sm" leftIcon={ic(MessageSquare, ICON_SIZE.xs)}
-          disabled={busy || !hasImage || !size} title={hasImage ? undefined : 'Сначала загрузите картинку'}
-          onClick={() => { void startDiscuss(); }}>
-          Обсудить с Claude
-        </Button>
-      </div>
-      {discuss && (
-        <DiscussPanel projectId={projectId} projectName={projectName} state={discuss}
-          onUsePrompt={text => { setPrompt(text); setSheet(null); }}
-          onOpenChat={sid => { openProjectChat(projectId, sid); onClose(); }}
-          onClose={closeDiscuss} />
-      )}
+  // ── Чат картинки: только у картинки, которая лежит в проекте ──
+  const chatArea = chat.props ? (
+    <div data-image-chat="" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <ImageChat {...chat.props} />
+    </div>
+  ) : (
+    <div style={{ flex: 1, minHeight: 0, padding: SP.md, fontSize: FS.sm, color: C.textMuted, lineHeight: 1.45, textAlign: 'center' }}>
+      Чат картинки появится, когда картинка будет в проекте: сохраните её, и можно будет обсудить её с Claude.
     </div>
   );
 
@@ -656,7 +622,9 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
           <Button variant="ghostFilled" size="sm" fullWidth leftIcon={ic(Wrench, ICON_SIZE.xs)} onClick={() => setSheet('tools')}>Инструменты</Button>
         </div>
         <div style={{ flex: 1 }}>
-          <Button variant="ghostFilled" size="sm" fullWidth leftIcon={ic(MessageSquare, ICON_SIZE.xs)} onClick={() => setSheet('chat')}>Чат</Button>
+          <Button variant="ghostFilled" size="sm" fullWidth leftIcon={ic(MessageSquare, ICON_SIZE.xs)} onClick={() => { chat.markRead(); setSheet('chat'); }}>
+            Чат{chat.unread && <span data-chat-unread="" title="Новое в чате" style={{ display: 'inline-flex', marginLeft: SP.xs }}><Dot color={C.accent} /></span>}
+          </Button>
         </div>
       </div>
       {promptCard}
@@ -707,8 +675,8 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
 
       {mobile && sheet && (
         <Modal title={sheet === 'tools' ? 'Инструменты' : 'Чат картинки'} onClose={() => setSheet(null)}
-          cardStyle={{ maxHeight: '86vh', background: C.bgPanel }}>
-          {sheet === 'tools' ? toolPanel : chatArea}
+          cardStyle={sheet === 'chat' ? { height: '86vh', maxHeight: '86vh', background: C.bgPanel } : { maxHeight: '86vh', background: C.bgPanel }}>
+          {sheet === 'tools' ? toolPanel : <div style={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column' }}>{chatArea}</div>}
         </Modal>
       )}
       {labelAt && (

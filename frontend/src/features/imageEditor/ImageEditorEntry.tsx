@@ -4,17 +4,20 @@
 // приложения, а не у кнопки: уход с экрана проекта размонтирует и дерево файлов, и
 // просмотр файла — без хоста спросить про несохранённые варианты было бы некому.
 
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ComponentType } from 'react';
 import { createPortal } from 'react-dom';
 import { Pencil, Sparkles } from 'lucide-react';
 import { Button, ConfirmDialog, ICON_SIZE, ICON_STROKE, ISLAND, Z, useIsMobile, FLAGS, useFeature, NAV_CHANGE_EVENT, parseHash } from 'aihome_shell/kit';
 import { ImageEditor, type ImageEditorTarget } from './ImageEditor';
 import { isEditableImage } from './format';
+import type { ImageChatSlotProps } from '../../lib/subsystems/registryCore';
 
 interface EntryProps {
   projectId: string;
   projectName: string;
   target: ImageEditorTarget;
+  // Чат картинки, с которым открыть редактор (карточка чата в списке)
+  sessionId?: string | null;
   onShowInFiles?: (path: string) => void;
   size?: 'xs' | 'sm';
 }
@@ -55,8 +58,9 @@ function closeImageEditor(): void {
   emit();
 }
 
-// Монтируется в App под авторизацией; размонтирование (выход) закрывает редактор
-export function ImageEditorHost() {
+// Монтируется в App под авторизацией; размонтирование (выход) закрывает редактор.
+// ImageChat — чат картинки ядра из контекста слота app-overlay
+export function ImageEditorHost({ ImageChat }: { ImageChat: ComponentType<ImageChatSlotProps> }) {
   const req = useSyncExternalStore(
     fn => { listeners.add(fn); return () => { listeners.delete(fn); }; },
     () => request,
@@ -64,14 +68,14 @@ export function ImageEditorHost() {
   useEffect(() => closeImageEditor, []);
   if (!req) return null;
   const { seq: key, ...props } = req;
-  return <ImageEditorLayer key={key} {...props} onClose={closeImageEditor} />;
+  return <ImageEditorLayer key={key} {...props} ImageChat={ImageChat} onClose={closeImageEditor} />;
 }
 
 // Слой на весь экран: редактор на месте рабочей области проекта. Портал в body —
 // иначе position: fixed внутри трансформированной панели файлов сжимается до её размеров.
 // Уход с экрана (смена адреса) закрывает слой; несохранённые варианты — через подтверждение,
 // а «Остаться» возвращает прежний адрес.
-function ImageEditorLayer({ onClose, ...props }: Omit<EntryProps, 'size'> & { onClose: () => void }) {
+function ImageEditorLayer({ onClose, ImageChat, ...props }: Omit<EntryProps, 'size'> & { onClose: () => void; ImageChat: ComponentType<ImageChatSlotProps> }) {
   const enabled = useFeature(FLAGS.imageEditor);
   const mobile = useIsMobile();
   const dirty = useRef(false);
@@ -107,7 +111,8 @@ function ImageEditorLayer({ onClose, ...props }: Omit<EntryProps, 'size'> & { on
       position: 'fixed', inset: 0, zIndex: Z.overlay, background: ISLAND.canvas,
       padding: mobile ? 0 : ISLAND.pad, display: 'flex', flexDirection: 'column',
     }}>
-      <ImageEditor {...props} onClose={onClose} onDirtyChange={d => { dirty.current = d; }}
+      <ImageEditor {...props} ImageChat={ImageChat} onClose={onClose} onDirtyChange={d => { dirty.current = d; }}
+        onOpenPath={path => openImageEditor({ ...props, sessionId: null, target: { kind: 'edit', path } })}
         onShowInFiles={props.onShowInFiles ? path => { onClose(); props.onShowInFiles?.(path); } : undefined} />
       {leaveAsk && (
         <ConfirmDialog title="Закрыть редактор?" subtitle="Несохранённые варианты пропадут."

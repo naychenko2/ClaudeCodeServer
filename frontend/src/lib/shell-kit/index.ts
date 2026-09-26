@@ -148,9 +148,3 @@ export { onMessage, onReconnected } from '../signalr';
 // ─── features/modelsSpend ────────────────────────────────────────────────────
 // Модалка ядра (её же открывает шапка хаба), а не код MF-модуля spend
 export { ModelsSpendModal } from '../../features/modelsSpend/ModelsSpendModal';
-
-// ─── чат ядра для «Обсудить с Claude» редактора картинок ─────────────────────
-// Временно, до чата картинки (ADR-018, шаг 14): тот же инстанс хука и SignalR,
-// что у ChatPanel, — своя копия в бандле модуля дала бы второе соединение
-export { useSession } from '../../hooks/useSession';
-export { MarkdownContent } from '../../components/chat/MarkdownContent';

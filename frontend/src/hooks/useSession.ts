@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import type { ChatItem, Session, ServerMessage, RateLimitInfo, WorkLoopState, TeamImplementState, TeamPlanDecision, TeamWavePulse } from '../types';
-import { joinSession, joinProject, leaveSession, onMessage, onReconnected, sendMessage, respondPermission, interruptSession, compactSession, answerQuestion as sendAnswer, respondPlan as sendPlanDecision, respondTeamPlan as sendTeamPlanDecision, respondTeamEscalation as sendTeamEscalationDecision, setMode as sendSetMode } from '../lib/signalr';
+import type { ChatItem, ImageSnapshotMark, Session, ServerMessage, RateLimitInfo, WorkLoopState, TeamImplementState, TeamPlanDecision, TeamWavePulse } from '../types';
+import { joinSession, joinProject, leaveSession, onMessage, onReconnected, sendMessage, sendImageChatMessage, respondPermission, interruptSession, compactSession, answerQuestion as sendAnswer, respondPlan as sendPlanDecision, respondTeamPlan as sendTeamPlanDecision, respondTeamEscalation as sendTeamEscalationDecision, setMode as sendSetMode } from '../lib/signalr';
 import { setRecallManifest } from '../lib/recallManifest';
 import { requestWakeLock, releaseWakeLock } from '../lib/wakeLock';
 import { api } from '../lib/api';
@@ -563,9 +563,13 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
     setState(sessionId, consumeComposerRestore);
   }, [sessionId]);
 
-  const send = useCallback(async (text: string, attachedPaths: string[] = [], mode?: string, opts?: { auto?: boolean }) => {
+  // opts.imageChat — сообщение чата картинки: уходит через SendImageChatMessage с пометкой
+  // снимка холста (ADR-018 §3); null — снимка нет (человек убрал чип)
+  const send = useCallback(async (text: string, attachedPaths: string[] = [], mode?: string,
+    opts?: { auto?: boolean; imageChat?: { snapshot: ImageSnapshotMark | null } }) => {
     if (!sessionId) return;
     const auto = opts?.auto ?? false;
+    const imageChat = opts?.imageChat;
     // Блокируем композер сразу (пошёл обмен с хабом), но баллон НЕ добавляем до исхода —
     // «честная очередь»: если чат занят, сервер вернёт 'queued', сообщение встанет в видимую
     // очередь (карточку даст снимок pending_messages), а доставленное вернётся user_message.
@@ -577,13 +581,18 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
       // Всегда подтверждаем членство в группе перед отправкой:
       // защита от потери группы при переподключении или переключении проекта
       await joinTracked(sessionId);
-      const outcome = await sendMessage(sessionId, text, attachedPaths, mode, auto);
+      const outcome = imageChat
+        ? await sendImageChatMessage(sessionId, text, attachedPaths, mode, imageChat.snapshot)
+        : await sendMessage(sessionId, text, attachedPaths, mode, auto);
       // 'started' — ход запущен: рисуем оптимистичный баллон (как раньше). Авто-ходы и
       // чужой ручной ввод сервер рассылает user_message в session-группу (наше соединение
       // исключено через GroupExcept), поэтому дублей здесь нет.
       // 'queued' — баллон не нужен: карточку даст pending_messages, isWaiting удержит ход.
       if (outcome === 'started' && !auto) {
-        setState(sessionId, prev => ({ ...prev, items: [...prev.items, { kind: 'user_message', text, attachedPaths, ts: Date.now() }] }));
+        setState(sessionId, prev => ({ ...prev, items: [...prev.items, {
+          kind: 'user_message', text, attachedPaths, ts: Date.now(),
+          ...(imageChat?.snapshot ? { imageSnapshot: imageChat.snapshot } : {}),
+        }] }));
       }
       // 'queued-preempted' — ради этого сообщения сервер прервал идущий ход (тот ждал ответа
       // человека либо шёл цикл «до готово»). Отмечаем прерывание, как по «Стоп»: убитый ход

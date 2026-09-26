@@ -192,19 +192,6 @@ export interface ImageEditCharacterInput {
   photos: Blob[];
 }
 
-// «Обсудить с Claude»: текст сообщения собирает фронт, сервер создаёт (или
-// переиспользует) чат проекта с размеченной копией во вложении и дописывает путь
-// к папке персонажа
-export interface ImageEditDiscussInput {
-  text: string;
-  annotated: Blob;
-  sourcePath?: string;
-  characterSlug?: string;
-  sessionId?: string;
-}
-
-export interface ImageEditDiscussResult { sessionId: string; created: boolean; attachments: string[] }
-
 // next-version — hero.v2.png рядом с исходником; as — «Сохранить как…» (ADR-018 §5)
 export type ImageEditSaveMode = 'next-version' | 'as';
 
@@ -385,7 +372,6 @@ export interface ImageEditorApi {
   updateCharacter(projectId: string, slug: string, input: ImageEditCharacterInput): Promise<ImageEditCharacter>;
   deleteCharacter(projectId: string, slug: string): Promise<void>;
   characterPhotoUrl(projectId: string, slug: string, file: string): string;
-  discuss(projectId: string, input: ImageEditDiscussInput): Promise<ImageEditDiscussResult>;
   saveCheck(projectId: string, req: SaveCheckRequest): Promise<SaveCheckResponse>;
   // dryRun — только посчитать вес: шаг не пишется, stepId = null
   transform(projectId: string, req: ImageTransformRequest, opts?: { dryRun?: boolean }): Promise<ImageTransformResponse>;
@@ -448,15 +434,6 @@ const liveApi: ImageEditorApi = {
     request<void>(`${charBase(projectId)}/${encodeURIComponent(slug)}`, { method: 'DELETE' }),
   characterPhotoUrl: (projectId, slug, file) =>
     withToken(`/api${charBase(projectId)}/${encodeURIComponent(slug)}/photos/${encodeURIComponent(file)}`),
-  discuss: (projectId, input) => {
-    const form = new FormData();
-    form.append('text', input.text);
-    form.append('annotated', input.annotated, 'annotated.png');
-    if (input.sourcePath) form.append('sourcePath', input.sourcePath);
-    if (input.characterSlug) form.append('characterSlug', input.characterSlug);
-    if (input.sessionId) form.append('sessionId', input.sessionId);
-    return request<ImageEditDiscussResult>(`${base(projectId)}/discuss`, { method: 'POST', body: form, timeoutMs: 120_000 });
-  },
   saveCheck: (projectId, req) => {
     const q = new URLSearchParams({ folder: req.folder ?? '', name: req.name });
     if (req.format) q.set('format', req.format);
@@ -768,9 +745,6 @@ export function createMockApi(mode: 'fal' | 'all'): ImageEditorApi {
     },
     characterPhotoUrl: (_projectId, slug, file) =>
       characters.find(c => c.character.slug === slug)?.urls.get(file) ?? '',
-    // Мок-чат не создаётся: панель ответа покажет пустое ожидание
-    discuss: async (_projectId, input) =>
-      delay({ sessionId: input.sessionId ?? `mock-chat-${++seq}`, created: !input.sessionId, attachments: [] }, 300),
   };
 }
 

@@ -733,6 +733,13 @@ export interface SessionImageChat {
   lineage: string[];
 }
 
+// Пометка снимка холста у сообщения чата картинки (ADR-018 §3, StoredUserMessage.ImageSnapshot):
+// revision — ревизия холста на момент отправки; attached=false — холст не менялся, снимок не приложен
+export interface ImageSnapshotMark {
+  revision: string;
+  attached: boolean;
+}
+
 export interface Session {
   id: string;
   // Отсутствует у чатов вне проекта (project-less)
@@ -1058,7 +1065,7 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'text_delta'; text: string }
   // delegationTaskId — доклад о завершении делегированной задачи: id задачи структурным
   // полем (см. ChatItem user_message), а не вытащенный из текста маркера
-  | { type: 'user_message'; text: string; attachedPaths?: string[]; senderPersonaId?: string; auto?: boolean; senderOrigin?: string; senderChatName?: string; staffNote?: string; timestamp?: number; delegationTaskId?: string }
+  | { type: 'user_message'; text: string; attachedPaths?: string[]; senderPersonaId?: string; auto?: boolean; senderOrigin?: string; senderChatName?: string; staffNote?: string; timestamp?: number; delegationTaskId?: string; imageSnapshot?: ImageSnapshotMark | null }
   // Гостевая реплика персоны без агентского хода (0 токенов) — доклад о завершении
   // делегированной задачи (модель Z); маркер доклада распознаётся на рендере (см.
   // lib/delegationReport.ts). Живой аналог StoredTextMessage.PersonaId из истории.
@@ -1940,7 +1947,8 @@ export type ChatItem =
   // у ходов без нового сообщения и при сбое записи снимка
   // delegationTaskId — доклад о завершении делегированной задачи: id задачи, к которой
   // ведёт карточка доклада. Нет у обычных сообщений и у историй до появления поля
-  | { kind: 'user_message'; text: string; attachedPaths?: string[]; viaAgent?: boolean; senderPersonaId?: string; systemDirective?: boolean; auto?: boolean; senderOrigin?: string; senderChatName?: string; staffNote?: string; ts?: number; promptSnapshotId?: string; delegationTaskId?: string }
+  // imageSnapshot — сообщение из чата картинки: приложен ли снимок холста (ADR-018 §3)
+  | { kind: 'user_message'; text: string; attachedPaths?: string[]; viaAgent?: boolean; senderPersonaId?: string; systemDirective?: boolean; auto?: boolean; senderOrigin?: string; senderChatName?: string; staffNote?: string; ts?: number; promptSnapshotId?: string; delegationTaskId?: string; imageSnapshot?: ImageSnapshotMark }
   | { kind: 'session_started'; model: string; mode: string; cwd?: string; toolCount?: number; mcpServers?: { name: string; status: string }[]; turnWorktree?: { path: string; name: string } | null }
   // personaId — авторство реплики (персона на момент хода); после смены собеседника
   // старые реплики сохраняют прежний аватар. Отсутствует у обычного ассистента.

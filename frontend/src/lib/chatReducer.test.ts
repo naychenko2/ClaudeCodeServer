@@ -149,6 +149,10 @@ function storedMessagePath(): string {
 const STORED_BUT_NOT_LIVE_ITEM: Record<string, string> = {
   workflow_progress: 'снапшот прогресса Workflow: normalizeHistory вливает его в карточку ' +
     'родительского tool_use (ветка m.kind === "workflow_progress"), отдельной строки ленты нет',
+  // Записи чата картинки (ADR-018 §1, §2): тихие строки «Вы запустили …» и «Сохранено как …»
+  // лента начнёт рисовать в шаге 15 плана редактора v2 — тогда они уходят в PERSISTED_KINDS
+  image_launch: 'ручной запуск генерации из редактора; строку ленты рисует шаг 15 редактора v2',
+  image_file_moved: 'чат картинки переехал на новый файл; строку ленты рисует шаг 15 редактора v2',
 };
 
 // Исключение №2: вид ленты участвует в сверке длин, но своего C#-типа в StoredMessage.cs

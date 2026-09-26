@@ -14,9 +14,9 @@ export const manifest: SubsystemManifest = {
   order: 95,
   noPill: true,
   slots: {
-    // Чат картинки из контекста (ctx.ImageChat) редактор начнёт рисовать в шаге 14
+    // Чат картинки — компонент ядра из контекста: своей копии ChatPanel в модуле нет
     'app-overlay': [
-      { name: 'image-editor', render: (_ctx: AppOverlayCtx) => <ImageEditorHost /> },
+      { name: 'image-editor', render: (ctx: AppOverlayCtx) => <ImageEditorHost ImageChat={ctx.ImageChat} /> },
     ],
     // ImageEditorOpenerApi: вход из дерева файлов
     'image-editor': [

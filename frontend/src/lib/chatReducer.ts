@@ -472,6 +472,7 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         ...(msg.staffNote ? { staffNote: msg.staffNote } : {}),
         ...(msg.auto ? { auto: true } : {}),
         ...(msg.delegationTaskId ? { delegationTaskId: msg.delegationTaskId } : {}),
+        ...(msg.imageSnapshot ? { imageSnapshot: msg.imageSnapshot } : {}),
       }]);
     }
 

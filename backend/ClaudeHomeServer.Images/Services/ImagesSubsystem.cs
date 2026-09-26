@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Images.Editing;
+using ClaudeHomeServer.Services.Images.LocalMedia;
 
 namespace ClaudeHomeServer.Services.Images;
 
@@ -36,5 +37,7 @@ public sealed class ImagesSubsystem : IAppSubsystem
         services.AddImageGeneration();
         // Редактор картинок (ADR-017): драйверы правки, исполнитель задач, сохранение, траты
         services.AddImageEditor();
+        // Локальная генерация через ComfyUI (MCP-сервер local-media): тумблер LocalMedia:Enabled
+        services.AddLocalMedia(config);
     }
 }

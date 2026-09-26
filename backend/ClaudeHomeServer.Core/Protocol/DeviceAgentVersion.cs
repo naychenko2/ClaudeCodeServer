@@ -118,4 +118,37 @@ public static class DeviceAgentCompatibility
     public const string MinVersion = "1.0.0";
 
     public static DeviceAgentVersion Min { get; } = DeviceAgentVersion.Parse(MinVersion);
+
+    /// <summary>Начало текста «агент не готов» — общее для харнеса и версии агента.</summary>
+    public const string NotReadyPrefix = "Агент устройства не готов";
+
+    /// <summary>
+    /// Агент ниже минимальной версии — ЕДИНСТВЕННОЕ сравнение с минимумом (AD-6), инлайновых
+    /// проверок версии вне него не заводим. null — не агент локальных проектов (клиент рук
+    /// ADR-008), о совместимости речи нет. Неразбираемая версия — устаревшая: совместимость
+    /// не подтверждена, а выкатка другие форматы не выпускает.
+    /// </summary>
+    public static bool IsOutdated(string? agentVersion) =>
+        agentVersion is not null
+        && (!DeviceAgentVersion.TryParse(agentVersion.Trim(), out var version) || version < Min);
+
+    /// <summary>Самообновление идёт: архив качается или новая версия ждёт конца работы.</summary>
+    public static bool IsUpdating(DeviceAgentUpdate? update) =>
+        update?.State is DeviceAgentUpdateStates.Downloading or DeviceAgentUpdateStates.WaitingIdle;
+
+    /// <summary>
+    /// Текст для человека про устаревшего агента; null — агент не устарел. Различает «агент
+    /// обновляется» (ждать) и «обновите агента» (обновления нет или оно упало).
+    /// </summary>
+    public static string? OutdatedProblem(string? agentVersion, DeviceAgentUpdate? update)
+    {
+        if (!IsOutdated(agentVersion)) return null;
+        var current = agentVersion!.Trim();
+        if (IsUpdating(update))
+            return $"{NotReadyPrefix}: агент обновляется с версии {current} до {update!.TargetVersion ?? "новой"}, работа начнётся после обновления";
+        var failed = update?.State == DeviceAgentUpdateStates.Failed
+            ? $" (обновление не удалось{(update.Reason is null ? "" : ": " + update.Reason)})"
+            : "";
+        return $"{NotReadyPrefix}: версия агента {current} ниже минимальной {MinVersion}{failed} — обновите агента";
+    }
 }

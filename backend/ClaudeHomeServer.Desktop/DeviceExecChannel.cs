@@ -126,7 +126,8 @@ public sealed class DeviceExecChannel : IDeviceExecChannel, IDeviceRelayChannel
             _harness.RequiredCliVersion,
             device.Capabilities.ToList(),
             ready,
-            problem);
+            problem,
+            device.AgentUpdate);
     }
 
     public async Task<IDeviceExecStream> OpenAsync(string ownerId, string deviceId, CancellationToken ct = default)
@@ -140,6 +141,8 @@ public sealed class DeviceExecChannel : IDeviceExecChannel, IDeviceRelayChannel
         if (!status.HasCapability(DeviceCapabilities.Exec))
             throw new DeviceExecRefusedException(DeviceExecRefusal.NoExecCapability,
                 $"{name} не может работать с чатами проекта: на нём нет агента AI Home для локальных проектов или его нужно обновить.");
+        if (status.AgentOutdated)
+            throw new DeviceExecRefusedException(DeviceExecRefusal.AgentOutdated, $"{name}: {status.AgentProblem}.");
         if (!status.HarnessReady)
             throw new DeviceExecRefusedException(DeviceExecRefusal.HarnessNotReady, $"{name}: {status.HarnessProblem}.");
 
@@ -166,6 +169,8 @@ public sealed class DeviceExecChannel : IDeviceExecChannel, IDeviceRelayChannel
         if (!status.HasCapability(DeviceCapabilities.Relay))
             throw new DeviceExecRefusedException(DeviceExecRefusal.NoRelayCapability,
                 $"{name}: агент не объявил ретранслятор чтения — обнови агента.");
+        if (status.AgentOutdated)
+            throw new DeviceExecRefusedException(DeviceExecRefusal.AgentOutdated, $"{name}: {status.AgentProblem}.");
 
         var connection = _router.Find(ownerId, deviceId)
             ?? throw new DeviceExecRefusedException(DeviceExecRefusal.Offline, $"{name} не в сети.");

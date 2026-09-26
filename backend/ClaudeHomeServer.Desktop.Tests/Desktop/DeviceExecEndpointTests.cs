@@ -146,7 +146,7 @@ public class DeviceExecEndpointTests : IDisposable
         var router = _factory.Services.GetRequiredService<DesktopCallRouter>();
         router.RegisterConnection(Conn, _ownerId, _deviceId);
         await channel.HelloAsync(Conn, _ownerId, _deviceId,
-            new DeviceHello(DesktopProtocol.Version, null, null, "linux-x64", "0.1.0", "2.1.281", [DeviceCapabilities.Exec]));
+            new DeviceHello(DesktopProtocol.Version, null, null, "linux-x64", DeviceAgentCompatibility.MinVersion, "2.1.281", [DeviceCapabilities.Exec]));
 
         var opening = channel.OpenAsync(_ownerId, _deviceId);
         var command = await _opener.Opened.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));

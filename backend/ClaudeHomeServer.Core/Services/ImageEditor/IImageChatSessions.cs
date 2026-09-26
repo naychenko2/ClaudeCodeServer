@@ -18,6 +18,15 @@ public interface IImageChatSessions
     // активность — UpdatedAt не двигается, чат не поднимается в списке и не выходит из архива.
     // null — чата нет или он не чат картинки. Владение и проект проверяет вызывающий.
     Session? SetPath(string sessionId, string path);
+
+    // Редактор сохранил картинку в новый файл, и чат идёт за ним: смена пути как в SetPath плюс
+    // запись image_file_moved в ленту. Запись — активность, она двигает UpdatedAt.
+    // null — чата нет или он не чат картинки. Владение и проект проверяет вызывающий.
+    Task<Session?> MoveToFileAsync(string sessionId, string path);
+
+    // Файл переименовали или перенесли мимо редактора: пути переписываются целиком, Lineage не
+    // растёт. UpdatedAt не двигается, в ленту ничего не пишется.
+    Session? RewritePaths(string sessionId, string currentPath, IReadOnlyList<string> lineage);
 }
 
 // Session — созданный чат; иначе ErrorCode + Error (коды — строки REST редактора)

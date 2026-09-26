@@ -306,6 +306,11 @@ public record ChatDeletedMessage()
 // а не удаляет — клиенты убирают/возвращают его в списках, но семантики «чата больше нет»
 // (как у chat_deleted — на ней строятся ChatsPage/awaiting/projectActivity) здесь нет.
 // SessionId — в базовом поле.
+// Живая копия StoredImageFileMovedMessage (ADR-018 §1): чат картинки перешёл на новый файл
+// вслед за редактором. Пути — от корня проекта; SessionId — в базовом поле.
+public record ImageFileMovedMessage(string From, string To, long? Timestamp = null)
+    : ServerMessage("image_file_moved");
+
 public record ChatArchivedMessage(bool Archived)
     : ServerMessage("chat_archived");
 

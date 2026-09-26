@@ -48,5 +48,7 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
         services.AddSingleton(sp => sp.GetService<IImageRaster>() is { } raster
             ? new ImageEditSteps(raster, sp.GetRequiredService<ImageEditWorkspace>(), sp.GetRequiredService<IImageEditJobs>())
             : null!);
+        // Чат картинки идёт за переименованным файлом (ADR-018 §1)
+        services.AddHostedService<Chats.ImageChatPathTracker>();
     }
 }

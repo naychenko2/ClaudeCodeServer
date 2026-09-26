@@ -31,7 +31,9 @@ public class ImageEditorController(
     IProjectFiles? files = null,
     ImageEditSteps? steps = null,
     IConfiguration? config = null,
-    IImageRaster? raster = null) : ControllerBase
+    IImageRaster? raster = null,
+    ISessionDirectory? sessionDirectory = null,
+    IImageChatSessions? chats = null) : ControllerBase
 {
     // Потолок файла проекта, который ручка transform читает в память; дальше решает растр (100 Мп)
     private const long MaxTransformFileBytes = 100L * 1024 * 1024;
@@ -201,7 +203,7 @@ public class ImageEditorController(
     }
 
     [HttpPost("save")]
-    public IActionResult Save(string projectId, [FromBody] ImageEditSaveRequest req)
+    public async Task<IActionResult> Save(string projectId, [FromBody] ImageEditSaveRequest req)
     {
         if (Gate(projectId, out var project) is { } denied) return denied;
         if (saver is null) return JobsUnavailable();
@@ -254,7 +256,6 @@ public class ImageEditorController(
             image = new EditedImage(encoded.Image!.Bytes, InputFitter.ContentTypeOf(encoded.Image.Format));
         }
 
-        // ChatSessionId пока принимается и не используется: перенос чата на новый файл — шаг 11
         var saved = mode == ImageEditSaveModes.As
             ? saver.SaveAs(project.RootPath, req.Folder, req.FileName, image)
             : saver.Save(project.RootPath, req, image);
@@ -266,8 +267,23 @@ public class ImageEditorController(
                 new { error = saved.Error, code = saved.ErrorCode, suggestion = check.Value?.Suggestion });
         }
         // Новый файл — обычная запись в проект: синк знаний и ватчеры узнают о нём сразу
-        if (saved.Value is { } result) files?.NotifyMutated(project.RootPath, result.Path, FileMutationKind.Write);
+        if (saved.Value is { } result)
+        {
+            files?.NotifyMutated(project.RootPath, result.Path, FileMutationKind.Write);
+            await MoveChatAsync(project, req.ChatSessionId, result.Path);
+        }
         return Map(saved, Ok);
+    }
+
+    // Чат идёт за редактором (ADR-018 §1): редактор перешёл на новый файл — чат вместе с ним.
+    // Чужой, несуществующий и обычный чат молча пропускаются: файл уже сохранён, а ответ
+    // не должен выдавать, существует ли чужой чат
+    private async Task MoveChatAsync(Project project, string? chatSessionId, string path)
+    {
+        if (string.IsNullOrWhiteSpace(chatSessionId) || chats is null || sessionDirectory is null) return;
+        var session = sessionDirectory.GetById(chatSessionId.Trim());
+        if (session is not { ImageChat: not null } || session.ProjectId != project.Id) return;
+        await chats.MoveToFileAsync(session.Id, path);
     }
 
     // Проверка имени «Сохранить как…» на лету: ничего не пишет, решение всё равно за CreateNew

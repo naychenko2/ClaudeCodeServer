@@ -42,4 +42,10 @@ public sealed class ImageChatSessions(
     }
 
     public Session? SetPath(string sessionId, string path) => sessions.SetImageChatPath(sessionId, path);
+
+    public Task<Session?> MoveToFileAsync(string sessionId, string path) =>
+        sessions.MoveImageChatToFileAsync(sessionId, path);
+
+    public Session? RewritePaths(string sessionId, string currentPath, IReadOnlyList<string> lineage) =>
+        sessions.RewriteImageChatPaths(sessionId, currentPath, lineage);
 }

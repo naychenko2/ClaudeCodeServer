@@ -1828,6 +1828,38 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         return entry.Info;
     }
 
+    // Чат идёт за редактором (ADR-018 §1): редактор сохранил картинку в новый файл. Путь
+    // меняется как в SetImageChatPath, а в ленту ложится тихая запись image_file_moved — и
+    // она, в отличие от смены пути, двигает UpdatedAt: человек что-то сделал в этом чате.
+    // null — чата нет или он не картинки; тот же путь — ничего не пишем.
+    public async Task<Session?> MoveImageChatToFileAsync(string sessionId, string path)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry) || entry.Info.ImageChat is not { } chat) return null;
+        var from = chat.CurrentPath;
+        if (from == path) return entry.Info;
+
+        SetImageChatPath(sessionId, path);
+        var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await AppendStoredAsync(sessionId,
+            new StoredImageFileMovedMessage { From = from, To = path, Timestamp = ts },
+            new ImageFileMovedMessage(from, path, ts));
+        entry.Info.UpdatedAt = DateTime.UtcNow;
+        SaveSessions();
+        return entry.Info;
+    }
+
+    // Файл чата картинки переименовали или перенесли мимо редактора (ADR-018 §1): пути
+    // переписываются целиком, в Lineage ничего не добавляется — это тот же файл, а не новая
+    // версия. UpdatedAt не трогаем и в ленту не пишем: чат не поднимается и не выходит из архива.
+    public Session? RewriteImageChatPaths(string sessionId, string currentPath, IReadOnlyList<string> lineage)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry) || entry.Info.ImageChat is not { } chat) return null;
+        chat.CurrentPath = currentPath;
+        chat.Lineage = [.. lineage];
+        SaveSessions();
+        return entry.Info;
+    }
+
     // Заглушить/включить уведомления по чату (браузерные «нужно решение» / «ход завершён»).
     // UpdatedAt не трогаем по той же причине, что в SetExpiry: это настройка, а не активность.
     public Session? SetNotificationsMuted(string sessionId, bool muted)

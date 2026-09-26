@@ -199,7 +199,8 @@ public class ImageEditorController(
                     "Путь вне папки проекта");
         }
 
-        var image = jobs.OpenVariant(UserId, projectId, req.JobId, req.Variant);
+        // Сохранение шага истории (StepId, ADR-018 §5) — волна 1; пока источник только вариант задачи
+        var image = req.JobId is null ? null : jobs.OpenVariant(UserId, projectId, req.JobId, req.Variant);
         if (image is null) return JobNotFound();
         var saved = saver.Save(project.RootPath, req, image);
         // Новый файл — обычная запись в проект: синк знаний и ватчеры узнают о нём сразу

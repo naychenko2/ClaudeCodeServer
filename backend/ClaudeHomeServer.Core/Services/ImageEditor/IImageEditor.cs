@@ -64,7 +64,12 @@ public record ImageEditCaps(
     int MaxReferences,
     int MaxCount,
     bool FaceByReferences,
-    bool SeparateMaskPass = false);
+    bool SeparateMaskPass = false,
+    // Лимиты входа модели для автоуменьшения (ADR-018 §9): длинная сторона в px, площадь в Мп,
+    // вес файла в МБ. null — лимита нет или он не курирован
+    int? MaxInputSide = null,
+    double? MaxInputMegapixels = null,
+    double? MaxInputMb = null);
 
 // Ориентир цены для каталога; точная сумма — только в котировке
 public record ImageEditPriceHint(double Amount, string Unit, string Per);

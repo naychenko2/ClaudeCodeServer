@@ -95,13 +95,23 @@ public record ImageEditJobInput(
     ImageBytes? Annotated,
     IReadOnlyList<ReferenceImage> References,
     string? SourcePath,
-    CharacterRef? Character = null);
+    CharacterRef? Character = null,
+    // Возврат размера оригинала после скачивания (ADR-018 §9, п. 4)
+    bool MatchSourceSize = true,
+    // Чат картинки, из которого запущена задача (ADR-018 §2); null — запуск вне чата
+    string? ChatSessionId = null,
+    ImageEditInitiator Initiator = ImageEditInitiator.Human);
 
 public record ImageEditJobCreatedDto(string JobId);
 
 public enum ImageEditJobStatus { Queued, Running, Downloading, Completed, Failed, Cancelled, Interrupted }
 
-// Variants — номера готовых вариантов (для …/jobs/{jobId}/variants/{n})
+// Кто запустил задачу или написал промпт: человек в редакторе или агент чата картинки
+public enum ImageEditInitiator { Human, Agent }
+
+// Variants — номера готовых вариантов (для …/jobs/{jobId}/variants/{n}).
+// ChatSessionId — чат картинки, из которого запущена задача (ADR-018 §2); имя не SessionId,
+// чтобы в событиях не столкнуться с ServerMessage.SessionId, по которому фронт роутит ленту.
 public record ImageEditJobDto(
     string JobId,
     string ProjectId,
@@ -114,21 +124,139 @@ public record ImageEditJobDto(
     bool? Charged,
     string? Error,
     int? QueuePosition,
-    DateTime CreatedAt);
+    DateTime CreatedAt,
+    string? ChatSessionId = null,
+    ImageEditInitiator Initiator = ImageEditInitiator.Human);
 
-// ── Сохранение: POST …/save ────────────────────────────────────────────────────
+// ── Сохранение: POST …/save, GET …/save/check ──────────────────────────────────
 
 // Флага перезаписи нет по построению: результат всегда новым файлом (hero.v2.png).
-// SourcePath — правка файла проекта; Folder + FileName — «Нарисовать картинку».
+// Mode = ImageEditSaveModes.*; null — прежнее поведение (NextVersion).
+// NextVersion: SourcePath — правка файла проекта; Folder + FileName — «Нарисовать картинку».
+// As («Сохранить как…», ADR-018 §5): Folder + FileName, расширение сервер ставит сам по
+// формату; занятое имя — 409 name_taken с suggestion, а не тихий переход на номер.
+// Источник — вариант задачи (JobId + Variant) ИЛИ шаг истории (StepId).
+// ChatSessionId — чат картинки, который переезжает на новый файл вместе с редактором.
+// Encode — перекодирование при записи; null — формат результата как есть.
 public record ImageEditSaveRequest(
-    string JobId,
+    string? JobId,
     int Variant,
     string? SourcePath,
     string? Folder,
-    string? FileName);
+    string? FileName,
+    string? Mode = null,
+    string? StepId = null,
+    string? ChatSessionId = null,
+    ImageEncodeSpec? Encode = null);
+
+public static class ImageEditSaveModes
+{
+    public const string NextVersion = "next-version";
+    public const string As = "as";
+}
 
 // Path — относительный путь созданного файла от корня проекта
 public record ImageEditSaveResultDto(string Path);
+
+// Проверка имени на лету. Path — итоговый путь с расширением по формату; Taken — имя занято;
+// Suggestion — ближайшее свободное имя (hero.v3.png), null — если свободно
+public record SaveCheckResponse(string Path, bool Taken, string? Suggestion);
+
+// ── Правки без ИИ: POST …/transform[?dryRun=true] (ADR-018 §9) ─────────────────
+
+public enum ImageEncodeFormat { Png, Jpeg, Webp }
+
+// Quality 40–100, у PNG игнорируется; null — качество по умолчанию формата
+public record ImageEncodeSpec(ImageEncodeFormat Format, int? Quality = null);
+
+// Прямоугольник в долях от размеров картинки (0..1), начало — левый верхний угол
+public record ImageFractionRect(double X, double Y, double Width, double Height);
+
+public enum ImageFlipAxis { Horizontal, Vertical }
+
+// Операция без ИИ; в JSON — { "type": "crop", … }, дискриминатор первым полем объекта.
+// Кодирование — не операция цепочки, а поле Encode запроса: оно применяется один раз на выходе.
+[System.Text.Json.Serialization.JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
+[System.Text.Json.Serialization.JsonDerivedType(typeof(AutoOrientOp), "autoOrient")]
+[System.Text.Json.Serialization.JsonDerivedType(typeof(CropOp), "crop")]
+[System.Text.Json.Serialization.JsonDerivedType(typeof(RotateOp), "rotate")]
+[System.Text.Json.Serialization.JsonDerivedType(typeof(FlipOp), "flip")]
+[System.Text.Json.Serialization.JsonDerivedType(typeof(ResizeOp), "resize")]
+public abstract record ImageTransformOp;
+
+public sealed record AutoOrientOp : ImageTransformOp;
+
+public sealed record CropOp(ImageFractionRect Rect) : ImageTransformOp;
+
+// Degrees — 90, 180 или 270 по часовой; другое — 400
+public sealed record RotateOp(int Degrees) : ImageTransformOp;
+
+public sealed record FlipOp(ImageFlipAxis Axis) : ImageTransformOp;
+
+// Либо Width/Height в px, либо Percent; LockAspect — недостающую сторону досчитать по пропорциям
+public sealed record ResizeOp(int? Width = null, int? Height = null, double? Percent = null, bool LockAspect = true)
+    : ImageTransformOp;
+
+// База правки: файл проекта (Path) или шаг истории сеанса (StepId) — ровно одно из двух
+public record ImageTransformBase(string? Path = null, string? StepId = null);
+
+public record ImageTransformRequest(
+    ImageTransformBase Base,
+    IReadOnlyList<ImageTransformOp> Ops,
+    ImageEncodeSpec? Encode = null);
+
+// StepId = null при dryRun: шаг не записан, посчитан только вес
+public record ImageTransformResponse(string? StepId, int Width, int Height, long Bytes);
+
+// ── Чат картинки: …/image-editor/chats (ADR-018 §1) ────────────────────────────
+
+// POST …/chats — создать чат картинки (и «Новый чат по этой картинке»); ответ — Session
+public record ImageChatCreateRequest(string SourcePath, string? PersonaId = null);
+
+// GET …/chats?path= — Current: чат с CurrentPath == path (null — нет);
+// Continued: чаты, у которых path в Lineage (разговор ушёл на новую версию файла)
+public record ImageChatLookupResponse(Models.Session? Current, IReadOnlyList<Models.Session> Continued);
+
+// PUT …/chats/{sessionId}/path — привязать чат к другому файлу
+public record ImageChatPathRequest(string Path);
+
+// Образец в состоянии чата: путь проекта (или копия в рабочей папке для загруженных с
+// компьютера) и роль
+public record ImageChatReference(string Path, ReferenceRole Role, string? Label = null);
+
+// Запись журнала «с прошлого хода»: Kind — ImageChatEventKinds.*, Text — строка для блока
+// состояния хода; JobId — задача, к которой относится запись
+public record ImageChatEvent(DateTime At, string Kind, string Text, string? JobId = null);
+
+public static class ImageChatEventKinds
+{
+    public const string Launched = "launched";
+    public const string Completed = "completed";
+    public const string Failed = "failed";
+    public const string Cancelled = "cancelled";
+    public const string Saved = "saved";
+}
+
+// Состояние редактора чата картинки на сервере (ImageChatStateStore, волна 2):
+// PUT/GET …/chats/{sessionId}/state. Revision растёт с каждой записью; запись со старой
+// Revision — 409. Marks — marks.json как есть. CanvasRevision — хеш CurrentPath, шага и
+// пометок; LastSentRevision — ревизия, снимок которой уже ушёл в чат.
+public record ImageChatState(
+    string Prompt,
+    ImageEditInitiator PromptAuthor,
+    string? Provider,
+    string? Model,
+    EditMode Mode,
+    int Count,
+    IReadOnlyList<ImageChatReference> References,
+    string? CharacterSlug,
+    System.Text.Json.JsonElement? Marks,
+    string? CanvasRevision,
+    string? LastSentRevision,
+    string? CurrentStepId,
+    bool MatchSourceSize,
+    IReadOnlyList<ImageChatEvent> Events,
+    long Revision);
 
 // ── Ошибки ─────────────────────────────────────────────────────────────────────
 

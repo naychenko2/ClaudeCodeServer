@@ -4,12 +4,15 @@
 // На телефоне холст на весь экран, промпт внизу, «Инструменты» и «Чат» — шторки.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ArrowLeft, Brush, Image as ImageIcon, MessageSquare, Upload, Wrench } from 'lucide-react';
+import { ArrowLeft, Brush, Image as ImageIcon, MessageSquare, Save, Upload, Wrench } from 'lucide-react';
 import {
-  Button, EmptyState, Field, IconButton, Island, Modal, ModalActions, TextField, ICON_SIZE, ICON_STROKE,
-  C, FS, ISLAND, R, SP, useIsMobile, api as appApi, showToast, useMe, ModelsSpendModal,
+  Button, EmptyState, Field, IconButton, Island, Modal, ModalActions, SegmentedControl, TextField, Toggle, ICON_SIZE, ICON_STROKE,
+  C, FS, ISLAND, R, SHADOW, SP, useIsMobile, api as appApi, showToast, useMe, ModelsSpendModal,
 } from 'aihome_shell/kit';
-import { AUTO_MODEL, imageEditorApi, type ImageEditCatalog, type ImageEditCatalogReason, type ImageEditQuoteRequest } from './api';
+import {
+  AUTO_MODEL, imageEditorApi, type ImageEditCatalog, type ImageEditCatalogReason, type ImageEditQuoteRequest,
+  type ImageEncodeFormat, type ImageEncodeSpec, type ImageFractionRect, type ImageTransformBase, type ImageTransformOp,
+} from './api';
 import { EditorCanvas } from './EditorCanvas';
 import { exportAnnotated, exportMask, hasAnnotationMark, hasMaskMark, marksToJson, type Mark, type Tool } from './marks';
 import { effectiveProvider, isRemovalPrompt, modelBlockReason, money, nextVersionName, pickOp, plural, priceSum, priceText, splitPath, variantsWord, type ProviderChoice } from './format';
@@ -17,9 +20,13 @@ import { currentModel, ProviderModelPicker } from './ProviderModelPicker';
 import { EditorSections, MarksTools, MobileToolbar, SectionHint, useEditorSections, type EditorSection } from './EditorSections';
 import { HistorySteps, ProjectImagePicker, QuickActions, SamplesSection } from './PanelSections';
 import {
-  actionTitle, currentSrc, EMPTY_HISTORY, goToStep, maxSamples, panelJobInput, pushStep, quickBlockReason, quickPlan,
-  type History, type LaunchAction, type LaunchPlan, type OutpaintRatio, type QuickAction, type Sample,
+  actionTitle, currentSrc, dropStepsFrom, EMPTY_HISTORY, goToStep, maxSamples, panelJobInput, patchStep, pushStep, quickBlockReason, quickPlan,
+  stepSaveSource, type History, type HistoryStep, type LaunchAction, type LaunchPlan, type OutpaintRatio, type QuickAction, type Sample, type SaveSource,
 } from './editorInputs';
+import { AdjustPanel } from './AdjustPanel';
+import {
+  chainTransform, CROP_RATIOS, fitCropRatio, formatOf, initialCrop, isFullCrop, opTitle, renderPreview, transformedSize, type CropRatio,
+} from './transforms';
 import { PromptCard } from './PromptCard';
 import { useQuote } from './useQuote';
 import { useImageEditJob } from './useImageEditJob';
@@ -53,9 +60,17 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
   const [sourcePath, setSourcePath] = useState<string | null>(target.kind === 'edit' ? target.path : null);
   // История шагов: оригинал и каждое «Взять за основу». Холст показывает текущий шаг,
   // его же байты уходят в генерацию. Нарисованное с нуля до первого шага не с чем сравнивать
-  const [history, setHistory] = useState<History>(() => target.kind === 'edit'
-    ? { steps: [{ id: 'original', original: true, title: 'Оригинал', src: appApi.files.fileUrl(projectId, target.path) }], cur: 0 }
+  const [history, setHistoryState] = useState<History>(() => target.kind === 'edit'
+    ? { steps: [originalStep('original', appApi.files.fileUrl(projectId, target.path), { path: target.path })], cur: 0 }
     : EMPTY_HISTORY);
+  // Правки без ИИ идут цепочкой быстрее рендера: вторая читает историю сразу после первой
+  const histRef = useRef(history);
+  const updateHistory = useCallback((fn: (h: History) => History) => {
+    histRef.current = fn(histRef.current);
+    setHistoryState(histRef.current);
+  }, []);
+  const setHistory = updateHistory;
+  const curStep: HistoryStep | undefined = history.steps[history.cur];
   const src = currentSrc(history);
   const stepSeq = useRef(0);
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
@@ -72,7 +87,12 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
   const [prompt, setPrompt] = useState('');
   const [count, setCount] = useState(3);
   const [selected, setSelected] = useState(0);
-  const [saveOpen, setSaveOpen] = useState(false);
+  const [saveSrc, setSaveSrc] = useState<SaveSource | null>(null);
+  const [compress, setCompress] = useState(false);
+  const [heavy, setHeavy] = useState<{ bytes: number; webpBytes: number | null } | null>(null);
+  // «Вернуть размер оригинала» (ADR-018 §9): по умолчанию включён
+  const [matchSize, setMatchSize] = useState(true);
+  const [crop, setCrop] = useState<{ rect: ImageFractionRect; ratio: CropRatio } | null>(null);
   const [savedPath, setSavedPath] = useState<string | null>(null);
   const [savedJobId, setSavedJobId] = useState<string | null>(null);
 
@@ -97,6 +117,8 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
 
   const job = useImageEditJob(api, projectId);
   const busy = job.phase === 'starting' || job.phase === 'running';
+  // Шаги правки без ИИ, которые сервер ещё не записал: генерировать по предпросмотру нельзя
+  const transforming = history.steps.some(x => x.pending);
   // Номера вариантов даёт сервер: выбранный по умолчанию — первый готовый
   const sel = job.variants.includes(selected) ? selected : job.variants[0] ?? 0;
   const dirty = busy || (job.phase === 'variants' && !!job.jobId && job.jobId !== savedJobId);
@@ -149,7 +171,7 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
     setProvider(p);
   };
 
-  const canGenerate = !!quote && !quoteLoading && !blocked && !busy && (hasImage || !!prompt.trim());
+  const canGenerate = !!quote && !quoteLoading && !blocked && !busy && !transforming && (hasImage || !!prompt.trim());
 
   const planOf = useCallback((a: LaunchAction): LaunchPlan => (a.kind === 'prompt'
     ? { op: pickOp(hasImage, hasMask), prompt: a.prompt, useMask: true, removal }
@@ -187,15 +209,17 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
       quoteId: q.quoteId, prompt: plan.prompt.trim(),
       marks: withMarks && marks.length && size ? marksToJson(marks, size.w, size.h) : undefined,
       sourcePath: sourcePath ?? undefined, source, mask, annotated, characterSlug: character?.slug,
+      matchSourceSize: matchSize,
       ...panelJobInput(samples, plan),
     }, n, q.expectedSeconds);
-  }, [api, projectId, pv, m, quote, count, planOf, hasMask, hasAnnotations, size, src, marks, sourcePath, character, samples, job]);
+  }, [api, projectId, pv, m, quote, count, planOf, hasMask, hasAnnotations, size, src, marks, sourcePath, character, samples, job, matchSize]);
 
   const generate = () => launch({ kind: 'prompt', prompt });
   const runQuick = (a: QuickAction) => { setSheet(null); void launch(a === 'outpaint' ? { kind: a, ratio } : { kind: a }); };
 
   const quickBlock = (a: QuickAction) => {
     if (busy) return 'Идёт генерация';
+    if (transforming) return 'Правка ещё сохраняется';
     if (!pv || !m || notConfigured) return 'Рисовать нечем — см. «Чем рисовать»';
     return quickBlockReason(a, hasImage && !!size, hasMask, explicitModel?.caps?.ops ?? null)
       || (samples.length > samplesMax ? blocked : '');
@@ -230,18 +254,98 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
   }));
 
   // ── История шагов ──
+  // Картинка с компьютера на сервере не лежит: править без ИИ её нельзя, пока не сохранена
   const startFrom = (url: string) => {
-    setHistory({ steps: [{ id: `o${++stepSeq.current}`, original: true, title: 'Оригинал', src: url }], cur: 0 });
+    setHistory(() => ({ steps: [originalStep(`o${++stepSeq.current}`, url, null)], cur: 0 }));
     setSize(null);
     setMarks([]);
   };
   const goStep = (i: number) => {
     if (i === history.cur) return;
     setHistory(h => goToStep(h, i));
+    setCrop(null);
     // Размер подхватит холст, когда шаг загрузится
     setSize(null);
     setSheet(null);
   };
+
+  // ── Правки без ИИ (ADR-018 §9) ──
+  // Предпросмотр каждого шага в полёте: следующая правка рисуется поверх него, а не
+  // поверх того, что успело загрузиться на холст
+  const previews = useRef(new Map<string, Promise<HTMLImageElement | null>>());
+  const previewUrls = useRef(new Set<string>());
+  useEffect(() => () => previewUrls.current.forEach(u => URL.revokeObjectURL(u)), []);
+
+  const imageOf = (step: HistoryStep): Promise<HTMLImageElement | null> => {
+    const shown = imgRef.current;
+    if (shown && shown.getAttribute('src') === step.src && shown.naturalWidth) return Promise.resolve(shown);
+    return loadImage(step.src).catch(() => null);
+  };
+
+  // Размер берём у шага, если он известен: у предпросмотра натуральный размер экранный
+  const onImageLoad = (img: HTMLImageElement) => {
+    imgRef.current = img;
+    const h = histRef.current;
+    const cur = h.steps[h.cur];
+    if (cur && cur.src !== img.getAttribute('src')) return;
+    if (cur?.w && cur.h) { setSize({ w: cur.w, h: cur.h }); return; }
+    const natural = { w: img.naturalWidth, h: img.naturalHeight };
+    setSize(natural);
+    if (cur) updateHistory(x => patchStep(x, cur.id, natural));
+  };
+
+  // Правка — сразу шагом истории с предпросмотром; сервер записывает шаг цепочкой за
+  // предыдущими. Не записался — шаг и всё поверх него убираются
+  const runTransform = (ops: ImageTransformOp[], encode: ImageEncodeSpec | null) => {
+    const h = histRef.current;
+    const cur = h.steps[h.cur];
+    if (!cur?.ready || !cur.w || !cur.h || !ops.length && !encode) return;
+    const id = `t${++stepSeq.current}`;
+    const dims = transformedSize({ w: cur.w, h: cur.h }, ops);
+    const { result, ready } = chainTransform(cur.ready, ops, encode, req => api.transform(projectId, req));
+    const baseImg = previews.current.get(cur.id) ?? imageOf(cur);
+    previews.current.set(id, baseImg.then(async img => {
+      const url = img && ops.length === 1 ? await renderPreview(img, ops[0]).catch(() => null) : null;
+      if (!url) return img;
+      previewUrls.current.add(url);
+      const shown = await loadImage(url).catch(() => null);
+      if (shown) updateHistory(x => (x.steps.some(st => st.id === id && st.pending) ? patchStep(x, id, { src: url }) : x));
+      return shown ?? img;
+    }));
+    updateHistory(x => pushStep(x, {
+      id, original: false, title: opTitle(ops[0] ?? { type: 'resize' }, encode), src: cur.src, ready, pending: true, w: dims.w, h: dims.h,
+    }));
+    // Обрезка, поворот и отражение меняют размер, когда загрузится предпросмотр: иначе
+    // прежняя картинка на миг растянется в новые пропорции. Ресайз выглядит как было
+    if (!ops.some(o => o.type === 'crop' || o.type === 'rotate' || o.type === 'flip')) setSize(dims);
+    setMarks([]);
+    setCrop(null);
+    result.then(async r => {
+      const url = api.stepUrl(projectId, r.stepId);
+      // Грузим заранее: предпросмотр сменится готовой картинкой без мигания
+      await loadImage(url).catch(() => null);
+      previews.current.delete(id);
+      updateHistory(x => patchStep(x, id, { src: url, pending: false, base: { stepId: r.stepId }, w: r.width, h: r.height, bytes: r.bytes }));
+    }).catch((e: Error) => {
+      previews.current.delete(id);
+      if (!histRef.current.steps.some(st => st.id === id)) return;
+      updateHistory(x => dropStepsFrom(x, id));
+      setSize(null);
+      showToast(`Правка не выполнена: ${e.message}`, '', 'error');
+    });
+  };
+
+  // Вес и формат текущей картинки — для «2,4 МБ → 310 КБ» и формата по умолчанию
+  const [fileInfo, setFileInfo] = useState<{ src: string; bytes: number; format: ImageEncodeFormat | null } | null>(null);
+  const infoSrc = curStep && !curStep.pending ? curStep.src : null;
+  useEffect(() => {
+    if (!infoSrc) return;
+    let alive = true;
+    fetch(infoSrc).then(r => r.blob())
+      .then(b => { if (alive) setFileInfo({ src: infoSrc, bytes: b.size, format: formatOf(b.type) }); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [infoSrc]);
 
   const startDiscuss = async () => {
     // Ручка обсуждения без картинки с пометками не работает: кнопка активна только при картинке
@@ -280,21 +384,43 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
   const takeAsBase = () => {
     if (!job.jobId) return;
     const url = api.variantUrl(projectId, job.jobId, sel);
-    setHistory(h => pushStep(h, { id: `s${++stepSeq.current}`, original: false, title: actionTitle(lastAction.current), src: url }));
+    const base: ImageTransformBase = { jobId: job.jobId, variant: sel };
+    setHistory(h => pushStep(h, {
+      id: `s${++stepSeq.current}`, original: false, title: actionTitle(lastAction.current), src: url, base, ready: Promise.resolve(base),
+    }));
     setSize(null);
     setMarks([]);
     setPrompt('');
     job.reset();
   };
 
+  // Диалог сохранения: вариант задачи или шаг истории. Тяжёлый файл (больше HeavyFileMb) —
+  // предупреждение с оценкой WebP; блокировки нет (ADR-018 §9)
+  const openSave = (from: SaveSource, knownBytes?: number) => {
+    setSaveSrc(from);
+    setCompress(false);
+    setHeavy(null);
+    const limit = (catalog?.limits.heavyFileMb ?? 5) * 1024 * 1024;
+    const bytesOf = knownBytes != null ? Promise.resolve(knownBytes)
+      : 'jobId' in from ? fetch(api.variantUrl(projectId, from.jobId, from.variant)).then(r => r.blob()).then(b => b.size) : Promise.resolve(null);
+    void bytesOf.then(async bytes => {
+      if (bytes == null || bytes <= limit) return;
+      setHeavy(h => h ?? { bytes, webpBytes: null });
+      const r = await api.transform(projectId, { base: from, ops: [], encode: HEAVY_ENCODE }, { dryRun: true }).catch(() => null);
+      if (r) setHeavy(h => (h ? { ...h, webpBytes: r.bytes } : h));
+    }).catch(() => {});
+  };
+
   const save = async ({ fileName, folder }: { fileName: string; folder: string }) => {
-    if (!job.jobId) return;
+    if (!saveSrc) return;
+    const src0 = 'jobId' in saveSrc ? { jobId: saveSrc.jobId, variant: saveSrc.variant } : { stepId: saveSrc.stepId, variant: 0 };
+    const encode = compress ? HEAVY_ENCODE : undefined;
     const res = await api.save(projectId, sourcePath
-      ? { jobId: job.jobId, variant: sel, sourcePath }
-      : { jobId: job.jobId, variant: sel, folder: folder || undefined, fileName });
-    setSaveOpen(false);
+      ? { ...src0, sourcePath, encode }
+      : { ...src0, folder: folder || undefined, fileName, encode });
+    setSaveSrc(null);
     setSavedPath(res.path);
-    setSavedJobId(job.jobId);
+    if ('jobId' in saveSrc) setSavedJobId(saveSrc.jobId);
     // Дальше правим уже сохранённый файл: следующая версия ляжет рядом с ним
     setSourcePath(res.path);
     showToast(`Сохранено в проект: ${res.path}`, '', 'info',
@@ -313,7 +439,7 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
     center = (
       <VariantsView variants={job.variants} variantUrl={n => api.variantUrl(projectId, jobId, n)}
         before={src} cost={job.cost} selected={sel}
-        onSelect={setSelected} onApply={() => setSaveOpen(true)} onBase={takeAsBase}
+        onSelect={setSelected} onApply={() => openSave({ jobId, variant: sel })} onBase={takeAsBase}
         onMore={() => { void launch(lastAction.current); }} onBack={job.reset} mobile={mobile} />
     );
   } else if (job.phase === 'error' && job.failure) {
@@ -329,13 +455,30 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
     center = (
       <EditorCanvas src={src} size={size} marks={marks} onMarksChange={setMarks} tool={tool}
         onTextAt={(x, y) => setLabelAt({ x, y, text: '' })}
-        onImageLoad={img => { imgRef.current = img; setSize({ w: img.naturalWidth, h: img.naturalHeight }); }} />
+        onImageLoad={onImageLoad}
+        crop={crop} onCropChange={rect => setCrop(c => (c ? { ...c, rect } : c))}
+        hint={crop ? 'Тяните рамку или её углы' : transforming ? 'Сохраняем правку…' : undefined}
+        overlay={crop && size && (
+          <CropBar ratio={crop.ratio} mobile={mobile}
+            onRatio={ratio => setCrop(c => (c ? { ratio, rect: ratio === 'free' ? c.rect : fitCropRatio(c.rect, ratio, size) } : c))}
+            onCancel={() => setCrop(null)}
+            onApply={() => {
+              if (isFullCrop(crop.rect)) { setCrop(null); return; }
+              runTransform([{ type: 'crop', rect: crop.rect }], null);
+            }} />
+        )} />
     );
   } else {
     center = <DropZone folder={folder} mobile={mobile} onFile={f => startFrom(URL.createObjectURL(f))} />;
   }
 
-  const marksOn = hasImage && job.phase === 'idle';
+  const marksOn = hasImage && job.phase === 'idle' && !crop;
+  const adjustBlock = !hasImage ? 'Сначала загрузите картинку'
+    : busy ? 'Идёт генерация'
+      : job.phase !== 'idle' ? 'Вернитесь к картинке, чтобы править её'
+        : !curStep?.ready ? 'Картинка с компьютера ещё не в проекте: сохраните её, тогда можно править'
+          : '';
+  const saveFromStep = job.phase === 'idle' ? stepSaveSource(curStep) : null;
   const doneSteps = history.steps.filter(x => !x.original).length;
 
   // ── Левая панель: шесть секций ──
@@ -370,6 +513,22 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
       body: <QuickActions blockReason={quickBlock} ratio={ratio} onRatio={setRatio} onRun={runQuick} />,
     },
     {
+      id: 'adjust', title: 'Правка без ИИ',
+      meta: transforming ? 'сохраняем…' : size ? `${size.w}×${size.h}` : undefined,
+      body: (
+        <AdjustPanel api={api} projectId={projectId} stepId={curStep?.id ?? ''} size={size} base={curStep?.ready ?? null}
+          sourceFormat={fileInfo?.src === src ? fileInfo.format : undefined} beforeBytes={curStep?.bytes ?? (fileInfo?.src === src ? fileInfo.bytes : null)}
+          blockReason={adjustBlock} cropping={!!crop}
+          onOp={op => runTransform([op], null)}
+          onCrop={() => {
+            if (!size) return;
+            setSheet(null);
+            setCrop(c => (c ? null : { rect: initialCrop('free', size), ratio: 'free' }));
+          }}
+          onApply={(ops, encode) => runTransform(ops, encode)} />
+      ),
+    },
+    {
       id: 'model', title: 'Чем рисовать',
       meta: pv && m ? `${pv.label} · ${m.label}` : undefined,
       body: (
@@ -383,6 +542,11 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
               onProvider={onProvider} onModel={setModel} hasImage={hasImage} hasMask={hasMask}
               priceLabel={priceLabel} mobile={mobile} />
           )}
+          <label style={{ display: 'flex', alignItems: 'center', gap: SP.sm, cursor: 'pointer' }}>
+            <Toggle checked={matchSize} onChange={setMatchSize} ariaLabel="Вернуть размер оригинала" width={34} height={20} />
+            <span style={{ fontSize: FS.sm, color: C.textPrimary }}>Вернуть размер оригинала</span>
+          </label>
+          <SectionHint>Варианты приводятся к размеру исходника, если пропорции совпадают.</SectionHint>
         </div>
       ),
     },
@@ -483,6 +647,12 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
             {folder ? `${folder}/ · ` : ''}{projectName}
           </div>
         </div>
+        {saveFromStep && !crop && (
+          <Button size="sm" variant="secondary" leftIcon={ic(Save, ICON_SIZE.xs)} disabled={transforming}
+            onClick={() => openSave(saveFromStep, curStep?.bytes)}>
+            {mobile ? 'Сохранить' : 'Сохранить в проект'}
+          </Button>
+        )}
         {savedPath && !mobile && (
           <span style={{ fontSize: FS.sm, color: C.successText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 280 }}>
             Сохранено в проект: {savedPath}
@@ -516,12 +686,54 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
           onPick={p => { addSamplePaths([p]); setPickerOpen(false); }} onClose={() => setPickerOpen(false)} />
       )}
       {providersOpen && <ModelsSpendModal initialTab="apply" onClose={() => setProvidersOpen(false)} />}
-      {saveOpen && job.jobId && (
+      {saveSrc && (
         <SaveDialog mode={sourcePath ? 'edit' : 'create'} sourcePath={sourcePath}
-          suggestedName={sourcePath ? nextVersionName(splitPath(sourcePath).name) : initial.name}
-          folder={folder} onSave={save} onClose={() => setSaveOpen(false)} />
+          suggestedName={withExt(sourcePath ? nextVersionName(splitPath(sourcePath).name) : initial.name, compress ? 'webp' : null)}
+          folder={folder} onSave={save} onClose={() => setSaveSrc(null)}
+          heavy={heavy && { ...heavy, compress, onCompress: setCompress }} />
       )}
     </Island>
+  );
+}
+
+const HEAVY_ENCODE: ImageEncodeSpec = { format: 'webp', quality: 80 };
+
+function originalStep(id: string, src: string, base: ImageTransformBase | null): HistoryStep {
+  return { id, original: true, title: 'Оригинал', src, base, ready: base ? Promise.resolve(base) : null };
+}
+
+function loadImage(url: string): Promise<HTMLImageElement> {
+  const img = new Image();
+  img.src = url;
+  return img.decode().then(() => img);
+}
+
+// Расширение имени по формату перекодирования: hero.v2.png → hero.v2.webp
+const withExt = (name: string, ext: string | null) => (ext ? name.replace(/\.\w+$/, '') + `.${ext}` : name);
+
+const CROP_LABEL: Record<CropRatio, string> = { free: 'Свободно', '1:1': '1:1', '16:9': '16:9', '9:16': '9:16' };
+
+// Плашка обрезки над холстом: пропорции, «Отмена», «Обрезать»
+function CropBar({ ratio, mobile, onRatio, onCancel, onApply }: {
+  ratio: CropRatio;
+  mobile: boolean;
+  onRatio: (r: CropRatio) => void;
+  onCancel: () => void;
+  onApply: () => void;
+}) {
+  return (
+    <div data-crop-bar="true" style={{
+      display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap', justifyContent: 'center',
+      padding: SP.sm, background: C.bgPanel, border: `1px solid ${C.borderLight}`, borderRadius: R.lg, boxShadow: SHADOW.card,
+    }}>
+      <div style={{ width: mobile ? 280 : 300, maxWidth: '100%' }}>
+        <SegmentedControl value={ratio} onChange={onRatio} options={CROP_RATIOS.map(r => ({ value: r, label: CROP_LABEL[r] }))} />
+      </div>
+      <div style={{ display: 'flex', gap: SP.xs }}>
+        <Button size="sm" variant="ghost" onClick={onCancel}>Отмена</Button>
+        <Button size="sm" variant="primary" onClick={onApply}>Обрезать</Button>
+      </div>
+    </div>
   );
 }
 

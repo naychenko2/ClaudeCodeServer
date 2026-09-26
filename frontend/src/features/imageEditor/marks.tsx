@@ -102,15 +102,27 @@ function strokePath(ctx: CanvasRenderingContext2D, pts: [number, number][]) {
 }
 
 // Бинарная маска ровно в размер исходника: чёрный фон, белое — менять
+// Маска едет в разрешении предпросмотра, не больше MASK_MAX по длинной стороне: до
+// размера исходника её растягивает сервер (nearest), а 48 Мп в canvas телефона не влезут
+export const MASK_MAX = 2048;
+
+export function maskExportSize(w: number, h: number): { w: number; h: number; k: number } {
+  const k = Math.min(1, MASK_MAX / Math.max(w, h));
+  return { w: Math.max(1, Math.round(w * k)), h: Math.max(1, Math.round(h * k)), k };
+}
+
 export async function exportMask(marks: Mark[], w: number, h: number): Promise<Blob | null> {
   const masks = marks.filter((m): m is Extract<Mark, { type: 'mask' }> => m.type === 'mask');
   if (!masks.length) return null;
+  const out = maskExportSize(w, h);
   const canvas = document.createElement('canvas');
-  canvas.width = w; canvas.height = h;
+  canvas.width = out.w; canvas.height = out.h;
   const ctx = canvas.getContext('2d');
   if (!ctx) return null;
   ctx.fillStyle = 'black';
-  ctx.fillRect(0, 0, w, h);
+  ctx.fillRect(0, 0, out.w, out.h);
+  // Пометки хранятся в пикселях исходника
+  ctx.scale(out.k, out.k);
   ctx.strokeStyle = 'white';
   ctx.lineCap = 'round'; ctx.lineJoin = 'round';
   for (const m of masks) { ctx.lineWidth = m.width; strokePath(ctx, m.points); }

@@ -7,7 +7,7 @@ describe('секции левой панели', () => {
   it('по умолчанию открыты пометки, образцы, быстрые действия и история', () => {
     const s = parseSections(null);
     expect(s).toEqual(DEFAULT_SECTIONS);
-    expect(s).toEqual({ marks: true, samples: true, chars: false, quick: true, model: false, hist: true });
+    expect(s).toEqual({ marks: true, samples: true, chars: false, quick: true, adjust: false, model: false, hist: true });
   });
 
   it('сохранённое состояние переживает круг «свернуть → записать → прочитать»', () => {

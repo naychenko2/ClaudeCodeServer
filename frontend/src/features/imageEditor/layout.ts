@@ -1,13 +1,14 @@
 // Раскладка редактора v2 (макет docs/mockups/image-editor-v2.html): секции левой панели
 // с состоянием «свёрнута / раскрыта» на пользователя и потолки авторазмера поля промпта.
 
-export const SECTION_IDS = ['marks', 'samples', 'chars', 'quick', 'model', 'hist'] as const;
+export const SECTION_IDS = ['marks', 'samples', 'chars', 'quick', 'adjust', 'model', 'hist'] as const;
 export type SectionId = typeof SECTION_IDS[number];
 export type SectionState = Record<SectionId, boolean>;
 
-// По умолчанию открыты «Пометки», «Образцы», «Быстрые действия», «История»
+// По умолчанию открыты «Пометки», «Образцы», «Быстрые действия», «История»;
+// «Правка без ИИ» (шаг 7) — свёрнута
 export const DEFAULT_SECTIONS: SectionState = {
-  marks: true, samples: true, chars: false, quick: true, model: false, hist: true,
+  marks: true, samples: true, chars: false, quick: true, adjust: false, model: false, hist: true,
 };
 
 // Ключ хранения — на пользователя: в одном браузере могут работать разные люди

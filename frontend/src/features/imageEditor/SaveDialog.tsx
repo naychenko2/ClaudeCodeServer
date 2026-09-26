@@ -1,18 +1,29 @@
 // Диалог «Сохранить в проект» (экран 7). Результат всегда новым файлом: у правки
 // имя версии подбирает сервер (hero.png → hero.v2.png, занято — следующий номер),
 // поэтому в диалоге оно показано как итог, а не поле ввода. У «Нарисовать картинку»
-// имя задаёт человек.
+// имя задаёт человек. Тяжёлый файл (больше HeavyFileMb) — предупреждение и кнопка,
+// которая подставляет кодирование в WebP; блокировки нет (ADR-018 §9).
 
 import { useState } from 'react';
-import { Field, Modal, ModalActions, TextField, C, FS, R, SP } from 'aihome_shell/kit';
+import { Button, Field, Modal, ModalActions, TextField, C, FS, R, SP } from 'aihome_shell/kit';
+import { formatBytes } from './transforms';
 
-export function SaveDialog({ mode, sourcePath, suggestedName, folder, onSave, onClose }: {
+export interface HeavyFile {
+  bytes: number;
+  // Оценка веса в WebP; null — ещё считается
+  webpBytes: number | null;
+  compress: boolean;
+  onCompress: (on: boolean) => void;
+}
+
+export function SaveDialog({ mode, sourcePath, suggestedName, folder, onSave, onClose, heavy }: {
   mode: 'edit' | 'create';
   sourcePath: string | null;
   suggestedName: string;
   folder: string;
   onSave: (v: { fileName: string; folder: string }) => Promise<void>;
   onClose: () => void;
+  heavy?: HeavyFile | null;
 }) {
   const [name, setName] = useState(suggestedName);
   const [dir, setDir] = useState(folder);
@@ -45,6 +56,18 @@ export function SaveDialog({ mode, sourcePath, suggestedName, folder, onSave, on
         {edit && sourcePath && (
           <div style={{ fontSize: FS.sm, color: C.successText, background: C.successBg, borderRadius: R.md, padding: `${SP.sm}px ${SP.md}px` }}>
             Оригинал {sourcePath} не изменится — новая версия ляжет рядом.
+          </div>
+        )}
+        {heavy && (
+          <div data-heavy="true" style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap', fontSize: FS.sm, color: C.warningText, background: C.warningBg, borderRadius: R.md, padding: `${SP.sm}px ${SP.md}px` }}>
+            <span style={{ flex: 1, minWidth: 180 }}>
+              {heavy.compress
+                ? `Сохраним в WebP${heavy.webpBytes != null ? ` ≈ ${formatBytes(heavy.webpBytes)}` : ''} вместо ${formatBytes(heavy.bytes)}.`
+                : `Файл ${formatBytes(heavy.bytes)} — тяжёлый. Сжать в WebP${heavy.webpBytes != null ? ` ≈ ${formatBytes(heavy.webpBytes)}` : ''}?`}
+            </span>
+            <Button size="sm" variant="secondary" onClick={() => heavy.onCompress(!heavy.compress)}>
+              {heavy.compress ? 'Оставить как есть' : 'Сжать в WebP'}
+            </Button>
           </div>
         )}
         {error && <div style={{ fontSize: FS.sm, color: C.dangerText }}>{error}</div>}

@@ -9,6 +9,7 @@
 
 import { request, readStoredToken, onMessage } from 'aihome_shell/kit';
 import type { Session } from '../../types';
+import { transformedSize } from './transforms';
 
 export type ImageEditOp = 'generate' | 'edit' | 'inpaint' | 'outpaint' | 'removeBackground' | 'upscale';
 export type EditMode = 'auto' | 'fast' | 'precise' | 'photoreal';
@@ -56,7 +57,8 @@ export interface ImageEditCatalog {
   // provider = null — ни одного доступного поставщика
   default: { provider: string | null; model: string };
   providers: ImageEditProvider[];
-  limits: { maxFileMb: number; maxReferences: number; maxCount: number };
+  // heavyFileMb — порог «тяжёлого файла» для диалога сохранения (ImageEditor:HeavyFileMb)
+  limits: { maxFileMb: number; maxReferences: number; maxCount: number; heavyFileMb?: number };
   // Почему поставщиков нет; null — есть хотя бы один
   reason: ImageEditCatalogReason | null;
 }
@@ -249,8 +251,11 @@ export type ImageTransformOp =
   // либо width/height в px, либо percent; lockAspect — недостающую сторону досчитать
   | { type: 'resize'; width?: number | null; height?: number | null; percent?: number | null; lockAspect?: boolean };
 
-// База правки: файл проекта или шаг истории сеанса — ровно одно из двух
-export type ImageTransformBase = { path: string; stepId?: null } | { stepId: string; path?: null };
+// База правки: файл проекта, шаг истории сеанса или вариант задачи — ровно одно из трёх
+export type ImageTransformBase =
+  | { path: string; stepId?: null; jobId?: null }
+  | { stepId: string; path?: null; jobId?: null }
+  | { jobId: string; variant: number; path?: null; stepId?: null };
 
 export interface ImageTransformRequest {
   base: ImageTransformBase;
@@ -384,6 +389,8 @@ export interface ImageEditorApi {
   saveCheck(projectId: string, req: SaveCheckRequest): Promise<SaveCheckResponse>;
   // dryRun — только посчитать вес: шаг не пишется, stepId = null
   transform(projectId: string, req: ImageTransformRequest, opts?: { dryRun?: boolean }): Promise<ImageTransformResponse>;
+  // Картинка шага истории для <img>: токен через ?access_token=, как у вариантов
+  stepUrl(projectId: string, stepId: string): string;
   createChat(projectId: string, req: ImageChatCreateRequest): Promise<Session>;
   findChats(projectId: string, path: string): Promise<ImageChatLookupResponse>;
   setChatPath(projectId: string, sessionId: string, req: ImageChatPathRequest): Promise<Session>;
@@ -458,6 +465,7 @@ const liveApi: ImageEditorApi = {
   transform: (projectId, req, opts) =>
     request<ImageTransformResponse>(`${base(projectId)}/transform${opts?.dryRun ? '?dryRun=true' : ''}`,
       { method: 'POST', body: JSON.stringify(req), timeoutMs: 60_000 }),
+  stepUrl: (projectId, stepId) => withToken(`/api${base(projectId)}/steps/${encodeURIComponent(stepId)}`),
   createChat: (projectId, req) =>
     request<Session>(chatBase(projectId), { method: 'POST', body: JSON.stringify(req) }),
   findChats: (projectId, path) =>
@@ -521,26 +529,8 @@ export function mockEncodedBytes(width: number, height: number, encode?: ImageEn
 
 // Размеры после цепочки правок — как посчитает сервер
 export function mockApplyOps(size: { width: number; height: number }, ops: ImageTransformOp[]) {
-  let { width, height } = size;
-  for (const op of ops) {
-    if (op.type === 'crop') {
-      width = Math.max(1, Math.round(width * op.rect.width));
-      height = Math.max(1, Math.round(height * op.rect.height));
-    } else if (op.type === 'rotate' && op.degrees !== 180) {
-      [width, height] = [height, width];
-    } else if (op.type === 'resize') {
-      if (op.percent != null) {
-        width = Math.max(1, Math.round(width * op.percent / 100));
-        height = Math.max(1, Math.round(height * op.percent / 100));
-      } else {
-        const lock = op.lockAspect ?? true;
-        const w = op.width ?? (lock && op.height ? Math.round(width * op.height / height) : width);
-        const h = op.height ?? (lock && op.width ? Math.round(height * op.width / width) : height);
-        [width, height] = [w, h];
-      }
-    }
-  }
-  return { width, height };
+  const r = transformedSize({ w: size.width, h: size.height }, ops);
+  return { width: r.w, height: r.h };
 }
 
 const mockError = (message: string, status: number, body?: Record<string, unknown>) =>
@@ -557,7 +547,7 @@ export function createMockApi(mode: 'fal' | 'all'): ImageEditorApi {
   let seq = 0;
   // Файлы, записанные «Сохранить как…»: повтор имени — 409 name_taken
   const savedPaths = new Set<string>();
-  const steps = new Map<string, { width: number; height: number }>();
+  const steps = new Map<string, { width: number; height: number; format: ImageEncodeFormat }>();
   const chats = new Map<string, Session>();
   const chatStates = new Map<string, ImageChatState>();
 
@@ -600,7 +590,7 @@ export function createMockApi(mode: 'fal' | 'all'): ImageEditorApi {
     catalog: () => delay<ImageEditCatalog>({
       default: { provider: providers.at(-1)?.key ?? null, model: AUTO_MODEL },
       providers,
-      limits: { maxFileMb: 20, maxReferences: 6, maxCount: 4 },
+      limits: { maxFileMb: 20, maxReferences: 6, maxCount: 4, heavyFileMb: 5 },
       reason: providers.length ? null : 'no_provider_configured',
     }),
     quote: async (_projectId, req) => {
@@ -692,14 +682,22 @@ export function createMockApi(mode: 'fal' | 'all'): ImageEditorApi {
     transform: async (_projectId, req, opts) => {
       if (req.ops.some(op => op.type === 'rotate' && ![90, 180, 270].includes(op.degrees)))
         throw mockError('Поворот только на 90, 180 или 270°', 400, { code: 'invalid_request' });
-      const baseSize = req.base.stepId ? steps.get(req.base.stepId) : MOCK_SOURCE_SIZE;
+      // Вариант мока — плашка 640×400 (variantUrl), файл проекта — MOCK_SOURCE_SIZE
+      const baseSize: { width: number; height: number; format?: ImageEncodeFormat } | undefined = req.base.stepId
+        ? steps.get(req.base.stepId) : req.base.jobId ? { width: 640, height: 400 } : MOCK_SOURCE_SIZE;
       if (!baseSize) throw mockError('Шаг не найден', 404, { code: 'invalid_request' });
       const size = mockApplyOps(baseSize, req.ops);
       const bytes = mockEncodedBytes(size.width, size.height, req.encode);
-      if (opts?.dryRun) return delay({ stepId: null, ...size, bytes }, 80);
+      if (opts?.dryRun) return delay({ stepId: null, width: size.width, height: size.height, bytes }, 80);
       const stepId = `s${++seq}`;
-      steps.set(stepId, size);
+      steps.set(stepId, { ...size, format: req.encode?.format ?? baseSize.format ?? 'png' });
       return delay({ stepId, ...size, bytes }, 200);
+    },
+    // Мок-шаг: плашка в размерах шага — пиксели мок не правит, геометрию видно по рамке
+    stepUrl: (_projectId, stepId) => {
+      const st = steps.get(stepId) ?? { width: 640, height: 400, format: 'png' as const };
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${st.width} ${st.height}"><rect width="${st.width}" height="${st.height}" fill="hsl(200,35%,72%)"/><text x="${st.width / 2}" y="${st.height / 2}" font-size="${Math.round(Math.min(st.width, st.height) / 8)}" text-anchor="middle" dominant-baseline="middle" fill="hsl(200,40%,25%)" font-family="sans-serif">${st.width}×${st.height} ${st.format}</text></svg>`;
+      return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
     },
     createChat: async (projectId, req) => {
       const now = new Date().toISOString();

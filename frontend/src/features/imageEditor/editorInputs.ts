@@ -2,7 +2,7 @@
 // история шагов. Чистые функции — их держат тесты editorInputs.test.ts.
 
 import type {
-  ImageEditJobInput, ImageEditOp, ImageEditProjectReference, ImageEditUploadedReference, ReferenceRole,
+  ImageEditJobInput, ImageEditOp, ImageEditProjectReference, ImageEditUploadedReference, ImageTransformBase, ReferenceRole,
 } from './api';
 
 // ── Образцы ──
@@ -106,10 +106,33 @@ export function actionTitle(a: LaunchAction): string {
 
 export interface HistoryStep {
   id: string;
-  // Оригинал — файл, с которого начали; остальные — «Взять за основу»
+  // Оригинал — файл, с которого начали; остальные — «Взять за основу» и правки без ИИ
   original: boolean;
   title: string;
   src: string;
+  // База серверной правки (transform): файл проекта, вариант задачи или шаг. Пока шаг
+  // в полёте — обещание его stepId. null — картинка не на сервере (загружена с компьютера)
+  ready?: Promise<ImageTransformBase> | null;
+  // Та же база, когда уже известна
+  base?: ImageTransformBase | null;
+  // Шаг правки ещё не записан сервером: на экране предпросмотр
+  pending?: boolean;
+  // Размеры и вес, если известны (у шага правки их отдаёт сервер)
+  w?: number;
+  h?: number;
+  bytes?: number;
+}
+
+export type SaveSource = { jobId: string; variant: number } | { stepId: string };
+
+// Что сохранять «Сохранить в проект» у текущего шага: вариант задачи или шаг правки.
+// У оригинала и у шага в полёте сохранять нечего
+export function stepSaveSource(s: HistoryStep | undefined): SaveSource | null {
+  const b = s?.base;
+  if (!s || s.original || s.pending || !b) return null;
+  if (b.stepId) return { stepId: b.stepId };
+  if (b.jobId) return { jobId: b.jobId, variant: b.variant };
+  return null;
 }
 
 export interface History { steps: HistoryStep[]; cur: number }
@@ -121,6 +144,16 @@ export function pushStep(h: History, step: HistoryStep): History {
   const steps = [...h.steps.slice(0, h.cur + 1), step];
   return { steps, cur: steps.length - 1 };
 }
+
+// Шаг не записался — убираем его и всё, что строилось поверх него
+export function dropStepsFrom(h: History, id: string): History {
+  const i = h.steps.findIndex(s => s.id === id);
+  if (i < 0) return h;
+  return { steps: h.steps.slice(0, i), cur: Math.min(h.cur, i - 1) };
+}
+
+export const patchStep = (h: History, id: string, patch: Partial<HistoryStep>): History =>
+  ({ ...h, steps: h.steps.map(s => (s.id === id ? { ...s, ...patch } : s)) });
 
 export const goToStep = (h: History, i: number): History =>
   (i >= 0 && i < h.steps.length ? { ...h, cur: i } : h);

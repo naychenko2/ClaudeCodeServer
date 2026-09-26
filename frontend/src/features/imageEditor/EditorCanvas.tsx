@@ -1,10 +1,13 @@
 // Холст редактора: картинка с SVG-слоем пометок, масштаб (кнопки и колесо) и
 // перемещение инструментом «рука». Пометки хранятся в пикселях исходника.
 
-import { useEffect, useRef, useState, type PointerEvent as RPointerEvent } from 'react';
+import { useEffect, useRef, useState, type PointerEvent as RPointerEvent, type ReactNode } from 'react';
 import { Minus, Plus, Scan } from 'lucide-react';
 import { IconButton, ICON_SIZE, ICON_STROKE, C, FS, R, SHADOW, SP } from 'aihome_shell/kit';
 import { MarksLayer, strokeScale, type Mark, type Tool } from './marks';
+import type { ImageFractionRect } from './api';
+import { CropOverlay } from './CropOverlay';
+import type { CropRatio } from './transforms';
 
 const TOOL_HINT: Record<Tool, string> = {
   hand: 'Тяните картинку, колесо — масштаб',
@@ -17,7 +20,7 @@ const TOOL_HINT: Record<Tool, string> = {
 
 const clampZoom = (z: number) => Math.min(4, Math.max(0.25, z));
 
-export function EditorCanvas({ src, size, marks, onMarksChange, tool, onTextAt, onImageLoad }: {
+export function EditorCanvas({ src, size, marks, onMarksChange, tool, onTextAt, onImageLoad, crop, onCropChange, overlay, hint }: {
   src: string;
   // Натуральный размер исходника; null — ещё грузится
   size: { w: number; h: number } | null;
@@ -27,6 +30,13 @@ export function EditorCanvas({ src, size, marks, onMarksChange, tool, onTextAt, 
   // Инструмент «подпись»: точка на картинке, текст спрашивает родитель
   onTextAt: (x: number, y: number) => void;
   onImageLoad: (img: HTMLImageElement) => void;
+  // Режим обрезки: рамка вместо пометок
+  crop?: { rect: ImageFractionRect; ratio: CropRatio } | null;
+  onCropChange?: (rect: ImageFractionRect) => void;
+  // Плашка снизу по центру (панель обрезки)
+  overlay?: ReactNode;
+  // Подсказка сверху вместо подсказки инструмента
+  hint?: string;
 }) {
   const stageRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -82,7 +92,7 @@ export function EditorCanvas({ src, size, marks, onMarksChange, tool, onTextAt, 
   };
 
   const onPointerDown = (e: RPointerEvent<HTMLDivElement>) => {
-    if (!size || tool === 'eraser') return;
+    if (!size || tool === 'eraser' || crop) return;
     // Жест не должен начинать выделение в документе: браузер тащит выделенное
     // нативным drag и обрывает жест pointercancel'ом
     e.preventDefault();
@@ -119,7 +129,7 @@ export function EditorCanvas({ src, size, marks, onMarksChange, tool, onTextAt, 
   const zoomBtn = { size: 'sm' as const, tone: 'muted' as const };
   const shown = draft ? [...marks, draft] : marks;
 
-  return (
+  const stageEl = (
     <div
       ref={stageRef}
       onPointerDown={onPointerDown}
@@ -139,13 +149,15 @@ export function EditorCanvas({ src, size, marks, onMarksChange, tool, onTextAt, 
           transform: `translate(-50%, -50%) translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
           boxShadow: SHADOW.card,
         }}>
-          <img src={src} alt="" draggable={false}
+          {/* Сменилась картинка при известном размере (шаг правки долетел) — onLoad отдаёт новую */}
+          <img src={src} alt="" draggable={false} onLoad={e => onImageLoad(e.currentTarget)}
             style={{ width: '100%', height: '100%', display: 'block', userSelect: 'none', pointerEvents: 'none' }} />
           <svg ref={svgRef} viewBox={`0 0 ${size.w} ${size.h}`} preserveAspectRatio="none"
             style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}>
             <MarksLayer marks={shown} k={k}
-              onPick={tool === 'eraser' ? i => onMarksChange(marks.filter((_, j) => j !== i)) : undefined} />
+              onPick={tool === 'eraser' && !crop ? i => onMarksChange(marks.filter((_, j) => j !== i)) : undefined} />
           </svg>
+          {crop && onCropChange && <CropOverlay rect={crop.rect} ratio={crop.ratio} size={size} onChange={onCropChange} />}
         </div>
       )}
       {/* Пока натуральный размер неизвестен, картинку грузим невидимо ради onLoad */}
@@ -158,8 +170,9 @@ export function EditorCanvas({ src, size, marks, onMarksChange, tool, onTextAt, 
         background: C.glass, color: C.textSecondary, fontSize: FS.sm, padding: `${SP.xs}px ${SP.md}px`,
         borderRadius: R.max, whiteSpace: 'nowrap', maxWidth: '90%', overflow: 'hidden', textOverflow: 'ellipsis',
       }}>
-        {TOOL_HINT[tool]}
+        {hint ?? TOOL_HINT[tool]}
       </div>
+
       <div
         onPointerDown={e => e.stopPropagation()}
         style={{
@@ -178,6 +191,19 @@ export function EditorCanvas({ src, size, marks, onMarksChange, tool, onTextAt, 
           <Scan size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
         </IconButton>
       </div>
+    </div>
+  );
+
+  // Плашка под холстом, а не поверх: на телефоне поверх она закрывала бы углы рамки.
+  // Обёртка есть всегда — иначе холст пересоздастся и наблюдатель размера потеряет его
+  return (
+    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      {stageEl}
+      {overlay && (
+        <div style={{ flex: '0 0 auto', display: 'flex', justifyContent: 'center', padding: SP.sm, background: C.bgInset }}>
+          {overlay}
+        </div>
+      )}
     </div>
   );
 }

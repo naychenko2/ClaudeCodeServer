@@ -101,13 +101,20 @@ turns/, journal/                   каталоги и журнал ходов
   на `versions/{v}\ai-home-agent.exe supervise`. Без администратора; живёт, пока пользователь
   вошёл в систему. Запись переписывается при каждом переключении версии.
 - **Linux** — unit `systemd --user` `~/.config/systemd/user/ai-home-agent.service`:
-  `ExecStart=<корень>/current/ai-home-agent supervise`, `Restart=on-failure`. Обычный режим
-  привязан к `graphical-session.target` (`After`/`PartOf`/`WantedBy`): от `default.target` у
-  агента нет `DISPLAY`/`WAYLAND_DISPLAY`, и приложения из хода не открываются; без графической
-  сессии такой unit не стартует. `--always-on` остаётся на `default.target` — графики там нет по
-  построению; смена режима переписывает unit и делает `reenable`. Linger
+  `ExecStart=<корень>/current/ai-home-agent supervise`, `Restart=on-failure`. Обычный режим —
+  `WantedBy=default.target graphical-session.target` и `After=graphical-session.target`, без
+  `PartOf`: графическую цель поднимают не все окружения (XFCE, MATE, i3, LXQt, старый Plasma,
+  xrdp), и unit только на ней там молча не стартовал бы. `--always-on` — только
+  `default.target`; смена режима переписывает unit и делает `reenable`.
+  `DISPLAY`/`WAYLAND_DISPLAY`/`XAUTHORITY`/`XDG_RUNTIME_DIR` агент берёт не из своего
+  окружения (от `default.target` его запускают до того, как рабочий стол их выставит), а на
+  каждом ходу из `systemctl --user show-environment` (`Exec/GraphicalSessionEnvironment.cs`);
+  в allow-list окружения CLI они входят только не на Windows. **Самообновление unit не
+  переписывает** — оно переставляет симлинк `current`; новый текст unit существующая установка
+  получает только повторным `install`. Linger
   (`loginctl enable-linger`) включается только с `install --always-on`; не разрешили —
-  `install` печатает команду для администратора. Нет `systemd --user` (WSL1, контейнер) —
+  `install` печатает команду для администратора. Обычный `install` linger не снимает, а если он
+  включён — напоминает про `loginctl disable-linger`. Нет `systemd --user` (WSL1, контейнер) —
   файлы ставятся, агент сопрягается, а как запускать руками, печатается; это не ошибка.
 
 ## Контракт супервизора (заморожен)

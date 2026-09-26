@@ -282,6 +282,9 @@ public static class AgentProgram
             {
                 TurnsRoot = paths.TurnsRoot, ConfigDirectory = paths.CliProfile, SidecarUrl = () => sidecar.Url,
                 PathPolicy = policy,
+                InheritedEnvironment = OperatingSystem.IsWindows()
+                    ? CliEnvironment.CurrentProcess
+                    : () => GraphicalSessionEnvironment.Merge(CliEnvironment.CurrentProcess(), new ProcessCommandRunner()),
             },
             new ManagedCliLeaseSource(managedCli), grants, journal, loggers.CreateLogger<TurnExecutor>());
         AppDomain.CurrentDomain.ProcessExit += (_, _) => executor.KillAll();

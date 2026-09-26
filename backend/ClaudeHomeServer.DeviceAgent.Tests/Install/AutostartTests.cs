@@ -27,12 +27,13 @@ internal sealed class FakeCommandRunner : ICommandRunner
 {
     public List<string> Commands { get; } = [];
     public Func<string, int> Code { get; set; } = _ => 0;
+    public Func<string, string> Output { get; set; } = _ => "";
 
     public (int Code, string Output) Run(string file, IReadOnlyList<string> args)
     {
         var line = string.Join(' ', [file, .. args]);
         Commands.Add(line);
-        return (Code(line), Code(line) == 0 ? "" : "Failed to connect to bus");
+        return (Code(line), Code(line) == 0 ? Output(line) : "Failed to connect to bus");
     }
 }
 
@@ -96,7 +97,7 @@ public sealed class AutostartTests : IDisposable
     }
 
     [Fact]
-    public void Unit_systemd_живёт_в_графической_сессии_и_запускает_supervise_через_симлинк_current()
+    public void Unit_systemd_стартует_от_default_target_после_графики_и_запускает_supervise_через_симлинк_current()
     {
         var unit = SystemdUserAutostart.RenderUnit("/home/ivan/.local/share/ai-home-agent/current/ai-home-agent",
             new Dictionary<string, string> { ["XDG_DATA_HOME"] = "/data/ivan" }, alwaysOn: false);
@@ -105,7 +106,6 @@ public sealed class AutostartTests : IDisposable
             [Unit]
             Description=AI Home: агент устройства
             After=graphical-session.target
-            PartOf=graphical-session.target
 
             [Service]
             Type=simple
@@ -115,9 +115,41 @@ public sealed class AutostartTests : IDisposable
             Environment="XDG_DATA_HOME=/data/ivan"
 
             [Install]
-            WantedBy=graphical-session.target
+            WantedBy=default.target graphical-session.target
 
             """.Replace("\r\n", "\n"));
+    }
+
+    [Fact]
+    public void Обычный_режим_не_зависит_от_графической_цели_которую_поднимают_не_все_рабочие_столы()
+    {
+        var unit = SystemdUserAutostart.RenderUnit("/opt/agent", new Dictionary<string, string>(), alwaysOn: false);
+        var wantedBy = unit.Split('\n').Single(l => l.StartsWith("WantedBy=")).Split('=', 2)[1].Split(' ');
+
+        // XFCE, MATE, i3, LXQt, xrdp graphical-session.target не поднимают: только на нём агент не стартовал бы
+        wantedBy.Should().Contain("default.target");
+        unit.Should().NotContain("PartOf=", "PartOf к графической цели гасил бы агент без графической сессии");
+    }
+
+    [Fact]
+    public void Переход_с_always_on_напоминает_что_linger_остался()
+    {
+        var runner = new FakeCommandRunner { Output = l => l.StartsWith("loginctl show-user") ? "yes\n" : "" };
+        var autostart = new SystemdUserAutostart(_install.Layout, runner, _unitDir, new Dictionary<string, string>());
+
+        var result = autostart.Register("1.2.0", alwaysOn: false);
+
+        result.Notes.Should().ContainSingle().Which.Should().Contain("linger остался").And.Contain("loginctl disable-linger");
+        runner.Commands.Should().NotContain(c => c.Contains("enable-linger"));
+    }
+
+    [Fact]
+    public void Без_linger_обычный_режим_ничего_о_нём_не_пишет()
+    {
+        var runner = new FakeCommandRunner { Output = l => l.StartsWith("loginctl show-user") ? "no" : "" };
+        var autostart = new SystemdUserAutostart(_install.Layout, runner, _unitDir, new Dictionary<string, string>());
+
+        autostart.Register("1.2.0", alwaysOn: false).Notes.Should().BeEmpty();
     }
 
     [Fact]
@@ -170,6 +202,7 @@ public sealed class AutostartTests : IDisposable
             "systemctl --user show-environment",
             "systemctl --user daemon-reload",
             "systemctl --user enable ai-home-agent.service",
+            $"loginctl show-user {Environment.UserName} --property=Linger --value",
             "systemctl --user restart ai-home-agent.service");
     }
 

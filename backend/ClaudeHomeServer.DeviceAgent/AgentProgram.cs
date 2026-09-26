@@ -22,6 +22,7 @@ namespace ClaudeHomeServer.DeviceAgent;
 ///   ai-home-agent pair --server https://host --code ABCD2345 [--name "Ноутбук"]
 ///   ai-home-agent roots add ПУТЬ [--force] | roots remove ПУТЬ | roots list
 ///   ai-home-agent [run]
+///   ai-home-agent --version
 ///
 /// Класс назван не <c>Program</c> и без top-level statements: иначе глобальный
 /// <c>Program</c> агента столкнулся бы с <c>Program</c> сервера в тестах, видящих обе сборки.
@@ -30,6 +31,14 @@ public static class AgentProgram
 {
     public static async Task<int> Main(string[] args)
     {
+        // До каталогов и хранилища токена: версию спрашивают установщик и скрипты, побочных
+        // эффектов у вопроса быть не должно
+        if (args is ["--version"])
+        {
+            Console.WriteLine(Version);
+            return 0;
+        }
+
         using var loggers = LoggerFactory.Create(b => b
             .AddSimpleConsole(o => { o.SingleLine = true; o.TimestampFormat = "HH:mm:ss "; })
             .SetMinimumLevel(LogLevel.Information));
@@ -62,6 +71,7 @@ public static class AgentProgram
         Console.Error.WriteLine("ai-home-agent roots remove ПУТЬ");
         Console.Error.WriteLine("ai-home-agent roots list");
         Console.Error.WriteLine("ai-home-agent [run]");
+        Console.Error.WriteLine("ai-home-agent --version");
         return 64;
     }
 

@@ -1,5 +1,6 @@
 using ClaudeHomeServer.DeviceAgent.Cli;
 using ClaudeHomeServer.DeviceAgent.Exec;
+using ClaudeHomeServer.DeviceAgent.Tests.Install;
 
 namespace ClaudeHomeServer.DeviceAgent.Tests.Exec;
 
@@ -25,6 +26,10 @@ public class CliEnvironmentTests
         ["TMP"] = @"C:\t",
         ["APPDATA"] = @"C:\a",
         ["LOCALAPPDATA"] = @"C:\l",
+        ["DISPLAY"] = ":0",
+        ["WAYLAND_DISPLAY"] = "wayland-0",
+        ["XAUTHORITY"] = "/run/user/1000/xauth",
+        ["XDG_RUNTIME_DIR"] = "/run/user/1000",
         // Ничто из этого не должно дойти до CLI
         ["ANTHROPIC_API_KEY"] = "sk-SECRET",
         ["ANTHROPIC_BASE_URL"] = "https://evil",
@@ -42,7 +47,8 @@ public class CliEnvironmentTests
         var env = CliEnvironment.Build(false, Agent, "/data/profile", Sidecar, SidecarTurn, null);
 
         env.Keys.Should().BeEquivalentTo(
-            "PATH", "HOME", "USERPROFILE", "LANG", "CLAUDE_CONFIG_DIR", "ANTHROPIC_BASE_URL",
+            "PATH", "HOME", "USERPROFILE", "LANG", "DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "XDG_RUNTIME_DIR",
+            "CLAUDE_CONFIG_DIR", "ANTHROPIC_BASE_URL",
             "ANTHROPIC_AUTH_TOKEN", "NO_PROXY", "HTTPS_PROXY", "DISABLE_AUTOUPDATER", "DISABLE_UPDATES");
         env["ANTHROPIC_BASE_URL"].Should().Be(SidecarTurn + "/llm");
         env["ANTHROPIC_AUTH_TOKEN"].Should().Be(CliEnvironment.AuthPlaceholder);
@@ -63,6 +69,31 @@ public class CliEnvironmentTests
             "NO_PROXY", "HTTPS_PROXY", "DISABLE_AUTOUPDATER", "DISABLE_UPDATES");
         CliEnvironment.InheritedOnWindows.Should().Equal(
             "SystemRoot", "ComSpec", "PATHEXT", "TEMP", "TMP", "APPDATA", "LOCALAPPDATA");
+    }
+
+    [Fact]
+    public void Графическая_сессия_берётся_из_менеджера_systemd_свежее_значений_агента()
+    {
+        var runner = new FakeCommandRunner
+        {
+            Output = _ => "HOME=/home/u\nDISPLAY=:1\nWAYLAND_DISPLAY=wayland-1\nXAUTHORITY=$'/tmp/x\\ny'\nSSH_AUTH_SOCK=/tmp/manager-ssh\n",
+        };
+
+        var merged = GraphicalSessionEnvironment.Merge(Agent, runner);
+
+        runner.Commands.Should().Equal("systemctl --user show-environment");
+        merged["DISPLAY"].Should().Be(":1", "после перевхода у агента, поднятого от default.target, значение старое");
+        merged["WAYLAND_DISPLAY"].Should().Be("wayland-1");
+        merged["XAUTHORITY"].Should().Be("/run/user/1000/xauth", "экранированное systemd значение не берём");
+        merged["SSH_AUTH_SOCK"].Should().Be("/tmp/ssh", "прочее окружение менеджера не подмешивается");
+        CliEnvironment.Build(false, merged, "/p", Sidecar, SidecarTurn, null)["DISPLAY"].Should().Be(":1");
+    }
+
+    [Fact]
+    public void Без_менеджера_systemd_остаётся_окружение_агента()
+    {
+        var merged = GraphicalSessionEnvironment.Merge(Agent, new FakeCommandRunner { Code = _ => 1 });
+        merged.Should().Equal(Agent);
     }
 
     [Fact]

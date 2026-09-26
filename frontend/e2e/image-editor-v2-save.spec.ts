@@ -40,7 +40,10 @@ async function openEditor(page: Page, projectId: string, token: string, width: n
   }, token);
   await page.goto(`/#/project/${projectId}/file/${encodeURIComponent('images/hero.png')}`);
   await page.getByRole('button', { name: 'Редактировать' }).first().click();
-  await expect(page.getByText('hero.png').first()).toBeVisible();
+  await expect(page.getByRole('button', { name: 'К файлам' })).toBeVisible();
+  // Только видимое: после chat.spec в DOM раньше шапки редактора стоит карточка чата
+  // «hero.png · правка» из списка чатов, а на 390 этот список спрятан за краем экрана
+  await expect(page.getByText('hero.png', { exact: true }).filter({ visible: true }).first()).toBeVisible();
 }
 
 // Правка без ИИ даёт шаг истории — в шапке появляются «Сохранить как…» и «Сохранить»

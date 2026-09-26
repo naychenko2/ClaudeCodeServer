@@ -20,7 +20,7 @@ import { currentModel, ProviderModelPicker } from './ProviderModelPicker';
 import { EditorSections, MarksTools, MobileToolbar, SectionHint, useEditorSections, type EditorSection } from './EditorSections';
 import { HistorySteps, ProjectImagePicker, QuickActions, SamplesSection, SaveButtons } from './PanelSections';
 import {
-  actionTitle, currentSrc, dropStepsFrom, EMPTY_HISTORY, goToStep, maxSamples, panelJobInput, patchStep, pushStep, QUICK_ACTIONS, quickBlockReason, quickPlan, quickUsesOwnModel,
+  actionTitle, applyAgentReferences, currentSrc, dropStepsFrom, EMPTY_HISTORY, goToStep, maxSamples, panelJobInput, patchStep, pushStep, QUICK_ACTIONS, quickBlockReason, quickPlan, quickUsesOwnModel,
   stepSaveSource, type History, type HistoryStep, type LaunchAction, type LaunchPlan, type OutpaintRatio, type QuickAction, type Sample, type SaveSource,
 } from './editorInputs';
 import { AdjustPanel } from './AdjustPanel';
@@ -408,15 +408,9 @@ export function ImageEditor({ projectId, projectName, target, sessionId: openSes
     if (patch.characterSlug !== undefined) chars.setActive(patch.characterSlug);
     if (patch.references) {
       const refs = patch.references;
-      setSamples(list => [
-        ...list.filter(x => x.source === 'upload'),
-        ...refs.map((r): Sample => {
-          const had = list.find(x => x.source === 'project' && x.path === r.path);
-          return had ? { ...had, role: r.role } : {
-            id: `p${++stepSeq.current}`, source: 'project', name: splitPath(r.path).name, role: r.role, path: r.path, url: appApi.files.fileUrl(projectId, r.path),
-          };
-        }),
-      ]);
+      setSamples(list => applyAgentReferences(list, refs, (r): Sample => ({
+        id: `p${++stepSeq.current}`, source: 'project', name: splitPath(r.path).name, role: r.role, path: r.path, url: appApi.files.fileUrl(projectId, r.path),
+      })));
     }
   };
 

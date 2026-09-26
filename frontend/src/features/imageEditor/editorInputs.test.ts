@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { jobForm } from './api';
 import {
-  actionTitle, currentSrc, EMPTY_HISTORY, goToStep, maxSamples, panelJobInput, pushStep, quickBlockReason, quickPlan,
+  actionTitle, applyAgentReferences, currentSrc, EMPTY_HISTORY, goToStep, maxSamples, panelJobInput, pushStep, quickBlockReason, quickPlan,
   samplesToJobInput, stepLabel, type History, type HistoryStep, type Sample,
 } from './editorInputs';
 
@@ -112,5 +112,33 @@ describe('история шагов', () => {
     expect([stepLabel(h, 0), stepLabel(h, 1)]).toEqual(['Оригинал', 'Шаг 1']);
     const scratch = pushStep(EMPTY_HISTORY, step('a'));
     expect(stepLabel(scratch, 0)).toBe('Шаг 1');
+  });
+});
+
+describe('образцы из состояния агента', () => {
+  const make = (r: { path: string; role: Sample['role'] }) => project(`new:${r.path}`, r.path, r.role);
+
+  it('агент убрал один из двух образцов проекта — остаётся нужный, образцы с компьютера целы', () => {
+    const list = [
+      project('p1', 'images/dusk.png', 'style'),
+      upload('u1', 'лицо.png', 'character'),
+      project('p2', 'brand/logo.png', 'object'),
+    ];
+    const next = applyAgentReferences(list, [{ path: 'brand/logo.png', role: 'object' }], make);
+    expect(next.map(s => s.id)).toEqual(['u1', 'p2']);
+    expect(next[0]).toBe(list[1]);
+  });
+
+  it('роль берётся у агента, новый образец дописывается в конец', () => {
+    const list = [project('p1', 'images/dusk.png', 'style'), upload('u1', 'лицо.png', 'character')];
+    const next = applyAgentReferences(list, [
+      { path: 'images/dusk.png', role: 'character' }, { path: 'brand/logo.png', role: 'object' },
+    ], make);
+    expect(next.map(s => [s.id, s.role])).toEqual([['p1', 'character'], ['u1', 'character'], ['new:brand/logo.png', 'object']]);
+  });
+
+  it('агент убрал все образцы — остаются только с компьютера', () => {
+    const list = [project('p1', 'images/dusk.png', 'style'), upload('u1', 'лицо.png', 'character')];
+    expect(applyAgentReferences(list, [], make).map(s => s.id)).toEqual(['u1']);
   });
 });

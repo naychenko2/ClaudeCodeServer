@@ -12,6 +12,19 @@
     <AssemblyName>ai-home-agent</AssemblyName>
     <EnableDefaultContentItems>false</EnableDefaultContentItems>
     <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+    <!-- Версия агента = номер выкатки (agent-distribution Р1): выкатка задаёт её сама через
+         -p:Version и -p:InformationalVersion (с +sha). Автоприписка ревизии SDK дала бы
+         второй +хвост и разные строки версии у одного бинаря. -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+
+  <!-- Платформа, ПОД которую собираем, а не на которой: по целевому RID, без RID — по ОС
+       сборки. Иначе win-x64 с Linux-машины выкатки уезжал бы без моста ConPTY. -->
+  <PropertyGroup>
+    <AgentTargetsWindows Condition="'$(RuntimeIdentifier)' != ''">$([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('win'))</AgentTargetsWindows>
+    <AgentTargetsWindows Condition="'$(RuntimeIdentifier)' == '' and '$(OS)' == 'Windows_NT'">true</AgentTargetsWindows>
+    <AgentTargetsWindows Condition="'$(AgentTargetsWindows)' == ''">false</AgentTargetsWindows>
+    <AgentTargetsLinux>$([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('linux'))</AgentTargetsLinux>
   </PropertyGroup>
 
   <ItemGroup>
@@ -40,22 +53,48 @@
          publish агента apphost ConPtyBridge.exe без ConPtyBridge.dll — локатор находит exe,
          мост падает на старте, а до фолбэка на powershell дело не доходит. Целый мост в bin
          агента кладёт таргет CopyConPtyBridge ниже -->
-    <ProjectReference Include="..\ConPtyBridge\ConPtyBridge.csproj" Condition="'$(OS)' == 'Windows_NT'" ReferenceOutputAssembly="false" Private="false" />
+    <ProjectReference Include="..\ConPtyBridge\ConPtyBridge.csproj" Condition="'$(AgentTargetsWindows)' == 'true'" ReferenceOutputAssembly="false" Private="false" />
   </ItemGroup>
 
-  <Target Name="CopyConPtyBridge" AfterTargets="Build" Condition="'$(OS)' == 'Windows_NT'">
+  <Target Name="CopyConPtyBridge" AfterTargets="Build" Condition="'$(AgentTargetsWindows)' == 'true'">
+    <!-- С RID мост собирается в свой подкаталог bin: без RID глоб только верхнего уровня,
+         иначе в bin агента смешались бы выходы разных RID -->
     <ItemGroup>
-      <ConPtyBridgeFiles Include="..\ConPtyBridge\bin\$(Configuration)\net10.0\**\*" />
+      <ConPtyBridgeFiles Condition="'$(RuntimeIdentifier)' == ''" Include="..\ConPtyBridge\bin\$(Configuration)\net10.0\*" />
+      <ConPtyBridgeFiles Condition="'$(RuntimeIdentifier)' != ''" Include="..\ConPtyBridge\bin\$(Configuration)\net10.0\$(RuntimeIdentifier)\*" />
     </ItemGroup>
     <Copy SourceFiles="@(ConPtyBridgeFiles)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
   </Target>
 
+  <!-- Publish под Windows: мост публикуется в тот же каталог и с тем же RID и SelfContained,
+       что агент, — build-копия выше в publish не попадает (publish берёт свои элементы, а не
+       содержимое bin). Самодостаточные агент и мост делят одни и те же файлы рантайма. -->
+  <Target Name="PublishConPtyBridge" AfterTargets="Publish" Condition="'$(AgentTargetsWindows)' == 'true'">
+    <PropertyGroup>
+      <_AgentPublishDirFull>$([MSBuild]::NormalizeDirectory('$(MSBuildProjectDirectory)', '$(PublishDir)'))</_AgentPublishDirFull>
+      <_ConPtyBridgePublishProps>Configuration=$(Configuration);SelfContained=$(SelfContained);PublishDir=$(_AgentPublishDirFull)</_ConPtyBridgePublishProps>
+      <_ConPtyBridgePublishProps Condition="'$(RuntimeIdentifier)' != ''">$(_ConPtyBridgePublishProps);RuntimeIdentifier=$(RuntimeIdentifier)</_ConPtyBridgePublishProps>
+    </PropertyGroup>
+    <MSBuild Projects="..\ConPtyBridge\ConPtyBridge.csproj" Targets="Publish" Properties="$(_ConPtyBridgePublishProps)" />
+  </Target>
+
   <!-- Linux/macOS: pty-bridge терминала собирается из исходника рядом с агентом (у сервера
        это делают Dockerfile и publish-linux.sh). Нет компилятора — предупреждение, не ошибка:
-       терминал тогда деградирует в bash с перенаправлением, как и на сервере без моста. -->
-  <Target Name="BuildPtyBridge" AfterTargets="Build" Condition="'$(OS)' != 'Windows_NT'"
+       терминал тогда деградирует в bash с перенаправлением, как и на сервере без моста.
+       Под linux-* мост статический, как у сервера: иначе он упрётся в glibc машины клиента. -->
+  <Target Name="BuildPtyBridge" AfterTargets="Build" Condition="'$(AgentTargetsWindows)' != 'true'"
           Inputs="$(MSBuildThisFileDirectory)../pty-bridge/pty-bridge.c" Outputs="$(OutDir)pty-bridge">
-    <Exec Command="cc -O2 -o &quot;$(OutDir)pty-bridge&quot; &quot;$(MSBuildThisFileDirectory)../pty-bridge/pty-bridge.c&quot; -lutil" ContinueOnError="WarnAndContinue" />
+    <PropertyGroup>
+      <_PtyBridgeStatic Condition="'$(AgentTargetsLinux)' == 'true'">-static</_PtyBridgeStatic>
+    </PropertyGroup>
+    <Exec Command="cc -O2 $(_PtyBridgeStatic) -o &quot;$(OutDir)pty-bridge&quot; &quot;$(MSBuildThisFileDirectory)../pty-bridge/pty-bridge.c&quot; -lutil" ContinueOnError="WarnAndContinue" />
+  </Target>
+
+  <!-- Publish под linux-* — это выпуск для раздачи: без моста он молча деградировал бы
+       терминал у всех клиентов, поэтому отсутствие моста здесь уже ошибка. -->
+  <Target Name="PublishPtyBridge" AfterTargets="Publish" Condition="'$(AgentTargetsWindows)' != 'true'">
+    <Error Condition="'$(AgentTargetsLinux)' == 'true' and !Exists('$(OutDir)pty-bridge')" Text="pty-bridge не собран: для publish под $(RuntimeIdentifier) нужен cc со статической libc (libc6-dev)" />
+    <Copy Condition="Exists('$(OutDir)pty-bridge')" SourceFiles="$(OutDir)pty-bridge" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" />
   </Target>
 
   <ItemGroup>

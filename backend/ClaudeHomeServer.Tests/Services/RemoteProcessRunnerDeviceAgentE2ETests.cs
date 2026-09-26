@@ -5,6 +5,7 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using ClaudeHomeServer.DeviceAgent.Composition;
 using ClaudeHomeServer.DeviceAgent.Exec;
 using ClaudeHomeServer.DeviceAgent.Processes;
 using ClaudeHomeServer.DeviceAgent.Sidecar;
@@ -107,6 +108,12 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
     }
 
     public RemoteProcessRunnerDeviceAgentE2ETests() => _tokens = new TurnTokenService(_bus);
+
+    // Разрешённый корень машины — сам каталог проекта
+    private sealed class ProjectRoot(string root) : IAgentRoots
+    {
+        public IReadOnlyList<string> Roots { get; } = [root];
+    }
 
     private sealed class CliSource(string path) : ICliLeaseSource
     {
@@ -273,6 +280,7 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
             SidecarUrl = () => _sidecar.Url,
             InheritedEnvironment = () => inherited,
             DrainTimeout = TimeSpan.FromSeconds(10),
+            PathPolicy = new AgentPathPolicy(new ProjectRoot(_projectDir)),
         }, new CliSource(cliPath), _grants, new TurnJournal(Path.Combine(_deviceDir, "journal")));
 
         _gateway = new SpyTurnGateway(new DeviceTurnGateway(_kit.Selector, _tokens));
@@ -546,6 +554,23 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
         _executor.LiveCount.Should().Be(0);
         _tokens.ActiveCount.Should().Be(0);
         Directory.Exists(Path.Combine(_deviceDir, "turns")).Should().BeFalse("каталог хода на устройстве не создан");
+    }
+
+    // ADR-016 §5: папка хода вне разрешённых корней машины — отказ агента доходит до человека
+    // причиной (UI узнаёт её по «разрешённым корням»), а не общим «процесс упал»
+    [Fact]
+    public void ПапкаВнеКорнейМашины_ОтказАгентаСПричиной_CLIНеСтартует()
+    {
+        var outside = Directory.CreateDirectory(Path.Combine(_deviceDir, "outside")).FullName;
+
+        var act = () => _runner.Start(Spec("turn-e2e-outside") with { WorkingDirectory = outside });
+
+        var refused = act.Should().Throw<DeviceExecRefusedException>().Which;
+        refused.Reason.Should().Be(DeviceExecRefusal.AgentRefused);
+        refused.Message.Should().Contain("не под разрешёнными корнями").And.Contain("ai-home-agent roots add");
+        TurnFailureText.ForException(refused).Should().Be(refused.Message);
+        _executor.LiveCount.Should().Be(0);
+        _tokens.ActiveCount.Should().Be(0, "токен хода отозван вместе с отказом");
     }
 
     [Fact]

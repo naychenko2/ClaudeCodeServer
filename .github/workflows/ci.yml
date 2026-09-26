@@ -29,6 +29,17 @@ jobs:
       # сети и внешних advisory), — в свойстве WarningsNotAsErrors там же, в props.
       - name: Build
         run: dotnet build backend/ClaudeHomeServer.slnx -warnaserror
+      # Сторож кросс-сборки агента устройства (agent-distribution AD-1): выкатка собирает
+      # win-x64 на Linux, и мост ConPTY обязан ехать в тот же каталог. Условие в csproj
+      # по ОС сборки вместо целевого RID молча выкинуло бы мост — здесь это падение.
+      - name: Publish DeviceAgent (win-x64)
+        run: |
+          dotnet publish backend/ClaudeHomeServer.DeviceAgent/ClaudeHomeServer.DeviceAgent.csproj \
+            -c Release -r win-x64 --self-contained -warnaserror -o "$RUNNER_TEMP/agent-win-x64"
+          for f in ai-home-agent.exe ConPtyBridge.exe ConPtyBridge.dll; do
+            test -f "$RUNNER_TEMP/agent-win-x64/$f" || { echo "нет $f в publish агента win-x64" >&2; exit 1; }
+          done
+        shell: bash
       # Гейт кодировки: все .cs в backend/ должны быть валидным UTF-8. Ловит
       # побочные повреждения, когда файл пересохраняется в системной кодовой странице
       # (CP1251 на Windows, KOI8-R где-то ещё) и локально собирается из-за windows-фолбэка

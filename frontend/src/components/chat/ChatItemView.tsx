@@ -33,6 +33,8 @@ import type { ChatItemSaveNoteCtx, ChatItemFileChangedApi } from '../../lib/subs
 import { ChatProjectContext, ChatTreePathContext, ChatSessionContext, PersonaContext, SpeakingItemContext, useAssistantName } from './contexts';
 import { PromptSnapshotDialog } from '../../features/chat/PromptSnapshotDialog';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
+import { RootsAddHint } from '../../features/desktop/AgentCommands';
+import { isRootNotAllowed } from '../../lib/agentInstall';
 import { AGENT_COLORS } from '../AgentSelector';
 import { MessageOriginChip } from '../MessageOriginChip';
 import { getPersonaById, usePersonasVersion, personaLabel, ensurePersonasLoaded } from '../../lib/personas';
@@ -2127,6 +2129,10 @@ function ErrorCard({ item, online, onRetry, onDropWindow1M }: {
   // остальной лентой и для возможного переноса подписи в будущем
   useIsMobile();
   const showDrop = item.action === 'window-1m-drop' && !!onDropWindow1M && !dropResolved;
+  // Ход локального проекта отказан: папка не под разрешёнными корнями агента — команда для машины
+  const projectCtx = useContext(ChatProjectContext);
+  const localProjects = useFeature(FLAGS.localProjects);
+  const rootsHint = localProjects && !!projectCtx?.local && isRootNotAllowed(item.text);
 
   const handleDrop = useCallback(async () => {
     if (!onDropWindow1M || dropLoading) return;
@@ -2205,6 +2211,11 @@ function ErrorCard({ item, online, onRetry, onDropWindow1M }: {
               {dropError}
             </div>
           )}
+        </div>
+      )}
+      {rootsHint && projectCtx && (
+        <div style={{ marginTop: SP.sm }}>
+          <RootsAddHint rootPath={projectCtx.rootPath} platform={projectCtx.devicePlatform} />
         </div>
       )}
     </div>

@@ -1,8 +1,10 @@
 using System.Collections.Concurrent;
 using System.Text;
+using ClaudeHomeServer.DeviceAgent.Composition;
 using ClaudeHomeServer.DeviceAgent.Exec;
 using ClaudeHomeServer.DeviceAgent.Processes;
 using ClaudeHomeServer.DeviceAgent.Sidecar;
+using ClaudeHomeServer.DeviceAgent.Tests.Composition;
 using ClaudeHomeServer.Protocol;
 using Microsoft.Extensions.Logging;
 
@@ -48,6 +50,8 @@ internal sealed class TurnHarness : IAsyncDisposable
             InheritedEnvironment = () => inherited,
             DrainTimeout = TimeSpan.FromSeconds(10),
             Launcher = launcher ?? TurnProcess.Start,
+            // Разрешённый корень машины — сам каталог проекта
+            PathPolicy = new AgentPathPolicy(new AgentSandbox.FixedRoots(WorkDir)),
         }, Cli, Grants, Journal, new ListLogger<TurnExecutor>(Logs));
     }
 
@@ -65,8 +69,8 @@ internal sealed class TurnHarness : IAsyncDisposable
     public Task? Run { get; private set; }
 
     public DeviceExecSpawn Spawn(IReadOnlyList<string>? args = null, IReadOnlyList<DeviceExecFile>? files = null,
-        IReadOnlyDictionary<string, string>? env = null, string fileName = "claude") =>
-        new(fileName, args ?? ["-p", "--output-format", "stream-json"], WorkDir,
+        IReadOnlyDictionary<string, string>? env = null, string fileName = "claude", string? workingDirectory = null) =>
+        new(fileName, args ?? ["-p", "--output-format", "stream-json"], workingDirectory ?? WorkDir,
             env ?? new Dictionary<string, string>(), files ?? [], RedirectStdin: true);
 
     public async Task StartAsync(DeviceExecSpawn spawn, string turnId = "turn1", DeviceExecGateway? grant = null, TimeSpan? maxOutage = null)

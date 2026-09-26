@@ -9,6 +9,11 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ClaudeHomeServer.DeviceAgent\ClaudeHomeServer.DeviceAgent.csproj" />
+    <!-- «Дочерний новой версии» для теста совместимости супервизора: exe в выходе тестов -->
+    <ProjectReference Include="..\ClaudeHomeServer.DeviceAgent.Tests.ChildFixture\ClaudeHomeServer.DeviceAgent.Tests.ChildFixture.csproj" />
+    <!-- Мост ConPTY целиком (exe+dll+runtimeconfig) в bin тестов: у агента ссылка на него
+         Private="false", а терминал в WorkbenchTests ищет мост рядом со сборкой -->
+    <ProjectReference Include="..\ConPtyBridge\ConPtyBridge.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -52,12 +52,19 @@ public sealed record DeviceExecStatus(
     string? RequiredCliVersion,
     IReadOnlyList<string> Capabilities,
     bool HarnessReady,
-    string? HarnessProblem)
+    string? HarnessProblem,
+    DeviceAgentUpdate? AgentUpdate = null)
 {
     public bool HasCapability(string capability) => Capabilities.Contains(capability);
 
+    /// <summary>Агент ниже минимальной версии (<see cref="DeviceAgentCompatibility"/>): ходы и ретранслятор отказывают.</summary>
+    public bool AgentOutdated => DeviceAgentCompatibility.IsOutdated(AgentVersion);
+
+    /// <summary>Почему устаревший агент не работает — текст для человека; null — не устарел.</summary>
+    public string? AgentProblem => DeviceAgentCompatibility.OutdatedProblem(AgentVersion, AgentUpdate);
+
     /// <summary>Можно ли прямо сейчас запускать ход на устройстве.</summary>
-    public bool CanExec => Online && HasCapability(DeviceCapabilities.Exec) && HarnessReady;
+    public bool CanExec => Online && HasCapability(DeviceCapabilities.Exec) && !AgentOutdated && HarnessReady;
 }
 
 /// <summary>Почему канал исполнения не открылся.</summary>
@@ -72,6 +79,10 @@ public enum DeviceExecRefusal
     GatewayRefused,
     /// <summary>Агент устройства не объявил ретранслятор чтения (старая версия).</summary>
     NoRelayCapability,
+    /// <summary>Агент устройства ниже минимальной версии: обновляется или его надо обновить.</summary>
+    AgentOutdated,
+    /// <summary>Агент отказал ходу по кадру spawn: папка вне разрешённых корней машины, нет копии CLI.</summary>
+    AgentRefused,
 }
 
 /// <summary>Отказ открыть канал исполнения; <see cref="Exception.Message"/> — готовый текст для человека.</summary>

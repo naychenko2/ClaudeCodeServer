@@ -6,3 +6,5 @@ mcp/**/*.js text eol=lf
 backend/sandbox/*.sh text eol=lf
 # Скрипты выкатки на Linux-хосте
 scripts/ops/*.sh text eol=lf
+# Установщик агента раздаётся как есть и исполняется через `| sh`
+deploy/agent-install/*.sh text eol=lf

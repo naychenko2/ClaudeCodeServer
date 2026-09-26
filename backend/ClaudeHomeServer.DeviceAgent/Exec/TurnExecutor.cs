@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text;
+using ClaudeHomeServer.DeviceAgent.Composition;
 using ClaudeHomeServer.DeviceAgent.Processes;
 using ClaudeHomeServer.DeviceAgent.Sidecar;
 using ClaudeHomeServer.Protocol;
@@ -19,6 +20,12 @@ internal sealed record ExecOptions
 
     /// <summary>Адрес сайдкара, <c>http://127.0.0.1:{порт}</c> (известен после его старта).</summary>
     public required Func<string> SidecarUrl { get; init; }
+
+    /// <summary>
+    /// Граница путей машины (ADR-016 §5): рабочий каталог хода — только под разрешёнными
+    /// корнями, та же политика, что у localhost-API файлов и ретранслятора.
+    /// </summary>
+    public required AgentPathPolicy PathPolicy { get; init; }
 
     public bool IsWindows { get; init; } = OperatingSystem.IsWindows();
 
@@ -220,6 +227,19 @@ internal sealed class TurnExecutor
         if (string.IsNullOrWhiteSpace(workingDirectory) || !Path.IsPathFullyQualified(workingDirectory)
             || !Directory.Exists(workingDirectory))
             throw new ExecRefusedException($"рабочий каталог хода не найден на устройстве: {workingDirectory}");
+        // Серверу агент не доверяет: каталог сверяется с корнями машины по реальному пути
+        try
+        {
+            _options.PathPolicy.ProjectRoot(workingDirectory);
+        }
+        catch (AgentPathRefusedException e)
+        {
+            throw new ExecRefusedException(e.Message);
+        }
+        catch (IOException)
+        {
+            throw new ExecRefusedException($"рабочий каталог хода не найден на устройстве: {workingDirectory}");
+        }
 
         // Аренда — первой: не готов харнес — не создаём ни каталогов, ни выдач
         var cli = _cli.TryAcquire(out var problem)

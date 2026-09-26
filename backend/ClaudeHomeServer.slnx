@@ -10,6 +10,7 @@
   <Project Path="ClaudeHomeServer.Desktop.Tests/ClaudeHomeServer.Desktop.Tests.csproj" />
   <Project Path="ClaudeHomeServer.DeviceAgent/ClaudeHomeServer.DeviceAgent.csproj" />
   <Project Path="ClaudeHomeServer.DeviceAgent.Tests/ClaudeHomeServer.DeviceAgent.Tests.csproj" />
+  <Project Path="ClaudeHomeServer.DeviceAgent.Tests.ChildFixture/ClaudeHomeServer.DeviceAgent.Tests.ChildFixture.csproj" />
   <Project Path="ClaudeHomeServer.Diagnostics/ClaudeHomeServer.Diagnostics.csproj" />
   <Project Path="ClaudeHomeServer.Diagnostics.Tests/ClaudeHomeServer.Diagnostics.Tests.csproj" />
   <Project Path="ClaudeHomeServer.Docs/ClaudeHomeServer.Docs.csproj" />

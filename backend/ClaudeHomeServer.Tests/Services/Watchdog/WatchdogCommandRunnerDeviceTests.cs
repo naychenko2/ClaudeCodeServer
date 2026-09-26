@@ -30,6 +30,7 @@ public class WatchdogCommandRunnerDeviceTests
     [InlineData(DeviceExecRefusal.Offline)]
     [InlineData(DeviceExecRefusal.NoResponse)]
     [InlineData(DeviceExecRefusal.HarnessNotReady)]
+    [InlineData(DeviceExecRefusal.AgentOutdated)]
     public async Task RunAsync_НеготовоеУстройство_ПропускАНеСбойЗапуска(DeviceExecRefusal reason)
     {
         var outcome = await RunnerRefusing(reason).RunAsync("owner-1", Local.Id, Local.RootPath, "test -f x", 10, default);

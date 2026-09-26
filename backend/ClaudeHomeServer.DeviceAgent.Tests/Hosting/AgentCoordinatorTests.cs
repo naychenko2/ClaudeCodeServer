@@ -2,6 +2,7 @@ using ClaudeHomeServer.DeviceAgent.Cli;
 using ClaudeHomeServer.DeviceAgent.Exec;
 using ClaudeHomeServer.DeviceAgent.Hosting;
 using ClaudeHomeServer.DeviceAgent.Tests.Exec;
+using ClaudeHomeServer.DeviceAgent.Update;
 using ClaudeHomeServer.Protocol;
 
 namespace ClaudeHomeServer.DeviceAgent.Tests.Hosting;
@@ -159,6 +160,74 @@ public class AgentCoordinatorTests
             (_, _) => { ran = true; return Task.CompletedTask; }, (_, _) => { ran = true; return Task.CompletedTask; });
 
         await control.RaiseExecOpen(new DeviceExecOpenCommand("x-1", DeviceExecProtocol.Version, "write"));
+
+        server.Connections.Should().Be(0);
+        ran.Should().BeFalse();
+    }
+
+    private sealed class FakeUpdates : IAgentUpdates
+    {
+        public DeviceAgentUpdate Status { get; set; } = new(DeviceAgentUpdateStates.Idle);
+        public List<DeviceHelloAck> Acks { get; } = [];
+        public event Action<DeviceAgentUpdate>? Changed;
+        public void OnAck(DeviceHelloAck ack) => Acks.Add(ack);
+        public void Raise() => Changed?.Invoke(Status);
+    }
+
+    [Fact]
+    public async Task Hello_несёт_состояние_обновления_ack_уходит_обновлятору_смена_повторяет_hello()
+    {
+        var control = new FakeControl();
+        var updates = new FakeUpdates();
+        await using var coordinator = new AgentCoordinator(control, new FakeHarness(), new ExecTestServer(),
+            (_, _) => Task.CompletedTask, "1.5.0", updates: updates);
+        await coordinator.HelloAsync();
+
+        control.Hellos.Single().AgentUpdate.Should().Be(new DeviceAgentUpdate(DeviceAgentUpdateStates.Idle));
+        updates.Acks.Should().ContainSingle();
+
+        updates.Status = new DeviceAgentUpdate(DeviceAgentUpdateStates.WaitingIdle, "2.0.0", "идёт ход");
+        updates.Raise();
+
+        (await control.SecondHello.Task.WaitAsync(TimeSpan.FromSeconds(10))).Should().BeTrue();
+        control.Hellos.Last().AgentUpdate!.State.Should().Be(DeviceAgentUpdateStates.WaitingIdle);
+    }
+
+    [Fact]
+    public async Task Канал_исполнения_держит_аренду_до_конца_хода()
+    {
+        var control = new FakeControl();
+        var activity = new ActivityRegistry();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var idle = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var coordinator = new AgentCoordinator(control, new FakeHarness(), new ExecTestServer(),
+            async (_, _) => { started.TrySetResult(); await finish.Task; }, "1.5.0", activity: activity);
+
+        await control.RaiseExecOpen(new DeviceExecOpenCommand("t-1", DeviceExecProtocol.Version));
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        activity.Describe().Should().Be("идёт ход");
+        activity.TrySeal().Should().BeFalse();
+
+        activity.Changed += () => { if (activity.IsIdle) idle.TrySetResult(); };
+        finish.SetResult();
+        await idle.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        activity.TrySeal().Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Запечатанный_реестр_новый_канал_не_открывает()
+    {
+        var control = new FakeControl();
+        var server = new ExecTestServer();
+        var activity = new ActivityRegistry();
+        var ran = false;
+        await using var coordinator = new AgentCoordinator(control, new FakeHarness(), server,
+            (_, _) => { ran = true; return Task.CompletedTask; }, "1.5.0", activity: activity);
+        activity.TrySeal().Should().BeTrue();
+
+        await control.RaiseExecOpen(new DeviceExecOpenCommand("t-1", DeviceExecProtocol.Version));
 
         server.Connections.Should().Be(0);
         ran.Should().BeFalse();

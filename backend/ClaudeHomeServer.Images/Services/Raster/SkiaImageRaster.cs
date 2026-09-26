@@ -89,6 +89,38 @@ public sealed class SkiaImageRaster : IImageRaster
         });
     }
 
+    public RasterOutcome EraseMasked(byte[] image, byte[] mask) =>
+        Run(image, unpremul: false, (bitmap, _) =>
+        {
+            using (bitmap)
+            {
+                // Маска маленькая и уже проверена по размеру вызывающим: декодируем её без второго
+                // места в семафоре — вложенный Run мог бы упереться в собственный потолок
+                using var codec = CreateCodec(mask)
+                    ?? throw new RasterFailure(RasterError.Unsupported, "Формат маски не распознан");
+                var decoded = Decode(codec, unpremul: true);
+                using var maskBitmap = Orient(decoded, codec.EncodedOrigin);
+                if (!ReferenceEquals(maskBitmap, decoded)) decoded.Dispose();
+                if (maskBitmap.Width != bitmap.Width || maskBitmap.Height != bitmap.Height)
+                    throw new RasterFailure(RasterError.InvalidOp,
+                        $"Размер маски {maskBitmap.Width}×{maskBitmap.Height} не совпадает с картинкой {bitmap.Width}×{bitmap.Height}");
+
+                var pixels = bitmap.GetPixelSpan();
+                var marks = maskBitmap.GetPixelSpan();
+                for (var i = 0; i < marks.Length; i += 4)
+                {
+                    // Rgba8888: яркость по трём каналам, прозрачное на маске — не отмечено
+                    var lit = (marks[i] + marks[i + 1] + marks[i + 2]) / 3 * marks[i + 3] / 255;
+                    if (lit <= 127) continue;
+                    pixels[i] = pixels[i + 1] = pixels[i + 2] = EraseGray;
+                    pixels[i + 3] = 255;
+                }
+                return Success(bitmap, ImageEncodeFormat.Png, MaxQuality);
+            }
+        });
+
+    private const byte EraseGray = 128;
+
     // Общая обвязка: семафор, заголовок, потолок, декодирование с AutoOrient
     private RasterOutcome Run(byte[] data, bool unpremul, Func<SKBitmap, ImageEncodeFormat?, RasterOutcome> body)
     {

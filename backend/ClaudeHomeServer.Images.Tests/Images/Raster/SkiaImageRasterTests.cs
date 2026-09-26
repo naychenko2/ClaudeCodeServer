@@ -173,6 +173,23 @@ public class SkiaImageRasterTests
         values.Should().Equal([0, 255], "в маске после масштабирования только 0 и 255");
     }
 
+    // Стирание кистью для локальной Qwen-Image: белое на маске — серое на картинке, остальное как было
+    [Fact]
+    public void Стирание_по_маске_закрашивает_серым_только_отмеченное()
+    {
+        var image = Png(Solid(8, 4, SKColors.Red));
+        var mask = Png(Split(8, 4, SKColors.White, SKColors.Black));
+
+        var outcome = _raster.EraseMasked(image, mask);
+
+        outcome.Ok.Should().BeTrue(outcome.Message);
+        using var result = SKBitmap.Decode(outcome.Image!.Bytes);
+        result.GetPixel(1, 1).Should().Be(new SKColor(128, 128, 128));
+        result.GetPixel(6, 2).Should().Be(SKColors.Red);
+        _raster.EraseMasked(image, Png(Solid(4, 4, SKColors.White))).Error.Should().Be(RasterError.InvalidOp,
+            "маска другого размера — отказ, а не сдвиг заливки");
+    }
+
     [Fact]
     public void Ресайз_ступенями_размеры_и_пропорции()
     {

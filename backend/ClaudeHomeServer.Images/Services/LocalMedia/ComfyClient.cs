@@ -168,6 +168,24 @@ public sealed class ComfyClient(IHttpClientFactory http, IConfiguration config)
                 : [];
     }
 
+    // Снять задачу из ожидающих: POST /queue {"delete":[id]}. Идущую задачу ComfyUI так не
+    // снимает — для неё нужен interrupt, а он бьёт по любому текущему прогону
+    public async Task DeletePendingAsync(string promptId, CancellationToken ct)
+    {
+        var body = new JsonObject { ["delete"] = new JsonArray(promptId) };
+        using var content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
+        try
+        {
+            using var response = await Client().PostAsync("queue", content, ct);
+            if (!response.IsSuccessStatusCode)
+                throw new ComfyException($"ComfyUI отклонил снятие задачи ({(int)response.StatusCode})");
+        }
+        catch (HttpRequestException ex)
+        {
+            throw new ComfyException("ComfyUI недоступен (снятие задачи)", ex);
+        }
+    }
+
     private async Task<JsonNode?> SendJsonAsync(Func<HttpClient, Task<HttpResponseMessage>> send, string what,
         CancellationToken ct)
     {

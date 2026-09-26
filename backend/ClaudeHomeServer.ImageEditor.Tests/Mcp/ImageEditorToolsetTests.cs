@@ -166,6 +166,29 @@ public class ImageEditorToolsetTests : IDisposable
         record.ProjectId.Should().Be(ProjectId);
     }
 
+    // ADR-018 §11: агент выбирает «Локальные модели» ключом local; потолок хода общий для всех
+    [Fact]
+    public async Task Агент_выбирает_локальные_модели_и_потолок_хода_действует()
+    {
+        var media = new LocalImageEditorTests.FakeMedia();
+        var toolset = Toolset([HiggsfieldImageEditorTests.Create().Editor,
+            new LocalImageEditor(media) { PollInterval = TimeSpan.FromMilliseconds(1) }]);
+        var args = () => new JsonObject { ["prompt"] = "удали провод", ["provider"] = "local" };
+
+        var first = await Call(toolset, ImageEditorToolset.ToolGenerate, args());
+        first.IsError.Should().BeFalse(first.Text);
+        var quote = Parse(first)["quote"]!;
+        quote["provider"]!.GetValue<string>().Should().Be("local");
+        quote["estimate"]!["unit"]!.GetValue<string>().Should().Be(ImageEditPriceUnits.Free);
+        (await Call(toolset, ImageEditorToolset.ToolGenerate, args())).IsError.Should().BeFalse();
+        var third = await Call(toolset, ImageEditorToolset.ToolGenerate, args());
+
+        third.IsError.Should().BeTrue();
+        third.Text.Should().Contain("не больше 2");
+        JobsOfChat().Should().HaveCount(2).And.OnlyContain(j => j.Provider == "local");
+        _states.Get(Owner, ChatId).Provider.Should().Be("local");
+    }
+
     [Fact]
     public async Task Третий_запуск_за_ход_отказ_без_задачи_а_после_хода_счётчик_сброшен()
     {

@@ -12,7 +12,7 @@ public static class ImageEditCatalog
     public const string AutoModelLabel = "Авто";
 
     // Порядок поставщиков в списке и при умолчании «auto»; незнакомый ключ — в конец
-    public static readonly string[] ProviderOrder = ["fal", "higgsfield"];
+    public static readonly string[] ProviderOrder = ["fal", "higgsfield", "local"];
 
     public static readonly ImageEditLimitsDto DefaultLimits = new(MaxFileMb: 20, MaxReferences: 6, MaxCount: 4);
 
@@ -44,6 +44,12 @@ public static class ImageEditCatalog
             ["seedream_v5_pro"] = EditInput,
             ["flux_2_pro_outpaint"] = EditInput,
             ["image_background_remover"] = EditInput,
+            // Локальные модели. Энкодер правки Qwen-Image берёт холст в его размере (resolution 0),
+            // поэтому держим его у верхней границы родной сетки модели: 1664 по длинной стороне
+            // (16:9 — 1664×928), 1,8 Мп (1:1 — 1328×1328). FaceDetailer работает кропами лиц, ему
+            // крупный холст по силам; 30 МБ — потолок входа local-media
+            ["qwen-image-2.1"] = (1664, 1.8, 30),
+            ["face-detailer"] = (4096, 16.8, 30),
         };
 
     // Модель с курируемыми лимитами входа; лимит, заданный драйвером явно, не перетирается

@@ -19,7 +19,7 @@ public sealed partial class ImageEditorToolset
 
     // Значения в тех же строках, что уходят по REST (enum'ы camelCase)
     private static readonly string[] Modes = ["auto", "fast", "precise", "photoreal"];
-    private static readonly string[] Ops = ["generate", "edit", "inpaint", "outpaint", "removeBackground", "upscale"];
+    private static readonly string[] Ops = ["generate", "edit", "inpaint", "outpaint", "removeBackground", "upscale", "enhanceFaces"];
     private static readonly string[] Roles = ["character", "style", "object"];
 
     private static JsonArray StrEnum(params string[] values)
@@ -67,7 +67,8 @@ public sealed partial class ImageEditorToolset
             Obj(new JsonObject
             {
                 ["prompt"] = Str("Промпт генерации"),
-                ["provider"] = Str("Поставщик (ключ из image_state), например fal или higgsfield"),
+                ["provider"] = Str("Поставщик (ключ из image_state): fal, higgsfield или local — «Локальные модели» "
+                    + "на своей видеокарте, бесплатно, но с очередью"),
                 ["model"] = Str("Модель поставщика из image_state или auto"),
                 ["mode"] = OneOf(Modes, "Режим при модели auto"),
                 ["count"] = Count(),
@@ -81,7 +82,8 @@ public sealed partial class ImageEditorToolset
                         ["role"] = OneOf(Roles, "Роль образца"),
                     }, "path", "role"),
                 },
-                ["op"] = OneOf(Ops, "Операция: правка, фон, апскейл, дорисовка за края; по умолчанию — из режима редактора"),
+                ["op"] = OneOf(Ops, "Операция: правка, фон, апскейл, дорисовка за края, улучшить лица (enhanceFaces, "
+                    + "только local); по умолчанию — из режима редактора"),
                 ["matchSourceSize"] = new JsonObject
                 {
                     ["type"] = "boolean",

@@ -33,7 +33,8 @@ public interface IImageEditor
     Task<bool> CancelRemoteAsync(string remoteId, CancellationToken ct);
 }
 
-public enum ImageEditOp { Generate, Edit, Inpaint, Outpaint, RemoveBackground, Upscale }
+// EnhanceFaces — быстрое действие «Улучшить лица» (локальные модели: FaceDetailer)
+public enum ImageEditOp { Generate, Edit, Inpaint, Outpaint, RemoveBackground, Upscale, EnhanceFaces }
 
 // «Авто / Быстрая / Точная правка / Фотореализм»; режим имеет смысл только при модели «Авто»
 public enum EditMode { Auto, Fast, Precise, Photoreal }
@@ -90,7 +91,8 @@ public record OutpaintSpec(int Left, int Top, int Right, int Bottom);
 public record CharacterRef(string Slug, string Name, string? Description);
 
 // MaskPass — предварительная правка по маске одним вариантом (ImageEditCaps.SeparateMaskPass):
-// её результат становится исходником этого запроса
+// её результат становится исходником этого запроса. Instruction — просьба человека как есть, без
+// ролей картинок и текста пометок: по ней драйвер без канала маски узнаёт стирание (EditIntent)
 public record ImageEditRequest(
     ImageEditOp Op,
     string Prompt,
@@ -102,7 +104,8 @@ public record ImageEditRequest(
     OutpaintSpec? Outpaint,
     string Model,
     CharacterRef? Character,
-    ImageEditRequest? MaskPass = null);
+    ImageEditRequest? MaskPass = null,
+    string? Instruction = null);
 
 public record EditedImage(byte[] Bytes, string ContentType);
 
@@ -125,4 +128,6 @@ public static class ImageEditPriceUnits
 {
     public const string Usd = "usd";
     public const string Credits = "credits";
+    // Локальные модели: денег нет, вместо цены — время и очередь
+    public const string Free = "free";
 }

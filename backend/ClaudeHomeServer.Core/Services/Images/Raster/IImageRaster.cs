@@ -19,6 +19,12 @@ public interface IImageRaster
 
     // Маска до заданных размеров методом nearest-neighbour: бинарность сохраняется. Результат — PNG
     RasterOutcome ResizeMask(byte[] mask, int width, int height);
+
+    // Закрасить нейтральным серым то, что на маске белое (яркость выше половины). Маска — того же
+    // размера, что картинка после AutoOrient. Так стирание кистью уходит модели без своего канала
+    // маски (локальная Qwen-Image): «замени серое фоном» она понимает, а маску-образец — нет.
+    // Результат — PNG
+    RasterOutcome EraseMasked(byte[] image, byte[] mask);
 }
 
 // Width/Height — как лежат в файле; DisplayWidth/DisplayHeight — после учёта EXIF-ориентации.

@@ -62,8 +62,11 @@ public record ImageEditQuoteRequest(
     bool HasAnnotations = false,
     bool Removal = false);
 
-// Source: ImageEditEstimateSources.*; Amount = null — «цена станет известна после запуска»
-public record ImageEditEstimateDto(double? Amount, string Unit, bool Approx, string Source);
+// Source: ImageEditEstimateSources.*; Amount = null — «цена станет известна после запуска».
+// EtaSeconds и QueueLength — у поставщика без цены (локальные модели, Unit = free): время
+// запуска по таблице замеров и длина общей очереди GPU в момент котировки
+public record ImageEditEstimateDto(double? Amount, string Unit, bool Approx, string Source,
+    int? EtaSeconds = null, int? QueueLength = null);
 
 // Model — уже развёрнутая модель (не «auto»): запуск исполняет ровно эту пару.
 // ExpectedSeconds — для процентов на фронте: у поставщиков процентов нет.

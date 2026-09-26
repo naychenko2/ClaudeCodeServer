@@ -142,7 +142,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         }
 
         var quote = new Quote(Guid.NewGuid().ToString("N"), ownerId, projectId, editor.Key, model, op, request.Count,
-            estimate, Now() + QuoteTtl, (editor as IImageEditQuoter)?.ExpectedSeconds(model));
+            estimate, Now() + QuoteTtl, estimate.EtaSeconds ?? (editor as IImageEditQuoter)?.ExpectedSeconds(model));
         PruneQuotes();
         _quotes[quote.Id] = quote;
         return ImageEditCallResult<ImageEditQuoteDto>.Ok(ToDto(quote));

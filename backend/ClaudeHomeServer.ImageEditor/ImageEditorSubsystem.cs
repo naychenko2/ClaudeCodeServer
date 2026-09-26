@@ -12,7 +12,7 @@ namespace ClaudeHomeServer.Services.ImageEditor;
 // DynamicModules[image-editor].Enabled=false (dll не грузится) или
 // Subsystems:ImageEditor:Enabled=false (Register не вызывается). В обоих случаях ручек нет — 404.
 //
-// Что берём из спины (всё — Core-швы): IImageRaster и IImagePlaceSettings от Images,
+// Что берём из спины (всё — Core-швы): IImageRaster, IImagePlaceSettings и ILocalImageMedia от Images,
 // IHiggsfieldAccess, IProjectManager, IFeatureFlagGate, IProjectFiles, ISessionBroadcaster,
 // ISpendCollector, IImageChatSessions и ISessionDirectory от Main. Растр необязателен: без Images
 // ручки transform и jobs отвечают 503 raster_unavailable, а не 500.
@@ -36,6 +36,10 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
         services.AddSingleton<HiggsfieldImageEditor>();
         services.AddSingleton<IImageEditor>(sp => sp.GetRequiredService<FalImageEditor>());
         services.AddSingleton<IImageEditor>(sp => sp.GetRequiredService<HiggsfieldImageEditor>());
+        // Локальные модели (ComfyUI): шов ILocalImageMedia регистрирует Images. Нет Images — шва нет,
+        // драйвер получает null и скрыт в каталоге, а не роняет резолв
+        services.AddSingleton(sp => new LocalImageEditor(sp.GetService<ILocalImageMedia>()));
+        services.AddSingleton<IImageEditor>(sp => sp.GetRequiredService<LocalImageEditor>());
 
         services.TryAddSingleton<IVersionedImageStore, VersionedImageStore>();
         services.AddSingleton<IImageEditSaver, ImageEditSaver>();

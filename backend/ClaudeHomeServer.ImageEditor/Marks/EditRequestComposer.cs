@@ -123,7 +123,8 @@ public static class EditRequestComposer
             : null;
 
         return ImageEditCallResult<ImageEditRequest>.Ok(new ImageEditRequest(
-            op, prompt, source, maskChannel, references, count, aspectRatio, null, model.Id, input.Character, maskPass));
+            op, prompt, source, maskChannel, references, count, aspectRatio, null, model.Id, input.Character, maskPass,
+            Instruction: input.Prompt?.Trim()));
     }
 
     private const string MaskRole = "маска: белое — область, которую менять, чёрное — не трогать";

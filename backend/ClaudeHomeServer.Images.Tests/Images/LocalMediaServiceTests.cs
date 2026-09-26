@@ -248,6 +248,17 @@ public class LocalMediaServiceTests : IDisposable
         viaInput.Error.Should().Contain("не найдена");
     }
 
+    [Fact]
+    public async Task Стор_UpdateЧужимВладельцем_ЗадачуНеМеняет()
+    {
+        var (service, store) = Build();
+        var mine = (await service.SubmitAsync(Generate(), default)).View!.Job;
+
+        store.Update(mine.Id, "owner-2", j => j.Status = LocalMediaStatuses.Failed).Should().BeNull();
+
+        store.Get(mine.Id, Owner)!.Status.Should().Be(mine.Status);
+    }
+
     // ─── Опрос и сбор результата ─────────────────────────────────────────────
 
     [Fact]

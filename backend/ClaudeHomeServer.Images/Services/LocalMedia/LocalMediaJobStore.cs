@@ -140,12 +140,12 @@ public sealed class LocalMediaJobStore
             return _jobs.Where(j => !LocalMediaStatuses.IsTerminal(j.Status)).Select(Clone).ToList();
     }
 
-    // Изменение задачи под локом; null — задачи нет
-    public LocalMediaJob? Update(string id, Action<LocalMediaJob> change)
+    // Изменение задачи под локом; null — задачи нет или она чужая
+    public LocalMediaJob? Update(string id, string ownerId, Action<LocalMediaJob> change)
     {
         lock (_writeLock)
         {
-            var index = _jobs.FindIndex(j => j.Id == id);
+            var index = _jobs.FindIndex(j => j.Id == id && j.OwnerId == ownerId);
             if (index < 0) return null;
             var next = Clone(_jobs[index]);
             change(next);

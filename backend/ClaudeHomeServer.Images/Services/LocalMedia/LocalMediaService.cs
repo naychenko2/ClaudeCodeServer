@@ -554,7 +554,7 @@ public sealed class LocalMediaService(
                 else
                 {
                     var status = position == 0 ? LocalMediaStatuses.Running : LocalMediaStatuses.Queued;
-                    var current = status == job.Status ? job : store.Update(job.Id, j => j.Status = status) ?? job;
+                    var current = status == job.Status ? job : store.Update(job.Id, job.OwnerId, j => j.Status = status) ?? job;
                     return new LocalMediaJobView(current, position);
                 }
             }
@@ -626,7 +626,7 @@ public sealed class LocalMediaService(
                 ? (LatentPath(history.Latents, "_video_"), LatentPath(history.Latents, "_audio_"))
                 : (null, null);
 
-            return store.Update(current.Id, j =>
+            return store.Update(current.Id, current.OwnerId, j =>
             {
                 j.Status = LocalMediaStatuses.Completed;
                 j.Outputs = outputs;
@@ -666,7 +666,7 @@ public sealed class LocalMediaService(
     };
 
     private LocalMediaJob Fail(LocalMediaJob job, string error) =>
-        store.Update(job.Id, j =>
+        store.Update(job.Id, job.OwnerId, j =>
         {
             j.Status = LocalMediaStatuses.Failed;
             j.Error = error;

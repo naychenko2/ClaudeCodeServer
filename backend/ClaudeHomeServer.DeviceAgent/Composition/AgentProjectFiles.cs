@@ -30,6 +30,9 @@ internal sealed class AgentProjectFiles : IProjectFiles
 
     public event Action<string, string, FileMutationKind, string?>? OnMutated;
 
+    public void NotifyMutated(string root, string relativePath, FileMutationKind kind) =>
+        _files.NotifyMutated(root, relativePath, kind);
+
     /// <summary>Тестовый шов: между проверкой пути и операцией — окно TOCTOU.</summary>
     internal Action<string>? AfterCheck { get; set; }
 

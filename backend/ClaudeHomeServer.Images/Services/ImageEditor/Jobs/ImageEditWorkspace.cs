@@ -13,7 +13,7 @@ namespace ClaudeHomeServer.Services.Images.Editing;
 // в той же папке. TTL тот же: запись шага обновляет время папки ленты, чистка её не снесёт.
 public sealed class ImageEditWorkspace(string root)
 {
-    public const string DirName = "image-editor";
+    public const string DirName = ImageEditorPaths.WorkspaceDirName;
     public static readonly TimeSpan Ttl = TimeSpan.FromDays(7);
 
     public string Root { get; } = root;

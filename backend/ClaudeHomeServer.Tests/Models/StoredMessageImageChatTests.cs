@@ -33,7 +33,7 @@ public class StoredMessageImageChatTests
                 Provider = "fal",
                 Model = "flux-fill",
                 Count = 2,
-                Estimate = new ImageEditEstimateDto(0.1, "usd", true, ImageEditEstimateSources.Catalog),
+                Estimate = new StoredImageLaunchEstimate(0.1, "usd", true, ImageEditEstimateSources.Catalog),
                 JobId = "j1",
                 Timestamp = 1,
             },
@@ -44,6 +44,9 @@ public class StoredMessageImageChatTests
 
         raw[0].GetProperty("kind").GetString().Should().Be("image_launch");
         raw[1].GetProperty("kind").GetString().Should().Be("image_file_moved");
+        // Имена полей оценки — те же, что у котировки редактора: history.json прежний
+        raw[0].GetProperty("estimate").EnumerateObject().Select(p => p.Name)
+            .Should().Equal("amount", "unit", "approx", "source");
 
         var launch = restored[0].Should().BeOfType<StoredImageLaunchMessage>().Subject;
         launch.By.Should().Be("human");

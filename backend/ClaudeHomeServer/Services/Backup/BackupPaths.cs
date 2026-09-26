@@ -102,7 +102,7 @@ public static class BackupPaths
         // кеш на 7 дней весом до гигабайт. Журнал трат редактора лежит рядом, в корне data
         // (image-editor-spend.jsonl), и в архив едет: это деньги, других копий у них нет.
         if (segments.Length > 1
-            && root.Equals(Images.Editing.ImageEditWorkspace.DirName, StringComparison.OrdinalIgnoreCase))
+            && root.Equals(ImageEditor.ImageEditorPaths.WorkspaceDirName, StringComparison.OrdinalIgnoreCase))
             return false;
         if (root.Equals(StagingDirName, StringComparison.OrdinalIgnoreCase)) return false;
 

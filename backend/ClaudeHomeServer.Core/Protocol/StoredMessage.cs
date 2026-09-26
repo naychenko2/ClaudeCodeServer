@@ -371,10 +371,15 @@ public class StoredImageLaunchMessage : StoredMessage
     public string Provider { get; init; } = "";
     public string Model { get; init; } = "";
     public int Count { get; init; }
-    public Services.ImageEditor.ImageEditEstimateDto? Estimate { get; init; }
+    public StoredImageLaunchEstimate? Estimate { get; init; }
     public string JobId { get; init; } = "";
     public long? Timestamp { get; init; }
 }
+
+// Оценка запуска в строке истории. Своя запись спины, а не котировка из DTO редактора:
+// редактор — отдельный модуль (ADR-018 §10.1), и протокол от него не зависит. Имена полей те
+// же, что у котировки, поэтому history.json не меняется. Source — ImageEditEstimateSources.*
+public sealed record StoredImageLaunchEstimate(double? Amount, string Unit, bool Approx, string Source);
 
 // Тихая строка «Сохранено как … Редактор перешёл на этот файл, чат — вместе с ним»
 // (ADR-018 §1): чат картинки переехал на новый путь. Пути — от корня проекта.

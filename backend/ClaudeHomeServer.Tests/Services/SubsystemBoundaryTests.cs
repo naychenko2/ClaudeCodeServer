@@ -1732,6 +1732,9 @@ public class SubsystemBoundaryTests
         // исполнитель задач в вертикали Images.
         "ClaudeHomeServer.Services.ImageEditor.Versioning",
         "ClaudeHomeServer.Services.ImageEditor.Spending",
+        // ADR-018 §10.1: шов растра. Реализация (SkiaImageRaster) в Images, потребитель —
+        // модуль редактора; namespace сохранён при переносе интерфейса из Images.
+        "ClaudeHomeServer.Services.Images.Editing.Raster",
     ];
 
     /// <summary>

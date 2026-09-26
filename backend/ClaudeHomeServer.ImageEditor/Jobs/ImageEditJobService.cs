@@ -20,9 +20,13 @@ namespace ClaudeHomeServer.Services.ImageEditor;
 //   суммой: сумма догоняется отдельной записью. Отмена и сбой после принятия запись не
 //   отменяют. Поставщик честно сказал «не списано» — компенсирующая запись с минусом,
 //   журнал только дописывается;
-// - кредиты администратора без цены не тратятся: у поставщика в кредитах котировка без
-//   суммы — отказ, а запуск по такой котировке невозможен;
-// - чужая задача и чужая котировка неотличимы от несуществующих;
+// - котировка без суммы запуск НЕ запрещает (C1 пересмотрен 2026-09-26, решение Андрея:
+//   Higgsfield доступен всем без запретов). Такая трата ложится на запустившего сразу при
+//   принятии с подписью SpendLabelPendingAmount («сумма уточняется»), а фактическая сумма
+//   из ответа поставщика (ActualCost) догоняет её отдельной записью;
+// - потолки одновременных задач не распространяются на Higgsfield: работа идёт у
+//   поставщика, а не на нашем железе;
+// - чужая задача и чужая котировка неотличимы от несуществующих.
 // - вход перед драйвером ужимается под лимиты модели (InputFitter), а варианты после
 //   скачивания приводятся к размеру исходника (MatchSourceSize, ADR-018 §9). Оригинал в
 //   проекте не трогается: сервис его не видит, работает с байтами запроса.
@@ -133,8 +137,6 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         {
             return Fail<ImageEditQuoteDto>(ImageEditErrorCodes.ProviderUnavailable, ex.Message);
         }
-        if (NeedsKnownPrice(editor, estimate))
-            return Fail<ImageEditQuoteDto>(ImageEditErrorCodes.ProviderUnavailable, UnknownPriceError(editor));
 
         var quote = new Quote(Guid.NewGuid().ToString("N"), ownerId, projectId, editor.Key, model, op, request.Count,
             estimate, Now() + QuoteTtl, (editor as IImageEditQuoter)?.ExpectedSeconds(model));
@@ -158,8 +160,6 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         if (editor is null)
             return Fail<ImageEditJobCreatedDto>(ImageEditErrorCodes.ProviderUnavailable,
                 $"Поставщик «{quote.Provider}» больше недоступен");
-        if (NeedsKnownPrice(editor, quote.Estimate))
-            return Fail<ImageEditJobCreatedDto>(ImageEditErrorCodes.ProviderUnavailable, UnknownPriceError(editor));
 
         // Ужатие до Compose: сверка размеров маски и исходника идёт уже по ужатым
         (int Width, int Height)? matchSize = null;
@@ -184,8 +184,9 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         Job job;
         lock (_startLock)
         {
-            var active = _jobs.Values.Where(j => j.IsActive).ToList();
-            if (active.Count(j => j.OwnerId == ownerId) >= MaxJobsPerOwner || active.Count >= MaxJobsPerInstance)
+            var active = _jobs.Values.Where(j => j.IsActive && IsCapped(j.Quote.Provider)).ToList();
+            if (IsCapped(editor.Key)
+                && (active.Count(j => j.OwnerId == ownerId) >= MaxJobsPerOwner || active.Count >= MaxJobsPerInstance))
                 return Fail<ImageEditJobCreatedDto>(ImageEditErrorCodes.TooManyJobs,
                     "Уже идёт слишком много генераций — дождитесь окончания текущих");
             if (!_quotes.TryRemove(quote.Id, out _))
@@ -318,7 +319,6 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             var request = new ImageEditQuoteRequest(other.Key, model.Id, EditMode.Auto, q.Op, count,
                 q.Op == ImageEditOp.Inpaint, 0, false, null, null);
             var estimate = ImageEditEstimates.FromHint(model, request, other.PriceUnit);
-            if (NeedsKnownPrice(other, estimate)) continue;
             var retry = new Quote(Guid.NewGuid().ToString("N"), job.OwnerId, job.ProjectId, other.Key, model, q.Op, count,
                 estimate, Now() + QuoteTtl, (other as IImageEditQuoter)?.ExpectedSeconds(model));
             _quotes[retry.Id] = retry;
@@ -383,7 +383,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
                 CostUsd = credits ? null : amount,
                 CostCredits = credits ? amount : null,
                 Generations = generations,
-                Label = SpendLabel,
+                Label = amount is null && generations > 0 ? SpendLabelPendingAmount : SpendLabel,
             });
         }
         catch (Exception ex)
@@ -470,13 +470,11 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
 
     // Подпись записи в общем учёте: по ней трата редактора отличима от генерации из чата
     public const string SpendLabel = "image-editor";
+    // Трата принята, а сумма пока неизвестна: её догонит запись с SpendLabel без генераций
+    public const string SpendLabelPendingAmount = "image-editor: сумма уточняется";
 
-    // Кредиты — общий аккаунт администратора: без суммы в котировке их не тратим (C1)
-    private static bool NeedsKnownPrice(IImageEditor editor, ImageEditEstimateDto estimate) =>
-        editor.PriceUnit == ImageEditPriceUnits.Credits && estimate.Amount is null;
-
-    private static string UnknownPriceError(IImageEditor editor) =>
-        $"{editor.Label} не назвал цену правки, а без цены кредиты не тратим. Попробуйте ещё раз или выберите другого поставщика";
+    // Потолки одновременных задач — только для поставщиков, которые их требуют
+    private static bool IsCapped(string provider) => provider != HiggsfieldImageEditor.ProviderKey;
 
     private static EditCost? EstimateCost(Quote q) =>
         q.Estimate.Amount is { } a ? new EditCost(a, q.Estimate.Unit) : null;

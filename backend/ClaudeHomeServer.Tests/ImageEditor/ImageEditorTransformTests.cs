@@ -31,7 +31,8 @@ public class ImageEditorTransformTests : IDisposable
     {
         var users = _factory.Services.GetRequiredService<UserStore>();
         var user = users.FindByUsername(TestWebApplicationFactory.TestUsername)!;
-        if (enableFlag) users.SetFeatureFlag(user.Id, FeatureFlagKeys.ImageEditor, true).Should().BeTrue();
+        // Флаг включён по умолчанию — «выключен» задаём override'ом пользователя
+        users.SetFeatureFlag(user.Id, FeatureFlagKeys.ImageEditor, enableFlag).Should().BeTrue();
         var dir = Path.Combine(_factory.TempDir, "img_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
         var id = _factory.Services.GetRequiredService<ProjectManager>()

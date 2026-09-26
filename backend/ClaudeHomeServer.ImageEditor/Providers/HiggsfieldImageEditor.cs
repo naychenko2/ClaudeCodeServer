@@ -12,7 +12,12 @@ namespace ClaudeHomeServer.Services.ImageEditor;
 // Цепочка: media_upload → PUT → media_confirm на каждый вход → generate_image с ЯВНЫМ
 // use_unlim: false (без него сервер при бесплатных генерациях ничего не запускает и
 // возвращает вопрос unlim_choice) → опрос jobs_wait до терминального статуса → скачивание.
+// Если unlim_choice всё же пришёл, отвечаем «тратить бесплатные» — запуск не роняем.
 // Инструмента отмены у Higgsfield нет: отмена просто прекращает ожидание.
+//
+// Аргументы generate_image с 2026-09 лежат ВНУТРИ params (схема required: ["params"]):
+// плоские Higgsfield отвергает «Input validation error … params: Invalid input», из-за чего
+// котировка оставалась без цены и редактор отказывал. Остальные инструменты — плоские.
 public sealed partial class HiggsfieldImageEditor(HiggsfieldMcpClient client) : IImageEditor, IImageEditQuoter
 {
     public const string ProviderKey = "higgsfield";
@@ -102,19 +107,25 @@ public sealed partial class HiggsfieldImageEditor(HiggsfieldMcpClient client) : 
             args["output_height"] = request.Height * 2;
         }
 
-        var call = await client.CallToolAsync("generate_image", args, ct);
+        var call = await client.CallToolAsync("generate_image", Params(args), ct);
         if (call.Unavailable) throw new ImageEditProviderUnavailableException(call.Text);
+        if (!call.Ok && Classify(call.Text) == EditOutcome.InsufficientCredits)
+            throw new ImageEditProviderUnavailableException(Explain(EditOutcome.InsufficientCredits, call.Text));
+        // Цена неизвестна — не отказ: исполнитель запустит и допишет сумму по факту
         if (ParseCredits(call) is not { } perRun) return ImageEditEstimates.Unknown(PriceUnit);
         return new ImageEditEstimateDto(Math.Round(perRun * Math.Max(1, request.Count), 4),
             PriceUnit, false, ImageEditEstimateSources.Provider);
     }
 
+    // structuredContent бывает плоским и вложенным: { "cost": { "credits": 1.5 } }
     internal static double? ParseCredits(HiggsfieldCall call)
     {
+        if (!call.Ok) return null;
         if (call.Structured is JsonObject s)
-            foreach (var key in new[] { "credits", "cost", "total_cost" })
-                if (s[key] is JsonValue v && v.TryGetValue<double>(out var d))
-                    return d;
+            foreach (var node in new[] { s, s["cost"] as JsonObject })
+                foreach (var key in new[] { "credits", "credits_exact", "cost", "total_cost" })
+                    if (node?[key] is JsonValue v && v.TryGetValue<double>(out var d))
+                        return d;
         var m = CreditsPattern().Match(call.Text);
         return m.Success && double.TryParse(m.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var credits)
             ? credits
@@ -171,11 +182,29 @@ public sealed partial class HiggsfieldImageEditor(HiggsfieldMcpClient client) : 
                 args["output_height"] = size.Value.Height * 2;
             }
 
-            var started = await client.CallToolAsync("generate_image", args, token);
+            // Точная цена этого запуска (с входами) — ею трата догоняет котировку без суммы
+            var preflight = args.DeepClone().AsObject();
+            preflight["get_cost"] = true;
+            var cost = await client.CallToolAsync("generate_image", Params(preflight), token);
+            var credits = cost.Unavailable ? null : ParseCredits(cost);
+
+            var started = await client.CallToolAsync("generate_image", Params(args), token);
             if (started.Unavailable) return Fail(EditOutcome.Unavailable, false, started.Text);
-            if (started.Text.Contains("unlim_choice", StringComparison.OrdinalIgnoreCase))
-                return Fail(EditOutcome.Failed, false, "Higgsfield запросил выбор бесплатных генераций — запуск не выполнен");
-            if (!started.Ok) return Fail(Classify(started.Text), false, started.Text);
+            if (IsUnlimChoice(started))
+            {
+                // Сервер спросил, чем платить: отвечаем «бесплатными» тем же запросом
+                args["use_unlim"] = true;
+                started = await client.CallToolAsync("generate_image", Params(args), token);
+                if (started.Unavailable) return Fail(EditOutcome.Unavailable, false, started.Text);
+                if (IsUnlimChoice(started))
+                    return Fail(EditOutcome.Failed, false, "Higgsfield так и не принял выбор оплаты — запуск не выполнен, кредиты не списаны");
+                credits = 0;
+            }
+            if (!started.Ok)
+            {
+                var outcome = Classify(started.Text);
+                return Fail(outcome, false, Explain(outcome, started.Text));
+            }
 
             var jobIds = JobIds(started.Json());
             if (jobIds.Count == 0) return Fail(EditOutcome.Failed, false, "Higgsfield не вернул id заданий");
@@ -223,7 +252,8 @@ public sealed partial class HiggsfieldImageEditor(HiggsfieldMcpClient client) : 
             if (urls.Count == 0)
             {
                 var text = errors.Count > 0 ? string.Join("; ", errors) : "Higgsfield не вернул картинок";
-                return new ImageEditResult(Classify(text), [], null, null, remoteId, text);
+                var outcome = Classify(text);
+                return new ImageEditResult(outcome, [], null, null, remoteId, errors.Count > 0 ? Explain(outcome, text) : text);
             }
 
             progress.Report(new EditProgress(EditStage.Downloading));
@@ -233,7 +263,7 @@ public sealed partial class HiggsfieldImageEditor(HiggsfieldMcpClient client) : 
                     images.Add(img);
             return images.Count == 0
                 ? new ImageEditResult(EditOutcome.Failed, [], null, null, remoteId, "Не удалось скачать результат Higgsfield")
-                : new ImageEditResult(EditOutcome.Ok, images, null, true, remoteId, null);
+                : new ImageEditResult(EditOutcome.Ok, images, ActualCost(credits, req.Count), true, remoteId, null);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -278,7 +308,7 @@ public sealed partial class HiggsfieldImageEditor(HiggsfieldMcpClient client) : 
         var upload = await client.CallToolAsync("media_upload",
             new JsonObject { ["filename"] = fileName, ["content_type"] = contentType }, ct);
         if (upload.Unavailable) return (null, Fail(EditOutcome.Unavailable, false, upload.Text));
-        if (!upload.Ok) return (null, Fail(Classify(upload.Text), false, upload.Text));
+        if (!upload.Ok) return (null, Fail(Classify(upload.Text), false, Explain(Classify(upload.Text), upload.Text)));
 
         var slot = ParseUploadSlot(upload);
         if (slot is null) return (null, Fail(EditOutcome.Failed, false, "Higgsfield не выдал адрес загрузки"));
@@ -288,7 +318,7 @@ public sealed partial class HiggsfieldImageEditor(HiggsfieldMcpClient client) : 
         var confirm = await client.CallToolAsync("media_confirm",
             new JsonObject { ["type"] = "image", ["media_id"] = slot.Value.MediaId }, ct);
         if (confirm.Unavailable) return (null, Fail(EditOutcome.Unavailable, false, confirm.Text));
-        if (!confirm.Ok) return (null, Fail(Classify(confirm.Text), false, confirm.Text));
+        if (!confirm.Ok) return (null, Fail(Classify(confirm.Text), false, Explain(Classify(confirm.Text), confirm.Text)));
         return (slot.Value.MediaId, null);
     }
 
@@ -335,6 +365,28 @@ public sealed partial class HiggsfieldImageEditor(HiggsfieldMcpClient client) : 
             return EditOutcome.Unavailable;
         return EditOutcome.Failed;
     }
+
+    // Копия: узел JSON не может жить у двух родителей, а args уходят повторно при unlim_choice
+    private static JsonObject Params(JsonObject args) => new() { ["params"] = args.DeepClone() };
+
+    private static bool IsUnlimChoice(HiggsfieldCall call) =>
+        call.Text.Contains("unlim_choice", StringComparison.OrdinalIgnoreCase)
+        || call.Structured is JsonObject s && s.ContainsKey("unlim_choice");
+
+    // Цена запуска — за один запуск (см. котировку), вариантов count; бесплатные — ноль
+    private static EditCost? ActualCost(double? perRun, int count) =>
+        perRun is { } c ? new EditCost(Math.Round(c * Math.Clamp(count, 1, 4), 4), ImageEditPriceUnits.Credits) : null;
+
+    // Ответы Higgsfield — по-английски и свободным текстом: человеку — понятная причина,
+    // исходный текст в хвосте для разбора
+    internal static string Explain(EditOutcome outcome, string raw) => outcome switch
+    {
+        EditOutcome.InsufficientCredits =>
+            $"На аккаунте Higgsfield закончились кредиты — пусть администратор пополнит баланс, или выберите другого поставщика. Ответ Higgsfield: {raw}",
+        EditOutcome.Rejected => $"Higgsfield отклонил запрос модерацией — переформулируйте запрос. Ответ Higgsfield: {raw}",
+        EditOutcome.Unavailable => $"Higgsfield сейчас недоступен. Ответ Higgsfield: {raw}",
+        _ => $"Higgsfield отказал в запуске. Ответ Higgsfield: {raw}",
+    };
 
     private static ImageEditResult Fail(EditOutcome outcome, bool? charged, string error) =>
         new(outcome, [], null, charged, null, error);

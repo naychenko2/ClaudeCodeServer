@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Security.Cryptography;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Protocol;
 
 namespace ClaudeHomeServer.Services.Desktop;
 
@@ -265,4 +266,27 @@ public static class DeviceChannelGuard
 
     public static bool IsSecure(HttpRequest request) =>
         IsSecure(request.IsHttps, request.HttpContext.Connection.RemoteIpAddress, ViaProxy(request.Headers));
+
+    public const string InsecureChannelError =
+        "Канал устройства доступен только по HTTPS: по открытому каналу токен устройства и команды не ходят";
+
+    /// <summary>Каналы, которые несут токен устройства после сопряжения: хаб и исполнение.</summary>
+    public static bool IsDeviceChannel(PathString path) =>
+        path.StartsWithSegments("/hubs/devices") || path.StartsWithSegments(DeviceExecProtocol.Path);
+
+    /// <summary>
+    /// То же правило, что у <c>/api/devices/pair</c>, на хабе устройств и канале исполнения.
+    /// Стоит до аутентификации: токен по открытому каналу не проверяется и не принимается.
+    /// </summary>
+    public static IApplicationBuilder UseDeviceChannelGuard(this IApplicationBuilder app) =>
+        app.Use(async (context, next) =>
+        {
+            if (IsDeviceChannel(context.Request.Path) && !IsSecure(context.Request))
+            {
+                context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                await context.Response.WriteAsJsonAsync(new { error = InsecureChannelError });
+                return;
+            }
+            await next();
+        });
 }

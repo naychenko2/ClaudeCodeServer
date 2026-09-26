@@ -247,6 +247,11 @@ public static class AgentProgram
             return 2;
         }
         var device = new DeviceIdentity(new Uri(registration.ServerUrl), token, registration.Fingerprint);
+        if (!ServerChannel.IsSecure(device.ServerUri))
+        {
+            log.LogError("{Error}: сопряги агента заново с https-адресом сервера", ServerChannel.InsecureError);
+            return 2;
+        }
 
         // Хвосты прошлой жизни агента: ходы, пережившие его, добиваются до первого нового хода
         var journal = new TurnJournal(paths.JournalDirectory, loggers.CreateLogger<TurnJournal>());

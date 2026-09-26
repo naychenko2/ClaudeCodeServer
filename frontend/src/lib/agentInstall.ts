@@ -4,6 +4,20 @@
 
 export type AgentOs = 'windows' | 'linux';
 
+// Канал, по которому можно раздавать установку агента: https, либо http на петле (дев-стенд).
+// По смыслу совпадает с DeviceChannelGuard.IsSecure на сервере, ServerChannel в агенте и
+// проверкой --server в скриптах установки: по открытому http из сети атакующий подменит
+// скрипт или архив, и чужой бинарь выполнится раньше, чем сервер откажет в сопряжении
+export const INSECURE_AGENT_INSTALL_TEXT =
+  'Установка агента доступна только по HTTPS — откройте веб-интерфейс по https-адресу';
+
+export function isSecureAgentOrigin(origin: string): boolean {
+  let url: URL;
+  try { url = new URL(origin); } catch { return false; }
+  if (url.protocol === 'https:') return true;
+  return url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+}
+
 // Синтаксис аргументов сверен с deploy/agent-install/install.ps1 (-Server/-Code) и install.sh
 // (--server/--code). Код — из алфавита без пробелов и кавычек, адрес — origin без хвоста
 export function agentInstallCommand(os: AgentOs, origin: string, code: string): string {

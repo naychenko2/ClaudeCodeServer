@@ -1697,6 +1697,8 @@ if (inspectionMode)
     });
 }
 
+// Хаб устройств и канал исполнения — только HTTPS или петля, как сопряжение (ADR-008)
+ClaudeHomeServer.Services.Desktop.DeviceChannelGuard.UseDeviceChannelGuard(app);
 app.UseAuthentication();
 app.UseAuthorization();
 

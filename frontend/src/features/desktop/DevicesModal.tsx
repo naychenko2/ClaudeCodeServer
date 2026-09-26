@@ -6,7 +6,7 @@ import { Button, ConfirmDialog, EmptyState, Modal, Notice, SegmentedControl } fr
 import { useIsMobile } from '../../lib/breakpoints';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
 import {
-  agentInstallCommand, fetchAgentManifest, guessAgentOs,
+  agentInstallCommand, fetchAgentManifest, guessAgentOs, INSECURE_AGENT_INSTALL_TEXT, isSecureAgentOrigin,
   type AgentManifestState, type AgentOs,
 } from '../../lib/agentInstall';
 import { CopyCommand } from './AgentCommands';
@@ -113,7 +113,10 @@ export function DevicesModal({ onClose }: { onClose: () => void }) {
           </div>
         )}
 
-        {pairing
+        {agentMode && !isSecureAgentOrigin(window.location.origin)
+          // Открытый канал из сети: сервер код не выпустит, а команда качала бы агента по http
+          ? <Notice icon={ShieldOff} title="Нужен HTTPS" style={{ marginBottom: SP.md }}>{INSECURE_AGENT_INSTALL_TEXT}</Notice>
+          : pairing
           ? (agentMode
             ? <AgentInstallCard code={pairing} onCancel={() => void cancelPairing()} isMobile={isMobile} />
             : <PairingCard code={pairing} onCancel={() => void cancelPairing()} isMobile={isMobile} />)

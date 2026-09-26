@@ -1,4 +1,5 @@
 using ClaudeHomeServer.DeviceAgent.Composition;
+using ClaudeHomeServer.DeviceAgent.Pairing;
 using ClaudeHomeServer.DeviceAgent.Sidecar;
 using ClaudeHomeServer.Protocol;
 using Microsoft.AspNetCore.Http.Connections;
@@ -16,10 +17,12 @@ internal sealed class HubControlConnection : IControlConnection, IAgentTicketInt
 {
     private readonly HubConnection _connection;
     private readonly ILogger _log;
+    private readonly Uri _server;
 
     public HubControlConnection(IDeviceIdentity device, ILogger log)
     {
         _log = log;
+        _server = device.ServerUri;
         _connection = new HubConnectionBuilder()
             .WithUrl(new Uri(device.ServerUri, "hubs/devices"), o =>
             {
@@ -41,6 +44,8 @@ internal sealed class HubControlConnection : IControlConnection, IAgentTicketInt
     /// <summary>Подключается, повторяя до успеха: сервер мог быть ещё не поднят.</summary>
     public async Task ConnectAsync(CancellationToken ct)
     {
+        // Отказ окончательный: повтор не сделает открытый канал шифрованным
+        if (!ServerChannel.IsSecure(_server)) throw new InsecureServerException();
         var delay = TimeSpan.FromSeconds(1);
         while (true)
         {

@@ -18,7 +18,7 @@
 #
 # Коды возврата:
 #   0  успех
-#   2  неверные аргументы
+#   2  неверные аргументы (в том числе --server не по https и не на петле)
 #   3  сервер не раздаёт агента (5xx, невалидный JSON, нет архива под RID)
 #   4  битый архив (размер или SHA-256 не совпали)
 #   5  нет нужного инструмента в PATH
@@ -30,7 +30,7 @@ set -eu
 
 # ---------- утилиты вывода ----------
 log()  { printf '%s\n' "$*" >&2; }
-die()  { log "ошибка: $*"; exit "$1"; }
+die()  { _rc="$1"; shift; log "ошибка: $*"; exit "$_rc"; }
 need() { command -v "$1" >/dev/null 2>&1 || die "$EX_TOOL" "нужен $1 в PATH"; }
 
 EX_OK=0
@@ -90,6 +90,37 @@ case "$SERVER" in
     */) SERVER="${SERVER%/}" ;;
 esac
 
+# ---------- канал: https или петля ----------
+# До любой загрузки: по открытому http атакующий в сети подменит скрипт или архив, и чужой
+# бинарь выполнится раньше, чем сервер откажет в сопряжении. Правило то же, что у сервера
+# (DeviceChannelGuard) и агента (ServerChannel): https, либо http на localhost/127.0.0.1/[::1].
+secure_server() {
+    case "$1" in *://*) ;; *) return 1 ;; esac
+    _scheme=$(printf '%s' "${1%%://*}" | tr '[:upper:]' '[:lower:]')
+    _rest="${1#*://}"
+    _authority="${_rest%%/*}"
+    _authority="${_authority%%\?*}"
+    _authority="${_authority%%#*}"
+    # user@host: доверяем только хосту после последней @
+    _hostport="${_authority##*@}"
+    case "$_hostport" in
+        \[*) _host="${_hostport%%]*}]" ;;
+        *)   _host="${_hostport%%:*}" ;;
+    esac
+    _host=$(printf '%s' "$_host" | tr '[:upper:]' '[:lower:]')
+    case "$_scheme" in
+        https) [ -n "$_host" ] && CURL_PROTO="=https" && return 0 ;;
+        http)
+            case "$_host" in
+                localhost|127.0.0.1|\[::1\]) CURL_PROTO="=http,https"; return 0 ;;
+            esac ;;
+    esac
+    return 1
+}
+
+CURL_PROTO=""
+secure_server "$SERVER" || die "$EX_USAGE" "адрес сервера должен быть https:// (http допустим только для localhost, 127.0.0.1 и [::1]): '$SERVER'. Откройте веб-интерфейс по https-адресу и скопируйте команду оттуда"
+
 # ---------- RID ----------
 ARCH="$(uname -m 2>/dev/null || echo unknown)"
 case "$ARCH" in
@@ -123,7 +154,9 @@ trap cleanup EXIT INT TERM
 # fetch URL OUT: тихо, с ретраями; код возврата = код утилиты, без вывода на терминал
 fetch() {
     _url="$1"; _out="$2"
-    if curl -fsSL --retry 3 --connect-timeout 10 --max-time 300 \
+    # --proto-redir: редирект не опустит протокол до открытого http
+    if curl -fsSL --proto "$CURL_PROTO" --proto-redir =https \
+            --retry 3 --connect-timeout 10 --max-time 300 \
             -o "$_out" "$_url" 2>/dev/null; then
         return 0
     fi

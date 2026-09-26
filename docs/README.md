@@ -118,7 +118,9 @@
 [ADR-016](adr/ADR-016-local-projects.md) (локальные проекты: харнес на устройстве, секреты
 только на сервере, набор функций по матрице возможностей проекта);
 [ADR-017](adr/ADR-017-image-editor.md) (редактор картинок в проекте: контракт правки
-`IImageEditor`, котировка вместо тихого фолбэка, сохранение новым файлом, персонажи — черновик);
+`IImageEditor`, котировка вместо тихого фолбэка, сохранение новым файлом, персонажи — черновик),
+[ADR-018](adr/ADR-018-image-editor-v2.md) (редактор v2: чат картинки вместо «Обсудить», генерация
+агентом через MCP-сервер `image-editor`, «Сохранить как…», правки без ИИ на ImageSharp — черновик);
 [model-resolution-and-fallback.md](adr/model-resolution-and-fallback.md) — приложение к ADR-007
 (резолв модели и фолбэк хода по цепочке),
 [specialties-personalization-review.md](adr/specialties-personalization-review.md) — приложение

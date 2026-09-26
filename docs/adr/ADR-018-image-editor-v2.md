@@ -1,7 +1,8 @@
 # ADR-018: Редактор картинок v2 — чат картинки, генерация агентом, «Сохранить как», правки без ИИ
 
-**Статус:** Черновик, редакция 2 от 2026-09-26 (растр — SkiaSharp вместо ImageSharp, решение Андрея;
-контракты волны 0 в коде)
+**Статус:** Черновик, редакция 3 от 2026-09-26: редактор выносится отдельным модулем, бэкенд и
+фронт (раздел 10, требование Андрея). Редакция 2 от того же дня: растр на SkiaSharp вместо
+ImageSharp (решение Андрея), контракты волны 0 в коде.
 **Дата:** 2026-09-26
 **Основа:** [ADR-017](ADR-017-image-editor.md) — редактор v1, он в master. Этот ADR его **дополняет**:
 разделы 1–7 и 10 ADR-017 остаются в силе, раздел 6 «Обсудить с Claude» **заменяется** разделом 1
@@ -495,6 +496,388 @@ launch, и держать две раскладки ради флага — дв
 Объём раздела заложен в волну 1 таблицы раздела 8: бэкенд ~700–900 строк и ~450 строк тестов,
 фронт (обрезка, поворот, отражение, размер, сжатие, вес) ~700–900 строк из общих 2 600–3 100.
 
+### 10. Редактор — отдельный модуль (редакция 3)
+
+**Требование Андрея от 2026-09-26:** редактор картинок должен быть отдельным модулем. На
+бэкенде он живёт в своём проекте, фронт встраивается отдельно. Сейчас это не так (сверено по
+ветке после шагов 1–4 плана):
+
+- логика и драйверы лежат в `ClaudeHomeServer.Images/Services/ImageEditor` (~3 300 строк), в
+  одной вертикали с генерацией аватаров;
+- контракты лежат в `ClaudeHomeServer.Core/Services/ImageEditor` (~800 строк, с `Versioning`);
+- в Main лежат `ImageEditorController` (~460 строк), `Services/ImageEditor/Discuss` и схемы
+  `ImageEditorToolset.Schemas.cs`. Это против курса ADR-014 «в Main не остаётся папок вертикалей»;
+- фронт вшит в основной бандл: `components/imageEditor` (~3 000 строк) и `api/imageEditor.ts`
+  (~820 строк).
+
+Раздел **заменяет** места прежних разделов, где что-то было положено в Main: тулсет и
+`BuildImageEditorContext` из §2, `ImageChatStateStore` и `ImageEditLaunchAssembler` из §2,
+`ImageChatPathTracker` из §1, раскладку по слоям из §8. Смысл решений §1–§9 не меняется,
+меняется только адрес кода.
+
+#### 10.1. Бэкенд: динамический модуль `ClaudeHomeServer.ImageEditor`
+
+**Форма — динамический модуль (сценарий Б), как Notes и Spend**, а не обычная вертикаль на
+`ProjectReference`:
+
+- Main ссылается на проект с `ReferenceOutputAssembly="false"`. Типов модуля Main не видит, это
+  гарантирует компилятор, а не ревью;
+- dll копируется в `modules/image-editor/` **двумя целями MSBuild, `Build` и `Publish`**. Это
+  грабли Notes из ADR-014: при одной цели `dotnet publish -o` молча терял dll, и прод падал на
+  старте;
+- `ModuleLoader` грузит сборку по записи `DynamicModules` (`Key`, `Backend.AssemblyPath`,
+  `Frontend.RemoteUrl`) и подключает её контроллеры своим `AssemblyPart`.
+
+Проект — `Microsoft.NET.Sdk.Web`, `OutputType=Library`, единственный `ProjectReference` — на
+Core, плюс `JwtBearer` (ради claim `sub`, как у Notes и Spend). `ImageEditorSubsystem : IAppSubsystem`
+с `Key = "imageeditor"`: гейт читает `Subsystems:ImageEditor:Enabled`, ключи конфигурации без учёта
+регистра. Ключ `image-editor` через дефис дал бы секцию `Subsystems:image-editor`, поэтому не он.
+Фич-флаг владельца и id фронтового remote остаются `image-editor`.
+
+**Выключить модуль можно двумя способами**, оба уже работают у Notes:
+
+- `DynamicModules[image-editor].Enabled=false` — dll не грузится вовсе;
+- `Subsystems:ImageEditor:Enabled=false` — `ModuleLoader` отказывает до загрузки.
+
+В обоих случаях ручки редактора отвечают `404`: контроллеров нет в составе MVC. Это лучше, чем у
+статических Web-вертикалей: у них выключение гейтом даёт `500` (`Program.cs`, комментарий про
+`ApplicationPart`).
+
+**Почему не обычная вертикаль.** Андрей просил, чтобы модуль встраивался отдельно. Динамический
+модуль подключается и выключается записью конфига, а его dll лежит отдельным файлом. Обычная
+вертикаль этого не даёт, а ещё отвечает `500` при выключенном гейте.
+
+**Жёсткое ограничение формы: у динамического модуля не может быть своих NuGet-пакетов.**
+`ModuleLoader` грузит сборку в `AssemblyLoadContext.Default`, зависимости резолвятся по
+`deps.json` Main. Пакета, которого нет в замыкании Main, в рантайме просто не будет. Отдельный
+контекст загрузки ADR-014 отверг. Отсюда разрез по растру ниже и новый сторож: **каждый
+`PackageReference` модуля обязан быть в замыкании пакетов Main** (сейчас у Notes и Spend так
+только по совпадению).
+
+**Что остаётся в `Images`:**
+
+| Остаётся в `Images` | Почему |
+|---|---|
+| генерация аватаров: `IImageGenerator`, драйверы fal/glif, `ImageGenerationService`, `ImageBackfillService` | другая фича, редактор её не использует |
+| `ImageGenerationSettingsStore` и `ImagePlaces` (включая место `image-editor`) | выбор поставщика по месту — функция админки генерации, общая для мест |
+| **`SkiaImageRaster` и пакеты SkiaSharp** | модуль не может нести нативный пакет (см. выше). Растр — общая инфраструктура картинок, ресайз аватаров станет вторым потребителем |
+
+**Что переезжает в модуль** — всё остальное из `Images/Services/ImageEditor`: `Jobs`
+(`ImageEditJobService`, `InputFitter`, `ImageEditWorkspace`, `ImageEditSteps`, `ImageEditSaver`),
+`Providers` (`FalImageEditor`, `HiggsfieldImageEditor`, `HiggsfieldMcpClient`, квотирование),
+`Marks`, `Characters`. Драйверы редактора — часть редактора: они реализуют его контракт
+`IImageEditor`, а генерация аватаров ими не пользуется. У `FalImageEditor` с аватарами общие
+только именованный клиент `"fal"` (его регистрирует Main) и ключ `Fal:ApiKey` из конфигурации.
+Типов обеих вертикалей здесь нет, поэтому шов не нужен.
+
+**Namespace модуля — `ClaudeHomeServer.Services.ImageEditor.*`.** Код из `Images` сейчас живёт в
+`ClaudeHomeServer.Services.Images.Editing.*`, а это поддерево корня вертикали `Images` в таблице
+`Boundaries`. С прежним namespace строка модуля пересеклась бы с `Images` префиксом, и сторож
+принял бы чужой код за свой.
+
+**Швы между модулем и остальным** (все в Core; список вызовов — в постановке шага переноса, как
+требует ADR-014):
+
+| Шов | Кто реализует | Что даёт модулю | Когда нужен |
+|---|---|---|---|
+| `IImageRaster` + записи операций | `Images` (`SkiaImageRaster`) | растр. Интерфейс переносится из `Images` в Core с сохранением namespace | перенос |
+| `IImagePlaceSettings` (чтение одного места) | `Images` | поставщик и модель места `image-editor` для контроллера | перенос |
+| `IHiggsfieldAccess` | Main (уже есть) | токен Higgsfield | уже есть |
+| `IProjectManager`, `IFeatureFlagGate`, `ISessionBroadcaster`, `ISpendCollector`, `IProjectFiles.OnMutated` | Main (уже есть) | проект и корень, флаг, события, траты, мутации файлов | уже есть; метод, которого нет, добавляется по факту вызова |
+| `IImageChatSessions`: создать чат картинки (с правилом выбора персоны и `AutoAllowTools`), `SetImageChatPath` без `UpdatedAt`, `AppendStoredAsync` | Main, адаптер над `SessionManager` | всё, что чату картинки нужно от ядра сессий | шаг 10 |
+| `ISessionDirectory.GetAll` | Main (уже есть) | поиск чата по пути (§1, линейный проход) | шаг 10 |
+| `IMcpSessionAccessor.GetOwned` | Main (уже есть) | резолв сессии из хвоста маршрута MCP | шаг 13 |
+| `IDelegatedTurnGate` | Main, над `DelegatedTurnGate.Decide` (сейчас `internal` в `Filters/`) | отказ на делегированном ходу | шаг 13 |
+| `IPromptSectionContributor`, `TurnEventBus` | Core (уже есть) | блок состояния хвостом хода, сброс счётчика запусков по `TurnCompleted` | шаги 12–13 |
+
+Если `Images` выключена, растра нет. Модуль принимает `IImageRaster?` и на `transform` и `jobs`
+отвечает честным `503 raster_unavailable`: это легальная форма из ADR-014 («обязательный параметр
+конструктора от отключаемой вертикали вне её самой — дефект»).
+
+**Core-контракты: что уходит в модуль и что остаётся в спине.**
+
+| Остаётся в Core | Почему |
+|---|---|
+| `Session.ImageChat` / `SessionImageChat` | поле модели сессии: едет в `sessions.json`, бэкап и `Session` на фронт |
+| `StoredImageLaunchMessage`, `StoredImageFileMovedMessage`, `StoredUserMessage.ImageSnapshot` | полиморфизм `StoredMessage` объявлен атрибутами `[JsonDerivedType]` на базе в Core, историю читает спина |
+| оценка в `StoredImageLaunchMessage.Estimate` | сейчас это `ImageEditEstimateDto` из DTO редактора, то есть протокол зависит от модуля. Заменяется собственной записью Core с **теми же именами полей**: JSON `history.json` не меняется, `BackupSchema.Version` не двигается |
+| `SpendRecord.SessionId`, `Initiator`, `SpendInitiators` | модель трат общая |
+| `FeatureFlagKeys.ImageEditor` | каталог флагов |
+| `IHiggsfieldAccess`, `IImageRaster` | швы (см. выше) |
+| имя каталога рабочих папок редактора (сейчас `ImageEditWorkspace.DirName`) | его читает `BackupPaths` в Main, а Main типов модуля не видит. Константа переезжает в Core |
+
+**Уходит в модуль:** `IImageEditor`, `IImageEditJobs`, `ImageEditCatalog`, `ImageEditDtos`,
+`ProjectLinkGuard`, `Versioning/*`. Ими пользуется только редактор. Туда же уходят события
+`image_edit_*` и `image_chat_state` (`ImageEditEvents.cs`). Их создаёт только модуль, а
+`ISessionBroadcaster` отдаёт их в `SendAsync("message", object)`, и SignalR сериализует
+фактический тип. Прецедент — событие из `ImageBackfillService`: его запись `: ServerMessage`
+объявлена в сборке `Images`, а не в Core. Для динамического модуля это закрепляется тестом:
+событие из сборки модуля, прогнанное через протокол хаба, несёт свои поля.
+
+**Остаётся в Main — это ядро сессий, а не вертикаль:**
+
+- `SessionManager.CreateAsync(…, imageChat)` и `SetImageChatPath`, за адаптером `IImageChatSessions`;
+- метод хаба `SendImageChatMessage`: хаб живёт только в Main;
+- `ImageEditorMcpContext` в `Llm/LlmSessionContext.cs` и `SessionManager.BuildImageEditorContext`,
+  как у `notes` (§10.2);
+- `HiggsfieldAccessAdapter`;
+- **временно** — `ImageDiscussService` с ручкой `POST …/image-editor/discuss`, отдельным маленьким
+  контроллером на прежнем маршруте. Ему нужны `SessionManager`, `PersonaManager` и `FileService`,
+  а заводить под него швы ради удаления в волне 2 бессмысленно. Сносится в шаге 10, как и было
+  решено в §4.
+
+**Сторожа границ:**
+
+- в `SubsystemBoundaryTests` новая строка `Boundaries`: `"ImageEditor"`,
+  `"ClaudeHomeServer.Services.ImageEditor"`, только `SharedAllowedPrefixes`, **без `SkiaSharp`**. В
+  строке `Images` `SkiaSharp` остаётся;
+- `typeof(ImageEditorSubsystem).Assembly` добавляется в статические конструкторы
+  `SubsystemBoundaryTests` и `SubsystemBoundaryCoverageTests`, иначе сторож пройдёт вакуумно
+  (ADR-014, «Форс-загрузка»). Проверка: число тестов в прогоне выросло на строку, **дубль строки
+  не ловит ни один сторож**;
+- новый тест «пакеты динамических модулей ⊂ пакеты Main» по трём csproj (Notes, Spend,
+  ImageEditor): парсинг `PackageReference`, мутация — вписать в модуль `SkiaSharp`, тест краснеет;
+- тест отключаемости по образцу Notes: `Subsystems:ImageEditor:Enabled=false` → `404` на
+  `image-editor/*`, тулсета нет в `McpToolsetRegistry`, `BuildImageEditorContext` → `null`;
+- прежний тест «Core без `PackageReference`» (шаг 4) не меняется.
+
+Тесты переезжают в новый `ClaudeHomeServer.ImageEditor.Tests`, но только модульные: драйверы,
+`InputFitter`, `Marks`, `Characters`, `Saver`, `Versioning`. Контроллерные и сквозные
+(`ImageEditorControllerTests`, `…Security`, `…Spending`) остаются в `ClaudeHomeServer.Tests`: они
+поднимают собранное приложение через `TestWebApplicationFactory`, и модуль туда приезжает записью
+`DynamicModules` в `appsettings.Testing.json`, как Notes. `SkiaImageRasterTests` остаются в
+`Images.Tests`.
+
+```mermaid
+flowchart LR
+  Main["Main: ядро сессий, хаб, SessionManager, BuildImageEditorContext"] -->|"ProjectReference, типы видны"| Images["Images: аватары, SkiaImageRaster"]
+  Main -.->|"ReferenceOutputAssembly=false, dll в modules/"| IE["ImageEditor: контроллеры, задачи, драйверы, тулсет, состояние"]
+  Main --> Core["Core: швы, Session, StoredMessage, SpendRecord"]
+  Images --> Core
+  IE --> Core
+```
+
+#### 10.2. MCP-сервер `image-editor`
+
+**Тулсет живёт в модуле**, по прецеденту `NotesToolset`: `ImageEditorToolset :
+IMcpParameterizedToolset` регистрируется в `ImageEditorSubsystem.Register`, в `Program.cs` его
+нет. Схемы (`ImageEditorToolset.Schemas.cs`, шаг 1) переезжают из Main вместе с ним. Маршрут
+общий, `POST /mcp/image-editor/{sessionId}`, `McpToolsetRegistry` находит тулсет среди
+`IEnumerable<IMcpToolset>`. Main тулсет не тянет.
+
+**Решение «ехать ли серверу в ход» остаётся в Main.** Шва «вертикаль сама добавляет сервер в
+конфиг хода» нет ни у кого: у каждого сервера свой record в `LlmSessionContext` и свой
+`Build*Context` в `SessionManager`, и Notes, чей тулсет уже в модуле, устроен так же. Заводить
+общий контрибьютор MCP-серверов ради второго потребителя не стоит, это отдельное решение по
+ADR-012. `BuildImageEditorContext` проверяет `Session.ImageChat != null`, флаг `image-editor` у
+владельца **и наличие тулсета `image-editor` в `McpToolsetRegistry`**. Последнее — новое. Если
+модуль не загружен, а контекст собран, CLI получит сервер, который отвечает `404`, и в ход
+приедет «fetch failed». Наличие тулсета — свойство процесса, а не хода, поэтому
+`McpToolsetStabilityTests` не страдают. Проверку «подсистема `images` включена» из §2 заменяет
+именно эта.
+
+#### 10.3. Фронт: MF-модуль `frontend/modules/image-editor`
+
+**Форма — как у `notes` и `spend`.** Код фичи переезжает в `src/features/imageEditor/`
+(компоненты, `api`, хуки). В `frontend/modules/image-editor/` лежит только MF-обёртка:
+
+- `vite.config.ts` с `name: 'aihome_image_editor'`, `exposes: { './subsystem' }`,
+  `remotes: { aihome_shell }`, shared `react`/`react-dom` singleton;
+- `subsystem.tsx` с **async boundary**: сначала `await import('aihome_shell/kit')`, потом
+  манифест. Иначе редактор молча не зарегистрируется, как было у `spend`;
+- `package.json`, dev-порт 5176, прокси `/image-editor-remote` в `vite.config.ts` хоста,
+  `build:image-editor` в цепочке `npm run build`, запись `Frontend.RemoteUrl:
+  "/image-editor-remote/remoteEntry.js"` в `DynamicModules`.
+
+Ядро редактор получает **только через `aihome_shell/kit`** — широкий неверсионируемый кит
+внутренних подсистем. `design-kit` для внешних модулей тут не подходит: он узкий, в нём нет `api`,
+`nav`, `signalr` и сторов. В кит добавляется то, чего в нём нет и что редактор уже использует:
+
+- `useMe`;
+- `useFeature`/`FLAGS`;
+- `NAV_CHANGE_EVENT`;
+- низкоуровневый `request` из `lib/offline` (или `api/imageEditor.ts` переписывается на `api`).
+
+`onMessage` и `onReconnected` в ките уже есть.
+
+`ModelsSpendModal` — это код **другой подсистемы** (`spend`). Модуль не может импортировать
+модуль, поэтому «Модели и расход» открывается навигацией на раздел или action-слотом, который
+вкладывает `spend`.
+
+**Главное правило модуля: ни одного относительного импорта из ядра.** Всё, что импортировано из
+`src/components`, `src/hooks`, `src/lib` мимо кита, соберётся **второй копией** внутрь remote. Для
+`ChatPanel` это второе SignalR-соединение (`let connection` в `signalr.ts` — синглтон модуля) и
+вторые сторы черновиков, персон и сессий. Сторож — правило `no-restricted-imports` в eslint для
+`src/features/imageEditor/**`: разрешены кит, собственная папка и `types`. Мутация: импорт
+`hooks/useSession` краснеет.
+
+**Встраивание чата — ядро отдаёт модулю слот, а не `ChatPanel` через кит.**
+
+Варианты:
+
+| Вариант | Один инстанс чата | Контракт между модулем и ядром | Решение |
+|---|---|---|---|
+| А. `ChatPanel` в бандле модуля | нет: вторая копия SignalR и сторов | — | отвергнут |
+| Б. `ChatPanel` экспортируется через `aihome_shell/kit` | да (общий ESM-граф) | все пропсы `ChatPanel` (3 000 строк, 74 импорта) плюс `Composer` и черновики для заглушки до создания чата | отвергнут |
+| В. **Слот: ядро передаёт модулю готовый компонент чата картинки** | да | ~8 пропсов `ImageChatSlotProps` | **принят** |
+
+Устройство варианта В:
+
+- **Кто рендерит редактор.** Каркас больше не импортирует `ImageEditorHost` в `App.tsx`. Он рисует
+  render-слот `app-overlay`, и модуль вкладывает туда свой хост редактора.
+- **Как чат попадает в модуль.** Контекст слота несёт `{ ImageChat: ComponentType<ImageChatSlotProps> }`.
+  Прецедент — `QuickActionNoteCtx { ActionButton }`: ядро передаёт компонент в render-функцию
+  подсистемы.
+- **Где живёт `ImageChatSlot`.** В ядре: `src/features/chat/imageChat/ImageChatSlot.tsx`. Внутри
+  `ChatPanel` с `embedded` и `hideHeader`, заглушка `ImageChatComposerStub` до создания чата и
+  переход «заглушка → `ChatPanel` с `pendingMessage`».
+- **Пропсы `ImageChatSlotProps`** (тип объявлен в `registryCore.ts`, как остальные контексты
+  слотов):
+  - `projectId`, `sourcePath`;
+  - `sessionId: string | null`;
+  - `draftKey` (псевдоключ `image:{projectId}:{path}`);
+  - `leadIn: ReactNode` (первая строка «Чат привязан к…» с кнопками);
+  - `prepareSend(text, paths) → { text, paths, snapshot }`;
+  - `createChat(personaId?) → Promise<Session>`: чат создаёт **модуль** своей ручкой
+    `POST …/image-editor/chats`, ядро маршрута модуля не знает;
+  - `onSessionChange(session)`.
+- **Что меняется в `ChatPanel`.** Пропсы из §6 (`hideHeader`, `prepareSend`, `pendingMessage`
+  объектом, `leadIn`) — правки **ядра**, модулю они не видны.
+- **Карточки ленты** — обычное направление «модуль вкладывает в слот ядра». В `ChatItemView`
+  появляется слот `chat-item-tool` с ключом по имени инструмента (`mcp__image-editor__*`) и по
+  `kind` записи (`image_launch`, `image_file_moved`). Модуль вкладывает `ImageLaunchCard`,
+  `ImagePromptCard` и тихие строки. Прямых веток `if` по именам инструментов редактора в ядре
+  нет.
+- **`ImageEditorBridge`** — React-контекст **модуля**. Редактор оборачивает им `<ImageChat>`, и
+  карточки внутри `ChatPanel` его видят: контекст проходит сквозь компоненты ядра, а провайдер и
+  потребитель — один инстанс модуля. В полном чате провайдера нет, и кнопка одна — «Открыть в
+  редакторе».
+- **`ChatCard`.** Значок и миниатюра — render-слот `chat-card-badge`. Клик «открыть в редакторе» —
+  через action-слот (ниже).
+
+**Вход из дерева файлов остаётся.** `FileExplorer` и `FileViewer` перестают импортировать
+`isEditableImage`/`openImageEditor`/`ImageEditorEntryButton`. Вместо этого:
+
+- action-слот `image-editor` с `ImageEditorOpenerApi { isEditable(path), open(target) }`, по
+  прецеденту `AiNoteOpenerApi`. Пункты «Редактировать картинку» и «Нарисовать картинку»
+  показываются, если есть вклад и включён флаг;
+- render-слот `file-viewer-toolbar` для кнопки в просмотрщике.
+
+Стор `openImageEditor` (module-level `listeners`) переезжает в модуль целиком. Ядро зовёт его
+только через `action`, поэтому инстанс один.
+
+**Деградация.** Если remote не загрузился, раздела и пунктов меню нет, а оболочка работает
+(`loadSubsystemRemotes`). Карточки `mcp__image-editor__*` рисуются общей карточкой `tool_use`,
+чаты картинок открываются как обычные — так же, как при выключенном флаге.
+
+#### 10.4. План переноса
+
+Перенос — **два шага, по одному на исполнителя, параллельно**. Вставляются в план после шагов 5
+и 6: всё, что уже написано в v1 и шагах 1–6, переезжает разом, а шаги 7–18 идут уже в модуле.
+**master не трогается вовсе**: v1 живёт там до мержа v2, а перенос целиком в ветке
+`feat/image-editor-v2`.
+
+**Шаг П1. Бэкенд в модуль — Денис.** Зависит от шагов 4 и 5 (закоммичены).
+
+1. Швы в Core первым коммитом: перенос `IImageRaster` с записями операций (namespace сохранить),
+   `IImagePlaceSettings`, константа каталога рабочих папок, запись оценки для
+   `StoredImageLaunchMessage` вместо `ImageEditEstimateDto` (те же имена полей).
+2. `ClaudeHomeServer.ImageEditor.csproj`, `ImageEditorSubsystem`, перенос файлов **`git mv`
+   отдельным коммитом без правок содержимого**, чтобы git видел переименования. Правка
+   namespace на `Services.ImageEditor.*` и `using` — следующим коммитом.
+3. `ImageEditorController` уходит в модуль (маршруты прежние), ручка «Обсудить» остаётся в Main
+   маленьким контроллером до шага 10. Схемы тулсета — в модуль.
+4. Main: `ProjectReference ReferenceOutputAssembly="false"`, цели копирования `Build` и `Publish`,
+   запись `DynamicModules` в `appsettings.json` и `appsettings.Testing.json`, `ImagesSubsystem`
+   перестаёт вызывать `AddImageEditor()`.
+5. Сторожа из 10.1 и перенос модульных тестов в `ClaudeHomeServer.ImageEditor.Tests`.
+
+- **Проверка:** `dotnet build`, полный `dotnet test backend/ClaudeHomeServer.slnx`;
+  `dotnet publish -o <tmp>` → в `<tmp>/modules/image-editor/` есть dll, `runtimes/` не вырос;
+  контейнер `docker compose … build claude-server` стартует.
+- **Готово, когда:**
+  - все прежние тесты редактора зелёные **без правки ожиданий**, правились только namespace и
+    `using`;
+  - в Main нет `using ClaudeHomeServer.Services.ImageEditor` вне временной ручки «Обсудить» и
+    `HiggsfieldAccessAdapter`;
+  - `Subsystems:ImageEditor:Enabled=false` → `404`, а не `500`;
+  - мутации сторожей из 10.1 краснеют.
+- **Объём:** ~4 100 строк кода и ~3 000 строк тестов переезжают почти без правок. Нового кода
+  ~250–350 строк (швы, адаптеры, csproj, сторожи). **1,5–2 дня.**
+
+**Шаг П2. Фронт в MF-модуль — Кира.** Зависит от шага 6 (закоммичен). Параллельно П1: пока П1
+не закоммичен, модуль работает на моках `api/imageEditor.ts`.
+
+1. `components/imageEditor/**` и `api/imageEditor.ts` → `src/features/imageEditor/` через `git mv`
+   отдельным коммитом.
+2. Импорты ядра переводятся на `aihome_shell/kit`, кит расширяется (10.3), вводится правило
+   `no-restricted-imports`.
+3. `frontend/modules/image-editor/` по образцу `spend`, скрипт сборки, прокси dev, запись remote
+   (её вносит П1 или П2, кто позже, — одной строкой).
+4. Слоты `app-overlay`, action `image-editor`, `file-viewer-toolbar`. `App.tsx`, `FileExplorer`,
+   `FileViewer` больше не импортируют редактор.
+
+- **Проверка:** `npx tsc -b`, vitest, `npm run lint:design`, `npm run build`: в `dist/` есть
+  `image-editor-remote/remoteEntry.js`, в основном бандле нет кода редактора (поиск по уникальной
+  строке редактора в `dist/assets`). Ручной прогон на моке, 1360 и 390: вход из дерева и из
+  просмотрщика, генерация, сохранение, «Обсудить». Remote удалён из `dist` → оболочка жива,
+  пунктов нет.
+- **Готово, когда:**
+  - `rg "components/imageEditor|api/imageEditor" frontend/src` пуст;
+  - eslint-сторож краснеет на мутации;
+  - сценарии v1 проходят.
+- **Объём:** ~3 800 строк переезжают. Нового кода ~350–450 строк: обёртка, кит, слоты, правка
+  трёх потребителей. **2–2,5 дня.**
+
+**Поправки к шагам 7–18:**
+
+| Шаг | Поправка |
+|---|---|
+| 7, 9 (К) | файлы в `src/features/imageEditor/`, импорты ядра только через кит. «Показать в дереве» — через `navPush` из кита |
+| 8 (Д) | в модуле. `ProjectLinkGuard` и `VersionedImageStore` уже там. `NotifyMutated` — через Core-шов файлов; нужного метода нет — добавить его в шов, а не звать `FileService` |
+| 10 (Д) | делится. Main: `CreateAsync(…, imageChat)`, `SetImageChatPath`, адаптер `IImageChatSessions` (правило персоны и `AutoAllowTools` внутри адаптера), `SendImageChatMessage`. Модуль: ручки `chats`, поиск через `ISessionDirectory.GetAll`. Снос временной ручки «Обсудить» из Main |
+| 11 (Д) | `ImageChatPathTracker` в **модуле**, подписка на `IProjectFiles.OnMutated`; путь и запись `image_file_moved` — через `IImageChatSessions` |
+| 12 (Д) | `ImageChatStateStore`, `PUT state`, `ImageEditLaunchAssembler`, вкладчик `image-editor-state` — в модуле. Правка «хвостом всегда» в `ClaudeSession` — спина (`Llm`). Исключение из бэкапа — по константе Core |
+| 13 (Д) | тулсет в модуле, `IDelegatedTurnGate` — новый шов. `ImageEditorMcpContext` и `BuildImageEditorContext` — Main, с гейтом «тулсет есть в реестре» вместо «подсистема `images`». `McpToolsetStabilityTests` остаются в `ClaudeHomeServer.Tests`, тесты тулсета — в тестах модуля |
+| 14 (К) | +~0,5–1 день. `ImageChatSlot`, `ImageChatComposerStub` и тип `ImageChatSlotProps` — в **ядре** (`features/chat/imageChat`). Правки `ChatPanel` из §6 — в ядре. Модуль рисует `<ctx.ImageChat …/>`. Снимок и `canvasRevision` — в модуле |
+| 15 (К) | +~0,5 дня. Слоты `chat-item-tool` в `ChatItemView` и `chat-card-badge` в `ChatCard` вместо прямых веток. `ImageEditorBridge` — в модуле |
+| 16 (Д) | выжимка в `CLAUDE.md` — ссылкой на вложенную карту `backend/ClaudeHomeServer.ImageEditor/CLAUDE.md`, как у Video и Deploy: так корневая карта не растёт |
+| 17 (Вера) | + сценарии: `DynamicModules[image-editor].Enabled=false` → пунктов нет, `500` нигде, чаты картинок открываются обычными; `Subsystems:ImageEditor:Enabled=false` → `404`; удалённый `remoteEntry.js` → оболочка жива; `Images` выключена → `503 raster_unavailable`, а не `500` |
+| 18 (Александр) | + проверить: модуль ссылается только на Core; пакеты модуля входят в замыкание Main; в бандле модуля нет второй копии `signalr.ts` (поиск по уникальной строке в чанках `image-editor-remote`) |
+
+#### 10.5. Риски и объём
+
+1. **Вторая копия чата внутри remote (MF × чат ядра) — главный риск.** Один случайный
+   относительный импорт из ядра, и в бандле модуля окажется своя копия `signalr.ts` и сторов. Лента
+   будет молчать или дублировать события, а видно это только на живом стенде. Защита тройная:
+   чат приходит слотом (10.3), eslint-сторож в модуле и проверка чанков в шаге 18.
+2. **Контекст React через границу MF.** `ImageEditorBridge` работает, потому что его провайдер и
+   потребители — один инстанс модуля. Контексты ядра (`ChatProjectContext` и другие) модуль
+   обязан брать **из кита**, иначе получит другой объект контекста и `undefined` без ошибки. Это
+   ловит тот же eslint-сторож.
+3. **Async boundary.** Без `await import('aihome_shell/kit')` в `subsystem.tsx` модуль молча не
+   регистрируется: грабли `spend`, описаны в его `subsystem.tsx`.
+4. **Динамический модуль без своих пакетов.** Если редактору когда-нибудь понадобится пакет, он
+   ляжет в `Images` или в Main, но не в модуль. Сторож «пакеты модуля ⊂ Main» делает это правило
+   видимым.
+5. **Цели копирования dll.** Одна цель вместо двух — прод не стартует после `publish -o`.
+   Проверка в П1 — публикацией во временный каталог.
+6. **Столкновение namespace** `Services.Images.Editing` с корнем `Images` — сторож молча принял
+   бы код модуля за код `Images`. Лечится переименованием в П1.
+7. **Конфликты с шагами 5–6.** П1 и П2 стартуют только после коммитов 5 и 6, в окно переноса
+   других исполнителей в ветке нет. `git mv` отдельным коммитом сохраняет историю для ревью Глеба.
+8. **Мёртвый MCP-сервер.** Контекст собран, а модуля нет → «fetch failed» у всех инструментов
+   хода. Закрыто гейтом «тулсет в реестре» (10.2) и тестом.
+9. **Задержка первого открытия.** Remote грузится на старте вместе с остальными
+   (`loadSubsystemRemotes` в `App.tsx`), первое открытие редактора не ждёт сети. Если Андрей
+   заметит, что старт стал медленнее, remote можно грузить лениво при первом входе, но не раньше
+   замера.
+
+**Объём.** Перенос — **~3,5–4,5 дня работы**: П1 1,5–2 дня, П2 2–2,5 дня. Добавки к шагам 10, 13,
+14 и 15 за швы и слоты — ещё **~1,5–2 дня**. По календарю П1 и П2 идут параллельно, добавки
+раскладываются по окнам 5–7 плана. Итог — **+~3–4 календарных дня** к ~3,5 неделям из §8. Узким
+местом остаётся фронт.
+
 ## Последствия
 
 - В продукте появляется второй «типизированный» чат после десктопного: `Session.ImageChat` и
@@ -509,6 +892,11 @@ launch, и держать две раскладки ради флага — дв
   сборкой под платформу. Цена — RID в каждой точке публикации (иначе +0,4 ГБ нативки на выкладку)
   и собственные `AutoOrient` и ступенчатый ресайз, которых у Skia нет из коробки.
 - «Обсудить с Claude» и блок `image-prompt` исчезают. ADR-017 §6 остаётся как история решения.
+- Редактор становится третьим динамическим модулем после Notes и Spend (раздел 10) и первым,
+  которому ядро отдаёт свой чат через слот. Цена — ~3,5–4,5 дня переноса и новые швы в Core
+  (`IImageChatSessions`, `IImagePlaceSettings`, `IDelegatedTurnGate`, перенос `IImageRaster`).
+  Выигрыш — редактор выключается записью конфига, Main его типов не видит, основной бандл фронта
+  его кода не несёт.
 
 ## Открыто
 
@@ -516,3 +904,8 @@ launch, и держать две раскладки ради флага — дв
 2. Нужен ли выключатель инстанса `ImageEditor:AgentLaunch` (раздел 7). Рекомендация: завести, по
    умолчанию `true`.
 3. Ширина левой панели и «свернуть в значки» — вопрос макета, не архитектуры (записка v2).
+4. Грузить remote редактора на старте или лениво при первом входе (раздел 10.5, п. 9).
+   Рекомендация: на старте, как `notes` и `spend`, и пересмотреть после замера.
+5. Общий контрибьютор MCP-серверов хода вместо пары «record в `LlmSessionContext` +
+   `Build*Context`» (раздел 10.2). Рекомендация: не заводить в рамках v2, это отдельное решение по
+   ADR-012 для всех серверов сразу.

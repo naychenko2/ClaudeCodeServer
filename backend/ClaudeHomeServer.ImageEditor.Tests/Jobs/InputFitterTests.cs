@@ -1,4 +1,7 @@
+using System.Collections.Concurrent;
 using System.Security.Cryptography;
+using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.Images.Editing.Raster;
 using ClaudeHomeServer.Tests.ImageEditor.Fakes;
@@ -43,7 +46,7 @@ public class InputFitterTests : IDisposable
         var mask = _raster.Probe(fitted.Input.Mask!.Bytes)!;
         (source.Width, source.Height).Should().Be((2048, 1365));
         (mask.Width, mask.Height).Should().Be((source.Width, source.Height));
-        MaskValues(fitted.Input.Mask.Bytes).Should().BeSubsetOf([0, 255], "маска после ужатия обязана остаться бинарной");
+        MaskValues(fitted.Input.Mask.Bytes).Should().Equal([0, 255], "маска после ужатия обязана остаться бинарной");
         (fitted.SourceWidth, fitted.SourceHeight).Should().Be((6000, 4000), "приводить варианты — к размеру оригинала");
     }
 
@@ -60,9 +63,12 @@ public class InputFitterTests : IDisposable
         var mask = _raster.Probe(fitted.Mask!.Bytes)!;
         (mask.Width, mask.Height).Should().Be((3000, 2000));
         fitted.Source!.Bytes.Should().BeSameAs(input.Source!.Bytes, "исходник под лимитом едет как пришёл");
-        MaskValues(fitted.Mask.Bytes).Should().BeSubsetOf([0, 255]);
+        MaskValues(fitted.Mask.Bytes).Should().Equal([0, 255], "полосы обоих цветов доехали, промежуточных нет");
     }
 
+    // Исполнитель не знает корня проекта, поэтому файл на диске он не тронет по построению —
+    // проверка файла одна была бы вакуумной. Сторожим то, до чего конвейер реально дотягивается:
+    // байты оригинала в памяти, из которых читается исходник, ужимаются в НОВЫЙ массив
     [Fact]
     public async Task Автоуменьшение_не_пишет_в_проект_хеш_оригинала_не_меняется()
     {
@@ -71,13 +77,17 @@ public class InputFitterTests : IDisposable
         var file = Path.Combine(project, "hero.png");
         await File.WriteAllBytesAsync(file, Png(6000, 4000, SKColors.OliveDrab));
         var before = Hash(file);
+        var original = await File.ReadAllBytesAsync(file);
         var editor = new SizedEditor(Png(1024, 683, SKColors.Red));
         var service = Service(editor);
 
-        var job = await RunAsync(service, Input(await File.ReadAllBytesAsync(file), mask: StripedMask(6000, 4000)));
+        var job = await RunAsync(service, Input(original, mask: StripedMask(6000, 4000)));
 
         job.Status.Should().Be(ImageEditJobStatus.Completed, job.Error);
-        _raster.Probe(editor.Received!.Source!.Bytes)!.Width.Should().Be(2048, "драйвер получил ужатый исходник");
+        var received = editor.Received!.Source!.Bytes;
+        _raster.Probe(received)!.Width.Should().Be(2048, "драйвер получил ужатый исходник");
+        received.Should().NotBeSameAs(original, "ужатие пишет в новый массив, а не поверх оригинала");
+        Hash(original).Should().Be(before, "байты оригинала в памяти не изменены");
         Hash(file).Should().Be(before);
         Directory.GetFiles(project, "*", SearchOption.AllDirectories).Should().Equal(file);
     }
@@ -137,15 +147,17 @@ public class InputFitterTests : IDisposable
 
     // ── Хелперы ──────────────────────────────────────────────────────────────────
 
+    private readonly FinishBroadcaster _finished = new();
+
     private ImageEditJobService Service(IImageEditor editor)
     {
         var service = new ImageEditJobService([editor], new ImageEditWorkspace(Path.Combine(_dir, "image-editor")),
-            NullLogger<ImageEditJobService>.Instance, raster: _raster);
+            NullLogger<ImageEditJobService>.Instance, broadcaster: _finished, raster: _raster);
         _services.Add(service);
         return service;
     }
 
-    private static async Task<ImageEditJobDto> RunAsync(ImageEditJobService service, ImageEditJobInput input,
+    private async Task<ImageEditJobDto> RunAsync(ImageEditJobService service, ImageEditJobInput input,
         ImageEditOp op = ImageEditOp.Edit)
     {
         var quote = await service.QuoteAsync("u", Project,
@@ -153,14 +165,38 @@ public class InputFitterTests : IDisposable
         quote.Value.Should().NotBeNull(quote.Error);
         var started = await service.StartAsync("u", Project, input with { QuoteId = quote.Value!.QuoteId }, default);
         started.Value.Should().NotBeNull(started.Error);
-        for (var i = 0; i < 1000; i++)
+        // Событие завершения исполнитель шлёт после смены статуса — ждём его, а не опрашиваем
+        await _finished.For(started.Value!.JobId).WaitAsync(TimeSpan.FromSeconds(30));
+        return service.Get("u", Project, started.Value.JobId)!;
+    }
+
+    // Завершение задачи — по событию completed/failed исполнителя. Событие может прийти раньше,
+    // чем тест спросит, поэтому источник заводится с любой стороны
+    private sealed class FinishBroadcaster : ISessionBroadcaster
+    {
+        private readonly ConcurrentDictionary<string, TaskCompletionSource> _jobs = new();
+
+        public Task For(string jobId) => Source(jobId).Task;
+
+        private TaskCompletionSource Source(string jobId) =>
+            _jobs.GetOrAdd(jobId, _ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+
+        public Task ToOwner(string ownerId, ServerMessage message)
         {
-            var job = service.Get("u", Project, started.Value!.JobId)!;
-            if (job.Status is ImageEditJobStatus.Completed or ImageEditJobStatus.Failed or ImageEditJobStatus.Cancelled)
-                return job;
-            await Task.Delay(10);
+            var jobId = message switch
+            {
+                ImageEditCompletedMessage m => m.JobId,
+                ImageEditFailedMessage m => m.JobId,
+                _ => null,
+            };
+            if (jobId is not null) Source(jobId).TrySetResult();
+            return Task.CompletedTask;
         }
-        throw new TimeoutException("задача не завершилась");
+
+        public Task ToSession(string sessionId, ServerMessage message) => Task.CompletedTask;
+        public Task ToSessionExcept(string sessionId, string exceptConnectionId, ServerMessage message) => Task.CompletedTask;
+        public Task ToProject(string projectId, ServerMessage message) => Task.CompletedTask;
+        public Task ToPreviewLog(string projectId, string serviceId, ServerMessage message) => Task.CompletedTask;
     }
 
     private static ImageEditJobInput Input(byte[] source, byte[]? mask = null) =>
@@ -212,18 +248,14 @@ public class InputFitterTests : IDisposable
         return data.ToArray();
     }
 
-    private static HashSet<int> MaskValues(byte[] png)
+    // Различные значения каналов по возрастанию
+    private static int[] MaskValues(byte[] png)
     {
         using var bitmap = SKBitmap.Decode(png);
-        var values = new HashSet<int>();
-        foreach (var pixel in bitmap.Pixels)
-        {
-            values.Add(pixel.Red);
-            values.Add(pixel.Green);
-            values.Add(pixel.Blue);
-        }
-        return values;
+        return [.. bitmap.Pixels.SelectMany(p => new int[] { p.Red, p.Green, p.Blue }).Distinct().Order()];
     }
 
-    private static string Hash(string path) => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)));
+    private static string Hash(string path) => Hash(File.ReadAllBytes(path));
+
+    private static string Hash(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes));
 }

@@ -77,6 +77,27 @@ public class AgentInstallScriptChannelTests : IDisposable
         code.Should().Be(expected, output);
     }
 
+    /// <summary>
+    /// В .NET Framework (Windows PowerShell 5.1) свойства HttpClient после первого запроса
+    /// менять нельзя — InvalidOperationException, и установка падает на скачивании архива.
+    /// Прогон под pwsh этого не ловит, поэтому сторож текстовый: Timeout выставляется ровно
+    /// в одном месте — в фабрике клиента, до любого запроса.
+    /// </summary>
+    [Fact]
+    public void Ps1_TimeoutКлиентаЗадаётсяТолькоПриСоздании()
+    {
+        var lines = File.ReadAllLines(Script("install.ps1"));
+        var assignments = lines
+            .Select((line, i) => (line, i))
+            .Where(x => System.Text.RegularExpressions.Regex.IsMatch(x.line, @"\.Timeout\s*="))
+            .ToList();
+
+        assignments.Should().ContainSingle("Timeout HttpClient меняется только в New-HttpClient");
+        var (_, at) = assignments[0];
+        lines[at - 1].Should().MatchRegex(@"\$client\s*=\s*New-Object System\.Net\.Http\.HttpClient",
+            "Timeout задаётся сразу после создания клиента");
+    }
+
     [UnsupportedOSPlatform("windows")]
     private async Task<(int Code, string Stderr)> RunShAsync(string server)
     {

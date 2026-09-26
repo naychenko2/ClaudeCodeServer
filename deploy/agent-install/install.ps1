@@ -141,8 +141,16 @@ if ($PSVersionTable.PSVersion.Major -ge 6 -and -not $IsWindows) {
 # Invoke-WebRequest в PS 5.1 плохо обрабатывает тело ошибки при 5xx; HttpClient всегда
 # даёт и код, и тело, и формат не зависит от версии PS.
 Add-Type -AssemblyName System.Net.Http
-$HttpClient = New-Object System.Net.Http.HttpClient
-$HttpClient.Timeout = [TimeSpan]::FromSeconds(30)
+
+function New-HttpClient([int]$timeoutSeconds) {
+    # Timeout задаётся только здесь, до первого запроса: в .NET Framework (PS 5.1) смена
+    # свойств HttpClient после первого запроса бросает InvalidOperationException
+    $client = New-Object System.Net.Http.HttpClient
+    $client.Timeout = [TimeSpan]::FromSeconds($timeoutSeconds)
+    return $client
+}
+
+$HttpClient = New-HttpClient 30
 
 function Get-Manifest([string]$url, [string]$localPath) {
     # Возвращает PSCustomObject с .StatusCode (int) и .Body (string).
@@ -159,10 +167,11 @@ function Get-Manifest([string]$url, [string]$localPath) {
 }
 
 function Get-Archive([string]$url, [string]$localPath) {
-    # Таймаут на скачивание архива — 5 минут; агент 70–100 МБ
-    $HttpClient.Timeout = [TimeSpan]::FromSeconds(300)
+    # Таймаут на скачивание архива — 5 минут; агент 70–100 МБ. Отдельный клиент: таймаут
+    # клиента манифеста после его запроса уже не поменять
+    $archiveClient = New-HttpClient 300
     try {
-        $resp = $HttpClient.GetAsync($url).Result
+        $resp = $archiveClient.GetAsync($url).Result
         Assert-SecureResponse $resp $url
         $bytes = $resp.Content.ReadAsByteArrayAsync().Result
         if (-not $resp.IsSuccessStatusCode) {
@@ -181,7 +190,7 @@ function Get-Archive([string]$url, [string]$localPath) {
     } catch {
         Exit-With $ExitDownload "не удалось скачать архив: $url ($($_.Exception.Message))"
     } finally {
-        $HttpClient.Timeout = [TimeSpan]::FromSeconds(30)
+        $archiveClient.Dispose()
     }
 }
 

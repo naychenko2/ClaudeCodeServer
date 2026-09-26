@@ -33,6 +33,27 @@ internal sealed class FakeAutostart : IAutostart
     public void Unregister() => Calls.Add("unregister");
 }
 
+internal sealed class FakeShim : ICommandShim
+{
+    public List<string> Calls { get; } = [];
+    public Exception? Failure { get; set; }
+
+    public string Location => "/фейк/bin/ai-home-agent";
+
+    public IReadOnlyList<string> Install()
+    {
+        Calls.Add("install");
+        if (Failure is not null) throw Failure;
+        return ["шим поставлен"];
+    }
+
+    public void Remove()
+    {
+        Calls.Add("remove");
+        if (Failure is not null) throw Failure;
+    }
+}
+
 internal sealed class FakeSupervisorControl : ISupervisorControl
 {
     public bool Running { get; set; }
@@ -78,6 +99,7 @@ public sealed class InstallCommandsTests : IDisposable
     private readonly TempInstall _install = new("1.4.0");
     private readonly AgentPaths _paths;
     private readonly FakeAutostart _autostart = new();
+    private readonly FakeShim _shim = new();
     private readonly FakeSupervisorControl _supervisors = new() { Running = true };
     private readonly FakeClock _clock = new();
     private readonly StringWriter _output = new();
@@ -99,7 +121,7 @@ public sealed class InstallCommandsTests : IDisposable
 
     private static readonly InstallRequest Request = new(new Uri("https://home.example/"), "ABCD2345", "Ноутбук", AlwaysOn: false);
 
-    private AgentInstaller Installer(string version = "1.4.0") => new(_paths, _install.Layout, version, _autostart, _supervisors,
+    private AgentInstaller Installer(string version = "1.4.0") => new(_paths, _install.Layout, version, _autostart, _shim, _supervisors,
         (request, _) =>
         {
             _pairings.Add(request);
@@ -120,7 +142,19 @@ public sealed class InstallCommandsTests : IDisposable
         _supervisors.Stops.Should().Be(1, "переустановка гасит прежний супервизор");
         _install.Layout.ReadActive().Should().Be("1.4.0");
         _autostart.Calls.Should().Equal("register 1.4.0", "start 1.4.0");
-        _output.ToString().Should().Contain("на связи");
+        _shim.Calls.Should().Equal(["install"], "подсказки UI зовут агента по имени — ai-home-agent roots add");
+        _output.ToString().Should().Contain("шим поставлен").And.Contain("на связи");
+    }
+
+    [Fact]
+    public async Task Сбой_шима_не_роняет_установку()
+    {
+        _autostart.OnStart = () => File.WriteAllText(_install.Layout.HealthyOf("1.4.0"), "ok");
+        _shim.Failure = new UnauthorizedAccessException("нет прав на bin");
+
+        (await Installer().RunAsync(Request, CancellationToken.None)).Should().Be(InstallExitCodes.Ok);
+        _output.ToString().Should().Contain("нет прав на bin").And.Contain("по полному пути");
+        _autostart.Calls.Should().Equal("register 1.4.0", "start 1.4.0");
     }
 
     [Fact]
@@ -185,7 +219,7 @@ public sealed class InstallCommandsTests : IDisposable
         new DeviceRegistration("https://home.example/", "dev-7", "Ноутбук", "f1ngerprint", DeviceTokenStores.FileKind)
             .Save(_paths.RegistrationFile);
         var revoke = new FakeSelfRevoke(status);
-        var uninstaller = new AgentUninstaller(_paths, _install.Layout, _autostart, _supervisors, revoke,
+        var uninstaller = new AgentUninstaller(_paths, _install.Layout, _autostart, _shim, _supervisors, revoke,
             kind => kind == DeviceTokenStores.FileKind ? store : throw new InvalidOperationException($"не то хранилище: {kind}"), _output);
         return (uninstaller, store, revoke);
     }
@@ -198,6 +232,7 @@ public sealed class InstallCommandsTests : IDisposable
         (await uninstaller.RunAsync(purge: false, CancellationToken.None)).Should().Be(0);
 
         _autostart.Calls.Should().Equal("unregister");
+        _shim.Calls.Should().Equal("remove");
         _supervisors.Stops.Should().Be(1);
         revoke.Calls.Should().ContainSingle();
         revoke.Calls[0].Server.Should().Be(new Uri("https://home.example/"));
@@ -237,7 +272,7 @@ public sealed class InstallCommandsTests : IDisposable
     public async Task Несопряжённый_агент_удаляется_без_похода_на_сервер()
     {
         var revoke = new FakeSelfRevoke(SelfRevokeStatus.Revoked);
-        var uninstaller = new AgentUninstaller(_paths, _install.Layout, _autostart, _supervisors, revoke,
+        var uninstaller = new AgentUninstaller(_paths, _install.Layout, _autostart, _shim, _supervisors, revoke,
             _ => new MemoryTokenStore(), _output);
 
         (await uninstaller.RunAsync(purge: false, CancellationToken.None)).Should().Be(0);

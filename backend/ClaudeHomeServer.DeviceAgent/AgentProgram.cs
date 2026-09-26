@@ -131,7 +131,7 @@ public static class AgentProgram
         }
 
         var layout = AgentLayout.Resolve(paths);
-        var installer = new AgentInstaller(paths, layout, own, Autostarts.ForCurrentOs(layout),
+        var installer = new AgentInstaller(paths, layout, own, Autostarts.ForCurrentOs(layout), CommandShims.ForCurrentOs(layout),
             new PidFileSupervisorControl(layout), PairWithServerAsync, Console.Out);
         try
         {
@@ -148,7 +148,8 @@ public static class AgentProgram
     {
         var layout = AgentLayout.Resolve(paths);
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-        var uninstaller = new AgentUninstaller(paths, layout, Autostarts.ForCurrentOs(layout), new PidFileSupervisorControl(layout),
+        var uninstaller = new AgentUninstaller(paths, layout, Autostarts.ForCurrentOs(layout), CommandShims.ForCurrentOs(layout),
+            new PidFileSupervisorControl(layout),
             new SelfRevokeClient(http), kind => DeviceTokenStores.Open(kind, paths.ConfigDirectory), Console.Out);
         return await uninstaller.RunAsync(purge, CancellationToken.None);
     }

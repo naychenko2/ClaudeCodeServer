@@ -45,7 +45,8 @@ export function samplesToJobInput(samples: Sample[]): {
 
 // ── Быстрые действия ──
 
-export type QuickAction = 'removeBackground' | 'upscale' | 'removeMarked' | 'outpaint';
+export type QuickAction = 'removeBackground' | 'upscale' | 'removeMarked' | 'outpaint' | 'enhanceFaces';
+export const QUICK_ACTIONS: QuickAction[] = ['removeBackground', 'upscale', 'removeMarked', 'outpaint', 'enhanceFaces'];
 export const OUTPAINT_RATIOS = ['1:1', '16:9', '9:16'] as const;
 export type OutpaintRatio = typeof OUTPAINT_RATIOS[number];
 
@@ -54,6 +55,7 @@ export const QUICK_LABEL: Record<QuickAction, string> = {
   upscale: 'Улучшить качество',
   removeMarked: 'Убрать отмеченное',
   outpaint: 'Дорисовать за края',
+  enhanceFaces: 'Улучшить лица',
 };
 
 // Что делал запуск — для заголовка шага истории и «Ещё варианты»
@@ -77,15 +79,29 @@ export function quickPlan(action: QuickAction, ratio: OutpaintRatio): LaunchPlan
     case 'upscale': return { op: 'upscale', prompt: '', useMask: false, removal: false };
     case 'removeMarked': return { op: 'inpaint', prompt: 'Убрать отмеченное', useMask: true, removal: true };
     case 'outpaint': return { op: 'outpaint', prompt: '', useMask: false, removal: false, aspectRatio: ratio };
+    case 'enhanceFaces': return { op: 'enhanceFaces', prompt: '', useMask: false, removal: false };
   }
 }
 
-// Почему быстрое действие недоступно (пусто — доступно)
-export function quickBlockReason(action: QuickAction, hasImage: boolean, hasMask: boolean, modelOps: ImageEditOp[] | null): string {
+// «Улучшить лица» — модель одного действия: её подбирает сервер, выбранная модель
+// поставщика тут ни при чём, и вариант всегда один
+export const quickUsesOwnModel = (action: QuickAction) => action === 'enhanceFaces';
+
+// Почему быстрое действие недоступно (пусто — доступно). providerOps — что умеет
+// поставщик целиком (null — неизвестно), modelOps — явно выбранная модель
+export function quickBlockReason(
+  action: QuickAction, hasImage: boolean, hasMask: boolean, modelOps: ImageEditOp[] | null,
+  providerOps: ImageEditOp[] | null = null,
+): string {
+  const op = quickPlan(action, '1:1').op;
+  if (providerOps && !providerOps.includes(op)) {
+    return action === 'enhanceFaces'
+      ? 'Есть только у «Локальных моделей» — выберите их в «Чем рисовать»'
+      : 'Этот поставщик так не умеет — возьмите другого в «Чем рисовать»';
+  }
   if (!hasImage) return 'Сначала загрузите картинку';
   if (action === 'removeMarked' && !hasMask) return 'Сначала отметьте кистью, что убрать';
-  const op = quickPlan(action, '1:1').op;
-  if (modelOps && !modelOps.includes(op)) return 'Выбранная модель так не умеет — возьмите «Авто» или другую';
+  if (modelOps && !quickUsesOwnModel(action) && !modelOps.includes(op)) return 'Выбранная модель так не умеет — возьмите «Авто» или другую';
   return '';
 }
 
@@ -99,6 +115,7 @@ export function actionTitle(a: LaunchAction): string {
     case 'upscale': return 'Улучшено качество';
     case 'removeMarked': return 'Убрано отмеченное';
     case 'outpaint': return `Дорисовано до ${a.ratio ?? ''}`.trim();
+    case 'enhanceFaces': return 'Улучшены лица';
   }
 }
 

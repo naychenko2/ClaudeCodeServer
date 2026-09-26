@@ -6,7 +6,7 @@ import { AlertTriangle, Check, Coins, Pencil, Save, Sparkles, X } from 'lucide-r
 import { Button, SegmentedControl, ICON_SIZE, ICON_STROKE, C, FS, R, SHADOW, SP } from 'aihome_shell/kit';
 import type { EditCost } from './api';
 import type { JobFailure } from './useImageEditJob';
-import { money, variantsWord } from './format';
+import { isFreeUnit, money, variantsWord } from './format';
 import { AgentTag } from './PromptCard';
 
 const icon = (I: typeof Check) => <I size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />;
@@ -108,7 +108,7 @@ export function VariantsView({ variants, variantUrl, before, cost, selected, onS
     <div style={area(mobile)}>
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap' }}>
         <span style={{ fontSize: FS.lg, fontWeight: 600, color: C.textHeading }}>Готово: {variantsWord(variants.length)}</span>
-        {cost && (
+        {cost && !isFreeUnit(cost.unit) && (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, fontSize: FS.sm, color: C.textMuted }}>
             <Coins size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />Списано {money(cost.amount, cost.unit)}
           </span>

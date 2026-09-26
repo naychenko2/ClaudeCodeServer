@@ -14,7 +14,7 @@ import type { ChatItem } from '../../../types';
 import {
   imageEditorApi, type EditCost, type ImageChatStateChange, type ImageEditCatalog, type ImageEditEstimate, type ImageEditJob,
 } from '../api';
-import { priceSum, priceText, variantsWord } from '../format';
+import { isFreeUnit, priceSum, priceText, variantsWord } from '../format';
 import { changedLine, describeChanges, modelLabel } from './stateSync';
 import { useImageEditorBridge } from './bridge';
 import { openImageChatById } from './openFromChat';
@@ -227,7 +227,9 @@ export function ImageLaunchCard({ ctx }: { ctx: ChatItemToolCtx }) {
   }
 
   const est = result.estimate;
-  const price = est ? priceSum(est.amount, est.unit, est.approx) : null;
+  // У локальных моделей вместо «≈ $» — «Бесплатно», время и очередь на момент запуска
+  const free = !!est && isFreeUnit(est.unit);
+  const price = est ? priceSum(est.amount, est.unit, est.approx, est) : null;
   const meta = [price, count ? variantsWord(count) : null].filter(Boolean).join(' · ');
   const changed = changedLine(describeChanges(result.changes, catalog), !!ctx.persona);
   const phase = status?.phase ?? 'run';
@@ -239,7 +241,7 @@ export function ImageLaunchCard({ ctx }: { ctx: ChatItemToolCtx }) {
     if (bridge) bridge.showJob(result.jobId, count ?? status?.variants ?? 1, result.expectedSeconds);
     else openInEditor(true);
   };
-  const noMoney = status?.charged === true ? 'Поставщик уже списал оплату.' : 'Деньги не списаны.';
+  const noMoney = free ? '' : status?.charged === true ? 'Поставщик уже списал оплату.' : 'Деньги не списаны.';
 
   const title = {
     run: 'Запущена генерация', done: 'Готово', cancel: 'Генерация отменена', error: 'Генерация не удалась', lost: 'Генерация прервалась',
@@ -259,8 +261,8 @@ export function ImageLaunchCard({ ctx }: { ctx: ChatItemToolCtx }) {
           <div style={{ width: `${progress}%`, height: '100%', background: C.accent, transition: 'width .5s linear' }} />
         </div>
       )}
-      {phase === 'cancel' && <Note>{noMoney}{bridge ? ' Промпт остался в поле сверху.' : ''}</Note>}
-      {phase === 'error' && <Note>{status?.error ?? 'Сервис рисования отказал.'}{status?.charged === false ? ' Деньги не списаны.' : ''}</Note>}
+      {phase === 'cancel' && (noMoney || bridge) && <Note>{[noMoney, bridge ? 'Промпт остался в поле сверху.' : ''].filter(Boolean).join(' ')}</Note>}
+      {phase === 'error' && <Note>{status?.error ?? 'Сервис рисования отказал.'}{status?.charged === false && !free ? ' Деньги не списаны.' : ''}</Note>}
       {phase === 'lost' && <Note>Сервер перезапускался, задача не сохранилась. Проверьте траты в «Модели и расход».</Note>}
       <Acts>
         {phase === 'run' && <Button size="sm" variant="secondary" leftIcon={ic(X)} onClick={() => { void cancel(); }}>Отменить</Button>}
@@ -339,7 +341,9 @@ export function ImageLaunchRow({ ctx }: { ctx: ChatItemToolCtx }) {
   const catalog = useCatalog(ctx.projectId);
   const model = modelLabel(catalog, item.provider, item.model);
   const est = item.estimate;
-  const price = est ? priceText(est.amount, est.unit, est.approx, item.count) : variantsWord(item.count);
+  // Строка — след в истории: время и очередь на момент запуска в неё не пишутся
+  const price = !est ? variantsWord(item.count)
+    : isFreeUnit(est.unit) ? `Бесплатно · ${variantsWord(item.count)}` : priceText(est.amount, est.unit, est.approx, item.count);
   const who = item.by === 'agent'
     ? `${ctx.persona ? personaLabel(ctx.persona) : 'Claude'} ${ctx.persona ? '— запуск' : 'запустил'}`
     : 'Вы запустили';

@@ -15,12 +15,12 @@ import {
 } from './api';
 import { EditorCanvas } from './EditorCanvas';
 import { exportAnnotated, exportMask, hasAnnotationMark, hasMaskMark, marksToJson, type Mark, type Tool } from './marks';
-import { effectiveProvider, isRemovalPrompt, modelBlockReason, money, pickOp, plural, priceSum, priceText, splitPath, variantsWord, type ProviderChoice } from './format';
+import { effectiveProvider, isRemovalPrompt, modelBlockReason, money, pickOp, plural, priceSum, priceText, providerOps, splitPath, variantsWord, type ProviderChoice } from './format';
 import { currentModel, ProviderModelPicker } from './ProviderModelPicker';
 import { EditorSections, MarksTools, MobileToolbar, SectionHint, useEditorSections, type EditorSection } from './EditorSections';
 import { HistorySteps, ProjectImagePicker, QuickActions, SamplesSection, SaveButtons } from './PanelSections';
 import {
-  actionTitle, currentSrc, dropStepsFrom, EMPTY_HISTORY, goToStep, maxSamples, panelJobInput, patchStep, pushStep, quickBlockReason, quickPlan,
+  actionTitle, currentSrc, dropStepsFrom, EMPTY_HISTORY, goToStep, maxSamples, panelJobInput, patchStep, pushStep, QUICK_ACTIONS, quickBlockReason, quickPlan, quickUsesOwnModel,
   stepSaveSource, type History, type HistoryStep, type LaunchAction, type LaunchPlan, type OutpaintRatio, type QuickAction, type Sample, type SaveSource,
 } from './editorInputs';
 import { AdjustPanel } from './AdjustPanel';
@@ -175,11 +175,11 @@ export function ImageEditor({ projectId, projectName, target, sessionId: openSes
 
   const unit = quote?.estimate.unit ?? pv?.priceUnit ?? 'usd';
   const priceLabel = quote
-    ? priceText(quote.estimate.amount, unit, quote.estimate.approx, count)
+    ? priceText(quote.estimate.amount, unit, quote.estimate.approx, count, quote.estimate)
     // Пока котировка едет — ориентир из каталога, чтобы цена не мигала
     : m?.priceHint ? priceText(m.priceHint.amount * count, m.priceHint.unit, true, count) : `… · ${variantsWord(count)}`;
   const priceSumLabel = quote
-    ? priceSum(quote.estimate.amount, unit, quote.estimate.approx)
+    ? priceSum(quote.estimate.amount, unit, quote.estimate.approx, quote.estimate)
     : m?.priceHint ? priceSum(m.priceHint.amount * count, m.priceHint.unit, true) : '…';
 
   const onProvider = (p: ProviderChoice) => {
@@ -208,6 +208,8 @@ export function ImageEditor({ projectId, projectName, target, sessionId: openSes
   const launch = useCallback(async (action: LaunchAction, n: number = count) => {
     if (!pv || !m) return;
     const plan = planOf(action);
+    // «Улучшить лица»: модель подбирает сервер, образцы и персонаж не нужны
+    const own = action.kind !== 'prompt' && quickUsesOwnModel(action.kind);
     const withMask = plan.useMask && hasMask;
     // Стрелки и подписи поясняют правку по промпту; фону, качеству и краям они ни к чему
     const withMarks = action.kind === 'prompt' || action.kind === 'removeMarked';
@@ -215,9 +217,9 @@ export function ImageEditor({ projectId, projectName, target, sessionId: openSes
     // Другое число вариантов («Нарисовать 1 вариант») или протухшая котировка — берём свежую
     if (!q || n !== count || Date.parse(q.expiresAt) - Date.now() < 30_000) {
       q = await api.quote(projectId, {
-        provider: pv.key, model: m.id, mode: 'auto', op: plan.op, count: n,
-        hasMask: withMask, hasAnnotations: withMarks && hasAnnotations, removal: plan.removal, references: samples.length,
-        hasCharacter: !!character, width: size?.w ?? null, height: size?.h ?? null,
+        provider: pv.key, model: own ? AUTO_MODEL : m.id, mode: 'auto', op: plan.op, count: n,
+        hasMask: withMask, hasAnnotations: withMarks && hasAnnotations, removal: plan.removal, references: own ? 0 : samples.length,
+        hasCharacter: !own && !!character, width: size?.w ?? null, height: size?.h ?? null,
       }).catch((e: Error) => { showToast(e.message, '', 'error'); return null; });
       if (!q) return;
     }
@@ -234,20 +236,26 @@ export function ImageEditor({ projectId, projectName, target, sessionId: openSes
     await job.start({
       quoteId: q.quoteId, prompt: plan.prompt.trim(),
       marks: withMarks && marks.length && size ? marksToJson(marks, size.w, size.h) : undefined,
-      sourcePath: sourcePath ?? undefined, source, mask, annotated, characterSlug: character?.slug,
+      sourcePath: sourcePath ?? undefined, source, mask, annotated, characterSlug: own ? undefined : character?.slug,
       matchSourceSize: matchSize,
-      ...panelJobInput(samples, plan),
+      ...panelJobInput(own ? [] : samples, plan),
     }, n, q.expectedSeconds);
   }, [api, projectId, pv, m, quote, count, planOf, hasMask, hasAnnotations, size, src, marks, sourcePath, character, samples, job, matchSize]);
 
   const generate = () => launch({ kind: 'prompt', prompt });
-  const runQuick = (a: QuickAction) => { setSheet(null); void launch(a === 'outpaint' ? { kind: a, ratio } : { kind: a }); };
+  const runQuick = (a: QuickAction) => {
+    setSheet(null);
+    void launch(a === 'outpaint' ? { kind: a, ratio } : { kind: a }, quickUsesOwnModel(a) ? 1 : count);
+  };
+  // Действие, которого нет ни у одного поставщика каталога, не показываем вовсе
+  const quickActions = QUICK_ACTIONS.filter(a => a !== 'enhanceFaces'
+    || !!catalog?.providers.some(x => providerOps(x)?.includes('enhanceFaces')));
 
   const quickBlock = (a: QuickAction) => {
     if (busy) return 'Идёт генерация';
     if (transforming) return 'Правка ещё сохраняется';
     if (!pv || !m || notConfigured) return 'Рисовать нечем — см. «Чем рисовать»';
-    return quickBlockReason(a, hasImage && !!size, hasMask, explicitModel?.caps?.ops ?? null)
+    return quickBlockReason(a, hasImage && !!size, hasMask, explicitModel?.caps?.ops ?? null, providerOps(pv))
       || (samples.length > samplesMax ? blocked : '');
   };
 
@@ -667,7 +675,7 @@ export function ImageEditor({ projectId, projectName, target, sessionId: openSes
     },
     {
       id: 'quick', title: 'Быстрые действия',
-      body: <QuickActions blockReason={quickBlock} ratio={ratio} onRatio={setRatio} onRun={runQuick} />,
+      body: <QuickActions actions={quickActions} blockReason={quickBlock} ratio={ratio} onRatio={setRatio} onRun={runQuick} />,
     },
     {
       id: 'adjust', title: 'Правка без ИИ',

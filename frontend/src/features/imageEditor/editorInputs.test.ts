@@ -64,6 +64,19 @@ describe('быстрые действия', () => {
     expect(quickBlockReason('outpaint', true, false, ['outpaint'])).toBe('');
   });
 
+  it('«Улучшить лица» — только у поставщика, который умеет, и не зависит от выбранной модели', () => {
+    expect(quickPlan('enhanceFaces', '1:1')).toMatchObject({ op: 'enhanceFaces', useMask: false, prompt: '' });
+    expect(quickBlockReason('enhanceFaces', true, false, null, ['generate', 'edit', 'upscale']))
+      .toBe('Есть только у «Локальных моделей» — выберите их в «Чем рисовать»');
+    // Явно выбранная Qwen-Image лица не правит, но действие берёт свою модель
+    expect(quickBlockReason('enhanceFaces', true, false, ['generate', 'edit'], ['generate', 'edit', 'enhanceFaces'])).toBe('');
+    expect(quickBlockReason('enhanceFaces', false, false, null, ['enhanceFaces'])).toBe('Сначала загрузите картинку');
+    // Чего не умеет поставщик целиком, то не лечится «Авто»
+    expect(quickBlockReason('upscale', true, false, null, ['generate', 'edit', 'enhanceFaces']))
+      .toBe('Этот поставщик так не умеет — возьмите другого в «Чем рисовать»');
+    expect(actionTitle({ kind: 'enhanceFaces' })).toBe('Улучшены лица');
+  });
+
   it('заголовок шага по действию', () => {
     expect(actionTitle({ kind: 'removeBackground' })).toBe('Убран фон');
     expect(actionTitle({ kind: 'outpaint', ratio: '16:9' })).toBe('Дорисовано до 16:9');

@@ -3,12 +3,12 @@
 // Логика входа задачи — в editorInputs.ts.
 
 import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
-import { Check, ChevronDown, ChevronUp, Expand, FolderOpen, Image as ImageIcon, Layers, Plus, Save, Scissors, Search, Sparkles, Upload, X } from 'lucide-react';
+import { Check, ChevronDown, ChevronUp, Expand, FolderOpen, Image as ImageIcon, Layers, Plus, Save, ScanFace, Scissors, Search, Sparkles, Upload, X } from 'lucide-react';
 import { Button, EmptyState, IconButton, IconField, Menu, MenuItem, Modal, ModalActions, SegmentedControl, ICON_SIZE, ICON_STROKE, C, FS, R, SP, api as appApi } from 'aihome_shell/kit';
 import type { ReferenceRole } from './api';
 import { SectionHint } from './EditorSections';
 import {
-  isImagePath, OUTPAINT_RATIOS, QUICK_LABEL, roleShort, SAMPLE_ROLES, stepLabel,
+  isImagePath, OUTPAINT_RATIOS, QUICK_ACTIONS, QUICK_LABEL, roleShort, SAMPLE_ROLES, stepLabel,
   type History, type OutpaintRatio, type QuickAction, type Sample,
 } from './editorInputs';
 
@@ -183,10 +183,12 @@ export function ProjectImagePicker({ projectId, taken, onPick, onClose }: {
 // ── Быстрые действия ──
 
 const QUICK_ICON: Record<QuickAction, typeof X> = {
-  removeBackground: Layers, upscale: Sparkles, removeMarked: Scissors, outpaint: Expand,
+  removeBackground: Layers, upscale: Sparkles, removeMarked: Scissors, outpaint: Expand, enhanceFaces: ScanFace,
 };
 
-export function QuickActions({ blockReason, ratio, onRatio, onRun }: {
+export function QuickActions({ actions = QUICK_ACTIONS, blockReason, ratio, onRatio, onRun }: {
+  // Какие действия показывать: того, чего не умеет ни один поставщик каталога, нет вовсе
+  actions?: QuickAction[];
   // Пусто — действие доступно
   blockReason: (a: QuickAction) => string;
   ratio: OutpaintRatio;
@@ -194,7 +196,6 @@ export function QuickActions({ blockReason, ratio, onRatio, onRun }: {
   onRun: (a: QuickAction) => void;
 }) {
   const [outpaint, setOutpaint] = useState(false);
-  const actions: QuickAction[] = ['removeBackground', 'upscale', 'removeMarked', 'outpaint'];
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs }}>

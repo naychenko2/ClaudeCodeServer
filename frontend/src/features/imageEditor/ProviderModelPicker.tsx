@@ -6,7 +6,7 @@ import { useState, type MouseEvent, type ReactNode } from 'react';
 import { AlertTriangle, Check, ChevronDown, Coins } from 'lucide-react';
 import { Button, Menu, MenuItem, Modal, ICON_SIZE, ICON_STROKE, C, FS, R, SP } from 'aihome_shell/kit';
 import type { ImageEditCatalog, ImageEditModel, ImageEditProvider } from './api';
-import { effectiveProvider, modelBlockReason, money, providerHint, type ProviderChoice } from './format';
+import { effectiveProvider, isFreeUnit, modelBlockReason, money, providerHint, type ProviderChoice } from './format';
 
 interface Props {
   catalog: ImageEditCatalog;
@@ -60,11 +60,14 @@ function ModelItems({ provider, value, hasImage, hasMask, onPick }: {
       {provider.models.map(m => {
         const why = modelBlockReason(m, hasImage, hasMask);
         const price = m.priceHint ? money(m.priceHint.amount, m.priceHint.unit) : undefined;
+        // У локальных моделей цены нет — подсказка говорит, что модель умеет
+        const ops = m.caps?.ops ?? [];
+        const can = isFreeUnit(provider.priceUnit) && ops.includes('generate') && ops.includes('edit') ? 'по тексту и правка' : undefined;
         return (
           <MenuItem key={m.id} icon={tick(m.id === value)} disabled={!!why}
             wrapper={why ? { title: why } : undefined}
             onClick={() => onPick(m.id)}
-            label={<Row name={m.label} hint={why || (m.id === 'auto' ? 'подберём под задачу' : undefined)} aside={price} />} />
+            label={<Row name={m.label} hint={why || (m.id === 'auto' ? 'подберём под задачу' : can)} aside={price} />} />
         );
       })}
     </>

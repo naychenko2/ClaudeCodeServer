@@ -4,20 +4,20 @@
 //
 // Мок-режим: пока драйверов поставщиков нет, живой сервер отдаёт пустой каталог и
 // 409 на запуск. Для работы экрана без драйверов в localStorage ставится
-// `cc-image-editor-mock`: `fal` — в каталоге только fal, `all` — fal и Higgsfield.
+// `cc-image-editor-mock`: `fal` — в каталоге только fal, `all` — fal, Higgsfield и локальные модели.
 // Мок повторяет контракт целиком, включая SignalR-события задачи.
 
 import { request, readStoredToken, onMessage } from 'aihome_shell/kit';
 import type { Session } from '../../types';
 import { transformedSize } from './transforms';
 
-export type ImageEditOp = 'generate' | 'edit' | 'inpaint' | 'outpaint' | 'removeBackground' | 'upscale';
+export type ImageEditOp = 'generate' | 'edit' | 'inpaint' | 'outpaint' | 'removeBackground' | 'upscale' | 'enhanceFaces';
 export type EditMode = 'auto' | 'fast' | 'precise' | 'photoreal';
 export type MaskSupport = 'none' | 'native' | 'asReference';
 export type ReferenceRole = 'character' | 'style' | 'object';
 export type EditOutcome = 'ok' | 'failed' | 'insufficientCredits' | 'rejected' | 'cancelled' | 'unavailable';
 export type EditStage = 'queued' | 'running' | 'downloading';
-export type PriceUnit = 'usd' | 'credits';
+export type PriceUnit = 'usd' | 'credits' | 'free';
 export type ImageEditJobStatus =
   | 'queued' | 'running' | 'downloading' | 'completed' | 'failed' | 'cancelled' | 'interrupted';
 
@@ -88,6 +88,9 @@ export interface ImageEditEstimate {
   unit: string;
   approx: boolean;
   source: 'provider' | 'catalog' | 'history' | 'unknown';
+  // У поставщика без цены (unit = free): время запуска по замерам и длина общей очереди GPU
+  etaSeconds?: number | null;
+  queueLength?: number | null;
 }
 
 export interface ImageEditQuote {
@@ -487,6 +490,12 @@ const MOCK_PROVIDERS: ImageEditProvider[] = [
     { id: 'soul_2', label: 'Soul', caps: caps(['generate', 'edit'], 'none'), priceHint: { amount: 3, unit: 'credits', per: 'image' } },
     { id: 'nano_banana_2', label: 'Nano Banana', caps: caps(ALL_EDIT, 'none'), priceHint: { amount: 1, unit: 'credits', per: 'image' } },
   ] },
+  // Как LocalImageEditor на сервере: Qwen-Image без своего канала маски и FaceDetailer
+  { key: 'local', label: 'Локальные модели', priceUnit: 'free', models: [
+    AUTO_ITEM,
+    { id: 'qwen-image-2.1', label: 'Qwen-Image 2.1', caps: caps(['generate', 'edit', 'inpaint'], 'asReference'), priceHint: { amount: 0, unit: 'free', per: 'image' } },
+    { id: 'face-detailer', label: 'Улучшить лица', caps: { ...caps(['enhanceFaces'], 'none'), maxReferences: 0, maxCount: 1 }, priceHint: { amount: 0, unit: 'free', per: 'image' } },
+  ] },
 ];
 
 function mockMode(): 'fal' | 'all' | null {
@@ -525,7 +534,7 @@ export function createMockApi(mode: 'fal' | 'all'): ImageEditorApi {
   const listeners = new Set<(e: ImageEditEvent) => void>();
   const emit = (e: ImageEditEvent) => listeners.forEach(fn => fn(e));
   const quotes = new Map<string, ImageEditQuote & { count: number }>();
-  const jobs = new Map<string, { job: ImageEditJob; timers: number[] }>();
+  const jobs = new Map<string, { job: ImageEditJob; timers: number[]; leaveQueue: () => void }>();
   let characters: { character: ImageEditCharacter; urls: Map<string, string> }[] = [];
   const delay = <T,>(v: T, ms = 150) => new Promise<T>(r => setTimeout(() => r(v), ms));
   let seq = 0;
@@ -567,12 +576,17 @@ export function createMockApi(mode: 'fal' | 'all'): ImageEditorApi {
     return chat;
   };
 
-  const resolveModel = (p: ImageEditProvider, model: string) =>
-    model === AUTO_MODEL ? p.models[1] : (p.models.find(m => m.id === model) ?? p.models[1]);
+  const resolveModel = (p: ImageEditProvider, model: string, op: ImageEditOp) =>
+    model === AUTO_MODEL
+      ? (p.models.find(m => m.caps?.ops.includes(op)) ?? p.models[1])
+      : (p.models.find(m => m.id === model) ?? p.models[1]);
+  // Очередь локальной видеокарты мока: растёт с каждым запуском и убывает с готовностью
+  let localQueue = 0;
 
   return {
     catalog: () => delay<ImageEditCatalog>({
-      default: { provider: providers.at(-1)?.key ?? null, model: AUTO_MODEL },
+      // Умолчание мока — последний платный: локальные модели выбираются руками
+      default: { provider: providers.filter(x => x.priceUnit !== 'free').at(-1)?.key ?? null, model: AUTO_MODEL },
       providers,
       limits: { maxFileMb: 20, maxReferences: 6, maxCount: 4, heavyFileMb: 5 },
       reason: providers.length ? null : 'no_provider_configured',
@@ -580,13 +594,17 @@ export function createMockApi(mode: 'fal' | 'all'): ImageEditorApi {
     quote: async (_projectId, req) => {
       const p = providers.find(x => x.key === req.provider);
       if (!p) throw Object.assign(new Error('Поставщик рисования не настроен'), { status: 409, body: { code: 'provider_unavailable' } });
-      const m = resolveModel(p, req.model);
+      const m = resolveModel(p, req.model, req.op);
       const per = m.priceHint?.amount ?? 0;
+      const free = p.priceUnit === 'free';
+      const seconds = free ? (req.op === 'enhanceFaces' ? 10 : 15 * req.count) : p.key === 'fal' ? 8 : 12;
       const quote: ImageEditQuote = {
         quoteId: `q${++seq}`, provider: p.key, model: m.id,
-        estimate: { amount: Math.round(per * req.count * 100) / 100, unit: p.priceUnit, approx: true, source: 'catalog' },
+        estimate: free
+          ? { amount: 0, unit: 'free', approx: false, source: 'provider', etaSeconds: seconds, queueLength: localQueue }
+          : { amount: Math.round(per * req.count * 100) / 100, unit: p.priceUnit, approx: true, source: 'catalog' },
         expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
-        expectedSeconds: p.key === 'fal' ? 8 : 12,
+        expectedSeconds: seconds,
       };
       quotes.set(quote.quoteId, { ...quote, count: req.count });
       return delay(quote, p.key === 'fal' ? 120 : 300);
@@ -601,7 +619,10 @@ export function createMockApi(mode: 'fal' | 'all'): ImageEditorApi {
         chatSessionId: input.chatSessionId ?? null, initiator: 'human',
       };
       const origin = { chatSessionId: job.chatSessionId, initiator: job.initiator };
-      const entry = { job, timers: [] as number[] };
+      let queued = q.estimate.unit === 'free';
+      if (queued) localQueue++;
+      const leaveQueue = () => { if (queued) { queued = false; localQueue--; } };
+      const entry = { job, timers: [] as number[], leaveQueue };
       jobs.set(jobId, entry);
       // «сломать» генерацию можно словом в запросе — так проверяется экран ошибки
       const failKind: EditOutcome | null = /кредит/i.test(input.prompt) ? 'insufficientCredits'
@@ -611,6 +632,7 @@ export function createMockApi(mode: 'fal' | 'all'): ImageEditorApi {
       at(200, () => { job.status = 'running'; emit({ type: 'image_edit_progress', jobId, projectId, stage: 'running', ...origin }); });
       if (failKind) {
         at(total / 2, () => {
+          leaveQueue();
           Object.assign(job, { status: 'failed', outcome: failKind, charged: false,
             error: failKind === 'failed' ? 'Сервис не ответил' : 'Не хватает кредитов' });
           emit({ type: 'image_edit_failed', jobId, projectId, outcome: failKind, charged: false, error: job.error, ...origin });
@@ -618,6 +640,7 @@ export function createMockApi(mode: 'fal' | 'all'): ImageEditorApi {
       } else {
         at(total * 0.85, () => { job.status = 'downloading'; emit({ type: 'image_edit_progress', jobId, projectId, stage: 'downloading', ...origin }); });
         at(total, () => {
+          leaveQueue();
           const cost = q.estimate.amount != null ? { amount: q.estimate.amount, unit: q.estimate.unit } : null;
           Object.assign(job, { status: 'completed', outcome: 'ok', charged: true, cost,
             variants: Array.from({ length: q.count }, (_, i) => i) });
@@ -635,6 +658,7 @@ export function createMockApi(mode: 'fal' | 'all'): ImageEditorApi {
       const e = jobs.get(jobId);
       if (!e) throw Object.assign(new Error('Задача не найдена'), { status: 404, body: { code: 'job_not_found' } });
       e.timers.forEach(t => clearTimeout(t));
+      e.leaveQueue();
       Object.assign(e.job, { status: 'cancelled', outcome: 'cancelled', charged: false });
       return delay({ ...e.job }, 50);
     },

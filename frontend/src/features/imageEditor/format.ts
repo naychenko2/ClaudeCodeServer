@@ -1,7 +1,7 @@
 // Тексты и расчёты экрана редактора: цена в единицах поставщика, имена версий,
 // причины недоступности модели. Формулировки — дословно из макета image-editor-v1.
 
-import type { ImageEditCatalog, ImageEditModel, ImageEditOp, ImageEditProvider } from './api';
+import type { ImageEditCatalog, ImageEditEstimate, ImageEditModel, ImageEditOp, ImageEditProvider } from './api';
 import { AUTO_MODEL } from './api';
 
 export const plural = (n: number, one: string, few: string, many: string) => {
@@ -15,26 +15,60 @@ export const plural = (n: number, one: string, few: string, many: string) => {
 
 export const variantsWord = (n: number) => `${n} ${plural(n, 'вариант', 'варианта', 'вариантов')}`;
 
-// «$0.12» у fal, «6 кредитов» у Higgsfield
+// Локальные модели: денег нет, вместо цены — время и очередь (ADR-018 §11)
+export const isFreeUnit = (unit: string) => unit === 'free';
+
+// «$0.12» у fal, «6 кредитов» у Higgsfield, «Бесплатно» у локальных моделей
 export function money(amount: number, unit: string): string {
+  if (isFreeUnit(unit)) return 'Бесплатно';
   if (unit === 'usd') return `$${amount.toFixed(2)}`;
   const n = Math.round(amount * 100) / 100;
   return `${n} ${plural(n, 'кредит', 'кредита', 'кредитов')}`;
 }
 
+// Время и очередь бесплатного запуска — из котировки; до котировки их нет
+export type FreeLoad = Pick<ImageEditEstimate, 'etaSeconds' | 'queueLength'>;
+
+// «≈ 40 с», «≈ 2 мин»
+export function etaText(seconds: number): string {
+  return seconds < 60 ? `≈ ${Math.max(1, Math.round(seconds))} с` : `≈ ${Math.round(seconds / 60)} мин`;
+}
+
+// «Бесплатно · ≈ 1 мин · в очереди 2»; пустая очередь не пишется, время неизвестно — «уточняется»
+export function freeSum(load?: FreeLoad | null): string {
+  const eta = load?.etaSeconds;
+  const queue = load?.queueLength;
+  return ['Бесплатно', eta != null && eta > 0 ? etaText(eta) : 'время уточняется', queue ? `в очереди ${queue}` : null]
+    .filter(Boolean).join(' · ');
+}
+
 // Только сумма: «≈ $0.12»; сумма неизвестна — честно так и пишем
-export function priceSum(amount: number | null | undefined, unit: string, approx: boolean): string {
+export function priceSum(amount: number | null | undefined, unit: string, approx: boolean, load?: FreeLoad | null): string {
+  if (isFreeUnit(unit)) return freeSum(load);
   if (amount == null) return 'Цена станет известна после запуска';
   return `${approx ? '≈ ' : ''}${money(amount, unit)}`;
 }
 
 // «≈ $0.12 · 3 варианта»
-export function priceText(amount: number | null | undefined, unit: string, approx: boolean, count: number): string {
-  return `${priceSum(amount, unit, approx)} · ${variantsWord(count)}`;
+export function priceText(amount: number | null | undefined, unit: string, approx: boolean, count: number, load?: FreeLoad | null): string {
+  return `${priceSum(amount, unit, approx, load)} · ${variantsWord(count)}`;
 }
 
 export const providerHint = (p: ImageEditProvider) =>
-  p.priceUnit === 'usd' ? 'оплата в долларах' : p.priceUnit === 'credits' ? 'оплата в кредитах' : '';
+  p.priceUnit === 'usd' ? 'оплата в долларах' : p.priceUnit === 'credits' ? 'оплата в кредитах'
+    : isFreeUnit(p.priceUnit) ? 'бесплатно, на своей видеокарте' : '';
+
+// Операции поставщика — объединение caps его моделей; null — у какой-то модели caps нет,
+// и честно сказать, чего поставщик не умеет, нельзя
+export function providerOps(p: ImageEditProvider): ImageEditOp[] | null {
+  const ops = new Set<ImageEditOp>();
+  for (const m of p.models) {
+    if (m.id === AUTO_MODEL) continue;
+    if (!m.caps) return null;
+    m.caps.ops.forEach(op => ops.add(op));
+  }
+  return [...ops];
+}
 
 // Операция по состоянию холста: с нуля — генерация, кисть — инпейнт, иначе правка
 export function pickOp(hasImage: boolean, hasMask: boolean): ImageEditOp {
@@ -52,6 +86,8 @@ export const isRemovalPrompt = (prompt: string) => REMOVAL.test(prompt) && !OTHE
 // сервером и недоступной не бывает.
 export function modelBlockReason(m: ImageEditModel, hasImage: boolean, hasMask: boolean): string {
   if (m.id === AUTO_MODEL || !m.caps) return '';
+  // Модель одного быстрого действия (FaceDetailer) промптом не запускается
+  if (m.caps.ops.length && m.caps.ops.every(op => op === 'enhanceFaces')) return 'Запускается кнопкой «Улучшить лица» в быстрых действиях';
   if (!hasImage && !m.caps.ops.includes('generate')) return 'Только правит готовую картинку — сначала загрузите её';
   if (hasImage && hasMask && m.caps.mask === 'none') return 'Не правит по маске — сотрите кисть или возьмите другую модель';
   return '';

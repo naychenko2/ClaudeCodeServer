@@ -269,8 +269,14 @@ public static class AgentProgram
         await using var sidecar = await SidecarHost.StartAsync(grants, device, loggers, ct: stop.Token);
         log.LogInformation("Сайдкар слушает {Url}", sidecar.Url);
 
+        // Одна политика корней на исполнение ходов и на файлы проектов (ADR-016 §5)
+        var policy = new AgentPathPolicy(new AgentRootsStore(paths.RootsFile));
         var executor = new TurnExecutor(
-            new ExecOptions { TurnsRoot = paths.TurnsRoot, ConfigDirectory = paths.CliProfile, SidecarUrl = () => sidecar.Url },
+            new ExecOptions
+            {
+                TurnsRoot = paths.TurnsRoot, ConfigDirectory = paths.CliProfile, SidecarUrl = () => sidecar.Url,
+                PathPolicy = policy,
+            },
             new ManagedCliLeaseSource(managedCli), grants, journal, loggers.CreateLogger<TurnExecutor>());
         AppDomain.CurrentDomain.ProcessExit += (_, _) => executor.KillAll();
 
@@ -282,7 +288,6 @@ public static class AgentProgram
         // переживших агента добьёт зачистка при следующем старте (SweepLeftovers выше)
         var launchers = new AgentLauncherFactory(journal, activity);
         AppDomain.CurrentDomain.ProcessExit += (_, _) => launchers.KillAll();
-        var policy = new AgentPathPolicy(new AgentRootsStore(paths.RootsFile));
         var git = new GitService(launchers, loggers.CreateLogger<GitService>());
         var projectFiles = new AgentProjectFiles(new FileService(git, logger: loggers.CreateLogger<FileService>()), policy);
         using var watchers = new AgentFileWatchers(control, loggers.CreateLogger<AgentFileWatchers>());

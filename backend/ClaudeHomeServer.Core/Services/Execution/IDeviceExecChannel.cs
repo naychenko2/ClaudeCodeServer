@@ -81,6 +81,8 @@ public enum DeviceExecRefusal
     NoRelayCapability,
     /// <summary>Агент устройства ниже минимальной версии: обновляется или его надо обновить.</summary>
     AgentOutdated,
+    /// <summary>Агент отказал ходу по кадру spawn: папка вне разрешённых корней машины, нет копии CLI.</summary>
+    AgentRefused,
 }
 
 /// <summary>Отказ открыть канал исполнения; <see cref="Exception.Message"/> — готовый текст для человека.</summary>

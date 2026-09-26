@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -118,6 +119,9 @@ public sealed class RemoteProcessRunner : IProcessLauncher
             // Отказ неготового устройства — DeviceExecRefusedException с причиной, до старта ретранслятора
             stream = _channel.OpenAsync(_ownerId, _deviceId).GetAwaiter().GetResult();
             stream.SendAsync(DeviceExecFrameChannel.Control, control).AsTask().GetAwaiter().GetResult();
+            // Отказ агента по кадру spawn (папка вне разрешённых корней, нет копии CLI) — тоже
+            // DeviceExecRefusedException с его причиной: иначе человек увидит «процесс упал»
+            stream = AwaitAgentVerdictAsync(stream).GetAwaiter().GetResult();
             var exec = RemoteExec.Launch(ExecKey(turnId), turnId, stream, spec, _nodePath, _relayScript);
             Execs[exec.Key] = exec;
             exec.Run(() =>
@@ -134,6 +138,58 @@ public sealed class RemoteProcessRunner : IProcessLauncher
             if (stream is not null) _ = stream.DisposeAsync().AsTask();
             throw;
         }
+    }
+
+    private static readonly TimeSpan VerdictTimeout = TimeSpan.FromSeconds(15);
+
+    // Первый кадр агента после spawn — Info (ход запущен) либо stderr с Exit и Error (отказ).
+    // Прочитанное до вердикта не теряется: его первым отдаёт обёртка потока. Нет ответа за
+    // потолок — решает дальше ретранслятор, как до этой проверки.
+    private static async Task<IDeviceExecStream> AwaitAgentVerdictAsync(IDeviceExecStream stream)
+    {
+        var head = new List<DeviceExecFrame>();
+        using var cts = new CancellationTokenSource(VerdictTimeout);
+        try
+        {
+            await foreach (var frame in stream.ReadAllAsync(cts.Token))
+            {
+                head.Add(frame);
+                if (frame.Channel == DeviceExecFrameChannel.Stderr) continue;
+                if (frame.Channel == DeviceExecFrameChannel.Exit && ExitError(frame) is { } error)
+                    throw new DeviceExecRefusedException(DeviceExecRefusal.AgentRefused, error);
+                break;
+            }
+        }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested) { }
+        return head.Count == 0 ? stream : new PrefetchedStream(stream, head);
+    }
+
+    private static string? ExitError(DeviceExecFrame frame)
+    {
+        try
+        {
+            var exit = DeviceExecJson.Deserialize<DeviceExecExit>(frame.Payload.Span);
+            return string.IsNullOrWhiteSpace(exit?.Error) ? null : exit.Error;
+        }
+        catch (System.Text.Json.JsonException) { return null; }
+    }
+
+    private sealed class PrefetchedStream(IDeviceExecStream inner, IReadOnlyList<DeviceExecFrame> head) : IDeviceExecStream
+    {
+        private IReadOnlyList<DeviceExecFrame>? _head = head;
+
+        public string ExecId => inner.ExecId;
+
+        public ValueTask SendAsync(DeviceExecFrameChannel channel, ReadOnlyMemory<byte> payload, CancellationToken ct = default) =>
+            inner.SendAsync(channel, payload, ct);
+
+        public async IAsyncEnumerable<DeviceExecFrame> ReadAllAsync([EnumeratorCancellation] CancellationToken ct = default)
+        {
+            foreach (var frame in Interlocked.Exchange(ref _head, null) ?? []) yield return frame;
+            await foreach (var frame in inner.ReadAllAsync(ct)) yield return frame;
+        }
+
+        public ValueTask DisposeAsync() => inner.DisposeAsync();
     }
 
     // Маршрут и токен хода — до запуска на устройстве. Модель — подсказка из --model: провайдера

@@ -4,7 +4,7 @@ import type { Project } from '../types';
 import { useDeviceAgent, probeDeviceAgent, type DeviceAgentStatus } from '../lib/deviceAgent';
 import { isRootNotAllowed } from '../lib/agentInstall';
 import { FLAGS, useFeature } from '../lib/featureFlags';
-import { SP } from '../lib/design';
+import { C, FS, SP } from '../lib/design';
 import { EmptyState, Button } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { CapabilityUnavailable } from './CapabilityGate';
@@ -59,6 +59,9 @@ export function DeviceAgentGate({ project, children, relayTitle }: Props) {
   const reason = 'reason' in status ? status.reason : null;
   // Агент отказал: папка проекта не под разрешёнными корнями машины — даём готовую команду
   const rootsHint = agentMode && isRootNotAllowed(reason);
+  // Ретранслятор включается и там, где агента нет вовсе: присутствие «не здесь» неотличимо
+  // от «агент не поставлен», поэтому подсказка установки видна на постоянной плашке, а не мелькает
+  const installHint = agentMode && !rootsHint && (status.kind === 'relay' || status.kind === 'relay-unavailable');
   const action = rootsHint
     ? (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: SP.md, maxWidth: 420 }}>
@@ -66,12 +69,32 @@ export function DeviceAgentGate({ project, children, relayTitle }: Props) {
         {retry}
       </div>
     )
-    : retry;
+    : installHint
+      ? (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: SP.md, maxWidth: 420 }}>
+          <div data-device-agent-install-hint style={{ fontSize: FS.sm, color: C.textMuted, textAlign: 'center', lineHeight: 1.5 }}>
+            Если это компьютер проекта — поставьте агента AI Home: Устройства → Подключить компьютер
+          </div>
+          <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap', justifyContent: 'center' }}>
+            <Button variant="secondary" size="sm" leftIcon={<Plug size={14} strokeWidth={2.2} />} onClick={() => setDevicesOpen(true)}>
+              Устройства
+            </Button>
+            {retry}
+          </div>
+        </div>
+      )
+      : retry;
+  const devicesModal = devicesOpen && <DevicesModal onClose={() => setDevicesOpen(false)} />;
 
   if (relayTitle !== undefined && status.kind === 'relay') return <>{children}</>;
   // Устройство не в сети или агент без ретранслятора — та же плашка «недоступно с причиной», что у матрицы
   if (relayTitle !== undefined && status.kind === 'relay-unavailable')
-    return <CapabilityUnavailable feature="relay" title={relayTitle} reason={status.reason} action={action} />;
+    return (
+      <>
+        <CapabilityUnavailable feature="relay" title={relayTitle} reason={status.reason} action={action} />
+        {devicesModal}
+      </>
+    );
   const view = describe(status, agentMode);
   if (!view) return <>{children}</>;
   const unreachableAction = agentMode && status.kind === 'unreachable'
@@ -93,7 +116,7 @@ export function DeviceAgentGate({ project, children, relayTitle }: Props) {
         subtitle={rootsHint ? 'Агент на этом компьютере открывает только папки, которые вы разрешили сами' : view.subtitle}
         action={status.kind === 'checking' ? undefined : unreachableAction ?? action}
       />
-      {devicesOpen && <DevicesModal onClose={() => setDevicesOpen(false)} />}
+      {devicesModal}
     </div>
   );
 }

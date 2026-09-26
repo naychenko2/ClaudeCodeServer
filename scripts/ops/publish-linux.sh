@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Сборка и публикация сервера на Linux-хосте — аналог фаз building/switching из
 # deploy-agent.ps1 (без трея, ConPtyBridge и schtasks) — плюс сборка релизов агента
-# устройства (ADR-016, задача AD-2: 1.<rev-count>.0+sha8, win-x64 zip, linux-x64 tar.gz).
+# устройства (ADR-016, задача AD-2: 1.<rev-count>.0, sha8 — в InformationalVersion, win-x64 zip, linux-x64 tar.gz).
 #
 #   scripts/ops/publish-linux.sh [PUBLISH_DIR]
 #
@@ -40,16 +40,17 @@ log()  { printf '%s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
 fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
-# Версия выкатки (Р1). Чистое дерево → 1.N.0+sha8, грязное → 1.N.0-dirty.<TS>.
+# Версия выкатки (Р1). Чистое дерево → 1.N.0, грязное → 1.N.0-dirty.<TS>. Хвост +sha8
+# едет только в InformationalVersion: в манифесте и в пути каталога версия каноническая,
+# иначе AgentReleaseCatalog сочтёт указатель повреждённым.
 agent_version() {
-  local rev sha ts
+  local rev ts
   rev=$(git -C "$REPO" rev-list --count HEAD)
-  sha=$(git -C "$REPO" rev-parse --short=8 HEAD)
   if [[ -n "$(git -C "$REPO" status --porcelain)" ]]; then
     ts=$(date -u +%Y%m%d%H%M%S)
     printf '1.%s.0-dirty.%s' "$rev" "$ts"
   else
-    printf '1.%s.0+%s' "$rev" "$sha"
+    printf '1.%s.0' "$rev"
   fi
 }
 
@@ -187,7 +188,8 @@ write_pointer() {
 
 # Выпуск релиза агента целиком (win-x64 + linux-x64 → manifest.json → указатель в staging).
 publish_agent_release() {
-  local version="$1" sha8="$2" manifest_dir="$AGENT_RELEASES/$version"
+  local version="$1" sha8="$2"
+  local manifest_dir="$AGENT_RELEASES/$version"
   local fail_rids=()
   local win_path="" lin_path=""
   local win_sha="" lin_sha="" win_size="" lin_size=""
@@ -280,9 +282,9 @@ rotate_releases() {
   shopt -u nullglob
   (( ${#versions[@]} <= AGENT_KEEP )) && return 0
 
-  # Лексикографический обратный сорт. Версии 1.N.0+... сортируются по тому же рецепту,
-  # что rev-list --count: новые коммиты дают больший N.
-  IFS=$'\n' read -r -d '' -a sorted < <(printf '%s\n' "${versions[@]}" | sort -r && printf '\0')
+  # Обратный сорт по версиям (sort -V): новые коммиты дают больший N, а лексикографический
+  # сорт поставил бы 1.999.0 выше 1.1000.0.
+  IFS=$'\n' read -r -d '' -a sorted < <(printf '%s\n' "${versions[@]}" | sort -rV && printf '\0')
   unset IFS
 
   # Первые AGENT_KEEP (свежайшие) оставляем, остальные удаляем.

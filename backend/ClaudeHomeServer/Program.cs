@@ -1176,6 +1176,9 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpSessionAcce
     ClaudeHomeServer.Services.Composition.McpSessionAccessorAdapter>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpPersonaBindings,
     ClaudeHomeServer.Services.Composition.McpPersonaBindingsAdapter>();
+// Гейт делегированного хода для тулсетов из модулей (image-editor, ADR-018 §10.1)
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IDelegatedTurnGate,
+    ClaudeHomeServer.Services.Composition.DelegatedTurnGateAdapter>();
 
 // Этап 5, волна E: forwarder-регистрации двух Core-интерфейсов выноса Notes.
 // Реализации (`TaskBridge` поверх TaskManager, `NotesHubNotifier` поверх IHubContext<SessionHub>)

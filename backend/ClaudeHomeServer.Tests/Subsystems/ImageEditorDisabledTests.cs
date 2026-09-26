@@ -55,8 +55,7 @@ public class ImageEditorDisabledTests : IDisposable
     }
 
     // Мёртвый MCP-сервер в конфиге хода дал бы «fetch failed» у всех инструментов (ADR-018 §10.5,
-    // риск 8). Контрольной половины пока нет: тулсет image-editor регистрируется в шаге 13, там же
-    // появится BuildImageEditorContext с гейтом «тулсет есть в реестре» и его проверка → null.
+    // риск 8): без модуля нет тулсета, а без тулсета BuildImageEditorContext не собирает сервер
     [Fact]
     public void Выключенный_модуль_не_даёт_тулсета_image_editor()
     {
@@ -64,6 +63,33 @@ public class ImageEditorDisabledTests : IDisposable
 
         registry.Find("image-editor").Should().BeNull();
         registry.Names.Should().NotContain("image-editor");
+        _enabled.Services.GetRequiredService<McpToolsetRegistry>().Find("image-editor")
+            .Should().NotBeNull("контроль: включённый модуль регистрирует тулсет");
+    }
+
+    [Fact]
+    public void Выключенный_модуль_не_даёт_сервера_в_ход_чата_картинки()
+    {
+        CharacterEndpointsTests.EnableFlag(_disabled, TestWebApplicationFactory.TestUsername);
+        CharacterEndpointsTests.EnableFlag(_enabled, TestWebApplicationFactory.TestUsername);
+
+        ContextFor(_disabled).Should().BeNull("тулсета нет в реестре — сервер в ход не едет");
+        ContextFor(_enabled).Should().NotBeNull("контроль: тот же чат при загруженном модуле сервер получает");
+    }
+
+    private static ClaudeHomeServer.Services.Llm.ImageEditorMcpContext? ContextFor(TestWebApplicationFactory factory)
+    {
+        var ownerId = factory.Services.GetRequiredService<ClaudeHomeServer.Services.UserStore>()
+            .FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
+        var chat = new ClaudeHomeServer.Models.Session
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            OwnerId = ownerId,
+            ProjectId = "p1",
+            ImageChat = new ClaudeHomeServer.Models.SessionImageChat { CurrentPath = "images/hero.png" },
+        };
+        return factory.Services.GetRequiredService<ClaudeHomeServer.Services.SessionManager>()
+            .BuildImageEditorContext(ownerId, chat);
     }
 
     [Theory]

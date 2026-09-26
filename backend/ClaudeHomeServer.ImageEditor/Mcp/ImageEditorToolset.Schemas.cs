@@ -5,13 +5,12 @@ namespace ClaudeHomeServer.Services.ImageEditor.Mcp;
 
 /// <summary>
 /// Схемы инструментов сервера image-editor (ADR-018 §2): чат картинки, генерация агентом.
-/// Контракт волны 0 — сам тулсет (вызовы, контекст из хвоста маршрута, потолки запусков)
-/// появится в волне 2. Состав фиксирован и не зависит от хода: сервер либо есть в чате
-/// картинки целиком, либо его нет.
+/// Вызовы — ImageEditorToolset.cs. Состав фиксирован и не зависит от хода: сервер либо есть
+/// в чате картинки целиком, либо его нет.
 /// </summary>
 public sealed partial class ImageEditorToolset
 {
-    public const string ServerName = "image-editor";
+    public const string ServerName = McpEndpoints.ImageEditorName;
 
     public const string ToolState = "image_state";
     public const string ToolGenerate = "image_generate";

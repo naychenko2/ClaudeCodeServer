@@ -576,6 +576,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     public event Action<Session>? OnSessionDeleted;
 
     private readonly FeatureFlagService _flags;
+    private readonly IServiceProvider? _services;
+    private Services.Mcp.Http.McpToolsetRegistry? _mcpToolsets;
     private readonly PersonaManager _personas;
     private readonly PersonaBindingsService _bindings;
     private readonly ClaudeSubscriptionPool _subscriptionPool;
@@ -751,9 +753,13 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // TeamPlanService работает на NullLogger.
         ILoggerFactory? loggerFactory = null,
         // Опционально (в тестах не передаётся): готовность устройства локального проекта
-        Execution.IProjectDeviceGate? deviceGate = null)
+        Execution.IProjectDeviceGate? deviceGate = null,
+        // Корень DI: реестр MCP-тулсетов резолвится лениво (BuildImageEditorContext) — прямая
+        // зависимость дала бы цикл SessionManager → реестр → тулсеты → SessionManager
+        IServiceProvider? services = null)
     {
         _deviceGate = deviceGate;
+        _services = services;
         _turnEvents = turnEvents;
         _loggerFactory = loggerFactory;
         _taskLookup = tasks is null ? null : new Composition.TaskLookupAdapter(tasks);
@@ -1083,6 +1089,21 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         return new HiggsfieldMcpContext(apiUrl, () => GetServiceToken(ownerId!), HttpEndpointUsable(apiUrl));
     }
 
+    // MCP-сервер редактора картинок (ADR-018 §2, §10.2): только в чате картинки (тип чата
+    // фиксирован с создания), при флаге image-editor у владельца и загруженном модуле. Последнее —
+    // наличие тулсета в реестре: модуль выключен, а контекст собран — CLI получил бы сервер,
+    // отвечающий 404, и «fetch failed» у всех инструментов хода. Все условия — свойства сессии,
+    // владельца и процесса; от хода состав не зависит (McpToolsetStabilityTests).
+    internal ImageEditorMcpContext? BuildImageEditorContext(string? ownerId, Session session)
+    {
+        if (ownerId is null || session.ImageChat is null || string.IsNullOrEmpty(session.ProjectId)) return null;
+        if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.ImageEditor)) return null;
+        _mcpToolsets ??= _services?.GetService<Services.Mcp.Http.McpToolsetRegistry>();
+        if (_mcpToolsets?.Find(McpEndpoints.ImageEditorName) is null) return null;
+        var apiUrl = ResolveTasksApiUrl(ownerId);
+        return new ImageEditorMcpContext(apiUrl, () => GetServiceToken(ownerId), HttpEndpointUsable(apiUrl));
+    }
+
     // Допускает ли АДРЕС бэкенда http-транспорт (ADR-012) — СХЕМА и форма строки, без
     // рубильника. Не http — значит https: боевой серт выписан на внешний домен, CLI упрётся
     // в ERR_TLS_CERT_ALTNAME_INVALID и спрячет инструмент от модели МОЛЧА, а *.naychenko.me
@@ -1122,13 +1143,13 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         WorkspaceMcpContext? workspace = null, NotificationsMcpContext? notifications = null,
         CodeGraphMcpContext? codeGraph = null, DifyMcpContext? dify = null,
         WatchMcpContext? watch = null, WebSearchMcpContext? webSearch = null,
-        HiggsfieldMcpContext? higgsfield = null) =>
+        HiggsfieldMcpContext? higgsfield = null, ImageEditorMcpContext? imageEditor = null) =>
         widgets is { UseHttp: true } || memory is { UseHttp: true }
         || tasks is { UseHttp: true } || notes is { UseHttp: true } || personas is { UseHttp: true }
         || workspace is { UseHttp: true } || notifications is { UseHttp: true }
         || codeGraph is { UseHttp: true } || dify is { UseHttp: true }
         || watch is { UseHttp: true } || webSearch is { UseHttp: true }
-        || higgsfield is { UseHttp: true };
+        || higgsfield is { UseHttp: true } || imageEditor is { UseHttp: true };
 
     // Браузер (плагин playwright): нужен по роли тестировщику, остальным персонам — нет.
     // Ключ-надстройка «browser» с дефолтом по пресету (SectionEnabled → SpecialtySections),
@@ -4003,6 +4024,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         var watchMcp = BuildWatchContext(ownerId);
         var webSearchMcp = BuildWebSearchContext(ownerId, persona.Persona);
         var higgsfieldMcp = BuildHiggsfieldContext(ownerId, persona.Persona);
+        var imageEditorMcp = BuildImageEditorContext(ownerId, session);
         var memoryMcp = persona.Memory ?? BuildTeamMemoryContext(ownerId, session.ProjectId);
         var tasksMcp = TasksMcpEnabled(ownerId, session, persona.Persona)
             ? BuildTasksContext(ownerId, session.ProjectId, persona.Persona) : null;
@@ -4042,7 +4064,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             EnqueueBypass: BuildEnqueueBypass(session.Id),
             OrchestrationDone: BuildOrchestrationDone(session.Id),
             HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp,
-                workspace, notificationsMcp, codeGraphMcp, difyMcp, watchMcp, webSearchMcp, higgsfieldMcp),
+                workspace, notificationsMcp, codeGraphMcp, difyMcp, watchMcp, webSearchMcp, higgsfieldMcp,
+                imageEditorMcp),
             HttpMcpEnabledProvider: HttpMcpEnabled,
             // Материалы контекста — только у проектных чатов (адреса file/task живут внутри
             // проекта); во внепроектной ветке восстановления провайдер не передаётся вовсе
@@ -4051,6 +4074,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             WatchMcp: watchMcp,
             WebSearchMcp: webSearchMcp,
             HiggsfieldMcp: higgsfieldMcp,
+            ImageEditorMcp: imageEditorMcp,
             // Корень ГЛАВНОЙ ветки проекта — fallback для slice графа кода, пока свой граф
             // worktree-ветки не построен (ADR-003). У не-worktree чата совпадает с rootPath,
             // fallback сводится к no-op в CodeGraphPromptProvider.GetSliceAsync.
@@ -5550,6 +5574,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             var watchMcp = BuildWatchContext(project.OwnerId);
             var webSearchMcp = BuildWebSearchContext(project.OwnerId, persona.Persona);
             var higgsfieldMcp = BuildHiggsfieldContext(project.OwnerId, persona.Persona);
+            var imageEditorMcp = BuildImageEditorContext(project.OwnerId, entry.Info);
             var memoryMcp = persona.Memory ?? BuildTeamMemoryContext(project.OwnerId, project.Id);
             var tasksMcp = TasksMcpEnabled(project.OwnerId, entry.Info, persona.Persona)
                 ? BuildTasksContext(project.OwnerId, project.Id, persona.Persona) : null;
@@ -5587,13 +5612,15 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 EnqueueBypass: BuildEnqueueBypass(sessionId),
                 OrchestrationDone: BuildOrchestrationDone(sessionId),
                 HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp,
-                    workspace, notificationsMcp, codeGraphMcp, difyMcp, watchMcp, webSearchMcp, higgsfieldMcp),
+                    workspace, notificationsMcp, codeGraphMcp, difyMcp, watchMcp, webSearchMcp, higgsfieldMcp,
+                    imageEditorMcp),
                 HttpMcpEnabledProvider: HttpMcpEnabled,
                 ChatContextProvider: BuildChatContextProvider(sessionId),
                 Events: _turnEvents,
                 WatchMcp: watchMcp,
                 WebSearchMcp: webSearchMcp,
                 HiggsfieldMcp: higgsfieldMcp,
+                ImageEditorMcp: imageEditorMcp,
                 // Корень ГЛАВНОЙ ветки проекта — fallback для slice графа кода, пока свой граф
                 // worktree-ветки не построен (ADR-003).
                 MainRootPath: projectRoot,

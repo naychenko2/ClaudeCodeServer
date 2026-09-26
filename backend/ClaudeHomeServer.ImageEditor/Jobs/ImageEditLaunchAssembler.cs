@@ -7,8 +7,8 @@ using ClaudeHomeServer.Services.Images.Editing.Raster;
 
 namespace ClaudeHomeServer.Services.ImageEditor;
 
-// Запуск генерации — одна сборка входа на всех (ADR-018 §2): ручка POST …/jobs и будущий
-// MCP-инструмент image_generate идут через неё. Две сборки разошлись бы в проверке путей,
+// Запуск генерации — одна сборка входа на всех (ADR-018 §2): ручка POST …/jobs и
+// MCP-инструмент image_generate (ImageEditorToolset) идут через неё. Две сборки разошлись бы в проверке путей,
 // лимитов и владения чатом, а это ровно те места, где дыра стоит денег.
 //
 // Порядок отказов прежний, как в ImageEditorController.Start до выноса: поставщик → исполнитель

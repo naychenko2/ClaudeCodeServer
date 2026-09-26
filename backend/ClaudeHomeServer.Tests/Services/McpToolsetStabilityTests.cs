@@ -365,6 +365,29 @@ public class McpToolsetStabilityTests
     }
 
     /// <summary>
+    /// Сервер редактора картинок (ADR-018 §2, §10.2) едет в ход по свойствам сессии, владельца и
+    /// процесса: тип чата, флаг image-editor, тулсет в реестре. Признак хода («редактор открыт»,
+    /// «идёт генерация», глубина делегирования) перезапускал бы CLI со всеми серверами.
+    /// </summary>
+    [SkippableFact]
+    public void СерверРедактораКартинок_ГейтитсяПоСессииФлагуИРеестру()
+    {
+        var path = FindSource("Services", "SessionManager.cs");
+        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+
+        var body = MethodBody(File.ReadAllText(path!),
+            "internal ImageEditorMcpContext? BuildImageEditorContext");
+
+        body.Should().Contain("ImageChat", "сервер есть только в чате картинки");
+        body.Should().Contain("FeatureFlagKeys.ImageEditor", "флаг владельца гейтит сервер");
+        body.Should().Contain("McpEndpoints.ImageEditorName",
+            "модуль не загружен — тулсета нет в реестре, и сервер в ход не едет");
+        body.Should().NotContain("_currentTurn", "состояние хода не должно влиять на состав серверов");
+        body.Should().NotContain("TurnDelegation", "гейт делегирования живёт в CallAsync тулсета");
+        body.Should().NotContain("IsBusy", "идущий ход не должен влиять на состав серверов");
+    }
+
+    /// <summary>
     /// Провайдер сабагентов-консультантов (pmem-серверы + --add-dir) гейтится тем же
     /// ConsultantsEnabled, а не собственной копией правила.
     /// </summary>
@@ -393,9 +416,16 @@ public class McpToolsetStabilityTests
     {
         var dir = FindDir("Services", "Mcp", "Http");
         Skip.If(dir is null, "Services/Mcp/Http не найден (сборка вне дерева репозитория)");
+        // Тулсеты модулей живут в своих сборках (ADR-018 §10.2) — их тела проверяются тем же правилом
+        var imageEditor = FindDirIn("ClaudeHomeServer.ImageEditor", "Mcp");
+        imageEditor.Should().NotBeNull("тулсет редактора картинок обязан попасть в проверку тел ToolsFor");
+        var files = Directory.GetFiles(dir!.FullName, "*.cs")
+            .Concat(Directory.GetFiles(imageEditor!.FullName, "*.cs"))
+            .ToList();
+        files.Should().Contain(f => Path.GetFileName(f) == "ImageEditorToolset.cs");
 
         var checkedAny = false;
-        foreach (var file in Directory.GetFiles(dir!.FullName, "*.cs"))
+        foreach (var file in files)
         {
             var source = File.ReadAllText(file);
             // Только РЕАЛИЗАЦИИ (public-члены классов): декларация интерфейса в
@@ -486,6 +516,18 @@ public class McpToolsetStabilityTests
             "состояние делегирования не смеет влиять на состав инструментов");
         code.Should().NotContain("_currentTurn",
             "состояние хода не должно влиять на состав инструментов");
+    }
+
+    private static DirectoryInfo? FindDirIn(string assembly, params string[] relative)
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null)
+        {
+            var candidate = Path.Combine([dir.FullName, "backend", assembly, .. relative]);
+            if (Directory.Exists(candidate)) return new DirectoryInfo(candidate);
+            dir = dir.Parent;
+        }
+        return null;
     }
 
     // Каталог по пути от корня репозитория (FindSource ищет файл — этот ищет папку)

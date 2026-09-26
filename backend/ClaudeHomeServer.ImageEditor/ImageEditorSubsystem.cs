@@ -56,5 +56,8 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
         services.AddSingleton(sp => new Chats.ImageChatStateStore(sp.GetRequiredService<ImageEditWorkspace>()));
         services.AddSingleton<ImageEditLaunchAssembler>();
         services.AddPromptSectionContributor<Chats.ImageEditorStateContributor>();
+        // MCP-сервер редактора для агента чата картинки (ADR-018 §10.2): маршрут общий,
+        // POST /mcp/image-editor/{sessionId}, реестр Main находит тулсет среди IMcpToolset
+        services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset, Mcp.ImageEditorToolset>();
     }
 }

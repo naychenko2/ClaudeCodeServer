@@ -156,6 +156,12 @@ public sealed record WebSearchMcpContext(string ApiUrl, Func<string> TokenFactor
 // TokenFactory/UseHttp — тот же идиом, что у websearch: сервисный JWT владельца Kestrel.
 public sealed record HiggsfieldMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp);
 
+// Контекст MCP-сервера редактора картинок (ADR-018 §2, §10.2): тулсет живёт в модуле, сессия
+// едет хвостом URL (/mcp/image-editor/{sessionId}). null — не чат картинки, флаг image-editor у
+// владельца выключен или модуль не загружен (тулсета нет в реестре — иначе «fetch failed» у
+// всего хода). Всё это — свойства сессии, владельца и процесса, не хода. stdio-ветки нет.
+public sealed record ImageEditorMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp);
+
 // Контекст MCP-сервера графа кода (codegraph_find/neighbors/hubs): адрес API, сервисный
 // токен владельца и проект, чей граф доступен инструментами. ProjectId обязателен —
 // граф ключуется проектом, в чате вне проекта сервер не подключается.
@@ -354,6 +360,8 @@ public sealed record LlmSessionContext(
     // Наличие контекста — свойство инстанса (EnsureFresh) и персоны (ReadOnly) — инвариант
     // стабильности состава не нарушается: оба стабильны в рамках сессии.
     HiggsfieldMcpContext? HiggsfieldMcp = null,
+    // MCP-сервер редактора картинок: только в чате картинки (ADR-018 §2)
+    ImageEditorMcpContext? ImageEditorMcp = null,
     // Корень сервера (AppContext.BaseDirectory, не IHostEnvironment.ContentRootPath —
     // при `dotnet run` это bin/Debug/net10.0, у IHostEnvironment — папка проекта) — для
     // BareMode: SystemPromptFile поставляется с продуктом и живёт в репозитории/публикации

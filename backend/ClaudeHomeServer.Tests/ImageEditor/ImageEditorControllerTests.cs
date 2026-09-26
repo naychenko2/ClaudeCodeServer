@@ -86,6 +86,17 @@ public class ImageEditorControllerTests : IDisposable
             Calls.Enqueue(request);
             return ImageEditCallResult<ImageEditSaveResultDto>.Ok(new ImageEditSaveResultDto("hero.v2.png"));
         }
+
+        public ImageEditCallResult<ImageEditSaveResultDto> SaveAs(
+            string projectRoot, string? folder, string? fileName, EditedImage image)
+        {
+            Calls.Enqueue(new ImageEditSaveRequest(null, 0, null, folder, fileName, ImageEditSaveModes.As));
+            return ImageEditCallResult<ImageEditSaveResultDto>.Ok(new ImageEditSaveResultDto("hero.png"));
+        }
+
+        public ImageEditCallResult<SaveCheckResponse> Check(
+            string projectRoot, string? folder, string? fileName, string extension) =>
+            ImageEditCallResult<SaveCheckResponse>.Ok(new SaveCheckResponse("hero.png", false, null));
     }
 
     private sealed class ImagesDisabledFactory : TestWebApplicationFactory

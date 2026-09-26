@@ -202,11 +202,16 @@ public class ImageEditorController(
     }
 
     [HttpPost("save")]
-    public IActionResult Save(string projectId, [FromBody] ImageEditSaveRequest req, CancellationToken ct)
+    public IActionResult Save(string projectId, [FromBody] ImageEditSaveRequest req)
     {
         if (Gate(projectId, out var project) is { } denied) return denied;
-        if (jobs is null || saver is null) return JobsUnavailable();
+        if (saver is null) return JobsUnavailable();
         if (raster is null) return RasterUnavailable();
+
+        var mode = string.IsNullOrWhiteSpace(req.Mode) ? ImageEditSaveModes.NextVersion : req.Mode.Trim();
+        if (mode is not (ImageEditSaveModes.NextVersion or ImageEditSaveModes.As))
+            return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
+                $"Неизвестный режим сохранения «{mode}»");
 
         foreach (var rel in new[] { req.SourcePath, req.Folder })
         {
@@ -216,14 +221,78 @@ public class ImageEditorController(
                     "Путь вне папки проекта");
         }
 
-        // Сохранение шага истории (StepId, ADR-018 §5) — волна 1; пока источник только вариант задачи
-        var image = req.JobId is null ? null : jobs.OpenVariant(UserId, projectId, req.JobId, req.Variant);
-        if (image is null) return JobNotFound();
-        var saved = saver.Save(project.RootPath, req, image);
+        // Источник — ровно одно: вариант задачи или шаг истории (ADR-018 §5). Пустой запрос —
+        // ошибка запроса, а не «задача не найдена»: иначе фронт искал бы несуществующую задачу
+        var hasJob = !string.IsNullOrWhiteSpace(req.JobId);
+        var hasStep = !string.IsNullOrWhiteSpace(req.StepId);
+        if (hasJob == hasStep)
+            return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
+                "Источник сохранения — ровно одно: вариант задачи или шаг истории");
+
+        EditedImage? image;
+        if (hasStep)
+        {
+            if (steps is null) return JobsUnavailable();
+            image = steps.Open(UserId, projectId, req.StepId!.Trim())?.Image;
+            if (image is null)
+                return Error(StatusCodes.Status404NotFound, ImageEditErrorCodes.StepNotFound, "Шаг истории не найден");
+        }
+        else
+        {
+            if (jobs is null) return JobsUnavailable();
+            image = jobs.OpenVariant(UserId, projectId, req.JobId!.Trim(), req.Variant);
+            if (image is null) return JobNotFound();
+        }
+
+        // Перекодирование при записи (раздел 9): расширение затем ставится по новому формату
+        if (req.Encode is { } encode)
+        {
+            var encoded = raster.Encode(image.Bytes, encode);
+            if (!encoded.Ok)
+                return Error(encoded.StatusCode,
+                    encoded.Error == RasterError.Busy ? ImageEditErrorCodes.TooManyJobs : ImageEditErrorCodes.InvalidRequest,
+                    encoded.Message ?? "Перекодирование не выполнено");
+            image = new EditedImage(encoded.Image!.Bytes, InputFitter.ContentTypeOf(encoded.Image.Format));
+        }
+
+        // ChatSessionId пока принимается и не используется: перенос чата на новый файл — шаг 11
+        var saved = mode == ImageEditSaveModes.As
+            ? saver.SaveAs(project.RootPath, req.Folder, req.FileName, image)
+            : saver.Save(project.RootPath, req, image);
+        if (saved.ErrorCode == ImageEditErrorCodes.NameTaken)
+        {
+            // Имя человек выбрал явно — не подменяем его номером, а подсказываем свободное
+            var check = saver.Check(project.RootPath, req.Folder, req.FileName, ImageEditSaver.ExtensionOf(image.Bytes));
+            return StatusCode(StatusCodes.Status409Conflict,
+                new { error = saved.Error, code = saved.ErrorCode, suggestion = check.Value?.Suggestion });
+        }
         // Новый файл — обычная запись в проект: синк знаний и ватчеры узнают о нём сразу
         if (saved.Value is { } result) files?.NotifyMutated(project.RootPath, result.Path, FileMutationKind.Write);
         return Map(saved, Ok);
     }
+
+    // Проверка имени «Сохранить как…» на лету: ничего не пишет, решение всё равно за CreateNew
+    [HttpGet("save/check")]
+    public IActionResult SaveCheck(string projectId, [FromQuery] string? folder, [FromQuery] string? name,
+        [FromQuery] string? format)
+    {
+        if (Gate(projectId, out var project) is { } denied) return denied;
+        if (saver is null) return JobsUnavailable();
+        if (ExtensionFor(format) is not { } ext)
+            return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
+                "Формат — png, jpeg, webp или gif");
+        return Map(saver.Check(project.RootPath, folder, name, ext), Ok);
+    }
+
+    private static string? ExtensionFor(string? format) =>
+        (format ?? "").Trim().TrimStart('.').ToLowerInvariant() switch
+        {
+            "png" => ".png",
+            "jpg" or "jpeg" => ".jpg",
+            "webp" => ".webp",
+            "gif" => ".gif",
+            _ => null,
+        };
 
     // Поля multipart запуска. Роли образцов — параллельные списки к файлам и путям
     // (character | style | object), незнакомая роль читается как object.
@@ -487,7 +556,7 @@ public class ImageEditorController(
         var code = result.ErrorCode ?? ImageEditErrorCodes.InvalidRequest;
         var status = code switch
         {
-            ImageEditErrorCodes.ProviderUnavailable => StatusCodes.Status409Conflict,
+            ImageEditErrorCodes.ProviderUnavailable or ImageEditErrorCodes.NameTaken => StatusCodes.Status409Conflict,
             ImageEditErrorCodes.QuoteNotFound or ImageEditErrorCodes.JobNotFound
                 or ImageEditErrorCodes.CharacterNotFound or ImageEditErrorCodes.StepNotFound => StatusCodes.Status404NotFound,
             ImageEditErrorCodes.TooManyJobs => StatusCodes.Status429TooManyRequests,

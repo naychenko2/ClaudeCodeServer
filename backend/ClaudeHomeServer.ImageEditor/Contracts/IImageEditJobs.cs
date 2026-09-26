@@ -30,4 +30,13 @@ public interface IImageEditSaver
 {
     ImageEditCallResult<ImageEditSaveResultDto> Save(
         string projectRoot, ImageEditSaveRequest request, EditedImage image);
+
+    // «Сохранить как…» (ADR-018 §5): ровно то имя, что выбрал человек, расширение — по формату
+    // байтов. Только FileMode.CreateNew: занятое имя — NameTaken, перезаписи нет никогда
+    ImageEditCallResult<ImageEditSaveResultDto> SaveAs(
+        string projectRoot, string? folder, string? fileName, EditedImage image);
+
+    // Проверка имени на лету: ничего не пишет. extension — «.png», «.jpg», «.webp», «.gif»
+    ImageEditCallResult<SaveCheckResponse> Check(
+        string projectRoot, string? folder, string? fileName, string extension);
 }

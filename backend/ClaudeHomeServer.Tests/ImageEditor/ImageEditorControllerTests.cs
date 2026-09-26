@@ -155,6 +155,10 @@ public class ImageEditorControllerTests : IDisposable
         var jobs = new FakeJobs();
         var factory = Factory([new FakeImageEditor("fal", models: FakeImageEditor.Model("m"))], jobs);
         var projectId = CreateProject(factory, TestWebApplicationFactory.TestUsername);
+        // Флаг включён по умолчанию — выключаем override'ом пользователя
+        var users = factory.Services.GetRequiredService<UserStore>();
+        users.SetFeatureFlag(users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id, FeatureFlagKeys.ImageEditor, false)
+            .Should().BeTrue();
         var client = factory.CreateAuthenticatedClient();
         var root = $"/api/projects/{projectId}/image-editor";
 

@@ -51,10 +51,11 @@ public sealed class ImageEditSteps(IImageRaster raster, ImageEditWorkspace works
             bytes = image.Bytes;
             variant = n;
             kind = ImageEditStepKinds.Variant;
-            // Вариант продолжает ленту шага, с которого запускали правку; без него — своя лента
+            // Вариант продолжает ленту шага, с которого запускали правку; без него — своя лента,
+            // а не папка задачи: шаги не смешиваются с вариантами v{n}
             var baseStep = job.BaseStepId is { } s ? Open(ownerId, projectId, s) : null;
             parent = baseStep?.Step.StepId;
-            editId = baseStep?.Step.EditId ?? jobId;
+            editId = baseStep?.Step.EditId ?? ImageEditWorkspace.NewStepId();
             sourcePath = baseStep?.Step.SourcePath;
         }
 

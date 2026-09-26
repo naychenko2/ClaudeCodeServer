@@ -156,6 +156,24 @@ public class ImageEditorTransformTests : IDisposable
     }
 
     [Fact]
+    public async Task Шаг_чужого_проекта_того_же_владельца_404()
+    {
+        var (projectA, dirA) = CreateProject();
+        var (projectB, _) = CreateProject();
+        await File.WriteAllBytesAsync(Path.Combine(dirA, "hero.png"), Png(40, 20));
+        var client = _factory.CreateAuthenticatedClient();
+        var created = await client.PostAsJsonAsync($"{Root(projectA)}/transform", Rotate(new { path = "hero.png" }));
+        var stepId = (await Json(created)).GetProperty("stepId").GetString()!;
+
+        var image = await client.GetAsync($"{Root(projectB)}/steps/{stepId}");
+        var chained = await client.PostAsJsonAsync($"{Root(projectB)}/transform", Rotate(new { stepId }));
+
+        image.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        chained.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await client.GetAsync($"{Root(projectA)}/steps/{stepId}")).StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
     public async Task Каталог_отдаёт_порог_тяжёлого_файла()
     {
         var (projectId, _) = CreateProject();

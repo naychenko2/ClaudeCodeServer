@@ -179,17 +179,17 @@ one-shot действия и разговор с исполнителем «Ло
 
 ## Генератор картинок (Services/Images)
 
-Аватар персоны рисует слой драйверов `IImageGenerator` (fal.ai, glif) за роутером
-`ImageGenerationService`; провайдера и модель выбирает админ отдельно для каждого места
-(`ImagePlaces` — сейчас одно: `persona-avatar`). Инвариант тот же, что у моделей: **явно
-выбранного провайдера не подменяем**, переход на другого — только в «Автоматически». Не
-нарисовалось — сущность живёт на инициалах, картинку догоняет очередь `ImageBackfillService`.
-Детали — [docs/features/image-generation.md](docs/features/image-generation.md).
+Слой драйверов `IImageGenerator` (fal.ai, glif) за роутером `ImageGenerationService`; провайдера и
+модель админ выбирает отдельно для каждого места `ImagePlaces`: `persona-avatar` и `image-editor` (у
+редактора — лишь умолчание). **Явно выбранного провайдера не подменяем**, переход — только в
+«Автоматически»; не нарисовалось — инициалы, догоняет `ImageBackfillService` ([image-generation.md](docs/features/image-generation.md)).
+Локальная генерация (`Services/Images/LocalMedia`) — MCP-сервер `local-media`, ComfyUI на своей GPU, только по явной просьбе;
+**граф — только из шаблонов `ComfyWorkflows`**: произвольный граф = запись файлов хоста ([local-media.md](docs/features/local-media.md)).
 
-## Локальная генерация (Services/Images/LocalMedia)
+## Редактор картинок (ClaudeHomeServer.ImageEditor)
 
-MCP-сервер `local-media` — наши модели в ComfyUI на своей GPU (`LocalMedia:Enabled`), только по явной просьбе.
-**Граф — только из шаблонов `ComfyWorkflows`**: произвольный граф = запись файлов хоста. Детали — [local-media.md](docs/features/local-media.md).
+Динамический модуль правки картинок проекта: fal, Higgsfield, локальные модели, правки без ИИ, чат картинки с агентом; за флагом `image-editor`.
+Инварианты и подробности — [backend/ClaudeHomeServer.ImageEditor/CLAUDE.md](backend/ClaudeHomeServer.ImageEditor/CLAUDE.md): файл подхватывается сам при работе с этой папкой.
 
 ## Раздел «Видео» (Services/Video)
 

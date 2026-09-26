@@ -655,6 +655,13 @@ builder.Services.AddGatedHostedFrom<HiggsfieldSnapshotWarmer>(builder.Configurat
     sp => new HiggsfieldSnapshotWarmer(
         sp.GetRequiredService<HiggsfieldToolset>(),
         sp.GetRequiredService<ILogger<HiggsfieldSnapshotWarmer>>()));
+// Локальная генерация картинок и видео (local-media): ComfyUI на своей GPU. Движок живёт в
+// подсистеме images (тумблер LocalMedia:Enabled), тулсет — здесь; папку проекта и «файл
+// записан» вертикаль получает через шов ILocalMediaProjectAccess
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Images.LocalMedia.ILocalMediaProjectAccess,
+    ClaudeHomeServer.Services.Mcp.LocalMediaProjectAccess>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
+    ClaudeHomeServer.Services.Mcp.Http.LocalMediaToolset>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.McpToolsetRegistry>();
 // Белый список инструментов профиля провайдера (KeepMcpTools): читает McpTransportController
 // на tools/list и tools/call, сами тулсеты о нём не знают

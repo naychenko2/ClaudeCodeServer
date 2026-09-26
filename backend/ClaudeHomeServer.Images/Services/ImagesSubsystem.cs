@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Images.Editing.Raster;
+using ClaudeHomeServer.Services.Images.LocalMedia;
 
 namespace ClaudeHomeServer.Services.Images;
 
@@ -38,5 +39,7 @@ public sealed class ImagesSubsystem : IAppSubsystem
         // здесь, редактор в модуле берёт шов IImageRaster. Один экземпляр на инстанс: внутри
         // семафор на 2 одновременные операции (ADR-018 §9)
         services.AddSingleton<IImageRaster, SkiaImageRaster>();
+        // Локальная генерация через ComfyUI (MCP-сервер local-media): тумблер LocalMedia:Enabled
+        services.AddLocalMedia(config);
     }
 }

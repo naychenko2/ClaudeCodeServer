@@ -1743,6 +1743,9 @@ public class SubsystemBoundaryTests
         // IImageChatSessions (чат картинки), имя рабочей папки для бэкапа и записи операций растра.
         // Сам редактор (контракты, задачи, драйверы) — в модуле ClaudeHomeServer.ImageEditor.
         "ClaudeHomeServer.Services.ImageEditor",
+        // Мерж local-media (ADR-018, раздел «Локальные модели»): ImageFormatSniffer — чистая
+        // функция по сигнатуре байтов, нужна и модулю редактора, и LocalMedia в Images.
+        "ClaudeHomeServer.Services.ImageEditor.Versioning",
         // ADR-018 §10.1: шов растра. Реализация (SkiaImageRaster) в Images, потребитель —
         // модуль редактора; namespace сохранён при переносе интерфейса из Images.
         "ClaudeHomeServer.Services.Images.Editing.Raster",

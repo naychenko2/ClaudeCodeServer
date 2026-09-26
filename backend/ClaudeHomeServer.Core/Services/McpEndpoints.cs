@@ -25,6 +25,7 @@ public static class McpEndpoints
     public const string HiggsfieldName = "higgsfield";
     // Редактор картинок (ADR-018 §2, §10.2): сервер есть только в чате картинки
     public const string ImageEditorName = "image-editor";
+    public const string LocalMediaName = "local-media";
     public const string WidgetsName = "widgets";
     public const string WorkspaceName = "wsp";
 

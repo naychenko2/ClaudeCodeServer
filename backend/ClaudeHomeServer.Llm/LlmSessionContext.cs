@@ -161,6 +161,12 @@ public sealed record HiggsfieldMcpContext(string ApiUrl, Func<string> TokenFacto
 // владельца выключен или модуль не загружен (тулсета нет в реестре — иначе «fetch failed» у
 // всего хода). Всё это — свойства сессии, владельца и процесса, не хода. stdio-ветки нет.
 public sealed record ImageEditorMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp);
+// Контекст MCP-сервера локальной генерации (local-media: ComfyUI на своей GPU). null — чат без
+// владельца или вне проекта, тумблер LocalMedia:Enabled выключен, подсистема images выключена,
+// проект локальный или персона ReadOnly (сервер пишет файлы в проект). Всё это — свойства
+// инстанса, сессии и персоны, а не хода: инвариант стабильности состава не задет.
+// TokenFactory/UseHttp — тот же идиом, что у higgsfield; stdio-ветки отката нет.
+public sealed record LocalMediaMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp);
 
 // Контекст MCP-сервера графа кода (codegraph_find/neighbors/hubs): адрес API, сервисный
 // токен владельца и проект, чей граф доступен инструментами. ProjectId обязателен —
@@ -362,6 +368,9 @@ public sealed record LlmSessionContext(
     HiggsfieldMcpContext? HiggsfieldMcp = null,
     // MCP-сервер редактора картинок: только в чате картинки (ADR-018 §2)
     ImageEditorMcpContext? ImageEditorMcp = null,
+    // MCP-сервер локальной генерации (ComfyUI): null — выключен или недоступен чату
+    // (см. LocalMediaMcpContext). Свойство инстанса, сессии и персоны, не хода.
+    LocalMediaMcpContext? LocalMediaMcp = null,
     // Корень сервера (AppContext.BaseDirectory, не IHostEnvironment.ContentRootPath —
     // при `dotnet run` это bin/Debug/net10.0, у IHostEnvironment — папка проекта) — для
     // BareMode: SystemPromptFile поставляется с продуктом и живёт в репозитории/публикации

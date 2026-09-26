@@ -186,6 +186,11 @@ one-shot действия и разговор с исполнителем «Ло
 нарисовалось — сущность живёт на инициалах, картинку догоняет очередь `ImageBackfillService`.
 Детали — [docs/features/image-generation.md](docs/features/image-generation.md).
 
+## Локальная генерация (Services/Images/LocalMedia)
+
+MCP-сервер `local-media` — наши модели в ComfyUI на своей GPU (`LocalMedia:Enabled`), только по явной просьбе.
+**Граф — только из шаблонов `ComfyWorkflows`**: произвольный граф = запись файлов хоста. Детали — [local-media.md](docs/features/local-media.md).
+
 ## Раздел «Видео» (Services/Video)
 
 Эфиры телеканалов и лента подписок YouTube за общим `IVideoProvider`; живой кадр рисуется оверлеем над страницами (панель, центральный остров, плавающее окно).

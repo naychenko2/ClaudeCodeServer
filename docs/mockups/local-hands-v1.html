@@ -1,0 +1,547 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Руки локальных проектов — трей, индикатор, веб (v1)</title>
+<style>
+  :root {
+    --c-bg-main: #F4F0E8; --c-bg-panel: #EDE7DC; --c-bg-card: #FBF8F2; --c-bg-white: #FFFFFF;
+    --c-text-heading: #2A251F; --c-text-primary: #39332B; --c-text-secondary: #756B5E; --c-text-muted: #9A8F7E;
+    --c-accent: #D97757; --c-border: #E0D7C8;
+    --c-success: #5E8B4E; --c-success-bg: #E9F1E8; --c-success-text: #3F7A4F;
+    --c-warning: #C9923E; --c-warning-bg: #FBEFE0; --c-warning-text: #8A6A28;
+    --c-danger: #B4452F; --c-danger-bg: #FBF1EC; --c-danger-text: #B4452F;
+    --c-info: #3E7CA6; --c-info-bg: #E7EFF5;
+    --shadow-card: 0 2px 8px rgba(60, 50, 35, 0.05);
+    --shadow-pop: 0 8px 28px rgba(40, 32, 20, 0.18);
+    /* Нативные поверхности Windows следуют теме системы: светлая */
+    --w-menu: #F9F9F9; --w-menu-text: #1B1B1B; --w-menu-muted: #8A8A8A; --w-menu-hover: #EAEAEA; --w-menu-sep: #E1E1E1;
+    --w-task: #EEF1F5; --w-desk: linear-gradient(135deg, #BFD3E6, #E7D9C9);
+  }
+  [data-theme="dark"] {
+    --c-bg-main: #201C18; --c-bg-panel: #272320; --c-bg-card: #2E2A25; --c-bg-white: #2E2A25;
+    --c-text-heading: #F2ECE1; --c-text-primary: #EDE6DB; --c-text-secondary: #B3A897; --c-text-muted: #8A8072;
+    --c-accent: #E38A6A; --c-border: #3D3830;
+    --c-success: #7CB86A; --c-success-bg: #232E20; --c-success-text: #8FCB79;
+    --c-warning: #E0AC5A; --c-warning-bg: #322717; --c-warning-text: #E7B96E;
+    --c-danger: #E8785E; --c-danger-bg: #331F1B; --c-danger-text: #EE8A72;
+    --c-info: #5FA0CC; --c-info-bg: #1E2A33;
+    --shadow-card: 0 2px 10px rgba(0, 0, 0, 0.35);
+    --shadow-pop: 0 10px 30px rgba(0, 0, 0, 0.55);
+    --w-menu: #2C2C2C; --w-menu-text: #F2F2F2; --w-menu-muted: #8F8F8F; --w-menu-hover: #3A3A3A; --w-menu-sep: #444;
+    --w-task: #1F2227; --w-desk: linear-gradient(135deg, #1D2B3A, #3A2E26);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 24px; background: var(--c-bg-main); color: var(--c-text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; line-height: 1.45; }
+  .page { max-width: 1180px; margin: 0 auto; }
+  h1 { font-size: 20px; color: var(--c-text-heading); margin: 0 0 4px; }
+  h2 { font-size: 16px; color: var(--c-text-heading); margin: 36px 0 6px; padding-top: 12px; border-top: 1px solid var(--c-border); }
+  h3 { font-size: 13px; color: var(--c-text-heading); margin: 0 0 10px; }
+  .lead { color: var(--c-text-secondary); margin: 0 0 16px; max-width: 820px; }
+  .note { color: var(--c-text-muted); font-size: 12px; margin-top: 8px; }
+  .theme-btn { position: fixed; top: 14px; right: 14px; z-index: 10; background: var(--c-bg-card); color: var(--c-text-primary);
+    border: 1px solid var(--c-border); border-radius: 8px; padding: 6px 12px; font: inherit; cursor: pointer; box-shadow: var(--shadow-card); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+  .card { background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 12px; padding: 16px; box-shadow: var(--shadow-card); min-width: 0; }
+  .tag { display: inline-block; font-size: 10px; font-weight: 600; padding: 1px 7px; border-radius: 999px; background: var(--c-info-bg); color: var(--c-info); margin-left: 6px; vertical-align: 1px; }
+  code { font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace; font-size: 12px; background: var(--c-bg-panel); padding: 1px 5px; border-radius: 4px; }
+
+  /* ── Значки трея ── */
+  .icons { display: flex; flex-wrap: wrap; gap: 14px; }
+  .icon-cell { display: flex; flex-direction: column; align-items: center; gap: 6px; width: 128px; text-align: center; font-size: 11.5px; color: var(--c-text-secondary); }
+  .icon-row { display: flex; gap: 10px; align-items: flex-end; padding: 10px 12px; background: var(--w-task); border-radius: 8px; }
+
+  /* ── Нативное меню Windows ── */
+  .wmenu { background: var(--w-menu); color: var(--w-menu-text); border: 1px solid var(--w-menu-sep); border-radius: 8px;
+    box-shadow: var(--shadow-pop); padding: 4px; width: 340px; max-width: 100%; font-family: 'Segoe UI', sans-serif; font-size: 12.5px; }
+  .wmenu .it { display: flex; align-items: center; gap: 8px; padding: 6px 10px 6px 28px; border-radius: 4px; position: relative; white-space: nowrap; }
+  .wmenu .it:hover:not(.dis) { background: var(--w-menu-hover); }
+  .wmenu .it.dis { color: var(--w-menu-muted); }
+  .wmenu .it.hdr { font-weight: 600; color: var(--w-menu-text); }
+  .wmenu .it.def { font-weight: 700; }
+  .wmenu .it .arrow { margin-left: auto; color: var(--w-menu-muted); }
+  .wmenu .it .chk { position: absolute; left: 10px; }
+  .wmenu .it .txt { overflow: hidden; text-overflow: ellipsis; }
+  .wmenu .sep { height: 1px; background: var(--w-menu-sep); margin: 4px 6px; }
+  .menu-wrap { display: flex; gap: 8px; align-items: flex-start; flex-wrap: wrap; }
+  .menu-wrap .wmenu.sub { width: 250px; margin-top: 150px; }
+
+  /* ── Уведомления Windows ── */
+  .toast { background: var(--w-menu); color: var(--w-menu-text); border: 1px solid var(--w-menu-sep); border-radius: 8px; box-shadow: var(--shadow-pop);
+    padding: 12px 14px; width: 340px; max-width: 100%; font-family: 'Segoe UI', sans-serif; }
+  .toast .app { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--w-menu-muted); margin-bottom: 6px; }
+  .toast .t { font-weight: 600; font-size: 13px; margin-bottom: 2px; }
+  .toast .b { font-size: 12.5px; }
+
+  /* ── Рабочий стол и индикатор ── */
+  .desk { position: relative; height: 330px; border-radius: 10px; overflow: hidden; background: var(--w-desk); border: 1px solid var(--c-border); }
+  .desk .win { position: absolute; left: 24px; top: 20px; width: 58%; height: 220px; background: var(--w-menu); border-radius: 8px; box-shadow: var(--shadow-pop); border: 1px solid var(--w-menu-sep); }
+  .desk .win .bar { height: 30px; border-bottom: 1px solid var(--w-menu-sep); display: flex; align-items: center; padding: 0 10px; font-size: 12px; color: var(--w-menu-text); font-family: 'Segoe UI', sans-serif; }
+  .desk .win .body { padding: 10px; }
+  .desk .win .line { height: 8px; background: var(--w-menu-sep); border-radius: 4px; margin: 8px 0; }
+  .desk .taskbar { position: absolute; left: 0; right: 0; bottom: 0; height: 36px; background: var(--w-task); display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 0 12px; border-top: 1px solid var(--w-menu-sep); }
+  .desk .clock { font-size: 11px; color: var(--w-menu-text); font-family: 'Segoe UI', sans-serif; text-align: right; line-height: 1.2; }
+  .ind { position: absolute; right: 12px; bottom: 48px; width: 340px; max-width: calc(100% - 24px); background: var(--w-menu); color: var(--w-menu-text);
+    border: 1px solid var(--c-accent); border-radius: 10px; box-shadow: var(--shadow-pop); padding: 10px 12px; font-family: 'Segoe UI', sans-serif; }
+  .ind .top { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 13px; }
+  .ind .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--c-accent); flex-shrink: 0; animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(217, 119, 87, .55); } 50% { box-shadow: 0 0 0 5px rgba(217, 119, 87, 0); } }
+  .ind .min { margin-left: auto; width: 22px; height: 22px; border-radius: 4px; display: grid; place-items: center; color: var(--w-menu-muted); cursor: pointer; }
+  .ind .min:hover { background: var(--w-menu-hover); }
+  .ind .chat { font-size: 12px; margin: 3px 0 0 17px; }
+  .ind .warn { font-size: 11.5px; color: var(--w-menu-muted); margin: 2px 0 0 17px; }
+  .ind .foot { display: flex; align-items: center; justify-content: space-between; margin: 8px 0 0 17px; font-size: 11.5px; color: var(--w-menu-muted); }
+  .stop { background: var(--c-danger); color: #fff; border: 0; border-radius: 6px; padding: 5px 16px; font: 600 12.5px 'Segoe UI', sans-serif; cursor: pointer; }
+  .stop:hover { filter: brightness(1.08); }
+  .ind.pill { width: auto; display: flex; align-items: center; gap: 8px; padding: 5px 6px 5px 12px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .ind.pill .stop { padding: 3px 12px; border-radius: 999px; font-size: 12px; }
+  .ind.done { border-color: var(--w-menu-sep); font-size: 12.5px; }
+  .desk-caption { font-size: 12px; color: var(--c-text-secondary); margin-top: 8px; }
+
+  /* ── Веб: элементы продукта ── */
+  .dlg { background: var(--c-bg-white); border: 1px solid var(--c-border); border-radius: 12px; box-shadow: var(--shadow-card); overflow: hidden; }
+  .acc { border-top: 1px solid var(--c-border); }
+  .acc:first-child { border-top: 0; }
+  .acc-h { display: flex; align-items: center; gap: 8px; padding: 10px 14px; font-weight: 600; color: var(--c-text-heading); }
+  .acc-h .sum { margin-left: auto; font-size: 11.5px; font-weight: 500; color: var(--c-text-muted); }
+  .acc-h .sum.ok { color: var(--c-success-text); } .acc-h .sum.warn { color: var(--c-warning-text); }
+  .acc-b { padding: 0 14px 14px; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 40px; }
+  .row .lbl { font-size: 13px; color: var(--c-text-primary); }
+  .row.dis .lbl { color: var(--c-text-muted); }
+  .help { font-size: 11.5px; color: var(--c-text-muted); margin-top: 4px; }
+  .toggle { width: 34px; height: 20px; border-radius: 999px; background: var(--c-border); position: relative; flex-shrink: 0; }
+  .toggle::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.2); }
+  .toggle.on { background: var(--c-accent); } .toggle.on::after { left: 16px; }
+  .toggle.dis { opacity: .45; }
+  .callout { font-size: 12px; border-radius: 8px; padding: 8px 10px; margin-top: 8px; }
+  .callout.warn { background: var(--c-warning-bg); color: var(--c-warning-text); }
+  .callout.muted { background: var(--c-bg-panel); color: var(--c-text-secondary); }
+  .cmd { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+  .cmd code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 5px 8px; }
+  .btn { font: 500 12px inherit; font-family: inherit; border-radius: 6px; padding: 4px 10px; border: 1px solid var(--c-border); background: var(--c-bg-card); color: var(--c-text-primary); cursor: pointer; white-space: nowrap; }
+  .btn.ghost { background: transparent; }
+  .btn.danger-ghost { background: transparent; border-color: transparent; color: var(--c-danger-text); font-weight: 600; }
+  .link { color: var(--c-accent); font-weight: 500; }
+  .empty-frame { border: 1px dashed var(--c-border); border-radius: 8px; padding: 18px; text-align: center; color: var(--c-text-muted); font-size: 12px; }
+
+  .prov { display: flex; align-items: flex-start; gap: 10px; padding: 9px 0; border-top: 1px solid var(--c-border); }
+  .prov:first-of-type { border-top: 0; }
+  .cb { width: 16px; height: 16px; border-radius: 4px; border: 1.5px solid var(--c-text-muted); flex-shrink: 0; margin-top: 1px; display: grid; place-items: center; }
+  .cb.on { background: var(--c-accent); border-color: var(--c-accent); }
+  .prov .nm { font-weight: 600; color: var(--c-text-primary); }
+  .prov .sub { font-size: 11.5px; color: var(--c-text-muted); }
+  .chip { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; font-weight: 600; padding: 1px 7px; border-radius: 999px; margin: 3px 4px 0 0; }
+  .chip.eye { background: var(--c-warning-bg); color: var(--c-warning-text); }
+  .chip.txt { background: var(--c-bg-panel); color: var(--c-text-secondary); }
+  .privacy { font-size: 13px; color: var(--c-text-primary); background: var(--c-warning-bg); border-left: 3px solid var(--c-warning); padding: 10px 12px; border-radius: 6px; margin-bottom: 10px; }
+
+  .hdr-bar { display: flex; align-items: center; gap: 8px; padding: 10px 12px; background: var(--c-bg-panel); border-radius: 8px; min-width: 0; }
+  .hdr-bar .title { font-weight: 600; color: var(--c-text-heading); white-space: nowrap; }
+  .hdr-bar .meta { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; }
+  .badge { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; font-weight: 600; letter-spacing: .02em; padding: 1px 7px; border-radius: 999px; white-space: nowrap; flex-shrink: 0; }
+  .badge.ok { background: var(--c-success-bg); color: var(--c-success-text); }
+  .badge.warn { background: var(--c-warning-bg); color: var(--c-warning-text); }
+  .badge.neutral { background: var(--c-bg-card); color: var(--c-text-secondary); border: 1px solid var(--c-border); }
+  .badge.muted { background: var(--c-bg-card); color: var(--c-text-muted); }
+  .xs-stop { font: 600 11px inherit; font-family: inherit; color: var(--c-danger-text); background: transparent; border: 1px solid var(--c-border); border-radius: 6px; padding: 1px 8px; cursor: pointer; }
+  .states td { padding: 8px 6px; border-top: 1px solid var(--c-border); vertical-align: middle; }
+  .states td:first-child { color: var(--c-text-secondary); font-size: 12px; width: 34%; }
+  .feed-sys { font-size: 12px; color: var(--c-text-secondary); background: var(--c-bg-panel); border-radius: 8px; padding: 8px 10px; margin: 8px 0; display: flex; gap: 8px; }
+  .feed-sys.err { background: var(--c-danger-bg); color: var(--c-danger-text); }
+  .popover { background: var(--c-bg-white); border: 1px solid var(--c-border); border-radius: 10px; box-shadow: var(--shadow-pop); padding: 10px 12px; font-size: 12px; color: var(--c-text-primary); margin-top: 6px; }
+
+  /* ── Мобильный кадр ── */
+  .phone { width: 360px; max-width: 100%; border: 1px solid var(--c-border); border-radius: 22px; padding: 10px; background: var(--c-bg-main); box-shadow: var(--shadow-card); }
+  .phone .scr { border-radius: 14px; overflow: hidden; background: var(--c-bg-white); }
+  .phone .mhdr { display: flex; align-items: center; gap: 8px; padding: 10px 12px; background: var(--c-bg-panel); }
+  .phone .mhdr .t { font-weight: 600; color: var(--c-text-heading); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .phone .mbody { padding: 12px; min-height: 120px; }
+
+  .decision { border-left: 3px solid var(--c-accent); background: var(--c-bg-card); padding: 12px 14px; border-radius: 8px; margin: 10px 0; }
+  .decision b { color: var(--c-text-heading); }
+  .q { border-left-color: var(--c-warning); }
+  svg.i { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
+  @media (max-width: 640px) {
+    body { padding: 12px; }
+    .states td { display: block; width: auto !important; }
+    .states td + td { border-top: 0; padding-top: 0; }
+    .hdr-bar { flex-wrap: wrap; }
+    .hdr-bar .meta { flex-wrap: wrap; }
+  }
+</style>
+</head>
+<body>
+<button class="theme-btn" onclick="const r=document.documentElement;r.dataset.theme=r.dataset.theme==='dark'?'light':'dark'">Тема: светлая / тёмная</button>
+<div class="page">
+
+<h1>Руки локальных проектов — трей агента, индикатор, веб</h1>
+<p class="lead">Шаг Ш6 плана <code>hands-plan-2026-09.md</code>. Тексты и решения — в <code>local-hands-proposal.md</code>, этот файл показывает, как это выглядит. Нативные поверхности Windows (меню, уведомления, плашка) следуют теме системы; кнопка вверху переключает обе темы разом.</p>
+
+<!-- ───────────────────────── 1. ЗНАЧОК ───────────────────────── -->
+<h2>1. Значок агента в трее</h2>
+<p class="lead">Пять состояний различаются формой. Силуэт — монитор; у десктопного клиента ADR-008 значок круглый (последний в ряду, для сравнения).</p>
+<div class="card">
+  <div class="icons" id="icons"></div>
+</div>
+
+<!-- ───────────────────────── 2. МЕНЮ ───────────────────────── -->
+<h2>2. Меню трея</h2>
+<p class="lead">Только то, что рисует <code>TrackPopupMenu</code>: текст, флажок, подменю, разделитель, недоступный пункт. Жирный — пункт по умолчанию (двойной клик по значку).</p>
+<div class="grid">
+  <div class="card">
+    <h3>Руки выключены <span class="tag">по умолчанию</span></h3>
+    <div class="menu-wrap">
+      <div class="wmenu">
+        <div class="it hdr dis">AI Home — агент устройства</div>
+        <div class="it dis"><span class="txt">На связи · home.example.ru · проектов: 2</span></div>
+        <div class="sep"></div>
+        <div class="it dis">Руки выключены</div>
+        <div class="it def">Разрешить руки на 30 минут</div>
+        <div class="it">Другой срок<span class="arrow">›</span></div>
+        <div class="sep"></div>
+        <div class="it">Программы для рук (1)<span class="arrow">›</span></div>
+        <div class="it">Разрешённые папки (2)<span class="arrow">›</span></div>
+        <div class="sep"></div>
+        <div class="it">Приостановить агента</div>
+        <div class="it dis">Обновления: версия 1.842.0, актуальна</div>
+        <div class="it">Открыть журнал агента</div>
+        <div class="sep"></div>
+        <div class="it">Выйти из агента</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Руки разрешены, ход действует</h3>
+    <div class="wmenu">
+      <div class="it hdr dis">AI Home — агент устройства</div>
+      <div class="it dis"><span class="txt">На связи · home.example.ru · проектов: 2</span></div>
+      <div class="sep"></div>
+      <div class="it dis">Руки разрешены · ещё 24 мин</div>
+      <div class="it dis"><span class="txt">Сейчас работает: «Сверка отчёта», Бухгалтерия</span></div>
+      <div class="it def">Остановить руки</div>
+      <div class="sep"></div>
+      <div class="it">Программы для рук (1)<span class="arrow">›</span></div>
+      <div class="it">Разрешённые папки (2)<span class="arrow">›</span></div>
+      <div class="sep"></div>
+      <div class="it">Приостановить агента</div>
+      <div class="it dis"><span class="txt">Обновление 1.845.0 — после текущих ходов</span></div>
+      <div class="it">Открыть журнал агента</div>
+      <div class="sep"></div>
+      <div class="it">Выйти из агента</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Подменю: срок и программы</h3>
+    <div class="wmenu" style="width:220px">
+      <div class="it">15 минут</div>
+      <div class="it"><span class="chk">•</span>30 минут</div>
+      <div class="it">1 час</div>
+      <div class="it">2 часа</div>
+    </div>
+    <div style="height:12px"></div>
+    <div class="menu-wrap">
+      <div class="wmenu" style="width:250px">
+        <div class="it"><span class="txt">TestPad — C:\Tools\TestPad\TestPad.exe</span><span class="arrow">›</span></div>
+        <div class="sep"></div>
+        <div class="it">Добавить программу…</div>
+      </div>
+      <div class="wmenu" style="width:210px">
+        <div class="it">Показать в Проводнике</div>
+        <div class="it">Убрать из списка…</div>
+      </div>
+    </div>
+    <p class="note">Папки устроены так же: список корней, «Добавить папку…», у строки — «Показать в Проводнике» и «Убрать из списка…». Удаление подтверждается окном.</p>
+  </div>
+
+  <div class="card">
+    <h3>Почему «Разрешить» недоступен</h3>
+    <div class="wmenu" style="margin-bottom:10px">
+      <div class="it dis">Руки не установлены</div>
+      <div class="it">Установить руки…</div>
+    </div>
+    <div class="wmenu" style="margin-bottom:10px">
+      <div class="it dis"><span class="txt">Добавьте программу — без неё рукам нечего делать</span></div>
+      <div class="it dis">Разрешить руки на 30 минут</div>
+      <div class="it">Программы для рук (0)<span class="arrow">›</span></div>
+    </div>
+    <div class="wmenu">
+      <div class="it dis">Агент на паузе — руки недоступны</div>
+      <div class="it def">Возобновить агента</div>
+    </div>
+    <p class="note">Нет связи с сервером не блокирует «Разрешить»: сеанс локальный. Статусная строка тогда — «Нет связи с сервером».</p>
+  </div>
+</div>
+
+<div class="grid" style="margin-top:16px">
+  <div class="card">
+    <h3>Отказ при добавлении программы</h3>
+    <div class="toast" style="width:100%">
+      <div class="t">Эту программу нельзя дать рукам</div>
+      <div class="b">«cmd.exe» нельзя дать рукам: через интерпретатор команд руки выполнили бы что угодно.</div>
+      <div style="text-align:right;margin-top:10px"><button class="btn">ОК</button></div>
+    </div>
+    <p class="note">Остальные тексты отказа (Проводник, ярлык/скрипт, сетевой путь) — в proposal, раздел 1.</p>
+  </div>
+  <div class="card">
+    <h3>Выход при идущем ходе</h3>
+    <div class="toast" style="width:100%">
+      <div class="t">Выйти из агента?</div>
+      <div class="b">Сейчас идёт ход в чате «Сверка отчёта». Выход прервёт его, руки выключатся.<br>Агент запустится снова при следующем входе в Windows.</div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px"><button class="btn">Выйти</button><button class="btn" style="border-color:var(--c-accent)">Отмена</button></div>
+    </div>
+    <p class="note">Фокус по умолчанию — на «Отмена»: Enter не прерывает ход.</p>
+  </div>
+</div>
+
+<!-- ───────────────────────── 3. УВЕДОМЛЕНИЯ ───────────────────────── -->
+<h2>3. Уведомления</h2>
+<div class="grid">
+  <div class="card"><h3>Человек разрешил руки</h3>
+    <div class="toast"><div class="app" data-ico="allowed">AI Home — агент устройства</div>
+      <div class="t">Руки разрешены на 30 минут</div>
+      <div class="b">Чаты проектов, где руки включены в настройках, смогут запускать программы из списка и работать с их окнами.</div></div></div>
+  <div class="card"><h3>Ход начал действовать руками <span class="tag">один раз на ход</span></h3>
+    <div class="toast"><div class="app" data-ico="acting">AI Home — агент устройства</div>
+      <div class="t">ИИ начал работать с компьютером</div>
+      <div class="b">Чат «Сверка отчёта» (Бухгалтерия) управляет окнами. Остановить — «Стоп» в углу экрана или в меню значка.</div></div></div>
+  <div class="card"><h3>Руки погасли сами</h3>
+    <div class="toast" style="margin-bottom:10px"><div class="app" data-ico="idle">AI Home — агент устройства</div>
+      <div class="t">Руки выключены: срок истёк</div>
+      <div class="b">Идущий ход прерван, окна, открытые им, закрыты.</div></div>
+    <div class="toast"><div class="app" data-ico="idle">AI Home — агент устройства</div>
+      <div class="t">Руки выключены: долго без дела</div>
+      <div class="b">15 минут чаты не пользовались руками.</div></div></div>
+</div>
+
+<!-- ───────────────────────── 4. ИНДИКАТОР ───────────────────────── -->
+<h2>4. Индикатор «ИИ управляет компьютером»</h2>
+<p class="lead">Виден с первого вызова рук в ходе и до конца хода. Правый нижний угол над панелью задач, поверх всех окон, фокус не забирает, в Alt+Tab не попадает. «Стоп» виден всегда, в том числе в свёрнутом виде.</p>
+<div class="grid">
+  <div>
+    <div class="desk">
+      <div class="win"><div class="bar">TestPad — отчёт.txt</div><div class="body"><div class="line" style="width:80%"></div><div class="line" style="width:60%"></div><div class="line" style="width:70%"></div></div></div>
+      <div class="ind">
+        <div class="top"><span class="dot"></span>ИИ управляет компьютером<span class="min" title="Свернуть">—</span></div>
+        <div class="chat">Чат «Сверка отчёта» · Бухгалтерия</div>
+        <div class="warn">Фокус может переключаться. Окна хода закроются вместе с ним.</div>
+        <div class="foot"><span>Руки разрешены ещё 24 мин</span><button class="stop" title="Остановить руки: ход прервётся, окна, открытые им, закроются">Стоп</button></div>
+      </div>
+      <div class="taskbar"><span data-ico="acting" data-size="18"></span><span class="clock">14:11<br>26.09.2026</span></div>
+    </div>
+    <div class="desk-caption">Развёрнутая плашка, 340 × 112.</div>
+  </div>
+  <div>
+    <div class="desk">
+      <div class="win" style="width:70%"><div class="bar">TestPad — отчёт.txt</div><div class="body"><div class="line" style="width:80%"></div><div class="line" style="width:60%"></div></div></div>
+      <div class="ind pill"><span class="dot"></span>ИИ за компьютером<button class="stop">Стоп</button></div>
+      <div class="taskbar"><span data-ico="acting" data-size="18"></span><span class="clock">14:12<br>26.09.2026</span></div>
+    </div>
+    <div class="desk-caption">Свёрнута кнопкой «—». Клик по пилюле разворачивает обратно.</div>
+  </div>
+  <div>
+    <div class="desk">
+      <div class="win" style="width:70%"><div class="bar" style="color:var(--w-menu-muted)">окна хода закрыты</div></div>
+      <div class="ind done">Руки выключены. Ход прерван.</div>
+      <div class="taskbar"><span data-ico="idle" data-size="18"></span><span class="clock">14:13<br>26.09.2026</span></div>
+    </div>
+    <div class="desk-caption">После «Стоп»: 3 секунды, затем исчезает.</div>
+  </div>
+</div>
+
+<!-- ───────────────────────── 5. ВЕБ: НАСТРОЙКИ ПРОЕКТА ───────────────────────── -->
+<h2>5. Веб: руки в настройках проекта</h2>
+<p class="lead">Секция <code>AccordionSection</code> рядом с <code>DeviceSection</code> в <code>EditDialog</code>. Отказы и их тексты — из матрицы <code>ProjectCapabilities</code> через <code>CapabilityGate</code>.</p>
+<div class="grid" id="project-states"></div>
+
+<!-- ───────────────────────── 6. ВЕБ: ПРОВАЙДЕРЫ ───────────────────────── -->
+<h2>6. Веб: каким провайдерам можно доверить руки</h2>
+<p class="lead">Настройки владельца, раздел «Руки на устройствах». По умолчанию не отмечен никто.</p>
+<div class="grid">
+  <div class="dlg" style="padding:16px">
+    <h3 style="font-size:14px">Каким провайдерам можно доверить руки</h3>
+    <div class="privacy">Провайдер видит снимки окон, в которых работают руки, и текст из них — всё, что в этих окнах открыто. Разрешайте только тем, кому доверяете такие данные.</div>
+    <div class="prov"><span class="cb on" data-check></span><div><div class="nm">Claude</div><div class="sub">Anthropic · подписка</div><span class="chip eye" data-eye>видит снимки окон</span></div></div>
+    <div class="prov"><span class="cb on" data-check></span><div><div class="nm">GLM</div><div class="sub">Zhipu · API</div><span class="chip eye" data-eye>видит снимки окон</span></div></div>
+    <div class="prov"><span class="cb"></span><div><div class="nm">DeepSeek</div><div class="sub">DeepSeek · API</div><span class="chip txt">без зрения — видит только текст окон</span></div></div>
+    <div class="prov"><span class="cb"></span><div><div class="nm">Kimi</div><div class="sub">Moonshot · API</div><span class="chip eye" data-eye>видит снимки окон</span></div></div>
+    <p class="help" style="margin-top:10px">Если основной провайдер чата недоступен, ход с руками перейдёт только к отмеченным. Нет отмеченных в цепочке — ход завершится ошибкой, а не уйдёт другому провайдеру.</p>
+  </div>
+  <div class="dlg" style="padding:16px">
+    <h3 style="font-size:14px">Никто не отмечен</h3>
+    <div class="privacy">Провайдер видит снимки окон, в которых работают руки, и текст из них — всё, что в этих окнах открыто. Разрешайте только тем, кому доверяете такие данные.</div>
+    <div class="callout muted">Никто не отмечен — руки выключены во всех проектах.</div>
+    <div class="prov"><span class="cb"></span><div><div class="nm">Claude</div><div class="sub">Anthropic · подписка</div><span class="chip eye" data-eye>видит снимки окон</span></div></div>
+    <div class="prov"><span class="cb"></span><div><div class="nm">GLM</div><div class="sub">Zhipu · API</div><span class="chip eye" data-eye>видит снимки окон</span></div></div>
+    <p class="note">Пометка «видит снимки окон» — тон warning: это то, о чём человек должен подумать перед галкой, а не декоративная метка.</p>
+  </div>
+</div>
+
+<!-- ───────────────────────── 7. ВЕБ: ИНДИКАТОР В ЧАТЕ ───────────────────────── -->
+<h2>7. Веб: индикатор в шапке чата</h2>
+<p class="lead">Вид — как у <code>HandsBadge</code> ADR-008 (тот же <code>Badge xs</code>, иконка, тона). Компонент свой — <code>LocalHandsBadge</code>: нет «Попросить руки», источник — событие SignalR, «Стоп» прерывает ход, а не сеанс. Обоснование — в proposal, раздел 3.</p>
+<div class="card">
+  <table class="states" style="width:100%;border-collapse:collapse" id="badge-states"></table>
+</div>
+
+<div class="grid" style="margin-top:16px">
+  <div class="card">
+    <h3>Строки в ленте</h3>
+    <div class="feed-sys err"><span data-lucide="alert"></span><span>Руки не разрешены на устройстве home-pc. Разрешите их в меню значка агента и отправьте сообщение ещё раз.</span></div>
+    <div class="feed-sys"><span data-lucide="hand"></span><span>Ход прерван на устройстве home-pc: руки выключены кнопкой «Стоп». Окна, открытые ходом, закрыты.</span></div>
+    <div class="feed-sys"><span data-lucide="clock"></span><span>Ход прерван на устройстве home-pc: истёк срок, на который разрешили руки.</span></div>
+    <div class="feed-sys err"><span data-lucide="alert"></span><span>Руки разрешены только для Claude и GLM — основной провайдер недоступен, а другим руки не доверены.</span></div>
+  </div>
+  <div class="card">
+    <h3>Мобила: шапка чата, 360 px</h3>
+    <div class="phone"><div class="scr">
+      <div class="mhdr"><span class="t">Сверка отчёта</span><span class="badge ok"><span data-lucide="monitor"></span>Руки</span><button class="xs-stop">Стоп</button></div>
+      <div class="mbody">
+        <div class="popover"><b>ИИ за компьютером home-pc</b><br>ИИ управляет окнами на устройстве. «Стоп» прервёт ход.</div>
+        <p class="note">Тап по бейджу открывает Popover с текстом <code>title</code> — на тач-экране подсказки нет.</p>
+      </div>
+    </div></div>
+    <div style="height:10px"></div>
+    <div class="phone"><div class="scr">
+      <div class="mhdr"><span class="t">Сверка отчёта</span><span class="badge warn"><span data-lucide="monitor"></span>Нет рук</span></div>
+    </div></div>
+  </div>
+</div>
+
+<!-- ───────────────────────── 8. ДВА ТРЕЯ ───────────────────────── -->
+<h2>8. Два трея на одной машине</h2>
+<div class="grid">
+  <div class="card">
+    <h3>Как это выглядит</h3>
+    <div class="icon-row" style="justify-content:flex-end">
+      <span data-ico="desktop-active" data-size="20" title="AI Home Desktop — руки на этом компьютере"></span>
+      <span data-ico="allowed" data-size="20" title="AI Home — агент · руки разрешены до 14:35"></span>
+      <span class="clock" style="font-size:11px">14:11</span>
+    </div>
+    <p class="note">Слева — десктопный клиент ADR-008 (круг), справа — агент устройства (монитор). Подсказки начинаются по-разному: «AI Home Desktop…» и «AI Home — агент…».</p>
+    <div class="toast" style="width:100%;margin-top:10px">
+      <div class="t">Руки уже отданы</div>
+      <div class="b">Руки на этом компьютере уже отданы: AI Home Desktop, чат «Письмо поставщику». Остановите их там, чтобы разрешить здесь.</div>
+      <div style="text-align:right;margin-top:10px"><button class="btn">ОК</button></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="decision"><b>Решено: два значка.</b> Процессы разные (WPF + WebView2 с учёткой пользователя против служебного агента с токеном устройства и супервизором). Один значок требует канала между ADR-008 и ADR-016 и общего жизненного цикла — дорого ради одного значка, а на одной машине оба нужны редко.</div>
+    <div class="decision"><b>Решено: одни руки на машину.</b> Пока руки идут, включивший держит именованный объект <code>Local\AiHome.Hands.Active</code>; второй отказывает при старте сеанса текстом слева. Агентская половина — Ш3/Ш7.</div>
+    <div class="decision q"><b>Владельцу:</b> половина правила в клиенте <code>AiHomeDesktop</code> в план не входит.<br>(а, рекомендую) маленькая задача на клиент ADR-008 в эту волну;<br>(б) принять риск в первой версии: агент проверяет только себя.</div>
+  </div>
+</div>
+
+</div>
+
+<script>
+// Значки рисуются одной функцией: так все кадры гарантированно одинаковые
+const ACC = 'var(--c-accent)';
+function trayIcon(kind, size) {
+  const s = size || 32;
+  const muted = 'var(--c-text-muted)';
+  if (kind.startsWith('desktop')) {
+    const filled = kind === 'desktop-active';
+    return `<svg width="${s}" height="${s}" viewBox="0 0 32 32">${filled
+      ? `<circle cx="16" cy="16" r="12" fill="${ACC}"/>`
+      : `<circle cx="16" cy="16" r="11" fill="none" stroke="${ACC}" stroke-width="4"/>`}</svg>`;
+  }
+  const stroke = kind === 'offline' ? muted : ACC;
+  const screenFill = kind === 'acting' ? ACC : 'none';
+  let inner = '';
+  if (kind === 'allowed') inner = `<circle cx="16" cy="13" r="3.2" fill="${ACC}"/>`;
+  if (kind === 'paused') inner = `<rect x="12" y="9" width="2.6" height="8" rx="1" fill="${ACC}"/><rect x="17.4" y="9" width="2.6" height="8" rx="1" fill="${ACC}"/>`;
+  if (kind === 'offline') inner = `<line x1="5" y1="26" x2="27" y2="4" stroke="${muted}" stroke-width="3" stroke-linecap="round"/>`;
+  return `<svg width="${s}" height="${s}" viewBox="0 0 32 32">
+    <rect x="4" y="5" width="24" height="16" rx="2.5" fill="${screenFill}" stroke="${stroke}" stroke-width="3"/>
+    <line x1="16" y1="21" x2="16" y2="26" stroke="${stroke}" stroke-width="3"/>
+    <line x1="10" y1="27" x2="22" y2="27" stroke="${stroke}" stroke-width="3" stroke-linecap="round"/>${inner}</svg>`;
+}
+const ICONS = [
+  ['idle', 'На связи, руки выключены', 'AI Home — агент устройства · руки выключены'],
+  ['allowed', 'Руки разрешены', 'AI Home — агент · руки разрешены до 14:35'],
+  ['acting', 'Руки действуют в ходе', 'AI Home — ИИ управляет компьютером'],
+  ['offline', 'Нет связи с сервером', 'AI Home — агент · нет связи с сервером'],
+  ['paused', 'Агент на паузе', 'AI Home — агент на паузе'],
+  ['desktop', 'Для сравнения: AI Home Desktop', 'AI Home Desktop — руки на этом компьютере'],
+];
+document.getElementById('icons').innerHTML = ICONS.map(([k, label, tip]) => `
+  <div class="icon-cell" title="${tip}">
+    <div class="icon-row">${trayIcon(k, 16)}${trayIcon(k, 24)}${trayIcon(k, 32)}</div>
+    <b style="color:var(--c-text-primary)">${label}</b><span>${tip}<br><span style="color:var(--c-text-muted)">${tip.length} симв.</span></span>
+  </div>`).join('');
+document.querySelectorAll('[data-ico]').forEach(el => {
+  const size = +(el.dataset.size || 14);
+  el.insertAdjacentHTML('afterbegin', trayIcon(el.dataset.ico, size));
+});
+
+// Иконки веба — упрощённые lucide
+const LUCIDE = {
+  monitor: '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>',
+  alert: '<circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/>',
+  hand: '<path d="M18 11V6a2 2 0 0 0-4 0v5M14 10V4a2 2 0 0 0-4 0v6M10 10.5V6a2 2 0 0 0-4 0v8a8 8 0 0 0 16 0v-3a2 2 0 0 0-4 0"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+  chevron: '<path d="m6 9 6 6 6-6"/>',
+  drive: '<path d="M22 12H2M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11zM6 16h.01M10 16h.01"/>',
+  copy: '<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+};
+const lucide = (name, size) => `<svg class="i" viewBox="0 0 24 24" style="width:${size || 12}px;height:${size || 12}px">${LUCIDE[name]}</svg>`;
+
+// Состояния секции в настройках проекта
+const HELP = 'Руки работают, только пока их разрешили на самом компьютере — в меню значка агента, — и только с программами из его списка. В чатах с руками команды оболочки (Bash, PowerShell) выключены. Начатые чаты подхватят изменение со следующего сообщения.';
+function section({ sum, sumTone, on, dis, extra }) {
+  return `<div class="dlg">
+    <div class="acc"><div class="acc-h">${lucide("drive", 15)} Устройство<span class="sum">home-pc · Windows · в сети</span></div></div>
+    <div class="acc"><div class="acc-h">${lucide('monitor', 15)} Руки на устройстве<span class="sum ${sumTone || ''}">${sum}</span>${lucide('chevron', 14)}</div>
+      <div class="acc-b">
+        <div class="row ${dis ? 'dis' : ''}"><span class="lbl">Разрешить чатам этого проекта управлять окнами на устройстве</span><span class="toggle ${on ? 'on' : ''} ${dis ? 'dis' : ''}"></span></div>
+        ${extra || ''}
+        <div class="help">${HELP}</div>
+      </div></div></div>`;
+}
+const PROJECT_STATES = [
+  ['Включено, всё готово', section({ sum: 'Включены', sumTone: 'ok', on: true })],
+  ['Выключено', section({ sum: 'Выключены', on: false })],
+  ['Компонент не установлен на устройстве', section({ sum: 'Не установлено на устройстве', dis: true,
+    extra: `<div class="callout muted">На устройстве «home-pc» руки не установлены. Установите их на самом компьютере — в меню значка агента или командой:
+      <div class="cmd"><code>ai-home-agent hands enable</code><button class="btn">${lucide('copy')} Копировать</button></div></div>` })],
+  ['Список провайдеров пуст', section({ sum: 'Включены, но провайдеров нет', sumTone: 'warn', on: true,
+    extra: `<div class="callout warn">Вы не разрешили руки ни одному провайдеру — ходы пойдут без рук. <span class="link">Выбрать провайдеров</span></div>` })],
+  ['Устройство не в сети', section({ sum: 'Включены', sumTone: 'ok', on: true,
+    extra: `<div class="callout muted">Устройство не в сети — настройка вступит в силу, когда оно вернётся.</div>` })],
+  ['Устройство не Windows', section({ sum: 'Недоступно', dis: true,
+    extra: `<div class="callout muted">Руки пока есть только на Windows.</div>` })],
+  ['Флаг <code>local-hands</code> выключен или проект серверный', `<div class="dlg"><div class="acc"><div class="acc-h">${lucide("drive", 15)} Устройство<span class="sum">home-pc · Windows · в сети</span></div></div>
+    <div class="acc-b"><div class="empty-frame">Секции «Руки на устройстве» нет — решение 8 плана. У серверных проектов руки — это «Десктопный агент» ADR-008.</div></div></div>`],
+];
+const MOBILE_STATE = `<div class="phone"><div class="scr"><div class="mhdr"><span class="t">Настройки проекта</span></div>${section({ sum: 'Не установлено', dis: true,
+  extra: `<div class="callout muted">На устройстве «home-pc» руки не установлены. Установите их на самом компьютере — в меню значка агента или командой:
+    <div class="cmd"><code>ai-home-agent hands enable</code><button class="btn">${lucide('copy')}</button></div></div>` })}</div></div>`;
+document.getElementById('project-states').innerHTML =
+  PROJECT_STATES.map(([t, html]) => `<div><h3>${t}</h3>${html}</div>`).join('') +
+  `<div><h3>Мобила, 360 px: не установлено</h3>${MOBILE_STATE}<p class="note">На мобиле summary укорачивается, кнопка копирования — только иконка.</p></div>`;
+
+// Состояния бейджа в шапке чата
+const hdr = (badge, extra) => `<div class="hdr-bar"><span class="title">Сверка отчёта</span><span class="meta">${badge}${extra || ''}<span class="badge neutral">${lucide("drive", 11)}home-pc</span></span></div>`;
+const b = (tone, text) => `<span class="badge ${tone}">${lucide('monitor', 11)}${text}</span>`;
+const BADGES = [
+  ['Руки действуют в ходе', hdr(b('ok', 'ИИ за компьютером home-pc'), '<button class="xs-stop" title="Прервать ход">Стоп</button>'), 'ИИ управляет окнами на устройстве. «Стоп» прервёт ход.'],
+  ['Руки разрешены, ход ими не пользуется', hdr(b('neutral', 'Руки разрешены · 24 мин')), 'На устройстве home-pc руки разрешены ещё 24 минуты.'],
+  ['Нет сеанса на устройстве', hdr(b('warn', 'Руки не разрешены на устройстве')), 'Разрешите руки в меню значка агента на компьютере home-pc. Отсюда их разрешить нельзя.'],
+  ['Остановлено на устройстве', hdr(b('warn', 'Руки выключены на устройстве')), 'Человек у компьютера нажал «Стоп». Разрешить снова можно в меню значка агента.'],
+  ['Провайдер не разрешён', hdr(b('muted', 'Руки недоступны: провайдер')), 'Провайдеру DeepSeek руки не разрешены. Настройки → Руки на устройствах.'],
+  ['Тумблер проекта выключен / флаг выключен', hdr(''), 'Бейджа нет.'],
+];
+document.getElementById('badge-states').innerHTML = BADGES.map(([t, html, tip]) =>
+  `<tr><td>${t}<div style="color:var(--c-text-muted);font-size:11px;margin-top:2px">title: ${tip}</div></td><td>${html}</td></tr>`).join('');
+
+document.querySelectorAll('[data-lucide]').forEach(el => { el.outerHTML = lucide(el.dataset.lucide, 13); });
+document.querySelectorAll('[data-check]').forEach(el => { el.innerHTML = `<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="#fff" stroke-width="3.5"><path d="M20 6 9 17l-5-5"/></svg>`; });
+</script>
+</body>
+</html>

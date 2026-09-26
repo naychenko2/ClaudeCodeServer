@@ -2,6 +2,7 @@ using ClaudeHomeServer.Services.Images.LocalMedia;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeHomeServer.Tests.Services;
@@ -136,11 +137,23 @@ public class LocalMediaCleanupTests : IDisposable
         AddJob(_a, LocalMediaOps.EditImage, setup: j => j.ComfyInputs = [$"ccs-local-media/{_a}-dir"]);
         var dir = Directory.CreateDirectory(Path.Combine(_input, "ccs-local-media", $"{_a}-dir")).FullName;
         var inside = Touch(dir, "file.png");
+        var log = new CapturingLogger();
 
-        _cleanup.Run(Options(), DateTime.UtcNow);
+        new LocalMediaCleanup(_store, log).Run(Options(), DateTime.UtcNow);
 
         Directory.Exists(dir).Should().BeTrue();
         File.Exists(inside).Should().BeTrue();
+        // Держится на явной проверке каталога: на Linux File.Exists для каталога и так ложь
+        log.Messages.Should().ContainSingle(m => m.Contains("каталог, не трогаю"));
+    }
+
+    private sealed class CapturingLogger : ILogger<LocalMediaCleanup>
+    {
+        public List<string> Messages { get; } = [];
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter) => Messages.Add(formatter(state, exception));
     }
 
     [Fact]

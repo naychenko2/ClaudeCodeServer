@@ -94,7 +94,12 @@ public sealed class LocalMediaCleanup(LocalMediaJobStore store, ILogger<LocalMed
                 log.LogWarning("Чистка ComfyUI: {Name} идёт через символическую ссылку — не трогаю", name);
                 return;
             }
-            // Каталог сюда не попадает: File.Exists для него ложь
+            // Каталог не трогаем явно: File.Exists/File.Delete ведут себя с ним по-разному на Windows и Linux
+            if (Directory.Exists(full))
+            {
+                log.LogWarning("Чистка ComfyUI: {Name} — каталог, не трогаю", name);
+                return;
+            }
             if (File.Exists(full)) File.Delete(full);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

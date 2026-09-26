@@ -104,6 +104,22 @@ public class LocalMediaServiceTests : IDisposable
     }
 
     [Fact]
+    public void Клиент_ЛатентыТолькоИзOutput()
+    {
+        var entry = JsonNode.Parse("""
+            {"status":{"status_str":"success","completed":true},
+             "outputs":{"9":{"latents":[
+                {"filename":"lm_1_video_00001_.latent","subfolder":"ccs-local-media/latents","type":"output"},
+                {"filename":"ccs-local-media-lm_1-video.latent","subfolder":"","type":"input"}]}}}
+            """)!.AsObject();
+
+        var parsed = ComfyClient.ParseHistory(entry);
+
+        parsed.Latents.Should().ContainSingle().Which.FileName.Should().Be("lm_1_video_00001_.latent");
+        parsed.Files.Should().BeEmpty();
+    }
+
+    [Fact]
     public void Клиент_ПозицияВОчереди()
     {
         var queue = new ComfyQueueState(["a"], ["b", "c"]);

@@ -50,6 +50,22 @@ public class InputFitterTests : IDisposable
         (fitted.SourceWidth, fitted.SourceHeight).Should().Be((6000, 4000), "приводить варианты — к размеру оригинала");
     }
 
+    // Генерация по тексту: исходника нет, а фото персонажа всё равно ужимаются под лимит модели
+    [Fact]
+    public async Task Без_исходника_образцы_всё_равно_ужимаются()
+    {
+        var fitter = new InputFitter(_raster);
+        var input = new ImageEditJobInput("q", "Тимур в кафе", null, null, null, null,
+            [new ReferenceImage(Png(3000, 3000, SKColors.SteelBlue), "image/png", ReferenceRole.Character, "Тимур")], null);
+
+        var result = await fitter.FitAsync(input, Limit2048, default);
+
+        result.Value.Should().NotBeNull(result.Error);
+        var probe = _raster.Probe(result.Value!.Input.References[0].Bytes)!;
+        (probe.Width, probe.Height).Should().Be((2048, 2048));
+        result.Value.SourceWidth.Should().BeNull();
+    }
+
     [Fact]
     public async Task Маска_с_телефона_растягивается_до_исходника_и_остаётся_бинарной()
     {

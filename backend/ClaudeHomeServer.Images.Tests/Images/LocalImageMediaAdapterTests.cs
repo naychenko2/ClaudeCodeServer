@@ -139,6 +139,29 @@ public class LocalImageMediaAdapterTests
         done.Files.Should().ContainSingle().Which.Bytes.Should().Equal(png);
     }
 
+    // Генерация по тексту с фото персонажа не теряет фото: граф правки на пустом холсте, где
+    // фото — образец энкодера, а не граф генерации без картинок
+    [Fact]
+    public async Task Генерация_с_фото_персонажа_идёт_графом_правки_на_пустом_холсте()
+    {
+        var adapter = Build();
+        var photo = LocalMediaTestImages.Png(8, 8);
+
+        var submitted = await adapter.SubmitAsync(
+            new LocalImageRequest(LocalImageOp.Generate, "Тимур сидит в кафе", [photo], "16:9", 1), default);
+
+        submitted.Error.Should().BeNull();
+        _comfy.UploadedBytes.Values.Should().ContainSingle().Which.Should().Equal(photo);
+        var graph = _comfy.Prompts.Should().ContainSingle().Subject["prompt"]!.AsObject();
+        graph["img1"]!["class_type"]!.GetValue<string>().Should().Be("LoadImage");
+        var enc = graph["enc"]!["inputs"]!.AsObject();
+        enc["images.image_1"]!.AsArray()[0]!.GetValue<string>().Should().Be("img1");
+        enc["prompt"]!.GetValue<string>().Should().Be("Тимур сидит в кафе");
+        var lat = graph["lat"]!["inputs"]!.AsObject();
+        (lat["width"]!.GetValue<int>(), lat["height"]!.GetValue<int>()).Should().Be((1664, 928));
+        graph["ks"]!["inputs"]!["latent_image"]!.AsArray()[0]!.GetValue<string>().Should().Be("lat");
+    }
+
     [Fact]
     public async Task Стирание_по_маске_без_растра_отказ_до_ComfyUI()
     {

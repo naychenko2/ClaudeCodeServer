@@ -70,7 +70,10 @@ public record ImageEditCaps(
     // вес файла в МБ. null — лимита нет или он не курирован
     int? MaxInputSide = null,
     double? MaxInputMegapixels = null,
-    double? MaxInputMb = null);
+    double? MaxInputMb = null,
+    // Сколько фото персонажа модель берёт как ОДНОГО человека; null — все. Qwen-Image рисует по
+    // человеку на каждое фото, и текст запроса это не лечит (живой прогон 2026-09-26)
+    int? MaxCharacterPhotos = null);
 
 // Ориентир цены для каталога; точная сумма — только в котировке
 public record ImageEditPriceHint(double Amount, string Unit, string Per);

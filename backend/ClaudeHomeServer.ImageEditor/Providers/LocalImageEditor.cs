@@ -23,6 +23,9 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
     // Потолок одного запуска с ожиданием очереди: четыре варианта правки ≈4 мин, плюс чужие прогоны
     private static readonly TimeSpan JobCeiling = TimeSpan.FromMinutes(20);
 
+    // Потолок картинок одного прогона графа правки (ComfyWorkflows.MaxEditImages): холст и образцы
+    public const int MaxImages = 16;
+
     internal TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(2);
 
     public string Key => ProviderKey;
@@ -36,7 +39,7 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
     [
         new(QwenImage, "Qwen-Image 2.1",
             new ImageEditCaps([ImageEditOp.Generate, ImageEditOp.Edit, ImageEditOp.Inpaint], MaskSupport.AsReference,
-                MaxReferences: 15, MaxCount: 4, FaceByReferences: true),
+                MaxReferences: 15, MaxCount: 4, FaceByReferences: true, MaxCharacterPhotos: 1),
             new ImageEditPriceHint(0, ImageEditPriceUnits.Free, "image")),
         new(FaceDetailer, "Улучшить лица",
             new ImageEditCaps([ImageEditOp.EnhanceFaces], MaskSupport.None, MaxReferences: 0, MaxCount: 1, FaceByReferences: false),
@@ -71,8 +74,10 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
     {
         var count = Math.Max(1, request.Count);
         if (model.Id == FaceDetailer) return media!.EtaSeconds(LocalImageOp.FaceDetail, 1, 1);
-        // Картинок в запросе: холст, размеченная копия, маска и образцы
-        var images = request.References + (request.HasAnnotations ? 1 : 0) + (request.HasMask ? 1 : 0);
+        // Картинок в запросе: холст, размеченная копия, маска, образцы и фото персонажа (одно,
+        // MaxCharacterPhotos) — фронт считает в References только образцы, фото добавляет сервер
+        var images = request.References + (request.HasAnnotations ? 1 : 0) + (request.HasMask ? 1 : 0)
+                     + (request.HasCharacter ? 1 : 0);
         if (request.Op == ImageEditOp.Generate)
             return images == 0
                 ? media!.EtaSeconds(LocalImageOp.Generate, count, 0)
@@ -120,6 +125,11 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
             default:
                 return Fail(EditOutcome.Failed, "Локальные модели так не умеют");
         }
+        // Обрезать нельзя: молча пропал бы персонаж или образец — честный отказ до очереди
+        if (run.Images.Count > MaxImages)
+            return Fail(EditOutcome.Failed,
+                $"Локальная модель берёт не больше {MaxImages} картинок за раз, а в запросе {run.Images.Count} " +
+                "(исходник, пометки, маска, образцы и фото персонажа). Уберите лишние образцы");
         // Генерация по тексту без образцов отдаёт все варианты одним прогоном, остальное — по одному
         if (runs > 1) run = run with { Count = 1 };
 

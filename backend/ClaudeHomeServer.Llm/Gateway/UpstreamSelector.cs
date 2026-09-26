@@ -46,6 +46,9 @@ public class UpstreamSelector(
 {
     public GatewayRouteDecision SelectRoute(string? model)
     {
+        // Шлюз выключен — его маршруты отвечают 404, и CLI упал бы посреди хода без объяснений.
+        if (!options.CurrentValue.Enabled)
+            return new(null, TurnFailureText.GatewayDisabled);
         if (providers.ResolveByModel(model) is { } p)
         {
             if (!p.Enabled) return new(null, TurnFailureText.GatewayProviderNotConfigured);

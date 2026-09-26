@@ -147,6 +147,9 @@ export default defineConfig({
       '/hubs': { target: backendUrl, changeOrigin: true, ws: true },
       // Self-hosted draw.io: бэкенд (YARP) проксирует /drawio/* в контейнер jgraph/drawio
       '/drawio': { target: backendUrl, changeOrigin: true },
+      // Раздача агента устройства (манифест, скрипты установки) — анонимно, вне /api.
+      // Регулярка, а не префикс: '/agent' совпал бы и с '/agents…'
+      '^/agent/': { target: backendUrl, changeOrigin: true },
       // Раздел «Телеметрия»: бэкенд форвардит /telemetry-proxy/* на SigNoz. Без этой строки
       // Vite отдал бы свой index.html (SPA-fallback), и в iframe грузился бы сам CCS.
       '/telemetry-proxy': { target: backendUrl, changeOrigin: true, ws: true },
@@ -166,6 +169,7 @@ export default defineConfig({
       '/api': { target: backendUrl, changeOrigin: true },
       '/hubs': { target: backendUrl, changeOrigin: true, ws: true },
       '/drawio': { target: backendUrl, changeOrigin: true },
+      '^/agent/': { target: backendUrl, changeOrigin: true },
       '/telemetry-proxy': { target: backendUrl, changeOrigin: true, ws: true },
       '/notes-remote': { target: 'http://localhost:5174', changeOrigin: true },
       '/spend-remote': { target: 'http://localhost:5175', changeOrigin: true },

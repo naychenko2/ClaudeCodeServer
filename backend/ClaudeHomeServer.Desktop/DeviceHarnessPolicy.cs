@@ -1,3 +1,5 @@
+using ClaudeHomeServer.Protocol;
+
 namespace ClaudeHomeServer.Services.Desktop;
 
 /// <summary>
@@ -13,7 +15,7 @@ public sealed class DeviceHarnessPolicy(IConfiguration config)
 {
     public const string CliVersionKey = "DeviceAgent:CliVersion";
 
-    public const string NotReadyPrefix = "Агент устройства не готов";
+    public const string NotReadyPrefix = DeviceAgentCompatibility.NotReadyPrefix;
 
     public string? RequiredCliVersion => Normalize(config[CliVersionKey]);
 

@@ -37,6 +37,8 @@
 [knowledge.md](architecture/knowledge.md) (заметки и Dify),
 [file-watching.md](architecture/file-watching.md) (наблюдение за деревом файлов),
 [device-agent-local-api.md](architecture/device-agent-local-api.md) (localhost-API агента устройства и модель угроз),
+[device-agent-distribution.md](architecture/device-agent-distribution.md) (раздача,
+самообновление и супервизор агента устройства),
 [personas.md](architecture/personas.md),
 [onboarding-intro.md](architecture/onboarding-intro.md) (знакомство: личное и проектное v2),
 [team-implement-mode.md](architecture/team-implement-mode.md) (режим чата-штаба),

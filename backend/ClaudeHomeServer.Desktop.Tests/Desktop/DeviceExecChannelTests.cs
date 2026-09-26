@@ -4,6 +4,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Desktop;
 using ClaudeHomeServer.Services.Execution;
+using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -65,7 +66,7 @@ public class DeviceExecChannelTests : IDisposable
 
     private sealed record Rig(DeviceRegistry Registry, DesktopCallRouter Router, DeviceExecChannel Channel, CountingOpener Opener, DesktopDevice Device);
 
-    private Rig NewRig(string? requiredCli = RequiredCli)
+    private Rig NewRig(string? requiredCli = RequiredCli, AgentReleaseCatalog? releases = null)
     {
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?> { [DeviceHarnessPolicy.CliVersionKey] = requiredCli })
@@ -74,19 +75,107 @@ public class DeviceExecChannelTests : IDisposable
         var router = new DesktopCallRouter(new SilentSender(), [], NullLogger<DesktopCallRouter>.Instance);
         var opener = new CountingOpener();
         var channel = new DeviceExecChannel(registry, router, new DeviceHarnessPolicy(config), opener,
-            NullLogger<DeviceExecChannel>.Instance, new ImmediateTime());
+            NullLogger<DeviceExecChannel>.Instance, new ImmediateTime(), releases);
         var (device, _) = registry.Register(Owner, "home", MachineFingerprint.Of("device-machine"));
         return new Rig(registry, router, channel, opener, device);
     }
 
     private static DeviceHello AgentHello(string? cliVersion, params string[] capabilities) =>
-        new(DesktopProtocol.Version, null, "agent-0.1", "linux-x64", "0.1.0", cliVersion,
+        new(DesktopProtocol.Version, null, "agent-1.0", "linux-x64", DeviceAgentCompatibility.MinVersion, cliVersion,
             capabilities.Length == 0 ? [DeviceCapabilities.Exec] : capabilities);
 
     private static async Task<DeviceHelloAck> ConnectAsync(Rig rig, DeviceHello hello)
     {
         rig.Router.RegisterConnection(Conn, Owner, rig.Device.Id);
         return await rig.Channel.HelloAsync(Conn, Owner, rig.Device.Id, hello);
+    }
+
+    // ---------- раздача агента в ack (agent-distribution AD-3, Р9) ----------
+
+    [Theory]
+    [InlineData("linux-x64")]
+    [InlineData("win-x64")]
+    public async Task Ack_НесётРелизПодRidУстройства(string rid)
+    {
+        using var rel = new AgentReleaseFixture();
+        var rig = NewRig(releases: new AgentReleaseCatalog(rel.Config()));
+
+        var ack = await ConnectAsync(rig, AgentHello(RequiredCli) with { Rid = rid });
+
+        var (file, bytes) = rid == "win-x64"
+            ? (AgentReleaseFixture.WinFile, rel.WinBytes)
+            : (AgentReleaseFixture.LinuxFile, rel.LinuxBytes);
+        ack.AgentLatestVersion.Should().Be(AgentReleaseFixture.Version);
+        ack.AgentMinVersion.Should().Be(DeviceAgentCompatibility.MinVersion);
+        ack.AgentArchiveSha256.Should().Be(AgentReleaseFixture.Sha(bytes));
+        ack.AgentArchiveSize.Should().Be(bytes.Length);
+        ack.AgentArchivePath.Should().Be($"{AgentReleaseFixture.Version}/{rid}/{file}");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("osx-arm64")]
+    [InlineData("../win-x64")]
+    public async Task Ack_RidНеНаш_ВерсияЕстьАрхиваНет(string? rid)
+    {
+        using var rel = new AgentReleaseFixture();
+        var rig = NewRig(releases: new AgentReleaseCatalog(rel.Config()));
+
+        var ack = await ConnectAsync(rig, AgentHello(RequiredCli) with { Rid = rid });
+
+        ack.AgentLatestVersion.Should().Be(AgentReleaseFixture.Version);
+        ack.AgentArchiveSha256.Should().BeNull();
+        ack.AgentArchiveSize.Should().BeNull();
+        ack.AgentArchivePath.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Ack_ДесктопВыключен_ТолькоМинимальнаяВерсия()
+    {
+        var rig = NewRig(releases: null);
+
+        var ack = await ConnectAsync(rig, AgentHello(RequiredCli) with { Rid = "win-x64" });
+
+        ack.AgentMinVersion.Should().Be(DeviceAgentCompatibility.MinVersion);
+        ack.AgentLatestVersion.Should().BeNull();
+        ack.AgentArchivePath.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Ack_КлиентРукБезВерсииАгента_ПолейРаздачиНет()
+    {
+        using var rel = new AgentReleaseFixture();
+        var rig = NewRig(releases: new AgentReleaseCatalog(rel.Config()));
+
+        var ack = await ConnectAsync(rig, new DeviceHello(DesktopProtocol.Version, ["click"], "1.0.0", Rid: "win-x64"));
+
+        ack.AgentMinVersion.Should().BeNull();
+        ack.AgentLatestVersion.Should().BeNull();
+        ack.AgentArchiveSha256.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Hello_СостояниеОбновленияСохраняетсяНормализованным()
+    {
+        var rig = NewRig();
+
+        await ConnectAsync(rig, AgentHello(RequiredCli) with
+        {
+            AgentUpdate = new DeviceAgentUpdate(" Waiting-Idle ", "1.201.0+abc", "  открыт терминал  "),
+        });
+
+        var stored = new DeviceRegistry(_dataDir).Get(Owner, rig.Device.Id)!.AgentUpdate;
+        stored.Should().Be(new DeviceAgentUpdate(DeviceAgentUpdateStates.WaitingIdle, "1.201.0", "открыт терминал"));
+    }
+
+    [Fact]
+    public async Task Hello_НезнакомоеСостояниеОбновления_НеХранится()
+    {
+        var rig = NewRig();
+
+        await ConnectAsync(rig, AgentHello(RequiredCli) with { AgentUpdate = new DeviceAgentUpdate("rm -rf", "../1.0.0", null) });
+
+        rig.Registry.Get(Owner, rig.Device.Id)!.AgentUpdate.Should().BeNull();
     }
 
     // ---------- «харнес не готов»: ход отказывает сразу, с причиной ----------
@@ -157,6 +246,64 @@ public class DeviceExecChannelTests : IDisposable
 
         ack.HarnessReady.Should().BeTrue();
         rig.Channel.GetStatus(Owner, rig.Device.Id)!.CanExec.Should().BeTrue();
+    }
+
+    // ---------- устаревший агент (agent-distribution AD-6): отказ до открытия канала ----------
+
+    [Fact]
+    public async Task АгентНижеМинимума_ХодОтказываетAgentOutdatedДоОткрытияКанала()
+    {
+        var rig = NewRig();
+        await ConnectAsync(rig, AgentHello(RequiredCli) with { AgentVersion = "0.9.0" });
+
+        var status = rig.Channel.GetStatus(Owner, rig.Device.Id)!;
+        status.HarnessReady.Should().BeTrue("харнес в порядке — отказывает именно версия агента");
+        status.CanExec.Should().BeFalse();
+
+        var open = () => rig.Channel.OpenAsync(Owner, rig.Device.Id);
+        var refused = await open.Should().ThrowAsync<DeviceExecRefusedException>();
+        refused.Which.Reason.Should().Be(DeviceExecRefusal.AgentOutdated);
+        refused.Which.Message.Should().Contain(DeviceHarnessPolicy.NotReadyPrefix).And.Contain("0.9.0")
+            .And.Contain(DeviceAgentCompatibility.MinVersion);
+        rig.Opener.Calls.Should().Be(0, "до устройства команда открытия не доходит — отказ случается раньше");
+    }
+
+    [Fact]
+    public async Task АгентРовноМинимальнойВерсии_КаналОткрывается()
+    {
+        var rig = NewRig();
+        await ConnectAsync(rig, AgentHello(RequiredCli) with { AgentVersion = DeviceAgentCompatibility.MinVersion + "+0a1b2c3d" });
+
+        rig.Channel.GetStatus(Owner, rig.Device.Id)!.CanExec.Should().BeTrue();
+        var open = () => rig.Channel.OpenAsync(Owner, rig.Device.Id);
+        (await open.Should().ThrowAsync<DeviceExecRefusedException>()).Which.Reason.Should().Be(DeviceExecRefusal.NoResponse);
+        rig.Opener.Calls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task АгентНижеМинимумаОбновляется_СтатусНесётОбновлениеИПричинуОжидания()
+    {
+        var rig = NewRig();
+        await ConnectAsync(rig, AgentHello(RequiredCli) with
+        {
+            AgentVersion = "0.9.0",
+            AgentUpdate = new DeviceAgentUpdate(DeviceAgentUpdateStates.Downloading, "1.207.0"),
+        });
+
+        var status = rig.Channel.GetStatus(Owner, rig.Device.Id)!;
+        status.AgentUpdate!.State.Should().Be(DeviceAgentUpdateStates.Downloading);
+        status.AgentProblem.Should().Contain("агент обновляется").And.Contain("1.207.0");
+    }
+
+    [Fact]
+    public async Task Ретранслятор_АгентНижеМинимума_ОтказAgentOutdated()
+    {
+        var rig = NewRig();
+        await ConnectAsync(rig, AgentHello(null, DeviceCapabilities.Relay) with { AgentVersion = "0.9.0" });
+
+        var open = () => rig.Channel.OpenRelayAsync(Owner, rig.Device.Id);
+        (await open.Should().ThrowAsync<DeviceExecRefusedException>()).Which.Reason.Should().Be(DeviceExecRefusal.AgentOutdated);
+        rig.Opener.Calls.Should().Be(0);
     }
 
     // ---------- ретранслятор чтения (задача 5.1): тот же канал, другое назначение ----------
@@ -239,7 +386,7 @@ public class DeviceExecChannelTests : IDisposable
         var reloaded = new DeviceRegistry(_dataDir).Get(Owner, rig.Device.Id)!;
 
         reloaded.Platform.Should().Be("linux-x64");
-        reloaded.AgentVersion.Should().Be("0.1.0");
+        reloaded.AgentVersion.Should().Be(DeviceAgentCompatibility.MinVersion);
         reloaded.CliVersion.Should().Be(RequiredCli);
         reloaded.Capabilities.Should().Equal(DeviceCapabilities.Exec, DeviceCapabilities.Relay);
     }

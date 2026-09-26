@@ -792,6 +792,12 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DesktopAccessGat
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DeviceHarnessPolicy>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDeviceExecOpenSender,
     ClaudeHomeServer.Services.Desktop.DeviceHubExecOpenSender>();
+// Каталог релизов агента устройства (agent-distribution Р3, Р5): его читают и ack хаба, и
+// анонимная раздача AgentDownloadsController. Тумблер Subsystems:desktop:Enabled пока гасит
+// только раздачу агента (Desktop не оформлен подсистемой IAppSubsystem): нет регистрации —
+// каталог null, раздача отвечает 503 с причиной, ack не называет версий.
+if (SubsystemGate.IsEnabled(builder.Configuration, "desktop"))
+    builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.AgentReleaseCatalog>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DeviceExecChannel>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IDeviceExecChannel>(
     sp => sp.GetRequiredService<ClaudeHomeServer.Services.Desktop.DeviceExecChannel>());
@@ -1313,6 +1319,21 @@ builder.Services.AddRateLimiter(options =>
                 QueueLimit = 0,
             });
     });
+    // Анонимная раздача агента устройства (agent-distribution Р11): скрипты, указатель и
+    // архивы по 70–100 МБ. Партиция — IP: учётных данных у установщика нет по построению
+    options.AddPolicy(ClaudeHomeServer.Controllers.AgentDownloadsController.RateLimitPolicy, ctx =>
+    {
+        var limit = ctx.RequestServices.GetRequiredService<IConfiguration>()
+            .GetValue("DeviceAgent:DownloadRateLimit", 30);
+        return RateLimitPartition.GetFixedWindowLimiter(
+            ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = limit,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+            });
+    });
     // Поиск по каталогу MCP-серверов: потолок запросов обязан стоять на бэке —
     // дебаунс фронта не защита. Партиция — владелец: реестр внешний, и молотить его
     // от одного аккаунта нельзя; без sub (запрос до авторизации) — фолбэк на IP
@@ -1692,6 +1713,8 @@ if (inspectionMode)
     });
 }
 
+// Хаб устройств и канал исполнения — только HTTPS или петля, как сопряжение (ADR-008)
+ClaudeHomeServer.Services.Desktop.DeviceChannelGuard.UseDeviceChannelGuard(app);
 app.UseAuthentication();
 app.UseAuthorization();
 

@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- «Дочерний новой версии» для теста совместимости супервизора (agent-distribution Р7):
+       крошечный exe, который знает контракт ТОЛЬКО литералами — код 75, аргумент run, имена
+       active/previous и переменные окружения. Переименованный в ai-home-agent(.exe), он
+       ложится в versions/{v}/ и поднимается боевым супервизором. Ссылки на агента нет
+       намеренно: иначе правка константы контракта поменяла бы обе стороны разом. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>agent-child-fixture</AssemblyName>
+    <RootNamespace>ClaudeHomeServer.DeviceAgent.Tests.ChildFixture</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Гибель вместе с супервизором — тот же исходник, что у боевого run: проверяется он, а не копия -->
+    <Compile Include="..\ClaudeHomeServer.DeviceAgent\Supervision\ParentDeathSignal.cs" Link="ParentDeathSignal.cs" />
+  </ItemGroup>
+
+</Project>

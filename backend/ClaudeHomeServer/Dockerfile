@@ -24,6 +24,8 @@ WORKDIR /src
 COPY backend/ClaudeHomeServer/ClaudeHomeServer.csproj backend/ClaudeHomeServer/
 RUN dotnet restore backend/ClaudeHomeServer/ClaudeHomeServer.csproj
 COPY backend/ ./backend/
+# Скрипты установки агента устройства встраиваются в сборку ресурсом (AgentDownloadsController)
+COPY deploy/agent-install/ ./deploy/agent-install/
 # RID обязателен: без него SkiaSharp (растр редактора) кладёт в runtimes/ нативку под все
 # платформы, ~0,4 ГБ. Рантайм-образ — glibc x64, поэтому linux-x64
 RUN dotnet publish backend/ClaudeHomeServer/ClaudeHomeServer.csproj \

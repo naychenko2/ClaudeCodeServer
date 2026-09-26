@@ -210,7 +210,9 @@ public sealed record ProjectCapabilities(
     /// Можно ли фоновой работе (исполнитель задачи, волна штаба, очередь чата, автоматизация,
     /// опрос сторожа) запускать ход проекта прямо сейчас. Серверный проект — всегда да.
     /// Локальный: устройство готово — да; устройства нет (отозвано) — ждать нечего, отказ;
-    /// иначе (офлайн, нет exec, харнес не готов) — ждать выхода устройства в онлайн.
+    /// иначе (офлайн, нет exec, агент устарел, харнес не готов) — ждать выхода устройства в
+    /// онлайн. Устаревший агент — тоже ожидание, а не ошибка: после обновления он переподключится,
+    /// а причина различает «агент обновляется» и «обновите агента».
     /// </summary>
     public static ProjectBackgroundGate BackgroundGate(Project project, DeviceExecStatus? device)
     {
@@ -225,7 +227,8 @@ public sealed record ProjectCapabilities(
 
     /// <summary>
     /// Чтение файлов проекта с другого устройства через ретранслятор (ADR-016 §5): только у
-    /// локального проекта и только пока его устройство онлайн и объявило ретранслятор.
+    /// локального проекта и только пока его устройство онлайн, объявило ретранслятор и агент
+    /// не ниже минимальной версии.
     /// null — можно, иначе причина для человека.
     /// </summary>
     public static string? RelayRefusal(Project project, DeviceExecStatus? device) =>
@@ -233,7 +236,7 @@ public sealed record ProjectCapabilities(
         : device is null ? DeviceMissingReason
         : !device.Online ? DeviceOfflineReason
         : !device.HasCapability(DeviceCapabilities.Relay) ? NoRelayReason
-        : null;
+        : device.AgentProblem;
 
     /// <summary>
     /// Матрица для проекта. <paramref name="device"/> — состояние устройства проекта из шва
@@ -262,6 +265,7 @@ public sealed record ProjectCapabilities(
             device is null ? DeviceMissingReason
             : !device.Online ? DeviceOfflineReason
             : !device.HasCapability(DeviceCapabilities.Exec) ? NoExecReason
+            : device.AgentOutdated ? device.AgentProblem
             : !device.HarnessReady ? device.HarnessProblem ?? "Харнес устройства не готов"
             : null;
 

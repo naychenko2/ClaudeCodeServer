@@ -35,6 +35,14 @@
        Этап 5, волна C, шаг 2: перенесён в `ClaudeHomeServer.ProjectIcons.csproj`
        вместе с вертикалью (EmbeddedResource едет со сборкой, в которой живёт). -->
 
+  <!-- Скрипты установки агента устройства (agent-distribution Р10): раздаются анонимно по
+       /agent/install.ps1 и /agent/install.sh, поэтому встроены в сборку и с диска по пути из
+       запроса не читаются никогда. LogicalName — короткое имя, по нему читает контроллер. -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\deploy\agent-install\install.ps1" LogicalName="AgentInstall.install.ps1" />
+    <EmbeddedResource Include="..\..\deploy\agent-install\install.sh" LogicalName="AgentInstall.install.sh" />
+  </ItemGroup>
+
   <!-- Хостовый publish: встроенные MCP-серверы и дефолты CLI кладём рядом с exe —
        TasksServerLocator и синк workflows ищут их от AppContext.BaseDirectory
        (в контейнере это делала копия в /app из Dockerfile) -->

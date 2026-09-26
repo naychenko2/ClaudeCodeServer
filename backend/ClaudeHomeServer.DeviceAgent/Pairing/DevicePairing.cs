@@ -12,7 +12,9 @@ namespace ClaudeHomeServer.DeviceAgent.Pairing;
 /// человек выпускает в вебе одноразовый код, агент меняет его на токен устройства через
 /// <c>POST /api/devices/pair</c>. Никаких других учётных данных у агента нет и не будет.
 /// </summary>
-internal sealed record DeviceRegistration(string ServerUrl, string DeviceId, string DeviceName, string Fingerprint)
+/// <param name="TokenStore">Где лежит токен (<c>DeviceTokenStores.*Kind</c>); null — сопряжение до записи выбора.</param>
+internal sealed record DeviceRegistration(
+    string ServerUrl, string DeviceId, string DeviceName, string Fingerprint, string? TokenStore = null)
 {
     public static DeviceRegistration? Load(string file)
     {
@@ -59,8 +61,8 @@ internal sealed class PairingClient(HttpClient http)
         Uri server, string code, string deviceName, string clientVersion, IDeviceTokenStore store, CancellationToken ct = default)
     {
         // По открытому каналу код и токен не выдаются (ADR-008); loopback — дев-стенд
-        if (server.Scheme != Uri.UriSchemeHttps && !server.IsLoopback)
-            throw new PairingException("сопряжение только по HTTPS: по открытому каналу код и токен не выдаются");
+        if (!ServerChannel.IsSecure(server))
+            throw new PairingException("сопряжение только по HTTPS: " + ServerChannel.InsecureError);
 
         var fingerprint = MachineIdentity.Fingerprint();
         using var response = await http.PostAsJsonAsync(new Uri(server, "api/devices/pair"),

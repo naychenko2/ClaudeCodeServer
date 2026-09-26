@@ -3,7 +3,7 @@ import { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback, Fra
 import { ArrowDown, ArrowUp, RotateCw, CircleHelp, Archive, ArchiveRestore } from 'lucide-react';
 import type { Project, Session, ChatItem, SkillInfo, AgentInfo, ClaudeBilling, Persona, Task, WorkLoopState, SessionTeamImplement, TeamPlanDecision, ImageSnapshotMark } from '../types';
 import { ProjectFeature } from '../types';
-import { featureReason, useProjectFeature } from '../lib/projectCapabilities';
+import { featureReason, isLocalProject, useProjectFeature } from '../lib/projectCapabilities';
 import { useSession } from '../hooks/useSession';
 import { usePersonasVersion, getPersonaById, getPersonasSnapshot, ensurePersonasLoaded, personaLabel } from '../lib/personas';
 import { findConsultedPersona } from './chat/PersonaTaskView';
@@ -843,7 +843,10 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   }, [composerH, embedded]);
   // Контекст проекта для резолва локальных путей картинок в сообщениях
   const projectCtx = useMemo(() => project
-    ? { id: project.id, rootPath: project.rootPath, transcriptReason: featureReason(project, ProjectFeature.WorkflowView) }
+    ? {
+      id: project.id, rootPath: project.rootPath, transcriptReason: featureReason(project, ProjectFeature.WorkflowView),
+      local: isLocalProject(project), devicePlatform: project.device?.platform ?? null,
+    }
     : null, [project]);
   // Ветка копирует транскрипт CLI на сервере — у локального проекта кнопок ветвления нет
   const branchAvailable = useProjectFeature(project, ProjectFeature.ChatBranch);

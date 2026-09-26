@@ -1,5 +1,5 @@
 // Открыть редактор из ленты полного чата или из списка чатов: у чата картинки есть свой файл
-// (imageChat.currentPath), имя проекта нужно шапке редактора.
+// (imageChat.currentPath) или папка черновика, имя проекта нужно шапке редактора.
 
 import { api as appApi, getFlag, FLAGS, showToast } from 'aihome_shell/kit';
 import type { Session } from '../../../types';
@@ -21,10 +21,12 @@ export interface OpenChatExtras {
 
 export function openImageChat(session: Session, extras?: OpenChatExtras): boolean {
   const path = session.imageChat?.currentPath;
-  if (!path || !session.projectId || !getFlag(FLAGS.imageEditor)) return false;
+  // Черновик «Нарисовать картинку»: файла ещё нет — редактор новой картинки в той же папке
+  const folder = session.imageChat?.draftFolder;
+  if ((!path && folder == null) || !session.projectId || !getFlag(FLAGS.imageEditor)) return false;
   const projectId = session.projectId;
   void projectName(projectId).then(name => openImageEditor({
-    projectId, projectName: name, target: { kind: 'edit', path }, sessionId: session.id,
+    projectId, projectName: name, target: path ? { kind: 'edit', path } : { kind: 'create', folder: folder ?? '' }, sessionId: session.id,
     initialPrompt: extras?.prompt, showJob: extras?.job,
   }));
   return true;

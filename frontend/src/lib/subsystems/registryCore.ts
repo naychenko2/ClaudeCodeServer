@@ -199,7 +199,8 @@ export interface ImageChatPrepared {
 // рисует готовый компонент, а не свою копию ChatPanel (ADR-018 §10.3, вариант В)
 export interface ImageChatSlotProps {
   projectId: string;
-  sourcePath: string;
+  // null — картинки в проекте ещё нет («Нарисовать картинку»): чат-черновик по папке
+  sourcePath: string | null;
   // null — чата ещё нет: композер-заглушка, чат создаётся первым сообщением
   sessionId: string | null;
   // Псевдоключ черновика `image:{projectId}:{path}`

@@ -14,7 +14,7 @@
 
 import { useMemo, useSyncExternalStore } from 'react';
 import type { ComponentType, LazyExoticComponent, ReactNode } from 'react';
-import type { AuthState, ImageSnapshotMark, NoteDetail, Session } from '../../types';
+import type { AuthState, ChatItem, ImageSnapshotMark, NoteDetail, Persona, Session } from '../../types';
 import type { HubTabValue } from '../../components/hubTabsModel';
 import { isSubsystemEnabled, subscribeSubsystems } from '../subsystems';
 
@@ -217,6 +217,22 @@ export interface ImageChatSlotProps {
 }
 // Render-слот `app-overlay`: слои уровня приложения поверх раскладки
 export interface AppOverlayCtx { ImageChat: ComponentType<ImageChatSlotProps> }
+
+// Render-слот `chat-item-tool`: своя карточка записи ленты. Имя вклада — полное имя
+// инструмента у tool_use (`mcp__image-editor__image_generate`) или kind записи
+// (`image_launch`). Нет вклада — лента рисует запись как раньше
+export interface ChatItemToolCtx {
+  item: ChatItem;
+  online: boolean;
+  projectId: string | null;
+  sessionId: string | null;
+  persona: Persona | null;
+}
+
+// Render-слот `chat-card-badge`: значок и миниатюра в карточке списка чатов. Действие
+// вклада open перехватывает клик по карточке: true — клик обработан, чат не открываем
+export interface ChatCardBadgeCtx { session: Session; isMobile: boolean }
+export interface ChatCardBadgeApi { open?: (session: Session) => boolean }
 
 // ---- Хранилище ----
 const _manifests: SubsystemManifest[] = [];

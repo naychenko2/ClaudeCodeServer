@@ -733,6 +733,19 @@ export interface SessionImageChat {
   lineage: string[];
 }
 
+// Ручной запуск генерации из редактора в ленте чата картинки (StoredImageLaunchMessage):
+// by — "human" | "agent", estimate — котировка на момент запуска
+export interface ImageLaunchFields {
+  by: string;
+  prompt: string;
+  provider: string;
+  model: string;
+  count: number;
+  estimate?: { amount: number | null; unit: string; approx: boolean; source: string } | null;
+  jobId: string;
+  timestamp?: number;
+}
+
 // Пометка снимка холста у сообщения чата картинки (ADR-018 §3, StoredUserMessage.ImageSnapshot):
 // revision — ревизия холста на момент отправки; attached=false — холст не менялся, снимок не приложен
 export interface ImageSnapshotMark {
@@ -1132,6 +1145,10 @@ export type ServerMessage = { sessionId: string } & (
       prefillSeconds?: number; cacheReadTokens?: number; promptTokens?: number;
     }
   | { type: 'compact_status'; status?: string; compactResult?: string; compactError?: string }
+  // Записи ленты чата картинки (ADR-018 §1, §2): живые копии StoredImageLaunchMessage и
+  // StoredImageFileMovedMessage. Рисует их модуль редактора через слот chat-item-tool
+  | ({ type: 'image_launch' } & ImageLaunchFields)
+  | { type: 'image_file_moved'; from: string; to: string; timestamp?: number }
   | { type: 'truncated' }
   | { type: 'redacted_thinking' }
   | { type: 'exited' }
@@ -1999,6 +2016,9 @@ export type ChatItem =
       blocks: number; resultBlocks: number; inputBlocks: number; thinkingBlocks: number;
       prefillSeconds?: number; cacheReadTokens?: number; promptTokens?: number;
     }
+  // Тихие строки чата картинки: «Вы запустили: …» и «Сохранено как …» (ADR-018 §1, §2)
+  | ({ kind: 'image_launch' } & ImageLaunchFields)
+  | { kind: 'image_file_moved'; from: string; to: string; timestamp?: number }
   | { kind: 'truncated' }
   | { kind: 'redacted_thinking' }
   // ts — момент остановки (история: StoredInterruptedMessage.Timestamp); в живой ленте нет

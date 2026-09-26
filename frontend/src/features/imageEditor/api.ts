@@ -381,7 +381,8 @@ export interface ImageEditorApi {
   findChats(projectId: string, path: string): Promise<ImageChatLookupResponse>;
   setChatPath(projectId: string, sessionId: string, req: ImageChatPathRequest): Promise<Session>;
   getChatState(projectId: string, sessionId: string): Promise<ImageChatState>;
-  putChatState(projectId: string, sessionId: string, state: ImageChatState): Promise<ImageChatState>;
+  // mask — маска кисти: едет multipart и только при смене canvasRevision
+  putChatState(projectId: string, sessionId: string, state: ImageChatState, mask?: Blob | null): Promise<ImageChatState>;
   subscribeChatState(handler: (e: ImageChatStateEvent) => void): () => void;
 }
 
@@ -451,8 +452,14 @@ const liveApi: ImageEditorApi = {
     request<Session>(`${chatBase(projectId)}/${encodeURIComponent(sessionId)}/path`, { method: 'PUT', body: JSON.stringify(req) }),
   getChatState: (projectId, sessionId) =>
     request<ImageChatState>(`${chatBase(projectId)}/${encodeURIComponent(sessionId)}/state`, { live: true }),
-  putChatState: (projectId, sessionId, state) =>
-    request<ImageChatState>(`${chatBase(projectId)}/${encodeURIComponent(sessionId)}/state`, { method: 'PUT', body: JSON.stringify(state) }),
+  putChatState: (projectId, sessionId, state, mask) => {
+    const url = `${chatBase(projectId)}/${encodeURIComponent(sessionId)}/state`;
+    if (!mask) return request<ImageChatState>(url, { method: 'PUT', body: JSON.stringify(state) });
+    const form = new FormData();
+    form.append('state', JSON.stringify(state));
+    form.append('mask', mask, 'mask.png');
+    return request<ImageChatState>(url, { method: 'PUT', body: form, timeoutMs: 60_000 });
+  },
   subscribeChatState: handler => onMessage(msg => {
     const m = msg as unknown as { type?: string };
     if (m.type === 'image_chat_state') handler(m as unknown as ImageChatStateEvent);

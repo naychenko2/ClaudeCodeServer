@@ -30,7 +30,7 @@ import { stripVoiceMarker } from '../../lib/tts';
 import { VoiceDigestNote, parseVoiceDigest } from './VoiceDigestNote';
 import { useContextPersona } from '../../lib/contextPersona';
 import { useSlotItem } from '../../lib/subsystems/registry';
-import type { ChatItemSaveNoteCtx, ChatItemFileChangedApi } from '../../lib/subsystems/registryCore';
+import type { ChatItemSaveNoteCtx, ChatItemFileChangedApi, ChatItemToolCtx } from '../../lib/subsystems/registryCore';
 import { ChatProjectContext, ChatTreePathContext, ChatSessionContext, PersonaContext, SpeakingItemContext, useAssistantName } from './contexts';
 import { PromptSnapshotDialog } from '../../features/chat/PromptSnapshotDialog';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
@@ -1038,6 +1038,13 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
   // Вклад карточки изменённого файла-заметки: заметка ли это (match) и как её
   // открыть/нарисовать. Нет вклада — обычная карточка изменённого файла.
   const fileChangedNote = useSlotItem<never, ChatItemFileChangedApi>('chat-item-action', 'file-changed');
+  // Своя карточка записи от подсистемы (редактор картинок: image_generate, image_launch…):
+  // ключ — имя инструмента у tool_use, иначе kind. Прямых веток по именам модулей в ядре нет
+  const chatSessionId = useContext(ChatSessionContext);
+  const ownView = useSlotItem<ChatItemToolCtx>('chat-item-tool', item.kind === 'tool_use' ? item.name : item.kind);
+  if (ownView?.render) {
+    return <>{ownView.render({ item, online, projectId: project?.id ?? null, sessionId: chatSessionId, persona })}</>;
+  }
   switch (item.kind) {
     case 'user_message': {
       // Служебный ход механики штаба (ответ на карточку, возврат в интервью, сводка волны) —

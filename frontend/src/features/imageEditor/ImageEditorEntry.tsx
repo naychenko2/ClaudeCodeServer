@@ -18,6 +18,9 @@ interface EntryProps {
   target: ImageEditorTarget;
   // Чат картинки, с которым открыть редактор (карточка чата в списке)
   sessionId?: string | null;
+  // Из ленты полного чата: промпт карточки «✦ Промпт» и задача карточки запуска
+  initialPrompt?: string;
+  showJob?: { jobId: string; count: number };
   onShowInFiles?: (path: string) => void;
   size?: 'xs' | 'sm';
 }
@@ -112,7 +115,7 @@ function ImageEditorLayer({ onClose, ImageChat, ...props }: Omit<EntryProps, 'si
       padding: mobile ? 0 : ISLAND.pad, display: 'flex', flexDirection: 'column',
     }}>
       <ImageEditor {...props} ImageChat={ImageChat} onClose={onClose} onDirtyChange={d => { dirty.current = d; }}
-        onOpenPath={path => openImageEditor({ ...props, sessionId: null, target: { kind: 'edit', path } })}
+        onOpenPath={path => openImageEditor({ ...props, sessionId: null, initialPrompt: undefined, showJob: undefined, target: { kind: 'edit', path } })}
         onShowInFiles={props.onShowInFiles ? path => { onClose(); props.onShowInFiles?.(path); } : undefined} />
       {leaveAsk && (
         <ConfirmDialog title="Закрыть редактор?" subtitle="Несохранённые варианты пропадут."

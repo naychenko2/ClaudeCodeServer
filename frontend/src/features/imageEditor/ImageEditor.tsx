@@ -10,7 +10,7 @@ import {
   C, FS, ISLAND, R, SHADOW, SP, useIsMobile, api as appApi, showToast, useMe, ModelsSpendModal, getNav, navPush, type NavSnapshot,
 } from 'aihome_shell/kit';
 import {
-  AUTO_MODEL, imageEditorApi, type ImageEditCatalog, type ImageEditCatalogReason, type ImageEditQuoteRequest, type ImageEditSaveRequest,
+  AUTO_MODEL, imageEditorApi, type ImageChatState, type ImageChatStateEvent, type ImageEditCatalog, type ImageEditInitiator, type ImageEditCatalogReason, type ImageEditQuoteRequest, type ImageEditSaveRequest,
   type ImageEncodeFormat, type ImageEncodeSpec, type ImageFractionRect, type ImageTransformBase, type ImageTransformOp,
 } from './api';
 import { EditorCanvas } from './EditorCanvas';
@@ -35,6 +35,10 @@ import { SaveAsDialog } from './SaveAsDialog';
 import { defaultStem, nameStem } from './saveAs';
 import { CharacterChip, CharacterSection, useCharacterDialogs, useCharacters } from './characters/CharacterPicker';
 import { useImageChat } from './chat/useImageChat';
+import { useChatStateSync } from './chat/useChatStateSync';
+import { applyAgentChanges, NO_AGENT_MARKS, providerFromState, type AgentMarks, type AgentApplied, type EditorSettings } from './chat/stateSync';
+import { ImageEditorBridge, type ImageEditorBridgeApi } from './chat/bridge';
+import { AgentTag } from './PromptCard';
 import type { ImageChatSlotProps } from '../../lib/subsystems/registryCore';
 
 export type ImageEditorTarget =
@@ -43,12 +47,15 @@ export type ImageEditorTarget =
 
 const ic = (I: typeof Brush, size: number = ICON_SIZE.sm) => <I size={size} strokeWidth={ICON_STROKE} />;
 
-export function ImageEditor({ projectId, projectName, target, sessionId: openSessionId, ImageChat, onClose, onOpenPath, onShowInFiles, onDirtyChange }: {
+export function ImageEditor({ projectId, projectName, target, sessionId: openSessionId, initialPrompt, showJob, ImageChat, onClose, onOpenPath, onShowInFiles, onDirtyChange }: {
   projectId: string;
   projectName: string;
   target: ImageEditorTarget;
   // Чат картинки, с которым открыли редактор (карточка чата)
   sessionId?: string | null;
+  // Из ленты полного чата: промпт карточки «✦ Промпт» и задача карточки запуска
+  initialPrompt?: string;
+  showJob?: { jobId: string; count: number };
   // Чат картинки ядра (контекст слота app-overlay): своей копии ChatPanel у модуля нет
   ImageChat: ComponentType<ImageChatSlotProps>;
   onClose: () => void;
@@ -90,8 +97,13 @@ export function ImageEditor({ projectId, projectName, target, sessionId: openSes
   const [marks, setMarks] = useState<Mark[]>([]);
   const [tool, setTool] = useState<Tool>('mask');
   const [labelAt, setLabelAt] = useState<{ x: number; y: number; text: string } | null>(null);
-  const [prompt, setPrompt] = useState('');
+  const [prompt, setPrompt] = useState(initialPrompt ?? '');
   const [count, setCount] = useState(3);
+  // Кто поставил промпт в поле и какие настройки поменял агент — метки «✦ … Claude»
+  const [promptAuthor, setPromptAuthor] = useState<ImageEditInitiator>(initialPrompt ? 'agent' : 'human');
+  const [agentMarks, setAgentMarks] = useState<AgentMarks>(initialPrompt ? { ...NO_AGENT_MARKS, prompt: true } : NO_AGENT_MARKS);
+  const [promptDraft, setPromptDraft] = useState<string | null>(null);
+  const [promptFlash, setPromptFlash] = useState(initialPrompt ? 1 : 0);
   const [selected, setSelected] = useState(0);
   // Открытый «Сохранить как…»: источник и формат результата (от него расширение)
   const [saveAs, setSaveAs] = useState<{ from: SaveSource; format: ImageEncodeFormat } | null>(null);
@@ -135,8 +147,9 @@ export function ImageEditor({ projectId, projectName, target, sessionId: openSes
         if (!alive) return;
         setCatalog(c);
         // Умолчание — поставщик и модель из настройки места image-editor
-        if (c.default.provider) setModel(c.default.model);
-        else setProvider(c.providers[0]?.key ?? 'settings');
+        // Выбор мог уже прийти из состояния чата — его не затираем
+        if (c.default.provider) setModel(m => (m === AUTO_MODEL ? c.default.model : m));
+        else setProvider(p => (p === 'settings' ? c.providers[0]?.key ?? 'settings' : p));
       })
       .catch((e: Error) => { if (alive) setCatalogError(e.message); });
     return () => { alive = false; };
@@ -173,6 +186,15 @@ export function ImageEditor({ projectId, projectName, target, sessionId: openSes
     // Сменился поставщик — модель сбрасывается на «Авто»: список моделей у него свой
     if (p !== provider) setModel(p === 'settings' && catalog?.default.provider ? catalog.default.model : AUTO_MODEL);
     setProvider(p);
+    setAgentMarks(x => ({ ...x, model: false }));
+  };
+  // Ручная правка снимает метку агента и пишет author = human
+  const onModel = (id: string) => { setModel(id); setAgentMarks(x => ({ ...x, model: false })); };
+  const onCount = (n: number) => { setCount(n); setAgentMarks(x => ({ ...x, count: false })); };
+  const onPrompt = (v: string) => {
+    setPrompt(v);
+    setPromptAuthor('human');
+    setAgentMarks(x => ({ ...x, prompt: false }));
   };
 
   const canGenerate = !!quote && !quoteLoading && !blocked && !busy && !transforming && (hasImage || !!prompt.trim());
@@ -358,6 +380,120 @@ export function ImageEditor({ projectId, projectName, target, sessionId: openSes
     onClose, onOpenPath,
   });
 
+  // ── Состояние редактора на сервере и правки агента (ADR-018 §2) ──
+  const marksJson = useMemo(() => (marks.length && size ? JSON.parse(marksToJson(marks, size.w, size.h)) as unknown : null), [marks, size]);
+  const stepBase = curStep?.base;
+  const settings: EditorSettings = {
+    prompt, promptAuthor, provider, model, count,
+    references: samples.flatMap(x => (x.source === 'project' ? [{ path: x.path, role: x.role }] : [])),
+    characterSlug: character?.slug ?? null, matchSourceSize: matchSize, marks: marksJson,
+    canvasRevision: chat.revision, currentStepId: stepBase && 'stepId' in stepBase && stepBase.stepId ? stepBase.stepId : null,
+  };
+
+  const applyPatch = (patch: AgentApplied['patch']) => {
+    if (patch.prompt !== undefined) setPrompt(patch.prompt);
+    if (patch.promptAuthor) setPromptAuthor(patch.promptAuthor);
+    if (patch.provider !== undefined) setProvider(patch.provider);
+    if (patch.model !== undefined) setModel(patch.model);
+    if (patch.count !== undefined) setCount(Math.min(4, Math.max(1, patch.count)));
+    if (patch.matchSourceSize !== undefined) setMatchSize(patch.matchSourceSize);
+    if (patch.characterSlug !== undefined) chars.setActive(patch.characterSlug);
+    if (patch.references) {
+      const refs = patch.references;
+      setSamples(list => [
+        ...list.filter(x => x.source === 'upload'),
+        ...refs.map((r): Sample => {
+          const had = list.find(x => x.source === 'project' && x.path === r.path);
+          return had ? { ...had, role: r.role } : {
+            id: `p${++stepSeq.current}`, source: 'project', name: splitPath(r.path).name, role: r.role, path: r.path, url: appApi.files.fileUrl(projectId, r.path),
+          };
+        }),
+      ]);
+    }
+  };
+
+  // Открыли чат: редактор забирает сохранённое состояние. Промпт, который уже в поле
+  // (пришёл из карточки полного чата или набран до ответа сервера), не затираем
+  const onStateLoad = (st: ImageChatState) => {
+    if (!st.revision) return;
+    const keepPrompt = !!prompt.trim();
+    applyPatch({
+      ...(keepPrompt ? null : { prompt: st.prompt, promptAuthor: st.promptAuthor }),
+      provider: providerFromState(st.provider), model: st.model || AUTO_MODEL, count: st.count,
+      matchSourceSize: st.matchSourceSize, ...(st.references.length ? { references: st.references } : null),
+    });
+    if (!keepPrompt && st.promptAuthor === 'agent' && st.prompt) setAgentMarks(x => ({ ...x, prompt: true }));
+  };
+
+  const onAgentState = (e: ImageChatStateEvent) => {
+    const applied = applyAgentChanges({ prompt, promptAuthor }, agentMarks, e.state, e.changes);
+    applyPatch(applied.patch);
+    setAgentMarks(applied.marks);
+    if (applied.draft) setPromptDraft(applied.draft);
+    if (applied.patch.prompt !== undefined) setPromptFlash(n => n + 1);
+  };
+
+  useChatStateSync({
+    api, projectId, sessionId: chat.sessionId, settings,
+    maskFor: async () => (size && hasMaskMark(marks) ? exportMask(marks, size.w, size.h) : null),
+    onLoad: onStateLoad, onAgent: onAgentState,
+  });
+
+  // Задача агента этого чата: свободный редактор показывает её в центре сам
+  const attachJob = job.attach;
+  const [agentJob, setAgentJob] = useState<string | null>(null);
+  const idle = job.phase === 'idle' && !crop;
+  const idleRef = useRef(idle);
+  useEffect(() => { idleRef.current = idle; });
+  const trackAgentJob = useCallback((jobId: string, n: number, expected?: number | null) => {
+    if (!idleRef.current) return;
+    idleRef.current = false;
+    setAgentJob(jobId);
+    attachJob(jobId, n, expected);
+  }, [attachJob]);
+  const chatSessionId = chat.sessionId;
+  useEffect(() => api.subscribe(e => {
+    if (!chatSessionId || e.chatSessionId !== chatSessionId || e.initiator !== 'agent' || e.type !== 'image_edit_progress') return;
+    trackAgentJob(e.jobId, count);
+  }), [api, chatSessionId, trackAgentJob, count]);
+
+  // Открыли из карточки запуска в полном чате — сразу на этой задаче
+  const shownJob = useRef(false);
+  useEffect(() => {
+    if (!showJob || shownJob.current) return;
+    shownJob.current = true;
+    setAgentJob(showJob.jobId);
+    attachJob(showJob.jobId, showJob.count);
+  }, [showJob, attachJob]);
+
+  // Агент (или карточка) ставит промпт в поле: метка, подсветка, текст человека — в черновик
+  const putAgentPrompt = (p: string, n?: number | null) => {
+    if (promptAuthor === 'human' && prompt.trim() && prompt !== p) setPromptDraft(prompt);
+    setPrompt(p);
+    setPromptAuthor('agent');
+    setAgentMarks(x => ({ ...x, prompt: true, count: n ? true : x.count }));
+    setPromptFlash(k => k + 1);
+    if (n) setCount(Math.min(4, Math.max(1, n)));
+    setSheet(null);
+  };
+
+  const bridge: ImageEditorBridgeApi = {
+    sessionId: chat.sessionId, busy: busy || transforming, priceSum: notConfigured ? null : priceSumLabel,
+    insertPrompt: (p, o) => putAgentPrompt(p, o?.count),
+    generate: (p, o) => {
+      putAgentPrompt(p, o?.count);
+      void launch({ kind: 'prompt', prompt: p }, o?.count ? Math.min(4, Math.max(1, o.count)) : count);
+    },
+    showJob: (jobId, n, expected) => {
+      if (busy && job.jobId !== jobId) { showToast('Дождитесь текущей генерации', '', 'info'); return; }
+      setSheet(null);
+      setCrop(null);
+      setAgentJob(jobId);
+      job.attach(jobId, n, expected);
+    },
+    trackJob: trackAgentJob,
+  };
+
   // Вариант становится шагом истории: «Взять за основу» и сохранение варианта
   const pushVariantStep = (jobId: string, variant: number) => {
     const url = api.variantUrl(projectId, jobId, variant);
@@ -373,7 +509,7 @@ export function ImageEditor({ projectId, projectName, target, sessionId: openSes
   const takeAsBase = () => {
     if (!job.jobId) return;
     pushVariantStep(job.jobId, sel);
-    setPrompt('');
+    onPrompt('');
   };
 
   // «Сохранить как…»: вариант задачи или шаг истории. Тяжёлый файл (больше HeavyFileMb) —
@@ -452,7 +588,8 @@ export function ImageEditor({ projectId, projectName, target, sessionId: openSes
   // ── Центр ──
   let center: ReactNode;
   if (job.phase === 'running' || job.phase === 'starting') {
-    center = <GenerationView count={job.count} progress={job.progress} onCancel={job.cancel} mobile={mobile} />;
+    center = <GenerationView count={job.count} progress={job.progress} onCancel={job.cancel} mobile={mobile}
+      byLabel={agentJob && agentJob === job.jobId ? (chat.hasPersona ? `запуск: ${chat.who}` : 'запустил Claude') : null} />;
   } else if (job.phase === 'variants' && job.jobId) {
     const jobId = job.jobId;
     center = (
@@ -550,16 +687,17 @@ export function ImageEditor({ projectId, projectName, target, sessionId: openSes
     },
     {
       id: 'model', title: 'Чем рисовать',
-      meta: pv && m ? `${pv.label} · ${m.label}` : undefined,
+      meta: pv && m ? `${agentMarks.model ? '✦ ' : ''}${pv.label} · ${m.label}` : undefined,
       body: (
         <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+          {agentMarks.model && <span style={{ alignSelf: 'flex-start' }}><AgentTag>{chat.hasPersona ? `модель: ${chat.who}` : 'модель сменил Claude'}</AgentTag></span>}
           {catalogError && <div style={{ fontSize: FS.sm, color: C.dangerText }}>{catalogError}</div>}
           {notConfigured && catalog && (
             <NotConfigured reason={catalogReason(catalog)} isAdmin={me.role === 'admin'} onSetup={() => setProvidersOpen(true)} />
           )}
           {catalog && !notConfigured && (
             <ProviderModelPicker catalog={catalog} provider={provider} model={m?.id ?? model}
-              onProvider={onProvider} onModel={setModel} hasImage={hasImage} hasMask={hasMask}
+              onProvider={onProvider} onModel={onModel} hasImage={hasImage} hasMask={hasMask}
               priceLabel={priceLabel} mobile={mobile} />
           )}
           <label style={{ display: 'flex', alignItems: 'center', gap: SP.sm, cursor: 'pointer' }}>
@@ -580,8 +718,10 @@ export function ImageEditor({ projectId, projectName, target, sessionId: openSes
 
   // ── Поле промпта ──
   const promptCard = (
-    <PromptCard prompt={prompt} onPrompt={setPrompt} busy={busy} busyCount={job.count} onCancel={job.cancel}
-      count={count} onCount={setCount} priceSum={notConfigured ? null : priceSumLabel}
+    <PromptCard prompt={prompt} onPrompt={onPrompt} busy={busy} busyCount={job.count} onCancel={job.cancel}
+      count={count} onCount={onCount}
+      agentLabel={agentMarks.prompt ? (chat.hasPersona ? chat.who : 'написал Claude') : null} flash={promptFlash}
+      draft={promptDraft} onRestoreDraft={() => { onPrompt(promptDraft ?? ''); setPromptDraft(null); }} countByAgent={agentMarks.count} priceSum={notConfigured ? null : priceSumLabel}
       canGenerate={canGenerate} blockedReason={blocked} onGenerate={() => { void generate(); }} mobile={mobile}
       placeholder={character
         ? `Где и что делает ${character.name}? Например, «${character.name} сидит в кафе у окна»`
@@ -603,7 +743,9 @@ export function ImageEditor({ projectId, projectName, target, sessionId: openSes
   // ── Чат картинки: только у картинки, которая лежит в проекте ──
   const chatArea = chat.props ? (
     <div data-image-chat="" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-      <ImageChat {...chat.props} />
+      <ImageEditorBridge.Provider value={bridge}>
+        <ImageChat {...chat.props} />
+      </ImageEditorBridge.Provider>
     </div>
   ) : (
     <div style={{ flex: 1, minHeight: 0, padding: SP.md, fontSize: FS.sm, color: C.textMuted, lineHeight: 1.45, textAlign: 'center' }}>

@@ -33,7 +33,11 @@ export function useImageEditJob(api: ImageEditorApi, projectId: string) {
   // Итоговое состояние задачи из GET — для догонялки после обрыва
   const applyJob = useCallback((job: ImageEditJob) => {
     if (jobRef.current?.id !== job.jobId) return;
-    if (job.status === 'completed') {
+    // Отмена — не ошибка: задачу отменили кнопкой (здесь или в карточке ленты)
+    if (job.status === 'cancelled') {
+      jobRef.current = null;
+      setS(IDLE);
+    } else if (job.status === 'completed') {
       jobRef.current = null;
       setS(p => ({ ...p, phase: 'variants', progress: 100, variants: job.variants, cost: job.cost ?? null }));
     } else if (job.status === 'failed' || job.status === 'interrupted') {
@@ -53,6 +57,9 @@ export function useImageEditJob(api: ImageEditorApi, projectId: string) {
     } else if (e.type === 'image_edit_completed') {
       jobRef.current = null;
       setS(p => ({ ...p, phase: 'variants', progress: 100, variants: e.variants, cost: e.cost ?? null }));
+    } else if (e.outcome === 'cancelled') {
+      jobRef.current = null;
+      setS(IDLE);
     } else {
       jobRef.current = null;
       setS(p => ({ ...p, phase: 'error', failure: {
@@ -99,7 +106,22 @@ export function useImageEditJob(api: ImageEditorApi, projectId: string) {
     if (id) await api.cancelJob(projectId, id).catch(() => { /* задача уже закончилась */ });
   }, [api, projectId]);
 
+  // Задача, запущенная не этой кнопкой (агент чата, карточка «Показать варианты»):
+  // берём её под наблюдение и сверяемся с сервером — она могла уже закончиться
+  const attach = useCallback((jobId: string, count: number, expectedSeconds?: number | null) => {
+    if (jobRef.current?.id === jobId) return;
+    jobRef.current = { id: jobId, started: Date.now(), expectedMs: Math.max(5, expectedSeconds ?? 30) * 1000 };
+    setS({ ...IDLE, phase: 'running', jobId, count });
+    api.getJob(projectId, jobId).then(applyJob).catch(() => {
+      if (jobRef.current?.id !== jobId) return;
+      jobRef.current = null;
+      setS(p => ({ ...p, phase: 'error', failure: {
+        outcome: 'failed', charged: null, error: 'Задача не найдена: сервер мог перезапуститься', retryQuote: null,
+      } }));
+    });
+  }, [api, projectId, applyJob]);
+
   const reset = useCallback(() => { jobRef.current = null; setS(IDLE); }, []);
 
-  return { ...s, start, cancel, reset };
+  return { ...s, start, cancel, reset, attach };
 }

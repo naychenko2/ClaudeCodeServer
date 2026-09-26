@@ -7,6 +7,7 @@ import { Button, SegmentedControl, ICON_SIZE, ICON_STROKE, C, FS, R, SHADOW, SP 
 import type { EditCost } from './api';
 import type { JobFailure } from './useImageEditJob';
 import { money, variantsWord } from './format';
+import { AgentTag } from './PromptCard';
 
 const icon = (I: typeof Check) => <I size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />;
 
@@ -15,13 +16,16 @@ const area = (mobile: boolean) => ({
   display: 'flex', flexDirection: 'column' as const, gap: SP.md,
 });
 
-export function GenerationView({ count, progress, onCancel, mobile }: {
+export function GenerationView({ count, progress, onCancel, mobile, byLabel }: {
   count: number; progress: number; onCancel: () => void; mobile: boolean;
+  // «✦ запустил Claude»: генерацию запустил агент чата
+  byLabel?: string | null;
 }) {
   return (
     <div style={area(mobile)}>
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap' }}>
         <span style={{ fontSize: FS.lg, fontWeight: 600, color: C.textHeading }}>Рисуем {variantsWord(count)}</span>
+        {byLabel && <AgentTag>{byLabel}</AgentTag>}
         <span style={{ fontSize: FS.sm, color: C.textMuted }}>обычно 20–40 секунд</span>
         <span style={{ flex: 1 }} />
         <Button size="sm" variant="secondary" leftIcon={icon(X)} onClick={onCancel}>Отменить</Button>

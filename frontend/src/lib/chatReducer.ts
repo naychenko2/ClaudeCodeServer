@@ -259,6 +259,7 @@ export const PERSISTED_KINDS = new Set<ChatItem['kind']>([
   'ask_question', 'plan_review', 'team_plan', 'team_escalation',
   'file_changed', 'result', 'fal_cost', 'glif_cost', 'compact_boundary', 'context_pruned', 'error',
   'work_loop_stopped', 'model_switched', 'branched_from', 'interrupted',
+  'image_launch', 'image_file_moved',
 ]);
 
 // Стоит ли заменить живую ленту историей с сервера: сравнение длин БЕЗ live-only
@@ -753,6 +754,20 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         ...(msg.cacheReadTokens !== undefined ? { cacheReadTokens: msg.cacheReadTokens } : {}),
         ...(msg.promptTokens !== undefined ? { promptTokens: msg.promptTokens } : {}),
       }]);
+
+    case 'image_launch': {
+      // Тихая строка ручного запуска в чате картинки. Одна задача — одна строка: повторная
+      // доставка того же события (веерная рассылка) ленту не удваивает
+      if (prev.items.some(it => it.kind === 'image_launch' && it.jobId === msg.jobId)) return prev;
+      return withItems([...prev.items, {
+        kind: 'image_launch', by: msg.by, prompt: msg.prompt, provider: msg.provider, model: msg.model,
+        count: msg.count, estimate: msg.estimate, jobId: msg.jobId, timestamp: msg.timestamp,
+      }]);
+    }
+
+    case 'image_file_moved':
+      if (prev.items.some(it => it.kind === 'image_file_moved' && it.to === msg.to && it.timestamp === msg.timestamp)) return prev;
+      return withItems([...prev.items, { kind: 'image_file_moved', from: msg.from, to: msg.to, timestamp: msg.timestamp }]);
 
     case 'compact_status':
       // Ход компакции: compacting → началась; compact_result — завершилась.

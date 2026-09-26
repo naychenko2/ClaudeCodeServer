@@ -190,5 +190,9 @@ export function useImageChat({ api, projectId, sourcePath, openSessionId, canvas
     prepareSend, createChat, onSessionChange: setSession, snapshot, suggestions: SUGGESTIONS,
   } : null;
 
-  return { sessionId, props, unread: unread && !chatVisible, markRead: () => setUnread(false) };
+  return {
+    sessionId, props, unread: unread && !chatVisible, markRead: () => setUnread(false),
+    // Для состояния на сервере и меток «✦ … Claude»: ревизия холста и собеседник чата
+    revision, who: persona?.name ?? 'Claude', hasPersona: !!persona,
+  };
 }

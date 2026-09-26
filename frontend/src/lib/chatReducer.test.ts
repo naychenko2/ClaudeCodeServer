@@ -149,10 +149,6 @@ function storedMessagePath(): string {
 const STORED_BUT_NOT_LIVE_ITEM: Record<string, string> = {
   workflow_progress: 'снапшот прогресса Workflow: normalizeHistory вливает его в карточку ' +
     'родительского tool_use (ветка m.kind === "workflow_progress"), отдельной строки ленты нет',
-  // Записи чата картинки (ADR-018 §1, §2): тихие строки «Вы запустили …» и «Сохранено как …»
-  // лента начнёт рисовать в шаге 15 плана редактора v2 — тогда они уходят в PERSISTED_KINDS
-  image_launch: 'ручной запуск генерации из редактора; строку ленты рисует шаг 15 редактора v2',
-  image_file_moved: 'чат картинки переехал на новый файл; строку ленты рисует шаг 15 редактора v2',
 };
 
 // Исключение №2: вид ленты участвует в сверке длин, но своего C#-типа в StoredMessage.cs
@@ -457,5 +453,24 @@ describe('resolveCardsFromHistory: догоняем пропущенный от�
       kind: 'ask_question', toolUseId: 't-2', input: { questions: [] }, resolved: true, answers: {},
     });
     expect(resolveCardsFromHistory(server, resolvedClient.items)).toBeNull();
+  });
+});
+
+describe('тихие строки чата картинки (ADR-018 §1, §2)', () => {
+  const launch = { type: 'image_launch', by: 'human', prompt: 'вечер', provider: 'fal', model: 'auto', count: 2, jobId: 'j1', timestamp: 5 };
+
+  it('живая строка «Вы запустили» — одна на задачу, повторная доставка не удваивает', () => {
+    const s = feed(initialChatState(), launch, launch);
+    expect(s.items.filter(i => i.kind === 'image_launch')).toHaveLength(1);
+  });
+
+  it('живая лента и история сверяются по длине: строки переживают перезагрузку', () => {
+    const live = feed(initialChatState(), launch, { type: 'image_file_moved', from: 'a.png', to: 'a.v2.png', timestamp: 6 });
+    const stored = snapshot(
+      { kind: 'image_launch', by: 'human', prompt: 'вечер', provider: 'fal', model: 'auto', count: 2, jobId: 'j1', timestamp: 5 },
+      { kind: 'image_file_moved', from: 'a.png', to: 'a.v2.png', timestamp: 6 },
+    );
+    expect(stored.map(i => i.kind)).toEqual(['image_launch', 'image_file_moved']);
+    expect(serverHistoryNewer(stored, live.items)).toBe(false);
   });
 });

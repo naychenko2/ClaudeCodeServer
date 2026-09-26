@@ -39,7 +39,7 @@ export type { SubsystemManifest } from '../subsystems/registryCore';
 export { OfflineError, request, readStoredToken } from '../offline';
 
 // ─── featureFlags ────────────────────────────────────────────────────────────
-export { FLAGS, useFeature } from '../featureFlags';
+export { FLAGS, useFeature, getFlag } from '../featureFlags';
 
 // ─── defaultPersona ──────────────────────────────────────────────────────────
 export { useMe } from '../defaultPersona';

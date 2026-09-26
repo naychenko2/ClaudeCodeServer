@@ -78,6 +78,8 @@ import { DeployProgressCard } from './chat/DeployProgressCard';
 import { isDeployStart } from '../lib/deployProgress';
 import { TeamPlanningIndicator } from './chat/TeamPlanningIndicator';
 import { NO_AUTOFILL } from '../lib/noAutofill';
+import { useSlot } from '../lib/subsystems/registry';
+import type { ChatItemToolCtx } from '../lib/subsystems/registryCore';
 
 // Боковой отступ мобильной ленты: чуть шире стандартных 12px, чтобы кольца «Эхо»
 // индикатора ожидания не резались клипом области прокрутки (overflow-x: hidden).
@@ -1985,6 +1987,9 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // (glif: project_update + view_media одного файла — один MediaBlock, выживает галерея).
   // Extract кэширован по ссылке на элемент, поэтому пересчёт на стрим-дельту дёшев
   const mediaVisibility = useMemo(() => buildMediaVisibility(items), [items]);
+  // Инструменты со своей карточкой от подсистемы (слот chat-item-tool) — на виду, как виджет
+  const ownToolCards = useSlot<ChatItemToolCtx>('chat-item-tool');
+  const ownToolNames = useMemo(() => new Set(ownToolCards.map(c => c.name)), [ownToolCards]);
 
   // QA Fold 8: ошибки прошлых дней (ts < сегодня) склеиваем в error_group ПО ДНЯМ —
   // иначе красные баннеры «Session failed 13.08» плодятся в ленте и теснят живое.
@@ -2255,7 +2260,9 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         // инструмента, сворачивается как все
         const isWidgetEntry = (it: ChatItem) =>
           it.kind === 'tool_use' && !it.isError && isWidgetShow(it.name);
-        const isPinnedEntry = (it: ChatItem) => isAgentEntry(it) || isMediaEntry(it) || isTaskCardEntry(it) || isWidgetEntry(it);
+        // Карточка подсистемы (запуск генерации агентом, «✦ Промпт») — визуальный результат, в свёртку не прячется
+        const isOwnCardEntry = (it: ChatItem) => it.kind === 'tool_use' && ownToolNames.has(it.name);
+        const isPinnedEntry = (it: ChatItem) => isAgentEntry(it) || isMediaEntry(it) || isTaskCardEntry(it) || isWidgetEntry(it) || isOwnCardEntry(it);
         const toolCount = slice.filter(([it]) => it.kind === 'tool_use' && !isPinnedEntry(it)).length;
         // Группа завершена, как только после неё появился следующий видимый элемент
         // (текст ассистента, запрос разрешения, result, error…) — конца хода не ждём.

@@ -22,7 +22,7 @@
 - **параметризованный** (`IMcpParameterizedToolset`) — состав и/или данные зависят от
   **хвоста маршрута** (`POST /mcp/{name}/{хвост}`). Хвост — наш код: его кладёт конфиг
   хода, модель его не видит, поэтому из него берут СЕССИЮ-вызывателя (tasks, notes,
-  personas, wsp, codegraph, notifications, dify, higgsfield, watch, websearch) или
+  personas, wsp, codegraph, notifications, dify, higgsfield, watch, websearch, local-media) или
   персону/проект (memory). Вызов без хвоста на параметризованный сервер — 404
   контроллера; чужой/невалидный хвост — пустой состав (fail-closed).
 
@@ -36,8 +36,8 @@
 - **`X-Caller-Session-Id`** — тот же id сессии в заголовке; на нём держатся фильтр
   `[DenyOnDelegatedTurn]` и белый список `McpToolWhitelist`.
 
-В `backend/ClaudeHomeServer/Services/Mcp/Http/` 17 файлов: 11 тулсетов (13 файлов —
-11 основных плюс 2 файла `.Schemas`, partial-классы
+В `backend/ClaudeHomeServer/Services/Mcp/Http/` 18 файлов: 12 тулсетов (14 файлов —
+12 основных плюс 2 файла `.Schemas`, partial-классы
 `PersonasToolset`/`WorkspaceToolset`) плюс 4 файла каркаса: [McpToolsetRegistry.cs](../../backend/ClaudeHomeServer/Services/Mcp/Http/McpToolsetRegistry.cs)
 (реестр имя → тулсет), [McpHttpTransport.cs](../../backend/ClaudeHomeServer/Services/Mcp/Http/McpHttpTransport.cs)
 (гейт схемы адреса + откат на stdio),
@@ -65,8 +65,9 @@
 | `higgsfield` | [HiggsfieldToolset.cs](../../backend/ClaudeHomeServer/Services/Mcp/Http/HiggsfieldToolset.cs) | 10 (белый список из 88+) | OAuth-подключение инстанса; белый список на вызов; хвост + `GetOwned` |
 | `watch` | [WatchToolset.cs](../../backend/ClaudeHomeServer/Services/Mcp/Http/WatchToolset.cs) | 3 | хвост + `GetOwned`; per-owner стор; **без** `DelegatedTurnGate` (решение ADR-013) |
 | `websearch` | [WebSearchToolset.cs](../../backend/ClaudeHomeServer/Services/Mcp/Http/WebSearchToolset.cs) | 2 | `Perplexity:ApiKey` (пустой — сервер не объявляется); квота чтения, общая с панелью «Чтение»; SSRF-рубежи ридера |
+| `local-media` | [LocalMediaToolset.cs](../../backend/ClaudeHomeServer/Services/Mcp/Http/LocalMediaToolset.cs) | 7 | `LocalMedia:Enabled` + подсистема `images`; чат проекта на сервере (`ProjectCapabilities`); не ReadOnly-персона; задачи per-owner; лимиты очереди |
 
-Итого: 12 серверов, 145 инструментов.
+Итого: 13 серверов, 152 инструмента.
 
 ---
 
@@ -343,6 +344,42 @@ Bearer-токеном инстанса (`HiggsfieldOAuthService`). Состав 
 + один повтор (замер: 0.9 / 17.8 / 19.9 / >40 с на 6 попыток; 15 с не хватало, тулсет
 пропадал молча); (6) статус handshake (Failed/Connected) пишется в `McpStatusStore`
 (`RecordProbe`), иначе UI держит сервер connected с нулём инструментов.
+
+### local-media — локальная генерация картинок и видео (ComfyUI)
+
+[LocalMediaToolset.cs](../../backend/ClaudeHomeServer/Services/Mcp/Http/LocalMediaToolset.cs) —
+наши модели на своей GPU; движок — вертикаль Images (`Services/LocalMedia`), модели, лимиты
+и причины решений — [local-media.md](../features/local-media.md).
+
+| Инструмент | Назначение |
+|---|---|
+| `local_generate_image` | Картинка по тексту (Qwen-Image 2.1): prompt, negative_prompt, aspect из белого списка, steps 4–40, count 1–4, seed |
+| `local_edit_image` | Правка по 1–16 референсам (пути файлов проекта или `job_id`), первая — холст |
+| `local_face_detail` | Доводка лиц на готовой картинке (FaceDetailer) |
+| `local_image_to_video` | Видео со звуком от первого кадра (MiniMax H3), 1–`MaxVideoSeconds` с, `full`/`half` |
+| `local_job_status` | Статус задачи; готовая несёт `images`/`videos` с `url` и `path` |
+| `local_jobs_wait` | Ожидание до 15 с за вызов, до 12 задач; `all_done`, `not_found` |
+| `local_models` | Операции, размеры, ориентировочное время, длина очереди ComfyUI |
+
+**Гейты:** узел в конфиге хода строит `SessionManager.BuildLocalMediaContext` — только при
+`LocalMedia:Enabled` и включённой подсистеме `images`, в чате проекта с файлами на сервере
+(`ProjectCapabilities.FilesOnServer`) и у персоны не ReadOnly. На КАЖДЫЙ вызов тулсет
+повторяет проверки: хвост + `GetOwned` (fail-closed), тумблер, проект сессии владельца на
+сервере. Задачи ключуются владельцем из `sub`: чужой `job_id` — «не найдена». Лимиты
+`MaxQueuedPerOwner` и `MaxComfyQueue` отказывают текстом до постановки. `DelegatedTurnGate`
+не ставится: инструменты ход не запускают.
+
+**Контекст вызова:** `POST /mcp/local-media/{sessionId}`; адрес ComfyUI в конфиг хода не
+едет. Результат пишется в `.cc-attachments/local-media/{дата}/` проекта сессии через шов
+`ILocalMediaProjectAccess` (адаптер в Main: `ProjectManager` + `FileService.NotifyMutated`).
+
+**Подводные камни:** (1) граф ComfyUI — только из `ComfyWorkflows`, произвольный граф не
+принимается никогда (custom nodes читают и пишут файлы хоста); (2) `/prompt` обязан нести
+`extra_data.preview_method=latent2rgb`, иначе превью роняет общий процесс ComfyUI на H3;
+(3) очередь ComfyUI общая с ручными прогонами стенда: позиция и ETA в ответе — без учёта
+длины чужих задач; (4) stdio-ветки отката нет, при `Mcp:HttpTransport=false` сервер ходу не
+объявляется (как `websearch`/`higgsfield`); (5) в тестах в живую очередь не ходим — фейковый
+ComfyUI `FakeComfy` в `ClaudeHomeServer.Tests/Helpers/LocalMediaFakes.cs`.
 
 ### personas — персоны владельца
 

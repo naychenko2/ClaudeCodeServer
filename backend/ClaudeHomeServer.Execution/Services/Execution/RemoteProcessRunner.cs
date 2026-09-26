@@ -50,6 +50,7 @@ public sealed class RemoteProcessRunner : IProcessLauncher
         McpEndpoints.PersonasName, McpEndpoints.NotificationsName, McpEndpoints.WatchName,
         McpEndpoints.WebSearchName, McpEndpoints.CodeGraphName, McpEndpoints.DifyName,
         McpEndpoints.HiggsfieldName, McpEndpoints.WidgetsName, McpEndpoints.WorkspaceName,
+        McpEndpoints.LocalMediaName,
     };
 
     // Живые исполнения по «владелец/ход»: Kill обязан найти ход, даже если его зовут

@@ -748,6 +748,10 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly HiggsfieldMcpContext? _higgsfieldMcp;
     // Higgsfield: условие как у websearch — схема адреса допускает http И рубильник включён
     private bool HiggsfieldHttpOn() => _higgsfieldMcp is { UseHttp: true } && HttpMcpOnNow();
+    // MCP-сервер локальной генерации (ComfyUI): null — выключен или недоступен чату
+    private readonly LocalMediaMcpContext? _localMediaMcp;
+    // Локальная генерация: условие как у higgsfield — схема адреса допускает http И рубильник включён
+    private bool LocalMediaHttpOn() => _localMediaMcp is { UseHttp: true } && HttpMcpOnNow();
     // MCP-сервер графа кода (codegraph_find/neighbors/hubs): null — чат вне проекта
     private readonly CodeGraphMcpContext? _codeGraphMcp;
     // MCP-сервер баз знаний Dify (ADR-012, волна 4): null — нет владельца или секция Dify
@@ -843,6 +847,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _watchMcp = context.WatchMcp;
         _webSearchMcp = context.WebSearchMcp;
         _higgsfieldMcp = context.HiggsfieldMcp;
+        _localMediaMcp = context.LocalMediaMcp;
         _httpMcpActive = context.HttpMcpActive;
         _httpMcpEnabled = context.HttpMcpEnabledProvider;
         _codeGraphMcp = context.CodeGraphMcp;
@@ -918,6 +923,8 @@ public class ClaudeSession : ILlmSessionAdapter
         // Higgsfield: та же история — stdio-ветки нет, контекста нет вовсе когда инстанс не
         // подключён или персона ReadOnly
         var hasHiggsfield = HiggsfieldHttpOn();
+        // Локальная генерация: stdio-ветки нет, контекста нет при выключенном LocalMedia:Enabled
+        var hasLocalMedia = LocalMediaHttpOn();
         // pmem-консультанты приезжают списком на каждый ход — рубильник для них тот же живой
         bool ConsultantHttp(ConsultantMemoryServer c) => c.UseHttp && httpOn;
         // tasks/notes/personas живут в Kestrel (ADR-012, фаза 2 волна 2), но пути их
@@ -1013,6 +1020,7 @@ public class ClaudeSession : ILlmSessionAdapter
             hasWatch = hasWatch && Keep("watch");
             hasWebSearch = hasWebSearch && Keep("websearch");
             hasHiggsfield = hasHiggsfield && Keep("higgsfield");
+            hasLocalMedia = hasLocalMedia && Keep("local-media");
             hasConsultants = hasConsultants && Keep("consultants");
             hasModules = hasModules && Keep("modules");
             hasFalAi = hasFalAi && Keep("fal-ai");
@@ -1024,7 +1032,7 @@ public class ClaudeSession : ILlmSessionAdapter
         }
         if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasNotifications
             && !hasWidgets && !hasCodeGraph && !hasDify && !hasDesktop && !hasDataset && !hasModules && !hasFalAi && !hasGlif
-            && !hasHiggsfield && userServers is null
+            && !hasHiggsfield && !hasLocalMedia && userServers is null
             && !hasExternal && !hasWatch && !hasWebSearch
             && !(hasConsultants && (memoryServerPath is not null
                 || personaAgents!.MemoryServers.Any(ConsultantHttp)))) return (null, "", []);
@@ -1693,6 +1701,26 @@ public class ClaudeSession : ILlmSessionAdapter
                 };
                 // Состав определяется белым списком провайдера (KeepMcpTools["higgsfield"])
                 shapes["higgsfield"] = "t:http";
+            }
+
+            if (hasLocalMedia)
+            {
+                // Локальная генерация (ComfyUI на своей GPU): http-ветка только, stdio-отката нет.
+                // Адрес ComfyUI наружу не уезжает: тулсет ходит в него сам, ходу достаётся только
+                // адрес узла Kestrel и сервисный JWT владельца. Сессия-вызыватель едет хвостом URL
+                servers["local-media"] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["type"] = "http",
+                    ["url"] = McpEndpoints.EndpointFor(_localMediaMcp!.ApiUrl, McpEndpoints.LocalMediaName, Info.Id),
+                    ["headers"] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["Authorization"] = $"Bearer {_localMediaMcp.TokenFactory()}",
+                        [McpEndpoints.CallerSessionHeader] = Info.Id,
+                    },
+                    ["alwaysLoad"] = true,
+                };
+                // Состав фиксирован (7 инструментов), вариативен только транспорт
+                shapes["local-media"] = "t:http";
             }
 
             if (hasDify && _difyMcp is not null)

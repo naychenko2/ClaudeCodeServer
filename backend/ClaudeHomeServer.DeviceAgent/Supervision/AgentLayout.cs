@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.DeviceAgent.Hosting;
+using ClaudeHomeServer.DeviceAgent.Versioning;
 
 namespace ClaudeHomeServer.DeviceAgent.Supervision;
 
@@ -99,13 +100,7 @@ internal sealed partial class AgentLayout(string root)
         version is { Length: > 0 and <= 64 } && version != "." && version != ".." && VersionName().IsMatch(version);
 
     /// <summary>Атомарная запись: .tmp + замена, как указатель active у ManagedCli.</summary>
-    public static void WriteAtomic(string file, string content)
-    {
-        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
-        var tmp = file + ".tmp";
-        File.WriteAllText(tmp, content);
-        File.Move(tmp, file, overwrite: true);
-    }
+    public static void WriteAtomic(string file, string content) => VersionedDirectory.WriteAtomic(file, content);
 
     [UnsupportedOSPlatform("windows")]
     private void PointCurrentLink(string version)

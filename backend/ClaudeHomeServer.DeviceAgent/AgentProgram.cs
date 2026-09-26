@@ -11,6 +11,7 @@ using ClaudeHomeServer.DeviceAgent.Processes;
 using ClaudeHomeServer.DeviceAgent.Relay;
 using ClaudeHomeServer.DeviceAgent.Sidecar;
 using ClaudeHomeServer.DeviceAgent.Supervision;
+using ClaudeHomeServer.DeviceAgent.Update;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Files;
 using ClaudeHomeServer.Services.Git;
@@ -256,6 +257,9 @@ public static class AgentProgram
         using var sigterm = PosixSignalRegistration.Create(PosixSignal.SIGTERM, c => { c.Cancel = true; stop.Cancel(); });
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; stop.Cancel(); };
 
+        // Всё, что держит переключение на новую версию: ходы, ретранслятор, терминалы, превью
+        var activity = new ActivityRegistry();
+
         using var cliHttp = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
         var managedCli = new ManagedCli(paths.CliRoot, new HttpCliDistribution(cliHttp), CliPlatform.Detect(),
             logger: loggers.CreateLogger<ManagedCli>());
@@ -276,7 +280,7 @@ public static class AgentProgram
         // сервере, за политикой корней машины; localhost-API — только для веб-морды сервера.
         // Терминалы и дев-серверы (задача 4.3) живут группой/Job Object в журнале ходов:
         // переживших агента добьёт зачистка при следующем старте (SweepLeftovers выше)
-        var launchers = new AgentLauncherFactory(journal);
+        var launchers = new AgentLauncherFactory(journal, activity);
         AppDomain.CurrentDomain.ProcessExit += (_, _) => launchers.KillAll();
         var policy = new AgentPathPolicy(new AgentRootsStore(paths.RootsFile));
         var git = new GitService(launchers, loggers.CreateLogger<GitService>());
@@ -304,9 +308,13 @@ public static class AgentProgram
         }
         // Ретранслятор чтения для других устройств (задача 5.1) — поверх тех же файлов и git
         var relay = new RelayHandler(projectFiles, git, loggers.CreateLogger<RelayHandler>());
+        var updater = CreateUpdater(paths, device, activity, cliHttp, loggers, log);
+        var updateLoop = updater is null ? new TaskCompletionSource<bool>().Task : RunUpdaterAsync(updater, log, stop.Token);
         await using var coordinator = new AgentCoordinator(control, new ManagedCliHarness(managedCli),
-            new ExecSocketConnector(device), executor.RunAsync, Version, log, runRelay: relay.RunAsync);
+            new ExecSocketConnector(device), executor.RunAsync, Version, log, runRelay: relay.RunAsync,
+            updates: updater, activity: activity);
 
+        var exitCode = 0;
         try
         {
             await control.ConnectAsync(stop.Token);
@@ -314,18 +322,54 @@ public static class AgentProgram
             // Успешный ack — версия здорова: супервизор её не откатит, install дождался
             SupervisedRun.MarkHealthy();
             log.LogInformation("Агент на связи с {Server} как «{Name}»", registration.ServerUrl, registration.DeviceName);
-            await Task.Delay(Timeout.Infinite, stop.Token);
+            // Цикл обновления завершается true, только переключив active: выходим с 75, супервизор поднимет новую версию
+            if (await updateLoop.WaitAsync(stop.Token)) exitCode = SupervisorContract.SwitchExitCode;
         }
         catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
         finally
         {
+            await stop.CancelAsync();
             executor.KillAll();
             launchers.KillAll();
             try { await cliLoop; } catch (OperationCanceledException) { }
         }
 
-        log.LogInformation("Агент остановлен");
-        return 0;
+        log.LogInformation(exitCode == 0 ? "Агент остановлен" : "Агент остановлен для перехода на новую версию");
+        return exitCode;
+    }
+
+    /// <summary>
+    /// Самообновление — только у установленного агента под супервизором: собранный из
+    /// исходников или запущенный руками выйти с 75 некому, его обновляет человек.
+    /// </summary>
+    private static AgentUpdater? CreateUpdater(AgentPaths paths, IDeviceIdentity device, ActivityRegistry activity,
+        HttpClient http, ILoggerFactory loggers, ILogger log)
+    {
+        if (AgentLayout.OwnVersion() is null || !SupervisedRun.IsSupervised)
+        {
+            log.LogInformation("Самообновление выключено: агент запущен не супервизором из каталога versions/");
+            return null;
+        }
+        var layout = AgentLayout.Resolve(paths);
+        var autostart = Autostarts.ForCurrentOs(layout);
+        return new AgentUpdater(layout, Version, AgentCoordinator.RidName, new HttpAgentArchiveSource(http, device.ServerUri),
+            activity, autostart.Repoint, () => SupervisedRun.SupervisorVersion(layout),
+            log: loggers.CreateLogger<AgentUpdater>());
+    }
+
+    // Сбой самого цикла обновления агента не валит: работаем на текущей версии дальше
+    private static async Task<bool> RunUpdaterAsync(AgentUpdater updater, ILogger log, CancellationToken ct)
+    {
+        try
+        {
+            return await updater.RunAsync(ct);
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            log.LogError(e, "Цикл самообновления агента упал — работаю на текущей версии");
+            await Task.Delay(Timeout.Infinite, ct);
+            return false;
+        }
     }
 
     private sealed record DeviceIdentity(Uri ServerUri, string DeviceToken, string Fingerprint) : IDeviceIdentity

@@ -3,37 +3,36 @@ using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
-using ClaudeHomeServer.Services.Files;
-using ClaudeHomeServer.Services.ImageEditor;
-using ClaudeHomeServer.Services.Images;
-using ClaudeHomeServer.Services.Images.Editing;
+using ClaudeHomeServer.Services.ImageEditor.Versioning;
+using ClaudeHomeServer.Services.Images.Editing.Raster;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
-namespace ClaudeHomeServer.Controllers;
+namespace ClaudeHomeServer.Services.ImageEditor.Controllers;
 
-// Редактор картинок в проекте (ADR-017, раздел 1). Контроллер в Main, потому что ему
-// нужна спина: владение проектом, корень проекта, SafePath. В вертикаль уходят уже байты
-// и абсолютный корень.
+// Редактор картинок в проекте (ADR-017, раздел 1). Контроллер живёт в модуле редактора
+// (ADR-018 §10.1), спину берёт через швы Core: владение проектом, флаг, уведомления о файлах.
 //
 // Гейты по порядку: флаг image-editor на СЕРВЕРЕ (404) → проект свой (404) → поставщик
 // доступен (409 provider_unavailable) → исполнитель задач подключён (503). Всё, что
-// приходит из Images, — nullable: подсистема отключаемая (ADR-014), её выключение
-// обязано давать честный ответ, а не 500.
+// приходит из отключаемых подсистем, — nullable (ADR-014): без Images нет растра, и
+// transform с jobs отвечают 503 raster_unavailable, а не 500.
 [ProjectCapability(ProjectCapabilityArea.FileBound)]
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/image-editor")]
 public class ImageEditorController(
-    FeatureFlagService flags,
-    ProjectManager projects,
+    IFeatureFlagGate flags,
+    IProjectManager projects,
     IEnumerable<IImageEditor> editors,
-    ImageGenerationSettingsStore? placeSettings = null,
+    IImagePlaceSettings? placeSettings = null,
     IImageEditJobs? jobs = null,
     IImageEditSaver? saver = null,
-    FileService? files = null,
+    IProjectFiles? files = null,
     ImageEditSteps? steps = null,
-    IConfiguration? config = null) : ControllerBase
+    IConfiguration? config = null,
+    IImageRaster? raster = null,
+    IImageDiscussStarter? discuss = null) : ControllerBase
 {
     // Потолок файла проекта, который ручка transform читает в память; дальше решает растр (100 Мп)
     private const long MaxTransformFileBytes = 100L * 1024 * 1024;
@@ -49,15 +48,15 @@ public class ImageEditorController(
     {
         if (Gate(projectId, out _) is { } denied) return denied;
 
-        var place = ImagePlaces.ImageEditor;
+        var place = ImagePlaceKeys.ImageEditor;
         var adminProvider = placeSettings?.ProviderFor(place);
         var adminModel = adminProvider is null ? null : placeSettings?.ModelFor(place, adminProvider);
         var heavy = config?.GetValue("ImageEditor:HeavyFileMb", DefaultHeavyFileMb) ?? DefaultHeavyFileMb;
         var limits = ImageEditCatalog.DefaultLimits with { HeavyFileMb = heavy > 0 ? heavy : DefaultHeavyFileMb };
         var catalog = ImageEditCatalog.Build(editors, adminProvider, adminModel, limits);
-        // Исполнитель задач регистрирует только подсистема картинок: его нет — она выключена.
-        // Ответ остаётся 200, чтобы фронт показал причину, а не общий сбой
-        if (jobs is null) catalog = catalog with { Reason = ImageEditCatalogReasons.SubsystemDisabled };
+        // Без растра (подсистема картинок выключена) редактор не работает: ответ остаётся 200,
+        // чтобы фронт показал причину, а не общий сбой
+        if (jobs is null || raster is null) catalog = catalog with { Reason = ImageEditCatalogReasons.SubsystemDisabled };
         return Ok(catalog);
     }
 
@@ -95,6 +94,7 @@ public class ImageEditorController(
             return Error(StatusCodes.Status409Conflict, ImageEditErrorCodes.ProviderUnavailable,
                 "Поставщик рисования не настроен. Обратитесь к администратору");
         if (jobs is null) return JobsUnavailable();
+        if (raster is null) return RasterUnavailable();
         if (string.IsNullOrWhiteSpace(form.QuoteId))
             return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
                 "Не указана котировка: сначала запросите цену");
@@ -206,6 +206,7 @@ public class ImageEditorController(
     {
         if (Gate(projectId, out var project) is { } denied) return denied;
         if (jobs is null || saver is null) return JobsUnavailable();
+        if (raster is null) return RasterUnavailable();
 
         foreach (var rel in new[] { req.SourcePath, req.Folder })
         {
@@ -260,6 +261,7 @@ public class ImageEditorController(
         [FromQuery] bool dryRun, CancellationToken ct)
     {
         if (Gate(projectId, out var project) is { } denied) return denied;
+        if (raster is null) return RasterUnavailable();
         if (steps is null) return JobsUnavailable();
 
         ProjectImage? file = null;
@@ -404,11 +406,12 @@ public class ImageEditorController(
             character = new ImageDiscussCharacter(manifest.Name, CharacterDto.From(manifest).Path);
         }
 
-        var service = ActivatorUtilities.CreateInstance<ImageDiscussService>(HttpContext.RequestServices);
-        var input = new ImageDiscussInput(form.Text ?? "",
-            new ImageBytes(await ReadAsync(form.Annotated, ct), ContentTypeOf(form.Annotated)),
+        if (discuss is null) return JobsUnavailable();
+        var annotated = await ReadAsync(form.Annotated, ct);
+        var input = new ImageDiscussInput(form.Text ?? "", annotated, ImageFormatSniffer.DetectExtension(annotated),
             sourcePath, character, form.SessionId);
-        return Map(await service.StartAsync(UserId, project, input, ct), Ok);
+        var outcome = await discuss.StartAsync(UserId, project, input, ct);
+        return Map(new ImageEditCallResult<ImageDiscussResultDto>(outcome.Value, outcome.ErrorCode, outcome.Error), Ok);
     }
 
     // SessionId — чат этого сеанса редактора, если он уже был: переиспользуется
@@ -445,6 +448,10 @@ public class ImageEditorController(
 
     private ObjectResult Error(int status, string code, string error) =>
         StatusCode(status, new { error, code });
+
+    private IActionResult RasterUnavailable() =>
+        Error(StatusCodes.Status503ServiceUnavailable, ImageEditErrorCodes.RasterUnavailable,
+            "Обработка картинок выключена на этом сервере");
 
     private IActionResult JobsUnavailable() =>
         Error(StatusCodes.Status503ServiceUnavailable, ImageEditErrorCodes.Unavailable,
@@ -484,7 +491,7 @@ public class ImageEditorController(
             ImageEditErrorCodes.QuoteNotFound or ImageEditErrorCodes.JobNotFound
                 or ImageEditErrorCodes.CharacterNotFound or ImageEditErrorCodes.StepNotFound => StatusCodes.Status404NotFound,
             ImageEditErrorCodes.TooManyJobs => StatusCodes.Status429TooManyRequests,
-            ImageEditErrorCodes.Unavailable => StatusCodes.Status503ServiceUnavailable,
+            ImageEditErrorCodes.Unavailable or ImageEditErrorCodes.RasterUnavailable => StatusCodes.Status503ServiceUnavailable,
             _ => StatusCodes.Status400BadRequest,
         };
         return Error(status, code, result.Error ?? "Запрос не выполнен");

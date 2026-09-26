@@ -1,6 +1,6 @@
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Services.ImageEditor;
-using ClaudeHomeServer.Services.Images.Editing;
+using ClaudeHomeServer.Tests.ImageEditor.Fakes;
 using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.ImageEditor.Characters;
@@ -25,7 +25,7 @@ public class CharacterStoreTests : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    internal static byte[] Jpeg(byte tag) => [0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, tag];
+    internal static byte[] Jpeg(byte tag) => TestImages.Jpeg(tag);
 
     internal static CharacterPhotoUpload[] Photos(int count) =>
         [.. Enumerable.Range(1, count).Select(i => new CharacterPhotoUpload(Jpeg((byte)i), i == 1 ? "front" : null))];

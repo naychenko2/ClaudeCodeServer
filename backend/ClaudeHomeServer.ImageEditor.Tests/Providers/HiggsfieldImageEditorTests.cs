@@ -1,6 +1,5 @@
 using System.Net;
 using ClaudeHomeServer.Services.ImageEditor;
-using ClaudeHomeServer.Services.Images.Editing;
 using ClaudeHomeServer.Tests.ImageEditor.Fakes;
 using FluentAssertions;
 

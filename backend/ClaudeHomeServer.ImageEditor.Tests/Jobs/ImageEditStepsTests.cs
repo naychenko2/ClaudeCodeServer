@@ -1,5 +1,4 @@
 using ClaudeHomeServer.Services.ImageEditor;
-using ClaudeHomeServer.Services.Images.Editing;
 using ClaudeHomeServer.Services.Images.Editing.Raster;
 using FluentAssertions;
 using SkiaSharp;

@@ -66,6 +66,11 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.Desktop.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- ImageEditor.Tests — модульные тесты редактора (ADR-018 §10.1) делят с тестами
+         контроллера internal-фейки ImageEditor/Fakes. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.ImageEditor.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\ClaudeHomeServer\ClaudeHomeServer.csproj" />
@@ -76,6 +81,9 @@
     <!-- Spend — динамический модуль: Main не тянет его как ProjectReference,
          поэтому Tests (нуждает SpendStore напрямую) добавляет явную ссылку. -->
     <ProjectReference Include="..\ClaudeHomeServer.Spend\ClaudeHomeServer.Spend.csproj" />
+    <!-- ImageEditor — динамический модуль (ADR-018 §10.1): тесты контроллера и фейки
+         драйверов живут здесь, им нужны типы модуля напрямую. -->
+    <ProjectReference Include="..\ClaudeHomeServer.ImageEditor\ClaudeHomeServer.ImageEditor.csproj" />
     <!-- Core — спинка (этап 3, Этап 5). Тесты ссылаются на Core-DTO
          (`SubagentRunPassport`/`TurnRunPassport`/`RecallItem`/`RecallBlock` после
          переезда, И на Core-интерфейсы вроде `IKnowledgeIndex`). Транзитивно
@@ -165,5 +173,11 @@
     <Copy SourceFiles="..\ClaudeHomeServer.Spend\bin\$(Configuration)\net10.0\ClaudeHomeServer.Spend.dll"
           DestinationFolder="$(OutDir)modules\spend" SkipUnchangedFiles="true"
           Condition="Exists('..\ClaudeHomeServer.Spend\bin\$(Configuration)\net10.0\ClaudeHomeServer.Spend.dll')" />
+  </Target>
+  <!-- ImageEditor: тот же паттерн — dll в modules/image-editor/ для ModuleLoader. -->
+  <Target Name="CopyImageEditorModuleForTests" AfterTargets="Build">
+    <Copy SourceFiles="..\ClaudeHomeServer.ImageEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.ImageEditor.dll"
+          DestinationFolder="$(OutDir)modules\image-editor" SkipUnchangedFiles="true"
+          Condition="Exists('..\ClaudeHomeServer.ImageEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.ImageEditor.dll')" />
   </Target>
 </Project>

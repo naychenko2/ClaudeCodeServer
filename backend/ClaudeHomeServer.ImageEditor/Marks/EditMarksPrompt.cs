@@ -2,7 +2,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 
-namespace ClaudeHomeServer.Services.Images.Editing;
+namespace ClaudeHomeServer.Services.ImageEditor;
 
 // Детерминированный перевод структурных пометок marks.json в текст запроса (ADR-017,
 // раздел 3). Чистая функция: одинаковый вход — одинаковый текст, поэтому фронт может держать

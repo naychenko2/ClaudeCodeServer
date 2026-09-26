@@ -2,7 +2,7 @@ using System.Text.RegularExpressions;
 using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.ImageEditor.Versioning;
 
-namespace ClaudeHomeServer.Services.Images.Editing;
+namespace ClaudeHomeServer.Services.ImageEditor;
 
 // Персонажи проекта на диске (ADR-017, раздел 10): characters/<slug>/character.json и
 // 3–10 фото лица. Владение проектом проверяет контроллер, сюда приходит уже корень.

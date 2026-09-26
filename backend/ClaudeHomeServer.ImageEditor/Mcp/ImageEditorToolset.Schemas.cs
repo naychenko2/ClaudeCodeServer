@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
+using ClaudeHomeServer.Services.Mcp.Http;
 
-namespace ClaudeHomeServer.Services.Mcp.Http;
+namespace ClaudeHomeServer.Services.ImageEditor.Mcp;
 
 /// <summary>
 /// Схемы инструментов сервера image-editor (ADR-018 §2): чат картинки, генерация агентом.

@@ -3,7 +3,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.Services.ImageEditor;
 
-namespace ClaudeHomeServer.Services.Images.Editing;
+namespace ClaudeHomeServer.Services.ImageEditor;
 
 // Драйвер правки Higgsfield (ADR-017, раздел 2а) поверх HiggsfieldMcpClient. Платит
 // инстансный аккаунт админа, учёт трат per-user ведёт исполнитель задач: сюда владелец не

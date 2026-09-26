@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 
-namespace ClaudeHomeServer.Services.Images.Editing;
+namespace ClaudeHomeServer.Services.ImageEditor;
 
 // Намерение запроса, которое меняет выбор модели. Сейчас одно — «стереть отмеченное»: чистый
 // инпейнт по маске (FLUX Fill) рисует в маске то, что написано в запросе, и удалять не умеет.

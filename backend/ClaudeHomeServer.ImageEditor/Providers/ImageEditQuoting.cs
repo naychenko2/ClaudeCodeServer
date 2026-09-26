@@ -1,6 +1,6 @@
 using ClaudeHomeServer.Services.ImageEditor;
 
-namespace ClaudeHomeServer.Services.Images.Editing;
+namespace ClaudeHomeServer.Services.ImageEditor;
 
 // Котировка драйвера (ADR-017, раздел 4): оценка в единицах поставщика — $ у fal,
 // кредиты у Higgsfield — уже умноженная на число вариантов. Драйвер без этого шва

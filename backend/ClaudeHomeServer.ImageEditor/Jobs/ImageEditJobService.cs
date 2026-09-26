@@ -6,7 +6,7 @@ using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.Images.Editing.Raster;
 using ClaudeHomeServer.Services.Spend;
 
-namespace ClaudeHomeServer.Services.Images.Editing;
+namespace ClaudeHomeServer.Services.ImageEditor;
 
 // Исполнитель задач редактора (ADR-017, разделы 4 и 7): котировка → 202 с jobId → события
 // прогресса и готовности вариантов в группу владельца → отмена. Реестр — в памяти.

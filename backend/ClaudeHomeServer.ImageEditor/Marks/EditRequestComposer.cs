@@ -1,6 +1,6 @@
 using ClaudeHomeServer.Services.ImageEditor;
 
-namespace ClaudeHomeServer.Services.Images.Editing;
+namespace ClaudeHomeServer.Services.ImageEditor;
 
 // Пометки → модель (ADR-017, раздел 3). Растровую работу делает фронт: он присылает чистый
 // исходник, маску и копию с нарисованными стрелками, рамками и подписями (annotated). Здесь

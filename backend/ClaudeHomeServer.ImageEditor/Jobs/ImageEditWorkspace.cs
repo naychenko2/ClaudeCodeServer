@@ -1,7 +1,7 @@
 using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.ImageEditor.Versioning;
 
-namespace ClaudeHomeServer.Services.Images.Editing;
+namespace ClaudeHomeServer.Services.ImageEditor;
 
 // Рабочая папка сеансов правки: data/image-editor/{ownerId}/{jobId}/v{n}.{ext} (ADR-017,
 // разделы 5 и 7). Это кеш на 7 дней, а весить он может гигабайты, поэтому в бэкап не едет

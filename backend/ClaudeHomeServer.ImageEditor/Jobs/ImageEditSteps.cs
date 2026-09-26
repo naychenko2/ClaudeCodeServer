@@ -1,7 +1,7 @@
 using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.Images.Editing.Raster;
 
-namespace ClaudeHomeServer.Services.Images.Editing;
+namespace ClaudeHomeServer.Services.ImageEditor;
 
 // Правки без ИИ и шаги истории (ADR-018 §9): POST …/transform. Бесплатно — без поставщика,
 // котировки и записи трат. Правки без ИИ и применённые варианты — шаги ОДНОЙ ленты с Parent.

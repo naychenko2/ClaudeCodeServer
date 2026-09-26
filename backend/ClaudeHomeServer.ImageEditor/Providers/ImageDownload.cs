@@ -1,6 +1,6 @@
 using ClaudeHomeServer.Services.ImageEditor;
 
-namespace ClaudeHomeServer.Services.Images.Editing;
+namespace ClaudeHomeServer.Services.ImageEditor;
 
 // Скачивание результата поставщика бэкендом (ADR-017, раздел 8): внешние ссылки fal и
 // Higgsfield наружу не уходят, варианты отдаются только своей ручкой из рабочей папки.

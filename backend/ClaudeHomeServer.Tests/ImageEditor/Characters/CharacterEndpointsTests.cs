@@ -4,8 +4,8 @@ using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.ImageEditor;
-using ClaudeHomeServer.Services.Images.Editing;
 using ClaudeHomeServer.Tests.Helpers;
+using ClaudeHomeServer.Tests.ImageEditor.Fakes;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -82,7 +82,7 @@ public class CharacterEndpointsTests : IDisposable
         var form = new MultipartFormDataContent { { new StringContent(name), "name" } };
         for (var i = 1; i <= photos; i++)
         {
-            var photo = new ByteArrayContent(CharacterStoreTests.Jpeg((byte)i));
+            var photo = new ByteArrayContent(TestImages.Jpeg((byte)i));
             photo.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/jpeg");
             form.Add(photo, "photos", $"IMG_{i}.jpg");
         }
@@ -101,7 +101,7 @@ public class CharacterEndpointsTests : IDisposable
         var api = $"/api/projects/{projectId}/image-editor";
 
         var discuss = new MultipartFormDataContent { { new StringContent("что поправить?"), "text" } };
-        discuss.Add(new ByteArrayContent(CharacterStoreTests.Jpeg(1)), "annotated", "annotated.jpg");
+        discuss.Add(new ByteArrayContent(TestImages.Jpeg(1)), "annotated", "annotated.jpg");
 
         var responses = new[]
         {
@@ -143,7 +143,7 @@ public class CharacterEndpointsTests : IDisposable
         var photo = await client.GetAsync($"{api}/characters/anya/photos/face-01.jpg");
         photo.StatusCode.Should().Be(HttpStatusCode.OK);
         photo.Content.Headers.ContentType!.MediaType.Should().Be("image/jpeg");
-        (await photo.Content.ReadAsByteArrayAsync()).Should().Equal(CharacterStoreTests.Jpeg(1));
+        (await photo.Content.ReadAsByteArrayAsync()).Should().Equal(TestImages.Jpeg(1));
 
         (await client.GetAsync($"{api}/characters/anya/photos/character.json")).StatusCode
             .Should().Be(HttpStatusCode.NotFound, "ручка фото отдаёт только файлы из списка фото");
@@ -194,7 +194,7 @@ public class CharacterEndpointsTests : IDisposable
             { new StringContent("в осеннем парке"), "prompt" },
             { new StringContent("anya"), "characterSlug" },
         };
-        form.Add(new ByteArrayContent(CharacterStoreTests.Jpeg(9)), "source", "hero.jpg");
+        form.Add(new ByteArrayContent(TestImages.Jpeg(9)), "source", "hero.jpg");
 
         var started = await client.PostAsync($"{api}/jobs", form);
 
@@ -209,7 +209,7 @@ public class CharacterEndpointsTests : IDisposable
             { new StringContent("q-1"), "quoteId" },
             { new StringContent("../x"), "characterSlug" },
         };
-        form.Add(new ByteArrayContent(CharacterStoreTests.Jpeg(9)), "source", "hero.jpg");
+        form.Add(new ByteArrayContent(TestImages.Jpeg(9)), "source", "hero.jpg");
         (await client.PostAsync($"{api}/jobs", form)).StatusCode.Should().Be(HttpStatusCode.BadRequest);
         jobs.Started.Should().ContainSingle("неизвестный персонаж не доходит до исполнителя");
     }

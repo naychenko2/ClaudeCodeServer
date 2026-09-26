@@ -1,7 +1,7 @@
 using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.Images.Editing.Raster;
 
-namespace ClaudeHomeServer.Services.Images.Editing;
+namespace ClaudeHomeServer.Services.ImageEditor;
 
 // Автоуменьшение входа и возврат размера (ADR-018 §9, п. 3 и 4). Точка одна для всех запусков
 // (ручка, агент, быстрые действия), поэтому закрытый редактор ничего не меняет:

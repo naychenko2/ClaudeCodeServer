@@ -1,4 +1,4 @@
-namespace ClaudeHomeServer.Services.Images.Editing;
+namespace ClaudeHomeServer.Services.ImageEditor;
 
 // Размеры картинки по заголовку, без библиотеки изображений (ADR-017, раздел 3): PNG — IHDR,
 // JPEG — маркер SOF, WebP — чанк VP8/VP8L/VP8X, GIF — логический экран. Нужны, чтобы

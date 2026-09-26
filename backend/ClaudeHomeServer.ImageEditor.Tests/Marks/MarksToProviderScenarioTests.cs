@@ -1,7 +1,6 @@
 using System.Net;
 using System.Text.Json;
 using ClaudeHomeServer.Services.ImageEditor;
-using ClaudeHomeServer.Services.Images.Editing;
 using ClaudeHomeServer.Tests.ImageEditor.Fakes;
 using ClaudeHomeServer.Tests.ImageEditor.Providers;
 using FluentAssertions;

@@ -262,6 +262,8 @@ public static class ImageEditErrorCodes
     public const string TooManyJobs = "too_many_jobs";
     // 503: подсистема картинок выключена на этом сервере
     public const string Unavailable = "image_editor_unavailable";
+    // 503: растра нет — подсистема картинок выключена, transform и запуск задач недоступны
+    public const string RasterUnavailable = "raster_unavailable";
 }
 
 // Результат вызова шва: Value при успехе, иначе код ImageEditErrorCodes.* и текст

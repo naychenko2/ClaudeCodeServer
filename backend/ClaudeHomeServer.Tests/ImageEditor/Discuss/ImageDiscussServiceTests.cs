@@ -3,6 +3,7 @@ using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Files;
 using ClaudeHomeServer.Services.ImageEditor;
+using ClaudeHomeServer.Services.ImageEditor.Versioning;
 using ClaudeHomeServer.Tests.Helpers;
 using ClaudeHomeServer.Tests.ImageEditor.Characters;
 using FluentAssertions;
@@ -43,10 +44,14 @@ public class ImageDiscussServiceTests : IDisposable
         ActivatorUtilities.CreateInstance<ImageDiscussService>(_factory.Services);
 
     private static ImageDiscussInput Input(string text, byte[]? annotated = null, string? source = null,
-        ImageDiscussCharacter? character = null, string? sessionId = null) =>
-        new(text, new ImageBytes(annotated ?? Png, "image/png"), source, character, sessionId);
+        ImageDiscussCharacter? character = null, string? sessionId = null)
+    {
+        // Сигнатуру размеченной копии определяет ручка модуля, сервис получает готовое расширение
+        var bytes = annotated ?? Png;
+        return new(text, bytes, ImageFormatSniffer.DetectExtension(bytes), source, character, sessionId);
+    }
 
-    private Task<ImageEditCallResult<ImageDiscussResultDto>> Start(ImageDiscussInput input, string? ownerId = null) =>
+    private Task<ImageDiscussOutcome> Start(ImageDiscussInput input, string? ownerId = null) =>
         Service().StartAsync(ownerId ?? _ownerId, _project, input, CancellationToken.None);
 
     [Theory]

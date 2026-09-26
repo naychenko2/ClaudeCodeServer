@@ -1,7 +1,6 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.ImageEditor.Versioning;
-using ClaudeHomeServer.Services.Images.Editing;
 using ClaudeHomeServer.Tests.ImageEditor.Fakes;
 using ClaudeHomeServer.Tests.ImageEditor.Providers;
 using FluentAssertions;

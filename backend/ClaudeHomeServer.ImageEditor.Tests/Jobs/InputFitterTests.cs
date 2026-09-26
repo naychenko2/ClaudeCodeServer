@@ -1,6 +1,5 @@
 using System.Security.Cryptography;
 using ClaudeHomeServer.Services.ImageEditor;
-using ClaudeHomeServer.Services.Images.Editing;
 using ClaudeHomeServer.Services.Images.Editing.Raster;
 using ClaudeHomeServer.Tests.ImageEditor.Fakes;
 using FluentAssertions;

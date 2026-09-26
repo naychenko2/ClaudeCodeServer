@@ -532,11 +532,13 @@ launch, и держать две раскладки ради флага — дв
 Core, плюс `JwtBearer` (ради claim `sub`, как у Notes и Spend). `ImageEditorSubsystem : IAppSubsystem`
 с `Key = "imageeditor"`: гейт читает `Subsystems:ImageEditor:Enabled`, ключи конфигурации без учёта
 регистра. Ключ `image-editor` через дефис дал бы секцию `Subsystems:image-editor`, поэтому не он.
-Фич-флаг владельца и id фронтового remote остаются `image-editor`.
+Фич-флаг владельца остаётся `image-editor`. Ключ записи `DynamicModules` при переносе (П1) —
+`imageeditor`, как у подсистемы: по нему `ModuleLoader` читает гейт, а фронт сверяет `ActiveKeys`
+и id remote. Каталог dll и путь remote остаются `image-editor`.
 
 **Выключить модуль можно двумя способами**, оба уже работают у Notes:
 
-- `DynamicModules[image-editor].Enabled=false` — dll не грузится вовсе;
+- `DynamicModules[imageeditor].Enabled=false` — dll не грузится вовсе;
 - `Subsystems:ImageEditor:Enabled=false` — `ModuleLoader` отказывает до загрузки.
 
 В обоих случаях ручки редактора отвечают `404`: контроллеров нет в составе MVC. Это лучше, чем у
@@ -621,10 +623,12 @@ Core, плюс `JwtBearer` (ради claim `sub`, как у Notes и Spend). `Im
 - `ImageEditorMcpContext` в `Llm/LlmSessionContext.cs` и `SessionManager.BuildImageEditorContext`,
   как у `notes` (§10.2);
 - `HiggsfieldAccessAdapter`;
-- **временно** — `ImageDiscussService` с ручкой `POST …/image-editor/discuss`, отдельным маленьким
-  контроллером на прежнем маршруте. Ему нужны `SessionManager`, `PersonaManager` и `FileService`,
-  а заводить под него швы ради удаления в волне 2 бессмысленно. Сносится в шаге 10, как и было
-  решено в §4.
+- **временно** — `ImageDiscussService`. Ему нужны `SessionManager`, `PersonaManager` и
+  `FileService`. **Поправка П1:** ручка `POST …/image-editor/discuss` осталась в контроллере модуля,
+  а не отдельным контроллером в Main. Main не видит типов модуля, а проверки ручки (каталог,
+  `ProjectLinkGuard`, персонажи, сигнатура картинки) — это код модуля. Кроме того, при выключенном
+  модуле `image-editor/*` должен целиком давать `404`. Модуль зовёт Main через один временный
+  шов `IImageDiscussStarter` в Core. Шов сносится в шаге 10 вместе с ручкой, как и было решено в §4.
 
 **Сторожа границ:**
 
@@ -842,7 +846,7 @@ ADR-012. `BuildImageEditorContext` проверяет `Session.ImageChat != null
 | 14 (К) | +~0,5–1 день. `ImageChatSlot`, `ImageChatComposerStub` и тип `ImageChatSlotProps` — в **ядре** (`features/chat/imageChat`). Правки `ChatPanel` из §6 — в ядре. Модуль рисует `<ctx.ImageChat …/>`. Снимок и `canvasRevision` — в модуле |
 | 15 (К) | +~0,5 дня. Слоты `chat-item-tool` в `ChatItemView` и `chat-card-badge` в `ChatCard` вместо прямых веток. `ImageEditorBridge` — в модуле |
 | 16 (Д) | выжимка в `CLAUDE.md` — ссылкой на вложенную карту `backend/ClaudeHomeServer.ImageEditor/CLAUDE.md`, как у Video и Deploy: так корневая карта не растёт |
-| 17 (Вера) | + сценарии: `DynamicModules[image-editor].Enabled=false` → пунктов нет, `500` нигде, чаты картинок открываются обычными; `Subsystems:ImageEditor:Enabled=false` → `404`; удалённый `remoteEntry.js` → оболочка жива; `Images` выключена → `503 raster_unavailable`, а не `500` |
+| 17 (Вера) | + сценарии: `DynamicModules[imageeditor].Enabled=false` → пунктов нет, `500` нигде, чаты картинок открываются обычными; `Subsystems:ImageEditor:Enabled=false` → `404`; удалённый `remoteEntry.js` → оболочка жива; `Images` выключена → `503 raster_unavailable`, а не `500` |
 | 18 (Александр) | + проверить: модуль ссылается только на Core; пакеты модуля входят в замыкание Main; в бандле модуля нет второй копии `signalr.ts` (поиск по уникальной строке в чанках `image-editor-remote`) |
 
 #### 10.5. Риски и объём

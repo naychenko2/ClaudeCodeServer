@@ -1,7 +1,7 @@
 using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.ImageEditor.Versioning;
 
-namespace ClaudeHomeServer.Services.Images.Editing;
+namespace ClaudeHomeServer.Services.ImageEditor;
 
 // Запись варианта в проект новым файлом (ADR-017, раздел 5). Флага перезаписи нет по
 // построению: правка файла идёт через версионное сохранение (hero.png → hero.v2.png,

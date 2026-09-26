@@ -3,7 +3,7 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Services.ImageEditor;
 
-namespace ClaudeHomeServer.Services.Images.Editing;
+namespace ClaudeHomeServer.Services.ImageEditor;
 
 // Формат characters/<slug>/character.json (ADR-017, раздел 10). Персонаж — папка в проекте,
 // а не запись в data/: он переносится вместе с проектом и виден Claude в чате.

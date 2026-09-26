@@ -5,7 +5,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using ClaudeHomeServer.Services.ImageEditor;
 
-namespace ClaudeHomeServer.Services.Images.Editing;
+namespace ClaudeHomeServer.Services.ImageEditor;
 
 // Драйвер правки fal.ai (ADR-017, разделы 2 и 4). Транспорт — очередь queue.fal.run, а не
 // синхронный fal.run: только она даёт стадии «в очереди / рисуем» и отмену. Входные

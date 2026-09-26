@@ -5,7 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Services.ImageEditor;
 
-namespace ClaudeHomeServer.Services.Images.Editing;
+namespace ClaudeHomeServer.Services.ImageEditor;
 
 // Тонкий JSON-RPC-клиент бэкенда к mcp.higgsfield.ai/mcp (ADR-017, раздел 2а). REST API под
 // наш OAuth-токен у Higgsfield нет, MCP-эндпоинт и есть их API. Прокси хода

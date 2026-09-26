@@ -48,4 +48,7 @@ public sealed class ImageChatSessions(
 
     public Session? RewritePaths(string sessionId, string currentPath, IReadOnlyList<string> lineage) =>
         sessions.RewriteImageChatPaths(sessionId, currentPath, lineage);
+
+    public Task<Session?> AppendLaunchAsync(string sessionId, Protocol.StoredImageLaunchMessage launch) =>
+        sessions.AppendImageLaunchAsync(sessionId, launch);
 }

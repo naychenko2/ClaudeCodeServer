@@ -87,6 +87,32 @@ public class ImageEditJobServiceTests : IDisposable
         _broadcaster.ToOwnerCalls.Should().OnlyContain(c => c.OwnerId == "user-b");
     }
 
+    // ADR-018 §2: чат картинки и инициатор идут из входа в задачу, её события и запись траты —
+    // «Модели и расход» различает, сколько потратил агент
+    [Theory]
+    [InlineData(ImageEditInitiator.Human, SpendInitiators.Human)]
+    [InlineData(ImageEditInitiator.Agent, SpendInitiators.Agent)]
+    public async Task ЧатИИнициатор_ДоходятДоТратыDtoИСобытий(ImageEditInitiator initiator, string spendInitiator)
+    {
+        var (higgsfield, _, _) = HiggsfieldImageEditorTests.Create();
+        var service = Service(higgsfield);
+        var quote = await service.QuoteAsync("user-b", Project, Quote("higgsfield", 2), default);
+        var started = await service.StartAsync("user-b", Project,
+            Input(quote.Value!.QuoteId) with { ChatSessionId = "chat-1", Initiator = initiator }, default);
+
+        var job = await WaitDone(service, "user-b", started.Value!.JobId);
+
+        job.ChatSessionId.Should().Be("chat-1");
+        job.Initiator.Should().Be(initiator);
+        job.Count.Should().Be(2);
+        job.Estimate.Should().NotBeNull();
+        var record = _spend.Records.Should().ContainSingle().Subject;
+        record.SessionId.Should().Be("chat-1");
+        record.Initiator.Should().Be(spendInitiator);
+        _broadcaster.ToOwnerCalls.Select(c => c.Message).OfType<ImageEditCompletedMessage>().Should()
+            .ContainSingle().Which.Should().Match<ImageEditCompletedMessage>(m => m.ChatSessionId == "chat-1" && m.Initiator == initiator);
+    }
+
     [Fact]
     public async Task ДорисоватьЗаКрая_ПропорцииИзФормыДоходятДоДрайвера()
     {

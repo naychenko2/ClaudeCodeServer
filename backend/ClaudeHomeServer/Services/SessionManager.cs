@@ -1848,6 +1848,26 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         return entry.Info;
     }
 
+    // Ручной запуск генерации из редактора чата картинки (ADR-018 §2): тихая строка
+    // «Вы запустили: …» в ленту. Как и image_file_moved, это активность человека — UpdatedAt
+    // двигается. null — чата нет или он не картинки.
+    public async Task<Session?> AppendImageLaunchAsync(string sessionId, StoredImageLaunchMessage launch)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry) || entry.Info.ImageChat is null) return null;
+        var ts = launch.Timestamp ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var stored = new StoredImageLaunchMessage
+        {
+            By = launch.By, Prompt = launch.Prompt, Provider = launch.Provider, Model = launch.Model,
+            Count = launch.Count, Estimate = launch.Estimate, JobId = launch.JobId, Timestamp = ts,
+        };
+        await AppendStoredAsync(sessionId, stored,
+            new ImageLaunchMessage(stored.By, stored.Prompt, stored.Provider, stored.Model, stored.Count,
+                stored.Estimate, stored.JobId, ts));
+        entry.Info.UpdatedAt = DateTime.UtcNow;
+        SaveSessions();
+        return entry.Info;
+    }
+
     // Файл чата картинки переименовали или перенесли мимо редактора (ADR-018 §1): пути
     // переписываются целиком, в Lineage ничего не добавляется — это тот же файл, а не новая
     // версия. UpdatedAt не трогаем и в ленту не пишем: чат не поднимается и не выходит из архива.

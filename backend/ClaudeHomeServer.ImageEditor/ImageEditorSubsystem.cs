@@ -2,6 +2,7 @@ using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Http;
 using ClaudeHomeServer.Services.ImageEditor.Versioning;
 using ClaudeHomeServer.Services.Images.Editing.Raster;
+using ClaudeHomeServer.Services.Turn;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace ClaudeHomeServer.Services.ImageEditor;
@@ -50,5 +51,10 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
             : null!);
         // Чат картинки идёт за переименованным файлом (ADR-018 §1)
         services.AddHostedService<Chats.ImageChatPathTracker>();
+        // Состояние редактора на сервере, общая сборка входа запуска и блок состояния хвостом
+        // хода (ADR-018 §2): им же пользуется MCP-тулсет редактора
+        services.AddSingleton(sp => new Chats.ImageChatStateStore(sp.GetRequiredService<ImageEditWorkspace>()));
+        services.AddSingleton<ImageEditLaunchAssembler>();
+        services.AddPromptSectionContributor<Chats.ImageEditorStateContributor>();
     }
 }

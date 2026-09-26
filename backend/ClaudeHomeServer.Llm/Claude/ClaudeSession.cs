@@ -2863,6 +2863,8 @@ public class ClaudeSession : ILlmSessionAdapter
         // провайдера СЕССИИ, как BareMode: сигнатура запуска остаётся стабильной.
         var recallInTurnText = _providers?.ResolveByModel(EffectiveModel) is { RecallInTurnText: true };
         List<PromptSectionDto> turnRecallSections = [];
+        // Секции PromptSection.InTurnTail: хвостом при любом провайдере, ближе всего к тексту хода
+        List<PromptSectionDto> alwaysTailSections = [];
 
         // Секции, удалённые TurnPromptAssembler.ApplyBudget из-за лимита командной строки
         // (32 767 символов Windows). По умолчанию пусто — обычный ход, срезки нет. Заполняется
@@ -2946,7 +2948,14 @@ public class ClaudeSession : ILlmSessionAdapter
                 }
                 foreach (var s in assembling.Sections)
                 {
-                    if (!string.IsNullOrWhiteSpace(s.Text))
+                    if (string.IsNullOrWhiteSpace(s.Text)) continue;
+                    // Хвост хода всегда, мимо RecallInTurnText и мимо системного блока
+                    // (ADR-018 §2, §10.4): такой секции в системном блоке не место ни у какого
+                    // провайдера — она меняется от хода к ходу по природе
+                    if (s.InTurnTail)
+                        alwaysTailSections.Add(new PromptSectionDto(s.Key, s.Title ?? s.Key, s.Text, "turn",
+                            Stable: false, Group: "misc"));
+                    else
                         contributorSections[s.Key] = s;
                 }
                 // Манифест F3: айтемы recall-секций собираются параллельно Sections.
@@ -3368,8 +3377,9 @@ public class ClaudeSession : ILlmSessionAdapter
                     manifestItems.Select(i => new RecallItemDto(i.Kind, i.Ref, i.Title, i.Snippet)).ToList()));
         }
 
-        // Хвост хода (RecallInTurnText): нестабильные секции уезжают вклейкой в текст, а не
-        // системным блоком. Кэш префикса это не трогает — текст хода и так новый каждый ход.
+        // Хвост хода (RecallInTurnText, плюс секции InTurnTail при любом провайдере): нестабильные
+        // секции уезжают вклейкой в текст, а не системным блоком. Кэш префикса это не трогает —
+        // текст хода и так новый каждый ход.
         //
         // Повтор не шлём: склейка не изменилась против прошлого хода — она уже в транскрипте
         // и доедет по --resume, а копия в каждом ходе растила бы контекст. Не вклеили —
@@ -3378,6 +3388,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // Побочно чинится мягкая деградация same-process хода: системный промпт живому
         // процессу не обновляется, а текст хода доезжает всегда — значит и recall тоже.
         var turnTextForCli = text;
+        turnRecallSections.AddRange(alwaysTailSections);
         if (turnRecallSections.Count > 0)
         {
             var joinedRecall = string.Join("\n\n", turnRecallSections.Select(x => x.Text));

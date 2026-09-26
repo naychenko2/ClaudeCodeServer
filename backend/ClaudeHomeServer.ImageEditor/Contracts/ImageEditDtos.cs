@@ -135,7 +135,11 @@ public record ImageEditJobDto(
     ImageEditInitiator Initiator = ImageEditInitiator.Human,
     string? BaseStepId = null,
     // Пометка возврата размера (ImageEditSizeNotes.*); null — размер приведён или не требовался
-    string? SizeNote = null);
+    string? SizeNote = null,
+    // Число вариантов и оценка котировки, по которой запущена задача: строка «Вы запустили …»
+    // и карточка запуска в ленте
+    int Count = 0,
+    ImageEditEstimateDto? Estimate = null);
 
 public static class ImageEditSizeNotes
 {
@@ -262,6 +266,8 @@ public static class ImageEditErrorCodes
     public const string ChatNotFound = "chat_not_found";
     // 409: «Сохранить как…» на занятое имя; в теле ответа ещё suggestion — ближайшее свободное
     public const string NameTaken = "name_taken";
+    // 409: запись состояния чата картинки со старой revision; в теле ещё state — актуальное
+    public const string RevisionConflict = "revision_conflict";
     // 429: потолок одновременных задач владельца или инстанса
     public const string TooManyJobs = "too_many_jobs";
     // 503: подсистема картинок выключена на этом сервере

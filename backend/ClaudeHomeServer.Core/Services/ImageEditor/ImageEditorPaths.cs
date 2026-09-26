@@ -6,4 +6,8 @@ public static class ImageEditorPaths
 {
     // Рабочая папка редактора рядом с data: варианты задач, маски и шаги истории — кеш
     public const string WorkspaceDirName = "image-editor";
+
+    // Состояние редактора чатов картинки: {WorkspaceDirName}/{ownerId}/chats/{sessionId}.json.
+    // Тот же TTL-кеш рабочей папки, в бэкап не едет (BackupPaths, тест в BackupPathsTests)
+    public const string ChatsDirName = "chats";
 }

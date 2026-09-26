@@ -24,7 +24,14 @@ public sealed record PromptSectionContribution(
 //
 // Этап 5, шаг 6: record-тип переехал в Core (из Services/Turn/TurnEvents.cs) по той же
 // причине — контрибьюторы в чужих вертикалях ссылаются на Core-DTO, Turn-импорт не нужен.
-public sealed record PromptSection(string Key, string Text);
+//
+// InTurnTail — секция уходит ХВОСТОМ ХОДА (вклейкой в текст хода) всегда, независимо от
+// RecallInTurnText провайдера, и в системный блок не попадает никогда. Для секций, которые
+// меняются от хода к ходу по самой своей природе (состояние редактора картинки, ADR-018 §2):
+// в системном блоке они обнуляли бы prefix cache всей истории у любого провайдера. Такую
+// секцию ClaudeSession подхватывает сам, без явной проводки ключа; Title — её заголовок в
+// снимке «что ушло модели».
+public sealed record PromptSection(string Key, string Text, string? Title = null, bool InTurnTail = false);
 
 // Контекст сессии, который шина кладёт в PromptAssembling для контрибьюторов.
 // Намеренно лёгкий: ровно то, что нужно для гейта IsEnabled и для вызова сервисов

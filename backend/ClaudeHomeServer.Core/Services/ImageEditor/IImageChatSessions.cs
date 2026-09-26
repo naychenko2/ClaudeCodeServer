@@ -27,6 +27,12 @@ public interface IImageChatSessions
     // Файл переименовали или перенесли мимо редактора: пути переписываются целиком, Lineage не
     // растёт. UpdatedAt не двигается, в ленту ничего не пишется.
     Session? RewritePaths(string sessionId, string currentPath, IReadOnlyList<string> lineage);
+
+    // Человек запустил генерацию из редактора этого чата: тихая строка image_launch в ленту.
+    // Модель её не видит (история, а не транскрипт CLI) — о запуске ход узнаёт из блока
+    // состояния редактора. Запись — активность, она двигает UpdatedAt.
+    // null — чата нет или он не чат картинки. Владение и проект проверяет вызывающий.
+    Task<Session?> AppendLaunchAsync(string sessionId, Protocol.StoredImageLaunchMessage launch);
 }
 
 // Session — созданный чат; иначе ErrorCode + Error (коды — строки REST редактора)

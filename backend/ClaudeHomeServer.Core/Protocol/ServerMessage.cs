@@ -311,6 +311,12 @@ public record ChatDeletedMessage()
 public record ImageFileMovedMessage(string From, string To, long? Timestamp = null)
     : ServerMessage("image_file_moved");
 
+// Живая копия StoredImageLaunchMessage (ADR-018 §2): тихая строка «Вы запустили: …» в чате
+// картинки. Поля те же, что у записи истории; SessionId — в базовом поле.
+public record ImageLaunchMessage(string By, string Prompt, string Provider, string Model, int Count,
+    StoredImageLaunchEstimate? Estimate, string JobId, long? Timestamp = null)
+    : ServerMessage("image_launch");
+
 public record ChatArchivedMessage(bool Archived)
     : ServerMessage("chat_archived");
 

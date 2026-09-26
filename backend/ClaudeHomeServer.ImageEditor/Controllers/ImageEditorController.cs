@@ -25,6 +25,7 @@ public class ImageEditorController(
     IFeatureFlagGate flags,
     IProjectManager projects,
     IEnumerable<IImageEditor> editors,
+    ImageEditLaunchAssembler launcher,
     IImagePlaceSettings? placeSettings = null,
     IImageEditJobs? jobs = null,
     IImageEditSaver? saver = null,
@@ -89,91 +90,29 @@ public class ImageEditorController(
     {
         if (Gate(projectId, out var project) is { } denied) return denied;
 
-        // Драйверов может не быть вовсе (не настроены или ещё не подключены) — это понятный
-        // отказ, а не 500 и не 202 на задачу, которая никогда не начнётся
-        if (ImageEditCatalog.Available(editors).Count == 0)
-            return Error(StatusCodes.Status409Conflict, ImageEditErrorCodes.ProviderUnavailable,
-                "Поставщик рисования не настроен. Обратитесь к администратору");
-        if (jobs is null) return JobsUnavailable();
-        if (raster is null) return RasterUnavailable();
-        if (string.IsNullOrWhiteSpace(form.QuoteId))
-            return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
-                "Не указана котировка: сначала запросите цену");
-
-        var aspectRatio = string.IsNullOrWhiteSpace(form.AspectRatio) ? null : form.AspectRatio.Trim();
-        if (aspectRatio is not null && !AspectRatios.Contains(aspectRatio))
-            return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
-                $"Пропорции {aspectRatio} не поддерживаются: только {string.Join(", ", AspectRatios)}");
-
-        var limits = ImageEditCatalog.DefaultLimits;
-        var maxFileBytes = limits.MaxFileMb * 1024L * 1024L;
-        var files = new[] { form.Source, form.Mask, form.Annotated }
-            .Concat(form.References ?? [])
-            .Where(f => f is not null);
-        if (files.Any(f => f!.Length > maxFileBytes))
-            return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
-                $"Файл больше {limits.MaxFileMb} МБ");
-
-        var references = new List<ReferenceImage>();
-        var uploaded = form.References ?? [];
-        for (var i = 0; i < uploaded.Count; i++)
-        {
-            var file = uploaded[i];
-            references.Add(new ReferenceImage(await ReadAsync(file, ct), ContentTypeOf(file),
-                RoleAt(form.ReferenceRoles, i), Path.GetFileName(file.FileName)));
-        }
-
-        // Образцы из проекта — по пути, строго внутри корня
+        // Проверки и сборка входа — в общем ImageEditLaunchAssembler (ADR-018 §2): тем же путём
+        // пойдёт запуск агентом. Здесь только multipart → байты
+        var uploaded = new List<ReferenceImage>();
+        var files = form.References ?? [];
+        for (var i = 0; i < files.Count; i++)
+            uploaded.Add(new ReferenceImage(await ReadAsync(files[i], ct), ContentTypeOf(files[i]),
+                RoleAt(form.ReferenceRoles, i), Path.GetFileName(files[i].FileName)));
         var paths = form.ReferencePaths ?? [];
-        for (var i = 0; i < paths.Count; i++)
-        {
-            if (!TryJoinInside(project.RootPath, paths[i], out var full))
-                return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
-                    "Образец вне папки проекта или идёт через символическую ссылку");
-            var info = new FileInfo(full);
-            if (!info.Exists)
-                return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
-                    $"Образец не найден: {paths[i]}");
-            if (info.Length > maxFileBytes)
-                return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
-                    $"Файл больше {limits.MaxFileMb} МБ");
-            references.Add(new ReferenceImage(await System.IO.File.ReadAllBytesAsync(full, ct),
-                ContentTypeByExtension(full), RoleAt(form.ReferencePathRoles, i), info.Name));
-        }
-        // Персонаж — фото из его папки образцами с ролью Character, первыми по порядку
-        CharacterRef? character = null;
-        if (form.CharacterSlug is { Length: > 0 } slug)
-        {
-            var found = CharacterStore.ForRequest(project.RootPath, slug);
-            if (found is null)
-                return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
-                    "Персонаж не найден");
-            character = found.Ref;
-            references.InsertRange(0, found.Photos);
-        }
-        if (references.Count > limits.MaxReferences)
-            return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
-                $"Образцов не больше {limits.MaxReferences}");
+        var referencePaths = paths.Select((p, i) => (p, RoleAt(form.ReferencePathRoles, i))).ToList();
 
-        if (form.SourcePath is { Length: > 0 } sourcePath && !TryJoinInside(project.RootPath, sourcePath, out _))
-            return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
-                "Исходник вне папки проекта или идёт через символическую ссылку");
-
-        var input = new ImageEditJobInput(
-            form.QuoteId.Trim(),
-            form.Prompt ?? "",
-            form.Marks,
+        var request = new ImageEditLaunchRequest(
+            form.QuoteId, form.Prompt, form.Marks, form.SourcePath,
             await ToBytesAsync(form.Source, ct),
             await ToBytesAsync(form.Mask, ct),
             await ToBytesAsync(form.Annotated, ct),
-            references,
-            form.SourcePath,
-            character,
+            uploaded, referencePaths, form.CharacterSlug,
             MatchSourceSize: form.MatchSourceSize ?? true,
             BaseStepId: form.BaseStepId,
-            AspectRatio: aspectRatio);
+            AspectRatio: form.AspectRatio,
+            ChatSessionId: form.ChatSessionId,
+            Initiator: ImageEditInitiator.Human);
 
-        var started = await jobs.StartAsync(UserId, projectId, input, ct);
+        var started = await launcher.LaunchAsync(UserId, project, request, ct);
         return Map(started, created => StatusCode(StatusCodes.Status202Accepted, created));
     }
 
@@ -332,11 +271,11 @@ public class ImageEditorController(
         public bool? MatchSourceSize { get; set; }
         // Шаг истории, с которого запущена правка: родитель шагов из её вариантов
         public string? BaseStepId { get; set; }
-        // Пропорции «Дорисовать за края» (AspectRatios); не передано — на усмотрение драйвера
+        // Пропорции «Дорисовать за края» (1:1, 16:9, 9:16); не передано — на усмотрение драйвера
         public string? AspectRatio { get; set; }
+        // Чат картинки, из которого запуск: строка «Вы запустили: …» в ленте и журнал состояния
+        public string? ChatSessionId { get; set; }
     }
-
-    private static readonly string[] AspectRatios = ["1:1", "16:9", "9:16"];
 
     // ── Правки без ИИ и шаги истории (ADR-018 §9) ──────────────────────────────────
 
@@ -549,13 +488,5 @@ public class ImageEditorController(
             ? ContentTypeByExtension(file.FileName)
             : file.ContentType;
 
-    private static string ContentTypeByExtension(string path) =>
-        Path.GetExtension(path).ToLowerInvariant() switch
-        {
-            ".png" => "image/png",
-            ".jpg" or ".jpeg" => "image/jpeg",
-            ".webp" => "image/webp",
-            ".gif" => "image/gif",
-            _ => "application/octet-stream",
-        };
+    private static string ContentTypeByExtension(string path) => ImageEditLaunchAssembler.ContentTypeByExtension(path);
 }

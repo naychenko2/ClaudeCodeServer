@@ -2,6 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.ImageEditor.Chats;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -21,6 +22,8 @@ public class ImageChatsController(
     IFeatureFlagGate flags,
     IProjectManager projects,
     ISessionDirectory directory,
+    ImageChatStateStore states,
+    ImageEditLaunchAssembler launcher,
     IImageChatSessions? chats = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -76,6 +79,77 @@ public class ImageChatsController(
 
         var updated = chats.SetPath(sessionId, path);
         return updated is null ? ChatNotFound() : Ok(updated);
+    }
+
+    // ── Состояние редактора (ADR-018 §2) ───────────────────────────────────────────
+
+    // Потолок тела записи состояния: JSON и маска холста
+    private const long MaxStateBodyBytes = 30L * 1024 * 1024;
+
+    [HttpGet("{sessionId}/state")]
+    public IActionResult GetState(string projectId, string sessionId)
+    {
+        if (Gate(projectId, out var project) is { } denied) return denied;
+        if (OwnImageChat(project, sessionId) is not { } session) return ChatNotFound();
+        return Ok(states.Get(UserId, session.Id));
+    }
+
+    // Запись с дебаунсом от редактора. Тело — JSON состояния либо multipart: поле state (JSON) и
+    // файл mask — маска едет только при смене canvasRevision. revision — та, от которой редактор
+    // считал; устарела — 409 с актуальным состоянием. Сессию не трогает: UpdatedAt не двигается.
+    [HttpPut("{sessionId}/state")]
+    [RequestSizeLimit(MaxStateBodyBytes)]
+    [RequestFormLimits(MultipartBodyLengthLimit = MaxStateBodyBytes)]
+    public async Task<IActionResult> PutState(string projectId, string sessionId, CancellationToken ct)
+    {
+        if (Gate(projectId, out var project) is { } denied) return denied;
+        if (OwnImageChat(project, sessionId) is not { } session) return ChatNotFound();
+
+        ImageChatState? incoming;
+        byte[]? mask = null;
+        try
+        {
+            if (Request.HasFormContentType)
+            {
+                var form = await Request.ReadFormAsync(ct);
+                incoming = form.TryGetValue("state", out var json) && !string.IsNullOrWhiteSpace(json)
+                    ? System.Text.Json.JsonSerializer.Deserialize<ImageChatState>(json.ToString(), ImageChatStateStore.Json)
+                    : null;
+                if (form.Files.GetFile("mask") is { Length: > 0 } file)
+                {
+                    using var ms = new MemoryStream();
+                    await file.CopyToAsync(ms, ct);
+                    mask = ms.ToArray();
+                }
+            }
+            else
+            {
+                incoming = await System.Text.Json.JsonSerializer.DeserializeAsync<ImageChatState>(
+                    Request.Body, ImageChatStateStore.Json, ct);
+            }
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            incoming = null;
+        }
+        if (incoming is null)
+            return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest, "Состояние не прочитано");
+        if (incoming.Count < 1 || incoming.Count > ImageEditCatalog.DefaultLimits.MaxCount)
+            return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
+                $"Число вариантов — от 1 до {ImageEditCatalog.DefaultLimits.MaxCount}");
+
+        var written = states.Write(UserId, session.Id, incoming, mask);
+        if (!written.Ok)
+            return StatusCode(StatusCodes.Status409Conflict, new
+            {
+                error = "Состояние уже поменялось — перечитайте его",
+                code = ImageEditErrorCodes.RevisionConflict,
+                state = written.State,
+            });
+        if (written.Changes.Count > 0)
+            await launcher.BroadcastStateAsync(UserId, project.Id, session.Id, written.State,
+                ImageEditInitiator.Human, written.Changes);
+        return Ok(written.State);
     }
 
     // Чат этого проекта (а проект уже свой — Gate) и именно чат картинки; иначе null

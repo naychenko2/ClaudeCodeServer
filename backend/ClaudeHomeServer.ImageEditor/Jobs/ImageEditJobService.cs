@@ -76,6 +76,9 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         // Размер исходника до ужатия: к нему приводятся варианты; null — приводить не к чему
         public (int Width, int Height)? MatchSize { get; init; }
         public string? BaseStepId { get; init; }
+        // Чат картинки и кто запустил (ADR-018 §2): едут в DTO, события и запись траты
+        public string? ChatSessionId { get; init; }
+        public ImageEditInitiator Initiator { get; init; }
         public string? SizeNote { get; set; }
         public readonly Lock Gate = new();
         public string Id { get; } = id;
@@ -198,6 +201,8 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
                 CreatedAt = Now(),
                 MatchSize = matchSize,
                 BaseStepId = string.IsNullOrWhiteSpace(input.BaseStepId) ? null : input.BaseStepId.Trim(),
+                ChatSessionId = string.IsNullOrWhiteSpace(input.ChatSessionId) ? null : input.ChatSessionId.Trim(),
+                Initiator = input.Initiator,
             };
             _jobs[job.Id] = job;
             job.Completion = Task.Run(() => RunAsync(job, editor, request));
@@ -273,7 +278,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             job.Status = ImageEditJobStatus.Completed;
         }
         await Broadcast(job.OwnerId, new ImageEditCompletedMessage(job.Id, job.ProjectId, [.. job.Variants], cost,
-            SizeNote: sizeNote));
+            job.ChatSessionId, job.Initiator, sizeNote));
     }
 
     private async Task FailAsync(Job job, IImageEditor editor, ImageEditResult result)
@@ -304,7 +309,8 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
                 job.Cost = new EditCost(amount, editor.PriceUnit);
         }
         await Broadcast(job.OwnerId,
-            new ImageEditFailedMessage(job.Id, job.ProjectId, result.Outcome, charged, result.Error, retry));
+            new ImageEditFailedMessage(job.Id, job.ProjectId, result.Outcome, charged, result.Error, retry,
+                job.ChatSessionId, job.Initiator));
     }
 
     // Сосед с подходящей моделью — только предложение: UI покажет «Повторить через …»
@@ -377,6 +383,8 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
                 Timestamp = Now(),
                 OwnerId = job.OwnerId,
                 ProjectId = job.ProjectId,
+                SessionId = job.ChatSessionId,
+                Initiator = job.Initiator == ImageEditInitiator.Agent ? SpendInitiators.Agent : SpendInitiators.Human,
                 Provider = job.Quote.Provider,
                 Model = job.Quote.Model.Id,
                 Source = job.Quote.Provider,
@@ -450,7 +458,8 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
                 job.QueuePosition = value.QueuePosition;
             }
             _ = owner.Broadcast(job.OwnerId,
-                new ImageEditProgressMessage(job.Id, job.ProjectId, value.Stage, value.QueuePosition));
+                new ImageEditProgressMessage(job.Id, job.ProjectId, value.Stage, value.QueuePosition,
+                    job.ChatSessionId, job.Initiator));
         }
     }
 
@@ -487,7 +496,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         lock (j.Gate)
             return new ImageEditJobDto(j.Id, j.ProjectId, j.Status, j.Quote.Provider, j.Quote.Model.Id,
                 [.. j.Variants], j.Cost, j.Outcome, j.Charged, j.Error, j.QueuePosition, j.CreatedAt,
-                BaseStepId: j.BaseStepId, SizeNote: j.SizeNote);
+                j.ChatSessionId, j.Initiator, j.BaseStepId, j.SizeNote, j.Quote.Count, j.Quote.Estimate);
     }
 
     private void PruneQuotes()

@@ -206,7 +206,7 @@ public sealed class DeviceRegistry
 
     /// <summary>
     /// Сведения агента из Hello (ADR-016): платформа, версии агента и управляемой копии CLI,
-    /// возможности. Hello без версии агента (клиент рук ADR-008) их не трогает. null —
+    /// возможности, состояние самообновления. Hello без версии агента (клиент рук ADR-008) их не трогает. null —
     /// устройства нет, оно отозвано или чужое.
     /// </summary>
     public DesktopDevice? UpdateAgentInfo(string ownerId, string deviceId, DeviceHello hello)
@@ -222,6 +222,7 @@ public sealed class DeviceRegistry
             device.AgentVersion = Trimmed(hello.AgentVersion);
             device.CliVersion = Trimmed(hello.CliVersion);
             device.Capabilities = DeviceCapabilities.Normalize(hello.Capabilities);
+            device.AgentUpdate = DeviceAgentUpdate.Normalize(hello.AgentUpdate);
             Save();
             return device;
         }

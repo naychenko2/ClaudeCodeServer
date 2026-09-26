@@ -44,6 +44,7 @@ public sealed class DeviceExecChannel : IDeviceExecChannel, IDeviceRelayChannel
     private readonly IDeviceExecOpenSender _opener;
     private readonly ILogger<DeviceExecChannel> _log;
     private readonly TimeProvider _time;
+    private readonly AgentReleaseCatalog? _releases;
     private readonly ConcurrentDictionary<string, DeviceExecStream> _streams = new();
 
     public DeviceExecChannel(
@@ -52,7 +53,8 @@ public sealed class DeviceExecChannel : IDeviceExecChannel, IDeviceRelayChannel
         DeviceHarnessPolicy harness,
         IDeviceExecOpenSender opener,
         ILogger<DeviceExecChannel> log,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        AgentReleaseCatalog? releases = null)
     {
         _registry = registry;
         _router = router;
@@ -60,12 +62,14 @@ public sealed class DeviceExecChannel : IDeviceExecChannel, IDeviceRelayChannel
         _opener = opener;
         _log = log;
         _time = timeProvider ?? TimeProvider.System;
+        _releases = releases;
     }
 
     /// <summary>
     /// Hello устройства: сведения агента сохраняются ДО того, как маршрутизатор объявит
     /// устройство онлайн, — наблюдатели онлайна видят уже свежие возможности. В ответ уходит
-    /// требуемая версия CLI и вердикт по объявленной копии.
+    /// требуемая версия CLI и вердикт по объявленной копии, а агенту — ещё и сведения о
+    /// раздаче (agent-distribution Р9): текущая и минимальная версии и архив под его RID.
     /// </summary>
     public async Task<DeviceHelloAck> HelloAsync(
         string connectionId, string ownerId, string deviceId, DeviceHello hello, CancellationToken ct = default)
@@ -77,12 +81,32 @@ public sealed class DeviceExecChannel : IDeviceExecChannel, IDeviceRelayChannel
         if (!ready && !string.IsNullOrWhiteSpace(hello.AgentVersion))
             _log.LogInformation("Устройство {DeviceId}: {Problem}", deviceId, problem);
 
-        return ack with
+        ack = ack with
         {
             RequiredCliVersion = _harness.RequiredCliVersion,
             HarnessReady = ready,
             HarnessProblem = problem,
             ExecProtocolVersion = DeviceExecProtocol.Version,
+        };
+        return string.IsNullOrWhiteSpace(hello.AgentVersion) ? ack : WithAgentRelease(ack, hello.Rid);
+    }
+
+    // Минимальная версия — свойство кода и уходит всегда; текущая — только если сервер
+    // раздаёт агента (выключенный Desktop или пустой каталог — null), архив — только под
+    // RID, который агент объявил сам.
+    private DeviceHelloAck WithAgentRelease(DeviceHelloAck ack, string? rid)
+    {
+        // Один снимок на оба ответа: версия и архив не могут прийти из разных выкаток
+        var latest = _releases?.Current().Latest;
+        var archive = latest is not null && DeviceAgentRids.IsSupported(rid)
+            && latest.Archives.TryGetValue(rid!, out var found) ? found : null;
+        return ack with
+        {
+            AgentMinVersion = DeviceAgentCompatibility.MinVersion,
+            AgentLatestVersion = latest?.Version,
+            AgentArchiveSha256 = archive?.Sha256,
+            AgentArchiveSize = archive?.Size,
+            AgentArchivePath = archive?.RelativePath,
         };
     }
 

@@ -1,14 +1,11 @@
-// Экран редактора картинок (макет docs/mockups/image-editor-v1.html, экраны 2–8):
-// холст с пометками, запрос, «Поставщик ▾ → Модель ▾», число вариантов и цена до
-// запуска, генерация с прогрессом и отменой, варианты, сохранение новой версией.
-// На телефоне колонки встают друг под другом: инструменты строкой, холст, панель
-// запроса с прилипшим низом.
+// Экран редактора картинок, раскладка v2 (макет docs/mockups/image-editor-v2.html):
+// слева шесть секций инструментов, в центре холст или генерация / варианты, справа
+// сверху поле промпта, под ним место чата картинки (пока там «Обсудить» из v1).
+// На телефоне холст на весь экран, промпт внизу, «Инструменты» и «Чат» — шторки.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import {
-  ArrowLeft, Brush, Eraser, Hand, Image as ImageIcon, MessageSquare, MoveUpRight, Sparkles, SquareDashed, Trash2, Type, Upload, X,
-} from 'lucide-react';
-import { Button, EmptyState, Field, IconButton, Island, Modal, ModalActions, SegmentedControl, TextArea, TextField } from '../ui';
+import { ArrowLeft, Brush, Image as ImageIcon, MessageSquare, Upload, Wrench } from 'lucide-react';
+import { Button, EmptyState, Field, IconButton, Island, Modal, ModalActions, TextField } from '../ui';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { C, FS, ISLAND, R, SP } from '../../lib/design';
 import { useIsMobile } from '../../lib/breakpoints';
@@ -20,7 +17,9 @@ import { AUTO_MODEL, imageEditorApi, type ImageEditCatalog, type ImageEditCatalo
 import { EditorCanvas } from './EditorCanvas';
 import { exportAnnotated, exportMask, hasAnnotationMark, hasMaskMark, marksToJson, type Mark, type Tool } from './marks';
 import { effectiveProvider, isRemovalPrompt, modelBlockReason, money, nextVersionName, pickOp, plural, priceText, splitPath, variantsWord, type ProviderChoice } from './format';
-import { currentModel, PriceLine, ProviderModelPicker, SectionLabel } from './ProviderModelPicker';
+import { currentModel, ProviderModelPicker } from './ProviderModelPicker';
+import { EditorSections, MarksTools, MobileToolbar, SectionHint, SoonBadge, useEditorSections, type EditorSection } from './EditorSections';
+import { PromptCard } from './PromptCard';
 import { useQuote } from './useQuote';
 import { useImageEditJob } from './useImageEditJob';
 import { ErrorView, GenerationView, VariantsView } from './ResultViews';
@@ -35,13 +34,6 @@ export type ImageEditorTarget =
   | { kind: 'create'; folder: string };  // «Нарисовать картинку» у папки
 
 const ic = (I: typeof Brush, size: number = ICON_SIZE.sm) => <I size={size} strokeWidth={ICON_STROKE} />;
-
-const TOOLS: { id: Tool; icon: typeof Brush; title: string }[] = [
-  { id: 'mask', icon: Brush, title: 'Кисть: закрасить место' },
-  { id: 'arrow', icon: MoveUpRight, title: 'Стрелка' },
-  { id: 'rect', icon: SquareDashed, title: 'Рамка' },
-  { id: 'text', icon: Type, title: 'Подпись' },
-];
 
 export function ImageEditor({ projectId, projectName, target, onClose, onShowInFiles, onDirtyChange }: {
   projectId: string;
@@ -88,6 +80,9 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
 
   const me = useMe();
   const [providersOpen, setProvidersOpen] = useState(false);
+  const sectionsState = useEditorSections(me.userId);
+  // Телефон: шторки «Инструменты» и «Чат»
+  const [sheet, setSheet] = useState<'tools' | 'chat' | null>(null);
 
   const job = useImageEditJob(api, projectId);
   const busy = job.phase === 'starting' || job.phase === 'running';
@@ -248,7 +243,7 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
     );
   } else if (src) {
     center = (
-      <EditorCanvas src={src} size={size} marks={marks} onMarksChange={setMarks} tool={tool} mobile={mobile}
+      <EditorCanvas src={src} size={size} marks={marks} onMarksChange={setMarks} tool={tool}
         onTextAt={(x, y) => setLabelAt({ x, y, text: '' })}
         onImageLoad={img => { imgRef.current = img; setSize({ w: img.naturalWidth, h: img.naturalHeight }); }} />
     );
@@ -256,104 +251,132 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
     center = <DropZone folder={folder} mobile={mobile} onFile={f => { setSrc(URL.createObjectURL(f)); setSize(null); setMarks([]); }} />;
   }
 
-  const tools = hasImage && job.phase === 'idle' && (
-    <div style={{
-      display: 'flex', flexDirection: mobile ? 'row' : 'column', alignItems: 'center', gap: SP.xxs, padding: SP.sm,
-      flex: mobile ? '0 0 auto' : '0 0 48px', overflowX: mobile ? 'auto' : undefined,
-      [mobile ? 'borderBottom' : 'borderRight']: `1px solid ${C.borderLight}`,
-    }}>
-      <IconButton active={tool === 'hand'} title="Перемещать" ariaLabel="Перемещать" onClick={() => setTool('hand')}>{ic(Hand)}</IconButton>
-      <ToolSep mobile={mobile} />
-      {TOOLS.map(t => (
-        <IconButton key={t.id} active={tool === t.id} title={t.title} ariaLabel={t.title} onClick={() => setTool(t.id)}>{ic(t.icon)}</IconButton>
-      ))}
-      <ToolSep mobile={mobile} />
-      <IconButton active={tool === 'eraser'} title="Ластик: убрать пометку" ariaLabel="Ластик: убрать пометку" onClick={() => setTool('eraser')}>{ic(Eraser)}</IconButton>
-      <IconButton title="Очистить пометки" ariaLabel="Очистить пометки" disabled={!marks.length} onClick={() => setMarks([])}>{ic(Trash2)}</IconButton>
+  const notConfigured = !!catalog && !catalog.providers.length;
+  const marksOn = hasImage && job.phase === 'idle';
+
+  // ── Левая панель: шесть секций ──
+  const sections: EditorSection[] = [
+    {
+      id: 'marks', title: 'Пометки',
+      meta: marks.length ? `${marks.length} ${plural(marks.length, 'пометка', 'пометки', 'пометок')}` : 'нет',
+      body: <MarksTools tool={tool} onTool={setTool} marksCount={marks.length} onClear={() => setMarks([])} disabled={!marksOn} />,
+    },
+    {
+      id: 'samples', title: 'Образцы', meta: <SoonBadge />,
+      body: <SectionHint>Модель возьмёт образец за пример. Роль — под миниатюрой: лицо, стиль или предмет. Картинку можно перетащить сюда из файлов.</SectionHint>,
+    },
+    {
+      id: 'chars', title: 'Персонажи',
+      meta: character ? `в генерации: ${character.name}` : chars.list.length ? String(chars.list.length) : 'нет',
+      body: (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+          <CharacterSection api={api} projectId={projectId} chars={chars} disabled={busy} bare
+            onNew={charDialogs.openNew} onCard={charDialogs.openCard} />
+          <SectionHint>Персонаж — набор фото лица в characters/. Подключённый узнаваем во всех вариантах.</SectionHint>
+        </div>
+      ),
+    },
+    {
+      id: 'quick', title: 'Быстрые действия', meta: <SoonBadge />,
+      body: <SectionHint>Запускаются сразу, без промпта. Число вариантов и цена — как в поле промпта.</SectionHint>,
+    },
+    {
+      id: 'model', title: 'Чем рисовать',
+      meta: pv && m ? `${pv.label} · ${m.label}` : undefined,
+      body: (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+          {catalogError && <div style={{ fontSize: FS.sm, color: C.dangerText }}>{catalogError}</div>}
+          {notConfigured && catalog && (
+            <NotConfigured reason={catalogReason(catalog)} isAdmin={me.role === 'admin'} onSetup={() => setProvidersOpen(true)} />
+          )}
+          {catalog && !notConfigured && (
+            <ProviderModelPicker catalog={catalog} provider={provider} model={m?.id ?? model}
+              onProvider={onProvider} onModel={setModel} hasImage={hasImage} hasMask={hasMask}
+              priceLabel={priceLabel} mobile={mobile} />
+          )}
+        </div>
+      ),
+    },
+    {
+      id: 'hist', title: 'История шагов', meta: <SoonBadge />,
+      body: <SectionHint>Здесь появятся шаги правки. На любой можно вернуться.</SectionHint>,
+    },
+  ];
+  const toolPanel = <EditorSections sections={sections} open={sectionsState.open} onToggle={sectionsState.toggle} />;
+
+  // ── Поле промпта ──
+  const promptCard = (
+    <PromptCard prompt={prompt} onPrompt={setPrompt} busy={busy} busyCount={job.count} onCancel={job.cancel}
+      count={count} onCount={setCount} priceLabel={notConfigured ? null : priceLabel}
+      canGenerate={canGenerate} blockedReason={blocked} onGenerate={() => generate()} mobile={mobile}
+      placeholder={character
+        ? `Где и что делает ${character.name}? Например, «${character.name} сидит в кафе у окна»`
+        : hasImage
+          ? 'Что изменить? Отметьте место на картинке или просто опишите'
+          : 'Опишите, что нарисовать: например, «светлая гостиная, синий диван, торшер в углу, утро»'}
+      above={character && (
+        <CharacterChip api={api} projectId={projectId} character={character} disabled={busy}
+          onOpen={() => charDialogs.openCard(character.slug)} onOff={() => chars.setActive(null)} />
+      )}
+      below={(
+        <>
+          {notConfigured && <div style={{ fontSize: FS.sm, color: C.textMuted }}>Рисовать нечем — см. «Чем рисовать» слева</div>}
+          {quoteError && !blocked && <div style={{ fontSize: FS.sm, color: C.dangerText }}>{quoteError}</div>}
+        </>
+      )} />
+  );
+
+  // ── Место чата картинки: пока живёт «Обсудить» из v1 ──
+  const chatArea = (
+    <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: SP.md, display: 'flex', flexDirection: 'column', gap: SP.md }}>
+      <div style={{ fontSize: FS.sm, color: C.textMuted, lineHeight: 1.45, textAlign: 'center' }}>
+        Здесь будет чат картинки. Пока можно обсудить её с Claude: ответ придёт сюда, а весь разговор откроется в чатах проекта.
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'center' }}>
+        <Button variant="ghost" size="sm" leftIcon={ic(MessageSquare, ICON_SIZE.xs)}
+          disabled={busy || !hasImage || !size} title={hasImage ? undefined : 'Сначала загрузите картинку'}
+          onClick={() => { void startDiscuss(); }}>
+          Обсудить с Claude
+        </Button>
+      </div>
+      {discuss && (
+        <DiscussPanel projectId={projectId} projectName={projectName} state={discuss}
+          onUsePrompt={text => { setPrompt(text); setSheet(null); }}
+          onOpenChat={sid => { openProjectChat(projectId, sid); onClose(); }}
+          onClose={closeDiscuss} />
+      )}
     </div>
   );
 
-  // ── Панель запроса ──
-  const notConfigured = !!catalog && !catalog.providers.length;
-  const ask = (
-    <div style={{
-      display: 'flex', flexDirection: 'column', minHeight: 0,
-      ...(mobile
-        ? { flex: '0 0 auto', borderTop: `1px solid ${C.borderLight}` }
-        : { width: 330, flex: '0 0 330px', borderLeft: `1px solid ${C.borderLight}` }),
-    }}>
-      <div style={{ flex: 1, overflow: mobile ? undefined : 'auto', padding: SP.md, display: 'flex', flexDirection: 'column', gap: SP.md }}>
-        <div>
-          <SectionLabel>{hasImage ? 'Запрос' : 'Что нарисовать'}</SectionLabel>
-          {character && (
-            <CharacterChip api={api} projectId={projectId} character={character} disabled={busy}
-              onOpen={() => charDialogs.openCard(character.slug)} onOff={() => chars.setActive(null)} />
-          )}
-          <TextArea value={prompt} onChange={setPrompt} disabled={busy} minHeight={96} autoGrow maxHeight={220}
-            placeholder={character
-              ? `Где и что делает ${character.name}? Например, «${character.name} сидит в кафе у окна»`
-              : hasImage
-                ? 'Что изменить?'
-                : 'Опишите, что нарисовать: например, «светлая гостиная, синий диван, торшер в углу, утро»'} />
-          <div style={{ display: 'flex', marginTop: SP.sm }}>
-            <Button variant="ghost" size="sm" leftIcon={ic(MessageSquare, ICON_SIZE.xs)}
-              disabled={busy || !hasImage || !size} title={hasImage ? undefined : 'Сначала загрузите картинку'}
-              onClick={() => { void startDiscuss(); }}>
-              Обсудить с Claude
-            </Button>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, marginTop: SP.sm, fontSize: FS.sm, color: C.textMuted }}>
-            {ic(Sparkles, ICON_SIZE.xs)}<span>Claude учитывает описание проекта</span>
-          </div>
+  const body = mobile ? (
+    <>
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}>
+        {center}
+        {marksOn && src && <MobileToolbar tool={tool} onTool={setTool} />}
+      </div>
+      <div style={{ flex: '0 0 auto', display: 'flex', gap: SP.xs, padding: `${SP.xs}px ${SP.md}px 0`, background: C.bgPanel, borderTop: `1px solid ${C.borderLight}` }}>
+        <div style={{ flex: 1 }}>
+          <Button variant="ghostFilled" size="sm" fullWidth leftIcon={ic(Wrench, ICON_SIZE.xs)} onClick={() => setSheet('tools')}>Инструменты</Button>
         </div>
-        {discuss && (
-          <DiscussPanel projectId={projectId} projectName={projectName} state={discuss}
-            onUsePrompt={text => setPrompt(text)}
-            onOpenChat={sid => { openProjectChat(projectId, sid); onClose(); }}
-            onClose={closeDiscuss} />
-        )}
-        <CharacterSection api={api} projectId={projectId} chars={chars} disabled={busy}
-          onNew={charDialogs.openNew} onCard={charDialogs.openCard} />
-        {catalogError && <div style={{ fontSize: FS.sm, color: C.dangerText }}>{catalogError}</div>}
-        {notConfigured && catalog && (
-          <NotConfigured reason={catalogReason(catalog)} isAdmin={me.role === 'admin'} onSetup={() => setProvidersOpen(true)} />
-        )}
-        {catalog && !notConfigured && (
-          <ProviderModelPicker catalog={catalog} provider={provider} model={m?.id ?? model}
-            onProvider={onProvider} onModel={setModel} hasImage={hasImage} hasMask={hasMask}
-            priceLabel={priceLabel} mobile={mobile} />
-        )}
-        {quoteError && !blocked && <div style={{ fontSize: FS.sm, color: C.dangerText }}>{quoteError}</div>}
+        <div style={{ flex: 1 }}>
+          <Button variant="ghostFilled" size="sm" fullWidth leftIcon={ic(MessageSquare, ICON_SIZE.xs)} onClick={() => setSheet('chat')}>Чат</Button>
+        </div>
       </div>
-      <div style={{
-        borderTop: `1px solid ${C.borderLight}`, padding: `${SP.sm}px ${SP.md}px`, background: C.bgInset,
-        display: 'flex', flexDirection: 'column', gap: SP.sm,
-        ...(mobile ? { position: 'sticky', bottom: 0, zIndex: 2 } : null),
-      }}>
-        {busy ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm }}>
-            <span style={{ flex: 1, fontSize: FS.sm, color: C.textSecondary }}>Рисуем {variantsWord(job.count)}…</span>
-            <Button size="sm" variant="secondary" leftIcon={ic(X)} onClick={job.cancel}>Отменить</Button>
-          </div>
-        ) : (
-          <>
-            <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: FS.sm, color: C.textMuted }}>Вариантов</span>
-              <div style={{ width: 132 }}>
-                <SegmentedControl value={String(count)} onChange={v => setCount(Number(v))}
-                  options={['1', '2', '3', '4'].map(v => ({ value: v, label: v }))} />
-              </div>
-              <span style={{ flex: 1 }} />
-              {!notConfigured && <PriceLine text={priceLabel} />}
-            </div>
-            <Button variant="primary" size="lg" fullWidth leftIcon={ic(Sparkles)} disabled={!canGenerate}
-              title={blocked || undefined} onClick={() => generate()}>
-              Сгенерировать
-            </Button>
-          </>
-        )}
+      {promptCard}
+    </>
+  ) : (
+    <>
+      <div data-editor-left="" style={{ width: 272, flex: '0 0 272px', borderRight: `1px solid ${C.borderLight}`, overflow: 'auto', background: C.bgPanel }}>
+        {toolPanel}
       </div>
-    </div>
+      <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+        {center}
+      </div>
+      <div data-editor-right="" style={{ width: 384, flex: '0 0 384px', borderLeft: `1px solid ${C.borderLight}`, display: 'flex', flexDirection: 'column', minHeight: 0, background: C.bgPanel }}>
+        {promptCard}
+        {chatArea}
+      </div>
+    </>
   );
 
   return (
@@ -376,17 +399,16 @@ export function ImageEditor({ projectId, projectName, target, onClose, onShowInF
           </span>
         )}
       </div>
-      <div style={{
-        flex: 1, minHeight: 0, display: 'flex',
-        ...(mobile ? { flexDirection: 'column', overflow: 'auto' } : null),
-      }}>
-        {tools}
-        <div style={{ flex: mobile ? '0 0 auto' : 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-          {center}
-        </div>
-        {ask}
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', ...(mobile ? { flexDirection: 'column' } : null) }}>
+        {body}
       </div>
 
+      {mobile && sheet && (
+        <Modal title={sheet === 'tools' ? 'Инструменты' : 'Чат картинки'} onClose={() => setSheet(null)}
+          cardStyle={{ maxHeight: '86vh', background: C.bgPanel }}>
+          {sheet === 'tools' ? toolPanel : chatArea}
+        </Modal>
+      )}
       {labelAt && (
         <Modal title="Подпись на картинке" width={380} onClose={() => setLabelAt(null)}
           footer={<ModalActions confirmLabel="Добавить" confirmDisabled={!labelAt.text.trim()} onCancel={() => setLabelAt(null)}
@@ -428,17 +450,13 @@ function NotConfigured({ reason, isAdmin, onSetup }: { reason: ImageEditCatalogR
   );
 }
 
-function ToolSep({ mobile }: { mobile: boolean }) {
-  return <div style={mobile ? { width: 1, height: 20, background: C.divider, margin: `0 ${SP.xs}px` } : { width: 20, height: 1, background: C.divider, margin: `${SP.xs}px 0` }} />;
-}
-
 // Пустой редактор (экран 2): перетащить картинку или загрузить с компьютера
 function DropZone({ folder, onFile, mobile }: { folder: string; onFile: (f: File) => void; mobile: boolean }) {
   const [over, setOver] = useState(false);
   const input = useRef<HTMLInputElement>(null);
   const take = (f: File | undefined) => { if (f && f.type.startsWith('image/')) onFile(f); };
   return (
-    <div style={{ flex: mobile ? '0 0 300px' : 1, minHeight: 0, padding: SP.lg, display: 'flex', background: C.bgInset }}>
+    <div style={{ flex: 1, minHeight: 0, padding: mobile ? SP.md : SP.lg, display: 'flex', background: C.bgInset }}>
       <div
         onDragOver={e => { e.preventDefault(); setOver(true); }}
         onDragLeave={() => setOver(false)}

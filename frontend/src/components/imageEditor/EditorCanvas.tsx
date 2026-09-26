@@ -19,7 +19,7 @@ const TOOL_HINT: Record<Tool, string> = {
 
 const clampZoom = (z: number) => Math.min(4, Math.max(0.25, z));
 
-export function EditorCanvas({ src, size, marks, onMarksChange, tool, onTextAt, onImageLoad, mobile }: {
+export function EditorCanvas({ src, size, marks, onMarksChange, tool, onTextAt, onImageLoad }: {
   src: string;
   // Натуральный размер исходника; null — ещё грузится
   size: { w: number; h: number } | null;
@@ -29,7 +29,6 @@ export function EditorCanvas({ src, size, marks, onMarksChange, tool, onTextAt, 
   // Инструмент «подпись»: точка на картинке, текст спрашивает родитель
   onTextAt: (x: number, y: number) => void;
   onImageLoad: (img: HTMLImageElement) => void;
-  mobile: boolean;
 }) {
   const stageRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -132,7 +131,7 @@ export function EditorCanvas({ src, size, marks, onMarksChange, tool, onTextAt, 
       onDragStart={e => e.preventDefault()}
       style={{
         position: 'relative', overflow: 'hidden', background: C.bgInset, userSelect: 'none',
-        flex: mobile ? '0 0 300px' : 1, minHeight: 0, touchAction: 'none',
+        flex: 1, minHeight: 0, touchAction: 'none',
         cursor: tool === 'hand' ? 'grab' : tool === 'text' ? 'text' : 'crosshair',
       }}
     >

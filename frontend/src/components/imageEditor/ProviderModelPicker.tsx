@@ -162,7 +162,7 @@ export function SectionLabel({ children }: { children: ReactNode }) {
 
 export function PriceLine({ text }: { text: string }) {
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, fontSize: FS.sm, color: C.textSecondary }}>
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, fontSize: FS.sm, color: C.textSecondary, whiteSpace: 'nowrap' }}>
       <Coins size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
       <b style={{ color: C.textPrimary }}>{text}</b>
     </span>

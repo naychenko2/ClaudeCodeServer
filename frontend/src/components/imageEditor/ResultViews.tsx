@@ -13,7 +13,7 @@ import { money, variantsWord } from './format';
 const icon = (I: typeof Check) => <I size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />;
 
 const area = (mobile: boolean) => ({
-  flex: mobile ? '0 0 auto' : 1, minHeight: 0, overflow: 'auto', padding: SP.lg,
+  flex: 1, minHeight: 0, overflow: 'auto', padding: mobile ? SP.md : SP.lg,
   display: 'flex', flexDirection: 'column' as const, gap: SP.md,
 });
 

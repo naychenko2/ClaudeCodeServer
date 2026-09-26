@@ -114,24 +114,28 @@ export function CharacterChip({ api, projectId, character, disabled, onOpen, onO
 }
 
 // Секция «Персонажи проекта»
-export function CharacterSection({ api, projectId, chars, disabled, onNew, onCard }: {
+export function CharacterSection({ api, projectId, chars, disabled, onNew, onCard, bare }: {
   api: ImageEditorApi;
   projectId: string;
   chars: CharactersState;
   disabled?: boolean;
   onNew: () => void;
   onCard: (slug: string) => void;
+  // Без своего заголовка — внутри секции «Персонажи» левой панели
+  bare?: boolean;
 }) {
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, marginBottom: SP.sm }}>
-        <span style={{ flex: 1, fontSize: FS.xs, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-          Персонажи проекта
-        </span>
-        {chars.list.length > 0 && (
-          <Button variant="ghost" size="xs" leftIcon={ic(UserPlus, ICON_SIZE.xs)} disabled={disabled} onClick={onNew}>Персонаж</Button>
-        )}
-      </div>
+      {(!bare || chars.list.length > 0) && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, marginBottom: SP.sm }}>
+          <span style={{ flex: 1, fontSize: FS.xs, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+            {bare ? '' : 'Персонажи проекта'}
+          </span>
+          {chars.list.length > 0 && (
+            <Button variant="ghost" size="xs" leftIcon={ic(UserPlus, ICON_SIZE.xs)} disabled={disabled} onClick={onNew}>Персонаж</Button>
+          )}
+        </div>
+      )}
       {chars.error && <div style={{ fontSize: FS.sm, color: C.dangerText, marginBottom: SP.sm }}>{chars.error}</div>}
       {chars.list.length ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>

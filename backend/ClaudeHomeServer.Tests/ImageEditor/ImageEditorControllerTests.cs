@@ -222,6 +222,27 @@ public class ImageEditorControllerTests : IDisposable
         error.GetProperty("error").GetString().Should().Contain("не настроен");
     }
 
+    // Хотфикс 2026-09-26: Higgsfield доступен всем — обычный пользователь (не админ) получает
+    // котировку без цены и запускается настоящим исполнителем задач
+    [Fact]
+    public async Task Higgsfield_НеАдмин_БезЦены_КотировкаИЗапуск202()
+    {
+        var factory = Factory([new FakeImageEditor("higgsfield", models: FakeImageEditor.Model("nano_banana_2"))]);
+        EnableFlag(factory, TestWebApplicationFactory.SecondUsername);
+        var projectId = CreateProject(factory, TestWebApplicationFactory.SecondUsername);
+        var client = factory.CreateAuthenticatedClient(TestWebApplicationFactory.SecondUsername,
+            TestWebApplicationFactory.SecondPassword);
+        var root = $"/api/projects/{projectId}/image-editor";
+
+        var quote = await client.PostAsJsonAsync($"{root}/quote", Quote("higgsfield"));
+        quote.StatusCode.Should().Be(HttpStatusCode.OK, await quote.Content.ReadAsStringAsync());
+        var quoteBody = await Json(quote);
+        quoteBody.GetProperty("estimate").GetProperty("amount").ValueKind.Should().Be(JsonValueKind.Null);
+
+        var start = await client.PostAsync($"{root}/jobs", JobForm(quoteBody.GetProperty("quoteId").GetString()!));
+        start.StatusCode.Should().Be(HttpStatusCode.Accepted, await start.Content.ReadAsStringAsync());
+    }
+
     [Fact]
     public async Task Запуск_по_котировке_202_с_id_задачи()
     {

@@ -5,15 +5,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowLeft, Brush, Image as ImageIcon, MessageSquare, Upload, Wrench } from 'lucide-react';
-import { Button, EmptyState, Field, IconButton, Island, Modal, ModalActions, TextField } from '../ui';
-import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
-import { C, FS, ISLAND, R, SP } from '../../lib/design';
-import { useIsMobile } from '../../lib/breakpoints';
-import { api as appApi } from '../../lib/api';
-import { showToast } from '../../lib/toast';
-import { useMe } from '../../lib/defaultPersona';
-import { ModelsSpendModal } from '../../features/modelsSpend/ModelsSpendModal';
-import { AUTO_MODEL, imageEditorApi, type ImageEditCatalog, type ImageEditCatalogReason, type ImageEditQuoteRequest } from '../../api/imageEditor';
+import {
+  Button, EmptyState, Field, IconButton, Island, Modal, ModalActions, TextField, ICON_SIZE, ICON_STROKE,
+  C, FS, ISLAND, R, SP, useIsMobile, api as appApi, showToast, useMe, ModelsSpendModal,
+} from 'aihome_shell/kit';
+import { AUTO_MODEL, imageEditorApi, type ImageEditCatalog, type ImageEditCatalogReason, type ImageEditQuoteRequest } from './api';
 import { EditorCanvas } from './EditorCanvas';
 import { exportAnnotated, exportMask, hasAnnotationMark, hasMaskMark, marksToJson, type Mark, type Tool } from './marks';
 import { effectiveProvider, isRemovalPrompt, modelBlockReason, money, nextVersionName, pickOp, plural, priceSum, priceText, splitPath, variantsWord, type ProviderChoice } from './format';

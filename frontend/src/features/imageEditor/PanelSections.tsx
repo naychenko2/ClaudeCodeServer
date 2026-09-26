@@ -3,11 +3,8 @@
 
 import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { ChevronDown, ChevronUp, Expand, FolderOpen, Image as ImageIcon, Layers, Plus, Scissors, Search, Sparkles, Upload, X } from 'lucide-react';
-import { Button, EmptyState, IconButton, IconField, Menu, MenuItem, Modal, ModalActions, SegmentedControl } from '../ui';
-import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
-import { C, FS, R, SP } from '../../lib/design';
-import { api as appApi } from '../../lib/api';
-import type { ReferenceRole } from '../../api/imageEditor';
+import { Button, EmptyState, IconButton, IconField, Menu, MenuItem, Modal, ModalActions, SegmentedControl, ICON_SIZE, ICON_STROKE, C, FS, R, SP, api as appApi } from 'aihome_shell/kit';
+import type { ReferenceRole } from './api';
 import { SectionHint } from './EditorSections';
 import {
   isImagePath, OUTPAINT_RATIOS, QUICK_LABEL, roleShort, SAMPLE_ROLES, stepLabel,

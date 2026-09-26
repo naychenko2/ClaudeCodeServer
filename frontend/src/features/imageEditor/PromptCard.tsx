@@ -4,9 +4,7 @@
 
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Sparkles, X } from 'lucide-react';
-import { Button, IconButton, SegmentedControl, TextArea } from '../ui';
-import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
-import { C, FS, SP } from '../../lib/design';
+import { Button, IconButton, SegmentedControl, TextArea, ICON_SIZE, ICON_STROKE, C, FS, SP } from 'aihome_shell/kit';
 import { PriceLine, SectionLabel } from './ProviderModelPicker';
 import { variantsWord } from './format';
 import { PROMPT_MIN_H, promptHeight, promptOverflows } from './layout';

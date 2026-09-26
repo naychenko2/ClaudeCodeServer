@@ -3,7 +3,7 @@
 
 import type {
   ImageEditJobInput, ImageEditOp, ImageEditProjectReference, ImageEditUploadedReference, ReferenceRole,
-} from '../../api/imageEditor';
+} from './api';
 
 // ── Образцы ──
 

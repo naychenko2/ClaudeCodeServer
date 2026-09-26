@@ -111,4 +111,21 @@ export default defineConfig([
     },
   },
   ...designSystem,
+  // Сторож MF-модуля «Редактор картинок» (ADR-018 §10.3): ядро модуль берёт только из
+  // aihome_shell/kit. Любой относительный импорт из src/components, hooks, lib, pages,
+  // features соберётся ВТОРОЙ копией внутрь remote: для чата это второе SignalR-соединение
+  // и вторые сторы, а для контекстов React — другой объект контекста и молчаливый undefined.
+  // Типы бандл не несут, поэтому `import type` разрешён (как и src/types).
+  {
+    files: ['src/features/imageEditor/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-imports': ['error', {
+        patterns: [{
+          group: ['**/components/**', '**/hooks/**', '**/lib/**', '**/pages/**', '**/features/**', '**/api/**', '**/App'],
+          allowTypeImports: true,
+          message: 'Модуль image-editor берёт ядро только из aihome_shell/kit (ADR-018 §10.3): прямой импорт соберёт вторую копию в remote.',
+        }],
+      }],
+    },
+  },
 ])

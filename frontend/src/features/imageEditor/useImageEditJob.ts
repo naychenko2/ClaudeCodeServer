@@ -4,10 +4,10 @@
 // GET …/jobs/{jobId} после переподключения.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { onReconnected } from '../../lib/signalr';
+import { onReconnected } from 'aihome_shell/kit';
 import type {
   EditCost, EditOutcome, ImageEditJob, ImageEditJobInput, ImageEditorApi, ImageEditQuote,
-} from '../../api/imageEditor';
+} from './api';
 
 export type JobPhase = 'idle' | 'starting' | 'running' | 'variants' | 'error';
 

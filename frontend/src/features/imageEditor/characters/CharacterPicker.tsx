@@ -4,11 +4,8 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { MoreHorizontal, Plus, User, UserPlus, X } from 'lucide-react';
-import { Button, IconButton } from '../../ui';
-import { ICON_SIZE, ICON_STROKE } from '../../ui/icons';
-import { C, FS, R, SP } from '../../../lib/design';
-import { showToast } from '../../../lib/toast';
-import type { ImageEditCharacter, ImageEditorApi } from '../../../api/imageEditor';
+import { Button, IconButton, ICON_SIZE, ICON_STROKE, C, FS, R, SP, showToast } from 'aihome_shell/kit';
+import type { ImageEditCharacter, ImageEditorApi } from '../api';
 import { CharacterDialog } from './CharacterDialog';
 
 const ic = (I: typeof User, size: number = ICON_SIZE.sm) => <I size={size} strokeWidth={ICON_STROKE} />;

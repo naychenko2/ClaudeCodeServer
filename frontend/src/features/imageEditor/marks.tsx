@@ -1,9 +1,9 @@
+import { C, FONT } from 'aihome_shell/kit';
 // Пометки холста (ADR-017, раздел 3). Координаты — в пикселях исходника, поэтому
 // экспорт не зависит от масштаба экрана. Исходник уходит чистым, а из пометок фронт
 // собирает три артефакта: mask.png (кисть, белое — менять), annotated.png (исходник
 // с нарисованными пометками) и marks.json (координаты в долях 0…1).
 
-import { C, FONT } from '../../lib/design';
 
 export type Mark =
   | { type: 'mask'; points: [number, number][]; width: number }

@@ -7,9 +7,8 @@
 // `cc-image-editor-mock`: `fal` — в каталоге только fal, `all` — fal и Higgsfield.
 // Мок повторяет контракт целиком, включая SignalR-события задачи.
 
-import { request, readStoredToken } from '../lib/offline';
-import { onMessage } from '../lib/signalr';
-import type { Session } from '../types';
+import { request, readStoredToken, onMessage } from 'aihome_shell/kit';
+import type { Session } from '../../types';
 
 export type ImageEditOp = 'generate' | 'edit' | 'inpaint' | 'outpaint' | 'removeBackground' | 'upscale';
 export type EditMode = 'auto' | 'fast' | 'precise' | 'photoreal';

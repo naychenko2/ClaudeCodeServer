@@ -155,6 +155,8 @@ export default defineConfig({
       '/notes-remote': { target: 'http://localhost:5174', changeOrigin: true },
       // MF remote spend (dev): dev-сервер модуля на :5175.
       '/spend-remote': { target: 'http://localhost:5175', changeOrigin: true },
+      // MF remote редактора картинок (dev): dev-сервер модуля на :5176.
+      '/image-editor-remote': { target: 'http://localhost:5176', changeOrigin: true },
     },
   },
   preview: {
@@ -167,6 +169,7 @@ export default defineConfig({
       '/telemetry-proxy': { target: backendUrl, changeOrigin: true, ws: true },
       '/notes-remote': { target: 'http://localhost:5174', changeOrigin: true },
       '/spend-remote': { target: 'http://localhost:5175', changeOrigin: true },
+      '/image-editor-remote': { target: 'http://localhost:5176', changeOrigin: true },
     },
   },
 });

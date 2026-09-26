@@ -152,6 +152,48 @@ export interface PlanButtonCtx { plan: string; online: boolean }
 export interface GlobalSearchNoteApi { open: (id: string) => void }
 export interface AiNoteOpenerApi { openNote: (id: string) => void }
 
+// ---- Редактор картинок (MF-модуль image-editor, ADR-018 §10.3) ----
+export type ImageEditorOpenTarget =
+  | { kind: 'edit'; path: string }       // «Редактировать» у картинки проекта
+  | { kind: 'create'; folder: string };  // «Нарисовать картинку» у папки
+export interface ImageEditorOpenRequest {
+  projectId: string;
+  projectName: string;
+  target: ImageEditorOpenTarget;
+  // «Показать в файлах» после сохранения
+  onShowInFiles?: (path: string) => void;
+}
+// Action-слот `image-editor`, вклад `opener`: вход из дерева файлов
+export interface ImageEditorOpenerApi {
+  isEditable: (path: string) => boolean;
+  open: (req: ImageEditorOpenRequest) => void;
+}
+// Render-слот `file-viewer-toolbar`: кнопки под просмотром файла
+export interface FileViewerToolbarCtx {
+  projectId: string;
+  projectName: string;
+  filePath: string;
+  onOpenFile?: (path: string) => void;
+}
+
+// Чат картинки, который ядро отдаёт модулю через контекст `app-overlay`: модуль
+// рисует готовый компонент, а не свою копию ChatPanel (ADR-018 §10.3, вариант В)
+export interface ImageChatSlotProps {
+  projectId: string;
+  sourcePath: string;
+  sessionId: string | null;
+  // Псевдоключ черновика `image:{projectId}:{path}`
+  draftKey: string;
+  // Первая строка «Чат привязан к…» с кнопками
+  leadIn: ReactNode;
+  prepareSend: (text: string, paths: string[]) => Promise<{ text: string; paths: string[]; snapshot?: string }>;
+  // Чат создаёт модуль своей ручкой: ядро маршрутов модуля не знает
+  createChat: (personaId?: string) => Promise<Session>;
+  onSessionChange: (session: Session) => void;
+}
+// Render-слот `app-overlay`: слои уровня приложения поверх раскладки
+export interface AppOverlayCtx { ImageChat: ComponentType<ImageChatSlotProps> }
+
 // ---- Хранилище ----
 const _manifests: SubsystemManifest[] = [];
 let _version = 0;

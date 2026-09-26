@@ -1,8 +1,8 @@
 // Тексты и расчёты экрана редактора: цена в единицах поставщика, имена версий,
 // причины недоступности модели. Формулировки — дословно из макета image-editor-v1.
 
-import type { ImageEditCatalog, ImageEditModel, ImageEditOp, ImageEditProvider } from '../../api/imageEditor';
-import { AUTO_MODEL } from '../../api/imageEditor';
+import type { ImageEditCatalog, ImageEditModel, ImageEditOp, ImageEditProvider } from './api';
+import { AUTO_MODEL } from './api';
 
 export const plural = (n: number, one: string, few: string, many: string) => {
   // Дробные суммы («1.5 кредита») согласуются по форме «few»

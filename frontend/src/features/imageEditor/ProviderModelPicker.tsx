@@ -4,10 +4,8 @@
 
 import { useState, type MouseEvent, type ReactNode } from 'react';
 import { AlertTriangle, Check, ChevronDown, Coins } from 'lucide-react';
-import { Button, Menu, MenuItem, Modal } from '../ui';
-import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
-import { C, FS, R, SP } from '../../lib/design';
-import type { ImageEditCatalog, ImageEditModel, ImageEditProvider } from '../../api/imageEditor';
+import { Button, Menu, MenuItem, Modal, ICON_SIZE, ICON_STROKE, C, FS, R, SP } from 'aihome_shell/kit';
+import type { ImageEditCatalog, ImageEditModel, ImageEditProvider } from './api';
 import { effectiveProvider, modelBlockReason, money, providerHint, type ProviderChoice } from './format';
 
 interface Props {

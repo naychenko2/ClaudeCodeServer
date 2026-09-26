@@ -7,12 +7,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { Pencil, Sparkles } from 'lucide-react';
-import { Button, ConfirmDialog } from '../ui';
-import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
-import { ISLAND, Z } from '../../lib/design';
-import { useIsMobile } from '../../lib/breakpoints';
-import { FLAGS, useFeature } from '../../lib/featureFlags';
-import { NAV_CHANGE_EVENT, parseHash } from '../../lib/nav';
+import { Button, ConfirmDialog, ICON_SIZE, ICON_STROKE, ISLAND, Z, useIsMobile, FLAGS, useFeature, NAV_CHANGE_EVENT, parseHash } from 'aihome_shell/kit';
 import { ImageEditor, type ImageEditorTarget } from './ImageEditor';
 import { isEditableImage } from './format';
 

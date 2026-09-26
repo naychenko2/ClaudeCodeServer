@@ -3,10 +3,8 @@
 
 import { useRef, useState, type PointerEvent as RPointerEvent } from 'react';
 import { AlertTriangle, Check, Coins, Pencil, Sparkles, X } from 'lucide-react';
-import { Button, SegmentedControl } from '../ui';
-import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
-import { C, FS, R, SHADOW, SP } from '../../lib/design';
-import type { EditCost } from '../../api/imageEditor';
+import { Button, SegmentedControl, ICON_SIZE, ICON_STROKE, C, FS, R, SHADOW, SP } from 'aihome_shell/kit';
+import type { EditCost } from './api';
 import type { JobFailure } from './useImageEditJob';
 import { money, variantsWord } from './format';
 

@@ -5,11 +5,7 @@
 
 import { useMemo } from 'react';
 import { MessageSquare, X } from 'lucide-react';
-import { Button, IconButton, WaitingIndicator } from '../../ui';
-import { ICON_SIZE, ICON_STROKE } from '../../ui/icons';
-import { C, FS, R, SP } from '../../../lib/design';
-import { useSession } from '../../../hooks/useSession';
-import { MarkdownContent } from '../../chat/MarkdownContent';
+import { Button, IconButton, WaitingIndicator, ICON_SIZE, ICON_STROKE, C, FS, R, SP, useSession, MarkdownContent } from 'aihome_shell/kit';
 import type { ChatItem } from '../../../types';
 import { extractImagePrompt } from './discussText';
 

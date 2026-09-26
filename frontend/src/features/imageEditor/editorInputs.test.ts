@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { jobForm } from '../../api/imageEditor';
+import { jobForm } from './api';
 import {
   actionTitle, currentSrc, EMPTY_HISTORY, goToStep, maxSamples, panelJobInput, pushStep, quickBlockReason, quickPlan,
   samplesToJobInput, stepLabel, type History, type HistoryStep, type Sample,

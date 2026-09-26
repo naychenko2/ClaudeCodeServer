@@ -30,7 +30,9 @@ import { showToast } from '../lib/toast';
 import { beginAiBusy, endAiBusy } from '../lib/ai/busy';
 import { useSubsystem } from '../lib/subsystems';
 import { useSlotItem } from '../lib/subsystems/registry';
-import type { FileExplorerFolderIconCtx, FileExplorerNoteDialogCtx } from '../lib/subsystems/registryCore';
+import type {
+  FileExplorerFolderIconCtx, FileExplorerNoteDialogCtx, ImageEditorOpenerApi, ImageEditorOpenTarget,
+} from '../lib/subsystems/registryCore';
 
 // Форматы, которые markitdown умеет превращать в Markdown (для пункта «Трансформировать в Markdown»)
 const MD_CONVERTIBLE = new Set(['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp', 'epub', 'csv', 'rtf', 'html', 'htm', 'msg']);
@@ -47,7 +49,6 @@ import { Modal, ModalActions, TextField, IconButton, Button, Menu, MenuItem, Pan
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { NO_AUTOFILL } from '../lib/noAutofill';
 import { FLAGS, useFeature } from '../lib/featureFlags';
-import { isEditableImage, openImageEditor, type ImageEditorTarget } from './imageEditor';
 
 interface Props {
   project: Project;
@@ -901,9 +902,11 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
   const [mdEnhance, setMdEnhance] = useState(false);
 
   // === Редактор картинок: «Редактировать» у картинки, «Нарисовать картинку» у папки ===
-  const imageEditorOn = useFeature(FLAGS.imageEditor);
-  const openEditor = (target: ImageEditorTarget) =>
-    openImageEditor({ projectId: project.id, projectName: project.name, target, onShowInFiles: path => onOpenFile(path) });
+  // Вход — вклад MF-модуля image-editor: нет модуля или флага — нет и пунктов
+  const imageEditor = useSlotItem<never, ImageEditorOpenerApi>('image-editor', 'opener')?.action;
+  const imageEditorOn = useFeature(FLAGS.imageEditor) && !!imageEditor;
+  const openEditor = (target: ImageEditorOpenTarget) =>
+    imageEditor?.open({ projectId: project.id, projectName: project.name, target, onShowInFiles: path => onOpenFile(path) });
   const doTransformMd = async (entry: FileEntry, targetDir: string | null) => {
     const enhance = mdEnhance;
     setMdEntry(null);
@@ -2119,7 +2122,7 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
         add(chatContextBtn.available,
           <MenuItem key="chat-context" icon={chatContextBtn.inContext ? <MI_Check /> : <MI_Context />}
             label={chatContextBtn.title} onClick={() => { close(); chatContextBtn.toggle(); }} />);
-        add(imageEditorOn && online && !entry.isDirectory && isEditableImage(entry.path),
+        add(imageEditorOn && online && !entry.isDirectory && imageEditor?.isEditable(entry.path),
           <MenuItem key="image-edit" icon={<Pencil size={15} strokeWidth={ICON_STROKE} />} label="Редактировать картинку"
             onClick={() => { close(); openEditor({ kind: 'edit', path: entry.path }); }} />);
         add(imageEditorOn && online && entry.isDirectory && !inNotesVault(entry.path),

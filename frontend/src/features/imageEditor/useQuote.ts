@@ -2,7 +2,7 @@
 // поставщика, модели, числа вариантов и признаков запроса. Ничего не тратит.
 
 import { useEffect, useState } from 'react';
-import type { ImageEditorApi, ImageEditQuote, ImageEditQuoteRequest } from '../../api/imageEditor';
+import type { ImageEditorApi, ImageEditQuote, ImageEditQuoteRequest } from './api';
 
 // Higgsfield считает цену препроверкой с загрузкой входов — ей дебаунс длиннее
 const debounceFor = (provider: string) => (provider === 'higgsfield' ? 800 : 300);

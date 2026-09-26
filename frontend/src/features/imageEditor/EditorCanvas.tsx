@@ -3,9 +3,7 @@
 
 import { useEffect, useRef, useState, type PointerEvent as RPointerEvent } from 'react';
 import { Minus, Plus, Scan } from 'lucide-react';
-import { IconButton } from '../ui';
-import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
-import { C, FS, R, SHADOW, SP } from '../../lib/design';
+import { IconButton, ICON_SIZE, ICON_STROKE, C, FS, R, SHADOW, SP } from 'aihome_shell/kit';
 import { MarksLayer, strokeScale, type Mark, type Tool } from './marks';
 
 const TOOL_HINT: Record<Tool, string> = {

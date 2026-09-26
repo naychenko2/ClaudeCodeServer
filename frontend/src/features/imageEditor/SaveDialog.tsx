@@ -4,8 +4,7 @@
 // имя задаёт человек.
 
 import { useState } from 'react';
-import { Field, Modal, ModalActions, TextField } from '../ui';
-import { C, FS, R, SP } from '../../lib/design';
+import { Field, Modal, ModalActions, TextField, C, FS, R, SP } from 'aihome_shell/kit';
 
 export function SaveDialog({ mode, sourcePath, suggestedName, folder, onSave, onClose }: {
   mode: 'edit' | 'create';

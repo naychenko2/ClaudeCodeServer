@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, X, File, Trash2, Maximize2, Columns2, RotateCcw, Save, Download, Music, Menu, SquarePen, Eye, Code, Copy, Check, FileDiff, History, Users, MessageCircle, MessageSquare, ChevronLeft, ChevronRight, TableOfContents, Lightbulb, StickyNote, SquareStack } from 'lucide-react';
 import SyntaxHighlighter from 'react-syntax-highlighter/dist/esm/prism-light';
 import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -42,9 +42,10 @@ import { showToast } from '../lib/toast';
 import { beginAiBusy, endAiBusy } from '../lib/ai/busy';
 import { useNotes, ensureNotesLoaded, existingTitleSet, useNotesVersion, useNotesByFile } from '../lib/notes';
 import { useSubsystem } from '../lib/subsystems';
-import { useSlotItem } from '../lib/subsystems/registry';
+import { useSlot, useSlotItem } from '../lib/subsystems/registry';
 import type {
   FileViewerNoteViewCtx, FileViewerNoteEditorCtx, FileViewerNoteConnectionsCtx, FileViewerDocCommentsCtx,
+  FileViewerToolbarCtx,
 } from '../lib/subsystems/registryCore';
 import type { NoteDetail } from '../types';
 import { MermaidDiagram } from './MermaidDiagram';
@@ -59,7 +60,6 @@ import { ToolbarOverflowMenu, type OverflowItem } from './ToolbarOverflowMenu';
 import { useToolbarOverflow } from '../hooks/useToolbarOverflow';
 import { BackButton, Modal, ModalActions, Button, ConfirmDialog, FileTypeTile, useIsMobileModal, Menu as UiMenu, MenuItem } from './ui';
 import { DiffView } from './DiffView';
-import { ImageEditorEntryButton } from './imageEditor';
 import { registerCopyDoc, copyMarkdown, copyRenderedHtml } from '../lib/selectionScope';
 // Тумблер панели «Оглавление» правит раскладку зон напрямую — тем же каналом, что
 // кнопка «Открыть изменения» в git-баре над композером (ProjectGitBar)
@@ -415,6 +415,8 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const notesOn = useSubsystem('notes');
   // Панели заметок — вклады слота file-viewer-panel (ноль прямых импортов фичи).
   // Нет вклада — соответствующий рендер деградирует до обычного markdown/редактора.
+  // Кнопки под просмотром файла от подсистем (вход в редактор картинок)
+  const fileViewerToolbar = useSlot<FileViewerToolbarCtx>('file-viewer-toolbar');
   const noteView = useSlotItem<FileViewerNoteViewCtx>('file-viewer-panel', 'note-view');
   const noteEditor = useSlotItem<FileViewerNoteEditorCtx>('file-viewer-panel', 'note-editor');
   const noteConnections = useSlotItem<FileViewerNoteConnectionsCtx>('file-viewer-panel', 'note-connections');
@@ -1972,12 +1974,12 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
                   {imgDims && <><span style={{ opacity: 0.5 }}>·</span><span>{imgDims.w}×{imgDims.h}</span></>}
                   {fileSizeMb && <><span style={{ opacity: 0.5 }}>·</span><span>{fileSizeMb} МБ</span></>}
                 </div>
-                {/* Вход в редактор: без флага image-editor и у нерастровых форматов кнопки нет */}
-                {!isHostMode && online && (
-                  <ImageEditorEntryButton projectId={project.id} projectName={project.name}
-                    target={{ kind: 'edit', path: filePath }}
-                    onShowInFiles={onOpenFile ? path => onOpenFile(path) : undefined} />
-                )}
+                {/* Вход в редактор — вклад модуля image-editor: без флага и у нерастровых форматов кнопки нет */}
+                {!isHostMode && online && fileViewerToolbar.map((c, i) => (
+                  <Fragment key={c.name ?? i}>
+                    {c.render?.({ projectId: project.id, projectName: project.name, filePath, onOpenFile })}
+                  </Fragment>
+                ))}
               </div>
             )}
 

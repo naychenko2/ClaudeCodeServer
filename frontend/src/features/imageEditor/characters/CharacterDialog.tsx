@@ -4,10 +4,8 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { ShieldAlert, Trash2, Upload, UserPlus, X } from 'lucide-react';
-import { Button, Checkbox, ConfirmDialog, Field, IconButton, Modal, TextArea, TextField } from '../../ui';
-import { ICON_SIZE, ICON_STROKE } from '../../ui/icons';
-import { C, FS, R, SP } from '../../../lib/design';
-import { characterSlug, type ImageEditCharacter, type ImageEditorApi } from '../../../api/imageEditor';
+import { Button, Checkbox, ConfirmDialog, Field, IconButton, Modal, TextArea, TextField, ICON_SIZE, ICON_STROKE, C, FS, R, SP } from 'aihome_shell/kit';
+import { characterSlug, type ImageEditCharacter, type ImageEditorApi } from '../api';
 import { MAX_PHOTO_MB, MAX_PHOTOS, MIN_PHOTOS, photosCountText, shrinkPhoto } from './photos';
 
 export const CHARACTER_PHOTOS_NOTICE =

@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createMockApi, imageEditErrorCode, isStaleRevision, MOCK_SOURCE_SIZE, nameTakenSuggestion,
   type ImageEditorApi,
-} from './imageEditor';
+} from './api';
 
 const P = 'p1';
 
@@ -169,7 +169,7 @@ describe('мок чатов картинки', () => {
     const api = createMockApi('fal');
     const chat = await api.createChat(P, { sourcePath: 'hero.png' });
     const cs = readFileSync(fileURLToPath(new URL(
-      '../../../backend/ClaudeHomeServer.Core/Services/ImageEditor/ImageEditDtos.cs', import.meta.url)), 'utf-8');
+      '../../../../backend/ClaudeHomeServer.ImageEditor/Contracts/ImageEditDtos.cs', import.meta.url)), 'utf-8');
     const params = /public record ImageChatState\(([^;]*?)\);/s.exec(cs)![1];
     const csFields = [...params.matchAll(/\s(\w+)(?:,|$)/g)].map(m => m[1][0].toLowerCase() + m[1].slice(1));
     expect(Object.keys(await api.getChatState(P, chat.id)).sort()).toEqual(csFields.sort());

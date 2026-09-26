@@ -3,9 +3,7 @@
 
 import { useCallback, useState, type ReactNode } from 'react';
 import { Brush, Eraser, Hand, MoveUpRight, SquareDashed, Trash2, Type } from 'lucide-react';
-import { Button, IconButton, SidebarSection } from '../ui';
-import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
-import { C, FS, R, SP } from '../../lib/design';
+import { Button, IconButton, SidebarSection, ICON_SIZE, ICON_STROKE, C, FS, R, SP } from 'aihome_shell/kit';
 import { parseSections, sectionsStorageKey, toggleSection, type SectionId, type SectionState } from './layout';
 import type { Tool } from './marks';
 

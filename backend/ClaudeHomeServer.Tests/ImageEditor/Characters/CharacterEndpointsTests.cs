@@ -97,6 +97,10 @@ public class CharacterEndpointsTests : IDisposable
     {
         var factory = Factory();
         var (projectId, root) = CreateProject(factory, TestWebApplicationFactory.TestUsername);
+        // Флаг включён по умолчанию — выключаем override'ом пользователя
+        var users = factory.Services.GetRequiredService<UserStore>();
+        users.SetFeatureFlag(users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id, FeatureFlagKeys.ImageEditor, false)
+            .Should().BeTrue();
         var client = factory.CreateAuthenticatedClient();
         var api = $"/api/projects/{projectId}/image-editor";
 

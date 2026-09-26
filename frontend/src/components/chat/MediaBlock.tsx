@@ -9,6 +9,7 @@ import { proxyUrl } from './MarkdownContent';
 import { ChatProjectContext } from './contexts';
 import { fmtCredits } from './glifStats';
 import { NO_AUTOFILL } from '../../lib/noAutofill';
+import { readStoredToken } from '../../lib/offline';
 
 export function mediaLabel(items: MediaItem[]): string {
   const imgCount = items.filter(m => m.kind === 'image').length;
@@ -40,6 +41,30 @@ function hostMatches(url: string, hosts: string[]): boolean {
     const h = new URL(url).hostname;
     return hosts.some(x => h === x || h.endsWith('.' + x));
   } catch { return false; }
+}
+
+// Медиа локальных моделей (MCP local-media) лежат в самом проекте и отдаются same-origin
+// эндпоинтом стриминга файлов. Единственная форма относительного URL, которую принимаем:
+// строгий префикс `/api/projects/{id}/files/stream?path=`; id — без `/` и `.`, чтобы
+// `..`/`//` не увели путь за пределы эндпоинта. Через /api/proxy их не гоняем: localhost
+// в прокси = SSRF.
+const LOCAL_STREAM_RE = /^\/api\/projects\/[A-Za-z0-9_-]+\/files\/stream\?path=[^\s"'<>#]+$/;
+
+export function isLocalStreamUrl(url: string): boolean {
+  return LOCAL_STREAM_RE.test(url);
+}
+
+// Имя файла из параметра path локального URL (для «Скачать» и подписи)
+function localFileName(url: string): string | undefined {
+  const path = new URLSearchParams(url.slice(url.indexOf('?') + 1)).get('path');
+  return path?.split('/').pop() || undefined;
+}
+
+// src медиа: локальные — напрямую с access_token (как ChatImage), внешние — через прокси
+export function mediaSrc(url: string): string {
+  if (!isLocalStreamUrl(url)) return proxyUrl(url);
+  const token = readStoredToken();
+  return token ? `${url}&access_token=${encodeURIComponent(token)}` : url;
 }
 
 // JSON из результатов MCP-инструментов (fal/glif): форма заранее неизвестна и
@@ -131,13 +156,16 @@ export function extractMediaFromResult(result: string): MediaItem[] {
     if (!obj) return;
     const url = obj.url ?? obj.uri ?? obj.result_url;
     if (typeof url !== 'string') return;
+    // Только абсолютные http(s) и строгий локальный stream-URL — никаких иных относительных
+    const isLocal = isLocalStreamUrl(url);
+    if (!isLocal && !/^https?:\/\//i.test(url)) return;
     // Входные изображения пользователя (uploaded) — не выход генерации
     if (obj.source === 'uploaded' || url.includes('glifchat-image-input-production')) return;
     const kind = classifyUrl(obj);
     if (!kind) return;
     if (items.some(m => m.url === url)) return;
     const fileNameRaw = obj.file_name ?? obj.fileName ?? obj.filename ?? obj.name ?? obj.title;
-    const fileName = typeof fileNameRaw === 'string' ? fileNameRaw : undefined;
+    const fileName = typeof fileNameRaw === 'string' ? fileNameRaw : isLocal ? localFileName(url) : undefined;
     // Размеры: fal кладёт в корень элемента, glif assets — в metadata.{width,height};
     // в view_media media[] размеров нет — блок рендерится без них, это ок
     const meta = asObj(obj.metadata);
@@ -165,6 +193,11 @@ export function extractMediaFromResult(result: string): MediaItem[] {
     // Массивы медиа (fal + glif assets + glif view_media media[] + higgsfield jobs/results)
     for (const arr of [value.images, value.videos, value.audio_files, value.audios, value.assets, value.media, value.jobs, value.results]) {
       if (Array.isArray(arr)) for (const item of arr) push(item);
+    }
+    // Задания со вложенными медиа: local_jobs_wait кладёт images/videos внутрь jobs[i],
+    // у самого задания url нет (у Higgsfield он прямо в элементе — его взял push выше)
+    for (const arr of [value.jobs, value.results]) {
+      if (Array.isArray(arr)) for (const item of arr) scan(item, depth + 1);
     }
     // Одиночные объекты
     for (const key of ['video', 'audio', 'audio_file', 'image'] as const) push(value[key]);
@@ -203,12 +236,15 @@ export function extractMediaFromResult(result: string): MediaItem[] {
   return items;
 }
 
+// local — медиа локальных моделей (MCP local-media), лежат в проекте
+export type MediaSource = 'fal' | 'glif' | 'higgsfield' | 'local';
+
 export interface MediaMeta {
   model?: string;
   inferenceTime?: number;
   // Источник генерации: fal (request_id/endpoint_id) или glif (_meta.glif, project_id+job_id,
   // медиа с glif-хоста). В футере метку показываем только для glif — рендер fal не меняется.
-  source?: 'fal' | 'glif' | 'higgsfield';
+  source?: MediaSource;
   outputType?: string;
   // jobId генерации glif — ключ сопоставления с glif_cost (кредиты с backend, GlifCostContext)
   jobId?: string;
@@ -298,7 +334,9 @@ export function extractMediaMeta(result: string, media?: MediaItem[]): MediaMeta
     const jobId: string | undefined = [glifMeta, root, asObj(root?.structuredContent), asObj(root?.result)]
       .map(b => b?.jobId ?? b?.job_id)
       .find((v): v is string => typeof v === 'string');
-    const source: MediaMeta['source'] = isGlif
+    const source: MediaMeta['source'] = items.some(m => isLocalStreamUrl(m.url))
+      ? 'local'
+      : isGlif
       ? 'glif'
       : isHiggsfield
         ? 'higgsfield'
@@ -343,7 +381,7 @@ export function MediaBlock({
   costPending?: boolean;
   // Списанные кредиты glif (с backend по jobId через GlifCostContext); нет — не показываем
   credits?: number;
-  source?: 'fal' | 'glif' | 'higgsfield';
+  source?: MediaSource;
   outputType?: string;
   online?: boolean;
 }) {
@@ -396,6 +434,7 @@ export function MediaBlock({
   // Метка источника: glif и higgsfield; fal-рендер исторически без метки, не меняем
   if (source === 'glif') metaParts.push(outputType ? `glif · ${outputType}` : 'glif');
   if (source === 'higgsfield') metaParts.push(model ? `higgsfield · ${model}` : 'higgsfield');
+  if (source === 'local') metaParts.push('Локальные модели');
   if (m.kind !== 'audio' && m.width && m.height) metaParts.push(`${m.width}×${m.height}`);
   if ((m.kind === 'video' || m.kind === 'audio') && m.duration) metaParts.push(`${m.duration.toFixed(1)}с`);
   if (inferenceTime) metaParts.push(`${inferenceTime.toFixed(1)}с`);
@@ -425,7 +464,7 @@ export function MediaBlock({
   const renderButtons = (dark = false) => (
     <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
       <a
-        href={online ? proxyUrl(m.url) : undefined}
+        href={online ? mediaSrc(m.url) : undefined}
         download={online ? filename : undefined}
         onClick={e => { if (!online) { e.preventDefault(); return; } e.stopPropagation(); }}
         onMouseEnter={() => { if (online) setDlHov(true); }}
@@ -437,7 +476,8 @@ export function MediaBlock({
       >
         ↓ Скачать
       </a>
-      {project && (
+      {/* Локальное медиа уже лежит в проекте — копировать его через save-from-url некуда */}
+      {project && !isLocalStreamUrl(m.url) && (
         <button
           onClick={openSaveDialog}
           disabled={!online || saveState === 'saving'}
@@ -476,7 +516,7 @@ export function MediaBlock({
           {/* Нативный плеер — обёртка с overflow:hidden обрезает углы shadow DOM */}
           <div style={{ borderRadius: 6, overflow: 'hidden' }}>
             <audio controls style={{ width: '100%', height: 36, outline: 'none', display: 'block' }}>
-              <source src={proxyUrl(m.url)} />
+              <source src={mediaSrc(m.url)} />
             </audio>
           </div>
           {/* Метаданные + кнопки */}
@@ -491,16 +531,16 @@ export function MediaBlock({
         <>
           <div style={{ display: 'inline-block', maxWidth: '100%' }}>
             {m.kind === 'image' ? (
-              <a href={proxyUrl(m.url)} target="_blank" rel="noopener noreferrer"
+              <a href={mediaSrc(m.url)} target="_blank" rel="noopener noreferrer"
                  style={{ display: 'block' }} onClick={handleImageClick}>
-                <img src={proxyUrl(m.url)} alt="" loading="lazy"
+                <img src={mediaSrc(m.url)} alt="" loading="lazy"
                   style={{ maxWidth: '100%', height: 'auto', display: 'block',
                     borderRadius: 8, border: `1px solid ${C.border}`, cursor: 'pointer' }} />
               </a>
             ) : (
               <video controls style={{ maxWidth: '100%', height: 'auto', display: 'block',
                 borderRadius: 8, border: `1px solid ${C.border}` }}>
-                <source src={proxyUrl(m.url)} />
+                <source src={mediaSrc(m.url)} />
               </video>
             )}
           </div>
@@ -541,7 +581,7 @@ export function MediaBlock({
             <X size={20} strokeWidth={2} />
           </button>
           <img
-            src={proxyUrl(m.url)}
+            src={mediaSrc(m.url)}
             alt=""
             onClick={e => e.stopPropagation()}
             style={{ maxWidth: '92vw', maxHeight: '76vh', objectFit: 'contain',

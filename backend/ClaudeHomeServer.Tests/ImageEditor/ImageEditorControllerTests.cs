@@ -155,6 +155,10 @@ public class ImageEditorControllerTests : IDisposable
         var jobs = new FakeJobs();
         var factory = Factory([new FakeImageEditor("fal", models: FakeImageEditor.Model("m"))], jobs);
         var projectId = CreateProject(factory, TestWebApplicationFactory.TestUsername);
+        // Флаг включён по умолчанию — выключаем override'ом пользователя
+        var users = factory.Services.GetRequiredService<UserStore>();
+        users.SetFeatureFlag(users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id, FeatureFlagKeys.ImageEditor, false)
+            .Should().BeTrue();
         var client = factory.CreateAuthenticatedClient();
         var root = $"/api/projects/{projectId}/image-editor";
 
@@ -220,6 +224,27 @@ public class ImageEditorControllerTests : IDisposable
         var error = await Json(start);
         error.GetProperty("code").GetString().Should().Be(ImageEditErrorCodes.ProviderUnavailable);
         error.GetProperty("error").GetString().Should().Contain("не настроен");
+    }
+
+    // Хотфикс 2026-09-26: Higgsfield доступен всем — обычный пользователь (не админ) получает
+    // котировку без цены и запускается настоящим исполнителем задач
+    [Fact]
+    public async Task Higgsfield_НеАдмин_БезЦены_КотировкаИЗапуск202()
+    {
+        var factory = Factory([new FakeImageEditor("higgsfield", models: FakeImageEditor.Model("nano_banana_2"))]);
+        EnableFlag(factory, TestWebApplicationFactory.SecondUsername);
+        var projectId = CreateProject(factory, TestWebApplicationFactory.SecondUsername);
+        var client = factory.CreateAuthenticatedClient(TestWebApplicationFactory.SecondUsername,
+            TestWebApplicationFactory.SecondPassword);
+        var root = $"/api/projects/{projectId}/image-editor";
+
+        var quote = await client.PostAsJsonAsync($"{root}/quote", Quote("higgsfield"));
+        quote.StatusCode.Should().Be(HttpStatusCode.OK, await quote.Content.ReadAsStringAsync());
+        var quoteBody = await Json(quote);
+        quoteBody.GetProperty("estimate").GetProperty("amount").ValueKind.Should().Be(JsonValueKind.Null);
+
+        var start = await client.PostAsync($"{root}/jobs", JobForm(quoteBody.GetProperty("quoteId").GetString()!));
+        start.StatusCode.Should().Be(HttpStatusCode.Accepted, await start.Content.ReadAsStringAsync());
     }
 
     [Fact]

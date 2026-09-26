@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using System.Net;
 using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.Images.Editing;
@@ -34,6 +35,19 @@ public class HiggsfieldImageEditorTests
         return (new HiggsfieldImageEditor(client) { PollInterval = TimeSpan.Zero }, http, access);
     }
 
+    // Живой ответ mcp.higgsfield.ai от 2026-09-26 на плоские аргументы generate_image
+    internal const string FlatArgsRejection = "Input validation error: Invalid arguments for tool generate_image: params: Invalid input";
+
+    // Аргументы generate_image — внутри params (схема Higgsfield с 2026-09)
+    internal static JsonObject? GenerateArgs(FakeHttp.Call c) => FakeHttp.Arguments(c)?["params"] as JsonObject;
+
+    internal static bool IsCostCall(FakeHttp.Call c) =>
+        FakeHttp.Tool(c) == "generate_image" && GenerateArgs(c)?["get_cost"] is not null;
+
+    // Настоящий запуск (не препроверка цены)
+    internal static FakeHttp.Call Launch(FakeHttp http) =>
+        http.Calls.Single(c => FakeHttp.Tool(c) == "generate_image" && !IsCostCall(c));
+
     internal static HttpResponseMessage HappyRoute(FakeHttp.Call c) => c switch
     {
         _ when c.Method == HttpMethod.Put => new HttpResponseMessage(HttpStatusCode.OK),
@@ -42,7 +56,8 @@ public class HiggsfieldImageEditorTests
         {
             "media_upload" => FakeHttp.McpText(UploadFixture),
             "media_confirm" => FakeHttp.McpText("Media confirmed."),
-            "generate_image" when FakeHttp.Arguments(c)?["get_cost"] is not null => FakeHttp.McpText(CostFixture),
+            "generate_image" when GenerateArgs(c) is null => FakeHttp.McpText(FlatArgsRejection, isError: true),
+            "generate_image" when IsCostCall(c) => FakeHttp.McpText(CostFixture),
             "generate_image" => FakeHttp.McpText(GenerateFixture),
             "jobs_wait" => FakeHttp.McpText(JobsWaitFixture),
             _ => new HttpResponseMessage(HttpStatusCode.NotFound),
@@ -64,7 +79,7 @@ public class HiggsfieldImageEditorTests
         estimate.Unit.Should().Be(ImageEditPriceUnits.Credits);
         estimate.Approx.Should().BeFalse();
         estimate.Source.Should().Be(ImageEditEstimateSources.Provider);
-        var args = FakeHttp.Arguments(http.Calls.Single())!;
+        var args = GenerateArgs(http.Calls.Single())!;
         args["get_cost"]!.GetValue<bool>().Should().BeTrue();
         args["use_unlim"]!.GetValue<bool>().Should().BeFalse();
         http.Calls.Single().Auth.Should().Be("Bearer admin-token");
@@ -105,10 +120,11 @@ public class HiggsfieldImageEditorTests
 
         result.Outcome.Should().Be(EditOutcome.Ok);
         result.Images.Should().ContainSingle();
+        // Фактическая сумма запуска — из препроверки с теми же входами
+        result.ActualCost.Should().Be(new EditCost(1.5, ImageEditPriceUnits.Credits));
         stages.Select(s => s.Stage).Should().Contain([EditStage.Queued, EditStage.Downloading]);
 
-        var generate = http.Calls.Single(c => FakeHttp.Tool(c) == "generate_image");
-        var args = FakeHttp.Arguments(generate)!;
+        var args = GenerateArgs(Launch(http))!;
         args["use_unlim"]!.GetValue<bool>().Should().BeFalse();
         args["is_inpaint"]!.GetValue<bool>().Should().BeTrue();
         args["medias"]!.AsArray().Select(m => m!["role"]!.ToString())
@@ -121,7 +137,7 @@ public class HiggsfieldImageEditorTests
     [Fact]
     public async Task Запуск_ОтказИнструмента_НехваткаКредитов()
     {
-        var (editor, _, _) = Create(c => FakeHttp.Tool(c) == "generate_image"
+        var (editor, _, _) = Create(c => FakeHttp.Tool(c) == "generate_image" && !IsCostCall(c)
             ? FakeHttp.McpText("Insufficient credits: your balance is 0.5, required 1.5", isError: true)
             : HappyRoute(c));
 
@@ -130,19 +146,57 @@ public class HiggsfieldImageEditorTests
 
         result.Outcome.Should().Be(EditOutcome.InsufficientCredits);
         result.Charged.Should().BeFalse();
+        result.Error.Should().StartWith("На аккаунте Higgsfield закончились кредиты");
     }
 
     [Fact]
-    public async Task Запуск_ВопросUnlimChoice_ОтказАНеЗависание()
+    public async Task Котировка_НехваткаКредитов_ПонятныйОтказПоРусски()
     {
-        var (editor, _, _) = Create(c => FakeHttp.Tool(c) == "generate_image"
+        var (editor, _, _) = Create(_ => FakeHttp.McpText("Insufficient credits: your balance is 0", isError: true));
+
+        var act = () => editor.EstimateAsync(editor.Models[0], QuoteRequest(1), default);
+
+        (await act.Should().ThrowAsync<ImageEditProviderUnavailableException>())
+            .Which.Message.Should().StartWith("На аккаунте Higgsfield закончились кредиты");
+    }
+
+    // Регрессия боевого отказа 2026-09-26: плоские аргументы Higgsfield отвергает, котировка
+    // оставалась без цены. structuredContent живого ответа — вложенный { cost: { credits } }
+    [Fact]
+    public async Task Котировка_СтруктурныйОтветСВложеннойЦеной_Разбирается()
+    {
+        var (editor, http, _) = Create(c => FakeHttp.Json(
+            """{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"Cost preflight"}],"structuredContent":{"cost":{"credits":1.5,"credits_exact":1.5}}}}"""));
+
+        var estimate = await editor.EstimateAsync(editor.Models[0], QuoteRequest(1), default);
+
+        estimate.Amount.Should().Be(1.5);
+        FakeHttp.Arguments(http.Calls.Single())!.Should().ContainSingle().Which.Key.Should().Be("params");
+    }
+
+    [Fact]
+    public void Котировка_ОтказВалидацииHiggsfield_НеЧитаетсяКакЦена()
+    {
+        HiggsfieldImageEditor.ParseCredits(new HiggsfieldCall(false, false, "Invalid input: 2 credits max", null))
+            .Should().BeNull();
+    }
+
+    // Вопрос unlim_choice не роняет запуск: отвечаем «бесплатными» тем же запросом
+    [Fact]
+    public async Task Запуск_ВопросUnlimChoice_ОтвечаемБесплатнымиИЗапускаем()
+    {
+        var (editor, http, _) = Create(c => FakeHttp.Tool(c) == "generate_image" && !IsCostCall(c)
+                                          && GenerateArgs(c)?["use_unlim"]?.GetValue<bool>() == false
             ? FakeHttp.McpText("""{"unlim_choice":{"question":"Use free generations?"}}""")
             : HappyRoute(c));
 
         var result = await editor.RunAsync(new ImageEditRequest(ImageEditOp.Generate, "кот", null, null, [], 1, null, null,
             HiggsfieldImageEditor.NanoBanana2, null), new SyncProgress(_ => { }), default);
 
-        result.Outcome.Should().Be(EditOutcome.Failed);
+        result.Outcome.Should().Be(EditOutcome.Ok);
+        result.ActualCost.Should().Be(new EditCost(0, ImageEditPriceUnits.Credits));
+        http.Calls.Where(c => FakeHttp.Tool(c) == "generate_image" && !IsCostCall(c))
+            .Select(c => GenerateArgs(c)!["use_unlim"]!.GetValue<bool>()).Should().Equal(false, true);
     }
 
     [Fact]

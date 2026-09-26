@@ -296,7 +296,7 @@ public class MarksToProviderScenarioTests
 
         result.Outcome.Should().Be(EditOutcome.Ok);
         model.Id.Should().Be(HiggsfieldImageEditor.NanoBanana2);
-        var args = FakeHttp.Arguments(http.Calls.Single(c => FakeHttp.Tool(c) == "generate_image"))!;
+        var args = HiggsfieldImageEditorTests.GenerateArgs(HiggsfieldImageEditorTests.Launch(http))!;
         args["medias"]!.AsArray().Select(m => m!["role"]!.ToString())
             .Should().Equal("image_references", "image_references", "mask");
         args["is_inpaint"]!.GetValue<bool>().Should().BeTrue();

@@ -64,6 +64,12 @@ public sealed class LocalMediaJob
     // Латенты видео и аудио в output ComfyUI («подпапка/файл»). Служебные: в проект не идут
     public string? LatentVideo { get; set; }
     public string? LatentAudio { get; set; }
+    // Что задача оставила в ComfyUI («подпапка/файл»): загруженные входы в input и файлы
+    // результата в output. По ним и только по ним идёт чистка (LocalMediaCleanup)
+    public List<string> ComfyInputs { get; set; } = [];
+    public List<string> ComfyOutputs { get; set; } = [];
+    // Промежуточные файлы завершённой задачи уже убраны (латенты живут до забывания задачи)
+    public bool TransientCleaned { get; set; }
     public string? Error { get; set; }
     public List<LocalMediaOutput> Outputs { get; set; } = [];
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
@@ -140,6 +146,13 @@ public sealed class LocalMediaJobStore
             return _jobs.Where(j => !LocalMediaStatuses.IsTerminal(j.Status)).Select(Clone).ToList();
     }
 
+    // Завершённые задачи, чьи промежуточные файлы в ComfyUI ещё не убраны
+    public IReadOnlyList<LocalMediaJob> TerminalUncleaned()
+    {
+        lock (_writeLock)
+            return _jobs.Where(j => LocalMediaStatuses.IsTerminal(j.Status) && !j.TransientCleaned).Select(Clone).ToList();
+    }
+
     // Изменение задачи под локом; null — задачи нет или она чужая
     public LocalMediaJob? Update(string id, string ownerId, Action<LocalMediaJob> change)
     {
@@ -158,16 +171,17 @@ public sealed class LocalMediaJobStore
     }
 
     // Забыть завершённые задачи старше срока: файлы в проекте остаются, теряется только
-    // возможность сослаться на задачу по job_id
-    public int Prune(TimeSpan olderThan, DateTime now)
+    // возможность сослаться на задачу по job_id. Возвращает забытые задачи — их латенты
+    // убирает чистка
+    public IReadOnlyList<LocalMediaJob> Prune(TimeSpan olderThan, DateTime now)
     {
         lock (_writeLock)
         {
-            var keep = _jobs.Where(j => !LocalMediaStatuses.IsTerminal(j.Status)
-                || (j.FinishedAt ?? j.CreatedAt) > now - olderThan).ToList();
-            var removed = _jobs.Count - keep.Count;
-            if (removed == 0) return 0;
-            _jobs = keep;
+            bool Expired(LocalMediaJob j) => LocalMediaStatuses.IsTerminal(j.Status)
+                && (j.FinishedAt ?? j.CreatedAt) <= now - olderThan;
+            var removed = _jobs.Where(Expired).ToList();
+            if (removed.Count == 0) return [];
+            _jobs = _jobs.Where(j => !Expired(j)).ToList();
             Save();
             return removed;
         }

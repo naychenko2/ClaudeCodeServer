@@ -21,7 +21,8 @@ public class ComfyWorkflowsTests
         "LTXVSeparateAVLatent", "SaveLatent", "LoadLatent", "MinimaxH3LatentUpscaler3D", "LTXVConcatAVLatent",
         "ManualSigmas", "MMH3TemporalSplitParamsV10", "MMH3SpatialSplitParamsV10", "MMH3SplitUpscale",
         "ModelPatchLoader", "LoadVideo", "GetVideoComponents", "LoadImageMask", "MiniMaxH3FunControlNetApply",
-        "MiniMaxH3ReferenceToVideo", "LoadAudio",
+        "MiniMaxH3ReferenceToVideo", "LoadAudio", "GrowMask", "MaskToImage", "ImageBlur", "ImageToMask",
+        "ImageFromBatch", "ImageCompositeMasked",
     ];
 
     private static JsonObject Inputs(JsonObject wf, string node) => wf[node]!["inputs"]!.AsObject();
@@ -234,7 +235,32 @@ public class ComfyWorkflowsTests
         var wf = ComfyWorkflows.InpaintVideo("h3_inpaint_src_864x480.mp4", "h3_inpaint_mask_864x480.png",
             RefPrompt(reference, "r2v"), 864, 480, 124, RefSeed, "h3bench/inpaint_864x480_124");
 
-        ComfyGraphDiff.Compare(wf, reference).Should().BeEmpty();
+        // Эталон стенда — без наложения исходника (его добавили по замеру d653be60): других
+        // расхождений, кроме наложения, быть не должно
+        ComfyGraphDiff.Compare(wf, reference).Should().BeEquivalentTo(
+        [
+            "adec: нет ноды",
+            "mask_grow: лишняя нода", "mask_img: лишняя нода", "mask_blur: лишняя нода", "mask_soft: лишняя нода",
+            "src_frames: лишняя нода", "overlay: лишняя нода",
+            "video.images: [\"overlay\",0] ≠ [\"vdec\",0]",
+            "video.fps: [\"src_parts\",2] ≠ 24",
+            "video.audio: [\"src_parts\",1] ≠ [\"adec\",0]",
+        ]);
+    }
+
+    [Fact]
+    public void Инпейнт_ВнеМаски_ИсходникИИсходныйЗвук()
+    {
+        var wf = ComfyWorkflows.InpaintVideo("v.mp4", "m.png", "a", 864, 480, 124, 1, "p");
+
+        Inputs(wf, "overlay")["destination"]!.ToJsonString().Should().Be("[\"src_frames\",0]", "фон — исходные кадры");
+        Inputs(wf, "overlay")["source"]!.ToJsonString().Should().Be("[\"vdec\",0]", "внутри маски — сгенерированное");
+        Inputs(wf, "overlay")["mask"]!.ToJsonString().Should().Be("[\"mask_soft\",0]");
+        Inputs(wf, "mask_grow")["mask"]!.ToJsonString().Should().Be("[\"mask\",0]");
+        Inputs(wf, "src_frames")["length"]!.GetValue<int>().Should().Be(124, "исходник не длиннее генерации");
+        Inputs(wf, "video")["images"]!.ToJsonString().Should().Be("[\"overlay\",0]");
+        Inputs(wf, "video")["audio"]!.ToJsonString().Should().Be("[\"src_parts\",1]", "звук исходника, а не сгенерированный");
+        wf.ContainsKey("adec").Should().BeFalse();
     }
 
     [Fact]

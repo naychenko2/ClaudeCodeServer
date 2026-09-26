@@ -347,8 +347,54 @@ public static class ComfyWorkflows
         wf["r2v"] = Node("MiniMaxH3ReferenceToVideo", R2vConditioning(prompt, width, height, length, "match"));
         AddSampler(wf, "fun", Link("r2v"), Link("r2v", 1), 4, seed);
         AddH3DecodeAndSave(wf, "sampler", "vvae", "avae", filenamePrefix);
+        AddSourceOverlay(wf, length);
         return wf;
     }
+
+    // Замер d653be60: модель перерисовывает и кадр вне маски (PSNR с исходником 19,8 дБ), поэтому
+    // вне маски возвращаем исходник. Маска расширяется и размывается, чтобы шов был мягким;
+    // исходник обрезается до длины генерации, звук и fps — исходные, сгенерированный звук не идёт
+    private static void AddSourceOverlay(JsonObject wf, int length)
+    {
+        wf.Remove("adec");
+        wf["mask_grow"] = Node("GrowMask", new JsonObject
+        {
+            ["mask"] = Link("mask"),
+            ["expand"] = InpaintMaskGrow,
+            ["tapered_corners"] = true,
+        });
+        wf["mask_img"] = Node("MaskToImage", new JsonObject { ["mask"] = Link("mask_grow") });
+        wf["mask_blur"] = Node("ImageBlur", new JsonObject
+        {
+            ["image"] = Link("mask_img"),
+            ["blur_radius"] = InpaintMaskBlurRadius,
+            ["sigma"] = InpaintMaskBlurSigma,
+        });
+        wf["mask_soft"] = Node("ImageToMask", new JsonObject { ["image"] = Link("mask_blur"), ["channel"] = "red" });
+        wf["src_frames"] = Node("ImageFromBatch", new JsonObject
+        {
+            ["image"] = Link("src_parts"),
+            ["batch_index"] = 0,
+            ["length"] = length,
+        });
+        wf["overlay"] = Node("ImageCompositeMasked", new JsonObject
+        {
+            ["destination"] = Link("src_frames"),
+            ["source"] = Link("vdec"),
+            ["x"] = 0,
+            ["y"] = 0,
+            ["resize_source"] = false,
+            ["mask"] = Link("mask_soft"),
+        });
+        var video = wf["video"]!["inputs"]!.AsObject();
+        video["images"] = Link("overlay");
+        video["fps"] = Link("src_parts", 2);
+        video["audio"] = Link("src_parts", 1);
+    }
+
+    public const int InpaintMaskGrow = 8;
+    public const int InpaintMaskBlurRadius = 15;
+    public const double InpaintMaskBlurSigma = 5.0;
 
     // Видео по референсам: картинки (до 9), видео (до 3, звук каждого — в парный вход
     // ref_video_audio) и отдельный звук (до 3); проводка — официальный шаблон

@@ -370,7 +370,13 @@ public static class DeviceCapabilities
     /// <summary>Ретранслятор чтения для других устройств (этап 5).</summary>
     public const string Relay = "relay";
 
-    public static readonly IReadOnlyList<string> All = [Exec, Files, Relay];
+    /// <summary>
+    /// Руки (ADR-016, раздел «Руки»): компонент <c>HandsBridge</c> установлен и его SHA-256
+    /// сверен. Про сеанс рук ничего не говорит — сеанс живёт только на машине.
+    /// </summary>
+    public const string Hands = "hands";
+
+    public static readonly IReadOnlyList<string> All = [Exec, Files, Relay, Hands];
 
     /// <summary>Только известные значения, без дублей, в порядке <see cref="All"/>.</summary>
     public static List<string> Normalize(IEnumerable<string>? declared)

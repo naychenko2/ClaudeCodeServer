@@ -548,6 +548,21 @@ public sealed class RemoteProcessRunnerDeviceAgentE2ETests : IAsyncLifetime
         Directory.Exists(Path.Combine(_deviceDir, "turns")).Should().BeFalse("каталог хода на устройстве не создан");
     }
 
+    [Fact]
+    public void ШлюзВыключен_ХодЗавершаетсяОшибкойСПричиной_ПроцессНаУстройствеНеСтартует()
+    {
+        _kit.Options.CurrentValue = new LlmGatewayOptions { Enabled = false, AllowSubscriptions = true };
+
+        var act = () => _runner.Start(Spec("turn-e2e-gw-off"));
+
+        var refused = act.Should().Throw<DeviceExecRefusedException>().Which;
+        refused.Reason.Should().Be(DeviceExecRefusal.GatewayRefused);
+        refused.Message.Should().Be(TurnFailureText.GatewayDisabled);
+        _channel.Opened.Should().Be(0, "канал исполнения не открывался");
+        _executor.LiveCount.Should().Be(0);
+        _tokens.ActiveCount.Should().Be(0);
+    }
+
     // ADR-016, задача 3.2а: настоящий ход чата локального проекта. Раннер берёт боевая фабрика
     // (ForProject), ClaudeSession сам ставит в spec свой чат — по нему шлюз выдаёт токен.
     // Два хода идут одним процессом CLI на устройстве, и оба проходят шлюз LLM.

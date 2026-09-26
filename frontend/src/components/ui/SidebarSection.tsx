@@ -10,7 +10,7 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 import { C, FONT, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from './icons';
 
-export function SidebarSection({ title, count, hint, actions, collapsedActions, storageKey, defaultOpen = true, children }: {
+export function SidebarSection({ title, count, hint, actions, collapsedActions, storageKey, defaultOpen = true, open: openProp, onToggle, children }: {
   title: string;
   // Число справа от заголовка (сколько свойств, сколько комментариев)
   count?: number;
@@ -23,23 +23,28 @@ export function SidebarSection({ title, count, hint, actions, collapsedActions, 
   collapsedActions?: ReactNode;
   storageKey?: string;
   defaultOpen?: boolean;
+  // Управляемый режим: состояние хранит потребитель (например, набор секций одним
+  // значением на пользователя), storageKey тогда не нужен
+  open?: boolean;
+  onToggle?: () => void;
   children: ReactNode;
 }) {
-  const [open, setOpen] = useState(() => {
+  const [openOwn, setOpen] = useState(() => {
     if (!storageKey) return defaultOpen;
     const saved = localStorage.getItem(storageKey);
     return saved === null ? defaultOpen : saved === '1';
   });
 
-  const toggle = () => setOpen(v => {
+  const open = openProp ?? openOwn;
+  const toggle = onToggle ?? (() => setOpen(v => {
     if (storageKey) localStorage.setItem(storageKey, v ? '0' : '1');
     return !v;
-  });
+  }));
 
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap' }}>
-        <button onClick={toggle} style={headStyle}>
+        <button onClick={toggle} aria-expanded={open} style={headStyle}>
           {open
             ? <ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ color: C.textMuted }} />
             : <ChevronRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ color: C.textMuted }} />}

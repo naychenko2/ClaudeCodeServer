@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Services.Backup;
+using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.Spend;
 using FluentAssertions;
 
@@ -122,6 +123,16 @@ public class BackupPathsTests
         BackupPaths.ShouldInclude("image-editor/user-1/job-1/v1.png").Should().BeFalse();
         // Траты редактора — деньги, других копий у них нет: журнал в корне data едет в архив
         BackupPaths.ShouldInclude("image-editor-spend.jsonl").Should().BeTrue();
+    }
+
+    [Fact]
+    public void РедакторКартинок_СостояниеЧатовКартинкиИсключено()
+    {
+        // Состояние редактора чата картинки (ADR-018 §2) — TTL-кеш рядом с вариантами; имена
+        // берём из констант Core, которые читает и сам модуль редактора
+        var dir = $"{ImageEditorPaths.WorkspaceDirName}/user-1/{ImageEditorPaths.ChatsDirName}";
+        BackupPaths.ShouldInclude($"{dir}/0f3c9a.json").Should().BeFalse();
+        BackupPaths.ShouldInclude($"{dir}/0f3c9a.mask.png").Should().BeFalse();
     }
 
     [Fact]

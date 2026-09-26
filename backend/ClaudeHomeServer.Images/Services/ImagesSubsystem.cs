@@ -1,5 +1,5 @@
 using ClaudeHomeServer.Services.Composition;
-using ClaudeHomeServer.Services.Images.Editing;
+using ClaudeHomeServer.Services.Images.Editing.Raster;
 using ClaudeHomeServer.Services.Images.LocalMedia;
 
 namespace ClaudeHomeServer.Services.Images;
@@ -35,8 +35,10 @@ public sealed class ImagesSubsystem : IAppSubsystem
         // (`AddImageDriver<FalImageService>()`) — отдельный AddSingleton дал бы второй
         // экземпляр того же типа.
         services.AddImageGeneration();
-        // Редактор картинок (ADR-017): драйверы правки, исполнитель задач, сохранение, траты
-        services.AddImageEditor();
+        // Растр — общая инфраструктура картинок (ADR-018 §10.1): пакеты SkiaSharp живут только
+        // здесь, редактор в модуле берёт шов IImageRaster. Один экземпляр на инстанс: внутри
+        // семафор на 2 одновременные операции (ADR-018 §9)
+        services.AddSingleton<IImageRaster, SkiaImageRaster>();
         // Локальная генерация через ComfyUI (MCP-сервер local-media): тумблер LocalMedia:Enabled
         services.AddLocalMedia(config);
     }

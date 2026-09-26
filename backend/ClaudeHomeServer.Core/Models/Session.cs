@@ -316,6 +316,16 @@ public static class SessionContextTypes
     public static bool IsKnown(string? value) => value is File or Url or Task;
 }
 
+// Привязка чата картинки к файлу проекта (ADR-018 §1). Пути — от корня проекта через «/».
+public sealed class SessionImageChat
+{
+    // Файл, с которым чат связан сейчас
+    public string CurrentPath { get; set; } = "";
+    // Прежние пути, старые первыми (hero.png, hero.v2.png…): по ним поиск отдаёт «разговор
+    // продолжился на новой версии»
+    public List<string> Lineage { get; set; } = [];
+}
+
 public class Session
 {
     public string Id { get; init; } = Guid.NewGuid().ToString();
@@ -439,6 +449,13 @@ public class Session
     // Дефолт false: старые записи sessions.json читаются штатно, BackupSchema.Version не
     // двигается (аддитивное поле с дефолтом формат не ломает).
     public bool DesktopChat { get; set; }
+    // Чат картинки (ADR-018 §1, флаг image-editor): null — обычный чат. Тип фиксируется при
+    // СОЗДАНИИ по той же причине, что у DesktopChat: от него зависит MCP-сервер image-editor,
+    // а значит сигнатура запуска CLI. Меняется только путь внутри (редактор ушёл на новую
+    // версию файла), и такая смена — настройка, UpdatedAt она не двигает.
+    // Аддитивное nullable-поле: старые записи sessions.json читаются с null,
+    // BackupSchema.Version не двигается.
+    public SessionImageChat? ImageChat { get; set; }
     // Цикл «до готово» (флаг work-loop): не null — ход автопродолжается до маркера завершения
     public SessionWorkLoop? WorkLoop { get; set; }
     // Сообщения, ждущие устройство локального проекта (ADR-016, вариант А плана §5): фоновые

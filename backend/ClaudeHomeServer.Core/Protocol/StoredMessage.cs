@@ -24,6 +24,8 @@ namespace ClaudeHomeServer.Protocol;
 [JsonDerivedType(typeof(StoredModelSwitchedMessage), "model_switched")]
 [JsonDerivedType(typeof(StoredBranchedFromMessage), "branched_from")]
 [JsonDerivedType(typeof(StoredInterruptedMessage), "interrupted")]
+[JsonDerivedType(typeof(StoredImageLaunchMessage), "image_launch")]
+[JsonDerivedType(typeof(StoredImageFileMovedMessage), "image_file_moved")]
 public abstract class StoredMessage { }
 
 public class StoredUserMessage(string text, string[]? attachedPaths = null, bool? viaAgent = null,
@@ -69,7 +71,13 @@ public class StoredUserMessage(string text, string[]? attachedPaths = null, bool
     // StoredTextMessage.DelegationTaskId (доклад из чата-исполнителя без персоны
     // приходит пользовательским сообщением)
     public string? DelegationTaskId { get; init; } = delegationTaskId;
+    // Снимок холста чата картинки (ADR-018 §3): приложен ли он к этому сообщению и на какой
+    // ревизии холста. По нему лента пишет «холст не менялся — снимок не приложен».
+    // null — обычный чат либо история до этого поля.
+    public StoredImageSnapshot? ImageSnapshot { get; init; }
 }
+
+public record StoredImageSnapshot(string Revision, bool Attached);
 
 public class StoredSessionStartedMessage(string model, string mode, TurnWorktreeInfo? turnWorktree = null) : StoredMessage
 {
@@ -348,5 +356,36 @@ public class StoredBranchedFromMessage : StoredMessage
 {
     public string SourceSessionId { get; init; } = "";
     public string SourceName { get; init; } = "";
+    public long? Timestamp { get; init; }
+}
+
+// Тихая строка «Вы запустили: «…» · FLUX Fill · ≈ $0.10 · 2 варианта» в чате картинки
+// (ADR-018 §2). Пишется в history.json, а не в транскрипт CLI: модель её НЕ видит, о ручном
+// запуске она узнаёт из блока состояния хода. By — кто запустил, значение SpendInitiators.*
+// ("human" | "agent"; тот же словарь, что у SpendRecord.Initiator): у истории нет конвертера
+// enum'ов, поэтому строка, а не ImageEditInitiator. Estimate — котировка на момент запуска.
+public class StoredImageLaunchMessage : StoredMessage
+{
+    public string By { get; init; } = Models.SpendInitiators.Human;
+    public string Prompt { get; init; } = "";
+    public string Provider { get; init; } = "";
+    public string Model { get; init; } = "";
+    public int Count { get; init; }
+    public StoredImageLaunchEstimate? Estimate { get; init; }
+    public string JobId { get; init; } = "";
+    public long? Timestamp { get; init; }
+}
+
+// Оценка запуска в строке истории. Своя запись спины, а не котировка из DTO редактора:
+// редактор — отдельный модуль (ADR-018 §10.1), и протокол от него не зависит. Имена полей те
+// же, что у котировки, поэтому history.json не меняется. Source — ImageEditEstimateSources.*
+public sealed record StoredImageLaunchEstimate(double? Amount, string Unit, bool Approx, string Source);
+
+// Тихая строка «Сохранено как … Редактор перешёл на этот файл, чат — вместе с ним»
+// (ADR-018 §1): чат картинки переехал на новый путь. Пути — от корня проекта.
+public class StoredImageFileMovedMessage : StoredMessage
+{
+    public string From { get; init; } = "";
+    public string To { get; init; } = "";
     public long? Timestamp { get; init; }
 }

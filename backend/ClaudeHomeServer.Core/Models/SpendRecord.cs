@@ -34,6 +34,13 @@ public static class SpendSources
         provider.StartsWith("sub-", StringComparison.Ordinal) ? "claude" : provider;
 }
 
+// Значения SpendRecord.Initiator
+public static class SpendInitiators
+{
+    public const string Human = "human";
+    public const string Agent = "agent";
+}
+
 // Одна запись расхода: ход чата, фоновый one-shot, генерация fal.ai или вызов бесплатной
 // модели. Детальные записи живут в data/spend/turns-*.jsonl последние Spend:DetailDays дней,
 // старше — сворачиваются в дневные агрегаты DailySpendRow (SpendStore.RollupOlderThan).
@@ -69,6 +76,9 @@ public sealed class SpendRecord
     public long DurationMs { get; init; }
     // Подпись операции: ключ фонового действия (changelog, notes.tags…) или endpoint fal
     public string? Label { get; init; }
+    // Кто запустил трату в редакторе картинок (ADR-018 §2): SpendInitiators.*. null — трата
+    // не из редактора либо запись до этого поля. В дневные агрегаты не сворачивается.
+    public string? Initiator { get; init; }
 
     [JsonIgnore]
     public long TotalTokens => InputTokens + OutputTokens + CacheReadTokens + CacheCreationTokens;

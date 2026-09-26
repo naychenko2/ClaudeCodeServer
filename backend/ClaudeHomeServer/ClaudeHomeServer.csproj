@@ -157,6 +157,37 @@
           SkipUnchangedFiles="true" Condition="Exists('..\ClaudeHomeServer.Spend\bin\$(Configuration)\net10.0\ClaudeHomeServer.Spend.dll')" />
   </Target>
 
+  <!-- Динамический модуль редактора картинок (ADR-018 §10.1): тот же паттерн, что Notes и Spend.
+       ReferenceOutputAssembly="false" — Main не видит типов редактора, швы живут в Core.
+       Две цели (Build/Publish): при одной `dotnet publish -o` молча терял dll модуля. -->
+  <ItemGroup>
+    <ProjectReference Include="..\ClaudeHomeServer.ImageEditor\ClaudeHomeServer.ImageEditor.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+  <Target Name="CopyImageEditorModuleBuild" AfterTargets="Build">
+    <ItemGroup>
+      <ImageEditorModuleFiles Include="..\ClaudeHomeServer.ImageEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.ImageEditor.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(ImageEditorModuleFiles)" DestinationFolder="$(OutDir)modules\image-editor"
+          SkipUnchangedFiles="true" Condition="Exists('..\ClaudeHomeServer.ImageEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.ImageEditor.dll')" />
+  </Target>
+  <Target Name="CopyImageEditorModulePublish" AfterTargets="Publish">
+    <ItemGroup>
+      <ImageEditorModuleFiles Include="..\ClaudeHomeServer.ImageEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.ImageEditor.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(ImageEditorModuleFiles)" DestinationFolder="$(PublishDir)modules\image-editor"
+          SkipUnchangedFiles="true" Condition="Exists('..\ClaudeHomeServer.ImageEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.ImageEditor.dll')" />
+  </Target>
+
+  <!-- Нативный libSkiaSharp.pdb из SkiaSharp.NativeAssets.Win32 весит ~84 МБ и в выкладке не
+       нужен: без этой цели публикация win-x64 вырастает почти на 0,1 ГБ (ADR-018 §9, размер
+       публикации). Символы остаются в пакете NuGet, если понадобится разбор дампа. -->
+  <Target Name="DropSkiaNativePdb" AfterTargets="ComputeResolvedFilesToPublishList">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)"
+                             Condition="'%(Filename)%(Extension)' == 'libSkiaSharp.pdb'" />
+    </ItemGroup>
+  </Target>
+
   <!-- === Модульность (Этап 3+, Этап 5)
        Вертикали Video/Yandex/Reader/CodeGraph/Skills/Git/Personas/Spend/Knowledge/
        Changelog/Diagnostics/Docs/Tts/WebSearch/Tasks/Modules/ProjectServices/Backgrounds
@@ -167,7 +198,7 @@
        До этапа 3 всё это жило одной сборкой, и инвариант «вертикаль зависит только
        от спинки» соблюдался логически; теперь он держится физически — вертикаль не
        может «протянуть руку» в Main, потому что ProjectReference в её .csproj нет.
-       Notes и Spend — исключения (динамические модули, см. CopyNotesModule/CopySpendModule),
+       Notes, Spend и ImageEditor — исключения (динамические модули, см. Copy*Module выше),
        не прямые референсы. -->
   <ItemGroup>
     <ProjectReference Include="..\ClaudeHomeServer.Backgrounds\ClaudeHomeServer.Backgrounds.csproj" />

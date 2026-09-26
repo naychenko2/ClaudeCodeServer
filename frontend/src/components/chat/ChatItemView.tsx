@@ -1,5 +1,5 @@
 import { memo, useState, useCallback, useContext, useEffect, type ReactNode } from 'react';
-import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock, ScrollText, RefreshCw, ChevronDown, Ban, GitFork, GitBranch } from 'lucide-react';
+import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock, ScrollText, RefreshCw, ChevronDown, Ban, GitFork, GitBranch, Camera } from 'lucide-react';
 import type { ChatItem, Persona, ProviderFallbackOption } from '../../types';
 import {
   splitFallbackOptions, formatSubscriptionMeta, providerSwitchReasonLabel, modelSwitchHeadline,
@@ -12,6 +12,7 @@ import type { TodoItem } from '../../hooks/useSessionArtifacts';
 import type { Mode } from '../../lib/modes';
 import { TodoList } from './TodoList';
 import { C, FONT, SHADOW, R, FS, SP } from '../../lib/design';
+import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { prunedHeadline, prunedDetails } from '../../lib/contextPruned';
 import { Button } from '../ui/Button';
 import { useIsMobile } from '../../lib/breakpoints';
@@ -29,7 +30,7 @@ import { stripVoiceMarker } from '../../lib/tts';
 import { VoiceDigestNote, parseVoiceDigest } from './VoiceDigestNote';
 import { useContextPersona } from '../../lib/contextPersona';
 import { useSlotItem } from '../../lib/subsystems/registry';
-import type { ChatItemSaveNoteCtx, ChatItemFileChangedApi } from '../../lib/subsystems/registryCore';
+import type { ChatItemSaveNoteCtx, ChatItemFileChangedApi, ChatItemToolCtx } from '../../lib/subsystems/registryCore';
 import { ChatProjectContext, ChatTreePathContext, ChatSessionContext, PersonaContext, SpeakingItemContext, useAssistantName } from './contexts';
 import { PromptSnapshotDialog } from '../../features/chat/PromptSnapshotDialog';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
@@ -1039,6 +1040,13 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
   // Вклад карточки изменённого файла-заметки: заметка ли это (match) и как её
   // открыть/нарисовать. Нет вклада — обычная карточка изменённого файла.
   const fileChangedNote = useSlotItem<never, ChatItemFileChangedApi>('chat-item-action', 'file-changed');
+  // Своя карточка записи от подсистемы (редактор картинок: image_generate, image_launch…):
+  // ключ — имя инструмента у tool_use, иначе kind. Прямых веток по именам модулей в ядре нет
+  const chatSessionId = useContext(ChatSessionContext);
+  const ownView = useSlotItem<ChatItemToolCtx>('chat-item-tool', item.kind === 'tool_use' ? item.name : item.kind);
+  if (ownView?.render) {
+    return <>{ownView.render({ item, online, projectId: project?.id ?? null, sessionId: chatSessionId, persona })}</>;
+  }
   switch (item.kind) {
     case 'user_message': {
       // Служебный ход механики штаба (ответ на карточку, возврат в интервью, сводка волны) —
@@ -1174,12 +1182,20 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
                 {item.attachedPaths.map(p => (
                   <span key={p} style={{
                     background: C.bgPanel, color: C.textSecondary, borderRadius: 5,
-                    padding: '1px 6px', fontSize: 11,
+                    padding: '1px 6px', fontSize: 11, maxWidth: '100%', overflowWrap: 'anywhere',
                   }}>
                     {/* В проекте — путь относительно корня; в чате без проекта — только имя файла */}
                     {project ? relPathTree(p, project.rootPath, treePath) : (p.replace(/\\/g, '/').split('/').pop() ?? p)}
                   </span>
                 ))}
+              </div>
+            )}
+            {/* Чат картинки: холст не менялся с прошлого сообщения — снимок не приложили,
+                агент его уже видел (ADR-018 §3) */}
+            {item.imageSnapshot && !item.imageSnapshot.attached && (
+              <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 4, fontSize: FS.xs, color: C.textMuted }}>
+                <Camera size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+                холст не менялся — снимок не приложен
               </div>
             )}
           </UserMessageBubble>

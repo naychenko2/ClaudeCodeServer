@@ -38,7 +38,7 @@ public record TextDeltaMessage(string Text)
 // StoredUserMessage.DelegationTaskId): связь с задачей структурная, не из текста.
 public record UserMessageMessage(string Text, IReadOnlyList<string>? AttachedPaths, string? SenderPersonaId, bool Auto,
     string? SenderOrigin = null, string? SenderChatName = null, string? StaffNote = null,
-    long? Timestamp = null, string? DelegationTaskId = null)
+    long? Timestamp = null, string? DelegationTaskId = null, StoredImageSnapshot? ImageSnapshot = null)
     : ServerMessage("user_message");
 
 // Очередь сообщений занятой сессии — полный снимок при каждом изменении (постановка,
@@ -306,6 +306,17 @@ public record ChatDeletedMessage()
 // а не удаляет — клиенты убирают/возвращают его в списках, но семантики «чата больше нет»
 // (как у chat_deleted — на ней строятся ChatsPage/awaiting/projectActivity) здесь нет.
 // SessionId — в базовом поле.
+// Живая копия StoredImageFileMovedMessage (ADR-018 §1): чат картинки перешёл на новый файл
+// вслед за редактором. Пути — от корня проекта; SessionId — в базовом поле.
+public record ImageFileMovedMessage(string From, string To, long? Timestamp = null)
+    : ServerMessage("image_file_moved");
+
+// Живая копия StoredImageLaunchMessage (ADR-018 §2): тихая строка «Вы запустили: …» в чате
+// картинки. Поля те же, что у записи истории; SessionId — в базовом поле.
+public record ImageLaunchMessage(string By, string Prompt, string Provider, string Model, int Count,
+    StoredImageLaunchEstimate? Estimate, string JobId, long? Timestamp = null)
+    : ServerMessage("image_launch");
+
 public record ChatArchivedMessage(bool Archived)
     : ServerMessage("chat_archived");
 

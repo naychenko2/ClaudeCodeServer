@@ -1,5 +1,5 @@
 import * as signalR from '@microsoft/signalr';
-import type { ServerMessage, TeamPlanDecision } from '../types';
+import type { ImageSnapshotMark, ServerMessage, TeamPlanDecision } from '../types';
 import { confirmOffline, readStoredToken, setConnectionState } from './offline';
 import { projectRouteOf } from './deviceAgent';
 import { agentHub, agentHubIfConnected, onAgentHubMessage } from './agentHub';
@@ -132,6 +132,14 @@ export type SendOutcome = 'started' | 'queued' | 'queued-preempted';
 export async function sendMessage(sessionId: string, text: string, attachedPaths: string[] = [], mode?: string, auto = false): Promise<SendOutcome> {
   const conn = await ensureConnected();
   return conn.invoke<SendOutcome>('SendMessage', sessionId, text, attachedPaths, mode ?? null, auto);
+}
+
+// Сообщение чата картинки (ADR-018 §3): тот же ход, что SendMessage, плюс пометка снимка
+// холста в истории. Сам снимок, если приложен, уже лежит в attachedPaths
+export async function sendImageChatMessage(sessionId: string, text: string, attachedPaths: string[], mode: string | undefined,
+  snapshot: ImageSnapshotMark | null): Promise<SendOutcome> {
+  const conn = await ensureConnected();
+  return conn.invoke<SendOutcome>('SendImageChatMessage', sessionId, text, attachedPaths, mode ?? null, snapshot);
 }
 
 export async function respondPermission(

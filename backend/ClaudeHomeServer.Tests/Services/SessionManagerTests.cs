@@ -3889,7 +3889,7 @@ public class SessionManagerTests : IDisposable
         {
             session.Id, entry, "реакция постановщика",
             null, "task-report", 0, true, true, null, SessionManager.PendingKind.Report,
-            null, null, null
+            null, null, null, null
         })!;
         await enq;
 
@@ -3927,7 +3927,7 @@ public class SessionManagerTests : IDisposable
         {
             session.Id, entry, "постороннее сообщение",
             null, "external-agent", 0, true, false, null, SessionManager.PendingKind.Agent,
-            null, null, null
+            null, null, null, null
         })!;
         await enq;
 
@@ -5729,7 +5729,7 @@ public class SessionManagerTests : IDisposable
             /*senderPersonaId*/ null, /*senderOrigin*/ null, /*agentDepth*/ 0,
             /*silent*/ false, /*suppressTasksExecute*/ false, /*senderChatName*/ null,
             SessionManager.PendingKind.Agent, /*attachedPaths*/ null, /*mode*/ null,
-            /*staffNote*/ null
+            /*staffNote*/ null, /*imageSnapshot*/ null
         ])!;
         await task;
         return (SendAndWaitResult)task.GetType().GetProperty("Result")!.GetValue(task)!;

@@ -4,8 +4,8 @@ using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.ImageEditor;
-using ClaudeHomeServer.Services.Images.Editing;
 using ClaudeHomeServer.Tests.Helpers;
+using ClaudeHomeServer.Tests.ImageEditor.Fakes;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -82,7 +82,7 @@ public class CharacterEndpointsTests : IDisposable
         var form = new MultipartFormDataContent { { new StringContent(name), "name" } };
         for (var i = 1; i <= photos; i++)
         {
-            var photo = new ByteArrayContent(CharacterStoreTests.Jpeg((byte)i));
+            var photo = new ByteArrayContent(TestImages.Jpeg((byte)i));
             photo.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/jpeg");
             form.Add(photo, "photos", $"IMG_{i}.jpg");
         }
@@ -93,7 +93,7 @@ public class CharacterEndpointsTests : IDisposable
         JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync());
 
     [Fact]
-    public async Task Флаг_выключен_ручки_персонажей_и_обсуждения_404()
+    public async Task Флаг_выключен_ручки_персонажей_404()
     {
         var factory = Factory();
         var (projectId, root) = CreateProject(factory, TestWebApplicationFactory.TestUsername);
@@ -104,9 +104,6 @@ public class CharacterEndpointsTests : IDisposable
         var client = factory.CreateAuthenticatedClient();
         var api = $"/api/projects/{projectId}/image-editor";
 
-        var discuss = new MultipartFormDataContent { { new StringContent("что поправить?"), "text" } };
-        discuss.Add(new ByteArrayContent(CharacterStoreTests.Jpeg(1)), "annotated", "annotated.jpg");
-
         var responses = new[]
         {
             await client.GetAsync($"{api}/characters"),
@@ -115,13 +112,10 @@ public class CharacterEndpointsTests : IDisposable
             await client.PutAsync($"{api}/characters/anya", CharacterForm("Аня", 0)),
             await client.DeleteAsync($"{api}/characters/anya"),
             await client.GetAsync($"{api}/characters/anya/photos/face-01.jpg"),
-            await client.PostAsync($"{api}/discuss", discuss),
         };
 
         responses.Select(r => r.StatusCode).Should().AllBeEquivalentTo(HttpStatusCode.NotFound);
         Directory.Exists(Path.Combine(root, "characters")).Should().BeFalse("при выключенном флаге запись не доходит до диска");
-        factory.Services.GetRequiredService<SessionManager>().GetByProject(projectId)
-            .Should().BeEmpty("при выключенном флаге чат не создаётся");
     }
 
     [Fact]
@@ -147,7 +141,7 @@ public class CharacterEndpointsTests : IDisposable
         var photo = await client.GetAsync($"{api}/characters/anya/photos/face-01.jpg");
         photo.StatusCode.Should().Be(HttpStatusCode.OK);
         photo.Content.Headers.ContentType!.MediaType.Should().Be("image/jpeg");
-        (await photo.Content.ReadAsByteArrayAsync()).Should().Equal(CharacterStoreTests.Jpeg(1));
+        (await photo.Content.ReadAsByteArrayAsync()).Should().Equal(TestImages.Jpeg(1));
 
         (await client.GetAsync($"{api}/characters/anya/photos/character.json")).StatusCode
             .Should().Be(HttpStatusCode.NotFound, "ручка фото отдаёт только файлы из списка фото");
@@ -198,7 +192,7 @@ public class CharacterEndpointsTests : IDisposable
             { new StringContent("в осеннем парке"), "prompt" },
             { new StringContent("anya"), "characterSlug" },
         };
-        form.Add(new ByteArrayContent(CharacterStoreTests.Jpeg(9)), "source", "hero.jpg");
+        form.Add(new ByteArrayContent(TestImages.Jpeg(9)), "source", "hero.jpg");
 
         var started = await client.PostAsync($"{api}/jobs", form);
 
@@ -213,7 +207,7 @@ public class CharacterEndpointsTests : IDisposable
             { new StringContent("q-1"), "quoteId" },
             { new StringContent("../x"), "characterSlug" },
         };
-        form.Add(new ByteArrayContent(CharacterStoreTests.Jpeg(9)), "source", "hero.jpg");
+        form.Add(new ByteArrayContent(TestImages.Jpeg(9)), "source", "hero.jpg");
         (await client.PostAsync($"{api}/jobs", form)).StatusCode.Should().Be(HttpStatusCode.BadRequest);
         jobs.Started.Should().ContainSingle("неизвестный персонаж не доходит до исполнителя");
     }

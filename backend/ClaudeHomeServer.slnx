@@ -23,6 +23,8 @@
   <Project Path="ClaudeHomeServer.Git.Tests/ClaudeHomeServer.Git.Tests.csproj" />
   <Project Path="ClaudeHomeServer.Images/ClaudeHomeServer.Images.csproj" />
   <Project Path="ClaudeHomeServer.Images.Tests/ClaudeHomeServer.Images.Tests.csproj" />
+  <Project Path="ClaudeHomeServer.ImageEditor/ClaudeHomeServer.ImageEditor.csproj" />
+  <Project Path="ClaudeHomeServer.ImageEditor.Tests/ClaudeHomeServer.ImageEditor.Tests.csproj" />
   <Project Path="ClaudeHomeServer.Knowledge/ClaudeHomeServer.Knowledge.csproj" />
   <Project Path="ClaudeHomeServer.Knowledge.Tests/ClaudeHomeServer.Knowledge.Tests.csproj" />
   <Project Path="ClaudeHomeServer.Llm/ClaudeHomeServer.Llm.csproj" />

@@ -118,6 +118,9 @@ internal static class TestImages
         return b;
     }
 
+    // Минимальная JPEG-сигнатура; tag различает файлы между собой
+    public static byte[] Jpeg(byte tag) => [0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, tag];
+
     public static IConfiguration Config(params (string Key, string? Value)[] values) =>
         new ConfigurationBuilder()
             .AddInMemoryCollection(values.Select(v => new KeyValuePair<string, string?>(v.Key, v.Value)))

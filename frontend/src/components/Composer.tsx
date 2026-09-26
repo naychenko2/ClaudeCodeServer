@@ -65,6 +65,8 @@ export interface ComposerProps {
   autoAllowTools?: string[];
   onRevokeAutoAllow?: (tool: string) => void | Promise<void>;
   attachments: string[];
+  // Чипы перед вложениями: снимок холста чата картинки (ADR-018 §3)
+  leadingChips?: ReactNode;
   onRemoveAttachment: (path: string) => void;
   // Вставка/перетаскивание любых файлов (скриншот, pdf, документ) — File-объекты
   // для загрузки и отправки. Что делать с картинками у модели без зрения — решает родитель
@@ -536,6 +538,7 @@ export function Composer({
   autoAllowTools,
   onRevokeAutoAllow,
   attachments,
+  leadingChips,
   onRemoveAttachment,
   onAttachFiles,
   isMobile,
@@ -2372,7 +2375,7 @@ export function Composer({
         />
       )}
       {/* Чипы вложений */}
-      {attachments.length > 0 && (
+      {(attachments.length > 0 || !!leadingChips) && (
         <div
           style={{
             display: 'flex',
@@ -2381,6 +2384,7 @@ export function Composer({
             padding: '11px 12px 8px',
           }}
         >
+          {leadingChips}
           {attachments.map((filePath) => {
             const name = basename(filePath);
             return (

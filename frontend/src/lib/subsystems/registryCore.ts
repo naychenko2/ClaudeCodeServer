@@ -14,7 +14,7 @@
 
 import { useMemo, useSyncExternalStore } from 'react';
 import type { ComponentType, LazyExoticComponent, ReactNode } from 'react';
-import type { AuthState, NoteDetail, Session } from '../../types';
+import type { AuthState, ChatItem, ImageSnapshotMark, NoteDetail, Persona, Session } from '../../types';
 import type { HubTabValue } from '../../components/hubTabsModel';
 import { isSubsystemEnabled, subscribeSubsystems } from '../subsystems';
 
@@ -151,6 +151,88 @@ export interface PlanButtonCtx { plan: string; online: boolean }
 // Action-вклады (поведенческие).
 export interface GlobalSearchNoteApi { open: (id: string) => void }
 export interface AiNoteOpenerApi { openNote: (id: string) => void }
+
+// ---- Редактор картинок (MF-модуль image-editor, ADR-018 §10.3) ----
+export type ImageEditorOpenTarget =
+  | { kind: 'edit'; path: string }       // «Редактировать» у картинки проекта
+  | { kind: 'create'; folder: string };  // «Нарисовать картинку» у папки
+export interface ImageEditorOpenRequest {
+  projectId: string;
+  projectName: string;
+  target: ImageEditorOpenTarget;
+  // Чат картинки, с которым открыть редактор (карточка чата в списке)
+  sessionId?: string | null;
+  // «Показать в файлах» после сохранения
+  onShowInFiles?: (path: string) => void;
+}
+// Action-слот `image-editor`, вклад `opener`: вход из дерева файлов
+export interface ImageEditorOpenerApi {
+  isEditable: (path: string) => boolean;
+  open: (req: ImageEditorOpenRequest) => void;
+}
+// Render-слот `file-viewer-toolbar`: кнопки под просмотром файла
+export interface FileViewerToolbarCtx {
+  projectId: string;
+  projectName: string;
+  filePath: string;
+  onOpenFile?: (path: string) => void;
+}
+
+// Чип снимка холста в композере чата картинки (ADR-018 §3)
+export interface ImageChatSnapshotChip {
+  // «hero.png · 3 пометки» — холст изменился с прошлого сообщения; «hero.png · без изменений» — нет
+  label: string;
+  changed: boolean;
+  // Прикладывать ли снимок: крестик снимает, пункт меню «+» возвращает
+  on: boolean;
+  onToggle: (on: boolean) => void;
+}
+
+// Что уходит в чат картинки после prepareSend: снимок (если приложен) уже в paths
+export interface ImageChatPrepared {
+  text: string;
+  paths: string[];
+  snapshot: ImageSnapshotMark | null;
+}
+
+// Чат картинки, который ядро отдаёт модулю через контекст `app-overlay`: модуль
+// рисует готовый компонент, а не свою копию ChatPanel (ADR-018 §10.3, вариант В)
+export interface ImageChatSlotProps {
+  projectId: string;
+  sourcePath: string;
+  // null — чата ещё нет: композер-заглушка, чат создаётся первым сообщением
+  sessionId: string | null;
+  // Псевдоключ черновика `image:{projectId}:{path}`
+  draftKey: string;
+  // Первая строка «Чат привязан к…» с кнопками
+  leadIn: ReactNode;
+  // Грузит снимок холста в вложения чата, если холст изменился
+  prepareSend: (sessionId: string, text: string, paths: string[]) => Promise<ImageChatPrepared>;
+  // Чат создаёт модуль своей ручкой: ядро маршрутов модуля не знает
+  createChat: (personaId?: string) => Promise<Session>;
+  onSessionChange: (session: Session) => void;
+  snapshot: ImageChatSnapshotChip | null;
+  // Подсказки пустой ленты: тап отправляет сообщение
+  suggestions?: string[];
+}
+// Render-слот `app-overlay`: слои уровня приложения поверх раскладки
+export interface AppOverlayCtx { ImageChat: ComponentType<ImageChatSlotProps> }
+
+// Render-слот `chat-item-tool`: своя карточка записи ленты. Имя вклада — полное имя
+// инструмента у tool_use (`mcp__image-editor__image_generate`) или kind записи
+// (`image_launch`). Нет вклада — лента рисует запись как раньше
+export interface ChatItemToolCtx {
+  item: ChatItem;
+  online: boolean;
+  projectId: string | null;
+  sessionId: string | null;
+  persona: Persona | null;
+}
+
+// Render-слот `chat-card-badge`: значок и миниатюра в карточке списка чатов. Действие
+// вклада open перехватывает клик по карточке: true — клик обработан, чат не открываем
+export interface ChatCardBadgeCtx { session: Session; isMobile: boolean }
+export interface ChatCardBadgeApi { open?: (session: Session) => boolean }
 
 // ---- Хранилище ----
 const _manifests: SubsystemManifest[] = [];

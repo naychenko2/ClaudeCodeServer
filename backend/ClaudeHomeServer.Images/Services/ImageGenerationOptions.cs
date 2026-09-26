@@ -9,7 +9,7 @@ namespace ClaudeHomeServer.Services.Images;
 public static class ImagePlaces
 {
     public const string PersonaAvatar = "persona-avatar";
-    public const string ImageEditor = "image-editor";
+    public const string ImageEditor = Composition.ImagePlaceKeys.ImageEditor;
 
     public static readonly string[] All = [PersonaAvatar, ImageEditor];
 

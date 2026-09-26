@@ -209,6 +209,31 @@ public class SessionHub : Hub
         };
     }
 
+    // Сообщение из композера редактора картинок (ADR-018 §3): тот же ход, что SendMessage, плюс
+    // пометка снимка холста в истории — по ней лента пишет «холст не менялся — снимок не
+    // приложен». Сам снимок, если приложен, уже лежит в attachedPaths обычным вложением.
+    public async Task<string> SendImageChatMessage(string sessionId, string text, List<string>? attachedPaths = null,
+        string? mode = null, StoredImageSnapshot? snapshot = null)
+    {
+        if (!OwnsSession(sessionId)) throw Denied();
+        if (_sessions.GetById(sessionId)?.ImageChat is null)
+            throw new HubException("Это не чат картинки");
+        if (snapshot is not null && (string.IsNullOrWhiteSpace(snapshot.Revision) || snapshot.Revision.Length > MaxSnapshotRevisionChars))
+            throw new HubException("Неверная ревизия снимка холста");
+        var outcome = await _sessions.SendMessageAsync(sessionId, text, attachedPaths ?? [], mode,
+            senderConnectionId: Context.ConnectionId, cause: Services.SessionManager.DeliveryCause.User,
+            imageSnapshot: snapshot);
+        return outcome switch
+        {
+            Services.SessionManager.SendUserOutcome.Started => "started",
+            Services.SessionManager.SendUserOutcome.QueuedPreempted => "queued-preempted",
+            _ => "queued",
+        };
+    }
+
+    // Ревизия — хеш состояния холста; потолок только отсекает мусор в history.json
+    private const int MaxSnapshotRevisionChars = 128;
+
     public void RespondPermission(string sessionId, string requestId, string behavior)
     {
         if (!OwnsSession(sessionId)) throw Denied();

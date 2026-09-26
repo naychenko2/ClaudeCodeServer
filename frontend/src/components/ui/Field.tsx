@@ -158,6 +158,8 @@ interface TextAreaProps {
   // (иначе очень длинный текст разносит форму по высоте)
   maxHeight?: number;
   disabled?: boolean;
+  // Только чтение: текст виден и выделяется, но не правится (поле не гаснет, как при disabled)
+  readOnly?: boolean;
   autoComplete?: string;
   autoFocus?: boolean;
   onKeyDown?: (e: KeyboardEvent<HTMLTextAreaElement>) => void;
@@ -165,7 +167,7 @@ interface TextAreaProps {
 }
 
 // === Многострочное поле с авто-ростом высоты ===
-export function TextArea({ value, onChange, placeholder, autoGrow, minHeight = 80, maxHeight, disabled, autoFocus, onKeyDown, autoComplete = 'off', style, voice, isMobile }: TextAreaProps & { voice?: boolean; isMobile?: boolean }) {
+export function TextArea({ value, onChange, placeholder, autoGrow, minHeight = 80, maxHeight, disabled, readOnly, autoFocus, onKeyDown, autoComplete = 'off', style, voice, isMobile }: TextAreaProps & { voice?: boolean; isMobile?: boolean }) {
   const [focused, setFocused] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
   const [recording, setRecording] = useState(false);
@@ -209,6 +211,7 @@ export function TextArea({ value, onChange, placeholder, autoGrow, minHeight = 8
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         disabled={disabled}
+        readOnly={readOnly}
         autoFocus={autoFocus}
         autoComplete={autoComplete}
         onKeyDown={onKeyDown}

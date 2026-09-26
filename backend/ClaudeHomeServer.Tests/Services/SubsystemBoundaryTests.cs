@@ -111,6 +111,9 @@ public class SubsystemBoundaryTests
         // чтобы сторож видел типы Images (IImageGenerator, ImageGenerationService)
         // и проверял границы по Images.dll.
         _ = typeof(ClaudeHomeServer.Services.Images.ImagesSubsystem).Assembly;
+        // ImageEditor — динамический модуль (ADR-018 §10.1): Main на него не ссылается,
+        // без форс-загрузки сторож прошёл бы по нему вакуумно.
+        _ = typeof(ClaudeHomeServer.Services.ImageEditor.ImageEditorSubsystem).Assembly;
         // Prompts — отдельная сборка (Этап 5, вынос Prompts): форс-загрузка нужна,
         // чтобы сторож видел типы Prompts (OmoPrompts, SubagentPrompts, OmcPersonaRouting)
         // и проверял границы по Prompts.dll.
@@ -250,14 +253,28 @@ public class SubsystemBoundaryTests
         // на внешние типы уходят в Core-интерфейсы: `IPersonaLookup`/`IPersonaAvatarStore`
         // (аватар персоны), `ServerMessage` (ImageBackfilledMessage), `ImageAssetHelper`
         // (ExtFor) — все в ClaudeHomeServer.Core.dll, покрываются `IsCoreAssembly`.
-        // Допусков за пределами спинки и своего namespace не осталось.
+        // `SkiaSharp.*` — third-party растр редактора (ADR-018 §9, `SkiaImageRaster`);
+        // пакет живёт только в Images, остальным вертикалям допуска нет.
         new object[]
         {
             new VerticalBoundary(
                 "Images",
                 "ClaudeHomeServer.Services.Images",
                 SharedAllowedPrefixes
-                    .Concat(new[] { "ClaudeHomeServer.Services.Images" })
+                    .Concat(new[] { "ClaudeHomeServer.Services.Images", "SkiaSharp" })
+                    .ToArray(),
+                Array.Empty<string>()),
+        },
+        // ImageEditor — динамический модуль редактора картинок (ADR-018 §10.1). Только общая
+        // спинка: растр, место генерации, Higgsfield и «Обсудить» — швы Core. SkiaSharp здесь
+        // намеренно нет — пакет живёт только в Images, модуль берёт растр через IImageRaster.
+        new object[]
+        {
+            new VerticalBoundary(
+                "ImageEditor",
+                "ClaudeHomeServer.Services.ImageEditor",
+                SharedAllowedPrefixes
+                    .Concat(new[] { "ClaudeHomeServer.Services.ImageEditor" })
                     .ToArray(),
                 Array.Empty<string>()),
         },
@@ -1722,15 +1739,16 @@ public class SubsystemBoundaryTests
         // больше не ссылается на ServerMetrics/Main напрямую) + DifyErrorCategorizer
         // (43 строки чистой функции, нужны и Knowledge, и Memory, обе вертикали).
         "ClaudeHomeServer.Core.Telemetry",
-        // ADR-017 (редактор картинок): контракт драйвера IImageEditor, REST-DTO, каталог
-        // поставщиков, события задачи и швы IHiggsfieldAccess/IImageEditJobs. Контроллер
-        // живёт в Main, драйверы — в вертикали Images, общий язык у них должен быть в спине.
+        // ADR-018 §10.1: швы модуля редактора картинок в спине — IHiggsfieldAccess,
+        // IImageChatSessions (чат картинки), имя рабочей папки для бэкапа и записи операций растра.
+        // Сам редактор (контракты, задачи, драйверы) — в модуле ClaudeHomeServer.ImageEditor.
         "ClaudeHomeServer.Services.ImageEditor",
-        // ADR-017, разделы 4 и 5: версионное сохранение (FileMode.CreateNew, hero.v2.png) и
-        // журнал трат редактора per-user — примитивы спины, их зовут и контроллер Main, и
-        // исполнитель задач в вертикали Images.
+        // Мерж local-media (ADR-018, раздел «Локальные модели»): ImageFormatSniffer — чистая
+        // функция по сигнатуре байтов, нужна и модулю редактора, и LocalMedia в Images.
         "ClaudeHomeServer.Services.ImageEditor.Versioning",
-        "ClaudeHomeServer.Services.ImageEditor.Spending",
+        // ADR-018 §10.1: шов растра. Реализация (SkiaImageRaster) в Images, потребитель —
+        // модуль редактора; namespace сохранён при переносе интерфейса из Images.
+        "ClaudeHomeServer.Services.Images.Editing.Raster",
     ];
 
     /// <summary>

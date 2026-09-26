@@ -748,6 +748,10 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly HiggsfieldMcpContext? _higgsfieldMcp;
     // Higgsfield: условие как у websearch — схема адреса допускает http И рубильник включён
     private bool HiggsfieldHttpOn() => _higgsfieldMcp is { UseHttp: true } && HttpMcpOnNow();
+    // MCP-сервер редактора картинок: null — не чат картинки (ADR-018 §2)
+    private readonly ImageEditorMcpContext? _imageEditorMcp;
+    // Редактор картинок: условие как у websearch — схема адреса допускает http И рубильник включён
+    private bool ImageEditorHttpOn() => _imageEditorMcp is { UseHttp: true } && HttpMcpOnNow();
     // MCP-сервер локальной генерации (ComfyUI): null — выключен или недоступен чату
     private readonly LocalMediaMcpContext? _localMediaMcp;
     // Локальная генерация: условие как у higgsfield — схема адреса допускает http И рубильник включён
@@ -847,6 +851,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _watchMcp = context.WatchMcp;
         _webSearchMcp = context.WebSearchMcp;
         _higgsfieldMcp = context.HiggsfieldMcp;
+        _imageEditorMcp = context.ImageEditorMcp;
         _localMediaMcp = context.LocalMediaMcp;
         _httpMcpActive = context.HttpMcpActive;
         _httpMcpEnabled = context.HttpMcpEnabledProvider;
@@ -923,6 +928,8 @@ public class ClaudeSession : ILlmSessionAdapter
         // Higgsfield: та же история — stdio-ветки нет, контекста нет вовсе когда инстанс не
         // подключён или персона ReadOnly
         var hasHiggsfield = HiggsfieldHttpOn();
+        // Редактор картинок: stdio-ветки нет, контекста нет вне чата картинки
+        var hasImageEditor = ImageEditorHttpOn();
         // Локальная генерация: stdio-ветки нет, контекста нет при выключенном LocalMedia:Enabled
         var hasLocalMedia = LocalMediaHttpOn();
         // pmem-консультанты приезжают списком на каждый ход — рубильник для них тот же живой
@@ -1020,6 +1027,7 @@ public class ClaudeSession : ILlmSessionAdapter
             hasWatch = hasWatch && Keep("watch");
             hasWebSearch = hasWebSearch && Keep("websearch");
             hasHiggsfield = hasHiggsfield && Keep("higgsfield");
+            hasImageEditor = hasImageEditor && Keep(McpEndpoints.ImageEditorName);
             hasLocalMedia = hasLocalMedia && Keep("local-media");
             hasConsultants = hasConsultants && Keep("consultants");
             hasModules = hasModules && Keep("modules");
@@ -1032,7 +1040,7 @@ public class ClaudeSession : ILlmSessionAdapter
         }
         if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasNotifications
             && !hasWidgets && !hasCodeGraph && !hasDify && !hasDesktop && !hasDataset && !hasModules && !hasFalAi && !hasGlif
-            && !hasHiggsfield && !hasLocalMedia && userServers is null
+            && !hasHiggsfield && !hasImageEditor && !hasLocalMedia && userServers is null
             && !hasExternal && !hasWatch && !hasWebSearch
             && !(hasConsultants && (memoryServerPath is not null
                 || personaAgents!.MemoryServers.Any(ConsultantHttp)))) return (null, "", []);
@@ -1701,6 +1709,25 @@ public class ClaudeSession : ILlmSessionAdapter
                 };
                 // Состав определяется белым списком провайдера (KeepMcpTools["higgsfield"])
                 shapes["higgsfield"] = "t:http";
+            }
+
+            if (hasImageEditor)
+            {
+                // Редактор картинок (ADR-018 §2): тулсет модуля, http-ветка только. Сессия едет
+                // хвостом URL — по ней тулсет находит чат картинки, проект и владельца
+                servers[McpEndpoints.ImageEditorName] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["type"] = "http",
+                    ["url"] = McpEndpoints.EndpointFor(_imageEditorMcp!.ApiUrl, McpEndpoints.ImageEditorName, Info.Id),
+                    ["headers"] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["Authorization"] = $"Bearer {_imageEditorMcp.TokenFactory()}",
+                        [McpEndpoints.CallerSessionHeader] = Info.Id,
+                    },
+                    ["alwaysLoad"] = true,
+                };
+                // Состав — свойство инстанса (ImageEditor:AgentLaunch), вариативен только транспорт
+                shapes[McpEndpoints.ImageEditorName] = "t:http";
             }
 
             if (hasLocalMedia)
@@ -2891,6 +2918,8 @@ public class ClaudeSession : ILlmSessionAdapter
         // провайдера СЕССИИ, как BareMode: сигнатура запуска остаётся стабильной.
         var recallInTurnText = _providers?.ResolveByModel(EffectiveModel) is { RecallInTurnText: true };
         List<PromptSectionDto> turnRecallSections = [];
+        // Секции PromptSection.InTurnTail: хвостом при любом провайдере, ближе всего к тексту хода
+        List<PromptSectionDto> alwaysTailSections = [];
 
         // Секции, удалённые TurnPromptAssembler.ApplyBudget из-за лимита командной строки
         // (32 767 символов Windows). По умолчанию пусто — обычный ход, срезки нет. Заполняется
@@ -2974,7 +3003,14 @@ public class ClaudeSession : ILlmSessionAdapter
                 }
                 foreach (var s in assembling.Sections)
                 {
-                    if (!string.IsNullOrWhiteSpace(s.Text))
+                    if (string.IsNullOrWhiteSpace(s.Text)) continue;
+                    // Хвост хода всегда, мимо RecallInTurnText и мимо системного блока
+                    // (ADR-018 §2, §10.4): такой секции в системном блоке не место ни у какого
+                    // провайдера — она меняется от хода к ходу по природе
+                    if (s.InTurnTail)
+                        alwaysTailSections.Add(new PromptSectionDto(s.Key, s.Title ?? s.Key, s.Text, "turn",
+                            Stable: false, Group: "misc"));
+                    else
                         contributorSections[s.Key] = s;
                 }
                 // Манифест F3: айтемы recall-секций собираются параллельно Sections.
@@ -3396,8 +3432,9 @@ public class ClaudeSession : ILlmSessionAdapter
                     manifestItems.Select(i => new RecallItemDto(i.Kind, i.Ref, i.Title, i.Snippet)).ToList()));
         }
 
-        // Хвост хода (RecallInTurnText): нестабильные секции уезжают вклейкой в текст, а не
-        // системным блоком. Кэш префикса это не трогает — текст хода и так новый каждый ход.
+        // Хвост хода (RecallInTurnText, плюс секции InTurnTail при любом провайдере): нестабильные
+        // секции уезжают вклейкой в текст, а не системным блоком. Кэш префикса это не трогает —
+        // текст хода и так новый каждый ход.
         //
         // Повтор не шлём: склейка не изменилась против прошлого хода — она уже в транскрипте
         // и доедет по --resume, а копия в каждом ходе растила бы контекст. Не вклеили —
@@ -3406,6 +3443,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // Побочно чинится мягкая деградация same-process хода: системный промпт живому
         // процессу не обновляется, а текст хода доезжает всегда — значит и recall тоже.
         var turnTextForCli = text;
+        turnRecallSections.AddRange(alwaysTailSections);
         if (turnRecallSections.Count > 0)
         {
             var joinedRecall = string.Join("\n\n", turnRecallSections.Select(x => x.Text));

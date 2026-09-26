@@ -181,7 +181,7 @@ public sealed class LocalMediaService(
                 var count = Math.Clamp(request.Count ?? 1, 1, ComfyWorkflows.MaxCount);
                 var graph = ComfyWorkflows.GenerateImage(prompt, request.NegativePrompt?.Trim() ?? "",
                     size.Width, size.Height, seed, steps, count, prefix);
-                return (graph, 15 + (int)Math.Ceiling(steps * 1.2 * count));
+                return (graph, GenerateImageEta(steps, count));
             }
             case LocalMediaOps.EditImage:
             {
@@ -191,13 +191,13 @@ public sealed class LocalMediaService(
                 var names = new List<string>();
                 for (var k = 0; k < images.Count; k++)
                     names.Add(await UploadInputAsync(request, job, root, images[k], MediaKind.Image, $"{job.Id}-in{k + 1}", ct));
-                return (ComfyWorkflows.EditImage(prompt, names, size, seed, prefix), 60 + 10 * (images.Count - 1));
+                return (ComfyWorkflows.EditImage(prompt, names, size, seed, prefix), EditImageEta(images.Count));
             }
             case LocalMediaOps.FaceDetail:
             {
                 if (images.Count != 1) throw new LocalMediaInputException("Нужна ровно одна картинка (image).");
                 var name = await UploadInputAsync(request, job, root, images[0], MediaKind.Image, $"{job.Id}-in1", ct);
-                return (ComfyWorkflows.FaceDetail(name, seed, prefix), 25);
+                return (ComfyWorkflows.FaceDetail(name, seed, prefix), FaceDetailEta);
             }
             case LocalMediaOps.TextToVideo:
             {
@@ -414,6 +414,14 @@ public sealed class LocalMediaService(
     }
 
     private static string LatentPrefix(LocalMediaJob job) => $"{ComfyWorkflows.OutputFolder}/latents/{job.Id}";
+
+    // Картинки: ≈45 с на картинку при 25 шагах, правка ≈60 с плюс ≈10 с на каждый образец,
+    // доводка лиц ≈25 с (docs/features/local-media.md). Общие с драйвером редактора
+    public static int GenerateImageEta(int steps, int count) => 15 + (int)Math.Ceiling(steps * 1.2 * count);
+
+    public static int EditImageEta(int images) => 60 + 10 * (Math.Max(1, images) - 1);
+
+    public const int FaceDetailEta = 25;
 
     // Время — зачётные прогоны замера d653be60 (одна RTX 3090, модели уже загружены); первый
     // прогон после простоя идёт примерно столько же. Где замера нет — null: время не обещаем.

@@ -1357,6 +1357,7 @@ const windowWidth = useWindowWidth();
       const f = s.file ?? null;
       setOpenFile(f);
       if (f === null) setFileFullscreen(false);
+      if (f && s.revealInTree) revealPanelKey('files');
       setSelectedTaskId(s.task ?? null);
       setProjectBoard(!!s.board);   // режим доски проекта из снимка истории
       // Персона / командный центр (вкладка «Команда») — восстанавливаем, если снимок несёт

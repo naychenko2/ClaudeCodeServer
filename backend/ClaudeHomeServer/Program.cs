@@ -576,6 +576,9 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.HiggsfieldOAuthServi
 // Шов для драйвера Higgsfield редактора картинок (ADR-017): токен без AdminOwnerId
 builder.Services.AddSingleton<ClaudeHomeServer.Services.ImageEditor.IHiggsfieldAccess,
     ClaudeHomeServer.Services.Mcp.HiggsfieldAccessAdapter>();
+// Чат картинки для модуля редактора (ADR-018 §1, §10.1): ручки в модуле, сессии создаёт и
+// правит ядро — адаптер над SessionManager
+builder.Services.AddSingleton<ClaudeHomeServer.Services.ImageEditor.IImageChatSessions, ImageChatSessions>();
 builder.Services.AddQuietHttpClient(
     ClaudeHomeServer.Services.Mcp.HiggsfieldOAuthService.HttpClientName,
     new QuietHttpClientProfile(
@@ -1186,6 +1189,9 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpSessionAcce
     ClaudeHomeServer.Services.Composition.McpSessionAccessorAdapter>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpPersonaBindings,
     ClaudeHomeServer.Services.Composition.McpPersonaBindingsAdapter>();
+// Гейт делегированного хода для тулсетов из модулей (image-editor, ADR-018 §10.1)
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IDelegatedTurnGate,
+    ClaudeHomeServer.Services.Composition.DelegatedTurnGateAdapter>();
 
 // Этап 5, волна E: forwarder-регистрации двух Core-интерфейсов выноса Notes.
 // Реализации (`TaskBridge` поверх TaskManager, `NotesHubNotifier` поверх IHubContext<SessionHub>)

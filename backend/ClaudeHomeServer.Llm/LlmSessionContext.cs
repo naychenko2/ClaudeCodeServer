@@ -156,6 +156,11 @@ public sealed record WebSearchMcpContext(string ApiUrl, Func<string> TokenFactor
 // TokenFactory/UseHttp — тот же идиом, что у websearch: сервисный JWT владельца Kestrel.
 public sealed record HiggsfieldMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp);
 
+// Контекст MCP-сервера редактора картинок (ADR-018 §2, §10.2): тулсет живёт в модуле, сессия
+// едет хвостом URL (/mcp/image-editor/{sessionId}). null — не чат картинки, флаг image-editor у
+// владельца выключен или модуль не загружен (тулсета нет в реестре — иначе «fetch failed» у
+// всего хода). Всё это — свойства сессии, владельца и процесса, не хода. stdio-ветки нет.
+public sealed record ImageEditorMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp);
 // Контекст MCP-сервера локальной генерации (local-media: ComfyUI на своей GPU). null — чат без
 // владельца или вне проекта, тумблер LocalMedia:Enabled выключен, подсистема images выключена,
 // проект локальный или персона ReadOnly (сервер пишет файлы в проект). Всё это — свойства
@@ -361,6 +366,8 @@ public sealed record LlmSessionContext(
     // Наличие контекста — свойство инстанса (EnsureFresh) и персоны (ReadOnly) — инвариант
     // стабильности состава не нарушается: оба стабильны в рамках сессии.
     HiggsfieldMcpContext? HiggsfieldMcp = null,
+    // MCP-сервер редактора картинок: только в чате картинки (ADR-018 §2)
+    ImageEditorMcpContext? ImageEditorMcp = null,
     // MCP-сервер локальной генерации (ComfyUI): null — выключен или недоступен чату
     // (см. LocalMediaMcpContext). Свойство инстанса, сессии и персоны, не хода.
     LocalMediaMcpContext? LocalMediaMcp = null,

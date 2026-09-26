@@ -316,7 +316,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         string Id, string Text, string? SenderPersonaId, string? SenderOrigin,
         int AgentDepth, DateTime EnqueuedAt, bool Silent = false, bool SuppressTasksExecute = false,
         string? SenderChatName = null, PendingKind Kind = PendingKind.Agent,
-        IReadOnlyList<string>? AttachedPaths = null, string? Mode = null, string? StaffNote = null);
+        IReadOnlyList<string>? AttachedPaths = null, string? Mode = null, string? StaffNote = null,
+        StoredImageSnapshot? ImageSnapshot = null);
 
     // Вид ожидающего сообщения. Report отделён от Agent: при активном цикле «до готово» Report
     // будит ждущий цикл (как User), а обычные Agent-сообщения посторонних агентов продолжают
@@ -575,6 +576,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     public event Action<Session>? OnSessionDeleted;
 
     private readonly FeatureFlagService _flags;
+    private readonly IServiceProvider? _services;
+    private Services.Mcp.Http.McpToolsetRegistry? _mcpToolsets;
     private readonly PersonaManager _personas;
     private readonly PersonaBindingsService _bindings;
     private readonly ClaudeSubscriptionPool _subscriptionPool;
@@ -750,9 +753,13 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // TeamPlanService работает на NullLogger.
         ILoggerFactory? loggerFactory = null,
         // Опционально (в тестах не передаётся): готовность устройства локального проекта
-        Execution.IProjectDeviceGate? deviceGate = null)
+        Execution.IProjectDeviceGate? deviceGate = null,
+        // Корень DI: реестр MCP-тулсетов резолвится лениво (BuildImageEditorContext) — прямая
+        // зависимость дала бы цикл SessionManager → реестр → тулсеты → SessionManager
+        IServiceProvider? services = null)
     {
         _deviceGate = deviceGate;
+        _services = services;
         _turnEvents = turnEvents;
         _loggerFactory = loggerFactory;
         _taskLookup = tasks is null ? null : new Composition.TaskLookupAdapter(tasks);
@@ -1082,6 +1089,21 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         return new HiggsfieldMcpContext(apiUrl, () => GetServiceToken(ownerId!), HttpEndpointUsable(apiUrl));
     }
 
+    // MCP-сервер редактора картинок (ADR-018 §2, §10.2): только в чате картинки (тип чата
+    // фиксирован с создания), при флаге image-editor у владельца и загруженном модуле. Последнее —
+    // наличие тулсета в реестре: модуль выключен, а контекст собран — CLI получил бы сервер,
+    // отвечающий 404, и «fetch failed» у всех инструментов хода. Все условия — свойства сессии,
+    // владельца и процесса; от хода состав не зависит (McpToolsetStabilityTests).
+    internal ImageEditorMcpContext? BuildImageEditorContext(string? ownerId, Session session)
+    {
+        if (ownerId is null || session.ImageChat is null || string.IsNullOrEmpty(session.ProjectId)) return null;
+        if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.ImageEditor)) return null;
+        _mcpToolsets ??= _services?.GetService<Services.Mcp.Http.McpToolsetRegistry>();
+        if (_mcpToolsets?.Find(McpEndpoints.ImageEditorName) is null) return null;
+        var apiUrl = ResolveTasksApiUrl(ownerId);
+        return new ImageEditorMcpContext(apiUrl, () => GetServiceToken(ownerId), HttpEndpointUsable(apiUrl));
+    }
+
     // MCP-сервер локальной генерации (ComfyUI на своей GPU). Узел есть в конфиге хода, только когда:
     //   1) включён машинный тумблер LocalMedia:Enabled и подсистема images (там живёт движок);
     //   2) чат проекта, чьи файлы на сервере: результат пишется в папку проекта
@@ -1140,13 +1162,15 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         WorkspaceMcpContext? workspace = null, NotificationsMcpContext? notifications = null,
         CodeGraphMcpContext? codeGraph = null, DifyMcpContext? dify = null,
         WatchMcpContext? watch = null, WebSearchMcpContext? webSearch = null,
-        HiggsfieldMcpContext? higgsfield = null, LocalMediaMcpContext? localMedia = null) =>
+        HiggsfieldMcpContext? higgsfield = null, ImageEditorMcpContext? imageEditor = null,
+        LocalMediaMcpContext? localMedia = null) =>
         widgets is { UseHttp: true } || memory is { UseHttp: true }
         || tasks is { UseHttp: true } || notes is { UseHttp: true } || personas is { UseHttp: true }
         || workspace is { UseHttp: true } || notifications is { UseHttp: true }
         || codeGraph is { UseHttp: true } || dify is { UseHttp: true }
         || watch is { UseHttp: true } || webSearch is { UseHttp: true }
-        || higgsfield is { UseHttp: true } || localMedia is { UseHttp: true };
+        || higgsfield is { UseHttp: true } || imageEditor is { UseHttp: true }
+        || localMedia is { UseHttp: true };
 
     // Браузер (плагин playwright): нужен по роли тестировщику, остальным персонам — нет.
     // Ключ-надстройка «browser» с дефолтом по пресету (SectionEnabled → SpecialtySections),
@@ -1826,6 +1850,74 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
         entry.Info.ExpiresAfterMinutes = minutes;
         entry.Info.ExpiryAnchor = minutes is null ? null : DateTime.UtcNow;
+        SaveSessions();
+        return entry.Info;
+    }
+
+    // Перепривязать чат картинки к файлу (ADR-018 §1): прежний путь уходит в Lineage, новый
+    // из Lineage убирается (вернулись к старой версии — она снова текущая). UpdatedAt не
+    // трогаем по той же причине, что в SetExpiry: это настройка, а не активность, и она не
+    // должна поднимать чат наверх и выводить его из архива. null — чата нет или он не картинки.
+    public Session? SetImageChatPath(string sessionId, string path)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry) || entry.Info.ImageChat is not { } chat) return null;
+        if (chat.CurrentPath == path) return entry.Info;
+        if (chat.CurrentPath.Length > 0 && !chat.Lineage.Contains(chat.CurrentPath))
+            chat.Lineage.Add(chat.CurrentPath);
+        chat.Lineage.Remove(path);
+        chat.CurrentPath = path;
+        SaveSessions();
+        return entry.Info;
+    }
+
+    // Чат идёт за редактором (ADR-018 §1): редактор сохранил картинку в новый файл. Путь
+    // меняется как в SetImageChatPath, а в ленту ложится тихая запись image_file_moved — и
+    // она, в отличие от смены пути, двигает UpdatedAt: человек что-то сделал в этом чате.
+    // null — чата нет или он не картинки; тот же путь — ничего не пишем.
+    public async Task<Session?> MoveImageChatToFileAsync(string sessionId, string path)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry) || entry.Info.ImageChat is not { } chat) return null;
+        var from = chat.CurrentPath;
+        if (from == path) return entry.Info;
+
+        SetImageChatPath(sessionId, path);
+        var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await AppendStoredAsync(sessionId,
+            new StoredImageFileMovedMessage { From = from, To = path, Timestamp = ts },
+            new ImageFileMovedMessage(from, path, ts));
+        entry.Info.UpdatedAt = DateTime.UtcNow;
+        SaveSessions();
+        return entry.Info;
+    }
+
+    // Ручной запуск генерации из редактора чата картинки (ADR-018 §2): тихая строка
+    // «Вы запустили: …» в ленту. Как и image_file_moved, это активность человека — UpdatedAt
+    // двигается. null — чата нет или он не картинки.
+    public async Task<Session?> AppendImageLaunchAsync(string sessionId, StoredImageLaunchMessage launch)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry) || entry.Info.ImageChat is null) return null;
+        var ts = launch.Timestamp ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var stored = new StoredImageLaunchMessage
+        {
+            By = launch.By, Prompt = launch.Prompt, Provider = launch.Provider, Model = launch.Model,
+            Count = launch.Count, Estimate = launch.Estimate, JobId = launch.JobId, Timestamp = ts,
+        };
+        await AppendStoredAsync(sessionId, stored,
+            new ImageLaunchMessage(stored.By, stored.Prompt, stored.Provider, stored.Model, stored.Count,
+                stored.Estimate, stored.JobId, ts));
+        entry.Info.UpdatedAt = DateTime.UtcNow;
+        SaveSessions();
+        return entry.Info;
+    }
+
+    // Файл чата картинки переименовали или перенесли мимо редактора (ADR-018 §1): пути
+    // переписываются целиком, в Lineage ничего не добавляется — это тот же файл, а не новая
+    // версия. UpdatedAt не трогаем и в ленту не пишем: чат не поднимается и не выходит из архива.
+    public Session? RewriteImageChatPaths(string sessionId, string currentPath, IReadOnlyList<string> lineage)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry) || entry.Info.ImageChat is not { } chat) return null;
+        chat.CurrentPath = currentPath;
+        chat.Lineage = [.. lineage];
         SaveSessions();
         return entry.Info;
     }
@@ -2928,7 +3020,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     public async Task<Session> CreateAsync(string projectId, ClaudeMode mode,
         string? resumeSessionId = null, string? name = null, string? model = null, string? agentName = null,
         string? effort = null, string? personaId = null, bool taskExecution = false, string? taskId = null,
-        string? onboardingKind = null, bool desktopChat = false)
+        string? onboardingKind = null, bool desktopChat = false, SessionImageChat? imageChat = null,
+        IReadOnlyList<string>? autoAllowTools = null)
     {
         var project = _projects.GetById(projectId)
             ?? throw new KeyNotFoundException($"Проект не найден: {projectId}");
@@ -2953,6 +3046,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             // Тип чата «Десктопный» (ADR-008): задаётся при СОЗДАНИИ и дальше не меняется —
             // состав грани фиксируется на момент запуска CLI
             DesktopChat = desktopChat,
+            // Чат картинки (ADR-018 §1): тип — с создания, по той же причине, что DesktopChat.
+            // Имя у него явное («hero.png · правка») — авто-заголовок и миграции тем его не трогают
+            ImageChat = imageChat,
+            NameLocked = imageChat is not null && !string.IsNullOrWhiteSpace(name),
+            AutoAllowTools = autoAllowTools is null ? [] : [.. autoAllowTools],
             // Онбординг-сессия: задаётся ДО старта — BuildPersonaLayer читает поле при сборке слоя
             OnboardingKind = onboardingKind,
         };
@@ -3947,6 +4045,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         var watchMcp = BuildWatchContext(ownerId);
         var webSearchMcp = BuildWebSearchContext(ownerId, persona.Persona);
         var higgsfieldMcp = BuildHiggsfieldContext(ownerId, persona.Persona);
+        var imageEditorMcp = BuildImageEditorContext(ownerId, session);
         var localMediaMcp = BuildLocalMediaContext(ownerId, session.ProjectId, persona.Persona);
         var memoryMcp = persona.Memory ?? BuildTeamMemoryContext(ownerId, session.ProjectId);
         var tasksMcp = TasksMcpEnabled(ownerId, session, persona.Persona)
@@ -3988,7 +4087,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             OrchestrationDone: BuildOrchestrationDone(session.Id),
             HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp,
                 workspace, notificationsMcp, codeGraphMcp, difyMcp, watchMcp, webSearchMcp, higgsfieldMcp,
-                localMediaMcp),
+                imageEditorMcp, localMediaMcp),
             HttpMcpEnabledProvider: HttpMcpEnabled,
             // Материалы контекста — только у проектных чатов (адреса file/task живут внутри
             // проекта); во внепроектной ветке восстановления провайдер не передаётся вовсе
@@ -3997,6 +4096,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             WatchMcp: watchMcp,
             WebSearchMcp: webSearchMcp,
             HiggsfieldMcp: higgsfieldMcp,
+            ImageEditorMcp: imageEditorMcp,
             LocalMediaMcp: localMediaMcp,
             // Корень ГЛАВНОЙ ветки проекта — fallback для slice графа кода, пока свой граф
             // worktree-ветки не построен (ADR-003). У не-worktree чата совпадает с rootPath,
@@ -4020,7 +4120,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // дописывает уточнение, а не просит остановиться. Для «перебить сейчас» есть явные
     // действия: кнопка «Стоп» и PreemptForPending (кнопка на карточке очереди).
     // Возвращаемый исход (Started/Queued) говорит клиенту, рисовать ли оптимистичный баллон.
-    public async Task<SendUserOutcome> SendMessageAsync(string sessionId, string text, IReadOnlyList<string> attachedPaths, string? mode = null, bool systemDirective = false, bool auto = false, string? senderPersonaId = null, bool suppressTasksExecute = false, string? senderOrigin = null, string? senderConnectionId = null, string? staffNote = null, DeliveryCause cause = DeliveryCause.Unknown)
+    public async Task<SendUserOutcome> SendMessageAsync(string sessionId, string text, IReadOnlyList<string> attachedPaths, string? mode = null, bool systemDirective = false, bool auto = false, string? senderPersonaId = null, bool suppressTasksExecute = false, string? senderOrigin = null, string? senderConnectionId = null, string? staffNote = null, DeliveryCause cause = DeliveryCause.Unknown, StoredImageSnapshot? imageSnapshot = null)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry))
             throw new InvalidOperationException("Сессия не найдена");
@@ -4083,7 +4183,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 // иначе форсаж dispatchNow и разбор по концу хода упёрлись бы в QueueFrozen
                 entry.QueueFrozen = false;
                 var enqueued = await EnqueuePendingAsync(sessionId, entry, text, senderPersonaId, senderOrigin,
-                    agentDepth: 0, kind: PendingKind.User, attachedPaths: attachedPaths, mode: mode);
+                    agentDepth: 0, kind: PendingKind.User, attachedPaths: attachedPaths, mode: mode,
+                    imageSnapshot: imageSnapshot);
                 if (enqueued is SendAndWaitResult.QueueFull f)
                     throw new InvalidOperationException(
                         $"В очереди чата уже {f.Limit} сообщений — дождитесь, пока она разберётся");
@@ -4135,7 +4236,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                     // Потолок не пробивается: голова изъята до добавления
                     entry.Pending.Add(new QueuedMessage(Guid.NewGuid().ToString("N"), text, senderPersonaId,
                         senderOrigin, AgentDepth: 0, DateTime.UtcNow, Kind: PendingKind.User,
-                        AttachedPaths: attachedPaths, Mode: mode));
+                        AttachedPaths: attachedPaths, Mode: mode, ImageSnapshot: imageSnapshot));
                 }
             }
             if (head is not null)
@@ -4147,7 +4248,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         }
 
         await SendDirectAsync(sessionId, entry, text, attachedPaths, mode, systemDirective, auto,
-            senderPersonaId, suppressTasksExecute, senderOrigin, senderConnectionId: senderConnectionId, staffNote: staffNote, cause: cause);
+            senderPersonaId, suppressTasksExecute, senderOrigin, senderConnectionId: senderConnectionId, staffNote: staffNote, cause: cause,
+            imageSnapshot: imageSnapshot);
         return SendUserOutcome.Started;
     }
 
@@ -4157,7 +4259,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     private async Task SendDirectAsync(string sessionId, SessionEntry entry, string text,
         IReadOnlyList<string> attachedPaths, string? mode, bool systemDirective, bool auto,
         string? senderPersonaId, bool suppressTasksExecute, string? senderOrigin, string? senderConnectionId = null,
-        bool fromQueue = false, string? staffNote = null, DeliveryCause cause = DeliveryCause.Unknown)
+        bool fromQueue = false, string? staffNote = null, DeliveryCause cause = DeliveryCause.Unknown,
+        StoredImageSnapshot? imageSnapshot = null)
     {
         // ДИАГНОСТИКА повторных доставок (инцидент 2026-08-10): каждая доставка хода в
         // процесс проходит через эту точку. src различает источник — hub (пользователь
@@ -4246,7 +4349,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         if (!systemDirective)
         {
             var userMsg = new UserMessageMessage(text, attachedPaths.Count > 0 ? attachedPaths : null,
-                senderPersonaId, auto, senderOrigin, StaffNote: staffNote);
+                senderPersonaId, auto, senderOrigin, StaffNote: staffNote, ImageSnapshot: imageSnapshot);
             if (!auto && !fromQueue && senderConnectionId is not null)
                 await BroadcastExceptAsync(sessionId, senderConnectionId, userMsg);
             else
@@ -4287,7 +4390,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
         await ApplyStatusAsync(sessionId, entry, SessionStatus.Working);
 
-        entry.Accumulator?.OnUserMessage(text, attachedPaths, systemDirective: systemDirective, auto: auto, senderPersonaId: senderPersonaId, senderOrigin: senderOrigin, staffNote: staffNote);
+        entry.Accumulator?.OnUserMessage(text, attachedPaths, systemDirective: systemDirective, auto: auto, senderPersonaId: senderPersonaId, senderOrigin: senderOrigin, staffNote: staffNote,
+            imageSnapshot: imageSnapshot);
         // Сообщение пользователя = начало нового хода в основном дереве (зеркало
         // сброса skippingWorktreeTurn в SessionChangedPaths.Extract)
         entry.TurnInWorktree = false;
@@ -4693,7 +4797,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         string text, string? senderPersonaId, string? senderOrigin, int agentDepth,
         bool silent = false, bool suppressTasksExecute = false, string? senderChatName = null,
         PendingKind kind = PendingKind.Agent, IReadOnlyList<string>? attachedPaths = null,
-        string? mode = null, string? staffNote = null)
+        string? mode = null, string? staffNote = null, StoredImageSnapshot? imageSnapshot = null)
     {
         bool dispatchNow;
         int position;
@@ -4707,7 +4811,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
             entry.Pending.Add(new QueuedMessage(Guid.NewGuid().ToString("N"), text, senderPersonaId,
                 senderOrigin, agentDepth, DateTime.UtcNow, silent, suppressTasksExecute, senderChatName,
-                kind, attachedPaths, mode, staffNote));
+                kind, attachedPaths, mode, staffNote, imageSnapshot));
             position = entry.Pending.Count;
 
             // Защита от гонки TOCTOU: статус занятости читается БЕЗ лока выше (в SendMessageAsync/
@@ -5174,7 +5278,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 await SendDirectAsync(sessionId, entry, next.Text,
                     next.AttachedPaths ?? [], mode: next.Mode, systemDirective: false, auto: false,
                     senderPersonaId: next.SenderPersonaId, suppressTasksExecute: next.SuppressTasksExecute,
-                    senderOrigin: next.SenderOrigin, fromQueue: true, cause: DeliveryCause.QueueUser);
+                    senderOrigin: next.SenderOrigin, fromQueue: true, cause: DeliveryCause.QueueUser,
+                    imageSnapshot: next.ImageSnapshot);
             else
                 await SendMessageAsync(sessionId, next.Text, [], auto: true,
                     senderPersonaId: next.SenderPersonaId, senderOrigin: next.SenderOrigin,
@@ -5492,6 +5597,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             var watchMcp = BuildWatchContext(project.OwnerId);
             var webSearchMcp = BuildWebSearchContext(project.OwnerId, persona.Persona);
             var higgsfieldMcp = BuildHiggsfieldContext(project.OwnerId, persona.Persona);
+            var imageEditorMcp = BuildImageEditorContext(project.OwnerId, entry.Info);
             var localMediaMcp = BuildLocalMediaContext(project.OwnerId, project.Id, persona.Persona);
             var memoryMcp = persona.Memory ?? BuildTeamMemoryContext(project.OwnerId, project.Id);
             var tasksMcp = TasksMcpEnabled(project.OwnerId, entry.Info, persona.Persona)
@@ -5531,13 +5637,14 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 OrchestrationDone: BuildOrchestrationDone(sessionId),
                 HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp,
                     workspace, notificationsMcp, codeGraphMcp, difyMcp, watchMcp, webSearchMcp, higgsfieldMcp,
-                    localMediaMcp),
+                    imageEditorMcp, localMediaMcp),
                 HttpMcpEnabledProvider: HttpMcpEnabled,
                 ChatContextProvider: BuildChatContextProvider(sessionId),
                 Events: _turnEvents,
                 WatchMcp: watchMcp,
                 WebSearchMcp: webSearchMcp,
                 HiggsfieldMcp: higgsfieldMcp,
+                ImageEditorMcp: imageEditorMcp,
                 LocalMediaMcp: localMediaMcp,
                 // Корень ГЛАВНОЙ ветки проекта — fallback для slice графа кода, пока свой граф
                 // worktree-ветки не построен (ADR-003).

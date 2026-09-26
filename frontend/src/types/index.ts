@@ -726,6 +726,33 @@ export interface FeatureFlagDefinition {
   stage: 'dev' | 'beta' | 'stable';
 }
 
+// Привязка чата картинки к файлу проекта (ADR-018 §1). Пути — от корня проекта через «/»
+export interface SessionImageChat {
+  currentPath: string;
+  // Прежние пути, старые первыми: по ним поиск отдаёт «разговор продолжился на новой версии»
+  lineage: string[];
+}
+
+// Ручной запуск генерации из редактора в ленте чата картинки (StoredImageLaunchMessage):
+// by — "human" | "agent", estimate — котировка на момент запуска
+export interface ImageLaunchFields {
+  by: string;
+  prompt: string;
+  provider: string;
+  model: string;
+  count: number;
+  estimate?: { amount: number | null; unit: string; approx: boolean; source: string } | null;
+  jobId: string;
+  timestamp?: number;
+}
+
+// Пометка снимка холста у сообщения чата картинки (ADR-018 §3, StoredUserMessage.ImageSnapshot):
+// revision — ревизия холста на момент отправки; attached=false — холст не менялся, снимок не приложен
+export interface ImageSnapshotMark {
+  revision: string;
+  attached: boolean;
+}
+
 export interface Session {
   id: string;
   // Отсутствует у чатов вне проекта (project-less)
@@ -746,6 +773,8 @@ export interface Session {
   // Десктопный чат (ADR-008): тип задаётся при создании и не меняется — в его транскрипте
   // лежат кадры чужого рабочего стола, поэтому продолжить его обычным чатом нельзя
   desktopChat?: boolean;
+  // Чат картинки (ADR-018 §1): тип задаётся при создании, внутри меняется только путь
+  imageChat?: SessionImageChat | null;
   mode: Mode;
   // Инструменты, разрешённые в этом чате без вопроса («Всегда разрешать …»). Скоуп —
   // инструмент целиком: «Bash» = любые команды этого чата. Разрешение постоянное
@@ -1049,7 +1078,7 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'text_delta'; text: string }
   // delegationTaskId — доклад о завершении делегированной задачи: id задачи структурным
   // полем (см. ChatItem user_message), а не вытащенный из текста маркера
-  | { type: 'user_message'; text: string; attachedPaths?: string[]; senderPersonaId?: string; auto?: boolean; senderOrigin?: string; senderChatName?: string; staffNote?: string; timestamp?: number; delegationTaskId?: string }
+  | { type: 'user_message'; text: string; attachedPaths?: string[]; senderPersonaId?: string; auto?: boolean; senderOrigin?: string; senderChatName?: string; staffNote?: string; timestamp?: number; delegationTaskId?: string; imageSnapshot?: ImageSnapshotMark | null }
   // Гостевая реплика персоны без агентского хода (0 токенов) — доклад о завершении
   // делегированной задачи (модель Z); маркер доклада распознаётся на рендере (см.
   // lib/delegationReport.ts). Живой аналог StoredTextMessage.PersonaId из истории.
@@ -1116,6 +1145,10 @@ export type ServerMessage = { sessionId: string } & (
       prefillSeconds?: number; cacheReadTokens?: number; promptTokens?: number;
     }
   | { type: 'compact_status'; status?: string; compactResult?: string; compactError?: string }
+  // Записи ленты чата картинки (ADR-018 §1, §2): живые копии StoredImageLaunchMessage и
+  // StoredImageFileMovedMessage. Рисует их модуль редактора через слот chat-item-tool
+  | ({ type: 'image_launch' } & ImageLaunchFields)
+  | { type: 'image_file_moved'; from: string; to: string; timestamp?: number }
   | { type: 'truncated' }
   | { type: 'redacted_thinking' }
   | { type: 'exited' }
@@ -1931,7 +1964,8 @@ export type ChatItem =
   // у ходов без нового сообщения и при сбое записи снимка
   // delegationTaskId — доклад о завершении делегированной задачи: id задачи, к которой
   // ведёт карточка доклада. Нет у обычных сообщений и у историй до появления поля
-  | { kind: 'user_message'; text: string; attachedPaths?: string[]; viaAgent?: boolean; senderPersonaId?: string; systemDirective?: boolean; auto?: boolean; senderOrigin?: string; senderChatName?: string; staffNote?: string; ts?: number; promptSnapshotId?: string; delegationTaskId?: string }
+  // imageSnapshot — сообщение из чата картинки: приложен ли снимок холста (ADR-018 §3)
+  | { kind: 'user_message'; text: string; attachedPaths?: string[]; viaAgent?: boolean; senderPersonaId?: string; systemDirective?: boolean; auto?: boolean; senderOrigin?: string; senderChatName?: string; staffNote?: string; ts?: number; promptSnapshotId?: string; delegationTaskId?: string; imageSnapshot?: ImageSnapshotMark }
   | { kind: 'session_started'; model: string; mode: string; cwd?: string; toolCount?: number; mcpServers?: { name: string; status: string }[]; turnWorktree?: { path: string; name: string } | null }
   // personaId — авторство реплики (персона на момент хода); после смены собеседника
   // старые реплики сохраняют прежний аватар. Отсутствует у обычного ассистента.
@@ -1982,6 +2016,9 @@ export type ChatItem =
       blocks: number; resultBlocks: number; inputBlocks: number; thinkingBlocks: number;
       prefillSeconds?: number; cacheReadTokens?: number; promptTokens?: number;
     }
+  // Тихие строки чата картинки: «Вы запустили: …» и «Сохранено как …» (ADR-018 §1, §2)
+  | ({ kind: 'image_launch' } & ImageLaunchFields)
+  | { kind: 'image_file_moved'; from: string; to: string; timestamp?: number }
   | { kind: 'truncated' }
   | { kind: 'redacted_thinking' }
   // ts — момент остановки (история: StoredInterruptedMessage.Timestamp); в живой ленте нет

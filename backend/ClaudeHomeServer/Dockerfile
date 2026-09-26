@@ -26,8 +26,10 @@ RUN dotnet restore backend/ClaudeHomeServer/ClaudeHomeServer.csproj
 COPY backend/ ./backend/
 # Скрипты установки агента устройства встраиваются в сборку ресурсом (AgentDownloadsController)
 COPY deploy/agent-install/ ./deploy/agent-install/
+# RID обязателен: без него SkiaSharp (растр редактора) кладёт в runtimes/ нативку под все
+# платформы, ~0,4 ГБ. Рантайм-образ — glibc x64, поэтому linux-x64
 RUN dotnet publish backend/ClaudeHomeServer/ClaudeHomeServer.csproj \
-    -c Release -o /app/publish /p:UseAppHost=false
+    -c Release -r linux-x64 --self-contained false -o /app/publish /p:UseAppHost=false
 # Свежесобранный фронт кладём в wwwroot (исходный wwwroot исключён в .dockerignore)
 COPY --from=frontend /src/frontend/dist /app/publish/wwwroot
 

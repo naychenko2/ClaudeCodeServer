@@ -151,6 +151,18 @@ public sealed class McpSessionAccessorAdapter(SessionManager sessions) : IMcpSes
         sessions.GetOwned(sessionId, ownerId);
 }
 
+// Тулсет редактора картинок тратит деньги: запрет и на делегированном ходу, и на
+// реакционном ходу доклада; вызов без вызывателя — отказ (fail-closed, ADR-018 §2)
+public sealed class DelegatedTurnGateAdapter(SessionManager sessions) : IDelegatedTurnGate
+{
+    public string? Deny(string ownerId, string callerSessionId, string action)
+    {
+        var decision = ClaudeHomeServer.Filters.DelegatedTurnGate.Decide(sessions, ownerId, callerSessionId, action,
+            alsoWhenExecutorSuppressed: true, allowInTeamImplement: false, failOpenWhenUnknown: false);
+        return decision.Allowed ? null : decision.DenyText;
+    }
+}
+
 public sealed class McpPersonaBindingsAdapter(PersonaBindingsService bindings) : IMcpPersonaBindings
 {
     public bool EffectiveToolEnabled(string? ownerId, Persona? persona, string key) =>

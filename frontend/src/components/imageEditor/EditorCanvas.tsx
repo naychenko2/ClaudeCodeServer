@@ -86,6 +86,10 @@ export function EditorCanvas({ src, size, marks, onMarksChange, tool, onTextAt, 
 
   const onPointerDown = (e: RPointerEvent<HTMLDivElement>) => {
     if (!size || tool === 'eraser') return;
+    // Жест не должен начинать выделение в документе: браузер тащит выделенное
+    // нативным drag и обрывает жест pointercancel'ом
+    e.preventDefault();
+    window.getSelection()?.removeAllRanges();
     if (tool === 'hand') {
       drag.current = { kind: 'pan', x: e.clientX, y: e.clientY, px: pan.x, py: pan.y };
       e.currentTarget.setPointerCapture(e.pointerId);
@@ -125,8 +129,9 @@ export function EditorCanvas({ src, size, marks, onMarksChange, tool, onTextAt, 
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
+      onDragStart={e => e.preventDefault()}
       style={{
-        position: 'relative', overflow: 'hidden', background: C.bgInset,
+        position: 'relative', overflow: 'hidden', background: C.bgInset, userSelect: 'none',
         flex: mobile ? '0 0 300px' : 1, minHeight: 0, touchAction: 'none',
         cursor: tool === 'hand' ? 'grab' : tool === 'text' ? 'text' : 'crosshair',
       }}

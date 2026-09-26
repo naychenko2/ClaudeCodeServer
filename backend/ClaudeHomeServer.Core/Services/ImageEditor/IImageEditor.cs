@@ -53,13 +53,18 @@ public enum EditStage { Queued, Running, Downloading }
 // чистый инпейнт по маске дорисовывает, а не стирает
 public record EditTraits(bool HasMask, int References, bool HasCharacter, bool HasAnnotations = false, bool Removal = false);
 
-// Возможности МОДЕЛИ, а не поставщика: недоступные операции UI показывает серыми
+// Возможности МОДЕЛИ, а не поставщика: недоступные операции UI показывает серыми.
+// SeparateMaskPass — кисть вместе со стрелками, рамками и подписями модель в одном запросе не
+// отрабатывает (закрашенное остаётся), поэтому правка идёт в два запроса: сначала по маске,
+// затем по пометкам поверх результата (ImageEditRequest.MaskPass). Драйвер такой модели
+// обязан исполнить MaskPass, а котировка — посчитать лишнюю картинку.
 public record ImageEditCaps(
     IReadOnlyList<ImageEditOp> Ops,
     MaskSupport Mask,
     int MaxReferences,
     int MaxCount,
-    bool FaceByReferences);
+    bool FaceByReferences,
+    bool SeparateMaskPass = false);
 
 // Ориентир цены для каталога; точная сумма — только в котировке
 public record ImageEditPriceHint(double Amount, string Unit, string Per);
@@ -79,6 +84,8 @@ public record OutpaintSpec(int Left, int Top, int Right, int Bottom);
 
 public record CharacterRef(string Slug, string Name, string? Description);
 
+// MaskPass — предварительная правка по маске одним вариантом (ImageEditCaps.SeparateMaskPass):
+// её результат становится исходником этого запроса
 public record ImageEditRequest(
     ImageEditOp Op,
     string Prompt,
@@ -89,7 +96,8 @@ public record ImageEditRequest(
     string? AspectRatio,
     OutpaintSpec? Outpaint,
     string Model,
-    CharacterRef? Character);
+    CharacterRef? Character,
+    ImageEditRequest? MaskPass = null);
 
 public record EditedImage(byte[] Bytes, string ContentType);
 

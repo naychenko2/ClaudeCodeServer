@@ -8,6 +8,8 @@ namespace ClaudeHomeServer.Services.Images.Editing;
 // - исходник уходит ЧИСТЫМ, как пришёл, — пометки запечены только в копию;
 // - образцы идут в фиксированном порядке: исходник, размеченная копия, маска (если у модели
 //   нет своего канала маски), затем образцы человека; роли картинок названы в запросе;
+// - у модели с SeparateMaskPass кисть вместе с пометками делится на два запроса: сначала по
+//   маске, затем по пометкам поверх результата (MaskPass);
 // - текст пометок из marks.json с координатами дописывается к запросу человека;
 // - просьбу стереть отмеченное чистый инпейнтер не получает (EditIntent) — отказ до запуска.
 // Ничего на диск не пишется: файл оригинала в проекте этот слой не видит вовсе.
@@ -50,6 +52,13 @@ public static class EditRequestComposer
         if (pureInpaint && EditIntent.IsRemoval(input.Prompt))
             return Invalid($"Модель {model.Label} дорисовывает, а не стирает: для удаления отмеченного возьмите модель «Авто»");
 
+        // Кисть вместе с пометками такая модель в одном запросе не отрабатывает: рисует по
+        // стрелке, а закрашенное оставляет (живой прогон 2026-09-26, 2 из 2; порядок картинок и
+        // формулировка ролей не лечат). Тогда первый запрос правит по маске, второй — по
+        // пометкам поверх его результата; просьба человека едет в оба, каждый выполняет свою часть
+        var split = mask is not null && annotated is not null && model.Caps.SeparateMaskPass
+                    && model.Caps.Mask == MaskSupport.AsReference && model.Caps.MaxReferences > 0;
+
         // Порядок образцов фиксирован: исходник, размеченная копия, маска, затем образцы
         // человека и персонажа — роли каждой картинки названы в запросе по номерам
         var references = new List<ReferenceImage>();
@@ -61,11 +70,15 @@ public static class EditRequestComposer
         if (annotated is not null && model.Caps.MaxReferences > 0)
         {
             references.Add(new ReferenceImage(annotated.Bytes, annotated.ContentType, ReferenceRole.Object, AnnotatedLabel));
-            roles.Add("та же картинка с пометками поверх (стрелки, рамки, подписи) — это указания, " +
-                      "куда смотреть; в результат пометки не переносить");
+            roles.Add(split
+                ? "картинка с пометками поверх (стрелки, рамки, подписи) — это указания, куда смотреть; " +
+                  "в результат пометки не переносить. Она сделана до первого шага правки, поэтому в остальном " +
+                  "может отличаться от первой — брать с неё только пометки"
+                : "та же картинка с пометками поверх (стрелки, рамки, подписи) — это указания, " +
+                  "куда смотреть; в результат пометки не переносить");
         }
 
-        if (mask is not null)
+        if (mask is not null && !split)
         {
             if (model.Caps.Mask == MaskSupport.Native)
             {
@@ -74,7 +87,7 @@ public static class EditRequestComposer
             else
             {
                 references.Add(new ReferenceImage(mask.Bytes, mask.ContentType, ReferenceRole.Object, MaskLabel));
-                roles.Add("маска: белое — область, которую менять, чёрное — не трогать");
+                roles.Add(MaskRole);
             }
         }
 
@@ -85,13 +98,8 @@ public static class EditRequestComposer
 
         // Нумерация ролей имеет смысл, только если картинок больше одной
         if (roles.Count > 1)
-        {
-            var sb = new System.Text.StringBuilder("Картинки в запросе:");
-            for (var i = 0; i < roles.Count; i++) sb.Append($"\n{i + 1}) {roles[i]}");
-            if (references.Any(r => r.Label is AnnotatedLabel or MaskLabel))
-                sb.Append("\nМенять только отмеченные места первой картинки, всё остальное оставить как есть.");
-            notes.Add(sb.ToString());
-        }
+            notes.Add(Roles(roles, references.Any(r => r.Label is AnnotatedLabel or MaskLabel),
+                split ? SecondPassNote : null));
 
         if (input.Character is { } character)
         {
@@ -101,14 +109,46 @@ public static class EditRequestComposer
             notes.Insert(0, $"Образцы «{character.Name}» — один и тот же человек ({who}): сохранить лицо и черты.");
         }
 
-        var marks = pureInpaint ? "" : EditMarksPrompt.Describe(input.MarksJson);
-        var prompt = string.Join("\n\n", new[] { input.Prompt?.Trim(), marks }
-            .Concat(notes)
-            .Where(s => !string.IsNullOrWhiteSpace(s)));
+        var marks = pureInpaint ? "" : EditMarksPrompt.Describe(input.MarksJson, split ? MarksScope.WithoutBrush : MarksScope.All);
+        var prompt = Join(input.Prompt, marks, notes);
+
+        // Первый проход: исходник и маска, один вариант — все варианты второго прохода растут
+        // из одного и того же стёртого или перерисованного места
+        var maskPass = split
+            ? new ImageEditRequest(ImageEditOp.Inpaint,
+                Join(input.Prompt, EditMarksPrompt.Describe(input.MarksJson, MarksScope.BrushOnly),
+                    [Roles(["исходная картинка, её и нужно править", MaskRole], true, FirstPassNote)]),
+                source, null, [new ReferenceImage(mask!.Bytes, mask.ContentType, ReferenceRole.Object, MaskLabel)],
+                1, null, null, model.Id, null)
+            : null;
 
         return ImageEditCallResult<ImageEditRequest>.Ok(new ImageEditRequest(
-            op, prompt, source, maskChannel, references, count, aspectRatio, null, model.Id, input.Character));
+            op, prompt, source, maskChannel, references, count, aspectRatio, null, model.Id, input.Character, maskPass));
     }
+
+    private const string MaskRole = "маска: белое — область, которую менять, чёрное — не трогать";
+
+    private const string FirstPassNote =
+        "Это первый шаг правки: выполнить только ту часть запроса, которая относится к закрашенному кистью " +
+        "месту (белое на маске). Стрелки, рамки и подписи на этом шаге не выполнять и ничего не добавлять вне маски.";
+
+    private const string SecondPassNote =
+        "Это второй шаг правки: закрашенное кистью место уже обработано, его не трогать и не возвращать как было. " +
+        "Выполнить только ту часть запроса, которая относится к стрелкам, рамкам и подписям.";
+
+    private static string Roles(IReadOnlyList<string> roles, bool marked, string? pass)
+    {
+        var sb = new System.Text.StringBuilder("Картинки в запросе:");
+        for (var i = 0; i < roles.Count; i++) sb.Append($"\n{i + 1}) {roles[i]}");
+        if (pass is not null) sb.Append('\n').Append(pass);
+        if (marked) sb.Append("\nМенять только отмеченные места первой картинки, всё остальное оставить как есть.");
+        return sb.ToString();
+    }
+
+    private static string Join(string? userPrompt, string marks, IEnumerable<string> notes) =>
+        string.Join("\n\n", new[] { userPrompt?.Trim(), marks }
+            .Concat(notes)
+            .Where(s => !string.IsNullOrWhiteSpace(s)));
 
     private static ImageEditCallResult<ImageEditRequest> Invalid(string error) =>
         ImageEditCallResult<ImageEditRequest>.Fail(ImageEditErrorCodes.InvalidRequest, error);

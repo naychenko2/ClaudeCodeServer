@@ -24,6 +24,8 @@ WORKDIR /src
 COPY backend/ClaudeHomeServer/ClaudeHomeServer.csproj backend/ClaudeHomeServer/
 RUN dotnet restore backend/ClaudeHomeServer/ClaudeHomeServer.csproj
 COPY backend/ ./backend/
+# Скрипты установки агента устройства встраиваются в сборку ресурсом (AgentDownloadsController)
+COPY deploy/agent-install/ ./deploy/agent-install/
 RUN dotnet publish backend/ClaudeHomeServer/ClaudeHomeServer.csproj \
     -c Release -o /app/publish /p:UseAppHost=false
 # Свежесобранный фронт кладём в wwwroot (исходный wwwroot исключён в .dockerignore)

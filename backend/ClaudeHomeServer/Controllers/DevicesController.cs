@@ -99,6 +99,27 @@ public class DevicesController(
             : NotFound(new { error = "Устройство не найдено" });
     }
 
+    /// <summary>
+    /// Самоотзыв (agent-distribution Р12): <c>uninstall</c> агента снимает СВОЁ устройство.
+    /// Авторизация — только токен устройства плюс отпечаток машины (схема хаба); веб-JWT и
+    /// сервисный токен эту ручку не открывают. Какое устройство отзывать, берётся из токена,
+    /// а не из запроса: чужое так не снять. Результат — то же надгробие, что при отзыве из веба.
+    /// </summary>
+    [Authorize(AuthenticationSchemes = DesktopDeviceAuthHandler.SchemeName)]
+    [HttpDelete("self")]
+    public IActionResult RevokeSelf()
+    {
+        var ownerId = User.FindFirstValue(JwtRegisteredClaimNames.Sub);
+        var deviceId = User.FindFirstValue(DesktopDeviceAuthHandler.DeviceIdClaim);
+        if (User.Identity?.AuthenticationType != DesktopDeviceAuthHandler.SchemeName
+            || string.IsNullOrEmpty(ownerId) || string.IsNullOrEmpty(deviceId))
+            return Unauthorized();
+
+        return registry.Revoke(ownerId, deviceId)
+            ? NoContent()
+            : NotFound(new { error = "Устройство не найдено" });
+    }
+
     public record PairRequest(string Code, string Name, string Fingerprint, string? ClientVersion);
 
     /// <summary>
@@ -150,6 +171,10 @@ public class DevicesController(
         revoked = device.Revoked,
         revokedAt = device.RevokedAt,
         tokenVersion = device.TokenVersion,
+        agentVersion = device.AgentVersion,
+        agentUpdate = device.AgentUpdate is { } update
+            ? new { state = update.State, targetVersion = update.TargetVersion, reason = update.Reason }
+            : null,
     };
 
     // Сервисный токен владельца (typ=svc) — не человек за клавиатурой: устройствами

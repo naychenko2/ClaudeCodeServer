@@ -233,6 +233,12 @@ public sealed record DesktopCancelCommand(string CallId, string Reason);
 /// держать (null — сервер её не задал); <see cref="HarnessReady"/> и
 /// <see cref="HarnessProblem"/> — вердикт сервера по объявленной копии. Поставив нужную
 /// версию, агент повторяет Hello — вердикт пересчитывается.
+///
+/// Раздача агента (agent-distribution Р9): <see cref="AgentLatestVersion"/> — версия текущей
+/// выкатки (null — сервер агента не раздаёт), <see cref="AgentMinVersion"/> — минимальная
+/// совместимая. Хеш, размер и путь архива (относительно <c>/agent/</c>) — под RID из Hello;
+/// архива под этот RID нет — поля пустые. Хеш едет по аутентифицированному каналу
+/// устройства, сам архив агент качает анонимной ручкой.
 /// </summary>
 public sealed record DeviceHelloAck(
     int ProtocolVersion,
@@ -242,7 +248,12 @@ public sealed record DeviceHelloAck(
     string? RequiredCliVersion = null,
     bool HarnessReady = false,
     string? HarnessProblem = null,
-    int ExecProtocolVersion = DeviceExecProtocol.Version);
+    int ExecProtocolVersion = DeviceExecProtocol.Version,
+    string? AgentLatestVersion = null,
+    string? AgentMinVersion = null,
+    string? AgentArchiveSha256 = null,
+    long? AgentArchiveSize = null,
+    string? AgentArchivePath = null);
 
 /// <summary>
 /// Открыть канал исполнения: устройство отвечает WebSocket-подключением на
@@ -271,6 +282,8 @@ public static class DeviceExecPurposes
 /// <see cref="AgentVersion"/>; клиент рук ADR-008 эти поля не шлёт, и сохранённые
 /// сведения об агенте его Hello не затирает. <see cref="CliVersion"/> — версия
 /// УПРАВЛЯЕМОЙ копии CLI в каталоге агента (null — копии нет), а не CLI из PATH.
+/// <see cref="Rid"/> — RID сборки агента (<c>win-x64</c>, <c>linux-x64</c>): под него сервер
+/// выбирает архив обновления. <see cref="AgentUpdate"/> — состояние самообновления.
 /// </summary>
 public sealed record DeviceHello(
     int ProtocolVersion,
@@ -279,7 +292,68 @@ public sealed record DeviceHello(
     string? Platform = null,
     string? AgentVersion = null,
     string? CliVersion = null,
-    IReadOnlyList<string>? Capabilities = null);
+    IReadOnlyList<string>? Capabilities = null,
+    string? Rid = null,
+    DeviceAgentUpdate? AgentUpdate = null);
+
+/// <summary>
+/// Состояние самообновления агента (agent-distribution AD-3/AD-5): <see cref="State"/> — одно
+/// из <see cref="DeviceAgentUpdateStates"/>, <see cref="TargetVersion"/> — версия, к которой
+/// идёт обновление, <see cref="Reason"/> — причина ожидания или провала, текстом для человека.
+/// </summary>
+public sealed record DeviceAgentUpdate(string State, string? TargetVersion = null, string? Reason = null)
+{
+    /// <summary>Потолок длины причины: текст приходит с устройства и уходит в стор и в UI.</summary>
+    public const int MaxReasonLength = 500;
+
+    /// <summary>
+    /// Только известное состояние, версия — только разбираемая, причина — обрезанная.
+    /// Незнакомое состояние — null: сервер не хранит того, чего не понимает.
+    /// </summary>
+    public static DeviceAgentUpdate? Normalize(DeviceAgentUpdate? declared)
+    {
+        if (declared is null) return null;
+        var state = (declared.State ?? "").Trim().ToLowerInvariant();
+        if (!DeviceAgentUpdateStates.All.Contains(state)) return null;
+
+        var target = DeviceAgentVersion.TryParse(declared.TargetVersion?.Trim(), out var v) ? v.ToString() : null;
+        var reason = string.IsNullOrWhiteSpace(declared.Reason) ? null : declared.Reason.Trim();
+        if (reason is { Length: > MaxReasonLength }) reason = reason[..MaxReasonLength];
+        return new DeviceAgentUpdate(state, target, reason);
+    }
+}
+
+/// <summary>Состояния самообновления агента.</summary>
+public static class DeviceAgentUpdateStates
+{
+    /// <summary>Обновлять нечего или обновление не начиналось.</summary>
+    public const string Idle = "idle";
+
+    /// <summary>Архив новой версии скачивается и проверяется.</summary>
+    public const string Downloading = "downloading";
+
+    /// <summary>Новая версия готова, переключение ждёт конца работы (ход, терминал…).</summary>
+    public const string WaitingIdle = "waiting-idle";
+
+    /// <summary>Обновление не удалось, причина — в <see cref="DeviceAgentUpdate.Reason"/>.</summary>
+    public const string Failed = "failed";
+
+    public static readonly IReadOnlyList<string> All = [Idle, Downloading, WaitingIdle, Failed];
+}
+
+/// <summary>
+/// RID-ы, под которые сервер раздаёт агента (agent-distribution Р11). Белый список: строка
+/// из запроса или из Hello, которой здесь нет, до каталога релизов не доходит.
+/// </summary>
+public static class DeviceAgentRids
+{
+    public const string WinX64 = "win-x64";
+    public const string LinuxX64 = "linux-x64";
+
+    public static readonly IReadOnlyList<string> Supported = [WinX64, LinuxX64];
+
+    public static bool IsSupported(string? rid) => rid is not null && Supported.Contains(rid, StringComparer.Ordinal);
+}
 
 /// <summary>
 /// Возможности агента устройства (ADR-016). Устройство объявляет их само; незнакомые

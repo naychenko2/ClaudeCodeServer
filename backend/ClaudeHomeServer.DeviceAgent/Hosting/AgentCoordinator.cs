@@ -86,6 +86,11 @@ internal sealed class AgentCoordinator : IAsyncDisposable
     public static string PlatformName =>
         OperatingSystem.IsWindows() ? "windows" : OperatingSystem.IsMacOS() ? "macos" : "linux";
 
+    /// <summary>RID этой сборки агента (win-x64, linux-x64…): под него сервер выбирает архив обновления.</summary>
+    public static string RidName =>
+        (OperatingSystem.IsWindows() ? "win" : OperatingSystem.IsMacOS() ? "osx" : "linux")
+        + "-" + System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant();
+
     public DeviceHello BuildHello() => new(
         DesktopProtocol.Version,
         SupportedSteps: [],
@@ -95,7 +100,8 @@ internal sealed class AgentCoordinator : IAsyncDisposable
         CliVersion: _harness.ActiveVersion,
         Capabilities: _runRelay is null
             ? [DeviceCapabilities.Exec, DeviceCapabilities.Files]
-            : [DeviceCapabilities.Exec, DeviceCapabilities.Files, DeviceCapabilities.Relay]);
+            : [DeviceCapabilities.Exec, DeviceCapabilities.Files, DeviceCapabilities.Relay],
+        Rid: RidName);
 
     /// <summary>Hello; force = false — только если активная копия поменялась с прошлого раза.</summary>
     public async Task HelloAsync(bool force = true)

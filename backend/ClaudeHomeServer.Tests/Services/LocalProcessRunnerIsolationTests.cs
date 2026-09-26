@@ -729,17 +729,20 @@ public class LocalProcessRunnerIsolationTests
             using var process = LocalProcessRunner.Instance.Start(new ProcessSpec
             {
                 FileName = "sh",
-                // Хвост отвязан от наших труб, иначе чтение stdout ждало бы и его
-                Args = ["-c", "sleep 300 </dev/null >/dev/null 2>&1 & echo $!"],
-                RedirectStdin = false,
+                // Хвост отвязан от наших труб, иначе чтение stdout ждало бы и его. Выход
+                // оболочки держим на stdin: по выходу раннер гасит scope, и хвост погибает
+                // раньше, чем тест успевает прочесть его cgroup (плавающий DirectoryNotFound на CI)
+                Args = ["-c", "sleep 300 </dev/null >/dev/null 2>&1 & echo $!; read _"],
                 Track = false,
             });
             var tailPid = int.Parse((await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10)))!);
+            // Оболочка ждёт stdin — scope жив, хвост в нём тоже: cgroup читается без гонки
             var cgroupLine = (await File.ReadAllTextAsync($"/proc/{tailPid}/cgroup")).Trim();
             var unit = cgroupLine.Split('/').Last();
             unit.Should().StartWith("ccs-run-").And.EndWith(".scope");
             // Путь cgroup сохраняем сразу: после гашения читать его будет неоткуда
             var cgroupDir = "/sys/fs/cgroup" + cgroupLine[(cgroupLine.IndexOf("::", StringComparison.Ordinal) + 2)..];
+            process.StandardInput.Close();
             await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
 
             // Остановка асинхронная (stop --no-block), а под нагрузкой SIGTERM и уборка

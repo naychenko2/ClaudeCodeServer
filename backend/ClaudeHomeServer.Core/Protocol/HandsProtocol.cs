@@ -32,6 +32,75 @@ public static class HandsTurnRules
 
     /// <summary>Полный набор для <c>--disallowedTools</c> хода с руками.</summary>
     public static readonly IReadOnlyList<string> All = [.. DisallowedTools, .. DisallowedWriteRules];
+
+    /// <summary>
+    /// Весь ли серверный набор <see cref="All"/> стоит в запретах хода. Лишние правила не мешают:
+    /// сюда же ложатся агентские добавки (<see cref="WithAgentRules"/>) и прочие запреты сессии.
+    /// </summary>
+    public static bool IsComplete(IEnumerable<string> disallowed)
+    {
+        var set = disallowed.ToHashSet(StringComparer.Ordinal);
+        return All.All(set.Contains);
+    }
+
+    /// <summary>
+    /// Место под агентские добавки: запрет записи в каталоги агента (<see cref="HandsFiles.AppsFileName"/>,
+    /// <see cref="HandsFiles.SessionFileName"/>) ставит агент — пути знает только он, сервер их не шлёт.
+    /// Порядок — сначала набор сервера, дубли не повторяются.
+    /// </summary>
+    public static IReadOnlyList<string> WithAgentRules(IReadOnlyList<string> serverRules, IEnumerable<string> agentRules) =>
+        [.. serverRules, .. agentRules.Where(r => !serverRules.Contains(r, StringComparer.Ordinal)).Distinct(StringComparer.Ordinal)];
+
+    /// <summary>
+    /// Строка ленты, когда чат с руками стоит в режиме «Без ограничений»: ход с руками в
+    /// <c>bypassPermissions</c> не идёт никогда, режим понижается до «Авто-правки».
+    /// </summary>
+    public const string BypassDowngradedText =
+        "В чате с руками режим «Без ограничений» не действует: ход идёт в режиме «Авто-правки».";
+
+    /// <summary>
+    /// Ошибка хода, когда основной провайдер отказал, а в цепочке фолбэка не осталось провайдеров,
+    /// которым владелец доверил руки. <paramref name="providers"/> — их имена для человека.
+    /// </summary>
+    public static string FallbackNowhereText(IReadOnlyList<string> providers) =>
+        providers.Count == 0
+            ? "Руки не разрешены ни одному провайдеру — основной провайдер недоступен, а другим руки не доверены."
+            : $"Руки разрешены только для {JoinNames(providers)} — основной провайдер недоступен, а другим руки не доверены.";
+
+    private static string JoinNames(IReadOnlyList<string> names) =>
+        names.Count == 1 ? names[0] : string.Join(", ", names.Take(names.Count - 1)) + " и " + names[^1];
+}
+
+/// <summary>
+/// Провайдеры, которым владелец доверил руки (<c>User.HandsProviders</c>): ключи реестра
+/// провайдеров, родной Claude (любая подписка пула) — <see cref="Claude"/>.
+/// </summary>
+public static class HandsProviders
+{
+    public const string Claude = "claude";
+
+    /// <summary>Разрешён ли провайдер с ключом <paramref name="providerKey"/>. Пустой список — никто.</summary>
+    public static bool Allowed(IReadOnlyList<string>? allowed, string? providerKey) =>
+        allowed is { Count: > 0 } && !string.IsNullOrEmpty(providerKey)
+        && allowed.Contains(providerKey, StringComparer.OrdinalIgnoreCase);
+}
+
+/// <summary>
+/// Состояние рук в чате — поле <c>State</c> события <c>hands_status</c> (макет Ш6, «Индикатор в чате»).
+/// Эфемерное событие: в историю не пишется, начальное состояние фронт берёт запросом.
+/// </summary>
+public static class HandsChatStates
+{
+    /// <summary>Руки подключены к идущему ходу.</summary>
+    public const string Active = "active";
+    /// <summary>Сеанс на устройстве есть, ход руками не пользуется.</summary>
+    public const string Allowed = "allowed";
+    /// <summary>Сеанса рук на устройстве нет: ход идёт без рук.</summary>
+    public const string NoSession = "no-session";
+    /// <summary>Человек у машины нажал «Стоп» или сеанс кончился: <c>Reason</c> — <see cref="HandsEndReason"/>.</summary>
+    public const string Stopped = "stopped";
+    /// <summary>Провайдеру чата руки не доверены.</summary>
+    public const string ProviderNotAllowed = "provider-not-allowed";
 }
 
 /// <summary>Файлы и каталоги рук на машине. Сервер их не видит и не правит.</summary>

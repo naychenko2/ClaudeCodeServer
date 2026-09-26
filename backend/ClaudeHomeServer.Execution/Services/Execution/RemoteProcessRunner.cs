@@ -291,7 +291,8 @@ public sealed class RemoteProcessRunner : IProcessLauncher
     /// <summary>
     /// MCP-конфиг для устройства: только http-серверы нашего бэкенда, адрес
     /// <c>{сайдкар}/mcp/{имя}/{хвост}</c>, никаких заголовков и env. Авторизацию и
-    /// <c>X-Caller-Session-Id</c> ставит шлюз по привязке токена хода.
+    /// <c>X-Caller-Session-Id</c> ставит шлюз по привязке токена хода. Плюс маркер рук
+    /// <see cref="DeviceExecPlaceholders.Hands"/> — без команды и путей.
     /// </summary>
     internal static string SanitizeMcpConfig(string json)
     {
@@ -301,6 +302,21 @@ public sealed class RemoteProcessRunner : IProcessLauncher
             foreach (var (name, node) in src)
             {
                 if (node is not JsonObject server) continue;
+                // Маркер рук (ADR-016 §7) — единственный не-http узел, который едет: без
+                // команды, путей и env, пересобранный из двух известных полей. Узел целиком
+                // заменяет агент на свой мост; любой другой stdio-узел выбрасывается ниже.
+                if (name == DeviceExecPlaceholders.HandsServerName)
+                {
+                    if ((server["type"] as JsonValue)?.TryGetValue<string>(out var ht) == true
+                        && ht == DeviceExecPlaceholders.Hands)
+                        servers[name] = new JsonObject
+                        {
+                            ["type"] = DeviceExecPlaceholders.Hands,
+                            [DeviceExecPlaceholders.HandsVisionField] =
+                                (server[DeviceExecPlaceholders.HandsVisionField] as JsonValue)?.TryGetValue<bool>(out var v) == true && v,
+                        };
+                    continue;
+                }
                 var type = (server["type"] as JsonValue)?.TryGetValue<string>(out var t) == true ? t : null;
                 var url = (server["url"] as JsonValue)?.TryGetValue<string>(out var u) == true ? u : null;
                 if (type is not ("http" or "sse") || url is null) continue;

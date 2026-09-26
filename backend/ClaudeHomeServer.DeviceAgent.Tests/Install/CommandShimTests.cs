@@ -70,10 +70,74 @@ public sealed class CommandShimTests : IDisposable
         shim.Install();
         path.Writes.Should().Be(1, "повторная установка PATH не трогает");
 
-        shim.Remove();
+        shim.Remove().Should().Be(ShimRemoval.Removed);
         File.Exists(shim.Location).Should().BeFalse();
         Directory.Exists(shim.BinDirectory).Should().BeFalse();
         path.Value.Should().Be(@"C:\Windows");
+    }
+
+    [Fact]
+    public void Windows_повторное_снятие_без_каталога_bin_честно_говорит_уже_снят()
+    {
+        var path = new MemoryUserPath(@"C:\Windows");
+        var shim = new WindowsCmdShim(_install.Layout, path);
+        shim.Install();
+        shim.Remove();
+
+        // Раньше File.Delete в пропавшем bin бросал DirectoryNotFoundException → «не снята»
+        shim.Remove().Should().Be(ShimRemoval.AlreadyGone);
+        path.Value.Should().Be(@"C:\Windows");
+    }
+
+    [Fact]
+    public void Windows_снятие_через_сам_шим_отдаёт_удаление_отложенной_команде()
+    {
+        var path = new MemoryUserPath(@"C:\Windows");
+        var starter = new FakeDetachedStarter(DetachedStartStatus.Started);
+        var shim = new WindowsCmdShim(_install.Layout, path, starter, runningUnderShim: () => true);
+        shim.Install();
+
+        shim.Remove().Should().Be(ShimRemoval.Deferred);
+
+        File.Exists(shim.Location).Should().BeTrue("cmd ещё дочитывает этот файл — удалит его отложенная команда");
+        path.Value.Should().Be(@"C:\Windows", "PATH чистится сразу");
+        var call = starter.Calls.Should().ContainSingle().Subject;
+        call.Exe.Should().EndWith("cmd.exe");
+        call.Args.Should().Equal("/d", "/s", "/c", shim.DeferredCommand(withRoot: false));
+        shim.DeferredCommand(false).Should().StartWith("ping -n 4 127.0.0.1 >nul & ")
+            .And.Contain($"del /f /q \"{shim.Location}\"");
+        shim.DeferredCommand(true).Should().EndWith($"rmdir /s /q \"{_install.Root}\"");
+    }
+
+    [Fact]
+    public void Windows_не_запустилась_отложенная_команда_шим_снимается_сразу()
+    {
+        var shim = new WindowsCmdShim(_install.Layout, new MemoryUserPath(null),
+            new FakeDetachedStarter(DetachedStartStatus.BreakawayDenied), runningUnderShim: () => true);
+        shim.Install();
+
+        shim.Remove().Should().Be(ShimRemoval.Removed);
+        File.Exists(shim.Location).Should().BeFalse();
+    }
+
+    [SkippableFact]
+    public async Task Windows_отложенная_команда_удаляет_шим_настоящим_cmd()
+    {
+        Skip.IfNot(OperatingSystem.IsWindows(), "cmd.exe — только Windows");
+        var shim = new WindowsCmdShim(_install.Layout, new MemoryUserPath(null));
+        shim.Install();
+
+        var psi = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "cmd.exe"))
+        {
+            // Как WindowsCommandLine.Build: аргумент с кавычками целиком в кавычках, их снимает /s
+            Arguments = $"/d /s /c \"{shim.DeferredCommand(withRoot: false)}\"",
+            UseShellExecute = false,
+        };
+        using var process = Process.Start(psi)!;
+        await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
+
+        File.Exists(shim.Location).Should().BeFalse();
+        Directory.Exists(shim.BinDirectory).Should().BeFalse();
     }
 
     [SkippableFact]
@@ -109,8 +173,9 @@ public sealed class CommandShimTests : IDisposable
         _install.Layout.SetActive("2.0.0");
         (await RunAsync(shim.Location, "roots", "list")).Output.Should().Be("2.0.0 roots list", "шим не переписывается при обновлении");
 
-        shim.Remove();
+        shim.Remove().Should().Be(ShimRemoval.Removed);
         File.Exists(shim.Location).Should().BeFalse();
+        shim.Remove().Should().Be(ShimRemoval.AlreadyGone);
     }
 
     [Fact]

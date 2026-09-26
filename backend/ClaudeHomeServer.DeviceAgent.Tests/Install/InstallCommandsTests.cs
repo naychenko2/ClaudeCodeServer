@@ -47,10 +47,13 @@ internal sealed class FakeShim : ICommandShim
         return ["шим поставлен"];
     }
 
-    public void Remove()
+    public ShimRemoval Removal { get; set; } = ShimRemoval.Removed;
+
+    public ShimRemoval Remove(bool withRoot = false)
     {
-        Calls.Add("remove");
+        Calls.Add(withRoot ? "remove+root" : "remove");
         if (Failure is not null) throw Failure;
+        return Removal;
     }
 }
 
@@ -266,6 +269,31 @@ public sealed class InstallCommandsTests : IDisposable
         Directory.Exists(_paths.DataDirectory).Should().BeFalse();
         Directory.Exists(_paths.ConfigDirectory).Should().BeFalse();
         Directory.Exists(_install.Root).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Повторный_uninstall_честно_говорит_что_команда_уже_снята()
+    {
+        _shim.Removal = ShimRemoval.AlreadyGone;
+        var (uninstaller, _, _) = Uninstaller(SelfRevokeStatus.Revoked);
+
+        await uninstaller.RunAsync(purge: false, CancellationToken.None);
+
+        _output.ToString().Should().Contain("Команда ai-home-agent уже снята").And.NotContain("не снята");
+    }
+
+    [Fact]
+    public async Task Purge_из_под_шима_оставляет_корень_отложенной_команде()
+    {
+        _shim.Removal = ShimRemoval.Deferred;
+        var (uninstaller, _, _) = Uninstaller(SelfRevokeStatus.Revoked);
+
+        await uninstaller.RunAsync(purge: true, CancellationToken.None);
+
+        _shim.Calls.Should().Equal("remove+root");
+        Directory.Exists(_install.Root).Should().BeTrue("корень с исполняемым шимом удалит отложенная команда");
+        Directory.Exists(_paths.DataDirectory).Should().BeFalse();
+        _output.ToString().Should().Contain("удалится через несколько секунд");
     }
 
     [Fact]

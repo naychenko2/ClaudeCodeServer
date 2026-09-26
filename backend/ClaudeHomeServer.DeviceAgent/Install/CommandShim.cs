@@ -21,8 +21,16 @@ internal interface ICommandShim
     /// <summary>
     /// Снять шим и то, что ради него прописано (PATH на Windows). <paramref name="withRoot"/> —
     /// заодно корень установки (<c>--purge</c>), если удалить его сейчас нельзя из-за самого шима.
+    /// <see cref="ShimRemoval.Deferred"/> только планирует удаление — запускает его
+    /// <see cref="StartDeferredRemoval"/>.
     /// </summary>
     ShimRemoval Remove(bool withRoot = false);
+
+    /// <summary>
+    /// Запустить удаление, отложенное <see cref="Remove"/>; вызывать последним действием процесса,
+    /// когда больше ничего не пишется на диск. false — не запустилось, удалять придётся руками.
+    /// </summary>
+    bool StartDeferredRemoval();
 }
 
 internal enum ShimRemoval
@@ -61,8 +69,9 @@ internal interface IUserPathStore
 ///
 /// Снятие через сам шим (<c>ai-home-agent uninstall</c>): cmd перечитывает .cmd после каждой
 /// строки, и удалённый из-под него файл давал «Системе не удается найти указанный путь» и
-/// exit=1. Поэтому под шимом файл удаляет отсоединённая команда через несколько секунд —
-/// уже после выхода cmd; признак «под шимом» — переменная, которую шим ставит всегда.
+/// exit=1. Поэтому под шимом файл удаляет отсоединённая команда, запущенная последним действием
+/// uninstall: она ждёт выхода процесса агента по PID (с потолком) и ещё секунду, пока cmd
+/// дочитает шим; признак «под шимом» — переменная, которую шим ставит всегда.
 /// </summary>
 internal sealed class WindowsCmdShim(
     AgentLayout layout, IUserPathStore userPath, IDetachedStarter? deferred = null, Func<bool>? runningUnderShim = null) : ICommandShim
@@ -98,6 +107,11 @@ internal sealed class WindowsCmdShim(
             "по имени команда доступна в новых окнах терминала"];
     }
 
+    /// <summary>Сколько отложенная команда ждёт выхода процесса агента, прежде чем удалять всё равно.</summary>
+    public static readonly TimeSpan ExitWaitCap = TimeSpan.FromSeconds(60);
+
+    private bool? _pendingWithRoot;
+
     public ShimRemoval Remove(bool withRoot = false)
     {
         if (userPath.Get() is { } before && UserPathList.Without(before, BinDirectory) is var after && after != before)
@@ -111,9 +125,11 @@ internal sealed class WindowsCmdShim(
 
         if (deferred is not null && runningUnderShim?.Invoke() == true)
         {
-            var cmd = Path.Combine(Environment.SystemDirectory, "cmd.exe");
-            var start = deferred.Start(cmd, ["/d", "/s", "/c", DeferredCommand(withRoot)], Path.GetTempPath());
-            if (start.Status == DetachedStartStatus.Started) return ShimRemoval.Deferred;
+            // В cmd /c «%» не экранируется: %имя% в пути подставилось бы, и rmdir ушёл бы не туда
+            if (layout.Root.Contains('%'))
+                throw new IOException($"в пути {layout.Root} есть «%», отложенное удаление через cmd исказило бы его");
+            _pendingWithRoot = withRoot;
+            return ShimRemoval.Deferred;
         }
 
         File.Delete(Location);
@@ -121,14 +137,30 @@ internal sealed class WindowsCmdShim(
         return ShimRemoval.Removed;
     }
 
+    public bool StartDeferredRemoval()
+    {
+        if (_pendingWithRoot is not { } withRoot || deferred is null) return false;
+        _pendingWithRoot = null;
+        var cmd = Path.Combine(Environment.SystemDirectory, "cmd.exe");
+        var start = deferred.Start(cmd, ["/d", "/s", "/c", DeferredCommand(withRoot, Environment.ProcessId)], Path.GetTempPath());
+        return start.Status == DetachedStartStatus.Started;
+    }
+
     /// <summary>
-    /// Текст для <c>cmd /d /s /c</c>: пауза, пока вызвавший cmd дочитает шим и выйдет, затем
-    /// удаление. <c>/s</c> снимает только внешние кавычки — пути внутри остаются в своих.
+    /// Текст для <c>cmd /d /s /c</c>: ждать выхода процесса <paramref name="waitForPid"/> (не
+    /// дольше <see cref="ExitWaitCap"/>; нет PowerShell — фиксированные 3 с), ещё секунду, пока
+    /// cmd дочитает шим, затем удалить. <c>/s</c> снимает только внешние кавычки — пути внутри
+    /// остаются в своих.
     /// </summary>
-    public string DeferredCommand(bool withRoot) =>
-        "ping -n 4 127.0.0.1 >nul & " + (withRoot
-            ? $"rmdir /s /q \"{layout.Root}\""
-            : $"del /f /q \"{Location}\" & rmdir \"{BinDirectory}\" 2>nul");
+    public string DeferredCommand(bool withRoot, int waitForPid)
+    {
+        var powershell = Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe");
+        return $"\"{powershell}\" -NoProfile -NonInteractive -Command \"Wait-Process -Id {waitForPid} " +
+            $"-Timeout {(int)ExitWaitCap.TotalSeconds} -ErrorAction SilentlyContinue; exit 0\" 2>nul " +
+            "|| ping -n 4 127.0.0.1 >nul & ping -n 2 127.0.0.1 >nul & " + (withRoot
+                ? $"rmdir /s /q \"{layout.Root}\""
+                : $"del /f /q \"{Location}\" & rmdir \"{BinDirectory}\" 2>nul");
+    }
 
     private void DeleteBinIfEmpty()
     {
@@ -233,6 +265,8 @@ internal sealed class UnixLinkShim(AgentLayout layout, string binDirectory, stri
         File.Delete(Location);
         return ShimRemoval.Removed;
     }
+
+    public bool StartDeferredRemoval() => false;
 
     private bool InPath() =>
         (pathVariable ?? "").Split(':').Any(e => e.Length > 0 && e.TrimEnd('/') == binDirectory.TrimEnd('/'));

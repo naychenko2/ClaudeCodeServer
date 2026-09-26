@@ -165,7 +165,7 @@ internal sealed class AgentUninstaller(
             output.WriteLine(removal switch
             {
                 ShimRemoval.AlreadyGone => $"Команда ai-home-agent уже снята: {shim.Location}",
-                ShimRemoval.Deferred => $"Команда ai-home-agent снята: {shim.Location} удалится через несколько секунд, " +
+                ShimRemoval.Deferred => $"Команда ai-home-agent снята: {shim.Location} удалится, " +
                     "когда завершится этот вызов",
                 _ => $"Команда ai-home-agent снята: {shim.Location}",
             });
@@ -175,8 +175,14 @@ internal sealed class AgentUninstaller(
             output.WriteLine($"Команда ai-home-agent не снята ({e.Message}) — удали {shim.Location} руками");
         }
 
-        if (purge) Purge(deferredRoot: removal == ShimRemoval.Deferred);
+        var deferred = removal == ShimRemoval.Deferred;
+        if (purge) Purge(deferredRoot: deferred);
         output.WriteLine("Агент удалён");
+
+        // Последним действием: отложенная команда ждёт выхода этого процесса, и всё, что делалось
+        // бы после её запуска (purge, вывод), шло бы наперегонки с её rmdir
+        if (deferred && !shim.StartDeferredRemoval())
+            output.WriteLine($"Отложенное удаление не запустилось — после выхода удали руками {(purge ? layout.Root : shim.Location)}");
         return 0;
     }
 
@@ -188,7 +194,7 @@ internal sealed class AgentUninstaller(
             if (!Directory.Exists(dir)) continue;
             if (deferredRoot && dir == layout.Root)
             {
-                output.WriteLine($"Удалится через несколько секунд: {dir}");
+                output.WriteLine($"Удалится, когда завершится этот вызов: {dir}");
                 continue;
             }
             try

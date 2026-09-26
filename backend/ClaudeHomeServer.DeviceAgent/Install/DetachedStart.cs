@@ -18,7 +18,11 @@ internal static class WindowsCommandLine
 {
     /// <summary>Командная строка Windows: путь и аргументы с пробелами — в кавычках.</summary>
     public static string Build(string executable, IReadOnlyList<string> args) =>
-        string.Join(' ', new[] { executable }.Concat(args).Select(a => a.Length > 0 && !a.Any(c => c is ' ' or '\t' or '"') ? a : $"\"{a}\""));
+        Arguments([executable, .. args]);
+
+    /// <summary>То же без исполняемого — для <see cref="System.Diagnostics.ProcessStartInfo.Arguments"/>.</summary>
+    public static string Arguments(IReadOnlyList<string> args) =>
+        string.Join(' ', args.Select(a => a.Length > 0 && !a.Any(c => c is ' ' or '\t' or '"') ? a : $"\"{a}\""));
 }
 
 /// <summary>

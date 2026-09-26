@@ -55,6 +55,16 @@ internal sealed class FakeShim : ICommandShim
         if (Failure is not null) throw Failure;
         return Removal;
     }
+
+    public bool DeferredStarts { get; set; } = true;
+    public Action? OnStartDeferred { get; set; }
+
+    public bool StartDeferredRemoval()
+    {
+        Calls.Add("start-deferred");
+        OnStartDeferred?.Invoke();
+        return DeferredStarts;
+    }
 }
 
 internal sealed class FakeSupervisorControl : ISupervisorControl
@@ -290,10 +300,52 @@ public sealed class InstallCommandsTests : IDisposable
 
         await uninstaller.RunAsync(purge: true, CancellationToken.None);
 
-        _shim.Calls.Should().Equal("remove+root");
+        _shim.Calls.Should().Equal("remove+root", "start-deferred");
         Directory.Exists(_install.Root).Should().BeTrue("корень с исполняемым шимом удалит отложенная команда");
         Directory.Exists(_paths.DataDirectory).Should().BeFalse();
-        _output.ToString().Should().Contain("удалится через несколько секунд");
+        _output.ToString().Should().Contain("Удалится, когда завершится этот вызов");
+    }
+
+    [Fact]
+    public async Task Отложенное_удаление_стартует_последним_после_purge_и_итоговой_строки()
+    {
+        _shim.Removal = ShimRemoval.Deferred;
+        var dataAtStart = true;
+        var outputAtStart = "";
+        _shim.OnStartDeferred = () =>
+        {
+            dataAtStart = Directory.Exists(_paths.DataDirectory);
+            outputAtStart = _output.ToString();
+        };
+        var (uninstaller, _, _) = Uninstaller(SelfRevokeStatus.Revoked);
+
+        await uninstaller.RunAsync(purge: true, CancellationToken.None);
+
+        dataAtStart.Should().BeFalse("rmdir отложенной команды не должен идти наперегонки с purge");
+        outputAtStart.Should().Contain("Агент удалён");
+        _output.ToString().Should().Be(outputAtStart, "после запуска отложенной команды процесс уже ничего не делает");
+    }
+
+    [Fact]
+    public async Task Не_запустилось_отложенное_удаление_человек_узнаёт_что_удалять_руками()
+    {
+        _shim.Removal = ShimRemoval.Deferred;
+        _shim.DeferredStarts = false;
+        var (uninstaller, _, _) = Uninstaller(SelfRevokeStatus.Revoked);
+
+        await uninstaller.RunAsync(purge: true, CancellationToken.None);
+
+        _output.ToString().Should().Contain($"Отложенное удаление не запустилось — после выхода удали руками {_install.Root}");
+    }
+
+    [Fact]
+    public async Task Без_отложенного_удаления_ничего_не_запускается()
+    {
+        var (uninstaller, _, _) = Uninstaller(SelfRevokeStatus.Revoked);
+
+        await uninstaller.RunAsync(purge: false, CancellationToken.None);
+
+        _shim.Calls.Should().Equal("remove");
     }
 
     [Fact]

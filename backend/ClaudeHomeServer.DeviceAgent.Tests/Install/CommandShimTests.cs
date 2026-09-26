@@ -90,34 +90,78 @@ public sealed class CommandShimTests : IDisposable
     }
 
     [Fact]
-    public void Windows_снятие_через_сам_шим_отдаёт_удаление_отложенной_команде()
+    public void Windows_снятие_через_сам_шим_только_планирует_удаление_а_запуск_отдельно()
     {
         var path = new MemoryUserPath(@"C:\Windows");
         var starter = new FakeDetachedStarter(DetachedStartStatus.Started);
         var shim = new WindowsCmdShim(_install.Layout, path, starter, runningUnderShim: () => true);
         shim.Install();
 
-        shim.Remove().Should().Be(ShimRemoval.Deferred);
+        shim.Remove(withRoot: true).Should().Be(ShimRemoval.Deferred);
 
         File.Exists(shim.Location).Should().BeTrue("cmd ещё дочитывает этот файл — удалит его отложенная команда");
         path.Value.Should().Be(@"C:\Windows", "PATH чистится сразу");
+        starter.Calls.Should().BeEmpty("запуск — последним действием uninstall, после purge");
+
+        shim.StartDeferredRemoval().Should().BeTrue();
         var call = starter.Calls.Should().ContainSingle().Subject;
         call.Exe.Should().EndWith("cmd.exe");
-        call.Args.Should().Equal("/d", "/s", "/c", shim.DeferredCommand(withRoot: false));
-        shim.DeferredCommand(false).Should().StartWith("ping -n 4 127.0.0.1 >nul & ")
-            .And.Contain($"del /f /q \"{shim.Location}\"");
-        shim.DeferredCommand(true).Should().EndWith($"rmdir /s /q \"{_install.Root}\"");
+        call.Args.Should().Equal("/d", "/s", "/c", shim.DeferredCommand(withRoot: true, Environment.ProcessId));
+        shim.StartDeferredRemoval().Should().BeFalse("план одноразовый");
     }
 
     [Fact]
-    public void Windows_не_запустилась_отложенная_команда_шим_снимается_сразу()
+    public void Windows_отложенная_команда_ждёт_выхода_агента_по_PID_с_потолком()
+    {
+        var shim = new WindowsCmdShim(_install.Layout, new MemoryUserPath(null));
+
+        var command = shim.DeferredCommand(withRoot: false, waitForPid: 4321);
+
+        command.Should().Contain("Wait-Process -Id 4321 -Timeout 60 ")
+            .And.Contain("|| ping -n 4 127.0.0.1 >nul & ", "без PowerShell — прежняя пауза")
+            .And.EndWith($"del /f /q \"{shim.Location}\" & rmdir \"{shim.BinDirectory}\" 2>nul");
+        command.IndexOf("Wait-Process", StringComparison.Ordinal).Should().BeLessThan(command.IndexOf("del ", StringComparison.Ordinal));
+        shim.DeferredCommand(withRoot: true, 4321).Should().EndWith($"rmdir /s /q \"{_install.Root}\"");
+    }
+
+    [Fact]
+    public void Windows_процент_в_пути_корня_отказ_от_отложенного_удаления_с_понятным_текстом()
+    {
+        var root = Path.Combine(_install.Root, "100%USERNAME%");
+        var layout = new ClaudeHomeServer.DeviceAgent.Supervision.AgentLayout(root);
+        var starter = new FakeDetachedStarter(DetachedStartStatus.Started);
+        var shim = new WindowsCmdShim(layout, new MemoryUserPath(null), starter, runningUnderShim: () => true);
+        shim.Install();
+
+        var act = () => shim.Remove();
+
+        act.Should().Throw<IOException>().WithMessage("*«%»*");
+        File.Exists(shim.Location).Should().BeTrue();
+        shim.StartDeferredRemoval().Should().BeFalse();
+        starter.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Windows_не_запустилась_отложенная_команда_uninstall_узнаёт_об_этом()
     {
         var shim = new WindowsCmdShim(_install.Layout, new MemoryUserPath(null),
             new FakeDetachedStarter(DetachedStartStatus.BreakawayDenied), runningUnderShim: () => true);
         shim.Install();
 
+        shim.Remove().Should().Be(ShimRemoval.Deferred);
+        shim.StartDeferredRemoval().Should().BeFalse();
+    }
+
+    [Fact]
+    public void Windows_не_под_шимом_снимается_сразу()
+    {
+        var starter = new FakeDetachedStarter(DetachedStartStatus.Started);
+        var shim = new WindowsCmdShim(_install.Layout, new MemoryUserPath(null), starter, runningUnderShim: () => false);
+        shim.Install();
+
         shim.Remove().Should().Be(ShimRemoval.Removed);
         File.Exists(shim.Location).Should().BeFalse();
+        shim.StartDeferredRemoval().Should().BeFalse();
     }
 
     [SkippableFact]
@@ -126,11 +170,15 @@ public sealed class CommandShimTests : IDisposable
         Skip.IfNot(OperatingSystem.IsWindows(), "cmd.exe — только Windows");
         var shim = new WindowsCmdShim(_install.Layout, new MemoryUserPath(null));
         shim.Install();
+        var cmd = Path.Combine(Environment.SystemDirectory, "cmd.exe");
+        // PID уже завершившегося процесса: Wait-Process сразу отпускает
+        using var gone = Process.Start(new ProcessStartInfo(cmd, "/d /c exit") { UseShellExecute = false })!;
+        await gone.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
 
-        var psi = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "cmd.exe"))
+        // Строка аргументов — той же функцией, что у настоящего отсоединённого запуска
+        var psi = new ProcessStartInfo(cmd)
         {
-            // Как WindowsCommandLine.Build: аргумент с кавычками целиком в кавычках, их снимает /s
-            Arguments = $"/d /s /c \"{shim.DeferredCommand(withRoot: false)}\"",
+            Arguments = WindowsCommandLine.Arguments(["/d", "/s", "/c", shim.DeferredCommand(withRoot: false, gone.Id)]),
             UseShellExecute = false,
         };
         using var process = Process.Start(psi)!;

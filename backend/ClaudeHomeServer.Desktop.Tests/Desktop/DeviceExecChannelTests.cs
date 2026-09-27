@@ -130,14 +130,21 @@ public class DeviceExecChannelTests : IDisposable
     }
 
     // Компонент рук (ADR-016 §7): архив ТОЙ ЖЕ версии, что у агента, — по каналу устройства
-    [Fact]
-    public async Task Ack_НесётКомпонентРукСвоейВерсииИRid()
+    // Реальная сборка шлёт InformationalVersion с хвостом +sha, а ключ каталога — канонический
+    [Theory]
+    [InlineData("")]
+    [InlineData("+abcdef12")]
+    public async Task Ack_НесётКомпонентРукСвоейВерсииИRid(string buildMetadata)
     {
         using var rel = new AgentReleaseFixture();
         rel.PublishWithHands();
         var rig = NewRig(releases: new AgentReleaseCatalog(rel.Config()));
 
-        var ack = await ConnectAsync(rig, AgentHello(RequiredCli) with { AgentVersion = AgentReleaseFixture.Version, Rid = "win-x64" });
+        var ack = await ConnectAsync(rig, AgentHello(RequiredCli) with
+        {
+            AgentVersion = AgentReleaseFixture.Version + buildMetadata,
+            Rid = "win-x64",
+        });
 
         ack.HandsArchivePath.Should().Be($"{AgentReleaseFixture.Version}/win-x64/{AgentReleaseFixture.HandsFile}");
         ack.HandsArchiveSha256.Should().Be(AgentReleaseFixture.Sha(rel.HandsBytes));

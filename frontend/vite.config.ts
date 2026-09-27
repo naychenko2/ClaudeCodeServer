@@ -81,6 +81,9 @@ export default defineConfig({
         // ПОСТАВЩИК singleton-инстанса (remotes пустые), для него eager штатен и
         // не мешает модулям-потребителям.
         react: { singleton: true, eager: true, requiredVersion: '^19.2.0' },
+        // Подпуть явно: модули берут jsx-runtime с import: false только у ядра
+        // (hostReactShared), а автодобавление подпутей — поведение версии плагина.
+        'react/jsx-runtime': { singleton: true, eager: true, requiredVersion: '^19.2.0' },
         'react-dom': { singleton: true, eager: true, requiredVersion: '^19.2.0' },
       },
     }),

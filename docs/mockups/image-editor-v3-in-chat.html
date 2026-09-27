@@ -1,0 +1,1273 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Редактор картинок v3 — работа с картинкой внутри чата проекта</title>
+<style>
+  /* Токены — копия theme.css (значения обеих тем), чтобы макет был самодостаточным */
+  /* Токены — копия theme.css (значения обеих тем), чтобы макет был самодостаточным */
+  :root {
+    --c-bg-main:     #F4F0E8;
+    --c-bg-panel:    #EDE7DC;
+    --c-bg-card:     #FBF8F2;
+    --c-bg-white:    #FFFFFF;
+    --c-bg-selected: #E8E1D4;
+    --c-bg-inset:    #E7E0D2;
+    --c-text-heading:   #2A251F;
+    --c-text-primary:   #39332B;
+    --c-text-secondary: #756B5E;
+    --c-text-muted:     #9A8F7E;
+    --c-on-accent:      #FBF8F2;
+    --c-on-dark:        #FFFFFF;
+    --c-accent:       #D97757;
+    --c-accent-light: #F4ECE1;
+    --c-accent-muted: #EAD3C5;
+    --c-border:       #E0D7C8;
+    --c-border-light: #E8E1D4;
+    --c-divider:      #DDD4C4;
+    --c-dashed:       #D0C6B4;
+    --c-track:        #D8CFBE;
+    --c-overlay: rgba(23, 19, 15, 0.42);
+    --c-media-scrim: rgba(0, 0, 0, 0.55);
+    --c-success:      #5E8B4E;
+    --c-success-bg:   #E9F1E8;
+    --c-success-text: #3F7A4F;
+    --c-warning:      #C9923E;
+    --c-warning-bg:   #FBEFE0;
+    --c-warning-text: #8A6A28;
+    --c-danger:        #B4452F;
+    --c-danger-bg:     #FBF1EC;
+    --c-danger-text:   #B4452F;
+    --c-danger-border: #F5C6BF;
+    --c-info:    #3E7CA6;
+    --c-info-bg: #E7EFF5;
+    --shadow-focus:    0 0 0 3px rgba(217, 119, 87, 0.14);
+    --shadow-card:     0 2px 8px rgba(60, 50, 35, 0.05);
+    --shadow-island:   0 1px 2px rgba(60, 50, 35, 0.06), 0 6px 20px rgba(60, 50, 35, 0.10);
+    --shadow-dropdown: 0 8px 28px rgba(60, 50, 35, 0.16);
+    --shadow-modal:    0 24px 60px rgba(23, 19, 15, 0.40);
+    --shadow-sheet:    0 -8px 40px rgba(23, 19, 15, 0.22);
+    --shadow-button:   0 4px 14px rgba(217, 119, 87, 0.30);
+    --c-skeleton: #E4DCCC;
+    --canvas-ink: 42, 37, 31;
+  }
+  [data-theme="dark"] {
+    --c-bg-main:     #201C18;
+    --c-bg-panel:    #272320;
+    --c-bg-card:     #2E2A25;
+    --c-bg-white:    #2E2A25;
+    --c-bg-selected: #38332D;
+    --c-bg-inset:    #1B1815;
+    --c-text-heading:   #F2ECE1;
+    --c-text-primary:   #EDE6DB;
+    --c-text-secondary: #B3A897;
+    --c-text-muted:     #8A8072;
+    --c-on-accent:      #201C18;
+    --c-accent:       #E38A6A;
+    --c-accent-light: #3A2E27;
+    --c-accent-muted: #4A362C;
+    --c-border:       #3D3830;
+    --c-border-light: #34302A;
+    --c-divider:      #454037;
+    --c-dashed:       #4A443B;
+    --c-track:        #454037;
+    --c-overlay: rgba(0, 0, 0, 0.58);
+    --c-success:      #7CB86A;
+    --c-success-bg:   #1F2B1C;
+    --c-success-text: #8FC47E;
+    --c-warning:      #E0A955;
+    --c-warning-bg:   #322717;
+    --c-warning-text: #E7B96E;
+    --c-danger:        #E8785E;
+    --c-danger-bg:     #331F1B;
+    --c-danger-text:   #EE8A72;
+    --c-danger-border: #5A302A;
+    --c-info:    #5FA0CC;
+    --c-info-bg: #1E2A33;
+    --shadow-focus:    0 0 0 3px rgba(227, 138, 106, 0.24);
+    --shadow-card:     0 2px 10px rgba(0, 0, 0, 0.35);
+    --shadow-island:   0 1px 2px rgba(0,0,0,.30), 0 8px 24px rgba(0,0,0,.45);
+    --shadow-dropdown: 0 10px 32px rgba(0, 0, 0, 0.5);
+    --shadow-modal:    0 24px 60px rgba(0, 0, 0, 0.6);
+    --shadow-sheet:    0 -10px 46px rgba(0, 0, 0, 0.55);
+    --shadow-button:   0 4px 16px rgba(227, 138, 106, 0.34);
+    --c-skeleton: #38332D;
+    --canvas-ink: 237, 230, 219;
+  }
+
+
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 18px 16px 60px; background: var(--c-bg-main); color: var(--c-text-primary);
+    font-family: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; }
+  button, textarea, input, select { font: inherit; color: inherit; }
+  .page { max-width: 1540px; margin: 0 auto; }
+  h1.doc { font-family: 'PT Serif', Georgia, serif; font-size: 26px; color: var(--c-text-heading); margin: 0 0 6px; }
+  p.lead { color: var(--c-text-secondary); margin: 0 0 10px; max-width: 980px; line-height: 1.55; }
+  code { font-family: 'JetBrains Mono', monospace; font-size: 12px; background: var(--c-bg-selected); border-radius: 4px; padding: 0 4px; }
+  .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+
+  /* Демо-управление макетом (не часть продукта) */
+  .demo { position: sticky; top: 0; z-index: 60; background: var(--c-bg-main); display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; padding: 8px 0 12px; }
+  .demo .grp { display: flex; gap: 4px; align-items: center; }
+  .demo .lbl { font-size: 11px; color: var(--c-text-muted); margin-right: 2px; }
+  .tbtn { font-size: 12px; cursor: pointer; border: 1px solid var(--c-border); background: var(--c-bg-card); border-radius: 10px; padding: 5px 10px; }
+  .tbtn[aria-pressed="true"] { background: var(--c-accent); color: var(--c-on-accent); border-color: transparent; }
+
+  .frame { background: var(--c-bg-main); border: 1px solid var(--c-border); border-radius: 14px; padding: 10px; box-shadow: var(--shadow-card); position: relative; overflow-x: auto; }
+  .app { position: relative; margin: 0 auto; height: 840px; display: flex; gap: 8px; }
+  .app.mobile { width: 390px; height: 820px; border: 1px solid var(--c-border); border-radius: 22px; overflow: hidden; gap: 0; }
+  .caption { font-size: 11px; color: var(--c-text-muted); margin: 8px 0 0; }
+
+  /* Рельсы панелей */
+  .rail { width: 44px; flex: 0 0 44px; display: flex; flex-direction: column; align-items: center; gap: 4px; padding-top: 6px; }
+  .ri { position: relative; width: 36px; height: 36px; border-radius: 10px; border: none; background: transparent; color: var(--c-text-muted); display: grid; place-items: center; cursor: pointer; padding: 0; }
+  .ri:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .ri.on { background: var(--c-accent-light); color: var(--c-accent); }
+  .ri .new { position: absolute; top: 2px; right: 2px; width: 7px; height: 7px; border-radius: 50%; background: var(--c-accent); }
+  .ri .tip { display: none; }
+  .zone { display: flex; gap: 8px; min-width: 0; flex: 0 1 auto; }
+  .zone.drop { outline: 2px dashed var(--c-accent-muted); outline-offset: 2px; border-radius: 14px; min-width: 60px; }
+
+  /* Остров и панель */
+  .island { background: var(--c-bg-panel); border: 1px solid var(--c-border-light); border-radius: 14px; box-shadow: var(--shadow-island);
+    display: flex; flex-direction: column; overflow: hidden; min-height: 0; min-width: 0; position: relative; }
+  .island.main { flex: 1; min-width: 380px; }
+  .app.mobile .island { border-radius: 0; border: none; box-shadow: none; min-width: 0; }
+  .ph { height: 42px; flex: 0 0 42px; display: flex; align-items: center; gap: 7px; padding: 0 6px 0 10px; border-bottom: 1px solid var(--c-border-light); background: var(--c-bg-inset); }
+  .ph[draggable="true"] { cursor: grab; }
+  .ph .ttl { font-size: 13px; font-weight: 600; color: var(--c-text-heading); white-space: nowrap; }
+  .ph .sub { font-size: 11px; color: var(--c-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .ph .grip { color: var(--c-text-muted); opacity: .6; font-size: 12px; letter-spacing: -2px; }
+  .pbody { flex: 1; overflow: auto; min-height: 0; padding: 10px; }
+  .panel.over { box-shadow: 0 0 0 2px var(--c-accent); }
+  .grow { flex: 1; min-width: 0; }
+
+  /* Кнопки */
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: 10px;
+    border: 1px solid var(--c-border); background: var(--c-bg-card); cursor: pointer; font-size: 13px; white-space: nowrap; }
+  .btn:hover { background: var(--c-bg-selected); }
+  .btn:focus-visible, .ib:focus-visible, .chip:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+  .btn.pri { background: var(--c-accent); color: var(--c-on-accent); border-color: transparent; box-shadow: var(--shadow-button); font-weight: 600; }
+  .btn.ghost { background: transparent; border-color: transparent; color: var(--c-text-secondary); }
+  .btn.ghost:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .btn.danger { color: var(--c-danger-text); }
+  .btn.sm { height: 28px; padding: 0 9px; font-size: 12px; border-radius: 8px; }
+  .btn.xs { height: 24px; padding: 0 8px; font-size: 11px; border-radius: 7px; }
+  .btn[disabled] { opacity: .5; cursor: default; box-shadow: none; }
+  .ib { width: 30px; height: 30px; border-radius: 8px; border: none; background: transparent; color: var(--c-text-muted); display: inline-grid; place-items: center; cursor: pointer; flex: 0 0 auto; padding: 0; }
+  .ib:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .ib.on { background: var(--c-accent-light); color: var(--c-accent); }
+  .ib.sm { width: 24px; height: 24px; }
+  svg.i { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+  svg.i.s { width: 13px; height: 13px; }
+  .chip { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; border-radius: 999px; border: 1px solid var(--c-border);
+    background: var(--c-bg-card); cursor: pointer; font-size: 12px; white-space: nowrap; max-width: 100%; }
+  .chip:hover { border-color: var(--c-accent-muted); }
+  .chip.acc { border-color: var(--c-accent); color: var(--c-accent); background: var(--c-accent-light); }
+  .chip.dash { border-style: dashed; }
+  .chip .x { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; color: var(--c-text-muted); }
+  .chip .x:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .chip .th { width: 18px; height: 18px; border-radius: 5px; overflow: hidden; flex: 0 0 18px; }
+  .chip .th svg { width: 100%; height: 100%; display: block; }
+  .seg { display: inline-flex; background: var(--c-bg-inset); border-radius: 10px; padding: 2px; gap: 2px; }
+  .seg button { border: none; background: transparent; color: var(--c-text-secondary); height: 26px; padding: 0 10px; border-radius: 8px; cursor: pointer; font-size: 12px; display: inline-flex; align-items: center; gap: 5px; }
+  .seg button.on { background: var(--c-bg-card); color: var(--c-text-heading); box-shadow: var(--shadow-card); font-weight: 600; }
+  .seg.acc button.on { color: var(--c-accent); }
+  .muted { color: var(--c-text-muted); }
+  .sec { color: var(--c-text-secondary); }
+  .hint { font-size: 11.5px; color: var(--c-text-muted); line-height: 1.45; }
+  .lbl2 { font-size: 11px; font-weight: 600; color: var(--c-text-muted); text-transform: uppercase; letter-spacing: .04em; margin: 12px 0 6px; }
+  input.fld, textarea.fld { width: 100%; border: 1.5px solid var(--c-border); background: var(--c-bg-white); border-radius: 8px; padding: 7px 9px; outline: none; }
+  input.fld:focus, textarea.fld:focus { border-color: var(--c-accent); box-shadow: var(--shadow-focus); }
+
+  /* Лента чата */
+  .feed { flex: 1; overflow: auto; padding: 14px 18px 8px; min-height: 0; display: flex; flex-direction: column; gap: 12px; }
+  .msg { max-width: 640px; line-height: 1.55; }
+  .msg.user { align-self: flex-end; background: var(--c-bg-card); border: 1px solid var(--c-border-light); border-radius: 14px 14px 4px 14px; padding: 8px 12px; max-width: 480px; }
+  .msg.bot .who { font-size: 11px; font-weight: 600; color: var(--c-accent); margin-bottom: 2px; }
+  .quiet { align-self: center; font-size: 11.5px; color: var(--c-text-muted); text-align: center; max-width: 600px; line-height: 1.45; }
+  .quiet b { color: var(--c-text-secondary); font-weight: 600; }
+  .typing { color: var(--c-text-muted); font-size: 12px; }
+
+  /* Карточка-стопка картинки (нить картинки) */
+  .tcard { position: relative; max-width: 460px; background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 12px; padding: 8px; margin-top: 6px; }
+  .tcard.focus { border-color: var(--c-accent); box-shadow: 0 0 0 3px var(--c-accent-light); }
+  .tcard .stack { position: relative; }
+  .tcard .stack.many::before, .tcard .stack.many::after { content: ''; position: absolute; left: 8px; right: 8px; top: -4px; height: 8px; border-radius: 8px 8px 0 0; border: 1px solid var(--c-border); border-bottom: none; background: var(--c-bg-panel); z-index: 0; }
+  .tcard .stack.many::after { left: 16px; right: 16px; top: -8px; opacity: .7; }
+  .tcard .pic { position: relative; z-index: 1; border-radius: 8px; overflow: hidden; border: 1px solid var(--c-border-light); cursor: pointer; aspect-ratio: 16 / 10; background: var(--c-bg-inset); }
+  .pic svg.img, .thumb svg.img, .cw svg.img { width: 100%; height: 100%; display: block; }
+  .tcard .th-head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; font-size: 12px; min-width: 0; }
+  .tcard .fname { font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: var(--c-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .badge { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 6px; font-size: 10.5px; font-weight: 600; white-space: nowrap; }
+  .badge.ok { background: var(--c-success-bg); color: var(--c-success-text); }
+  .badge.draft { background: var(--c-warning-bg); color: var(--c-warning-text); }
+  .badge.acc { background: var(--c-accent-light); color: var(--c-accent); }
+  .badge.info { background: var(--c-info-bg); color: var(--c-info); }
+  .stepnav { display: inline-flex; align-items: center; gap: 2px; font-size: 11.5px; color: var(--c-text-secondary); white-space: nowrap; }
+  .foot { display: flex; align-items: center; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+  .foot .meta { flex: 1; min-width: 120px; font-size: 10.5px; color: var(--c-text-muted); font-family: 'JetBrains Mono', monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pick { position: absolute; inset: 0; z-index: 2; background: var(--c-media-scrim); display: flex; align-items: center; justify-content: center; gap: 8px; border-radius: 8px; }
+  .prog { height: 4px; border-radius: 4px; background: var(--c-track); overflow: hidden; margin: 6px 0 2px; }
+  .prog > i { display: block; height: 100%; background: var(--c-accent); transition: width .2s; }
+  .vars { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 6px; }
+  .thumb { position: relative; aspect-ratio: 16 / 10; border-radius: 6px; overflow: hidden; border: 2px solid transparent; cursor: pointer; background: var(--c-bg-inset); }
+  .thumb.on { border-color: var(--c-accent); }
+  .thumb .n { position: absolute; left: 4px; top: 3px; font-size: 10px; font-weight: 700; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.6); }
+  .skel { background: var(--c-skeleton); animation: pulse 1.1s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .55; } }
+
+  /* Карточка запуска агентом */
+  .launch { max-width: 520px; border: 1px solid var(--c-border); border-radius: 12px; background: var(--c-bg-card); padding: 10px 12px; margin-top: 6px; }
+  .launch .t { display: flex; align-items: center; gap: 6px; font-weight: 600; color: var(--c-text-heading); font-size: 12.5px; }
+  .launch .changed { font-size: 11.5px; color: var(--c-text-secondary); margin: 3px 0 6px; }
+  .launch .prompt { font-size: 12.5px; line-height: 1.5; background: var(--c-bg-inset); border-radius: 8px; padding: 8px 10px; white-space: pre-wrap; }
+  .by { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; font-weight: 600; color: var(--c-accent); }
+
+  /* Полоса «Картинки» над композером */
+  .ibar { margin: 6px 14px 6px; background: var(--c-bg-panel); border: 1px solid var(--c-border); border-radius: 16px; padding: 7px 8px 7px 10px; display: flex; flex-direction: column; gap: 6px; }
+  .ibar .row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+  .ibar .ttl { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; color: var(--c-text-heading); }
+  .ibar.mini { flex-direction: row; align-items: center; height: 30px; padding: 0 6px 0 10px; border-radius: 10px; cursor: pointer; gap: 7px; }
+  .ibar.mini .sum { font-size: 11.5px; color: var(--c-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }
+  .dd { position: relative; display: inline-flex; }
+  .ddb { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 8px; border-radius: 8px; border: 1px solid var(--c-border); background: var(--c-bg-white); cursor: pointer; font-size: 12px; white-space: nowrap; }
+  .ddb.agent { border-color: var(--c-accent); }
+  .menu { position: absolute; z-index: 40; min-width: 240px; background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 10px; box-shadow: var(--shadow-dropdown); padding: 4px; }
+  .menu.up { bottom: calc(100% + 4px); left: 0; }
+  .menu.down { top: calc(100% + 4px); left: 0; }
+  .menu.right { right: 0; left: auto; }
+  .mi { display: flex; align-items: flex-start; gap: 8px; width: 100%; text-align: left; border: none; background: transparent; padding: 6px 8px; border-radius: 7px; cursor: pointer; font-size: 12.5px; }
+  .mi:hover { background: var(--c-bg-selected); }
+  .mi.on { color: var(--c-accent); }
+  .mi[disabled] { opacity: .45; cursor: default; }
+  .mi small { display: block; font-size: 11px; color: var(--c-text-muted); }
+  .count { display: inline-flex; align-items: center; border: 1px solid var(--c-border); border-radius: 8px; height: 26px; background: var(--c-bg-white); }
+  .count button { border: none; background: transparent; width: 22px; height: 24px; cursor: pointer; color: var(--c-text-secondary); }
+  .count span { min-width: 16px; text-align: center; font-size: 12px; font-weight: 600; }
+  .price { font-size: 11.5px; color: var(--c-text-secondary); white-space: nowrap; }
+  .warn { font-size: 11.5px; color: var(--c-warning-text); background: var(--c-warning-bg); border-radius: 8px; padding: 5px 8px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+
+  /* Композер */
+  .composer { margin: 0 14px 12px; background: var(--c-bg-white); border: 1px solid var(--c-border); border-radius: 16px; padding: 8px 8px 6px 12px; box-shadow: var(--shadow-card); }
+  .composer.img { border-color: var(--c-accent); box-shadow: var(--shadow-focus); }
+  .composer .ptag { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--c-text-muted); margin-bottom: 3px; flex-wrap: wrap; }
+  .composer textarea { width: 100%; border: none; outline: none; resize: none; background: transparent; min-height: 40px; max-height: 200px; line-height: 1.5; font-size: 13.5px; }
+  .composer .atts { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 4px; }
+  .composer .bar { display: flex; align-items: center; gap: 6px; }
+  .send { width: 32px; height: 32px; border-radius: 10px; border: none; background: var(--c-accent); color: var(--c-on-accent); display: grid; place-items: center; cursor: pointer; }
+
+  /* Холст (панель) */
+  .cv-tools { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; padding: 6px 8px; border-bottom: 1px solid var(--c-border-light); }
+  .cv-tools .sep { width: 1px; height: 20px; background: var(--c-divider); margin: 0 4px; }
+  .board { position: relative; overflow: hidden; background: repeating-conic-gradient(var(--c-bg-inset) 0 25%, var(--c-bg-panel) 0 50%) 0 0 / 18px 18px; border-radius: 10px; border: 1px solid var(--c-border-light); height: 330px; touch-action: none; }
+  .board.hand { cursor: grab; } .board.draw { cursor: crosshair; }
+  .cw { position: absolute; left: 50%; top: 50%; width: 92%; aspect-ratio: 16 / 10; transform-origin: center; }
+  .cw .rot { width: 100%; height: 100%; }
+  .cw svg.ov { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .zoomlbl { font-size: 11px; color: var(--c-text-secondary); min-width: 38px; text-align: center; font-family: 'JetBrains Mono', monospace; }
+  .csec { margin-top: 10px; }
+  .csec .h { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--c-text-heading); margin-bottom: 6px; }
+  .qa { display: flex; flex-wrap: wrap; gap: 6px; }
+  .steps { display: flex; flex-direction: column; gap: 4px; }
+  .step { display: flex; align-items: center; gap: 8px; padding: 4px; border-radius: 8px; cursor: pointer; border: 1px solid transparent; }
+  .step:hover { background: var(--c-bg-selected); }
+  .step.on { border-color: var(--c-accent); background: var(--c-accent-light); }
+  .step .sth { width: 54px; height: 34px; border-radius: 5px; overflow: hidden; flex: 0 0 54px; }
+  .step .sth svg { width: 100%; height: 100%; display: block; }
+  .step .st { font-size: 12px; min-width: 0; flex: 1; }
+  .step .st small { display: block; color: var(--c-text-muted); font-size: 10.5px; }
+  .cmp { position: relative; aspect-ratio: 16 / 10; border-radius: 10px; overflow: hidden; border: 1px solid var(--c-border-light); }
+  .cmp .layer { position: absolute; inset: 0; }
+  .cmp .after { clip-path: inset(0 0 0 var(--cut)); }
+  .cmp .line { position: absolute; top: 0; bottom: 0; left: var(--cut); width: 2px; background: #fff; box-shadow: 0 0 4px rgba(0,0,0,.5); }
+  .cmp .tag { position: absolute; top: 6px; font-size: 10.5px; font-weight: 700; color: #fff; background: var(--c-media-scrim); padding: 1px 6px; border-radius: 5px; }
+  .empty { text-align: center; padding: 40px 16px; color: var(--c-text-muted); line-height: 1.55; }
+  .empty .big { font-size: 14px; color: var(--c-text-heading); font-weight: 600; margin-bottom: 4px; }
+
+  /* Персонажи */
+  .char { display: flex; align-items: center; gap: 9px; padding: 7px; border-radius: 10px; border: 1px solid var(--c-border-light); background: var(--c-bg-card); margin-bottom: 6px; }
+  .char.on { border-color: var(--c-accent); }
+  .ava { width: 38px; height: 38px; border-radius: 50%; overflow: hidden; flex: 0 0 38px; }
+  .ava svg { width: 100%; height: 100%; display: block; }
+  .photos { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; }
+  .photo { position: relative; aspect-ratio: 1; border-radius: 7px; overflow: hidden; }
+  .photo svg { width: 100%; height: 100%; display: block; }
+  .photo .del { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border-radius: 50%; border: none; background: var(--c-media-scrim); color: #fff; font-size: 11px; cursor: pointer; line-height: 1; }
+  .photo.add { border: 1.5px dashed var(--c-dashed); display: grid; place-items: center; color: var(--c-text-muted); cursor: pointer; background: transparent; }
+  .notice { display: flex; gap: 8px; background: var(--c-warning-bg); color: var(--c-warning-text); border-radius: 9px; padding: 8px 10px; font-size: 11.5px; line-height: 1.45; margin-top: 10px; }
+  label.cb { display: flex; gap: 8px; align-items: center; font-size: 12px; margin-top: 8px; cursor: pointer; }
+  label.cb input { accent-color: var(--c-accent); width: 15px; height: 15px; }
+
+  /* Файлы */
+  .tree .row { display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 4px; border-radius: 7px; position: relative; font-size: 12.5px; }
+  .tree .row:hover { background: var(--c-bg-selected); }
+  .tree .row.hl { background: var(--c-accent-light); }
+  .tree .row .more { opacity: 0; }
+  .tree .row:hover .more, .tree .row .more.open { opacity: 1; }
+  .newtag { font-size: 10px; color: var(--c-accent); font-weight: 700; }
+
+  /* Чаты */
+  .chat-it { display: flex; flex-direction: column; padding: 7px 9px; border-radius: 9px; cursor: pointer; margin-bottom: 2px; }
+  .chat-it:hover { background: var(--c-bg-selected); }
+  .chat-it.on { background: var(--c-bg-card); box-shadow: var(--shadow-card); }
+  .chat-it .n { font-size: 12.5px; color: var(--c-text-heading); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .chat-it small { font-size: 11px; color: var(--c-text-muted); }
+
+  /* Модалка, шторка, тост, превью панели */
+  .ovl { position: absolute; inset: 0; background: var(--c-overlay); z-index: 80; display: flex; align-items: center; justify-content: center; }
+  .modal { width: 460px; max-width: calc(100% - 24px); background: var(--c-bg-card); border-radius: 16px; box-shadow: var(--shadow-modal); padding: 16px 18px; }
+  .modal h3 { margin: 0 0 12px; font-size: 16px; color: var(--c-text-heading); }
+  .split { display: flex; border: 1.5px solid var(--c-border); border-radius: 8px; overflow: hidden; background: var(--c-bg-white); }
+  .split input { flex: 1; border: none; outline: none; padding: 8px 10px; background: transparent; min-width: 0; }
+  .split .ext { padding: 8px 10px; background: var(--c-bg-panel); color: var(--c-text-muted); border-left: 1px solid var(--c-border); font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+  .folders { border: 1px solid var(--c-border-light); border-radius: 9px; margin-top: 10px; max-height: 170px; overflow: auto; }
+  .folders .f { display: flex; align-items: center; gap: 7px; padding: 6px 9px; cursor: pointer; font-size: 12.5px; }
+  .folders .f:hover { background: var(--c-bg-selected); } .folders .f.on { background: var(--c-accent-light); color: var(--c-accent); }
+  .sheet { position: absolute; left: 0; right: 0; bottom: 0; height: 86%; background: var(--c-bg-panel); border-radius: 18px 18px 0 0; box-shadow: var(--shadow-sheet); z-index: 70; display: flex; flex-direction: column; }
+  .sheet .grab { width: 40px; height: 4px; border-radius: 4px; background: var(--c-track); margin: 7px auto 0; }
+  .toast { position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 95; background: var(--c-text-heading); color: var(--c-bg-main); border-radius: 12px; padding: 9px 12px; font-size: 12.5px; display: flex; gap: 10px; align-items: center; box-shadow: var(--shadow-dropdown); max-width: calc(100% - 24px); }
+  .toast button { background: transparent; border: none; color: var(--c-accent-muted); font-weight: 600; cursor: pointer; padding: 0; }
+  #peek { position: absolute; z-index: 75; width: 300px; max-height: 520px; box-shadow: var(--shadow-modal); display: none; }
+  .mhead { display: flex; align-items: center; gap: 4px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1 class="doc">Редактор картинок v3 — всё в основном чате проекта</h1>
+  <p class="lead">Отдельного окна редактора нет. Картинка живёт в ленте как карточка-стопка (нить картинки), крупно и с пометками — в боковой
+    панели <b>«Холст»</b>, персонажи — в панели <b>«Персонажи»</b>, настройки генерации — в полосе <b>«Картинки»</b> над композером,
+    промпт модели — в композере в режиме <b>«Картинка»</b>. Это макет: код продукта не менялся. Описание — <code>image-editor-v3-in-chat-proposal.md</code>.</p>
+  <div class="demo">
+    <div class="grp"><span class="lbl">Тема</span><button class="tbtn" data-demo="theme:light">Светлая</button><button class="tbtn" data-demo="theme:dark">Тёмная</button></div>
+    <div class="grp"><span class="lbl">Ширина</span><button class="tbtn" data-demo="w:desk">Десктоп</button><button class="tbtn" data-demo="w:mob">Телефон 390</button></div>
+    <div class="grp"><span class="lbl">Сценарий</span><button class="tbtn" data-demo="reset">Сначала</button></div>
+    <span class="lbl">Панели: наведите на значок в рельсе — превью с булавкой «Закрепить»; шапку открытой панели можно перетащить в другую зону.</span>
+  </div>
+  <div class="frame"><div class="app" id="app"></div><div id="peek" class="island"></div></div>
+  <p class="caption">Цены, модели и ответы агента условные. Персонаж, образцы, промпт и пометки уходят в запрос только к картинке в фокусе.</p>
+</div>
+<script>
+const IC = {
+  brush: '<path d="M9.06 11.9 17.1 3.86a2.1 2.1 0 0 1 3 3l-8.05 8.05"/><path d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-2.5 1.52-2 2.02 1.08 1.1 2.49 2.02 4 2.02 2.2 0 4-1.8 4-4.04a3.01 3.01 0 0 0-3-3.02z"/>',
+  arrow: '<path d="M5 19 19 5"/><path d="M9 5h10v10"/>',
+  rect: '<rect x="3.5" y="5.5" width="17" height="13" rx="1.5" stroke-dasharray="3 2.5"/>',
+  text: '<path d="M4 7V5h16v2"/><path d="M9 19h6"/><path d="M12 5v14"/>',
+  eraser: '<path d="m7 21-4.3-4.3a1 1 0 0 1 0-1.4l10-10a1 1 0 0 1 1.4 0l5.6 5.6a1 1 0 0 1 0 1.4L11 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/>',
+  trash: '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+  hand: '<path d="M18 11V6a2 2 0 0 0-4 0v5"/><path d="M14 10V4a2 2 0 0 0-4 0v6"/><path d="M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>', minus: '<path d="M5 12h14"/>',
+  fit: '<path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3"/>',
+  spark: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 17l.7 1.8 1.8.7-1.8.7L19 22l-.7-1.8-1.8-.7 1.8-.7z"/>',
+  hist: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/>',
+  img: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/>',
+  folder: '<path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.7-.9l-.8-1.2A2 2 0 0 0 7.9 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z"/>',
+  file: '<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/><path d="M14 2v6h6"/>',
+  upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/>',
+  x: '<path d="M18 6 6 18M6 6l12 12"/>', check: '<path d="M20 6 9 17l-5-5"/>',
+  down: '<path d="m6 9 6 6 6-6"/>', up: '<path d="m18 15-6-6-6 6"/>', back: '<path d="m15 18-6-6 6-6"/>',
+  pencil: '<path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/>',
+  more: '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
+  scissors: '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 8.1 15.9M14.5 14.5 20 20M8.1 8.1 12 12"/>',
+  expand: '<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>',
+  hd: '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M7 9v6M11 9v6M7 12h4M15 9v6h1.5a2.5 2.5 0 0 0 0-5H15"/>',
+  alert: '<path d="m21.7 18-8-14a2 2 0 0 0-3.5 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3z"/><path d="M12 9v4M12 17h.01"/>',
+  coin: '<circle cx="12" cy="12" r="9"/><path d="M14.5 9.5c-.5-1-1.5-1.5-2.5-1.5-1.7 0-3 1-3 2.2 0 2.8 6 1.4 6 4.3 0 1.2-1.3 2.3-3 2.3-1.1 0-2.2-.6-2.7-1.6M12 6.5v11"/>',
+  chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  layers: '<path d="m12 2 10 5-10 5L2 7z"/><path d="m2 17 10 5 10-5M2 12l10 5 10-5"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  userplus: '<circle cx="10" cy="8" r="4"/><path d="M2 21a8 8 0 0 1 13.3-6"/><path d="M19 15v6M16 18h6"/>',
+  mic: '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4"/>',
+  send: '<path d="M12 19V5M5 12l7-7 7 7"/>',
+  stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
+  zap: '<path d="M13 2 3 14h9l-1 8 10-12h-9z"/>',
+  sliders: '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>',
+  ext: '<path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
+  wrench: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
+  camera: '<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z"/><circle cx="12" cy="13" r="3"/>',
+  save: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/>',
+  chatplus: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M12 7v6M9 10h6"/>',
+};
+
+const ic = (n, s) => `<svg class="i${s ? ' s' : ''}" viewBox="0 0 24 24">${IC[n]}</svg>`;
+IC.pin = '<path d="M12 17v5M9 10.76V6h6v4.76l2 2.24v2H7v-2z"/><path d="M8 3h8"/>';
+IC.tree = '<path d="M3 5h6l2 2h10v12H3z"/>';
+IC.users = '<circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0M16 3.1a4 4 0 0 1 0 7.8M22 21a7 7 0 0 0-5-6.7"/>';
+IC.canvas = '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/>';
+IC.git = '<circle cx="6" cy="6" r="3"/><circle cx="18" cy="18" r="3"/><path d="M6 9v12M18 15V9a3 3 0 0 0-3-3h-4"/>';
+IC.list = '<path d="M9 6h12M9 12h12M9 18h12M4 6h.01M4 12h.01M4 18h.01"/>';
+IC.left = '<path d="m15 18-6-6 6-6"/>';
+IC.right = '<path d="m9 18 6-6-6-6"/>';
+IC.up = '<path d="m18 15-6-6-6 6"/>';
+IC.minus = '<path d="M5 12h14"/>';
+IC.rotate = '<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>';
+IC.flip = '<path d="M12 3v18M8 7 3 12l5 5M16 7l5 5-5 5"/>';
+IC.crop = '<path d="M6 2v14a2 2 0 0 0 2 2h14M18 22V8a2 2 0 0 0-2-2H2"/>';
+IC.target = '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/>';
+IC.undo = '<path d="M9 14 4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/>';
+IC.check = '<path d="M20 6 9 17l-5-5"/>';
+IC.chats = IC.chat;
+// ---------- Картинки сцены (это «фото», от темы не зависят) ----------
+let uid = 0;
+// d: { lamp: null|0..3, bg, painting, wide, evening: null|0..3 }
+function scene(d = {}) {
+  const k = 'g' + (++uid);
+  const bg = d.bg !== false, painting = d.painting !== false;
+  const vb = d.wide ? '-100 0 840 400' : '0 0 640 400';
+  const ev = d.evening;
+  const sky = ev == null ? ['#9ECBE8', '#E6F0F2'] : [['#2B3A67', '#E7976A'], ['#1E2748', '#8E6C8A'], ['#3B4E7A', '#F0B27A'], ['#232C4A', '#C98B6B']][ev % 4];
+  const lampColors = ['#C9A25A', '#F3E6CF', '#3C4A5A', '#B85C3C'];
+  const lamp = d.lamp == null ? '' : (() => {
+    const c = lampColors[d.lamp % 4];
+    const shade = d.lamp % 2 === 0
+      ? `<path d="M572 132 L628 132 L616 96 L584 96 Z" fill="${c}"/>`
+      : `<ellipse cx="600" cy="112" rx="30" ry="22" fill="${c}"/>`;
+    return `<circle cx="600" cy="150" r="95" fill="url(#${k}glow)"/>
+      <rect x="597" y="126" width="6" height="176" fill="#3A332B"/>
+      <ellipse cx="600" cy="303" rx="26" ry="6" fill="#3A332B"/>${shade}`;
+  })();
+  return `<svg class="img" viewBox="${vb}" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="${k}w" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#E9DCC6"/><stop offset="1" stop-color="#D8C6A8"/></linearGradient>
+    <linearGradient id="${k}f" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#9C7650"/><stop offset="1" stop-color="#7A5A3C"/></linearGradient>
+    <linearGradient id="${k}s" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${sky[0]}"/><stop offset="1" stop-color="${sky[1]}"/></linearGradient>
+    <radialGradient id="${k}glow"><stop offset="0" stop-color="#FFE3A8" stop-opacity=".75"/><stop offset="1" stop-color="#FFE3A8" stop-opacity="0"/></radialGradient>
+    <radialGradient id="${k}warm" cx=".3" cy=".6"><stop offset="0" stop-color="#FFB870" stop-opacity=".35"/><stop offset="1" stop-color="#FFB870" stop-opacity="0"/></radialGradient>
+    <pattern id="${k}ch" width="20" height="20" patternUnits="userSpaceOnUse"><rect width="20" height="20" fill="#FFFFFF"/><rect width="10" height="10" fill="#DDDDDD"/><rect x="10" y="10" width="10" height="10" fill="#DDDDDD"/></pattern>
+  </defs>
+  ${bg ? `<rect x="-100" y="0" width="840" height="300" fill="url(#${k}w)"/>
+    <rect x="-100" y="300" width="840" height="100" fill="url(#${k}f)"/>
+    <rect x="60" y="50" width="150" height="160" rx="4" fill="#F6F0E4"/>
+    <rect x="70" y="60" width="130" height="140" fill="url(#${k}s)"/>
+    <circle cx="170" cy="95" r="14" fill="${ev == null ? '#FFF6D6' : '#F8E7B0'}"/>
+    <path d="M70 170 Q110 140 150 165 T200 160 L200 200 L70 200Z" fill="${ev == null ? '#8DB38A' : '#3F5A4A'}"/>
+    <rect x="135" y="60" width="4" height="140" fill="#F6F0E4"/>
+    ${d.wide ? `<rect x="-80" y="80" width="60" height="120" rx="3" fill="#C7B08F"/><rect x="660" y="60" width="50" height="240" fill="#CDB896"/>` : ''}
+    ${painting ? `<rect x="300" y="70" width="120" height="84" rx="2" fill="#5B4A3A"/><rect x="306" y="76" width="108" height="72" fill="#C98B6B"/><circle cx="340" cy="104" r="12" fill="#F2C28B"/><path d="M306 148 L350 118 L380 138 L414 112 L414 148Z" fill="#7F5B45"/>` : ''}`
+  : `<rect x="-100" y="0" width="840" height="400" fill="url(#${k}ch)"/>`}
+  ${lamp}
+  <rect x="330" y="235" width="240" height="60" rx="16" fill="#6F8FA6"/>
+  <rect x="340" y="200" width="220" height="50" rx="14" fill="#86A5BA"/>
+  <rect x="318" y="228" width="30" height="72" rx="10" fill="#5E7E95"/>
+  <rect x="552" y="228" width="30" height="72" rx="10" fill="#5E7E95"/>
+  <rect x="340" y="295" width="8" height="18" fill="#3A332B"/><rect x="552" y="295" width="8" height="18" fill="#3A332B"/>
+  ${bg ? `<ellipse cx="200" cy="330" rx="70" ry="12" fill="#5C4330" opacity=".35"/>
+    <rect x="150" y="262" width="100" height="10" rx="3" fill="#4C3A2C"/>
+    <rect x="160" y="272" width="6" height="52" fill="#4C3A2C"/><rect x="234" y="272" width="6" height="52" fill="#4C3A2C"/>
+    ${d.cup === false ? '' : '<rect x="180" y="236" width="24" height="26" rx="4" fill="#E9E1D3"/>'}
+    <path d="M40 300 Q30 250 50 220 Q60 260 58 300Z M58 300 Q70 240 95 215 Q80 265 72 300Z" fill="#5E8B4E"/>
+    <rect x="36" y="296" width="44" height="34" rx="5" fill="#B7704E"/>` : ''}
+  ${ev != null ? `<rect x="-100" y="0" width="840" height="400" fill="#141A33" opacity="${[.3, .38, .24, .34][ev % 4]}"/><rect x="-100" y="0" width="840" height="400" fill="url(#${k}warm)"/>` : ''}
+</svg>`;
+}
+function sampleSVG(kind) {
+  if (kind === 'light') return `<svg viewBox="0 0 64 64"><defs><radialGradient id="sl${++uid}" cx=".5" cy=".4"><stop offset="0" stop-color="#FFE8B0"/><stop offset="1" stop-color="#B8733F"/></radialGradient></defs><rect width="64" height="64" fill="url(#sl${uid})"/><circle cx="32" cy="24" r="9" fill="#FFF6DA"/></svg>`;
+  if (kind === 'lamp') return `<svg viewBox="0 0 64 64"><rect width="64" height="64" fill="#EFE6D6"/><path d="M20 22h24l-5-12H25z" fill="#C9A25A"/><rect x="30.5" y="22" width="3" height="32" fill="#3A332B"/><ellipse cx="32" cy="55" rx="10" ry="3" fill="#3A332B"/></svg>`;
+  if (kind === 'logo') return `<svg viewBox="0 0 64 64"><rect width="64" height="64" fill="#2F3B48"/><circle cx="32" cy="32" r="16" fill="none" stroke="#D97757" stroke-width="6"/></svg>`;
+  if (kind === 'dusk') return `<svg viewBox="0 0 64 64"><defs><linearGradient id="sd${++uid}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2B3A67"/><stop offset="1" stop-color="#E7976A"/></linearGradient></defs><rect width="64" height="64" fill="url(#sd${uid})"/><path d="M0 48 L14 40 L26 46 L40 36 L64 44 L64 64 L0 64Z" fill="#1E2240"/></svg>`;
+  return `<svg viewBox="0 0 64 64"><rect width="64" height="64" fill="#9FB7C6"/><circle cx="24" cy="26" r="8" fill="#F3D7BD"/><circle cx="42" cy="28" r="8" fill="#E7C3A4"/><rect x="12" y="38" width="42" height="26" rx="10" fill="#5E7E95"/></svg>`;
+}
+// Лицо персонажа (фото из набора)
+const FACE_BG = ['#DCE6EE', '#EFE3CF', '#D9D2E6', '#E8D8C8', '#CFE0D2', '#F0D9C4', '#D6DEE8', '#E4E0D2', '#E9D4D4', '#D3E3E6'];
+function faceSVG(i = 0) {
+  return `<svg viewBox="0 0 64 64"><rect width="64" height="64" fill="${FACE_BG[i % 10]}"/>
+    <path d="M14 64 Q16 46 32 45 Q48 46 50 64Z" fill="#3F7F74"/><rect x="28" y="38" width="8" height="9" fill="#F1C7A5"/>
+    <path d="M17 30 Q16 11 32 10 Q48 11 47 30 L49 50 Q42 46 40 38 L24 38 Q22 46 15 50Z" fill="#7A3B22"/>
+    <ellipse cx="32" cy="29" rx="11" ry="13" fill="#F1C7A5"/>
+    <path d="M21 25 Q24 14 34 15 Q41 16 43 24 Q36 19 28 22 Q24 23 21 25Z" fill="#7A3B22"/>
+    <circle cx="28" cy="29" r="1.3" fill="#3A2A20"/><circle cx="36" cy="29" r="1.3" fill="#3A2A20"/></svg>`;
+}
+
+// ---------- Кафе с Аней (для генерации с нуля) ----------
+function cafe(d = {}) {
+  const k = 'c' + (++uid);
+  const walls = ['#E8D2B8', '#D6E0D4', '#E9D6D6', '#D8D6E6'][d.v % 4];
+  const shirt = ['#3F7F74', '#B85C3C', '#3E5C8A', '#8A6A28'][d.v % 4];
+  const hair = d.anya ? '#7A3B22' : ['#2E2520', '#C8A06A', '#5A3A2A', '#1F1B18'][d.v % 4];
+  return `<svg class="img" viewBox="0 0 640 400" xmlns="http://www.w3.org/2000/svg"><defs>
+    <linearGradient id="${k}s" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#A9CFE6"/><stop offset="1" stop-color="#EAF1EE"/></linearGradient></defs>
+    <rect width="640" height="400" fill="${walls}"/>
+    <rect x="380" y="40" width="210" height="190" rx="6" fill="#F6F0E4"/><rect x="392" y="52" width="186" height="166" fill="url(#${k}s)"/>
+    <rect x="483" y="52" width="4" height="166" fill="#F6F0E4"/>
+    <path d="M392 190 Q440 160 490 180 T578 172 L578 218 L392 218Z" fill="#8DB38A"/>
+    <rect x="0" y="300" width="640" height="100" fill="#8E6B4A"/>
+    <path d="M150 400 Q156 300 250 292 Q344 300 350 400Z" fill="${shirt}"/>
+    <rect x="236" y="250" width="28" height="30" fill="#F1C7A5"/>
+    <path d="M190 200 Q186 120 250 116 Q314 120 310 200 L318 290 Q290 276 284 250 L216 250 Q210 276 182 290Z" fill="${hair}"/>
+    <ellipse cx="250" cy="196" rx="44" ry="52" fill="#F1C7A5"/>
+    <path d="M206 180 Q214 136 256 138 Q290 142 296 176 Q268 156 236 166 Q220 170 206 180Z" fill="${hair}"/>
+    <circle cx="234" cy="198" r="4" fill="#3A2A20"/><circle cx="266" cy="198" r="4" fill="#3A2A20"/>
+    <path d="M238 222 Q250 230 262 222" stroke="#B0574A" stroke-width="3" fill="none"/>
+    <rect x="80" y="318" width="480" height="16" rx="5" fill="#5C4330"/>
+    ${d.cup === false ? '' : '<rect x="330" y="288" width="34" height="30" rx="6" fill="#F4EEE4"/><path d="M364 296 q14 2 0 16" stroke="#F4EEE4" stroke-width="5" fill="none"/><path d="M340 280 q4 -10 0 -18 M352 280 q4 -10 0 -18" stroke="#fff" stroke-width="2" opacity=".6" fill="none"/>'}
+    <circle cx="140" cy="300" r="14" fill="#E0A955"/>
+  </svg>`;
+}
+// Рендер картинки шага: сцена + правки без ИИ (поворот, отражение, обрезка)
+function pic(d) {
+  const inner = d.kind === 'cafe' ? cafe(d) : scene(d);
+  const t = [];
+  if (d.rot) t.push(`rotate(${d.rot}deg)`, d.rot % 180 ? 'scale(.62)' : '');
+  if (d.flip) t.push('scaleX(-1)');
+  if (d.crop) t.push('scale(1.18)');
+  return t.length ? `<div class="rot" style="transform:${t.join(' ')}">${inner}</div>` : inner;
+}
+
+// ---------- Данные ----------
+const PROVIDERS = [
+  { id: 'fal', name: 'fal', hint: 'оплата в долларах', unit: 'usd', models: [
+    { id: 'auto', name: 'Авто', hint: 'подберём под задачу', per: 0.08, mask: true },
+    { id: 'nb2', name: 'Nano Banana 2', hint: 'правка словами, держит лица', per: 0.08, mask: false },
+    { id: 'kontext', name: 'FLUX Kontext', hint: 'правка по описанию', per: 0.04, mask: false },
+    { id: 'fill', name: 'FLUX Fill', hint: 'точно по маске, остальное не трогает', per: 0.05, mask: true },
+  ] },
+  { id: 'hf', name: 'Higgsfield', hint: 'оплата в кредитах', unit: 'cr', models: [
+    { id: 'auto', name: 'Авто', hint: 'подберём под задачу', per: 2, mask: true },
+    { id: 'gpt25', name: 'GPT Image 2.5', hint: 'фото, текст на картинке, маска', per: 2, mask: true },
+    { id: 'soul', name: 'Soul', hint: 'портреты и люди', per: 3, mask: false },
+  ] },
+  { id: 'local', name: 'Локально', hint: 'своя видеокарта, бесплатно', unit: 'free', models: [
+    { id: 'qwen', name: 'Qwen-Image', hint: 'генерация и правка по образцам', per: 0, sec: 40, mask: true },
+  ] },
+];
+const ROLES = [['face', 'Персонаж — сохранить лицо', 'Лицо'], ['style', 'Стиль', 'Стиль'], ['object', 'Предмет', 'Предмет']];
+const TOOLS = [['hand', 'hand', 'Рука'], ['mask', 'brush', 'Кисть-маска'], ['rect', 'rect', 'Рамка'], ['arrow', 'arrow', 'Стрелка'], ['text', 'text', 'Подпись'], ['eraser', 'eraser', 'Ластик']];
+const QUICK = [['bg', 'Убрать фон'], ['upscale', 'Улучшить'], ['remove', 'Убрать отмеченное'], ['faces', 'Улучшить лица'], ['outpaint', 'Дорисовать за края']];
+const AGENT_PROMPT = 'Сделай вечер: за окном сумерки с тёплой полосой заката, в комнате приглушённый тёплый свет, мягкие длинные тени от дивана и столика. Картину, растение и диван не меняй, композицию и размер кадра сохрани.';
+
+let S;
+function initState() {
+  S = {
+    theme: S ? S.theme : 'light', mobile: S ? S.mobile : false,
+    zones: { left: ['chats'], right: ['files'] },
+    home: { chats: 'left', files: 'right', chars: 'right', canvas: 'right' },
+    peekKey: null, dragKey: null, sheet: null,
+    chat: 'main',
+    chats: {
+      main: { name: 'Вёрстка шапки сайта', sub: 'сейчас', msgs: [] },
+      texts: { name: 'Тексты для страницы «О студии»', sub: 'вчера', msgs: [{ who: 'user', text: 'Набросай три варианта заголовка.' }, { who: 'bot', text: 'Держите: «Студия, где живут идеи», «Сделано руками», «Тёплое место для работы».' }] },
+    },
+    threads: {}, tseq: 0, focus: null, pickOpen: null,
+    mode: 'chat', chatDraft: '', promptDraft: '', promptBy: null, myPrompt: '', sendMarks: true,
+    barOpen: true, provider: 'fal', model: 'auto', count: 3, keepSize: true, agentSet: null,
+    menu: null, samples: [{ kind: 'light', name: 'тёплый свет', role: 'style' }], roleEdit: null,
+    characters: [{ id: 'anya', name: 'Аня', desc: '25 лет, рыжие волосы до плеч, веснушки', photos: [0, 1, 2, 3, 4] }],
+    charOn: null, charForm: null, charDel: null,
+    tool: 'mask', brush: 26, zoom: 1, panX: 0, panY: 0, cvPop: null, slider: 50,
+    saveDlg: null, toast: null, toastAct: null, hlFile: null, fileMenu: null, saveFolder: null,
+    typing: false,
+    files: {
+      '': [{ n: 'README.md' }],
+      docs: [{ n: 'brand.md' }],
+      images: [{ n: 'hero.png', d: { lamp: 0 } }, { n: 'team-photo.jpg', d: { lamp: 3, painting: false } }],
+      'images/generated': [{ n: 'hero.v2.png', d: { lamp: 2 } }],
+      'images/blog': [],
+    },
+  };
+  const hero = newThread({ name: 'hero.png', folder: 'images', path: 'images/hero.png', d: { lamp: 0 }, ver: 'v1', meta: 'fal · Nano Banana 2 · $0.08' });
+  const about = newThread({ name: 'about.jpg', folder: 'images', path: null, d: { lamp: 1, painting: false, evening: null }, origin: 'Приложено с компьютера', meta: 'about.jpg · 1600×1000' });
+  S.chats.main.msgs = [
+    { who: 'user', text: 'Нарисуй картинку для шапки сайта: гостиная студии, тёплый дневной свет' },
+    { who: 'bot', text: 'Нарисовал через fal · Nano Banana 2 и сохранил как <span class="mono">images/hero.png</span>.', thread: hero },
+    { who: 'user', text: 'И вот фото с прошлой съёмки, пригодится', thread: about },
+    { who: 'bot', text: 'Принял. Чтобы поправить картинку, нажмите «Править» под ней — она откроется на панели «Холст». Или включите режим «Картинка» в композере.' },
+  ];
+}
+function newThread({ name, folder, path, d, ver, meta, origin, label }) {
+  const id = 't' + (++S.tseq);
+  S.threads[id] = { id, name, folder: folder || 'images', path, origin, meta: meta || '',
+    steps: [{ d, label: label || (origin ? 'Оригинал' : 'Первая версия'), ver: path ? (ver || 'v1') : null, file: path }],
+    cur: 0, marks: [], gen: null, variants: null, sel: 0 };
+  return id;
+}
+
+// ---------- Утилиты ----------
+const plural = (n, a, b, c) => { const m10 = n % 10, m100 = n % 100; return m10 === 1 && m100 !== 11 ? a : (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20) ? b : c); };
+const variantsWord = n => `${n} ${plural(n, 'вариант', 'варианта', 'вариантов')}`;
+const marksWord = n => `${n} ${plural(n, 'пометка', 'пометки', 'пометок')}`;
+const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const prov = () => PROVIDERS.find(p => p.id === S.provider);
+const model = () => prov().models.find(m => m.id === S.model) || prov().models[0];
+const money = (n, unit) => unit === 'usd' ? `$${n.toFixed(2)}` : `${n} ${plural(n, 'кредит', 'кредита', 'кредитов')}`;
+function priceText(n = S.count) {
+  const p = prov(), m = model();
+  if (p.unit === 'free') return `Бесплатно · ~${m.sec * n} с · очередь: 1`;
+  const v = m.per * n;
+  return `≈ ${money(p.unit === 'usd' ? Math.round(v * 100) / 100 : v, p.unit)}`;
+}
+const shortPrice = () => prov().unit === 'free' ? 'бесплатно' : priceText();
+const ft = () => S.focus ? S.threads[S.focus] : null;
+const curStep = t => t.steps[t.cur] || null;
+const fileLabel = t => ((curStep(t) && curStep(t).file) || t.path || t.name).split('/').pop();
+const maskBlock = () => { const t = ft(); return t && !model().mask && t.marks.some(m => m.type === 'mask'); };
+const charById = id => S.characters.find(c => c.id === id);
+const msgs = () => S.chats[S.chat].msgs;
+const isOpen = k => S.zones.left.includes(k) || S.zones.right.includes(k);
+function toast(text, act) { S.toast = text; S.toastAct = act || null; clearTimeout(toast.t); toast.t = setTimeout(() => { S.toast = null; render(); }, 4200); }
+function nextFree(folder, base) {
+  const names = (S.files[folder] || []).map(f => f.n);
+  let v = 2; while (names.includes(`${base}.v${v}.png`)) v++;
+  return `${base}.v${v}`;
+}
+const baseOf = n => n.replace(/\.(png|jpg|jpeg|webp)$/i, '').replace(/\.v\d+$/, '');
+
+// ---------- Отрисовка: полоса «Картинки» ----------
+function viewBar() {
+  const t = ft();
+  const p = prov(), m = model();
+  const ch = S.charOn && charById(S.charOn);
+  const show = S.mode === 'image' || t;
+  if (!show) return '';
+  if (!S.barOpen) {
+    const parts = [t ? `Работаем с: ${fileLabel(t)}` : 'Новая картинка', `${p.name} · ${m.name}`, variantsWord(S.count), shortPrice()];
+    if (ch) parts.push(ch.name);
+    return `<div class="ibar mini" data-act="barOpen" title="Развернуть полосу «Картинки»">${ic('img', 1)}<span class="sum">${esc(parts.join(' · '))}</span>${ic('down', 1)}</div>`;
+  }
+  const focusChip = t
+    ? `<span class="chip acc" title="Режим «Картинка» и агент работают с этой картинкой"><span class="th">${pic(curStep(t).d)}</span>Работаем с: <b>${esc(fileLabel(t))}</b>${t.steps.length > 1 ? ` · шаг ${t.cur + 1}` : ''}<span class="x" data-act="unfocus" title="Снять фокус — следующая генерация нарисует новую картинку">${ic('x', 1)}</span></span>`
+    : `<span class="chip dash">${ic('spark', 1)} Новая картинка${S.saveFolder ? ` · сохранять в <span class="mono">${esc(S.saveFolder)}/</span>` : ''}</span>`;
+  const provMenu = S.menu === 'prov' ? `<div class="menu up">${PROVIDERS.map(x => `<button class="mi ${x.id === S.provider ? 'on' : ''}" data-act="setProv:${x.id}"><span class="grow">${x.name}<small>${x.hint}</small></span>${x.id === S.provider ? ic('check', 1) : ''}</button>`).join('')}</div>` : '';
+  const modelMenu = S.menu === 'model' ? `<div class="menu up">${p.models.map(x => `<button class="mi ${x.id === m.id ? 'on' : ''}" data-act="setModel:${x.id}"><span class="grow">${x.name}<small>${x.hint}${x.mask ? ' · правит по маске' : ''}</small></span>${x.id === m.id ? ic('check', 1) : ''}</button>`).join('')}</div>` : '';
+  const agentModel = S.agentSet && S.agentSet.model;
+  const samples = S.samples.map((s, i) => `<span class="dd"><span class="chip" data-act="roleEdit:${i}" title="Роль образца"><span class="th">${sampleSVG(s.kind)}</span>${esc(s.name)} · <span class="muted">${ROLES.find(r => r[0] === s.role)[2]}</span></span>${S.roleEdit === i ? `<div class="menu up">${ROLES.map(r => `<button class="mi ${r[0] === s.role ? 'on' : ''}" data-act="setRole:${r[0]}">${r[1]}</button>`).join('')}<button class="mi" data-act="rmSample:${i}" style="color:var(--c-danger-text)">Убрать образец</button></div>` : ''}</span>`).join('');
+  const sampleMenu = S.menu === 'sample' ? `<div class="menu up"><button class="mi" data-act="addSample:pc"><span class="grow">С компьютера<small>PNG, JPG или WebP до 20 МБ</small></span></button><button class="mi" data-act="addSample:proj"><span class="grow">Из файлов проекта…<small>Любая картинка этого проекта</small></span></button></div>` : '';
+  return `<div class="ibar" data-testid="ibar">
+    <div class="row">
+      <span class="ttl">${ic('img', 1)} Картинки</span>
+      ${focusChip}
+      <span class="grow"></span>
+      <button class="ib sm" data-act="barClose" title="Свернуть в строку">${ic('up', 1)}</button>
+    </div>
+    <div class="row">
+      <span class="dd"><button class="ddb" data-act="menu:prov" data-testid="prov">${esc(p.name)} ${ic('down', 1)}</button>${provMenu}</span>
+      <span class="dd"><button class="ddb ${agentModel ? 'agent' : ''}" data-act="menu:model" data-testid="model" title="${agentModel ? 'Модель сменил Claude' : 'Модель'}">${agentModel ? '<span class="by">✦</span>' : ''}${esc(m.name)} ${ic('down', 1)}</button>${modelMenu}</span>
+      <span class="count" title="Число вариантов"><button data-act="cnt:-1">−</button><span>${S.count}</span><button data-act="cnt:1">+</button></span>
+      <span class="price">${variantsWord(S.count)} · ${priceText()}</span>
+      ${ch ? `<span class="chip acc" title="Подключённый персонаж — его фото уходят в запрос"><span class="th" style="border-radius:50%">${faceSVG(ch.photos[0])}</span>${esc(ch.name)}<span class="x" data-act="charOff" title="Отключить персонажа">${ic('x', 1)}</span></span>` : `<span class="chip dash" data-act="openChars" title="Открыть панель «Персонажи»">${ic('user', 1)} Персонаж</span>`}
+      ${samples}
+      <span class="dd"><span class="chip dash" data-act="menu:sample">${ic('plus', 1)} Образец</span>${sampleMenu}</span>
+      ${t ? `<label class="chip ${S.keepSize ? 'acc' : ''}" data-act="keepSize" title="Результат вернётся в размере оригинала">${ic(S.keepSize ? 'check' : 'expand', 1)} Размер оригинала</label>` : ''}
+    </div>
+    ${maskBlock() ? `<div class="warn">${ic('alert', 1)} ${esc(m.name)} не правит по маске — кисть на холсте она не увидит. <button class="btn xs" data-act="useFill">Взять ${S.provider === 'hf' ? 'GPT Image 2.5' : 'FLUX Fill'}</button></div>` : ''}
+  </div>`;
+}
+
+// ---------- Композер ----------
+function viewComposer() {
+  const img = S.mode === 'image';
+  const t = ft();
+  const marks = t ? t.marks.length : 0;
+  const ph = img ? (t ? `Что изменить в ${fileLabel(t)}? Отметьте место на холсте или просто опишите` : 'Опишите новую картинку — например, «Аня в кафе»') : 'Спросите Claude…';
+  const atts = [];
+  if (t && marks && S.sendMarks) atts.push(`<span class="chip dash" title="Пометки уйдут вместе со следующим сообщением"><span class="th">${pic(curStep(t).d)}</span>${esc(fileLabel(t))} · ${marksWord(marks)}<span class="x" data-act="noMarks" title="Не прикладывать пометки">${ic('x', 1)}</span></span>`);
+  const tag = img ? `<div class="ptag"><b style="color:var(--c-accent)">Промпт модели</b> · уходит прямо в ${esc(model().name)}, без агента
+      ${S.promptBy ? `· <span class="by">✦ написал Claude</span>${S.myPrompt ? ` <button class="btn xs ghost" data-act="restoreMine">Вернуть мой текст</button>` : ''}` : ''}</div>` : '';
+  const block = img && maskBlock();
+  return `<div class="composer ${img ? 'img' : ''}" data-testid="composer">
+    ${tag}
+    ${atts.length ? `<div class="atts">${atts.join('')}</div>` : ''}
+    <textarea id="ta" rows="${img ? 3 : 2}" placeholder="${esc(ph)}" data-testid="ta">${esc(img ? S.promptDraft : S.chatDraft)}</textarea>
+    <div class="bar">
+      <button class="ib" title="Приложить файл" data-act="toastStatic:Вложения — как в обычном композере">${ic('plus')}</button>
+      <div class="seg acc" data-testid="modeSeg"><button class="${img ? '' : 'on'}" data-act="mode:chat">${ic('chat', 1)} Чат</button><button class="${img ? 'on' : ''}" data-act="mode:image" data-testid="modeImage">${ic('img', 1)} Картинка</button></div>
+      ${img ? '' : `<button class="chip" data-act="toastStatic:Выбор собеседника — как сейчас">Claude ${ic('down', 1)}</button>`}
+      <span class="grow"></span>
+      ${img
+        ? `<button class="btn pri sm" data-act="send" data-testid="gen" ${block ? 'disabled' : ''}>${ic('spark', 1)} ${t ? 'Изменить' : 'Сгенерировать'} · ${prov().unit === 'free' ? 'бесплатно' : priceText()}</button>`
+        : `<button class="ib" title="Голос" data-act="toastStatic:Голосовой ввод — как сейчас">${ic('mic')}</button><button class="send" data-act="send" data-testid="send" title="Отправить">${ic('send', 1)}</button>`}
+    </div>
+  </div>`;
+}
+
+// ---------- Лента ----------
+function viewThreadCard(id) {
+  const t = S.threads[id];
+  const st = curStep(t);
+  const focus = S.focus === id;
+  if (!st) return `<div class="tcard" data-testid="card-${id}"><div class="th-head"><span class="fname">${esc(t.name)}</span><span class="badge info">новая картинка</span></div>${threadGen(t, id)}</div>`;
+  const saved = !!st.file;
+  const badge = saved ? `<span class="badge ok" title="Файл в проекте">${st.ver} · в проекте</span>` : `<span class="badge draft" title="Черновик: в проект ещё не записан">черновик</span>`;
+  const nav = t.steps.length > 1 ? `<span class="stepnav"><button class="ib sm" data-act="step:${id}:-1" ${t.cur === 0 ? 'disabled' : ''} title="Предыдущий шаг">${ic('left', 1)}</button>шаг ${t.cur + 1} из ${t.steps.length}<button class="ib sm" data-act="step:${id}:1" ${t.cur === t.steps.length - 1 ? 'disabled' : ''} title="Следующий шаг">${ic('right', 1)}</button></span>` : '';
+  const gen = threadGen(t, id);
+  return threadCardBody(t, id, st, focus, saved, badge, nav, gen);
+}
+function threadGen(t, id) {
+  let gen = '';
+  if (t.gen) {
+    gen = `<div class="hint" style="margin-top:6px">● Рисуем ${variantsWord(t.gen.n)}… · ${esc(t.gen.model)} · ${esc(t.gen.price)} <button class="btn xs ghost" data-act="cancel:${id}">Отменить</button></div><div class="prog"><i style="width:${t.gen.p}%"></i></div>
+      <div class="vars">${Array.from({ length: t.gen.n }, () => '<div class="thumb skel"></div>').join('')}</div>`;
+  } else if (t.variants) {
+    gen = `<div class="hint" style="margin-top:6px">✓ Готово · ${variantsWord(t.variants.list.length)} · ${esc(t.variants.price)}. Выберите — станет следующим шагом.</div>
+      <div class="vars" data-testid="vars">${t.variants.list.map((d, i) => `<div class="thumb ${t.sel === i ? 'on' : ''}" data-act="sel:${id}:${i}"><span class="n">${i + 1}</span>${pic(d)}</div>`).join('')}</div>
+      <div class="foot"><button class="btn sm pri" data-act="take:${id}" data-testid="take">Взять вариант ${t.sel + 1}</button><button class="btn sm" data-act="cmpOnCanvas:${id}">До / после на холсте</button><button class="btn sm ghost" data-act="dropVars:${id}">Не брать</button></div>`;
+  }
+  return gen;
+}
+function threadCardBody(t, id, st, focus, saved, badge, nav, gen) {
+  const pick = S.pickOpen === id && !focus ? `<div class="pick"><button class="btn sm pri" data-act="focus:${id}">${ic('target', 1)} Работать с этой</button><button class="btn sm" data-act="edit:${id}">Править на холсте</button></div>` : '';
+  const title = fileLabel(t);
+  return `<div class="tcard ${focus ? 'focus' : ''}" data-testid="card-${id}">
+    <div class="th-head">${focus ? `<span class="badge acc">${ic('target', 1)} в работе</span>` : ''}<span class="fname">${esc(title)}</span>${badge}<span class="grow"></span>${nav}</div>
+    <div class="stack ${t.steps.length > 1 ? 'many' : ''}"><div class="pic" data-act="picClick:${id}" data-testid="pic-${id}">${pic(st.d)}${pick}</div></div>
+    ${gen}
+    <div class="foot">
+      <span class="meta">${esc(st.label)}${t.origin ? ' · ' + esc(t.origin) : ''}${t.meta ? ' · ' + esc(t.meta) : ''}</span>
+      <button class="btn xs" data-act="edit:${id}" data-testid="edit-${id}">${ic('pencil', 1)} Править</button>
+      <button class="btn xs" data-act="toastStatic:Скачивание — как сейчас">↓ Скачать</button>
+      <button class="btn xs" data-act="saveQuick:${id}" title="Следующей свободной версией рядом с исходным файлом">${saved ? 'В проекте' : 'Сохранить в проект'}</button>
+      <button class="btn xs" data-act="saveAs:${id}" data-testid="saveAs-${id}">Сохранить как…</button>
+    </div>
+  </div>`;
+}
+function viewMsg(m) {
+  if (m.silent) return `<div class="msg bot">${viewThreadCard(m.thread)}</div>`;
+  if (m.who === 'quiet') return `<div class="quiet">${m.text}</div>`;
+  if (m.who === 'user') return `<div class="msg user">${m.text ? `<div>${esc(m.text)}</div>` : ''}${m.att ? `<div class="hint" style="margin-top:4px">📎 ${esc(m.att)}</div>` : ''}${m.thread ? viewThreadCard(m.thread) : ''}</div>`;
+  let launch = '';
+  if (m.launch) {
+    const L = m.launch;
+    launch = `<div class="launch" data-testid="launch"><div class="t"><span class="by">✦ Claude</span> запустил генерацию · ${esc(L.file)} · ${variantsWord(L.n)} · ${esc(L.price)}</div>
+      ${L.changed ? `<div class="changed">Изменил: ${esc(L.changed)}</div>` : ''}
+      <div class="prompt">${esc(L.prompt)}</div>
+      <div class="foot"><button class="btn xs" data-act="editPrompt" data-testid="editPrompt">${ic('pencil', 1)} Править промпт</button><button class="btn xs ghost" data-act="restoreMine" ${S.myPrompt ? '' : 'disabled'} title="${S.myPrompt ? 'Вернуть ваш прежний промпт в композер' : 'Своего промпта не было'}">Вернуть мой</button><span class="meta">варианты — в карточке картинки ниже</span></div></div>`;
+  }
+  return `<div class="msg bot"><div class="who">Claude</div><div>${m.text}</div>${launch}${m.thread ? viewThreadCard(m.thread) : ''}</div>`;
+}
+function viewChat() {
+  const c = S.chats[S.chat];
+  const body = c.msgs.length ? c.msgs.map(viewMsg).join('') : `<div class="empty"><div class="big">Новый чат</div>Напишите сообщение или включите режим «Картинка».</div>`;
+  const mobCanvas = S.mobile && isOpen('canvas');
+  return `<div class="island main">
+    <div class="ph">${S.mobile ? `<button class="ib" data-act="sheet:chats" title="Чаты">${ic('chat')}</button>` : ''}<span class="ttl" style="overflow:hidden;text-overflow:ellipsis">${esc(c.name)}</span><span class="sub">Проект «Сайт студии»</span><span class="grow"></span>
+      ${S.mobile ? `<button class="ib" data-act="sheet:files" title="Файлы">${ic('tree')}</button><button class="ib" data-act="sheet:chars" title="Персонажи" data-testid="mobChars">${ic('users')}</button><button class="ib ${mobCanvas ? 'on' : ''}" data-act="toggle:canvas" title="Холст">${ic('canvas')}</button>` : ''}</div>
+    ${mobCanvas ? `<div style="flex:1;overflow:auto;min-height:0;display:flex;flex-direction:column">${viewCanvas(true)}</div>` : `<div class="feed" id="feed">${body}${S.typing ? '<div class="typing">Claude печатает…</div>' : ''}</div>`}
+    ${viewBar()}
+    ${viewComposer()}
+  </div>`;
+}
+
+// ---------- Панели ----------
+const PANELS = {
+  chats: { title: 'Чаты', icon: 'chat', w: 210, min: 170 },
+  files: { title: 'Файлы', icon: 'tree', w: 240, min: 190 },
+  chars: { title: 'Персонажи', icon: 'users', w: 300, min: 230 },
+  canvas: { title: 'Холст', icon: 'canvas', w: 500, min: 360 },
+};
+function panelShell(k, body, sub) {
+  const P = PANELS[k];
+  return `<div class="island panel" style="width:${P.w}px;flex:0 1 ${P.w}px;min-width:${P.min}px" data-panel="${k}" data-testid="panel-${k}">
+    <div class="ph" draggable="true" data-drag="${k}" title="Перетащите шапку, чтобы перенести панель"><span class="grip">⋮⋮</span>${ic(P.icon, 1)}<span class="ttl">${P.title}</span>${sub ? `<span class="sub">${sub}</span>` : ''}<span class="grow"></span><button class="ib sm" data-act="toggle:${k}" title="Закрыть панель">${ic('x', 1)}</button></div>
+    <div class="pbody" ${k === 'canvas' ? 'style="padding:0"' : ''}>${body}</div></div>`;
+}
+function viewChatsBody() {
+  return `<button class="btn sm" style="width:100%;margin-bottom:8px" data-act="newChat">${ic('chatplus', 1)} Новый чат</button>` +
+    Object.entries(S.chats).map(([id, c]) => `<div class="chat-it ${S.chat === id ? 'on' : ''}" data-act="chat:${id}"><span class="n">${esc(c.name)}</span><small>${esc(c.sub)}${id === S.chat ? ' · последний активный' : ''}</small></div>`).join('') +
+    `<p class="hint" style="margin-top:12px">Отдельных чатов «картинка · правка» больше нет: картинка живёт нитью внутри обычного чата.</p>`;
+}
+function viewFilesBody() {
+  const rows = [];
+  const folders = Object.keys(S.files).sort();
+  for (const f of folders) {
+    const depth = f ? f.split('/').length : 0;
+    if (f) rows.push(row(f, f.split('/').pop() + '/', depth - 1, true));
+    for (const x of S.files[f]) rows.push(row(f ? `${f}/${x.n}` : x.n, x.n, depth, false, x));
+  }
+  function row(path, name, depth, folder, x) {
+    const isImg = !folder && x && x.d;
+    const menuOpen = S.fileMenu === path;
+    const menu = menuOpen ? `<div class="menu down right" style="top:26px">${folder
+      ? `<button class="mi" data-act="drawIn:${path}" data-testid="drawIn"><span class="grow">Нарисовать картинку<small>Чат с композером в режиме «Картинка», сохранять сюда</small></span></button><button class="mi" disabled>Новый файл…</button>`
+      : isImg ? `<button class="mi" data-act="editFile:${path}" data-testid="editFile"><span class="grow">Редактировать картинку<small>В последнем активном чате, картинка в фокусе, панель «Холст»</small></span></button><button class="mi" disabled>Переименовать…</button>`
+      : `<button class="mi" disabled>Открыть</button>`}</div>` : '';
+    return `<div class="row ${S.hlFile === path ? 'hl' : ''}" style="padding-left:${4 + depth * 14}px">${folder ? ic('folder', 1) : (isImg ? `<span class="th" style="width:18px;height:18px;border-radius:4px;overflow:hidden;display:inline-block">${pic(x.d)}</span>` : ic('file', 1))}
+      <span class="grow" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(name)}</span>${S.hlFile === path ? '<span class="newtag">новый</span>' : ''}
+      <button class="ib sm more ${menuOpen ? 'open' : ''}" data-act="fileMenu:${path}" title="Действия" data-testid="more-${path}">${ic('more', 1)}</button>${menu}</div>`;
+  }
+  return `<div class="tree">${rows.join('')}</div><p class="hint" style="margin-top:10px">«⋯» у картинки — «Редактировать картинку», у папки — «Нарисовать картинку».</p>`;
+}
+function viewCharsBody() {
+  const F = S.charForm;
+  if (F) {
+    const ok = F.name.trim() && F.photos.length >= 3 && F.photos.length <= 10 && F.consent;
+    return `<div class="mhead"><button class="ib sm" data-act="charCancel" title="Назад">${ic('left', 1)}</button><b>${F.id ? 'Персонаж: ' + esc(F.name || '') : 'Новый персонаж'}</b></div>
+      <div class="lbl2">Имя</div><input class="fld" data-in="charName" value="${esc(F.name)}" placeholder="Например, Маша" data-testid="charName">
+      <div class="lbl2">Описание</div><textarea class="fld" rows="2" data-in="charDesc" placeholder="Уходит в запрос вместе с фото: возраст, причёска, приметы">${esc(F.desc)}</textarea>
+      <div class="lbl2">Фото лица · ${F.photos.length} из 3–10</div>
+      <div class="photos">${F.photos.map((p, i) => `<div class="photo">${faceSVG(p)}<button class="del" data-act="charRmPhoto:${i}" title="Убрать фото">✕</button></div>`).join('')}${F.photos.length < 10 ? `<button class="photo add" data-act="charAddPhoto" title="Загрузить фото" data-testid="charAddPhoto">${ic('upload', 1)}</button>` : ''}</div>
+      <div class="notice">${ic('alert', 1)}<span>Фото будут отправляться выбранному сервису рисования при каждой генерации. У Higgsfield они попадут в общий аккаунт администратора. Загружайте фото чужих людей только с их согласия</span></div>
+      <label class="cb"><input type="checkbox" data-in="charConsent" ${F.consent ? 'checked' : ''} data-testid="charConsent"> Понимаю, у людей на фото есть согласие</label>
+      <div class="foot" style="margin-top:12px"><button class="btn sm pri" data-act="charSave" ${ok ? '' : 'disabled'} data-testid="charSave">Сохранить</button><button class="btn sm ghost" data-act="charCancel">Отмена</button>
+      ${F.id ? `<span class="grow"></span><button class="btn sm danger" data-act="charDelAsk:${F.id}">${ic('trash', 1)} Удалить</button>` : ''}</div>
+      ${!ok ? `<p class="hint">${!F.name.trim() ? 'Нужно имя. ' : ''}${F.photos.length < 3 ? 'Нужно минимум 3 фото. ' : ''}${!F.consent ? 'Отметьте согласие.' : ''}</p>` : ''}`;
+  }
+  const list = S.characters.map(c => `<div class="char ${S.charOn === c.id ? 'on' : ''}" data-testid="char-${c.id}"><span class="ava">${faceSVG(c.photos[0])}</span>
+    <span class="grow"><b>${esc(c.name)}</b><br><span class="hint">${c.photos.length} фото${S.charOn === c.id ? ' · подключён к работе' : ''}</span></span>
+    ${S.charOn === c.id ? `<button class="btn xs" data-act="charOff">Отключить</button>` : `<button class="btn xs pri" data-act="charOn:${c.id}" data-testid="charOn-${c.id}">Подключить к работе</button>`}
+    <button class="ib sm" data-act="charEdit:${c.id}" title="Изменить">${ic('pencil', 1)}</button></div>`).join('');
+  const del = S.charDel ? `<div class="warn" style="margin-top:8px">Удалить «${esc(charById(S.charDel).name)}»? Папка <span class="mono">characters/${esc(S.charDel)}/</span> с фото удалится из проекта.
+     <button class="btn xs danger" data-act="charDel">Удалить</button><button class="btn xs ghost" data-act="charDelNo">Отмена</button></div>` : '';
+  return `${list || '<div class="empty">Персонажей пока нет</div>'}${del}
+    <button class="btn sm" style="width:100%;margin-top:4px" data-act="charNew" data-testid="charNew">${ic('userplus', 1)} Новый персонаж</button>
+    <p class="hint" style="margin-top:10px">Персонажи — общие для всего проекта. Подключённый персонаж виден чипом в полосе «Картинки» и уходит в каждую генерацию, пока его не отключат.</p>`;
+}
+function marksSVG(t) {
+  return t.marks.map((m, i) => {
+    const a = `data-mi="${i}"`;
+    if (m.type === 'mask') return `<path ${a} d="${m.d}" stroke="rgba(217,119,87,.55)" stroke-width="${m.w}" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`;
+    if (m.type === 'rect') return `<rect ${a} x="${Math.min(m.x1, m.x2)}" y="${Math.min(m.y1, m.y2)}" width="${Math.abs(m.x2 - m.x1)}" height="${Math.abs(m.y2 - m.y1)}" fill="none" stroke="#D97757" stroke-width="3" stroke-dasharray="8 5"/>`;
+    if (m.type === 'arrow') { const ang = Math.atan2(m.y2 - m.y1, m.x2 - m.x1), h = 14; return `<g ${a} stroke="#D97757" stroke-width="4" fill="none" stroke-linecap="round"><line x1="${m.x1}" y1="${m.y1}" x2="${m.x2}" y2="${m.y2}"/><path d="M${m.x2 - h * Math.cos(ang - .5)} ${m.y2 - h * Math.sin(ang - .5)} L${m.x2} ${m.y2} L${m.x2 - h * Math.cos(ang + .5)} ${m.y2 - h * Math.sin(ang + .5)}"/></g>`; }
+    return `<text ${a} x="${m.x}" y="${m.y}" font-size="22" font-weight="700" fill="#D97757" stroke="#fff" stroke-width="4" paint-order="stroke">${esc(m.t)}</text>`;
+  }).join('');
+}
+function viewCanvas(mob) {
+  const t = ft();
+  if (!t) return `<div class="empty"><div class="big">Картинка не выбрана</div>Нажмите «Править» у картинки в ленте или «Редактировать картинку» в «Файлах». Холст показывает картинку в фокусе.</div>`;
+  const st = curStep(t);
+  const tools = TOOLS.map(([id, icn, name]) => `<button class="ib ${S.tool === id ? 'on' : ''}" data-act="tool:${id}" title="${name}" data-testid="tool-${id}">${ic(icn)}</button>`).join('');
+  let stage;
+  if (t.variants && S.cmp) {
+    const after = t.variants.list[t.sel];
+    stage = `<div style="padding:8px"><div class="cmp" style="--cut:${S.slider}%"><div class="layer">${pic(st.d)}</div><div class="layer after">${pic(after)}</div><div class="line"></div><span class="tag" style="left:6px">До</span><span class="tag" style="right:6px">После · вариант ${t.sel + 1}</span></div>
+      <input type="range" min="0" max="100" value="${S.slider}" data-in="slider" style="width:100%;accent-color:var(--c-accent)">
+      <div class="vars">${t.variants.list.map((d, i) => `<div class="thumb ${t.sel === i ? 'on' : ''}" data-act="sel:${t.id}:${i}"><span class="n">${i + 1}</span>${pic(d)}</div>`).join('')}</div>
+      <div class="foot"><button class="btn sm pri" data-act="take:${t.id}">Взять вариант ${t.sel + 1} за основу</button><button class="btn sm" data-act="cmpOff">Вернуться к правке</button></div></div>`;
+  } else {
+    stage = `<div class="cv-tools">${tools}<span class="sep"></span>
+        ${S.tool === 'mask' ? `<span class="hint">Кисть</span><input type="range" min="8" max="60" value="${S.brush}" data-in="brush" style="width:70px;accent-color:var(--c-accent)">` : ''}
+        <button class="ib" data-act="clearMarks" title="Стереть все пометки">${ic('trash')}</button>
+        <span class="grow"></span>
+        <button class="ib" data-act="zoom:-1" title="Отдалить">${ic('minus')}</button><span class="zoomlbl">${Math.round(S.zoom * 100)}%</span><button class="ib" data-act="zoom:1" title="Приблизить" data-testid="zoomIn">${ic('plus')}</button><button class="ib" data-act="fit" title="Вписать">${ic('fit')}</button></div>
+      <div style="padding:8px"><div class="board ${S.tool === 'hand' ? 'hand' : 'draw'}" id="board" style="${mob ? 'height:300px' : ''}" data-testid="board">
+        <div class="cw" style="transform:translate(calc(-50% + ${S.panX}px), calc(-50% + ${S.panY}px)) scale(${S.zoom})">${pic(st.d)}<svg class="ov" id="ov" viewBox="0 0 640 400" preserveAspectRatio="none">${marksSVG(t)}</svg></div></div>
+        <div class="hint" style="margin-top:4px">${t.marks.length ? `${marksWord(t.marks.length)} · уйдут со следующим сообщением из композера` : 'Колесо — масштаб, «Рука» — сдвиг. Пометки уходят со следующим сообщением.'}</div>
+        ${t.variants ? `<div class="warn" style="margin-top:6px">Готовы ${variantsWord(t.variants.list.length)} <button class="btn xs" data-act="cmpOn">Сравнить до / после</button></div>` : ''}</div>`;
+  }
+  const noAi = [['size', 'Размер'], ['compress', 'Сжатие'], ['crop', 'Обрезка'], ['rot', 'Поворот'], ['flip', 'Отражение']];
+  const pop = S.cvPop === 'size' ? `<div class="qa" style="margin-top:6px">${['1920×1200', '1280×800', '800×500'].map(x => `<button class="chip" data-act="noai:size:${x}">${x}</button>`).join('')}</div>`
+    : S.cvPop === 'compress' ? `<div class="qa" style="margin-top:6px">${['90%', '80%', '60%'].map(x => `<button class="chip" data-act="noai:compress:${x}">JPEG ${x}</button>`).join('')}</div>`
+    : S.cvPop === 'outpaint' ? `<div class="qa" style="margin-top:6px">${['16:9', '4:3', '1:1', '9:16'].map(x => `<button class="chip" data-act="quickGo:outpaint:${x}">${x}</button>`).join('')}</div>` : '';
+  const steps = t.steps.map((s, i) => `<div class="step ${t.cur === i ? 'on' : ''}" data-act="goStep:${t.id}:${i}" data-testid="step-${i}"><span class="sth">${pic(s.d)}</span><span class="st">${i + 1}. ${esc(s.label)}<small>${s.file ? `${s.ver} · ${esc(s.file)}` : 'черновик'}${t.cur === i ? ' · сейчас' : ''}</small></span>${t.cur !== i ? `<button class="btn xs ghost" data-act="goStep:${t.id}:${i}" title="Продолжить с этого шага">${ic('undo', 1)} Откатиться</button>` : ''}</div>`).join('');
+  return `<div style="${mob ? 'padding-bottom:6px' : ''}">
+    <div style="display:flex;align-items:center;gap:6px;padding:8px 10px 0"><span class="fname mono" style="font-size:12px">${esc(fileLabel(t))}</span>${st.file ? `<span class="badge ok">${st.ver} · в проекте</span>` : '<span class="badge draft">черновик</span>'}<span class="hint">шаг ${t.cur + 1} из ${t.steps.length}</span></div>
+    ${stage}
+    <div style="padding:0 10px 10px">
+      <div class="csec"><div class="h">${ic('zap', 1)} Быстрые действия <span class="hint" style="font-weight:400">· сразу, без промпта · ${variantsWord(S.count)} · ${shortPrice()}</span></div>
+        <div class="qa">${QUICK.map(([id, n]) => `<button class="btn sm" data-act="quick:${id}" data-testid="quick-${id}">${n}</button>`).join('')}</div></div>
+      <div class="csec"><div class="h">${ic('wrench', 1)} Без ИИ <span class="hint" style="font-weight:400">· бесплатно, мгновенно</span></div>
+        <div class="qa">${noAi.map(([id, n]) => `<button class="btn sm ${S.cvPop === id ? 'pri' : ''}" data-act="noaiOpen:${id}">${n}</button>`).join('')}</div>${pop}</div>
+      <div class="csec"><div class="h">${ic('hist', 1)} Шаги этой картинки <span class="hint" style="font-weight:400">· в ленте — одна карточка-стопка</span></div><div class="steps">${steps}</div></div>
+      <div class="foot" style="margin-top:10px"><button class="btn sm" data-act="saveQuick:${t.id}">${ic('save', 1)} Сохранить в проект</button><button class="btn sm" data-act="saveAs:${t.id}">Сохранить как…</button></div>
+    </div></div>`;
+}
+function panelBody(k) {
+  if (k === 'chats') return viewChatsBody();
+  if (k === 'files') return viewFilesBody();
+  if (k === 'chars') return viewCharsBody();
+  return viewCanvas(false);
+}
+function panelSub(k) {
+  if (k === 'canvas' && ft()) return esc(fileLabel(ft()));
+  if (k === 'chars') return `${S.characters.length}`;
+  return '';
+}
+function viewZone(z) {
+  return `<div class="zone" data-zone="${z}">${S.zones[z].map(k => panelShell(k, panelBody(k), panelSub(k))).join('')}</div>`;
+}
+function viewRail(z) {
+  const keys = Object.keys(PANELS).filter(k => S.home[k] === z);
+  const extra = z === 'right' ? `<button class="ri" data-act="toastStatic:«Изменения» — как сейчас" title="Изменения">${ic('git')}</button><button class="ri" data-act="toastStatic:«Задачи» — как сейчас" title="Задачи">${ic('list')}</button>` : '';
+  return `<div class="rail">${keys.map(k => `<button class="ri ${isOpen(k) ? 'on' : ''}" data-act="toggle:${k}" data-rail="${k}" title="${PANELS[k].title}" data-testid="rail-${k}">${ic(PANELS[k].icon)}${k === 'chars' || k === 'canvas' ? '<span class="new" title="Новая панель"></span>' : ''}</button>`).join('')}${extra}</div>`;
+}
+function viewSheet() {
+  if (!S.sheet) return '';
+  return `<div class="ovl" style="z-index:69" data-act="sheetClose"></div><div class="sheet" data-testid="sheet"><div class="grab"></div><div class="ph" style="background:transparent">${ic(PANELS[S.sheet].icon, 1)}<span class="ttl">${PANELS[S.sheet].title}</span><span class="grow"></span><button class="ib" data-act="sheetClose">${ic('x', 1)}</button></div><div class="pbody">${panelBody(S.sheet)}</div></div>`;
+}
+function viewSave() {
+  const D = S.saveDlg; if (!D) return '';
+  const name = D.base.trim().replace(/\.png$/i, '') + '.png';
+  const taken = (S.files[D.folder] || []).some(f => f.n === name);
+  const free = nextFree(D.folder, baseOf(D.base.trim() || 'image'));
+  return `<div class="ovl"><div class="modal" data-testid="saveDlg"><h3>Сохранить как…</h3>
+    <div class="lbl2" style="margin-top:0">Имя файла</div><div class="split"><input data-in="saveBase" value="${esc(D.base)}" data-testid="saveName"><span class="ext">.png</span></div>
+    <div class="lbl2">Папка проекта</div><div class="folders">${Object.keys(S.files).filter(f => f.startsWith('images')).map(f => `<div class="f ${D.folder === f ? 'on' : ''}" data-act="saveFolder:${f}">${ic('folder', 1)}<span class="grow">${f}/</span><span class="hint">${S.files[f].length} ${plural(S.files[f].length, 'файл', 'файла', 'файлов')}${f === D.from ? ' · здесь сейчас' : ''}</span></div>`).join('')}</div>
+    ${taken ? `<div class="warn" style="margin-top:10px">Такой файл уже есть: ${esc(D.folder)}/${esc(name)}. Перезаписать нельзя — возьмите другое имя. <button class="btn xs" data-act="saveTake:${free}">Взять «${free}.png»</button></div>` : ''}
+    <p class="hint">Исходный файл не меняется. Карточка картинки в ленте перейдёт на новый файл, нить шагов — вместе с ней.</p>
+    <div class="foot" style="justify-content:flex-end"><button class="btn ghost" data-act="saveClose">Отмена</button><button class="btn pri" data-act="saveDo" ${taken || !D.base.trim() ? 'disabled' : ''} data-testid="saveDo">Сохранить</button></div></div></div>`;
+}
+
+let focusTa = false, taSel = null;
+function render() {
+  document.documentElement.dataset.theme = S.theme;
+  document.querySelectorAll('[data-demo]').forEach(b => {
+    const [k, v] = b.dataset.demo.split(':');
+    if (k === 'theme') b.setAttribute('aria-pressed', S.theme === v);
+    if (k === 'w') b.setAttribute('aria-pressed', (v === 'mob') === S.mobile);
+  });
+  const ta = document.getElementById('ta');
+  focusTa = ta && document.activeElement === ta; taSel = focusTa ? [ta.selectionStart, ta.selectionEnd] : null;
+  const feed = document.getElementById('feed'); const sc = feed ? feed.scrollTop : 0; const atBottom = feed ? feed.scrollHeight - feed.scrollTop - feed.clientHeight < 40 : true;
+  const app = document.getElementById('app');
+  app.className = 'app' + (S.mobile ? ' mobile' : '');
+  app.innerHTML = S.mobile
+    ? `${viewChat()}${viewSheet()}${viewSave()}${S.toast ? viewToast() : ''}`
+    : `${viewRail('left')}${viewZone('left')}${viewChat()}${viewZone('right')}${viewRail('right')}${viewSave()}${S.toast ? viewToast() : ''}`;
+  const f2 = document.getElementById('feed');
+  if (f2) f2.scrollTop = (atBottom || render.toBottom) ? f2.scrollHeight : sc;
+  render.toBottom = false;
+  const ta2 = document.getElementById('ta');
+  if (ta2 && (focusTa || render.focusTa)) { ta2.focus(); if (taSel && !render.focusTa) ta2.setSelectionRange(...taSel); else ta2.setSelectionRange(ta2.value.length, ta2.value.length); }
+  render.focusTa = false;
+}
+const viewToast = () => `<div class="toast" data-testid="toast">${esc(S.toast)}${S.toastAct ? `<button data-act="${S.toastAct[1]}">${esc(S.toastAct[0])}</button>` : ''}</div>`;
+
+// ---------- Генерация ----------
+function variantsFor(t, kind, n) {
+  const base = t ? curStep(t).d : null;
+  return Array.from({ length: n }, (_, i) => {
+    if (!t) return { kind: 'cafe', v: i, anya: !!S.charOn };
+    const d = { ...base };
+    if (kind === 'remove-cup') d.cup = false;
+    if (kind === 'evening') d.evening = i;
+    if (kind === 'bg') d.bg = false;
+    if (kind === 'outpaint') d.wide = true;
+    if (kind === 'remove') { d.lamp = null; d.cup = false; }
+    if (kind === 'generic' && d.kind !== 'cafe') d.lamp = (base.lamp == null ? 0 : base.lamp + 1 + i) % 4;
+    if (kind === 'generic' && d.kind === 'cafe') d.v = (d.v + 1 + i) % 4;
+    if (kind === 'upscale' || kind === 'faces') { /* визуально то же */ }
+    if (d.kind === 'cafe' && kind === 'remove-cup') d.cup = false;
+    return d;
+  });
+}
+function runGen(tid, { kind, n, label }) {
+  const t = S.threads[tid];
+  t.variants = null; t.sel = 0;
+  t.gen = { n, p: 5, model: model().name, price: prov().unit === 'free' ? 'бесплатно' : priceText(n), kind, label };
+  t.gen.timer = setInterval(() => {
+    if (!t.gen) return;
+    t.gen.p += 24;
+    if (t.gen.p >= 100) {
+      clearInterval(t.gen.timer);
+      t.variants = { list: variantsFor(t.steps.length === 0 ? null : t, kind, n), price: t.gen.price, label };
+      t.gen = null;
+    }
+    render();
+  }, 260);
+}
+function kindOf(text) {
+  const s = text.toLowerCase();
+  if (/чашк|кружк/.test(s)) return 'remove-cup';
+  if (/вечер|закат|сумерк/.test(s)) return 'evening';
+  if (/фон/.test(s)) return 'bg';
+  return 'generic';
+}
+function send() {
+  const ta = document.getElementById('ta');
+  const text = (ta ? ta.value : '').trim();
+  if (!text) { toast('Напишите, что нарисовать или изменить'); render(); return; }
+  const t = ft();
+  const marks = t && S.sendMarks ? t.marks.length : 0;
+  if (S.mode === 'image') {
+    if (maskBlock()) return;
+    if (t) {
+      msgs().push({ who: 'quiet', text: `Вы запустили: <b>«${esc(text)}»</b> · ${esc(fileLabel(t))}${marks ? ` · ${marksWord(marks)}` : ''} · ${esc(model().name)} · ${esc(shortPrice())} · ${variantsWord(S.count)}` });
+      runGen(t.id, { kind: kindOf(text), n: S.count, label: text });
+    } else {
+      // Новая картинка: нить с пустыми шагами — первый шаг появится, когда выберут вариант
+      const id = 't' + (++S.tseq);
+      const nm = /аня|кафе/i.test(text) ? 'anya-cafe' : 'image';
+      S.threads[id] = { id, name: nm + '.png', folder: S.saveFolder || 'images', path: null, meta: '', steps: [], cur: 0, marks: [], gen: null, variants: null, sel: 0, prompt: text };
+      msgs().push({ who: 'quiet', text: `Вы запустили: <b>«${esc(text)}»</b> · новая картинка · ${esc(model().name)}${S.charOn ? ` · персонаж: ${esc(charById(S.charOn).name)}` : ''} · ${esc(shortPrice())} · ${variantsWord(S.count)}` });
+      msgs().push({ who: 'bot', text: '', thread: id, silent: true });
+      runGen(id, { kind: 'new', n: S.count, label: text });
+    }
+    S.myPrompt = ''; S.promptBy = null; S.promptDraft = '';
+  } else {
+    msgs().push({ who: 'user', text, att: marks ? `${fileLabel(t)} · ${marksWord(marks)}` : '' });
+    S.chatDraft = '';
+    S.typing = true; render.toBottom = true; render();
+    setTimeout(() => agentReply(text, t, marks), 700);
+  }
+  render.toBottom = true; render(); render.focusTa = true;
+}
+function agentReply(text, t, marks) {
+  S.typing = false;
+  if (t) {
+    const kind = kindOf(text);
+    const prompt = kind === 'remove-cup' ? 'Убери чашку со стола (отмечена кистью), на её месте — продолжение столешницы. Остальное не меняй, размер кадра сохрани.' : AGENT_PROMPT;
+    const changed = [];
+    if (S.count !== 2) { S.count = 2; changed.push('вариантов: 2'); }
+    if (marks && S.provider === 'fal' && S.model !== 'fill') { S.model = 'fill'; S.agentSet = { model: true }; changed.push('модель → FLUX Fill'); }
+    if (S.promptDraft && S.promptBy !== 'claude') S.myPrompt = S.promptDraft;
+    S.promptDraft = prompt; S.promptBy = 'claude';
+    msgs().push({ who: 'bot', text: `Вижу ${marks ? 'пометку на' : ''} <span class="mono">${esc(fileLabel(t))}</span>. Поставил промпт и запустил — варианты появятся в карточке картинки.`,
+      launch: { file: fileLabel(t), n: S.count, price: shortPrice(), prompt, changed: changed.join(', ') } });
+    runGen(t.id, { kind, n: S.count, label: 'Claude: ' + prompt.slice(0, 40) + '…' });
+  } else if (/нарису|картин|сгенер/i.test(text)) {
+    msgs().push({ who: 'bot', text: 'Могу нарисовать сам — или переключите композер в «Картинка», тогда текст уйдёт прямо в модель.' });
+  } else {
+    msgs().push({ who: 'bot', text: 'Понял. Если речь о картинке — выберите её в ленте («Работать с этой»), тогда я буду знать, о какой идёт речь.' });
+  }
+  render.toBottom = true; render();
+}
+function take(tid) {
+  const t = S.threads[tid];
+  const d = t.variants.list[t.sel];
+  t.steps = t.steps.slice(0, t.cur + 1);
+  t.steps.push({ d, label: t.variants.label ? (t.variants.label.length > 38 ? t.variants.label.slice(0, 38) + '…' : t.variants.label) : 'Вариант', ver: null, file: null });
+  t.cur = t.steps.length - 1;
+  t.marks = []; t.variants = null; S.cmp = false;
+  if (!S.focus || S.focus !== tid) S.focus = tid;
+  S.agentSet = null;
+  toast(`Шаг ${t.cur + 1} — черновик. Сохраните в проект, когда понравится`);
+}
+
+// ---------- Действия ----------
+const ACT = {
+  barOpen() { S.barOpen = true; }, barClose() { S.barOpen = false; },
+  menu(k) { S.menu = S.menu === k ? null : k; S.roleEdit = null; },
+  setProv(id) { S.provider = id; S.model = PROVIDERS.find(p => p.id === id).models[0].id; S.menu = null; S.agentSet = null; },
+  setModel(id) { S.model = id; S.menu = null; S.agentSet = null; },
+  cnt(d) { S.count = Math.max(1, Math.min(4, S.count + +d)); },
+  useFill() { S.model = S.provider === 'hf' ? 'gpt25' : (S.provider === 'local' ? 'qwen' : 'fill'); },
+  keepSize() { S.keepSize = !S.keepSize; },
+  roleEdit(i) { S.roleEdit = S.roleEdit === +i ? null : +i; S.menu = null; },
+  setRole(r) { S.samples[S.roleEdit].role = r; S.roleEdit = null; },
+  rmSample(i) { S.samples.splice(+i, 1); S.roleEdit = null; },
+  addSample(src) { S.samples.push(src === 'pc' ? { kind: 'dusk', name: 'dusk-ref.png', role: 'style' } : { kind: 'team', name: 'team-photo.jpg', role: 'face' }); S.menu = null; },
+  unfocus() { S.focus = null; toast('Фокус снят. Следующая генерация нарисует новую картинку'); },
+  focus(id) { S.focus = id; S.pickOpen = null; S.saveFolder = null; },
+  picClick(id) { if (!S.threads[id].steps.length) return; if (S.focus === id) { ACT.edit(id); return; } S.pickOpen = S.pickOpen === id ? null : id; },
+  edit(id) { S.focus = id; S.pickOpen = null; openPanel('canvas'); S.cmp = false; if (S.mobile) S.sheet = null; },
+  openChars() { if (S.mobile) S.sheet = 'chars'; else openPanel('chars'); },
+  charOff() { S.charOn = null; },
+  charOn(id) { S.charOn = id; toast(`Персонаж «${charById(id).name}» подключён к работе — чип в полосе «Картинки»`); if (S.mobile) S.sheet = null; },
+  charNew() { S.charForm = { id: null, name: '', desc: '', photos: [], consent: false }; },
+  charEdit(id) { const c = charById(id); S.charForm = { id, name: c.name, desc: c.desc, photos: [...c.photos], consent: false }; },
+  charCancel() { S.charForm = null; },
+  charAddPhoto() { const F = S.charForm; if (F.photos.length < 10) F.photos.push((F.photos.length * 3 + 2) % 10); },
+  charRmPhoto(i) { S.charForm.photos.splice(+i, 1); },
+  charSave() {
+    const F = S.charForm;
+    if (F.id) { Object.assign(charById(F.id), { name: F.name.trim(), desc: F.desc, photos: F.photos }); toast('Персонаж сохранён'); }
+    else { const id = 'c' + Date.now(); S.characters.push({ id, name: F.name.trim(), desc: F.desc, photos: F.photos }); toast(`Персонаж «${F.name.trim()}» создан. Подключите его к работе`); }
+    S.charForm = null;
+  },
+  charDelAsk(id) { S.charForm = null; S.charDel = id; },
+  charDel() { const id = S.charDel; S.characters = S.characters.filter(c => c.id !== id); if (S.charOn === id) S.charOn = null; S.charDel = null; toast('Персонаж удалён'); },
+  charDelNo() { S.charDel = null; },
+  mode(m) { const ta = document.getElementById('ta'); if (ta) { if (S.mode === 'image') S.promptDraft = ta.value; else S.chatDraft = ta.value; } S.mode = m; if (m === 'image') S.barOpen = !S.mobile || S.barOpen; render.focusTa = true; },
+  noMarks() { S.sendMarks = false; },
+  send() { send(); return 'skip'; },
+  restoreMine() { if (!S.myPrompt) return; S.promptDraft = S.myPrompt; S.myPrompt = ''; S.promptBy = null; S.mode = 'image'; render.focusTa = true; },
+  editPrompt() { S.mode = 'image'; S.barOpen = true; render.focusTa = true; },
+  step(id, d) { const t = S.threads[id]; t.cur = Math.max(0, Math.min(t.steps.length - 1, t.cur + +d)); t.marks = []; },
+  goStep(id, i) { const t = S.threads[id]; t.cur = +i; t.marks = []; toast(`Шаг ${+i + 1}: следующая правка пойдёт от него, более поздние шаги останутся в списке, пока не сделаете новую`); },
+  sel(id, i) { S.threads[id].sel = +i; },
+  take(id) { take(id); },
+  dropVars(id) { S.threads[id].variants = null; },
+  cancel(id) { const t = S.threads[id]; clearInterval(t.gen.timer); t.gen = null; msgs().push({ who: 'quiet', text: 'Генерация отменена · деньги не списаны' }); },
+  cmpOnCanvas(id) { S.focus = id; openPanel('canvas'); S.cmp = true; if (S.mobile) S.sheet = null; },
+  cmpOn() { S.cmp = true; }, cmpOff() { S.cmp = false; },
+  tool(id) { S.tool = id; },
+  clearMarks() { if (ft()) ft().marks = []; },
+  zoom(d) { S.zoom = Math.max(.5, Math.min(4, +(S.zoom * (+d > 0 ? 1.25 : .8)).toFixed(2))); },
+  fit() { S.zoom = 1; S.panX = 0; S.panY = 0; },
+  quick(id) {
+    const t = ft(); if (!t) return;
+    if (id === 'outpaint') { S.cvPop = S.cvPop === 'outpaint' ? null : 'outpaint'; return; }
+    if (id === 'remove' && !t.marks.length) { toast('Сначала отметьте кистью, что убрать'); return; }
+    const name = QUICK.find(q => q[0] === id)[1];
+    msgs().push({ who: 'quiet', text: `Вы запустили: <b>«${name}»</b> · ${esc(fileLabel(t))} · ${esc(model().name)} · ${esc(shortPrice())} · ${variantsWord(S.count)}` });
+    runGen(t.id, { kind: id, n: S.count, label: name }); render.toBottom = true;
+  },
+  quickGo(id, ratio) { const t = ft(); S.cvPop = null; msgs().push({ who: 'quiet', text: `Вы запустили: <b>«Дорисовать за края · ${ratio}»</b> · ${esc(fileLabel(t))} · ${esc(shortPrice())}` }); runGen(t.id, { kind: 'outpaint', n: S.count, label: `Дорисовать за края ${ratio}` }); },
+  noaiOpen(id) {
+    const t = ft();
+    if (id === 'size' || id === 'compress') { S.cvPop = S.cvPop === id ? null : id; return; }
+    const d = { ...curStep(t).d };
+    if (id === 'rot') d.rot = ((d.rot || 0) + 90) % 360;
+    if (id === 'flip') d.flip = !d.flip;
+    if (id === 'crop') d.crop = true;
+    addStep(t, d, { rot: `Поворот ${d.rot}°`, flip: 'Отражение', crop: 'Обрезка 16:9' }[id]);
+  },
+  noai(kind, v) { const t = ft(); S.cvPop = null; addStep(t, { ...curStep(t).d }, kind === 'size' ? `Размер ${v}` : `Сжатие JPEG ${v}`); },
+  saveQuick(id) {
+    const t = S.threads[id]; const st = curStep(t);
+    if (!st) return;
+    if (st.file) { toast(`Уже в проекте: ${st.file}`); return; }
+    const base = baseOf(t.name); const folder = t.folder;
+    const nm = (t.path ? nextFree(folder, base) : base) + '.png';
+    doSave(t, folder, nm);
+  },
+  saveAs(id) { const t = S.threads[id]; if (!t.steps.length) return; const folder = t.folder; S.saveDlg = { tid: id, base: t.path ? nextFree(folder, baseOf(t.name)) : baseOf(t.name), folder, from: folder }; },
+  saveFolder(f) { S.saveDlg.folder = f; },
+  saveTake(n) { S.saveDlg.base = n; },
+  saveClose() { S.saveDlg = null; },
+  saveDo() { const D = S.saveDlg; const nm = D.base.trim().replace(/\.png$/i, '') + '.png'; S.saveDlg = null; doSave(S.threads[D.tid], D.folder, nm); },
+  showFile(p) { S.hlFile = p; if (S.mobile) S.sheet = 'files'; else openPanel('files'); S.toast = null; },
+  toggle(k) { if (S.mobile && k !== 'canvas') { S.sheet = k; return; } if (isOpen(k)) closePanel(k); else openPanel(k); },
+  pin(k) { openPanel(k); hidePeek(); },
+  sheet(k) { S.sheet = k; }, sheetClose() { S.sheet = null; },
+  chat(id) { S.chat = id; S.focus = null; S.chats[id].sub = 'сейчас'; if (S.mobile) S.sheet = null; },
+  newChat() { const id = 'n' + Date.now(); S.chats[id] = { name: 'Новый чат', sub: 'сейчас', msgs: [] }; S.chat = id; S.focus = null; },
+  fileMenu(p) { S.fileMenu = S.fileMenu === p ? null : p; },
+  editFile(path) {
+    S.fileMenu = null; S.sheet = null;
+    // Чат картинки: последний активный чат проекта, картинка в фокусе, панель «Холст»
+    const found = Object.values(S.threads).filter(t => t.path === path || t.steps.some(s => s.file === path)).pop();
+    const inChat = found && msgs().some(m => m.thread === found.id);
+    if (inChat) { S.focus = found.id; msgs().push({ who: 'quiet', text: `Открыто из «Файлов»: <b>${esc(path)}</b> — картинка уже есть в этом чате, взята в работу` }); }
+    else {
+      const f = path.split('/'); const n = f.pop(); const folder = f.join('/');
+      const x = S.files[folder].find(y => y.n === n);
+      const id = newThread({ name: n, folder, path, d: x.d, ver: /\.v(\d+)\./.test(n) ? 'v' + n.match(/\.v(\d+)\./)[1] : 'v1', meta: 'из файлов проекта' });
+      msgs().push({ who: 'quiet', text: `Открыто из «Файлов»: <b>${esc(path)}</b>` });
+      msgs().push({ who: 'bot', text: '', thread: id, silent: true });
+      S.focus = id;
+    }
+    S.mode = 'image'; S.barOpen = true; S.saveFolder = null;
+    openPanel('canvas'); render.toBottom = true;
+  },
+  drawIn(path) { S.fileMenu = null; S.sheet = null; S.focus = null; S.mode = 'image'; S.barOpen = true; S.saveFolder = path; msgs().push({ who: 'quiet', text: `Нарисовать картинку в <b>${esc(path)}/</b> — композер в режиме «Картинка»` }); render.focusTa = true; render.toBottom = true; },
+  toastStatic(t) { toast(t + ' (в макете не раскрывается)'); },
+};
+function addStep(t, d, label) {
+  t.steps = t.steps.slice(0, t.cur + 1);
+  t.steps.push({ d, label, ver: null, file: null }); t.cur = t.steps.length - 1; t.marks = [];
+  msgs().push({ who: 'quiet', text: `Правка без ИИ: <b>${esc(label)}</b> · ${esc(fileLabel(t))} · шаг ${t.cur + 1}` });
+}
+function doSave(t, folder, nm) {
+  const st = curStep(t);
+  const path = `${folder}/${nm}`;
+  S.files[folder] = S.files[folder] || [];
+  S.files[folder].push({ n: nm, d: st.d });
+  const v = nm.match(/\.v(\d+)\.png$/);
+  const n = t.steps.filter(s => s.file).length + 1;
+  st.file = path; st.ver = v ? 'v' + v[1] : 'v' + n;
+  t.path = path; t.name = nm; t.folder = folder;
+  msgs().push({ who: 'quiet', text: `Сохранено как <b>${esc(path)}</b>. Карточка картинки перешла на этот файл, нить шагов — вместе с ней` });
+  toast(`Сохранено в проект: ${path}`, ['Показать в дереве', `showFile:${path}`]);
+  render.toBottom = true;
+}
+function openPanel(k) {
+  if (S.mobile) { if (k === 'canvas') { if (!S.zones.right.includes(k)) S.zones.right.push(k); } else S.sheet = k; return; }
+  if (isOpen(k)) { flash(k); return; }
+  S.zones[S.home[k]].push(k);
+}
+function closePanel(k) { for (const z of ['left', 'right']) S.zones[z] = S.zones[z].filter(x => x !== k); }
+function flash(k) { setTimeout(() => { const el = document.querySelector(`[data-panel="${k}"]`); if (el) { el.classList.add('over'); setTimeout(() => el.classList.remove('over'), 600); } }, 30); }
+
+// ---------- События ----------
+const app = document.getElementById('app');
+document.addEventListener('click', e => {
+  const demo = e.target.closest('[data-demo]');
+  if (demo) {
+    const [k, v] = demo.dataset.demo.split(':');
+    if (k === 'theme') S.theme = v;
+    if (k === 'w') { S.mobile = v === 'mob'; S.sheet = null; if (S.mobile) { S.barOpen = false; closePanel('canvas'); } }
+    if (k === 'reset') { Object.values(S.threads).forEach(t => t.gen && clearInterval(t.gen.timer)); initState(); }
+    render(); return;
+  }
+  const el = e.target.closest('[data-act]');
+  if (!el) {
+    if (S.menu || S.roleEdit != null || S.fileMenu || S.pickOpen) { S.menu = null; S.roleEdit = null; S.fileMenu = null; S.pickOpen = null; render(); }
+    return;
+  }
+  if (el.tagName === 'INPUT') return;
+  const [name, ...args] = el.dataset.act.split(':');
+  const fn = ACT[name]; if (!fn) return;
+  if (name !== 'menu') S.menu = null;
+  if (!['roleEdit', 'setRole', 'rmSample'].includes(name)) S.roleEdit = null;
+  if (name !== 'fileMenu' && !['editFile', 'drawIn'].includes(name)) S.fileMenu = null;
+  if (name !== 'picClick' && name !== 'focus' && name !== 'edit') S.pickOpen = null;
+  const ta = document.getElementById('ta');
+  if (ta && name !== 'mode') { if (S.mode === 'image') S.promptDraft = ta.value; else S.chatDraft = ta.value; }
+  const r = fn(...args.length > 2 ? [args[0], args[1], args.slice(2).join(':')] : args);
+  if (r !== 'skip') render();
+});
+document.addEventListener('input', e => {
+  const k = e.target.dataset.in;
+  if (e.target.id === 'ta') { if (S.mode === 'image') { S.promptDraft = e.target.value; if (S.promptBy) { S.promptBy = null; } } else S.chatDraft = e.target.value; return; }
+  if (!k) return;
+  if (k === 'charName') { S.charForm.name = e.target.value; rerenderKeep(e.target); }
+  if (k === 'charDesc') S.charForm.desc = e.target.value;
+  if (k === 'charConsent') { S.charForm.consent = e.target.checked; render(); }
+  if (k === 'brush') S.brush = +e.target.value;
+  if (k === 'slider') { S.slider = +e.target.value; const c = document.querySelector('.cmp'); if (c) c.style.setProperty('--cut', S.slider + '%'); }
+  if (k === 'saveBase') { S.saveDlg.base = e.target.value; rerenderKeep(e.target); }
+});
+function rerenderKeep(inp) {
+  const sel = inp.dataset.in, pos = inp.selectionStart;
+  render();
+  const n = document.querySelector(`[data-in="${sel}"]`); if (n) { n.focus(); n.setSelectionRange(pos, pos); }
+}
+document.addEventListener('keydown', e => {
+  if (e.target.id === 'ta' && e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+});
+
+// Рисование и панорама на холсте
+let drag = null;
+function svgPt(e) {
+  const ov = document.getElementById('ov'); const r = ov.getBoundingClientRect();
+  return { x: Math.round((e.clientX - r.left) / r.width * 640), y: Math.round((e.clientY - r.top) / r.height * 400) };
+}
+app.addEventListener('pointerdown', e => {
+  const board = e.target.closest('#board'); if (!board) return;
+  const t = ft(); if (!t) return;
+  e.preventDefault();
+  if (S.tool === 'hand') { drag = { type: 'pan', sx: e.clientX, sy: e.clientY, px: S.panX, py: S.panY }; return; }
+  if (S.tool === 'eraser') { const mi = e.target.closest('[data-mi]'); if (mi) { t.marks.splice(+mi.dataset.mi, 1); render(); } return; }
+  const p = svgPt(e);
+  if (S.tool === 'text') { t.marks.push({ type: 'text', x: p.x, y: p.y, t: 'вот это' }); render(); return; }
+  const m = S.tool === 'mask' ? { type: 'mask', w: S.brush, d: `M${p.x} ${p.y}` } : { type: S.tool, x1: p.x, y1: p.y, x2: p.x + 1, y2: p.y + 1 };
+  t.marks.push(m); drag = { type: 'draw', m };
+});
+window.addEventListener('pointermove', e => {
+  if (!drag) return;
+  if (drag.type === 'pan') { S.panX = drag.px + e.clientX - drag.sx; S.panY = drag.py + e.clientY - drag.sy; const cw = document.querySelector('.cw'); if (cw) cw.style.transform = `translate(calc(-50% + ${S.panX}px), calc(-50% + ${S.panY}px)) scale(${S.zoom})`; return; }
+  const p = svgPt(e);
+  if (drag.m.type === 'mask') drag.m.d += ` L${p.x} ${p.y}`; else { drag.m.x2 = p.x; drag.m.y2 = p.y; }
+  const ov = document.getElementById('ov'); if (ov) ov.innerHTML = marksSVG(ft());
+});
+window.addEventListener('pointerup', () => { if (drag) { const wasDraw = drag.type === 'draw'; drag = null; if (wasDraw) render(); } });
+app.addEventListener('wheel', e => { if (!e.target.closest('#board')) return; e.preventDefault(); ACT.zoom(e.deltaY < 0 ? 1 : -1); render(); }, { passive: false });
+
+// Перетаскивание панелей между зонами (за шапку)
+app.addEventListener('dragstart', e => { const h = e.target.closest('[data-drag]'); if (!h) return; S.dragKey = h.dataset.drag; e.dataTransfer.setData('text/plain', S.dragKey); });
+app.addEventListener('dragover', e => { const z = e.target.closest('[data-zone]'); if (!z || !S.dragKey) return; e.preventDefault(); document.querySelectorAll('[data-zone]').forEach(x => x.classList.toggle('drop', x === z)); });
+app.addEventListener('drop', e => {
+  const z = e.target.closest('[data-zone]'); if (!z || !S.dragKey) return; e.preventDefault();
+  const k = S.dragKey, zone = z.dataset.zone; const before = e.target.closest('[data-panel]');
+  closePanel(k);
+  const arr = S.zones[zone]; const i = before ? arr.indexOf(before.dataset.panel) : -1;
+  if (i >= 0) arr.splice(i, 0, k); else arr.push(k);
+  S.home[k] = zone; S.dragKey = null; render();
+});
+app.addEventListener('dragend', () => { S.dragKey = null; document.querySelectorAll('[data-zone]').forEach(x => x.classList.remove('drop')); });
+
+// Превью закрытой панели по наведению на значок рельсы: булавка «Закрепить»
+const peek = document.getElementById('peek');
+let peekT = null;
+function hidePeek() { peek.style.display = 'none'; S.peekKey = null; }
+app.addEventListener('mouseover', e => {
+  const r = e.target.closest('[data-rail]'); if (!r || S.mobile) return;
+  const k = r.dataset.rail; if (isOpen(k)) return;
+  clearTimeout(peekT);
+  peekT = setTimeout(() => {
+    S.peekKey = k;
+    const fr = document.querySelector('.frame').getBoundingClientRect(), rr = r.getBoundingClientRect();
+    const left = S.home[k] === 'left' ? rr.right - fr.left + 6 : rr.left - fr.left - 306;
+    peek.innerHTML = `<div class="ph">${ic(PANELS[k].icon, 1)}<span class="ttl">${PANELS[k].title}</span><span class="grow"></span><button class="ib sm" data-act="pin:${k}" title="Закрепить панель" data-testid="pin-${k}">${ic('pin', 1)}</button></div><div class="pbody" style="max-height:470px">${k === 'canvas' ? viewCanvas(true) : panelBody(k)}</div>`;
+    peek.style.left = left + 'px'; peek.style.top = (rr.top - fr.top) + 'px'; peek.style.display = 'flex';
+  }, 350);
+});
+app.addEventListener('mouseout', e => { if (e.target.closest('[data-rail]')) { clearTimeout(peekT); peekT = setTimeout(() => { if (!peek.matches(':hover')) hidePeek(); }, 400); } });
+peek.addEventListener('mouseleave', () => { peekT = setTimeout(hidePeek, 300); });
+peek.addEventListener('mouseenter', () => clearTimeout(peekT));
+
+initState();
+render();
+</script>
+</body>
+</html>

@@ -47,6 +47,25 @@ public sealed class AgentFileWatchersTests : IDisposable
             sink.Reports.SelectMany(r => r.Paths).Should().NotContain(p => p.StartsWith("node_modules"));
     }
 
+    // Состояние oh-my-claudecode копит каталог на каждую сессию: оно не наблюдается, как и на сервере
+    [Fact]
+    public async Task ПравкаВOmc_НеДоезжает()
+    {
+        var sink = new Sink { Until = r => r.Paths.Contains("src/new.txt") };
+        using var watchers = new AgentFileWatchers(sink);
+        Directory.CreateDirectory(Path.Combine(_box.Project, "src"));
+        Directory.CreateDirectory(Path.Combine(_box.Project, ".omc", "state", "sessions", "s1"));
+        var root = _box.Policy().ProjectRoot(_box.Project);
+
+        watchers.Touch("p1", root);
+        File.WriteAllText(Path.Combine(_box.Project, ".omc", "state", "sessions", "s1", "a.json"), "{}");
+        File.WriteAllText(Path.Combine(_box.Project, "src", "new.txt"), "x");
+
+        await sink.Got.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        lock (sink.Reports)
+            sink.Reports.SelectMany(r => r.Paths).Should().NotContain(p => p.StartsWith(".omc"));
+    }
+
     [Fact]
     public void ПовторныйTouch_НеПлодитНаблюдателей()
     {

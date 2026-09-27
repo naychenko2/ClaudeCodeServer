@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using ClaudeHomeServer.Services.Execution;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -599,7 +600,9 @@ public class LocalProcessRunnerIsolationTests
     }
     // Поддельный systemd-run: отбрасывает флаги обёртки до «--» и exec-ает команду.
     // Файл аргументов — по PID: exec сохраняет PID, так что это PID нашего процесса. Раннер
-    // глобальный, и процессы параллельных тестов других коллекций тоже проходят через фейк
+    // глобальный, и процессы параллельных тестов других коллекций тоже проходят через фейк.
+    // Скрипт для /bin/sh и режим файла Unix — хелпер только для не-Windows, вызывающие гейтят.
+    [UnsupportedOSPlatform("windows")]
     private static (string Dir, string Fake) FakeSystemdRun()
     {
         var dir = Path.Combine(Path.GetTempPath(), "lpr_stop_" + Guid.NewGuid().ToString("N")[..8]);

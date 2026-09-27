@@ -14,7 +14,17 @@ const core = JSON.parse(readFileSync(new URL('../package.json', import.meta.url)
   dependencies: Record<string, string>;
 };
 
-const version = (pkg: string) => core.dependencies[pkg].replace(/^[\^~]/, '');
+// Контракт — точная X.Y.Z: диапазон (>=19, 19.2.x) молча дал бы неверную version.
+const version = (pkg: string) => {
+  const raw = core.dependencies[pkg];
+  const exact = raw?.replace(/^[\^~]/, '');
+  if (!exact || !/^\d+\.\d+\.\d+$/.test(exact)) {
+    throw new Error(
+      `hostReactShared: версия ${pkg} в frontend/package.json должна быть X.Y.Z (допускается ^ или ~), получено «${raw}»`,
+    );
+  }
+  return exact;
+};
 
 const consume = (pkg: string) => ({
   singleton: true,

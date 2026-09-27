@@ -18,11 +18,11 @@ using SkiaSharp;
 
 namespace ClaudeHomeServer.Tests.ImageEditor.Threads;
 
-// Нить картинки в обычном чате проекта на собранном приложении (ADR-019, волна 2): взять в
-// работу с якорем в ленте, «Взять» вариант своей задачи и шаг правки без ИИ, откат и новая
-// правка — старая стопка с якорем на прежнем месте, ручной запуск в нить с тихой строкой,
-// сохранение уводит нить на новый файл, чужая сессия и чужая нить изолированы, ветвление и
-// удаление чата доходят до нитей через шину.
+// Нить картинки в обычном чате проекта на собранном приложении (ADR-019, волна 2, и версии 27.09):
+// взять в работу с якорем в ленте, ручной запуск в нить с якорем запуска внизу, варианты — версии,
+// правка без ИИ — шаг текущей версии, «продолжить от версии», сохранение уводит нить на новый
+// файл, чужая сессия и чужая нить изолированы, ветвление и удаление чата доходят до нитей через
+// шину. Стопки («Взять», откат со старой стопкой) проверяются на нити в формате до 27.09.
 public class ThreadFlowEndpointTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();
@@ -127,8 +127,33 @@ public class ThreadFlowEndpointTests : IDisposable
     private async Task<HttpResponseMessage> TakeStep(string chatId, string threadId, string stepId) =>
         await _client.PostAsJsonAsync($"{Threads(chatId)}/{threadId}/take", new { stepId, revision = Revision(chatId) });
 
+    // Правка без ИИ в текущую версию нити
+    private async Task<HttpResponseMessage> AddStep(string chatId, string threadId, string stepId) =>
+        await _client.PostAsJsonAsync($"{Threads(chatId)}/{threadId}/steps", new { stepId, revision = Revision(chatId) });
+
+    private async Task<HttpResponseMessage> Continue(string chatId, string threadId, string versionId, long? revision = null) =>
+        await _client.PutAsJsonAsync($"{Threads(chatId)}/{threadId}/current", new { versionId, revision = revision ?? Revision(chatId) });
+
+    // Нить в формате до 27.09: стопка без шагов, версий в файле нет
+    private string SeedLegacy(string chatId)
+    {
+        var path = Store.StatePath(_ownerId, chatId);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, """
+            {"focus":"t-old","revision":3,"threads":[{"id":"t-old","file":"images/hero.png","lineage":[],"draftFolder":null,
+             "stacks":[{"stackId":"st1","steps":[],"forkedFromStepId":null,"old":false}],"currentStackId":"st1",
+             "settings":null,"pendingJobId":null,"createdAt":"2026-09-20T10:00:00Z"}]}
+            """);
+        return "t-old";
+    }
+
+    // Исполнитель закончил задачу: варианты становятся версиями (так его событие зовёт сервис нитей)
+    private async Task FinishJob(string jobId) =>
+        await _factory.Services.GetRequiredService<ImageThreadService>()
+            .OnJobFinishedAsync(_ownerId, _jobs.Get(_ownerId, _projectId, jobId)!);
+
     [Fact]
-    public async Task Взять_картинку_в_работу_кладёт_якорь_стопки_в_ленту_один_раз()
+    public async Task Взять_картинку_в_работу_кладёт_якорь_нити_в_ленту_один_раз()
     {
         var chat = await Chat();
 
@@ -139,7 +164,7 @@ public class ThreadFlowEndpointTests : IDisposable
         anchor.Module.Should().Be("imageeditor");
         anchor.RecordType.Should().Be(ImageThreadService.RecordTypes.Thread);
         anchor.Data!.Value.GetProperty("threadId").GetString().Should().Be(threadId);
-        anchor.Data.Value.GetProperty("stackId").GetString().Should().Be(Store.Get(_ownerId, chat.Id).Threads.Single().CurrentStackId);
+        anchor.Data.Value.GetProperty("versionId").GetString().Should().Be(ImageThreadVersion.OriginId, "якорь нити — карточка исходника");
         anchor.Fallback.Should().Be("Картинка: images/hero.png");
         _broadcaster.ToOwnerCalls.Select(c => c.Message).OfType<ImageThreadChangedMessage>()
             .Should().Contain(m => m.SessionId == chat.Id && m.State.Focus == threadId);
@@ -159,15 +184,14 @@ public class ThreadFlowEndpointTests : IDisposable
     }
 
     [Fact]
-    public async Task Откат_и_новая_правка_оставляют_старую_стопку_с_якорем_на_месте()
+    public async Task Старая_нить_откат_и_новая_правка_оставляют_старую_стопку_с_якорем_на_месте()
     {
         var chat = await Chat();
-        var threadId = await OpenHero(chat.Id);
+        var threadId = SeedLegacy(chat.Id);
         var s1 = await TransformStep(new { path = "images/hero.png" });
         (await TakeStep(chat.Id, threadId, s1)).StatusCode.Should().Be(HttpStatusCode.OK);
         var s2 = await TransformStep(new { stepId = s1 });
         (await TakeStep(chat.Id, threadId, s2)).StatusCode.Should().Be(HttpStatusCode.OK);
-        var firstStack = Store.Get(_ownerId, chat.Id).Threads.Single().CurrentStackId;
 
         var rollback = await _client.PostAsJsonAsync($"{Threads(chat.Id)}/{threadId}/rollback", new { stepId = s1, revision = Revision(chat.Id) });
         rollback.StatusCode.Should().Be(HttpStatusCode.OK);
@@ -177,19 +201,38 @@ public class ThreadFlowEndpointTests : IDisposable
 
         taken.StatusCode.Should().Be(HttpStatusCode.OK, await taken.Content.ReadAsStringAsync());
         var thread = Store.Get(_ownerId, chat.Id).Threads.Single();
-        thread.Stacks.Single(s => s.StackId == firstStack).Should().BeEquivalentTo(
-            new ImageThreadStack(firstStack!, [s1, s2], null, true));
+        thread.Stacks.Single(s => s.StackId == "st1").Should().BeEquivalentTo(new ImageThreadStack("st1", [s1, s2], null, true));
         thread.CurrentStack!.Steps.Should().Equal(s1, s3);
+        thread.ImageStepOf(thread.CurrentVersion!).Should().Be(s3, "исходник старой нити — её текущий шаг стопки");
         var records = await Records(chat.Id);
-        records.Select(r => r.RecordType).Should().Equal(
-            ImageThreadService.RecordTypes.Thread, ImageThreadService.RecordTypes.Thread, ImageThreadService.RecordTypes.StackForked);
-        records[0].Data!.Value.GetProperty("stackId").GetString().Should().Be(firstStack, "якорь старой стопки остался первым");
-        records[1].Data!.Value.GetProperty("stackId").GetString().Should().Be(thread.CurrentStackId);
-        records[2].Fallback.Should().Be("Шаг 2 не пропал — он в старой стопке выше");
+        records.Select(r => r.RecordType).Should().Equal(ImageThreadService.RecordTypes.Thread, ImageThreadService.RecordTypes.StackForked);
+        records[0].Data!.Value.GetProperty("stackId").GetString().Should().Be(thread.CurrentStackId);
+        records[1].Fallback.Should().Be("Шаг 2 не пропал — он в старой стопке выше");
     }
 
     [Fact]
-    public async Task Ручной_запуск_в_нить_ставит_ожидание_тихую_строку_и_берётся_вариант()
+    public async Task Правка_без_ИИ_ложится_в_текущую_версию_без_карточки_а_Взять_и_откат_у_новой_нити_400()
+    {
+        var chat = await Chat();
+        var threadId = await OpenHero(chat.Id);
+        var s1 = await TransformStep(new { path = "images/hero.png" });
+
+        var added = await AddStep(chat.Id, threadId, s1);
+
+        added.StatusCode.Should().Be(HttpStatusCode.OK, await added.Content.ReadAsStringAsync());
+        var version = (await Json(added)).GetProperty("threads")[0].GetProperty("versions").EnumerateArray().Should().ContainSingle().Subject;
+        version.GetProperty("steps").EnumerateArray().Select(e => e.GetString()).Should().Equal(s1);
+        version.GetProperty("currentStepId").GetString().Should().Be(s1);
+        (await Records(chat.Id)).Should().ContainSingle("правка без ИИ новых карточек не создаёт");
+
+        (await TakeStep(chat.Id, threadId, await TransformStep(new { stepId = s1 }))).StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await _client.PostAsJsonAsync($"{Threads(chat.Id)}/{threadId}/rollback", new { stepId = s1, revision = Revision(chat.Id) }))
+            .StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await AddStep(chat.Id, threadId, new string('a', 32))).StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task Ручной_запуск_в_нить_кладёт_якорь_запуска_а_вариант_становится_версией()
     {
         var chat = await Chat();
         var threadId = await OpenHero(chat.Id);
@@ -200,30 +243,85 @@ public class ThreadFlowEndpointTests : IDisposable
         var jobId = (await Json(resp)).GetProperty("jobId").GetString()!;
         _jobs.LastInput!.ThreadId.Should().Be(threadId);
         _jobs.LastInput.ChatSessionId.Should().Be(chat.Id);
-        Store.Get(_ownerId, chat.Id).Threads.Single().PendingJobId.Should().Be(jobId);
-        var launch = (await Records(chat.Id)).Last();
-        launch.RecordType.Should().Be(ImageThreadService.RecordTypes.Launch);
-        launch.Fallback.Should().StartWith("Вы запустили: «убрать провод»");
+        _jobs.LastInput.BaseVersionId.Should().Be(ImageThreadVersion.OriginId);
+        var launch = Store.Get(_ownerId, chat.Id).Threads.Single().Launches.Should().ContainSingle().Subject;
+        launch.JobId.Should().Be(jobId);
+        launch.Status.Should().Be(ImageThreadLaunchStatus.Running);
+        var anchor = (await Records(chat.Id)).Last();
+        anchor.RecordType.Should().Be(ImageThreadService.RecordTypes.LaunchVersions);
+        anchor.Data!.Value.GetProperty("threadId").GetString().Should().Be(threadId);
+        anchor.Data.Value.GetProperty("jobId").GetString().Should().Be(jobId);
+        anchor.Fallback.Should().StartWith("Вы запустили: «убрать провод»");
 
         var section = await NextTurnSection(chat);
-        section.Should().Contain("Человек запустил вручную").And.Contain("варианты ждут выбора");
+        section.Should().Contain("Человек запустил вручную").And.Contain("рисуется: «убрать провод»");
 
-        var take = await _client.PostAsJsonAsync($"{Threads(chat.Id)}/{threadId}/take",
-            new { jobId, variant = 1, revision = Revision(chat.Id) });
+        await FinishJob(jobId);
+
+        var thread = Store.Get(_ownerId, chat.Id).Threads.Single();
+        var version = thread.Versions.Should().ContainSingle(v => !v.IsOrigin).Subject;
+        version.Should().Match<ImageThreadVersion>(v => v.JobId == jobId && v.Variant == 1 && v.Number == 1);
+        thread.CurrentVersionId.Should().Be(version.Id);
+        (await _client.GetAsync($"{Editor()}/steps/{version.CurrentStepId}")).StatusCode.Should().Be(HttpStatusCode.OK,
+            "вариант стал шагом истории без «Взять»");
+        (await Records(chat.Id)).Where(r => r.RecordType == ImageThreadService.RecordTypes.LaunchVersions)
+            .Should().ContainSingle("якорь один на запуск, версии перечислены в нити");
+    }
+
+    [Fact]
+    public async Task Продолжить_от_старой_версии_и_запуск_растят_версии_от_неё()
+    {
+        var chat = await Chat();
+        var threadId = await OpenHero(chat.Id);
+        var first = (await Json(await _client.PostAsync($"{Editor()}/jobs", JobForm(chat.Id, threadId)))).GetProperty("jobId").GetString()!;
+        await FinishJob(first);
+        var second = (await Json(await _client.PostAsync($"{Editor()}/jobs", JobForm(chat.Id, threadId)))).GetProperty("jobId").GetString()!;
+        await FinishJob(second);
+        var before = Store.Get(_ownerId, chat.Id).Threads.Single();
+        var v1 = before.Versions.Single(v => v.Number == 1);
+        before.CurrentVersionId.Should().Be(before.Versions.Single(v => v.Number == 2).Id);
+
+        var continued = await Continue(chat.Id, threadId, v1.Id);
+        continued.StatusCode.Should().Be(HttpStatusCode.OK, await continued.Content.ReadAsStringAsync());
+        (await Json(continued)).GetProperty("threads")[0].GetProperty("currentVersionId").GetString().Should().Be(v1.Id);
+        var third = (await Json(await _client.PostAsync($"{Editor()}/jobs", JobForm(chat.Id, threadId)))).GetProperty("jobId").GetString()!;
+        _jobs.LastInput!.BaseVersionId.Should().Be(v1.Id);
+        _jobs.LastInput.BaseStepId.Should().Be(v1.CurrentStepId);
+        await FinishJob(third);
+
+        var after = Store.Get(_ownerId, chat.Id).Threads.Single();
+        after.Versions.Take(3).Should().BeEquivalentTo(before.Versions, "старые версии не тронуты");
+        after.Versions.Last().BaseVersionId.Should().Be(v1.Id);
+        after.Versions.Last().Number.Should().Be(3);
+
+        (await Continue(chat.Id, threadId, "нет-такой")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        var started = _jobs.Started;
+        var foreignVersion = JobForm(chat.Id, threadId);
+        foreignVersion.Add(new StringContent("нет-такой"), "versionId");
+        var refused = await _client.PostAsync($"{Editor()}/jobs", foreignVersion);
+        refused.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await Json(refused)).GetProperty("code").GetString().Should().Be(ImageEditErrorCodes.VersionNotFound);
+        _jobs.Started.Should().Be(started, "чужая версия — отказ до запуска");
+    }
+
+    [Fact]
+    public async Task Старая_нить_ручной_запуск_и_Взять_вариант_работают()
+    {
+        var chat = await Chat();
+        var threadId = SeedLegacy(chat.Id);
+        var jobId = (await Json(await _client.PostAsync($"{Editor()}/jobs", JobForm(chat.Id, threadId)))).GetProperty("jobId").GetString()!;
+
+        var take = await _client.PostAsJsonAsync($"{Threads(chat.Id)}/{threadId}/take", new { jobId, variant = 1, revision = Revision(chat.Id) });
 
         take.StatusCode.Should().Be(HttpStatusCode.OK, await take.Content.ReadAsStringAsync());
-        var thread = Store.Get(_ownerId, chat.Id).Threads.Single();
-        thread.PendingJobId.Should().BeNull();
-        thread.CurrentStack!.Steps.Should().ContainSingle().Which.Should().Be(thread.CurrentStepId);
-        (await _client.GetAsync($"{Editor()}/steps/{thread.CurrentStepId}")).StatusCode.Should().Be(HttpStatusCode.OK,
-            "взятый вариант стал шагом истории");
+        Store.Get(_ownerId, chat.Id).Threads.Single().CurrentStack!.Steps.Should().ContainSingle();
     }
 
     [Fact]
     public async Task Вариант_задачи_другой_нити_не_берётся()
     {
         var chat = await Chat();
-        var threadId = await OpenHero(chat.Id);
+        var threadId = SeedLegacy(chat.Id);
         var other = await Chat();
         var otherThread = await OpenHero(other.Id);
         var resp = await _client.PostAsync($"{Editor()}/jobs", JobForm(other.Id, otherThread));
@@ -268,6 +366,10 @@ public class ThreadFlowEndpointTests : IDisposable
             await second.PostAsJsonAsync($"{Threads(chat.Id, otherProject)}/{threadId}/take", new { stepId = new string('a', 32), revision = rev }),
             await second.PostAsJsonAsync($"{Threads(chat.Id, otherProject)}/{threadId}/rollback", new { stepId = (string?)null, revision = rev }),
             await second.PostAsJsonAsync($"{Threads(chat.Id, otherProject)}/{threadId}/dismiss", new { jobId = "j", revision = rev }),
+            await second.PutAsJsonAsync($"{Threads(chat.Id, otherProject)}/{threadId}/current",
+                new { versionId = ImageThreadVersion.OriginId, revision = rev }),
+            await second.PostAsJsonAsync($"{Threads(chat.Id, otherProject)}/{threadId}/steps", new { stepId = new string('a', 32), revision = rev }),
+            await second.PutAsJsonAsync($"{Threads(chat.Id)}/{threadId}/current", new { versionId = ImageThreadVersion.OriginId, revision = rev }),
             await second.PutAsJsonAsync($"{Threads(chat.Id, otherProject)}/{threadId}/settings",
                 new { settings = new { provider = "fal", model = "m", count = 2, matchSourceSize = true }, revision = rev }),
             await second.DeleteAsync($"{Threads(chat.Id, otherProject)}/{threadId}?revision={rev}"),
@@ -288,9 +390,13 @@ public class ThreadFlowEndpointTests : IDisposable
         var foreign = await OpenHero(other.Id);
 
         var take = await TakeStep(chat.Id, foreign, await TransformStep(new { path = "images/hero.png" }));
+        var step = await AddStep(chat.Id, foreign, await TransformStep(new { path = "images/hero.png" }));
+        var current = await Continue(chat.Id, foreign, ImageThreadVersion.OriginId);
         var remove = await _client.DeleteAsync($"{Threads(chat.Id)}/{foreign}?revision={Revision(chat.Id)}");
 
         take.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        step.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        current.StatusCode.Should().Be(HttpStatusCode.NotFound);
         remove.StatusCode.Should().Be(HttpStatusCode.NotFound);
         (await Json(remove)).GetProperty("code").GetString().Should().Be(ImageEditErrorCodes.ThreadNotFound);
         Store.Get(_ownerId, other.Id).Threads.Should().ContainSingle();
@@ -301,7 +407,7 @@ public class ThreadFlowEndpointTests : IDisposable
     {
         var chat = await Chat();
         var threadId = await OpenHero(chat.Id);
-        (await TakeStep(chat.Id, threadId, await TransformStep(new { path = "images/hero.png" }))).EnsureSuccessStatusCode();
+        (await AddStep(chat.Id, threadId, await TransformStep(new { path = "images/hero.png" }))).EnsureSuccessStatusCode();
         var draft = await _client.PostAsJsonAsync(Threads(chat.Id), new { draftFolder = "", revision = Revision(chat.Id) });
         var draftId = (await Json(draft)).GetProperty("focus").GetString()!;
 
@@ -322,7 +428,7 @@ public class ThreadFlowEndpointTests : IDisposable
         var threadId = await OpenHero(chat.Id);
         var stale = Revision(chat.Id) - 1;
 
-        var resp = await _client.PostAsJsonAsync($"{Threads(chat.Id)}/{threadId}/rollback", new { stepId = (string?)null, revision = stale });
+        var resp = await Continue(chat.Id, threadId, ImageThreadVersion.OriginId, stale);
 
         resp.StatusCode.Should().Be(HttpStatusCode.Conflict);
         (await Json(resp)).GetProperty("state").GetProperty("revision").GetInt64().Should().Be(Revision(chat.Id));
@@ -334,7 +440,7 @@ public class ThreadFlowEndpointTests : IDisposable
         var chat = await Chat();
         var threadId = await OpenHero(chat.Id);
         var step = await TransformStep(new { path = "images/hero.png" });
-        (await TakeStep(chat.Id, threadId, step)).EnsureSuccessStatusCode();
+        (await AddStep(chat.Id, threadId, step)).EnsureSuccessStatusCode();
 
         var save = await _client.PostAsJsonAsync($"{Editor()}/save",
             new { stepId = step, variant = 0, sourcePath = "images/hero.png", sessionId = chat.Id, threadId });
@@ -371,7 +477,7 @@ public class ThreadFlowEndpointTests : IDisposable
     {
         var chat = await Chat();
         var threadId = await OpenHero(chat.Id);
-        (await TakeStep(chat.Id, threadId, await TransformStep(new { path = "images/hero.png" }))).EnsureSuccessStatusCode();
+        (await AddStep(chat.Id, threadId, await TransformStep(new { path = "images/hero.png" }))).EnsureSuccessStatusCode();
         var branch = await Chat();
         var bus = _factory.Services.GetRequiredService<ITurnEventBus>();
 
@@ -382,13 +488,12 @@ public class ThreadFlowEndpointTests : IDisposable
         resp.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await Json(resp);
         body.GetProperty("focus").GetString().Should().Be(threadId);
-        body.GetProperty("threads")[0].GetProperty("currentStepId").GetString().Should().NotBeNullOrEmpty();
+        body.GetProperty("threads")[0].GetProperty("versions")[0].GetProperty("currentStepId").GetString().Should().NotBeNullOrEmpty();
         File.Exists(Store.StatePath(_ownerId, chat.Id)).Should().BeFalse("нити удалённого чата снесены");
 
         // Ветка живёт дальше сама: её мутации не зависят от удалённого источника
-        var rollback = await _client.PostAsJsonAsync($"{Threads(branch.Id)}/{threadId}/rollback",
-            new { stepId = (string?)null, revision = Revision(branch.Id) });
-        rollback.StatusCode.Should().Be(HttpStatusCode.OK);
+        var continued = await Continue(branch.Id, threadId, ImageThreadVersion.OriginId);
+        continued.StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
     private async Task<string> NextTurnSection(Session chat)

@@ -12,10 +12,11 @@ namespace ClaudeHomeServer.Services.ImageEditor.Threads;
 // журнал для блока хвоста хода. Ручки нитей, запуск задачи и сохранение идут сюда, чтобы следы
 // не разошлись между ними.
 //
-// Взять вариант, откатиться и сохранить в проект может только человек (решение Андрея 1): эти
-// методы зовут только ручки, тулсет агента их не видит. Агенту доступны только AgentFocusAsync и
-// AgentOpenAsync — взять картинку в работу, снять выбор, завести черновик, и каждое такое
-// действие видно в ленте тихой строкой «Claude взял в работу: …».
+// Каждый вариант запуска — версия нити (изменение 27.09): OnJobFinishedAsync по событию
+// исполнителя. Правку без ИИ, «продолжить от версии» и «Взять» старых нитей зовут только ручки
+// человека. Агенту доступны AgentFocusAsync, AgentOpenAsync и AgentContinueAsync — взять картинку в
+// работу, снять выбор, завести черновик, выбрать версию-основу; смена картинки видна в ленте тихой
+// строкой «Claude взял в работу: …».
 //
 // Чат проверяет вызывающий там, где отказ — часть ответа (ручки нитей: 404). Запуск и
 // сохранение с чужим чатом или нитью не падают — OwnChat молча отбрасывает, ответ не выдаёт
@@ -33,9 +34,13 @@ public sealed class ImageThreadService(
 
     public static class RecordTypes
     {
-        // Якорь стопки: data { threadId, stackId }, содержимое карточки рисуется из хранилища
+        // Якорь нити — карточка исходника: data { threadId, versionId: "origin" }; у нитей до 27.09
+        // якорь стопки data { threadId, stackId }. Содержимое карточки рисуется из хранилища
         public const string Thread = "image_thread";
-        // Тихие строки: data { threadId, … }
+        // Якорь запуска ИИ внизу ленты: data { threadId, jobId, prompt, provider, model, count,
+        // initiator, baseVersionId }. Варианты запуска — версии нити с этим jobId
+        public const string LaunchVersions = "image_launch_versions";
+        // Тихие строки: data { threadId, … }. image_launch — ручной запуск до 27.09, больше не пишется
         public const string Launch = "image_launch";
         public const string Saved = "image_saved";
         public const string StackForked = "image_stack_forked";
@@ -64,7 +69,7 @@ public sealed class ImageThreadService(
     {
         var written = store.Open(ownerId, sessionId, file, draftFolder, revision, NewThreadSettings(ownerId, projectId));
         if (written.Status == ImageThreadWriteStatus.Ok && written is { Existing: false, Thread: { } thread })
-            await AnchorAsync(sessionId, thread, thread.CurrentStackId!, ct);
+            await AnchorAsync(sessionId, thread, ct);
         return await AfterAsync(ownerId, projectId, sessionId, written);
     }
 
@@ -74,9 +79,37 @@ public sealed class ImageThreadService(
     public Task<ImageThreadWrite> RemoveAsync(string ownerId, string projectId, string sessionId, string threadId, long revision) =>
         AfterAsync(ownerId, projectId, sessionId, store.Remove(ownerId, sessionId, threadId, revision));
 
+    // Откат стопки — только у нити до 27.09: у новой нити стопок нет, её «откат» — продолжить от версии
     public Task<ImageThreadWrite> RollbackAsync(string ownerId, string projectId, string sessionId, string threadId,
         string? stepId, long revision) =>
-        AfterAsync(ownerId, projectId, sessionId, store.Rollback(ownerId, sessionId, threadId, stepId, revision));
+        store.Get(ownerId, sessionId).Threads.FirstOrDefault(t => t.Id == threadId) is { Stacks.Count: 0 }
+            ? Task.FromResult(new ImageThreadWrite(ImageThreadWriteStatus.Invalid, store.Get(ownerId, sessionId)))
+            : AfterAsync(ownerId, projectId, sessionId, store.Rollback(ownerId, sessionId, threadId, stepId, revision));
+
+    // «Продолжить от версии» (человек): версия становится текущей, нить — в работе. Ничего не удаляет
+    public Task<ImageThreadWrite> ContinueAsync(string ownerId, string projectId, string sessionId, string threadId,
+        string versionId, string? stepId, long revision) =>
+        AfterAsync(ownerId, projectId, sessionId,
+            store.SetCurrentVersion(ownerId, sessionId, threadId, versionId, stepId, revision, focus: true));
+
+    // Агент выбрал версию («поправь вторую»): она становится текущей. Ревизию агент не держит
+    public Task<ImageThreadWrite> AgentContinueAsync(string ownerId, string projectId, string sessionId, string threadId,
+        string versionId) =>
+        AfterAsync(ownerId, projectId, sessionId,
+            store.SetCurrentVersion(ownerId, sessionId, threadId, versionId, null, null));
+
+    // Правка без ИИ (готовый шаг POST …/transform) ложится шагом текущей версии: новой версии и
+    // карточки в ленте нет. Шаг обязан быть своим — чужой неотличим от отсутствующего
+    public async Task<ImageThreadTake> AddStepAsync(string ownerId, string projectId, string sessionId, string threadId,
+        string stepId, long revision)
+    {
+        if (steps is null)
+            return ImageThreadTake.Fail(ImageEditErrorCodes.RasterUnavailable, "Обработка картинок выключена на этом сервере");
+        if (steps.Open(ownerId, projectId, stepId) is null)
+            return ImageThreadTake.Fail(ImageEditErrorCodes.StepNotFound, "Шаг истории не найден — возможно, он устарел");
+        return new ImageThreadTake(await AfterAsync(ownerId, projectId, sessionId,
+            store.AddVersionStep(ownerId, sessionId, threadId, stepId, revision)));
+    }
 
     public Task<ImageThreadWrite> DismissAsync(string ownerId, string projectId, string sessionId, string threadId,
         string jobId, long revision) =>
@@ -118,7 +151,7 @@ public sealed class ImageThreadService(
             if (written.Status == ImageThreadWriteStatus.Ok && written.State.Revision != before.Revision)
                 await FocusLineAsync(sessionId, written.State, before, ct);
             if (written is { Status: ImageThreadWriteStatus.Ok, Existing: false, Thread: { } thread })
-                await AnchorAsync(sessionId, thread, thread.CurrentStackId!, ct);
+                await AnchorAsync(sessionId, thread, ct);
             return await AfterAsync(ownerId, projectId, sessionId, written);
         }
     }
@@ -156,6 +189,11 @@ public sealed class ImageThreadService(
             return new ImageThreadTake(new ImageThreadWrite(ImageThreadWriteStatus.ThreadNotFound, state));
         if (steps is null)
             return ImageThreadTake.Fail(ImageEditErrorCodes.RasterUnavailable, "Обработка картинок выключена на этом сервере");
+        // «Взять» — только у нити до 27.09 со стопками: у новой нити варианты сразу версии, а
+        // правка без ИИ ложится через AddStepAsync
+        if (thread.Stacks.Count == 0)
+            return ImageThreadTake.Fail(ImageEditErrorCodes.InvalidRequest,
+                "У этой картинки версии: варианты уже в ленте, «Взять» не нужно");
 
         string newStep;
         var label = "правку";
@@ -184,41 +222,51 @@ public sealed class ImageThreadService(
             new ImageThreadEvent(store.Now(), ImageThreadEventKinds.Taken, logText, threadId, jobId?.Trim()));
         if (written is { Status: ImageThreadWriteStatus.Ok, Forked: { } fork, Thread: { } after })
         {
-            await AnchorAsync(sessionId, after, fork.NewStack.StackId, ct);
+            await RecordAsync(sessionId, RecordTypes.Thread, $"Картинка: {Name(after)}",
+                new { threadId = after.Id, stackId = fork.NewStack.StackId }, ct);
             await RecordAsync(sessionId, RecordTypes.StackForked, ForkText(fork),
                 new { threadId, stackId = fork.NewStack.StackId, oldStackId = fork.FrozenStack.StackId }, ct);
         }
         return new ImageThreadTake(await AfterAsync(ownerId, projectId, sessionId, written));
     }
 
-    // Задача запущена в нить: её варианты ждут выбора, ход узнаёт о запуске из журнала. Ручной
-    // запуск ещё и тихой строкой в ленте — модель её не видит, это след для человека
+    // Задача запущена в нить: запуск записан в нити (его основа — версия baseVersionId, она же
+    // становится текущей), внизу ленты — якорь запуска, где потом появятся его версии. Ход узнаёт о
+    // запуске из журнала; якорь модель не видит
     public async Task OnLaunchedAsync(string ownerId, string projectId, string sessionId, string threadId,
-        ImageEditJobDto? job, string jobId, string prompt, ImageEditInitiator initiator, CancellationToken ct)
+        ImageEditJobDto? job, string jobId, string prompt, ImageEditInitiator initiator, string? baseVersionId,
+        string? baseStepId, CancellationToken ct)
     {
         try
         {
             var model = job?.Model ?? "модель по котировке";
             var count = job?.Count ?? 0;
             var variants = count > 0 ? $" · {count} {ImageEditorStateContributor.Variants(count)}" : "";
-            var who = initiator == ImageEditInitiator.Agent ? "Ты запустил" : "Человек запустил вручную";
-            var written = store.SetPending(ownerId, sessionId, threadId, jobId,
+            var agent = initiator == ImageEditInitiator.Agent;
+            var who = agent ? "Ты запустил" : "Человек запустил вручную";
+            var thread = store.Get(ownerId, sessionId).Threads.FirstOrDefault(t => t.Id == threadId);
+            var from = thread?.Version(baseVersionId) is { } baseVersion ? $" · от: {ImageThread.Label(baseVersion)}" : "";
+            var written = store.AddLaunch(ownerId, sessionId, threadId,
+                new ImageThreadLaunch(jobId, baseVersionId, baseStepId, store.Now(), ImageThreadLaunchStatus.Running,
+                    agent ? SpendInitiators.Agent : SpendInitiators.Human, prompt.Trim()),
                 new ImageThreadEvent(store.Now(), ImageThreadEventKinds.Launched,
-                    $"{who}: «{prompt.Trim()}» · {model}{variants}{EstimateText(job?.Estimate)}", threadId, jobId));
+                    $"{who}: «{prompt.Trim()}» · {model}{variants}{from}{EstimateText(job?.Estimate)}", threadId, jobId));
             if (written.Status != ImageThreadWriteStatus.Ok) return;
 
-            if (initiator == ImageEditInitiator.Human)
-                await RecordAsync(sessionId, RecordTypes.Launch, $"Вы запустили: «{prompt.Trim()}» · {model}{variants}",
-                    new
-                    {
-                        threadId,
-                        jobId,
-                        prompt,
-                        provider = job?.Provider,
-                        model = job?.Model,
-                        count,
-                        estimate = job?.Estimate,
-                    }, ct);
+            await RecordAsync(sessionId, RecordTypes.LaunchVersions,
+                $"{(agent ? "Claude запустил" : "Вы запустили")}: «{prompt.Trim()}» · {model}{variants}",
+                new
+                {
+                    threadId,
+                    jobId,
+                    prompt,
+                    provider = job?.Provider,
+                    model = job?.Model,
+                    count,
+                    estimate = job?.Estimate,
+                    initiator = agent ? SpendInitiators.Agent : SpendInitiators.Human,
+                    baseVersionId,
+                }, ct);
             await AfterAsync(ownerId, projectId, sessionId, written);
         }
         catch (Exception ex)
@@ -227,6 +275,69 @@ public sealed class ImageThreadService(
             log.LogWarning(ex, "Редактор картинок: запуск {JobId} не записан в нить {ThreadId}", jobId, threadId);
         }
     }
+
+    // Задача кончилась (зовёт исполнитель): у готовой каждый вариант ложится шагом (байты как
+    // есть, родитель — шаг-основа запуска) и становится версией нити внизу; у сбоя и отмены запуск
+    // просто закрывается. Задача вне нити, чужой чат или запуск, которого нить не знает, —
+    // ничего. Сбой здесь не роняет исполнителя: варианты остаются в задаче до TTL
+    public async Task OnJobFinishedAsync(string ownerId, ImageEditJobDto job)
+    {
+        if (job is not { ThreadId: { } threadId, ChatSessionId: { } sessionId }) return;
+        try
+        {
+            if (directory?.GetById(sessionId) is not { } session || session.ProjectId != job.ProjectId) return;
+            var thread = store.Get(ownerId, sessionId).Threads.FirstOrDefault(t => t.Id == threadId);
+            if (thread?.Launches.FirstOrDefault(l => l.JobId == job.JobId) is not { Status: ImageThreadLaunchStatus.Running } launch)
+                return;
+
+            var taken = new List<(int Variant, string StepId)>();
+            var status = job.Status switch
+            {
+                ImageEditJobStatus.Completed => ImageThreadLaunchStatus.Done,
+                ImageEditJobStatus.Cancelled => ImageThreadLaunchStatus.Cancelled,
+                _ => ImageThreadLaunchStatus.Failed,
+            };
+            if (status == ImageThreadLaunchStatus.Done && steps is not null)
+            {
+                foreach (var n in job.Variants)
+                {
+                    var step = steps.TakeVariant(ownerId, job.ProjectId, job.JobId, n, launch.BaseStepId, thread.File);
+                    if (step.Value is { } s) taken.Add((n, s.StepId));
+                    else log.LogWarning("Редактор картинок: вариант {Variant} задачи {JobId} не стал версией: {Error}",
+                        n, job.JobId, step.Error);
+                }
+                if (taken.Count == 0) status = ImageThreadLaunchStatus.Failed;
+            }
+
+            var written = store.FinishLaunch(ownerId, sessionId, threadId, job.JobId, status, taken,
+                (after, added) => new ImageThreadEvent(store.Now(), ImageThreadEventKinds.Versions,
+                    VersionsText(after, launch, added, job), threadId, job.JobId));
+            if (written.Status == ImageThreadWriteStatus.Ok)
+                await AfterAsync(ownerId, job.ProjectId, sessionId, written);
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "Редактор картинок: варианты задачи {JobId} не стали версиями нити {ThreadId}", job.JobId, threadId);
+        }
+    }
+
+    // «Готово «синий фон»: версии 3–4 картинки hero.png (от исходника)» / «… не получилось»
+    private static string VersionsText(ImageThread thread, ImageThreadLaunch launch, IReadOnlyList<ImageThreadVersion> added,
+        ImageEditJobDto job)
+    {
+        var what = $"«{launch.Prompt}» в картинку {Name(thread)}";
+        if (added.Count == 0)
+            return job.Status == ImageEditJobStatus.Cancelled ? $"Запуск {what} отменён"
+                : $"Запуск {what} не получился" + (string.IsNullOrWhiteSpace(job.Error) ? "" : $" ({job.Error})");
+        var numbers = added.Count == 1 ? $"версия {added[0].Number}" : $"версии {added[0].Number}–{added[^1].Number}";
+        var from = thread.Version(launch.BaseVersionId) is { } b ? $", от: {ImageThread.Label(b)}" : "";
+        var current = thread.CurrentVersion is { } c && added.Contains(c) ? $"; в работе {ImageThread.Label(c)}" : "";
+        return $"Готово {what}: {numbers}{from}{current}";
+    }
+
+    // Варианты запуска становятся версиями, как только исполнитель их скачал: подписку ставит
+    // регистрация модуля (ImageEditorSubsystem), в тестах — сам тест
+    public void Watch(ImageEditJobService jobs) => jobs.Finished += OnJobFinishedAsync;
 
     // Человек сохранил картинку нити: нить идёт за новым файлом, в ленте тихая строка
     public async Task OnSavedAsync(string ownerId, string projectId, string sessionId, string threadId, string path,
@@ -302,8 +413,10 @@ public sealed class ImageThreadService(
         return written;
     }
 
-    private Task AnchorAsync(string sessionId, ImageThread thread, string stackId, CancellationToken ct) =>
-        RecordAsync(sessionId, RecordTypes.Thread, $"Картинка: {Name(thread)}", new { threadId = thread.Id, stackId }, ct);
+    // Якорь нити — карточка исходника
+    private Task AnchorAsync(string sessionId, ImageThread thread, CancellationToken ct) =>
+        RecordAsync(sessionId, RecordTypes.Thread, $"Картинка: {Name(thread)}",
+            new { threadId = thread.Id, versionId = ImageThreadVersion.OriginId }, ct);
 
     // Следы в ленте не должны ронять запись нити: она уже сделана
     private async Task RecordAsync(string sessionId, string recordType, string fallback, object data, CancellationToken ct)

@@ -110,8 +110,10 @@ public record ImageEditJobInput(
     string? BaseStepId = null,
     // Пропорции результата («Дорисовать за края»): 1:1, 16:9, 9:16; null — на усмотрение драйвера
     string? AspectRatio = null,
-    // Нить картинки чата ChatSessionId (ADR-019): её варианты ждут «Взять»; null — запуск вне нити
-    string? ThreadId = null);
+    // Нить картинки чата ChatSessionId (ADR-019): её варианты станут версиями; null — запуск вне нити
+    string? ThreadId = null,
+    // Версия нити, от которой запущена правка (изменение 27.09 к ADR-019); null — вне нити
+    string? BaseVersionId = null);
 
 public record ImageEditJobCreatedDto(string JobId);
 
@@ -224,6 +226,7 @@ public static class ImageEditErrorCodes
     public const string ChatNotFound = "chat_not_found";
     // 404: нити картинки нет в этом чате (чужая неотличима от несуществующей)
     public const string ThreadNotFound = "thread_not_found";
+    public const string VersionNotFound = "version_not_found";
     // 409: «Сохранить как…» на занятое имя; в теле ответа ещё suggestion — ближайшее свободное
     public const string NameTaken = "name_taken";
     // 409: запись нитей чата со старой revision; в теле ещё state — актуальное

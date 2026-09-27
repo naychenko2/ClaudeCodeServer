@@ -17,8 +17,10 @@ namespace ClaudeHomeServer.Services.ImageEditor.Controllers;
 // своём чате — 404 thread_not_found. Каждая мутация несёт revision, от которой считал фронт:
 // устарела — 409 с актуальным состоянием. Ответ мутации — полное состояние нитей, как у GET.
 //
-// Взять вариант, откатиться и сохранить — только человек (решение Андрея 1): ручки здесь,
-// в тулсете агента таких инструментов нет.
+// Версии (изменение 27.09): каждый вариант запуска — версия нити сам, без «Взять». Ручки
+// current («продолжить от версии») и steps (правка без ИИ в текущую версию) — для всех нитей;
+// take / rollback / dismiss — только для нитей до 27.09 со стопками. Сохранить в проект — только
+// человек (решение Андрея 1).
 [ProjectCapability(ProjectCapabilityArea.FileBound)]
 [ApiController]
 [Authorize]
@@ -84,7 +86,32 @@ public class ThreadsController(
         return Result(await threads.RemoveAsync(UserId, projectId, sessionId, threadId, revision));
     }
 
-    // «Взять»: вариант задачи этой нити (jobId + variant) или шаг правки без ИИ (stepId)
+    // «Продолжить от версии»: версия становится текущей (от неё пойдёт следующая правка), нить —
+    // в работе; stepId — ещё и шаг этой версии. Ничего не удаляет
+    [HttpPut("{threadId}/current")]
+    public async Task<IActionResult> Continue(string projectId, string sessionId, string threadId,
+        [FromBody] ImageThreadContinueRequest req)
+    {
+        if (Gate(projectId, sessionId, out _) is { } denied) return denied;
+        if (string.IsNullOrWhiteSpace(req.VersionId))
+            return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest, "Не указана версия");
+        var stepId = string.IsNullOrWhiteSpace(req.StepId) ? null : req.StepId.Trim();
+        return Result(await threads.ContinueAsync(UserId, projectId, sessionId, threadId, req.VersionId.Trim(), stepId,
+            req.Revision));
+    }
+
+    // Правка без ИИ: готовый шаг (POST …/transform) ложится шагом текущей версии — новой версии нет
+    [HttpPost("{threadId}/steps")]
+    public async Task<IActionResult> AddStep(string projectId, string sessionId, string threadId,
+        [FromBody] ImageThreadStepRequest req)
+    {
+        if (Gate(projectId, sessionId, out _) is { } denied) return denied;
+        if (string.IsNullOrWhiteSpace(req.StepId))
+            return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest, "Не указан шаг");
+        return TakeResult(await threads.AddStepAsync(UserId, projectId, sessionId, threadId, req.StepId.Trim(), req.Revision));
+    }
+
+    // «Взять» (нити до 27.09): вариант задачи этой нити (jobId + variant) или шаг правки без ИИ (stepId)
     [HttpPost("{threadId}/take")]
     public async Task<IActionResult> Take(string projectId, string sessionId, string threadId,
         [FromBody] ImageThreadTakeRequest req, CancellationToken ct)
@@ -95,8 +122,12 @@ public class ThreadsController(
             return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
                 "Взять можно ровно одно: вариант задачи (jobId + variant) или шаг правки (stepId)");
 
-        var taken = await threads.TakeAsync(UserId, projectId, sessionId, threadId, req.JobId, req.Variant, req.StepId,
-            req.Revision, jobs, ct);
+        return TakeResult(await threads.TakeAsync(UserId, projectId, sessionId, threadId, req.JobId, req.Variant, req.StepId,
+            req.Revision, jobs, ct));
+    }
+
+    private IActionResult TakeResult(ImageThreadTake taken)
+    {
         if (taken.Write is { } written) return Result(written);
         var status = taken.ErrorCode switch
         {
@@ -118,7 +149,8 @@ public class ThreadsController(
         return Result(await threads.DismissAsync(UserId, projectId, sessionId, threadId, req.JobId.Trim(), req.Revision));
     }
 
-    // Откат: шаг нити становится текущим (null — исходник); стопки не трогает
+    // Откат (нити до 27.09): шаг стопки становится текущим (null — исходник); стопки не трогает.
+    // У нити без стопок — 400: там «откат» — продолжить от версии
     [HttpPost("{threadId}/rollback")]
     public async Task<IActionResult> Rollback(string projectId, string sessionId, string threadId,
         [FromBody] ImageThreadRollbackRequest req)
@@ -150,8 +182,10 @@ public class ThreadsController(
         }),
         ImageThreadWriteStatus.StepNotFound => Error(StatusCodes.Status404NotFound, ImageEditErrorCodes.StepNotFound,
             "Шага нет в этой картинке"),
+        ImageThreadWriteStatus.VersionNotFound => Error(StatusCodes.Status404NotFound, ImageEditErrorCodes.VersionNotFound,
+            "Версии нет в этой картинке"),
         ImageThreadWriteStatus.Invalid => Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
-            "У картинки уже есть шаги или варианты ждут выбора — убрать её нельзя"),
+            "Действие не подходит этой картинке: у неё уже есть шаги, версии или идёт генерация"),
         _ => Error(StatusCodes.Status404NotFound, ImageEditErrorCodes.ThreadNotFound, "Картинка не найдена в этом чате"),
     };
 
@@ -188,5 +222,9 @@ public sealed record ImageThreadTakeRequest(string? JobId, int? Variant, string?
 public sealed record ImageThreadDismissRequest(string? JobId, long Revision);
 
 public sealed record ImageThreadRollbackRequest(string? StepId, long Revision);
+
+public sealed record ImageThreadContinueRequest(string? VersionId, string? StepId, long Revision);
+
+public sealed record ImageThreadStepRequest(string? StepId, long Revision);
 
 public sealed record ImageThreadSettingsRequest(ImageThreadSettings? Settings, long Revision);

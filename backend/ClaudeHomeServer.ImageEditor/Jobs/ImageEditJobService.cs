@@ -67,6 +67,11 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         _time = time ?? TimeProvider.System;
     }
 
+    // Задача кончилась (готова, сбой, отмена): владелец и итог. Слушатель — нити картинок: варианты
+    // становятся версиями до события image_edit_completed, чтобы фронт, перечитав нити, их застал.
+    // Сбой слушателя задачу не роняет
+    public event Func<string, ImageEditJobDto, Task>? Finished;
+
     private sealed record Quote(
         string Id, string OwnerId, string ProjectId, string Provider, ImageEditModelInfo Model,
         ImageEditOp Op, int Count, ImageEditEstimateDto Estimate, DateTime ExpiresAt, int? ExpectedSeconds);
@@ -250,6 +255,24 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
                 job.Outcome = EditOutcome.Failed;
                 job.Error = "Не удалось сохранить результат";
             }
+            await NotifyFinishedAsync(job);
+        }
+    }
+
+    private async Task NotifyFinishedAsync(Job job)
+    {
+        if (Finished is not { } finished) return;
+        var dto = ToDto(job);
+        foreach (var listener in finished.GetInvocationList().Cast<Func<string, ImageEditJobDto, Task>>())
+        {
+            try
+            {
+                await listener(job.OwnerId, dto);
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "Редактор картинок: слушатель завершения задачи {JobId} упал", job.Id);
+            }
         }
     }
 
@@ -280,6 +303,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             job.SizeNote = sizeNote;
             job.Status = ImageEditJobStatus.Completed;
         }
+        await NotifyFinishedAsync(job);
         await Broadcast(job.OwnerId, new ImageEditCompletedMessage(job.Id, job.ProjectId, [.. job.Variants], cost,
             job.ChatSessionId, job.Initiator, sizeNote, job.ThreadId));
     }
@@ -311,6 +335,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             if (charged != false && job.RecordedAmount is { } amount)
                 job.Cost = new EditCost(amount, editor.PriceUnit);
         }
+        await NotifyFinishedAsync(job);
         await Broadcast(job.OwnerId,
             new ImageEditFailedMessage(job.Id, job.ProjectId, result.Outcome, charged, result.Error, retry,
                 job.ChatSessionId, job.Initiator, job.ThreadId));

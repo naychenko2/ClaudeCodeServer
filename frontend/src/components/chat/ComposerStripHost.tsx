@@ -43,11 +43,11 @@ export function ComposerStripHost({ projectId, sessionId, isMobile, builtins = [
   const current = strips.find(c => c.name === active);
   if (!current) return null;
 
-  const toggleCollapsed = () => {
-    const next = !collapsed;
+  const setCollapsedPersist = (next: boolean) => {
     setCollapsed(next);
     try { localStorage.setItem(COLLAPSED_KEY, next ? '1' : '0'); } catch { /* приватный режим */ }
   };
+  const toggleCollapsed = () => setCollapsedPersist(!collapsed);
 
   const switcher = strips.length > 1 ? (
     <span style={{ position: 'relative', display: 'inline-flex', flexShrink: 0 }}>
@@ -93,5 +93,5 @@ export function ComposerStripHost({ projectId, sessionId, isMobile, builtins = [
     </span>
   ) : null;
 
-  return <>{current.render!({ projectId, sessionId, isMobile, collapsed, switcher })}</>;
+  return <>{current.render!({ projectId, sessionId, isMobile, collapsed, setCollapsed: setCollapsedPersist, switcher })}</>;
 }

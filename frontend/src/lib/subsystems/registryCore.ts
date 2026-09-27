@@ -211,6 +211,8 @@ export interface ComposerStripCtx {
   isMobile: boolean;
   // Свёрнута ли полоса в строку 30 px (одно состояние на все полосы)
   collapsed: boolean;
+  // Свернуть в строку / развернуть (кнопка ⌃ в полосе, клик по свёрнутой строке)
+  setCollapsed?: (collapsed: boolean) => void;
   // Переключатель «Git ▾» от хоста: полоса ставит его на место своего заголовка
   switcher: ReactNode;
 }

@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Трей агента устройства (руки, Ш7): значок в области уведомлений, меню, плашка «ИИ управляет
+       компьютером» и «Стоп» по pipe агента. Чистый Win32 через P/Invoke, без WinForms: замер
+       2026-09-27 — WinForms добавляет к самодостаточному архиву агента win-x64 42,6 МБ файлов
+       (14,2 МБ в zip), порог задачи — 10 МБ. TFM намеренно net10.0, как у ConPtyBridge:
+       Linux CI собирает проект без EnableWindowsTargeting, а логика (TrayModel, TrayPipeClient)
+       тестируется в ClaudeHomeServer.DeviceAgent.Tests. Не Windows — рантайм-гвард, выход 64. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>WinExe</OutputType>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>ai-home-agent-tray</AssemblyName>
+    <RootNamespace>ClaudeHomeServer.DeviceAgent.Tray</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Контракт pipe (HandsPipe, HandsPipeMessage) — единый источник правды с агентом. В publish
+         агента Core уже лежит, лишнего веса трей не добавляет -->
+    <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="ClaudeHomeServer.DeviceAgent.Tests" />
+  </ItemGroup>
+
+</Project>

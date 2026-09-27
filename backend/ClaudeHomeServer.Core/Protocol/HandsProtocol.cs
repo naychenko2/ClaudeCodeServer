@@ -1,3 +1,4 @@
+using System.Security.Principal;
 using System.Text.Json;
 
 namespace ClaudeHomeServer.Protocol;
@@ -226,7 +227,29 @@ public static class HandsPipe
     /// </summary>
     public static string Name(string userSid) => $"AiHomeAgent.Tray.{userSid}";
 
+    /// <summary>Имя pipe текущего пользователя ОС — одно у агента и трея: на Windows по SID, на Unix по имени.</summary>
+    public static string NameForCurrentUser() =>
+        Name(OperatingSystem.IsWindows() ? WindowsIdentity.GetCurrent().User!.Value : Environment.UserName);
+
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+}
+
+/// <summary>
+/// Процесс трея <c>ai-home-agent-tray</c> (Ш7): лежит в каталоге версии рядом с агентом,
+/// поднимает и перезапускает его <c>ai-home-agent supervise</c> в сеансе пользователя.
+/// </summary>
+public static class HandsTrayProcess
+{
+    public static string ExecutableName => OperatingSystem.IsWindows() ? "ai-home-agent-tray.exe" : "ai-home-agent-tray";
+
+    /// <summary>Человек выбрал «Выйти из агента»: супервизор гасит агента и выходит сам, трей не перезапускает.</summary>
+    public const int ExitAgentCode = 10;
+
+    /// <summary>Трей этого пользователя уже запущен — второй экземпляр выходит сразу.</summary>
+    public const int AlreadyRunningCode = 3;
+
+    /// <summary>Не Windows: значка в области уведомлений нет.</summary>
+    public const int UnsupportedCode = 64;
 }
 
 /// <summary>Типы кадров pipe. Незнакомый тип получатель пропускает, а не рвёт соединение.</summary>
@@ -267,10 +290,25 @@ public sealed record HandsPipeMessage(
 /// <param name="Installed">Компонент установлен и SHA-256 сверен.</param>
 /// <param name="ActiveTurns">Ходы, к которым сейчас подключены руки (не больше одного — <see cref="HandsMachineLock"/>).</param>
 /// <param name="ServerOnline">Связь агента с сервером — «Стоп» работает и без неё.</param>
+/// <param name="Device">Сведения для меню трея; null — агент их не прислал.</param>
 public sealed record HandsTrayStatus(
     bool Installed,
     IReadOnlyList<HandsActiveTurn> ActiveTurns,
-    bool ServerOnline);
+    bool ServerOnline,
+    HandsTrayDevice? Device = null);
+
+/// <summary>Устройство глазами меню трея: только просмотр, правка — командами агента.</summary>
+/// <param name="Server">Адрес сервера, с которым сопряжён агент.</param>
+/// <param name="DeviceName">Имя устройства при сопряжении.</param>
+/// <param name="AgentVersion">Версия работающего агента.</param>
+/// <param name="Roots">Разрешённые корни проектов (<c>ai-home-agent roots</c>).</param>
+/// <param name="LogDirectory">Каталог журналов агента; null — агент запущен не из установки.</param>
+public sealed record HandsTrayDevice(
+    string Server,
+    string DeviceName,
+    string AgentVersion,
+    IReadOnlyList<string> Roots,
+    string? LogDirectory);
 
 /// <summary>Ход с руками: «ИИ управляет компьютером».</summary>
 /// <param name="TurnId">Ход исполнения на устройстве (<c>DeviceExecControl.TurnId</c>).</param>

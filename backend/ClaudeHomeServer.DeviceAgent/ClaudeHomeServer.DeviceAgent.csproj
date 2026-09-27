@@ -54,6 +54,9 @@
          мост падает на старте, а до фолбэка на powershell дело не доходит. Целый мост в bin
          агента кладёт таргет CopyConPtyBridge ниже -->
     <ProjectReference Include="..\ConPtyBridge\ConPtyBridge.csproj" Condition="'$(AgentTargetsWindows)' == 'true'" ReferenceOutputAssembly="false" Private="false" />
+    <!-- Трей рук (Ш7): отдельный процесс ai-home-agent-tray рядом с агентом, его поднимает
+         supervise (TraySupervisor). Ссылка и копирование — по образцу моста ConPTY выше -->
+    <ProjectReference Include="..\ClaudeHomeServer.DeviceAgent.Tray\ClaudeHomeServer.DeviceAgent.Tray.csproj" Condition="'$(AgentTargetsWindows)' == 'true'" ReferenceOutputAssembly="false" Private="false" />
   </ItemGroup>
 
   <Target Name="CopyConPtyBridge" AfterTargets="Build" Condition="'$(AgentTargetsWindows)' == 'true'">
@@ -66,6 +69,14 @@
     <Copy SourceFiles="@(ConPtyBridgeFiles)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
   </Target>
 
+  <Target Name="CopyAgentTray" AfterTargets="Build" Condition="'$(AgentTargetsWindows)' == 'true'">
+    <ItemGroup>
+      <AgentTrayFiles Condition="'$(RuntimeIdentifier)' == ''" Include="..\ClaudeHomeServer.DeviceAgent.Tray\bin\$(Configuration)\net10.0\ai-home-agent-tray*" />
+      <AgentTrayFiles Condition="'$(RuntimeIdentifier)' != ''" Include="..\ClaudeHomeServer.DeviceAgent.Tray\bin\$(Configuration)\net10.0\$(RuntimeIdentifier)\ai-home-agent-tray*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(AgentTrayFiles)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
+
   <!-- Publish под Windows: мост публикуется в тот же каталог и с тем же RID и SelfContained,
        что агент, — build-копия выше в publish не попадает (publish берёт свои элементы, а не
        содержимое bin). Самодостаточные агент и мост делят одни и те же файлы рантайма. -->
@@ -76,6 +87,8 @@
       <_ConPtyBridgePublishProps Condition="'$(RuntimeIdentifier)' != ''">$(_ConPtyBridgePublishProps);RuntimeIdentifier=$(RuntimeIdentifier)</_ConPtyBridgePublishProps>
     </PropertyGroup>
     <MSBuild Projects="..\ConPtyBridge\ConPtyBridge.csproj" Targets="Publish" Properties="$(_ConPtyBridgePublishProps)" />
+    <!-- Трей — тем же набором свойств: тот же каталог, RID и SelfContained, общий рантайм -->
+    <MSBuild Projects="..\ClaudeHomeServer.DeviceAgent.Tray\ClaudeHomeServer.DeviceAgent.Tray.csproj" Targets="Publish" Properties="$(_ConPtyBridgePublishProps)" />
   </Target>
 
   <!-- Linux/macOS: pty-bridge терминала собирается из исходника рядом с агентом (у сервера

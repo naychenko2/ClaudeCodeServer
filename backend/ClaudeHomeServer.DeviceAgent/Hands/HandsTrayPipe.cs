@@ -24,6 +24,7 @@ internal sealed class HandsTrayPipe : IAsyncDisposable
     private readonly HandsRegistry _registry;
     private readonly Func<bool> _installed;
     private readonly Func<bool> _serverOnline;
+    private readonly Func<HandsTrayDevice?> _device;
     private readonly ILogger _log;
     private readonly CancellationTokenSource _stop = new();
     private readonly Lock _lock = new();
@@ -32,19 +33,17 @@ internal sealed class HandsTrayPipe : IAsyncDisposable
     private HashSet<string> _announced = new(StringComparer.Ordinal);
     private Task? _accept;
 
-    public HandsTrayPipe(string name, HandsRegistry registry, Func<bool> installed, Func<bool> serverOnline, ILogger? log = null)
+    public HandsTrayPipe(string name, HandsRegistry registry, Func<bool> installed, Func<bool> serverOnline, ILogger? log = null,
+        Func<HandsTrayDevice?>? device = null)
     {
         _name = name;
         _registry = registry;
         _installed = installed;
         _serverOnline = serverOnline;
+        _device = device ?? (() => null);
         _log = log ?? NullLogger.Instance;
         _registry.Changed += OnRegistryChanged;
     }
-
-    /// <summary>Имя pipe текущего пользователя ОС: на Windows — по SID, на Unix — по имени пользователя.</summary>
-    public static string NameForCurrentUser() =>
-        HandsPipe.Name(OperatingSystem.IsWindows() ? WindowsIdentity.GetCurrent().User!.Value : Environment.UserName);
 
     public void Start()
     {
@@ -54,7 +53,7 @@ internal sealed class HandsTrayPipe : IAsyncDisposable
     }
 
     /// <summary>Снимок для трея.</summary>
-    public HandsTrayStatus Status() => new(_installed(), _registry.Active, _serverOnline());
+    public HandsTrayStatus Status() => new(_installed(), _registry.Active, _serverOnline(), _device());
 
     /// <summary>Разослать снимок всем подключённым треям (перемена связи с сервером, установка компонента).</summary>
     public void Broadcast() => _ = BroadcastAsync(new HandsPipeMessage(HandsPipeTypes.Status, Status: Status()));

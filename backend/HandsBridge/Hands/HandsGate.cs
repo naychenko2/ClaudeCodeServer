@@ -35,8 +35,10 @@ internal static class HandsGate
     public static CallToolResult Deny(string tool, HandsDecision decision) =>
         Deny(tool, decision.Reason ?? "Not allowed.");
 
-    public static CallToolResult Deny(string tool, string reason) =>
-        new()
+    public static CallToolResult Deny(string tool, string reason)
+    {
+        HandsLog.Write($"гейт: отказ {tool}: {reason}");
+        return new()
         {
             Content =
             [
@@ -47,6 +49,7 @@ internal static class HandsGate
             ],
             IsError = true,
         };
+    }
 
     private sealed class NoWindows : IHandsWindowSystem
     {

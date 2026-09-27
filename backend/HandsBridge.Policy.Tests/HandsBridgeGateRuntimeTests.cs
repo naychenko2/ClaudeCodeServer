@@ -16,9 +16,13 @@ namespace HandsBridge.Policy.Tests;
 /// на Windows ответ не <c>hands_policy</c>, на Linux исполнение доходит до сервисов моста и падает
 /// на инициализации WinAPI/COM, куда отказ гейта не пускает.
 /// </summary>
+[Collection(Collection)]
 public class HandsBridgeGateRuntimeTests
 {
-    private static readonly Lazy<Assembly> Bridge = new(LoadBridge);
+    /// <summary>Гейт моста — статика процесса: тесты, настраивающие его, не идут параллельно.</summary>
+    public const string Collection = "hands-bridge-runtime";
+
+    internal static readonly Lazy<Assembly> Bridge = new(LoadBridge);
 
     [Fact]
     public async Task App_denied_by_gate_does_not_launch()
@@ -112,7 +116,7 @@ public class HandsBridgeGateRuntimeTests
     }
 
     /// <summary>Вызов метода инструмента: неуказанные параметры — умолчания из схемы.</summary>
-    private static async Task<(bool IsError, string Text)> Call(string typeName, Dictionary<string, object?> args)
+    internal static async Task<(bool IsError, string Text)> Call(string typeName, Dictionary<string, object?> args)
     {
         var type = Bridge.Value.GetType(typeName, throwOnError: true)!;
         var method = type.GetMethods(BindingFlags.Public | BindingFlags.Static)

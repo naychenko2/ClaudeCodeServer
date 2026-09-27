@@ -214,6 +214,20 @@ glif — `compose_project` + опрос джобы) за роутером `Image
 схема ходов, белый список и форма хранения — [ADR-009](docs/adr/ADR-009-project-icon-glyph.md);
 тексты интерфейса — [docs/features/project-icon-glyphs.md](docs/features/project-icon-glyphs.md).
 
+## Раздел «Архитектура» (Viaduct)
+
+C4-схема проекта в редакторе Viaduct Community (BUSL-1.1 — только для своих, не как
+hosted-сервис; код Viaduct в репу не попадает) в sandbox-iframe без `allow-same-origin`.
+Источник правды — файл `docs/architecture/model.viaduct.json` под git: версия SHA-256, 409
+на устаревшую; пишут его редактор (мост-шим, дебаунс 1,2 с), «Собрать из кода» (слияние не
+затирает найденное) и тулсет `arch_*`. Вынесен как Notes: бэк — динамический модуль
+(`DynamicModules`, шовы Core `IArchitectureCodeSource`/`IStaticBranchContributor`), фронт —
+MF-remote `frontend/modules/architecture`. Статика `/modules/viaduct` — под тумблером подсистемы.
+Фич-флага нет: раздел и тулсет есть у всех, когда модуль загружен (`DynamicModules` → `architecture`
++ `Subsystems:architecture:Enabled`), выключается только конфигом.
+Устройство и ограничения — [architecture-section.md](docs/features/architecture-section.md),
+сборка — [viaduct-module.md](docs/operations/viaduct-module.md), решение — [ADR-016](docs/adr/ADR-016-viaduct-architecture-section.md).
+
 ## Внутренние подсистемы (Services/Composition)
 
 Внутренние границы продукта — **подсистемы**, контракт
@@ -464,6 +478,7 @@ Microsoft DI не выгружает контейнер по конструкц�
 выход по `is null`, честный отказ на границе со своим кодом (502/503) — 500 и
 необработанное исключение не годятся. Гейт ставится **на регистрацию**: пост-хок
 удаление дескрипторов не видит регистрацию через `ImplementationFactory`.
+У динамических модулей (`DynamicModules`: Notes, Architecture) гейт проверяет `ModuleLoader` до `Register`: выключенный модуль не регистрирует сервисы и не подключает ApplicationPart.
 Грабля, которая касается всех вынесенных вертикалей:
 `ApplicationPart` вертикали под `Microsoft.NET.Sdk.Web` подключается MSBuild
 сам, «добавить часть по гейту» — мёртвый код, изоляция маршрутов делается
@@ -811,7 +826,7 @@ Dark launch: фича коммитится выключенной и включ�
 ([Models/FeatureFlag.cs](backend/ClaudeHomeServer/Models/FeatureFlag.cs)); хранение —
 override в `data/users.json`; фронт — стор [lib/featureFlags.ts](frontend/src/lib/featureFlags.ts),
 хук `useFeature(FLAGS.key)`. Большинство старых флажных фич включены безусловно
-(2026-08); в каталоге **восемь флагов**: `workspace-destructive` (постоянный предохранитель от
+(2026-08); в каталоге **восемь флагов** (флаг `architecture` снят 2026-09-26 — раздел включается только конфигом модуля, см. раздел «Архитектура»): `workspace-destructive` (постоянный предохранитель от
 необратимого удаления), `change-dossiers-recall` (история решений по коду — подсказки
 персонам и выгрузка отдельной веткой, [ADR-004](docs/adr/ADR-004-change-dossiers.md)),
 `desktop-agent` (руки на машине пользователя: тип чата «Десктопный», тумблер грани в

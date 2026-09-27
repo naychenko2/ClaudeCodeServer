@@ -30,7 +30,7 @@ export {
 export { useSubsystem, isSubsystemEnabled } from '../subsystems';
 
 // ─── subsystems/registryCore ─────────────────────────────────────────────────
-export { registerSubsystem } from '../subsystems/registryCore';
+export { registerSubsystem, REVEAL_PANEL_EVENT } from '../subsystems/registryCore';
 export type { SubsystemManifest } from '../subsystems/registryCore';
 
 // ─── offline ─────────────────────────────────────────────────────────────────

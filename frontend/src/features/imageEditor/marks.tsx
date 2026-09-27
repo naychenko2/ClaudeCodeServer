@@ -174,3 +174,33 @@ export async function exportAnnotated(img: HTMLImageElement, marks: Mark[], w: n
   }
   return toBlob(canvas);
 }
+
+// Снимок для сообщения агенту (режим «Чат», записка v3 «Композер»): картинка со всеми
+// пометками, кисть — полупрозрачной заливкой. Ужимается до maxSide по длинной стороне:
+// больше модели не нужно, а лишние мегабайты оседают в транскрипте на каждый --resume
+export async function exportChatSnapshot(img: HTMLImageElement, marks: Mark[], w: number, h: number, maxSide = 1568): Promise<Blob | null> {
+  if (!marks.length) return null;
+  const annotated = await exportAnnotated(img, marks, w, h).catch(() => null);
+  const base: CanvasImageSource | null = annotated ? await createImageBitmap(annotated).catch(() => null) : img;
+  if (!base) return null;
+  const s = Math.min(1, maxSide / Math.max(w, h));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(w * s));
+  canvas.height = Math.max(1, Math.round(h * s));
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(base, 0, 0, canvas.width, canvas.height);
+  if (base instanceof ImageBitmap) base.close();
+  const masks = marks.filter((m): m is Extract<Mark, { type: 'mask' }> => m.type === 'mask');
+  if (masks.length) {
+    ctx.save();
+    ctx.scale(s, s);
+    ctx.globalAlpha = 0.55;
+    ctx.strokeStyle = tokenColor(C.accent, 'orange');
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    for (const m of masks) { ctx.lineWidth = m.width; strokePath(ctx, m.points); }
+    ctx.restore();
+  }
+  return toBlob(canvas);
+}

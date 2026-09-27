@@ -12,7 +12,7 @@ import { GitCommitView } from '../components/GitCommitView';
 import { GitChangesRail } from '../components/GitChangesRail';
 import { VideoPanel } from '../features/video/VideoPanel';
 import { useVideoPlaying } from '../lib/videoStage';
-import { type PanelKey, type RailBadgeInfo } from './workspace/panelCatalog';
+import { isPanelKey, type PanelKey, type RailBadgeInfo } from './workspace/panelCatalog';
 import { KnowledgePanel } from '../components/KnowledgePanel';
 import { ModelsSpendModal } from '../features/modelsSpend/ModelsSpendModal';
 import { ProjectIntroCard } from '../features/projects/ProjectIntroCard';
@@ -23,8 +23,8 @@ import { api } from '../lib/api';
 import { chatNeighborForArchive } from '../lib/chatUpdate';
 import { useFeature, FLAGS } from '../lib/featureFlags';
 import { SUBSYSTEMS, useSubsystem } from '../lib/subsystems';
-import { useSlotItem } from '../lib/subsystems/registry';
-import type { WorkspacePanelNotesCtx } from '../lib/subsystems/registryCore';
+import { REVEAL_PANEL_EVENT, SLOT_WORKSPACE_PANEL_DEF, useSlot, useSlotItem } from '../lib/subsystems/registry';
+import type { WorkspacePanelDefApi, WorkspacePanelDefCtx, WorkspacePanelNotesCtx } from '../lib/subsystems/registryCore';
 import { isArchivedChat, matchChatFilter, loadChatFilters } from '../lib/chatFilters';
 import { markChatRead } from '../lib/chatReadState';
 import { refreshProjectActivity } from '../lib/projectActivity';
@@ -305,6 +305,10 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   const notesEnabled = useSubsystem(SUBSYSTEMS.notes)
   // Панель «Заметки проекта» — вклад слота workspace-panel (ноль прямых импортов фичи).
   const notesPanel = useSlotItem<WorkspacePanelNotesCtx>('workspace-panel', 'project-notes')
+  // Панели подсистем (слот workspace-panel-def, например «Персонажи» редактора картинок):
+  // ключ зарезервирован в panelCatalog, тело рисует подсистема. Выключенная подсистема
+  // вкладов не отдаёт — контента нет, и keyAvailable прячет кнопку в рельсе
+  const panelDefs = useSlot<WorkspacePanelDefCtx, WorkspacePanelDefApi>(SLOT_WORKSPACE_PANEL_DEF)
 
   // Восстанавливаем состояние окна для этого проекта (компонент перемонтируется при входе в проект)
   const [leftTab, setLeftTab] = useState<LeftTab>(() => {
@@ -363,7 +367,16 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   // «История решений»: реветь панель по клику на файл в файловом менеджере — той
   // же точкой входа, что «Открыть изменения» у ProjectGitBar и тумблер «Оглавление»
   // у FileViewer (правим раскладку напрямую через стор зон)
-  const { reveal: revealPanelKey } = wsPanels.use();
+  const { reveal: revealPanelKey, close: closePanelKey } = wsPanels.use();
+  // Показ панели по просьбе подсистемы (пунктирный чип «Персонаж» в полосе «Картинки»)
+  useEffect(() => {
+    const onReveal = (e: Event) => {
+      const key = (e as CustomEvent<{ key?: unknown }>).detail?.key;
+      if (isPanelKey(key)) revealPanelKey(key);
+    };
+    window.addEventListener(REVEAL_PANEL_EVENT, onReveal);
+    return () => window.removeEventListener(REVEAL_PANEL_EVENT, onReveal);
+  }, [revealPanelKey]);
   // Режим просмотра файла — из ГЛОБАЛЬНОГО предпочтения (одно на все проекты), а не
   // из per-project стора: тумблер в шапке файла пишет предпочтение, точки открытия
   // его читают. См. loadFileFullscreenPref в lib/workspaceState.
@@ -1942,6 +1955,11 @@ const windowWidth = useWindowWidth();
             terminal: <DeviceAgentGate project={project}><TerminalPanelContent terminals={terminals} activeTerminalId={activeTerminalId} onSelect={handleSelectTerminal} onCreate={handleCreateTerminal} onStop={handleStopTerminal} onActivity={setTerminalBusy} /></DeviceAgentGate>,
             preview: <DeviceAgentGate project={project}><PreviewPanelContent projectId={project.id} project={project} services={previewServices} activePreviewId={activePreviewId} onSelect={handleSelectPreview} onStart={startService} onStop={stopService} onRefresh={refreshServices} /></DeviceAgentGate>,
             video: <VideoPanel />,
+            ...Object.fromEntries(panelDefs.flatMap(d => (
+              d.name && isPanelKey(d.name) && d.render && (d.action?.isAvailable?.(project.id) ?? true)
+                ? [[d.name, d.render({ projectId: project.id, isMobile: false, onClose: () => closePanelKey(d.name as PanelKey) })]]
+                : []
+            ))),
           }}
         />
       </div>

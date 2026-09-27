@@ -34,7 +34,7 @@ function resolveModel(catalog: ImageEditCatalog | null, settings: ImageThreadSet
   return { pv, m: currentModel(pv, settings.model ?? fallback) };
 }
 
-function loadImage(src: string): Promise<HTMLImageElement> {
+export function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.crossOrigin = 'anonymous';

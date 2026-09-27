@@ -75,6 +75,13 @@ async function load(projectId: string, sessionId: string, force = false) {
   }
 }
 
+// Состояние чата до первой мутации (вход из дерева в ещё не открытый чат): без него
+// мутация ушла бы с ревизией 0 и словила 409. Сбой запроса — наружу, вызывающему
+export async function ensureThreads(projectId: string, sessionId: string): Promise<void> {
+  if (_entries.get(sessionId)?.loaded) return;
+  apply(sessionId, projectId, await threadsApi.get(projectId, sessionId));
+}
+
 export function getThreadsState(sessionId: string | null): ImageThreadsState {
   return (sessionId && _entries.get(sessionId)?.state) || EMPTY_THREADS;
 }

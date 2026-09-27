@@ -902,7 +902,8 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
   const [mdEnhance, setMdEnhance] = useState(false);
 
   // === Редактор картинок: «Редактировать» у картинки, «Нарисовать картинку» у папки ===
-  // Вход — вклад MF-модуля image-editor: нет модуля или флага — нет и пунктов
+  // Вход — вклад MF-модуля image-editor: нет модуля или флага — нет и пунктов. Картинка
+  // открывается в последнем активном чате проекта (ADR-019), попапом «Редактор»
   const imageEditor = useSlotItem<never, ImageEditorOpenerApi>('image-editor', 'opener')?.action;
   const imageEditorOn = useFeature(FLAGS.imageEditor) && !!imageEditor;
   const openEditor = (target: ImageEditorOpenTarget) =>

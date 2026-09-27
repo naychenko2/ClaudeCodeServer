@@ -14,7 +14,7 @@
 
 import { useMemo, useSyncExternalStore } from 'react';
 import type { ComponentType, LazyExoticComponent, ReactNode } from 'react';
-import type { AuthState, ChatItem, ImageSnapshotMark, NoteDetail, Persona, Session } from '../../types';
+import type { AuthState, ChatItem, NoteDetail, Persona, Session } from '../../types';
 import type { HubTabValue } from '../../components/hubTabsModel';
 import { isSubsystemEnabled, subscribeSubsystems } from '../subsystems';
 
@@ -160,8 +160,6 @@ export interface ImageEditorOpenRequest {
   projectId: string;
   projectName: string;
   target: ImageEditorOpenTarget;
-  // Чат картинки, с которым открыть редактор (карточка чата в списке)
-  sessionId?: string | null;
   // «Показать в файлах» после сохранения
   onShowInFiles?: (path: string) => void;
 }
@@ -177,47 +175,6 @@ export interface FileViewerToolbarCtx {
   filePath: string;
   onOpenFile?: (path: string) => void;
 }
-
-// Чип снимка холста в композере чата картинки (ADR-018 §3)
-export interface ImageChatSnapshotChip {
-  // «hero.png · 3 пометки» — холст изменился с прошлого сообщения; «hero.png · без изменений» — нет
-  label: string;
-  changed: boolean;
-  // Прикладывать ли снимок: крестик снимает, пункт меню «+» возвращает
-  on: boolean;
-  onToggle: (on: boolean) => void;
-}
-
-// Что уходит в чат картинки после prepareSend: снимок (если приложен) уже в paths
-export interface ImageChatPrepared {
-  text: string;
-  paths: string[];
-  snapshot: ImageSnapshotMark | null;
-}
-
-// Чат картинки, который ядро отдаёт модулю через контекст `app-overlay`: модуль
-// рисует готовый компонент, а не свою копию ChatPanel (ADR-018 §10.3, вариант В)
-export interface ImageChatSlotProps {
-  projectId: string;
-  // null — картинки в проекте ещё нет («Нарисовать картинку»): чат-черновик по папке
-  sourcePath: string | null;
-  // null — чата ещё нет: композер-заглушка, чат создаётся первым сообщением
-  sessionId: string | null;
-  // Псевдоключ черновика `image:{projectId}:{path}`
-  draftKey: string;
-  // Первая строка «Чат привязан к…» с кнопками
-  leadIn: ReactNode;
-  // Грузит снимок холста в вложения чата, если холст изменился
-  prepareSend: (sessionId: string, text: string, paths: string[]) => Promise<ImageChatPrepared>;
-  // Чат создаёт модуль своей ручкой: ядро маршрутов модуля не знает
-  createChat: (personaId?: string) => Promise<Session>;
-  onSessionChange: (session: Session) => void;
-  snapshot: ImageChatSnapshotChip | null;
-  // Подсказки пустой ленты: тап отправляет сообщение
-  suggestions?: string[];
-}
-// Render-слот `app-overlay`: слои уровня приложения поверх раскладки
-export interface AppOverlayCtx { ImageChat: ComponentType<ImageChatSlotProps> }
 
 // Render-слот `chat-item-tool`: своя карточка записи ленты. Имя вклада — полное имя
 // инструмента у tool_use (`mcp__image-editor__image_generate`) или kind записи
@@ -282,6 +239,10 @@ export interface ComposerModeApi {
 // Render-слот `composer-chip`: чип над полем ввода («hero.png · 1 пометка ✕»).
 // Вклад сам решает, рисоваться ли (null — чипа нет).
 export interface ComposerChipCtx { projectId: string | null; sessionId: string | null; isMobile: boolean }
+// Действие вклада composer-chip: перед отправкой сообщения агенту (режим «Чат») вклад
+// отдаёт файлы, которые уйдут вложениями (снимок картинки с пометками), и сам гасит
+// свой чип. Пустой список — прикладывать нечего
+export interface ComposerChipApi { beforeSend?: (ctx: ComposerChipCtx) => Promise<File[]> }
 
 // Слот `workspace-panel-def`: панель рабочей области от подсистемы (например,
 // «Персонажи»). Имя вклада — ключ панели; render рисует тело, action описывает её
@@ -292,6 +253,9 @@ export interface WorkspacePanelDefApi {
   icon: ReactNode;
   isAvailable?: (projectId: string) => boolean;
 }
+// Показать панель рабочей области извне (например, пунктирный чип «Персонаж» в полосе):
+// событие окна с detail = { key }; слушает страница проекта, неизвестный ключ пропускается
+export const REVEAL_PANEL_EVENT = 'cc-reveal-panel';
 
 // ---- Хранилище ----
 const _manifests: SubsystemManifest[] = [];

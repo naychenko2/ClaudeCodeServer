@@ -3,13 +3,16 @@
 // с: …» (или «Нарисовать новую» без выбора), вторая — чем рисовать, число вариантов,
 // цена, персонаж и «Размер оригинала». Свёрнутая — одна строка 30 px.
 
-import { useEffect, useState, type MouseEvent, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { AlertTriangle, Minus, Plus, Sparkles, User } from 'lucide-react';
 import {
-  Button, Checkbox, Chip, IconButton, Menu, MenuItem, C, FS, R, SP, ICON_SIZE, ICON_STROKE,
+  Button, Checkbox, Chip, IconButton, Modal, C, FS, R, SP, ICON_SIZE, ICON_STROKE,
 } from 'aihome_shell/kit';
 import type { ComposerStripCtx } from '../../../lib/subsystems/registryCore';
-import { AUTO_MODEL, imageEditorApi, type ImageEditCharacter } from '../api';
+import { AUTO_MODEL, imageEditorApi } from '../api';
+import { CharactersPanel } from '../characters/CharactersPanel';
+import { CHARACTERS_PANEL, revealWorkspacePanel } from '../characters/panel';
+import { useCharacters } from '../characters/useCharacters';
 import { ProviderModelPicker } from '../ProviderModelPicker';
 import { createDraft, releaseFocus } from '../thread/actions';
 import { focusLabel, isEmptyThread } from '../thread/model';
@@ -19,27 +22,11 @@ import { useThreadLaunch } from '../thread/useThreadLaunch';
 
 const ic = (I: typeof User, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
 
-// Персонажи проекта: один запрос на проект за вкладку
-const charLists = new Map<string, Promise<ImageEditCharacter[]>>();
-function useCharacterList(projectId: string, open: boolean) {
-  const [list, setList] = useState<ImageEditCharacter[] | null>(null);
-  useEffect(() => {
-    let alive = true;
-    let p = charLists.get(projectId);
-    if (!p) {
-      p = imageEditorApi().listCharacters(projectId).catch(() => { charLists.delete(projectId); return []; });
-      charLists.set(projectId, p);
-    }
-    void p.then(l => { if (alive) setList(l); });
-    return () => { alive = false; };
-  }, [projectId, open]);
-  return list;
-}
-
-// Персонаж — на проект: остаётся подключённым при смене картинки, чип на миг подсвечивается
-function CharacterChip({ projectId, slug, focusKey }: { projectId: string; slug: string | null; focusKey: string | null }) {
-  const [menu, setMenu] = useState<DOMRect | null>(null);
-  const list = useCharacterList(projectId, !!menu);
+// Персонаж — на проект: остаётся подключённым при смене картинки, чип на миг подсвечивается.
+// Пунктирный «Персонаж» открывает панель «Персонажи» (на телефоне — шторкой)
+function CharacterChip({ projectId, slug, focusKey, isMobile }: { projectId: string; slug: string | null; focusKey: string | null; isMobile: boolean }) {
+  const { list } = useCharacters(projectId);
+  const [sheet, setSheet] = useState(false);
   const [flash, setFlash] = useState(false);
   const [seenFocus, setSeenFocus] = useState(focusKey);
   if (seenFocus !== focusKey) {
@@ -55,23 +42,22 @@ function CharacterChip({ projectId, slug, focusKey }: { projectId: string; slug:
   const avatar = current?.photos[0]
     ? <img src={imageEditorApi().characterPhotoUrl(projectId, current.slug, current.photos[0].file)} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
     : undefined;
-  const open = (e: MouseEvent) => setMenu((e.currentTarget as HTMLElement).getBoundingClientRect());
+  const openPanel = () => {
+    if (isMobile) setSheet(true);
+    else revealWorkspacePanel(CHARACTERS_PANEL);
+  };
   return (
-    <span style={{ display: 'inline-flex' }} onClick={slug ? undefined : open}>
+    <span style={{ display: 'inline-flex' }}>
       {slug
-        ? <Chip selected={flash} leading={avatar} maxW={160} title="Уходит в каждую генерацию" onRemove={() => setPrefs(projectId, { characterSlug: null })}>
+        ? <Chip selected={flash} leading={avatar} maxW={160} title="Уходит в каждую генерацию" onClick={openPanel}
+            onRemove={() => setPrefs(projectId, { characterSlug: null })}>
             {current?.name ?? slug}
           </Chip>
-        : <Chip dashed leading={ic(User)} title="Подключить персонажа проекта">Персонаж</Chip>}
-      {menu && (
-        <Menu anchor={menu} onClose={() => setMenu(null)} minWidth={220}>
-          {list === null && <MenuItem label="Загружаем…" disabled onClick={() => {}} />}
-          {list?.length === 0 && <MenuItem label="В проекте пока нет персонажей" disabled onClick={() => {}} />}
-          {list?.map(c => (
-            <MenuItem key={c.slug} label={`${c.name} · ${c.photos.length} фото`}
-              onClick={() => { setMenu(null); setPrefs(projectId, { characterSlug: c.slug }); }} />
-          ))}
-        </Menu>
+        : <Chip dashed leading={ic(User)} title="Персонажи проекта" onClick={openPanel}>Персонаж</Chip>}
+      {sheet && (
+        <Modal title="Персонажи" onClose={() => setSheet(false)}>
+          <CharactersPanel projectId={projectId} />
+        </Modal>
       )}
     </span>
   );
@@ -159,7 +145,7 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
               onClick={() => L.setSettings({ count: count + 1 })}>{ic(Plus)}</IconButton>
           </span>
           <span data-image-price="" style={{ color: C.textPrimary, fontWeight: 600, whiteSpace: 'nowrap' }}>{L.priceLabel}</span>
-          <CharacterChip projectId={projectId} slug={L.prefs.characterSlug} focusKey={state.focus} />
+          <CharacterChip projectId={projectId} slug={L.prefs.characterSlug} focusKey={state.focus} isMobile={isMobile} />
           {withSteps && (
             <span style={{ display: 'inline-flex', alignItems: 'center' }} title="Результат вернётся в размере исходника">
               <Checkbox checked={L.settings.matchSourceSize} onChange={v => L.setSettings({ matchSourceSize: v })}

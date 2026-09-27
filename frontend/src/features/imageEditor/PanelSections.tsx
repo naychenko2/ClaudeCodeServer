@@ -1,15 +1,14 @@
-// Секции левой панели редактора v2 (макет image-editor-v2): «Образцы» с ролями,
-// «Быстрые действия», «История шагов» и кнопки сохранения шага в шапке.
+// Секции попапа «Редактор»: «Образцы» с ролями и «Быстрые действия».
 // Логика входа задачи — в editorInputs.ts.
 
 import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
-import { Check, ChevronDown, ChevronUp, Expand, FolderOpen, Image as ImageIcon, Layers, Plus, Save, ScanFace, Scissors, Search, Sparkles, Upload, X } from 'lucide-react';
+import { ChevronDown, ChevronUp, Expand, FolderOpen, Image as ImageIcon, Layers, Plus, ScanFace, Scissors, Search, Sparkles, Upload, X } from 'lucide-react';
 import { Button, EmptyState, IconButton, IconField, Menu, MenuItem, Modal, ModalActions, SegmentedControl, ICON_SIZE, ICON_STROKE, C, FS, R, SP, api as appApi } from 'aihome_shell/kit';
 import type { ReferenceRole } from './api';
 import { SectionHint } from './EditorSections';
 import {
-  isImagePath, OUTPAINT_RATIOS, QUICK_ACTIONS, QUICK_LABEL, roleShort, SAMPLE_ROLES, stepLabel,
-  type History, type OutpaintRatio, type QuickAction, type Sample,
+  isImagePath, OUTPAINT_RATIOS, QUICK_ACTIONS, QUICK_LABEL, roleShort, SAMPLE_ROLES,
+  type OutpaintRatio, type QuickAction, type Sample,
 } from './editorInputs';
 
 const ic = (I: typeof X, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
@@ -220,79 +219,6 @@ export function QuickActions({ actions = QUICK_ACTIONS, blockReason, ratio, onRa
         </div>
       )}
       <SectionHint>Запускаются сразу, без промпта. Число вариантов и цена — как в поле промпта.</SectionHint>
-    </div>
-  );
-}
-
-// ── История шагов ──
-
-export function HistorySteps({ history, disabled, onStep }: {
-  history: History;
-  disabled: boolean;
-  onStep: (i: number) => void;
-}) {
-  const { steps, cur } = history;
-  const hint = steps.length <= 1
-    ? 'Здесь появятся шаги правки. На любой можно вернуться.'
-    : cur < steps.length - 1
-      ? `Вы на шаге «${stepLabel(history, cur)}». Следующая правка заменит шаги после него.`
-      : 'Нажмите на шаг, чтобы вернуться к нему.';
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
-      {steps.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs }}>
-          {steps.map((s, i) => (
-            <Button key={s.id} size="sm" fullWidth variant={i === cur ? 'ghostAccent' : 'ghost'} disabled={disabled}
-              onClick={() => onStep(i)} title={s.title}
-              style={{
-                justifyContent: 'flex-start', height: 'auto', padding: SP.xxs, gap: SP.sm, fontWeight: 400,
-                border: `1px solid ${i === cur ? C.accent : 'transparent'}`, opacity: i > cur ? 0.55 : 1,
-              }}>
-              <span style={{ width: 64, flex: '0 0 64px', aspectRatio: '4 / 3', borderRadius: R.sm, overflow: 'hidden', border: `1px solid ${C.border}`, background: C.bgInset }}>
-                <img src={s.src} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
-              </span>
-              <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0, textAlign: 'left' }}>
-                <span style={{ fontSize: FS.xs, color: C.textMuted }}>{stepLabel(history, i)}</span>
-                {!s.original && (
-                  <span style={{ fontSize: FS.sm, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.title}</span>
-                )}
-              </span>
-            </Button>
-          ))}
-        </div>
-      )}
-      <SectionHint>{hint}</SectionHint>
-    </div>
-  );
-}
-
-// ── Сохранение шага: шапка редактора ──
-
-// «Сохранить» — сразу следующей версией рядом, «Сохранить как…» — своё имя и папка
-export function SaveButtons({ mobile, disabled, onSave, onSaveAs }: {
-  mobile: boolean;
-  disabled: boolean;
-  onSave: () => void;
-  onSaveAs: () => void;
-}) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexShrink: 0 }}>
-      {mobile
-        ? (
-          <IconButton title="Сохранить как…" ariaLabel="Сохранить как…" disabled={disabled} onClick={onSaveAs}>
-            {ic(Save, ICON_SIZE.sm)}
-          </IconButton>
-        )
-        : (
-          <Button size="sm" variant="secondary" leftIcon={ic(Save)} disabled={disabled} onClick={onSaveAs}
-            title="Сохранить под другим именем или в другую папку">
-            Сохранить как…
-          </Button>
-        )}
-      <Button size="sm" variant="primary" leftIcon={ic(Check)} disabled={disabled} onClick={onSave}
-        title="Сохранить следующей версией рядом">
-        Сохранить
-      </Button>
     </div>
   );
 }

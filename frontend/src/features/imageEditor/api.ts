@@ -8,7 +8,6 @@
 // Мок повторяет контракт целиком, включая SignalR-события задачи.
 
 import { request, readStoredToken, onMessage } from 'aihome_shell/kit';
-import type { Session } from '../../types';
 import { transformedSize } from './transforms';
 
 export type ImageEditOp = 'generate' | 'edit' | 'inpaint' | 'outpaint' | 'removeBackground' | 'upscale' | 'enhanceFaces';
@@ -269,53 +268,8 @@ export interface ImageTransformRequest {
 // stepId = null при dryRun: шаг не записан, посчитан только вес
 export interface ImageTransformResponse { stepId: string | null; width: number; height: number; bytes: number }
 
-// ── Чат картинки: …/image-editor/chats (ADR-018 §1) ────────────────────────────
-
-// Ровно одно из двух: sourcePath — чат файла проекта; folder — чат-черновик «Нарисовать
-// картинку» по папке назначения ("" — корень проекта), файл появится при первом сохранении
-export type ImageChatCreateRequest =
-  | { sourcePath: string; folder?: undefined; personaId?: string | null }
-  | { folder: string; sourcePath?: undefined; personaId?: string | null };
-
-// current — чат с currentPath == path; continued — чаты, у которых path в lineage
-export interface ImageChatLookupResponse { current: Session | null; continued: Session[] }
-
-export interface ImageChatPathRequest { path: string }
-
-export interface ImageChatReference { path: string; role: ReferenceRole; label?: string | null }
-
-export type ImageChatEventKind = 'launched' | 'completed' | 'failed' | 'cancelled' | 'saved';
-
-// Запись журнала «с прошлого хода» для блока состояния хода
-export interface ImageChatEvent { at: string; kind: ImageChatEventKind; text: string; jobId?: string | null }
-
-// Состояние редактора чата картинки на сервере: GET/PUT …/chats/{sessionId}/state.
-// revision растёт с каждой записью, запись со старой revision — 409.
-// marks — marks.json как есть; canvasRevision — хеш файла, шага и пометок;
-// lastSentRevision — ревизия, снимок которой уже ушёл в чат
-export interface ImageChatState {
-  prompt: string;
-  promptAuthor: ImageEditInitiator;
-  provider: string | null;
-  model: string | null;
-  mode: EditMode;
-  count: number;
-  references: ImageChatReference[];
-  characterSlug: string | null;
-  marks: unknown;
-  canvasRevision: string | null;
-  lastSentRevision: string | null;
-  currentStepId: string | null;
-  matchSourceSize: boolean;
-  events: ImageChatEvent[];
-  revision: number;
-}
-
-// field — имя поля ImageChatState в camelCase; from/to — значения для метки «✦ модель сменил Claude»
-export interface ImageChatStateChange { field: keyof ImageChatState | string; from?: unknown; to?: unknown }
-
-// Записи ленты чата картинки в history.json (StoredMessage, дискриминатор kind).
-// Модель их не видит — о ручном запуске она узнаёт из блока состояния хода
+// Записи ленты чатов картинки v2 в history.json (StoredMessage, дискриминатор kind): новые
+// не пишутся, но история архивных чатов читается (ADR-019 §6)
 export interface ImageLaunchStoredMessage {
   kind: 'image_launch';
   by: ImageEditInitiator;
@@ -343,18 +297,6 @@ export type ImageEditEvent = ImageEditEventOrigin & (
   | { type: 'image_edit_completed'; jobId: string; projectId: string; variants: number[]; cost?: EditCost | null }
   | { type: 'image_edit_failed'; jobId: string; projectId: string; outcome: EditOutcome; charged?: boolean | null; error?: string | null; retryQuote?: ImageEditQuote | null });
 
-// Состояние редактора чата картинки сменилось (чаще всего его поменял агент).
-// sessionId — чат: редактор применяет событие, только если открыт именно он
-export interface ImageChatStateEvent {
-  type: 'image_chat_state';
-  sessionId: string;
-  projectId: string;
-  revision: number;
-  state: ImageChatState;
-  changedBy: ImageEditInitiator;
-  changes: ImageChatStateChange[];
-}
-
 // Коды ошибок ручек: { error, code }
 export type ImageEditErrorCode =
   | 'provider_unavailable' | 'invalid_request' | 'quote_not_found'
@@ -371,11 +313,6 @@ export function imageEditErrorCode(e: unknown): ImageEditErrorCode | null {
 export function nameTakenSuggestion(e: unknown): string | null {
   const body = (e as { body?: { code?: unknown; suggestion?: unknown } } | null)?.body;
   return body?.code === 'name_taken' && typeof body.suggestion === 'string' ? body.suggestion : null;
-}
-
-// 409 на PUT состояния: запись со старой revision — перечитать состояние
-export function isStaleRevision(e: unknown): boolean {
-  return (e as { status?: unknown } | null)?.status === 409;
 }
 
 export interface ImageEditorApi {
@@ -398,13 +335,6 @@ export interface ImageEditorApi {
   transform(projectId: string, req: ImageTransformRequest, opts?: { dryRun?: boolean }): Promise<ImageTransformResponse>;
   // Картинка шага истории для <img>: токен через ?access_token=, как у вариантов
   stepUrl(projectId: string, stepId: string): string;
-  createChat(projectId: string, req: ImageChatCreateRequest): Promise<Session>;
-  findChats(projectId: string, path: string): Promise<ImageChatLookupResponse>;
-  setChatPath(projectId: string, sessionId: string, req: ImageChatPathRequest): Promise<Session>;
-  getChatState(projectId: string, sessionId: string): Promise<ImageChatState>;
-  // mask — маска кисти: едет multipart и только при смене canvasRevision
-  putChatState(projectId: string, sessionId: string, state: ImageChatState, mask?: Blob | null): Promise<ImageChatState>;
-  subscribeChatState(handler: (e: ImageChatStateEvent) => void): () => void;
 }
 
 const base = (projectId: string) => `/projects/${encodeURIComponent(projectId)}/image-editor`;
@@ -424,7 +354,6 @@ function characterForm(input: ImageEditCharacterInput): FormData {
 }
 
 const charBase = (projectId: string) => `${base(projectId)}/characters`;
-const chatBase = (projectId: string) => `${base(projectId)}/chats`;
 
 const IMAGE_EDIT_EVENTS = new Set(['image_edit_progress', 'image_edit_completed', 'image_edit_failed']);
 
@@ -465,26 +394,6 @@ const liveApi: ImageEditorApi = {
     request<ImageTransformResponse>(`${base(projectId)}/transform${opts?.dryRun ? '?dryRun=true' : ''}`,
       { method: 'POST', body: JSON.stringify(req), timeoutMs: 60_000 }),
   stepUrl: (projectId, stepId) => withToken(`/api${base(projectId)}/steps/${encodeURIComponent(stepId)}`),
-  createChat: (projectId, req) =>
-    request<Session>(chatBase(projectId), { method: 'POST', body: JSON.stringify(req) }),
-  findChats: (projectId, path) =>
-    request<ImageChatLookupResponse>(`${chatBase(projectId)}?path=${encodeURIComponent(path)}`, { live: true }),
-  setChatPath: (projectId, sessionId, req) =>
-    request<Session>(`${chatBase(projectId)}/${encodeURIComponent(sessionId)}/path`, { method: 'PUT', body: JSON.stringify(req) }),
-  getChatState: (projectId, sessionId) =>
-    request<ImageChatState>(`${chatBase(projectId)}/${encodeURIComponent(sessionId)}/state`, { live: true }),
-  putChatState: (projectId, sessionId, state, mask) => {
-    const url = `${chatBase(projectId)}/${encodeURIComponent(sessionId)}/state`;
-    if (!mask) return request<ImageChatState>(url, { method: 'PUT', body: JSON.stringify(state) });
-    const form = new FormData();
-    form.append('state', JSON.stringify(state));
-    form.append('mask', mask, 'mask.png');
-    return request<ImageChatState>(url, { method: 'PUT', body: form, timeoutMs: 60_000 });
-  },
-  subscribeChatState: handler => onMessage(msg => {
-    const m = msg as unknown as { type?: string };
-    if (m.type === 'image_chat_state') handler(m as unknown as ImageChatStateEvent);
-  }),
 };
 
 // ── Мок ───────────────────────────────────────────────────────────────────────
@@ -559,8 +468,6 @@ export function createMockApi(mode: 'fal' | 'all'): ImageEditorApi {
   // Файлы, записанные «Сохранить как…»: повтор имени — 409 name_taken
   const savedPaths = new Set<string>();
   const steps = new Map<string, { width: number; height: number; format: ImageEncodeFormat }>();
-  const chats = new Map<string, Session>();
-  const chatStates = new Map<string, ImageChatState>();
 
   // Путь «Сохранить как…»: расширение по формату, вписанное руками срезается.
   // Имя, оканчивающееся на taken, мок считает занятым — так проверяется 409
@@ -574,26 +481,6 @@ export function createMockApi(mode: 'fal' | 'all'): ImageEditorApi {
     let n = 2;
     while (isTaken(at(`${stem}.v${n}`))) n++;
     return { path, taken: true, suggestion: at(`${stem}.v${n}`) };
-  };
-
-  const moveChat = (sessionId: string | null | undefined, to: string) => {
-    const chat = sessionId ? chats.get(sessionId) : undefined;
-    if (!chat?.imageChat || chat.imageChat.currentPath === to) return;
-    const was = chat.imageChat.currentPath;
-    // Черновик привязывается к первому сохранённому файлу: прежнего пути нет
-    chat.imageChat = { currentPath: to, lineage: was ? [...chat.imageChat.lineage, was] : chat.imageChat.lineage };
-  };
-
-  const emptyState = (): ImageChatState => ({
-    prompt: '', promptAuthor: 'human', provider: null, model: null, mode: 'auto', count: 1,
-    references: [], characterSlug: null, marks: null, canvasRevision: null, lastSentRevision: null,
-    currentStepId: null, matchSourceSize: true, events: [], revision: 0,
-  });
-
-  const ownChat = (projectId: string, sessionId: string) => {
-    const chat = chats.get(sessionId);
-    if (!chat || chat.projectId !== projectId) throw mockError('Чат не найден', 404);
-    return chat;
   };
 
   const resolveModel = (p: ImageEditProvider, model: string, op: ImageEditOp) =>
@@ -703,7 +590,6 @@ export function createMockApi(mode: 'fal' | 'all'): ImageEditorApi {
           ? req.sourcePath.replace(/(?:\.v\d+)?\.(\w+)$/, '.v2.png')
           : `${req.folder ? `${req.folder}/` : ''}${req.fileName ?? 'новая-картинка.png'}`;
       }
-      moveChat(req.chatSessionId, path);
       return delay({ path });
     },
     saveCheck: async (_projectId, req) => delay(resolveAs(req.folder, req.name, req.format), 60),
@@ -727,48 +613,6 @@ export function createMockApi(mode: 'fal' | 'all'): ImageEditorApi {
       const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${st.width} ${st.height}"><rect width="${st.width}" height="${st.height}" fill="hsl(200,35%,72%)"/><text x="${st.width / 2}" y="${st.height / 2}" font-size="${Math.round(Math.min(st.width, st.height) / 8)}" text-anchor="middle" dominant-baseline="middle" fill="hsl(200,40%,25%)" font-family="sans-serif">${st.width}×${st.height} ${st.format}</text></svg>`;
       return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
     },
-    createChat: async (projectId, req) => {
-      const now = new Date().toISOString();
-      const chat: Session = {
-        id: `mock-image-chat-${++seq}`, projectId, personaId: req.personaId ?? undefined,
-        name: req.sourcePath != null ? `${req.sourcePath.split('/').pop()} · правка` : `Новая картинка · ${req.folder || 'корень проекта'}`,
-        mode: 'default', status: 'finished', messageCount: 0, createdAt: now, updatedAt: now, origin: 'manual',
-        imageChat: req.sourcePath != null
-          ? { currentPath: req.sourcePath, lineage: [] }
-          : { currentPath: null, draftFolder: req.folder, lineage: [] },
-      };
-      chats.set(chat.id, chat);
-      return delay({ ...chat }, 200);
-    },
-    findChats: async (projectId, path) => {
-      const own = [...chats.values()].filter(c => c.projectId === projectId && c.imageChat)
-        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-      return delay({
-        current: own.find(c => c.imageChat!.currentPath === path) ?? null,
-        continued: own.filter(c => c.imageChat!.lineage.includes(path)),
-      });
-    },
-    // Привязка к другому файлу — настройка: updatedAt не двигается
-    setChatPath: async (projectId, sessionId, req) => {
-      const chat = ownChat(projectId, sessionId);
-      if (!chat.imageChat) throw mockError('Это не чат картинки', 400, { code: 'invalid_request' });
-      moveChat(sessionId, req.path);
-      return delay({ ...chat });
-    },
-    getChatState: async (projectId, sessionId) => {
-      ownChat(projectId, sessionId);
-      return delay(chatStates.get(sessionId) ?? emptyState(), 60);
-    },
-    putChatState: async (projectId, sessionId, state) => {
-      ownChat(projectId, sessionId);
-      const current = chatStates.get(sessionId) ?? emptyState();
-      if (state.revision !== current.revision) throw mockError('Состояние уже изменилось', 409);
-      const next = { ...state, revision: current.revision + 1 };
-      chatStates.set(sessionId, next);
-      return delay(next, 60);
-    },
-    // Агента в моке нет, а своё состояние редактор знает сам — событий не бывает
-    subscribeChatState: () => () => {},
     subscribe: handler => {
       listeners.add(handler);
       return () => { listeners.delete(handler); };

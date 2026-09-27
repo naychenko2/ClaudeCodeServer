@@ -1,20 +1,22 @@
-// Манифест MF-модуля «Редактор картинок» (ADR-018 §10.3). Ключ совпадает с
+// Манифест MF-модуля «Редактор картинок» (ADR-018 §10.3, ADR-019). Ключ совпадает с
 // ImageEditorSubsystem.Key бэкенда: гейт слотов сверяется с активными подсистемами
 // из /api/auth/me. Фич-флаг владельца (image-editor) проверяют сами входы.
 
-import { Image as ImageIcon } from 'lucide-react';
+import { Contact, Image as ImageIcon } from 'lucide-react';
 import { FLAGS, getFlag, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
 import type {
-  SubsystemManifest, AppOverlayCtx, FileViewerToolbarCtx, ChatItemToolCtx, ChatCardBadgeCtx,
-  ComposerChipCtx, ComposerStripCtx,
+  SubsystemManifest, FileViewerToolbarCtx, ChatItemToolCtx, ComposerChipApi, ComposerChipCtx, ComposerStripCtx,
+  WorkspacePanelDefApi, WorkspacePanelDefCtx,
 } from '../../lib/subsystems/registryCore';
-import { ImageEditorEntryButton, ImageEditorHost, openImageEditor } from './ImageEditorEntry';
 import { isEditableImage } from './format';
 import { ImageFileMovedRow, ImageLaunchCard, ImageLaunchRow, ImagePromptCard } from './chat/cards';
-import { ImageChatCardBadge } from './chat/ChatCardBadge';
-import { openImageChat } from './chat/openFromChat';
+import { CharactersPanel } from './characters/CharactersPanel';
+import { CHARACTERS_PANEL } from './characters/panel';
+import { EditImageButton } from './entry/EditImageButton';
+import { openFromTree } from './entry/openFromTree';
 import { ImageComposerChip } from './composer/ComposerChip';
 import { imageMode } from './composer/imageMode';
+import { takeMarksAttachment } from './composer/marksAttachment';
 import { ImagesStrip, imagesStripStatus } from './strip/ImagesStrip';
 import { ThreadAnchor } from './thread/ThreadCard';
 import { recordKey, ThreadSysLine } from './thread/records';
@@ -29,15 +31,12 @@ export const manifest: SubsystemManifest = {
   order: 95,
   noPill: true,
   slots: {
-    // Чат картинки — компонент ядра из контекста: своей копии ChatPanel в модуле нет
-    'app-overlay': [
-      { name: 'image-editor', render: (ctx: AppOverlayCtx) => <ImageEditorHost ImageChat={ctx.ImageChat} /> },
-    ],
-    // ImageEditorOpenerApi: вход из дерева файлов
+    // ImageEditorOpenerApi: вход из дерева файлов — последний активный чат проекта
     'image-editor': [
-      { name: 'opener', action: { isEditable: isEditableImage, open: openImageEditor } },
+      { name: 'opener', action: { isEditable: isEditableImage, open: openFromTree } },
     ],
-    // Карточки ленты чата картинки: ключ — имя инструмента или kind записи
+    // Карточки ленты: ключ — имя инструмента или kind записи (image_launch и
+    // image_file_moved — история архивных чатов картинки v2)
     'chat-item-tool': [
       { name: TOOL('image_generate'), render: (ctx: ChatItemToolCtx) => <ImageLaunchCard ctx={ctx} /> },
       { name: TOOL('image_suggest_prompt'), render: (ctx: ChatItemToolCtx) => <ImagePromptCard ctx={ctx} /> },
@@ -66,23 +65,30 @@ export const manifest: SubsystemManifest = {
     'composer-mode': [{ name: 'image', order: 10, action: imageMode as unknown as Record<string, unknown> }],
     // Чип пометок и попап «Редактор»
     'composer-chip': [
-      { name: 'image-marks', render: (ctx: ComposerChipCtx) => <ImageComposerChip ctx={ctx} /> },
-    ],
-    // Значок и миниатюра в списке чатов; клик по чату картинки открывает редактор
-    'chat-card-badge': [
       {
-        name: 'image-chat',
-        render: (ctx: ChatCardBadgeCtx) => <ImageChatCardBadge ctx={ctx} />,
-        action: { open: openImageChat },
+        name: 'image-marks',
+        render: (ctx: ComposerChipCtx) => <ImageComposerChip ctx={ctx} />,
+        // Режим «Чат»: пометки уходят агенту снимком-вложением со следующим сообщением
+        action: { beforeSend: takeMarksAttachment } satisfies ComposerChipApi as unknown as Record<string, unknown>,
+      },
+    ],
+    // Панель «Персонажи» рабочей области проекта
+    'workspace-panel-def': [
+      {
+        name: CHARACTERS_PANEL,
+        render: (ctx: WorkspacePanelDefCtx) => <CharactersPanel projectId={ctx.projectId} />,
+        action: {
+          title: 'Персонажи',
+          icon: <Contact size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+          isAvailable: () => getFlag(FLAGS.imageEditor),
+        } satisfies WorkspacePanelDefApi as unknown as Record<string, unknown>,
       },
     ],
     'file-viewer-toolbar': [
       {
         name: 'image-editor', order: 10,
         render: (ctx: FileViewerToolbarCtx) => (
-          <ImageEditorEntryButton projectId={ctx.projectId} projectName={ctx.projectName}
-            target={{ kind: 'edit', path: ctx.filePath }}
-            onShowInFiles={ctx.onOpenFile} />
+          <EditImageButton projectId={ctx.projectId} projectName={ctx.projectName} path={ctx.filePath} />
         ),
       },
     ],

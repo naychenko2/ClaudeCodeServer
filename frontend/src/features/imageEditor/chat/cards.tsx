@@ -1,10 +1,9 @@
-// Карточки ленты чата картинки (ADR-018 §2, макет image-editor-v2, «.card» и «.sysline»):
-// запуск генерации агентом (image_generate), предложенный промпт (image_suggest_prompt) и
-// тихие строки «Вы запустили: …» и «Сохранено как …». Ядро рисует их через слот
-// chat-item-tool; в редакторе кнопки действуют через ImageEditorBridge, в полном чате —
-// открывают редактор.
+// Карточки ленты (слот chat-item-tool): запуск генерации агентом (image_generate) и
+// предложенный промпт (image_suggest_prompt) в чате проекта (ADR-019 §4), а также тихие
+// строки «Вы запустили: …» и «Сохранено как …» из истории чатов картинки v2 — старые
+// чаты уходят в архив, но открываются и должны читаться.
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { AlertTriangle, Check, ExternalLink, Image as ImageIcon, SlidersHorizontal, Sparkles, X, Zap } from 'lucide-react';
 import {
   Button, Dot, ProgressBar, C, FS, R, SHADOW, SP, ICON_SIZE, ICON_STROKE, onReconnected, personaLabel, showToast,
@@ -12,13 +11,12 @@ import {
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import type { ChatItem } from '../../../types';
 import {
-  imageEditorApi, type EditCost, type ImageChatStateChange, type ImageEditEstimate, type ImageEditJob,
+  AUTO_MODEL, imageEditorApi, type EditCost, type ImageEditCatalog, type ImageEditEstimate, type ImageEditJob,
 } from '../api';
 import { useCatalog } from '../thread/catalog';
-import { isFreeUnit, priceSum, priceText, variantsWord } from '../format';
-import { changedLine, describeChanges, modelLabel } from './stateSync';
-import { useImageEditorBridge } from './bridge';
-import { openImageChatById } from './openFromChat';
+import { effectiveProvider, isFreeUnit, priceSum, priceText, variantsWord } from '../format';
+import { getFocusedThread, openEditor, useThreads } from '../thread/threadStore';
+import { launchThread, useThreadLaunch } from '../thread/useThreadLaunch';
 
 type ToolItem = Extract<ChatItem, { kind: 'tool_use' }>;
 
@@ -41,13 +39,55 @@ function inputOf(item: ToolItem): Record<string, unknown> {
 const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v : null);
 
+// Изменение настроек запуска агентом: field — имя настройки, from/to — значения
+export interface LaunchChange { field: string; from?: unknown; to?: unknown }
+
+// Подписи поставщика и модели по каталогу; каталога нет — сырые ключи
+function providerLabel(catalog: ImageEditCatalog | null, key: string | null | undefined): string {
+  if (!catalog) return key || 'как в настройках';
+  return effectiveProvider(catalog, key || 'settings')?.label ?? key ?? '';
+}
+
+export function modelLabel(catalog: ImageEditCatalog | null, provider: string | null | undefined, model: string | null | undefined): string {
+  const id = model || AUTO_MODEL;
+  const pv = catalog ? effectiveProvider(catalog, provider || 'settings') : null;
+  const found = pv?.models.find(m => m.id === id);
+  if (found) return found.label;
+  return id === AUTO_MODEL ? 'Авто' : id;
+}
+
+// «промпт, модель → FLUX Fill, вариантов: 2» из changes[] результата image_generate
+export function describeChanges(changes: LaunchChange[], catalog: ImageEditCatalog | null): string[] {
+  const byField = new Map(changes.map(c => [c.field, c]));
+  const parts: string[] = [];
+  if (byField.has('prompt')) parts.push('промпт');
+  const pv = byField.get('provider');
+  if (pv && providerLabel(catalog, str(pv.from)) !== providerLabel(catalog, str(pv.to))) {
+    parts.push(`поставщик → ${providerLabel(catalog, str(pv.to))}`);
+  }
+  const md = byField.get('model');
+  if (md) parts.push(`модель → ${modelLabel(catalog, str(pv?.to), str(md.to))}`);
+  const ct = byField.get('count');
+  if (ct && typeof ct.to === 'number') parts.push(`вариантов: ${ct.to}`);
+  const size = byField.get('matchSourceSize');
+  if (size) parts.push(size.to ? 'вернуть размер оригинала' : 'без возврата размера');
+  return parts;
+}
+
+// Строка карточки: «Изменил: …» от лица Claude, у персоны — безличное «Изменено: …»
+// (рода персоны продукт не знает)
+export function changedLine(parts: string[], persona: boolean): string | null {
+  if (!parts.length) return null;
+  return `${persona ? 'Изменено' : 'Изменил'}: ${parts.join(', ')}`;
+}
+
 interface LaunchResult {
   jobId: string;
   provider: string | null;
   model: string | null;
   estimate: ImageEditEstimate | null;
   expectedSeconds: number | null;
-  changes: ImageChatStateChange[];
+  changes: LaunchChange[];
 }
 
 export function parseLaunchResult(text: string | undefined): LaunchResult | null {
@@ -57,7 +97,7 @@ export function parseLaunchResult(text: string | undefined): LaunchResult | null
   const quote = (r.quote && typeof r.quote === 'object' ? r.quote : {}) as Record<string, unknown>;
   const est = quote.estimate && typeof quote.estimate === 'object' ? quote.estimate as ImageEditEstimate : null;
   const changes = Array.isArray(r.changes)
-    ? (r.changes as unknown[]).filter((c): c is ImageChatStateChange => !!c && typeof c === 'object' && typeof (c as { field?: unknown }).field === 'string')
+    ? (r.changes as unknown[]).filter((c): c is LaunchChange => !!c && typeof c === 'object' && typeof (c as { field?: unknown }).field === 'string')
     : [];
   return {
     jobId, provider: str(quote.provider), model: str(quote.model), estimate: est,
@@ -175,9 +215,10 @@ function Acts({ children }: { children: ReactNode }) {
 
 export function ImageLaunchCard({ ctx }: { ctx: ChatItemToolCtx }) {
   const item = ctx.item as ToolItem;
-  const bridge = useImageEditorBridge(ctx.sessionId);
   const catalog = useCatalog(ctx.projectId);
   const input = inputOf(item);
+  // threadId в image_generate обязателен (ADR-019, решение 1): по нему карточка ведёт в попап нити
+  const threadId = str(input.threadId);
   const result = item.isError ? null : parseLaunchResult(item.result);
   const { status, cancel } = useLaunchStatus(ctx.projectId, result?.jobId ?? null);
   const running = !!result && (!status || status.phase === 'run');
@@ -185,14 +226,6 @@ export function ImageLaunchCard({ ctx }: { ctx: ChatItemToolCtx }) {
 
   const count = num(input.count) ?? num(result?.changes.find(c => c.field === 'count')?.to)
     ?? (status?.phase === 'done' && status.variants ? status.variants : null);
-
-  // Задача ещё идёт — открытый редактор этого чата показывает её в центре
-  const tracked = useRef(false);
-  useEffect(() => {
-    if (!bridge || !result || tracked.current || status?.phase !== 'run') return;
-    tracked.current = true;
-    bridge.trackJob(result.jobId, count ?? 1, result.expectedSeconds);
-  }, [bridge, result, status?.phase, count]);
 
   if (item.result === undefined) {
     return <Card><CardHead icon={<Dot color={C.accent} />} title="Запускаю генерацию…" /></Card>;
@@ -214,14 +247,8 @@ export function ImageLaunchCard({ ctx }: { ctx: ChatItemToolCtx }) {
   const meta = [price, count ? variantsWord(count) : null].filter(Boolean).join(' · ');
   const changed = changedLine(describeChanges(result.changes, catalog), !!ctx.persona);
   const phase = status?.phase ?? 'run';
-  const openInEditor = (withJob: boolean) => {
-    if (!ctx.sessionId) return;
-    void openImageChatById(ctx.sessionId, withJob ? { job: { jobId: result.jobId, count: count ?? 1 } } : undefined);
-  };
-  const showVariants = () => {
-    if (bridge) bridge.showJob(result.jobId, count ?? status?.variants ?? 1, result.expectedSeconds);
-    else openInEditor(true);
-  };
+  // Варианты и шаги живут в попапе «Редактор» нити
+  const openInEditor = ctx.sessionId && threadId ? () => openEditor(ctx.sessionId!, threadId) : null;
   const noMoney = free ? '' : status?.charged === true ? 'Поставщик уже списал оплату.' : 'Деньги не списаны.';
 
   const title = {
@@ -240,14 +267,14 @@ export function ImageLaunchCard({ ctx }: { ctx: ChatItemToolCtx }) {
       {phase === 'run' && (
         <ProgressBar value={progress} transition="width .5s linear" />
       )}
-      {phase === 'cancel' && (noMoney || bridge) && <Note>{[noMoney, bridge ? 'Промпт остался в поле сверху.' : ''].filter(Boolean).join(' ')}</Note>}
+      {phase === 'cancel' && noMoney && <Note>{noMoney}</Note>}
       {phase === 'error' && <Note>{status?.error ?? 'Сервис рисования отказал.'}{status?.charged === false && !free ? ' Деньги не списаны.' : ''}</Note>}
       {phase === 'lost' && <Note>Сервер перезапускался, задача не сохранилась. Проверьте траты в «Модели и расход».</Note>}
       <Acts>
         {phase === 'run' && <Button size="sm" variant="secondary" leftIcon={ic(X)} onClick={() => { void cancel(); }}>Отменить</Button>}
-        {phase === 'done' && <Button size="sm" variant="primary" onClick={showVariants}>Показать варианты</Button>}
-        {!bridge && phase !== 'done' && ctx.sessionId && (
-          <Button size="sm" variant="ghost" leftIcon={ic(ExternalLink)} onClick={() => openInEditor(phase === 'run')}>Открыть в редакторе</Button>
+        {phase === 'done' && openInEditor && <Button size="sm" variant="primary" onClick={openInEditor}>Показать варианты</Button>}
+        {phase !== 'done' && openInEditor && (
+          <Button size="sm" variant="ghost" leftIcon={ic(ExternalLink)} onClick={openInEditor}>Открыть в редакторе</Button>
         )}
       </Acts>
     </Card>
@@ -258,17 +285,28 @@ export function ImageLaunchCard({ ctx }: { ctx: ChatItemToolCtx }) {
 
 export function ImagePromptCard({ ctx }: { ctx: ChatItemToolCtx }) {
   const item = ctx.item as ToolItem;
-  const bridge = useImageEditorBridge(ctx.sessionId);
   const input = inputOf(item);
   const prompt = str(input.prompt);
   const count = num(input.count);
-  const [inserted, setInserted] = useState(false);
+  // Промпт уходит в выбранную картинку чата: без выбора запускать не во что
+  useThreads(ctx.projectId, ctx.sessionId);
+  const thread = getFocusedThread(ctx.sessionId);
+  const L = useThreadLaunch(ctx.projectId ?? '', ctx.sessionId, thread);
+  const [busy, setBusy] = useState(false);
+  const [launched, setLaunched] = useState(false);
 
   if (!prompt) {
     return item.result === undefined
       ? <Card><CardHead icon={ic(Sparkles)} title="Готовлю промпт…" /></Card>
       : null;
   }
+  const generate = async () => {
+    if (!thread || !ctx.projectId || !ctx.sessionId) return;
+    setBusy(true);
+    const ok = await launchThread(ctx.projectId, ctx.sessionId, thread, { kind: 'prompt', prompt });
+    setBusy(false);
+    if (ok) setLaunched(true);
+  };
   return (
     <Card>
       <CardHead icon={ic(Sparkles)} title="Промпт" meta={count ? variantsWord(count) : null} />
@@ -278,25 +316,16 @@ export function ImagePromptCard({ ctx }: { ctx: ChatItemToolCtx }) {
       }}>
         {prompt}
       </div>
-      <Acts>
-        {bridge ? (
-          <>
-            <Button size="sm" variant="secondary" disabled={bridge.busy} leftIcon={inserted ? ic(Check) : undefined}
-              onClick={() => { bridge.insertPrompt(prompt, { count }); setInserted(true); }}>
-              {inserted ? 'Вставлено' : 'Вставить в промпт'}
-            </Button>
-            <Button size="sm" variant="primary" disabled={bridge.busy} leftIcon={ic(Sparkles)}
-              onClick={() => { bridge.generate(prompt, { count }); setInserted(true); }}>
-              {bridge.priceSum ? `Сгенерировать · ${bridge.priceSum}` : 'Сгенерировать'}
-            </Button>
-          </>
-        ) : ctx.sessionId && (
-          <Button size="sm" variant="secondary" leftIcon={ic(ExternalLink)}
-            onClick={() => { void openImageChatById(ctx.sessionId!, { prompt }); }}>
-            Открыть в редакторе с этим промптом
+      {thread ? (
+        <Acts>
+          <Button size="sm" variant="primary" loading={busy} disabled={busy || launched}
+            leftIcon={launched ? ic(Check) : ic(Sparkles)} onClick={() => { void generate(); }}>
+            {launched ? 'Запущено' : L.price ? `Сгенерировать · ${L.price}` : 'Сгенерировать'}
           </Button>
-        )}
-      </Acts>
+        </Acts>
+      ) : (
+        <Note>Выберите картинку в ленте, чтобы запустить этот промпт.</Note>
+      )}
     </Card>
   );
 }

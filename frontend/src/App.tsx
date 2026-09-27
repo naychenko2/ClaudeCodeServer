@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef, lazy, Suspense } from 'react'
 import type { Project, AuthState } from './types'
 import { C } from './lib/design'
-import { AppOverlaySlot } from './components/AppOverlaySlot'
 import { LoginPage } from './pages/LoginPage'
 import { ProjectListPage } from './pages/ProjectListPage'
 import { ChatsPage } from './pages/ChatsPage'
@@ -1256,7 +1255,6 @@ export default function App() {
       {auth && <VideoStageFrame />}
       {/* Слои подсистем НАД страницами (редактор картинок): уход с проекта должен спросить
           про несохранённые варианты, а не молча размонтировать слой вместе с деревом файлов */}
-      {auth && !authChecking && <AppOverlaySlot />}
       {authChecking
         ? <LoadingScreen hint="Проверяю вход" />
         : !auth

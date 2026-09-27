@@ -15,7 +15,7 @@
 // здешний notes — панель заметок ПРОЕКТА, тамошний — заметки-артефакты хода), но
 // это разные типы: там, где импортируются оба, брать один из них под алиасом.
 import {
-  BookOpen, BookOpenText, ClipboardList, FolderTree, GitCompare, ListTodo, Bot, User, Users,
+  BookOpen, BookOpenText, ClipboardList, Contact, FolderTree, GitCompare, ListTodo, Bot, User, Users,
   SquareTerminal, AppWindow, MonitorPlay, Network, MessageCircle, NotebookPen, StickyNote, Library, Puzzle,
   TableOfContents, Lightbulb,
   type LucideIcon,
@@ -37,6 +37,9 @@ export const PANEL_KEYS = [
   'chats', 'files', 'changes', 'tasks', 'docs', 'dossiers', 'knowledge', 'notes', 'graph', 'team', 'skills', 'terminal', 'preview',
   'plan', 'agents', 'context',
   'toc',
+  // Панели подсистем (слот workspace-panel-def): ключ зарезервирован здесь, тело и
+  // доступность — у подсистемы; выключена подсистема — нет содержимого, нет и кнопки
+  'characters',
   // Фоновый эфир рядом с работой: живёт и в проекте, и в разделе «Чаты».
   // Каталог каналов панелью НЕ является: он открывается в центральном острове
   // (кнопка в шапке этой панели), потому что каналы выбирают по обложкам,
@@ -122,6 +125,8 @@ export const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> =
   // — отсюда своя группа рельсы (CENTER_KEYS), а не соседство с содержимым проекта:
   // «Файлы» и «Документация» показывают репозиторий, эта — то, что сейчас читают.
   toc:      { title: 'Оглавление', Icon: TableOfContents },
+  // Персонажи редактора картинок (модуль image-editor): люди с фото для генераций
+  characters: { title: 'Персонажи', Icon: Contact },
 
   // Разделы хаба. Ключи намеренно длиннее воркспейсных: рядом живут похожие по
   // смыслу панели проекта, и путать их нельзя. personasList — все персоны
@@ -158,6 +163,7 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
   agents: 'right',
   context: 'right',
   toc: 'right',
+  characters: 'right',
   // Разделы хаба выросли из левого сайдбара — там их дом
   notesList: 'left',
   notesGraph: 'left',
@@ -169,7 +175,7 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
 // Наборы ключей по экранам — что вообще доступно в этой рельсе (проп allowedKeys)
 export const WORKSPACE_KEYS: readonly PanelKey[] = [
   'chats', 'files', 'changes', 'tasks', 'docs', 'dossiers', 'knowledge', 'notes', 'graph', 'team', 'skills', 'terminal', 'preview',
-  'plan', 'agents', 'context', 'toc', 'video',
+  'plan', 'agents', 'context', 'toc', 'video', 'characters',
 ];
 // Раздел «Чаты»: список чатов плюс панели активной сессии (проекта там нет)
 export const CHAT_KEYS: readonly PanelKey[] = ['chats', 'plan', 'agents', 'context', 'video'];

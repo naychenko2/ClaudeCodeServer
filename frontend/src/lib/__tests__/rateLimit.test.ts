@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { RateLimitInfo, UsageSnapshot } from '../../types';
-import { toRateWindows, worstWindow, fmtReset, windowLabel, latestPerWindow, latestWithUtilization, snapshotFreshnessLabel, overageLabel } from '../rateLimit';
+import { toRateWindows, worstWindow, fmtReset, windowLabel, latestPerWindow, latestWithUtilization, snapshotFreshnessLabel, overageLabel, withAccountFallback, ratePillSegments, ratePillCompact, ratePillVisible, ratePillMoreText, shortWindowLabel } from '../rateLimit';
 
 const win = (limitType: string, over: Partial<RateLimitInfo> = {}): RateLimitInfo =>
   ({ limitType, ...over });
@@ -89,6 +89,146 @@ describe('latestPerWindow', () => {
       snap('2026-07-19T12:00:00Z', 'five_hour', { status: 'allowed', resetsAt: '2026-07-19T16:00:00Z' }),
     ]);
     expect(out[0].hasUtil).toBe(false);
+  });
+});
+
+describe('пилюля лимитов в шапке чата', () => {
+  const snap = (ts: string, limitType: string, over: Partial<UsageSnapshot> = {}): UsageSnapshot =>
+    ({ timestamp: ts, limitType, ...over });
+  const NOW = '2026-09-27T12:00:00Z';
+  const R5 = '2026-09-27T15:00:00Z';
+  const RW = '2026-10-01T10:00:00Z';
+
+  it('три окна: постоянный порядок 5ч → неделя → модель, свой уровень у каждого', () => {
+    const windows = toRateWindows({
+      seven_day_opus: win('seven_day_opus', { utilization: 0.3 }),
+      seven_day: win('seven_day', { utilization: 0.12 }),
+      five_hour: win('five_hour', { utilization: 0.41 }),
+    });
+    expect(ratePillSegments(windows)).toEqual([
+      { limitType: 'five_hour', label: '5ч', text: '41%', level: 'normal' },
+      { limitType: 'seven_day', label: 'Нед', text: '12%', level: 'normal' },
+      { limitType: 'seven_day_opus', label: 'Opus', text: '30%', level: 'normal' },
+    ]);
+    expect(ratePillCompact(windows)).toEqual({ head: { limitType: 'five_hour', label: '5ч', text: '41%', level: 'normal' }, more: 2 });
+  });
+
+  it('окно без utilization в чате берёт процент из снимка аккаунта (то же окно)', () => {
+    const out = withAccountFallback(
+      [win('five_hour', { status: 'allowed', resetsAt: R5 })],
+      [snap('2026-09-27T11:50:00Z', 'five_hour', { utilization: 0.41, resetsAt: R5 }),
+        snap('2026-09-27T11:50:00Z', 'seven_day', { utilization: 0.12, resetsAt: RW })],
+      NOW,
+    );
+    expect(ratePillSegments(out).map(s => `${s.label} ${s.text}`)).toEqual(['5ч 41%', 'Нед 12%']);
+  });
+
+  it('свежий чат без событий: окна целиком из снимка аккаунта', () => {
+    const out = withAccountFallback([], [snap('2026-09-27T11:00:00Z', 'seven_day_opus', { utilization: 0.3 })], NOW);
+    expect(ratePillSegments(out).map(s => s.text)).toEqual(['30%']);
+  });
+
+  it('процент из чата свежее снимка аккаунта', () => {
+    const out = withAccountFallback(
+      [win('five_hour', { utilization: 0.7, resetsAt: R5 })],
+      [snap('2026-09-27T11:00:00Z', 'five_hour', { utilization: 0.4, resetsAt: R5 })],
+      NOW,
+    );
+    expect(ratePillSegments(out)[0]).toMatchObject({ text: '70%', level: 'warn' });
+  });
+
+  it('событие чата из сброшенного окна не перебивает свежий снимок аккаунта', () => {
+    const out = withAccountFallback(
+      [win('five_hour', { utilization: 0.9, resetsAt: '2026-09-27T11:00:00Z' })],
+      [snap('2026-09-27T11:55:00Z', 'five_hour', { utilization: 0.05, resetsAt: '2026-09-27T16:00:00Z' })],
+      NOW,
+    );
+    expect(ratePillSegments(out)[0]).toMatchObject({ text: '5%', level: 'normal' });
+  });
+
+  it('событие чата без процента и без сброса не затирает процент аккаунта', () => {
+    const out = withAccountFallback(
+      [win('five_hour', { status: 'allowed' })],
+      [snap('2026-09-27T11:50:00Z', 'five_hour', { utilization: 0.41, resetsAt: R5 })],
+      NOW,
+    );
+    expect(ratePillSegments(out)[0].text).toBe('41%');
+  });
+
+  it('окно без процента нигде → прочерк, а не 0%', () => {
+    const out = withAccountFallback([win('five_hour', { status: 'allowed', resetsAt: R5 })], [], NOW);
+    expect(ratePillSegments(out)).toEqual([{ limitType: 'five_hour', label: '5ч', text: '—', level: 'normal' }]);
+  });
+
+  it('пустой набор → нет сегментов и нет сжатой формы', () => {
+    expect(ratePillSegments([])).toEqual([]);
+    expect(ratePillCompact([])).toBeNull();
+    expect(withAccountFallback([], [], NOW)).toEqual([]);
+  });
+
+  it('danger: сжатая форма показывает окно у предела, перерасход помечен «+»', () => {
+    const windows = toRateWindows({
+      five_hour: win('five_hour', { utilization: 0.5 }),
+      seven_day: win('seven_day', { utilization: 1, isUsingOverage: true }),
+      seven_day_opus: win('seven_day_opus', { utilization: 0.2 }),
+    });
+    expect(ratePillCompact(windows)).toEqual({ head: { limitType: 'seven_day', label: 'Нед', text: '100%+', level: 'danger' }, more: 2 });
+    expect(ratePillSegments(windows).find(s => s.limitType === 'seven_day')?.level).toBe('danger');
+  });
+
+  it('снимок аккаунта из сброшенного окна отбрасывается: старые «90%» не горят красным', () => {
+    const out = withAccountFallback(
+      [],
+      [snap('2026-09-27T10:00:00Z', 'five_hour', { utilization: 0.9, resetsAt: '2026-09-27T11:00:00Z' }),
+        snap('2026-09-27T11:50:00Z', 'seven_day', { utilization: 0.12, resetsAt: RW })],
+      NOW,
+    );
+    expect(ratePillSegments(out).map(s => `${s.label} ${s.text}`)).toEqual(['Нед 12%']);
+    expect(out.some(w => w.level === 'danger')).toBe(false);
+  });
+
+  it('сброшенный снимок не глушит событие чата без процента: окно остаётся прочерком', () => {
+    const out = withAccountFallback(
+      [win('five_hour', { status: 'allowed' })],
+      [snap('2026-09-27T10:00:00Z', 'five_hour', { utilization: 0.9, resetsAt: '2026-09-27T11:00:00Z' })],
+      NOW,
+    );
+    expect(ratePillSegments(out)).toEqual([{ limitType: 'five_hour', label: '5ч', text: '—', level: 'normal' }]);
+  });
+
+  it('хвост «+N» отделён отступом, в том числе после перерасхода', () => {
+    expect(ratePillMoreText(2)).toBe(' +2');
+    expect(ratePillMoreText(0)).toBe('');
+    const windows = toRateWindows({
+      five_hour: win('five_hour', { utilization: 0.5 }),
+      seven_day: win('seven_day', { utilization: 1, isUsingOverage: true }),
+      seven_day_opus: win('seven_day_opus', { utilization: 0.2 }),
+    });
+    const c = ratePillCompact(windows)!;
+    expect(c.head.text + ratePillMoreText(c.more)).toBe('100%+ +2');
+  });
+
+  it('десктоп: не больше трёх окон в постоянном порядке, остальные — счётчиком', () => {
+    const windows = toRateWindows({
+      extra_usage: win('extra_usage', { utilization: 0.9 }),
+      seven_day_opus: win('seven_day_opus', { utilization: 0.3 }),
+      seven_day_sonnet: win('seven_day_sonnet', { utilization: 0.1 }),
+      seven_day: win('seven_day', { utilization: 0.12 }),
+      five_hour: win('five_hour', { utilization: 0.41 }),
+    });
+    const v = ratePillVisible(windows);
+    expect(v.segments.map(s => s.label)).toEqual(['5ч', 'Нед', 'Opus']);
+    expect(v.more).toBe(2);
+    expect(ratePillVisible(windows.slice(0, 2)).more).toBe(0);
+  });
+
+  it('короткие подписи: известные, per-model и эвристики', () => {
+    expect(shortWindowLabel('five_hour')).toBe('5ч');
+    expect(shortWindowLabel('seven_day')).toBe('Нед');
+    expect(shortWindowLabel('seven_day_sonnet')).toBe('Sonnet');
+    expect(shortWindowLabel('extra_usage')).toBe('Доп');
+    expect(shortWindowLabel('rolling_5hr_v2')).toBe('5ч');
+    expect(shortWindowLabel('nimbus_quill')).toBe('Др.');
   });
 });
 

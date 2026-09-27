@@ -105,6 +105,102 @@ export function latestPerWindow(snapshots: UsageSnapshot[]): Array<RateWindow & 
   return toRateWindows(map).map(w => ({ ...w, timestamp: latest.get(w.limitType)?.timestamp }));
 }
 
+// Окна чата поверх снимков аккаунта: живое событие чата — самое свежее, а если оно пришло
+// без процента (в нормальном режиме так почти всегда), latestPerWindow подставит процент
+// того же окна из снимка. Окна, которых в чате нет вовсе, приходят из снимка — так цифры
+// видны с открытия чата, до первого хода.
+// Событие чата помечается временем «сейчас», поэтому устаревшее отбрасываем, иначе оно
+// перебило бы свежий снимок: окно уже сброшено (resetsAt в прошлом) или событие без процента
+// и без сброса, а у аккаунта это окно есть (такому событию нечем уточнить снимок).
+// Снимки аккаунта из уже сброшенного окна отбрасываются по тому же условию: старый «90%»
+// после сброса — неправда, лучше прочерк или свежая цифра.
+export function withAccountFallback(chat: RateLimitInfo[], accountSnapshots: UsageSnapshot[], now: string = new Date().toISOString()): RateWindow[] {
+  const nowMs = new Date(now).getTime();
+  const expired = (resetsAt?: string) => !!resetsAt && new Date(resetsAt).getTime() <= nowMs;
+  const account = accountSnapshots.filter(s => !expired(s.resetsAt));
+  const accountTypes = new Set(account.map(s => s.limitType));
+  const live = chat.filter(w =>
+    !expired(w.resetsAt)
+    && (typeof w.utilization === 'number' || !!w.resetsAt || !accountTypes.has(w.limitType)));
+  return latestPerWindow([
+    ...account,
+    ...live.map(w => ({
+      timestamp: now, limitType: w.limitType, utilization: w.utilization, status: w.status,
+      isUsingOverage: w.isUsingOverage, resetsAt: w.resetsAt, overageStatus: w.overageStatus, overageResetsAt: w.overageResetsAt,
+    })),
+  ]);
+}
+
+// Короткие подписи окон для пилюли шапки (полные — windowLabel, в поповере)
+const SHORT_WINDOW_LABELS: Record<string, string> = {
+  five_hour: '5ч',
+  rolling_5h: '5ч',
+  seven_day: 'Нед',
+  weekly: 'Нед',
+  extra_usage: 'Доп',
+};
+
+export function shortWindowLabel(type: string): string {
+  if (SHORT_WINDOW_LABELS[type]) return SHORT_WINDOW_LABELS[type];
+  const m = /^seven_day_(.+)$/i.exec(type);
+  if (m) return `${m[1].charAt(0).toUpperCase()}${m[1].slice(1).replace(/_/g, ' ')}`;
+  if (/5|five|hour/i.test(type)) return '5ч';
+  if (/week|seven|day/i.test(type)) return 'Нед';
+  // Незнакомый ключ сырым идентификатором на пилюлю не пускаем — полное имя в подсказке и поповере
+  return 'Др.';
+}
+
+// Порядок окон на пилюле — постоянный (5ч → неделя → по моделям → перерасход), а не по
+// проценту: иначе окна прыгали бы местами по ходу разговора
+function pillRank(type: string): number {
+  if (/^seven_day_/i.test(type)) return 2;
+  if (type === 'extra_usage') return 3;
+  const s = shortWindowLabel(type);
+  return s === '5ч' ? 0 : s === 'Нед' ? 1 : 4;
+}
+
+export interface RatePillSegment {
+  limitType: string;
+  label: string;                        // «5ч», «Нед», «Opus»
+  text: string;                         // «41%», «100%+» (перерасход), «—» (процент неизвестен)
+  level: RateWindow['level'];
+}
+
+function toSegment(w: RateWindow): RatePillSegment {
+  return {
+    limitType: w.limitType,
+    label: shortWindowLabel(w.limitType),
+    text: w.hasUtil ? `${w.pct}%${w.isUsingOverage ? '+' : ''}` : '—',
+    level: w.level,
+  };
+}
+
+// Все окна для пилюли шапки: «5ч 41% · Нед 12% · Opus 30%»
+export function ratePillSegments(windows: RateWindow[]): RatePillSegment[] {
+  return [...windows]
+    .sort((a, b) => (pillRank(a.limitType) - pillRank(b.limitType)) || a.limitType.localeCompare(b.limitType))
+    .map(toSegment);
+}
+
+// Десктоп: не больше max окон в постоянном порядке, остальные — счётчиком «+N»
+export const PILL_MAX_WINDOWS = 3;
+
+export function ratePillVisible(windows: RateWindow[], max: number = PILL_MAX_WINDOWS): { segments: RatePillSegment[]; more: number } {
+  const all = ratePillSegments(windows);
+  return { segments: all.slice(0, max), more: Math.max(0, all.length - max) };
+}
+
+// Сжатая форма для мобилы/планшета: худшее окно + сколько окон ещё («5ч 41% +2»)
+export function ratePillCompact(windows: RateWindow[]): { head: RatePillSegment; more: number } | null {
+  const worst = worstWindow(windows);
+  return worst ? { head: toSegment(worst), more: windows.length - 1 } : null;
+}
+
+// Хвост «+N» с неразрывным отступом: без него выходило «41%+2», а при перерасходе «100%++2»
+export function ratePillMoreText(more: number): string {
+  return more > 0 ? ` +${more}` : '';
+}
+
 // Точки {время(мс), доля} по каждому окну, отсортированные — для спарклайна тренда
 export function seriesByWindow(snapshots: UsageSnapshot[]): Record<string, { t: number; u: number }[]> {
   const out: Record<string, { t: number; u: number }[]> = {};

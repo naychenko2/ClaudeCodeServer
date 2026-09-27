@@ -204,6 +204,38 @@ public class SubscriptionOAuthUsageServiceTests : IDisposable
         accounts.Single(a => a.Key == "second").Token.Should().Be("token-second");
     }
 
+    [Fact]
+    public void EnumerateAccounts_PrimaryИзФайлаЛогина_БезПрофиля_РефрешЗапрещён()
+    {
+        // Ревью d04dcd2e: файл ~/.claude/.credentials.json делит живая сессия CLI;
+        // рефреш одноразового refresh-токена с нашей стороны гасил бы её логин
+        using var _ = SystemEnv("CLAUDE_CODE_OAUTH_TOKEN", null);
+        var profileDir = WriteProfileCreds("user-home", "file-token", "refresh-1",
+            DateTimeOffset.UtcNow.AddHours(-1).ToUnixTimeMilliseconds());
+        var svc = CreateServiceWith(new Dictionary<string, string?> { ["ClaudeUserProfileDir"] = profileDir });
+
+        var primary = svc.EnumerateAccounts().Single();
+
+        primary.Key.Should().Be(ClaudeSubscriptionPool.PrimaryKey);
+        primary.Token.Should().Be("file-token");
+        primary.ProfileDir.Should().BeNull("primary-файл продлевает только сам CLI");
+    }
+
+    [Fact]
+    public void EnumerateAccounts_PrimaryИзEnv_БезПрофиля()
+    {
+        // env-токен (setup-токен) файлом не продлевается — рефреш файла тут был бы чужим
+        using var _ = SystemEnv("CLAUDE_CODE_OAUTH_TOKEN", "env-token");
+        var profileDir = WriteProfileCreds("user-home-env", "file-token", "refresh-1",
+            DateTimeOffset.UtcNow.AddHours(-1).ToUnixTimeMilliseconds());
+        var svc = CreateServiceWith(new Dictionary<string, string?> { ["ClaudeUserProfileDir"] = profileDir });
+
+        var primary = svc.EnumerateAccounts().Single();
+
+        primary.Token.Should().Be("env-token");
+        primary.ProfileDir.Should().BeNull();
+    }
+
     // --- LoginCommandFor: готовая PowerShell-команда входа для плашки «нужен claude login» ---
 
     private static IDisposable SystemEnv(string key, string? value)

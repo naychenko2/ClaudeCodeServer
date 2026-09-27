@@ -124,6 +124,10 @@ public sealed partial class SubscriptionOAuthUsageService(
         var primaryPooled = pool.All.Any(s => s.Key == ClaudeSubscriptionPool.PrimaryKey);
         if (!primaryPooled)
         {
+            // ProfileDir у primary — всегда null: его .credentials.json делит живая
+            // интерактивная сессия CLI пользователя. Refresh-токен одноразовый — наш рефреш
+            // погасил бы его у CLI, а сорвавшаяся запись новой пары убила бы логин целиком.
+            // Продлевает этот файл только сам CLI (ревью d04dcd2e, откат фикса df14723e).
             var primary = ResolvePrimaryToken();
             if (!string.IsNullOrWhiteSpace(primary))
                 yield return (ClaudeSubscriptionPool.PrimaryKey, primary!, null);

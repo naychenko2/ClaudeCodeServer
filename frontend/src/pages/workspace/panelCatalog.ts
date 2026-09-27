@@ -17,7 +17,7 @@
 import {
   BookOpen, BookOpenText, ClipboardList, FolderTree, GitCompare, ListTodo, Bot, User, Users,
   SquareTerminal, AppWindow, MonitorPlay, Network, MessageCircle, NotebookPen, StickyNote, Library, Puzzle,
-  TableOfContents, Lightbulb,
+  TableOfContents, Lightbulb, DraftingCompass,
   type LucideIcon,
 } from 'lucide-react';
 import type { BadgeTone } from '../../components/ui/CountBadge';
@@ -34,7 +34,7 @@ export const PANEL_KEYS = [
   // Порядок рельсы: сначала работа с проектом «здесь и сейчас» — дерево файлов,
   // его изменения, задачи по ним; дальше справочное (документация, знания, граф)
   // и командное
-  'chats', 'files', 'changes', 'tasks', 'docs', 'dossiers', 'knowledge', 'notes', 'graph', 'team', 'skills', 'terminal', 'preview',
+  'chats', 'files', 'changes', 'tasks', 'docs', 'dossiers', 'knowledge', 'notes', 'graph', 'arch', 'team', 'skills', 'terminal', 'preview',
   'plan', 'agents', 'context',
   'toc',
   // Фоновый эфир рядом с работой: живёт и в проекте, и в разделе «Чаты».
@@ -104,7 +104,12 @@ export const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> =
   changes:  { title: 'Изменения', Icon: GitCompare },
   tasks:    { title: 'Задачи',    Icon: ListTodo },
   graph:    { title: 'Граф',      Icon: Network },
-  team:     { title: 'Команда',   Icon: Users },
+  // «Архитектура» (C4-модель Viaduct, за флагом architecture) — сосед «Графа» по смыслу:
+  // граф — код «как есть», архитектура — «как задумано». Чертёжный циркуль — инструмент
+  // архитектора: проектирование, а не содержимое. Boxes читался как «кубики/склад» и занят
+  // «Командным спринтом»; Layers/LayoutDashboard/Shapes/SquareStack уже заняты в продукте
+  arch:     { title: 'Архитектура', Icon: DraftingCompass },
+  team:    { title: 'Команда',   Icon: Users },
   // Навыки и агенты рабочей папки (.claude/skills, .claude/agents) — файловые
   // умения CLI, а не персоны-контакты: поэтому отдельная панель рядом с «Командой»,
   // а не вкладка внутри неё. Bot занят сессионными «Агентами» (артефакт хода),
@@ -147,6 +152,7 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
   changes: 'right',
   tasks: 'right',
   graph: 'right',
+  arch: 'right',
   team: 'right',
   skills: 'right',
   terminal: 'right',
@@ -168,7 +174,7 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
 
 // Наборы ключей по экранам — что вообще доступно в этой рельсе (проп allowedKeys)
 export const WORKSPACE_KEYS: readonly PanelKey[] = [
-  'chats', 'files', 'changes', 'tasks', 'docs', 'dossiers', 'knowledge', 'notes', 'graph', 'team', 'skills', 'terminal', 'preview',
+  'chats', 'files', 'changes', 'tasks', 'docs', 'dossiers', 'knowledge', 'notes', 'graph', 'arch', 'team', 'skills', 'terminal', 'preview',
   'plan', 'agents', 'context', 'toc', 'video',
 ];
 // Раздел «Чаты»: список чатов плюс панели активной сессии (проекта там нет)
@@ -199,9 +205,13 @@ export const CENTER_KEYS: readonly PanelKey[] = ['toc'];
 //
 // Раньше группа гейтилась настройкой проекта «Инструменты» (Project.ToolsEnabled)
 // и по дефолту была скрыта у всех. Гейт убран: видимость кнопок — дело ящика
-// рельсы («…»), а не настроек проекта, и per-project разницы у неё нет. Обе кнопки
-// лежат в ящике по умолчанию (defaultTucked у wsPanels).
-export const TOOLS_KEYS: readonly PanelKey[] = ['terminal', 'preview', 'video'];
+// рельсы («…»), а не настроек проекта, и per-project разницы у неё нет. Терминал и
+// «Сервисы» лежат в ящике по умолчанию (defaultTucked у wsPanels).
+//
+// «Архитектура» (C4-модель, за флагом architecture) — первая в группе и видна по
+// умолчанию: отдельная группа «Проектирование» ради одной кнопки дробила рельсу
+// лишней чертой. С выключенным флагом кнопки просто нет, группа живёт без неё.
+export const TOOLS_KEYS: readonly PanelKey[] = ['arch', 'terminal', 'preview', 'video'];
 
 // Содержимое проекта и панели разделов: всё, что не относится ни к текущей сессии,
 // ни к запуску процессов, ни к центральной области. Первая группа рельсы, дальше

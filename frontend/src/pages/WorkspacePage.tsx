@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect, useReducer, type ReactNode } from 'react';
-import { Plus, MessageCircle, Network, Puzzle, GitCompare, BookOpen } from 'lucide-react';
+import { Plus, MessageCircle, Network, Puzzle, GitCompare, BookOpen, DraftingCompass } from 'lucide-react';
 import type { Project, Session, SkillsData, AuthState, Task, ProjectService, SessionContextEntry } from '../types';
 import { SessionList } from '../components/SessionList';
 import { FileExplorer } from '../components/FileExplorer';
@@ -21,7 +21,7 @@ import { chatNeighborForArchive } from '../lib/chatUpdate';
 import { useFeature, FLAGS } from '../lib/featureFlags';
 import { SUBSYSTEMS, useSubsystem } from '../lib/subsystems';
 import { useSlotItem } from '../lib/subsystems/registry';
-import type { WorkspacePanelNotesCtx } from '../lib/subsystems/registryCore';
+import type { WorkspacePanelNotesCtx, WorkspacePanelArchCtx, WorkspaceCenterDocCtx } from '../lib/subsystems/registryCore';
 import { isArchivedChat, matchChatFilter, loadChatFilters } from '../lib/chatFilters';
 import { markChatRead } from '../lib/chatReadState';
 import { refreshProjectActivity } from '../lib/projectActivity';
@@ -345,7 +345,20 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   // Документ «Граф зависимостей» открыт в центре — та же модель «документ поверх чата»,
   // что и openFile: крестик возвращает центр к чату, открытие любого другого документа
   // (файл/задача/чат) закрывает граф. Открывается из панели «Граф» в рельсе.
-  const [graphOpen, setGraphOpen] = useState(false);
+  // Тем же местом живёт документ «Архитектура» (панель arch): документ
+  // центра один, поэтому состояние общее — setGraphOpen(false) у всех открывателей
+  // центра закрывает любой из двух, а открытие одного вытесняет другой.
+  const [centerDoc, setCenterDoc] = useState<'graph' | 'arch' | null>(null);
+  const graphOpen = centerDoc === 'graph';
+  const archOpen = centerDoc === 'arch';
+  const setGraphOpen = useCallback((open: boolean) => setCenterDoc(open ? 'graph' : null), []);
+  // «Архитектура» — MF-remote (modules/architecture): панель рельсы и документ центра
+  // приходят вкладами слотов, ноль прямых импортов фичи. Гейт — только наличие ОБОИХ
+  // вкладов (remote не загрузился / подсистема выключена — раздела нет целиком);
+  // фич-флага у раздела нет, включение — конфигом модуля.
+  const archPanel = useSlotItem<WorkspacePanelArchCtx>('workspace-panel', 'architecture');
+  const archDoc = useSlotItem<WorkspaceCenterDocCtx>('workspace-center-doc', 'arch');
+  const archEnabled = !!archPanel && !!archDoc;
   // Ридер ссылок: живёт как просмотр файла — сплит с чатом либо на всю контентную
   // зону (см. DesktopWorkspace). Один экземпляр состояния на страницу.
   const reader = useReaderPanel();
@@ -826,15 +839,27 @@ const windowWidth = useWindowWidth();
     ? [...leftTabOptions.slice(0, Math.max(0, projectVisibleCount - 1)), leftTabOptions[activeLeftIdx]]
     : leftTabOptions.slice(0, projectVisibleCount);
   const mobileVisibleValues = new Set(mobileLeftTabOptions.map(o => o.value));
+  const overflowTabItems: OverflowItem[] = leftTabOptions
+    .filter(o => !mobileVisibleValues.has(o.value))
+    .map(o => ({ key: o.value, icon: o.icon, label: o.label, onClick: () => handleTabSwitch(o.value) }));
+  // Порядок как у групп рельсы (RAIL_GROUPS): содержимое проекта с «Графом» →
+  // инструменты запуска, первой в которых идёт «Архитектура». Поэтому граф встаёт
+  // перед «Инструментами», а архитектура — первой в их группе, не в хвост списка
+  const toolsIdx = overflowTabItems.findIndex(i => i.key === 'tools');
+  const splitAt = toolsIdx === -1 ? overflowTabItems.length : toolsIdx;
   const projectOverflowItems: OverflowItem[] = [
-    ...leftTabOptions
-      .filter(o => !mobileVisibleValues.has(o.value))
-      .map(o => ({ key: o.value, icon: o.icon, label: o.label, onClick: () => handleTabSwitch(o.value) })),
+    ...overflowTabItems.slice(0, splitAt),
     {
       key: 'graph', label: 'Граф',
       icon: <Network size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />,
       onClick: () => ensureGraphOpen(),
     },
+    ...(archEnabled ? [{
+      key: 'arch', label: 'Архитектура',
+      icon: <DraftingCompass size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />,
+      onClick: () => ensureArchOpen(),
+    }] : []),
+    ...overflowTabItems.slice(splitAt),
     {
       key: 'models-spend', label: 'Модели и расход',
       icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></svg>,
@@ -971,7 +996,13 @@ const windowWidth = useWindowWidth();
     setSelectedTaskId(null);
     setActivePreviewId(null);
     if (isMobile) setMobileView('chat');
-  }, [isMobile, setActivePreviewId]);
+  }, [isMobile, setActivePreviewId, setGraphOpen]);
+
+  // Документ «Архитектура» — то же место и те же правила, что у «Графа»
+  const ensureArchOpen = useCallback(() => {
+    ensureGraphOpen();
+    setCenterDoc('arch');
+  }, [ensureGraphOpen]);
 
   // «Построить граф» (empty-state документа и панели): явный POST-build на бэке,
   // стор сам переходит в 'building' и дожидается готовности polling'ом.
@@ -1782,6 +1813,12 @@ const windowWidth = useWindowWidth();
             <CodeGraphDocument projectId={project.id} isMobile onClose={handleGraphClose} onOpenFile={handleOpenFileFromTree} onBuild={handleGraphBuild} />
           </div>
         )}
+        {/* Документ «Архитектура» — там же и так же, как граф */}
+        {!openFile && archOpen && archEnabled && (
+          <div style={{ position: 'absolute', inset: 0, zIndex: 800, display: 'flex', background: C.bgMain }}>
+            {archDoc?.render?.({ projectId: project.id, projectName: project.name, isMobile: true, onClose: handleGraphClose, onShowFile: handleOpenFileFromTree })}
+          </div>
+        )}
         {columnsDialogEl}
         {showModelsSpend && <ModelsSpendModal onClose={() => setShowModelsSpend(false)} />}
         {editProjectOpen && (
@@ -1881,8 +1918,10 @@ const windowWidth = useWindowWidth();
           previewOpen={!!ccActivePreview}
           previewArea={ccActivePreview ? <PreviewView service={ccActivePreview} projectId={project.id} onStop={stopService} onClose={() => setActivePreviewId(null)} services={previewServices} /> : null}
           onClosePreview={() => setActivePreviewId(null)}
-          graphOpen={graphOpen}
-          graphArea={<CodeGraphDocument projectId={project.id} isMobile={false} onClose={handleGraphClose} onOpenFile={handleOpenFileFromTree} onBuild={handleGraphBuild} />}
+          graphOpen={graphOpen || (archOpen && archEnabled)}
+          graphArea={archOpen && archEnabled
+            ? archDoc?.render?.({ projectId: project.id, projectName: project.name, isMobile: false, onClose: handleGraphClose, onShowFile: handleOpenFileFromTree })
+            : <CodeGraphDocument projectId={project.id} isMobile={false} onClose={handleGraphClose} onOpenFile={handleOpenFileFromTree} onBuild={handleGraphBuild} />}
           onOpenReader={handleOpenReader}
           panels={{
             files: <FileExplorer project={project} activeFilePath={openFile} isMobile={false} onOpenFile={handleOpenFileFromTree} onAddToKnowledge={handleAddToKnowledge} onAddFolderToKnowledge={handleAddFolderToKnowledge} onRemoveFromKnowledge={handleRemoveFromKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} indexingFolders={indexingFolders} onAttachToChat={activeSession && !fileFullscreen ? handleAttachToChat : undefined} onOpenDossiers={handleOpenDossiers} />,
@@ -1906,6 +1945,10 @@ const windowWidth = useWindowWidth();
             tasks: <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={false} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} groupTab={projectGroupTab} onGroupTab={setProjectGroupTab} filters={taskListFilters} onFilters={setTaskListFilters} />,
             team: <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} onShowTeam={() => { handlePersonaCleared(); setTeamCenterOpen(true); }} teamActive={teamCenterOpen && !selectedPersonaId && !personaCreating} />,
             graph: <CodeGraphPanel projectId={project.id} graphOpen={graphOpen} onEnsureGraphOpen={ensureGraphOpen} onCollapseGraph={handleGraphClose} onOpenFile={handleOpenFileFromTree} onBuild={handleGraphBuild} />,
+            // «Архитектура» за флагом: без контента кнопки в рельсе нет (keyAvailable)
+            ...(archEnabled ? {
+              arch: archPanel?.render?.({ projectId: project.id, archOpen, onEnsureOpen: ensureArchOpen, onCollapse: handleGraphClose }),
+            } : {}),
             // Навыки и агенты рабочей папки. onChanged кладёт свежий состав в тот же
             // skillsData, откуда композер берёт «/»-команды: установка навыка в панели
             // видна в подсказке сразу, без перезагрузки страницы

@@ -14,8 +14,10 @@ C4-редактор [Viaduct Community](https://github.com/quietgridlabs/viaduct
 | Что | Где |
 |---|---|
 | Скрипт установки/обновления | [scripts/build-viaduct.ps1](../../scripts/build-viaduct.ps1) |
-| Закреплённый коммит | `1af2d6e21e2ab66e8e62caf67063eac7fc1dfd57` (тег `v0.1.2`) — дефолт `-Commit` скрипта |
-| Сборка | `{data}/modules/viaduct/dist` + маркер `.viaduct-build.json` (коммит, base, хэш шима) |
+| Источник сборки | машинный (переменные `VIADUCT_REPO_URL` + `VIADUCT_COMMIT`), иначе публичный апстрим — см. «Источник сборки» |
+| Закреплённый коммит апстрима | `1af2d6e21e2ab66e8e62caf67063eac7fc1dfd57` (тег `v0.1.2`) — дефолт скрипта без машинного источника |
+| Сборка | `{data}/modules/viaduct/dist` + маркер `.viaduct-build.json` (репа, коммит, base, хэш шима, версия Monaco) |
+| Monaco | `monaco-editor` `0.56.0` (дефолт `-MonacoVersion`, совпадает с lock-файлом коммита) → `dist/monaco/vs` |
 | Раздача | `GET /modules/viaduct/**` — [ViaductStaticHosting.cs](../../backend/ClaudeHomeServer.Architecture/Services/Architecture/ViaductStaticHosting.cs), в вертикали; Main ставит ветку циклом по Core-шову `IStaticBranchContributor` |
 | MF-remote раздела | `frontend/modules/architecture` → `npm run build:architecture` (входит в `npm run build`) → `dist/architecture-remote`, раздаётся по `/architecture-remote/` (файлы лежат в `wwwroot/architecture-remote` и отдаются общей раздачей статики как обычные файлы — гейтом не закрыты; «только загруженные» — это список `/api/subsystem-modules`, по которому оболочка и грузит remote); дев — `npm run dev:architecture` |
 | Исключение из бэкапа | `BackupPaths.ShouldInclude`: `modules/viaduct/**` (соседние `modules/{id}/module.json` едут) |
@@ -33,13 +35,41 @@ powershell -ExecutionPolicy Bypass -File scripts\build-viaduct.ps1 -DataDir back
 powershell -ExecutionPolicy Bypass -File scripts\build-viaduct.ps1 -DataDir C:\deploy\claude\data
 ```
 
-Требует `git`, Node 22+ и `npm`; ходит только в GitHub и npm registry. Первый прогон —
-около 5 минут (`npm ci` + `vite build`), повторный с тем же коммитом — мгновенный выход
-«уже установлен» (идемпотентность по маркеру). `-Force` — пересобрать принудительно.
+Требует `git`, Node 22+ и `npm`; ходит только на хостинг репы и в npm registry. Первый
+прогон — около 5 минут (`npm ci` + `vite build`), повторный с тем же источником — мгновенный
+выход «уже установлен» (идемпотентность по маркеру). `-Force` — пересобрать принудительно.
+
+### Источник сборки
+
+Какую репу и какой коммит собирать, скрипт решает так (первое найденное побеждает):
+
+1. явные `-RepoUrl` / `-Commit` — хоть один задан, переменные окружения не читаются вовсе
+   (поэтому для своей репы передавай оба; один `-Commit` — это коммит апстрима);
+2. **машинные переменные окружения** `VIADUCT_REPO_URL` + `VIADUCT_COMMIT` — задаются парой
+   (одна без другой — отказ), живут только на машине и в git не попадают. Так собирается
+   сборка с нашими правками поверх апстрима: адрес такой репы в репозиторий CCS, доки и
+   коммиты не пишем;
+3. публичный апстрим на закреплённом коммите (таблица выше) — поведение по умолчанию.
+
+```powershell
+# один раз на машине (пользовательские переменные; новый терминал их увидит)
+[Environment]::SetEnvironmentVariable('VIADUCT_REPO_URL', '<адрес репы>', 'User')
+[Environment]::SetEnvironmentVariable('VIADUCT_COMMIT', '<полный SHA>', 'User')
+```
+
+Доступ к закрытой репе — через Git Credential Manager машины: пароль/токен в адресе скрипт
+отвергает, PAT никуда не кладём; в лог и маркер адрес идёт без логина (на его месте мог бы
+оказаться токен). Коммит — только полный SHA
+(40 hex): shallow-фетч по короткому SHA хостинг не отдаёт. Для репы, отличной от апстрима,
+коммит обязателен — закреплённый коммит апстрима к ней не подходит.
+
+Сборка с нашими правками включает в шиме флаг `window.__viaductHost.autoHandles` —
+перевыбор сторон связей после переноса карточки; сборка апстрима флаг просто не читает.
+Русский интерфейс в такой сборке — её собственный дефолт, шим язык не трогает.
 
 Что делает скрипт:
 
-1. Во временной папке `git fetch --depth 1` ровно закреплённого SHA, сверка `HEAD`.
+1. Во временной папке `git fetch --depth 1` ровно выбранного SHA, сверка `HEAD`.
 2. `npm ci --ignore-scripts` → `vendorRedoc` → `tsc -b` → `vite build --base=/modules/viaduct/`.
    `npm run build` не используется: хвост аргументов уехал бы в `prerender`, а снимки
    лендинга для SEO встраиванию не нужны. Метрики (`VITE_METRICS_DISABLED=1`) и Umami
@@ -53,12 +83,30 @@ powershell -ExecutionPolicy Bypass -File scripts\build-viaduct.ps1 -DataDir C:\d
    сборка без шима для отладки — `-NoShim`; без шима модель не переживает перезагрузку).
    Не нашёл ровно один module-скрипт → громкий отказ: значит, структура сборки Viaduct
    поменялась. Правка шима = пересборка скриптом (маркер хранит хэш шима).
-5. Атомарная подмена: копия в `dist.new` рядом с целью → `rename` старой в `dist.old` →
+5. Локальный Monaco (редакторы документов, sequence, контрактов). Viaduct штатно тянет
+   `loader.js` с `cdn.jsdelivr.net`, CSP раздачи это режет — поэтому AMD-сборка
+   `monaco-editor/min/vs` кладётся в `dist/monaco/vs`. Берётся из `node_modules` Viaduct
+   (тот пакет, против которого собран бандл); если lock-файл коммита держит не
+   `-MonacoVersion`, закреплённая версия ставится отдельным `npm install` мимо дерева Viaduct.
+   В `<head>` после шима встают описание `<script type="application/json" id="viaduct-monaco">`
+   (путь `vs` и адреса самодостаточных воркеров `editor.worker-*.js`/`json.worker-*.js`) и
+   `monaco/vs/loader.js`. Шим поднимает `vs/editor/editor.main` до старта бандла —
+   `@monaco-editor/loader` видит готовый `window.monaco` и на CDN не идёт; бандл стартует,
+   когда есть и модель от хоста, и Monaco (провал Monaco бандл не держит: холст работает).
+   Воркеры — из `blob:` по тексту файла (`fetch` → `Blob` → `new Worker`): из непрозрачного
+   origin `new Worker(url)` бросает `SecurityError`. `MonacoEnvironment` шим ставит **после**
+   загрузки `editor.main` — AMD-сборка 0.56 при загрузке перетирает его своим `getWorker`, и
+   Monaco молча уводит воркеры в главный поток (грабля поймана на смоуке 2026-09-27).
+   Не нашёлся ровно один воркер каждого вида или `loader.js` — громкий отказ.
+   Смена версии Monaco = пересборка (версия в маркере). CSP при этом не ослаблен: всё с
+   `'self'`, воркеры — `worker-src 'self' blob:`, как и было.
+6. Атомарная подмена: копия в `dist.new` рядом с целью → `rename` старой в `dist.old` →
    `rename` новой в `dist`. Сервер резолвит файлы по пути на каждый запрос — **рестарт не
    нужен** ни после установки, ни после обновления.
 
-Обновление Viaduct — только осознанное: новый `-Commit` (полный SHA), прогон на деве,
-смоук раздела, потом на бою.
+Обновление Viaduct — только осознанное: новый полный SHA (в `VIADUCT_COMMIT` при машинном
+источнике, иначе `-Commit`), прогон на деве, смоук раздела, потом на бою. Смена репы или
+коммита меняет маркер — следующий прогон пересобирает сам.
 
 ## Раздача
 
@@ -100,7 +148,8 @@ endpoint молчат). Без авторизации — в бандле нет
 
 - **Убрать модуль:** удалить папку `{data}\modules\viaduct` — раздел покажет «модуль не
   установлен», рестарт не нужен.
-- **Вернуть прежнюю версию:** прогнать скрипт с прежним `-Commit`.
+- **Вернуть прежнюю версию:** прогнать скрипт с прежним источником (`-Commit` или прежнее
+  значение `VIADUCT_COMMIT`); вернуться на апстрим — удалить обе переменные.
 
 ## Хранилище модели и мост
 
@@ -140,11 +189,12 @@ build` — оба remote собраны. Правило: новая зависи
 Ограничения самого раздела (потеря правки при быстром переходе в другой проект, старое имя
 «(корень)», просмотр на телефоне) — в [architecture-section.md](../features/architecture-section.md#известные-ограничения).
 
-- **Monaco грузится с CDN.** Viaduct не конфигурирует `@monaco-editor/loader`, поэтому
-  редакторы docs/sequence/контрактов тянут `loader.js` с `cdn.jsdelivr.net`, а CSP это режет.
-  Канва C4 от этого не зависит. Лечение без правки кода Viaduct — в шиме
-  (`@monaco-editor/loader` берёт уже лежащий `window.monaco`) либо вендоринг Monaco при
-  сборке; открывать CSP на внешний CDN не планируется.
+- ~~Monaco грузится с CDN~~ — **вылечено 2026-09-27** локальной раздачей (шаг 5 установки).
+  Проверено на дев-стенде: документ элемента, sequence-диаграмма и тело запроса endpoint
+  правятся в Monaco и через Save доезжают до `model.viaduct.json`, воркеры идут из `blob:`,
+  CSP-нарушений в консоли нет. Диагностика во фрейме — `window.__viaductHost`
+  (`monaco`: встал ли, `workers`: сколько поднято). Правка, не меняющая разобранную модель
+  (например, комментарий PlantUML), кнопку Save не включает — это поведение Viaduct.
 - Роутер Viaduct (BrowserRouter без basename) на чужом пути `/modules/viaduct/` сам уводит
   на `/editor` — в iframe безвредно (история живёт внутри фрейма), но при прямом открытии
   во вкладке URL становится `/editor` CCS, и перезагрузка уйдёт в SPA CCS. Штатный путь —

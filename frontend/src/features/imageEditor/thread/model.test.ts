@@ -88,3 +88,101 @@ describe('задача, оборванная перезапуском серве
     expect(launchedPrompt('что-то другое')).toBeNull();
   });
 });
+
+import {
+  currentVersion, isLegacyThread, versionHasImage, versionStep, versionsOf, launchVersions, versionMeta,
+} from './model';
+
+const v = (id: string, patch: Partial<Parameters<typeof makeV>[0]> = {}): ImageThreadVersion => makeV(id, patch);
+
+function makeV(id: string, patch: Partial<{ jobId: string | null; variant: number | null; baseVersionId: string | null; baseStepId: string | null; steps: string[]; currentStepId: string | null; number: number; createdAt: string }>): ImageThreadVersion {
+  return {
+    id, jobId: null, variant: null, baseVersionId: null, baseStepId: null,
+    steps: [], currentStepId: null, number: 0, createdAt: '2026-09-27T00:00:00Z', ...patch,
+  };
+}
+
+import type { ImageThreadVersion } from './threadsApi';
+
+describe('версии картинки (изменение 27.09 к ADR-019)', () => {
+  it('у нити без versions — пустой список, но не падает', () => {
+    expect(versionsOf(thread({}))).toEqual([]);
+    expect(currentVersion(thread({}))).toBeNull();
+  });
+
+  it('isLegacyThread срабатывает только по старым признакам: стопки с шагами или pendingJobId', () => {
+    expect(isLegacyThread(thread({ stacks: [{ stackId: 's', steps: ['a'], forkedFromStepId: null, old: false }] }))).toBe(true);
+    expect(isLegacyThread(thread({ pendingJobId: 'j1' }))).toBe(true);
+    expect(isLegacyThread(thread({
+      versions: [v('origin'), v('v1', { jobId: 'j1', variant: 0, number: 1, steps: ['step1'], currentStepId: 'step1' })],
+      currentVersionId: 'v1',
+    }))).toBe(false);
+  });
+
+  it('currentVersion — текущая; версия без неё — первая в списке', () => {
+    const t = thread({
+      versions: [v('origin'), v('v1', { number: 1 })],
+      currentVersionId: 'v1',
+    });
+    expect(currentVersion(t)?.id).toBe('v1');
+    expect(currentVersion(thread({ versions: [v('a'), v('b')] }))?.id).toBe('a');
+  });
+
+  it('versionHasImage: исходник — файл нити или baseStepId; версия ИИ — currentStepId', () => {
+    const t = thread({
+      file: 'img/hero.png', stacks: [], currentStackId: null, currentStepId: null,
+      versions: [
+        v('origin'),
+        v('v1', { jobId: 'j1', variant: 0, number: 1, steps: ['st1'], currentStepId: 'st1' }),
+      ],
+    });
+    expect(versionHasImage(t, t.versions![0])).toBe(true);
+    expect(versionHasImage(t, t.versions![1])).toBe(true);
+  });
+
+  it('launchVersions выбирает только варианты одного jobId по индексу', () => {
+    const t = thread({
+      versions: [
+        v('origin'),
+        v('a', { jobId: 'j', variant: 0, number: 1 }),
+        v('b', { jobId: 'j', variant: 1, number: 2 }),
+        v('c', { jobId: 'other', variant: 0, number: 3 }),
+      ],
+    });
+    expect(launchVersions(t, 'j').map(x => x.id)).toEqual(['a', 'b']);
+  });
+
+  it('versionMeta собирает подпись из индекса в запуске и базовой версии', () => {
+    const t = thread({
+      versions: [
+        v('origin'),
+        v('a', { jobId: 'j', variant: 0, number: 1, baseVersionId: 'origin' }),
+        v('b', { jobId: 'j', variant: 1, number: 2, baseVersionId: 'origin' }),
+      ],
+    });
+    expect(versionMeta(t, t.versions![1])).toContain('вариант 1 из 2');
+    expect(versionMeta(t, t.versions![1])).toContain('от исходника');
+    expect(versionMeta(t, t.versions![2])).toContain('вариант 2 из 2');
+  });
+
+  it('focusLabel для нити с версиями говорит имя · версия N', () => {
+    const t = thread({
+      versions: [v('origin'), v('v1', { number: 1 })],
+      currentVersionId: 'v1',
+    });
+    expect(focusLabel(t)).toBe('hero.png · версия 1');
+    expect(focusLabel(t, true)).toBe('hero.png · в1');
+  });
+
+  it('versionStep у исходника без правок — текущий шаг нити, у версии ИИ — её baseStepId', () => {
+    const t = thread({
+      file: 'img/hero.png', currentStepId: 'st0',
+      versions: [
+        v('origin'),
+        v('v1', { number: 1, baseStepId: 'st0', currentStepId: 'st1' }),
+      ],
+    });
+    expect(versionStep(t, t.versions![0])).toBe('st0');
+    expect(versionStep(t, t.versions![1])).toBe('st1');
+  });
+});

@@ -17,9 +17,11 @@ namespace ClaudeHomeServer.Services.ImageEditor.Mcp;
 /// хвост несёт чат, по нему тулсет находит владельца, проект и нити картинок чата.
 ///
 /// Агент видит нити и сам берёт картинку в работу или заводит черновик (решение Андрея 1) — это
-/// всегда видно в ленте тихой строкой «Claude взял в работу: …». Взять вариант, откатиться и
-/// сохранить в проект может только человек: таких инструментов у агента нет. Запуск идёт строго в
-/// нить по threadId, а не «по текущему фокусу»: человек может сменить картинку посреди хода.
+/// всегда видно в ленте тихой строкой «Claude взял в работу: …». Каждый вариант запуска сразу
+/// версия нити (изменение 27.09); агент выбирает, от какой версии править (versionId в
+/// image_generate и image_focus). Сохранить в проект может только человек: такого инструмента у
+/// агента нет. Запуск идёт строго в нить по threadId, а не «по текущему фокусу»: человек может
+/// сменить картинку посреди хода.
 ///
 /// Запуск — ровно тем путём, что у человека: котировка исполнителя и вход через
 /// ImageEditLaunchAssembler (проверка путей, нити и лимитов одна). Трата ложится на владельца чата
@@ -131,8 +133,15 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
     {
         var threadId = Str(args, "threadId");
         var file = Str(args, "file");
+        var versionId = Str(args, "versionId");
         if (threadId is not null && file is not null)
             return Deny("Укажи что-то одно: threadId картинки этого чата или file — путь картинки проекта.");
+        if (versionId is not null && threadId is null)
+            return Deny("versionId — версия картинки threadId: укажи и threadId.");
+        if (versionId is not null
+            && _threads.Get(ownerId, session.Id).Threads.FirstOrDefault(t => t.Id == threadId) is { } target
+            && target.Version(versionId) is null)
+            return Deny($"У картинки {threadId} нет версии {versionId}. Список версий — image_state.");
 
         ImageThreadWrite written;
         if (file is not null)
@@ -144,6 +153,8 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         else
         {
             written = await _threads.AgentFocusAsync(ownerId, project.Id, session.Id, threadId, ct);
+            if (written.Status == ImageThreadWriteStatus.Ok && versionId is not null)
+                written = await _threads.AgentContinueAsync(ownerId, project.Id, session.Id, threadId!, versionId);
         }
 
         return written.Status switch
@@ -222,6 +233,10 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
 
         if (_threads.Get(ownerId, session.Id).Threads.FirstOrDefault(t => t.Id == threadId) is not { } thread)
             return Deny($"Картинки {threadId} нет в этом чате. Список — image_state.");
+        var versionId = Str(args, "versionId");
+        var version = versionId is null ? thread.CurrentVersion : thread.Version(versionId);
+        if (version is null)
+            return Deny($"У картинки {threadId} нет версии {versionId}. Список версий — image_state.");
 
         if (!TryReserveLaunch(session.Id))
             return Deny($"За один ход можно запустить не больше {MaxLaunchesPerTurn} генераций. "
@@ -229,7 +244,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         var launched = false;
         try
         {
-            var result = await LaunchAsync(args, ownerId, session, project, thread, ct);
+            var result = await LaunchAsync(args, ownerId, session, project, thread, version, ct);
             launched = !result.IsError;
             return result;
         }
@@ -240,7 +255,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
     }
 
     private async Task<McpToolCallResult> LaunchAsync(JsonObject args, string ownerId, Session session,
-        Project project, ImageThread thread, CancellationToken ct)
+        Project project, ImageThread thread, ImageThreadVersion version, CancellationToken ct)
     {
         // Что не передано — выбор человека: настройки нити, иначе полосы «Картинки» проекта, а
         // поставщик по умолчанию — как у каталога. Персонаж — подключённый в полосе проекта
@@ -254,11 +269,11 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         var matchSourceSize = Bool(args, "matchSourceSize") ?? settings?.MatchSourceSize ?? true;
         var references = ReferencesArg(args);
 
-        // Исходник — текущий шаг нити, иначе файл нити с диска проекта. У черновика «Новая
-        // картинка» без шага исходника нет вовсе: рисуем новую по тексту
+        // Исходник — картинка версии-основы (её шаг), иначе файл нити с диска проекта. У черновика
+        // «Новая картинка» без шага исходника нет вовсе: рисуем новую по тексту
         ImageBytes? source = null;
         string? baseStepId = null;
-        if (thread.CurrentStepId is { Length: > 0 } stepId && _steps?.Open(ownerId, project.Id, stepId) is { } step)
+        if (thread.ImageStepOf(version) is { Length: > 0 } stepId && _steps?.Open(ownerId, project.Id, stepId) is { } step)
         {
             source = new ImageBytes(step.Image.Bytes, step.Image.ContentType);
             baseStepId = stepId;
@@ -304,7 +319,8 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             BaseStepId: baseStepId,
             Initiator: ImageEditInitiator.Agent,
             ThreadSessionId: session.Id,
-            ThreadId: thread.Id);
+            ThreadId: thread.Id,
+            VersionId: version.Id);
         var started = await _launcher.LaunchAsync(ownerId, project, request, ct);
         if (started.Value is not { } created)
             return await FailAsync(started.ErrorCode, started.Error, ownerId, project, quoteRequest, ct);
@@ -313,9 +329,10 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         {
             jobId = created.JobId,
             threadId = thread.Id,
+            baseVersion = new { versionId = version.Id, label = ImageThread.Label(version) },
             quote = new { q.Provider, q.Model, q.Estimate, q.ExpectedSeconds },
             note = "Генерация идёт отдельно от хода: остановка разговора её не отменяет, отмена — image_cancel. "
-                + "Варианты появятся в карточке картинки; взять вариант, откатиться и сохранить в проект может только человек.",
+                + "Каждый вариант станет новой версией картинки внизу ленты; сохранить в проект может только человек.",
         });
     }
 
@@ -399,6 +416,10 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
                 pendingJob = t.PendingJobId is { } jobId && _jobs?.Get(ownerId, project.Id, jobId) is { } j
                     ? new { j.JobId, j.Status, j.Provider, j.Model, variants = j.Variants.Count, j.Cost, j.Error, j.Initiator }
                     : null,
+                running = t.Launches.Where(l => l.Status == ImageThreadLaunchStatus.Running)
+                    .Select(l => _jobs?.Get(ownerId, project.Id, l.JobId) is { } j
+                        ? new { j.JobId, j.Status, j.Provider, j.Model, j.Count, l.Prompt, from = l.BaseVersionId }
+                        : new { l.JobId, Status = ImageEditJobStatus.Queued, Provider = "", Model = "", Count = 0, l.Prompt, from = l.BaseVersionId }),
             }),
             defaultProvider = catalog.Default.Provider,
             defaultModel = catalog.Default.Model,
@@ -407,7 +428,8 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             humanChoice = HumanChoice(ownerId, project, state),
             note = state.Threads.Count == 0
                 ? "В этом чате ещё нет картинок. Возьми картинку проекта в работу (image_focus с file) или заведи новую (image_new)."
-                : "Взять вариант, откатиться и сохранить в проект может только человек.",
+                : "Каждый вариант запуска — версия картинки. Править другую версию — versionId в image_generate. "
+                    + "Сохранить в проект может только человек.",
         };
     }
 
@@ -426,7 +448,20 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
                     + Chats.ImageEditorStateContributor.DraftFolderText(t.DraftFolder)
                     + ". image_generate без op нарисует её по тексту.",
             },
-            step = steps.Count == 0 ? "шагов нет" : at == 0 ? $"на холсте исходник, шагов {steps.Count}" : $"шаг {at} из {steps.Count}",
+            currentVersionId = t.CurrentVersionId,
+            versions = t.Versions.Select(v => new
+            {
+                versionId = v.Id,
+                label = ImageThread.Label(v),
+                current = v.Id == t.CurrentVersionId,
+                from = t.Version(v.BaseVersionId) is { } b ? ImageThread.Label(b) : null,
+                jobId = v.JobId,
+                variant = v.Variant,
+                prompt = v.JobId is { } job ? t.Launches.FirstOrDefault(l => l.JobId == job)?.Prompt : null,
+                editsWithoutAi = v.IsOrigin ? v.Steps.Count : Math.Max(0, v.Steps.Count - 1),
+            }),
+            // Стопка — формат нитей до 27.09
+            oldStack = steps.Count == 0 ? null : at == 0 ? $"на холсте исходник, шагов {steps.Count}" : $"шаг {at} из {steps.Count}",
             settings = t.Settings,
             pendingJobId = t.PendingJobId,
         };

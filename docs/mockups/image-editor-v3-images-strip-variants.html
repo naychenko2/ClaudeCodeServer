@@ -1,0 +1,493 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Полоса «Картинки» в дизайн-системе — три варианта</title>
+<style>
+  /* Токены — копия theme.css (обе темы): макет открывается без сети и без сборки.
+     Имена переменных повторяют C.* из lib/design.ts: --c-bg-panel = C.bgPanel и т. д. */
+  :root {
+    --c-bg-main: #F4F0E8; --c-bg-panel: #EDE7DC; --c-bg-card: #FBF8F2; --c-bg-white: #FFFFFF;
+    --c-bg-selected: #E8E1D4; --c-bg-inset: #E7E0D2;
+    --c-text-heading: #2A251F; --c-text-primary: #39332B; --c-text-secondary: #756B5E; --c-text-muted: #9A8F7E;
+    --c-on-accent: #FBF8F2; --c-accent: #D97757; --c-accent-light: #F4ECE1; --c-accent-muted: #EAD3C5;
+    --c-border: #E0D7C8; --c-border-light: #E8E1D4; --c-divider: #DDD4C4; --c-dashed: #D0C6B4;
+    --c-overlay: rgba(23, 19, 15, 0.42);
+    --c-diff-add-text: #3F7A4F; --c-diff-rem-text: #B4452F; --c-info: #3E7CA6;
+    --c-warning-text: #8A6A28;
+    --shadow-focus: 0 0 0 3px rgba(217, 119, 87, 0.14);
+    --shadow-card: 0 2px 8px rgba(60, 50, 35, 0.05);
+    --shadow-island: 0 1px 2px rgba(60, 50, 35, 0.06), 0 6px 20px rgba(60, 50, 35, 0.10);
+    --shadow-dropdown: 0 8px 28px rgba(60, 50, 35, 0.16);
+    --shadow-sheet: 0 -8px 40px rgba(23, 19, 15, 0.22);
+  }
+  [data-theme="dark"] {
+    --c-bg-main: #201C18; --c-bg-panel: #272320; --c-bg-card: #2E2A25; --c-bg-white: #2E2A25;
+    --c-bg-selected: #38332D; --c-bg-inset: #1B1815;
+    --c-text-heading: #F2ECE1; --c-text-primary: #EDE6DB; --c-text-secondary: #B3A897; --c-text-muted: #8A8072;
+    --c-on-accent: #201C18; --c-accent: #E38A6A; --c-accent-light: #3A2E27; --c-accent-muted: #4A362C;
+    --c-border: #3D3830; --c-border-light: #34302A; --c-divider: #454037; --c-dashed: #4A443B;
+    --c-overlay: rgba(0, 0, 0, 0.58);
+    --c-diff-add-text: #8FC47E; --c-diff-rem-text: #EE8A72; --c-info: #5FA0CC;
+    --c-warning-text: #E7B96E;
+    --shadow-focus: 0 0 0 3px rgba(227, 138, 106, 0.24);
+    --shadow-card: 0 2px 10px rgba(0, 0, 0, 0.35);
+    --shadow-island: 0 1px 2px rgba(0,0,0,.30), 0 8px 24px rgba(0,0,0,.45);
+    --shadow-dropdown: 0 10px 32px rgba(0, 0, 0, 0.5);
+    --shadow-sheet: 0 -10px 46px rgba(0, 0, 0, 0.55);
+  }
+
+  /* Шкалы: FS xs 11 · sm 12 · base 13 · md 14 · lg 16; SP 2/4/8/12/16/24; R sm 6 · md 8 · lg 10 · xl 12 · xxl 14 · max 999 · sheet 22 */
+  * { box-sizing: border-box; }
+  html, body { overflow-x: hidden; }
+  body { margin: 0; padding: 16px 16px 48px; background: var(--c-bg-main); color: var(--c-text-primary);
+    font-family: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; }
+  body.w390 { padding: 8px 0 48px; }
+  button { font: inherit; color: inherit; }
+  svg { flex-shrink: 0; display: block; }
+  .mono { font-family: 'JetBrains Mono', 'Courier New', monospace; }
+  .grow { flex: 1 1 0; min-width: 0; }
+  .ell { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .page { max-width: 1360px; margin: 0 auto; }
+  h1.doc { font-family: 'PT Serif', Georgia, serif; font-size: 22px; color: var(--c-text-heading); margin: 0 0 4px; }
+  p.lead { color: var(--c-text-secondary); margin: 0 0 8px; max-width: 900px; line-height: 1.5; }
+  body.w390 h1.doc, body.w390 p.lead { padding: 0 12px; }
+
+  /* Демо-управление макетом (не часть продукта) */
+  .demo { position: sticky; top: 0; z-index: 60; background: var(--c-bg-main); display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; padding: 8px 0 10px; }
+  body.w390 .demo { padding: 8px 12px 10px; }
+  .demo .grp { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+  .demo .lbl { font-size: 11px; color: var(--c-text-muted); margin-right: 2px; }
+  .tbtn { font-size: 12px; cursor: pointer; border: 1px solid var(--c-border); background: var(--c-bg-card); border-radius: 10px; padding: 4px 9px; }
+  .tbtn[aria-pressed="true"] { background: var(--c-accent); color: var(--c-on-accent); border-color: transparent; }
+  .vdesc { font-size: 12px; color: var(--c-text-secondary); margin: 0 0 10px; line-height: 1.5; max-width: 980px; }
+  body.w390 .vdesc { padding: 0 12px; }
+  .vdesc b { color: var(--c-text-heading); }
+
+  .frame { border: 1px solid var(--c-border); border-radius: 14px; padding: 10px; background: var(--c-bg-main); }
+  body.w390 .frame { border: none; padding: 0; border-radius: 0; }
+
+  /* Раскладка приложения */
+  .app { position: relative; display: flex; gap: 8px; height: 880px; width: 100%; }
+  .app.mob { width: 390px; max-width: 100%; margin: 0 auto; height: 800px; border: 1px solid var(--c-border); border-radius: 22px; overflow: hidden; gap: 0; }
+  body.w390 .app.mob { border-radius: 0; border-left: none; border-right: none; }
+  .rail { width: 44px; flex: 0 0 44px; }
+  .rail i { display: block; width: 32px; height: 32px; margin: 6px auto; border-radius: 10px; background: var(--c-bg-selected); opacity: .6; }
+  .island { background: var(--c-bg-panel); border: 1px solid var(--c-border-light); border-radius: 14px; box-shadow: var(--shadow-island);
+    display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+  .island.side { flex: 0 0 230px; }
+  .island.side.r { flex-basis: 240px; }
+  .ph { height: 42px; flex: 0 0 42px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 1px solid var(--c-border-light); background: var(--c-bg-inset);
+    font-weight: 600; color: var(--c-text-heading); }
+  .ph .sub { font-weight: 400; font-size: 11px; color: var(--c-text-muted); }
+  .stub { margin: 8px 12px; height: 12px; border-radius: 6px; background: var(--c-bg-selected); opacity: .7; }
+  .chat { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; background: var(--c-bg-main); border-radius: 14px; overflow: hidden; border: 1px solid var(--c-border-light); }
+  .app.mob .chat { border: none; border-radius: 0; }
+  .chat .ph { background: var(--c-bg-main); font-family: 'PT Serif', Georgia, serif; font-size: 16px; color: var(--c-accent); border-bottom-color: var(--c-border-light); }
+  .feed { flex: 1 1 auto; overflow-y: auto; overflow-x: hidden; padding: 12px 16px 4px; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+  .app.mob .feed { padding: 10px 12px 4px; }
+  .dock { padding: 0 16px 10px; position: relative; }
+  .app.mob .dock { padding: 0 12px 10px; }
+
+  /* Лента: сообщения и карточки-версии */
+  .umsg { align-self: flex-end; max-width: 80%; background: var(--c-bg-card); border: 1px solid var(--c-border-light); border-radius: 14px; padding: 8px 12px; line-height: 1.45; }
+  .runline { display: flex; justify-content: center; gap: 4px; align-items: center; font-size: 11px; color: var(--c-text-muted); text-align: center; line-height: 1.4; }
+  .ver { display: grid; grid-template-columns: 128px 1fr; gap: 12px; background: var(--c-bg-card); border: 1px solid var(--c-border-light);
+    border-radius: 14px; padding: 8px; box-shadow: var(--shadow-card); }
+  .ver.cur { border-color: var(--c-accent); box-shadow: var(--shadow-focus); }
+  .app.mob .ver { grid-template-columns: 84px 1fr; gap: 8px; }
+  .thumb { aspect-ratio: 4 / 3; border-radius: 10px; border: 1px solid var(--c-border-light); }
+  .t1 { background: radial-gradient(circle at 50% 50%, #1BA4F6 0 30%, transparent 31%), #F6E21E; }
+  .t2 { background: radial-gradient(circle at 50% 55%, #1BA4F6 0 28%, transparent 29%), linear-gradient(#F29A5C, #F6D27A); }
+  .t3 { background: radial-gradient(circle at 50% 55%, #1BA4F6 0 28%, transparent 29%), linear-gradient(#8E5A9E, #F08A5C 70%, #F6C66E); }
+  .t4 { background: radial-gradient(circle at 50% 55%, #1BA4F6 0 28%, transparent 29%), linear-gradient(#26314F, #E0785A); }
+  .vmeta { min-width: 0; display: flex; flex-direction: column; gap: 4px; justify-content: center; }
+  .vtitle { display: flex; align-items: center; gap: 8px; font-weight: 600; color: var(--c-text-heading); flex-wrap: wrap; }
+  .vsub { font-size: 12px; color: var(--c-text-muted); }
+  .vprompt { font-size: 12px; color: var(--c-text-secondary); }
+  .vacts { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+
+  /* ≈ Badge (ui/Badge.tsx) */
+  .badge { display: inline-flex; align-items: center; height: 18px; padding: 0 8px; border-radius: 999px; font-size: 11px; font-weight: 600;
+    background: var(--c-accent-light); color: var(--c-accent); border: 1px solid var(--c-accent-muted); }
+  .badge.n { background: var(--c-bg-selected); color: var(--c-text-secondary); border-color: var(--c-border); font-weight: 500; }
+
+  /* ≈ Button (ui/Button.tsx): xs — 24 px, R.md; варианты ghost / outline / accent */
+  .btn { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px; border-radius: 8px; font-size: 12px; cursor: pointer;
+    border: 1px solid transparent; background: transparent; color: var(--c-text-secondary); white-space: nowrap; flex-shrink: 0; }
+  .btn:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .btn.out { border-color: var(--c-border); background: var(--c-bg-card); color: var(--c-text-heading); }
+  .btn.acc { background: var(--c-accent); color: var(--c-on-accent); font-weight: 600; }
+
+  /* Кнопки плашки — геометрия ProjectGitBar: 28 px, R.md */
+  .pill { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border: 1px solid var(--c-border); border-radius: 8px;
+    background: var(--c-bg-card); color: var(--c-text-heading); font-size: 12.5px; cursor: pointer; white-space: nowrap; min-width: 0; flex-shrink: 1; }
+  .pill .k { color: var(--c-text-muted); }
+  .pill svg.chev { color: var(--c-text-muted); }
+  .pill.white { background: var(--c-bg-white); }
+  .bacc { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border: none; border-radius: 8px;
+    background: var(--c-accent); color: var(--c-on-accent); font-size: 12.5px; font-weight: 600; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
+  .bacc .op { opacity: .85; font-weight: 500; }
+  .add { color: var(--c-diff-add-text); } .rem { color: var(--c-diff-rem-text); }
+
+  /* ≈ IconButton (ui/IconButton.tsx) */
+  .ibtn { display: inline-grid; place-items: center; width: 28px; height: 28px; border: none; background: transparent; border-radius: 8px;
+    color: var(--c-text-muted); cursor: pointer; flex-shrink: 0; padding: 0; }
+  .ibtn:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+
+  /* ≈ Chip (ui/Chip.tsx), variant soft: R.max, selected — accentLight + accentMuted, dashed — пунктир, leading 18 px */
+  .chip { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--c-border);
+    background: var(--c-bg-card); color: var(--c-text-primary); font-size: 12px; white-space: nowrap; cursor: pointer; min-width: 0; flex-shrink: 0; }
+  .chip.picked { background: var(--c-accent-light); border-color: var(--c-accent-muted); color: var(--c-accent); }
+  .chip.dash { border-style: dashed; border-color: var(--c-dashed); background: transparent; color: var(--c-text-secondary); }
+  .chip.shrink { flex-shrink: 1; }
+  .chip .lead { width: 18px; height: 18px; border-radius: 50%; overflow: hidden; flex-shrink: 0; margin-left: -4px; }
+  .chip .x { display: inline-grid; place-items: center; color: inherit; opacity: .7; margin-right: -4px; }
+  .chip .role { color: var(--c-text-muted); }
+  .ava { background: linear-gradient(135deg, #C9906A, #7A4E3A); }
+  .avabtn { width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--c-accent-muted); flex-shrink: 0; cursor: pointer; padding: 0; }
+
+  /* Степпер числа вариантов */
+  .step { display: inline-flex; align-items: center; gap: 2px; height: 28px; padding: 0 2px; border: 1px solid var(--c-border); border-radius: 999px; background: var(--c-bg-card); flex-shrink: 0; }
+  .step button { width: 22px; height: 22px; border: none; background: transparent; border-radius: 50%; color: var(--c-text-muted); display: grid; place-items: center; cursor: pointer; padding: 0; }
+  .step span { min-width: 14px; text-align: center; color: var(--c-text-heading); font-weight: 600; font-size: 12.5px; }
+  .price { font-size: 12.5px; font-weight: 600; color: var(--c-text-heading); white-space: nowrap; flex-shrink: 0; }
+  .price .k { font-weight: 400; color: var(--c-text-muted); }
+
+  /* ≈ Checkbox (ui/Checkbox.tsx) */
+  .cbx { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--c-text-secondary); white-space: nowrap; flex-shrink: 0; }
+  .cbx i { width: 16px; height: 16px; border-radius: 6px; background: var(--c-accent); color: var(--c-on-accent); display: grid; place-items: center; }
+
+  /* === Плашка полосы — эталон ProjectGitBar: 51 px, R.xxl, bgPanel, рамка C.border === */
+  .plate { position: relative; display: flex; align-items: center; gap: 12px; height: 51px; padding: 0 8px 0 8px; margin: 8px 0;
+    background: var(--c-bg-panel); border: 1px solid var(--c-border); border-radius: 14px; min-width: 0; }
+  .plate.tight { gap: 8px; }
+  .plate.slim { height: 44px; gap: 8px; padding: 0 6px 0 6px; margin: 6px 0; }
+  .plate.two { flex-direction: column; align-items: stretch; height: auto; gap: 0; padding: 0; }
+  .plate.two .r1 { display: flex; align-items: center; gap: 12px; height: 46px; padding: 0 8px; min-width: 0; }
+  .plate.two .r2 { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; padding: 8px 8px 8px 12px; border-top: 1px solid var(--c-border-light); min-width: 0; }
+  .app.mob .plate.two .r1 { gap: 8px; height: 44px; }
+  .branch { display: flex; align-items: center; gap: 7px; min-width: 0; color: var(--c-text-muted); }
+  .branch .mono { font-size: 12.5px; color: var(--c-text-secondary); }
+  .vsep { width: 1px; height: 18px; background: var(--c-divider); flex-shrink: 0; }
+
+  /* Заголовок полосы = переключатель полос (Button ghost xs + Menu). Одинаков у Git и «Картинок» */
+  .swwrap { position: relative; display: inline-flex; flex-shrink: 0; }
+  .sw { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 6px 0 6px; border: none; border-radius: 8px; background: transparent;
+    color: var(--c-text-heading); font-size: 12.5px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+  .sw:hover, .sw.open { background: var(--c-bg-selected); }
+  .sw svg.ico { color: var(--c-accent); }
+  .sw svg.chev { color: var(--c-text-muted); }
+  .sw .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--c-accent); }
+  .sw.static { cursor: default; } .sw.static:hover { background: transparent; }
+
+  /* Свёрнутая строка — как микрострока git-бара: 28 px, R.lg */
+  .micro { display: flex; align-items: center; gap: 8px; height: 30px; margin: 6px 0; padding: 0 8px 0 2px; background: var(--c-bg-panel);
+    border: 1px solid var(--c-border); border-radius: 10px; min-width: 0; font-size: 12px; }
+  .micro .sw { height: 26px; font-size: 12px; }
+  .micro .mt { color: var(--c-text-secondary); } .micro .mm { color: var(--c-text-muted); }
+  .micro .exp { display: flex; align-items: center; gap: 8px; flex: 1 1 0; min-width: 0; border: none; background: transparent; padding: 0; cursor: pointer; height: 100%; }
+
+  /* ≈ Menu (ui/Menu.tsx) */
+  .menu { position: absolute; z-index: 20; background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 12px; box-shadow: var(--shadow-dropdown);
+    padding: 4px; min-width: 260px; max-width: calc(100vw - 24px); }
+  .menu.up { bottom: calc(100% + 6px); left: 0; }
+  .menu.upr { bottom: calc(100% + 6px); right: 0; }
+  .mi { display: flex; align-items: center; gap: 10px; min-height: 34px; padding: 4px 10px; border-radius: 8px; color: var(--c-text-primary); font-size: 13px; }
+  .mi:hover { background: var(--c-bg-selected); }
+  .mi.on { background: var(--c-accent-light); }
+  .mi .st { color: var(--c-text-muted); font-size: 12px; }
+  .mi svg { color: var(--c-text-muted); }
+  .msep { height: 1px; background: var(--c-border-light); margin: 4px 6px; }
+  .mhead { font-size: 11px; color: var(--c-text-muted); padding: 6px 10px 2px; }
+  .mchips { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 10px 8px; }
+
+  /* Карточка настроек (варианты C и мобильная шторка) */
+  .pop { position: absolute; z-index: 20; right: 0; bottom: calc(100% + 6px); width: 380px; max-width: 100%; background: var(--c-bg-card); border: 1px solid var(--c-border);
+    border-radius: 12px; box-shadow: var(--shadow-dropdown); padding: 12px; display: grid; grid-template-columns: 96px 1fr; gap: 10px 12px; align-items: center; }
+  .pop .lbl { font-size: 12px; color: var(--c-text-muted); }
+  .pop .ctl { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; }
+  .pop .foot { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; padding-top: 8px; border-top: 1px solid var(--c-border-light); font-size: 12px; color: var(--c-text-secondary); }
+  /* ≈ Select (ui/Select.tsx) */
+  .sel { display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; border: 1px solid var(--c-border); border-radius: 12px; background: var(--c-bg-white);
+    width: 100%; min-width: 0; font-size: 13px; color: var(--c-text-primary); }
+  .sel svg { margin-left: auto; color: var(--c-text-muted); }
+  .scrim { position: absolute; inset: 0; z-index: 30; background: var(--c-overlay); }
+  .sheet { position: absolute; left: 0; right: 0; bottom: 0; z-index: 31; background: var(--c-bg-card); border-radius: 22px 22px 0 0; box-shadow: var(--shadow-sheet); padding: 8px 16px 20px; }
+  .sheet .grab { width: 36px; height: 4px; border-radius: 999px; background: var(--c-divider); margin: 0 auto 10px; }
+  .sheet .shh { display: flex; align-items: center; font-weight: 600; color: var(--c-text-heading); font-size: 16px; margin-bottom: 12px; }
+  .sheet .pop { position: static; width: auto; border: none; box-shadow: none; padding: 0; background: transparent; grid-template-columns: 88px 1fr; }
+
+  /* === Композер === */
+  .comp { background: var(--c-bg-white); border: 1px solid var(--c-border); border-radius: 14px; padding: 8px 8px 8px 12px; display: flex; flex-direction: column; gap: 6px; }
+  .comp.img { border-color: var(--c-accent-muted); box-shadow: var(--shadow-focus); }
+  .hint { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--c-text-muted); min-width: 0; }
+  .hint b { color: var(--c-text-secondary); font-weight: 600; }
+  .ta { min-height: 40px; color: var(--c-text-muted); font-size: 14px; line-height: 1.45; padding-right: 4px; }
+  .crow { display: flex; align-items: center; gap: 8px; min-width: 0; margin-left: -4px; }
+  /* ≈ InlineSegmented (ui/InlineSegmented.tsx) */
+  .seg { display: inline-flex; padding: 2px; gap: 2px; border-radius: 10px; background: var(--c-bg-selected); flex-shrink: 0; }
+  .seg span { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 8px; font-size: 12px; color: var(--c-text-secondary); cursor: pointer; }
+  .seg span.on { background: var(--c-bg-card); color: var(--c-text-heading); box-shadow: var(--shadow-card); font-weight: 600; }
+  .seg span.on svg { color: var(--c-accent); }
+  .seg span.off { opacity: .45; cursor: not-allowed; }
+  .app.mob .seg span { padding: 0 8px; }
+  .send { width: 32px; height: 32px; border-radius: 10px; border: none; background: var(--c-accent); color: var(--c-on-accent); display: grid; place-items: center; flex-shrink: 0; }
+  .submit { height: 32px; padding: 0 12px; border-radius: 10px; font-size: 13px; }
+  .tools { display: flex; align-items: center; gap: 12px; padding: 6px 4px 0; font-size: 12px; color: var(--c-text-muted); white-space: nowrap; overflow: hidden; }
+  .note { font-size: 11px; color: var(--c-text-muted); margin: 6px 2px 0; line-height: 1.4; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1 class="doc">Полоса «Картинки» в дизайн-системе — три варианта</h1>
+  <p class="lead">Эталон — git-полоса (<code>ProjectGitBar</code>): одна плашка 51 px, скругление R.xxl, фон C.bgPanel, кнопки 28 px с R.md.
+    Во всех вариантах заголовок полосы и есть переключатель полос, а отдельной плашки «Git ▾» больше нет. Поле ввода раскладывается в три строки, поэтому текст ни на что не наезжает.
+    В ленте каждый вариант генерации — своя карточка-версия. Записка с разбором — <code>image-editor-v3-images-strip-variants.md</code>.</p>
+
+  <div class="demo" id="demo"></div>
+  <p class="vdesc" id="vdesc"></p>
+  <div class="frame"><div id="root"></div></div>
+</div>
+
+<script>
+// Иконки — пути lucide (как в продукте), обводка ICON_STROKE 1.75
+const P = {
+  image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/>',
+  chev: '<path d="m6 9 6 6 6-6"/>',
+  chevUp: '<path d="m18 15-6-6-6 6"/>',
+  git: '<line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  cloud: '<path d="M12 13v8"/><path d="M4 14.9A7 7 0 1 1 15.7 8h1.8a4.5 4.5 0 0 1 2.5 8.2"/><path d="m8 17 4-4 4 4"/>',
+  spark: '<path d="M9.9 15.5A2 2 0 0 0 8.5 14.1L2.4 12.5a.5.5 0 0 1 0-1l6.1-1.6A2 2 0 0 0 9.9 8.5l1.6-6.1a.5.5 0 0 1 1 0l1.6 6.1a2 2 0 0 0 1.4 1.4l6.1 1.6a.5.5 0 0 1 0 1l-6.1 1.6a2 2 0 0 0-1.4 1.4l-1.6 6.1a.5.5 0 0 1-1 0z"/>',
+  user: '<circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 0 0-16 0"/>',
+  minus: '<path d="M5 12h14"/>', plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
+  x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  more: '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
+  msg: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  sliders: '<path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="8" cy="18" r="2"/>',
+  mic: '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><path d="M12 19v3"/>',
+  up: '<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>',
+  zap: '<path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/>',
+  pencil: '<path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>',
+  save: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/>',
+  cont: '<path d="m15 10 5 5-5 5"/><path d="M4 4v7a4 4 0 0 0 4 4h12"/>',
+  eye: '<path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>',
+  fold: '<path d="m7 20 5-5 5 5"/><path d="m7 4 5 5 5-5"/>',
+  layers: '<path d="m12 2 10 5-10 5L2 7z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/>',
+};
+const ic = (n, s = 15, cls = '') => `<svg class="${cls}" width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">${P[n]}</svg>`;
+const chev = (s = 12) => ic('chev', s, 'chev');
+
+// Состояние макета; можно задать из адреса: ?v=B&theme=dark&w=390&st=sel&strip=images&mode=image&menu=1&pop=1
+const S = { v: 'A', theme: 'light', w: 1360, strip: 'images', st: 'sel', mode: 'image', menu: false, pop: false };
+for (const [k, val] of new URLSearchParams(location.search)) {
+  if (!(k in S)) continue;
+  S[k] = typeof S[k] === 'boolean' ? val === '1' : typeof S[k] === 'number' ? +val : val;
+}
+
+const VARIANTS = {
+  A: ['A · Близнец git-полосы', '<b>Одна строка 51 px</b>, как у git: заголовок-переключатель, чип «с чем работаем», дальше «поставщик · модель ▾», варианты, цена, аватар персонажа. Образцы и «Размер оригинала» — в меню «⋯». Самый похожий на эталон, но часть настроек прячется.'],
+  B: ['B · Двухэтажная плашка', '<b>Одна плашка, две строки</b> через тонкий разделитель. Верх — как git-полоса: переключатель, чип, цена справа. Низ — все настройки чипами, ничего не спрятано. Выше на 40 px, зато прямо повторяет состав из записки v3.'],
+  C: ['C · Строка-сводка + карточка', '<b>Одна строка 51 px</b>: переключатель, чип и одна кнопка-сводка «fal · FLUX Kontext · 2 · ≈ $0.16 ▾». Все настройки — в карточке над полосой (на телефоне — шторкой). Самый тихий, но менять модель — это лишний клик.'],
+};
+
+const DEMO = [
+  ['Вариант', 'v', [['A', 'A'], ['B', 'B'], ['C', 'C']]],
+  ['Тема', 'theme', [['light', 'Светлая'], ['dark', 'Тёмная']]],
+  ['Ширина', 'w', [[1360, '1360'], [390, '390']]],
+  ['Полоса', 'strip', [['images', 'Картинки'], ['git', 'Git']]],
+  ['Картинка', 'st', [['none', 'не выбрана'], ['sel', 'выбрана'], ['col', 'свёрнуто']]],
+  ['Поле', 'mode', [['chat', 'Чат'], ['image', 'Картинка']]],
+  ['Открыто', 'menu', [[false, '—'], [true, 'меню полос']]],
+  ['', 'pop', [[false, '—'], [true, 'настройки']]],
+];
+
+function demo() {
+  document.getElementById('demo').innerHTML = DEMO.map(([l, k, opts]) =>
+    `<span class="grp">${l ? `<span class="lbl">${l}</span>` : ''}${opts.map(([v, t]) =>
+      `<button class="tbtn" data-k="${k}" data-v="${v}" aria-pressed="${S[k] === v}">${t}</button>`).join('')}</span>`).join('');
+}
+document.addEventListener('click', e => {
+  const b = e.target.closest('.tbtn');
+  if (!b) return;
+  const k = b.dataset.k, raw = b.dataset.v;
+  S[k] = typeof S[k] === 'boolean' ? raw === 'true' : typeof S[k] === 'number' ? +raw : raw;
+  if (k === 'menu' && S.menu) S.pop = false;
+  if (k === 'pop' && S.pop) S.menu = false;
+  render();
+});
+
+// ---------- данные сцены ----------
+const D = { focus: 'hero.png · версия 3', prov: 'fal', model: 'FLUX Kontext', n: 2, price: '≈ $0.16' };
+const mob = () => S.w === 390;
+const sel = () => S.st !== 'none';
+
+// ---------- общие куски ----------
+// Заголовок полосы = переключатель полос. На телефоне git-полосы нет → полоса одна → без «▾»
+function sw(kind) {
+  const [icon, title] = kind === 'git' ? ['git', 'Git'] : ['image', 'Картинки'];
+  if (mob()) return `<span class="swwrap"><span class="sw static">${ic(icon, 15, 'ico')}${title}</span></span>`;
+  const dot = kind === 'git' && sel() ? '<i class="dot"></i>' : '';
+  return `<span class="swwrap"><button class="sw ${S.menu ? 'open' : ''}" title="Сменить полосу над композером">${ic(icon, 15, 'ico')}${title}${chev()}${dot}</button>${S.menu ? switchMenu(kind) : ''}</span>`;
+}
+function switchMenu(kind) {
+  const img = sel() ? 'Работаем с hero.png · версия 3' : 'картинка не выбрана';
+  return `<div class="menu up" style="min-width:360px">
+    <div class="mi ${kind === 'git' ? 'on' : ''}">${ic('git')}<span>Git <span class="st">· feat/site-header · +42 −7 · 2 к публикации</span></span></div>
+    <div class="mi ${kind === 'images' ? 'on' : ''}">${ic('image')}<span>Картинки <span class="st">· ${img}</span></span></div>
+    <div class="msep"></div>
+    <div class="mi">${ic('fold')}<span>${S.st === 'col' ? 'Развернуть полосу' : 'Свернуть полосу в строку'}</span></div>
+  </div>`;
+}
+const vsep = '<span class="vsep"></span>';
+const focusChip = (shrink = true) => sel()
+  ? `<span class="chip picked ${shrink ? 'shrink' : ''}" title="К этой картинке относятся режим «Картинка» и просьбы агенту"><span class="lead t3"></span><span class="ell">${D.focus}</span><span class="x">${ic('x', 12)}</span></span>`
+  : `<span class="chip dash" title="Выберите картинку в ленте или нарисуйте новую">${ic('spark', 13)}Нарисовать новую</span>`;
+const stepper = () => `<span class="step" title="Число вариантов"><button>${ic('minus', 13)}</button><span>${D.n}</span><button>${ic('plus', 13)}</button></span>`;
+const charAvatar = () => `<button class="avabtn ava" title="Персонаж «Маша» уходит в каждую генерацию"></button>`;
+const charChip = () => `<span class="chip" title="Уходит в каждую генерацию"><span class="lead ava"></span>Маша<span class="x">${ic('x', 12)}</span></span>`;
+const refChips = () => `<span class="chip"><span class="lead t4"></span>логотип <span class="role">· стиль</span><span class="x">${ic('x', 12)}</span></span><span class="chip dash">${ic('plus', 12)}Образец</span>`;
+const origBox = () => sel() ? `<span class="cbx" title="Результат вернётся в размере исходника"><i>${ic('check', 11)}</i>Размер оригинала</span>` : '';
+
+// Карточка настроек: у C — над полосой, на телефоне у всех вариантов — шторкой
+function settingsGrid() {
+  return `<div class="pop">
+    <span class="lbl">Поставщик</span><span class="ctl"><span class="sel">fal<span class="k" style="color:var(--c-text-muted)">&nbsp;· по умолчанию</span>${chev(14)}</span></span>
+    <span class="lbl">Модель</span><span class="ctl"><span class="sel">${D.model}${chev(14)}</span></span>
+    <span class="lbl">Варианты</span><span class="ctl">${stepper()}<span class="price">${D.price}</span></span>
+    <span class="lbl">Персонаж</span><span class="ctl">${charChip()}</span>
+    <span class="lbl">Образцы</span><span class="ctl">${refChips()}</span>
+    ${sel() ? `<span class="foot">${origBox()}</span>` : ''}
+  </div>`;
+}
+function sheet() {
+  return `<div class="scrim"></div><div class="sheet"><div class="grab"></div>
+    <div class="shh">Настройки картинки<span class="grow"></span><button class="ibtn">${ic('x', 18)}</button></div>${settingsGrid()}</div>`;
+}
+
+// ---------- полоса Git (одинакова во всех вариантах) ----------
+function gitPlate() {
+  return `<div class="plate">${sw('git')}${vsep}
+    <span class="branch">${ic('git', 15)}<span class="mono ell">feat/site-header</span></span>
+    <span class="grow"></span>
+    <button class="pill white mono"><span class="add">+42</span><span class="rem">−7</span></button>
+    <button class="pill">${ic('check', 15)}Зафиксировать${chev(14)}</button>
+    <button class="bacc">${ic('cloud', 15)}Опубликовать <span class="op">2</span></button>
+  </div>`;
+}
+
+// ---------- свёрнутая строка (общая форма, как микрострока git-бара) ----------
+function microRow() {
+  const what = sel() ? `<span class="mt ell" style="flex:0 1 auto">${D.focus}</span>` : '<span class="mm">картинка не выбрана</span>';
+  return `<div class="micro">${sw('images')}${vsep}<button class="exp" title="Развернуть полосу">${what}
+    <span class="mm ell grow">${D.prov} · ${D.model} · ${D.n} вар. · ${D.price}</span>${chev(15)}</button></div>`;
+}
+
+// ---------- варианты полосы «Картинки» ----------
+function stripA() {
+  if (mob()) {
+    return `<div class="plate slim">${sw('images')}${vsep}${focusChip()}<span class="grow"></span>
+      <span class="price">${D.price}</span><button class="ibtn" title="Настройки картинки">${ic('sliders', 16)}</button></div>`;
+  }
+  const menu = S.pop ? `<div class="menu upr" style="min-width:300px">
+      <div class="mhead">Образцы к ближайшему запуску</div><div class="mchips">${refChips()}</div>
+      ${sel() ? `<div class="msep"></div><div class="mi">${origBox()}</div>` : ''}
+      <div class="msep"></div><div class="mi">${ic('user')}Персонажи проекта…</div></div>` : '';
+  return `<div class="plate tight">${sw('images')}${vsep}${focusChip()}<span class="grow"></span>
+    <button class="pill" style="flex-shrink:0;max-width:200px" title="Поставщик и модель">${ic('spark', 14)}<span class="k">${D.prov} ·</span><span class="ell">${D.model}</span>${chev(14)}</button>
+    ${stepper()}<span class="price">${D.price}</span>${charAvatar()}
+    <span class="swwrap"><button class="ibtn" title="Образцы, размер оригинала">${ic('more', 16)}</button>${menu}</span></div>`;
+}
+function stripB() {
+  return `<div class="plate two">
+    <div class="r1">${sw('images')}${vsep}${focusChip()}<span class="grow"></span>
+      <span class="price">${mob() ? '' : `<span class="k">${D.n} варианта ·</span> `}${D.price}</span></div>
+    <div class="r2">
+      <button class="pill"><span class="k">Поставщик:</span>${D.prov}${chev(14)}</button>
+      <button class="pill"><span class="k">Модель:</span><span class="ell">${D.model}</span>${chev(14)}</button>
+      ${stepper()}${charChip()}${refChips()}${origBox()}
+    </div></div>`;
+}
+function stripC() {
+  const summary = mob()
+    ? `<button class="pill" style="flex-shrink:0" title="Настройки картинки">${ic('sliders', 14)}<b>${D.price}</b>${chev(14)}</button>`
+    : `<button class="pill" title="Настройки картинки">${ic('sliders', 14)}<span class="ell">${D.prov} · ${D.model} · ${D.n} вар. ·</span><b>${D.price}</b>${chev(14)}</button>`;
+  return `<div class="plate ${mob() ? 'slim' : ''}">${sw('images')}${vsep}${focusChip()}<span class="grow"></span>
+    ${summary}${mob() ? '' : charAvatar()}${S.pop && !mob() ? settingsGrid() : ''}</div>`;
+}
+
+function strip() {
+  if (S.strip === 'git') {
+    if (mob()) return `<p class="note">На телефоне git-полосы нет (её скрывает ChatPanel) — остаётся одна полоса, и её заголовок становится простой подписью без «▾».</p>` + imagesStrip();
+    return gitPlate();
+  }
+  return imagesStrip();
+}
+function imagesStrip() {
+  // Телефон: без выбранной картинки полоса скрыта, как сейчас
+  if (mob() && S.st === 'none') return '<p class="note">Телефон, картинка не выбрана: полосы нет, чтобы не отнимать высоту. Появится при выборе картинки в ленте.</p>';
+  if (S.st === 'col') return microRow();
+  return { A: stripA, B: stripB, C: stripC }[S.v]();
+}
+
+// ---------- композер: подсказка, поле и строка действий — три строки, ничто ни на что не наезжает ----------
+function composer() {
+  const img = S.mode === 'image' && sel();
+  const m = mob();
+  const segs = `<span class="seg" role="tablist" aria-label="Режим поля">
+    <span class="${img ? '' : 'on'}" title="Сообщение агенту">${ic('msg', 14)}${m ? '' : 'Чат'}</span>
+    <span class="${img ? 'on' : ''} ${sel() ? '' : 'off'}" title="${sel() ? 'Промпт прямо в модель' : 'Выберите картинку'}">${ic('image', 14)}${m ? '' : 'Картинка'}</span></span>`;
+  const verb = D.focus ? 'Изменить' : 'Сгенерировать';
+  const act = img
+    ? `<button class="bacc submit">${ic('spark', 15)}${verb}<span class="op">· ${D.price}</span></button>`
+    : `<button class="ibtn">${ic('mic', 17)}</button><button class="send">${ic('up', 17)}</button>`;
+  return `<div class="comp ${img ? 'img' : ''}">
+    ${img ? `<div class="hint">${ic('spark', 12)}<span class="ell"><b>Промпт модели</b> · уходит прямо в ${D.model}, без агента</span></div>` : ''}
+    <div class="ta">${img ? 'Что изменить в hero.png? Например: «фон — тёплый закат, круг не трогать»' : 'Спросите Ассистента…'}</div>
+    <div class="crow">${segs}<span class="grow"></span>${act}</div>
+  </div>${m ? '' : `<div class="tools"><span>Авто-правки ▾</span><span>＋</span><span>⋯</span><span>Модель ▾</span><span class="ell">Личный помощник ▾</span></div>`}
+  ${S.mode === 'image' && !sel() ? '<p class="note">Режим «Картинка» доступен только при выбранной картинке — поле само вернулось в «Чат».</p>' : ''}`;
+}
+
+// ---------- лента версий ----------
+function version(n, th, title, sub, prompt, cur) {
+  const acts = cur
+    ? `<button class="btn out">${ic('pencil', 13)}Редактор</button><button class="btn acc">${ic('save', 13)}Сохранить в проект</button>`
+    : `<button class="btn out">${ic('eye', 13)}Открыть</button><button class="btn">${ic('cont', 13)}Продолжить от неё</button>`;
+  return `<div class="ver ${cur ? 'cur' : ''}"><div class="thumb ${th}"></div><div class="vmeta">
+    <div class="vtitle">Версия ${n}<span class="vsub" style="font-weight:400">${title}</span>${cur ? '<span class="badge">в работе</span>' : ''}</div>
+    <div class="vsub">${sub}</div>${prompt ? `<div class="vprompt ell">«${prompt}»</div>` : ''}
+    <div class="vacts">${acts}</div></div></div>`;
+}
+function feed() {
+  const cur = sel();
+  return `<div class="umsg">Поставь на hero.png тёплый закатный фон, круг не трогай</div>
+    ${version(1, 't1', 'hero.png', 'исходник из проекта · 1024×768', '', false)}
+    <div class="runline">${ic('zap', 12)}<span>Вы запустили «фон — тёплый закат» от версии 1 · ${D.model} · 2 варианта · $0.16</span></div>
+    ${version(2, 't2', '· вариант 1 из 2', `от версии 1 · ${D.model}`, 'фон — тёплый закат', false)}
+    ${version(3, 't3', '· вариант 2 из 2', `от версии 1 · ${D.model}`, 'фон — тёплый закат', cur)}
+    <div class="runline">${ic('zap', 12)}<span>Следующий запуск ляжет новой карточкой сюда, вниз — от той версии, что «в работе»</span></div>`;
+}
+
+function render() {
+  document.documentElement.dataset.theme = S.theme;
+  document.body.classList.toggle('w390', mob());
+  demo();
+  document.getElementById('vdesc').innerHTML = VARIANTS[S.v][1];
+  const chat = `<div class="chat"><div class="ph">Личный помощник<span class="sub">QA gen</span></div>
+    <div class="feed">${feed()}</div>
+    <div class="dock">${strip()}${composer()}</div></div>`;
+  const sheetOn = mob() && S.pop && S.strip === 'images' && S.st !== 'none' && S.st !== 'col';
+  document.getElementById('root').innerHTML = mob()
+    ? `<div class="app mob" data-variant="${S.v}">${chat}${sheetOn ? sheet() : ''}</div>`
+    : `<div class="app" data-variant="${S.v}"><div class="rail"><i></i><i></i><i></i></div>
+        <div class="island side"><div class="ph">Чаты</div><div class="stub"></div><div class="stub" style="width:60%"></div></div>
+        ${chat}
+        <div class="island side r"><div class="ph">Файлы</div><div class="stub"></div><div class="stub" style="width:50%"></div><div class="stub" style="width:70%"></div></div></div>`;
+}
+render();
+</script>
+</body>
+</html>

@@ -14,13 +14,15 @@ import { imageEditorApi } from '../api';
 import { isFreeUnit, money, variantsWord } from '../format';
 import { dismissJob, saveToProject, savedStepOf, takeVariant, workWith } from './actions';
 import {
-  chainOf, currentIndex, currentStack, findStack, interruptedOf, isEmptyThread, saveFolder, stepOf, threadName, versionLabel,
+  chainOf, currentIndex, currentStack, findStack, findVersion, interruptedOf, isEmptyThread, isLegacyThread, ORIGIN, saveFolder,
+  stepOf, threadName, versionLabel,
 } from './model';
 import { recordOf } from './records';
 import { openEditor, useThreads } from './threadStore';
 import type { ImageThread, ImageThreadEvent, ImageThreadStack } from './threadsApi';
 import { imageSrc, launchThread } from './useThreadLaunch';
 import { useJobStatus, useProgress } from './useJobStatus';
+import { OriginAnchor, VersionCard } from './VersionCards';
 
 const ic = (I: typeof X, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
 
@@ -278,19 +280,29 @@ function StackCard({ projectId, sessionId, thread, stack, focused, events }: {
   );
 }
 
-// Вклад в chat-item-tool: якорь стопки в ленте
+// Вклад в chat-item-tool: якорь нити в ленте. С 27.09 якорь — { threadId, versionId } и
+// рисует исходник (или черновик), версии запусков — свои якоря ниже. Якорь со stackId —
+// карточка-стопка старой нити: старые чаты открываются как были
 export function ThreadAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
   const rec = recordOf(ctx.item);
   const state = useThreads(ctx.projectId, ctx.sessionId);
-  const data = (rec?.data ?? {}) as { threadId?: unknown; stackId?: unknown };
+  const data = (rec?.data ?? {}) as { threadId?: unknown; stackId?: unknown; versionId?: unknown };
   const thread = typeof data.threadId === 'string' ? state.threads.find(t => t.id === data.threadId) : undefined;
   if (!ctx.projectId || !ctx.sessionId || !thread) {
     // Нить удалили (пустой черновик сняли ✕) — якорь в истории остался; рисуем след
     return rec?.fallback ? <Note>{rec.fallback}</Note> : null;
   }
+  const focused = state.focus === thread.id;
+  const byVersion = typeof data.versionId === 'string' || (typeof data.stackId !== 'string' && !isLegacyThread(thread) && !!thread.versions?.length);
+  if (byVersion) {
+    const v = typeof data.versionId === 'string' && data.versionId !== ORIGIN ? findVersion(thread, data.versionId) : null;
+    return v
+      ? <VersionCard projectId={ctx.projectId} sessionId={ctx.sessionId} thread={thread} version={v} focused={focused} />
+      : <OriginAnchor projectId={ctx.projectId} sessionId={ctx.sessionId} thread={thread} focused={focused} />;
+  }
   const stack = typeof data.stackId === 'string' ? findStack(thread, data.stackId) : currentStack(thread);
   return (
     <StackCard projectId={ctx.projectId} sessionId={ctx.sessionId} thread={thread} stack={stack}
-      focused={state.focus === thread.id} events={state.events} />
+      focused={focused} events={state.events} />
   );
 }

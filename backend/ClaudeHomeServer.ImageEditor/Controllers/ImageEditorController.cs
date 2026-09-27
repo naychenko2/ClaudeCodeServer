@@ -111,7 +111,8 @@ public class ImageEditorController(
             AspectRatio: form.AspectRatio,
             Initiator: ImageEditInitiator.Human,
             ThreadSessionId: form.SessionId,
-            ThreadId: form.ThreadId);
+            ThreadId: form.ThreadId,
+            VersionId: form.VersionId);
 
         var started = await launcher.LaunchAsync(UserId, project, request, ct);
         return Map(started, created => StatusCode(StatusCodes.Status202Accepted, created));
@@ -267,10 +268,12 @@ public class ImageEditorController(
         public string? BaseStepId { get; set; }
         // Пропорции «Дорисовать за края» (1:1, 16:9, 9:16); не передано — на усмотрение драйвера
         public string? AspectRatio { get; set; }
-        // Нить картинки в чате проекта (ADR-019): варианты ждут «Взять» в её карточке, ручной
-        // запуск ложится тихой строкой в ленту. Не своя нить — 404 thread_not_found до запуска
+        // Нить картинки в чате проекта (ADR-019): варианты станут её версиями, внизу ленты —
+        // якорь запуска. Не своя нить — 404 thread_not_found до запуска
         public string? SessionId { get; set; }
         public string? ThreadId { get; set; }
+        // Версия нити, от которой правка; не передано — текущая. Чужая — 404 version_not_found
+        public string? VersionId { get; set; }
     }
 
     // ── Правки без ИИ и шаги истории (ADR-018 §9) ──────────────────────────────────
@@ -456,7 +459,7 @@ public class ImageEditorController(
             ImageEditErrorCodes.ProviderUnavailable or ImageEditErrorCodes.NameTaken => StatusCodes.Status409Conflict,
             ImageEditErrorCodes.QuoteNotFound or ImageEditErrorCodes.JobNotFound
                 or ImageEditErrorCodes.CharacterNotFound or ImageEditErrorCodes.StepNotFound
-                or ImageEditErrorCodes.ThreadNotFound => StatusCodes.Status404NotFound,
+                or ImageEditErrorCodes.ThreadNotFound or ImageEditErrorCodes.VersionNotFound => StatusCodes.Status404NotFound,
             ImageEditErrorCodes.TooManyJobs => StatusCodes.Status429TooManyRequests,
             ImageEditErrorCodes.Unavailable or ImageEditErrorCodes.RasterUnavailable => StatusCodes.Status503ServiceUnavailable,
             _ => StatusCodes.Status400BadRequest,

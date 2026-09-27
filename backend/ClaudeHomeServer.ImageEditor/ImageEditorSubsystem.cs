@@ -68,8 +68,14 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
         // вместе с чатом по событиям шины session/deleted и session/branched
         services.AddSingleton(sp => Threads.ImageThreadStore.FromConfig(sp.GetRequiredService<IConfiguration>()));
         services.AddHostedService<Threads.ImageThreadLifecycle>();
-        // Следы нити в ленте и событие image_thread_changed; нить идёт за переименованным файлом
-        services.AddSingleton<Threads.ImageThreadService>();
+        // Следы нити в ленте и событие image_thread_changed; нить идёт за переименованным файлом.
+        // Варианты готовой задачи становятся версиями нити по событию исполнителя
+        services.AddSingleton(sp =>
+        {
+            var threads = ActivatorUtilities.CreateInstance<Threads.ImageThreadService>(sp);
+            threads.Watch(sp.GetRequiredService<ImageEditJobService>());
+            return threads;
+        });
         // Выбор человека в полосе «Картинки» проекта: data/image-editor-prefs, его наследуют новые
         // нити и запуск агентом без аргументов
         services.AddSingleton(sp => Prefs.ImageProjectPrefsStore.FromConfig(sp.GetRequiredService<IConfiguration>()));

@@ -4,7 +4,8 @@
 // полосы: фокус просит полосу «Картинки» у стора полос ядра, снятие — отпускает.
 
 import { useEffect, useSyncExternalStore } from 'react';
-import { onReconnected, releaseStrip, requestStrip, showToast } from 'aihome_shell/kit';
+import { notifyComposer, onReconnected, releaseStrip, requestStrip, showToast } from 'aihome_shell/kit';
+import type { Sample } from '../editorInputs';
 import type { Mark } from '../marks';
 import { conflictState, EMPTY_THREADS, threadsApi, type ImageThread, type ImageThreadsState } from './threadsApi';
 
@@ -15,8 +16,13 @@ interface Entry { projectId: string; state: ImageThreadsState; loaded: boolean; 
 const _entries = new Map<string, Entry>();
 // Пометки редактора на нить: уходят со следующим запуском, ✕ на чипе — не прикладывать
 const _marks = new Map<string, { marks: Mark[]; size: { w: number; h: number } | null }>();
-// Попап «Редактор»: какой чат и какая нить открыты
-let _editor: { sessionId: string; threadId: string } | null = null;
+// Образцы на проект: уходят в каждую генерацию, пока их не убрали (карточка настроек полосы)
+const _samples = new Map<string, Sample[]>();
+// Попап «Редактор»: какой чат, какая нить и какая версия открыты (null — текущая)
+let _editor: { sessionId: string; threadId: string; versionId: string | null } | null = null;
+// Просьбы включить режим «Картинка» по чатам («Редактировать» / «Нарисовать»): счётчик,
+// каждая новая — новый ключ самовключения режима в поле ввода
+const _modeRequests = new Map<string, number>();
 let _version = 0;
 const _listeners = new Set<() => void>();
 let _unsub: (() => void) | null = null;
@@ -47,6 +53,8 @@ function apply(sessionId: string, projectId: string, state: ImageThreadsState) {
   _entries.set(sessionId, { projectId, state, loaded: true, loading: false });
   syncStrip(sessionId, prevFocus, state.focus);
   emit();
+  // Поле ввода пересчитывает режим «Картинка» по сигналу стора полос
+  notifyComposer();
 }
 
 function ensureLive() {
@@ -134,6 +142,17 @@ export async function mutate(
 export const focusThread = (projectId: string, sessionId: string, threadId: string | null) =>
   mutate(projectId, sessionId, rev => threadsApi.focus(projectId, sessionId, threadId, rev));
 
+// ── Режим поля ввода ──
+
+export function requestImageMode(sessionId: string) {
+  _modeRequests.set(sessionId, (_modeRequests.get(sessionId) ?? 0) + 1);
+  notifyComposer();
+}
+
+export function getImageModeRequest(sessionId: string | null): number {
+  return (sessionId && _modeRequests.get(sessionId)) || 0;
+}
+
 // ── Пометки ──
 
 export function getThreadMarks(threadId: string | null) {
@@ -150,8 +169,15 @@ export function setThreadMarks(threadId: string, marks: Mark[], size: { w: numbe
 
 export function getEditor() { return _editor; }
 
-export function openEditor(sessionId: string, threadId: string) {
-  _editor = { sessionId, threadId };
+export function openEditor(sessionId: string, threadId: string, versionId: string | null = null) {
+  _editor = { sessionId, threadId, versionId };
+  emit();
+}
+
+// Переход между версиями внутри попапа
+export function showEditorVersion(versionId: string | null) {
+  if (!_editor) return;
+  _editor = { ..._editor, versionId };
   emit();
 }
 
@@ -160,10 +186,26 @@ export function closeEditor() {
   emit();
 }
 
+// ── Образцы ──
+
+const NO_SAMPLES: Sample[] = [];
+
+export function getSamples(projectId: string | null): Sample[] {
+  return (projectId && _samples.get(projectId)) || NO_SAMPLES;
+}
+
+export function setSamples(projectId: string, samples: Sample[]) {
+  if (samples.length) _samples.set(projectId, samples);
+  else _samples.delete(projectId);
+  emit();
+}
+
 // Сброс — только для тестов
 export function __resetThreadStore() {
   _entries.clear();
   _marks.clear();
+  _samples.clear();
+  _modeRequests.clear();
   _editor = null;
   emit();
 }

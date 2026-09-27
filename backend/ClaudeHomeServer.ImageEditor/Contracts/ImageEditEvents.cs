@@ -12,18 +12,21 @@ public static class ImageEditEventNames
     public const string Failed = "image_edit_failed";
     // Состояние редактора чата картинки сменилось (ADR-018 §2): чаще всего его поменял агент
     public const string ChatState = "image_chat_state";
+    // Нити картинок чата сменились (ADR-019): любая запись в ImageThreadStore
+    public const string ThreadChanged = "image_thread_changed";
 }
 
 // ChatSessionId и Initiator в событиях задачи — те же, что в ImageEditJobDto (ADR-018 §2):
 // карточка запуска агентом в ленте находит свою задачу. Хвостовые поля, старый фронт их не видит.
 
 public record ImageEditProgressMessage(string JobId, string ProjectId, EditStage Stage, int? QueuePosition,
-    string? ChatSessionId = null, ImageEditInitiator Initiator = ImageEditInitiator.Human)
+    string? ChatSessionId = null, ImageEditInitiator Initiator = ImageEditInitiator.Human, string? ThreadId = null)
     : ServerMessage(ImageEditEventNames.Progress);
 
 // SizeNote — как в ImageEditJobDto: варианты не приведены к размеру исходника
 public record ImageEditCompletedMessage(string JobId, string ProjectId, IReadOnlyList<int> Variants, EditCost? Cost,
-    string? ChatSessionId = null, ImageEditInitiator Initiator = ImageEditInitiator.Human, string? SizeNote = null)
+    string? ChatSessionId = null, ImageEditInitiator Initiator = ImageEditInitiator.Human, string? SizeNote = null,
+    string? ThreadId = null)
     : ServerMessage(ImageEditEventNames.Completed);
 
 // RetryQuote — котировка соседнего доступного поставщика: UI предлагает «Повторить через …»
@@ -36,7 +39,8 @@ public record ImageEditFailedMessage(
     string? Error,
     ImageEditQuoteDto? RetryQuote,
     string? ChatSessionId = null,
-    ImageEditInitiator Initiator = ImageEditInitiator.Human)
+    ImageEditInitiator Initiator = ImageEditInitiator.Human,
+    string? ThreadId = null)
     : ServerMessage(ImageEditEventNames.Failed);
 
 // Одно изменённое поле состояния: Field — имя поля ImageChatState в camelCase
@@ -55,3 +59,9 @@ public record ImageChatStateMessage(
     ImageEditInitiator ChangedBy,
     IReadOnlyList<ImageChatStateChange> Changes)
     : ServerMessage(ImageEditEventNames.ChatState);
+
+// Нити чата после записи (ADR-019 §3): карточки-стопки в ленте перерисовываются из State.
+// Базовый SessionId — чат, чьи нити сменились (new ImageThreadChangedMessage(…) { SessionId = chatId }).
+// Уходит в группу владельца на КАЖДУЮ запись: фокус, шаг, задача, сохранение, откат
+public record ImageThreadChangedMessage(string ProjectId, long Revision, Threads.ImageThreadsState State)
+    : ServerMessage(ImageEditEventNames.ThreadChanged);

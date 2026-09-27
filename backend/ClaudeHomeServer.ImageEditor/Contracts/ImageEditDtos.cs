@@ -109,7 +109,9 @@ public record ImageEditJobInput(
     // Шаг истории, с которого запущена правка: родитель шагов из её вариантов (ADR-018 §9)
     string? BaseStepId = null,
     // Пропорции результата («Дорисовать за края»): 1:1, 16:9, 9:16; null — на усмотрение драйвера
-    string? AspectRatio = null);
+    string? AspectRatio = null,
+    // Нить картинки чата ChatSessionId (ADR-019): её варианты ждут «Взять»; null — запуск вне нити
+    string? ThreadId = null);
 
 public record ImageEditJobCreatedDto(string JobId);
 
@@ -142,7 +144,9 @@ public record ImageEditJobDto(
     // Число вариантов и оценка котировки, по которой запущена задача: строка «Вы запустили …»
     // и карточка запуска в ленте
     int Count = 0,
-    ImageEditEstimateDto? Estimate = null);
+    ImageEditEstimateDto? Estimate = null,
+    // Нить картинки, в которую запущена задача (ADR-019); чат нити — ChatSessionId
+    string? ThreadId = null);
 
 public static class ImageEditSizeNotes
 {
@@ -168,7 +172,10 @@ public record ImageEditSaveRequest(
     string? Mode = null,
     string? StepId = null,
     string? ChatSessionId = null,
-    ImageEncodeSpec? Encode = null);
+    ImageEncodeSpec? Encode = null,
+    // Нить картинки чата SessionId (ADR-019): после сохранения идёт за новым файлом
+    string? SessionId = null,
+    string? ThreadId = null);
 
 public static class ImageEditSaveModes
 {

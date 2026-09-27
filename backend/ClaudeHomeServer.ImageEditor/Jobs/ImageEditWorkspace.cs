@@ -90,19 +90,46 @@ public sealed class ImageEditWorkspace(string root)
     public static bool IsStepId(string? id) =>
         id is { Length: 32 } && id.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f');
 
-    // Чистка сеансов старше TTL; ошибки файловой системы не мешают запуску
+    // Шаги, на которые ссылаются нити картинок владельца (ADR-019 §1): живут столько же, сколько
+    // нить, а не TTL. Ставит регистрация модуля поверх ImageThreadStore; null — удерживать нечего
+    public Func<string, IReadOnlySet<string>>? RetainedSteps { get; set; }
+
+    // Чистка сеансов старше TTL; ошибки файловой системы не мешают запуску. В ленте с шагом
+    // живой нити уходят только шаги без ссылок и варианты задач, сама папка остаётся
     public void Sweep(DateTime nowUtc)
     {
         if (!Directory.Exists(Root)) return;
         try
         {
             foreach (var owner in Directory.EnumerateDirectories(Root))
-            foreach (var job in Directory.EnumerateDirectories(owner))
-                if (nowUtc - Directory.GetLastWriteTimeUtc(job) > Ttl)
-                    Directory.Delete(job, recursive: true);
+            {
+                IReadOnlySet<string>? keep = null;
+                foreach (var job in Directory.EnumerateDirectories(owner))
+                {
+                    if (nowUtc - Directory.GetLastWriteTimeUtc(job) <= Ttl) continue;
+                    keep ??= RetainedSteps?.Invoke(Path.GetFileName(owner)) ?? new HashSet<string>();
+                    if (!SweepRetaining(job, keep)) Directory.Delete(job, recursive: true);
+                }
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
+
+    // true — в папке есть шаги живых нитей: снесено всё, кроме них
+    private static bool SweepRetaining(string dir, IReadOnlySet<string> keep)
+    {
+        var steps = Path.Combine(dir, StepsDirName);
+        if (keep.Count == 0 || !Directory.Exists(steps)) return false;
+        var held = Directory.EnumerateFiles(steps).Where(f => keep.Contains(StepIdOf(f))).ToList();
+        if (held.Count == 0) return false;
+
+        foreach (var file in Directory.EnumerateFiles(steps).Except(held)) File.Delete(file);
+        foreach (var file in Directory.EnumerateFiles(dir)) File.Delete(file);
+        foreach (var sub in Directory.EnumerateDirectories(dir).Where(d => d != steps)) Directory.Delete(sub, recursive: true);
+        return true;
+    }
+
+    private static string StepIdOf(string file) => Path.GetFileName(file).Split('.')[0];
 
     // id владельца и задачи — только из своих рук (Guid и claim), но всё равно без разделителей
     private string JobDir(string ownerId, string jobId) =>

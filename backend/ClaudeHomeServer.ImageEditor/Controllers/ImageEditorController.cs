@@ -3,6 +3,7 @@ using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.ImageEditor.Threads;
 using ClaudeHomeServer.Services.ImageEditor.Versioning;
 using ClaudeHomeServer.Services.Images.Editing.Raster;
 using Microsoft.AspNetCore.Authorization;
@@ -34,7 +35,8 @@ public class ImageEditorController(
     IConfiguration? config = null,
     IImageRaster? raster = null,
     ISessionDirectory? sessionDirectory = null,
-    IImageChatSessions? chats = null) : ControllerBase
+    IImageChatSessions? chats = null,
+    ImageThreadService? threads = null) : ControllerBase
 {
     // Потолок файла проекта, который ручка transform читает в память; дальше решает растр (100 Мп)
     private const long MaxTransformFileBytes = 100L * 1024 * 1024;
@@ -110,7 +112,9 @@ public class ImageEditorController(
             BaseStepId: form.BaseStepId,
             AspectRatio: form.AspectRatio,
             ChatSessionId: form.ChatSessionId,
-            Initiator: ImageEditInitiator.Human);
+            Initiator: ImageEditInitiator.Human,
+            ThreadSessionId: form.SessionId,
+            ThreadId: form.ThreadId);
 
         var started = await launcher.LaunchAsync(UserId, project, request, ct);
         return Map(started, created => StatusCode(StatusCodes.Status202Accepted, created));
@@ -210,6 +214,11 @@ public class ImageEditorController(
         {
             files?.NotifyMutated(project.RootPath, result.Path, FileMutationKind.Write);
             await MoveChatAsync(project, req.ChatSessionId, result.Path);
+            // Нить идёт за сохранённым файлом (ADR-019). Чужая нить или чат молча пропускаются:
+            // файл уже сохранён, а ответ не должен выдавать чужое
+            if (threads is not null && threads.OwnThread(UserId, project.Id, req.SessionId, req.ThreadId))
+                await threads.OnSavedAsync(UserId, project.Id, req.SessionId!.Trim(), req.ThreadId!.Trim(), result.Path,
+                    HttpContext?.RequestAborted ?? CancellationToken.None);
         }
         return Map(saved, Ok);
     }
@@ -275,6 +284,10 @@ public class ImageEditorController(
         public string? AspectRatio { get; set; }
         // Чат картинки, из которого запуск: строка «Вы запустили: …» в ленте и журнал состояния
         public string? ChatSessionId { get; set; }
+        // Нить картинки в чате проекта (ADR-019): варианты ждут «Взять» в её карточке, ручной
+        // запуск ложится тихой строкой в ленту. Не своя нить — 404 thread_not_found до запуска
+        public string? SessionId { get; set; }
+        public string? ThreadId { get; set; }
     }
 
     // ── Правки без ИИ и шаги истории (ADR-018 §9) ──────────────────────────────────
@@ -459,7 +472,8 @@ public class ImageEditorController(
         {
             ImageEditErrorCodes.ProviderUnavailable or ImageEditErrorCodes.NameTaken => StatusCodes.Status409Conflict,
             ImageEditErrorCodes.QuoteNotFound or ImageEditErrorCodes.JobNotFound
-                or ImageEditErrorCodes.CharacterNotFound or ImageEditErrorCodes.StepNotFound => StatusCodes.Status404NotFound,
+                or ImageEditErrorCodes.CharacterNotFound or ImageEditErrorCodes.StepNotFound
+                or ImageEditErrorCodes.ThreadNotFound => StatusCodes.Status404NotFound,
             ImageEditErrorCodes.TooManyJobs => StatusCodes.Status429TooManyRequests,
             ImageEditErrorCodes.Unavailable or ImageEditErrorCodes.RasterUnavailable => StatusCodes.Status503ServiceUnavailable,
             _ => StatusCodes.Status400BadRequest,

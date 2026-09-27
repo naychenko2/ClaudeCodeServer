@@ -3,6 +3,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.ImageEditor.Chats;
+using ClaudeHomeServer.Services.ImageEditor.Threads;
 using ClaudeHomeServer.Services.Images.Editing.Raster;
 
 namespace ClaudeHomeServer.Services.ImageEditor;
@@ -18,6 +19,11 @@ namespace ClaudeHomeServer.Services.ImageEditor;
 // задача запускается без чата, трата и события — без SessionId, а ответ не выдаёт, существует
 // ли чужой чат. Свой чат после старта получает строку image_launch в ленту и запись в журнал
 // состояния — из журнала о запуске узнаёт ход (блок ImageEditorStateContributor).
+//
+// Нить картинки (ADR-019). Запуск в нить — ThreadSessionId + ThreadId: нить обязана быть своей
+// в своём чате этого проекта, иначе отказ thread_not_found ДО запуска и траты (молча отбросить
+// нельзя: варианты ушли бы мимо карточки, которую человек видит). После старта варианты нити
+// ждут «Взять», ручной запуск ложится тихой строкой image_launch через IChatFeed.
 public sealed class ImageEditLaunchAssembler(
     IEnumerable<IImageEditor> editors,
     ImageChatStateStore states,
@@ -26,7 +32,8 @@ public sealed class ImageEditLaunchAssembler(
     IImageRaster? raster = null,
     ISessionDirectory? sessionDirectory = null,
     IImageChatSessions? chats = null,
-    ISessionBroadcaster? broadcaster = null)
+    ISessionBroadcaster? broadcaster = null,
+    ImageThreadService? threads = null)
 {
     public static readonly IReadOnlyList<string> AspectRatios = ["1:1", "16:9", "9:16"];
 
@@ -39,7 +46,13 @@ public sealed class ImageEditLaunchAssembler(
 
         var started = await jobs!.StartAsync(ownerId, project.Id, input, ct);
         if (started.Value is { } created && input.ChatSessionId is { } chatId)
-            await RecordLaunchAsync(ownerId, project, chatId, input, created.JobId);
+        {
+            if (input.ThreadId is { } threadId && threads is not null)
+                await threads.OnLaunchedAsync(ownerId, project.Id, chatId, threadId, jobs.Get(ownerId, project.Id, created.JobId),
+                    created.JobId, input.Prompt, input.Initiator, ct);
+            else
+                await RecordLaunchAsync(ownerId, project, chatId, input, created.JobId);
+        }
         return started;
     }
 
@@ -58,6 +71,19 @@ public sealed class ImageEditLaunchAssembler(
             return Fail<ImageEditJobInput>(ImageEditErrorCodes.RasterUnavailable, "Обработка картинок выключена на этом сервере");
         if (string.IsNullOrWhiteSpace(req.QuoteId))
             return Invalid("Не указана котировка: сначала запросите цену");
+
+        string? threadId = null, chatId;
+        if (!string.IsNullOrWhiteSpace(req.ThreadId))
+        {
+            if (threads is null || !threads.OwnThread(ownerId, project.Id, req.ThreadSessionId, req.ThreadId))
+                return Fail<ImageEditJobInput>(ImageEditErrorCodes.ThreadNotFound, "Картинка не найдена в этом чате");
+            threadId = req.ThreadId.Trim();
+            chatId = req.ThreadSessionId!.Trim();
+        }
+        else
+        {
+            chatId = OwnImageChat(project, req.ChatSessionId);
+        }
 
         var aspectRatio = string.IsNullOrWhiteSpace(req.AspectRatio) ? null : req.AspectRatio.Trim();
         if (aspectRatio is not null && !AspectRatios.Contains(aspectRatio))
@@ -104,10 +130,11 @@ public sealed class ImageEditLaunchAssembler(
             req.SourcePath,
             character,
             MatchSourceSize: req.MatchSourceSize,
-            ChatSessionId: OwnImageChat(project, req.ChatSessionId),
+            ChatSessionId: chatId,
             Initiator: req.Initiator,
             BaseStepId: req.BaseStepId,
-            AspectRatio: aspectRatio));
+            AspectRatio: aspectRatio,
+            ThreadId: threadId));
     }
 
     private static long MaxFileBytes => ImageEditCatalog.DefaultLimits.MaxFileMb * 1024L * 1024L;
@@ -217,7 +244,8 @@ public sealed class ImageEditLaunchAssembler(
 
 // Вход запуска до проверок. Uploaded — образцы, пришедшие байтами (с компьютера), уже с ролями;
 // ReferencePaths — образцы из проекта путями. ChatSessionId — чат картинки, из которого запуск;
-// Initiator — кто запустил: человек ручкой или агент инструментом
+// Initiator — кто запустил: человек ручкой или агент инструментом; ThreadSessionId + ThreadId —
+// нить картинки в чате проекта (ADR-019)
 public sealed record ImageEditLaunchRequest(
     string? QuoteId,
     string? Prompt,
@@ -233,4 +261,7 @@ public sealed record ImageEditLaunchRequest(
     string? BaseStepId = null,
     string? AspectRatio = null,
     string? ChatSessionId = null,
-    ImageEditInitiator Initiator = ImageEditInitiator.Human);
+    ImageEditInitiator Initiator = ImageEditInitiator.Human,
+    // Нить картинки в чате проекта (ADR-019); ChatSessionId при этом не нужен — это чат v2
+    string? ThreadSessionId = null,
+    string? ThreadId = null);

@@ -76,6 +76,26 @@ public sealed class ImageEditSteps(IImageRaster raster, ImageEditWorkspace works
             new ImageTransformResponse(step.StepId, step.Width, step.Height, step.Bytes));
     }
 
+    // «Взять» вариант в нить (ADR-019 §1): байты варианта ложатся шагом как есть, без
+    // перекодирования. Родитель — текущий шаг нити (parentStepId), а не BaseStepId задачи: нить
+    // сама знает, где её холст. Без родителя — своя лента от файла нити sourcePath
+    public ImageEditCallResult<ImageEditStep> TakeVariant(
+        string ownerId, string projectId, string jobId, int variant, string? parentStepId, string? sourcePath)
+    {
+        var image = jobs.Get(ownerId, projectId, jobId) is null ? null : jobs.OpenVariant(ownerId, projectId, jobId, variant);
+        if (image is null)
+            return ImageEditCallResult<ImageEditStep>.Fail(ImageEditErrorCodes.JobNotFound, "Задача не найдена");
+        if (raster.Probe(image.Bytes) is not { } probe)
+            return ImageEditCallResult<ImageEditStep>.Fail(ImageEditErrorCodes.InvalidRequest, "Вариант не распознан как картинка");
+
+        var parent = parentStepId is null ? null : Open(ownerId, projectId, parentStepId);
+        var step = new ImageEditStep(ImageEditWorkspace.NewStepId(), parent?.Step.EditId ?? ImageEditWorkspace.NewStepId(),
+            projectId, parent?.Step.StepId, ImageEditStepKinds.Variant, probe.DisplayWidth, probe.DisplayHeight,
+            image.Bytes.LongLength, DateTime.UtcNow, parent?.Step.SourcePath ?? sourcePath, jobId, variant);
+        workspace.SaveStep(ownerId, step, image.Bytes);
+        return ImageEditCallResult<ImageEditStep>.Ok(step);
+    }
+
     // Шаг своего проекта; чужой владелец или проект неотличимы от отсутствующего
     public (ImageEditStep Step, EditedImage Image)? Open(string ownerId, string projectId, string stepId) =>
         workspace.OpenStep(ownerId, stepId) is { } found && found.Step.ProjectId == projectId ? found : null;

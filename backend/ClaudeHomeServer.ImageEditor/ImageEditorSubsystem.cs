@@ -44,7 +44,14 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
 
         services.TryAddSingleton<IVersionedImageStore, VersionedImageStore>();
         services.AddSingleton<IImageEditSaver, ImageEditSaver>();
-        services.AddSingleton(sp => ImageEditWorkspace.FromConfig(sp.GetRequiredService<IConfiguration>()));
+        // Шаги, на которые ссылаются нити картинок, чистка рабочей папки не трогает (ADR-019 §1)
+        services.AddSingleton(sp =>
+        {
+            var workspace = ImageEditWorkspace.FromConfig(sp.GetRequiredService<IConfiguration>());
+            var threads = sp.GetRequiredService<Threads.ImageThreadStore>();
+            workspace.RetainedSteps = threads.ReferencedSteps;
+            return workspace;
+        });
         // Траты пишутся в общий учёт ISpendCollector (вертикаль Spend); выключенный Spend —
         // null, исполнитель тогда только предупреждает в лог
         services.AddSingleton<ImageEditJobService>();
@@ -65,6 +72,9 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
         // вместе с чатом по событиям шины session/deleted и session/branched
         services.AddSingleton(sp => Threads.ImageThreadStore.FromConfig(sp.GetRequiredService<IConfiguration>()));
         services.AddHostedService<Threads.ImageThreadLifecycle>();
+        // Следы нити в ленте и событие image_thread_changed; нить идёт за переименованным файлом
+        services.AddSingleton<Threads.ImageThreadService>();
+        services.AddHostedService<Threads.ImageThreadPathTracker>();
         // MCP-сервер редактора для агента чата картинки (ADR-018 §10.2): маршрут общий,
         // POST /mcp/image-editor/{sessionId}, реестр Main находит тулсет среди IMcpToolset
         services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset, Mcp.ImageEditorToolset>();

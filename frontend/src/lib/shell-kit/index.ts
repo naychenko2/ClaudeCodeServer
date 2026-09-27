@@ -68,7 +68,7 @@ export { parseHash, navPush, navReplace, getNav } from '../nav';
 export type { NavSnapshot } from '../nav';
 
 // ─── tasks ───────────────────────────────────────────────────────────────────
-export { projectColor } from '../tasks';
+export { projectColor, useTasks, ensureTasksLoaded, openTaskInSection } from '../tasks';
 
 // ─── themeMode ───────────────────────────────────────────────────────────────
 export { getEffectiveTheme, subscribeThemeMode, useThemeMode } from '../themeMode';

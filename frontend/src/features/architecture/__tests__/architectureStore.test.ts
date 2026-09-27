@@ -305,3 +305,83 @@ describe('architectureStore: «Только просмотр»', () => {
     expect(current().frameKey).toBe(stamp.frameKey + 1);
   });
 });
+
+describe('architectureStore: «Собрать архитектуру» с агентом', () => {
+  const pass1 = { modelPath: 'm', graphBuiltAt: null, generatedAt: 't', containers: 1, components: 0, added: 1, matched: 0, connectionsAdded: 0 };
+  const reject = (status: number, body: object) => Object.assign(new Error(String(status)), { status, body });
+
+  it('200 с агентом: сводка и задача исполнителя, withAgent уходит в запрос', async () => {
+    await open(A, null, null);
+    api.architectureGenerate.mockResolvedValueOnce({ ...pass1, agentTaskId: 't1', agentPersonaId: null, agentError: null });
+    api.architectureModel.mockResolvedValueOnce(dto(model('Alpha'), 'va'));
+    await store.generateArchitecture(A, true);
+
+    expect(api.architectureGenerate).toHaveBeenLastCalledWith(A, true);
+    expect(current().status).toBe('ready');
+    expect(current().lastBuild?.added).toBe(1);
+    expect(current().agent).toEqual({ taskId: 't1', personaId: null, error: null });
+    expect(current().generateError).toBeNull();
+  });
+
+  it('409 build_in_progress без result: модель не трогаем, ошибки нет, задача известна', async () => {
+    await open(A, model('Alpha'), 'va');
+    api.architectureGenerate.mockRejectedValueOnce(reject(409, { code: 'build_in_progress', agentTaskId: 't0', result: null }));
+    await store.generateArchitecture(A, true);
+
+    expect(current().generating).toBe(false);
+    expect(current().generateError).toBeNull();
+    expect(current().agent).toEqual({ taskId: 't0', personaId: null, error: 'build_in_progress' });
+    expect(current().content).toBe(model('Alpha'));
+  });
+
+  it('503 agent_unavailable с result: проход 1 применён как успех со сноской', async () => {
+    await open(A, null, null);
+    api.architectureGenerate.mockRejectedValueOnce(reject(503, { code: 'agent_unavailable', result: pass1 }));
+    api.architectureModel.mockResolvedValueOnce(dto(model('Alpha'), 'va'));
+    await store.generateArchitecture(A, true);
+
+    expect(current().status).toBe('ready');
+    expect(current().generateError).toBeNull();
+    expect(current().lastBuild?.added).toBe(1);
+    expect(current().agent?.error).toBe('agent_unavailable');
+  });
+
+  it('503 graph_unavailable — по-прежнему ошибка сборки', async () => {
+    await open(A, null, null);
+    api.architectureGenerate.mockRejectedValueOnce(reject(503, { code: 'graph_unavailable', message: 'Граф кода не построился' }));
+    await store.generateArchitecture(A);
+
+    expect(current().generateError).toBe('Граф кода не построился');
+    expect(current().agent).toBeNull();
+  });
+
+  it('ошибка пересборки готовой модели: модель цела, прежняя сводка сброшена, крестик убирает ошибку', async () => {
+    await open(A, null, null);
+    api.architectureGenerate.mockResolvedValueOnce(pass1);
+    api.architectureModel.mockResolvedValueOnce(dto(model('Alpha'), 'va'));
+    await store.generateArchitecture(A);
+    expect(current().lastBuild?.added).toBe(1);
+
+    api.architectureGenerate.mockRejectedValueOnce(reject(503, { code: 'graph_unavailable', message: 'Граф кода не построился' }));
+    await store.generateArchitecture(A);
+    expect(current().status).toBe('ready');
+    expect(current().content).toBe(model('Alpha'));
+    expect(current().generateError).toBe('Граф кода не построился');
+    expect(current().lastBuild).toBeNull();
+
+    store.dismissBuildSummary();
+    expect(current().generateError).toBeNull();
+  });
+
+  it('409 build_in_progress без result после прежней сборки: сводки нет', async () => {
+    await open(A, null, null);
+    api.architectureGenerate.mockResolvedValueOnce(pass1);
+    api.architectureModel.mockResolvedValueOnce(dto(model('Alpha'), 'va'));
+    await store.generateArchitecture(A);
+
+    api.architectureGenerate.mockRejectedValueOnce(reject(409, { code: 'build_in_progress', agentTaskId: 't0', result: null }));
+    await store.generateArchitecture(A, true);
+    expect(current().lastBuild).toBeNull();
+    expect(current().agent?.error).toBe('build_in_progress');
+  });
+});

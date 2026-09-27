@@ -10,7 +10,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   DraftingCompass, X, Check, Loader, AlertTriangle, Eye, Sparkles, Unlink, FileWarning, RefreshCw,
-  FileJson, Download, Lock,
+  FileJson, Download, Lock, Bot,
 } from 'lucide-react';
 import {
   C, FONT, FS, SP, Button, BackButton, EmptyState, WaitingIndicator, MetaChip,
@@ -19,9 +19,10 @@ import {
 } from 'aihome_shell/kit';
 import {
   useArchitecture, loadArchitecture, checkRemote, onProjectFilesChanged, onFrameDirty, onFrameSave, retrySave,
-  takeServerVersion, downloadLocal, setReadOnly, startBlank, generateArchitecture,
+  takeServerVersion, downloadLocal, setReadOnly, startBlank, generateArchitecture, dismissBuildSummary,
   setFrameWindow, POLL_MS, MODEL_PATH, type ArchState,
 } from './architectureStore';
+import { AgentToggle, BuildBanner, agentBlockedHint, useAgentBuild, useAgentPref } from './ArchitectureBuild';
 import { ViaductFrame, type FrameFailure } from './ViaductFrame';
 import { parseOutline, modelTitle, LEVEL_LABEL, type ArchElement, type ArchLevel } from './modelOutline';
 
@@ -75,11 +76,25 @@ export function ArchitectureDocument({ projectId, projectName, isMobile, onClose
 
   const retryFrame = () => { setFrameFailed(null); takeServerVersion(); };
 
+  // Галочка «С агентом»: одна на пустое состояние и меню. Пока задача сборки не закрыта
+  // (агент собирает или она ждёт человека), вторая агентная сборка не стартует (сервер
+  // ответил бы 409) — проход 1 без агента разрешён
+  const [withAgent, setWithAgent] = useAgentPref(projectId);
+  const agent = useAgentBuild(projectId, s.agent?.taskId ?? null);
+  const agentHint = agentBlockedHint(agent.phase);
+  const agentBusy = agentHint !== null;
+  const build = () => void generateArchitecture(projectId, withAgent && !agentBusy);
+
   const menu: OverflowItem[] = [
     {
-      key: 'generate', label: 'Пересобрать из кода', icon: <Sparkles size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
-      sublabel: 'Ручные описания и раскладка сохранятся', disabled: s.generating,
-      onClick: () => void generateArchitecture(projectId),
+      key: 'generate', label: 'Пересобрать архитектуру', icon: <Sparkles size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+      sublabel: withAgent && !agentBusy ? 'С агентом · ручные описания и раскладка сохранятся' : 'Ручные описания и раскладка сохранятся',
+      disabled: s.generating, onClick: build,
+    },
+    {
+      key: 'agent', label: 'С агентом', icon: <Bot size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+      sublabel: agentHint ?? 'Проверит кандидатов и дополнит модель',
+      toggle: withAgent && !agentBusy, disabled: agentBusy, onClick: () => setWithAgent(!withAgent),
     },
     {
       key: 'file', label: 'Показать файл модели', icon: <FileJson size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
@@ -126,6 +141,8 @@ export function ArchitectureDocument({ projectId, projectName, isMobile, onClose
           onDownload={() => downloadLocal(`model.viaduct.${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}.json`)} />
       )}
 
+      {!s.generating && <BuildBanner s={s} projectId={projectId} isMobile={isMobile} onDismiss={dismissBuildSummary} />}
+
       <div style={{ flex: 1, minHeight: 0, position: 'relative', display: 'flex', flexDirection: 'column' }}>
         {(s.status === 'idle' || s.status === 'loading') && (
           <EmptyState
@@ -152,8 +169,10 @@ export function ArchitectureDocument({ projectId, projectName, isMobile, onClose
         {s.generating && (
           <EmptyState
             icon={<Loader size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
-            title="Собираю модель из кода"
-            subtitle="Документ обновится сам, закрывать его не нужно."
+            title="Собираю архитектуру из кода"
+            subtitle={withAgent && !agentBusy
+              ? 'Сначала модель из кода, затем задача агенту — он дополнит её уже на холсте. Закрывать документ не нужно.'
+              : 'Документ обновится сам, закрывать его не нужно.'}
             action={<WaitingIndicator hint="Обычно пара минут" />}
           />
         )}
@@ -165,7 +184,7 @@ export function ArchitectureDocument({ projectId, projectName, isMobile, onClose
             subtitle={s.generateError}
             action={(
               <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap', justifyContent: 'center' }}>
-                <Button variant="secondary" size="md" onClick={() => void generateArchitecture(projectId)}>Повторить</Button>
+                <Button variant="secondary" size="md" onClick={build}>Повторить</Button>
                 {!isMobile && <Button variant="ghost" size="md" onClick={startBlank}>Начать с пустого</Button>}
               </div>
             )}
@@ -176,12 +195,15 @@ export function ArchitectureDocument({ projectId, projectName, isMobile, onClose
           <EmptyState
             icon={<DraftingCompass size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
             title="Архитектура ещё не описана"
-            subtitle="Соберу стартовую C4-модель из кода проекта: системы, контейнеры и связи между ними. Дальше её можно править руками или поручить персоне."
+            subtitle="Соберу C4-модель из кода проекта: системы, внешние сервисы, контейнеры и связи между ними. Дальше её можно править руками или поручить агенту."
             action={(
-              <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap', justifyContent: 'center' }}>
-                <Button variant="primary" size="md" onClick={() => void generateArchitecture(projectId)}
-                  leftIcon={<Sparkles size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}>Собрать из кода</Button>
-                {!isMobile && <Button variant="ghost" size="md" onClick={startBlank}>Начать с пустого холста</Button>}
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: SP.md }}>
+                <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap', justifyContent: 'center' }}>
+                  <Button variant="primary" size="md" onClick={build}
+                    leftIcon={<Sparkles size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}>Собрать архитектуру</Button>
+                  {!isMobile && <Button variant="ghost" size="md" onClick={startBlank}>Начать с пустого холста</Button>}
+                </div>
+                <AgentToggle checked={withAgent && !agentBusy} onChange={setWithAgent} disabled={agentBusy} hint={agentHint} />
               </div>
             )}
           />
@@ -287,6 +309,24 @@ function ConflictBanner({ conflict, isMobile, onReload, onDownload }: {
   );
 }
 
+// Метки генератора у элемента: «нет в коде» (из кода пропал) и «кандидат» (найден по
+// конфигам/compose, ждёт проверки). Прочие теги модели в обзоре не показываем.
+const MARK_MISSING = 'нет в коде';
+const MARK_CANDIDATE = 'кандидат';
+
+function ElementMarks({ tags }: { tags?: string[] }) {
+  const missing = tags?.includes(MARK_MISSING);
+  const candidate = tags?.includes(MARK_CANDIDATE);
+  if (!missing && !candidate) return null;
+  const tone = (background: string, color: string) => ({ background, color, border: 'none', fontWeight: 600 });
+  return (
+    <div style={{ display: 'flex', gap: SP.xs, flexWrap: 'wrap', marginTop: SP.xs }}>
+      {missing && <MetaChip style={tone(C.warningBg, C.warningText)}>{MARK_MISSING}</MetaChip>}
+      {candidate && <MetaChip style={tone(C.infoBg, C.info)}>{MARK_CANDIDATE}</MetaChip>}
+    </div>
+  );
+}
+
 // Мобильный список-обзор: элементы по уровням C4, тап раскрывает описание и связи
 function MobileOverview({ elements, onOpenCanvas }: { elements: ArchElement[]; onOpenCanvas: () => void }) {
   const [open, setOpen] = useState<string | null>(null);
@@ -317,6 +357,7 @@ function MobileOverview({ elements, onOpenCanvas }: { elements: ArchElement[]; o
                   <span style={{ fontWeight: 600, fontSize: FS.sm, color: C.textHeading, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{el.name}</span>
                   {el.technology && <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, flexShrink: 0 }}>{el.technology}</span>}
                 </div>
+                <ElementMarks tags={el.tags} />
                 {el.description && (
                   <div style={{
                     fontSize: FS.xs, color: C.textSecondary, marginTop: 2,

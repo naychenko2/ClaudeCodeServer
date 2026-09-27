@@ -77,11 +77,11 @@ export function ArchitecturePanel({ projectId, archOpen, onEnsureOpen, onCollaps
       <>{header}<EmptyState compact
         icon={<DraftingCompass size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />}
         title="Архитектура ещё не описана"
-        subtitle="Соберу стартовую C4-модель из кода проекта."
+        subtitle="Соберу C4-модель из кода проекта: системы, контейнеры и связи."
         action={(
           <Button variant="primary" size="sm" fullWidth loading={s.generating}
             onClick={() => { onEnsureOpen(); void generateArchitecture(projectId); }}
-            leftIcon={<Sparkles size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}>Собрать из кода</Button>
+            leftIcon={<Sparkles size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}>Собрать архитектуру</Button>
         )}
       /></>
     );

@@ -5,7 +5,7 @@
 // Сохранение: мост присылает persist-обёртку стора (строку ключа localStorage) после
 // дебаунса → PUT с версией, от которой шли правки. Совпало по смыслу с файлом — PUT не
 // шлём (иначе первая же гидратация редактора переформатировала бы файл). Ушло в 409 —
-// файл успели поменять (вторая вкладка, персона, «Собрать из кода»): плашка конфликта,
+// файл успели поменять (вторая вкладка, персона, «Собрать архитектуру»): плашка конфликта,
 // дальнейшие правки не пишутся, пока человек не выберет «Перезагрузить» или «Скачать».
 // Пока документ открыт, сверяем версию: чужая правка без своих несохранённых — тихая
 // перезагрузка модели, со своими — та же плашка конфликта; удалённый файл — «модели нет».
@@ -14,7 +14,7 @@
 // потерянное событие (реконнект SignalR, сбой watcher'а).
 import { useSyncExternalStore } from 'react';
 import { api } from 'aihome_shell/kit';
-import type { ArchitectureModelDto } from '../../lib/api';
+import type { ArchitectureGenerateResult, ArchitectureModelDto } from '../../lib/api';
 import type { FrameStamp } from './ViaductFrame';
 
 export type ArchStatus = 'idle' | 'loading' | 'ready' | 'missing' | 'error';
@@ -25,6 +25,13 @@ export interface ArchConflict {
   version: string | null;
   updatedAt: string | null;
   updatedBy: string | null;
+}
+
+export interface ArchAgent {
+  taskId: string | null;
+  personaId: string | null;
+  // launch_failed | agent_unavailable | build_in_progress | прочий код отказа
+  error: string | null;
 }
 
 export interface ArchState {
@@ -42,6 +49,10 @@ export interface ArchState {
   blank: boolean;
   generating: boolean;
   generateError: string | null;
+  // Итог последней сборки (сводка) и агентный проход: задача исполнителя, его персона,
+  // отказ запуска (409 build_in_progress — agent.error, модель при этом прежняя)
+  lastBuild: ArchitectureGenerateResult | null;
+  agent: ArchAgent | null;
   corrupt: boolean;
   save: SaveState;
   saveError: string | null;
@@ -58,7 +69,7 @@ export interface ArchState {
 const INITIAL: ArchState = {
   projectId: null, status: 'idle', error: null,
   content: null, version: null, updatedAt: null, updatedBy: null,
-  frameKey: 0, blank: false, generating: false, generateError: null, corrupt: false,
+  frameKey: 0, blank: false, generating: false, generateError: null, lastBuild: null, agent: null, corrupt: false,
   save: 'saved', saveError: null, dirty: false, conflict: null, readOnly: false,
   localValue: null, focus: null,
 };
@@ -328,25 +339,53 @@ export function requestFocus(id: string) {
   set({ focus: { id, tick: (state.focus?.tick ?? 0) + 1 } });
 }
 
-export async function generateArchitecture(projectId: string) {
+export function dismissBuildSummary() {
+  // Ошибку пересборки готовой модели несёт плашка — крестик убирает и её; у пустой
+  // модели ошибка живёт в своём экране с «Повторить», его не трогаем
+  set({ lastBuild: null, agent: null, ...(state.status === 'ready' ? { generateError: null } : {}) });
+}
+
+// «Собрать архитектуру»: проход 1 (детерминированный) и, с withAgent, задача исполнителю.
+// Отказы агентной части (409 build_in_progress, 503 agent_unavailable) несут итог прохода 1
+// в body.result — модель при этом собрана, его показываем как обычный успех со сноской
+export async function generateArchitecture(projectId: string, withAgent = false) {
   if (state.generating) return;
-  set({ generating: true, generateError: null });
+  // Прежняя сводка к новой сборке не относится: упади эта — осталась бы чужая «Собрано: …».
+  // Агента (идущую задачу) не трогаем — его ведёт стор задач
+  set({ generating: true, generateError: null, lastBuild: null });
+  let result: ArchitectureGenerateResult | null = null;
+  let agent: ArchAgent | null = null;
   try {
-    await api.projects.architectureGenerate(projectId);
+    result = await api.projects.architectureGenerate(projectId, withAgent);
+    if (withAgent) agent = { taskId: result.agentTaskId ?? null, personaId: result.agentPersonaId ?? null, error: result.agentError ?? null };
+  } catch (e) {
     if (state.projectId !== projectId) return;
+    const err = e as Error & { status?: number; body?: { code?: string; message?: string; agentTaskId?: string | null; result?: ArchitectureGenerateResult | null } };
+    const code = err.body?.code;
+    if (code === 'build_in_progress' || code === 'agent_unavailable') {
+      agent = { taskId: err.body?.agentTaskId ?? null, personaId: null, error: code };
+      result = err.body?.result ?? null;
+      // Ранний отказ «уже идёт»: проход 1 не выполнялся, модель прежняя
+      if (!result) { set({ generating: false, agent }); return; }
+    } else {
+      set({
+        generating: false,
+        generateError: err.body?.message ?? errorText(e),
+        corrupt: code === 'model_corrupt' || state.corrupt,
+      });
+      return;
+    }
+  }
+  if (state.projectId !== projectId) return;
+  try {
     const dto = await api.projects.architectureModel(projectId);
     if (state.projectId !== projectId) return;
     // Свои несохранённые правки поверх свежей сборки не затираем — конфликт
     if (state.dirty) set({ conflict: { ...dto }, save: 'failed', saveError: 'Модель пересобрана из кода, пока вы её правили' });
     else applyServer(dto, true);
-    set({ generating: false, blank: false });
+    set({ generating: false, blank: false, lastBuild: result, agent });
   } catch (e) {
     if (state.projectId !== projectId) return;
-    const err = e as Error & { status?: number; body?: { code?: string; message?: string } };
-    set({
-      generating: false,
-      generateError: err.body?.message ?? errorText(e),
-      corrupt: err.body?.code === 'model_corrupt' || state.corrupt,
-    });
+    set({ generating: false, generateError: errorText(e), lastBuild: result, agent });
   }
 }

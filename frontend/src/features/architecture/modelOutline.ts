@@ -12,6 +12,8 @@ export interface ArchElement {
   technology?: string;
   description?: string;
   connections: number;
+  // Теги элемента (генератор ставит «кандидат» и «нет в коде»); нет тегов — undefined
+  tags?: string[];
 }
 
 export const LEVEL_LABEL: Record<ArchLevel, string> = {
@@ -30,6 +32,12 @@ const LEVELS: { level: ArchLevel; key: string; parent: string | null }[] = [
 
 function str(v: unknown): string | undefined {
   return typeof v === 'string' && v.trim() ? v : undefined;
+}
+
+function tagsOf(v: unknown): string[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const tags = v.filter((t): t is string => typeof t === 'string' && t.trim() !== '');
+  return tags.length ? tags : undefined;
 }
 
 export function parseOutline(content: string | null): ArchElement[] {
@@ -55,6 +63,7 @@ export function parseOutline(content: string | null): ArchElement[] {
         technology: str(el.technology),
         description: str(el.description),
         connections: Array.isArray(el.connections) ? el.connections.length : 0,
+        tags: tagsOf(el.tags),
       });
     }
   }

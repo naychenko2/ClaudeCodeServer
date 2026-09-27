@@ -15,7 +15,7 @@ export interface GlyphCandidate {
   name?: string | null;
 }
 
-// Итог «Собрать из кода» (POST /projects/{id}/architecture/generate).
+// Итог «Собрать архитектуру» (POST /projects/{id}/architecture/generate).
 // graphBuiltAt — время снимка графа кода, которым помечена карта (ISO); added/matched —
 // новые и сохранённые элементы: повторная сборка ручные описания не трогает.
 export interface ArchitectureGenerateResult {
@@ -27,6 +27,20 @@ export interface ArchitectureGenerateResult {
   added: number;
   matched: number;
   connectionsAdded: number;
+  // Проход 1 «Собрать архитектуру»: внешние системы-кандидаты (тег «кандидат»), элементы из
+  // кода, которых больше нет (тег «нет в коде»), снятые пометки и удалённые руками (не
+  // пересоздаются); missing/candidatesSkipped — имена для сводки
+  candidates?: number;
+  markedMissing?: number;
+  unmarked?: number;
+  skippedDeleted?: number;
+  missing?: string[] | null;
+  candidatesSkipped?: string[] | null;
+  // Проход 2 (withAgent): задача исполнителю, его персона (null — без персоны-архитектора)
+  // и код отказа; launch_failed — задача создана, но исполнитель не стартовал
+  agentTaskId?: string | null;
+  agentPersonaId?: string | null;
+  agentError?: string | null;
 }
 
 // Модель раздела «Архитектура» (GET /projects/{id}/architecture/model). version — SHA-256
@@ -813,9 +827,12 @@ export const api = {
     // слияние с docs/architecture/model.viaduct.json без затирания ручных описаний.
     // Если графа нет, бэкенд строит его в том же запросе (на CCS ~1.5 мин), отсюда таймаут.
     // 409 code=model_corrupt — файл модели битый, 503 code=graph_unavailable — графа нет.
-    architectureGenerate: (id: string) =>
+    // withAgent — проход 2: задача исполнителю (персона-архитектор, если есть). 409
+    // code=build_in_progress (+agentTaskId, result) — агент уже собирает; 503
+    // code=agent_unavailable (+result) — собрано без агента.
+    architectureGenerate: (id: string, withAgent = false) =>
       request<ArchitectureGenerateResult>(`/projects/${encodeURIComponent(id)}/architecture/generate`,
-        { method: 'POST', timeoutMs: 300_000 }),
+        { method: 'POST', body: JSON.stringify({ withAgent }), timeoutMs: 300_000 }),
     // Хранилище модели раздела «Архитектура»: content — байты файла как есть (null —
     // модели ещё нет). live: устаревшая модель из офлайн-кэша дала бы ложный конфликт.
     architectureModel: (id: string) =>

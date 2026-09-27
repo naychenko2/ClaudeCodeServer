@@ -20,7 +20,7 @@ import { currentModel, ProviderModelPicker } from './ProviderModelPicker';
 import { EditorSections, MarksTools, MobileToolbar, SectionHint, useEditorSections, type EditorSection } from './EditorSections';
 import { HistorySteps, ProjectImagePicker, QuickActions, SamplesSection, SaveButtons } from './PanelSections';
 import {
-  actionTitle, currentSrc, dropStepsFrom, EMPTY_HISTORY, goToStep, maxSamples, panelJobInput, patchStep, pushStep, QUICK_ACTIONS, quickBlockReason, quickPlan, quickUsesOwnModel,
+  actionTitle, applyAgentReferences, currentSrc, dropStepsFrom, EMPTY_HISTORY, goToStep, maxSamples, panelJobInput, patchStep, pushStep, QUICK_ACTIONS, quickBlockReason, quickPlan, quickUsesOwnModel,
   stepSaveSource, type History, type HistoryStep, type LaunchAction, type LaunchPlan, type OutpaintRatio, type QuickAction, type Sample, type SaveSource,
 } from './editorInputs';
 import { AdjustPanel } from './AdjustPanel';
@@ -383,7 +383,7 @@ export function ImageEditor({ projectId, projectName, target, sessionId: openSes
 
   // ── Чат картинки ──
   const chat = useImageChat({
-    api, projectId, sourcePath, openSessionId, chatVisible: !mobile || sheet === 'chat',
+    api, projectId, sourcePath, folder: initial.folder, openSessionId, chatVisible: !mobile || sheet === 'chat',
     canvas: { imgRef, marks, size, stepId: curStep && !curStep.pending ? curStep.id : null },
     onClose, onOpenPath,
   });
@@ -408,15 +408,9 @@ export function ImageEditor({ projectId, projectName, target, sessionId: openSes
     if (patch.characterSlug !== undefined) chars.setActive(patch.characterSlug);
     if (patch.references) {
       const refs = patch.references;
-      setSamples(list => [
-        ...list.filter(x => x.source === 'upload'),
-        ...refs.map((r): Sample => {
-          const had = list.find(x => x.source === 'project' && x.path === r.path);
-          return had ? { ...had, role: r.role } : {
-            id: `p${++stepSeq.current}`, source: 'project', name: splitPath(r.path).name, role: r.role, path: r.path, url: appApi.files.fileUrl(projectId, r.path),
-          };
-        }),
-      ]);
+      setSamples(list => applyAgentReferences(list, refs, (r): Sample => ({
+        id: `p${++stepSeq.current}`, source: 'project', name: splitPath(r.path).name, role: r.role, path: r.path, url: appApi.files.fileUrl(projectId, r.path),
+      })));
     }
   };
 
@@ -553,10 +547,11 @@ export function ImageEditor({ projectId, projectName, target, sessionId: openSes
 
   // «Применить» / «Сохранить» — сразу, без диалога, следующей версией рядом
   const saveNext = async (from: SaveSource) => {
-    // Чат картинки переезжает на новый файл вместе с редактором (ADR-018 §1)
+    // Чат картинки переезжает на новый файл вместе с редактором (ADR-018 §1), черновик
+    // «Нарисовать картинку» — привязывается к первому сохранённому
     const req: ImageEditSaveRequest = sourcePath
       ? { ...saveSource(from), mode: 'next-version', sourcePath, chatSessionId: chat.sessionId }
-      : { ...saveSource(from), mode: 'next-version', folder: initial.folder || undefined, fileName: initial.name };
+      : { ...saveSource(from), mode: 'next-version', folder: initial.folder || undefined, fileName: initial.name, chatSessionId: chat.sessionId };
     try {
       afterSave(from, (await api.save(projectId, req)).path);
     } catch (e) {
@@ -748,16 +743,12 @@ export function ImageEditor({ projectId, projectName, target, sessionId: openSes
       )} />
   );
 
-  // ── Чат картинки: только у картинки, которая лежит в проекте ──
-  const chatArea = chat.props ? (
+  // ── Чат картинки: у новой картинки — черновик по папке до первого сохранения ──
+  const chatArea = (
     <div data-image-chat="" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
       <ImageEditorBridge.Provider value={bridge}>
         <ImageChat {...chat.props} />
       </ImageEditorBridge.Provider>
-    </div>
-  ) : (
-    <div style={{ flex: 1, minHeight: 0, padding: SP.md, fontSize: FS.sm, color: C.textMuted, lineHeight: 1.45, textAlign: 'center' }}>
-      Чат картинки появится, когда картинка будет в проекте: сохраните её, и можно будет обсудить её с Claude.
     </div>
   );
 

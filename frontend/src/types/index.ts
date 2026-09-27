@@ -175,6 +175,9 @@ export interface Project {
   // Почему тумблер рук включить нельзя; null — можно. Готовый текст с сервера
   // (ProjectCapabilities.HandsRefusal). Читать только через projectCapabilities.ts
   handsRefusal?: string | null;
+  // Только в ответе создания и перепривязки локального проекта: агент устройства создал или
+  // разрешил папку («Папка «…» создана и разрешена агенту на «…»»). Показывается уведомлением
+  folderNotice?: string | null;
 }
 
 // Провайдер, которому владелец может доверить руки (GET /api/me/hands-providers).
@@ -749,7 +752,9 @@ export interface FeatureFlagDefinition {
 
 // Привязка чата картинки к файлу проекта (ADR-018 §1). Пути — от корня проекта через «/»
 export interface SessionImageChat {
-  currentPath: string;
+  // null — чат-черновик «Нарисовать картинку»: файла ещё нет, есть папка назначения
+  currentPath: string | null;
+  draftFolder?: string | null;
   // Прежние пути, старые первыми: по ним поиск отдаёт «разговор продолжился на новой версии»
   lineage: string[];
 }

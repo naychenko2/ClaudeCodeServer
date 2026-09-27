@@ -175,6 +175,10 @@ jobs:
       - name: Lint (non-blocking)
         run: npm run lint
         continue-on-error: true
+      # Сторож импортов MF-модуля «Редактор картинок» (ADR-018 §10.3) — жёсткий гейт
+      # отдельным конфигом: в общем линте выше он тонул бы в легаси-долге
+      - name: Lint remote guard (image-editor)
+        run: npx eslint --config eslint.remote.config.js src/features/imageEditor
       - name: Build (tsc -b + vite)
         run: npm run build
       - name: Test

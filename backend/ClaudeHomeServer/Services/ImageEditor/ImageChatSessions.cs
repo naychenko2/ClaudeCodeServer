@@ -11,8 +11,18 @@ public sealed class ImageChatSessions(
     PersonaManager personas,
     DefaultAssistantProvisioner provisioner) : IImageChatSessions
 {
-    public async Task<ImageChatCreateOutcome> CreateAsync(string ownerId, Project project, string sourcePath,
-        string? personaId, CancellationToken ct)
+    public Task<ImageChatCreateOutcome> CreateAsync(string ownerId, Project project, string sourcePath,
+        string? personaId, CancellationToken ct) =>
+        CreateCoreAsync(ownerId, project, personaId, ImageChatDefaults.ChatName(sourcePath),
+            new SessionImageChat { CurrentPath = sourcePath }, ct);
+
+    public Task<ImageChatCreateOutcome> CreateDraftAsync(string ownerId, Project project, string folder,
+        string? personaId, CancellationToken ct) =>
+        CreateCoreAsync(ownerId, project, personaId, ImageChatDefaults.DraftChatName(folder),
+            new SessionImageChat { CurrentPath = null, DraftFolder = folder }, ct);
+
+    private async Task<ImageChatCreateOutcome> CreateCoreAsync(string ownerId, Project project, string? personaId,
+        string name, SessionImageChat imageChat, CancellationToken ct)
     {
         string? chosen;
         if (!string.IsNullOrWhiteSpace(personaId))
@@ -35,8 +45,7 @@ public sealed class ImageChatSessions(
         }
 
         var session = await sessions.CreateAsync(project.Id, ClaudeMode.AcceptEdits,
-            name: ImageChatDefaults.ChatName(sourcePath), personaId: chosen,
-            imageChat: new SessionImageChat { CurrentPath = sourcePath },
+            name: name, personaId: chosen, imageChat: imageChat,
             autoAllowTools: ImageChatDefaults.AutoAllowTools);
         return ImageChatCreateOutcome.Ok(session);
     }

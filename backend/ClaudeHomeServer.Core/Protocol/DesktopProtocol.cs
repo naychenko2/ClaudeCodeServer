@@ -277,6 +277,13 @@ public static class DeviceExecPurposes
 {
     /// <summary>Ретранслятор чтения для других устройств: протокол — <see cref="RelayProtocol"/>.</summary>
     public const string Relay = "relay";
+
+    /// <summary>
+    /// Выдача папки проекта (решение владельца 2026-09-27, ADR-016 §5): агент создаёт папку и
+    /// добавляет её в корни машины. Отдельно от ретранслятора: тот не пишет по построению (G6).
+    /// Протокол — <see cref="BindFolderProtocol"/>.
+    /// </summary>
+    public const string BindFolder = BindFolderProtocol.Operation;
 }
 
 // ---------- устройство → сервер ----------
@@ -384,7 +391,10 @@ public static class DeviceCapabilities
     /// </summary>
     public const string Hands = "hands";
 
-    public static readonly IReadOnlyList<string> All = [Exec, Files, Relay, Hands];
+    /// <summary>Выдача папки проекта (<see cref="DeviceExecPurposes.BindFolder"/>); старый агент её не объявляет.</summary>
+    public const string BindFolder = "bind-folder";
+
+    public static readonly IReadOnlyList<string> All = [Exec, Files, Relay, Hands, BindFolder];
 
     /// <summary>Только известные значения, без дублей, в порядке <see cref="All"/>.</summary>
     public static List<string> Normalize(IEnumerable<string>? declared)

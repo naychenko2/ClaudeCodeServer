@@ -29,6 +29,14 @@ internal static class CliEnvironment
         ["SystemRoot", "ComSpec", "PATHEXT", "TEMP", "TMP", "APPDATA", "LOCALAPPDATA"];
 
     /// <summary>
+    /// Дополнительно не на Windows — графическая сессия: без неё приложения, которые ход
+    /// открывает (<c>xdg-open</c>, <c>gtk-launch</c>), не находят экран. Свежие значения при
+    /// старте хода подкладывает <see cref="GraphicalSessionEnvironment"/>.
+    /// </summary>
+    public static readonly IReadOnlyList<string> InheritedFromGraphicalSession =
+        ["DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "XDG_RUNTIME_DIR"];
+
+    /// <summary>
     /// Ключи, которые сервер вправе прислать в spawn: только поведенческие. Всё прочее
     /// агент отбрасывает — даже скомпрометированный сервер не уведёт CLI на свой адрес.
     /// </summary>
@@ -42,7 +50,7 @@ internal static class CliEnvironment
     {
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         names.UnionWith(InheritedEverywhere);
-        if (windows) names.UnionWith(InheritedOnWindows);
+        names.UnionWith(windows ? InheritedOnWindows : InheritedFromGraphicalSession);
         names.UnionWith(["CLAUDE_CONFIG_DIR", "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "NO_PROXY", "HTTPS_PROXY"]);
         names.UnionWith(ManagedCliEnvironment.Variables.Keys);
         names.UnionWith(AllowedFromServer);
@@ -71,7 +79,7 @@ internal static class CliEnvironment
         foreach (var (key, value) in fromServer ?? new Dictionary<string, string>())
             if (AllowedFromServer.Contains(key)) env[key] = value;
 
-        foreach (var name in windows ? InheritedEverywhere.Concat(InheritedOnWindows) : InheritedEverywhere)
+        foreach (var name in InheritedEverywhere.Concat(windows ? InheritedOnWindows : InheritedFromGraphicalSession))
             if (source.TryGetValue(name, out var value) && value.Length > 0) env[name] = value;
 
         env.TryAdd("LANG", DefaultLang);

@@ -2,6 +2,7 @@ using ClaudeHomeServer.DeviceAgent.Cli;
 using ClaudeHomeServer.DeviceAgent.Exec;
 using ClaudeHomeServer.DeviceAgent.Hosting;
 using ClaudeHomeServer.DeviceAgent.Tests.Exec;
+using ClaudeHomeServer.DeviceAgent.Tests.Supervision;
 using ClaudeHomeServer.DeviceAgent.Update;
 using ClaudeHomeServer.Protocol;
 
@@ -13,6 +14,9 @@ public class AgentCoordinatorTests
     {
         public List<DeviceHello> Hellos { get; } = [];
         public string? RequiredCli { get; set; } = "2.1.0";
+
+        /// <summary>«Последняя версия» раздачи сервера; null — сервер агента не раздаёт.</summary>
+        public volatile string? LatestAgent;
         public TaskCompletionSource<bool> SecondHello { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public event Func<DeviceExecOpenCommand, Task>? ExecOpen;
@@ -25,8 +29,13 @@ public class AgentCoordinatorTests
                 Hellos.Add(hello);
                 if (Hellos.Count >= 2) SecondHello.TrySetResult(true);
             }
+            var latest = LatestAgent;
             return Task.FromResult(new DeviceHelloAck(1, 2, 1024, 10, RequiredCli, hello.CliVersion == RequiredCli,
-                hello.CliVersion == RequiredCli ? null : "Агент устройства не готов"));
+                hello.CliVersion == RequiredCli ? null : "Агент устройства не готов",
+                AgentLatestVersion: latest,
+                AgentArchiveSha256: latest is null ? null : new string('a', 64),
+                AgentArchiveSize: latest is null ? null : 10,
+                AgentArchivePath: latest is null ? null : $"{latest}/linux-x64/agent.tar.gz"));
         }
 
         public Task RaiseExecOpen(DeviceExecOpenCommand c) => ExecOpen!.Invoke(c);
@@ -151,6 +160,25 @@ public class AgentCoordinatorTests
     }
 
     [Fact]
+    public async Task Назначение_bind_project_folder_уходит_выдаче_папки_и_объявлено_в_hello()
+    {
+        var control = new FakeControl();
+        var server = new ExecTestServer();
+        var bind = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var relayRan = false;
+        await using var coordinator = new AgentCoordinator(control, new FakeHarness(), server, (_, _) => Task.CompletedTask, "0.9.0",
+            runRelay: (_, _) => { relayRan = true; return Task.CompletedTask; },
+            runBindFolder: (link, _) => { bind.TrySetResult(link.ExecId); return Task.CompletedTask; });
+
+        await coordinator.HelloAsync();
+        await control.RaiseExecOpen(new DeviceExecOpenCommand("b-1", DeviceExecProtocol.Version, DeviceExecPurposes.BindFolder));
+
+        (await bind.Task.WaitAsync(TimeSpan.FromSeconds(10))).Should().Be("b-1");
+        relayRan.Should().BeFalse("канал выдачи папки не идёт ретранслятору");
+        control.Hellos.Single().Capabilities.Should().Contain(DeviceCapabilities.BindFolder);
+    }
+
+    [Fact]
     public async Task Незнакомое_назначение_канал_не_открывает()
     {
         var control = new FakeControl();
@@ -191,6 +219,61 @@ public class AgentCoordinatorTests
 
         (await control.SecondHello.Task.WaitAsync(TimeSpan.FromSeconds(10))).Should().BeTrue();
         control.Hellos.Last().AgentUpdate!.State.Should().Be(DeviceAgentUpdateStates.WaitingIdle);
+    }
+
+    /// <summary>Архив, который качается вечно: обновлятор застывает в downloading.</summary>
+    private sealed class EndlessArchives : IAgentArchiveSource
+    {
+        public async Task<Stream> OpenAsync(string relativePath, CancellationToken ct)
+        {
+            await Task.Delay(Timeout.Infinite, ct);
+            throw new OperationCanceledException(ct);
+        }
+    }
+
+    [Fact]
+    public async Task Новая_версия_на_сервере_без_переподключения_доводит_агента_до_downloading_за_один_период()
+    {
+        var period = TimeSpan.FromMinutes(30);
+        using var install = new TempInstall("1.5.0");
+        install.Layout.SetActive("1.5.0");
+        var activity = new ActivityRegistry();
+        var updater = new AgentUpdater(install.Layout, "1.5.0", "linux-x64", new EndlessArchives(), activity, _ => { }, () => "1.5.0");
+        var downloading = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        updater.Changed += s => { if (s.State == DeviceAgentUpdateStates.Downloading) downloading.TrySetResult(s.TargetVersion); };
+        var control = new FakeControl { LatestAgent = "1.5.0" };
+        var clock = new ManualClock();
+        using var stop = new CancellationTokenSource();
+        await using var coordinator = new AgentCoordinator(control, new FakeHarness(), new ExecTestServer(),
+            (_, _) => Task.CompletedTask, "1.5.0", updates: updater, activity: activity, time: clock);
+        var updates = updater.RunAsync(stop.Token);
+
+        await coordinator.HelloAsync();
+        var checks = coordinator.RunUpdateChecksAsync(period, stop.Token);
+        await clock.TimerArmed.WaitAsync(TimeSpan.FromSeconds(10));
+
+        // Выкатили только агента: сервер не перезапускался, хаб не рвался
+        control.LatestAgent = "2.0.0";
+        clock.Advance(AgentCoordinator.Jittered(period, 0) - TimeSpan.FromSeconds(1));
+        control.Hellos.Should().ContainSingle("раньше нижней границы периода проверки нет");
+
+        clock.Advance(period * (2 * AgentCoordinator.UpdateCheckJitter) + TimeSpan.FromSeconds(1));
+
+        (await downloading.Task.WaitAsync(TimeSpan.FromSeconds(10))).Should().Be("2.0.0");
+        control.Hellos.Count.Should().BeGreaterThanOrEqualTo(2);
+
+        await stop.CancelAsync();
+        await checks.WaitAsync(TimeSpan.FromSeconds(10));
+        (await updates.WaitAsync(TimeSpan.FromSeconds(10))).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Разброс_периода_проверки_в_пределах_десяти_процентов()
+    {
+        var period = TimeSpan.FromMinutes(30);
+        AgentCoordinator.Jittered(period, 0).Should().Be(TimeSpan.FromMinutes(27));
+        AgentCoordinator.Jittered(period, 0.5).Should().Be(period);
+        AgentCoordinator.Jittered(period, 0.999999).Should().BeCloseTo(TimeSpan.FromMinutes(33), TimeSpan.FromSeconds(1));
     }
 
     [Fact]

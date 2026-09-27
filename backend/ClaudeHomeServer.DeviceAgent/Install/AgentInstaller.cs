@@ -158,26 +158,45 @@ internal sealed class AgentUninstaller(
             output.WriteLine("Агент не был сопряжён — отзывать на сервере нечего");
         }
 
+        ShimRemoval? removal = null;
         try
         {
-            shim.Remove();
-            output.WriteLine($"Команда ai-home-agent снята: {shim.Location}");
+            removal = shim.Remove(withRoot: purge);
+            output.WriteLine(removal switch
+            {
+                ShimRemoval.AlreadyGone => $"Команда ai-home-agent уже снята: {shim.Location}",
+                ShimRemoval.Deferred => $"Команда ai-home-agent снята: {shim.Location} удалится, " +
+                    "когда завершится этот вызов",
+                _ => $"Команда ai-home-agent снята: {shim.Location}",
+            });
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
             output.WriteLine($"Команда ai-home-agent не снята ({e.Message}) — удали {shim.Location} руками");
         }
 
-        if (purge) Purge();
+        var deferred = removal == ShimRemoval.Deferred;
+        if (purge) Purge(deferredRoot: deferred);
         output.WriteLine("Агент удалён");
+
+        // Последним действием: отложенная команда ждёт выхода этого процесса, и всё, что делалось
+        // бы после её запуска (purge, вывод), шло бы наперегонки с её rmdir
+        if (deferred && !shim.StartDeferredRemoval())
+            output.WriteLine($"Отложенное удаление не запустилось — после выхода удали руками {(purge ? layout.Root : shim.Location)}");
         return 0;
     }
 
-    private void Purge()
+    // Корень с шимом под исполняемым cmd удалит отложенная команда шима — вместе с версией, из которой идёт uninstall
+    private void Purge(bool deferredRoot)
     {
         foreach (var dir in new[] { layout.Root, paths.DataDirectory, paths.ConfigDirectory }.Distinct())
         {
             if (!Directory.Exists(dir)) continue;
+            if (deferredRoot && dir == layout.Root)
+            {
+                output.WriteLine($"Удалится, когда завершится этот вызов: {dir}");
+                continue;
+            }
             try
             {
                 Directory.Delete(dir, recursive: true);

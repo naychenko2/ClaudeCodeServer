@@ -16,6 +16,8 @@ import { canvasRevision, canvasSnapshot } from './snapshot';
 
 // Подсказки пустой ленты — из макета image-editor-v2
 const SUGGESTIONS = ['Убери вон ту лампу и сделай вечер', 'Придумай промпт для обложки блога'];
+// У черновика «Нарисовать картинку» картинки ещё нет: примеры того, что нарисовать
+const DRAFT_SUGGESTIONS = ['Нарисуй уютную кофейню на закате, акварель', 'Придумай обложку для поста о походе в горы'];
 
 // Открыть чат проекта тем же каналом, что диплинки: воркспейс подхватит ключ
 export function openProjectChat(projectId: string, sessionId: string) {
@@ -30,11 +32,14 @@ export interface ImageChatCanvas {
   stepId: string | null;
 }
 
-export function useImageChat({ api, projectId, sourcePath, openSessionId, canvas, chatVisible, onClose, onOpenPath }: {
+export function useImageChat({ api, projectId, sourcePath, folder, openSessionId, canvas, chatVisible, onClose, onOpenPath }: {
   api: ImageEditorApi;
   projectId: string;
-  // null — картинки в проекте нет (с компьютера, «Нарисовать»): чата нет
+  // null — картинки в проекте нет (с компьютера, «Нарисовать»): чат-черновик по папке,
+  // к файлу он переходит при первом сохранении
   sourcePath: string | null;
+  // Папка, куда ляжет новая картинка ("" — корень проекта)
+  folder: string;
   // Чат, с которым редактор открыли (карточка чата в списке)
   openSessionId?: string | null;
   canvas: ImageChatCanvas;
@@ -54,26 +59,40 @@ export function useImageChat({ api, projectId, sourcePath, openSessionId, canvas
 
   // Поиск — один раз на открытие: дальше чат идёт за редактором сам (сохранение переносит его)
   const openPath = useRef(sourcePath);
+  // Черновик ищется только по ссылке: у новой картинки файла нет, искать чат не по чему
   useEffect(() => {
     const path = openPath.current;
-    if (!path) return;
+    if (!path && !openSessionId) return;
     let alive = true;
     const byLink = openSessionId
       ? appApi.chats.get(openSessionId).then(s => (s.imageChat ? s : null)).catch(() => null)
       : Promise.resolve(null);
-    void Promise.all([byLink, api.findChats(projectId, path).catch(() => null)]).then(([linked, found]) => {
+    const byPath = path ? api.findChats(projectId, path).catch(() => null) : Promise.resolve(null);
+    void Promise.all([byLink, byPath]).then(([linked, found]) => {
       if (!alive) return;
       const chat = linked ?? found?.current ?? null;
       setContinued(found && !found.current ? found.continued : []);
       if (!chat) return;
       setSession(chat);
-      if (chat.imageChat && chat.imageChat.currentPath !== path) setStrayPath(chat.imageChat.currentPath);
-      showToast(`Открыт чат этой картинки: «${chat.name}»`, '', 'info');
+      const at = chat.imageChat?.currentPath;
+      if (path && at && at !== path) setStrayPath(at);
+      if (path) showToast(`Открыт чат этой картинки: «${chat.name}»`, '', 'info');
     });
     return () => { alive = false; };
   }, [api, projectId, openSessionId]);
 
   const sessionId = session?.id ?? null;
+  const draft = !sourcePath;
+
+  // Сохранение переводит чат на файл (черновик — впервые): перечитываем сессию, чтобы
+  // imageChat знал новый путь
+  const boundPath = session?.imageChat?.currentPath ?? null;
+  useEffect(() => {
+    if (!sessionId || !sourcePath || boundPath === sourcePath) return;
+    let alive = true;
+    appApi.chats.get(sessionId).then(s => { if (alive) setSession(s); }).catch(() => {});
+    return () => { alive = false; };
+  }, [sessionId, sourcePath, boundPath]);
 
   // Последний отправленный снимок живёт и в состоянии на сервере — переживает перезагрузку
   useEffect(() => {
@@ -96,9 +115,11 @@ export function useImageChat({ api, projectId, sourcePath, openSessionId, canvas
     });
   }, [sessionId]);
 
-  const fileName = sourcePath ? splitPath(sourcePath).name : '';
+  const fileName = sourcePath ? splitPath(sourcePath).name : 'новая картинка';
   const { marks, size, stepId } = canvas;
-  const revision = sourcePath && size && stepId ? canvasRevision(sourcePath, stepId, marks, size) : null;
+  // Пока картинки нет (нет шага на холсте), ревизии нет — снимок не прикладывается
+  const draftKey = sourcePath ? `image:${projectId}:${sourcePath}` : `image:${projectId}:draft:${folder}`;
+  const revision = size && stepId ? canvasRevision(sourcePath ?? draftKey, stepId, marks, size) : null;
   const changed = !!revision && revision !== lastSent;
 
   const snapshot = useMemo(() => (revision ? {
@@ -126,14 +147,13 @@ export function useImageChat({ api, projectId, sourcePath, openSessionId, canvas
     return { text, paths: [...paths, path], snapshot: { revision: rev, attached: true } };
   }, [projectId]);
 
-  const createChat = useCallback(async (personaId?: string) => {
-    if (!sourcePath) throw new Error('Картинки нет в проекте');
-    return api.createChat(projectId, { sourcePath, personaId: personaId ?? null });
-  }, [api, projectId, sourcePath]);
+  const createChat = useCallback(async (personaId?: string) => api.createChat(projectId, sourcePath
+    ? { sourcePath, personaId: personaId ?? null }
+    : { folder, personaId: personaId ?? null }), [api, projectId, sourcePath, folder]);
 
   const newChat = () => {
     if (!session) return;
-    showToast(`Новый чат по ${fileName}. Прежний «${session.name}» остался в списке чатов проекта`, '', 'info');
+    showToast(`Новый чат по ${draft ? 'новой картинке' : fileName}. Прежний «${session.name}» остался в списке чатов проекта`, '', 'info');
     setSession(null);
     setLastSent(null);
     setSnapOn(true);
@@ -153,13 +173,20 @@ export function useImageChat({ api, projectId, sourcePath, openSessionId, canvas
   const who = persona ? personaLabel(persona) : 'Claude';
   const ic = (I: typeof ImageIcon) => <I size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />;
 
-  const leadIn = sourcePath ? (
-    <div data-image-chat-lead="" style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, fontSize: FS.sm, color: C.textMuted, lineHeight: 1.45 }}>
+  const leadIn = (
+    <div data-image-chat-lead="" data-image-chat-draft={draft ? '' : undefined} style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, fontSize: FS.sm, color: C.textMuted, lineHeight: 1.45 }}>
       <div style={{ display: 'flex', gap: SP.xs, alignItems: 'flex-start' }}>
         <span style={{ display: 'inline-flex', paddingTop: 2 }}>{ic(ImageIcon)}</span>
-        <span style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
-          Чат привязан к <b style={{ color: C.textPrimary }}>{sourcePath}</b>. {who} видит картинку, пометки, образцы и промпт — и может сам запустить генерацию.
-        </span>
+        {draft ? (
+          <span style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
+            Опишите, что нарисовать, — {who} подберёт промпт и сам запустит генерацию. Картинка ляжет в{' '}
+            <b style={{ color: C.textPrimary }}>{folder ? `${folder}/` : 'корень проекта'}</b>, чат перейдёт на файл при сохранении.
+          </span>
+        ) : (
+          <span style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
+            Чат привязан к <b style={{ color: C.textPrimary }}>{sourcePath}</b>. {who} видит картинку, пометки, образцы и промпт — и может сам запустить генерацию.
+          </span>
+        )}
       </div>
       {strayPath && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs, alignItems: 'flex-start' }}>
@@ -167,15 +194,15 @@ export function useImageChat({ api, projectId, sourcePath, openSessionId, canvas
           <Button size="sm" variant="secondary" leftIcon={ic(Link2)} onClick={() => { void bindHere(); }}>Привязать чат к этому файлу</Button>
         </div>
       )}
-      {!session && continued[0]?.imageChat && (
+      {!session && continued[0]?.imageChat?.currentPath && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs, alignItems: 'flex-start' }}>
           <span style={{ color: C.textSecondary }}>Разговор об этой картинке продолжился на {continued[0].imageChat.currentPath}</span>
-          <Button size="sm" variant="ghost" onClick={() => onOpenPath(continued[0].imageChat!.currentPath)}>Открыть</Button>
+          <Button size="sm" variant="ghost" onClick={() => onOpenPath(continued[0].imageChat!.currentPath!)}>Открыть</Button>
         </div>
       )}
       {session && (
         <div style={{ display: 'flex', gap: SP.xs, flexWrap: 'wrap' }}>
-          <Button size="sm" variant="ghost" leftIcon={ic(MessageSquarePlus)} title="Новый чат по этой картинке" onClick={newChat}>Новый чат</Button>
+          <Button size="sm" variant="ghost" leftIcon={ic(MessageSquarePlus)} title={draft ? 'Новый чат по новой картинке' : 'Новый чат по этой картинке'} onClick={newChat}>Новый чат</Button>
           <Button size="sm" variant="ghost" leftIcon={ic(ExternalLink)} title="Открыть в полном чате"
             onClick={() => { openProjectChat(projectId, session.id); onClose(); }}>
             Открыть в полном чате
@@ -183,12 +210,12 @@ export function useImageChat({ api, projectId, sourcePath, openSessionId, canvas
         </div>
       )}
     </div>
-  ) : null;
+  );
 
-  const props: ImageChatSlotProps | null = sourcePath ? {
-    projectId, sourcePath, sessionId, draftKey: `image:${projectId}:${sourcePath}`, leadIn,
-    prepareSend, createChat, onSessionChange: setSession, snapshot, suggestions: SUGGESTIONS,
-  } : null;
+  const props: ImageChatSlotProps = {
+    projectId, sourcePath, sessionId, draftKey, leadIn,
+    prepareSend, createChat, onSessionChange: setSession, snapshot, suggestions: draft ? DRAFT_SUGGESTIONS : SUGGESTIONS,
+  };
 
   return {
     sessionId, props, unread: unread && !chatVisible, markRead: () => setUnread(false),

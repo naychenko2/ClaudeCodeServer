@@ -83,6 +83,8 @@ public enum DeviceExecRefusal
     AgentOutdated,
     /// <summary>Агент отказал ходу по кадру spawn: папка вне разрешённых корней машины, нет копии CLI.</summary>
     AgentRefused,
+    /// <summary>Агент устройства не объявил выдачу папки проекта (старая версия).</summary>
+    NoBindFolderCapability,
 }
 
 /// <summary>Отказ открыть канал исполнения; <see cref="Exception.Message"/> — готовый текст для человека.</summary>

@@ -54,6 +54,8 @@ internal sealed class SystemdUserAutostart(
 {
     public const string UnitName = "ai-home-agent.service";
 
+    private const string GraphicalTarget = "graphical-session.target";
+
     /// <summary>Переменные, которые определяют каталоги агента: у менеджера systemd они бывают другими, чем в терминале.</summary>
     private static readonly string[] InheritedVariables = ["XDG_CONFIG_HOME", "XDG_DATA_HOME"];
 
@@ -79,12 +81,22 @@ internal sealed class SystemdUserAutostart(
 
     public string ExecutablePath => Path.Combine(layout.CurrentLink, SupervisorContract.ExecutableName);
 
-    /// <summary>Текст unit: путь — через симлинк current, переменные каталогов — из окружения установки.</summary>
-    public static string RenderUnit(string executable, IReadOnlyDictionary<string, string> environment)
+    /// <summary>
+    /// Текст unit: путь — через симлинк current, переменные каталогов — из окружения установки.
+    /// Обычный режим стартует от <c>default.target</c>, как и раньше: <c>graphical-session.target</c>
+    /// поднимают не все окружения (XFCE, MATE, i3, LXQt, старый Plasma, xrdp), и unit только на
+    /// нём там не стартовал бы вовсе. Графическая цель добавлена второй — для порядка, где она
+    /// есть; <c>PartOf</c> нет намеренно, иначе без графической сессии unit не живёт.
+    /// <c>DISPLAY</c>/<c>WAYLAND_DISPLAY</c> агент добирает при старте хода из окружения
+    /// менеджера (<see cref="GraphicalSessionEnvironment"/>), а не выбором цели.
+    /// </summary>
+    public static string RenderUnit(string executable, IReadOnlyDictionary<string, string> environment, bool alwaysOn)
     {
         var text = new StringBuilder()
             .AppendLine("[Unit]")
-            .AppendLine("Description=AI Home: агент устройства")
+            .AppendLine("Description=AI Home: агент устройства");
+        if (!alwaysOn) text.AppendLine($"After={GraphicalTarget}");
+        text
             .AppendLine()
             .AppendLine("[Service]")
             .AppendLine("Type=simple")
@@ -96,7 +108,7 @@ internal sealed class SystemdUserAutostart(
         return text
             .AppendLine()
             .AppendLine("[Install]")
-            .AppendLine("WantedBy=default.target")
+            .AppendLine(alwaysOn ? "WantedBy=default.target" : $"WantedBy=default.target {GraphicalTarget}")
             .ToString()
             .Replace("\r\n", "\n");
     }
@@ -105,19 +117,30 @@ internal sealed class SystemdUserAutostart(
     {
         if (!IsAvailable()) return new AutostartResult(false, [ManualInstruction()]);
 
-        var unit = RenderUnit(ExecutablePath, environment);
+        var unit = RenderUnit(ExecutablePath, environment, alwaysOn);
         Directory.CreateDirectory(unitDirectory);
-        if (!File.Exists(UnitFile) || File.ReadAllText(UnitFile) != unit) AgentLayout.WriteAtomic(UnitFile, unit);
+        var existed = File.Exists(UnitFile);
+        var changed = !existed || File.ReadAllText(UnitFile) != unit;
+        if (changed) AgentLayout.WriteAtomic(UnitFile, unit);
 
         var notes = new List<string>();
         Require(Systemctl("daemon-reload"), "daemon-reload");
-        Require(Systemctl("enable", UnitName), "enable");
+        // Сменился WantedBy (режим --always-on) — enable оставил бы ссылку в старом *.wants
+        var enable = existed && changed ? "reenable" : "enable";
+        Require(Systemctl(enable, UnitName), enable);
         if (alwaysOn)
         {
             var (code, output) = runner.Run("loginctl", ["enable-linger"]);
             notes.Add(code == 0
                 ? "linger включён: агент поднимется при загрузке машины без входа"
                 : $"linger не включился ({output}); выполни с правами администратора: sudo loginctl enable-linger {Environment.UserName}");
+        }
+        // Переход с --always-on: linger install не снимает — он мог быть включён и не ради агента
+        else if (runner.Run("loginctl", ["show-user", Environment.UserName, "--property=Linger", "--value"]) is (0, var linger)
+                 && linger.Trim() == "yes")
+        {
+            notes.Add("linger остался включён: агент по-прежнему поднимется при загрузке машины без входа. " +
+                "Не нужно — выключи: loginctl disable-linger");
         }
         return new AutostartResult(true, notes);
     }

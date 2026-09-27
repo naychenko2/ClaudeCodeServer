@@ -258,7 +258,11 @@ export interface ImageTransformResponse { stepId: string | null; width: number; 
 
 // ── Чат картинки: …/image-editor/chats (ADR-018 §1) ────────────────────────────
 
-export interface ImageChatCreateRequest { sourcePath: string; personaId?: string | null }
+// Ровно одно из двух: sourcePath — чат файла проекта; folder — чат-черновик «Нарисовать
+// картинку» по папке назначения ("" — корень проекта), файл появится при первом сохранении
+export type ImageChatCreateRequest =
+  | { sourcePath: string; folder?: undefined; personaId?: string | null }
+  | { folder: string; sourcePath?: undefined; personaId?: string | null };
 
 // current — чат с currentPath == path; continued — чаты, у которых path в lineage
 export interface ImageChatLookupResponse { current: Session | null; continued: Session[] }
@@ -561,7 +565,9 @@ export function createMockApi(mode: 'fal' | 'all'): ImageEditorApi {
   const moveChat = (sessionId: string | null | undefined, to: string) => {
     const chat = sessionId ? chats.get(sessionId) : undefined;
     if (!chat?.imageChat || chat.imageChat.currentPath === to) return;
-    chat.imageChat = { currentPath: to, lineage: [...chat.imageChat.lineage, chat.imageChat.currentPath] };
+    const was = chat.imageChat.currentPath;
+    // Черновик привязывается к первому сохранённому файлу: прежнего пути нет
+    chat.imageChat = { currentPath: to, lineage: was ? [...chat.imageChat.lineage, was] : chat.imageChat.lineage };
   };
 
   const emptyState = (): ImageChatState => ({
@@ -711,9 +717,11 @@ export function createMockApi(mode: 'fal' | 'all'): ImageEditorApi {
       const now = new Date().toISOString();
       const chat: Session = {
         id: `mock-image-chat-${++seq}`, projectId, personaId: req.personaId ?? undefined,
-        name: `${req.sourcePath.split('/').pop()} · правка`, mode: 'default', status: 'finished',
-        messageCount: 0, createdAt: now, updatedAt: now, origin: 'manual',
-        imageChat: { currentPath: req.sourcePath, lineage: [] },
+        name: req.sourcePath != null ? `${req.sourcePath.split('/').pop()} · правка` : `Новая картинка · ${req.folder || 'корень проекта'}`,
+        mode: 'default', status: 'finished', messageCount: 0, createdAt: now, updatedAt: now, origin: 'manual',
+        imageChat: req.sourcePath != null
+          ? { currentPath: req.sourcePath, lineage: [] }
+          : { currentPath: null, draftFolder: req.folder, lineage: [] },
       };
       chats.set(chat.id, chat);
       return delay({ ...chat }, 200);

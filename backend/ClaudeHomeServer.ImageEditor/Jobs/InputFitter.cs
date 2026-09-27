@@ -24,8 +24,12 @@ public sealed class InputFitter(IImageRaster raster)
     {
         var source = input.Source is { Bytes.Length: > 0 } ? input.Source : null;
         var probe = source is null ? null : raster.Probe(source.Bytes);
+        // Без исходника (генерация по тексту) образцы — например, фото персонажа — всё равно ужимаются
         if (source is null || probe is null)
-            return Ok(new FittedInput(input, null, null));
+        {
+            var refs = await FitReferencesAsync(input, caps, ct);
+            return refs.Error is not null ? FailOutcome(refs.Error) : Ok(new FittedInput(input with { References = refs.List! }, null, null));
+        }
 
         var fittedSource = await FitImageAsync(source, probe, caps, ct);
         if (fittedSource.Error is not null) return Fail(fittedSource);
@@ -41,18 +45,9 @@ public sealed class InputFitter(IImageRaster raster)
             annotated = r.Image;
         }
 
-        var references = new List<ReferenceImage>();
-        foreach (var reference in input.References ?? [])
-        {
-            if (raster.Probe(reference.Bytes) is not { } rp)
-            {
-                references.Add(reference);
-                continue;
-            }
-            var r = await FitImageAsync(new ImageBytes(reference.Bytes, reference.ContentType), rp, caps, ct);
-            if (r.Error is not null) return Fail(r);
-            references.Add(reference with { Bytes = r.Image!.Bytes, ContentType = r.Image.ContentType });
-        }
+        var fittedRefs = await FitReferencesAsync(input, caps, ct);
+        if (fittedRefs.Error is not null) return FailOutcome(fittedRefs.Error);
+        var references = fittedRefs.List!;
 
         var mask = input.Mask;
         if (mask is { Bytes.Length: > 0 } && raster.Probe(mask.Bytes) is { } mp
@@ -126,6 +121,23 @@ public sealed class InputFitter(IImageRaster raster)
         return new Fitted(new ImageBytes(outcome.Image!.Bytes, ContentTypeOf(outcome.Image.Format)), null);
     }
 
+    private async Task<FittedRefs> FitReferencesAsync(ImageEditJobInput input, ImageEditCaps caps, CancellationToken ct)
+    {
+        var references = new List<ReferenceImage>();
+        foreach (var reference in input.References ?? [])
+        {
+            if (raster.Probe(reference.Bytes) is not { } rp)
+            {
+                references.Add(reference);
+                continue;
+            }
+            var r = await FitImageAsync(new ImageBytes(reference.Bytes, reference.ContentType), rp, caps, ct);
+            if (r.Error is not null) return new FittedRefs(null, r.Error);
+            references.Add(reference with { Bytes = r.Image!.Bytes, ContentType = r.Image.ContentType });
+        }
+        return new FittedRefs(references, null);
+    }
+
     // Семафор растра не ждёт (Wait(0)); запуск задачи — ждёт недолго, прежде чем сдаться
     private async Task<RasterOutcome> RunAsync(Func<RasterOutcome> op, CancellationToken ct)
     {
@@ -145,6 +157,8 @@ public sealed class InputFitter(IImageRaster raster)
     };
 
     private sealed record Fitted(ImageBytes? Image, RasterOutcome? Error);
+
+    private sealed record FittedRefs(List<ReferenceImage>? List, RasterOutcome? Error);
 
     private static ImageEditCallResult<FittedInput> Ok(FittedInput value) => ImageEditCallResult<FittedInput>.Ok(value);
 

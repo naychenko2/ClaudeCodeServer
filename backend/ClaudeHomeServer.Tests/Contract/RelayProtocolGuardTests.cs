@@ -18,8 +18,10 @@ namespace ClaudeHomeServer.Tests.Contract;
 /// </summary>
 public sealed class RelayProtocolGuardTests
 {
+    // check-path — вердикт политики корней по папке проекта (exists/isDirectory/insideRoots),
+    // только чтение: создание и перепривязка локального проекта спрашивают агента до сохранения
     private static readonly string[] AllowedOperations =
-        ["list", "read", "stat", "search", "git-status", "git-diff", "git-log", "git-show"];
+        ["list", "read", "stat", "search", "git-status", "git-diff", "git-log", "git-show", "check-path"];
 
     // Поля запроса: ни одно не несёт данных для записи (содержимого, нового имени, сообщения коммита)
     private static readonly string[] AllowedRequestFields =
@@ -70,10 +72,13 @@ public sealed class RelayProtocolGuardTests
         relay.Operations.Should().BeEquivalentTo(AllowedOperations);
     }
 
+    // Второе назначение — выдача папки проекта (решение владельца 2026-09-27): оно пишет
+    // (создаёт папку, добавляет корень), поэтому живёт отдельным назначением, а не операцией
+    // ретранслятора — allow-list G6 выше остаётся только чтением
     [Fact]
-    public void НазначенияКанала_ТолькоRelay()
+    public void НазначенияКанала_RelayИВыдачаПапки()
     {
-        Constants(typeof(DeviceExecPurposes)).Should().Equal(DeviceExecPurposes.Relay);
+        Constants(typeof(DeviceExecPurposes)).Should().BeEquivalentTo(DeviceExecPurposes.Relay, DeviceExecPurposes.BindFolder);
     }
 
     private sealed class FixedRoots(string root) : IAgentRoots

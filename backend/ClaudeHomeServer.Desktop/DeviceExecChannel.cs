@@ -36,7 +36,7 @@ public sealed class DeviceHubExecOpenSender(IHubContext<DeviceHub, IDesktopDevic
 /// Авторизация WebSocket — только токен устройства плюс отпечаток: дефолтная JwtBearer и
 /// сервисный JWT владельца канал не открывают (та же граница, что у /api/devices/*).
 /// </summary>
-public sealed class DeviceExecChannel : IDeviceExecChannel, IDeviceRelayChannel
+public sealed class DeviceExecChannel : IDeviceExecChannel, IDeviceRelayChannel, IDeviceFolderBindChannel
 {
     private readonly DeviceRegistry _registry;
     private readonly DesktopCallRouter _router;
@@ -184,6 +184,31 @@ public sealed class DeviceExecChannel : IDeviceExecChannel, IDeviceRelayChannel
             ?? throw new DeviceExecRefusedException(DeviceExecRefusal.Offline, $"{name} не в сети.");
 
         return await OpenStreamAsync(connection, DeviceExecPurposes.Relay, RelayProtocol.MaxOutage, ct,
+            $"{name} не ответило за {(int)DeviceExecProtocol.OpenTimeout.TotalSeconds} с.");
+    }
+
+    /// <summary>
+    /// Канал одной выдачи папки проекта (решение владельца 2026-09-27): назначение
+    /// <see cref="DeviceExecPurposes.BindFolder"/>, короткий потолок простоя как у ретранслятора.
+    /// </summary>
+    public async Task<IDeviceExecStream> OpenBindFolderAsync(string ownerId, string deviceId, CancellationToken ct = default)
+    {
+        var status = GetStatus(ownerId, deviceId)
+            ?? throw new DeviceExecRefusedException(DeviceExecRefusal.UnknownDevice, "Устройство не найдено или отозвано.");
+
+        var name = $"Устройство «{status.DeviceName}»";
+        if (!status.Online)
+            throw new DeviceExecRefusedException(DeviceExecRefusal.Offline, $"{name} не в сети.");
+        if (!status.HasCapability(DeviceCapabilities.BindFolder))
+            throw new DeviceExecRefusedException(DeviceExecRefusal.NoBindFolderCapability,
+                $"{name}: агент не умеет выдавать папку проекта — обнови агента.");
+        if (status.AgentOutdated)
+            throw new DeviceExecRefusedException(DeviceExecRefusal.AgentOutdated, $"{name}: {status.AgentProblem}.");
+
+        var connection = _router.Find(ownerId, deviceId)
+            ?? throw new DeviceExecRefusedException(DeviceExecRefusal.Offline, $"{name} не в сети.");
+
+        return await OpenStreamAsync(connection, DeviceExecPurposes.BindFolder, RelayProtocol.MaxOutage, ct,
             $"{name} не ответило за {(int)DeviceExecProtocol.OpenTimeout.TotalSeconds} с.");
     }
 

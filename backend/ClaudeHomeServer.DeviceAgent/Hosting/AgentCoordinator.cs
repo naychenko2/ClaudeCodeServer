@@ -62,22 +62,33 @@ internal interface IAgentUpdates
 /// (<see cref="DeviceHello.AgentUpdate"/>), смена состояния повторяет hello. Каждый канал
 /// исполнения — ход или запрос ретранслятора — держит аренду <see cref="ActivityRegistry"/>
 /// до конца работы: пока она открыта, агент на новую версию не переключается.
+/// Ack приходит только на hello, а hello — только при подключении, поэтому
+/// <see cref="RunUpdateChecksAsync"/> повторяет его раз в период: сервер, переоткрывший
+/// раздачу без рестарта, назовёт новую версию и без переподключения агента.
 /// </summary>
 internal sealed class AgentCoordinator : IAsyncDisposable
 {
     public static readonly TimeSpan DefaultMaxOutage = DeviceExecProtocol.MaxOutage;
+
+    /// <summary>Период повторной проверки обновления по умолчанию (<c>AI_HOME_AGENT_UPDATE_CHECK_MINUTES</c>).</summary>
+    public static readonly TimeSpan DefaultUpdateCheckPeriod = TimeSpan.FromMinutes(30);
+
+    /// <summary>Разброс периода: ±10 %, чтобы агенты, поднятые одной выкаткой, не стучались разом.</summary>
+    public const double UpdateCheckJitter = 0.1;
 
     private readonly IControlConnection _control;
     private readonly IHarness _harness;
     private readonly IExecSocketConnector _connector;
     private readonly Func<ExecLink, CancellationToken, Task> _runTurn;
     private readonly Func<ExecLink, CancellationToken, Task>? _runRelay;
+    private readonly Func<ExecLink, CancellationToken, Task>? _runBindFolder;
     private readonly IAgentUpdates? _updates;
     private readonly ActivityRegistry? _activity;
     private readonly HandsRuntime? _hands;
     private readonly string _agentVersion;
     private readonly ILogger _log;
     private readonly TimeSpan _maxOutage;
+    private readonly TimeProvider _time;
     private readonly SemaphoreSlim _helloLock = new(1, 1);
     private readonly CancellationTokenSource _stopping = new();
     private readonly List<Task> _turns = [];
@@ -89,14 +100,17 @@ internal sealed class AgentCoordinator : IAsyncDisposable
     public AgentCoordinator(IControlConnection control, IHarness harness, IExecSocketConnector connector,
         Func<ExecLink, CancellationToken, Task> runTurn, string agentVersion, ILogger? log = null, TimeSpan? maxOutage = null,
         Func<ExecLink, CancellationToken, Task>? runRelay = null, IAgentUpdates? updates = null, ActivityRegistry? activity = null,
+        TimeProvider? time = null, Func<ExecLink, CancellationToken, Task>? runBindFolder = null,
         HandsRuntime? hands = null)
     {
         _hands = hands;
+        _time = time ?? TimeProvider.System;
         _control = control;
         _harness = harness;
         _connector = connector;
         _runTurn = runTurn;
         _runRelay = runRelay;
+        _runBindFolder = runBindFolder;
         _updates = updates;
         _activity = activity;
         _agentVersion = agentVersion;
@@ -117,22 +131,25 @@ internal sealed class AgentCoordinator : IAsyncDisposable
         (OperatingSystem.IsWindows() ? "win" : OperatingSystem.IsMacOS() ? "osx" : "linux")
         + "-" + System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant();
 
-    public DeviceHello BuildHello()
+    public DeviceHello BuildHello() => new(
+        DesktopProtocol.Version,
+        SupportedSteps: [],
+        ClientVersion: _agentVersion,
+        Platform: PlatformName,
+        AgentVersion: _agentVersion,
+        CliVersion: _harness.ActiveVersion,
+        Capabilities: Capabilities(),
+        Rid: RidName,
+        AgentUpdate: _updates?.Status);
+
+    private List<string> Capabilities()
     {
         List<string> capabilities = [DeviceCapabilities.Exec, DeviceCapabilities.Files];
         if (_runRelay is not null) capabilities.Add(DeviceCapabilities.Relay);
+        if (_runBindFolder is not null) capabilities.Add(DeviceCapabilities.BindFolder);
         // Руки — только когда компонент установлен И сверен: ход с маркером иначе всё равно откажет
         if (_hands?.Component.IsReady == true) capabilities.Add(DeviceCapabilities.Hands);
-        return new DeviceHello(
-            DesktopProtocol.Version,
-            SupportedSteps: [],
-            ClientVersion: _agentVersion,
-            Platform: PlatformName,
-            AgentVersion: _agentVersion,
-            CliVersion: _harness.ActiveVersion,
-            Capabilities: capabilities,
-            Rid: RidName,
-            AgentUpdate: _updates?.Status);
+        return capabilities;
     }
 
     /// <summary>Hello; force = false — только если активная копия поменялась с прошлого раза.</summary>
@@ -192,6 +209,32 @@ internal sealed class AgentCoordinator : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Раз в <paramref name="period"/> (с разбросом) — hello ради свежего ack. Канал лежит —
+    /// hello не уходит, это не ошибка: после реконнекта его пошлёт <see cref="IControlConnection.Reconnected"/>.
+    /// </summary>
+    public async Task RunUpdateChecksAsync(TimeSpan period, CancellationToken ct)
+    {
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _stopping.Token);
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(Jittered(period, Random.Shared.NextDouble()), _time, linked.Token);
+                try { await HelloAsync(force: true); }
+                catch (Exception e) when (e is not OperationCanceledException)
+                {
+                    _log.LogInformation("Проверка обновления агента не ушла: {Error}", e.Message);
+                }
+            }
+        }
+        catch (OperationCanceledException) when (linked.IsCancellationRequested) { }
+    }
+
+    /// <summary>Период с разбросом; <paramref name="sample"/> ∈ [0, 1) растягивается на ±<see cref="UpdateCheckJitter"/>.</summary>
+    internal static TimeSpan Jittered(TimeSpan period, double sample) =>
+        period * (1 - UpdateCheckJitter + 2 * UpdateCheckJitter * sample);
+
     private void OnHarnessChanged(HarnessStatus status) => RepeatHello("смены копии CLI");
 
     private void OnUpdateChanged(DeviceAgentUpdate update) => RepeatHello("смены состояния обновления");
@@ -223,6 +266,7 @@ internal sealed class AgentCoordinator : IAsyncDisposable
         {
             null => (_runTurn, _maxOutage),
             DeviceExecPurposes.Relay when _runRelay is not null => (_runRelay, RelayProtocol.MaxOutage),
+            DeviceExecPurposes.BindFolder when _runBindFolder is not null => (_runBindFolder, RelayProtocol.MaxOutage),
             _ => ((Func<ExecLink, CancellationToken, Task>?)null, TimeSpan.Zero),
         };
         if (run is null)

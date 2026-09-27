@@ -22,7 +22,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects")]
-public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, UserStore users, UserHomeResolver homes, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory, ClaudeHomeServer.Services.Dossiers.DossierStore dossiers, KnowledgeService knowledge, PersonaManager personas, PersonaMemoryService personaMemory, ClaudeHomeServer.Services.Git.GitService git, ClaudeHomeServer.Services.Git.GitServerService gitServer, ClaudeHomeServer.Services.ProjectIcons.ProjectIconGlyphService iconGlyphs, FeatureFlagService flags, ClaudeHomeServer.Services.Desktop.DesktopHandsSessionService desktopHands, Services.Mcp.McpRegistry mcpRegistry, ChatArchiveService autoArchive, ILogger<ProjectsController> logger, IHubContext<SessionHub> hub, INoteSemanticIndex? notesKb = null, ClaudeHomeServer.Services.Execution.IDeviceExecChannel? deviceExec = null) : ControllerBase
+public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, UserStore users, UserHomeResolver homes, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory, ClaudeHomeServer.Services.Dossiers.DossierStore dossiers, KnowledgeService knowledge, PersonaManager personas, PersonaMemoryService personaMemory, ClaudeHomeServer.Services.Git.GitService git, ClaudeHomeServer.Services.Git.GitServerService gitServer, ClaudeHomeServer.Services.ProjectIcons.ProjectIconGlyphService iconGlyphs, FeatureFlagService flags, ClaudeHomeServer.Services.Desktop.DesktopHandsSessionService desktopHands, Services.Mcp.McpRegistry mcpRegistry, ChatArchiveService autoArchive, ILogger<ProjectsController> logger, IHubContext<SessionHub> hub, INoteSemanticIndex? notesKb = null, ClaudeHomeServer.Services.Execution.IDeviceExecChannel? deviceExec = null, ClaudeHomeServer.Services.Execution.IDeviceRelayChannel? deviceRelay = null, ClaudeHomeServer.Services.Execution.IDeviceFolderBindChannel? deviceFolders = null) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -30,7 +30,10 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     private Task BroadcastTeamMemory(string action, string projectId, string? entryId = null) =>
         hub.Clients.Group("user_" + UserId).SendAsync("message", new TeamMemoryChangedMessage(action, projectId, entryId));
 
-    private object WithCount(Project p)
+    private object WithCount(Project p) => WithCount(p, folderNotice: null);
+
+    // folderNotice — строка «Папка … создана и разрешена агенту» из ответа создания и перепривязки
+    private object WithCount(Project p, string? folderNotice)
     {
         // Путь показываем относительно домашней папки владельца — с учётом override она может
         // не совпадать с DefaultProjectsPath (иначе получилось бы «..\..\GIT\myproj»)
@@ -44,7 +47,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         // осиротевший дефолт (как в AuthController.Me для личной)
         var defaultPersonaId = p.DefaultPersonaId is { } dpid && personas.Get(dpid, UserId) is not null
             ? dpid : null;
-        return new { p.Id, p.Name, p.RootPath, RelativePath = relativePath, p.CreatedAt, p.UpdatedAt, p.GroupId, p.SystemPrompt, p.ShowHiddenFiles, p.PermissionRules, p.BoardColumns, p.TagRegistry, Icon = ProjectIconDto(p.Icon), p.McpServersOn, p.DesktopAgentEnabled, p.HandsEnabled, HandsRefusal = HandsToggleRefusal(p, device), Background = Services.Backgrounds.ProjectBackgroundView.Of(p), BuiltInSystemPrompt = ProjectManager.BuiltInSystemPrompt, SessionCount = sessions.CountByProject(p.Id), DefaultPersonaId = defaultPersonaId, p.OnboardingSessionId, p.PresetKey, p.AutoImportDossiers, p.ArchiveAfterDays, p.DeviceId, Device = DeviceDto(device), Capabilities = ProjectCapabilities.For(p, device) };
+        return new { p.Id, p.Name, p.RootPath, RelativePath = relativePath, p.CreatedAt, p.UpdatedAt, p.GroupId, p.SystemPrompt, p.ShowHiddenFiles, p.PermissionRules, p.BoardColumns, p.TagRegistry, Icon = ProjectIconDto(p.Icon), p.McpServersOn, p.DesktopAgentEnabled, p.HandsEnabled, HandsRefusal = HandsToggleRefusal(p, device), Background = Services.Backgrounds.ProjectBackgroundView.Of(p), BuiltInSystemPrompt = ProjectManager.BuiltInSystemPrompt, SessionCount = sessions.CountByProject(p.Id), DefaultPersonaId = defaultPersonaId, p.OnboardingSessionId, p.PresetKey, p.AutoImportDossiers, p.ArchiveAfterDays, p.DeviceId, Device = DeviceDto(device), Capabilities = ProjectCapabilities.For(p, device), FolderNotice = folderNotice };
     }
 
     // Можно ли включить руки проекта (ADR-016 §7): матрица без тумблера самого проекта —
@@ -73,6 +76,18 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     // Отказ привязать проект к устройству: флаг local-projects + возможность exec (ADR-016 §1)
     private string? BindRefusal(string deviceId) => ProjectCapabilities.BindRefusal(
         flags.IsEnabled(UserId, FeatureFlagKeys.LocalProjects), deviceExec?.GetStatus(UserId, deviceId));
+
+    // Папка на устройстве под проект: агент сам создаёт и разрешает её (DeviceFolderCheck.BindAsync),
+    // старый агент — только проверка. Refusal — отказ; Notice — что агент создал или разрешил
+    private async Task<DeviceFolderCheck.Verdict> DeviceFolderAsync(string deviceId, string devicePath, string? projectName)
+    {
+        if (deviceExec?.GetStatus(UserId, deviceId) is not { } device) return new(null, null); // отказал бы BindRefusal
+        var verdict = await DeviceFolderCheck.BindAsync(deviceFolders, deviceRelay, UserId, device, devicePath, projectName,
+            HttpContext.RequestAborted);
+        if (verdict.Warning is { } warning)
+            logger.LogWarning("Папка {Path} на устройстве {DeviceId} не проверена: {Warning}", devicePath, deviceId, warning);
+        return verdict;
+    }
 
     // DTO иконки (ADR-009 §4): значок едет ДАННЫМИ — имя рисует компонент lucide фронта,
     // разметки фронт не получает. Поле v — версия содержимого значка (ADR-009 §8).
@@ -221,10 +236,19 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         {
             var username = User.FindFirstValue(ClaimTypes.Name) ?? UserId;
             Project p;
+            string? folderNotice = null;
             if (!string.IsNullOrWhiteSpace(req.DeviceId))
             {
                 // Локальный проект (ADR-016): только за флагом и только на устройстве с exec
                 if (BindRefusal(req.DeviceId) is { } refusal) return BadRequest(new { error = refusal });
+                // Папку готовит агент до сохранения: создаёт и разрешает её, иначе ошибка
+                // всплыла бы первым ходом. Пустой путь отвергнет CreateLocal своим текстом
+                if (!string.IsNullOrWhiteSpace(req.RootPath))
+                {
+                    var folder = await DeviceFolderAsync(req.DeviceId, ProjectCapabilities.NormalizeDevicePath(req.RootPath), req.Name);
+                    if (folder.Refusal is { } folderRefusal) return BadRequest(new { error = folderRefusal });
+                    folderNotice = folder.Notice;
+                }
                 p = projects.CreateLocal(req.Name, req.RootPath ?? "", UserId, req.DeviceId, req.GroupId, req.Color);
             }
             else
@@ -253,7 +277,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
                     logger.LogWarning(ex, "Git при создании проекта {Name} не подключился (проект создан)", p.Name);
                 }
             }
-            return CreatedAtAction(nameof(GetById), new { id = p.Id }, WithCount(p));
+            return CreatedAtAction(nameof(GetById), new { id = p.Id }, WithCount(p, folderNotice));
         }
         catch (DirectoryNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
@@ -342,6 +366,22 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
             return BadRequest(new { error = refusal });
         if (!string.Equals(p.DeviceId, deviceId, StringComparison.Ordinal) && sessions.CountByProject(id) > 0)
             return Conflict(new { error = "Нельзя сменить устройство проекта: у проекта уже есть чаты. Удалите их и повторите." });
+        string? folderNotice = null;
+        if (deviceId is not null)
+        {
+            string devicePath;
+            try { devicePath = ProjectCapabilities.NormalizeDevicePath(string.IsNullOrWhiteSpace(req.RootPath) ? p.RootPath : req.RootPath); }
+            catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
+            // Привязка не меняется — спрашивать устройство незачем (и офлайн не мешает)
+            var unchanged = string.Equals(p.DeviceId, deviceId, StringComparison.Ordinal)
+                && string.Equals(p.RootPath, devicePath, StringComparison.Ordinal);
+            if (!unchanged)
+            {
+                var folder = await DeviceFolderAsync(deviceId, devicePath, p.Name);
+                if (folder.Refusal is { } folderRefusal) return BadRequest(new { error = folderRefusal });
+                folderNotice = folder.Notice;
+            }
+        }
         var oldKnowledgeRoot = ProjectCapabilities.KnowledgeRoot(p);
         Project moved;
         try { moved = projects.SetDevice(id, deviceId, req.RootPath); }
@@ -357,7 +397,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
             // Заметки notes/ серверной папки выпали из источников — вычистить их из индекса
             notesKb?.QueueSync(UserId);
         }
-        return Ok(WithCount(moved));
+        return Ok(WithCount(moved, folderNotice));
     }
 
     // База знаний серверной папки: Dify-датасет + запись WorkspaceKnowledge. Датасет общий для

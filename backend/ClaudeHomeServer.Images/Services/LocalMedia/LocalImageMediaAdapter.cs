@@ -10,53 +10,81 @@ namespace ClaudeHomeServer.Services.Images.LocalMedia;
 // задач и без записи в проект: задачу ведёт исполнитель редактора, а варианты он кладёт в свою
 // рабочую папку. Общее с local-media — тумблер LocalMedia:Enabled, потолок общей очереди
 // MaxComfyQueue и таблица замеров времени.
-public sealed class LocalImageMediaAdapter(ComfyClient comfy, IConfiguration config, ILogger<LocalImageMediaAdapter> log,
-    IImageRaster? raster = null) : ILocalImageMedia
+public sealed class LocalImageMediaAdapter : ILocalImageMedia
 {
     private const string OutputStem = "ie_";
-    // Живость ComfyUI для каталога: свежий ответ держим 30 с, первая проверка ждёт не дольше 2 с
+    // Живость ComfyUI для каталога: свежий ответ держим 30 с, опрос — не дольше 2 с
     private static readonly TimeSpan ProbeTtl = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(2);
+
+    private readonly ComfyClient comfy;
+    private readonly IConfiguration config;
+    private readonly ILogger<LocalImageMediaAdapter> log;
+    private readonly IImageRaster? raster;
 
     private readonly Lock _probeGate = new();
     private DateTime _probedAt = DateTime.MinValue;
     private bool _alive;
     private Task? _probing;
 
+    public LocalImageMediaAdapter(ComfyClient comfy, IConfiguration config, ILogger<LocalImageMediaAdapter> log,
+        IImageRaster? raster = null)
+    {
+        this.comfy = comfy;
+        this.config = config;
+        this.log = log;
+        this.raster = raster;
+        // Прогрев: к первому вопросу каталога ответ ComfyUI обычно уже есть, и поставщик
+        // не мигает «скрыт» на старте
+        if (LocalMediaOptions.IsEnabled(config)) StartProbe();
+    }
+
+    // Не блокирует никогда: отдаёт последний известный ответ, а устаревший освежает в фоне.
+    // Синхронное ожидание опроса здесь держало бы поток пула на каждом запросе каталога
     public bool Available
     {
         get
         {
             if (!LocalMediaOptions.IsEnabled(config)) return false;
-            Task? first = null;
             lock (_probeGate)
             {
-                if (DateTime.UtcNow - _probedAt < ProbeTtl) return _alive;
-                _probing ??= ProbeAsync();
-                if (_probedAt == DateTime.MinValue) first = _probing;
+                if (DateTime.UtcNow - _probedAt >= ProbeTtl) StartProbe();
+                return _alive;
             }
-            // Самый первый вопрос ждёт ответа: иначе поставщик мигнул бы «скрыт» на старте
-            first?.Wait(ProbeTimeout);
-            lock (_probeGate) return _alive;
         }
+    }
+
+    // Задача опроса в процессе
+    internal Task? Probing
+    {
+        get { lock (_probeGate) return _probing; }
+    }
+
+    private void StartProbe()
+    {
+        lock (_probeGate) _probing ??= ProbeAsync();
     }
 
     private async Task ProbeAsync()
     {
-        var alive = await QueueLengthAsync(CancellationToken.None) is not null;
-        lock (_probeGate)
+        // Опрос уходит с потока вызывающего: тот держит блокировку и ждать не должен
+        await Task.Yield();
+        try
         {
-            _alive = alive;
-            _probedAt = DateTime.UtcNow;
-            _probing = null;
+            await QueueLengthAsync(CancellationToken.None);
+        }
+        finally
+        {
+            lock (_probeGate) _probing = null;
         }
     }
 
-    private void MarkDead()
+    // Любой ответ очереди (опрос, котировка, запуск) — свежее знание о живости ComfyUI
+    private void Remember(bool alive)
     {
         lock (_probeGate)
         {
-            _alive = false;
+            _alive = alive;
             _probedAt = DateTime.UtcNow;
         }
     }
@@ -67,14 +95,18 @@ public sealed class LocalImageMediaAdapter(ComfyClient comfy, IConfiguration con
         timeout.CancelAfter(ProbeTimeout);
         try
         {
-            return (await comfy.GetQueueAsync(timeout.Token)).Length;
+            var length = (await comfy.GetQueueAsync(timeout.Token)).Length;
+            Remember(alive: true);
+            return length;
         }
         catch (ComfyException)
         {
+            Remember(alive: false);
             return null;
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
+            Remember(alive: false);
             return null;
         }
     }
@@ -122,10 +154,11 @@ public sealed class LocalImageMediaAdapter(ComfyClient comfy, IConfiguration con
         try
         {
             queue = await comfy.GetQueueAsync(ct);
+            Remember(alive: true);
         }
         catch (ComfyException ex)
         {
-            MarkDead();
+            Remember(alive: false);
             return LocalImageSubmitted.Fail($"{ex.Message}. Попробуйте позже или выберите другого поставщика.", busy: true);
         }
         if (queue.Length >= options.MaxComfyQueue)

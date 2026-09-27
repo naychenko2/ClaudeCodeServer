@@ -149,10 +149,14 @@ public class ImageEditorToolsetTests : IDisposable
     }
 
     // ADR-018 §7: агент в чате владельца B запускает Higgsfield → одна запись траты на B,
-    // инициатор — агент, SessionId — чат. Не на персону и не на админа Higgsfield
-    [Fact]
-    public async Task Трата_агента_ложится_на_владельца_чата_с_инициатором_агент()
+    // инициатор — агент, SessionId — чат. Не на персону и не на админа Higgsfield: чат, который
+    // ведёт персона, платит тем же владельцем
+    [Theory]
+    [InlineData(null)]
+    [InlineData("persona-artist")]
+    public async Task Трата_агента_ложится_на_владельца_чата_с_инициатором_агент(string? personaId)
     {
+        _sessions[ChatId].PersonaId = personaId;
         var toolset = Toolset();
 
         var result = await Call(toolset, ImageEditorToolset.ToolGenerate, new JsonObject { ["prompt"] = "фон" });
@@ -311,6 +315,27 @@ public class ImageEditorToolsetTests : IDisposable
         _states.Get(Owner, ChatId).References.Should().BeEmpty("отвергнутый запуск не пишет образцы в состояние");
     }
 
+    // Исходник чата читается общим путём сборщика (ReadProjectImageAsync): ссылка наружу
+    // отвергается до котировки, а не доезжает байтами чужого файла до поставщика
+    [Fact]
+    public async Task Файл_чата_через_символическую_ссылку_отвергается_до_котировки()
+    {
+        var outside = Path.Combine(_dir, "outside.png");
+        File.WriteAllBytes(outside, TestImages.Png(4, 4));
+        var link = Path.Combine(_root, "images", "linked.png");
+        try { File.CreateSymbolicLink(link, outside); }
+        catch (Exception e) when (e is UnauthorizedAccessException or IOException) { return; } // Windows без прав — проверка идёт в CI на Linux
+        AddChat(ChatId, Owner, ProjectId, "images/linked.png");
+        var toolset = Toolset();
+
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate, new JsonObject { ["prompt"] = "фон" });
+
+        result.IsError.Should().BeTrue();
+        result.Text.Should().Be("Файл чата вне папки проекта или идёт через символическую ссылку");
+        JobsOfChat().Should().BeEmpty();
+        _spend.Records.Should().BeEmpty();
+    }
+
     // Отказ поставщика — котировка соседа в результате; второго вызова драйвера нет
     [Fact]
     public async Task Недоступный_поставщик_даёт_retryQuote_соседа_без_запуска()
@@ -366,6 +391,78 @@ public class ImageEditorToolsetTests : IDisposable
         body["file"]!["width"]!.GetValue<int>().Should().Be(4);
         body["provider"]!.GetValue<string>().Should().Be("higgsfield");
         body["providers"]!.AsArray().Should().NotBeEmpty();
+    }
+
+    // ── Черновик «Нарисовать картинку»: файла ещё нет ───────────────────────────
+
+    private void MakeDraft(string folder = "art") =>
+        _sessions[ChatId].ImageChat = new SessionImageChat { CurrentPath = null, DraftFolder = folder };
+
+    [Fact]
+    public async Task Черновик_image_generate_рисует_по_тексту_и_пишет_трату_на_владельца()
+    {
+        MakeDraft();
+        var media = new LocalImageEditorTests.FakeMedia();
+        var toolset = Toolset([new LocalImageEditor(media) { PollInterval = TimeSpan.FromMilliseconds(1) }]);
+
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate,
+            new JsonObject { ["prompt"] = "кот в шляпе", ["provider"] = "local" });
+
+        result.IsError.Should().BeFalse(result.Text);
+        var job = await WaitDone(Parse(result)["jobId"]!.GetValue<string>());
+        job.Status.Should().Be(ImageEditJobStatus.Completed);
+        job.ChatSessionId.Should().Be(ChatId, "варианты черновика попадают в его ленту и редактор");
+        var submitted = media.Submitted.Should().ContainSingle().Subject;
+        submitted.Op.Should().Be(LocalImageOp.Generate);
+        submitted.Images.Should().BeEmpty("у черновика исходника нет — генерация по тексту");
+        var record = _spend.Records.Should().ContainSingle().Subject;
+        record.OwnerId.Should().Be(Owner);
+        record.Initiator.Should().Be(SpendInitiators.Agent);
+        record.SessionId.Should().Be(ChatId);
+        _states.Get(Owner, ChatId).Events.Should().Contain(e => e.JobId == job.JobId);
+    }
+
+    [Fact]
+    public async Task Черновик_правка_без_картинки_отказ_без_задачи_и_лимит_цел()
+    {
+        MakeDraft();
+        var toolset = Toolset();
+
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate,
+            new JsonObject { ["prompt"] = "убери фон", ["op"] = "removeBackground" });
+
+        result.IsError.Should().BeTrue();
+        result.Text.Should().Contain("Картинки ещё нет");
+        _spend.Records.Should().BeEmpty();
+        (await Call(toolset, ImageEditorToolset.ToolGenerate, new JsonObject { ["prompt"] = "кот" }))
+            .IsError.Should().BeFalse("отказ не расходует лимит хода");
+        (await Call(toolset, ImageEditorToolset.ToolGenerate, new JsonObject { ["prompt"] = "кот 2" }))
+            .IsError.Should().BeFalse();
+        (await Call(toolset, ImageEditorToolset.ToolGenerate, new JsonObject { ["prompt"] = "кот 3" }))
+            .Text.Should().Contain("не больше 2", "лимит 2 за ход действует и у черновика");
+    }
+
+    [Fact]
+    public async Task Черновик_image_state_честно_говорит_что_картинки_нет()
+    {
+        MakeDraft("art/heroes");
+        var toolset = Toolset();
+
+        var result = await Call(toolset, ImageEditorToolset.ToolState);
+
+        result.IsError.Should().BeFalse(result.Text);
+        var body = Parse(result);
+        body["file"].Should().BeNull();
+        body["draft"]!["folder"]!.GetValue<string>().Should().Be("art/heroes");
+        body["draft"]!["note"]!.GetValue<string>().Should().Contain("Картинки ещё нет");
+    }
+
+    [Fact]
+    public void Черновик_блок_состояния_хода_без_файла()
+    {
+        var text = ImageEditorStateContributor.Render(null, ImageChatStateStore.Empty, [], _ => null, "art");
+
+        text.Should().Contain("Файл: картинки ещё нет").And.Contain("папку art");
     }
 
     // Имена в AutoAllowTools чата картинки (Core) обязаны совпадать со схемами тулсета

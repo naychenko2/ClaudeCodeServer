@@ -14,6 +14,12 @@ public interface IImageChatSessions
     Task<ImageChatCreateOutcome> CreateAsync(string ownerId, Project project, string sourcePath,
         string? personaId, CancellationToken ct);
 
+    // Чат-черновик «Нарисовать картинку»: файла ещё нет, есть папка назначения ("" — корень).
+    // Имя «Новая картинка · art», собеседник по тому же правилу. folder уже проверен модулем:
+    // внутри проекта, папка существует. Первое сохранение с этим чатом переведёт его на файл
+    Task<ImageChatCreateOutcome> CreateDraftAsync(string ownerId, Project project, string folder,
+        string? personaId, CancellationToken ct);
+
     // Перепривязать чат картинки к файлу: прежний путь уходит в Lineage. Настройка, а не
     // активность — UpdatedAt не двигается, чат не поднимается в списке и не выходит из архива.
     // null — чата нет или он не чат картинки. Владение и проект проверяет вызывающий.
@@ -58,4 +64,8 @@ public static class ImageChatDefaults
 
     // Имя чата: «hero.png · правка». Явное — авто-заголовок его не перепишет
     public static string ChatName(string sourcePath) => $"{Path.GetFileName(sourcePath)} · правка";
+
+    // Имя черновика: «Новая картинка · art/heroes»; корень проекта — словами
+    public static string DraftChatName(string folder) =>
+        $"Новая картинка · {(folder.Length == 0 ? "корень проекта" : folder)}";
 }

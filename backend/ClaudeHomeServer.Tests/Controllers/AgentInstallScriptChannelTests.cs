@@ -78,6 +78,43 @@ public class AgentInstallScriptChannelTests : IDisposable
     }
 
     /// <summary>
+    /// Команда из веб-интерфейса вставляется в открытое окно PowerShell как scriptblock
+    /// (живой прогон 2026-09-27): exit в скрипте закрывал само окно вместе с текстом ошибки.
+    /// Хост обязан пережить установку и увидеть код в $LASTEXITCODE; код 3 идёт через
+    /// локальный catch загрузки, он не должен подменить собой завершение.
+    /// </summary>
+    [SkippableTheory]
+    [InlineData("http://192.168.1.5", 2)]
+    [InlineData("https://127.0.0.1:9", 3)]
+    public async Task Ps1_ScriptblockВОткрытомОкне_ХостЖивёт_КодВLastExitCode(string server, int expected)
+    {
+        var pwsh = FindOnPath("pwsh");
+        Skip.If(pwsh is null, "pwsh не установлен");
+
+        var script = Script("install.ps1").Replace("'", "''");
+        var (code, output) = await RunAsync(pwsh!, ["-NoProfile", "-NonInteractive", "-Command",
+            $"& ([scriptblock]::Create((Get-Content -Raw -LiteralPath '{script}'))) -Server {server} -Code X; " +
+            "Write-Output \"host-alive:$LASTEXITCODE\""], path: null);
+
+        output.Should().Contain($"host-alive:{expected}", "окно после установки должно остаться открытым");
+        code.Should().Be(0, output);
+    }
+
+    [Theory]
+    [InlineData("install.ps1")]
+    [InlineData("install.sh")]
+    public void ФинальныйБлок_ГоворитЧтоДелатьДальше(string name)
+    {
+        var text = File.ReadAllText(Script(name));
+
+        text.Should().Contain("Что дальше")
+            .And.Contain("ai-home-agent roots add")
+            .And.Contain("roots list")
+            .And.Contain("«Устройства»")
+            .And.Contain("«Новый проект → На этом компьютере»");
+    }
+
+    /// <summary>
     /// В .NET Framework (Windows PowerShell 5.1) свойства HttpClient после первого запроса
     /// менять нельзя — InvalidOperationException, и установка падает на скачивании архива.
     /// Прогон под pwsh этого не ловит, поэтому сторож текстовый: Timeout выставляется ровно

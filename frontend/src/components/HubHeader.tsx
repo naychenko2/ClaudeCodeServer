@@ -20,6 +20,7 @@ import { McpServersModal } from '../features/mcp/McpServersModal';
 import { DevicesModal } from '../features/desktop/DevicesModal';
 import { HandsProvidersModal } from '../features/localHands/HandsProvidersModal';
 import { useFeature, FLAGS } from '../lib/featureFlags';
+import { useDevicesMenuVisible } from '../features/desktop/deviceOptions';
 import { DeployModal } from './DeployModal';
 import { PowerModal } from './PowerModal';
 import { RemoteCommandsModal } from './RemoteCommandsModal';
@@ -181,9 +182,9 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
     return () => { alive = false; window.removeEventListener(BADGE_EVENT, refresh); };
   }, [isAdmin]);
 
-  // Грань десктопного агента за фич-флагом: без него пункта «Устройства» нет —
-  // сопрягать нечего, а сервер всё равно откажет
-  const desktopEnabled = useFeature(FLAGS.desktopAgent);
+  // Пункт «Устройства» — под любым из флагов desktop-agent и local-projects: без обоих
+  // подключать нечего
+  const devicesMenu = useDevicesMenuVisible();
   const localHandsEnabled = useFeature(FLAGS.localHands);
 
   // Доступна ли выкатка на бой. Спрашиваем только у админа: фича admin-only и вдобавок
@@ -550,9 +551,9 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
           onShowFeatureFlags={() => setShowFeatureFlags(true)}
           onShowModelsSpend={() => setShowModelsSpend(true)}
           onShowMcpServers={() => setShowMcpServers(true)}
-          // Устройства десктопной грани — только при поднятом флаге: без него сопрягать
-          // нечего, сервер всё равно откажет
-          onShowDevices={desktopEnabled ? () => setShowDevices(true) : undefined}
+          // Устройства — клиент рук (desktop-agent) или агент локальных проектов
+          // (local-projects): режим модалка выбирает сама
+          onShowDevices={devicesMenu ? () => setShowDevices(true) : undefined}
           onShowHandsProviders={localHandsEnabled ? () => setShowHandsProviders(true) : undefined}
           onShowUserManagement={() => setShowUserMgmt(true)}
           // Админский список подсистем инстанса (Этап 5, волна 3): только

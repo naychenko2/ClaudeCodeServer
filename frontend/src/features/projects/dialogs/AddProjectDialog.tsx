@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { Project, ProjectGroup, DesktopDevice } from '../../../types';
 import { api } from '../../../lib/api';
+import { showToast } from '../../../lib/toast';
 import { C, FS, MODAL_W, SP } from '../../../lib/design';
 import { Modal, ModalActions, TextField, Field, SegmentedControl, Select } from '../../../components/ui';
 import { GroupSelect } from '../GroupSelect';
@@ -109,6 +110,7 @@ export function AddProjectDialog({ groups, defaultGroupId, onSuccess, onClose }:
           deviceId,
           rootPath: devicePath.trim(),
         });
+        if (p.folderNotice) showToast('Папка проекта', p.folderNotice);
         let created = p;
         if (draftGlyph && draftGlyph.name) {
           try {

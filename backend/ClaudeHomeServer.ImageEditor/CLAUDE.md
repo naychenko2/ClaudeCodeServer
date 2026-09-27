@@ -75,6 +75,8 @@ MF-remote `frontend/modules/image-editor` над кодом `frontend/src/featur
   (генерация, правка, кисть; маска — образцом, кроме «удали», там серая заливка `EraseMask`) и
   FaceDetailer (`EnhanceFaces`). Котировка без цены: `free`, время по замерам и длина очереди
   ComfyUI; не ответил ComfyUI — `provider_unavailable`. Граф — только из шаблонов `ComfyWorkflows`.
+  **Персонаж — одно фото (`MaxCharacterPhotos: 1`)**: Qwen-Image рисует по человеку на каждое фото,
+  и текст запроса это не лечит (живой прогон 2026-09-26); больше 16 картинок — отказ, не обрезка.
 
 **Перед правками — прочитай [ADR-018](../../docs/adr/ADR-018-image-editor-v2.md)**, §7 «Инварианты
 под угрозой и сторожа» и §10.4 «План переноса».

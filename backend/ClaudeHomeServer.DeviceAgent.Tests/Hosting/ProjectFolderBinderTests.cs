@@ -154,6 +154,40 @@ public sealed class ProjectFolderBinderTests : IDisposable
         binder.Bind(new BindFolderRequest(outside, "p")).Outcome.Should().Be(BindFolderOutcomes.Bound);
     }
 
+    [Theory]
+    [InlineData(@"C:\PROGRA~1\App")]
+    [InlineData(@"C:\PROGRA~2\App")]
+    [InlineData(@"C:\Users\u\APPDAT~1\x")]
+    [InlineData(@"\\?\C:\Users\u\myapp")]
+    [InlineData(@"\\?\C:\PROGRA~1\App")]
+    [InlineData(@"\\.\C:\x")]
+    [InlineData(@"\\server\share\x")]
+    [InlineData(@"C:\foo:bar")]
+    public void КороткиеСетевыеИПотоковыеПути_Отказ_ДоОбращенияКДиску(string path)
+    {
+        var (binder, roots) = Create();
+
+        var result = binder.Bind(new BindFolderRequest(path, "p"));
+
+        result.Outcome.Should().Be(BindFolderOutcomes.Forbidden);
+        result.Message.Should().NotBeNullOrEmpty();
+        roots.Roots.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ПодпапкаТочкиМонтирования_Разрешена()
+    {
+        MakeDir(Config);
+        MakeDir(Home);
+        var roots = new AgentRootsStore(Path.Combine(Config, "roots.json"));
+        var mount = Path.Combine(_base, "mnt");
+        var binder = new ProjectFolderBinder(roots, new AgentPathPolicy(roots),
+            new AgentForbiddenContext([Home], [Config], [mount]));
+
+        binder.Bind(new BindFolderRequest(mount, "p")).Outcome.Should().Be(BindFolderOutcomes.Forbidden);
+        binder.Bind(new BindFolderRequest(Path.Combine(mount, "foo"), "p")).Outcome.Should().Be(BindFolderOutcomes.Bound);
+    }
+
     [Fact]
     public void ФайлПоПути_Отказ()
     {

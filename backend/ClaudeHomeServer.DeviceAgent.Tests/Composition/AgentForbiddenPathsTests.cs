@@ -55,6 +55,8 @@ public sealed class AgentForbiddenPathsTests
     [InlineData("/mnt/data/projects")]
     [InlineData("/srv/app")]
     [InlineData("/home/u/.sshkeys-backup-not-really")]
+    // Подпапка точки монтирования разрешена намеренно: запрещена только сама точка
+    [InlineData("/mnt/data/foo")]
     public void Unix_ПодпапкиПрофиляИОбычныеКаталоги_Разрешены(string path) =>
         AgentForbiddenPaths.RefusalOf(path, Unix).Should().BeNull();
 
@@ -78,9 +80,43 @@ public sealed class AgentForbiddenPathsTests
         AgentForbiddenPaths.RefusalOf(path, Windows).Should().NotBeNull($"«{path}» в запретном списке");
 
     [Theory]
+    [InlineData(@"C:\PROGRA~1\App")]
+    [InlineData(@"C:\PROGRA~2\App")]
+    [InlineData(@"C:\Users\u\APPDAT~1\x")]
+    [InlineData(@"C:\Users\u\Projects\MYPROJ~1.GIT")]
+    public void Windows_КороткиеИмена_Отказ(string path)
+    {
+        AgentForbiddenPaths.RefusalOf(path, Windows).Should().Contain("без коротких имён");
+        AgentForbiddenPaths.Check(path, Windows).Should().Contain("без коротких имён");
+    }
+
+    [Theory]
+    [InlineData(@"\\?\C:\Users\u\myapp")]
+    [InlineData(@"\\?\C:\PROGRA~1\App")]
+    [InlineData(@"\\.\C:\x")]
+    [InlineData(@"\\server\share\x")]
+    [InlineData("//server/share/x")]
+    [InlineData(@"/\?\C:\x")]
+    public void Windows_СетевыеИСлужебныеПути_Отказ(string path)
+    {
+        AgentForbiddenPaths.RefusalOf(path, Windows).Should().StartWith("Сетевые и служебные пути");
+        AgentForbiddenPaths.Check(path, Windows).Should().StartWith("Сетевые и служебные пути");
+    }
+
+    [Fact]
+    public void Windows_ДвоеточиеВСегменте_Отказ()
+    {
+        AgentForbiddenPaths.RefusalOf(@"C:\foo:bar", Windows).Should().Contain("Двоеточие");
+        AgentForbiddenPaths.Check(@"C:\foo:bar", Windows).Should().Contain("Двоеточие");
+    }
+
+    [Theory]
     [InlineData(@"C:\Users\u\Projects\app")]
     [InlineData(@"D:\work\app")]
     [InlineData(@"C:\src\app")]
+    // Тильда не в форме 8.3 — обычное имя
+    [InlineData(@"C:\src\my~app")]
+    [InlineData(@"C:\src\verylongname~1")]
     public void Windows_ОбычныеКаталоги_Разрешены(string path) =>
         AgentForbiddenPaths.RefusalOf(path, Windows).Should().BeNull();
 

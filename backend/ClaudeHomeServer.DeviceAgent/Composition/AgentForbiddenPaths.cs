@@ -46,6 +46,7 @@ internal static class AgentForbiddenPaths
     /// </summary>
     public static string? Check(string path, AgentForbiddenContext context)
     {
+        if (ShapeRefusalOf(path) is { } shape) return shape;
         if (string.IsNullOrWhiteSpace(path) || !Path.IsPathFullyQualified(path))
             return "Нужен абсолютный путь этой машины";
         string real;
@@ -60,6 +61,7 @@ internal static class AgentForbiddenPaths
     /// </summary>
     internal static string? RefusalOf(string path, AgentForbiddenContext context)
     {
+        if (ShapeRefusalOf(path) is { } shape) return shape;
         if (Parse(path) is not { } p) return "Нужен абсолютный путь этой машины";
         var (root, segments, windows) = p;
 
@@ -105,9 +107,37 @@ internal static class AgentForbiddenPaths
         return null;
     }
 
+    /// <summary>
+    /// Формы пути, которые лексическое сравнение не судит честно, — отказ до обращения к диску
+    /// (биндер зовёт это раньше любых проверок ФС, чтобы не стучаться на чужой сервер):
+    /// <c>\\?\</c>, <c>\\.\</c> и UNC обходят сравнение корней и не являются папкой этой машины;
+    /// короткое имя 8.3 (<c>PROGRA~1</c>) ФС разворачивает в запретный каталог мимо сравнения
+    /// сегментов; двоеточие в сегменте — альтернативный поток NTFS. Ждать <c>IOException</c> нельзя.
+    /// </summary>
+    internal static string? ShapeRefusalOf(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return null;
+        // Любая пара разделителей в начале: «\\», «//», «/\\» — Windows все их читает как «\\»
+        if (path.Length >= 2 && path[0] is '\\' or '/' && path[1] is '\\' or '/')
+            return @"Сетевые и служебные пути (\\…) не поддерживаются — укажите папку на диске этого компьютера";
+        if (Parse(path) is not { Windows: true } p) return null;
+        foreach (var segment in p.Segments)
+        {
+            if (segment.Contains(':'))
+                return $"Двоеточие в имени папки недопустимо («{segment}»)";
+            if (ShortName.IsMatch(segment))
+                return $"Укажите полный путь без коротких имён (…~1): «{segment}»";
+        }
+        return null;
+    }
+
+    // Короткое имя 8.3: до восьми символов, тильда, номер, расширение до трёх символов
+    private static readonly System.Text.RegularExpressions.Regex ShortName =
+        new(@"^[^~\\/]{1,8}~\d+(\.[^\\/]{0,3})?$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
     private sealed record Parsed(string Root, List<string> Segments, bool Windows);
 
-    // Корень: «C:\», «\\сервер\шара\» (Windows) или «/» (Unix). Относительный путь — null
+    // Корень: «C:\» (Windows) или «/» (Unix). Относительный, сетевой и служебный путь — null
     private static Parsed? Parse(string path)
     {
         if (string.IsNullOrWhiteSpace(path)) return null;
@@ -118,14 +148,6 @@ internal static class AgentForbiddenPaths
         {
             root = char.ToUpperInvariant(path[0]) + ":";
             rest = path[3..];
-            windows = true;
-        }
-        else if (path.StartsWith(@"\\", StringComparison.Ordinal) || path.StartsWith("//", StringComparison.Ordinal))
-        {
-            var parts = path[2..].Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length < 2) return null;
-            root = @"\\" + parts[0] + @"\" + parts[1];
-            rest = string.Join('/', parts[2..]);
             windows = true;
         }
         else if (path[0] == '/')

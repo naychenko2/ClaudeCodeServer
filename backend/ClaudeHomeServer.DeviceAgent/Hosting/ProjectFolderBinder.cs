@@ -31,6 +31,9 @@ internal sealed class ProjectFolderBinder(
     public BindFolderResult Bind(BindFolderRequest request)
     {
         var path = request.Path;
+        // Сетевой путь отбивается до CheckRoot: иначе агент сам постучится на чужой сервер
+        if (AgentForbiddenPaths.ShapeRefusalOf(path) is { } shape)
+            return Refused(BindFolderOutcomes.Forbidden, shape);
         if (string.IsNullOrWhiteSpace(path) || !Path.IsPathFullyQualified(path))
             return Refused(BindFolderOutcomes.Refused, "Нужен абсолютный путь этой машины");
 

@@ -33,6 +33,10 @@ AGENT_PROJECT="${AGENT_PROJECT:-$REPO/backend/ClaudeHomeServer.DeviceAgent/Claud
 AGENT_BUILD="${TMPDIR:-/tmp}/ccs-agent-build.$$-$RANDOM"
 AGENT_KEEP="${AGENT_KEEP:-4}"
 
+# Компонент рук (ADR-016 §7): HandsBridge собирается ТОЙ ЖЕ выкаткой, версия и хвост +sha
+# те же, что у агента. Зависимости на DeviceAgent нет, в архив агента не утечёт.
+HANDS_PROJECT="${HANDS_PROJECT:-$REPO/backend/HandsBridge/HandsBridge.csproj}"
+
 # RID → расширение архива. Шаг задачи AD-2.
 AGENT_RIDS=(win-x64 linux-x64)
 
@@ -138,6 +142,51 @@ publish_one_agent() {
   esac
 }
 
+# Публикация HandsBridge под win-x64 (single-file self-contained). На выходе — ничего;
+# путь к архиву собирает pack_one_hands. Возвращает 0 при успехе, 1 при ошибке.
+# - IncludeSourceRevisionInInformationalVersion=false ОБЯЗАТЕЛЬНО: без него SDK припишет
+#   второй +sha-хвост поверх нашего InformationalVersion (та же ловушка, что и в
+#   ClaudeHomeServer.DeviceAgent.csproj:16-18).
+# - EnableWindowsTargeting уже включён в HandsBridge.csproj:25, отдельно передавать
+#   не нужно; ubuntu-хостинг сборки справится.
+# - app.manifest внедряется в PE-заголовок .exe самим MSBuild; рядом .exe.manifest
+#   НЕ появляется, и для single-file это нормальное поведение.
+# - CopyToPublishDirectory для LICENSE при single-file НЕ срабатывает (это свойство
+#   обычного publish), поэтому после publish копируем LICENSE из bin явно.
+publish_one_hands() {
+  local version="$1" sha8="$2"
+  local out_dir="$AGENT_BUILD/hands-win-x64"
+  local publish_props=(
+    -p:Version="$version"
+    -p:InformationalVersion="${version}+${sha8}"
+    -p:IncludeSourceRevisionInInformationalVersion=false
+    -p:PublishSingleFile=true
+    -p:EnableCompressionInSingleFile=true
+    -p:IncludeNativeLibrariesForSelfExtract=true
+    -p:IncludeAllContentForSelfExtract=true
+  )
+
+  rm -rf "$out_dir"
+
+  if ! (cd "$REPO" && dotnet publish "$HANDS_PROJECT" -c Release --nologo -v quiet \
+        -r win-x64 --self-contained -o "$out_dir" "${publish_props[@]}"); then
+    return 1
+  fi
+
+  # Гейт: single-file .exe обязателен, без него HandsComponent.Install упадёт
+  # ("В архиве рук нет HandsBridge.exe").
+  [[ -f "$out_dir/HandsBridge.exe" ]] \
+    || { log "нет HandsBridge.exe в publish HandsBridge" >&2; return 1; }
+
+  # LICENSE обязательна (MIT, едет в публикацию — HandsBridge.csproj:44). Single-file
+  # не копирует CopyToPublishDirectory-файлы рядом, поэтому берём напрямую из исходника:
+  # LICENSE там лежит неизменным и совпадает с тем, что попадает в обычный publish.
+  [[ -f "$REPO/backend/HandsBridge/LICENSE" ]] \
+    || { log "нет $REPO/backend/HandsBridge/LICENSE" >&2; return 1; }
+  cp "$REPO/backend/HandsBridge/LICENSE" "$out_dir/HandsBridge.LICENSE.txt" \
+    || { log "не удалось скопировать LICENSE в $out_dir" >&2; return 1; }
+}
+
 # Упаковка выхода publish в архив. tar.gz для linux-x64 сохраняет права; для надёжности
 # ставим +x на apphost и .so до архивации.
 pack_one_agent() {
@@ -165,22 +214,45 @@ pack_one_agent() {
   printf '%s\n' "$archive_path"
 }
 
+# Упаковка выхода publish HandsBridge в zip. Имя файла — hands-{version}-win-x64.zip,
+# лежит рядом с архивами агента в {AGENT_RELEASES}/{version}/. Совпадает с
+# AgentReleaseFixture.HandsFile и проходит regex имени в AgentReleaseCatalog.
+pack_one_hands() {
+  local version="$1"
+  local out_dir="$AGENT_BUILD/hands-win-x64"
+  local archive_name="hands-${version}-win-x64.zip"
+  local archive_path="$AGENT_RELEASES/$version/$archive_name"
+
+  (cd "$out_dir" && zip -qr "$archive_path" .) || return 1
+  printf '%s\n' "$archive_path"
+}
+
 # Запись JSON манифеста (он же указатель) для текущей версии.
+# hands_win_* могут быть пустыми — тогда секция hands в манифесте = {} (компонент не публиковался
+# этой выкаткой, AgentReleaseCatalog.Parse такое принимает как валидный пустой раздел).
 write_pointer() {
   local version="$1" archive_win="$2" sha_win="$3" size_win="$4" \
-                    archive_lin="$5" sha_lin="$6" size_lin="$7"
+                    archive_lin="$5" sha_lin="$6" size_lin="$7" \
+                    hands_win_file="$8" hands_win_sha="$9" hands_win_size="${10}"
   local out_json
 
   out_json=$(jq -n \
     --arg version "$version" \
     --arg win_file "$archive_win" --argjson win_size "$size_win" --arg win_sha "$sha_win" \
     --arg lin_file "$archive_lin" --argjson lin_size "$size_lin" --arg lin_sha "$sha_lin" \
+    --arg hands_file "$hands_win_file" --argjson hands_size "$hands_win_size" --arg hands_sha "$hands_win_sha" \
     '{
       version: $version,
       archives: {
         "win-x64":   { file: $win_file, size: $win_size,   sha256: $win_sha },
         "linux-x64": { file: $lin_file, size: $lin_size,   sha256: $lin_sha }
-      }
+      },
+      hands: (
+        if ($hands_file | length) > 0
+          then { "win-x64": { file: $hands_file, size: $hands_size, sha256: $hands_sha } }
+          else {}
+        end
+      )
     }')
 
   printf '%s\n' "$out_json" > "$AGENT_RELEASES/$version/manifest.json"
@@ -195,6 +267,7 @@ publish_agent_release() {
   local win_path="" lin_path=""
   local win_sha="" lin_sha="" win_size="" lin_size=""
   local win_file="" lin_file=""
+  local hands_sha="" hands_size="" hands_file=""
 
   mkdir -p "$manifest_dir" "$STAGING"
 
@@ -232,12 +305,32 @@ publish_agent_release() {
     return 0
   fi
 
+  # Компонент рук (ADR-016 §7): единый RID (win-x64). Сборка и упаковка идут после цикла
+  # по RID агента, но ДО записи манифеста — если HandsBridge упал, секция hands просто
+  # останется пустой, агентский релиз всё равно записывается (частичный отказ — лучше, чем
+  # ничего, как и для RID агента).
+  log "== hands-publish win-x64"
+  if ! publish_one_hands "$version" "$sha8"; then
+    warn "сборка HandsBridge провалилась — без hands в манифесте"
+  else
+    log "== hands-pack win-x64"
+    local hands_archive_path
+    if ! hands_archive_path=$(pack_one_hands "$version"); then
+      warn "упаковка HandsBridge не удалась — без hands в манифесте"
+    else
+      hands_file=$(basename "$hands_archive_path")
+      hands_sha=$(sha256sum "$hands_archive_path" | awk '{print $1}')
+      hands_size=$(stat -c '%s' "$hands_archive_path")
+    fi
+  fi
+
   # Если один RID упал — записываем манифест с тем, что есть (Частично — лучше, чем ничего).
   # Решение Р3 про отказ не пишет, но и не должно случиться: частичная выкатка всё равно
   # полезна, пока указатель прошлой версии не затрёт её.
   write_pointer "$version" \
     "${win_file:-}" "${win_sha:-}" "${win_size:-0}" \
-    "${lin_file:-}" "${lin_sha:-}" "${lin_size:-0}"
+    "${lin_file:-}" "${lin_sha:-}" "${lin_size:-0}" \
+    "${hands_file:-}" "${hands_sha:-}" "${hands_size:-0}"
 
   if (( ${#fail_rids[@]} > 0 )); then
     warn "релиз $version неполный: ${fail_rids[*]} упали; манифест записан частично"

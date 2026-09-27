@@ -33,4 +33,17 @@ public sealed record ArchitectureInput(
     IReadOnlyList<SourceUnit> Units,
     CodeSnapshotInput Snapshot,
     // Подсистемы (IAppSubsystem у CCS): id типа → заголовок (Title).
-    IReadOnlyDictionary<string, string> SubsystemTitles);
+    IReadOnlyDictionary<string, string> SubsystemTitles,
+    // Кандидаты во внешние системы L1 (ArchitectureExternalScanner); null — не искали.
+    IReadOnlyList<ExternalCandidate>? Externals = null);
+
+/// <summary>
+/// Кандидат во внешнюю систему уровня L1, найденный в конфиге или коде. В модель едут только
+/// имя, эвристика технологии и человекочитаемый источник — НИ ОДНОГО значения конфига
+/// (адреса, ключи): сканер значений не читает вовсе.
+/// </summary>
+public sealed record ExternalCandidate(
+    string Name,          // имя секции/сервиса/клиента: "Dify", "Perplexity", "signoz"
+    string? Technology,   // эвристика: "HTTP API", "docker-сервис", null
+    string Source,        // человекочитаемый источник: "appsettings.json: секция Dify"
+    int Confidence);      // 0..100 — для сортировки и отсечки по потолку

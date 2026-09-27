@@ -36,6 +36,22 @@ public class ArchitectureModelStoreTests : IDisposable
 
     private string ModelPath => Path.Combine(_root, "docs", "architecture", "model.viaduct.json");
 
+    // Срыв подмены (на месте файла — каталог): ошибка пробрасывается, а .tmp в проекте не остаётся.
+    // Оба пути атомарной записи — хранилища (редактор/meta) и генератора («Собрать из кода»).
+    [Fact]
+    public async Task Срыв_атомарной_записи__tmp_не_остаётся()
+    {
+        Directory.CreateDirectory(ModelPath);
+
+        var store = () => ArchitectureModelStore.WriteAtomicAsync(ModelPath, [1, 2, 3], CancellationToken.None);
+        await store.Should().ThrowAsync<Exception>();
+        File.Exists(ModelPath + ".tmp").Should().BeFalse();
+
+        var generator = () => ArchitectureModelGenerator.WriteAtomicAsync(ModelPath, "{}", CancellationToken.None);
+        await generator.Should().ThrowAsync<Exception>();
+        File.Exists(ModelPath + ".tmp").Should().BeFalse();
+    }
+
     [Fact]
     public async Task Модели_нет__чтение_отдаёт_пустое_без_версии()
     {

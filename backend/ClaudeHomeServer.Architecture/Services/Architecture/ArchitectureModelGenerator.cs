@@ -13,7 +13,19 @@ public sealed record ArchitectureGenerateResult(
     int Components,
     int Added,
     int Matched,
-    int ConnectionsAdded);
+    int ConnectionsAdded,
+    // Проход 1 «Собрать архитектуру»: внешние системы-кандидаты L1 и «нет в коде»
+    int Candidates = 0,
+    int MarkedMissing = 0,
+    int Unmarked = 0,
+    int SkippedDeleted = 0,
+    IReadOnlyList<string>? Missing = null,
+    // Кандидаты ниже порога уверенности или сверх потолка — только строка в сводке
+    IReadOnlyList<string>? CandidatesSkipped = null,
+    // Проход 2 (withAgent): задача агенту, его персона (null — без персоны) и код отказа
+    string? AgentTaskId = null,
+    string? AgentPersonaId = null,
+    string? AgentError = null);
 
 /// <summary>Файл модели в проекте не читается как JSON — перезаписывать его генератор отказывается.</summary>
 public sealed class ArchitectureModelCorruptException(string path, Exception inner)
@@ -54,7 +66,9 @@ public sealed class ArchitectureModelGenerator(ILogger<ArchitectureModelGenerato
 
         var units = ArchitectureSourceScanner.ScanUnits(root, ct);
         var titles = ArchitectureSourceScanner.ReadSubsystemTitles(snapshot, rel => TryRead(root, rel));
-        var generated = ArchitectureModelBuilder.Build(new ArchitectureInput(systemName, units, snapshot, titles));
+        var externals = ArchitectureExternalScanner.Scan(root, ct);
+        var generated = ArchitectureModelBuilder.Build(
+            new ArchitectureInput(systemName, units, snapshot, titles, externals.Accepted));
 
         await _gate.WaitAsync(ct);
         try
@@ -70,35 +84,53 @@ public sealed class ArchitectureModelGenerator(ILogger<ArchitectureModelGenerato
                 }
             }
 
-            var merged = ArchitectureModelMerger.Merge(existing, generated);
+            // Метаданные дописываются, а не переписываются: updatedAt/updatedBy редактора и
+            // карта происхождения elements живут там же (раньше генератор их терял)
+            var meta = await ArchitectureModelStore.ReadMetaAsync(metaPath, ct) ?? new JsonObject();
             var generatedAt = DateTimeOffset.UtcNow;
+            var merged = ArchitectureModelMerger.Merge(existing, generated,
+                meta["elements"] as JsonObject, generatedAt);
             var graphBuiltAt = snapshot.BuiltAt?.ToString("O");
 
             await WriteAtomicAsync(modelPath, merged.Document.ToJsonString(Indented), ct);
-            var meta = new JsonObject
-            {
-                ["generator"] = "ccs-code-v1",
-                ["graphBuiltAt"] = graphBuiltAt,
-                ["generatedAt"] = generatedAt.ToString("O"),
-                ["containers"] = generated.Containers.Count,
-                ["components"] = generated.Components.Count,
-            };
+            meta["generator"] = "ccs-code-v1";
+            meta["graphBuiltAt"] = graphBuiltAt;
+            meta["generatedAt"] = generatedAt.ToString("O");
+            meta["containers"] = generated.Containers.Count;
+            meta["components"] = generated.Components.Count;
+            meta["elements"] = merged.Elements;
             await WriteAtomicAsync(metaPath, meta.ToJsonString(Indented), ct);
 
             logger.LogInformation(
                 "Архитектура собрана из кода: {Root}, контейнеров {Containers}, компонентов {Components}, " +
-                "добавлено {Added}, сохранено {Matched}, новых связей {Connections}",
+                "добавлено {Added}, сохранено {Matched}, новых связей {Connections}, кандидатов L1 {Candidates}, " +
+                "нет в коде {Missing}, вернулось {Unmarked}, не воскрешено удалённых {SkippedDeleted}",
                 root, generated.Containers.Count, generated.Components.Count,
-                merged.Added, merged.Matched, merged.ConnectionsAdded);
+                merged.Added, merged.Matched, merged.ConnectionsAdded, merged.Candidates,
+                merged.Missing?.Count ?? 0, merged.Unmarked, merged.SkippedDeleted);
 
             return new ArchitectureGenerateResult(ModelRelPath, graphBuiltAt, generatedAt,
                 generated.Containers.Count, generated.Components.Count,
-                merged.Added, merged.Matched, merged.ConnectionsAdded);
+                merged.Added, merged.Matched, merged.ConnectionsAdded,
+                merged.Candidates, merged.MarkedMissing, merged.Unmarked, merged.SkippedDeleted,
+                merged.Missing ?? [],
+                SkippedSummary(externals.Rejected));
         }
         finally
         {
             _gate.Release();
         }
+    }
+
+    /// <summary>Потолок строк сводки отсеянных кандидатов — хвост сворачивается в «и ещё N».</summary>
+    public const int MaxSkippedShown = 20;
+
+    // Сводка отсеянных кандидатов: в большом проекте их сотни, а ответ читает человек и модель
+    internal static List<string> SkippedSummary(IReadOnlyList<ExternalCandidate> rejected)
+    {
+        var shown = rejected.Take(MaxSkippedShown).Select(c => $"{c.Name} ({c.Source})").ToList();
+        if (rejected.Count > MaxSkippedShown) shown.Add($"и ещё {rejected.Count - MaxSkippedShown}");
+        return shown;
     }
 
     private static string? TryRead(string root, string relPath)
@@ -115,11 +147,21 @@ public sealed class ArchitectureModelGenerator(ILogger<ArchitectureModelGenerato
         }
     }
 
-    private static async Task WriteAtomicAsync(string path, string content, CancellationToken ct)
+    internal static async Task WriteAtomicAsync(string path, string content, CancellationToken ct)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var tmp = path + ".tmp";
-        await File.WriteAllTextAsync(tmp, content + "\n", ct);
-        File.Move(tmp, path, overwrite: true);
+        try
+        {
+            await File.WriteAllTextAsync(tmp, content + "\n", ct);
+            File.Move(tmp, path, overwrite: true);
+        }
+        catch
+        {
+            // Сорвалась запись или подмена — недописанный .tmp в проекте не оставляем
+            // (иначе он висит в дереве, синке знаний и git status).
+            try { File.Delete(tmp); } catch { /* не удалилось — пробрасываем исходную ошибку */ }
+            throw;
+        }
     }
 }

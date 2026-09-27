@@ -15,6 +15,23 @@ public static partial class ArchitectureSourceScanner
     /// <summary>Потолок обхода — защита от гигантских деревьев (монорепы, случайный home).</summary>
     public const int MaxDirectories = 20_000;
 
+    /// <summary>
+    /// Симлинк или junction: в обход не идём — петля (ссылка на предка) гоняла бы обход до
+    /// потолка, а ссылка наружу утащила бы чужое дерево в модель проекта.
+    /// Не прочитались атрибуты — тоже не идём.
+    /// </summary>
+    public static bool IsReparsePoint(string dir)
+    {
+        try
+        {
+            return (File.GetAttributes(dir) & FileAttributes.ReparsePoint) != 0;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return true;
+        }
+    }
+
     /// <summary>Имя интерфейса-маркера подсистемы (контракт CCS; в чужих проектах просто не найдётся).</summary>
     public const string SubsystemMarkerName = "IAppSubsystem";
 
@@ -56,7 +73,7 @@ public static partial class ArchitectureSourceScanner
             foreach (var sub in subdirs)
             {
                 var relSub = ArchitecturePathFolding.Normalize(Path.GetRelativePath(fullRoot, sub));
-                if (!ArchitecturePathFolding.IsIgnored(relSub)) stack.Push(sub);
+                if (!ArchitecturePathFolding.IsIgnored(relSub) && !IsReparsePoint(sub)) stack.Push(sub);
             }
         }
 

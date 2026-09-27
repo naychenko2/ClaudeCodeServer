@@ -13,13 +13,19 @@ public sealed record GeneratedElement(
     string? Description,
     string? Technology,
     string? ParentKey,
-    IReadOnlyList<GeneratedConnection> Connections);
+    IReadOnlyList<GeneratedConnection> Connections,
+    // Внешняя система-кандидат L1: при создании получает external и тег «кандидат»
+    bool External = false);
 
-/// <summary>Стартовая модель уровней система/контейнер/компонент.</summary>
+/// <summary>
+/// Стартовая модель уровней система/контейнер/компонент плюс внешние системы-кандидаты L1
+/// (соседи системы проекта на уровне systems).
+/// </summary>
 public sealed record GeneratedModel(
     GeneratedElement System,
     IReadOnlyList<GeneratedElement> Containers,
-    IReadOnlyList<GeneratedElement> Components);
+    IReadOnlyList<GeneratedElement> Components,
+    IReadOnlyList<GeneratedElement>? Externals = null);
 
 /// <summary>
 /// Чистая функция «входы → стартовая модель»: без диска и часов, детерминирована
@@ -34,6 +40,15 @@ public static class ArchitectureModelBuilder
 
     private const string DependsLabel = "зависит от";
     private const string UsesLabel = "использует";
+
+    /// <summary>Тег невыверенной внешней системы: генератор ставит при создании и больше не трогает.</summary>
+    public const string CandidateTag = "кандидат";
+
+    /// <summary>Потолок строки источника в описании кандидата (как у описаний тулсета).</summary>
+    public const int MaxCandidateDescription = 120;
+
+    /// <summary>Ключ внешней системы-кандидата (по нему — стабильный id gen-system-…).</summary>
+    public static string ExternalKey(string name) => "external:" + ArchitectureExternalScanner.NormalizeName(name);
 
     public static string ComponentKey(string container, string component) => container + "::" + component;
 
@@ -164,9 +179,26 @@ public static class ArchitectureModelBuilder
                 connections);
         }).ToList();
 
-        var system = new GeneratedElement(SystemKey, input.SystemName, null, null, null, []);
-        return new GeneratedModel(system, containers, components);
+        // 5. Внешние системы-кандидаты L1 и связь «система проекта → кандидат».
+        var externals = (input.Externals ?? [])
+            .Take(ArchitectureExternalScanner.MaxExternalSystems)
+            .Select(c => new GeneratedElement(
+                ExternalKey(c.Name),
+                c.Name,
+                Truncate("Найдено: " + c.Source, MaxCandidateDescription),
+                c.Technology,
+                null,
+                [],
+                External: true))
+            .DistinctBy(e => e.Key, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var system = new GeneratedElement(SystemKey, input.SystemName, null, null, null,
+            externals.Select(e => new GeneratedConnection(e.Key, UsesLabel)).ToList());
+        return new GeneratedModel(system, containers, components, externals);
     }
+
+    private static string Truncate(string s, int max) => s.Length <= max ? s : s[..(max - 1)] + "…";
 
     private static string Canon(List<string> keys, string key) =>
         keys.First(k => Eq(k, key));

@@ -67,8 +67,11 @@ public sealed class ArchitectureModelStore
     /// Пишет модель, если файл всё ещё в версии <paramref name="baseVersion"/>
     /// (null — «файла ещё нет»). Иначе ничего не трогает и отдаёт текущее состояние.
     /// </summary>
+    /// <param name="origins">Дозапись в карту происхождения (id элемента → origin) под тем же
+    /// замком, что и модель: тулсет метит созданное им как <c>agent</c>.</param>
     public async Task<ArchitectureSaveOutcome> WriteAsync(
-        string root, string content, string? baseVersion, string updatedBy, CancellationToken ct)
+        string root, string content, string? baseVersion, string updatedBy, CancellationToken ct,
+        IReadOnlyDictionary<string, string>? origins = null)
     {
         Validate(content);
         var (modelPath, metaPath) = Paths(root);
@@ -89,7 +92,7 @@ public sealed class ArchitectureModelStore
 
             await WriteAtomicAsync(modelPath, bytes, ct);
             var author = new ArchitectureModelAuthor(DateTimeOffset.UtcNow, updatedBy);
-            await WriteAuthorAsync(metaPath, author, ct);
+            await WriteAuthorAsync(metaPath, author, origins, ct);
             return new ArchitectureSaveOutcome(true, new ArchitectureModelSnapshot(content, VersionOf(bytes), author));
         }
         finally
@@ -125,23 +128,33 @@ public sealed class ArchitectureModelStore
         if (meta is null) return new ArchitectureModelAuthor(null, null);
         var updatedAt = TryDate(meta["updatedAt"]);
         var generatedAt = TryDate(meta["generatedAt"]);
-        // Генератор переписывает метаданные целиком и updatedBy не знает: свежая сборка
-        // из кода — тоже «обновление», её автор — сама сборка
+        // Генератор updatedBy не знает: свежая сборка из кода — тоже «обновление»,
+        // её автор — сама сборка
         if (generatedAt is not null && (updatedAt is null || generatedAt > updatedAt))
             return new ArchitectureModelAuthor(generatedAt, GeneratorAuthor);
         return new ArchitectureModelAuthor(updatedAt, meta["updatedBy"]?.GetValue<string>());
     }
 
-    private static async Task WriteAuthorAsync(string metaPath, ArchitectureModelAuthor author, CancellationToken ct)
+    private static async Task WriteAuthorAsync(string metaPath, ArchitectureModelAuthor author,
+        IReadOnlyDictionary<string, string>? origins, CancellationToken ct)
     {
-        // Чужие поля (время снимка графа от генератора) сохраняем
+        // Чужие поля (время снимка графа и карту происхождения от генератора) сохраняем
         var meta = await ReadMetaAsync(metaPath, ct) ?? new JsonObject();
         meta["updatedAt"] = author.UpdatedAt?.ToString("O");
         meta["updatedBy"] = author.UpdatedBy;
+        if (origins is { Count: > 0 })
+        {
+            if (meta["elements"] is not JsonObject elements) meta["elements"] = elements = new JsonObject();
+            foreach (var (id, origin) in origins)
+            {
+                if (elements[id] is not JsonObject rec) elements[id] = rec = new JsonObject();
+                rec["origin"] = origin;
+            }
+        }
         await WriteAtomicAsync(metaPath, Utf8NoBom.GetBytes(meta.ToJsonString(Indented) + "\n"), ct);
     }
 
-    private static async Task<JsonObject?> ReadMetaAsync(string metaPath, CancellationToken ct)
+    internal static async Task<JsonObject?> ReadMetaAsync(string metaPath, CancellationToken ct)
     {
         if (!File.Exists(metaPath)) return null;
         try
@@ -158,11 +171,21 @@ public sealed class ArchitectureModelStore
     private static DateTimeOffset? TryDate(JsonNode? node) =>
         node is JsonValue v && v.TryGetValue<string>(out var s) && DateTimeOffset.TryParse(s, out var d) ? d : null;
 
-    private static async Task WriteAtomicAsync(string path, byte[] bytes, CancellationToken ct)
+    internal static async Task WriteAtomicAsync(string path, byte[] bytes, CancellationToken ct)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var tmp = path + ".tmp";
-        await File.WriteAllBytesAsync(tmp, bytes, ct);
-        File.Move(tmp, path, overwrite: true);
+        try
+        {
+            await File.WriteAllBytesAsync(tmp, bytes, ct);
+            File.Move(tmp, path, overwrite: true);
+        }
+        catch
+        {
+            // Сорвалась запись или подмена — недописанный .tmp в проекте не оставляем
+            // (иначе он висит в дереве, синке знаний и git status).
+            try { File.Delete(tmp); } catch { /* не удалилось — пробрасываем исходную ошибку */ }
+            throw;
+        }
     }
 }

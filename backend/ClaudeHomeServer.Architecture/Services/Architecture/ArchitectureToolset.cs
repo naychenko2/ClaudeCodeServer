@@ -123,7 +123,8 @@ public sealed class ArchitectureToolset(
                         Tags: TagsArg(arguments),
                         External: BoolArg(arguments, "external") ?? false));
                     return await SaveAsync(project, persona, doc, snapshot,
-                        $"Элемент «{created.Name}» [{created.Level}] создан, id={created.Id}.", ct);
+                        $"Элемент «{created.Name}» [{created.Level}] создан, id={created.Id}.", ct,
+                        new Dictionary<string, string> { [created.Id] = ArchitectureModelMerger.OriginAgent });
                 }
 
                 case "arch_delete_element":
@@ -206,11 +207,12 @@ public sealed class ArchitectureToolset(
     // Запись — через общее хранилище со сверкой версии: между нашим чтением и записью файл
     // могли поменять раздел (другая вкладка) или «Собрать из кода» — тогда честный конфликт
     private async Task<McpToolCallResult> SaveAsync(Project project, Persona? persona, JsonObject doc,
-        ArchitectureModelSnapshot basis, string summary, CancellationToken ct)
+        ArchitectureModelSnapshot basis, string summary, CancellationToken ct,
+        IReadOnlyDictionary<string, string>? origins = null)
     {
         var author = persona?.Name is { Length: > 0 } name ? name : "Claude";
         var outcome = await store.WriteAsync(project.RootPath, ArchitectureModelEditor.Serialize(doc),
-            basis.Version, author, ct);
+            basis.Version, author, ct, origins);
         return outcome.Saved
             ? Text($"{summary} Сохранено, version={outcome.Current.Version}. "
                 + "Раздел «Архитектура» покажет правку после перезагрузки модели.")

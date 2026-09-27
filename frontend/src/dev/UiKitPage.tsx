@@ -2672,7 +2672,7 @@ function PanelsSection() {
         {/* Состояние чата в списке несёт ореол самой карточки — точки статуса в ней
             больше нет. Ниже боевой ChatCard во всех 8 видах: он рисует ореол сам
             по таблицам STATUS_CONFIG / STATUS_GLOW (StatusIndicator.tsx) классами
-            cc-glow-* из index.css. Цвет отвечает «что происходит», переливание —
+            cc-tint-* из index.css. Цвет отвечает «что происходит», переливание —
             «происходит прямо сейчас», сила (alpha) — насколько это требует внимания. */}
         <SubBlock label="ChatCard — ореол статуса, все 8 видов">
           <Island bg={C.bgMain} borderColor={ISLAND.border} style={{ overflow: 'hidden' }}>

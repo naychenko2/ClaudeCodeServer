@@ -21,12 +21,17 @@ public sealed class ModuleLoader
     private readonly ModuleRegistry _registry;
     private readonly IConfiguration _config;
     private readonly ILogger<ModuleLoader> _log;
+    // Стор состава подсистем: модуль, выключенный гейтом Subsystems:{Key}:Enabled, пишется
+    // сюда как RecordDisabled (админский экран, RestartRequired). null — только в юнитах.
+    private readonly SubsystemStateStore? _states;
 
-    public ModuleLoader(ModuleRegistry registry, IConfiguration config, ILogger<ModuleLoader> log)
+    public ModuleLoader(ModuleRegistry registry, IConfiguration config, ILogger<ModuleLoader> log,
+        SubsystemStateStore? states = null)
     {
         _registry = registry;
         _config = config;
         _log = log;
+        _states = states;
     }
 
     // Вызывается один раз на старте (до builder.Build()) в Program.cs. Возвращает
@@ -83,6 +88,16 @@ public sealed class ModuleLoader
             }
 
             var subsystem = (IAppSubsystem)Activator.CreateInstance(implType)!;
+            // Гейт отключаемости — тот же, что в AddSubsystems (ADR-014): выключенный модуль
+            // не зовёт Register и НЕ возвращается наружу, поэтому Program.cs не подключает
+            // его ApplicationPart и не пишет RecordActive — контроллеров у него нет вовсе.
+            if (!SubsystemGate.IsEnabled(_config, subsystem.Key))
+            {
+                _states?.RecordDisabled(subsystem);
+                _log.LogInformation("Модуль «{Key}» выключен гейтом Subsystems:{SubsystemKey}:Enabled — не загружается",
+                    desc.Key, subsystem.Key);
+                return null;
+            }
             subsystem.Register(services, _config);
             _log.LogInformation("Модуль «{Key}» «{Title}» v{Version} загружен: {Path}",
                 desc.Key, subsystem.Title, desc.Version, desc.Backend?.AssemblyPath);

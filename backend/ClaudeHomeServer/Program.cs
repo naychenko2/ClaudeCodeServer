@@ -138,8 +138,10 @@ var mvcBuilder = builder.Services.AddControllers()
     // Notes — теперь динамический модуль (сценарий Б): ApplicationPart добавляется
     // ModuleLoader'ом по пути из DynamicModules-конфига (см. ниже), а не автоматически
     // через ProjectReference. Старый gate по имени сборки ("ClaudeHomeServer.Notes") удалён.
-    // Гейт «выключить Notes» — теперь `DynamicModules.notes.Enabled=false` (ModuleLoader
-    // просто не загрузит dll) + `Subsystems:Notes:Enabled` для Main-side-форвардеров.
+    // Гейт «выключить Notes» — любой из двух замков: `DynamicModules.notes.Enabled=false`
+    // (ModuleLoader не загрузит dll) или `Subsystems:Notes:Enabled=false` — ModuleLoader
+    // проверяет его ДО Register: без регистрации сервисов, без ApplicationPart (маршрутов
+    // нет) и без RecordActive; Main-side-форвардеры читают тот же гейт.
 
 // Динамические модули (сценарий Б): отдельные сборки, грузятся по пути из секции "DynamicModules"
 // конфига при старте (не через ProjectReference). Load-once, выгрузки нет (DI сам не выгружает).
@@ -158,14 +160,18 @@ var mvcBuilder = builder.Services.AddControllers()
 // тот же инстанс.
 var dynamicModuleStore = new ClaudeHomeServer.Services.Composition.SubsystemStateStore();
 builder.Services.AddSingleton(dynamicModuleStore);
+// Реестр — вне using: ниже по нему же идёт генерическая раздача MF-remote `{key}-remote`.
+var dynamicModuleRegistry = new ClaudeHomeServer.Services.DynamicModules.ModuleRegistry(builder.Configuration);
 using (var dynamicModuleLogProvider = builder.Services.BuildServiceProvider())
 {
     var dynamicModuleLogFactory = dynamicModuleLogProvider.GetRequiredService<ILoggerFactory>();
-    var dynamicModuleRegistry = new ClaudeHomeServer.Services.DynamicModules.ModuleRegistry(builder.Configuration);
     var dynamicModuleLoader = new ClaudeHomeServer.Services.DynamicModules.ModuleLoader(
         dynamicModuleRegistry,
         builder.Configuration,
-        dynamicModuleLogFactory.CreateLogger<ClaudeHomeServer.Services.DynamicModules.ModuleLoader>());
+        dynamicModuleLogFactory.CreateLogger<ClaudeHomeServer.Services.DynamicModules.ModuleLoader>(),
+        // Модуль, выключенный гейтом Subsystems:{Key}:Enabled, ModuleLoader сам пишет как
+        // RecordDisabled и наружу не возвращает — RecordActive ниже его не касается.
+        dynamicModuleStore);
     foreach (var dynamicModuleAssembly in dynamicModuleLoader.LoadAll(builder.Services))
     {
         // MVC-контроллеры загруженной сборки подключаем как отдельный ApplicationPart
@@ -1788,17 +1794,23 @@ if (Directory.Exists(distPath))
     app.UseDefaultFiles(new DefaultFilesOptions { FileProvider = fp });
     app.UseStaticFiles(new StaticFileOptions { FileProvider = fp, OnPrepareResponse = setCacheHeaders, ContentTypeProvider = contentTypes });
 
-    // MF-remote подсистем (N2): /notes-remote/** раздаём из ФИЗИЧЕСКОГО wwwroot/notes-remote.
+    // MF-remote подсистем (N2): /{key}-remote/** раздаём из ФИЗИЧЕСКОГО wwwroot/{key}-remote —
+    // один цикл по модулям DynamicModules с Frontend, без per-module строк (notes, architecture…).
     // Отдельно от distPath (выше fp может указывать на dev-dist, не на wwwroot), чтобы в проде
     // запрос remoteEntry.js всегда резолвился в файл, а не SPA-fallback → index.html (loadRemote упал бы).
-    // Middleware стоит РАНЬШЕ MapFallbackToFile, поэтому перехватывает /notes-remote/* до SPA-фолбэка.
-    var notesRemotePath = Path.Combine(AppContext.BaseDirectory, "wwwroot", "notes-remote");
-    if (Directory.Exists(notesRemotePath))
+    // Middleware стоит РАНЬШЕ MapFallbackToFile, поэтому перехватывает /{key}-remote/* до SPA-фолбэка.
+    // Ключ идёт в путь — берём только простые имена (буквы/цифры/дефис/подчёркивание).
+    // Список раздачи — только загруженные модули. Файлы в wwwroot всё равно доступны общей
+    // статикой (UseStaticFiles выше), данных в remote нет.
+    foreach (var remoteModule in dynamicModuleRegistry.ServedRemotes(dynamicModuleStore))
     {
+        if (!remoteModule.Key.All(ch => char.IsAsciiLetterOrDigit(ch) || ch is '-' or '_')) continue;
+        var remotePath = Path.Combine(AppContext.BaseDirectory, "wwwroot", remoteModule.Key + "-remote");
+        if (!Directory.Exists(remotePath)) continue;
         app.UseStaticFiles(new StaticFileOptions
         {
-            FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(notesRemotePath),
-            RequestPath = "/notes-remote",
+            FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(remotePath),
+            RequestPath = "/" + remoteModule.Key + "-remote",
             OnPrepareResponse = setCacheHeaders,
             ContentTypeProvider = contentTypes
         });

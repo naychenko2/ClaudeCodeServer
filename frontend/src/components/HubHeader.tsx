@@ -18,6 +18,7 @@ import { FeatureFlagsModal } from './FeatureFlagsModal';
 import { ModelsSpendModal } from '../features/modelsSpend/ModelsSpendModal';
 import { McpServersModal } from '../features/mcp/McpServersModal';
 import { DevicesModal } from '../features/desktop/DevicesModal';
+import { HandsProvidersModal } from '../features/localHands/HandsProvidersModal';
 import { useFeature, FLAGS } from '../lib/featureFlags';
 import { DeployModal } from './DeployModal';
 import { PowerModal } from './PowerModal';
@@ -71,6 +72,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
   const [showModelsSpend, setShowModelsSpend] = useState(false);
   const [showMcpServers, setShowMcpServers] = useState(false);
   const [showDevices, setShowDevices] = useState(false);
+  const [showHandsProviders, setShowHandsProviders] = useState(false);
   const [showDeploy, setShowDeploy] = useState(false);
   const [showPower, setShowPower] = useState(false);
   const [showRemoteCommands, setShowRemoteCommands] = useState(false);
@@ -182,6 +184,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
   // Грань десктопного агента за фич-флагом: без него пункта «Устройства» нет —
   // сопрягать нечего, а сервер всё равно откажет
   const desktopEnabled = useFeature(FLAGS.desktopAgent);
+  const localHandsEnabled = useFeature(FLAGS.localHands);
 
   // Доступна ли выкатка на бой. Спрашиваем только у админа: фича admin-only и вдобавок
   // выключена в конфиге по умолчанию — на машинах, где раннера нет, пункта быть не должно.
@@ -550,6 +553,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
           // Устройства десктопной грани — только при поднятом флаге: без него сопрягать
           // нечего, сервер всё равно откажет
           onShowDevices={desktopEnabled ? () => setShowDevices(true) : undefined}
+          onShowHandsProviders={localHandsEnabled ? () => setShowHandsProviders(true) : undefined}
           onShowUserManagement={() => setShowUserMgmt(true)}
           // Админский список подсистем инстанса (Этап 5, волна 3): только
           // чтение через GET /api/admin/subsystems, без тумблера — глобальный
@@ -589,6 +593,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
       {showModelsSpend && <ModelsSpendModal onClose={() => setShowModelsSpend(false)} />}
       {showMcpServers && <McpServersModal isAdmin={isAdmin} onClose={() => setShowMcpServers(false)} />}
       {showDevices && <DevicesModal onClose={() => setShowDevices(false)} />}
+      {showHandsProviders && <HandsProvidersModal onClose={() => setShowHandsProviders(false)} />}
       {showDeploy && <DeployModal onClose={() => setShowDeploy(false)} />}
       {showPower && <PowerModal onClose={() => setShowPower(false)} />}
       {showRemoteCommands && <RemoteCommandsModal onClose={() => setShowRemoteCommands(false)} />}

@@ -1,5 +1,5 @@
 import { memo, useState, useCallback, useContext, useEffect, type ReactNode } from 'react';
-import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock, ScrollText, RefreshCw, ChevronDown, Ban, GitFork, GitBranch, Camera } from 'lucide-react';
+import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock, ScrollText, RefreshCw, ChevronDown, Ban, GitFork, GitBranch, Camera, MonitorSmartphone } from 'lucide-react';
 import type { ChatItem, Persona, ProviderFallbackOption } from '../../types';
 import {
   splitFallbackOptions, formatSubscriptionMeta, providerSwitchReasonLabel, modelSwitchHeadline,
@@ -1932,6 +1932,24 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
           maxWidth: '100%', textAlign: 'center',
         }}>
           <svg width="11" height="11" viewBox="0 0 24 24" fill={C.textMuted} style={{ flexShrink: 0 }}><rect x="5" y="5" width="14" height="14" rx="2" /></svg>
+          <span>{item.text}</span>
+        </div>
+      );
+    }
+
+    case 'hands_notice': {
+      // Строка о руках локального проекта: остановка на устройстве — янтарная, как
+      // остальные предупреждения ленты; справочная (понижение режима) — нейтральная
+      const warn = item.tone === 'warning';
+      return (
+        <div style={{
+          alignSelf: 'center', maxWidth: '100%', display: 'flex', alignItems: 'center', gap: 8,
+          justifyContent: 'center', textAlign: 'center', borderRadius: 8, padding: '6px 12px', fontSize: 12.5,
+          background: warn ? C.warningBg : C.bgSelected,
+          border: `1px solid ${warn ? C.warning : C.border}`,
+          color: warn ? C.warningText : C.textSecondary,
+        }}>
+          <MonitorSmartphone size={13} strokeWidth={2} style={{ flexShrink: 0 }} />
           <span>{item.text}</span>
         </div>
       );

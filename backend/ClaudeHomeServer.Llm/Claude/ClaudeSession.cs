@@ -771,6 +771,15 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly Func<ExternalMcpContext?>? _externalMcpProvider;
     // Браузер (плагин playwright) в этой сессии: false — гасим плагин на запуске CLI
     private readonly bool _browserEnabled;
+    // Руки локального проекта (LlmSessionContext.HandsEnabled/HandsProviders): решение на ход —
+    // HandsActiveNow, от него одного зависят маркер рук и режим прав
+    private readonly bool _handsEnabled;
+    private readonly IReadOnlyList<string>? _handsProviders;
+    // Руки у последнего собранного хода — живая смена режима прав (TrySetPermissionModeLive)
+    // обязана понизить bypass так же, как запуск
+    private volatile bool _lastHandsActive;
+    // Строка о понижении bypass уже ушла в ленту: повторять её каждый ход — шум
+    private bool _bypassDowngradeNoticed;
     // Реестр CLI-провайдеров: env-оверрайды процесса (ANTHROPIC_BASE_URL и др.)
     // для сторонних моделей; null — всегда родной Claude
     private readonly LlmProviderRegistry? _providers;
@@ -789,6 +798,10 @@ public class ClaudeSession : ILlmSessionAdapter
     // каждого ответа (TurnTelemetry.ModelFromEvent). EffectiveModel — лишь намерение, и при
     // пустом слоте он null, из-за чего в телеметрию уходил литерал unknown.
     private string? _turnCliModel;
+
+    // Сигнатура запуска последнего собранного хода (BuildLaunchSignature) — для сторожей
+    // стабильности: два хода чата с одинаковыми свойствами обязаны дать одну сигнатуру
+    internal string? LastLaunchSignature { get; private set; }
 
     // Спан идущего хода — чтобы дописать в него фактическую модель, когда CLI её назовёт.
     // Тег ставится в двух местах, но никогда одновременно: при старте хода (до запуска
@@ -861,6 +874,8 @@ public class ClaudeSession : ILlmSessionAdapter
         _personaAgentsProvider = context.PersonaAgentsProvider;
         _externalMcpProvider = context.ExternalMcpProvider;
         _browserEnabled = context.BrowserEnabled;
+        _handsEnabled = context.HandsEnabled;
+        _handsProviders = context.HandsProviders;
         _launcher = context.Launcher ?? Execution.LocalProcessRunner.Instance;
         _localEngineBusy = context.LocalEngineBusy ?? LocalEngineBusyTracker.Instance;
         // Запреты конфига + ограничения возможностей персоны (ExtraDisallowedTools)
@@ -899,8 +914,10 @@ public class ClaudeSession : ILlmSessionAdapter
     // ServerKeys — строка сигнатуры («ключ:отпечаток-состава»), НЕ список серверов: отпечаток
     // сам содержит запятые, парсить его нельзя. ServerNames — плоский список ключей для
     // показа человеку (снимок промпта хода).
+    // hands — решение HandsActiveNow этого хода (свойство сессии): маркер рук вместо узла и
+    // ни одного stdio-узла в конфиге.
     private (string? Path, string ServerKeys, IReadOnlyList<string> ServerNames) BuildTurnMcpConfig(
-        string? datasetId, PersonaAgentsContext? personaAgents = null)
+        string? datasetId, PersonaAgentsContext? personaAgents = null, bool hands = false)
     {
         // Рубильник Mcp:HttpTransport спрашивается на ХОД (HttpMcpEnabledProvider, а не
         // захваченный при создании адаптера bool): контекст живёт столько же, сколько адаптер,
@@ -1041,7 +1058,7 @@ public class ClaudeSession : ILlmSessionAdapter
         if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasNotifications
             && !hasWidgets && !hasCodeGraph && !hasDify && !hasDesktop && !hasDataset && !hasModules && !hasFalAi && !hasGlif
             && !hasHiggsfield && !hasImageEditor && !hasLocalMedia && userServers is null
-            && !hasExternal && !hasWatch && !hasWebSearch
+            && !hasExternal && !hasWatch && !hasWebSearch && !hands
             && !(hasConsultants && (memoryServerPath is not null
                 || personaAgents!.MemoryServers.Any(ConsultantHttp)))) return (null, "", []);
 
@@ -1942,6 +1959,31 @@ public class ClaudeSession : ILlmSessionAdapter
                         provider.Key, string.Join(",", removed));
                 }
             }
+
+            // Руки (ADR-016 §7, решения 2 и 4): stdio-узел — ещё один канал запуска кода на
+            // устройстве, поэтому в ходе с руками их нет ни одного (внешние серверы реестра,
+            // модули, user-scope, откатившиеся на stdio продуктовые). Узел рук — только маркер:
+            // команду и путь моста подставляет агент. Ставится ПОСЛЕ обрезки TrimMcpServers,
+            // иначе белый список провайдера отрезал бы руки молча.
+            if (hands)
+            {
+                foreach (var key in servers.Select(kv => kv.Key).ToList())
+                {
+                    var type = (servers[key]?["type"] as System.Text.Json.Nodes.JsonValue)?.TryGetValue<string>(out var t) == true ? t : null;
+                    if (type is "http" or "sse") continue;
+                    servers.Remove(key);
+                    shapes.Remove(key);
+                }
+                // Без зрения (решение 7) агент запускает мост без screenshot_control. Зрение —
+                // свойство провайдера сессии, поэтому и отпечаток состава стабилен между ходами
+                var vision = Capabilities.SupportsImages;
+                servers[DeviceExecPlaceholders.HandsServerName] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["type"] = DeviceExecPlaceholders.Hands,
+                    [DeviceExecPlaceholders.HandsVisionField] = vision,
+                };
+                shapes[DeviceExecPlaceholders.HandsServerName] = vision ? "v1" : "v0";
+            }
             if (servers.Count == 0) return (null, "", []);
             var combined = new System.Text.Json.Nodes.JsonObject { ["mcpServers"] = servers };
             // HostTempDir среды: для песочницы это bind-mount — процесс claude увидит файл
@@ -2468,6 +2510,18 @@ public class ClaudeSession : ILlmSessionAdapter
         WriteLineToStdin(msg, target);
     }
 
+    // Руки в этом ходе: признак чата и провайдер текущей пары среди доверенных владельцем. Оба —
+    // свойства сессии (EffectiveModel от хода не зависит), поэтому сигнатура запуска между
+    // ходами не мерцает. Фолбэк уводит ход только к доверенным провайдерам (TrimChainForHands),
+    // так что внутри хода решение не меняется.
+    private bool HandsActiveNow() =>
+        _handsEnabled && HandsProviders.Allowed(_handsProviders,
+            _providers?.ProviderKey(EffectiveModel) ?? HandsProviders.Claude);
+
+    // Режим прав хода с руками: bypassPermissions не бывает никогда, понижается до acceptEdits
+    internal static ClaudeMode HandsPermissionMode(ClaudeMode mode) =>
+        mode == ClaudeMode.Bypass ? ClaudeMode.AcceptEdits : mode;
+
     // Смена режима прав на лету: пишем control_request set_permission_mode в stdin живого
     // процесса. CLI применяет его к идущему ходу (дальнейшие tool-вызовы уже по новому режиму)
     // и отвечает control_response success (reader его игнорирует как неизвестный тип).
@@ -2476,6 +2530,8 @@ public class ClaudeSession : ILlmSessionAdapter
     {
         var proc = _currentProcess;
         if (proc is null || proc.HasExited) return false;
+        // Ход с руками в bypassPermissions не уходит и на лету (ADR-016 §7)
+        if (_lastHandsActive) mode = HandsPermissionMode(mode);
         var req = JsonSerializer.Serialize(new
         {
             type = "control_request",
@@ -2714,10 +2770,34 @@ public class ClaudeSession : ILlmSessionAdapter
         if (Info.ClaudeSessionId is not null)
             args.AddRange(["--resume", Info.ClaudeSessionId]);
 
+        // Руки этого хода — единственное решение, от которого зависят маркер рук в --mcp-config и
+        // режим прав: разойтись они не могут. Shell, сабагенты и запись в .claude/.mcp.json в ходе
+        // с руками не запрещаются (решение владельца 3б, ADR-016 §7).
+        var handsActive = HandsActiveNow();
+        _lastHandsActive = handsActive;
+        var disallowed = _disallowedTools;
+        // Руки у чата есть, но провайдеру хода не доверены — ход идёт без рук, бейдж говорит почему
+        if (_handsEnabled && !handsActive)
+            await _onMessage(new HandsStatusMessage(HandsChatStates.ProviderNotAllowed));
+
         // Режим прав у claude CLI задаётся флагом --permission-mode (значения: default,
         // acceptEdits, plan, auto, dontAsk, bypassPermissions), а НЕ --mode (такого флага нет).
         // После одобрения плана один ход выполняем без plan, чтобы Claude реализовал, а не планировал заново.
-        if (_forceNonPlanNextTurn)
+        if (handsActive)
+        {
+            // Ход с руками идёт с явным режимом всегда: без флага CLI взял бы defaultMode из
+            // .claude/settings*.json проекта, а там может стоять bypassPermissions
+            var mode = _forceNonPlanNextTurn && Info.Mode == ClaudeMode.Plan ? ClaudeMode.Default : Info.Mode;
+            _forceNonPlanNextTurn = false;
+            args.AddRange(["--permission-mode", HandsPermissionMode(mode).ToCliFlag()]);
+            if (mode != ClaudeMode.Bypass) _bypassDowngradeNoticed = false;
+            else if (!_bypassDowngradeNoticed)
+            {
+                _bypassDowngradeNoticed = true;
+                await _onMessage(new HandsNoticeMessage(HandsTurnRules.BypassDowngradedText));
+            }
+        }
+        else if (_forceNonPlanNextTurn)
             _forceNonPlanNextTurn = false;
         else
             args.AddRange(["--permission-mode", Info.Mode.ToCliFlag()]);
@@ -2830,7 +2910,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // Ошибки провайдера — ход без консультантов.
         PersonaAgentsContext? personaAgents = null;
         if (_personaAgentsProvider is not null
-            && !_disallowedTools.Contains("Task", StringComparer.Ordinal))
+            && !disallowed.Contains("Task", StringComparer.Ordinal))
         {
             try { personaAgents = _personaAgentsProvider(); }
             catch (Exception ex)
@@ -2846,7 +2926,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // серверной папки не должна подсунуть ходу чужую базу знаний
         var currentWk = _serverContent ? _wkStore?.ForRoot(_rootPath) : null;
         var currentDatasetId = currentWk?.DatasetId;
-        var (turnMcpPath, mcpServerKeys, mcpServerNames) = BuildTurnMcpConfig(currentDatasetId, personaAgents);
+        var (turnMcpPath, mcpServerKeys, mcpServerNames) = BuildTurnMcpConfig(currentDatasetId, personaAgents, handsActive);
         // Секции промпта про MCP-серверы вешаются на ФАКТ доставки сервера в конфиг ЭТОГО хода,
         // а не на «контекст сервера есть у сессии»: TrimMcpServers/KeepMcpServers гасят сервер
         // (у local-qwen из всего набора остаются tasks/codegraph/memory), а руководство к нему
@@ -2866,7 +2946,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // Task(subagent_type=…) учат инструменту, которого у хода нет. _lastBareModeApplied
         // выставлен блоком BareMode выше по методу, до сборки секций.
         var taskToolAvailable = !_lastBareModeApplied
-            && !_disallowedTools.Contains("Task", StringComparer.Ordinal);
+            && !disallowed.Contains("Task", StringComparer.Ordinal);
         var effectiveMcpConfig = turnMcpPath ?? _mcpConfigPath;
         if (!string.IsNullOrWhiteSpace(effectiveMcpConfig) && File.Exists(effectiveMcpConfig))
         {
@@ -2901,8 +2981,8 @@ public class ClaudeSession : ILlmSessionAdapter
                 string.Join(",", personaAgents.MemoryServers.Select(s => "mcp__" + s.ServerKey))]);
 
         // Блокируем коннекторы аккаунта claude.ai — они вливаются помимо --mcp-config.
-        if (_disallowedTools.Length > 0)
-            args.AddRange(["--disallowedTools", string.Join(",", _disallowedTools)]);
+        if (disallowed.Length > 0)
+            args.AddRange(["--disallowedTools", string.Join(",", disallowed)]);
 
         // Слой персоны из системного промпта — жёсткая часть сигнатуры прогона
         // (смена собеседника посреди доживания = несовместимый ход → новый процесс)
@@ -3726,6 +3806,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _lastTurnInputChars = (combinedPrompt?.Length ?? 0) + turnTextForCli.Length;
 
         var signature = BuildLaunchSignature(args, mcpServerKeys, envOverrides, personaLayerPrompt);
+        LastLaunchSignature = signature;
 
         // Same-process ход: прогон дожил с прошлого хода (фоновые агенты ещё работают),
         // окружение не изменилось — отдаём сообщение живому процессу в stdin, агенты

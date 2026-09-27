@@ -57,4 +57,7 @@
   <Project Path="ClaudeHomeServer.Yandex/ClaudeHomeServer.Yandex.csproj" />
   <Project Path="ClaudeHomeServer.Yandex.Tests/ClaudeHomeServer.Yandex.Tests.csproj" />
   <Project Path="ConPtyBridge/ConPtyBridge.csproj" />
+  <Project Path="HandsBridge/HandsBridge.csproj" />
+  <Project Path="HandsBridge.Policy/HandsBridge.Policy.csproj" />
+  <Project Path="HandsBridge.Policy.Tests/HandsBridge.Policy.Tests.csproj" />
 </Solution>

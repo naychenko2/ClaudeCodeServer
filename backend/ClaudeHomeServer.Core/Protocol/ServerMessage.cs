@@ -619,6 +619,19 @@ public record DesktopSessionMessage(bool Active, string DeviceName, string ChatS
     string? Reason = null)
     : ServerMessage("desktop_session");
 
+// Статус рук локального проекта в чате (ADR-016 §7) — источник бейджа LocalHandsBadge и строк
+// ленты. Не путать с DesktopSessionMessage (руки десктопного агента, ADR-008). Эфемерное: в
+// history.json не пишется. State — HandsChatStates; Reason — HandsEndReason у stopped;
+// DeviceName — человеческое имя устройства; ExpiresAt — UTC конца сеанса на устройстве.
+public record HandsStatusMessage(string State, string? DeviceName = null, string? Reason = null,
+    DateTime? ExpiresAt = null)
+    : ServerMessage("hands_status");
+
+// Строка ленты о руках, не ошибка хода (ErrorMessage перевёл бы чат в Error): «режим
+// «Без ограничений» понижен» и подобные. Эфемерное, в history.json не пишется.
+public record HandsNoticeMessage(string Text)
+    : ServerMessage("hands_notice");
+
 // Подсказка следующего сообщения: текст от claude CLI после хода.
 // Эфемерное событие — в history.json не пишется (нет case в OnMessageAsync и StoredMessage).
 public record PromptSuggestionMessage(string Text)

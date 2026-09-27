@@ -13,7 +13,8 @@ namespace ClaudeHomeServer.DeviceAgent.Hosting;
 /// только токеном устройства плюс отпечаток. Имена методов — часть протокола
 /// (<c>IDesktopDeviceClient</c> на сервере).
 /// </summary>
-internal sealed class HubControlConnection : IControlConnection, IAgentTicketIntrospector, IFilesChangedSink, IAsyncDisposable
+internal sealed class HubControlConnection : IControlConnection, IAgentTicketIntrospector, IFilesChangedSink,
+    Hands.IHandsStatusSink, IAsyncDisposable
 {
     private readonly HubConnection _connection;
     private readonly ILogger _log;
@@ -77,6 +78,15 @@ internal sealed class HubControlConnection : IControlConnection, IAgentTicketInt
         _connection.State == HubConnectionState.Connected
             ? _connection.InvokeAsync(DeviceAgentApi.FilesChangedMethod, report, ct)
             : Task.CompletedTask;
+
+    /// <summary>Состояние рук хода — в чат; канал не поднят — теряется, бейдж перечитает состояние запросом.</summary>
+    Task Hands.IHandsStatusSink.ReportAsync(DeviceHandsReport report, CancellationToken ct) =>
+        _connection.State == HubConnectionState.Connected
+            ? _connection.InvokeAsync(DeviceHandsReport.Method, report, ct)
+            : Task.CompletedTask;
+
+    /// <summary>Канал управления на связи — трей показывает, дойдёт ли статус до чата.</summary>
+    public bool IsConnected => _connection.State == HubConnectionState.Connected;
 
     public ValueTask DisposeAsync() => _connection.DisposeAsync();
 

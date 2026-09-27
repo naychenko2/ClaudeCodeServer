@@ -399,4 +399,15 @@ public sealed record LlmSessionContext(
     // task-notification, живой поток субагентов, ватчер workflow, вес истории в снимке) и
     // фолбэк не переносит его между профилями — провайдера выбирает шлюз, профиль один.
     // Считает SessionManager по ProjectCapabilities.
-    bool TranscriptOnServer = true);
+    bool TranscriptOnServer = true,
+    // Руки локального проекта (ADR-016 §7) — свойство ЧАТА, а не хода: матрица
+    // ProjectCapabilities.HandsRefusal пропускает (флаг local-hands, локальный проект, устройство
+    // с hands, тумблер проекта) и владелец доверил руки хоть одному провайдеру. Ход с руками —
+    // только на провайдере из HandsProviders: ClaudeSession ставит маркер рук
+    // и режим прав без bypassPermissions в одном месте и по одному условию, фолбэк режет цепочку
+    // до этих провайдеров.
+    // Смена признака у начатого чата — осознанный перезапуск CLI, как смена провайдера.
+    bool HandsEnabled = false,
+    // Провайдеры, которым владелец доверил руки (User.HandsProviders): ключи реестра, родной
+    // Claude — "claude". null/пусто — никому.
+    IReadOnlyList<string>? HandsProviders = null);

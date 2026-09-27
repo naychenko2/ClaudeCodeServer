@@ -38,7 +38,7 @@ public class LocalMediaMcpNodeTests : IDisposable
     {
         var method = typeof(ClaudeSession).GetMethod("BuildTurnMcpConfig",
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
-        var result = method.Invoke(session, [null, null])!;
+        var result = method.Invoke(session, [null, null, false])!;
         var type = result.GetType();
         var path = (string?)type.GetField("Item1")!.GetValue(result);
         var keys = (string)type.GetField("Item2")!.GetValue(result)!;

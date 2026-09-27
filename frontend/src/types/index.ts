@@ -97,6 +97,9 @@ export const ProjectFeature = {
   LiveSubagents: 'liveSubagents',
   WorkflowView: 'workflowView',
   ChatBranch: 'chatBranch',
+  // Руки на устройстве (ADR-016 §7): ни в одну группу не входят — доступность решает
+  // handsRefusal проекта, а не состояние группы (зеркало ProjectFeatures.Hands)
+  Hands: 'hands',
 } as const;
 export type ProjectFeatureKey = (typeof ProjectFeature)[keyof typeof ProjectFeature];
 
@@ -167,6 +170,24 @@ export interface Project {
   // Матрица возможностей проекта (ADR-016 §4). Обязательна у новых ответов; для старого
   // бэка может быть null — тогда capabilities вырождаются в «серверный проект, всё доступно»
   capabilities?: ProjectCapabilitiesView | null;
+  // Руки локального проекта (ADR-016 §7, флаг local-hands): тумблер проекта
+  handsEnabled?: boolean;
+  // Почему тумблер рук включить нельзя; null — можно. Готовый текст с сервера
+  // (ProjectCapabilities.HandsRefusal). Читать только через projectCapabilities.ts
+  handsRefusal?: string | null;
+}
+
+// Провайдер, которому владелец может доверить руки (GET /api/me/hands-providers).
+// supportsImages=false — провайдер без зрения: снимков окон не получает, только текст
+export interface HandsProviderOption {
+  key: string;
+  displayName: string;
+  supportsImages: boolean;
+}
+
+export interface HandsProvidersView {
+  providers: string[];
+  available: HandsProviderOption[];
 }
 
 // Иконка проекта (ADR-009): initials — две буквы на цветной плитке; glyph — значок из
@@ -1249,6 +1270,11 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'composer_restore'; text?: string | null; attachedPaths?: string[] | null; mode?: string | null }
   // Подсказка следующего сообщения — чип в композере
   | { type: 'prompt_suggestion'; text: string }
+  // Руки локального проекта в чате (ADR-016 §7): эфемерные, в историю не пишутся.
+  // state — HandsChatStates, reason — HandsEndReason у stopped, deviceName — имя устройства
+  | { type: 'hands_status'; state: string; deviceName?: string | null; reason?: string | null }
+  // Строка ленты о руках, не ошибка хода (понижение «Без ограничений» и подобное)
+  | { type: 'hands_notice'; text: string }
   // Снимок промпта хода записан: id для кнопки «какой промпт ушёл» под постом.
   // Текст сюда не кладём — шторка забирает его отдельным REST-запросом.
   // applied=false — ход доигрывался в живом процессе, и этот промпт модели не уходил
@@ -2053,6 +2079,9 @@ export type ChatItem =
   // Остановка цикла «до готово»: текст готов на сервере (лимит/ошибка/ручной стоп),
   // фронт его не собирает — иначе разъедется с сервером при смене лимита
   | { kind: 'work_loop_stopped'; reason: string; text: string }
+  // Строка ленты о руках локального проекта (hands_notice или остановка рук на устройстве).
+  // Live-only: события эфемерные, в историю не пишутся
+  | { kind: 'hands_notice'; text: string; tone: 'neutral' | 'warning' }
   // details — сырой технический текст сбоя за человекочитаемым text (см. wire-событие error).
   // action — признак предлагаемого действия под карточкой: сейчас только "window-1m-drop"
   // (кнопка «Продолжить в стандартном окне» под карточкой отказа Window1MUnavailable).
@@ -3775,6 +3804,14 @@ export interface DesktopPairingCode {
   expiresAt: string;
   attemptsLeft: number;
   hostFingerprint?: string;
+}
+
+// Первая отрисовка бейджа рук локального проекта (GET /api/sessions/{id}/hands-status),
+// зеркало HandsStatusView. state=null — у чата рук нет вовсе, бейдж не рисуется
+export interface LocalHandsChatStatus {
+  state: string | null;
+  reason: string | null;
+  deviceName: string | null;
 }
 
 // Сеанс рук глазами веб-морды (GET /api/devices/hands/chat/{id}).

@@ -41,6 +41,15 @@ export interface ArchitectureGenerateResult {
   agentTaskId?: string | null;
   agentPersonaId?: string | null;
   agentError?: string | null;
+  warnings?: ArchitectureModelFinding[] | null;
+}
+
+// Несостыковка модели (ArchitectureModelValidator на бэке): висящая ссылка, точка связи,
+// которой у карточки нет, дубль id. Предупреждение — запись она не блокирует
+export interface ArchitectureModelFinding {
+  kind: 'dangling_parent' | 'dangling_connection' | 'dangling_flow_step' | 'unknown_handle' | 'duplicate_id';
+  elementId: string;
+  text: string;
 }
 
 // Модель раздела «Архитектура» (GET /projects/{id}/architecture/model). version — SHA-256
@@ -51,12 +60,14 @@ export interface ArchitectureModelDto {
   version: string | null;
   updatedAt: string | null;
   updatedBy: string | null;
+  warnings?: ArchitectureModelFinding[];
 }
 
 export interface ArchitectureSaveResult {
   version: string;
   updatedAt: string | null;
   updatedBy: string | null;
+  warnings?: ArchitectureModelFinding[];
 }
 
 

@@ -14,7 +14,7 @@
 // потерянное событие (реконнект SignalR, сбой watcher'а).
 import { useSyncExternalStore } from 'react';
 import { api } from 'aihome_shell/kit';
-import type { ArchitectureGenerateResult, ArchitectureModelDto } from '../../lib/api';
+import type { ArchitectureGenerateResult, ArchitectureModelDto, ArchitectureModelFinding } from '../../lib/api';
 import type { FrameStamp } from './ViaductFrame';
 
 export type ArchStatus = 'idle' | 'loading' | 'ready' | 'missing' | 'error';
@@ -25,6 +25,7 @@ export interface ArchConflict {
   version: string | null;
   updatedAt: string | null;
   updatedBy: string | null;
+  warnings?: ArchitectureModelFinding[];
 }
 
 export interface ArchAgent {
@@ -43,6 +44,10 @@ export interface ArchState {
   version: string | null;
   updatedAt: string | null;
   updatedBy: string | null;
+  // Несостыковки файла на сервере (проверка бэка) и набор, скрытый крестиком плашки:
+  // тот же набор второй раз не показываем, новый — показываем снова
+  warnings: ArchitectureModelFinding[];
+  warningsHidden: string | null;
   // Счётчик перемонтирования iframe: растёт, когда фрейм надо поднять заново с content
   frameKey: number;
   // «Начать с пустого холста»: модели нет, но редактор открыт — первое сохранение создаст файл
@@ -68,7 +73,7 @@ export interface ArchState {
 
 const INITIAL: ArchState = {
   projectId: null, status: 'idle', error: null,
-  content: null, version: null, updatedAt: null, updatedBy: null,
+  content: null, version: null, updatedAt: null, updatedBy: null, warnings: [], warningsHidden: null,
   frameKey: 0, blank: false, generating: false, generateError: null, lastBuild: null, agent: null, corrupt: false,
   save: 'saved', saveError: null, dirty: false, conflict: null, readOnly: false,
   localValue: null, focus: null,
@@ -120,6 +125,7 @@ function applyServer(dto: ArchitectureModelDto, remount: boolean) {
     version: dto.version,
     updatedAt: dto.updatedAt,
     updatedBy: dto.updatedBy,
+    ...warningsPatch(dto.warnings),
     corrupt: dto.exists && canonical(dto.content) === null,
     ...(remount ? { frameKey: state.frameKey + 1, dirty: false, save: 'saved' as SaveState, saveError: null, conflict: null, localValue: null } : {}),
   });
@@ -243,7 +249,7 @@ async function pump() {
     const res = await api.projects.architectureSaveModel(projectId, pretty, state.version);
     if (state.projectId !== projectId) return;
     set({
-      content: pretty, version: res.version, updatedAt: res.updatedAt, updatedBy: res.updatedBy,
+      content: pretty, version: res.version, updatedAt: res.updatedAt, updatedBy: res.updatedBy, ...warningsPatch(res.warnings),
       status: 'ready', blank: false, save: 'saved', saveError: null, dirty: queued !== null,
     });
   } catch (e) {
@@ -280,7 +286,7 @@ export function takeServerVersion() {
   const c = state.conflict;
   queued = null;
   if (c) {
-    set({ status: c.content === null ? 'missing' : 'ready', content: c.content, version: c.version, updatedAt: c.updatedAt, updatedBy: c.updatedBy });
+    set({ status: c.content === null ? 'missing' : 'ready', content: c.content, version: c.version, updatedAt: c.updatedAt, updatedBy: c.updatedBy, ...warningsPatch(c.warnings) });
   }
   set({ conflict: null, dirty: false, save: 'saved', saveError: null, localValue: null, frameKey: state.frameKey + 1 });
   if (!c && state.projectId) void loadArchitecture(state.projectId, true);
@@ -339,10 +345,31 @@ export function requestFocus(id: string) {
   set({ focus: { id, tick: (state.focus?.tick ?? 0) + 1 } });
 }
 
+// Ключ набора находок: скрытое крестиком сравнивается по нему
+export function warningsKey(warnings: ArchitectureModelFinding[]): string {
+  return warnings.map(w => w.text).join('\n');
+}
+
+// Свежие находки с сервера. Пустой набор забывает скрытое крестиком: иначе та же поломка,
+// починенная и повторённая, прошла бы молча
+export function warningsPatch(warnings: ArchitectureModelFinding[] | null | undefined): Pick<ArchState, 'warnings'> & Partial<Pick<ArchState, 'warningsHidden'>> {
+  const list = warnings ?? [];
+  return list.length === 0 ? { warnings: list, warningsHidden: null } : { warnings: list };
+}
+
+// Находки, которые плашка показывает: есть и не скрыты крестиком именно этим набором
+export function visibleWarnings(s: Pick<ArchState, 'warnings' | 'warningsHidden'>): ArchitectureModelFinding[] {
+  return s.warnings.length > 0 && warningsKey(s.warnings) !== s.warningsHidden ? s.warnings : [];
+}
+
 export function dismissBuildSummary() {
   // Ошибку пересборки готовой модели несёт плашка — крестик убирает и её; у пустой
-  // модели ошибка живёт в своём экране с «Повторить», его не трогаем
-  set({ lastBuild: null, agent: null, ...(state.status === 'ready' ? { generateError: null } : {}) });
+  // модели ошибка живёт в своём экране с «Повторить», его не трогаем. Находки проверки
+  // прячутся до смены их набора
+  set({
+    lastBuild: null, agent: null, warningsHidden: warningsKey(state.warnings),
+    ...(state.status === 'ready' ? { generateError: null } : {}),
+  });
 }
 
 // «Собрать архитектуру»: проход 1 (детерминированный) и, с withAgent, задача исполнителю.
@@ -386,6 +413,10 @@ export async function generateArchitecture(projectId: string, withAgent = false)
     set({ generating: false, blank: false, lastBuild: result, agent });
   } catch (e) {
     if (state.projectId !== projectId) return;
-    set({ generating: false, generateError: errorText(e), lastBuild: result, agent });
+    // Модель пересобрана, а перечитать не вышло — находки берём из итога сборки
+    set({
+      generating: false, generateError: errorText(e), lastBuild: result, agent,
+      ...(result?.warnings ? warningsPatch(result.warnings) : {}),
+    });
   }
 }

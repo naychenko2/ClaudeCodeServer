@@ -8,8 +8,8 @@ import {
   C, FS, SP, Button, IconButton, Toggle, ICON_SIZE, ICON_STROKE,
   useTasks, ensureTasksLoaded, openTaskInSection, usePersonas, ensurePersonasLoaded,
 } from 'aihome_shell/kit';
-import type { ArchState } from './architectureStore';
-import type { ArchitectureGenerateResult } from '../../lib/api';
+import { visibleWarnings, type ArchState } from './architectureStore';
+import type { ArchitectureGenerateResult, ArchitectureModelFinding } from '../../lib/api';
 import type { Task } from '../../types';
 
 // Метка незавершённой агентной сборки (IArchitectureAgentLauncher.BuildLabel на бэке)
@@ -108,8 +108,20 @@ function summaryTitle(r: ArchitectureGenerateResult): string | undefined {
   return lines.length ? lines.join('\n') : undefined;
 }
 
-// Плашка между шапкой и холстом: сводка прохода 1 и/или статус агента.
-// Тон — info; отказы агента и его ошибка — warning
+// Сколько находок проверки перечислять в подсказке строки — остальное свёрнуто в «…и ещё N»
+const WARNINGS_IN_TITLE = 20;
+
+// Строка несостыковок модели: счётчик и первая находка, полный список — в подсказке
+export function warningsText(w: ArchitectureModelFinding[]): { line: string; title: string } {
+  const rest = w.length > WARNINGS_IN_TITLE ? `\n…и ещё ${w.length - WARNINGS_IN_TITLE}` : '';
+  return {
+    line: `Несостыковки в модели (${w.length}) — холст покажет не всё записанное: ${w[0].text}${w.length > 1 ? ' …' : ''}`,
+    title: w.slice(0, WARNINGS_IN_TITLE).map(x => `• ${x.text}`).join('\n') + rest,
+  };
+}
+
+// Плашка между шапкой и холстом: сводка прохода 1, статус агента и несостыковки модели.
+// Тон — info; отказы агента, его ошибка и несостыковки — warning
 export function BuildBanner({ s, projectId, isMobile, onDismiss }: {
   s: ArchState; projectId: string; isMobile: boolean; onDismiss: () => void;
 }) {
@@ -150,10 +162,13 @@ export function BuildBanner({ s, projectId, isMobile, onDismiss }: {
   if (agentLine && !code && hideKey && hidden === hideKey) agentLine = null;
   const rebuildError = rebuildErrorOf(s);
   if (rebuildError) warn = true;
+  const shownWarnings = visibleWarnings(s);
+  const warnings = shownWarnings.length > 0 ? warningsText(shownWarnings) : null;
+  if (warnings) warn = true;
   if (warn) icon = <AlertTriangle size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />;
 
   const summary = s.lastBuild ? summaryText(s.lastBuild) : null;
-  if (!agentLine && !summary && !rebuildError) return null;
+  if (!agentLine && !summary && !rebuildError && !warnings) return null;
   // Незавершённую агентную сборку не прячем крестиком — она сама себя закроет
   const dismissible = agent.phase !== 'running';
 
@@ -163,10 +178,11 @@ export function BuildBanner({ s, projectId, isMobile, onDismiss }: {
       padding: `${SP.sm}px ${SP.md}px`, fontSize: FS.sm,
       background: warn ? C.warningBg : C.infoBg, color: warn ? C.warningText : C.info,
     }}>
-      {agentLine || rebuildError ? icon : <Check size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />}
+      {agentLine || rebuildError || warnings ? icon : <Check size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />}
       <div style={{ flex: 1, minWidth: isMobile ? 0 : 200, display: 'flex', flexDirection: 'column', gap: 2 }}>
         {rebuildError && <span>Пересобрать не удалось: {rebuildError}. На холсте прежняя модель.</span>}
         {agentLine && <span>{agentLine}</span>}
+        {warnings && <span title={warnings.title} style={{ overflowWrap: 'anywhere' }}>{warnings.line}</span>}
         {summary && (
           <span title={s.lastBuild ? summaryTitle(s.lastBuild) : undefined}
             style={{ fontSize: FS.xs, opacity: agentLine ? 0.85 : 1 }}>{summary}</span>

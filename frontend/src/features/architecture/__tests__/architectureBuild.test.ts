@@ -4,7 +4,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Task } from '../../../types';
 
 vi.mock('aihome_shell/kit', () => ({}));
-const { resolveAgentBuild, agentBlockedHint, rebuildErrorOf } = await import('../ArchitectureBuild');
+const { resolveAgentBuild, agentBlockedHint, rebuildErrorOf, warningsText } = await import('../ArchitectureBuild');
+const { visibleWarnings, warningsKey, warningsPatch } = await import('../architectureStore');
 
 const P = 'proj-a';
 const task = (patch: Partial<Task>): Task => ({
@@ -57,5 +58,35 @@ describe('rebuildErrorOf: ошибка пересборки готовой мо�
   it('у пустой и повреждённой — нет (их ведут свои экраны)', () => {
     expect(rebuildErrorOf({ status: 'missing', corrupt: false, generateError: 'x' })).toBeNull();
     expect(rebuildErrorOf({ status: 'ready', corrupt: true, generateError: 'x' })).toBeNull();
+  });
+});
+
+describe('несостыковки модели: плашка', () => {
+  const dangling = { kind: 'dangling_connection' as const, elementId: 'c2', text: 'контейнер «Хранилище» (c2): связь → gone — такого элемента нет' };
+  const dup = { kind: 'duplicate_id' as const, elementId: 'k1', text: 'id k1 повторяется (2)' };
+
+  it('чистая модель — строки нет; висящая ссылка — видна со счётчиком', () => {
+    expect(visibleWarnings({ warnings: [], warningsHidden: null })).toEqual([]);
+    const shown = visibleWarnings({ warnings: [dangling], warningsHidden: null });
+    expect(shown).toHaveLength(1);
+    expect(warningsText(shown).line).toMatch(/Несостыковки в модели \(1\).*связь → gone/);
+  });
+
+  it('скрытый крестиком набор не показывается, новый — показывается снова', () => {
+    const hidden = warningsKey([dangling]);
+    expect(visibleWarnings({ warnings: [dangling], warningsHidden: hidden })).toEqual([]);
+    expect(visibleWarnings({ warnings: [dangling, dup], warningsHidden: hidden })).toHaveLength(2);
+  });
+
+  it('пустой набор забывает скрытое — повторная поломка снова видна', () => {
+    expect(warningsPatch([])).toEqual({ warnings: [], warningsHidden: null });
+    expect(warningsPatch([dangling])).toEqual({ warnings: [dangling] });
+    expect(warningsPatch(undefined)).toEqual({ warnings: [], warningsHidden: null });
+  });
+
+  it('полный список — в подсказке', () => {
+    const t = warningsText([dangling, dup]);
+    expect(t.line).toMatch(/\(2\).* …$/);
+    expect(t.title).toBe(`• ${dangling.text}\n• ${dup.text}`);
   });
 });

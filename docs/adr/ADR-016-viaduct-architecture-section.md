@@ -100,3 +100,17 @@ Change License — Apache-2.0 с 2030-09-12.
 Гейт оболочки — наличие обоих вкладов remote, гейт хода (`SessionManager.BuildArchitectureContext`)
 — загрузка модуля + гейт подсистемы + привязка персоны. Старые override `architecture` в
 `data/users.json` ничему не мешают: неизвестный ключ `GetEffective` пропускает, вычищать не нужно.
+
+## Дополнение 2026-09-27: «Собрать архитектуру»
+
+Кнопка сборки стала двухпроходной (план —
+[architecture-build-button-plan.md](../research/architecture-build-button-plan.md)).
+Проход 1 детерминированный: контейнеры/компоненты плюс кандидаты L1 с тегом `кандидат`
+(имена секций `appsettings.json`/`appsettings.{Env}.json` без Local, compose без `build`,
+имена HTTP-клиентов; значения не читаются). Происхождение элементов — в meta рядом с
+моделью: пропавшее из кода получает `нет в коде`, удалённое руками не воскресает. Проход 2 —
+галочка «С агентом»: задача исполнителю-архитектору (`Specialty == Planner` с доступом к
+`arch_*`, иначе задача без персоны), слот strong, защита от двойного запуска меткой
+`arch-build` (409 с `agentTaskId`). Шов запуска — `IArchitectureAgentLauncher` в Core
+(`Services.Composition`), вертикаль в Tasks не лезет. Устройство —
+[architecture-section.md](../features/architecture-section.md#кнопка-собрать-архитектуру).

@@ -4,7 +4,7 @@
 // приезжает сюда сообщением init, а обратно уходит сообщениями save. Сообщения
 // принимаем только от окна СВОЕГО фрейма (e.source) и только с меткой протокола.
 //
-// Протокол (v=1) — в шапке шима: ready → init; dirty / save / prefs; focus / flush.
+// Протокол (v=1) — в шапке шима: ready → init; dirty / save / prefs / download; focus / flush.
 // Настройки вида (c4-*-ключи) в файл модели не пишутся: живут в localStorage этой
 // страницы под viaduct-prefs:{projectId} (план встраивания, раздел «Хранение»).
 import { useEffect, useRef } from 'react';
@@ -41,9 +41,44 @@ interface Props {
 interface ShimMessage {
   source: 'viaduct-shim';
   v: number;
-  type: 'ready' | 'started' | 'dirty' | 'save' | 'prefs';
+  type: 'ready' | 'started' | 'dirty' | 'save' | 'prefs' | 'download';
   value?: unknown;
   prefs?: unknown;
+  name?: unknown;
+  data?: unknown;
+}
+
+// Экспорт схемы (SVG/PNG): картинку снимает шим, а сохраняет хост — из песочницы скачивание
+// зависит от активации пользователя, которой к концу асинхронного снимка может уже не быть.
+// Фрейм считаем недоверенным: имя — только простое с расширением из белого списка, тип
+// файла выводим из расширения сами, размер ограничен
+const EXPORT_NAME = /^[A-Za-z0-9._-]{1,120}\.(svg|png)$/;
+const EXPORT_MIME: Record<string, string> = { svg: 'image/svg+xml', png: 'image/png' };
+const EXPORT_MAX_BYTES = 64 * 1024 * 1024;
+// Мост снимает барьер активации песочницы, поэтому держим свой: скачивание только после
+// взаимодействия пользователя со страницей и не чаще раза в EXPORT_MIN_GAP_MS — иначе
+// недоверенный скрипт во фрейме мог бы сыпать файлами без единого клика
+const EXPORT_MIN_GAP_MS = 3000;
+let lastExportAt = 0;
+
+function saveExport(name: unknown, data: unknown) {
+  if (typeof name !== 'string' || !(data instanceof ArrayBuffer)) return;
+  const m = EXPORT_NAME.exec(name);
+  if (!m || data.byteLength === 0 || data.byteLength > EXPORT_MAX_BYTES) return;
+  if (navigator.userActivation && !navigator.userActivation.hasBeenActive) return;
+  const now = Date.now();
+  if (now - lastExportAt < EXPORT_MIN_GAP_MS) return;
+  lastExportAt = now;
+  const url = URL.createObjectURL(new Blob([data], { type: EXPORT_MIME[m[1]] }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Отзыв сразу после click() в части браузеров обрывает скачивание
+  setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }
 
 function prefsKey(projectId: string) { return `viaduct-prefs:${projectId}`; }
@@ -111,6 +146,9 @@ export function ViaductFrame({ projectId, frameKey, model, theme, focus, onDirty
           if (msg.prefs && typeof msg.prefs === 'object') {
             try { localStorage.setItem(prefsKey(projectId), JSON.stringify(msg.prefs)); } catch { /* квота — не критично */ }
           }
+          return;
+        case 'download':
+          saveExport(msg.name, msg.data);
           return;
       }
     };

@@ -126,18 +126,4 @@ public class SessionImageChatTests
         req.Ops.OfType<ResizeOp>().Single().LockAspect.Should().BeTrue("замок пропорций включён по умолчанию");
         req.Encode.Should().Be(new ImageEncodeSpec(ImageEncodeFormat.Webp, 80));
     }
-
-    [Fact]
-    public void СобытиеСостоянияЧата_ТипИЧатВБазовомSessionId()
-    {
-        var state = new ImageChatState("закат", ImageEditInitiator.Agent, "fal", "flux", EditMode.Auto, 2,
-            [], null, null, null, null, null, true, [], 3);
-        var msg = new ImageChatStateMessage("p1", 3, state, ImageEditInitiator.Agent, []) { SessionId = "s1" };
-
-        using var doc = JsonDocument.Parse(JsonSerializer.Serialize(msg, msg.GetType(), WireJson));
-        doc.RootElement.GetProperty("type").GetString().Should().Be("image_chat_state");
-        doc.RootElement.GetProperty("sessionId").GetString().Should().Be("s1");
-        doc.RootElement.GetProperty("changedBy").GetString().Should().Be("agent");
-        doc.RootElement.GetProperty("state").GetProperty("promptAuthor").GetString().Should().Be("agent");
-    }
 }

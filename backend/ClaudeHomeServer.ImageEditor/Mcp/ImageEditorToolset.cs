@@ -3,29 +3,35 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Composition;
-using ClaudeHomeServer.Services.ImageEditor.Chats;
+using ClaudeHomeServer.Services.ImageEditor.Threads;
 using ClaudeHomeServer.Services.Mcp.Http;
 using ClaudeHomeServer.Services.Turn;
 
 namespace ClaudeHomeServer.Services.ImageEditor.Mcp;
 
 /// <summary>
-/// MCP-сервер редактора картинок для агента чата картинки (ADR-018 §2, §10.2). Тулсет живёт в
+/// MCP-сервер редактора картинок для агента любого чата проекта (ADR-019 §4). Тулсет живёт в
 /// модуле по прецеденту NotesToolset; ехать ли серверу в ход, решает Main
 /// (SessionManager.BuildImageEditorContext). Маршрут — <c>POST /mcp/image-editor/{sessionId}</c>:
-/// хвост несёт чат картинки, по нему тулсет находит владельца, проект и файл.
+/// хвост несёт чат, по нему тулсет находит владельца, проект и нити картинок чата.
+///
+/// Агент видит нити и сам берёт картинку в работу или заводит черновик (решение Андрея 1) — это
+/// всегда видно в ленте тихой строкой «Claude взял в работу: …». Взять вариант, откатиться и
+/// сохранить в проект может только человек: таких инструментов у агента нет. Запуск идёт строго в
+/// нить по threadId, а не «по текущему фокусу»: человек может сменить картинку посреди хода.
 ///
 /// Запуск — ровно тем путём, что у человека: котировка исполнителя и вход через
-/// ImageEditLaunchAssembler (проверка путей и лимитов одна). Трата ложится на владельца чата
+/// ImageEditLaunchAssembler (проверка путей, нити и лимитов одна). Трата ложится на владельца чата
 /// (ownerId из сервисного JWT и сессии), инициатор — агент, SessionId — этот чат.
 ///
 /// Сторожа дешёвого запуска — в CallAsync, не в составе: делегированный и реакционный ход —
 /// отказ fail-closed (IDelegatedTurnGate), не больше MaxLaunchesPerTurn запусков за ход (счётчик на
 /// сессию, сброс по TurnCompleted этой сессии). Задача живёт отдельно от хода: «Стоп» её не
-/// отменяет, отмена — только image_cancel или кнопкой. Сохранять в проект агент не может.
+/// отменяет, отмена — только image_cancel или кнопкой.
 ///
 /// ИНВАРИАНТ состава: tools/list зависит от сессии, флага владельца и настройки инстанса
-/// ImageEditor:AgentLaunch — не от хода (McpToolsetStabilityTests).
+/// ImageEditor:AgentLaunch — не от хода, фокуса и нитей (McpToolsetStabilityTests). Без
+/// выбранной картинки инструмент отвечает отказом, а не исчезает.
 /// </summary>
 public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
 {
@@ -42,7 +48,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
     private readonly IFeatureFlagGate _flags;
     private readonly IProjectManager _projects;
     private readonly IEnumerable<IImageEditor> _editors;
-    private readonly ImageChatStateStore _states;
+    private readonly ImageThreadService _threads;
     private readonly ImageEditLaunchAssembler _launcher;
     private readonly IDelegatedTurnGate? _turnGate;
     private readonly IImageEditJobs? _jobs;
@@ -59,7 +65,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         IFeatureFlagGate flags,
         IProjectManager projects,
         IEnumerable<IImageEditor> editors,
-        ImageChatStateStore states,
+        ImageThreadService threads,
         ImageEditLaunchAssembler launcher,
         IDelegatedTurnGate? turnGate = null,
         IImageEditJobs? jobs = null,
@@ -72,7 +78,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         _flags = flags;
         _projects = projects;
         _editors = editors;
-        _states = states;
+        _threads = threads;
         _launcher = launcher;
         _turnGate = turnGate;
         _jobs = jobs;
@@ -83,15 +89,16 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
     }
 
     public string Name => ServerName;
-    public string Version => "1.0.0";
+    public string Version => "2.0.0";
 
     public IReadOnlyList<McpToolSchema> ToolsFor(McpToolCallContext context) =>
         TryResolve(context, out _, out _, out _) ? ToolsOfInstance : [];
 
-    // Состав инстанса: без запуска агентом остаются только чтение состояния и предложение промпта
+    // Состав инстанса: без запуска агентом остаются чтение, выбор картинки и предложение промпта —
+    // всё, что не тратит денег
     private IReadOnlyList<McpToolSchema> ToolsOfInstance => _agentLaunch
         ? Schemas
-        : [.. Schemas.Where(t => t.Name is ToolState or ToolSuggestPrompt)];
+        : [.. Schemas.Where(t => t.Name is ToolState or ToolFocus or ToolNew or ToolSuggestPrompt)];
 
     public async Task<McpToolCallResult> CallAsync(string tool, JsonObject arguments,
         McpToolCallContext context, CancellationToken ct)
@@ -104,6 +111,8 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         return tool switch
         {
             ToolState => Json(DescribeState(context.OwnerId, session, project)),
+            ToolFocus => await FocusAsync(arguments, context.OwnerId, session, project, ct),
+            ToolNew => await NewAsync(arguments, context.OwnerId, session, project, ct),
             ToolSuggestPrompt => SuggestPrompt(arguments),
             ToolGenerate => await GenerateAsync(arguments, context.OwnerId, session, project, ct),
             ToolCancel => await CancelAsync(arguments, context.OwnerId, session, project, ct),
@@ -111,11 +120,79 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         };
     }
 
+    // ── image_focus и image_new ────────────────────────────────────────────────
+
+    private async Task<McpToolCallResult> FocusAsync(JsonObject args, string ownerId, Session session,
+        Project project, CancellationToken ct)
+    {
+        var threadId = Str(args, "threadId");
+        var file = Str(args, "file");
+        if (threadId is not null && file is not null)
+            return Deny("Укажи что-то одно: threadId картинки этого чата или file — путь картинки проекта.");
+
+        ImageThreadWrite written;
+        if (file is not null)
+        {
+            if (ProjectImagePath(project, file) is not { } path)
+                return Deny($"Картинка не найдена в проекте: {file}");
+            written = await _threads.AgentOpenAsync(ownerId, project.Id, session.Id, path, null, ct);
+        }
+        else
+        {
+            written = await _threads.AgentFocusAsync(ownerId, project.Id, session.Id, threadId, ct);
+        }
+
+        return written.Status switch
+        {
+            ImageThreadWriteStatus.Ok => Json(Focused(written.State)),
+            ImageThreadWriteStatus.ThreadNotFound => Deny($"Картинки {threadId} нет в этом чате. Список — image_state."),
+            _ => Deny("Человек как раз меняет выбор картинки — повтори позже."),
+        };
+    }
+
+    private async Task<McpToolCallResult> NewAsync(JsonObject args, string ownerId, Session session,
+        Project project, CancellationToken ct)
+    {
+        var folder = ImageThreadPathTracker.Normalize(Str(args, "folder") ?? "");
+        if (folder.Length > 0
+            && (ProjectLinkGuard.ResolveInside(project.RootPath, folder) is not { } full || !Directory.Exists(full)))
+            return Deny($"Папка не найдена в проекте: {folder}");
+
+        var written = await _threads.AgentOpenAsync(ownerId, project.Id, session.Id, null, folder, ct);
+        return written.Status == ImageThreadWriteStatus.Ok
+            ? Json(Focused(written.State))
+            : Deny("Человек как раз меняет выбор картинки — повтори позже.");
+    }
+
+    private static object Focused(ImageThreadsState state) => new
+    {
+        focus = state.Focus,
+        thread = state.Threads.FirstOrDefault(t => t.Id == state.Focus) is { } t ? DescribeThread(t) : null,
+        note = "Человек видит в ленте, какую картинку ты взял в работу, и может снять выбор.",
+    };
+
+    // Путь картинки проекта в форме нитей: от корня через «/», строго внутри и без ссылки наружу
+    private static string? ProjectImagePath(Project project, string file)
+    {
+        var rel = ImageThreadPathTracker.Normalize(file);
+        if (rel.Length == 0 || ProjectLinkGuard.ResolveInside(project.RootPath, rel) is not { } full || !File.Exists(full))
+            return null;
+        return ImageEditLaunchAssembler.ContentTypeByExtension(full).StartsWith("image/", StringComparison.Ordinal)
+            ? Path.GetRelativePath(project.RootPath, full).Replace('\\', '/')
+            : null;
+    }
+
     // ── image_generate ─────────────────────────────────────────────────────────
 
     private async Task<McpToolCallResult> GenerateAsync(JsonObject args, string ownerId, Session session,
         Project project, CancellationToken ct)
     {
+        // threadId обязателен (решение Андрея 1): человек мог сменить картинку посреди хода, и
+        // запуск «по текущему фокусу» ушёл бы не туда. Отказ — до гейта и лимита хода
+        if (Str(args, "threadId") is not { } threadId)
+            return Deny("Не указан threadId: запуск идёт только в конкретную картинку чата. "
+                + "Возьми id из image_state (или возьми картинку в работу через image_focus / image_new).");
+
         // Тратить деньги может только ход, который видит человек
         var denied = _turnGate is null
             ? "Запуск генерации недоступен: сервер не проверил ход — отказ по построению."
@@ -123,13 +200,16 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         if (denied is not null) return Deny(denied);
         if (_jobs is null) return Deny("Редактор картинок недоступен на этом сервере.");
 
+        if (_threads.Get(ownerId, session.Id).Threads.FirstOrDefault(t => t.Id == threadId) is not { } thread)
+            return Deny($"Картинки {threadId} нет в этом чате. Список — image_state.");
+
         if (!TryReserveLaunch(session.Id))
             return Deny($"За один ход можно запустить не больше {MaxLaunchesPerTurn} генераций. "
                 + "Покажи человеку, что уже получилось, и дождись его ответа.");
         var launched = false;
         try
         {
-            var result = await LaunchAsync(args, ownerId, session, project, ct);
+            var result = await LaunchAsync(args, ownerId, session, project, thread, ct);
             launched = !result.IsError;
             return result;
         }
@@ -140,95 +220,76 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
     }
 
     private async Task<McpToolCallResult> LaunchAsync(JsonObject args, string ownerId, Session session,
-        Project project, CancellationToken ct)
+        Project project, ImageThread thread, CancellationToken ct)
     {
-        var current = _states.Get(ownerId, session.Id);
-        // Пустая строка — не путь: у черновика исходника нет, и в задачу она уйти не должна
-        var chatPath = session.ImageChat!.CurrentPath is { Length: > 0 } boundPath ? boundPath : null;
-
-        // Что не передано — из состояния редактора, а поставщик по умолчанию — как у каталога
-        var provider = Str(args, "provider") ?? current.Provider ?? DefaultProvider();
+        // Что не передано — из настроек нити, а поставщик по умолчанию — как у каталога
+        var settings = thread.Settings;
+        var provider = Str(args, "provider") ?? settings?.Provider ?? DefaultProvider();
         if (provider is null)
             return Deny("Поставщик рисования не настроен. Обратитесь к администратору.");
-        var model = Str(args, "model") ?? current.Model ?? ImageEditCatalog.AutoModelId;
-        var mode = Enum<EditMode>(args, "mode") ?? current.Mode;
-        var count = Int(args, "count") ?? current.Count;
-        var prompt = Str(args, "prompt") ?? current.Prompt;
-        var matchSourceSize = Bool(args, "matchSourceSize") ?? current.MatchSourceSize;
-        var references = ReferencesArg(args) ?? current.References;
-        var marksJson = current.Marks?.GetRawText();
+        var model = Str(args, "model") ?? settings?.Model ?? ImageEditCatalog.AutoModelId;
+        var mode = Enum<EditMode>(args, "mode") ?? EditMode.Auto;
+        var count = Int(args, "count") ?? (settings is { Count: > 0 } s ? s.Count : 1);
+        var prompt = Str(args, "prompt") ?? "";
+        var matchSourceSize = Bool(args, "matchSourceSize") ?? settings?.MatchSourceSize ?? true;
+        var references = ReferencesArg(args);
+        var character = Str(args, "character");
 
-        // Исходник — текущий шаг истории редактора, иначе файл чата с диска проекта. У черновика
-        // «Нарисовать картинку» без шага исходника нет вовсе: рисуем новую по тексту
+        // Исходник — текущий шаг нити, иначе файл нити с диска проекта. У черновика «Новая
+        // картинка» без шага исходника нет вовсе: рисуем новую по тексту
         ImageBytes? source = null;
         string? baseStepId = null;
-        if (current.CurrentStepId is { Length: > 0 } stepId && _steps?.Open(ownerId, project.Id, stepId) is { } step)
+        if (thread.CurrentStepId is { Length: > 0 } stepId && _steps?.Open(ownerId, project.Id, stepId) is { } step)
         {
             source = new ImageBytes(step.Image.Bytes, step.Image.ContentType);
             baseStepId = stepId;
         }
-        else if (chatPath is { Length: > 0 })
+        else if (thread.File is { Length: > 0 } file)
         {
             // Тот же путь чтения, что у образцов человека: проверки пути и лимита одни
-            var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(project.RootPath, chatPath, "Файл чата", ct);
+            var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(project.RootPath, file, "Файл картинки", ct);
             if (read.Value is not { } image) return Deny(read.Error!);
             source = image;
         }
         var op = Enum<ImageEditOp>(args, "op") ?? (source is null ? ImageEditOp.Generate : ImageEditOp.Edit);
         if (source is null && op != ImageEditOp.Generate)
             return Deny("Картинки ещё нет: это новая картинка. Сначала нарисуй её — op generate или без op.");
-        // Маска холста без картинки не к чему: у черновика её нет
-        var mask = source is not null && _states.ReadMask(ownerId, session.Id) is { Length: > 0 } maskBytes
-            ? new ImageBytes(maskBytes, "image/png")
-            : null;
+        if (prompt.Length == 0 && op is ImageEditOp.Generate or ImageEditOp.Edit or ImageEditOp.Inpaint)
+            return Deny("Пустой промпт: опиши, что нарисовать или поправить.");
         var size = source is null ? null : ImageDimensions.Read(source.Bytes);
 
         var quoteRequest = new ImageEditQuoteRequest(provider, model, mode, op, count,
-            HasMask: mask is not null,
+            HasMask: false,
             References: references.Count,
-            HasCharacter: !string.IsNullOrWhiteSpace(current.CharacterSlug),
+            HasCharacter: character is not null,
             Width: size?.Width,
             Height: size?.Height,
-            HasAnnotations: !string.IsNullOrWhiteSpace(EditMarksPrompt.Describe(marksJson, MarksScope.WithoutBrush)),
             Removal: EditIntent.IsRemoval(prompt));
         var quote = await _jobs!.QuoteAsync(ownerId, project.Id, quoteRequest, ct);
         if (quote.Value is not { } q)
             return await FailAsync(quote.ErrorCode, quote.Error, ownerId, project, quoteRequest, ct);
 
         var request = new ImageEditLaunchRequest(
-            q.QuoteId, prompt, marksJson, chatPath, source, mask, Annotated: null,
+            q.QuoteId, prompt, MarksJson: null, thread.File, source, Mask: null, Annotated: null,
             Uploaded: [],
-            ReferencePaths: [.. references.Select(r => (r.Path, r.Role))],
-            current.CharacterSlug,
+            ReferencePaths: references,
+            character,
             MatchSourceSize: matchSourceSize,
             BaseStepId: baseStepId,
-            ChatSessionId: session.Id,
-            Initiator: ImageEditInitiator.Agent);
+            Initiator: ImageEditInitiator.Agent,
+            ThreadSessionId: session.Id,
+            ThreadId: thread.Id);
         var started = await _launcher.LaunchAsync(ownerId, project, request, ct);
         if (started.Value is not { } created)
             return await FailAsync(started.ErrorCode, started.Error, ownerId, project, quoteRequest, ct);
 
-        // Состояние меняется только после старта: отвергнутый запуск не оставляет в редакторе
-        // чужой модели или битого пути образца
-        var changes = await ApplyStateAsync(ownerId, session.Id, project.Id, latest => latest with
-        {
-            Prompt = prompt,
-            PromptAuthor = Str(args, "prompt") is not null ? ImageEditInitiator.Agent : latest.PromptAuthor,
-            Provider = q.Provider,
-            Model = model,
-            Mode = mode,
-            Count = count,
-            References = references,
-            MatchSourceSize = matchSourceSize,
-        });
-
         return Json(new
         {
             jobId = created.JobId,
+            threadId = thread.Id,
             quote = new { q.Provider, q.Model, q.Estimate, q.ExpectedSeconds },
-            changes = changes.Select(c => new { c.Field, c.From, c.To }),
             note = "Генерация идёт отдельно от хода: остановка разговора её не отменяет, отмена — image_cancel. "
-                + "Сохранить результат в проект может только человек.",
+                + "Варианты появятся в карточке картинки; взять вариант, откатиться и сохранить в проект может только человек.",
         });
     }
 
@@ -254,24 +315,6 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             code = code ?? ImageEditErrorCodes.InvalidRequest,
             retryQuote = retry,
         }, JsonOpts), IsError: true);
-    }
-
-    // Запись изменений агента в состояние и событие редактору. Человек мог записать своё между
-    // чтением и записью — перечитываем и накладываем правку заново
-    private async Task<IReadOnlyList<ImageChatStateChange>> ApplyStateAsync(string ownerId, string sessionId,
-        string projectId, Func<ImageChatState, ImageChatState> change)
-    {
-        for (var attempt = 0; attempt < 3; attempt++)
-        {
-            var current = _states.Get(ownerId, sessionId);
-            var written = _states.Write(ownerId, sessionId, change(current), mask: null);
-            if (!written.Ok) continue;
-            if (written.Changes.Count > 0)
-                await _launcher.BroadcastStateAsync(ownerId, projectId, sessionId, written.State,
-                    ImageEditInitiator.Agent, written.Changes);
-            return written.Changes;
-        }
-        return [];
     }
 
     private string? DefaultProvider()
@@ -315,52 +358,61 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
 
     private object DescribeState(string ownerId, Session session, Project project)
     {
-        var state = _states.Get(ownerId, session.Id);
-        var chat = session.ImageChat!;
-        var chatPath = chat.CurrentPath;
-        var full = chatPath is { Length: > 0 } ? ProjectLinkGuard.ResolveInside(project.RootPath, chatPath) : null;
-        (int Width, int Height)? size = null;
-        if (full is not null && File.Exists(full))
-        {
-            using var stream = File.OpenRead(full);
-            var head = new byte[Math.Min(64 * 1024, stream.Length)];
-            stream.ReadExactly(head);
-            size = ImageDimensions.Read(head);
-        }
-
+        var state = _threads.Get(ownerId, session.Id);
         var place = ImagePlaceKeys.ImageEditor;
         var admin = _placeSettings?.ProviderFor(place);
         var catalog = ImageEditCatalog.Build(_editors, admin, admin is null ? null : _placeSettings?.ModelFor(place, admin));
-        var jobIds = state.Events.Select(e => e.JobId).OfType<string>().Distinct().TakeLast(5);
 
         return new
         {
-            // Черновик «Нарисовать картинку»: файла ещё нет, file — null, а draft говорит, куда сохранится
-            file = chatPath is { Length: > 0 } ? new { path = chatPath, width = size?.Width, height = size?.Height } : null,
-            draft = chatPath is { Length: > 0 } ? null : new
+            focus = state.Focus,
+            threads = state.Threads.Select(t => new
             {
-                folder = chat.DraftFolder ?? "",
-                note = "Картинки ещё нет: это новая картинка, человек сохранит её в "
-                    + ImageEditorStateContributor.DraftFolderText(chat.DraftFolder)
-                    + ". image_generate без op нарисует её по тексту.",
-            },
-            state.Prompt,
-            state.PromptAuthor,
-            provider = state.Provider ?? catalog.Default.Provider,
-            model = state.Model ?? catalog.Default.Model,
-            state.Mode,
-            state.Count,
-            state.References,
-            character = state.CharacterSlug,
-            marks = state.Marks is { } m ? EditMarksPrompt.Describe(m.GetRawText()) : "",
-            state.MatchSourceSize,
-            recentJobs = jobIds
-                .Select(id => _jobs?.Get(ownerId, project.Id, id))
-                .OfType<ImageEditJobDto>()
-                .Select(j => new { j.JobId, j.Status, j.Provider, j.Model, variants = j.Variants.Count, j.Cost, j.Error, j.Initiator }),
+                thread = DescribeThread(t),
+                size = t.File is { Length: > 0 } file ? SizeOf(project, file) : null,
+                pendingJob = t.PendingJobId is { } jobId && _jobs?.Get(ownerId, project.Id, jobId) is { } j
+                    ? new { j.JobId, j.Status, j.Provider, j.Model, variants = j.Variants.Count, j.Cost, j.Error, j.Initiator }
+                    : null,
+            }),
+            defaultProvider = catalog.Default.Provider,
+            defaultModel = catalog.Default.Model,
             providers = catalog.Providers,
             agentLaunch = _agentLaunch,
+            note = state.Threads.Count == 0
+                ? "В этом чате ещё нет картинок. Возьми картинку проекта в работу (image_focus с file) или заведи новую (image_new)."
+                : "Взять вариант, откатиться и сохранить в проект может только человек.",
         };
+    }
+
+    private static object DescribeThread(ImageThread t)
+    {
+        var steps = t.CurrentStack?.Steps ?? [];
+        var at = t.CurrentStepId is { } s ? steps.ToList().IndexOf(s) + 1 : 0;
+        return new
+        {
+            threadId = t.Id,
+            file = t.File,
+            draft = t.File is { Length: > 0 } ? null : new
+            {
+                folder = t.DraftFolder ?? "",
+                note = "Картинки ещё нет: это новая картинка, человек сохранит её в "
+                    + Chats.ImageEditorStateContributor.DraftFolderText(t.DraftFolder)
+                    + ". image_generate без op нарисует её по тексту.",
+            },
+            step = steps.Count == 0 ? "шагов нет" : at == 0 ? $"на холсте исходник, шагов {steps.Count}" : $"шаг {at} из {steps.Count}",
+            settings = t.Settings,
+            pendingJobId = t.PendingJobId,
+        };
+    }
+
+    private static object? SizeOf(Project project, string file)
+    {
+        var full = ProjectLinkGuard.ResolveInside(project.RootPath, file);
+        if (full is null || !File.Exists(full)) return null;
+        using var stream = File.OpenRead(full);
+        var head = new byte[Math.Min(64 * 1024, stream.Length)];
+        stream.ReadExactly(head);
+        return ImageDimensions.Read(head) is { } size ? new { width = size.Width, height = size.Height } : null;
     }
 
     // ── Счётчик запусков за ход ────────────────────────────────────────────────
@@ -393,15 +445,15 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
 
     // ── Маршрут: /mcp/image-editor/{sessionId} ─────────────────────────────────
 
-    // Чат картинки владельца токена в его проекте и при включённом флаге. Любой отказ одним
-    // текстом: чужой чат неотличим от несуществующего, а состав у него пустой
+    // Чат проекта владельца токена при включённом флаге. Любой отказ одним текстом: чужой чат
+    // неотличим от несуществующего, а состав у него пустой
     private bool TryResolve(McpToolCallContext context, out Session session, out Project project, out string error)
     {
         session = null!;
         project = null!;
-        error = "Чат картинки не найден — инструменты редактора недоступны.";
+        error = "Чат проекта не найден — инструменты редактора картинок недоступны.";
         if (!TryParseRoute(context.RouteTail, out var sessionId)) return false;
-        if (_sessions.GetOwned(sessionId, context.OwnerId) is not { ImageChat: not null, ProjectId: { } projectId } owned)
+        if (_sessions.GetOwned(sessionId, context.OwnerId) is not { ProjectId: { } projectId } owned)
             return false;
         if (!_flags.IsEnabled(context.OwnerId, FeatureFlagKeys.ImageEditor)) return false;
         if (_projects.GetById(projectId) is not { } found || found.OwnerId != context.OwnerId) return false;
@@ -439,14 +491,14 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         Str(args, name) is { } s && System.Enum.TryParse<T>(s, ignoreCase: true, out var value) ? value : null;
 
     // Образцы агента — пути проекта с ролями; проверку пути делает общий сборщик входа
-    private static IReadOnlyList<ImageChatReference>? ReferencesArg(JsonObject args)
+    private static IReadOnlyList<(string Path, ReferenceRole Role)> ReferencesArg(JsonObject args)
     {
-        if (args["references"] is not JsonArray array) return null;
-        var list = new List<ImageChatReference>();
+        if (args["references"] is not JsonArray array) return [];
+        var list = new List<(string, ReferenceRole)>();
         foreach (var item in array.OfType<JsonObject>())
         {
             if (Str(item, "path") is not { } path) continue;
-            list.Add(new ImageChatReference(path, Enum<ReferenceRole>(item, "role") ?? ReferenceRole.Object));
+            list.Add((path, Enum<ReferenceRole>(item, "role") ?? ReferenceRole.Object));
         }
         return list;
     }

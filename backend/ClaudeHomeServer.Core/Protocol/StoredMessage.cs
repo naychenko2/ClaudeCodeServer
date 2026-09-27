@@ -75,7 +75,8 @@ public class StoredUserMessage(string text, string[]? attachedPaths = null, bool
     public string? DelegationTaskId { get; init; } = delegationTaskId;
     // Снимок холста чата картинки (ADR-018 §3): приложен ли он к этому сообщению и на какой
     // ревизии холста. По нему лента пишет «холст не менялся — снимок не приложен».
-    // null — обычный чат либо история до этого поля.
+    // null — обычный чат либо история до этого поля. С v3 (ADR-019) не пишется, только читается
+    // из истории старых чатов картинки — удалять поле нельзя.
     public StoredImageSnapshot? ImageSnapshot { get; init; }
 }
 

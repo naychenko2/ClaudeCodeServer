@@ -1,8 +1,4 @@
-using System.Globalization;
 using ClaudeHomeServer.Models;
-using ClaudeHomeServer.Protocol;
-using ClaudeHomeServer.Services.Composition;
-using ClaudeHomeServer.Services.ImageEditor.Chats;
 using ClaudeHomeServer.Services.ImageEditor.Threads;
 using ClaudeHomeServer.Services.Images.Editing.Raster;
 
@@ -13,26 +9,18 @@ namespace ClaudeHomeServer.Services.ImageEditor;
 // лимитов и владения чатом, а это ровно те места, где дыра стоит денег.
 //
 // Порядок отказов прежний, как в ImageEditorController.Start до выноса: поставщик → исполнитель
-// → растр → котировка → пропорции → размеры → образцы → персонаж → исходник.
-//
-// Чат картинки. Чужой, несуществующий, обычный чат и чат другого проекта молча отбрасываются:
-// задача запускается без чата, трата и события — без SessionId, а ответ не выдаёт, существует
-// ли чужой чат. Свой чат после старта получает строку image_launch в ленту и запись в журнал
-// состояния — из журнала о запуске узнаёт ход (блок ImageEditorStateContributor).
+// → растр → котировка → нить → пропорции → размеры → образцы → персонаж → исходник.
 //
 // Нить картинки (ADR-019). Запуск в нить — ThreadSessionId + ThreadId: нить обязана быть своей
 // в своём чате этого проекта, иначе отказ thread_not_found ДО запуска и траты (молча отбросить
 // нельзя: варианты ушли бы мимо карточки, которую человек видит). После старта варианты нити
-// ждут «Взять», ручной запуск ложится тихой строкой image_launch через IChatFeed.
+// ждут «Взять», ручной запуск ложится тихой строкой image_launch через IChatFeed, а ход узнаёт
+// о запуске из журнала нитей (блок ImageEditorStateContributor). Запуск без нити — без чата:
+// трата и события без SessionId.
 public sealed class ImageEditLaunchAssembler(
     IEnumerable<IImageEditor> editors,
-    ImageChatStateStore states,
-    ILogger<ImageEditLaunchAssembler> log,
     IImageEditJobs? jobs = null,
     IImageRaster? raster = null,
-    ISessionDirectory? sessionDirectory = null,
-    IImageChatSessions? chats = null,
-    ISessionBroadcaster? broadcaster = null,
     ImageThreadService? threads = null)
 {
     public static readonly IReadOnlyList<string> AspectRatios = ["1:1", "16:9", "9:16"];
@@ -45,18 +33,13 @@ public sealed class ImageEditLaunchAssembler(
             return Fail<ImageEditJobCreatedDto>(assembled.ErrorCode, assembled.Error);
 
         var started = await jobs!.StartAsync(ownerId, project.Id, input, ct);
-        if (started.Value is { } created && input.ChatSessionId is { } chatId)
-        {
-            if (input.ThreadId is { } threadId && threads is not null)
-                await threads.OnLaunchedAsync(ownerId, project.Id, chatId, threadId, jobs.Get(ownerId, project.Id, created.JobId),
-                    created.JobId, input.Prompt, input.Initiator, ct);
-            else
-                await RecordLaunchAsync(ownerId, project, chatId, input, created.JobId);
-        }
+        if (started.Value is { } created && input is { ChatSessionId: { } chatId, ThreadId: { } threadId } && threads is not null)
+            await threads.OnLaunchedAsync(ownerId, project.Id, chatId, threadId, jobs.Get(ownerId, project.Id, created.JobId),
+                created.JobId, input.Prompt, input.Initiator, ct);
         return started;
     }
 
-    // Вход задачи без запуска: всё проверено, байты прочитаны, чат либо свой, либо отброшен
+    // Вход задачи без запуска: всё проверено, байты прочитаны, нить своя или её нет
     public async Task<ImageEditCallResult<ImageEditJobInput>> AssembleAsync(
         string ownerId, Project project, ImageEditLaunchRequest req, CancellationToken ct)
     {
@@ -72,17 +55,13 @@ public sealed class ImageEditLaunchAssembler(
         if (string.IsNullOrWhiteSpace(req.QuoteId))
             return Invalid("Не указана котировка: сначала запросите цену");
 
-        string? threadId = null, chatId;
+        string? threadId = null, chatId = null;
         if (!string.IsNullOrWhiteSpace(req.ThreadId))
         {
             if (threads is null || !threads.OwnThread(ownerId, project.Id, req.ThreadSessionId, req.ThreadId))
                 return Fail<ImageEditJobInput>(ImageEditErrorCodes.ThreadNotFound, "Картинка не найдена в этом чате");
             threadId = req.ThreadId.Trim();
             chatId = req.ThreadSessionId!.Trim();
-        }
-        else
-        {
-            chatId = OwnImageChat(project, req.ChatSessionId);
         }
 
         var aspectRatio = string.IsNullOrWhiteSpace(req.AspectRatio) ? null : req.AspectRatio.Trim();
@@ -139,9 +118,9 @@ public sealed class ImageEditLaunchAssembler(
 
     private static long MaxFileBytes => ImageEditCatalog.DefaultLimits.MaxFileMb * 1024L * 1024L;
 
-    // Картинка проекта по пути — единственное чтение с диска для запуска (образцы и исходник
-    // чата у агента): строго внутри корня, не через символическую ссылку, в пределах лимита.
-    // what — чем картинка служит, для текста отказа («Образец», «Файл чата»)
+    // Картинка проекта по пути — единственное чтение с диска для запуска (образцы и файл нити
+    // у агента): строго внутри корня, не через символическую ссылку, в пределах лимита.
+    // what — чем картинка служит, для текста отказа («Образец», «Файл картинки»)
     public static async Task<ImageEditCallResult<ImageBytes>> ReadProjectImageAsync(
         string projectRoot, string path, string what, CancellationToken ct)
     {
@@ -158,72 +137,6 @@ public sealed class ImageEditLaunchAssembler(
         return ImageEditCallResult<ImageBytes>.Ok(
             new ImageBytes(await File.ReadAllBytesAsync(full, ct), ContentTypeByExtension(full)));
     }
-
-    // Свой чат картинки этого проекта (проект уже свой — его проверил вызывающий) или null
-    private string? OwnImageChat(Project project, string? chatSessionId)
-    {
-        if (string.IsNullOrWhiteSpace(chatSessionId) || sessionDirectory is null) return null;
-        var session = sessionDirectory.GetById(chatSessionId.Trim());
-        return session is { ImageChat: not null } && session.ProjectId == project.Id ? session.Id : null;
-    }
-
-    // Задача уже идёт: сбой записи в ленту или журнал не должен превращать 202 в ошибку
-    private async Task RecordLaunchAsync(string ownerId, Project project, string chatId, ImageEditJobInput input,
-        string jobId)
-    {
-        try
-        {
-            var job = jobs!.Get(ownerId, project.Id, jobId);
-            var by = input.Initiator == ImageEditInitiator.Agent ? SpendInitiators.Agent : SpendInitiators.Human;
-            var count = job?.Count ?? 0;
-            var estimate = job?.Estimate is { } e ? new StoredImageLaunchEstimate(e.Amount, e.Unit, e.Approx, e.Source) : null;
-
-            if (input.Initiator == ImageEditInitiator.Human && chats is not null)
-                await chats.AppendLaunchAsync(chatId, new StoredImageLaunchMessage
-                {
-                    By = by,
-                    Prompt = input.Prompt,
-                    Provider = job?.Provider ?? "",
-                    Model = job?.Model ?? "",
-                    Count = count,
-                    Estimate = estimate,
-                    JobId = jobId,
-                });
-
-            var who = input.Initiator == ImageEditInitiator.Agent ? "Ты запустил" : "Человек запустил вручную";
-            var text = $"{who}: «{input.Prompt.Trim()}» · {job?.Model ?? "модель по котировке"}"
-                       + (count > 0 ? $" · {count} {ImageEditorStateContributor.Variants(count)}" : "")
-                       + EstimateText(job?.Estimate);
-            var state = states.AppendEvent(ownerId, chatId,
-                new ImageChatEvent(states.Now(), ImageChatEventKinds.Launched, text, jobId));
-            await BroadcastStateAsync(ownerId, project.Id, chatId, state, input.Initiator);
-        }
-        catch (Exception ex)
-        {
-            log.LogWarning(ex, "Редактор картинок: запуск {JobId} не записан в чат {ChatId}", jobId, chatId);
-        }
-    }
-
-    public async Task BroadcastStateAsync(string ownerId, string projectId, string chatId, ImageChatState state,
-        ImageEditInitiator changedBy, IReadOnlyList<ImageChatStateChange>? changes = null)
-    {
-        if (broadcaster is null) return;
-        try
-        {
-            await broadcaster.ToOwner(ownerId,
-                new ImageChatStateMessage(projectId, state.Revision, state, changedBy, changes ?? []) { SessionId = chatId });
-        }
-        catch (Exception ex)
-        {
-            // Потерянное событие редактор догоняет GET …/state
-            log.LogDebug(ex, "Редактор картинок: состояние чата {ChatId} не разослано", chatId);
-        }
-    }
-
-    private static string EstimateText(ImageEditEstimateDto? e) => e?.Amount is not { } amount ? ""
-        : e.Unit == ImageEditPriceUnits.Usd
-            ? string.Create(CultureInfo.InvariantCulture, $" · ≈ ${amount:0.##}")
-            : string.Create(CultureInfo.InvariantCulture, $" · ≈ {amount:0.##} кр.");
 
     private static ImageEditCallResult<ImageEditJobInput> Invalid(string error) =>
         Fail<ImageEditJobInput>(ImageEditErrorCodes.InvalidRequest, error);
@@ -243,9 +156,8 @@ public sealed class ImageEditLaunchAssembler(
 }
 
 // Вход запуска до проверок. Uploaded — образцы, пришедшие байтами (с компьютера), уже с ролями;
-// ReferencePaths — образцы из проекта путями. ChatSessionId — чат картинки, из которого запуск;
-// Initiator — кто запустил: человек ручкой или агент инструментом; ThreadSessionId + ThreadId —
-// нить картинки в чате проекта (ADR-019)
+// ReferencePaths — образцы из проекта путями. Initiator — кто запустил: человек ручкой или агент
+// инструментом; ThreadSessionId + ThreadId — нить картинки в чате проекта (ADR-019)
 public sealed record ImageEditLaunchRequest(
     string? QuoteId,
     string? Prompt,
@@ -260,8 +172,6 @@ public sealed record ImageEditLaunchRequest(
     bool MatchSourceSize = true,
     string? BaseStepId = null,
     string? AspectRatio = null,
-    string? ChatSessionId = null,
     ImageEditInitiator Initiator = ImageEditInitiator.Human,
-    // Нить картинки в чате проекта (ADR-019); ChatSessionId при этом не нужен — это чат v2
     string? ThreadSessionId = null,
     string? ThreadId = null);

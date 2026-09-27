@@ -478,6 +478,9 @@ builder.Services.AddGatedHostedService<PersonaProjectBindingsMigration>(builder.
 // gated hosted: в Testing не стартует, повторный проход отсекается marker-файлом в data.
 // Живёт в спине рядом с прочими миграциями сторов, а не в вертикали Llm (см. шапку файла).
 builder.Services.AddGatedHostedService<GlmModelAliasMigration>(builder.Configuration);
+// Чаты картинки v2 уходят в архив (ADR-019, решение 2): идемпотентно по маркеру
+// SessionImageChat.MigratedAt, поэтому и восстановленный старый бэкап мигрирует при старте
+builder.Services.AddGatedHostedService<ImageChatV3Migration>(builder.Configuration);
 // Сводка карточки архива чата (место chat-digest). Живёт в спине, а не в вертикали Llm:
 // читает историю чата и заметку-итог, пишет сводку в сессию, а модель ей нужна лишь как
 // генератор текста через ICheapTextRunner (см. шапку файла).
@@ -576,9 +579,6 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.HiggsfieldOAuthServi
 // Шов для драйвера Higgsfield редактора картинок (ADR-017): токен без AdminOwnerId
 builder.Services.AddSingleton<ClaudeHomeServer.Services.ImageEditor.IHiggsfieldAccess,
     ClaudeHomeServer.Services.Mcp.HiggsfieldAccessAdapter>();
-// Чат картинки для модуля редактора (ADR-018 §1, §10.1): ручки в модуле, сессии создаёт и
-// правит ядро — адаптер над SessionManager
-builder.Services.AddSingleton<ClaudeHomeServer.Services.ImageEditor.IImageChatSessions, ImageChatSessions>();
 // Запись модулей в ленту чата (ADR-019 §2): общий шов для подсистем, адаптер над SessionManager
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.IChatFeed, ChatFeed>();
 builder.Services.AddQuietHttpClient(

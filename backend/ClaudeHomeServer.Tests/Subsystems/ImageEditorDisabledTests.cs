@@ -68,7 +68,7 @@ public class ImageEditorDisabledTests : IDisposable
     }
 
     [Fact]
-    public void Выключенный_модуль_не_даёт_сервера_в_ход_чата_картинки()
+    public void Выключенный_модуль_не_даёт_сервера_в_ход_чата_проекта()
     {
         CharacterEndpointsTests.EnableFlag(_disabled, TestWebApplicationFactory.TestUsername);
         CharacterEndpointsTests.EnableFlag(_enabled, TestWebApplicationFactory.TestUsername);
@@ -86,7 +86,6 @@ public class ImageEditorDisabledTests : IDisposable
             Id = Guid.NewGuid().ToString("N"),
             OwnerId = ownerId,
             ProjectId = "p1",
-            ImageChat = new ClaudeHomeServer.Models.SessionImageChat { CurrentPath = "images/hero.png" },
         };
         return factory.Services.GetRequiredService<ClaudeHomeServer.Services.SessionManager>()
             .BuildImageEditorContext(ownerId, chat);
@@ -97,11 +96,8 @@ public class ImageEditorDisabledTests : IDisposable
     [InlineData("POST", "quote")]
     [InlineData("POST", "transform")]
     [InlineData("GET", "characters")]
-    [InlineData("POST", "chats")]
-    [InlineData("GET", "chats?path=images/hero.png")]
-    [InlineData("PUT", "chats/any/path")]
-    [InlineData("GET", "chats/any/state")]
-    [InlineData("PUT", "chats/any/state")]
+    [InlineData("GET", "sessions/any/threads")]
+    [InlineData("PUT", "sessions/any/threads/focus")]
     [InlineData("POST", "save")]
     public async Task Ручки_редактора_при_выключенном_модуле_404_а_не_500(string method, string tail)
     {

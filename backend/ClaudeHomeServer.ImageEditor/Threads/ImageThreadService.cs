@@ -13,7 +13,9 @@ namespace ClaudeHomeServer.Services.ImageEditor.Threads;
 // не разошлись между ними.
 //
 // Взять вариант, откатиться и сохранить в проект может только человек (решение Андрея 1): эти
-// методы зовут только ручки, тулсет агента их не видит.
+// методы зовут только ручки, тулсет агента их не видит. Агенту доступны только AgentFocusAsync и
+// AgentOpenAsync — взять картинку в работу, снять выбор, завести черновик, и каждое такое
+// действие видно в ленте тихой строкой «Claude взял в работу: …».
 //
 // Чат проверяет вызывающий там, где отказ — часть ответа (ручки нитей: 404). Запуск и
 // сохранение с чужим чатом или нитью не падают — OwnChat молча отбрасывает, ответ не выдаёт
@@ -36,7 +38,12 @@ public sealed class ImageThreadService(
         public const string Launch = "image_launch";
         public const string Saved = "image_saved";
         public const string StackForked = "image_stack_forked";
+        // Агент сменил картинку в работе: data { threadId, by: "agent" }
+        public const string Focus = "image_focus";
     }
+
+    // Сколько раз агент перечитывает ревизию, если человек записал своё между чтением и записью
+    private const int AgentAttempts = 3;
 
     public ImageThreadsState Get(string ownerId, string sessionId) => store.Get(ownerId, sessionId);
 
@@ -77,6 +84,58 @@ public sealed class ImageThreadService(
     public Task<ImageThreadWrite> SetSettingsAsync(string ownerId, string projectId, string sessionId, string threadId,
         ImageThreadSettings settings, long revision) =>
         AfterAsync(ownerId, projectId, sessionId, store.SetSettings(ownerId, sessionId, threadId, settings, revision));
+
+    // Агент берёт в работу нить этого чата (threadId) или снимает выбор (null). Ревизию агент не
+    // держит — берётся актуальная, гонка с человеком лечится перечитыванием. Фокус сменился —
+    // тихая строка в ленте; тот же фокус повторно ничего не пишет
+    public async Task<ImageThreadWrite> AgentFocusAsync(string ownerId, string projectId, string sessionId,
+        string? threadId, CancellationToken ct)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            var before = store.Get(ownerId, sessionId);
+            var written = store.SetFocus(ownerId, sessionId, threadId, before.Revision);
+            if (written.Status == ImageThreadWriteStatus.Conflict && attempt < AgentAttempts - 1) continue;
+            if (written.Status == ImageThreadWriteStatus.Ok && written.State.Revision != before.Revision)
+                await FocusLineAsync(sessionId, written.State, before, ct);
+            return await AfterAsync(ownerId, projectId, sessionId, written);
+        }
+    }
+
+    // Агент берёт в работу файл проекта (нить по нему — новая или уже существующая) или заводит
+    // черновик «Новая картинка» в папке. Сначала тихая строка, следом якорь новой стопки: в ленте
+    // «Claude взял в работу: logo.png», под ней карточка
+    public async Task<ImageThreadWrite> AgentOpenAsync(string ownerId, string projectId, string sessionId,
+        string? file, string? draftFolder, CancellationToken ct)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            var before = store.Get(ownerId, sessionId);
+            var written = store.Open(ownerId, sessionId, file, draftFolder, before.Revision);
+            if (written.Status == ImageThreadWriteStatus.Conflict && attempt < AgentAttempts - 1) continue;
+            if (written.Status == ImageThreadWriteStatus.Ok && written.State.Revision != before.Revision)
+                await FocusLineAsync(sessionId, written.State, before, ct);
+            if (written is { Status: ImageThreadWriteStatus.Ok, Existing: false, Thread: { } thread })
+                await AnchorAsync(sessionId, thread, thread.CurrentStackId!, ct);
+            return await AfterAsync(ownerId, projectId, sessionId, written);
+        }
+    }
+
+    // «Claude взял в работу: logo.png» или «Claude снял выбор: logo.png»
+    private Task FocusLineAsync(string sessionId, ImageThreadsState after, ImageThreadsState before, CancellationToken ct)
+    {
+        if (after.Focus is { } focus && after.Threads.FirstOrDefault(t => t.Id == focus) is { } taken)
+            return RecordAsync(sessionId, RecordTypes.Focus, FocusText(taken),
+                new { threadId = taken.Id, by = SpendInitiators.Agent }, ct);
+        var dropped = before.Threads.FirstOrDefault(t => t.Id == before.Focus);
+        return RecordAsync(sessionId, RecordTypes.Focus, UnfocusText(dropped),
+            new { threadId = (string?)null, by = SpendInitiators.Agent }, ct);
+    }
+
+    public static string FocusText(ImageThread thread) => $"Claude взял в работу: {Name(thread)}";
+
+    public static string UnfocusText(ImageThread? thread) =>
+        thread is null ? "Claude снял выбор картинки" : $"Claude снял выбор: {Name(thread)}";
 
     // «Взять»: вариант задачи этой нити (jobId + variant) или готовый шаг правки без ИИ (stepId)
     // становится шагом нити. Откат и новая правка заводят новую стопку: её якорь и строка

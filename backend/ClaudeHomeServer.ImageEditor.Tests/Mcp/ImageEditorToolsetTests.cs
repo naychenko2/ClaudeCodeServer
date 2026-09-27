@@ -5,8 +5,8 @@ using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.ImageEditor;
-using ClaudeHomeServer.Services.ImageEditor.Chats;
 using ClaudeHomeServer.Services.ImageEditor.Mcp;
+using ClaudeHomeServer.Services.ImageEditor.Threads;
 using ClaudeHomeServer.Services.Images.Editing.Raster;
 using ClaudeHomeServer.Services.Mcp.Http;
 using ClaudeHomeServer.Services.Spend;
@@ -21,9 +21,12 @@ using Moq;
 
 namespace ClaudeHomeServer.Tests.ImageEditor.Mcp;
 
-// MCP-сервер редактора для агента (ADR-018 §2, §7): запуск сразу тем же путём, что у человека,
-// трата на владельца чата с инициатором «агент», потолок запусков за ход, отказ на
-// делегированном ходу, изоляция чужого чата и чужой задачи
+// MCP-сервер редактора для агента любого чата проекта (ADR-019 §4, решение Андрея 1): агент
+// видит нити, берёт картинку в работу и заводит черновик — всегда тихой строкой в ленте; запуск
+// только в нить по обязательному threadId тем же путём, что у человека; взять вариант,
+// откатиться и сохранить агент не может. Плюс сторожа v2: трата на владельца чата с
+// инициатором «агент», потолок запусков за ход, отказ на делегированном ходу, изоляция чужого
+// чата и чужой задачи, состав не зависит от фокуса и нитей.
 public class ImageEditorToolsetTests : IDisposable
 {
     private const string Owner = "user-b";
@@ -36,19 +39,23 @@ public class ImageEditorToolsetTests : IDisposable
     private readonly RecordingBroadcaster _broadcaster = new();
     private readonly MemorySpendStore _spend = new();
     private readonly FakeTurnBus _bus = new();
+    private readonly RecordingFeed _feed = new();
     private readonly Mock<IDelegatedTurnGate> _turnGate = new();
     private readonly Dictionary<string, Session> _sessions = new();
     private readonly HashSet<string> _flagOn = [Owner, Stranger];
     private readonly List<ImageEditJobService> _services = [];
+    private readonly ImageThreadStore _store;
     private ImageEditJobService _jobs = null!;
-    private ImageChatStateStore _states = null!;
 
     public ImageEditorToolsetTests()
     {
         _root = Path.Combine(_dir, "project");
         Directory.CreateDirectory(Path.Combine(_root, "images"));
+        Directory.CreateDirectory(Path.Combine(_root, "art"));
         File.WriteAllBytes(Path.Combine(_root, "images", "hero.png"), TestImages.Png(4, 4));
-        AddChat(ChatId, Owner, ProjectId, "images/hero.png");
+        File.WriteAllText(Path.Combine(_root, "notes.txt"), "не картинка");
+        _store = new ImageThreadStore(Path.Combine(_dir, ImageThreadStore.DirName));
+        AddChat(ChatId, Owner, ProjectId);
     }
 
     public void Dispose()
@@ -58,14 +65,8 @@ public class ImageEditorToolsetTests : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    private void AddChat(string id, string owner, string projectId, string? imagePath) =>
-        _sessions[id] = new Session
-        {
-            Id = id,
-            OwnerId = owner,
-            ProjectId = projectId,
-            ImageChat = imagePath is null ? null : new SessionImageChat { CurrentPath = imagePath },
-        };
+    private void AddChat(string id, string owner, string? projectId) =>
+        _sessions[id] = new Session { Id = id, OwnerId = owner, ProjectId = projectId };
 
     private ImageEditorToolset Toolset(IImageEditor[]? editors = null, bool agentLaunch = true, bool withGate = true)
     {
@@ -73,12 +74,11 @@ public class ImageEditorToolsetTests : IDisposable
         var workspace = new ImageEditWorkspace(Path.Combine(_dir, "image-editor"));
         _jobs = new ImageEditJobService(editors, workspace, NullLogger<ImageEditJobService>.Instance, _spend, _broadcaster);
         _services.Add(_jobs);
-        _states = new ImageChatStateStore(workspace);
 
         var directory = new Mock<ISessionDirectory>();
         directory.Setup(d => d.GetById(It.IsAny<string>())).Returns((string id) => _sessions.GetValueOrDefault(id));
-        var launcher = new ImageEditLaunchAssembler(editors, _states, NullLogger<ImageEditLaunchAssembler>.Instance,
-            _jobs, new SkiaImageRaster(), directory.Object, broadcaster: _broadcaster);
+        var threads = new ImageThreadService(_store, NullLogger<ImageThreadService>.Instance, directory.Object, _feed, _broadcaster);
+        var launcher = new ImageEditLaunchAssembler(editors, _jobs, new SkiaImageRaster(), threads);
 
         var accessor = new Mock<IMcpSessionAccessor>();
         accessor.Setup(a => a.GetOwned(It.IsAny<string>(), It.IsAny<string>()))
@@ -90,7 +90,7 @@ public class ImageEditorToolsetTests : IDisposable
         projects.Setup(p => p.GetById(ProjectId)).Returns(new Project { Id = ProjectId, OwnerId = Owner, RootPath = _root });
 
         var config = TestImages.Config((ImageEditorToolset.AgentLaunchKey, agentLaunch ? "true" : "false"));
-        return new ImageEditorToolset(accessor.Object, flags.Object, projects.Object, editors, _states, launcher,
+        return new ImageEditorToolset(accessor.Object, flags.Object, projects.Object, editors, threads, launcher,
             withGate ? _turnGate.Object : null, _jobs, events: _bus, config: config);
     }
 
@@ -102,10 +102,22 @@ public class ImageEditorToolsetTests : IDisposable
 
     private static JsonObject Parse(McpToolCallResult result) => JsonNode.Parse(result.Text)!.AsObject();
 
+    // Картинка чата: нить по файлу, как её завёл бы человек из дерева
+    private string Thread(string file = "images/hero.png", string chat = ChatId) =>
+        _store.Open(Owner, chat, file, null, _store.Get(Owner, chat).Revision).Thread!.Id;
+
+    private string Draft(string folder = "art") =>
+        _store.Open(Owner, ChatId, null, folder, _store.Get(Owner, ChatId).Revision).Thread!.Id;
+
+    private JsonObject Gen(string threadId, string prompt = "фон") => new() { ["threadId"] = threadId, ["prompt"] = prompt };
+
     private IReadOnlyList<ImageEditJobDto> JobsOfChat() =>
-        _states.Get(Owner, ChatId).Events
+        _store.Get(Owner, ChatId).Events
             .Select(e => e.JobId).OfType<string>().Distinct()
             .Select(id => _jobs.Get(Owner, ProjectId, id)).OfType<ImageEditJobDto>().ToList();
+
+    private IEnumerable<StoredModuleRecord> Lines(string recordType) =>
+        _feed.Records.Where(r => r.SessionId == ChatId && r.Record.RecordType == recordType).Select(r => r.Record);
 
     private async Task<ImageEditJobDto> WaitDone(string jobId)
     {
@@ -119,47 +131,206 @@ public class ImageEditorToolsetTests : IDisposable
         throw new TimeoutException("задача не завершилась");
     }
 
+    // ── Состав: решение Андрея 1 ──────────────────────────────────────────────
+
     [Fact]
-    public async Task Агент_запускает_генерацию_сразу_и_меняет_состояние_редактора()
+    public void Инструментов_взять_откатить_и_сохранить_у_агента_нет()
+    {
+        var names = Toolset().ToolsFor(Ctx()).Select(t => t.Name).ToList();
+
+        names.Should().BeEquivalentTo([
+            ImageEditorToolset.ToolState, ImageEditorToolset.ToolFocus, ImageEditorToolset.ToolNew,
+            ImageEditorToolset.ToolGenerate, ImageEditorToolset.ToolCancel, ImageEditorToolset.ToolSuggestPrompt]);
+        names.Should().NotContain(n => n.Contains("take") || n.Contains("rollback") || n.Contains("undo")
+            || n.Contains("save") || n.Contains("dismiss") || n.Contains("remove"),
+            "что становится шагом и файлом проекта, решает только человек");
+    }
+
+    [Fact]
+    public void В_схеме_image_generate_threadId_обязателен()
+    {
+        var generate = Toolset().ToolsFor(Ctx()).Single(t => t.Name == ImageEditorToolset.ToolGenerate);
+
+        generate.InputSchema["required"]!.AsArray().Select(n => n!.GetValue<string>()).Should().Contain("threadId");
+    }
+
+    [Fact]
+    public async Task image_generate_без_threadId_отказ_без_задачи_и_лимит_цел()
+    {
+        var toolset = Toolset();
+        var thread = Thread();
+        _store.SetFocus(Owner, ChatId, thread, _store.Get(Owner, ChatId).Revision);
+
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate, new JsonObject { ["prompt"] = "фон" });
+
+        result.IsError.Should().BeTrue();
+        result.Text.Should().Contain("threadId", "запуск «по текущему фокусу» ушёл бы не на ту картинку");
+        _spend.Records.Should().BeEmpty();
+        (await Call(toolset, ImageEditorToolset.ToolGenerate, Gen(thread, "a"))).IsError.Should().BeFalse();
+        (await Call(toolset, ImageEditorToolset.ToolGenerate, Gen(thread, "b"))).IsError
+            .Should().BeFalse("отказ без threadId не съел место в потолке хода");
+    }
+
+    [Fact]
+    public async Task image_generate_с_чужой_или_несуществующей_нитью_отказ()
+    {
+        AddChat("chat-b2", Owner, ProjectId);
+        var foreign = Thread(chat: "chat-b2");
+        var toolset = Toolset();
+
+        (await Call(toolset, ImageEditorToolset.ToolGenerate, Gen(foreign))).IsError.Should().BeTrue();
+        (await Call(toolset, ImageEditorToolset.ToolGenerate, Gen("nope"))).IsError.Should().BeTrue();
+        _spend.Records.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Без_запуска_агентом_в_составе_чтение_выбор_и_предложение()
+    {
+        var toolset = Toolset(agentLaunch: false);
+
+        toolset.ToolsFor(Ctx()).Select(t => t.Name).Should().BeEquivalentTo([
+            ImageEditorToolset.ToolState, ImageEditorToolset.ToolFocus, ImageEditorToolset.ToolNew,
+            ImageEditorToolset.ToolSuggestPrompt]);
+        (await Call(toolset, ImageEditorToolset.ToolGenerate, Gen(Thread()))).IsError.Should().BeTrue();
+        _spend.Records.Should().BeEmpty();
+    }
+
+    // Состав tools/list входит в сигнатуру запуска CLI: смена фокуса или новая нить не должны его менять
+    [Fact]
+    public async Task Состав_не_зависит_от_фокуса_и_нитей()
+    {
+        var toolset = Toolset();
+        var empty = toolset.ToolsFor(Ctx()).Select(t => t.Name).ToList();
+
+        await Call(toolset, ImageEditorToolset.ToolFocus, new JsonObject { ["file"] = "images/hero.png" });
+        var focused = toolset.ToolsFor(Ctx()).Select(t => t.Name).ToList();
+        await Call(toolset, ImageEditorToolset.ToolFocus);
+        var unfocused = toolset.ToolsFor(Ctx()).Select(t => t.Name).ToList();
+
+        focused.Should().Equal(empty);
+        unfocused.Should().Equal(empty);
+    }
+
+    [Fact]
+    public void Чужой_чат_чат_вне_проекта_и_выключенный_флаг_пустой_состав()
+    {
+        AddChat("outside", Owner, projectId: null);
+        var toolset = Toolset();
+
+        toolset.ToolsFor(Ctx()).Should().HaveCount(6, "сервер есть в любом чате проекта");
+        toolset.ToolsFor(Ctx(owner: Stranger)).Should().BeEmpty("чат владельца B чужаку не виден");
+        toolset.ToolsFor(Ctx(tail: "missing")).Should().BeEmpty();
+        toolset.ToolsFor(Ctx(tail: "../chat-b")).Should().BeEmpty();
+        toolset.ToolsFor(Ctx(tail: "outside")).Should().BeEmpty("чат вне проекта картинок не имеет");
+        _flagOn.Remove(Owner);
+        toolset.ToolsFor(Ctx()).Should().BeEmpty("флаг image-editor владельца выключен");
+    }
+
+    // ── Выбор картинки агентом: всегда тихой строкой ──────────────────────────
+
+    [Fact]
+    public async Task image_focus_по_файлу_берёт_картинку_в_работу_тихой_строкой_и_якорем()
     {
         var toolset = Toolset();
 
+        var result = await Call(toolset, ImageEditorToolset.ToolFocus, new JsonObject { ["file"] = "images/hero.png" });
+
+        result.IsError.Should().BeFalse(result.Text);
+        var state = _store.Get(Owner, ChatId);
+        var thread = state.Threads.Should().ContainSingle().Subject;
+        state.Focus.Should().Be(thread.Id);
+        thread.File.Should().Be("images/hero.png");
+        Lines(ImageThreadService.RecordTypes.Focus).Should().ContainSingle()
+            .Which.Fallback.Should().Be("Claude взял в работу: images/hero.png");
+        Lines(ImageThreadService.RecordTypes.Thread).Should().ContainSingle("новая нить — её карточка в ленте");
+        _broadcaster.ToOwnerCalls.Select(c => c.Message).OfType<ImageThreadChangedMessage>().Should().NotBeEmpty();
+    }
+
+    [Fact]
+    public async Task image_focus_по_threadId_и_снятие_выбора_тоже_видны_в_ленте()
+    {
+        var thread = Thread();
+        _store.SetFocus(Owner, ChatId, null, _store.Get(Owner, ChatId).Revision);
+        var toolset = Toolset();
+
+        (await Call(toolset, ImageEditorToolset.ToolFocus, new JsonObject { ["threadId"] = thread })).IsError.Should().BeFalse();
+        (await Call(toolset, ImageEditorToolset.ToolFocus, new JsonObject { ["threadId"] = thread })).IsError.Should().BeFalse();
+        (await Call(toolset, ImageEditorToolset.ToolFocus)).IsError.Should().BeFalse();
+
+        Lines(ImageThreadService.RecordTypes.Focus).Select(r => r.Fallback).Should().Equal(
+            "Claude взял в работу: images/hero.png",
+            "Claude снял выбор: images/hero.png");
+        _store.Get(Owner, ChatId).Focus.Should().BeNull();
+        Lines(ImageThreadService.RecordTypes.Thread).Should().BeEmpty("нить уже была — второй карточки нет");
+    }
+
+    [Fact]
+    public async Task image_focus_на_то_что_не_картинка_проекта_отказ_без_следов()
+    {
+        var toolset = Toolset();
+
+        (await Call(toolset, ImageEditorToolset.ToolFocus, new JsonObject { ["file"] = "notes.txt" })).IsError.Should().BeTrue();
+        (await Call(toolset, ImageEditorToolset.ToolFocus, new JsonObject { ["file"] = "../outside.png" })).IsError.Should().BeTrue();
+        (await Call(toolset, ImageEditorToolset.ToolFocus, new JsonObject { ["threadId"] = "nope" })).IsError.Should().BeTrue();
+
+        _store.Get(Owner, ChatId).Threads.Should().BeEmpty();
+        _feed.Records.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task image_new_заводит_черновик_в_папке_тихой_строкой()
+    {
+        var toolset = Toolset();
+
+        var result = await Call(toolset, ImageEditorToolset.ToolNew, new JsonObject { ["folder"] = "art" });
+
+        result.IsError.Should().BeFalse(result.Text);
+        var thread = _store.Get(Owner, ChatId).Threads.Should().ContainSingle().Subject;
+        thread.File.Should().BeNull();
+        thread.DraftFolder.Should().Be("art");
+        _store.Get(Owner, ChatId).Focus.Should().Be(thread.Id);
+        Lines(ImageThreadService.RecordTypes.Focus).Should().ContainSingle()
+            .Which.Fallback.Should().Be("Claude взял в работу: новая картинка");
+        (await Call(toolset, ImageEditorToolset.ToolNew, new JsonObject { ["folder"] = "missing" })).IsError.Should().BeTrue();
+    }
+
+    // ── Запуск в нить ─────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task Агент_запускает_генерацию_в_нить_варианты_ждут_человека()
+    {
+        var thread = Thread();
+        var toolset = Toolset();
+
         var result = await Call(toolset, ImageEditorToolset.ToolGenerate,
-            new JsonObject { ["prompt"] = "убрать провод", ["count"] = 2 });
+            new JsonObject { ["threadId"] = thread, ["prompt"] = "убрать провод", ["count"] = 2 });
 
         result.IsError.Should().BeFalse(result.Text);
         var body = Parse(result);
         var jobId = body["jobId"]!.GetValue<string>();
+        body["threadId"]!.GetValue<string>().Should().Be(thread);
         body["quote"]!["provider"]!.GetValue<string>().Should().Be("higgsfield");
-        body["changes"]!.AsArray().Select(c => c!["field"]!.GetValue<string>()).Should().Contain(["prompt", "count"]);
 
         var job = _jobs.Get(Owner, ProjectId, jobId)!;
         job.Initiator.Should().Be(ImageEditInitiator.Agent);
         job.ChatSessionId.Should().Be(ChatId);
+        job.ThreadId.Should().Be(thread);
         job.Count.Should().Be(2);
-
-        var state = _states.Get(Owner, ChatId);
-        state.Prompt.Should().Be("убрать провод");
-        state.PromptAuthor.Should().Be(ImageEditInitiator.Agent);
-        state.Count.Should().Be(2);
-        state.Events.Should().Contain(e => e.JobId == jobId && e.Kind == ImageChatEventKinds.Launched);
-        _broadcaster.ToOwnerCalls.Select(c => c.Message).OfType<ImageChatStateMessage>()
-            .Should().Contain(m => m.ChangedBy == ImageEditInitiator.Agent && m.SessionId == ChatId
-                && m.Changes.Any(ch => ch.Field == "prompt"));
+        _store.Get(Owner, ChatId).Threads.Single().PendingJobId.Should().Be(jobId);
+        Lines(ImageThreadService.RecordTypes.Launch).Should().BeEmpty("запуск агента виден карточкой вызова, а не тихой строкой");
     }
 
-    // ADR-018 §7: агент в чате владельца B запускает Higgsfield → одна запись траты на B,
-    // инициатор — агент, SessionId — чат. Не на персону и не на админа Higgsfield: чат, который
-    // ведёт персона, платит тем же владельцем
+    // ADR-018 §7: трата агента — одна запись на владельца чата, инициатор — агент, SessionId — чат
     [Theory]
     [InlineData(null)]
     [InlineData("persona-artist")]
     public async Task Трата_агента_ложится_на_владельца_чата_с_инициатором_агент(string? personaId)
     {
         _sessions[ChatId].PersonaId = personaId;
+        var thread = Thread();
         var toolset = Toolset();
 
-        var result = await Call(toolset, ImageEditorToolset.ToolGenerate, new JsonObject { ["prompt"] = "фон" });
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate, Gen(thread));
         result.IsError.Should().BeFalse(result.Text);
         await WaitDone(Parse(result)["jobId"]!.GetValue<string>());
 
@@ -170,14 +341,14 @@ public class ImageEditorToolsetTests : IDisposable
         record.ProjectId.Should().Be(ProjectId);
     }
 
-    // ADR-018 §11: агент выбирает «Локальные модели» ключом local; потолок хода общий для всех
     [Fact]
     public async Task Агент_выбирает_локальные_модели_и_потолок_хода_действует()
     {
         var media = new LocalImageEditorTests.FakeMedia();
         var toolset = Toolset([HiggsfieldImageEditorTests.Create().Editor,
             new LocalImageEditor(media) { PollInterval = TimeSpan.FromMilliseconds(1) }]);
-        var args = () => new JsonObject { ["prompt"] = "удали провод", ["provider"] = "local" };
+        var thread = Thread();
+        var args = () => new JsonObject { ["threadId"] = thread, ["prompt"] = "удали провод", ["provider"] = "local" };
 
         var first = await Call(toolset, ImageEditorToolset.ToolGenerate, args());
         first.IsError.Should().BeFalse(first.Text);
@@ -190,28 +361,26 @@ public class ImageEditorToolsetTests : IDisposable
         third.IsError.Should().BeTrue();
         third.Text.Should().Contain("не больше 2");
         JobsOfChat().Should().HaveCount(2).And.OnlyContain(j => j.Provider == "local");
-        _states.Get(Owner, ChatId).Provider.Should().Be("local");
     }
 
     [Fact]
     public async Task Третий_запуск_за_ход_отказ_без_задачи_а_после_хода_счётчик_сброшен()
     {
+        var thread = Thread();
         var toolset = Toolset();
-        var args = () => new JsonObject { ["prompt"] = "вариант" };
 
-        (await Call(toolset, ImageEditorToolset.ToolGenerate, args())).IsError.Should().BeFalse();
-        (await Call(toolset, ImageEditorToolset.ToolGenerate, args())).IsError.Should().BeFalse();
-        var third = await Call(toolset, ImageEditorToolset.ToolGenerate, args());
+        (await Call(toolset, ImageEditorToolset.ToolGenerate, Gen(thread))).IsError.Should().BeFalse();
+        (await Call(toolset, ImageEditorToolset.ToolGenerate, Gen(thread))).IsError.Should().BeFalse();
+        var third = await Call(toolset, ImageEditorToolset.ToolGenerate, Gen(thread));
 
         third.IsError.Should().BeTrue();
         third.Text.Should().Contain("не больше 2");
         JobsOfChat().Should().HaveCount(2, "третий вызов задачи не создаёт");
 
-        // Ход другого чата счётчик этого не трогает, ход своего — сбрасывает
         await _bus.PublishAsync(new TurnCompleted(new TurnContext("other-chat", Owner, 1, 0), "success"));
-        (await Call(toolset, ImageEditorToolset.ToolGenerate, args())).IsError.Should().BeTrue();
+        (await Call(toolset, ImageEditorToolset.ToolGenerate, Gen(thread))).IsError.Should().BeTrue();
         await _bus.PublishAsync(new TurnCompleted(new TurnContext(ChatId, Owner, 1, 0), "success"));
-        (await Call(toolset, ImageEditorToolset.ToolGenerate, args())).IsError.Should().BeFalse();
+        (await Call(toolset, ImageEditorToolset.ToolGenerate, Gen(thread))).IsError.Should().BeFalse();
         JobsOfChat().Should().HaveCount(3);
     }
 
@@ -220,19 +389,19 @@ public class ImageEditorToolsetTests : IDisposable
     {
         _turnGate.Setup(g => g.Deny(Owner, ChatId, It.IsAny<string>()))
             .Returns("Запуск генерации недоступно на делегированном ходу");
+        var thread = Thread();
         var toolset = Toolset();
 
-        var result = await Call(toolset, ImageEditorToolset.ToolGenerate, new JsonObject { ["prompt"] = "фон" });
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate, Gen(thread));
 
         result.IsError.Should().BeTrue();
         result.Text.Should().Contain("делегированном ходу");
         JobsOfChat().Should().BeEmpty();
         _spend.Records.Should().BeEmpty();
-        _states.Get(Owner, ChatId).Prompt.Should().BeEmpty("отказ не меняет состояние редактора");
 
         _turnGate.Setup(g => g.Deny(Owner, ChatId, It.IsAny<string>())).Returns((string?)null);
-        (await Call(toolset, ImageEditorToolset.ToolGenerate, new JsonObject { ["prompt"] = "a" })).IsError.Should().BeFalse();
-        (await Call(toolset, ImageEditorToolset.ToolGenerate, new JsonObject { ["prompt"] = "b" })).IsError
+        (await Call(toolset, ImageEditorToolset.ToolGenerate, Gen(thread, "a"))).IsError.Should().BeFalse();
+        (await Call(toolset, ImageEditorToolset.ToolGenerate, Gen(thread, "b"))).IsError
             .Should().BeFalse("отказанный вызов не съел место в потолке хода");
     }
 
@@ -241,47 +410,32 @@ public class ImageEditorToolsetTests : IDisposable
     {
         var toolset = Toolset(withGate: false);
 
-        var result = await Call(toolset, ImageEditorToolset.ToolGenerate, new JsonObject { ["prompt"] = "фон" });
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate, Gen(Thread()));
 
         result.IsError.Should().BeTrue();
         JobsOfChat().Should().BeEmpty();
     }
 
     [Fact]
-    public async Task Чужой_чат_в_хвосте_пустой_состав_и_отказ_без_задачи()
+    public async Task Чужой_владелец_отказ_без_задачи()
     {
+        var thread = Thread();
         var toolset = Toolset();
 
-        toolset.ToolsFor(Ctx()).Should().HaveCount(4);
-        toolset.ToolsFor(Ctx(owner: Stranger)).Should().BeEmpty("чат владельца B чужаку не виден");
-        toolset.ToolsFor(Ctx(tail: "missing")).Should().BeEmpty();
-        toolset.ToolsFor(Ctx(tail: "../chat-b")).Should().BeEmpty();
-
-        var result = await Call(toolset, ImageEditorToolset.ToolGenerate, new JsonObject { ["prompt"] = "фон" },
-            Ctx(owner: Stranger));
-        result.IsError.Should().BeTrue();
+        (await Call(toolset, ImageEditorToolset.ToolGenerate, Gen(thread), Ctx(owner: Stranger))).IsError.Should().BeTrue();
         (await Call(toolset, ImageEditorToolset.ToolState, ctx: Ctx(owner: Stranger))).IsError.Should().BeTrue();
+        (await Call(toolset, ImageEditorToolset.ToolFocus, new JsonObject { ["threadId"] = thread }, Ctx(owner: Stranger)))
+            .IsError.Should().BeTrue();
         JobsOfChat().Should().BeEmpty();
         _spend.Records.Should().BeEmpty();
     }
 
     [Fact]
-    public void Обычный_чат_и_выключенный_флаг_пустой_состав()
-    {
-        AddChat("plain", Owner, ProjectId, imagePath: null);
-        var toolset = Toolset();
-
-        toolset.ToolsFor(Ctx(tail: "plain")).Should().BeEmpty("сервер есть только в чате картинки");
-        _flagOn.Remove(Owner);
-        toolset.ToolsFor(Ctx()).Should().BeEmpty("флаг image-editor владельца выключен");
-    }
-
-    [Fact]
     public async Task Отмена_задачи_другого_чата_неотличима_от_несуществующей()
     {
-        AddChat("chat-b2", Owner, ProjectId, "images/hero.png");
+        AddChat("chat-b2", Owner, ProjectId);
         var toolset = Toolset();
-        var started = await Call(toolset, ImageEditorToolset.ToolGenerate, new JsonObject { ["prompt"] = "фон" });
+        var started = await Call(toolset, ImageEditorToolset.ToolGenerate, Gen(Thread()));
         var jobId = Parse(started)["jobId"]!.GetValue<string>();
 
         var foreign = await Call(toolset, ImageEditorToolset.ToolCancel, new JsonObject { ["jobId"] = jobId },
@@ -305,6 +459,7 @@ public class ImageEditorToolsetTests : IDisposable
 
         var result = await Call(toolset, ImageEditorToolset.ToolGenerate, new JsonObject
         {
+            ["threadId"] = Thread(),
             ["prompt"] = "как на образце",
             ["references"] = new JsonArray { new JsonObject { ["path"] = "images/ref.png", ["role"] = "style" } },
         });
@@ -312,31 +467,29 @@ public class ImageEditorToolsetTests : IDisposable
         result.IsError.Should().BeTrue();
         result.Text.Should().Contain("символическую ссылку");
         JobsOfChat().Should().BeEmpty();
-        _states.Get(Owner, ChatId).References.Should().BeEmpty("отвергнутый запуск не пишет образцы в состояние");
     }
 
-    // Исходник чата читается общим путём сборщика (ReadProjectImageAsync): ссылка наружу
+    // Файл нити читается общим путём сборщика (ReadProjectImageAsync): ссылка наружу
     // отвергается до котировки, а не доезжает байтами чужого файла до поставщика
     [Fact]
-    public async Task Файл_чата_через_символическую_ссылку_отвергается_до_котировки()
+    public async Task Файл_нити_через_символическую_ссылку_отвергается_до_котировки()
     {
         var outside = Path.Combine(_dir, "outside.png");
         File.WriteAllBytes(outside, TestImages.Png(4, 4));
         var link = Path.Combine(_root, "images", "linked.png");
         try { File.CreateSymbolicLink(link, outside); }
         catch (Exception e) when (e is UnauthorizedAccessException or IOException) { return; } // Windows без прав — проверка идёт в CI на Linux
-        AddChat(ChatId, Owner, ProjectId, "images/linked.png");
+        var thread = Thread("images/linked.png");
         var toolset = Toolset();
 
-        var result = await Call(toolset, ImageEditorToolset.ToolGenerate, new JsonObject { ["prompt"] = "фон" });
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate, Gen(thread));
 
         result.IsError.Should().BeTrue();
-        result.Text.Should().Be("Файл чата вне папки проекта или идёт через символическую ссылку");
+        result.Text.Should().Be("Файл картинки вне папки проекта или идёт через символическую ссылку");
         JobsOfChat().Should().BeEmpty();
         _spend.Records.Should().BeEmpty();
     }
 
-    // Отказ поставщика — котировка соседа в результате; второго вызова драйвера нет
     [Fact]
     public async Task Недоступный_поставщик_даёт_retryQuote_соседа_без_запуска()
     {
@@ -344,24 +497,13 @@ public class ImageEditorToolsetTests : IDisposable
         var toolset = Toolset([fal, new FakeImageEditor("higgsfield", enabled: false)]);
 
         var result = await Call(toolset, ImageEditorToolset.ToolGenerate,
-            new JsonObject { ["prompt"] = "фон", ["provider"] = "higgsfield" });
+            new JsonObject { ["threadId"] = Thread(), ["prompt"] = "фон", ["provider"] = "higgsfield" });
 
         result.IsError.Should().BeTrue();
         var body = Parse(result);
         body["code"]!.GetValue<string>().Should().Be(ImageEditErrorCodes.ProviderUnavailable);
         body["retryQuote"]!["provider"]!.GetValue<string>().Should().Be("fal");
         JobsOfChat().Should().BeEmpty("RunAsync заглушки бросает — запуска не было");
-    }
-
-    [Fact]
-    public async Task Без_запуска_агентом_в_составе_только_состояние_и_предложение()
-    {
-        var toolset = Toolset(agentLaunch: false);
-
-        toolset.ToolsFor(Ctx()).Select(t => t.Name).Should()
-            .BeEquivalentTo([ImageEditorToolset.ToolState, ImageEditorToolset.ToolSuggestPrompt]);
-        (await Call(toolset, ImageEditorToolset.ToolGenerate, new JsonObject { ["prompt"] = "фон" })).IsError.Should().BeTrue();
-        JobsOfChat().Should().BeEmpty();
     }
 
     [Fact]
@@ -374,44 +516,46 @@ public class ImageEditorToolsetTests : IDisposable
 
         result.IsError.Should().BeFalse();
         Parse(result)["prompt"]!.GetValue<string>().Should().Be("закатное небо");
-        _states.Get(Owner, ChatId).Revision.Should().Be(0);
+        _store.Get(Owner, ChatId).Revision.Should().Be(0);
         _broadcaster.ToOwnerCalls.Should().BeEmpty();
+        _feed.Records.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task Состояние_отдаёт_файл_промпт_и_поставщиков()
+    public async Task Состояние_отдаёт_нити_фокус_и_поставщиков()
     {
+        var thread = Thread();
         var toolset = Toolset();
 
         var result = await Call(toolset, ImageEditorToolset.ToolState);
 
         result.IsError.Should().BeFalse(result.Text);
         var body = Parse(result);
-        body["file"]!["path"]!.GetValue<string>().Should().Be("images/hero.png");
-        body["file"]!["width"]!.GetValue<int>().Should().Be(4);
-        body["provider"]!.GetValue<string>().Should().Be("higgsfield");
+        body["focus"]!.GetValue<string>().Should().Be(thread);
+        var first = body["threads"]!.AsArray().Single()!;
+        first["thread"]!["threadId"]!.GetValue<string>().Should().Be(thread);
+        first["thread"]!["file"]!.GetValue<string>().Should().Be("images/hero.png");
+        first["size"]!["width"]!.GetValue<int>().Should().Be(4);
+        body["defaultProvider"]!.GetValue<string>().Should().Be("higgsfield");
         body["providers"]!.AsArray().Should().NotBeEmpty();
     }
 
-    // ── Черновик «Нарисовать картинку»: файла ещё нет ───────────────────────────
-
-    private void MakeDraft(string folder = "art") =>
-        _sessions[ChatId].ImageChat = new SessionImageChat { CurrentPath = null, DraftFolder = folder };
+    // ── Черновик «Новая картинка»: файла ещё нет ───────────────────────────────
 
     [Fact]
     public async Task Черновик_image_generate_рисует_по_тексту_и_пишет_трату_на_владельца()
     {
-        MakeDraft();
+        var draft = Draft();
         var media = new LocalImageEditorTests.FakeMedia();
         var toolset = Toolset([new LocalImageEditor(media) { PollInterval = TimeSpan.FromMilliseconds(1) }]);
 
         var result = await Call(toolset, ImageEditorToolset.ToolGenerate,
-            new JsonObject { ["prompt"] = "кот в шляпе", ["provider"] = "local" });
+            new JsonObject { ["threadId"] = draft, ["prompt"] = "кот в шляпе", ["provider"] = "local" });
 
         result.IsError.Should().BeFalse(result.Text);
         var job = await WaitDone(Parse(result)["jobId"]!.GetValue<string>());
         job.Status.Should().Be(ImageEditJobStatus.Completed);
-        job.ChatSessionId.Should().Be(ChatId, "варианты черновика попадают в его ленту и редактор");
+        job.ThreadId.Should().Be(draft, "варианты черновика попадают в его карточку");
         var submitted = media.Submitted.Should().ContainSingle().Subject;
         submitted.Op.Should().Be(LocalImageOp.Generate);
         submitted.Images.Should().BeEmpty("у черновика исходника нет — генерация по тексту");
@@ -419,58 +563,43 @@ public class ImageEditorToolsetTests : IDisposable
         record.OwnerId.Should().Be(Owner);
         record.Initiator.Should().Be(SpendInitiators.Agent);
         record.SessionId.Should().Be(ChatId);
-        _states.Get(Owner, ChatId).Events.Should().Contain(e => e.JobId == job.JobId);
     }
 
     [Fact]
     public async Task Черновик_правка_без_картинки_отказ_без_задачи_и_лимит_цел()
     {
-        MakeDraft();
+        var draft = Draft();
         var toolset = Toolset();
 
         var result = await Call(toolset, ImageEditorToolset.ToolGenerate,
-            new JsonObject { ["prompt"] = "убери фон", ["op"] = "removeBackground" });
+            new JsonObject { ["threadId"] = draft, ["prompt"] = "убери фон", ["op"] = "removeBackground" });
 
         result.IsError.Should().BeTrue();
         result.Text.Should().Contain("Картинки ещё нет");
         _spend.Records.Should().BeEmpty();
-        (await Call(toolset, ImageEditorToolset.ToolGenerate, new JsonObject { ["prompt"] = "кот" }))
-            .IsError.Should().BeFalse("отказ не расходует лимит хода");
-        (await Call(toolset, ImageEditorToolset.ToolGenerate, new JsonObject { ["prompt"] = "кот 2" }))
-            .IsError.Should().BeFalse();
-        (await Call(toolset, ImageEditorToolset.ToolGenerate, new JsonObject { ["prompt"] = "кот 3" }))
+        (await Call(toolset, ImageEditorToolset.ToolGenerate, Gen(draft, "кот"))).IsError.Should().BeFalse("отказ не расходует лимит хода");
+        (await Call(toolset, ImageEditorToolset.ToolGenerate, Gen(draft, "кот 2"))).IsError.Should().BeFalse();
+        (await Call(toolset, ImageEditorToolset.ToolGenerate, Gen(draft, "кот 3")))
             .Text.Should().Contain("не больше 2", "лимит 2 за ход действует и у черновика");
     }
 
+    // Имена в списке авторазрешения (Core) обязаны совпадать со схемами тулсета
     [Fact]
-    public async Task Черновик_image_state_честно_говорит_что_картинки_нет()
-    {
-        MakeDraft("art/heroes");
-        var toolset = Toolset();
-
-        var result = await Call(toolset, ImageEditorToolset.ToolState);
-
-        result.IsError.Should().BeFalse(result.Text);
-        var body = Parse(result);
-        body["file"].Should().BeNull();
-        body["draft"]!["folder"]!.GetValue<string>().Should().Be("art/heroes");
-        body["draft"]!["note"]!.GetValue<string>().Should().Contain("Картинки ещё нет");
-    }
-
-    [Fact]
-    public void Черновик_блок_состояния_хода_без_файла()
-    {
-        var text = ImageEditorStateContributor.Render(null, ImageChatStateStore.Empty, [], _ => null, "art");
-
-        text.Should().Contain("Файл: картинки ещё нет").And.Contain("папку art");
-    }
-
-    // Имена в AutoAllowTools чата картинки (Core) обязаны совпадать со схемами тулсета
-    [Fact]
-    public void Автоматически_разрешённые_инструменты_есть_в_схемах()
+    public void Автоматически_разрешённые_инструменты_ровно_схемы_тулсета()
     {
         var names = Toolset().ToolsFor(Ctx()).Select(t => $"mcp__{ImageEditorToolset.ServerName}__{t.Name}").ToList();
-        names.Should().Contain(ImageChatDefaults.AutoAllowTools);
+        names.Should().BeEquivalentTo(ImageEditorAgentTools.AutoAllowTools);
+    }
+
+    private sealed class RecordingFeed : IChatFeed
+    {
+        public List<(string SessionId, StoredModuleRecord Record)> Records { get; } = [];
+
+        public Task<bool> AppendRecordAsync(string sessionId, StoredModuleRecord record, CancellationToken ct = default)
+        {
+            lock (Records) Records.Add((sessionId, record));
+            return Task.FromResult(true);
+        }
     }
 
     private sealed class FakeTurnBus : ITurnEventBus

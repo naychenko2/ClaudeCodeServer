@@ -748,10 +748,14 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly HiggsfieldMcpContext? _higgsfieldMcp;
     // Higgsfield: условие как у websearch — схема адреса допускает http И рубильник включён
     private bool HiggsfieldHttpOn() => _higgsfieldMcp is { UseHttp: true } && HttpMcpOnNow();
-    // MCP-сервер редактора картинок: null — не чат картинки (ADR-018 §2)
+    // MCP-сервер редактора картинок: null — чат вне проекта или редактор недоступен (ADR-019 §4)
     private readonly ImageEditorMcpContext? _imageEditorMcp;
     // Редактор картинок: условие как у websearch — схема адреса допускает http И рубильник включён
     private bool ImageEditorHttpOn() => _imageEditorMcp is { UseHttp: true } && HttpMcpOnNow();
+
+    // Инструмент редактора картинок без карточки разрешения: только если сервер едет в этот ход
+    internal static bool IsImageEditorAutoAllowed(ImageEditorMcpContext? context, string toolName) =>
+        context?.AutoAllowTools?.Contains(toolName, StringComparer.Ordinal) == true;
     // MCP-сервер локальной генерации (ComfyUI): null — выключен или недоступен чату
     private readonly LocalMediaMcpContext? _localMediaMcp;
     // Локальная генерация: условие как у higgsfield — схема адреса допускает http И рубильник включён
@@ -2411,6 +2415,9 @@ public class ClaudeSession : ILlmSessionAdapter
         // Свои MCP-серверы — без карточки, см. комментарий у BuiltInMcpServerPrefixes.
         if (ruleDecision == null && Array.Exists(BuiltInMcpServerPrefixes, p => toolName.StartsWith(p, StringComparison.Ordinal)))
             return "allow";
+        // Редактор картинок (ADR-019 §4): действия агента и так видны в ленте, список — из
+        // контекста хода, а не из сессии: сервер едет в любой чат проекта
+        if (ruleDecision == null && IsImageEditorAutoAllowed(_imageEditorMcp, toolName)) return "allow";
         // План текущего хода (BuiltInTaskPlanTools) — тоже без карточки: побочных эффектов
         // вне сессии у него нет, а спрашивать пришлось бы на КАЖДЫЙ шаг плана. В голосовом
         // режиме и hands-free отвечать на такую карточку вовсе некому — ход завис бы в

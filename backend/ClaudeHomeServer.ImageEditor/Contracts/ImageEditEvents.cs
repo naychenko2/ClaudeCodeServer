@@ -10,14 +10,12 @@ public static class ImageEditEventNames
     public const string Progress = "image_edit_progress";
     public const string Completed = "image_edit_completed";
     public const string Failed = "image_edit_failed";
-    // Состояние редактора чата картинки сменилось (ADR-018 §2): чаще всего его поменял агент
-    public const string ChatState = "image_chat_state";
     // Нити картинок чата сменились (ADR-019): любая запись в ImageThreadStore
     public const string ThreadChanged = "image_thread_changed";
 }
 
-// ChatSessionId и Initiator в событиях задачи — те же, что в ImageEditJobDto (ADR-018 §2):
-// карточка запуска агентом в ленте находит свою задачу. Хвостовые поля, старый фронт их не видит.
+// ChatSessionId и Initiator в событиях задачи — те же, что в ImageEditJobDto: карточка запуска
+// агентом в ленте находит свою задачу. Хвостовые поля, старый фронт их не видит.
 
 public record ImageEditProgressMessage(string JobId, string ProjectId, EditStage Stage, int? QueuePosition,
     string? ChatSessionId = null, ImageEditInitiator Initiator = ImageEditInitiator.Human, string? ThreadId = null)
@@ -42,23 +40,6 @@ public record ImageEditFailedMessage(
     ImageEditInitiator Initiator = ImageEditInitiator.Human,
     string? ThreadId = null)
     : ServerMessage(ImageEditEventNames.Failed);
-
-// Одно изменённое поле состояния: Field — имя поля ImageChatState в camelCase
-// ("prompt", "model", "count"…), From/To — значения для метки «✦ модель сменил Claude»
-public record ImageChatStateChange(string Field, System.Text.Json.JsonElement? From, System.Text.Json.JsonElement? To);
-
-// Уходит в группу владельца (ISessionBroadcaster.ToOwner). Базовый SessionId здесь — id
-// САМОГО чата картинки, чьё состояние сменилось (заполняется при создании:
-// new ImageChatStateMessage(…) { SessionId = chatId }); редактор применяет событие, только если
-// открыт именно этот чат. Не путать с ChatSessionId в ImageEditJob*: там SessionId пуст, а
-// ChatSessionId — чат, к которому привязана задача. ChangedBy — кто поменял.
-public record ImageChatStateMessage(
-    string ProjectId,
-    long Revision,
-    ImageChatState State,
-    ImageEditInitiator ChangedBy,
-    IReadOnlyList<ImageChatStateChange> Changes)
-    : ServerMessage(ImageEditEventNames.ChatState);
 
 // Нити чата после записи (ADR-019 §3): карточки-стопки в ленте перерисовываются из State.
 // Базовый SessionId — чат, чьи нити сменились (new ImageThreadChangedMessage(…) { SessionId = chatId }).

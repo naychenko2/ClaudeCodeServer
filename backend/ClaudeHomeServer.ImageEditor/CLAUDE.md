@@ -26,8 +26,9 @@ MF-remote `frontend/modules/image-editor` над кодом `frontend/src/featur
 - `IImageRaster` (`Services.Images.Editing.Raster`) — растр на SkiaSharp, реализация в `Images`.
   Необязателен: без `Images` ручки `transform` и `jobs` отвечают `503 raster_unavailable`, а не 500;
 - `IImagePlaceSettings` — умолчание места `image-editor` из настроек генератора (`Images`);
-- `IImageChatSessions` — создание чата картинки, `SetImageChatPath`, запись в ленту (адаптер в Main
-  поверх `SessionManager`, правило выбора персоны живёт внутри адаптера);
+- `IChatFeed` — запись модуля в ленту чата (`module_record`: якоря нитей, тихие строки; адаптер в
+  Main поверх `SessionManager`). Чата картинки v2 больше нет (ADR-019): старые чаты уходят в архив
+  миграцией `ImageChatV3Migration` в Main;
 - `IDelegatedTurnGate` — вердикт `DelegatedTurnGate` для тулсета (гейт в Main);
 - `ILocalImageMedia` — движок local-media (адаптер `LocalImageMediaAdapter` в `Images`). Нет `Images`
   — шва нет, драйвер `local` получает `null` и скрыт в каталоге.
@@ -50,9 +51,10 @@ MF-remote `frontend/modules/image-editor` над кодом `frontend/src/featur
   `ImageEditor:AgentLaunch`.
 - **На делегированном ходу запуск — fail-closed** через `IDelegatedTurnGate`: нет сессии-вызывателя
   — отказ, а не пропуск.
-- **Состав `tools/list` не зависит от хода**: сервер `image-editor` едет только в чат картинки
-  (`Session.ImageChat`), по флагу владельца и при тулсете в реестре (`BuildImageEditorContext` в
-  Main). Иначе CLI перезапустится со всеми MCP-серверами.
+- **Состав `tools/list` не зависит от хода, фокуса и нитей**: сервер `image-editor` едет в любой чат
+  проекта по флагу владельца и при тулсете в реестре (`BuildImageEditorContext` в Main). Иначе CLI
+  перезапустится со всеми MCP-серверами. Взять вариант, откатиться и сохранить агент не может —
+  таких инструментов нет; `image_generate` без `threadId` — отказ (ADR-019 §4).
 - **Состояние редактора (`image-editor-state`) едет хвостом хода ВСЕГДА** (`PromptSection.InTurnTail`),
   у любого провайдера, а не только при `RecallInTurnText`: секция меняется каждый ход и в
   системном блоке обнуляла бы prefix cache всей истории.

@@ -34,8 +34,6 @@ public class ImageEditorController(
     ImageEditSteps? steps = null,
     IConfiguration? config = null,
     IImageRaster? raster = null,
-    ISessionDirectory? sessionDirectory = null,
-    IImageChatSessions? chats = null,
     ImageThreadService? threads = null) : ControllerBase
 {
     // Потолок файла проекта, который ручка transform читает в память; дальше решает растр (100 Мп)
@@ -111,7 +109,6 @@ public class ImageEditorController(
             MatchSourceSize: form.MatchSourceSize ?? true,
             BaseStepId: form.BaseStepId,
             AspectRatio: form.AspectRatio,
-            ChatSessionId: form.ChatSessionId,
             Initiator: ImageEditInitiator.Human,
             ThreadSessionId: form.SessionId,
             ThreadId: form.ThreadId);
@@ -213,7 +210,6 @@ public class ImageEditorController(
         if (saved.Value is { } result)
         {
             files?.NotifyMutated(project.RootPath, result.Path, FileMutationKind.Write);
-            await MoveChatAsync(project, req.ChatSessionId, result.Path);
             // Нить идёт за сохранённым файлом (ADR-019). Чужая нить или чат молча пропускаются:
             // файл уже сохранён, а ответ не должен выдавать чужое
             if (threads is not null && threads.OwnThread(UserId, project.Id, req.SessionId, req.ThreadId))
@@ -221,17 +217,6 @@ public class ImageEditorController(
                     HttpContext?.RequestAborted ?? CancellationToken.None);
         }
         return Map(saved, Ok);
-    }
-
-    // Чат идёт за редактором (ADR-018 §1): редактор перешёл на новый файл — чат вместе с ним.
-    // Чужой, несуществующий и обычный чат молча пропускаются: файл уже сохранён, а ответ
-    // не должен выдавать, существует ли чужой чат
-    private async Task MoveChatAsync(Project project, string? chatSessionId, string path)
-    {
-        if (string.IsNullOrWhiteSpace(chatSessionId) || chats is null || sessionDirectory is null) return;
-        var session = sessionDirectory.GetById(chatSessionId.Trim());
-        if (session is not { ImageChat: not null } || session.ProjectId != project.Id) return;
-        await chats.MoveToFileAsync(session.Id, path);
     }
 
     // Проверка имени «Сохранить как…» на лету: ничего не пишет, решение всё равно за CreateNew
@@ -282,8 +267,6 @@ public class ImageEditorController(
         public string? BaseStepId { get; set; }
         // Пропорции «Дорисовать за края» (1:1, 16:9, 9:16); не передано — на усмотрение драйвера
         public string? AspectRatio { get; set; }
-        // Чат картинки, из которого запуск: строка «Вы запустили: …» в ленте и журнал состояния
-        public string? ChatSessionId { get; set; }
         // Нить картинки в чате проекта (ADR-019): варианты ждут «Взять» в её карточке, ручной
         // запуск ложится тихой строкой в ленту. Не своя нить — 404 thread_not_found до запуска
         public string? SessionId { get; set; }

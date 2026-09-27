@@ -4,15 +4,19 @@ using ClaudeHomeServer.Services.Mcp.Http;
 namespace ClaudeHomeServer.Services.ImageEditor.Mcp;
 
 /// <summary>
-/// Схемы инструментов сервера image-editor (ADR-018 §2): чат картинки, генерация агентом.
-/// Вызовы — ImageEditorToolset.cs. Состав фиксирован и не зависит от хода: сервер либо есть
-/// в чате картинки целиком, либо его нет.
+/// Схемы инструментов сервера image-editor (ADR-019 §4): нити картинок чата проекта, выбор
+/// картинки агентом, генерация в нить. Вызовы — ImageEditorToolset.cs. Состав фиксирован и не
+/// зависит от хода, фокуса и нитей: сервер либо есть в чате проекта целиком, либо его нет.
+/// Инструментов «взять вариант», «откатиться» и «сохранить» здесь нет и быть не должно — это
+/// решения человека (решение Андрея 1).
 /// </summary>
 public sealed partial class ImageEditorToolset
 {
     public const string ServerName = McpEndpoints.ImageEditorName;
 
     public const string ToolState = "image_state";
+    public const string ToolFocus = "image_focus";
+    public const string ToolNew = "image_new";
     public const string ToolGenerate = "image_generate";
     public const string ToolSuggestPrompt = "image_suggest_prompt";
     public const string ToolCancel = "image_cancel";
@@ -54,19 +58,39 @@ public sealed partial class ImageEditorToolset
     internal static readonly IReadOnlyList<McpToolSchema> Schemas =
     [
         new(ToolState,
-            "Текущее состояние редактора этой картинки: файл и его размеры, промпт, поставщик и модель, "
-            + "число вариантов, образцы с ролями, персонаж, пометки словами, путь последнего снимка, "
-            + "последние задачи и их итог, доступные модели с возможностями. Ничего не меняет.",
+            "Картинки этого чата: какая в работе (focus), у каждой threadId, файл и размер (или черновик "
+            + "с папкой), шаг на холсте, настройки запуска, задача, чьи варианты ждут выбора человека; "
+            + "поставщики и модели с возможностями. Ничего не меняет.",
             Obj(new JsonObject())),
 
-        new(ToolGenerate,
-            "Сразу запускает генерацию по картинке этого чата — без вопроса человеку, это тратит деньги. "
-            + "Если картинки ещё нет (новая картинка: в image_state file = null), рисует её по тексту. "
-            + "Все параметры необязательные: что не передано, берётся из состояния редактора; "
-            + "переданное меняет состояние (человек увидит, что поменял ты). Не больше двух запусков за ход. "
-            + "Возвращает { jobId, quote, changes[] }. Сохранить результат в проект может только человек.",
+        new(ToolFocus,
+            "Берёт картинку в работу — человек увидит в ленте строку «Claude взял в работу: …» и "
+            + "полосу «Картинки» над полем ввода. threadId — картинка этого чата из image_state; file — "
+            + "путь картинки проекта (нить по нему заведётся или найдётся); без обоих — снять выбор. "
+            + "Денег не тратит.",
             Obj(new JsonObject
             {
+                ["threadId"] = Str("Картинка этого чата (threadId из image_state)"),
+                ["file"] = Str("Путь картинки от корня проекта, если в чате её ещё нет"),
+            })),
+
+        new(ToolNew,
+            "Заводит карточку «Новая картинка» (черновик без файла) и берёт её в работу — строкой в "
+            + "ленте. Нарисовать её — image_generate с threadId черновика; сохранит в проект человек.",
+            Obj(new JsonObject
+            {
+                ["folder"] = Str("Папка проекта, куда человек сохранит картинку; пусто — корень"),
+            })),
+
+        new(ToolGenerate,
+            "Сразу запускает генерацию в картинку threadId — без вопроса человеку, это тратит деньги. "
+            + "threadId обязателен: человек мог сменить картинку посреди хода. У черновика без файла "
+            + "рисует новую по тексту. Что не передано — из настроек картинки. Не больше двух запусков "
+            + "за ход. Возвращает { jobId, threadId, quote }. Варианты появятся в карточке картинки: "
+            + "взять вариант, откатиться и сохранить в проект может только человек.",
+            Obj(new JsonObject
+            {
+                ["threadId"] = Str("Картинка этого чата (threadId из image_state)"),
                 ["prompt"] = Str("Промпт генерации"),
                 ["provider"] = Str("Поставщик (ключ из image_state): fal, higgsfield или local — «Локальные модели» "
                     + "на своей видеокарте, бесплатно, но с очередью"),
@@ -76,13 +100,14 @@ public sealed partial class ImageEditorToolset
                 ["references"] = new JsonObject
                 {
                     ["type"] = "array",
-                    ["description"] = "Образцы: пути файлов проекта с ролями; заменяют образцы редактора",
+                    ["description"] = "Образцы: пути файлов проекта с ролями",
                     ["items"] = Obj(new JsonObject
                     {
                         ["path"] = Str("Путь от корня проекта"),
                         ["role"] = OneOf(Roles, "Роль образца"),
                     }, "path", "role"),
                 },
+                ["character"] = Str("Персонаж проекта (slug папки characters/)"),
                 ["op"] = OneOf(Ops, "Операция: правка, фон, апскейл, дорисовка за края, улучшить лица (enhanceFaces, "
                     + "только local); по умолчанию — правка, а у новой картинки без файла — generate"),
                 ["matchSourceSize"] = new JsonObject
@@ -90,7 +115,7 @@ public sealed partial class ImageEditorToolset
                     ["type"] = "boolean",
                     ["description"] = "Вернуть вариантам размер исходника, если пропорции совпадают",
                 },
-            })),
+            }, "threadId")),
 
         new(ToolSuggestPrompt,
             "Только предлагает промпт: ничего не запускает и не меняет. Человек увидит карточку "
@@ -103,7 +128,7 @@ public sealed partial class ImageEditorToolset
             }, "prompt")),
 
         new(ToolCancel,
-            "Отменяет задачу генерации этого чата. Настройки, которые ты поменял, при отмене не откатываются.",
+            "Отменяет задачу генерации этого чата.",
             Obj(new JsonObject
             {
                 ["jobId"] = Str("jobId из результата image_generate"),

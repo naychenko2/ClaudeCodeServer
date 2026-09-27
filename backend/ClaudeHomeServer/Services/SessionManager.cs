@@ -316,8 +316,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         string Id, string Text, string? SenderPersonaId, string? SenderOrigin,
         int AgentDepth, DateTime EnqueuedAt, bool Silent = false, bool SuppressTasksExecute = false,
         string? SenderChatName = null, PendingKind Kind = PendingKind.Agent,
-        IReadOnlyList<string>? AttachedPaths = null, string? Mode = null, string? StaffNote = null,
-        StoredImageSnapshot? ImageSnapshot = null);
+        IReadOnlyList<string>? AttachedPaths = null, string? Mode = null, string? StaffNote = null);
 
     // Вид ожидающего сообщения. Report отделён от Agent: при активном цикле «до готово» Report
     // будит ждущий цикл (как User), а обычные Agent-сообщения посторонних агентов продолжают
@@ -468,11 +467,14 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     }
 
     // Результат AppendIfNotDuplicateStoredNoLockAsync для дисковой ветки публикаций:
-    // Added — запись добавлена; Duplicate — предикат уже видел такую запись; NoKey —
-    // у чата ещё нет ClaudeSessionId (история не заведена). NoKey отделён от Duplicate
-    // специально: при нём дисковой записи нет, но учёт и broadcast должны пройти
-    // (раньше оба случая мапились в duplicate=true и аналитика терялась).
-    private enum AppendResult { Added, Duplicate, NoKey }
+    // Added — запись добавлена; Duplicate — предикат уже видел такую запись.
+    private enum AppendResult { Added, Duplicate }
+
+    // Ключ history.json чата: транскрипт CLI, а до первого ответа агента — id самого чата.
+    // Тот же ключ берут EnsureAccumulatorAsync и локальный голосовой ход, поэтому записи,
+    // сделанные до первого ответа (карточки нитей картинок, ADR-019), аккумулятор первого хода
+    // поднимает с диска и дальше сохраняет уже под ClaudeSessionId — ничего не теряется.
+    private static string HistoryKeyOf(Session info) => info.ClaudeSessionId ?? info.Id;
 
     // Дедуп-then-append: общий шов публикаций fal/glif и AppendStoredAsync на
     // дисковой ветке. КОНТРАКТ: вызывающий ОБЯЗАН держать _falPersistLock — иначе
@@ -486,7 +488,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         Func<StoredMessage, bool> isDuplicate,
         Func<StoredMessage> factory)
     {
-        if (entry.Info.ClaudeSessionId is not string key) return AppendResult.NoKey;
+        var key = HistoryKeyOf(entry.Info);
         var stored = await _history.LoadAsync(key);
         if (stored.Any(isDuplicate)) return AppendResult.Duplicate;
         stored.Add(factory());
@@ -1089,19 +1091,20 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         return new HiggsfieldMcpContext(apiUrl, () => GetServiceToken(ownerId!), HttpEndpointUsable(apiUrl));
     }
 
-    // MCP-сервер редактора картинок (ADR-018 §2, §10.2): только в чате картинки (тип чата
-    // фиксирован с создания), при флаге image-editor у владельца и загруженном модуле. Последнее —
-    // наличие тулсета в реестре: модуль выключен, а контекст собран — CLI получил бы сервер,
-    // отвечающий 404, и «fetch failed» у всех инструментов хода. Все условия — свойства сессии,
-    // владельца и процесса; от хода состав не зависит (McpToolsetStabilityTests).
+    // MCP-сервер редактора картинок (ADR-019 §4): в любом чате проекта, при флаге image-editor у
+    // владельца и загруженном модуле. Последнее — наличие тулсета в реестре: модуль выключен, а
+    // контекст собран — CLI получил бы сервер, отвечающий 404, и «fetch failed» у всех
+    // инструментов хода. Все условия — свойства сессии, владельца и процесса; от хода, фокуса и
+    // нитей картинок состав не зависит (McpToolsetStabilityTests).
     internal ImageEditorMcpContext? BuildImageEditorContext(string? ownerId, Session session)
     {
-        if (ownerId is null || session.ImageChat is null || string.IsNullOrEmpty(session.ProjectId)) return null;
+        if (ownerId is null || string.IsNullOrEmpty(session.ProjectId)) return null;
         if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.ImageEditor)) return null;
         _mcpToolsets ??= _services?.GetService<Services.Mcp.Http.McpToolsetRegistry>();
         if (_mcpToolsets?.Find(McpEndpoints.ImageEditorName) is null) return null;
         var apiUrl = ResolveTasksApiUrl(ownerId);
-        return new ImageEditorMcpContext(apiUrl, () => GetServiceToken(ownerId), HttpEndpointUsable(apiUrl));
+        return new ImageEditorMcpContext(apiUrl, () => GetServiceToken(ownerId), HttpEndpointUsable(apiUrl),
+            ImageEditor.ImageEditorAgentTools.AutoAllowTools);
     }
 
     // MCP-сервер локальной генерации (ComfyUI на своей GPU). Узел есть в конфиге хода, только когда:
@@ -1692,6 +1695,36 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         return entry.Info;
     }
 
+    // Разовая миграция чатов картинки v2 на v3 (ADR-019, решение 2): чат уходит в архив
+    // (ArchivedAt, UpdatedAt не трогаем — по общему правилу IsArchived) и получает маркер
+    // SessionImageChat.MigratedAt. Идемпотентна: чат с маркером пропускается — и тот, что
+    // человек вернул из архива сам, повторно не архивируется. Уже архивный чат получает только
+    // маркер. ArchivedAt не раньше UpdatedAt: иначе чат с меткой из будущего остался бы в списке.
+    // Транскрипт копируется в архив, как при ручной архивации, --resume не ломается.
+    // Возвращает число мигрированных чатов; 0 — sessions.json не переписывается.
+    public int ArchiveLegacyImageChats(DateTime nowUtc)
+    {
+        var migrated = 0;
+        foreach (var entry in _sessions.Values)
+        {
+            if (entry.Info.ImageChat is not { MigratedAt: null } chat) continue;
+            if (!entry.Info.IsArchived)
+            {
+                entry.Info.ArchivedAt = entry.Info.UpdatedAt > nowUtc ? entry.Info.UpdatedAt : nowUtc;
+                entry.Info.ArchivedBy = LegacyImageChatArchivedBy;
+                entry.Info.ArchiveBatchId = null;
+                ArchiveTranscriptCopy(entry.Info);
+            }
+            chat.MigratedAt = nowUtc;
+            migrated++;
+        }
+        if (migrated > 0) SaveSessions();
+        return migrated;
+    }
+
+    // Кто архивировал: не "user" и не "rule" — откат прохода автоправила такие чаты не вернёт
+    public const string LegacyImageChatArchivedBy = "image-editor-v3";
+
     // Копия транскрипта при архивации: источники — ВСЕ корни профилей, как у уборки при
     // удалении (DeleteTranscript): за время жизни чат мог мигрировать между профилями и
     // рабочими папками, а миграции исходники не удаляют. Сам стор валидирует csid белым
@@ -1854,65 +1887,6 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         return entry.Info;
     }
 
-    // Перепривязать чат картинки к файлу (ADR-018 §1): прежний путь уходит в Lineage, новый
-    // из Lineage убирается (вернулись к старой версии — она снова текущая). UpdatedAt не
-    // трогаем по той же причине, что в SetExpiry: это настройка, а не активность, и она не
-    // должна поднимать чат наверх и выводить его из архива. null — чата нет или он не картинки.
-    public Session? SetImageChatPath(string sessionId, string path)
-    {
-        if (!_sessions.TryGetValue(sessionId, out var entry) || entry.Info.ImageChat is not { } chat) return null;
-        if (chat.CurrentPath == path) return entry.Info;
-        if (chat.CurrentPath is { Length: > 0 } previous && !chat.Lineage.Contains(previous))
-            chat.Lineage.Add(previous);
-        chat.Lineage.Remove(path);
-        chat.CurrentPath = path;
-        // Черновик получил файл — папка назначения больше не нужна
-        chat.DraftFolder = null;
-        SaveSessions();
-        return entry.Info;
-    }
-
-    // Чат идёт за редактором (ADR-018 §1): редактор сохранил картинку в новый файл. Путь
-    // меняется как в SetImageChatPath, а в ленту ложится тихая запись image_file_moved — и
-    // она, в отличие от смены пути, двигает UpdatedAt: человек что-то сделал в этом чате.
-    // null — чата нет или он не картинки; тот же путь — ничего не пишем. У черновика («Нарисовать
-    // картинку») это первое сохранение: From в записи пустой — файла до него не было.
-    public async Task<Session?> MoveImageChatToFileAsync(string sessionId, string path)
-    {
-        if (!_sessions.TryGetValue(sessionId, out var entry) || entry.Info.ImageChat is not { } chat) return null;
-        var from = chat.CurrentPath ?? "";
-        if (from == path) return entry.Info;
-
-        SetImageChatPath(sessionId, path);
-        var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        await AppendStoredAsync(sessionId,
-            new StoredImageFileMovedMessage { From = from, To = path, Timestamp = ts },
-            new ImageFileMovedMessage(from, path, ts));
-        entry.Info.UpdatedAt = DateTime.UtcNow;
-        SaveSessions();
-        return entry.Info;
-    }
-
-    // Ручной запуск генерации из редактора чата картинки (ADR-018 §2): тихая строка
-    // «Вы запустили: …» в ленту. Как и image_file_moved, это активность человека — UpdatedAt
-    // двигается. null — чата нет или он не картинки.
-    public async Task<Session?> AppendImageLaunchAsync(string sessionId, StoredImageLaunchMessage launch)
-    {
-        if (!_sessions.TryGetValue(sessionId, out var entry) || entry.Info.ImageChat is null) return null;
-        var ts = launch.Timestamp ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        var stored = new StoredImageLaunchMessage
-        {
-            By = launch.By, Prompt = launch.Prompt, Provider = launch.Provider, Model = launch.Model,
-            Count = launch.Count, Estimate = launch.Estimate, JobId = launch.JobId, Timestamp = ts,
-        };
-        await AppendStoredAsync(sessionId, stored,
-            new ImageLaunchMessage(stored.By, stored.Prompt, stored.Provider, stored.Model, stored.Count,
-                stored.Estimate, stored.JobId, ts));
-        entry.Info.UpdatedAt = DateTime.UtcNow;
-        SaveSessions();
-        return entry.Info;
-    }
-
     // Запись модуля в ленту вне хода (ADR-019 §2, шов IChatFeed): история + живая пара
     // module_record. Активность, как тихие строки v2: UpdatedAt двигается, чат выходит из
     // архива. Timestamp ставит сервер, если модуль его не задал. false — чата нет.
@@ -1930,18 +1904,6 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         entry.Info.UpdatedAt = DateTime.UtcNow;
         SaveSessions();
         return true;
-    }
-
-    // Файл чата картинки переименовали или перенесли мимо редактора (ADR-018 §1): пути
-    // переписываются целиком, в Lineage ничего не добавляется — это тот же файл, а не новая
-    // версия. UpdatedAt не трогаем и в ленту не пишем: чат не поднимается и не выходит из архива.
-    public Session? RewriteImageChatPaths(string sessionId, string currentPath, IReadOnlyList<string> lineage)
-    {
-        if (!_sessions.TryGetValue(sessionId, out var entry) || entry.Info.ImageChat is not { } chat) return null;
-        chat.CurrentPath = currentPath;
-        chat.Lineage = [.. lineage];
-        SaveSessions();
-        return entry.Info;
     }
 
     // Заглушить/включить уведомления по чату (браузерные «нужно решение» / «ход завершён»).
@@ -3047,8 +3009,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     public async Task<Session> CreateAsync(string projectId, ClaudeMode mode,
         string? resumeSessionId = null, string? name = null, string? model = null, string? agentName = null,
         string? effort = null, string? personaId = null, bool taskExecution = false, string? taskId = null,
-        string? onboardingKind = null, bool desktopChat = false, SessionImageChat? imageChat = null,
-        IReadOnlyList<string>? autoAllowTools = null)
+        string? onboardingKind = null, bool desktopChat = false)
     {
         var project = _projects.GetById(projectId)
             ?? throw new KeyNotFoundException($"Проект не найден: {projectId}");
@@ -3073,11 +3034,6 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             // Тип чата «Десктопный» (ADR-008): задаётся при СОЗДАНИИ и дальше не меняется —
             // состав грани фиксируется на момент запуска CLI
             DesktopChat = desktopChat,
-            // Чат картинки (ADR-018 §1): тип — с создания, по той же причине, что DesktopChat.
-            // Имя у него явное («hero.png · правка») — авто-заголовок и миграции тем его не трогают
-            ImageChat = imageChat,
-            NameLocked = imageChat is not null && !string.IsNullOrWhiteSpace(name),
-            AutoAllowTools = autoAllowTools is null ? [] : [.. autoAllowTools],
             // Онбординг-сессия: задаётся ДО старта — BuildPersonaLayer читает поле при сборке слоя
             OnboardingKind = onboardingKind,
         };
@@ -4043,10 +3999,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             throw new InvalidOperationException(
                 "Недопустимый resumeSessionId: разрешены только буквы, цифры, дефис и подчеркивание");
 
-        var existingHistory = session.ClaudeSessionId != null
-            ? await _history.LoadAsync(session.ClaudeSessionId)
-            : [];
-        var accumulator = new TurnAccumulator(existingHistory, session.ClaudeSessionId);
+        // Ключ истории до первого ответа агента — id чата (HistoryKeyOf): иначе внеходовые
+        // записи в свежий чат (карточки нитей картинок) жили бы только в памяти
+        var historyKey = HistoryKeyOf(session);
+        var accumulator = new TurnAccumulator(await _history.LoadAsync(historyKey), historyKey);
 
         var entry = new SessionEntry { Info = session, Accumulator = accumulator };
         _sessions[session.Id] = entry;
@@ -4147,7 +4103,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // дописывает уточнение, а не просит остановиться. Для «перебить сейчас» есть явные
     // действия: кнопка «Стоп» и PreemptForPending (кнопка на карточке очереди).
     // Возвращаемый исход (Started/Queued) говорит клиенту, рисовать ли оптимистичный баллон.
-    public async Task<SendUserOutcome> SendMessageAsync(string sessionId, string text, IReadOnlyList<string> attachedPaths, string? mode = null, bool systemDirective = false, bool auto = false, string? senderPersonaId = null, bool suppressTasksExecute = false, string? senderOrigin = null, string? senderConnectionId = null, string? staffNote = null, DeliveryCause cause = DeliveryCause.Unknown, StoredImageSnapshot? imageSnapshot = null)
+    public async Task<SendUserOutcome> SendMessageAsync(string sessionId, string text, IReadOnlyList<string> attachedPaths, string? mode = null, bool systemDirective = false, bool auto = false, string? senderPersonaId = null, bool suppressTasksExecute = false, string? senderOrigin = null, string? senderConnectionId = null, string? staffNote = null, DeliveryCause cause = DeliveryCause.Unknown)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry))
             throw new InvalidOperationException("Сессия не найдена");
@@ -4210,8 +4166,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 // иначе форсаж dispatchNow и разбор по концу хода упёрлись бы в QueueFrozen
                 entry.QueueFrozen = false;
                 var enqueued = await EnqueuePendingAsync(sessionId, entry, text, senderPersonaId, senderOrigin,
-                    agentDepth: 0, kind: PendingKind.User, attachedPaths: attachedPaths, mode: mode,
-                    imageSnapshot: imageSnapshot);
+                    agentDepth: 0, kind: PendingKind.User, attachedPaths: attachedPaths, mode: mode);
                 if (enqueued is SendAndWaitResult.QueueFull f)
                     throw new InvalidOperationException(
                         $"В очереди чата уже {f.Limit} сообщений — дождитесь, пока она разберётся");
@@ -4263,7 +4218,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                     // Потолок не пробивается: голова изъята до добавления
                     entry.Pending.Add(new QueuedMessage(Guid.NewGuid().ToString("N"), text, senderPersonaId,
                         senderOrigin, AgentDepth: 0, DateTime.UtcNow, Kind: PendingKind.User,
-                        AttachedPaths: attachedPaths, Mode: mode, ImageSnapshot: imageSnapshot));
+                        AttachedPaths: attachedPaths, Mode: mode));
                 }
             }
             if (head is not null)
@@ -4275,8 +4230,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         }
 
         await SendDirectAsync(sessionId, entry, text, attachedPaths, mode, systemDirective, auto,
-            senderPersonaId, suppressTasksExecute, senderOrigin, senderConnectionId: senderConnectionId, staffNote: staffNote, cause: cause,
-            imageSnapshot: imageSnapshot);
+            senderPersonaId, suppressTasksExecute, senderOrigin, senderConnectionId: senderConnectionId, staffNote: staffNote, cause: cause);
         return SendUserOutcome.Started;
     }
 
@@ -4286,8 +4240,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     private async Task SendDirectAsync(string sessionId, SessionEntry entry, string text,
         IReadOnlyList<string> attachedPaths, string? mode, bool systemDirective, bool auto,
         string? senderPersonaId, bool suppressTasksExecute, string? senderOrigin, string? senderConnectionId = null,
-        bool fromQueue = false, string? staffNote = null, DeliveryCause cause = DeliveryCause.Unknown,
-        StoredImageSnapshot? imageSnapshot = null)
+        bool fromQueue = false, string? staffNote = null, DeliveryCause cause = DeliveryCause.Unknown)
     {
         // ДИАГНОСТИКА повторных доставок (инцидент 2026-08-10): каждая доставка хода в
         // процесс проходит через эту точку. src различает источник — hub (пользователь
@@ -4376,7 +4329,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         if (!systemDirective)
         {
             var userMsg = new UserMessageMessage(text, attachedPaths.Count > 0 ? attachedPaths : null,
-                senderPersonaId, auto, senderOrigin, StaffNote: staffNote, ImageSnapshot: imageSnapshot);
+                senderPersonaId, auto, senderOrigin, StaffNote: staffNote);
             if (!auto && !fromQueue && senderConnectionId is not null)
                 await BroadcastExceptAsync(sessionId, senderConnectionId, userMsg);
             else
@@ -4417,8 +4370,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
         await ApplyStatusAsync(sessionId, entry, SessionStatus.Working);
 
-        entry.Accumulator?.OnUserMessage(text, attachedPaths, systemDirective: systemDirective, auto: auto, senderPersonaId: senderPersonaId, senderOrigin: senderOrigin, staffNote: staffNote,
-            imageSnapshot: imageSnapshot);
+        entry.Accumulator?.OnUserMessage(text, attachedPaths, systemDirective: systemDirective, auto: auto, senderPersonaId: senderPersonaId, senderOrigin: senderOrigin, staffNote: staffNote);
         // Сообщение пользователя = начало нового хода в основном дереве (зеркало
         // сброса skippingWorktreeTurn в SessionChangedPaths.Extract)
         entry.TurnInWorktree = false;
@@ -4824,7 +4776,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         string text, string? senderPersonaId, string? senderOrigin, int agentDepth,
         bool silent = false, bool suppressTasksExecute = false, string? senderChatName = null,
         PendingKind kind = PendingKind.Agent, IReadOnlyList<string>? attachedPaths = null,
-        string? mode = null, string? staffNote = null, StoredImageSnapshot? imageSnapshot = null)
+        string? mode = null, string? staffNote = null)
     {
         bool dispatchNow;
         int position;
@@ -4838,7 +4790,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
             entry.Pending.Add(new QueuedMessage(Guid.NewGuid().ToString("N"), text, senderPersonaId,
                 senderOrigin, agentDepth, DateTime.UtcNow, silent, suppressTasksExecute, senderChatName,
-                kind, attachedPaths, mode, staffNote, imageSnapshot));
+                kind, attachedPaths, mode, staffNote));
             position = entry.Pending.Count;
 
             // Защита от гонки TOCTOU: статус занятости читается БЕЗ лока выше (в SendMessageAsync/
@@ -5305,8 +5257,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 await SendDirectAsync(sessionId, entry, next.Text,
                     next.AttachedPaths ?? [], mode: next.Mode, systemDirective: false, auto: false,
                     senderPersonaId: next.SenderPersonaId, suppressTasksExecute: next.SuppressTasksExecute,
-                    senderOrigin: next.SenderOrigin, fromQueue: true, cause: DeliveryCause.QueueUser,
-                    imageSnapshot: next.ImageSnapshot);
+                    senderOrigin: next.SenderOrigin, fromQueue: true, cause: DeliveryCause.QueueUser);
             else
                 await SendMessageAsync(sessionId, next.Text, [], auto: true,
                     senderPersonaId: next.SenderPersonaId, senderOrigin: next.SenderOrigin,
@@ -5504,9 +5455,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         await WithFalPersistLockAsync(async () =>
         {
             if (entry.Accumulator is not null) return;
-            var key = entry.Info.ClaudeSessionId ?? entry.Info.Id.ToString();
+            // Ключ сохранения — тот же, что у чтения: до первого ответа агента это id чата, иначе
+            // внеходовая запись в свежий чат (AppendStoredAsync) не легла бы на диск вовсе.
+            // Ответ CLI переключит ключ на ClaudeSessionId (SessionStartedMessage → SetSaveKey)
+            var key = HistoryKeyOf(entry.Info);
             var existingHistory = await _history.LoadAsync(key);
-            entry.Accumulator = new TurnAccumulator(existingHistory, entry.Info.ClaudeSessionId);
+            entry.Accumulator = new TurnAccumulator(existingHistory, key);
         });
     }
 
@@ -8714,10 +8668,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         IReadOnlyList<StoredMessage> list;
         if (entry.Accumulator != null)
             list = entry.Accumulator.GetAll();
-        else if (entry.Info.ClaudeSessionId != null)
-            list = await _history.LoadAsync(entry.Info.ClaudeSessionId);
         else
-            list = [];
+            list = await _history.LoadAsync(HistoryKeyOf(entry.Info));
 
         // Догоняем стоимость старых fal-генераций, у которых её ещё нет (фоном, дедуп внутри)
         BackfillFalCosts(sessionId, list);

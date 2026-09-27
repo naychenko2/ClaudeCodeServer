@@ -14,7 +14,7 @@ namespace ClaudeHomeServer.Services.ImageEditor;
 //
 // Что берём из спины (всё — Core-швы): IImageRaster, IImagePlaceSettings и ILocalImageMedia от Images,
 // IHiggsfieldAccess, IProjectManager, IFeatureFlagGate, IProjectFiles, ISessionBroadcaster,
-// ISpendCollector, IImageChatSessions и ISessionDirectory от Main, шина ITurnEventBus (жизненный
+// ISpendCollector, IChatFeed и ISessionDirectory от Main, шина ITurnEventBus (жизненный
 // цикл чата). Растр необязателен: без Images ручки transform и jobs отвечают 503
 // raster_unavailable, а не 500.
 public sealed class ImageEditorSubsystem : IAppSubsystem
@@ -61,11 +61,7 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
         services.AddSingleton(sp => sp.GetService<IImageRaster>() is { } raster
             ? new ImageEditSteps(raster, sp.GetRequiredService<ImageEditWorkspace>(), sp.GetRequiredService<IImageEditJobs>())
             : null!);
-        // Чат картинки идёт за переименованным файлом (ADR-018 §1)
-        services.AddHostedService<Chats.ImageChatPathTracker>();
-        // Состояние редактора на сервере, общая сборка входа запуска и блок состояния хвостом
-        // хода (ADR-018 §2): им же пользуется MCP-тулсет редактора
-        services.AddSingleton(sp => new Chats.ImageChatStateStore(sp.GetRequiredService<ImageEditWorkspace>()));
+        // Общая сборка входа запуска и блок нитей хвостом хода: им же пользуется MCP-тулсет
         services.AddSingleton<ImageEditLaunchAssembler>();
         services.AddPromptSectionContributor<Chats.ImageEditorStateContributor>();
         // Нити картинок и фокус чата (ADR-019 §1): хранилище в data/image-threads, живёт и умирает
@@ -75,7 +71,7 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
         // Следы нити в ленте и событие image_thread_changed; нить идёт за переименованным файлом
         services.AddSingleton<Threads.ImageThreadService>();
         services.AddHostedService<Threads.ImageThreadPathTracker>();
-        // MCP-сервер редактора для агента чата картинки (ADR-018 §10.2): маршрут общий,
+        // MCP-сервер редактора для агента любого чата проекта (ADR-019 §4): маршрут общий,
         // POST /mcp/image-editor/{sessionId}, реестр Main находит тулсет среди IMcpToolset
         services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset, Mcp.ImageEditorToolset>();
     }

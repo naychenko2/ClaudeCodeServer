@@ -103,7 +103,7 @@ public record ImageEditJobInput(
     CharacterRef? Character = null,
     // Возврат размера оригинала после скачивания (ADR-018 §9, п. 4)
     bool MatchSourceSize = true,
-    // Чат картинки, из которого запущена задача (ADR-018 §2); null — запуск вне чата
+    // Чат нити, в которую запущена задача (ADR-019); null — запуск вне нити
     string? ChatSessionId = null,
     ImageEditInitiator Initiator = ImageEditInitiator.Human,
     // Шаг истории, с которого запущена правка: родитель шагов из её вариантов (ADR-018 §9)
@@ -117,11 +117,11 @@ public record ImageEditJobCreatedDto(string JobId);
 
 public enum ImageEditJobStatus { Queued, Running, Downloading, Completed, Failed, Cancelled, Interrupted }
 
-// Кто запустил задачу или написал промпт: человек в редакторе или агент чата картинки
+// Кто запустил задачу: человек в редакторе или агент чата
 public enum ImageEditInitiator { Human, Agent }
 
 // Variants — номера готовых вариантов (для …/jobs/{jobId}/variants/{n}).
-// ChatSessionId — чат картинки, из которого запущена задача (ADR-018 §2); имя не SessionId,
+// ChatSessionId — чат нити, в которую запущена задача (ADR-019); имя не SessionId,
 // чтобы в событиях не столкнуться с ServerMessage.SessionId, по которому фронт роутит ленту.
 public record ImageEditJobDto(
     string JobId,
@@ -161,7 +161,6 @@ public static class ImageEditSizeNotes
 // As («Сохранить как…», ADR-018 §5): Folder + FileName, расширение сервер ставит сам по
 // формату; занятое имя — 409 name_taken с suggestion, а не тихий переход на номер.
 // Источник — вариант задачи (JobId + Variant) ИЛИ шаг истории (StepId).
-// ChatSessionId — чат картинки, который переезжает на новый файл вместе с редактором.
 // Encode — перекодирование при записи; null — формат результата как есть.
 public record ImageEditSaveRequest(
     string? JobId,
@@ -171,7 +170,6 @@ public record ImageEditSaveRequest(
     string? FileName,
     string? Mode = null,
     string? StepId = null,
-    string? ChatSessionId = null,
     ImageEncodeSpec? Encode = null,
     // Нить картинки чата SessionId (ADR-019): после сохранения идёт за новым файлом
     string? SessionId = null,
@@ -205,56 +203,6 @@ public record ImageTransformRequest(
 // StepId = null при dryRun: шаг не записан, посчитан только вес
 public record ImageTransformResponse(string? StepId, int Width, int Height, long Bytes);
 
-// ── Чат картинки: …/image-editor/chats (ADR-018 §1) ────────────────────────────
-
-// POST …/chats — создать чат картинки (и «Новый чат по этой картинке»); ответ — Session
-public record ImageChatCreateRequest(string SourcePath, string? PersonaId = null);
-
-// GET …/chats?path= — Current: чат с CurrentPath == path (null — нет);
-// Continued: чаты, у которых path в Lineage (разговор ушёл на новую версию файла)
-public record ImageChatLookupResponse(Models.Session? Current, IReadOnlyList<Models.Session> Continued);
-
-// PUT …/chats/{sessionId}/path — привязать чат к другому файлу
-public record ImageChatPathRequest(string Path);
-
-// Образец в состоянии чата: путь проекта (или копия в рабочей папке для загруженных с
-// компьютера) и роль
-public record ImageChatReference(string Path, ReferenceRole Role, string? Label = null);
-
-// Запись журнала «с прошлого хода»: Kind — ImageChatEventKinds.*, Text — строка для блока
-// состояния хода; JobId — задача, к которой относится запись
-public record ImageChatEvent(DateTime At, string Kind, string Text, string? JobId = null);
-
-public static class ImageChatEventKinds
-{
-    public const string Launched = "launched";
-    public const string Completed = "completed";
-    public const string Failed = "failed";
-    public const string Cancelled = "cancelled";
-    public const string Saved = "saved";
-}
-
-// Состояние редактора чата картинки на сервере (ImageChatStateStore, волна 2):
-// PUT/GET …/chats/{sessionId}/state. Revision растёт с каждой записью; запись со старой
-// Revision — 409. Marks — marks.json как есть. CanvasRevision — хеш CurrentPath, шага и
-// пометок; LastSentRevision — ревизия, снимок которой уже ушёл в чат.
-public record ImageChatState(
-    string Prompt,
-    ImageEditInitiator PromptAuthor,
-    string? Provider,
-    string? Model,
-    EditMode Mode,
-    int Count,
-    IReadOnlyList<ImageChatReference> References,
-    string? CharacterSlug,
-    System.Text.Json.JsonElement? Marks,
-    string? CanvasRevision,
-    string? LastSentRevision,
-    string? CurrentStepId,
-    bool MatchSourceSize,
-    IReadOnlyList<ImageChatEvent> Events,
-    long Revision);
-
 // ── Ошибки ─────────────────────────────────────────────────────────────────────
 
 // Тело ошибки ручек: { error: "текст для человека", code: ImageEditErrorCodes.* }
@@ -272,13 +220,13 @@ public static class ImageEditErrorCodes
     public const string StepNotFound = "step_not_found";
     // 404: персонажа нет в проекте (или slug не проходит белый список)
     public const string CharacterNotFound = "character_not_found";
-    // 404: чата картинки нет, он чужой, из другого проекта или обычный чат — неотличимо
+    // 404: чата нет, он чужой или из другого проекта — неотличимо
     public const string ChatNotFound = "chat_not_found";
     // 404: нити картинки нет в этом чате (чужая неотличима от несуществующей)
     public const string ThreadNotFound = "thread_not_found";
     // 409: «Сохранить как…» на занятое имя; в теле ответа ещё suggestion — ближайшее свободное
     public const string NameTaken = "name_taken";
-    // 409: запись состояния чата картинки со старой revision; в теле ещё state — актуальное
+    // 409: запись нитей чата со старой revision; в теле ещё state — актуальное
     public const string RevisionConflict = "revision_conflict";
     // 429: потолок одновременных задач владельца или инстанса
     public const string TooManyJobs = "too_many_jobs";

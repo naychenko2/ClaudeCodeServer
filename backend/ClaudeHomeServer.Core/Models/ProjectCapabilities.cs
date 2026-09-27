@@ -252,7 +252,8 @@ public sealed record ProjectCapabilities(
     /// владельца, локальный проект, устройство объявило <see cref="DeviceCapabilities.Hands"/>,
     /// тумблер рук у проекта включён. null — можно, иначе причина для человека. Онлайн не
     /// требуется, как у <see cref="BindRefusal"/>: без сети ход откажет по <see cref="Exec"/>.
-    /// Сеанс рук сервер не видит и здесь не проверяет — его проверяет агент при подключении.
+    /// Сеанса рук на машине нет (решение 1в): установку и сверку компонента, режим прав хода и
+    /// занятость рук машины проверяет агент при подключении.
     /// Контракт шага Ш1; к серверу и фронту матрицу подключает Ш4.
     /// </summary>
     public static string? HandsRefusal(Project project, DeviceExecStatus? device, bool handsFlagEnabled, bool projectHandsEnabled) =>

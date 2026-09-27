@@ -9,17 +9,14 @@
 export const HandsChatState = {
   Active: 'active',
   Allowed: 'allowed',
-  NoSession: 'no-session',
+  Unavailable: 'unavailable',
   Stopped: 'stopped',
   ProviderNotAllowed: 'provider-not-allowed',
 } as const;
 
 // Причины остановки — зеркало HandsEndReason (HandsProtocol.cs)
 export const HandsEndReason = {
-  Expired: 'expired',
-  Idle: 'idle',
   StoppedFromTray: 'tray-stop',
-  StoppedFromCli: 'cli-stop',
   HandsDisabled: 'disabled',
   AgentStopping: 'agent-stopping',
 } as const;
@@ -99,8 +96,40 @@ function onDevice(name: string | null | undefined): string {
   return name ? ` «${name}»` : '';
 }
 
-// status=null — событий ещё не было (ручки начального состояния пока нет): нейтральный
-// бейдж «руки включены в проекте», а не «активен» — активность знает только событие
+// Состояние бейджа: первая отрисовка — GET /api/sessions/{id}/hands-status, дальше события
+// hands_status. none — у чата рук нет, бейдж не рисуется; loading/failed — нейтральный вид
+export type HandsBadgeState =
+  | { kind: 'loading' }
+  | { kind: 'failed' }
+  | { kind: 'none' }
+  | { kind: 'status'; status: HandsStatusSnapshot };
+
+export const HANDS_BADGE_LOADING: HandsBadgeState = { kind: 'loading' };
+
+// Ответ GET. Событие, пришедшее раньше ответа, свежее его — ответ тогда не применяем
+export function handsInitialLoaded(
+  prev: HandsBadgeState,
+  view: { state: string | null; reason?: string | null; deviceName?: string | null },
+): HandsBadgeState {
+  if (prev.kind === 'status') return prev;
+  if (view.state === null) return { kind: 'none' };
+  return { kind: 'status', status: { state: view.state, reason: view.reason, deviceName: view.deviceName } };
+}
+
+export function handsInitialFailed(prev: HandsBadgeState): HandsBadgeState {
+  return prev.kind === 'loading' ? { kind: 'failed' } : prev;
+}
+
+export function handsEventReceived(status: HandsStatusSnapshot): HandsBadgeState {
+  return { kind: 'status', status };
+}
+
+export function handsBadgeStatus(state: HandsBadgeState): HandsStatusSnapshot | null {
+  return state.kind === 'status' ? state.status : null;
+}
+
+// status=null — состояние ещё грузится или запрос упал: нейтральный бейдж «руки включены
+// в проекте», а не «активен» — активность знает только сервер
 export function handsBadgeView(status: HandsStatusSnapshot | null, projectDeviceName: string | null): HandsBadgeView {
   const device = status?.deviceName || projectDeviceName;
   switch (status?.state) {
@@ -120,12 +149,12 @@ export function handsBadgeView(status: HandsStatusSnapshot | null, projectDevice
         title: `Руки на устройстве${onDevice(device)} готовы: ИИ возьмёт их, когда понадобится. ${HANDS_OWN_WINDOWS_TEXT}`,
         canStop: false,
       };
-    case HandsChatState.NoSession:
+    case HandsChatState.Unavailable:
       return {
         tone: 'warning',
         text: 'Руки недоступны на устройстве',
         short: 'Нет рук',
-        title: `Руки на устройстве${onDevice(device)} сейчас недоступны — например, заняты другим ходом на этой машине. Ход идёт без рук.`,
+        title: `Руки включены, но устройство${onDevice(device)} их сейчас не даст: оно не на связи или руки на нём не установлены. Ход идёт без рук.`,
         canStop: false,
       };
     case HandsChatState.Stopped:
@@ -158,7 +187,6 @@ export function handsBadgeView(status: HandsStatusSnapshot | null, projectDevice
 function stoppedReasonText(reason: string | null | undefined): string {
   switch (reason) {
     case HandsEndReason.StoppedFromTray:
-    case HandsEndReason.StoppedFromCli:
       return 'Человек у компьютера нажал «Стоп» — ход прерван, окна, открытые ходом, закрыты.';
     case HandsEndReason.HandsDisabled:
       return 'Руки на устройстве выключены — ход прерван.';
@@ -178,7 +206,6 @@ export function handsStatusFeedLine(status: HandsStatusSnapshot): string | null 
   const where = `на устройстве${onDevice(status.deviceName)}`;
   switch (status.reason) {
     case HandsEndReason.StoppedFromTray:
-    case HandsEndReason.StoppedFromCli:
       return `Ход прерван ${where}: руки выключены кнопкой «Стоп». Окна, открытые ходом, закрыты.`;
     case HandsEndReason.HandsDisabled:
       return `Ход прерван ${where}: руки на нём выключены.`;

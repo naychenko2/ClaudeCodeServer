@@ -1272,7 +1272,7 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'prompt_suggestion'; text: string }
   // Руки локального проекта в чате (ADR-016 §7): эфемерные, в историю не пишутся.
   // state — HandsChatStates, reason — HandsEndReason у stopped, deviceName — имя устройства
-  | { type: 'hands_status'; state: string; deviceName?: string | null; reason?: string | null; expiresAt?: string | null }
+  | { type: 'hands_status'; state: string; deviceName?: string | null; reason?: string | null }
   // Строка ленты о руках, не ошибка хода (понижение «Без ограничений» и подобное)
   | { type: 'hands_notice'; text: string }
   // Снимок промпта хода записан: id для кнопки «какой промпт ушёл» под постом.
@@ -3804,6 +3804,14 @@ export interface DesktopPairingCode {
   expiresAt: string;
   attemptsLeft: number;
   hostFingerprint?: string;
+}
+
+// Первая отрисовка бейджа рук локального проекта (GET /api/sessions/{id}/hands-status),
+// зеркало HandsStatusView. state=null — у чата рук нет вовсе, бейдж не рисуется
+export interface LocalHandsChatStatus {
+  state: string | null;
+  reason: string | null;
+  deviceName: string | null;
 }
 
 // Сеанс рук глазами веб-морды (GET /api/devices/hands/chat/{id}).

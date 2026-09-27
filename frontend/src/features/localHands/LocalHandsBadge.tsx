@@ -2,7 +2,11 @@ import { useEffect, useState } from 'react';
 import { MonitorSmartphone } from 'lucide-react';
 import { interruptSession, onMessage } from '../../lib/signalr';
 import { isFeatureAvailable } from '../../lib/projectCapabilities';
-import { handsBadgeView, type HandsStatusSnapshot } from '../../lib/localHands';
+import {
+  HANDS_BADGE_LOADING, handsBadgeStatus, handsBadgeView, handsEventReceived, handsInitialFailed,
+  handsInitialLoaded, type HandsBadgeState,
+} from '../../lib/localHands';
+import { api } from '../../lib/api';
 import { useIsMobile } from '../../lib/breakpoints';
 import { showToast } from '../../lib/toast';
 import { Badge, Button } from '../../components/ui';
@@ -12,8 +16,8 @@ import { ProjectFeature, type Project, type Session } from '../../types';
 // Бейдж рук локального проекта в шапке чата (ADR-016 §7). Внешне — как HandsBadge
 // десктопного чата (та же пилюля и иконка), логика своя:
 //  • нет «Попросить руки» — руки включает тумблер проекта, заявки с веба нет;
-//  • состояние — событие hands_status, а не опрос; ручки начального состояния пока нет,
-//    поэтому до первого события бейдж нейтральный, а не «активен»;
+//  • первая отрисовка — GET /api/sessions/{id}/hands-status, дальше события hands_status;
+//    нейтральный вид — только пока ответ грузится или если запрос упал;
 //  • «Стоп» прерывает ход тем же механизмом, что кнопка остановки в композере.
 // Флаг local-hands проверяет вызывающий; бейдж есть, только пока руки включены и доступны.
 export function LocalHandsBadge({ session, project, compact }: {
@@ -22,20 +26,28 @@ export function LocalHandsBadge({ session, project, compact }: {
   compact: boolean;
 }) {
   const isMobile = useIsMobile();
-  const [status, setStatus] = useState<HandsStatusSnapshot | null>(null);
+  const [state, setState] = useState<HandsBadgeState>(HANDS_BADGE_LOADING);
   const [busy, setBusy] = useState(false);
   const shown = project?.handsEnabled === true && isFeatureAvailable(project, ProjectFeature.Hands);
 
   useEffect(() => {
     if (!shown) return;
-    return onMessage(msg => {
+    setState(HANDS_BADGE_LOADING);
+    let alive = true;
+    // Подписка раньше запроса: событие между ответом и подпиской не теряется
+    const off = onMessage(msg => {
       if (msg.type !== 'hands_status' || msg.sessionId !== session.id) return;
-      setStatus({ state: msg.state, deviceName: msg.deviceName, reason: msg.reason });
+      setState(handsEventReceived({ state: msg.state, deviceName: msg.deviceName, reason: msg.reason }));
     });
+    api.sessions.handsStatus(session.id)
+      .then(view => { if (alive) setState(prev => handsInitialLoaded(prev, view)); })
+      .catch(() => { if (alive) setState(handsInitialFailed); });
+    return () => { alive = false; off(); };
   }, [shown, session.id]);
 
-  if (!shown) return null;
+  if (!shown || state.kind === 'none') return null;
 
+  const status = handsBadgeStatus(state);
   const view = handsBadgeView(status, project?.device?.name ?? null);
 
   const stop = async () => {

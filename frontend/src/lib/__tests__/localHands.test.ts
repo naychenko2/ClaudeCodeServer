@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { handsBadgeView, handsSectionView, handsStatusFeedLine, HandsChatState, HandsEndReason } from '../localHands';
+import {
+  HANDS_BADGE_LOADING, handsBadgeStatus, handsBadgeView, handsEventReceived, handsInitialFailed, handsInitialLoaded,
+  handsSectionView, handsStatusFeedLine, HandsChatState, HandsEndReason,
+} from '../localHands';
 import { featureReason, isFeatureAvailable } from '../projectCapabilities';
 import { applyServerMessage, initialChatState } from '../chatReducer';
 import { ProjectFeature, type Project, type ServerMessage } from '../../types';
@@ -50,12 +53,43 @@ describe('handsSectionView', () => {
   });
 });
 
-describe('handsBadgeView', () => {
-  it('до первого события — нейтрально, без «Стоп», не «активен»', () => {
-    const v = handsBadgeView(null, 'home-pc');
+describe('состояние бейджа: GET, затем события', () => {
+  const view = (state: string | null, reason: string | null = null) => ({ state, reason, deviceName: 'home-pc' });
+
+  it('пока GET грузится — нейтральный «Руки включены», не «активен»', () => {
+    const v = handsBadgeView(handsBadgeStatus(HANDS_BADGE_LOADING), 'home-pc');
     expect(v).toMatchObject({ tone: 'neutral', canStop: false, text: 'Руки включены' });
   });
 
+  it('запрос упал — тот же нейтральный вид', () => {
+    const s = handsInitialFailed(HANDS_BADGE_LOADING);
+    expect(s.kind).toBe('failed');
+    expect(handsBadgeView(handsBadgeStatus(s), 'home-pc').text).toBe('Руки включены');
+  });
+
+  it('первая отрисовка берёт состояние из ответа GET', () => {
+    const s = handsInitialLoaded(HANDS_BADGE_LOADING, view(HandsChatState.Unavailable));
+    expect(handsBadgeView(handsBadgeStatus(s), null).text).toBe('Руки недоступны на устройстве');
+  });
+
+  it('GET вернул state=null — у чата рук нет, бейдж не рисуется', () => {
+    expect(handsInitialLoaded(HANDS_BADGE_LOADING, view(null)).kind).toBe('none');
+  });
+
+  it('событие, пришедшее раньше ответа GET, свежее — ответ его не перетирает', () => {
+    const afterEvent = handsEventReceived({ state: HandsChatState.Active, deviceName: 'home-pc' });
+    const s = handsInitialLoaded(afterEvent, view(HandsChatState.Allowed));
+    expect(handsBadgeStatus(s)?.state).toBe(HandsChatState.Active);
+    expect(handsInitialFailed(afterEvent)).toBe(afterEvent);
+  });
+
+  it('событие после GET меняет вид', () => {
+    const s = handsEventReceived({ state: HandsChatState.Stopped, reason: HandsEndReason.StoppedFromTray });
+    expect(handsBadgeView(handsBadgeStatus(s), null)).toMatchObject({ tone: 'warning', short: 'Стоп' });
+  });
+});
+
+describe('handsBadgeView', () => {
   it('руки в ходе — «Стоп» и имя устройства', () => {
     const v = handsBadgeView({ state: HandsChatState.Active, deviceName: 'home-pc' }, null);
     expect(v).toMatchObject({ tone: 'success', canStop: true, text: 'ИИ за компьютером home-pc', short: 'Руки' });
@@ -68,9 +102,16 @@ describe('handsBadgeView', () => {
     expect(v.title).toContain('Руки на устройствах');
   });
 
-  it('no-session — руки недоступны, например заняты другим ходом', () => {
-    const v = handsBadgeView({ state: HandsChatState.NoSession }, 'home-pc');
-    expect(v.title).toContain('заняты другим ходом');
+  it('unavailable — устройство не на связи или руки не установлены, без «Стоп»', () => {
+    const v = handsBadgeView({ state: HandsChatState.Unavailable }, 'home-pc');
+    expect(v).toMatchObject({ tone: 'warning', short: 'Нет рук', canStop: false, text: 'Руки недоступны на устройстве' });
+    expect(v.title).toContain('не на связи');
+    // «заняты» — отказ хода агентом, а не состояние рук: его текст приходит ошибкой хода
+    expect(v.title).not.toContain('заняты');
+  });
+
+  it('allowed — руки готовы, без «Стоп»', () => {
+    expect(handsBadgeView({ state: HandsChatState.Allowed }, 'pc')).toMatchObject({ text: 'Руки готовы', canStop: false });
   });
 
   it('незнакомое состояние — нейтральный вид', () => {
@@ -78,7 +119,7 @@ describe('handsBadgeView', () => {
   });
 
   it.each([
-    HandsChatState.Active, HandsChatState.Allowed, HandsChatState.NoSession,
+    HandsChatState.Active, HandsChatState.Allowed, HandsChatState.Unavailable,
     HandsChatState.Stopped, HandsChatState.ProviderNotAllowed, 'initial',
   ])('%s — без сроков, «разрешите в трее» и белого списка', state => {
     for (const reason of Object.values(HandsEndReason)) {

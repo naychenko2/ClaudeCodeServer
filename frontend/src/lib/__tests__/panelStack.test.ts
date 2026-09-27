@@ -10,7 +10,7 @@ import {
   enforceZoneInvariant, homeOf, trackHome, parseHome, closePanelTo, evictForeign, replacePanelWith,
   markActiveSide, restoreOppositeIfEmpty,
   isTucked, tuckPanel, untuckPanel, parseKeyList, sortRail, reorderRail, mergeTuckDefaults,
-  railSequence, COL_DEFAULT, COL_MIN, COL_MAX,
+  railSequence, COL_DEFAULT, COL_MIN, COL_MAX, WS_DEFAULT_TUCKED,
   type PanelZones,
 } from '../../pages/workspace/panelStackState';
 import { RAIL_GROUPS } from '../../pages/workspace/panelCatalog';
@@ -629,6 +629,34 @@ describe('mergeTuckDefaults — разовая укладка редких кн�
   it('дубль в ящике не плодится', () => {
     const r = mergeTuckDefaults(['graph'], ['graph'], []);
     expect(r.tucked).toEqual(['graph']);
+  });
+
+  // «Архитектура» переехала в ящик по умолчанию позже прошлых волн: проверяем на
+  // настоящем наборе воркспейса, а не на укороченном WANT
+  describe('кнопка «Архитектура» в наборе воркспейса', () => {
+    const OLD_WAVE = WS_DEFAULT_TUCKED.filter(k => k !== 'arch');
+
+    it('входит в defaultTucked воркспейса', () => {
+      expect(WS_DEFAULT_TUCKED).toContain('arch');
+    });
+
+    it('новый пользователь: сразу в ящике', () => {
+      const r = mergeTuckDefaults([], WS_DEFAULT_TUCKED, []);
+      expect(r.tucked).toContain('arch');
+    });
+
+    it('старожил прошлой волны: уезжает в ящик один раз, разобранное им не трогаем', () => {
+      const r = mergeTuckDefaults(['graph'], WS_DEFAULT_TUCKED, OLD_WAVE);
+      expect(r.changed).toBe(true);
+      expect(r.tucked).toEqual(['graph', 'arch']);
+      expect(r.applied).toContain('arch');
+    });
+
+    it('достали из ящика — повторно не прячется', () => {
+      const r = mergeTuckDefaults(['graph'], WS_DEFAULT_TUCKED, [...WS_DEFAULT_TUCKED]);
+      expect(r.changed).toBe(false);
+      expect(r.tucked).not.toContain('arch');
+    });
   });
 });
 

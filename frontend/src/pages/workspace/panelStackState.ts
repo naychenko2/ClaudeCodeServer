@@ -1340,13 +1340,17 @@ function createPanelZones(ns: string, opts?: {
 // Инстанс воркспейса — ключ cc_ws_zones, миграция со старых cc_ws_panels_* /
 // cc_ws_left_panels_* и совсем старого плоского списка cc_ws_panels_open.
 // Слева при первом запуске открыты «Чаты».
+// Редкие кнопки прячем в ящик рельсы из коробки: столбец остаётся коротким
+// (Файлы/Изменения/Задачи/Документация/Команда), а Граф, Знания, Заметки,
+// Архитектура, Навыки, Терминал и Сервисы достаются из «…» по мере надобности.
+export const WS_DEFAULT_TUCKED: readonly PanelKey[] = [
+  'graph', 'knowledge', 'notes', 'arch', 'skills', 'terminal', 'preview',
+];
+
 export const wsPanels = createPanelZones('ws', {
   legacyOpenKey: 'cc_ws_panels_open',
   defaultZones: { left: [['chats']] },
-  // Редкие кнопки прячем в ящик рельсы из коробки: столбец остаётся коротким
-  // (Файлы/Изменения/Задачи/Документация/Команда), а Граф, Знания, Заметки,
-  // Навыки, Терминал и Сервисы достаются из «…» по мере надобности.
-  defaultTucked: ['graph', 'knowledge', 'notes', 'skills', 'terminal', 'preview'],
+  defaultTucked: [...WS_DEFAULT_TUCKED],
 });
 
 // Инстанс раздела «Чаты» — независимая раскладка (cc_chat_zones).

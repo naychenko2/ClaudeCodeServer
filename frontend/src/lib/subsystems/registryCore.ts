@@ -107,6 +107,23 @@ export interface WorkspacePanelNotesCtx {
   onOpenFile: (path: string) => void;
 }
 
+// Панель «Архитектура» в рельсе проекта: навигатор по C4-модели, открывает документ в центре.
+export interface WorkspacePanelArchCtx {
+  projectId: string;
+  archOpen: boolean;
+  onEnsureOpen: () => void;
+  onCollapse: () => void;
+}
+// Документ центральной зоны воркспейса (слот workspace-center-doc): каркас владеет
+// раскладкой центра и состоянием centerDoc, содержимое приходит вкладом подсистемы.
+export interface WorkspaceCenterDocCtx {
+  projectId: string;
+  projectName: string;
+  isMobile: boolean;
+  onClose: () => void;
+  onShowFile: (path: string) => void;
+}
+
 export interface HomeWidgetNotesCtx { onHubTab: (t: HubTabValue) => void }
 
 export interface ActionButtonProps {

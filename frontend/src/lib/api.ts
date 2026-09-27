@@ -15,6 +15,36 @@ export interface GlyphCandidate {
   name?: string | null;
 }
 
+// Итог «Собрать из кода» (POST /projects/{id}/architecture/generate).
+// graphBuiltAt — время снимка графа кода, которым помечена карта (ISO); added/matched —
+// новые и сохранённые элементы: повторная сборка ручные описания не трогает.
+export interface ArchitectureGenerateResult {
+  modelPath: string;
+  graphBuiltAt: string | null;
+  generatedAt: string;
+  containers: number;
+  components: number;
+  added: number;
+  matched: number;
+  connectionsAdded: number;
+}
+
+// Модель раздела «Архитектура» (GET /projects/{id}/architecture/model). version — SHA-256
+// содержимого файла; updatedBy — имя человека или «Сборка из кода».
+export interface ArchitectureModelDto {
+  exists: boolean;
+  content: string | null;
+  version: string | null;
+  updatedAt: string | null;
+  updatedBy: string | null;
+}
+
+export interface ArchitectureSaveResult {
+  version: string;
+  updatedAt: string | null;
+  updatedBy: string | null;
+}
+
 
 // Итог выкатки, как его пишет трей-раннер в deploy-status.json. Формат чужой — читаем как есть.
 // result: running | ok | blocked | build-failed | rolled-back | failed | error.
@@ -779,6 +809,22 @@ export const api = {
     // поэтому таймаут запроса поднят до 3 минут (дефолтный 30с перехватил бы сборку).
     codeGraphBuild: (id: string) =>
       request<void>(`/projects/${encodeURIComponent(id)}/code-graph/build`, { method: 'POST', timeoutMs: 180_000 }),
+    // «Собрать из кода» (раздел «Архитектура»): стартовая модель Viaduct из графа кода,
+    // слияние с docs/architecture/model.viaduct.json без затирания ручных описаний.
+    // Если графа нет, бэкенд строит его в том же запросе (на CCS ~1.5 мин), отсюда таймаут.
+    // 409 code=model_corrupt — файл модели битый, 503 code=graph_unavailable — графа нет.
+    architectureGenerate: (id: string) =>
+      request<ArchitectureGenerateResult>(`/projects/${encodeURIComponent(id)}/architecture/generate`,
+        { method: 'POST', timeoutMs: 300_000 }),
+    // Хранилище модели раздела «Архитектура»: content — байты файла как есть (null —
+    // модели ещё нет). live: устаревшая модель из офлайн-кэша дала бы ложный конфликт.
+    architectureModel: (id: string) =>
+      request<ArchitectureModelDto>(`/projects/${encodeURIComponent(id)}/architecture/model`, { live: true }),
+    // Запись от версии baseVersion (null — «модели не было»); 409 code=version_conflict,
+    // в err.body.current — состояние файла на сервере.
+    architectureSaveModel: (id: string, content: string, baseVersion: string | null) =>
+      request<ArchitectureSaveResult>(`/projects/${encodeURIComponent(id)}/architecture/model`,
+        { method: 'PUT', body: JSON.stringify({ content, baseVersion }) }),
     // Preview: сервисы проекта (инференс из манифестов + сохранённые в .claude/launch.json)
     services: (id: string) =>
       request<{ services: ProjectService[]; activeServiceId: string | null }>(`/projects/${id}/services`),

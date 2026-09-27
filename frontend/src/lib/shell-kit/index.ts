@@ -15,6 +15,9 @@ export { FONT, FS, C, R, SP, SHADOW, ISLAND, Z, GROUP_COLORS, CHAT_MAX_W, TB } f
 // ─── api ─────────────────────────────────────────────────────────────────────
 export { api } from '../api';
 
+// ─── signalr (события проекта) ───────────────────────────────────────────────
+export { onFilesChanged } from '../signalr';
+
 // ─── notes (стор + hooks) ─────────────────────────────────────────────────────
 export {
   useNotes, useNoteFolders, useNotesVersion, ensureNotesLoaded, existingTitleSet, bumpNotes,
@@ -68,7 +71,13 @@ export type { NavSnapshot } from '../nav';
 export { projectColor } from '../tasks';
 
 // ─── themeMode ───────────────────────────────────────────────────────────────
-export { getEffectiveTheme, subscribeThemeMode } from '../themeMode';
+export { getEffectiveTheme, subscribeThemeMode, useThemeMode } from '../themeMode';
+
+// ─── gitFormat ───────────────────────────────────────────────────────────────
+// Алиас: имя relTime в ките уже занято реализацией из features/home/WidgetCard
+// (у неё отрицательная разница зажата в ноль). Сведение двух реализаций — вне
+// выноса «Архитектуры», поэтому git-вариант едет под своим именем.
+export { relTime as gitRelTime } from '../gitFormat';
 
 // ─── useNow ──────────────────────────────────────────────────────────────────
 export { useNow } from '../useNow';
@@ -96,6 +105,7 @@ export {
   Button, IconButton, Badge, Modal, ConfirmDialog, BackButton,
   IslandScaffold, PanelHeaderSlot, useHasPanelHeader, MenuItem,
   SidebarSection, Toggle, PageCanvas, WaitingIndicator,
+  EmptyState, MetaChip, IconField,
 } from '../../components/ui';
 
 // ─── components/ui/icons ─────────────────────────────────────────────────────
@@ -106,7 +116,11 @@ export { MarkdownViewer, stripFrontmatter } from '../../components/MarkdownViewe
 export type { ResolvedNote } from '../../components/MarkdownViewer';
 
 // ─── components/Toolbar ──────────────────────────────────────────────────────
-export { PillSwitch, tbBtnPrimary, tbBtnGhost } from '../../components/Toolbar';
+export { PillSwitch, tbBtnPrimary, tbBtnGhost, Toolbar, ToolbarIconButton } from '../../components/Toolbar';
+
+// ─── components/ToolbarOverflowMenu ──────────────────────────────────────────
+export { ToolbarOverflowMenu } from '../../components/ToolbarOverflowMenu';
+export type { OverflowItem } from '../../components/ToolbarOverflowMenu';
 
 // ─── components/HubTabs ──────────────────────────────────────────────────────
 export { subsystemTabValue } from '../../components/HubTabs';

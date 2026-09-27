@@ -1,5 +1,5 @@
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
-import { mkdirSync, rmSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -24,6 +24,11 @@ async function login(request: APIRequestContext): Promise<string> {
 }
 
 const auth = () => ({ Authorization: `Bearer ${token}` });
+
+// Вход в страницу: токен И id пользователя. Без cc_user_id страница не вступает в группу
+// user_{id} (lib/tasks.ts joinUserGroup) и не получает task_changed — стор задач замирает,
+// и плашка сборки показывала «Агент собирает…» после PUT done/DELETE задачи (регресс 2026-09-27).
+const userIdOf = (tk: string) => JSON.parse(Buffer.from(tk.split('.')[1], 'base64url').toString('utf8')).sub as string;
 
 function collectConsole(page: Page, sink: string[]) {
   page.on('console', m => { if (m.type() === 'error' || m.type() === 'warning') sink.push(`[${m.type()}] ${m.text()}`); });
@@ -107,7 +112,7 @@ test('модель: запись, конфликт версии, отказ на
 test('панель рельсы и документ с редактором Viaduct открываются', async ({ page, context }) => {
   const logs: string[] = [];
   collectConsole(page, logs);
-  await context.addInitScript(tk => localStorage.setItem('cc_token', tk as string), token);
+  await context.addInitScript(({ tk, uid }) => { localStorage.setItem('cc_token', tk); localStorage.setItem('cc_user_id', uid); }, { tk: token, uid: userIdOf(token) });
   await openProject(page);
 
   // Кнопка рельсы открывает панель (вклад слота workspace-panel), холст — отдельный
@@ -121,4 +126,75 @@ test('панель рельсы и документ с редактором Viad
 
   const frame = page.locator('iframe[src*="/modules/viaduct"]');
   await expect(frame, 'документ должен поднять редактор Viaduct в iframe').toHaveCount(1, { timeout: 15_000 });
+});
+
+// «Собрать архитектуру» без агента: кнопка пустого состояния документа запускает проход 1.
+// Кандидаты L1 — секции appsettings.json с адресом и сервисы compose без build: — едут
+// внешними системами с тегом «кандидат»; appsettings.Local.json не читается, значения
+// конфига (адреса, ключи) в модель не попадают никогда.
+test('кнопка «Собрать архитектуру» без агента: кандидаты L1 с тегом, Local и секреты не читаются', async ({ page, context, playwright, baseURL }) => {
+  const buildRoot = join(tmpdir(), `ccs-arch-build-e2e-${Date.now()}`);
+  mkdirSync(join(buildRoot, 'src', 'App'), { recursive: true });
+  writeFileSync(join(buildRoot, 'src', 'App', 'App.csproj'),
+    '<Project Sdk="Microsoft.NET.Sdk.Web"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>');
+  writeFileSync(join(buildRoot, 'src', 'App', 'Program.cs'),
+    'var b = WebApplication.CreateBuilder(args);\nb.Services.AddHttpClient("payments");\nb.Build().Run();\n');
+  writeFileSync(join(buildRoot, 'src', 'App', 'appsettings.json'), JSON.stringify({
+    Logging: { LogLevel: { Default: 'Information' } },
+    Payments: { BaseUrl: 'https://pay.e2e-secret-host.test', ApiKey: 'sk-e2e-SECRET-VALUE' },
+  }));
+  writeFileSync(join(buildRoot, 'src', 'App', 'appsettings.Local.json'), JSON.stringify({
+    LocalOnlyService: { Url: 'https://local-only.test', Token: 'local-secret' },
+  }));
+  writeFileSync(join(buildRoot, 'docker-compose.yml'),
+    'services:\n  app:\n    build: .\n  redis:\n    image: redis:7\n');
+
+  const request = await playwright.request.newContext({ baseURL });
+  const created = await request.post('/api/projects', { headers: auth(), data: { name: `arch-build-e2e-${Date.now()}`, rootPath: buildRoot } });
+  expect(created.ok(), `проект должен создаться: ${created.status()}`).toBeTruthy();
+  const buildProjectId = (await created.json()).id as string;
+  try {
+    await context.addInitScript(({ tk, uid }) => { localStorage.setItem('cc_token', tk); localStorage.setItem('cc_user_id', uid); }, { tk: token, uid: userIdOf(token) });
+    await page.goto('/');
+    await page.waitForTimeout(5000);
+    await page.evaluate(id => { location.hash = `#/project/${id}`; }, buildProjectId);
+    await page.waitForTimeout(4000);
+    await page.getByRole('button', { name: 'Архитектура' }).first().click();
+    await page.getByRole('button', { name: 'Открыть холст' }).click();
+
+    // Пустое состояние: галочка «С агентом» по умолчанию выключена, кнопка сборки — главная
+    const agentToggle = page.getByRole('switch', { name: 'С агентом' });
+    if (await agentToggle.count()) await expect(agentToggle.first()).not.toBeChecked();
+    const genResponse = page.waitForResponse(r => r.url().includes(`/api/projects/${buildProjectId}/architecture/generate`));
+    await page.getByRole('button', { name: 'Собрать архитектуру' }).last().click();
+    const gen = await genResponse;
+    expect(gen.status(), 'проход 1 без агента должен отработать').toBe(200);
+    const result = await gen.json();
+    expect(result.agentTaskId ?? null, 'без галочки задача агенту не создаётся').toBeNull();
+    expect(result.candidates).toBeGreaterThanOrEqual(2);
+
+    const model = await (await request.get(`/api/projects/${buildProjectId}/architecture/model`, { headers: auth() })).json();
+    expect(model.exists).toBe(true);
+    const content = model.content as string;
+    // Viaduct хранит модель в state.model и раскладывает элементы по уровням
+    const parsed = JSON.parse(content).state?.model ?? {};
+    const elements = ['systems', 'containers', 'components'].flatMap(k => (parsed[k] ?? []) as { name: string; tags?: string[] }[]);
+    const byName = (n: string) => elements.find(e => e.name.toLowerCase() === n.toLowerCase());
+    for (const name of ['Payments', 'redis']) {
+      const el = byName(name);
+      expect(el, `кандидат ${name} должен стать элементом`).toBeTruthy();
+      expect(el!.tags ?? []).toContain('кандидат');
+    }
+    expect(byName('LocalOnlyService'), 'appsettings.Local.json не сканируется').toBeUndefined();
+    expect(content).not.toContain('sk-e2e-SECRET-VALUE');
+    expect(content).not.toContain('e2e-secret-host');
+    expect(content).not.toContain('local-only');
+
+    // Плашка сводки прохода 1 видна на холсте
+    await expect(page.getByText(/Собрано: .*кандидатов/)).toBeVisible();
+  } finally {
+    await request.delete(`/api/projects/${buildProjectId}`, { headers: auth() });
+    await request.dispose();
+    rmSync(buildRoot, { recursive: true, force: true });
+  }
 });

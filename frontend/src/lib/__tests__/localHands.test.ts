@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   HANDS_BADGE_LOADING, handsBadgeStatus, handsBadgeView, handsEventReceived, handsInitialFailed, handsInitialLoaded,
-  handsProviderLabel, handsSectionView, handsStatusFeedLine, HandsChatState, HandsEndReason,
+  handsProviderLabel, handsProviderVision, handsSectionView, handsStatusFeedLine, handsStripSummary, handsStripView,
+  HandsChatState, HandsEndReason,
 } from '../localHands';
 import { featureReason, isFeatureAvailable } from '../projectCapabilities';
 import { applyServerMessage, initialChatState } from '../chatReducer';
@@ -193,5 +194,76 @@ describe('handsProviderLabel', () => {
   it('подписка пула Claude (свой ключ) и пустой провайдер — это Claude', () => {
     expect(handsProviderLabel('acc-a', providers)).toBe('Claude · видит снимки окон');
     expect(handsProviderLabel(null, providers)).toBe('Claude · видит снимки окон');
+  });
+});
+
+describe('полоса «Руки» — одна строка', () => {
+  const claude = { name: 'Claude', vision: true };
+  const glm = { name: 'GLM', vision: false };
+  const st = (state: string, reason?: string) => ({ state, reason });
+  // Самая длинная короткая форма чипа должна влезать в телефон 390 рядом с «Стоп» и ⌃
+  const SHORT_MAX = 12;
+
+  // Пять состояний постановки плюс нейтральный вид до ответа сервера
+  const cases: Array<[string, ReturnType<typeof st> | null, string, string, string, boolean]> = [
+    ['ИИ управляет компьютером', st('active'), 'ИИ управляет компьютером', 'ИИ управляет', 'success', true],
+    ['руки готовы', st('allowed'), 'Руки готовы', 'Готовы', 'neutral', false],
+    ['заняты другим ходом', st('unavailable', 'busy'), 'Заняты другим ходом', 'Заняты', 'warning', false],
+    ['остановлено', st('stopped', 'tray-stop'), 'Остановлено', 'Остановлено', 'warning', false],
+    ['недоступны на устройстве', st('unavailable'), 'Недоступны на устройстве', 'Недоступны', 'warning', false],
+    ['до ответа сервера', null, 'Руки включены', 'Включены', 'neutral', false],
+  ];
+
+  for (const [name, status, chip, short, tone, canStop] of cases) {
+    it(`${name}: чип «${chip}», коротко «${short}», тон ${tone}`, () => {
+      const v = handsStripView(status, 'Ноутбук');
+      expect(v.chip).toBe(chip);
+      expect(v.short).toBe(short);
+      expect(v.tone).toBe(tone);
+      expect(v.canStop).toBe(canStop);
+      expect(v.short.length).toBeLessThanOrEqual(SHORT_MAX);
+      for (const t of [v.text, v.chip, v.short, v.reason ?? '', v.detail ?? '']) assertNoLegacyWording(t);
+    });
+  }
+
+  it('полный статус (меню переключателя, заголовок карточки) — как в постановке', () => {
+    expect(handsStripView(st('unavailable', 'busy'), null).text).toBe('Руки заняты другим ходом на этом устройстве');
+    expect(handsStripView(st('unavailable'), null).text).toBe('Руки недоступны на устройстве');
+    expect(handsStripView(st('active'), null).text).toBe('ИИ управляет компьютером');
+  });
+
+  it('причина остановки: коротко в сводке, полностью в карточке', () => {
+    const v = handsStripView(st('stopped', 'tray-stop'), null);
+    expect(v.reason).toBe('Нажат «Стоп» у компьютера');
+    expect(v.detail).toMatch(/окна, открытые ходом, закрыты/);
+    expect(handsStripView(st('stopped', 'disabled'), null).reason).toBe('Руки выключены на устройстве');
+    expect(handsStripView(st('stopped', 'agent-stopping'), null).reason).toBe('Агент устройства остановился');
+    expect(handsStripView(st('active'), null).reason).toBeNull();
+  });
+
+  it('сводка: устройство раньше зрения — многоточие съедает зрение, а не устройство', () => {
+    expect(handsStripSummary(st('active'), 'Ноутбук', claude)).toBe('Ноутбук · Claude · видит снимки окон');
+    expect(handsStripSummary(st('allowed'), 'Ноутбук', glm)).toBe('Ноутбук · GLM · только текст окон');
+  });
+
+  it('сводка по состояниям: занято, остановлено, недоступно, до ответа', () => {
+    expect(handsStripSummary(st('unavailable', 'busy'), 'Ноутбук', claude)).toBe('Ноутбук · идёт другой ход');
+    expect(handsStripSummary(st('stopped', 'tray-stop'), 'Ноутбук', claude)).toBe('Нажат «Стоп» у компьютера · Ноутбук');
+    expect(handsStripSummary(st('unavailable'), 'Ноутбук', claude)).toBe('Ноутбук');
+    expect(handsStripSummary(null, 'Ноутбук', claude)).toBe('Ноутбук');
+  });
+
+  it('свёрнутая строка: только устройство, у остановки — короткая причина', () => {
+    expect(handsStripSummary(st('active'), 'Ноутбук', claude, true)).toBe('Ноутбук');
+    expect(handsStripSummary(st('stopped', 'disabled'), 'Ноутбук', claude, true)).toBe('Руки выключены на устройстве · Ноутбук');
+  });
+
+  it('о провайдере в полосе только зрение — ни выбора, ни доверия', () => {
+    for (const s of [st('active'), st('allowed')]) {
+      const text = handsStripSummary(s, 'Ноутбук', glm);
+      expect(text).not.toMatch(/довер|разреш|выбер|провайдер/i);
+    }
+    expect(handsProviderVision('glm', [{ key: 'glm', caps: { displayName: 'GLM', supportsImages: false } }]))
+      .toEqual({ name: 'GLM', vision: false });
   });
 });

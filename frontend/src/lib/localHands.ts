@@ -182,46 +182,92 @@ export function handsBadgeView(status: HandsStatusSnapshot | null, projectDevice
 
 // ---------- полоса «Руки» над композером ----------
 
+// Полоса — одна строка по геометрии git-полосы (прототип полос, вариант C): статус-чип не
+// сжимается никогда, у него есть короткая форма для узкой полосы; сжимается только сводка
 export interface HandsStripView {
   tone: HandsBadgeTone;
-  // Статус одной строкой — он же строка меню переключателя полос
+  // Полный статус — строка меню переключателя полос и заголовок карточки подробностей
   text: string;
-  // Причина остановки — начало второй строки; null — причины нет
+  // Чип статуса в полосе: после заголовка «Руки ▾» подлежащее не повторяем
+  chip: string;
+  // Чип в полосе уже порога и в свёрнутой строке
+  short: string;
+  // Причина остановки: коротко — в сводку, полностью — в карточку; null — причины нет
+  reason: string | null;
   detail: string | null;
-  title: string;
   canStop: boolean;
 }
 
-// Тексты полосы: тон, подсказка и «Стоп» — те же, что у бейджа, короче только статус
+// Тон и «Стоп» — те же, что у бейджа
 export function handsStripView(status: HandsStatusSnapshot | null, projectDeviceName: string | null): HandsStripView {
   const b = handsBadgeView(status, projectDeviceName);
-  const v = (text: string, detail: string | null = null): HandsStripView =>
-    ({ tone: b.tone, text, detail, title: b.title, canStop: b.canStop });
+  const v = (text: string, chip: string, short: string, reason: string | null = null, detail: string | null = null): HandsStripView =>
+    ({ tone: b.tone, text, chip, short, reason, detail, canStop: b.canStop });
   switch (status?.state) {
-    case HandsChatState.Active: return v('ИИ управляет компьютером');
-    case HandsChatState.Allowed: return v('Руки готовы');
+    case HandsChatState.Active: return v('ИИ управляет компьютером', 'ИИ управляет компьютером', 'ИИ управляет');
+    case HandsChatState.Allowed: return v('Руки готовы', 'Руки готовы', 'Готовы');
     case HandsChatState.Unavailable:
-      return v(status.reason === HandsEndReason.Busy
-        ? 'Руки заняты другим ходом на этом устройстве'
-        : 'Руки недоступны на устройстве');
-    case HandsChatState.Stopped: return v('Остановлено', stoppedReasonText(status.reason));
-    default: return v('Руки включены');
+      return status.reason === HandsEndReason.Busy
+        ? v('Руки заняты другим ходом на этом устройстве', 'Заняты другим ходом', 'Заняты')
+        : v('Руки недоступны на устройстве', 'Недоступны на устройстве', 'Недоступны');
+    case HandsChatState.Stopped:
+      return v('Остановлено', 'Остановлено', 'Остановлено', stoppedReasonShort(status.reason), stoppedReasonText(status.reason));
+    default: return v('Руки включены', 'Руки включены', 'Включены');
+  }
+}
+
+// Сводка рядом с чипом: полная — кнопка карточки подробностей, mini — хвост свёрнутой
+// строки. Устройство идёт раньше пометки о зрении: не хватит места — многоточие съест зрение
+export function handsStripSummary(
+  status: HandsStatusSnapshot | null,
+  device: string | null,
+  provider: HandsProviderVision | null,
+  mini = false,
+): string {
+  const view = handsStripView(status, device);
+  if (view.reason) return [view.reason, device].filter(Boolean).join(' · ');
+  if (mini) return device ?? '';
+  const vision = provider ? `${provider.name} · ${provider.vision ? 'видит снимки окон' : 'только текст окон'}` : null;
+  switch (status?.state) {
+    case HandsChatState.Unavailable:
+      return [device, status.reason === HandsEndReason.Busy ? 'идёт другой ход' : null].filter(Boolean).join(' · ');
+    case HandsChatState.Active:
+    case HandsChatState.Allowed:
+      return [device, vision].filter(Boolean).join(' · ');
+    default: return device ?? '';
   }
 }
 
 export interface HandsProviderNote { key: string; caps: { displayName: string; supportsImages: boolean } }
+export interface HandsProviderVision { name: string; vision: boolean }
 
 // Провайдер чата и что он видит. Руки есть у любого провайдера (решение владельца
 // 2026-09-27), единственное различие — зрение: без него мост идёт без снимков окон.
 // Ключ чата не нашёлся в каталоге провайдеров — это подписка пула Claude (у пулов свои ключи)
+export function handsProviderVision(
+  sessionProvider: string | null | undefined,
+  providers: readonly HandsProviderNote[],
+): HandsProviderVision | null {
+  const key = (sessionProvider || 'claude').toLowerCase();
+  const o = providers.find(x => x.key.toLowerCase() === key) ?? providers.find(x => x.key.toLowerCase() === 'claude');
+  return o ? { name: o.caps.displayName, vision: o.caps.supportsImages } : null;
+}
+
 export function handsProviderLabel(
   sessionProvider: string | null | undefined,
   providers: readonly HandsProviderNote[],
 ): string | null {
-  const key = (sessionProvider || 'claude').toLowerCase();
-  const o = providers.find(x => x.key.toLowerCase() === key) ?? providers.find(x => x.key.toLowerCase() === 'claude');
-  if (!o) return null;
-  return `${o.caps.displayName} · ${o.caps.supportsImages ? 'видит снимки окон' : 'видит только текст окон'}`;
+  const o = handsProviderVision(sessionProvider, providers);
+  return o && `${o.name} · ${o.vision ? 'видит снимки окон' : 'видит только текст окон'}`;
+}
+
+function stoppedReasonShort(reason: string | null | undefined): string {
+  switch (reason) {
+    case HandsEndReason.StoppedFromTray: return 'Нажат «Стоп» у компьютера';
+    case HandsEndReason.HandsDisabled: return 'Руки выключены на устройстве';
+    case HandsEndReason.AgentStopping: return 'Агент устройства остановился';
+    default: return 'Руки отключились от хода';
+  }
 }
 
 function stoppedReasonText(reason: string | null | undefined): string {

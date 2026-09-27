@@ -120,6 +120,8 @@ export interface ImageEditJob {
   // Чат картинки, из которого запущена задача (ADR-018 §2); null — запуск вне чата
   chatSessionId?: string | null;
   initiator?: ImageEditInitiator;
+  // Нить основного чата (ADR-019), если задача запущена в нить
+  threadId?: string | null;
 }
 
 // Кто запустил задачу или написал промпт: человек в редакторе или агент чата картинки
@@ -143,6 +145,11 @@ export interface ImageEditJobInput {
   // Вернуть размер оригинала после скачивания (ADR-018 §9); по умолчанию сервер — true
   matchSourceSize?: boolean;
   chatSessionId?: string;
+  // Нить картинки основного чата (ADR-019): задача станет pendingJobId нити
+  sessionId?: string;
+  threadId?: string;
+  // Шаг нити, от которого идёт правка (currentStepId); байты шага — в source
+  baseStepId?: string;
 }
 
 export interface ImageEditUploadedReference { file: Blob; name: string; role: ReferenceRole }
@@ -171,6 +178,9 @@ export function jobForm(input: ImageEditJobInput): FormData {
   if (input.aspectRatio) form.append('aspectRatio', input.aspectRatio);
   if (input.matchSourceSize != null) form.append('matchSourceSize', String(input.matchSourceSize));
   if (input.chatSessionId) form.append('chatSessionId', input.chatSessionId);
+  if (input.sessionId) form.append('sessionId', input.sessionId);
+  if (input.threadId) form.append('threadId', input.threadId);
+  if (input.baseStepId) form.append('baseStepId', input.baseStepId);
   return form;
 }
 
@@ -210,6 +220,9 @@ export interface ImageEditSaveRequest {
   stepId?: string | null;
   // Чат картинки переезжает на новый файл вместе с редактором
   chatSessionId?: string | null;
+  // Нить основного чата (ADR-019): карточка переходит на сохранённый файл
+  sessionId?: string | null;
+  threadId?: string | null;
   // Перекодирование при записи; null — формат результата как есть
   encode?: ImageEncodeSpec | null;
 }
@@ -322,7 +335,8 @@ export interface ImageSnapshot { revision: string; attached: boolean }
 
 // SignalR-события задачи (группа владельца, событие message)
 // chatSessionId и initiator — те же, что у ImageEditJob
-interface ImageEditEventOrigin { chatSessionId?: string | null; initiator?: ImageEditInitiator }
+// threadId — нить основного чата (ADR-019), её чат — в том же chatSessionId
+interface ImageEditEventOrigin { chatSessionId?: string | null; initiator?: ImageEditInitiator; threadId?: string | null }
 
 export type ImageEditEvent = ImageEditEventOrigin & (
   | { type: 'image_edit_progress'; jobId: string; projectId: string; stage: EditStage; queuePosition?: number | null }

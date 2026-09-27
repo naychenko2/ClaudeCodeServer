@@ -6,8 +6,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react';
 import { ArrowLeft, Brush, Image as ImageIcon, MessageSquare, Upload, Wrench } from 'lucide-react';
 import {
-  Button, Dot, EmptyState, Field, IconButton, Island, Modal, ModalActions, SegmentedControl, TextField, Toggle, ICON_SIZE, ICON_STROKE,
-  C, FS, ISLAND, R, SHADOW, SP, useIsMobile, api as appApi, showToast, useMe, ModelsSpendModal, getNav, navPush, type NavSnapshot,
+  Button, Dot, EmptyState, Field, IconButton, Island, Modal, ModalActions, TextField, Toggle, ICON_SIZE, ICON_STROKE,
+  C, FS, ISLAND, R, SP, useIsMobile, api as appApi, showToast, useMe, ModelsSpendModal, getNav, navPush, type NavSnapshot,
 } from 'aihome_shell/kit';
 import {
   AUTO_MODEL, imageEditorApi, type ImageChatState, type ImageChatStateEvent, type ImageEditCatalog, type ImageEditInitiator, type ImageEditCatalogReason, type ImageEditQuoteRequest, type ImageEditSaveRequest,
@@ -24,8 +24,9 @@ import {
   stepSaveSource, type History, type HistoryStep, type LaunchAction, type LaunchPlan, type OutpaintRatio, type QuickAction, type Sample, type SaveSource,
 } from './editorInputs';
 import { AdjustPanel } from './AdjustPanel';
+import { CropBar } from './CropBar';
 import {
-  chainTransform, CROP_RATIOS, fitCropRatio, formatOf, initialCrop, isFullCrop, opTitle, renderPreview, transformedSize, type CropRatio,
+  chainTransform, fitCropRatio, formatOf, initialCrop, isFullCrop, opTitle, renderPreview, transformedSize, type CropRatio,
 } from './transforms';
 import { PromptCard } from './PromptCard';
 import { useQuote } from './useQuote';
@@ -859,31 +860,6 @@ function loadImage(url: string): Promise<HTMLImageElement> {
   return img.decode().then(() => img);
 }
 
-const CROP_LABEL: Record<CropRatio, string> = { free: 'Свободно', '1:1': '1:1', '16:9': '16:9', '9:16': '9:16' };
-
-// Плашка обрезки над холстом: пропорции, «Отмена», «Обрезать»
-function CropBar({ ratio, mobile, onRatio, onCancel, onApply }: {
-  ratio: CropRatio;
-  mobile: boolean;
-  onRatio: (r: CropRatio) => void;
-  onCancel: () => void;
-  onApply: () => void;
-}) {
-  return (
-    <div data-crop-bar="true" style={{
-      display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap', justifyContent: 'center',
-      padding: SP.sm, background: C.bgPanel, border: `1px solid ${C.borderLight}`, borderRadius: R.lg, boxShadow: SHADOW.card,
-    }}>
-      <div style={{ width: mobile ? 280 : 300, maxWidth: '100%' }}>
-        <SegmentedControl value={ratio} onChange={onRatio} options={CROP_RATIOS.map(r => ({ value: r, label: CROP_LABEL[r] }))} />
-      </div>
-      <div style={{ display: 'flex', gap: SP.xs }}>
-        <Button size="sm" variant="ghost" onClick={onCancel}>Отмена</Button>
-        <Button size="sm" variant="primary" onClick={onApply}>Обрезать</Button>
-      </div>
-    </div>
-  );
-}
 
 // Причина пустого каталога. Старый бэкенд поля reason не присылает: пустой список = не настроено
 function catalogReason(c: ImageEditCatalog): ImageEditCatalogReason | null {

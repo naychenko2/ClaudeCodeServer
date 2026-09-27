@@ -12,8 +12,9 @@ import {
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import type { ChatItem } from '../../../types';
 import {
-  imageEditorApi, type EditCost, type ImageChatStateChange, type ImageEditCatalog, type ImageEditEstimate, type ImageEditJob,
+  imageEditorApi, type EditCost, type ImageChatStateChange, type ImageEditEstimate, type ImageEditJob,
 } from '../api';
+import { useCatalog } from '../thread/catalog';
 import { isFreeUnit, priceSum, priceText, variantsWord } from '../format';
 import { changedLine, describeChanges, modelLabel } from './stateSync';
 import { useImageEditorBridge } from './bridge';
@@ -22,26 +23,6 @@ import { openImageChatById } from './openFromChat';
 type ToolItem = Extract<ChatItem, { kind: 'tool_use' }>;
 
 const ic = (I: typeof Zap) => <I size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />;
-
-// ── Каталог проекта для подписей моделей: один запрос на вкладку ──
-
-const catalogs = new Map<string, Promise<ImageEditCatalog | null>>();
-
-function useCatalog(projectId: string | null): ImageEditCatalog | null {
-  const [catalog, setCatalog] = useState<ImageEditCatalog | null>(null);
-  useEffect(() => {
-    if (!projectId) return;
-    let alive = true;
-    let p = catalogs.get(projectId);
-    if (!p) {
-      p = imageEditorApi().catalog(projectId).catch(() => { catalogs.delete(projectId); return null; });
-      catalogs.set(projectId, p);
-    }
-    void p.then(c => { if (alive) setCatalog(c); });
-    return () => { alive = false; };
-  }, [projectId]);
-  return catalog;
-}
 
 // ── Разбор вызова ──
 

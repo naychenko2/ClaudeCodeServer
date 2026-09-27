@@ -21,6 +21,40 @@ public class TurnAccumulatorTests : IDisposable
             }).Build());
     }
 
+    // --- Отметка «Ход остановлен пользователем» ---
+
+    [Fact]
+    public void OnUserInterrupted_ВстаётПослеНаписанногоИНеДублируется()
+    {
+        var acc = new TurnAccumulator([]);
+        acc.OnUserMessage("напиши доклад", []);
+        acc.OnTextDelta("начало отве");
+
+        acc.OnUserInterrupted().Should().BeTrue();
+        acc.OnUserInterrupted().Should().BeFalse("повторный «Стоп» подряд второй отметки не даёт");
+
+        var all = acc.GetAll();
+        all.Select(m => m.GetType()).Should().Equal(
+            typeof(StoredUserMessage), typeof(StoredTextMessage), typeof(StoredInterruptedMessage));
+        ((StoredTextMessage)all[1]).Text.Should().Be("начало отве");
+        ((StoredInterruptedMessage)all[2]).Timestamp.Should().BeGreaterThan(0);
+    }
+
+    [Fact]
+    public async Task OnUserInterrupted_ПереживаетСохранениеИЗагрузку()
+    {
+        var sessionId = Guid.NewGuid().ToString();
+        var acc = new TurnAccumulator([], sessionId);
+        acc.OnUserMessage("вопрос", []);
+        acc.OnUserInterrupted();
+        await acc.SaveSnapshotAsync(_histSvc);
+
+        var loaded = await _histSvc.LoadAsync(sessionId);
+        loaded.Should().HaveCount(2);
+        loaded[1].Should().BeOfType<StoredInterruptedMessage>()
+            .Which.Timestamp.Should().BeGreaterThan(0);
+    }
+
     [Fact]
     public void SetPromptSnapshot_ПривязываетСнимокКСообщениюХода()
     {
@@ -627,6 +661,34 @@ public class TurnAccumulatorTests : IDisposable
 
         acc.GetAll().OfType<StoredTextMessage>().Select(m => m.Text)
             .Should().ContainSingle().Which.Should().Be("Ставлю новую задачу на Дениса.");
+    }
+
+    // Точный якорь ветвления (фича chat-branch, шаг 5): uuid хвоста транскрипта, снятый на
+    // конце хода, ложится в запись result — по нему резак находит границу точным сравнением.
+    [Fact]
+    public async Task OnResultAsync_ПишетЯкорьХвостаТранскрипта()
+    {
+        var acc = new TurnAccumulator([]);
+        acc.OnUserMessage("сделай", []);
+
+        await acc.OnResultAsync("success", 100, 1, null, null, null, null, _histSvc,
+            transcriptTailUuid: "0f1e2d3c-4b5a-4968-8778-99aabbccddee");
+
+        acc.GetAll().OfType<StoredResultMessage>().Single()
+            .TranscriptTailUuid.Should().Be("0f1e2d3c-4b5a-4968-8778-99aabbccddee");
+    }
+
+    // Якорь не прочитался (транскрипт не найден, битый хвост) — null, ход идёт как прежде:
+    // такой чат просто ветвится текстовым сопоставлением.
+    [Fact]
+    public async Task OnResultAsync_БезЯкоря_ПолеNull()
+    {
+        var acc = new TurnAccumulator([]);
+        acc.OnUserMessage("сделай", []);
+
+        await acc.OnResultAsync("success", 100, 1, null, null, null, null, _histSvc);
+
+        acc.GetAll().OfType<StoredResultMessage>().Single().TranscriptTailUuid.Should().BeNull();
     }
 
     public void Dispose()

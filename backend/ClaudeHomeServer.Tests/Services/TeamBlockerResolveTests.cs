@@ -32,7 +32,6 @@ namespace ClaudeHomeServer.Tests.Services;
 //
 // Парсер маркера разрезает маркер в код-блоке как цитату (команда Киры, волна 1 —
 // содержимое НЕ идёт в reason), и принимает его вне код-блока как активный вызов.
-[Collection(TestCollections.SessionStaticResolvers)]
 public class TeamBlockerResolveTests : IDisposable
 {
     private readonly string _dir;
@@ -801,6 +800,7 @@ public class TeamBlockerResolveTests : IDisposable
     private sealed class StubPlanner(Func<string> answer) : ICheapTextRunner
     {
         public bool UsesLocal(string actionKey) => false;
+        public bool HasFreeRoute(string actionKey) => false;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "claude";
 
         public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,

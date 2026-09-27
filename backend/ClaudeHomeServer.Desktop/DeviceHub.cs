@@ -1,6 +1,8 @@
 using System.Security.Claims;
 using ClaudeHomeServer.Protocol;
 using Microsoft.AspNetCore.Authorization;
+using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Execution;
 using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services.Desktop;
@@ -16,6 +18,12 @@ public interface IDesktopDeviceClient
 
     /// <summary>Отмена: гасит ожидание и невыполненные шаги.</summary>
     Task Cancel(DesktopCancelCommand cancel);
+
+    /// <summary>
+    /// Открыть канал исполнения (ADR-016): устройство подключается WebSocket'ом к
+    /// /api/devices/exec с этим execId.
+    /// </summary>
+    Task ExecOpen(DeviceExecOpenCommand command);
 }
 
 /// <summary>
@@ -37,7 +45,14 @@ public interface IDesktopDeviceClient
 /// маршрутизатор пушит в хаб через <c>IHubContext&lt;DeviceHub&gt;</c>.
 /// </summary>
 [Authorize(AuthenticationSchemes = DesktopProtocol.DeviceTokenScheme)]
-public sealed class DeviceHub(DesktopCallRouter router, ILogger<DeviceHub> log) : Hub<IDesktopDeviceClient>
+public sealed class DeviceHub(
+    DesktopCallRouter router,
+    DeviceExecChannel exec,
+    ILogger<DeviceHub> log,
+    AgentTicketService? agentTickets = null,
+    IProjectFilesChangedNotifier? filesChanged = null,
+    ILocalHandsNotifier? handsNotifier = null)
+    : Hub<IDesktopDeviceClient>
 {
     private string? OwnerId => Context.User?.FindFirstValue(DesktopProtocol.OwnerIdClaim);
     private string? DeviceId => Context.User?.FindFirstValue(DesktopProtocol.DeviceIdClaim);
@@ -66,6 +81,9 @@ public sealed class DeviceHub(DesktopCallRouter router, ILogger<DeviceHub> log) 
     /// <summary>
     /// Представление устройства: версия протокола объявляется явно, поддерживаемые типы шагов
     /// сервер не додумывает. До Hello устройство командам недоступно.
+    /// Агент локальных проектов (ADR-016) дополнительно объявляет платформу, версии и
+    /// возможности, а в ответ получает требуемую версию CLI и вердикт «харнес готов»;
+    /// поставив нужную копию CLI, он повторяет Hello.
     /// </summary>
     public async Task<DeviceHelloAck> Hello(DeviceHello hello)
     {
@@ -77,7 +95,8 @@ public sealed class DeviceHub(DesktopCallRouter router, ILogger<DeviceHub> log) 
                 $"Версия протокола {hello.ProtocolVersion} не поддерживается: сервер говорит на версии {DesktopProtocol.Version}");
         }
 
-        return await router.HelloAsync(Context.ConnectionId, hello, Context.ConnectionAborted);
+        return await exec.HelloAsync(
+            Context.ConnectionId, OwnerId ?? "", DeviceId ?? "", hello, Context.ConnectionAborted);
     }
 
     /// <summary>Подтверждение приёма команды. Не пришло за 2 с — вызов кончается честной ошибкой.</summary>
@@ -117,6 +136,68 @@ public sealed class DeviceHub(DesktopCallRouter router, ILogger<DeviceHub> log) 
         if (!router.Progress(callId, Context.ConnectionId, lastAppliedStep)) throw UnknownCall(callId);
         return Task.CompletedTask;
     }
+
+    /// <summary>
+    /// Интроспекция билета localhost-API (ADR-016, задача 4.2): агент спрашивает, кому
+    /// сервер выдал билет, пришедший от браузера. Ответ — только устройству, к которому билет
+    /// привязан; во всех остальных случаях null, без различения причин.
+    /// </summary>
+    [HubMethodName(DeviceAgentApi.IntrospectMethod)]
+    public AgentTicketIntrospection? IntrospectAgentTicket(string ticket)
+    {
+        if (agentTickets is null || OwnerId is not { Length: > 0 } ownerId || DeviceId is not { Length: > 0 } deviceId)
+            return null;
+        return agentTickets.Introspect(ownerId, deviceId, ticket);
+    }
+
+    /// <summary>
+    /// Донесение ватчера агента: дерево локального проекта изменилось. Уходит в веб-морду
+    /// тем же событием, что у серверного ватчера, — но только по проекту, привязанному к
+    /// этому устройству: чужой проект устройство «пошевелить» не может.
+    /// </summary>
+    [HubMethodName(DeviceAgentApi.FilesChangedMethod)]
+    public async Task ProjectFilesChanged(DeviceFilesChanged report)
+    {
+        if (agentTickets is null || filesChanged is null) return;
+        if (OwnerId is not { Length: > 0 } ownerId || DeviceId is not { Length: > 0 } deviceId) return;
+        if (agentTickets.ProjectOnDevice(ownerId, deviceId, report.ProjectId) is null)
+            throw new HubException($"Проект {report.ProjectId} к этому устройству не привязан");
+
+        var paths = report.Paths ?? [];
+        var full = report.Full || paths.Count > DeviceAgentApi.MaxChangedPaths;
+        await filesChanged.FilesChangedAsync(report.ProjectId, full ? [] : paths, full);
+    }
+
+    /// <summary>
+    /// Донесение агента о руках хода (ADR-016 §7): «ход действует руками», «руки доступны»,
+    /// «остановлено из трея». Принимается только по ходу с руками, который сервер сам отправил
+    /// ЭТОМУ устройству, — чужой чат устройство «пошевелить» не может. Состояние запоминается
+    /// у устройства (первая отрисовка бейджа) и уходит в чат хода.
+    /// </summary>
+    [HubMethodName(DeviceHandsReport.Method)]
+    public async Task ReportHandsStatus(DeviceHandsReport report)
+    {
+        if (OwnerId is not { Length: > 0 } ownerId || DeviceId is not { Length: > 0 } deviceId) return;
+        if (report is null || !HandsChatStates.FromDevice.Contains(report.State))
+            throw new HubException("Незнакомое состояние рук");
+        if (DeviceHandsTurns.SessionOf(ownerId, deviceId, report.TurnId ?? "") is not { } sessionId)
+            throw new HubException($"Ход {report.TurnId} с руками этому устройству не отправлялся");
+
+        // Причина — только из известного набора: текст с устройства в чат как есть не едет
+        var reason = report.State == HandsChatStates.Stopped && KnownEndReasons.Contains(report.Reason ?? "")
+            ? report.Reason
+            : null;
+        DeviceHandsTurns.SetLast(ownerId, deviceId,
+            new DeviceHandsLastState(sessionId, report.TurnId!, report.State, reason, DateTimeOffset.UtcNow));
+        DeviceHandsTurns.Accepted(ownerId, deviceId, report.TurnId!, report.State);
+        if (handsNotifier is not null)
+            await handsNotifier.HandsStatusAsync(ownerId, deviceId, sessionId, report.State, reason);
+    }
+
+    private static readonly HashSet<string> KnownEndReasons = new(StringComparer.Ordinal)
+    {
+        HandsEndReason.StoppedFromTray, HandsEndReason.HandsDisabled, HandsEndReason.AgentStopping,
+    };
 
     // Донесение по чужому или неизвестному callId — не «тихо ок»: устройство обязано увидеть отказ.
     private static HubException UnknownCall(string callId) =>

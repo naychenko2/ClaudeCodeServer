@@ -8,7 +8,9 @@ import { MarkdownContent } from '../../components/chat/MarkdownContent';
 import { api } from '../../lib/api';
 import { useModelLabel } from '../../lib/models';
 import { C, FS, SP, R, FONT } from '../../lib/design';
-import type { PromptSnapshot, PromptSection, CliSkill } from '../../types';
+import { MapHygieneDialog } from '../projects/dialogs/MapHygieneDialog';
+import { useFeature, FLAGS } from '../../lib/featureFlags';
+import type { PromptSnapshot, PromptSection, CliSkill, MapHygieneReport } from '../../types';
 
 // Шторка «какой промпт ушёл»: посекционно то, что CCS собрал и передал claude CLI на этом
 // ходу, плюс доступная часть слоя самого CLI и разбор «что лишнее» по кнопке.
@@ -17,6 +19,10 @@ import type { PromptSnapshot, PromptSection, CliSkill } from '../../types';
 interface Props {
   sessionId: string;
   snapshotId: string;
+  // ID проекта чата. Нужен для горячего входа в уборку карты из cliRows — кнопка
+  // «Прибраться» открывает MapHygieneDialog по этому id. null — личный чат без проекта,
+  // кнопку тогда не показываем
+  projectId?: string | null;
   // Размер контекста последнего запроса хода (result.contextTokens) — для сравнения
   // «наши секции против всего, что реально ушло». Считает ChatPanel по ленте.
   // null — ход не дошёл до ответа модели (например, упал на аутентификации)
@@ -25,6 +31,31 @@ interface Props {
   // в него записано. Единственные точные числа про кэш, что у нас есть
   turnCache?: { read: number; creation: number } | null;
   onClose: () => void;
+}
+
+// Порог для горячего входа в уборку карты из cliRows: выше — корневой CLAUDE.md виден
+// как «съедает контекст», и предлагаем прибраться. Меньше — карта ещё в рамках бюджета
+// Anthropic, и кнопка только мешала бы
+const TIDY_TRIGGER_BYTES = 50 * 1024;
+
+/**
+ * Видна ли кнопка «Прибраться» в строке файла слоя CLI. Отдельная функция, а не выражение
+ * в разметке: условие держит dark launch второго входа, а проверить его в рендере нечем —
+ * диалог грузит снимок эффектом. Флаг здесь ПЕРВЫМ и обязателен: без него при выключенной
+ * фиче кнопка была видна всем, вела в модалку, и «Разобрать моделью» отдавало 404 сырым
+ * текстом (тумблер обязан закрывать оба входа — и секцию настроек, и эту кнопку).
+ */
+export function showTidyButton(o: {
+  featureEnabled: boolean;
+  /** Сервер отдаёт корневому CLAUDE.md проекта ровно этот заголовок. */
+  fileTitle: string;
+  projectId?: string | null;
+  sizeBytes: number;
+}): boolean {
+  return o.featureEnabled
+    && o.fileTitle === 'CLAUDE.md проекта'
+    && !!o.projectId
+    && o.sizeBytes >= TIDY_TRIGGER_BYTES;
 }
 
 // Заголовок строки-раздела: серая подпись над блоком
@@ -402,7 +433,7 @@ function SectionRow({ section, share, hoverKey, hovered, onHover, loadText }: {
   );
 }
 
-export function PromptSnapshotDialog({ sessionId, snapshotId, contextTokens, turnCache, onClose }: Props) {
+export function PromptSnapshotDialog({ sessionId, snapshotId, projectId, contextTokens, turnCache, onClose }: Props) {
   const [snapshot, setSnapshot] = useState<PromptSnapshot | null>(null);
   // 'loading' | 'ready' | 'gone' (снимок вытеснен ретеншном) | 'error'
   const [state, setState] = useState<'loading' | 'ready' | 'gone' | 'error'>('loading');
@@ -410,6 +441,15 @@ export function PromptSnapshotDialog({ sessionId, snapshotId, contextTokens, tur
   const [analysis, setAnalysis] = useState<string | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
+  // Горячий вход в уборку карты из cliRows (см. TIDY_TRIGGER_BYTES). null — модалка
+  // закрыта. Открывается по кнопке «Прибраться» в строке корневого CLAUDE.md
+  const [tidyReport, setTidyReport] = useState<MapHygieneReport | null>(null);
+  const [tidyLoading, setTidyLoading] = useState(false);
+  const [tidyError, setTidyError] = useState<string | null>(null);
+  // Второй вход в уборку карты закрыт тем же флагом, что и секция в настройках проекта:
+  // review и apply под выключенным флагом отвечают 404, и кнопка вела бы в модалку,
+  // которая падает на первом же «Разобрать моделью» сырым текстом ошибки
+  const mapHygieneEnabled = useFeature(FLAGS.projectMapHygiene);
   // Блок разбора живёт в самом низу списка секций — после ответа подводим к нему сами
   const analysisRef = useRef<HTMLDivElement>(null);
   // Открыть снимок старта прогона вместо унаследованного (кнопка на плашке)
@@ -501,6 +541,21 @@ export function PromptSnapshotDialog({ sessionId, snapshotId, contextTokens, tur
       .finally(() => setAnalyzing(false));
   };
 
+  // Горячий вход в уборку карты из cliRows. Сканируем проект и открываем MapHygieneDialog
+  // поверх текущего шторки; если скан упал — показываем причину (тихо, без баннера на
+  // весь экран). Повторный вызов с tidyReport!=null перезагружает отчёт
+  const openTidy = () => {
+    if (!projectId || tidyLoading) return;
+    setTidyLoading(true);
+    return api.projects.mapHygiene.scan(projectId)
+      .then(r => setTidyReport(r))
+      .catch((e: unknown) => {
+        const err = e as { body?: { error?: string }; message?: string };
+        setTidyError(err?.body?.error || err?.message || 'Не удалось проверить карту');
+      })
+      .finally(() => setTidyLoading(false));
+  };
+
   // Разбор занимает до полутора минут, а его результат оказывается ниже всего списка —
   // без подводки человек смотрит на неизменившийся экран и думает, что ничего не вышло
   useEffect(() => {
@@ -528,15 +583,40 @@ export function PromptSnapshotDialog({ sessionId, snapshotId, contextTokens, tur
   // Инструменты сюда не входят: их вес неизвестен, они рендерятся отдельно в конце
   const cliShare = (size: number) => (cliTotal > 0 ? Math.round(size * 100 / cliTotal) : 0);
   const cliRows: { key: string; size: number; render: () => React.ReactNode }[] = [
-    ...(cli?.files ?? []).map(f => ({
-      key: f.key,
-      size: sizeOf(f),
-      render: () => (
-        <SectionRow key={f.key} section={f} loadText={loadFileText}
-          hoverKey={barKey('cli', f.key)} hovered={hovered} onHover={setHovered}
-          share={cliShare(sizeOf(f))} />
-      ),
-    })),
+    ...(cli?.files ?? []).map(f => {
+      // Корневой CLAUDE.md проекта: сервер отдаёт title "CLAUDE.md проекта" (vs
+      // ".claude/CLAUDE.md" → "CLAUDE.md проекта (.claude)"). Когда он толще порога —
+      // это горячий момент для уборки: человек смотрит «кто съел контекст», видит
+      // 98 КБ и ровно сейчас думает об уборке. Кнопка открывает модалку MapHygieneDialog
+      // поверх шторки — без ухода со страницы чата
+      const showTidy = showTidyButton({
+        featureEnabled: mapHygieneEnabled,
+        fileTitle: f.title,
+        projectId,
+        sizeBytes: f.size ?? f.text.length,
+      });
+      return {
+        key: f.key,
+        size: sizeOf(f),
+        render: () => (
+          <div key={f.key} style={{ display: 'flex', alignItems: 'stretch' }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <SectionRow section={f} loadText={loadFileText}
+                hoverKey={barKey('cli', f.key)} hovered={hovered} onHover={setHovered}
+                share={cliShare(sizeOf(f))} />
+            </div>
+            {showTidy && (
+              <div style={{ display: 'flex', alignItems: 'center', paddingRight: SP.sm }}>
+                <Button variant="ghost" size="xs" onClick={openTidy}
+                  loading={tidyLoading} title="Открыть уборку карты проекта">
+                  Прибраться
+                </Button>
+              </div>
+            )}
+          </div>
+        ),
+      };
+    }),
     ...(cli?.skills?.length ? [{
       key: 'skills',
       size: skillsChars(cli.skills),
@@ -563,6 +643,7 @@ export function PromptSnapshotDialog({ sessionId, snapshotId, contextTokens, tur
   ].sort((a, b) => b.size - a.size);
 
   return (
+    <>
     <Modal width={620} title="Что модель знала, когда отвечала" onClose={onClose}
       // Подпись модели — та же, что под постом (id → человеческое имя): иначе в ленте
       // «Opus 5», а в шапке шторки сырой claude-opus-5, и это выглядит как разные модели
@@ -880,10 +961,25 @@ export function PromptSnapshotDialog({ sessionId, snapshotId, contextTokens, tur
             {analysisError && (
               <div style={{ color: C.dangerText, fontSize: FS.sm }}>{analysisError}</div>
             )}
+            {tidyError && (
+              <div style={{ color: C.dangerText, fontSize: FS.sm, marginTop: SP.xs }}>{tidyError}</div>
+            )}
           </div>
         </div>
       )}
     </Modal>
+    {/* Уборка карты из cliRows: поверх шторки снимка промпта. Применение/закрытие
+        модалки не двигают снимок — человек остаётся в контексте «что съело контекст» */}
+    {tidyReport && projectId && (
+      <MapHygieneDialog projectId={projectId} report={tidyReport}
+        // «Проверить заново» на плашке 409 — тот же скан, что открыл модалку: без него
+        // баннер исчезал, а отчёт оставался протухшим, и следующий apply снова ловил 409.
+        // onReport держит модалку в курсе review/apply — родитель здесь один и тот же state
+        onReloaded={openTidy}
+        onReport={setTidyReport}
+        onClose={() => setTidyReport(null)} />
+    )}
+  </>
   );
 }
 

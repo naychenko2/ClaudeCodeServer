@@ -1,8 +1,8 @@
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Mcp;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
-using Xunit;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -120,5 +120,123 @@ public class McpStatusStoreTests : IDisposable
         ]);
 
         store.GetByOwner("owner1").Should().HaveCount(3);
+    }
+
+    // --- Волна 7: инстансные интеграции (Higgsfield). Глеб в ревью `4f061084` отметил
+    // отсутствие тестов на новую поверхность: GetForServer/GetByOwnerForServers/GetByOwnerMerged.
+    // Эти пять тестов — сторожа на инстансность: следующий человек не должен случайно
+    // продублировать условие в контроллере или прочитать user-bag там, где жил ServiceOwnerId-bag.
+
+    // Сторож 1: обычные серверы идут через user-bag, как и Get. Без этого теста любая
+    // правка GetForServer может сломать «дефолтный» путь — никто не заметит.
+    [Fact]
+    public void GetForServer_ОбычныйСервер_ЧитаетИзUserBag()
+    {
+        var store = NewStore();
+        store.RecordFromInit("owner1", "chat1",
+            [new McpServerInfo("weather", "connected")]);
+
+        var record = new McpServerRecord
+        {
+            Key = "weather",
+            OwnerId = "owner1",
+            Label = "Weather",
+            Transport = McpTransport.Http,
+            Url = "https://example.test/mcp",
+        };
+
+        var entry = store.GetForServer("owner1", record);
+
+        entry.Should().BeEquivalentTo(store.Get("owner1", "weather"),
+            "обычный сервер обязан читаться из user-bag — как и прежний Get");
+    }
+
+    // Сторож 2: точка склейки реально работает — для Higgsfield отдаём ServiceOwnerId-bag,
+    // даже если в user-bag есть запись (старое «connected» от init не должно помешать
+    // свежему «failed» от probe дойти до UI).
+    [Fact]
+    public void GetForServer_Higgsfield_ЧитаетИзServiceOwnerIdИгнорируяUserBag()
+    {
+        var store = NewStore();
+        const string userId = "owner1";
+        // Ложный «connected» в user-bag — init мог принести его до сбоя OAuth.
+        store.RecordFromInit(userId, "chat1",
+            [new McpServerInfo(HiggsfieldOAuthService.Key, "connected")]);
+        // Истинный «failed» в ServiceOwnerId-bag — проба по кнопке.
+        store.RecordProbe(HiggsfieldOAuthService.ServiceOwnerId, HiggsfieldOAuthService.Key,
+            McpServerStatuses.Failed, "tools/list empty");
+
+        var record = new McpServerRecord
+        {
+            Key = HiggsfieldOAuthService.Key,
+            OwnerId = userId,
+            Label = HiggsfieldOAuthService.Label,
+            Transport = McpTransport.Http,
+            Url = HiggsfieldOAuthService.Url,
+        };
+
+        var entry = store.GetForServer(userId, record);
+
+        entry.Should().NotBeNull();
+        entry!.Status.Should().Be(McpServerStatuses.Failed,
+            "Higgsfield обязан читаться из ServiceOwnerId-bag, не из user-bag");
+        entry.Error.Should().Be("tools/list empty",
+            "диагностический текст берётся из инстансной записи, не из чужой");
+    }
+
+    // Сторож 3: при коллизии побеждает инстансный статус. Без этого теста следующая
+    // правка может «упростить» GetByOwnerMerged до простого GetByOwner — и карточка
+    // встроенных серверов начнёт показывать зелёный Higgsfield, пока реальный статус Failed.
+    [Fact]
+    public void GetByOwnerMerged_КоллизияСтатусов_ПриоритетУИнстансного()
+    {
+        var store = NewStore();
+        const string userId = "owner1";
+        store.RecordFromInit(userId, "chat1",
+            [new McpServerInfo(HiggsfieldOAuthService.Key, "connected")]);
+        store.RecordProbe(HiggsfieldOAuthService.ServiceOwnerId, HiggsfieldOAuthService.Key,
+            McpServerStatuses.NeedsAuth, "401 Unauthorized");
+
+        var merged = store.GetByOwnerMerged(userId);
+
+        merged.Should().ContainKey(HiggsfieldOAuthService.Key);
+        merged[HiggsfieldOAuthService.Key].Status.Should().Be(McpServerStatuses.NeedsAuth,
+            "инстансный статус важнее user-bag — иначе UI скроет реальную проблему");
+    }
+
+    // Сторож 4: прежнее поведение GetByOwner не ломается, когда инстансных записей нет.
+    // Без теста легко «оптимизировать» GetByOwnerMerged и пропустить возврат user-bag'а
+    // для обычных записей вроде weather.
+    [Fact]
+    public void GetByOwnerMerged_НетИнстансныхЗаписей_РавенGetByOwner()
+    {
+        var store = NewStore();
+        const string userId = "owner1";
+        store.RecordFromInit(userId, "chat1", [
+            new McpServerInfo("weather", "connected"),
+            new McpServerInfo("tasks", "failed"),
+        ]);
+        // ServiceOwnerId-bag пуст — никаких записей о Higgsfield.
+
+        var merged = store.GetByOwnerMerged(userId);
+        var own = store.GetByOwner(userId);
+
+        merged.Should().BeEquivalentTo(own,
+            "без инстансных записей мердж обязан вернуть то же, что и GetByOwner");
+        merged.Should().HaveCount(2);
+    }
+
+    // Сторож 5: пустой список записей — не падает. Контроллеры List и Builtin прогоняют
+    // все записи реестра (а у чата без реестра их 0). Без теста первая регрессия
+    // обнаружится только в проде.
+    [Fact]
+    public void GetByOwnerForServers_ПустойСписок_ВозвращаетПустойСловарь()
+    {
+        var store = NewStore();
+
+        var result = store.GetByOwnerForServers("owner1", []);
+
+        result.Should().NotBeNull();
+        result.Should().BeEmpty("граничный случай — пустой вход даёт пустой выход без падений");
     }
 }

@@ -79,6 +79,11 @@ public class ClaudeSession : ILlmSessionAdapter
     // null — чат вне проекта; равен _rootPath — обычный чат без worktree, fallback
     // сводится к no-op в CodeGraphPromptProvider.GetSliceAsync.
     private readonly string? _mainRootPath;
+    private readonly bool _serverContent;
+    // Транскрипт CLI на диске сервера (LlmSessionContext.TranscriptOnServer). false — локальный
+    // проект: транскрипт на устройстве, ход его у себя не ищет — ни хвоста task-notification,
+    // ни живого потока субагентов, ни ватчера workflow, ни веса истории в снимке
+    private readonly bool _transcriptOnServer;
     // Логгер BareMode-диагностики: размер взятой карты, oversized-отступ и т.п.
     // Опциональный — тесты/старые вызовы передают null, лог просто не пишется.
     private readonly ILogger? _log;
@@ -95,11 +100,27 @@ public class ClaudeSession : ILlmSessionAdapter
     // бэкенда, а не в каждом проекте пользователя. null — тесты без DI / старый контракт:
     // в этом случае SystemPromptFile ожидается абсолютным путём.
     private readonly string? _serverContentRoot;
-    // Фактическое состояние BareMode в последнем BuildArgs: true если CLI реально
-    // получил `--bare`. Снимок промпта читает этот признак, а не повторно ResolveByModel
-    // (см. ревью 2026-09-05: при деградации BuildBareModeArgs снимает оба флага, и снимок
+    // Фактическое состояние BareMode в последнем BuildArgs: true если BareMode реально
+    // применён (карта найдена, CLAUDE_CODE_DISABLE_CLAUDE_MDS поставлен). Снимок промпта
+    // читает этот признак, а не повторно ResolveByModel
+    // (см. ревью 2026-09-05: при деградации BuildBareModeArgs снимает флага, и снимок
     // обязан показывать обычный режим, а не «bare»).
     private bool _lastBareModeApplied;
+    // Сторож на пропажу CLAUDE_CODE_DISABLE_CLAUDE_MDS: переменная недокументирована,
+    // в любом обновлении CLI может исчезнуть. На первом ходу BareMode-сессии входные
+    // токены обязаны укладываться в ожидаемую базу (карта + тулсеты + текст хода,
+    // см. BareModeExpectedInputTokens); превышение на величину CLAUDE.md проекта
+    // означает, что переменная перестала работать. Одноразовый: после первого
+    // срабатывания (или первого хода) не повторяем.
+    private volatile bool _bareModeWatchdogFired;
+    // Размер фактически применённой карты BareMode в байтах (0 — BareMode не применён).
+    // От него сторож считает ожидаемую базу входа: прежняя константа 15 000 была
+    // подобрана под карту в ~2 КБ и протухла, когда карта доросла до 13,7 КБ.
+    private long _lastBareModeMapBytes;
+    // Длина того, что сервер САМ положил во вход хода: --append-system-prompt плюс текст
+    // сообщения (с хвостом recall). Переменная часть базы сторожа — без неё длинное
+    // первое сообщение (описание задачи у исполнителя) выглядело бы как поломка.
+    private int _lastTurnInputChars;
     // Для тестов-сторожей (InternalsVisibleTo): мутация гейта или снимка обязана
     // краснеть на этом свойстве. Не часть публичного API.
     internal bool LastBareModeApplied => _lastBareModeApplied;
@@ -203,6 +224,13 @@ public class ClaudeSession : ILlmSessionAdapter
     private string? _lastSubmittedTurnText;
     private volatile bool _lastTurnResolved = true;
     private bool _lastSubmitWasNewProcess;
+
+    // Хеш нестабильных секций, вклеенных в текст ПРОШЛОГО хода (RecallInTurnText).
+    // Не изменились — не повторяем: они уже лежат в транскрипте и доедут по --resume,
+    // а копия в каждом ходе растила бы контекст на ровном месте. Живёт в памяти
+    // процесса: после рестарта первый ход пошлёт склейку заново — кэш префикса это
+    // не трогает (вклейка идёт в хвост), цена ошибки — один лишний блок.
+    private string? _lastTurnRecallHash;
     // Сериализует записи в stdin процесса: control_response шлются из SignalR-потоков
     // параллельно с пампом — без лока JSON-строки могут перемешаться
     private readonly SemaphoreSlim _stdinLock = new(1, 1);
@@ -567,6 +595,26 @@ public class ClaudeSession : ILlmSessionAdapter
     private static readonly string[] BrowserTools =
         ["mcp__plugin_playwright_playwright__*", "mcp__microsoft_playwright-mcp__*"];
 
+    // Настройки MCP-сервера плагина playwright через env процесса CLI (сервер наследует его):
+    // по умолчанию @playwright/mcp запускает браузер окном на DISPLAY, а на сервере без
+    // RDP-входа дисплея нет и запуск падает; общий постоянный профиль ловит «browser is
+    // already in use» у двух параллельных ходов; скриншоты кладём в .cc-attachments/,
+    // откуда их можно показать в ленте. Решение зависит только от персоны и корня хода —
+    // сигнатура запуска стабильна между ходами. Песочнице не ставим: хостовый путь там
+    // неверен, а браузера в cc-sandbox может не быть вовсе.
+    internal static IReadOnlyDictionary<string, string> PlaywrightMcpEnv(
+        bool browserEnabled, bool sandboxed, string rootPath)
+    {
+        if (!browserEnabled || sandboxed)
+            return new Dictionary<string, string>();
+        return new Dictionary<string, string>
+        {
+            ["PLAYWRIGHT_MCP_HEADLESS"] = "true",
+            ["PLAYWRIGHT_MCP_ISOLATED"] = "true",
+            ["PLAYWRIGHT_MCP_OUTPUT_DIR"] = Path.Combine(rootPath, ".cc-attachments", "playwright"),
+        };
+    }
+
     // Инструменты правки файлов — используются для атрибуции file_changed
     // (FileChangeAttributor.Claim), чтобы TurnFileWatcher чужого чата того же rootPath
     // не показал карточку правки, сделанной этой сессией. NotebookEdit — единственный
@@ -700,6 +748,22 @@ public class ClaudeSession : ILlmSessionAdapter
     // выключены. Условие подключения — как у веб-поиска: stdio-ветки отката нет
     private readonly ArchitectureMcpContext? _architectureMcp;
     private bool ArchitectureHttpOn() => _architectureMcp is { UseHttp: true } && HttpMcpOnNow();
+    // MCP-сервер Higgsfield (инстансное OAuth-подключение, прокси): null — не подключён или RO
+    private readonly HiggsfieldMcpContext? _higgsfieldMcp;
+    // Higgsfield: условие как у websearch — схема адреса допускает http И рубильник включён
+    private bool HiggsfieldHttpOn() => _higgsfieldMcp is { UseHttp: true } && HttpMcpOnNow();
+    // MCP-сервер редактора картинок: null — чат вне проекта или редактор недоступен (ADR-019 §4)
+    private readonly ImageEditorMcpContext? _imageEditorMcp;
+    // Редактор картинок: условие как у websearch — схема адреса допускает http И рубильник включён
+    private bool ImageEditorHttpOn() => _imageEditorMcp is { UseHttp: true } && HttpMcpOnNow();
+
+    // Инструмент редактора картинок без карточки разрешения: только если сервер едет в этот ход
+    internal static bool IsImageEditorAutoAllowed(ImageEditorMcpContext? context, string toolName) =>
+        context?.AutoAllowTools?.Contains(toolName, StringComparer.Ordinal) == true;
+    // MCP-сервер локальной генерации (ComfyUI): null — выключен или недоступен чату
+    private readonly LocalMediaMcpContext? _localMediaMcp;
+    // Локальная генерация: условие как у higgsfield — схема адреса допускает http И рубильник включён
+    private bool LocalMediaHttpOn() => _localMediaMcp is { UseHttp: true } && HttpMcpOnNow();
     // MCP-сервер графа кода (codegraph_find/neighbors/hubs): null — чат вне проекта
     private readonly CodeGraphMcpContext? _codeGraphMcp;
     // MCP-сервер баз знаний Dify (ADR-012, волна 4): null — нет владельца или секция Dify
@@ -715,9 +779,19 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly Func<ExternalMcpContext?>? _externalMcpProvider;
     // Браузер (плагин playwright) в этой сессии: false — гасим плагин на запуске CLI
     private readonly bool _browserEnabled;
+    // Руки локального проекта (LlmSessionContext.HandsEnabled): решение на ход —
+    // HandsActiveNow, от него одного зависят маркер рук и режим прав
+    private readonly bool _handsEnabled;
+    // Руки у последнего собранного хода — живая смена режима прав (TrySetPermissionModeLive)
+    // обязана понизить bypass так же, как запуск
+    private volatile bool _lastHandsActive;
+    // Строка о понижении bypass уже ушла в ленту: повторять её каждый ход — шум
+    private bool _bypassDowngradeNoticed;
     // Реестр CLI-провайдеров: env-оверрайды процесса (ANTHROPIC_BASE_URL и др.)
     // для сторонних моделей; null — всегда родной Claude
     private readonly LlmProviderRegistry? _providers;
+    // Признак «локальный движок занят ходом» — ставится на время хода на провайдере с IsLocal
+    private readonly LocalEngineBusyTracker _localEngineBusy;
     // Резолвер назначений моделей — нужен ради «модели по назначению места» (см. EffectiveModel);
     // null — адаптер собран без него (тесты), тогда пустая модель означает дефолт CLI, как раньше
     private readonly ModelAssignmentResolver? _assignments;
@@ -731,6 +805,10 @@ public class ClaudeSession : ILlmSessionAdapter
     // каждого ответа (TurnTelemetry.ModelFromEvent). EffectiveModel — лишь намерение, и при
     // пустом слоте он null, из-за чего в телеметрию уходил литерал unknown.
     private string? _turnCliModel;
+
+    // Сигнатура запуска последнего собранного хода (BuildLaunchSignature) — для сторожей
+    // стабильности: два хода чата с одинаковыми свойствами обязаны дать одну сигнатуру
+    internal string? LastLaunchSignature { get; private set; }
 
     // Спан идущего хода — чтобы дописать в него фактическую модель, когда CLI её назовёт.
     // Тег ставится в двух местах, но никогда одновременно: при старте хода (до запуска
@@ -764,6 +842,8 @@ public class ClaudeSession : ILlmSessionAdapter
         Info = info;
         _rootPath = context.RootPath;
         _mainRootPath = context.MainRootPath;
+        _serverContent = context.ServerContent;
+        _transcriptOnServer = context.TranscriptOnServer;
         _serverContentRoot = context.ContentRootPath;
         _onMessage = context.OnMessage;
         _mcpConfigPath = mcpConfigPath;
@@ -791,6 +871,9 @@ public class ClaudeSession : ILlmSessionAdapter
         _watchMcp = context.WatchMcp;
         _webSearchMcp = context.WebSearchMcp;
         _architectureMcp = context.ArchitectureMcp;
+        _higgsfieldMcp = context.HiggsfieldMcp;
+        _imageEditorMcp = context.ImageEditorMcp;
+        _localMediaMcp = context.LocalMediaMcp;
         _httpMcpActive = context.HttpMcpActive;
         _httpMcpEnabled = context.HttpMcpEnabledProvider;
         _codeGraphMcp = context.CodeGraphMcp;
@@ -799,7 +882,9 @@ public class ClaudeSession : ILlmSessionAdapter
         _personaAgentsProvider = context.PersonaAgentsProvider;
         _externalMcpProvider = context.ExternalMcpProvider;
         _browserEnabled = context.BrowserEnabled;
+        _handsEnabled = context.HandsEnabled;
         _launcher = context.Launcher ?? Execution.LocalProcessRunner.Instance;
+        _localEngineBusy = context.LocalEngineBusy ?? LocalEngineBusyTracker.Instance;
         // Запреты конфига + ограничения возможностей персоны (ExtraDisallowedTools)
         _disallowedTools = context.ExtraDisallowedTools is { Count: > 0 } extra
             ? [.. (disallowedTools ?? []), .. extra]
@@ -836,8 +921,10 @@ public class ClaudeSession : ILlmSessionAdapter
     // ServerKeys — строка сигнатуры («ключ:отпечаток-состава»), НЕ список серверов: отпечаток
     // сам содержит запятые, парсить его нельзя. ServerNames — плоский список ключей для
     // показа человеку (снимок промпта хода).
+    // hands — решение HandsActiveNow этого хода (свойство сессии): маркер рук вместо узла и
+    // ни одного stdio-узла в конфиге.
     private (string? Path, string ServerKeys, IReadOnlyList<string> ServerNames) BuildTurnMcpConfig(
-        string? datasetId, PersonaAgentsContext? personaAgents = null)
+        string? datasetId, PersonaAgentsContext? personaAgents = null, bool hands = false)
     {
         // Рубильник Mcp:HttpTransport спрашивается на ХОД (HttpMcpEnabledProvider, а не
         // захваченный при создании адаптера bool): контекст живёт столько же, сколько адаптер,
@@ -864,6 +951,13 @@ public class ClaudeSession : ILlmSessionAdapter
         var hasWebSearch = WebSearchHttpOn();
         // Архитектура: та же история — сервер рождён в Kestrel, stdio-ветки нет
         var hasArchitecture = ArchitectureHttpOn();
+        // Higgsfield: та же история — stdio-ветки нет, контекста нет вовсе когда инстанс не
+        // подключён или персона ReadOnly
+        var hasHiggsfield = HiggsfieldHttpOn();
+        // Редактор картинок: stdio-ветки нет, контекста нет вне чата картинки
+        var hasImageEditor = ImageEditorHttpOn();
+        // Локальная генерация: stdio-ветки нет, контекста нет при выключенном LocalMedia:Enabled
+        var hasLocalMedia = LocalMediaHttpOn();
         // pmem-консультанты приезжают списком на каждый ход — рубильник для них тот же живой
         bool ConsultantHttp(ConsultantMemoryServer c) => c.UseHttp && httpOn;
         // tasks/notes/personas живут в Kestrel (ADR-012, фаза 2 волна 2), но пути их
@@ -959,6 +1053,9 @@ public class ClaudeSession : ILlmSessionAdapter
             hasWatch = hasWatch && Keep("watch");
             hasWebSearch = hasWebSearch && Keep("websearch");
             hasArchitecture = hasArchitecture && Keep("architecture");
+            hasHiggsfield = hasHiggsfield && Keep("higgsfield");
+            hasImageEditor = hasImageEditor && Keep(McpEndpoints.ImageEditorName);
+            hasLocalMedia = hasLocalMedia && Keep("local-media");
             hasConsultants = hasConsultants && Keep("consultants");
             hasModules = hasModules && Keep("modules");
             hasFalAi = hasFalAi && Keep("fal-ai");
@@ -969,8 +1066,9 @@ public class ClaudeSession : ILlmSessionAdapter
             // и стоит он дёшево
         }
         if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasNotifications
-            && !hasWidgets && !hasCodeGraph && !hasDify && !hasDesktop && !hasDataset && !hasModules && !hasFalAi && !hasGlif && userServers is null
-            && !hasExternal && !hasWatch && !hasWebSearch && !hasArchitecture
+            && !hasWidgets && !hasCodeGraph && !hasDify && !hasDesktop && !hasDataset && !hasModules && !hasFalAi && !hasGlif
+            && !hasHiggsfield && !hasImageEditor && !hasLocalMedia && userServers is null
+            && !hasExternal && !hasWatch && !hasWebSearch && !hasArchitecture && !hands
             && !(hasConsultants && (memoryServerPath is not null
                 || personaAgents!.MemoryServers.Any(ConsultantHttp)))) return (null, "", []);
 
@@ -1619,6 +1717,66 @@ public class ClaudeSession : ILlmSessionAdapter
                 shapes["websearch"] = "t:http";
             }
 
+            if (hasHiggsfield)
+            {
+                // Higgsfield (инстансное OAuth-подключение): http-ветка только, stdio-отката нет.
+                // Ключ Higgsfield наружу не уезжает: тулсет ходит во внешний API сам (Bearer
+                // admin-токен на бэкенде), а ходу достаётся только адрес узла Kestrel и сервисный
+                // JWT владельца. Сессия-вызыватель едет хвостом URL (как websearch).
+                servers["higgsfield"] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["type"] = "http",
+                    ["url"] = McpEndpoints.EndpointFor(_higgsfieldMcp!.ApiUrl, McpEndpoints.HiggsfieldName, Info.Id),
+                    ["headers"] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["Authorization"] = $"Bearer {_higgsfieldMcp.TokenFactory()}",
+                        [McpEndpoints.CallerSessionHeader] = Info.Id,
+                    },
+                    ["alwaysLoad"] = true,
+                };
+                // Состав определяется белым списком провайдера (KeepMcpTools["higgsfield"])
+                shapes["higgsfield"] = "t:http";
+            }
+
+            if (hasImageEditor)
+            {
+                // Редактор картинок (ADR-018 §2): тулсет модуля, http-ветка только. Сессия едет
+                // хвостом URL — по ней тулсет находит чат картинки, проект и владельца
+                servers[McpEndpoints.ImageEditorName] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["type"] = "http",
+                    ["url"] = McpEndpoints.EndpointFor(_imageEditorMcp!.ApiUrl, McpEndpoints.ImageEditorName, Info.Id),
+                    ["headers"] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["Authorization"] = $"Bearer {_imageEditorMcp.TokenFactory()}",
+                        [McpEndpoints.CallerSessionHeader] = Info.Id,
+                    },
+                    ["alwaysLoad"] = true,
+                };
+                // Состав — свойство инстанса (ImageEditor:AgentLaunch), вариативен только транспорт
+                shapes[McpEndpoints.ImageEditorName] = "t:http";
+            }
+
+            if (hasLocalMedia)
+            {
+                // Локальная генерация (ComfyUI на своей GPU): http-ветка только, stdio-отката нет.
+                // Адрес ComfyUI наружу не уезжает: тулсет ходит в него сам, ходу достаётся только
+                // адрес узла Kestrel и сервисный JWT владельца. Сессия-вызыватель едет хвостом URL
+                servers["local-media"] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["type"] = "http",
+                    ["url"] = McpEndpoints.EndpointFor(_localMediaMcp!.ApiUrl, McpEndpoints.LocalMediaName, Info.Id),
+                    ["headers"] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["Authorization"] = $"Bearer {_localMediaMcp.TokenFactory()}",
+                        [McpEndpoints.CallerSessionHeader] = Info.Id,
+                    },
+                    ["alwaysLoad"] = true,
+                };
+                // Состав фиксирован (7 инструментов), вариативен только транспорт
+                shapes["local-media"] = "t:http";
+            }
+
             if (hasArchitecture)
             {
                 // C4-модель проекта (arch_*): единственная ветка — http, как у веб-поиска.
@@ -1807,6 +1965,55 @@ public class ClaudeSession : ILlmSessionAdapter
                 }
             }
 
+            // Финальный рубеж TrimMcpServers: гасим всё, чего нет в белом списке
+            // KeepMcpServers текущего провайдера, даже если сервер проскочил первый
+            // рубеж (hasX &= Keep выше) — например, через McpConfigPath или
+            // новый блок, добавленный без индивидуальной проверки Keep. Без этого
+            // однократная забывчивость навсегда оставляет лишний сервер в конфиге
+            // хода и пожирает контекст локальной модели.
+            if (trimMcp && provider is not null)
+            {
+                var allowed = new HashSet<string>(provider.KeepMcpServers, StringComparer.OrdinalIgnoreCase);
+                var removed = new List<string>();
+                foreach (var key in servers.Select(kv => kv.Key).ToList())
+                {
+                    if (allowed.Contains(key)) continue;
+                    removed.Add(key);
+                    servers.Remove(key);
+                    shapes.Remove(key);
+                }
+                if (removed.Count > 0)
+                {
+                    _log?.LogWarning(
+                        "TrimMcpServers: у провайдера {Provider} отрезаны серверы {Servers} (нет в KeepMcpServers)",
+                        provider.Key, string.Join(",", removed));
+                }
+            }
+
+            // Руки (ADR-016 §7, решения 2 и 4): stdio-узел — ещё один канал запуска кода на
+            // устройстве, поэтому в ходе с руками их нет ни одного (внешние серверы реестра,
+            // модули, user-scope, откатившиеся на stdio продуктовые). Узел рук — только маркер:
+            // команду и путь моста подставляет агент. Ставится ПОСЛЕ обрезки TrimMcpServers,
+            // иначе белый список провайдера отрезал бы руки молча.
+            if (hands)
+            {
+                foreach (var key in servers.Select(kv => kv.Key).ToList())
+                {
+                    var type = (servers[key]?["type"] as System.Text.Json.Nodes.JsonValue)?.TryGetValue<string>(out var t) == true ? t : null;
+                    if (type is "http" or "sse") continue;
+                    servers.Remove(key);
+                    shapes.Remove(key);
+                }
+                // Без зрения (решение 7) агент запускает мост без screenshot_control. Зрение —
+                // свойство провайдера сессии, поэтому и отпечаток состава стабилен между ходами
+                var vision = Capabilities.SupportsImages;
+                servers[DeviceExecPlaceholders.HandsServerName] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["type"] = DeviceExecPlaceholders.Hands,
+                    [DeviceExecPlaceholders.HandsVisionField] = vision,
+                };
+                shapes[DeviceExecPlaceholders.HandsServerName] = vision ? "v1" : "v0";
+            }
             if (servers.Count == 0) return (null, "", []);
             var combined = new System.Text.Json.Nodes.JsonObject { ["mcpServers"] = servers };
             // HostTempDir среды: для песочницы это bind-mount — процесс claude увидит файл
@@ -2047,6 +2254,16 @@ public class ClaudeSession : ILlmSessionAdapter
                         details = $"[Win32:206]{ex.Message}";
                         text = TurnFailureText.PromptOverflow;
                     }
+                    else if (ex is Execution.DeviceExecRefusedException refused)
+                    {
+                        // Отказ устройства локального проекта: текст отказа — человеку, маркер —
+                        // классификатору фолбэка (другая пара не лечит офлайн-устройство)
+                        details = TurnErrorClassifier.DeviceRefusedMarker + ex.Message;
+                        text = TurnFailureText.ForException(ex);
+                        // Руки держит другой ход этой машины — бейдж говорит это сам, а не «устройство недоступно»
+                        if (refused.Reason == Execution.DeviceExecRefusal.HandsBusy)
+                            await _onMessage(new HandsStatusMessage(HandsChatStates.Unavailable, Reason: HandsEndReason.Busy));
+                    }
                     else if (ex is System.ComponentModel.Win32Exception w32)
                     {
                         details = $"[Win32:{w32.NativeErrorCode}]{ex.Message}";
@@ -2269,6 +2486,9 @@ public class ClaudeSession : ILlmSessionAdapter
         // Свои MCP-серверы — без карточки, см. комментарий у BuiltInMcpServerPrefixes.
         if (ruleDecision == null && Array.Exists(BuiltInMcpServerPrefixes, p => toolName.StartsWith(p, StringComparison.Ordinal)))
             return "allow";
+        // Редактор картинок (ADR-019 §4): действия агента и так видны в ленте, список — из
+        // контекста хода, а не из сессии: сервер едет в любой чат проекта
+        if (ruleDecision == null && IsImageEditorAutoAllowed(_imageEditorMcp, toolName)) return "allow";
         // План текущего хода (BuiltInTaskPlanTools) — тоже без карточки: побочных эффектов
         // вне сессии у него нет, а спрашивать пришлось бы на КАЖДЫЙ шаг плана. В голосовом
         // режиме и hands-free отвечать на такую карточку вовсе некому — ход завис бы в
@@ -2326,6 +2546,15 @@ public class ClaudeSession : ILlmSessionAdapter
         WriteLineToStdin(msg, target);
     }
 
+    // Руки в этом ходе: признак чата, провайдер хода роли не играет (решение владельца
+    // 2026-09-27). Признак — свойство сессии, поэтому сигнатура запуска между ходами не мерцает;
+    // что провайдер видит (снимки или только текст окон), решает его зрение в BuildTurnMcpConfig.
+    private bool HandsActiveNow() => _handsEnabled;
+
+    // Режим прав хода с руками: bypassPermissions не бывает никогда, понижается до acceptEdits
+    internal static ClaudeMode HandsPermissionMode(ClaudeMode mode) =>
+        mode == ClaudeMode.Bypass ? ClaudeMode.AcceptEdits : mode;
+
     // Смена режима прав на лету: пишем control_request set_permission_mode в stdin живого
     // процесса. CLI применяет его к идущему ходу (дальнейшие tool-вызовы уже по новому режиму)
     // и отвечает control_response success (reader его игнорирует как неизвестный тип).
@@ -2334,6 +2563,8 @@ public class ClaudeSession : ILlmSessionAdapter
     {
         var proc = _currentProcess;
         if (proc is null || proc.HasExited) return false;
+        // Ход с руками в bypassPermissions не уходит и на лету (ADR-016 §7)
+        if (_lastHandsActive) mode = HandsPermissionMode(mode);
         var req = JsonSerializer.Serialize(new
         {
             type = "control_request",
@@ -2541,6 +2772,17 @@ public class ClaudeSession : ILlmSessionAdapter
         _turnActivity = turnActivity;
         _turnCliModel = null;
 
+        // Ход на ЛОКАЛЬНОМ провайдере занимает KV-бюджет движка целиком — на это время
+        // фоновые one-shot действия к локали не пускаем (LocalEngineBusyTracker, правило
+        // в LocalActionRouter.LocalBlockedByTurn). using на всё тело хода: освобождение
+        // обязано случиться на ЛЮБОМ выходе, включая исключение и отмену.
+        // Признак берём в начале хода по намерению — той же проверкой, что ставит env
+        // локального провайдера ниже; фолбэк на другую модель внутри хода признак не
+        // снимает намеренно: процесс CLI уже живёт с этим движком.
+        using var localEngineSlot = _providers?.ResolveByModel(EffectiveModel) is { IsLocal: true }
+            ? _localEngineBusy.Enter()
+            : null;
+
         // --print обязателен: без него --output-format/--input-format/--include-partial-messages/--permission-prompt-tool не работают
         // --input-format stream-json нужен: мы посылаем JSON-объекты в stdin, а не plain text
         var args = new List<string>
@@ -2561,10 +2803,31 @@ public class ClaudeSession : ILlmSessionAdapter
         if (Info.ClaudeSessionId is not null)
             args.AddRange(["--resume", Info.ClaudeSessionId]);
 
+        // Руки этого хода — единственное решение, от которого зависят маркер рук в --mcp-config и
+        // режим прав: разойтись они не могут. Shell, сабагенты и запись в .claude/.mcp.json в ходе
+        // с руками не запрещаются (решение владельца 3б, ADR-016 §7).
+        var handsActive = HandsActiveNow();
+        _lastHandsActive = handsActive;
+        var disallowed = _disallowedTools;
+
         // Режим прав у claude CLI задаётся флагом --permission-mode (значения: default,
         // acceptEdits, plan, auto, dontAsk, bypassPermissions), а НЕ --mode (такого флага нет).
         // После одобрения плана один ход выполняем без plan, чтобы Claude реализовал, а не планировал заново.
-        if (_forceNonPlanNextTurn)
+        if (handsActive)
+        {
+            // Ход с руками идёт с явным режимом всегда: без флага CLI взял бы defaultMode из
+            // .claude/settings*.json проекта, а там может стоять bypassPermissions
+            var mode = _forceNonPlanNextTurn && Info.Mode == ClaudeMode.Plan ? ClaudeMode.Default : Info.Mode;
+            _forceNonPlanNextTurn = false;
+            args.AddRange(["--permission-mode", HandsPermissionMode(mode).ToCliFlag()]);
+            if (mode != ClaudeMode.Bypass) _bypassDowngradeNoticed = false;
+            else if (!_bypassDowngradeNoticed)
+            {
+                _bypassDowngradeNoticed = true;
+                await _onMessage(new HandsNoticeMessage(HandsTurnRules.BypassDowngradedText));
+            }
+        }
+        else if (_forceNonPlanNextTurn)
             _forceNonPlanNextTurn = false;
         else
             args.AddRange(["--permission-mode", Info.Mode.ToCliFlag()]);
@@ -2585,21 +2848,19 @@ public class ClaudeSession : ILlmSessionAdapter
         if (!string.IsNullOrEmpty(effort))
             args.AddRange(["--effort", effort!]);
 
-        // Режим bare отключает автозагрузку CLAUDE.md, хуков, LSP, плагинов и авто-памяти.
-        // У локальных моделей полная карта проекта съедает контекст и тормозит ход (замер
-        // 2026-09-05: ~95 000 токенов при полной CLAUDE.md против ~2 400 при --bare +
-        // краткой карте в SystemPromptFile). Вместо неё подаём явную короткую карту.
+        // BareMode: краткая карта проекта вместо полной CLAUDE.md. У локальных моделей
+        // полная карта съедает контекст и тормозит ход (замер 2026-09-05: ~95 000 токенов
+        // против ~2 400 при BareMode + краткой карте). Автозагрузка CLAUDE.md теперь
+        // отключается переменной CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 (в envOverrides ниже),
+        // а не флагом --bare — MCP, хуки и LSP остаются живыми.
         // Признак берётся от свойств СЕССИИ (EffectiveModel → провайдер), не хода:
         // сигнатура запуска стабильна в пределах сессии, McpToolsetStabilityTests остаётся
-        // зелёным. Состав MCP задаётся через --mcp-config ниже — --bare его НЕ трогает.
+        // зелёным.
         //
-        // OAuth-инвариант: --bare ломает OAuth-авторизацию CLI (пропускает чтение кредов
-        // ~/.claude/.credentials.json, см. OneShotClaudeRunner.cs:299). Здесь это безопасно
-        // СТРУКТУРНО: bareProvider != null ⇒ провайдер найден реестром ⇒ это сторонний
-        // CLI-провайдер с API-ключом, OAuth используется ТОЛЬКО у пула подписок родного Claude
-        // (LlmProviderRegistry.cs:411, BuildCliEnv ставит ANTHROPIC_API_KEY из authToken).
-        // null от ResolveByModel = родной Claude без env-оверрайдов — BareMode там не включится,
-        // условие bareProvider is { BareMode: true } не выполнится.
+        // OAuth-инвариант (задача 2026-09-15: снят, см. docs/architecture/llm-providers.md):
+        // раньше --bare ломал OAuth-авторизацию, и BareMode был безопасен «структурно» —
+        // включался только для не-родных провайдеров. Переменной окружения этот риск не
+        // грозит, но проверку в коде пока НЕ снимаем (лишняя работа для этой задачи).
         var bareProvider = _providers?.ResolveByModel(EffectiveModel);
         if (bareProvider is { BareMode: true })
         {
@@ -2614,7 +2875,8 @@ public class ClaudeSession : ILlmSessionAdapter
                     // (см. поле _sessionLog). Тесты без DI передают null — fallback на _log.
                     _sessionLog ?? (ILogger?)_log,
                     out var bareWarning,
-                    out _lastBareModeApplied);
+                    out _lastBareModeApplied,
+                    out _lastBareModeMapBytes);
                 if (bareWarning is not null)
                     Console.Error.WriteLine($"[ClaudeSession] {bareWarning}");
                 args.AddRange(bareArgs);
@@ -2628,6 +2890,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 // ДО bareModeEffective = true), иначе поле несёт значение предыдущего хода.
                 Console.Error.WriteLine($"[ClaudeSession] SystemPromptFile за пределами корня, ход без BareMode: {ex.Message}");
                 _lastBareModeApplied = false;
+                _lastBareModeMapBytes = 0;
             }
             catch (InvalidOperationException ex)
             {
@@ -2636,6 +2899,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 // про явный сброс _lastBareModeApplied.
                 Console.Error.WriteLine($"[ClaudeSession] SystemPromptFile недоступен в песочнице, ход без него: {ex.Message}");
                 _lastBareModeApplied = false;
+                _lastBareModeMapBytes = 0;
             }
 
             // Доп. деградация: BareMode сконфигурирован провайдером, но BuildBareModeArgs
@@ -2657,6 +2921,7 @@ public class ClaudeSession : ILlmSessionAdapter
             // Голый провайдер (облачный или родной Claude) — BareMode не задействован,
             // даже если в его LlmProviderConfig когда-то по ошибке что-то пропишут.
             _lastBareModeApplied = false;
+            _lastBareModeMapBytes = 0;
         }
 
         // Подсказка следующего сообщения: CLI после result испускает prompt_suggestion
@@ -2675,7 +2940,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // Ошибки провайдера — ход без консультантов.
         PersonaAgentsContext? personaAgents = null;
         if (_personaAgentsProvider is not null
-            && !_disallowedTools.Contains("Task", StringComparer.Ordinal))
+            && !disallowed.Contains("Task", StringComparer.Ordinal))
         {
             try { personaAgents = _personaAgentsProvider(); }
             catch (Exception ex)
@@ -2687,9 +2952,11 @@ public class ClaudeSession : ILlmSessionAdapter
         }
 
         // MCP-конфиг: создаём каждый ход с актуальным dataset id (мог появиться после создания сессии)
-        var currentWk = _wkStore?.ForRoot(_rootPath);
+        // Локальный проект: датасета по рабочей папке нет (ADR-016 §4) — совпавшая строка
+        // серверной папки не должна подсунуть ходу чужую базу знаний
+        var currentWk = _serverContent ? _wkStore?.ForRoot(_rootPath) : null;
         var currentDatasetId = currentWk?.DatasetId;
-        var (turnMcpPath, mcpServerKeys, mcpServerNames) = BuildTurnMcpConfig(currentDatasetId, personaAgents);
+        var (turnMcpPath, mcpServerKeys, mcpServerNames) = BuildTurnMcpConfig(currentDatasetId, personaAgents, handsActive);
         // Секции промпта про MCP-серверы вешаются на ФАКТ доставки сервера в конфиг ЭТОГО хода,
         // а не на «контекст сервера есть у сессии»: TrimMcpServers/KeepMcpServers гасят сервер
         // (у local-qwen из всего набора остаются tasks/codegraph/memory), а руководство к нему
@@ -2709,7 +2976,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // Task(subagent_type=…) учат инструменту, которого у хода нет. _lastBareModeApplied
         // выставлен блоком BareMode выше по методу, до сборки секций.
         var taskToolAvailable = !_lastBareModeApplied
-            && !_disallowedTools.Contains("Task", StringComparer.Ordinal);
+            && !disallowed.Contains("Task", StringComparer.Ordinal);
         var effectiveMcpConfig = turnMcpPath ?? _mcpConfigPath;
         if (!string.IsNullOrWhiteSpace(effectiveMcpConfig) && File.Exists(effectiveMcpConfig))
         {
@@ -2744,8 +3011,8 @@ public class ClaudeSession : ILlmSessionAdapter
                 string.Join(",", personaAgents.MemoryServers.Select(s => "mcp__" + s.ServerKey))]);
 
         // Блокируем коннекторы аккаунта claude.ai — они вливаются помимо --mcp-config.
-        if (_disallowedTools.Length > 0)
-            args.AddRange(["--disallowedTools", string.Join(",", _disallowedTools)]);
+        if (disallowed.Length > 0)
+            args.AddRange(["--disallowedTools", string.Join(",", disallowed)]);
 
         // Слой персоны из системного промпта — жёсткая часть сигнатуры прогона
         // (смена собеседника посреди доживания = несовместимый ход → новый процесс)
@@ -2754,6 +3021,15 @@ public class ClaudeSession : ILlmSessionAdapter
         // Секции промпта хода — нужны ниже, при записи снимка «что ушло модели»
         // (снимок пишется уже после развилки same-process, когда известно, применён ли он)
         List<PromptSectionDto> sections = [];
+
+        // RecallInTurnText: нестабильные секции не идут в системный блок (он обязан быть
+        // побайтово неизменным, иначе prefix cache движка рвёт кэш всей истории), а
+        // копятся здесь и уезжают хвостом — вклейкой в текст хода. Признак берём от
+        // провайдера СЕССИИ, как BareMode: сигнатура запуска остаётся стабильной.
+        var recallInTurnText = _providers?.ResolveByModel(EffectiveModel) is { RecallInTurnText: true };
+        List<PromptSectionDto> turnRecallSections = [];
+        // Секции PromptSection.InTurnTail: хвостом при любом провайдере, ближе всего к тексту хода
+        List<PromptSectionDto> alwaysTailSections = [];
 
         // Секции, удалённые TurnPromptAssembler.ApplyBudget из-за лимита командной строки
         // (32 767 символов Windows). По умолчанию пусто — обычный ход, срезки нет. Заполняется
@@ -2782,8 +3058,16 @@ public class ClaudeSession : ILlmSessionAdapter
             // group — чья это часть: по ней UI считает, во сколько обходится персона.
             void Add(string key, string title, string? text, bool stable = true, string group = "misc")
             {
-                if (!string.IsNullOrWhiteSpace(text))
-                    sections.Add(new PromptSectionDto(key, title, text, Stable: stable, Group: group));
+                if (string.IsNullOrWhiteSpace(text)) return;
+                // При RecallInTurnText нестабильные секции придерживаем: ниже они либо
+                // уедут хвостом (Kind="turn" — Combine берёт только "system"), либо будут
+                // опущены как неизменившиеся. В системный блок они не попадают никогда.
+                if (recallInTurnText && !stable)
+                {
+                    turnRecallSections.Add(new PromptSectionDto(key, title, text, "turn", Stable: false, Group: group));
+                    return;
+                }
+                sections.Add(new PromptSectionDto(key, title, text, Stable: stable, Group: group));
             }
 
             // Шина событий хода: реестр IPromptSectionContributor собирает свои секции
@@ -2811,7 +3095,8 @@ public class ClaudeSession : ILlmSessionAdapter
                     HasNotesMcp: _notesMcp is not null,
                     HasMemoryMcp: _memoryMcp is not null,
                     HasWorkspaceMcp: _workspaceMcp is not null,
-                    WorkspaceSections: _workspaceMcp?.Sections ?? Array.Empty<string>());
+                    WorkspaceSections: _workspaceMcp?.Sections ?? Array.Empty<string>(),
+                    ServerContent: _serverContent);
                 var assembling = new Turn.PromptAssembling(
                     turn: CurrentTurnContext(), session: promptContext, turnText: text);
                 try
@@ -2828,7 +3113,14 @@ public class ClaudeSession : ILlmSessionAdapter
                 }
                 foreach (var s in assembling.Sections)
                 {
-                    if (!string.IsNullOrWhiteSpace(s.Text))
+                    if (string.IsNullOrWhiteSpace(s.Text)) continue;
+                    // Хвост хода всегда, мимо RecallInTurnText и мимо системного блока
+                    // (ADR-018 §2, §10.4): такой секции в системном блоке не место ни у какого
+                    // провайдера — она меняется от хода к ходу по природе
+                    if (s.InTurnTail)
+                        alwaysTailSections.Add(new PromptSectionDto(s.Key, s.Title ?? s.Key, s.Text, "turn",
+                            Stable: false, Group: "misc"));
+                    else
                         contributorSections[s.Key] = s;
                 }
                 // Манифест F3: айтемы recall-секций собираются параллельно Sections.
@@ -3250,6 +3542,31 @@ public class ClaudeSession : ILlmSessionAdapter
                     manifestItems.Select(i => new RecallItemDto(i.Kind, i.Ref, i.Title, i.Snippet)).ToList()));
         }
 
+        // Хвост хода (RecallInTurnText, плюс секции InTurnTail при любом провайдере): нестабильные
+        // секции уезжают вклейкой в текст, а не системным блоком. Кэш префикса это не трогает —
+        // текст хода и так новый каждый ход.
+        //
+        // Повтор не шлём: склейка не изменилась против прошлого хода — она уже в транскрипте
+        // и доедет по --resume, а копия в каждом ходе растила бы контекст. Не вклеили —
+        // не кладём и в sections: снимок «что ушло модели» не должен показывать лишнего.
+        //
+        // Побочно чинится мягкая деградация same-process хода: системный промпт живому
+        // процессу не обновляется, а текст хода доезжает всегда — значит и recall тоже.
+        var turnTextForCli = text;
+        turnRecallSections.AddRange(alwaysTailSections);
+        if (turnRecallSections.Count > 0)
+        {
+            var joinedRecall = string.Join("\n\n", turnRecallSections.Select(x => x.Text));
+            var recallHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes(joinedRecall)));
+            if (recallHash != _lastTurnRecallHash)
+            {
+                _lastTurnRecallHash = recallHash;
+                sections.AddRange(turnRecallSections);
+                turnTextForCli = joinedRecall + "\n\n---\n\n" + text;
+            }
+        }
+
         // Env-оверрайды собираем ДО ApplyBudget: оценка должна учитывать фактический env,
         // иначе сторонний провайдер (ANTHROPIC_BASE_URL + ANTHROPIC_AUTH_TOKEN от BuildCliEnv)
         // приехал бы в оценку нулевой длиной, а в реальном docker exec — нет (ревью dc641949,
@@ -3338,6 +3655,15 @@ public class ClaudeSession : ILlmSessionAdapter
             foreach (var (k, v) in cliEnv)
                 envOverrides[k] = v;
         }
+
+        // Id сессии в заголовке КАЖДОГО запроса CLI к локальному провайдеру: по нему прокси
+        // локальной модели связывает сдвиг границы прунинга с чатом и просит бэкенд показать
+        // карточку в ленте. Проверено на стенде 2026-09-23 — CLI дописывает содержимое
+        // ANTHROPIC_CUSTOM_HEADERS к каждому обращению к API.
+        //
+        // Только у локального провайдера: наружу, чужому эндпоинту, id нашей сессии не нужен.
+        if (localProvider is not null)
+            envOverrides["ANTHROPIC_CUSTOM_HEADERS"] = $"X-CCS-Session: {Info.Id}";
         else if (_subscriptionPool?.HasExtra == true
             && _providers?.GetByKey(Info.Provider) is null)
         {
@@ -3353,6 +3679,17 @@ public class ClaudeSession : ILlmSessionAdapter
                         envOverrides[k] = v;
             }
         }
+
+        // BareMode (замена --bare, задача 2026-09-15): переменная окружения отключает
+        // автозагрузку CLAUDE.md, не трогая MCP/хуки/остальное. Не документирована в
+        // claude --help (найдена строкой в бинарнике CLI 2.1.270) — сторож на пропажу
+        // см. TrackContextTokens. Ставим только когда BareMode реально применён (карта
+        // найдена), иначе у облачного провайдера переменная была бы лишним шумом.
+        if (_lastBareModeApplied)
+            envOverrides["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] = "1";
+
+        foreach (var (k, v) in PlaywrightMcpEnv(_browserEnabled, _launcher.IsSandboxed, _rootPath))
+            envOverrides[k] = v;
 
         // Родной Claude (подписка — основной аккаунт или аккаунт пула): объявляем окно
         // контекста сами, как сторонним провайдерам это делает BuildCliEnv. Считаем по модели
@@ -3479,11 +3816,11 @@ public class ClaudeSession : ILlmSessionAdapter
         object content;
         if (imageBlocks.Count == 0)
         {
-            content = text;
+            content = turnTextForCli;
         }
         else
         {
-            var blocks = new List<object> { new { type = "text", text } };
+            var blocks = new List<object> { new { type = "text", text = turnTextForCli } };
             blocks.AddRange(imageBlocks);
             content = blocks;
         }
@@ -3493,7 +3830,13 @@ public class ClaudeSession : ILlmSessionAdapter
             message = new { role = "user", content }
         });
 
+        // Переменная часть входа для BareMode-сторожа: системный блок и текст сообщения —
+        // ровно то, что кладёт сервер (карта, схемы инструментов и MCP приходят от CLI и
+        // учтены в его базе отдельно). Картинки не считаем: у local-qwen их нет.
+        _lastTurnInputChars = (combinedPrompt?.Length ?? 0) + turnTextForCli.Length;
+
         var signature = BuildLaunchSignature(args, mcpServerKeys, envOverrides, personaLayerPrompt);
+        LastLaunchSignature = signature;
 
         // Same-process ход: прогон дожил с прошлого хода (фоновые агенты ещё работают),
         // окружение не изменилось — отдаём сообщение живому процессу в stdin, агенты
@@ -3595,6 +3938,8 @@ public class ClaudeSession : ILlmSessionAdapter
                 ClearEnv = _providers?.EnvKeysToClear ?? LlmProviderRegistry.ProviderEnvKeys,
                 StdioEncoding = utf8NoBom,
                 TurnId = _currentTurnId,
+                // Раннер устройства привязывает к чату токен шлюза (ADR-016 §2); local/docker поле не читают
+                SessionId = Info.Id,
                 // Событие Exited — единственный надёжный сигнал смерти процесса: закрытие stdout
                 // может не наступить (дочерние node-процессы MCP наследуют и держат pipe). Без него
                 // обрыв хода зависает в «ожидании» без диагностики (инцидент P27).
@@ -4280,7 +4625,8 @@ public class ClaudeSession : ILlmSessionAdapter
     // в снимок не тащим (это вся переписка) — только размер и число сообщений.
     private (long? Bytes, int? Messages) TranscriptStats()
     {
-        if (_cliConfigRoot is not { Length: > 0 } root || Info.ClaudeSessionId is not { } csid)
+        if (!_transcriptOnServer
+            || _cliConfigRoot is not { Length: > 0 } root || Info.ClaudeSessionId is not { } csid)
             return (null, null);
         try
         {
@@ -4347,12 +4693,27 @@ public class ClaudeSession : ILlmSessionAdapter
         => !lastTurnResolved && lastSubmitWasNewProcess
            && lastSubmittedText is not null && text == lastSubmittedText;
 
-    // Последний user-текст главного транскрипта этой сессии (null — файла нет/ошибка/вложение)
+    // Последний user-текст главного транскрипта этой сессии (null — файла нет/ошибка/вложение).
+    // У локального проекта всегда null: durable-ность прошлого submit на устройстве не
+    // проверить, и ре-аттемпт идёт обычным submit — возможный дубль виден, пустой ход нет
     private string? ReadLastTranscriptUserText()
-        => TranscriptProbe.LastUserText(
-            Info.ClaudeSessionId is { } csid
-                ? TranscriptProbe.FindMainTranscript(_rootPath, csid)
-                : null);
+        => _transcriptOnServer
+            ? TranscriptProbe.LastUserText(
+                Info.ClaudeSessionId is { } csid
+                    ? TranscriptProbe.FindMainTranscript(_rootPath, csid)
+                    : null)
+            : null;
+
+    // Строки result.errors CLI (пусто — поля нет или оно не массив строк)
+    internal static IReadOnlyList<string> ResultErrors(JsonElement result)
+    {
+        if (!result.TryGetProperty("errors", out var errors) || errors.ValueKind != JsonValueKind.Array)
+            return [];
+        return errors.EnumerateArray()
+            .Where(e => e.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(e.GetString()))
+            .Select(e => e.GetString()!)
+            .ToList();
+    }
 
     // Пустой result CLI: «success» без единого хода модели и без токенов — служебный маркер
     // «модель не вызывалась» (микро-ход task-notification на --resume; запуск без submit при
@@ -4366,14 +4727,16 @@ public class ClaudeSession : ILlmSessionAdapter
            && (usage is null || (usage.InputTokens == 0 && usage.OutputTokens == 0
                                   && usage.CacheReadTokens == 0 && usage.CacheCreationTokens == 0));
 
-    // Чистая функция сборки аргументов BareMode (--bare + опц. --tools + --system-prompt-file).
+    // Чистая функция сборки аргументов BareMode (опц. --tools + --system-prompt-file).
     // Вызывается ИЗ BuildArgs при bareProvider.BareMode=true. Ход аргументов:
-    //   1) --bare (всегда);
-    //   2) --tools "<список>" (только если bareTools непустой);
-    //   3) --system-prompt-file <путь в среде исполнения> (только если SystemPromptFile задан
-    //      и файл существует; иначе оба флага снимаются с warning).
-    // На out bareModeEffective: true если CLI реально получит `--bare` (хотя бы пустой карты);
-    // false если оба флага сняты (нет файла карты). Снимок промпта в BuildCliLayerFiles
+    //   1) --tools "<список>" (только если bareTools непустой);
+    //   2) --system-prompt-file <путь в среде исполнения> (только если SystemPromptFile задан
+    //      и файл существует; иначе всё снимается с warning).
+    // Отключение автозагрузки CLAUDE.md (раньше — флаг `--bare`) теперь реализовано
+    // переменной окружения CLAUDE_CODE_DISABLE_CLAUDE_MDS=1, которую ставит RunTurnAsync
+    // при _lastBareModeApplied=true.
+    // На out bareModeEffective: true если BareMode реально применён (карта найдена);
+    // false если флага нет (нет файла карты). Снимок промпта в BuildCliLayerFiles
     // решает по этому признаку, а не по флагу BareMode провайдера — иначе при деградации
     // снапшот показывал карту Bare, которой в реальном запуске нет.
     //
@@ -4386,7 +4749,7 @@ public class ClaudeSession : ILlmSessionAdapter
         out string? warning,
         out bool bareModeEffective)
         => BuildBareModeArgs(projectRoot, serverContentRoot, promptFilePath, bareTools,
-            paths, logger: null, out warning, out bareModeEffective);
+            paths, logger: null, out warning, out bareModeEffective, out _);
 
     internal static IReadOnlyList<string> BuildBareModeArgs(
         string projectRoot, string? serverContentRoot,
@@ -4395,13 +4758,26 @@ public class ClaudeSession : ILlmSessionAdapter
         ILogger? logger,
         out string? warning,
         out bool bareModeEffective)
+        => BuildBareModeArgs(projectRoot, serverContentRoot, promptFilePath, bareTools,
+            paths, logger, out warning, out bareModeEffective, out _);
+
+    // mapBytes — размер фактически взятой карты (0, если BareMode снят). Нужен сторожу
+    // первого хода: ожидаемая база входа считается от карты, а не от константы.
+    internal static IReadOnlyList<string> BuildBareModeArgs(
+        string projectRoot, string? serverContentRoot,
+        string promptFilePath, string[]? bareTools,
+        Execution.IPathMapper paths,
+        ILogger? logger,
+        out string? warning,
+        out bool bareModeEffective,
+        out long mapBytes)
     {
         warning = null;
         bareModeEffective = false;
-        // BareMode без файла карты: --bare без --system-prompt-file оставил бы модель
-        // БЕЗ контекста, потому что --bare отключает автозагрузку CLAUDE.md и CLI
-        // ничего своего не подтянет. Асимметрия с веткой «файл не найден» ниже
-        // (она снимает оба флага с warning) была неоправданна — модель идёт без
+        mapBytes = 0;
+        // BareMode без файла карты: --system-prompt-file без карты оставил бы модель
+        // БЕЗ явной карты проекта. Асимметрия с веткой «файл не найден» ниже
+        // (она снимает всё с warning) была неоправданна — модель идёт без
         // карты молча. Теперь единое поведение: пустой SystemPromptFile =
         // BareMode снят с warning, ход в обычном режиме с полной CLAUDE.md.
         if (string.IsNullOrWhiteSpace(promptFilePath))
@@ -4423,18 +4799,17 @@ public class ClaudeSession : ILlmSessionAdapter
         }
         // Лог размера: важно для диагностики раздутого входа. Logger опциональный — тесты
         // BuildBareModeArgs передают null.
+        mapBytes = new FileInfo(resolved).Length;
         logger?.LogInformation(
             "BareMode: взята {Source} карта {Path} ({Bytes} байт)",
             projectLocalUsed ? "проектная" : "серверная",
             resolved,
-            new FileInfo(resolved).Length);
-        var args = new List<string>(capacity: 4 + (bareTools is { Length: > 0 } ? 2 : 0))
-        {
-            "--bare",
-        };
-        // Состав: --bare → (опц.) --tools → --system-prompt-file <путь>. Три порядка
-        // проверены на 2.1.241/2.1.261 — набор идентичен, CLI принимает любой. Текущий
-        // порядок (--bare → --tools → --system-prompt-file) оставлен как наиболее читаемый.
+            mapBytes);
+        // Состав: (опц.) --tools → --system-prompt-file <путь>.
+        // CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 (ставится в env, не args) заменяет
+        // бывший флаг --bare: отключает автозагрузку CLAUDE.md, не трогая
+        // MCP/хуки/остальное. Задача 2026-09-15.
+        var args = new List<string>(capacity: 4 + (bareTools is { Length: > 0 } ? 2 : 0));
         if (bareTools is { Length: > 0 })
             args.AddRange(BuildToolsArg(bareTools));
         args.Add("--system-prompt-file");
@@ -4641,8 +5016,13 @@ public class ClaudeSession : ILlmSessionAdapter
                     // часть контекста: новый процесс под другим CLAUDE_CONFIG_DIR (фолбэк сменил
                     // провайдера) пишет транскрипты в другую папку, старый ватчер с закешированной
                     // папкой их не увидит.
-                    if (_subagentWatcher is null
-                        || !_subagentWatcher.Matches(cwd ?? _rootPath, Info.ClaudeSessionId!, _turnConfigRoot))
+                    // Локальный проект: транскрипты на устройстве — живого потока субагентов и
+                    // хвоста task-notification нет (фронт показывает причину по матрице,
+                    // ProjectFeatures.LiveSubagents); завершения фоновых задач ловятся по stdout
+                    // и TaskOutput, иначе прогон доживает до потолка BgLingerTimeout
+                    if (_transcriptOnServer
+                        && (_subagentWatcher is null
+                            || !_subagentWatcher.Matches(cwd ?? _rootPath, Info.ClaudeSessionId!, _turnConfigRoot)))
                     {
                         if (_subagentWatcher is not null)
                         {
@@ -4659,7 +5039,7 @@ public class ClaudeSession : ILlmSessionAdapter
 
                     // Ридер notification'ов — один на прогон (init повторяется на каждом ходе
                     // нового CLI; пересоздание сбросило бы офсет и пропустило завершения)
-                    if (_transcriptTailer is null)
+                    if (_transcriptTailer is null && _transcriptOnServer)
                     {
                         _transcriptTailer = new MainTranscriptTailer(
                             cwd ?? _rootPath, Info.ClaudeSessionId!, HandleTaskNotification);
@@ -4820,6 +5200,15 @@ public class ClaudeSession : ILlmSessionAdapter
                     var humanError = TurnFailureText.ForCliError(rawError);
                     await _onMessage(new ErrorMessage(humanError ?? rawError, ExpectResultFollows: true,
                         Details: humanError is null ? null : rawError));
+                }
+                // Отказ до вызова модели (error_during_execution): текста в result нет, причины —
+                // в errors. Главная — --resume без транскрипта там, где идёт ход: без ошибки
+                // человек увидел бы пустой провалившийся ход без объяснения
+                else if (isErrorFlag && ResultErrors(root) is { Count: > 0 } resultErrors)
+                {
+                    var rawErrors = string.Join("\n", resultErrors);
+                    await _onMessage(new ErrorMessage(TurnFailureText.ForResultErrors(resultErrors) ?? rawErrors,
+                        ExpectResultFollows: true, Details: rawErrors));
                 }
                 // Статус Error/Active выставит SessionManager по ResultMessage
                 var ctxTokens = _lastContextTokens > 0 ? _lastContextTokens : (int?)null;
@@ -5006,8 +5395,10 @@ public class ClaudeSession : ILlmSessionAdapter
             if (_subagentWatcher is { IsDisposed: false } doneWatcher && !IsBgPending(run, toolUseId))
                 await doneWatcher.FinalizeAsync([toolUseId], "tool_result");
 
-            // Если это результат Workflow с транскриптом — запускаем watcher
-            if (!isError && resultContent.Contains("Transcript dir:"))
+            // Если это результат Workflow с транскриптом — запускаем watcher. У локального
+            // проекта папка workflow на устройстве: ватчера нет, карточка показывает причину
+            // по матрице (ProjectFeatures.WorkflowView)
+            if (_transcriptOnServer && !isError && resultContent.Contains("Transcript dir:"))
             {
                 var m = System.Text.RegularExpressions.Regex.Match(resultContent, @"Transcript dir:\s*(.+)");
                 if (m.Success)
@@ -5582,7 +5973,9 @@ public class ClaudeSession : ILlmSessionAdapter
     // запросу (в отличие от result, где всё сложено за ход), поэтому сумма входных токенов здесь
     // и есть текущее заполнение окна. Сабагентов пропускаем: у них свой контекст, к окну
     // основной сессии отношения не имеющий.
-    private void TrackContextTokens(JsonElement root)
+    // internal (а не private) ради теста одноразовости BareMode-сторожа: он подаёт
+    // assistant-сообщение с usage напрямую, минуя запуск настоящего CLI.
+    internal void TrackContextTokens(JsonElement root)
     {
         if (HasParentToolUseId(root)) return;
         if (!root.TryGetProperty("message", out var msg)) return;
@@ -5592,7 +5985,56 @@ public class ClaudeSession : ILlmSessionAdapter
             + IntProp(u, "cache_read_input_tokens")
             + IntProp(u, "cache_creation_input_tokens");
         if (tokens > 0) _lastContextTokens = tokens;
+
+        // Сторож на пропажу CLAUDE_CODE_DISABLE_CLAUDE_MDS: переменная не в claude --help,
+        // в любом обновлении CLI она может исчезнуть/сменить имя. На первом ходу BareMode
+        // входные токены сравниваем с ожидаемой базой (BareModeExpectedInputTokens), а не
+        // с константой: поломка — это база ПЛЮС CLAUDE.md проекта. WARN делает её видимой.
+        // Одноразовый в обе стороны: не сработал на первом ходу — дальше не проверяем.
+        if (tokens > 0 && !_bareModeWatchdogFired && _lastBareModeApplied && SubmittedTurnSeq <= 1)
+        {
+            _bareModeWatchdogFired = true;
+            var expected = BareModeExpectedInputTokens(_lastBareModeMapBytes, _lastTurnInputChars);
+            var limit = expected + BareModeAlarmMarginTokens;
+            if (tokens > limit)
+            {
+                Console.Error.WriteLine(
+                    $"[ClaudeSession] BareMode-сторож: входные токены {tokens} на первом ходу " +
+                    $"при ожидаемых до {limit} (база {expected}: карта {_lastBareModeMapBytes} Б, " +
+                    $"тулсеты и MCP ≈ {BareModeFixedOverheadTokens}, текст хода {_lastTurnInputChars} симв.; " +
+                    $"запас {BareModeAlarmMarginTokens}) — похоже, CLAUDE_CODE_DISABLE_CLAUDE_MDS " +
+                    $"больше не работает (обновление CLI?); молчаливая автозагрузка CLAUDE.md проекта " +
+                    $"раздувает контекст локальной модели");
+            }
+        }
     }
+
+    // Оценка токенов по объёму текста. Грубость намеренная: сторож ловит РАЗНИЦУ
+    // в 18 000 токенов (CLAUDE.md проекта), а не считает биллинг. Три — для русского
+    // UTF-8 (два байта на букву) оценка сверху по байтам карты и снизу по символам хода.
+    private const int CharsPerTokenEstimate = 3;
+
+    // Фиксированная часть входа BareMode-хода, от карты не зависящая: системный промпт
+    // самого CLI, схемы BareTools (шесть инструментов = 17 580 символов тела запроса,
+    // замер 2026-09-15) и пять MCP-серверов из KeepMcpServers. Получена как остаток по
+    // фактуре прода: минимальный вход первого хода local-qwen 15 802 токена
+    // (лог 2026-09-20) минус карта 13,7 КБ ≈ 4 600 — около 11 200, округлено вверх.
+    // Пересчитывать при заметном изменении BareTools/KeepMcpServers, а не при росте карты:
+    // её вклад считается от файла.
+    internal const int BareModeFixedOverheadTokens = 12_000;
+
+    // Запас до тревоги. Настоящая поломка добавляет CLAUDE.md проекта (64 КБ ≈ 18 000
+    // токенов) и перекрывает запас с зазором; погрешность оценки текста хода — нет.
+    // Проверено на фактуре прода: все 58 срабатываний старого порога за 16–21.09
+    // (15 802–25 532 токена при карте 13 727 Б) в этот запас укладываются.
+    internal const int BareModeAlarmMarginTokens = 12_000;
+
+    // Ожидаемый вход первого хода BareMode-сессии: карта + фиксированная часть + то,
+    // что сервер сам положил в ход (системный блок и текст сообщения).
+    internal static int BareModeExpectedInputTokens(long mapBytes, int turnInputChars)
+        => (int)(Math.Max(0, mapBytes) / CharsPerTokenEstimate)
+           + BareModeFixedOverheadTokens
+           + Math.Max(0, turnInputChars) / CharsPerTokenEstimate;
 
     // Ход мог уйти в собственный git worktree через встроенный инструмент EnterWorktree —
     // это происходит мимо тумблера чата (Session.WorktreePath/SetWorktreeAsync), поэтому

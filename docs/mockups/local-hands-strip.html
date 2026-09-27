@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Полоса «Руки» над композером — макет</title>
+<!--
+  Геометрия — как у git-полосы (прототип полос image-editor-v3-strips-prototype, вариант C):
+  • Полная полоса — одна строка: 51 px на десктопе, 44 px на телефоне и узком планшете; R.xxl, рамка C.border,
+    фон C.bgPanel, кнопки 28 px (на телефоне 32). Свёрнутая — строка 30 px, R.lg, клик разворачивает.
+  • Слева заголовок-переключатель хоста «Руки ▾» (на телефоне только иконка ▾) и разделитель; своего заголовка нет.
+  • Решения Майи (2026-09-27): чип статуса не сжимается никогда — в полосе уже 520 px берёт короткий текст;
+    сжимается только сводка (устройство · модель · зрение), устройство раньше зрения. Пустое место после сводки,
+    сводка читается продолжением статуса.
+  • Сводка — кнопка: подробности карточкой над полосой (полный статус, полная причина остановки, устройство,
+    модель и что она видит, предупреждение про любые окна). На телефоне кнопки сводки нет, сам чип открывает
+    те же подробности шторкой.
+  • «Стоп» — danger, только active, виден и в свёрнутой строке: остановить ИИ за компьютером за два клика нельзя.
+  • О провайдере в полосе только зрение: «видит снимки окон» / «только текст окон». Выбора провайдера нет.
+-->
+<style>
+  .light { --bg:#f6f5f2; --panel:#efede8; --white:#fff; --bl:#e4e1da; --b:#d6d2c9; --t:#1f1d1a; --ts:#4a463f; --tm:#8a857b; --ok:#2f9e5b; --warn:#d08a1e; --danger:#b8472e; }
+  .dark  { --bg:#16161a; --panel:#1f1f24; --white:#2a2a31; --bl:#2c2c33; --b:#3a3a42; --t:#ecebe8; --ts:#c3c1bb; --tm:#8d8b85; --ok:#4cc27d; --warn:#e8a33b; --danger:#d9674b; }
+  body { margin:0; font:13px system-ui, sans-serif; background:#ccc; display:flex; flex-wrap:wrap; gap:24px; padding:24px; }
+  .frame { background:var(--bg); color:var(--t); width:742px; padding:0 14px 10px; border-radius:12px; overflow:hidden; box-shadow:0 2px 12px #0003; }
+  .frame.m { width:362px; }
+  h3 { margin:0; padding:10px 0 0; font-size:12px; color:var(--tm); }
+  .strip { display:flex; align-items:center; gap:8px; height:51px; padding:0 8px; margin:10px 0 8px; box-sizing:border-box;
+    background:var(--panel); border:1px solid var(--b); border-radius:14px; font-size:12px; color:var(--ts); min-width:0; }
+  .m .strip { height:44px; padding:0 6px; gap:6px; margin:6px 0; }
+  .mini { display:flex; align-items:center; gap:8px; height:30px; padding:0 6px 0 4px; margin:4px 0 6px; box-sizing:border-box;
+    background:var(--panel); border:1px solid var(--b); border-radius:10px; font-size:12px; color:var(--ts); min-width:0; cursor:pointer; }
+  .sw { display:inline-flex; align-items:center; gap:4px; height:24px; padding:0 4px; border-radius:8px; font-weight:600; flex-shrink:0; color:var(--t); }
+  .mini .sw { height:22px; }
+  .vs { width:1px; height:22px; background:var(--b); flex-shrink:0; }
+  .mini .vs { height:16px; }
+  .dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+  .chip { display:inline-flex; align-items:center; gap:6px; flex-shrink:0; white-space:nowrap; font-weight:500; color:var(--t); }
+  .chip.muted { color:var(--ts); }
+  .m .chip { height:32px; padding:0 8px; border-radius:10px; }
+  .sum { display:inline-flex; align-items:center; gap:4px; height:28px; padding:0 9px; border:1px solid var(--b); background:var(--white);
+    border-radius:8px; min-width:0; flex:0 1 auto; color:var(--ts); }
+  .sum span, .tail { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+  .tail { flex:1; color:var(--tm); }
+  .grow { flex:1; }
+  .stop { height:28px; padding:0 9px; border:none; background:var(--danger); color:#fff; border-radius:8px; font-weight:600; flex-shrink:0; }
+  .m .strip .stop { height:32px; }
+  .mini .stop { height:24px; }
+  .ib { width:28px; height:28px; display:inline-grid; place-items:center; color:var(--tm); flex-shrink:0; }
+  .m .strip .ib { width:32px; height:32px; }
+  .composer { height:56px; border:1px solid var(--b); border-radius:14px; background:var(--white); }
+</style>
+</head>
+<body>
+<script>
+  // [полный статус, чип, коротко, тон, «Стоп», сводка, сводка свёрнутой]
+  const states = [
+    ['ИИ управляет компьютером', 'ИИ управляет компьютером', 'ИИ управляет', 'ok', true, 'Ноутбук · Claude · видит снимки окон', 'Ноутбук'],
+    ['Руки готовы', 'Руки готовы', 'Готовы', 'tm', false, 'Ноутбук · GLM · только текст окон', 'Ноутбук'],
+    ['Руки заняты другим ходом на этом устройстве', 'Заняты другим ходом', 'Заняты', 'warn', false, 'Ноутбук · идёт другой ход', 'Ноутбук'],
+    ['Остановлено', 'Остановлено', 'Остановлено', 'warn', false, 'Нажат «Стоп» у компьютера · Ноутбук', 'Нажат «Стоп» у компьютера · Ноутбук'],
+    ['Руки недоступны на устройстве', 'Недоступны на устройстве', 'Недоступны', 'warn', false, 'Ноутбук', 'Ноутбук'],
+  ];
+  const dot = s => `<span class="dot" style="background:var(--${s[3]})"></span>`;
+  const full = (s, m) => `<div class="strip"><span class="sw">🖥${m ? '' : ' Руки'} ▾</span><span class="vs"></span>
+      <span class="chip ${s[3] === 'tm' ? 'muted' : ''}" title="${s[0]}">${dot(s)}${m ? s[2] + ' ▾' : s[1]}</span>
+      ${m ? '' : `<span class="sum"><span>${s[5]}</span> ▾</span>`}<span class="grow"></span>
+      ${s[4] ? '<button class="stop">■ Стоп</button>' : ''}<span class="ib">⌃</span></div>`;
+  const mini = (s, m) => `<div class="mini"><span class="sw">🖥${m ? '' : ' Руки'} ▾</span><span class="vs"></span>${dot(s)}
+      <span class="chip ${s[3] === 'tm' ? 'muted' : ''}">${s[2]}</span><span class="tail">· ${s[6]}</span>
+      ${s[4] ? '<button class="stop">■ Стоп</button>' : ''}<span>▾</span></div>`;
+  for (const theme of ['light', 'dark']) {
+    document.write(`<div class="frame ${theme}"><h3>${theme === 'light' ? 'Светлая' : 'Тёмная'} · 1360 с открытыми панелями, полная полоса 51 px</h3>
+      ${states.map(s => full(s, false)).join('')}
+      <h3>Свёрнутая строка 30 px</h3>${states.map(s => mini(s, false)).join('')}<div class="composer"></div></div>`);
+    document.write(`<div class="frame m ${theme}"><h3>Телефон 390 · полная 44 px, чип открывает шторку</h3>
+      ${states.map(s => full(s, true)).join('')}<h3>Свёрнутая 30 px</h3>${states.map(s => mini(s, true)).join('')}<div class="composer"></div></div>`);
+  }
+</script>
+</body>
+</html>

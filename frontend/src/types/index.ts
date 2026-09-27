@@ -38,6 +38,84 @@ export interface BackgroundResult {
   failReason?: string | null;
 }
 
+// Группа возможностей проекта (ADR-016 §4). ЕДИНСТВЕННАЯ точка правды о доступности
+// подсистемы у конкретного проекта — компоненты спрашивают «есть ли мой ключ в features
+// и доступна ли группа», а НЕ deviceId. Сторож G10 (ProjectCapabilitiesGuardTests) ловит
+// инлайновые проверки локальности вне lib/projectCapabilities.ts.
+export type ProjectCapabilityHost = 'server' | 'device' | 'off';
+
+export interface ProjectCapabilityGroup {
+  host: ProjectCapabilityHost;
+  available: boolean;
+  // Готовый текст для человека, почему группа недоступна (например «Устройство офлайн»);
+  // null если доступна
+  reason: string | null;
+  // Состав группы — ключи возможностей (см. ниже)
+  features: string[];
+}
+
+// Матрица возможностей проекта (ADR-016 §4) — фронтовая проекция ProjectCapabilities.cs
+// бэка. host: где работает ход (сервер или устройство); deviceId: id устройства для
+// локального, null для серверного. exec: можно ли запустить ход прямо сейчас (reason —
+// готовый текст причины).
+export interface ProjectCapabilitiesView {
+  host: 'server' | 'device';
+  deviceId: string | null;
+  files: ProjectCapabilityGroup;
+  platform: ProjectCapabilityGroup;
+  serverContent: ProjectCapabilityGroup;
+  // Механики, читающие транскрипт CLI с диска сервера; у старого бэка поля нет
+  transcript?: ProjectCapabilityGroup;
+  exec: { available: boolean; reason: string | null };
+}
+
+// Ключи возможностей (ADR-016 §4, ключи ProjectFeatures на бэке). Фронт держит свой
+// enum-литерал рядом с DTO: менять его синхронно с ProjectFeatures.cs при расширении.
+// Состав групп зафиксирован контрактом DTO из 3.1.
+export const ProjectFeature = {
+  Files: 'files',
+  Diff: 'diff',
+  Git: 'git',
+  FileWatcher: 'fileWatcher',
+  Terminal: 'terminal',
+  DevServers: 'devServers',
+  Skills: 'skills',
+  Attachments: 'attachments',
+  Chat: 'chat',
+  History: 'history',
+  Tasks: 'tasks',
+  Memory: 'memory',
+  Personas: 'personas',
+  Notes: 'notes',
+  Costs: 'costs',
+  Tts: 'tts',
+  Knowledge: 'knowledge',
+  CodeGraph: 'codeGraph',
+  Dossiers: 'dossiers',
+  Docs: 'docs',
+  MapHygiene: 'mapHygiene',
+  LiveSubagents: 'liveSubagents',
+  WorkflowView: 'workflowView',
+  ChatBranch: 'chatBranch',
+  // Руки на устройстве (ADR-016 §7): ни в одну группу не входят — доступность решает
+  // handsRefusal проекта, а не состояние группы (зеркало ProjectFeatures.Hands)
+  Hands: 'hands',
+} as const;
+export type ProjectFeatureKey = (typeof ProjectFeature)[keyof typeof ProjectFeature];
+
+// Устройство проекта глазами веб-морды (ADR-008 + ADR-016 §4): null у серверного проекта
+// и у локального с отозванным устройством. Доп. поля нужны для отображения статуса в
+// диалогах и хедере — «устройство офлайн» видно и в проекте, и в чате
+export interface ProjectDeviceView {
+  id: string;
+  name: string;
+  online: boolean;
+  platform: string | null;
+  agentVersion: string | null;
+  harnessReady: boolean;
+  harnessProblem: string | null;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -82,6 +160,24 @@ export interface Project {
   // chat-auto-archive). null/отсутствует — своего порога нет, наследуется личный
   // порог владельца; настройка проекта личный порог не трогает
   archiveAfterDays?: number | null;
+  // Локальный проект (ADR-016 §4): null — серверный. У локального — id устройства из
+  // реестра ADR-008. САМО поле читать нельзя — только через projectCapabilities.ts
+  deviceId?: string | null;
+  // Карточка устройства для UI; null у серверного проекта и у локального с отозванным
+  // устройством. Через неё показываем имя/онлайн/харнес — она же идёт в «устройство
+  // офлайн» в шапке чата
+  device?: ProjectDeviceView | null;
+  // Матрица возможностей проекта (ADR-016 §4). Обязательна у новых ответов; для старого
+  // бэка может быть null — тогда capabilities вырождаются в «серверный проект, всё доступно»
+  capabilities?: ProjectCapabilitiesView | null;
+  // Руки локального проекта (ADR-016 §7): тумблер проекта
+  handsEnabled?: boolean;
+  // Почему тумблер рук включить нельзя; null — можно. Готовый текст с сервера
+  // (ProjectCapabilities.HandsRefusal). Читать только через projectCapabilities.ts
+  handsRefusal?: string | null;
+  // Только в ответе создания и перепривязки локального проекта: агент устройства создал или
+  // разрешил папку («Папка «…» создана и разрешена агенту на «…»»). Показывается уведомлением
+  folderNotice?: string | null;
 }
 
 // Иконка проекта (ADR-009): initials — две буквы на цветной плитке; glyph — значок из
@@ -468,6 +564,9 @@ export interface Task {
   // (см. ExecutorStopClassifier). executorStoppedAt != null — карточка ждёт человека.
   executorStoppedAt?: string;
   executorStopReason?: string;
+  /** Исполнитель ждёт устройство локального проекта (ADR-016): с какого момента и почему */
+  deviceWaitSince?: string | null;
+  deviceWaitReason?: string | null;
   // Метка снятия человеком по карточке блокера (DropSubtaskAsync): если стоит —
   // карточка закрыта человеком, правка статуса от агента отвергается. Человек может
   // снять метку, перетащив задачу обратно в Todo/InProgress.
@@ -638,6 +737,45 @@ export interface FeatureFlagDefinition {
   stage: 'dev' | 'beta' | 'stable';
 }
 
+// Привязка чата картинки к файлу проекта (ADR-018 §1). Пути — от корня проекта через «/»
+export interface SessionImageChat {
+  // null — чат-черновик «Нарисовать картинку»: файла ещё нет, есть папка назначения
+  currentPath: string | null;
+  draftFolder?: string | null;
+  // Прежние пути, старые первыми: по ним поиск отдаёт «разговор продолжился на новой версии»
+  lineage: string[];
+}
+
+// Ручной запуск генерации из редактора в ленте чата картинки (StoredImageLaunchMessage):
+// by — "human" | "agent", estimate — котировка на момент запуска
+export interface ImageLaunchFields {
+  by: string;
+  prompt: string;
+  provider: string;
+  model: string;
+  count: number;
+  estimate?: { amount: number | null; unit: string; approx: boolean; source: string } | null;
+  jobId: string;
+  timestamp?: number;
+}
+
+// Запись модуля в ленте чата (StoredModuleRecord / ModuleRecordMessage, ADR-019 §2): data —
+// JSON модуля, ядро его не разбирает; fallback — текст строки, когда модуля нет
+export interface ModuleRecordFields {
+  module: string;
+  recordType: string;
+  data?: unknown;
+  fallback: string;
+  timestamp?: number;
+}
+
+// Пометка снимка холста у сообщения чата картинки (ADR-018 §3, StoredUserMessage.ImageSnapshot):
+// revision — ревизия холста на момент отправки; attached=false — холст не менялся, снимок не приложен
+export interface ImageSnapshotMark {
+  revision: string;
+  attached: boolean;
+}
+
 export interface Session {
   id: string;
   // Отсутствует у чатов вне проекта (project-less)
@@ -658,6 +796,8 @@ export interface Session {
   // Десктопный чат (ADR-008): тип задаётся при создании и не меняется — в его транскрипте
   // лежат кадры чужого рабочего стола, поэтому продолжить его обычным чатом нельзя
   desktopChat?: boolean;
+  // Чат картинки (ADR-018 §1): тип задаётся при создании, внутри меняется только путь
+  imageChat?: SessionImageChat | null;
   mode: Mode;
   // Инструменты, разрешённые в этом чате без вопроса («Всегда разрешать …»). Скоуп —
   // инструмент целиком: «Bash» = любые команды этого чата. Разрешение постоянное
@@ -961,7 +1101,7 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'text_delta'; text: string }
   // delegationTaskId — доклад о завершении делегированной задачи: id задачи структурным
   // полем (см. ChatItem user_message), а не вытащенный из текста маркера
-  | { type: 'user_message'; text: string; attachedPaths?: string[]; senderPersonaId?: string; auto?: boolean; senderOrigin?: string; senderChatName?: string; staffNote?: string; timestamp?: number; delegationTaskId?: string }
+  | { type: 'user_message'; text: string; attachedPaths?: string[]; senderPersonaId?: string; auto?: boolean; senderOrigin?: string; senderChatName?: string; staffNote?: string; timestamp?: number; delegationTaskId?: string; imageSnapshot?: ImageSnapshotMark | null }
   // Гостевая реплика персоны без агентского хода (0 токенов) — доклад о завершении
   // делегированной задачи (модель Z); маркер доклада распознаётся на рендере (см.
   // lib/delegationReport.ts). Живой аналог StoredTextMessage.PersonaId из истории.
@@ -1012,7 +1152,28 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'error'; text: string; details?: string; action?: string | null }
   | { type: 'rate_limit'; limitType: string; resetsAt?: string; status?: string; utilization?: number; isUsingOverage?: boolean; overageStatus?: string; overageResetsAt?: string }
   | { type: 'compact_boundary'; trigger: string; preTokens?: number; postTokens?: number }
+  // Прокси локальной модели обрезал историю хода (kind='prune') либо увёл сжатие в облако
+  // (kind='compact_cloud'). Приходит ПОСЛЕ первого байта ответа — до него лента молчит, и
+  // это нормально: своего «ожидания» у прунинга нет.
+  // blocks — сколько блоков выкинуто всего, дальше разбивка по видам (вывод инструмента,
+  // вход инструмента, размышление). prefillSeconds — сколько ждали пересчёт префикса после
+  // сдвига; cacheReadTokens/promptTokens — доля запроса, взятая из кэша (cacheRead/prompt).
+  // eventId — личность сдвига: внеходовая рассылка веерная (session- + project-группа), и
+  // вкладка открытого чата состоит в обеих, то есть получает одно событие дважды. По eventId
+  // редьюсер отличает вторую доставку от второго сдвига (карточки до появления поля — без него)
+  | {
+      type: 'context_pruned'; kind: 'prune' | 'compact_cloud'; eventId?: string;
+      tokensBefore: number; tokensAfter: number;
+      blocks: number; resultBlocks: number; inputBlocks: number; thinkingBlocks: number;
+      prefillSeconds?: number; cacheReadTokens?: number; promptTokens?: number;
+    }
   | { type: 'compact_status'; status?: string; compactResult?: string; compactError?: string }
+  // Записи ленты чата картинки (ADR-018 §1, §2): живые копии StoredImageLaunchMessage и
+  // StoredImageFileMovedMessage. Рисует их модуль редактора через слот chat-item-tool
+  | ({ type: 'image_launch' } & ImageLaunchFields)
+  | { type: 'image_file_moved'; from: string; to: string; timestamp?: number }
+  // Запись модуля в ленте (ADR-019 §2): живая копия StoredModuleRecord
+  | ({ type: 'module_record' } & ModuleRecordFields)
   | { type: 'truncated' }
   | { type: 'redacted_thinking' }
   | { type: 'exited' }
@@ -1105,7 +1266,7 @@ export type ServerMessage = { sessionId: string } & (
   // Полный снимок очереди сообщений занятой сессии (постановка/отмена/доставка).
   // kind: 'user' — сообщение человека из «честной очереди» (рисуется карточкой «Вы» с
   // вложениями и режимом, который вернётся в композер по «Стоп»); 'agent' — chats_send.
-  | { type: 'pending_messages'; items: { id: string; text: string; senderPersonaId?: string; senderOrigin?: string; enqueuedAt: string; senderChatName?: string; kind?: 'user' | 'agent'; attachedPaths?: string[]; mode?: string | null }[] }
+  | { type: 'pending_messages'; items: { id: string; text: string; senderPersonaId?: string; senderOrigin?: string; enqueuedAt: string; senderChatName?: string; kind?: 'user' | 'agent'; attachedPaths?: string[]; mode?: string | null; waitingForDevice?: boolean }[] }
   // «Стоп» вернул прерванное пользовательское сообщение в композер (фича «честная
   // очередь»). text=null — восстанавливать нечего (прерван авто/агентский ход, очередь
   // пуста): композер не трогаем. Иначе — текст, вложения и режим, которые подставятся
@@ -1113,6 +1274,11 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'composer_restore'; text?: string | null; attachedPaths?: string[] | null; mode?: string | null }
   // Подсказка следующего сообщения — чип в композере
   | { type: 'prompt_suggestion'; text: string }
+  // Руки локального проекта в чате (ADR-016 §7): эфемерные, в историю не пишутся.
+  // state — HandsChatStates, reason — HandsEndReason у stopped, deviceName — имя устройства
+  | { type: 'hands_status'; state: string; deviceName?: string | null; reason?: string | null }
+  // Строка ленты о руках, не ошибка хода (понижение «Без ограничений» и подобное)
+  | { type: 'hands_notice'; text: string }
   // Снимок промпта хода записан: id для кнопки «какой промпт ушёл» под постом.
   // Текст сюда не кладём — шторка забирает его отдельным REST-запросом.
   // applied=false — ход доигрывался в живом процессе, и этот промпт модели не уходил
@@ -1828,7 +1994,8 @@ export type ChatItem =
   // у ходов без нового сообщения и при сбое записи снимка
   // delegationTaskId — доклад о завершении делегированной задачи: id задачи, к которой
   // ведёт карточка доклада. Нет у обычных сообщений и у историй до появления поля
-  | { kind: 'user_message'; text: string; attachedPaths?: string[]; viaAgent?: boolean; senderPersonaId?: string; systemDirective?: boolean; auto?: boolean; senderOrigin?: string; senderChatName?: string; staffNote?: string; ts?: number; promptSnapshotId?: string; delegationTaskId?: string }
+  // imageSnapshot — сообщение из чата картинки: приложен ли снимок холста (ADR-018 §3)
+  | { kind: 'user_message'; text: string; attachedPaths?: string[]; viaAgent?: boolean; senderPersonaId?: string; systemDirective?: boolean; auto?: boolean; senderOrigin?: string; senderChatName?: string; staffNote?: string; ts?: number; promptSnapshotId?: string; delegationTaskId?: string; imageSnapshot?: ImageSnapshotMark }
   | { kind: 'session_started'; model: string; mode: string; cwd?: string; toolCount?: number; mcpServers?: { name: string; status: string }[]; turnWorktree?: { path: string; name: string } | null }
   // personaId — авторство реплики (персона на момент хода); после смены собеседника
   // старые реплики сохраняют прежний аватар. Отсутствует у обычного ассистента.
@@ -1866,9 +2033,29 @@ export type ChatItem =
   | { kind: 'glif_cost'; jobId: string; outputType?: string; mediaCount: number; credits?: number; model?: string }
   | { kind: 'rate_limit'; limitType: string; resetsAt?: string; status?: string }
   | { kind: 'compact_boundary'; trigger: string; preTokens?: number; postTokens?: number }
+  // Прокси локальной модели обрезал историю (см. wire-событие context_pruned). Вид сдвига
+  // лежит в pruneKind, а НЕ в kind: у элемента ленты и у записи истории kind — дискриминатор
+  // (TypeDiscriminatorPropertyName = "kind" в StoredMessage.cs), своего поля с тем же именем
+  // запись иметь не может. В wire-событии дискриминатор — type, поэтому там поле зовётся kind.
+  // eventId — личность сдвига (StoredContextPrunedMessage.EventId / wire-поле eventId):
+  // по ней дедупится повторная доставка одного события. Необязательно: у карточек,
+  // записанных до её появления, поля нет
+  | {
+      kind: 'context_pruned'; pruneKind: 'prune' | 'compact_cloud'; eventId?: string;
+      tokensBefore: number; tokensAfter: number;
+      blocks: number; resultBlocks: number; inputBlocks: number; thinkingBlocks: number;
+      prefillSeconds?: number; cacheReadTokens?: number; promptTokens?: number;
+    }
+  // Тихие строки чата картинки: «Вы запустили: …» и «Сохранено как …» (ADR-018 §1, §2)
+  | ({ kind: 'image_launch' } & ImageLaunchFields)
+  | { kind: 'image_file_moved'; from: string; to: string; timestamp?: number }
+  // Запись модуля (ADR-019 §2): карточку рисует модуль через слот chat-item-tool по ключу
+  // `${module}:${recordType}`, без модуля — строка fallback
+  | ({ kind: 'module_record' } & ModuleRecordFields)
   | { kind: 'truncated' }
   | { kind: 'redacted_thinking' }
-  | { kind: 'interrupted' }
+  // ts — момент остановки (история: StoredInterruptedMessage.Timestamp); в живой ленте нет
+  | { kind: 'interrupted'; ts?: number }
   | { kind: 'resumed' }
   | { kind: 'session_ended' }
   // Разделитель «сменился собеседник»: label задан явно (смена вручную / speaker_changed
@@ -1888,6 +2075,10 @@ export type ChatItem =
   // provider_switched.errorDetails, история: StoredModelSwitchedMessage.Details):
   // раскрывается «Подробностями» внутри маркера
   | { kind: 'model_switched'; model: string; previousModel: string; reason?: string; rawLabel?: string; details?: string }
+  // Плашка «Ветка от {имя чата}» (фича chat-branch): запись истории нового чата, созданного
+  // ветвлением. sourceSessionId — id оригинала, sourceName — имя оригинала (снимок на момент
+  // ветвления), ts — Unix-мс UTC (в истории — StoredBranchedFromMessage.Timestamp).
+  | { kind: 'branched_from'; sourceSessionId: string; sourceName: string; ts?: number }
   // Карточка-предложение: лимит подписки исчерпан — продолжить на стороннем провайдере.
   // resolved — миграция состоялась (карточка гаснет)
   | { kind: 'provider_limit'; resetsAt?: string; providers: ProviderFallbackOption[]; resolved?: boolean }
@@ -1895,6 +2086,9 @@ export type ChatItem =
   // Остановка цикла «до готово»: текст готов на сервере (лимит/ошибка/ручной стоп),
   // фронт его не собирает — иначе разъедется с сервером при смене лимита
   | { kind: 'work_loop_stopped'; reason: string; text: string }
+  // Строка ленты о руках локального проекта (hands_notice или остановка рук на устройстве).
+  // Live-only: события эфемерные, в историю не пишутся
+  | { kind: 'hands_notice'; text: string; tone: 'neutral' | 'warning' }
   // details — сырой технический текст сбоя за человекочитаемым text (см. wire-событие error).
   // action — признак предлагаемого действия под карточкой: сейчас только "window-1m-drop"
   // (кнопка «Продолжить в стандартном окне» под карточкой отказа Window1MUnavailable).
@@ -3569,6 +3763,9 @@ export interface VideoFeedResponse {
 
 // Устройство владельца из GET /api/devices. Отпечаток наружу урезан до 12 символов —
 // он служит человеку приметой «это та самая машина», а не проверкой.
+// online/platform/agentVersion/harnessReady/harnessProblem/capabilities — поля для
+// локальных проектов (ADR-016 §4): показываем «устройство офлайн» и решаем, годится ли
+// оно для запуска хода (capabilities.exec)
 export interface DesktopDevice {
   id: string;
   name: string;
@@ -3579,6 +3776,32 @@ export interface DesktopDevice {
   revoked: boolean;
   revokedAt?: string | null;
   tokenVersion: number;
+  // Текущий статус: true — клиент в сети и пингует шлюз. Отсутствует у старого бэка —
+  // тогда считаем false (не показываем как доступное для привязки)
+  online?: boolean;
+  // Платформа клиента ("windows" | "macos" | "linux" | ...) — только для карточки
+  platform?: string | null;
+  // Версия агента устройства (semver) — для диагностики и подсказки «обновите»
+  agentVersion?: string | null;
+  // Самообновление агента (agent-distribution AD-3/AD-5); null — агент о нём не сообщал
+  agentUpdate?: DeviceAgentUpdate | null;
+  // Готовность харнеса локальных проектов: false — привязка возможна, но ходы не пойдут,
+  // пока владелец не дособерёт (см. harnessProblem)
+  harnessReady?: boolean;
+  harnessProblem?: string | null;
+  // Что устройство сейчас умеет (для пикера привязки в AddProjectDialog). exec — может
+  // ли запускать ход локального проекта (Agent локальных проектов ADR-016)
+  capabilities?: {
+    exec?: boolean;
+    files?: boolean;
+  } | null;
+}
+
+// Состояние самообновления агента (DeviceAgentUpdateStates на бэке): reason — текст с устройства
+export interface DeviceAgentUpdate {
+  state: 'idle' | 'downloading' | 'waiting-idle' | 'failed';
+  targetVersion?: string | null;
+  reason?: string | null;
 }
 
 // Заявка на сопряжение: код из 8 символов живёт 5 минут и принадлежит ЭТОЙ веб-сессии.
@@ -3588,6 +3811,14 @@ export interface DesktopPairingCode {
   expiresAt: string;
   attemptsLeft: number;
   hostFingerprint?: string;
+}
+
+// Первая отрисовка бейджа рук локального проекта (GET /api/sessions/{id}/hands-status),
+// зеркало HandsStatusView. state=null — у чата рук нет вовсе, бейдж не рисуется
+export interface LocalHandsChatStatus {
+  state: string | null;
+  reason: string | null;
+  deviceName: string | null;
 }
 
 // Сеанс рук глазами веб-морды (GET /api/devices/hands/chat/{id}).
@@ -3658,4 +3889,161 @@ export interface PlanMap {
   oneLine: string;     // суть плана одной фразой
   numbers: PlanMapNumber[];
   blocks: PlanMapBlock[];
+}
+
+// ===== Уборка карты проекта (CLAUDE.md) =====
+// Контракт ответа сканера (docs/research/project-map-hygiene-plan-2026-09.md, Р8):
+// обе фазы живут на нём — в этой волне фронт использует только факты (suggestions приходят
+// пустые к modelSays, поля ниже модели задействует волна 2). Имена полей сверены с
+// бэковым MapHygieneReport, расхождение здесь и там ломает UI молча.
+
+export type MapHygieneKind = 'dead-link' | 'dead-import' | 'root-relative' | 'long-section';
+export type MapHygieneSeverity = 'high' | 'medium' | 'low';
+
+// Одна находка по ссылке или импорту в отчёте. AnchorText — markdown-ссылка целиком или
+// строка импорта; id предложения считается от этого якоря, чтобы человек мог отметить
+// «починить ссылку на FeatureFlag.cs» без риска попасть не на ту.
+export interface MapHygieneLinkFinding {
+  path: string;            // карта, в которой находка (для вложенных)
+  section: string | null;
+  line: number;            // 0 у мёртвого импорта второго уровня
+  target: string;
+  reason: 'notFound' | 'rootRelativeOnly' | 'absolute' | 'outsideProject' | 'deadImport';
+  candidates: string[];
+  anchorText: string;
+}
+
+// Секция карты — кандидат на уборку. FirstLine, а не тело: у крупной секции тело не
+// показывается целиком, а firstLine достаточно для глаза.
+export interface MapHygieneSection {
+  title: string;
+  startLine: number;
+  lines: number;
+  docsRefs: number;
+  firstLine: string;
+}
+
+// Применимость правки: null ⇒ кнопки «Применить» нет вовсе. После `apply != null` живёт
+// формула из Р10а: единственный кандидат И уникальный вне кодовых заборов якорь. Здесь —
+// только носитель формы; заполняется в волне 4 вместе с самим apply.
+export interface MapHygieneApplyPatch {
+  before: string;
+  after: string;
+  anchorText: string;
+}
+
+export interface MapHygieneSuggestionAnchor {
+  line: number;
+  heading: string | null;
+}
+
+export interface MapHygieneSuggestion {
+  id: string;
+  kind: MapHygieneKind;
+  severity: MapHygieneSeverity;
+  fact: string;
+  modelSays: string | null;
+  anchor: MapHygieneSuggestionAnchor;
+  savingLines: number;
+  apply: MapHygieneApplyPatch | null;
+}
+
+// Бюджет: ориентир Anthropic (≤200 строк) + сам факт превышения. Проценты НЕ рисуем
+// (Р9 — у большого проекта карта объективно больше, и приговор в процентах обесценивает
+// отчёт), здесь только бинарный ответ для шапки.
+export interface MapHygieneBudget {
+  recommendedLines: number;
+  overBudget: boolean;
+}
+
+// Справочная строка о файле карты (корневая / вложенные / локальная).
+export interface MapHygieneFileRef {
+  path: string;
+  lines: number;
+  bytes: number;
+}
+
+// Полный отчёт сканера. Поле baseSha едет обратно в review/apply — по нему сервер
+// видит, что человек смотрит на тот же файл, что и в момент скана.
+export interface MapHygieneReport {
+  path: string;
+  exists: boolean;
+  baseSha: string | null;
+
+  lines: number;
+  bytes: number;
+  approxTokens: number;
+  approxTokensNote: string;
+
+  expandedLines: number;
+  importCount: number;
+  expansionTruncated: boolean;
+  importDepthExceeded: boolean;
+
+  budget: MapHygieneBudget;
+
+  sectionCount: number;
+  longSectionCount: number;
+  sections: MapHygieneSection[];
+
+  deadLinkCount: number;
+  deadLinks: MapHygieneLinkFinding[];
+
+  deadImportCount: number;
+  deadImports: MapHygieneLinkFinding[];
+
+  rootRelativeCount: number;
+  rootRelativeLinks: MapHygieneLinkFinding[];
+
+  // Пропущенные цели (абсолютные пути и т.п.). В UI НЕ показываются (Р8): «не проверяли»
+  // — не находка и не действие, а строка, которую человек не может ни починить, ни осмыслить
+  skippedCount: number;
+  skipped: MapHygieneLinkFinding[];
+
+  unclosedFence: boolean;
+
+  // Список ДЕЙСТВИЙ поверх списков находок выше. В этой волне modelSays у всех null:
+  // модель ещё не зовётся (Р11: фич-флаг выключен). Волна 2 привезёт суждения.
+  suggestions: MapHygieneSuggestion[];
+
+  // Текст, которым сервер объясняет неполноту разбора (модель не настроена, не дошла
+  // и т.п.). В UI показывается дословно — по глухому «не удалось» человек не починит
+  // «модель для разбора не настроена». Доступен после POST /map-hygiene/review.
+  modelNote?: string | null;
+
+  secondMap: MapHygieneFileRef | null;
+  nestedMapCount: number;
+  nestedMaps: MapHygieneFileRef[];
+
+  // Компактная карта из docs/CLAUDE-local.md (BareMode): в счёт контекста не входит,
+  // показывается справочно
+  localMap: MapHygieneFileRef | null;
+
+  walkTruncated: boolean;
+  truncated: boolean;
+}
+
+// Причина, по которой правка не применилась. Закрытый белый список из четырёх значений
+// (MapApplyReasons на бэке): фронт по нему не ветвится, но человеку на каждый показывается
+// своя строка — «не удалось» без причины он не починит.
+export type MapHygieneApplyFailureReason =
+  | 'anchorNotFound'
+  | 'ambiguousAnchor'
+  | 'unknownId'
+  | 'notApplicable';
+
+export interface MapHygieneApplyFailure {
+  id: string;
+  reason: MapHygieneApplyFailureReason;
+}
+
+// Ответ POST /map-hygiene/apply: что применилось, что нет с причиной, новый sha карты
+// (если правки легли) и полный свежий отчёт сканера — шапка перерисовывается из него
+// без второго запроса (Р10.4 плана). Мнимой атомарности нет: applied[] и failed[] могут
+// быть непустыми одновременно.
+export interface MapHygieneApplyResult {
+  applied: string[];
+  failed: MapHygieneApplyFailure[];
+  newSha: string | null;
+  scan: MapHygieneReport;
 }

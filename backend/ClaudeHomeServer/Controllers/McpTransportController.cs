@@ -245,7 +245,7 @@ public sealed class McpTransportController(McpToolsetRegistry registry,
                         var sane = Core.Telemetry.MetricTagGuard.IsToolShape(toolName);
                         var logName = sane ? toolName : Services.Mcp.McpCallLog.Overflow;
                         var text = sane
-                            ? $"Ошибка: {OneLine(ex.Message)}"
+                            ? $"Ошибка: {Core.Telemetry.LogText.OneLine(ex.Message)}"
                             : $"Ошибка: {ex.GetType().Name} — имя инструмента не прошло проверку формы";
                         logger.LogWarning("MCP-инструмент {Server}.{Tool} упал: {Error}",
                             toolset.Name, logName, text);
@@ -313,10 +313,6 @@ public sealed class McpTransportController(McpToolsetRegistry registry,
     // попадает изнутри, а не из тела запроса.
     private static bool IsMethodShape(string v) =>
         v.Length <= 64 && v.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-' or '.' or '/');
-
-    // Текст исключения едет в лог одной строкой: перенос внутри него TimestampedConsoleWriter
-    // превратил бы в поддельную запись с настоящим UTC-таймстемпом
-    private static string OneLine(string text) => text.Replace("\r", " ").Replace("\n", " ");
 
     private static JsonObject ToolContent(string text, bool isError)
     {

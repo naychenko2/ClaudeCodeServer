@@ -72,12 +72,16 @@ public class TaskSchedulerService(
     {
         if (task.Assignee != TaskItemAssignee.Claude) return false;
         if (task.Status != TaskItemStatus.Todo || task.ClaudeStartedAt is not null) return false;
+        // Задача уже ждёт устройство локального проекта: запустит её DeviceOnlineDispatcher,
+        // потолок ожидания считается от постановки в ожидание, а не от срока (ADR-016, план §5)
+        if (task.DeviceWaitSince is not null) return false;
 
         var dueUtc = TaskDueCalculator.DueMomentUtc(task, tz);
         return dueUtc is not null && dueUtc <= nowUtc && nowUtc - dueUtc <= AutoStartWindow;
     }
 
-    // Автозапуск Claude-исполнителя в момент срока: assignee=Claude, ещё не запускалась
+    // Автозапуск Claude-исполнителя в момент срока: assignee=Claude, ещё не запускалась.
+    // Устройство локального проекта офлайн — исполнитель сам ставит задачу в «ждёт устройство»
     private async Task ProcessClaudeAutoStartAsync(TaskItem task, TimeZoneInfo tz, DateTime nowUtc)
     {
         if (!ShouldAutoStart(task, tz, nowUtc)) return;

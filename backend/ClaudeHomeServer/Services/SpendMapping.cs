@@ -1,3 +1,4 @@
+using System.Threading;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
@@ -8,11 +9,19 @@ namespace ClaudeHomeServer.Services;
 
 // Чистые функции сборки SpendRecord из потока сообщений/событий приёма хода. Вынесены из
 // SessionManager (этап 4, волна 1 «приём хода», 2026-09-07) — это код спины, использующий
-// обе стороны (ISpendCollector подсистемы Spend и LlmProviderRegistry слоя Llm), и держать
-// его внутри SessionManager было лишним весом ядра. Никакого состояния, только зависимости
-// в параметрах — шов здесь не нужен.
+// обе стороны: Core-контракт `ISpendCollector` (зависимость на вертикаль Spend идёт через
+// интерфейс в Core, не через ProjectReference на Spend.dll) и `LlmProviderRegistry`/
+// `IModelResolver` слоя Llm. Перенос самого SpendMapping в вертикаль Spend отклонён
+// архитектором: потянуло бы правку конструктора SessionManager ради косметики.
+// Никакого состояния, только зависимости в параметрах — шов здесь не нужен.
 internal static class SpendMapping
 {
+    // One-shot-флаги: при отсутствии ISpendCollector предупреждаем один раз за процесс,
+    // чтобы каждый ход не спамил лог
+    private static int _turnSpendWarned;
+    private static int _falSpendWarned;
+    private static int _glifSpendWarned;
+
     // Извлекает request_id из результата вызова, если это генерация fal.ai. Признак fal —
     // наличие request_id И fal-домена где-либо в ответе. Покрывает обе формы результата:
     //  • run_model/submit_job: fal.run в *_url (status_url/response_url/cancel_url);
@@ -44,7 +53,12 @@ internal static class SpendMapping
         Session? s,
         ResultMessage m)
     {
-        if (spend is null || s is null || m.Usage is null) return;
+        if (spend is null || s is null || m.Usage is null)
+        {
+            if (spend is null && Interlocked.Exchange(ref _turnSpendWarned, 1) == 0)
+                log?.LogWarning("spend: коллектор недоступен, запись расхода хода пропущена");
+            return;
+        }
         try
         {
             var provider = SpendSources.NormalizeProvider(s.Provider);
@@ -83,7 +97,12 @@ internal static class SpendMapping
         Session s,
         FalCostMessage msg)
     {
-        if (spend is null) return;
+        if (spend is null)
+        {
+            if (Interlocked.Exchange(ref _falSpendWarned, 1) == 0)
+                log?.LogWarning("spend: коллектор недоступен, запись расхода генерации fal.ai пропущена");
+            return;
+        }
         try
         {
             spend.Record(new SpendRecord
@@ -112,7 +131,12 @@ internal static class SpendMapping
         Session s,
         GlifCostMessage msg)
     {
-        if (spend is null) return;
+        if (spend is null)
+        {
+            if (Interlocked.Exchange(ref _glifSpendWarned, 1) == 0)
+                log?.LogWarning("spend: коллектор недоступен, запись расхода генерации glif пропущена");
+            return;
+        }
         try
         {
             spend.Record(new SpendRecord
@@ -131,5 +155,38 @@ internal static class SpendMapping
             });
         }
         catch (Exception ex) { log?.LogWarning(ex, "spend: запись генерации glif не удалась"); }
+    }
+
+    // Аналитика: генерация Higgsfield — признак по ИМЕНИ инструмента (mcp__higgsfield__generate_*),
+    // не по контенту результата. У Higgsfield кредиты, не токены и не USD — считаем только факт
+    // генерации. Вызывается по ToolUseMessage (имя доступно в момент вызова, до tool_result).
+    public static bool TryExtractHiggsfieldGeneration(string? toolName) =>
+        toolName is not null && toolName.Contains("mcp__higgsfield__generate_");
+
+    // Запись расхода Higgsfield-генерации: Generations=1, CostUsd=null (кредиты не пересчитываем).
+    public static void RecordHiggsfieldGeneration(
+        ISpendCollector? spend,
+        Func<Session, string?> resolveOwnerId,
+        ILogger? log,
+        Session s)
+    {
+        if (spend is null) return;
+        try
+        {
+            spend.Record(new SpendRecord
+            {
+                OwnerId = resolveOwnerId(s) ?? "",
+                ProjectId = s.ProjectId,
+                SessionId = s.Id,
+                TaskId = s.TaskId,
+                PersonaId = s.PersonaId,
+                Provider = SpendSources.Higgsfield,
+                Source = SpendSources.Higgsfield,
+                CostUsd = null,
+                Generations = 1,
+                Label = "higgsfield-generation",
+            });
+        }
+        catch (Exception ex) { log?.LogWarning(ex, "spend: запись генерации higgsfield не удалась"); }
     }
 }

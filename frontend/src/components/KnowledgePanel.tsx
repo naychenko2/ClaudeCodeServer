@@ -1,11 +1,14 @@
 import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import { BookOpen, Database, Info, RotateCcw, Search, Tag, Trash2, X } from 'lucide-react';
 import type { Project } from '../types';
+import { ProjectFeature } from '../types';
 import type { DifyDocument } from '../lib/api';
 import { api } from '../lib/api';
+import { useProjectFeature, featureReason } from '../lib/projectCapabilities';
 import { onMessage } from '../lib/signalr';
 import { C, R, SHADOW, FONT } from '../lib/design';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
+import { CapabilityUnavailable } from './CapabilityGate';
 import { EmptyState, IconButton, PanelHeaderSlot, useHasPanelHeader, usePanelHeaderHold } from './ui';
 import { useListAutoFocus } from '../lib/listAutoFocus';
 import { NO_AUTOFILL } from '../lib/noAutofill';
@@ -414,7 +417,20 @@ function KnowledgeTip({ icon, title, text }: { icon: ReactNode; title: string; t
 
 // --- Главный компонент ---
 
-export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = false }: Props) {
+export function KnowledgePanel(props: Props) {
+  // Гейт по матрице (ADR-016 §3.4): knowledge — контент проекта на сервере, у
+  // локального проекта выключено. Гейт живёт в обёртке, а хуки — в KnowledgePanelBody:
+  // иначе смена гейта (перепривязка к устройству) меняла бы число хуков между рендерами
+  const kbGate = useProjectFeature(props.project, ProjectFeature.Knowledge);
+  const kbGateReason = featureReason(props.project, ProjectFeature.Knowledge);
+  if (!kbGate) {
+    return <CapabilityUnavailable feature={ProjectFeature.Knowledge} title="База знаний недоступна" reason={kbGateReason ?? 'Контент проекта не хранится на сервере'} />;
+  }
+
+  return <KnowledgePanelBody {...props} />;
+}
+
+function KnowledgePanelBody({ project, isMobile = false, alwaysShowIcons = false }: Props) {
   const [status, setStatus] = useState<KnowledgeStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

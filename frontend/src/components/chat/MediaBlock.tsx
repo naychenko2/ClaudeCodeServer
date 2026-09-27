@@ -9,6 +9,7 @@ import { proxyUrl } from './MarkdownContent';
 import { ChatProjectContext } from './contexts';
 import { fmtCredits } from './glifStats';
 import { NO_AUTOFILL } from '../../lib/noAutofill';
+import { readStoredToken } from '../../lib/offline';
 
 export function mediaLabel(items: MediaItem[]): string {
   const imgCount = items.filter(m => m.kind === 'image').length;
@@ -42,6 +43,30 @@ function hostMatches(url: string, hosts: string[]): boolean {
   } catch { return false; }
 }
 
+// Медиа локальных моделей (MCP local-media) лежат в самом проекте и отдаются same-origin
+// эндпоинтом стриминга файлов. Единственная форма относительного URL, которую принимаем:
+// строгий префикс `/api/projects/{id}/files/stream?path=`; id — без `/` и `.`, чтобы
+// `..`/`//` не увели путь за пределы эндпоинта. Через /api/proxy их не гоняем: localhost
+// в прокси = SSRF.
+const LOCAL_STREAM_RE = /^\/api\/projects\/[A-Za-z0-9_-]+\/files\/stream\?path=[^\s"'<>#]+$/;
+
+export function isLocalStreamUrl(url: string): boolean {
+  return LOCAL_STREAM_RE.test(url);
+}
+
+// Имя файла из параметра path локального URL (для «Скачать» и подписи)
+function localFileName(url: string): string | undefined {
+  const path = new URLSearchParams(url.slice(url.indexOf('?') + 1)).get('path');
+  return path?.split('/').pop() || undefined;
+}
+
+// src медиа: локальные — напрямую с access_token (как ChatImage), внешние — через прокси
+export function mediaSrc(url: string): string {
+  if (!isLocalStreamUrl(url)) return proxyUrl(url);
+  const token = readStoredToken();
+  return token ? `${url}&access_token=${encodeURIComponent(token)}` : url;
+}
+
 // JSON из результатов MCP-инструментов (fal/glif): форма заранее неизвестна и
 // не описывается контрактом, поэтому обходим её с проверками на каждом шаге
 // (unknown-глубь вместо any).
@@ -60,7 +85,7 @@ function str(v: Json | undefined): string {
 export function classifyUrl(item: Json | undefined): 'image' | 'video' | 'audio' | null {
   const obj = asObj(item);
   if (!obj) return null;
-  const url = obj.url ?? obj.uri;
+  const url = obj.url ?? obj.uri ?? obj.result_url;
   if (typeof url !== 'string') return null;
   // Явный тип элемента: glif assets — type:"image"|"video"|"audio",
   // glif view_media media[] — kind с теми же значениями
@@ -90,6 +115,19 @@ export function classifyUrl(item: Json | undefined): 'image' | 'video' | 'audio'
 // целиком такая строка не JSON, поэтому маркеры вытаскиваем regex'ом независимо от JSON.
 const RESOURCE_LINK_RE = /\[Resource link:\s*([^\]]+)\]\s*(https?:\/\/\S+)/g;
 
+// Голый URL в свободном тексте (Higgsfield job_status: ссылка — не в JSON и не маркером,
+// а строкой в тексте). Стопим на пробел/кавычки/скобки, чтобы markdown-`](url)` не
+// захватил закрывающую скобку.
+const BARE_URL_RE = /https?:\/\/[^\s"'<>()]+/g;
+
+// Хосты, которые кладут готовую ссылку на медиа СТРОКОЙ в свободный текст tool-результата
+// (не в JSON, не маркером). Пока — только Higgsfield: точный distribution его CDN
+// (не суффикс cloudfront.net, чтобы не стать открытым на чужой контент). fal/glif/cloudinary
+// сюда НЕ входят: их URL живёт в JSON/маркерах, и именно там фильтруются входные референсы
+// (source=uploaded, glifchat-image-input-production) — голым {url} этот контекст теряется
+// и входная картинка «оживала» дублем.
+const BARE_TEXT_MEDIA_HOSTS = ['d8j0ntlcm91z4.cloudfront.net'];
+
 // Толерантный разбор результата: целиком JSON — отлично; нет — пробуем хвост от первой
 // фигурной скобки до последней (сплющенный боевой формат «мусор + {json}»).
 // На мусоре не падаем — вернём undefined, медиа из маркеров всё равно покажутся.
@@ -116,15 +154,18 @@ export function extractMediaFromResult(result: string): MediaItem[] {
   const push = (item: Json | undefined) => {
     const obj = asObj(item);
     if (!obj) return;
-    const url = obj.url ?? obj.uri;
+    const url = obj.url ?? obj.uri ?? obj.result_url;
     if (typeof url !== 'string') return;
+    // Только абсолютные http(s) и строгий локальный stream-URL — никаких иных относительных
+    const isStream = isLocalStreamUrl(url);
+    if (!isStream && !/^https?:\/\//i.test(url)) return;
     // Входные изображения пользователя (uploaded) — не выход генерации
     if (obj.source === 'uploaded' || url.includes('glifchat-image-input-production')) return;
     const kind = classifyUrl(obj);
     if (!kind) return;
     if (items.some(m => m.url === url)) return;
     const fileNameRaw = obj.file_name ?? obj.fileName ?? obj.filename ?? obj.name ?? obj.title;
-    const fileName = typeof fileNameRaw === 'string' ? fileNameRaw : undefined;
+    const fileName = typeof fileNameRaw === 'string' ? fileNameRaw : isStream ? localFileName(url) : undefined;
     // Размеры: fal кладёт в корень элемента, glif assets — в metadata.{width,height};
     // в view_media media[] размеров нет — блок рендерится без них, это ок
     const meta = asObj(obj.metadata);
@@ -149,9 +190,14 @@ export function extractMediaFromResult(result: string): MediaItem[] {
       }
       return;
     }
-    // Массивы медиа (fal + glif assets + glif view_media media[])
-    for (const arr of [value.images, value.videos, value.audio_files, value.audios, value.assets, value.media]) {
+    // Массивы медиа (fal + glif assets + glif view_media media[] + higgsfield jobs/results)
+    for (const arr of [value.images, value.videos, value.audio_files, value.audios, value.assets, value.media, value.jobs, value.results]) {
       if (Array.isArray(arr)) for (const item of arr) push(item);
+    }
+    // Задания со вложенными медиа: local_jobs_wait кладёт images/videos внутрь jobs[i],
+    // у самого задания url нет (у Higgsfield он прямо в элементе — его взял push выше)
+    for (const arr of [value.jobs, value.results]) {
+      if (Array.isArray(arr)) for (const item of arr) scan(item, depth + 1);
     }
     // Одиночные объекты
     for (const key of ['video', 'audio', 'audio_file', 'image'] as const) push(value[key]);
@@ -176,15 +222,29 @@ export function extractMediaFromResult(result: string): MediaItem[] {
   const parsed = parseLoose(result);
   if (parsed) scan(parsed, 0);
 
+  // 3. Голые URL в свободном тексте — строго по белому списку хостов, не «любым ссылкам»:
+  //    иначе в ленте рисовалось бы всё, что случайно попало в текст. Higgsfield job_status
+  //    отдаёт готовую ссылку строкой (не в JSON), fal/glif сюда не попадают — у них URL в
+  //    JSON. Тип — classifyUrl по расширению; дедуп по URL в push: повторный опрос задания
+  //    не нарисует картинку дважды. Проход идёт ПОСЛЕДНИМ: JSON-версия с метаданными
+  //    (width/height) выигрывает, голый URL лишь дополняет то, что JSON не дал.
+  for (const m of result.matchAll(BARE_URL_RE)) {
+    if (!hostMatches(m[0], BARE_TEXT_MEDIA_HOSTS)) continue;
+    push({ url: m[0] });
+  }
+
   return items;
 }
+
+// local — медиа локальных моделей (MCP local-media), лежат в проекте
+export type MediaSource = 'fal' | 'glif' | 'higgsfield' | 'local';
 
 export interface MediaMeta {
   model?: string;
   inferenceTime?: number;
   // Источник генерации: fal (request_id/endpoint_id) или glif (_meta.glif, project_id+job_id,
   // медиа с glif-хоста). В футере метку показываем только для glif — рендер fal не меняется.
-  source?: 'fal' | 'glif';
+  source?: MediaSource;
   outputType?: string;
   // jobId генерации glif — ключ сопоставления с glif_cost (кредиты с backend, GlifCostContext)
   jobId?: string;
@@ -249,9 +309,14 @@ export function extractMediaMeta(result: string, media?: MediaItem[]): MediaMeta
   try {
     const parsed = parseLoose(result);
     const root = asObj(parsed);
-    // Имя модели: endpoint_id → берём только короткое имя после последнего / (в результате fal обычно отсутствует)
+    // Имя модели: endpoint_id → короткое имя после / (fal); higgsfield: model в jobs[]/results[]
     const endpointId = typeof root?.endpoint_id === 'string' ? root.endpoint_id : undefined;
-    const model = endpointId ? endpointId.split('/').pop() : undefined;
+    const hfArrays: Json[][] = [root?.jobs, root?.results].filter((v): v is Json[] => Array.isArray(v));
+    const hfModel: string | undefined = hfArrays
+      .flat()
+      .map(j => { const o = asObj(j); return o?.model; })
+      .find((v): v is string => typeof v === 'string');
+    const model = endpointId ? endpointId.split('/').pop() : hfModel;
     // Время генерации: ищем в нескольких местах
     const r = asObj(root?.result) ?? root;
     const inferenceTimeRaw =
@@ -262,15 +327,22 @@ export function extractMediaMeta(result: string, media?: MediaItem[]): MediaMeta
 
     const items = media ?? extractMediaFromResult(result);
     const { glifMeta, isGlif, outputType: bagOutputType } = detectGlif(parsed, items);
+    // Higgsfield: host d8j0ntlcm91z4.cloudfront.net или jobs[]/results[] с result_url
+    const isHiggsfield = items.some(m => hostMatches(m.url, ['d8j0ntlcm91z4.cloudfront.net']))
+      || hfArrays.some(arr => arr.some(j => { const o = asObj(j); return o != null && typeof o.result_url === 'string'; }));
     // jobId glif-генерации: в _meta.glif или в одном из «мешков» результата (snake/camel)
     const jobId: string | undefined = [glifMeta, root, asObj(root?.structuredContent), asObj(root?.result)]
       .map(b => b?.jobId ?? b?.job_id)
       .find((v): v is string => typeof v === 'string');
-    const source: MediaMeta['source'] = isGlif
+    const source: MediaMeta['source'] = items.some(m => isLocalStreamUrl(m.url))
+      ? 'local'
+      : isGlif
       ? 'glif'
-      : (root?.request_id || endpointId || items.some(m => m.url.includes('fal.media') || m.url.includes('fal.run')))
-        ? 'fal'
-        : undefined;
+      : isHiggsfield
+        ? 'higgsfield'
+        : (root?.request_id || endpointId || items.some(m => m.url.includes('fal.media') || m.url.includes('fal.run')))
+          ? 'fal'
+          : undefined;
     const outputType = glifMeta?.outputType ?? glifMeta?.output_type ?? (isGlif ? bagOutputType ?? root?.outputType : undefined);
 
     return {
@@ -309,7 +381,7 @@ export function MediaBlock({
   costPending?: boolean;
   // Списанные кредиты glif (с backend по jobId через GlifCostContext); нет — не показываем
   credits?: number;
-  source?: 'fal' | 'glif';
+  source?: MediaSource;
   outputType?: string;
   online?: boolean;
 }) {
@@ -359,16 +431,18 @@ export function MediaBlock({
 
   // Строка метаданных
   const metaParts: string[] = [];
-  // Метка источника — только glif: fal-рендер исторически без метки, не меняем
+  // Метка источника: glif и higgsfield; fal-рендер исторически без метки, не меняем
   if (source === 'glif') metaParts.push(outputType ? `glif · ${outputType}` : 'glif');
+  if (source === 'higgsfield') metaParts.push(model ? `higgsfield · ${model}` : 'higgsfield');
+  if (source === 'local') metaParts.push('Локальные модели');
   if (m.kind !== 'audio' && m.width && m.height) metaParts.push(`${m.width}×${m.height}`);
   if ((m.kind === 'video' || m.kind === 'audio') && m.duration) metaParts.push(`${m.duration.toFixed(1)}с`);
   if (inferenceTime) metaParts.push(`${inferenceTime.toFixed(1)}с`);
-  if (model) metaParts.push(model);
+  if (model && source !== 'higgsfield') metaParts.push(model);
   // Стоимость: fal — точная, с backend (billing-events, «считается…» пока ждём);
-  // glif — если доехала в JSON результата; не доехала — просто без цены, без вечной метки.
+  // glif — если доехала в JSON; higgsfield — не в JSON, «считается…» не показываем.
   if (costUsd) metaParts.push(costUsd < 0.01 ? `$${costUsd.toFixed(4)}` : `$${costUsd.toFixed(2)}`);
-  else if (costPending) metaParts.push('считается…');
+  else if (costPending && source !== 'higgsfield') metaParts.push('считается…');
   // Кредиты glif — с backend по jobId (glif_cost); нет данных — ничего не добавляем
   if (credits !== undefined) metaParts.push(fmtCredits(credits));
 
@@ -390,7 +464,7 @@ export function MediaBlock({
   const renderButtons = (dark = false) => (
     <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
       <a
-        href={online ? proxyUrl(m.url) : undefined}
+        href={online ? mediaSrc(m.url) : undefined}
         download={online ? filename : undefined}
         onClick={e => { if (!online) { e.preventDefault(); return; } e.stopPropagation(); }}
         onMouseEnter={() => { if (online) setDlHov(true); }}
@@ -402,7 +476,8 @@ export function MediaBlock({
       >
         ↓ Скачать
       </a>
-      {project && (
+      {/* Локальное медиа уже лежит в проекте — копировать его через save-from-url некуда */}
+      {project && !isLocalStreamUrl(m.url) && (
         <button
           onClick={openSaveDialog}
           disabled={!online || saveState === 'saving'}
@@ -441,7 +516,7 @@ export function MediaBlock({
           {/* Нативный плеер — обёртка с overflow:hidden обрезает углы shadow DOM */}
           <div style={{ borderRadius: 6, overflow: 'hidden' }}>
             <audio controls style={{ width: '100%', height: 36, outline: 'none', display: 'block' }}>
-              <source src={proxyUrl(m.url)} />
+              <source src={mediaSrc(m.url)} />
             </audio>
           </div>
           {/* Метаданные + кнопки */}
@@ -456,16 +531,16 @@ export function MediaBlock({
         <>
           <div style={{ display: 'inline-block', maxWidth: '100%' }}>
             {m.kind === 'image' ? (
-              <a href={proxyUrl(m.url)} target="_blank" rel="noopener noreferrer"
+              <a href={mediaSrc(m.url)} target="_blank" rel="noopener noreferrer"
                  style={{ display: 'block' }} onClick={handleImageClick}>
-                <img src={proxyUrl(m.url)} alt="" loading="lazy"
+                <img src={mediaSrc(m.url)} alt="" loading="lazy"
                   style={{ maxWidth: '100%', height: 'auto', display: 'block',
                     borderRadius: 8, border: `1px solid ${C.border}`, cursor: 'pointer' }} />
               </a>
             ) : (
               <video controls style={{ maxWidth: '100%', height: 'auto', display: 'block',
                 borderRadius: 8, border: `1px solid ${C.border}` }}>
-                <source src={proxyUrl(m.url)} />
+                <source src={mediaSrc(m.url)} />
               </video>
             )}
           </div>
@@ -506,7 +581,7 @@ export function MediaBlock({
             <X size={20} strokeWidth={2} />
           </button>
           <img
-            src={proxyUrl(m.url)}
+            src={mediaSrc(m.url)}
             alt=""
             onClick={e => e.stopPropagation()}
             style={{ maxWidth: '92vw', maxHeight: '76vh', objectFit: 'contain',

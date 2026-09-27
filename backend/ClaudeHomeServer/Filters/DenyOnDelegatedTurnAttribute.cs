@@ -189,9 +189,20 @@ internal static class DelegatedTurnGate
         // в чате с циклом идёт без ограничений (лимит только на возвраты из ожидания, тот
         // живёт в ContinueWorkLoopAsync). Здесь остаются лишь два гейта: делегированный ход
         // и реакционный ход доклада — оба пришли из анти-рекурсии, не из квоты.
+        // Исключение: ход-реакция на доклад (ExecutorSuppressed) в чате с АКТИВНЫМ циклом
+        // — это единственная точка, где координатор принимает результат и запускает следующего
+        // исполнителя, поэтому запрет режет саму суть цикла. Круг «запуск → доклад → продолжение»
+        // уже оплачен инкрементом Iteration в ContinueWorkLoopAsync.
 
-        if (!delegated && !DenyOnDelegatedTurnAttribute.IsSuppressedExecutorTurn(turn, alsoWhenExecutorSuppressed))
-            return DelegatedTurnGateDecision.Pass;
+        if (!delegated)
+        {
+            if (!DenyOnDelegatedTurnAttribute.IsSuppressedExecutorTurn(turn, alsoWhenExecutorSuppressed))
+                return DelegatedTurnGateDecision.Pass;
+            // React turn on executor report: if the chat has an active work loop, allow —
+            // the iteration counter in ContinueWorkLoopAsync already caps the number of returns.
+            if (sessions.HasActiveWorkLoop(callerSessionId, ownerId))
+                return DelegatedTurnGateDecision.Pass;
+        }
 
         return Deny(delegated
             ? $"{action} недоступно на делегированном ходу: этот ход инициирован другим "

@@ -4,7 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { C } from '../../lib/design'
 import { XTERM_BASE_OPTIONS } from '../../lib/xtermTheme'
-import { onMessage, joinPreviewLog, leavePreviewLog } from '../../lib/signalr'
+import { onPreviewMessage, joinPreviewLog, leavePreviewLog } from '../../lib/signalr'
 
 // Вывод дев-серверов. Read-only двойник TerminalView: тот же xterm (Vite и dotnet
 // печатают ANSI-цвета — в <pre> они превратились бы в мусор вида [32m), но без
@@ -66,7 +66,7 @@ export function PreviewLogView({ projectId, sources }: { projectId: string; sour
     const ready = new Set<string>()
     const pending: { id: string; data: string }[] = []
 
-    const unsub = onMessage(msg => {
+    const unsub = onPreviewMessage(projectId, msg => {
       if (disposed || msg.type !== 'preview_log') return
       if (!prefixOf.has(msg.serviceId)) return
       if (ready.has(msg.serviceId)) write(msg.serviceId, msg.data)

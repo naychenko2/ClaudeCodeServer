@@ -2,6 +2,7 @@
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Team;
 using FluentAssertions;
+using ClaudeHomeServer.Services.Files;
 
 namespace ClaudeHomeServer.Tests.Services;
 

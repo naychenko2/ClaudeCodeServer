@@ -107,4 +107,24 @@ public class TurnFailureTextTests
         TurnFailureText.PromptOverflow.Contains("попробуйте позже", StringComparison.OrdinalIgnoreCase)
             .Should().BeFalse("тот же риск — таймаут/перегрузка лечатся подменой, тут бесполезны");
     }
+    // ADR-016 3.7: --resume без транскрипта там, где идёт ход (у локального проекта — на
+    // устройстве). Строка — живой вывод CLI 2.x на отсутствующий разговор: текста в result
+    // нет, причина только в errors. Ход обязан упасть с понятной причиной, а не пустым
+    [Fact]
+    public void ResumeБезТранскрипта_ИзResultErrors_ПонятнаяПричина()
+    {
+        const string line = "{\"type\":\"result\",\"subtype\":\"error_during_execution\",\"is_error\":true,"
+            + "\"num_turns\":0,\"session_id\":\"11111111-2222-3333-4444-555555555555\","
+            + "\"errors\":[\"No conversation found with session ID: 11111111-2222-3333-4444-555555555555\"]}";
+        using var doc = System.Text.Json.JsonDocument.Parse(line);
+
+        var errors = ClaudeHomeServer.Services.Llm.Claude.ClaudeSession.ResultErrors(doc.RootElement);
+
+        errors.Should().ContainSingle();
+        TurnFailureText.ForResultErrors(errors).Should().Be(TurnFailureText.ResumeTranscriptMissing);
+    }
+
+    [Fact]
+    public void ResultErrors_Нераспознанные_ПоказываютсяКакЕсть()
+        => TurnFailureText.ForResultErrors(["Something else went wrong"]).Should().BeNull();
 }

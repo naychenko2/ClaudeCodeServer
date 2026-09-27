@@ -1,6 +1,7 @@
 ﻿using ClaudeHomeServer.Services;
 using FluentAssertions;
 using Xunit;
+using ClaudeHomeServer.Services.Files;
 
 namespace ClaudeHomeServer.Tests.Services;
 

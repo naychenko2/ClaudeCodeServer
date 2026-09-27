@@ -17,7 +17,7 @@ namespace ClaudeHomeServer.Services.Spend;
 // RollupOlderThan сворачивает день в DailySpendRow и удаляет jsonl. Инвариант: день живёт
 // ЛИБО в деталях, ЛИБО в daily — читатели выбирают источник по наличию дня в daily,
 // двойного счёта нет. Все даты — по UTC.
-public sealed class SpendStore : ISpendCollector
+public sealed class SpendStore : ISpendCollector, ISpendDetailReader
 {
     private readonly string _dir;
     private readonly ILogger<SpendStore>? _log;
@@ -79,8 +79,10 @@ public sealed class SpendStore : ISpendCollector
 
     public void Record(SpendRecord record)
     {
-        // Пустые записи не копим: ни токенов, ни генераций — аналитике нечего показать
-        if (record.TotalTokens == 0 && record.Generations == 0) return;
+        // Пустые записи не копим: ни токенов, ни генераций, ни суммы — аналитике нечего
+        // показать. Сумма без генераций — догоняющая запись редактора картинок, её терять нельзя
+        if (record.TotalTokens == 0 && record.Generations == 0
+            && (record.CostUsd ?? 0) == 0 && (record.CostRub ?? 0) == 0 && (record.CostCredits ?? 0) == 0) return;
 
         // Дедуп по Id: повторный импорт той же записи (оборванный backfill) — тихий no-op
         if (!_ids.TryAdd(record.Id, 0)) return;
@@ -164,9 +166,17 @@ public sealed class SpendStore : ISpendCollector
                 lock (list) snapshot = [.. list];
                 next[date] = Aggregate(date, snapshot);
             }
-            _daily = next;
-            PersistDaily(next);
 
+            if (!PersistDaily(next))
+            {
+                // daily.json не записан — сырьё остаётся нетронутым,
+                // следующий проход rollup попробует записать снова
+                _log?.LogWarning("spend: daily.json не записан, сырьё {Dates} остаётся до следующего прохода",
+                    string.Join(", ", victims));
+                return;
+            }
+
+            _daily = next;
             foreach (var date in victims)
             {
                 if (_details.TryRemove(date, out var removed))
@@ -205,6 +215,7 @@ public sealed class SpendStore : ISpendCollector
             row.CacheCreationTokens += r.CacheCreationTokens;
             row.CostUsd += r.CostUsd ?? 0;
             row.CostRub += r.CostRub ?? 0;
+            row.CostCredits += r.CostCredits ?? 0;
             row.Generations += r.Generations;
             row.Turns += 1;
         }
@@ -273,7 +284,8 @@ public sealed class SpendStore : ISpendCollector
         }
     }
 
-    private void PersistDaily(Dictionary<string, List<DailySpendRow>> snapshot)
+    // internal — для тестов: сбой записи (диск, права) → false → сырьё не удаляется.
+    internal bool PersistDaily(Dictionary<string, List<DailySpendRow>> snapshot)
     {
         try
         {
@@ -281,7 +293,8 @@ public sealed class SpendStore : ISpendCollector
             var tmp = DailyPath + ".tmp";
             File.WriteAllText(tmp, JsonSerializer.Serialize(snapshot, JsonOpts));
             File.Move(tmp, DailyPath, overwrite: true);
+            return true;
         }
-        catch (Exception ex) { _log?.LogError(ex, "spend: не удалось записать daily.json"); }
+        catch (Exception ex) { _log?.LogError(ex, "spend: не удалось записать daily.json"); return false; }
     }
 }

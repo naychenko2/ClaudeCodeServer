@@ -4,7 +4,7 @@
 // хост (aihome_shell) грузит его по URL в рантайме (registerRemotes + loadRemote).
 // Remote экспортирует ./subsystem — полный SubsystemManifest (manifest + slots, без tab).
 //
-// Dev-сервер запускается на порту 5175 (vite dev), хост проксирует /architecture-remote/**
+// Dev-сервер запускается на порту 5177 (vite dev), хост проксирует /architecture-remote/**
 // сюда. В прод remoteEntry.js сервиcится статически под /architecture-remote/ в wwwroot.
 
 import { defineConfig } from 'vite';
@@ -43,7 +43,7 @@ export default defineConfig({
     },
   },
   server: {
-    port: 5175,
+    port: 5177,
     // Dev-сервер — цель прокси /architecture-remote хоста: браузер идёт same-origin
     // (через прокси), поэтому CORS для него формально не нужен; cors:true оставлен
     // страховкой на случай прямого кросс-оригин доступа к remoteEntry.js.

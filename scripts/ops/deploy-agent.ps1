@@ -343,10 +343,31 @@ function Invoke-Robocopy([string]$src, [string]$dst, [switch]$Mirror, [string[]]
         $rcArgs += '/XD'
         foreach ($d in $excludeDirs) { $rcArgs += (Join-Path $src $d) }
     }
-    $rcArgs += @('/R:2', '/W:1', '/NFL', '/NDL', '/NP', '/NJH', '/NJS')
+    $rcArgs += @('/R:2', '/W:1', '/NP')
+    # Полный ход robocopy пишем в лог-файл. Раньше /NFL /NDL /NJH /NJS глушили и консоль, и
+    # лог, и при коде ≥8 в журнале оставалось только число — список упавших файлов терялся,
+    # каждый такой случай приходилось расследовать руками на боевой машине.
+    $rcLog = $null
+    if (-not $DryRun) {
+        $logDir = Join-Path $AgentDir 'logs\robocopy'
+        New-Item -ItemType Directory -Force $logDir -ErrorAction SilentlyContinue | Out-Null
+        $rcLog = Join-Path $logDir ('{0}-{1}.log' -f $stamp, [guid]::NewGuid().ToString('N').Substring(0,8))
+        $rcArgs += '/LOG+:' + $rcLog
+    }
     & robocopy.exe @rcArgs | Out-Null
     $code = $LASTEXITCODE
-    if ($code -ge 8) { throw "robocopy '$src' -> '$dst' вернул $code" }
+    if ($code -ge 8) {
+        $msg = "robocopy '$src' -> '$dst' вернул $code"
+        if ($rcLog -and (Test-Path $rcLog)) {
+            $tail = @(Get-Content $rcLog -Tail 100 -ErrorAction SilentlyContinue)
+            if ($tail.Count -gt 0) {
+                Write-Bad "$msg — последние строки лога:"
+                foreach ($line in $tail) { Write-Bad "  $line" }
+            }
+            $msg += ". Лог: $rcLog"
+        }
+        throw $msg
+    }
     return $code
 }
 
@@ -365,36 +386,78 @@ function Copy-BuildTree([string]$src, [string]$dst) {
 # любой одноимённый процесс на машине, а на этой же машине штатно живут хостовой дев-стенд
 # (dotnet run), инспекционные копии бэкапа (--inspect) и тестовый инстанс полигона на :8080 —
 # выкатка убивала бы их заодно, а потом ещё и падала на «процессы не умерли за 20 с».
-# Путь недоступен (процесс чужой учётки) — значит и не наш: такие не трогаем.
-function Get-StackProcesses {
+# Процесс с НАШИМ именем, у которого путь прочитать не удалось, — не «чужой», а
+# «неопознанный»: чаще всего это наш же стек, запущенный С ПОВЫШЕНИЕМ, тогда как агент
+# идёт из планировщика без него (RunLevel=LeastPrivilege). Молча считать такой процесс
+# чужим нельзя — именно это стоило шести дней и четырёх выкаток 14–16.09: шаг stop
+# отчитывался ok, никого не погасив, а swap затем падал на занятых dll с robocopy 11.
+# Поэтому список делится надвое, а решение о неопознанных принимает вызывающий.
+function Get-StackProcessInfo {
     $root = Get-NormalizedPath $PublishDir
     $procs = @(Get-Process -Name 'ClaudeHomeServer', 'ClaudeHomeServer.Tray', 'ConPtyBridge' -ErrorAction SilentlyContinue)
-    return @($procs | Where-Object {
+    $ours = @()
+    $unknown = @()
+    foreach ($p in $procs) {
         $exePath = ''
-        try { $exePath = $_.Path } catch { $exePath = '' }
-        if (-not $exePath) { return $false }
-        return ((Get-NormalizedPath (Split-Path -Parent $exePath)) -eq $root)
-    })
+        try { $exePath = $p.Path } catch { $exePath = '' }
+        if (-not $exePath) { $unknown += $p; continue }
+        if ((Get-NormalizedPath (Split-Path -Parent $exePath)) -eq $root) { $ours += $p }
+    }
+    return [pscustomobject]@{ Ours = @($ours); Unreadable = @($unknown) }
+}
+
+# Совместимый вид для остальных вызывающих: только опознанно наши процессы.
+function Get-StackProcesses { return @((Get-StackProcessInfo).Ours) }
+
+# Текст про неопознанные процессы — один на guard и на Stop-ServerStack, чтобы человек
+# читал одну и ту же формулировку с готовым диагнозом, а не гадал по PID.
+function Get-UnreadableStackText([object[]]$procs) {
+    $ids = @($procs | ForEach-Object { "$($_.ProcessName):$($_.Id)" }) -join ', '
+    return "не удалось опознать процессы стека (путь недоступен): $ids. " +
+           'Скорее всего они запущены с повышением, а агент — без него: проверь RunLevel ' +
+           'задачи планировщика (нужен HighestAvailable). Гасить и подменять файлы вслепую нельзя.'
 }
 
 function Stop-ServerStack {
+    # Fail-closed: неопознанный процесс с нашим именем останавливает выкатку ДО подмены
+    # файлов. Раньше он молча выпадал из списка, и шаг рапортовал успех вхолостую.
+    $info = Get-StackProcessInfo
+    if ($info.Unreadable.Count -gt 0) { throw (Get-UnreadableStackText $info.Unreadable) }
+
     # Трей глушим ПЕРВЫМ, иначе его супервизор поднимет сервер обратно посреди подмены файлов.
     # ConPtyBridge живёт в PublishDir и переживает смерть сервера-родителя — его exe залочит
     # копирование, поэтому он в списке наравне с сервером.
-    @(Get-StackProcesses | Where-Object { $_.ProcessName -eq 'ClaudeHomeServer.Tray' }) |
-        Stop-Process -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Milliseconds 400
-    @(Get-StackProcesses | Where-Object { $_.ProcessName -ne 'ClaudeHomeServer.Tray' }) |
-        Stop-Process -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Milliseconds 700
+    # PID запоминаем ДО убийства: живость проверяем по ним, а не повторным отбором — у
+    # процесса, которого не удалось завершить, путь может стать нечитаемым, и он снова
+    # выпал бы из выдачи как «не наш».
+    $targets = @($info.Ours | ForEach-Object { [pscustomobject]@{ Id = $_.Id; Name = $_.ProcessName } })
+    $failures = @()
+    foreach ($group in @('tray', 'rest')) {
+        $batch = @($info.Ours | Where-Object {
+            if ($group -eq 'tray') { $_.ProcessName -eq 'ClaudeHomeServer.Tray' }
+            else { $_.ProcessName -ne 'ClaudeHomeServer.Tray' }
+        })
+        foreach ($p in $batch) {
+            # Отказ в завершении больше не глотаем: без прав на возвышенный процесс
+            # Stop-Process просто ничего не делает, и раньше это было не видно.
+            try { Stop-Process -Id $p.Id -Force -ErrorAction Stop }
+            catch { $failures += "$($p.ProcessName):$($p.Id) — $($_.Exception.Message)" }
+        }
+        Start-Sleep -Milliseconds $(if ($group -eq 'tray') { 400 } else { 700 })
+    }
+
+    $stillAlive = { @($targets | Where-Object { Get-Process -Id $_.Id -ErrorAction SilentlyContinue }) }
     $deadline = (Get-Date).AddSeconds(20)
     while ((Get-Date) -lt $deadline) {
-        $alive = @(Get-StackProcesses)
-        if ($alive.Count -eq 0) { break }
+        if ((& $stillAlive).Count -eq 0) { break }
         Start-Sleep -Milliseconds 500
     }
-    $alive = @(Get-StackProcesses)
-    if ($alive.Count -gt 0) { throw "процессы не умерли за 20 с: $($alive.ProcessName -join ', ')" }
+    $alive = & $stillAlive
+    if ($alive.Count -gt 0) {
+        $msg = "процессы не умерли за 20 с: $(@($alive | ForEach-Object { "$($_.Name):$($_.Id)" }) -join ', ')"
+        if ($failures.Count -gt 0) { $msg += ". Отказы завершения: $($failures -join '; ')" }
+        throw $msg
+    }
     # Файловые локи снимаются не мгновенно после Exit процесса — даём Windows дописать.
     Start-Sleep -Milliseconds 800
 }
@@ -414,6 +477,31 @@ function Start-ServerStack {
         if (-not (Test-Path $trayExe)) { throw "не найден трей-супервизор: $trayExe" }
         Start-Process -FilePath $trayExe -WorkingDirectory $PublishDir | Out-Null
     }
+}
+
+# --- Песочница ---------------------------------------------------------------------------
+# На одной машине живут cc-sandbox (dev) и cc-sandbox-prod (prod): прод-агент НЕ должен
+# трогать дев. Имя контейнера берётся из appsettings.Local.json прод-конфига
+# (Sandbox:ContainerName, дефолт cc-sandbox), и две точки вызова (stop-sandbox и
+# sandbox-container) ходят через одну функцию.
+function Get-SandboxContainerName {
+    $localCfg = Join-Path $PublishDir 'appsettings.Local.json'
+    if (Test-Path $localCfg) {
+        try {
+            $cn = (Get-Content $localCfg -Raw | ConvertFrom-Json).Sandbox.ContainerName
+            if ($cn) { return "$cn" }
+        } catch { }
+    }
+    return 'cc-sandbox'
+}
+
+function Remove-SandboxContainer {
+    # Снимает bind-mount контейнера на $PublishDir\SystemPrompts. Без этого robocopy во время
+    # swap падает с кодом 11 (часть файлов не скопирована) — задача cc3ca7aa. Терпим
+    # «контейнера нет» (2>$null | Out-Null): на свежем инстансе это норма.
+    $name = Get-SandboxContainerName
+    docker rm -f $name 2>$null | Out-Null
+    return $name
 }
 
 function Invoke-DataBackup {
@@ -724,6 +812,19 @@ try {
     }
     if ($runner.Count -gt 0) { Write-Warn 'Runner жив, но задан -IgnoreRunner: сервер после подмены поднимет он' }
 
+    # --- Guard: стек опознаётся -----------------------------------------------------------
+    # Ту же проверку делает Stop-ServerStack, но там она сработала бы уже после сборки и
+    # бэкапа — на проде это ~15 минут работы впустую и два лишних перезапуска. Здесь отказ
+    # стоит секунду. Проверяем ДО всего: процесс с нашим именем, чей путь не читается,
+    # почти наверняка наш же стек с повышением, который агент не сможет ни опознать, ни
+    # погасить (14–16.09: четыре выкатки подряд откатились на swap именно из-за этого).
+    $stackInfo = Get-StackProcessInfo
+    if ($stackInfo.Unreadable.Count -gt 0) {
+        $text = Get-UnreadableStackText $stackInfo.Unreadable
+        Write-Bad "ОТКАЗ: $text"
+        Exit-Guard "$text Выкатка не начиналась."
+    }
+
     # --- Guard: свободное место -----------------------------------------------------------
     $binSize = Get-DirSizeBytes $PublishDir $script:DataDirs
     if ($binSize -le 0) { $binSize = [int64](1GB) }
@@ -788,9 +889,10 @@ try {
             Write-Host '  ФАЗА 2 (окно недоступности):'
             $n++; Write-Host "  $n. ClaudeHomeServer.exe --backup (снимок данных)"
             $n++; Write-Host "  $n. стоп трея, сервера, ConPtyBridge"
+            if (-not $SkipSandbox) { $n++; Write-Host "  $n. остановить контейнер песочницы (освобождает bind-mount на $PublishDir\SystemPrompts)" }
             $n++; Write-Host "  $n. снимок бинарников -> $ReleasesDir\$stamp (без $($script:DataDirs -join ', '))"
             $n++; Write-Host "  $n. staging -> $PublishDir + build-id.txt (deployId $deployId)"
-            if (-not $SkipSandbox) { $n++; Write-Host "  $n. пересоздать контейнер песочницы" }
+            if (-not $SkipSandbox) { $n++; Write-Host "  $n. пересоздать контейнер песочницы (новый образ)" }
             $n++; Write-Host "  $n. старт трея"
             Write-Host '  ФАЗА 3 (гейт):'
             $n++; Write-Host "  $n. health $HealthSuccesses успешных ответа за $HealthTimeoutSec с ($HealthUrl), X-Build = $deployId"
@@ -883,8 +985,25 @@ try {
     Complete-DeployStep $h 'ok' ''
 
     $h = Add-DeployStep 'publish-backend'
-    dotnet publish (Join-Path $RepoDir 'backend\ClaudeHomeServer\ClaudeHomeServer.csproj') -c Release -o $StagingDir
+    # RID обязателен: без него нативка SkiaSharp (растр редактора) едет под все платформы, ~0,4 ГБ
+    dotnet publish (Join-Path $RepoDir 'backend\ClaudeHomeServer\ClaudeHomeServer.csproj') -c Release -r win-x64 --self-contained false -o $StagingDir
     if ($LASTEXITCODE -ne 0) { Complete-DeployStep $h 'failed' "dotnet exit $LASTEXITCODE"; throw "публикация бэка упала (exit $LASTEXITCODE)" }
+    # Проверка динамических модулей: ModuleLoader резолвит их по пути из appsettings.json
+    # (modules/notes, modules/spend и modules/image-editor). Если csproj потеряет копию при publish — INoteSemanticIndex
+    # и ISpendCollector не зарегистрируются, форвардер Knowledge роняет старт, /api/spend/*
+    # отдаёт 404. Раньше отлавливалось уже в продакшене (задача H4). Ловим здесь, пока
+    # staging не заархивирован: падаем с понятным сообщением, а не выкатываем мёртвый хост.
+    foreach ($mod in @(
+        @{ Name = 'notes'; Dll = 'ClaudeHomeServer.Notes.dll' },
+        @{ Name = 'spend'; Dll = 'ClaudeHomeServer.Spend.dll' },
+        @{ Name = 'image-editor'; Dll = 'ClaudeHomeServer.ImageEditor.dll' })) {
+        $dllPath = Join-Path $StagingDir "modules\$($mod.Name)\$($mod.Dll)"
+        if (-not (Test-Path $dllPath)) {
+            $msg = "нет $dllPath после publish: ModuleLoader не найдёт модуль $($mod.Name) — INoteSemanticIndex/ISpendCollector не зарегистрируются (см. цели копирования модулей в ClaudeHomeServer.csproj)"
+            Complete-DeployStep $h 'failed' $msg
+            throw $msg
+        }
+    }
     Complete-DeployStep $h 'ok' ''
 
     $h = Add-DeployStep 'publish-conpty'
@@ -963,6 +1082,20 @@ try {
         Complete-DeployStep $h 'ok' ''
     }
 
+    # MSBuild/Roslyn build-server (VBCSCompiler/dotnet build-server) после `dotnet publish`
+    # держит handles на собранные в staging .dll — robocopy во время swap падает с кодом 11
+    # (ERROR 32, "file is being used by another process"). Гасим сервер сборки ДО остановки
+    # прода, чтобы все хендлы на staging освободились к моменту копирования. Безопасно при
+    # уже-мёртвом build-server (команда завершается мгновенно) и при отсутствии SDK.
+    $h = Add-DeployStep 'build-server-shutdown'
+    & dotnet build-server shutdown 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn "dotnet build-server shutdown вернул $LASTEXITCODE — продолжаю (не критично)"
+        Complete-DeployStep $h 'warn' "exit $LASTEXITCODE"
+    } else {
+        Complete-DeployStep $h 'ok' ''
+    }
+
 } catch {
     # Сюда попадают все провалы ФАЗЫ 1 и guard'ов после старта журнала: сервер жив,
     # публикацию мы не трогали — просто честно закрываем выкатку.
@@ -996,6 +1129,20 @@ try {
     $stopAttempted = $true
     Stop-ServerStack
     Complete-DeployStep $h 'ok' ''
+
+    # Прод-контейнер песочницы держит bind-mount на $PublishDir\SystemPrompts (карта BareMode),
+    # поэтому robocopy во время swap падает с кодом 11. Гасим контейнер ДО snapshot/swap,
+    # чтобы bind-mount освободил каталог. Имя — из прод-конфига (Sandbox:ContainerName,
+    # дефолт cc-sandbox), иначе можно удалить чужой контейнер на машине, где живут и dev
+    # (cc-sandbox), и prod (cc-sandbox-prod). Шаг sandbox-container ПОСЛЕ swap остаётся — он
+    # обеспечивает переход на новый образ.
+    $h = Add-DeployStep 'stop-sandbox'
+    if ($SkipSandbox) {
+        Complete-DeployStep $h 'skipped' '-SkipSandbox'
+    } else {
+        $containerName = Remove-SandboxContainer
+        Complete-DeployStep $h 'ok' $containerName
+    }
 
     $h = Add-DeployStep 'snapshot'
     if (Test-Path (Join-Path $PublishDir 'ClaudeHomeServer.exe')) {
@@ -1036,15 +1183,7 @@ try {
     } else {
         # Имя из прод-конфига (Sandbox:ContainerName), дефолт cc-sandbox. Бэкенд поднял бы
         # свежий контейнер и сам, но явное удаление гарантирует переход на новый образ сразу.
-        $containerName = 'cc-sandbox'
-        $localCfg = Join-Path $PublishDir 'appsettings.Local.json'
-        if (Test-Path $localCfg) {
-            try {
-                $cn = (Get-Content $localCfg -Raw | ConvertFrom-Json).Sandbox.ContainerName
-                if ($cn) { $containerName = $cn }
-            } catch { }
-        }
-        docker rm -f $containerName 2>$null | Out-Null
+        $containerName = Remove-SandboxContainer
         Complete-DeployStep $h 'ok' $containerName
     }
 
@@ -1109,7 +1248,9 @@ try {
         Write-Bad "откат сам упал: $($_.Exception.Message)"
     }
     if ($rolled) {
-        Complete-Deploy 'rolled_back' "$reason. Прошлый релиз $stamp возвращён, прод отвечает." $stamp
+        # ВАЖНО: формулировка должна явно говорить, что НОВЫЙ код на прод НЕ попал. Иначе
+        # «прод отвечает» читалось как успех, а на деле крутился старый релиз (см. задачу 3b9cbf99).
+        Complete-Deploy 'rolled_back' "$reason. Выкатка ОТМЕНЕНА, прод работает на ПРОШЛОМ релизе $stamp — новый код sha $($git.sha) НЕ УСТАНОВЛЕН." $stamp
         $exitCode = 3
     } else {
         Complete-Deploy 'failed' "$reason. Откат не поднял прод — нужен человек: $releaseDir" $stamp

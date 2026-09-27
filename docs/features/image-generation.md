@@ -3,8 +3,8 @@
 **Статус:** реализовано, без фич-флага. Настройка не меняет поведение чистой установки —
 до первого выбора админа работает режим «Автоматически».
 **Источник правды по поведению — код:**
-[backend/ClaudeHomeServer/Services/Images/](../../backend/ClaudeHomeServer/Services/Images/),
-[FalImageService.cs](../../backend/ClaudeHomeServer/Services/FalImageService.cs),
+[backend/ClaudeHomeServer.Images/Services/](../../backend/ClaudeHomeServer.Images/Services/),
+[FalImageService.cs](../../backend/ClaudeHomeServer.Images/Services/FalImageService.cs),
 [ImageGenerationController.cs](../../backend/ClaudeHomeServer/Controllers/ImageGenerationController.cs).
 **Смежные документы:**
 - [ADR-008](../adr/ADR-008-project-background-generation.md) — фон проекта; догоняющая
@@ -50,7 +50,7 @@ ImageBackfillService ───────┘        (data/image-generation.json
 
 ### 2.1. Драйвер: `IImageGenerator`
 
-[IImageGenerator.cs](../../backend/ClaudeHomeServer/Services/Images/IImageGenerator.cs) —
+[IImageGenerator.cs](../../backend/ClaudeHomeServer.Images/Services/IImageGenerator.cs) —
 контракт из пяти членов: `Key` (`fal` | `glif`), `DisplayName`, `Enabled` (есть ключ/токен),
 `Models` (курируемый каталог для пикера) и
 `GenerateManyAsync(prompt, count, model, ct)`. Общие типы — `GeneratedImage(Bytes, ContentType)`
@@ -60,13 +60,13 @@ ImageBackfillService ───────┘        (data/image-generation.json
 понимает «не смог» без разбора ошибок), и вызывающие контроллеры (внятный отказ вместо 500).
 
 Регистрация — одна строка `AddImageDriver<T>()` в
-[ImageGenerationRegistration.cs](../../backend/ClaudeHomeServer/Services/Images/ImageGenerationRegistration.cs):
+[ImageGenerationRegistration.cs](../../backend/ClaudeHomeServer.Images/Services/ImageGenerationRegistration.cs):
 драйвер отдаётся и по своему типу, и в набор `IEnumerable<IImageGenerator>`, который получает
 роутер. Новый провайдер = новый класс + одна строка регистрации.
 
 ### 2.2. Драйвер fal.ai (синхронный)
 
-[FalImageService.cs](../../backend/ClaudeHomeServer/Services/FalImageService.cs) — прежний
+[FalImageService.cs](../../backend/ClaudeHomeServer.Images/Services/FalImageService.cs) — прежний
 сервис под общим контрактом, поверхность сохранена (старые перегрузки `GenerateAsync`/
 `GenerateManyAsync` без модели на месте).
 
@@ -95,7 +95,7 @@ ImageBackfillService ───────┘        (data/image-generation.json
 
 ### 2.3. Драйвер glif (асинхронный, с опросом)
 
-[GlifImageGenerator.cs](../../backend/ClaudeHomeServer/Services/Images/GlifImageGenerator.cs) —
+[GlifImageGenerator.cs](../../backend/ClaudeHomeServer.Images/Services/GlifImageGenerator.cs) —
 серверный путь без участия CLI-хода; транспорт тот же, что у `GlifAccountService`: JSON-RPC
 `tools/call` на `https://glif.app/api/mcp`, `Bearer {Glif:McpToken}`, endpoint stateless (без
 `initialize`), ответ приходит SSE-кадром либо чистым JSON.
@@ -115,7 +115,7 @@ ImageBackfillService ───────┘        (data/image-generation.json
 - `Enabled` = задан `Glif:McpToken`.
 
 Ответы разбирает
-[GlifJobParser.cs](../../backend/ClaudeHomeServer/Services/Images/GlifJobParser.cs) — чистая
+[GlifJobParser.cs](../../backend/ClaudeHomeServer.Images/Services/GlifJobParser.cs) — чистая
 защитная функция: достаёт полезное из `structuredContent`, `_meta.glif`, JSON внутри
 text-блоков и самого `result`; ссылки на медиа собирает из `media[]` и блоков
 `resource_link`/`resource` с дедупом. Состояния сводит к четырём (`Unknown` / `Working` /
@@ -133,7 +133,7 @@ me to iterate on…») и `interaction` (у обычного прогона `nul
 
 ### 2.4. Роутер `ImageGenerationService`
 
-[ImageGenerationService.cs](../../backend/ClaudeHomeServer/Services/Images/ImageGenerationService.cs) —
+[ImageGenerationService.cs](../../backend/ClaudeHomeServer.Images/Services/ImageGenerationService.cs) —
 единственная точка входа генерации; прямой привязки к конкретному драйверу у вызывающих больше нет.
 
 - **Порядок драйверов фиксирует сам роутер** (`ImageGenerationOptions.ProviderOrder` =
@@ -155,7 +155,7 @@ me to iterate on…») и `interaction` (у обычного прогона `nul
 
 ### 2.5. Настройка и её слои
 
-[ImageGenerationSettingsStore.cs](../../backend/ClaudeHomeServer/Services/Images/ImageGenerationSettingsStore.cs)
+[ImageGenerationSettingsStore.cs](../../backend/ClaudeHomeServer.Images/Services/ImageGenerationSettingsStore.cs)
 — `data/image-generation.json`, `FormatVersion = 1`, снимок неизменяемый, запись целиком под
 локом (образец — `FallbackSettingsStore`).
 
@@ -183,9 +183,9 @@ auto  /  модель = дефолт самого драйвера
 паттерн, что у фона проекта (ADR-008).
 
 Файлы:
-[ImageBackfillStore.cs](../../backend/ClaudeHomeServer/Services/Images/ImageBackfillStore.cs) ·
-[ImageBackfillService.cs](../../backend/ClaudeHomeServer/Services/Images/ImageBackfillService.cs) ·
-[ImageBackfillHostedService.cs](../../backend/ClaudeHomeServer/Services/Images/ImageBackfillHostedService.cs).
+[ImageBackfillStore.cs](../../backend/ClaudeHomeServer.Images/Services/ImageBackfillStore.cs) ·
+[ImageBackfillService.cs](../../backend/ClaudeHomeServer.Images/Services/ImageBackfillService.cs) ·
+[ImageBackfillHostedService.cs](../../backend/ClaudeHomeServer.Images/Services/ImageBackfillHostedService.cs).
 
 - **Очередь** — `data/image-backfill.json` (`FormatVersion = 1`). Заявка:
   `Kind` (`project-icon` | `persona-avatar`), `EntityId`, `OwnerId`, `Prompt?`, `Attempts`,

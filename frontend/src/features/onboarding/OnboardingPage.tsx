@@ -346,6 +346,10 @@ function IntroChatShell({ kind, title, subtitle, project, start, onDone }: {
             attachedFiles={attachedFiles}
             onAttachedFilesChange={setAttachedFiles}
             greetingBubble={<IntroPlaque kind={kind} isMobile={isMobile} />}
+            // Знакомство ведётся в единственном чате, отдельный список не загружаем —
+            // отдаём Set из id этого чата, чтобы любая плашка «Ветка от …» (маловероятная
+            // в знакомстве, но возможная) деградировала в текст, а не вела на несуществующий чат
+            availableChatIds={new Set([session.id])}
           />
         ) : error ? (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: SP.md, padding: SP.xl, textAlign: 'center' }}>

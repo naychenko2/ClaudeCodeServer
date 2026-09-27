@@ -4,6 +4,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Notes;
+using ClaudeHomeServer.Services.Spend;
 using ClaudeHomeServer.Services.Tasks;
 
 namespace ClaudeHomeServer.Services;
@@ -32,7 +33,7 @@ internal sealed record TaskPromptMetrics(int TotalChars, int TotalTokensEst,
 // Claude-исполнитель задач: запускает отдельную чат-сессию по задаче (кнопкой или
 // автозапуском по сроку), следит за её ходом через SessionManager.OnSessionMessage
 // и уведомляет пользователя (тост + push) о завершении и запросах разрешений.
-public class TaskExecutionService
+public class TaskExecutionService : Execution.IDeviceOnlineHandler
 {
     private readonly TaskManager _tasks;
     private readonly SessionManager _sessions;
@@ -52,6 +53,11 @@ public class TaskExecutionService
     // Среда исполнения владельца: путь справочника в постановке должен быть адресуем
     // ИЗ неё, а не с хоста. null — считаем среду локальной (перевод тождественный).
     private readonly Execution.ILauncherFactory? _launchers;
+    // Проект задачи — для среды исполнения проекта (ADR-016: локальный проект — на устройстве)
+    private readonly IProjectManager? _projects;
+    // Готовность устройства локального проекта (ADR-016, вариант А плана §5): офлайн —
+    // задача встаёт в «ждёт устройство» ДО создания чата. null — проверки нет (тесты без неё).
+    private readonly Execution.IProjectDeviceGate? _deviceGate;
     // Стор настроек специальностей: матрицы моделей по уровням и DefaultTier специальности
     // (ADR-007 §2). null — настройка не подключена, матрицы специальности не участвуют.
     private readonly SpecialtySettingsStore? _specialtySettings;
@@ -79,7 +85,8 @@ public class TaskExecutionService
     private const int TurnErrorTextLimit = 4000;
     // Учёт размера постановки по секциям (шаг 4 плана оптимизации токенов). null — стор
     // не подключён (тесты без DI): замер тогда идёт только в лог, запуск задачи не страдает.
-    private readonly Spend.TaskPromptMetricsStore? _promptMetrics;
+    // Шов — ITaskPromptMetricsStore (Core): Main не тянет конкретную сборку Spend.
+    private readonly ITaskPromptMetricsStore? _promptMetrics;
     // Паспорта прогонов сабагентов: отсюда исполнитель узнаёт, что сабагент его хода замолчал
     // на середине. null — стор не подключён (тесты без DI): ходы разбираются как раньше.
     private readonly Llm.Claude.SubagentRunLog? _subagentRuns;
@@ -101,12 +108,15 @@ public class TaskExecutionService
         PersonaAgentFileSync? agentFiles = null, Execution.ILauncherFactory? launchers = null,
         SpecialtySettingsStore? specialtySettings = null,
         Llm.ModelAssignmentResolver? assignments = null,
-        Spend.TaskPromptMetricsStore? promptMetrics = null,
+        ITaskPromptMetricsStore? promptMetrics = null,
         Llm.Claude.SubagentRunLog? subagentRuns = null,
         // Подсистема Notes отключаемая: null — блок «релевантные заметки» в постановке
         // исполнителя тихо пропускается (BuildNotesContextAsync).
-        INoteSemanticIndex? kb = null)
+        INoteSemanticIndex? kb = null,
+        IProjectManager? projects = null,
+        Execution.IProjectDeviceGate? deviceGate = null)
     {
+        _deviceGate = deviceGate;
         _staleAfter = TimeSpan.FromMinutes(
             int.TryParse(config["Tasks:ExecutorStaleMinutes"], out var stale) && stale > 0 ? stale : 15);
         _subagentRuns = subagentRuns;
@@ -115,6 +125,7 @@ public class TaskExecutionService
         _providers = providers;
         _agentFiles = agentFiles;
         _launchers = launchers;
+        _projects = projects;
         _specialtySettings = specialtySettings;
         _assignments = assignments;
         _tasks = tasks;
@@ -180,6 +191,11 @@ public class TaskExecutionService
     // null — режима нет либо сервис не поднят: провал остаётся обычным (тост владельцу).
     public Func<TaskItem, Task>? TeamTaskFailed { get; set; }
 
+    // Хук «под-задача так и не стартовала» (устройство не вышло в онлайн за потолок ожидания):
+    // TeamWaveService поднимает карточку в ленте штаба. Отдельно от TeamTaskFailed: перевыдача
+    // тут бессмысленна — она упрётся в то же офлайн-устройство ещё на сутки.
+    public Func<TaskItem, string, Task>? TeamTaskNotLaunched { get; set; }
+
     /// <summary>
     /// Запуск выполнения задачи Claude-ом: отдельная сессия в проекте задачи
     /// (личная — чат вне проекта) в режиме acceptEdits, первым сообщением — постановка.
@@ -232,6 +248,17 @@ public class TaskExecutionService
             linked.Status is SessionStatus.Starting or SessionStatus.Working or SessionStatus.Waiting)
             throw new InvalidOperationException("По задаче уже работает сессия");
 
+        // Устройство локального проекта не готово — запуска не делаем вовсе: ни чата, ни
+        // отметки ClaudeStartedAt (иначе упавший старт выглядел бы начатым, а страховка
+        // молчала). Задача встаёт в «ждёт устройство» и стартует по выходу устройства в онлайн.
+        if (task.ProjectId is { } gateProjectId && _projects?.GetById(gateProjectId) is { } gateProject
+            && _deviceGate?.Check(gateProject) is { IsReady: false } gate)
+        {
+            if (!gate.MustWait)
+                throw new InvalidOperationException(gate.Reason ?? ProjectCapabilities.DeviceMissingReason);
+            return await EnterDeviceWaitAsync(task, gate.Reason);
+        }
+
         // Персона-исполнитель: чужая/удалённая — мягкая деградация в обычный режим
         Persona? persona = null;
         if (task.PersonaId is not null)
@@ -273,7 +300,7 @@ public class TaskExecutionService
         await _broadcaster.ToOwner(task.OwnerId, new TaskChangedMessage("updated", updated));
 
         var prompt = BuildPrompt(updated, persona, ResolveTierAliases(task.OwnerId),
-            ResolveCategoryProfilesPath(task));
+            ResolveCategoryProfilesPath(task), ResolveRulesTemplate(session.Id, task.OwnerId));
         // Обогащение контекста семантически близкими заметками
         var notesBlock = await BuildNotesContextAsync(updated);
         prompt += notesBlock;
@@ -288,13 +315,25 @@ public class TaskExecutionService
             metrics.TaskSectionChars, metrics.ExpectedResultChars, metrics.ToolsChars,
             metrics.MandatoryChars, metrics.RestrictionsChars, metrics.DelegationChars,
             metrics.OmOChars, metrics.ContextChars, metrics.NotesContextChars);
-        _promptMetrics?.Record(new Spend.TaskPromptMetricsStore.Entry(
+        _promptMetrics?.Record(new TaskPromptMetricsEntry(
             DateTime.UtcNow, updated.Id, updated.OwnerId!, updated.ProjectId, session.Id, persona?.Id,
             metrics.TotalChars, metrics.TotalTokensEst,
             metrics.TaskSectionChars, metrics.ExpectedResultChars, metrics.ToolsChars,
             metrics.MandatoryChars, metrics.RestrictionsChars, metrics.DelegationChars,
             metrics.OmOChars, metrics.ContextChars, metrics.NotesContextChars));
-        await _sessions.SendMessageAsync(session.Id, prompt, [], auto: true, senderPersonaId: persona?.Id);
+        try
+        {
+            await _sessions.SendMessageAsync(session.Id, prompt, [], auto: true, senderPersonaId: persona?.Id);
+        }
+        catch (Exception ex)
+        {
+            // Отметка запуска уже стоит (без неё первые события хода не нашли бы задачу), а
+            // постановка не ушла: итог «error», чтобы задача не выглядела идущей в работе
+            _log.LogError(ex, "Постановка исполнителю задачи {TaskId} не отправлена", task.Id);
+            if (_tasks.MarkClaudeResult(task.Id, "error") is { } failed)
+                await _broadcaster.ToOwner(task.OwnerId, new TaskChangedMessage("updated", failed));
+            throw;
+        }
 
         if (auto)
             await NotifyAsync(updated, new NotificationMessage(
@@ -310,6 +349,96 @@ public class TaskExecutionService
         _log.LogInformation("Claude-исполнитель запущен ({Trigger}): задача {TaskId} «{Title}», сессия {SessionId}",
             auto ? "автозапуск" : "вручную", updated.Id, updated.Title, session.Id);
         return updated;
+    }
+
+    // --- Ожидание устройства локального проекта (ADR-016, вариант А плана §5) ---
+
+    // Задача встаёт в «ждёт устройство»: отметка на самой задаче (переживает рестарт) и одно
+    // уведомление на всё ожидание — повторные попытки (ручной запуск, тик) его не повторяют.
+    private async Task<TaskItem> EnterDeviceWaitAsync(TaskItem task, string? reason)
+    {
+        var first = _tasks.GetById(task.Id)?.DeviceWaitSince is null;
+        var updated = _tasks.MarkDeviceWait(task.Id, DateTime.UtcNow, reason)
+            ?? throw new InvalidOperationException("Задача удалена");
+        await _broadcaster.ToOwner(task.OwnerId!, new TaskChangedMessage("updated", updated));
+        if (first)
+        {
+            await NotifyAsync(updated, new NotificationMessage(
+                Title: "Задача ждёт устройство",
+                Body: $"{updated.Title}: {reason ?? "устройство проекта недоступно"}. Исполнитель запустится, " +
+                      $"когда устройство выйдет в сеть (ждём до {(int)ProjectCapabilities.DeviceWaitCeiling.TotalHours} ч)",
+                Url: TaskUrl.Of(updated),
+                Kind: "info",
+                PersonaId: updated.PersonaId,
+                ProjectId: updated.ProjectId,
+                TaskId: updated.Id,
+                Tag: "Исполнитель"));
+            _log.LogInformation("Задача {TaskId} «{Title}» ждёт устройство: {Reason}", updated.Id, updated.Title, reason);
+        }
+        return updated;
+    }
+
+    public async Task OnDeviceOnlineAsync(string ownerId, string deviceId, CancellationToken ct = default)
+    {
+        foreach (var task in _tasks.GetDeviceWaiting())
+            if (task.OwnerId == ownerId)
+                await ResumeDeviceWaitAsync(task, DateTime.UtcNow, deviceId);
+    }
+
+    public async Task SweepAsync(DateTime nowUtc, CancellationToken ct = default)
+    {
+        foreach (var task in _tasks.GetDeviceWaiting())
+            await ResumeDeviceWaitAsync(task, nowUtc, onlineDeviceId: null);
+    }
+
+    // Ждущая задача: истёк потолок — остановка с причиной; устройство готово — запуск.
+    // onlineDeviceId — событие конкретного устройства (задачи на других не трогаем).
+    private async Task ResumeDeviceWaitAsync(TaskItem task, DateTime nowUtc, string? onlineDeviceId)
+    {
+        try
+        {
+            if (task.DeviceWaitSince is { } since && nowUtc - since >= ProjectCapabilities.DeviceWaitCeiling)
+            {
+                await ExpireDeviceWaitAsync(task);
+                return;
+            }
+            if (task.ProjectId is null || _projects?.GetById(task.ProjectId) is not { } project || _deviceGate is null)
+                return;
+            var gate = _deviceGate.Check(project);
+            if (onlineDeviceId is not null && gate.DeviceId != onlineDeviceId) return;
+            if (gate.Verdict == ProjectBackgroundVerdict.DeviceGone)
+            {
+                await ExpireDeviceWaitAsync(task, gate.Reason);
+                return;
+            }
+            if (!gate.IsReady) return;
+            _log.LogInformation("Устройство проекта готово — запускаю ждавшую задачу {TaskId} «{Title}»", task.Id, task.Title);
+            await ExecuteAsync(task, auto: true);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Запуск ждавшей устройство задачи {TaskId} «{Title}» не удался", task.Id, task.Title);
+        }
+    }
+
+    // Ожидание кончилось без запуска: пометка «исполнитель остановился» с причиной, уведомление
+    // владельцу и (у под-задачи штаба) карточка в ленте штаба — не тишина.
+    private async Task ExpireDeviceWaitAsync(TaskItem task, string? detail = null)
+    {
+        var cleared = _tasks.ClearDeviceWait(task.Id);
+        if (cleared is null) return;
+        await HandleExecutorStoppedAsync(cleared, ExecutorStopClassifier.DeviceWaitExpiredReason);
+        if (TeamTaskNotLaunched is { } onNotLaunched)
+        {
+            try
+            {
+                await onNotLaunched(cleared, detail ?? ExecutorStopText(ExecutorStopClassifier.DeviceWaitExpiredReason));
+            }
+            catch (Exception ex)
+            {
+                _log.LogError(ex, "Карточка штаба о несостоявшемся запуске задачи {TaskId} не поднята", cleared.Id);
+            }
+        }
     }
 
     /// <summary>
@@ -346,12 +475,30 @@ public class TaskExecutionService
     {
         var hostPath = _agentFiles?.EnsureCategoryProfiles(task.OwnerId!, task.ProjectId);
         if (hostPath is null) return null;
-        var paths = _launchers?.ForOwner(task.OwnerId).Paths ?? Execution.IdentityPathMapper.Instance;
+        var project = task.ProjectId is { } pid ? _projects?.GetById(pid) : null;
+        var launcher = project is not null ? _launchers?.ForProject(project) : _launchers?.ForOwner(task.OwnerId);
+        var paths = launcher?.Paths ?? Execution.IdentityPathMapper.Instance;
         var runtimePath = ToRuntimeOrNull(paths, hostPath);
         if (runtimePath is null)
             _log.LogDebug("Справочник категорий {Path} недоступен в среде исполнения владельца {Owner} — " +
                           "ссылку в постановку не кладу", hostPath, task.OwnerId);
         return runtimePath;
+    }
+
+    // Шаблон правил постановки для этой задачи. Корень берём у сессии-исполнителя
+    // (GetChatRoot) — она уже создана к моменту сборки промпта, и её EffectiveRoot
+    // учитывает worktree задачи: правка правил в ветке видна сразу, без выкатки.
+    // Путь ХОСТОВЫЙ и читает его бэкенд, а не процесс исполнителя, — перевод в среду
+    // владельца здесь не нужен (в отличие от ссылки на справочник категорий).
+    private string? ResolveRulesTemplate(string sessionId, string? ownerId)
+    {
+        string? root = null;
+        if (ownerId is not null)
+        {
+            try { root = _sessions.GetChatRoot(sessionId, ownerId); }
+            catch (Exception ex) { _log.LogDebug(ex, "Корень чата {Session} не определён — шаблон правил только серверный", sessionId); }
+        }
+        return ReadRulesTemplate(root);
     }
 
     // null — путь вне монтирований среды (аналог SafeJoin, см. DockerPathMapper):
@@ -362,14 +509,55 @@ public class TaskExecutionService
         catch { return null; }
     }
 
+    // Шаблон статичных блоков постановки (ПРАВИЛА + ДЕЛЕГИРОВАНИЕ). Вынесен из кода, чтобы
+    // правка текста не требовала пересборки и выкатки: цепочка резолва как у карты BareMode
+    // (ClaudeSession.ResolvePromptPath) — файл в проекте перебивает серверный дефолт рядом
+    // с exe. Шаблон не найден/не читается — работает встроенный фолбэк ниже, постановка
+    // никогда не остаётся без правил.
+    internal const string RulesTemplateFileName = "task-executor-rules.md";
+
+    // Плейсхолдеры шаблона: строка уровней моделей владельца и ссылка на справочник
+    // категорий. Оба необязательны — пустое значение убирает строку целиком, а не
+    // оставляет висящий заголовок без содержимого.
+    private const string TierLevelsPlaceholder = "{{TIER_LEVELS}}";
+    private const string CategoryProfilesPlaceholder = "{{CATEGORY_PROFILES}}";
+
+    /// <summary>
+    /// Текст шаблона правил: `docs/task-executor-rules.md` проекта, иначе серверный дефолт
+    /// из `SystemPrompts/` рядом с exe. null — ни одного файла нет либо чтение не удалось:
+    /// вызывающий получает встроенный текст.
+    /// </summary>
+    internal static string? ReadRulesTemplate(string? projectRoot)
+    {
+        if (!string.IsNullOrWhiteSpace(projectRoot))
+        {
+            var projectLocal = Path.Combine(projectRoot, "docs", RulesTemplateFileName);
+            if (File.Exists(projectLocal) && TryRead(projectLocal) is { } local) return local;
+        }
+        var serverDefault = Path.Combine(AppContext.BaseDirectory, "SystemPrompts", RulesTemplateFileName);
+        return File.Exists(serverDefault) ? TryRead(serverDefault) : null;
+
+        // Файл читается на КАЖДУЮ постановку — правка подхватывается без перезапуска.
+        // Сбой чтения (файл подменяют прямо сейчас, права) не должен ронять запуск задачи:
+        // молча отступаем к встроенному тексту.
+        static string? TryRead(string path)
+        {
+            try { return File.ReadAllText(path); }
+            catch (IOException) { return null; }
+            catch (UnauthorizedAccessException) { return null; }
+        }
+    }
+
     // Постановка задачи для Claude: контекст + правила ведения статуса через MCP tasks_*.
     // С персоной — структурированный 6-секционный контракт (персона-исполнитель);
     // без персоны — прежний формат (обратная совместимость).
     internal static string BuildPrompt(TaskItem task, Persona? persona = null,
-        ModelTierAliases? aliases = null, string? categoryProfilesPath = null)
+        ModelTierAliases? aliases = null, string? categoryProfilesPath = null,
+        string? rulesTemplate = null)
     {
         if (persona is not null)
-            return BuildPersonaPrompt(task, aliases ?? ModelTierAliases.None, categoryProfilesPath);
+            return BuildPersonaPrompt(task, aliases ?? ModelTierAliases.None, categoryProfilesPath,
+                rulesTemplate);
 
         var sb = new StringBuilder();
         sb.AppendLine($"Выполни задачу из трекера (id задачи: {task.Id}).");
@@ -413,7 +601,7 @@ public class TaskExecutionService
     // Секция КОНТЕКСТ идёт последней: блок заметок (BuildNotesContextAsync)
     // дописывается после и попадает в неё же.
     private static string BuildPersonaPrompt(TaskItem task, ModelTierAliases aliases,
-        string? categoryProfilesPath = null)
+        string? categoryProfilesPath = null, string? rulesTemplate = null)
     {
         var sb = new StringBuilder();
         sb.AppendLine("## ЗАДАЧА");
@@ -426,6 +614,16 @@ public class TaskExecutionService
             sb.AppendLine(task.Description);
         }
         sb.AppendLine();
+        // Блоки ПРАВИЛА и ДЕЛЕГИРОВАНИЕ приезжают шаблоном из файла (ReadRulesTemplate).
+        // Встроенный текст ниже — фолбэк на случай, когда файла нет: он обязан оставаться
+        // дословной копией шаблона, сторож RulesTemplate_СовпадаетСВстроеннымФолбэком
+        // сравнивает обе ветки байт в байт.
+        if (rulesTemplate is { } template && !string.IsNullOrWhiteSpace(template))
+        {
+            sb.AppendLine(RenderRulesTemplate(template, aliases, categoryProfilesPath));
+            AppendContextSection(sb, task);
+            return sb.ToString();
+        }
         // Секции ОЖИДАЕМЫЙ РЕЗУЛЬТАТ, ОБЯЗАТЕЛЬНО, НЕЛЬЗЯ и ИНСТРУМЕНТЫ слиты в одну:
         // они говорили об одном и том же (заверши через tasks_complete с итогом и файлами)
         // тремя разными формулировками. Содержание правил — защищённое, тронут только
@@ -476,6 +674,47 @@ public class TaskExecutionService
         // ссылку не даём вовсе, чтобы исполнитель не бился в несуществующий путь.
         if (categoryProfilesPath is not null)
             sb.AppendLine($"Профили категорий (какой уровень и как формулировать) — `{categoryProfilesPath}`.");
+        AppendContextSection(sb, task);
+        return sb.ToString();
+    }
+
+    // Подстановка плейсхолдеров шаблона. Пустое значение убирает СТРОКУ целиком: иначе
+    // в постановке остаётся пустая строка там, где у владельца нет алиасов тиров или
+    // справочник категорий недоступен.
+    private static string RenderRulesTemplate(string template, ModelTierAliases aliases,
+        string? categoryProfilesPath)
+    {
+        var levels = new List<string>(3);
+        if (aliases.Strong is { } strong) levels.Add($"сильная `{strong}`/`strong`");
+        if (aliases.Medium is { } medium) levels.Add($"средняя `{medium}`/`medium`");
+        if (aliases.Weak is { } weak) levels.Add($"слабая `{weak}`/`weak`");
+
+        var tierLine = aliases.Any
+            ? $"Уровень (`model=` в `Task` / `modelTier` в задаче): {string.Join("; ", levels)}."
+            : null;
+        var profilesLine = categoryProfilesPath is not null
+            ? $"Профили категорий (какой уровень и как формулировать) — `{categoryProfilesPath}`."
+            : null;
+
+        var rendered = ReplaceLine(template, TierLevelsPlaceholder, tierLine);
+        rendered = ReplaceLine(rendered, CategoryProfilesPlaceholder, profilesLine);
+        // Хвостовые переводы строк шаблона срезаем: разделитель перед ## КОНТЕКСТ ставит
+        // AppendContextSection, иначе пустых строк накопится сколько угодно.
+        return rendered.TrimEnd('\r', '\n');
+
+        static string ReplaceLine(string text, string placeholder, string? value)
+        {
+            if (value is not null) return text.Replace(placeholder, value);
+            // Плейсхолдер вместе со своим переводом строки — и в LF, и в CRLF-варианте
+            return text.Replace(placeholder + "\r\n", "")
+                       .Replace(placeholder + "\n", "")
+                       .Replace(placeholder, "");
+        }
+    }
+
+    // Секция КОНТЕКСТ — общая для обеих веток сборки (шаблон и встроенный фолбэк).
+    private static void AppendContextSection(StringBuilder sb, TaskItem task)
+    {
         sb.AppendLine();
         sb.AppendLine("## КОНТЕКСТ");
         if (task.Subtasks.Count > 0)
@@ -495,7 +734,6 @@ public class TaskExecutionService
         }
         if (task.Subtasks.Count == 0 && task.LinkedFiles.Count == 0)
             sb.AppendLine("Дополнительного контекста нет.");
-        return sb.ToString();
     }
 
     // Измерить размер промпта по секциям: символы + грубая оценка токенов (~4 байта на символ UTF-8).
@@ -794,6 +1032,8 @@ public class TaskExecutionService
         ExecutorStopClassifier.AuthFailedReason => "не удалось авторизоваться у провайдера модели",
         ExecutorStopClassifier.SubagentStuckReason =>
             "сабагент раз за разом обрывается посреди работы, добить его не удалось",
+        ExecutorStopClassifier.DeviceWaitExpiredReason =>
+            "устройство локального проекта так и не стало доступно — исполнитель не запускался",
         _ => "исполнение прервано",
     };
 
@@ -1177,11 +1417,11 @@ public class TaskExecutionService
     // сутки прятало поломку DI-резолвера). В этом случае возвращаем SourceSessionId — пусть
     // доклад идёт туда, а вызывающий код пишет Warning, чтобы аномалия была видна.
     internal static string? ResolveReportTarget(Session? executorSession, string? sourceSessionId,
-        out bool fromFallback)
+        ITaskLookup? tasks, out bool fromFallback)
     {
         fromFallback = false;
         if (executorSession is null) return sourceSessionId;
-        var parent = executorSession.ParentSessionId;
+        var parent = SessionTaskLinks.ParentSessionId(executorSession, tasks);
         if (parent is not null) return parent;
         // parent == null: либо ParentDetached=true (явный вынос в корень — гасим),
         // либо у чата вообще нет TaskId (корневой чат без задачи — гасим, аномалии нет:
@@ -1237,7 +1477,7 @@ public class TaskExecutionService
         // вынос в корень её гасит — «вынес из группы» значит «не докладывай туда». Чата-исполнителя
         // нет (задача закрыта без запуска) — остаётся SourceSessionId, как было.
         var executorSession = task.LinkedSessionId is not null ? _sessions.GetById(task.LinkedSessionId) : null;
-        var targetId = ResolveReportTarget(executorSession, task.SourceSessionId, out var fromFallback);
+        var targetId = ResolveReportTarget(executorSession, task.SourceSessionId, new TaskLookupAdapter(_tasks), out var fromFallback);
         if (targetId is null)
         {
             _log.LogInformation("Доклад Z задачи {TaskId}: пропуск — чат-исполнитель явно вынесен в корень (ParentDetached)", task.Id);

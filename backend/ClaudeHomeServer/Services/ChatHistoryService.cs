@@ -99,10 +99,10 @@ public class ChatHistoryService
         var messages = await LoadAsync(claudeSessionId);
         if (messages.Count == 0) return;
         // Ход реально оборван, только если после последнего сообщения пользователя
-        // нет result/error
+        // нет result/error/отметки «остановлен пользователем»
         for (var i = messages.Count - 1; i >= 0; i--)
         {
-            if (messages[i] is StoredResultMessage or StoredErrorMessage) return;
+            if (messages[i] is StoredResultMessage or StoredErrorMessage or StoredInterruptedMessage) return;
             if (messages[i] is StoredUserMessage) break;
         }
         messages.Add(new StoredErrorMessage("Сервер был перезапущен во время хода — ход прерван")

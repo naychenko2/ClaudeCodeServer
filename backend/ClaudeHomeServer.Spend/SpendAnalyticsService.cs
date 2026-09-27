@@ -3,11 +3,8 @@ using ClaudeHomeServer.Services.Llm;
 
 namespace ClaudeHomeServer.Services.Spend;
 
-// Фильтры среза (значения id разрезов). Owner для не-админа принудительно = текущий
-// пользователь (SpendAccess), поэтому чужие данные на уровне запросов недостижимы.
-public sealed record SpendFilter(
-    string? Owner = null, string? Project = null, string? Chat = null, string? Task = null,
-    string? Persona = null, string? Provider = null, string? Model = null, string? Source = null);
+// SpendFilter — в Core (ClaudeHomeServer.Core/Services/Spend/ISpendAnalytics.cs) как
+// parameter-тип ISpendAnalytics; локальная копия удалена.
 
 // Унифицированная строка расчётов: детальная запись (Turns=1) либо дневной агрегат.
 // Detailed=false — строка из свёрнутого дня, листьев-ходов под ней нет.
@@ -47,10 +44,8 @@ public sealed record SpendOverviewDto(
     Dictionary<string, IReadOnlyList<SpendCardRowDto>> Cards,
     IReadOnlyList<SpendTurnDto> TopTurns);
 
-// Расход в рублях (сервисы Яндекса — сейчас только озвучка SpeechKit): сумма и число
-// оплаченных запросов. null — за период таких трат не было, и строке в UI взяться неоткуда.
-// Отдельно от токенов и долларов осознанно: это ДРУГАЯ валюта, складывать нечего.
-public sealed record SpendRubDto(double Total, int Requests);
+// SpendRubDto — в Core (ClaudeHomeServer.Core/Services/Spend/ISpendAnalytics.cs) как
+// return-тип ISpendAnalytics.Rub; локальная копия удалена.
 
 public sealed record SpendWidgetDto(SpendTokensDto Today, SpendTokensDto Week,
     int TodayTurns, int WeekTurns, int WeekFalGenerations, IReadOnlyList<SpendDayDto> ByDay);
@@ -68,7 +63,7 @@ public sealed record SpendBadgeDto(string SessionId, SpendTokensDto Total, int T
 // на `LlmProviderRegistry`, и вертикаль не собиралась без ProjectReference на Llm.
 public sealed class SpendAnalyticsService(SpendStore store, ISessionDirectory sessions,
     IProjectManager projects, ITaskLookup tasks, IPersonaLookup personas, IUserStore users,
-    IModelResolver llmProviders)
+    IModelResolver llmProviders) : ISpendAnalytics
 {
     private const int CardLimit = 8;
     private const int TopTurnsLimit = 10;

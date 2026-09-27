@@ -394,11 +394,15 @@ export const PersonaTaskView = memo(function PersonaTaskView({ item, online, onO
   const answer = asyncAck
     ? (lastTextIdx >= 0 ? (activity![lastTextIdx].item as { text: string }).text : '')
     : (item.result ?? '');
-  const emptyAnswerNote = bgEmptyAnswerNote({
-    settledNoText: settledBg && lastTextIdx < 0,
-    bgAborted: item.bgAborted,
-    hasToolActivity: !!activity && activity.some(e => e.item.kind === 'tool_use'),
-  });
+  // Локальный проект: текст фонового агента живёт в его транскрипте на устройстве и в ленту
+  // не доходит — пустой ответ объясняем этим, а не молчим
+  const emptyAnswerNote = settledBg && lastTextIdx < 0 && item.bgAborted !== true && project?.transcriptReason
+    ? 'У локального проекта ответ фонового агента хранится на его устройстве и здесь не показывается'
+    : bgEmptyAnswerNote({
+      settledNoText: settledBg && lastTextIdx < 0,
+      bgAborted: item.bgAborted,
+      hasToolActivity: !!activity && activity.some(e => e.item.kind === 'tool_use'),
+    });
 
   // Обычный сабагент (не персона) — стандартная карточка инструмента
   if (!persona) return <ToolUseView item={item} online={online} onOpenFile={onOpenFile} />;

@@ -59,7 +59,9 @@ export function McpServerList({ data, onEdit, onAdd, onCatalog, onOpenAccess, on
   // Три известные группы разбираем явно, всё прочее — в «подключено вне AI Home»:
   // незнакомое значение group (новая группа с бэкенда) обязано остаться видимым,
   // иначе сервер подключён, а в списке его нет
-  const serviceTiles = builtin.filter(t => t.group === 'product' || t.group === 'integration');
+  // Higgsfield исключён: рендерится отдельной карточкой (HiggsfieldCard), плитка здесь
+  // была бы дублем.
+  const serviceTiles = builtin.filter(t => (t.group === 'product' || t.group === 'integration') && t.key !== 'higgsfield');
   const memoryTiles = builtin.filter(t => t.group === 'persona-memory');
   const externalTiles = builtin.filter(t => !serviceTiles.includes(t) && !memoryTiles.includes(t));
 

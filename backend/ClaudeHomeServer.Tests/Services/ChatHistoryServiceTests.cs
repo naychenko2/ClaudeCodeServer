@@ -29,6 +29,65 @@ public class ChatHistoryServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Interrupted_СериализуетсяТудаОбратно()
+    {
+        var sessionId = Guid.NewGuid().ToString();
+        await _sut.SaveAsync(sessionId, [new StoredUserMessage("вопрос"), new StoredInterruptedMessage(1_700_000_000_000)]);
+
+        File.ReadAllText(Directory.GetFiles(_tempDir, "history.json", SearchOption.AllDirectories).Single())
+            .Should().Contain("\"kind\":\"interrupted\"");
+        var loaded = await _sut.LoadAsync(sessionId);
+        loaded[1].Should().BeOfType<StoredInterruptedMessage>()
+            .Which.Timestamp.Should().Be(1_700_000_000_000);
+    }
+
+    // Карточка обрезки контекста рядом с обычной репликой — и это не «ещё один тип за компанию».
+    // Вид карточки ("prune"/"compact_cloud") просится полем `kind`, но это имя занято
+    // дискриминатором полиморфизма StoredMessage. Резолвер System.Text.Json строится ОДИН раз
+    // на весь базовый тип, поэтому конфликт имён убивает запись и чтение history.json у ВСЕХ
+    // чатов, а не только у записи прунинга: StoredTextMessage в этом же наборе — проверка
+    // ровно на это. На диске поле называется `pruneKind` — как и у элемента ленты на фронте.
+    [Fact]
+    public async Task ContextPruned_СериализуетсяТудаОбратно_НеЛомаяОстальнуюИсторию()
+    {
+        var sessionId = Guid.NewGuid().ToString();
+        await _sut.SaveAsync(sessionId, [
+            new StoredTextMessage("обычная реплика"),
+            new StoredContextPrunedMessage("prune", 234_000, 46_000, 66, 64, 1, 1, 87.5, 18_000, 20_000)]);
+
+        var json = File.ReadAllText(
+            Directory.GetFiles(_tempDir, "history.json", SearchOption.AllDirectories).Single());
+        json.Should().Contain("\"kind\":\"context_pruned\"", "дискриминатор остаётся за kind");
+        json.Should().Contain("\"pruneKind\":\"prune\"", "вид карточки едет отдельным именем");
+
+        var loaded = await _sut.LoadAsync(sessionId);
+        loaded[0].Should().BeOfType<StoredTextMessage>();
+        var card = loaded[1].Should().BeOfType<StoredContextPrunedMessage>().Subject;
+        card.Kind.Should().Be("prune");
+        card.TokensBefore.Should().Be(234_000);
+        card.TokensAfter.Should().Be(46_000);
+        card.Blocks.Should().Be(66);
+        card.ResultBlocks.Should().Be(64);
+        card.InputBlocks.Should().Be(1);
+        card.ThinkingBlocks.Should().Be(1);
+        card.PrefillSeconds.Should().Be(87.5);
+        card.CacheReadTokens.Should().Be(18_000);
+        card.PromptTokens.Should().Be(20_000);
+    }
+
+    [Fact]
+    public async Task AppendTurnAborted_ХодОстановленПользователем_НеСчитаетсяОборванным()
+    {
+        // Отметка «Стоп» закрывает ход — плашка «сервер перезапущен» поверх неё была бы ложью
+        var sessionId = Guid.NewGuid().ToString();
+        await _sut.SaveAsync(sessionId, [new StoredUserMessage("вопрос"), new StoredInterruptedMessage(1)]);
+
+        await _sut.AppendTurnAbortedAsync(sessionId);
+
+        (await _sut.LoadAsync(sessionId)).OfType<StoredErrorMessage>().Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task SaveAsync_ThenLoadAsync_ReturnsSameMessages()
     {
         var sessionId = Guid.NewGuid().ToString();
@@ -240,6 +299,29 @@ public class ChatHistoryServiceTests : IDisposable
 
         _sut.LastContextFromHistory(sessionId).Should().Be(60_000,
             "null/0 у последнего result пропущен — берём предыдущий ненулевой");
+    }
+
+    // Совместимость со старой историей: result без TranscriptTailUuid читается как null,
+    // поле опциональное (фича chat-branch, шаг 5). Хранилище — System.Text.Json, отсутствующее
+    // свойство тихо подставляет default для ссылочного типа, но проверим явно: легаси-чат
+    // с диска остаётся рабочим без миграции.
+    [Fact]
+    public async Task LoadAsync_СтараяИсторияБезTranscriptTailUuid_ПолеNull()
+    {
+        var sessionId = Guid.NewGuid().ToString();
+        var dir = Path.Combine(_tempDir, "sessions", sessionId);
+        Directory.CreateDirectory(dir);
+        await File.WriteAllTextAsync(Path.Combine(dir, "history.json"), """
+        [
+          { "kind": "user_message", "text": "привет" },
+          { "kind": "result", "subtype": "success", "durationMs": 100, "numTurns": 1 }
+        ]
+        """);
+
+        var loaded = await _sut.LoadAsync(sessionId);
+
+        loaded.OfType<StoredResultMessage>().Single()
+            .TranscriptTailUuid.Should().BeNull();
     }
 
     public void Dispose()

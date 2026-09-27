@@ -48,21 +48,27 @@ public record NoteTaskCreateRequest(
 // дефектах, и мост вычисляет Outcome по статусу Done + kind карточки сам.
 public record NoteTaskUpdateRequest(NoteTaskStatus Status, string? DueDate = null);
 
+// Владелец (ownerId) в сигнатурах обязателен и не выводится из noteId: id заметки
+// личного vault владельца не содержит, у двух пользователей заметка по одному пути
+// даёт один и тот же id. Мост обязан сам отсечь чужие задачи — иначе ручки заметок
+// отдают и правят карточки соседа.
 public interface INoteTaskBridge
 {
-    // Все задачи, привязанные к чекбоксу указанной заметки (по SourceNoteId),
+    // Задачи ВЛАДЕЛЬЦА, привязанные к чекбоксу указанной заметки (по SourceNoteId),
     // для панели «Задачи из заметки».
-    IReadOnlyList<NoteTaskRef> GetBySourceNote(string noteId);
+    IReadOnlyList<NoteTaskRef> GetBySourceNote(string ownerId, string noteId);
 
     // Создать задачу из чекбокса. Реализация в Main транслирует NoteTaskCreateRequest
     // в TaskManager.Create c CreateTaskRequest. Возвращает NoteTaskRef с id новой задачи.
     NoteTaskRef Create(string? projectId, string ownerId, NoteTaskCreateRequest req);
 
     // Правит статус задачи при тоггле чекбокса. Реализация в Main вызывает
-    // TaskManager.Update c UpdateTaskRequest(Status: req.Status).
-    NoteTaskRef? Update(string taskId, NoteTaskUpdateRequest req);
+    // TaskManager.Update c UpdateTaskRequest(Status: req.Status). Чужая задача —
+    // null, как будто её нет.
+    NoteTaskRef? Update(string ownerId, string taskId, NoteTaskUpdateRequest req);
 
     // Спавн следующего вхождения повторяющейся задачи (см. ToggleAsync:161).
-    // Возвращает null если повторение не настроено или следующего вхождения нет.
-    NoteTaskRef? SpawnNextOccurrence(string completedTaskId);
+    // Возвращает null если повторение не настроено, следующего вхождения нет
+    // либо задача принадлежит другому владельцу.
+    NoteTaskRef? SpawnNextOccurrence(string ownerId, string completedTaskId);
 }

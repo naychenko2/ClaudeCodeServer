@@ -5,6 +5,7 @@ using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Services.Llm.Claude;
 using FluentAssertions;
 using Xunit;
+using ClaudeHomeServer.Services.Files;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -56,6 +57,7 @@ public class FileServiceGitStatusTests : IAsyncLifetime, IDisposable
     {
         public IProcessLauncher Local => launcher;
         public IProcessLauncher ForOwner(string? ownerId) => launcher;
+        public IProcessLauncher ForProject(ClaudeHomeServer.Models.Project project) => launcher;
     }
 
     private readonly string _repo;

@@ -37,6 +37,10 @@ public static class ExecutorStopClassifier
     /// продолжать сам исполнитель не должен — решает человек (перезапуск снимает пометку).
     /// </summary>
     public const string InterruptedByUserReason = "interrupted_by_user";
+    /// Исполнитель так и не стартовал: устройство локального проекта не вышло в онлайн за
+    /// потолок ожидания (ADR-016, вариант А плана §5). Терминальная: дальше решает человек.
+    /// </summary>
+    public const string DeviceWaitExpiredReason = "device_wait_expired";
 
     /// <summary>
     /// Сабагенты хода: None — обрывов не было; Truncated — оборвался, добивание в пути;

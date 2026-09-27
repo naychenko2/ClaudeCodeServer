@@ -1,0 +1,21 @@
+[Unit]
+Description=ClaudeHomeServer (Home AI, naychenko.me)
+Documentation=file:///home/an/Sources/ClaudeCodeServer/README.md
+# Сервер не привязан к графической сессии: живёт в user-менеджере, который при
+# включённом linger (loginctl enable-linger) стартует с загрузкой и переживает
+# вход/выход из стола и RDP-сессии. Открытие GUI-приложений из ходов без
+# графической сессии не работает.
+After=network-online.target docker.service
+
+[Service]
+WorkingDirectory=/opt/ccs/app
+Environment=ASPNETCORE_ENVIRONMENT=Production
+Environment=DOTNET_CLI_TELEMETRY_OPTOUT=1
+Environment=PATH=/home/an/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/dotnet /opt/ccs/app/ClaudeHomeServer.dll
+Restart=always
+RestartSec=5
+TimeoutStopSec=60
+
+[Install]
+WantedBy=default.target

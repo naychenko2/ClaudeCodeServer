@@ -21,17 +21,12 @@ public sealed class ModuleLoader
     private readonly ModuleRegistry _registry;
     private readonly IConfiguration _config;
     private readonly ILogger<ModuleLoader> _log;
-    // Стор состава подсистем: модуль, выключенный гейтом Subsystems:{Key}:Enabled, пишется
-    // сюда как RecordDisabled (админский экран, RestartRequired). null — только в юнитах.
-    private readonly SubsystemStateStore? _states;
 
-    public ModuleLoader(ModuleRegistry registry, IConfiguration config, ILogger<ModuleLoader> log,
-        SubsystemStateStore? states = null)
+    public ModuleLoader(ModuleRegistry registry, IConfiguration config, ILogger<ModuleLoader> log)
     {
         _registry = registry;
         _config = config;
         _log = log;
-        _states = states;
     }
 
     // Вызывается один раз на старте (до builder.Build()) в Program.cs. Возвращает
@@ -49,6 +44,32 @@ public sealed class ModuleLoader
 
     private Assembly? TryLoadOne(IServiceCollection services, ModuleDescriptor desc)
     {
+        // Единая точка истины для гейта подсистемы: `Subsystems:{Key}:Enabled` (ADR-014,
+        // CLAUDE.md «Отключаемость подсистемы»). Без этой проверки ModuleLoader грузил
+        // сборку и звал Register, даже когда подсистема выключена вторым рубильником
+        // (хост: `Subsystems:spend:Enabled=false` при включённом модуле) — отсюда расхождение
+        // snapshot (`enabled=False, active=True`), фронт продолжал грузить remote,
+        // а hosted-сервисы подсистемы (rollup/backfill) молча не крутились: гейт уважался
+        // только внутри AddGatedHostedService, остальная регистрация проходила.
+        //
+        // `DynamicModules:Enabled=false` уже отфильтрован на уровне `_registry.All.Where` —
+        // это «не загружать сборку вообще». Здесь — «загрузить, но не регистрировать»:
+        // `Register` НЕ вызывается, hosted и контроллеры подсистемы в контейнер не попадут,
+        // `AddApplicationPart` сборки НЕ подключается (возвращаем null ниже).
+        //
+        // Возвращаем null без попытки загрузить dll — у фронт-only модулей (notes) сборки
+        // Backend нет и не ожидается; если бы ModuleLoader начал грузить её понапрасну,
+        // он бы шумел Warning «сборка не найдена» для штатно сконфигурированного модуля
+        // (см. существующий ранний возврат `if (desc.Backend is null)` ниже).
+        if (!SubsystemGate.IsEnabled(_config, desc.Key))
+        {
+            _log.LogInformation(
+                "Модуль «{Key}»: гейт Subsystems:{Key}:Enabled выключен — регистрация подсистемы пропущена",
+                desc.Key, desc.Key);
+            return null;
+        }
+
+
         // Фронт-only модуль (N1: notes): Backend отсутствует, отдельной сборки и не ожидается —
         // его MF-remote отдаёт SubsystemModulesController. Без этого раннего возврата каждый старт
         // хоста шептал Warning «сборка не найдена «»» о штатно сконфигурированном модуле.
@@ -88,16 +109,6 @@ public sealed class ModuleLoader
             }
 
             var subsystem = (IAppSubsystem)Activator.CreateInstance(implType)!;
-            // Гейт отключаемости — тот же, что в AddSubsystems (ADR-014): выключенный модуль
-            // не зовёт Register и НЕ возвращается наружу, поэтому Program.cs не подключает
-            // его ApplicationPart и не пишет RecordActive — контроллеров у него нет вовсе.
-            if (!SubsystemGate.IsEnabled(_config, subsystem.Key))
-            {
-                _states?.RecordDisabled(subsystem);
-                _log.LogInformation("Модуль «{Key}» выключен гейтом Subsystems:{SubsystemKey}:Enabled — не загружается",
-                    desc.Key, subsystem.Key);
-                return null;
-            }
             subsystem.Register(services, _config);
             _log.LogInformation("Модуль «{Key}» «{Title}» v{Version} загружен: {Path}",
                 desc.Key, subsystem.Title, desc.Version, desc.Backend?.AssemblyPath);

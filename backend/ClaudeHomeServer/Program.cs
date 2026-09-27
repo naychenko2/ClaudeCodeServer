@@ -15,6 +15,7 @@ using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Services.Team;
 using ClaudeHomeServer.Services.Http;
 using ClaudeHomeServer.Services.Mcp;
+using ClaudeHomeServer.Services.Mcp.Http;
 using ClaudeHomeServer.Services.ProjectServices;
 using ClaudeHomeServer.Services.Terminal;
 using ClaudeHomeServer.Services.TriggerSources;
@@ -28,6 +29,7 @@ using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.StaticFiles;
 using Yarp.ReverseProxy.Forwarder;
+using ClaudeHomeServer.Services.Files;
 
 JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
 
@@ -85,7 +87,45 @@ ClaudeHomeServer.Services.Diagnostics.FileLog.Attach(builder.Configuration, buil
 // без этого они копятся и съедают гигабайты памяти. Должно быть ДО первого Process.Start.
 // В инспекционной копии пропускаем: pid-файл лежит рядом с exe (а не в DataPath), то есть
 // принадлежит БОЕВОМУ серверу — чистка убила бы его MCP-серверы и идущие ходы.
-if (!inspectionMode) ProcessRegistry.Initialize();
+//
+// Execution:ProcessRegistry:Enabled (дефолт true) — вторая, та же по смыслу оговорка:
+// реестр процессов ПРОЦЕСС-ГЛОБАЛЕН (статика), а хост в процессе бывает не один. В бою
+// хост ровно один и владеет всеми порождёнными процессами машины; тестовый хост
+// (appsettings.Testing.json) — не владеет: он поднимается и гасится десятки раз за прогон
+// рядом с чужими процессами того же процесса ОС, и его ApplicationStopping вычищал реестр
+// и убивал процессы параллельно идущих тестов (доказано: подъём и Dispose тестового хоста
+// снимал с учёта и убивал заранее зарегистрированный живой процесс).
+var ownsProcessRegistry = !inspectionMode
+    && builder.Configuration.GetValue("Execution:ProcessRegistry:Enabled", true);
+if (ownsProcessRegistry) ProcessRegistry.Initialize();
+
+// Изоляция процессов local-среды по памяти (инцидент 2026-09-19: systemd-oomd дважды
+// убил прод ccs.service целиком, потому что сборки агентских CLI живут в cgroup прода).
+// Опции — секция Execution:Isolation (Enabled/Slice/MemoryMax). Дефолт выключено: на
+// Windows и в dev-контейнере user-шины нет, и там обёртка fail-open.
+// Выставить в appsettings.Local.json:
+//   "Execution": { "Isolation": { "Enabled": true, "Slice": "ccs-agents.slice",
+//     "MemoryMax": "16G" } }
+// MemoryHigh в примере нет намеренно: под systemd-oomd дроссель сам становится источником
+// PSI-давления и убивает наш же scope (разбор 2026-09-22). Заполненный ключ ругается в
+// stderr на старте — см. IsolationOptions.FromConfig.
+ClaudeHomeServer.Services.Execution.IsolationOptions.Instance =
+    ClaudeHomeServer.Services.Execution.IsolationOptions.FromConfig(builder.Configuration);
+
+// Потолок одновременных ТЯЖЁЛЫХ запусков (сборки/тесты): пределы scope заданы per-scope, а
+// число одновременных scope не ограничивало ничто — инцидент oomd 2026-09-21, 18,1 GB в
+// четырёх параллельных прогонах. Ключ Execution:Isolation:MaxConcurrentBuilds, дефолт 2,
+// явный 0 — без ограничения (откат без пересборки).
+ClaudeHomeServer.Services.Execution.BuildConcurrencyGate.Configure(
+    ClaudeHomeServer.Services.Execution.BuildConcurrencyGate.LimitFromConfig(builder.Configuration));
+
+// Гашение scope висит на событии Exited и умирает вместе с процессом бэкенда: упал бэкенд —
+// scope с узлами сборки остался в slice, и увидеть его можно только отсюда, со следующего
+// старта. Как сирота отличается от scope живого соседнего инстанса — в ScopeOrphanSweeper.
+// Фоном: старт не должен ждать systemctl, а свои scope этого запуска сторож не тронет
+// (их владелец — мы, и мы живы).
+_ = Task.Run(() => ClaudeHomeServer.Services.Execution.ScopeOrphanSweeper.Sweep(
+    ClaudeHomeServer.Services.Execution.IsolationOptions.Instance));
 
 // Признак «сервер работает на этом каталоге data»: держится весь uptime и проверяется
 // восстановлением. Живой сервер во время restore продолжил бы писать в перемещённый
@@ -121,10 +161,18 @@ builder.Services.AddExceptionHandler<ClaudeHomeServer.Services.Http.UnhandledExc
 // Держим IMvcBuilder в переменной: ниже, после загрузки динамических модулей (ModuleLoader),
 // на том же builder'е подключаем их контроллеры (AddApplicationPart-эквивалент —
 // ConfigureApplicationPartManager, единственный доступный на IServiceCollection-уровне путь).
-var mvcBuilder = builder.Services.AddControllers()
+// Отказ локального проекта из глубины сервиса (ProjectCapabilityGuard.ServerRoot) — 409 с
+// кодом local_project, а не 500 (ADR-016 §4, G1)
+var mvcBuilder = builder.Services.AddControllers(o => o.Filters.Add(new LocalProjectExceptionFilter()))
     .AddJsonOptions(o =>
         o.JsonSerializerOptions.Converters.Add(
             new JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase)));
+// Вычисленные «связи» сессии (parentSessionId/taskDone) дописываются на границе
+// сериализации — одним конвертером типа Session на все точки отдачи (см.
+// Services/SessionJsonConverter.cs). Только в опциях MVC: стор sessions.json пишется
+// своими опциями SessionManager, и вычисленные поля в файл не попадают.
+builder.Services.AddSingleton<Microsoft.Extensions.Options.IConfigureOptions<Microsoft.AspNetCore.Mvc.JsonOptions>,
+    ClaudeHomeServer.Services.SessionJsonOptionsSetup>();
 // Сборки вертикалей, собранные под `Microsoft.NET.Sdk.Web`, несут атрибут
     // `[assembly: ApplicationPart("...")]` — MSBuild дописывает его в сгенерированный
     // `obj/*/ClaudeHomeServer.MvcApplicationPartsAssemblyInfo.cs` ссылочного проекта
@@ -150,28 +198,25 @@ var mvcBuilder = builder.Services.AddControllers()
 //
 // Честный ILogger<ModuleLoader> (M10): на этом этапе builder.Build() ещё не вызван, а
 // WebApplicationBuilder в .NET 10 не отдаёт готовый ILoggerFactory/ServiceProvider (builder.Logging
-// — ILoggingBuilder, CreateLogger<T> на нём не резолвится). Поэтому собираем ОДНОРАЗОВЫЙ
-// провайдер из builder.Services (в нём уже зарегистрированы реальные лог-провайдеры, поставленные
-// WebApplication.CreateBuilder) и берём оттуда ILoggerFactory: «модуль не загрузился» уходит
-// в консоль, а не теряется в no-op-фабрике (раньше здесь был new LoggerFactory() без провайдеров).
-// Логирование происходит сразу, в LoadAll, внутри using — одноразовый провайдер к тому моменту жив.
+// — ILoggingBuilder, CreateLogger<T> на нём не резолвится). Поэтому заводим ОДНОРАЗОВУЮ
+// консольную фабрику с той же секцией Logging, что у хоста: «модуль не загрузился» уходит
+// в консоль, а не теряется в no-op-фабрике. Временный BuildServiceProvider здесь не годится
+// (ASP0000: второй контейнер синглтонов). Логирование идёт сразу, в LoadAll, внутри using.
 // Стор подсистем: регистрируем ДО LoadAll, чтобы ModuleLoader записал в него
 // динамические модули (RecordActive/RecordDisabled) и AddSubsystems переиспользовал
 // тот же инстанс.
 var dynamicModuleStore = new ClaudeHomeServer.Services.Composition.SubsystemStateStore();
 builder.Services.AddSingleton(dynamicModuleStore);
-// Реестр — вне using: ниже по нему же идёт генерическая раздача MF-remote `{key}-remote`.
+// Реестр — вне using: ниже по нему же идёт раздача MF-remote загруженных модулей.
 var dynamicModuleRegistry = new ClaudeHomeServer.Services.DynamicModules.ModuleRegistry(builder.Configuration);
-using (var dynamicModuleLogProvider = builder.Services.BuildServiceProvider())
+using (var dynamicModuleLogFactory = LoggerFactory.Create(logging => logging
+    .AddConfiguration(builder.Configuration.GetSection("Logging"))
+    .AddConsole()))
 {
-    var dynamicModuleLogFactory = dynamicModuleLogProvider.GetRequiredService<ILoggerFactory>();
     var dynamicModuleLoader = new ClaudeHomeServer.Services.DynamicModules.ModuleLoader(
         dynamicModuleRegistry,
         builder.Configuration,
-        dynamicModuleLogFactory.CreateLogger<ClaudeHomeServer.Services.DynamicModules.ModuleLoader>(),
-        // Модуль, выключенный гейтом Subsystems:{Key}:Enabled, ModuleLoader сам пишет как
-        // RecordDisabled и наружу не возвращает — RecordActive ниже его не касается.
-        dynamicModuleStore);
+        dynamicModuleLogFactory.CreateLogger<ClaudeHomeServer.Services.DynamicModules.ModuleLoader>());
     foreach (var dynamicModuleAssembly in dynamicModuleLoader.LoadAll(builder.Services))
     {
         // MVC-контроллеры загруженной сборки подключаем как отдельный ApplicationPart
@@ -194,7 +239,31 @@ using (var dynamicModuleLogProvider = builder.Services.BuildServiceProvider())
         // но dll не загружена — создаём lightweight-заглушку, несущую Key/Title/Description.
         dynamicModuleStore.RecordDisabled(new DisabledModuleStub(desc));
     }
+    // Третий сценарий отключения: `DynamicModules:N:Enabled=true` (ModuleLoader грузит dll)
+    // + `Subsystems:{key}:Enabled=false` (ModuleLoader возвращает null до загрузки — рубильник
+    // гейта первым бьёт по `ModuleLoader.TryLoadOne`, см. Services/DynamicModules/ModuleLoader.cs
+    // строка «if (!SubsystemGate.IsEnabled(...)) return null»). Цикл выше отбирает только
+    // `!m.Enabled` и обходит такой модуль, `RecordActive` ему тоже не достаётся — модуль
+    // выпадает из снимка ВООБЩЕ, и админ не отличает «выключено намеренно» от «не подключали».
+    // Снимок должен показывать обе группы (Активные/Задизейбленные — контракт
+    // SubsystemStateStore), поэтому добавляем запись здесь. Дубля с предыдущим циклом нет:
+    // он фильтрует по `!m.Enabled` (DynamicModules), этот — по `m.Enabled && !SubsystemGate.IsEnabled`
+    // (DynamicModules вкл, Subsystems выкл). Пересечение пусто.
+    foreach (var desc in dynamicModuleRegistry.All
+        .Where(m => m.Enabled && !ClaudeHomeServer.Services.Composition.SubsystemGate.IsEnabled(builder.Configuration, m.Key)))
+    {
+        dynamicModuleStore.RecordDisabled(new DisabledModuleStub(desc));
+    }
 }
+
+// Статические вертикали: их `[assembly: ApplicationPart("...")]` MSBuild дописывает
+// автоматически (см. блок выше). Гейт `Subsystems:{key}:Enabled` снимает DI-регистрацию
+// (Register не вызывается), но ApplicationPart остаётся в MVC-частях → роутер находит
+// контроллер, пытается его активировать без зависимостей → 500 вместо 404.
+// Notes и Spend — динамические модули (сценарий Б): ApplicationPart подключает
+// ModuleLoader (выше), а не MSBuild-атрибут — M1-костыль (ручное снятие части
+// ClaudeHomeServer.Spend) снят после перехода на ReferenceOutputAssembly="false".
+
 // Hosted-сервисы: в Testing-среде (TestWebApplicationFactory) НЕ регистрируются без
 // явного флага Testing:EnableHostedServices=true — 17 фоновых циклов на каждый из
 // ~27 бутов тестовых хостов только жгли время прогона и порождали фоновую возню
@@ -212,6 +281,8 @@ builder.Services.AddSignalR(o =>
         o.KeepAliveInterval = TimeSpan.FromSeconds(15);
         // Медленное рукопожатие на плохом канале не должно ронять подключение
         o.HandshakeTimeout = TimeSpan.FromSeconds(30);
+        // Отказ файловой группы для локального проекта (ADR-016 §4, G1) на методах хабов
+        Microsoft.AspNetCore.SignalR.HubOptionsExtensions.AddFilter(o, new ProjectCapabilityHubFilter());
     })
     .AddJsonProtocol(o =>
         o.PayloadSerializerOptions.Converters.Add(
@@ -231,8 +302,13 @@ builder.Services.AddSingleton<IForgejoAccountStore>(sp => sp.GetRequiredService<
 builder.Services.AddSingleton<IUserStore, UserStoreAdapter>();
 // Драйверы среды исполнения процессов пользователей (local / docker-песочница)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.SandboxManager>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.ILauncherFactory,
-    ClaudeHomeServer.Services.Execution.LauncherFactory>();
+// Канал устройств и шлюз хода (ADR-016) — ленивым резолвом: прямая зависимость замыкала граф синглтонов
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.ILauncherFactory>(sp =>
+    new ClaudeHomeServer.Services.Execution.LauncherFactory(
+        sp.GetRequiredService<IUserStore>(),
+        sp.GetRequiredService<ClaudeHomeServer.Services.Execution.SandboxManager>(),
+        () => sp.GetService<ClaudeHomeServer.Services.Execution.IDeviceExecChannel>(),
+        () => sp.GetService<ClaudeHomeServer.Services.Execution.IDeviceTurnGateway>()));
 // Узкий шов пула preview-портов песочницы для вертикали ProjectServices
 // (Этап 5, волна C, шаг 2): DevServerService в отдельной сборке
 // получает только диапазон, всё остальное в SandboxManager остаётся
@@ -322,6 +398,9 @@ builder.Services.AddSingleton<JwtValidatorGateway>();
 // своим кешем/состоянием (см. DuplicateSingletonRegistrationTests).
 builder.Services.AddSingleton<IUserTokenValidator>(sp => sp.GetRequiredService<JwtValidatorGateway>());
 builder.Services.AddSingleton<IPreviewTokenValidator>(sp => sp.GetRequiredService<JwtValidatorGateway>());
+// Шов шлюза MCP (ADR-016): адрес бэкенда и сервисный JWT владельца — теми же функциями,
+// что у конфига серверного хода.
+builder.Services.AddSingleton<IMcpBackendAccess, ClaudeHomeServer.Services.Composition.McpBackendAccess>();
 // Шов для Modules (Этап 5, волна C, шаг 1б): вместо прямой зависимости от
 // FeatureFlagService — узкий контракт на проверку одного флага. Адаптер в
 // `Services/FeatureFlagGateway` идёт через `FeatureFlagService` — Modules
@@ -408,6 +487,9 @@ builder.Services.AddGatedHostedService<PersonaProjectBindingsMigration>(builder.
 // gated hosted: в Testing не стартует, повторный проход отсекается marker-файлом в data.
 // Живёт в спине рядом с прочими миграциями сторов, а не в вертикали Llm (см. шапку файла).
 builder.Services.AddGatedHostedService<GlmModelAliasMigration>(builder.Configuration);
+// Чаты картинки v2 уходят в архив (ADR-019, решение 2): идемпотентно по маркеру
+// SessionImageChat.MigratedAt, поэтому и восстановленный старый бэкап мигрирует при старте
+builder.Services.AddGatedHostedService<ImageChatV3Migration>(builder.Configuration);
 // Сводка карточки архива чата (место chat-digest). Живёт в спине, а не в вертикали Llm:
 // читает историю чата и заметку-итог, пишет сводку в сессию, а модель ей нужна лишь как
 // генератор текста через ICheapTextRunner (см. шапку файла).
@@ -415,12 +497,24 @@ builder.Services.AddSingleton<ChatDigestService>();
 // TaskManager/TaskAiService/BoardService/DailyBriefingService/TaskSchedulerService
 // — DI в подсистеме `TasksSubsystem` (волна 4C, шаг 1).
 builder.Services.AddSingleton<FileService>();
+// Шов файлов проекта (ADR-016): async и с ключом «проект», guard файловой группы внутри.
+builder.Services.AddSingleton<IProjectFiles, ProjectFiles>();
 // Резолв контекста чата (фича chat-context): признак «не найден» считает одна точка
 // для REST фронта и MCP-тула context_list
 builder.Services.AddSingleton<SessionContextResolver>();
 // Документация проекта (README + docs/) для панели «Доки»: индекс, связи, поиск.
 // Кеш живёт внутри сервиса и ключуется корнем папки, поэтому singleton.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Docs.DocsIndexService>();
+// Гигиена карты проекта (CLAUDE.md): детерминированный сканер без модели, пороги —
+// из секции ProjectMap конфигурации. Состояния нет, читает файлы по запросу
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Docs.ProjectMapScanner>();
+// Фаза 2 той же уборки: суждение модели поверх фактов сканера. Состояния нет, ответ
+// модели нигде не кэшируется — факты пересчитываются на каждый запрос
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Docs.ProjectMapReviewService>();
+// Фаза 3: запись отмеченных человеком правок в CLAUDE.md. Синглтон не ради экономии —
+// лок на путь карты обязан быть общим для всех запросов процесса (два окна продукта у
+// одного человека правят одну карту)
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Docs.ProjectMapApplyService>();
 // Применение пресета каркаса знакомства v2: только добавляет поверх живой папки,
 // отчёт по каждому шагу; зависимости-синглтоны, сам тоже stateless-синглтон
 builder.Services.AddSingleton<ProjectPresetService>();
@@ -489,8 +583,19 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpStatusStore>();
 // токена перед ходом (pending-записи входа живут только в памяти — отсюда singleton)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpOAuthService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpProbeService>();
-// Встроенная интеграция Higgsfield (волна 1): запись реестра + OAuth-вход + инжект в ход
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.HiggsfieldIntegration>();
+// Инстансное подключение Higgsfield (фаза 1.1): единый OAuth-вход админа, шарится всеми
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.HiggsfieldOAuthService>();
+// Шов для драйвера Higgsfield редактора картинок (ADR-017): токен без AdminOwnerId
+builder.Services.AddSingleton<ClaudeHomeServer.Services.ImageEditor.IHiggsfieldAccess,
+    ClaudeHomeServer.Services.Mcp.HiggsfieldAccessAdapter>();
+// Запись модулей в ленту чата (ADR-019 §2): общий шов для подсистем, адаптер над SessionManager
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.IChatFeed, ChatFeed>();
+builder.Services.AddQuietHttpClient(
+    ClaudeHomeServer.Services.Mcp.HiggsfieldOAuthService.HttpClientName,
+    new QuietHttpClientProfile(
+        Category: "ClaudeHomeServer.Mcp.Higgsfield",
+        Subject: "инстансным подключением Higgsfield",
+        Consequence: "Обновление токена не прошло — админу нужно переподключиться."));
 // Продуктовые MCP-серверы поверх HTTP (ADR-012): тулсет отдаёт схемы, общий контроллер
 // McpTransportController — транспорт. Новый сервер добавляется одной регистрацией здесь.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
@@ -535,6 +640,39 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
 // не объявляется вовсе (SessionManager не строит контекст).
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
     ClaudeHomeServer.Services.Mcp.Http.WebSearchToolset>();
+// Higgsfield (фаза 1.2): прокси к mcp.higgsfield.ai/mcp, 10 инструментов из белого списка.
+// Instance-level OAuth фазы 1.1 уже зарегистрирован выше (HiggsfieldOAuthService +
+// higgsfield-oauth-клиент); здесь — тихий клиент самого прокси и сам тулсет.
+builder.Services.AddQuietHttpClient(
+    ClaudeHomeServer.Services.Mcp.Http.HiggsfieldToolset.HttpClientName,
+    new QuietHttpClientProfile(
+        Category: "ClaudeHomeServer.Mcp.Higgsfield",
+        Subject: "прокси-тулсетом Higgsfield",
+        Consequence: "Генерации картинок/видео/аудио недоступны — список инструментов устарел."));
+// Регистрация HiggsfieldToolset под двумя типами через форвардер: одна реализация
+// под собственным типом и под IMcpToolset, без дубля singleton. `AddSingleton<I, C>()`
+// дал бы ВТОРОЙ экземпляр рядом с `AddSingleton<C>()`, а каст `(HiggsfieldToolset)
+// sp.GetRequiredService<IMcpToolset>()` бросил бы InvalidCastException: последняя
+// AddSingleton<IMcpToolset> в AddSubsystems (NotesToolset) перекрыла бы Higgsfield —
+// приложение не поднялось бы. Форвардер ловит оба требования: один экземпляр +
+// каст не нужен (hosted берёт по собственному типу). Задача eefcb96a.
+builder.Services.AddSingleton<HiggsfieldToolset>();
+builder.Services.AddSingleton<IMcpToolset>(sp => sp.GetRequiredService<HiggsfieldToolset>());
+// Фоновый прогрев снимка tools/list для Higgsfield (шаг 4 задачи 6e309216):
+// тулсет остаётся тот же singleton, hosted берёт его из DI по тому же корню, что
+// и IMcpToolset — иначе у нас было бы ДВА HiggsfieldToolset в процессе, и обновление
+// кэша в одном не отражалось бы в ToolsFor у другого.
+builder.Services.AddGatedHostedFrom<HiggsfieldSnapshotWarmer>(builder.Configuration,
+    sp => new HiggsfieldSnapshotWarmer(
+        sp.GetRequiredService<HiggsfieldToolset>(),
+        sp.GetRequiredService<ILogger<HiggsfieldSnapshotWarmer>>()));
+// Локальная генерация картинок и видео (local-media): ComfyUI на своей GPU. Движок живёт в
+// подсистеме images (тумблер LocalMedia:Enabled), тулсет — здесь; папку проекта и «файл
+// записан» вертикаль получает через шов ILocalMediaProjectAccess
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Images.LocalMedia.ILocalMediaProjectAccess,
+    ClaudeHomeServer.Services.Mcp.LocalMediaProjectAccess>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
+    ClaudeHomeServer.Services.Mcp.Http.LocalMediaToolset>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.McpToolsetRegistry>();
 // Белый список инструментов профиля провайдера (KeepMcpTools): читает McpTransportController
 // на tools/list и tools/call, сами тулсеты о нём не знают
@@ -651,15 +789,65 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDesktopDeviceDi
     ClaudeHomeServer.Services.Desktop.DesktopDeviceDirectory>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDesktopHandsNotifier,
     ClaudeHomeServer.Services.Composition.DesktopHandsNotifier>();
+// Статус рук локального проекта (ADR-016 §7) — в чат хода из донесений агента
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.ILocalHandsNotifier,
+    ClaudeHomeServer.Services.Composition.LocalHandsNotifier>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDesktopCallCanceller,
     ClaudeHomeServer.Services.Desktop.DesktopRouterCallCanceller>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DesktopHandsSessionService>();
 // Разрыв соединения — один из поводов погасить сеанс: маршрутизатор канала знает о нём
 // первым, поэтому сеансы подписаны на него наблюдателем, а не наоборот (форвард на тот же
 // синглтон, не второй экземпляр).
+// Второй наблюдатель — диспетчер выхода устройства в онлайн (ADR-016, план §5; регистрация
+// блоком ниже). Стоит ДО службы сеансов: одиночный резолв наблюдателя обязан отдавать её.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDeviceConnectionObserver>(
+    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Composition.DeviceOnlineDispatcher>());
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDeviceConnectionObserver>(
     sp => sp.GetRequiredService<ClaudeHomeServer.Services.Desktop.DesktopHandsSessionService>());
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DesktopAccessGate>();
+// Канал исполнения локальных проектов (ADR-016): шов IDeviceExecChannel (Core) — форвард
+// на тот же синглтон, который обслуживает WebSocket /api/devices/exec и Hello хаба.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DeviceHarnessPolicy>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDeviceExecOpenSender,
+    ClaudeHomeServer.Services.Desktop.DeviceHubExecOpenSender>();
+// Каталог релизов агента устройства (agent-distribution Р3, Р5): его читают и ack хаба, и
+// анонимная раздача AgentDownloadsController. Тумблер Subsystems:desktop:Enabled пока гасит
+// только раздачу агента (Desktop не оформлен подсистемой IAppSubsystem): нет регистрации —
+// каталог null, раздача отвечает 503 с причиной, ack не называет версий.
+if (SubsystemGate.IsEnabled(builder.Configuration, "desktop"))
+    builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.AgentReleaseCatalog>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DeviceExecChannel>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IDeviceExecChannel>(
+    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Desktop.DeviceExecChannel>());
+// Ретранслятор чтения для других устройств (ADR-016 §5) — тот же канал исполнения
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IDeviceRelayChannel>(
+    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Desktop.DeviceExecChannel>());
+// Выдача папки локального проекта агентом (решение владельца 2026-09-27) — он же
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IDeviceFolderBindChannel>(
+    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Desktop.DeviceExecChannel>());
+// Билеты браузера к localhost-API агента и доставка событий его ватчера в веб-морду
+// (ADR-016, задача 4.2): только память, рестарт бэкенда отзывает все билеты.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.AgentTicketService>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.IProjectFilesChangedNotifier,
+    ClaudeHomeServer.Services.Composition.ProjectFilesChangedNotifier>();
+
+// Фоновая работа при офлайн-устройстве (ADR-016, вариант А плана §5): гейт готовности
+// устройства проекта для пяти механизмов, диспетчер выхода устройства в онлайн (наблюдатель
+// маршрутизатора + поминутный проход с потолком 24 ч) и его обработчики — исполнитель задач
+// (с под-задачами штаба), очередь чата, автоматизации персон. Сторожа догоняют своим тиком.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IProjectDeviceGate>(
+    sp => new ClaudeHomeServer.Services.Execution.ProjectDeviceGate(
+        () => sp.GetService<ClaudeHomeServer.Services.Execution.IDeviceExecChannel>()));
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.DeviceOnlineDispatcher>();
+builder.Services.AddGatedHostedFrom(builder.Configuration,
+    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Composition.DeviceOnlineDispatcher>());
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.ChatDeviceWaitHandler>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IDeviceOnlineHandler>(
+    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Composition.ChatDeviceWaitHandler>());
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IDeviceOnlineHandler>(
+    sp => sp.GetRequiredService<TaskExecutionService>());
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IDeviceOnlineHandler>(
+    sp => sp.GetRequiredService<PersonaAutomationService>());
 // Сторож сеансов: 15 минут простоя, потолок 2 часа, исчезнувший чат, снятый тумблер грани
 builder.Services.AddGatedHostedService<ClaudeHomeServer.Services.Desktop.DesktopSessionReaper>(builder.Configuration);
 // TaskSchedulerService — DI в подсистеме `TasksSubsystem` (волна 4C, шаг 1).
@@ -726,7 +914,9 @@ builder.Services.AddSubsystems(builder.Configuration,
     // от Dossiers/Knowledge напрямую; миграция WorkspaceKnowledgeStore из Project —
     // отдельный пост-билд блок ниже, чтобы не словить construct до PostRestoreHook.
     new ClaudeHomeServer.Services.Knowledge.KnowledgeSubsystem(),
-    new ClaudeHomeServer.Services.Spend.SpendSubsystem(),
+    // Spend — динамический модуль (сценарий Б): грузится ModuleLoader'ом по пути из
+    // секции DynamicModules, НЕ через ProjectReference. Швы (ISpendAnalytics,
+    // ITaskPromptMetricsStore, ISpendDetailReader, ISpendCollector) — в Core.
     new VideoSubsystem(),
     new ClaudeHomeServer.Services.Yandex.YandexSubsystem(),
     new ClaudeHomeServer.Services.Reader.ReaderSubsystem(),
@@ -1022,6 +1212,9 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpSessionAcce
     ClaudeHomeServer.Services.Composition.McpSessionAccessorAdapter>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpPersonaBindings,
     ClaudeHomeServer.Services.Composition.McpPersonaBindingsAdapter>();
+// Гейт делегированного хода для тулсетов из модулей (image-editor, ADR-018 §10.1)
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IDelegatedTurnGate,
+    ClaudeHomeServer.Services.Composition.DelegatedTurnGateAdapter>();
 
 // Этап 5, волна E: forwarder-регистрации двух Core-интерфейсов выноса Notes.
 // Реализации (`TaskBridge` поверх TaskManager, `NotesHubNotifier` поверх IHubContext<SessionHub>)
@@ -1149,6 +1342,21 @@ builder.Services.AddRateLimiter(options =>
                 QueueLimit = 0,
             });
     });
+    // Анонимная раздача агента устройства (agent-distribution Р11): скрипты, указатель и
+    // архивы по 70–100 МБ. Партиция — IP: учётных данных у установщика нет по построению
+    options.AddPolicy(ClaudeHomeServer.Controllers.AgentDownloadsController.RateLimitPolicy, ctx =>
+    {
+        var limit = ctx.RequestServices.GetRequiredService<IConfiguration>()
+            .GetValue("DeviceAgent:DownloadRateLimit", 30);
+        return RateLimitPartition.GetFixedWindowLimiter(
+            ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = limit,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+            });
+    });
     // Поиск по каталогу MCP-серверов: потолок запросов обязан стоять на бэке —
     // дебаунс фронта не защита. Партиция — владелец: реестр внешний, и молотить его
     // от одного аккаунта нельзя; без sub (запрос до авторизации) — фолбэк на IP
@@ -1184,13 +1392,31 @@ builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
 // автоочистки — удалять чаты и заметки. Снимаем регистрации разом, а не по списку:
 // перечень пришлось бы дописывать при каждом новом сервисе, и однажды его забудут.
 // Хостинговые сервисы самого ASP.NET Core (Kestrel и прочие) не трогаем — только свои.
-if (inspectionMode)
+//
+// Фильтр — по имени сборки `ClaudeHomeServer` и `ClaudeHomeServer.*`, минус `*.Tests`:
+// ровно та же логика, что у сторожей границ (SubsystemBoundaryTests), иначе вынесенная
+// вертикаль (Llm, Images, Tasks, Notes…) продолжит ехать в инспекции молча — фильтр
+// по одной сборке Main её не видит.
+static bool IsOwnHostedServiceDescriptor(ServiceDescriptor d)
 {
-    var appAssembly = typeof(ClaudeHomeServer.Services.Backup.BackupService).Assembly;
+    var implAsm = d.ImplementationType?.Assembly
+        ?? d.ImplementationFactory?.Method.DeclaringType?.Assembly;
+    var n = implAsm?.GetName().Name;
+    if (n is null) return false;
+    if (n.EndsWith(".Tests", StringComparison.Ordinal)) return false;
+    return n == "ClaudeHomeServer" || n.StartsWith("ClaudeHomeServer.", StringComparison.Ordinal);
+}
+
+// Чтение `inspectionMode` здесь повторное — первое (строка 68) смотрит на конфиг ДО
+// `ConfigureAppConfiguration` (TestWebApplicationFactory.ExtraConfig), второй раз —
+// уже после всех источников. Раннее чтение остаётся для ProcessRegistry/InstanceLock,
+// позднее — для гейта фоновых сервисов: без этого фильтр не снимал бы хосты
+// телеметрии и вынесенных вертикалей в тестовой среде.
+if (builder.Configuration.GetValue<bool>("InspectionMode"))
+{
     var background = builder.Services
         .Where(d => d.ServiceType == typeof(IHostedService))
-        .Where(d => d.ImplementationType?.Assembly == appAssembly
-                    || d.ImplementationFactory?.Method.DeclaringType?.Assembly == appAssembly)
+        .Where(IsOwnHostedServiceDescriptor)
         .ToList();
     foreach (var descriptor in background) builder.Services.Remove(descriptor);
     Console.WriteLine($"[Inspection] фоновые сервисы отключены ({background.Count})");
@@ -1203,6 +1429,10 @@ var app = builder.Build();
 // пост-билд инициализаций и до middleware-конвейера, чтобы зависящие от него
 // шаги (например, MigrateFromProjects в Knowledge) уже видели результат.
 app.UseSubsystems();
+
+// Доставка алертов о нечитаемых сторах (JsonFileStore статический, DI туда не дотягивается);
+// алерты, случившиеся до этой строки, придут прямо сейчас
+ClaudeHomeServer.Services.DataLossAlerts.Attach(app.Services);
 
 // Логгер статического парсера workflow-транскриптов (DI туда не дотягивается)
 ClaudeHomeServer.Services.Llm.WorkflowAgentParser.Log = app.Services.GetRequiredService<ILoggerFactory>()
@@ -1249,15 +1479,33 @@ app.Services.GetRequiredService<UserStore>();
 // LocalActionOverridesStore при загрузке отбрасывает оверрайды неизвестных ключей —
 // поздняя регистрация теряла бы сохранённые маршруты модульных действий
 app.Services.GetRequiredService<ModuleRegistry>();
+// Одноразовая миграция ф.2.1: усыновление per-owner higgsfield-токенов под сервисного
+// владельца (higgsfield-instance). Идемпотентна — повторный вызов без per-owner записей
+// вернёт false. Best-effort: сбой не блокирует старт.
+// В инспекционной копии НЕ запускаем: она работает только на чтение, а миграция удаляет
+// per-owner записи и переносит секреты — то есть показала бы не то, что лежит в архиве
+// (а архив до этой фичи такие записи как раз и содержит). Плюс SaveState в конце пишет
+// higgsfield.json даже когда переносить нечего.
+if (!inspectionMode)
+{
+    try
+    {
+        app.Services.GetRequiredService<ClaudeHomeServer.Services.Mcp.HiggsfieldOAuthService>()
+            .RunMigration();
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"[HiggsfieldMigration] миграция пропущена: {ex.Message}");
+    }
+}
 if (!inspectionMode)
 {
     // Фоновый прогрев каталога моделей (опрос claude CLI ~5 с — не задерживаем старт).
     // В копии пропускаем: запуск claude зарегистрировал бы процесс в pid-файле БОЕВОГО
     // сервера (реестр живёт рядом с exe, а не в DataPath).
     _ = Task.Run(() => app.Services.GetRequiredService<ModelCatalogService>().GetModelsAsync());
-    // Фоновый прогрев активной локальной LLM (грузим веса в память заранее; best-effort).
-    // Резолвится через интерфейс — выбор движка уже сделан по LocalLlm:Provider.
-    _ = Task.Run(() => app.Services.GetRequiredService<ClaudeHomeServer.Services.Llm.ILocalLlmClient>().WarmUpAsync());
+    // Прогрев активной локальной LLM — IHostedService `LocalLlmWarmupService` из
+    // подсистемы Llm, срабатывает автоматически при старте (условие — внутри сервиса).
 }
 app.Services.GetRequiredService<JwtService>();
 // Раздача волн «Командной реализации»: конструктор вешает хук в SessionManager
@@ -1488,6 +1736,8 @@ if (inspectionMode)
     });
 }
 
+// Хаб устройств и канал исполнения — только HTTPS или петля, как сопряжение (ADR-008)
+ClaudeHomeServer.Services.Desktop.DeviceChannelGuard.UseDeviceChannelGuard(app);
 app.UseAuthentication();
 app.UseAuthorization();
 
@@ -1577,24 +1827,15 @@ app.Use(async (ctx, next) =>
 }
 
 // Dev-server preview proxy: /preview/{projectId}/{**path} → http://127.0.0.1:{port}
+// Сам проброс — DevServerPreviewForwarder вертикали (им же пользуется агент устройства),
+// здесь только вход: кто вправе смотреть превью проекта.
 {
-    var previewInvoker = new HttpMessageInvoker(new SocketsHttpHandler
-    {
-        UseProxy = false,
-        AllowAutoRedirect = false,
-        AutomaticDecompression = DecompressionMethods.None,
-        UseCookies = false,
-    });
+    var previewInvoker = DevServerPreviewForwarder.CreateInvoker();
 
     app.Use(async (ctx, next) =>
     {
-        var path = ctx.Request.Path.Value ?? "";
-        var match = System.Text.RegularExpressions.Regex.Match(path, @"^/preview/([^/]+)(/.*)?$");
-        if (match.Success)
+        if (DevServerPreviewForwarder.TryParse(ctx.Request.Path.Value, out var projectId, out var restPath))
         {
-            var projectId = match.Groups[1].Value;
-            var restPath = match.Groups[2].Value ?? "/";
-
             // Аутентификация: middleware выполняется ДО endpoint routing, поэтому [Authorize]
             // тут не действует и ctx.User для iframe-запроса пуст. Токен берём из cookie
             // cc_preview (её ставит фронт перед загрузкой iframe — уходит и с сабресурсами),
@@ -1633,40 +1874,18 @@ app.Use(async (ctx, next) =>
                 await ctx.Response.WriteAsync("{\"error\":\"Доступ запрещён\"}");
                 return;
             }
-
-            var devServer = ctx.RequestServices.GetRequiredService<DevServerService>();
-            // Порт активного для превью сервиса проекта; если ни один не запущен — 503.
-            var port = devServer.GetActivePreviewPort(projectId);
-            if (port is null)
+            // Превью локального проекта отдаёт агент устройства (ADR-016, G1), не сервер
+            if (ProjectCapabilityGuard.Refusal(previewProject, ProjectCapabilityArea.FileBound) is { } refusal)
             {
-                ctx.Response.StatusCode = 503;
-                await ctx.Response.WriteAsync("{\"error\":\"Dev-сервер не запущен\"}");
+                ctx.Response.StatusCode = StatusCodes.Status409Conflict;
+                await ctx.Response.WriteAsJsonAsync(new { error = refusal, code = ProjectCapabilityGuard.Code });
                 return;
             }
 
-            // HttpTransformer.Default сам дописывает к префиксу Path и QueryString запроса,
-            // поэтому в префиксе пути быть не должно (иначе /preview/{id} уедет на дев-сервер
-            // дважды и тот ответит 404). Срезаем свой префикс прямо в запросе.
-            ctx.Request.Path = restPath.Length == 0 ? "/" : restPath;
-            // Семью loopback-адресов выбирает LoopbackResolver, а не литерал: dev-сервер
-            // на Node 17+ слушает ТОЛЬКО ::1, и прежний 127.0.0.1 до него не доставал —
-            // живой сервис отдавал «соединение отвергнуто» при работающем порте.
-            var previewBase = await LoopbackResolver.ResolveBaseAsync(port.Value);
-            if (previewBase is null)
-            {
-                ctx.Response.StatusCode = 503;
-                await ctx.Response.WriteAsync("{\"error\":\"Dev-сервер не отвечает\"}");
-                return;
-            }
-
-            var forwarder = ctx.RequestServices.GetRequiredService<IHttpForwarder>();
-            var previewError = await forwarder.SendAsync(ctx, previewBase, previewInvoker,
-                ForwarderRequestConfig.Empty, HttpTransformer.Default);
-            // До назначения не достучались — процесс мог смениться на слушающий по другой
-            // семье, поэтому выбор семьи забываем, а не держим до истечения TTL. Отмены
-            // клиентом сюда не попадают: они ничего не говорят о живости назначения.
-            if (previewError is ForwarderError.Request or ForwarderError.RequestTimedOut)
-                LoopbackResolver.Invalidate(port.Value);
+            await DevServerPreviewForwarder.ForwardAsync(ctx,
+                ctx.RequestServices.GetRequiredService<DevServerService>(),
+                ctx.RequestServices.GetRequiredService<IHttpForwarder>(),
+                previewInvoker, projectId, restPath);
             return;
         }
         await next();
@@ -1800,30 +2019,58 @@ if (Directory.Exists(distPath))
     app.UseDefaultFiles(new DefaultFilesOptions { FileProvider = fp });
     app.UseStaticFiles(new StaticFileOptions { FileProvider = fp, OnPrepareResponse = setCacheHeaders, ContentTypeProvider = contentTypes });
 
-    // MF-remote подсистем (N2): /{key}-remote/** раздаём из ФИЗИЧЕСКОГО wwwroot/{key}-remote —
-    // один цикл по модулям DynamicModules с Frontend, без per-module строк (notes, architecture…).
-    // Отдельно от distPath (выше fp может указывать на dev-dist, не на wwwroot), чтобы в проде
-    // запрос remoteEntry.js всегда резолвился в файл, а не SPA-fallback → index.html (loadRemote упал бы).
-    // Middleware стоит РАНЬШЕ MapFallbackToFile, поэтому перехватывает /{key}-remote/* до SPA-фолбэка.
-    // Ключ идёт в путь — берём только простые имена (буквы/цифры/дефис/подчёркивание).
-    // Список раздачи — только загруженные модули. Файлы в wwwroot всё равно доступны общей
-    // статикой (UseStaticFiles выше), данных в remote нет.
-    foreach (var remoteModule in dynamicModuleRegistry.ServedRemotes(dynamicModuleStore))
+    // MF-remote подсистем (N2): для каждого DynamicModules-модуля с Frontend.RemoteUrl
+    // раздаём статику из ФИЗИЧЕСКОГО wwwroot/{имя-папки}. Отдельно от distPath (выше fp может
+    // указывать на dev-dist, не на wwwroot), чтобы в проде запрос remoteEntry.js всегда
+    // резолвился в файл, а не SPA-fallback → index.html (loadRemote упал бы).
+    // Middleware стоит РАНЬШЕ MapFallbackToFile, поэтому перехватывает /*-remote/* до SPA-фолбэка.
+    // Список раздачи — только загруженные модули (выключенный гейтом remote не отдаём).
+    foreach (var servedModule in dynamicModuleRegistry.ServedRemotes(dynamicModuleStore))
     {
-        if (!remoteModule.Key.All(ch => char.IsAsciiLetterOrDigit(ch) || ch is '-' or '_')) continue;
-        var remotePath = Path.Combine(AppContext.BaseDirectory, "wwwroot", remoteModule.Key + "-remote");
-        if (!Directory.Exists(remotePath)) continue;
-        app.UseStaticFiles(new StaticFileOptions
+        var remoteUrl = servedModule.Frontend!.RemoteUrl;
+        if (string.IsNullOrEmpty(remoteUrl)) continue;
+        // L3 (2026-09-15): абсолютный URL (https://…) не начинается с '/' — TrimStart+Split
+        // дал бы папку "https:" → Directory.Exists=false → тихий пропуск без лога.
+        if (!remoteUrl.StartsWith('/'))
         {
-            FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(remotePath),
-            RequestPath = "/" + remoteModule.Key + "-remote",
-            OnPrepareResponse = setCacheHeaders,
-            ContentTypeProvider = contentTypes
-        });
+            app.Logger.LogWarning(
+                "[DynamicModules] Frontend:RemoteUrl модуля {Key} не является относительным путём ({Url}) — раздача MF-remote пропущена",
+                servedModule.Key, remoteUrl);
+            continue;
+        }
+        // Из RemoteUrl = "/{имя}-remote/remoteEntry.js" папка на диске = первый слаг URL.
+        var folder = remoteUrl.TrimStart('/').Split('/')[0];
+        if (string.IsNullOrEmpty(folder)) continue;
+        var remotePath = Path.Combine(AppContext.BaseDirectory, "wwwroot", folder);
+        if (Directory.Exists(remotePath))
+        {
+            app.UseStaticFiles(new StaticFileOptions
+            {
+                FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(remotePath),
+                RequestPath = "/" + folder,
+                OnPrepareResponse = setCacheHeaders,
+                ContentTypeProvider = contentTypes
+            });
+        }
     }
 
     // /_api/* — Office/SharePoint-запросы; возвращаем 404 вместо SPA, иначе Word показывает «Нет доступа»
     app.Map("/_api", api => api.Run(ctx => { ctx.Response.StatusCode = 404; return Task.CompletedTask; }));
+    // /api/* — REST API: любой несопоставленный маршрут (выключенная подсистема, опечатка,
+    // устаревший путь) обязан отдавать 404, а не 200+index.html из SPA-фолбэка — иначе клиент
+    // не отличит «выключенный Spend» (контроллер не зарегистрирован, action нет) от
+    // «живой чат SPA» (HTML-страница с JS): фронт получит 200 и попытается распарсить
+    // HTML как JSON. Тот же дефект на живом хосте 2026-09-16: выключенный
+    // /api/spend/overview отдавал 200 text/html.
+    //
+    // Раньше это была `app.Map("/api", api => api.Run(...404...))` — терминальная ветка
+    // middleware, выполнявшаяся В ПАЙПЛАЙНЕ до исполнения выбранного эндпоинта и рубившая
+    // ВСЕ /api/* как 404, ВКЛЮЧАЯ живые контроллеры (Александр, ревью c66e4127). Сейчас —
+    // fallback-эндпоинт с шаблоном `/api/{**rest}`: более специфичный, чем
+    // `MapFallbackToFile` ниже, поэтому выигрывает у SPA-фолбэка, но ПРОИГРЫВАЕТ реальным
+    // контроллерам (MVC-роутинг специфичнее fallback'а). `/hubs/*`, `/mcp/*` и
+    // `/api/modules` (ModuleGateway, регистрируется раньше строкой 1512) не задеты.
+    app.MapFallback("/api/{**rest}", ctx => { ctx.Response.StatusCode = 404; return Task.CompletedTask; });
     app.MapFallbackToFile("index.html", new StaticFileOptions { FileProvider = fp, OnPrepareResponse = setCacheHeaders });
 }
 else
@@ -1881,6 +2128,22 @@ app.MapHub<TerminalHub>("/hubs/terminal");
 // Канал десктопного агента (ADR-008): исходящее соединение клиента с машины пользователя,
 // push команды в конкретное соединение. Схема авторизации — токен устройства, а не общий JWT
 app.MapHub<ClaudeHomeServer.Services.Desktop.DeviceHub>("/hubs/devices");
+// Шлюз LLM локальных проектов (ADR-016): авторизация — токен хода, а не JWT; выключен
+// тумблером LlmGateway:Enabled (404). Подсистема llm отключаемая — маппим только при ней.
+if (app.Services.GetService<ClaudeHomeServer.Services.Llm.Gateway.UpstreamSelector>() is not null)
+    ClaudeHomeServer.Services.Llm.Gateway.LlmGatewayEndpoints.MapLlmGateway(app);
+
+// Шлюз MCP для хода на устройстве (ADR-016): вход по токену хода, а не по JWT.
+// Подсистема llm отключаемая — без неё нет и токенов хода.
+if (app.Services.GetService<ClaudeHomeServer.Services.Llm.Gateway.TurnTokenService>() is not null)
+{
+    ClaudeHomeServer.Services.Llm.Gateway.McpGatewayEndpoints.MapMcpGateway(app);
+    // Туннель выхода собственного трафика CLI устройства: тумблер LlmGateway:Egress:Enabled
+    ClaudeHomeServer.Services.Llm.Gateway.EgressGatewayEndpoints.MapEgressGateway(app);
+}
+
+// Потоковый канал исполнения устройства (ADR-016): WebSocket, та же схема токена устройства
+app.MapDeviceExecChannel();
 
 // Graceful shutdown: гасим все живые процессы claude, терминалы и dev-серверы.
 //
@@ -1890,8 +2153,18 @@ app.MapHub<ClaudeHomeServer.Services.Desktop.DeviceHub>("/hubs/devices");
 // ObjectDisposedException — гасить процессы было уже нечем. Все три сервиса —
 // синглтоны, так что заранее взятая ссылка та же самая.
 var shutdownSessions = app.Services.GetRequiredService<SessionManager>();
+// Токен хода (ADR-016): резолв здесь создаёт экземпляр, а с ним — подписку на
+// turn/completed; удаление чата отзывает его токены явно (ход мог и не начаться).
+// GetService: подсистема llm отключаемая.
+if (app.Services.GetService<ClaudeHomeServer.Services.Llm.Gateway.TurnTokenService>() is { } turnTokens)
+    shutdownSessions.OnSessionDeleted += s => turnTokens.RevokeSession(s.Id);
 var shutdownTerminals = app.Services.GetRequiredService<TerminalService>();
 var shutdownDevServers = app.Services.GetRequiredService<DevServerService>();
+// Стор задач пишется с дебаунсом (TaskManager.ScheduleSave) — несохранённое досбрасываем
+// руками. Dispose контейнера сделал бы то же самое, но он случается ПОСЛЕ остановки хоста,
+// а терять правки при штатной остановке нельзя даже в окне между двумя фазами.
+// GetService, а не GetRequiredService: подсистема задач отключаемая (Subsystems:tasks).
+var shutdownTasks = app.Services.GetService<ClaudeHomeServer.Services.Tasks.TaskManager>();
 
 app.Lifetime.ApplicationStopping.Register(() =>
 {
@@ -1902,11 +2175,13 @@ app.Lifetime.ApplicationStopping.Register(() =>
         catch (Exception ex) { Console.Error.WriteLine($"Shutdown: {what} — {ex.Message}"); }
     }
 
+    if (shutdownTasks is not null) Safe(shutdownTasks.Flush, "стор задач");
     Safe(shutdownSessions.KillAllProcesses, "процессы claude");
     Safe(shutdownTerminals.Dispose, "терминалы");
     Safe(shutdownDevServers.Dispose, "dev-серверы");
-    // Тот же pid-файл принадлежит боевому серверу — копия его не трогает
-    if (!inspectionMode) Safe(ProcessRegistry.KillAll, "реестр процессов");
+    // Тот же pid-файл принадлежит боевому серверу — копия его не трогает; не владеющий
+    // реестром хост (тестовый) тем более: KillAll бьёт по ВСЕМ процессам процесса ОС
+    if (ownsProcessRegistry) Safe(ProcessRegistry.KillAll, "реестр процессов");
 });
 
 app.Run();

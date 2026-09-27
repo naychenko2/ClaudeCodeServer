@@ -15,6 +15,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Ретранслятор stdio удалённого хода: RemoteProcessRunner ищет его рядом со сборкой -->
+    <None Include="Services\Execution\exec-relay.mjs" Link="exec-relay.mjs" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
   </ItemGroup>
 

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Threading;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Models;
@@ -42,8 +43,11 @@ public sealed class WebSearchToolset(
     ReaderService reader,
     ReaderQuotaService quota,
     SessionManager sessions,
-    ISpendCollector spend) : IMcpParameterizedToolset
+    ILogger<WebSearchToolset> logger,
+    ISpendCollector? spend = null) : IMcpParameterizedToolset
 {
+    private int _spendNullWarned;
+
     // Имя сервера = первый сегмент маршрута POST /mcp/websearch/{sessionId}. Константа —
     // единственная точка правды для URL конфига хода (ClaudeSession) и для ключей
     // KeepMcpServers/KeepMcpTools профиля провайдера
@@ -145,6 +149,12 @@ public sealed class WebSearchToolset(
     // Пустую запись (ноль токенов) отбрасывает сам SpendStore.
     private void RecordSpend(string ownerId, Session session, WebSearchOutcome outcome, TimeSpan elapsed)
     {
+        if (spend is null)
+        {
+            if (Interlocked.Exchange(ref _spendNullWarned, 1) == 0)
+                logger.LogWarning("spend: коллектор недоступен, запись расхода веб-поиска пропущена");
+            return;
+        }
         var cost = (outcome.InputTokens * search.PriceInPer1M + outcome.OutputTokens * search.PriceOutPer1M)
             / 1_000_000d;
         spend.Record(new SpendRecord

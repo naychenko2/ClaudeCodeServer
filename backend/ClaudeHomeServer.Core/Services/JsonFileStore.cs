@@ -1,41 +1,305 @@
+using System.Collections;
 using System.Collections.Concurrent;
 using System.Text.Json;
 
 namespace ClaudeHomeServer.Services;
 
 // Надёжная JSON-персистентность для файловых хранилищ:
-// - чтение не теряет данные: повреждённый файл переименовывается в .corrupt-*.bak, а не перезатирается;
+// - чтение не теряет данные: битая запись стоит только себя (уцелевшие поднимаются, а полный
+//   исходник кладётся рядом копией .partial-*.bak — первый же Save перезатёр бы файл усечённым
+//   списком, и чинить пропущенные записи было бы уже нечем), повреждённый целиком файл
+//   переименовывается в .corrupt-*.bak (а не перезатирается), состояние поднимается из
+//   прошлого .bak, и лишь когда не вышло ничего — пустое состояние с алертом наверх;
 // - запись атомарна: сериализация во временный файл + File.Move с заменой (на Windows — атомарная замена),
-//   крэш посреди записи не портит целевой файл.
+//   крэш посреди записи не портит целевой файл; tmp сбрасывается на диск (fsync) до переноса.
 // Локов не берёт — синхронизация остаётся на стороне вызывающих.
 public static class JsonFileStore
 {
     /// <summary>
-    /// Читает и десериализует JSON. Файла нет → default. Парсинг упал → повреждённый файл
-    /// сохраняется как {path}.corrupt-{timestamp}.bak, ошибка логируется, возвращается default.
+    /// Данные стора прочитаны не полностью. Два разных случая, различимых по
+    /// <paramref name="SkippedItems"/>: 0 — стор не прочитан вовсе (ни сам файл, ни бэкапы,
+    /// подсистема стартовала с пустым состоянием); больше нуля — частичный подъём, уцелевшие
+    /// записи живы, пропущенные остались только в копии исходника <paramref name="BackupPath"/>.
+    /// </summary>
+    public sealed record DataLossAlert(
+        string Path,
+        string? BackupPath,
+        string Reason,
+        int LoadedItems = 0,
+        int SkippedItems = 0);
+
+    /// <summary>
+    /// Читает и десериализует JSON. Файла нет → default. Парсинг упал — по порядку:
+    /// поэлементный разбор коллекции (битые записи пропускаются с WARN, файл остаётся на месте,
+    /// полный исходник копируется в {path}.partial-{timestamp}.bak) → откат на самый свежий
+    /// {path}.corrupt-*.bak → default с алертом в <see cref="DataLossSink"/>.
+    /// В последних двух случаях повреждённый файл сохраняется как {path}.corrupt-{timestamp}.bak.
     /// </summary>
     public static T? Load<T>(string path, JsonSerializerOptions? options = null, ILogger? logger = null)
     {
         if (!File.Exists(path)) return default;
+        string? json = null;
         try
         {
-            var json = File.ReadAllText(path);
+            json = File.ReadAllText(path);
             return JsonSerializer.Deserialize<T>(json, options);
         }
         catch (Exception ex)
         {
-            var backupPath = $"{path}.corrupt-{DateTime.UtcNow:yyyyMMdd-HHmmss}.bak";
+            // Одна битая запись из сотен не должна стоить всего стора (инцидент 19.09.2026:
+            // 22 записи с null в non-nullable поле унесли все 866 сессий). Поэлементный разбор
+            // включается ТОЛЬКО после провала обычного — на здоровых файлах путь чтения прежний.
+            if (json is not null && TryLoadPerItem<T>(json, options, logger, path, out var partial, out var stats))
+            {
+                if (stats.Skipped > 0) ReportPartialLoad(path, ex, stats, logger);
+                return partial;
+            }
+            return Recover<T>(path, ex, options, logger);
+        }
+    }
+
+    // Сколько записей коллекции уцелело и сколько пропущено при поэлементном разборе.
+    private readonly record struct PerItemStats(int Loaded, int Skipped);
+
+    // Частичный подъём: сам файл остаётся на месте (на этом стоит остальная логика), но рядом
+    // ложится КОПИЯ полного исходника. Без неё первый же Save — у SessionManager это автосейв
+    // через секунды — перезаписал бы файл усечённым списком, и данные пропущенных записей
+    // исчезли бы безвозвратно (19.09.2026 их чинили руками: null → false в 22 записях).
+    private static void ReportPartialLoad(string path, Exception ex, PerItemStats stats, ILogger? logger)
+    {
+        var copyPath = CopyAside(path, logger);
+        LogWarn(logger, copyPath is null
+            ? $"{path}: копию исходника сохранить не удалось — данные пропущенных записей ({stats.Skipped}) будут потеряны первым же сохранением"
+            : $"{path}: полный исходник скопирован в {copyPath}");
+        ReportDataLoss(new DataLossAlert(path, copyPath, ex.Message, stats.Loaded, stats.Skipped));
+    }
+
+    // Копия (не перенос!) исходника рядом со стором: оригинал обязан остаться на месте.
+    private static string? CopyAside(string path, ILogger? logger)
+    {
+        var stem = $"{path}.partial-{DateTime.UtcNow:yyyyMMdd-HHmmss}";
+        var copyPath = $"{stem}.bak";
+        for (var i = 2; File.Exists(copyPath); i++) copyPath = $"{stem}-{i}.bak";
+        try
+        {
+            File.Copy(path, copyPath);
+            return copyPath;
+        }
+        catch (Exception copyEx)
+        {
+            LogError(logger, copyEx, $"не удалось сохранить копию исходника как {copyPath}");
+            return null;
+        }
+    }
+
+    // Полный провал разбора: пробуем поднять состояние из прошлого снимка, и только если
+    // не вышло — отдаём пустое, но громко.
+    private static T? Recover<T>(string path, Exception ex, JsonSerializerOptions? options, ILogger? logger)
+    {
+        // Кандидатов на откат перечисляем ДО того, как положим рядом новый .bak: иначе
+        // самым свежим окажется только что сохранённый мусор.
+        var candidates = RecentBackups(path);
+        var backupPath = MoveAside(path, logger);
+
+        foreach (var candidate in candidates)
+        {
+            if (!TryReadFile<T>(candidate, options, logger, out var restored)) continue;
+            LogWarn(logger, $"{path} не читается ({ex.Message}) — состояние поднято из {Path.GetFileName(candidate)}");
+            return restored;
+        }
+
+        var reason = ex.Message;
+        LogError(logger, ex, $"не удалось прочитать {path} — повреждённый файл сохранён как {backupPath}, стартуем с пустым состоянием");
+        ReportDataLoss(new DataLossAlert(path, backupPath, reason));
+        return default;
+    }
+
+    // Читает файл «тихо», без побочных эффектов: ни переименований, ни алертов — бэкап,
+    // из которого не вышло подняться, должен остаться лежать как есть.
+    private static bool TryReadFile<T>(string file, JsonSerializerOptions? options, ILogger? logger, out T? value)
+    {
+        value = default;
+        string json;
+        try
+        {
+            json = File.ReadAllText(file);
+        }
+        catch (Exception ex)
+        {
+            LogWarn(logger, $"бэкап {file} не прочитан: {ex.Message}");
+            return false;
+        }
+
+        try
+        {
+            value = JsonSerializer.Deserialize<T>(json, options);
+            // Разобранный в null бэкап (файл с текстом «null») — не состояние, а пустышка:
+            // перебор кандидатов на нём обрываться не должен.
+            return value is not null;
+        }
+        catch
+        {
+            // Копию бэкапа рядом не кладём и алерт не шлём: бэкап никто не перезаписывает,
+            // а о самой аварии вызывающий уже сообщил — копия и алерт нужны только стору.
+            return TryLoadPerItem(json, options, logger, file, out value, out _);
+        }
+    }
+
+    /// <summary>
+    /// Разбирает коллекцию поэлементно: JSON-массив в List-подобный T, JSON-объект в
+    /// Dictionary&lt;string, V&gt;. Битый элемент пропускается с WARN (индекс/ключ + текст ошибки).
+    /// Не коллекция, не разбирается сам JSON или не уцелел ни один элемент — false, и вызывающий
+    /// идёт прежним путём.
+    /// </summary>
+    private static bool TryLoadPerItem<T>(string json, JsonSerializerOptions? options, ILogger? logger, string path,
+        out T? value, out PerItemStats stats)
+    {
+        value = default;
+        stats = default;
+        JsonDocument doc;
+        try
+        {
+            doc = JsonDocument.Parse(json);
+        }
+        catch
+        {
+            // Сам JSON синтаксически битый — по элементам его не разложить.
+            return false;
+        }
+
+        using (doc)
+        {
+            var root = doc.RootElement;
+            if (root.ValueKind == JsonValueKind.Array && TryBuildList<T>(root, options, logger, path, out value, out stats))
+                return true;
+            if (root.ValueKind == JsonValueKind.Object && TryBuildDictionary<T>(root, options, logger, path, out value, out stats))
+                return true;
+            return false;
+        }
+    }
+
+    private static bool TryBuildList<T>(JsonElement root, JsonSerializerOptions? options, ILogger? logger, string path,
+        out T? value, out PerItemStats stats)
+    {
+        value = default;
+        stats = default;
+        var itemType = EnumerableItemType(typeof(T));
+        // Собираем в List<итем>: им закрываются все формы T у вызывающих (List<X>, IList<X>,
+        // IReadOnlyList<X>, IEnumerable<X>). Экзотику (массивы, HashSet) в продукте не зовут,
+        // и подменять её самодельной сборкой ради гипотетики незачем.
+        if (itemType is null) return false;
+        var listType = typeof(List<>).MakeGenericType(itemType);
+        if (!typeof(T).IsAssignableFrom(listType)) return false;
+
+        var list = (IList)Activator.CreateInstance(listType)!;
+        var skipped = 0;
+        var index = -1;
+        foreach (var item in root.EnumerateArray())
+        {
+            index++;
             try
             {
-                File.Move(path, backupPath, overwrite: true);
+                list.Add(item.Deserialize(itemType, options));
             }
-            catch (Exception moveEx)
+            catch (Exception ex)
             {
-                LogError(logger, moveEx, $"не удалось сохранить повреждённый файл как {backupPath}");
+                skipped++;
+                LogWarn(logger, $"{path}: запись #{index} пропущена — {ex.Message}");
             }
-            LogError(logger, ex, $"не удалось прочитать {path} — повреждённый файл сохранён как {backupPath}, стартуем с пустым состоянием");
-            return default;
         }
+
+        // Не уцелело ничего — файл мусорный, дальше им занимается откат на бэкап.
+        if (list.Count == 0) return false;
+        if (skipped > 0)
+            LogWarn(logger, $"{path}: поднято записей {list.Count}, пропущено битых {skipped} (файл оставлен на месте)");
+        stats = new PerItemStats(list.Count, skipped);
+        value = (T)list;
+        return true;
+    }
+
+    private static bool TryBuildDictionary<T>(JsonElement root, JsonSerializerOptions? options, ILogger? logger, string path,
+        out T? value, out PerItemStats stats)
+    {
+        value = default;
+        stats = default;
+        // Только Dictionary<string, V>: ключи всех словарных сторов продукта строковые,
+        // а разбор ключа произвольного типа пришлось бы дублировать за System.Text.Json.
+        var type = typeof(T);
+        if (!type.IsGenericType || type.GetGenericTypeDefinition() != typeof(Dictionary<,>)) return false;
+        var args = type.GetGenericArguments();
+        if (args[0] != typeof(string)) return false;
+
+        var dict = (IDictionary)Activator.CreateInstance(type)!;
+        var skipped = 0;
+        foreach (var prop in root.EnumerateObject())
+        {
+            try
+            {
+                dict[prop.Name] = prop.Value.Deserialize(args[1], options);
+            }
+            catch (Exception ex)
+            {
+                skipped++;
+                LogWarn(logger, $"{path}: запись «{prop.Name}» пропущена — {ex.Message}");
+            }
+        }
+
+        if (dict.Count == 0) return false;
+        if (skipped > 0)
+            LogWarn(logger, $"{path}: поднято записей {dict.Count}, пропущено битых {skipped} (файл оставлен на месте)");
+        stats = new PerItemStats(dict.Count, skipped);
+        value = (T)dict;
+        return true;
+    }
+
+    // Тип элемента коллекции T (для T = IEnumerable<X> — сам T).
+    private static Type? EnumerableItemType(Type type)
+    {
+        if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(IEnumerable<>))
+            return type.GetGenericArguments()[0];
+        return type.GetInterfaces()
+            .FirstOrDefault(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IEnumerable<>))
+            ?.GetGenericArguments()[0];
+    }
+
+    // Самые свежие .corrupt-*.bak рядом со стором, новые первыми. Потолок в пять штук:
+    // перебирать все накопившиеся снимки (на проде их за десяток) дороже, чем полезно.
+    private static IReadOnlyList<string> RecentBackups(string path)
+    {
+        try
+        {
+            var dir = Path.GetDirectoryName(Path.GetFullPath(path));
+            if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) return [];
+            return new DirectoryInfo(dir)
+                .GetFiles($"{Path.GetFileName(path)}.corrupt-*.bak")
+                .OrderByDescending(f => f.LastWriteTimeUtc)
+                .Take(5)
+                .Select(f => f.FullName)
+                .ToList();
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    // Уносит повреждённый файл в .corrupt-*.bak. Имя уникализируется: в пределах одной
+    // секунды перенос с overwrite затёр бы прошлый снимок — то есть ровно то, из чего
+    // мы собираемся восстанавливаться.
+    private static string MoveAside(string path, ILogger? logger)
+    {
+        var stem = $"{path}.corrupt-{DateTime.UtcNow:yyyyMMdd-HHmmss}";
+        var backupPath = $"{stem}.bak";
+        for (var i = 2; File.Exists(backupPath); i++) backupPath = $"{stem}-{i}.bak";
+        try
+        {
+            File.Move(path, backupPath);
+        }
+        catch (Exception moveEx)
+        {
+            LogError(logger, moveEx, $"не удалось сохранить повреждённый файл как {backupPath}");
+        }
+        return backupPath;
     }
 
     /// <summary>
@@ -54,7 +318,15 @@ public static class JsonFileStore
         var tmpPath = $"{path}.{Guid.NewGuid():N}.tmp";
         try
         {
-            File.WriteAllText(tmpPath, JsonSerializer.Serialize(value, options));
+            // Данные tmp обязаны лечь на диск ДО переименования: иначе при внезапном
+            // выключении ФС (ext4 delalloc, NTFS) успевает сохранить rename, но не
+            // содержимое — и на месте стора остаётся файл нулевой длины или из нулей.
+            // Так дважды терялся sessions.json (17.09 и 19.09.2026).
+            using (var fs = new FileStream(tmpPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                JsonSerializer.Serialize(fs, value, options);
+                fs.Flush(flushToDisk: true);
+            }
             // Внутри процесса записи по одному пути выстраиваются в очередь: два
             // одновременных File.Move поверх одного файла на Windows дают Access denied.
             lock (LockFor(path)) MoveWithRetry(tmpPath, path);
@@ -95,11 +367,74 @@ public static class JsonFileStore
         }
     }
 
+    private static readonly List<DataLossAlert> PendingAlerts = [];
+    private static Action<DataLossAlert>? _dataLossSink;
+
+    /// <summary>
+    /// Куда сообщать о старте с пустым состоянием — доставку ставит композиция (DI здесь
+    /// невозможен: сторы читаются из конструкторов, а часть — до сборки контейнера).
+    /// Алерты, случившиеся ДО подписки, не теряются: они копятся и уходят в момент установки —
+    /// иначе как раз случай инцидента (чтение сторов на старте) остался бы незамеченным.
+    /// </summary>
+    public static Action<DataLossAlert>? DataLossSink
+    {
+        get { lock (PendingAlerts) return _dataLossSink; }
+        set
+        {
+            DataLossAlert[] pending;
+            lock (PendingAlerts)
+            {
+                _dataLossSink = value;
+                pending = [.. PendingAlerts];
+                PendingAlerts.Clear();
+            }
+            if (value is null) return;
+            foreach (var alert in pending) Invoke(value, alert);
+        }
+    }
+
+    private static void ReportDataLoss(DataLossAlert alert)
+    {
+        Action<DataLossAlert>? sink;
+        lock (PendingAlerts)
+        {
+            sink = _dataLossSink;
+            // Потолок буфера: если пустыми встали все сторы разом, подписчику хватит первых —
+            // авария уже очевидна, а неограниченный список тут не нужен никому.
+            if (sink is null)
+            {
+                if (PendingAlerts.Count < 16) PendingAlerts.Add(alert);
+                return;
+            }
+        }
+        Invoke(sink, alert);
+    }
+
+    private static void Invoke(Action<DataLossAlert> sink, DataLossAlert alert)
+    {
+        try
+        {
+            sink(alert);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[JsonFileStore] доставка алерта о потере данных не удалась: {ex.Message}");
+        }
+    }
+
     private static void LogError(ILogger? logger, Exception ex, string message)
     {
         if (logger is not null)
             logger.LogError(ex, "JsonFileStore: {Message}", message);
         else
             Console.Error.WriteLine($"[JsonFileStore] {message}: {ex.Message}");
+    }
+
+    private static void LogWarn(ILogger? logger, string message)
+    {
+        if (logger is not null)
+            logger.LogWarning("JsonFileStore: {Message}", message);
+        else
+            Console.Error.WriteLine($"[JsonFileStore] {message}");
     }
 }

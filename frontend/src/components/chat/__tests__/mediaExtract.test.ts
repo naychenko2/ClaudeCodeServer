@@ -2,8 +2,8 @@
 // Фикстуры glif — по подтверждённой живым токеном фактуре: resource_link content-блоки
 // (uri + mimeType), assets get_project (uri, type, metadata.{format,width,height}),
 // хосты glifusercontent.com / res.cloudinary.com, _meta.glif с billing telemetry.
-import { describe, it, expect } from 'vitest';
-import { extractMediaFromResult, extractMediaMeta, classifyUrl } from '../MediaBlock';
+import { describe, it, expect, vi } from 'vitest';
+import { extractMediaFromResult, extractMediaMeta, classifyUrl, isLocalStreamUrl, mediaSrc } from '../MediaBlock';
 
 // ---------- fal.ai — регрессия существующих форматов ----------
 
@@ -322,5 +322,124 @@ describe('смешанный боевой результат fal + glif', () => 
       '\r\n[Resource link: g.mp4] https://glifusercontent.com/i:r/g.mp4';
     const media = extractMediaFromResult(mixed);
     expect(media.map(m => m.kind)).toEqual(['video', 'image']); // маркеры идут первым проходом
+  });
+});
+
+// ---------- Higgsfield — jobs_wait и generate_image ----------
+
+const HIGGSFIELD_JOBS_WAIT = JSON.stringify({
+  jobs: [
+    {
+      index: 0,
+      job_id: '8c516bb9-f774-4523-9777-d9f5cb2ca3bf',
+      status: 'completed',
+      type: 'image',
+      model: 'gpt_image_2_5',
+      result_url: 'https://d8j0ntlcm91z4.cloudfront.net/user_abc/hf_20260916_074017_8c516bb9.png',
+    },
+  ],
+  summary: { total: 1, completed: 1, failed: 0, active: 0, errors: 0 },
+  all_terminal: true,
+});
+
+const HIGGSFIELD_GENERATE_IMAGE = JSON.stringify({
+  results: [
+    {
+      id: '8c516bb9-f774-4523-9777-d9f5cb2ca3bf',
+      type: 'image',
+      status: 'pending',
+      model: 'gpt_image_2_5',
+      params: { prompt: '…', aspect_ratio: '16:9' },
+    },
+  ],
+});
+
+describe('Higgsfield', () => {
+  it('jobs_wait: один элемент, kind=image, ссылка из result_url', () => {
+    const media = extractMediaFromResult(HIGGSFIELD_JOBS_WAIT);
+    expect(media).toHaveLength(1);
+    expect(media[0].kind).toBe('image');
+    expect(media[0].url).toBe('https://d8j0ntlcm91z4.cloudfront.net/user_abc/hf_20260916_074017_8c516bb9.png');
+  });
+
+  it('generate_image (pending): пустой список, без падений', () => {
+    const media = extractMediaFromResult(HIGGSFIELD_GENERATE_IMAGE);
+    expect(media).toEqual([]);
+  });
+
+  it('extractMediaMeta: источник higgsfield, модель gpt_image_2_5, цены нет', () => {
+    const meta = extractMediaMeta(HIGGSFIELD_JOBS_WAIT);
+    expect(meta.source).toBe('higgsfield');
+    expect(meta.model).toBe('gpt_image_2_5');
+    expect(meta.costUsd).toBeUndefined();
+  });
+});
+
+// ---------- local-media: same-origin медиа локальных моделей ----------
+
+const PID = '0b461266-6bdb-47f2-9ca3-47068de62b74';
+const LOCAL_IMG = `/api/projects/${PID}/files/stream?path=.cc-attachments/local-media/cat.png`;
+const LOCAL_VID = `/api/projects/${PID}/files/stream?path=.cc-attachments/local-media/clip.mp4`;
+
+describe('local-media', () => {
+  it('images: same-origin stream-URL → image с размерами и именем из path', () => {
+    const media = extractMediaFromResult(JSON.stringify({
+      images: [{ url: LOCAL_IMG, content_type: 'image/png', width: 512, height: 512, path: '.cc-attachments/local-media/cat.png' }],
+    }));
+    expect(media).toEqual([{ kind: 'image', url: LOCAL_IMG, width: 512, height: 512, fileName: 'cat.png' }]);
+  });
+
+  it('videos: mp4 → video, источник local', () => {
+    const result = JSON.stringify({ videos: [{ url: LOCAL_VID, content_type: 'video/mp4', width: 832, height: 480 }] });
+    const media = extractMediaFromResult(result);
+    expect(media.map(m => m.kind)).toEqual(['video']);
+    expect(media[0].fileName).toBe('clip.mp4');
+    expect(extractMediaMeta(result).source).toBe('local');
+  });
+
+  // Боевой результат local_jobs_wait (QA 2026-09-26): медиа вложены в jobs[i], путь %-кодирован
+  it('local_jobs_wait: images/videos внутри jobs[] → медиа, источник local', () => {
+    const img = `/api/projects/${PID}/files/stream?path=.cc-attachments%2Flocal-media%2F2026-09-26%2Flm_5b1d-1.png`;
+    const vid = `/api/projects/${PID}/files/stream?path=.cc-attachments%2Flocal-media%2F2026-09-26%2Flm_ad73-1.mp4`;
+    const result = JSON.stringify({ all_done: true, jobs: [
+      { job_id: 'lm_5b1d', operation: 'generate_image', status: 'completed', seed: 1,
+        images: [{ url: img, content_type: 'image/png', width: 1472, height: 1104, path: '.cc-attachments/local-media/2026-09-26/lm_5b1d-1.png' }] },
+      { job_id: 'lm_ad73', operation: 'image_to_video', status: 'completed', seed: 2,
+        videos: [{ url: vid, content_type: 'video/mp4', width: 480, height: 864, path: '.cc-attachments/local-media/2026-09-26/lm_ad73-1.mp4' }] },
+    ] });
+    const media = extractMediaFromResult(result);
+    expect(media.map(m => [m.kind, m.url, m.fileName])).toEqual([
+      ['image', img, 'lm_5b1d-1.png'],
+      ['video', vid, 'lm_ad73-1.mp4'],
+    ]);
+    expect(extractMediaMeta(result).source).toBe('local');
+  });
+
+  it('classifyUrl по content_type работает и для локального URL', () => {
+    expect(classifyUrl({ url: LOCAL_VID, content_type: 'video/mp4' })).toBe('video');
+  });
+
+  it('произвольные относительные URL не принимаются', () => {
+    for (const url of [
+      '/api/proxy?url=http://localhost:5000/x.png',
+      '/api/projects/../../etc/files/stream?path=x.png',
+      `/api/projects/${PID}/files/raw?path=x.png`,
+      `api/projects/${PID}/files/stream?path=x.png`,
+      `//evil.example/api/projects/${PID}/files/stream?path=x.png`,
+      '/x.png',
+    ]) {
+      expect(isLocalStreamUrl(url)).toBe(false);
+      expect(extractMediaFromResult(JSON.stringify({ images: [{ url, content_type: 'image/png' }] }))).toEqual([]);
+    }
+  });
+
+  it('mediaSrc: локальный URL — напрямую с access_token, внешний — через прокси', () => {
+    vi.stubGlobal('localStorage', { getItem: (k: string) => (k === 'cc_token' ? 'tok 1' : null) });
+    try {
+      expect(mediaSrc(LOCAL_IMG)).toBe(`${LOCAL_IMG}&access_token=tok%201`);
+      expect(mediaSrc('https://fal.media/files/a.png').startsWith('/api/proxy?')).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

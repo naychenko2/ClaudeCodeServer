@@ -35,6 +35,14 @@
        Этап 5, волна C, шаг 2: перенесён в `ClaudeHomeServer.ProjectIcons.csproj`
        вместе с вертикалью (EmbeddedResource едет со сборкой, в которой живёт). -->
 
+  <!-- Скрипты установки агента устройства (agent-distribution Р10): раздаются анонимно по
+       /agent/install.ps1 и /agent/install.sh, поэтому встроены в сборку и с диска по пути из
+       запроса не читаются никогда. LogicalName — короткое имя, по нему читает контроллер. -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\deploy\agent-install\install.ps1" LogicalName="AgentInstall.install.ps1" />
+    <EmbeddedResource Include="..\..\deploy\agent-install\install.sh" LogicalName="AgentInstall.install.sh" />
+  </ItemGroup>
+
   <!-- Хостовый publish: встроенные MCP-серверы и дефолты CLI кладём рядом с exe —
        TasksServerLocator и синк workflows ищут их от AppContext.BaseDirectory
        (в контейнере это делала копия в /app из Dockerfile) -->
@@ -44,6 +52,15 @@
          /app/ (publish). Без копии флаг system-prompt-file укажет на несуществующий файл
          и ход провайдера упадёт (см. ревью 2026-09-05). -->
     <None Include="SystemPrompts\CLAUDE-local.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <!-- Шаблон блоков ПРАВИЛА и ДЕЛЕГИРОВАНИЕ постановки задач-исполнителей
+         (TaskExecutionService.ReadRulesTemplate). Читается на каждую постановку, поэтому
+         правка текста на проде не требует пересборки — достаточно заменить файл. Нет файла
+         — работает встроенный фолбэк в коде, постановка не остаётся без правил. -->
+    <None Include="SystemPrompts\task-executor-rules.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <!-- Блок «ПРАВИЛА» постановки задачи-исполнителю (TaskExecutionService.ResolveExecutorRules):
+         серверный дефолт, который перебивается docs/task-executor-rules.md в корне проекта задачи.
+         Читается при каждой сборке промпта — правка текста не требует ни кода, ни выкатки. -->
+    <None Include="SystemPrompts\task-executor-rules.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\..\mcp\**\*" LinkBase="mcp" CopyToPublishDirectory="PreserveNewest" />
     <!-- __tests__ исключаем: Node-хёрнессы не должны попадать в production-артефакт,
          их место в репозитории для локального/CI-прогона -->
@@ -91,29 +108,74 @@
        (Enabled=true в прод-конфиге). ReferenceOutputAssembly="false" — Main не видит типы Notes
        на этапе компиляции; все швы (INoteAccessor, INoteSemanticIndex и др.) живут в Core.
        Копия dll в выходной каталог нужна всегда (Debug+Release): ModuleLoader грузит по пути
-       из appsettings.json. -->
+       из appsettings.json.
+
+       Две отдельные цели вместо одной с условием IsPublishing: SDK выставляет только
+       _IsPublishing (с подчёркиванием); IsPublishing всегда пуст — publish выбирал ветку
+       $(OutDir), и в PublishDir модуль не попадал. Build копирует в $(OutDir)
+       (dev-запуск dotnet run), Publish — в $(PublishDir) (деплой deploy80.ps1 / deploy-agent
+       делают dotnet publish -o и раньше теряли dll: на проде ModuleLoader не находил
+       INoteSemanticIndex, форвардер Knowledge ронял старт хоста). -->
   <ItemGroup>
     <ProjectReference Include="..\ClaudeHomeServer.Notes\ClaudeHomeServer.Notes.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
-  <!-- Две цели: Build копирует в $(OutDir) (dev-запуск dotnet run), Publish — в
-       $(PublishDir) (деплой deploy80.ps1 делает dotnet publish -o и раньше терял
-       модуль: на проде ModuleLoader не находил dll, INoteSemanticIndex не
-       регистрировался, и форвардер Knowledge ронял старт хоста). Одна цель с условием
-       «PublishDir не пуст» не годится: SDK задаёт PublishDir и на обычной сборке
-       (bin\...\publish\), и копия Build уезжала мимо $(OutDir). -->
-  <PropertyGroup>
-    <NotesModuleDll>..\ClaudeHomeServer.Notes\bin\$(Configuration)\net10.0\ClaudeHomeServer.Notes.dll</NotesModuleDll>
-  </PropertyGroup>
-  <Target Name="CopyNotesModule" AfterTargets="Build">
-    <Copy SourceFiles="$(NotesModuleDll)" DestinationFolder="$(OutDir)modules\notes"
-          SkipUnchangedFiles="true" Condition="Exists('$(NotesModuleDll)')" />
+  <Target Name="CopyNotesModuleBuild" AfterTargets="Build">
+    <ItemGroup>
+      <NotesModuleFiles Include="..\ClaudeHomeServer.Notes\bin\$(Configuration)\net10.0\ClaudeHomeServer.Notes.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(NotesModuleFiles)" DestinationFolder="$(OutDir)modules\notes"
+          SkipUnchangedFiles="true" Condition="Exists('..\ClaudeHomeServer.Notes\bin\$(Configuration)\net10.0\ClaudeHomeServer.Notes.dll')" />
   </Target>
-  <Target Name="CopyNotesModuleOnPublish" AfterTargets="Publish">
-    <!-- На Publish тихий пропуск недопустим: бой остался бы без модуля и не стартовал бы -->
-    <Error Condition="!Exists('$(NotesModuleDll)')"
-           Text="Модуль Notes не собран: нет $(NotesModuleDll) — публикация без него уронила бы старт хоста" />
-    <Copy SourceFiles="$(NotesModuleDll)" DestinationFolder="$(PublishDir)modules\notes"
-          SkipUnchangedFiles="true" />
+  <Target Name="CopyNotesModulePublish" AfterTargets="Publish">
+    <ItemGroup>
+      <NotesModuleFiles Include="..\ClaudeHomeServer.Notes\bin\$(Configuration)\net10.0\ClaudeHomeServer.Notes.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(NotesModuleFiles)" DestinationFolder="$(PublishDir)modules\notes"
+          SkipUnchangedFiles="true" Condition="Exists('..\ClaudeHomeServer.Notes\bin\$(Configuration)\net10.0\ClaudeHomeServer.Notes.dll')" />
+  </Target>
+
+  <!-- Динамический модуль Spend: тот же паттерн, что Notes.
+       ReferenceOutputAssembly="false" — Main не видит типы Spend на этапе компиляции;
+       все швы (ISpendCollector, ISpendAnalytics, ITaskPromptMetricsStore и др.) живут в Core.
+       Копия dll в выходной каталог: ModuleLoader грузит по пути из appsettings.json.
+       Две цели (Build/Publish) — симметрично CopyNotesModule выше. -->
+  <ItemGroup>
+    <ProjectReference Include="..\ClaudeHomeServer.Spend\ClaudeHomeServer.Spend.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+  <Target Name="CopySpendModuleBuild" AfterTargets="Build">
+    <ItemGroup>
+      <SpendModuleFiles Include="..\ClaudeHomeServer.Spend\bin\$(Configuration)\net10.0\ClaudeHomeServer.Spend.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(SpendModuleFiles)" DestinationFolder="$(OutDir)modules\spend"
+          SkipUnchangedFiles="true" Condition="Exists('..\ClaudeHomeServer.Spend\bin\$(Configuration)\net10.0\ClaudeHomeServer.Spend.dll')" />
+  </Target>
+  <Target Name="CopySpendModulePublish" AfterTargets="Publish">
+    <ItemGroup>
+      <SpendModuleFiles Include="..\ClaudeHomeServer.Spend\bin\$(Configuration)\net10.0\ClaudeHomeServer.Spend.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(SpendModuleFiles)" DestinationFolder="$(PublishDir)modules\spend"
+          SkipUnchangedFiles="true" Condition="Exists('..\ClaudeHomeServer.Spend\bin\$(Configuration)\net10.0\ClaudeHomeServer.Spend.dll')" />
+  </Target>
+
+  <!-- Динамический модуль редактора картинок (ADR-018 §10.1): тот же паттерн, что Notes и Spend.
+       ReferenceOutputAssembly="false" — Main не видит типов редактора, швы живут в Core.
+       Две цели (Build/Publish): при одной `dotnet publish -o` молча терял dll модуля. -->
+  <ItemGroup>
+    <ProjectReference Include="..\ClaudeHomeServer.ImageEditor\ClaudeHomeServer.ImageEditor.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+  <Target Name="CopyImageEditorModuleBuild" AfterTargets="Build">
+    <ItemGroup>
+      <ImageEditorModuleFiles Include="..\ClaudeHomeServer.ImageEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.ImageEditor.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(ImageEditorModuleFiles)" DestinationFolder="$(OutDir)modules\image-editor"
+          SkipUnchangedFiles="true" Condition="Exists('..\ClaudeHomeServer.ImageEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.ImageEditor.dll')" />
+  </Target>
+  <Target Name="CopyImageEditorModulePublish" AfterTargets="Publish">
+    <ItemGroup>
+      <ImageEditorModuleFiles Include="..\ClaudeHomeServer.ImageEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.ImageEditor.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(ImageEditorModuleFiles)" DestinationFolder="$(PublishDir)modules\image-editor"
+          SkipUnchangedFiles="true" Condition="Exists('..\ClaudeHomeServer.ImageEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.ImageEditor.dll')" />
   </Target>
 
   <!-- Динамический модуль Architecture (раздел «Архитектура», Viaduct 10.2): тот же паттерн,
@@ -124,9 +186,6 @@
   <ItemGroup>
     <ProjectReference Include="..\ClaudeHomeServer.Architecture\ClaudeHomeServer.Architecture.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
-  <!-- Две цели, а не одна с условием на $(PublishDir): SDK задаёт PublishDir и на обычной
-       сборке (bin\...\publish\), и условие «PublishDir не пуст» уводило бы копию Build мимо
-       $(OutDir) — dotnet run не нашёл бы модуль. -->
   <PropertyGroup>
     <ArchitectureModuleDll>..\ClaudeHomeServer.Architecture\bin\$(Configuration)\net10.0\ClaudeHomeServer.Architecture.dll</ArchitectureModuleDll>
   </PropertyGroup>
@@ -142,6 +201,16 @@
           SkipUnchangedFiles="true" />
   </Target>
 
+  <!-- Нативный libSkiaSharp.pdb из SkiaSharp.NativeAssets.Win32 весит ~84 МБ и в выкладке не
+       нужен: без этой цели публикация win-x64 вырастает почти на 0,1 ГБ (ADR-018 §9, размер
+       публикации). Символы остаются в пакете NuGet, если понадобится разбор дампа. -->
+  <Target Name="DropSkiaNativePdb" AfterTargets="ComputeResolvedFilesToPublishList">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)"
+                             Condition="'%(Filename)%(Extension)' == 'libSkiaSharp.pdb'" />
+    </ItemGroup>
+  </Target>
+
   <!-- === Модульность (Этап 3+, Этап 5)
        Вертикали Video/Yandex/Reader/CodeGraph/Skills/Git/Personas/Spend/Knowledge/
        Changelog/Diagnostics/Docs/Tts/WebSearch/Tasks/Modules/ProjectServices/Backgrounds
@@ -152,8 +221,8 @@
        До этапа 3 всё это жило одной сборкой, и инвариант «вертикаль зависит только
        от спинки» соблюдался логически; теперь он держится физически — вертикаль не
        может «протянуть руку» в Main, потому что ProjectReference в её .csproj нет.
-       Notes и Architecture — исключения: динамические модули (см. CopyNotesModule,
-       CopyArchitectureModule), не прямые референсы. -->
+       Notes, Spend, ImageEditor и Architecture — исключения (динамические модули, см. Copy*Module выше),
+       не прямые референсы. -->
   <ItemGroup>
     <ProjectReference Include="..\ClaudeHomeServer.Backgrounds\ClaudeHomeServer.Backgrounds.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
@@ -168,6 +237,7 @@
     <ProjectReference Include="..\ClaudeHomeServer.Docs\ClaudeHomeServer.Docs.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Dossiers\ClaudeHomeServer.Dossiers.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Execution\ClaudeHomeServer.Execution.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Files\ClaudeHomeServer.Files.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Memory\ClaudeHomeServer.Memory.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Skills\ClaudeHomeServer.Skills.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Git\ClaudeHomeServer.Git.csproj" />
@@ -175,12 +245,11 @@
     <ProjectReference Include="..\ClaudeHomeServer.Knowledge\ClaudeHomeServer.Knowledge.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Llm\ClaudeHomeServer.Llm.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Modules\ClaudeHomeServer.Modules.csproj" />
-    <!-- Notes — теперь динамический модуль (см. CopyNotesModule выше), не прямой референс -->
+    <!-- Notes и Spend — теперь динамические модули (см. CopyNotesModule/CopySpendModule выше), не прямые референсы -->
 <ProjectReference Include="..\ClaudeHomeServer.Personas\ClaudeHomeServer.Personas.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.ProjectIcons\ClaudeHomeServer.ProjectIcons.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.ProjectServices\ClaudeHomeServer.ProjectServices.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Prompts\ClaudeHomeServer.Prompts.csproj" />
-    <ProjectReference Include="..\ClaudeHomeServer.Spend\ClaudeHomeServer.Spend.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Tasks\ClaudeHomeServer.Tasks.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Terminal\ClaudeHomeServer.Terminal.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Tts\ClaudeHomeServer.Tts.csproj" />

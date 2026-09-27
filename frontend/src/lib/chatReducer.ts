@@ -4,6 +4,7 @@
 // остаются в хуке; редьюсер только считает следующее состояние.
 
 import type { ChatItem, ServerMessage, RateLimitInfo, WorkLoopState, TeamImplementState, TeamWavePulse, SessionTeamImplement } from '../types';
+import { handsStatusFeedLine } from './localHands';
 import { isBgLaunchResult } from './agentTail';
 
 // Live-состояние режима «Командная реализация» из REST-гидратации (Session.teamImplement):
@@ -96,6 +97,9 @@ export interface PendingChatMessage {
   // Только у пользовательских: превратить в чипы при отрисовке и вернуть в композер по «Стоп»
   attachedPaths?: string[];
   mode?: string | null;
+  // Ждёт устройство локального проекта (ADR-016): лежит отдельно от обычной очереди и уйдёт
+  // в работу, когда устройство выйдет на связь, а не по концу текущего хода
+  waitingForDevice?: boolean;
 }
 
 // Команда композеру подставить прерванное сообщение (событие composer_restore).
@@ -221,9 +225,15 @@ export function normalizeHistory(raw: unknown[], opts?: { deriveSpeakers?: boole
     // Поля маркера подмены (model/previousModel/reason/details) переносятся как есть,
     // но пару «ошибка + подмена» из истории старых чатов схлопываем — см. appendModelSwitched
     else if (m.kind === 'model_switched') appendModelSwitched(items, m as unknown as ModelSwitchedItem);
-    else if (m.kind === 'text' || m.kind === 'user_message') {
+    else if (m.kind === 'text' || m.kind === 'user_message' || m.kind === 'interrupted') {
       // В истории поле называется timestamp (StoredMessage.Timestamp), в ленте — ts:
       // без перекладывания панель поста осталась бы без времени после перезагрузки
+      const { timestamp, ...rest } = m as unknown as Record<string, unknown> & { timestamp?: number };
+      items.push({ ...rest, ...(timestamp !== undefined ? { ts: timestamp } : {}) } as unknown as ChatItem);
+    }
+    else if (m.kind === 'branched_from') {
+      // Плашка «Ветка от …» (фича chat-branch): запись истории с sourceSessionId/sourceName,
+      // ts перекладываем так же, как у text/user_message — без этого дата в ленте потеряется
       const { timestamp, ...rest } = m as unknown as Record<string, unknown> & { timestamp?: number };
       items.push({ ...rest, ...(timestamp !== undefined ? { ts: timestamp } : {}) } as unknown as ChatItem);
     }
@@ -239,12 +249,18 @@ export function normalizeHistory(raw: unknown[], opts?: { deriveSpeakers?: boole
 // live-only элемент завышает длину клиента, серверная история навсегда признаётся
 // не новее, и оборванный посреди хода ответ залипает до перезагрузки страницы.
 // Список белый, а не чёрный, намеренно: новый вид элемента ленты по умолчанию
-// считается live-only и сверку не ломает. Сторож соответствия — chatReducer.test.ts.
+// считается live-only и сверку не ломает.
+// Сторож — `lib/chatReducer.test.ts`, describe «PERSISTED_KINDS ↔ StoredMessage.cs»: он
+// ЧИТАЕТ StoredMessage.cs, вынимает дискриминаторы [JsonDerivedType] и сверяет с этим
+// списком в обе стороны. Расхождение = красный тест; обе законные асимметрии (хранимый вид
+// без своей строки ленты — workflow_progress; вид ленты без C#-типа — сейчас таких нет)
+// перечислены там же поимённо, с объяснением каждой записи.
 export const PERSISTED_KINDS = new Set<ChatItem['kind']>([
   'user_message', 'session_started', 'text', 'thinking', 'tool_use',
   'ask_question', 'plan_review', 'team_plan', 'team_escalation',
-  'file_changed', 'result', 'fal_cost', 'glif_cost', 'compact_boundary', 'error',
-  'work_loop_stopped', 'model_switched',
+  'file_changed', 'result', 'fal_cost', 'glif_cost', 'compact_boundary', 'context_pruned', 'error',
+  'work_loop_stopped', 'model_switched', 'branched_from', 'interrupted',
+  'image_launch', 'image_file_moved', 'module_record',
 ]);
 
 // Стоит ли заменить живую ленту историей с сервера: сравнение длин БЕЗ live-only
@@ -458,6 +474,7 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         ...(msg.staffNote ? { staffNote: msg.staffNote } : {}),
         ...(msg.auto ? { auto: true } : {}),
         ...(msg.delegationTaskId ? { delegationTaskId: msg.delegationTaskId } : {}),
+        ...(msg.imageSnapshot ? { imageSnapshot: msg.imageSnapshot } : {}),
       }]);
     }
 
@@ -714,6 +731,53 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         compactNote: undefined,
         items: [...prev.items, { kind: 'compact_boundary', trigger: msg.trigger, preTokens: msg.preTokens, postTokens: msg.postTokens }],
       };
+
+    case 'context_pruned':
+      // Прокси локальной модели сдвинул контекст. Вид сдвига переименовываем kind → pruneKind:
+      // у элемента ленты kind занят дискриминатором (см. тип ChatItem). Состояние компакции
+      // не трогаем: сжатие в облаке ведёт прокси, индикатор «Сжимаю…» на него не заводился.
+      //
+      // Дедуп по eventId — как у fal_cost по requestId и по той же причине: внеходовая
+      // рассылка веерная (BroadcastSessionMessageAsync → session-группа И project-группа), а
+      // вкладка открытого чата состоит в обеих, поэтому ОДНО событие приезжает сюда дважды.
+      // Дедупим по личности, а не по числам: два разных сдвига вправе совпасть числами, и
+      // показать надо оба. Личности нет (карточка из старой истории) — просто дописываем.
+      if (msg.eventId !== undefined
+        && prev.items.some(it => it.kind === 'context_pruned' && it.eventId === msg.eventId))
+        return prev;
+      return withItems([...prev.items, {
+        kind: 'context_pruned', pruneKind: msg.kind,
+        ...(msg.eventId !== undefined ? { eventId: msg.eventId } : {}),
+        tokensBefore: msg.tokensBefore, tokensAfter: msg.tokensAfter,
+        blocks: msg.blocks, resultBlocks: msg.resultBlocks,
+        inputBlocks: msg.inputBlocks, thinkingBlocks: msg.thinkingBlocks,
+        ...(msg.prefillSeconds !== undefined ? { prefillSeconds: msg.prefillSeconds } : {}),
+        ...(msg.cacheReadTokens !== undefined ? { cacheReadTokens: msg.cacheReadTokens } : {}),
+        ...(msg.promptTokens !== undefined ? { promptTokens: msg.promptTokens } : {}),
+      }]);
+
+    case 'image_launch': {
+      // Тихая строка ручного запуска в чате картинки. Одна задача — одна строка: повторная
+      // доставка того же события (веерная рассылка) ленту не удваивает
+      if (prev.items.some(it => it.kind === 'image_launch' && it.jobId === msg.jobId)) return prev;
+      return withItems([...prev.items, {
+        kind: 'image_launch', by: msg.by, prompt: msg.prompt, provider: msg.provider, model: msg.model,
+        count: msg.count, estimate: msg.estimate, jobId: msg.jobId, timestamp: msg.timestamp,
+      }]);
+    }
+
+    case 'image_file_moved':
+      if (prev.items.some(it => it.kind === 'image_file_moved' && it.to === msg.to && it.timestamp === msg.timestamp)) return prev;
+      return withItems([...prev.items, { kind: 'image_file_moved', from: msg.from, to: msg.to, timestamp: msg.timestamp }]);
+
+    case 'module_record':
+      // Повторная доставка той же записи (веерная рассылка) ленту не удваивает
+      if (prev.items.some(it => it.kind === 'module_record' && it.module === msg.module && it.recordType === msg.recordType
+        && it.timestamp === msg.timestamp && JSON.stringify(it.data) === JSON.stringify(msg.data))) return prev;
+      return withItems([...prev.items, {
+        kind: 'module_record', module: msg.module, recordType: msg.recordType, data: msg.data,
+        fallback: msg.fallback, timestamp: msg.timestamp,
+      }]);
 
     case 'compact_status':
       // Ход компакции: compacting → началась; compact_result — завершилась.
@@ -978,6 +1042,18 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
           liveness: msg.liveness,
         },
       };
+
+    case 'hands_notice':
+      // Строка о руках от сервера (понижение «Без ограничений» и подобное) — live-only:
+      // событие эфемерное, после перезагрузки его нет и в истории
+      return withItems([...prev.items, { kind: 'hands_notice', text: msg.text, tone: 'neutral' }]);
+
+    case 'hands_status': {
+      // Состояние рук живёт в полосе «Руки» (LocalHandsStripFeed слушает то же событие); в ленту идёт
+      // только остановка на устройстве — она объясняет, почему ход оборвался
+      const line = handsStatusFeedLine(msg);
+      return line ? withItems([...prev.items, { kind: 'hands_notice', text: line, tone: 'warning' }]) : prev;
+    }
 
     case 'prompt_suggestion':
       // Подсказка следующего сообщения — приходит после result хода; в ленту не попадает

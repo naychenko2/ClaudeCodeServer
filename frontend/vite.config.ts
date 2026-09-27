@@ -81,6 +81,9 @@ export default defineConfig({
         // ПОСТАВЩИК singleton-инстанса (remotes пустые), для него eager штатен и
         // не мешает модулям-потребителям.
         react: { singleton: true, eager: true, requiredVersion: '^19.2.0' },
+        // Подпуть явно: модули берут jsx-runtime с import: false только у ядра
+        // (hostReactShared), а автодобавление подпутей — поведение версии плагина.
+        'react/jsx-runtime': { singleton: true, eager: true, requiredVersion: '^19.2.0' },
         'react-dom': { singleton: true, eager: true, requiredVersion: '^19.2.0' },
       },
     }),
@@ -147,13 +150,20 @@ export default defineConfig({
       '/hubs': { target: backendUrl, changeOrigin: true, ws: true },
       // Self-hosted draw.io: бэкенд (YARP) проксирует /drawio/* в контейнер jgraph/drawio
       '/drawio': { target: backendUrl, changeOrigin: true },
+      // Раздача агента устройства (манифест, скрипты установки) — анонимно, вне /api.
+      // Регулярка, а не префикс: '/agent' совпал бы и с '/agents…'
+      '^/agent/': { target: backendUrl, changeOrigin: true },
       // Раздел «Телеметрия»: бэкенд форвардит /telemetry-proxy/* на SigNoz. Без этой строки
       // Vite отдал бы свой index.html (SPA-fallback), и в iframe грузился бы сам CCS.
       '/telemetry-proxy': { target: backendUrl, changeOrigin: true, ws: true },
       // MF remote notes (dev): dev-сервер модуля на :5174, хост грузит remoteEntry.js
       // через этот префикс. В прод remoteEntry.js сервиcится статически из wwwroot.
-      '/notes-remote': { target: 'http://localhost:5174', changeOrigin: true, rewrite: (p: string) => p.replace(/^\/notes-remote/, '') },
-      '/architecture-remote': { target: 'http://localhost:5175', changeOrigin: true, rewrite: (p: string) => p.replace(/^\/architecture-remote/, '') },
+      '/notes-remote': { target: 'http://localhost:5174', changeOrigin: true },
+      // MF remote spend (dev): dev-сервер модуля на :5175.
+      '/spend-remote': { target: 'http://localhost:5175', changeOrigin: true },
+      // MF remote редактора картинок (dev): dev-сервер модуля на :5176.
+      '/image-editor-remote': { target: 'http://localhost:5176', changeOrigin: true },
+      '/architecture-remote': { target: 'http://localhost:5177', changeOrigin: true, rewrite: (p: string) => p.replace(/^\/architecture-remote/, '') },
     },
   },
   preview: {
@@ -163,9 +173,12 @@ export default defineConfig({
       '/api': { target: backendUrl, changeOrigin: true },
       '/hubs': { target: backendUrl, changeOrigin: true, ws: true },
       '/drawio': { target: backendUrl, changeOrigin: true },
+      '^/agent/': { target: backendUrl, changeOrigin: true },
       '/telemetry-proxy': { target: backendUrl, changeOrigin: true, ws: true },
-      '/notes-remote': { target: 'http://localhost:5174', changeOrigin: true, rewrite: (p: string) => p.replace(/^\/notes-remote/, '') },
-      '/architecture-remote': { target: 'http://localhost:5175', changeOrigin: true, rewrite: (p: string) => p.replace(/^\/architecture-remote/, '') },
+      '/notes-remote': { target: 'http://localhost:5174', changeOrigin: true },
+      '/spend-remote': { target: 'http://localhost:5175', changeOrigin: true },
+      '/image-editor-remote': { target: 'http://localhost:5176', changeOrigin: true },
+      '/architecture-remote': { target: 'http://localhost:5177', changeOrigin: true, rewrite: (p: string) => p.replace(/^\/architecture-remote/, '') },
     },
   },
 });

@@ -30,8 +30,7 @@ frontend/node_modules/
 frontend/dist/
 frontend/dev-dist/
 # Служебная диагностика плагина @module-federation/vite (пересоздаётся сборкой)
-frontend/.mf/
-frontend/modules/*/.mf/
+frontend/**/.mf/
 
 # Playwright MCP
 .playwright-mcp/
@@ -97,6 +96,7 @@ onlyoffice/local.json
 # Маска со ** — агент, запущенный с рабочей папкой внутри проекта, роняет копию .claude туда.
 **/.claude/agents/*
 !.claude/agents/designer.md
+!.claude/agents/scout.md
 
 # Справочник профилей категорий делегирования — его кладёт PersonaAgentFileSync
 # из константы OmoPrompts.DelegationCategoryProfiles (источник — docs/omo/translations)
@@ -152,3 +152,13 @@ tools/browser-spike/cft.zip
 # obj-* ломают сборку (CS0579 — дубли AssemblyInfo попадают в glob исходников).
 backend/**/bin-*/
 backend/**/obj-*/
+
+# Временные артефакты ручных прогонов и экспериментов (конфиги, логи, черновые скрипты).
+# Держим папку вне репозитория: незакоммиченный мусор здесь блокировал выкатку —
+# агент деплоя отказывается ехать с грязным деревом (16.09.2026).
+tmp/
+
+# Кеш интерпретатора Python: пересоздаётся при каждом запуске скриптов scripts/ops.
+# Держим правило общим, а не по одной папке — питоновские утилиты заводятся точечно.
+__pycache__/
+*.py[cod]

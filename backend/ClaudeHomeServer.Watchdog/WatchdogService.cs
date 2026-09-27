@@ -146,6 +146,15 @@ public class WatchdogService : BackgroundService
 
         if (!ShouldPoll(w, nowUtc)) return;
 
+        // Устройство локального проекта офлайн: опрос пропускается с отметкой. LastPollAt не
+        // двигаем — следующий тик спросит снова, и первый же опрос после выхода устройства в
+        // онлайн пройдёт сразу: догоняется один, а не накопленные. Потолок жизни тикает выше.
+        if (_env.DeviceWaitReason(w) is { } waitReason)
+        {
+            SkipForDevice(w, nowUtc, waitReason);
+            return;
+        }
+
         var workDir = _env.ResolveWorkDir(w);
         if (workDir is null)
         {
@@ -168,7 +177,7 @@ public class WatchdogService : BackgroundService
             PollOutcome outcome;
             try
             {
-                outcome = await _runner.RunAsync(w.OwnerId, workDir, w.PollCommand,
+                outcome = await _runner.RunAsync(w.OwnerId, w.ProjectId, workDir, w.PollCommand,
                     w.PollTimeoutSeconds, pollCts.Token);
             }
             catch (OperationCanceledException) when (pollCts.IsCancellationRequested && !ct.IsCancellationRequested)
@@ -185,6 +194,17 @@ public class WatchdogService : BackgroundService
             if (w.Status != WatchdogStatus.Active) return;
 
             LogPoll(w, outcome);
+
+            if (outcome.Kind == PollOutcomeKind.DeviceUnavailable)
+            {
+                // Отказ пришёл уже от канала (устройство не открыло поток) — интервал съеден,
+                // иначе каждый тик ждал бы таймаута открытия заново
+                w.LastPollAt = nowUtc;
+                SkipForDevice(w, nowUtc, outcome.Failure ?? "устройство проекта не в сети");
+                return;
+            }
+            // Опрос на устройстве состоялся — полоса пропусков закончилась
+            w.DeviceSkippedSince = null;
 
             switch (outcome.Kind)
             {
@@ -225,11 +245,24 @@ public class WatchdogService : BackgroundService
         {
             PollOutcomeKind.ExitCode => $"exit {outcome.ExitCode}",
             PollOutcomeKind.PollTimeout => "таймаут poll",
+            PollOutcomeKind.DeviceUnavailable => $"пропуск: {outcome.Failure}",
             _ => $"запуск не состоялся: {outcome.Failure}",
         };
         var output = outcome.Output.Length > 200 ? outcome.Output[..200] + "…" : outcome.Output;
         _log?.LogInformation("Сторож «{Name}» ({Id}): poll «{Command}» → {Head}, вывод: {Output}",
             w.Name, w.Id, w.PollCommand, head, output);
+    }
+
+    // Пропуск опроса из-за офлайн-устройства: не сбой запуска (счётчик не растёт), отметка
+    // видна в watch_list выводом последнего опроса. В лог — один раз на полосу пропусков.
+    private void SkipForDevice(WatchdogRecord w, DateTime nowUtc, string reason)
+    {
+        if (w.DeviceSkippedSince is null)
+        {
+            w.DeviceSkippedSince = nowUtc;
+            _log?.LogInformation("Сторож «{Name}» ({Id}): опрос пропущен — {Reason}", w.Name, w.Id, reason);
+        }
+        w.LastOutput = ClipOutput($"Опрос пропущен: {reason}");
     }
 
     // Причина «каталога нет» для будильника launch_failed (текст — по проекту сторожа)

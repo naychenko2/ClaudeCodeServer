@@ -11,6 +11,9 @@ export interface NavSnapshot {
   chatId?: string;                // активный чат: screen === 'chats' — глобальный, screen === 'project' — проектный
   view?: 'sidebar' | 'chat';     // мобильный вид внутри проекта / чатов
   file?: string | null;          // открытый файл (путь) или null
+  // «Показать в дереве» (редактор картинок): вместе с файлом открыть панель файлов.
+  // Живёт только в history.state, в адрес не попадает
+  revealInTree?: boolean;
   task?: string | null;          // открытая задача (id) или null
   board?: boolean;               // режим Kanban-доски проекта (screen === 'project')
   note?: string | null;          // открытая заметка (id) или null (screen === 'notes')

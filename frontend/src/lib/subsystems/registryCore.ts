@@ -14,7 +14,7 @@
 
 import { useMemo, useSyncExternalStore } from 'react';
 import type { ComponentType, LazyExoticComponent, ReactNode } from 'react';
-import type { AuthState, NoteDetail, Session } from '../../types';
+import type { AuthState, ChatItem, NoteDetail, Persona, Session } from '../../types';
 import type { HubTabValue } from '../../components/hubTabsModel';
 import { isSubsystemEnabled, subscribeSubsystems } from '../subsystems';
 
@@ -42,6 +42,11 @@ export interface SubsystemManifest {
   title: string;
   icon?: ReactNode;
   order: number;
+  // Подсистема не получает пилюлю в таббаре хаба (вход — через меню/шорткаты).
+  noPill?: boolean;
+  // Вклады самого каркаса (полоса «Руки»): бэковой подсистемы с тумблером у них нет,
+  // гейт включённости не применяется — доступность решают сами вклады.
+  core?: boolean;
   tab?: { component: LazyExoticComponent<ComponentType<SubsystemTabProps>> };
   slots?: Record<string, SlotContribution[]>;
 }
@@ -125,6 +130,13 @@ export interface WorkspaceCenterDocCtx {
 }
 
 export interface HomeWidgetNotesCtx { onHubTab: (t: HubTabValue) => void }
+export type HomeWidgetSpendCtx = Record<string, never>;
+export interface ChatHeaderBadgeCtx {
+  sessionId: string;
+  chatName?: string | null;
+  resultCount: number;
+  isMobile?: boolean;
+}
 
 export interface ActionButtonProps {
   icon: ReactNode;
@@ -159,6 +171,113 @@ export interface PlanButtonCtx { plan: string; online: boolean }
 // Action-вклады (поведенческие).
 export interface GlobalSearchNoteApi { open: (id: string) => void }
 export interface AiNoteOpenerApi { openNote: (id: string) => void }
+
+// ---- Редактор картинок (MF-модуль image-editor, ADR-018 §10.3) ----
+export type ImageEditorOpenTarget =
+  | { kind: 'edit'; path: string }       // «Редактировать» у картинки проекта
+  | { kind: 'create'; folder: string };  // «Нарисовать картинку» у папки
+export interface ImageEditorOpenRequest {
+  projectId: string;
+  projectName: string;
+  target: ImageEditorOpenTarget;
+  // «Показать в файлах» после сохранения
+  onShowInFiles?: (path: string) => void;
+}
+// Action-слот `image-editor`, вклад `opener`: вход из дерева файлов
+export interface ImageEditorOpenerApi {
+  isEditable: (path: string) => boolean;
+  open: (req: ImageEditorOpenRequest) => void;
+}
+// Render-слот `file-viewer-toolbar`: кнопки под просмотром файла
+export interface FileViewerToolbarCtx {
+  projectId: string;
+  projectName: string;
+  filePath: string;
+  onOpenFile?: (path: string) => void;
+}
+
+// Render-слот `chat-item-tool`: своя карточка записи ленты. Имя вклада — полное имя
+// инструмента у tool_use (`mcp__image-editor__image_generate`) или kind записи
+// (`image_launch`). Нет вклада — лента рисует запись как раньше
+export interface ChatItemToolCtx {
+  item: ChatItem;
+  online: boolean;
+  projectId: string | null;
+  sessionId: string | null;
+  persona: Persona | null;
+}
+
+// Render-слот `chat-card-badge`: значок и миниатюра в карточке списка чатов. Действие
+// вклада open перехватывает клик по карточке: true — клик обработан, чат не открываем
+export interface ChatCardBadgeCtx { session: Session; isMobile: boolean }
+export interface ChatCardBadgeApi { open?: (session: Session) => boolean }
+
+// ---- Композер и рабочая область: слоты для полос, режимов, чипов и панелей ----
+// Имена слотов — одной точкой: каркас и модули ссылаются на константы, а не на строки.
+export const SLOT_COMPOSER_STRIP = 'composer-strip';
+export const SLOT_COMPOSER_MODE = 'composer-mode';
+export const SLOT_COMPOSER_CHIP = 'composer-chip';
+export const SLOT_WORKSPACE_PANEL_DEF = 'workspace-panel-def';
+
+// Слот `composer-strip`: полоса над композером (Git, Картинки, …). Имя вклада — id
+// полосы; render рисует саму полосу, action описывает её для переключателя «Git ▾».
+// Выбор активной полосы — стор lib/composerStrips.ts, не сама полоса.
+export interface ComposerStripCtx {
+  projectId: string;
+  sessionId: string | null;
+  isMobile: boolean;
+  // Свёрнута ли полоса в строку 30 px (одно состояние на все полосы)
+  collapsed: boolean;
+  // Свернуть в строку / развернуть (кнопка ⌃ в полосе, клик по свёрнутой строке)
+  setCollapsed?: (collapsed: boolean) => void;
+  // Переключатель «Git ▾» от хоста: полоса ставит его на место своего заголовка
+  switcher: ReactNode;
+}
+export interface ComposerStripApi {
+  title: string;
+  icon: ReactNode;
+  // false — полоса не предлагается (нет git, модуль недоступен в проекте)
+  isAvailable?: (ctx: { projectId: string; sessionId: string | null }) => boolean;
+  // Строка состояния в меню переключателя: «feat/site-header · +42 −7», «Работаем с hero.png»
+  status?: (ctx: { projectId: string; sessionId: string | null }) => ReactNode;
+}
+
+// Слот `composer-mode`: режим поля ввода рядом с «Чатом» («Картинка»). Имя вклада — id режима.
+export interface ComposerModeCtx { projectId: string | null; sessionId: string | null }
+export interface ComposerModeApi {
+  title: string;
+  icon: ReactNode;
+  // Режим предлагается, только пока условие истинно (например, выбрана картинка)
+  isAvailable: (ctx: ComposerModeCtx) => boolean;
+  placeholder: (ctx: ComposerModeCtx) => string;
+  // Подпись кнопки отправки: «✦ Изменить · ≈ $0.15»
+  submitLabel?: (ctx: ComposerModeCtx) => ReactNode;
+  // Подпись над полем: «Промпт модели · уходит прямо в FLUX Fill, без агента»
+  hint?: (ctx: ComposerModeCtx) => ReactNode;
+  // Отправка мимо агента; текст режима хранится отдельно от черновика чата
+  onSubmit: (ctx: ComposerModeCtx, text: string) => Promise<void> | void;
+}
+
+// Render-слот `composer-chip`: чип над полем ввода («hero.png · 1 пометка ✕»).
+// Вклад сам решает, рисоваться ли (null — чипа нет).
+export interface ComposerChipCtx { projectId: string | null; sessionId: string | null; isMobile: boolean }
+// Действие вклада composer-chip: перед отправкой сообщения агенту (режим «Чат») вклад
+// отдаёт файлы, которые уйдут вложениями (снимок картинки с пометками), и сам гасит
+// свой чип. Пустой список — прикладывать нечего
+export interface ComposerChipApi { beforeSend?: (ctx: ComposerChipCtx) => Promise<File[]> }
+
+// Слот `workspace-panel-def`: панель рабочей области от подсистемы (например,
+// «Персонажи»). Имя вклада — ключ панели; render рисует тело, action описывает её
+// для рельсы и каталога панелей.
+export interface WorkspacePanelDefCtx { projectId: string; isMobile: boolean; onClose: () => void }
+export interface WorkspacePanelDefApi {
+  title: string;
+  icon: ReactNode;
+  isAvailable?: (projectId: string) => boolean;
+}
+// Показать панель рабочей области извне (например, пунктирный чип «Персонаж» в полосе):
+// событие окна с detail = { key }; слушает страница проекта, неизвестный ключ пропускается
+export const REVEAL_PANEL_EVENT = 'cc-reveal-panel';
 
 // ---- Хранилище ----
 const _manifests: SubsystemManifest[] = [];
@@ -196,7 +315,7 @@ export function getSubsystemTab(key: string): LazyExoticComponent<ComponentType<
 export function getSlotContributions<C = never, A = Record<string, unknown>>(slot: string): SlotContribution<C, A>[] {
   const out: SlotContribution<C, A>[] = [];
   for (const m of _manifests) {
-    if (!isSubsystemEnabled(m.key)) continue;
+    if (!m.core && !isSubsystemEnabled(m.key)) continue;
     const list = m.slots?.[slot];
     if (list) out.push(...(list as unknown as SlotContribution<C, A>[]));
   }

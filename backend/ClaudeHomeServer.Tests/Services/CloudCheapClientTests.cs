@@ -134,6 +134,11 @@ public class CloudCheapClientTests
         cfg["LlmProviders:minimax:AnthropicBaseUrl"] = "https://api.minimax.io/anthropic";
         cfg["LlmProviders:minimax:ApiBaseUrl"] = "https://api.minimax.io/v1";
         cfg["CheapHttpSources:minimax:Provider"] = "minimax";
+        // Как в отгружаемом appsettings.json: без гашения размышлений MiniMax-M3 пишет
+        // <think>…</think> прямо в content и съедает лимит вывода (прод 2026-09-22).
+        // Что флаг стоит в настоящем конфиге, а не только здесь, проверяет
+        // Конфиг_ГашениеРазмышлений_ТолькоУMiniMax
+        cfg["CheapHttpSources:minimax:DisableThinking"] = "true";
         cfg["CheapHttpSources:minimax:Models:0:Id"] = "MiniMax-M3";
         cfg["CheapHttpSources:minimax:Models:0:DisplayName"] = "MiniMax M3";
         cfg["CheapHttpSources:minimax:Models:0:ContextWindow"] = "1048576";
@@ -344,6 +349,72 @@ public class CloudCheapClientTests
 
         Assert.Contains("\"temperature\":1", stub.Handler.LastRequestBody);
         Assert.DoesNotContain("\"temperature\":0", stub.Handler.LastRequestBody);
+    }
+
+    // Гашение размышлений: поле thinking провайдер-специфичное. У minimax оно обязано
+    // доехать до тела запроса (иначе ход мысли съедает лимит вывода и консолидация памяти
+    // не доводит работу до конца — прод 2026-09-22), остальным источникам его слать нельзя:
+    // провайдер, который такого поля не знает, отобьёт запрос 400-м.
+    [Fact]
+    public async Task GenerateDetailedAsync_Minimax_SendsThinkingDisabled()
+    {
+        var cfg = WithMinimax(WithKimi(WithGlm(WithDeepSeek(WithOpenRouter(new())))));
+        var config = TestConfig.Build(cfg);
+        var providers = new LlmProviderRegistry(config);
+        var stub = new StubHttpFactory(OkJson);
+        var client = new CloudCheapClient(stub, config, providers, NullLogger<CloudCheapClient>.Instance);
+
+        await client.GenerateDetailedAsync("direct:MiniMax-M3", "p", TimeSpan.FromSeconds(5), maxTokens: 128);
+
+        Assert.Contains("\"thinking\":{\"type\":\"disabled\"}", stub.Handler.LastRequestBody);
+    }
+
+    [Theory]
+    [InlineData("deepseek-v4-flash")]
+    [InlineData("glm-5.2")]
+    [InlineData("kimi-k3")]
+    [InlineData("nvidia/nemotron:free")]
+    public async Task GenerateDetailedAsync_OtherSources_NoThinkingField(string modelId)
+    {
+        var cfg = WithMinimax(WithKimi(WithGlm(WithDeepSeek(WithOpenRouter(new())))));
+        var config = TestConfig.Build(cfg);
+        var providers = new LlmProviderRegistry(config);
+        var stub = new StubHttpFactory(OkJson);
+        var client = new CloudCheapClient(stub, config, providers, NullLogger<CloudCheapClient>.Instance);
+
+        await client.GenerateDetailedAsync($"direct:{modelId}", "p", TimeSpan.FromSeconds(5), maxTokens: 128);
+
+        Assert.DoesNotContain("thinking", stub.Handler.LastRequestBody);
+    }
+
+    // Сторож на РЕАЛЬНЫЙ appsettings.json: сам флаг читается из конфига, поэтому тесты выше
+    // проверяют только проводку — без этого теста DisableThinking можно молча потерять
+    // в настройках, и симптом вернётся на бою при зелёном наборе.
+    [Fact]
+    public void Конфиг_ГашениеРазмышлений_ТолькоУMiniMax()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        string? path = null;
+        for (; dir is not null && path is null; dir = dir.Parent)
+        {
+            var candidate = Path.Combine(dir.FullName, "ClaudeHomeServer", "appsettings.json");
+            if (File.Exists(candidate)) path = candidate;
+        }
+        Assert.NotNull(path);
+
+        var config = new ConfigurationBuilder().AddJsonFile(path!).Build();
+        var sources = config.GetSection("CheapHttpSources").GetChildren()
+            .Where(c => c.GetSection("Models").GetChildren().Any())
+            .ToList();
+        Assert.NotEmpty(sources);
+
+        foreach (var s in sources)
+        {
+            var expected = s.Key == "minimax";
+            var actual = bool.TryParse(s["DisableThinking"], out var v) && v;
+            Assert.True(expected == actual,
+                $"источник {s.Key}: DisableThinking ожидался {expected}, в конфиге {actual}");
+        }
     }
 
     [Fact]

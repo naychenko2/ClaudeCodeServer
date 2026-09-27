@@ -169,6 +169,13 @@ public sealed class CodeGraphToolset(
                 + "Попроси пользователя включить её.";
             return false;
         }
+        // CodeGraph — группа «контент на сервере»: локальный проект отказывает до ватчера
+        // и постройки графа по пути чужой машины (ADR-016 §4)
+        if (Composition.ProjectCapabilityGuard.Refusal(project, Composition.ProjectCapabilityArea.ServerContent) is { } refusal)
+        {
+            error = Composition.ProjectCapabilityGuard.HubMessage(refusal);
+            return false;
+        }
         // Дерево сессии: отдельное worktree имеет СВОЙ граф (ADR-003). Watcher его файлов
         // поднимаем лениво — как CodeGraphController.ResolveRoot (первая дверь к графу
         // отдельного дерева). Резолв живой: смена WorktreePath подхватывается сама.

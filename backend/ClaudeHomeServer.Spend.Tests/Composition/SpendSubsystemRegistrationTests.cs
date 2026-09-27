@@ -86,12 +86,12 @@ public class SpendSubsystemRegistrationTests
             "коллектор пишет в одну копию стора, а читает из другой, и данные расходятся");
     }
 
-    // Сторож факта подключения в Program.cs: поднимает полный стенд через
+    // Сторож факта динамической загрузки: поднимает полный стенд через
     // `TestWebApplicationFactory<Program>` и резолвит типы Spend из РЕАЛЬНОГО DI-графа
-    // (а не из изолированного ServiceCollection, как предыдущие тесты). Если кто-то
-    // уберёт `new SpendSubsystem()` из `AddSubsystems(...)` в Program.cs — резолв
-    // упадёт с InvalidOperationException, и тест поймает регрессию. Без него класс
-    // дефекта «вынесли подсистему, но забыли подключить» проходит молча.
+    // (а не из изолированного ServiceCollection, как предыдущие тесты). Spend —
+    // динамический модуль: ModuleLoader загружает dll, находит IAppSubsystem и
+    // вызывает Register. Если dll не на месте (путь из appsettings.json не резолвится)
+    // или ModuleLoader не находит тип — резолв упадёт с InvalidOperationException.
     [Fact]
     public void Program_RegistersSpendSubsystem_ServicesResolvable()
     {

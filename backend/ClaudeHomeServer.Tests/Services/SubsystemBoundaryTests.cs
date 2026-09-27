@@ -112,10 +112,16 @@ public class SubsystemBoundaryTests
         // чтобы сторож видел типы Images (IImageGenerator, ImageGenerationService)
         // и проверял границы по Images.dll.
         _ = typeof(ClaudeHomeServer.Services.Images.ImagesSubsystem).Assembly;
+        // ImageEditor — динамический модуль (ADR-018 §10.1): Main на него не ссылается,
+        // без форс-загрузки сторож прошёл бы по нему вакуумно.
+        _ = typeof(ClaudeHomeServer.Services.ImageEditor.ImageEditorSubsystem).Assembly;
         // Prompts — отдельная сборка (Этап 5, вынос Prompts): форс-загрузка нужна,
         // чтобы сторож видел типы Prompts (OmoPrompts, SubagentPrompts, OmcPersonaRouting)
         // и проверял границы по Prompts.dll.
         _ = typeof(ClaudeHomeServer.Services.Prompts.OmoPrompts).Assembly;
+        // Files — отдельная сборка (ADR-016, задача 4.1): форс-загрузка нужна, чтобы
+        // сторож видел FileService и проверял границы вертикали по Files.dll.
+        _ = typeof(ClaudeHomeServer.Services.Files.FileService).Assembly;
     }
 
     /// <summary>Запись границы одной вертикали: имя (для отчёта), корневой namespace
@@ -248,14 +254,28 @@ public class SubsystemBoundaryTests
         // на внешние типы уходят в Core-интерфейсы: `IPersonaLookup`/`IPersonaAvatarStore`
         // (аватар персоны), `ServerMessage` (ImageBackfilledMessage), `ImageAssetHelper`
         // (ExtFor) — все в ClaudeHomeServer.Core.dll, покрываются `IsCoreAssembly`.
-        // Допусков за пределами спинки и своего namespace не осталось.
+        // `SkiaSharp.*` — third-party растр редактора (ADR-018 §9, `SkiaImageRaster`);
+        // пакет живёт только в Images, остальным вертикалям допуска нет.
         new object[]
         {
             new VerticalBoundary(
                 "Images",
                 "ClaudeHomeServer.Services.Images",
                 SharedAllowedPrefixes
-                    .Concat(new[] { "ClaudeHomeServer.Services.Images" })
+                    .Concat(new[] { "ClaudeHomeServer.Services.Images", "SkiaSharp" })
+                    .ToArray(),
+                Array.Empty<string>()),
+        },
+        // ImageEditor — динамический модуль редактора картинок (ADR-018 §10.1). Только общая
+        // спинка: растр, место генерации, Higgsfield и «Обсудить» — швы Core. SkiaSharp здесь
+        // намеренно нет — пакет живёт только в Images, модуль берёт растр через IImageRaster.
+        new object[]
+        {
+            new VerticalBoundary(
+                "ImageEditor",
+                "ClaudeHomeServer.Services.ImageEditor",
+                SharedAllowedPrefixes
+                    .Concat(new[] { "ClaudeHomeServer.Services.ImageEditor" })
                     .ToArray(),
                 Array.Empty<string>()),
         },
@@ -446,6 +466,10 @@ public class SubsystemBoundaryTests
         // `SpendStore` форвардит `ISpendCollector` через `sp => ...GetRequiredService<SpendStore>()` —
         // инвариант «интерфейс и конкретный тип указывают на ОДИН инстанс» (тест
         // `SpendSubsystemRegistrationTests.Register_SpendCollector_IsSameInstanceAsStore`).
+        // `SpendController` (namespace `ClaudeHomeServer.Services.Spend.Controllers`) лежит ВНУТРИ
+        // дерева NamespaceRoot Spend, поэтому попадает в перебор типов сторожа и IL-сканируется
+        // (мутация: снятие собственного префикса даёт 9 нарушений от контроллера). Namespace в
+        // стиле Notes оставил бы его вне сторожа.
         new object[]
         {
             new VerticalBoundary(
@@ -689,11 +713,6 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.NotificationService",
                     "ClaudeHomeServer.Services.SessionManager",
                     "ClaudeHomeServer.Services.SessionManager+ReportUpResult",
-                    // === IL-видимость (задача `8beee75e`, волна 1).
-                    // `TeamPlanFileRenderer.cs:112` зовёт `FileService.SafeJoin(...)`
-                    // static-метод из тела метода — точечный допуск по образцу
-                    // `Tasks → FileService` (вертикаль → спинка).
-                    "ClaudeHomeServer.Services.FileService",
                     // `TeamPlanningService.cs:146` материализует `SpecialtyCatalog`
                     // (статический класс из корня) в async-state. По прецеденту Llm
                     // (тоже `SpecialtyCatalog`) — фиксируем шов явно, иначе IL-скан
@@ -801,7 +820,6 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.Skills.SkillInfo",
                     "ClaudeHomeServer.Services.AppSettingsService",
                     "ClaudeHomeServer.Services.ChatHistoryService",
-                    "ClaudeHomeServer.Services.FileService",
                     "ClaudeHomeServer.Services.SessionSummaryService",
                     // `Notes.NotesService` снят (Этап 5, 2026-09-12): прямых ссылок
                     // из Llm на сервис вертикали Notes не осталось (замечание сторожа
@@ -900,8 +918,8 @@ public class SubsystemBoundaryTests
         // 1) Префикс-шов `Services.Llm` — `ICheapTextRunner` для ИИ-помощи (summary/extract/tags/
         //    enhance) и `LocalActionCatalog.DocFormat/Summary/Extract/Tags`. Тот же шов,
         //    что у `Backgrounds`/`Git`/`Deploy`/`Changelog`.
-        // 2) Точечный допуск к корню Services — `FileService`: DocsIndexService читает каталог
-        //    `docs/` и кеширует индекс, DocumentAiService читает файлы по хосту через FilesController.
+        // 2) Файлы проекта — через шов IProjectFileGateway (Core): допуск к FileService
+        //    снят, когда он уехал в вертикаль Files (ADR-016, задача 4.1).
         new object[]
         {
             new VerticalBoundary(
@@ -913,10 +931,7 @@ public class SubsystemBoundaryTests
                         "ClaudeHomeServer.Services.Docs",
                     })
                     .ToArray(),
-                new[]
-                {
-                    "ClaudeHomeServer.Services.FileService",
-                }),
+                Array.Empty<string>()),
         },
         // Turn — шина событий хода + контрибьюторы секций системного промпта.
         // Все внешние допуски точечные (префиксов-швов нет): root Services, Dossiers
@@ -1044,6 +1059,10 @@ public class SubsystemBoundaryTests
         // закрыты швами спины (ISessionDirectory/IFeatureFlagGate/IPersonaResolver/
         // IProjectManager/IUserStore/IDesktopCapabilityTokens), хаб устройств переехал
         // в саму вертикаль, а Protocol.* проходит по сборке Core.
+        // ADR-016 (задача 2.1): Desktop РЕАЛИЗУЕТ Core-шов `Services.Execution.IDeviceExecChannel`
+        // (канал исполнения на устройстве, WebSocket /api/devices/exec), потребитель —
+        // Execution (`RemoteProcessRunner`, задача 2.3). Прямого ребра Execution ⇄ Desktop нет:
+        // шов проходит по сборке Core, отдельного допуска не требует.
         new object[]
         {
             new VerticalBoundary(
@@ -1153,8 +1172,8 @@ public class SubsystemBoundaryTests
         // проектов + фоновый прогрев кеша. Внешние зависимости:
         // 1) Префикс-шов `Services.Llm` — `ICheapTextRunner` для дневной сводки (тот же шов,
         //    что у `Backgrounds`/`Git`/`Deploy`/`Docs`).
-        // 2) Точечный допуск к корню Services — `FileService`: чтение git-вывода и
-        //    `data/changelog/product.json` (ChangelogService).
+        // 2) Лог коммитов — через шов ICommitLogReader (Core): допуск к FileService снят,
+        //    когда он уехал в вертикаль Files (ADR-016, задача 4.1).
         new object[]
         {
             new VerticalBoundary(
@@ -1166,10 +1185,7 @@ public class SubsystemBoundaryTests
                         "ClaudeHomeServer.Services.Changelog",
                     })
                     .ToArray(),
-                new[]
-                {
-                    "ClaudeHomeServer.Services.FileService",
-                }),
+                Array.Empty<string>()),
         },
         // Terminal — вертикаль PTY-терминала (Этап 5, волна C, шаг 2; вертикаль без
         // IAppSubsystem — регистрация одна, прецедент `Services.Watchdog`).
@@ -1228,11 +1244,13 @@ public class SubsystemBoundaryTests
         //    чистый — `ISessionBroadcaster` (Core) дёргается из TasksScheduler через
         //    `IHubContext` теперь неявно через Core-шов).
         // Зафиксированные швы (IL-скан видит declaring-типы):
-        // - `Tasks.TaskManager` ставит три статических резолвера на `Models.Session`
-        //   (`Session.TaskSourceSessionResolver`/`TaskDelegationDepthResolver`/
-        //   `TaskDoneResolver`) в конструкторе TaskManager.cs. Связь Tasks →
-        //   Models видна через `ClaudeHomeServer.Models` (SharedAllowedPrefixes);
-        //   мутация статической модели — фиксированное исключение.
+        // - (снят, эксперимент-4) раньше `Tasks.TaskManager` ставил в конструкторе
+        //   статические резолверы на `Models.Session` (`TaskSourceSessionResolver`/
+        //   `TaskDelegationDepthResolver`/`TaskDoneResolver`) — мутация статической
+        //   модели была фиксированным исключением. Теперь вычисления `ParentSessionId`/
+        //   `TaskDone` считает `SessionTaskLinks` (Core) поверх Core-шва `ITaskLookup`,
+        //   а на wire их дописывает `SessionJsonConverter` (Main) — Tasks → Models.Session
+        //   не мутает.
         // Мёртвые допуски сняты ревью (2026-09-09): формально сторож оставался зелёным
         // и с ними, но был ШИРЕ реальной поверхности зависимостей Tasks после выноса —
         // иначе вертикаль могла бы прикинуться «спиной» в обход швов. Та же ловушка,
@@ -1366,6 +1384,22 @@ public class SubsystemBoundaryTests
                     {
                         "ClaudeHomeServer.Services.Git",
                     })
+                    .ToArray(),
+                Array.Empty<string>()),
+        },
+        // Files — файловый сервис проекта (ADR-016, задача 4.1): FileService и серверная
+        // реализация шва IProjectFiles. Вертикаль без IAppSubsystem: от FileService
+        // обязательными параметрами зависят десятки входов Main, а обязательный параметр
+        // от отключаемой вертикали — дефект. Git и владелец проекта — через швы Core
+        // (IGitWorkingTree, IProjectManager), поэтому allow-list дефолтный. Под тем же
+        // namespace в Core живут FileEntry и примитив RecursiveDirectoryWatcher.
+        new object[]
+        {
+            new VerticalBoundary(
+                "Files",
+                "ClaudeHomeServer.Services.Files",
+                SharedAllowedPrefixes
+                    .Concat(new[] { "ClaudeHomeServer.Services.Files" })
                     .ToArray(),
                 Array.Empty<string>()),
         },
@@ -1666,6 +1700,13 @@ public class SubsystemBoundaryTests
         // под `Prompts/OnboardingPrompts.cs` — не один файл-примитив. Чтобы
         // не раздувать CoreAllowedRootTypes, разрешаем namespace.
         "ClaudeHomeServer.Services.Prompts",
+        // Разбор OOM 2026-09-22: RecursiveDirectoryWatcher — примитив спины, наблюдение
+        // за деревом без подписки на служебные каталоги (FileSystemWatcher на Linux
+        // ставит слежку на КАЖДЫЙ каталог, чёрные списки режут только события).
+        // Владения вертикалью нет: сегодня его зовёт TurnFileWatcher (Llm), следом
+        // переедет FileWatcherService (Main) — из спины он доступен обоим, тогда как
+        // ссылка `Vertical → Main` невозможна в принципе.
+        "ClaudeHomeServer.Services.Files",
         // Этап 5, узкие швы Turn: DossierRecallRequest/DossierRecallResult — контрактные
         // DTO пассивного recall паспортов. Запрос собирает Turn (контрибьютор промпта),
         // исполняет Memory (PersonaMemoryService.BuildRecallAsync), владеет Dossiers.
@@ -1716,6 +1757,17 @@ public class SubsystemBoundaryTests
         // больше не ссылается на ServerMetrics/Main напрямую) + DifyErrorCategorizer
         // (43 строки чистой функции, нужны и Knowledge, и Memory, обе вертикали).
         "ClaudeHomeServer.Core.Telemetry",
+        // ADR-018 §10.1: швы модуля редактора картинок в спине — IHiggsfieldAccess,
+        // список авторазрешения тулсета агента (ImageEditorAgentTools), имя рабочей папки для
+        // бэкапа и записи операций растра.
+        // Сам редактор (контракты, задачи, драйверы) — в модуле ClaudeHomeServer.ImageEditor.
+        "ClaudeHomeServer.Services.ImageEditor",
+        // Мерж local-media (ADR-018, раздел «Локальные модели»): ImageFormatSniffer — чистая
+        // функция по сигнатуре байтов, нужна и модулю редактора, и LocalMedia в Images.
+        "ClaudeHomeServer.Services.ImageEditor.Versioning",
+        // ADR-018 §10.1: шов растра. Реализация (SkiaImageRaster) в Images, потребитель —
+        // модуль редактора; namespace сохранён при переносе интерфейса из Images.
+        "ClaudeHomeServer.Services.Images.Editing.Raster",
     ];
 
     /// <summary>
@@ -1758,7 +1810,16 @@ public class SubsystemBoundaryTests
         "ClaudeHomeServer.Services.SessionChangedPaths",
         "ClaudeHomeServer.Services.SessionIdGuard",
         "ClaudeHomeServer.Services.SessionTranscript",
+        // Чистая проекция над Core-типами: Models.Session + контракт ITaskLookup (обе связи
+        // «чат ↔ задача»). Осознанно в спине, а не в Main: владения вертикалью нет, состояния
+        // нет, а в Main этот хелпер заставлял вертикали ходить в обход через SessionManager.
+        "ClaudeHomeServer.Services.SessionTaskLinks",
         "ClaudeHomeServer.Services.ExecutorStopClassifier",
+        // Состояние ```-забора при построчном разборе markdown (правила CommonMark).
+        // В спине, а не в вертикали Docs: её зовут и сканер карты (Docs), и раскрытие
+        // @-импортов CLAUDE.md (Core, ClaudeMdExpander) — третий комплект правил
+        // разошёлся бы с двумя первыми. Прецедент SafePath: примитив без владения
+        "ClaudeHomeServer.Services.MarkdownFence",
         "ClaudeHomeServer.Services.PersonaLabel",
         "ClaudeHomeServer.Services.PersonaConsultantToolset",
         "ClaudeHomeServer.Services.SpecialtyCatalog",

@@ -28,8 +28,9 @@ public interface IProcessLauncher
     // docker-клиента не трогает процесс в контейнере — драйвер добивает его по TurnId.
     void Kill(Process process, string? turnId = null);
     // ВЕРХНЯЯ оценка длины итоговой командной строки в широких символах, которую соберёт
-    // .NET при ProcessStart по этому spec. Учитывает СВОЮ обвязку раннера: Local — ничего
-    // (только cli+args), Docker — docker exec -i -w … cc-sandbox run-turn.sh turnId claude.
+    // .NET при ProcessStart по этому spec. Учитывает СВОЮ обвязку раннера:
+    //   Local — cli+args (плюс systemd-run-обёртка, когда изоляция включена);
+    //   Docker — docker exec -i -w … cc-sandbox run-turn.sh turnId claude.
     // TurnPromptAssembler.ApplyBudget сравнивает результат с CmdlineLimit, чтобы стартовать
     // ход или отказать заранее с PromptOverflowException (ревью dc641949, волна 3).
     int EstimateCommandLineLength(ProcessSpec spec);

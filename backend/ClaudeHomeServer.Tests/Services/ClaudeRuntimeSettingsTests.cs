@@ -20,10 +20,14 @@ public class ClaudeRuntimeSettingsTests
     }
 
     [Fact]
-    public void ХукиВыключеныВОбоихРежимах()
+    public void ХукиГасятсяТолькоНаWindows()
     {
+        // Сервер переехал на Linux: на нём хуки нужны как канал влияния на локальную
+        // модель (PostToolUse), а мелькающих окон консоли нет. На Windows прежнее
+        // поведение — дочерние процессы плагинов открывают консоль на каждый ход.
+        var expected = OperatingSystem.IsWindows();
         foreach (var browser in new[] { true, false })
-            Settings(browser).Json.GetProperty("disableAllHooks").GetBoolean().Should().BeTrue();
+            Settings(browser).Json.GetProperty("disableAllHooks").GetBoolean().Should().Be(expected);
     }
 
     [Fact]
@@ -41,6 +45,19 @@ public class ClaudeRuntimeSettingsTests
     {
         var plugins = Settings(browserEnabled: false).Json.GetProperty("enabledPlugins");
         plugins.GetProperty("playwright@claude-plugins-official").GetBoolean().Should().BeFalse();
+    }
+
+    [Fact]
+    public void ИмяФайлаСовпадаетССоставомХуков()
+    {
+        // Состояние хуков читают по cliArgs снимка промпта, где видно только имя файла:
+        // «hooks-off» с включёнными хуками внутри однажды уже увёл диагноз не туда.
+        foreach (var browser in new[] { true, false })
+        {
+            var (path, json) = Settings(browser);
+            var marker = json.GetProperty("disableAllHooks").GetBoolean() ? "hooks-off" : "hooks-on";
+            Path.GetFileName(path).Should().StartWith(marker);
+        }
     }
 
     [Fact]

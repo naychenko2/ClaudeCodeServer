@@ -12,7 +12,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/home")]
-public class HomeController(SessionManager sessions, ProjectManager projects) : ControllerBase
+public class HomeController(SessionManager sessions, ProjectManager projects, ITaskLookup tasks) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -36,7 +36,7 @@ public class HomeController(SessionManager sessions, ProjectManager projects) : 
         // гейдж ccs.sessions.active, чтобы сводка и метрика не разъезжались.
         var active = all
             .Where(SessionLiveness.IsLive)
-            .Select(s => ToDto(s, projectNames))
+            .Select(s => ToDto(s, projectNames, tasks))
             .ToList();
         var recentItems = all
             // Архив режется на сервере СТРОГО ДО .Take(recent): лимит стоит до клиентского
@@ -44,13 +44,13 @@ public class HomeController(SessionManager sessions, ProjectManager projects) : 
             // «Недавние» (план v4, шаг 4). Это не «дефолтный GET списка» — контракт не ломается.
             .Where(s => !s.IsLive() && s.Status is not SessionStatus.Orphaned && !s.IsArchived)
             .Take(recent)
-            .Select(s => ToDto(s, projectNames))
+            .Select(s => ToDto(s, projectNames, tasks))
             .ToList();
 
         return Ok(new { active, recent = recentItems });
     }
 
-    private static HomeSessionDto ToDto(Session s, IReadOnlyDictionary<string, string> projectNames) => new(
+    private static HomeSessionDto ToDto(Session s, IReadOnlyDictionary<string, string> projectNames, ITaskLookup? tasks) => new(
         s.Id,
         s.ProjectId,
         s.ProjectId is not null ? projectNames.GetValueOrDefault(s.ProjectId) : null,
@@ -59,7 +59,7 @@ public class HomeController(SessionManager sessions, ProjectManager projects) : 
         s.LastMessage,
         s.PersonaId,
         s.TaskId,
-        s.TaskDone,
+        SessionTaskLinks.IsTaskDone(s, tasks),
         s.MessageCount,
         s.UpdatedAt,
         s.Origin,

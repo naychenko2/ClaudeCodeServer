@@ -35,6 +35,8 @@ public sealed class GitAutoCommitService(
     {
         if (msg is not ResultMessage || session.ProjectId is null) return Task.CompletedTask;
         var project = projects.GetById(session.ProjectId);
+        // Локальный проект коммитит у себя на устройстве — серверный git туда не ходит (ADR-016 §4)
+        if (project is not null && !ProjectCapabilities.FilesOnServer(project)) return Task.CompletedTask;
         // Чат в отдельном worktree меняет файлы ТАМ — коммитим его дерево, не корень проекта
         var root = session.WorktreePath ?? project?.RootPath;
         if (project is null || root is null || !project.GitAutoCommit || !git.IsGitRepo(root))

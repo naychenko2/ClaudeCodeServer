@@ -1,7 +1,9 @@
 using System.Text;
+using System.Threading;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Execution;
+using Microsoft.Extensions.Logging;
 
 namespace ClaudeHomeServer.Services.Llm;
 
@@ -36,7 +38,8 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
     ITierModelResolver? appSettings = null,
     UserModelTierResolver? userTiers = null,
     ClaudeSubscriptionPool? subscriptionPool = null,
-    SubscriptionActivityTracker? activity = null) : IOneShotRunner
+    SubscriptionActivityTracker? activity = null,
+    ILogger<OneShotClaudeRunner>? logger = null) : IOneShotRunner
 {
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(120);
 
@@ -44,6 +47,7 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
     // валидирует аргументы и падает с кодом 1 на незнакомом, а образ песочницы может нести
     // версию старее хостовой. true — вернуть прежнее поведение с записью транскриптов.
     private readonly bool _persistSessions = config.GetValue("Claude:PersistOneShotSessions", false);
+    private int _spendNullWarned;
 
     // Авто-деградация: CLI не игнорирует незнакомый аргумент, а падает с кодом 1. Образ
     // песочницы собирается отдельно от хоста и может нести версию без флага — тогда КАЖДЫЙ
@@ -321,7 +325,13 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
     // internal — тестируется напрямую с готовым OneShotResult, без запуска процесса.
     internal void RecordSpend(OneShotResult result, string? model, string? ownerId, string? label, string? poolSubKey)
     {
-        if (spend is null || result.Usage is not { } u) return;
+        if (spend is null)
+        {
+            if (Interlocked.Exchange(ref _spendNullWarned, 1) == 0)
+                logger?.LogWarning("spend: коллектор недоступен, запись расхода one-shot claude пропущена");
+            return;
+        }
+        if (result.Usage is not { } u) return;
         try
         {
             // Как и у живого чата (SessionManager.RecordTurnSpend по Session.Provider):

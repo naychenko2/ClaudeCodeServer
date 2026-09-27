@@ -1,0 +1,129 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.ImageEditor;
+using FluentAssertions;
+
+namespace ClaudeHomeServer.Tests.Models;
+
+// Контракты волны 0 редактора v2 (ADR-018): привязка чата к картинке живёт на Session и едет
+// в sessions.json и на фронт; старые записи читаются без миграции.
+public class SessionImageChatTests
+{
+    // Опции стора сессий (SessionManager._jsonOpts)
+    private static readonly JsonSerializerOptions StoreJson = new()
+    {
+        Converters = { new JsonStringEnumConverter() },
+    };
+
+    // Правила wire для фронта: camelCase + enum'ы строками
+    private static readonly JsonSerializerOptions WireJson = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+    };
+
+    [Fact]
+    public void СтараяЗаписьБезПоля_ЧатНеКартинки()
+    {
+        const string legacy = """{"id":"s1","provider":"claude","model":"sonnet"}""";
+        var session = JsonSerializer.Deserialize<Session>(legacy, StoreJson)!;
+        session.ImageChat.Should().BeNull("аддитивное поле: старый sessions.json читается без миграции");
+    }
+
+    // Записи чатов картинки до черновиков: DraftFolder нет — это чат по файлу, как раньше
+    [Fact]
+    public void СтарыйЧатКартинкиБезDraftFolder_ЧитаетсяКакЧатПоФайлу()
+    {
+        const string legacy = """{"id":"s1","ImageChat":{"CurrentPath":"images/hero.png","Lineage":[]}}""";
+        var session = JsonSerializer.Deserialize<Session>(legacy, StoreJson)!;
+        session.ImageChat!.CurrentPath.Should().Be("images/hero.png");
+        session.ImageChat.DraftFolder.Should().BeNull();
+    }
+
+    // Чат картинки без поля currentPath — черновик (null), а не «файл по пустому пути»
+    [Fact]
+    public void ЧатКартинкиБезCurrentPath_ЧитаетсяЧерновиком()
+    {
+        const string record = """{"id":"s1","ImageChat":{"DraftFolder":"art","Lineage":[]}}""";
+        var session = JsonSerializer.Deserialize<Session>(record, StoreJson)!;
+        session.ImageChat!.CurrentPath.Should().BeNull();
+        new SessionImageChat().CurrentPath.Should().BeNull("новый чат картинки по умолчанию — черновик");
+    }
+
+    [Fact]
+    public void ЧерновикКартинки_ПереживаетКругСериализацииИУходитНаФронт()
+    {
+        var original = new Session { Id = "s1", ImageChat = new SessionImageChat { CurrentPath = null, DraftFolder = "art" } };
+
+        var restored = JsonSerializer.Deserialize<Session>(JsonSerializer.Serialize(original, StoreJson), StoreJson)!;
+        restored.ImageChat!.CurrentPath.Should().BeNull();
+        restored.ImageChat.DraftFolder.Should().Be("art");
+
+        var wire = JsonSerializer.SerializeToElement(original, WireJson).GetProperty("imageChat");
+        wire.GetProperty("currentPath").ValueKind.Should().Be(JsonValueKind.Null);
+        wire.GetProperty("draftFolder").GetString().Should().Be("art");
+    }
+
+    [Fact]
+    public void ЧатКартинки_ПереживаетКругСериализацииСтора()
+    {
+        var original = new Session
+        {
+            Id = "s1",
+            ImageChat = new SessionImageChat
+            {
+                CurrentPath = "images/hero.v2.png",
+                Lineage = ["images/hero.png"],
+            },
+        };
+
+        var restored = JsonSerializer.Deserialize<Session>(JsonSerializer.Serialize(original, StoreJson), StoreJson)!;
+
+        restored.ImageChat.Should().NotBeNull();
+        restored.ImageChat!.CurrentPath.Should().Be("images/hero.v2.png");
+        restored.ImageChat.Lineage.Should().Equal("images/hero.png");
+    }
+
+    [Fact]
+    public void ОбычныйЧат_ПереживаетКругСериализацииБезПривязки()
+    {
+        var restored = JsonSerializer.Deserialize<Session>(
+            JsonSerializer.Serialize(new Session { Id = "s1" }, StoreJson), StoreJson)!;
+        restored.ImageChat.Should().BeNull();
+    }
+
+    [Fact]
+    public void ЧатКартинки_УходитНаФронтВCamelCase()
+    {
+        var session = new Session { ImageChat = new SessionImageChat { CurrentPath = "a.png", Lineage = ["b.png"] } };
+        using var doc = JsonDocument.Parse(JsonSerializer.Serialize(session, WireJson));
+
+        var chat = doc.RootElement.GetProperty("imageChat");
+        chat.GetProperty("currentPath").GetString().Should().Be("a.png");
+        chat.GetProperty("lineage")[0].GetString().Should().Be("b.png");
+    }
+
+    [Fact]
+    public void ОперацииПравки_ЧитаютсяПоДискриминаторуType()
+    {
+        const string json = """
+            {"base":{"stepId":"st1"},
+             "ops":[{"type":"autoOrient"},
+                    {"type":"crop","rect":{"x":0.1,"y":0.2,"width":0.5,"height":0.5}},
+                    {"type":"rotate","degrees":90},
+                    {"type":"flip","axis":"horizontal"},
+                    {"type":"resize","percent":50}],
+             "encode":{"format":"webp","quality":80}}
+            """;
+
+        var req = JsonSerializer.Deserialize<ImageTransformRequest>(json, WireJson)!;
+
+        req.Base.StepId.Should().Be("st1");
+        req.Ops.Select(o => o.GetType()).Should().Equal(
+            typeof(AutoOrientOp), typeof(CropOp), typeof(RotateOp), typeof(FlipOp), typeof(ResizeOp));
+        req.Ops.OfType<FlipOp>().Single().Axis.Should().Be(ImageFlipAxis.Horizontal);
+        req.Ops.OfType<ResizeOp>().Single().LockAspect.Should().BeTrue("замок пропорций включён по умолчанию");
+        req.Encode.Should().Be(new ImageEncodeSpec(ImageEncodeFormat.Webp, 80));
+    }
+}

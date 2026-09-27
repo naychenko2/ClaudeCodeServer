@@ -32,24 +32,24 @@ public class McpServersListGroupTests(TestWebApplicationFactory factory)
     {
         // Запись реестра для ключа «higgsfield» заводится только через CreateBuiltIn
         // (McpRegistry.Create режет по ReservedKeys) — ровно как и в проде через
-        // HiggsfieldIntegration.LoginAsync. Запрос через POST /api/mcp/servers отверг бы
+        // HiggsfieldOAuthService.ConnectAsync. Запрос через POST /api/mcp/servers отверг бы
         // ключ как занятый, и тест потерял бы проверяемое значение group.
         var ownerId = UserIdOf(factory);
         var registry = factory.Services.GetRequiredService<McpRegistry>();
         registry.CreateBuiltIn(ownerId, new McpServerRecord
         {
-            Key = HiggsfieldIntegration.Key,
-            Label = HiggsfieldIntegration.Label,
-            Description = HiggsfieldIntegration.Description,
+            Key = HiggsfieldOAuthService.Key,
+            Label = HiggsfieldOAuthService.Label,
+            Description = HiggsfieldOAuthService.Description,
             Transport = McpTransport.Http,
-            Url = HiggsfieldIntegration.Url,
+            Url = HiggsfieldOAuthService.Url,
             Auth = new McpAuthConfig { Kind = McpAuthKind.OAuth2 },
             Enabled = true,
         });
 
         var list = await _client.GetFromJsonAsync<JsonElement>("/api/mcp/servers");
         var higgsfield = list.EnumerateArray()
-            .Single(item => item.GetProperty("key").GetString() == HiggsfieldIntegration.Key);
+            .Single(item => item.GetProperty("key").GetString() == HiggsfieldOAuthService.Key);
 
         // Поле group обязано быть в JSON. Если из DTO его уберут — TryGetProperty вернёт false,
         // и ассерт ниже укажет на причину (мутация «убрать поле из DTO» должна ронять тест)

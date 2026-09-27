@@ -1,4 +1,5 @@
 using System.Text.Json;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Services.Images;
 
@@ -11,7 +12,7 @@ namespace ClaudeHomeServer.Services.Images;
 // Слои: место в сторе (правит админ в UI) → секция конфига Images (общая на все места)
 // → дефолт кода auto. Образец — FallbackSettingsStore: снимок неизменяемый, запись целиком
 // под локом.
-public sealed class ImageGenerationSettingsStore
+public sealed class ImageGenerationSettingsStore : IImagePlaceSettings
 {
     // Версия формата файла; инкремент при ломающем изменении структуры (правило BackupSchema).
     // 1 — один выбор на инстанс, 2 — выбор по местам (читается и первый, см. Load).

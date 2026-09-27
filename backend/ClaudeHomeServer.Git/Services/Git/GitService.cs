@@ -42,7 +42,7 @@ public sealed class GitConflictException(string message, IReadOnlyList<string> f
 // (commit-on-plumbing): запись полного дерева, резолв рефа, чтение списка файлов и
 // содержимого, tip с автором, push. Имя ветки и идентичность коммита — на стороне
 // вызывающей вертикали (см. DossierBranch), GitService про конкретные ветки не знает.
-public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? logger = null) : IGitRefSnapshotStore, IGitRepoChecker
+public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? logger = null) : IGitRefSnapshotStore, IGitRepoChecker, IGitWorkingTree
 {
     // Сериализация write-операций одного репозитория: git из UI, авто-коммит хода и
     // сессия Claude могут столкнуться на .git/index.lock. Чтение (status/log/diff) — без блокировки.
@@ -132,6 +132,23 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         finally { proc.Dispose(); }
     }
 
+    // Переменная, запрещающая git необязательные блокировки. Именно env, а не глобальный
+    // флаг --no-optional-locks: оба появились в git 2.15, но старый git неизвестную
+    // переменную молча проигнорирует, а неизвестный флаг уронит команду.
+    internal const string OptionalLocksEnv = "GIT_OPTIONAL_LOCKS";
+
+    // Запуск ЗАВЕДОМО читающей команды. Без запрета `git status`/`diff` вправе взять
+    // .git/index.lock и переписать индекс (stat-cache, untrackedCache, fsmonitor) — а
+    // ретранслятор чтения (ADR-016 §5) обязан не писать в репозиторий по построению.
+    // Read-only помечается здесь, на месте вызова, а не угадывается по args[0]: внутри
+    // write-операций те же ls-files/rev-parse идут обычным RunAsync под семафором.
+    private Task<GitResult> RunReadAsync(
+        string? ownerId, string root, IReadOnlyList<string> args,
+        int timeoutMs = DefaultTimeoutMs, CancellationToken ct = default) =>
+        RunAsync(ownerId, root, args,
+            env: new Dictionary<string, string> { [OptionalLocksEnv] = "0" },
+            timeoutMs: timeoutMs, ct: ct);
+
     // Бросает GitCommandException, если git завершился с ошибкой.
     private async Task<GitResult> RunOkAsync(
         string? ownerId, string root, IReadOnlyList<string> args,
@@ -174,7 +191,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         // -uall обязателен: без него git сворачивает неотслеживаемую папку в ОДНУ запись с
         // завершающим слешем (`.claude/`), а панель изменений рисует её как файл — клик по
         // такой записи уходил в files/content с путём папки и валил чтение (500).
-        var r = await RunAsync(ownerId, root, ["status", "--porcelain=v2", "--branch", "-z", "-uall"], ct: ct);
+        var r = await RunReadAsync(ownerId, root, ["status", "--porcelain=v2", "--branch", "-z", "-uall"], ct: ct);
         if (!r.Ok)
             return new GitStatusDto(false, null, null, 0, 0, false, [], [], []);
         var dto = ParsePorcelainV2(r.Stdout);
@@ -185,7 +202,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         return dto with { IsWorktree = File.Exists(Path.Combine(root, ".git")) };
     }
 
-    // Статистика строк по ОТСЛЕЖИВАЕМЫМ файлам: `git diff HEAD --numstat` (staged+unstaged
+    // Статистика строк по ОТСЛЕЖИВАЕМЫМ файлам: `git diff-index HEAD --numstat` (staged+unstaged
     // суммарно vs HEAD). Пустой репо/нет HEAD → пусто (не кидаем: файлы всё равно untracked).
     // Ключ словаря — путь файла (для rename — новый путь).
     // Неотслеживаемые файлы чисел не получают осознанно: раньше каждый замерялся своим
@@ -197,7 +214,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         string? ownerId, string root, CancellationToken ct)
     {
         var map = new Dictionary<string, (int, int, bool)>();
-        var tracked = await RunAsync(ownerId, root, ["diff", "HEAD", "--numstat", "-z"], ct: ct);
+        var tracked = await RunReadAsync(ownerId, root, ["diff-index", "-M", "--numstat", "-z", "HEAD"], ct: ct);
         if (tracked.Ok) ParseNumstatZ(tracked.Stdout, map);
         return map;
     }
@@ -242,19 +259,24 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
             ? f with { Added = s.add, Deleted = s.del }
             : f).ToList();
 
+    // Дифф рабочего дерева — плюмбингом diff-files/diff-index, а не `git diff`: порцелан
+    // при сравнении с деревом освежает stat-cache и переписывает .git/index, НЕ глядя на
+    // GIT_OPTIONAL_LOCKS и --no-optional-locks (проверено на git 2.53). Плюмбинг индекс не
+    // трогает, файл лишь с изменённым mtime в патч не попадает. `-M` у numstat сохраняет
+    // детект переименований, который у порцелана включён по умолчанию.
     public async Task<string?> DiffFileAsync(string? ownerId, string root, string relPath, bool staged, CancellationToken ct = default)
     {
         if (!IsGitRepo(root)) return null;
         ValidateRel(root, relPath);
         string[] args = staged
             ? ["diff", "--cached", "--", relPath]
-            : ["diff", "--", relPath];
-        var r = await RunAsync(ownerId, root, args, ct: ct);
+            : ["diff-files", "-p", "--", relPath];
+        var r = await RunReadAsync(ownerId, root, args, ct: ct);
         if (r.Ok && !string.IsNullOrWhiteSpace(r.Stdout)) return r.Stdout;
         // Для нового (untracked) файла обычный diff пуст — показываем содержимое как добавление
         if (!staged)
         {
-            var untracked = await RunAsync(ownerId, root,
+            var untracked = await RunReadAsync(ownerId, root,
                 ["diff", "--no-index", "--", "/dev/null", relPath], ct: ct);
             if (!string.IsNullOrWhiteSpace(untracked.Stdout)) return untracked.Stdout;
         }
@@ -269,9 +291,9 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     {
         if (!IsGitRepo(root)) return null;
         ValidateRel(root, relPath);
-        var head = await RunAsync(ownerId, root, ["diff", "HEAD", "--", relPath], ct: ct);
+        var head = await RunReadAsync(ownerId, root, ["diff-index", "-p", "HEAD", "--", relPath], ct: ct);
         if (head.Ok && !string.IsNullOrWhiteSpace(head.Stdout)) return head.Stdout;
-        var cached = await RunAsync(ownerId, root, ["diff", "--cached", "--", relPath], ct: ct);
+        var cached = await RunReadAsync(ownerId, root, ["diff", "--cached", "--", relPath], ct: ct);
         return cached.Ok && !string.IsNullOrWhiteSpace(cached.Stdout) ? cached.Stdout : null;
     }
 
@@ -286,7 +308,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         if (!IsGitRepo(root)) return null;
         ValidateRevision(since);
         var validated = files.Select(f => ValidateRel(root, f)).ToArray();
-        var r = await RunAsync(ownerId, root,
+        var r = await RunReadAsync(ownerId, root,
             ["log", "--format=%H", "--numstat", $"{since}..HEAD", "--", .. validated], ct: ct);
         return r.Ok ? r.Stdout : null;
     }
@@ -299,7 +321,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         var args = new List<string> { "log", "-n", limit.ToString(),
             "--pretty=format:%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s%x1e" };
         if (!string.IsNullOrWhiteSpace(branch)) args.Add(branch);
-        var r = await RunAsync(ownerId, root, args, ct: ct);
+        var r = await RunReadAsync(ownerId, root, args, ct: ct);
         return r.Ok ? ParseLog(r.Stdout) : [];
     }
 
@@ -323,7 +345,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     private async Task<IReadOnlyList<GitLogEntry>?> LogRangeAsync(
         string? ownerId, string root, int limit, string[] range, CancellationToken ct)
     {
-        var r = await RunAsync(ownerId, root,
+        var r = await RunReadAsync(ownerId, root,
             ["log", "-n", limit.ToString(),
              "--pretty=format:%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s%x1e", .. range], ct: ct);
         return r.Ok ? ParseLog(r.Stdout) : null;
@@ -334,7 +356,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     {
         if (!IsGitRepo(root)) return [];
         ValidateRel(root, relPath);
-        var r = await RunAsync(ownerId, root,
+        var r = await RunReadAsync(ownerId, root,
             ["log", "--follow", "-n", limit.ToString(),
              "--pretty=format:%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s%x1e", "--", relPath], ct: ct);
         return r.Ok ? ParseLog(r.Stdout) : [];
@@ -353,10 +375,10 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
             .ToString("yyyy-MM-ddTHH:mm:sszzz", CultureInfo.InvariantCulture);
         if (string.IsNullOrWhiteSpace(relPath))
         {
-            var r = await RunAsync(ownerId, root, ["rev-list", "--count", since, "HEAD"], ct: ct);
+            var r = await RunReadAsync(ownerId, root, ["rev-list", "--count", since, "HEAD"], ct: ct);
             return r.Ok && int.TryParse(r.Stdout.Trim(), out var n) ? n : 0;
         }
-        var log = await RunAsync(ownerId, root,
+        var log = await RunReadAsync(ownerId, root,
             ["log", "--follow", since, "--format=%H", "--", ValidateRel(root, relPath)], ct: ct);
         return log.Ok
             ? log.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length
@@ -387,11 +409,11 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     public async Task<GitRepoSnapshot> RepoSnapshotAsync(string? ownerId, string root, CancellationToken ct = default)
     {
         if (!IsGitRepo(root)) return new GitRepoSnapshot(null, [], null);
-        var status = await RunAsync(ownerId, root, ["status", "--porcelain"], ct: ct);
+        var status = await RunReadAsync(ownerId, root, ["status", "--porcelain"], ct: ct);
         if (!status.Ok)
             return new GitRepoSnapshot(null, [], FirstLine(status.Stderr) ?? "git status --porcelain завершился с ошибкой");
         var dirty = ParseDirty(status.Stdout);
-        var head = await RunAsync(ownerId, root, ["rev-parse", "--short", "HEAD"], ct: ct);
+        var head = await RunReadAsync(ownerId, root, ["rev-parse", "--short", "HEAD"], ct: ct);
         var sha = head.Ok && head.Stdout.Length > 0 ? head.Stdout.Trim() : null;
         return new GitRepoSnapshot(sha, dirty, null);
     }
@@ -409,7 +431,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         {
             ValidateRevision(ancestorSha);
             ValidateRevision(revOrSha);
-            var r = await RunAsync(ownerId, root, ["merge-base", "--is-ancestor", ancestorSha, revOrSha], ct: ct);
+            var r = await RunReadAsync(ownerId, root, ["merge-base", "--is-ancestor", ancestorSha, revOrSha], ct: ct);
             return r.Ok;
         }
         catch (GitCommandException ex)
@@ -426,7 +448,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         if (!IsGitRepo(root) || !IsValidSha(sha)) return "";
         try
         {
-            var r = await RunAsync(ownerId, root, ["show", "--stat", "--pretty=format:", sha], ct: ct);
+            var r = await RunReadAsync(ownerId, root, ["show", "--stat", "--pretty=format:", sha], ct: ct);
             return r.Ok ? r.Stdout.Trim() : "";
         }
         catch (GitCommandException ex)
@@ -451,7 +473,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         if (!IsGitRepo(root) || !IsValidSha(sha)) return 1;
         try
         {
-            var r = await RunAsync(ownerId, root, ["show", "-s", "--format=%P", sha], ct: ct);
+            var r = await RunReadAsync(ownerId, root, ["show", "-s", "--format=%P", sha], ct: ct);
             if (!r.Ok) return 1;
             // git всегда печатает трейлинг-перевод строки: для root-коммита stdout = "\n",
             // и без Trim Split даст 1 лишний элемент. CommitStatAsync использует тот же
@@ -503,7 +525,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         string? ownerId, string root, string sha, CancellationToken ct = default)
     {
         if (!IsGitRepo(root)) return [];
-        var r = await RunAsync(ownerId, root, ["show", "--name-only", "--pretty=format:", sha], ct: ct);
+        var r = await RunReadAsync(ownerId, root, ["show", "--name-only", "--pretty=format:", sha], ct: ct);
         if (!r.Ok) return [];
         return [.. r.Stdout
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
@@ -520,7 +542,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         string? ownerId, string root, string oldSha, string newSha, CancellationToken ct = default)
     {
         if (!IsGitRepo(root) || !IsValidSha(oldSha) || !IsValidSha(newSha)) return null;
-        var r = await RunAsync(ownerId, root, ["diff", "--name-only", oldSha, newSha],
+        var r = await RunReadAsync(ownerId, root, ["diff", "--name-only", oldSha, newSha],
             timeoutMs: 30_000, ct: ct);
         if (!r.Ok) return null;
         return [.. r.Stdout
@@ -530,14 +552,14 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     public async Task<GitCommitDetail?> CommitDetailAsync(string? ownerId, string root, string sha, CancellationToken ct = default)
     {
         if (!IsGitRepo(root) || !IsValidSha(sha)) return null;
-        var meta = await RunAsync(ownerId, root,
+        var meta = await RunReadAsync(ownerId, root,
             ["show", "--no-patch", "--format=%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s%x1f%b", sha], ct: ct);
         if (!meta.Ok) return null;
         var f = meta.Stdout.TrimEnd('\n', '\r').Split('\x1f');
         if (f.Length < 7 || !DateTimeOffset.TryParse(f[4], out var date)) return null;
 
         // Список файлов коммита: -m + --first-parent, чтобы merge-коммиты тоже давали дифф к первому родителю
-        var names = await RunAsync(ownerId, root,
+        var names = await RunReadAsync(ownerId, root,
             ["show", "--name-status", "--format=", "--first-parent", "-m", sha], ct: ct);
         var files = new List<GitFileChange>();
         foreach (var line in names.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries))
@@ -554,7 +576,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         }
 
         // Статистика строк файлов коммита (+N/−M)
-        var stat = await RunAsync(ownerId, root,
+        var stat = await RunReadAsync(ownerId, root,
             ["show", "--numstat", "--format=", "--first-parent", "-m", "-z", sha], ct: ct);
         if (stat.Ok)
         {
@@ -569,7 +591,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     {
         if (!IsGitRepo(root) || !IsValidSha(sha)) return null;
         ValidateRel(root, relPath);
-        var r = await RunAsync(ownerId, root,
+        var r = await RunReadAsync(ownerId, root,
             ["show", "--format=", "--first-parent", "-m", sha, "--", relPath], ct: ct);
         return r.Ok && !string.IsNullOrWhiteSpace(r.Stdout) ? r.Stdout : null;
     }
@@ -578,7 +600,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     {
         if (!IsGitRepo(root)) return [];
         // %00 — NUL-разделитель полей внутри строки ветки
-        var r = await RunAsync(ownerId, root,
+        var r = await RunReadAsync(ownerId, root,
             ["branch", "--format=%(HEAD)%00%(refname:short)%00%(upstream:short)"], ct: ct);
         if (!r.Ok) return [];
 
@@ -670,7 +692,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     public async Task<IReadOnlyList<GitStashEntry>> StashListAsync(string? ownerId, string root, CancellationToken ct = default)
     {
         if (!IsGitRepo(root)) return [];
-        var r = await RunAsync(ownerId, root, ["stash", "list", "--format=%gd%x1f%s%x1f%cI"], ct: ct);
+        var r = await RunReadAsync(ownerId, root, ["stash", "list", "--format=%gd%x1f%s%x1f%cI"], ct: ct);
         if (!r.Ok) return [];
         var list = new List<GitStashEntry>();
         foreach (var line in r.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries))
@@ -689,7 +711,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     {
         if (!IsGitRepo(root) || index < 0) return [];
         var stashRef = $"stash@{{{index}}}";
-        var names = await RunAsync(ownerId, root,
+        var names = await RunReadAsync(ownerId, root,
             ["stash", "show", "--name-status", "--include-untracked", stashRef], ct: ct);
         if (!names.Ok) return [];
         var files = new List<GitFileChange>();
@@ -705,7 +727,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
                 files.Add(new GitFileChange(parts[1], status[0].ToString()));
         }
         // Статистика строк (+N/−M); при неудаче — просто список файлов без чисел
-        var stat = await RunAsync(ownerId, root,
+        var stat = await RunReadAsync(ownerId, root,
             ["stash", "show", "--numstat", "--include-untracked", "-z", stashRef], ct: ct);
         if (stat.Ok)
         {
@@ -756,7 +778,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         if (!IsGitRepo(root) || !IsValidSha(sha)) return null;
         ValidateRel(root, relPath);
         var spec = relPath.Replace('\\', '/');
-        var r = await RunAsync(ownerId, root, ["show", $"{sha}:{spec}"], ct: ct);
+        var r = await RunReadAsync(ownerId, root, ["show", $"{sha}:{spec}"], ct: ct);
         if (!r.Ok) return null;
         // Бинарь не показываем как текст
         return r.Stdout.Contains('\0') ? null : r.Stdout;
@@ -779,7 +801,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     {
         if (!IsGitRepo(root)) return [];
         ValidateRel(root, relPath);
-        var r = await RunAsync(ownerId, root, ["blame", "--line-porcelain", "--", relPath], timeoutMs: 30_000, ct: ct);
+        var r = await RunReadAsync(ownerId, root, ["blame", "--line-porcelain", "--", relPath], timeoutMs: 30_000, ct: ct);
         if (!r.Ok) throw new GitCommandException(FirstLine(r.Stderr) ?? "blame не удался");
 
         var lines = new List<GitBlameLine>();
@@ -1028,7 +1050,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         ValidateRevision(fullRef);
         try
         {
-            var r = await RunAsync(ownerId, root, ["rev-parse", "--verify", "--quiet", fullRef], ct: ct);
+            var r = await RunReadAsync(ownerId, root, ["rev-parse", "--verify", "--quiet", fullRef], ct: ct);
             var sha = r.Stdout.Trim();
             logger?.LogInformation(
                 "RefExists: root='{Root}' ref='{Ref}' exit={ExitCode} stdout='{Stdout}' stderr='{Stderr}'",
@@ -1054,7 +1076,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         foreach (var refName in candidates) ValidateRevision(refName);
         foreach (var refName in candidates)
         {
-            var r = await RunAsync(ownerId, root, ["rev-parse", "--verify", "--quiet", refName], ct: ct);
+            var r = await RunReadAsync(ownerId, root, ["rev-parse", "--verify", "--quiet", refName], ct: ct);
             if (r.Ok && IsValidSha(r.Stdout.Trim())) return refName;
         }
         return null;
@@ -1070,7 +1092,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         ValidateRevision(fullRef);
         try
         {
-            var r = await RunAsync(ownerId, root, ["rev-parse", "--verify", "--quiet", fullRef], ct: ct);
+            var r = await RunReadAsync(ownerId, root, ["rev-parse", "--verify", "--quiet", fullRef], ct: ct);
             var sha = r.Stdout.Trim();
             return r.Ok && IsValidSha(sha) ? sha : null;
         }
@@ -1084,7 +1106,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     {
         // Полный формат ls-tree ("<mode> <type> <sha>\t<path>"), не --name-only:
         // фильтруем только blob — записи subtree/submodule не нужны
-        var r = await RunAsync(ownerId, root, ["ls-tree", "-r", resolvedRef], ct: ct);
+        var r = await RunReadAsync(ownerId, root, ["ls-tree", "-r", resolvedRef], ct: ct);
         if (!r.Ok) return [];
         var files = new List<string>();
         foreach (var raw in r.Stdout.Split('\n'))
@@ -1106,7 +1128,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     {
         ValidateRel(root, relPath);
         var spec = relPath.Replace('\\', '/');
-        var r = await RunAsync(ownerId, root, ["cat-file", "blob", $"{resolvedRef}:{spec}"], ct: ct);
+        var r = await RunReadAsync(ownerId, root, ["cat-file", "blob", $"{resolvedRef}:{spec}"], ct: ct);
         if (!r.Ok) return null;
         // Бинарь не показываем как текст
         return r.Stdout.Contains('\0') ? null : r.Stdout;
@@ -1117,7 +1139,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     // в LogAsync (%x1f между полями). refName должен быть уже резолвленным (ResolveRefAsync).
     public async Task<GitRefTip?> TipAsync(string? ownerId, string root, string resolvedRef, CancellationToken ct = default)
     {
-        var r = await RunAsync(ownerId, root,
+        var r = await RunReadAsync(ownerId, root,
             ["log", "-1", "--pretty=format:%H%x1f%an%x1f%aI", resolvedRef], ct: ct);
         if (!r.Ok) return null;
         var parts = r.Stdout.Trim().Split('\x1f');
@@ -1331,7 +1353,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         string[] args = push
             ? ["remote", "get-url", "--push", "origin"]
             : ["remote", "get-url", "origin"];
-        var r = await RunAsync(ownerId, root, args, ct: ct);
+        var r = await RunReadAsync(ownerId, root, args, ct: ct);
         var url = r.Stdout.Trim();
         return r.Ok && url.Length > 0 ? url : null;
     }
@@ -1369,7 +1391,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     public async Task<IReadOnlyList<GitWorktreeInfo>> WorktreeListAsync(string? ownerId, string mainRoot, CancellationToken ct = default)
     {
         if (!IsGitRepo(mainRoot)) return [];
-        var r = await RunAsync(ownerId, mainRoot, ["worktree", "list", "--porcelain"], ct: ct);
+        var r = await RunReadAsync(ownerId, mainRoot, ["worktree", "list", "--porcelain"], ct: ct);
         if (!r.Ok) return [];
 
         var paths = launchers.ForOwner(ownerId).Paths;

@@ -12,7 +12,12 @@ public enum DocLinkKind { Doc, Repo, External }
 
 // Ссылка из документа. Target — путь от корня проекта с прямыми слэшами (Doc/Repo)
 // либо исходный URL (External). Anchor — слаг после «#», уже нормализованный.
-public record DocLink(string Target, string? Anchor, DocLinkKind Kind, string Text);
+// Missing — цели Repo-ссылки нет на диске (протухший путь: файл переехал или удалён).
+// Именно поле, а не четвёртое значение DocLinkKind: enum едет во фронт строкой, и
+// DocsPanel ветвится по kind === 'repo' — новое значение молча сломало бы клик по ссылке.
+// Дефолт false обязателен: record позиционный, у него десяток существующих вызовов.
+public record DocLink(string Target, string? Anchor, DocLinkKind Kind, string Text,
+    bool Missing = false);
 
 // Заголовок документа. Slug считается от текста, очищенного от markdown-разметки, —
 // тот же контракт повторяет фронт (lib/docsLinks.ts), иначе переход по якорю не найдёт цель.

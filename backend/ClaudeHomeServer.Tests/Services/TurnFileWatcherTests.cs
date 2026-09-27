@@ -10,6 +10,7 @@ namespace ClaudeHomeServer.Tests.Services;
 // FileChangedMessage вообще, хотя git-панель прирост файла увидела. Ручной прогон это
 // окно не воспроизводит (правка должна попасть между стартом и концом хода за секунды) —
 // здесь события эмулируются прямой записью на диск, без гонки с реальным claude CLI.
+[Collection(TestCollections.Inotify)]
 public class TurnFileWatcherTests : IDisposable
 {
     private readonly string _root;

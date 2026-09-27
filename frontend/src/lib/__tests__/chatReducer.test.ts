@@ -761,6 +761,25 @@ describe('applyServerMessage: work_loop_stopped', () => {
   });
 });
 
+describe('normalizeHistory: interrupted', () => {
+  it('отметка «Стоп» из истории — элемент interrupted со временем, «Повторить» живёт', () => {
+    const items = normalizeHistory([
+      { kind: 'user_message', text: 'сделай отчёт', timestamp: 1 },
+      { kind: 'text', text: 'начинаю', timestamp: 2 },
+      { kind: 'interrupted', timestamp: 3 },
+    ]);
+    expect(items[2]).toEqual({ kind: 'interrupted', ts: 3 });
+    expect(retryableInterruptedIndex(items)).toBe(2);
+  });
+
+  it('отметка считается при сверке с живой лентой — перезагрузка её не дублирует', () => {
+    const server = normalizeHistory([{ kind: 'user_message', text: 'в' }, { kind: 'interrupted', timestamp: 3 }]);
+    const live: ChatItem[] = [{ kind: 'user_message', text: 'в' }, { kind: 'interrupted' }];
+    expect(serverHistoryNewer(server, live)).toBe(false);
+    expect(serverHistoryNewer(server, [{ kind: 'user_message', text: 'в' }])).toBe(true);
+  });
+});
+
 describe('normalizeHistory', () => {
   it('thinking из истории свёрнут, error без повтора, остальное как есть', () => {
     const raw = [

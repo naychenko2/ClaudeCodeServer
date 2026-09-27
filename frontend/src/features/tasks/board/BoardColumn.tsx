@@ -88,10 +88,11 @@ function WipEditor({ wip, onWip }: { wip?: number; onWip: (v?: number) => void }
 }
 
 // Ячейка доски: конкретная колонка статуса в конкретной дорожке. Droppable + сортируемый список.
-export function BoardCell({ cellId, cards, projectNameOf, onOpen, onQuickAdd, minEmptyHeight }: {
+export function BoardCell({ cellId, cards, projectNameOf, deviceNameOf, onOpen, onQuickAdd, minEmptyHeight }: {
   cellId: string;
   cards: Task[];
   projectNameOf: (t: Task) => string | undefined;
+  deviceNameOf?: (t: Task) => string | undefined;
   onOpen: (t: Task) => void;
   onQuickAdd?: (title: string) => void;   // undefined = без быстрого добавления (в режиме дорожек)
   minEmptyHeight: number;
@@ -121,7 +122,7 @@ export function BoardCell({ cellId, cards, projectNameOf, onOpen, onQuickAdd, mi
     >
       <SortableContext items={cards.map(c => c.id)} strategy={verticalListSortingStrategy}>
         {cards.map(t => (
-          <BoardCard key={t.id} task={t} projectName={projectNameOf(t)} onOpen={() => onOpen(t)} />
+          <BoardCard key={t.id} task={t} projectName={projectNameOf(t)} deviceName={deviceNameOf?.(t)} onOpen={() => onOpen(t)} />
         ))}
       </SortableContext>
 

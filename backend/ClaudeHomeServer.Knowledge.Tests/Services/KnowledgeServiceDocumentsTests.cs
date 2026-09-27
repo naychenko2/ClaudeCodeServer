@@ -85,6 +85,49 @@ public class KnowledgeServiceDocumentsTests
         page.Data[1].Error.Should().BeNull();
     }
 
+    // Dify отдаёт `word_count: null`, пока объём документа не посчитан (колонка nullable,
+    // сериализатор — `int | None`). Non-nullable int ронял разбор ВСЕГО ответа: реконсайлер
+    // и память персон падали каждым проходом. Оба пути падения — список и одиночный документ.
+    [Fact]
+    public async Task ListDocumentsAsync_WordCountNull_РазбираетсяКакНеизвестно()
+    {
+        var handler = new FakeHandler
+        {
+            ResponseJson = """
+                {"data":[
+                    {"id":"d1","name":"в индексации.md","indexing_status":"indexing","word_count":null},
+                    {"id":"d2","name":"готовый.md","indexing_status":"completed","word_count":42},
+                    {"id":"d3","name":"пустой.md","indexing_status":"completed","word_count":0}
+                ],"has_more":false,"total":3}
+                """,
+        };
+        var sut = Create(handler);
+
+        var page = await sut.ListDocumentsAsync("ds-1");
+
+        page.Data.Should().HaveCount(3);
+        page.Data[0].WordCount.Should().BeNull("null у Dify — «объём ещё не посчитан», а не ноль слов");
+        page.Data[1].WordCount.Should().Be(42);
+        page.Data[2].WordCount.Should().Be(0, "честный ноль обязан отличаться от «неизвестно»");
+    }
+
+    [Fact]
+    public async Task IndexFileByTextAsync_WordCountNull_ВОдиночномДокументе_НеРоняетРазбор()
+    {
+        var handler = new FakeHandler
+        {
+            ResponseJson = """
+                {"document":{"id":"d1","name":"свежий.md","indexing_status":"waiting","word_count":null}}
+                """,
+        };
+        var sut = Create(handler);
+
+        var doc = await sut.IndexFileByTextAsync("ds-1", "свежий.md", "текст");
+
+        doc.Id.Should().Be("d1");
+        doc.IndexingStatus.Should().Be("waiting");
+    }
+
     [Fact]
     public async Task ListAllDocumentsAsync_Прокидывает_Status_На_Каждую_Страницу()
     {

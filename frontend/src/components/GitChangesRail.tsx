@@ -15,7 +15,12 @@ import {
   Check, Plus, Archive, ArchiveRestore, Trash2, UploadCloud, ExternalLink, FileDiff, User,
 } from 'lucide-react';
 import type { Project, GitFileChange, GitLogEntry, GitStashEntry, ChangedBySession } from '../types';
+import { ProjectFeature } from '../types';
 import { api } from '../lib/api';
+import { useProjectFeature, featureReason } from '../lib/projectCapabilities';
+import { useProjectRoutes } from '../lib/deviceAgent';
+import { DeviceAgentGate } from './DeviceAgentGate';
+import { CapabilityUnavailable } from './CapabilityGate';
 import { C, R, FS, SP, FONT, MODAL_W } from '../lib/design';
 import {
   useGitState, ensureGit, loadUnpushedLog, loadGitLog, loadGitRemote, loadGitBranches, loadGitStash,
@@ -219,8 +224,33 @@ function buildTree(files: RowFile[]): TreeNode[] {
   return sortRec(root.children);
 }
 
-export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, activeFilePath, activeCommitSha, onCommit, onScopeChange, changedBy }: Props) {
+// Гейт по матрице (ADR-016 §3.4): git у локального проекта живёт в агенте устройства —
+// недоступен он, показываем причину; доступен, но агент на этой машине не ответил —
+// состояние связи (DeviceAgentGate). С другого устройства изменения читаются через ретранслятор,
+// без единого действия записи. Хуки панели — в GitChangesRailBody
+export function GitChangesRail(props: Props) {
+  const gitGate = useProjectFeature(props.project, ProjectFeature.Git);
+  if (!gitGate) return <CapabilityUnavailable feature={ProjectFeature.Git} title="Изменения недоступны" reason={featureReason(props.project, ProjectFeature.Git)} />;
+  return <DeviceAgentGate project={props.project} relayTitle="Изменения недоступны"><GitChangesRailBody {...props} /></DeviceAgentGate>;
+}
+
+function GitChangesRailBody({ project, onOpenDiff, onOpenFile, onOpenCommit, activeFilePath, activeCommitSha, onCommit, onScopeChange, changedBy }: Props) {
   const st = useGitState(project.id);
+  // Действия, маршрута которых у проекта сейчас нет, не показываем (список — deviceAgentRoutes.ts):
+  // у серверного проекта есть всё, у агента — не всё, с другого устройства — ни одной записи
+  const { can } = useProjectRoutes(project);
+  const canRemote = can('POST git/push') && can('POST git/fetch') && can('POST git/pull');
+  // Смена ветки грязного дерева предлагает отложить правки (stash) — это тоже запись
+  const canBranchOps = can('POST git/checkout') && can('POST git/branches') && can('POST git/stash');
+  const canDiscardAll = can('POST git/discard-all');
+  const canAiMessage = can('POST git/ai/commit-message');
+  const canSaveNow = can('POST git/save-now');
+  const canRepoSettings = can('GET git/commit-prompt');
+  const canAutoCommit = can('PUT git/auto-commit');
+  const canCommitOps = can('POST git/stage') && can('POST git/unstage') && can('POST git/commit');
+  const canDiscard = can('POST git/discard');
+  const canStashOps = can('POST git/stash/{index:int}/pop') && can('DELETE git/stash/{index:int}');
+  const canGitInit = can('POST git/init');
   const status = st.status;
   // Пути активного чата (lowercase) — тогл «только файлы чата» и признак mine у бейджа.
   // Серверный источник (changed-by: история чата минус зафиксированное в git) — фронтовый
@@ -594,7 +624,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
         onClick={open}
         onMouseEnter={() => setHoveredRow(rowKey)}
         onMouseLeave={() => setHoveredRow(null)}
-        {...pressProps(rowKey, () => { if (isWorking) setTouchMenu({ kind: 'file', file: f }); })}
+        {...pressProps(rowKey, () => { if (isWorking && canDiscard) setTouchMenu({ kind: 'file', file: f }); })}
         style={{
           // Список (showParent) — двухэтажная строка (имя + путь), дерево — одна строка.
           // Размеры и отступы — общие с деревом «Файлов» (см. ROW_H выше)
@@ -655,7 +685,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
         {/* numstat +N/−M. В рабочем скоупе по наведению уступает место кнопке отката:
             оба на одном слоте, а flex:1 у имени абсорбирует разницу — строка не
             дёргается, и кнопке не нужно absolute-перекрытие */}
-        {isWorking && hovered && !st.busy ? (
+        {isWorking && hovered && !st.busy && canDiscard ? (
           <IconButton size="xs" tone="danger" color={C.danger} title="Отменить изменения"
             style={{ flexShrink: 0 }}
             onClick={e => { e.stopPropagation(); setDiscardPath(f.path); }}>
@@ -670,7 +700,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
         {/* Состояние файла (A/M/D): тот же значок, что в дереве «Файлов», не путается с
             плиткой типа (та слева). В рабочем скоупе по наведению уступает место кнопке
             отката. Не крайний справа — за ним ещё бейдж авторства */}
-        {!(isWorking && hovered && !st.busy) && <FileStatusBadge status={f.status} />}
+        {!(isWorking && hovered && !st.busy && canDiscard) && <FileStatusBadge status={f.status} />}
         {/* Бейдж «кто менял файл» — КРАЙНИМ справа, после статуса. Только у файлов рабочего
             дерева. Иконка кодирует КОЛИЧЕСТВО чатов, бледность и цифра — участие активного:
             - single mine  (MessageSquareDot) — только активный чат: та же иконка, что у тогла
@@ -841,7 +871,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
     <>
         {!isBranch && <>
         {/* Режим выбора файлов (чекбоксы) — только для текущих изменений */}
-        {isWorking && rows.length > 0 && (
+        {isWorking && rows.length > 0 && canCommitOps && (
           <>
             <IconButton size="xs" title={selectMode ? 'Скрыть выбор файлов' : 'Выбрать файлы для коммита'}
               active={selectMode} onClick={() => setSelectMode(v => !v)}>
@@ -893,10 +923,10 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
             дереве, когда формы фиксации (её прежней точки входа) на экране нет.
             anchor-режим меню — слот шапки лежит внутри карточки с transform,
             и absolute-позиционирование уехало бы вместе с ней */}
-        <IconButton size="xs" title="Настройки репозитория" active={!!repoMenu}
+        {canRepoSettings && <IconButton size="xs" title="Настройки репозитория" active={!!repoMenu}
           onClick={e => setRepoMenu(repoMenu ? null : e.currentTarget.getBoundingClientRect())}>
           <Settings size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-        </IconButton>
+        </IconButton>}
     </>
   );
 
@@ -947,7 +977,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
     // появляются не всегда — считаем по фактически видимым строкам
     <Menu anchor={repoMenu} minWidth={260} maxHeight={remote ? 200 : 60} onClose={() => setRepoMenu(null)}>
       {/* Настройки авто-ведения истории — только когда remote-инфо загружено */}
-      {remote && <>
+      {remote && canAutoCommit && <>
         <MenuItem
           icon={remote.autoCommit ? <Check size={15} strokeWidth={2} /> : <></>}
           label={
@@ -999,11 +1029,11 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
           icon={<GitBranch size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
           title="Проект без git"
           subtitle="В папке проекта будет создан репозиторий — появится история правок и фиксация изменений. Если настроен сервер Forgejo, также будет создан удалённый репозиторий."
-          action={
+          action={canGitInit ? (
             <Button size="md" variant="primary" disabled={gitInitBusy} onClick={() => void handleGitInit()}>
               {gitInitBusy ? 'Подключаю…' : 'Подключить git'}
             </Button>
-          }
+          ) : undefined}
         />
         {gitInitError && (
           <div style={{ padding: '0 16px', fontSize: 12.5, color: C.dangerText, fontFamily: FONT.sans, lineHeight: 1.45, textAlign: 'center' }}>
@@ -1159,7 +1189,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
               ? 'Все изменения сохранены — история ведётся автоматически'
               : `Изменений: ${pendingCount} — сохранятся после хода ИИ`}
           </span>
-          {pendingCount > 0 && (
+          {pendingCount > 0 && canSaveNow && (
             <Button size="sm" variant="primary" disabled={savingNow || st.busy} onClick={() => void handleSaveNow()}>
               {savingNow ? 'Сохраняю…' : 'Сохранить сейчас'}
             </Button>
@@ -1168,7 +1198,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
       )}
 
       {/* === Нижняя зона: форма фиксации ИЛИ селектор скоупов === */}
-      {mode === 'commit' ? (
+      {mode === 'commit' && canCommitOps ? (
         <div style={{ borderTop: `1px solid ${C.border}`, padding: '8px 10px 10px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <Pencil size={14} strokeWidth={ICON_STROKE} color={C.accent} />
@@ -1188,7 +1218,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
               minHeight={commitBodyH}
               style={{ paddingRight: 34 }}
             />
-            <span
+            {canAiMessage && <span
               onClick={() => { if (!aiBusy) void handleAi(); }}
               title="Сгенерировать описание"
               style={{ position: 'absolute', right: 9, top: 9, cursor: 'pointer', display: 'flex' }}
@@ -1196,7 +1226,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
               {aiBusy
                 ? <span style={{ width: 13, height: 13, borderRadius: '50%', border: `2px solid ${C.track}`, borderTopColor: C.accent, animation: 'cc-spin 0.6s linear infinite' }} />
                 : <Sparkles size={15} strokeWidth={ICON_STROKE} color={C.accent} />}
-            </span>
+            </span>}
           </div>
           {/* Действия: настройки слева; делегирование чату + «Зафиксировать» справа
               в один ряд. nowrap + primary flexShrink:0 — «Зафиксировать» всегда стоит
@@ -1270,18 +1300,18 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
                     Главное действие — крайним справа, разрушительное перед ним */}
                 {workingFiles.length > 0 && isWorking && (
                   <>
-                    <IconButton size="xs" title="Отменить все изменения"
+                    {canDiscardAll && <IconButton size="xs" title="Отменить все изменения"
                       onClick={e => { e.stopPropagation(); setDiscardAllConfirm(true); }}>
                       <Undo2 size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-                    </IconButton>
-                    <button
+                    </IconButton>}
+                    {canCommitOps && <button
                       onClick={e => { e.stopPropagation(); void openCommitForm(); }}
                       title="Зафиксировать изменения"
                       style={{ ...commitBtnStyle, marginLeft: 'auto', ...(compactActions ? { width: ACTION_BTN_W_ICON } : null) }}
                     >
                       <Check size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
                       {!compactActions && 'Зафиксировать'}
-                    </button>
+                    </button>}
                   </>
                 )}
               </div>
@@ -1298,7 +1328,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
                     onClick={() => selectScope(rowKey)}
                     onMouseEnter={() => setHoveredRow(rowKey)}
                     onMouseLeave={() => setHoveredRow(null)}
-                    {...pressProps(rowKey, () => setTouchMenu({ kind: 'stash', stash: s }))}
+                    {...pressProps(rowKey, () => { if (canStashOps) setTouchMenu({ kind: 'stash', stash: s }); })}
                     style={scopeRowStyle(active, hovered, pressingKey === rowKey)}
                   >
                     <Archive size={14} strokeWidth={ICON_STROKE} color={C.textSecondary} style={{ flexShrink: 0 }} />
@@ -1306,9 +1336,9 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
                       {s.message || `stash@{${s.index}}`}
                     </span>
                     {/* Время — всегда в потоке (держит высоту строки); под кнопками при ховере прячем */}
-                    <span title={relTime(s.date)} style={{ fontFamily: FONT.mono, fontSize: 10, color: C.textMuted, flexShrink: 0, opacity: hovered && !st.busy ? 0 : 1 }}>{relTime(s.date)}</span>
+                    <span title={relTime(s.date)} style={{ fontFamily: FONT.mono, fontSize: 10, color: C.textMuted, flexShrink: 0, opacity: hovered && !st.busy && canStashOps ? 0 : 1 }}>{relTime(s.date)}</span>
                     {/* Кнопки — absolute поверх времени, не двигают layout */}
-                    {hovered && !st.busy && (
+                    {hovered && !st.busy && canStashOps && (
                       <span style={{ position: 'absolute', right: 0, top: '50%', transform: 'translateY(-50%)', display: 'flex', alignItems: 'center', gap: 2 }}>
                         <IconButton size="xs" tone="accent" title="Вернуть изменения (pop)"
                           onClick={e => { e.stopPropagation(); if (active) setActiveScope('working'); void gitStashPop(project.id, s.index); }}>
@@ -1408,6 +1438,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
               </div>
               {/* Вертикальный разделитель отбивает стрелку от тела — видно, что это
                   отдельное действие (меню веток), а не часть выбора скоупа */}
+              {canBranchOps && <>
               <div style={{ width: 1, flexShrink: 0, background: (isBranch || branchMenu) ? C.accentMuted : C.border }} />
               <button
                 onClick={e => { e.stopPropagation(); openBranchMenu(e.currentTarget.getBoundingClientRect()); }}
@@ -1420,6 +1451,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
               >
                 <ChevronDown size={14} strokeWidth={ICON_STROKE} color={(branchMenu || isBranch) ? C.accent : C.textMuted} />
               </button>
+              </>}
             </div>
             {/* anchor-режим (портал по якорю стрелки): панель живёт в карточке с
                 transform, и absolute-меню обрезалось её рамками — как у repoMenu */}
@@ -1444,6 +1476,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
           </div>
           {/* Обмен с remote по нарастанию: сначала лёгкий fetch, за ним pull */}
           {/* Габарит кнопок ряда — ровно ROW_H, как у капсулы слева и строк скоупов выше */}
+          {canRemote && <>
           <IconButton size="xs" title="Проверить обновления (fetch)" disabled={st.busy}
             style={{ width: ROW_H, height: ROW_H }} onClick={() => void gitFetch(project.id)}>
             <RefreshCw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
@@ -1474,6 +1507,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
             <UploadCloud size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
             {!compactActions && 'Опубликовать'}
           </button>
+          </>}
         </div>
       </div>
       )}

@@ -1,3 +1,4 @@
+using System.Threading;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Mcp;
@@ -27,10 +28,11 @@ public interface IIncidentLocalContext
 
 public sealed class IncidentLocalContext(
     SessionManager sessions,
-    SpendStore spend,
     McpCallLog mcpCalls,
-    ILogger<IncidentLocalContext> log) : IIncidentLocalContext
+    ILogger<IncidentLocalContext> log,
+    ISpendDetailReader? spend = null) : IIncidentLocalContext
 {
+    private int _spendNullWarned;
     public IReadOnlyList<IncidentChat> Describe(
         IReadOnlyList<IncidentTurn> turns, DateTimeOffset from, DateTimeOffset to,
         string? alertChatId)
@@ -81,6 +83,12 @@ public sealed class IncidentLocalContext(
 
     private IReadOnlyList<SpendRecord> SafeSpend(DateTimeOffset from, DateTimeOffset to)
     {
+        if (spend is null)
+        {
+            if (Interlocked.Exchange(ref _spendNullWarned, 1) == 0)
+                log.LogDebug("spend: detail reader недоступен, расход за окно инцидента не собран");
+            return [];
+        }
         try
         {
             return spend.DetailsBetween(

@@ -835,6 +835,7 @@ internal sealed class SequencedCheap(params string?[] answers) : ICheapTextRunne
     public List<string> Prompts { get; } = [];
 
     public bool UsesLocal(string actionKey) => false;
+    public bool HasFreeRoute(string actionKey) => false;
     public string DescribeRoute(string actionKey, string? fallbackModel) => "test";
 
     public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,

@@ -160,11 +160,13 @@ internal static class ProfileSyncManifestStore
     // camelCase — единый стиль с остальными JSON в проекте (JsonStringEnumConverter
     // с CamelCase, см. Program.cs). Иначе поле Source уезжало бы в файле как
     // "Source", а источник задан как "host" | "defaults" по ADR-015 §3.
+    // DictionaryKeyPolicy НЕ задаём: ключи Files — пути, camelCase превращал «CLAUDE.md»
+    // в «cLAUDE.md». На Windows это маскировала регистронезависимая ФС, на Linux путь
+    // не находился и запись молча вычищалась из манифеста.
     private static readonly JsonSerializerOptions Options = new()
     {
         WriteIndented = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DictionaryKeyPolicy = JsonNamingPolicy.CamelCase,
     };
 
     public static ProfileSyncManifest LoadOrEmpty(string profileDir)
@@ -176,7 +178,14 @@ internal static class ProfileSyncManifestStore
             var json = File.ReadAllText(path);
             var m = JsonSerializer.Deserialize<ProfileSyncManifest>(json, Options);
             if (m is null) return new ProfileSyncManifest();
-            m.Files ??= new(StringComparer.OrdinalIgnoreCase);
+            // Десериализатор создаёт словарь с регистрозависимым компаратором по умолчанию —
+            // возвращаем регистронезависимый, как у нового манифеста
+            // Через индексатор, а не конструктор: старые манифесты могут держать
+            // «cLAUDE.md» и «CLAUDE.md» разом
+            var files = new Dictionary<string, ProfileSyncEntry>(StringComparer.OrdinalIgnoreCase);
+            if (m.Files is not null)
+                foreach (var (key, entry) in m.Files) files[key] = entry;
+            m.Files = files;
             return m;
         }
         catch (Exception ex)

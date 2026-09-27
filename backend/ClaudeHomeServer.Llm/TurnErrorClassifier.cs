@@ -114,6 +114,10 @@ public static class TurnErrorClassifier
         return text.StartsWith(prefix, StringComparison.Ordinal);
     }
 
+    // Маркер отказа устройства локального проекта (ADR-016): ClaudeSession ставит его первым
+    // токеном Details, когда раннер устройства отказал в запуске (офлайн, нет exec, харнес не готов)
+    public const string DeviceRefusedMarker = "[Device:refused]";
+
     public static FallbackErrorClass Classify(TurnAttemptOutcome outcome)
     {
         // Остановка пользователем — не ошибка доставки
@@ -145,6 +149,18 @@ public static class TurnErrorClassifier
         if (outcome.Win32ErrorCode == Win32ErrorFilenameExcedRange
             || HasWin32Marker(outcome.ErrorText, Win32ErrorFilenameExcedRange))
             return FallbackErrorClass.PromptOverflow;
+
+        // Локальный ресурс ОС исчерпан (лимит inotify, EMFILE/ENFILE) — ход упал на старте у нас,
+        // до всякого провайдера. Тоже ДО ветки "без result → Unreachable": инцидент 2026-09-19 —
+        // IOException лимита inotify из TurnFileWatcher.Start ушла в Unreachable, и фолбэк за 0,6 с
+        // сжёг три подписки, хотя сеть ни при чём. Другая пара это не лечит — честная ошибка хода.
+        if (LooksLocalResourceExhausted(outcome.ErrorText)) return FallbackErrorClass.None;
+
+        // Устройство локального проекта не приняло запуск — тоже ДО ветки "без result →
+        // Unreachable": соседняя пара «модель × подписка» пойдёт на то же офлайн-устройство,
+        // фолбэк лишь сжёг бы цепочку. Честная ошибка хода с текстом отказа
+        if (outcome.ErrorText?.StartsWith(DeviceRefusedMarker, StringComparison.Ordinal) == true)
+            return FallbackErrorClass.None;
 
         // Процесс умер без result — любой обрыв потока, включая посреди начатого ответа
         if (!outcome.HasResult) return FallbackErrorClass.Unreachable;
@@ -391,6 +407,26 @@ public static class TurnErrorClassifier
     {
         if (string.IsNullOrWhiteSpace(value)) return false;
         foreach (var phrase in ProviderErrorPhrases)
+            if (value.Contains(phrase, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    // Исчерпание локальных ресурсов ОС. Формулировки .NET для inotify («…user limit (N) on the
+    // number of inotify instances/watches has been reached», «The system limit on the number of
+    // inotify instances…») и errno открытых дескрипторов. Голое «limit» не берём — слишком обычно.
+    private static readonly string[] LocalResourcePhrases =
+    [
+        "inotify instances",
+        "inotify watches",
+        "too many open files",
+        "EMFILE",
+        "ENFILE",
+    ];
+
+    private static bool LooksLocalResourceExhausted(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        foreach (var phrase in LocalResourcePhrases)
             if (value.Contains(phrase, StringComparison.OrdinalIgnoreCase)) return true;
         return false;
     }

@@ -7,7 +7,10 @@ using Microsoft.AspNetCore.SignalR;
 namespace ClaudeHomeServer.Services.Terminal;
 
 /// <summary>ДТО списка терминалов для фронта.</summary>
-public record TerminalInfoDto(string Id, string ProjectId, string Name, string Status, string? Shell);
+/// <param name="Pty">Терминал идёт через псевдоконсоль (ConPTY-мост или pty-bridge). false —
+/// упрощённый терминал на перенаправленных потоках: без цветов, очистки экрана и
+/// интерактивных программ; фронт обязан показать это честно.</param>
+public record TerminalInfoDto(string Id, string ProjectId, string Name, string Status, string? Shell, bool Pty);
 
 /// <summary>Экземпляр запущенного терминала.</summary>
 internal sealed class TerminalInstance : IDisposable
@@ -100,12 +103,22 @@ public sealed class TerminalService : IDisposable
     private readonly CancellationTokenSource _shutdownCts = new();
     private readonly Timer _cleanupTimer;
 
-    private static readonly string PtyBridgePath = "/app/pty-bridge";
+    // В образе песочницы (и в docker-образе сервера) бинарь лежит в /app
+    private const string ContainerPtyBridgePath = "/app/pty-bridge";
+
+    // Нативный запуск на Linux-хосте: сначала рядом со сборкой сервера, затем /app
+    private static readonly string LocalPtyBridgePath =
+        File.Exists(Path.Combine(AppContext.BaseDirectory, "pty-bridge"))
+            ? Path.Combine(AppContext.BaseDirectory, "pty-bridge")
+            : ContainerPtyBridgePath;
+
+    private static string PtyBridgePathFor(Execution.IProcessLauncher launcher) =>
+        launcher.IsSandboxed ? ContainerPtyBridgePath : LocalPtyBridgePath;
 
     // Есть ли pty-bridge в целевой среде: локально — файл на диске,
     // в песочнице — гарантирован образом
     private static bool HasPtyBridge(Execution.IProcessLauncher launcher) =>
-        launcher.IsSandboxed || File.Exists(PtyBridgePath);
+        launcher.IsSandboxed || File.Exists(LocalPtyBridgePath);
 
     // Префикс имени группы терминала (шаг 5, волна C, шов `ITerminalHubNotifier`):
     // формат знает только TerminalService, реализация шва имя не дописывает.
@@ -137,7 +150,7 @@ public sealed class TerminalService : IDisposable
 
         // Шелл выбираем по ОС ЦЕЛЕВОЙ среды: powershell на Windows-хосте,
         // pty-bridge/bash на Linux (в т.ч. внутри песочницы)
-        var launcher = _launchers.ForOwner(project.OwnerId);
+        var launcher = _launchers.ForProject(project);
         var isWindows = launcher.TargetIsWindows;
         var usesPtyBridge = false;
         var turnId = Guid.NewGuid().ToString("N")[..12];
@@ -152,7 +165,8 @@ public sealed class TerminalService : IDisposable
             // backspace/стрелки/история/Tab/Ctrl+C, тот же кадровый протокол, что у
             // Linux-моста), при недоступности — фолбэк на голое перенаправление.
             shell = "powershell.exe";
-            var bridgePath = launcher.IsSandboxed ? null : Execution.ConPtyBridgeLocator.Find();
+            var reason = "Windows-песочница";
+            var bridgePath = launcher.IsSandboxed ? null : Execution.ConPtyBridgeLocator.Find(out reason);
             process = null!;
             if (bridgePath is not null)
             {
@@ -170,15 +184,17 @@ public sealed class TerminalService : IDisposable
                         TurnId = turnId,
                     });
                     usesPtyBridge = true;
+                    _log.LogInformation("Терминал {TerminalId}: мост ConPTY {BridgePath}", terminalId, bridgePath);
                 }
                 catch (Exception ex)
                 {
-                    _log.LogWarning(ex, "ConPtyBridge не запустился — фолбэк на перенаправление");
+                    _log.LogWarning(ex, "Терминал {TerminalId}: фолбэк на перенаправление — ConPtyBridge не запустился",
+                        terminalId);
                 }
             }
             else
             {
-                _log.LogWarning("ConPtyBridge.exe не найден или Windows без ConPTY — powershell с перенаправлением");
+                _log.LogWarning("Терминал {TerminalId}: фолбэк на перенаправление — {Reason}", terminalId, reason);
             }
             if (!usesPtyBridge)
             {
@@ -220,7 +236,7 @@ public sealed class TerminalService : IDisposable
                 usesPtyBridge = true;
                 process = launcher.Start(new Execution.ProcessSpec
                 {
-                    FileName = PtyBridgePath,
+                    FileName = PtyBridgePathFor(launcher),
                     Args = [cols.ToString(), rows.ToString()],
                     WorkingDirectory = project.RootPath,
                     Env = env,
@@ -447,7 +463,7 @@ public sealed class TerminalService : IDisposable
         }
     }
 
-    private static TerminalInfoDto ToDto(TerminalInstance inst) => new(inst.Id, inst.ProjectId, inst.Name, inst.Status, inst.Shell);
+    private static TerminalInfoDto ToDto(TerminalInstance inst) => new(inst.Id, inst.ProjectId, inst.Name, inst.Status, inst.Shell, inst.UsesPtyBridge);
 
     public void Dispose()
     {

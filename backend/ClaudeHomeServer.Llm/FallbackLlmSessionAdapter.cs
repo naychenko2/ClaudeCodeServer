@@ -102,6 +102,9 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     private readonly string? _initialProfileRoot;
     // Корень профиля ТЕКУЩЕЙ подписки/провайдера — обновляется каждой подменой
     private string? _profileRoot;
+    // Транскрипт чата на диске сервера. false — локальный проект (ADR-016): транскрипт на
+    // устройстве в единственном профиле CLI, провайдера выбирает шлюз — переносить нечего
+    private readonly bool _transcriptOnServer;
     private readonly CancellationTokenSource _cts = new();
 
     // Активная оркестрация фолбэка (null — сообщения проходят насквозь)
@@ -137,7 +140,8 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         IEgressProbe? egress = null,
         Turn.ITurnEventBus? events = null,
         TimeSpan? egressRetryDelay = null,
-        ILocalEndpointProbe? localProbe = null)
+        ILocalEndpointProbe? localProbe = null,
+        bool transcriptOnServer = true)
     {
         _inner = inner;
         _effectiveModel = effectiveModel;
@@ -160,6 +164,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         _egress = egress;
         _events = events;
         _localProbe = localProbe;
+        _transcriptOnServer = transcriptOnServer;
         _egressRetryDelay = egressRetryDelay ?? EgressRetryDelay;
         _profileRoot = initialProfileRoot ?? ResolveRootFor(CurrentProviderKey(Info.Model));
     }
@@ -1128,11 +1133,12 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
 // не имеет права ронять ход: вся публикация под try, шина сама гасит исключения подписчиков.
             if (_events is not null)
             {
+                var errorClass = lastClass is { } lc ? TurnErrorClassifier.WireName(lc) : null;
+                TurnRunPassport? passport = null;
                 try
                 {
                     var endedAt = DateTime.UtcNow;
-                    var errorClass = lastClass is { } lc ? TurnErrorClassifier.WireName(lc) : null;
-                    var passport = new TurnRunPassport(
+                    passport = new TurnRunPassport(
                         SessionId: Info.Id,
                         StartedAt: startedAt,
                         EndedAt: endedAt,
@@ -1150,6 +1156,15 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                         LastError: lastEnd?.ErrorText ?? lastEnd?.Result?.ApiErrorStatus,
                         ContextTokens: ContextEstimate(),
                         RecordedAt: endedAt);
+                }
+                catch (Exception ex)
+                {
+                    LogWarn($"Паспорт хода не записан ({Info.Id}): {ex.Message}");
+                }
+                // Событие уходит и без паспорта: по нему отзывается токен хода шлюза
+                // (TurnTokenService), и сбой диагностики не должен оставить токен жить.
+                try
+                {
                     // Fire-and-forget: подписчик SessionManager.HandleTurnCompleted пишет
                     // в TurnRunLog (единственный источник), PublishAsync не бросает.
                     _ = _events.PublishAsync(new TurnCompleted(
@@ -1165,7 +1180,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 }
                 catch (Exception ex)
                 {
-                    LogWarn($"Паспорт хода не записан ({Info.Id}): {ex.Message}");
+                    LogWarn($"Конец хода не опубликован ({Info.Id}): {ex.Message}");
                 }
             }
         }
@@ -1485,6 +1500,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     private bool TryMigrateTranscript(string? dstRoot)
     {
         if (Info.ClaudeSessionId is null) return true;
+        if (!_transcriptOnServer) return true;
         if (_profileRoot is null || dstRoot is null) return false;
         // Приёмник совпал с источником: нативный шаг цепочки может резолвиться в ТЕКУЩУЮ
         // подписку — переносить нечего, а копирование файла в себя же CopyFileShared не умеет
@@ -1529,6 +1545,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     private bool TryCopyTranscriptBack(string? dstRoot, bool preserveLongerDestination = true)
     {
         if (Info.ClaudeSessionId is null) return true;
+        if (!_transcriptOnServer) return true;
         if (_profileRoot is null || dstRoot is null) return false;
         // Шаг цепочки мог остаться в ТОЙ ЖЕ подписке — возвращать транскрипт некуда, а копия
         // файла в себя же уходит в ретраи CopyFileShared до дедлайна (см. TryMigrateTranscript).

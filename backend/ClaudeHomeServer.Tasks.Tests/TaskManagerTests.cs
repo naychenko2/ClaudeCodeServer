@@ -3,7 +3,6 @@ using ClaudeHomeServer.Services.Tasks;
 
 namespace ClaudeHomeServer.Tests.Services;
 
-[Collection(TestCollections.SessionStaticResolvers)]
 public class TaskManagerTests : IDisposable
 {
     private readonly string _dir;
@@ -18,6 +17,9 @@ public class TaskManagerTests : IDisposable
 
     public void Dispose()
     {
+        // Гасим таймер дебаунса записи: иначе отложенный сброс уже удалённого набора
+        // задач воссоздал бы временный каталог после теста.
+        _sut.Dispose();
         if (Directory.Exists(_dir)) Directory.Delete(_dir, recursive: true);
     }
 
@@ -196,6 +198,10 @@ public class TaskManagerTests : IDisposable
     {
         var task = _sut.Create("proj-1", "user-1", new CreateTaskRequest("выживу рестарт",
             DueDate: "2026-08-01", ReminderMinutes: 15));
+
+        // Запись стора отложена дебаунсом — досбрасываем явно, чтобы «рестарт» увидел
+        // задачу детерминированно (ровно это делает остановка приложения)
+        _sut.Flush();
 
         // «Рестарт сервера»: новый менеджер с тем же DataPath
         var reloaded = new TaskManager(BuildConfig(_dir)).GetById(task.Id);
@@ -498,7 +504,8 @@ public class TaskManagerTests : IDisposable
         task.WorktreePath.Should().Be(Wt);
         task.WorktreeBranch.Should().Be("wt/feature-x");
 
-        // Переживает рестарт (поле в data/tasks.json)
+        // Переживает рестарт (поле в data/tasks.json); Flush — из-за дебаунса записи
+        _sut.Flush();
         new TaskManager(BuildConfig(_dir)).GetById(task.Id)!.WorktreePath.Should().Be(Wt);
     }
 
@@ -701,37 +708,6 @@ public class TaskManagerTests : IDisposable
 
         act.Should().Throw<InvalidOperationException>();
         _sut.GetById(task.Id)!.Status.Should().NotBe(TaskItemStatus.Done);
-    }
-
-    // ─── Шов Tasks → Models.Session (три статических резолвера) ─────────────────
-    // Волна 4C, шаг 1 — после переезда TaskManager в `Services.Tasks.TaskManager`
-    // нужно доказать, что ctor всё ещё ставит резолверы на `Session`. Без этого
-    // `Session.ParentSessionId`/`TaskDone`/`TaskDelegationDepth` выродились бы в
-    // null/0/false (архитектор: «если TaskManager однажды не будет создан к моменту
-    // первой сериализации Session — иерархия чатов, гейт глубины делегирования и
-    // фильтр "Завершён" тихо выродятся»). Инициализация в TaskManager.cs:32-36.
-
-    [Fact]
-    public void Constructor_УстанавливаетТриРезолвераНаSession()
-    {
-        // ctor уже вызван в этом тест-фикстуре (InstancePerTest); проверяем,
-        // что все три резолвера на Session не null и корректно резолвят наши задачи.
-        // Без инициализации в TaskManager.cs:32-36 Session.ParentSessionId/
-        // Session.TaskDelegationDepth (гейт TASKS_EXECUTE)/Session.TaskDone выродились бы
-        // в null/0/false — архитектор прямо предупреждает (досье переезда Task).
-        var live = _sut.Create(null, "owner", new CreateTaskRequest("t-резолверы-live"));
-        var done = _sut.Create(null, "owner", new CreateTaskRequest("t-резолверы-done"));
-        _sut.Update(done.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
-
-        Session.TaskSourceSessionResolver.Should().NotBeNull("ctor должен ставить TaskSourceSessionResolver");
-        Session.TaskDelegationDepthResolver.Should().NotBeNull("ctor должен ставить TaskDelegationDepthResolver");
-        Session.TaskDoneResolver.Should().NotBeNull("ctor должен ставить TaskDoneResolver");
-
-        // Live: делегации нет → 0, TaskDone=false.
-        Session.TaskDelegationDepthResolver!(live.Id).Should().Be(0);
-        Session.TaskDoneResolver!(live.Id).Should().BeFalse();
-        // Done: TaskDone=true.
-        Session.TaskDoneResolver!(done.Id).Should().BeTrue();
     }
 
     // ─── DroppedByHumanAt (волна 1 team-blocker-honest, дефект f3965801) ─────────

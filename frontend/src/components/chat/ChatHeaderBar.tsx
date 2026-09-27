@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react';
-import { Plus, Menu as MenuIcon, Tags, Bell, BellOff, History, Hourglass, ListChecks, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore } from 'lucide-react';
+import { Plus, Menu as MenuIcon, Tags, Bell, BellOff, History, Hourglass, ListChecks, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore, HardDrive } from 'lucide-react';
 import type { Project, Session, ClaudeBilling, Persona, ProjectTag } from '../../types';
 import { api } from '../../lib/api';
 import { isArchivedChat } from '../../lib/chatFilters';
@@ -22,24 +22,25 @@ import { AGENT_COLORS, agentDotColor } from '../AgentSelector';
 import { type RateWindow, type RatePillSegment, RATE_COLORS, windowLabel, fmtReset, worstWindow, withAccountFallback, ratePillSegments, ratePillCompact, ratePillVisible, ratePillMoreText } from '../../lib/rateLimit';
 import { useAccountUsage, accountSnapshotsFor } from '../../lib/accountUsage';
 import { type ContextEstimate } from '../../lib/context';
+import { prunedSummaryText } from '../../lib/contextPruned';
 import { ContextThresholdsDialog } from '../ContextThresholdsDialog';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { C, FONT, R, SP, SHADOW, TB, CHAT_MAX_W, MODAL_W, GROUP_COLORS } from '../../lib/design';
 import { useWindowWidth, MOBILE_MAX, TABLET_WIDE_MIN } from '../../lib/breakpoints';
 import { Toolbar, ToolbarIconButton } from '../Toolbar';
 import { ToolbarOverflowMenu, type OverflowItem } from '../ToolbarOverflowMenu';
-import { BackButton, ChatTopicIcon, Modal, ModalActions, ConfirmDialog, TextField, Menu, MenuItem, MenuSep } from '../ui';
+import { Badge, BackButton, ChatTopicIcon, Modal, ModalActions, ConfirmDialog, TextField, Menu, MenuItem, MenuSep } from '../ui';
 import { createTask } from '../../lib/tasks';
 import { showToast } from '../../lib/toast';
 import { beginAiBusy, endAiBusy } from '../../lib/ai/busy';
 import { useSlotItem } from '../../lib/subsystems/registry';
-import type { ChatHeaderSummaryCtx, ChatHeaderMenuItemCtx } from '../../lib/subsystems/registryCore';
+import type { ChatHeaderSummaryCtx, ChatHeaderMenuItemCtx, ChatHeaderBadgeCtx } from '../../lib/subsystems/registryCore';
 import type { ExtractedTaskCandidate } from '../../types';
 import { ChatOriginBadge } from '../ChatOriginBadge';
 import { TeamMechanicBadge } from '../../features/team/TeamMechanicBadge';
 import type { TeamMechanicId } from '../../features/team/teamMechanics';
 import { resolveChatOrigin } from '../../lib/chatOrigin';
-import { SpendBadge } from '../../features/spend/SpendBadge';
+import { projectDeviceBadge } from '../../lib/projectCapabilities';
 import { type GlifGenStats, fmtCredits } from './glifStats';
 import { useActionVisibility } from '../../hooks/useActionVisibility';
 import { CHAT_ACTION_ORDER, CHAT_BADGE_ORDER, CHAT_BADGE_LABELS, HEADER_ACTIONS_HIDDEN_BY_DEFAULT, HEADER_COMPACT_HIDDEN_BY_DEFAULT, WALL_ACTIONS_HIDDEN_BY_DEFAULT, type ChatActionKey, type ChatBadgeKey } from '../../lib/chatActions';
@@ -524,6 +525,11 @@ function ContextPopoverBody({ estimate, isWaiting, isCompacting, canCompact, com
           ? `${fmtTokens(estimate.lastCompact.pre)} → ${fmtTokens(estimate.lastCompact.post)}`
           : fmtTokens(estimate.lastCompact.post)} />
       )}
+      {estimate.pruned && (
+        // Итог обрезок прокси локальной модели за чат: сколько раз двигали контекст и
+        // сколько суммарно срезали. Каждый сдвиг отмечен карточкой в ленте, здесь — сумма
+        <BadgeRow k="Обрезка контекста" v={prunedSummaryText(estimate.pruned)} />
+      )}
       <div style={{ fontFamily: FONT.sans, fontSize: 10.5, color: C.textMuted, marginTop: 6, lineHeight: 1.4 }}>
         Сжимает историю диалога в саммари, освобождая место в окне. При заполнении {assistantName} делает это автоматически.
       </div>
@@ -1007,6 +1013,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // AI-действия чата к заметкам не относятся и остаются.
   const summaryAction = useSlotItem<ChatHeaderSummaryCtx>('chat-header-action', 'session-summary');
   const summaryMenuItem = useSlotItem<ChatHeaderMenuItemCtx>('chat-header-action', 'summary-menu-item');
+  const spendBadgeSlot = useSlotItem<ChatHeaderBadgeCtx>('chat-header-badge', 'spend-badge');
   // УЗКИЙ планшет (601 – TABLET_WIDE_MIN): мобильная механика — объединённый чип,
   // wide-поповер, плотная группа кнопок, заголовок с многоточием. Объединяем с mobile
   // через `isCompact`, чтобы не дублировать ветки внутри costBadges / rightCluster /
@@ -1138,6 +1145,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // Происхождение чата (задача/автоматизация) — рисуется в мета-строке заголовка
   // (см. metaRow): на мобиле компактной иконкой, на десктопе коротким бейджем.
   const origin = resolveChatOrigin(session);
+  const deviceBadge = projectDeviceBadge(project);
   // Блок названия чата. На мобиле он целиком кликабелен как «назад».
   // Кликабельный стек аватаров группового чата (активный спикер — с цветным
   // кольцом) + поповер управления составом. Размер аватара параметром: компактный
@@ -1253,6 +1261,17 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     // Десктопный чат: руки, их устройство и «Стоп». Компонент сам решает, показываться
     // ли — у обычного чата он пуст, поэтому условия типа чата здесь нет
     slots.push(<HandsBadge key="hands" session={session} />);
+    // Руки локального проекта — полоса «Руки» над композером (features/localHands/HandsStrip)
+    // Локальный проект (ADR-016): где живут файлы и в сети ли устройство — иначе
+    // закрытый гейт хода и пропавшие панели выглядят поломкой
+    if (deviceBadge) slots.push(
+      <span key="device" data-project-device-badge style={{ display: 'inline-flex', minWidth: 0, maxWidth: 240 }}>
+        <Badge size="xs" tone={deviceBadge.offline ? 'warning' : 'neutral'} title={deviceBadge.title}
+          icon={<HardDrive size={11} strokeWidth={ICON_STROKE} aria-hidden />}>
+          {isCompact ? deviceBadge.short : deviceBadge.text}
+        </Badge>
+      </span>
+    );
     // Происхождение живёт здесь в ОБОИХ размерах и на обеих платформах: в правом
     // ряду длинный заголовок задачи выдавливал чипы и резался на 220px
     if (origin) slots.push(
@@ -1405,9 +1424,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     : <CostBadge stats={cost} isMobile={isCompact} billing={billing} onBillingChange={onBillingChange} windows={limitWindows} resetKey={session.id} />;
   // Бейдж расхода токенов чата (аналитика v2): обновляется по завершению хода —
   // триггер cost.results растёт вместе с result-сообщениями ленты
-  const spendBadge = (
-    <SpendBadge sessionId={session.id} chatName={session.name} resultCount={cost.results} isMobile={isCompact} />
-  );
+  const spendBadge = spendBadgeSlot?.render?.({ sessionId: session.id, chatName: session.name, resultCount: cost.results, isMobile: isCompact });
   // compact (колонка стены): плашек контекста, стоимости и расхода нет — в узкой
   // шапке они занимают всю ширину и переносят строку, а следить за деньгами и
   // контекстом уместнее в полном виде чата (открывается кнопкой из ярлыка колонки)

@@ -3,6 +3,7 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Docs;
 using FluentAssertions;
+using ClaudeHomeServer.Services.Files;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -197,6 +198,82 @@ public class DocsIndexTests : IDisposable
         doc.Headings.Should().ContainSingle().Which.Text.Should().Be("Настоящий раздел");
     }
 
+    // Документация ПРО документацию — наш корпус целиком (ADR, планы, гайды), и вложенный
+    // пример забора там норма. Наивное «переключить флаг на любом маркере» закрывало внешний
+    // забор внутренним, и остаток примера разбирался как живой текст: заголовок из примера
+    // попадал в оглавление панели, а ссылка — в OutLinks и в Backlinks чужого документа
+    [Fact]
+    public void ВложенныйЗабор_ВнутреннийНеЗакрываетВнешний()
+    {
+        Write("""
+              # Документ
+
+              ````md
+              ```
+              ## Заголовок из примера
+              [ссылка из примера](docs/architecture.md)
+              ```
+              ````
+
+              ## Настоящий раздел
+              """, "docs", "nested-fence.md");
+        Write("# Архитектура", "docs", "architecture.md");
+
+        var entry = _svc.GetIndex(_root).Single(d => d.Path == "docs/nested-fence.md");
+        var doc = _svc.GetDoc(_root, "docs/nested-fence.md")!;
+
+        entry.Headings.Should().ContainSingle().Which.Text.Should().Be("Настоящий раздел");
+        doc.Links.Should().BeEmpty();
+        _svc.GetDoc(_root, "docs/architecture.md")!.Backlinks.Should().BeEmpty();
+    }
+
+    // Забор, закрытый маркером ДРУГОГО типа, — не закрыт: ~~~ внутри ```-примера
+    [Fact]
+    public void ЗаборДругогоТипаВнутри_НеЗакрываетОткрытый()
+    {
+        Write("""
+              # Документ
+
+              ```md
+              ~~~
+              ## Заголовок из примера
+              ~~~
+              ```
+
+              ## Настоящий раздел
+              """, "docs", "mixed-fence.md");
+
+        var entry = _svc.GetIndex(_root).Single(d => d.Path == "docs/mixed-fence.md");
+
+        entry.Headings.Should().ContainSingle().Which.Text.Should().Be("Настоящий раздел");
+    }
+
+    // Незакрытый забор от опечатки выкидывает из разбора остаток файла — и это честнее,
+    // чем разбирать пример кода как текст документа. Признака «забор не закрыт» у индекса
+    // нет (он есть у сканера карты), поэтому фиксируем само поведение
+    [Fact]
+    public void НезакрытыйЗабор_ОстатокФайлаНеРазбирается()
+    {
+        Write("""
+              # Документ
+
+              ## Раздел до забора
+
+              ```bash
+              # комментарий, а не заголовок
+              [пример ссылки](docs/architecture.md)
+
+              ## Раздел после незакрытого забора
+              """, "docs", "unclosed-fence.md");
+
+        var entry = _svc.GetIndex(_root).Single(d => d.Path == "docs/unclosed-fence.md");
+        var doc = _svc.GetDoc(_root, "docs/unclosed-fence.md")!;
+
+        entry.Title.Should().Be("Документ");
+        entry.Headings.Should().ContainSingle().Which.Text.Should().Be("Раздел до забора");
+        doc.Links.Should().BeEmpty();
+    }
+
     [Fact]
     public void Слаг_СчитаетсяОтТекстаБезРазметки()
     {
@@ -225,6 +302,60 @@ public class DocsIndexTests : IDisposable
             l => { l.Kind.Should().Be(DocLinkKind.Doc); l.Target.Should().Be("docs/architecture.md"); },
             l => { l.Kind.Should().Be(DocLinkKind.Repo); l.Target.Should().Be("backend/Program.cs"); },
             l => { l.Kind.Should().Be(DocLinkKind.External); l.Target.Should().Be("https://example.com"); });
+    }
+
+    // Ссылка на файл вне области — Repo; флаг Missing показывает, жив ли путь на диске.
+    // Вид при этом остаётся repo: фронт ветвится по kind, и четвёртое значение enum
+    // молча сломало бы клик по ссылке
+    [Fact]
+    public void RepoСсылка_ЖивойПуть_MissingЛожь_ПереехавшийПуть_MissingИстина()
+    {
+        Write("""
+              # Обзор
+
+              [живой код](backend/Program.cs), [переехавший](backend/Models/FeatureFlag.cs)
+              и [папка](backend).
+              """, "README.md");
+        Write("// код", "backend", "Program.cs");
+
+        var links = _svc.GetDoc(_root, "README.md")!.Links;
+
+        links.Should().SatisfyRespectively(
+            l => { l.Kind.Should().Be(DocLinkKind.Repo); l.Missing.Should().BeFalse(); },
+            l => { l.Kind.Should().Be(DocLinkKind.Repo); l.Missing.Should().BeTrue(); },
+            // Ссылка на каталог — обычное дело в доках, мёртвой её считать нельзя
+            l => { l.Kind.Should().Be(DocLinkKind.Repo); l.Missing.Should().BeFalse(); });
+    }
+
+    // Живость Repo-ссылки зависит от файлов КОДА, а кеш корпуса ключуется отпечатком
+    // ДОКУМЕНТОВ: посчитай флаг при разборе — и он врал бы до следующей правки самого .md
+    [Fact]
+    public void RepoСсылка_MissingНеЗалипаетВКеше_ПослеПоявленияФайла()
+    {
+        Write("# Обзор\n\n[код](backend/Program.cs)", "README.md");
+        _svc.GetDoc(_root, "README.md")!.Links.Single().Missing.Should().BeTrue();
+
+        // Появился файл КОДА, документ не менялся — отпечаток корпуса тот же
+        Write("// код", "backend", "Program.cs");
+
+        _svc.GetDoc(_root, "README.md")!.Links.Single().Missing.Should().BeFalse();
+    }
+
+    // Схем в доках больше, чем http/mailto: «javascript:» и «data:…» стоят примерами
+    // в ADR-005 про SSRF, и без общего правила они попали бы в мёртвые файлы
+    [Theory]
+    [InlineData("javascript:alert(1)")]
+    [InlineData("data:text/html;base64,PHNjcmlwdD4=")]
+    [InlineData("vscode://file/x")]
+    [InlineData("tel:+79990000000")]
+    public void СсылкаСЛюбойСхемой_СчитаетсяВнешней(string target)
+    {
+        Write($"# Обзор\n\n[пример]({target})", "README.md");
+
+        var link = _svc.GetDoc(_root, "README.md")!.Links.Single();
+
+        link.Kind.Should().Be(DocLinkKind.External);
+        link.Missing.Should().BeFalse();
     }
 
     [Fact]

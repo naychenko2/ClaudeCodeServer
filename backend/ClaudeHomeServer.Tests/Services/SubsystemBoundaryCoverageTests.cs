@@ -64,9 +64,15 @@ public class SubsystemBoundaryCoverageTests
         // Images — отдельная сборка (Этап 5, вынос Images): без typeof набор сборок
         // её не содержит, и проверка полноты Boundaries по ней ничего не проверяет.
         _ = typeof(ClaudeHomeServer.Services.Images.ImagesSubsystem).Assembly;
+        // ImageEditor — динамический модуль (ADR-018 §10.1): Main на него не ссылается,
+        // без typeof проверка полноты Boundaries по нему ничего не проверяет.
+        _ = typeof(ClaudeHomeServer.Services.ImageEditor.ImageEditorSubsystem).Assembly;
         // Prompts — отдельная сборка (Этап 5, вынос Prompts): без typeof набор
         // сборок её не содержит, и проверка полноты Boundaries по ней ничего не проверяет.
         _ = typeof(ClaudeHomeServer.Services.Prompts.OmoPrompts).Assembly;
+        // Files — отдельная сборка (ADR-016, задача 4.1): форс-загрузка нужна, чтобы
+        // сторож видел FileService и проверял границы вертикали по Files.dll.
+        _ = typeof(ClaudeHomeServer.Services.Files.FileService).Assembly;
     }
 
     [Fact]
@@ -232,6 +238,12 @@ public class SubsystemBoundaryCoverageTests
             // инфраструктура загрузки по манифесту секции "DynamicModules", не вертикаль-
             // подсистема (IAppSubsystem не имеет). Живёт в Main, потребляет его Program.cs.
             "ClaudeHomeServer.Services.DynamicModules",
+            // `ClaudeHomeServer.Services.Files` здесь больше нет: под ним живёт вертикаль Files
+            // (ADR-016, задача 4.1) со своей строкой в Boundaries. Core-типы того же namespace
+            // (RecursiveDirectoryWatcher, FileEntry) проверяются её сторожем, а другим
+            // вертикалям доступны как спина по сборке Core.
+            // `ClaudeHomeServer.Services.ImageEditor` здесь больше нет: это модуль редактора
+            // (ADR-018 §10.1) со своей строкой в Boundaries; его швы в Core проверяются тем же сторожем.
         };
 
         // Все namespace, покрытые через SubsystemBoundaryTests.Boundaries (по полю

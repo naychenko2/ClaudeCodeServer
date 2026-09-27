@@ -234,6 +234,7 @@ public class SpecialtyPromptSectionsControllerTests : IClassFixture<TestWebAppli
         private int _call;
 
         public bool UsesLocal(string actionKey) => false;
+        public bool HasFreeRoute(string actionKey) => false;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "stub";
         public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
             string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
@@ -386,6 +387,7 @@ public class SpecialtyPromptSectionsControllerTests : IClassFixture<TestWebAppli
     private sealed class ThrowingCheap : ICheapTextRunner
     {
         public bool UsesLocal(string actionKey) => false;
+        public bool HasFreeRoute(string actionKey) => false;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "stub";
         public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
             string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)

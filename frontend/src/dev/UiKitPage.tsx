@@ -26,12 +26,12 @@ import {
   Calendar, Share2, MessageCircle,
   Network, FileText, AlertCircle, Loader2,
 } from 'lucide-react';
-import { Rows3, Pin, FolderOpen, Bell, List, ListTree, ArrowRightToLine } from 'lucide-react';
+import { Rows3, Pin, FolderOpen, Bell, List, ListTree, ArrowRightToLine, Unplug } from 'lucide-react';
 import { C, FONT, FS, SP, R, SHADOW, ISLAND, MODAL_W, GROUP_COLORS } from '../lib/design';
 import { AGENT_COLORS } from '../components/AgentSelector';
 import { ChatCard } from '../components/ChatCard';
 import { STATUS_CONFIG, STATUS_GLOW, type VisualStatus } from '../components/StatusIndicator';
-import { ProviderLimitCard } from '../components/chat/ChatItemView';
+import { ProviderLimitCard, ContextPrunedRow } from '../components/chat/ChatItemView';
 import type { Session, ChatItem, Persona, PlanMap } from '../types';
 import { MarkdownContent } from '../components/chat/MarkdownContent';
 import { PlanScheme } from '../components/plan/PlanScheme';
@@ -45,9 +45,11 @@ import {
   Button, IconButton, Modal, ModalActions, ConfirmDialog,
   Menu, MenuItem, BackButton, WaitingIndicator,
   IslandScaffold, Splitter, SidebarSplitter, IslandSplitter, IslandSidebarSplitter,
-  TextField, TextArea, IconField, Field, FieldLabel,
-  PanelShell, PanelHeaderSlot, useHasPanelHeader, RailFlyout,
+  TextField, TextArea, IconField, Field, FieldLabel, Select,
+  PanelShell, PanelHeaderSlot, useHasPanelHeader, RailFlyout, Notice,
+  Chip, ProgressBar,
 } from '../components/ui';
+import { CapabilityUnavailable } from '../components/CapabilityGate';
 import { InlineSegmented } from '../components/ui/InlineSegmented';
 import { ICON_SIZE, ICON_STROKE, ICON_PROPS } from '../components/ui/icons';
 import { Toolbar, ToolbarIconButton } from '../components/Toolbar';
@@ -333,6 +335,7 @@ function TogglesSection() {
   const [toggleOn, setToggleOn] = useState(true);
   const [toggleOff, setToggleOff] = useState(false);
   const [layout, setLayout] = useState('comfort');
+  const [chipOn, setChipOn] = useState(true);
 
   return (
     <Island>
@@ -458,6 +461,45 @@ function TogglesSection() {
             </SidebarSection>
           </div>
         </SubBlock>
+
+        {/* Chip / ChipX: пилюля фильтра, действия или выбранного объекта. Чип над полем
+            ввода («hero.png · 1 пометка ✕») — soft с leading и onRemove; maxW обрезает
+            подпись, а крестик остаётся снаружи обрезки */}
+        <SubBlock label="Chip / ChipX — soft, selected, dashed, toggle, leading + крестик">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs, alignItems: 'center' }}>
+              <Chip>Обычный</Chip>
+              <Chip selected>Выбран</Chip>
+              <Chip dashed onClick={() => {}}>+ Персонаж</Chip>
+              <Chip onRemove={() => {}}>С крестиком</Chip>
+              <Chip
+                maxW={160}
+                leading={<span style={{ width: '100%', height: '100%', background: C.accentLight }} />}
+                onRemove={() => {}}
+              >
+                очень-длинное-имя-картинки.png · 1 пометка
+              </Chip>
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs, alignItems: 'center' }}>
+              <Chip variant="toggle" selected={chipOn} onClick={() => setChipOn(v => !v)}>Мультивыбор</Chip>
+              <Chip variant="toggle" onClick={() => {}}>Выключен</Chip>
+              <Chip variant="toggle" large selected>Тач-версия</Chip>
+              <Chip touch onRemove={() => {}}>touch — крестик 32px</Chip>
+            </div>
+          </div>
+        </SubBlock>
+
+        {/* ProgressBar: тонкая полоса 4px на дорожке C.track, тон — роль. estimate —
+            прогноз, а не факт (приглушённая заливка) */}
+        <SubBlock label="ProgressBar — тоны и прогноз (estimate)">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, maxWidth: 320 }}>
+            <ProgressBar value={62} />
+            <ProgressBar value={40} estimate />
+            <ProgressBar value={100} tone="success" />
+            <ProgressBar value={75} tone="warning" />
+            <ProgressBar value={20} tone="danger" />
+          </div>
+        </SubBlock>
       </div>
     </Island>
   );
@@ -487,6 +529,7 @@ function OverlaysSection() {
   const [modalOpen, setModalOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [fullscreenOpen, setFullscreenOpen] = useState(false);
 
   return (
     <Island>
@@ -510,6 +553,13 @@ function OverlaysSection() {
         <SubBlock label="Modal — центрированная карточка / мобильная шторка">
           <Button variant="primary" size="md" onClick={() => setModalOpen(true)}>
             Открыть Modal
+          </Button>
+        </SubBlock>
+
+        {/* Modal size="fullscreen": рабочее окно во весь экран (редактор картинок) */}
+        <SubBlock label='Modal size="fullscreen" — рабочее окно во весь экран'>
+          <Button variant="secondary" size="md" onClick={() => setFullscreenOpen(true)}>
+            Открыть fullscreen
           </Button>
         </SubBlock>
 
@@ -614,6 +664,30 @@ function OverlaysSection() {
         </Modal>
       )}
 
+      {/* Демо fullscreen: шапка и футер вне скролла, тело без отступов — холст от края до края */}
+      {fullscreenOpen && (
+        <Modal
+          size="fullscreen"
+          title="Демо fullscreen"
+          subtitle="Десктоп — карточка во весь вьюпорт с отступом, мобила — без шторки и скругления, с safe-area."
+          onClose={() => setFullscreenOpen(false)}
+          footer={
+            <ModalActions
+              confirmLabel="Готово"
+              onConfirm={() => setFullscreenOpen(false)}
+              onCancel={() => setFullscreenOpen(false)}
+            />
+          }
+        >
+          <div style={{
+            height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: C.bgInset, color: C.textMuted, fontSize: FS.md,
+          }}>
+            Холст рабочего окна
+          </div>
+        </Modal>
+      )}
+
       {/* Демо ConfirmDialog: danger-вариант */}
       {confirmOpen && (
         <ConfirmDialog
@@ -660,6 +734,7 @@ function FieldsSection() {
   const [iconMail, setIconMail] = useState('');
   const [iconSearch, setIconSearch] = useState('');
   const [fielded, setFielded] = useState('');
+  const [selected, setSelected] = useState('');
 
   return (
     <Island>
@@ -694,6 +769,21 @@ function FieldsSection() {
             placeholder="Disabled поле"
             disabled
           />
+        </div>
+
+        {/* Select — выпадающий список в стиле полей: с плейсхолдером + disabled */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+          <FieldLabel>Select</FieldLabel>
+          <Select
+            value={selected}
+            onChange={setSelected}
+            placeholder="Выберите устройство"
+            options={[
+              { value: 'laptop', label: 'Ноутбук (windows)' },
+              { value: 'desktop', label: 'Десктоп (linux) · офлайн' },
+            ]}
+          />
+          <Select value="" onChange={() => {}} placeholder="Disabled список" options={[]} disabled />
         </div>
 
         {/* TextArea — многострочный ввод с авто-ростом: обычное + disabled */}
@@ -1820,6 +1910,29 @@ const DEMO_PROVIDER_LIMIT_ITEMS: Extract<ChatItem, { kind: 'provider_limit' }>[]
   },
 ];
 
+// Демо строк «контекст обрезан» (событие context_pruned прокси локальной модели):
+// обрезка с полной статистикой, обрезка без замеров и сжатие, ушедшее в облако.
+const DEMO_CONTEXT_PRUNED_ITEMS: Extract<ChatItem, { kind: 'context_pruned' }>[] = [
+  {
+    kind: 'context_pruned', pruneKind: 'prune',
+    tokensBefore: 171_000, tokensAfter: 113_000,
+    blocks: 25, resultBlocks: 20, inputBlocks: 3, thinkingBlocks: 2,
+    prefillSeconds: 87, cacheReadTokens: 0, promptTokens: 113_000,
+  },
+  {
+    kind: 'context_pruned', pruneKind: 'prune',
+    tokensBefore: 150_000, tokensAfter: 128_000,
+    blocks: 6, resultBlocks: 6, inputBlocks: 0, thinkingBlocks: 0,
+    prefillSeconds: 42, cacheReadTokens: 96_000, promptTokens: 128_000,
+  },
+  {
+    kind: 'context_pruned', pruneKind: 'compact_cloud',
+    tokensBefore: 0, tokensAfter: 0,
+    blocks: 0, resultBlocks: 0, inputBlocks: 0, thinkingBlocks: 0,
+    prefillSeconds: 21,
+  },
+];
+
 // Мета 9 панелей правой рельсы — копия PANEL_META из RightPanelStack (там
 // не экспортируется). Меняется только Icon и title; контент у каждого свой.
 const PANELS_DEMO: { key: string; title: string; Icon: LucideIcon; accent?: boolean }[] = [
@@ -2771,6 +2884,24 @@ function PanelsSection() {
           </div>
         </SubBlock>
 
+        {/* Строка сдвига контекста из ленты чата: прокси локальной модели обрезал историю
+            хода либо увёл сжатие в облако. Служебный разделитель в тоне карточки сжатия;
+            виды блоков с нулём в подписи не перечисляются. */}
+        <SubBlock label="ContextPrunedRow — контекст обрезан / сжатие в облаке">
+          <div style={{
+            background: C.bgWhite,
+            borderRadius: R.xl,
+            padding: SP.md,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: SP.md,
+          }}>
+            {DEMO_CONTEXT_PRUNED_ITEMS.map((it, i) => (
+              <ContextPrunedRow key={i} item={it} />
+            ))}
+          </div>
+        </SubBlock>
+
         {/* Шпаргалка по 4 фоновым тонам дизайн-системы. Плашки красятся
             РЕАЛЬНЫМИ значениями C.*, поэтому при смене темы (SegmentedControl
             в шапке) видна инверсия: в светлой остров темнее холста, в тёмной
@@ -3268,6 +3399,29 @@ function ToolbarAndEmptySection() {
                 </Button>
               }
             />
+          </div>
+        </SubBlock>
+
+        {/* Плашка «недоступно с причиной» (ADR-016 §3.4) — единственная на все панели:
+            тот же EmptyState compact, что у состояний связи с агентом устройства */}
+        <SubBlock label="CapabilityUnavailable — панель недоступна для проекта">
+          <div style={{ background: C.bgPanel, borderRadius: R.xl, minHeight: SP.xxxl * 5 }}>
+            <CapabilityUnavailable
+              feature="files"
+              title="Файлы недоступны"
+              reason="Устройство проекта не в сети"
+            />
+          </div>
+        </SubBlock>
+
+        {/* Notice — баннер причины во всю ширину: «ждёт устройство», «ход недоступен» */}
+        <SubBlock label="Notice — баннер причины (warning / danger)">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+            <Notice icon={Unplug}>Устройство проекта не в сети</Notice>
+            <Notice icon={Unplug} title="Ждёт устройство «Ноутбук» · 12 мин">
+              Задача запустится, когда устройство выйдет на связь; через 24 часа ожидание снимется.
+            </Notice>
+            <Notice tone="danger" icon={Unplug} title="Не запускалась: устройство так и не вышло на связь" />
           </div>
         </SubBlock>
       </div>

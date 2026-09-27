@@ -79,6 +79,13 @@ public class McpRegistry
             return _byOwner.TryGetValue(ownerId, out var list) ? list.ToList() : [];
     }
 
+    /// <summary>Все владельцы, у которых есть хотя бы одна запись (снимок).</summary>
+    public IEnumerable<string> GetAllOwners()
+    {
+        lock (_lock)
+            return _byOwner.Keys.ToList();
+    }
+
     public McpServerRecord? Get(string ownerId, string id)
     {
         lock (_lock)
@@ -114,7 +121,7 @@ public class McpRegistry
     /// <summary>
     /// Заводит запись встроенного сервера продукта (Higgsfield и подобные). Путь
     /// отдельный и явный — обычный Create режет по ReservedKeys, чтобы человек через
-    /// форму не мог занять ключ встроенного сервера; встроенный код (HiggsfieldIntegration
+    /// форму не мог занять ключ встроенного сервера; встроенный код (HiggsfieldOAuthService
     /// и пр.) идёт сюда и обходит только проверку резерва, сохраняя формат ключа,
     /// префикс персон-памяти и уникальность у владельца. Sanity check ключа —
     /// обязательно встроенный, иначе метод падает: иначе им можно было бы заводить
@@ -164,7 +171,7 @@ public class McpRegistry
             var key = (draft.Key ?? "").Trim().ToLowerInvariant();
             // Ключ существующей записи при обновлении не меняется — резерв защищает от ЗАНЯТИЯ
             // ключа человеком через форму, а не от правки уже заведённой встроенной записи
-            // (StoreTokens в OAuth и Logout в HiggsfieldIntegration кладут токены тем же ключом,
+            // (StoreTokens в OAuth и Logout в HiggsfieldOAuthService кладут токены тем же ключом,
             // что и EnsureRecord). Совпал с прежним — резерв пропускаем; смена ключа на
             // резервный по-прежнему отвергается.
             var allowReserved = string.Equals(key, existing.Key, StringComparison.OrdinalIgnoreCase);

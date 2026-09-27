@@ -276,9 +276,11 @@ public sealed class ProjectKnowledgeSyncService : Knowledge.IKnowledgeSyncPartic
     {
         foreach (var p in _projects.GetByOwner(userId))
         {
+            // Локальный проект записи знаний не имеет — его путь живёт на устройстве
+            if (ProjectCapabilities.KnowledgeRoot(p) is not { } root) continue;
             // Папку может делить проект другого владельца — тогда запись знаний не трогаем
-            if (_projects.GetByRootPath(p.RootPath).Any(x => x.OwnerId != userId)) continue;
-            _wkStore.Delete(p.RootPath);
+            if (_projects.GetByRootPath(root).Any(x => x.OwnerId != userId)) continue;
+            _wkStore.Delete(root);
         }
         return Task.CompletedTask;
     }
@@ -473,7 +475,9 @@ public sealed class ProjectKnowledgeTurnSync(
         var projectId = session.ProjectId;
         if (string.IsNullOrEmpty(projectId)) return Task.CompletedTask;
         if (msg is not (FileChangedMessage or ResultMessage)) return Task.CompletedTask;
-        var root = projects.GetById(projectId)?.RootPath;
+        // Выключенная группа (ADR-016 §4): у чатов локального проекта синк не запускается —
+        // ни по его пути, ни по совпавшей с ним строке серверной папки
+        var root = projects.GetById(projectId) is { } project ? ProjectCapabilities.KnowledgeRoot(project) : null;
         if (root is null) return Task.CompletedTask;
         sync.QueueSync(root, msg is FileChangedMessage fc ? [fc.Path] : null);
         return Task.CompletedTask;

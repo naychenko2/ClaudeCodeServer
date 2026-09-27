@@ -16,6 +16,7 @@ namespace ClaudeHomeServer.Tests.Services;
 /// Использует polling-режим FileWatcher (детерминированнее FileSystemWatcher в TestServer/CI)
 /// и короткий CodeGraph:RebuildDebounceMs из TestWebApplicationFactory.
 /// </summary>
+[Collection(TestCollections.Inotify)]
 public class FileWatcherServiceTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

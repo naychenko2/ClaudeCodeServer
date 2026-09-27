@@ -4,6 +4,7 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Terminal;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Hubs;
 
@@ -25,6 +26,7 @@ public class TerminalHub : Hub
     private static HubException Denied() => new("Доступ запрещён");
 
     /// <summary>Создать новый терминал в проекте.</summary>
+    [ProjectCapability(ProjectCapabilityArea.FileBound)]
     public async Task<TerminalInfoDto> CreateTerminal(string projectId, int cols, int rows, string? name = null)
     {
         if (!OwnsProject(projectId)) throw Denied();
@@ -38,6 +40,7 @@ public class TerminalHub : Hub
     }
 
     /// <summary>Список терминалов проекта.</summary>
+    [ProjectCapability(ProjectCapabilityArea.FileBound)]
     public List<TerminalInfoDto> ListTerminals(string projectId)
     {
         if (!OwnsProject(projectId)) throw Denied();

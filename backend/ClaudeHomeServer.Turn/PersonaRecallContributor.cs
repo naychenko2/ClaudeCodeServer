@@ -84,7 +84,7 @@ public sealed class PersonaRecallContributor : IPromptSectionContributor
             // Контекст паспортов (ADR-004 §5): проект чата + якоря + текст хода. null —
             // вне проектного контекста (нет ProjectId у сессии) или выключен флаг.
             Dossiers.DossierRecallRequest? dossier = null;
-            if (_recall.DossierRecallAvailable && session.ProjectId is { } dossierProjectId
+            if (_recall.DossierRecallAvailable && sessionContext.ServerContent && session.ProjectId is { } dossierProjectId
                 && _flags.IsEnabled(sessionContext.OwnerId, FeatureFlagKeys.ChangeDossiersRecall))
             {
                 var prevTurnFiles = await LastTurnChangedFilesAsync(session);

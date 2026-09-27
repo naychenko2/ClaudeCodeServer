@@ -198,7 +198,7 @@ public sealed partial class DocsIndexService(IProjectFileGateway? files = null)
         var block = DocProperties.Parse(text);
         return new DocDetail(
             entry.Path, entry.Title, text,
-            corpus.OutLinks.TryGetValue(key, out var outs) ? outs : [],
+            MarkMissing(rootPath, corpus.OutLinks.TryGetValue(key, out var outs) ? outs : []),
             corpus.Backlinks.TryGetValue(key, out var backs) ? backs : [],
             Properties: entry.Properties ?? DocProperties.Values(text, entry.Path),
             Type: DocTypeSchema.IsTypeable(entry)
@@ -909,6 +909,9 @@ public sealed partial class DocsIndexService(IProjectFileGateway? files = null)
                 if (target is null) continue;   // ведёт за пределы проекта — не наша забота
 
                 var kind = byPath.ContainsKey(target) ? DocLinkKind.Doc : DocLinkKind.Repo;
+                // Флаг Missing здесь НЕ проставляется: корпус кешируется по отпечатку
+                // документов, а живость Repo-ссылки зависит от файлов кода — переехал файл,
+                // отпечаток .md не изменился, и флаг остался бы враньём. Считается при отдаче
                 resolved.Add(new DocLink(target, link.Anchor, kind, link.Text));
 
                 if (kind != DocLinkKind.Doc || string.Equals(target, from, StringComparison.OrdinalIgnoreCase))
@@ -2064,25 +2067,24 @@ public sealed partial class DocsIndexService(IProjectFileGateway? files = null)
     [GeneratedRegex(@"(?<!\!)\[([^\]]*)\]\(\s*([^)\s]*)(?:\s+""[^""]*"")?\s*\)")]
     internal static partial Regex LinkRegex();
 
-    // Ограда блока кода: ``` или ~~~ (с отступом до трёх пробелов)
-    [GeneratedRegex(@"^ {0,3}(`{3,}|~{3,})")]
-    internal static partial Regex FenceRegex();
-
     internal static ParsedDocument ParseDocument(string markdown)
     {
         string? title = null;
         var headings = new List<DocHeading>();
         var links = new List<ParsedLink>();
-        var inFence = false;
+        var fence = new MarkdownFence();
 
         foreach (var raw in markdown.Split('\n'))
         {
             var line = raw.TrimEnd('\r');
 
             // Блоки кода пропускаем целиком: «# комментарий» в bash-примере — не заголовок,
-            // а markdown-ссылка в примере кода — не связь между документами
-            if (FenceRegex().IsMatch(line)) { inFence = !inFence; continue; }
-            if (inFence) continue;
+            // а markdown-ссылка в примере кода — не связь между документами.
+            // Правило забора одно на вертикаль — MarkdownFence (CommonMark), тот же, что у
+            // сканера карты: наивное «переключить флаг на любом маркере» закрывало внешний
+            // забор вложенным примером, а наш корпус — документация ПРО документацию, где
+            // вложенный пример норма
+            if (fence.Consume(line) || fence.InFence) continue;
 
             var h = HeadingRegex().Match(line);
             if (h.Success)
@@ -2150,11 +2152,41 @@ public sealed partial class DocsIndexService(IProjectFileGateway? files = null)
         return (target[..i], anchor.Length == 0 ? null : anchor);
     }
 
+    // Схема URI перед двоеточием. Длина ИМЕНИ схемы — от двух символов, и это намеренно:
+    // односимвольная «схема» — это диск Windows («C:\Users\…»), абсолютный путь, а не
+    // внешняя ссылка. Схем в доках больше, чем http/mailto: «javascript:» и «data:…»
+    // стоят примерами в ADR-005 про SSRF, и без общего правила они попали бы в мёртвые файлы.
+    [GeneratedRegex(@"^[A-Za-z][A-Za-z0-9+.\-]+:")]
+    internal static partial Regex SchemeRegex();
+
     internal static bool IsExternal(string target) =>
-        target.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
-        target.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
-        target.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase) ||
+        SchemeRegex().IsMatch(target) ||
         target.StartsWith("//", StringComparison.Ordinal);
+
+    // Протухшие Repo-ссылки: цели нет на диске. Считается при ОТДАЧЕ документа, а не в
+    // кешируемом корпусе — иначе флаг живёт до следующей правки самого .md, хотя зависит
+    // от файлов кода. Ссылок у документа единицы, проверка существования дешёвая.
+    private static IReadOnlyList<DocLink> MarkMissing(string root, IReadOnlyList<DocLink> links) =>
+        [.. links.Select(l => l.Kind == DocLinkKind.Repo && !RepoTargetExists(root, l.Target)
+            ? l with { Missing = true }
+            : l)];
+
+    // Есть ли цель Repo-ссылки на диске. Через SafePath.Join: цель приходит из текста
+    // документа, а «../../etc» обязан отказать, а не проверить чужой файл.
+    // Папка тоже считается целью — ссылки на каталоги в доках обычны («см. deploy/systemd/»).
+    internal static bool RepoTargetExists(string root, string relativeTarget)
+    {
+        try
+        {
+            var full = SafePath.Join(root, relativeTarget);
+            return File.Exists(full) || Directory.Exists(full);
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or ArgumentException
+            or NotSupportedException or PathTooLongException or IOException)
+        {
+            return false;
+        }
+    }
 
     // Путь ссылки относительно документа-источника → путь от корня проекта.
     // null — ссылка уводит выше корня: такие в корпус не берём.

@@ -10,7 +10,7 @@ namespace ClaudeHomeServer.Controllers;
 [Authorize]
 [Route("api/usage")]
 public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscriptionPool,
-    LlmProviderRegistry providers, LocalActionRouter localRouter, ILocalLlmClient ollama,
+    LlmProviderRegistry providers, LocalActionRouter localRouter,
     SubscriptionOAuthUsageService oauthUsage,
     LocalActionOverridesStore localActions, SpecialtySettingsStore specialty) : ControllerBase
 {
@@ -106,13 +106,14 @@ public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscri
     // Блок локальной модели: настройки Ollama + маршрут каждого фонового действия (локаль/claude)
     private OllamaUsageInfo BuildOllamaInfo()
     {
+        var enabled = localRouter.OllamaEnabled;
         var globalPresets = specialty.Snapshot.Global.Presets;
         var actions = LocalActionCatalog.All
             .Select(a =>
             {
                 var route = localRouter.Resolve(a.Key);
                 return new OllamaActionInfo(a.Key, a.Title, a.Group,
-                    RoutedToOllama: route.Kind == RouteKind.Local && ollama.Enabled,
+                    RoutedToOllama: route.Kind == RouteKind.Local && enabled,
                     Source: route.Source.ToString().ToLowerInvariant(),
                     Route: route.Kind switch
                     {
@@ -128,7 +129,7 @@ public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscri
                     Preset: LocalActionsAdminController.DescribePreset(localActions.TryGet(a.Key), globalPresets));
             })
             .ToList();
-        return new OllamaUsageInfo(ollama.Enabled, ollama.Enabled ? ollama.TextModel : null,
-            ollama.Enabled ? ollama.BaseUrl : null, actions, Provider: ollama.ProviderKey);
+        return new OllamaUsageInfo(enabled, enabled ? localRouter.LocalModel : null,
+            enabled ? localRouter.LocalBaseUrl : null, actions, Provider: localRouter.LocalProviderKey);
     }
 }

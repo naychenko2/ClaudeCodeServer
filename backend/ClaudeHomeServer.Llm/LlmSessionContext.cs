@@ -157,6 +157,24 @@ public sealed record WebSearchMcpContext(string ApiUrl, Func<string> TokenFactor
 // выключенная подсистема, флаг владельца architecture выключен или Off-привязка персоны.
 // stdio-ветки отката НЕТ (сервер рождён в Kestrel) — идиом тот же, что у watch/websearch.
 public sealed record ArchitectureMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp);
+// Контекст MCP-сервера Higgsfield (инстансное OAuth-подключение, прокси к mcp.higgsfield.ai).
+// null — инстанс не подключён (EnsureFresh() = null) или персона ReadOnly.
+// TokenFactory/UseHttp — тот же идиом, что у websearch: сервисный JWT владельца Kestrel.
+public sealed record HiggsfieldMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp);
+
+// Контекст MCP-сервера редактора картинок (ADR-019 §4): тулсет живёт в модуле, сессия едет
+// хвостом URL (/mcp/image-editor/{sessionId}). null — чат вне проекта, флаг image-editor у
+// владельца выключен или модуль не загружен (тулсета нет в реестре — иначе «fetch failed» у
+// всего хода). Всё это — свойства сессии, владельца и процесса, не хода. stdio-ветки нет.
+// AutoAllowTools — инструменты сервера, которые DecidePermission пропускает без карточки.
+public sealed record ImageEditorMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp,
+    IReadOnlyList<string>? AutoAllowTools = null);
+// Контекст MCP-сервера локальной генерации (local-media: ComfyUI на своей GPU). null — чат без
+// владельца или вне проекта, тумблер LocalMedia:Enabled выключен, подсистема images выключена,
+// проект локальный или персона ReadOnly (сервер пишет файлы в проект). Всё это — свойства
+// инстанса, сессии и персоны, а не хода: инвариант стабильности состава не задет.
+// TokenFactory/UseHttp — тот же идиом, что у higgsfield; stdio-ветки отката нет.
+public sealed record LocalMediaMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp);
 
 // Контекст MCP-сервера графа кода (codegraph_find/neighbors/hubs): адрес API, сервисный
 // токен владельца и проект, чей граф доступен инструментами. ProjectId обязателен —
@@ -355,6 +373,15 @@ public sealed record LlmSessionContext(
     // MCP-сервер архитектуры (arch_*): null — чат вне проекта, подсистема/флаг выключены
     // или Off-привязка персоны. Все оси — свойства владельца/сессии (инвариант ADR-012).
     ArchitectureMcpContext? ArchitectureMcp = null,
+    // MCP-сервер Higgsfield (инстансное OAuth-подключение): null — не подключён или RO-персона.
+    // Наличие контекста — свойство инстанса (EnsureFresh) и персоны (ReadOnly) — инвариант
+    // стабильности состава не нарушается: оба стабильны в рамках сессии.
+    HiggsfieldMcpContext? HiggsfieldMcp = null,
+    // MCP-сервер редактора картинок: только в чате картинки (ADR-018 §2)
+    ImageEditorMcpContext? ImageEditorMcp = null,
+    // MCP-сервер локальной генерации (ComfyUI): null — выключен или недоступен чату
+    // (см. LocalMediaMcpContext). Свойство инстанса, сессии и персоны, не хода.
+    LocalMediaMcpContext? LocalMediaMcp = null,
     // Корень сервера (AppContext.BaseDirectory, не IHostEnvironment.ContentRootPath —
     // при `dotnet run` это bin/Debug/net10.0, у IHostEnvironment — папка проекта) — для
     // BareMode: SystemPromptFile поставляется с продуктом и живёт в репозитории/публикации
@@ -366,4 +393,29 @@ public sealed record LlmSessionContext(
     // CodeGraphContributor использует MainRootPath как fallback для slice графа кода
     // (ADR-003), пока граф worktree-ветки ещё не построен. null — чат вне проекта; равен
     // RootPath — обычный чат без worktree, fallback сводится к no-op.
-    string? MainRootPath = null);
+    string? MainRootPath = null,
+    // Признак «на локальном движке идёт ход»: ход на провайдере с IsLocal помечает его на
+    // своё время, фоновые one-shot действия по нему уходят мимо локали
+    // (LocalActionRouter.LocalBlockedByTurn). null — процесс-глобальный
+    // LocalEngineBusyTracker.Instance, тот же объект, что в DI; своим экземпляром
+    // пользуются только тесты, чтобы не делить признак между параллельными прогонами.
+    LocalEngineBusyTracker? LocalEngineBusy = null,
+    // Группа «нужен контент проекта на сервере» (ADR-016 §4: Dify, CodeGraph, досье) у
+    // проекта чата работает. false — локальный проект: ход не цепляет датасет по рабочей
+    // папке и не зовёт серверные контрибьюторы контента, даже если строка пути совпала
+    // с серверной папкой. Считает SessionManager по ProjectCapabilities.
+    bool ServerContent = true,
+    // Транскрипт CLI чата лежит на диске сервера (ADR-016). false — локальный проект:
+    // транскрипт живёт только на устройстве, поэтому ход не ищет его у себя (хвост
+    // task-notification, живой поток субагентов, ватчер workflow, вес истории в снимке) и
+    // фолбэк не переносит его между профилями — провайдера выбирает шлюз, профиль один.
+    // Считает SessionManager по ProjectCapabilities.
+    bool TranscriptOnServer = true,
+    // Руки локального проекта (ADR-016 §7) — свойство ЧАТА, а не хода: матрица
+    // ProjectCapabilities.HandsRefusal пропускает (локальный проект, устройство
+    // с hands, тумблер проекта). Провайдер хода роли не играет (решение владельца 2026-09-27):
+    // ClaudeSession ставит маркер рук и режим прав без bypassPermissions в одном месте и по
+    // одному условию, а снимки окон отдаёт только провайдеру со зрением (vision=false — мост
+    // без screenshot_control).
+    // Смена признака у начатого чата — осознанный перезапуск CLI, как смена провайдера.
+    bool HandsEnabled = false);

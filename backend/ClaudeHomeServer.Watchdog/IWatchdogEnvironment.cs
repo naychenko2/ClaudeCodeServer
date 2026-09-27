@@ -21,4 +21,11 @@ public interface IWatchdogEnvironment
     /// null — запуск невозможен (проект удалён / дом не настроен).
     /// </summary>
     string? ResolveWorkDir(WatchdogRecord w);
+
+    /// <summary>
+    /// Устройство локального проекта сторожа не готово (ADR-016, план §5): причина для
+    /// отметки пропуска; null — опрашивать можно (серверный проект, чат вне проектов,
+    /// готовое устройство). Живой резолв на каждый опрос.
+    /// </summary>
+    string? DeviceWaitReason(WatchdogRecord w) => null;
 }

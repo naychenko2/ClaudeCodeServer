@@ -27,6 +27,8 @@ namespace ClaudeHomeServer.Services.Architecture;
 /// </summary>
 [ApiController]
 [Authorize]
+// Модель лежит в папке проекта, сборка идёт по графу кода — у локального проекта их на сервере нет
+[ProjectCapability(ProjectCapabilityArea.ServerContent)]
 [Route("api/projects/{projectId}/architecture")]
 public class ArchitectureController(
     IProjectManager projects,

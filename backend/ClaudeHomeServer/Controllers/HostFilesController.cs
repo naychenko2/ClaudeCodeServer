@@ -5,6 +5,7 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Execution;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using ClaudeHomeServer.Services.Files;
 
 namespace ClaudeHomeServer.Controllers;
 
@@ -43,7 +44,7 @@ public class HostFilesController(FileService files, UserStore users, ILauncherFa
             if (Directory.Exists(path)) return NotFound();
             if (!System.IO.File.Exists(path)) return NotFound();
 
-            // FileService.SafeJoin(dir, name) собирает обратно тот же абсолютный путь —
+            // SafePath.Join(dir, name) собирает обратно тот же абсолютный путь —
             // так переиспользуем детект бинарности/изображения без дублирования логики
             var dir = Path.GetDirectoryName(path)!;
             var name = Path.GetFileName(path);

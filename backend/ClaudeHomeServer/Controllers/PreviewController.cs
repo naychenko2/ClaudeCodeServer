@@ -4,34 +4,34 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.ProjectServices;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Controllers;
 
+/// <summary>
+/// Раздел «Сервисы проекта» на сервере. Сами маршруты живут в вертикали
+/// (<see cref="ProjectServicesApi"/>): их же обслуживает агент устройства для локального
+/// проекта (ADR-016, задача 4.3). Здесь — вход: владелец проекта и отказ G1 атрибутом.
+/// </summary>
+[ProjectCapability(ProjectCapabilityArea.FileBound)]
 [ApiController]
 [Authorize]
 public class PreviewController : ControllerBase
 {
     private readonly ProjectManager _projects;
-    private readonly DevServerService _devServer;
-    private readonly ProjectServiceDiscovery _discovery;
-    private readonly LaunchConfigService _launch;
+    private readonly ProjectServicesApi _api;
     private readonly ExternalPreviewRouter _external;
-    private readonly DevServerPortMemory _portMemory;
     private readonly ExternalPreviewStore _links;
     private readonly JwtService _jwt;
     private readonly ILogger<PreviewController> _log;
 
-    public PreviewController(ProjectManager projects, DevServerService devServer,
-        ProjectServiceDiscovery discovery, LaunchConfigService launch,
+    public PreviewController(ProjectManager projects, ProjectServicesApi api,
         ExternalPreviewRouter external, ExternalPreviewStore links, JwtService jwt,
-        DevServerPortMemory portMemory, ILogger<PreviewController> log)
+        ILogger<PreviewController> log)
     {
         _projects = projects;
-        _devServer = devServer;
-        _discovery = discovery;
-        _launch = launch;
+        _api = api;
         _external = external;
-        _portMemory = portMemory;
         _links = links;
         _jwt = jwt;
         _log = log;
@@ -45,336 +45,52 @@ public class PreviewController : ControllerBase
         return project?.OwnerId == UserId ? project : null;
     }
 
+    private IActionResult Result(ProjectServicesResult r) => StatusCode(r.Status, r.Body);
+
     /// <summary>Список запускаемых сервисов проекта (инференс из манифестов + сохранённые) с runtime-статусом.</summary>
     [HttpGet("/api/projects/{projectId}/services")]
-    public async Task<IActionResult> Services(string projectId)
-    {
-        var project = OwnedProject(projectId);
-        if (project is null) return Forbid();
+    public async Task<IActionResult> Services(string projectId) =>
+        OwnedProject(projectId) is { } project ? Result(await _api.ServicesAsync(project, UserId)) : Forbid();
 
-        var discovered = await _discovery.DiscoverAsync(project);
-        var running = _devServer.GetRunning(projectId, UserId).ToDictionary(r => r.ServiceId);
-        var activeId = _devServer.GetActiveServiceId(projectId, UserId)
-            ?? _devServer.GetActiveExternal(projectId)?.ServiceId;
-
-        // Сервисы с известным портом, которых мы не запускали, пробуем на слух: порт
-        // отвечает — значит сервис поднят снаружи (Rider, терминал, второй инстанс).
-        // Скана слушающих портов машины при этом не делаем: щупаем только свои порты.
-        var external = await ProbeExternalAsync(projectId, discovered, running);
-
-        var services = new List<ServiceDto>();
-        var covered = new HashSet<string>();
-        var byId = discovered.ToDictionary(s => s.Id);
-        foreach (var s in discovered)
-        {
-            covered.Add(s.Id);
-            if (s.Members is { Length: > 0 })
-            {
-                services.Add(GroupDto(s, byId, running, external));
-                continue;
-            }
-            running.TryGetValue(s.Id, out var run);
-            var isExternal = run is null && external.ContainsKey(s.Id);
-            services.Add(new ServiceDto(s.Id, s.Name, s.Source, s.Command, s.Args, s.Cwd,
-                s.SuggestedPort, s.AutoPort, s.Saved,
-                run?.Status ?? (isExternal ? "external" : "idle"),
-                run?.Port ?? (isExternal ? external[s.Id] : null),
-                run?.Error, s.Members));
-        }
-        // Запущенные сервисы, которых нет в инференсе (напр. кастомная разовая команда).
-        foreach (var run in running.Values)
-        {
-            if (covered.Contains(run.ServiceId)) continue;
-            services.Add(new ServiceDto(run.ServiceId, run.Name, "custom", "", [], null,
-                null, false, false, run.Status, run.Port, run.Error));
-        }
-
-        return Ok(new { services, activeServiceId = activeId });
-    }
-
-    /// <summary>
-    /// Статус группы — производная от участников: запущена, только когда живы все;
-    /// «starting», пока поднимается хоть один; ошибка первого упавшего видна целиком.
-    /// Порт берём у первого участника, которому есть что показать в превью.
-    /// </summary>
-    private static ServiceDto GroupDto(ProjectServiceInfo group, Dictionary<string, ProjectServiceInfo> byId,
-        Dictionary<string, RunningServiceInfo> running, Dictionary<string, int> external)
-    {
-        var members = group.Members!.Where(byId.ContainsKey).ToArray();
-        var states = members.Select(id =>
-        {
-            running.TryGetValue(id, out var run);
-            return run?.Status ?? (external.ContainsKey(id) ? "external" : "idle");
-        }).ToList();
-
-        var status = states.Count == 0 ? "idle"
-            : states.Any(s => s == "error") ? "error"
-            : states.Any(s => s == "starting") ? "starting"
-            // Все участники подняты вне продукта — группе тоже нечего запускать и останавливать,
-            // а превью ей назначается внешним эндпоинтом: своего процесса в реестре у неё нет,
-            // и обычный active вернул бы прокси пустоту («Dev-сервер не запущен»)
-            : states.All(s => s == "external") ? "external"
-            : states.All(s => s is "started" or "external") ? "started"
-            // Часть поднята, часть нет — это не «запускается»: без своего статуса
-            // группа выглядела бы вечно стартующей
-            : states.Any(s => s is "started" or "external") ? "partial"
-            : "idle";
-
-        // Тем же правилом, что и резолв для превью: последний участник — это агрегатор
-        var port = members
-            .Reverse()
-            .Select(id => running.TryGetValue(id, out var r) ? r.Port : (external.TryGetValue(id, out var ep) ? ep : (int?)null))
-            .FirstOrDefault(p => p is > 0);
-        var error = members
-            .Select(id => running.TryGetValue(id, out var r) ? r.Error : null)
-            .FirstOrDefault(e => !string.IsNullOrEmpty(e));
-
-        return new ServiceDto(group.Id, group.Name, group.Source, group.Command, group.Args, group.Cwd,
-            group.SuggestedPort, group.AutoPort, group.Saved, status, port, error, members);
-    }
-
-    /// <summary>
-    /// Id сервисов, чей порт слушается кем-то со стороны. Пробуем параллельно и только
-    /// те порты, которые вычислил discovery: чужие порты машины нас не касаются.
-    /// </summary>
-    private async Task<Dictionary<string, int>> ProbeExternalAsync(
-        string projectId, List<ProjectServiceInfo> discovered, Dictionary<string, RunningServiceInfo> running)
-    {
-        // Порт берём из конфигурации, а если её там нет — из памяти прошлых запусков.
-        // Второй источник нужен ровно после перезапуска продукта: реестр процессов пуст,
-        // сами дев-серверы живы, и без него панель предложила бы запустить сервис поверх
-        // собственного вчерашнего процесса (см. DevServerPortMemory).
-        var candidates = discovered
-            .Where(s => !running.ContainsKey(s.Id))
-            .Select(s => (s.Id, Port: s.SuggestedPort is > 0 ? s.SuggestedPort : _portMemory.Get(projectId, s.Id)))
-            .Where(c => c.Port is > 0)
-            .ToList();
-        if (candidates.Count == 0) return [];
-
-        var results = await Task.WhenAll(candidates.Select(async c =>
-            (c.Id, c.Port, Listening: await LoopbackResolver.IsListeningAsync(c.Port!.Value))));
-        return results.Where(r => r.Listening).ToDictionary(r => r.Id, r => r.Port!.Value);
-    }
-
-    /// <summary>
-    /// Показать в превью сервис, поднятый вне продукта.
-    ///
-    /// Порт НЕ принимается от клиента: он берётся из конфигурации сервиса этого проекта.
-    /// Иначе эндпоинт превратился бы в туннель на любой localhost-порт хоста (соседний
-    /// инстанс продукта, Dify, чужая админка) — под авторизацией владельца проекта.
-    /// </summary>
+    /// <summary>Показать в превью сервис, поднятый вне продукта (порт — из конфигурации, не от клиента).</summary>
     [HttpPost("/api/projects/{projectId}/preview/active-external")]
-    public async Task<IActionResult> SetActiveExternal(string projectId, [FromBody] PreviewActiveRequest req)
-    {
-        var project = OwnedProject(projectId);
-        if (project is null) return Forbid();
-        if (string.IsNullOrWhiteSpace(req.ServiceId))
-            return BadRequest(new { error = "serviceId не указан" });
-
-        var known = await _discovery.DiscoverAsync(project);
-        var svc = known.FirstOrDefault(s => s.Id == req.ServiceId);
-        if (svc is null) return NotFound(new { error = "Сервис не найден" });
-
-        // Правило выбора порта (в том числе у составной конфигурации) — одно на весь продукт
-        var port = await _discovery.ResolvePortAsync(project, svc.Id);
-        if (port is not > 0)
-            return BadRequest(new { error = "У сервиса не задан порт — непонятно, где он слушает" });
-
-        if (!await LoopbackResolver.IsListeningAsync(port.Value))
-            return BadRequest(new { error = $"На порту {port} никто не слушает" });
-
-        _devServer.SetActiveExternal(projectId, svc.Id, port.Value);
-        _log.LogInformation("Проект {ProjectId}: превью указывает на внешний сервис {ServiceId} (:{Port})",
-            projectId, svc.Id, port);
-        return Ok(new { activeServiceId = svc.Id, port });
-    }
+    public async Task<IActionResult> SetActiveExternal(string projectId, [FromBody] PreviewActiveRequest req) =>
+        OwnedProject(projectId) is { } project ? Result(await _api.SetActiveExternalAsync(project, req)) : Forbid();
 
     [HttpPost("/api/projects/{projectId}/preview/start")]
-    public async Task<IActionResult> Start(string projectId, [FromBody] PreviewStartRequest req)
-    {
-        var project = OwnedProject(projectId);
-        if (project is null) return Forbid();
-
-        // Составной запуск: команды у группы нет, поднимаем каждого участника его
-        // собственной конфигурацией. Порт возвращаем первого, кому есть что показать.
-        if (!string.IsNullOrWhiteSpace(req.ServiceId))
-        {
-            var known = await _discovery.DiscoverAsync(project);
-            var group = known.FirstOrDefault(s => s.Id == req.ServiceId && s.Members is { Length: > 0 });
-            if (group != null) return await StartGroupAsync(projectId, group, known);
-        }
-
-        if (string.IsNullOrWhiteSpace(req.Command))
-            return BadRequest(new { error = "Команда не указана" });
-
-        var serviceId = string.IsNullOrWhiteSpace(req.ServiceId)
-            ? "custom-" + Guid.NewGuid().ToString("N")[..8]
-            : req.ServiceId!;
-        var name = string.IsNullOrWhiteSpace(req.Name) ? req.Command : req.Name!;
-
-        var result = await _devServer.StartAsync(projectId, UserId, serviceId, name,
-            req.Command, req.Args ?? [], req.Cwd, req.Port, req.AutoPort, req.Env);
-        return Ok(new { status = result.Status, port = result.Port, error = result.Error, serviceId });
-    }
-
-    private async Task<IActionResult> StartGroupAsync(string projectId, ProjectServiceInfo group,
-        List<ProjectServiceInfo> known)
-    {
-        var byId = known.ToDictionary(s => s.Id);
-        var results = new List<(string Id, DevServerStartResult Result)>();
-
-        // Последовательно, а не параллельно: у составных конфигураций порядок осмыслен
-        // (в Rider следующий шаг ждёт порта предыдущего), да и лог старта читается ровнее
-        foreach (var id in group.Members!)
-        {
-            if (!byId.TryGetValue(id, out var member)) continue;
-            // Участник уже поднят снаружи — запускать нечего, иначе упрёмся в занятый порт
-            if (member.SuggestedPort is > 0 &&
-                _devServer.GetRunning(projectId, UserId).All(r => r.ServiceId != id) &&
-                await LoopbackResolver.IsListeningAsync(member.SuggestedPort.Value))
-            {
-                _devServer.SetActiveExternal(projectId, id, member.SuggestedPort.Value);
-                continue;
-            }
-            results.Add((id, await _devServer.StartAsync(projectId, UserId, id, member.Name,
-                member.Command, member.Args, member.Cwd, member.SuggestedPort, member.AutoPort, member.Env)));
-        }
-
-        var failed = results.FirstOrDefault(r => !r.Result.Success);
-        var port = results.Select(r => r.Result.Port).FirstOrDefault(p => p is > 0);
-        return Ok(new
-        {
-            status = failed.Id != null ? "error" : results.Count == 0 ? "idle" : "started",
-            port,
-            error = failed.Result?.Error,
-            serviceId = group.Id,
-        });
-    }
+    public async Task<IActionResult> Start(string projectId, [FromBody] PreviewStartRequest req) =>
+        OwnedProject(projectId) is { } project ? Result(await _api.StartAsync(project, UserId, req)) : Forbid();
 
     [HttpPost("/api/projects/{projectId}/preview/stop")]
-    public async Task<IActionResult> Stop(string projectId, [FromBody] PreviewStopRequest? req)
-    {
-        var project = OwnedProject(projectId);
-        if (project is null) return Forbid();
-        if (string.IsNullOrWhiteSpace(req?.ServiceId))
-            return BadRequest(new { error = "serviceId не указан" });
+    public async Task<IActionResult> Stop(string projectId, [FromBody] PreviewStopRequest? req) =>
+        OwnedProject(projectId) is { } project ? Result(await _api.StopAsync(project, UserId, req)) : Forbid();
 
-        // Группу останавливаем целиком: её участники — обычные сервисы реестра
-        var group = (await _discovery.DiscoverAsync(project))
-            .FirstOrDefault(s => s.Id == req.ServiceId && s.Members is { Length: > 0 });
-        foreach (var id in group?.Members ?? [req.ServiceId!])
-            await _devServer.StopAsync(projectId, UserId, id);
-
-        return Ok(new { status = "stopped" });
-    }
-
-    /// <summary>
-    /// Остановить сервис, поднятый ВНЕ продукта (или переживший его перезапуск).
-    ///
-    /// Штатный «Стоп» такому не годится: своего объекта процесса у нас нет. Поэтому ищем
-    /// владельца порта и гасим его — но с разбором, чей он:
-    ///
-    /// свой осиротевший (PID совпал с запомненным при запуске) гасится сразу, посторонний —
-    /// только с подтверждением человека. Разница существенная: на порту может оказаться не
-    /// дев-сервер, а docker-proxy или чужая служба, и убивать такое молча нельзя.
-    /// </summary>
+    /// <summary>Остановить сервис, поднятый ВНЕ продукта: свой осиротевший — сразу, чужой — с подтверждением.</summary>
     [HttpPost("/api/projects/{projectId}/preview/stop-external")]
-    public async Task<IActionResult> StopExternal(string projectId, [FromBody] StopExternalRequest req)
-    {
-        var project = OwnedProject(projectId);
-        if (project is null) return Forbid();
-        if (string.IsNullOrWhiteSpace(req.ServiceId))
-            return BadRequest(new { error = "serviceId не указан" });
-
-        var port = await _external.ResolveServicePortAsync(project, req.ServiceId, UserId);
-        if (port is not > 0)
-            return BadRequest(new { error = "Не удалось определить порт сервиса" });
-
-        var owner = PortOwnerLookup.Find(port.Value);
-        if (owner is null)
-            return BadRequest(new { error = $"Не удалось определить процесс на порту {port}" });
-
-        // Самоубийство продукта выглядело бы как «кнопка гасит CCS» — такого не делаем
-        if (owner.Pid == Environment.ProcessId)
-            return BadRequest(new { error = "Этот порт слушает сам ClaudeCodeServer" });
-
-        var remembered = _portMemory.GetRun(projectId, req.ServiceId);
-        // Свой — только когда СОВПАЛИ и процесс, и порт: номера процессов система выдаёт
-        // повторно, и одного PID мало, чтобы считать процесс нашим
-        var isOurs = remembered is not null && remembered.Pid == owner.Pid && remembered.Port == port.Value;
-
-        if (!isOurs && !req.Confirm)
-        {
-            return Conflict(new
-            {
-                needsConfirm = true,
-                pid = owner.Pid,
-                processName = owner.ProcessName,
-                port = port.Value,
-                error = "Порт держит процесс, который продукт не запускал",
-            });
-        }
-
-        try
-        {
-            var process = System.Diagnostics.Process.GetProcessById(owner.Pid);
-            // Дерево целиком: dev-серверы почти всегда поднимают детей (node → vite → esbuild),
-            // и смерть одного лишь родителя оставила бы порт занятым
-            process.Kill(entireProcessTree: true);
-            await process.WaitForExitAsync(HttpContext.RequestAborted);
-        }
-        catch (Exception ex)
-        {
-            _log.LogWarning(ex, "Не удалось остановить процесс {Pid} на порту {Port}", owner.Pid, port);
-            return StatusCode(500, new { error = $"Не удалось остановить процесс: {ex.Message}" });
-        }
-
-        _portMemory.Forget(projectId, req.ServiceId);
-        _log.LogInformation("Проект {ProjectId}: остановлен внешний процесс {Pid} ({Name}) на порту {Port}",
-            projectId, owner.Pid, owner.ProcessName ?? "?", port);
-        return Ok(new { status = "stopped", pid = owner.Pid });
-    }
+    public async Task<IActionResult> StopExternal(string projectId, [FromBody] StopExternalRequest req) =>
+        OwnedProject(projectId) is { } project
+            ? Result(await _api.StopExternalAsync(project, UserId, req, ct: HttpContext.RequestAborted))
+            : Forbid();
 
     [HttpGet("/api/projects/{projectId}/preview/status")]
-    public IActionResult Status(string projectId)
-    {
-        if (OwnedProject(projectId) is null) return Forbid();
-        var running = _devServer.GetRunning(projectId, UserId);
-        var activeId = _devServer.GetActiveServiceId(projectId, UserId);
-        return Ok(new { running, activeServiceId = activeId });
-    }
+    public IActionResult Status(string projectId) =>
+        OwnedProject(projectId) is { } project ? Result(_api.Status(project, UserId)) : Forbid();
 
     /// <summary>Назначить активный для превью сервис (на его порт указывает iframe).</summary>
     [HttpPost("/api/projects/{projectId}/preview/active")]
-    public IActionResult SetActive(string projectId, [FromBody] PreviewActiveRequest req)
-    {
-        if (OwnedProject(projectId) is null) return Forbid();
-        if (string.IsNullOrWhiteSpace(req.ServiceId))
-            return BadRequest(new { error = "serviceId не указан" });
-        _devServer.SetActivePreview(projectId, req.ServiceId);
-        return Ok(new { activeServiceId = req.ServiceId });
-    }
+    public IActionResult SetActive(string projectId, [FromBody] PreviewActiveRequest req) =>
+        OwnedProject(projectId) is { } project ? Result(_api.SetActive(project, req)) : Forbid();
 
     /// <summary>Прочитать .claude/launch.json проекта.</summary>
     [HttpGet("/api/projects/{projectId}/launch-config")]
-    public async Task<IActionResult> GetLaunchConfig(string projectId)
-    {
-        var project = OwnedProject(projectId);
-        if (project is null) return Forbid();
-        var configs = await _launch.ReadAsync(project);
-        return Ok(new { configurations = configs });
-    }
+    public async Task<IActionResult> GetLaunchConfig(string projectId) =>
+        OwnedProject(projectId) is { } project ? Result(await _api.GetLaunchConfigAsync(project)) : Forbid();
 
     /// <summary>Записать .claude/launch.json проекта.</summary>
     [HttpPut("/api/projects/{projectId}/launch-config")]
-    public async Task<IActionResult> PutLaunchConfig(string projectId, [FromBody] LaunchConfigPutRequest req)
-    {
-        var project = OwnedProject(projectId);
-        if (project is null) return Forbid();
-        await _launch.WriteAsync(project, req.Configurations ?? []);
-        _discovery.Invalidate(projectId);
-        return Ok(new { configurations = req.Configurations ?? [] });
-    }
+    public async Task<IActionResult> PutLaunchConfig(string projectId, [FromBody] LaunchConfigPutRequest req) =>
+        OwnedProject(projectId) is { } project ? Result(await _api.PutLaunchConfigAsync(project, req)) : Forbid();
+
     // ── Внешний доступ по поддомену (см. ExternalPreviewOptions) ──────────────────
 
     /// <summary>
@@ -468,21 +184,3 @@ public class PreviewController : ControllerBase
         return Ok(new { revoked = count });
     }
 }
-
-public record ServiceDto(
-    string Id, string Name, string Source, string Command, string[] Args, string? Cwd,
-    int? SuggestedPort, bool AutoPort, bool Saved,
-    string Status, int? RunningPort, string? Error,
-    // Составной запуск: id входящих сервисов (у обычного сервиса — null)
-    string[]? Members = null);
-
-public record PreviewStartRequest(
-    string Command, string[]? Args = null, int? Port = null,
-    string? ServiceId = null, string? Name = null, string? Cwd = null,
-    bool AutoPort = false, Dictionary<string, string>? Env = null);
-
-public record PreviewStopRequest(string? ServiceId);
-/// <summary>Остановка процесса, поднятого вне продукта. Confirm — согласие гасить чужой.</summary>
-public record StopExternalRequest(string? ServiceId, bool Confirm = false);
-public record PreviewActiveRequest(string ServiceId);
-public record LaunchConfigPutRequest(List<LaunchConfigEntry>? Configurations);

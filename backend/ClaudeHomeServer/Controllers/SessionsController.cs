@@ -5,9 +5,11 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Controllers;
 
+[ProjectCapability(ProjectCapabilityArea.Platform)]
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/sessions")]
@@ -25,6 +27,8 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
     public IActionResult GetAll(string projectId)
     {
         if (!OwnsProject(projectId)) return NotFound();
+        // Вычисляемые parentSessionId/taskDone дописывает конвертер Session на границе
+        // сериализации (SessionJsonConverter) — здесь ничего подставлять не нужно
         return Ok(sessions.GetByProject(projectId));
     }
 

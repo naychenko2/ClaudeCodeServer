@@ -1,4 +1,5 @@
 using System.Net.Http.Headers;
+using System.Threading;
 using System.Text;
 using System.Text.Json;
 
@@ -26,6 +27,7 @@ public sealed class LlamaServerClient : ILocalLlmClient
     private readonly IHttpClientFactory _http;
     private readonly ILogger<LlamaServerClient> _logger;
     private readonly Spend.ISpendCollector? _spend;
+    private int _spendNullWarned;
     private readonly LocalLlmOptions _options;
 
     public string BaseUrl => _options.BaseUrl;
@@ -558,7 +560,12 @@ public sealed class LlamaServerClient : ILocalLlmClient
     // его: prompt_tokens/completion_tokens живут внутри, а не на верхнем уровне.
     private void RecordSpend(string model, JsonElement json, string? ownerId, string? label)
     {
-        if (_spend is null) return;
+        if (_spend is null)
+        {
+            if (Interlocked.Exchange(ref _spendNullWarned, 1) == 0)
+                _logger.LogWarning("spend: коллектор недоступен, запись расхода llama-server пропущена");
+            return;
+        }
         try
         {
             var usage = json.TryGetProperty("usage", out var u) && u.ValueKind == JsonValueKind.Object
@@ -602,22 +609,23 @@ public sealed class LlamaServerClient : ILocalLlmClient
         return JsonDocument.Parse(ms.ToArray()).RootElement.Clone();
     }
 
-    // Прогрев: холостой вызов с max_tokens:1, чтобы модель загрузилась в память.
-    // Best-effort — ошибки глушим.
-    public async Task WarmUpAsync(CancellationToken ct = default)
+    // Прогрев: холостой вызов с max_tokens:1, чтобы заданная модель загрузилась в память.
+    // null/пусто → дефолтный Model. Best-effort — ошибки глушим.
+    public async Task WarmUpAsync(string? model, CancellationToken ct = default)
     {
         if (!Enabled) return;
+        var target = string.IsNullOrWhiteSpace(model) ? Model : model;
         try
         {
             var client = _http.CreateClient(HttpClientName);
             client.Timeout = TimeSpan.FromSeconds(90);
             await client.PostAsJsonAsync($"{BaseUrl}/v1/chat/completions", new
             {
-                model = Model,
+                model = target,
                 messages = new[] { new { role = "user", content = "ok" } },
                 max_tokens = 1,
             }, ct);
-            _logger.LogInformation("llama-server прогрет: модель {Model}", Model);
+            _logger.LogInformation("llama-server прогрет: модель {Model}", target);
         }
         catch (Exception ex)
         {

@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Services.Knowledge;
@@ -59,8 +60,11 @@ public sealed class UserKnowledgeCascade
         //    проекта без участника синка (после волны 5 — резервная страховка).
         foreach (var p in _projects.GetByOwner(userId))
         {
-            if (_projects.GetByRootPath(p.RootPath).Any(x => x.OwnerId != userId)) continue;
-            _wkStore.Delete(p.RootPath);
+            // У локального проекта записи знаний нет: его путь — строка чужой машины и может
+            // совпасть с серверной папкой другого проекта (ADR-016 §1)
+            if (ProjectCapabilities.KnowledgeRoot(p) is not { } root) continue;
+            if (_projects.GetByRootPath(root).Any(x => x.OwnerId != userId)) continue;
+            _wkStore.Delete(root);
         }
 
         // 3. Dify: все датасеты с префиксом «{username}:» — включая осиротевшие со стухшими

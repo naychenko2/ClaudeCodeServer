@@ -1,8 +1,10 @@
-import { useEffect, useRef, useCallback } from 'react'
+import { useEffect, useRef, useCallback, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
-import { C } from '../../lib/design'
+import { AlertTriangle } from 'lucide-react'
+import { C, SP } from '../../lib/design'
+import { Notice } from '../ui'
 import { XTERM_BASE_OPTIONS } from '../../lib/xtermTheme'
 import { sendTerminalInput, resizeTerminal, onTerminalMessage, connectTerminal } from '../../lib/terminalSignalr'
 
@@ -23,6 +25,8 @@ export function TerminalView({ terminalId, onActivity, visible = true }: Props) 
   // onActivity — через ref: смена колбэка не должна пересоздавать xterm (иначе экран
   // чернеет и теряется ввод/вывод). xterm живёт ровно на один terminalId.
   const onActivityRef = useRef(onActivity)
+  // Терминал без псевдоконсоли — предупреждаем, а не притворяемся полноценным
+  const [simplified, setSimplified] = useState(false)
   useEffect(() => { onActivityRef.current = onActivity })
 
   const handleResize = useCallback(() => {
@@ -71,6 +75,7 @@ export function TerminalView({ terminalId, onActivity, visible = true }: Props) 
 
     connectTerminal(terminalId).then(t => {
       if (t) { onActivityRef.current?.(false); markOutput() }
+      if (!disposedRef.current) setSimplified(t?.pty === false)
     })
 
     const unsub = onTerminalMessage((msg) => {
@@ -117,6 +122,13 @@ export function TerminalView({ terminalId, onActivity, visible = true }: Props) 
   }, [visible, handleResize])
 
   return (
-    <div ref={termRef} style={{ flex: 1, minHeight: 0, overflow: 'hidden', background: C.termBg, padding: 4 }} />
+    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      {simplified && (
+        <Notice icon={AlertTriangle} title="Упрощённый терминал" style={{ margin: SP.xs, flexShrink: 0 }}>
+          Псевдоконсоль недоступна: нет цветов, очистки экрана и интерактивных программ.
+        </Notice>
+      )}
+      <div ref={termRef} style={{ flex: 1, minHeight: 0, overflow: 'hidden', background: C.termBg, padding: 4 }} />
+    </div>
   )
 }

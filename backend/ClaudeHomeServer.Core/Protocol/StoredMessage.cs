@@ -1,4 +1,5 @@
-﻿using System.Text.Json.Serialization;
+﻿using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace ClaudeHomeServer.Protocol;
 
@@ -17,10 +18,16 @@ namespace ClaudeHomeServer.Protocol;
 [JsonDerivedType(typeof(StoredFalCostMessage), "fal_cost")]
 [JsonDerivedType(typeof(StoredGlifCostMessage), "glif_cost")]
 [JsonDerivedType(typeof(StoredCompactBoundaryMessage), "compact_boundary")]
+[JsonDerivedType(typeof(StoredContextPrunedMessage), "context_pruned")]
 [JsonDerivedType(typeof(StoredErrorMessage), "error")]
 [JsonDerivedType(typeof(StoredWorkflowProgressMessage), "workflow_progress")]
 [JsonDerivedType(typeof(StoredWorkLoopStoppedMessage), "work_loop_stopped")]
 [JsonDerivedType(typeof(StoredModelSwitchedMessage), "model_switched")]
+[JsonDerivedType(typeof(StoredBranchedFromMessage), "branched_from")]
+[JsonDerivedType(typeof(StoredInterruptedMessage), "interrupted")]
+[JsonDerivedType(typeof(StoredImageLaunchMessage), "image_launch")]
+[JsonDerivedType(typeof(StoredImageFileMovedMessage), "image_file_moved")]
+[JsonDerivedType(typeof(StoredModuleRecord), "module_record")]
 public abstract class StoredMessage { }
 
 public class StoredUserMessage(string text, string[]? attachedPaths = null, bool? viaAgent = null,
@@ -66,7 +73,14 @@ public class StoredUserMessage(string text, string[]? attachedPaths = null, bool
     // StoredTextMessage.DelegationTaskId (доклад из чата-исполнителя без персоны
     // приходит пользовательским сообщением)
     public string? DelegationTaskId { get; init; } = delegationTaskId;
+    // Снимок холста чата картинки (ADR-018 §3): приложен ли он к этому сообщению и на какой
+    // ревизии холста. По нему лента пишет «холст не менялся — снимок не приложен».
+    // null — обычный чат либо история до этого поля. С v3 (ADR-019) не пишется, только читается
+    // из истории старых чатов картинки — удалять поле нельзя.
+    public StoredImageSnapshot? ImageSnapshot { get; init; }
 }
+
+public record StoredImageSnapshot(string Revision, bool Attached);
 
 public class StoredSessionStartedMessage(string model, string mode, TurnWorktreeInfo? turnWorktree = null) : StoredMessage
 {
@@ -138,6 +152,13 @@ public class StoredResultMessage(string subtype, long durationMs, int numTurns,
     // Время запросов к API за ход — см. ResultMessage.DurationApiMs. В историях до этого
     // поля null: скорость у старых ходов считается по полному времени хода.
     public long? DurationApiMs { get; init; } = durationApiMs;
+    // Точный якорь границы хода для ветвления чата (фича chat-branch, §4 документа-основания):
+    // uuid последней записи транскрипта CLI на момент конца этого хода
+    // (TranscriptProbe.LastRecordUuid). Пока его нет, границу приходится искать текстовым
+    // сопоставлением сообщений истории с промптами транскрипта — оно честно отказывает
+    // примерно на каждом десятом шаге. null — история до этого поля (исторические чаты
+    // так и ветвятся текстовым путём), транскрипт не найден либо хвост не прочитался.
+    public string? TranscriptTailUuid { get; init; }
 }
 
 public class StoredErrorMessage(string text) : StoredMessage
@@ -163,12 +184,55 @@ public class StoredWorkLoopStoppedMessage(string reason, string text) : StoredMe
     public string Text { get; init; } = text;
 }
 
+// Отметка «Ход остановлен пользователем»: ход оборвал ЧЕЛОВЕК («Стоп», «Прервать и
+// отправить», сообщение в ход, ждавший его ответа). Убитый ход не присылает ни result, ни
+// error — без этой записи после F5 и на другом устройстве в ленте висел бы вопрос без
+// ответа, неотличимый от зависшего хода. Прочие обрывы (падение процесса, перезапуск хода
+// штабом, снятие задачи) её не пишут — у них своя запись либо её нет вовсе.
+// Timestamp — Unix-мс UTC, как у StoredErrorMessage.
+public class StoredInterruptedMessage(long? timestamp = null) : StoredMessage
+{
+    public long? Timestamp { get; init; } = timestamp;
+}
+
 // Граница компакции контекста — чтобы после перезагрузки страницы оценка заполнения не врала
 public class StoredCompactBoundaryMessage(string trigger, int? preTokens, int? postTokens = null) : StoredMessage
 {
     public string Trigger { get; init; } = trigger;
     public int? PreTokens { get; init; } = preTokens;
     public int? PostTokens { get; init; } = postTokens;
+}
+
+// Обрезка контекста прокси локальной модели — чтобы карточка пережила перезагрузку страницы.
+// Поля — ровно как у ContextPrunedMessage (протокол): расхождение форм после перезагрузки
+// давало бы карточку без цифр.
+//
+// Единственное расхождение вынужденное: вид карточки ("prune"/"compact_cloud") в ЛЕНТЕ
+// приезжает полем `kind`, а в ИСТОРИИ — полем `pruneKind`. Имя `kind` здесь занято
+// дискриминатором полиморфизма StoredMessage, и свойство с таким же именем роняет
+// сериализацию ВСЕЙ истории целиком (InvalidOperationException при первом же сохранении),
+// а не только этой записи.
+//
+// EventId — та же личность сдвига, что в ContextPrunedMessage: она едет и в историю, иначе
+// после перезагрузки страницы дедуп ленты потерял бы точку сравнения. У карточек, записанных
+// до её появления, поля нет — null, и дедуп по нему НЕ работает (две старые записи с
+// одинаковым null схлопнулись бы в одну).
+public class StoredContextPrunedMessage(string kind, int tokensBefore, int tokensAfter, int blocks,
+    int resultBlocks, int inputBlocks, int thinkingBlocks, double? prefillSeconds = null,
+    int? cacheReadTokens = null, int? promptTokens = null, string? eventId = null) : StoredMessage
+{
+    [JsonPropertyName("pruneKind")]
+    public string Kind { get; init; } = kind;
+    public string? EventId { get; init; } = eventId;
+    public int TokensBefore { get; init; } = tokensBefore;
+    public int TokensAfter { get; init; } = tokensAfter;
+    public int Blocks { get; init; } = blocks;
+    public int ResultBlocks { get; init; } = resultBlocks;
+    public int InputBlocks { get; init; } = inputBlocks;
+    public int ThinkingBlocks { get; init; } = thinkingBlocks;
+    public double? PrefillSeconds { get; init; } = prefillSeconds;
+    public int? CacheReadTokens { get; init; } = cacheReadTokens;
+    public int? PromptTokens { get; init; } = promptTokens;
 }
 
 // Стоимость генерации fal.ai (фактически списанная), приходит вне хода — хранится отдельной записью
@@ -284,4 +348,63 @@ public class StoredModelSwitchedMessage : StoredMessage
     // Сырой текст промежуточной ошибки, погашенной этой подменой (ProviderSwitchedMessage.
     // ErrorDetails): без записи в историю после F5 «Подробности» маркера опустели бы.
     public string? Details { get; init; }
+}
+
+// Плашка «Ветка от {имя чата}» в ленте нового чата, созданного ветвлением (фича
+// chat-branch). Это запись ИСТОРИИ, а не живое событие: она обязана переживать F5 и
+// рестарт сервера (как model_switched, а не как provider_switched). SourceSessionId —
+// id оригинального чата, SourceName — его имя (снимок на момент ветвления), Timestamp —
+// Unix-мс UTC (см. StoredTextMessage.Timestamp).
+public class StoredBranchedFromMessage : StoredMessage
+{
+    public string SourceSessionId { get; init; } = "";
+    public string SourceName { get; init; } = "";
+    public long? Timestamp { get; init; }
+}
+
+// Тихая строка «Вы запустили: «…» · FLUX Fill · ≈ $0.10 · 2 варианта» в чате картинки
+// (ADR-018 §2). Пишется в history.json, а не в транскрипт CLI: модель её НЕ видит, о ручном
+// запуске она узнаёт из блока состояния хода. By — кто запустил, значение SpendInitiators.*
+// ("human" | "agent"; тот же словарь, что у SpendRecord.Initiator): у истории нет конвертера
+// enum'ов, поэтому строка, а не ImageEditInitiator. Estimate — котировка на момент запуска.
+public class StoredImageLaunchMessage : StoredMessage
+{
+    public string By { get; init; } = Models.SpendInitiators.Human;
+    public string Prompt { get; init; } = "";
+    public string Provider { get; init; } = "";
+    public string Model { get; init; } = "";
+    public int Count { get; init; }
+    public StoredImageLaunchEstimate? Estimate { get; init; }
+    public string JobId { get; init; } = "";
+    public long? Timestamp { get; init; }
+}
+
+// Оценка запуска в строке истории. Своя запись спины, а не котировка из DTO редактора:
+// редактор — отдельный модуль (ADR-018 §10.1), и протокол от него не зависит. Имена полей те
+// же, что у котировки, поэтому history.json не меняется. Source — ImageEditEstimateSources.*
+public sealed record StoredImageLaunchEstimate(double? Amount, string Unit, bool Approx, string Source);
+
+// Тихая строка «Сохранено как … Редактор перешёл на этот файл, чат — вместе с ним»
+// (ADR-018 §1): чат картинки переехал на новый путь. Пути — от корня проекта.
+public class StoredImageFileMovedMessage : StoredMessage
+{
+    public string From { get; init; } = "";
+    public string To { get; init; } = "";
+    public long? Timestamp { get; init; }
+}
+
+// Запись модуля в ленте чата (ADR-019 §2): одна общая запись истории на все модули, чтобы
+// каждый новый вид строки не был правкой полиморфизма ядра. Ядро Data не разбирает — это JSON
+// модуля. Fallback — готовый текст строки на случай, когда модуль выключен или не знает
+// RecordType: лента рисует его вместо карточки. RecordType, а не Type: у живой пары
+// (ModuleRecordMessage) поле type занято типом события протокола, а формы обязаны совпадать.
+// Пишется в history.json через IChatFeed, а не в транскрипт CLI: модель такую запись не видит.
+public class StoredModuleRecord : StoredMessage
+{
+    // Ключ подсистемы-автора (IAppSubsystem.Key), например "imageeditor"
+    public string Module { get; init; } = "";
+    public string RecordType { get; init; } = "";
+    public JsonElement? Data { get; init; }
+    public string Fallback { get; init; } = "";
+    public long? Timestamp { get; init; }
 }

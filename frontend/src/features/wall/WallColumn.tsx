@@ -12,7 +12,7 @@
 // Осознанные срезы (не баги): в колонку не проброшены skills/agents (пикеры
 // навыков и агентов в композере пусты); onOpenFile дают только колонки С
 // проектом (FileViewer требует project). Полная работа с проектом — переход.
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { SquareArrowOutUpRight, X } from 'lucide-react';
 import type { Project, Session } from '../../types';
 import { C, FONT, FS, ISLAND, R, SHADOW, Z } from '../../lib/design';
@@ -24,7 +24,7 @@ import { useCanHover } from '../../lib/pointer';
 import { useAgentsRunning, useBgCommandRunning } from '../../lib/agentsPresence';
 import { useChatWatchdogs } from '../../lib/watchdogPresence';
 import { projectTone, fadeTone, projectTopWash } from '../../lib/projectTone';
-import { chatStatus, focusChat, updateChat, removeChat, startOrderDrag, isOrderDrag, dropOrder } from './wallStore';
+import { chatStatus, focusChat, updateChat, removeChat, startOrderDrag, isOrderDrag, dropOrder, useWallState } from './wallStore';
 
 // Слот иконки в ярлыке — как у шапки панели (PanelShell): место в потоке ровно
 // под значок, кнопка под курсором крупнее слота и выступает симметрично
@@ -42,6 +42,15 @@ export function WallColumn({ session, project, index, focused, onZoom, onOpenFil
   onOpenFile?: (path: string) => void;
 }) {
   const status = chatStatus(session);
+  // Множество id чатов на стене — для плашки «Ветка от …» в ChatPanel внутри колонки.
+  // На стене набор чатов маленький (лимит), отдельного полного списка чатов
+  // пользователя у нас нет (он грузится в ChatsPage/WorkspacePage), поэтому
+  // честнее передать то, что под рукой: чат-оригинал ВСЕГДА на стене рядом
+  // с веткой, иначе плашку в этой колонке никто бы не показал — зато если он
+  // убран со стены, плашка деградирует в текст, и это согласуется с общей
+  // логикой «жив ли оригинал». Не лучшее из решений, но не худшее
+  const wall = useWallState();
+  const availableChatIds = useMemo(() => new Set(wall.chats.map(c => c.id)), [wall.chats]);
   // Живая фоновая работа: ход завершён, статус спокойный — без этого колонка чата,
   // где идёт работа, выглядит ровно как простаивающая. Стену держат открытой именно
   // чтобы следить, поэтому молчать тут дороже всего. Агенты и фоновая команда
@@ -220,6 +229,7 @@ export function WallColumn({ session, project, index, focused, onZoom, onOpenFil
             headerDragProps={{ draggable: true, onDragStart: e => startOrderDrag(e, index) }}
             // Смена модели/режима/цикла из колонки — снимок в сторе стены обязан обновиться
             onSessionUpdated={updateChat}
+            availableChatIds={availableChatIds}
           />
         )}
       </div>

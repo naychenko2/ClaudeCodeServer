@@ -31,6 +31,7 @@ public class SubsystemModulesController(IConfiguration config, SubsystemStateSto
         var items = section.GetChildren().Select(kvp => new
         {
             id = section[kvp.Key + ":Key"],
+            enabled = section[kvp.Key + ":Enabled"] ?? "true",
             remoteUrl = section[kvp.Key + ":Frontend:RemoteUrl"],
             exposedModule = section[kvp.Key + ":Frontend:ExposedModule"] ?? "./subsystem",
         }).Where(m => !string.IsNullOrEmpty(m.remoteUrl) && m.id is not null && active.Contains(m.id)).ToList();

@@ -135,6 +135,10 @@ interface Props {
   railBadges?: Partial<Record<PanelKey, RailBadgeInfo>>;
   // Открыть режим «Стена» (док стены под доком проектов; вкладки в таббаре у стены нет)
   onOpenWall?: () => void;
+  // Множество id чатов проекта, уже загруженных SessionList (через WorkspacePage).
+  // Нужно ChatPanel для плашки «Ветка от …» — определять, жив ли оригинал ветки.
+  // Не задано — fallback к ссылке (старое поведение)
+  availableChatIds?: Set<string>;
 }
 
 export function DesktopWorkspace(p: Props) {
@@ -332,6 +336,7 @@ export function DesktopWorkspace(p: Props) {
       // удалённого чата (тот же колбэк, что чистит выбор после удаления в списке)
       onAddToWall={wallOn ? () => handleAddToWall(p.activeSession!) : undefined}
       onChatDeleted={p.onClearSession}
+      availableChatIds={p.availableChatIds}
     />
   ) : (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>

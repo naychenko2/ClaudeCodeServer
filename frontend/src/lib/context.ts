@@ -1,5 +1,6 @@
 import type { ChatItem } from '../types';
 import { contextWindowFor } from './models';
+import { summarizePruned, type PrunedSummary } from './contextPruned';
 
 // Оценка заполнения контекстного окна сессии.
 // Источник: contextTokens последнего result — размер контекста ПОСЛЕДНЕГО запроса к API
@@ -30,6 +31,10 @@ export interface ContextEstimate {
   level: 'normal' | 'warn' | 'danger';
   model?: string;               // фактическая модель (последний session_started)
   lastCompact?: CompactSummary; // итог последнего сжатия в этом чате (если оно было)
+  // Итог обрезок прокси локальной модели за чат (сколько сдвигов, сколько срезано).
+  // undefined — контекст в этом чате не двигали. К оценке заполнения не подмешивается
+  // по той же причине, что и lastCompact: это про объём истории, а не про окно
+  pruned?: PrunedSummary;
 }
 
 // Дефолтные пороги подсветки (переопределяются per-user, см. contextPrefs)
@@ -79,5 +84,9 @@ export function estimateContext(
     : pct >= thresholds.warnPct ? 'warn'
     : 'normal';
 
-  return { tokens, window, pct, fresh, level, model, lastCompact };
+  // Обрезки считаем отдельным проходом: обратный цикл выше выходит по первому маркеру,
+  // а сводка нужна по всему чату
+  const pruned = summarizePruned(items);
+
+  return { tokens, window, pct, fresh, level, model, lastCompact, pruned };
 }

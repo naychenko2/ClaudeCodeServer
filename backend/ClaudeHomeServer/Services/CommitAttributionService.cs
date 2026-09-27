@@ -81,7 +81,9 @@ public class CommitAttributionService(
         var rootKey = NormalizeRoot(root);
         // Одна папка допустима у РАЗНЫХ владельцев (EnsureRootFree запрещает повтор только
         // внутри одного) — помечаем чаты ВСЕХ проектов с этим корнем, а не первого попавшегося
-        var matching = projects.GetAll().Where(p => NormalizeRoot(p.RootPath) == rootKey).ToList();
+        // root — папка на сервере: локальный проект с той же строкой пути — чужая машина
+        var matching = projects.GetAll().Where(p => NormalizeRoot(p.RootPath) == rootKey
+            && Composition.ProjectCapabilityGuard.Allows(p, Composition.ProjectCapabilityArea.FileBound)).ToList();
         if (matching.Count == 0) return; // git worktree чата / не корень проекта
 
         var files = await git.ChangedFilePathsBetweenAsync(ownerId, root, oldHead, newHead);

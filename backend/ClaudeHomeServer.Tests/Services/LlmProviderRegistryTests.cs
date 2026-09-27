@@ -272,6 +272,24 @@ public class LlmProviderRegistryTests
         Create().EnvKeysToClear.Should().Contain("CLAUDE_CODE_MAX_CONTEXT_TOKENS");
     }
 
+    // Порог автосжатия CLI двигается переменной CLAUDE_CODE_AUTO_COMPACT_WINDOW, и она же
+    // стоит в ProviderEnvKeys. Противоречия тут нет: чистка применяется к УНАСЛЕДОВАННОМУ
+    // окружению хоста, а наш ExtraEnv кладётся поверх (LocalProcessRunner: сначала ClearEnv,
+    // потом Env). Тест держит единственное место, где это можно сломать молча, — порядок
+    // применения ExtraEnv в BuildCliEnv: перенеси его выше собственных ключей, и окно
+    // автосжатия перестанет доезжать до CLI, а порог тихо вернётся к штатному.
+    [Fact]
+    public void BuildCliEnv_ОкноАвтосжатияИзExtraEnv_ДоезжаетДоCLI()
+    {
+        var env = Create(new()
+        {
+            ["LlmProviders:deepseek:ExtraEnv:CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = "140000",
+        }).BuildCliEnv("deepseek-v4-pro")!;
+        env.Should().ContainKey("CLAUDE_CODE_AUTO_COMPACT_WINDOW")
+            .WhoseValue.Should().Be("140000");
+        LlmProviderRegistry.ProviderEnvKeys.Should().Contain("CLAUDE_CODE_AUTO_COMPACT_WINDOW");
+    }
+
     [Fact]
     public void BuildCliEnv_ПровайдерБезКлюча_Исключение()
     {
@@ -1386,5 +1404,48 @@ public class LlmProviderRegistryTests
         var probe = new FakeLocalProbe(knownWindow: 99999);
         var env = CreateWithLocal(settings, probe).BuildCliEnv("deepseek-v4-pro")!;
         env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"].Should().Be("1048576");
+    }
+
+    // ─── Резерв под ответ вычитается из объявляемого окна ──────────────────────────
+    // vLLM проверяет prompt + max_tokens ≤ max_model_len ДО генерации. Если CLI объявляет
+    // голое max_model_len, а reserve из ExtraEnv не вычитать — CLI не сожмёт контекст вовремя
+    // и ход упадёт 400 (122881 + 8192 = 131073 > 131072).
+
+    // Живое окно 131072, в ExtraEnv CLAUDE_CODE_MAX_OUTPUT_TOKENS = "8192":
+    // объявляем 131072 − 8192 − 512 = 122368.
+    [Fact]
+    public void BuildCliEnv_РезервПодОтвет_ВычитаетсяИЗЖивогоОкна()
+    {
+        var settings = new Dictionary<string, string?>
+        {
+            ["LlmProviders:local-qwen:DisplayName"] = "Qwen",
+            ["LlmProviders:local-qwen:AnthropicBaseUrl"] = "http://127.0.0.1:18020",
+            ["LlmProviders:local-qwen:IsLocal"] = "true",
+            ["LlmProviders:local-qwen:Models:0:Id"] = "qwen3.8-27b",
+            ["LlmProviders:local-qwen:Models:0:ContextWindow"] = "71680",
+            ["LlmProviders:local-qwen:ExtraEnv:CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = "8192",
+        };
+        var probe = new FakeLocalProbe(knownWindow: 131072);
+        var env = CreateWithLocal(settings, probe).BuildCliEnv("qwen3.8-27b")!;
+        // 131072 − 8192 − 512 = 122368
+        env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"].Should().Be("122368");
+    }
+
+    // Живое окно 65536, CLAUDE_CODE_MAX_OUTPUT_TOKENS в ExtraEnv НЕ задан:
+    // fail-open, окно не тронуть.
+    [Fact]
+    public void BuildCliEnv_БезРезерва_ОкноНеТронуть()
+    {
+        var settings = new Dictionary<string, string?>
+        {
+            ["LlmProviders:local-qwen:DisplayName"] = "Qwen",
+            ["LlmProviders:local-qwen:AnthropicBaseUrl"] = "http://127.0.0.1:18020",
+            ["LlmProviders:local-qwen:IsLocal"] = "true",
+            ["LlmProviders:local-qwen:Models:0:Id"] = "qwen3.8-27b",
+            ["LlmProviders:local-qwen:Models:0:ContextWindow"] = "71680",
+        };
+        var probe = new FakeLocalProbe(knownWindow: 65536);
+        var env = CreateWithLocal(settings, probe).BuildCliEnv("qwen3.8-27b")!;
+        env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"].Should().Be("65536");
     }
 }

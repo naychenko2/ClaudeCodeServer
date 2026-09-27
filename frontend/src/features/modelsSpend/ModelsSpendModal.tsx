@@ -26,13 +26,19 @@ import type { BalanceChipData } from './BalanceChip';
 // пользователя; слои настроек живут в модульном сторе presets.ts
 // (useSpecialtySettings + useSaveState), write-стор ключует scope+userId.
 
-type TabKey = 'quotas' | 'slots' | 'apply' | 'chains';
+export type ModelsSpendTab = 'quotas' | 'slots' | 'apply' | 'chains';
+type TabKey = ModelsSpendTab;
 type Scope = 'global' | 'owner' | 'user';
 
-export function ModelsSpendModal({ balances, onClose }: { balances?: BalanceChipData[]; onClose: () => void }) {
+export function ModelsSpendModal({ balances, initialTab = 'quotas', onClose }: {
+  balances?: BalanceChipData[];
+  // «Применение» — из редактора картинок, где рисование не настроено
+  initialTab?: ModelsSpendTab;
+  onClose: () => void;
+}) {
   // Стартовая вкладка — «Расход»: с ним приходят чаще, чем с настройкой моделей.
   // Диплинки (эффект ниже) перекрывают этот дефолт после маунта.
-  const [tab, setTab] = useState<TabKey>('quotas');
+  const [tab, setTab] = useState<TabKey>(initialTab);
 
   // Роль и контекст уровня «Модели по умолчанию»: null = общие (админ) или свои (не-админ)
   const [me, setMe] = useState<Awaited<ReturnType<typeof api.auth.me>> | null>(null);

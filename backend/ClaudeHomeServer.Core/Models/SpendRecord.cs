@@ -3,9 +3,9 @@ using System.Text.Json.Serialization;
 namespace ClaudeHomeServer.Models;
 
 // Источники расхода токенов (спека Spend Analytics v2): ходы чатов/задач, фоновые one-shot,
-// генерации fal.ai (токенов нет — счётчик), бесплатные модели (токены есть, стоимость 0),
-// синтез речи Yandex SpeechKit (токенов нет, счётчик запросов и рубли), веб-поиск через
-// Perplexity Sonar (токены есть — источник обычный, в суммы токенов входит).
+// генерации fal.ai (токенов нет — счётчик), генерации Higgsfield (кредиты, не токены — счётчик),
+// бесплатные модели (токены есть, стоимость 0), синтез речи Yandex SpeechKit (токенов нет,
+// счётчик запросов и рубли), веб-поиск через Perplexity Sonar (токены есть — источник обычный).
 public static class SpendSources
 {
     public const string ChatTurn = "chat-turn";
@@ -15,10 +15,11 @@ public static class SpendSources
     public const string Free = "free";
     public const string Tts = "tts";
     public const string WebSearch = "websearch";
+    public const string Higgsfield = "higgsfield";
 
     // Источники без токенов: у них расход меряется счётчиком вызовов, а не токенами, поэтому
     // в рейтингах «по токенам» им делать нечего (иначе они вечно висят внизу с нулём).
-    public static bool IsTokenless(string source) => source is Fal or Glif or Tts;
+    public static bool IsTokenless(string source) => source is Fal or Glif or Tts or Higgsfield;
 
     // Бесплатный исполнитель: локальная модель (Ollama или llama-server), прямой
     // адаптер любого OpenAI-совместимого источника (провайдер заканчивается на "-direct")
@@ -31,6 +32,13 @@ public static class SpendSources
     // Дополнительные подписки Claude (sub-*) — тот же провайдер claude, отдельной осью не нужны
     public static string NormalizeProvider(string provider) =>
         provider.StartsWith("sub-", StringComparison.Ordinal) ? "claude" : provider;
+}
+
+// Значения SpendRecord.Initiator
+public static class SpendInitiators
+{
+    public const string Human = "human";
+    public const string Agent = "agent";
 }
 
 // Одна запись расхода: ход чата, фоновый one-shot, генерация fal.ai или вызов бесплатной
@@ -59,12 +67,18 @@ public sealed class SpendRecord
     // Отдельное поле, а не пересчёт в доллары: курс пришлось бы выдумывать, и врал бы он тем
     // сильнее, чем старше запись. Валюты не складываются нигде — ни здесь, ни в агрегатах.
     public double? CostRub { get; init; }
+    // Стоимость в КРЕДИТАХ поставщика (Higgsfield в редакторе картинок, ADR-017 §4) — третья
+    // валюта по образцу CostRub: с долларами и рублями не складывается нигде
+    public double? CostCredits { get; init; }
     // Счётчик вызовов без токенов: генерации fal.ai/glif и запросы синтеза речи (SpeechKit
     // тарифицируется ЗА ЗАПРОС, так что это ровно единицы тарификации); у остальных 0
     public int Generations { get; init; }
     public long DurationMs { get; init; }
     // Подпись операции: ключ фонового действия (changelog, notes.tags…) или endpoint fal
     public string? Label { get; init; }
+    // Кто запустил трату в редакторе картинок (ADR-018 §2): SpendInitiators.*. null — трата
+    // не из редактора либо запись до этого поля. В дневные агрегаты не сворачивается.
+    public string? Initiator { get; init; }
 
     [JsonIgnore]
     public long TotalTokens => InputTokens + OutputTokens + CacheReadTokens + CacheCreationTokens;
@@ -92,6 +106,7 @@ public sealed class DailySpendRow
     public long CacheCreationTokens { get; set; }
     public double CostUsd { get; set; }
     public double CostRub { get; set; }
+    public double CostCredits { get; set; }
     public int Generations { get; set; }
     // Количество свёрнутых записей (ходов/вызовов)
     public int Turns { get; set; }

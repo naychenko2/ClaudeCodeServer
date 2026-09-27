@@ -1,0 +1,84 @@
+using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Http;
+using ClaudeHomeServer.Services.ImageEditor.Versioning;
+using ClaudeHomeServer.Services.Images.Editing.Raster;
+using ClaudeHomeServer.Services.Turn;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+
+namespace ClaudeHomeServer.Services.ImageEditor;
+
+// Редактор картинок — динамический модуль (ADR-018 §10.1): грузится ModuleLoader'ом по записи
+// DynamicModules[image-editor], Main его типов не видит. Выключается двумя способами:
+// DynamicModules[image-editor].Enabled=false (dll не грузится) или
+// Subsystems:ImageEditor:Enabled=false (Register не вызывается). В обоих случаях ручек нет — 404.
+//
+// Модуль ссылается только на Core: всё внешнее — швы оттуда, реализации регистрируют другие сборки.
+// Images — IImageRaster, IImagePlaceSettings, ILocalImageMedia; Spend — ISpendCollector; Main —
+// IHiggsfieldAccess, IProjectManager, IFeatureFlagGate, IProjectFiles, ISessionBroadcaster, IChatFeed,
+// ISessionDirectory и шина ITurnEventBus (жизненный цикл чата). Растр необязателен: без Images
+// ручки transform и jobs отвечают 503 raster_unavailable, а не 500.
+public sealed class ImageEditorSubsystem : IAppSubsystem
+{
+    public string Key => "imageeditor";
+
+    public string Title => "Редактор картинок";
+
+    public string Description => "Правка картинок проекта моделями и без ИИ, персонажи, версии файлов";
+
+    public void Register(IServiceCollection services, IConfiguration config)
+    {
+        services.AddQuietHttpClient(HiggsfieldMcpClient.HttpClientName, new QuietHttpClientProfile(
+            Category: "ClaudeHomeServer.Images.Editor.Higgsfield",
+            Subject: "Higgsfield из редактора картинок",
+            Consequence: "Правка картинок через Higgsfield недоступна — остальные поставщики работают."));
+
+        services.AddSingleton<HiggsfieldMcpClient>();
+        services.AddSingleton<FalImageEditor>();
+        services.AddSingleton<HiggsfieldImageEditor>();
+        services.AddSingleton<IImageEditor>(sp => sp.GetRequiredService<FalImageEditor>());
+        services.AddSingleton<IImageEditor>(sp => sp.GetRequiredService<HiggsfieldImageEditor>());
+        // Локальные модели (ComfyUI): шов ILocalImageMedia регистрирует Images. Нет Images — шва нет,
+        // драйвер получает null и скрыт в каталоге, а не роняет резолв
+        services.AddSingleton(sp => new LocalImageEditor(sp.GetService<ILocalImageMedia>()));
+        services.AddSingleton<IImageEditor>(sp => sp.GetRequiredService<LocalImageEditor>());
+
+        services.TryAddSingleton<IVersionedImageStore, VersionedImageStore>();
+        services.AddSingleton<IImageEditSaver, ImageEditSaver>();
+        // Шаги, на которые ссылаются нити картинок, чистка рабочей папки не трогает (ADR-019 §1)
+        services.AddSingleton(sp =>
+        {
+            var workspace = ImageEditWorkspace.FromConfig(sp.GetRequiredService<IConfiguration>());
+            var threads = sp.GetRequiredService<Threads.ImageThreadStore>();
+            workspace.RetainedSteps = threads.ReferencedSteps;
+            return workspace;
+        });
+        // Траты пишутся в общий учёт ISpendCollector (вертикаль Spend); выключенный Spend —
+        // null, исполнитель тогда только предупреждает в лог
+        services.AddSingleton<ImageEditJobService>();
+        services.AddSingleton<IImageEditJobs>(sp => sp.GetRequiredService<ImageEditJobService>());
+        // Правки без ИИ и шаги истории (ADR-018 §9). Без растра шагов нет: фабрика отдаёт null,
+        // и контроллер получает его вместо исключения резолва
+        services.AddSingleton(sp => sp.GetService<IImageRaster>() is { } raster
+            ? new ImageEditSteps(raster, sp.GetRequiredService<ImageEditWorkspace>(), sp.GetRequiredService<IImageEditJobs>())
+            : null!);
+        // Общая сборка входа запуска и блок нитей хвостом хода: им же пользуется MCP-тулсет
+        services.AddSingleton<ImageEditLaunchAssembler>();
+        services.AddPromptSectionContributor<Chats.ImageEditorStateContributor>();
+        // Нити картинок и фокус чата (ADR-019 §1): хранилище в data/image-threads, живёт и умирает
+        // вместе с чатом по событиям шины session/deleted и session/branched
+        services.AddSingleton(sp => Threads.ImageThreadStore.FromConfig(sp.GetRequiredService<IConfiguration>()));
+        services.AddHostedService<Threads.ImageThreadLifecycle>();
+        // Следы нити в ленте и событие image_thread_changed; нить идёт за переименованным файлом
+        services.AddSingleton<Threads.ImageThreadService>();
+        // Выбор человека в полосе «Картинки» проекта: data/image-editor-prefs, его наследуют новые
+        // нити и запуск агентом без аргументов
+        services.AddSingleton(sp => Prefs.ImageProjectPrefsStore.FromConfig(sp.GetRequiredService<IConfiguration>()));
+        services.AddSingleton<Prefs.ImageProjectPrefsService>();
+        // Нить с задачей, оборванной перезапуском, не висит в «Рисуем…»: сверка при старте
+        services.AddHostedService<Threads.ImageThreadRecovery>();
+        services.AddHostedService<Threads.ImageThreadPathTracker>();
+        // MCP-сервер редактора для агента любого чата проекта (ADR-019 §4): маршрут общий,
+        // POST /mcp/image-editor/{sessionId}, реестр Main находит тулсет среди IMcpToolset
+        services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset, Mcp.ImageEditorToolset>();
+    }
+}

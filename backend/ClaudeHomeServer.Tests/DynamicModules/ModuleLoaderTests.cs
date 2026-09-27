@@ -81,25 +81,34 @@ public class ModuleLoaderTests
         loaded.Should().BeEmpty("Enabled=false — загрузчик модуль пропускает");
     }
 
-    // Гейт отключаемости Subsystems:{Key}:Enabled=false (ADR-014): запись модуля Enabled=true,
-    // но Register не вызывается, сборка наружу не отдаётся (Program.cs не подключит её
-    // ApplicationPart), а в стор подсистем модуль уходит неактивным.
+    // H2 (зоид живого хоста 2026-09-15): ModuleLoader звал `subsystem.Register` мимо
+    // `SubsystemGate.IsEnabled`, и при `DynamicModules:Enabled=true` + `Subsystems:Key:Enabled=false`
+    // сборка грузилась, контроллеры и hosted регистрировались, hosted при этом не запускались
+    // (у AddGatedHostedService свой гейт), и снимок `/api/admin/subsystems` показывал
+    // active=True при enabled=False — расхождение. Тест ниже фиксирует, что оба рубильника
+    // дают одинаковый наблюдаемый эффект (ModuleLoader НЕ грузит модуль ни по какому из
+    // них, если хотя бы один выключен — наблюдаемое состояние у хоста одно и то же).
     [Fact]
-    public void ГейтПодсистемыВыключен_RegisterНеЗовётся_СторПишетDisabled()
+    public void ПодсистемныйГейтВыключен_МодульНеЗагружается()
     {
-        var config = new ConfigurationBuilder()
-            .AddConfiguration(StubConfig())
-            .AddInMemoryCollection(new Dictionary<string, string?> { ["Subsystems:__stub:Enabled"] = "false" })
-            .Build();
-        var states = new SubsystemStateStore();
-        var loader = new ModuleLoader(new ModuleRegistry(config), config, NullLogger<ModuleLoader>.Instance, states);
-        var services = new ServiceCollection();
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["DynamicModules:0:Key"] = "__stub",
+            ["DynamicModules:0:Backend:AssemblyPath"] = "modules/__stub/StubModule.dll",
+            ["DynamicModules:0:Enabled"] = "true",
+            // Гейт подсистемы (а не DynamicModules.Enabled) — тот самый, что выключают
+            // галкой в `Subsystems:{Key}:Enabled=false` в админке.
+            ["Subsystems:__stub:Enabled"] = "false",
+        }).Build();
 
-        loader.LoadAll(services).Should().BeEmpty("выключенный гейтом модуль наружу не отдаётся");
-        services.Should().NotContain(d => d.ServiceType == typeof(IAppSubsystem), "Register не вызван");
-        var snapshot = states.Snapshot(config).Single(s => s.Key == "__stub");
-        snapshot.Active.Should().BeFalse();
-        snapshot.RestartRequired.Should().BeFalse();
+        var registry = new ModuleRegistry(config);
+        var loader = new ModuleLoader(registry, config, NullLogger<ModuleLoader>.Instance);
+
+        var loaded = loader.LoadAll(new ServiceCollection());
+        loaded.Should().BeEmpty(
+            "Subsystems:{Key}:Enabled=false обязан пройти через ModuleLoader.TryLoadOne — " +
+            "иначе снимок /api/admin/subsystems покажет active=True при выключенном гейте, " +
+            "а контроллеры подсистемы окажутся в DI без своих зависимостей");
     }
 
     // Раздача MF-remote /{key}-remote (цикл в Program.cs) идёт по ServedRemotes: только
@@ -122,7 +131,7 @@ public class ModuleLoaderTests
             .Build();
         var registry = new ModuleRegistry(config);
         var states = new SubsystemStateStore();
-        var loaded = new ModuleLoader(registry, config, NullLogger<ModuleLoader>.Instance, states)
+        var loaded = new ModuleLoader(registry, config, NullLogger<ModuleLoader>.Instance)
             .LoadAll(new ServiceCollection());
         // Как Program.cs: загруженную сборку записываем в стор активной
         foreach (var assembly in loaded)

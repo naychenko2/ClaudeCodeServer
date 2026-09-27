@@ -1724,6 +1724,84 @@ public class LocalActionRoutingTests
         Assert.DoesNotContain("\"max_tokens\":1024", body);
     }
 
+    // --- Пер-местный лимит вывода (CloudNumPredict), образец CloudTimeoutMs ---
+    // Консолидации (прод 2026-09-22): на 200+ записях JSON merge-операций не влезает в
+    // профильный CloudNumPredict 8192 — облако обрезает ответ на незакрытый JSON-массив,
+    // ExtractJsonArray даёт null, и весь merge = no-op.
+
+    [Fact]
+    public void CloudNumPredictFor_ПерМестноеЗначениеКаталогаИначеПрофильное()
+    {
+        var router = Router(new() { ["Ollama:Model"] = "qwen3:14b" });
+        // Консолидации — пер-местные 16384 (вдвое профильного)
+        Assert.Equal(16_384, router.CloudNumPredictFor(LocalActionCatalog.TeamMemoryConsolidate));
+        Assert.Equal(16_384, router.CloudNumPredictFor(LocalActionCatalog.PersonaMemoryConsolidate));
+        // Сосед без пер-местного значения — профиль Large 8192, потолок не задран
+        Assert.Equal(8192, router.CloudNumPredictFor(LocalActionCatalog.Changelog));
+
+        // Конфиг переопределяет ПРОФИЛЬ, не пер-местное: консолидации — 16384,
+        // соседи — уже 4096 (аналог тестов CloudTimeoutMsFor)
+        var overridden = Router(new()
+        {
+            ["Ollama:Model"] = "qwen3:14b",
+            ["Ollama:Profiles:large:CloudNumPredict"] = "4096",
+        });
+        Assert.Equal(16_384, overridden.CloudNumPredictFor(LocalActionCatalog.TeamMemoryConsolidate));
+        Assert.Equal(4096, overridden.CloudNumPredictFor(LocalActionCatalog.Changelog));
+    }
+
+    [Fact]
+    public async Task CheapRunner_DirectМаршрут_ПерМестныйЛимитВывода()
+    {
+        // Зеркало CheapRunner_DirectМаршрут_ПробрасываетОблачныйЛимит: direct-шаг
+        // консолидации обязан уйти в max_tokens=16384 (пер-местный), а не 8192 (профиль).
+        var dir = Path.Combine(Path.GetTempPath(), "cc-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var cfg = new Dictionary<string, string?>
+        {
+            ["Ollama:Model"] = "",
+            ["DataPath"] = Path.Combine(dir, "projects.json"),
+            ["LlmProviders:openrouter:ApiKey"] = "test-key",
+            ["LlmProviders:openrouter:AnthropicBaseUrl"] = "https://openrouter.ai/api",
+            ["LlmProviders:openrouter:ApiBaseUrl"] = "https://openrouter.ai/api/v1",
+            ["OpenRouter:Provider"] = "openrouter",
+            ["OpenRouter:DirectModels:0:Id"] = "nvidia/nemotron:free",
+        };
+        var config = TestConfig.Build(cfg);
+        var store = Store(config);
+        store.Set(LocalActionCatalog.TeamMemoryConsolidate,
+            CloudCheapClient.RoutePrefix + "nvidia/nemotron:free");
+        var router = new LocalActionRouter(Ollama(config), store, config, NullLogger<LocalActionRouter>.Instance);
+        var capture = new CapturingHttpHandler();
+        var cloud = new CloudCheapClient(new SingleFactory(capture), config, new LlmProviderRegistry(config),
+            NullLogger<CloudCheapClient>.Instance);
+        var runner = new CheapTextRunner(router, Ollama(config), cloud, new FakeOneShot(),
+            NullLogger<CheapTextRunner>.Instance);
+
+        await runner.RunAsync(LocalActionCatalog.TeamMemoryConsolidate, "p", ownerId: "u");
+
+        var body = capture.LastBody;
+        Assert.NotNull(body);
+        Assert.Contains("\"max_tokens\":16384", body);
+        Assert.DoesNotContain("\"max_tokens\":8192", body);
+    }
+
+    [Fact]
+    public void СоседниеМеста_БезПерМестногоЛимита_ПрофильныйCeilingНеМеняется()
+    {
+        // Регресс: пер-местный лимит не «протекает» — автолёрн/сжатие памяти (Large,
+        // небольшой вывод) и changelog остаются на профильном 8192, не на 16384.
+        Assert.Null(LocalActionCatalog.Find(LocalActionCatalog.TeamMemoryAutolearn)!.CloudNumPredict);
+        Assert.Null(LocalActionCatalog.Find(LocalActionCatalog.TeamMemoryCompress)!.CloudNumPredict);
+        Assert.Null(LocalActionCatalog.Find(LocalActionCatalog.Changelog)!.CloudNumPredict);
+
+        var router = Router(new() { ["Ollama:Model"] = "qwen3:14b" });
+        Assert.Equal(8192, router.CloudNumPredictFor(LocalActionCatalog.TeamMemoryAutolearn));
+        // Small-профиль — свой профильный потолок (1024), не Large и не 16384
+        Assert.Equal(1024, router.CloudNumPredictFor(LocalActionCatalog.TeamMemoryCompress));
+        Assert.Equal(8192, router.CloudNumPredictFor(LocalActionCatalog.Changelog));
+    }
+
     // --- Эффективный резолв для показа «Сейчас пойдёт» (Preview, ADR-007 §5 п.5) ---
     // Та же кодовая дорога, что боевой резолв: источник, эффективный уровень и раскрытие пресета.
 

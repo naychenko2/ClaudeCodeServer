@@ -43,6 +43,15 @@ internal class TurnAccumulator
         _saveKey = saveKey;
     }
 
+    // Ключ, под которым история пишется СЕЙЧАС. Нужен в момент system/init: к этой секунде
+    // ClaudeSession уже переписал Session.ClaudeSessionId на пришедший от CLI, и прежний
+    // (подготовленный) csid живёт только здесь — по нему страховка ветвления опознаёт
+    // осиротевшую пару «транскрипт + история» (SessionManager.OnMessageAsync).
+    public string? SaveKey
+    {
+        get { lock (_lock) return _saveKey; }
+    }
+
     public void SetSaveKey(string claudeSessionId)
     {
         lock (_lock) _saveKey = claudeSessionId;
@@ -473,9 +482,14 @@ internal class TurnAccumulator
                 .LastOrDefault(m => m.EscalationId == escalationId)?.Escalation;
     }
 
+    // transcriptTailUuid — точный якорь границы хода для ветвления чата: uuid последней
+    // записи транскрипта CLI, снятый вызывающим на конце хода (см.
+    // StoredResultMessage.TranscriptTailUuid). null — не прочитался, чат остаётся на
+    // текстовом сопоставлении.
     public async Task OnResultAsync(string subtype, long durationMs, int numTurns,
         UsageInfo? usage, double? totalCostUsd, string? apiErrorStatus, IReadOnlyList<string>? permissionDenials, ChatHistoryService svc,
-        int? contextTokens = null, string? usageModel = null, long? durationApiMs = null)
+        int? contextTokens = null, string? usageModel = null, long? durationApiMs = null,
+        string? transcriptTailUuid = null)
     {
         lock (_lock)
         {
@@ -486,7 +500,8 @@ internal class TurnAccumulator
             foreach (var m in _currentTurn)
                 if (m is StoredTextMessage t && t.ParentToolUseId is null && t.Model is null)
                     t.Model = usageModel;
-            _currentTurn.Add(new StoredResultMessage(subtype, durationMs, numTurns, usage, totalCostUsd, apiErrorStatus, permissionDenials, contextTokens, durationApiMs));
+            _currentTurn.Add(new StoredResultMessage(subtype, durationMs, numTurns, usage, totalCostUsd, apiErrorStatus, permissionDenials, contextTokens, durationApiMs)
+                { TranscriptTailUuid = transcriptTailUuid });
         }
         await FlushAsync(svc);
     }
@@ -501,6 +516,24 @@ internal class TurnAccumulator
             _currentTurn.Add(new StoredErrorMessage(text) { Details = details, Timestamp = NowMs() });
         }
         await FlushAsync(svc);
+    }
+
+    // Ход остановлен человеком: отметка встаёт в текущий ход СЛЕДОМ за тем, что он успел
+    // написать (буферы сбрасываем, как на конце хода), — там же, где её ставит живая лента.
+    // Ход в историю не закрываем (FlushAsync): фоновые агенты убитого хода ещё могут прислать
+    // bg_agent_done/прогресс workflow по своим карточкам. Повторный «Стоп» подряд второй
+    // отметки не даёт. false — отметка уже стоит, писать нечего.
+    public bool OnUserInterrupted()
+    {
+        lock (_lock)
+        {
+            FlushBuffers(final: true);
+            var last = _currentTurn.Count > 0 ? _currentTurn[^1]
+                : _history.Count > 0 ? _history[^1] : null;
+            if (last is StoredInterruptedMessage) return false;
+            _currentTurn.Add(new StoredInterruptedMessage(NowMs()));
+            return true;
+        }
     }
 
     // Стоимость генерации fal.ai приходит асинхронно (вне хода) — добавляем в историю напрямую.

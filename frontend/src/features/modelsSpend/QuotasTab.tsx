@@ -17,7 +17,8 @@ import { modelUnavailableText, unavailableModelName } from '../../lib/providerLi
 import { fmtReset, latestPerWindow, seriesByWindow, snapshotFreshnessLabel, windowLabel, worstWindow } from '../../lib/rateLimit';
 import { rotationBadgeState } from '../../lib/rotation';
 import type { RotationBadgeState } from '../../lib/rotation';
-import { addDaysUtc, openSpend, plural, spendQuery, todayUtc } from '../../lib/spend';
+import { plural } from '../../lib/plural';
+import { addDaysUtc, openSpend, spendQuery, todayUtc } from '../../lib/spendContract';
 import { freeSourceLabel, isFreeSource } from '../../lib/spendSources';
 import { isLocalEngineKey } from '../../lib/localEngine';
 import { showToast } from '../../lib/toast';

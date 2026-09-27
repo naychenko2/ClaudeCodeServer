@@ -35,13 +35,12 @@ namespace ClaudeHomeServer.Services.Tasks;
 // 4) Точечный допуск к `ClaudeHomeServer.Protocol.NotificationMessage` — параметр
 //    public-метода `TaskSchedulerService.SendNotificationAsync`. Префикс
 //    `ClaudeHomeServer.Protocol` снят (волна 3).
-// 5) Шов `Tasks → Models.Session`: `TaskManager.ctor` мутирует три статических
-//    резолвера на `Session` (`Session.TaskSourceSessionResolver`,
-//    `TaskDelegationDepthResolver`, `TaskDoneResolver`) — нужны `Session.ParentSessionId`,
-//    `Session.TaskDelegationDepth` (гейт `TASKS_EXECUTE`) и `Session.TaskDone`
-//    (фильтр чатов «Готово»). Связь из тела конструктора, рефлексией не
-//    контролируется. Контракт: `TaskManager` создаётся раньше первой сериализации
-//    `Session` (он singleton, инстанс живёт весь процесс, никаких поздних Lazy).
+// 5) Шов `Tasks → Models.Session` (статика) — снят (эксперимент-4). Раньше
+//    `TaskManager.ctor` мутировал статические `Session.TaskSourceSessionResolver`/
+//    `TaskDoneResolver`, из чего `Session` (Core) вычислял `ParentSessionId`/`TaskDone`.
+//    Теперь вычисления живут в спине: `SessionTaskLinks` (Core) поверх шва `ITaskLookup`,
+//    а на wire их дописывает конвертер `Session` в Main — связь вертикаль → модель
+//    через явный Core-порт, а не скрытую статическую запись из конструктора.
 public sealed class TasksSubsystem : IAppSubsystem
 {
     public string Key => "tasks";

@@ -10,7 +10,7 @@
 // в хостовой сборке (tsc/vitest/vite) — через алиас на этот файл.
 
 // ─── design ──────────────────────────────────────────────────────────────────
-export { FONT, FS, C, R, SP, SHADOW, ISLAND, Z, GROUP_COLORS, CHAT_MAX_W, TB } from '../design';
+export { FONT, FS, C, R, SP, SHADOW, ISLAND, Z, GROUP_COLORS, CHAT_MAX_W, TB, CONTENT_MAX_W } from '../design';
 
 // ─── api ─────────────────────────────────────────────────────────────────────
 export { api } from '../api';
@@ -33,11 +33,19 @@ export {
 export { useSubsystem, isSubsystemEnabled } from '../subsystems';
 
 // ─── subsystems/registryCore ─────────────────────────────────────────────────
-export { registerSubsystem } from '../subsystems/registryCore';
+export { registerSubsystem, REVEAL_PANEL_EVENT } from '../subsystems/registryCore';
 export type { SubsystemManifest } from '../subsystems/registryCore';
 
 // ─── offline ─────────────────────────────────────────────────────────────────
-export { OfflineError } from '../offline';
+// request и readStoredToken — низкоуровневый HTTP редактора картинок: его api.ts
+// ходит по своим маршрутам в обход фасада api
+export { OfflineError, request, readStoredToken } from '../offline';
+
+// ─── featureFlags ────────────────────────────────────────────────────────────
+export { FLAGS, useFeature, getFlag } from '../featureFlags';
+
+// ─── defaultPersona ──────────────────────────────────────────────────────────
+export { useMe } from '../defaultPersona';
 
 // ─── toast ───────────────────────────────────────────────────────────────────
 export { showToast } from '../toast';
@@ -46,7 +54,7 @@ export { showToast } from '../toast';
 export { ensurePersonasLoaded, usePersonas, personaLabel } from '../personas';
 
 // ─── breakpoints ─────────────────────────────────────────────────────────────
-export { useIsMobile, useWindowWidth } from '../breakpoints';
+export { useIsMobile, useWindowWidth, MOBILE_MAX, TABLET_MAX } from '../breakpoints';
 
 // ─── noAutofill ──────────────────────────────────────────────────────────────
 export { NO_AUTOFILL } from '../noAutofill';
@@ -64,7 +72,7 @@ export { docAnnotationsPrompt, ANNOTATIONS_TOOL_KEY } from '../ai/annotationsPro
 export { useAiJob, runAiJob, patchAiJobResult, resetAiJob } from '../aiJobStore';
 
 // ─── nav ─────────────────────────────────────────────────────────────────────
-export { parseHash, navPush, navReplace, getNav } from '../nav';
+export { parseHash, navPush, navReplace, getNav, NAV_CHANGE_EVENT } from '../nav';
 export type { NavSnapshot } from '../nav';
 
 // ─── tasks ───────────────────────────────────────────────────────────────────
@@ -104,8 +112,9 @@ export { useContainerWidth } from '../../hooks/useContainerWidth';
 export {
   Button, IconButton, Badge, Modal, ConfirmDialog, BackButton,
   IslandScaffold, PanelHeaderSlot, useHasPanelHeader, MenuItem,
-  SidebarSection, Toggle, PageCanvas, WaitingIndicator,
-  EmptyState, MetaChip, IconField,
+  SidebarSection, Toggle, PageCanvas, WaitingIndicator, Dot,
+  Island, EmptyState, Field, TextField, TextArea, IconField, ModalActions, Menu, SegmentedControl, Checkbox,
+  Chip, ChipX, ProgressBar, MetaChip,
 } from '../../components/ui';
 
 // ─── components/ui/icons ─────────────────────────────────────────────────────
@@ -136,7 +145,7 @@ export { ChatProjectContext } from '../../components/chat/contexts';
 export { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 
 // ─── features/home/WidgetCard ─────────────────────────────────────────────────
-export { WidgetCard, WidgetAction, WidgetEmpty, relTime } from '../../features/home/WidgetCard';
+export { WidgetCard, WidgetAction, WidgetEmpty, relTime, MiniSegment } from '../../features/home/WidgetCard';
 
 // ─── pages/workspace/PanelZone ───────────────────────────────────────────────
 export { PanelZone } from '../../pages/workspace/PanelZone';
@@ -146,3 +155,15 @@ export { NOTES_KEYS } from '../../pages/workspace/panelCatalog';
 
 // ─── pages/workspace/panelStackState ─────────────────────────────────────────
 export { notesPanels, zoneOf } from '../../pages/workspace/panelStackState';
+
+// ─── composerStrips ──────────────────────────────────────────────────────────
+// Владелец полосы над композером просит показать её в чате и снимает запрос
+// (правило старшинства — в самом сторе, ADR-019 решение 3)
+export { requestStrip, releaseStrip } from '../composerStrips';
+
+// ─── signalr ─────────────────────────────────────────────────────────────────
+export { onMessage, onReconnected } from '../signalr';
+
+// ─── features/modelsSpend ────────────────────────────────────────────────────
+// Модалка ядра (её же открывает шапка хаба), а не код MF-модуля spend
+export { ModelsSpendModal } from '../../features/modelsSpend/ModelsSpendModal';

@@ -20,7 +20,6 @@ namespace ClaudeHomeServer.Tests.Services;
 // BroadcastChatDeletedAsync), chat_deleted суррогатом не используется. Здесь же отбор
 // кандидатов автоправила: GetArchiveRuleCandidates — та же функция, что позовёт тик.
 // Сборка SessionManager своя (как ChatArchiveFlagTests), но мок хаба ЗАПИСЫВАЕТ группы.
-[Collection(TestCollections.SessionStaticResolvers)]
 public class ChatArchivedEventTests : IDisposable
 {
     // Владелец чатов: свой пользователь на каждую сборку (CreateChatAsync резолвит
@@ -112,7 +111,7 @@ public class ChatArchivedEventTests : IDisposable
     public void Предикат_СтарыйНезакреплённыйОбычныйЧат_Кандидат()
     {
         var s = Old();
-        SessionManager.MatchesArchiveRule(s, cutoff: s.UpdatedAt.AddMinutes(1)).Should().BeTrue();
+        SessionManager.MatchesArchiveRule(s, null, cutoff: s.UpdatedAt.AddMinutes(1)).Should().BeTrue();
     }
 
     [Fact]
@@ -127,17 +126,10 @@ public class ChatArchivedEventTests : IDisposable
             .Matches(cutoff, "уже в архиве повторно не архивируем");
         Old().Tap(s => s.TaskId = "task-1")
             .Matches(cutoff, "чат живой задачи-исполнителя");
-        Old().Tap(s =>
-        {
-            s.TaskId = "task-1";
-            Session.TaskDoneResolver = _ => true;
-            try
-            {
-                SessionManager.MatchesArchiveRule(s, cutoff).Should().BeTrue(
-                    "задача выполнена — чат артефакт, правилу можно");
-            }
-            finally { Session.TaskDoneResolver = null; }
-        });
+        var done = Old();
+        done.TaskId = "task-1";
+        SessionManager.MatchesArchiveRule(done, new DoneTaskLookup("task-1"), cutoff).Should().BeTrue(
+            "задача выполнена — чат артефакт, правилу можно");
     }
 
     // Исключение снято 28.08.2026: брошенное знакомство иначе не архивировалось никогда
@@ -148,7 +140,7 @@ public class ChatArchivedEventTests : IDisposable
     {
         var s = Old();
         s.OnboardingKind = kind;
-        SessionManager.MatchesArchiveRule(s, cutoff: s.UpdatedAt.AddMinutes(1)).Should().BeTrue(
+        SessionManager.MatchesArchiveRule(s, null, cutoff: s.UpdatedAt.AddMinutes(1)).Should().BeTrue(
             "порог сам по себе означает, что знакомство не продолжают");
     }
 
@@ -166,7 +158,7 @@ public class ChatArchivedEventTests : IDisposable
         {
             Stage = stage, WaveNumber = wave, ClosedWave = closed,
         };
-        SessionManager.MatchesArchiveRule(s, cutoff: s.UpdatedAt.AddMinutes(1)).Should().BeTrue(
+        SessionManager.MatchesArchiveRule(s, null, cutoff: s.UpdatedAt.AddMinutes(1)).Should().BeTrue(
             "живой ход и фоновые агенты отсекаются отдельно, в GetArchiveRuleCandidates");
     }
 
@@ -174,7 +166,7 @@ public class ChatArchivedEventTests : IDisposable
     public void Предикат_ПорогНеПройден_НеКандидат()
     {
         var s = Old(); // UpdatedAt = now-100д
-        SessionManager.MatchesArchiveRule(s, cutoff: s.UpdatedAt.AddDays(-1))
+        SessionManager.MatchesArchiveRule(s, null, cutoff: s.UpdatedAt.AddDays(-1))
             .Should().BeFalse("cutoff раньше последней активности — порог не пройден");
     }
 
@@ -275,11 +267,21 @@ public class ChatArchivedEventTests : IDisposable
 internal static class ArchivePredicateCheck
 {
     public static void Matches(this Session s, DateTime cutoff, string because) =>
-        SessionManager.MatchesArchiveRule(s, cutoff).Should().BeFalse(because);
+        SessionManager.MatchesArchiveRule(s, null, cutoff).Should().BeFalse(because);
 
     public static T Tap<T>(this T value, Action<T> configure)
     {
         configure(value);
         return value;
     }
+}
+
+// Стерильный ITaskLookup для юнита-теста MatchesArchiveRule: единственный известный id →
+// задача в статусе Done (остальные id — не найдена). Заменяет прежнюю гонку на статический
+// Session.TaskDoneResolver.
+internal sealed class DoneTaskLookup(string doneId) : ITaskLookup
+{
+    public TaskItem? GetById(string id) => id == doneId
+        ? new TaskItem { Id = id, Status = TaskItemStatus.Done }
+        : null;
 }

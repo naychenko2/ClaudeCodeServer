@@ -64,7 +64,14 @@ public class DeviceHubTests
         context.SetupGet(c => c.User).Returns(new ClaimsPrincipal(new ClaimsIdentity(claims, "device-token")));
         context.SetupGet(c => c.ConnectionAborted).Returns(CancellationToken.None);
 
-        var hub = new DeviceHub(router, NullLogger<DeviceHub>.Instance) { Context = context.Object };
+        // Устройств в реестре нет: Hello этих тестов — клиента рук, сведения агента не пишутся
+        var exec = new DeviceExecChannel(
+            new DeviceRegistry(Path.Combine(Path.GetTempPath(), "ccs_devhub_" + Guid.NewGuid().ToString("N"))),
+            router,
+            new DeviceHarnessPolicy(new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build()),
+            Mock.Of<IDeviceExecOpenSender>(),
+            NullLogger<DeviceExecChannel>.Instance);
+        var hub = new DeviceHub(router, exec, NullLogger<DeviceHub>.Instance) { Context = context.Object };
         return (hub, context);
     }
 

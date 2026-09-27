@@ -4,12 +4,13 @@
 > [backend/ClaudeHomeServer/Controllers/](../../backend/ClaudeHomeServer/Controllers/);
 > при расхождении верить коду и чинить этот файл.
 
-Все эндпоинты (кроме `/api/auth/ping`) и SignalR-хаб защищены `[Authorize]` —
-доступ только по API-ключу. `ping` дополнительно под rate-limit (`Auth:PingRateLimit`,
-по умолчанию 10/мин на IP). См. [remote-access.md](../operations/remote-access.md).
+Все эндпоинты (кроме `/api/auth/login`) и SignalR-хаб защищены `[Authorize]` —
+схема **JWT Bearer**. Вход дополнительно под rate-limit (политика `auth-login`,
+ключ `Auth:LoginRateLimit`, по умолчанию 10/мин, партиция по адресу клиента).
+См. [remote-access.md](../operations/remote-access.md).
 
 ```
-POST /api/auth/ping             { serverUrl, apiKey } → { ok } | 401 | 429  (ключ + rate-limit)
+POST /api/auth/login            { username, password } → { token, expiresAt, username, displayName } | 400 | 401 | 429
 GET/POST/PUT/DELETE /api/projects
 GET/POST/DELETE     /api/projects/{id}/sessions       POST body: { mode, name?, resumeSessionId?, model? }
 PUT                 /api/projects/{id}/sessions/{sid} body: { name?, model? } → обновлённая сессия
@@ -97,3 +98,86 @@ GET                 /api/knowledge/{id}/search?q=&topK=&method=semantic|fulltext
 Эффективные значения флагов также возвращаются в `GET /api/auth/me` (поле `featureFlags`),
 чтобы фронт получал их тем же запросом, что и при старте. Подробнее — раздел «Фич-флаги»
 в [CLAUDE.md](../../CLAUDE.md).
+
+## Редактор картинок (модуль `imageeditor`)
+
+Ручки модуля [ClaudeHomeServer.ImageEditor](../../backend/ClaudeHomeServer.ImageEditor/CLAUDE.md),
+решения — [ADR-019](../adr/ADR-019-image-editor-v3-in-chat.md). Гейт у всех один: флаг
+`image-editor` выключен или проект чужой — `404`; модуль выключен конфигом — ручек нет (`404`).
+Ошибки — `{ error, code }`.
+
+```
+GET                 /api/projects/{id}/image-editor/catalog              → поставщики, модели, caps
+POST                /api/projects/{id}/image-editor/quote                → котировка (цена или время и очередь)
+POST                /api/projects/{id}/image-editor/jobs                 multipart; sessionId? + threadId? — запуск в нить чата → 202 задача
+GET/DELETE          /api/projects/{id}/image-editor/jobs/{jobId}         → задача / отмена
+GET                 /api/projects/{id}/image-editor/jobs/{jobId}/variants/{n}  → картинка варианта
+POST                /api/projects/{id}/image-editor/save                 { …, sessionId?, threadId? } → файл; занятое имя — 409 name_taken + suggestion
+GET                 /api/projects/{id}/image-editor/save/check           → свободно ли имя
+POST                /api/projects/{id}/image-editor/transform            правка без ИИ → шаг; нет растра — 503 raster_unavailable
+GET                 /api/projects/{id}/image-editor/steps/{stepId}       → картинка шага
+GET/POST/PUT/DELETE /api/projects/{id}/image-editor/characters[/{slug}]  персонажи проекта; фото — …/characters/{slug}/photos/{file}
+GET/PUT             /api/projects/{id}/image-editor/prefs                { provider, model, count, matchSourceSize, characterSlug } —
+                                                                         выбор в полосе «Картинки» проекта (нет — null, null, 2, true, null);
+                                                                         удалённый персонаж читается как null; PUT → image_prefs_changed
+```
+
+**Нити чата** (`ThreadsController`, база `/api/projects/{id}/image-editor/sessions/{sid}/threads`).
+Чужой, несуществующий и чат другого проекта неотличимы — `404 chat_not_found`; нить не этого чата —
+`404 thread_not_found`. Каждая мутация несёт `revision`, от которой считал клиент: устарела —
+`409 revision_conflict` с актуальным `state`. Ответ любой мутации — полное состояние, как у `GET`.
+Смена фокуса `sessions.json` не пишет и `updatedAt` чата не двигает.
+
+```
+GET                 …/threads                          → { focus, revision, threads[] }
+POST                …/threads                          { file? | draftFolder?, revision } — взять картинку в работу
+                                                       (ровно одно; нить по файлу уже есть — фокус на неё)
+PUT                 …/threads/focus                    { threadId | null, revision } — выбрать картинку или снять выбор
+DELETE              …/threads/{threadId}?revision=     убрать нить без шагов; с шагами или ждущими вариантами — 400
+POST                …/threads/{threadId}/take          { jobId + variant | stepId, revision } — «Взять»
+POST                …/threads/{threadId}/dismiss       { jobId, revision } — «Не брать»
+POST                …/threads/{threadId}/rollback      { stepId | null, revision } — откат (null — исходник)
+PUT                 …/threads/{threadId}/settings      { settings, revision } — поставщик, модель, число вариантов
+```
+
+`take`, `rollback` и `save` — только человек: у агента таких MCP-инструментов нет (ADR-019,
+решение 1). Ручек чата картинки v2 (`image-editor/chats*`) больше нет.
+
+## SignalR-хаб `/hubs/session`
+
+Вторая половина контракта с фронтом: REST отдаёт состояние, хаб — живой ход. Источник правды —
+[Hubs/SessionHub.cs](../../backend/ClaudeHomeServer/Hubs/SessionHub.cs); хаб под тем же
+`[Authorize]`, что и REST.
+
+**Клиент вызывает** (основные методы; полный список — в коде):
+
+```
+JoinSession(sessionId)                      → подписка на чат; в ответ Caller получает догоняющие
+                                              события (статус хода, незавершённое сообщение, recall)
+LeaveSession(sessionId)                     → отписка
+SendMessage(sessionId, text,                → отправить ход; возвращает id созданного сообщения
+            attachedPaths?, mode?, auto?)
+RespondPermission(sessionId, requestId,     → ответ на permission_request (ждёт его CLI, см. ниже)
+                  behavior)
+Interrupt(sessionId)                        → прервать идущий ход
+```
+
+Рядом живут подписки на другие каналы того же хаба (`JoinProject`/`LeaveProject`,
+`JoinUser`/`LeaveUser`, `JoinPreviewLog`/`LeavePreviewLog`) и ходовые ответы штаба
+(`RespondTeamPlan`, `RespondTeamEscalation`), плюс `CompactSession`.
+
+**Сервер шлёт** единственное событие — `message` с объектом
+[`ServerMessage`](../../backend/ClaudeHomeServer.Core/Protocol/ServerMessage.cs), где вид
+события различается полем `type` (`text_delta`, `thinking_delta`, `tool_use`, `tool_result`,
+`permission_request`, `result`, `exited` и т.д.). Один канал с дискриминатором, а не метод на
+каждое событие: фронт разбирает поток в одном месте, а вертикаль может завести свой record и
+отправить его через `IHubContext<SessionHub>`, ни от кого не завися (см.
+[ADR-014](../adr/ADR-014-internal-subsystems.md), раздел про `ClaudeHomeServer.Protocol`).
+
+Записи модулей в ленте чата идут типом `module_record` (`{ module, recordType, data, fallback }`,
+та же форма лежит в `history.json`); незнакомый `recordType` или выключенный модуль — лента рисует
+`fallback`. Модуль пишет их вне хода через шов `IChatFeed`; модель их не видит. Редактор картинок
+шлёт владельцу `image_edit_progress` / `image_edit_completed` / `image_edit_failed` и
+`image_thread_changed` (нити чата сменились; потерянное событие догоняется `GET …/threads`) и
+`image_prefs_changed { projectId, prefs }` (выбор в полосе «Картинки» проекта; догоняется `GET …/prefs`).
+Метода `SendImageChatMessage` и события `image_chat_state` (чат картинки v2) больше нет.

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import {
@@ -119,23 +119,82 @@ describe('serverHistoryNewer: базовые случаи', () => {
 });
 
 // Сторож: белый список персистируемых видов на фронте обязан совпадать с тем, что
-// бэкенд реально пишет в history.json. Разъехались — сверка длин врёт.
+// бэкенд реально пишет в history.json. Разъехались — сверка длин врёт. Источник правды
+// один — дискриминаторы StoredMessage.cs, тест читает сам файл, а не копию списка.
+
+// Путь к StoredMessage.cs ищем подъёмом вверх от файла теста до корня репозитория.
+// Не `../../..`: так сторож переживает переезд самого теста внутри frontend/, а корень
+// опознаётся по искомому файлу, а не по `.git` (в worktree это файл, а не папка).
+// Разделители пути собирает path.join — тест одинаково работает на Windows и на Linux в CI.
+const STORED_MESSAGE_REL = path.join('backend', 'ClaudeHomeServer.Core', 'Protocol', 'StoredMessage.cs');
+
+function storedMessagePath(): string {
+  const start = path.dirname(fileURLToPath(import.meta.url));
+  for (let dir = start; ;) {
+    const candidate = path.join(dir, STORED_MESSAGE_REL);
+    if (existsSync(candidate)) return candidate;
+    const parent = path.dirname(dir);
+    // Дошли до корня файловой системы — падаем с диагнозом, а не проходим тихо
+    if (parent === dir) throw new Error(
+      `Сторож PERSISTED_KINDS: от ${start} вверх до корня не найден ${STORED_MESSAGE_REL}. ` +
+      'Файл переехал или переименован — почини путь, а не выключай сторож.');
+    dir = parent;
+  }
+}
+
+// Исключение №1: бэкенд пишет этот вид в history.json, но СОБСТВЕННЫМ элементом ленты он
+// не становится. Критерий — в normalizeHistory такой kind до items не доходит. Считать его
+// в serverHistoryNewer нельзя: на клиенте его нет ни в живой ленте, ни в нормализованной
+// истории, и он завысил бы длину серверного списка.
+const STORED_BUT_NOT_LIVE_ITEM: Record<string, string> = {
+  workflow_progress: 'снапшот прогресса Workflow: normalizeHistory вливает его в карточку ' +
+    'родительского tool_use (ветка m.kind === "workflow_progress"), отдельной строки ленты нет',
+};
+
+// Исключение №2: вид ленты участвует в сверке длин, но своего C#-типа в StoredMessage.cs
+// не имеет. Критерий — элемент переживает перезагрузку, но приезжает с сервера не отдельной
+// записью истории (например, собирается фронтом из других записей). Сейчас таких нет, и это
+// не «на всякий случай»: чисто клиентские виды (provider_limit, provider_switched,
+// git_turn_commit, companion_switched…) в PERSISTED_KINDS не входят вовсе и исключения не
+// требуют. Появится такой вид — вписать сюда с объяснением, иначе сторож покраснеет.
+const PERSISTED_WITHOUT_STORED_TYPE: Record<string, string> = {};
+
 describe('PERSISTED_KINDS ↔ StoredMessage.cs', () => {
   it('совпадает с дискриминаторами StoredMessage', () => {
-    const here = path.dirname(fileURLToPath(import.meta.url));
-    const storedPath = path.resolve(here, '..', '..', '..', 'backend',
-      'ClaudeHomeServer.Core', 'Protocol', 'StoredMessage.cs');
-    const src = readFileSync(storedPath, 'utf8');
+    const src = readFileSync(storedMessagePath(), 'utf8');
     const discriminators = [...src.matchAll(/JsonDerivedType\(typeof\([^)]+\),\s*"([a-z_]+)"\)/g)]
       .map(m => m[1]);
 
-    expect(discriminators.length).toBeGreaterThan(10); // регулярка жива, файл найден
+    // Регулярка жива: файл нашёлся, но разбор дал пустоту — значит изменился синтаксис
+    // атрибутов, и сравнение ниже было бы сравнением с пустым списком
+    expect(discriminators.length,
+      `в ${STORED_MESSAGE_REL} не разобрано ни одного [JsonDerivedType] — проверь регулярку`)
+      .toBeGreaterThan(10);
 
-    // workflow_progress персистится, но собственным элементом ленты не становится:
-    // normalizeHistory вливает его в карточку родительского tool_use
-    const expected = discriminators.filter(k => k !== 'workflow_progress');
+    const csharp = new Set(discriminators);
+    const front = new Set<string>(PERSISTED_KINDS);
 
-    expect([...PERSISTED_KINDS].sort()).toEqual([...expected].sort());
+    // Протухшие исключения — такая же красная лампа, как расхождение списков: молчаливого
+    // «пропустим лишнее» быть не должно
+    expect(Object.keys(STORED_BUT_NOT_LIVE_ITEM).filter(k => !csharp.has(k)),
+      `исключение STORED_BUT_NOT_LIVE_ITEM протухло: этих видов в ${STORED_MESSAGE_REL} больше нет — убери записи`)
+      .toEqual([]);
+    expect(Object.keys(PERSISTED_WITHOUT_STORED_TYPE).filter(k => !front.has(k) || csharp.has(k)),
+      'исключение PERSISTED_WITHOUT_STORED_TYPE протухло: вид либо исчез из PERSISTED_KINDS, либо обзавёлся C#-типом')
+      .toEqual([]);
+
+    const missingOnFront = discriminators.filter(k => !front.has(k) && !(k in STORED_BUT_NOT_LIVE_ITEM));
+    expect(missingOnFront,
+      'бэкенд пишет в history.json виды, которых нет в PERSISTED_KINDS (frontend/src/lib/chatReducer.ts): ' +
+      `${missingOnFront.join(', ')}. Добавить их в белый список либо (если элементом ленты они не становятся) ` +
+      'в STORED_BUT_NOT_LIVE_ITEM с объяснением')
+      .toEqual([]);
+
+    const missingInCSharp = [...front].filter(k => !csharp.has(k) && !(k in PERSISTED_WITHOUT_STORED_TYPE));
+    expect(missingInCSharp,
+      `в PERSISTED_KINDS есть виды без дискриминатора в ${STORED_MESSAGE_REL}: ${missingInCSharp.join(', ')}. ` +
+      'В историю они не пишутся — убрать из белого списка либо занести в PERSISTED_WITHOUT_STORED_TYPE с объяснением')
+      .toEqual([]);
   });
 });
 
@@ -394,5 +453,47 @@ describe('resolveCardsFromHistory: догоняем пропущенный от�
       kind: 'ask_question', toolUseId: 't-2', input: { questions: [] }, resolved: true, answers: {},
     });
     expect(resolveCardsFromHistory(server, resolvedClient.items)).toBeNull();
+  });
+});
+
+describe('тихие строки чата картинки (ADR-018 §1, §2)', () => {
+  const launch = { type: 'image_launch', by: 'human', prompt: 'вечер', provider: 'fal', model: 'auto', count: 2, jobId: 'j1', timestamp: 5 };
+
+  it('живая строка «Вы запустили» — одна на задачу, повторная доставка не удваивает', () => {
+    const s = feed(initialChatState(), launch, launch);
+    expect(s.items.filter(i => i.kind === 'image_launch')).toHaveLength(1);
+  });
+
+  it('живая лента и история сверяются по длине: строки переживают перезагрузку', () => {
+    const live = feed(initialChatState(), launch, { type: 'image_file_moved', from: 'a.png', to: 'a.v2.png', timestamp: 6 });
+    const stored = snapshot(
+      { kind: 'image_launch', by: 'human', prompt: 'вечер', provider: 'fal', model: 'auto', count: 2, jobId: 'j1', timestamp: 5 },
+      { kind: 'image_file_moved', from: 'a.png', to: 'a.v2.png', timestamp: 6 },
+    );
+    expect(stored.map(i => i.kind)).toEqual(['image_launch', 'image_file_moved']);
+    expect(serverHistoryNewer(stored, live.items)).toBe(false);
+  });
+});
+
+describe('запись модуля module_record (ADR-019 §2)', () => {
+  const rec = { type: 'module_record', module: 'imageeditor', recordType: 'image_thread', data: { threadId: 't1', stackId: 's1' }, fallback: 'Картинка', timestamp: 7 };
+
+  it('живая запись ложится в ленту одной строкой, повторная доставка не удваивает', () => {
+    const s = feed(initialChatState(), rec, rec);
+    const items = s.items.filter(i => i.kind === 'module_record');
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ module: 'imageeditor', recordType: 'image_thread', data: { threadId: 't1', stackId: 's1' }, fallback: 'Картинка' });
+  });
+
+  it('две стопки одной нити — две записи: различаются по data', () => {
+    const s = feed(initialChatState(), rec, { ...rec, data: { threadId: 't1', stackId: 's2' } });
+    expect(s.items.filter(i => i.kind === 'module_record')).toHaveLength(2);
+  });
+
+  it('история и живая лента сверяются: запись переживает перезагрузку', () => {
+    const live = feed(initialChatState(), rec);
+    const stored = snapshot({ kind: 'module_record', module: 'imageeditor', recordType: 'image_thread', data: { threadId: 't1', stackId: 's1' }, fallback: 'Картинка', timestamp: 7 });
+    expect(stored.map(i => i.kind)).toEqual(['module_record']);
+    expect(serverHistoryNewer(stored, live.items)).toBe(false);
   });
 });

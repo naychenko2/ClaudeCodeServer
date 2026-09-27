@@ -115,6 +115,40 @@ describe('fal — регрессия', () => {
   });
 });
 
+describe('higgsfield — голые URL из текста', () => {
+  // job_status отдаёт готовую ссылку строкой в свободном тексте (не в JSON, не маркером)
+  const HF_URL = 'https://d8j0ntlcm91z4.cloudfront.net/user_ab12cd34/hf_20260917_095526_0e524a8e-21d3.png';
+
+  it('job_status (текст + голый URL) → извлекается один image', () => {
+    const result = `Job 0e524a8e-21d3-44f0-99de-6d8b84aeb9e6 — completed\n${HF_URL}`;
+    const map = buildMediaVisibility([tool('hf', 'mcp__higgsfield__job_status', result)]);
+    expect(visible(map, 'hf').map(m => m.kind)).toEqual(['image']);
+    expect(visible(map, 'hf')[0].url).toBe(HF_URL);
+  });
+
+  it('повторный job_status по тому же заданию (URL пришедший дважды) → один элемент', () => {
+    const result = `Job 0e524a8e-21d3-44f0-99de-6d8b84aeb9e6 — completed\n${HF_URL}`;
+    const map = buildMediaVisibility([
+      tool('hf1', 'mcp__higgsfield__job_status', result),
+      tool('hf2', 'mcp__higgsfield__job_status', result),
+    ]);
+    expect(visible(map, 'hf1')).toHaveLength(1);
+    expect(visible(map, 'hf2')).toEqual([]);
+  });
+
+  it('URL с постороннего хоста в тексте → НЕ извлекается (защита от «рисуем что попало»)', () => {
+    const result = 'Готово: https://example.com/photo.png — скачать';
+    const map = buildMediaVisibility([tool('hf', 'mcp__higgsfield__job_status', result)]);
+    expect(visible(map, 'hf')).toEqual([]);
+  });
+
+  it('generate_image без URL → пусто, без падений', () => {
+    const result = 'Submitted 1 job. If a widget is visible, it polls automatically…\n- 0e524a8e-21d3-44f0-99de-6d8b84aeb9e6  "Calm sea at dawn"';
+    const map = buildMediaVisibility([tool('hf', 'mcp__higgsfield__generate_image', result)]);
+    expect(visible(map, 'hf')).toEqual([]);
+  });
+});
+
 describe('normalizeMediaUrl', () => {
   it('trim и финальный слэш', () => {
     expect(normalizeMediaUrl(`  ${IMG} `)).toBe(IMG);

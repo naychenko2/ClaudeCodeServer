@@ -58,6 +58,12 @@ public class TaskItem
     // Сбрасывается при повторном запуске исполнителя (TaskManager.MarkClaudeStarted).
     public DateTime? ExecutorStoppedAt { get; set; }
     public string? ExecutorStopReason { get; set; }
+    // Исполнитель ждёт устройство локального проекта (ADR-016, вариант А плана §5): момент
+    // постановки в ожидание и причина для человека. ClaudeStartedAt при этом пуст — запуска
+    // не было. Стартует DeviceOnlineDispatcher при выходе устройства в онлайн; через 24 ч —
+    // остановка с причиной device_wait_expired. Снимается запуском (MarkClaudeStarted).
+    public DateTime? DeviceWaitSince { get; set; }
+    public string? DeviceWaitReason { get; set; }
     // Пометка снятия человеком по карточке блокера (волна 1 team-blocker-honest, дефект
     // f3965801): «Задача будет закрыта как снятая, исполнитель получит отбой» — диалог
     // ОБЕЩАЕТ это. Поле делает пометку сильнее позднего tasks_complete: гонка
@@ -100,8 +106,8 @@ public class TaskItem
     public string? SourceSessionId { get; set; }
     // Глубина цепочки делегирования: 0 — создана не из чата-исполнителя (обычный чат/UI/API);
     // из чата-исполнителя родительской задачи — её DelegationDepth + 1 (TaskManager.Create).
-    // Гейт TASKS_EXECUTE (ClaudeSession, через Session.TaskDelegationDepth) запрещает запуск
-    // нового исполнителя при >= 3 — обрывает рекурсивное размножение задач-исполнителей.
+    // Анти-рекурсия делегирования проверяется гейтом по глубине хода (DelegatedTurnGate /
+    // DenyOnDelegatedTurn, agentDepth), а не из этой модели; поле фиксирует длину цепочки.
     public int DelegationDepth { get; set; }
     // Порядок карточки на Kanban-доске (ручная сортировка внутри колонки).
     // double — чтобы вставлять между соседями через midpoint без перенумерации.

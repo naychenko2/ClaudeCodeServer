@@ -1,7 +1,10 @@
 import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, memo, type ReactNode } from 'react';
-import { X, Folder, FolderPlus, ChevronRight, SquarePen, Trash2, ArrowRight, Paperclip, BookOpen, Search, Plus, Check, Copy, Upload, Monitor, Server, GitBranch, ArrowDownWideNarrow, FoldVertical, UnfoldVertical, Lightbulb, StickyNote, AlertTriangle, CloudOff, RefreshCw, Workflow, SquareStack } from 'lucide-react';
+import { X, Folder, FolderPlus, ChevronRight, SquarePen, Trash2, ArrowRight, Paperclip, BookOpen, Search, Plus, Check, Copy, Upload, Monitor, Server, GitBranch, ArrowDownWideNarrow, FoldVertical, UnfoldVertical, Lightbulb, StickyNote, AlertTriangle, CloudOff, RefreshCw, Workflow, SquareStack, Pencil, Sparkles } from 'lucide-react';
 import type { Project, FileEntry } from '../types';
+import { ProjectFeature } from '../types';
 import { api } from '../lib/api';
+import { useProjectFeature, featureReason } from '../lib/projectCapabilities';
+import { useProjectRoutes } from '../lib/deviceAgent';
 import { OfflineError } from '../lib/offline';
 import { DIAGRAM_KINDS, DIAGRAM_META, diagramFileName, retargetDiagramExt, type DiagramKind } from '../lib/diagramTemplates';
 
@@ -27,7 +30,9 @@ import { showToast } from '../lib/toast';
 import { beginAiBusy, endAiBusy } from '../lib/ai/busy';
 import { useSubsystem } from '../lib/subsystems';
 import { useSlotItem } from '../lib/subsystems/registry';
-import type { FileExplorerFolderIconCtx, FileExplorerNoteDialogCtx } from '../lib/subsystems/registryCore';
+import type {
+  FileExplorerFolderIconCtx, FileExplorerNoteDialogCtx, ImageEditorOpenerApi, ImageEditorOpenTarget,
+} from '../lib/subsystems/registryCore';
 
 // Форматы, которые markitdown умеет превращать в Markdown (для пункта «Трансформировать в Markdown»)
 const MD_CONVERTIBLE = new Set(['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp', 'epub', 'csv', 'rtf', 'html', 'htm', 'msg']);
@@ -37,10 +42,13 @@ import { useGitState, ensureGit } from '../lib/git';
 import { useOnline } from '../hooks/useOnline';
 import { useContextButton } from '../features/chatContext/useContextButton';
 import { EmptyState } from './EmptyState';
+import { DeviceAgentGate } from './DeviceAgentGate';
+import { CapabilityUnavailable } from './CapabilityGate';
 import { C, R, FS, SP, FONT, MODAL_W } from '../lib/design';
 import { Modal, ModalActions, TextField, IconButton, Button, Menu, MenuItem, PanelHeaderSlot, FileTypeTile, FileStatusBadge, SegmentedControl, useHasPanelHeader, usePanelHeaderHold } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { NO_AUTOFILL } from '../lib/noAutofill';
+import { FLAGS, useFeature } from '../lib/featureFlags';
 
 interface Props {
   project: Project;
@@ -451,6 +459,8 @@ interface FileRowProps {
   expanded: boolean;
   loading: boolean;
   renaming: boolean;
+  // Переименование и перенос мышью: нет маршрута files/rename (другое устройство) — строка их не предлагает
+  canRename: boolean;
   isDropTarget: boolean;
   dragging: boolean;
   pressing: boolean;
@@ -543,9 +553,9 @@ const FileRow = memo(function FileRow(p: FileRowProps) {
 
   return (
     <div
-      draggable={!touch && !p.renaming && !notesRoot}
+      draggable={!touch && !p.renaming && !notesRoot && p.canRename}
       onClick={() => { if (!p.renaming) p.onOpen(entry); }}
-      onDoubleClick={!isMobile && !entry.isDirectory ? e => { e.stopPropagation(); p.onRename(entry); } : undefined}
+      onDoubleClick={!isMobile && !entry.isDirectory && p.canRename ? e => { e.stopPropagation(); p.onRename(entry); } : undefined}
       onContextMenu={e => p.onContextMenu(e, entry)}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
@@ -713,8 +723,33 @@ const FileRow = memo(function FileRow(p: FileRowProps) {
   );
 });
 
-export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = false, alwaysShowIcons = false, onAddToKnowledge, onAddFolderToKnowledge, onRemoveFromKnowledge, indexedFileNames, indexingFiles, indexingFolders, onAttachToChat, onOpenDossiers }: Props) {
+// Гейт по матрице возможностей (ADR-016 §3.4): если у проекта выключена группа
+// files (например, локальный с офлайн-устройством) — показываем причину, а не
+// пустое дерево. Саму проверку локальности делает projectCapabilities.ts — здесь
+// только матрица. У локального проекта дерево открывается через агента на этой машине, а с
+// другого устройства — через ретранслятор, только на чтение; пока связи нет, DeviceAgentGate
+// показывает состояние. Хуки дерева живут в
+// FileExplorerBody, поэтому ранние выходы гейтов не ломают Rules of Hooks
+export function FileExplorer(props: Props) {
+  const fileGate = useProjectFeature(props.project, ProjectFeature.Files);
+  if (!fileGate) {
+    return <CapabilityUnavailable feature={ProjectFeature.Files} title="Файлы недоступны" reason={featureReason(props.project, ProjectFeature.Files)} />;
+  }
+  return <DeviceAgentGate project={props.project} relayTitle="Файлы недоступны"><FileExplorerBody {...props} /></DeviceAgentGate>;
+}
+
+function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = false, alwaysShowIcons = false, onAddToKnowledge, onAddFolderToKnowledge, onRemoveFromKnowledge, indexedFileNames, indexingFiles, indexingFolders, onAttachToChat, onOpenDossiers }: Props) {
   const online = useOnline();
+  // Контрол записи рисуется, только если у проекта сейчас есть его маршрут: у агента — не все,
+  // с другого устройства (ретранслятор) — ни одного. Список маршрутов — deviceAgentRoutes.ts
+  const { can } = useProjectRoutes(project);
+  const canUpload = can('POST files/upload');
+  const canToMarkdown = can('POST files/document/to-markdown');
+  const canCreateFile = can('POST files/create');
+  const canMkdir = can('POST files/mkdir');
+  const canRename = can('POST files/rename');
+  const canDelete = can('DELETE files');
+  const canCreate = canCreateFile || canMkdir || canUpload;
   const hasPanelHeader = useHasPanelHeader();
   const marks = useSyncMarks(project.id);
   // Гейт по подсистеме заметок: при выключенной — бейджи заметок у файлов и
@@ -865,6 +900,14 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   // === Трансформация в Markdown (markitdown) — выбор папки назначения ===
   const [mdEntry, setMdEntry] = useState<FileEntry | null>(null);
   const [mdEnhance, setMdEnhance] = useState(false);
+
+  // === Редактор картинок: «Редактировать» у картинки, «Нарисовать картинку» у папки ===
+  // Вход — вклад MF-модуля image-editor: нет модуля или флага — нет и пунктов. Картинка
+  // открывается в последнем активном чате проекта (ADR-019), попапом «Редактор»
+  const imageEditor = useSlotItem<never, ImageEditorOpenerApi>('image-editor', 'opener')?.action;
+  const imageEditorOn = useFeature(FLAGS.imageEditor) && !!imageEditor;
+  const openEditor = (target: ImageEditorOpenTarget) =>
+    imageEditor?.open({ projectId: project.id, projectName: project.name, target, onShowInFiles: path => onOpenFile(path) });
   const doTransformMd = async (entry: FileEntry, targetDir: string | null) => {
     const enhance = mdEnhance;
     setMdEntry(null);
@@ -943,6 +986,11 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       setOnlyChanged(st.onlyChanged ?? false);
       loadDir('');
       if (st.mobileDir) loadDir(st.mobileDir);
+      // Пока проводник был размонтирован (пользователь на другой вкладке), листинги
+      // восстановленных папок могли устареть: событие filesChanged доходит только до
+      // смонтированного подписчика. Перезапрашиваем ВСЕ восстановленные папки (тот же
+      // приём, что и при full=true-ресинке); повторные пути loadDir снимает через inFlight.
+      for (const d of st.dirCache.keys()) loadDir(d);
     } else {
       setDirCache(new Map());
       setDirErrors(new Map());
@@ -991,6 +1039,29 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   // первого рендера — папка тогда только раскрывается и никогда не сворачивается
   const expandedRef = useRef(expanded);
   expandedRef.current = expanded;
+
+  // Файл открыли извне дерева («Показать в дереве» у сохранённой картинки): раскрываем
+  // папки до него, перечитываем его папку (файл может быть новым) и подсвечиваем строку.
+  // Уже видимый файл (клик по строке) не трогаем. Панель, открытая вместе с файлом,
+  // тоже показывает его: поэтому стартуем с пустого пути, а не с текущего
+  const revealedRef = useRef('');
+  useEffect(() => {
+    if (activeNorm === revealedRef.current) return;
+    revealedRef.current = activeNorm;
+    if (!activeNorm || isMobile) return;
+    const parts = activeNorm.split('/').slice(0, -1);
+    const dirs = parts.map((_, i) => parts.slice(0, i + 1).join('/'));
+    const parent = dirs[dirs.length - 1] ?? '';
+    const listed = dirCacheRef.current.get(parent)?.some(e => normPath(e.path) === activeNorm);
+    if (listed && dirs.every(d => expandedRef.current.has(d))) return;
+    void (async () => {
+      await Promise.all(dirs.slice(0, -1).filter(d => !dirCacheRef.current.has(d)).map(loadDir));
+      await invalidateDir(parent);
+      setExpanded(prev => { const n = new Set(prev); for (const d of dirs) n.add(d); return n; });
+      setNewlyCreatedPath(activeNorm);
+      setTimeout(() => setNewlyCreatedPath(null), 1500);
+    })();
+  }, [activeNorm, isMobile, loadDir, invalidateDir]);
 
   const handleToggleDir = async (entry: FileEntry) => {
     const { path } = entry;
@@ -1466,6 +1537,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         expanded={expanded.has(entry.path)}
         loading={loadingDirs.has(entry.path)}
         renaming={renamingPath === entry.path}
+        canRename={canRename}
         isDropTarget={dropTarget === entry.path}
         dragging={dragPath === entry.path}
         pressing={pressingPath === entry.path}
@@ -1554,7 +1626,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   // Главное действие панели — в ЗАКРЕПЛЁННОМ слоте: оно видно всегда, а не только
   // под курсором (как «+ Чат» и «+ Задача» у соседей). На пустом дереве иначе
   // непонятно, чем его наполнить
-  const createControl = online ? (
+  const createControl = online && canCreate ? (
     <Button
       size="xs"
       variant="primary"
@@ -1598,30 +1670,30 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           onClick={() => { setCreateMenu(null); setNoteDialog({ folder: noteFolderOf(targetDir) }); }}
         />
       )}
-      <MenuItem
+      {canCreateFile && <MenuItem
         icon={<Plus size={15} strokeWidth={ICON_STROKE} />}
         label="Файл"
         onClick={() => { setCreateMenu(null); if (isMobile) setCreateInDir(mobileDir); setShowCreateFile(true); }}
-      />
+      />}
       {/* Диаграммы — файлы проекта: в vault заметок пункта нет */}
-      {!inNotes && (
+      {!inNotes && canCreateFile && (
         <MenuItem
           icon={<Workflow size={15} strokeWidth={ICON_STROKE} />}
           label="Диаграмма"
           onClick={() => { setCreateMenu(null); if (isMobile) setCreateInDir(mobileDir); setDiagramName(diagramFileName(diagramKind)); setDiagramError(null); setShowCreateDiagram(true); }}
         />
       )}
-      <MenuItem
+      {canMkdir && <MenuItem
         icon={<FolderPlusIcon />}
         label="Папка"
         onClick={() => { setCreateMenu(null); if (isMobile) setCreateInDir(mobileDir); setShowCreateDir(true); }}
-      />
-      <MenuItem
+      />}
+      {canUpload && <MenuItem
         icon={uploading ? <span style={{ width: 14, height: 14, borderRadius: '50%', border: `2px solid ${C.track}`, borderTopColor: C.accent, animation: 'spin 0.6s linear infinite', display: 'inline-block' }} /> : <Upload size={15} strokeWidth={ICON_STROKE} />}
         label={uploading ? 'Загружаю…' : 'Загрузить файлы'}
         disabled={uploading}
         onClick={() => { setCreateMenu(null); uploadInputRef.current?.click(); }}
-      />
+      />}
       {/* Куда попадёт созданное — подписью в подвале меню, а не отдельной строкой
           под тулбаром: вопрос возникает ровно в момент создания. Целевая папка —
           последняя, которую открыли в дереве, и вернуться в корень иначе было
@@ -2074,11 +2146,17 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         add(chatContextBtn.available,
           <MenuItem key="chat-context" icon={chatContextBtn.inContext ? <MI_Check /> : <MI_Context />}
             label={chatContextBtn.title} onClick={() => { close(); chatContextBtn.toggle(); }} />);
+        add(imageEditorOn && online && !entry.isDirectory && imageEditor?.isEditable(entry.path),
+          <MenuItem key="image-edit" icon={<Pencil size={15} strokeWidth={ICON_STROKE} />} label="Редактировать картинку"
+            onClick={() => { close(); openEditor({ kind: 'edit', path: entry.path }); }} />);
+        add(imageEditorOn && online && entry.isDirectory && !inNotesVault(entry.path),
+          <MenuItem key="image-create" icon={<Sparkles size={15} strokeWidth={ICON_STROKE} />} label="Нарисовать картинку"
+            onClick={() => { close(); openEditor({ kind: 'create', folder: entry.path }); }} />);
         add(!entry.isDirectory && onAttachToChat,
           <MenuItem key="attach" icon={<MI_Attach />} label="Прикрепить к чату" onClick={() => { close(); onAttachToChat!(entry.path); }} />);
         add(!entry.isDirectory && /\.(md|mdx)$/i.test(entry.name),
           <MenuItem key="copy-md" icon={<MI_Copy />} label="Копировать Markdown" onClick={() => { close(); void copyMdFromTree(entry.path); }} />);
-        add(!entry.isDirectory && online && isMdConvertible(entry.name),
+        add(!entry.isDirectory && online && canToMarkdown && isMdConvertible(entry.name),
           <MenuItem key="to-md" icon={<MI_Copy />} label="Трансформировать в Markdown…" onClick={() => { close(); setMdEntry(entry); }} />);
         add(!entry.isDirectory && !inNotesVault(entry.path) && onAddToKnowledge && !isKb && isKnowledgeIndexable(entry.name),
           <MenuItem key="kb-add" icon={<MI_BookPlus />} label="Добавить в знания" onClick={() => { close(); onAddToKnowledge!(entry.path); }} />);
@@ -2099,12 +2177,15 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           <MenuItem key="note-about" icon={<MI_NotePlus />} label="Заметка о файле" onClick={() => { close(); setNoteDialog({ file: entry.path }); }} />);
 
         // «Заметки» (vault) не переименовываем/не удаляем — сломается база знаний
-        if (!isNotesRoot(entry) && online) {
+        if (!isNotesRoot(entry) && online && (canRename || canDelete)) {
           sep('sep-1');
-          items.push(<MenuItem key="rename" icon={<MI_Rename />} label="Переименовать" onClick={() => startRename(entry)} />);
-          items.push(<MenuItem key="move" icon={<MI_Move />} label="Переместить в…" onClick={() => { close(); setMovingEntry(entry); setShowMoveModal(true); }} />);
-          sep('sep-2');
-          items.push(<MenuItem key="delete" icon={<MI_Trash />} label="Удалить" danger onClick={() => { close(); setDeleteConfirm(entry); }} />);
+          if (canRename) {
+            items.push(<MenuItem key="rename" icon={<MI_Rename />} label="Переименовать" onClick={() => startRename(entry)} />);
+            items.push(<MenuItem key="move" icon={<MI_Move />} label="Переместить в…" onClick={() => { close(); setMovingEntry(entry); setShowMoveModal(true); }} />);
+          }
+          if (canRename && canDelete) sep('sep-2');
+          if (canDelete)
+            items.push(<MenuItem key="delete" icon={<MI_Trash />} label="Удалить" danger onClick={() => { close(); setDeleteConfirm(entry); }} />);
         }
 
         // Мобила и планшет — шторка Modal с именем файла в заголовке

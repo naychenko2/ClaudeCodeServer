@@ -36,9 +36,13 @@ public sealed record CheapProfileSpec(
 // CloudTimeoutMs — пер-местный потолок ожидания ОБЛАЧНОГО шага вместо потолка профиля:
 // для мест, чей исполнитель отвечает дольше (или зависает дольше), чем допускает профиль,
 // не трогая общий потолок для всех остальных мест того же профиля. null = профиль.
+// CloudNumPredict — пер-местный потолок ВЫВОДА облачного шага (max_tokens) вместо
+// профильного CloudNumPredict: для мест, чей ответ не влезает в профильный лимит,
+// не трогая лимит остальных мест того же профиля. null = профиль.
 public sealed record LocalAction(
     string Key, string Title, string Group, CheapProfile Profile, bool DefaultLocal,
-    bool Agentic = false, ModelTier? Tier = null, int? CloudTimeoutMs = null);
+    bool Agentic = false, ModelTier? Tier = null, int? CloudTimeoutMs = null,
+    int? CloudNumPredict = null);
 
 // Каталог всех фоновых one-shot действий — единый источник правды для роутинга и UI.
 // Сюда НЕ входят технически неприменимые: задача-исполнитель (агентная сессия с
@@ -125,6 +129,10 @@ public static class LocalActionCatalog
     // Значок проекта (ADR-009): имя иконки из белого списка lucide — разметки от модели
     // не приходит никогда. Место обслуживает ОБА хода подбора (слова → выбор из меню)
     public const string ProjectIcon = "project-icon";
+    // Уборка карты проекта: формулировки поверх готовых фактов сканера CLAUDE.md.
+    // Модель не видит карту целиком (100 КБ в окно не влезают) и ничего, кроме суждения,
+    // не диктует — патч, якорь и вид находки берутся из отчёта сканера
+    public const string ProjectMapHygiene = "project-map-hygiene";
 
     // Дефолты профилей. Переопределяются
     // Ollama:Profiles:{small|text|large}:{NumCtx|NumPredict|TimeoutMs|CloudTimeoutMs|CloudNumPredict}.
@@ -197,8 +205,18 @@ public static class LocalActionCatalog
         // бесплатная цепочка (RunFreeAsync): при недоступности локали/адаптера — жёсткая
         // обрезка на стороне TeamMemoryService, платить claude за это не нужно.
         new(TeamMemoryCompress, "Сжатие авто-записи памяти команды", "Память", CheapProfile.Small, DefaultLocal: true),
-        new(PersonaMemoryConsolidate, "Консолидация памяти персон", "Память", CheapProfile.Text, DefaultLocal: true),
-        new(TeamMemoryConsolidate, "Консолидация памяти команды", "Память", CheapProfile.Text, DefaultLocal: true),
+        // Консолидации — Large, а не Text: на вход уходят десятки килобайт записей памяти,
+        // и на профиле Text (4096 вывод / 8192 контекст) локальный фолбэк резал промпт вдвое,
+        // теряя половину записей, которые должен был слить (прод 2026-09-22).
+        // Пер-местный лимит вывода 16384 (вдвое выше профильного 8192): на 200+ записях
+        // JSON merge-операций со сводным текстом ~1000 символов не влезал в профильный
+        // потолок — облачная модель обрезала ответ на незакрытый массив, ExtractJsonArray
+        // давал null, и весь merge был no-op (прод 22.09, MiniMax-M3). Калибровка: если
+        // провайдер отбивает 16384 400-м — вернуть 8192 и добавить батчинг BuildPrompt.
+        new(PersonaMemoryConsolidate, "Консолидация памяти персон", "Память", CheapProfile.Large,
+            DefaultLocal: true, CloudNumPredict: 16_384),
+        new(TeamMemoryConsolidate, "Консолидация памяти команды", "Память", CheapProfile.Large,
+            DefaultLocal: true, CloudNumPredict: 16_384),
         new(AutomationGate, "Гейт проактивности персон", "Персоны", CheapProfile.Small, DefaultLocal: true),
         new(DocSummary, "Краткое содержание документа", "Документы", CheapProfile.Large, DefaultLocal: true),
         new(DocExtract, "Выжимка из документа", "Документы", CheapProfile.Large, DefaultLocal: true),
@@ -278,6 +296,16 @@ public static class LocalActionCatalog
         // потолок профиля для остальных Large-мест.
         new(ProjectIcon, "Значок проекта", "Проекты", CheapProfile.Large,
             DefaultLocal: false, Tier: ModelTier.Medium, CloudTimeoutMs: 180_000),
+        // Уборка карты проекта: Large — отчёт сканера по крупной карте это ~800 токенов
+        // плюс правила разбора, на Small/Text num_ctx срезал бы хвост списка фактов и
+        // модель начала бы судить о находках, которых не видела. Локаль выключена:
+        // продукт здесь и есть связный текст по-русски — «сойдёт за успех» дороже отказа.
+        // Ответ намеренно ужат до { id, severity, modelSays }: потолок вывода локали у
+        // профиля Large — 1024 токена, и полный объект с фактом и якорем в него не лезет,
+        // то есть при «Локальной» фича ВСЕГДА падала бы в тихий фолбэк. Agentic не ставим:
+        // ходить в файлы не нужно, все факты приносит сканер
+        new(ProjectMapHygiene, "Уборка карты проекта", "Проекты", CheapProfile.Large,
+            DefaultLocal: false, Tier: ModelTier.Medium),
     ];
 
     private static readonly Dictionary<string, LocalAction> ByKey =

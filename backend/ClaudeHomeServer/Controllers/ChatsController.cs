@@ -6,10 +6,13 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Team;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Files;
 
 namespace ClaudeHomeServer.Controllers;
 
 // Чаты вне проекта: сессии Claude без привязки к проекту, рабочая папка — {домашняя папка}/Chats (UserHomeResolver)
+[ProjectCapability(ProjectCapabilityArea.Platform)]
 [ApiController]
 [Authorize]
 [Route("api/chats")]
@@ -30,7 +33,8 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     }
 
     [HttpGet]
-    public IActionResult GetAll() => Ok(sessions.GetProjectlessChats(UserId));
+    public IActionResult GetAll() =>
+        Ok(sessions.GetProjectlessChats(UserId));
 
     // Снимок «у каких чатов прямо сейчас идёт фоновая работа»: id сессий владельца, включая
     // проектные — карточки чатов проекта рисует тот же стор. Нужен потому, что событие
@@ -543,6 +547,41 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
+    // Ветвление чата (шаг 4 плана «Ветвление чата», контракт §6
+    // docs/research/chat-branching-2026-09.md): новый чат с обрезанной по якорному
+    // сообщению историей и транскриптом CLI. Эндпоинт — тонкая обёртка: гейты §9,
+    // резак транскрипта и наследование полей §11 живут целиком в
+    // SessionManager.BranchAsync, здесь их не дублируем. Как migrate-provider, один
+    // эндпоинт покрывает и чаты вне проекта, и проектные сессии — GetOwned внутри
+    // BranchAsync резолвит владельца через проект.
+    // Коды: 404 — чат не найден/чужой (KeyNotFoundException из BranchAsync).
+    // 409 — ЛЮБОЙ отказ BranchAsync (InvalidOperationException → Conflict, конвенция
+    // SetArchivedAsync). Известное ограничение: BranchAsync кидает один и тот же тип
+    // исключения и для «идёт ход»/«граница не сопоставлена» (по документу — 409), и для
+    // «ветвить нечего» — нет ClaudeSessionId, десктопный чат, групповой/штаб, транскрипт
+    // не найден, потолок размера (по документу — 400); различить их в контроллере можно
+    // только парсингом текста ошибки, а это и есть «логика гейтов в контроллере»,
+    // которую задача прямо запрещает. Двойной клик — идемпотентности здесь нет
+    // сознательно, кнопку блокирует фронт (шаг 7).
+    [HttpPost("{id}/branch")]
+    public async Task<IActionResult> Branch(string id, [FromBody] BranchChatRequest req)
+    {
+        try
+        {
+            var result = await sessions.BranchAsync(
+                id, UserId, req.UserMessageIndex, req.AnchorText, req.Include, req.Name);
+            return Ok(new
+            {
+                chatId = result.Session.Id,
+                projectId = result.Session.ProjectId,
+                claudeSessionId = result.Session.ClaudeSessionId,
+                draft = result.Draft,
+            });
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (InvalidOperationException ex) { return Conflict(new { error = ex.Message }); }
+    }
+
     [HttpGet("{id}/history")]
     public async Task<IActionResult> GetHistory(string id)
     {
@@ -580,21 +619,20 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     [RequestSizeLimit(100 * 1024 * 1024)] // 100 МБ
     public async Task<IActionResult> Upload(string id, IFormFile? file = null)
     {
-        if (sessions.GetOwned(id, UserId) is null) return NotFound();
+        if (sessions.GetOwned(id, UserId) is not { } chat) return NotFound();
+        // Вложения локального проекта принимает агент устройства, не сервер (ADR-016 §4)
+        if (chat.ProjectId is { } pid && projects.GetById(pid) is { } project
+            && ProjectCapabilityGuard.Refusal(project, ProjectCapabilityArea.FileBound) is { } refusal)
+            return ProjectCapabilityGuard.Denied(refusal);
         if (file == null || file.Length == 0)
             return BadRequest(new { error = "Файл не выбран или пустой" });
 
         var root = sessions.GetChatRoot(id, UserId);
         if (root is null) return NotFound();
 
-        // Path.GetFileName защищает от path-сегментов в имени файла (../evil)
-        var safeName = Path.GetFileName(file.FileName);
-        if (string.IsNullOrEmpty(safeName))
+        // Правило пути одно с агентом устройства: {AttachmentsDir}/{guid}/{имя файла}
+        if (AttachmentsGitExclude.AttachmentPath(file.FileName) is not { } rel)
             return BadRequest(new { error = "Некорректное имя файла" });
-
-        // Уникальность — через подпапку с GUID, чтобы сохранить оригинальное имя файла
-        // (на плашке в чате показывается basename = оригинальное имя, и Claude видит его же)
-        var rel = $"{FileService.AttachmentsDir}/{Guid.NewGuid():N}/{safeName}";
 
         // Вложения не должны светиться в git-статусе проекта и уезжать в историю по `git add -A`.
         // Лениво, до записи файла: у проекта со своим .gitignore дефолтный игнор не создавался.
@@ -665,3 +703,8 @@ public record SetWorktreeRequest(bool Enabled, string? Branch = null, bool Force
 public record MigrateProviderRequest(string? Model, string? SubscriptionKey = null);
 
 public record SetModeRequest(string Mode);
+
+// Ветвление чата (шаг 4 плана «Ветвление чата», контракт §6 docs/research/chat-branching-2026-09.md).
+// AnchorText обязателен: индекс — договорённость двух счётчиков (клиент/сервер), сверка текста
+// на сервере страхует от расхождения (SessionManager.BranchAsync).
+public record BranchChatRequest(int UserMessageIndex, string AnchorText, string Include, string? Name = null);

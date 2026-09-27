@@ -248,7 +248,8 @@ public sealed class DailyBriefingService
     private async Task<string> GitActivityAsync(string userId, CancellationToken ct)
     {
         var sb = new StringBuilder();
-        foreach (var p in _projects.GetByOwner(userId).Take(12))
+        // git локального проекта на устройстве — серверный git его не видит (ADR-016 §4)
+        foreach (var p in _projects.GetByOwner(userId).Where(ProjectCapabilities.FilesOnServer).Take(12))
         {
             var lines = await RunGitLogAsync(p.RootPath, ct);
             if (lines.Count == 0) continue;

@@ -13,8 +13,22 @@ public sealed record McpOAuthStart(string AuthorizeUrl, string State, string Red
 /// <summary>Итог обмена кода: ключ сервера нужен странице callback, чтобы адресовать postMessage.</summary>
 public sealed record McpOAuthCompleted(string ServerId, string ServerKey, string RedirectUri);
 
+/// <summary>Класс отказа входа: по нему решают код и тесты, текст — только для человека.</summary>
+public enum McpOAuthFailure
+{
+    Other,
+    /// <summary>Сервер авторизации не ответил ни на один запрос.</summary>
+    Unreachable,
+    /// <summary>Сервер не объявил регистрацию клиента (DCR) — нужен ручной client_id.</summary>
+    RegistrationUnsupported,
+}
+
 /// <summary>Беда, о которой человеку надо сказать словами (400 или страница callback).</summary>
-public class McpOAuthException(string message) : Exception(message);
+public class McpOAuthException(string message, McpOAuthFailure failure = McpOAuthFailure.Other)
+    : Exception(message)
+{
+    public McpOAuthFailure Failure { get; } = failure;
+}
 
 /// <summary>
 /// OAuth 2.1 для внешних MCP-серверов по спеке MCP (2025-03-26 / 2025-06-18):
@@ -115,8 +129,57 @@ public class McpOAuthService(
         var oauth = record.Auth.OAuth ?? new McpOAuthConfig();
         var (issuer, endpoints) = await DiscoverWithinBudgetAsync(serverUrl, oauth, ct);
 
-        var clientId = Trim(input?.ClientId) ?? Trim(oauth.ClientId);
-        var clientSecretRef = oauth.ClientSecretRef;
+        // Сохранённый redirect_uri мог разойтись с актуальным (смена домена, туннель,
+        // переезд пути — случай Higgsfield 2026-09-15: собственный callback появился
+        // позже, клиент был зарегистрирован под общий /api/mcp/oauth/callback).
+        // Без проверки authorize уедет со старым client_id и новым redirect_uri —
+        // провайдер отбивает «redirect_uri does not match any pre-registered url»
+        // и повторный «Войти» не помогает. Ручной client_id из формы всегда побеждает:
+        // это явное решение человека, дальше он сам отвечает за соответствие своему
+        // провайдеру. Refresh-токен лежит в той же McpSecretEntry, что и access
+        // (через AccessTokenRef), — повторный DCR его не задевает.
+        //
+        // Расхождение она диагностирует, но НЕ лечит автоматически: у Clerk DCR по
+        // client_name возвращает прежнего клиента с прежним списком адресов, новый
+        // redirect_uri в этот список не попадает (см. HiggsfieldInstanceController —
+        // лечение там: привести адрес к зарегистрированному, т.е. взять общий
+        // callback McpOAuthService.CallbackPath).
+        var manualClientId = Trim(input?.ClientId);
+        var storedRedirect = Trim(oauth.RedirectUri);
+        var currentRedirect = Trim(redirectUri);
+        var redirectMismatch = storedRedirect is not null
+            && currentRedirect is not null
+            && !string.Equals(storedRedirect, currentRedirect, StringComparison.OrdinalIgnoreCase);
+
+        // Сбрасываем client_id только когда можем его перерегистрировать: при наличии
+        // registration_endpoint у провайдера (DCR) идём в RegisterClientAsync. Если DCR
+        // нет — провайдер сам решает, зарегистрированы ли у него оба адреса возврата;
+        // откатываемся на сохранённый client_id иначе вход сломался бы требованием
+        // «впиши client_id вручную», хотя прежний уже годен (находка ревью Глеба,
+        // задача 39a034c7).
+        var hasDcr = !string.IsNullOrWhiteSpace(endpoints.RegistrationEndpoint);
+        var clientId = manualClientId
+            ?? (redirectMismatch && hasDcr ? null : Trim(oauth.ClientId));
+        // Сбрасываем секрет вместе с client_id: при redirectMismatch идём в DCR, а новый
+        // клиент может оказаться публичным (DCR без client_secret) — оставшийся
+        // ClientSecretRef от старого клиента привёл бы к отправке чужого секрета в обмене
+        // кода. Сейчас не стреляет (Higgsfield — публичный Clerk-клиент), но логически
+        // обязательно держать пары в унисон. Без DCR прежний клиент пригоден — секрет
+        // оставляем.
+        var clientSecretRef = (manualClientId is null && redirectMismatch && hasDcr)
+            ? null
+            : oauth.ClientSecretRef;
+        if (manualClientId is null && redirectMismatch)
+        {
+            if (hasDcr)
+                log.LogWarning(
+                    "OAuth-клиент «{Key}» зарегистрирован под «{Old}», запрошен «{New}» — перерегистрация",
+                    record.Key, storedRedirect, currentRedirect);
+            else
+                log.LogWarning(
+                    "OAuth-клиент «{Key}» зарегистрирован под «{Old}», запрошен «{New}» — DCR недоступна, пробуем прежний client_id",
+                    record.Key, storedRedirect, currentRedirect);
+        }
         if (Trim(input?.ClientSecret) is { } freshSecret)
             clientSecretRef = secrets.Set(ownerId, freshSecret);
 
@@ -332,52 +395,63 @@ public class McpOAuthService(
 
     // ── discovery ────────────────────────────────────────────────────────────────────
 
+    // Отметка «хоть один запрос discovery получил HTTP-ответ» — своя на каждый вход
+    private sealed class DiscoveryReach { public bool Responded; }
+
     // Общий потолок на всю цепочку discovery. Каждый шаг внутри (GetJsonAsync,
     // ProbeResourceMetadataUrlAsync) сам глотает сетевые ошибки и таймауты попытки и просто
     // переходит к следующему кандидату — при недоступном хосте DiscoverAsync поэтому не
-    // бросает исключение, а тихо доезжает до дефолтных путей спеки. Раз оборвались по этому
-    // потолку — значит хост не отвечал вовсе, и вместо того, чтобы тащить угаданные (и заведомо
-    // недостижимые) пути дальше в DCR, говорим человеку правду сразу
+    // бросает исключение, а тихо доезжает до дефолтных путей спеки, у которых нет DCR.
+    // «Не отвечает» решаем по факту: ни один запрос не получил ответа. Потолок сам по себе
+    // признаком не годится — если попытки кончились по своим таймаутам раньше него, код
+    // уезжал в регистрацию и говорил «не поддерживает автоматическую регистрацию»
     private async Task<(Uri Issuer, McpOAuthEndpoints Endpoints)> DiscoverWithinBudgetAsync(
         Uri serverUrl, McpOAuthConfig oauth, CancellationToken ct)
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(_discoveryOverallTimeout);
-        var result = await DiscoverAsync(serverUrl, oauth, cts.Token);
-        if (cts.IsCancellationRequested && !ct.IsCancellationRequested)
+        var reach = new DiscoveryReach();
+        var result = await DiscoverAsync(serverUrl, oauth, reach, cts.Token);
+        if (!ct.IsCancellationRequested && cts.IsCancellationRequested)
             throw new McpOAuthException(
-                $"Сервер авторизации не отвечает (проверка адресов заняла больше {_discoveryOverallTimeout.TotalSeconds:0} с)");
+                $"Сервер авторизации не отвечает (проверка адресов заняла больше {_discoveryOverallTimeout.TotalSeconds:0} с)",
+                McpOAuthFailure.Unreachable);
+        if (!ct.IsCancellationRequested && !reach.Responded)
+            throw new McpOAuthException(
+                "Сервер авторизации не отвечает — ни один адрес discovery не ответил",
+                McpOAuthFailure.Unreachable);
         return result;
     }
 
     // Адрес authorization server и его эндпоинты. Уже найденный issuer не ищем заново:
     // повторный вход после отзыва доступа не должен зависеть от того, отвечает ли сервер 401
     private async Task<(Uri Issuer, McpOAuthEndpoints Endpoints)> DiscoverAsync(
-        Uri serverUrl, McpOAuthConfig oauth, CancellationToken ct)
+        Uri serverUrl, McpOAuthConfig oauth, DiscoveryReach reach, CancellationToken ct)
     {
-        var issuer = await FindIssuerAsync(serverUrl, oauth, ct);
+        var issuer = await FindIssuerAsync(serverUrl, oauth, reach, ct);
         foreach (var candidate in McpOAuthDiscovery.AuthorizationServerCandidates(issuer))
         {
-            var metadata = await GetJsonAsync(candidate, ct);
+            var metadata = await GetJsonAsync(candidate, reach, ct);
             if (metadata is { } json) return (issuer, McpOAuthDiscovery.EndpointsFrom(json, issuer));
         }
         // Метаданных нет — по спеке остаются дефолтные пути
         return (issuer, McpOAuthDiscovery.DefaultEndpoints(issuer));
     }
 
-    private async Task<Uri> FindIssuerAsync(Uri serverUrl, McpOAuthConfig oauth, CancellationToken ct)
+    private async Task<Uri> FindIssuerAsync(Uri serverUrl, McpOAuthConfig oauth, DiscoveryReach reach,
+        CancellationToken ct)
     {
         if (oauth.AuthorizationServer is { Length: > 0 } known
             && Uri.TryCreate(known, UriKind.Absolute, out var knownUri)) return knownUri;
 
-        var metadataUrl = await ProbeResourceMetadataUrlAsync(serverUrl, ct);
+        var metadataUrl = await ProbeResourceMetadataUrlAsync(serverUrl, reach, ct);
         var candidates = metadataUrl is null
             ? McpOAuthDiscovery.ProtectedResourceCandidates(serverUrl)
             : [metadataUrl, .. McpOAuthDiscovery.ProtectedResourceCandidates(serverUrl)];
 
         foreach (var candidate in candidates)
         {
-            if (await GetJsonAsync(candidate, ct) is not { } json) continue;
+            if (await GetJsonAsync(candidate, reach, ct) is not { } json) continue;
             if (McpOAuthDiscovery.AuthorizationServerFrom(json) is not { } server) continue;
             if (Uri.TryCreate(server, UriKind.Absolute, out var uri)) return uri;
         }
@@ -386,7 +460,8 @@ public class McpOAuthService(
     }
 
     // 401 от самого MCP-сервера: в WWW-Authenticate лежит адрес метаданных ресурса
-    private async Task<string?> ProbeResourceMetadataUrlAsync(Uri serverUrl, CancellationToken ct)
+    private async Task<string?> ProbeResourceMetadataUrlAsync(Uri serverUrl, DiscoveryReach reach,
+        CancellationToken ct)
     {
         try
         {
@@ -396,6 +471,7 @@ public class McpOAuthService(
             };
             request.Headers.TryAddWithoutValidation("Accept", "application/json, text/event-stream");
             using var response = await DiscoveryClient().SendAsync(request, ct);
+            reach.Responded = true;
             if (response.StatusCode is not (HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)) return null;
             return McpOAuthDiscovery.ResourceMetadataFrom(
                 response.Headers.WwwAuthenticate.Select(h => h.ToString()));
@@ -406,11 +482,12 @@ public class McpOAuthService(
         }
     }
 
-    private async Task<JsonElement?> GetJsonAsync(string url, CancellationToken ct)
+    private async Task<JsonElement?> GetJsonAsync(string url, DiscoveryReach reach, CancellationToken ct)
     {
         try
         {
             using var response = await DiscoveryClient().GetAsync(url, ct);
+            reach.Responded = true;
             if (!response.IsSuccessStatusCode) return null;
             var body = await response.Content.ReadAsStringAsync(ct);
             using var document = JsonDocument.Parse(body);
@@ -435,7 +512,8 @@ public class McpOAuthService(
     {
         if (endpoints.RegistrationEndpoint is not { Length: > 0 } endpoint)
             throw new McpOAuthException(
-                "Сервер не поддерживает автоматическую регистрацию — впиши client_id вручную");
+                "Сервер не поддерживает автоматическую регистрацию — впиши client_id вручную",
+                McpOAuthFailure.RegistrationUnsupported);
 
         var payload = new Dictionary<string, object?>
         {
@@ -462,7 +540,8 @@ public class McpOAuthService(
         // canceled» — называем настоящую причину, а не пересказываем исключение
         catch (TaskCanceledException) when (!ct.IsCancellationRequested)
         {
-            throw new McpOAuthException("Сервер авторизации не отвечает — регистрация клиента не выполнена");
+            throw new McpOAuthException("Сервер авторизации не отвечает — регистрация клиента не выполнена",
+                McpOAuthFailure.Unreachable);
         }
         catch (HttpRequestException ex)
         {

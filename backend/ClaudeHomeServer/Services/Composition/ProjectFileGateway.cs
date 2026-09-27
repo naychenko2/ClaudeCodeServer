@@ -1,3 +1,5 @@
+using ClaudeHomeServer.Services.Files;
+
 namespace ClaudeHomeServer.Services.Composition;
 
 // Реализация IProjectFileGateway: тонкая обёртка над FileService, достаёт ровно
@@ -14,12 +16,7 @@ public sealed class ProjectFileGateway : IProjectFileGateway
     public ProjectFileGateway(FileService files)
     {
         _files = files;
-        // FileService.FileMutationKind (Main) и Core/Services/Composition.FileMutationKind
-        // — параллельные enum'ы с одинаковыми значениями (Write/Create/Delete/Rename).
-        // Явное приведение по int: Core не может импортировать Main-тип, но мост через
-        // числовые значения легитимен и проверен ревью швов.
-        _files.OnMutated += (root, rel, kind, newRel) =>
-            OnMutated?.Invoke(root, rel, (FileMutationKind)(int)kind, newRel);
+        _files.OnMutated += (root, rel, kind, newRel) => OnMutated?.Invoke(root, rel, kind, newRel);
     }
 
     public void CreateDirectory(string root, string relativePath) =>

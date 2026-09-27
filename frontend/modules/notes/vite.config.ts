@@ -10,8 +10,13 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { federation } from '@module-federation/vite';
+import { hostReactShared } from '../hostReactShared';
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
+  // Dev: префикс прокси хоста — MF-рантайм резолвит root-absolute импорты
+  // относительно base, поэтому в dev все URL должны начинаться с /notes-remote/.
+  // Prod: относительный — remoteEntry.js сервиcится статически под /notes-remote/.
+  base: mode === 'development' ? '/notes-remote/' : './',
   plugins: [
     react(),
     federation({
@@ -29,10 +34,8 @@ export default defineConfig({
       remotes: {
         aihome_shell: { type: 'module', name: 'aihome_shell', entry: '/remoteEntry.js' },
       },
-      shared: {
-        react: { singleton: true, requiredVersion: '^19.2.0' },
-        'react-dom': { singleton: true, requiredVersion: '^19.2.0' },
-      },
+      // React — только singleton ядра, своей копии модуль не везёт (см. hostReactShared).
+      shared: hostReactShared,
     }),
   ],
   build: {
@@ -49,4 +52,4 @@ export default defineConfig({
     // страховкой на случай прямого кросс-оригин доступа к remoteEntry.js.
     cors: true,
   },
-});
+}));

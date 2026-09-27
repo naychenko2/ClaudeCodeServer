@@ -88,6 +88,8 @@ public sealed class DossierAutoImporter : BackgroundService
     private async Task ImportProjectAsync(Project project)
     {
         if (!project.AutoImportDossiers || project.OwnerId is not { } ownerId) return;
+        // Локальный проект: его git на устройстве, серверного досье нет (ADR-016 §4)
+        if (!ProjectCapabilities.ServerContentEnabled(project)) return;
         if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.ChangeDossiersRecall)) return;
         if (!GitRepo.IsRepo(project.RootPath)) return;
 

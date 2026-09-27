@@ -365,7 +365,7 @@ internal sealed class TeamTurnCompletionService
     public async Task<ReportUpResult> ReportBlockerAsync(string sessionId, string text, string ownerId)
     {
         var chat = _sessions.GetOwned(sessionId, ownerId);
-        var parentId = chat?.ParentSessionId;
+        var parentId = chat is null ? null : _sessions.EffectiveParentSessionId(chat);
 
         // Пробуждение штаба — платный ход, инициированный агентом, поэтому оно под квотой:
         // иначе исполнитель поднимал бы координатора докладом-блокером в бесконечном цикле,

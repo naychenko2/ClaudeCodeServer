@@ -10,6 +10,28 @@ public sealed class CheapTextRunner(
 {
     public bool UsesLocal(string actionKey) => router.UsesLocal(actionKey);
 
+    // Та же проверка, что и первые два шага RunFreeAsync: прямой адаптер → локаль.
+    // Не вызывает — нужно только знать «пройдёт ли», не тратить деньги/время.
+    // Условия (см. CheapTextRunner.RunFreeAsync):
+    //   • direct-модель агрератора — CloudCheapClient.IsDirectRoute;
+    //   • локаль — LocalStepApplies (Kind=Local ИЛИ Kind=Model при DefaultLocal=true)
+    //     И живой ILocalLlmClient.
+    // Занятость движка ходом сюда НЕ входит намеренно: это вопрос «настроен ли бесплатный
+    // путь вообще», а не «свободен ли он в эту секунду». Иначе возможность места мигала бы
+    // в UI у каждого хода на локали.
+    public bool HasFreeRoute(string actionKey)
+    {
+        var route = router.Resolve(actionKey);
+
+        if (route.Kind == RouteKind.Model && !string.IsNullOrWhiteSpace(route.Model)
+            && CloudCheapClient.IsDirectRoute(route.Model))
+        {
+            return true;
+        }
+
+        return LocalStepApplies(actionKey, route.Kind) && ollama.Enabled;
+    }
+
     // Описание маршрута для лога/события: kind + конкретная модель или слот, если это
     // слот/модель. claude/local — без модели (дефолты маршрута). Пример: «model=nemotron:free»,
     // «tier=strong», «claude», «local». Используется из TeamPlanningService — там, где
@@ -39,9 +61,11 @@ public sealed class CheapTextRunner(
     // Потолок вывода для ОБЛАЧНЫХ шагов (direct-адаптер, RunDetailedAsync). Локальный
     // NumPredict — это num_predict Ollama (бережёт память GPU), для облачного маршрута он
     // мал: модель обрезала крупный JSON-план на полуслове, симптом неотличим от таймаута
-    // (прод 2026-08-05). CloudNumPredict — отдельное поле профиля (дефолты в каталоге).
+    // (прод 2026-08-05). Лимит — от роутера: пер-местное значение каталога, если место его
+    // задало, иначе профильный CloudNumPredict — единственная точка склейки, не дублируем
+    // здесь выбор «каталог → профиль».
     internal int CloudNumPredictFor(string actionKey) =>
-        router.ProfileFor(actionKey).CloudNumPredict;
+        router.CloudNumPredictFor(actionKey);
 
     // При маршруте-слоте исполнитель — модель слота ВЛАДЕЛЬЦА действия (сильная/средняя/слабая
     // из личного per-user слота, с откатом на глобальный AppSettings), а не модель действия из
@@ -99,7 +123,7 @@ public sealed class CheapTextRunner(
         // не отличался бы от «локаль». Для «сильных» действий (DefaultLocal=false) локаль
         // пропускаем и как страховку: слабая модель на сложной задаче даёт мусор, который ещё
         // и «сойдёт» за успех и оборвёт цепочку до качественного claude.
-        if (LocalStepApplies(actionKey, route.Kind) && ollama.Enabled)
+        if (LocalStepReady(actionKey, route.Kind))
         {
             var local = await RunLocalAsync(actionKey, prompt, jsonFormat, ownerId, ct);
             if (!string.IsNullOrWhiteSpace(local)) return local;
@@ -197,6 +221,21 @@ public sealed class CheapTextRunner(
         kind == RouteKind.Local
         || (kind == RouteKind.Model && LocalActionCatalog.Find(actionKey)?.DefaultLocal == true);
 
+    // Идёт ли шаг локали ПРЯМО СЕЙЧАС: маршрут её допускает (LocalStepApplies), движок настроен
+    // и на нём не идёт ход исполнителя. Последнее — правило «фон не лезет в занятый движок»
+    // (LocalActionRouter.LocalBlockedByTurn): фоновый запрос кэшем не пользуется, а KV-бюджет
+    // занимает и вытесняет префикс чата (живой прогон 2026-09-23). Действие не теряется —
+    // оно идёт дальше по своей цепочке, к облачному шагу.
+    private bool LocalStepReady(string actionKey, RouteKind kind)
+    {
+        if (!LocalStepApplies(actionKey, kind) || !ollama.Enabled) return false;
+        if (!router.LocalBlockedByTurn) return true;
+        log.LogDebug(
+            "cheap-runner: действие {Action} — на локальном движке идёт ход, шаг локали пропускаю",
+            actionKey);
+        return false;
+    }
+
     private Task<string?> RunLocalAsync(string actionKey, string prompt, object? jsonFormat,
         string? ownerId, CancellationToken ct)
     {
@@ -225,7 +264,7 @@ public sealed class CheapTextRunner(
             if (!string.IsNullOrWhiteSpace(picked)) return picked;
         }
 
-        if (LocalStepApplies(actionKey, route.Kind) && ollama.Enabled)
+        if (LocalStepReady(actionKey, route.Kind))
         {
             var local = await RunLocalAsync(actionKey, prompt, jsonFormat, ownerId: null, ct);
             if (!string.IsNullOrWhiteSpace(local)) return local;
@@ -234,9 +273,12 @@ public sealed class CheapTextRunner(
         return null;
     }
 
+    // Действие без облачного шага: занятый ходом движок означает «не сейчас» — вызывающий
+    // получает null и деградирует ровно как при недоступной локали (иначе единственная
+    // альтернатива — платить за бесплатное по замыслу место).
     public async Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, CancellationToken ct = default)
     {
-        if (!router.UsesLocal(actionKey)) return null;
+        if (!router.UsesLocal(actionKey) || router.LocalBlockedByTurn) return null;
         var spec = router.ProfileFor(actionKey);
         var local = await ollama.GenerateTextAsync(
             prompt, model: null, timeout: TimeSpan.FromMilliseconds(spec.TimeoutMs),
@@ -286,7 +328,7 @@ public sealed class CheapTextRunner(
         }
 
         // Шаг 2 — локальная модель (usage нет). Для «сильных» действий локаль-страховка пропускается — см. RunAsync.
-        if (LocalStepApplies(actionKey, route.Kind) && ollama.Enabled)
+        if (LocalStepReady(actionKey, route.Kind))
         {
             var local = await RunLocalAsync(actionKey, prompt, jsonFormat, ownerId, ct);
             if (!string.IsNullOrWhiteSpace(local)) return new OneShotResult(local, null, 0);

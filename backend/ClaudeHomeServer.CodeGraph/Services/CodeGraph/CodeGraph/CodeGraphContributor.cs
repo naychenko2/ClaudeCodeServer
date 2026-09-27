@@ -48,6 +48,7 @@ public sealed class CodeGraphContributor : IPromptSectionContributor
 
     public bool IsEnabled(PromptSessionContext sessionContext) =>
         _provider is not null
+        && sessionContext.ServerContent
         && !string.IsNullOrWhiteSpace(sessionContext.RootPath)
         && _toolGate.IsServerToolEnabled(sessionContext.OwnerId, sessionContext.Persona, "codegraph");
 

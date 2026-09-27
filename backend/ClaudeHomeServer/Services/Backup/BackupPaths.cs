@@ -44,6 +44,9 @@ public static class BackupPaths
         if (fileName.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)) return false;
         if (fileName.EndsWith(".part", StringComparison.OrdinalIgnoreCase)) return false;
         if (fileName.Contains(".corrupt-", StringComparison.OrdinalIgnoreCase)) return false;
+        // Копия исходника при частичном подъёме стора (JsonFileStore.CopyAside): дубликат
+        // живого файла размером с него самого — в облачный архив ехать не должен
+        if (fileName.Contains(".partial-", StringComparison.OrdinalIgnoreCase)) return false;
         if (fileName.Equals(StateFileName, StringComparison.OrdinalIgnoreCase)) return false;
         if (fileName.Equals(PostRestoreMarker, StringComparison.OrdinalIgnoreCase)) return false;
 
@@ -75,16 +78,48 @@ public static class BackupPaths
             && fileName.Equals(Llm.PlanMapService.CacheFileName, StringComparison.OrdinalIgnoreCase))
             return false;
 
+        // Снимок списка инструментов Higgsfield — кеш tools/list, который прокси пишет
+        // при каждом успешном опросе апстрима (шаг 2 дозадачи 6e309216). Секретов нет,
+        // но восстанавливать его из архива бесполезно: список всё равно устаревший, а
+        // первый же успешный handshake файл перезапишет. Переехавший из бэкапа снимок
+        // заставит ходы 30 мин жить на чужой версии схем — это регрессия, а не польза.
+        if (segments.Length == 1
+            && fileName.Equals(Mcp.Http.HiggsfieldToolset.SnapshotFileName, StringComparison.OrdinalIgnoreCase))
+            return false;
+
         // Снимки промпта ходов — диагностический лог (последние 50 ходов на чат):
         // восстанавливать нечего, а в облако они бы поехали десятками мегабайт
         if (root.Equals("prompt-snapshots", StringComparison.OrdinalIgnoreCase)) return false;
         // Замеры размера постановки задач — наблюдение, а не настройка (как mcp-status.json):
         // растут линейно с числом запусков, восстанавливать нечего. Сама аналитика расхода
         // (spend/turns-*.jsonl, spend/daily.json) в архив едет — исключён только этот файл.
-        if (root.Equals(Spend.TaskPromptMetricsStore.DirName, StringComparison.OrdinalIgnoreCase)
-            && fileName.Equals(Spend.TaskPromptMetricsStore.FileName, StringComparison.OrdinalIgnoreCase))
+        // Константы из TaskPromptMetricsStore (Spend) влиты сюда как литералы, чтобы Main
+        // не тянул конкретную сборку Spend: смена имён файлов/директорий — редкое событие.
+        if (root.Equals("spend", StringComparison.OrdinalIgnoreCase)
+            && fileName.Equals("task-prompts.jsonl", StringComparison.OrdinalIgnoreCase))
+            return false;
+        // Рабочая папка редактора картинок (ADR-017, раздел 5): варианты и маски сеансов —
+        // кеш на 7 дней весом до гигабайт. Журнал трат редактора лежит рядом, в корне data
+        // (image-editor-spend.jsonl), и в архив едет: это деньги, других копий у них нет.
+        if (segments.Length > 1
+            && root.Equals(ImageEditor.ImageEditorPaths.WorkspaceDirName, StringComparison.OrdinalIgnoreCase))
             return false;
         if (root.Equals(StagingDirName, StringComparison.OrdinalIgnoreCase)) return false;
+
+        // Встроенный Forgejo (forgejo/**): репозитории и gitea.db едут, но три подпапки нет.
+        // ssh — ключи хоста (приватные; контейнер создаёт их от root с правами 600, сервер
+        // их даже прочитать не может). gitea/queues (LevelDB) и gitea/indexers (bleve/bolt)
+        // живой контейнер держит под блокировкой, и копирование обрывало весь бэкап. Все три
+        // Forgejo пересоздаёт сам: ключи — при старте (сменится лишь отпечаток хоста),
+        // очередь и поисковый индекс — пересборкой.
+        if (root.Equals("forgejo", StringComparison.OrdinalIgnoreCase) && segments.Length >= 2)
+        {
+            if (segments[1].Equals("ssh", StringComparison.OrdinalIgnoreCase)) return false;
+            if (segments.Length >= 3 && segments[1].Equals("gitea", StringComparison.OrdinalIgnoreCase)
+                && (segments[2].Equals("queues", StringComparison.OrdinalIgnoreCase)
+                    || segments[2].Equals("indexers", StringComparison.OrdinalIgnoreCase)))
+                return false;
+        }
 
         // Кеш CodeGraph: code-graphs/{hash}/cache/ — не едет в облако (пересобирается).
         // «cache» — третий сегмент: code-graphs / {hash} / cache / …

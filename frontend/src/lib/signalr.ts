@@ -1,6 +1,8 @@
 import * as signalR from '@microsoft/signalr';
 import type { ServerMessage, TeamPlanDecision } from '../types';
 import { confirmOffline, readStoredToken, setConnectionState } from './offline';
+import { projectRouteOf } from './deviceAgent';
+import { agentHub, agentHubIfConnected, onAgentHubMessage } from './agentHub';
 
 let connection: signalR.HubConnection | null = null;
 
@@ -191,6 +193,15 @@ export function onMessage(handler: (msg: ServerMessage) => void): () => void {
   return () => conn.off('message', handler);
 }
 
+// События дев-серверов проекта (preview_status, preview_log): у локального проекта они идут из
+// хаба агента устройства — подписка открывает его, иначе статусы запуска не придут.
+export function onPreviewMessage(projectId: string, handler: (msg: ServerMessage) => void): () => void {
+  const off = onMessage(handler);
+  const offAgent = onAgentHubMessage(handler);
+  if (projectRouteOf(projectId) === 'agent') void agentHub(projectId).catch(() => { /* агент не найден — состояние покажет гейт */ });
+  return () => { off(); offAgent(); };
+}
+
 // Watcher: сервер сообщает об изменении файлов проекта (создание/правка/удаление).
 // full=true — сигнал полной пересинхронизации (массовые изменения либо сбой watcher'а):
 // paths при нём пуст, подписчик перезагружает всё, а не ждёт конкретных путей.
@@ -225,14 +236,16 @@ export async function leaveProject(projectId: string): Promise<void> {
 // Подписка на вывод дев-сервера (вкладка «Логи» панели «Сервисы»). Накопленный буфер
 // приходит ОТВЕТОМ на этот вызов (а не сообщением — иначе при пере-монтировании вьюера
 // его ловят оба инстанса и лог задваивается), дальше вывод идёт событиями preview_log.
+// Дев-серверы локального проекта живут в агенте устройства — лог идёт из его хаба (событие
+// то же, preview_log; слушать его — onPreviewMessage).
 export async function joinPreviewLog(projectId: string, serviceId: string): Promise<string | null> {
-  const conn = await ensureConnected();
+  const conn = projectRouteOf(projectId) === 'agent' ? await agentHub(projectId) : await ensureConnected();
   return conn.invoke<string | null>('JoinPreviewLog', projectId, serviceId);
 }
 
 export async function leavePreviewLog(projectId: string, serviceId: string): Promise<void> {
-  const conn = getConnection();
-  if (conn.state === signalR.HubConnectionState.Connected)
+  const conn = projectRouteOf(projectId) === 'agent' ? agentHubIfConnected(projectId) : getConnection();
+  if (conn?.state === signalR.HubConnectionState.Connected)
     await conn.invoke('LeavePreviewLog', projectId, serviceId);
 }
 

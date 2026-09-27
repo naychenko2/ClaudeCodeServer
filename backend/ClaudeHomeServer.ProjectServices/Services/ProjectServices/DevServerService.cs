@@ -182,7 +182,7 @@ public sealed class DevServerService : IDisposable
             return new DevServerStartResult(false, null, "error", "Недопустимый рабочий каталог");
         }
 
-        var launcher = _launchers.ForOwner(project.OwnerId);
+        var launcher = _launchers.ForProject(project);
         var envVars = new Dictionary<string, string>();
         if (env != null)
             foreach (var (k, v) in env) envVars[k] = v;

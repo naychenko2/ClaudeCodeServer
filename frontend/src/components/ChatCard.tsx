@@ -30,6 +30,8 @@ import { getLastMechanic } from '../lib/lastMechanic';
 import { teamImplementTone, teamImplementStageShort, teamImplementBadgeText } from '../lib/teamImplement';
 import { useCanHover } from '../lib/pointer';
 import { NO_AUTOFILL } from '../lib/noAutofill';
+import { useSlot } from '../lib/subsystems/registry';
+import type { ChatCardBadgeApi, ChatCardBadgeCtx } from '../lib/subsystems/registryCore';
 
 // Ширина правой зоны под лицо собеседника; на её левой кромке стоит столбик действий
 const COMPANION_W = 84;
@@ -226,6 +228,8 @@ export function ChatCard({
   const displayName = (taskChat ? taskChat.title : s.name) || fallbackName;
   // Последняя запущенная в чате механика команды — компактный бейдж
   const mechanic = getLastMechanic(s.id);
+  // Значки подсистем в строке названия (чат картинки — миниатюра и «картинка»)
+  const badges = useSlot<ChatCardBadgeCtx, ChatCardBadgeApi>('chat-card-badge');
   // Открытое меню действий: rect кнопки-триггера (null — закрыто)
   const [menu, setMenu] = useState<DOMRect | null>(null);
 
@@ -671,6 +675,8 @@ export function ChatCard({
         if (lpFired.current) { lpFired.current = false; return; }
         // Раскрытая свайпом карточка: тап закрывает раскрытие, а не открывает чат
         if (swipeOpen) { onSwipeToggle?.(false); return; }
+        // Подсистема может открыть чат по-своему (чат картинки — в редакторе)
+        if (badges.some(b => b.action?.open?.(s))) return;
         onSelect();
       }}
       onMouseEnter={() => onHover(true)}
@@ -901,6 +907,7 @@ export function ChatCard({
               {displayName}
             </span>
           )}
+          {badges.map((b, i) => b.render && <span key={b.name ?? i} style={{ display: 'contents' }}>{b.render({ session: s, isMobile })}</span>)}
           <TeamImplementMarker session={s} />
           <ExpiryBadge session={s} />
           {/* Закрепление: иконка-признак, сама кнопка живёт в блоке действий */}

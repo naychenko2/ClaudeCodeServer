@@ -1,7 +1,9 @@
 import { setAudioFocus } from '../lib/audioFocus';
 import { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback, Fragment, type HTMLAttributes } from 'react';
-import { ArrowDown, ArrowUp, RotateCw, CircleHelp, Archive, ArchiveRestore } from 'lucide-react';
+import { ArrowDown, ArrowUp, RotateCw, CircleHelp, Archive, ArchiveRestore, GitBranch } from 'lucide-react';
 import type { Project, Session, ChatItem, SkillInfo, AgentInfo, ClaudeBilling, Persona, Task, WorkLoopState, SessionTeamImplement, TeamPlanDecision } from '../types';
+import { ProjectFeature } from '../types';
+import { featureReason, isLocalProject, useProjectFeature } from '../lib/projectCapabilities';
 import { useSession } from '../hooks/useSession';
 import { usePersonasVersion, getPersonaById, getPersonasSnapshot, ensurePersonasLoaded, personaLabel } from '../lib/personas';
 import { findConsultedPersona } from './chat/PersonaTaskView';
@@ -43,12 +45,15 @@ import { voiceStyleFor, normalizeVoiceStyle, VOICE_STYLE_DIGEST, VOICE_STYLE_TAL
 import type { SpeechPhase } from '../hooks/useHandsFree';
 import { updateChatFields } from '../lib/chatUpdate';
 import { type Mode, ModeIcon, MODES, isDangerMode } from '../lib/modes';
-import { getDraft } from '../lib/drafts';
+import { getDraft, setDraft } from '../lib/drafts';
 import { useModelCaps, assistantName, planModelChange } from '../lib/models';
 import { Composer } from './Composer';
 import { ProjectGitBar } from './ProjectGitBar';
+import { ComposerStripHost } from './chat/ComposerStripHost';
+import { LocalHandsStripFeed } from '../features/localHands/LocalHandsStripFeed';
 import { C, R, SHADOW, SP, FS, PANEL_ANIM, CHAT_MAX_W, CHAT_GUTTER_L } from '../lib/design';
 import { VAR_PAD_R, VAR_SHIFT, VAR_W, useChatGutter } from '../lib/chatGutter';
+import { navPush, type NavSnapshot } from '../lib/nav';
 import { useIsTouch } from '../lib/breakpoints';
 import { setChatContext, AI_RECOMPUTE_EVENT } from '../lib/ai/chatContext';
 import { setFabObstacle } from '../lib/ai/fabObstacle';
@@ -74,6 +79,8 @@ import { DeployProgressCard } from './chat/DeployProgressCard';
 import { isDeployStart } from '../lib/deployProgress';
 import { TeamPlanningIndicator } from './chat/TeamPlanningIndicator';
 import { NO_AUTOFILL } from '../lib/noAutofill';
+import { SLOT_COMPOSER_CHIP, useSlot, type ComposerChipApi, type ComposerChipCtx } from '../lib/subsystems/registry';
+import type { ChatItemToolCtx } from '../lib/subsystems/registryCore';
 
 // Боковой отступ мобильной ленты: чуть шире стандартных 12px, чтобы кольца «Эхо»
 // индикатора ожидания не резались клипом области прокрутки (overflow-x: hidden).
@@ -95,6 +102,8 @@ interface Props {
   // доклада о выполнении. Отсутствует — рядом места нет (мобила, планшет, чат вне
   // воркспейса), и карточка откроет детали модалкой
   onOpenTaskAside?: (task: Task) => void;
+  // Сообщение, которое уйдёт само после присоединения к чату. Объект — со своими вложениями
+  // и пометкой снимка холста (чат картинки, ADR-018 §6); строка — прежние вызовы
   pendingMessage?: string;
   onPendingMessageSent?: () => void;
   onSessionUpdated?: (session: Session) => void;
@@ -136,6 +145,13 @@ interface Props {
   // колонку — так же, как за её ярлык. Тащить карточку принято за её верх, и шапка
   // чата — самая заметная его часть.
   headerDragProps?: HTMLAttributes<HTMLDivElement>;
+  // Множество id чатов, загруженных на этом экране — для плашки «Ветка от …».
+  // Если передан, и id оригинала НЕ в нём — плашка в ChatItemView деградирует в
+  // обычный текст, без ссылки и без клика. Не передан — поведение прежнее
+  // (ссылка). Источник — тот список чатов, что уже загружен владельцем экрана
+  // (ChatsPage.chats, WorkspacePage.sessions, wallStore.chats); нового запроса
+  // к серверу не заводим
+  availableChatIds?: Set<string>;
 }
 
 // Предел одной загрузки — совпадает с RequestSizeLimit эндпоинта загрузки вложений
@@ -209,7 +225,7 @@ function memoizedCacheEntry(
   return entry;
 }
 
-export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTaskAside, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, onAddToWall, onChatDeleted, skills, agents, attachedFiles, onAttachedFilesChange, greetingBubble, headerIsland, embedded, composerFocusSignal, contextBar, headerDragProps }: Props) {
+export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTaskAside, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, onAddToWall, onChatDeleted, skills, agents, attachedFiles, onAttachedFilesChange, greetingBubble, headerIsland, embedded, composerFocusSignal, contextBar, headerDragProps, availableChatIds }: Props) {
   const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, teamImplement: liveTeamImplement, teamPlanning: liveTeamPlanning, teamWavePulse, promptSuggestion, pending, composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending, preemptForPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
   // Открылся пустой чат (только что создан — своей истории у него нет) — курсор сразу
   // в поле ввода: сюда пришли писать, а не читать. Решение принимаем один раз на чат и
@@ -807,7 +823,14 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     return () => { root.style.setProperty('--cc-fab-bottom', '20px'); };
   }, [composerH, embedded]);
   // Контекст проекта для резолва локальных путей картинок в сообщениях
-  const projectCtx = useMemo(() => project ? { id: project.id, rootPath: project.rootPath } : null, [project]);
+  const projectCtx = useMemo(() => project
+    ? {
+      id: project.id, rootPath: project.rootPath, transcriptReason: featureReason(project, ProjectFeature.WorkflowView),
+      local: isLocalProject(project), devicePlatform: project.device?.platform ?? null,
+    }
+    : null, [project]);
+  // Ветка копирует транскрипт CLI на сервере — у локального проекта кнопок ветвления нет
+  const branchAvailable = useProjectFeature(project, ProjectFeature.ChatBranch);
 
   // Накопительная стоимость/токены сессии — сумма по всем result-элементам ленты.
   // Источник правды — история (грузится с бэка), поэтому переживает перезагрузку.
@@ -1096,6 +1119,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     }
   }, [isJoined, send, pendingMessage]);
 
+  const chipSlot = useSlot<ComposerChipCtx, ComposerChipApi>(SLOT_COMPOSER_CHIP);
   const handleSend = async (text: string, _attachments?: string[], opts?: { auto?: boolean }) => {
     // Новый вопрос обрывает чтение предыдущего ответа. Прайминг здесь — второе место
     // (первое в тумблере): режим персистится на чате, и «включил вчера — надиктовал
@@ -1112,6 +1136,17 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     const paths = [...attachedFiles];
     onAttachedFilesChange([]);
     atBottomRef.current = true; // своё сообщение — прыгаем вниз и снова прилипаем
+    // Чипы подсистем над полем ввода отдают свои вложения (пометки картинки агенту).
+    // Не приложилось — сообщение всё равно уходит: текст человека важнее снимка
+    for (const chip of chipSlot) {
+      if (!chip.action?.beforeSend) continue;
+      try {
+        const files = await chip.action.beforeSend({ projectId: project?.id ?? null, sessionId: session.id, isMobile: isMobile === true });
+        for (const f of files) paths.push((await api.chats.uploadFile(session.id, f, project?.id)).path);
+      } catch {
+        showToast('Вложение', 'Не удалось приложить пометки — сообщение ушло без них');
+      }
+    }
     await send(text, paths, mode);
   };
 
@@ -1160,12 +1195,12 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     for (const file of files) {
       if (file.size > MAX_UPLOAD_BYTES) { showToast('Вложение', TOO_BIG_MSG); continue; }
       try {
-        const { path } = await api.chats.uploadFile(session.id, file);
+        const { path } = await api.chats.uploadFile(session.id, file, project?.id);
         added.push(path);
       } catch { showToast('Вложение', UPLOAD_FAIL_MSG); }
     }
     if (added.length) onAttachedFilesChange([...attachedFiles, ...added]);
-  }, [session.id, attachedFiles, onAttachedFilesChange]);
+  }, [session.id, project?.id, attachedFiles, onAttachedFilesChange]);
 
   // Единая точка загрузки с устройства (вставка, перетаскивание, кнопка пикера):
   // гейт по зрению модели сужен до картинок — pdf и документы claude читает с диска
@@ -1199,6 +1234,29 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     const updated = await api.chats.migrateProvider(session.id, model, subscriptionKey);
     onSessionUpdated?.(updated);
   }, [session.id, onSessionUpdated]);
+
+  // Ветвление чата от шага ленты (фича chat-branch). Сервер заводит новый чат с копией
+  // истории до userMessageIndex и кладёт его транскрипт в свою папку. Ошибки ВСЕ приходят
+  // 409 (контроллер сворачивает восемь отказов §9 в один код), но текст в err.message
+  // уже человеческий — его и показываем тостом, не разводя ветку по коду. draft из
+  // ответа (только при include='beforePrompt') кладём в стор черновика композера нового
+  // чата: пользователь должен успеть поправить текст, поэтому НЕ отправляем автоматически.
+  // include='turn' возвращает draft=null — композер новой ветки пуст. Навигация —
+  // navPush снимка; ветка наследует проект оригинала, объект Project берём из props.
+  const handleBranch = useCallback(async (target: { userMessageIndex: number; anchorText: string; include: 'turn' | 'beforePrompt' }) => {
+    try {
+      const result = await api.chats.branch(session.id, target);
+      if (result.draft) setDraft(result.chatId, result.draft);
+      const navDest: NavSnapshot = result.projectId
+        // На проектный чат: объект Project нужен снапшоту. Ветка наследует проект
+        // оригинала, и props.project для него совпадает (тот же ownerId).
+        ? { screen: 'project', project: project!, chatId: result.chatId, view: 'chat', file: null }
+        : { screen: 'chats', chatId: result.chatId };
+      navPush(navDest);
+    } catch (err) {
+      showToast('Ветвление', err instanceof Error ? err.message : 'Не удалось создать ветку чата');
+    }
+  }, [session.id, project]);
 
   // «Продолжить в стандартном окне 200K» под карточкой отказа Window1MUnavailable: снимает
   // суффикс [1m] с чата. Возврат { ok: false, error } при 400/404 — карточка показывает
@@ -1792,11 +1850,43 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // Единый рендер одного элемента ленты (используется в основном рендере и в доке).
   // useCallback + React.memo на ChatItemView: при дописывании ленты неизменившиеся
   // элементы не перерендериваются (все пропсы-функции стабильны).
+  // Адрес якорного user_message для кнопки «Ветвление» (фича chat-branch). У ленты
+  // элементы не имеют стабильного id, а индексы items и messages расходятся штатно
+  // (normalizeHistory вливает workflow_progress в tool_use и группирует ошибки), поэтому
+  // сервер и фронт считают одно и то же множество — порядковый номер user_message.
+  // Для user_message: его собственный индекс. Для ответа ассистента: индекс ПОСЛЕДНЕГО
+  // user_message выше (то же значение, что у user_message). Нет user_message выше →
+  // кнопки нет. anchorText — первые ~120 символов текста этого сообщения: сервер
+  // сверяет его с найденным по индексу сообщением, на расхождении отвечает 409.
+  // useMemo от items — пересчёт только при изменении ленты, иначе renderItem пересоздавался
+  // бы на каждую стрим-дельту и ронял мемоизацию ChatItemView.
+  const branchAnchors = useMemo(() => {
+    const arr: ({ userMessageIdx: number; anchorText: string; include: 'turn' | 'beforePrompt' } | null)[] = [];
+    let count = 0;
+    let lastText = '';
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      if (it.kind === 'user_message') {
+        count++;
+        lastText = it.text.slice(0, 120);
+        arr[i] = { userMessageIdx: count - 1, anchorText: lastText, include: 'beforePrompt' };
+      } else {
+        arr[i] = count > 0 ? { userMessageIdx: count - 1, anchorText: lastText, include: 'turn' } : null;
+      }
+    }
+    return arr;
+  }, [items]);
+
   const renderItem = useCallback((item: ChatItem, i: number,
     extras?: {
       agentActivity?: ActivityEntry[];
       agentRenderChild?: (item: ChatItem, idx: number) => React.ReactNode;
-    }) => (
+    }) => {
+    const anchor = branchAnchors[i];
+    const onBranchForItem = anchor && branchAvailable
+      ? () => handleBranch({ userMessageIndex: anchor.userMessageIdx, anchorText: anchor.anchorText, include: anchor.include })
+      : undefined;
+    return (
     <ChatItemView
       key={itemKey(item, i)}
       item={item}
@@ -1823,6 +1913,8 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       onRetry={handleRetry}
       onInterrupt={interrupt}
       onMigrateProvider={handleMigrateProvider}
+      onBranch={onBranchForItem}
+      availableChatIds={availableChatIds}
       taskPlan={batchByIndex.get(i)}
       agentActivity={extras?.agentActivity}
       agentRenderChild={extras?.agentRenderChild}
@@ -1860,14 +1952,15 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       turnCache={turnMeta.cache[i]}
       onDropWindow1M={handleDropWindow1M}
     />
-  ), [
+    );
+  }, [
     online, isWaiting, items.length, lastResultIndex, retryInterruptedIdx, toggleThinking, allowPermission,
     denyPermission, handleAllowAlways, answerQuestion, handleRespondPlan, planVersions,
     lastApprovedPlanIdx, mode, onOpenFile, project, handleRevert, handleRetry,
-    interrupt, handleMigrateProvider, handleDropWindow1M, batchByIndex, showWaiting, taskTodos, changeMode, turnBoundaries,
+    interrupt, handleMigrateProvider, handleBranch, branchAvailable, handleDropWindow1M, branchAnchors, batchByIndex, showWaiting, taskTodos, changeMode, turnBoundaries,
     mechanicOffers, launchedByIndex, failedByIndex, declinedMechanicOffers, runTeamMechanic, scrollToMechanicLaunch,
     presetOffers, presetCardState, presetNote, presetError, presetBusy, applyPreset, declinePreset,
-    turnMeta,
+    turnMeta, availableChatIds,
   ]);
 
   // Блок действий: подряд идущие карточки инструментов + изменения файлов объединяем
@@ -1879,6 +1972,9 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // (glif: project_update + view_media одного файла — один MediaBlock, выживает галерея).
   // Extract кэширован по ссылке на элемент, поэтому пересчёт на стрим-дельту дёшев
   const mediaVisibility = useMemo(() => buildMediaVisibility(items), [items]);
+  // Инструменты со своей карточкой от подсистемы (слот chat-item-tool) — на виду, как виджет
+  const ownToolCards = useSlot<ChatItemToolCtx>('chat-item-tool');
+  const ownToolNames = useMemo(() => new Set(ownToolCards.map(c => c.name)), [ownToolCards]);
 
   // QA Fold 8: ошибки прошлых дней (ts < сегодня) склеиваем в error_group ПО ДНЯМ —
   // иначе красные баннеры «Session failed 13.08» плодятся в ленте и теснят живое.
@@ -2012,6 +2108,9 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     }
     // Дочерние элементы субагента (не-Workflow, не inline) — рисуем единой линией-коннектором слева
     const isSubItem = (it: ChatItem) => !!parentOf(it) && !suppressedByWorkflow.has(it) && !suppressedByAgentParent.has(it);
+    // Пустая реплика (локальные модели шлют "\n" между вызовами инструментов) — это
+    // аватар персоны без текста; не рисуем её и не даём ей рвать стопку действий
+    const isBlankText = (it: ChatItem) => it.kind === 'text' && it.text.trim() === '';
     // Узлы ленты с пометкой стартового индекса — нужно для обёртки success-коннектором
     const nodes: RenderedNode[] = [];
     const pushNode = (node: React.ReactNode, start: number) => nodes.push({ node, start });
@@ -2060,7 +2159,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       // lookahead-цикла ниже. Гашение здесь нужно только чтобы САМОМУ
       // подавленному элементу не выделился data-feed-index — иначе баннер
       // «К карточке» найдёт его в DOM как обычный и прыгнет не туда
-      if (suppressedByTeamNoise.has(i)) { i++; continue; }
+      if (suppressedByTeamNoise.has(i) || isBlankText(display[i])) { i++; continue; }
       // Элементы, отрисованные внутри WorkflowBlockView или inline под родителем-агентом,
       // в основной ленте пропускаем (любой kind: инструменты, текст, thinking)
       if (suppressedByWorkflow.has(display[i]) || suppressedByAgentParent.has(display[i])) {
@@ -2097,7 +2196,8 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         // теперь ВИДИМ (разделитель «ход в дереве агента»/«ход вернулся в проект»)
         // и обязан рвать стопку действий, как любой другой видимый элемент
         const isInvisible = (it: ChatItem, idx: number) =>
-          (it.kind === 'session_started' && !turnBoundaries.has(idx)) || it.kind === 'resumed' || it.kind === 'fal_cost' || it.kind === 'glif_cost';
+          (it.kind === 'session_started' && !turnBoundaries.has(idx)) || it.kind === 'resumed' || it.kind === 'fal_cost' || it.kind === 'glif_cost'
+          || isBlankText(it);
         // Размышления верхнего уровня прячем внутрь группы, если они стоят МЕЖДУ действиями
         const isThought = (it: ChatItem) => (it.kind === 'thinking' && !it.parentToolUseId) || it.kind === 'redacted_thinking';
         // isSuppressed включает и гашение штабного шума по индексу — иначе
@@ -2145,7 +2245,9 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         // инструмента, сворачивается как все
         const isWidgetEntry = (it: ChatItem) =>
           it.kind === 'tool_use' && !it.isError && isWidgetShow(it.name);
-        const isPinnedEntry = (it: ChatItem) => isAgentEntry(it) || isMediaEntry(it) || isTaskCardEntry(it) || isWidgetEntry(it);
+        // Карточка подсистемы (запуск генерации агентом, «✦ Промпт») — визуальный результат, в свёртку не прячется
+        const isOwnCardEntry = (it: ChatItem) => it.kind === 'tool_use' && ownToolNames.has(it.name);
+        const isPinnedEntry = (it: ChatItem) => isAgentEntry(it) || isMediaEntry(it) || isTaskCardEntry(it) || isWidgetEntry(it) || isOwnCardEntry(it);
         const toolCount = slice.filter(([it]) => it.kind === 'tool_use' && !isPinnedEntry(it)).length;
         // Группа завершена, как только после неё появился следующий видимый элемент
         // (текст ассистента, запрос разрешения, result, error…) — конца хода не ждём.
@@ -2767,7 +2869,29 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
               чата, дерево текущего хода, суммарный diff и кнопки «Зафиксировать»/
               «Опубликовать». Правой панели «Изменения» на мобиле нет — отсюда гейт
               !isMobile; на мобиле о дереве хода сообщает только отметка в ленте. */}
-          {project && !isMobile && !embedded && <ProjectGitBar project={project} session={session} turnTree={turnTree} turnTreeLive={isWaiting} onCommitOwn={handleCommitOwn} onCommitAll={handleCommitAll} />}
+          {/* Полосы над композером (реестр composer-strip): одна за раз, Git — встроенный
+              вклад каркаса; какая видна — решает стор lib/composerStrips. */}
+          {/* Полоса «Руки»: состояние рук чата и её фокус питает отдельный компонент — сама
+              полоса рисуется только активной */}
+          {project && !embedded && <LocalHandsStripFeed session={session} project={project} />}
+          {project && !embedded && (
+            <ComposerStripHost projectId={project.id} sessionId={session.id} isMobile={isMobile === true}
+              builtins={[{
+                name: 'git', order: 0,
+                render: ({ switcher }) => (
+                  <>
+                    {switcher && <div style={{ display: 'flex', marginTop: SP.xs }}>{switcher}</div>}
+                    <ProjectGitBar project={project} session={session} turnTree={turnTree} turnTreeLive={isWaiting} onCommitOwn={handleCommitOwn} onCommitAll={handleCommitAll} />
+                  </>
+                ),
+                action: {
+                  title: 'Git',
+                  icon: <GitBranch size={14} strokeWidth={ICON_STROKE} />,
+                  // Правой панели «Изменения» на мобиле нет — git-полоса там не показывается
+                  isAvailable: () => !isMobile,
+                },
+              }]} />
+          )}
           {/* Подъём композера над лентой даёт сама белая карточка (Composer), а не эта
               обёртка: полоса контролов вынесена из карточки, и тень на обёртке рисовала
               серый ореол вокруг пустой области под ней и полоску над полем ввода. */}
@@ -2797,6 +2921,8 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             // стора черновиков (getDraft) уже под новый sessionId.
             key={session.id}
             sessionId={session.id}
+            // ADR-016 §3.4: проект чата — для гейта отправки и баннера «устройство офлайн»
+            project={project}
             voicePersonaId={session.personaId ?? undefined}
             offline={!online}
             onSend={handleSend}

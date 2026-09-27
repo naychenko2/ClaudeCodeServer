@@ -88,7 +88,10 @@ public class SkillSuggestService(
     public async Task<IReadOnlyList<SkillSuggestion>> SuggestForProjectAsync(string? ownerId, string projectId,
         CancellationToken ct = default)
     {
-        var project = projectSummary.GetById(projectId)
+        // Проект берём ТОЛЬКО через сверку с владельцем: иначе по чужому projectId имя и
+        // системный промпт чужого проекта уезжали в контекст запроса к модели. Владельца
+        // нет — отказ (fail-closed), подбор под проект без владельца не бывает.
+        var project = (ownerId is null ? null : projectSummary.GetById(ownerId, projectId))
             ?? throw new KeyNotFoundException("Проект не найден");
         var sb = new StringBuilder();
         sb.AppendLine($"Проект: {project.Name}");

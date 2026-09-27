@@ -91,8 +91,9 @@ public class ProjectFileSessionsIndex(SessionManager sessions, ChatHistoryServic
         foreach (var key in _cache.Keys)
             if (!liveIds.Contains(key)) _cache.TryRemove(key, out _);
 
-        var rootPath = projects.GetById(projectId)?.RootPath;
-        if (rootPath is null) return result; // проект не резолвится — ownership уже проверил контроллер
+        if (projects.GetById(projectId) is not { } project) return result; // ownership уже проверил контроллер
+        // Панель «Изменения» локального проекта — в агенте устройства; сервер индекс не строит
+        var rootPath = Composition.ProjectCapabilityGuard.ServerRoot(project);
 
         foreach (var session in projectSessions)
         {

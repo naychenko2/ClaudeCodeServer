@@ -1,4 +1,6 @@
 using ClaudeHomeServer.Services.Backup;
+using ClaudeHomeServer.Services.ImageEditor;
+using ClaudeHomeServer.Services.Spend;
 using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Services;
@@ -22,6 +24,9 @@ public class BackupPathsTests
     [InlineData("dossiers/owner1/project1.json")]
     [InlineData("dossiers/owner1/project1.archive.jsonl")]
     [InlineData("dossiers/state.json")]
+    // Репозитории встроенного Forgejo — едут, исключены только ключи хоста SSH
+    [InlineData("forgejo/git/repositories/andrey/ai-home.git/HEAD")]
+    [InlineData("forgejo/gitea/gitea.db")]
     public void СтейтИМаркерыМиграций_ПопадаютВАрхив(string path)
     {
         BackupPaths.ShouldInclude(path).Should().BeTrue();
@@ -57,9 +62,19 @@ public class BackupPathsTests
     [InlineData("backups/ccs-old.zip")]
     [InlineData("backups-secrets/ccs-secrets-1.zip")]
     [InlineData(".backup-staging/users.json")]
+    // Ключи хоста SSH Forgejo — приватные и нечитаемые для сервера (root, 600)
+    [InlineData("forgejo/ssh/ssh_host_rsa_key")]
+    [InlineData("forgejo/ssh/ssh_host_ed25519_key.pub")]
+    // Рабочая очередь Forgejo (LevelDB) — живой контейнер держит LOCK
+    [InlineData("forgejo/gitea/queues/common/LOCK")]
+    // Поисковый индекс Forgejo (bleve/bolt) — тоже под блокировкой, пересобирается
+    [InlineData("forgejo/gitea/indexers/issues.bleve/store/root.bolt")]
     [InlineData("backup-state.json")]
     [InlineData("projects.json.abc123.tmp")]
     [InlineData("users.json.corrupt-20260101-000000.bak")]
+    // Копия исходника при частичном подъёме стора — дубликат живого файла (на проде
+    // sessions.json это ~2 МБ), в архив не едет
+    [InlineData("sessions.json.partial-20260921-153000.bak")]
     // Корзина синка профилей — мусорная зона с TTL, восстановлению не подлежит
     [InlineData(".sync-trash/deepseek/2026-09-02T11-30-00Z/CLAUDE.md")]
     [InlineData(".sync-trash/deepseek/2026-09-02T11-30-00Z/rules/extra.md")]
@@ -79,6 +94,47 @@ public class BackupPathsTests
         BackupPaths.ShouldInclude("spend/daily.json").Should().BeTrue();
     }
 
+    // Сторож связки пары «константа вертикали ↔ литерал в спине» (по образцу DockerPathMapperTests,
+    // раздел SystemPrompts). Без него переименование `TaskPromptMetricsStore.FileName` или
+    // `DirName` осталось бы незамеченным: литерал "spend"/"task-prompts.jsonl" в BackupPaths
+    // тихо протухнет, и метрики промптов поедут в облачный архив как обычная аналитика.
+    // Main не имеет ProjectReference на Spend.dll, поэтому прямая ссылка через константы
+    // невозможна — связь держит тест: имена сравниваются через ShouldInclude, который
+    // читает литералы, против актуальных значений TaskPromptMetricsStore.
+    [Fact]
+    public void ЛитералыВBackupPaths_СовпадаютСКонстантамиВертикали()
+    {
+        // Составной путь, который BackupPaths.ShouldInclude читает как
+        // {root="spend", file="task-prompts.jsonl"}.
+        var composite = string.Join('/', TaskPromptMetricsStore.DirName, TaskPromptMetricsStore.FileName);
+
+        composite.Should().Be("spend/task-prompts.jsonl",
+            $"константы вертикали изменились — обнови литералы в BackupPaths.ShouldInclude " +
+            $"(DirName='{TaskPromptMetricsStore.DirName}', FileName='{TaskPromptMetricsStore.FileName}')");
+
+        BackupPaths.ShouldInclude(composite).Should().BeFalse(
+            "имя в Spend должно оставаться исключением облачного архива: это наблюдение, не настройка");
+    }
+
+    [Fact]
+    public void РедакторКартинок_РабочаяПапкаИсключена_ЖурналТратЕдет()
+    {
+        // Варианты и маски сеансов правки — кеш на 7 дней весом до гигабайт
+        BackupPaths.ShouldInclude("image-editor/user-1/job-1/v1.png").Should().BeFalse();
+        // Траты редактора — деньги, других копий у них нет: журнал в корне data едет в архив
+        BackupPaths.ShouldInclude("image-editor-spend.jsonl").Should().BeTrue();
+    }
+
+    [Fact]
+    public void РедакторКартинок_СостояниеЧатовКартинкиИсключено()
+    {
+        // Состояние редактора чата картинки (ADR-018 §2) — TTL-кеш рядом с вариантами; имена
+        // берём из констант Core, которые читает и сам модуль редактора
+        var dir = $"{ImageEditorPaths.WorkspaceDirName}/user-1/{ImageEditorPaths.ChatsDirName}";
+        BackupPaths.ShouldInclude($"{dir}/0f3c9a.json").Should().BeFalse();
+        BackupPaths.ShouldInclude($"{dir}/0f3c9a.mask.png").Should().BeFalse();
+    }
+
     [Fact]
     public void СтатусыMcpСерверов_Исключены()
     {
@@ -94,6 +150,17 @@ public class BackupPathsTests
     {
         // Карта восстановима одним вызовом по кнопке «Собрать схему» — кеш, не данные
         BackupPaths.ShouldInclude("plan-maps.json").Should().BeFalse();
+    }
+
+    [Fact]
+    public void СнимокСпискаHiggsfield_Исключен()
+    {
+        // Кеш tools/list, который прокси пишет при каждом успешном опросе апстрима.
+        // Секретов нет, но восстанавливать из облака бесполезно: список всё равно
+        // устаревший, а первый же успешный handshake перезапишет файл. Переехавший
+        // из бэкапа снимок заставит ходы 30 мин жить на чужой версии схем — это
+        // регрессия, а не польза.
+        BackupPaths.ShouldInclude("higgsfield-tools.json").Should().BeFalse();
     }
 
     [Fact]

@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -12,11 +12,47 @@ import { LUCIDE_ICON_NAME_SET, isLucideIconName } from '../../../lib/projectGlyp
 // жил до ручной приёмки. Тест ловит любое новое расхождение.
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-// Путь только через path.join от расположения теста: CI гоняет на ubuntu, литералы
-// с обратным слэшем там считаются относительными именами
-const whitelistPath = path.join(
-  here, '..', '..', '..', '..', '..',
-  'backend', 'ClaudeHomeServer', 'Services', 'ProjectIcons', 'lucide-icon-names.g.txt');
+// Корень репо ищем от расположения теста подъёмом по .git, чтобы не зависеть от
+// конкретного имени .csproj (вертикали переезжают между csproj при выносе — Этап 5).
+function findRepoRoot(start: string): string {
+  let dir = start;
+  for (let i = 0; i < 8; i += 1) {
+    if (existsSync(path.join(dir, '.git'))) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) throw new Error(`не нашёл корень репо (.git) от ${start}`);
+    dir = parent;
+  }
+  throw new Error(`не нашёл корень репо (.git) от ${start}`);
+}
+
+// Рекурсивный поиск первого файла с заданным именем от стартового каталога. Возвращает
+// абсолютный путь; сортируем по позиции в обходе для детерминированности.
+function findFirstFile(start: string, name: string): string {
+  const stack: string[] = [start];
+  while (stack.length > 0) {
+    const dir = stack.pop()!;
+    const entries = readdirSync(dir) as string[];
+    entries.sort();
+    for (const entry of entries) {
+      const full = path.join(dir, entry);
+      const stat = statSync(full);
+      if (stat.isDirectory()) {
+        // worktree-ы зеркалят тот же файл — пропускаем, иначе тест упрётся в неоднозначность
+        if (entry === 'node_modules' || entry === '.git') continue;
+        stack.push(full);
+      } else if (entry === name) {
+        return full;
+      }
+    }
+  }
+  throw new Error(`файл ${name} не найден от ${start}`);
+}
+
+const repoRoot = findRepoRoot(here);
+// Ограничиваем поиск каталогом backend/: там лежит белый список, искать шире —
+// ловить копии в .claude/worktrees/* (они идентичны, но проверять равенство дороже)
+const backendRoot = path.join(repoRoot, 'backend');
+const whitelistPath = findFirstFile(backendRoot, 'lucide-icon-names.g.txt');
 
 function backendNames(): string[] {
   return readFileSync(whitelistPath, 'utf8')

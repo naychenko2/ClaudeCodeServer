@@ -460,6 +460,7 @@ public class PlanMapServiceTests : IDisposable
         public int Calls;
 
         public bool UsesLocal(string actionKey) => false;
+        public bool HasFreeRoute(string actionKey) => false;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "stub";
 
         public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
@@ -485,6 +486,7 @@ public class PlanMapServiceTests : IDisposable
     private sealed class ThrowingRunner : ICheapTextRunner
     {
         public bool UsesLocal(string actionKey) => false;
+        public bool HasFreeRoute(string actionKey) => false;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "stub";
 
         public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
@@ -513,6 +515,7 @@ public class PlanMapServiceTests : IDisposable
         public void Release() => _release.TrySetResult();
 
         public bool UsesLocal(string actionKey) => false;
+        public bool HasFreeRoute(string actionKey) => false;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "stub";
 
         public async Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,

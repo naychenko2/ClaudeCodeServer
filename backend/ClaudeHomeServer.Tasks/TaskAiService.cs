@@ -196,6 +196,8 @@ public class TaskAiService(IProjectManager projects, IConfiguration config,
         sb.AppendLine($"Контекст: задача относится к проекту «{project.Name}».");
         try
         {
+            // CLAUDE.md локального проекта на устройстве — one-shot его не читает (ADR-016 §4)
+            if (!ProjectCapabilities.FilesOnServer(project)) return;
             var claudeMd = Path.Combine(project.RootPath, "CLAUDE.md");
             if (File.Exists(claudeMd))
             {

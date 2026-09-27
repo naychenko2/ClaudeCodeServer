@@ -24,8 +24,16 @@ WORKDIR /src
 COPY backend/ClaudeHomeServer/ClaudeHomeServer.csproj backend/ClaudeHomeServer/
 RUN dotnet restore backend/ClaudeHomeServer/ClaudeHomeServer.csproj
 COPY backend/ ./backend/
+# Скрипты установки агента устройства встраиваются в сборку ресурсом (AgentDownloadsController)
+COPY deploy/agent-install/ ./deploy/agent-install/
+# RID обязателен: без него SkiaSharp (растр редактора) кладёт в runtimes/ нативку под все
+# платформы, ~0,4 ГБ. Рантайм-образ — glibc x64, поэтому linux-x64
 RUN dotnet publish backend/ClaudeHomeServer/ClaudeHomeServer.csproj \
-    -c Release -o /app/publish /p:UseAppHost=false
+    -c Release -r linux-x64 --self-contained false -o /app/publish /p:UseAppHost=false
+# Динамические модули ModuleLoader резолвит по пути — без них старт падает (как в publish-linux.sh)
+RUN for mod in notes/ClaudeHomeServer.Notes.dll spend/ClaudeHomeServer.Spend.dll image-editor/ClaudeHomeServer.ImageEditor.dll; do \
+      test -f "/app/publish/modules/$mod" || { echo "нет modules/$mod после publish" >&2; exit 1; }; \
+    done
 # Свежесобранный фронт кладём в wwwroot (исходный wwwroot исключён в .dockerignore)
 COPY --from=frontend /src/frontend/dist /app/publish/wwwroot
 
@@ -50,7 +58,12 @@ RUN npm install -g @anthropic-ai/claude-code skills
 RUN apt-get update && apt-get install -y --no-install-recommends mc \
  && rm -rf /var/lib/apt/lists/*
 
-RUN useradd -m -u 1001 app
+# UID пользователя app. На Linux-хосте bind-mount проверяет права по UID —
+# задать UID владельца папок проектов: --build-arg APP_UID=$(id -u).
+# UID 1000 в базовом образе занят пользователем node — освобождаем
+ARG APP_UID=1001
+RUN if getent passwd ${APP_UID} >/dev/null; then userdel -r "$(getent passwd ${APP_UID} | cut -d: -f1)"; fi \
+ && useradd -m -u ${APP_UID} app
 WORKDIR /app
 
 COPY --from=pty-bridge /src/pty-bridge /app/pty-bridge
@@ -105,7 +118,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends mc \
  && rm -rf /var/lib/apt/lists/*
 
 # Непривилегированный пользователь; HOME под volume ~/.claude
-RUN useradd -m -u 1001 app
+# UID пользователя app. На Linux-хосте bind-mount проверяет права по UID —
+# задать UID владельца папок проектов: --build-arg APP_UID=$(id -u).
+# UID 1000 в базовом образе занят пользователем node — освобождаем
+ARG APP_UID=1001
+RUN if getent passwd ${APP_UID} >/dev/null; then userdel -r "$(getent passwd ${APP_UID} | cut -d: -f1)"; fi \
+ && useradd -m -u ${APP_UID} app
 WORKDIR /app
 
 COPY --from=pty-bridge /src/pty-bridge /app/pty-bridge

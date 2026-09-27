@@ -95,7 +95,12 @@ public static class McpOAuthDiscovery
         return new McpOAuthEndpoints(
             Str(metadata, "authorization_endpoint") ?? root + "/authorize",
             Str(metadata, "token_endpoint") ?? root + "/token",
-            Str(metadata, "registration_endpoint") ?? root + "/register",
+            // RFC 8414 §2: registration_endpoint опционален. Если провайдер его не
+            // объявил — дефолта не выдумываем, иначе RegisterClientAsync отправит POST
+            // на заведомо несуществующий /register и упадёт, а человек увидит
+            // «Сервер не поддерживает автоматическую регистрацию» без шанса на откат
+            // к ручному client_id.
+            Str(metadata, "registration_endpoint"),
             scopes);
     }
 

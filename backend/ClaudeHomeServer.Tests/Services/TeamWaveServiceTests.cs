@@ -22,7 +22,6 @@ namespace ClaudeHomeServer.Tests.Services;
 // ждёт, пока закроются задачи предыдущей.
 // TaskExecutionService в тестах не передаём — запуск claude.exe здесь не гоняется, проверяем
 // раздачу: карточки задач, состояние режима и счётчики бюджета.
-[Collection(TestCollections.SessionStaticResolvers)]
 public class TeamWaveServiceTests : IDisposable
 {
     private readonly string _dir;
@@ -61,6 +60,12 @@ public class TeamWaveServiceTests : IDisposable
 
         _teamPlanning = new TeamPlanningService(_personas, new StubPlanner(() => _plannerAnswer));
         _sessions = CreateSessionManager(config, userStore, appSettings, _broadcaster);
+        // Явный per-инстансный lookup задач. Раньше вычисляемый Session.ParentSessionId
+        // (дерево чатов-исполнителей) закрывалась статикой Session.TaskSourceSessionResolver,
+        // которую тестовый TaskManager (_tasks) ставил в ctor; теперь lookup явный. В проде
+        // DI пробрасывает TaskManager в SessionManager (см. его ctor), в этом тесте SessionManager
+        // создан без него → подменяем lookup, иначе родительство ребёнка-исполнителя не резолвится.
+        _sessions.SetTaskLookupForTests(new TaskLookupAdapter(_tasks));
         // Реальный NotificationService с дисковым стором (паттерн TaskExecutionServiceDelegationReportTests):
         // напоминания о карточках проверяем по broadcast-снимку выше
         var notif = new NotificationService(
@@ -277,6 +282,24 @@ public class TeamWaveServiceTests : IDisposable
         var ti = _sessions.GetById(session.Id)!.TeamImplement!;
         ti.Stage.Should().Be(TeamImplementStage.AwaitingDecision,
             "карточка эскалации ставит практику на ожидание решения — молчаливых пауз не бывает");
+    }
+
+    // ADR-016, вариант А плана §5: под-задача ждала устройство локального проекта и не
+    // дождалась за потолок — карточка в ленте штаба с причиной, не тишина
+    [Fact]
+    public async Task ПодЗадачаНеДождаласьУстройства_КарточкаСПричинойВЛентеШтаба()
+    {
+        var (session, plan) = await MakeRunningStabAsync("wave-device-wait");
+        var created = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
+        var task = created[0];
+
+        await _sut.OnTaskNotLaunchedAsync(task, "устройство локального проекта так и не стало доступно");
+
+        var card = (await ((ITeamHistoryStore)_sessions).GetOpenTeamEscalationsAsync(session.Id))
+            .Should().ContainSingle(c => c.TaskId == task.Id).Which;
+        card.Kind.Should().Be(TeamEscalationKind.TaskFailed);
+        card.Details.Should().Contain("так и не стало доступно").And.Contain("устройство проекта");
+        _sessions.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.AwaitingDecision);
     }
 
     [Fact]
@@ -1412,10 +1435,12 @@ public class TeamWaveServiceTests : IDisposable
     // собирает проект 45 минут. Все UpdatedAt-якоря статичны (двигаются только на границах
     // ходов), но прогон CLI ребёнка жив — это активность «сейчас», а не «зависло».
     // Родительство чата-исполнителя закрепляем через SetParent, а не вычисляемым по задаче
-    // путём: Session.TaskSourceSessionResolver статический, и параллельный тестовый класс
-    // (WebApplicationFactory со своей TaskManager) переприсваивает его себе — вычисляемый
-    // ParentSessionId флакует в null. Для пульса оба пути — один и тот же ребёнок
-    // (ParentSessionId), авто-резолв отдельно покрыт тестом активности выше.
+    // путём: раньше ParentSessionId шло через статический Session.TaskSourceSessionResolver,
+    // который параллельный тестовый класс (WebApplicationFactory со своей TaskManager)
+    // переприсваивал себе — вычисляемый ParentSessionId флакал в null (статика теперь снята,
+    // lookup пер-инстанса, но SetParent — самый явный и устойчивый способ закрепить род).
+    // Для пульса оба пути — один и тот же ребёнок (ParentSessionId), авто-резолв
+    // отдельно покрыт тестом активности выше.
     [Fact]
     public async Task Пульс_ЖивойХодИсполнителяСпасаетОтЛожногоЗависания()
     {
@@ -3055,6 +3080,7 @@ public class TeamWaveServiceTests : IDisposable
     private sealed class StubPlanner(Func<string> answer) : ClaudeHomeServer.Services.Llm.ICheapTextRunner
     {
         public bool UsesLocal(string actionKey) => false;
+        public bool HasFreeRoute(string actionKey) => false;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "claude";
 
         public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,

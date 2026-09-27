@@ -313,6 +313,8 @@ public class SessionMessagesController(SessionManager sessions, SessionMessaging
         StoredToolUseMessage t => new { kind = "tool", name = t.Name, isError = t.IsError } as object,
         StoredResultMessage r => new { kind = "result", subtype = r.Subtype, numTurns = r.NumTurns },
         StoredErrorMessage e => new { kind = "error", text = Truncate(e.Text) },
+        // Без неё агент видел бы вопрос человека без ответа, как у зависшего хода
+        StoredInterruptedMessage => new { kind = "interrupted" },
         _ => null,
     };
 

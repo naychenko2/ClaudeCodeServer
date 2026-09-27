@@ -87,7 +87,7 @@ function toProjectRelative(src: string, rootPath: string): string {
 
 // Картинка из markdown: внешние URL (http/https/data) — напрямую; локальный путь файла
 // проекта (например, картинка, скачанная Claude) — грузим через API и показываем как data-URL.
-function ChatImage({ src, alt }: { src?: string; alt?: string }) {
+export function ChatImage({ src, alt }: { src?: string; alt?: string }) {
   const project = useContext(ChatProjectContext);
   // /api/proxy?... — уже проксированный URL (от urlTransform)
   const isRemote = !!src && /^(https?:|data:|\/api\/proxy)/i.test(src);
@@ -122,7 +122,9 @@ function ChatImage({ src, alt }: { src?: string; alt?: string }) {
 
   const finalSrc = isRemote ? src : cached ?? resolved;
 
-  if (failed) return <span style={{ fontSize: 13, color: C.textMuted }}>🖼 {alt || src}</span>;
+  // ref — на КАЖДУЮ ветку: пока картинки нет, в DOM только плейсхолдер, и без ref на нём
+  // IntersectionObserver ничего не наблюдает → inView вечно false → fetch не стартует никогда
+  if (failed) return <span ref={wrapRef} style={{ fontSize: 13, color: C.textMuted }}>🖼 {alt || src}</span>;
   if (!finalSrc) return <span ref={wrapRef} style={{ fontSize: 13, color: C.textMuted }}>Загрузка изображения…</span>;
 
   return (
@@ -442,7 +444,8 @@ const PROXY_ALLOWED_HOSTS = [
 
 // Домены генераторов медиа — их src в markdown не проксируем: медиа уже показаны в MediaBlock.
 // res.cloudinary.com здесь нет намеренно: это общий CDN, ссылку на него в markdown показываем.
-const MEDIA_HOSTS = ['fal.media', 'fal.run', 'queue.fal.run', 'cdn.fal.ai', 'glifusercontent.com'];
+// Higgsfield-CDN — точный distribution (как в PROXY_ALLOWED_HOSTS), не суффикс cloudfront.net.
+const MEDIA_HOSTS = ['fal.media', 'fal.run', 'queue.fal.run', 'cdn.fal.ai', 'glifusercontent.com', 'd8j0ntlcm91z4.cloudfront.net'];
 
 function matchesHosts(url: string, hosts: string[]): boolean {
   try {

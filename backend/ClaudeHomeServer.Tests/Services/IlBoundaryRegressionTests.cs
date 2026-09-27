@@ -25,6 +25,9 @@ public class IlBoundaryRegressionTests
     {
         _ = typeof(ClaudeHomeServer.Services.Execution.DockerProcessRunner).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Deploy.DeployService).Assembly;
+        // Files — отдельная сборка (ADR-016, задача 4.1): форс-загрузка нужна, чтобы
+        // сторож видел FileService и проверял границы вертикали по Files.dll.
+        _ = typeof(ClaudeHomeServer.Services.Files.FileService).Assembly;
     }
 
     public IlBoundaryRegressionTests(ITestOutputHelper output) => _out = output;

@@ -11,7 +11,6 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // постановщику уже доставлен сервером (TaskExecutionService). Гейт вынесен статическим
 // предикатом SessionMessagingService.IsCompletionAlreadyReported — проверяем его вместе
 // с резолвом задачи по сессии, без поднятия приложения.
-[Collection(TestCollections.SessionStaticResolvers)]
 public class ReportUpCompletionGateTests : IDisposable
 {
     private readonly string _dir;

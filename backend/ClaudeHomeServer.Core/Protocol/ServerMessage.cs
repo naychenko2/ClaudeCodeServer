@@ -53,9 +53,12 @@ public record PendingMessagesMessage(IReadOnlyList<PendingMessageDto> Items)
 // Kind — "user" (сообщение человека, ждёт в серверной очереди) или "agent" (chats_send);
 // AttachedPaths/Mode заполнены только у пользовательских — клиент рисует их на карточке
 // и (Mode) применяет при возврате в композер.
+// WaitingForDevice — сообщение ждёт устройство локального проекта (ADR-016, план §5): лежит
+// на сессии, уйдёт в работу при выходе устройства в онлайн.
 public record PendingMessageDto(string Id, string Text, string? SenderPersonaId,
     string? SenderOrigin, DateTime EnqueuedAt, string? SenderChatName = null,
-    string Kind = "agent", IReadOnlyList<string>? AttachedPaths = null, string? Mode = null);
+    string Kind = "agent", IReadOnlyList<string>? AttachedPaths = null, string? Mode = null,
+    bool WaitingForDevice = false);
 
 // «Стоп» вернул текст в композер (фича «честная очередь»). Payload null — восстанавливать
 // нечего (прерван авто/агентский ход, пользовательских в очереди не было): клиент просто
@@ -223,6 +226,31 @@ public record RateLimitMessage(string LimitType, string? ResetsAt, string? Statu
 public record CompactBoundaryMessage(string Trigger, int? PreTokens, int? PostTokens = null)
     : ServerMessage("compact_boundary");
 
+// Обрезка контекста прокси локальной модели: сдвиг границы прунинга (Kind = "prune") либо уход
+// автосжатия в облако (Kind = "compact_cloud"). И то, и другое стоит человеку десятков секунд
+// тишины в чате, неотличимых от зависания, — карточка рассказывает, чем они заняты.
+// PrefillSeconds — время до первого байта ответа модели у ЭТОГО запроса, то есть ровно
+// «сколько ждали»; CacheReadTokens / PromptTokens — доля промпта, взятая из prefix cache.
+// Приходит ВНЕ потока хода, от прокси через /api/internal/llm-proxy/events.
+//
+// EventId — личность сдвига, по ней фронт дедупит строку ленты (как fal_cost по RequestId).
+// Нужна потому, что внеходовая рассылка веерная: BroadcastSessionMessageAsync шлёт ОДНО
+// сообщение и в session-группу, и в project-группу, а вкладка открытого чата состоит в обеих
+// (useSession.joinSession + WorkspacePage.joinProject на одном соединении) — значит получает
+// его ДВА раза. Без личности редьюсер дописывал вторую строку с теми же числами, и два
+// РАЗНЫХ сдвига выглядели как один, показанный дважды (диагностика 2026-09-23).
+public record ContextPrunedMessage(
+    string Kind,
+    int TokensBefore,
+    int TokensAfter,
+    int Blocks,
+    int ResultBlocks, int InputBlocks, int ThinkingBlocks,
+    double? PrefillSeconds,
+    int? CacheReadTokens,
+    int? PromptTokens,
+    string? EventId = null)
+    : ServerMessage("context_pruned");
+
 // Ход компакции (system/status): Status == "compacting" — началась;
 // CompactResult == "success"/"failed" (+ CompactError) — завершилась
 public record CompactStatusMessage(string? Status, string? CompactResult = null, string? CompactError = null)
@@ -278,6 +306,12 @@ public record ChatDeletedMessage()
 // а не удаляет — клиенты убирают/возвращают его в списках, но семантики «чата больше нет»
 // (как у chat_deleted — на ней строятся ChatsPage/awaiting/projectActivity) здесь нет.
 // SessionId — в базовом поле.
+// Живая копия StoredModuleRecord (ADR-019 §2): запись модуля в ленте чата. Поля те же, что у
+// записи истории; SessionId — в базовом поле.
+public record ModuleRecordMessage(string Module, string RecordType, System.Text.Json.JsonElement? Data,
+    string Fallback, long? Timestamp = null)
+    : ServerMessage("module_record");
+
 public record ChatArchivedMessage(bool Archived)
     : ServerMessage("chat_archived");
 
@@ -579,6 +613,18 @@ public record DesktopSessionMessage(bool Active, string DeviceName, string ChatS
     string? ChatName = null, DateTime? StartedAt = null, DateTime? ExpiresAt = null,
     string? Reason = null)
     : ServerMessage("desktop_session");
+
+// Статус рук локального проекта в чате (ADR-016 §7) — источник бейджа LocalHandsBadge и строк
+// ленты. Не путать с DesktopSessionMessage (руки десктопного агента, ADR-008). Эфемерное: в
+// history.json не пишется. State — HandsChatStates; Reason — HandsEndReason у stopped и
+// HandsEndReason.Busy у unavailable; DeviceName — человеческое имя устройства.
+public record HandsStatusMessage(string State, string? DeviceName = null, string? Reason = null)
+    : ServerMessage("hands_status");
+
+// Строка ленты о руках, не ошибка хода (ErrorMessage перевёл бы чат в Error): «режим
+// «Без ограничений» понижен» и подобные. Эфемерное, в history.json не пишется.
+public record HandsNoticeMessage(string Text)
+    : ServerMessage("hands_notice");
 
 // Подсказка следующего сообщения: текст от claude CLI после хода.
 // Эфемерное событие — в history.json не пишется (нет case в OnMessageAsync и StoredMessage).

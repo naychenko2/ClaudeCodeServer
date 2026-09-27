@@ -192,6 +192,9 @@ public sealed class DifyToolset(
                     var docs = await knowledge.ListDocumentsAsync(ds.Id, page, limit, keyword: keyword);
                     return Json(new
                     {
+                        // WordCount — int?: у документа в индексации Dify объём ещё не посчитан.
+                        // Уходит модели явным `"wordCount": null` (JsonOpts null не прячет) —
+                        // «неизвестно» обязано отличаться от честного нуля слов
                         data = docs.Data.Select(d => new { d.Id, d.Name, d.IndexingStatus, d.WordCount }),
                         docs.Total, docs.HasMore,
                         page,
@@ -381,7 +384,7 @@ public sealed class DifyToolset(
         // Username — из стора (сервисный JWT может не нести claim Name), как у wsp
         username = users.GetById(context.OwnerId)?.Username ?? context.OwnerId;
         if (session.ProjectId is { } pid && projects.GetById(pid) is { OwnerId: var owner } project
-            && owner == context.OwnerId)
+            && owner == context.OwnerId && ProjectCapabilities.ServerContentEnabled(project))
         {
             var root = SessionManager.EffectiveRoot(session, project.RootPath);
             defaultDatasetId = workspaceStore.GetByPath(root)?.DifyDatasetId;

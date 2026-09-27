@@ -35,6 +35,10 @@
 [llm-providers.md](architecture/llm-providers.md),
 [mcp-servers.md](architecture/mcp-servers.md),
 [knowledge.md](architecture/knowledge.md) (заметки и Dify),
+[file-watching.md](architecture/file-watching.md) (наблюдение за деревом файлов),
+[device-agent-local-api.md](architecture/device-agent-local-api.md) (localhost-API агента устройства и модель угроз),
+[device-agent-distribution.md](architecture/device-agent-distribution.md) (раздача,
+самообновление и супервизор агента устройства),
 [personas.md](architecture/personas.md),
 [onboarding-intro.md](architecture/onboarding-intro.md) (знакомство: личное и проектное v2),
 [team-implement-mode.md](architecture/team-implement-mode.md) (режим чата-штаба),
@@ -47,7 +51,8 @@
 [desktop-agent-client.md](features/desktop-agent-client.md) (десктопный клиент второй волны:
 устройство решения, сопряжение и токен, фазы вызова в канале, запуск и отладка),
 [image-generation.md](features/image-generation.md) (выбор генератора картинок:
-иконка проекта, аватар персоны), [model-presets-and-tiers.md](features/model-presets-and-tiers.md),
+иконка проекта, аватар персоны), [image-editor.md](features/image-editor.md) (редактор
+картинок v2: поставщики, чат картинки, агент, правки без ИИ), [model-presets-and-tiers.md](features/model-presets-and-tiers.md),
 [model-providers-rework.md](features/model-providers-rework.md),
 [model-route-format-validation.md](features/model-route-format-validation.md),
 [project-backgrounds.md](features/project-backgrounds.md),
@@ -118,6 +123,15 @@
 кто источник истины для каждой зоны, удаление только по манифесту доставки),
 [ADR-016](adr/ADR-016-viaduct-architecture-section.md) (раздел «Архитектура» на встроенном
 Viaduct Community без форка; лицензионные рамки BUSL-1.1 — только для своих);
+[ADR-016](adr/ADR-016-local-projects.md) (локальные проекты: харнес на устройстве, секреты
+только на сервере, набор функций по матрице возможностей проекта);
+[ADR-017](adr/ADR-017-image-editor.md) (редактор картинок в проекте: контракт правки
+`IImageEditor`, котировка вместо тихого фолбэка, сохранение новым файлом, персонажи — черновик),
+[ADR-018](adr/ADR-018-image-editor-v2.md) (редактор v2: чат картинки вместо «Обсудить», генерация
+агентом через MCP-сервер `image-editor`, «Сохранить как…», правки без ИИ на ImageSharp — черновик),
+[ADR-019](adr/ADR-019-image-editor-v3-in-chat.md) (редактор v3: работа с картинкой в основном чате
+проекта — нити и фокус в хранилище модуля, швы ядра `IChatFeed`, `module_record` и события
+жизненного цикла чата, чаты v2 уходят в архив, реестр полос над композером);
 [model-resolution-and-fallback.md](adr/model-resolution-and-fallback.md) — приложение к ADR-007
 (резолв модели и фолбэк хода по цепочке),
 [specialties-personalization-review.md](adr/specialties-personalization-review.md) — приложение
@@ -152,6 +166,15 @@ CLI-провайдер: проверенная конфигурация стен
 [viaduct-embed-plan.md](research/viaduct-embed-plan.md)
 (разведка Viaduct Community и план встраивания разделом «Архитектура»: формат стора,
 вердикт по шиму localStorage в sandbox-iframe, серия задач 2–9). Читать как «так было тогда».
+[local-projects-spike-2026-09.md](research/local-projects-spike-2026-09.md) (спайк
+ADR-016: CLI на устройстве через LLM-шлюз и сайдкар без секретов на клиенте, условия
+Anthropic для OAuth подписки через прокси),
+[local-projects-plan-2026-09.md](research/local-projects-plan-2026-09.md) (план этапов 1–5
+ADR-016: задачи с владением файлами, сторожа, развилка по фоновой автоматике офлайн),
+[chat-branching-2026-09.md](research/chat-branching-2026-09.md) (архитектурный разрез
+«Ветвления чата»: ветка как обычный чат с префиксом транскрипта, почему обход по
+`parentUuid` ломает контекст и почему граница ищется текстовым якорем — с замерами
+сопоставимости истории и транскрипта на данных прода). Читать как «так было тогда».
 
 **omo/** — [adoption.md](omo/adoption.md) (правовая рамка), `translations/` — переводы
 промптов, из которых генерируются `Services/Prompts/OmoPrompts*.cs`.

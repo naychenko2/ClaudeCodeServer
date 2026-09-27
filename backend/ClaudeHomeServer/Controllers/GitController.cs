@@ -7,9 +7,11 @@ using ClaudeHomeServer.Services.Git;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Controllers;
 
+[ProjectCapability(ProjectCapabilityArea.FileBound)]
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/git")]
@@ -99,8 +101,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         try
         {
             var p = GetProject(projectId);
-            var diff = await git.DiffFileAsync(Owner(p), RootFor(p), path, staged, ct);
-            return Ok(new { diff });
+            return Ok(new DiffResponse(await git.DiffFileAsync(Owner(p), RootFor(p), path, staged, ct)));
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return BadRequest(new { error = "Недопустимый путь" }); }
@@ -151,8 +152,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         try
         {
             var p = GetProject(projectId);
-            var diff = await git.CommitFileDiffAsync(Owner(p), RootFor(p), sha, path, ct);
-            return Ok(new { diff });
+            return Ok(new DiffResponse(await git.CommitFileDiffAsync(Owner(p), RootFor(p), sha, path, ct)));
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return BadRequest(new { error = "Недопустимый путь" }); }
@@ -300,8 +300,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         try
         {
             var p = GetProject(projectId);
-            var content = await git.FileAtCommitAsync(Owner(p), RootFor(p), sha, path, ct);
-            return Ok(new { content });
+            return Ok(new CommitFileResponse(await git.FileAtCommitAsync(Owner(p), RootFor(p), sha, path, ct)));
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return BadRequest(new { error = "Недопустимый путь" }); }
@@ -481,7 +480,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
             var message = AppendDossierTrailer(body.Message);
             var sha = await git.CommitAsync(Owner(p), RootFor(p), message, body.Amend, ct);
             await NotifyChanged(projectId);
-            return Ok(new { sha });
+            return Ok(new CommitResponse(sha));
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
@@ -691,11 +690,9 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
     }
 }
 
-public record GitPathRequest(string Path);
 public record GitPatchRequest(string Patch);
 public record GitStashRequest(string? Message = null);
 public record GitAutoCommitRequest(bool Enabled, bool Push = false);
-public record GitCommitRequest(string Message, bool Amend = false);
 public record GitCheckoutRequest(string Branch);
 // Адрес удалённого репозитория, введённый человеком (валидация — в SetRemote)
 public record GitSetRemoteRequest(string? Url);

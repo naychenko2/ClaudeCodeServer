@@ -316,6 +316,26 @@ public static class SessionContextTypes
     public static bool IsKnown(string? value) => value is File or Url or Task;
 }
 
+// Привязка чата картинки v2 к файлу проекта (ADR-018 §1). Пути — от корня проекта через «/».
+// С v3 (ADR-019) поле только для чтения: новых чатов картинки нет, а старые sessions.json
+// обязаны читаться. Удалять класс и поле Session.ImageChat нельзя.
+public sealed class SessionImageChat
+{
+    // Файл, с которым чат связан сейчас. null — черновик «Нарисовать картинку»: файла ещё нет,
+    // первое сохранение с этим чатом выставит путь. Записи без поля читаются черновиком
+    public string? CurrentPath { get; set; }
+    // Папка, куда сохранится новая картинка черновика ("" — корень проекта). Только у
+    // черновика: первое сохранение её снимает. У чатов по файлу и старых записей — null
+    public string? DraftFolder { get; set; }
+    // Прежние пути, старые первыми (hero.png, hero.v2.png…): по ним поиск отдаёт «разговор
+    // продолжился на новой версии»
+    public List<string> Lineage { get; set; } = [];
+    // Когда чат ушёл в архив миграцией на v3 (ADR-019, решение 2); null — ещё не мигрирован.
+    // Аддитивное поле: BackupSchema.Version не растёт, восстановленный старый бэкап мигрирует
+    // при старте тем же кодом. Чат, который человек вернул из архива, повторно не архивируется
+    public DateTime? MigratedAt { get; set; }
+}
+
 public class Session
 {
     public string Id { get; init; } = Guid.NewGuid().ToString();
@@ -439,8 +459,20 @@ public class Session
     // Дефолт false: старые записи sessions.json читаются штатно, BackupSchema.Version не
     // двигается (аддитивное поле с дефолтом формат не ломает).
     public bool DesktopChat { get; set; }
+    // Чат картинки (ADR-018 §1, флаг image-editor): null — обычный чат. Тип фиксируется при
+    // СОЗДАНИИ по той же причине, что у DesktopChat: от него зависит MCP-сервер image-editor,
+    // а значит сигнатура запуска CLI. Меняется только путь внутри (редактор ушёл на новую
+    // версию файла), и такая смена — настройка, UpdatedAt она не двигает.
+    // Аддитивное nullable-поле: старые записи sessions.json читаются с null,
+    // BackupSchema.Version не двигается.
+    public SessionImageChat? ImageChat { get; set; }
     // Цикл «до готово» (флаг work-loop): не null — ход автопродолжается до маркера завершения
     public SessionWorkLoop? WorkLoop { get; set; }
+    // Сообщения, ждущие устройство локального проекта (ADR-016, вариант А плана §5): фоновые
+    // и отложенные доставки, пришедшие, когда устройство офлайн. Живут на сессии, а не в
+    // памятной очереди Pending — рестарт их не стирает. Уходят в работу при выходе устройства
+    // в онлайн; старше 24 ч — снимаются с уведомлением. null/пусто — ждущих нет.
+    public List<DeviceWaitMessage>? DeviceWaitQueue { get; set; }
     // Режим «Командная реализация»: не null — чат работает как
     // штаб фичи (план, задачи на исполнителей, волны, проверка).
     public SessionTeamImplement? TeamImplement { get; set; }
@@ -483,6 +515,15 @@ public class Session
     // Origin автоматизации: null — обычный чат; иначе — id правила PersonaAutomationRule,
     // чат которого создан движком проактивности. Для фильтрации авто-чатов и трассировки.
     public string? AutomationRuleId { get; set; }
+    // Единственный машинно-читаемый признак «этот чат — ветка» (фича chat-branch): id
+    // оригинального чата, от истории которого (до выбранного шага) скопирована эта ветка.
+    // null — обычный чат. Нужен, чтобы backfill расхода мог пропускать унаследованные
+    // result-записи (и не пересчитывать чужой расход дважды) и чтобы при разборе
+    // инцидента было понятно происхождение файла транскрипта. Для UI не используется —
+    // плашка «Ветка от …» живёт в истории (StoredBranchedFromMessage).
+    // Аддитивное nullable-поле с дефолтом: старые записи sessions.json читаются штатно,
+    // BackupSchema.Version не двигается (тот же приём, что у CommittedFilePaths/Context).
+    public string? BranchedFromSessionId { get; set; }
     // Отдельное git worktree чата: рабочая папка сессии вместо project.RootPath.
     // Путь всегда ХОСТОВЫЙ (как Project.RootPath); в песочницу транслируется при запуске.
     // null — чат живёт в основном дереве проекта. Только для проектных сессий.
@@ -499,11 +540,6 @@ public class Session
         : AutomationRuleId != null ? ChatOrigin.Automation
         : ChatOrigin.Manual;
 
-    // Резолвер «задача → чат-источник»: назначает TaskManager при старте (DI в модель не
-    // пробросить — Session сериализуется напрямую во всех точках отдачи). Истина живёт
-    // в TaskItem.SourceSessionId, здесь только вычисление.
-    public static Func<string, string?>? TaskSourceSessionResolver { get; set; }
-
     // Ручная группировка (drag-and-drop в списке чатов): родитель, назначенный пользователем.
     // Побеждает авто-связь по задаче. Пара с ParentDetached описывает три состояния, поэтому
     // менять их обоих можно ТОЛЬКО через SessionManager.SetParent — он держит инвариант
@@ -514,35 +550,14 @@ public class Session
     // состояния, и sentinel-строка их бы склеила.
     public bool ParentDetached { get; set; }
 
-    // Родительский чат: ручная группировка, иначе — чат, в котором была создана задача
-    // сессии-исполнителя (TaskId → Task.SourceSessionId). Вычисляется, не хранится — как Origin.
-    // null — корневой чат либо задача удалена (чат всплывает в корень — принято осознанно).
-    // TaskId ручная группировка не трогает: связь чата с задачей (плашка, артефакты,
-    // TaskDelegationDepth) живёт своей жизнью и перетаскиванием не рвётся.
-    public string? ParentSessionId =>
-        ParentOverrideId is not null ? ParentOverrideId
-        : ParentDetached ? null
-        : TaskId != null ? TaskSourceSessionResolver?.Invoke(TaskId) : null;
-
-    // Резолвер «задача → глубина делегирования»: назначает TaskManager при старте (как
-    // TaskSourceSessionResolver). Истина живёт в TaskItem.DelegationDepth.
-    public static Func<string, int>? TaskDelegationDepthResolver { get; set; }
-
-    // Глубина цепочки делегирования задачи-исполнителя этого чата (0 — обычный чат либо
-    // задача без глубины). Вычисляется, не хранится. Используется гейтом TASKS_EXECUTE
-    // (ClaudeSession.BuildTurnMcpConfig): чат-исполнитель глубины >= 3 не запускает нового.
-    public int TaskDelegationDepth =>
-        TaskId != null ? TaskDelegationDepthResolver?.Invoke(TaskId) ?? 0 : 0;
-
-    // Резолвер «задача → выполнена?»: назначает TaskManager при старте (как
-    // TaskSourceSessionResolver). Истина живёт в TaskItem.Status == Done.
-    public static Func<string, bool>? TaskDoneResolver { get; set; }
-
-    // Связанная задача чата-исполнителя выполнена (TaskId != null и задача в статусе Done).
-    // true только для чатов выполненных задач (бывший «архив»); false — обычные чаты и живые
-    // задачи. Вычисляется, не хранится — как Origin/ParentSessionId. Фронт объединяет его с
-    // статусом Finished в чип «Готово» фильтра чатов (маппинг статусов, макет A).
-    public bool TaskDone => TaskId is not null && (TaskDoneResolver?.Invoke(TaskId) ?? false);
+    // Эффективный родительский чат (ParentSessionId) и признак «Готово» (TaskDone) —
+    // ВЫЧИСЛЯЕМЫЕ, и живут НЕ здесь, а в SessionTaskLinks (Core/Services) поверх шва ITaskLookup:
+    // ручная группировка, иначе TaskId → Task.SourceSessionId / Task.Status==Done. Раньше
+    // эти вычисления читали статические Func-резолверы, ставившиеся конструктором TaskManager,
+    // т.е. спин-модель зависела от вертикали. На wire оба поля дописывает КОНВЕРТЕР типа
+    // Session на границе сериализации (Main, Services/SessionJsonConverter.cs) — одна точка на
+    // все эндпоинты; проекции в контроллерах (HomeSessionDto) зовут SessionTaskLinks сами.
+    // Сторож «в модели нет изменяемой статики» — SessionModelStaticsTests.
 
     // Чат в архиве: его архивировали (ArchivedAt) и активности после этого не было
     // (UpdatedAt не двигался). Вычисляется, не хранится — как Origin/TaskDone. Признак
@@ -552,4 +567,30 @@ public class Session
     // ArchivedAt) возвращает чат сама. Исключения «не-активности» (значки тем, переименование,
     // правка name/model/effort/tags) UpdatedAt у архивного чата не двигают — см. SessionManager.
     public bool IsArchived => ArchivedAt is DateTime archived && UpdatedAt <= archived;
+}
+
+/// <summary>
+/// Сообщение, ждущее устройство локального проекта (<see cref="Session.DeviceWaitQueue"/>).
+/// Route — каким путём его доставить после выхода устройства в онлайн: <c>auto</c> — серверный
+/// ход (исполнитель, доклад, цикл), <c>agent</c> — сообщение агента или будильника (chats_send),
+/// <c>user</c> — пользовательское из серверной очереди.
+/// </summary>
+public sealed record DeviceWaitMessage(
+    string Id,
+    string Text,
+    string Route,
+    DateTime QueuedAt,
+    string? SenderPersonaId = null,
+    string? SenderOrigin = null,
+    int AgentDepth = 0,
+    bool SystemDirective = false,
+    bool SuppressTasksExecute = false,
+    string? SenderChatName = null,
+    string? StaffNote = null,
+    IReadOnlyList<string>? AttachedPaths = null,
+    string? Mode = null)
+{
+    public const string RouteAuto = "auto";
+    public const string RouteAgent = "agent";
+    public const string RouteUser = "user";
 }

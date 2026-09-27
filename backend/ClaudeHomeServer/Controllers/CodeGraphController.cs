@@ -5,6 +5,7 @@ using ClaudeHomeServer.Services.CodeGraph;
 using ClaudeHomeServer.Services.Knowledge;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Controllers;
 
@@ -16,6 +17,7 @@ namespace ClaudeHomeServer.Controllers;
 /// Опциональный ?rootPath= выбирает дерево: корень проекта (по умолчанию) либо отдельное
 /// worktree чата — у него свой граф (ADR-003).
 /// </summary>
+[ProjectCapability(ProjectCapabilityArea.ServerContent)]
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/code-graph")]

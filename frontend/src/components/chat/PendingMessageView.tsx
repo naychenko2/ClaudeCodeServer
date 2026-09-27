@@ -8,11 +8,12 @@
 // «создать», зона дропа). Глухой прозрачности нет: приглушение несут рамка и фон,
 // а opacity поверх C.textMuted роняла бы контраст подписей.
 import { useEffect, useRef, useState } from 'react';
-import { AlertCircle, ChevronDown, CloudOff, Inbox, User } from 'lucide-react';
+import { AlertCircle, ChevronDown, CloudOff, Inbox, Unplug, User } from 'lucide-react';
 import { C, FONT, R, SP, FS } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { IconButton } from '../ui/IconButton';
 import { Button } from '../ui/Button';
+import { Badge } from '../ui/Badge';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { MarkdownContent } from './MarkdownContent';
 import { MessageOriginChip } from '../MessageOriginChip';
@@ -84,6 +85,8 @@ function PendingMessageRow({ item, onCancel, onPreempt, isMobile, leaving, sessi
   // kind=user — своё сообщение, ждущее в «честной очереди»: подпись «Вы», без персоны и
   // чипа-источника (это не чужое входящее). Агентские строки (chats_send) — прежняя логика.
   const isUser = item.kind === 'user';
+  // Ждёт устройство, а не конец хода: своя рамка, подпись и пояснение, перебоя нет
+  const deviceWait = !!item.waitingForDevice;
   // Персона → её имя; иначе имя чата-отправителя; иначе нейтральная подпись
   const title = isUser ? 'Вы' : (sender ? personaLabel(sender) : (item.senderChatName || 'Входящее сообщение'));
   const preview = previewOf(item.text);
@@ -96,7 +99,7 @@ function PendingMessageRow({ item, onCancel, onPreempt, isMobile, leaving, sessi
 
   return (
     <div style={{
-      border: `1px dashed ${C.dashed}`, borderRadius: R.lg, background: C.bgInset,
+      border: `1px dashed ${deviceWait ? C.warning : C.dashed}`, borderRadius: R.lg, background: C.bgInset,
       // Уход и отмена — одинаково приглушают строку, чтобы подмена не «моргала»
       opacity: leaving ? 0 : cancelling ? 0.55 : 1,
       transform: leaving ? 'translateY(-2px)' : 'none',
@@ -124,6 +127,13 @@ function PendingMessageRow({ item, onCancel, onPreempt, isMobile, leaving, sessi
         }}>
           {title}
         </span>
+
+        {deviceWait && (
+          <Badge tone="warning" size="xs" title="Уйдёт в работу, когда устройство проекта выйдет на связь"
+            icon={<Unplug size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden />}>
+            Ждёт устройство
+          </Badge>
+        )}
 
         {!isUser && item.senderOrigin && <MessageOriginChip origin={item.senderOrigin} style={{ flex: '0 0 auto' }} />}
 
@@ -192,7 +202,15 @@ function PendingMessageRow({ item, onCancel, onPreempt, isMobile, leaving, sessi
           <MarkdownContent text={item.text} />
         </div>
       )}
-      {open && isUser && (
+      {open && deviceWait && (
+        <div style={{
+          padding: `0 ${SP.md}px ${SP.sm}px ${isMobile ? SP.md : 38}px`,
+          fontSize: FS.xs, color: C.textMuted,
+        }}>
+          Устройство проекта не в сети — уйдёт в работу, когда оно выйдет на связь
+        </div>
+      )}
+      {open && isUser && !deviceWait && (
         // Свой ход в очереди: объясняем, почему карточка стоит, а не ушла в работу, и даём
         // явный перебой. Отправка сама ход не прерывает (иначе сделанная им работа и токены
         // выбрасываются) — «не жди, начинай сейчас» это отдельное осознанное действие.
@@ -312,7 +330,8 @@ export function PendingMessageList({ items, onCancel, onPreempt, isMobile, sessi
           // Перебой доставляет ГОЛОВУ очереди (DrainNextPendingAsync), а не ту строку, что
           // раскрыл пользователь — поэтому кнопка только у первой. Иначе «отправить это
           // сейчас» на второй реплике отправляло бы первую.
-          onPreempt={i === 0 ? onPreempt : undefined}
+          // Ждущие устройство стоят в хвосте снимка и перебоем не доставляются
+          onPreempt={i === 0 && !p.waitingForDevice ? onPreempt : undefined}
         />
       ))}
     </div>

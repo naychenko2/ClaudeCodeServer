@@ -7,6 +7,11 @@ namespace ClaudeHomeServer.Services.Spend;
 /// Учёт размера промпта постановки задачи по секциям (план «Оптимизация потребления
 /// токенов», шаг 4.1). Одна строка = один запуск исполнителя.
 ///
+/// ПОЧЕМУ ЖИВЁТ В data/spend/: наблюдательная метрика промптов задач, физически в
+/// spend-каталоге по историческим причинам (создана в рамках того же плана). Концептуальной
+/// связи с деньгами нет; выделение в отдельную вертикаль не оправдано объёмом (один
+/// JSONL-файл, одна запись на запуск).
+///
 /// ПРИВАТНОСТЬ (инвариант, под тестом). Сюда пишутся ТОЛЬКО РАЗМЕРЫ секций в символах —
 /// ни одного символа текста постановки, описания задачи или заметок из базы знаний.
 /// То же правило, что у ModuleLlmUsageStore и PromptAuditService: файл лежит рядом с
@@ -16,30 +21,14 @@ namespace ClaudeHomeServer.Services.Spend;
 /// учёт только растёт, дописывание строки дешевле перезаписи JSON-стора.
 /// В облачный бэкап НЕ едет (BackupPaths.ShouldInclude) — это наблюдение, а не настройка.
 /// </summary>
-public sealed class TaskPromptMetricsStore
+public sealed class TaskPromptMetricsStore : ITaskPromptMetricsStore
 {
     public const string FileName = "task-prompts.jsonl";
     public const string DirName = "spend";
 
-    /// <summary>Замер одного запуска исполнителя. Только числа и идентификаторы разрезов.</summary>
-    public sealed record Entry(
-        [property: JsonPropertyName("at")] DateTime At,
-        [property: JsonPropertyName("taskId")] string TaskId,
-        [property: JsonPropertyName("ownerId")] string OwnerId,
-        [property: JsonPropertyName("projectId")] string? ProjectId,
-        [property: JsonPropertyName("sessionId")] string? SessionId,
-        [property: JsonPropertyName("personaId")] string? PersonaId,
-        [property: JsonPropertyName("totalChars")] int TotalChars,
-        [property: JsonPropertyName("totalTokensEst")] int TotalTokensEst,
-        [property: JsonPropertyName("task")] int TaskSection,
-        [property: JsonPropertyName("expected")] int ExpectedResult,
-        [property: JsonPropertyName("tools")] int Tools,
-        [property: JsonPropertyName("rules")] int Rules,
-        [property: JsonPropertyName("restrictions")] int Restrictions,
-        [property: JsonPropertyName("delegation")] int Delegation,
-        [property: JsonPropertyName("omo")] int OmO,
-        [property: JsonPropertyName("context")] int Context,
-        [property: JsonPropertyName("notes")] int Notes);
+    // Замер одного запуска исполнителя. Только числа и идентификаторы разрезов.
+    // Тип перенесён в Core (TaskPromptMetricsEntry в ITaskPromptMetricsStore.cs) как
+    // return/arg-тип интерфейса, чтобы Main не тянул конкретную сборку Spend.
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -69,7 +58,7 @@ public sealed class TaskPromptMetricsStore
     }
 
     /// <summary>Дописать замер. Учёт не должен ронять запуск задачи — сбой только в лог.</summary>
-    public void Record(Entry entry)
+    public void Record(TaskPromptMetricsEntry entry)
     {
         try
         {
@@ -90,12 +79,12 @@ public sealed class TaskPromptMetricsStore
     /// Замеры задачи, новые сверху. Пустой список — задача запускалась до появления стора
     /// либо файл ещё не создан: это не ошибка, разбивку просто не покажем.
     /// </summary>
-    public IReadOnlyList<Entry> ForTask(string taskId)
+    public IReadOnlyList<TaskPromptMetricsEntry> ForTask(string taskId)
     {
         if (!File.Exists(_storePath)) return [];
         try
         {
-            var result = new List<Entry>();
+            var result = new List<TaskPromptMetricsEntry>();
             // Чтение под тем же локом, что и запись: File.AppendAllText не атомарен
             // относительно чтения, а строка, прочитанная наполовину, свалит десериализацию
             lock (_writeLock)
@@ -103,10 +92,10 @@ public sealed class TaskPromptMetricsStore
                 foreach (var line in File.ReadLines(_storePath))
                 {
                     if (string.IsNullOrWhiteSpace(line)) continue;
-                    Entry? e;
+                    TaskPromptMetricsEntry? e;
                     // Битая строка (обрыв записи при падении процесса) не должна прятать
                     // остальные замеры — пропускаем её молча
-                    try { e = JsonSerializer.Deserialize<Entry>(line, JsonOpts); }
+                    try { e = JsonSerializer.Deserialize<TaskPromptMetricsEntry>(line, JsonOpts); }
                     catch (JsonException) { continue; }
                     if (e is not null && e.TaskId == taskId) result.Add(e);
                 }

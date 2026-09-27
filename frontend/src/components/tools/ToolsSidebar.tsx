@@ -10,14 +10,22 @@ import { AddServiceDialog } from '../preview/AddServiceDialog'
 import { useExternalPreviewLinks } from '../../hooks/useExternalPreviewLinks'
 import { api } from '../../lib/api'
 import { saveExternalUrl, clearExternalUrl, clearAllExternalUrls } from '../../lib/externalPreviewUrls'
+import { useProjectFeature, featureReason, projectRouteReason } from '../../lib/projectCapabilities'
+import { DeviceAgentGate } from '../DeviceAgentGate'
+import { CapabilityUnavailable } from '../CapabilityGate'
 import type * as ts from '../../lib/terminalSignalr'
-import type { ProjectService } from '../../types'
+import type { Project, ProjectService } from '../../types'
+import { ProjectFeature } from '../../types'
 import { NO_AUTOFILL } from '../../lib/noAutofill';
 
 type ToolsTab = 'terminal' | 'preview'
 
 interface Props {
   projectId: string
+  // Опциональный проект для гейта по capabilities (ADR-016 §3.4): терминал и
+  // дев-серверы работают с файлами проекта, у локального с офлайн-устройством
+  // недоступны. Если не передан — старый путь вызова, гейт отключён
+  project?: Project | null
   activeTab: ToolsTab
   onTabChange: (t: ToolsTab) => void
   // Список терминалов и операции подняты в WorkspacePage (нужны и хедеру ToolsPane)
@@ -63,16 +71,41 @@ export function groupServices(services: ProjectService[]): [string, ProjectServi
   return [...map.entries()].sort((a, b) => sourceMeta(a[0]).order - sourceMeta(b[0]).order)
 }
 
-export function ToolsSidebar({
-  projectId, activeTab, onTabChange,
+// Терминал и сервисы локального проекта живут в агенте устройства на этой машине: пока он не
+// ответил, DeviceAgentGate показывает состояние связи. Гейт группы files — здесь, а все
+// хуки — в ToolsSidebarBody: ранний выход в теле нарушал бы Rules of Hooks
+export function ToolsSidebar(props: Props) {
+  // Гейт по матрице (ADR-016 §3.4): терминал и dev-серверы требуют доступ к файлам.
+  // Серверный эндпоинт проксирует запросы к агенту устройства при файлах в группе
+  // files. Если группа недоступна (например, офлайн-устройство) — оба раздела пустые
+  const filesGate = useProjectFeature(props.project, ProjectFeature.Files);
+  const filesGateReason = featureReason(props.project, ProjectFeature.Files);
+  if (props.project && !filesGate) {
+    return <CapabilityUnavailable feature="tools" title="Терминал и сервисы недоступны" reason={filesGateReason ?? 'Файлы проекта недоступны'} />;
+  }
+  if (!props.project) return <ToolsSidebarBody {...props} />;
+  return <DeviceAgentGate project={props.project}><ToolsSidebarBody {...props} /></DeviceAgentGate>;
+}
+
+function ToolsSidebarBody({
+  projectId, project, activeTab, onTabChange,
   terminals, onCreateTerminal, onStopTerminal, onRenameTerminal,
   onSelectTerminal, activeTerminalId,
   activePreviewId, previewServices,
   onRefreshServices, onStartService, onStopService, onSelectPreview,
   terminalBusy,
 }: Props) {
+  // Группа files здесь уже доступна (гейт в обёртке); отдельные подсистемы — нет гарантии
+  const terminalGate = useProjectFeature(project, ProjectFeature.Terminal);
+  const terminalGateReason = featureReason(project, ProjectFeature.Terminal);
+  const previewGate = useProjectFeature(project, ProjectFeature.DevServers);
+  const previewGateReason = featureReason(project, ProjectFeature.DevServers);
   // Инлайн-переименование: id редактируемого терминала + текущее значение поля
   const [renaming, setRenaming] = useState<{ id: string; value: string } | null>(null)
+  // Per-tab reason для tooltip'а кнопки таба (когда files доступны, но конкретная
+  // подсистема нет)
+  const terminalDisabledReason = !terminalGate ? (terminalGateReason ?? 'Терминал недоступен') : null;
+  const previewDisabledReason = !previewGate ? (previewGateReason ?? 'Сервисы недоступны') : null;
 
   const commitRename = useCallback(() => {
     setRenaming(prev => {
@@ -95,11 +128,15 @@ export function ToolsSidebar({
       {/* Вкладки */}
       <div style={{ flexShrink: 0, padding: '10px 12px', borderBottom: `1px solid ${C.border}` }}>
         <div style={{ display: 'flex', gap: 4, background: C.bgInset, borderRadius: R.md, padding: 2 }}>
-          <TabButton active={activeTab === 'terminal'} onClick={() => onTabChange('terminal')}>
+          <TabButton active={activeTab === 'terminal'} onClick={() => onTabChange('terminal')}
+            disabled={project ? !terminalGate : false}
+            disabledReason={terminalDisabledReason}>
             <Terminal size={14} strokeWidth={2} />
             Терминал
           </TabButton>
-          <TabButton active={activeTab === 'preview'} onClick={() => onTabChange('preview')}>
+          <TabButton active={activeTab === 'preview'} onClick={() => onTabChange('preview')}
+            disabled={project ? !previewGate : false}
+            disabledReason={previewDisabledReason}>
             <Monitor size={14} strokeWidth={2} />
             Сервисы
           </TabButton>
@@ -108,6 +145,14 @@ export function ToolsSidebar({
 
       {/* Список терминалов */}
       {activeTab === 'terminal' && (
+        // ADR-016 §3.4: конкретная подсистема может быть недоступна при доступной
+        // группе files (например, terminal отдельно от preview). Плашка причины —
+        // вместо списка терминалов
+        project && !terminalGate ? (
+          <div style={{ flex: 1, minHeight: 0 }}>
+            <CapabilityUnavailable feature="terminal" title="Терминал недоступен" reason={terminalDisabledReason} />
+          </div>
+        ) : (
         <div style={{ flex: 1, overflowY: 'auto', padding: '8px 10px' }}>
           {terminals.map(t => (
             <div
@@ -164,12 +209,18 @@ export function ToolsSidebar({
             Новый терминал
           </Button>
         </div>
-      )}
+        ))}
 
       {/* Список сервисов Preview */}
       {activeTab === 'preview' && (
+        project && !previewGate ? (
+          <div style={{ flex: 1, minHeight: 0 }}>
+            <CapabilityUnavailable feature="preview" title="Сервисы недоступны" reason={previewDisabledReason} />
+          </div>
+        ) : (
         <PreviewServiceList
           projectId={projectId}
+          project={project}
           groups={groups}
           hasAny={previewServices.length > 0}
           activePreviewId={activePreviewId}
@@ -178,7 +229,7 @@ export function ToolsSidebar({
           onStopService={onStopService}
           onSelectPreview={onSelectPreview}
         />
-      )}
+        ))}
     </div>
   )
 }
@@ -186,10 +237,12 @@ export function ToolsSidebar({
 // Список сервисов проекта с группировкой по источникам — экспортирован: его же
 // рендерит панелька «Сервисы» нового интерфейса (workspace-cc-panels)
 export function PreviewServiceList({
-  projectId, groups, hasAny, activePreviewId,
+  projectId, project, groups, hasAny, activePreviewId,
   onRefreshServices, onStartService, onStopService, onSelectPreview,
 }: {
   projectId: string
+  // Проект — для решения, есть ли у него внешний доступ (у локального нет)
+  project?: Project | null
   groups: [string, ProjectService[]][]
   hasAny: boolean
   activePreviewId: string | null
@@ -202,6 +255,8 @@ export function PreviewServiceList({
   // Ссылки внешнего доступа: список сквозной по проектам владельца, поэтому живёт здесь,
   // а не в состоянии проекта
   const { enabled: extEnabled, links: extLinks, refresh: refreshLinks, revoke, revokeAll } = useExternalPreviewLinks()
+  // У локального проекта внешнего доступа нет: кнопка остаётся недоступной с причиной
+  const shareReason = extEnabled ? projectRouteReason(project, 'POST preview/external-link') : null
   const [shareError, setShareError] = useState<string | null>(null)
   const [shareNote, setShareNote] = useState<string | null>(null)
   // Чужой процесс на порту: гасим только после явного согласия — там может оказаться
@@ -401,7 +456,8 @@ export function PreviewServiceList({
                     onStop={() => onStopService(svc.id)}
                     onSelect={() => onSelectPreview(svc.id)}
                     shared={sharedHere.has(svc.id)}
-                    onShare={extEnabled ? () => void share(svc) : undefined}
+                    onShare={extEnabled && !shareReason ? () => void share(svc) : undefined}
+                    shareUnavailable={shareReason}
                     onStopExternal={() => void stopExternal(svc)}
                     onUnshare={() => {
                       const jti = sharedHere.get(svc.id)
@@ -420,7 +476,8 @@ export function PreviewServiceList({
                       onStop={() => onStopService(member.id)}
                       onSelect={() => onSelectPreview(member.id)}
                       shared={sharedHere.has(member.id)}
-                      onShare={extEnabled ? () => void share(member) : undefined}
+                      onShare={extEnabled && !shareReason ? () => void share(member) : undefined}
+                      shareUnavailable={shareReason}
                       onStopExternal={() => void stopExternal(member)}
                       onUnshare={() => {
                         const jti = sharedHere.get(member.id)
@@ -489,7 +546,7 @@ const saveCollapsed = (projectId: string, value: Set<string>) => {
   try { localStorage.setItem(collapsedKey(projectId), JSON.stringify([...value])) } catch { /* ignore */ }
 }
 
-function ServiceRow({ svc, memberNames, active, onStart, onStop, onSelect, shared, onShare, onUnshare, onStopExternal, nested }: {
+function ServiceRow({ svc, memberNames, active, onStart, onStop, onSelect, shared, onShare, shareUnavailable, onUnshare, onStopExternal, nested }: {
   svc: ProjectService
   memberNames?: string[]
   // Строка — участник составной конфигурации: рисуется под ней со сдвигом и направляющей
@@ -501,6 +558,8 @@ function ServiceRow({ svc, memberNames, active, onStart, onStop, onSelect, share
   // Открыт ли сервис наружу по ссылке и можно ли это менять (фича включена на сервере)
   shared?: boolean
   onShare?: () => void
+  // Почему открыть наружу нельзя — кнопка показывается недоступной с этой подсказкой
+  shareUnavailable?: string | null
   onUnshare?: () => void
   // Остановка процесса, поднятого вне продукта: своего объекта процесса у нас нет,
   // поэтому путь отдельный от обычного «Стоп»
@@ -601,6 +660,11 @@ function ServiceRow({ svc, memberNames, active, onStart, onStop, onSelect, share
           и есть то, что этот значок должен ловить */}
       {shared && (
         <Globe size={12} style={{ flexShrink: 0, color: C.warning }} aria-label="открыт наружу" />
+      )}
+      {hover && shareUnavailable && (running || external) && (
+        <IconButton size="xs" variant="soft" disabled title={shareUnavailable}>
+          <Globe size={12} />
+        </IconButton>
       )}
       {hover && onShare && (running || external) && (
         shared
@@ -732,16 +796,26 @@ function ServiceHoverCard({ anchorRef, svc, cmd, statusText, port, note, externa
   )
 }
 
-function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+function TabButton({ active, onClick, disabled, disabledReason, children }: {
+  active: boolean; onClick: () => void; children: React.ReactNode;
+  // ADR-016 §3.4: недоступная вкладка — кликабельна, чтобы человек мог открыть
+  // пустую секцию с плашкой причины, но визуально приглушена и в title — причина
+  disabled?: boolean; disabledReason?: string | null;
+}) {
   return (
-    <button onClick={onClick} style={{
-      flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-      padding: '6px 10px', borderRadius: R.sm, border: 'none', cursor: 'pointer',
-      fontSize: 12, fontWeight: 600,
-      background: active ? C.bgWhite : 'transparent',
-      color: active ? C.textHeading : C.textSecondary,
-      fontFamily: FONT.sans,
-    }}>
+    <button
+      onClick={onClick}
+      title={disabled && disabledReason ? disabledReason : undefined}
+      style={{
+        flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+        padding: '6px 10px', borderRadius: R.sm, border: 'none',
+        cursor: 'pointer', fontSize: 12, fontWeight: 600,
+        background: active ? C.bgWhite : 'transparent',
+        color: disabled ? C.textMuted : (active ? C.textHeading : C.textSecondary),
+        fontFamily: FONT.sans,
+        opacity: disabled ? 0.6 : 1,
+      }}
+    >
       {children}
     </button>
   )

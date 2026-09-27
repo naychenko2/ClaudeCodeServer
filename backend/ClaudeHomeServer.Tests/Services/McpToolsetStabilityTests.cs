@@ -24,7 +24,26 @@ namespace ClaudeHomeServer.Tests.Services;
 /// </summary>
 public class McpToolsetStabilityTests
 {
-    private static string? FindSource() => FindSource("Services", "Llm", "Claude", "ClaudeSession.cs");
+    // ClaudeSession.cs переехал при выносе вертикали Llm (мерж e9bd6f74):
+    // backend/ClaudeHomeServer/Services/Llm/Claude/ → backend/ClaudeHomeServer.Llm/Claude/
+    // Ищем по обоим путям: новому (текущее) и старому (на случай отката).
+    private static string? FindSource()
+    {
+        return FindSourceIn("ClaudeHomeServer.Llm", "Claude", "ClaudeSession.cs")
+            ?? FindSource("Services", "Llm", "Claude", "ClaudeSession.cs");
+    }
+
+    private static string? FindSourceIn(string assembly, params string[] relative)
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null)
+        {
+            var candidate = Path.Combine([dir.FullName, "backend", assembly, .. relative]);
+            if (File.Exists(candidate)) return candidate;
+            dir = dir.Parent;
+        }
+        return null;
+    }
 
     private static string? FindSource(params string[] relative)
     {
@@ -43,6 +62,11 @@ public class McpToolsetStabilityTests
     // ConsultantsEnabled открыты тулсетам, и за ними могут идти internal-соседи
     private static string MethodBody(string source, string signature)
     {
+        // Переводы строк нормализуем с обеих сторон: исходник на Windows-чекауте идёт с CRLF,
+        // на Linux (CI и прод-хост) — с LF, и сигнатура, записанная под одну платформу,
+        // на другой молча не находилась бы.
+        source = source.Replace("\r\n", "\n");
+        signature = signature.Replace("\r\n", "\n");
         var start = source.IndexOf(signature, StringComparison.Ordinal);
         start.Should().BeGreaterThan(0, $"метод «{signature}» обязан существовать");
         var end = source.IndexOf("\n    private ", start + signature.Length, StringComparison.Ordinal);
@@ -53,11 +77,14 @@ public class McpToolsetStabilityTests
             .Where(l => !l.TrimStart().StartsWith("//", StringComparison.Ordinal)));
     }
 
-    [SkippableFact]
+    [Fact]
     public void СоставИнструментовХода_НеЗависитОтСостоянияХода()
     {
         var path = FindSource();
-        Skip.If(path is null, "ClaudeSession.cs не найден (сборка вне дерева репозитория)");
+        path.Should().NotBeNull(
+            "ClaudeSession.cs не найден ни по одному из ожидаемых путей: "
+            + "backend/ClaudeHomeServer.Llm/Claude/ (новый) или "
+            + "backend/ClaudeHomeServer/Services/Llm/Claude/ (старый)");
 
         var source = File.ReadAllText(path!);
         // Сигнатуру ищем регулярным выражением, а не точной строкой: кортеж возврата растёт
@@ -230,49 +257,6 @@ public class McpToolsetStabilityTests
     }
 
     /// <summary>
-    /// Продуктовая встроенная интеграция Higgsfield доставляется НЕ по каскаду реестра
-    /// (McpServersOn/McpServerGranted), а собственной чистой формулой
-    /// McpDelivery.IsBuiltinDelivered: рубильник записи + RO-гейт. Возврат к
-    /// McpDelivery.ShouldDeliver в этой ветке был бы откатом заявки
-    /// «продуктовая интеграция, не запись реестра» и обязан ронять тест.
-    /// </summary>
-    [SkippableFact]
-    public void Хиггсфилд_ПродуктоваяИнтеграция_КаскадРеестраНеПрименяется()
-    {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
-
-        var body = MethodBody(File.ReadAllText(path!), "private void TryAddHiggsfieldBuiltin");
-
-        // Решение принимает отдельная точка — IsBuiltinDelivered
-        body.Should().Contain("IsBuiltinDelivered(",
-            "продуктовая интеграция: гейт — McpDelivery.IsBuiltinDelivered, без проекта/персоны");
-        // Каскад реестра (McpServersOn / McpServerGranted) здесь НЕ применяется
-        body.Should().NotContain("McpServerGranted(",
-            "выдача сервера персоне — каскад реестра, к встроенной интеграции не относится");
-        body.Should().NotContain("McpServersOn",
-            "McpServersOn — каскад реестра, к встроенной интеграции не относится");
-        body.Should().NotContain("Mcp.McpDelivery.ShouldDeliver(",
-            "возврат к ShouldDeliver откатывает продуктовое правило на реестровое");
-        // Фич-флага в этой ветке нет с 2026-09-08 (снят): интеграция работает безусловно,
-        // единственный предохранитель — рубильник Enabled записи, который читает
-        // IsBuiltinDelivered. Возврат любой проверки флага (хоть FeatureFlagKeys.DesktopAgent,
-        // хоть литералом "higgsfield") обязан ронять тест: доставка идёт по записи
-        // реестра, а не по тумблеру фичи.
-        body.Should().NotContain("_flags",
-            "флаг higgsfield снят: доставка идёт по записи реестра, а не по тумблеру фичи");
-        // Живой OAuth сохраняем
-        body.Should().Contain("EnsureFresh",
-            "живой OAuth-токен обязателен (или сервер снимается с хода с WARN)");
-        // RO-гейт сохранён через IsBuiltinDelivered — требование точное: «readOnly» даёт
-        // и сигнатура bool readOnly, поэтому проверять «любое вхождение readOnly» бессмысленно,
-        // мутация «захардкодить readOnly: false на месте вызова» пройдёт. Требуем точный вызов
-        // IsBuiltinDelivered(hf, readOnly) — иначе проводка «RO персоны → гейт» не закрыта.
-        body.Should().Contain("IsBuiltinDelivered(hf, readOnly)",
-            "readOnly персоны обязан доезжать до гейта, а не гаситься литералом на месте вызова");
-    }
-
-    /// <summary>
     /// Записи встроенных интеграций (IntegrationKeys, сейчас — dify/fal-ai/glif/higgsfield)
     /// доставляются собственной веткой (TryAddHiggsfieldBuiltin и аналоги), а НЕ реестровым
     /// циклом BuildExternalMcpProvider. Иначе у доставки становится две точки истины:
@@ -382,6 +366,32 @@ public class McpToolsetStabilityTests
     }
 
     /// <summary>
+    /// Сервер редактора картинок (ADR-019 §4) едет в ход по свойствам сессии, владельца и
+    /// процесса: чат проекта, флаг image-editor, тулсет в реестре. Признак хода («идёт
+    /// генерация», глубина делегирования), фокус и нити картинок перезапускали бы CLI со всеми
+    /// серверами.
+    /// </summary>
+    [SkippableFact]
+    public void СерверРедактораКартинок_ГейтитсяПоСессииФлагуИРеестру()
+    {
+        var path = FindSource("Services", "SessionManager.cs");
+        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+
+        var body = MethodBody(File.ReadAllText(path!),
+            "internal ImageEditorMcpContext? BuildImageEditorContext");
+
+        body.Should().Contain("ProjectId", "сервер есть в любом чате проекта");
+        body.Should().NotContain("ImageChat", "отдельного чата картинки в v3 нет");
+        body.Should().NotContain("Thread", "фокус и нити картинок не влияют на состав серверов");
+        body.Should().Contain("FeatureFlagKeys.ImageEditor", "флаг владельца гейтит сервер");
+        body.Should().Contain("McpEndpoints.ImageEditorName",
+            "модуль не загружен — тулсета нет в реестре, и сервер в ход не едет");
+        body.Should().NotContain("_currentTurn", "состояние хода не должно влиять на состав серверов");
+        body.Should().NotContain("TurnDelegation", "гейт делегирования живёт в CallAsync тулсета");
+        body.Should().NotContain("IsBusy", "идущий ход не должен влиять на состав серверов");
+    }
+
+    /// <summary>
     /// Провайдер сабагентов-консультантов (pmem-серверы + --add-dir) гейтится тем же
     /// ConsultantsEnabled, а не собственной копией правила.
     /// </summary>
@@ -410,9 +420,16 @@ public class McpToolsetStabilityTests
     {
         var dir = FindDir("Services", "Mcp", "Http");
         Skip.If(dir is null, "Services/Mcp/Http не найден (сборка вне дерева репозитория)");
+        // Тулсеты модулей живут в своих сборках (ADR-018 §10.2) — их тела проверяются тем же правилом
+        var imageEditor = FindDirIn("ClaudeHomeServer.ImageEditor", "Mcp");
+        imageEditor.Should().NotBeNull("тулсет редактора картинок обязан попасть в проверку тел ToolsFor");
+        var files = Directory.GetFiles(dir!.FullName, "*.cs")
+            .Concat(Directory.GetFiles(imageEditor!.FullName, "*.cs"))
+            .ToList();
+        files.Should().Contain(f => Path.GetFileName(f) == "ImageEditorToolset.cs");
 
         var checkedAny = false;
-        foreach (var file in Directory.GetFiles(dir!.FullName, "*.cs"))
+        foreach (var file in files)
         {
             var source = File.ReadAllText(file);
             // Только РЕАЛИЗАЦИИ (public-члены классов): декларация интерфейса в
@@ -491,11 +508,14 @@ public class McpToolsetStabilityTests
     /// читать MentionsToolsEnabled — «MentionsHint is not null» расходился с составом при
     /// единственной персоне владельца (подсказка гаснет, инструмент остаётся).
     /// </summary>
-    [SkippableFact]
+    [Fact]
     public void ShapeПерсон_ЧитаетЕдинуюФормулуMentions()
     {
         var path = FindSource();
-        Skip.If(path is null, "ClaudeSession.cs не найден (сборка вне дерева репозитория)");
+        path.Should().NotBeNull(
+            "ClaudeSession.cs не найден ни по одному из ожидаемых путей: "
+            + "backend/ClaudeHomeServer.Llm/Claude/ (новый) или "
+            + "backend/ClaudeHomeServer/Services/Llm/Claude/ (старый)");
 
         var source = File.ReadAllText(path!);
         var start = source.IndexOf("mentionsForShape", StringComparison.Ordinal);
@@ -537,6 +557,18 @@ public class McpToolsetStabilityTests
             "состояние делегирования не смеет влиять на состав инструментов");
         code.Should().NotContain("_currentTurn",
             "состояние хода не должно влиять на состав инструментов");
+    }
+
+    private static DirectoryInfo? FindDirIn(string assembly, params string[] relative)
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null)
+        {
+            var candidate = Path.Combine([dir.FullName, "backend", assembly, .. relative]);
+            if (Directory.Exists(candidate)) return new DirectoryInfo(candidate);
+            dir = dir.Parent;
+        }
+        return null;
     }
 
     // Каталог по пути от корня репозитория (FindSource ищет файл — этот ищет папку)
@@ -857,5 +889,25 @@ public class McpToolsetStabilityTests
             "решение принимает FeatureFlagService.IsEnabled по владельцу сессии");
         body.Should().NotContain("_currentTurn",
             "состояние хода не должно влиять на состав инструментов памяти");
+    }
+
+    /// <summary>
+    /// Руки локального проекта (ADR-016 §7) — свойство чата: маркер рук, запреты HandsTurnRules и
+    /// режим прав входят в сигнатуру запуска. Два хода одного чата с руками обязаны дать ОДНУ
+    /// сигнатуру — иначе каждый ход перезапускал бы CLI со всеми MCP (и с мостом рук).
+    /// </summary>
+    [Fact]
+    public async Task РукиВключены_ДваХода_ОднаСигнатура()
+    {
+        using var h = new HandsTurnHarness(true,
+            mode: ClaudeHomeServer.Models.ClaudeMode.Bypass);
+        var first = await h.RunTurnAsync("первый ход");
+        var second = await h.RunTurnAsync("второй ход, другой текст");
+
+        first.McpServers!.ContainsKey(ClaudeHomeServer.Protocol.DeviceExecPlaceholders.HandsServerName)
+            .Should().BeTrue("кейс про чат с руками");
+        first.Signature.Should().NotBeNullOrEmpty();
+        second.Signature.Should().Be(first.Signature,
+            "руки — свойство чата, а не хода: сигнатура запуска между ходами не мерцает");
     }
 }

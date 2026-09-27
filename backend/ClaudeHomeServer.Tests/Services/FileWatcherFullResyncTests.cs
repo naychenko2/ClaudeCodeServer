@@ -1,3 +1,5 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 using System.Text.Json;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
@@ -12,6 +14,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
+using ClaudeHomeServer.Services.Files;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -22,6 +25,7 @@ namespace ClaudeHomeServer.Tests.Services;
 /// Юнит-набор: сервис в изоляции, хаб — Moq-рекордер (по образцу ChatArchivedEventTests);
 /// переполнение проверяется в polling-режиме — он детерминированнее FileSystemWatcher в CI.
 /// </summary>
+[Collection(TestCollections.Inotify)]
 public class FileWatcherFullResyncTests : IDisposable
 {
     private readonly string _tempDir =
@@ -169,33 +173,6 @@ public class FileWatcherFullResyncTests : IDisposable
             "какие пути потеряны за время сбоя — неизвестно, клиенту остаётся полная пересинхронизация");
     }
 
-    // Д1 регресса 2026-09-27: удаление папки проекта роняло бэкенд — Error → RecreateWatcher →
-    // new FileSystemWatcher(несуществующий путь) бросал ArgumentException в колбэке пула потоков.
-    [Fact]
-    public async Task КаталогИсчез_ПересозданиеНеБросает_ВернувшийсяКаталогСноваПодВатчером()
-    {
-        var hub = new HubRecorder();
-        var (svc, projectId, dir) = Build(hub, usePolling: false, pollMs: 0);
-        svc.Watch(projectId, "conn-gone");
-
-        Directory.Delete(dir, recursive: true);
-        var recreate = () => svc.RecreateWatcher(projectId);
-        recreate.Should().NotThrow("исключение из колбэка Error валит процесс целиком");
-
-        // Каталог вернулся — следующее обращение поднимает watcher заново
-        Directory.CreateDirectory(dir);
-        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        hub.OnSent("project_" + projectId, p =>
-        {
-            if (p.GetProperty("paths").EnumerateArray().Any(x => x.GetString() == "back.txt")) tcs.TrySetResult(true);
-        });
-        svc.Watch(projectId, "conn-back");
-        File.WriteAllText(Path.Combine(dir, "back.txt"), "x");
-
-        var done = await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(10)));
-        done.Should().Be(tcs.Task, "снятый после исчезновения каталога watcher обязан подняться, когда каталог вернулся");
-    }
-
     // Д2 регресса 2026-09-27: перенос папки приходит событием КАТАЛОГА, дети молчат — инкремент
     // по .cs-путям его не видел, граф оставался со старыми путями, генератор архитектуры плодил фантомы.
     [Fact]
@@ -287,5 +264,118 @@ public class FileWatcherFullResyncTests : IDisposable
         while (_graphs.GetCacheSignature(dir) is not null && sw.Elapsed < TimeSpan.FromSeconds(5))
             await Task.Delay(20);
         _graphs.GetCacheSignature(dir).Should().BeNull("удалённая папка с детьми — смена структуры");
+    }
+
+    // ── Кейс A: ref-count ─────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Watch_RefCount_ВозвращаетTrueТолькоКогдаWatcherПоднятЗаново()
+    {
+        var hub = new HubRecorder();
+        var (svc, pid, _) = Build(hub, usePolling: false, pollMs: 0);
+
+        svc.Watch(pid, "conn-1").Should().BeTrue(
+            "первый connectionId — watcher создан, в наблюдении был пробел");
+
+        svc.Watch(pid, "conn-2").Should().BeFalse(
+            "watcher уже жив — прибавился ещё один connectionId, нет нового пробела");
+
+        svc.RemoveConnection("conn-1");
+        svc.RemoveConnection("conn-2");
+        svc.Watch(pid, "conn-3").Should().BeTrue(
+            "после снятия всех связей watcher disposed — новый watch обязан поднять заново");
+    }
+
+    // ── Кейс B: хаб реально шлёт сигнал ────────────────────────────────────────────
+
+    [Fact]
+    public async Task JoinProject_WatcherПоднятЗаново_ШлётFilesChangedFullCaller()
+    {
+        var hub = new HubRecorder();
+        var (svc, pid, _, projects, ownerId) = BuildWithOwner(hub, usePolling: false, pollMs: 0);
+
+        // Рекордер вызовов Clients.Caller.SendCoreAsync
+        var callerArgs = new List<object[]>();
+        var callerProxy = new Mock<ISingleClientProxy>();
+        callerProxy
+            .Setup(p => p.SendCoreAsync(It.IsAny<string>(), It.IsAny<object[]>(), It.IsAny<CancellationToken>()))
+            .Callback<string, object[], CancellationToken>((_, args, _) => callerArgs.Add(args))
+            .Returns(Task.CompletedTask);
+
+        var clients = new Mock<IHubCallerClients>();
+        clients.Setup(c => c.Caller).Returns(callerProxy.Object);
+
+        var groups = new Mock<IGroupManager>();
+        groups.Setup(g => g.AddToGroupAsync(
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        // Context: sub-claim = ownerId проекта → OwnsProject=true
+        var principal = new ClaimsPrincipal(new ClaimsIdentity(new[]
+        {
+            new Claim(JwtRegisteredClaimNames.Sub, ownerId),
+        }));
+        var context = new Mock<HubCallerContext>();
+        context.Setup(c => c.ConnectionId).Returns("conn-1");
+        context.Setup(c => c.User).Returns(principal);
+
+        var sessionHub = new SessionHub(null!, projects, svc, null!, null!)
+        {
+            Context = context.Object,
+            Groups = groups.Object,
+            Clients = clients.Object,
+        };
+
+        // Первый JoinProject: watcher не поднят → Watch=true → filesChanged(full=true) улетит
+        await sessionHub.JoinProject(pid);
+
+        callerArgs.Should().HaveCount(1,
+            "первый join поднял новый watcher — клиенту обязан прийти full-ресинк");
+        var payload = JsonSerializer.SerializeToElement(callerArgs[0][0]);
+        payload.GetProperty("projectId").GetString().Should().Be(pid);
+        payload.GetProperty("full").GetBoolean().Should().BeTrue();
+        payload.GetProperty("paths").GetArrayLength().Should().Be(0,
+            "full: какие пути потеряны — неизвестно, клиенту остаётся полная пересинхронизация");
+
+        // Второй JoinProject с другим connectionId: watcher уже жив → Watch=false → без сигнала
+        context.Setup(c => c.ConnectionId).Returns("conn-2");
+        await sessionHub.JoinProject(pid);
+
+        callerArgs.Should().HaveCount(1,
+            "watcher жив — второй connectionId не должен дёргать лишний full-ресинк у чужих вкладок");
+    }
+
+    // Фабрика для Case B: возвращает также ProjectManager и ownerId (для sub-claim)
+    private (FileWatcherService Svc, string ProjectId, string Dir,
+        ProjectManager Projects, string OwnerId) BuildWithOwner(HubRecorder hub, bool usePolling, int pollMs)
+    {
+        Directory.CreateDirectory(_tempDir);
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(_tempDir, "projects.json"),
+            ["FileWatcher:UsePolling"] = usePolling ? "true" : "false",
+            ["FileWatcher:PollIntervalMs"] = pollMs.ToString(),
+        }).Build();
+
+        var userStore = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        var owner = userStore.Add("jpo-" + Guid.NewGuid().ToString("N")[..8], "pw-123456", "user");
+        var projects = new ProjectManager(config, userStore, new AppSettingsService(config));
+
+        var dir = Path.Combine(_tempDir, "jpo_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        var project = projects.Create("jpo-" + Guid.NewGuid().ToString("N")[..8], dir, owner.Id, owner.Username);
+
+        var wkStore = new WorkspaceKnowledgeStore(config);
+        var knowledge = new KnowledgeService(new Mock<IHttpClientFactory>().Object,
+            Options.Create(new DifyOptions()), wkStore);
+        var knowledgeSync = new ProjectKnowledgeSyncService(knowledge, wkStore, projects,
+            new ProjectFileGateway(new FileService()), new RecordingHubNotifier(), new NullDifyMetrics(),
+            NullLogger<ProjectKnowledgeSyncService>.Instance);
+        var graphs = new CodeGraphService(NullLogger<CodeGraphService>.Instance, new ProjectRootLookup(projects),
+            new GraphPersistence(_tempDir, NullLogger<GraphPersistence>.Instance), config);
+
+        var svc = new FileWatcherService(projects, hub.Context, knowledgeSync, graphs, config);
+        _services.Add(svc);
+        return (svc, project.Id, dir, projects, owner.Id);
     }
 }

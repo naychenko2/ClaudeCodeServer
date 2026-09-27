@@ -47,8 +47,8 @@ public static class WatchdogLimits
 // Серверный сторож чата: «дожидаюсь условия и бужу этот чат».
 // Сервис бэкенда крутит цикл опроса, переживая ходы, рестарты и смерть процесса CLI —
 // в отличие от Monitor/run_in_background харнесса, живущих внутри процесса claude.
-// Исполнение poll-команды — через ILauncherFactory.ForOwner(OwnerId): среда владельца
-// (local/песочница), WorkingDirectory резолвится живьём на каждый опрос (rootPath проекта
+// Исполнение poll-команды — в среде проекта сторожа (ILauncherFactory.ForProject; чат вне
+// проектов — ForOwner(OwnerId): local/песочница владельца), WorkingDirectory резолвится живьём на каждый опрос (rootPath проекта
 // по ProjectId; чат вне проектов — домашняя папка владельца).
 // Хранение — data/watchdogs.json (WatchdogStore); в архив бэкапа попадает автоматически.
 public class WatchdogRecord
@@ -80,6 +80,10 @@ public class WatchdogRecord
     // недоступна). exit != 0 сюда НЕ входит — это штатное «ещё нет». 3 подряд → launch_failed;
     // любой состоявшийся запуск обнуляет.
     public int ConsecutiveLaunchFailures { get; set; }
+    // Опрос пропускается: устройство локального проекта офлайн (ADR-016, вариант А плана §5).
+    // Пропуск не считается сбоем запуска и не копится: после выхода устройства в онлайн
+    // выполняется один опрос. Момент первого пропуска подряд; null — пропусков нет.
+    public DateTime? DeviceSkippedSince { get; set; }
     // Число сделанных попыток доставки будильника
     public int DeliveryAttempts { get; set; }
     // Момент доставки будильника. null у активного (ещё не будил) и у терминального,

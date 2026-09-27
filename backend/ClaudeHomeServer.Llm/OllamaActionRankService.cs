@@ -15,16 +15,17 @@ public sealed record RankedAction(string Id, string Level);
 
 public sealed class OllamaActionRankService
 {
-    private readonly ILocalLlmClient _ollama;
-    private readonly LocalActionRouter _router;
+    private readonly ICheapTextRunner _runner;
 
-    // Ранжир доступен, если Ollama настроена И действие action-rank заведено на локаль (конфиг)
-    public bool Enabled => _router.UsesLocal(LocalActionCatalog.ActionRank);
+    // Ранжир доступен, если у места `action-rank` есть ХОТЬ КАКОЙ-ТО бесплатный маршрут
+    // (локаль ИЛИ direct-модель агрегатора через RunFreeAsync). Проверка живёт в
+    // CheapTextRunner.HasFreeRoute — единая точка «есть бесплатный шаг» для всей
+    // цепочки, иначе та же правка правила в одном месте оставит другие врозь.
+    public bool Enabled => _runner.HasFreeRoute(LocalActionCatalog.ActionRank);
 
-    public OllamaActionRankService(ILocalLlmClient ollama, LocalActionRouter router)
+    public OllamaActionRankService(ICheapTextRunner runner)
     {
-        _ollama = ollama;
-        _router = router;
+        _runner = runner;
     }
 
     private static readonly HashSet<string> ValidLevels = new(StringComparer.OrdinalIgnoreCase)
@@ -65,7 +66,7 @@ public sealed class OllamaActionRankService
         "максимум K по убыванию уровня. Лучше не предложить, чем предложить лишнее. Не выдумывай id.";
 
     // Отранжировать действия. contextText — компактное описание открытой сущности (усечено фронтом).
-    // Пустой результат = сигнал фолбэка (Ollama выключен/ошибка/ничего не уместно).
+    // Пустой результат = сигнал фолбэка (раннер недоступен/ошибка/ничего не уместно).
     public async Task<IReadOnlyList<RankedAction>> RankAsync(
         string contextType, string contextText, IReadOnlyList<RankCandidate> actions, int maxK,
         CancellationToken ct = default)
@@ -73,17 +74,19 @@ public sealed class OllamaActionRankService
         if (!Enabled || actions.Count == 0) return [];
 
         var menu = actions.Select(a => new { id = a.Id, desc = a.Title + " — " + a.Hint });
+        // SystemPrompt склеиваем в начало userPrompt: RunFreeAsync системного блока
+        // не принимает, локальный шаг внутри зовёт ChatJsonAsync с пустым system.
         var userPrompt =
+            $"{SystemPrompt}\n\n" +
             $"КОНТЕКСТ ({contextType}):\n{contextText}\n\n" +
             $"МАКСИМУМ: {maxK}\n\n" +
             $"ДОСТУПНЫЕ ДЕЙСТВИЯ:\n{JsonSerializer.Serialize(menu)}";
 
-        // Профиль каталога применяем явно: раньше вызов шёл с дефолтами ChatJsonAsync, и
-        // num_ctx/num_predict/timeout из CheapProfile.Small молча не действовали — меню
-        // действий с длинным контекстом обрезалось на входе.
-        var spec = _router.ProfileFor(LocalActionCatalog.ActionRank);
-        var raw = await _ollama.ChatJsonAsync(SystemPrompt, userPrompt, FormatSchema, ct,
-            timeoutMs: spec.TimeoutMs, numPredict: spec.NumPredict, numCtx: spec.NumCtx);
+        // Бесплатная цепочка: direct-модель агрегатора → локальная Ollama.
+        // Профиль (num_ctx/num_predict/timeout) применяет сам раннер — раньше это
+        // приходилось тащить сюда и молча терялось.
+        var raw = await _runner.RunFreeAsync(LocalActionCatalog.ActionRank, userPrompt,
+            jsonFormat: FormatSchema, ct);
         if (string.IsNullOrWhiteSpace(raw)) return [];
 
         var allowed = actions.Select(a => a.Id).ToHashSet(StringComparer.Ordinal);

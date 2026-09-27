@@ -122,13 +122,13 @@ public static class HandsChatStates
     public static readonly IReadOnlyList<string> FromDevice = [Active, Allowed, Stopped];
 }
 
-/// <summary>Компонент рук на машине. Сервер его не видит и не правит.</summary>
+/// <summary>Мост рук на машине. Сервер его не видит и не правит.</summary>
 public static class HandsFiles
 {
-    /// <summary>Каталог компонента в каталоге данных агента: <c>%LOCALAPPDATA%\AiHomeAgent\hands\</c>.</summary>
-    public const string ComponentDirectory = "hands";
-
-    /// <summary>Исполняемый файл моста (форк sbroenne/mcp-windows, win-x64 single-file).</summary>
+    /// <summary>
+    /// Исполняемый файл моста (форк sbroenne/mcp-windows): лежит в каталоге версии агента рядом с
+    /// <c>ai-home-agent.exe</c> и делит с ним рантайм.
+    /// </summary>
     public const string BridgeExe = "HandsBridge.exe";
 }
 
@@ -191,7 +191,7 @@ public static class HandsEndReason
 {
     /// <summary>Человек нажал «Стоп» в трее: ход прерван, следующий ход снова может взять руки.</summary>
     public const string StoppedFromTray = "tray-stop";
-    /// <summary>Компонент убран командой <c>ai-home-agent hands disable</c> посреди хода.</summary>
+    /// <summary>Мост пропал посреди хода. Нынешний агент так не гасит: причина осталась для старых агентов.</summary>
     public const string HandsDisabled = "disabled";
     public const string AgentStopping = "agent-stopping";
     /// <summary>
@@ -292,7 +292,7 @@ public sealed record HandsPipeMessage(
     string? Error = null);
 
 /// <summary>Что показывает трей.</summary>
-/// <param name="Installed">Компонент установлен и SHA-256 сверен.</param>
+/// <param name="Installed">Мост рук лежит в каталоге версии агента.</param>
 /// <param name="ActiveTurns">Ходы, к которым сейчас подключены руки (не больше одного — <see cref="HandsMachineLock"/>).</param>
 /// <param name="ServerOnline">Связь агента с сервером — «Стоп» работает и без неё.</param>
 /// <param name="Device">Сведения для меню трея; null — агент их не прислал.</param>

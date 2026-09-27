@@ -147,7 +147,7 @@ internal sealed class AgentCoordinator : IAsyncDisposable
         List<string> capabilities = [DeviceCapabilities.Exec, DeviceCapabilities.Files];
         if (_runRelay is not null) capabilities.Add(DeviceCapabilities.Relay);
         if (_runBindFolder is not null) capabilities.Add(DeviceCapabilities.BindFolder);
-        // Руки — только когда компонент установлен И сверен: ход с маркером иначе всё равно откажет
+        // Руки — только когда мост лежит в каталоге версии: ход с маркером иначе всё равно откажет
         if (_hands?.Component.IsReady == true) capabilities.Add(DeviceCapabilities.Hands);
         return capabilities;
     }
@@ -168,8 +168,6 @@ internal sealed class AgentCoordinator : IAsyncDisposable
             _announcedCli = hello.CliVersion;
             _announcedUpdate = hello.AgentUpdate;
             _announcedHands = hands;
-            // Хеш архива рук едет только этим каналом: команда hands enable берёт его отсюда
-            _hands?.Component.SaveOffer(HandsComponent.OfferFrom(ack, _agentVersion));
             if (ack.HarnessReady) _log.LogInformation("Сервер принял агента: готов к работе (CLI {Version})", hello.CliVersion);
             else _log.LogInformation("Сервер принял агента: {Problem}", ack.HarnessProblem ?? "агент устройства не готов");
             _harness.SetRequiredVersion(ack.RequiredCliVersion);
@@ -178,34 +176,6 @@ internal sealed class AgentCoordinator : IAsyncDisposable
         finally
         {
             _helloLock.Release();
-        }
-    }
-
-    /// <summary>
-    /// Слежка за машинным выключателем рук: <c>hands enable|disable</c> правят файлы, а идущий
-    /// агент раз в <paramref name="period"/> сверяет компонент. Пропал посреди хода — ход с руками
-    /// гасится с причиной <see cref="HandsEndReason.HandsDisabled"/>; перемена — повтор hello.
-    /// </summary>
-    public async Task WatchHandsAsync(TimeSpan period, CancellationToken ct)
-    {
-        if (_hands is null) return;
-        using var timer = new PeriodicTimer(period);
-        while (await timer.WaitForNextTickAsync(ct))
-            await RefreshHandsAsync();
-    }
-
-    internal async Task RefreshHandsAsync()
-    {
-        if (_hands is null) return;
-        if (!_hands.Component.IsReady && _hands.Registry.Active.Count > 0)
-        {
-            _log.LogWarning("Компонент рук убран или не сверен посреди хода — гашу ходы с руками");
-            _hands.Registry.Stop(null, HandsEndReason.HandsDisabled);
-        }
-        try { await HelloAsync(force: false); }
-        catch (Exception e) when (e is not OperationCanceledException)
-        {
-            _log.LogWarning(e, "Повторный hello после перемены рук не ушёл");
         }
     }
 

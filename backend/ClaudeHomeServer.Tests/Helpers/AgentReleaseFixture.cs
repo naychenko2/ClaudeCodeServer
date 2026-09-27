@@ -17,7 +17,7 @@ public sealed class AgentReleaseFixture : IDisposable
     public const string Version = "1.200.0";
     public const string WinFile = "ai-home-agent-1.200.0-win-x64.zip";
     public const string LinuxFile = "ai-home-agent-1.200.0-linux-x64.tar.gz";
-    /// <summary>Компонент рук той же версии (ADR-016 §7) — секция <c>hands</c> манифеста.</summary>
+    /// <summary>Отдельный архив моста рук старых выкаток — секция <c>hands</c> их манифеста.</summary>
     public const string HandsFile = "hands-1.200.0-win-x64.zip";
 
     public string Dir { get; } = Path.Combine(Path.GetTempPath(), "ccs_agent_rel_" + Guid.NewGuid().ToString("N"));
@@ -28,8 +28,8 @@ public sealed class AgentReleaseFixture : IDisposable
     public byte[] LinuxBytes { get; } = Encoding.UTF8.GetBytes("архив агента под linux, другой");
     public byte[] HandsBytes { get; } = Encoding.UTF8.GetBytes("архив моста рук HandsBridge");
 
-    /// <summary>Переопубликовать текущую версию вместе с компонентом рук под win-x64.</summary>
-    public void PublishWithHands()
+    /// <summary>Переопубликовать текущую версию так, как её писали старые выкатки: с отдельным архивом рук.</summary>
+    public void PublishWithLegacyHands()
     {
         var dir = Path.Combine(Root, Version);
         File.WriteAllBytes(Path.Combine(dir, HandsFile), HandsBytes);

@@ -27,7 +27,7 @@ namespace ClaudeHomeServer.DeviceAgent;
 ///   ai-home-agent uninstall [--purge]
 ///   ai-home-agent pair --server https://host --code ABCD2345 [--name "Ноутбук"] [--always-on]
 ///   ai-home-agent roots add ПУТЬ [--force] | roots remove ПУТЬ | roots list | roots auto [on|off]
-///   ai-home-agent hands enable | disable | status
+///   ai-home-agent hands status
 ///   ai-home-agent supervise
 ///   ai-home-agent [run]
 ///   ai-home-agent --version
@@ -69,7 +69,7 @@ public static class AgentProgram
                 "uninstall" when args[1..] is [] or ["--purge"] => await UninstallAsync(args.Contains("--purge"), paths),
                 "pair" => await PairAsync(args[1..], paths, log),
                 "roots" => Roots(args[1..], paths),
-                "hands" => await HandsAsync(args[1..], paths),
+                "hands" => Hands(args[1..]),
                 "run" => await RunAsync(paths, loggers, log),
                 _ => Usage(),
             };
@@ -263,15 +263,10 @@ public static class AgentProgram
         }
     }
 
-    // Руки (ADR-016 §7): машинный выключатель — ставит и убирает компонент только человек на машине
-    private static async Task<int> HandsAsync(string[] args, AgentPaths paths)
-    {
-        using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
-        var commands = new HandsCommands(new HandsComponent(paths.DataDirectory),
-            () => DeviceRegistration.Load(paths.RegistrationFile) is { } r ? new Uri(r.ServerUrl) : null,
-            http, Version, Console.Out, Console.Error, handsSupported: OperatingSystem.IsWindows());
-        return await commands.RunAsync(args, CancellationToken.None);
-    }
+    // Руки (ADR-016 §7): мост едет в составе агента — команда только справочная
+    private static int Hands(string[] args) =>
+        new HandsCommands(HandsComponent.ForThisAgent(), Console.Out, Console.Error, handsSupported: OperatingSystem.IsWindows())
+            .Run(args);
 
     private static string AutoState(AgentRootsStore roots) => roots.AutoEnabled
         ? "Автовыдача папок проектов включена: сервер может создать папку проекта и разрешить её (выключить — «ai-home-agent roots auto off»)"
@@ -339,7 +334,7 @@ public static class AgentProgram
 
         // Руки (ADR-016 §7) — только на Windows: мост — Windows-программа, замок машины — именованный семафор
         var hands = OperatingSystem.IsWindows()
-            ? new HandsRuntime(new HandsComponent(paths.DataDirectory), new NamedHandsMachineLock(), new HandsRegistry(), control)
+            ? new HandsRuntime(HandsComponent.ForThisAgent(), new NamedHandsMachineLock(), new HandsRegistry(), control)
             : null;
 
         // Одна политика корней на исполнение ходов и на файлы проектов (ADR-016 §5)
@@ -419,7 +414,6 @@ public static class AgentProgram
             // Успешный ack — версия здорова: супервизор её не откатит, install дождался
             SupervisedRun.MarkHealthy();
             log.LogInformation("Агент на связи с {Server} как «{Name}»", registration.ServerUrl, registration.DeviceName);
-            _ = WatchHandsAsync(coordinator, log, stop.Token);
             // Раздачу могли переоткрыть без рестарта сервера (AGENT_ONLY=1): ack без переподключения — только так
             if (updater is not null) _ = coordinator.RunUpdateChecksAsync(UpdateCheckPeriod(), stop.Token);
             // Цикл обновления завершается true, только переключив active: выходим с 75, супервизор поднимет новую версию
@@ -455,14 +449,6 @@ public static class AgentProgram
         return new AgentUpdater(layout, Version, AgentCoordinator.RidName, new HttpAgentArchiveSource(http, device.ServerUri),
             activity, autostart.Repoint, () => SupervisedRun.SupervisorVersion(layout),
             log: loggers.CreateLogger<AgentUpdater>());
-    }
-
-    // Слежка за hands enable|disable; сбой её агента не валит
-    private static async Task WatchHandsAsync(AgentCoordinator coordinator, ILogger log, CancellationToken ct)
-    {
-        try { await coordinator.WatchHandsAsync(TimeSpan.FromSeconds(10), ct); }
-        catch (OperationCanceledException) { }
-        catch (Exception e) { log.LogError(e, "Слежка за компонентом рук упала — перемены рук видны после перезапуска агента"); }
     }
 
     private static TimeSpan UpdateCheckPeriod() =>

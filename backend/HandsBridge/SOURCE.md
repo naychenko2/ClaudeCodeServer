@@ -30,10 +30,13 @@
 ## Правленые файлы upstream
 
 Правки сводятся к вызову гейта и удалению опасных веток. Своё (не upstream) — `Hands/*`.
+Лог моста — `Hands/HandsLog.cs`: `AiHomeAgent\logs\hands.log` рядом с логами агента (путь
+переопределяет `--log`): запуск, отказы гейта, коды ошибок `CreateProcess` и
+`AssignProcessToJobObject`.
 
 | Файл | Правка |
 |---|---|
-| `Tools/AppTool.cs` | гейт `CheckLaunch`; запуск нормализованного полного пути (кроме `HandsForbiddenApps`), `UseShellExecute=false`, процесс — во вложенный Job (не вышло — гасим); удалены поиск окна по заголовку для «заглушек» и «любое окно процесса с тем же именем» — окно ищется среди окон запущенного PID; описание для модели |
+| `Tools/AppTool.cs` | гейт `CheckLaunch`; запуск нормализованного полного пути (кроме `HandsForbiddenApps`), `UseShellExecute=false`, процесс — в свой вложенный Job на каждый запуск (не вышло — гасим, отказ с кодом ошибки Windows; процесс уже вышел — отказ «заглушка передала запуск»); запуск и коды ошибок — в `hands.log`; удалены поиск окна по заголовку для «заглушек» и «любое окно процесса с тем же именем» — окно ищется среди окон запущенного PID; описание для модели |
 | `Automation/Tools/UIClickTool.cs`, `UITypeTool.cs`, `UIFindTool.cs`, `UISnapshotTool.cs`, `UIReadTool.cs` | гейт `CheckUi`: hwnd обязателен; у `ui_click`/`ui_type` — ни окно, ни окно любого `elementId`/`parentElementId` не из `HandsForbiddenApps`; у `ui_snapshot` убран фолбэк на окно переднего плана; у `ui_read` удалён OCR-фолбэк, копировавший прямоугольник окна с экрана |
 | `Tools/WindowManagementTool.cs` | гейт `CheckWindowAction` (только действия из схемы); `list`/`find`/`get_foreground`/`wait_for` — без фильтра |
 | `Tools/ScreenshotControlTool.cs` | гейт `CheckScreenshot`: любая цель, только `inline`, без `outputPath` |

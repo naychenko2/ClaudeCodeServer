@@ -6,7 +6,7 @@ using ClaudeHomeServer.HandsBridge.Policy;
 namespace ClaudeHomeServer.HandsBridge;
 
 /// <summary>
-/// WinAPI-сторона гейта: вложенный Job моста, в который <c>app</c> кладёт запущенные программы,
+/// WinAPI-сторона гейта: вложенные Job моста, в которые <c>app</c> кладёт запущенные программы,
 /// и ответы на вопросы политики об окнах и процессах. Любой сбой — «ввод запрещён».
 /// </summary>
 [SupportedOSPlatform("windows")]
@@ -18,38 +18,53 @@ internal sealed partial class WindowsHandsSystem : IHandsWindowSystem, IDisposab
     private const int JobObjectExtendedLimitInformation = 9;
     private const uint JobObjectLimitKillOnJobClose = 0x2000;
 
-    private readonly nint _job;
+    // Вложенные Job внутри Job хода: программы рук гаснут вместе с мостом и вместе с ходом.
+    // Job хода мост не открывает: он нужен только агенту для KillTree по концу хода
+    private readonly List<nint> _appJobs = [];
+    private readonly Lock _sync = new();
 
-    public WindowsHandsSystem()
+    /// <summary>
+    /// Кладёт только что запущенный процесс в СВОЙ новый Job с KILL_ON_JOB_CLOSE. Job на каждый
+    /// запуск, а не общий: первый процесс вложенного Job задаёт его место в иерархии, и программа,
+    /// рождённая в другой иерархии (упакованные приложения, Win11-notepad), закрывала общий Job для
+    /// всех следующих — AssignProcessToJobObject отдавал ERROR_ACCESS_DENIED (замер на стенде,
+    /// задача 0ab253d5). Потомок, успевший родиться до посадки, в Job не попадёт — зато он в Job
+    /// хода и погаснет по концу хода вместе со всем деревом.
+    /// </summary>
+    /// <returns>0 — процесс в Job; иначе код ошибки Windows.</returns>
+    public int AssignToAppsJob(Process process)
     {
-        // Вложенный Job внутри Job хода: программы рук гаснут вместе с мостом и вместе с ходом.
-        // Job хода мост не открывает: он нужен только агенту для KillTree по концу хода
-        _job = CreateJobObjectW(0, null);
-        if (_job == 0)
-            throw new InvalidOperationException($"CreateJobObject failed: {Marshal.GetLastPInvokeError()}");
+        var job = CreateJobObjectW(0, null);
+        if (job == 0)
+            return Marshal.GetLastPInvokeError();
 
         var info = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
         info.BasicLimitInformation.LimitFlags = JobObjectLimitKillOnJobClose;
-        if (!SetInformationJobObject(_job, JobObjectExtendedLimitInformation, ref info, (uint)Marshal.SizeOf<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>()))
-            throw new InvalidOperationException($"SetInformationJobObject failed: {Marshal.GetLastPInvokeError()}");
-    }
+        if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, ref info, (uint)Marshal.SizeOf<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>()))
+            return Fail(job);
 
-    /// <summary>
-    /// Кладёт только что запущенный процесс в Job. Потомок, успевший родиться до этого, в Job не
-    /// попадёт — зато он в Job хода и погаснет по концу хода вместе со всем деревом.
-    /// </summary>
-    public bool AssignToAppsJob(Process process)
-    {
         var handle = OpenProcess(ProcessSetQuota | ProcessTerminate, false, (uint)process.Id);
         if (handle == 0)
-            return false;
+            return Fail(job);
         try
         {
-            return AssignProcessToJobObject(_job, handle);
+            if (!AssignProcessToJobObject(job, handle))
+                return Fail(job);
         }
         finally
         {
             CloseHandle(handle);
+        }
+
+        lock (_sync)
+            _appJobs.Add(job);
+        return 0;
+
+        static int Fail(nint job)
+        {
+            var error = Marshal.GetLastPInvokeError();
+            CloseHandle(job);
+            return error;
         }
     }
 
@@ -78,7 +93,12 @@ internal sealed partial class WindowsHandsSystem : IHandsWindowSystem, IDisposab
 
     public void Dispose()
     {
-        CloseHandle(_job);
+        lock (_sync)
+        {
+            foreach (var job in _appJobs)
+                CloseHandle(job);
+            _appJobs.Clear();
+        }
     }
 
     [StructLayout(LayoutKind.Sequential)]

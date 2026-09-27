@@ -46,6 +46,10 @@ if (args.Length > 0 && (args[0] == "--version" || args[0] == "-v"))
     return 0;
 }
 
+// Руки: лог рядом с логами агента (--log переопределяет путь)
+HandsLog.Configure(GetOption(args, "--log") ?? HandsLog.DefaultPath);
+HandsLog.Write($"мост {serverVersion} запущен: args=[{string.Join(' ', args)}]");
+
 // Руки: гейт до старта хоста. Границы «только свои окна» нет (решение владельца 2026-09-27,
 // ADR-016 §7), поэтому имя Job хода мосту не передаётся: Job хода нужен только агенту для KillTree.
 HandsGate.Configure();

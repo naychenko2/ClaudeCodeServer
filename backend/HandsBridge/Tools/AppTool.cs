@@ -155,30 +155,46 @@ public static partial class AppTool
                 startInfo.WorkingDirectory = workingDirectory;
             }
 
+            HandsLog.Write($"app: запуск '{programPath}' args='{arguments}'");
             var process = Process.Start(startInfo);
             if (process is null)
             {
+                HandsLog.Write($"app: Process.Start вернул null для '{programPath}'");
                 return WindowManagementResult.CreateFailure(
                     WindowManagementErrorCode.SystemError,
                     $"Failed to start process: '{programPath}'");
             }
 
             // Программа вне Job моста — неуправляемая: гасим, а не оставляем работать мимо гейта
-            if (!hands.AssignToAppsJob(process))
+            var assignError = hands.AssignToAppsJob(process);
+            if (assignError != 0)
             {
+                process.Refresh();
+                var exited = process.HasExited;
+                HandsLog.Write($"app: '{programPath}' pid={process.Id} AssignProcessToJobObject {HandsLog.Win32(assignError)}, " +
+                    (exited ? $"процесс уже вышел с кодом {process.ExitCode}" : "процесс остановлен"));
+                if (exited)
+                {
+                    return HandOffFailure(programPath, process.ExitCode);
+                }
+
                 try
                 {
                     process.Kill(entireProcessTree: true);
                 }
                 catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
                 {
-                    // Процесс уже вышел
+                    // Процесс вышел между проверкой и остановкой
                 }
 
                 return WindowManagementResult.CreateFailure(
                     WindowManagementErrorCode.SystemError,
-                    $"'{programPath}' could not be put under hands control and was stopped.");
+                    $"Windows refused to put '{programPath}' under hands control (Windows error {HandsLog.Win32(assignError)}), " +
+                    "so it was stopped. This happens when Windows starts a program inside its own job hierarchy " +
+                    "(Store-packaged apps and their aliases). Try a regular desktop application.");
             }
+
+            HandsLog.Write($"app: '{programPath}' pid={process.Id} под контролем рук");
 
             if (waitForWindow)
             {
@@ -206,10 +222,8 @@ public static partial class AppTool
 
                 if (process.HasExited)
                 {
-                    return WindowManagementResult.CreateFailure(
-                        WindowManagementErrorCode.SystemError,
-                        $"Process '{programPath}' exited with code {process.ExitCode} before showing a window. " +
-                        "Programs that hand off to another process (launcher stubs, an already running browser) are not supported by hands.");
+                    HandsLog.Write($"app: '{programPath}' pid={process.Id} вышел с кодом {process.ExitCode}, не показав окна");
+                    return HandOffFailure(programPath, process.ExitCode);
                 }
 
                 var finalWindow = await FindProcessWindowAsync(windowService, process, cancellationToken);
@@ -228,7 +242,7 @@ public static partial class AppTool
             return WindowManagementResult.CreateSuccess(
                 $"Launched '{programPath}' successfully (PID: {process.Id})");
         }
-        catch (System.ComponentModel.Win32Exception ex) when (ex.NativeErrorCode == 2) // ERROR_FILE_NOT_FOUND
+        catch (System.ComponentModel.Win32Exception ex) when (Logged(programPath, ex) && ex.NativeErrorCode == 2) // ERROR_FILE_NOT_FOUND
         {
             return WindowManagementResult.CreateFailure(
                 WindowManagementErrorCode.WindowNotFound,
@@ -242,10 +256,33 @@ public static partial class AppTool
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            if (ex is not System.ComponentModel.Win32Exception)
+            {
+                HandsLog.Write($"app: сбой запуска '{programPath}': {ex.GetType().Name}: {ex.Message}");
+            }
+
             return WindowManagementResult.CreateFailure(
                 WindowManagementErrorCode.SystemError,
                 $"Failed to launch '{programPath}': {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// Заглушка: процесс сразу передал запуск другому процессу (Win11-notepad, calc, приложения
+    /// Store, уже запущенный браузер) и вышел. Список заглушек не ведём — ловим по факту выхода.
+    /// </summary>
+    private static WindowManagementResult HandOffFailure(string programPath, int exitCode) =>
+        WindowManagementResult.CreateFailure(
+            WindowManagementErrorCode.SystemError,
+            $"'{programPath}' handed the launch off to another process and exited right away (exit code {exitCode}), " +
+            "so hands have no handle for it. Find the window it opened with window_management(action='find'), " +
+            "or start a regular desktop application instead.");
+
+    /// <summary>Код ошибки CreateProcess — в лог; фильтр catch, всегда true.</summary>
+    private static bool Logged(string programPath, System.ComponentModel.Win32Exception ex)
+    {
+        HandsLog.Write($"app: CreateProcess '{programPath}' {HandsLog.Win32(ex.NativeErrorCode)}");
+        return true;
     }
 
     /// <summary>

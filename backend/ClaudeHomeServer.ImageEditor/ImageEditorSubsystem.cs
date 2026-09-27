@@ -12,11 +12,11 @@ namespace ClaudeHomeServer.Services.ImageEditor;
 // DynamicModules[image-editor].Enabled=false (dll не грузится) или
 // Subsystems:ImageEditor:Enabled=false (Register не вызывается). В обоих случаях ручек нет — 404.
 //
-// Что берём из спины (всё — Core-швы): IImageRaster, IImagePlaceSettings и ILocalImageMedia от Images,
-// IHiggsfieldAccess, IProjectManager, IFeatureFlagGate, IProjectFiles, ISessionBroadcaster,
-// ISpendCollector, IChatFeed и ISessionDirectory от Main, шина ITurnEventBus (жизненный
-// цикл чата). Растр необязателен: без Images ручки transform и jobs отвечают 503
-// raster_unavailable, а не 500.
+// Модуль ссылается только на Core: всё внешнее — швы оттуда, реализации регистрируют другие сборки.
+// Images — IImageRaster, IImagePlaceSettings, ILocalImageMedia; Spend — ISpendCollector; Main —
+// IHiggsfieldAccess, IProjectManager, IFeatureFlagGate, IProjectFiles, ISessionBroadcaster, IChatFeed,
+// ISessionDirectory и шина ITurnEventBus (жизненный цикл чата). Растр необязателен: без Images
+// ручки transform и jobs отвечают 503 raster_unavailable, а не 500.
 public sealed class ImageEditorSubsystem : IAppSubsystem
 {
     public string Key => "imageeditor";

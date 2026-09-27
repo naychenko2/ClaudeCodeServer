@@ -160,6 +160,25 @@ public class AgentCoordinatorTests
     }
 
     [Fact]
+    public async Task Назначение_bind_project_folder_уходит_выдаче_папки_и_объявлено_в_hello()
+    {
+        var control = new FakeControl();
+        var server = new ExecTestServer();
+        var bind = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var relayRan = false;
+        await using var coordinator = new AgentCoordinator(control, new FakeHarness(), server, (_, _) => Task.CompletedTask, "0.9.0",
+            runRelay: (_, _) => { relayRan = true; return Task.CompletedTask; },
+            runBindFolder: (link, _) => { bind.TrySetResult(link.ExecId); return Task.CompletedTask; });
+
+        await coordinator.HelloAsync();
+        await control.RaiseExecOpen(new DeviceExecOpenCommand("b-1", DeviceExecProtocol.Version, DeviceExecPurposes.BindFolder));
+
+        (await bind.Task.WaitAsync(TimeSpan.FromSeconds(10))).Should().Be("b-1");
+        relayRan.Should().BeFalse("канал выдачи папки не идёт ретранслятору");
+        control.Hellos.Single().Capabilities.Should().Contain(DeviceCapabilities.BindFolder);
+    }
+
+    [Fact]
     public async Task Незнакомое_назначение_канал_не_открывает()
     {
         var control = new FakeControl();

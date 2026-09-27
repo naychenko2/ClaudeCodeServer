@@ -804,6 +804,9 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IDeviceExecCha
 // Ретранслятор чтения для других устройств (ADR-016 §5) — тот же канал исполнения
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IDeviceRelayChannel>(
     sp => sp.GetRequiredService<ClaudeHomeServer.Services.Desktop.DeviceExecChannel>());
+// Выдача папки локального проекта агентом (решение владельца 2026-09-27) — он же
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IDeviceFolderBindChannel>(
+    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Desktop.DeviceExecChannel>());
 // Билеты браузера к localhost-API агента и доставка событий его ватчера в веб-морду
 // (ADR-016, задача 4.2): только память, рестарт бэкенда отзывает все билеты.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.AgentTicketService>();

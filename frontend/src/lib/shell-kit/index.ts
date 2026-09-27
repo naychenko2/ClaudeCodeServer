@@ -149,6 +149,10 @@ export { notesPanels, zoneOf } from '../../pages/workspace/panelStackState';
 // композеру от владельца режима поля ввода
 export { requestStrip, releaseStrip, notifyComposer } from '../composerStrips';
 
+// ─── chatFollow ──────────────────────────────────────────────────────────────
+// Запуск по действию человека прокручивает ленту чата вниз, как своё сообщение
+export { followChat } from '../chatFollow';
+
 // ─── signalr ─────────────────────────────────────────────────────────────────
 export { onMessage, onReconnected } from '../signalr';
 

@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react';
 import type { ChatItem } from '../types';
+import { onChatFollow } from '../lib/chatFollow';
 
 // Позиция чтения живёт ровно один reload: пишется только при выгрузке страницы
 // (pagehide), в sessionStorage (умирает вместе с вкладкой) и потребляется первым же
@@ -209,6 +210,16 @@ export function useChatScroll(sessionId: string, items: ChatItem[], isHistoryLoa
     ro.observe(content);
     return () => ro.disconnect();
   }, [syncScrollState, applyRestore]);
+
+  // Запуск из подсистемы по действию человека (генерация картинки) — как своё сообщение:
+  // прыгаем вниз и прилипаем, дальше рост ленты держит низ, пока жест не отклеит
+  useEffect(() => onChatFollow(sessionId, () => {
+    atBottomRef.current = true;
+    pendingRestoreRef.current = null;
+    setShowScrollDown(false);
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }), [sessionId]);
 
   const handleMessagesScroll = syncScrollState;
 

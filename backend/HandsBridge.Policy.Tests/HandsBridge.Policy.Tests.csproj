@@ -11,7 +11,23 @@
 
   <ItemGroup>
     <ProjectReference Include="..\HandsBridge.Policy\HandsBridge.Policy.csproj" />
+    <!-- Мост нужен рантайм-тестам гейта (HandsBridgeGateRuntimeTests): TFM windows сюда не
+         подключить, поэтому только порядок сборки, а сборку грузим рефлексией из hands-bridge/ -->
+    <ProjectReference Include="..\HandsBridge\HandsBridge.csproj" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" Private="false" />
   </ItemGroup>
+
+  <Target Name="CopyHandsBridgeOutput" AfterTargets="Build">
+    <MSBuild Projects="..\HandsBridge\HandsBridge.csproj" Targets="GetTargetPath" Properties="Configuration=$(Configuration)">
+      <Output TaskParameter="TargetOutputs" PropertyName="_HandsBridgeDll" />
+    </MSBuild>
+    <PropertyGroup>
+      <_HandsBridgeDir>$([System.IO.Path]::GetDirectoryName('$(_HandsBridgeDll)'))</_HandsBridgeDir>
+    </PropertyGroup>
+    <ItemGroup>
+      <_HandsBridgeFiles Include="$(_HandsBridgeDir)/*.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_HandsBridgeFiles)" DestinationFolder="$(OutDir)hands-bridge" SkipUnchangedFiles="true" />
+  </Target>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />

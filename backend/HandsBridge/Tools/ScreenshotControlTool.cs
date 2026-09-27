@@ -85,7 +85,7 @@ public static partial class ScreenshotControlTool
         [DefaultValue(false)] bool includeImage,
         CancellationToken cancellationToken)
     {
-        var gate = HandsGate.Policy.CheckScreenshot(action, target, windowHandle, outputMode);
+        var gate = HandsGate.Policy.CheckScreenshot(action, target, windowHandle, outputMode, outputPath);
         if (!gate.Allowed)
         {
             return HandsGate.Deny(HandsTools.ScreenshotControl, gate);

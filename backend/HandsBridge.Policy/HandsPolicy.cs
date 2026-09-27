@@ -187,10 +187,11 @@ public sealed class HandsPolicy(IHandsWindowSystem windows)
 
     /// <summary>
     /// <c>screenshot_control</c>: снимок — только <c>target='window'</c> своего окна и только в
-    /// ответ (режим <c>file</c> пишет по произвольному пути машины). Экран, монитор, область и
-    /// все мониторы — отказ. Список мониторов пикселей не несёт и разрешён.
+    /// ответ (режим <c>file</c> пишет по произвольному пути машины). <c>outputPath</c> отвергается
+    /// при любом режиме: снимок с разметкой пишет по нему файл и в режиме <c>inline</c>. Экран,
+    /// монитор, область и все мониторы — отказ. Список мониторов пикселей не несёт и разрешён.
     /// </summary>
-    public HandsDecision CheckScreenshot(string? action, string? target, string? windowHandle, string? outputMode)
+    public HandsDecision CheckScreenshot(string? action, string? target, string? windowHandle, string? outputMode, string? outputPath)
     {
         if (string.Equals(action, "list_monitors", StringComparison.OrdinalIgnoreCase))
             return HandsDecision.Allow;
@@ -205,6 +206,9 @@ public sealed class HandsPolicy(IHandsWindowSystem windows)
 
         if (!string.IsNullOrWhiteSpace(outputMode) && !string.Equals(outputMode, "inline", StringComparison.OrdinalIgnoreCase))
             return HandsDecision.Deny("Only outputMode='inline' is allowed: screenshots are not written to disk.");
+
+        if (!string.IsNullOrEmpty(outputPath))
+            return HandsDecision.Deny("outputPath is not allowed: screenshots are not written to disk. Omit it.");
 
         if (string.IsNullOrWhiteSpace(windowHandle))
             return HandsDecision.Deny($"target='window' requires windowHandle of your own window. {UseOwnWindow}");

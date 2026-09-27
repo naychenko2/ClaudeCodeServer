@@ -49,6 +49,8 @@ public class HandsLaunchTests
     [InlineData(@"C:\Windows\System32\cmd.exe")]
     [InlineData(@"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe")]
     [InlineData(@"C:\Program Files\PowerShell\7\pwsh.exe")]
+    [InlineData(@"C:\Program Files\PowerShell\7-preview\pwsh-preview.exe")]
+    [InlineData(@"C:\Program Files\PowerShell\7-preview\pwsh-7.4-preview.exe")]
     [InlineData(@"C:\Windows\System32\wscript.exe")]
     [InlineData(@"C:\Windows\System32\cscript.exe")]
     [InlineData(@"C:\Windows\System32\mshta.exe")]

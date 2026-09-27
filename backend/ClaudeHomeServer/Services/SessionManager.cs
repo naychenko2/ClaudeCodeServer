@@ -2001,12 +2001,16 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // заменяется, всё остальное — включая незнакомые модели и «preset:{id}» — остаётся как есть.
     // Возвращает число изменённых чатов; 0 — стор на диск не переписывается.
     // Идёт через живой реестр, а не файл: иначе первый же SaveSessions вернул бы старые id.
-    public int RemapModels(IReadOnlyDictionary<string, string> map)
+    public int RemapModels(IReadOnlyDictionary<string, string> map) =>
+        RemapModels(id => map.TryGetValue(id, out var next) ? next : null);
+
+    // То же с произвольным сведением: map(id) → новое значение или null (не менять).
+    public int RemapModels(Func<string, string?> map)
     {
         var changed = 0;
         foreach (var info in _sessions.Values.Select(e => e.Info))
         {
-            if (info.Model is null || !map.TryGetValue(info.Model.Trim(), out var next)) continue;
+            if (info.Model is null || map(info.Model.Trim()) is not { } next || next == info.Model) continue;
             info.Model = next;
             changed++;
         }
@@ -2044,8 +2048,10 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // Подставляется, только когда модель НЕ задана явно и это НЕ resume: у транскрипта
     // resumed-сессии уже зафиксированы своя модель и провайдер, и подмена здесь сменила бы
     // провайдер и упёрлась в guard смены провайдера (400).
+    // Родной Claude сводится к семейству и тут: модель чата — точка записи.
     private string? ResolveDefaultModel(string usageKey, string? model, string? resumeSessionId, string? ownerId) =>
-        !string.IsNullOrEmpty(resumeSessionId) ? model : _assignments.Resolve(usageKey, model, ownerId);
+        _llmProviders.CanonicalizeModel(
+            !string.IsNullOrEmpty(resumeSessionId) ? model : _assignments.Resolve(usageKey, model, ownerId));
 
     // Место применения по признакам сессии — тот же порядок, что у ClaudeSession.UsageKey:
     // исполнитель задач специфичнее персоны, персона специфичнее обычного чата.
@@ -2475,7 +2481,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         if (GetOwned(sessionId, ownerId) is null || !_sessions.TryGetValue(sessionId, out var entry))
             throw new KeyNotFoundException("Чат не найден");
 
-        var newModel = string.IsNullOrWhiteSpace(model) ? null : model.Trim();
+        var newModel = _llmProviders.CanonicalizeModel(string.IsNullOrWhiteSpace(model) ? null : model.Trim());
 
         var target = _llmProviders.ResolveByModel(newModel);
         // Десктопный чат стороннему вендору не отдаём (ADR-008): в его транскрипте оседают
@@ -5949,7 +5955,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
         if (model is not null)
         {
-            var newModel = string.IsNullOrWhiteSpace(model) ? null : model.Trim();
+            // Родной Claude храним семейством (opus/fable…): версию выбирает CLI, окно — сервер
+            var newModel = _llmProviders.CanonicalizeModel(string.IsNullOrWhiteSpace(model) ? null : model.Trim());
             // Провайдера резолвим по ЭФФЕКТИВНЫМ моделям: пустая означает «по назначению места»,
             // а назначение может указывать на модель стороннего провайдера. По сырому null
             // возврат glm-чата к «По умолчанию» (при назначении на glm) выглядел бы как переезд

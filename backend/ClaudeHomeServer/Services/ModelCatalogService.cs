@@ -23,21 +23,22 @@ public class ModelCatalogService(LlmProviderRegistry providers, IHttpClientFacto
     private readonly bool _queryProviderApis = config.GetValue("ModelCatalog:QueryProviderApis", true);
 
     // IsCurated=false — модель обнаружена опросом API провайдера, без ручной карточки
-    // (нет описания/цен); UI может свернуть такие в «другие модели»
+    // (нет описания/цен); UI может свернуть такие в «другие модели».
+    // ResolvedVersion — у Claude: во что CLI сейчас резолвит семейство («Opus 5.5»), только
+    // для подписи; в Value версии нет никогда (храним семейство). null — CLI не сказал.
     public record ModelInfo(string Value, string DisplayName, string? Description,
-        string Provider = "claude", int? ContextWindow = null, bool IsCurated = true);
+        string Provider = "claude", int? ContextWindow = null, bool IsCurated = true,
+        string? ResolvedVersion = null);
 
     private static readonly TimeSpan CacheTtl = TimeSpan.FromHours(6);
     private static readonly TimeSpan RetryTtl = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan QueryTimeout = TimeSpan.FromSeconds(60);
 
-    // Алиасы вместо конкретных версий — не протухают при выходе новых моделей
+    // Семейства вместо конкретных версий — не протухают при выходе новых моделей
     private static readonly List<ModelInfo> Fallback =
     [
-        new("default", "Default", null),
-        new("opus", "Opus", null),
-        new("sonnet", "Sonnet", null),
-        new("haiku", "Haiku", null),
+        new(LlmProviderRegistry.DefaultClaudeModel, "Default", null),
+        .. ClaudeModelFamily.All.Select(f => new ModelInfo(f.Alias, f.DisplayName, null)),
     ];
 
     private readonly SemaphoreSlim _lock = new(1, 1);
@@ -280,58 +281,65 @@ public class ModelCatalogService(LlmProviderRegistry providers, IHttpClientFacto
                 modelsEl.ValueKind != JsonValueKind.Array)
                 return null;
 
+            // Каталог CLI отдаёт смесь алиасов и версионных id («opus», «claude-fable-5-1[1m]»),
+            // и выбор версионного пункта прибивал бы чат к версии. Сводим каждую запись к
+            // семейству: value — алиас семейства, подпись — имя семейства, версия — отдельным
+            // полем для подписи. Дубли по семейству схлопываются, default остаётся как есть,
+            // записи вне известных семейств (opusplan, best…) в список не попадают.
             var result = new List<ModelInfo>();
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var m in modelsEl.EnumerateArray())
             {
                 var value = m.TryGetProperty("value", out var v) ? v.GetString() : null;
                 if (string.IsNullOrWhiteSpace(value)) continue;
-                // Тир-алиас с окном (opus[1m]) и базовый алиас (opus) — две разные позиции:
-                // способность пула обслужить окно проверяется в рантайме
-                // (ClaudeSubscriptionPool.CanServeWindow1M), поэтому каталог отдаёт обе;
-                // дедуп ловит лишь точные коллизии value.
-                if (!seen.Add(value)) continue;
                 var displayName = m.TryGetProperty("displayName", out var d) ? d.GetString() : null;
                 var description = m.TryGetProperty("description", out var ds) ? ds.GetString() : null;
-                result.Add(new ModelInfo(value, displayName ?? value, description));
+
+                string key, label;
+                if (value.Trim().Equals(LlmProviderRegistry.DefaultClaudeModel, StringComparison.OrdinalIgnoreCase))
+                {
+                    key = LlmProviderRegistry.DefaultClaudeModel;
+                    label = displayName ?? "Default";
+                }
+                else if (ClaudeModelFamily.Resolve(value) is { } family)
+                {
+                    key = family.Alias;
+                    label = family.DisplayName;
+                }
+                else continue;
+
+                var version = ResolvedVersionOf(description);
+                var idx = result.FindIndex(r => r.Value == key);
+                if (idx < 0)
+                    result.Add(new ModelInfo(key, label, description, ResolvedVersion: version));
+                else if (result[idx].ResolvedVersion is null && version is not null)
+                    result[idx] = result[idx] with { ResolvedVersion = version };
             }
-            result = CollapseSameLabel(result);
             return result.Count > 0 ? result : null;
         }
         catch (JsonException) { return null; }
         catch (KeyNotFoundException) { return null; }
     }
 
-    // Одинаковая ПОДПИСЬ у разных value — это дубль на экране: в списке две строки «Fable»,
-    // различить которые нельзя (у Opus подписи CLI разводит сам — «Opus» и «Opus (1M context)»,
-    // такие записи остаются обе). Из одноимённых оставляем ОДНУ, предпочитая алиас без номера
-    // версии («fable[1m]» перед «claude-fable-5-1»): алиасы не протухают с выходом следующей
-    // версии модели, а суффикс окна алиасу не мешает.
-    private static List<ModelInfo> CollapseSameLabel(List<ModelInfo> models)
-    {
-        var byLabel = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        var kept = new List<ModelInfo>();
-        foreach (var m in models)
-        {
-            var label = m.DisplayName.Trim();
-            if (!byLabel.TryGetValue(label, out var idx))
-            {
-                byLabel[label] = kept.Count;
-                kept.Add(m);
-                continue;
-            }
-            // Занятое место уступается только версионно-нейтральному алиасу
-            if (IsVersionlessAlias(m.Value) && !IsVersionlessAlias(kept[idx].Value))
-                kept[idx] = m;
-        }
-        return kept;
-    }
+    // Версия, в которую CLI резолвит пункт, — из описания: «Opus 5.5 · Best for…» у семейства,
+    // «Use the default model (currently Opus 5.5) · …» у default. Берётся только «Семейство
+    // номер» известного семейства; иная форма описания — null (подпись просто без версии).
+    private static readonly System.Text.RegularExpressions.Regex VersionPattern = new(
+        @"^(?<name>[A-Za-z]+)\s+(?<ver>\d+(?:\.\d+)*)\b",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
-    // Версионно-нейтральный алиас — value без номера версии; суффикс окна («[1m]») номером
-    // не считается и снимается перед проверкой.
-    private static bool IsVersionlessAlias(string value)
+    private static readonly System.Text.RegularExpressions.Regex CurrentlyPattern = new(
+        @"\(currently\s+(?<inner>[^)]+)\)",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant
+        | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    internal static string? ResolvedVersionOf(string? description)
     {
-        var bare = value.EndsWith("[1m]", StringComparison.OrdinalIgnoreCase) ? value[..^4] : value;
-        return !bare.Any(char.IsDigit);
+        if (string.IsNullOrWhiteSpace(description)) return null;
+        var head = description.Split(" · ")[0].Trim();
+        if (CurrentlyPattern.Match(head) is { Success: true } cur) head = cur.Groups["inner"].Value.Trim();
+        var match = VersionPattern.Match(head);
+        if (!match.Success) return null;
+        var family = ClaudeModelFamily.FromAlias(match.Groups["name"].Value);
+        return family is null ? null : $"{family.DisplayName} {match.Groups["ver"].Value}";
     }
 }

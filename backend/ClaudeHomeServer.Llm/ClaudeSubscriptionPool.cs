@@ -306,7 +306,7 @@ public class ClaudeSubscriptionPool
     public bool IsPairUsable(string key, string? model)
         => SupportsModel(key, model) && !IsModelUnavailable(key, model);
 
-    /// <summary>Может ли пул обслужить тир-алиас с окном 1M прямо сейчас?</summary>
+    /// <summary>Может ли пул обслужить алиас семейства с окном 1M прямо сейчас?</summary>
     /// Не тир-алиас (полный id, модель стороннего провайдера, обычный алиас) — вопрос не к пулу,
     /// true. Пул пуст (локальный Claude, default Supports1M=true) — тоже true. Иначе: есть живой
     /// (не исчерпанный, не auth-dead) аккаунт, чей ПЛАН тянет 1M.
@@ -324,6 +324,22 @@ public class ClaudeSubscriptionPool
         if (!LlmProviderRegistry.IsClaudeTierWindowAlias(model)) return true;
         return _subscriptions.Count == 0
             || AllKeys().Any(k => !IsExhausted(k) && !IsAuthDead(k) && SupportsModel(k, model));
+    }
+
+    /// <summary>Модель, которая уйдёт в --model: семейство + окно 1M, если его можно получить.</summary>
+    /// Храним только семейство, окно решает сервер при запуске: суффикс [1m] дописывается, если
+    /// семейство его поддерживает (ClaudeModelFamily.Supports1M) И подписка хода тянет окно. Ключ
+    /// подписки известен (ход чата на аккаунте пула) — решает её план; не известен или вне пула
+    /// (основной аккаунт, фон до Pick) — CanServeWindow1M по всему пулу, тогда Pick по модели с
+    /// окном сам выберет аккаунт, который его тянет. Алиас с суффиксом из старых данных приводится
+    /// к тем же правилам (срезается, если окна нет). Полные id и сторонние модели — как есть.
+    public string? LaunchModel(string? model, string? subKey = null)
+    {
+        if (ClaudeModelFamily.FromAliasOrWindowAlias(model) is not { } family) return model;
+        if (!family.Supports1M) return family.Alias;
+        var sub = subKey is null ? null : _subscriptions.FirstOrDefault(s => s.Key == subKey);
+        var can1M = sub is not null ? sub.Supports1M : CanServeWindow1M(family.WindowAlias);
+        return can1M ? family.WindowAlias : family.Alias;
     }
 
     /// <summary>Аккаунт «в ротации» для новых чатов.</summary>

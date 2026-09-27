@@ -52,6 +52,10 @@ public class LlmProviderRegistryTests
     [InlineData("opus[1m]")]
     [InlineData("sonnet[1m]")]
     [InlineData("haiku[1m]")]
+    [InlineData("fable")]
+    [InlineData("fable[1m]")]
+    [InlineData("claude-opus-4-8")]
+    [InlineData("claude-fable-5-1[1m]")]
     public void BuildOAuthCliEnv_ТирАлиас_БезEnvМодели(string alias)
     {
         var env = Create().BuildOAuthCliEnv("second", "tok-123", model: alias)!;
@@ -60,11 +64,12 @@ public class LlmProviderRegistryTests
         env.Should().NotContainKey("ANTHROPIC_DEFAULT_OPUS_MODEL");
     }
 
-    // Полные id (в т.ч. с окном claude-fable-5[1m]) и модели сторонних провайдеров
-    // (glm-5.2[1m]) — суффикс разбирает сам CLI, env-дефолты им нужны
+    // Id вне известных семейств (claude-mythos-*) и модели сторонних провайдеров
+    // (glm-5.2[1m]) — суффикс разбирает сам CLI, env-дефолты им нужны. Версионные id
+    // семейств (claude-opus-4-8) сюда не относятся — это семейство, env им не ставится.
     [Theory]
-    [InlineData("claude-opus-4-8")]
-    [InlineData("claude-fable-5[1m]")]
+    [InlineData("claude-mythos-5")]
+    [InlineData("claude-mythos-5[1m]")]
     [InlineData("glm-5.2[1m]")]
     public void BuildOAuthCliEnv_ПолныйId_СтавитEnvМодель(string model)
     {
@@ -118,6 +123,7 @@ public class LlmProviderRegistryTests
     [InlineData("OPUS[1M]", "opus")]
     [InlineData("sonnet[1m]", "sonnet")]
     [InlineData("haiku[1m]", "haiku")]
+    [InlineData("fable[1m]", "fable")]
     // Базовые алиасы и обычные модели — без изменений
     [InlineData("opus", "opus")]
     [InlineData("claude-sonnet-5", "claude-sonnet-5")]

@@ -77,8 +77,10 @@ public class PersonaAgentFileGeneratorTests
         PersonaAgentFileSync.ModelAliasFor(providers, "claude-sonnet-5").Should().Be("sonnet");
         PersonaAgentFileSync.ModelAliasFor(providers, "claude-haiku-4-5-20251001").Should().Be("haiku");
         PersonaAgentFileSync.ModelAliasFor(providers, null).Should().BeNull();
-        // Незнакомый тир Claude — не рискуем несуществующим алиасом
-        PersonaAgentFileSync.ModelAliasFor(providers, "claude-fable-5").Should().BeNull();
+        // Fable — такое же семейство: алиас fable CLI знает, сторонним его маппит BuildCliEnv
+        PersonaAgentFileSync.ModelAliasFor(providers, "claude-fable-5").Should().Be("fable");
+        // Незнакомое семейство Claude — не рискуем несуществующим алиасом
+        PersonaAgentFileSync.ModelAliasFor(providers, "claude-mythos-5").Should().BeNull();
         PersonaAgentFileSync.ModelAliasFor(providers, "deepseek-chat").Should().BeNull();
         // Сторонняя модель с «sonnet» в имени — гейт по провайдеру, а не по подстроке
         PersonaAgentFileSync.ModelAliasFor(providers, "deepseek-sonnet-x").Should().BeNull();

@@ -478,6 +478,9 @@ builder.Services.AddGatedHostedService<PersonaProjectBindingsMigration>(builder.
 // gated hosted: в Testing не стартует, повторный проход отсекается marker-файлом в data.
 // Живёт в спине рядом с прочими миграциями сторов, а не в вертикали Llm (см. шапку файла).
 builder.Services.AddGatedHostedService<GlmModelAliasMigration>(builder.Configuration);
+// Разовое сведение моделей родного Claude к семействам (opus/fable/sonnet/haiku) во всех сторах —
+// gated hosted, повторный проход отсекается маркером model-families-migration-v1.done в data.
+builder.Services.AddGatedHostedService<ClaudeModelFamilyMigration>(builder.Configuration);
 // Чаты картинки v2 уходят в архив (ADR-019, решение 2): идемпотентно по маркеру
 // SessionImageChat.MigratedAt, поэтому и восстановленный старый бэкап мигрирует при старте
 builder.Services.AddGatedHostedService<ImageChatV3Migration>(builder.Configuration);
@@ -794,6 +797,7 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDeviceConnectio
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DesktopAccessGate>();
 // Канал исполнения локальных проектов (ADR-016): шов IDeviceExecChannel (Core) — форвард
 // на тот же синглтон, который обслуживает WebSocket /api/devices/exec и Hello хаба.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IHostCliVersion, ClaudeHomeServer.Services.Execution.HostCliVersion>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DeviceHarnessPolicy>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDeviceExecOpenSender,
     ClaudeHomeServer.Services.Desktop.DeviceHubExecOpenSender>();

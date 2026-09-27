@@ -469,6 +469,51 @@ SHA-256 и сравнивается с `ClaudeSession._lastTurnRecallHash`; со
 `Exited` шлётся **не из `result`**, а по фактической смерти процесса — иначе ход, чей CLI
 умер без финального события, остался бы висеть.
 
+## Модели родного Claude: храним семейство, версию выбирает CLI, окно — сервер
+
+Во всех сторах (чаты, персоны, слоты, пресеты-цепочки, маршруты мест) модель родного Claude
+хранится **только семейством**: `opus | fable | sonnet | haiku` (плюс `default`/пусто — решает
+CLI). Ни номера версии, ни суффикса `[1m]` в сохранённом значении нет.
+
+- **Версию выбирает CLI.** Алиас семейства CLI резолвит в последнюю версию сам (`opus` →
+  claude-opus-5-5, `fable` → claude-fable-5-1). Каталог CLI (`initialize → models`) отдаёт
+  смесь алиасов и версионных id (в 2.1.283 Fable приходит как `claude-fable-5-1[1m]`), и выбор
+  версионного пункта раньше прибивал чат к версии. `ModelCatalogService.TryParseModels` сводит
+  записи к семействам: `value` — семейство, подпись — имя семейства, версия — отдельным полем
+  `resolvedVersion` («Opus 5.5», из описания CLI) только для показа. Контракт `/api/models`:
+  у Claude `value ∈ {default, opus, fable, sonnet, haiku}`.
+- **Окно 1M дописывает сервер при запуске.** `ClaudeSubscriptionPool.LaunchModel` добавляет
+  `[1m]`, если семейство его поддерживает (`ClaudeModelFamily.Supports1M`: opus, fable,
+  sonnet — да, haiku — нет) И подписка хода тянет окно: ход чата — по плану его аккаунта
+  (`Session.Provider`), фон — по пулу (`CanServeWindow1M`, затем `Pick` по модели с окном).
+  Pro без 1M получает голое семейство и объявленное окно 200K
+  (`CLAUDE_CODE_MAX_CONTEXT_TOKENS` считается от того, что реально ушло в `--model`), CLI
+  сожмёт контекст вовремя. Без пула (тесты, сборка без подписок) окно не дописывается.
+  Проверено по реестру моделей CLI 2.1.283: fable-5-1, opus-5-5, sonnet-5 объявлены с окном
+  1e6 (`native_1m`), haiku-4-5 — 200K; суффикс к fable CLI принимает (`fable[1m]` есть в его
+  списке алиасов).
+- **Семейство не уходит в `ANTHROPIC_MODEL` никогда** — ни голое, ни с окном: из env алиас
+  уезжает в API сырым id и валит ход «There's an issue with the selected model». Сторонним
+  провайдерам `BuildCliEnv` маппит алиасы пина сабагента env-переменными, включая
+  `ANTHROPIC_DEFAULT_FABLE_MODEL` (fable — сильный тир наравне с opus, маппится на основную
+  модель провайдера).
+- **Единственный список семейств — `ClaudeModelFamily`** (`ClaudeHomeServer.Llm`).
+  `IsClaudeTierAlias`, `IsClaudeTierWindowAlias`/`StripClaudeWindowAlias`, `ModelTierAlias`,
+  `IsNativeClaudeModel` и `ModelCatalogService.Fallback` — его делегаты; своих списков
+  алиасов в коде не заводить. Новое семейство — одна строка в `ClaudeModelFamily.All`.
+- **Сведение на записи** — `LlmProviderRegistry.CanonicalizeModel`: сперва `ResolveByModel`,
+  поэтому модель стороннего провайдера (даже с id вида `claude-*`) не трогается. Его зовут
+  сторы на записи (`SessionManager`, `PersonaManager`, `SpecialtySettingsStore`,
+  `AppSettingsService`, `UserStore`, `LocalActionOverridesStore`); осевшие значения свела
+  разовая миграция `ClaudeModelFamilyMigration` (маркер `model-families-migration-v1.done`,
+  снимок `*.bak-*` каждого стора перед записью). Формат файлов не менялся — поменялись только
+  значения строк, поэтому `BackupSchema.Version` не инкрементирован: старый архив
+  восстанавливается как есть, а миграция сводит его значения на следующем старте.
+
+Версия CLI на устройствах локальных проектов идёт за хостом: `DeviceHarnessPolicy` требует
+версию `claude --version` сервера (`ClaudeCliVersion`, Core), а `DeviceAgent:CliVersion` —
+только аварийный пин поверх неё.
+
 ## Пул подписок Claude и опрос usage
 
 `ClaudeSubscriptionPool` (секция `ClaudeSubscriptions`) — несколько аккаунтов Claude на

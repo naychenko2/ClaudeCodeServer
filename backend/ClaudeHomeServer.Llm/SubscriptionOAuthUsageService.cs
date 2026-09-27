@@ -405,38 +405,13 @@ public sealed partial class SubscriptionOAuthUsageService(
     internal void OverrideUserAgent(string ua) => _userAgent = ua;
 
     // User-Agent claude-code/<версия установленного CLI> — обязателен (см. FallbackCliVersion).
-    // Версию узнаём один раз за жизнь процесса через `claude --version`.
+    // Версию узнаём один раз за жизнь процесса (ClaudeCliVersion).
     private async Task<string> ResolveUserAgentAsync(CancellationToken ct)
     {
         if (_userAgent is not null) return _userAgent;
-        var version = await TryGetCliVersionAsync(ct) ?? FallbackCliVersion;
+        var version = await ClaudeHomeServer.Services.Execution.ClaudeCliVersion.GetAsync().WaitAsync(ct) ?? FallbackCliVersion;
         return _userAgent = $"claude-code/{version}";
     }
-
-    private static async Task<string?> TryGetCliVersionAsync(CancellationToken ct)
-    {
-        try
-        {
-            var psi = new ProcessStartInfo(ClaudeHomeServer.Services.Execution.ClaudeCliLocator.FindClaudeExecutable())
-            {
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true,
-            };
-            psi.ArgumentList.Add("--version");
-            using var p = Process.Start(psi);
-            if (p is null) return null;
-            var output = await p.StandardOutput.ReadToEndAsync(ct);
-            await p.WaitForExitAsync(ct);
-            var m = CliVersionRegex().Match(output);
-            return m.Success ? m.Value : null;
-        }
-        catch { return null; }
-    }
-
-    [GeneratedRegex(@"\d+\.\d+\.\d+")]
-    private static partial Regex CliVersionRegex();
 
     // Динамический перебор окон ответа: любое свойство-объект с utilization/resets_at —
     // окно лимита (five_hour, seven_day, per-model seven_day_opus/sonnet/fable и любые

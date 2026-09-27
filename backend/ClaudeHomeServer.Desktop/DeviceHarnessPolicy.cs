@@ -1,29 +1,32 @@
+using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Protocol;
 
 namespace ClaudeHomeServer.Services.Desktop;
 
 /// <summary>
 /// Требуемая версия управляемой копии CLI на устройствах (ADR-016 §3 «Управляемая копия
-/// CLI»). Источник — одна настройка сервера <see cref="CliVersionKey"/>, и читается она
-/// только здесь; значение берётся вживую, смена версии не требует рестарта.
+/// CLI»). По умолчанию устройства идут за хостом — требуется та версия CLI, что стоит на
+/// сервере (<see cref="IHostCliVersion"/>): прибитая в конфиге версия отставала от хоста при
+/// каждом обновлении CLI. Настройка <see cref="CliVersionKey"/> — только аварийный пин поверх
+/// версии хоста; читается она только здесь и вживую, смена не требует рестарта.
 ///
 /// Вердикт «харнес готов» не хранится: он считается сверкой объявленной агентом версии с
 /// требуемой в момент вопроса. Сравнение точное — «не той версии» значит любую другую, в
 /// том числе более новую: сервер жёстко зависит от поведения CLI.
 /// </summary>
-public sealed class DeviceHarnessPolicy(IConfiguration config)
+public sealed class DeviceHarnessPolicy(IConfiguration config, IHostCliVersion? hostCli = null)
 {
     public const string CliVersionKey = "DeviceAgent:CliVersion";
 
     public const string NotReadyPrefix = DeviceAgentCompatibility.NotReadyPrefix;
 
-    public string? RequiredCliVersion => Normalize(config[CliVersionKey]);
+    public string? RequiredCliVersion => Normalize(config[CliVersionKey]) ?? Normalize(hostCli?.Current);
 
     public (bool Ready, string? Problem) Evaluate(string? declaredCliVersion)
     {
         var required = RequiredCliVersion;
         if (required is null)
-            return (false, $"{NotReadyPrefix}: на сервере не задана версия CLI для устройств ({CliVersionKey})");
+            return (false, $"{NotReadyPrefix}: на сервере не определена версия CLI для устройств: CLI хоста не ответил, пин {CliVersionKey} не задан");
 
         var declared = Normalize(declaredCliVersion);
         if (declared is null)

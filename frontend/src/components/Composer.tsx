@@ -1677,17 +1677,9 @@ export function Composer({
     </div>
   );
 
-  const inputArea = talkActive ? loopArea : isListening ? (
-    <div style={{ ...dotsStyle, gap: 10 }}>
-      <span style={{ width: 9, height: 9, borderRadius: '50%', background: C.danger, animation: 'pulsedot 1s ease-in-out infinite', flexShrink: 0 }} />
-      <span style={{ fontSize: 13, color: C.dangerText, fontWeight: 600, fontFamily: FONT.mono, flexShrink: 0, minWidth: 34 }}>{fmtRecTime(recSeconds)}</span>
-      <Waveform />
-    </div>
-  ) : (
-    // Обёртка нужна ghost-слою подсказки: он позиционируется поверх ПУСТОГО textarea
-    // (подсказка видна только при пустом поле, совмещать с текстом юзера не нужно)
-    <div style={{ position: 'relative', flex: 1, minWidth: 0, width: isMobile ? '100%' : undefined, display: 'flex', alignItems: 'center' }}>
-      {slotModes.length > 0 && (
+  // Сегмент режимов поля: в «Чате» — слева от поля, в режиме подсистемы («Картинка») —
+  // в нижней строке действий: поле тогда на всю ширину, три строки как в прототипе полос
+  const modesSeg = slotModes.length > 0 && (
         // Сегмент «Чат | …» слева поля. По макету (.mswitch) это радио-группа из
         // двух кнопок — она появляется только при выбранной картинке, иначе первая
         // кнопка «Чат» рисуется одна. Здесь slotModes.length > 0 уже отфильтровано
@@ -1706,7 +1698,18 @@ export function Composer({
             </IconButton>
           ))}
         </div>
-      )}
+      );
+  const inputArea = talkActive ? loopArea : isListening ? (
+    <div style={{ ...dotsStyle, gap: 10 }}>
+      <span style={{ width: 9, height: 9, borderRadius: '50%', background: C.danger, animation: 'pulsedot 1s ease-in-out infinite', flexShrink: 0 }} />
+      <span style={{ fontSize: 13, color: C.dangerText, fontWeight: 600, fontFamily: FONT.mono, flexShrink: 0, minWidth: 34 }}>{fmtRecTime(recSeconds)}</span>
+      <Waveform />
+    </div>
+  ) : (
+    // Обёртка нужна ghost-слою подсказки: он позиционируется поверх ПУСТОГО textarea
+    // (подсказка видна только при пустом поле, совмещать с текстом юзера не нужно)
+    <div style={{ position: 'relative', flex: 1, minWidth: 0, width: isMobile ? '100%' : undefined, display: 'flex', alignItems: 'center' }}>
+      {!activeMode && modesSeg}
       <textarea
         autoComplete="off"
         ref={textareaRef}
@@ -1733,7 +1736,7 @@ export function Composer({
           fontSize: isMobile ? 16 : 15, // 16px — чтобы iOS не зумил при фокусе
           color: C.textPrimary,
           background: 'transparent',
-          minHeight: 34,
+          minHeight: activeMode ? 78 : 34,
           maxHeight: 200,
           lineHeight: '1.5',
           padding: isMobile ? '6px 8px' : '6px 4px',
@@ -2522,15 +2525,23 @@ export function Composer({
             : isListening
               ? <>{cancelRecBtn}{confirmRecBtn}</>
               : activeMode
-                ? (
-                  <Button size="sm" pill variant="primary" disabled={!hasText || execBlocked} data-composer-send=""
-                    onClick={() => void handleSend()}>
-                    {activeMode.submitLabel ? activeMode.submitLabel(modeCtx) : <ArrowUp size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
-                  </Button>
-                )
+                ? null
                 : <>{phrasesButton}{micButton}{!canSend && !isGenerating && voiceButton ? voiceButton : sendButton}</>}
         </div>
       </div>
+      {/* Режим подсистемы: третья строка — сегмент режимов слева, запуск справа */}
+      {activeMode && !talkActive && !isListening && (
+        <div data-composer-mode-bar="" style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, padding: `0 ${SP.xxs}px ${SP.xxs}px` }}>
+          {modesSeg}
+          <span style={{ flex: 1 }} />
+          <span data-composer-send="" style={{ display: 'inline-flex', minWidth: 0, flexShrink: 1 }}>
+            <Button size="sm" pill variant="primary" disabled={!hasText || execBlocked}
+              onClick={() => void handleSend()} style={{ minWidth: 0 }}>
+              {activeMode.submitLabel ? activeMode.submitLabel(modeCtx) : <ArrowUp size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+            </Button>
+          </span>
+        </div>
+      )}
       </div>
     </div>
 

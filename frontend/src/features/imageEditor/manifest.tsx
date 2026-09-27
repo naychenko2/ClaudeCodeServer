@@ -19,6 +19,7 @@ import { imageMode } from './composer/imageMode';
 import { takeMarksAttachment } from './composer/marksAttachment';
 import { ImagesStrip, imagesStripStatus } from './strip/ImagesStrip';
 import { ThreadAnchor } from './thread/ThreadCard';
+import { LaunchAnchor } from './thread/VersionCards';
 import { recordKey, ThreadSysLine } from './thread/records';
 import { IMAGES_STRIP } from './thread/threadStore';
 
@@ -44,6 +45,8 @@ export const manifest: SubsystemManifest = {
       { name: 'image_file_moved', render: (ctx: ChatItemToolCtx) => <ImageFileMovedRow ctx={ctx} /> },
       // Нить основного чата (ADR-019 §3): якорь карточки-стопки и тихие строки module_record
       { name: recordKey('image_thread'), render: (ctx: ChatItemToolCtx) => <ThreadAnchor ctx={ctx} /> },
+      // Запуск ИИ в нить (изменение 27.09): строка запуска и карточка на каждый вариант
+      { name: recordKey('image_launch_versions'), render: (ctx: ChatItemToolCtx) => <LaunchAnchor ctx={ctx} /> },
       ...['image_launch', 'image_saved', 'image_stack_forked', 'image_focus'].map(t => (
         { name: recordKey(t), render: (ctx: ChatItemToolCtx) => <ThreadSysLine ctx={ctx} /> }
       )),
@@ -57,7 +60,7 @@ export const manifest: SubsystemManifest = {
           title: 'Картинки',
           icon: <ImageIcon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
           isAvailable: () => getFlag(FLAGS.imageEditor),
-          status: ({ sessionId }: { sessionId: string | null }) => imagesStripStatus(sessionId),
+          status: ({ projectId, sessionId }: { projectId: string; sessionId: string | null }) => imagesStripStatus(projectId, sessionId),
         },
       },
     ],

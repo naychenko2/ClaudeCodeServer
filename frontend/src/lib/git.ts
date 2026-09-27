@@ -5,6 +5,7 @@
 import { useSyncExternalStore } from 'react';
 import type { GitStatus, GitBranchInfo, GitLogEntry, GitStashEntry, GitRemoteInfo, ChangedBySession } from '../types';
 import { api, getGitSessionContext } from './api';
+import { plural } from './plural';
 import { joinUser, onFilesChanged, onGitStatusChanged, onReconnected } from './signalr';
 
 export interface GitProjectState {
@@ -485,6 +486,17 @@ export function workingDiffStat(status: GitStatus | null): { added: number; dele
   let added = 0, deleted = 0;
   for (const v of seen.values()) { added += v.added; deleted += v.deleted; }
   return { added, deleted, files: seen.size };
+}
+
+// Строка состояния git-полосы над композером и её пункта в меню переключателя полос:
+// есть что фиксировать → есть что публиковать → чисто (прототип полос, вариант C)
+export type GitStripTone = 'changes' | 'ahead' | 'clean';
+export function gitStripStatus(status: GitStatus | null, unpushed: number): { text: string; tone: GitStripTone } {
+  const files = workingDiffStat(status).files;
+  if (files > 0) return { text: `${files} ${plural(files, 'файл', 'файла', 'файлов')} изменено`, tone: 'changes' };
+  const ahead = (status?.ahead ?? 0) > 0 ? status!.ahead : unpushed;
+  if (ahead > 0) return { text: `${ahead} ${plural(ahead, 'коммит', 'коммита', 'коммитов')} к публикации`, tone: 'ahead' };
+  return { text: 'чисто, всё опубликовано', tone: 'clean' };
 }
 
 // Состояние git проекта (статус/история/ветки/busy/ошибка)

@@ -209,8 +209,10 @@ export interface ComposerStripCtx {
   projectId: string;
   sessionId: string | null;
   isMobile: boolean;
-  // Свёрнута ли полоса в строку 30 px (одно состояние на все полосы)
+  // Свёрнута ли полоса в строку 30 px — своё у каждой полосы каждого чата
   collapsed: boolean;
+  // Свернуть в строку / развернуть (кнопка ⌃ в полосе, клик по свёрнутой строке)
+  setCollapsed: (collapsed: boolean) => void;
   // Переключатель «Git ▾» от хоста: полоса ставит его на место своего заголовка
   switcher: ReactNode;
 }
@@ -219,7 +221,7 @@ export interface ComposerStripApi {
   icon: ReactNode;
   // false — полоса не предлагается (нет git, модуль недоступен в проекте)
   isAvailable?: (ctx: { projectId: string; sessionId: string | null }) => boolean;
-  // Строка состояния в меню переключателя: «feat/site-header · +42 −7», «Работаем с hero.png»
+  // Строка состояния в меню переключателя: «feat/site-header · 3 файла изменено», «Работаем с: hero.png · версия 2»
   status?: (ctx: { projectId: string; sessionId: string | null }) => ReactNode;
 }
 

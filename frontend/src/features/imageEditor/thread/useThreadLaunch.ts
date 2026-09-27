@@ -12,12 +12,14 @@ import {
 } from '../format';
 import { currentModel } from '../ProviderModelPicker';
 import { exportAnnotated, exportMask, hasAnnotationMark, hasMaskMark, marksToJson } from '../marks';
-import { quickPlan, quickUsesOwnModel, type LaunchAction, type LaunchPlan } from '../editorInputs';
+import { quickPlan, quickUsesOwnModel, samplesToJobInput, type LaunchAction, type LaunchPlan } from '../editorInputs';
 import { useQuote } from '../useQuote';
-import { loadCatalog, useCatalog } from './catalog';
+import { getCatalog, loadCatalog, useCatalog } from './catalog';
 import { effectiveSettings, getPrefs, setPrefs, usePrefs } from './prefs';
-import { getThreadMarks, mutate, setThreadMarks, useThreadStoreVersion } from './threadStore';
-import { threadsApi, type ImageThread, type ImageThreadSettings } from './threadsApi';
+import { activeStepOf } from './actions';
+import { currentVersion, isLegacyThread, originFile, versionHasImage, versionStep } from './model';
+import { getSamples, getThreadMarks, mutate, setThreadMarks, useThreadStoreVersion } from './threadStore';
+import { threadsApi, type ImageThread, type ImageThreadSettings, type ImageThreadVersion } from './threadsApi';
 
 // Картинка позиции нити: шаг — из рабочей папки редактора, исходник — файл проекта
 export function imageSrc(projectId: string, t: ImageThread, stepId: string | null): string | null {
@@ -25,13 +27,40 @@ export function imageSrc(projectId: string, t: ImageThread, stepId: string | nul
   return t.file ? appApi.files.fileUrl(projectId, t.file) : null;
 }
 
-export const threadHasImage = (t: ImageThread | null) => !!t && (!!t.currentStepId || !!t.file);
+// Картинка версии: её шаг или файл-исходник
+export function versionSrc(projectId: string, t: ImageThread, v: ImageThreadVersion): string | null {
+  const stepId = versionStep(t, v);
+  if (stepId) return imageEditorApi().stepUrl(projectId, stepId);
+  const file = v.id === 'origin' ? originFile(t) : null;
+  return file ? appApi.files.fileUrl(projectId, file) : null;
+}
+
+// Картинка, от которой пойдёт следующая правка
+export function activeSrc(projectId: string, t: ImageThread): string | null {
+  const v = isLegacyThread(t) ? null : currentVersion(t);
+  return v ? versionSrc(projectId, t, v) : imageSrc(projectId, t, t.currentStepId);
+}
+
+export function threadHasImage(t: ImageThread | null): boolean {
+  if (!t) return false;
+  const v = isLegacyThread(t) ? null : currentVersion(t);
+  return v ? versionHasImage(t, v) : !!t.currentStepId || !!t.file;
+}
 
 // Поставщик и модель по настройкам: модель не выбрана — умолчание админа у его поставщика
 function resolveModel(catalog: ImageEditCatalog | null, settings: ImageThreadSettings) {
   const pv = catalog ? effectiveProvider(catalog, settings.provider ?? 'settings') : null;
   const fallback = pv && pv.key === catalog?.default.provider ? catalog.default.model : AUTO_MODEL;
   return { pv, m: currentModel(pv, settings.model ?? fallback) };
+}
+
+// Поставщик, модель и ориентир цены без подписки — для строк вне рендера полосы
+// (меню переключателя полос): каталог берётся из кэша, котировки нет
+export function launchSummaryParts(projectId: string, thread: ImageThread | null) {
+  const settings = effectiveSettings(getPrefs(projectId), thread?.settings);
+  const { pv, m } = resolveModel(getCatalog(projectId), settings);
+  const price = m?.priceHint ? priceSum(m.priceHint.amount * settings.count, m.priceHint.unit, true) : null;
+  return { provider: pv?.label ?? null, model: m?.label ?? null, count: settings.count, price };
 }
 
 export function loadImage(src: string): Promise<HTMLImageElement> {
@@ -75,11 +104,18 @@ export async function launchThread(
     const q = await api.quote(projectId, {
       provider: pv.key, model: own ? AUTO_MODEL : m.id, mode: 'auto', op: plan.op, count: own ? 1 : settings.count,
       hasMask: withMask, hasAnnotations: withMarks && hasAnnotationMark(marks), removal: plan.removal,
-      references: 0, hasCharacter: !own && !!prefs.characterSlug, width: size?.w ?? null, height: size?.h ?? null,
+      references: own ? 0 : getSamples(projectId).length, hasCharacter: !own && !!prefs.characterSlug,
+      width: size?.w ?? null, height: size?.h ?? null,
     });
-    const stepId = thread.currentStepId;
-    const src = imageSrc(projectId, thread, stepId);
-    const source = stepId && src ? await fetch(src).then(r => r.blob()) : undefined;
+    const legacy = isLegacyThread(thread);
+    const version = legacy ? null : currentVersion(thread);
+    const stepId = activeStepOf(thread);
+    const src = activeSrc(projectId, thread);
+    // Байты картинки — всегда с фронта: сам сервер подставляет только шаг версии, а исходник
+    // без правок (файл проекта) по sourcePath не читает — тот лишь сторож пути и родословная
+    const source = src ? await fetch(src).then(r => r.blob()) : undefined;
+    const file = version ? (version.id === 'origin' ? originFile(thread) : null) : thread.file;
+    const samples = own ? { references: [], referencePaths: [] } : samplesToJobInput(getSamples(projectId));
     let mask: Blob | undefined;
     let annotated: Blob | undefined;
     if (src && size && withMask) mask = (await exportMask(marks, size.w, size.h)) ?? undefined;
@@ -90,12 +126,12 @@ export async function launchThread(
     await api.startJob(projectId, {
       quoteId: q.quoteId, prompt: plan.prompt,
       marks: withMarks && size ? marksToJson(marks, size.w, size.h) : undefined,
-      sourcePath: !stepId && thread.file ? thread.file : undefined,
-      source, mask, annotated,
+      sourcePath: !stepId && file ? file : undefined,
+      source, mask, annotated, ...samples,
       characterSlug: own ? undefined : prefs.characterSlug ?? undefined,
       matchSourceSize: settings.matchSourceSize,
       ...(plan.aspectRatio ? { aspectRatio: plan.aspectRatio } : null),
-      sessionId, threadId: thread.id, baseStepId: stepId ?? undefined,
+      sessionId, threadId: thread.id, baseStepId: stepId ?? undefined, versionId: version?.id,
     });
     // Пометки ушли с запуском
     if (withMarks || withMask) setThreadMarks(thread.id, [], null);
@@ -119,10 +155,11 @@ export function useThreadLaunch(projectId: string, sessionId: string | null, thr
   const hasAnnotations = hasImage && hasAnnotationMark(marks);
   const blocked = m ? modelBlockReason(m, hasImage, hasMask) : '';
   const count = settings.count;
+  const references = getSamples(projectId).length;
 
   const quoteReq: ImageEditQuoteRequest | null = pv && m && !blocked ? {
     provider: pv.key, model: m.id, mode: 'auto', op: pickOp(hasImage, hasMask), count,
-    hasMask, hasAnnotations, references: 0, hasCharacter: !!prefs.characterSlug,
+    hasMask, hasAnnotations, references, hasCharacter: !!prefs.characterSlug,
     width: size?.w ?? null, height: size?.h ?? null,
   } : null;
   const { quote, loading } = useQuote(api, projectId, quoteReq);

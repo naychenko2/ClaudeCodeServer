@@ -104,3 +104,22 @@ describe('стор полос', () => {
     expect(getActiveStrip('s1', ALL)).toBe('images');
   });
 });
+
+import {
+  collapsedStorageKey, isStripCollapsed, setStripCollapsed,
+} from './composerStrips';
+
+describe('свёрнутость полос (прототип полос, вариант C)', () => {
+  it('своя у каждой полосы чата', () => {
+    expect(collapsedStorageKey('s1', 'images')).not.toBe(collapsedStorageKey('s1', 'git'));
+    expect(collapsedStorageKey('s1', 'images')).not.toBe(collapsedStorageKey('s2', 'images'));
+  });
+
+  it('по умолчанию — флаг устройства (isMobile) и выбор живёт в localStorage', () => {
+    expect(isStripCollapsed('s1', 'images', true)).toBe(true);
+    expect(isStripCollapsed('s1', 'images', false)).toBe(false);
+    setStripCollapsed('s1', 'images', true);
+    expect(isStripCollapsed('s1', 'images', false)).toBe(true);
+    expect(isStripCollapsed('s1', 'git', false)).toBe(false);
+  });
+});

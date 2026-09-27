@@ -17,7 +17,7 @@ import { computeTodoBatches } from '../hooks/useSessionArtifacts';
 import { useChatScroll } from '../hooks/useChatScroll';
 import { useOnline } from '../hooks/useOnline';
 import { api, setGitSessionContext } from '../lib/api';
-import { ensureGit, loadUnpushedLog } from '../lib/git';
+import { ensureGit, getGitState, gitStripStatus, loadUnpushedLog } from '../lib/git';
 import { slugify } from '../lib/slug';
 import { parseWorkflowMeta } from '../lib/workflowMeta';
 import { detectTeamMechanic, buildTeamTurnText, DEFAULT_TEAM_SETTINGS, type TeamMechanicId } from '../features/team/teamMechanics';
@@ -2878,17 +2878,23 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             <ComposerStripHost projectId={project.id} sessionId={session.id} isMobile={isMobile === true}
               builtins={[{
                 name: 'git', order: 0,
-                render: ({ switcher }) => (
+                render: ({ switcher, collapsed, setCollapsed }) => (
                   // Заголовок-селектор полосы теперь живёт внутри самой полосы (ProjectGitBar),
                   // а не отдельной плашкой над ней — одна плашка с веткой и «Опубликовать»
                   <ProjectGitBar project={project} session={session} turnTree={turnTree} turnTreeLive={isWaiting}
-                    onCommitOwn={handleCommitOwn} onCommitAll={handleCommitAll} switcher={switcher} />
+                    onCommitOwn={handleCommitOwn} onCommitAll={handleCommitAll} switcher={switcher}
+                    collapsed={collapsed} onCollapsedChange={setCollapsed} />
                 ),
                 action: {
                   title: 'Git',
                   icon: <GitBranch size={14} strokeWidth={ICON_STROKE} />,
-                  // Правой панели «Изменения» на мобиле нет — git-полоса там не показывается
-                  isAvailable: () => !isMobile,
+                  // На телефоне полоса тоже есть (прототип полос): по умолчанию свёрнута в строку
+                  status: () => {
+                    const g = getGitState(project.id);
+                    if (!g.status?.isRepo) return null;
+                    const branch = session.worktreeBranch ?? g.status.branch ?? '—';
+                    return `${branch} · ${gitStripStatus(g.status, g.unpushed.length).text}`;
+                  },
                 },
               }]} />
           )}

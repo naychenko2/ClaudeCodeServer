@@ -39,6 +39,17 @@ public sealed class CodeGraphService : IDisposable
     // срезов провайдеров при инкременте (правка .tsx не должна заново гонять Roslyn по .cs).
     private readonly ConcurrentDictionary<string, Core.CodeGraph> _lastGraphs = new();
 
+    // Поколение графа per normalizedRootPath: Invalidate его двигает. Сборка, начатая в старом
+    // поколении, результат не пишет — иначе она допишет граф со старыми путями поверх сброса
+    // (гонка Д2: провайдер может не заметить отмену и доехать до SaveAsync).
+    private readonly ConcurrentDictionary<string, long> _generations = new();
+
+    // Замок записи графа per normalizedRootPath: проверка поколения и запись — под ним (SaveIfCurrentAsync).
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _saveGates = new();
+
+    // Для тестов гонок: фоновое перестроение по таймеру дебаунса завершилось (успех/отмена/ошибка).
+    internal Action<string>? BackgroundRebuildFinished;
+
     public CodeGraphService(
         ILogger<CodeGraphService> logger,
         IProjectRootLookup projectRoots,
@@ -148,8 +159,68 @@ public sealed class CodeGraphService : IDisposable
     /// </summary>
     public void Invalidate(string rootPath)
     {
+        var normalized = PathNormalizer.NormalizePath(rootPath);
+        // Снимок в памяти — ДО сдвига поколения: иначе фоновый инкремент, уже прочитавший новое
+        // поколение, возьмёт старый граф базой (prevGraph) и сохранит устаревшие срезы как свежие.
+        _lastGraphs.TryRemove(normalized, out _);
+        // Затем поколение, потом отмена и удаление: сборка, проверившая поколение ДО сдвига,
+        // успевает записать граф лишь до Delete ниже; проверившая ПОСЛЕ — запись не делает
+        // (или стирает свою, см. SaveIfCurrentAsync).
+        _generations.AddOrUpdate(normalized, 1, (_, g) => g + 1);
+        // Отложенный инкремент считал бы от старых путей — снимаем вместе с таймером.
+        if (_pendingRebuilds.TryRemove(normalized, out var pending))
+            pending.Dispose();
+        CancelActiveRebuild(normalized);
+        // Построение по запросу GET отменяем, но из реестра не снимаем: guard снимет себя сам.
+        if (_onDemandRebuilds.TryGetValue(normalized, out var onDemand))
+        {
+            try { onDemand.Cancel(); } catch (ObjectDisposedException) { }
+        }
+
         _persistence.Delete(rootPath);
-        _lastGraphs.TryRemove(PathNormalizer.NormalizePath(rootPath), out _);
+        // И повторно после сдвига: запись старого поколения могла опубликовать снимок в окне
+        // между первым снятием и сдвигом. Потеря свежего снимка безвредна — сборка пойдёт с нуля.
+        _lastGraphs.TryRemove(normalized, out _);
+    }
+
+    private long CurrentGeneration(string normalized) =>
+        _generations.TryGetValue(normalized, out var g) ? g : 0;
+
+    /// <summary>
+    /// Записать граф, только если поколение не сменилось со старта сборки. Сброс пришёл во
+    /// время записи — стираем записанное: следующее обращение построит граф заново.
+    /// </summary>
+    private async Task<bool> SaveIfCurrentAsync(string rootPath, string normalized, long generation,
+        Core.CodeGraph graph, CancellationToken ct)
+    {
+        // Запись сериализована на ключ проекта: иначе старая сборка, заметившая сброс после
+        // своей записи, своим Delete стёрла бы graph.json, только что записанный новым поколением.
+        var gate = _saveGates.GetOrAdd(normalized, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct);
+        try
+        {
+            if (CurrentGeneration(normalized) != generation) return false;
+            await _persistence.SaveAsync(rootPath, graph, ct);
+            if (CurrentGeneration(normalized) != generation)
+            {
+                _persistence.Delete(rootPath);
+                return false;
+            }
+            _lastGraphs[normalized] = graph;
+            // Сброс проскочил между проверкой и публикацией снимка — снимаем только свой:
+            // на его месте может уже лежать граф новой сборки.
+            if (CurrentGeneration(normalized) != generation)
+            {
+                _persistence.Delete(rootPath);
+                _lastGraphs.TryRemove(new KeyValuePair<string, Core.CodeGraph>(normalized, graph));
+                return false;
+            }
+            return true;
+        }
+        finally
+        {
+            gate.Release();
+        }
     }
 
     /// <summary>
@@ -194,11 +265,15 @@ public sealed class CodeGraphService : IDisposable
             pending.Dispose();
         // И отменяем бегущее фоновое перестроение этого проекта — явное его замещает.
         CancelActiveRebuild(normalized);
+        var generation = CurrentGeneration(normalized);
 
         _logger.LogInformation("Перестроение графа (явный триггер) для {Path}", rootPath);
         var graph = await BuildInternalAsync(rootPath, changedByExtension: null, prevGraph: null, ct);
-        await _persistence.SaveAsync(rootPath, graph, ct);
-        _lastGraphs[normalized] = graph;
+        if (!await SaveIfCurrentAsync(rootPath, normalized, generation, graph, ct))
+        {
+            _logger.LogInformation("Граф {Path} сброшен во время построения — результат не записан", rootPath);
+            return;
+        }
 
         _logger.LogInformation("Граф перестроен для {Path}: {Nodes} узлов, {Edges} рёбер",
             rootPath, graph.Nodes.Count, graph.Edges.Count);
@@ -313,6 +388,7 @@ public sealed class CodeGraphService : IDisposable
             if (!_pendingRebuilds.TryRemove(normalizedPath, out var state))
                 return;
             state.Dispose();
+            var generation = CurrentGeneration(normalizedPath);
 
             // Прошлый rebuild этого проекта ещё бежит — отменяем: свежий его замещает.
             CancelActiveRebuild(normalizedPath);
@@ -335,8 +411,11 @@ public sealed class CodeGraphService : IDisposable
             _lastGraphs.TryGetValue(normalizedPath, out var prevGraph);
 
             var graph = await BuildInternalAsync(rootPath, changedByExtension, prevGraph, ct);
-            await _persistence.SaveAsync(rootPath, graph, ct);
-            _lastGraphs[normalizedPath] = graph;
+            if (!await SaveIfCurrentAsync(rootPath, normalizedPath, generation, graph, ct))
+            {
+                _logger.LogDebug("Граф {Path} сброшен во время перестроения — результат не записан", rootPath);
+                return;
+            }
 
             _logger.LogInformation("Граф перестроен для {Path}: {Nodes} узлов, {Edges} рёбер",
                 rootPath, graph.Nodes.Count, graph.Edges.Count);
@@ -360,6 +439,7 @@ public sealed class CodeGraphService : IDisposable
                     new KeyValuePair<string, CancellationTokenSource>(normalizedPath, active));
                 active.Dispose();
             }
+            BackgroundRebuildFinished?.Invoke(normalizedPath);
         }
     }
 

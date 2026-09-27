@@ -185,6 +185,7 @@
   .feed { flex: 1; overflow: auto; padding: 14px 18px 8px; min-height: 0; display: flex; flex-direction: column; gap: 12px; }
   .msg { max-width: 640px; line-height: 1.55; }
   .msg.user { align-self: flex-end; background: var(--c-bg-card); border: 1px solid var(--c-border-light); border-radius: 14px 14px 4px 14px; padding: 8px 12px; max-width: 480px; }
+  .app.mobile .msg.user { max-width: 100%; min-width: 0; }
   .msg.bot .who { font-size: 11px; font-weight: 600; color: var(--c-accent); margin-bottom: 2px; }
   .quiet { align-self: center; font-size: 11.5px; color: var(--c-text-muted); text-align: center; max-width: 600px; line-height: 1.45; }
   .quiet b { color: var(--c-text-secondary); font-weight: 600; }
@@ -256,9 +257,17 @@
   .composer textarea { width: 100%; border: none; outline: none; resize: none; background: transparent; min-height: 40px; max-height: 200px; line-height: 1.5; font-size: 13.5px; }
   .composer .atts { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 4px; }
   .composer .bar { display: flex; align-items: center; gap: 6px; }
+  /* Переключатель «Чат | Картинка» — слева в поле ввода, только при выбранной картинке */
+  .composer .inrow { display: flex; align-items: flex-start; gap: 8px; }
+  .composer .inrow textarea { flex: 1; min-width: 0; }
+  .mswitch { display: flex; flex-direction: row; gap: 2px; padding: 2px; background: var(--c-bg-inset); border-radius: 8px; flex: 0 0 auto; }
+  .mswitch button { width: 26px; height: 18px; border: none; border-radius: 6px; background: transparent; color: var(--c-text-muted); display: grid; place-items: center; cursor: pointer; padding: 0; }
+  .mswitch button:hover { color: var(--c-text-primary); }
+  .mswitch button.on { background: var(--c-bg-card); color: var(--c-accent); box-shadow: var(--shadow-card); }
+  .mswitch button:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
   .send { width: 32px; height: 32px; border-radius: 10px; border: none; background: var(--c-accent); color: var(--c-on-accent); display: grid; place-items: center; cursor: pointer; }
 
-  /* Холст (панель) */
+  /* Холст (в попапе редактора) */
   .cv-tools { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; padding: 6px 8px; border-bottom: 1px solid var(--c-border-light); }
   .cv-tools .sep { width: 1px; height: 20px; background: var(--c-divider); margin: 0 4px; }
   .board { position: relative; overflow: hidden; background: repeating-conic-gradient(var(--c-bg-inset) 0 25%, var(--c-bg-panel) 0 50%) 0 0 / 18px 18px; border-radius: 10px; border: 1px solid var(--c-border-light); height: 330px; touch-action: none; }
@@ -331,22 +340,57 @@
   .toast button { background: transparent; border: none; color: var(--c-accent-muted); font-weight: 600; cursor: pointer; padding: 0; }
   #peek { position: absolute; z-index: 75; width: 300px; max-height: 520px; box-shadow: var(--shadow-modal); display: none; }
   .mhead { display: flex; align-items: center; gap: 4px; }
+
+  /* Редактор картинки — попап (Modal из components/ui), почти во весь экран; на телефоне — весь экран */
+  .ovl.ed { z-index: 76; }
+  .editor { position: absolute; inset: 14px; background: var(--c-bg-card); border-radius: 16px; box-shadow: var(--shadow-modal); display: flex; flex-direction: column; overflow: hidden; }
+  .app.mobile .editor { inset: 0; border-radius: 0; }
+  .ed-head { display: flex; align-items: center; gap: 8px; padding: 12px 10px 10px 18px; border-bottom: 1px solid var(--c-border-light); min-width: 0; }
+  .ed-head h3 { margin: 0; font-family: 'PT Serif', Georgia, serif; font-weight: 500; font-size: 20px; color: var(--c-text-heading); white-space: nowrap; }
+  .app.mobile .ed-head { padding-left: 12px; }
+  .app.mobile .ed-head h3 { font-size: 18px; }
+  .ed-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 310px; }
+  .app.mobile .ed-body { display: block; overflow: auto; }
+  .ed-stage { display: flex; flex-direction: column; min-height: 0; min-width: 0; border-right: 1px solid var(--c-border-light); }
+  .app.mobile .ed-stage { border-right: none; }
+  .ed-stage .bwrap { flex: 1; min-height: 0; padding: 8px 10px; display: flex; flex-direction: column; }
+  .ed-stage .board { flex: 1; height: auto; min-height: 280px; container-type: size; }
+  .ed-stage .cw { width: min(92cqw, 92cqh * 1.6); }
+  .app.mobile .ed-stage .board { flex: none; height: 300px; min-height: 0; }
+  .ed-side { overflow: auto; padding: 0 14px 14px; min-width: 0; }
+  .ed-side .csec .h { flex-wrap: wrap; row-gap: 0; }
+  .ed-side .csec .h .hint { flex-basis: 100%; }
+  .ed-foot { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--c-border-light); flex-wrap: wrap; }
+  .ed-foot .hint { flex: 1; min-width: 160px; }
+
+  /* Git-полоса — копия ProjectGitBar: стоит над композером, пока картинка не выбрана */
+  .gbar { margin: 6px 14px; display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 6px 0 10px; background: var(--c-bg-panel); border: 1px solid var(--c-border); border-radius: 12px; font-size: 12px; min-width: 0; }
+  .gbar .br { display: inline-flex; align-items: center; gap: 6px; min-width: 0; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: var(--c-text-primary); }
+  .gbar .br span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .gbar .gb { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 8px; border-radius: 8px; border: 1px solid var(--c-border); background: var(--c-bg-white); cursor: pointer; font-size: 12px; white-space: nowrap; }
+  .gbar .add { color: var(--c-success-text); } .gbar .del { color: var(--c-danger-text); }
+
+
+  /* Карточка-черновик «Новая картинка» */
+  .draftbox { border: 1.5px dashed var(--c-dashed); border-radius: 8px; aspect-ratio: 16 / 10; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; text-align: center; padding: 14px; color: var(--c-text-muted); font-size: 12px; line-height: 1.45; background: var(--c-bg-inset); }
+  .draftbox b { color: var(--c-text-heading); font-size: 13px; }
 </style>
 </head>
 <body>
 <div class="page">
   <h1 class="doc">Редактор картинок v3 — всё в основном чате проекта</h1>
-  <p class="lead">Отдельного окна редактора нет. Картинка живёт в ленте как карточка-стопка (нить картинки), крупно и с пометками — в боковой
-    панели <b>«Холст»</b>, персонажи — в панели <b>«Персонажи»</b>, настройки генерации — в полосе <b>«Картинки»</b> над композером,
-    промпт модели — в композере в режиме <b>«Картинка»</b>. Это макет: код продукта не менялся. Описание — <code>image-editor-v3-in-chat-proposal.md</code>.</p>
+  <p class="lead">Отдельного окна редактора нет. Картинка живёт в ленте как карточка-стопка (нить картинки). Крупно и с пометками —
+    в попапе <b>«Редактировать»</b> у картинки, персонажи — в панели <b>«Персонажи»</b>. Пока картинка выбрана, над композером стоит
+    полоса <b>«Картинки»</b> и доступен режим композера <b>«Картинка»</b>; без выбранной картинки там обычная git-полоса и режим «Чат».
+    Это макет: код продукта не менялся. Описание — <code>image-editor-v3-in-chat-proposal.md</code>.</p>
   <div class="demo">
     <div class="grp"><span class="lbl">Тема</span><button class="tbtn" data-demo="theme:light">Светлая</button><button class="tbtn" data-demo="theme:dark">Тёмная</button></div>
     <div class="grp"><span class="lbl">Ширина</span><button class="tbtn" data-demo="w:desk">Десктоп</button><button class="tbtn" data-demo="w:mob">Телефон 390</button></div>
     <div class="grp"><span class="lbl">Сценарий</span><button class="tbtn" data-demo="reset">Сначала</button></div>
-    <span class="lbl">Панели: наведите на значок в рельсе — превью с булавкой «Закрепить»; шапку открытой панели можно перетащить в другую зону.</span>
+    <span class="lbl">Сценарий: «Редактировать» у картинки → пометка → закрыть → режим «Картинка» → отправка → ✕ на чипе «Работаем с…».</span>
   </div>
   <div class="frame"><div class="app" id="app"></div><div id="peek" class="island"></div></div>
-  <p class="caption">Цены, модели и ответы агента условные. Персонаж, образцы, промпт и пометки уходят в запрос только к картинке в фокусе.</p>
+  <p class="caption">Цены, модели и ответы агента условные. Персонаж, образцы, промпт и пометки уходят в запрос только к выбранной картинке.</p>
 </div>
 <script>
 const IC = {
@@ -541,7 +585,8 @@ function initState() {
   S = {
     theme: S ? S.theme : 'light', mobile: S ? S.mobile : false,
     zones: { left: ['chats'], right: ['files'] },
-    home: { chats: 'left', files: 'right', chars: 'right', canvas: 'right' },
+    home: { chats: 'left', files: 'right', chars: 'right' },
+    editor: false,
     peekKey: null, dragKey: null, sheet: null,
     chat: 'main',
     chats: {
@@ -555,7 +600,7 @@ function initState() {
     characters: [{ id: 'anya', name: 'Аня', desc: '25 лет, рыжие волосы до плеч, веснушки', photos: [0, 1, 2, 3, 4] }],
     charOn: null, charForm: null, charDel: null,
     tool: 'mask', brush: 26, zoom: 1, panX: 0, panY: 0, cvPop: null, slider: 50,
-    saveDlg: null, toast: null, toastAct: null, hlFile: null, fileMenu: null, saveFolder: null,
+    saveDlg: null, toast: null, toastAct: null, hlFile: null, fileMenu: null,
     typing: false,
     files: {
       '': [{ n: 'README.md' }],
@@ -571,7 +616,7 @@ function initState() {
     { who: 'user', text: 'Нарисуй картинку для шапки сайта: гостиная студии, тёплый дневной свет' },
     { who: 'bot', text: 'Нарисовал через fal · Nano Banana 2 и сохранил как <span class="mono">images/hero.png</span>.', thread: hero },
     { who: 'user', text: 'И вот фото с прошлой съёмки, пригодится', thread: about },
-    { who: 'bot', text: 'Принял. Чтобы поправить картинку, нажмите «Править» под ней — она откроется на панели «Холст». Или включите режим «Картинка» в композере.' },
+    { who: 'bot', text: 'Принял. Чтобы поправить картинку, нажмите «Редактировать» под ней — откроется редактор с пометками. Или «Работать с этой» — тогда в композере появится режим «Картинка».' },
   ];
 }
 function newThread({ name, folder, path, d, ver, meta, origin, label }) {
@@ -617,16 +662,15 @@ function viewBar() {
   const t = ft();
   const p = prov(), m = model();
   const ch = S.charOn && charById(S.charOn);
-  const show = S.mode === 'image' || t;
-  if (!show) return '';
+  // Полоса «Картинки» есть только при выбранной картинке; иначе на её месте git-полоса
+  if (!t) return viewGitBar();
+  const draft = !t.steps.length;
   if (!S.barOpen) {
-    const parts = [t ? `Работаем с: ${fileLabel(t)}` : 'Новая картинка', `${p.name} · ${m.name}`, variantsWord(S.count), shortPrice()];
+    const parts = [`Работаем с: ${fileLabel(t)}`, `${p.name} · ${m.name}`, variantsWord(S.count), shortPrice()];
     if (ch) parts.push(ch.name);
-    return `<div class="ibar mini" data-act="barOpen" title="Развернуть полосу «Картинки»">${ic('img', 1)}<span class="sum">${esc(parts.join(' · '))}</span>${ic('down', 1)}</div>`;
+    return `<div class="ibar mini" data-act="barOpen" title="Развернуть полосу «Картинки»" data-testid="ibar-mini">${ic('img', 1)}<span class="sum">${esc(parts.join(' · '))}</span><span class="x ib sm" data-act="unfocus" title="Снять выбор картинки" data-testid="unfocus-mini">${ic('x', 1)}</span></div>`;
   }
-  const focusChip = t
-    ? `<span class="chip acc" title="Режим «Картинка» и агент работают с этой картинкой"><span class="th">${pic(curStep(t).d)}</span>Работаем с: <b>${esc(fileLabel(t))}</b>${t.steps.length > 1 ? ` · шаг ${t.cur + 1}` : ''}<span class="x" data-act="unfocus" title="Снять фокус — следующая генерация нарисует новую картинку">${ic('x', 1)}</span></span>`
-    : `<span class="chip dash">${ic('spark', 1)} Новая картинка${S.saveFolder ? ` · сохранять в <span class="mono">${esc(S.saveFolder)}/</span>` : ''}</span>`;
+  const focusChip = `<span class="chip acc" data-testid="focusChip" title="Режим «Картинка» и агент работают с этой картинкой">${draft ? ic('spark', 1) : `<span class="th">${pic(curStep(t).d)}</span>`}Работаем с: <b>${esc(fileLabel(t))}</b>${draft ? ` · сохранять в <span class="mono">${esc(t.folder)}/</span>` : ''}${t.steps.length > 1 ? ` · шаг ${t.cur + 1}` : ''}<span class="x" data-act="unfocus" title="Снять выбор — вернётся git-полоса и режим «Чат»" data-testid="unfocus">${ic('x', 1)}</span></span>`;
   const provMenu = S.menu === 'prov' ? `<div class="menu up">${PROVIDERS.map(x => `<button class="mi ${x.id === S.provider ? 'on' : ''}" data-act="setProv:${x.id}"><span class="grow">${x.name}<small>${x.hint}</small></span>${x.id === S.provider ? ic('check', 1) : ''}</button>`).join('')}</div>` : '';
   const modelMenu = S.menu === 'model' ? `<div class="menu up">${p.models.map(x => `<button class="mi ${x.id === m.id ? 'on' : ''}" data-act="setModel:${x.id}"><span class="grow">${x.name}<small>${x.hint}${x.mask ? ' · правит по маске' : ''}</small></span>${x.id === m.id ? ic('check', 1) : ''}</button>`).join('')}</div>` : '';
   const agentModel = S.agentSet && S.agentSet.model;
@@ -647,18 +691,30 @@ function viewBar() {
       ${ch ? `<span class="chip acc" title="Подключённый персонаж — его фото уходят в запрос"><span class="th" style="border-radius:50%">${faceSVG(ch.photos[0])}</span>${esc(ch.name)}<span class="x" data-act="charOff" title="Отключить персонажа">${ic('x', 1)}</span></span>` : `<span class="chip dash" data-act="openChars" title="Открыть панель «Персонажи»">${ic('user', 1)} Персонаж</span>`}
       ${samples}
       <span class="dd"><span class="chip dash" data-act="menu:sample">${ic('plus', 1)} Образец</span>${sampleMenu}</span>
-      ${t ? `<label class="chip ${S.keepSize ? 'acc' : ''}" data-act="keepSize" title="Результат вернётся в размере оригинала">${ic(S.keepSize ? 'check' : 'expand', 1)} Размер оригинала</label>` : ''}
+      ${!draft ? `<label class="chip ${S.keepSize ? 'acc' : ''}" data-act="keepSize" title="Результат вернётся в размере оригинала">${ic(S.keepSize ? 'check' : 'expand', 1)} Размер оригинала</label>` : ''}
     </div>
-    ${maskBlock() ? `<div class="warn">${ic('alert', 1)} ${esc(m.name)} не правит по маске — кисть на холсте она не увидит. <button class="btn xs" data-act="useFill">Взять ${S.provider === 'hf' ? 'GPT Image 2.5' : 'FLUX Fill'}</button></div>` : ''}
+    ${maskBlock() ? `<div class="warn">${ic('alert', 1)} ${esc(m.name)} не правит по маске — кисть в редакторе она не увидит. <button class="btn xs" data-act="useFill">Взять ${S.provider === 'hf' ? 'GPT Image 2.5' : 'FLUX Fill'}</button></div>` : ''}
+  </div>`;
+}
+
+// Git-полоса — как ProjectGitBar сейчас: ветка, дифф, «Зафиксировать», «Опубликовать», свернуть
+function viewGitBar() {
+  return `<div class="gbar" data-testid="gitbar">
+    <span class="br">${ic('git', 1)}<span>feat/site-header</span></span>
+    <span class="grow"></span>
+    <button class="gb" data-act="toastStatic:Панель «Изменения» — как сейчас" title="Открыть изменения"><span class="add">+42</span><span class="del">−7</span></button>
+    ${S.mobile ? '' : `<button class="gb" data-act="toastStatic:Фиксация — как сейчас" title="Зафиксировать изменения (git commit)">${ic('check', 1)} Зафиксировать ${ic('down', 1)}</button>`}
+    <button class="gb" data-act="toastStatic:Публикация — как сейчас" title="Опубликовать (git push)">${ic('upload', 1)} ${S.mobile ? '2' : 'Опубликовать 2'}</button>
+    <button class="ib sm" data-act="toastStatic:Сворачивание git-полосы — как сейчас" title="Свернуть гит-бар">${ic('up', 1)}</button>
   </div>`;
 }
 
 // ---------- Композер ----------
 function viewComposer() {
-  const img = S.mode === 'image';
   const t = ft();
+  const img = S.mode === 'image' && !!t;
   const marks = t ? t.marks.length : 0;
-  const ph = img ? (t ? `Что изменить в ${fileLabel(t)}? Отметьте место на холсте или просто опишите` : 'Опишите новую картинку — например, «Аня в кафе»') : 'Спросите Claude…';
+  const ph = img ? (t.steps.length ? `Что изменить в ${fileLabel(t)}? Отметьте место в редакторе или просто опишите` : 'Опишите новую картинку — например, «Аня в кафе»') : 'Спросите Claude…';
   const atts = [];
   if (t && marks && S.sendMarks) atts.push(`<span class="chip dash" title="Пометки уйдут вместе со следующим сообщением"><span class="th">${pic(curStep(t).d)}</span>${esc(fileLabel(t))} · ${marksWord(marks)}<span class="x" data-act="noMarks" title="Не прикладывать пометки">${ic('x', 1)}</span></span>`);
   const tag = img ? `<div class="ptag"><b style="color:var(--c-accent)">Промпт модели</b> · уходит прямо в ${esc(model().name)}, без агента
@@ -667,14 +723,16 @@ function viewComposer() {
   return `<div class="composer ${img ? 'img' : ''}" data-testid="composer">
     ${tag}
     ${atts.length ? `<div class="atts">${atts.join('')}</div>` : ''}
-    <textarea id="ta" rows="${img ? 3 : 2}" placeholder="${esc(ph)}" data-testid="ta">${esc(img ? S.promptDraft : S.chatDraft)}</textarea>
+    <div class="inrow">
+      ${t ? `<div class="mswitch" role="radiogroup" aria-label="Режим композера" data-testid="modeSeg"><button class="${img ? '' : 'on'}" role="radio" aria-checked="${!img}" data-act="mode:chat" data-testid="modeChat" title="Чат — сообщение Claude">${ic('chat', 1)}</button><button class="${img ? 'on' : ''}" role="radio" aria-checked="${img}" data-act="mode:image" data-testid="modeImage" title="Картинка — промпт прямо в модель, без агента">${ic('img', 1)}</button></div>` : ''}
+      <textarea id="ta" rows="${img ? 3 : 2}" placeholder="${esc(ph)}" data-testid="ta">${esc(img ? S.promptDraft : S.chatDraft)}</textarea>
+    </div>
     <div class="bar">
       <button class="ib" title="Приложить файл" data-act="toastStatic:Вложения — как в обычном композере">${ic('plus')}</button>
-      <div class="seg acc" data-testid="modeSeg"><button class="${img ? '' : 'on'}" data-act="mode:chat">${ic('chat', 1)} Чат</button><button class="${img ? 'on' : ''}" data-act="mode:image" data-testid="modeImage">${ic('img', 1)} Картинка</button></div>
       ${img ? '' : `<button class="chip" data-act="toastStatic:Выбор собеседника — как сейчас">Claude ${ic('down', 1)}</button>`}
       <span class="grow"></span>
       ${img
-        ? `<button class="btn pri sm" data-act="send" data-testid="gen" ${block ? 'disabled' : ''}>${ic('spark', 1)} ${t ? 'Изменить' : 'Сгенерировать'} · ${prov().unit === 'free' ? 'бесплатно' : priceText()}</button>`
+        ? `<button class="btn pri sm" data-act="send" data-testid="gen" ${block ? 'disabled' : ''}>${ic('spark', 1)} ${t.steps.length ? 'Изменить' : 'Сгенерировать'} · ${prov().unit === 'free' ? 'бесплатно' : priceText()}</button>`
         : `<button class="ib" title="Голос" data-act="toastStatic:Голосовой ввод — как сейчас">${ic('mic')}</button><button class="send" data-act="send" data-testid="send" title="Отправить">${ic('send', 1)}</button>`}
     </div>
   </div>`;
@@ -685,7 +743,14 @@ function viewThreadCard(id) {
   const t = S.threads[id];
   const st = curStep(t);
   const focus = S.focus === id;
-  if (!st) return `<div class="tcard" data-testid="card-${id}"><div class="th-head"><span class="fname">${esc(t.name)}</span><span class="badge info">новая картинка</span></div>${threadGen(t, id)}</div>`;
+  if (!st) {
+    // Карточка-черновик: картинки ещё нет, но её можно выбрать — тогда доступен режим «Картинка»
+    const empty = !t.gen && !t.variants
+      ? `<div class="draftbox" data-testid="draftbox"><b>Новая картинка</b>${focus
+          ? 'Опишите её в композере в режиме «Картинка» — варианты появятся здесь'
+          : 'Картинка ещё не нарисована'}<span class="hint">сохранять в <span class="mono">${esc(t.folder)}/</span></span>${focus ? '' : `<button class="btn sm pri" data-act="focus:${id}">${ic('target', 1)} Работать с этой</button>`}</div>` : '';
+    return `<div class="tcard ${focus ? 'focus' : ''}" data-testid="card-${id}"><div class="th-head">${focus ? `<span class="badge acc">${ic('target', 1)} в работе</span>` : ''}<span class="fname">${esc(t.name)}</span><span class="badge info">новая картинка</span></div>${empty}${threadGen(t, id)}</div>`;
+  }
   const saved = !!st.file;
   const badge = saved ? `<span class="badge ok" title="Файл в проекте">${st.ver} · в проекте</span>` : `<span class="badge draft" title="Черновик: в проект ещё не записан">черновик</span>`;
   const nav = t.steps.length > 1 ? `<span class="stepnav"><button class="ib sm" data-act="step:${id}:-1" ${t.cur === 0 ? 'disabled' : ''} title="Предыдущий шаг">${ic('left', 1)}</button>шаг ${t.cur + 1} из ${t.steps.length}<button class="ib sm" data-act="step:${id}:1" ${t.cur === t.steps.length - 1 ? 'disabled' : ''} title="Следующий шаг">${ic('right', 1)}</button></span>` : '';
@@ -700,12 +765,12 @@ function threadGen(t, id) {
   } else if (t.variants) {
     gen = `<div class="hint" style="margin-top:6px">✓ Готово · ${variantsWord(t.variants.list.length)} · ${esc(t.variants.price)}. Выберите — станет следующим шагом.</div>
       <div class="vars" data-testid="vars">${t.variants.list.map((d, i) => `<div class="thumb ${t.sel === i ? 'on' : ''}" data-act="sel:${id}:${i}"><span class="n">${i + 1}</span>${pic(d)}</div>`).join('')}</div>
-      <div class="foot"><button class="btn sm pri" data-act="take:${id}" data-testid="take">Взять вариант ${t.sel + 1}</button><button class="btn sm" data-act="cmpOnCanvas:${id}">До / после на холсте</button><button class="btn sm ghost" data-act="dropVars:${id}">Не брать</button></div>`;
+      <div class="foot"><button class="btn sm pri" data-act="take:${id}" data-testid="take">Взять вариант ${t.sel + 1}</button><button class="btn sm" data-act="cmpOnCanvas:${id}">До / после в редакторе</button><button class="btn sm ghost" data-act="dropVars:${id}">Не брать</button></div>`;
   }
   return gen;
 }
 function threadCardBody(t, id, st, focus, saved, badge, nav, gen) {
-  const pick = S.pickOpen === id && !focus ? `<div class="pick"><button class="btn sm pri" data-act="focus:${id}">${ic('target', 1)} Работать с этой</button><button class="btn sm" data-act="edit:${id}">Править на холсте</button></div>` : '';
+  const pick = S.pickOpen === id && !focus ? `<div class="pick"><button class="btn sm pri" data-act="focus:${id}">${ic('target', 1)} Работать с этой</button><button class="btn sm" data-act="edit:${id}">${ic('pencil', 1)} Редактировать</button></div>` : '';
   const title = fileLabel(t);
   return `<div class="tcard ${focus ? 'focus' : ''}" data-testid="card-${id}">
     <div class="th-head">${focus ? `<span class="badge acc">${ic('target', 1)} в работе</span>` : ''}<span class="fname">${esc(title)}</span>${badge}<span class="grow"></span>${nav}</div>
@@ -713,7 +778,7 @@ function threadCardBody(t, id, st, focus, saved, badge, nav, gen) {
     ${gen}
     <div class="foot">
       <span class="meta">${esc(st.label)}${t.origin ? ' · ' + esc(t.origin) : ''}${t.meta ? ' · ' + esc(t.meta) : ''}</span>
-      <button class="btn xs" data-act="edit:${id}" data-testid="edit-${id}">${ic('pencil', 1)} Править</button>
+      <button class="btn xs" data-act="edit:${id}" data-testid="edit-${id}">${ic('pencil', 1)} Редактировать</button>
       <button class="btn xs" data-act="toastStatic:Скачивание — как сейчас">↓ Скачать</button>
       <button class="btn xs" data-act="saveQuick:${id}" title="Следующей свободной версией рядом с исходным файлом">${saved ? 'В проекте' : 'Сохранить в проект'}</button>
       <button class="btn xs" data-act="saveAs:${id}" data-testid="saveAs-${id}">Сохранить как…</button>
@@ -737,11 +802,10 @@ function viewMsg(m) {
 function viewChat() {
   const c = S.chats[S.chat];
   const body = c.msgs.length ? c.msgs.map(viewMsg).join('') : `<div class="empty"><div class="big">Новый чат</div>Напишите сообщение или включите режим «Картинка».</div>`;
-  const mobCanvas = S.mobile && isOpen('canvas');
   return `<div class="island main">
     <div class="ph">${S.mobile ? `<button class="ib" data-act="sheet:chats" title="Чаты">${ic('chat')}</button>` : ''}<span class="ttl" style="overflow:hidden;text-overflow:ellipsis">${esc(c.name)}</span><span class="sub">Проект «Сайт студии»</span><span class="grow"></span>
-      ${S.mobile ? `<button class="ib" data-act="sheet:files" title="Файлы">${ic('tree')}</button><button class="ib" data-act="sheet:chars" title="Персонажи" data-testid="mobChars">${ic('users')}</button><button class="ib ${mobCanvas ? 'on' : ''}" data-act="toggle:canvas" title="Холст">${ic('canvas')}</button>` : ''}</div>
-    ${mobCanvas ? `<div style="flex:1;overflow:auto;min-height:0;display:flex;flex-direction:column">${viewCanvas(true)}</div>` : `<div class="feed" id="feed">${body}${S.typing ? '<div class="typing">Claude печатает…</div>' : ''}</div>`}
+      ${S.mobile ? `<button class="ib" data-act="sheet:files" title="Файлы">${ic('tree')}</button><button class="ib" data-act="sheet:chars" title="Персонажи" data-testid="mobChars">${ic('users')}</button>` : ''}</div>
+    <div class="feed" id="feed">${body}${S.typing ? '<div class="typing">Claude печатает…</div>' : ''}</div>
     ${viewBar()}
     ${viewComposer()}
   </div>`;
@@ -752,13 +816,12 @@ const PANELS = {
   chats: { title: 'Чаты', icon: 'chat', w: 210, min: 170 },
   files: { title: 'Файлы', icon: 'tree', w: 240, min: 190 },
   chars: { title: 'Персонажи', icon: 'users', w: 300, min: 230 },
-  canvas: { title: 'Холст', icon: 'canvas', w: 500, min: 360 },
 };
 function panelShell(k, body, sub) {
   const P = PANELS[k];
   return `<div class="island panel" style="width:${P.w}px;flex:0 1 ${P.w}px;min-width:${P.min}px" data-panel="${k}" data-testid="panel-${k}">
     <div class="ph" draggable="true" data-drag="${k}" title="Перетащите шапку, чтобы перенести панель"><span class="grip">⋮⋮</span>${ic(P.icon, 1)}<span class="ttl">${P.title}</span>${sub ? `<span class="sub">${sub}</span>` : ''}<span class="grow"></span><button class="ib sm" data-act="toggle:${k}" title="Закрыть панель">${ic('x', 1)}</button></div>
-    <div class="pbody" ${k === 'canvas' ? 'style="padding:0"' : ''}>${body}</div></div>`;
+    <div class="pbody">${body}</div></div>`;
 }
 function viewChatsBody() {
   return `<button class="btn sm" style="width:100%;margin-bottom:8px" data-act="newChat">${ic('chatplus', 1)} Новый чат</button>` +
@@ -777,8 +840,8 @@ function viewFilesBody() {
     const isImg = !folder && x && x.d;
     const menuOpen = S.fileMenu === path;
     const menu = menuOpen ? `<div class="menu down right" style="top:26px">${folder
-      ? `<button class="mi" data-act="drawIn:${path}" data-testid="drawIn"><span class="grow">Нарисовать картинку<small>Чат с композером в режиме «Картинка», сохранять сюда</small></span></button><button class="mi" disabled>Новый файл…</button>`
-      : isImg ? `<button class="mi" data-act="editFile:${path}" data-testid="editFile"><span class="grow">Редактировать картинку<small>В последнем активном чате, картинка в фокусе, панель «Холст»</small></span></button><button class="mi" disabled>Переименовать…</button>`
+      ? `<button class="mi" data-act="drawIn:${path}" data-testid="drawIn"><span class="grow">Нарисовать картинку<small>В ленте карточка-черновик «Новая картинка», композер в режиме «Картинка»</small></span></button><button class="mi" disabled>Новый файл…</button>`
+      : isImg ? `<button class="mi" data-act="editFile:${path}" data-testid="editFile"><span class="grow">Редактировать картинку<small>В последнем активном чате: картинка выбрана, открыт редактор</small></span></button><button class="mi" disabled>Переименовать…</button>`
       : `<button class="mi" disabled>Открыть</button>`}</div>` : '';
     return `<div class="row ${S.hlFile === path ? 'hl' : ''}" style="padding-left:${4 + depth * 14}px">${folder ? ic('folder', 1) : (isImg ? `<span class="th" style="width:18px;height:18px;border-radius:4px;overflow:hidden;display:inline-block">${pic(x.d)}</span>` : ic('file', 1))}
       <span class="grow" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(name)}</span>${S.hlFile === path ? '<span class="newtag">новый</span>' : ''}
@@ -820,15 +883,16 @@ function marksSVG(t) {
     return `<text ${a} x="${m.x}" y="${m.y}" font-size="22" font-weight="700" fill="#D97757" stroke="#fff" stroke-width="4" paint-order="stroke">${esc(m.t)}</text>`;
   }).join('');
 }
-function viewCanvas(mob) {
+// Редактор картинки — попап (Modal): крупный холст, пометки, быстрые действия, без ИИ, шаги, сохранение
+function viewEditor() {
   const t = ft();
-  if (!t) return `<div class="empty"><div class="big">Картинка не выбрана</div>Нажмите «Править» у картинки в ленте или «Редактировать картинку» в «Файлах». Холст показывает картинку в фокусе.</div>`;
+  if (!S.editor || !t || !t.steps.length) return '';
   const st = curStep(t);
   const tools = TOOLS.map(([id, icn, name]) => `<button class="ib ${S.tool === id ? 'on' : ''}" data-act="tool:${id}" title="${name}" data-testid="tool-${id}">${ic(icn)}</button>`).join('');
   let stage;
   if (t.variants && S.cmp) {
     const after = t.variants.list[t.sel];
-    stage = `<div style="padding:8px"><div class="cmp" style="--cut:${S.slider}%"><div class="layer">${pic(st.d)}</div><div class="layer after">${pic(after)}</div><div class="line"></div><span class="tag" style="left:6px">До</span><span class="tag" style="right:6px">После · вариант ${t.sel + 1}</span></div>
+    stage = `<div class="bwrap" style="overflow:auto"><div class="cmp" style="--cut:${S.slider}%"><div class="layer">${pic(st.d)}</div><div class="layer after">${pic(after)}</div><div class="line"></div><span class="tag" style="left:6px">До</span><span class="tag" style="right:6px">После · вариант ${t.sel + 1}</span></div>
       <input type="range" min="0" max="100" value="${S.slider}" data-in="slider" style="width:100%;accent-color:var(--c-accent)">
       <div class="vars">${t.variants.list.map((d, i) => `<div class="thumb ${t.sel === i ? 'on' : ''}" data-act="sel:${t.id}:${i}"><span class="n">${i + 1}</span>${pic(d)}</div>`).join('')}</div>
       <div class="foot"><button class="btn sm pri" data-act="take:${t.id}">Взять вариант ${t.sel + 1} за основу</button><button class="btn sm" data-act="cmpOff">Вернуться к правке</button></div></div>`;
@@ -838,9 +902,9 @@ function viewCanvas(mob) {
         <button class="ib" data-act="clearMarks" title="Стереть все пометки">${ic('trash')}</button>
         <span class="grow"></span>
         <button class="ib" data-act="zoom:-1" title="Отдалить">${ic('minus')}</button><span class="zoomlbl">${Math.round(S.zoom * 100)}%</span><button class="ib" data-act="zoom:1" title="Приблизить" data-testid="zoomIn">${ic('plus')}</button><button class="ib" data-act="fit" title="Вписать">${ic('fit')}</button></div>
-      <div style="padding:8px"><div class="board ${S.tool === 'hand' ? 'hand' : 'draw'}" id="board" style="${mob ? 'height:300px' : ''}" data-testid="board">
+      <div class="bwrap"><div class="board ${S.tool === 'hand' ? 'hand' : 'draw'}" id="board" data-testid="board">
         <div class="cw" style="transform:translate(calc(-50% + ${S.panX}px), calc(-50% + ${S.panY}px)) scale(${S.zoom})">${pic(st.d)}<svg class="ov" id="ov" viewBox="0 0 640 400" preserveAspectRatio="none">${marksSVG(t)}</svg></div></div>
-        <div class="hint" style="margin-top:4px">${t.marks.length ? `${marksWord(t.marks.length)} · уйдут со следующим сообщением из композера` : 'Колесо — масштаб, «Рука» — сдвиг. Пометки уходят со следующим сообщением.'}</div>
+        ${t.gen ? `<div class="hint" style="margin-top:6px">● Рисуем ${variantsWord(t.gen.n)}… · ${esc(t.gen.model)} — прогресс и варианты в карточке в ленте</div>` : ''}
         ${t.variants ? `<div class="warn" style="margin-top:6px">Готовы ${variantsWord(t.variants.list.length)} <button class="btn xs" data-act="cmpOn">Сравнить до / после</button></div>` : ''}</div>`;
   }
   const noAi = [['size', 'Размер'], ['compress', 'Сжатие'], ['crop', 'Обрезка'], ['rot', 'Поворот'], ['flip', 'Отражение']];
@@ -848,26 +912,33 @@ function viewCanvas(mob) {
     : S.cvPop === 'compress' ? `<div class="qa" style="margin-top:6px">${['90%', '80%', '60%'].map(x => `<button class="chip" data-act="noai:compress:${x}">JPEG ${x}</button>`).join('')}</div>`
     : S.cvPop === 'outpaint' ? `<div class="qa" style="margin-top:6px">${['16:9', '4:3', '1:1', '9:16'].map(x => `<button class="chip" data-act="quickGo:outpaint:${x}">${x}</button>`).join('')}</div>` : '';
   const steps = t.steps.map((s, i) => `<div class="step ${t.cur === i ? 'on' : ''}" data-act="goStep:${t.id}:${i}" data-testid="step-${i}"><span class="sth">${pic(s.d)}</span><span class="st">${i + 1}. ${esc(s.label)}<small>${s.file ? `${s.ver} · ${esc(s.file)}` : 'черновик'}${t.cur === i ? ' · сейчас' : ''}</small></span>${t.cur !== i ? `<button class="btn xs ghost" data-act="goStep:${t.id}:${i}" title="Продолжить с этого шага">${ic('undo', 1)} Откатиться</button>` : ''}</div>`).join('');
-  return `<div style="${mob ? 'padding-bottom:6px' : ''}">
-    <div style="display:flex;align-items:center;gap:6px;padding:8px 10px 0"><span class="fname mono" style="font-size:12px">${esc(fileLabel(t))}</span>${st.file ? `<span class="badge ok">${st.ver} · в проекте</span>` : '<span class="badge draft">черновик</span>'}<span class="hint">шаг ${t.cur + 1} из ${t.steps.length}</span></div>
-    ${stage}
-    <div style="padding:0 10px 10px">
-      <div class="csec"><div class="h">${ic('zap', 1)} Быстрые действия <span class="hint" style="font-weight:400">· сразу, без промпта · ${variantsWord(S.count)} · ${shortPrice()}</span></div>
-        <div class="qa">${QUICK.map(([id, n]) => `<button class="btn sm" data-act="quick:${id}" data-testid="quick-${id}">${n}</button>`).join('')}</div></div>
-      <div class="csec"><div class="h">${ic('wrench', 1)} Без ИИ <span class="hint" style="font-weight:400">· бесплатно, мгновенно</span></div>
-        <div class="qa">${noAi.map(([id, n]) => `<button class="btn sm ${S.cvPop === id ? 'pri' : ''}" data-act="noaiOpen:${id}">${n}</button>`).join('')}</div>${pop}</div>
-      <div class="csec"><div class="h">${ic('hist', 1)} Шаги этой картинки <span class="hint" style="font-weight:400">· в ленте — одна карточка-стопка</span></div><div class="steps">${steps}</div></div>
-      <div class="foot" style="margin-top:10px"><button class="btn sm" data-act="saveQuick:${t.id}">${ic('save', 1)} Сохранить в проект</button><button class="btn sm" data-act="saveAs:${t.id}">Сохранить как…</button></div>
-    </div></div>`;
+  const marksHint = t.marks.length
+    ? `${marksWord(t.marks.length)} · уйдут со следующим сообщением из композера`
+    : 'Колесо — масштаб, «Рука» — сдвиг. Пометки уходят со следующим сообщением из композера.';
+  return `<div class="ovl ed"><div class="editor" role="dialog" aria-label="Редактор картинки" data-testid="editor">
+    <div class="ed-head"><h3>Редактор</h3><span class="fname mono" style="font-size:12px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(fileLabel(t))}</span>${st.file ? `<span class="badge ok">${st.ver} · в проекте</span>` : '<span class="badge draft">черновик</span>'}${S.mobile ? '' : `<span class="hint">шаг ${t.cur + 1} из ${t.steps.length}</span>`}<span class="grow"></span>
+      <button class="ib" data-act="edClose" title="Закрыть — картинка останется выбранной" data-testid="edClose">${ic('x')}</button></div>
+    <div class="ed-body">
+      <div class="ed-stage">${stage}</div>
+      <div class="ed-side">
+        <div class="csec"><div class="h">${ic('zap', 1)} Быстрые действия <span class="hint" style="font-weight:400">· сразу, без промпта · ${variantsWord(S.count)} · ${shortPrice()}</span></div>
+          <div class="qa">${QUICK.map(([id, n]) => `<button class="btn sm" data-act="quick:${id}" data-testid="quick-${id}">${n}</button>`).join('')}</div></div>
+        <div class="csec"><div class="h">${ic('wrench', 1)} Без ИИ <span class="hint" style="font-weight:400">· бесплатно, мгновенно</span></div>
+          <div class="qa">${noAi.map(([id, n]) => `<button class="btn sm ${S.cvPop === id ? 'pri' : ''}" data-act="noaiOpen:${id}">${n}</button>`).join('')}</div>${pop}</div>
+        <div class="csec"><div class="h">${ic('hist', 1)} Шаги этой картинки <span class="hint" style="font-weight:400">· в ленте — одна карточка-стопка</span></div><div class="steps">${steps}</div></div>
+      </div>
+    </div>
+    <div class="ed-foot"><span class="hint" data-testid="marksHint">${marksHint}</span>
+      <button class="btn sm" data-act="saveQuick:${t.id}">${ic('save', 1)} Сохранить в проект</button><button class="btn sm" data-act="saveAs:${t.id}">Сохранить как…</button><button class="btn sm pri" data-act="edClose">Готово</button></div>
+  </div></div>`;
 }
 function panelBody(k) {
   if (k === 'chats') return viewChatsBody();
   if (k === 'files') return viewFilesBody();
   if (k === 'chars') return viewCharsBody();
-  return viewCanvas(false);
+  return '';
 }
 function panelSub(k) {
-  if (k === 'canvas' && ft()) return esc(fileLabel(ft()));
   if (k === 'chars') return `${S.characters.length}`;
   return '';
 }
@@ -877,7 +948,7 @@ function viewZone(z) {
 function viewRail(z) {
   const keys = Object.keys(PANELS).filter(k => S.home[k] === z);
   const extra = z === 'right' ? `<button class="ri" data-act="toastStatic:«Изменения» — как сейчас" title="Изменения">${ic('git')}</button><button class="ri" data-act="toastStatic:«Задачи» — как сейчас" title="Задачи">${ic('list')}</button>` : '';
-  return `<div class="rail">${keys.map(k => `<button class="ri ${isOpen(k) ? 'on' : ''}" data-act="toggle:${k}" data-rail="${k}" title="${PANELS[k].title}" data-testid="rail-${k}">${ic(PANELS[k].icon)}${k === 'chars' || k === 'canvas' ? '<span class="new" title="Новая панель"></span>' : ''}</button>`).join('')}${extra}</div>`;
+  return `<div class="rail">${keys.map(k => `<button class="ri ${isOpen(k) ? 'on' : ''}" data-act="toggle:${k}" data-rail="${k}" title="${PANELS[k].title}" data-testid="rail-${k}">${ic(PANELS[k].icon)}${k === 'chars' ? '<span class="new" title="Новая панель"></span>' : ''}</button>`).join('')}${extra}</div>`;
 }
 function viewSheet() {
   if (!S.sheet) return '';
@@ -899,6 +970,8 @@ function viewSave() {
 let focusTa = false, taSel = null;
 function render() {
   document.documentElement.dataset.theme = S.theme;
+  // Режим «Картинка» живёт только при выбранной картинке
+  if (!ft()) { S.mode = 'chat'; S.editor = false; }
   document.querySelectorAll('[data-demo]').forEach(b => {
     const [k, v] = b.dataset.demo.split(':');
     if (k === 'theme') b.setAttribute('aria-pressed', S.theme === v);
@@ -910,8 +983,8 @@ function render() {
   const app = document.getElementById('app');
   app.className = 'app' + (S.mobile ? ' mobile' : '');
   app.innerHTML = S.mobile
-    ? `${viewChat()}${viewSheet()}${viewSave()}${S.toast ? viewToast() : ''}`
-    : `${viewRail('left')}${viewZone('left')}${viewChat()}${viewZone('right')}${viewRail('right')}${viewSave()}${S.toast ? viewToast() : ''}`;
+    ? `${viewChat()}${viewSheet()}${viewEditor()}${viewSave()}${S.toast ? viewToast() : ''}`
+    : `${viewRail('left')}${viewZone('left')}${viewChat()}${viewZone('right')}${viewRail('right')}${viewEditor()}${viewSave()}${S.toast ? viewToast() : ''}`;
   const f2 = document.getElementById('feed');
   if (f2) f2.scrollTop = (atBottom || render.toBottom) ? f2.scrollHeight : sc;
   render.toBottom = false;
@@ -969,17 +1042,14 @@ function send() {
   const marks = t && S.sendMarks ? t.marks.length : 0;
   if (S.mode === 'image') {
     if (maskBlock()) return;
-    if (t) {
+    if (t.steps.length) {
       msgs().push({ who: 'quiet', text: `Вы запустили: <b>«${esc(text)}»</b> · ${esc(fileLabel(t))}${marks ? ` · ${marksWord(marks)}` : ''} · ${esc(model().name)} · ${esc(shortPrice())} · ${variantsWord(S.count)}` });
       runGen(t.id, { kind: kindOf(text), n: S.count, label: text });
     } else {
-      // Новая картинка: нить с пустыми шагами — первый шаг появится, когда выберут вариант
-      const id = 't' + (++S.tseq);
-      const nm = /аня|кафе/i.test(text) ? 'anya-cafe' : 'image';
-      S.threads[id] = { id, name: nm + '.png', folder: S.saveFolder || 'images', path: null, meta: '', steps: [], cur: 0, marks: [], gen: null, variants: null, sel: 0, prompt: text };
+      // Карточка-черновик: получает имя по промпту, первый шаг появится, когда выберут вариант
+      if (t.name === 'Новая картинка') t.name = (/аня|кафе/i.test(text) ? 'anya-cafe' : 'image') + '.png';
       msgs().push({ who: 'quiet', text: `Вы запустили: <b>«${esc(text)}»</b> · новая картинка · ${esc(model().name)}${S.charOn ? ` · персонаж: ${esc(charById(S.charOn).name)}` : ''} · ${esc(shortPrice())} · ${variantsWord(S.count)}` });
-      msgs().push({ who: 'bot', text: '', thread: id, silent: true });
-      runGen(id, { kind: 'new', n: S.count, label: text });
+      runGen(t.id, { kind: 'new', n: S.count, label: text });
     }
     S.myPrompt = ''; S.promptBy = null; S.promptDraft = '';
   } else {
@@ -992,7 +1062,11 @@ function send() {
 }
 function agentReply(text, t, marks) {
   S.typing = false;
-  if (t) {
+  if (t && !t.steps.length) {
+    if (t.name === 'Новая картинка') t.name = (/аня|кафе/i.test(text) ? 'anya-cafe' : 'image') + '.png';
+    msgs().push({ who: 'bot', text: 'Рисую новую картинку — варианты появятся в её карточке.', launch: { file: fileLabel(t), n: S.count, price: shortPrice(), prompt: text, changed: '' } });
+    runGen(t.id, { kind: 'new', n: S.count, label: 'Claude: ' + text.slice(0, 40) });
+  } else if (t) {
     const kind = kindOf(text);
     const prompt = kind === 'remove-cup' ? 'Убери чашку со стола (отмечена кистью), на её месте — продолжение столешницы. Остальное не меняй, размер кадра сохрани.' : AGENT_PROMPT;
     const changed = [];
@@ -1035,10 +1109,17 @@ const ACT = {
   setRole(r) { S.samples[S.roleEdit].role = r; S.roleEdit = null; },
   rmSample(i) { S.samples.splice(+i, 1); S.roleEdit = null; },
   addSample(src) { S.samples.push(src === 'pc' ? { kind: 'dusk', name: 'dusk-ref.png', role: 'style' } : { kind: 'team', name: 'team-photo.jpg', role: 'face' }); S.menu = null; },
-  unfocus() { S.focus = null; toast('Фокус снят. Следующая генерация нарисует новую картинку'); },
-  focus(id) { S.focus = id; S.pickOpen = null; S.saveFolder = null; },
+  unfocus() {
+    const t = ft();
+    // Пустой черновик без вариантов уходит из ленты вместе с выбором
+    if (t && !t.steps.length && !t.gen && !t.variants) { S.chats[S.chat].msgs = msgs().filter(m => m.thread !== t.id); delete S.threads[t.id]; }
+    S.focus = null; S.mode = 'chat'; S.editor = false;
+    toast('Картинка больше не выбрана: режим «Чат», над композером снова git-полоса');
+  },
+  focus(id) { S.focus = id; S.pickOpen = null; },
+  edClose() { S.editor = false; S.cvPop = null; },
   picClick(id) { if (!S.threads[id].steps.length) return; if (S.focus === id) { ACT.edit(id); return; } S.pickOpen = S.pickOpen === id ? null : id; },
-  edit(id) { S.focus = id; S.pickOpen = null; openPanel('canvas'); S.cmp = false; if (S.mobile) S.sheet = null; },
+  edit(id) { S.focus = id; S.pickOpen = null; S.editor = true; S.cmp = false; S.sheet = null; },
   openChars() { if (S.mobile) S.sheet = 'chars'; else openPanel('chars'); },
   charOff() { S.charOn = null; },
   charOn(id) { S.charOn = id; toast(`Персонаж «${charById(id).name}» подключён к работе — чип в полосе «Картинки»`); if (S.mobile) S.sheet = null; },
@@ -1067,7 +1148,7 @@ const ACT = {
   take(id) { take(id); },
   dropVars(id) { S.threads[id].variants = null; },
   cancel(id) { const t = S.threads[id]; clearInterval(t.gen.timer); t.gen = null; msgs().push({ who: 'quiet', text: 'Генерация отменена · деньги не списаны' }); },
-  cmpOnCanvas(id) { S.focus = id; openPanel('canvas'); S.cmp = true; if (S.mobile) S.sheet = null; },
+  cmpOnCanvas(id) { S.focus = id; S.editor = true; S.cmp = true; S.sheet = null; },
   cmpOn() { S.cmp = true; }, cmpOff() { S.cmp = false; },
   tool(id) { S.tool = id; },
   clearMarks() { if (ft()) ft().marks = []; },
@@ -1106,15 +1187,15 @@ const ACT = {
   saveClose() { S.saveDlg = null; },
   saveDo() { const D = S.saveDlg; const nm = D.base.trim().replace(/\.png$/i, '') + '.png'; S.saveDlg = null; doSave(S.threads[D.tid], D.folder, nm); },
   showFile(p) { S.hlFile = p; if (S.mobile) S.sheet = 'files'; else openPanel('files'); S.toast = null; },
-  toggle(k) { if (S.mobile && k !== 'canvas') { S.sheet = k; return; } if (isOpen(k)) closePanel(k); else openPanel(k); },
+  toggle(k) { if (S.mobile) { S.sheet = k; return; } if (isOpen(k)) closePanel(k); else openPanel(k); },
   pin(k) { openPanel(k); hidePeek(); },
   sheet(k) { S.sheet = k; }, sheetClose() { S.sheet = null; },
-  chat(id) { S.chat = id; S.focus = null; S.chats[id].sub = 'сейчас'; if (S.mobile) S.sheet = null; },
-  newChat() { const id = 'n' + Date.now(); S.chats[id] = { name: 'Новый чат', sub: 'сейчас', msgs: [] }; S.chat = id; S.focus = null; },
+  chat(id) { S.chat = id; S.focus = null; S.mode = 'chat'; S.chats[id].sub = 'сейчас'; if (S.mobile) S.sheet = null; },
+  newChat() { const id = 'n' + Date.now(); S.chats[id] = { name: 'Новый чат', sub: 'сейчас', msgs: [] }; S.chat = id; S.focus = null; S.mode = 'chat'; },
   fileMenu(p) { S.fileMenu = S.fileMenu === p ? null : p; },
   editFile(path) {
     S.fileMenu = null; S.sheet = null;
-    // Чат картинки: последний активный чат проекта, картинка в фокусе, панель «Холст»
+    // Последний активный чат проекта: картинка выбрана, открыт редактор, композер в режиме «Картинка»
     const found = Object.values(S.threads).filter(t => t.path === path || t.steps.some(s => s.file === path)).pop();
     const inChat = found && msgs().some(m => m.thread === found.id);
     if (inChat) { S.focus = found.id; msgs().push({ who: 'quiet', text: `Открыто из «Файлов»: <b>${esc(path)}</b> — картинка уже есть в этом чате, взята в работу` }); }
@@ -1126,12 +1207,21 @@ const ACT = {
       msgs().push({ who: 'bot', text: '', thread: id, silent: true });
       S.focus = id;
     }
-    S.mode = 'image'; S.barOpen = true; S.saveFolder = null;
-    openPanel('canvas'); render.toBottom = true;
+    S.mode = 'image'; S.barOpen = true; S.editor = true; S.cmp = false;
+    render.toBottom = true;
   },
-  drawIn(path) { S.fileMenu = null; S.sheet = null; S.focus = null; S.mode = 'image'; S.barOpen = true; S.saveFolder = path; msgs().push({ who: 'quiet', text: `Нарисовать картинку в <b>${esc(path)}/</b> — композер в режиме «Картинка»` }); render.focusTa = true; render.toBottom = true; },
+  drawIn(path) { S.fileMenu = null; S.sheet = null; startDraft(path); },
   toastStatic(t) { toast(t + ' (в макете не раскрывается)'); },
 };
+// Карточка-черновик «Новая картинка»: выбирается сразу, поэтому режим «Картинка» доступен до первой генерации
+function startDraft(folder) {
+  const id = 't' + (++S.tseq);
+  S.threads[id] = { id, name: 'Новая картинка', folder, path: null, meta: '', steps: [], cur: 0, marks: [], gen: null, variants: null, sel: 0, draft: true };
+  msgs().push({ who: 'quiet', text: `Новая картинка · сохранять в <b>${esc(folder)}/</b>` });
+  msgs().push({ who: 'bot', text: '', thread: id, silent: true });
+  S.focus = id; S.mode = 'image'; S.barOpen = true; S.editor = false;
+  render.focusTa = true; render.toBottom = true;
+}
 function addStep(t, d, label) {
   t.steps = t.steps.slice(0, t.cur + 1);
   t.steps.push({ d, label, ver: null, file: null }); t.cur = t.steps.length - 1; t.marks = [];
@@ -1151,7 +1241,7 @@ function doSave(t, folder, nm) {
   render.toBottom = true;
 }
 function openPanel(k) {
-  if (S.mobile) { if (k === 'canvas') { if (!S.zones.right.includes(k)) S.zones.right.push(k); } else S.sheet = k; return; }
+  if (S.mobile) { S.sheet = k; return; }
   if (isOpen(k)) { flash(k); return; }
   S.zones[S.home[k]].push(k);
 }
@@ -1165,7 +1255,7 @@ document.addEventListener('click', e => {
   if (demo) {
     const [k, v] = demo.dataset.demo.split(':');
     if (k === 'theme') S.theme = v;
-    if (k === 'w') { S.mobile = v === 'mob'; S.sheet = null; if (S.mobile) { S.barOpen = false; closePanel('canvas'); } }
+    if (k === 'w') { S.mobile = v === 'mob'; S.sheet = null; if (S.mobile) S.barOpen = false; }
     if (k === 'reset') { Object.values(S.threads).forEach(t => t.gen && clearInterval(t.gen.timer)); initState(); }
     render(); return;
   }
@@ -1204,6 +1294,7 @@ function rerenderKeep(inp) {
 }
 document.addEventListener('keydown', e => {
   if (e.target.id === 'ta' && e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+  if (e.key === 'Escape' && S.editor && !S.saveDlg) { ACT.edClose(); render(); }
 });
 
 // Рисование и панорама на холсте
@@ -1258,7 +1349,7 @@ app.addEventListener('mouseover', e => {
     S.peekKey = k;
     const fr = document.querySelector('.frame').getBoundingClientRect(), rr = r.getBoundingClientRect();
     const left = S.home[k] === 'left' ? rr.right - fr.left + 6 : rr.left - fr.left - 306;
-    peek.innerHTML = `<div class="ph">${ic(PANELS[k].icon, 1)}<span class="ttl">${PANELS[k].title}</span><span class="grow"></span><button class="ib sm" data-act="pin:${k}" title="Закрепить панель" data-testid="pin-${k}">${ic('pin', 1)}</button></div><div class="pbody" style="max-height:470px">${k === 'canvas' ? viewCanvas(true) : panelBody(k)}</div>`;
+    peek.innerHTML = `<div class="ph">${ic(PANELS[k].icon, 1)}<span class="ttl">${PANELS[k].title}</span><span class="grow"></span><button class="ib sm" data-act="pin:${k}" title="Закрепить панель" data-testid="pin-${k}">${ic('pin', 1)}</button></div><div class="pbody" style="max-height:470px">${panelBody(k)}</div>`;
     peek.style.left = left + 'px'; peek.style.top = (rr.top - fr.top) + 'px'; peek.style.display = 'flex';
   }, 350);
 });

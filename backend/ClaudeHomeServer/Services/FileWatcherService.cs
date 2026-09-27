@@ -263,9 +263,9 @@ public class FileWatcherService : IDisposable
     private RecursiveDirectoryWatcher StartWatcher(string key, Entry entry)
     {
         RecursiveDirectoryWatcher? w = null;
-        // Служебные каталоги (TreeExcludes) не ПОДПИСЫВАЮТСЯ вовсе — тем же списком, по
+        // Служебные каталоги (TreeExcludes.WatchNames) не ПОДПИСЫВАЮТСЯ вовсе — тем же списком, по
         // которому потом фильтруются события: второй список дал бы «подписались, но глушим».
-        w = new RecursiveDirectoryWatcher(entry.Root, TreeExcludes.Names,
+        w = new RecursiveDirectoryWatcher(entry.Root, TreeExcludes.WatchNames,
             (path, _) => OnFsEvent(key, entry, path),
             onWarning: message => OnWatchWarning(key, message),
             includeDirectories: true, // дерево файлов в UI показывает и каталоги
@@ -393,7 +393,7 @@ public class FileWatcherService : IDisposable
             }
             foreach (var d in dirs)
             {
-                if (TreeExcludes.Contains(Path.GetFileName(d))) continue;
+                if (TreeExcludes.WatchContains(Path.GetFileName(d))) continue;
                 if (snap.Count >= SnapshotMaxEntries) return snap;
                 snap[Path.GetRelativePath(root, d).Replace('\\', '/')] = -1;
                 stack.Push(d);
@@ -437,7 +437,7 @@ public class FileWatcherService : IDisposable
     private static bool IsExcluded(string rel)
     {
         foreach (var seg in rel.Split('/'))
-            if (TreeExcludes.Contains(seg)) return true;
+            if (TreeExcludes.WatchContains(seg)) return true;
         return false;
     }
 

@@ -15,7 +15,7 @@ internal interface IFilesChangedSink
 /// <summary>
 /// Ватчер деревьев локальных проектов (ADR-016, задача 4.2): тот же
 /// <see cref="RecursiveDirectoryWatcher"/> и тот же список исключений
-/// (<see cref="TreeExcludes"/>), что у серверного FileWatcherService. Проект наблюдается,
+/// (<see cref="TreeExcludes.WatchNames"/>), что у серверного FileWatcherService. Проект наблюдается,
 /// пока с машины его открывают: наблюдение поднимает принятый билет, гасит простой.
 ///
 /// Сбои различаются, как на сервере: потеря событий — только полная пересинхронизация у
@@ -86,7 +86,7 @@ internal sealed class AgentFileWatchers : IDisposable
 
     private void Start(Entry entry)
     {
-        var watcher = _factory(entry.Root, TreeExcludes.Names,
+        var watcher = _factory(entry.Root, TreeExcludes.WatchNames,
             (path, _) => OnEvent(entry, path),
             failure => OnFailure(entry, failure));
         try { watcher.Start(); }
@@ -109,7 +109,7 @@ internal sealed class AgentFileWatchers : IDisposable
         if (rel.StartsWith("..", StringComparison.Ordinal) || rel == ".") return;
         // Ветка FileSystemWatcher (Windows/macOS) наблюдает всё дерево — служебные каталоги
         // отсекаются по сегментам, как у FileWatcherService
-        if (rel.Split('/').Any(TreeExcludes.Contains)) return;
+        if (rel.Split('/').Any(TreeExcludes.WatchContains)) return;
         lock (_lock)
         {
             if (!IsLive(entry)) return;

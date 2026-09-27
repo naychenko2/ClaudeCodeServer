@@ -235,6 +235,64 @@ export interface ChatItemToolCtx {
 export interface ChatCardBadgeCtx { session: Session; isMobile: boolean }
 export interface ChatCardBadgeApi { open?: (session: Session) => boolean }
 
+// ---- Композер и рабочая область: слоты для полос, режимов, чипов и панелей ----
+// Имена слотов — одной точкой: каркас и модули ссылаются на константы, а не на строки.
+export const SLOT_COMPOSER_STRIP = 'composer-strip';
+export const SLOT_COMPOSER_MODE = 'composer-mode';
+export const SLOT_COMPOSER_CHIP = 'composer-chip';
+export const SLOT_WORKSPACE_PANEL_DEF = 'workspace-panel-def';
+
+// Слот `composer-strip`: полоса над композером (Git, Картинки, …). Имя вклада — id
+// полосы; render рисует саму полосу, action описывает её для переключателя «Git ▾».
+// Выбор активной полосы — стор lib/composerStrips.ts, не сама полоса.
+export interface ComposerStripCtx {
+  projectId: string;
+  sessionId: string | null;
+  isMobile: boolean;
+  // Свёрнута ли полоса в строку 30 px (одно состояние на все полосы)
+  collapsed: boolean;
+  // Переключатель «Git ▾» от хоста: полоса ставит его на место своего заголовка
+  switcher: ReactNode;
+}
+export interface ComposerStripApi {
+  title: string;
+  icon: ReactNode;
+  // false — полоса не предлагается (нет git, модуль недоступен в проекте)
+  isAvailable?: (ctx: { projectId: string; sessionId: string | null }) => boolean;
+  // Строка состояния в меню переключателя: «feat/site-header · +42 −7», «Работаем с hero.png»
+  status?: (ctx: { projectId: string; sessionId: string | null }) => ReactNode;
+}
+
+// Слот `composer-mode`: режим поля ввода рядом с «Чатом» («Картинка»). Имя вклада — id режима.
+export interface ComposerModeCtx { projectId: string | null; sessionId: string | null }
+export interface ComposerModeApi {
+  title: string;
+  icon: ReactNode;
+  // Режим предлагается, только пока условие истинно (например, выбрана картинка)
+  isAvailable: (ctx: ComposerModeCtx) => boolean;
+  placeholder: (ctx: ComposerModeCtx) => string;
+  // Подпись кнопки отправки: «✦ Изменить · ≈ $0.15»
+  submitLabel?: (ctx: ComposerModeCtx) => ReactNode;
+  // Подпись над полем: «Промпт модели · уходит прямо в FLUX Fill, без агента»
+  hint?: (ctx: ComposerModeCtx) => ReactNode;
+  // Отправка мимо агента; текст режима хранится отдельно от черновика чата
+  onSubmit: (ctx: ComposerModeCtx, text: string) => Promise<void> | void;
+}
+
+// Render-слот `composer-chip`: чип над полем ввода («hero.png · 1 пометка ✕»).
+// Вклад сам решает, рисоваться ли (null — чипа нет).
+export interface ComposerChipCtx { projectId: string | null; sessionId: string | null; isMobile: boolean }
+
+// Слот `workspace-panel-def`: панель рабочей области от подсистемы (например,
+// «Персонажи»). Имя вклада — ключ панели; render рисует тело, action описывает её
+// для рельсы и каталога панелей.
+export interface WorkspacePanelDefCtx { projectId: string; isMobile: boolean; onClose: () => void }
+export interface WorkspacePanelDefApi {
+  title: string;
+  icon: ReactNode;
+  isAvailable?: (projectId: string) => boolean;
+}
+
 // ---- Хранилище ----
 const _manifests: SubsystemManifest[] = [];
 let _version = 0;

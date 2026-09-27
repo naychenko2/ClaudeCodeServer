@@ -44,6 +44,9 @@ export interface SubsystemManifest {
   order: number;
   // Подсистема не получает пилюлю в таббаре хаба (вход — через меню/шорткаты).
   noPill?: boolean;
+  // Вклады самого каркаса (полоса «Руки»): бэковой подсистемы с тумблером у них нет,
+  // гейт включённости не применяется — доступность решают сами вклады.
+  core?: boolean;
   tab?: { component: LazyExoticComponent<ComponentType<SubsystemTabProps>> };
   slots?: Record<string, SlotContribution[]>;
 }
@@ -293,7 +296,7 @@ export function getSubsystemTab(key: string): LazyExoticComponent<ComponentType<
 export function getSlotContributions<C = never, A = Record<string, unknown>>(slot: string): SlotContribution<C, A>[] {
   const out: SlotContribution<C, A>[] = [];
   for (const m of _manifests) {
-    if (!isSubsystemEnabled(m.key)) continue;
+    if (!m.core && !isSubsystemEnabled(m.key)) continue;
     const list = m.slots?.[slot];
     if (list) out.push(...(list as unknown as SlotContribution<C, A>[]));
   }

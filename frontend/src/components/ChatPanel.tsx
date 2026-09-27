@@ -50,6 +50,7 @@ import { useModelCaps, assistantName, planModelChange } from '../lib/models';
 import { Composer } from './Composer';
 import { ProjectGitBar } from './ProjectGitBar';
 import { ComposerStripHost } from './chat/ComposerStripHost';
+import { LocalHandsStripFeed } from '../features/localHands/LocalHandsStripFeed';
 import { C, R, SHADOW, SP, FS, PANEL_ANIM, CHAT_MAX_W, CHAT_GUTTER_L } from '../lib/design';
 import { VAR_PAD_R, VAR_SHIFT, VAR_W, useChatGutter } from '../lib/chatGutter';
 import { navPush, type NavSnapshot } from '../lib/nav';
@@ -2870,6 +2871,9 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
               !isMobile; на мобиле о дереве хода сообщает только отметка в ленте. */}
           {/* Полосы над композером (реестр composer-strip): одна за раз, Git — встроенный
               вклад каркаса; какая видна — решает стор lib/composerStrips. */}
+          {/* Полоса «Руки»: состояние рук чата и её фокус питает отдельный компонент — сама
+              полоса рисуется только активной */}
+          {project && !embedded && <LocalHandsStripFeed session={session} project={project} />}
           {project && !embedded && (
             <ComposerStripHost projectId={project.id} sessionId={session.id} isMobile={isMobile === true}
               builtins={[{

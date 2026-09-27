@@ -94,6 +94,12 @@ public static class BackupPaths
             if (segments.Length >= 3 && segments[2].Equals("cache", StringComparison.OrdinalIgnoreCase))
                 return false;
         }
+        // Сборка Viaduct (modules/viaduct/**) — воспроизводимый кеш скрипта build-viaduct.ps1,
+        // а не данные. Только эта подпапка: соседние modules/{id}/module.json — манифесты
+        // внешних модулей, они в архив едут
+        if (root.Equals("modules", StringComparison.OrdinalIgnoreCase)
+            && segments.Length >= 2 && segments[1].Equals("viaduct", StringComparison.OrdinalIgnoreCase))
+            return false;
         // Дефолтные папки архивов внутри data (нестандартные пути отсекаются по абсолютному
         // пути в BackupCore — имя папки там может быть любым)
         if (root.Equals(DefaultBackupDirName, StringComparison.OrdinalIgnoreCase)) return false;

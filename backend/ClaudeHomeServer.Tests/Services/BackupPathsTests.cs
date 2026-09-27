@@ -121,6 +121,23 @@ public class BackupPathsTests
     }
 
     [Theory]
+    [InlineData("modules/viaduct/dist/index.html")]
+    [InlineData("modules/viaduct/dist/assets/index-x81WCr2c.js")]
+    [InlineData("modules/Viaduct/dist/.viaduct-build.json")]
+    public void СборкаViaduct_Исключена(string path)
+    {
+        // Воспроизводимый кеш build-viaduct.ps1 — пересобирается скриптом, не данные
+        BackupPaths.ShouldInclude(path).Should().BeFalse();
+    }
+
+    [Fact]
+    public void МанифестВнешнегоМодуля_ПопадаетВАрхив()
+    {
+        // Исключение узкое: соседние modules/{id}/module.json — настройка, её бэкапим
+        BackupPaths.ShouldInclude("modules/echo/module.json").Should().BeTrue();
+    }
+
+    [Theory]
     [InlineData("jwt-secret.txt")]
     [InlineData("vapid-keys.json")]
     [InlineData("module-keys.json")]

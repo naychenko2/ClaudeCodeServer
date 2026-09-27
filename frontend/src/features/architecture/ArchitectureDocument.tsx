@@ -22,7 +22,8 @@ import {
   takeServerVersion, downloadLocal, setReadOnly, startBlank, generateArchitecture, dismissBuildSummary,
   setFrameWindow, POLL_MS, MODEL_PATH, type ArchState,
 } from './architectureStore';
-import { AgentToggle, BuildBanner, agentBlockedHint, useAgentBuild, useAgentPref } from './ArchitectureBuild';
+import { BuildBanner, agentBlockedHint, useAgentBuild, useAgentPref } from './ArchitectureBuild';
+import { ArchitectureCreateDialog } from './ArchitectureCreateDialog';
 import { ViaductFrame, type FrameFailure } from './ViaductFrame';
 import { parseOutline, modelTitle, LEVEL_LABEL, type ArchElement, type ArchLevel } from './modelOutline';
 
@@ -40,6 +41,8 @@ export function ArchitectureDocument({ projectId, projectName, isMobile, onClose
   const [frameFailed, setFrameFailed] = useState<FrameFailure | null>(null);
   // Мобила: список-обзор по умолчанию, схема — по кнопке
   const [mobileCanvas, setMobileCanvas] = useState(false);
+  // Диалог первого создания: выбор «из кода» / «с пустого холста», см. ArchitectureCreateDialog
+  const [createOpen, setCreateOpen] = useState(false);
 
   useEffect(() => { void loadArchitecture(projectId); }, [projectId]);
 
@@ -195,16 +198,10 @@ export function ArchitectureDocument({ projectId, projectName, isMobile, onClose
           <EmptyState
             icon={<DraftingCompass size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
             title="Архитектура ещё не описана"
-            subtitle="Соберу C4-модель из кода проекта: системы, внешние сервисы, контейнеры и связи между ними. Дальше её можно править руками или поручить агенту."
+            subtitle="Соберу C4-модель из кода проекта или начну с пустого холста — выбор за вами."
             action={(
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: SP.md }}>
-                <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap', justifyContent: 'center' }}>
-                  <Button variant="primary" size="md" onClick={build}
-                    leftIcon={<Sparkles size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}>Собрать архитектуру</Button>
-                  {!isMobile && <Button variant="ghost" size="md" onClick={startBlank}>Начать с пустого холста</Button>}
-                </div>
-                <AgentToggle checked={withAgent && !agentBusy} onChange={setWithAgent} disabled={agentBusy} hint={agentHint} />
-              </div>
+              <Button variant="primary" size="md" onClick={() => setCreateOpen(true)}
+                leftIcon={<Sparkles size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}>Создать архитектуру</Button>
             )}
           />
         )}
@@ -253,6 +250,15 @@ export function ArchitectureDocument({ projectId, projectName, isMobile, onClose
           />
         )}
       </div>
+
+      {createOpen && (
+        <ArchitectureCreateDialog
+          withAgent={withAgent} onWithAgentChange={setWithAgent} agentBusy={agentBusy} agentHint={agentHint}
+          onClose={() => setCreateOpen(false)}
+          onGenerate={() => { setCreateOpen(false); build(); }}
+          onBlank={() => { setCreateOpen(false); startBlank(); }}
+        />
+      )}
     </div>
   );
 }

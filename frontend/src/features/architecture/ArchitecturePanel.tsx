@@ -8,7 +8,9 @@ import {
   C, FONT, FS, R, SP, Button, IconButton, IconField, EmptyState, WaitingIndicator, PanelHeaderSlot, useHasPanelHeader,
   ICON_SIZE, ICON_STROKE,
 } from 'aihome_shell/kit';
-import { useArchitecture, loadArchitecture, generateArchitecture, requestFocus } from './architectureStore';
+import { useArchitecture, loadArchitecture, generateArchitecture, startBlank, requestFocus } from './architectureStore';
+import { agentBlockedHint, useAgentBuild, useAgentPref } from './ArchitectureBuild';
+import { ArchitectureCreateDialog } from './ArchitectureCreateDialog';
 import { parseOutline, LEVEL_LABEL, type ArchLevel } from './modelOutline';
 
 interface Props {
@@ -24,6 +26,11 @@ export function ArchitecturePanel({ projectId, archOpen, onEnsureOpen, onCollaps
   const s = useArchitecture();
   const inHeader = useHasPanelHeader();
   const [query, setQuery] = useState('');
+  const [createOpen, setCreateOpen] = useState(false);
+  const [withAgent, setWithAgent] = useAgentPref(projectId);
+  const agent = useAgentBuild(projectId, s.agent?.taskId ?? null);
+  const agentHint = agentBlockedHint(agent.phase);
+  const agentBusy = agentHint !== null;
 
   useEffect(() => { void loadArchitecture(projectId); }, [projectId]);
 
@@ -72,18 +79,26 @@ export function ArchitecturePanel({ projectId, archOpen, onEnsureOpen, onCollaps
     );
   }
 
-  if (s.status === 'missing') {
+  if (s.status === 'missing' && !s.blank) {
     return (
       <>{header}<EmptyState compact
         icon={<DraftingCompass size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />}
         title="Архитектура ещё не описана"
-        subtitle="Соберу C4-модель из кода проекта: системы, контейнеры и связи."
+        subtitle="Соберу C4-модель из кода проекта или начну с пустого холста — выбор за вами."
         action={(
           <Button variant="primary" size="sm" fullWidth loading={s.generating}
-            onClick={() => { onEnsureOpen(); void generateArchitecture(projectId); }}
-            leftIcon={<Sparkles size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}>Собрать архитектуру</Button>
+            onClick={() => setCreateOpen(true)}
+            leftIcon={<Sparkles size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}>Создать архитектуру</Button>
         )}
-      /></>
+      />
+      {createOpen && (
+        <ArchitectureCreateDialog
+          withAgent={withAgent} onWithAgentChange={setWithAgent} agentBusy={agentBusy} agentHint={agentHint}
+          onClose={() => setCreateOpen(false)}
+          onGenerate={() => { setCreateOpen(false); onEnsureOpen(); void generateArchitecture(projectId, withAgent && !agentBusy); }}
+          onBlank={() => { setCreateOpen(false); onEnsureOpen(); startBlank(); }}
+        />
+      )}</>
     );
   }
 

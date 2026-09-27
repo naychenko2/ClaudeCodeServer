@@ -153,6 +153,7 @@ export default defineConfig({
       // MF remote notes (dev): dev-сервер модуля на :5174, хост грузит remoteEntry.js
       // через этот префикс. В прод remoteEntry.js сервиcится статически из wwwroot.
       '/notes-remote': { target: 'http://localhost:5174', changeOrigin: true, rewrite: (p: string) => p.replace(/^\/notes-remote/, '') },
+      '/architecture-remote': { target: 'http://localhost:5175', changeOrigin: true, rewrite: (p: string) => p.replace(/^\/architecture-remote/, '') },
     },
   },
   preview: {
@@ -164,6 +165,7 @@ export default defineConfig({
       '/drawio': { target: backendUrl, changeOrigin: true },
       '/telemetry-proxy': { target: backendUrl, changeOrigin: true, ws: true },
       '/notes-remote': { target: 'http://localhost:5174', changeOrigin: true, rewrite: (p: string) => p.replace(/^\/notes-remote/, '') },
+      '/architecture-remote': { target: 'http://localhost:5175', changeOrigin: true, rewrite: (p: string) => p.replace(/^\/architecture-remote/, '') },
     },
   },
 });

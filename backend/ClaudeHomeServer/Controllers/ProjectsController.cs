@@ -54,7 +54,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     // человеку нужна причина, по которой тумблер недоступен, а не «выключено тумблером».
     // null — тумблер доступен.
     private string? HandsToggleRefusal(Project p, ClaudeHomeServer.Services.Execution.DeviceExecStatus? device) =>
-        ProjectCapabilities.HandsRefusal(p, device, flags.IsEnabled(UserId, FeatureFlagKeys.LocalHands), projectHandsEnabled: true);
+        ProjectCapabilities.HandsRefusal(p, device, projectHandsEnabled: true);
 
     // Состояние устройства локального проекта (ADR-016); у серверного — null. Канала нет
     // (подсистема устройств выключена) — устройство считается ненайденным, а не падает.

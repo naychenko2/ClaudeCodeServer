@@ -185,7 +185,8 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
   // Пункт «Устройства» — под любым из флагов desktop-agent и local-projects: без обоих
   // подключать нечего
   const devicesMenu = useDevicesMenuVisible();
-  const localHandsEnabled = useFeature(FLAGS.localHands);
+  // Руки (ADR-016 §7) своего флага не имеют: они есть только у локальных проектов
+  const localProjectsEnabled = useFeature(FLAGS.localProjects);
 
   // Доступна ли выкатка на бой. Спрашиваем только у админа: фича admin-only и вдобавок
   // выключена в конфиге по умолчанию — на машинах, где раннера нет, пункта быть не должно.
@@ -554,7 +555,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
           // Устройства — клиент рук (desktop-agent) или агент локальных проектов
           // (local-projects): режим модалка выбирает сама
           onShowDevices={devicesMenu ? () => setShowDevices(true) : undefined}
-          onShowHandsProviders={localHandsEnabled ? () => setShowHandsProviders(true) : undefined}
+          onShowHandsProviders={localProjectsEnabled ? () => setShowHandsProviders(true) : undefined}
           onShowUserManagement={() => setShowUserMgmt(true)}
           // Админский список подсистем инстанса (Этап 5, волна 3): только
           // чтение через GET /api/admin/subsystems, без тумблера — глобальный

@@ -169,23 +169,30 @@ public class ProjectCapabilitiesTests
     private static DeviceExecStatus WithHands() => Device(caps: [DeviceCapabilities.Exec, DeviceCapabilities.Hands]);
 
     [Fact]
-    public void Руки_ВсеУсловия_Можно_ДажеОфлайн()
+    public void Руки_ВсеУсловия_Можно_ДажеОфлайн_БезФлага()
     {
-        ProjectCapabilities.HandsRefusal(Local(), WithHands(), handsFlagEnabled: true, projectHandsEnabled: true)
-            .Should().BeNull();
-        ProjectCapabilities.HandsRefusal(Local(), WithHands() with { Online = false }, true, true)
+        ProjectCapabilities.HandsRefusal(Local(), WithHands(), projectHandsEnabled: true)
+            .Should().BeNull("флага нет: руки у всех, выключатель — тумблер проекта");
+        ProjectCapabilities.HandsRefusal(Local(), WithHands() with { Online = false }, true)
             .Should().BeNull("сеанс и онлайн проверяются при ходе, а не в матрице");
     }
 
     [Fact]
     public void Руки_КаждоеНевыполненноеУсловие_СвояПричина()
     {
-        ProjectCapabilities.HandsRefusal(Local(), WithHands(), false, true).Should().Be(ProjectCapabilities.HandsFlagOffReason);
-        ProjectCapabilities.HandsRefusal(Server(), WithHands(), true, true).Should().Be(ProjectCapabilities.HandsNotLocalReason);
-        ProjectCapabilities.HandsRefusal(Local(), null, true, true).Should().Be(ProjectCapabilities.DeviceMissingReason);
-        ProjectCapabilities.HandsRefusal(Local(), Device(), true, true).Should().Be(ProjectCapabilities.HandsNotInstalledReason);
-        ProjectCapabilities.HandsRefusal(Local(), WithHands(), true, false).Should().Be(ProjectCapabilities.HandsProjectOffReason);
+        ProjectCapabilities.HandsRefusal(Server(), WithHands(), true).Should().Be(ProjectCapabilities.HandsNotLocalReason);
+        ProjectCapabilities.HandsRefusal(Local(), null, true).Should().Be(ProjectCapabilities.DeviceMissingReason);
+        ProjectCapabilities.HandsRefusal(Local(), WithHands(), false).Should().Be(ProjectCapabilities.HandsProjectOffReason);
     }
+
+    // Мост едет в составе агента под Windows: Windows-агент без возможности — старой версии
+    [Theory]
+    [InlineData("windows", ProjectCapabilities.HandsAgentOutdatedReason)]
+    [InlineData(null, ProjectCapabilities.HandsAgentOutdatedReason)]
+    [InlineData("linux", ProjectCapabilities.HandsNotWindowsReason)]
+    [InlineData("macos", ProjectCapabilities.HandsNotWindowsReason)]
+    public void Руки_АгентБезМоста_ЧестныйОтказ(string? platform, string reason) =>
+        ProjectCapabilities.HandsRefusal(Local(), Device() with { Platform = platform }, true).Should().Be(reason);
 
     [Fact]
     public void Руки_ВозможностьУстройстваНеТеряетсяПриНормализации() =>

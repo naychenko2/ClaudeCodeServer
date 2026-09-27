@@ -17,7 +17,7 @@ namespace ClaudeHomeServer.Controllers;
 [Authorize]
 [Route("api/me/hands-providers")]
 public class MyHandsProvidersController(UserStore users, LlmProviderRegistry providers,
-    FeatureFlagService flags, SessionManager sessions) : ControllerBase
+    SessionManager sessions) : ControllerBase
 {
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
 
@@ -46,9 +46,6 @@ public class MyHandsProvidersController(UserStore users, LlmProviderRegistry pro
         var available = Available();
         var requested = req.Providers.Where(k => !string.IsNullOrWhiteSpace(k))
             .Select(k => k.Trim()).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        // Без флага список можно только очистить: разрешать руки выключенной фиче незачем
-        if (requested.Count > 0 && !flags.IsEnabled(UserId, FeatureFlagKeys.LocalHands))
-            return BadRequest(new { error = ProjectCapabilities.HandsFlagOffReason });
 
         List<string> clean = [.. available.Select(o => o.Key).Where(requested.Contains)];
         if (!users.SetHandsProviders(UserId, clean)) return Unauthorized();

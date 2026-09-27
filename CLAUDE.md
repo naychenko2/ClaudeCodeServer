@@ -446,7 +446,9 @@ Dark launch: фича коммитится выключенной и включ�
 ([ADR-008](docs/adr/ADR-008-project-background-generation.md),
 [project-backgrounds.md](docs/features/project-backgrounds.md)), карточка доклада о
 завершённой задаче ([task-completion-report.md](docs/features/task-completion-report.md)),
-серверные сторожа чатов ([ADR-013](docs/adr/ADR-013-server-chat-watchdogs.md)) и встроенная
+серверные сторожа чатов ([ADR-013](docs/adr/ADR-013-server-chat-watchdogs.md)), руки
+локальных проектов (выключатель — только тумблер проекта, мост едет в составе агента;
+[ADR-016](docs/adr/ADR-016-local-projects.md) §7) и встроенная
 интеграция Higgsfield — её доставка в ход, предохранитель «Отключить» и отсутствие тумблера
 в интерфейсе разобраны в [mcp-registry.md](docs/architecture/mcp-registry.md).
 

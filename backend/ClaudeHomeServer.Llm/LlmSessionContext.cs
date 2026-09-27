@@ -403,7 +403,7 @@ public sealed record LlmSessionContext(
     // Считает SessionManager по ProjectCapabilities.
     bool TranscriptOnServer = true,
     // Руки локального проекта (ADR-016 §7) — свойство ЧАТА, а не хода: матрица
-    // ProjectCapabilities.HandsRefusal пропускает (флаг local-hands, локальный проект, устройство
+    // ProjectCapabilities.HandsRefusal пропускает (локальный проект, устройство
     // с hands, тумблер проекта) и владелец доверил руки хоть одному провайдеру. Ход с руками —
     // только на провайдере из HandsProviders: ClaudeSession ставит маркер рук
     // и режим прав без bypassPermissions в одном месте и по одному условию, фолбэк режет цепочку

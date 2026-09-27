@@ -1,11 +1,10 @@
 // Вклад полосы «Руки» в реестр composer-strip. Руки — часть каркаса, а не подсистема с
-// тумблером на бэке: манифест помечен core, доступность решает сам вклад (флаг
-// local-hands, руки проекта, ответ сервера).
+// тумблером на бэке: манифест помечен core, доступность решает сам вклад (руки проекта,
+// ответ сервера).
 
 import { registerSubsystem, type ComposerStripApi, type ComposerStripCtx, type SubsystemManifest } from '../../lib/subsystems/registryCore';
 import { HandsStrip, handsStripIcon, handsStripStatus } from './HandsStrip';
 import { HANDS_STRIP, handsStripAvailable, subscribeHandsStrip } from './handsStrip';
-import { subscribeFlags } from '../../lib/featureFlags';
 
 export const handsManifest: SubsystemManifest = {
   key: 'local-hands',
@@ -51,4 +50,3 @@ function nudge() {
   registerSubsystem(handsManifest);
 }
 subscribeHandsStrip(nudge);
-subscribeFlags(nudge);

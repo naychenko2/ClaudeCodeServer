@@ -18,7 +18,7 @@ namespace ClaudeHomeServer.Controllers;
 [Authorize]
 [Route("api/sessions")]
 public class SessionHandsController(
-    SessionManager sessions, ProjectManager projects, UserStore users, FeatureFlagService flags,
+    SessionManager sessions, ProjectManager projects, UserStore users,
     IDeviceExecChannel? devices = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -34,8 +34,7 @@ public class SessionHandsController(
         if (session.ProjectId is null || projects.GetById(session.ProjectId) is not { } project
             || !ProjectCapabilities.IsDeviceBound(project))
             return none;
-        if (!flags.IsEnabled(UserId, FeatureFlagKeys.LocalHands) || !project.HandsEnabled
-            || users.GetById(UserId)?.HandsProviders is not { Count: > 0 })
+        if (!project.HandsEnabled || users.GetById(UserId)?.HandsProviders is not { Count: > 0 })
             return none;
 
         var device = devices?.GetStatus(UserId, project.DeviceId!);

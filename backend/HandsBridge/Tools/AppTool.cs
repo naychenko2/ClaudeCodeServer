@@ -34,11 +34,12 @@ public static partial class AppTool
     /// Edge (msedge.exe) and Chrome (chrome.exe) page content is fully automatable: links, buttons, and form fields
     /// surface as ARIA/visible-text UIA names. Browser chrome (address bar, tabs) is best-effort — use keyboard shortcuts.
     ///
-    /// HANDS: only programs the user allowed on this machine can be started, by their full path; the error message
-    /// lists them. Only windows of programs started here are available to the other tools. Launcher stubs that hand
-    /// off to another process (calc.exe, Store apps, a browser that is already running) are not supported.
+    /// HANDS: any program can be started by the full path to its .exe, except interpreters and terminals (cmd, PowerShell,
+    /// Python, Node, bash, Windows Terminal...). Only windows of programs started in this turn are available to the other
+    /// tools. Launcher stubs that hand off to another process (calc.exe, Store apps, a browser that is already running)
+    /// are not supported.
     /// </remarks>
-    /// <param name="programPath">Full path to an allowed program (e.g., 'C:\\Program Files\\App\\app.exe'). Names without a folder are not searched in PATH.</param>
+    /// <param name="programPath">Full path to the program's .exe (e.g., 'C:\\Program Files\\App\\app.exe'). Names without a folder are not searched in PATH.</param>
     /// <param name="arguments">Command-line arguments for the program (optional). Example: '--new-window' for browsers.</param>
     /// <param name="workingDirectory">Working directory for the launched program (optional).</param>
     /// <param name="waitForWindow">Wait for the application window to appear before returning (default: true). Set to false for background processes.</param>
@@ -113,7 +114,7 @@ public static partial class AppTool
         {
             return WindowManagementResult.CreateFailure(
                 WindowManagementErrorCode.MissingRequiredParameter,
-                "programPath is required. Specify the full path of an allowed program.");
+                "programPath is required. Specify the full path of the program's .exe.");
         }
 
         var hands = HandsGate.System;
@@ -231,7 +232,7 @@ public static partial class AppTool
         {
             return WindowManagementResult.CreateFailure(
                 WindowManagementErrorCode.WindowNotFound,
-                $"Program not found: '{programPath}'. The allowed path does not exist on this machine.");
+                $"Program not found: '{programPath}'. The path does not exist on this machine.");
         }
         catch (System.ComponentModel.Win32Exception ex) when (ex.NativeErrorCode == 5) // ERROR_ACCESS_DENIED
         {

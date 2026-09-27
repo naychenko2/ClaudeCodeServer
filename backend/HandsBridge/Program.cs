@@ -46,15 +46,15 @@ if (args.Length > 0 && (args[0] == "--version" || args[0] == "-v"))
     return 0;
 }
 
-// Руки: белый список программ машины передаёт агент (--apps-file <путь к hands-apps.json>).
-// Без него гейт закрыт: ни одной программы и ни одного своего окна.
-var appsFile = GetOption(args, "--apps-file");
-if (string.IsNullOrWhiteSpace(appsFile))
+// Руки: имя Job хода передаёт агент (--turn-job Local\AiHome.Turn.…) — окна процессов из него
+// свои (решение владельца 2б). Без него своих окон нет: гейт закрыт.
+var turnJob = GetOption(args, ClaudeHomeServer.Protocol.HandsBridgeArgs.TurnJob);
+if (string.IsNullOrWhiteSpace(turnJob))
 {
-    Console.Error.WriteLine("[hands] --apps-file is not set: no programs are allowed.");
+    Console.Error.WriteLine("[hands] --turn-job is not set: no window is available to hands.");
 }
 
-HandsGate.Configure(appsFile);
+HandsGate.Configure(turnJob);
 
 var builder = Host.CreateApplicationBuilder(args);
 

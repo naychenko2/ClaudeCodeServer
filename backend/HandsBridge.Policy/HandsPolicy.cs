@@ -22,24 +22,26 @@ public static class HandsTools
 /// <summary>
 /// Единственный гейт рук: его зовёт каждый инструмент моста ДО любого действия.
 /// <para>
-/// Своё окно (решение архитектора по каналу Ш1 «дочерний процесс разрешённой программы») —
-/// окно, у которого ОБА условия: процесс во вложенном Job моста (запущен <c>app</c> или его
-/// потомок) и образ процесса — путь из <c>hands-apps.json</c>. Дочерний процесс вне белого
-/// списка в том же Job — чужой. Владеемые диалоги своего окна свои, потому что живут в том же
-/// процессе; диалог, который владеемым сделал ЧУЖОЙ процесс, — чужой.
+/// Своё окно (решение владельца 2б, 2026-09-27) — окно процесса из Job хода: программа,
+/// запущенная <c>app</c> (вложенный Job моста живёт внутри Job хода), командой этого хода или
+/// их потомок. Белого списка программ нет. Окно процесса из <see cref="HandsForbiddenApps"/>
+/// своим не бывает никогда: ввод в терминал — это исполнение команд. Владеемые диалоги своего
+/// окна свои, потому что живут в том же процессе; диалог, который владеемым сделал ЧУЖОЙ
+/// процесс, — чужой.
 /// </para>
-/// Закрыто по умолчанию: нет файла, битый файл, сбой WinAPI — всё читается как «нельзя».
+/// Граница — защита от ошибок модели (не лезть в открытые окна человека), а не от злоумышленника.
+/// Закрыто по умолчанию: сбой WinAPI или мост вне Job хода — всё читается как «чужое».
 /// </summary>
-public sealed class HandsPolicy(Func<HandsAppsFile?> readApps, IHandsWindowSystem windows)
+public sealed class HandsPolicy(IHandsWindowSystem windows)
 {
     private const string UseOwnWindow =
-        "Only windows of programs you started with the app tool in this session are available. " +
-        "Start an allowed program with app(programPath=...) and use the handle it returns, " +
+        "Only windows of programs started in this turn are available. " +
+        "Start a program with app(programPath=...) and use the handle it returns, " +
         "or call window_management(action='list') to see your windows.";
 
     /// <summary>
     /// Ключи Chromium, которые подменяют исполняемый файл дочерних процессов или открывают
-    /// управление браузером снаружи: с ними разрешённый браузер становится запускалкой команд.
+    /// управление браузером снаружи: с ними браузер становится запускалкой команд.
     /// </summary>
     private static readonly string[] ForbiddenArgumentFragments =
         ["cmd-prefix", "gpu-launcher", "subprocess-path", "remote-debugging", "load-extension"];
@@ -57,30 +59,24 @@ public sealed class HandsPolicy(Func<HandsAppsFile?> readApps, IHandsWindowSyste
     // ---------- app ----------
 
     /// <summary>
-    /// Запуск: только полный путь <c>.exe</c> из <c>hands-apps.json</c>, точное совпадение после
-    /// нормализации; интерпретаторы — никогда, даже внесённые человеком.
+    /// Запуск: полный путь <c>.exe</c> после нормализации, без поиска по <c>PATH</c>;
+    /// интерпретаторы и терминалы (<see cref="HandsForbiddenApps"/>) — никогда.
     /// </summary>
     public HandsLaunchDecision CheckLaunch(string? programPath, string? arguments)
     {
         var normalized = HandsAppPaths.TryNormalize(programPath);
         if (normalized is null)
             return HandsLaunchDecision.Deny(
-                $"programPath must be a full path to an .exe (for example C:\\Program Files\\App\\app.exe); " +
-                $"names without a folder are not searched in PATH. {AllowedAppsHint()}");
+                "programPath must be a full path to an .exe (for example C:\\Program Files\\App\\app.exe); " +
+                "names without a folder are not searched in PATH.");
 
         if (HandsAppPaths.IsForbidden(normalized))
             return HandsLaunchDecision.Deny(
-                $"'{HandsAppPaths.FileName(normalized)}' runs arbitrary commands and is never started by hands. " +
-                AllowedAppsHint());
+                $"'{HandsAppPaths.FileName(normalized)}' is an interpreter or a terminal: it runs arbitrary commands " +
+                "and is never started by hands. Start the program you need directly by its .exe.");
 
         if (!HandsAppPaths.IsExecutable(normalized))
-            return HandsLaunchDecision.Deny($"Only .exe programs can be started. {AllowedAppsHint()}");
-
-        if (!AllowedApps().TryGetValue(normalized, out var listed))
-            return HandsLaunchDecision.Deny(
-                $"'{normalized}' is not in the list of programs the user allowed on this machine. " +
-                "Ask the user to allow it on the computer (tray menu or 'ai-home-agent hands allow-app'). " +
-                AllowedAppsHint());
+            return HandsLaunchDecision.Deny("Only .exe programs can be started.");
 
         if (arguments is not null)
         {
@@ -93,24 +89,31 @@ public sealed class HandsPolicy(Func<HandsAppsFile?> readApps, IHandsWindowSyste
             }
         }
 
-        // Запускаем путь в написании из белого списка, а не как его прислала модель
-        return HandsLaunchDecision.Allow(listed);
+        // Запускаем ровно проверенную строку, а не как путь прислала модель
+        return HandsLaunchDecision.Allow(normalized);
     }
 
     // ---------- окна ----------
 
     /// <summary>Своё окно по правилу из шапки класса.</summary>
-    public bool IsOwnWindow(long hwnd) => hwnd != 0 && IsOwnWindow(hwnd, AllowedApps());
+    public bool IsOwnWindow(long hwnd)
+    {
+        if (hwnd == 0)
+            return false;
+        var processId = windows.GetWindowProcessId(hwnd);
+        if (processId is not { } pid || !windows.IsProcessInTurnJob(pid))
+            return false;
+
+        var image = HandsAppPaths.TryNormalize(windows.GetProcessImagePath(pid));
+        return image is not null && !HandsAppPaths.IsForbidden(image);
+    }
 
     /// <summary>То же для hwnd строкой, как его передаёт модель.</summary>
     public bool IsOwnWindow(string? handle) => TryParseHandle(handle, out var hwnd) && IsOwnWindow(hwnd);
 
     /// <summary>Только свои окна — для <c>list</c>, <c>find</c> и поиска окна после запуска.</summary>
-    public IReadOnlyList<T> FilterOwn<T>(IEnumerable<T> items, Func<T, string?> handleOf)
-    {
-        var allowed = AllowedApps();
-        return items.Where(item => TryParseHandle(handleOf(item), out var hwnd) && IsOwnWindow(hwnd, allowed)).ToList();
-    }
+    public IReadOnlyList<T> FilterOwn<T>(IEnumerable<T> items, Func<T, string?> handleOf) =>
+        items.Where(item => TryParseHandle(handleOf(item), out var hwnd) && IsOwnWindow(hwnd)).ToList();
 
     /// <summary>
     /// <c>ui_*</c>: окно обязано быть своим, и каждый переданный <c>elementId</c> — из своего окна
@@ -277,53 +280,5 @@ public sealed class HandsPolicy(Func<HandsAppsFile?> readApps, IHandsWindowSyste
         if (string.IsNullOrEmpty(handle) || handle.Any(ch => ch is < '0' or > '9'))
             return false;
         return long.TryParse(handle, NumberStyles.None, CultureInfo.InvariantCulture, out hwnd) && hwnd != 0;
-    }
-
-    private bool IsOwnWindow(long hwnd, HashSet<string> allowed)
-    {
-        var processId = windows.GetWindowProcessId(hwnd);
-        if (processId is not { } pid || !windows.IsProcessInAppsJob(pid))
-            return false;
-
-        var image = HandsAppPaths.TryNormalize(windows.GetProcessImagePath(pid));
-        return image is not null && !HandsAppPaths.IsForbidden(image) && allowed.Contains(image);
-    }
-
-    /// <summary>
-    /// Белый список машины, читается на каждую проверку: человек правит его, пока мост жив.
-    /// Незнакомая версия формата, битые и запрещённые записи — выпадают.
-    /// </summary>
-    private HashSet<string> AllowedApps()
-    {
-        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        HandsAppsFile? file;
-        try
-        {
-            file = readApps();
-        }
-        catch
-        {
-            return set;
-        }
-
-        if (file is null || file.Version != HandsAppsFile.CurrentVersion || file.Apps is null)
-            return set;
-
-        foreach (var entry in file.Apps)
-        {
-            var normalized = HandsAppPaths.TryNormalize(entry?.Path);
-            if (normalized is not null && !HandsAppPaths.IsForbidden(normalized) && HandsAppPaths.IsExecutable(normalized))
-                set.Add(normalized);
-        }
-
-        return set;
-    }
-
-    private string AllowedAppsHint()
-    {
-        var apps = AllowedApps();
-        return apps.Count == 0
-            ? "No programs are allowed on this machine yet; ask the user to allow one."
-            : $"Allowed programs: {string.Join("; ", apps.Order(StringComparer.OrdinalIgnoreCase))}.";
     }
 }

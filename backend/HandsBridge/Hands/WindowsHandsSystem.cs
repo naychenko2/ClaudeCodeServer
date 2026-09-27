@@ -7,7 +7,8 @@ namespace ClaudeHomeServer.HandsBridge;
 
 /// <summary>
 /// WinAPI-сторона гейта: вложенный Job моста, в который <c>app</c> кладёт запущенные программы,
-/// и ответы на вопросы политики об окнах и процессах. Любой сбой — «чужое».
+/// Job хода, по которому решается «своё окно», и ответы на вопросы политики об окнах и процессах.
+/// Любой сбой — «чужое».
 /// </summary>
 [SupportedOSPlatform("windows")]
 internal sealed partial class WindowsHandsSystem : IHandsWindowSystem, IDisposable
@@ -15,15 +16,17 @@ internal sealed partial class WindowsHandsSystem : IHandsWindowSystem, IDisposab
     private const uint ProcessQueryLimitedInformation = 0x1000;
     private const uint ProcessSetQuota = 0x0100;
     private const uint ProcessTerminate = 0x0001;
+    private const uint JobObjectQuery = 0x0004;
     private const int JobObjectExtendedLimitInformation = 9;
     private const uint JobObjectLimitKillOnJobClose = 0x2000;
 
     private readonly nint _job;
+    private readonly nint _turnJob;
 
-    public WindowsHandsSystem()
+    /// <param name="turnJobName">Имя Job хода от агента; не открылся — своих окон нет.</param>
+    public WindowsHandsSystem(string? turnJobName)
     {
-        // Вложенный Job внутри Job хода: программы рук гаснут вместе с мостом, а «свой» процесс
-        // отличается от любого другого процесса хода (сам CLI, агент) членством именно в нём
+        // Вложенный Job внутри Job хода: программы рук гаснут вместе с мостом и вместе с ходом
         _job = CreateJobObjectW(0, null);
         if (_job == 0)
             throw new InvalidOperationException($"CreateJobObject failed: {Marshal.GetLastPInvokeError()}");
@@ -32,6 +35,15 @@ internal sealed partial class WindowsHandsSystem : IHandsWindowSystem, IDisposab
         info.BasicLimitInformation.LimitFlags = JobObjectLimitKillOnJobClose;
         if (!SetInformationJobObject(_job, JobObjectExtendedLimitInformation, ref info, (uint)Marshal.SizeOf<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>()))
             throw new InvalidOperationException($"SetInformationJobObject failed: {Marshal.GetLastPInvokeError()}");
+
+        // Только имя из ожидаемого пространства: чужой Job с подобранным именем своим не станет
+        if (!string.IsNullOrWhiteSpace(turnJobName)
+            && turnJobName.StartsWith(ClaudeHomeServer.Protocol.HandsBridgeArgs.TurnJobPrefix, StringComparison.Ordinal))
+        {
+            _turnJob = OpenJobObjectW(JobObjectQuery, false, turnJobName);
+            if (_turnJob == 0)
+                Console.Error.WriteLine($"[hands] turn job '{turnJobName}' is not available ({Marshal.GetLastPInvokeError()}): no window is available to hands.");
+        }
     }
 
     /// <summary>
@@ -59,14 +71,17 @@ internal sealed partial class WindowsHandsSystem : IHandsWindowSystem, IDisposab
         return pid == 0 ? null : (int)pid;
     }
 
-    public bool IsProcessInAppsJob(int processId)
+    public bool IsProcessInTurnJob(int processId)
     {
+        if (_turnJob == 0)
+            return false;
         var handle = OpenProcess(ProcessQueryLimitedInformation, false, (uint)processId);
         if (handle == 0)
             return false;
         try
         {
-            return IsProcessInJob(handle, _job, out var inJob) && inJob;
+            // Процесс вложенного Job моста состоит и в Job хода: вложенность Job наследует членство вверх
+            return IsProcessInJob(handle, _turnJob, out var inJob) && inJob;
         }
         finally
         {
@@ -91,7 +106,12 @@ internal sealed partial class WindowsHandsSystem : IHandsWindowSystem, IDisposab
         }
     }
 
-    public void Dispose() => CloseHandle(_job);
+    public void Dispose()
+    {
+        CloseHandle(_job);
+        if (_turnJob != 0)
+            CloseHandle(_turnJob);
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     private struct JOBOBJECT_BASIC_LIMIT_INFORMATION
@@ -131,6 +151,9 @@ internal sealed partial class WindowsHandsSystem : IHandsWindowSystem, IDisposab
 
     [LibraryImport("kernel32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
     private static partial nint CreateJobObjectW(nint lpJobAttributes, string? lpName);
+
+    [LibraryImport("kernel32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    private static partial nint OpenJobObjectW(uint dwDesiredAccess, [MarshalAs(UnmanagedType.Bool)] bool bInheritHandle, string lpName);
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

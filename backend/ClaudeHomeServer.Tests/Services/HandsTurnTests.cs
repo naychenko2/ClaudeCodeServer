@@ -167,8 +167,9 @@ internal sealed class HandsTurnHarness : IDisposable
     }
 }
 
-// Правила хода с руками (ADR-016 §7, план рук Ш4, решения 2, 4, 7): запреты, маркер рук,
-// отсев stdio-узлов и режим прав зависят от ОДНОГО решения ClaudeSession.HandsActiveNow.
+// Правила хода с руками (ADR-016 §7, план рук Ш4, решения 4 и 7; решение владельца 3б): маркер
+// рук, отсев stdio-узлов и режим прав зависят от ОДНОГО решения ClaudeSession.HandsActiveNow.
+// Shell, сабагенты и запись в .claude/.mcp.json в ходе с руками не запрещаются (3б).
 public class HandsTurnTests
 {
     private static readonly ExternalMcpContext External = new(
@@ -180,13 +181,15 @@ public class HandsTurnTests
     ]);
 
     [Fact]
-    public async Task РукиВключены_ПолныйНаборЗапретов_МаркерРук_БезStdio()
+    public async Task РукиВключены_ShellНеЗапрещён_МаркерРук_БезStdio()
     {
         using var h = new HandsTurnHarness(true, [HandsProviders.Claude], external: () => External);
         var turn = await h.RunTurnAsync();
 
-        turn.Disallowed.Should().Contain(HandsTurnRules.All, "ход с руками закрывает shell, сабагентов и запись в .claude/.mcp.json");
-        HandsTurnRules.IsComplete(turn.Disallowed).Should().BeTrue();
+        turn.Disallowed.Should().NotContain(["Bash", "PowerShell", "Monitor", "BashOutput", "KillShell", "Task", "Agent",
+            "Edit(.claude/**)", "Write(.claude/**)", "Edit(.mcp.json)", "Write(.mcp.json)"],
+            "решение владельца 3б: shell в чате с руками разрешён, запреты Ш4 сняты");
+        HandsTurnRules.PermissionRefusal(turn.Args).Should().BeNull("агент сверяет режим прав хода с руками");
 
         var servers = turn.McpServers!;
         var hands = servers[DeviceExecPlaceholders.HandsServerName]!.AsObject();
@@ -208,7 +211,6 @@ public class HandsTurnTests
         using var h = new HandsTurnHarness(false, [HandsProviders.Claude], external: () => External);
         var turn = await h.RunTurnAsync();
 
-        turn.Disallowed.Should().NotContain(HandsTurnRules.All);
         turn.McpServers!.ContainsKey(DeviceExecPlaceholders.HandsServerName).Should().BeFalse();
         turn.McpServers!.ContainsKey("ext-stdio").Should().BeTrue();
     }
@@ -234,6 +236,7 @@ public class HandsTurnTests
 
         first.Args.Should().NotContain("bypassPermissions", "ход с руками в bypassPermissions не идёт никогда");
         first.PermissionMode.Should().Be("acceptEdits");
+        HandsTurnRules.PermissionRefusal(first.Args).Should().BeNull("иначе агент откажет ходу с руками");
         second.PermissionMode.Should().Be("acceptEdits");
         h.Messages.OfType<HandsNoticeMessage>().Should().ContainSingle("строка о понижении — одна, а не на каждый ход")
             .Which.Text.Should().Be(HandsTurnRules.BypassDowngradedText);
@@ -272,16 +275,5 @@ public class HandsTurnTests
     {
         foreach (var mode in Enum.GetValues<ClaudeMode>())
             ClaudeSession.HandsPermissionMode(mode).Should().Be(mode == ClaudeMode.Bypass ? ClaudeMode.AcceptEdits : mode);
-    }
-
-    [Fact]
-    public void АгентскиеДобавки_ДописываютсяПослеСерверных_БезДублей()
-    {
-        var combined = HandsTurnRules.WithAgentRules(HandsTurnRules.All, ["Write(C:/agent/hands-apps.json)", "Bash"]);
-        combined.Take(HandsTurnRules.All.Count).Should().Equal(HandsTurnRules.All);
-        combined.Should().ContainSingle(r => r == "Bash");
-        combined.Should().Contain("Write(C:/agent/hands-apps.json)");
-        HandsTurnRules.IsComplete(combined).Should().BeTrue();
-        HandsTurnRules.IsComplete(HandsTurnRules.All.Where(r => r != "Agent")).Should().BeFalse();
     }
 }

@@ -4,7 +4,7 @@ using Xunit;
 
 namespace HandsBridge.Policy.Tests;
 
-/// <summary><c>app</c>: белый список машины, интерпретаторы, нормализация путей.</summary>
+/// <summary><c>app</c>: любая программа по полному пути, кроме интерпретаторов и терминалов (решение 2б).</summary>
 public class HandsLaunchTests
 {
     [Theory]
@@ -14,12 +14,13 @@ public class HandsLaunchTests
     [InlineData(@"C:\Windows\System32\..\notepad.exe")]
     [InlineData(@"C:\Windows\.\\notepad.exe")]
     [InlineData(@"C:\Windows\notepad.exe. .")]
-    public void Allowed_program_starts_by_its_normalized_path(string requested)
+    public void Program_starts_by_its_normalized_path(string requested)
     {
         var decision = Machine.Policy().CheckLaunch(requested, null);
 
         Assert.True(decision.Allowed, decision.Reason);
-        Assert.Equal(@"C:\Windows\notepad.exe", decision.ProgramPath);
+        // Регистр Windows не различает; запускается ровно проверенная строка
+        Assert.Equal(@"C:\Windows\notepad.exe", decision.ProgramPath, ignoreCase: true);
     }
 
     [Theory]
@@ -61,13 +62,19 @@ public class HandsLaunchTests
     [InlineData(@"C:\Windows\System32\CMD.EXE")]
     [InlineData(@"C:\Windows\System32\cmd.exe.")]
     [InlineData(@"C:\Windows\System32\cmd.com")]
-    public void Interpreter_is_denied_even_when_the_user_listed_it(string interpreter)
+    [InlineData(@"C:\Program Files\Git\bin\bash.exe")]
+    [InlineData(@"C:\Program Files\Git\git-bash.exe")]
+    [InlineData(@"C:\Windows\System32\wsl.exe")]
+    [InlineData(@"C:\Windows\System32\conhost.exe")]
+    [InlineData(@"C:\Users\an\AppData\Local\Microsoft\WindowsApps\wt.exe")]
+    [InlineData(@"C:\Program Files\WindowsApps\Microsoft.WindowsTerminal\WindowsTerminal.exe")]
+    [InlineData(@"C:\Strawberry\perl\bin\perl.exe")]
+    public void Interpreter_or_terminal_is_never_started(string interpreter)
     {
-        var policy = Machine.Policy(Machine.Apps(interpreter));
-
-        var decision = policy.CheckLaunch(interpreter, null);
+        var decision = Machine.Policy().CheckLaunch(interpreter, null);
 
         Assert.False(decision.Allowed);
+        Assert.Null(decision.ProgramPath);
         Assert.Contains("never started", decision.Reason);
     }
 
@@ -79,34 +86,26 @@ public class HandsLaunchTests
         Assert.False(decision.Allowed);
     }
 
-    [Fact]
-    public void Program_outside_the_list_is_denied_and_the_list_is_named()
+    [Theory]
+    [InlineData(@"C:\Program Files\Paint\helper.exe")]
+    [InlineData(@"D:\Tools\Some App\viewer.exe")]
+    [InlineData(@"C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE")]
+    public void Any_program_by_full_path_is_allowed_there_is_no_allow_list(string program)
     {
-        var decision = Machine.Policy().CheckLaunch(@"C:\Program Files\Paint\helper.exe", null);
+        var decision = Machine.Policy().CheckLaunch(program, null);
 
-        Assert.False(decision.Allowed);
-        Assert.Contains("not in the list", decision.Reason);
-        Assert.Contains(Machine.Notepad, decision.Reason);
+        Assert.True(decision.Allowed, decision.Reason);
+        Assert.Equal(program, decision.ProgramPath);
     }
 
-    [Fact]
-    public void Script_in_the_list_is_denied_because_CreateProcess_hands_it_to_cmd()
+    [Theory]
+    [InlineData(@"C:\Tools\build.bat")]
+    [InlineData(@"C:\Tools\build.cmd")]
+    [InlineData(@"C:\Tools\run.ps1")]
+    [InlineData(@"C:\Tools\link.lnk")]
+    public void Non_exe_is_denied_because_CreateProcess_hands_scripts_to_cmd(string script)
     {
-        const string script = @"C:\Tools\build.bat";
-
-        var decision = Machine.Policy(Machine.Apps(script)).CheckLaunch(script, null);
-
-        Assert.False(decision.Allowed);
-    }
-
-    [Fact]
-    public void Missing_or_unknown_version_list_allows_nothing()
-    {
-        var unknownVersion = new HandsAppsFile(HandsAppsFile.CurrentVersion + 1, [new HandsAppEntry(Machine.Notepad, DateTimeOffset.UnixEpoch)]);
-
-        Assert.False(new HandsPolicy(() => null, Machine.Windows()).CheckLaunch(Machine.Notepad, null).Allowed);
-        Assert.False(new HandsPolicy(() => unknownVersion, Machine.Windows()).CheckLaunch(Machine.Notepad, null).Allowed);
-        Assert.False(new HandsPolicy(() => throw new IOException("locked"), Machine.Windows()).CheckLaunch(Machine.Notepad, null).Allowed);
+        Assert.False(Machine.Policy().CheckLaunch(script, null).Allowed);
     }
 
     [Theory]

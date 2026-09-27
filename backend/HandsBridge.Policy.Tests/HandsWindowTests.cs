@@ -18,37 +18,44 @@ public class HandsWindowTests
     // ---------- своё окно ----------
 
     [Fact]
-    public void Window_of_listed_program_in_the_job_is_own_even_if_path_differs_in_case_and_slashes()
+    public void Window_of_program_in_the_turn_job_is_own_even_if_path_differs_in_case_and_slashes()
     {
         Assert.True(Machine.Policy().IsOwnWindow(Machine.Own));
     }
 
     [Fact]
-    public void Child_process_outside_the_list_in_the_same_job_is_foreign()
+    public void Any_other_program_in_the_turn_job_is_own_there_is_no_allow_list()
     {
-        Assert.False(Machine.Policy().IsOwnWindow(Machine.ChildOutsideList));
+        Assert.True(Machine.Policy().IsOwnWindow(Machine.ChildInJob));
     }
 
     [Fact]
-    public void Listed_program_started_by_the_user_outside_the_job_is_foreign()
+    public void Window_of_a_process_outside_the_turn_job_is_foreign()
     {
         Assert.False(Machine.Policy().IsOwnWindow(Machine.UserNotepad));
     }
 
     [Fact]
-    public void Interpreter_in_the_job_is_foreign_even_if_listed()
+    public void Interpreter_or_terminal_in_the_turn_job_is_foreign()
     {
         Assert.False(Machine.Policy().IsOwnWindow(Machine.ForbiddenInJob));
+        Assert.False(Machine.Policy().IsOwnWindow(Machine.TerminalInJob));
     }
 
     [Fact]
-    public void Program_removed_from_the_list_loses_its_windows_immediately()
+    public void Process_with_unreadable_image_is_foreign()
     {
-        var apps = Machine.Apps(Machine.Notepad);
-        var policy = new HandsPolicy(() => apps, Machine.Windows());
+        Assert.False(Machine.Policy().IsOwnWindow(Machine.UnknownImageInJob));
+    }
+
+    [Fact]
+    public void Process_that_left_the_turn_job_loses_its_windows_immediately()
+    {
+        var windows = Machine.Windows();
+        var policy = Machine.Policy(windows);
         Assert.True(policy.IsOwnWindow(Machine.Own));
 
-        apps = Machine.Apps(Machine.Paint);
+        windows.Process(1, inJob: false, image: Machine.Notepad);
 
         Assert.False(policy.IsOwnWindow(Machine.Own));
     }
@@ -84,7 +91,7 @@ public class HandsWindowTests
     {
         var policy = Machine.Policy();
 
-        foreach (var foreign in new[] { Machine.ChildOutsideList, Machine.UserNotepad, Machine.ForbiddenInJob, Machine.Missing })
+        foreach (var foreign in new[] { Machine.UserNotepad, Machine.ForbiddenInJob, Machine.TerminalInJob, Machine.Missing })
         {
             var decision = policy.CheckUi(tool, foreign, Machine.ResolveElement);
             Assert.False(decision.Allowed, $"{tool} on {foreign}");
@@ -120,7 +127,7 @@ public class HandsWindowTests
         var policy = Machine.Policy();
 
         Assert.True(policy.CheckWindowAction(action, Machine.Own).Allowed);
-        Assert.False(policy.CheckWindowAction(action, Machine.ChildOutsideList).Allowed);
+        Assert.False(policy.CheckWindowAction(action, Machine.ForbiddenInJob).Allowed);
         Assert.False(policy.CheckWindowAction(action, Machine.UserNotepad).Allowed);
         Assert.False(policy.CheckWindowAction(action, null).Allowed);
     }
@@ -152,11 +159,11 @@ public class HandsWindowTests
     [Fact]
     public void List_and_find_return_only_own_windows()
     {
-        var all = new[] { Machine.Own, Machine.ChildOutsideList, Machine.UserNotepad, Machine.ForbiddenInJob, Machine.Missing, "garbage" };
+        var all = new[] { Machine.Own, Machine.ChildInJob, Machine.UserNotepad, Machine.ForbiddenInJob, Machine.Missing, "garbage" };
 
         var own = Machine.Policy().FilterOwn(all, h => h);
 
-        Assert.Equal([Machine.Own], own);
+        Assert.Equal([Machine.Own, Machine.ChildInJob], own);
     }
 
     [Fact]
@@ -203,7 +210,7 @@ public class HandsWindowTests
         var policy = Machine.Policy();
 
         Assert.False(policy.CheckScreenshot("capture", "window", Machine.UserNotepad, null).Allowed);
-        Assert.False(policy.CheckScreenshot("capture", "window", Machine.ChildOutsideList, null).Allowed);
+        Assert.False(policy.CheckScreenshot("capture", "window", Machine.TerminalInJob, null).Allowed);
         Assert.False(policy.CheckScreenshot("capture", "window", null, null).Allowed);
     }
 

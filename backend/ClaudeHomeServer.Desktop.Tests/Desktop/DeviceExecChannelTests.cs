@@ -129,6 +129,36 @@ public class DeviceExecChannelTests : IDisposable
         ack.AgentArchivePath.Should().BeNull();
     }
 
+    // Компонент рук (ADR-016 §7): архив ТОЙ ЖЕ версии, что у агента, — по каналу устройства
+    [Fact]
+    public async Task Ack_НесётКомпонентРукСвоейВерсииИRid()
+    {
+        using var rel = new AgentReleaseFixture();
+        rel.PublishWithHands();
+        var rig = NewRig(releases: new AgentReleaseCatalog(rel.Config()));
+
+        var ack = await ConnectAsync(rig, AgentHello(RequiredCli) with { AgentVersion = AgentReleaseFixture.Version, Rid = "win-x64" });
+
+        ack.HandsArchivePath.Should().Be($"{AgentReleaseFixture.Version}/win-x64/{AgentReleaseFixture.HandsFile}");
+        ack.HandsArchiveSha256.Should().Be(AgentReleaseFixture.Sha(rel.HandsBytes));
+        ack.HandsArchiveSize.Should().Be(rel.HandsBytes.Length);
+    }
+
+    [Theory]
+    [InlineData("1.199.0", "win-x64")]
+    [InlineData(AgentReleaseFixture.Version, "linux-x64")]
+    public async Task Ack_КомпонентаРукДругойВерсииИлиRid_Нет(string agentVersion, string rid)
+    {
+        using var rel = new AgentReleaseFixture();
+        rel.PublishWithHands();
+        var rig = NewRig(releases: new AgentReleaseCatalog(rel.Config()));
+
+        var ack = await ConnectAsync(rig, AgentHello(RequiredCli) with { AgentVersion = agentVersion, Rid = rid });
+
+        ack.HandsArchivePath.Should().BeNull();
+        ack.HandsArchiveSha256.Should().BeNull();
+    }
+
     [Fact]
     public async Task Ack_ДесктопВыключен_ТолькоМинимальнаяВерсия()
     {

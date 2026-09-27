@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.WebSockets;
 using ClaudeHomeServer.DeviceAgent.Cli;
 using ClaudeHomeServer.DeviceAgent.Exec;
+using ClaudeHomeServer.DeviceAgent.Hands;
 using ClaudeHomeServer.DeviceAgent.Pairing;
 using ClaudeHomeServer.DeviceAgent.Sidecar;
 using ClaudeHomeServer.DeviceAgent.Update;
@@ -73,6 +74,7 @@ internal sealed class AgentCoordinator : IAsyncDisposable
     private readonly Func<ExecLink, CancellationToken, Task>? _runRelay;
     private readonly IAgentUpdates? _updates;
     private readonly ActivityRegistry? _activity;
+    private readonly HandsRuntime? _hands;
     private readonly string _agentVersion;
     private readonly ILogger _log;
     private readonly TimeSpan _maxOutage;
@@ -81,12 +83,15 @@ internal sealed class AgentCoordinator : IAsyncDisposable
     private readonly List<Task> _turns = [];
     private string? _announcedCli;
     private DeviceAgentUpdate? _announcedUpdate;
+    private bool _announcedHands;
     private bool _announced;
 
     public AgentCoordinator(IControlConnection control, IHarness harness, IExecSocketConnector connector,
         Func<ExecLink, CancellationToken, Task> runTurn, string agentVersion, ILogger? log = null, TimeSpan? maxOutage = null,
-        Func<ExecLink, CancellationToken, Task>? runRelay = null, IAgentUpdates? updates = null, ActivityRegistry? activity = null)
+        Func<ExecLink, CancellationToken, Task>? runRelay = null, IAgentUpdates? updates = null, ActivityRegistry? activity = null,
+        HandsRuntime? hands = null)
     {
+        _hands = hands;
         _control = control;
         _harness = harness;
         _connector = connector;
@@ -112,18 +117,23 @@ internal sealed class AgentCoordinator : IAsyncDisposable
         (OperatingSystem.IsWindows() ? "win" : OperatingSystem.IsMacOS() ? "osx" : "linux")
         + "-" + System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant();
 
-    public DeviceHello BuildHello() => new(
-        DesktopProtocol.Version,
-        SupportedSteps: [],
-        ClientVersion: _agentVersion,
-        Platform: PlatformName,
-        AgentVersion: _agentVersion,
-        CliVersion: _harness.ActiveVersion,
-        Capabilities: _runRelay is null
-            ? [DeviceCapabilities.Exec, DeviceCapabilities.Files]
-            : [DeviceCapabilities.Exec, DeviceCapabilities.Files, DeviceCapabilities.Relay],
-        Rid: RidName,
-        AgentUpdate: _updates?.Status);
+    public DeviceHello BuildHello()
+    {
+        List<string> capabilities = [DeviceCapabilities.Exec, DeviceCapabilities.Files];
+        if (_runRelay is not null) capabilities.Add(DeviceCapabilities.Relay);
+        // Руки — только когда компонент установлен И сверен: ход с маркером иначе всё равно откажет
+        if (_hands?.Component.IsReady == true) capabilities.Add(DeviceCapabilities.Hands);
+        return new DeviceHello(
+            DesktopProtocol.Version,
+            SupportedSteps: [],
+            ClientVersion: _agentVersion,
+            Platform: PlatformName,
+            AgentVersion: _agentVersion,
+            CliVersion: _harness.ActiveVersion,
+            Capabilities: capabilities,
+            Rid: RidName,
+            AgentUpdate: _updates?.Status);
+    }
 
     /// <summary>Hello; force = false — только если активная копия поменялась с прошлого раза.</summary>
     public async Task HelloAsync(bool force = true)
@@ -132,12 +142,17 @@ internal sealed class AgentCoordinator : IAsyncDisposable
         try
         {
             var hello = BuildHello();
-            if (!force && _announced && hello.CliVersion == _announcedCli && hello.AgentUpdate == _announcedUpdate) return;
+            var hands = hello.Capabilities?.Contains(DeviceCapabilities.Hands) == true;
+            if (!force && _announced && hello.CliVersion == _announcedCli && hello.AgentUpdate == _announcedUpdate
+                && hands == _announcedHands) return;
 
             var ack = await _control.HelloAsync(hello, _stopping.Token);
             _announced = true;
             _announcedCli = hello.CliVersion;
             _announcedUpdate = hello.AgentUpdate;
+            _announcedHands = hands;
+            // Хеш архива рук едет только этим каналом: команда hands enable берёт его отсюда
+            _hands?.Component.SaveOffer(HandsComponent.OfferFrom(ack, _agentVersion));
             if (ack.HarnessReady) _log.LogInformation("Сервер принял агента: готов к работе (CLI {Version})", hello.CliVersion);
             else _log.LogInformation("Сервер принял агента: {Problem}", ack.HarnessProblem ?? "агент устройства не готов");
             _harness.SetRequiredVersion(ack.RequiredCliVersion);
@@ -146,6 +161,34 @@ internal sealed class AgentCoordinator : IAsyncDisposable
         finally
         {
             _helloLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Слежка за машинным выключателем рук: <c>hands enable|disable</c> правят файлы, а идущий
+    /// агент раз в <paramref name="period"/> сверяет компонент. Пропал посреди хода — ход с руками
+    /// гасится с причиной <see cref="HandsEndReason.HandsDisabled"/>; перемена — повтор hello.
+    /// </summary>
+    public async Task WatchHandsAsync(TimeSpan period, CancellationToken ct)
+    {
+        if (_hands is null) return;
+        using var timer = new PeriodicTimer(period);
+        while (await timer.WaitForNextTickAsync(ct))
+            await RefreshHandsAsync();
+    }
+
+    internal async Task RefreshHandsAsync()
+    {
+        if (_hands is null) return;
+        if (!_hands.Component.IsReady && _hands.Registry.Active.Count > 0)
+        {
+            _log.LogWarning("Компонент рук убран или не сверен посреди хода — гашу ходы с руками");
+            _hands.Registry.Stop(null, HandsEndReason.HandsDisabled);
+        }
+        try { await HelloAsync(force: false); }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            _log.LogWarning(e, "Повторный hello после перемены рук не ушёл");
         }
     }
 

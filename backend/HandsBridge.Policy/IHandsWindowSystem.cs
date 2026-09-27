@@ -10,8 +10,11 @@ public interface IHandsWindowSystem
     /// <summary>Процесс, которому принадлежит окно; null — окна нет.</summary>
     int? GetWindowProcessId(long hwnd);
 
-    /// <summary>Процесс во вложенном Job моста — то есть запущен инструментом <c>app</c> или его потомок.</summary>
-    bool IsProcessInAppsJob(int processId);
+    /// <summary>
+    /// Процесс в Job хода (<c>--turn-job</c>): запущен <c>app</c> (вложенный Job моста), командой
+    /// хода или их потомок. Job хода не открылся — false для любого процесса.
+    /// </summary>
+    bool IsProcessInTurnJob(int processId);
 
     /// <summary>Полный путь образа процесса в Win32-форме; null — узнать не удалось.</summary>
     string? GetProcessImagePath(int processId);

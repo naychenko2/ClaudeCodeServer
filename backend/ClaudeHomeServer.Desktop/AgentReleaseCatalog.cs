@@ -46,8 +46,15 @@ public sealed record AgentReleaseArchive(string Version, string Rid, string File
     public string RelativePath => $"{Version}/{Rid}/{File}";
 }
 
-/// <summary>Версия агента и её архивы по RID.</summary>
-public sealed record AgentRelease(string Version, IReadOnlyDictionary<string, AgentReleaseArchive> Archives);
+/// <summary>
+/// Версия агента и её архивы по RID. <see cref="Hands"/> — компонент рук той же версии (ADR-016 §7):
+/// отдельный архив <c>HandsBridge</c>, который ставит только <c>ai-home-agent hands enable</c>, —
+/// архив агента из-за него не растёт.
+/// </summary>
+public sealed record AgentRelease(
+    string Version,
+    IReadOnlyDictionary<string, AgentReleaseArchive> Archives,
+    IReadOnlyDictionary<string, AgentReleaseArchive> Hands);
 
 /// <summary>
 /// Снимок каталога. <see cref="Latest"/> — версия, на которую указывает указатель текущей
@@ -73,8 +80,11 @@ public sealed record AgentReleaseSnapshot(
 /// указатель текущей выкатки <see cref="PointerFileName"/>. Формат указателя и манифеста один:
 /// <code>
 /// { "version": "1.123.0",
-///   "archives": { "win-x64": { "file": "ai-home-agent-1.123.0-win-x64.zip", "size": 1, "sha256": "…64 hex…" } } }
+///   "archives": { "win-x64": { "file": "ai-home-agent-1.123.0-win-x64.zip", "size": 1, "sha256": "…64 hex…" } },
+///   "hands":    { "win-x64": { "file": "hands-1.123.0-win-x64.zip", "size": 1, "sha256": "…64 hex…" } } }
 /// </code>
+/// Секция <c>hands</c> необязательна (компонент рук, ADR-016 §7); её записи подчиняются тем же
+/// правилам, что архивы агента, а имя файла не повторяет ни одного архива этой версии.
 ///
 /// Всё, что пришло с диска, проверяется: RID — из белого списка <see cref="DeviceAgentRids"/>
 /// (незнакомые пропускаются), SHA-256 — 64 hex, имя архива — без разделителей пути, версия —
@@ -143,8 +153,12 @@ public sealed partial class AgentReleaseCatalog
         if (!DeviceAgentRids.IsSupported(rid) || version is null || file is null) return null;
         var snapshot = Current();
         if (!snapshot.Versions.TryGetValue(version, out var release)) return null;
-        if (!release.Archives.TryGetValue(rid!, out var archive)) return null;
-        return string.Equals(archive.File, file, StringComparison.Ordinal) ? archive : null;
+        if (release.Archives.TryGetValue(rid!, out var archive) && string.Equals(archive.File, file, StringComparison.Ordinal))
+            return archive;
+        // Компонент рук — тем же путём и по тем же правилам: имя только сравнивается с манифестом
+        return release.Hands.TryGetValue(rid!, out var hands) && string.Equals(hands.File, file, StringComparison.Ordinal)
+            ? hands
+            : null;
     }
 
     /// <summary>Открыть архив: путь собирается только из корня каталога и данных манифеста.</summary>
@@ -196,8 +210,10 @@ public sealed partial class AgentReleaseCatalog
     }
 
     private static bool SameArchives(AgentRelease a, AgentRelease b) =>
-        a.Archives.Count == b.Archives.Count
-        && a.Archives.All(kv => b.Archives.TryGetValue(kv.Key, out var other) && other == kv.Value);
+        Same(a.Archives, b.Archives) && Same(a.Hands, b.Hands);
+
+    private static bool Same(IReadOnlyDictionary<string, AgentReleaseArchive> a, IReadOnlyDictionary<string, AgentReleaseArchive> b) =>
+        a.Count == b.Count && a.All(kv => b.TryGetValue(kv.Key, out var other) && other == kv.Value);
 
     /// <summary>Манифест или указатель; null — повреждён (причина — в логе).</summary>
     private AgentRelease? Parse(string? json, string? expectedVersion, string what)
@@ -218,32 +234,48 @@ public sealed partial class AgentReleaseCatalog
             if (expectedVersion is not null && versionText != expectedVersion)
                 return Reject(what, $"версия {versionText} не совпадает с каталогом {expectedVersion}");
 
-            var archives = new Dictionary<string, AgentReleaseArchive>(StringComparer.Ordinal);
+            // Раскладка на диске — {version}/{archive}: два архива с одним именем делили бы файл
             var files = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var entry in root.GetProperty("archives").EnumerateObject())
-            {
-                // Незнакомый RID — не ошибка: манифест будущей выкатки может знать больше платформ
-                if (!DeviceAgentRids.IsSupported(entry.Name)) continue;
-
-                var file = entry.Value.GetProperty("file").GetString();
-                var size = entry.Value.GetProperty("size").GetInt64();
-                var sha = entry.Value.GetProperty("sha256").GetString();
-                if (file is null || !ArchiveName().IsMatch(file)) return Reject(what, $"имя архива «{file}» недопустимо");
-                if (sha is null || !Sha256Hex().IsMatch(sha)) return Reject(what, $"SHA-256 архива {entry.Name} не 64 hex");
-                if (size <= 0) return Reject(what, $"размер архива {entry.Name} не положителен");
-                // Раскладка на диске — {version}/{archive}: два RID с одним именем делили бы файл
-                if (!files.Add(file)) return Reject(what, $"имя архива «{file}» повторяется");
-
-                archives[entry.Name] = new AgentReleaseArchive(versionText, entry.Name, file, size, sha.ToLowerInvariant());
-            }
-
+            var archives = ParseArchives(root.GetProperty("archives"), versionText, files, out var problem);
+            if (archives is null) return Reject(what, problem!);
             if (archives.Count == 0) return Reject(what, "нет ни одного архива известной платформы");
-            return new AgentRelease(versionText, archives);
+
+            var hands = new Dictionary<string, AgentReleaseArchive>(StringComparer.Ordinal);
+            if (root.TryGetProperty("hands", out var handsSection))
+            {
+                hands = ParseArchives(handsSection, versionText, files, out problem);
+                if (hands is null) return Reject(what, "компонент рук: " + problem);
+            }
+            return new AgentRelease(versionText, archives, hands);
         }
         catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException or FormatException)
         {
             return Reject(what, ex.Message);
         }
+    }
+
+    /// <summary>Секция архивов по RID; null — запись недопустима, причина — в <paramref name="problem"/>.</summary>
+    private static Dictionary<string, AgentReleaseArchive>? ParseArchives(
+        JsonElement section, string version, HashSet<string> files, out string? problem)
+    {
+        problem = null;
+        var archives = new Dictionary<string, AgentReleaseArchive>(StringComparer.Ordinal);
+        foreach (var entry in section.EnumerateObject())
+        {
+            // Незнакомый RID — не ошибка: манифест будущей выкатки может знать больше платформ
+            if (!DeviceAgentRids.IsSupported(entry.Name)) continue;
+
+            var file = entry.Value.GetProperty("file").GetString();
+            var size = entry.Value.GetProperty("size").GetInt64();
+            var sha = entry.Value.GetProperty("sha256").GetString();
+            if (file is null || !ArchiveName().IsMatch(file)) { problem = $"имя архива «{file}» недопустимо"; return null; }
+            if (sha is null || !Sha256Hex().IsMatch(sha)) { problem = $"SHA-256 архива {entry.Name} не 64 hex"; return null; }
+            if (size <= 0) { problem = $"размер архива {entry.Name} не положителен"; return null; }
+            if (!files.Add(file)) { problem = $"имя архива «{file}» повторяется"; return null; }
+
+            archives[entry.Name] = new AgentReleaseArchive(version, entry.Name, file, size, sha.ToLowerInvariant());
+        }
+        return archives;
     }
 
     private AgentRelease? Reject(string what, string reason)

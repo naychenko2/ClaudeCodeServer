@@ -27,6 +27,8 @@ public class FileWatcherFullResyncTests : IDisposable
     private readonly string _tempDir =
         Path.Combine(Path.GetTempPath(), "ccs_fwt_" + Guid.NewGuid().ToString("N"));
     private readonly List<FileWatcherService> _services = [];
+    // Граф кода последнего Build — для проверки сброса по событиям каталогов
+    private CodeGraphService? _graphs;
 
     public void Dispose()
     {
@@ -104,6 +106,7 @@ public class FileWatcherFullResyncTests : IDisposable
         var graphs = new CodeGraphService(NullLogger<CodeGraphService>.Instance, new ProjectRootLookup(projects),
             new GraphPersistence(_tempDir, NullLogger<GraphPersistence>.Instance), config);
 
+        _graphs = graphs;
         var svc = new FileWatcherService(projects, hub.Context, knowledgeSync, graphs, config);
         _services.Add(svc);
         return (svc, project.Id, dir);
@@ -164,5 +167,125 @@ public class FileWatcherFullResyncTests : IDisposable
         payload.GetProperty("full").GetBoolean().Should().BeTrue();
         payload.GetProperty("paths").GetArrayLength().Should().Be(0,
             "какие пути потеряны за время сбоя — неизвестно, клиенту остаётся полная пересинхронизация");
+    }
+
+    // Д1 регресса 2026-09-27: удаление папки проекта роняло бэкенд — Error → RecreateWatcher →
+    // new FileSystemWatcher(несуществующий путь) бросал ArgumentException в колбэке пула потоков.
+    [Fact]
+    public async Task КаталогИсчез_ПересозданиеНеБросает_ВернувшийсяКаталогСноваПодВатчером()
+    {
+        var hub = new HubRecorder();
+        var (svc, projectId, dir) = Build(hub, usePolling: false, pollMs: 0);
+        svc.Watch(projectId, "conn-gone");
+
+        Directory.Delete(dir, recursive: true);
+        var recreate = () => svc.RecreateWatcher(projectId);
+        recreate.Should().NotThrow("исключение из колбэка Error валит процесс целиком");
+
+        // Каталог вернулся — следующее обращение поднимает watcher заново
+        Directory.CreateDirectory(dir);
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        hub.OnSent("project_" + projectId, p =>
+        {
+            if (p.GetProperty("paths").EnumerateArray().Any(x => x.GetString() == "back.txt")) tcs.TrySetResult(true);
+        });
+        svc.Watch(projectId, "conn-back");
+        File.WriteAllText(Path.Combine(dir, "back.txt"), "x");
+
+        var done = await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(10)));
+        done.Should().Be(tcs.Task, "снятый после исчезновения каталога watcher обязан подняться, когда каталог вернулся");
+    }
+
+    // Д2 регресса 2026-09-27: перенос папки приходит событием КАТАЛОГА, дети молчат — инкремент
+    // по .cs-путям его не видел, граф оставался со старыми путями, генератор архитектуры плодил фантомы.
+    [Fact]
+    public async Task ПереносПапки_СбрасываетГрафКода()
+    {
+        var hub = new HubRecorder();
+        var (svc, projectId, dir) = Build(hub, usePolling: false, pollMs: 0);
+        Directory.CreateDirectory(Path.Combine(dir, "src"));
+        File.WriteAllText(Path.Combine(dir, "src", "Foo.cs"), "namespace Demo { public class Foo {} }");
+        await _graphs!.RebuildAsync(dir, CancellationToken.None);
+        _graphs.GetCacheSignature(dir).Should().NotBeNull("граф построен до переноса");
+
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        hub.OnSent("project_" + projectId, p =>
+        {
+            if (p.GetProperty("paths").EnumerateArray().Any(x => x.GetString() == "lib")) tcs.TrySetResult(true);
+        });
+        svc.Watch(projectId, "conn-move");
+        Directory.Move(Path.Combine(dir, "src"), Path.Combine(dir, "lib"));
+
+        var done = await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(10)));
+        done.Should().Be(tcs.Task, "перенос папки обязан дойти до флаша");
+        // Сброс графа идёт в том же флаше сразу за рассылкой — ждём его коротким опросом
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (_graphs.GetCacheSignature(dir) is not null && sw.Elapsed < TimeSpan.FromSeconds(5))
+            await Task.Delay(20);
+        _graphs.GetCacheSignature(dir).Should().BeNull("перенос каталога обязан сбросить граф целиком");
+    }
+
+    // Удалённый путь без расширения — ещё не каталог: Dockerfile и vim-овский 4913 (проба
+    // записи) — файлы. Пустая новая папка структуру графа тоже не меняет. Сброс по ним
+    // выкидывал бы граф на каждое сохранение в vim.
+    [Fact]
+    public async Task УдалениеФайлаБезРасширения_ИПустаяПапка_ГрафНеСбрасывают()
+    {
+        var hub = new HubRecorder();
+        var (svc, projectId, dir) = Build(hub, usePolling: false, pollMs: 0);
+        File.WriteAllText(Path.Combine(dir, "Dockerfile"), "FROM x");
+        File.WriteAllText(Path.Combine(dir, "4913"), "");
+        await _graphs!.RebuildAsync(dir, CancellationToken.None);
+        _graphs.GetCacheSignature(dir).Should().NotBeNull("граф построен до удаления");
+
+        var first = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var barrier = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        hub.OnSent("project_" + projectId, p =>
+        {
+            var paths = p.GetProperty("paths").EnumerateArray().Select(x => x.GetString()).ToList();
+            if (paths.Contains("Dockerfile")) first.TrySetResult(true);
+            if (paths.Contains("barrier.txt")) barrier.TrySetResult(true);
+        });
+        svc.Watch(projectId, "conn-noext");
+        File.Delete(Path.Combine(dir, "Dockerfile"));
+        File.Delete(Path.Combine(dir, "4913"));
+        Directory.CreateDirectory(Path.Combine(dir, "emptydir"));
+
+        (await Task.WhenAny(first.Task, Task.Delay(TimeSpan.FromSeconds(10))))
+            .Should().Be(first.Task, "удаление обязано дойти до флаша");
+        // Барьер: следующий флаш начинается после окончания предыдущего (дебаунс 400 мс) —
+        // к его приходу возможный сброс графа от первого флаша уже случился бы
+        File.WriteAllText(Path.Combine(dir, "barrier.txt"), "x");
+        (await Task.WhenAny(barrier.Task, Task.Delay(TimeSpan.FromSeconds(10))))
+            .Should().Be(barrier.Task, "барьерный флаш обязан прийти");
+
+        _graphs.GetCacheSignature(dir).Should().NotBeNull(
+            "файл без расширения и пустая папка — не перенос каталога, граф сбрасывать не за что");
+    }
+
+    // Обратная сторона сужения: удаление папки с детьми по-прежнему сбрасывает граф
+    [Fact]
+    public async Task УдалениеПапкиСДетьми_СбрасываетГраф()
+    {
+        var hub = new HubRecorder();
+        var (svc, projectId, dir) = Build(hub, usePolling: false, pollMs: 0);
+        Directory.CreateDirectory(Path.Combine(dir, "src"));
+        File.WriteAllText(Path.Combine(dir, "src", "readme.txt"), "x");
+        await _graphs!.RebuildAsync(dir, CancellationToken.None);
+
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        hub.OnSent("project_" + projectId, p =>
+        {
+            if (p.GetProperty("paths").EnumerateArray().Any(x => x.GetString() == "src")) tcs.TrySetResult(true);
+        });
+        svc.Watch(projectId, "conn-deldir");
+        Directory.Delete(Path.Combine(dir, "src"), recursive: true);
+
+        (await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(10))))
+            .Should().Be(tcs.Task, "удаление папки обязано дойти до флаша");
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (_graphs.GetCacheSignature(dir) is not null && sw.Elapsed < TimeSpan.FromSeconds(5))
+            await Task.Delay(20);
+        _graphs.GetCacheSignature(dir).Should().BeNull("удалённая папка с детьми — смена структуры");
     }
 }

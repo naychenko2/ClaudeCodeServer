@@ -3,6 +3,7 @@ using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Services.CodeGraph;
 using ClaudeHomeServer.Services.Knowledge;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.Logging;
 
 namespace ClaudeHomeServer.Services;
 
@@ -45,6 +46,12 @@ public class FileWatcherService : IDisposable
         public readonly HashSet<string> Connections = new();
         public readonly HashSet<string> PendingPaths = new(StringComparer.OrdinalIgnoreCase);
         public Timer? Debounce;
+        // Сменилась структура каталогов (папку создали/перенесли/удалили): инкремент графа кода
+        // ходит по .cs-путям и такой перенос не видит — дети переехавшей папки событий не дают.
+        public bool DirsChanged;
+        // Удалённые пути без расширения: каталог это или файл (Dockerfile, vim-овский 4913),
+        // уже не проверить. Решаем во флаше: каталог — если в том же флаше есть его дети.
+        public readonly HashSet<string> DeletedNoExt = new(StringComparer.OrdinalIgnoreCase);
     }
 
     private readonly ConcurrentDictionary<string, Entry> _entries = new();             // key (projectId | worktree:{id}) -> Entry
@@ -59,10 +66,13 @@ public class FileWatcherService : IDisposable
     // Polling вместо FileSystemWatcher — для bind-mount ФС без inotify (9p/virtiofs в Docker Desktop).
     private readonly bool _usePolling;
     private readonly int _pollIntervalMs;
+    private readonly ILogger<FileWatcherService>? _logger;
 
     public FileWatcherService(ProjectManager projects, IHubContext<SessionHub> hub,
-        ProjectKnowledgeSyncService knowledgeSync, CodeGraphService codeGraphs, IConfiguration config)
+        ProjectKnowledgeSyncService knowledgeSync, CodeGraphService codeGraphs, IConfiguration config,
+        ILogger<FileWatcherService>? logger = null)
     {
+        _logger = logger;
         _projects = projects;
         _hub = hub;
         _knowledgeSync = knowledgeSync;
@@ -142,6 +152,13 @@ public class FileWatcherService : IDisposable
                 if (string.Equals(existing.Root, full, StringComparison.OrdinalIgnoreCase))
                 {
                     existing.LastTouchUtc = DateTime.UtcNow;
+                    // Watcher снят после исчезновения каталога (RecreateWatcher) — каталог
+                    // вернулся, поднимаем заново.
+                    if (existing.Watcher is null && existing.Poll is null)
+                    {
+                        if (_usePolling) StartPolling(key, existing);
+                        else existing.Watcher = CreateWatcher(key, existing);
+                    }
                     return;
                 }
                 DisposeEntry(key, existing);
@@ -177,26 +194,67 @@ public class FileWatcherService : IDisposable
         }
     }
 
-    private FileSystemWatcher CreateWatcher(string key, Entry entry)
+    // null — watcher не запустился (путь исчез между проверкой и запуском, исчерпан лимит
+    // inotify на Linux и т.п.). Мёртвый watcher в entry.Watcher держать нельзя: Watch/WatchPath
+    // поднимают его заново только при Watcher is null, и проект остался бы без наблюдения
+    // навсегда. Тестом не воспроизводится платформонезависимо — отказ EnableRaisingEvents
+    // зависит от ОС (лимит inotify, гонка с удалением каталога).
+    private FileSystemWatcher? CreateWatcher(string key, Entry entry)
     {
-        var w = new FileSystemWatcher(entry.Root)
+        // Конструктор — тоже под try: каталог может исчезнуть между Directory.Exists и созданием,
+        // а исключение из колбэка w.Error (RecreateWatcher) уронило бы процесс.
+        FileSystemWatcher w;
+        try
         {
-            IncludeSubdirectories = true,
-            NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName
-                         | NotifyFilters.LastWrite | NotifyFilters.Size,
-            InternalBufferSize = PathBufferBytes,
+            w = new FileSystemWatcher(entry.Root)
+            {
+                IncludeSubdirectories = true,
+                NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName
+                             | NotifyFilters.LastWrite | NotifyFilters.Size,
+                InternalBufferSize = PathBufferBytes,
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Не удалось запустить watcher {Key} для {Root} — наблюдение поднимется при следующем подключении",
+                key, entry.Root);
+            return null;
+        }
+        // Признак «событие каталога» считается здесь, пока известен вид события: Changed папки
+        // (правка файла внутри) структуру не меняет, пустая созданная папка — тоже. Удалённый
+        // путь уже не проверить — путь без расширения становится кандидатом, решение во флаше
+        // (DeletedNoExt); удаление папки с точкой в имени (Foo.Core) так не распознаётся, но
+        // рекурсивное удаление всё равно шлёт события .cs-детей.
+        w.Created += (_, e) => OnFsEvent(key, entry, e.FullPath, IsNonEmptyDir(e.FullPath));
+        w.Changed += (_, e) => OnFsEvent(key, entry, e.FullPath);
+        w.Deleted += (_, e) => OnFsEvent(key, entry, e.FullPath, deletedNoExt: !Path.HasExtension(e.FullPath));
+        w.Renamed += (_, e) =>
+        {
+            var dir = Directory.Exists(e.FullPath);
+            OnFsEvent(key, entry, e.FullPath, dir);
+            OnFsEvent(key, entry, e.OldFullPath, dir);
         };
-        void OnChange(object _, FileSystemEventArgs e) => OnFsEvent(key, entry, e.FullPath);
-        w.Created += OnChange;
-        w.Changed += OnChange;
-        w.Deleted += OnChange;
-        w.Renamed += (_, e) => { OnFsEvent(key, entry, e.FullPath); OnFsEvent(key, entry, e.OldFullPath); };
         w.Error += (_, _) => RecreateWatcher(key, entry);
-        try { w.EnableRaisingEvents = true; } catch { /* недоступный путь — оставим без watcher */ }
+        try { w.EnableRaisingEvents = true; }
+        catch (Exception ex)
+        {
+            try { w.Dispose(); } catch { }
+            _logger?.LogWarning(ex, "Не удалось запустить watcher {Key} для {Root} — наблюдение поднимется при следующем подключении",
+                key, entry.Root);
+            return null;
+        }
         return w;
     }
 
-    private void OnFsEvent(string key, Entry entry, string fullPath)
+    // Созданный каталог с содержимым (перенос папки снаружи дерева: дети событий не дают).
+    // Пустая новая папка структуру графа не меняет — её дети придут своими событиями.
+    private static bool IsNonEmptyDir(string path)
+    {
+        try { return Directory.Exists(path) && Directory.EnumerateFileSystemEntries(path).Any(); }
+        catch { return false; }
+    }
+
+    private void OnFsEvent(string key, Entry entry, string fullPath, bool isDir = false, bool deletedNoExt = false)
     {
         string rel;
         try { rel = Path.GetRelativePath(entry.Root, fullPath).Replace('\\', '/'); }
@@ -206,8 +264,10 @@ public class FileWatcherService : IDisposable
         lock (_lock)
         {
             entry.PendingPaths.Add(rel);
+            if (isDir && !IsGraphIgnored(rel)) entry.DirsChanged = true;
+            if (deletedNoExt && !IsGraphIgnored(rel)) entry.DeletedNoExt.Add(rel);
             if (entry.Debounce is null)
-                entry.Debounce = new Timer(_ => Flush(key, entry), null, DebounceMs, Timeout.Infinite);
+                entry.Debounce = new Timer(_ => SafeFlush(key, entry), null, DebounceMs, Timeout.Infinite);
             else
                 entry.Debounce.Change(DebounceMs, Timeout.Infinite);
         }
@@ -266,10 +326,20 @@ public class FileWatcherService : IDisposable
             var cur = BuildSnapshot(entry.Root);
 
             var changed = new List<string>();
+            var dirsChanged = false;
             foreach (var kv in cur)
-                if (!old.TryGetValue(kv.Key, out var t) || t != kv.Value) changed.Add(kv.Key);
-            foreach (var rel in old.Keys)
-                if (!cur.ContainsKey(rel)) changed.Add(rel);
+                if (!old.TryGetValue(kv.Key, out var t) || t != kv.Value)
+                {
+                    changed.Add(kv.Key);
+                    // -1 — маркер директории: появилась новая папка
+                    if (kv.Value == -1 && !IsGraphIgnored(kv.Key)) dirsChanged = true;
+                }
+            foreach (var (rel, t) in old)
+                if (!cur.ContainsKey(rel))
+                {
+                    changed.Add(rel);
+                    if (t == -1 && !IsGraphIgnored(rel)) dirsChanged = true;
+                }
 
             entry.Snapshot = cur;
             if (changed.Count == 0) return;
@@ -278,8 +348,14 @@ public class FileWatcherService : IDisposable
             {
                 if (!_entries.ContainsKey(key)) return; // entry уже снят
                 foreach (var p in changed) entry.PendingPaths.Add(p);
+                if (dirsChanged) entry.DirsChanged = true;
             }
             Flush(key, entry);
+        }
+        catch (Exception ex)
+        {
+            // Колбэк таймера: необработанное исключение отсюда роняет процесс
+            _logger?.LogWarning(ex, "Сбой опроса файлов {Root}", entry.Root);
         }
         finally
         {
@@ -296,16 +372,39 @@ public class FileWatcherService : IDisposable
         return false;
     }
 
+    // Каталоги, которые граф кода не строит (.claude, packages, TestResults…): их перенос
+    // граф не устаревает.
+    private static bool IsGraphIgnored(string rel)
+    {
+        foreach (var seg in rel.Split('/'))
+            if (CodeGraphIgnoredDirectories.Names.Contains(seg)) return true;
+        return false;
+    }
+
+    // Колбэк таймера дебаунса: исключение из пула потоков роняет процесс целиком
+    private void SafeFlush(string key, Entry entry)
+    {
+        try { Flush(key, entry); }
+        catch (Exception ex) { _logger?.LogWarning(ex, "Сбой рассылки изменений файлов {Root}", entry.Root); }
+    }
+
     private void Flush(string key, Entry entry)
     {
         string[] allPaths;
         bool full;
+        bool dirsChanged;
         lock (_lock)
         {
             if (entry.PendingPaths.Count == 0) return;
             full = entry.PendingPaths.Count > MaxPaths;
             allPaths = entry.PendingPaths.ToArray();
             entry.PendingPaths.Clear();
+            dirsChanged = entry.DirsChanged
+                // Удалённый путь без расширения — каталог, только если в том же флаше есть его дети
+                || entry.DeletedNoExt.Any(d => allPaths.Any(p =>
+                    p.StartsWith(d + "/", StringComparison.OrdinalIgnoreCase)));
+            entry.DirsChanged = false;
+            entry.DeletedNoExt.Clear();
         }
         // Отдельное дерево чата (path-watcher) в UI не показывается и в знания не синкается —
         // у него нет ни SignalR-группы, ни датасета: он живёт только ради графа кода.
@@ -325,7 +424,11 @@ public class FileWatcherService : IDisposable
         }
         // Реактивный триггер CodeGraph: .cs-правки планируют инкрементальное перестроение графа
         // (дебаунс 15с живёт в CodeGraphService — серия правок схлопывается в один rebuild).
-        NotifyCodeGraph(entry.Root, allPaths);
+        // Перенос/удаление папки инкремент не видит (событие приходит путём каталога, дети
+        // молчат) — граф сбрасываем целиком, следующее обращение построит его заново. Иначе
+        // генератор архитектуры плодил фантомы из старых путей (Д2 регресса 2026-09-27).
+        if (dirsChanged) _codeGraphs.Invalidate(entry.Root);
+        else NotifyCodeGraph(entry.Root, allPaths);
     }
 
     // Фильтрует .cs из накопленных путей и передаёт в CodeGraphService для инкрементального
@@ -343,13 +446,40 @@ public class FileWatcherService : IDisposable
             _codeGraphs.InvalidateIncremental(rootPath, csFiles);
     }
 
+    // Вызывается из колбэка Error в пуле потоков: любое исключение отсюда роняет процесс
+    // целиком (Д1: удаление папки проекта → new FileSystemWatcher бросал ArgumentException).
+    // Каталог исчез — watcher снимаем. Сам он не восстановится: сторожа появления каталога нет,
+    // подъём — только по следующему Watch/WatchPath (переподключение клиента к проекту,
+    // очередное обращение к графу worktree), если к тому времени каталог вернулся.
     private void RecreateWatcher(string key, Entry entry)
     {
-        lock (_lock)
+        try
         {
-            try { entry.Watcher?.Dispose(); } catch { }
-            entry.Watcher = CreateWatcher(key, entry);
+            bool alive;
+            lock (_lock)
+            {
+                try { entry.Watcher?.Dispose(); } catch { }
+                entry.Watcher = null;
+                // Entry уже снят (Unwatch/пересоздание между сбоем и колбэком) — поднимать нечего
+                if (!_entries.TryGetValue(key, out var current) || !ReferenceEquals(current, entry)) return;
+                alive = Directory.Exists(entry.Root);
+                if (alive) entry.Watcher = CreateWatcher(key, entry);
+            }
+            if (!alive)
+            {
+                _logger?.LogWarning("Каталог {Root} под наблюдением исчез — watcher {Key} снят", entry.Root, key);
+                return;
+            }
+            NotifyFullResync(entry);
         }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Не удалось пересоздать watcher {Key} для {Root}", key, entry.Root);
+        }
+    }
+
+    private void NotifyFullResync(Entry entry)
+    {
         // За время сбоя watcher'а события ФС потеряны — списку файлов в UI нечем
         // компенсироваться. Клиенту уходит сигнал полной пересинхронизации (пути неизвестны),
         // синку знаний — полный проход без hints: перенос вне файлового API задетектится

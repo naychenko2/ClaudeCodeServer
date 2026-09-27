@@ -41,25 +41,11 @@ public static class CompilationBuilder
     public const string ProjectAssemblyName = "CodeGraph.AnalyzedProject";
 
     /// <summary>
-    /// Каталоги, исключаемые из обхода .cs: кеш/зависимости/артефакты сборки/IDE-мусор.
-    /// Сравнение по имени каталога (case-insensitive), на любой глубине. Идея та же, что у
-    /// FileService.TreeExcludes, но шире: убираем .claude (плагины oh-my-claudecode и их кеш),
-    /// packages (NuGet), TestResults — иначе этот мусор раздувает detect и валит граф в
-    /// regex-fallback (баг прода: 7372 .cs в .claude/ → 7878 &gt; порога 5000 → Roslyn не звался).
+    /// Каталоги, исключаемые из обхода .cs. Сам список живёт в Core
+    /// (<see cref="CodeGraphIgnoredDirectories"/>): им же пользуется FileWatcherService из корня
+    /// Services, а ссылаться на тип вертикали оттуда нельзя (сторож границ).
     /// </summary>
-    public static readonly HashSet<string> IgnoredDirectories = new(StringComparer.OrdinalIgnoreCase)
-    {
-        // VCS / IDE / кеш
-        ".git", ".claude", ".vs", ".idea", ".cache",
-        // Зависимости
-        "node_modules", "packages",
-        // Артефакты сборки .NET
-        "bin", "obj",
-        // Результаты тестов (coverage/temp)
-        "TestResults",
-        // Фронтенд/прочие build-артефакты (совпадает с FileService.TreeExcludes)
-        "dist", "dev-dist", "publish", ".next", "target",
-    };
+    public static readonly HashSet<string> IgnoredDirectories = CodeGraphIgnoredDirectories.Names;
 
     /// <summary>
     /// Построить Compilation из всех .cs папки rootPath.

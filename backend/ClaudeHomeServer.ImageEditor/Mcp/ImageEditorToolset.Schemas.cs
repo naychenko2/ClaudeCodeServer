@@ -47,6 +47,9 @@ public sealed partial class ImageEditorToolset
         return schema;
     }
 
+    private const string NotWithoutAsk =
+        "Не указывай без просьбы человека — по умолчанию берётся выбор из полосы «Картинки»";
+
     private static JsonObject Count() => new()
     {
         ["type"] = "integer",
@@ -85,7 +88,8 @@ public sealed partial class ImageEditorToolset
         new(ToolGenerate,
             "Сразу запускает генерацию в картинку threadId — без вопроса человеку, это тратит деньги. "
             + "threadId обязателен: человек мог сменить картинку посреди хода. У черновика без файла "
-            + "рисует новую по тексту. Что не передано — из настроек картинки. Не больше двух запусков "
+            + "рисует новую по тексту. Поставщик, модель, число вариантов и персонаж по умолчанию — "
+            + "выбор человека в полосе «Картинки»: не передавай их без его просьбы. Не больше двух запусков "
             + "за ход. Возвращает { jobId, threadId, quote }. Варианты появятся в карточке картинки: "
             + "взять вариант, откатиться и сохранить в проект может только человек.",
             Obj(new JsonObject
@@ -93,8 +97,8 @@ public sealed partial class ImageEditorToolset
                 ["threadId"] = Str("Картинка этого чата (threadId из image_state)"),
                 ["prompt"] = Str("Промпт генерации"),
                 ["provider"] = Str("Поставщик (ключ из image_state): fal, higgsfield или local — «Локальные модели» "
-                    + "на своей видеокарте, бесплатно, но с очередью"),
-                ["model"] = Str("Модель поставщика из image_state или auto"),
+                    + "на своей видеокарте, бесплатно, но с очередью. " + NotWithoutAsk),
+                ["model"] = Str("Модель поставщика из image_state или auto. " + NotWithoutAsk),
                 ["mode"] = OneOf(Modes, "Режим при модели auto"),
                 ["count"] = Count(),
                 ["references"] = new JsonObject
@@ -107,7 +111,7 @@ public sealed partial class ImageEditorToolset
                         ["role"] = OneOf(Roles, "Роль образца"),
                     }, "path", "role"),
                 },
-                ["character"] = Str("Персонаж проекта (slug папки characters/)"),
+                ["character"] = Str("Персонаж проекта (slug папки characters/). " + NotWithoutAsk),
                 ["op"] = OneOf(Ops, "Операция: правка, фон, апскейл, дорисовка за края, улучшить лица (enhanceFaces, "
                     + "только local); по умолчанию — правка, а у новой картинки без файла — generate"),
                 ["matchSourceSize"] = new JsonObject

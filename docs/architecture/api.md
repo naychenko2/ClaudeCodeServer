@@ -117,6 +117,9 @@ GET                 /api/projects/{id}/image-editor/save/check           → с�
 POST                /api/projects/{id}/image-editor/transform            правка без ИИ → шаг; нет растра — 503 raster_unavailable
 GET                 /api/projects/{id}/image-editor/steps/{stepId}       → картинка шага
 GET/POST/PUT/DELETE /api/projects/{id}/image-editor/characters[/{slug}]  персонажи проекта; фото — …/characters/{slug}/photos/{file}
+GET/PUT             /api/projects/{id}/image-editor/prefs                { provider, model, count, matchSourceSize, characterSlug } —
+                                                                         выбор в полосе «Картинки» проекта (нет — null, null, 2, true, null);
+                                                                         удалённый персонаж читается как null; PUT → image_prefs_changed
 ```
 
 **Нити чата** (`ThreadsController`, база `/api/projects/{id}/image-editor/sessions/{sid}/threads`).
@@ -175,5 +178,6 @@ Interrupt(sessionId)                        → прервать идущий х
 та же форма лежит в `history.json`); незнакомый `recordType` или выключенный модуль — лента рисует
 `fallback`. Модуль пишет их вне хода через шов `IChatFeed`; модель их не видит. Редактор картинок
 шлёт владельцу `image_edit_progress` / `image_edit_completed` / `image_edit_failed` и
-`image_thread_changed` (нити чата сменились; потерянное событие догоняется `GET …/threads`).
+`image_thread_changed` (нити чата сменились; потерянное событие догоняется `GET …/threads`) и
+`image_prefs_changed { projectId, prefs }` (выбор в полосе «Картинки» проекта; догоняется `GET …/prefs`).
 Метода `SendImageChatMessage` и события `image_chat_state` (чат картинки v2) больше нет.

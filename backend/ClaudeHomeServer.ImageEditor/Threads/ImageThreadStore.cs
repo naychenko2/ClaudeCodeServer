@@ -64,8 +64,10 @@ public sealed class ImageThreadStore(string root, TimeProvider? time = null)
     }
 
     // Взять картинку в работу от человека (POST threads): нить по этому файлу уже есть — фокус на
-    // неё (Existing), новую не плодим; черновик заводится всегда новый
-    public ImageThreadWrite Open(string ownerId, string sessionId, string? file, string? draftFolder, long revision)
+    // неё (Existing), новую не плодим; черновик заводится всегда новый. settings — настройки новой
+    // нити (выбор человека в полосе «Картинки» проекта), уже существующую нить они не трогают
+    public ImageThreadWrite Open(string ownerId, string sessionId, string? file, string? draftFolder, long revision,
+        ImageThreadSettings? settings = null)
     {
         if ((file is null) == (draftFolder is null))
             throw new ArgumentException("Нужно ровно одно: файл картинки или папка черновика");
@@ -83,7 +85,7 @@ public sealed class ImageThreadStore(string root, TimeProvider? time = null)
                 return new ImageThreadWrite(ImageThreadWriteStatus.Ok, focused) { Thread = existing, Existing = true };
             }
 
-            var thread = NewThread(file, draftFolder);
+            var thread = NewThread(file, draftFolder, settings);
             var next = current with
             {
                 Threads = [.. current.Threads, thread],
@@ -394,10 +396,10 @@ public sealed class ImageThreadStore(string root, TimeProvider? time = null)
         return -1;
     }
 
-    private ImageThread NewThread(string? file, string? draftFolder)
+    private ImageThread NewThread(string? file, string? draftFolder, ImageThreadSettings? settings = null)
     {
         var stack = new ImageThreadStack(NewId(), [], null, false);
-        return new ImageThread(NewId(), file, [], draftFolder, [stack], stack.StackId, null, null, Now());
+        return new ImageThread(NewId(), file, [], draftFolder, [stack], stack.StackId, settings, null, Now());
     }
 
     private ImageThreadsState Read(string ownerId, string sessionId) => ReadFile(StatePath(ownerId, sessionId));

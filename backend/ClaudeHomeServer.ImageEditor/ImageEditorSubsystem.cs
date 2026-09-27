@@ -70,6 +70,10 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
         services.AddHostedService<Threads.ImageThreadLifecycle>();
         // Следы нити в ленте и событие image_thread_changed; нить идёт за переименованным файлом
         services.AddSingleton<Threads.ImageThreadService>();
+        // Выбор человека в полосе «Картинки» проекта: data/image-editor-prefs, его наследуют новые
+        // нити и запуск агентом без аргументов
+        services.AddSingleton(sp => Prefs.ImageProjectPrefsStore.FromConfig(sp.GetRequiredService<IConfiguration>()));
+        services.AddSingleton<Prefs.ImageProjectPrefsService>();
         // Нить с задачей, оборванной перезапуском, не висит в «Рисуем…»: сверка при старте
         services.AddHostedService<Threads.ImageThreadRecovery>();
         services.AddHostedService<Threads.ImageThreadPathTracker>();

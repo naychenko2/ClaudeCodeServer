@@ -26,7 +26,8 @@ public sealed class ImageThreadService(
     ISessionDirectory? directory = null,
     IChatFeed? feed = null,
     ISessionBroadcaster? broadcaster = null,
-    ImageEditSteps? steps = null)
+    ImageEditSteps? steps = null,
+    Prefs.ImageProjectPrefsService? prefs = null)
 {
     public const string ModuleKey = "imageeditor";
 
@@ -61,7 +62,7 @@ public sealed class ImageThreadService(
     public async Task<ImageThreadWrite> OpenAsync(string ownerId, string projectId, string sessionId,
         string? file, string? draftFolder, long revision, CancellationToken ct)
     {
-        var written = store.Open(ownerId, sessionId, file, draftFolder, revision);
+        var written = store.Open(ownerId, sessionId, file, draftFolder, revision, NewThreadSettings(ownerId, projectId));
         if (written.Status == ImageThreadWriteStatus.Ok && written is { Existing: false, Thread: { } thread })
             await AnchorAsync(sessionId, thread, thread.CurrentStackId!, ct);
         return await AfterAsync(ownerId, projectId, sessionId, written);
@@ -111,7 +112,8 @@ public sealed class ImageThreadService(
         for (var attempt = 0; ; attempt++)
         {
             var before = store.Get(ownerId, sessionId);
-            var written = store.Open(ownerId, sessionId, file, draftFolder, before.Revision);
+            var written = store.Open(ownerId, sessionId, file, draftFolder, before.Revision,
+                NewThreadSettings(ownerId, projectId));
             if (written.Status == ImageThreadWriteStatus.Conflict && attempt < AgentAttempts - 1) continue;
             if (written.Status == ImageThreadWriteStatus.Ok && written.State.Revision != before.Revision)
                 await FocusLineAsync(sessionId, written.State, before, ct);
@@ -120,6 +122,10 @@ public sealed class ImageThreadService(
             return await AfterAsync(ownerId, projectId, sessionId, written);
         }
     }
+
+    // Новая нить (от человека и от агента) начинает с выбора человека в полосе «Картинки» проекта
+    private ImageThreadSettings? NewThreadSettings(string ownerId, string projectId) =>
+        prefs?.SettingsFor(ownerId, projectId);
 
     // «Claude взял в работу: logo.png» или «Claude снял выбор: logo.png»
     private Task FocusLineAsync(string sessionId, ImageThreadsState after, ImageThreadsState before, CancellationToken ct)

@@ -19,7 +19,8 @@ namespace ClaudeHomeServer.Services.ImageEditor.Chats;
 public sealed class ImageEditorStateContributor(
     IFeatureFlagGate flags,
     IImageEditJobs? jobs = null,
-    ImageThreadStore? threads = null) : IPromptSectionContributor
+    ImageThreadStore? threads = null,
+    Prefs.ImageProjectPrefsService? prefs = null) : IPromptSectionContributor
 {
     public const string SectionKey = "image-editor-state";
 
@@ -44,20 +45,30 @@ public sealed class ImageEditorStateContributor(
             return Task.FromResult<PromptSectionContribution?>(null);
 
         var (state, fresh) = threads.TakeForTurn(ownerId, session.Id);
-        var block = RenderThreads(state, fresh, jobId => session.ProjectId is { } pid ? jobs?.Get(ownerId, pid, jobId) : null);
+        var projectPrefs = session.ProjectId is { } projectId ? prefs?.Get(ownerId, projectId) : null;
+        var block = RenderThreads(state, fresh, jobId => session.ProjectId is { } pid ? jobs?.Get(ownerId, pid, jobId) : null,
+            projectPrefs);
         return Task.FromResult<PromptSectionContribution?>(new PromptSectionContribution(
             [new PromptSection(Key, block, Title, InTurnTail: true)]));
     }
 
     // Нити картинок чата: «в работе» первой, у каждой файл, шаг и ожидающие варианты
+    // prefs — выбор человека в полосе «Картинки» проекта: для картинки в работе показываются её
+    // настройки (а без них и без фокуса — проекта), персонаж всегда из проекта
     public static string RenderThreads(ImageThreadsState state, IReadOnlyList<ImageThreadEvent> fresh,
-        Func<string, ImageEditJobDto?> job)
+        Func<string, ImageEditJobDto?> job, Prefs.ImageProjectPrefs? prefs = null)
     {
         var sb = new StringBuilder();
         sb.AppendLine("## Картинки в этом чате");
         sb.AppendLine(state.Focus is null
             ? "В работе: ничего не выбрано"
             : $"В работе: картинка {state.Focus}");
+        if (prefs is not null)
+        {
+            var focused = state.Threads.FirstOrDefault(t => t.Id == state.Focus);
+            sb.AppendLine(ChoiceText(focused?.Settings ?? prefs.ToThreadSettings(), prefs.CharacterSlug));
+            sb.AppendLine(ChoiceRule);
+        }
         foreach (var t in state.Threads.OrderByDescending(t => t.Id == state.Focus))
         {
             var what = t.File is { Length: > 0 } file ? $"файл {file}"
@@ -77,6 +88,17 @@ public sealed class ImageEditorStateContributor(
         }
         return sb.ToString().TrimEnd();
     }
+
+    public const string ChoiceRule =
+        "Это выбор человека — не передавай provider/model/character в image_generate, если он сам не просил сменить.";
+
+    // «Выбор человека в полосе «Картинки»: поставщик fal, модель auto, вариантов 2, персонаж anya»
+    public static string ChoiceText(ImageThreadSettings settings, string? character) =>
+        "Выбор человека в полосе «Картинки»: "
+        + $"поставщик {settings.Provider ?? "по умолчанию"}, "
+        + $"модель {settings.Model ?? ImageEditCatalog.AutoModelId}, "
+        + $"вариантов {settings.Count}, "
+        + $"персонаж {character ?? "не подключён"}";
 
     public static string DraftFolderText(string? folder) =>
         string.IsNullOrEmpty(folder) ? "корень проекта" : $"папку {folder}";

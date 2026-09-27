@@ -6,12 +6,14 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.ImageEditor.Mcp;
+using ClaudeHomeServer.Services.ImageEditor.Prefs;
 using ClaudeHomeServer.Services.ImageEditor.Threads;
 using ClaudeHomeServer.Services.Images.Editing.Raster;
 using ClaudeHomeServer.Services.Mcp.Http;
 using ClaudeHomeServer.Services.Spend;
 using ClaudeHomeServer.Services.Turn;
 using ClaudeHomeServer.Tests.ImageEditor;
+using ClaudeHomeServer.Tests.ImageEditor.Characters;
 using ClaudeHomeServer.Tests.ImageEditor.Fakes;
 using ClaudeHomeServer.Tests.ImageEditor.Providers;
 using FluentAssertions;
@@ -45,6 +47,7 @@ public class ImageEditorToolsetTests : IDisposable
     private readonly HashSet<string> _flagOn = [Owner, Stranger];
     private readonly List<ImageEditJobService> _services = [];
     private readonly ImageThreadStore _store;
+    private readonly ImageProjectPrefsStore _prefsStore;
     private ImageEditJobService _jobs = null!;
 
     public ImageEditorToolsetTests()
@@ -55,6 +58,7 @@ public class ImageEditorToolsetTests : IDisposable
         File.WriteAllBytes(Path.Combine(_root, "images", "hero.png"), TestImages.Png(4, 4));
         File.WriteAllText(Path.Combine(_root, "notes.txt"), "не картинка");
         _store = new ImageThreadStore(Path.Combine(_dir, ImageThreadStore.DirName));
+        _prefsStore = new ImageProjectPrefsStore(Path.Combine(_dir, ImageProjectPrefsStore.DirName));
         AddChat(ChatId, Owner, ProjectId);
     }
 
@@ -77,7 +81,11 @@ public class ImageEditorToolsetTests : IDisposable
 
         var directory = new Mock<ISessionDirectory>();
         directory.Setup(d => d.GetById(It.IsAny<string>())).Returns((string id) => _sessions.GetValueOrDefault(id));
-        var threads = new ImageThreadService(_store, NullLogger<ImageThreadService>.Instance, directory.Object, _feed, _broadcaster);
+        var projects = new Mock<IProjectManager>();
+        projects.Setup(p => p.GetById(ProjectId)).Returns(new Project { Id = ProjectId, OwnerId = Owner, RootPath = _root });
+        var prefs = new ImageProjectPrefsService(_prefsStore, NullLogger<ImageProjectPrefsService>.Instance, projects.Object);
+        var threads = new ImageThreadService(_store, NullLogger<ImageThreadService>.Instance, directory.Object, _feed, _broadcaster,
+            prefs: prefs);
         var launcher = new ImageEditLaunchAssembler(editors, _jobs, new SkiaImageRaster(), threads);
 
         var accessor = new Mock<IMcpSessionAccessor>();
@@ -86,12 +94,10 @@ public class ImageEditorToolsetTests : IDisposable
         var flags = new Mock<IFeatureFlagGate>();
         flags.Setup(f => f.IsEnabled(It.IsAny<string>(), FeatureFlagKeys.ImageEditor))
             .Returns((string user, string _) => _flagOn.Contains(user));
-        var projects = new Mock<IProjectManager>();
-        projects.Setup(p => p.GetById(ProjectId)).Returns(new Project { Id = ProjectId, OwnerId = Owner, RootPath = _root });
 
         var config = TestImages.Config((ImageEditorToolset.AgentLaunchKey, agentLaunch ? "true" : "false"));
         return new ImageEditorToolset(accessor.Object, flags.Object, projects.Object, editors, threads, launcher,
-            withGate ? _turnGate.Object : null, _jobs, events: _bus, config: config);
+            withGate ? _turnGate.Object : null, _jobs, events: _bus, config: config, prefs: prefs);
     }
 
     private static McpToolCallContext Ctx(string owner = Owner, string tail = ChatId) => new(owner, tail, tail);
@@ -581,6 +587,121 @@ public class ImageEditorToolsetTests : IDisposable
         (await Call(toolset, ImageEditorToolset.ToolGenerate, Gen(draft, "кот 2"))).IsError.Should().BeFalse();
         (await Call(toolset, ImageEditorToolset.ToolGenerate, Gen(draft, "кот 3")))
             .Text.Should().Contain("не больше 2", "лимит 2 за ход действует и у черновика");
+    }
+
+    // ── Выбор человека в полосе «Картинки» ────────────────────────────────────
+
+    private void Prefs(ImageProjectPrefs prefs) => _prefsStore.Save(Owner, ProjectId, prefs);
+
+    private (ImageEditorToolset Toolset, LocalImageEditorTests.FakeMedia Media) WithLocal()
+    {
+        var media = new LocalImageEditorTests.FakeMedia();
+        var toolset = Toolset([HiggsfieldImageEditorTests.Create().Editor,
+            new LocalImageEditor(media) { PollInterval = TimeSpan.FromMilliseconds(1) }]);
+        return (toolset, media);
+    }
+
+    private string Character() =>
+        CharacterStore.Create(_root, new CharacterDraft("Аня", null, CharacterStoreTests.Photos(3)), DateTime.UtcNow)
+            .Value!.Manifest.Slug;
+
+    [Fact]
+    public async Task image_new_наследует_выбор_проекта_и_сообщает_его()
+    {
+        Prefs(new ImageProjectPrefs(LocalImageEditor.ProviderKey, LocalImageEditor.QwenImage, 3, false, null));
+        var toolset = Toolset();
+
+        var result = await Call(toolset, ImageEditorToolset.ToolNew);
+
+        result.IsError.Should().BeFalse(result.Text);
+        _store.Get(Owner, ChatId).Threads.Single().Settings.Should()
+            .Be(new ImageThreadSettings(LocalImageEditor.ProviderKey, LocalImageEditor.QwenImage, 3, false));
+        var choice = Parse(result)["humanChoice"]!;
+        choice["text"]!.GetValue<string>().Should()
+            .Be("Выбор человека в полосе «Картинки»: поставщик local, модель qwen-image-2.1, вариантов 3, персонаж не подключён");
+        choice["rule"]!.GetValue<string>().Should().Contain("не передавай provider/model/character");
+    }
+
+    [Fact]
+    public async Task image_focus_по_файлу_новая_нить_наследует_выбор_проекта()
+    {
+        Prefs(new ImageProjectPrefs("higgsfield", null, 4, true, null));
+        var toolset = Toolset();
+
+        (await Call(toolset, ImageEditorToolset.ToolFocus, new JsonObject { ["file"] = "images/hero.png" })).IsError.Should().BeFalse();
+
+        _store.Get(Owner, ChatId).Threads.Single().Settings.Should().Be(new ImageThreadSettings("higgsfield", null, 4, true));
+    }
+
+    [Fact]
+    public async Task image_generate_без_аргументов_берёт_поставщика_модель_число_и_персонажа_из_полосы()
+    {
+        var slug = Character();
+        Prefs(new ImageProjectPrefs(LocalImageEditor.ProviderKey, LocalImageEditor.QwenImage, 3, true, slug));
+        var (toolset, media) = WithLocal();
+        var draft = Draft(); // заведена мимо полосы: настроек у нити нет — берётся выбор проекта
+
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate, Gen(draft, "кот в шляпе"));
+
+        result.IsError.Should().BeFalse(result.Text);
+        var job = await WaitDone(Parse(result)["jobId"]!.GetValue<string>());
+        job.Provider.Should().Be(LocalImageEditor.ProviderKey, "по умолчанию админа был бы higgsfield");
+        job.Model.Should().Be(LocalImageEditor.QwenImage);
+        job.Count.Should().Be(3);
+        media.Submitted.Should().NotBeEmpty().And.OnlyContain(r => r.Images.Count == 1,
+            "персонаж из полосы проекта уехал фото, хотя агент его не передавал");
+    }
+
+    [Fact]
+    public async Task image_generate_берёт_настройки_нити_раньше_выбора_проекта()
+    {
+        Prefs(new ImageProjectPrefs(LocalImageEditor.ProviderKey, null, 3, true, null));
+        var (toolset, _) = WithLocal();
+        var thread = Thread();
+        _store.SetSettings(Owner, ChatId, thread, new ImageThreadSettings("higgsfield", null, 1, true), _store.Get(Owner, ChatId).Revision);
+
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate, Gen(thread));
+
+        result.IsError.Should().BeFalse(result.Text);
+        var job = _jobs.Get(Owner, ProjectId, Parse(result)["jobId"]!.GetValue<string>())!;
+        job.Provider.Should().Be("higgsfield");
+        job.Count.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Явный_аргумент_агента_перекрывает_выбор_человека()
+    {
+        var slug = Character();
+        Prefs(new ImageProjectPrefs("higgsfield", null, 3, true, slug));
+        var (toolset, media) = WithLocal();
+        var draft = Draft();
+
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate, new JsonObject
+        {
+            ["threadId"] = draft, ["prompt"] = "кот", ["provider"] = "local", ["count"] = 1, ["character"] = "nope",
+        });
+
+        result.IsError.Should().BeTrue("явный персонаж агента перекрывает полосу — а такого в проекте нет");
+        Parse(result)["error"]!.GetValue<string>().Should().Be("Персонаж не найден");
+
+        var ok = await Call(toolset, ImageEditorToolset.ToolGenerate, new JsonObject
+        {
+            ["threadId"] = draft, ["prompt"] = "кот", ["provider"] = "local", ["count"] = 1,
+        });
+        ok.IsError.Should().BeFalse(ok.Text);
+        var job = _jobs.Get(Owner, ProjectId, Parse(ok)["jobId"]!.GetValue<string>())!;
+        job.Provider.Should().Be("local");
+        job.Count.Should().Be(1);
+    }
+
+    [Fact]
+    public void Описания_provider_model_character_просят_не_указывать_без_просьбы()
+    {
+        var props = Toolset().ToolsFor(Ctx()).Single(t => t.Name == ImageEditorToolset.ToolGenerate).InputSchema["properties"]!;
+
+        foreach (var name in new[] { "provider", "model", "character" })
+            props[name]!["description"]!.GetValue<string>().Should()
+                .Contain("Не указывай без просьбы человека — по умолчанию берётся выбор из полосы «Картинки»");
     }
 
     // Имена в списке авторазрешения (Core) обязаны совпадать со схемами тулсета

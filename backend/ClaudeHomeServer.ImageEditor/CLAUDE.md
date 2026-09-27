@@ -39,6 +39,13 @@ MF-remote `frontend/modules/image-editor` над кодом `frontend/src/featur
 Реестр задач рестарт не переживает: теряются и уже готовые варианты, ждавшие «Взять» (деньги
 списаны), поэтому текст пометки — «задача потеряна», а не «генерация прервана».
 
+**Выбор человека в полосе «Картинки»** — `Prefs/ImageProjectPrefs` на владельца и проект,
+`data/image-editor-prefs/{ownerId}/{projectId}.json`, ручки `GET/PUT …/image-editor/prefs`, событие
+`image_prefs_changed`. Новая нить (человек и агент) берёт из него `Settings`; `image_generate` без
+аргументов берёт поставщика, модель и число из `thread.Settings`, иначе из выбора проекта, а
+персонажа — из выбора проекта (удалённый читается как `null`). Блок хвоста хода и ответ `image_new`
+показывают этот выбор с правилом «не передавай provider/model/character без просьбы человека».
+
 **Снесено в v3 и не возвращается:** `ImageChatsController` (ручки `image-editor/chats*`),
 `ImageChatStateStore`, `ImageChatPathTracker`, `IImageChatSessions`, метод хаба
 `SendImageChatMessage`, событие `image_chat_state`. Старые чаты «hero.png · правка» один раз

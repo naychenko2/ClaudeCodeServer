@@ -12,6 +12,8 @@ public static class ImageEditEventNames
     public const string Failed = "image_edit_failed";
     // Нити картинок чата сменились (ADR-019): любая запись в ImageThreadStore
     public const string ThreadChanged = "image_thread_changed";
+    // Выбор человека в полосе «Картинки» проекта сменился (PUT …/image-editor/prefs)
+    public const string PrefsChanged = "image_prefs_changed";
 }
 
 // ChatSessionId и Initiator в событиях задачи — те же, что в ImageEditJobDto: карточка запуска
@@ -46,3 +48,7 @@ public record ImageEditFailedMessage(
 // Уходит в группу владельца на КАЖДУЮ запись: фокус, шаг, задача, сохранение, откат
 public record ImageThreadChangedMessage(string ProjectId, long Revision, Threads.ImageThreadsState State)
     : ServerMessage(ImageEditEventNames.ThreadChanged);
+
+// Настройки проекта после записи — в группу владельца: другие вкладки перерисовывают полосу
+public record ImageProjectPrefsChangedMessage(string ProjectId, Prefs.ImageProjectPrefs Prefs)
+    : ServerMessage(ImageEditEventNames.PrefsChanged);

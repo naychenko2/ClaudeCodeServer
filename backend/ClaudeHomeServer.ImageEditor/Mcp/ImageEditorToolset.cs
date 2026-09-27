@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.ImageEditor.Prefs;
 using ClaudeHomeServer.Services.ImageEditor.Threads;
 using ClaudeHomeServer.Services.Mcp.Http;
 using ClaudeHomeServer.Services.Turn;
@@ -54,6 +55,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
     private readonly IImageEditJobs? _jobs;
     private readonly IImagePlaceSettings? _placeSettings;
     private readonly ImageEditSteps? _steps;
+    private readonly ImageProjectPrefsService? _prefs;
     private readonly bool _agentLaunch;
 
     // Запуски агентом в текущем ходу: sessionId → число. Сброс — TurnCompleted этой сессии
@@ -72,7 +74,8 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         IImagePlaceSettings? placeSettings = null,
         ImageEditSteps? steps = null,
         ITurnEventBus? events = null,
-        IConfiguration? config = null)
+        IConfiguration? config = null,
+        ImageProjectPrefsService? prefs = null)
     {
         _sessions = sessions;
         _flags = flags;
@@ -84,6 +87,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         _jobs = jobs;
         _placeSettings = placeSettings;
         _steps = steps;
+        _prefs = prefs;
         _agentLaunch = config?.GetValue(AgentLaunchKey, true) ?? true;
         events?.OnNotification<TurnCompleted>(OnTurnCompleted, "ImageEditorToolset.ResetLaunches");
     }
@@ -144,7 +148,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
 
         return written.Status switch
         {
-            ImageThreadWriteStatus.Ok => Json(Focused(written.State)),
+            ImageThreadWriteStatus.Ok => Json(Focused(written.State, file is null ? null : HumanChoice(ownerId, project, written.State))),
             ImageThreadWriteStatus.ThreadNotFound => Deny($"Картинки {threadId} нет в этом чате. Список — image_state."),
             _ => Deny("Человек как раз меняет выбор картинки — повтори позже."),
         };
@@ -160,16 +164,32 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
 
         var written = await _threads.AgentOpenAsync(ownerId, project.Id, session.Id, null, folder, ct);
         return written.Status == ImageThreadWriteStatus.Ok
-            ? Json(Focused(written.State))
+            ? Json(Focused(written.State, HumanChoice(ownerId, project, written.State)))
             : Deny("Человек как раз меняет выбор картинки — повтори позже.");
     }
 
-    private static object Focused(ImageThreadsState state) => new
+    // humanChoice — настройки, которые картинка унаследовала из полосы «Картинки», и правило
+    private static object Focused(ImageThreadsState state, object? humanChoice = null) => new
     {
         focus = state.Focus,
         thread = state.Threads.FirstOrDefault(t => t.Id == state.Focus) is { } t ? DescribeThread(t) : null,
+        humanChoice,
         note = "Человек видит в ленте, какую картинку ты взял в работу, и может снять выбор.",
     };
+
+    // Выбор человека для картинки в работе (без фокуса — для проекта): что возьмёт image_generate
+    // без provider/model/count/character
+    private object? HumanChoice(string ownerId, Project project, ImageThreadsState state)
+    {
+        if (_prefs is null) return null;
+        var prefs = _prefs.Get(ownerId, project);
+        var settings = state.Threads.FirstOrDefault(t => t.Id == state.Focus)?.Settings ?? prefs.ToThreadSettings();
+        return new
+        {
+            text = Chats.ImageEditorStateContributor.ChoiceText(settings, prefs.CharacterSlug),
+            rule = Chats.ImageEditorStateContributor.ChoiceRule,
+        };
+    }
 
     // Путь картинки проекта в форме нитей: от корня через «/», строго внутри и без ссылки наружу
     private static string? ProjectImagePath(Project project, string file)
@@ -222,8 +242,10 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
     private async Task<McpToolCallResult> LaunchAsync(JsonObject args, string ownerId, Session session,
         Project project, ImageThread thread, CancellationToken ct)
     {
-        // Что не передано — из настроек нити, а поставщик по умолчанию — как у каталога
-        var settings = thread.Settings;
+        // Что не передано — выбор человека: настройки нити, иначе полосы «Картинки» проекта, а
+        // поставщик по умолчанию — как у каталога. Персонаж — подключённый в полосе проекта
+        var prefs = _prefs?.Get(ownerId, project);
+        var settings = thread.Settings ?? prefs?.ToThreadSettings();
         var provider = Str(args, "provider") ?? settings?.Provider ?? DefaultProvider();
         if (provider is null)
             return Deny("Поставщик рисования не настроен. Обратитесь к администратору.");
@@ -233,7 +255,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         var prompt = Str(args, "prompt") ?? "";
         var matchSourceSize = Bool(args, "matchSourceSize") ?? settings?.MatchSourceSize ?? true;
         var references = ReferencesArg(args);
-        var character = Str(args, "character");
+        var character = Str(args, "character") ?? prefs?.CharacterSlug;
 
         // Исходник — текущий шаг нити, иначе файл нити с диска проекта. У черновика «Новая
         // картинка» без шага исходника нет вовсе: рисуем новую по тексту
@@ -378,6 +400,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             defaultModel = catalog.Default.Model,
             providers = catalog.Providers,
             agentLaunch = _agentLaunch,
+            humanChoice = HumanChoice(ownerId, project, state),
             note = state.Threads.Count == 0
                 ? "В этом чате ещё нет картинок. Возьми картинку проекта в работу (image_focus с file) или заведи новую (image_new)."
                 : "Взять вариант, откатиться и сохранить в проект может только человек.",

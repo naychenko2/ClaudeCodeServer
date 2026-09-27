@@ -25,7 +25,7 @@ namespace ClaudeHomeServer.DeviceAgent;
 ///   ai-home-agent install --server https://host --code ABCD2345 [--name "Ноутбук"] [--always-on]
 ///   ai-home-agent uninstall [--purge]
 ///   ai-home-agent pair --server https://host --code ABCD2345 [--name "Ноутбук"] [--always-on]
-///   ai-home-agent roots add ПУТЬ [--force] | roots remove ПУТЬ | roots list
+///   ai-home-agent roots add ПУТЬ [--force] | roots remove ПУТЬ | roots list | roots auto [on|off]
 ///   ai-home-agent supervise
 ///   ai-home-agent [run]
 ///   ai-home-agent --version
@@ -85,6 +85,7 @@ public static class AgentProgram
         Console.Error.WriteLine("ai-home-agent roots add ПУТЬ [--force]");
         Console.Error.WriteLine("ai-home-agent roots remove ПУТЬ");
         Console.Error.WriteLine("ai-home-agent roots list");
+        Console.Error.WriteLine("ai-home-agent roots auto [on|off]");
         Console.Error.WriteLine("ai-home-agent supervise");
         Console.Error.WriteLine("ai-home-agent [run]");
         Console.Error.WriteLine("ai-home-agent --version");
@@ -197,7 +198,17 @@ public static class AgentProgram
         switch (args)
         {
             case ["list"] or []:
-                foreach (var r in roots.Roots) Console.WriteLine(r);
+                foreach (var r in roots.Roots)
+                    Console.WriteLine(roots.LabelOf(r) is { } label ? $"{r}  — {label}" : r);
+                Console.Error.WriteLine(AutoState(roots));
+                return 0;
+            // Выключатель автовыдачи папок проектов — только здесь, на машине: с сервера его не переключить
+            case ["auto"]:
+                Console.WriteLine(AutoState(roots));
+                return 0;
+            case ["auto", "on" or "off"]:
+                roots.SetAuto(args[1] == "on");
+                Console.WriteLine(AutoState(roots));
                 return 0;
             case ["add", ..] when args[1..].Where(a => a != "--force").ToArray() is [var path]:
                 Console.Error.WriteLine("Внимание: " + AgentRootsStore.SharedWriteWarning);
@@ -216,6 +227,10 @@ public static class AgentProgram
                 return Usage();
         }
     }
+
+    private static string AutoState(AgentRootsStore roots) => roots.AutoEnabled
+        ? "Автовыдача папок проектов включена: сервер может создать папку проекта и разрешить её (выключить — «ai-home-agent roots auto off»)"
+        : "Автовыдача папок проектов выключена: корни добавляются только командой «ai-home-agent roots add»";
 
     private static string Version =>
         typeof(AgentProgram).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
@@ -276,7 +291,8 @@ public static class AgentProgram
         log.LogInformation("Сайдкар слушает {Url}", sidecar.Url);
 
         // Одна политика корней на исполнение ходов и на файлы проектов (ADR-016 §5)
-        var policy = new AgentPathPolicy(new AgentRootsStore(paths.RootsFile));
+        var rootsStore = new AgentRootsStore(paths.RootsFile);
+        var policy = new AgentPathPolicy(rootsStore);
         var executor = new TurnExecutor(
             new ExecOptions
             {
@@ -322,11 +338,15 @@ public static class AgentProgram
         }
         // Ретранслятор чтения для других устройств (задача 5.1) — поверх тех же файлов и git
         var relay = new RelayHandler(projectFiles, git, loggers.CreateLogger<RelayHandler>());
+        // Выдача папки проекта (решение владельца 2026-09-27): отдельно от ретранслятора, он не пишет
+        var binder = new ProjectFolderBinder(rootsStore, policy, ProjectFolderBinder.ContextForCurrentMachine(paths),
+            loggers.CreateLogger<ProjectFolderBinder>());
+        log.LogInformation("{State}", AutoState(rootsStore));
         var updater = CreateUpdater(paths, device, activity, cliHttp, loggers, log);
         var updateLoop = updater is null ? new TaskCompletionSource<bool>().Task : RunUpdaterAsync(updater, log, stop.Token);
         await using var coordinator = new AgentCoordinator(control, new ManagedCliHarness(managedCli),
             new ExecSocketConnector(device), executor.RunAsync, Version, log, runRelay: relay.RunAsync,
-            updates: updater, activity: activity);
+            updates: updater, activity: activity, runBindFolder: binder.RunAsync);
 
         var exitCode = 0;
         try

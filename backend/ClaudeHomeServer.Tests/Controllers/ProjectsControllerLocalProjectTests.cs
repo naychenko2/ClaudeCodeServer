@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using ClaudeHomeServer.DeviceAgent.Composition;
 using ClaudeHomeServer.DeviceAgent.Exec;
+using ClaudeHomeServer.DeviceAgent.Hosting;
 using ClaudeHomeServer.DeviceAgent.Relay;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
@@ -21,6 +22,11 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// перепривязка при чатах — 409. Папку на устройстве создание и перепривязка проверяют ДО
 /// сохранения настоящим обработчиком агента (RelayHandler + AgentPathPolicy) через канал
 /// ретранслятора: нет папки, файл, вне корней, офлайн — 400; старый агент — пропуск.
+///
+/// Агент с выдачей папки (<see cref="DeviceCapabilities.BindFolder"/>, решение владельца
+/// 2026-09-27) — настоящий <see cref="ProjectFolderBinder"/>: нет папки — создана и разрешена,
+/// вне корней — разрешена, запретный путь и выключенная автовыдача — 400. Устройства без
+/// этой возможности («dev-exec») — старый агент: прежний отказ с подсказкой команды.
 /// </summary>
 public sealed class ProjectsControllerLocalProjectTests : IDisposable
 {
@@ -40,6 +46,14 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
             Agents[deviceId].OpenRelayAsync(ownerId, deviceId, ct);
     }
 
+    /// <summary>Канал выдачи папки по устройствам.</summary>
+    private sealed class BindByDevice : IDeviceFolderBindChannel
+    {
+        public Dictionary<string, LoopbackRelayChannel> Agents { get; } = [];
+        public Task<IDeviceExecStream> OpenBindFolderAsync(string ownerId, string deviceId, CancellationToken ct = default) =>
+            Agents[deviceId].OpenRelayAsync(ownerId, deviceId, ct);
+    }
+
     private sealed class AllowedRoots(params string[] roots) : IAgentRoots
     {
         public IReadOnlyList<string> Roots { get; } = roots;
@@ -47,6 +61,7 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
 
     private readonly FakeDeviceExec _devices = new();
     private readonly RelayByDevice _relay = new();
+    private readonly BindByDevice _bind = new();
     private readonly TestWebApplicationFactory _factory;
     private readonly HttpClient _client;
 
@@ -54,6 +69,12 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
     private readonly string _machine = Path.Combine(Path.GetTempPath(), "lp-agent-" + Guid.NewGuid().ToString("N"));
     private string AllowedRoot => Path.Combine(_machine, "allowed");
     private string Outside => Path.Combine(_machine, "outside");
+
+    // Машина агента с выдачей папки — рядом с тестами, а не в temp: на Windows temp лежит в
+    // запретном для выдачи AppData. Профиль этой «машины» — BindHome
+    private readonly string _bindMachine = Path.Combine(AppContext.BaseDirectory, "lp-bind-" + Guid.NewGuid().ToString("N"));
+    private string BindHome => Path.Combine(_bindMachine, "home");
+    private readonly AgentRootsStore _bindRoots;
 
     public ProjectsControllerLocalProjectTests()
     {
@@ -65,6 +86,10 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
         _devices.Devices["dev-old"] = Status("dev-old", online: true, DeviceCapabilities.Exec);
         _devices.Devices["dev-old-relay"] = Status("dev-old-relay", online: true, DeviceCapabilities.Exec, DeviceCapabilities.Relay);
         _devices.Devices["dev-noexec"] = Status("dev-noexec", online: true, DeviceCapabilities.Files);
+        _devices.Devices["dev-bind"] = Status("dev-bind", online: true,
+            DeviceCapabilities.Exec, DeviceCapabilities.Relay, DeviceCapabilities.BindFolder);
+        _devices.Devices["dev-bind-refused"] = Status("dev-bind-refused", online: true,
+            DeviceCapabilities.Exec, DeviceCapabilities.Relay, DeviceCapabilities.BindFolder);
 
         _factory = new TestWebApplicationFactory
         {
@@ -72,6 +97,7 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
             {
                 s.AddSingleton<IDeviceExecChannel>(_devices);
                 s.AddSingleton<IDeviceRelayChannel>(_relay);
+                s.AddSingleton<IDeviceFolderBindChannel>(_bind);
             },
         };
         _client = _factory.CreateAuthenticatedClient();
@@ -82,12 +108,37 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
         var agent = new RelayHandler(new AgentProjectFiles(new FileService(git), policy), git);
         _relay.Agents["dev-exec"] = new LoopbackRelayChannel { Agent = agent.RunAsync };
         _relay.Agents["dev-old-relay"] = new LoopbackRelayChannel { Agent = OldAgentAsync };
+
+        // Агент с выдачей папки: свои корни (пока пусто), профиль и каталог конфига в запретном списке
+        PrivateDir(BindHome);
+        var config = PrivateDir(Path.Combine(_bindMachine, "config"));
+        _bindRoots = new AgentRootsStore(Path.Combine(config, "roots.json"));
+        var bindPolicy = new AgentPathPolicy(_bindRoots);
+        var binder = new ProjectFolderBinder(_bindRoots, bindPolicy, new AgentForbiddenContext([BindHome], [config], []));
+        var bindRelay = new RelayHandler(new AgentProjectFiles(new FileService(git), bindPolicy), git);
+        _bind.Agents["dev-bind"] = new LoopbackRelayChannel { Agent = binder.RunAsync };
+        _relay.Agents["dev-bind"] = new LoopbackRelayChannel { Agent = bindRelay.RunAsync };
+        // Объявил возможность, но канал выдачи отказал как старому агенту — откат на проверку
+        _bind.Agents["dev-bind-refused"] = new LoopbackRelayChannel
+        {
+            Refuse = new DeviceExecRefusedException(DeviceExecRefusal.NoBindFolderCapability, "старый агент"),
+        };
+        _relay.Agents["dev-bind-refused"] = new LoopbackRelayChannel { Agent = bindRelay.RunAsync };
+    }
+
+    // Каталог только владельцу на запись: общий на запись корень агент не добавит
+    private static string PrivateDir(string path)
+    {
+        if (OperatingSystem.IsWindows()) Directory.CreateDirectory(path);
+        else Directory.CreateDirectory(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        return path;
     }
 
     public void Dispose()
     {
         _factory.Dispose();
         try { Directory.Delete(_machine, recursive: true); } catch { /* временная папка */ }
+        try { Directory.Delete(_bindMachine, recursive: true); } catch { /* временная папка */ }
     }
 
     // Агент до операции check-path: незнакомая операция — 400, как у RelayHandler того времени
@@ -308,6 +359,134 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
         var r = await _client.PutAsJsonAsync($"/api/projects/{id}/device", new { deviceId = "dev-exec", rootPath = dir });
 
         r.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    // ---------- выдача папки агентом (bind-project-folder) ----------
+
+    [Fact]
+    public async Task Создание_НетПапки_АгентСоздаётИРазрешает_201СУведомлением()
+    {
+        await SetFlagAsync(true);
+        var path = Path.Combine(BindHome, "projects", "app");
+
+        var r = await _client.PostAsJsonAsync("/api/projects", new { name = "Мой проект", rootPath = path, deviceId = "dev-bind" });
+
+        r.StatusCode.Should().Be(HttpStatusCode.Created);
+        (await BodyAsync(r)).GetProperty("folderNotice").GetString()
+            .Should().Be($"Папка «{path}» создана и разрешена агенту на «home»");
+        Directory.Exists(path).Should().BeTrue();
+        _bindRoots.Roots.Should().Equal(path);
+        _bindRoots.LabelOf(path).Should().Be("добавлен автоматически для проекта «Мой проект»");
+    }
+
+    [Fact]
+    public async Task Создание_ПапкаВнеКорней_АгентРазрешает_201()
+    {
+        await SetFlagAsync(true);
+        var path = PrivateDir(Path.Combine(BindHome, "existing"));
+
+        var r = await CreateLocalAsync("dev-bind", path);
+
+        r.StatusCode.Should().Be(HttpStatusCode.Created);
+        (await BodyAsync(r)).GetProperty("folderNotice").GetString()
+            .Should().Be($"Папка «{path}» разрешена агенту на «home»");
+        _bindRoots.Roots.Should().Equal(path);
+    }
+
+    [Fact]
+    public async Task Создание_ПапкаУжеПодКорнем_201БезУведомления()
+    {
+        await SetFlagAsync(true);
+        var root = PrivateDir(Path.Combine(BindHome, "work"));
+        _bindRoots.Add(root);
+        var path = PrivateDir(Path.Combine(root, "app"));
+
+        var r = await CreateLocalAsync("dev-bind", path);
+
+        r.StatusCode.Should().Be(HttpStatusCode.Created);
+        (await BodyAsync(r)).GetProperty("folderNotice").ValueKind.Should().Be(JsonValueKind.Null);
+        _bindRoots.Roots.Should().Equal(root);
+    }
+
+    [Fact]
+    public async Task Создание_ЗапретныйПуть_400_НичегоНеСоздано()
+    {
+        await SetFlagAsync(true);
+        var ssh = Path.Combine(BindHome, ".ssh");
+
+        var r = await CreateLocalAsync("dev-bind", ssh);
+
+        r.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await ErrorAsync(r)).Should().StartWith("Агент на «home» не выдаёт эту папку:");
+        Directory.Exists(ssh).Should().BeFalse();
+        _bindRoots.Roots.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Создание_АвтовыдачаВыключенаНаМашине_ПрежнийОтказСПодсказкой()
+    {
+        await SetFlagAsync(true);
+        _bindRoots.SetAuto(false);
+        var missing = Path.Combine(BindHome, "nope");
+        var outside = PrivateDir(Path.Combine(BindHome, "existing"));
+
+        var m = await CreateLocalAsync("dev-bind", missing);
+        var o = await CreateLocalAsync("dev-bind", outside);
+
+        m.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await ErrorAsync(m)).Should().Be($"Папки «{missing}» нет на устройстве «home». Создайте её или укажите другую");
+        o.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await ErrorAsync(o)).Should().Contain($"ai-home-agent roots add \"{outside}\"");
+        Directory.Exists(missing).Should().BeFalse();
+        _bindRoots.Roots.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Создание_СтарыйАгентБезВыдачи_ПрежнийОтказСПодсказкойКоманды()
+    {
+        await SetFlagAsync(true);
+
+        // dev-exec возможность bind-folder не объявил; dev-bind-refused объявил, но канал отказал
+        var r1 = await CreateLocalAsync("dev-exec", Outside);
+        var r2 = await CreateLocalAsync("dev-bind-refused", Outside);
+
+        foreach (var r in new[] { r1, r2 })
+        {
+            r.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+            (await ErrorAsync(r)).Should().StartWith("Папка вне разрешённых на устройстве")
+                .And.Contain($"ai-home-agent roots add \"{Outside}\"");
+        }
+        _bindRoots.Roots.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Перепривязка_НетПапки_АгентСоздаётИРазрешает_200СУведомлением()
+    {
+        await SetFlagAsync(true);
+        var id = await CreateServerAsync();
+        var path = Path.Combine(BindHome, "moved");
+
+        var r = await _client.PutAsJsonAsync($"/api/projects/{id}/device", new { deviceId = "dev-bind", rootPath = path });
+
+        r.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await BodyAsync(r);
+        body.GetProperty("deviceId").GetString().Should().Be("dev-bind");
+        body.GetProperty("folderNotice").GetString().Should().Be($"Папка «{path}» создана и разрешена агенту на «home»");
+        Directory.Exists(path).Should().BeTrue();
+        _bindRoots.Roots.Should().Equal(path);
+    }
+
+    [Fact]
+    public async Task Перепривязка_ВнеКорней_АгентРазрешает_200()
+    {
+        await SetFlagAsync(true);
+        var id = await CreateServerAsync();
+        var path = PrivateDir(Path.Combine(BindHome, "existing"));
+
+        var r = await _client.PutAsJsonAsync($"/api/projects/{id}/device", new { deviceId = "dev-bind", rootPath = path });
+
+        r.StatusCode.Should().Be(HttpStatusCode.OK);
+        _bindRoots.Roots.Should().Equal(path);
     }
 
     // ---------- прежнее поведение ----------

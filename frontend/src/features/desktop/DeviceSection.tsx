@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Laptop, Unlink } from 'lucide-react';
 import type { DesktopDevice, Project } from '../../types';
 import { api } from '../../lib/api';
+import { showToast } from '../../lib/toast';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { Button, ConfirmDialog, Select, TextField } from '../../components/ui';
 import { AccordionSection } from '../projects/dialogs/AccordionSection';
@@ -74,6 +75,7 @@ export function DeviceSection({ project, onUpdated }: Props) {
     setBusy(true); setErr('');
     try {
       const updated = await api.projects.setDevice(project.id, { deviceId: picked, rootPath });
+      if (updated.folderNotice) showToast('Папка проекта', updated.folderNotice);
       invalidateProjectsCache();
       onUpdated?.(updated);
       setPicked('');

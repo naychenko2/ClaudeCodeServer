@@ -80,6 +80,7 @@ internal sealed class AgentCoordinator : IAsyncDisposable
     private readonly IExecSocketConnector _connector;
     private readonly Func<ExecLink, CancellationToken, Task> _runTurn;
     private readonly Func<ExecLink, CancellationToken, Task>? _runRelay;
+    private readonly Func<ExecLink, CancellationToken, Task>? _runBindFolder;
     private readonly IAgentUpdates? _updates;
     private readonly ActivityRegistry? _activity;
     private readonly string _agentVersion;
@@ -96,7 +97,7 @@ internal sealed class AgentCoordinator : IAsyncDisposable
     public AgentCoordinator(IControlConnection control, IHarness harness, IExecSocketConnector connector,
         Func<ExecLink, CancellationToken, Task> runTurn, string agentVersion, ILogger? log = null, TimeSpan? maxOutage = null,
         Func<ExecLink, CancellationToken, Task>? runRelay = null, IAgentUpdates? updates = null, ActivityRegistry? activity = null,
-        TimeProvider? time = null)
+        TimeProvider? time = null, Func<ExecLink, CancellationToken, Task>? runBindFolder = null)
     {
         _time = time ?? TimeProvider.System;
         _control = control;
@@ -104,6 +105,7 @@ internal sealed class AgentCoordinator : IAsyncDisposable
         _connector = connector;
         _runTurn = runTurn;
         _runRelay = runRelay;
+        _runBindFolder = runBindFolder;
         _updates = updates;
         _activity = activity;
         _agentVersion = agentVersion;
@@ -131,11 +133,17 @@ internal sealed class AgentCoordinator : IAsyncDisposable
         Platform: PlatformName,
         AgentVersion: _agentVersion,
         CliVersion: _harness.ActiveVersion,
-        Capabilities: _runRelay is null
-            ? [DeviceCapabilities.Exec, DeviceCapabilities.Files]
-            : [DeviceCapabilities.Exec, DeviceCapabilities.Files, DeviceCapabilities.Relay],
+        Capabilities: Capabilities(),
         Rid: RidName,
         AgentUpdate: _updates?.Status);
+
+    private List<string> Capabilities()
+    {
+        List<string> capabilities = [DeviceCapabilities.Exec, DeviceCapabilities.Files];
+        if (_runRelay is not null) capabilities.Add(DeviceCapabilities.Relay);
+        if (_runBindFolder is not null) capabilities.Add(DeviceCapabilities.BindFolder);
+        return capabilities;
+    }
 
     /// <summary>Hello; force = false — только если активная копия поменялась с прошлого раза.</summary>
     public async Task HelloAsync(bool force = true)
@@ -218,6 +226,7 @@ internal sealed class AgentCoordinator : IAsyncDisposable
         {
             null => (_runTurn, _maxOutage),
             DeviceExecPurposes.Relay when _runRelay is not null => (_runRelay, RelayProtocol.MaxOutage),
+            DeviceExecPurposes.BindFolder when _runBindFolder is not null => (_runBindFolder, RelayProtocol.MaxOutage),
             _ => ((Func<ExecLink, CancellationToken, Task>?)null, TimeSpan.Zero),
         };
         if (run is null)

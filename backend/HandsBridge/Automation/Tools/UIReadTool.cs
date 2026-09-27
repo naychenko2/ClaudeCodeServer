@@ -1,0 +1,169 @@
+using System.ComponentModel;
+using System.Runtime.Versioning;
+using ModelContextProtocol.Protocol;
+using ModelContextProtocol.Server;
+using Sbroenne.WindowsMcp.Native;
+using Sbroenne.WindowsMcp.Tools;
+
+namespace Sbroenne.WindowsMcp.Automation.Tools;
+
+/// <summary>
+/// MCP tool for reading text from UI elements with automatic OCR fallback.
+/// </summary>
+[SupportedOSPlatform("windows")]
+[McpServerToolType]
+public static partial class UIReadTool
+{
+    /// <summary>
+    /// Reads text from a UI element. If UIA text extraction fails, automatically tries OCR.
+    /// Keywords: read, read text, get text, extract text, OCR, text content, contents, value,
+    /// scrape, article text, web page text, what does it say.
+    /// </summary>
+    /// <remarks>
+    /// Extract text from UI elements or screen regions. Auto-falls back to OCR if normal text extraction fails.
+    /// For web pages in Edge/Chrome, pass format='article' to get clean, token-efficient article text
+    /// (main content only, navigation chrome and inline link URLs stripped, headings/lists as markdown).
+    /// Reading the live signed-in browser window this way also works for authenticated/internal pages that
+    /// an HTTP fetch cannot reach.
+    /// </remarks>
+    /// <param name="windowHandle">Window handle as decimal string (from window_management 'find' or 'list'). REQUIRED.</param>
+    /// <param name="name">Element name (exact match, case-insensitive).</param>
+    /// <param name="nameContains">Substring in element name (case-insensitive).</param>
+    /// <param name="namePattern">Regex pattern for element name matching.</param>
+    /// <param name="controlType">Control type (Text, Edit, Document, etc.)</param>
+    /// <param name="automationId">AutomationId for precise matching.</param>
+    /// <param name="className">Element class name.</param>
+    /// <param name="elementId">Stable element id from a prior ui_find/ui_snapshot. When provided, reads that exact element directly and ignores the name/type selectors (avoids re-querying).</param>
+    /// <param name="foundIndex">Return Nth match (1-based, default: 1).</param>
+    /// <param name="includeChildren">Include child element text (default: false). Ignored when format='article'.</param>
+    /// <param name="language">OCR language code (e.g., 'en-US', 'de-DE'). Uses system default if not specified. Only used if OCR fallback triggers.</param>
+    /// <param name="format">Text extraction mode: 'raw' (default, complete but includes nav chrome and link URLs) or 'article' (clean main-content text for web pages, chrome and inline URLs stripped, headings/lists as markdown).</param>
+    /// <param name="includeDiagnostics">Include diagnostics (timing, query, elements scanned) in response. Default: false.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A call result containing a text content block with the JSON payload of the extracted text content from the element or screen region. <c>IsError</c> reflects operation success.</returns>
+    [McpServerTool(Name = "ui_read", Title = "Read Text from Element", Destructive = false, OpenWorld = false)]
+    public static async partial Task<CallToolResult> ExecuteAsync(
+        string windowHandle,
+        [DefaultValue(null)] string? name,
+        [DefaultValue(null)] string? nameContains,
+        [DefaultValue(null)] string? namePattern,
+        [DefaultValue(null)] string? controlType,
+        [DefaultValue(null)] string? automationId,
+        [DefaultValue(null)] string? className,
+        [DefaultValue(null)] string? elementId,
+        [DefaultValue(1)] int foundIndex,
+        [DefaultValue(false)] bool includeChildren,
+        [DefaultValue(null)] string? language,
+        [DefaultValue(null)] string? format,
+        [DefaultValue(false)] bool includeDiagnostics,
+        CancellationToken cancellationToken)
+    {
+        const string actionName = "read";
+
+        var gate = HandsGate.Policy.CheckUi(HandsTools.UiRead, windowHandle, HandsGate.ElementWindow, elementId);
+        if (!gate.Allowed)
+        {
+            return HandsGate.Deny(HandsTools.UiRead, gate);
+        }
+
+        if (string.IsNullOrWhiteSpace(windowHandle))
+        {
+            return WindowsToolsBase.FailResult(
+                "windowHandle is required. Get it from window_management(action='find').");
+        }
+
+        var foundIndexError = WindowsToolsBase.ValidateFoundIndex(foundIndex);
+        if (foundIndexError is not null)
+        {
+            return foundIndexError;
+        }
+
+        if (!TryParseTextExtractionMode(format, out var mode))
+        {
+            return WindowsToolsBase.FailResult(
+                $"Invalid format '{format}'. Use 'raw' (default) or 'article'.");
+        }
+
+        try
+        {
+            var query = new ElementQuery
+            {
+                WindowHandle = windowHandle,
+                Name = name,
+                NameContains = nameContains,
+                NamePattern = namePattern,
+                ControlType = controlType,
+                AutomationId = automationId,
+                ClassName = className,
+                FoundIndex = Math.Max(1, foundIndex)
+            };
+
+            var automationService = WindowsToolsBase.UIAutomationService;
+
+            // Try normal text extraction first
+            // If no specific element criteria, just read from the window
+            string? elementIdToRead = null;
+            if (!string.IsNullOrWhiteSpace(elementId))
+            {
+                // Caller supplied a stable element id from a prior find/snapshot - use it directly.
+                elementIdToRead = elementId;
+            }
+            else if (!string.IsNullOrEmpty(name) || !string.IsNullOrEmpty(nameContains) || !string.IsNullOrEmpty(namePattern) ||
+                !string.IsNullOrEmpty(controlType) || !string.IsNullOrEmpty(automationId) || !string.IsNullOrEmpty(className))
+            {
+                // Find the element first
+                var findResult = await automationService.FindElementsAsync(query, cancellationToken);
+                if (findResult.Success && findResult.Items?.Length > 0)
+                {
+                    elementIdToRead = findResult.Items[0].Id;
+                }
+            }
+
+            var result = await automationService.GetTextAsync(elementIdToRead, windowHandle, includeChildren, mode, cancellationToken);
+            if (result.Success && !string.IsNullOrWhiteSpace(result.Text))
+            {
+                return WindowsToolsBase.ToCallToolResult(result, includeDiagnostics);
+            }
+
+            // Article mode is a UIA-only, structure-aware extraction; OCR (which returns raw pixels
+            // as flat text) cannot honor it, so skip the OCR fallback and return the UIA result.
+            if (mode == TextExtractionMode.Article)
+            {
+                return WindowsToolsBase.ToCallToolResult(result, includeDiagnostics);
+            }
+
+            // Руки: OCR-фолбэк upstream копировал прямоугольник окна С ЭКРАНА — вместе
+            // с чужими окнами, перекрывшими своё. Ветка удалена, снимок своего окна — screenshot_control.
+
+            return WindowsToolsBase.ToCallToolResult(result, includeDiagnostics);
+        }
+        catch (Exception ex)
+        {
+            return WindowsToolsBase.ErrorCallToolResult(actionName, ex);
+        }
+    }
+
+    private static bool TryParseTextExtractionMode(string? format, out TextExtractionMode mode)
+    {
+        mode = TextExtractionMode.Raw;
+
+        if (string.IsNullOrWhiteSpace(format))
+        {
+            return true;
+        }
+
+        switch (format.Trim().ToLowerInvariant())
+        {
+            case "raw":
+                mode = TextExtractionMode.Raw;
+                return true;
+            case "article":
+            case "markdown":
+            case "clean":
+                mode = TextExtractionMode.Article;
+                return true;
+            default:
+                return false;
+        }
+    }
+}

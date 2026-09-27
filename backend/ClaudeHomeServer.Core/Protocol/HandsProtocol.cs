@@ -6,50 +6,60 @@ namespace ClaudeHomeServer.Protocol;
 //
 // Контракт без поведения: типы и константы, от которых отталкиваются сервер (Ш4), мост (Ш2),
 // агент (Ш3) и трей (Ш7). Модель угроз — docs/architecture/device-agent-local-api.md, раздел «Руки».
+// Решения владельца 2026-09-27 (1в 2б 3б) сняли сеанс на машине, белый список программ и запрет
+// shell: руки берёт любой ход чата с включёнными руками, пока компонент стоит на устройстве.
 
 /// <summary>
-/// Что сервер обязан запретить в ходе с руками и что агент сверяет перед подключением моста
-/// (сквозные решения 2 и 3). Одно определение на обе стороны: сервер пишет его в
-/// <c>--disallowedTools</c>, агент отказывает ходу, если в spawn есть маркер рук, а полного
-/// набора в аргументах нет. Правила — в синтаксисе правил разрешений CLI.
+/// Правила хода с руками — одно определение на обе стороны: сервер собирает по ним аргументы
+/// CLI, агент сверяет их перед подключением моста.
+/// <para>
+/// Решение владельца 3б (2026-09-27): shell, сабагенты и запись в <c>.claude/**</c> и
+/// <c>.mcp.json</c> в ходе с руками НЕ запрещаются. Локальный проект и без рук даёт ходу shell
+/// на машине с правами пользователя, а запреты Ш4 держали только границу «рук без shell».
+/// Остаётся одно правило режима прав: ход с руками не идёт в <c>bypassPermissions</c> — это
+/// защита от ошибок модели, а не от злоумышленника.
+/// </para>
 /// </summary>
 public static class HandsTurnRules
 {
-    /// <summary>
-    /// Shell закрыт целиком, allow-list отвергнут. <c>Task</c> — пока не доказано, что
-    /// сабагент наследует <c>--disallowedTools</c>; <c>Agent</c> — то же имя инструмента в
-    /// новых версиях CLI (в потоке встречаются оба).
-    /// </summary>
-    public static readonly IReadOnlyList<string> DisallowedTools =
-        ["Bash", "PowerShell", "Monitor", "BashOutput", "KillShell", "Task", "Agent"];
+    public const string PermissionModeFlag = "--permission-mode";
+
+    /// <summary>Режим, в котором ход с руками не идёт никогда.</summary>
+    public const string ForbiddenPermissionMode = "bypassPermissions";
+
+    /// <summary>Флаги CLI, которые пропускают вопросы о правах мимо режима.</summary>
+    public static readonly IReadOnlyList<string> ForbiddenFlags =
+        ["--dangerously-skip-permissions", "--allow-dangerously-skip-permissions"];
 
     /// <summary>
-    /// Отложенный запуск кода через файлы проекта: хуки из <c>.claude/settings*.json</c> и
-    /// MCP-серверы из <c>.mcp.json</c> исполнились бы при следующем запуске CLI на устройстве.
+    /// Почему аргументы хода не годятся для рук, либо null — годятся. Режим обязан стоять явно:
+    /// без флага CLI взял бы <c>defaultMode</c> из <c>.claude/settings*.json</c> проекта, а там
+    /// может стоять <see cref="ForbiddenPermissionMode"/>.
     /// </summary>
-    public static readonly IReadOnlyList<string> DisallowedWriteRules =
-        ["Edit(.claude/**)", "Write(.claude/**)", "Edit(.mcp.json)", "Write(.mcp.json)"];
-
-    /// <summary>Полный набор для <c>--disallowedTools</c> хода с руками.</summary>
-    public static readonly IReadOnlyList<string> All = [.. DisallowedTools, .. DisallowedWriteRules];
-
-    /// <summary>
-    /// Весь ли серверный набор <see cref="All"/> стоит в запретах хода. Лишние правила не мешают:
-    /// сюда же ложатся агентские добавки (<see cref="WithAgentRules"/>) и прочие запреты сессии.
-    /// </summary>
-    public static bool IsComplete(IEnumerable<string> disallowed)
+    public static string? PermissionRefusal(IReadOnlyList<string> args)
     {
-        var set = disallowed.ToHashSet(StringComparer.Ordinal);
-        return All.All(set.Contains);
-    }
+        var modes = new List<string>();
+        for (var i = 0; i < args.Count; i++)
+        {
+            var arg = args[i];
+            if (ForbiddenFlags.Contains(arg, StringComparer.Ordinal))
+                return $"в ходе с руками стоит флаг {arg}";
+            if (arg == PermissionModeFlag)
+            {
+                if (i + 1 >= args.Count) return "у флага --permission-mode нет значения";
+                modes.Add(args[++i]);
+            }
+            else if (arg.StartsWith(PermissionModeFlag + "=", StringComparison.Ordinal))
+            {
+                modes.Add(arg[(PermissionModeFlag.Length + 1)..]);
+            }
+        }
 
-    /// <summary>
-    /// Место под агентские добавки: запрет записи в каталоги агента (<see cref="HandsFiles.AppsFileName"/>,
-    /// <see cref="HandsFiles.SessionFileName"/>) ставит агент — пути знает только он, сервер их не шлёт.
-    /// Порядок — сначала набор сервера, дубли не повторяются.
-    /// </summary>
-    public static IReadOnlyList<string> WithAgentRules(IReadOnlyList<string> serverRules, IEnumerable<string> agentRules) =>
-        [.. serverRules, .. agentRules.Where(r => !serverRules.Contains(r, StringComparer.Ordinal)).Distinct(StringComparer.Ordinal)];
+        if (modes.Count == 0) return "у хода с руками не задан режим прав";
+        return modes.Any(m => string.Equals(m, ForbiddenPermissionMode, StringComparison.OrdinalIgnoreCase))
+            ? "ход с руками не идёт в режиме «Без ограничений»"
+            : null;
+    }
 
     /// <summary>
     /// Строка ленты, когда чат с руками стоит в режиме «Без ограничений»: ход с руками в
@@ -85,40 +95,35 @@ public static class HandsProviders
         && allowed.Contains(providerKey, StringComparer.OrdinalIgnoreCase);
 }
 
+
 /// <summary>
 /// Состояние рук в чате — поле <c>State</c> события <c>hands_status</c> (макет Ш6, «Индикатор в чате»).
-/// Эфемерное событие: в историю не пишется, начальное состояние фронт берёт запросом.
+/// Эфемерное событие: в историю не пишется, начальное состояние фронт берёт запросом
+/// <c>GET /api/sessions/{id}/hands-status</c>.
 /// </summary>
 public static class HandsChatStates
 {
-    /// <summary>Руки подключены к идущему ходу.</summary>
+    /// <summary>Руки подключены к идущему ходу: «ИИ управляет компьютером».</summary>
     public const string Active = "active";
-    /// <summary>Сеанс на устройстве есть, ход руками не пользуется.</summary>
+    /// <summary>Руки доступны ходам чата, сейчас ни к одному не подключены.</summary>
     public const string Allowed = "allowed";
-    /// <summary>Сеанса рук на устройстве нет: ход идёт без рук.</summary>
-    public const string NoSession = "no-session";
-    /// <summary>Человек у машины нажал «Стоп» или сеанс кончился: <c>Reason</c> — <see cref="HandsEndReason"/>.</summary>
+    /// <summary>
+    /// Руки у чата включены, но устройство их сейчас не даст: компонент не установлен
+    /// (<c>ai-home-agent hands disable</c>) или устройство не на связи.
+    /// </summary>
+    public const string Unavailable = "unavailable";
+    /// <summary>Руки отцепились от хода не по его концу: <c>Reason</c> — <see cref="HandsEndReason"/>.</summary>
     public const string Stopped = "stopped";
     /// <summary>Провайдеру чата руки не доверены.</summary>
     public const string ProviderNotAllowed = "provider-not-allowed";
+
+    /// <summary>Состояния, которые присылает агент (<see cref="DeviceHandsReport"/>); прочие считает сервер.</summary>
+    public static readonly IReadOnlyList<string> FromDevice = [Active, Allowed, Stopped];
 }
 
-/// <summary>Файлы и каталоги рук на машине. Сервер их не видит и не правит.</summary>
+/// <summary>Компонент рук на машине. Сервер его не видит и не правит.</summary>
 public static class HandsFiles
 {
-    /// <summary>
-    /// Белый список программ — в каталоге конфига агента, рядом с <c>roots.json</c>. Правит только
-    /// команда машины <c>ai-home-agent hands allow-app/deny-app</c> (и трей через неё же).
-    /// Формат — <see cref="HandsAppsFile"/>.
-    /// </summary>
-    public const string AppsFileName = "hands-apps.json";
-
-    /// <summary>
-    /// Состояние сеанса — в каталоге данных агента. Формат — <see cref="HandsSessionState"/>.
-    /// Файла нет или он битый — сеанса нет (закрыто по умолчанию).
-    /// </summary>
-    public const string SessionFileName = "hands-session.json";
-
     /// <summary>Каталог компонента в каталоге данных агента: <c>%LOCALAPPDATA%\AiHomeAgent\hands\</c>.</summary>
     public const string ComponentDirectory = "hands";
 
@@ -127,78 +132,80 @@ public static class HandsFiles
 }
 
 /// <summary>
-/// <c>hands-apps.json</c>. <see cref="Version"/> — версия формата; незнакомая версия или битый
-/// файл читаются как пустой список. Пути — полные, нормализованные, сравнение точное без
-/// учёта регистра (Windows); поиска по имени и по <c>PATH</c> нет.
-/// </summary>
-public sealed record HandsAppsFile(int Version, IReadOnlyList<HandsAppEntry> Apps)
-{
-    public const int CurrentVersion = 1;
-}
-
-/// <param name="Path">Полный путь к <c>.exe</c> программы.</param>
-/// <param name="AddedAt">Когда человек разрешил программу.</param>
-public sealed record HandsAppEntry(string Path, DateTimeOffset AddedAt);
-
-/// <summary>
-/// Программы, которые мост не запускает никогда, даже если человек внёс их в белый список:
-/// каждая исполняет произвольные команды. Сравнение по имени файла без учёта регистра;
-/// <c>python*</c> — по префиксу. Команда <c>allow-app</c> отказывает им сразу.
+/// Программы, которые мост не запускает никогда (решение владельца 2б, 2026-09-27): белого
+/// списка нет, любая другая <c>.exe</c> по полному пути запускается. Здесь — интерпретаторы,
+/// оболочки и терминалы: каждый исполняет произвольные команды, и окна их процессов тоже чужие.
+/// Сравнение по имени файла без учёта регистра (и по имени без расширения); <c>python*</c> —
+/// по префиксу.
 /// </summary>
 public static class HandsForbiddenApps
 {
     public static readonly IReadOnlyList<string> Names =
     [
-        "cmd.exe", "powershell.exe", "pwsh.exe", "wscript.exe", "cscript.exe", "mshta.exe",
-        "rundll32.exe", "regsvr32.exe", "node.exe", "explorer.exe",
+        // интерпретаторы и запускалки скриптов
+        "cmd.exe", "powershell.exe", "powershell_ise.exe", "pwsh.exe", "wscript.exe", "cscript.exe",
+        "mshta.exe", "rundll32.exe", "regsvr32.exe", "node.exe", "perl.exe", "ruby.exe", "php.exe",
+        "explorer.exe",
+        // оболочки и терминалы
+        "bash.exe", "sh.exe", "wsl.exe", "wslhost.exe", "mintty.exe", "git-bash.exe",
+        "wt.exe", "WindowsTerminal.exe", "OpenConsole.exe", "conhost.exe",
     ];
 
     public static readonly IReadOnlyList<string> NamePrefixes = ["python"];
 }
 
 /// <summary>
-/// Сеанс рук: окно времени, которое человек открыл на машине (CLI или трей). С сервера сеанс не
-/// стартует никогда — такой команды в протоколе устройства нет. Потолок и простой — константы кода.
+/// Аргументы запуска моста — их подставляет агент в узел <see cref="DeviceExecPlaceholders.HandsServerName"/>.
 /// </summary>
-public static class HandsSession
+public static class HandsBridgeArgs
 {
-    public static readonly TimeSpan DefaultDuration = TimeSpan.FromMinutes(30);
+    /// <summary>
+    /// Имя Job Object хода (<c>Local\AiHome.Turn.…</c>): окно процесса из этого Job — своё окно
+    /// (решение владельца 2б). Без аргумента своих окон нет — гейт закрыт.
+    /// </summary>
+    public const string TurnJob = "--turn-job";
 
-    public static readonly TimeSpan MaxDuration = TimeSpan.FromHours(2);
+    /// <summary>Выключить инструменты моста: без зрения — <c>screenshot_control</c> (решение 7).</summary>
+    public const string ExcludeTools = "--exclude-tools";
 
-    /// <summary>Сеанс кончается, если столько времени не было ни одного вызова моста.</summary>
-    public static readonly TimeSpan IdleTimeout = TimeSpan.FromMinutes(10);
-}
-
-/// <summary>Кто открыл сеанс.</summary>
-public static class HandsSessionSource
-{
-    public const string Cli = "cli";
-    public const string Tray = "tray";
+    /// <summary>Префикс имени Job хода с руками.</summary>
+    public const string TurnJobPrefix = @"Local\AiHome.Turn.";
 }
 
 /// <summary>
-/// <c>hands-session.json</c>. Сеанс активен, пока сейчас раньше <see cref="ExpiresAt"/> и
-/// с <see cref="LastActivityAt"/> прошло меньше <see cref="HandsSession.IdleTimeout"/>.
+/// Одни руки на машину: второй ход с руками на той же машине (и в том же сеансе входа)
+/// получает честный отказ, а не делит мышь и клавиатуру с первым.
 /// </summary>
-public sealed record HandsSessionState(
-    DateTimeOffset StartedAt,
-    DateTimeOffset ExpiresAt,
-    DateTimeOffset LastActivityAt,
-    string Source);
+public static class HandsMachineLock
+{
+    public const string Name = @"Local\AiHome.Hands.Active";
+
+    public const string BusyText = "Руки заняты другим ходом на этом устройстве — дождись его конца или останови его из трея.";
+}
 
 /// <summary>
-/// Почему кончился сеанс или отцепились руки хода. Агент гасит дерево хода (<c>KillTree</c>) и
-/// сообщает серверу эту причину; трей показывает её человеку.
+/// Почему руки отцепились от хода. Агент гасит дерево хода (<c>KillTree</c>) и сообщает
+/// серверу причину; трей показывает её человеку.
 /// </summary>
 public static class HandsEndReason
 {
-    public const string Expired = "expired";
-    public const string Idle = "idle";
+    /// <summary>Человек нажал «Стоп» в трее: ход прерван, следующий ход снова может взять руки.</summary>
     public const string StoppedFromTray = "tray-stop";
-    public const string StoppedFromCli = "cli-stop";
+    /// <summary>Компонент убран командой <c>ai-home-agent hands disable</c> посреди хода.</summary>
     public const string HandsDisabled = "disabled";
     public const string AgentStopping = "agent-stopping";
+}
+
+/// <summary>
+/// Донесение агента о руках хода — метод хаба устройств <see cref="Method"/>. Сервер принимает
+/// его только по ходу, который сам отправил этому устройству, и транслирует в чат хода.
+/// </summary>
+/// <param name="TurnId">Ход исполнения на устройстве (<c>DeviceExecControl.TurnId</c>).</param>
+/// <param name="State">Одно из <see cref="HandsChatStates.FromDevice"/>.</param>
+/// <param name="Reason"><see cref="HandsEndReason"/> у <see cref="HandsChatStates.Stopped"/>.</param>
+public sealed record DeviceHandsReport(string TurnId, string State, string? Reason = null)
+{
+    public const string Method = "ReportHandsStatus";
 }
 
 /// <summary>
@@ -229,11 +236,10 @@ public static class HandsPipeTypes
     /// <summary>Первый кадр трея: <see cref="HandsPipeMessage.Version"/>. Агент отвечает <see cref="Status"/>.</summary>
     public const string Hello = "hello";
     public const string GetStatus = "get-status";
-    /// <summary>Открыть сеанс на <see cref="HandsPipeMessage.Minutes"/> (не больше потолка).</summary>
-    public const string SessionStart = "session-start";
-    /// <summary>Закрыть сеанс; идущие ходы с руками гасятся.</summary>
-    public const string SessionStop = "session-stop";
-    /// <summary>Погасить ход <see cref="HandsPipeMessage.TurnId"/> (null — все ходы с руками); сеанс остаётся.</summary>
+    /// <summary>
+    /// «Стоп»: погасить ход <see cref="HandsPipeMessage.TurnId"/> (null — все ходы с руками).
+    /// Ход прерывается целиком, следующий ход снова может взять руки.
+    /// </summary>
     public const string TurnStop = "turn-stop";
 
     // агент → трей
@@ -251,7 +257,6 @@ public static class HandsPipeTypes
 public sealed record HandsPipeMessage(
     string Type,
     int? Version = null,
-    int? Minutes = null,
     string? TurnId = null,
     HandsTrayStatus? Status = null,
     HandsActiveTurn? Turn = null,
@@ -260,17 +265,14 @@ public sealed record HandsPipeMessage(
 
 /// <summary>Что показывает трей.</summary>
 /// <param name="Installed">Компонент установлен и SHA-256 сверен.</param>
-/// <param name="Session">Активный сеанс; null — сеанса нет.</param>
-/// <param name="ActiveTurns">Ходы, к которым сейчас подключены руки.</param>
+/// <param name="ActiveTurns">Ходы, к которым сейчас подключены руки (не больше одного — <see cref="HandsMachineLock"/>).</param>
 /// <param name="ServerOnline">Связь агента с сервером — «Стоп» работает и без неё.</param>
 public sealed record HandsTrayStatus(
     bool Installed,
-    HandsSessionState? Session,
     IReadOnlyList<HandsActiveTurn> ActiveTurns,
     bool ServerOnline);
 
-/// <summary>Ход с руками: «ИИ управляет компьютером в чате X».</summary>
+/// <summary>Ход с руками: «ИИ управляет компьютером».</summary>
 /// <param name="TurnId">Ход исполнения на устройстве (<c>DeviceExecControl.TurnId</c>).</param>
-/// <param name="ChatTitle">Название чата для человека; сервер может его не прислать.</param>
-/// <param name="ProjectName">Проект чата для человека.</param>
-public sealed record HandsActiveTurn(string TurnId, string? ChatTitle, string? ProjectName, DateTimeOffset StartedAt);
+/// <param name="ProjectRoot">Рабочий каталог хода — чтобы человек узнал проект.</param>
+public sealed record HandsActiveTurn(string TurnId, string? ProjectRoot, DateTimeOffset StartedAt);

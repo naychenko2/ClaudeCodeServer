@@ -17,6 +17,8 @@ public sealed class AgentReleaseFixture : IDisposable
     public const string Version = "1.200.0";
     public const string WinFile = "ai-home-agent-1.200.0-win-x64.zip";
     public const string LinuxFile = "ai-home-agent-1.200.0-linux-x64.tar.gz";
+    /// <summary>Компонент рук той же версии (ADR-016 §7) — секция <c>hands</c> манифеста.</summary>
+    public const string HandsFile = "hands-1.200.0-win-x64.zip";
 
     public string Dir { get; } = Path.Combine(Path.GetTempPath(), "ccs_agent_rel_" + Guid.NewGuid().ToString("N"));
     public string Root => Path.Combine(Dir, "agent-releases");
@@ -24,6 +26,29 @@ public sealed class AgentReleaseFixture : IDisposable
 
     public byte[] WinBytes { get; } = Encoding.UTF8.GetBytes("архив агента под windows");
     public byte[] LinuxBytes { get; } = Encoding.UTF8.GetBytes("архив агента под linux, другой");
+    public byte[] HandsBytes { get; } = Encoding.UTF8.GetBytes("архив моста рук HandsBridge");
+
+    /// <summary>Переопубликовать текущую версию вместе с компонентом рук под win-x64.</summary>
+    public void PublishWithHands()
+    {
+        var dir = Path.Combine(Root, Version);
+        File.WriteAllBytes(Path.Combine(dir, HandsFile), HandsBytes);
+        var json = JsonSerializer.Serialize(new
+        {
+            version = Version,
+            archives = new Dictionary<string, object>
+            {
+                [DeviceAgentRids.WinX64] = new { file = WinFile, size = WinBytes.Length, sha256 = Sha(WinBytes) },
+                [DeviceAgentRids.LinuxX64] = new { file = LinuxFile, size = LinuxBytes.Length, sha256 = Sha(LinuxBytes) },
+            },
+            hands = new Dictionary<string, object>
+            {
+                [DeviceAgentRids.WinX64] = new { file = HandsFile, size = HandsBytes.Length, sha256 = Sha(HandsBytes) },
+            },
+        });
+        WriteManifest(Version, json);
+        WritePointerJson(json);
+    }
 
     public AgentReleaseFixture(bool publish = true)
     {

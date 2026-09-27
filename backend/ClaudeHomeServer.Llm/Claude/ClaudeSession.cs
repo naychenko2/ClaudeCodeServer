@@ -772,7 +772,7 @@ public class ClaudeSession : ILlmSessionAdapter
     // Браузер (плагин playwright) в этой сессии: false — гасим плагин на запуске CLI
     private readonly bool _browserEnabled;
     // Руки локального проекта (LlmSessionContext.HandsEnabled/HandsProviders): решение на ход —
-    // HandsActiveNow, от него одного зависят маркер рук, запреты HandsTurnRules и режим прав
+    // HandsActiveNow, от него одного зависят маркер рук и режим прав
     private readonly bool _handsEnabled;
     private readonly IReadOnlyList<string>? _handsProviders;
     // Руки у последнего собранного хода — живая смена режима прав (TrySetPermissionModeLive)
@@ -1964,7 +1964,7 @@ public class ClaudeSession : ILlmSessionAdapter
             // устройстве, поэтому в ходе с руками их нет ни одного (внешние серверы реестра,
             // модули, user-scope, откатившиеся на stdio продуктовые). Узел рук — только маркер:
             // команду и путь моста подставляет агент. Ставится ПОСЛЕ обрезки TrimMcpServers,
-            // иначе белый список провайдера отрезал бы руки молча, оставив запрет shell.
+            // иначе белый список провайдера отрезал бы руки молча.
             if (hands)
             {
                 foreach (var key in servers.Select(kv => kv.Key).ToList())
@@ -2770,11 +2770,12 @@ public class ClaudeSession : ILlmSessionAdapter
         if (Info.ClaudeSessionId is not null)
             args.AddRange(["--resume", Info.ClaudeSessionId]);
 
-        // Руки этого хода — единственное решение, от которого зависят маркер рук в --mcp-config,
-        // запреты HandsTurnRules в --disallowedTools и режим прав: разойтись они не могут.
+        // Руки этого хода — единственное решение, от которого зависят маркер рук в --mcp-config и
+        // режим прав: разойтись они не могут. Shell, сабагенты и запись в .claude/.mcp.json в ходе
+        // с руками не запрещаются (решение владельца 3б, ADR-016 §7).
         var handsActive = HandsActiveNow();
         _lastHandsActive = handsActive;
-        string[] disallowed = handsActive ? [.. _disallowedTools, .. HandsTurnRules.All] : _disallowedTools;
+        var disallowed = _disallowedTools;
         // Руки у чата есть, но провайдеру хода не доверены — ход идёт без рук, бейдж говорит почему
         if (_handsEnabled && !handsActive)
             await _onMessage(new HandsStatusMessage(HandsChatStates.ProviderNotAllowed));

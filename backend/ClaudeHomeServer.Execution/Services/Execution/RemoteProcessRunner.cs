@@ -125,9 +125,13 @@ public sealed class RemoteProcessRunner : IProcessLauncher
             stream = AwaitAgentVerdictAsync(stream).GetAwaiter().GetResult();
             var exec = RemoteExec.Launch(ExecKey(turnId), turnId, stream, spec, _nodePath, _relayScript);
             Execs[exec.Key] = exec;
+            // Ход с маркером рук: донесения агента о руках принимаются только по нему (ADR-016 §7)
+            var hands = HasHandsMarker(spawn);
+            if (hands) DeviceHandsTurns.Register(_ownerId, _deviceId, turnId, spec.SessionId!);
             exec.Run(() =>
             {
                 Execs.TryRemove(new KeyValuePair<string, RemoteExec>(exec.Key, exec));
+                if (hands) DeviceHandsTurns.Remove(_ownerId, _deviceId, turnId);
                 _gateway.EndTurn(gateway.TurnId);
             });
             if (spec.Track) ProcessRegistry.Register(exec.Relay);
@@ -241,6 +245,10 @@ public sealed class RemoteProcessRunner : IProcessLauncher
     }
 
     internal static string NewTurnId() => Guid.NewGuid().ToString("N")[..12];
+
+    // Маркер рук переживает санитизацию только в каноническом узле — его и ищем
+    internal static bool HasHandsMarker(DeviceExecSpawn spawn) =>
+        spawn.Files.Any(f => f.Content.Contains(DeviceExecPlaceholders.Hands, StringComparison.Ordinal));
 
     private string ExecKey(string turnId) => _ownerId + "/" + turnId;
 

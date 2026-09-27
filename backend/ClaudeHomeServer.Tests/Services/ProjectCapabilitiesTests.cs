@@ -191,10 +191,20 @@ public class ProjectCapabilitiesTests
     public void Руки_ВозможностьУстройстваНеТеряетсяПриНормализации() =>
         DeviceCapabilities.Normalize(["EXEC", " hands ", "мусор"]).Should().Equal(DeviceCapabilities.Exec, DeviceCapabilities.Hands);
 
-    [Fact]
-    public void Руки_НаборЗапретовХода_ЗакрываетShellИСабагентов() =>
-        HandsTurnRules.All.Should().Contain(["Bash", "PowerShell", "Monitor", "BashOutput", "KillShell", "Task", "Agent",
-            "Edit(.claude/**)", "Write(.claude/**)"]);
+    // Решение владельца 3б: shell в ходе с руками разрешён, из правил хода остался только режим прав
+    [Theory]
+    [InlineData("--permission-mode acceptEdits", true)]
+    [InlineData("--permission-mode default", true)]
+    [InlineData("--permission-mode=plan", true)]
+    [InlineData("--permission-mode bypassPermissions", false)]
+    [InlineData("--permission-mode=BypassPermissions", false)]
+    [InlineData("--permission-mode acceptEdits --permission-mode bypassPermissions", false)]
+    [InlineData("--permission-mode acceptEdits --dangerously-skip-permissions", false)]
+    [InlineData("--permission-mode acceptEdits --allow-dangerously-skip-permissions", false)]
+    [InlineData("--print --output-format stream-json", false)]
+    [InlineData("--permission-mode", false)]
+    public void Руки_РежимПравХода_БезBypassИТолькоЯвный(string args, bool ok) =>
+        (HandsTurnRules.PermissionRefusal(args.Split(' ')) is null).Should().Be(ok);
 
     // --- Вердикт для фоновой работы (ADR-016, вариант А плана §5) ---
 

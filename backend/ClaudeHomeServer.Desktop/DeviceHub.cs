@@ -189,6 +189,7 @@ public sealed class DeviceHub(
             : null;
         DeviceHandsTurns.SetLast(ownerId, deviceId,
             new DeviceHandsLastState(sessionId, report.TurnId!, report.State, reason, DateTimeOffset.UtcNow));
+        DeviceHandsTurns.Accepted(ownerId, deviceId, report.TurnId!, report.State);
         if (handsNotifier is not null)
             await handsNotifier.HandsStatusAsync(ownerId, deviceId, sessionId, report.State, reason);
     }

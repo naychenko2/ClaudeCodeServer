@@ -102,8 +102,10 @@ public sealed class DeviceExecChannel : IDeviceExecChannel, IDeviceRelayChannel,
         var archive = latest is not null && DeviceAgentRids.IsSupported(rid)
             && latest.Archives.TryGetValue(rid!, out var found) ? found : null;
         // Компонент рук — ТОЙ ЖЕ версии, что агент: аргументы запуска моста — контракт этой пары
+        // (ключ каталога — канонический, агент же шлёт версию с хвостом +sha)
         var hands = snapshot is not null && DeviceAgentRids.IsSupported(rid)
-            && snapshot.Versions.TryGetValue(agentVersion, out var own)
+            && DeviceAgentVersion.Canonical(agentVersion) is { } ownVersion
+            && snapshot.Versions.TryGetValue(ownVersion, out var own)
             && own.Hands.TryGetValue(rid!, out var h) ? h : null;
         return ack with
         {

@@ -43,6 +43,49 @@ public class ArchitectureModuleEndpointTests : IDisposable
         body.GetProperty("exists").GetBoolean().Should().BeFalse();
     }
 
+    // Проверка модели: висящая ссылка — предупреждение в ответе PUT и GET, запись при этом
+    // проходит; чистая модель — пустой список
+    [Fact]
+    public async Task Модель_с_висящей_связью__сохраняется_с_предупреждением_чистая__без()
+    {
+        var dir = Path.Combine(_factory.TempDir, "arch-warnings");
+        Directory.CreateDirectory(dir);
+        var created = await _client.PostAsJsonAsync("/api/projects", new { name = "ArchWarnings", rootPath = dir });
+        created.EnsureSuccessStatusCode();
+        var projectId = JsonSerializer.Deserialize<JsonElement>(await created.Content.ReadAsStringAsync())
+            .GetProperty("id").GetString()!;
+        var url = $"/api/projects/{projectId}/architecture/model";
+        const string dangling = """
+            {"state":{"model":{"systems":[{"id":"s1","name":"CCS","connections":[{"targetId":"gone"}]}],
+            "containers":[],"components":[],"codeElements":[]}},"version":0}
+            """;
+
+        var put = await _client.PutAsJsonAsync(url, new { content = dangling, baseVersion = (string?)null });
+        put.StatusCode.Should().Be(HttpStatusCode.OK, "находки записи не блокируют");
+        var saved = JsonSerializer.Deserialize<JsonElement>(await put.Content.ReadAsStringAsync());
+        var warning = saved.GetProperty("warnings").EnumerateArray().Should().ContainSingle().Subject;
+        warning.GetProperty("kind").GetString().Should().Be(ArchitectureModelValidator.KindDanglingConnection);
+        warning.GetProperty("text").GetString().Should().Contain("связь → gone");
+
+        var got = JsonSerializer.Deserialize<JsonElement>(await _client.GetStringAsync(url));
+        got.GetProperty("warnings").GetArrayLength().Should().Be(1);
+
+        var clean = dangling.Replace("""{"targetId":"gone"}""", "");
+        var put2 = await _client.PutAsJsonAsync(url, new { content = clean, baseVersion = saved.GetProperty("version").GetString() });
+        put2.StatusCode.Should().Be(HttpStatusCode.OK);
+        JsonSerializer.Deserialize<JsonElement>(await put2.Content.ReadAsStringAsync())
+            .GetProperty("warnings").GetArrayLength().Should().Be(0);
+
+        // Непривычная форма (state не объект): хранилище её пускает, проверка не роняет запрос
+        var odd = await _client.PutAsJsonAsync(url, new
+        {
+            content = """{"state":1}""",
+            baseVersion = JsonSerializer.Deserialize<JsonElement>(await put2.Content.ReadAsStringAsync()).GetProperty("version").GetString(),
+        });
+        odd.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await _client.GetAsync(url)).StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
     // Кнопка «Собрать из кода» шлёт POST без тела и без Content-Type: [FromBody] с
     // EmptyBodyBehavior.Allow обязан пропустить его как «без агента», а не отбить 415
     [Fact]

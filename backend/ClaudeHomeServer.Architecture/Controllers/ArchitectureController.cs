@@ -44,8 +44,9 @@ public class ArchitectureController(
         StatusCode(503, new { code = "graph_unavailable", message = "Граф кода не построился — модель собрать не из чего" });
 
     /// <summary>
-    /// 200 — <c>{ exists, content, version, updatedAt, updatedBy }</c>, где content —
-    /// байты файла как есть (null, если модели ещё нет); 404/403 — нет проекта / чужой.
+    /// 200 — <c>{ exists, content, version, updatedAt, updatedBy, warnings }</c>, где content —
+    /// байты файла как есть (null, если модели ещё нет), warnings — находки
+    /// <see cref="ArchitectureModelValidator"/>; 404/403 — нет проекта / чужой.
     /// </summary>
     [HttpGet("model")]
     public async Task<IActionResult> GetModel(string projectId, CancellationToken ct)
@@ -83,6 +84,8 @@ public class ArchitectureController(
                 version = outcome.Current.Version,
                 updatedAt = outcome.Current.Author.UpdatedAt,
                 updatedBy = outcome.Current.Author.UpdatedBy,
+                // Несостыковки записанного — предупреждение, запись не блокируют
+                warnings = ArchitectureModelValidator.ValidateContent(body.Content),
             });
         }
         catch (ArchitectureModelInvalidException ex)
@@ -197,6 +200,7 @@ public class ArchitectureController(
         version = s.Version,
         updatedAt = s.Author.UpdatedAt,
         updatedBy = s.Author.UpdatedBy,
+        warnings = ArchitectureModelValidator.ValidateContent(s.Content),
     };
 
     /// <summary>Снимок графа кода → нейтральный вход генератора (пути — относительно корня).</summary>

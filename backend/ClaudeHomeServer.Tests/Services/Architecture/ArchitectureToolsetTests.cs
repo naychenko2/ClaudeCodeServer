@@ -115,6 +115,19 @@ public class ArchitectureToolsetTests : IDisposable
         result.IsError.Should().BeFalse();
         result.Text.Should().Contain("version=").And.Contain("CCS").And.Contain("id=c1")
             .And.Contain("SessionManager").And.Contain("связей: 1");
+        result.Text.Should().NotContain("Несостыковки");
+    }
+
+    [Fact]
+    public async Task Context_ВисящаяСвязь_Несостыковки()
+    {
+        var doc = FileModel();
+        ContainerOf(doc, "c2")["connections"] = new JsonArray(new JsonObject { ["targetId"] = "gone" });
+        File.WriteAllText(ModelPath, doc.ToJsonString());
+
+        var result = await Call("arch_context");
+        result.IsError.Should().BeFalse();
+        result.Text.Should().Contain("Несостыковки модели (1)").And.Contain("связь → gone — такого элемента нет");
     }
 
     [Fact]

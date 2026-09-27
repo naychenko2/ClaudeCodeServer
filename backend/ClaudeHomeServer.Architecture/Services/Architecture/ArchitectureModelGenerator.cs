@@ -25,7 +25,9 @@ public sealed record ArchitectureGenerateResult(
     // Проход 2 (withAgent): задача агенту, его персона (null — без персоны) и код отказа
     string? AgentTaskId = null,
     string? AgentPersonaId = null,
-    string? AgentError = null);
+    string? AgentError = null,
+    // Несостыковки записанной модели (ArchitectureModelValidator) — предупреждение
+    IReadOnlyList<ArchitectureModelFinding>? Warnings = null);
 
 /// <summary>Файл модели в проекте не читается как JSON — перезаписывать его генератор отказывается.</summary>
 public sealed class ArchitectureModelCorruptException(string path, Exception inner)
@@ -114,7 +116,8 @@ public sealed class ArchitectureModelGenerator(ILogger<ArchitectureModelGenerato
                 merged.Added, merged.Matched, merged.ConnectionsAdded,
                 merged.Candidates, merged.MarkedMissing, merged.Unmarked, merged.SkippedDeleted,
                 merged.Missing ?? [],
-                SkippedSummary(externals.Rejected));
+                SkippedSummary(externals.Rejected),
+                Warnings: ArchitectureModelValidator.Validate(merged.Document));
         }
         finally
         {

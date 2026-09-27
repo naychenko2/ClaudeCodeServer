@@ -80,7 +80,8 @@ public sealed class ArchitectureToolset(
                 case "arch_context":
                     return Text($"Модель проекта «{project.Name}», version={snapshot.Version}"
                         + AuthorNote(snapshot.Author) + "\n"
-                        + ArchitectureModelEditor.RenderContext(doc));
+                        + ArchitectureModelEditor.RenderContext(doc)
+                        + FindingsNote(ArchitectureModelValidator.Validate(doc)));
 
                 case "arch_search":
                 {
@@ -215,9 +216,20 @@ public sealed class ArchitectureToolset(
             basis.Version, author, ct, origins);
         return outcome.Saved
             ? Text($"{summary} Сохранено, version={outcome.Current.Version}. "
-                + "Раздел «Архитектура» покажет правку после перезагрузки модели.")
+                + "Раздел «Архитектура» покажет правку после перезагрузки модели."
+                + FindingsNote(ArchitectureModelValidator.Validate(doc)))
             : Conflict(outcome.Current);
     }
+
+    // Несостыковки модели — отдельным блоком ответа, а не отказом: запись по ним не
+    // блокируется, но модель должна их видеть, иначе чинить нечему. Отдельного
+    // инструмента не заводим — состав tools/list постоянный (McpToolsetStabilityTests)
+    private static string FindingsNote(IReadOnlyList<ArchitectureModelFinding> findings) =>
+        findings.Count == 0
+            ? ""
+            : $"\n\nНесостыковки модели ({findings.Count}) — редактор покажет эти места не так, как записано:\n"
+                + ArchitectureModelValidator.Render(findings)
+                + "\nЕсли это следствие твоих правок — исправь; если нет — сообщи пользователю.";
 
     // Модель передала version (из arch_context/arch_get_element) — правка опирается на то,
     // что она видела; файл успели поменять → отказ, а не правка вслепую поверх чужой.
@@ -329,7 +341,8 @@ public sealed class ArchitectureToolset(
         new("arch_context",
             "Сводка C4-модели архитектуры проекта (раздел «Архитектура», файл "
             + ArchitectureModelGenerator.ModelRelPath + "): счётчики и дерево «система → контейнеры → "
-            + "компоненты» с id элементов и текущая version модели. Начинай с неё, чтобы понять устройство проекта.",
+            + "компоненты» с id элементов, текущая version модели и несостыковки (висящие ссылки, "
+            + "неверные точки связей, дубли id), если есть. Начинай с неё, чтобы понять устройство проекта.",
             Obj(new JsonObject())),
         new("arch_search",
             "Найти элементы C4-модели по подстроке в имени, описании, технологии, тегах или id. "

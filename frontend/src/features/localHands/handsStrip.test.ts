@@ -39,7 +39,6 @@ beforeEach(() => {
   store.clear();
   __resetComposerStrips();
   __resetHandsStrip();
-  setAllFlags({ 'local-hands': true });
   setHandsProject(P, { available: true, deviceName: 'Ноутбук' });
 });
 
@@ -86,11 +85,11 @@ describe('полоса «Руки» — фокус', () => {
 });
 
 describe('полоса «Руки» — доступность', () => {
-  it('без флага local-hands полосы нет', () => {
+  it('флага нет: полоса есть при любом наборе флагов', () => {
     setAllFlags({});
     handsStripOnMessage(S, hands('active'));
-    expect(available()).not.toContain(HANDS_STRIP);
-    expect(active()).toBe('git');
+    expect(available()).toContain(HANDS_STRIP);
+    expect(active()).toBe(HANDS_STRIP);
   });
 
   it('при handsRefusal проекта полосы нет', () => {

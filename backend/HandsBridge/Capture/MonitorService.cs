@@ -15,7 +15,7 @@ public sealed class MonitorService
     internal delegate int DpiQuery(nint monitor, int dpiType, out uint dpiX, out uint dpiY);
 
     /// <inheritdoc />
-    public int MonitorCount => Screen.AllScreens.Length;
+    public int MonitorCount => DisplayMonitors.All().Count;
 
     /// <inheritdoc />
     public IReadOnlyList<MonitorInfo> GetMonitors()
@@ -169,19 +169,19 @@ public sealed class MonitorService
     }
 
     /// <summary>
-    /// Gets the device name from Screen.AllScreens that matches the given bounds.
+    /// Gets the device name of the monitor that matches the given bounds.
     /// </summary>
     /// <param name="bounds">The bounds from native API.</param>
     /// <returns>The device name if found, otherwise null.</returns>
     private static string? GetDeviceNameForMonitor(RECT bounds)
     {
-        var screens = Screen.AllScreens;
+        var screens = DisplayMonitors.All();
 
         // Try to match by comparing positions
         foreach (var screen in screens)
         {
             // If positions match exactly
-            if (screen.Bounds.X == bounds.Left && screen.Bounds.Y == bounds.Top)
+            if (screen.Bounds.Left == bounds.Left && screen.Bounds.Top == bounds.Top)
             {
                 return screen.DeviceName;
             }
@@ -190,7 +190,7 @@ public sealed class MonitorService
         // If no exact match, try to match by primary status for the primary monitor
         foreach (var screen in screens)
         {
-            if (screen.Primary && bounds.Left == 0 && bounds.Top == 0)
+            if (screen.IsPrimary && bounds.Left == 0 && bounds.Top == 0)
             {
                 return screen.DeviceName;
             }

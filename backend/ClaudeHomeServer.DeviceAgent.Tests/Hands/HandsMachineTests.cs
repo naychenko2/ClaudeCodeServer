@@ -12,104 +12,59 @@ using ClaudeHomeServer.Protocol;
 
 namespace ClaudeHomeServer.DeviceAgent.Tests.Hands;
 
-/// <summary>Команды машины <c>hands enable|disable|status</c>: скачивание по манифесту и сверка SHA-256.</summary>
+/// <summary>Справка <c>hands status</c>; <c>enable|disable</c> больше ничего не ставят и не убирают.</summary>
 public class HandsCommandsTests : IDisposable
 {
-    private static readonly Uri Server = new("https://home.example/");
-
     private readonly HandsFixture _fx = new();
 
     public void Dispose() => _fx.Dispose();
 
-    private sealed class ArchiveServer(byte[] body) : HttpMessageHandler
+    private (int Code, string Out, string Err) Run(string[] args, bool supported = true)
     {
-        public List<Uri> Requests { get; } = [];
-
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
-        {
-            Requests.Add(request.RequestUri!);
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(body) });
-        }
-    }
-
-    private (HandsCommands Commands, ArchiveServer Server, StringWriter Out, StringWriter Err) Commands(
-        byte[] served, bool supported = true, string agentVersion = "1.2.3")
-    {
-        var server = new ArchiveServer(served);
         var output = new StringWriter();
         var error = new StringWriter();
-        return (new HandsCommands(_fx.Component, () => Server, new HttpClient(server), agentVersion, output, error, supported),
-            server, output, error);
+        var code = new HandsCommands(_fx.Component, output, error, supported).Run(args);
+        return (code, output.ToString(), error.ToString());
     }
 
     [Fact]
-    public async Task Enable_качает_архив_по_пути_из_манифеста_и_ставит_компонент()
+    public void Status_показывает_мост_из_каталога_версии()
     {
-        var (path, offer) = _fx.Archive();
-        _fx.Component.SaveOffer(offer);
-        var (commands, server, output, _) = Commands(File.ReadAllBytes(path));
+        _fx.WithBridge();
 
-        (await commands.RunAsync(["enable"], CancellationToken.None)).Should().Be(0);
+        var (code, output, _) = Run(["status"]);
 
-        server.Requests.Should().Equal(new Uri(Server, "agent/" + offer.Path));
-        _fx.Component.Check().Ready.Should().BeTrue();
-        output.ToString().Should().Contain("Руки установлены");
+        code.Should().Be(0);
+        output.Should().Contain("Мост рук на месте").And.Contain(_fx.Component.BridgePath);
     }
 
     [Fact]
-    public async Task Enable_с_подменённым_архивом_ничего_не_ставит()
+    public void Status_без_моста_или_не_на_Windows_честно_отказывает()
     {
-        var (path, offer) = _fx.Archive();
-        _fx.Component.SaveOffer(offer);
-        var tampered = File.ReadAllBytes(path);
-        tampered[^1] ^= 0xFF;
-        var (commands, _, _, error) = Commands(tampered);
+        Run(["status"]).Should().Match<(int Code, string Out, string Err)>(r => r.Code == 1 && r.Err.Contains(HandsComponent.MissingText));
+        _fx.WithBridge();
+        Run(["status"], supported: false).Err.Should().Contain(HandsAttach.UnsupportedText);
+    }
 
-        (await commands.RunAsync(["enable"], CancellationToken.None)).Should().Be(1);
+    [Theory]
+    [InlineData("enable")]
+    [InlineData("disable")]
+    public void Машинного_выключателя_нет_и_мост_не_трогается(string command)
+    {
+        _fx.WithBridge();
 
-        error.ToString().Should().Contain("SHA-256");
-        _fx.Component.Check().Ready.Should().BeFalse();
+        var (code, _, error) = Run([command]);
+
+        code.Should().Be(1);
+        error.Should().Contain(HandsCommands.NoMachineSwitchText);
+        _fx.Component.IsReady.Should().BeTrue();
     }
 
     [Fact]
-    public async Task Enable_без_сведений_сервера_или_не_на_Windows_отказывает()
+    public void Команд_сеанса_и_белого_списка_нет()
     {
-        var (commands, server, _, error) = Commands([]);
-        (await commands.RunAsync(["enable"], CancellationToken.None)).Should().Be(1);
-        error.ToString().Should().Contain("Сервер ещё не прислал");
-
-        var (_, offer) = _fx.Archive();
-        _fx.Component.SaveOffer(offer);
-        var (linux, _, _, linuxError) = Commands([], supported: false);
-        (await linux.RunAsync(["enable"], CancellationToken.None)).Should().Be(1);
-        linuxError.ToString().Should().Be(HandsAttach.UnsupportedText + Environment.NewLine);
-
-        var (stale, _, _, staleError) = Commands([], agentVersion: "1.2.4");
-        (await stale.RunAsync(["enable"], CancellationToken.None)).Should().Be(1);
-        staleError.ToString().Should().Contain("для агента 1.2.3");
-        server.Requests.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task Disable_и_status()
-    {
-        _fx.Installed();
-        var (commands, _, output, _) = Commands([]);
-
-        (await commands.RunAsync(["status"], CancellationToken.None)).Should().Be(0);
-        (await commands.RunAsync(["disable"], CancellationToken.None)).Should().Be(0);
-        (await commands.RunAsync(["status"], CancellationToken.None)).Should().Be(1);
-
-        output.ToString().Should().Contain("Руки установлены и сверены").And.Contain(HandsComponent.NotInstalledText);
-    }
-
-    [Fact]
-    public async Task Команд_сеанса_и_белого_списка_нет()
-    {
-        var (commands, _, _, _) = Commands([]);
-
         foreach (var args in new[] { new[] { "session", "start" }, ["allow-app", "C:\\x.exe"], ["deny-app", "C:\\x.exe"], ["apps"] })
-            (await commands.RunAsync(args, CancellationToken.None)).Should().Be(64, string.Join(' ', args));
+            Run(args).Code.Should().Be(64, string.Join(' ', args));
     }
 }
 
@@ -190,7 +145,7 @@ public class HandsTrayPipeTests
     }
 }
 
-/// <summary>Hello объявляет руки только при сверенном компоненте; сведения о компоненте — из ответа сервера.</summary>
+/// <summary>Hello объявляет руки только агентом, в каталоге версии которого лежит мост.</summary>
 public class HandsHelloTests : IDisposable
 {
     private readonly HandsFixture _fx = new();
@@ -217,43 +172,21 @@ public class HandsHelloTests : IDisposable
         public event Action<ClaudeHomeServer.DeviceAgent.Cli.HarnessStatus>? Changed { add { } remove { } }
     }
 
-    private static readonly DeviceHelloAck Ack = new(1, 2, 3, 4, HandsArchivePath: "1.2.3/win-x64/hands-1.2.3-win-x64.zip",
-        HandsArchiveSha256: new string('b', 64), HandsArchiveSize: 42);
+    private static readonly DeviceHelloAck Ack = new(1, 2, 3, 4);
 
-    [Fact]
-    public async Task Руки_в_hello_только_при_сверенном_компоненте_и_перемена_повторяет_hello()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Руки_в_hello_только_когда_мост_лежит_в_каталоге_версии(bool bridge)
     {
+        if (bridge) _fx.WithBridge();
         var control = new Control(Ack);
-        var hands = _fx.Runtime();
         await using var coordinator = new AgentCoordinator(control, new Harness(), new ExecTestServer(),
-            (_, _) => Task.CompletedTask, "1.2.3", hands: hands);
+            (_, _) => Task.CompletedTask, "1.2.3", hands: _fx.Runtime());
 
         await coordinator.HelloAsync();
-        control.Hellos.Last().Capabilities.Should().NotContain(DeviceCapabilities.Hands);
-        _fx.Component.ReadOffer().Should().Be(new HandsOffer("1.2.3", Ack.HandsArchivePath!, Ack.HandsArchiveSha256!, 42));
 
-        _fx.Installed();
-        await coordinator.RefreshHandsAsync();
-        control.Hellos.Should().HaveCount(2, "установка компонента — повод объявить руки");
-        control.Hellos.Last().Capabilities.Should().Contain(DeviceCapabilities.Hands);
-
-        await coordinator.RefreshHandsAsync();
-        control.Hellos.Should().HaveCount(2, "без перемены hello не повторяется");
-    }
-
-    [Fact]
-    public async Task Компонент_убран_посреди_хода_ход_с_руками_гасится()
-    {
-        _fx.Installed();
-        var hands = _fx.Runtime();
-        string? reason = null;
-        using var turn = hands.Registry.Attach("turn-1", null, r => reason = r);
-        await using var coordinator = new AgentCoordinator(new Control(Ack), new Harness(), new ExecTestServer(),
-            (_, _) => Task.CompletedTask, "1.2.3", hands: hands);
-
-        _fx.Component.Remove();
-        await coordinator.RefreshHandsAsync();
-
-        reason.Should().Be(HandsEndReason.HandsDisabled);
+        if (bridge) control.Hellos.Single().Capabilities.Should().Contain(DeviceCapabilities.Hands);
+        else control.Hellos.Single().Capabilities.Should().NotContain(DeviceCapabilities.Hands);
     }
 }

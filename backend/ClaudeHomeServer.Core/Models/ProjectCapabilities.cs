@@ -132,10 +132,10 @@ public sealed record ProjectCapabilities(
     public const string ServerContentOffReason = "У локального проекта недоступно: его файлы лежат на устройстве, а не на сервере";
     public const string TranscriptOnDeviceReason =
         "У локального проекта недоступно: подробная история чата хранится на его устройстве";
-    public const string HandsFlagOffReason = "Руки выключены (экспериментальная функция «Руки на устройстве»)";
     public const string HandsNotLocalReason = "Руки есть только у локального проекта: ИИ управляет программами на устройстве проекта";
-    public const string HandsNotInstalledReason =
-        "На устройстве не установлены руки: выполните на нём «ai-home-agent hands enable»";
+    public const string HandsAgentOutdatedReason =
+        "Агент устройства старой версии, в нём нет рук: обновите агента AI Home на устройстве";
+    public const string HandsNotWindowsReason = "Руки есть только у агента на Windows: на этом устройстве их нет";
     public const string HandsProjectOffReason = "Руки выключены в настройках проекта";
 
     /// <summary>Проект привязан к устройству. Единственная проверка локальности во всём коде.</summary>
@@ -248,19 +248,20 @@ public sealed record ProjectCapabilities(
         : device.AgentProblem;
 
     /// <summary>
-    /// Можно ли чатам проекта подключать руки (ADR-016, раздел «Руки»): флаг <c>local-hands</c>
-    /// владельца, локальный проект, устройство объявило <see cref="DeviceCapabilities.Hands"/>,
-    /// тумблер рук у проекта включён. null — можно, иначе причина для человека. Онлайн не
-    /// требуется, как у <see cref="BindRefusal"/>: без сети ход откажет по <see cref="Exec"/>.
-    /// Сеанса рук на машине нет (решение 1в): установку и сверку компонента, режим прав хода и
-    /// занятость рук машины проверяет агент при подключении.
+    /// Можно ли чатам проекта подключать руки (ADR-016, раздел «Руки»): локальный проект,
+    /// устройство объявило <see cref="DeviceCapabilities.Hands"/>, тумблер рук у проекта включён.
+    /// null — можно, иначе причина для человека. Флага нет: руки у всех, выключатель — тумблер
+    /// проекта. Мост едет в составе агента под Windows, поэтому Windows-устройство без
+    /// возможности — это агент старой версии. Онлайн не требуется, как у <see cref="BindRefusal"/>:
+    /// без сети ход откажет по <see cref="Exec"/>. Сеанса рук на машине нет (решение 1в): наличие
+    /// моста, режим прав хода и занятость рук машины проверяет агент при подключении.
     /// Контракт шага Ш1; к серверу и фронту матрицу подключает Ш4.
     /// </summary>
-    public static string? HandsRefusal(Project project, DeviceExecStatus? device, bool handsFlagEnabled, bool projectHandsEnabled) =>
-        !handsFlagEnabled ? HandsFlagOffReason
-        : !IsDeviceBound(project) ? HandsNotLocalReason
+    public static string? HandsRefusal(Project project, DeviceExecStatus? device, bool projectHandsEnabled) =>
+        !IsDeviceBound(project) ? HandsNotLocalReason
         : device is null ? DeviceMissingReason
-        : !device.HasCapability(DeviceCapabilities.Hands) ? HandsNotInstalledReason
+        : !device.HasCapability(DeviceCapabilities.Hands)
+            ? device.Platform is null or "windows" ? HandsAgentOutdatedReason : HandsNotWindowsReason
         : !projectHandsEnabled ? HandsProjectOffReason
         : null;
 

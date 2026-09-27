@@ -35,17 +35,8 @@ public class HandsAttachTests : IDisposable
         RefusalOf(() => HandsAttach.Prepare(Spawn(), "t1", runtime: null)).Should().Be(HandsAttach.UnsupportedText);
 
     [Fact]
-    public void Отказ_компонент_не_установлен() =>
-        RefusalOf(() => HandsAttach.Prepare(Spawn(), "t1", _fx.Runtime())).Should().Be(HandsComponent.NotInstalledText);
-
-    [Fact]
-    public void Отказ_хеш_моста_не_сошёлся()
-    {
-        _fx.Installed();
-        File.AppendAllText(_fx.Component.BridgePath, "подмена");
-
-        RefusalOf(() => HandsAttach.Prepare(Spawn(), "t1", _fx.Runtime())).Should().Be(HandsComponent.NotVerifiedText);
-    }
+    public void Отказ_моста_нет_в_каталоге_агента() =>
+        RefusalOf(() => HandsAttach.Prepare(Spawn(), "t1", _fx.Runtime())).Should().Be(HandsComponent.MissingText);
 
     [Theory]
     [InlineData("--permission-mode bypassPermissions")]
@@ -53,7 +44,7 @@ public class HandsAttachTests : IDisposable
     [InlineData("--print")]
     public void Отказ_режим_прав_хода(string args)
     {
-        _fx.Installed();
+        _fx.WithBridge();
 
         RefusalOf(() => HandsAttach.Prepare(Spawn(args.Split(' ')), "t1", _fx.Runtime()))
             .Should().StartWith("Руки не подключены:");
@@ -62,7 +53,7 @@ public class HandsAttachTests : IDisposable
     [Fact]
     public void Отказ_маркер_не_в_узле_hands()
     {
-        _fx.Installed();
+        _fx.WithBridge();
         var config = new JsonObject
         {
             ["mcpServers"] = new JsonObject { ["other"] = new JsonObject { ["type"] = DeviceExecPlaceholders.Hands } },
@@ -75,7 +66,7 @@ public class HandsAttachTests : IDisposable
     [Fact]
     public void Отказ_маркер_в_двух_файлах_или_не_в_JSON()
     {
-        _fx.Installed();
+        _fx.WithBridge();
         var twice = Spawn(files: [HandsFixture.McpFile(HandsFixture.McpConfig()), new("f2", "b.json", HandsFixture.McpConfig())]);
         var prompt = Spawn(files: [HandsFixture.McpFile(HandsFixture.McpConfig()), new("f2", "prompt.md", "текст " + DeviceExecPlaceholders.Hands)]);
 
@@ -86,7 +77,7 @@ public class HandsAttachTests : IDisposable
     [Fact]
     public void Отказ_руки_заняты_другим_ходом_и_свободны_после_его_конца()
     {
-        _fx.Installed();
+        _fx.WithBridge();
         var machine = new InProcessHandsMachineLock();
 
         var first = HandsAttach.Prepare(Spawn(), "t1", _fx.Runtime(machine))!;
@@ -102,7 +93,7 @@ public class HandsAttachTests : IDisposable
     [InlineData(false)]
     public void Маркер_заменяется_узлом_своего_моста_в_Job_хода(bool vision)
     {
-        _fx.Installed();
+        _fx.WithBridge();
         var spawn = Spawn(files: HandsFixture.McpFile(HandsFixture.McpConfig(vision)));
 
         using var lease = HandsAttach.Prepare(spawn, "turn-7", _fx.Runtime())!;
@@ -122,7 +113,7 @@ public class HandsAttachTests : IDisposable
     }
 }
 
-/// <summary>Компонент рук: установка по манифесту с сверкой SHA-256, сверка перед ходом, удаление.</summary>
+/// <summary>Мост рук едет в составе агента: ищется в каталоге его версии, отдельной установки нет.</summary>
 public class HandsComponentTests : IDisposable
 {
     private readonly HandsFixture _fx = new();
@@ -130,84 +121,20 @@ public class HandsComponentTests : IDisposable
     public void Dispose() => _fx.Dispose();
 
     [Fact]
-    public void Установка_сверяет_хеш_архива_и_пишет_запись()
+    public void Мост_найден_в_каталоге_версии()
     {
-        var (path, offer) = _fx.Archive();
+        _fx.WithBridge();
 
-        var record = _fx.Component.Install(path, offer);
-
-        record.ArchiveSha256.Should().Be(offer.Sha256);
-        record.BridgeSha256.Should().Be(HandsComponent.FileSha256(_fx.Component.BridgePath));
-        _fx.Component.Check().Ready.Should().BeTrue();
+        _fx.Component.BridgePath.Should().Be(Path.Combine(_fx.AgentDirectory, HandsFiles.BridgeExe));
+        _fx.Component.IsReady.Should().BeTrue();
+        _fx.Component.Check().Should().Match<HandsComponentCheck>(c => c.Ready && c.Problem == null);
     }
 
     [Fact]
-    public void Чужой_хеш_или_размер_архива_не_ставятся()
-    {
-        var (path, offer) = _fx.Archive();
-
-        var wrongSha = () => _fx.Component.Install(path, offer with { Sha256 = new string('0', 64) });
-        var wrongSize = () => _fx.Component.Install(path, offer with { Size = offer.Size + 1 });
-
-        wrongSha.Should().Throw<HandsInstallException>().WithMessage("*SHA-256*");
-        wrongSize.Should().Throw<HandsInstallException>().WithMessage("*Размер*");
-        _fx.Component.Check().Ready.Should().BeFalse();
-        Directory.Exists(_fx.Component.ComponentDirectory).Should().BeFalse();
-    }
+    public void Нет_моста_в_каталоге_версии_нет_рук() =>
+        _fx.Component.Check().Should().Match<HandsComponentCheck>(c => !c.Ready && c.Problem == HandsComponent.MissingText);
 
     [Fact]
-    public void Архив_без_моста_не_ставится()
-    {
-        var (path, offer) = _fx.Archive(entry: "other.exe");
-
-        var act = () => _fx.Component.Install(path, offer);
-
-        act.Should().Throw<HandsInstallException>().WithMessage($"*{HandsFiles.BridgeExe}*");
-        _fx.Component.Check().Ready.Should().BeFalse();
-    }
-
-    [Fact]
-    public void Подменённый_мост_не_проходит_сверку()
-    {
-        _fx.Installed();
-
-        File.WriteAllText(_fx.Component.BridgePath, "другой мост");
-
-        _fx.Component.Check().Should().Match<HandsComponentCheck>(c => !c.Ready && c.Problem == HandsComponent.NotVerifiedText);
-    }
-
-    [Fact]
-    public void Удаление_снимает_возможность_сразу()
-    {
-        _fx.Installed();
-
-        _fx.Component.Remove().Should().BeTrue();
-
-        _fx.Component.Check().Should().Match<HandsComponentCheck>(c => !c.Ready && c.Problem == HandsComponent.NotInstalledText);
-        Directory.Exists(_fx.Component.ComponentDirectory).Should().BeFalse();
-    }
-
-    [Theory]
-    [InlineData("1.2.3/win-x64/hands-1.2.3-win-x64.zip", true)]
-    [InlineData("../win-x64/hands.zip", false)]
-    [InlineData("1.2.3/../hands.zip", false)]
-    [InlineData("1.2.3/win-x64/../../x.zip", false)]
-    [InlineData("1.2.3\\win-x64\\hands.zip", false)]
-    [InlineData("/etc/passwd", false)]
-    [InlineData("1.2.3/win-x64/.hidden", false)]
-    [InlineData("https://evil.example/x.zip", false)]
-    public void Путь_архива_из_ответа_сервера_проверяется(string path, bool ok) =>
-        HandsComponent.IsSafeArchivePath(path).Should().Be(ok);
-
-    [Fact]
-    public void Предложение_из_ответа_hello_только_полным_набором()
-    {
-        var ack = new DeviceHelloAck(1, 2, 3, 4, HandsArchivePath: "1.2.3/win-x64/hands.zip",
-            HandsArchiveSha256: new string('A', 64), HandsArchiveSize: 10);
-
-        HandsComponent.OfferFrom(ack, "1.2.3").Should().Be(new HandsOffer("1.2.3", "1.2.3/win-x64/hands.zip", new string('a', 64), 10));
-        HandsComponent.OfferFrom(ack with { HandsArchiveSize = null }, "1.2.3").Should().BeNull();
-        HandsComponent.OfferFrom(ack with { HandsArchivePath = "../x.zip" }, "1.2.3").Should().BeNull();
-        HandsComponent.OfferFrom(ack with { HandsArchiveSha256 = "xyz" }, "1.2.3").Should().BeNull();
-    }
+    public void Агент_ищет_мост_рядом_со_своим_исполняемым_файлом() =>
+        HandsComponent.ForThisAgent().BridgePath.Should().Be(Path.Combine(AppContext.BaseDirectory, HandsFiles.BridgeExe));
 }

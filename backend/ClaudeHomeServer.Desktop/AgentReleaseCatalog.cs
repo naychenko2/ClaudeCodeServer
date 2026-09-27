@@ -47,14 +47,10 @@ public sealed record AgentReleaseArchive(string Version, string Rid, string File
 }
 
 /// <summary>
-/// Версия агента и её архивы по RID. <see cref="Hands"/> — компонент рук той же версии (ADR-016 §7):
-/// отдельный архив <c>HandsBridge</c>, который ставит только <c>ai-home-agent hands enable</c>, —
-/// архив агента из-за него не растёт.
+/// Версия агента и её архивы по RID. Мост рук (ADR-016 §7) отдельного архива не имеет: он едет
+/// внутри архива агента под win-x64.
 /// </summary>
-public sealed record AgentRelease(
-    string Version,
-    IReadOnlyDictionary<string, AgentReleaseArchive> Archives,
-    IReadOnlyDictionary<string, AgentReleaseArchive> Hands);
+public sealed record AgentRelease(string Version, IReadOnlyDictionary<string, AgentReleaseArchive> Archives);
 
 /// <summary>
 /// Снимок каталога. <see cref="Latest"/> — версия, на которую указывает указатель текущей
@@ -80,11 +76,9 @@ public sealed record AgentReleaseSnapshot(
 /// указатель текущей выкатки <see cref="PointerFileName"/>. Формат указателя и манифеста один:
 /// <code>
 /// { "version": "1.123.0",
-///   "archives": { "win-x64": { "file": "ai-home-agent-1.123.0-win-x64.zip", "size": 1, "sha256": "…64 hex…" } },
-///   "hands":    { "win-x64": { "file": "hands-1.123.0-win-x64.zip", "size": 1, "sha256": "…64 hex…" } } }
+///   "archives": { "win-x64": { "file": "ai-home-agent-1.123.0-win-x64.zip", "size": 1, "sha256": "…64 hex…" } } }
 /// </code>
-/// Секция <c>hands</c> необязательна (компонент рук, ADR-016 §7); её записи подчиняются тем же
-/// правилам, что архивы агента, а имя файла не повторяет ни одного архива этой версии.
+/// Секцию <c>hands</c> старых выкаток (отдельный архив моста рук) каталог не читает.
 ///
 /// Всё, что пришло с диска, проверяется: RID — из белого списка <see cref="DeviceAgentRids"/>
 /// (незнакомые пропускаются), SHA-256 — 64 hex, имя архива — без разделителей пути, версия —
@@ -153,11 +147,8 @@ public sealed partial class AgentReleaseCatalog
         if (!DeviceAgentRids.IsSupported(rid) || version is null || file is null) return null;
         var snapshot = Current();
         if (!snapshot.Versions.TryGetValue(version, out var release)) return null;
-        if (release.Archives.TryGetValue(rid!, out var archive) && string.Equals(archive.File, file, StringComparison.Ordinal))
-            return archive;
-        // Компонент рук — тем же путём и по тем же правилам: имя только сравнивается с манифестом
-        return release.Hands.TryGetValue(rid!, out var hands) && string.Equals(hands.File, file, StringComparison.Ordinal)
-            ? hands
+        return release.Archives.TryGetValue(rid!, out var archive) && string.Equals(archive.File, file, StringComparison.Ordinal)
+            ? archive
             : null;
     }
 
@@ -210,10 +201,8 @@ public sealed partial class AgentReleaseCatalog
     }
 
     private static bool SameArchives(AgentRelease a, AgentRelease b) =>
-        Same(a.Archives, b.Archives) && Same(a.Hands, b.Hands);
-
-    private static bool Same(IReadOnlyDictionary<string, AgentReleaseArchive> a, IReadOnlyDictionary<string, AgentReleaseArchive> b) =>
-        a.Count == b.Count && a.All(kv => b.TryGetValue(kv.Key, out var other) && other == kv.Value);
+        a.Archives.Count == b.Archives.Count
+        && a.Archives.All(kv => b.Archives.TryGetValue(kv.Key, out var other) && other == kv.Value);
 
     /// <summary>Манифест или указатель; null — повреждён (причина — в логе).</summary>
     private AgentRelease? Parse(string? json, string? expectedVersion, string what)
@@ -239,14 +228,7 @@ public sealed partial class AgentReleaseCatalog
             var archives = ParseArchives(root.GetProperty("archives"), versionText, files, out var problem);
             if (archives is null) return Reject(what, problem!);
             if (archives.Count == 0) return Reject(what, "нет ни одного архива известной платформы");
-
-            var hands = new Dictionary<string, AgentReleaseArchive>(StringComparer.Ordinal);
-            if (root.TryGetProperty("hands", out var handsSection))
-            {
-                hands = ParseArchives(handsSection, versionText, files, out problem);
-                if (hands is null) return Reject(what, "компонент рук: " + problem);
-            }
-            return new AgentRelease(versionText, archives, hands);
+            return new AgentRelease(versionText, archives);
         }
         catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException or FormatException)
         {

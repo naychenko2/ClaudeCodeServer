@@ -1,42 +1,26 @@
 using System.Collections.Concurrent;
-using System.IO.Compression;
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.DeviceAgent.Hands;
 using ClaudeHomeServer.Protocol;
 
 namespace ClaudeHomeServer.DeviceAgent.Tests.Hands;
 
-/// <summary>Каталог данных агента с компонентом рук и архив компонента для установки.</summary>
+/// <summary>Каталог версии агента: мост рук в нём лежит или нет.</summary>
 internal sealed class HandsFixture : IDisposable
 {
     public HandsFixture()
     {
-        DataDirectory = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "agent-hands-" + Guid.NewGuid().ToString("N")[..10])).FullName;
-        Component = new HandsComponent(DataDirectory);
+        AgentDirectory = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "agent-hands-" + Guid.NewGuid().ToString("N")[..10])).FullName;
+        Component = new HandsComponent(AgentDirectory);
     }
 
-    public string DataDirectory { get; }
+    public string AgentDirectory { get; }
     public HandsComponent Component { get; }
 
-    /// <summary>Архив компонента: мост в корне, как его публикует выкатка.</summary>
-    public (string Path, HandsOffer Offer) Archive(string version = "1.2.3", byte[]? bridge = null, string entry = HandsFiles.BridgeExe)
+    /// <summary>Положить мост в каталог версии, как его раскладывает архив агента.</summary>
+    public HandsFixture WithBridge()
     {
-        var path = Path.Combine(DataDirectory, "hands-" + Guid.NewGuid().ToString("N")[..6] + ".zip");
-        using (var zip = ZipFile.Open(path, ZipArchiveMode.Create))
-        {
-            using (var s = zip.CreateEntry(entry).Open()) s.Write(bridge ?? "MZ fake bridge"u8);
-            using (var l = zip.CreateEntry("HandsBridge.LICENSE.txt").Open()) l.Write("MIT"u8);
-        }
-        var offer = new HandsOffer(version, $"{version}/win-x64/{Path.GetFileName(path)}",
-            HandsComponent.FileSha256(path), new FileInfo(path).Length);
-        return (path, offer);
-    }
-
-    /// <summary>Поставить компонент как это сделала бы <c>hands enable</c>.</summary>
-    public HandsFixture Installed()
-    {
-        var (path, offer) = Archive();
-        Component.Install(path, offer);
+        File.WriteAllBytes(Path.Combine(AgentDirectory, HandsFiles.BridgeExe), "MZ fake bridge"u8.ToArray());
         return this;
     }
 
@@ -67,7 +51,7 @@ internal sealed class HandsFixture : IDisposable
 
     public void Dispose()
     {
-        try { Directory.Delete(DataDirectory, recursive: true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        try { Directory.Delete(AgentDirectory, recursive: true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
     }
 }
 

@@ -12,15 +12,16 @@ using Xunit;
 namespace ClaudeHomeServer.Tests.Services.Desktop;
 
 /// <summary>
-/// Компонент рук в раздаче агента (ADR-016 §7, план рук Ш3/Ш5): секция <c>hands</c> манифеста,
-/// отдача архива строго по записи манифеста и хеш компонента в ответе на hello.
+/// Мост рук едет в архиве агента (ADR-016 §7): отдельного компонента в раздаче больше нет.
+/// Каталог старой выкатки с секцией <c>hands</c> по-прежнему читается, но архив моста не
+/// отдаётся и в указатель не попадает.
 /// </summary>
 public class HandsComponentReleaseTests : IDisposable
 {
     private readonly AgentReleaseFixture _rel = new();
     private readonly RecordingReleaseFileSystem _fs = new();
 
-    public HandsComponentReleaseTests() => _rel.PublishWithHands();
+    public HandsComponentReleaseTests() => _rel.PublishWithLegacyHands();
 
     public void Dispose() => _rel.Dispose();
 
@@ -33,96 +34,33 @@ public class HandsComponentReleaseTests : IDisposable
         };
 
     [Fact]
-    public void Манифест_СекцияHands_РазбираетсяПодRid()
+    public void Старая_секция_hands_не_ломает_раздачу_агента()
     {
-        var hands = Catalog().Current().Latest!.Hands;
+        var latest = Catalog().Current().Latest;
 
-        hands.Should().ContainKey(DeviceAgentRids.WinX64);
-        var h = hands[DeviceAgentRids.WinX64];
-        h.File.Should().Be(AgentReleaseFixture.HandsFile);
-        h.Sha256.Should().Be(AgentReleaseFixture.Sha(_rel.HandsBytes));
-        h.RelativePath.Should().Be($"{AgentReleaseFixture.Version}/win-x64/{AgentReleaseFixture.HandsFile}");
+        latest.Should().NotBeNull();
+        latest!.Archives.Keys.Should().BeEquivalentTo(DeviceAgentRids.WinX64, DeviceAgentRids.LinuxX64);
     }
 
     [Fact]
-    public void Архив_рук_отдаётся_байт_в_байт_тем_же_путём_что_агент()
-    {
-        var result = Controller(Catalog()).Archive(AgentReleaseFixture.Version, "win-x64", AgentReleaseFixture.HandsFile);
-
-        var file = result.Should().BeOfType<FileStreamResult>().Subject;
-        using var copy = new MemoryStream();
-        file.FileStream.CopyTo(copy);
-        copy.ToArray().Should().Equal(_rel.HandsBytes);
-        file.ContentType.Should().Be("application/zip");
-    }
-
-    [Fact]
-    public void Указатель_несёт_компонент_рук()
-    {
-        var ok = Controller(Catalog()).Manifest().Should().BeOfType<OkObjectResult>().Subject;
-        var hands = JsonSerializer.SerializeToElement(ok.Value).GetProperty("hands").GetProperty("win-x64");
-
-        hands.GetProperty("file").GetString().Should().Be(AgentReleaseFixture.HandsFile);
-        hands.GetProperty("sha256").GetString().Should().Be(AgentReleaseFixture.Sha(_rel.HandsBytes));
-    }
-
-    [Theory]
-    [InlineData("не из манифеста", "win-x64", "hands-1.200.0-win-x64.exe")]
-    [InlineData("RID без компонента", "linux-x64", AgentReleaseFixture.HandsFile)]
-    [InlineData("..", "win-x64", "..")]
-    [InlineData("../ в имени", "win-x64", "../" + AgentReleaseFixture.HandsFile)]
-    [InlineData("%2e%2e в имени", "win-x64", "%2e%2e%2f" + AgentReleaseFixture.HandsFile)]
-    public void Запрос_рук_не_из_манифеста_404_и_до_диска_не_доходит(string why, string rid, string file)
+    public void Архив_рук_старой_выкатки_не_отдаётся_и_до_диска_не_доходит()
     {
         var catalog = Catalog();
         catalog.Current();
         _fs.Reset();
 
-        var result = Controller(catalog).Archive(AgentReleaseFixture.Version, rid, file);
+        var result = Controller(catalog).Archive(AgentReleaseFixture.Version, "win-x64", AgentReleaseFixture.HandsFile);
 
-        result.Should().BeOfType<NotFoundObjectResult>(why);
-        _fs.Count("open").Should().Be(0, why);
+        result.Should().BeOfType<NotFoundObjectResult>();
+        _fs.Count("open").Should().Be(0);
     }
 
     [Fact]
-    public void Имя_компонента_совпадает_с_архивом_агента_манифест_отвергнут()
+    public void Указатель_компонента_рук_не_несёт()
     {
-        var json = JsonSerializer.Serialize(new
-        {
-            version = AgentReleaseFixture.Version,
-            archives = new Dictionary<string, object>
-            {
-                ["win-x64"] = new { file = AgentReleaseFixture.WinFile, size = 1, sha256 = new string('a', 64) },
-            },
-            hands = new Dictionary<string, object>
-            {
-                ["win-x64"] = new { file = AgentReleaseFixture.WinFile, size = 1, sha256 = new string('b', 64) },
-            },
-        });
-        _rel.WriteManifest(AgentReleaseFixture.Version, json);
-        _rel.WritePointerJson(json);
+        var ok = Controller(Catalog()).Manifest().Should().BeOfType<OkObjectResult>().Subject;
 
-        Catalog().Current().Versions.Should().NotContainKey(AgentReleaseFixture.Version,
-            "два архива с одним именем делили бы файл на диске");
-    }
-
-    [Theory]
-    [InlineData("../hands.zip")]
-    [InlineData("hands dir/x.zip")]
-    public void Недопустимое_имя_компонента_отвергает_манифест(string file)
-    {
-        var json = JsonSerializer.Serialize(new
-        {
-            version = AgentReleaseFixture.Version,
-            archives = new Dictionary<string, object>
-            {
-                ["win-x64"] = new { file = AgentReleaseFixture.WinFile, size = 1, sha256 = new string('a', 64) },
-            },
-            hands = new Dictionary<string, object> { ["win-x64"] = new { file, size = 1, sha256 = new string('b', 64) } },
-        });
-        _rel.WriteManifest(AgentReleaseFixture.Version, json);
-
-        Catalog().Current().Versions.Should().NotContainKey(AgentReleaseFixture.Version);
+        JsonSerializer.SerializeToElement(ok.Value).TryGetProperty("hands", out _).Should().BeFalse();
     }
 }
 

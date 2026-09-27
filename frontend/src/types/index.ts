@@ -170,7 +170,7 @@ export interface Project {
   // Матрица возможностей проекта (ADR-016 §4). Обязательна у новых ответов; для старого
   // бэка может быть null — тогда capabilities вырождаются в «серверный проект, всё доступно»
   capabilities?: ProjectCapabilitiesView | null;
-  // Руки локального проекта (ADR-016 §7, флаг local-hands): тумблер проекта
+  // Руки локального проекта (ADR-016 §7): тумблер проекта
   handsEnabled?: boolean;
   // Почему тумблер рук включить нельзя; null — можно. Готовый текст с сервера
   // (ProjectCapabilities.HandsRefusal). Читать только через projectCapabilities.ts

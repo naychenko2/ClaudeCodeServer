@@ -1200,7 +1200,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     }
 
     // Руки локального проекта (ADR-016 §7) — свойство чата, а не хода: матрица
-    // ProjectCapabilities.HandsRefusal (флаг local-hands, локальный проект, hands у устройства,
+    // ProjectCapabilities.HandsRefusal (локальный проект, hands у устройства,
     // тумблер проекта). Провайдер хода не сужает ни руки, ни фолбэк (решение владельца
     // 2026-09-27): снимки окон отсекает зрение провайдера в ClaudeSession.
     // Канал устройства резолвится лениво: прямая зависимость замкнула бы граф синглтонов.
@@ -1210,8 +1210,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         var device = ProjectCapabilities.IsDeviceBound(project)
             ? _services?.GetService<Execution.IDeviceExecChannel>()?.GetStatus(ownerId, project.DeviceId!)
             : null;
-        var refusal = ProjectCapabilities.HandsRefusal(project, device,
-            _flags.IsEnabled(ownerId, FeatureFlagKeys.LocalHands), project.HandsEnabled);
+        var refusal = ProjectCapabilities.HandsRefusal(project, device, project.HandsEnabled);
         return refusal is null;
     }
 

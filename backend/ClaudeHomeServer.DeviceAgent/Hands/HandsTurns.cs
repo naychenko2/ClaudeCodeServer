@@ -174,8 +174,8 @@ internal sealed class HandsTurnLease(IDisposable machineLock, string jobName, IR
 /// <summary>
 /// Подключение рук к ходу (ADR-016 §7, решение 4 плана): сервер ставит в MCP-конфиг хода только
 /// маркер <see cref="DeviceExecPlaceholders.Hands"/>, а узел <c>hands</c> → свой
-/// <c>HandsBridge.exe</c> подставляет агент. Подставляет, только если компонент установлен и
-/// сверен, режим прав хода не <c>bypassPermissions</c> и руки машины свободны; иначе ход
+/// <c>HandsBridge.exe</c> подставляет агент. Подставляет, только если мост лежит в каталоге
+/// версии агента, режим прав хода не <c>bypassPermissions</c> и руки машины свободны; иначе ход
 /// честно отказывает (<see cref="ExecRefusedException"/>), а не идёт молча без рук.
 /// </summary>
 internal static class HandsAttach
@@ -203,7 +203,7 @@ internal static class HandsAttach
         if (runtime is null) throw new ExecRefusedException(UnsupportedText);
 
         var check = runtime.Component.Check();
-        if (!check.Ready) throw new ExecRefusedException(check.Problem ?? HandsComponent.NotInstalledText);
+        if (!check.Ready) throw new ExecRefusedException(check.Problem ?? HandsComponent.MissingText);
 
         if (HandsTurnRules.PermissionRefusal(spawn.Args) is { } permission)
             throw new ExecRefusedException($"Руки не подключены: {permission}.");

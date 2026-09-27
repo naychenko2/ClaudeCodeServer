@@ -10,9 +10,8 @@ import { featureReason } from '../../lib/projectCapabilities';
 import { handsSectionView } from '../../lib/localHands';
 import { ProjectFeature, type Project } from '../../types';
 
-// Секция «Руки на устройстве» в настройках проекта (ADR-016 §7). Снаружи — только флаг
-// local-hands; всё остальное решает handsRefusal с сервера через CapabilityGate, без
-// проверок локальности руками. Текст отказа — тот, что вернул сервер.
+// Секция «Руки на устройстве» в настройках проекта (ADR-016 §7). Флага нет: всё решает
+// handsRefusal с сервера через CapabilityGate, без проверок локальности руками. Текст отказа — тот, что вернул сервер.
 export function LocalHandsSection({ project, onUpdated }: {
   project: Project;
   onUpdated?: (updated: Project) => void;

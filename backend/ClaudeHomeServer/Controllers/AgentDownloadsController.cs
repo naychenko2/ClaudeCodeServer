@@ -57,8 +57,6 @@ public sealed class AgentDownloadsController(
             version = latest.Version,
             archives = latest.Archives.Values.ToDictionary(
                 a => a.Rid, a => new { file = a.File, size = a.Size, sha256 = a.Sha256 }),
-            hands = latest.Hands.Values.ToDictionary(
-                a => a.Rid, a => new { file = a.File, size = a.Size, sha256 = a.Sha256 }),
         });
     }
 

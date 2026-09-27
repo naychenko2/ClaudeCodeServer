@@ -8,7 +8,6 @@
 // только активной и не может сама себя запросить.
 
 import { useSyncExternalStore } from 'react';
-import { FLAGS, getFlag } from '../../lib/featureFlags';
 import { getPendingFocus, releaseStrip, requestStrip } from '../../lib/composerStrips';
 import {
   HANDS_BADGE_LOADING, HandsChatState, handsEventReceived, handsInitialFailed, handsInitialLoaded,
@@ -116,10 +115,10 @@ export function resetHandsSession(sessionId: string) {
 
 // ---------- вклад в реестр ----------
 
-// Полоса предлагается, только пока флаг local-hands включён, руки проекта включены и
-// доступны, а сервер не ответил «у чата рук нет»
+// Полоса предлагается, только пока руки проекта включены и доступны, а сервер не ответил
+// «у чата рук нет»
 export function handsStripAvailable({ projectId, sessionId }: { projectId: string; sessionId: string | null }): boolean {
-  if (!getFlag(FLAGS.localHands) || !sessionId) return false;
+  if (!sessionId) return false;
   if (getHandsProject(projectId)?.available !== true) return false;
   return getHandsSession(sessionId).state.kind !== 'none';
 }

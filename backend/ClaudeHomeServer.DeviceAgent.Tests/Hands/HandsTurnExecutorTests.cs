@@ -37,7 +37,7 @@ public class HandsTurnExecutorTests : IDisposable
     [SkippableFact]
     public async Task Стоп_из_трея_гасит_ход_вместе_с_мостом_и_сообщает_причину()
     {
-        _fx.Installed();
+        _fx.WithBridge();
         var sink = new RecordingSink();
         var hands = _fx.Runtime(sink: sink);
         await using var h = NewHarness(hands);
@@ -76,7 +76,7 @@ public class HandsTurnExecutorTests : IDisposable
     [SkippableFact]
     public async Task Ход_кончился_сам_руки_доступны_и_замок_свободен()
     {
-        _fx.Installed();
+        _fx.WithBridge();
         var sink = new RecordingSink();
         var hands = _fx.Runtime(sink: sink);
         await using var h = NewHarness(hands);
@@ -96,7 +96,7 @@ public class HandsTurnExecutorTests : IDisposable
     [SkippableFact]
     public async Task Второй_ход_с_руками_на_той_же_машине_получает_отказ()
     {
-        _fx.Installed();
+        _fx.WithBridge();
         // Два агента одной машины делят один замок — как именованный семафор сеанса входа
         var machine = new InProcessHandsMachineLock();
         await using var first = NewHarness(_fx.Runtime(machine));
@@ -119,7 +119,7 @@ public class HandsTurnExecutorTests : IDisposable
     [SkippableFact]
     public async Task Ход_без_маркера_идёт_без_рук_даже_при_установленном_компоненте()
     {
-        _fx.Installed();
+        _fx.WithBridge();
         var sink = new RecordingSink();
         var hands = _fx.Runtime(sink: sink);
         await using var h = NewHarness(hands);

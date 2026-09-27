@@ -222,7 +222,7 @@ public sealed class WindowsAutomationPrompts
                 "2) ui_find(windowHandle='<handle>', nameContains='...') — verify element exists (has built-in timeout).\n" +
                 "3) ui_read(windowHandle='<handle>', nameContains='...') — check text content changed.\n" +
                 "5) screenshot_control(target='window', windowHandle='<handle>', annotate=true) — visual element discovery.\n" +
-                "6) ui_read(windowHandle='<handle>') — for custom-rendered text (uses OCR fallback).")
+                "6) ui_read(windowHandle='<handle>') — for custom-rendered text; if it reports no_text_found, take a window screenshot.")
         ];
     }
 

@@ -46,15 +46,9 @@ if (args.Length > 0 && (args[0] == "--version" || args[0] == "-v"))
     return 0;
 }
 
-// Руки: имя Job хода передаёт агент (--turn-job Local\AiHome.Turn.…) — окна процессов из него
-// свои (решение владельца 2б). Без него своих окон нет: гейт закрыт.
-var turnJob = GetOption(args, ClaudeHomeServer.Protocol.HandsBridgeArgs.TurnJob);
-if (string.IsNullOrWhiteSpace(turnJob))
-{
-    Console.Error.WriteLine("[hands] --turn-job is not set: no window is available to hands.");
-}
-
-HandsGate.Configure(turnJob);
+// Руки: гейт до старта хоста. Границы «только свои окна» нет (решение владельца 2026-09-27,
+// ADR-016 §7), поэтому имя Job хода мосту не передаётся: Job хода нужен только агенту для KillTree.
+HandsGate.Configure();
 
 var builder = Host.CreateApplicationBuilder(args);
 

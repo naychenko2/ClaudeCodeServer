@@ -10,9 +10,11 @@ namespace HandsBridge.Policy.Tests;
 /// (WinForms), ссылкой в тесты под net10.0 его не подключить, поэтому сборка грузится
 /// рефлексией в свой контекст из <c>hands-bridge/</c> вывода тестов. Отказ гейта отдаётся до
 /// первого обращения к WinAPI, так что на Linux путь отказа исполняется целиком. Гейт без
-/// <c>Configure</c> закрыт (своих окон нет), значит каждый вызов ниже обязан получить отказ.
-/// Если отказ не вернуть (убрать <c>return</c>), выполнение пойдёт дальше к действию, и ответ
-/// будет уже не отказом гейта.
+/// <c>Configure</c> не знает ни одного процесса, поэтому ввод получает отказ. Если отказ не
+/// вернуть (убрать <c>return</c>), выполнение пойдёт дальше к действию, и ответ будет уже не
+/// отказом гейта. Обратное тоже проверяется: снимок экрана и чтение чужого окна проходят гейт —
+/// на Windows ответ не <c>hands_policy</c>, на Linux исполнение доходит до сервисов моста и падает
+/// на инициализации WinAPI/COM, куда отказ гейта не пускает.
 /// </summary>
 public class HandsBridgeGateRuntimeTests
 {
@@ -30,7 +32,7 @@ public class HandsBridgeGateRuntimeTests
     }
 
     [Fact]
-    public async Task Ui_click_on_foreign_window_is_denied_by_gate()
+    public async Task Ui_click_into_window_of_unknown_program_is_denied_by_gate()
     {
         var result = await Call("Sbroenne.WindowsMcp.Automation.Tools.UIClickTool", new()
         {
@@ -38,7 +40,37 @@ public class HandsBridgeGateRuntimeTests
             ["name"] = "OK",
         });
 
-        AssertGateDenied(result, "ui_click", "is not yours");
+        AssertGateDenied(result, "ui_click", "never click or type");
+    }
+
+    [Theory]
+    [InlineData("primary_screen")]
+    [InlineData("all_monitors")]
+    [InlineData("region")]
+    public async Task Screen_capture_passes_the_gate(string target)
+    {
+        await AssertPassesGate("Sbroenne.WindowsMcp.Tools.ScreenshotControlTool", new()
+        {
+            ["target"] = target,
+            ["regionX"] = 0,
+            ["regionY"] = 0,
+            ["regionWidth"] = 10,
+            ["regionHeight"] = 10,
+        });
+    }
+
+    [Fact]
+    public async Task Foreign_window_capture_and_read_pass_the_gate()
+    {
+        await AssertPassesGate("Sbroenne.WindowsMcp.Tools.ScreenshotControlTool", new()
+        {
+            ["target"] = "window",
+            ["windowHandle"] = "65552",
+        });
+        await AssertPassesGate("Sbroenne.WindowsMcp.Automation.Tools.UIReadTool", new()
+        {
+            ["windowHandle"] = "65552",
+        });
     }
 
     [Fact]
@@ -64,6 +96,19 @@ public class HandsBridgeGateRuntimeTests
         Assert.Equal("hands_policy", json.RootElement.GetProperty("error").GetString());
         Assert.Equal(tool, json.RootElement.GetProperty("tool").GetString());
         Assert.Contains(reason, json.RootElement.GetProperty("message").GetString());
+    }
+
+    private static async Task AssertPassesGate(string typeName, Dictionary<string, object?> args)
+    {
+        try
+        {
+            var result = await Call(typeName, args);
+            Assert.DoesNotContain("hands_policy", result.Text);
+        }
+        catch (TypeInitializationException ex) when (!OperatingSystem.IsWindows() && ex.TypeName == "Sbroenne.WindowsMcp.Tools.WindowsToolsBase")
+        {
+            // Linux: гейт пропустил, дальше нет WinAPI — это и есть «дошло до действия»
+        }
     }
 
     /// <summary>Вызов метода инструмента: неуказанные параметры — умолчания из схемы.</summary>

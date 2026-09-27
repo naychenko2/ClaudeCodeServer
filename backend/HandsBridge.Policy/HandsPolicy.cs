@@ -22,22 +22,19 @@ public static class HandsTools
 /// <summary>
 /// Единственный гейт рук: его зовёт каждый инструмент моста ДО любого действия.
 /// <para>
-/// Своё окно (решение владельца 2б, 2026-09-27) — окно процесса из Job хода: программа,
-/// запущенная <c>app</c> (вложенный Job моста живёт внутри Job хода), командой этого хода или
-/// их потомок. Белого списка программ нет. Окно процесса из <see cref="HandsForbiddenApps"/>
-/// своим не бывает никогда: ввод в терминал — это исполнение команд. Владеемые диалоги своего
-/// окна свои, потому что живут в том же процессе; диалог, который владеемым сделал ЧУЖОЙ
-/// процесс, — чужой.
+/// Границы «только свои окна» нет: граница снята решением владельца 2026-09-27 (вторая волна,
+/// ADR-016 §7). Модель видит, читает, снимает и трогает любое окно рабочего стола, список окон
+/// отдаёт все окна, снимок экрана, монитора и области разрешён.
 /// </para>
-/// Граница — защита от ошибок модели (не лезть в открытые окна человека), а не от злоумышленника.
-/// Закрыто по умолчанию: сбой WinAPI или мост вне Job хода — всё читается как «чужое».
+/// Остаётся одно правило окон: в окно процесса из <see cref="HandsForbiddenApps"/> (интерпретатор,
+/// терминал, Проводник) руки не вводят — ни кликом, ни текстом. Ввод туда — исполнение команд в
+/// обход запрета этих программ в <c>app</c>. Читать и снимать такие окна можно. Закрыто по
+/// умолчанию: не узнали процесс окна или образ — ввод запрещён.
 /// </summary>
 public sealed class HandsPolicy(IHandsWindowSystem windows)
 {
-    private const string UseOwnWindow =
-        "Only windows of programs started in this turn are available. " +
-        "Start a program with app(programPath=...) and use the handle it returns, " +
-        "or call window_management(action='list') to see your windows.";
+    private const string ListWindows =
+        "Call window_management(action='list') to get window handles.";
 
     /// <summary>
     /// Ключи Chromium, которые подменяют исполняемый файл дочерних процессов или открывают
@@ -46,14 +43,18 @@ public sealed class HandsPolicy(IHandsWindowSystem windows)
     private static readonly string[] ForbiddenArgumentFragments =
         ["cmd-prefix", "gpu-launcher", "subprocess-path", "remote-debugging", "load-extension"];
 
-    /// <summary>
-    /// Действия <c>window_management</c>, которым нужен свой hwnd. <c>list</c>/<c>find</c>
-    /// разрешены, но отдают только свои окна; <c>get_foreground</c> сверяется по результату.
-    /// </summary>
-    private static readonly HashSet<string> HandleActions = new(StringComparer.Ordinal)
+    /// <summary>Действия <c>window_management</c> из схемы инструмента; прочие — отказ.</summary>
+    private static readonly HashSet<string> WindowActions = new(StringComparer.Ordinal)
     {
+        "list", "find", "get_foreground", "wait_for",
         "activate", "minimize", "maximize", "restore", "close", "move", "resize", "set_bounds",
         "move_to_monitor", "get_state", "wait_for_state", "move_and_activate", "ensure_visible",
+    };
+
+    /// <summary>Инструменты, которые вводят в окно: клик и текст.</summary>
+    private static readonly HashSet<string> InputTools = new(StringComparer.Ordinal)
+    {
+        HandsTools.UiClick, HandsTools.UiType,
     };
 
     // ---------- app ----------
@@ -95,29 +96,26 @@ public sealed class HandsPolicy(IHandsWindowSystem windows)
 
     // ---------- окна ----------
 
-    /// <summary>Своё окно по правилу из шапки класса.</summary>
-    public bool IsOwnWindow(long hwnd)
+    /// <summary>
+    /// Можно ли вводить в окно: процесс окна известен, его образ прочитан и не из
+    /// <see cref="HandsForbiddenApps"/>. Любой сбой — нельзя.
+    /// </summary>
+    public bool AcceptsInput(long hwnd)
     {
         if (hwnd == 0)
             return false;
-        var processId = windows.GetWindowProcessId(hwnd);
-        if (processId is not { } pid || !windows.IsProcessInTurnJob(pid))
+        if (windows.GetWindowProcessId(hwnd) is not { } pid)
             return false;
 
         var image = HandsAppPaths.TryNormalize(windows.GetProcessImagePath(pid));
         return image is not null && !HandsAppPaths.IsForbidden(image);
     }
 
-    /// <summary>То же для hwnd строкой, как его передаёт модель.</summary>
-    public bool IsOwnWindow(string? handle) => TryParseHandle(handle, out var hwnd) && IsOwnWindow(hwnd);
-
-    /// <summary>Только свои окна — для <c>list</c>, <c>find</c> и поиска окна после запуска.</summary>
-    public IReadOnlyList<T> FilterOwn<T>(IEnumerable<T> items, Func<T, string?> handleOf) =>
-        items.Where(item => TryParseHandle(handleOf(item), out var hwnd) && IsOwnWindow(hwnd)).ToList();
-
     /// <summary>
-    /// <c>ui_*</c>: окно обязано быть своим, и каждый переданный <c>elementId</c> — из своего окна
-    /// (идентификатор элемента несёт hwnd своего корня; не разрешился — отказ, а не «поверим»).
+    /// <c>ui_*</c>: окно — любое, но hwnd обязателен (фолбэка на окно переднего плана нет).
+    /// Для ввода (<c>ui_click</c>, <c>ui_type</c>) окно и окно каждого переданного
+    /// <c>elementId</c> обязаны принимать ввод (<see cref="AcceptsInput"/>): идентификатор
+    /// элемента несёт hwnd своего корня, не разрешился — отказ, а не «поверим».
     /// </summary>
     /// <param name="resolveElementWindow">hwnd корня элемента по его id; null — id неизвестен.</param>
     public HandsDecision CheckUi(
@@ -127,71 +125,47 @@ public sealed class HandsPolicy(IHandsWindowSystem windows)
         params string?[] elementIds)
     {
         if (string.IsNullOrWhiteSpace(windowHandle))
-            return HandsDecision.Deny($"{tool} requires windowHandle of your own window. {UseOwnWindow}");
+            return HandsDecision.Deny($"{tool} requires windowHandle. {ListWindows}");
 
-        if (!IsOwnWindow(windowHandle))
-            return HandsDecision.Deny($"Window '{windowHandle}' is not yours. {UseOwnWindow}");
+        if (!InputTools.Contains(tool))
+            return HandsDecision.Allow;
+
+        if (!TryParseHandle(windowHandle, out var hwnd) || !AcceptsInput(hwnd))
+            return HandsDecision.Deny(NoInput($"Window '{windowHandle}'"));
 
         foreach (var elementId in elementIds)
         {
             if (string.IsNullOrWhiteSpace(elementId))
                 continue;
-            var elementWindow = resolveElementWindow(elementId);
-            if (elementWindow is not { } hwnd)
+            if (resolveElementWindow(elementId) is not { } elementWindow)
                 return HandsDecision.Deny(
-                    $"Element '{elementId}' is unknown. Take a fresh ui_snapshot of your window and use its ids.");
-            if (!IsOwnWindow(hwnd))
-                return HandsDecision.Deny($"Element '{elementId}' belongs to a window that is not yours. {UseOwnWindow}");
+                    $"Element '{elementId}' is unknown. Take a fresh ui_snapshot of the window and use its ids.");
+            if (!AcceptsInput(elementWindow))
+                return HandsDecision.Deny(NoInput($"Element '{elementId}'"));
         }
 
         return HandsDecision.Allow;
     }
 
     /// <summary>
-    /// <c>window_management</c>. Поиска и ожидания окна по заголовку по всему столу нет:
-    /// <c>wait_for</c> получает отказ, <c>find</c> ищет только среди своих.
+    /// <c>window_management</c>: любое действие из схемы над любым окном, включая <c>close</c>,
+    /// поиск по заголовку (<c>find</c>, <c>wait_for</c>) и полный список окон.
     /// </summary>
     /// <param name="action">Имя действия в snake_case, как в схеме инструмента.</param>
-    public HandsDecision CheckWindowAction(string action, string? handle)
-    {
-        switch (action)
-        {
-            case "list":
-            case "find":
-            case "get_foreground":
-                return HandsDecision.Allow;
-            case "wait_for":
-                return HandsDecision.Deny(
-                    "wait_for searches every window on the desktop by title and is disabled. " +
-                    "Use window_management(action='list') to see your windows, or wait_for_state with your handle.");
-        }
-
-        if (!HandleActions.Contains(action))
-            return HandsDecision.Deny($"Unknown window_management action '{action}'.");
-
-        if (string.IsNullOrWhiteSpace(handle))
-            return HandsDecision.Deny($"{action} requires the handle of your own window. {UseOwnWindow}");
-
-        return IsOwnWindow(handle)
+    public static HandsDecision CheckWindowAction(string action) =>
+        WindowActions.Contains(action)
             ? HandsDecision.Allow
-            : HandsDecision.Deny($"Window '{handle}' is not yours. {UseOwnWindow}");
-    }
-
-    /// <summary><c>get_foreground</c> отдаёт окно, только если на переднем плане своё.</summary>
-    public HandsDecision CheckForegroundResult(string? handle) =>
-        IsOwnWindow(handle)
-            ? HandsDecision.Allow
-            : HandsDecision.Deny($"The foreground window is not yours, its details are hidden. {UseOwnWindow}");
+            : HandsDecision.Deny($"Unknown window_management action '{action}'.");
 
     // ---------- снимок ----------
 
     /// <summary>
-    /// <c>screenshot_control</c>: снимок — только <c>target='window'</c> своего окна и только в
-    /// ответ (режим <c>file</c> пишет по произвольному пути машины). <c>outputPath</c> отвергается
-    /// при любом режиме: снимок с разметкой пишет по нему файл и в режиме <c>inline</c>. Экран,
-    /// монитор, область и все мониторы — отказ. Список мониторов пикселей не несёт и разрешён.
+    /// <c>screenshot_control</c>: любая цель — окно (любой hwnd), экран, монитор, область, все
+    /// мониторы. Снимок — только в ответ: режим <c>file</c> пишет по произвольному пути машины, а
+    /// <c>outputPath</c> отвергается при любом режиме (снимок с разметкой пишет по нему файл и в
+    /// режиме <c>inline</c>). Это запрет записи на диск, а не граница окон.
     /// </summary>
-    public HandsDecision CheckScreenshot(string? action, string? target, string? windowHandle, string? outputMode, string? outputPath)
+    public static HandsDecision CheckScreenshot(string? action, string? outputMode, string? outputPath)
     {
         if (string.Equals(action, "list_monitors", StringComparison.OrdinalIgnoreCase))
             return HandsDecision.Allow;
@@ -199,24 +173,18 @@ public sealed class HandsPolicy(IHandsWindowSystem windows)
         if (!string.IsNullOrWhiteSpace(action) && !string.Equals(action, "capture", StringComparison.OrdinalIgnoreCase))
             return HandsDecision.Deny($"Unknown screenshot_control action '{action}'.");
 
-        if (!string.Equals(target, "window", StringComparison.OrdinalIgnoreCase))
-            return HandsDecision.Deny(
-                $"Screenshots of '{(string.IsNullOrWhiteSpace(target) ? "primary_screen" : target)}' are not allowed: " +
-                "only target='window' with the handle of your own window. " + UseOwnWindow);
-
         if (!string.IsNullOrWhiteSpace(outputMode) && !string.Equals(outputMode, "inline", StringComparison.OrdinalIgnoreCase))
             return HandsDecision.Deny("Only outputMode='inline' is allowed: screenshots are not written to disk.");
 
         if (!string.IsNullOrEmpty(outputPath))
             return HandsDecision.Deny("outputPath is not allowed: screenshots are not written to disk. Omit it.");
 
-        if (string.IsNullOrWhiteSpace(windowHandle))
-            return HandsDecision.Deny($"target='window' requires windowHandle of your own window. {UseOwnWindow}");
-
-        return IsOwnWindow(windowHandle)
-            ? HandsDecision.Allow
-            : HandsDecision.Deny($"Window '{windowHandle}' is not yours. {UseOwnWindow}");
+        return HandsDecision.Allow;
     }
+
+    private static string NoInput(string what) =>
+        $"{what} belongs to an interpreter, a terminal or Explorer (or its program is unknown): " +
+        "hands never click or type there, typing into it runs commands. Reading and screenshots are allowed.";
 
     // ---------- клавиатура ----------
 
@@ -237,8 +205,9 @@ public sealed class HandsPolicy(IHandsWindowSystem windows)
 
     /// <summary>
     /// Системные сочетания не уходят никогда: любое с Win, клавиша Win сама по себе, Alt+Tab,
-    /// Alt+Esc, Ctrl+Esc, Ctrl+Shift+Esc и всё с Ctrl+Alt. Они уводят ввод из своего окна
-    /// («Пуск», переключение окон, диспетчер задач, экран безопасности). Проверка — по
+    /// Alt+Esc, Ctrl+Esc, Ctrl+Shift+Esc и всё с Ctrl+Alt. Они открывают «Пуск», «Выполнить»,
+    /// переключение окон, диспетчер задач и экран безопасности — ввод в оболочку в обход запрета
+    /// ввода в окна Проводника. Проверка — по
     /// виртуальному коду ПОСЛЕ сопоставления имени: синонимы вроде «meta»/«super» её не обходят.
     /// </summary>
     public static HandsDecision CheckKeys(int virtualKey, bool ctrl, bool alt, bool shift, bool win)
@@ -252,7 +221,7 @@ public sealed class HandsPolicy(IHandsWindowSystem windows)
         if (ctrl && alt)
             return HandsDecision.Deny("Ctrl+Alt combinations are not allowed.");
         if (alt && virtualKey is VirtualKeys.Tab or VirtualKeys.Escape)
-            return HandsDecision.Deny("Alt+Tab and Alt+Esc switch away from your window and are not allowed.");
+            return HandsDecision.Deny("Alt+Tab and Alt+Esc switch windows and are not allowed; use window_management(action='activate').");
         if (ctrl && virtualKey == VirtualKeys.Escape)
             return HandsDecision.Deny(shift
                 ? "Ctrl+Shift+Esc opens Task Manager and is not allowed."

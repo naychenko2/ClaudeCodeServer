@@ -209,7 +209,7 @@ internal static class HandsAttach
             throw new ExecRefusedException($"Руки не подключены: {permission}.");
 
         var jobName = HandsBridgeArgs.TurnJobPrefix + turnId + "." + Guid.NewGuid().ToString("N")[..8];
-        var rewritten = Rewrite(files, runtime.Component.BridgePath, jobName);
+        var rewritten = Rewrite(files, runtime.Component.BridgePath);
 
         var lease = runtime.MachineLock.TryAcquire() ?? throw new ExecRefusedException(HandsMachineLock.BusyText, HandsEndReason.Busy);
         return new HandsTurnLease(lease, jobName, rewritten);
@@ -219,7 +219,7 @@ internal static class HandsAttach
     /// Маркер допустим ровно в одном месте: <c>mcpServers.hands.type</c> одного JSON-файла spec.
     /// Любое другое вхождение — отказ, а не «подставим, где нашли».
     /// </summary>
-    internal static IReadOnlyList<DeviceExecFile> Rewrite(IReadOnlyList<DeviceExecFile> files, string bridgePath, string jobName)
+    internal static IReadOnlyList<DeviceExecFile> Rewrite(IReadOnlyList<DeviceExecFile> files, string bridgePath)
     {
         var result = new List<DeviceExecFile>(files.Count);
         var replaced = 0;
@@ -242,7 +242,7 @@ internal static class HandsAttach
                 throw new ExecRefusedException(MisplacedMarkerText);
 
             var vision = (node[DeviceExecPlaceholders.HandsVisionField] as JsonValue)?.TryGetValue<bool>(out var v) == true && v;
-            var args = new JsonArray(HandsBridgeArgs.TurnJob, jobName);
+            var args = new JsonArray();
             if (!vision)
             {
                 args.Add(HandsBridgeArgs.ExcludeTools);

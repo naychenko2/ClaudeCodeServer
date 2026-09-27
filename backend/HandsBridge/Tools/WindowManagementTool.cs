@@ -76,7 +76,7 @@ public static partial class WindowManagementTool
         [DefaultValue(false)] bool discardChanges,
         CancellationToken cancellationToken)
     {
-        var gate = HandsGate.Policy.CheckWindowAction(JsonNamingPolicy.SnakeCaseLower.ConvertName(action.ToString()), handle);
+        var gate = HandsPolicy.CheckWindowAction(JsonNamingPolicy.SnakeCaseLower.ConvertName(action.ToString()));
         if (!gate.Allowed)
         {
             return HandsGate.Deny(HandsTools.WindowManagement, gate);
@@ -216,7 +216,7 @@ public static partial class WindowManagementTool
             return ToCallToolResult(result);
         }
 
-        var windows = HandsGate.Policy.FilterOwn(result.Windows ?? [], w => w.Handle);
+        var windows = result.Windows ?? [];
 
         if (!string.IsNullOrEmpty(excludeTitle))
         {
@@ -252,10 +252,7 @@ public static partial class WindowManagementTool
                 "'title' or 'processName' is required for find action. Use processName for exact app matching (e.g., processName='Notepad').");
         }
 
-        var result = await WindowsToolsBase.WindowService.FindWindowAsync(title, processName, useRegex, cancellationToken);
-        return result.Success
-            ? WindowManagementResult.CreateListSuccess(HandsGate.Policy.FilterOwn(result.Windows ?? [], w => w.Handle))
-            : result;
+        return await WindowsToolsBase.WindowService.FindWindowAsync(title, processName, useRegex, cancellationToken);
     }
 
     private static async Task<WindowManagementResult> HandleActivateAsync(
@@ -274,16 +271,7 @@ public static partial class WindowManagementTool
 
     private static async Task<WindowManagementResult> HandleGetForegroundAsync(CancellationToken cancellationToken)
     {
-        var result = await WindowsToolsBase.WindowService.GetForegroundWindowAsync(cancellationToken);
-        if (!result.Success)
-        {
-            return result;
-        }
-
-        var gate = HandsGate.Policy.CheckForegroundResult(result.Window?.Handle);
-        return gate.Allowed
-            ? result
-            : WindowManagementResult.CreateFailure(WindowManagementErrorCode.WindowNotFound, gate.Reason!);
+        return await WindowsToolsBase.WindowService.GetForegroundWindowAsync(cancellationToken);
     }
 
     private static async Task<WindowManagementResult> HandleMinimizeAsync(

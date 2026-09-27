@@ -41,6 +41,68 @@ public class KillTreeTests
         }
     }
 
+    /// <summary>
+    /// Руки видят и трогают любые окна (ADR-016 §7), но по концу хода гаснет только дерево хода:
+    /// программа, которую открыл человек, в группу хода не входит и остаётся живой.
+    /// </summary>
+    [SkippableFact]
+    [UnsupportedOSPlatform("windows")]
+    public async Task Unix_конец_хода_гасит_только_своё_дерево_чужой_процесс_жив()
+    {
+        Skip.If(OperatingSystem.IsWindows());
+        Skip.If(UnixGroupProcess.FindSetsid() is null, "нет setsid");
+        var dir = Directory.CreateTempSubdirectory("kill-unix-foreign-").FullName;
+        using var foreign = Process.Start(new ProcessStartInfo("/bin/sleep", "600") { UseShellExecute = false })!;
+        try
+        {
+            var cli = FakeUnixCli.Write(dir);
+            using var process = TurnProcess.Start(new TurnLaunch(cli, [], dir, UnixEnv(dir)));
+            var grandchild = await ReadPidAsync(Path.Combine(dir, "grandchild.pid"));
+
+            process.KillTree();
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            await WaitAsync(() => !UnixGroupProcess.IsAlive(grandchild));
+
+            UnixGroupProcess.IsAlive(grandchild).Should().BeFalse("окно, открытое ходом, закрывается вместе с ним");
+            foreign.HasExited.Should().BeFalse("программу человека ход не открывал и не гасит");
+        }
+        finally
+        {
+            foreign.Kill();
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [SkippableFact]
+    [SupportedOSPlatform("windows")]
+    public async Task Windows_конец_хода_гасит_только_свой_Job_чужой_процесс_жив()
+    {
+        Skip.IfNot(OperatingSystem.IsWindows(), "ветка Windows: Job Object");
+        var dir = Directory.CreateTempSubdirectory("kill-win-foreign-").FullName;
+        var ping = Path.Combine(Environment.SystemDirectory, "PING.EXE");
+        using var foreign = Process.Start(new ProcessStartInfo(ping, "-n 600 127.0.0.1") { UseShellExecute = false, CreateNoWindow = true })!;
+        try
+        {
+            var cmd = Path.Combine(Environment.SystemDirectory, "cmd.exe");
+            var script = "ping -n 2 127.0.0.1 >nul & ping -n 600 127.0.0.1 >nul";
+            using var process = TurnProcess.Start(new TurnLaunch(cmd, ["/d", "/c", script], dir, WindowsEnv()));
+            process.Process.StandardInput.Close();
+            var own = await WaitForChildrenAsync(process.Id, "ping.exe", count: 1, () => "cmd хода не породил ping");
+
+            process.KillTree();
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            await WaitAsync(() => own.All(pid => !WindowsIsAlive(pid)));
+
+            own.Should().OnlyContain(pid => !WindowsIsAlive(pid), "процесс хода в Job хода");
+            WindowsIsAlive(foreign.Id).Should().BeTrue("чужой процесс вне Job хода");
+        }
+        finally
+        {
+            try { foreign.Kill(); } catch (InvalidOperationException) { }
+            try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+        }
+    }
+
     [SkippableFact]
     [SupportedOSPlatform("windows")]
     public async Task Windows_Job_Object_убивает_CLI_и_внука()

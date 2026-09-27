@@ -8,7 +8,7 @@ namespace ClaudeHomeServer.HandsBridge;
 
 /// <summary>
 /// Точка входа инструментов в гейт <see cref="HandsPolicy"/>. Пока <see cref="Configure"/> не
-/// вызван, своих окон нет и запускать некуда — закрыто по умолчанию.
+/// вызван, запускать некуда и вводить некуда — закрыто по умолчанию.
 /// </summary>
 [SupportedOSPlatform("windows")]
 internal static class HandsGate
@@ -21,10 +21,9 @@ internal static class HandsGate
     /// <summary>Job программ рук; до <see cref="Configure"/> запуск невозможен.</summary>
     public static WindowsHandsSystem? System => s_system;
 
-    /// <param name="turnJob">Имя Job хода — его передаёт агент при подключении моста к ходу.</param>
-    public static void Configure(string? turnJob)
+    public static void Configure()
     {
-        s_system = new WindowsHandsSystem(turnJob);
+        s_system = new WindowsHandsSystem();
         s_policy = new HandsPolicy(s_system);
     }
 
@@ -52,7 +51,6 @@ internal static class HandsGate
     private sealed class NoWindows : IHandsWindowSystem
     {
         public int? GetWindowProcessId(long hwnd) => null;
-        public bool IsProcessInTurnJob(int processId) => false;
         public string? GetProcessImagePath(int processId) => null;
     }
 }

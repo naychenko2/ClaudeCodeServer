@@ -7,10 +7,11 @@
 Назначение — руки локального проекта (ADR-016, раздел «Руки»; план
 `docs/research/hands-plan-2026-09.md`, Ш2). Каждый инструмент до любого действия зовёт гейт
 `HandsPolicy` из проекта `HandsBridge.Policy` (чистый `net10.0`, тесты — `HandsBridge.Policy.Tests`
-на Linux). Запуск моста: `HandsBridge.exe --turn-job Local\AiHome.Turn.<…> [--exclude-tools screenshot_control]`
-— узел подставляет агент (Ш3); без `--turn-job` своих окон нет и гейт закрыт. Белого списка
-программ нет (решение владельца 2б, 2026-09-27): запрещены только интерпретаторы и терминалы
-`HandsForbiddenApps`, своё окно — окно процесса из Job хода.
+на Linux). Запуск моста: `HandsBridge.exe [--exclude-tools screenshot_control]` — узел подставляет
+агент (Ш3). Белого списка программ нет (решение владельца 2б, 2026-09-27): запрещены только
+интерпретаторы и терминалы `HandsForbiddenApps`. Границы «только свои окна» нет (вторая волна
+решений владельца 2026-09-27, ADR-016 §7): любое окно и снимок экрана разрешены, `--turn-job`
+снят; в окна `HandsForbiddenApps` руки не вводят.
 
 ## Что удалено из upstream
 
@@ -32,13 +33,13 @@
 
 | Файл | Правка |
 |---|---|
-| `Tools/AppTool.cs` | гейт `CheckLaunch`; запуск нормализованного полного пути (кроме `HandsForbiddenApps`), `UseShellExecute=false`, процесс — во вложенный Job (не вышло — гасим); удалены поиск окна по заголовку для «заглушек» и «любое окно процесса с тем же именем»; окно ищется только среди своих; описание для модели |
-| `Automation/Tools/UIClickTool.cs`, `UITypeTool.cs`, `UIFindTool.cs`, `UISnapshotTool.cs`, `UIReadTool.cs` | гейт `CheckUi` (своё окно + своё окно у каждого `elementId`/`parentElementId`/`nearElement`); у `ui_snapshot` убран фолбэк на окно переднего плана; у `ui_read` удалён OCR-фолбэк, копировавший прямоугольник окна с экрана |
-| `Tools/WindowManagementTool.cs` | гейт `CheckWindowAction`; `list`/`find` — только свои окна; `get_foreground` — только если своё; `wait_for` (поиск по заголовку по всему столу) — отказ |
-| `Tools/ScreenshotControlTool.cs` | гейт `CheckScreenshot`: только `target='window'` своего окна, только `inline` |
+| `Tools/AppTool.cs` | гейт `CheckLaunch`; запуск нормализованного полного пути (кроме `HandsForbiddenApps`), `UseShellExecute=false`, процесс — во вложенный Job (не вышло — гасим); удалены поиск окна по заголовку для «заглушек» и «любое окно процесса с тем же именем» — окно ищется среди окон запущенного PID; описание для модели |
+| `Automation/Tools/UIClickTool.cs`, `UITypeTool.cs`, `UIFindTool.cs`, `UISnapshotTool.cs`, `UIReadTool.cs` | гейт `CheckUi`: hwnd обязателен; у `ui_click`/`ui_type` — ни окно, ни окно любого `elementId`/`parentElementId` не из `HandsForbiddenApps`; у `ui_snapshot` убран фолбэк на окно переднего плана; у `ui_read` удалён OCR-фолбэк, копировавший прямоугольник окна с экрана |
+| `Tools/WindowManagementTool.cs` | гейт `CheckWindowAction` (только действия из схемы); `list`/`find`/`get_foreground`/`wait_for` — без фильтра |
+| `Tools/ScreenshotControlTool.cs` | гейт `CheckScreenshot`: любая цель, только `inline`, без `outputPath` |
 | `Capture/ScreenshotService.cs` | удалён фолбэк снимка окна через копию области экрана (снимал и чужие окна поверх своего) |
 | `Input/KeyboardInputService.cs` | `CheckKeys`/`CheckKeyDown` по виртуальному коду: Win, Alt+Tab, Alt+Esc, Ctrl+Esc, Ctrl+Shift+Esc, Ctrl+Alt+… не уходят никогда |
-| `Program.cs` | аргумент `--turn-job`, `HandsGate.Configure` до старта хоста |
+| `Program.cs` | `HandsGate.Configure` до старта хоста |
 | `GlobalUsings.cs` | пространства имён гейта |
 | `HandsBridge.csproj` | ссылка на `HandsBridge.Policy`, комментарий |
 

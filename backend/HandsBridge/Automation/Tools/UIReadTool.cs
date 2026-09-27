@@ -133,7 +133,7 @@ public static partial class UIReadTool
             }
 
             // Руки: OCR-фолбэк upstream копировал прямоугольник окна С ЭКРАНА — вместе
-            // с чужими окнами, перекрывшими своё. Ветка удалена, снимок своего окна — screenshot_control.
+            // с чужими окнами, перекрывшими своё. Ветка удалена, снимок окна — screenshot_control.
 
             return WindowsToolsBase.ToCallToolResult(result, includeDiagnostics);
         }

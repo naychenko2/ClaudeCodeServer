@@ -58,7 +58,7 @@ public static partial class UISnapshotTool
     {
         const string actionName = "snapshot";
 
-        // Без hwnd upstream берёт окно переднего плана — у рук такого фолбэка нет: гейт требует своё окно
+        // Без hwnd upstream берёт окно переднего плана — у рук такого фолбэка нет: гейт требует hwnd
         var gate = HandsGate.Policy.CheckUi(HandsTools.UiSnapshot, windowHandle, HandsGate.ElementWindow, parentElementId);
         if (!gate.Allowed)
         {

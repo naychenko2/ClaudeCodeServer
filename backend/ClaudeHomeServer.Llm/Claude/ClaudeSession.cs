@@ -775,10 +775,9 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly Func<ExternalMcpContext?>? _externalMcpProvider;
     // Браузер (плагин playwright) в этой сессии: false — гасим плагин на запуске CLI
     private readonly bool _browserEnabled;
-    // Руки локального проекта (LlmSessionContext.HandsEnabled/HandsProviders): решение на ход —
+    // Руки локального проекта (LlmSessionContext.HandsEnabled): решение на ход —
     // HandsActiveNow, от него одного зависят маркер рук и режим прав
     private readonly bool _handsEnabled;
-    private readonly IReadOnlyList<string>? _handsProviders;
     // Руки у последнего собранного хода — живая смена режима прав (TrySetPermissionModeLive)
     // обязана понизить bypass так же, как запуск
     private volatile bool _lastHandsActive;
@@ -879,7 +878,6 @@ public class ClaudeSession : ILlmSessionAdapter
         _externalMcpProvider = context.ExternalMcpProvider;
         _browserEnabled = context.BrowserEnabled;
         _handsEnabled = context.HandsEnabled;
-        _handsProviders = context.HandsProviders;
         _launcher = context.Launcher ?? Execution.LocalProcessRunner.Instance;
         _localEngineBusy = context.LocalEngineBusy ?? LocalEngineBusyTracker.Instance;
         // Запреты конфига + ограничения возможностей персоны (ExtraDisallowedTools)
@@ -2520,13 +2518,10 @@ public class ClaudeSession : ILlmSessionAdapter
         WriteLineToStdin(msg, target);
     }
 
-    // Руки в этом ходе: признак чата и провайдер текущей пары среди доверенных владельцем. Оба —
-    // свойства сессии (EffectiveModel от хода не зависит), поэтому сигнатура запуска между
-    // ходами не мерцает. Фолбэк уводит ход только к доверенным провайдерам (TrimChainForHands),
-    // так что внутри хода решение не меняется.
-    private bool HandsActiveNow() =>
-        _handsEnabled && HandsProviders.Allowed(_handsProviders,
-            _providers?.ProviderKey(EffectiveModel) ?? HandsProviders.Claude);
+    // Руки в этом ходе: признак чата, провайдер хода роли не играет (решение владельца
+    // 2026-09-27). Признак — свойство сессии, поэтому сигнатура запуска между ходами не мерцает;
+    // что провайдер видит (снимки или только текст окон), решает его зрение в BuildTurnMcpConfig.
+    private bool HandsActiveNow() => _handsEnabled;
 
     // Режим прав хода с руками: bypassPermissions не бывает никогда, понижается до acceptEdits
     internal static ClaudeMode HandsPermissionMode(ClaudeMode mode) =>
@@ -2786,9 +2781,6 @@ public class ClaudeSession : ILlmSessionAdapter
         var handsActive = HandsActiveNow();
         _lastHandsActive = handsActive;
         var disallowed = _disallowedTools;
-        // Руки у чата есть, но провайдеру хода не доверены — ход идёт без рук, бейдж говорит почему
-        if (_handsEnabled && !handsActive)
-            await _onMessage(new HandsStatusMessage(HandsChatStates.ProviderNotAllowed));
 
         // Режим прав у claude CLI задаётся флагом --permission-mode (значения: default,
         // acceptEdits, plan, auto, dontAsk, bypassPermissions), а НЕ --mode (такого флага нет).

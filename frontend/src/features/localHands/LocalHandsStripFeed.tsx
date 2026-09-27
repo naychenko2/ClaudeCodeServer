@@ -4,8 +4,8 @@ import { isFeatureAvailable } from '../../lib/projectCapabilities';
 import { api } from '../../lib/api';
 import { ProjectFeature, type Project, type Session } from '../../types';
 import {
-  applyHandsFocus, getHandsProviders, handsStatusFailed, handsStatusLoaded, handsStripOnMessage, resetHandsSession,
-  setHandsProject, setHandsProviders, setHandsSessionProvider,
+  applyHandsFocus, handsStatusFailed, handsStatusLoaded, handsStripOnMessage, resetHandsSession,
+  setHandsProject, setHandsSessionProvider,
 } from './handsStrip';
 import { watchHandsAvailability } from './handsStripManifest';
 
@@ -34,9 +34,6 @@ export function LocalHandsStripFeed({ session, project }: { session: Session; pr
     api.sessions.handsStatus(session.id)
       .then(view => { if (alive) handsStatusLoaded(session.id, view); })
       .catch(() => { if (alive) handsStatusFailed(session.id); });
-    if (getHandsProviders() === null) {
-      api.meHandsProviders.get().then(v => setHandsProviders(v.available)).catch(() => { /* без пометки провайдера */ });
-    }
     return () => { alive = false; off(); };
   }, [available, session.id]);
 

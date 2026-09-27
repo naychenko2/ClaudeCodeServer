@@ -180,19 +180,6 @@ export interface Project {
   folderNotice?: string | null;
 }
 
-// Провайдер, которому владелец может доверить руки (GET /api/me/hands-providers).
-// supportsImages=false — провайдер без зрения: снимков окон не получает, только текст
-export interface HandsProviderOption {
-  key: string;
-  displayName: string;
-  supportsImages: boolean;
-}
-
-export interface HandsProvidersView {
-  providers: string[];
-  available: HandsProviderOption[];
-}
-
 // Иконка проекта (ADR-009): initials — две буквы на цветной плитке; glyph — значок из
 // белого списка lucide (только name). Проверка показа значка — СТРОГО положительная
 // (`kind === 'glyph'`, не `kind !== 'initials'`): старая запись с числовым Kind = 1

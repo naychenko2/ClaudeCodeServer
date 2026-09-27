@@ -13,7 +13,8 @@ import { showToast } from '../../lib/toast';
 import { Button, Dot } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import type { ComposerStripCtx } from '../../lib/subsystems/registryCore';
-import { getHandsProject, getHandsProviders, getHandsSession, useHandsStripVersion } from './handsStrip';
+import { useProviders } from '../../lib/models';
+import { getHandsProject, getHandsSession, useHandsStripVersion } from './handsStrip';
 
 const TONE_DOT: Record<HandsBadgeTone, string> = {
   success: C.success,
@@ -33,6 +34,8 @@ export function handsStripStatus({ projectId, sessionId }: { projectId: string; 
 export function HandsStrip({ ctx }: { ctx: ComposerStripCtx }) {
   const { projectId, sessionId, isMobile, collapsed, switcher } = ctx;
   useHandsStripVersion();
+  // Зрение провайдера — из каталога /api/models; хук перерисует полосу, когда каталог догрузится
+  const providers = useProviders();
   const [busy, setBusy] = useState(false);
   if (!sessionId) return null;
 
@@ -40,7 +43,7 @@ export function HandsStrip({ ctx }: { ctx: ComposerStripCtx }) {
   const project = getHandsProject(projectId);
   const view = handsStripView(handsBadgeStatus(session.state), project?.deviceName ?? null);
   const device = project?.deviceName ?? null;
-  const provider = handsProviderLabel(session.provider, getHandsProviders());
+  const provider = handsProviderLabel(session.provider, providers);
   const detail = [view.detail?.replace(/\.$/, ''), device, provider].filter(Boolean).join(' · ');
 
   const stop = async () => {

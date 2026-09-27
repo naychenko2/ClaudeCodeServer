@@ -404,12 +404,9 @@ public sealed record LlmSessionContext(
     bool TranscriptOnServer = true,
     // Руки локального проекта (ADR-016 §7) — свойство ЧАТА, а не хода: матрица
     // ProjectCapabilities.HandsRefusal пропускает (локальный проект, устройство
-    // с hands, тумблер проекта) и владелец доверил руки хоть одному провайдеру. Ход с руками —
-    // только на провайдере из HandsProviders: ClaudeSession ставит маркер рук
-    // и режим прав без bypassPermissions в одном месте и по одному условию, фолбэк режет цепочку
-    // до этих провайдеров.
+    // с hands, тумблер проекта). Провайдер хода роли не играет (решение владельца 2026-09-27):
+    // ClaudeSession ставит маркер рук и режим прав без bypassPermissions в одном месте и по
+    // одному условию, а снимки окон отдаёт только провайдеру со зрением (vision=false — мост
+    // без screenshot_control).
     // Смена признака у начатого чата — осознанный перезапуск CLI, как смена провайдера.
-    bool HandsEnabled = false,
-    // Провайдеры, которым владелец доверил руки (User.HandsProviders): ключи реестра, родной
-    // Claude — "claude". null/пусто — никому.
-    IReadOnlyList<string>? HandsProviders = null);
+    bool HandsEnabled = false);

@@ -190,8 +190,21 @@ public static class AgentProgram
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; stop.Cancel(); };
 
         var autostart = Autostarts.ForCurrentOs(layout);
-        var supervisor = new AgentSupervisor(layout, new ProcessChildLauncher(agentLog.Append), autostart.Repoint, log);
-        return await supervisor.RunAsync(stop.Token);
+        var launcher = new ProcessChildLauncher(agentLog.Append);
+        var supervisor = new AgentSupervisor(layout, launcher, autostart.Repoint, log);
+
+        // Трей (Ш7) — только на Windows: там руки. «Выйти из агента» в трее гасит и супервизор
+        var tray = OperatingSystem.IsWindows()
+            ? Task.Run(async () =>
+            {
+                if (await new TraySupervisor(layout, launcher, log).RunAsync(stop.Token)) await stop.CancelAsync();
+            })
+            : Task.CompletedTask;
+
+        var code = await supervisor.RunAsync(stop.Token);
+        await stop.CancelAsync();
+        await tray;
+        return code;
     }
 
     // Корни, под которыми агент открывает файлы проектов: правит только человек на машине
@@ -297,7 +310,8 @@ public static class AgentProgram
             : null;
 
         // Одна политика корней на исполнение ходов и на файлы проектов (ADR-016 §5)
-        var policy = new AgentPathPolicy(new AgentRootsStore(paths.RootsFile));
+        var roots = new AgentRootsStore(paths.RootsFile);
+        var policy = new AgentPathPolicy(roots);
         var executor = new TurnExecutor(
             new ExecOptions
             {
@@ -309,8 +323,10 @@ public static class AgentProgram
 
         // Pipe для трея: статус рук и «Стоп», без сервера и без localhost-API
         await using var trayPipe = hands is null ? null
-            : new HandsTrayPipe(HandsTrayPipe.NameForCurrentUser(), hands.Registry, () => hands.Component.IsReady,
-                () => control.IsConnected, loggers.CreateLogger<HandsTrayPipe>());
+            : new HandsTrayPipe(HandsPipe.NameForCurrentUser(), hands.Registry, () => hands.Component.IsReady,
+                () => control.IsConnected, loggers.CreateLogger<HandsTrayPipe>(),
+                () => new HandsTrayDevice(registration.ServerUrl, registration.DeviceName, Version, roots.Roots,
+                    AgentLayout.OwnVersion() is null ? null : AgentLayout.Resolve(paths).LogDirectory));
         try { trayPipe?.Start(); }
         catch (IOException e)
         {

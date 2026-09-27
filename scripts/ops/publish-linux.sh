@@ -126,8 +126,9 @@ publish_one_agent() {
       [[ -f "$out_dir/ai-home-agent.exe" ]] || return 1
       # Без моста ConPTY терминал агента молча уходит в упрощённый фолбэк (без цветов и
       # Clear-Host) у всех клиентов — такой выпуск не выпускаем
+      # Без трея (Ш7) у рук нет значка, плашки и локального «Стоп» — такой выпуск тоже не выпускаем
       local f
-      for f in ConPtyBridge.exe ConPtyBridge.dll; do
+      for f in ConPtyBridge.exe ConPtyBridge.dll ai-home-agent-tray.exe ai-home-agent-tray.dll ai-home-agent-tray.runtimeconfig.json; do
         [[ -f "$out_dir/$f" ]] || { log "нет $f в publish агента win-x64" >&2; return 1; }
       done
       ;;

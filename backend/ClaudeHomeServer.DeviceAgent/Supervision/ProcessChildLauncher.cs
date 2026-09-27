@@ -14,9 +14,19 @@ namespace ClaudeHomeServer.DeviceAgent.Supervision;
 ///   Процессы порождаются с одного вечного потока: для ядра «родитель» — поток fork.
 /// Вывод дочернего построчно уходит в <paramref name="output"/> (журнал агента).
 /// </summary>
-internal sealed class ProcessChildLauncher(Action<string> output) : IChildLauncher
+internal sealed class ProcessChildLauncher(Action<string> output) : IChildLauncher, ITrayLauncher
 {
     private static readonly Lazy<Spawner> SpawnThread = new(() => new Spawner());
+
+    /// <summary>Трей — без аргументов и без контракта healthy, но в своём Job: смерть супервизора гасит и его.</summary>
+    ISupervisedChild ITrayLauncher.Start(string executable, string workingDirectory) =>
+        Launch(new ProcessStartInfo(executable)
+        {
+            WorkingDirectory = workingDirectory,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        });
 
     public ISupervisedChild Start(string executable, string workingDirectory, string healthyFile)
     {
@@ -31,7 +41,11 @@ internal sealed class ProcessChildLauncher(Action<string> output) : IChildLaunch
         psi.ArgumentList.Add(SupervisorContract.ChildCommand);
         psi.Environment[SupervisorContract.HealthyFileEnv] = healthyFile;
         psi.Environment[SupervisorContract.SupervisorPidEnv] = Environment.ProcessId.ToString();
+        return Launch(psi);
+    }
 
+    private Child Launch(ProcessStartInfo psi)
+    {
         var process = SpawnThread.Value.Start(psi);
         JobHandle? job = null;
         try

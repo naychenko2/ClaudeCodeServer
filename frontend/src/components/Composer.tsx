@@ -1688,7 +1688,12 @@ export function Composer({
     // (подсказка видна только при пустом поле, совмещать с текстом юзера не нужно)
     <div style={{ position: 'relative', flex: 1, minWidth: 0, width: isMobile ? '100%' : undefined, display: 'flex', alignItems: 'center' }}>
       {slotModes.length > 0 && (
-        // Переключатель режимов — в одну строку с полем: композер не становится выше
+        // Сегмент «Чат | …» слева поля. По макету (.mswitch) это радио-группа из
+        // двух кнопок — она появляется только при выбранной картинке, иначе первая
+        // кнопка «Чат» рисуется одна. Здесь slotModes.length > 0 уже отфильтровано
+        // isAvailable, поэтому «Картинка» в списке означает картинка выбрана — рисуем
+        // полный сегмент, иначе (например, другие подсистемы заведут свои режимы) —
+        // оставляем только кнопку «Чат», чтобы высота композера не менялась
         <div data-composer-modes="" style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0, marginRight: SP.xs }}>
           <IconButton size="sm" active={!activeMode} title={`Чат — сообщение ${asstName}`} ariaLabel="Режим «Чат»"
             onClick={() => setModeId(null)}>
@@ -1721,6 +1726,7 @@ export function Composer({
         style={{
           flex: 1,
           width: '100%',
+          minWidth: 0, // иначе flex-item не сжимается меньше content и наезжает на send-кнопку при длинном submitLabel
           border: 'none',
           outline: 'none',
           resize: 'none',
@@ -1739,9 +1745,15 @@ export function Composer({
       {suggestionVisible && promptSuggestion && (
         // Ghost text как в Claude Code Desktop: серый текст подсказки в самом поле
         // + бейдж-клавиша ⇥ (тап — принять; на десктопе также → / Tab).
-        // pointerEvents:none у слоя — тап по полю ставит фокус как обычно
+        // pointerEvents:none у слоя — тап по полю ставит фокус как обычно.
+        // ВАЖНО: позиционируется ТОЛЬКО над textarea (left/right через те же отступы
+        // что у textarea), а не inset:0 — иначе ghost закрывал send-кнопку и переключатель
+        // режима, при длинном submitLabel «✦ Изменить · ≈ $0.15» и длинном имени модели
+        // они визуально наезжали на подсказку
         <div style={{
-          position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', gap: 8,
+          position: 'absolute', top: 0, bottom: 0,
+          left: 0, right: 0,
+          display: 'flex', alignItems: 'center', gap: 8,
           padding: isMobile ? '0 8px' : '0 4px', pointerEvents: 'none', boxSizing: 'border-box',
           fontSize: isMobile ? 16 : 15, lineHeight: '1.5', color: C.textMuted, minWidth: 0,
         }}>

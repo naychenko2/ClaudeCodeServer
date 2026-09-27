@@ -2879,10 +2879,10 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
               builtins={[{
                 name: 'git', order: 0,
                 render: ({ switcher }) => (
-                  <>
-                    {switcher && <div style={{ display: 'flex', marginTop: SP.xs }}>{switcher}</div>}
-                    <ProjectGitBar project={project} session={session} turnTree={turnTree} turnTreeLive={isWaiting} onCommitOwn={handleCommitOwn} onCommitAll={handleCommitAll} />
-                  </>
+                  // Заголовок-селектор полосы теперь живёт внутри самой полосы (ProjectGitBar),
+                  // а не отдельной плашкой над ней — одна плашка с веткой и «Опубликовать»
+                  <ProjectGitBar project={project} session={session} turnTree={turnTree} turnTreeLive={isWaiting}
+                    onCommitOwn={handleCommitOwn} onCommitAll={handleCommitAll} switcher={switcher} />
                 ),
                 action: {
                   title: 'Git',

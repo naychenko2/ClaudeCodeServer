@@ -7,7 +7,7 @@
 // показываем ВСЕГДА, даже с пустым диффом — иначе после переключения в свежее дерево
 // узнать «где мы работаем» было бы неоткуда (композер значение дерева не показывает,
 // там только кнопка-тумблер).
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { GitBranch, FolderGit2, Check, CloudUpload, ChevronDown, ChevronUp, MessageSquare, Sparkles } from 'lucide-react';
 import type { Project, Session } from '../types';
 import { C, FONT, R, SP } from '../lib/design';
@@ -26,7 +26,7 @@ import { ICON_STROKE } from './ui/icons';
 // и возможного будущего расширения (например, «закрепить» slim-вариант на десктопе).
 const COLLAPSED_KEY = 'cc-gitbar-collapsed';
 
-export function ProjectGitBar({ project, session, turnTree = null, turnTreeLive = false, onCommitOwn, onCommitAll }: {
+export function ProjectGitBar({ project, session, turnTree = null, turnTreeLive = false, onCommitOwn, onCommitAll, switcher }: {
   project: Project;
   session?: Session;
   // Дерево ХОДА: агент внутри хода ушёл в свой git worktree (EnterWorktree), минуя
@@ -37,6 +37,10 @@ export function ProjectGitBar({ project, session, turnTree = null, turnTreeLive 
   // Коммит только файлов этого диалога / всех изменений рабочего дерева
   onCommitOwn: () => void;
   onCommitAll: () => void;
+  // Заголовок-селектор от хоста: когда в реестре composer-strip несколько полос,
+  // хост рисует кнопку «Git ▾» и просит полосу поставить её на место своего заголовка.
+  // Полоса одна (только Git) — null и отрисовываем привычный вид без кнопки слева
+  switcher?: ReactNode;
 }) {
   const st = useGitState(project.id);
   const status = st.status;
@@ -400,6 +404,9 @@ export function ProjectGitBar({ project, session, turnTree = null, turnTreeLive 
     <>
     {showMicro ? microRow : (
     <div style={shellStyle}>
+      {/* Заголовок-селектор полос (composer-strip). Когда переключатель есть, он заменяет
+          отдельную плашку «Git ▾» сверху — единая плашка с веткой и действиями */}
+      {switcher}
       {/* Ветка / имя worktree; папка-иконка — чат в отдельном дереве */}
       {branchLabel}
 

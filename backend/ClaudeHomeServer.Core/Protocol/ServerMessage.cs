@@ -317,6 +317,12 @@ public record ImageLaunchMessage(string By, string Prompt, string Provider, stri
     StoredImageLaunchEstimate? Estimate, string JobId, long? Timestamp = null)
     : ServerMessage("image_launch");
 
+// Живая копия StoredModuleRecord (ADR-019 §2): запись модуля в ленте чата. Поля те же, что у
+// записи истории; SessionId — в базовом поле.
+public record ModuleRecordMessage(string Module, string RecordType, System.Text.Json.JsonElement? Data,
+    string Fallback, long? Timestamp = null)
+    : ServerMessage("module_record");
+
 public record ChatArchivedMessage(bool Archived)
     : ServerMessage("chat_archived");
 

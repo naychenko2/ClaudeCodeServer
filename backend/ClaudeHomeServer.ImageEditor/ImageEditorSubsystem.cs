@@ -14,8 +14,9 @@ namespace ClaudeHomeServer.Services.ImageEditor;
 //
 // Что берём из спины (всё — Core-швы): IImageRaster, IImagePlaceSettings и ILocalImageMedia от Images,
 // IHiggsfieldAccess, IProjectManager, IFeatureFlagGate, IProjectFiles, ISessionBroadcaster,
-// ISpendCollector, IImageChatSessions и ISessionDirectory от Main. Растр необязателен: без Images
-// ручки transform и jobs отвечают 503 raster_unavailable, а не 500.
+// ISpendCollector, IImageChatSessions и ISessionDirectory от Main, шина ITurnEventBus (жизненный
+// цикл чата). Растр необязателен: без Images ручки transform и jobs отвечают 503
+// raster_unavailable, а не 500.
 public sealed class ImageEditorSubsystem : IAppSubsystem
 {
     public string Key => "imageeditor";
@@ -60,6 +61,10 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
         services.AddSingleton(sp => new Chats.ImageChatStateStore(sp.GetRequiredService<ImageEditWorkspace>()));
         services.AddSingleton<ImageEditLaunchAssembler>();
         services.AddPromptSectionContributor<Chats.ImageEditorStateContributor>();
+        // Нити картинок и фокус чата (ADR-019 §1): хранилище в data/image-threads, живёт и умирает
+        // вместе с чатом по событиям шины session/deleted и session/branched
+        services.AddSingleton(sp => Threads.ImageThreadStore.FromConfig(sp.GetRequiredService<IConfiguration>()));
+        services.AddHostedService<Threads.ImageThreadLifecycle>();
         // MCP-сервер редактора для агента чата картинки (ADR-018 §10.2): маршрут общий,
         // POST /mcp/image-editor/{sessionId}, реестр Main находит тулсет среди IMcpToolset
         services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset, Mcp.ImageEditorToolset>();

@@ -1,4 +1,5 @@
-﻿using System.Text.Json.Serialization;
+﻿using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace ClaudeHomeServer.Protocol;
 
@@ -26,6 +27,7 @@ namespace ClaudeHomeServer.Protocol;
 [JsonDerivedType(typeof(StoredInterruptedMessage), "interrupted")]
 [JsonDerivedType(typeof(StoredImageLaunchMessage), "image_launch")]
 [JsonDerivedType(typeof(StoredImageFileMovedMessage), "image_file_moved")]
+[JsonDerivedType(typeof(StoredModuleRecord), "module_record")]
 public abstract class StoredMessage { }
 
 public class StoredUserMessage(string text, string[]? attachedPaths = null, bool? viaAgent = null,
@@ -387,5 +389,21 @@ public class StoredImageFileMovedMessage : StoredMessage
 {
     public string From { get; init; } = "";
     public string To { get; init; } = "";
+    public long? Timestamp { get; init; }
+}
+
+// Запись модуля в ленте чата (ADR-019 §2): одна общая запись истории на все модули, чтобы
+// каждый новый вид строки не был правкой полиморфизма ядра. Ядро Data не разбирает — это JSON
+// модуля. Fallback — готовый текст строки на случай, когда модуль выключен или не знает
+// RecordType: лента рисует его вместо карточки. RecordType, а не Type: у живой пары
+// (ModuleRecordMessage) поле type занято типом события протокола, а формы обязаны совпадать.
+// Пишется в history.json через IChatFeed, а не в транскрипт CLI: модель такую запись не видит.
+public class StoredModuleRecord : StoredMessage
+{
+    // Ключ подсистемы-автора (IAppSubsystem.Key), например "imageeditor"
+    public string Module { get; init; } = "";
+    public string RecordType { get; init; } = "";
+    public JsonElement? Data { get; init; }
+    public string Fallback { get; init; } = "";
     public long? Timestamp { get; init; }
 }

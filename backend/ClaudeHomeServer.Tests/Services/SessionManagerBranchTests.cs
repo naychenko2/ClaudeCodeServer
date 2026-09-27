@@ -8,6 +8,7 @@ using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Skills;
+using ClaudeHomeServer.Services.Turn;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -29,6 +30,8 @@ public class SessionManagerBranchTests : IDisposable
     private readonly ChatHistoryService _historyService;
     private readonly LlmProviderRegistry _llmProviders;
     private readonly SessionManager _sut;
+    // Шина событий хода: по ней подсистемы узнают о ветвлении и удалении чата (ADR-019 §2)
+    private readonly TurnEventBus _bus = new();
 
     public SessionManagerBranchTests()
     {
@@ -79,7 +82,7 @@ public class SessionManagerBranchTests : IDisposable
         _sut = new SessionManager(_projectManager, _historyService, config, adapters, falCost, usage,
             appSettings, userStore, jwt, server.Object, _llmProviders, flags, personas, bindings, subPool,
             NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox,
-            broadcaster: broadcaster);
+            broadcaster: broadcaster, turnEvents: _bus);
     }
 
     public void Dispose()
@@ -788,5 +791,39 @@ public class SessionManagerBranchTests : IDisposable
         var branchHistory = await _historyService.LoadAsync(result.Session.ClaudeSessionId!);
         branchHistory.OfType<StoredUserMessage>().Should().ContainSingle()
             .Which.Text.Should().Be(text1);
+    }
+
+    // --- ADR-019 §2 — жизненный цикл чата на шине для подсистем ---
+
+    [Fact]
+    public async Task Ветвление_публикует_session_branched_с_источником_и_владельцем()
+    {
+        var (session, project, _, text1, _) = await SeedBranchableChatAsync("bus-branch");
+        var published = new List<SessionBranched>();
+        _bus.OnNotification<SessionBranched>(e => { published.Add(e); return Task.CompletedTask; });
+
+        var result = await _sut.BranchAsync(session.Id, TestUserId, 0, text1, SessionManager.ChatBranchInclude.Turn);
+
+        var e = published.Should().ContainSingle().Subject;
+        e.SourceSessionId.Should().Be(session.Id);
+        e.Turn.SessionId.Should().Be(result.Session.Id);
+        e.Turn.OwnerId.Should().Be(TestUserId);
+        e.Turn.ProjectId.Should().Be(project.Id);
+    }
+
+    [Fact]
+    public async Task Удаление_публикует_session_deleted_с_владельцем_чата()
+    {
+        var (session, project, _, _, _) = await SeedBranchableChatAsync("bus-delete");
+        var published = new List<SessionDeleted>();
+        _bus.OnNotification<SessionDeleted>(e => { published.Add(e); return Task.CompletedTask; });
+
+        await _sut.DeleteAsync(session.Id);
+
+        var e = published.Should().ContainSingle().Subject;
+        e.Turn.SessionId.Should().Be(session.Id);
+        e.Turn.OwnerId.Should().Be(TestUserId, "у проектного чата владелец берётся у проекта");
+        e.Turn.ProjectId.Should().Be(project.Id);
+        e.Turn.TurnSeq.Should().Be(0, "хода нет");
     }
 }

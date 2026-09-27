@@ -48,4 +48,22 @@ public class ModuleEventSerializationTests : IDisposable
         json.GetProperty("chatSessionId").GetString().Should().Be("chat-1");
         json.GetProperty("initiator").GetString().Should().Be("agent", "enum уходит строкой, как у остальных событий");
     }
+
+    // Живая пара записи модуля (ADR-019 §2): data модуля уходит как есть, а не строкой JSON,
+    // поле recordType не путается с type события протокола
+    [Fact]
+    public void Запись_модуля_уходит_с_data_как_объектом()
+    {
+        var data = JsonSerializer.SerializeToElement(new { threadId = "t1", stackId = "s1" });
+
+        var json = Wire(new ModuleRecordMessage("imageeditor", "image_thread", data, "Картинка: hero.png", 5)
+            { SessionId = "chat-1" });
+
+        json.GetProperty("type").GetString().Should().Be("module_record");
+        json.GetProperty("sessionId").GetString().Should().Be("chat-1");
+        json.GetProperty("module").GetString().Should().Be("imageeditor");
+        json.GetProperty("recordType").GetString().Should().Be("image_thread");
+        json.GetProperty("data").GetProperty("stackId").GetString().Should().Be("s1");
+        json.GetProperty("fallback").GetString().Should().Be("Картинка: hero.png");
+    }
 }

@@ -579,6 +579,8 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.ImageEditor.IHiggsfieldA
 // Чат картинки для модуля редактора (ADR-018 §1, §10.1): ручки в модуле, сессии создаёт и
 // правит ядро — адаптер над SessionManager
 builder.Services.AddSingleton<ClaudeHomeServer.Services.ImageEditor.IImageChatSessions, ImageChatSessions>();
+// Запись модулей в ленту чата (ADR-019 §2): общий шов для подсистем, адаптер над SessionManager
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.IChatFeed, ChatFeed>();
 builder.Services.AddQuietHttpClient(
     ClaudeHomeServer.Services.Mcp.HiggsfieldOAuthService.HttpClientName,
     new QuietHttpClientProfile(

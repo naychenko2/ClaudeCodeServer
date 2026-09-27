@@ -82,9 +82,10 @@ public sealed class TurnEventsMapContractTests
 
         var adrText = File.ReadAllText(adrPath);
         // Ищем идентификаторы событий в backticks: `prompt/assembling`,
-        // `subagent/completed` и т.п. Префикс из четырёх имён — канонические пространства
-        // имён шины; в коде других префиксов быть не должно, и ADR их не упоминает.
-        var adrEvents = Regex.Matches(adrText, @"`(turn|prompt|tool|subagent)/[a-z0-9\-]+`")
+        // `subagent/completed` и т.п. Префиксы — канонические пространства имён шины
+        // (`session/*` — жизненный цикл чата, ADR-019); в коде других префиксов быть не
+        // должно, и ADR их не упоминает.
+        var adrEvents = Regex.Matches(adrText, @"`(turn|prompt|tool|subagent|session)/[a-z0-9\-]+`")
             .Select(m => m.Value.Trim('`'))
             .ToHashSet(StringComparer.Ordinal);
 

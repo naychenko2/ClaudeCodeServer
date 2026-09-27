@@ -1913,6 +1913,25 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         return entry.Info;
     }
 
+    // Запись модуля в ленту вне хода (ADR-019 §2, шов IChatFeed): история + живая пара
+    // module_record. Активность, как тихие строки v2: UpdatedAt двигается, чат выходит из
+    // архива. Timestamp ставит сервер, если модуль его не задал. false — чата нет.
+    public async Task<bool> AppendModuleRecordAsync(string sessionId, StoredModuleRecord record)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return false;
+        var ts = record.Timestamp ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var stored = new StoredModuleRecord
+        {
+            Module = record.Module, RecordType = record.RecordType, Data = record.Data,
+            Fallback = record.Fallback, Timestamp = ts,
+        };
+        await AppendStoredAsync(sessionId, stored,
+            new ModuleRecordMessage(stored.Module, stored.RecordType, stored.Data, stored.Fallback, ts));
+        entry.Info.UpdatedAt = DateTime.UtcNow;
+        SaveSessions();
+        return true;
+    }
+
     // Файл чата картинки переименовали или перенесли мимо редактора (ADR-018 §1): пути
     // переписываются целиком, в Lineage ничего не добавляется — это тот же файл, а не новая
     // версия. UpdatedAt не трогаем и в ленту не пишем: чат не поднимается и не выходит из архива.
@@ -2898,6 +2917,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             SaveSessions();
             branchSession = b;
         }
+
+        // Подсистемы со своим состоянием по sessionId (нити редактора картинок) копируют его под
+        // ветку (ADR-019 §2). Notification: сбой подписчика ветвление не роняет
+        await TurnEvents.PublishAsync(new SessionBranched(
+            new TurnContext(branchSession.Id, ownerId, 0, 0, branchSession.ProjectId), sessionId));
 
         return new ChatBranchResult(branchSession, draft);
     }
@@ -8601,6 +8625,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         }
         SaveSessions();
         try { OnSessionDeleted?.Invoke(entry.Info); } catch { /* наблюдатель не должен ронять удаление */ }
+        // Подсистемы сносят своё состояние чата (ADR-019 §2); сбой подписчика шина гасит сама
+        await TurnEvents.PublishAsync(new SessionDeleted(
+            new TurnContext(sessionId, ResolveOwnerId(entry.Info), 0, 0, entry.Info.ProjectId)));
         await BroadcastChatDeletedAsync(sessionId, entry.Info);
     }
 

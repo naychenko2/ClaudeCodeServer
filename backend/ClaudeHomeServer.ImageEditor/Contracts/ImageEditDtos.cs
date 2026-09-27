@@ -267,6 +267,8 @@ public static class ImageEditErrorCodes
     public const string CharacterNotFound = "character_not_found";
     // 404: чата картинки нет, он чужой, из другого проекта или обычный чат — неотличимо
     public const string ChatNotFound = "chat_not_found";
+    // 404: нити картинки нет в этом чате (чужая неотличима от несуществующей)
+    public const string ThreadNotFound = "thread_not_found";
     // 409: «Сохранить как…» на занятое имя; в теле ответа ещё suggestion — ближайшее свободное
     public const string NameTaken = "name_taken";
     // 409: запись состояния чата картинки со старой revision; в теле ещё state — актуальное

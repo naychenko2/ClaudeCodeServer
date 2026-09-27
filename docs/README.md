@@ -123,7 +123,10 @@
 [ADR-017](adr/ADR-017-image-editor.md) (редактор картинок в проекте: контракт правки
 `IImageEditor`, котировка вместо тихого фолбэка, сохранение новым файлом, персонажи — черновик),
 [ADR-018](adr/ADR-018-image-editor-v2.md) (редактор v2: чат картинки вместо «Обсудить», генерация
-агентом через MCP-сервер `image-editor`, «Сохранить как…», правки без ИИ на ImageSharp — черновик);
+агентом через MCP-сервер `image-editor`, «Сохранить как…», правки без ИИ на ImageSharp — черновик),
+[ADR-019](adr/ADR-019-image-editor-v3-in-chat.md) (редактор v3: работа с картинкой в основном чате
+проекта — нити и фокус в хранилище модуля, швы ядра `IChatFeed`, `module_record` и события
+жизненного цикла чата, чаты v2 уходят в архив, реестр полос над композером);
 [model-resolution-and-fallback.md](adr/model-resolution-and-fallback.md) — приложение к ADR-007
 (резолв модели и фолбэк хода по цепочке),
 [specialties-personalization-review.md](adr/specialties-personalization-review.md) — приложение

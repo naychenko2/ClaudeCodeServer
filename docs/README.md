@@ -58,7 +58,9 @@
 [video-panel.md](features/video-panel.md) (видео: эфиры телеканалов и лента
 подписок YouTube — почему СМОТРИМ, а не Rutube, и почему плеер всегда анонимен),
 [voice-barge-in.md](features/voice-barge-in.md) (перебивание голосом в разговоре:
-устройство, ограничения, критерии снятия флага).
+устройство, ограничения, критерии снятия флага),
+[architecture-section.md](features/architecture-section.md) (раздел «Архитектура»: C4-модель
+проекта файлом под git, мост с Viaduct, сборка из кода, тулсет `arch_*`, ограничения).
 
 **observability/** — [overview.md](observability/overview.md) — главный документ раздела;
 [audit.md](observability/audit.md), [dashboards.md](observability/dashboards.md),
@@ -71,7 +73,8 @@
 [llm-channel.md](modules/llm-channel.md)) ссылаются на него.
 
 **operations/** — [docker.md](operations/docker.md) (сборка и запуск в контейнере),
-[remote-access.md](operations/remote-access.md) (Tailscale + HTTPS).
+[remote-access.md](operations/remote-access.md) (Tailscale + HTTPS),
+[viaduct-module.md](operations/viaduct-module.md) (сборка, раздача и выкатка редактора Viaduct).
 
 **design/** — [guidelines.md](design/guidelines.md) (обязательна для правок UI),
 [target-devices.md](design/target-devices.md) (приоритетные устройства и их ширины
@@ -112,7 +115,9 @@
 [ADR-014](adr/ADR-014-internal-subsystems.md) (внутренние подсистемы: контракт `IAppSubsystem`,
 пилот Video, правило зависимостей между вертикалями),
 [ADR-015](adr/ADR-015-cli-profile-sync-zones.md) (зоны профилей CLI и правила синхронизации:
-кто источник истины для каждой зоны, удаление только по манифесту доставки);
+кто источник истины для каждой зоны, удаление только по манифесту доставки),
+[ADR-016](adr/ADR-016-viaduct-architecture-section.md) (раздел «Архитектура» на встроенном
+Viaduct Community без форка; лицензионные рамки BUSL-1.1 — только для своих);
 [model-resolution-and-fallback.md](adr/model-resolution-and-fallback.md) — приложение к ADR-007
 (резолв модели и фолбэк хода по цепочке),
 [specialties-personalization-review.md](adr/specialties-personalization-review.md) — приложение
@@ -143,7 +148,10 @@ CLI-провайдер: проверенная конфигурация стен
 (разведка разреза `SessionManager` и план выноса штаба вертикалью),
 [team-di-migration-2026-09.md](research/team-di-migration-2026-09.md)
 (что реально снимается при переводе штаба на DI: 17 обёрток против 10 фасадных,
-почему Team не выносится отдельным `.csproj`). Читать как «так было тогда».
+почему Team не выносится отдельным `.csproj`),
+[viaduct-embed-plan.md](research/viaduct-embed-plan.md)
+(разведка Viaduct Community и план встраивания разделом «Архитектура»: формат стора,
+вердикт по шиму localStorage в sandbox-iframe, серия задач 2–9). Читать как «так было тогда».
 
 **omo/** — [adoption.md](omo/adoption.md) (правовая рамка), `translations/` — переводы
 промптов, из которых генерируются `Services/Prompts/OmoPrompts*.cs`.

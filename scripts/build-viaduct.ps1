@@ -14,8 +14,10 @@
 
     Источник сборки (репа + коммит) выбирается так: явные -RepoUrl/-Commit → машинные
     переменные окружения VIADUCT_REPO_URL/VIADUCT_COMMIT (задаются на машине, в git не
-    живут) → публичный апстрим на закреплённом коммите. Переменные задаются парой: одна без
-    другой — ошибка. Доступ к закрытой репе — через Git Credential Manager машины, токены
+    живут) → публичный апстрим на закреплённом коммите. Переменные читаются из окружения
+    процесса, затем (только Windows) пользователя и машины; пара берётся целиком из первой
+    области, где задана хоть одна из них, половинка — ошибка. Откуда взят источник, пишется
+    в лог, уход на апстрим — с предупреждением. Доступ к закрытой репе — через Git Credential Manager машины, токены
     скрипт не принимает и никуда не пишет.
 
     Идемпотентен: если в целевой папке уже лежит сборка того же источника (репа + коммит, тот
@@ -76,14 +78,28 @@ function Write-Text([string]$Path, [string]$Text) { [IO.File]::WriteAllText($Pat
 # --- Источник сборки ---------------------------------------------------------------------
 $DefaultRepoUrl = 'https://github.com/quietgridlabs/viaduct'
 $DefaultCommit = '1af2d6e21e2ab66e8e62caf67063eac7fc1dfd57'     # закреплённый коммит апстрима (тег v0.1.2)
+$Source = 'параметры -RepoUrl/-Commit'
 if (-not $RepoUrl -and -not $Commit) {
-    $envRepo = $env:VIADUCT_REPO_URL
-    $envCommit = $env:VIADUCT_COMMIT
-    if ($envRepo -and $envCommit) {
-        $RepoUrl = $envRepo.Trim(); $Commit = $envCommit.Trim().ToLowerInvariant()
-        Write-Host 'Источник сборки — переменные окружения VIADUCT_REPO_URL/VIADUCT_COMMIT'
-    } elseif ($envRepo -or $envCommit) {
-        Fail 'VIADUCT_REPO_URL и VIADUCT_COMMIT задаются парой — задана только одна из переменных'
+    # Области окружения по порядку: процесс, затем пользователь и машина из реестра — дочерний
+    # процесс не видит переменных, выставленных после старта родителя, и без дочитки сборка
+    # молча ушла бы на апстрим. Пара берётся ЦЕЛИКОМ из первой области, где задана хоть одна
+    # переменная: половинки из разных областей не склеиваем (старый коммит процесса с новой
+    # репой пользователя дал бы сборку, которую никто не задавал), половинка — отказ.
+    # User/Machine есть только на Windows; на Linux/CI читается одно окружение процесса.
+    $scopes = @('Process')
+    if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { $scopes += 'User', 'Machine' }
+    $scopeNames = @{ Process = 'окружение процесса'; User = 'окружение пользователя'; Machine = 'окружение машины' }
+    foreach ($scope in $scopes) {
+        # Тримим до проверок: пробельное значение — не заданное, иначе оно перекрыло бы область ниже
+        $envRepo = "$([Environment]::GetEnvironmentVariable('VIADUCT_REPO_URL', $scope))".Trim()
+        $envCommit = "$([Environment]::GetEnvironmentVariable('VIADUCT_COMMIT', $scope))".Trim().ToLowerInvariant()
+        if (-not $envRepo -and -not $envCommit) { continue }
+        if (-not ($envRepo -and $envCommit)) {
+            Fail "VIADUCT_REPO_URL и VIADUCT_COMMIT задаются парой — в области «$($scopeNames[$scope])» задана только одна из переменных"
+        }
+        $RepoUrl = $envRepo; $Commit = $envCommit
+        $Source = "переменные VIADUCT_REPO_URL/VIADUCT_COMMIT ($($scopeNames[$scope]))"
+        break
     }
 }
 if (-not $RepoUrl) { $RepoUrl = $DefaultRepoUrl }
@@ -91,12 +107,18 @@ if (-not $Commit) {
     # Коммит апстрима к чужой репе не подходит: без явного коммита такая сборка — ошибка
     if ($RepoUrl -ne $DefaultRepoUrl) { Fail "для репы, отличной от апстрима, нужен явный -Commit (или VIADUCT_COMMIT)" }
     $Commit = $DefaultCommit
+    if (-not $PSBoundParameters.ContainsKey('RepoUrl')) { $Source = 'публичный апстрим по умолчанию' }
 }
 # Пароль/токен в адресе не принимаем — доступ даёт Git Credential Manager. Логин без пароля
 # штатен (у Azure DevOps адрес вида https://org@host/...), но на его месте мог оказаться
 # токен: в лог и маркер идёт адрес без userinfo
 if ($RepoUrl -match '^[a-z][a-z0-9+.-]*://[^/@]*:[^/@]*@') { Fail 'в адресе репы не должно быть логина с паролем/токеном — доступ даёт Git Credential Manager' }
 $RepoUrlSafe = $RepoUrl -replace '^([a-z][a-z0-9+.-]*://)[^/@]*@', '$1'
+# Громко: откуда взят источник и какой коммит — подмена на апстрим не должна пройти тихо
+Write-Host "Источник сборки: $Source; репа $RepoUrlSafe; коммит $Commit"
+if ($Source -eq 'публичный апстрим по умолчанию') {
+    Write-Host 'ВНИМАНИЕ: VIADUCT_REPO_URL/VIADUCT_COMMIT не заданы ни в одной области окружения — собирается публичный апстрим без доработок' -ForegroundColor Yellow
+}
 
 # --- Проверки входа ----------------------------------------------------------------------
 if ($Commit -notmatch '^[0-9a-f]{40}$') { Fail "-Commit должен быть полным SHA (40 hex), получено «$Commit»" }

@@ -501,8 +501,12 @@ public class McpOAuthServiceTests : IDisposable
 
     // ── таймаут discovery ────────────────────────────────────────────────────────────
 
-    [Fact]
-    public async Task Вход_НедоступныйСерверАвторизации_УкладываетсяВПотолокИДаётПонятнуюОшибку()
+    [Theory]
+    [InlineData("5", false)]
+    [InlineData("30", false)]
+    [InlineData("5", true)]
+    public async Task Вход_НедоступныйСерверАвторизации_УкладываетсяВПотолокИДаётПонятнуюОшибку(
+        string overallSeconds, bool issuerKnown)
     {
         var dir = Path.Combine(Path.GetTempPath(), "ccs-mcp-oauth-hang-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
@@ -512,19 +516,30 @@ public class McpOAuthServiceTests : IDisposable
             {
                 ["DataPath"] = Path.Combine(dir, "projects.json"),
                 ["Mcp:OAuthDiscoveryTimeoutSeconds"] = "1",
-                ["Mcp:OAuthDiscoveryOverallTimeoutSeconds"] = "5",
+                ["Mcp:OAuthDiscoveryOverallTimeoutSeconds"] = overallSeconds,
             }).Build();
             var registry = new McpRegistry(config, new McpSecretStore(config));
             var service = new McpOAuthService(registry, new McpSecretStore(config), new McpStatusStore(config),
                 new StubHttpClientFactory(new HangingHandler()), config, NullLogger<McpOAuthService>.Instance);
             var record = NewRecord(registry);
+            if (issuerKnown)
+            {
+                record.Auth = new McpAuthConfig
+                {
+                    OAuth = new McpOAuthConfig { AuthorizationServer = "https://auth.example.com" },
+                };
+                record = registry.Update(Owner, record.Id, record)!;
+            }
 
             var stopwatch = Stopwatch.StartNew();
             var act = () => service.StartAsync(Owner, record, Redirect, input: null);
             var thrown = await act.Should().ThrowAsync<McpOAuthException>();
             stopwatch.Stop();
 
-            thrown.Which.Message.Should().Contain("не отвечает");
+            // Класс отказа, а не текст: при сумме таймаутов попыток меньше потолка (второй и
+            // третий случай; первый — ровно на границе, как на CI) цепочка кончалась раньше
+            // потолка и уезжала в регистрацию с чужим «не поддерживает автоматическую регистрацию»
+            thrown.Which.Failure.Should().Be(McpOAuthFailure.Unreachable);
             // Раньше та же недоступность authorization server держала запрос 90-100с
             // (стандартные таймауты HttpClient складывались по цепочке discovery)
             stopwatch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(15),

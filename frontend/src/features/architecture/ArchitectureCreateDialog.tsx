@@ -24,16 +24,21 @@ export function ArchitectureCreateDialog({
 }: Props) {
   const isMobile = useIsMobile();
   return (
-    <Modal width={440} title="Создать архитектуру" onClose={onClose}>
+    <Modal width={560} title="Создать архитектуру" onClose={onClose}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
-        <OptionCard
-          icon={<Sparkles size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />}
-          title="Из кода проекта"
-          subtitle="Просканирую системы, контейнеры и связи между ними."
-          onClick={onGenerate}
-        />
-        <div style={{ paddingLeft: SP.md }}>
-          <AgentToggle checked={withAgent && !agentBusy} onChange={onWithAgentChange} disabled={agentBusy} hint={agentHint} />
+        {/* Тоггл агента относится к сборке из кода — стоит справа от её карточки (на мобиле — под ней) */}
+        <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', alignItems: isMobile ? 'stretch' : 'center', gap: SP.md }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <OptionCard
+              icon={<Sparkles size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />}
+              title="Из кода проекта"
+              subtitle="Просканирую системы, контейнеры и связи между ними."
+              onClick={onGenerate}
+            />
+          </div>
+          <div style={isMobile ? { paddingLeft: SP.md } : { flex: '0 0 190px' }}>
+            <AgentToggle checked={withAgent && !agentBusy} onChange={onWithAgentChange} disabled={agentBusy} hint={agentHint} />
+          </div>
         </div>
         {/* Пальцем на 360px холст не правят (мобильный режим только просмотра — как у документа) */}
         {!isMobile && (

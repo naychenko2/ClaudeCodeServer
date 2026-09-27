@@ -83,7 +83,8 @@ export function AgentToggle({ checked, onChange, disabled, hint }: {
       <Toggle checked={checked} onChange={onChange} disabled={disabled} focusable ariaLabel="С агентом" />
       <div style={{ minWidth: 0 }}>
         <div style={{ fontSize: FS.sm, fontWeight: 600, color: C.textHeading }}>С агентом</div>
-        <div style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.45 }}>
+        {/* Подсказка есть только когда агентная сборка заблокирована — её красим как предупреждение */}
+        <div style={{ fontSize: FS.xs, color: hint ? C.danger : C.textMuted, lineHeight: 1.45 }}>
           {hint ?? 'Проверит кандидатов и дополнит модель. Создаётся задача со своим чатом; без персоны-архитектора работает исполнитель без персоны.'}
         </div>
       </div>

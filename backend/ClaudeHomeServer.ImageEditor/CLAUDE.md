@@ -36,6 +36,8 @@ MF-remote `frontend/modules/image-editor` над кодом `frontend/src/featur
 (`ImageThreadLifecycle` на `session/deleted` / `session/branched`). Реестр задач живёт в памяти:
 при старте `ImageThreadRecovery` снимает с нитей `pendingJobId`, которых реестр не знает, ставит
 `interruptedJobId` и запись журнала `interrupted` — иначе карточка висит в «Рисуем…» вечно.
+Реестр задач рестарт не переживает: теряются и уже готовые варианты, ждавшие «Взять» (деньги
+списаны), поэтому текст пометки — «задача потеряна», а не «генерация прервана».
 
 **Снесено в v3 и не возвращается:** `ImageChatsController` (ручки `image-editor/chats*`),
 `ImageChatStateStore`, `ImageChatPathTracker`, `IImageChatSessions`, метод хаба

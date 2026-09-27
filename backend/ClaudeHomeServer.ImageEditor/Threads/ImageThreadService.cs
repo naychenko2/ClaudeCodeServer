@@ -241,12 +241,13 @@ public sealed class ImageThreadService(
         }
     }
 
-    public const string InterruptedText = "Генерация прервана перезапуском сервера";
+    public const string InterruptedText = "Задача потеряна при перезапуске сервера";
 
     // После перезапуска сервера (ADR-019): реестр задач живёт в памяти, и PendingJobId, которого
     // в нём нет, не дождётся ни вариантов, ни отказа — карточка висела бы в «Рисуем…». Такая
     // задача снимается с нити с пометкой InterruptedJobId и записью журнала для хода, владельцу
-    // уходит image_thread_changed. Трату не трогает: поставщик принял задачу до перезапуска, и
+    // уходит image_thread_changed. Текст покрывает и задачу, которая до рестарта уже отрисовала
+    // варианты и ждала «Взять»: они тоже потеряны вместе с реестром. Трату не трогает: поставщик принял задачу до перезапуска, и
     // «не списано» от него уже не придёт (инвариант учёта — отмена после принятия трату не отменяет)
     public async Task<int> RecoverInterruptedAsync(IImageEditJobs? jobs, CancellationToken ct)
     {
@@ -260,7 +261,7 @@ public sealed class ImageThreadService(
                 var state = store.DropDeadPending(ownerId, sessionId,
                     jobId => projectId is not null && jobs?.Get(ownerId, projectId, jobId) is not null,
                     (thread, jobId) => new ImageThreadEvent(store.Now(), ImageThreadEventKinds.Interrupted,
-                        $"{InterruptedText}: картинка {Name(thread)}, вариантов не будет — запусти заново", thread.Id, jobId));
+                        $"{InterruptedText}: картинка {Name(thread)}, варианты недоступны — запусти заново", thread.Id, jobId));
                 if (state is null) continue;
                 dropped++;
                 if (projectId is not null) await BroadcastAsync(ownerId, projectId, sessionId, state);

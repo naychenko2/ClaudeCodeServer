@@ -66,7 +66,7 @@ public sealed class ImageEditorStateContributor(
             var at = t.CurrentStepId is { } s && steps.Contains(s) ? steps.ToList().IndexOf(s) + 1 : 0;
             var step = steps.Count == 0 ? "шагов нет" : at == 0 ? $"на холсте исходник, шагов {steps.Count}" : $"шаг {at} из {steps.Count}";
             var pending = t.PendingJobId is { } p ? "; варианты ждут выбора человека" + Outcome(job(p))
-                : t.InterruptedJobId is not null ? "; последняя генерация прервана перезапуском сервера, вариантов нет" : "";
+                : t.InterruptedJobId is not null ? "; последняя задача потеряна при перезапуске сервера, варианты недоступны" : "";
             sb.AppendLine($"- {t.Id}{(t.Id == state.Focus ? " (в работе)" : "")}: {what}; {step}{pending}");
         }
         if (fresh.Count > 0)

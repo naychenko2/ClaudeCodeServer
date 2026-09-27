@@ -164,6 +164,9 @@ publish_one_hands() {
     -p:EnableCompressionInSingleFile=true
     -p:IncludeNativeLibrariesForSelfExtract=true
     -p:IncludeAllContentForSelfExtract=true
+    # У HandsBridge символы выключены в csproj, а у HandsBridge.Policy — нет: без этого его
+    # .pdb ложится рядом с .exe и едет в архив
+    -p:DebugType=none
   )
 
   rm -rf "$out_dir"

@@ -249,13 +249,10 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         var provider = Str(args, "provider") ?? settings?.Provider ?? DefaultProvider();
         if (provider is null)
             return Deny("Поставщик рисования не настроен. Обратитесь к администратору.");
-        var model = Str(args, "model") ?? settings?.Model ?? ImageEditCatalog.AutoModelId;
         var mode = Enum<EditMode>(args, "mode") ?? EditMode.Auto;
-        var count = Int(args, "count") ?? (settings is { Count: > 0 } s ? s.Count : 1);
         var prompt = Str(args, "prompt") ?? "";
         var matchSourceSize = Bool(args, "matchSourceSize") ?? settings?.MatchSourceSize ?? true;
         var references = ReferencesArg(args);
-        var character = Str(args, "character") ?? prefs?.CharacterSlug;
 
         // Исходник — текущий шаг нити, иначе файл нити с диска проекта. У черновика «Новая
         // картинка» без шага исходника нет вовсе: рисуем новую по тексту
@@ -279,6 +276,13 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         if (prompt.Length == 0 && op is ImageEditOp.Generate or ImageEditOp.Edit or ImageEditOp.Inpaint)
             return Deny("Пустой промпт: опиши, что нарисовать или поправить.");
         var size = source is null ? null : ImageDimensions.Read(source.Bytes);
+
+        // Операции со своей моделью — как у человека: из выбора в полосе не наследуются ни
+        // модель, ни число вариантов, ни персонаж. Явные аргументы агента остаются как есть
+        var own = ImageEditCatalog.OwnModelOps.Contains(op);
+        var model = Str(args, "model") ?? (own ? null : settings?.Model) ?? ImageEditCatalog.AutoModelId;
+        var count = Int(args, "count") ?? (!own && settings is { Count: > 0 } s ? s.Count : 1);
+        var character = Str(args, "character") ?? (own ? null : prefs?.CharacterSlug);
 
         var quoteRequest = new ImageEditQuoteRequest(provider, model, mode, op, count,
             HasMask: false,

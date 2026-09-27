@@ -694,6 +694,60 @@ public class ImageEditorToolsetTests : IDisposable
         job.Count.Should().Be(1);
     }
 
+    // Быстрое действие со своей моделью — как у человека (quickUsesOwnModel на фронте): из полосы
+    // не едут ни персонаж, ни чужая модель, ни число вариантов
+    [Fact]
+    public async Task Улучшить_лица_без_аргументов_не_наследует_персонажа_модель_и_число_из_полосы()
+    {
+        var slug = Character();
+        Prefs(new ImageProjectPrefs(LocalImageEditor.ProviderKey, LocalImageEditor.QwenImage, 3, true, slug));
+        // Персонаж в полосе есть, но без фото: подставь его сервер — запуск упал бы
+        // «Персонаж не найден», а FaceDetailer фото молча игнорирует и иначе подстановку не видно
+        foreach (var photo in Directory.GetFiles(CharacterStore.CharacterDir(_root, slug)!)
+                     .Where(f => Path.GetFileName(f) != CharacterStore.ManifestFile))
+            File.Delete(photo);
+        var (toolset, media) = WithLocal();
+        var thread = Thread();
+
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate,
+            new JsonObject { ["threadId"] = thread, ["op"] = "enhanceFaces" });
+
+        result.IsError.Should().BeFalse(result.Text);
+        var job = await WaitDone(Parse(result)["jobId"]!.GetValue<string>());
+        job.Provider.Should().Be(LocalImageEditor.ProviderKey, "поставщик из полосы наследуется");
+        job.Model.Should().Be(LocalImageEditor.FaceDetailer, "модель полосы qwen-image лица не улучшает");
+        job.Count.Should().Be(1);
+        media.Submitted.Should().ContainSingle().Which.Images.Should().HaveCount(1, "едет только исходник");
+    }
+
+    [Fact]
+    public async Task Правка_по_промпту_без_персонажа_берёт_его_из_полосы()
+    {
+        var slug = Character();
+        Prefs(new ImageProjectPrefs(LocalImageEditor.ProviderKey, null, 1, true, slug));
+        var (toolset, media) = WithLocal();
+
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate, Gen(Thread(), "надеть шляпу"));
+
+        result.IsError.Should().BeFalse(result.Text);
+        await WaitDone(Parse(result)["jobId"]!.GetValue<string>());
+        media.Submitted.Should().NotBeEmpty().And.OnlyContain(r => r.Images.Count == 2,
+            "холст и фото персонажа из полосы");
+    }
+
+    [Fact]
+    public async Task Явный_персонаж_агента_едет_и_в_улучшение_лиц()
+    {
+        Prefs(new ImageProjectPrefs(LocalImageEditor.ProviderKey, null, 1, true, null));
+        var (toolset, _) = WithLocal();
+
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate,
+            new JsonObject { ["threadId"] = Thread(), ["op"] = "enhanceFaces", ["character"] = "nope" });
+
+        result.IsError.Should().BeTrue("явный персонаж агента не отбрасывается — а такого в проекте нет");
+        Parse(result)["error"]!.GetValue<string>().Should().Be("Персонаж не найден");
+    }
+
     [Fact]
     public void Описания_provider_model_character_просят_не_указывать_без_просьбы()
     {

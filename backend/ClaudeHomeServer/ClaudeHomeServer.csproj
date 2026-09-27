@@ -95,20 +95,25 @@
   <ItemGroup>
     <ProjectReference Include="..\ClaudeHomeServer.Notes\ClaudeHomeServer.Notes.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
-  <Target Name="CopyNotesModule" AfterTargets="Build;Publish">
-    <!-- Две цели: Build копирует в $(OutDir) (dev-запуск dotnet run), Publish — в
-         $(PublishDir) (деплой deploy80.ps1 делает dotnet publish -o и раньше терял
-         модуль: на проде ModuleLoader не находил dll, INoteSemanticIndex не
-         регистрировался, и форвардер Knowledge ронял старт хоста). -->
-    <PropertyGroup>
-      <NotesModuleDir Condition="'$(PublishDir)' != ''">$(PublishDir)modules\notes</NotesModuleDir>
-      <NotesModuleDir Condition="'$(PublishDir)' == ''">$(OutDir)modules\notes</NotesModuleDir>
-    </PropertyGroup>
-    <ItemGroup>
-      <NotesModuleFiles Include="..\ClaudeHomeServer.Notes\bin\$(Configuration)\net10.0\ClaudeHomeServer.Notes.dll" />
-    </ItemGroup>
-    <Copy SourceFiles="@(NotesModuleFiles)" DestinationFolder="$(NotesModuleDir)"
-          SkipUnchangedFiles="true" Condition="Exists('..\ClaudeHomeServer.Notes\bin\$(Configuration)\net10.0\ClaudeHomeServer.Notes.dll')" />
+  <!-- Две цели: Build копирует в $(OutDir) (dev-запуск dotnet run), Publish — в
+       $(PublishDir) (деплой deploy80.ps1 делает dotnet publish -o и раньше терял
+       модуль: на проде ModuleLoader не находил dll, INoteSemanticIndex не
+       регистрировался, и форвардер Knowledge ронял старт хоста). Одна цель с условием
+       «PublishDir не пуст» не годится: SDK задаёт PublishDir и на обычной сборке
+       (bin\...\publish\), и копия Build уезжала мимо $(OutDir). -->
+  <PropertyGroup>
+    <NotesModuleDll>..\ClaudeHomeServer.Notes\bin\$(Configuration)\net10.0\ClaudeHomeServer.Notes.dll</NotesModuleDll>
+  </PropertyGroup>
+  <Target Name="CopyNotesModule" AfterTargets="Build">
+    <Copy SourceFiles="$(NotesModuleDll)" DestinationFolder="$(OutDir)modules\notes"
+          SkipUnchangedFiles="true" Condition="Exists('$(NotesModuleDll)')" />
+  </Target>
+  <Target Name="CopyNotesModuleOnPublish" AfterTargets="Publish">
+    <!-- На Publish тихий пропуск недопустим: бой остался бы без модуля и не стартовал бы -->
+    <Error Condition="!Exists('$(NotesModuleDll)')"
+           Text="Модуль Notes не собран: нет $(NotesModuleDll) — публикация без него уронила бы старт хоста" />
+    <Copy SourceFiles="$(NotesModuleDll)" DestinationFolder="$(PublishDir)modules\notes"
+          SkipUnchangedFiles="true" />
   </Target>
 
   <!-- === Модульность (Этап 3+, Этап 5)

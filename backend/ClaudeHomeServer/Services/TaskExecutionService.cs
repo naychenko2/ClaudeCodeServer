@@ -134,6 +134,9 @@ public class TaskExecutionService
         // штабных хуков, уехавших в TeamCoordinator (шаг 2г-4): те ставила и читала одна и та
         // же вертикаль, а этот ставит чужая сторона.
         _sessions.HasLiveDelegatedTasks = HasLiveDelegatedTask;
+        // Старт хода в чате исполнителя: «Стоп» человека не терминален для задачи —
+        // продолжение работы снимает пометку interrupted_by_user (см. ResumeAfterUserStopAsync)
+        _sessions.TurnStarting = ResumeAfterUserStopAsync;
         // Резолв названия задачи по id для подписи карточки эскалации (волна 1
         // team-blocker-honest, дефект 1430b732): та же причина — SessionManager не знает
         // TaskManager, штаб читает через Func-канал. null для удалённой задачи не ошибка:
@@ -714,6 +717,34 @@ public class TaskExecutionService
     // Забрать и очистить: текст относится к ЗАВЕРШИВШЕМУСЯ ходу, следующий копится с нуля
     private string? TakeTurnError(string sessionId) =>
         _turnErrors.TryRemove(sessionId, out var text) ? text : null;
+
+    // «Стоп» человека у исполнителя задачи (доска агентов): прерванный ход приходит exited без
+    // result, поэтому ClaudeResult не встаёт никогда, и задача навсегда числилась бы в работе
+    // (Д3 регресса 2026-09-27: плашка «Агент собирает» вечно running). Ставим ту же пометку
+    // остановки, что у терминального отказа, — она же гасит страховку-оклик (ClassifyStall).
+    // Уведомление и доклад постановщику не шлём: остановил сам человек, он в курсе.
+    public async Task<TaskItem?> MarkStoppedByUserAsync(string sessionId)
+    {
+        var task = FindTracked(sessionId);
+        if (task is null || task.Status == TaskItemStatus.Done) return null;
+        var stopped = _tasks.MarkExecutorStopped(task.Id, DateTime.UtcNow, ExecutorStopClassifier.InterruptedByUserReason);
+        if (stopped is null) return null;
+        await _broadcaster.ToOwner(stopped.OwnerId!, new TaskChangedMessage("updated", stopped));
+        return stopped;
+    }
+
+    // Новый ход в отслеживаемой сессии задачи после «Стоп»: работа продолжается, задача снова
+    // живая (HasLiveDelegatedTask, плашка доски). Снимаем только пометку interrupted_by_user —
+    // терминальные отказы (401, лимит) снимает лишь перезапуск исполнителя (MarkClaudeStarted).
+    // internal — для юнит-тестов (вызов напрямую, без живого хода).
+    internal async Task ResumeAfterUserStopAsync(string sessionId)
+    {
+        var task = FindTracked(sessionId);
+        if (task is null || task.ExecutorStopReason != ExecutorStopClassifier.InterruptedByUserReason) return;
+        var resumed = _tasks.ClearExecutorStopped(task.Id, ExecutorStopClassifier.InterruptedByUserReason);
+        if (resumed is null) return;
+        await _broadcaster.ToOwner(resumed.OwnerId!, new TaskChangedMessage("updated", resumed));
+    }
 
     // Исполнитель встал насовсем: пометка на задаче + уведомление владельцу + (если задачу
     // ставила персона) доклад ей с пробуждением. Перезапуск НЕ делаем: причина терминальная,

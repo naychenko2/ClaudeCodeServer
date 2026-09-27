@@ -3857,6 +3857,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             sessionId, deliverySrc, effectiveCause, senderOrigin ?? "-", mode ?? "-",
             (text.Length > 60 ? text[..60] : text).Replace('\n', ' '));
 
+        if (TurnStarting is { } onTurnStarting)
+        {
+            try { await onTurnStarting(sessionId); }
+            catch (Exception ex) { _log.LogWarning(ex, "Хук старта хода {Session} упал", sessionId); }
+        }
+
         // Режим, выбранный в Composer, применяется со следующего хода: процесс claude
         // пересоздаётся в RunTurnAsync и читает --permission-mode из Info.Mode.
         // Режим «План» у провайдера без поддержки тихо игнорируем (защита от рассинхрона UI).
@@ -6373,6 +6379,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // в вертикали Services.Tasks, и прямая ссылка на него из спины уронила бы сторож границ.
     // null — признак не задан (тесты, либо стора задач нет): ждать нечего.
     public Func<string, bool>? HasLiveDelegatedTasks { get; set; }
+
+    // Старт нового хода в сессии (любой источник: человек, очередь, авто-ход). Вешает
+    // TaskExecutionService — по тем же причинам, что HasLiveDelegatedTasks: продолжение в чате
+    // исполнителя после «Стоп» снимает пометку остановки, иначе задача числилась бы мёртвой.
+    // Сбой хука ход не роняет. null — хук не задан (тесты без стора задач).
+    public Func<string, Task>? TurnStarting { get; set; }
 
     // Резолв названия задачи по id (волна 1 team-blocker-honest, дефект 1430b732): штаб
     // публикует карточку остановки с TaskId, и подпись диалога снятия должна показать

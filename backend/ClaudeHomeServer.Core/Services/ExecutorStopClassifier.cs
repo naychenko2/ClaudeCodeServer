@@ -32,6 +32,13 @@ public static class ExecutorStopClassifier
     public const string SubagentStuckReason = "subagent_stuck";
 
     /// <summary>
+    /// Человек нажал «Стоп» у исполнителя задачи. Терминальная причина: прерванный ход
+    /// result не присылает, и без пометки задача висела бы «в работе» без исполнителя;
+    /// продолжать сам исполнитель не должен — решает человек (перезапуск снимает пометку).
+    /// </summary>
+    public const string InterruptedByUserReason = "interrupted_by_user";
+
+    /// <summary>
     /// Сабагенты хода: None — обрывов не было; Truncated — оборвался, добивание в пути;
     /// Stuck — обрывается раз за разом, попытки добивания исчерпаны.
     /// </summary>

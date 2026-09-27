@@ -487,6 +487,20 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         return task;
     }
 
+    // Снять пометку остановки, только если она стоит ИМЕННО с этой причиной (продолжение
+    // чата после «Стоп» снимает interrupted_by_user, но не терминальный отказ вроде 401).
+    // null — пометки с такой причиной нет, снимать нечего.
+    public TaskItem? ClearExecutorStopped(string id, string reason)
+    {
+        var task = _tasks.GetValueOrDefault(id);
+        if (task is null || task.ExecutorStoppedAt is null || task.ExecutorStopReason != reason) return null;
+        task.ExecutorStoppedAt = null;
+        task.ExecutorStopReason = null;
+        task.UpdatedAt = DateTime.UtcNow;
+        Save();
+        return task;
+    }
+
     // Пометка снятия человеком по карточке блокера (волна 1 team-blocker-honest, дефект
     // f3965801): ставится штабом в DropSubtaskAsync после Update(Status=Done). С этого
     // момента TaskManager.Update не меняет Status/Outcome, а ResultMarkdown исполнителя

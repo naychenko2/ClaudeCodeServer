@@ -206,10 +206,14 @@ public class SessionHub : Hub
         _sessions.SetMode(sessionId, mode);
     }
 
-    public void Interrupt(string sessionId)
+    // executions — из DI параметром метода (сервис хабу нужен только здесь, конструктор не трогаем)
+    public async Task Interrupt(string sessionId, TaskExecutionService executions)
     {
         if (!OwnsSession(sessionId)) throw Denied();
         _sessions.Interrupt(sessionId);
+        // «Стоп» в чате исполнителя задачи: прерванный ход result не пришлёт — фиксируем
+        // остановку сами, как на доске агентов (BoardController.InterruptAgent)
+        await executions.MarkStoppedByUserAsync(sessionId);
     }
 
     // Ручное сворачивание контекста сессии (/compact)

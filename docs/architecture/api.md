@@ -99,6 +99,47 @@ GET                 /api/knowledge/{id}/search?q=&topK=&method=semantic|fulltext
 чтобы фронт получал их тем же запросом, что и при старте. Подробнее — раздел «Фич-флаги»
 в [CLAUDE.md](../../CLAUDE.md).
 
+## Редактор картинок (модуль `imageeditor`)
+
+Ручки модуля [ClaudeHomeServer.ImageEditor](../../backend/ClaudeHomeServer.ImageEditor/CLAUDE.md),
+решения — [ADR-019](../adr/ADR-019-image-editor-v3-in-chat.md). Гейт у всех один: флаг
+`image-editor` выключен или проект чужой — `404`; модуль выключен конфигом — ручек нет (`404`).
+Ошибки — `{ error, code }`.
+
+```
+GET                 /api/projects/{id}/image-editor/catalog              → поставщики, модели, caps
+POST                /api/projects/{id}/image-editor/quote                → котировка (цена или время и очередь)
+POST                /api/projects/{id}/image-editor/jobs                 multipart; sessionId? + threadId? — запуск в нить чата → 202 задача
+GET/DELETE          /api/projects/{id}/image-editor/jobs/{jobId}         → задача / отмена
+GET                 /api/projects/{id}/image-editor/jobs/{jobId}/variants/{n}  → картинка варианта
+POST                /api/projects/{id}/image-editor/save                 { …, sessionId?, threadId? } → файл; занятое имя — 409 name_taken + suggestion
+GET                 /api/projects/{id}/image-editor/save/check           → свободно ли имя
+POST                /api/projects/{id}/image-editor/transform            правка без ИИ → шаг; нет растра — 503 raster_unavailable
+GET                 /api/projects/{id}/image-editor/steps/{stepId}       → картинка шага
+GET/POST/PUT/DELETE /api/projects/{id}/image-editor/characters[/{slug}]  персонажи проекта; фото — …/characters/{slug}/photos/{file}
+```
+
+**Нити чата** (`ThreadsController`, база `/api/projects/{id}/image-editor/sessions/{sid}/threads`).
+Чужой, несуществующий и чат другого проекта неотличимы — `404 chat_not_found`; нить не этого чата —
+`404 thread_not_found`. Каждая мутация несёт `revision`, от которой считал клиент: устарела —
+`409 revision_conflict` с актуальным `state`. Ответ любой мутации — полное состояние, как у `GET`.
+Смена фокуса `sessions.json` не пишет и `updatedAt` чата не двигает.
+
+```
+GET                 …/threads                          → { focus, revision, threads[] }
+POST                …/threads                          { file? | draftFolder?, revision } — взять картинку в работу
+                                                       (ровно одно; нить по файлу уже есть — фокус на неё)
+PUT                 …/threads/focus                    { threadId | null, revision } — выбрать картинку или снять выбор
+DELETE              …/threads/{threadId}?revision=     убрать нить без шагов; с шагами или ждущими вариантами — 400
+POST                …/threads/{threadId}/take          { jobId + variant | stepId, revision } — «Взять»
+POST                …/threads/{threadId}/dismiss       { jobId, revision } — «Не брать»
+POST                …/threads/{threadId}/rollback      { stepId | null, revision } — откат (null — исходник)
+PUT                 …/threads/{threadId}/settings      { settings, revision } — поставщик, модель, число вариантов
+```
+
+`take`, `rollback` и `save` — только человек: у агента таких MCP-инструментов нет (ADR-019,
+решение 1). Ручек чата картинки v2 (`image-editor/chats*`) больше нет.
+
 ## SignalR-хаб `/hubs/session`
 
 Вторая половина контракта с фронтом: REST отдаёт состояние, хаб — живой ход. Источник правды —
@@ -129,3 +170,10 @@ Interrupt(sessionId)                        → прервать идущий х
 каждое событие: фронт разбирает поток в одном месте, а вертикаль может завести свой record и
 отправить его через `IHubContext<SessionHub>`, ни от кого не завися (см.
 [ADR-014](../adr/ADR-014-internal-subsystems.md), раздел про `ClaudeHomeServer.Protocol`).
+
+Записи модулей в ленте чата идут типом `module_record` (`{ module, recordType, data, fallback }`,
+та же форма лежит в `history.json`); незнакомый `recordType` или выключенный модуль — лента рисует
+`fallback`. Модуль пишет их вне хода через шов `IChatFeed`; модель их не видит. Редактор картинок
+шлёт владельцу `image_edit_progress` / `image_edit_completed` / `image_edit_failed` и
+`image_thread_changed` (нити чата сменились; потерянное событие догоняется `GET …/threads`).
+Метода `SendImageChatMessage` и события `image_chat_state` (чат картинки v2) больше нет.

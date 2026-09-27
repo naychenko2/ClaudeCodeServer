@@ -57,6 +57,26 @@ describe('toRateWindows', () => {
       ok: 'normal',
     });
   });
+
+  it('seven_day_overage_included — служебное событие, а не окно: вместе с seven_day одно окно', () => {
+    const out = toRateWindows({
+      seven_day: win('seven_day', { utilization: 0.12, status: 'allowed' }),
+      seven_day_overage_included: win('seven_day_overage_included', { utilization: 0.12, status: 'allowed' }),
+    });
+    expect(out.map(w => w.limitType)).toEqual(['seven_day']);
+  });
+
+  it('seven_day_overage_included отсекается и в пути через снимки аккаунта', () => {
+    const reset = '2026-10-01T10:00:00Z';
+    const out = withAccountFallback(
+      [win('seven_day_overage_included', { status: 'allowed', resetsAt: reset })],
+      [{ timestamp: '2026-09-27T11:50:00Z', limitType: 'seven_day', utilization: 0.12, resetsAt: reset },
+        { timestamp: '2026-09-27T11:50:00Z', limitType: 'seven_day_overage_included', utilization: 0.12, resetsAt: reset }],
+      '2026-09-27T12:00:00Z',
+    );
+    expect(out.map(w => w.limitType)).toEqual(['seven_day']);
+    expect(ratePillSegments(out).map(s => s.label)).toEqual(['Нед']);
+  });
 });
 
 describe('latestPerWindow', () => {

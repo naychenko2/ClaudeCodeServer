@@ -54,9 +54,16 @@ function rateLevel(w: RateLimitInfo): RateWindow['level'] {
   return 'normal';
 }
 
+// Служебные события Anthropic, а не отдельные лимиты: seven_day_overage_included дублирует
+// недельное окно (сброс тот же), а общее правило seven_day_<модель> сделало бы из него
+// окно «Overage included». Режем здесь — единственная точка, через которую идут и пилюля,
+// и поповер (latestPerWindow и withAccountFallback сводятся к toRateWindows)
+const NON_WINDOW_TYPES = new Set(['seven_day_overage_included']);
+
 // Преобразует карту окон в отсортированный (по использованию, убыв.) массив
 export function toRateWindows(rateLimits: Record<string, RateLimitInfo>): RateWindow[] {
   return Object.values(rateLimits)
+    .filter(w => !NON_WINDOW_TYPES.has(w.limitType))
     .filter(w => typeof w.utilization === 'number' || !!w.status)
     .map(w => ({
       ...w,

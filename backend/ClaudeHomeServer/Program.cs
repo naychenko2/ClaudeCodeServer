@@ -336,6 +336,12 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Git.IGitCommitInspector,
 // синглтон `CodeGraphService`, что и подсистем.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.CodeGraph.ICodeGraphInspector,
     ClaudeHomeServer.Services.CodeGraph.CodeGraphInspector>();
+// Шов снимка графа для раздела «Архитектура» (Viaduct 10.1, разрез Architecture↔CodeGraph).
+// Под гейтом CodeGraph: у контроллера Architecture шов необязателен (нет → 503
+// graph_unavailable), а форвардер без CodeGraphService не резолвится.
+if (SubsystemGate.IsEnabled(builder.Configuration, ClaudeHomeServer.Services.CodeGraph.CodeGraphSubsystem.SubsystemKey))
+    builder.Services.AddSingleton<ClaudeHomeServer.Services.CodeGraph.IArchitectureCodeSource,
+        ClaudeHomeServer.Services.CodeGraph.ArchitectureCodeSource>();
 builder.Services.AddSingleton<ProjectGroupManager>();
 builder.Services.AddSingleton<ProjectEventLogService>();
 // Этап 5, волна E: узкий Core-шов IProjectEventLogService для выноса Notes (NotesService
@@ -1732,6 +1738,12 @@ app.Use(async (ctx, next) =>
         await next();
     });
 }
+
+// Статические ветки подсистем (сейчас — собранный Viaduct раздела «Архитектура»):
+// ставятся здесь, после защитных middleware и до SPA-фолбэка, а не в UseSubsystems —
+// там ветка ушла бы из-под HTTPS-редиректа и перехватчика превью-хоста
+foreach (var contributor in app.Services.GetServices<IStaticBranchContributor>())
+    contributor.Configure(app);
 
 // Раздача фронтенда: wwwroot/ рядом с exe (prod) или ../../frontend/dist (dev)
 var wwwrootPath = Path.Combine(AppContext.BaseDirectory, "wwwroot");

@@ -16,15 +16,20 @@ interface Props {
   agentHint: string | null;
   onClose: () => void;
   onGenerate: () => void;
-  onBlank: () => void;
+  // Нет обработчика — нет и карточки «С пустого холста»: при пересборке готовой модели
+  // она означала бы снести всё, это не вариант той же операции
+  onBlank?: () => void;
+  // rebuild — тот же выбор для готовой модели (меню документа «Пересобрать архитектуру…»)
+  mode?: 'create' | 'rebuild';
 }
 
 export function ArchitectureCreateDialog({
-  withAgent, onWithAgentChange, agentBusy, agentHint, onClose, onGenerate, onBlank,
+  withAgent, onWithAgentChange, agentBusy, agentHint, onClose, onGenerate, onBlank, mode = 'create',
 }: Props) {
   const isMobile = useIsMobile();
+  const rebuild = mode === 'rebuild';
   return (
-    <Modal width={560} title="Создать архитектуру" onClose={onClose}>
+    <Modal width={560} title={rebuild ? 'Пересобрать архитектуру' : 'Создать архитектуру'} onClose={onClose}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
         {/* Тоггл агента относится к сборке из кода — стоит справа от её карточки (на мобиле — под ней) */}
         <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', alignItems: isMobile ? 'stretch' : 'center', gap: SP.md }}>
@@ -32,7 +37,9 @@ export function ArchitectureCreateDialog({
             <OptionCard
               icon={<Sparkles size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />}
               title="Из кода проекта"
-              subtitle="Просканирую системы, контейнеры и связи между ними."
+              subtitle={rebuild
+                ? 'Просканирую код заново. Ручные описания и раскладка сохранятся.'
+                : 'Просканирую системы, контейнеры и связи между ними.'}
               onClick={onGenerate}
             />
           </div>
@@ -41,7 +48,7 @@ export function ArchitectureCreateDialog({
           </div>
         </div>
         {/* Пальцем на 360px холст не правят (мобильный режим только просмотра — как у документа) */}
-        {!isMobile && (
+        {onBlank && !isMobile && (
           <OptionCard
             icon={<Layers size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />}
             title="С пустого холста"

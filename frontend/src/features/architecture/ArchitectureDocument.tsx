@@ -10,7 +10,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   DraftingCompass, X, Check, Loader, AlertTriangle, Eye, Sparkles, Unlink, FileWarning, RefreshCw,
-  FileJson, Download, Lock, Bot,
+  FileJson, Download, Lock,
 } from 'lucide-react';
 import {
   C, FONT, FS, SP, Button, BackButton, EmptyState, WaitingIndicator, MetaChip,
@@ -41,8 +41,9 @@ export function ArchitectureDocument({ projectId, projectName, isMobile, onClose
   const [frameFailed, setFrameFailed] = useState<FrameFailure | null>(null);
   // Мобила: список-обзор по умолчанию, схема — по кнопке
   const [mobileCanvas, setMobileCanvas] = useState(false);
-  // Диалог первого создания: выбор «из кода» / «с пустого холста», см. ArchitectureCreateDialog
-  const [createOpen, setCreateOpen] = useState(false);
+  // Диалог сборки: create — первое создание («из кода» / «с пустого холста»),
+  // rebuild — пересборка готовой модели из меню, см. ArchitectureCreateDialog
+  const [dialog, setDialog] = useState<'create' | 'rebuild' | null>(null);
 
   useEffect(() => { void loadArchitecture(projectId); }, [projectId]);
 
@@ -79,7 +80,7 @@ export function ArchitectureDocument({ projectId, projectName, isMobile, onClose
 
   const retryFrame = () => { setFrameFailed(null); takeServerVersion(); };
 
-  // Галочка «С агентом»: одна на пустое состояние и меню. Пока задача сборки не закрыта
+  // Галочка «С агентом»: живёт только в диалоге сборки. Пока задача сборки не закрыта
   // (агент собирает или она ждёт человека), вторая агентная сборка не стартует (сервер
   // ответил бы 409) — проход 1 без агента разрешён
   const [withAgent, setWithAgent] = useAgentPref(projectId);
@@ -90,14 +91,9 @@ export function ArchitectureDocument({ projectId, projectName, isMobile, onClose
 
   const menu: OverflowItem[] = [
     {
-      key: 'generate', label: 'Пересобрать архитектуру', icon: <Sparkles size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
-      sublabel: withAgent && !agentBusy ? 'С агентом · ручные описания и раскладка сохранятся' : 'Ручные описания и раскладка сохранятся',
-      disabled: s.generating, onClick: build,
-    },
-    {
-      key: 'agent', label: 'С агентом', icon: <Bot size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
-      sublabel: agentHint ?? 'Проверит кандидатов и дополнит модель',
-      toggle: withAgent && !agentBusy, disabled: agentBusy, onClick: () => setWithAgent(!withAgent),
+      key: 'generate', label: 'Пересобрать архитектуру…', icon: <Sparkles size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+      sublabel: 'Ручные описания и раскладка сохранятся',
+      disabled: s.generating, onClick: () => setDialog('rebuild'),
     },
     {
       key: 'file', label: 'Показать файл модели', icon: <FileJson size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
@@ -200,7 +196,7 @@ export function ArchitectureDocument({ projectId, projectName, isMobile, onClose
             title="Архитектура ещё не описана"
             subtitle="Соберу C4-модель из кода проекта или начну с пустого холста — выбор за вами."
             action={(
-              <Button variant="primary" size="md" onClick={() => setCreateOpen(true)}
+              <Button variant="primary" size="md" onClick={() => setDialog('create')}
                 leftIcon={<Sparkles size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}>Создать архитектуру</Button>
             )}
           />
@@ -251,12 +247,13 @@ export function ArchitectureDocument({ projectId, projectName, isMobile, onClose
         )}
       </div>
 
-      {createOpen && (
+      {dialog && (
         <ArchitectureCreateDialog
+          mode={dialog}
           withAgent={withAgent} onWithAgentChange={setWithAgent} agentBusy={agentBusy} agentHint={agentHint}
-          onClose={() => setCreateOpen(false)}
-          onGenerate={() => { setCreateOpen(false); build(); }}
-          onBlank={() => { setCreateOpen(false); startBlank(); }}
+          onClose={() => setDialog(null)}
+          onGenerate={() => { setDialog(null); build(); }}
+          onBlank={dialog === 'create' ? () => { setDialog(null); startBlank(); } : undefined}
         />
       )}
     </div>

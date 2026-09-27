@@ -54,7 +54,8 @@ export default defineConfig({
     // singleton react/react-dom для внешних модулей. Remotes регистрируются в рантайме
     // (registerRemotes по списку GET /api/modules) — статических remotes нет.
     // Спайк R5a подтвердил: Vite 8/Rolldown + MF + PWA injectManifest собираются,
-    // React-инстанс один, remote-чанки не попадают в precache (живут под /api/modules/**/ui/).
+    // React-инстанс один. Remote-чанки в precache не попадают: у внешних модулей они живут
+    // под /api/modules/**/ui/, у подсистем (/{имя}-remote/) исключены globIgnores ниже.
     federation({
       name: 'aihome_shell',
       // Design-kit ядра для внешних модулей (контракт §7.1, R14–R16): модули берут
@@ -117,8 +118,11 @@ export default defineConfig({
       injectManifest: {
         globPatterns: ['**/*.{js,mjs,css,html,ico,png,svg,webmanifest}'],
         // Ассеты барж-ина офлайн не нужны (петля разговора в офлайне гаснет),
-        // а worklet и ort-loader попали бы в precache по маске выше
-        globIgnores: ['vad/**'],
+        // а worklet и ort-loader попали бы в precache по маске выше.
+        // *-remote/** — MF-remote подсистем: сейчас их копируют в dist ПОСЛЕ vite build,
+        // но окажись они там до сборки хоста, старый SW отдавал бы старые remoteEntry
+        // и чанки мимо ?v= из /api/subsystem-modules
+        globIgnores: ['vad/**', '*-remote/**'],
         // Основной бандл перевалил дефолтный лимит precache (2 MiB); с инъекцией
         // data-cc-src (UI-инспектор) вырос до ~4.4 MiB — держим лимит с запасом
         maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,

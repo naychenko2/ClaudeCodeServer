@@ -1045,6 +1045,7 @@ builder.Services.AddReverseProxy()
 // не заменяется — YARP объединяет несколько IProxyConfigProvider, существующие маршруты
 // OnlyOffice/drawio/forgejo работают как раньше).
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Modules.ModuleRegistry>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.DynamicModules.RemoteStaticFiles>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Modules.ModuleTokenService>();
 builder.Services.AddSingleton<Yarp.ReverseProxy.Configuration.IProxyConfigProvider,
     ClaudeHomeServer.Services.Modules.ModuleProxyConfigProvider>();
@@ -1967,26 +1968,12 @@ if (Directory.Exists(distPath))
     app.Logger.LogInformation("Фронтенд раздаётся из {Path}", distPath);
     var fp = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(distPath);
 
-    // index.html и SW-файлы — no-store: браузер всегда берёт свежую версию с сервера.
-    // /assets/** — immutable: хэши в именах гарантируют уникальность, кэшируем «вечно».
+    // index.html, SW-файлы и remoteEntry.js любых MF-remote — no-store: браузер всегда
+    // берёт свежую точку входа. /assets/** и /{имя}-remote/assets/** — immutable: хэши
+    // в именах гарантируют уникальность, кэшируем «вечно».
     Action<StaticFileResponseContext> setCacheHeaders = ctx =>
-    {
-        var name = ctx.File.Name;
-        var headers = ctx.Context.Response.Headers;
-        if (name.Equals("index.html", StringComparison.OrdinalIgnoreCase) ||
-            name.Equals("sw.js", StringComparison.OrdinalIgnoreCase) ||
-            name.Equals("registerSW.js", StringComparison.OrdinalIgnoreCase) ||
-            name.EndsWith(".webmanifest", StringComparison.OrdinalIgnoreCase))
-        {
-            headers.CacheControl = "no-store, no-cache, must-revalidate";
-            headers.Pragma = "no-cache";
-            headers.Expires = "0";
-        }
-        else if (ctx.Context.Request.Path.StartsWithSegments("/assets"))
-        {
-            headers.CacheControl = "public, max-age=31536000, immutable";
-        }
-    };
+        ClaudeHomeServer.Services.DynamicModules.RemoteStaticFiles.ApplyCacheHeaders(
+            ctx.Context.Request.Path, ctx.File.Name, ctx.Context.Response.Headers);
 
     // .onnx (модель Silero барж-ина, wwwroot/vad) в стандартной карте MIME отсутствует —
     // без явной записи StaticFiles отвечает 404, SPA-fallback отдаёт вместо модели
@@ -2019,7 +2006,8 @@ if (Directory.Exists(distPath))
         // Из RemoteUrl = "/{имя}-remote/remoteEntry.js" папка на диске = первый слаг URL.
         var folder = remoteUrl.TrimStart('/').Split('/')[0];
         if (string.IsNullOrEmpty(folder)) continue;
-        var remotePath = Path.Combine(AppContext.BaseDirectory, "wwwroot", folder);
+        var remotePath = Path.Combine(
+            ClaudeHomeServer.Services.DynamicModules.RemoteStaticFiles.PrimaryRoot(app.Configuration), folder);
         if (Directory.Exists(remotePath))
         {
             app.UseStaticFiles(new StaticFileOptions

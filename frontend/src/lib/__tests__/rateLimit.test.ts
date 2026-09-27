@@ -126,11 +126,11 @@ describe('пилюля лимитов в шапке чата', () => {
       five_hour: win('five_hour', { utilization: 0.41 }),
     });
     expect(ratePillSegments(windows)).toEqual([
-      { limitType: 'five_hour', label: '5ч', text: '41%', level: 'normal' },
-      { limitType: 'seven_day', label: 'Нед', text: '12%', level: 'normal' },
-      { limitType: 'seven_day_opus', label: 'Opus', text: '30%', level: 'normal' },
+      { limitType: 'five_hour', label: '5ч', text: '41%', pct: 41, level: 'normal' },
+      { limitType: 'seven_day', label: 'Нед', text: '12%', pct: 12, level: 'normal' },
+      { limitType: 'seven_day_opus', label: 'Opus', text: '30%', pct: 30, level: 'normal' },
     ]);
-    expect(ratePillCompact(windows)).toEqual({ head: { limitType: 'five_hour', label: '5ч', text: '41%', level: 'normal' }, more: 2 });
+    expect(ratePillCompact(windows)).toEqual({ head: { limitType: 'five_hour', label: '5ч', text: '41%', pct: 41, level: 'normal' }, more: 2 });
   });
 
   it('окно без utilization в чате берёт процент из снимка аккаунта (то же окно)', () => {
@@ -177,7 +177,7 @@ describe('пилюля лимитов в шапке чата', () => {
 
   it('окно без процента нигде → прочерк, а не 0%', () => {
     const out = withAccountFallback([win('five_hour', { status: 'allowed', resetsAt: R5 })], [], NOW);
-    expect(ratePillSegments(out)).toEqual([{ limitType: 'five_hour', label: '5ч', text: '—', level: 'normal' }]);
+    expect(ratePillSegments(out)).toEqual([{ limitType: 'five_hour', label: '5ч', text: '—', pct: null, level: 'normal' }]);
   });
 
   it('пустой набор → нет сегментов и нет сжатой формы', () => {
@@ -192,19 +192,49 @@ describe('пилюля лимитов в шапке чата', () => {
       seven_day: win('seven_day', { utilization: 1, isUsingOverage: true }),
       seven_day_opus: win('seven_day_opus', { utilization: 0.2 }),
     });
-    expect(ratePillCompact(windows)).toEqual({ head: { limitType: 'seven_day', label: 'Нед', text: '100%+', level: 'danger' }, more: 2 });
+    expect(ratePillCompact(windows)).toEqual({ head: { limitType: 'seven_day', label: 'Нед', text: '100%+', pct: 100, level: 'danger' }, more: 2 });
     expect(ratePillSegments(windows).find(s => s.limitType === 'seven_day')?.level).toBe('danger');
   });
 
-  it('снимок аккаунта из сброшенного окна отбрасывается: старые «90%» не горят красным', () => {
+  it('снимок аккаунта из сброшенного окна: старые «90%» не горят, окно остаётся прочерком «устарело»', () => {
     const out = withAccountFallback(
       [],
       [snap('2026-09-27T10:00:00Z', 'five_hour', { utilization: 0.9, resetsAt: '2026-09-27T11:00:00Z' }),
         snap('2026-09-27T11:50:00Z', 'seven_day', { utilization: 0.12, resetsAt: RW })],
       NOW,
     );
-    expect(ratePillSegments(out).map(s => `${s.label} ${s.text}`)).toEqual(['Нед 12%']);
+    expect(ratePillSegments(out).map(s => `${s.label} ${s.text}`)).toEqual(['5ч —', 'Нед 12%']);
+    expect(ratePillSegments(out)[0]).toEqual({ limitType: 'five_hour', label: '5ч', text: '—', pct: null, level: 'normal', stale: true });
+    expect(ratePillSegments(out)[1].stale).toBeFalsy();
     expect(out.some(w => w.level === 'danger')).toBe(false);
+  });
+
+  it('устаревшее окно берёт сброс последнего снимка; свежий снимок того же окна убирает пометку', () => {
+    const stale = withAccountFallback(
+      [],
+      [snap('2026-09-27T09:00:00Z', 'five_hour', { utilization: 0.5, resetsAt: '2026-09-27T10:00:00Z' }),
+        snap('2026-09-27T10:30:00Z', 'five_hour', { utilization: 0.8, resetsAt: '2026-09-27T11:00:00Z' })],
+      NOW,
+    );
+    expect(stale).toHaveLength(1);
+    expect(stale[0]).toMatchObject({ limitType: 'five_hour', stale: true, hasUtil: false, resetsAt: '2026-09-27T11:00:00Z' });
+
+    const fresh = withAccountFallback(
+      [],
+      [snap('2026-09-27T10:30:00Z', 'five_hour', { utilization: 0.8, resetsAt: '2026-09-27T11:00:00Z' }),
+        snap('2026-09-27T11:55:00Z', 'five_hour', { utilization: 0.05, resetsAt: '2026-09-27T16:00:00Z' })],
+      NOW,
+    );
+    expect(ratePillSegments(fresh)).toEqual([{ limitType: 'five_hour', label: '5ч', text: '5%', pct: 5, level: 'normal' }]);
+  });
+
+  it('сброшенное служебное окно не превращается в устаревшее', () => {
+    const out = withAccountFallback(
+      [],
+      [snap('2026-09-27T10:00:00Z', 'seven_day_overage_included', { utilization: 0.1, resetsAt: '2026-09-27T11:00:00Z' })],
+      NOW,
+    );
+    expect(out).toEqual([]);
   });
 
   it('сброшенный снимок не глушит событие чата без процента: окно остаётся прочерком', () => {
@@ -213,7 +243,7 @@ describe('пилюля лимитов в шапке чата', () => {
       [snap('2026-09-27T10:00:00Z', 'five_hour', { utilization: 0.9, resetsAt: '2026-09-27T11:00:00Z' })],
       NOW,
     );
-    expect(ratePillSegments(out)).toEqual([{ limitType: 'five_hour', label: '5ч', text: '—', level: 'normal' }]);
+    expect(ratePillSegments(out)).toEqual([{ limitType: 'five_hour', label: '5ч', text: '—', pct: null, level: 'normal' }]);
   });
 
   it('хвост «+N» отделён отступом, в том числе после перерасхода', () => {

@@ -19,7 +19,7 @@ import { PersonaFace } from '../../features/personas/PersonaFace';
 import { GroupParticipantsPopover } from '../../features/personas/GroupParticipantsPopover';
 import { personaTitleLines } from '../../lib/personas';
 import { AGENT_COLORS, agentDotColor } from '../AgentSelector';
-import { type RateWindow, RATE_COLORS, windowLabel, fmtReset, worstWindow, withAccountFallback, ratePillSegments, ratePillCompact, ratePillVisible, ratePillMoreText } from '../../lib/rateLimit';
+import { type RateWindow, type RatePillSegment, RATE_COLORS, windowLabel, fmtReset, worstWindow, withAccountFallback, ratePillSegments, ratePillCompact, ratePillVisible, ratePillMoreText } from '../../lib/rateLimit';
 import { useAccountUsage, accountSnapshotsFor } from '../../lib/accountUsage';
 import { type ContextEstimate } from '../../lib/context';
 import { ContextThresholdsDialog } from '../ContextThresholdsDialog';
@@ -97,12 +97,16 @@ function RateRow({ w }: { w: RateWindow }) {
         <span style={{ fontFamily: FONT.sans, fontSize: 12, color: C.textSecondary }}>
           {windowLabel(w.limitType)}{w.isUsingOverage ? ' · перерасход' : ''}
         </span>
-        <span style={{ fontFamily: FONT.mono, fontSize: 12, fontWeight: 700, color: c.text }}>{w.pct}%{w.isUsingOverage ? '+' : ''}</span>
+        <span style={{ fontFamily: FONT.mono, fontSize: 12, fontWeight: 700, color: c.text }}>{w.stale ? '—' : `${w.pct}%${w.isUsingOverage ? '+' : ''}`}</span>
       </div>
-      <div style={{ height: 4, borderRadius: 2, background: C.track, overflow: 'hidden', margin: '3px 0' }}>
-        <div style={{ width: `${Math.min(100, w.pct)}%`, height: '100%', background: c.fill }} />
-      </div>
-      {reset && <div style={{ fontFamily: FONT.sans, fontSize: 10.5, color: C.textMuted }}>сброс {reset}</div>}
+      {!w.stale && (
+        <div style={{ height: 4, borderRadius: 2, background: C.track, overflow: 'hidden', margin: '3px 0' }}>
+          <div style={{ width: `${Math.min(100, w.pct)}%`, height: '100%', background: c.fill }} />
+        </div>
+      )}
+      {w.stale
+        ? <div style={{ fontFamily: FONT.sans, fontSize: 10.5, color: C.textMuted }}>данные устарели</div>
+        : reset && <div style={{ fontFamily: FONT.sans, fontSize: 10.5, color: C.textMuted }}>сброс {reset}</div>}
     </div>
   );
 }
@@ -250,14 +254,26 @@ function ClaudeCostPopoverBody({ stats, billing, onBillingChange, windows }: {
 // Окна лимитов на лицевой стороне пилюли, каждое цветом своего уровня.
 // compact — только худшее окно и «+N» (мобила/планшет: шапка тесная).
 // Нормальный уровень — нейтральным текстом пилюли: янтарь и красный заметны только на фоне спокойных окон
+// Мини-бар окна — тот же, что у пилюли контекста (ContextAmount): трек + заливка цветом уровня.
+// Процент неизвестен — бар не рисуем, остаётся «—».
+function RateMiniBar({ seg, compact }: { seg: RatePillSegment; compact?: boolean }) {
+  if (seg.pct === null) return null;
+  return (
+    <span style={{ width: compact ? 18 : 26, height: 5, borderRadius: 3, background: C.track, overflow: 'hidden', display: 'inline-block' }}>
+      <span style={{ display: 'block', width: `${seg.pct}%`, height: '100%', background: RATE_COLORS[seg.level].fill }} />
+    </span>
+  );
+}
+
 function RatePillText({ windows, compact }: { windows: RateWindow[]; compact?: boolean }) {
   const segColor = (level: RateWindow['level']) => level === 'normal' ? C.textSecondary : RATE_COLORS[level].text;
+  const segStyle = (level: RateWindow['level']) => ({ color: segColor(level), display: 'inline-flex', alignItems: 'center', gap: 5 });
   if (compact) {
     const c = ratePillCompact(windows);
     if (!c) return <span style={{ color: C.textMuted }}>—</span>;
     return (
-      <span style={{ whiteSpace: 'nowrap' }}>
-        <span style={{ color: segColor(c.head.level) }}>{c.head.label} {c.head.text}</span>
+      <span style={{ whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center' }}>
+        <span style={segStyle(c.head.level)}>{c.head.label} <RateMiniBar seg={c.head} compact /> {c.head.text}</span>
         {c.more > 0 && <span style={{ color: C.textSecondary, fontWeight: 600 }}>{ratePillMoreText(c.more)}</span>}
       </span>
     );
@@ -266,11 +282,11 @@ function RatePillText({ windows, compact }: { windows: RateWindow[]; compact?: b
   const { segments: segs, more } = ratePillVisible(windows);
   if (segs.length === 0) return <span style={{ color: C.textMuted }}>—</span>;
   return (
-    <span style={{ whiteSpace: 'nowrap' }}>
+    <span style={{ whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center' }}>
       {segs.map((s, i) => (
-        <span key={s.limitType}>
+        <span key={s.limitType} style={{ display: 'inline-flex', alignItems: 'center', whiteSpace: 'pre' }}>
           {i > 0 && <span style={{ color: C.textMuted, fontWeight: 400 }}> · </span>}
-          <span style={{ color: segColor(s.level) }}>{s.label} {s.text}</span>
+          <span style={segStyle(s.level)}>{s.label} <RateMiniBar seg={s} /> {s.text}</span>
         </span>
       ))}
       {more > 0 && <span style={{ color: C.textSecondary, fontWeight: 600 }}>{ratePillMoreText(more)}</span>}
@@ -299,7 +315,7 @@ function ClaudePillAmount({ stats, billing, windows, compact }: {
 function rateTitle(windows: RateWindow[]): string {
   const segs = ratePillSegments(windows);
   if (segs.length === 0) return 'Лимиты подписки Claude — нажмите для разбивки';
-  return 'Лимиты подписки: ' + segs.map(s => `${windowLabel(s.limitType)} ${s.text}`).join(', ') + ' — нажмите для разбивки';
+  return 'Лимиты подписки: ' + segs.map(s => `${windowLabel(s.limitType)} ${s.text}${s.stale ? ' (данные устарели)' : ''}`).join(', ') + ' — нажмите для разбивки';
 }
 
 function CostBadge({ stats, isMobile, billing, onBillingChange, windows, resetKey }: {

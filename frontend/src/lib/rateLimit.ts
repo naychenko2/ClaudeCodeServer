@@ -6,6 +6,7 @@ export interface RateWindow extends RateLimitInfo {
   pct: number;                          // 0..100 (0 если процент неизвестен)
   hasUtil: boolean;                     // пришёл ли реальный utilization (при низком расходе его нет)
   level: 'normal' | 'warn' | 'danger';
+  stale?: boolean;                      // окно сброшено, а свежего снимка нет — данные устарели
 }
 
 const WINDOW_LABELS: Record<string, string> = {
@@ -120,7 +121,8 @@ export function latestPerWindow(snapshots: UsageSnapshot[]): Array<RateWindow & 
 // перебило бы свежий снимок: окно уже сброшено (resetsAt в прошлом) или событие без процента
 // и без сброса, а у аккаунта это окно есть (такому событию нечем уточнить снимок).
 // Снимки аккаунта из уже сброшенного окна отбрасываются по тому же условию: старый «90%»
-// после сброса — неправда, лучше прочерк или свежая цифра.
+// после сброса — неправда. Но окно при этом не пропадает: если свежих данных о нём нет
+// (опрос лимитов лёг), оно остаётся прочерком с пометкой stale — «данные устарели».
 export function withAccountFallback(chat: RateLimitInfo[], accountSnapshots: UsageSnapshot[], now: string = new Date().toISOString()): RateWindow[] {
   const nowMs = new Date(now).getTime();
   const expired = (resetsAt?: string) => !!resetsAt && new Date(resetsAt).getTime() <= nowMs;
@@ -129,13 +131,24 @@ export function withAccountFallback(chat: RateLimitInfo[], accountSnapshots: Usa
   const live = chat.filter(w =>
     !expired(w.resetsAt)
     && (typeof w.utilization === 'number' || !!w.resetsAt || !accountTypes.has(w.limitType)));
-  return latestPerWindow([
+  const fresh = latestPerWindow([
     ...account,
     ...live.map(w => ({
       timestamp: now, limitType: w.limitType, utilization: w.utilization, status: w.status,
       isUsingOverage: w.isUsingOverage, resetsAt: w.resetsAt, overageStatus: w.overageStatus, overageResetsAt: w.overageResetsAt,
     })),
   ]);
+  const seen = new Set(fresh.map(w => w.limitType));
+  const staleByType = new Map<string, UsageSnapshot>();
+  for (const s of accountSnapshots) {
+    if (seen.has(s.limitType) || NON_WINDOW_TYPES.has(s.limitType) || !expired(s.resetsAt)) continue;
+    const prev = staleByType.get(s.limitType);
+    if (!prev || new Date(s.timestamp).getTime() > new Date(prev.timestamp).getTime()) staleByType.set(s.limitType, s);
+  }
+  const stale: RateWindow[] = [...staleByType.values()].map(s => ({
+    limitType: s.limitType, resetsAt: s.resetsAt, pct: 0, hasUtil: false, level: 'normal', stale: true,
+  }));
+  return [...fresh, ...stale];
 }
 
 // Короткие подписи окон для пилюли шапки (полные — windowLabel, в поповере)
@@ -170,7 +183,9 @@ export interface RatePillSegment {
   limitType: string;
   label: string;                        // «5ч», «Нед», «Opus»
   text: string;                         // «41%», «100%+» (перерасход), «—» (процент неизвестен)
+  pct: number | null;                   // 0..100 для мини-бара; null — процент неизвестен
   level: RateWindow['level'];
+  stale?: boolean;                      // данные окна устарели (прочерк без мини-бара)
 }
 
 function toSegment(w: RateWindow): RatePillSegment {
@@ -178,7 +193,9 @@ function toSegment(w: RateWindow): RatePillSegment {
     limitType: w.limitType,
     label: shortWindowLabel(w.limitType),
     text: w.hasUtil ? `${w.pct}%${w.isUsingOverage ? '+' : ''}` : '—',
+    pct: w.hasUtil ? w.pct : null,
     level: w.level,
+    stale: w.stale,
   };
 }
 

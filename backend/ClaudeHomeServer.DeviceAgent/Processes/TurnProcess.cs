@@ -5,7 +5,7 @@ namespace ClaudeHomeServer.DeviceAgent.Processes;
 
 /// <summary>
 /// Что запустить: путь к бинарю берётся только из аренды управляемой копии. <see cref="JobName"/> —
-/// имя Job Object хода с руками (Windows): по нему мост отличает свои окна от чужих.
+/// имя Job Object хода с руками (Windows), только для журнала: мосту оно не передаётся.
 /// </summary>
 internal sealed record TurnLaunch(
     string ExecutablePath,

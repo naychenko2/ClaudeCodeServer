@@ -22,8 +22,8 @@ public class HandsBridgeSourceGuardTests
         { HandsTools.UiClick, "Automation/Tools/UIClickTool.cs", "HandsGate.Policy.CheckUi(HandsTools.UiClick," },
         { HandsTools.UiType, "Automation/Tools/UITypeTool.cs", "HandsGate.Policy.CheckUi(HandsTools.UiType," },
         { HandsTools.UiRead, "Automation/Tools/UIReadTool.cs", "HandsGate.Policy.CheckUi(HandsTools.UiRead," },
-        { HandsTools.WindowManagement, "Tools/WindowManagementTool.cs", "HandsGate.Policy.CheckWindowAction(" },
-        { HandsTools.ScreenshotControl, "Tools/ScreenshotControlTool.cs", "HandsGate.Policy.CheckScreenshot(" },
+        { HandsTools.WindowManagement, "Tools/WindowManagementTool.cs", "HandsPolicy.CheckWindowAction(" },
+        { HandsTools.ScreenshotControl, "Tools/ScreenshotControlTool.cs", "HandsPolicy.CheckScreenshot(" },
     };
 
     [Fact]
@@ -52,13 +52,23 @@ public class HandsBridgeSourceGuardTests
         Assert.True(firstAwait < 0 || denyAt < firstAwait, $"{tool}: действие раньше гейта");
     }
 
+    /// <summary>
+    /// Граница «только свои окна» снята (ADR-016 §7): список, поиск (в том числе по заголовку) и
+    /// окно переднего плана отдают все окна, а не фильтруются, и поиск окна после запуска — тоже.
+    /// </summary>
     [Fact]
-    public void List_find_and_foreground_filter_own_windows()
+    public void List_find_and_foreground_return_every_window()
     {
-        var source = Read("Tools/WindowManagementTool.cs");
+        var windows = Read("Tools/WindowManagementTool.cs");
+        var app = Read("Tools/AppTool.cs");
 
-        Assert.Equal(2, Regex.Matches(source, @"HandsGate\.Policy\.FilterOwn\(").Count);
-        Assert.Contains("HandsGate.Policy.CheckForegroundResult(", source);
+        foreach (var source in new[] { windows, app })
+        {
+            Assert.DoesNotContain("FilterOwn", source);
+            Assert.DoesNotContain("IsOwnWindow", source);
+            Assert.DoesNotContain("CheckForegroundResult", source);
+        }
+        Assert.Contains("HandleWaitForAsync(title,", windows);
     }
 
     [Fact]

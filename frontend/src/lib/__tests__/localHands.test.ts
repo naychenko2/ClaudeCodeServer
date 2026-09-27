@@ -93,7 +93,7 @@ describe('handsBadgeView', () => {
   it('руки в ходе — «Стоп» и имя устройства', () => {
     const v = handsBadgeView({ state: HandsChatState.Active, deviceName: 'home-pc' }, null);
     expect(v).toMatchObject({ tone: 'success', canStop: true, text: 'ИИ за компьютером home-pc', short: 'Руки' });
-    expect(v.title).toContain('только окна, которые открыл сам');
+    expect(v.title).toContain('любые окна на этом компьютере, в том числе снимать экран');
   });
 
   it('провайдер не доверен — подсказка, где настроить', () => {

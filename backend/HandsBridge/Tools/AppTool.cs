@@ -35,9 +35,8 @@ public static partial class AppTool
     /// surface as ARIA/visible-text UIA names. Browser chrome (address bar, tabs) is best-effort — use keyboard shortcuts.
     ///
     /// HANDS: any program can be started by the full path to its .exe, except interpreters and terminals (cmd, PowerShell,
-    /// Python, Node, bash, Windows Terminal...). Only windows of programs started in this turn are available to the other
-    /// tools. Launcher stubs that hand off to another process (calc.exe, Store apps, a browser that is already running)
-    /// are not supported.
+    /// Python, Node, bash, Windows Terminal, Explorer...). Launcher stubs that hand off to another process (calc.exe,
+    /// Store apps, a browser that is already running) return no handle: find their window with window_management.
     /// </remarks>
     /// <param name="programPath">Full path to the program's .exe (e.g., 'C:\\Program Files\\App\\app.exe'). Names without a folder are not searched in PATH.</param>
     /// <param name="arguments">Command-line arguments for the program (optional). Example: '--new-window' for browsers.</param>
@@ -187,15 +186,16 @@ public static partial class AppTool
                 var timeout = timeoutMs ?? WindowsToolsBase.TimeoutMs;
                 var deadline = DateTime.UtcNow.AddMilliseconds(timeout);
 
-                // Руки: окно ищется только среди своих окон этого процесса. Ветки upstream «заглушка
-                // вышла — ищем окно по заголовку» и «любое окно процесса с тем же именем» удалены:
-                // обе отдавали модели чужое окно.
+                // Руки: окно ищется только среди окон этого процесса. Ветки upstream «заглушка
+                // вышла — ищем окно по заголовку» и «любое окно процесса с тем же именем» не
+                // возвращаем: они выдавали за запущенное окно другой программы. Найти окно по
+                // заголовку модель может сама — window_management find/wait_for.
                 while (!process.HasExited && DateTime.UtcNow < deadline)
                 {
                     await Task.Delay(100, cancellationToken);
                     process.Refresh();
 
-                    var processWindow = await FindOwnProcessWindowAsync(windowService, process, cancellationToken);
+                    var processWindow = await FindProcessWindowAsync(windowService, process, cancellationToken);
                     if (processWindow != null)
                     {
                         return WindowManagementResult.CreateWindowSuccess(
@@ -212,7 +212,7 @@ public static partial class AppTool
                         "Programs that hand off to another process (launcher stubs, an already running browser) are not supported by hands.");
                 }
 
-                var finalWindow = await FindOwnProcessWindowAsync(windowService, process, cancellationToken);
+                var finalWindow = await FindProcessWindowAsync(windowService, process, cancellationToken);
                 if (finalWindow != null)
                 {
                     return WindowManagementResult.CreateWindowSuccess(
@@ -221,7 +221,7 @@ public static partial class AppTool
                 }
 
                 return WindowManagementResult.CreateSuccess(
-                    $"Launched '{programPath}' (PID: {process.Id}), but window did not appear within timeout. Use window_management(action='list') to see your windows.");
+                    $"Launched '{programPath}' (PID: {process.Id}), but window did not appear within timeout. Use window_management(action='list') to find it.");
             }
 
             // Not waiting for window - just return success
@@ -249,14 +249,14 @@ public static partial class AppTool
     }
 
     /// <summary>
-    /// Своё окно запущенного процесса: сначала главное, затем любое видимое окно того же PID.
+    /// Окно запущенного процесса: сначала главное, затем любое видимое окно того же PID.
     /// </summary>
-    private static async Task<WindowInfoCompact?> FindOwnProcessWindowAsync(
+    private static async Task<WindowInfoCompact?> FindProcessWindowAsync(
         Window.WindowService windowService,
         Process process,
         CancellationToken cancellationToken)
     {
-        if (process.MainWindowHandle != IntPtr.Zero && HandsGate.Policy.IsOwnWindow(process.MainWindowHandle))
+        if (process.MainWindowHandle != IntPtr.Zero)
         {
             var windowInfo = await windowService.GetWindowInfoAsync(process.MainWindowHandle, cancellationToken);
             if (windowInfo != null)
@@ -271,8 +271,7 @@ public static partial class AppTool
             return null;
         }
 
-        var own = HandsGate.Policy.FilterOwn(listResult.Windows.Where(w => w.ProcessId == process.Id), w => w.Handle);
-        return own.Count > 0 ? own[0] : null;
+        return listResult.Windows.FirstOrDefault(w => w.ProcessId == process.Id);
     }
 
     /// <summary>

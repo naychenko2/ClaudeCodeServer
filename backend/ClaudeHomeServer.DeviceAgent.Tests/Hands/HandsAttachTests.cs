@@ -114,9 +114,10 @@ public class HandsAttachTests : IDisposable
         ((string?)node["type"]).Should().Be("stdio");
         ((string?)node["command"]).Should().Be(_fx.Component.BridgePath, "команду сервер не шлёт — её ставит агент");
         var args = node["args"]!.AsArray().Select(a => (string?)a).ToList();
-        args.Take(2).Should().Equal(HandsBridgeArgs.TurnJob, lease.JobName);
-        if (vision) args.Should().HaveCount(2);
-        else args.Skip(2).Should().Equal(HandsBridgeArgs.ExcludeTools, HandsAttach.ScreenshotTool);
+        // Имя Job хода мосту не едет: граница «только свои окна» снята (ADR-016 §7)
+        args.Should().NotContain("--turn-job").And.NotContain(lease.JobName);
+        if (vision) args.Should().BeEmpty();
+        else args.Should().Equal(HandsBridgeArgs.ExcludeTools, HandsAttach.ScreenshotTool);
         JsonNode.Parse(content)!["mcpServers"]!["tasks"].Should().NotBeNull("прочие узлы не тронуты");
     }
 }

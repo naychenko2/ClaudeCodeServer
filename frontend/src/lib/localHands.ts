@@ -23,7 +23,8 @@ export const HandsEndReason = {
   Busy: 'busy',
 } as const;
 
-export const HANDS_OWN_WINDOWS_TEXT = 'ИИ видит и трогает только окна, которые открыл сам.';
+// Границы «только свои окна» нет (решение владельца 2026-09-27, ADR-016 §7)
+export const HANDS_ANY_WINDOW_TEXT = 'ИИ может видеть и трогать любые окна на этом компьютере, в том числе снимать экран.';
 export const HANDS_SETTINGS_HINT = 'Меню профиля → «Руки на устройствах».';
 
 // ---------- секция проекта ----------
@@ -140,7 +141,7 @@ export function handsBadgeView(status: HandsStatusSnapshot | null, projectDevice
         tone: 'success',
         text: device ? `ИИ за компьютером ${device}` : 'ИИ за компьютером',
         short: 'Руки',
-        title: `ИИ управляет окнами на устройстве${onDevice(device)}. ${HANDS_OWN_WINDOWS_TEXT} «Стоп» прервёт ход.`,
+        title: `ИИ управляет окнами на устройстве${onDevice(device)}. ${HANDS_ANY_WINDOW_TEXT} «Стоп» прервёт ход.`,
         canStop: true,
       };
     case HandsChatState.Allowed:
@@ -148,7 +149,7 @@ export function handsBadgeView(status: HandsStatusSnapshot | null, projectDevice
         tone: 'neutral',
         text: 'Руки готовы',
         short: 'Руки',
-        title: `Руки на устройстве${onDevice(device)} готовы: ИИ возьмёт их, когда понадобится. ${HANDS_OWN_WINDOWS_TEXT}`,
+        title: `Руки на устройстве${onDevice(device)} готовы: ИИ возьмёт их, когда понадобится. ${HANDS_ANY_WINDOW_TEXT}`,
         canStop: false,
       };
     case HandsChatState.Unavailable:
@@ -189,7 +190,7 @@ export function handsBadgeView(status: HandsStatusSnapshot | null, projectDevice
         tone: 'neutral',
         text: 'Руки включены',
         short: 'Руки',
-        title: `Руки включены в проекте: ИИ сможет открывать программы на устройстве${onDevice(device)}. ${HANDS_OWN_WINDOWS_TEXT}`,
+        title: `Руки включены в проекте: ИИ сможет открывать программы на устройстве${onDevice(device)}. ${HANDS_ANY_WINDOW_TEXT}`,
         canStop: false,
       };
   }

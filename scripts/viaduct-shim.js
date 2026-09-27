@@ -9,6 +9,13 @@
  * подменяет оба in-memory-хранилищами и мостит ключ модели к хосту через postMessage.
  * Никаких токенов и адресов API внутри фрейма нет: хранит модель только хост.
  *
+ * Monaco (редакторы документов, sequence, контрактов) Viaduct штатно тянет с CDN, а CSP
+ * фрейма пускает только 'self'. Сборка кладёт AMD-Monaco рядом (monaco/vs) и описывает его
+ * в <script type="application/json" id="viaduct-monaco">; шим поднимает его до старта
+ * бандла — @monaco-editor/loader видит готовый window.monaco и на CDN не идёт. Воркеры
+ * стартуют из blob по тексту файла: из непрозрачного origin new Worker(url) бросает
+ * SecurityError (скрипт воркера «чужой»), а blob, созданный в самом фрейме, — свой.
+ *
  * Протокол (версия v=1), все сообщения — объекты с полями source и v:
  *   фрейм → хост (source: 'viaduct-shim'):
  *     ready                         — шим встал, жду init (повторяется, пока init не придёт);
@@ -34,6 +41,7 @@
   var SAVE_DEBOUNCE_MS = 1200;
   var PREFS_DEBOUNCE_MS = 1500;
   var READY_RETRY_MS = 500;
+  var MONACO_TIMEOUT_MS = 15000;
 
   var parentWin = window.parent;
   if (!parentWin || parentWin === window) return; // открыт не во фрейме — шиму делать нечего
@@ -136,6 +144,75 @@
     else fn();
   }
 
+  // Объект хоста для бандла: autoHandles — перевыбор сторон связей после переноса карточки
+  // (сборка без этой правки флаг просто не читает). Остальное — диагностика для проверок и
+  // DevTools: встал ли локальный Monaco, сколько воркеров поднято
+  var diag = window.__viaductHost = { autoHandles: true, monaco: false, workers: 0 };
+
+  // Локальный Monaco. done() зовётся ровно один раз — и при успехе, и при провале: без
+  // Monaco бандл всё равно стартует (холст работает, редакторы — нет), лучше, чем пустой фрейм
+  function bootMonaco(done) {
+    var el = document.getElementById('viaduct-monaco');
+    if (!el) { done(); return; } // сборка без Monaco (старый скрипт) — прежнее поведение
+    var cfg;
+    try { cfg = JSON.parse(el.textContent); } catch (e) { console.error('[viaduct-shim] конфиг Monaco', e); done(); return; }
+    var amd = window.require;
+    if (typeof amd !== 'function' || typeof amd.config !== 'function') {
+      console.error('[viaduct-shim] AMD-загрузчик Monaco не встал');
+      done();
+      return;
+    }
+    var workers = cfg.workers || {};
+    // Ставится ПОСЛЕ editor.main: AMD-сборка при загрузке перетирает MonacoEnvironment
+    // своим getWorker (new Worker(url) — из песочницы падает, и Monaco молча уводит воркеры
+    // в главный поток)
+    var environment = {
+      getWorker: function (_, label) {
+        var url = label === 'json' && workers.json ? workers.json : workers.editor;
+        return fetch(url)
+          .then(function (r) {
+            if (!r.ok) throw new Error('воркер Monaco ' + url + ': HTTP ' + r.status);
+            return r.text();
+          })
+          .then(function (text) {
+            diag.workers++;
+            return new Worker(URL.createObjectURL(new Blob([text], { type: 'text/javascript' })), { name: label });
+          });
+      },
+    };
+    amd.config({ paths: { vs: cfg.vs } });
+    // У AMD-загрузчика нет таймаута: повисший запрос editor.main держал бы фрейм пустым
+    // навсегда. Повторный done() безопасен — его отсекает вызывающий
+    setTimeout(function () {
+      if (!diag.monaco) { console.error('[viaduct-shim] Monaco не загрузился за ' + MONACO_TIMEOUT_MS + ' мс'); done(); }
+    }, MONACO_TIMEOUT_MS);
+    amd(['vs/editor/editor.main'], function () {
+      window.MonacoEnvironment = environment;
+      diag.monaco = !!(window.monaco && window.monaco.editor);
+      done();
+    }, function (err) {
+      console.error('[viaduct-shim] Monaco не загрузился', err);
+      done();
+    });
+  }
+
+  // Бандл стартует, когда есть и модель от хоста (init), и Monaco — в любом порядке
+  var monacoSettled = false;
+  var appRequested = false;
+  var appStarted = false;
+  function maybeStartApp() {
+    if (appStarted || !monacoSettled || !appRequested) return;
+    appStarted = true;
+    startApp();
+  }
+  whenDomReady(function () {
+    bootMonaco(function () {
+      if (monacoSettled) return;
+      monacoSettled = true;
+      maybeStartApp();
+    });
+  });
+
   function focusElement(id) {
     if (!id) return;
     try {
@@ -167,7 +244,7 @@
         local.load(ONBOARDING_KEY, '1');
       }
       if (msg.focus) { try { history.replaceState(null, '', editorUrl(String(msg.focus))); } catch (err) { /* без фокуса */ } }
-      whenDomReady(startApp);
+      whenDomReady(function () { appRequested = true; maybeStartApp(); });
     } else if (msg.type === 'focus') {
       focusElement(msg.elementId);
     } else if (msg.type === 'flush') {

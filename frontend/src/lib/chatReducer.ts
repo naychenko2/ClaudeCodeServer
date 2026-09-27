@@ -4,6 +4,7 @@
 // остаются в хуке; редьюсер только считает следующее состояние.
 
 import type { ChatItem, ServerMessage, RateLimitInfo, WorkLoopState, TeamImplementState, TeamWavePulse, SessionTeamImplement } from '../types';
+import { handsStatusFeedLine } from './localHands';
 import { isBgLaunchResult } from './agentTail';
 
 // Live-состояние режима «Командная реализация» из REST-гидратации (Session.teamImplement):
@@ -1032,6 +1033,18 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
           liveness: msg.liveness,
         },
       };
+
+    case 'hands_notice':
+      // Строка о руках от сервера (понижение «Без ограничений» и подобное) — live-only:
+      // событие эфемерное, после перезагрузки его нет и в истории
+      return withItems([...prev.items, { kind: 'hands_notice', text: msg.text, tone: 'neutral' }]);
+
+    case 'hands_status': {
+      // Состояние рук живёт в бейдже (LocalHandsBadge слушает то же событие); в ленту идёт
+      // только остановка на устройстве — она объясняет, почему ход оборвался
+      const line = handsStatusFeedLine(msg);
+      return line ? withItems([...prev.items, { kind: 'hands_notice', text: line, tone: 'warning' }]) : prev;
+    }
 
     case 'prompt_suggestion':
       // Подсказка следующего сообщения — приходит после result хода; в ленту не попадает

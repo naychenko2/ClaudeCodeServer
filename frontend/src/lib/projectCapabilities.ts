@@ -86,6 +86,15 @@ export function getProjectCapabilities(project: Project | null | undefined): Pro
   };
 }
 
+// Руки (ADR-016 §7) в группы не входят: доступность тумблера решает handsRefusal с сервера
+// (ProjectCapabilities.HandsRefusal без тумблера самого проекта). Сервер отдаёт поле всегда,
+// null там — «можно». Нет поля (старый бэк или проекта нет) — руки недоступны.
+const HANDS_UNKNOWN_REASON = 'Руки недоступны в этой версии сервера';
+
+function handsAvailable(project: Project | null | undefined): boolean {
+  return project?.handsRefusal === null;
+}
+
 // В какой группе живёт ключ. Возвращает группу или null для незнакомого ключа.
 // Сторож G10 разрешает в этом файле ВСЕ формы обращения к deviceId — потому проверки
 // локальности тут, а в панелях только host/features/reason из матрицы.
@@ -101,6 +110,7 @@ function findGroup(cap: ProjectCapabilitiesView, feature: ProjectFeatureKey): Pr
 // по этой функции. Не знаем ключа — false (защита от тихих регрессий при расширении
 // списка ключей на бэке).
 export function isFeatureAvailable(project: Project | null | undefined, feature: ProjectFeatureKey): boolean {
+  if (feature === ProjectFeature.Hands) return handsAvailable(project);
   const cap = getProjectCapabilities(project);
   const group = findGroup(cap, feature);
   if (!group) return false;
@@ -110,6 +120,7 @@ export function isFeatureAvailable(project: Project | null | undefined, feature:
 // Готовый текст причины недоступности (null если доступно). UI показывает его как
 // tooltip к скрытой панели/кнопке.
 export function featureReason(project: Project | null | undefined, feature: ProjectFeatureKey): string | null {
+  if (feature === ProjectFeature.Hands) return handsAvailable(project) ? null : project?.handsRefusal ?? HANDS_UNKNOWN_REASON;
   const cap = getProjectCapabilities(project);
   const group = findGroup(cap, feature);
   if (!group) return 'Возможность недоступна в этой версии';
@@ -195,7 +206,7 @@ export function useProjectCapabilities(project: Project | null | undefined): Pro
 // Удобный хук-чекер возможности — для частого использования в JSX
 // (useProjectFeature(project, 'files') вместо isFeatureAvailable(project, 'files')).
 export function useProjectFeature(project: Project | null | undefined, feature: ProjectFeatureKey): boolean {
-  return useMemo(() => isFeatureAvailable(project, feature), [project?.capabilities, project?.deviceId, feature]);
+  return useMemo(() => isFeatureAvailable(project, feature), [project?.capabilities, project?.deviceId, project?.handsRefusal, feature]);
 }
 
 // Бейдж «устройство не в сети» / «не готово»: project.device?.online=false или

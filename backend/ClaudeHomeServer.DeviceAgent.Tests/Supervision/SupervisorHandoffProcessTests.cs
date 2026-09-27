@@ -15,6 +15,7 @@ public sealed class SupervisorHandoffProcessTests : IDisposable
     private readonly string _root = Directory.CreateTempSubdirectory("agent-handoff-").FullName;
     private readonly string _home = Directory.CreateTempSubdirectory("agent-handoff-home-").FullName;
     private readonly List<Process> _processes = [];
+    private readonly List<string> _started = [];
 
     public void Dispose()
     {
@@ -43,20 +44,22 @@ public sealed class SupervisorHandoffProcessTests : IDisposable
         var result = await new DetachedSupervisorHandoff(layout, new ProcessStarter(this))
             .HandOffAsync("2.0.0", CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(60));
 
+        // Ok = преемник уже отметился в supervisor.handoff своим PID, то есть ждёт замок
         result.Should().Be(HandoffResult.Ok, Log(layout));
         var successor = _processes.Single();
-        await Task.Delay(1000);
-        successor.HasExited.Should().BeFalse("принявший эстафету ждёт замок, а не выходит «уже работает»");
+        _started.Should().Equal([layout.ExeOf("2.0.0")], "эстафета поднимает супервизор из каталога новой версии");
         File.ReadAllText(layout.SupervisorPidFile).Trim().Should().Be(Environment.ProcessId.ToString(),
             "пока прежний держит замок, новый не супервизор — двух одновременно нет");
 
         old.Dispose();
 
+        // Преемник взял замок и работает: pid-файл пишется сразу за замком, отметка эстафеты
+        // снимается после — ждём оба факта, а не строку журнала, которая пишется ещё позже.
+        // Выйди он «уже работает» вместо ожидания — pid-файл не стал бы его
         await SupervisorContractTests.WaitUntilAsync(
-            () => File.Exists(layout.SupervisorPidFile) && File.ReadAllText(layout.SupervisorPidFile).Trim() == successor.Id.ToString(),
+            () => ReadPid(layout.SupervisorPidFile) == successor.Id && !File.Exists(layout.SupervisorHandoffFile),
             "новый супервизор не взял замок после выхода прежнего", () => Log(layout));
-        Log(layout).Should().Contain("стартовал из").And.Contain(layout.VersionDir("2.0.0"));
-        File.Exists(layout.SupervisorHandoffFile).Should().BeFalse("отметка эстафеты убирается, взяв замок");
+        successor.HasExited.Should().BeFalse();
         SupervisorLock.TryAcquire(layout).Should().BeNull("замок у нового супервизора");
     }
 
@@ -82,6 +85,12 @@ public sealed class SupervisorHandoffProcessTests : IDisposable
         // Сигналы после exec живы: SIGTERM гасит супервизор, как systemctl stop
         kill(supervisor.Id, 15).Should().Be(0);
         await SupervisorContractTests.WaitUntilAsync(() => supervisor.HasExited, "SIGTERM не погасил супервизор после exec", () => Log(layout));
+    }
+
+    private static int? ReadPid(string file)
+    {
+        try { return int.TryParse(File.ReadAllText(file).Trim(), out var pid) ? pid : null; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
     }
 
     private static string Log(AgentLayout layout)
@@ -127,8 +136,11 @@ public sealed class SupervisorHandoffProcessTests : IDisposable
     /// <summary>Отсоединённый запуск для теста: обычный процесс, чтобы тест его и прибрал.</summary>
     private sealed class ProcessStarter(SupervisorHandoffProcessTests owner) : IDetachedStarter
     {
-        public DetachedStart Start(string executable, IReadOnlyList<string> args, string workingDirectory) =>
-            new(DetachedStartStatus.Started, owner.Start(executable, args, workingDirectory).Id);
+        public DetachedStart Start(string executable, IReadOnlyList<string> args, string workingDirectory)
+        {
+            owner._started.Add(executable);
+            return new(DetachedStartStatus.Started, owner.Start(executable, args, workingDirectory).Id);
+        }
     }
 
     [DllImport("libc", SetLastError = true)]

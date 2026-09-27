@@ -316,7 +316,9 @@ public static class SessionContextTypes
     public static bool IsKnown(string? value) => value is File or Url or Task;
 }
 
-// Привязка чата картинки к файлу проекта (ADR-018 §1). Пути — от корня проекта через «/».
+// Привязка чата картинки v2 к файлу проекта (ADR-018 §1). Пути — от корня проекта через «/».
+// С v3 (ADR-019) поле только для чтения: новых чатов картинки нет, а старые sessions.json
+// обязаны читаться. Удалять класс и поле Session.ImageChat нельзя.
 public sealed class SessionImageChat
 {
     // Файл, с которым чат связан сейчас. null — черновик «Нарисовать картинку»: файла ещё нет,
@@ -328,6 +330,10 @@ public sealed class SessionImageChat
     // Прежние пути, старые первыми (hero.png, hero.v2.png…): по ним поиск отдаёт «разговор
     // продолжился на новой версии»
     public List<string> Lineage { get; set; } = [];
+    // Когда чат ушёл в архив миграцией на v3 (ADR-019, решение 2); null — ещё не мигрирован.
+    // Аддитивное поле: BackupSchema.Version не растёт, восстановленный старый бэкап мигрирует
+    // при старте тем же кодом. Чат, который человек вернул из архива, повторно не архивируется
+    public DateTime? MigratedAt { get; set; }
 }
 
 public class Session

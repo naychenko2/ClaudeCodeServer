@@ -1,7 +1,6 @@
-import { useState, useEffect, useRef, lazy, Suspense } from 'react'
+import { useState, useEffect, useRef, lazy, Suspense, createElement } from 'react'
 import type { Project, AuthState } from './types'
 import { C } from './lib/design'
-import { AppOverlaySlot } from './components/AppOverlaySlot'
 import { LoginPage } from './pages/LoginPage'
 import { ProjectListPage } from './pages/ProjectListPage'
 import { ChatsPage } from './pages/ChatsPage'
@@ -1256,7 +1255,6 @@ export default function App() {
       {auth && <VideoStageFrame />}
       {/* Слои подсистем НАД страницами (редактор картинок): уход с проекта должен спросить
           про несохранённые варианты, а не молча размонтировать слой вместе с деревом файлов */}
-      {auth && !authChecking && <AppOverlaySlot />}
       {authChecking
         ? <LoadingScreen hint="Проверяю вход" />
         : !auth
@@ -1271,8 +1269,10 @@ export default function App() {
               ? <CalendarPage auth={auth} onLogout={logout} onHubTab={switchHubTab} onOpenTask={openTaskInProject} />
             : activeSubsystemKey
               ? <Suspense fallback={<div style={{ minHeight: '100vh', background: C.bgMain }} />}>
+                  {/* createElement, а не JSX: компонент не создаётся в рендере, а берётся
+                      из реестра — ленивый экземпляр живёт в манифесте и стабилен */}
                   {ActiveSubsystemTab
-                    ? <ActiveSubsystemTab auth={auth} onLogout={logout} onHubTab={switchHubTab} />
+                    ? createElement(ActiveSubsystemTab, { auth, onLogout: logout, onHubTab: switchHubTab })
                     : null}
                 </Suspense>
             : effectiveHubTab === 'personas'

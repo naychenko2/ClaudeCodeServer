@@ -55,3 +55,6 @@ export { BackButton } from './BackButton';
 export { WaitingIndicator } from './WaitingIndicator';
 export { Checkbox } from './Checkbox';
 export type { CheckboxProps } from './Checkbox';
+export { Chip, ChipX } from './Chip';
+export { ProgressBar } from './ProgressBar';
+export type { ProgressTone } from './ProgressBar';

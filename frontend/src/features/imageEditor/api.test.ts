@@ -1,8 +1,6 @@
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import {
-  createMockApi, imageEditErrorCode, isStaleRevision, MOCK_SOURCE_SIZE, nameTakenSuggestion,
+  createMockApi, imageEditErrorCode, MOCK_SOURCE_SIZE, nameTakenSuggestion,
   type ImageEditorApi,
 } from './api';
 
@@ -68,17 +66,14 @@ describe('мок save', () => {
     expect(nameTakenSuggestion(e)).toBe('images/hero.v2.png');
   });
 
-  it('источник — шаг истории, чат картинки переезжает на новый файл', async () => {
+  it('источник — шаг истории, формат по encode', async () => {
     const api = createMockApi('fal');
-    const chat = await api.createChat(P, { sourcePath: 'images/hero.png' });
     const step = await api.transform(P, { base: { path: 'images/hero.png' }, ops: [{ type: 'rotate', degrees: 90 }] });
     const saved = await api.save(P, {
       stepId: step.stepId, variant: 0, mode: 'as', folder: 'images', fileName: 'hero-evening',
-      encode: { format: 'webp', quality: 80 }, chatSessionId: chat.id,
+      encode: { format: 'webp', quality: 80 },
     });
     expect(saved.path).toBe('images/hero-evening.webp');
-    const found = await api.findChats(P, 'images/hero-evening.webp');
-    expect(found.current?.imageChat).toEqual({ currentPath: 'images/hero-evening.webp', lineage: ['images/hero.png'] });
   });
 
   it('несуществующий источник — 404 job_not_found', async () => {
@@ -127,64 +122,5 @@ describe('мок transform', () => {
       base: { path: 'a.png' }, ops: [{ type: 'rotate', degrees: 45 as 90 }],
     }));
     expect((e as { status: number }).status).toBe(400);
-  });
-});
-
-describe('мок чатов картинки', () => {
-  it('создание и поиск: current по пути, continued по lineage', async () => {
-    const api = createMockApi('fal');
-    const chat = await api.createChat(P, { sourcePath: 'images/hero.png', personaId: 'kira' });
-    expect(chat).toMatchObject({ projectId: P, personaId: 'kira', name: 'hero.png · правка' });
-    expect((await api.findChats(P, 'images/hero.png')).current?.id).toBe(chat.id);
-
-    const moved = await api.setChatPath(P, chat.id, { path: 'images/hero.v2.png' });
-    expect(moved.imageChat).toEqual({ currentPath: 'images/hero.v2.png', lineage: ['images/hero.png'] });
-    expect(moved.updatedAt).toBe(chat.updatedAt);
-    const old = await api.findChats(P, 'images/hero.png');
-    expect(old.current).toBeNull();
-    expect(old.continued.map(c => c.id)).toEqual([chat.id]);
-    expect((await api.findChats('other', 'images/hero.v2.png')).current).toBeNull();
-  });
-
-  it('черновик по папке: без файла, первое сохранение с chatSessionId привязывает к файлу', async () => {
-    const api = createMockApi('fal');
-    const chat = await api.createChat(P, { folder: 'images' });
-    expect(chat.name).toBe('Новая картинка · images');
-    expect(chat.imageChat).toEqual({ currentPath: null, draftFolder: 'images', lineage: [] });
-
-    const jobId = await mockJob(api);
-    const { path } = await api.save(P, { jobId, variant: 0, mode: 'next-version', folder: 'images', fileName: 'кот.png', chatSessionId: chat.id });
-    expect(path).toBe('images/кот.png');
-    const found = await api.findChats(P, 'images/кот.png');
-    expect(found.current?.imageChat).toEqual({ currentPath: 'images/кот.png', lineage: [] });
-  });
-
-  it('состояние: запись со старой revision — 409', async () => {
-    const api = createMockApi('fal');
-    const chat = await api.createChat(P, { sourcePath: 'hero.png' });
-    const s0 = await api.getChatState(P, chat.id);
-    expect(s0.revision).toBe(0);
-    const s1 = await api.putChatState(P, chat.id, { ...s0, prompt: 'закат' });
-    expect(s1).toMatchObject({ prompt: 'закат', revision: 1 });
-    const e = await rejection(api.putChatState(P, chat.id, { ...s0, prompt: 'рассвет' }));
-    expect(isStaleRevision(e)).toBe(true);
-    expect((await api.getChatState(P, chat.id)).prompt).toBe('закат');
-  });
-
-  it('чужой или несуществующий чат — 404', async () => {
-    const api = createMockApi('fal');
-    const chat = await api.createChat(P, { sourcePath: 'hero.png' });
-    expect(((await rejection(api.getChatState('other', chat.id))) as { status: number }).status).toBe(404);
-    expect(((await rejection(api.setChatPath(P, 'nope', { path: 'x.png' }))) as { status: number }).status).toBe(404);
-  });
-
-  it('поля состояния — один в один с C# ImageChatState', async () => {
-    const api = createMockApi('fal');
-    const chat = await api.createChat(P, { sourcePath: 'hero.png' });
-    const cs = readFileSync(fileURLToPath(new URL(
-      '../../../../backend/ClaudeHomeServer.ImageEditor/Contracts/ImageEditDtos.cs', import.meta.url)), 'utf-8');
-    const params = /public record ImageChatState\(([^;]*?)\);/s.exec(cs)![1];
-    const csFields = [...params.matchAll(/\s(\w+)(?:,|$)/g)].map(m => m[1][0].toLowerCase() + m[1].slice(1));
-    expect(Object.keys(await api.getChatState(P, chat.id)).sort()).toEqual(csFields.sort());
   });
 });

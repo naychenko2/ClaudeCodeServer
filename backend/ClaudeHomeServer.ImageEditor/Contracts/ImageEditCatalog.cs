@@ -11,6 +11,10 @@ public static class ImageEditCatalog
     public const string AutoModelId = "auto";
     public const string AutoModelLabel = "Авто";
 
+    // Операции «со своей моделью»: модель подбирает сервер, вариант один, персонаж не едет.
+    // Зеркалит quickUsesOwnModel в frontend/src/features/imageEditor/editorInputs.ts — менять вместе
+    public static readonly IReadOnlySet<ImageEditOp> OwnModelOps = new HashSet<ImageEditOp> { ImageEditOp.EnhanceFaces };
+
     // Порядок поставщиков в списке и при умолчании «auto»; незнакомый ключ — в конец
     public static readonly string[] ProviderOrder = ["fal", "higgsfield", "local"];
 

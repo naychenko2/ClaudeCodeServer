@@ -474,3 +474,26 @@ describe('тихие строки чата картинки (ADR-018 §1, §2)',
     expect(serverHistoryNewer(stored, live.items)).toBe(false);
   });
 });
+
+describe('запись модуля module_record (ADR-019 §2)', () => {
+  const rec = { type: 'module_record', module: 'imageeditor', recordType: 'image_thread', data: { threadId: 't1', stackId: 's1' }, fallback: 'Картинка', timestamp: 7 };
+
+  it('живая запись ложится в ленту одной строкой, повторная доставка не удваивает', () => {
+    const s = feed(initialChatState(), rec, rec);
+    const items = s.items.filter(i => i.kind === 'module_record');
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ module: 'imageeditor', recordType: 'image_thread', data: { threadId: 't1', stackId: 's1' }, fallback: 'Картинка' });
+  });
+
+  it('две стопки одной нити — две записи: различаются по data', () => {
+    const s = feed(initialChatState(), rec, { ...rec, data: { threadId: 't1', stackId: 's2' } });
+    expect(s.items.filter(i => i.kind === 'module_record')).toHaveLength(2);
+  });
+
+  it('история и живая лента сверяются: запись переживает перезагрузку', () => {
+    const live = feed(initialChatState(), rec);
+    const stored = snapshot({ kind: 'module_record', module: 'imageeditor', recordType: 'image_thread', data: { threadId: 't1', stackId: 's1' }, fallback: 'Картинка', timestamp: 7 });
+    expect(stored.map(i => i.kind)).toEqual(['module_record']);
+    expect(serverHistoryNewer(stored, live.items)).toBe(false);
+  });
+});

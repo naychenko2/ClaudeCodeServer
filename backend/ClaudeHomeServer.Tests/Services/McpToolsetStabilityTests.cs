@@ -365,9 +365,10 @@ public class McpToolsetStabilityTests
     }
 
     /// <summary>
-    /// Сервер редактора картинок (ADR-018 §2, §10.2) едет в ход по свойствам сессии, владельца и
-    /// процесса: тип чата, флаг image-editor, тулсет в реестре. Признак хода («редактор открыт»,
-    /// «идёт генерация», глубина делегирования) перезапускал бы CLI со всеми серверами.
+    /// Сервер редактора картинок (ADR-019 §4) едет в ход по свойствам сессии, владельца и
+    /// процесса: чат проекта, флаг image-editor, тулсет в реестре. Признак хода («идёт
+    /// генерация», глубина делегирования), фокус и нити картинок перезапускали бы CLI со всеми
+    /// серверами.
     /// </summary>
     [SkippableFact]
     public void СерверРедактораКартинок_ГейтитсяПоСессииФлагуИРеестру()
@@ -378,7 +379,9 @@ public class McpToolsetStabilityTests
         var body = MethodBody(File.ReadAllText(path!),
             "internal ImageEditorMcpContext? BuildImageEditorContext");
 
-        body.Should().Contain("ImageChat", "сервер есть только в чате картинки");
+        body.Should().Contain("ProjectId", "сервер есть в любом чате проекта");
+        body.Should().NotContain("ImageChat", "отдельного чата картинки в v3 нет");
+        body.Should().NotContain("Thread", "фокус и нити картинок не влияют на состав серверов");
         body.Should().Contain("FeatureFlagKeys.ImageEditor", "флаг владельца гейтит сервер");
         body.Should().Contain("McpEndpoints.ImageEditorName",
             "модуль не загружен — тулсета нет в реестре, и сервер в ход не едет");

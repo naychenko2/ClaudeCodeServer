@@ -113,3 +113,23 @@ public sealed record TurnCompleted(
 {
     public const string Event = "turn/completed";
 }
+
+// session/deleted и session/branched — жизненный цикл чата для подсистем (ADR-019 §2).
+// ChatDeletedMessage — событие для фронта, а подсистеме, которая держит своё состояние по
+// sessionId (нити редактора картинок), нужен факт на шине. Хода тут нет, поэтому TurnSeq = 0,
+// а владелец в Turn.OwnerId — владелец чата (SessionManager.ResolveOwnerId).
+
+// session/deleted — чат удалён (вручную или авто-удалением временного чата); публикуется после
+// уборки истории, транскрипта и сохранения реестра. Подписчик сносит своё состояние чата.
+public sealed record SessionDeleted(TurnContext Turn) : ITurnNotification
+{
+    public const string Event = "session/deleted";
+}
+
+// session/branched — ветвлением создан новый чат Turn.SessionId от SourceSessionId; history.json
+// ветки уже лежит на диске. Подписчик копирует состояние источника под новый id с теми же
+// внутренними идентификаторами — записи ленты, скопированные в ветку, продолжают разрешаться.
+public sealed record SessionBranched(TurnContext Turn, string SourceSessionId) : ITurnNotification
+{
+    public const string Event = "session/branched";
+}

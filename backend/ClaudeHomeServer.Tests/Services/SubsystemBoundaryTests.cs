@@ -1740,7 +1740,8 @@ public class SubsystemBoundaryTests
         // (43 строки чистой функции, нужны и Knowledge, и Memory, обе вертикали).
         "ClaudeHomeServer.Core.Telemetry",
         // ADR-018 §10.1: швы модуля редактора картинок в спине — IHiggsfieldAccess,
-        // IImageChatSessions (чат картинки), имя рабочей папки для бэкапа и записи операций растра.
+        // список авторазрешения тулсета агента (ImageEditorAgentTools), имя рабочей папки для
+        // бэкапа и записи операций растра.
         // Сам редактор (контракты, задачи, драйверы) — в модуле ClaudeHomeServer.ImageEditor.
         "ClaudeHomeServer.Services.ImageEditor",
         // Мерж local-media (ADR-018, раздел «Локальные модели»): ImageFormatSniffer — чистая

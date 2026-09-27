@@ -78,6 +78,8 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         public string? BaseStepId { get; init; }
         // Чат картинки и кто запустил (ADR-018 §2): едут в DTO, события и запись траты
         public string? ChatSessionId { get; init; }
+        // Нить картинки чата ChatSessionId (ADR-019): «Взять» принимает варианты только своей задачи
+        public string? ThreadId { get; init; }
         public ImageEditInitiator Initiator { get; init; }
         public string? SizeNote { get; set; }
         public readonly Lock Gate = new();
@@ -202,6 +204,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
                 MatchSize = matchSize,
                 BaseStepId = string.IsNullOrWhiteSpace(input.BaseStepId) ? null : input.BaseStepId.Trim(),
                 ChatSessionId = string.IsNullOrWhiteSpace(input.ChatSessionId) ? null : input.ChatSessionId.Trim(),
+                ThreadId = string.IsNullOrWhiteSpace(input.ThreadId) ? null : input.ThreadId.Trim(),
                 Initiator = input.Initiator,
             };
             _jobs[job.Id] = job;
@@ -278,7 +281,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             job.Status = ImageEditJobStatus.Completed;
         }
         await Broadcast(job.OwnerId, new ImageEditCompletedMessage(job.Id, job.ProjectId, [.. job.Variants], cost,
-            job.ChatSessionId, job.Initiator, sizeNote));
+            job.ChatSessionId, job.Initiator, sizeNote, job.ThreadId));
     }
 
     private async Task FailAsync(Job job, IImageEditor editor, ImageEditResult result)
@@ -310,7 +313,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         }
         await Broadcast(job.OwnerId,
             new ImageEditFailedMessage(job.Id, job.ProjectId, result.Outcome, charged, result.Error, retry,
-                job.ChatSessionId, job.Initiator));
+                job.ChatSessionId, job.Initiator, job.ThreadId));
     }
 
     // Сосед с подходящей моделью — только предложение: UI покажет «Повторить через …»
@@ -459,7 +462,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             }
             _ = owner.Broadcast(job.OwnerId,
                 new ImageEditProgressMessage(job.Id, job.ProjectId, value.Stage, value.QueuePosition,
-                    job.ChatSessionId, job.Initiator));
+                    job.ChatSessionId, job.Initiator, job.ThreadId));
         }
     }
 
@@ -496,7 +499,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         lock (j.Gate)
             return new ImageEditJobDto(j.Id, j.ProjectId, j.Status, j.Quote.Provider, j.Quote.Model.Id,
                 [.. j.Variants], j.Cost, j.Outcome, j.Charged, j.Error, j.QueuePosition, j.CreatedAt,
-                j.ChatSessionId, j.Initiator, j.BaseStepId, j.SizeNote, j.Quote.Count, j.Quote.Estimate);
+                j.ChatSessionId, j.Initiator, j.BaseStepId, j.SizeNote, j.Quote.Count, j.Quote.Estimate, j.ThreadId);
     }
 
     private void PruneQuotes()

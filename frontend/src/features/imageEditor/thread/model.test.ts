@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chainOf, currentIndex, currentStack, focusLabel, saveFolder, versionLabel } from './model';
+import { chainOf, currentIndex, currentStack, focusLabel, interruptedOf, launchedPrompt, saveFolder, versionLabel } from './model';
 import type { ImageThread } from './threadsApi';
 
 const thread = (patch: Partial<ImageThread>): ImageThread => ({
@@ -55,5 +55,36 @@ describe('нить картинки', () => {
     expect(focusLabel(t)).toBe('hero.png · шаг 2');
     expect(saveFolder(t)).toBe('images');
     expect(saveFolder(thread({ file: null, draftFolder: 'x' }))).toBe('x');
+  });
+});
+
+describe('задача, оборванная перезапуском сервера', () => {
+  const launched = (jobId: string, prompt: string) => ({
+    at: '2026-09-27T10:00:00Z', kind: 'launched', threadId: 't1', jobId,
+    text: `Человек запустил вручную: «${prompt}» · FLUX dev · 2 варианта · ≈ $0.06`,
+  });
+  const interrupted = { at: '2026-09-27T10:05:00Z', kind: 'interrupted', threadId: 't1', jobId: 'j1',
+    text: 'Генерация прервана перезапуском сервера: картинка hero.png, вариантов не будет — запусти заново' };
+
+  it('пометка без идущей задачи — «прервана», промпт берётся из записи о запуске', () => {
+    const t = thread({ interruptedJobId: 'j1' });
+    expect(interruptedOf(t, [launched('j0', 'старое'), launched('j1', 'кот в «шляпе»'), interrupted]))
+      .toEqual({ jobId: 'j1', prompt: 'кот в «шляпе»' });
+  });
+
+  it('запись о запуске ушла из журнала — пометка есть, промпта нет', () => {
+    expect(interruptedOf(thread({ interruptedJobId: 'j1' }), [interrupted])).toEqual({ jobId: 'j1', prompt: null });
+  });
+
+  it('идущая задача важнее пометки; без пометки блока нет', () => {
+    expect(interruptedOf(thread({ interruptedJobId: 'j1', pendingJobId: 'j2' }), [launched('j1', 'кот')])).toBeNull();
+    expect(interruptedOf(thread({ interruptedJobId: null }), [launched('j1', 'кот')])).toBeNull();
+    expect(interruptedOf(thread({}))).toBeNull();
+  });
+
+  it('промпт из текста записи: агентский запуск и пустой промпт', () => {
+    expect(launchedPrompt('Ты запустил: «убрать фон» · модель по котировке')).toBe('убрать фон');
+    expect(launchedPrompt('Ты запустил: «  » · FLUX')).toBeNull();
+    expect(launchedPrompt('что-то другое')).toBeNull();
   });
 });

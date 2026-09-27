@@ -5,7 +5,7 @@
 // же карточки; после отката и новой правки старая стопка остаётся на месте с меткой.
 
 import { useState, type ReactNode } from 'react';
-import { AlertTriangle, ChevronLeft, ChevronRight, Download, Image as ImageIcon, Pencil, X } from 'lucide-react';
+import { AlertTriangle, ChevronLeft, ChevronRight, Download, Image as ImageIcon, Pencil, RotateCcw, X } from 'lucide-react';
 import {
   Badge, Button, Dot, IconButton, ProgressBar, C, FS, R, SHADOW, SP, ICON_SIZE, ICON_STROKE, useIsMobile,
 } from 'aihome_shell/kit';
@@ -14,12 +14,12 @@ import { imageEditorApi } from '../api';
 import { isFreeUnit, money, variantsWord } from '../format';
 import { dismissJob, saveToProject, savedStepOf, takeVariant, workWith } from './actions';
 import {
-  chainOf, currentIndex, currentStack, findStack, isEmptyThread, saveFolder, stepOf, threadName, versionLabel,
+  chainOf, currentIndex, currentStack, findStack, interruptedOf, isEmptyThread, saveFolder, stepOf, threadName, versionLabel,
 } from './model';
 import { recordOf } from './records';
 import { openEditor, useThreads } from './threadStore';
-import type { ImageThread, ImageThreadStack } from './threadsApi';
-import { imageSrc } from './useThreadLaunch';
+import type { ImageThread, ImageThreadEvent, ImageThreadStack } from './threadsApi';
+import { imageSrc, launchThread } from './useThreadLaunch';
 import { useJobStatus, useProgress } from './useJobStatus';
 
 const ic = (I: typeof X, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
@@ -169,10 +169,39 @@ export function JobBlock({ projectId, sessionId, thread, inEditor, onPreview }: 
   );
 }
 
+// Задачу оборвал перезапуск сервера: вариантов не будет, «Рисуем…» не закончится никогда
+function InterruptedBlock({ projectId, sessionId, thread, jobId, prompt }: {
+  projectId: string; sessionId: string; thread: ImageThread; jobId: string; prompt: string | null;
+}) {
+  const [busy, setBusy] = useState(false);
+  const run = async (fn: () => Promise<boolean>) => { setBusy(true); await fn(); setBusy(false); };
+  return (
+    <div data-image-thread-job="interrupted" style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
+      <Note>
+        Генерация прервана перезапуском сервера.
+        {prompt ? '' : ' Запустите её заново из композера в режиме «Картинка».'}
+      </Note>
+      <Acts>
+        {prompt && (
+          <Button size="sm" variant="secondary" leftIcon={ic(RotateCcw)} disabled={busy} title={`«${prompt}»`}
+            onClick={() => { void run(() => launchThread(projectId, sessionId, thread, { kind: 'prompt', prompt })); }}>
+            Запустить заново
+          </Button>
+        )}
+        <Button size="sm" variant="ghost" disabled={busy}
+          onClick={() => { void run(() => dismissJob(projectId, sessionId, thread, jobId)); }}>
+          Не брать
+        </Button>
+      </Acts>
+    </div>
+  );
+}
+
 // ── Карточка ──
 
-function StackCard({ projectId, sessionId, thread, stack, focused }: {
+function StackCard({ projectId, sessionId, thread, stack, focused, events }: {
   projectId: string; sessionId: string; thread: ImageThread; stack: ImageThreadStack | null; focused: boolean;
+  events?: readonly ImageThreadEvent[];
 }) {
   const mobile = useIsMobile();
   const chain = chainOf(thread, stack);
@@ -190,6 +219,7 @@ function StackCard({ projectId, sessionId, thread, stack, focused }: {
   const [saving, setSaving] = useState(false);
   const src = pos ? imageSrc(projectId, thread, pos.stepId) : null;
   const folder = saveFolder(thread);
+  const interrupted = isCurrent ? interruptedOf(thread, events) : null;
 
   const edit = async () => {
     if (!focused && !(await workWith(projectId, sessionId, thread.id))) return;
@@ -228,6 +258,7 @@ function StackCard({ projectId, sessionId, thread, stack, focused }: {
       ) : <StepImage src={src} />}
 
       {isCurrent && thread.pendingJobId && <JobBlock projectId={projectId} sessionId={sessionId} thread={thread} />}
+      {interrupted && <InterruptedBlock projectId={projectId} sessionId={sessionId} thread={thread} {...interrupted} />}
 
       {!draft && (
         <Acts>
@@ -260,6 +291,6 @@ export function ThreadAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
   const stack = typeof data.stackId === 'string' ? findStack(thread, data.stackId) : currentStack(thread);
   return (
     <StackCard projectId={ctx.projectId} sessionId={ctx.sessionId} thread={thread} stack={stack}
-      focused={state.focus === thread.id} />
+      focused={state.focus === thread.id} events={state.events} />
   );
 }

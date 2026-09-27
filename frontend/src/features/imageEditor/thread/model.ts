@@ -1,7 +1,7 @@
 // Чистые правила нити: цепочка шагов стопки, подписи карточки и чипа. Под юнит-тестом.
 
 import { splitPath } from '../format';
-import type { ImageThread, ImageThreadStack } from './threadsApi';
+import type { ImageThread, ImageThreadEvent, ImageThreadStack } from './threadsApi';
 
 // Позиция стопки: исходный файл (stepId = null) или шаг правки
 export interface ThreadPos { stepId: string | null }
@@ -58,4 +58,22 @@ export function focusLabel(t: ImageThread): string {
 export function saveFolder(t: ImageThread): string {
   if (t.file) return splitPath(t.file).folder;
   return t.draftFolder ?? '';
+}
+
+// Промпт запуска из записи журнала launched: «Человек запустил вручную: «промпт» · модель…»
+export function launchedPrompt(text: string): string | null {
+  const m = /: «([\s\S]*)» · /.exec(text);
+  return m?.[1].trim() || null;
+}
+
+// Задача нити, оборванная перезапуском сервера: карточка показывает «Генерация прервана»
+// вместо вечного «Рисуем…». Идущая задача важнее пометки. prompt — для перезапуска тем же
+// текстом; null, если запись о запуске уже ушла из журнала
+export function interruptedOf(
+  t: ImageThread, events: readonly ImageThreadEvent[] = [],
+): { jobId: string; prompt: string | null } | null {
+  const jobId = t.interruptedJobId;
+  if (!jobId || t.pendingJobId) return null;
+  const launched = events.find(e => e.kind === 'launched' && e.jobId === jobId);
+  return { jobId, prompt: launched ? launchedPrompt(launched.text) : null };
 }

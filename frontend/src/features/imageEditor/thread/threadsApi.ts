@@ -35,13 +35,26 @@ export interface ImageThread {
   settings: ImageThreadSettings | null;
   // Задача, чьи варианты ждут выбора; живёт до take или dismiss
   pendingJobId: string | null;
+  // Задача, которую оборвал перезапуск сервера: вариантов не будет. Снимают следующий
+  // запуск или «Не брать» (dismiss с этим jobId)
+  interruptedJobId?: string | null;
   createdAt: string;
+}
+
+// Запись журнала нитей «с прошлого сообщения»: launched, taken, saved, interrupted
+export interface ImageThreadEvent {
+  at: string;
+  kind: string;
+  text: string;
+  threadId?: string | null;
+  jobId?: string | null;
 }
 
 export interface ImageThreadsState {
   focus: string | null;
   revision: number;
   threads: ImageThread[];
+  events?: ImageThreadEvent[];
 }
 
 export const EMPTY_THREADS: ImageThreadsState = { focus: null, revision: 0, threads: [] };

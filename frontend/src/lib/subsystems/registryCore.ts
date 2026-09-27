@@ -110,7 +110,7 @@ export interface WorkspacePanelNotesCtx {
 }
 
 export interface HomeWidgetNotesCtx { onHubTab: (t: HubTabValue) => void }
-export interface HomeWidgetSpendCtx {}
+export type HomeWidgetSpendCtx = Record<string, never>;
 export interface ChatHeaderBadgeCtx {
   sessionId: string;
   chatName?: string | null;

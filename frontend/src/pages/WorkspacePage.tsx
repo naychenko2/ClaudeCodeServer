@@ -1105,7 +1105,7 @@ const windowWidth = useWindowWidth();
   // Актуальное значение для колбэков создания чата: у них deps осознанно сужены,
   // и без ref они держат дефолт на момент монтирования
   const projectDefaultIdRef = useRef(projectDefaultId);
-  projectDefaultIdRef.current = projectDefaultId;
+  useLayoutEffect(() => { projectDefaultIdRef.current = projectDefaultId; }, [projectDefaultId]);
   useEffect(() => {
     if (project.defaultPersonaId !== undefined) setProjectDefaultId(project.defaultPersonaId);
   }, [project.defaultPersonaId]);

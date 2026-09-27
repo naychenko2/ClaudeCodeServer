@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, lazy, Suspense } from 'react'
+import { useState, useEffect, useRef, lazy, Suspense, createElement } from 'react'
 import type { Project, AuthState } from './types'
 import { C } from './lib/design'
 import { LoginPage } from './pages/LoginPage'
@@ -1269,8 +1269,10 @@ export default function App() {
               ? <CalendarPage auth={auth} onLogout={logout} onHubTab={switchHubTab} onOpenTask={openTaskInProject} />
             : activeSubsystemKey
               ? <Suspense fallback={<div style={{ minHeight: '100vh', background: C.bgMain }} />}>
+                  {/* createElement, а не JSX: компонент не создаётся в рендере, а берётся
+                      из реестра — ленивый экземпляр живёт в манифесте и стабилен */}
                   {ActiveSubsystemTab
-                    ? <ActiveSubsystemTab auth={auth} onLogout={logout} onHubTab={switchHubTab} />
+                    ? createElement(ActiveSubsystemTab, { auth, onLogout: logout, onHubTab: switchHubTab })
                     : null}
                 </Suspense>
             : effectiveHubTab === 'personas'

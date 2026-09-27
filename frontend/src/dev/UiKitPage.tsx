@@ -47,6 +47,7 @@ import {
   IslandScaffold, Splitter, SidebarSplitter, IslandSplitter, IslandSidebarSplitter,
   TextField, TextArea, IconField, Field, FieldLabel, Select,
   PanelShell, PanelHeaderSlot, useHasPanelHeader, RailFlyout, Notice,
+  Chip, ProgressBar,
 } from '../components/ui';
 import { CapabilityUnavailable } from '../components/CapabilityGate';
 import { InlineSegmented } from '../components/ui/InlineSegmented';
@@ -334,6 +335,7 @@ function TogglesSection() {
   const [toggleOn, setToggleOn] = useState(true);
   const [toggleOff, setToggleOff] = useState(false);
   const [layout, setLayout] = useState('comfort');
+  const [chipOn, setChipOn] = useState(true);
 
   return (
     <Island>
@@ -459,6 +461,45 @@ function TogglesSection() {
             </SidebarSection>
           </div>
         </SubBlock>
+
+        {/* Chip / ChipX: пилюля фильтра, действия или выбранного объекта. Чип над полем
+            ввода («hero.png · 1 пометка ✕») — soft с leading и onRemove; maxW обрезает
+            подпись, а крестик остаётся снаружи обрезки */}
+        <SubBlock label="Chip / ChipX — soft, selected, dashed, toggle, leading + крестик">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs, alignItems: 'center' }}>
+              <Chip>Обычный</Chip>
+              <Chip selected>Выбран</Chip>
+              <Chip dashed onClick={() => {}}>+ Персонаж</Chip>
+              <Chip onRemove={() => {}}>С крестиком</Chip>
+              <Chip
+                maxW={160}
+                leading={<span style={{ width: '100%', height: '100%', background: C.accentLight }} />}
+                onRemove={() => {}}
+              >
+                очень-длинное-имя-картинки.png · 1 пометка
+              </Chip>
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs, alignItems: 'center' }}>
+              <Chip variant="toggle" selected={chipOn} onClick={() => setChipOn(v => !v)}>Мультивыбор</Chip>
+              <Chip variant="toggle" onClick={() => {}}>Выключен</Chip>
+              <Chip variant="toggle" large selected>Тач-версия</Chip>
+              <Chip touch onRemove={() => {}}>touch — крестик 32px</Chip>
+            </div>
+          </div>
+        </SubBlock>
+
+        {/* ProgressBar: тонкая полоса 4px на дорожке C.track, тон — роль. estimate —
+            прогноз, а не факт (приглушённая заливка) */}
+        <SubBlock label="ProgressBar — тоны и прогноз (estimate)">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, maxWidth: 320 }}>
+            <ProgressBar value={62} />
+            <ProgressBar value={40} estimate />
+            <ProgressBar value={100} tone="success" />
+            <ProgressBar value={75} tone="warning" />
+            <ProgressBar value={20} tone="danger" />
+          </div>
+        </SubBlock>
       </div>
     </Island>
   );
@@ -488,6 +529,7 @@ function OverlaysSection() {
   const [modalOpen, setModalOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [fullscreenOpen, setFullscreenOpen] = useState(false);
 
   return (
     <Island>
@@ -511,6 +553,13 @@ function OverlaysSection() {
         <SubBlock label="Modal — центрированная карточка / мобильная шторка">
           <Button variant="primary" size="md" onClick={() => setModalOpen(true)}>
             Открыть Modal
+          </Button>
+        </SubBlock>
+
+        {/* Modal size="fullscreen": рабочее окно во весь экран (редактор картинок) */}
+        <SubBlock label='Modal size="fullscreen" — рабочее окно во весь экран'>
+          <Button variant="secondary" size="md" onClick={() => setFullscreenOpen(true)}>
+            Открыть fullscreen
           </Button>
         </SubBlock>
 
@@ -612,6 +661,30 @@ function OverlaysSection() {
             из ModalActions: «Отмена» слева, основное действие справа, в один
             ряд на любой ширине.
           </p>
+        </Modal>
+      )}
+
+      {/* Демо fullscreen: шапка и футер вне скролла, тело без отступов — холст от края до края */}
+      {fullscreenOpen && (
+        <Modal
+          size="fullscreen"
+          title="Демо fullscreen"
+          subtitle="Десктоп — карточка во весь вьюпорт с отступом, мобила — без шторки и скругления, с safe-area."
+          onClose={() => setFullscreenOpen(false)}
+          footer={
+            <ModalActions
+              confirmLabel="Готово"
+              onConfirm={() => setFullscreenOpen(false)}
+              onCancel={() => setFullscreenOpen(false)}
+            />
+          }
+        >
+          <div style={{
+            height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: C.bgInset, color: C.textMuted, fontSize: FS.md,
+          }}>
+            Холст рабочего окна
+          </div>
         </Modal>
       )}
 

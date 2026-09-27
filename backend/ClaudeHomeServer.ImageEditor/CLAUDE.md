@@ -33,7 +33,9 @@ MF-remote `frontend/modules/image-editor` над кодом `frontend/src/featur
 (`image_thread` — якорь стопки, `image_focus`, `image_launch`, `image_saved`,
 `image_stack_forked`); содержимое карточки фронт рисует живьём из REST нитей и события
 `image_thread_changed`. Удаление чата сносит нити, ветвление копирует их с теми же `threadId`
-(`ImageThreadLifecycle` на `session/deleted` / `session/branched`).
+(`ImageThreadLifecycle` на `session/deleted` / `session/branched`). Реестр задач живёт в памяти:
+при старте `ImageThreadRecovery` снимает с нитей `pendingJobId`, которых реестр не знает, ставит
+`interruptedJobId` и запись журнала `interrupted` — иначе карточка висит в «Рисуем…» вечно.
 
 **Снесено в v3 и не возвращается:** `ImageChatsController` (ручки `image-editor/chats*`),
 `ImageChatStateStore`, `ImageChatPathTracker`, `IImageChatSessions`, метод хаба

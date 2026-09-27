@@ -70,6 +70,8 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
         services.AddHostedService<Threads.ImageThreadLifecycle>();
         // Следы нити в ленте и событие image_thread_changed; нить идёт за переименованным файлом
         services.AddSingleton<Threads.ImageThreadService>();
+        // Нить с задачей, оборванной перезапуском, не висит в «Рисуем…»: сверка при старте
+        services.AddHostedService<Threads.ImageThreadRecovery>();
         services.AddHostedService<Threads.ImageThreadPathTracker>();
         // MCP-сервер редактора для агента любого чата проекта (ADR-019 §4): маршрут общий,
         // POST /mcp/image-editor/{sessionId}, реестр Main находит тулсет среди IMcpToolset

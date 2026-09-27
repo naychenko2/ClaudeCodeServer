@@ -241,6 +241,38 @@ public sealed class ImageThreadService(
         }
     }
 
+    public const string InterruptedText = "Генерация прервана перезапуском сервера";
+
+    // После перезапуска сервера (ADR-019): реестр задач живёт в памяти, и PendingJobId, которого
+    // в нём нет, не дождётся ни вариантов, ни отказа — карточка висела бы в «Рисуем…». Такая
+    // задача снимается с нити с пометкой InterruptedJobId и записью журнала для хода, владельцу
+    // уходит image_thread_changed. Трату не трогает: поставщик принял задачу до перезапуска, и
+    // «не списано» от него уже не придёт (инвариант учёта — отмена после принятия трату не отменяет)
+    public async Task<int> RecoverInterruptedAsync(IImageEditJobs? jobs, CancellationToken ct)
+    {
+        var dropped = 0;
+        foreach (var (ownerId, sessionId) in store.Chats())
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                var projectId = directory?.GetById(sessionId)?.ProjectId;
+                var state = store.DropDeadPending(ownerId, sessionId,
+                    jobId => projectId is not null && jobs?.Get(ownerId, projectId, jobId) is not null,
+                    (thread, jobId) => new ImageThreadEvent(store.Now(), ImageThreadEventKinds.Interrupted,
+                        $"{InterruptedText}: картинка {Name(thread)}, вариантов не будет — запусти заново", thread.Id, jobId));
+                if (state is null) continue;
+                dropped++;
+                if (projectId is not null) await BroadcastAsync(ownerId, projectId, sessionId, state);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                log.LogWarning(ex, "Редактор картинок: прерванные задачи нитей чата {SessionId} не сняты", sessionId);
+            }
+        }
+        return dropped;
+    }
+
     public async Task BroadcastAsync(string ownerId, string projectId, string sessionId, ImageThreadsState state)
     {
         if (broadcaster is null) return;

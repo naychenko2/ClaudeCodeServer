@@ -19,7 +19,9 @@ public sealed record ImageThreadsState(string? Focus, long Revision, IReadOnlyLi
 // «Новая картинка»: у него есть только DraftFolder ("" — корень). Lineage — прежние пути файла,
 // по которым нить шла за сохранениями. Stacks — стопки шагов: текущая и «старые» после отката.
 // CurrentStepId — шаг, который сейчас на холсте; null — исходник (файл) или пустой черновик.
-// PendingJobId — задача, чьи варианты ждут «Взять» или «Не брать».
+// PendingJobId — задача, чьи варианты ждут «Взять» или «Не брать». InterruptedJobId — задача,
+// которую оборвал перезапуск сервера (реестр задач живёт в памяти): карточка показывает
+// «Генерация прервана перезапуском сервера», поле снимает следующий запуск или «Не брать».
 public sealed record ImageThread(
     string Id,
     string? File,
@@ -30,7 +32,8 @@ public sealed record ImageThread(
     ImageThreadSettings? Settings,
     string? PendingJobId,
     DateTime CreatedAt,
-    string? CurrentStepId = null)
+    string? CurrentStepId = null,
+    string? InterruptedJobId = null)
 {
     [JsonIgnore]
     public ImageThreadStack? CurrentStack => Stacks.FirstOrDefault(s => s.StackId == CurrentStackId);
@@ -62,6 +65,7 @@ public static class ImageThreadEventKinds
     public const string Launched = "launched";
     public const string Taken = "taken";
     public const string Saved = "saved";
+    public const string Interrupted = "interrupted";
 }
 
 public enum ImageThreadWriteStatus

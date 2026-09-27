@@ -191,7 +191,11 @@ public sealed class ImageThreadStore(string root, TimeProvider? time = null)
     // «Не брать»: варианты задачи больше не ждут выбора. Задача уже не та — ничего не меняет
     public ImageThreadWrite Dismiss(string ownerId, string sessionId, string threadId, string jobId, long revision) =>
         Mutate(ownerId, sessionId, threadId, revision, (state, thread) =>
-            Replace(state, thread with { PendingJobId = thread.PendingJobId == jobId ? null : thread.PendingJobId }));
+            Replace(state, thread with
+            {
+                PendingJobId = thread.PendingJobId == jobId ? null : thread.PendingJobId,
+                InterruptedJobId = thread.InterruptedJobId == jobId ? null : thread.InterruptedJobId,
+            }));
 
     public ImageThreadWrite SetSettings(string ownerId, string sessionId, string threadId, ImageThreadSettings settings,
         long revision) =>
@@ -200,7 +204,49 @@ public sealed class ImageThreadStore(string root, TimeProvider? time = null)
     // Задача запущена по нити — её варианты ждут выбора (прежняя ожидавшая задача вытесняется)
     public ImageThreadWrite SetPending(string ownerId, string sessionId, string threadId, string jobId,
         ImageThreadEvent? log = null) =>
-        Mutate(ownerId, sessionId, threadId, null, (state, thread) => Replace(state, thread with { PendingJobId = jobId }, log));
+        Mutate(ownerId, sessionId, threadId, null, (state, thread) =>
+            Replace(state, thread with { PendingJobId = jobId, InterruptedJobId = null }, log));
+
+    // Задачи, которых нет в живом реестре (isAlive = false), снимаются с нитей чата: их оборвал
+    // перезапуск сервера, вариантов не будет. Сверка идёт под замком хранилища, поэтому запуск,
+    // записавший PendingJobId, уже виден реестру. null — снимать нечего (ничего не записано)
+    public ImageThreadsState? DropDeadPending(string ownerId, string sessionId, Func<string, bool> isAlive,
+        Func<ImageThread, string, ImageThreadEvent> log)
+    {
+        lock (_gate)
+        {
+            var current = Read(ownerId, sessionId);
+            var events = current.Events.ToList();
+            var changed = false;
+            var threads = current.Threads.Select(t =>
+            {
+                if (t.PendingJobId is not { } jobId || isAlive(jobId)) return t;
+                changed = true;
+                events.Add(log(t, jobId));
+                return t with { PendingJobId = null, InterruptedJobId = jobId };
+            }).ToList();
+            if (!changed) return null;
+            var next = current with
+            {
+                Threads = threads,
+                Events = [.. events.TakeLast(MaxEvents)],
+                Revision = current.Revision + 1,
+            };
+            Save(ownerId, sessionId, next);
+            return next;
+        }
+    }
+
+    // Все чаты с нитями: пары (владелец, сессия) по файлам хранилища
+    public IReadOnlyList<(string OwnerId, string SessionId)> Chats()
+    {
+        lock (_gate)
+        {
+            if (!Directory.Exists(Root)) return [];
+            return [.. Directory.EnumerateDirectories(Root).SelectMany(dir => Directory.EnumerateFiles(dir, "*.json")
+                .Select(file => (Path.GetFileName(dir), Path.GetFileNameWithoutExtension(file))))];
+        }
+    }
 
     // Человек сохранил картинку нити в проект: нить идёт за новым файлом, прежний уходит в
     // Lineage; у черновика файл появляется впервые, папка черновика больше не нужна

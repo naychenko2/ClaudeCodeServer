@@ -4,7 +4,7 @@ import { Filter, Search, X, Pin, Clock, Users } from 'lucide-react';
 import type { Persona, Session } from '../types';
 import { C, R, FONT, FS, SHADOW, Z, SP } from '../lib/design';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
-import { Modal, IconButton } from './ui';
+import { Modal, IconButton, Chip } from './ui';
 import { personaLabel } from '../lib/personas';
 import { useCanHover } from '../lib/pointer';
 import { useListAutoFocus } from '../lib/listAutoFocus';
@@ -71,33 +71,6 @@ interface FilterBarProps {
     options: { value: ChatGroupBy; label: string; icon: ReactNode }[];
     onChange: (v: ChatGroupBy) => void;
   };
-}
-
-// === Чип мультивыбора ===
-function Chip({ active, children, onClick, large }: {
-  active: boolean;
-  children: ReactNode;
-  onClick: () => void;
-  large?: boolean;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        padding: large ? '7px 13px' : '4px 10px',
-        borderRadius: R.pill,
-        border: `1px solid ${active ? C.accent : C.borderLight}`,
-        background: active ? C.accent : 'transparent',
-        color: active ? C.onAccent : C.textSecondary,
-        fontSize: large ? FS.base : FS.sm,
-        fontWeight: 600, fontFamily: FONT.sans, cursor: 'pointer',
-        display: 'inline-flex', alignItems: 'center', gap: SP.xs,
-        transition: 'background 0.12s, border-color 0.12s',
-      }}
-    >
-      {children}
-    </button>
-  );
 }
 
 // Маркер-точка статуса: на активном чипе — onAccent, иначе — цвет статуса
@@ -223,7 +196,7 @@ function FilterContent({
           {ALL_STATUS_CHIPS.map(chip => {
             const active = filters.statuses.includes(chip);
             return (
-              <Chip key={chip} active={active} large={large}
+              <Chip variant="toggle" key={chip} selected={active} large={large}
                 onClick={() => {
                   const next = toggle(filters.statuses, chip);
                   // пустой набор статусов = «всё скрыто» — не даём, возвращаем дефолт
@@ -254,7 +227,7 @@ function FilterContent({
           {ORIGIN_OPTIONS.map(o => {
             const active = filters.origins.includes(o.value);
             return (
-              <Chip key={o.value} active={active} large={large}
+              <Chip variant="toggle" key={o.value} selected={active} large={large}
                 onClick={() => {
                   const next = toggle(filters.origins, o.value);
                   patch({ origins: next.length ? next : [...ALL_ORIGINS] });
@@ -273,13 +246,13 @@ function FilterContent({
         <div style={sectionStyle}>
           <SectionTitle>Персона</SectionTitle>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs }}>
-            <Chip active={!filters.personaId} large={large}
+            <Chip variant="toggle" selected={!filters.personaId} large={large}
               onClick={() => patch({ personaId: null })}
             >
               Все
             </Chip>
             {personasInChats.map(p => (
-              <Chip key={p.id} active={filters.personaId === p.id} large={large}
+              <Chip variant="toggle" key={p.id} selected={filters.personaId === p.id} large={large}
                 onClick={() => patch({ personaId: filters.personaId === p.id ? null : p.id })}
               >
                 <PersonaAvatar persona={p} size={14} />
@@ -298,7 +271,7 @@ function FilterContent({
             const active = filters.only.includes(o);
             const Icon = ONLY_ICON[o];
             return (
-              <Chip key={o} active={active} large={large}
+              <Chip variant="toggle" key={o} selected={active} large={large}
                 onClick={() => patch({ only: toggle(filters.only, o) })}
               >
                 <Icon size={large ? 13 : 11} strokeWidth={2} style={{ flexShrink: 0 }} />
@@ -507,7 +480,7 @@ export function FilterBar({
               <SectionTitle>Группировка</SectionTitle>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs }}>
                 {grouping.options.map(o => (
-                  <Chip key={o.value} active={o.value === grouping.value} onClick={() => grouping.onChange(o.value)}>
+                  <Chip variant="toggle" key={o.value} selected={o.value === grouping.value} onClick={() => grouping.onChange(o.value)}>
                     {o.icon}
                     {o.label}
                   </Chip>

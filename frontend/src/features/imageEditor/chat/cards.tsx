@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, Check, ExternalLink, Image as ImageIcon, SlidersHorizontal, Sparkles, X, Zap } from 'lucide-react';
 import {
-  Button, Dot, C, FS, R, SHADOW, SP, ICON_SIZE, ICON_STROKE, onReconnected, personaLabel, showToast,
+  Button, Dot, ProgressBar, C, FS, R, SHADOW, SP, ICON_SIZE, ICON_STROKE, onReconnected, personaLabel, showToast,
 } from 'aihome_shell/kit';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import type { ChatItem } from '../../../types';
@@ -257,9 +257,7 @@ export function ImageLaunchCard({ ctx }: { ctx: ChatItemToolCtx }) {
         </div>
       )}
       {phase === 'run' && (
-        <div style={{ height: 4, borderRadius: R.max, background: C.track, overflow: 'hidden' }}>
-          <div style={{ width: `${progress}%`, height: '100%', background: C.accent, transition: 'width .5s linear' }} />
-        </div>
+        <ProgressBar value={progress} transition="width .5s linear" />
       )}
       {phase === 'cancel' && (noMoney || bridge) && <Note>{[noMoney, bridge ? 'Промпт остался в поле сверху.' : ''].filter(Boolean).join(' ')}</Note>}
       {phase === 'error' && <Note>{status?.error ?? 'Сервис рисования отказал.'}{status?.charged === false && !free ? ' Деньги не списаны.' : ''}</Note>}

@@ -20,6 +20,11 @@ interface ModalProps {
   hideCloseButton?: boolean;
   children?: ReactNode;
   cardStyle?: CSSProperties;
+  // fullscreen — рабочее окно во весь экран (редактор картинок): шапка и футер вне
+  // скролла, тело без отступов (холст встаёт от края до края). На мобиле — без ручки
+  // шторки и скругления, с safe-area сверху и снизу; на десктопе — карточка во весь
+  // вьюпорт с отступом. width при этом игнорируется.
+  size?: 'default' | 'fullscreen';
 }
 
 // Единое модальное окно.
@@ -31,7 +36,7 @@ interface ModalProps {
 // могут спрятать встроенный через hideCloseButton.
 export function Modal({
   width = 440, title, subtitle, footer, onClose,
-  closeOnBackdrop = true, hideCloseButton = false, children, cardStyle,
+  closeOnBackdrop = true, hideCloseButton = false, children, cardStyle, size = 'default',
 }: ModalProps) {
   const isMobile = useIsMobileModal();
 
@@ -104,6 +109,58 @@ export function Modal({
     position: 'fixed', inset: 0, background: C.overlay,
     display: 'flex', justifyContent: 'center', zIndex: Z.modal,
   };
+
+  if (size === 'fullscreen') {
+    // Шапка — всегда вне скролла и с крестиком: «шаг N из M» и «Готово» должны быть
+    // видны постоянно, а ручки шторки нет — жеста «потяни вниз» у этого окна нет
+    const fsHeader = (titleBlock || closeButton) && (
+      <div style={{
+        display: 'flex', alignItems: 'flex-start', gap: SP.sm, flexShrink: 0,
+        padding: isMobile ? `calc(${SP.md}px + env(safe-area-inset-top)) 18px ${SP.md}px` : '20px 28px 16px',
+        borderBottom: `1px solid ${C.borderLight}`,
+      }}>
+        {titleBlock}
+        {closeButton}
+      </div>
+    );
+    return createPortal(
+      <div
+        className="cc-overlay"
+        style={{ ...overlayBase, alignItems: 'stretch', padding: isMobile ? 0 : SP.lg }}
+        onPointerDown={(e) => { if (closeOnBackdrop && e.target === e.currentTarget) onClose(); }}
+      >
+        <div
+          className={isMobile ? undefined : 'cc-modal-card'}
+          style={{
+            background: C.bgMain, borderRadius: isMobile ? 0 : R.modal,
+            width: '100%', height: isMobile ? '100dvh' : '100%',
+            boxShadow: isMobile ? undefined : SHADOW.modal,
+            display: 'flex', flexDirection: 'column', boxSizing: 'border-box', overflow: 'hidden',
+            ...cardStyle,
+          }}
+        >
+          {fsHeader}
+          <div style={{
+            flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column',
+            WebkitOverflowScrolling: 'touch',
+          }}>
+            {children}
+          </div>
+          {footer && (
+            <div style={{
+              flexShrink: 0, padding: isMobile ? '12px 18px' : '16px 28px',
+              paddingBottom: isMobile ? 'calc(12px + env(safe-area-inset-bottom))' : undefined,
+              borderTop: `1px solid ${C.borderLight}`, background: C.bgMain,
+              display: 'flex', gap: 10, justifyContent: 'flex-end',
+            }}>
+              {footer}
+            </div>
+          )}
+        </div>
+      </div>,
+      document.body,
+    );
+  }
 
   if (isMobile) {
     return createPortal(

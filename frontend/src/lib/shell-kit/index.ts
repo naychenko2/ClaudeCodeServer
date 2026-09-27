@@ -105,6 +105,7 @@ export {
   IslandScaffold, PanelHeaderSlot, useHasPanelHeader, MenuItem,
   SidebarSection, Toggle, PageCanvas, WaitingIndicator, Dot,
   Island, EmptyState, Field, TextField, TextArea, IconField, ModalActions, Menu, SegmentedControl, Checkbox,
+  Chip, ChipX, ProgressBar,
 } from '../../components/ui';
 
 // ─── components/ui/icons ─────────────────────────────────────────────────────

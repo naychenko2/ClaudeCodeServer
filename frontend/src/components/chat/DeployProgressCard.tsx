@@ -26,6 +26,7 @@ import { api, type DeployJournalRecord } from '../../lib/api';
 import { C, FONT, FS, R, SHADOW, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { Badge, type BadgeTone } from '../ui/Badge';
+import { ProgressBar, type ProgressTone } from '../ui/ProgressBar';
 import { useIsMobile } from '../../lib/breakpoints';
 import { setDeployInProgress } from '../../lib/deployState';
 import { applyUpdateAndReload } from '../../lib/swUpdate';
@@ -319,11 +320,9 @@ export const DeployProgressCard = memo(function DeployProgressCard({ item, sessi
           </div>
         )}
 
-        {/* Бар прогресса. Истории нет — бара нет вовсе: пустой прогноз честнее выдуманного.
-            Локальный, не общий примитив: восемь рукописных копий такого бара по проекту
-            выносятся в ui/MeterBar отдельной работой, тащить её сюда незачем */}
+        {/* Бар прогресса. Истории нет — бара нет вовсе: пустой прогноз честнее выдуманного */}
         {state !== 'loading' && state !== 'queued' && totalMs > 0 && (
-          <ProgressBar
+          <ProgressRow
             pct={pct} state={state} estimate={state === 'dead'}
             right={running ? runningHint(state, elapsed, totalMs) : ''}
           />
@@ -557,24 +556,15 @@ function filesWord(n: number): string {
   return 'незакоммиченных файлов';
 }
 
-// Тонкий бар прогресса — локальный: общий примитив ui/MeterBar выносится отдельной
-// работой вместе с восемью уже существующими рукописными копиями
-function ProgressBar({ pct, state, estimate, right }: { pct: number; state: CardState; estimate: boolean; right: string }) {
-  const fill = state === 'succeeded' ? C.success
-    : state === 'rolled_back' ? C.warning
-      : state === 'failed' ? C.danger
-        : estimate ? C.accentSoft : C.accent;
+// Строка прогресса: общий ui/ProgressBar плюс подсказка времени справа
+function ProgressRow({ pct, state, estimate, right }: { pct: number; state: CardState; estimate: boolean; right: string }) {
+  const tone: ProgressTone = state === 'succeeded' ? 'success'
+    : state === 'rolled_back' ? 'warning'
+      : state === 'failed' ? 'danger'
+        : 'accent';
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap', rowGap: SP.xs }}>
-      <span style={{
-        flex: 1, minWidth: 120, height: 4, borderRadius: R.max,
-        background: C.borderLight, overflow: 'hidden',
-      }}>
-        <span style={{
-          display: 'block', height: '100%', width: `${Math.max(0, Math.min(100, pct))}%`,
-          borderRadius: R.max, background: fill, transition: 'width .3s ease',
-        }} />
-      </span>
+      <ProgressBar value={pct} tone={tone} estimate={estimate} style={{ flex: 1, minWidth: 120 }} />
       {right && (
         <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap' }}>
           {right}

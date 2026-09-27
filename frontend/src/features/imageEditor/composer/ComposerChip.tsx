@@ -1,19 +1,22 @@
 // Чип пометок над полем ввода (слот composer-chip): «hero.png · 1 пометка ✕». Пометки
 // из редактора уходят со следующим сообщением в любом режиме, ✕ — не прикладывать.
 // Здесь же живёт попап «Редактор»: композер смонтирован всё время, пока открыт чат, а
-// карточка в ленте может уехать из виду.
+// карточка в ленте может уехать из виду. По той же причине чип — точка входа в чат для
+// полосы «Картинки»: чип монтируется один раз на чат, а карточек в ленте много.
 
+import { useEffect } from 'react';
 import { Brush } from 'lucide-react';
 import { Chip, ICON_SIZE, ICON_STROKE, SP } from 'aihome_shell/kit';
 import type { ComposerChipCtx } from '../../../lib/subsystems/registryCore';
 import { EditorModal } from '../editor/EditorModal';
 import { plural } from '../format';
 import { threadName } from '../thread/model';
-import { getEditor, getThreadMarks, openEditor, setThreadMarks, useThreads } from '../thread/threadStore';
+import { enterChat, getEditor, getThreadMarks, openEditor, setThreadMarks, useThreads } from '../thread/threadStore';
 
 export function ImageComposerChip({ ctx }: { ctx: ComposerChipCtx }) {
   const { projectId, sessionId } = ctx;
   const state = useThreads(projectId, sessionId);
+  useEffect(() => { if (sessionId) enterChat(sessionId); }, [sessionId]);
   const thread = state.focus ? state.threads.find(t => t.id === state.focus) ?? null : null;
   const editor = getEditor();
   const n = thread ? getThreadMarks(thread.id).marks.length : 0;

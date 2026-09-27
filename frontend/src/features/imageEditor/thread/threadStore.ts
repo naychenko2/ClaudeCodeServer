@@ -82,6 +82,14 @@ export async function ensureThreads(projectId: string, sessionId: string): Promi
   apply(sessionId, projectId, await threadsApi.get(projectId, sessionId));
 }
 
+// Вход в чат: владелец полосы заново просит «Картинки» по серверному фокусу — ручной уход
+// на другую полосу держится только до выхода из чата, как и после перезагрузки. Ещё не
+// загруженный чат попросит полосу сам, когда придёт его состояние
+export function enterChat(sessionId: string) {
+  const e = _entries.get(sessionId);
+  if (e?.loaded && e.state.focus) requestStrip(sessionId, IMAGES_STRIP);
+}
+
 export function getThreadsState(sessionId: string | null): ImageThreadsState {
   return (sessionId && _entries.get(sessionId)?.state) || EMPTY_THREADS;
 }

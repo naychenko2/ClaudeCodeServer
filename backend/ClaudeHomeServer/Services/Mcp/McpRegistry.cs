@@ -23,7 +23,7 @@ public class McpRegistry
     public static readonly string[] ReservedKeys =
     [
         "tasks", "notes", "memory", "personas", "wsp", "notifications",
-        "widgets", "codegraph", "dify", "fal-ai", "glif", "higgsfield",
+        "widgets", "codegraph", "dify", "fal-ai", "glif", "higgsfield", "architecture",
     ];
 
     // Префикс серверов памяти персон-консультантов (pmem_<handle>)

@@ -580,6 +580,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // Фабрика логгеров для вертикали (волна В): TeamPlanService получает собственный
     // типизированный ILogger. null — в тестах без DI, TeamPlanService работает на NullLogger.
     private readonly ILoggerFactory? _loggerFactory;
+    // Снимок загруженных подсистем: гейт объявления arch_* по факту загрузки модуля
+    private readonly Composition.SubsystemStateStore? _subsystemStates;
     // Драйверы среды исполнения владельцев (local / docker-песочница)
     private readonly Execution.ILauncherFactory _launchers;
     private readonly Execution.SandboxManager _sandbox;
@@ -723,8 +725,12 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // Опционально (в тестах не передаётся): фабрика логгеров — нужна вертикали
         // TeamPlanService с собственным типизированным логгером (волна В). Без неё
         // TeamPlanService работает на NullLogger.
-        ILoggerFactory? loggerFactory = null)
+        ILoggerFactory? loggerFactory = null,
+        // Опционально (в тестах не передаётся): снимок загруженных подсистем — факт загрузки
+        // динамических модулей (Architecture). Без него сервер arch_* ходу не объявляется.
+        Composition.SubsystemStateStore? subsystemStates = null)
     {
+        _subsystemStates = subsystemStates;
         _turnEvents = turnEvents;
         _loggerFactory = loggerFactory;
         _subagentRuns = subagentRuns;
@@ -1033,6 +1039,23 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         return new WebSearchMcpContext(apiUrl, () => GetServiceToken(ownerId!), HttpEndpointUsable(apiUrl));
     }
 
+    // Контекст MCP-сервера архитектуры (arch_*: C4-модель проекта). Все оси — свойства
+    // владельца/сессии/процесса, не хода (инвариант стабильности состава ADR-012): чат
+    // проекта, модуль Architecture реально загружен (динамическая сборка, Viaduct 10.2: без
+    // dll тулсета нет в реестре, и ход объявил бы CLI мёртвый сервер — урок форвардера
+    // Knowledge у Notes) и не выключен вторым замком Subsystems:architecture:Enabled, плюс
+    // Off-привязка персоны tool:architecture. Фич-флага у раздела нет (решение 2026-09-26):
+    // включение — только конфигом модуля. Тулсет перепроверяет то же на каждом вызове.
+    private ArchitectureMcpContext? BuildArchitectureContext(string? ownerId, string? projectId, Persona? persona)
+    {
+        if (ownerId is null || string.IsNullOrEmpty(projectId)) return null;
+        if (_subsystemStates?.ActiveKeys().Contains(McpEndpoints.ArchitectureName, StringComparer.OrdinalIgnoreCase) != true) return null;
+        if (!Composition.SubsystemGate.IsEnabled(_config, McpEndpoints.ArchitectureName)) return null;
+        if (!_bindings.ServerToolEnabled(ownerId, persona, "architecture")) return null;
+        var apiUrl = ResolveTasksApiUrl(ownerId);
+        return new ArchitectureMcpContext(apiUrl, () => GetServiceToken(ownerId), HttpEndpointUsable(apiUrl));
+    }
+
     // Допускает ли АДРЕС бэкенда http-транспорт (ADR-012) — СХЕМА и форма строки, без
     // рубильника. Не http — значит https: боевой серт выписан на внешний домен, CLI упрётся
     // в ERR_TLS_CERT_ALTNAME_INVALID и спрячет инструмент от модели МОЛЧА, а *.naychenko.me
@@ -1071,8 +1094,10 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         TasksMcpContext? tasks = null, NotesMcpContext? notes = null, PersonasMcpContext? personas = null,
         WorkspaceMcpContext? workspace = null, NotificationsMcpContext? notifications = null,
         CodeGraphMcpContext? codeGraph = null, DifyMcpContext? dify = null,
-        WatchMcpContext? watch = null, WebSearchMcpContext? webSearch = null) =>
-        widgets is { UseHttp: true } || memory is { UseHttp: true }
+        WatchMcpContext? watch = null, WebSearchMcpContext? webSearch = null,
+        ArchitectureMcpContext? architecture = null) =>
+        architecture is { UseHttp: true }
+        || widgets is { UseHttp: true } || memory is { UseHttp: true }
         || tasks is { UseHttp: true } || notes is { UseHttp: true } || personas is { UseHttp: true }
         || workspace is { UseHttp: true } || notifications is { UseHttp: true }
         || codeGraph is { UseHttp: true } || dify is { UseHttp: true }
@@ -3623,6 +3648,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         var personasMcp = BuildPersonasContext(ownerId, session.ProjectId, session, persona.Persona);
         var notificationsMcp = BuildNotificationsContext(ownerId, session.PersonaId, persona.Persona);
         var codeGraphMcp = BuildCodeGraphContext(ownerId, session.ProjectId, session.Id, rootPath, persona.Persona);
+        var architectureMcp = BuildArchitectureContext(ownerId, session.ProjectId, persona.Persona);
         var difyMcp = BuildDifyContext(ownerId);
         var adapter = _adapters.Create(session, new LlmSessionContext(rootPath,
             msg => OnMessageAsync(session.Id, accumulator, msg, runId),
@@ -3651,8 +3677,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             EnqueueBypass: BuildEnqueueBypass(session.Id),
             OrchestrationDone: BuildOrchestrationDone(session.Id),
             HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp,
-                workspace, notificationsMcp, codeGraphMcp, difyMcp, watchMcp, webSearchMcp),
+                workspace, notificationsMcp, codeGraphMcp, difyMcp, watchMcp, webSearchMcp, architectureMcp),
             HttpMcpEnabledProvider: HttpMcpEnabled,
+            ArchitectureMcp: architectureMcp,
             // Материалы контекста — только у проектных чатов (адреса file/task живут внутри
             // проекта); во внепроектной ветке восстановления провайдер не передаётся вовсе
             ChatContextProvider: session.ProjectId is not null ? BuildChatContextProvider(session.Id) : null,
@@ -5012,6 +5039,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             var personasMcp = BuildPersonasContext(project.OwnerId, project.Id, entry.Info, persona.Persona);
             var notificationsMcp = BuildNotificationsContext(project.OwnerId, entry.Info.PersonaId, persona.Persona);
             var codeGraphMcp = BuildCodeGraphContext(project.OwnerId, project.Id, entry.Info.Id, rootPath, persona.Persona);
+            var architectureMcp = BuildArchitectureContext(project.OwnerId, project.Id, persona.Persona);
             var difyMcp = BuildDifyContext(project.OwnerId);
             context = new LlmSessionContext(rootPath,
                 msg => OnMessageAsync(sessionId, accumulator, msg, runId),
@@ -5041,8 +5069,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 EnqueueBypass: BuildEnqueueBypass(sessionId),
                 OrchestrationDone: BuildOrchestrationDone(sessionId),
                 HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp,
-                    workspace, notificationsMcp, codeGraphMcp, difyMcp, watchMcp, webSearchMcp),
+                    workspace, notificationsMcp, codeGraphMcp, difyMcp, watchMcp, webSearchMcp, architectureMcp),
                 HttpMcpEnabledProvider: HttpMcpEnabled,
+                ArchitectureMcp: architectureMcp,
                 ChatContextProvider: BuildChatContextProvider(sessionId),
                 Events: _turnEvents,
                 WatchMcp: watchMcp,

@@ -49,6 +49,10 @@ public static class PersonaAccessPolicy
         "mcp__wsp__tags_remove",
         "mcp__wsp__knowledge_index", "mcp__wsp__kb_add_document",
         "mcp__wsp__chats_create", "mcp__wsp__chats_update", "mcp__wsp__chats_delete",
+        // C4-модель проекта: создание, правка и удаление элементов, правка связей (тулсет
+        // отклоняет их и сам; соответствие ArchitectureToolset.WriteTools держит тест)
+        "mcp__architecture__arch_create_element", "mcp__architecture__arch_update_element",
+        "mcp__architecture__arch_delete_element", "mcp__architecture__arch_set_connection",
     ];
 
     // Итоговый список дополнительных запретов сессии персоны:

@@ -151,6 +151,13 @@ public sealed record WatchMcpContext(string ApiUrl, Func<string> TokenFactory, b
 // он живёт только на бэкенде, в конфиг хода и env процесса CLI не уезжает.
 public sealed record WebSearchMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp);
 
+// Контекст MCP-сервера архитектуры (arch_*: C4-модель проекта, раздел «Архитектура»):
+// адрес API и фабрика сервисного токена владельца; сессия-вызыватель едет хвостом URL
+// (/mcp/architecture/{sessionId}), по ней тулсет резолвит проект. null — чат вне проекта,
+// выключенная подсистема, флаг владельца architecture выключен или Off-привязка персоны.
+// stdio-ветки отката НЕТ (сервер рождён в Kestrel) — идиом тот же, что у watch/websearch.
+public sealed record ArchitectureMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp);
+
 // Контекст MCP-сервера графа кода (codegraph_find/neighbors/hubs): адрес API, сервисный
 // токен владельца и проект, чей граф доступен инструментами. ProjectId обязателен —
 // граф ключуется проектом, в чате вне проекта сервер не подключается.
@@ -345,6 +352,9 @@ public sealed record LlmSessionContext(
     // Perplexity:ApiKey. Наличие контекста — свойство владельца и настройки инстанса
     // (инвариант стабильности состава ADR-012).
     WebSearchMcpContext? WebSearchMcp = null,
+    // MCP-сервер архитектуры (arch_*): null — чат вне проекта, подсистема/флаг выключены
+    // или Off-привязка персоны. Все оси — свойства владельца/сессии (инвариант ADR-012).
+    ArchitectureMcpContext? ArchitectureMcp = null,
     // Корень сервера (AppContext.BaseDirectory, не IHostEnvironment.ContentRootPath —
     // при `dotnet run` это bin/Debug/net10.0, у IHostEnvironment — папка проекта) — для
     // BareMode: SystemPromptFile поставляется с продуктом и живёт в репозитории/публикации

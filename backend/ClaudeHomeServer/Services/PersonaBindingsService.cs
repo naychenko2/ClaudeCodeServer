@@ -36,6 +36,7 @@ public class PersonaBindingsService : IPersonaServerToolGate
             ["personas"] = ("Персоны", "Раздел персон (mcp__personas__*): CRUD и @упоминания"),
             ["consultants"] = ("Консультации персон", "Персоны-консультанты: сабагенты .md (Task по handle), их память mcp__pmem_* и persona_ask"),
             ["codegraph"] = ("Граф кода", "Граф кода проекта (mcp__codegraph__*) и его выжимка в промпте"),
+            ["architecture"] = ("Архитектура", "C4-модель архитектуры проекта (mcp__architecture__arch_*): чтение и правка элементов и связей. Нужен включённый раздел «Архитектура»"),
             ["notifications"] = ("Уведомления", "Уведомления пользователя (mcp__notifications__*): создать, отметить прочитанным. По умолчанию — только у персон с модулем автоматизации (остальным включается этой привязкой)"),
             ["widgets"] = ("Виджеты", "Интерактивные HTML-виджеты в ленте чата (mcp__widgets__widget_show)"),
             ["projects"] = ("Проекты", "Секция projects workspace: список и карточки проектов владельца"),
@@ -93,7 +94,7 @@ public class PersonaBindingsService : IPersonaServerToolGate
     // по серверу принимает он, а не голый ServerToolEnabled.
     public static readonly IReadOnlySet<string> ServerKeys =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            { "personas", "consultants", "codegraph", "notifications", "widgets" };
+            { "personas", "consultants", "codegraph", "notifications", "widgets", "architecture" };
 
     // Ключи секций-надстроек, дефолт которых задаёт пресет по Persona.Specialty
     // (SpecialtySections). Решение — SectionEnabled.

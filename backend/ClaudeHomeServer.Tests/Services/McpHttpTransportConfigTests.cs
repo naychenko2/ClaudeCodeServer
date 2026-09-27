@@ -191,6 +191,43 @@ public class McpHttpTransportConfigTests : IDisposable
     }
 
     /// <summary>
+    /// Сервер архитектуры (arch_*): http-узел с сессией-вызывателем в хвосте URL; без
+    /// контекста или при снятом рубильнике узла нет вовсе — stdio-ветки у него нет.
+    /// </summary>
+    [Fact]
+    public void Архитектура_HttpУзелССессиейВХвосте_БезКонтекстаИРубильникаУзлаНет()
+    {
+        var session = new Session { Id = "sess-arch-1" };
+        var architecture = new ArchitectureMcpContext("http://localhost:5000", () => "tok-R", UseHttp: true);
+        var httpOn = true;
+        var adapter = new ClaudeSession(session, new LlmSessionContext(
+            RootPath: _root,
+            OnMessage: _ => Task.CompletedTask,
+            RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
+            PermissionRules: null,
+            TasksMcp: null,
+            HttpMcpEnabledProvider: () => httpOn,
+            ArchitectureMcp: architecture));
+
+        var (servers, keys) = BuildFor(adapter);
+        var node = servers["architecture"]!.AsObject();
+        node["type"]!.GetValue<string>().Should().Be("http");
+        node["url"]!.GetValue<string>().Should().Be($"http://localhost:5000/mcp/architecture/{session.Id}");
+        node["alwaysLoad"]!.GetValue<bool>().Should().BeTrue();
+        node["headers"]!["Authorization"]!.GetValue<string>().Should().Be("Bearer tok-R");
+        node["headers"]!.AsObject().ContainsKey("X-Caller-Session-Id").Should().BeTrue();
+        keys.Should().Contain("architecture:t:http");
+
+        httpOn = false;
+        var (offServers, offKeys) = BuildFor(adapter);
+        offServers.ContainsKey("architecture").Should().BeFalse("рубильник снят — stdio-подмены нет");
+        offKeys.Should().NotContain("architecture:");
+
+        var (noServers, _) = BuildConfig();
+        noServers.ContainsKey("architecture").Should().BeFalse("контекста нет — сервер ходу не объявляется");
+    }
+
+    /// <summary>
     /// Контекста нет (чат без владельца) — узла нет. Рубильник Mcp:HttpTransport снят при
     /// живом контексте — узла тоже нет, и stdio-замену НЕ подставляем: ветки отката у watch
     /// нет (node-сервера не существовало).

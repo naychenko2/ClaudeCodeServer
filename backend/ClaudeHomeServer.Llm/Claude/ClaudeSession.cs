@@ -696,6 +696,10 @@ public class ClaudeSession : ILlmSessionAdapter
     // Веб-поиск: условие ровно как у сторожей — схема адреса допускает http И рубильник
     // включён. stdio-ветки отката нет, поэтому негодный адрес означает «сервера ходу нет»
     private bool WebSearchHttpOn() => _webSearchMcp is { UseHttp: true } && HttpMcpOnNow();
+    // MCP-сервер архитектуры (arch_*): null — чат вне проекта, подсистема/флаг/привязка
+    // выключены. Условие подключения — как у веб-поиска: stdio-ветки отката нет
+    private readonly ArchitectureMcpContext? _architectureMcp;
+    private bool ArchitectureHttpOn() => _architectureMcp is { UseHttp: true } && HttpMcpOnNow();
     // MCP-сервер графа кода (codegraph_find/neighbors/hubs): null — чат вне проекта
     private readonly CodeGraphMcpContext? _codeGraphMcp;
     // MCP-сервер баз знаний Dify (ADR-012, волна 4): null — нет владельца или секция Dify
@@ -786,6 +790,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _widgetsMcp = context.WidgetsMcp;
         _watchMcp = context.WatchMcp;
         _webSearchMcp = context.WebSearchMcp;
+        _architectureMcp = context.ArchitectureMcp;
         _httpMcpActive = context.HttpMcpActive;
         _httpMcpEnabled = context.HttpMcpEnabledProvider;
         _codeGraphMcp = context.CodeGraphMcp;
@@ -857,6 +862,8 @@ public class ClaudeSession : ILlmSessionAdapter
         // Веб-поиск: та же история — stdio-ветки нет, контекста нет вовсе при пустом
         // Perplexity:ApiKey (тогда схемы web_search/web_read не занимают окно модели)
         var hasWebSearch = WebSearchHttpOn();
+        // Архитектура: та же история — сервер рождён в Kestrel, stdio-ветки нет
+        var hasArchitecture = ArchitectureHttpOn();
         // pmem-консультанты приезжают списком на каждый ход — рубильник для них тот же живой
         bool ConsultantHttp(ConsultantMemoryServer c) => c.UseHttp && httpOn;
         // tasks/notes/personas живут в Kestrel (ADR-012, фаза 2 волна 2), но пути их
@@ -951,6 +958,7 @@ public class ClaudeSession : ILlmSessionAdapter
             hasDify = hasDify && Keep("dify");
             hasWatch = hasWatch && Keep("watch");
             hasWebSearch = hasWebSearch && Keep("websearch");
+            hasArchitecture = hasArchitecture && Keep("architecture");
             hasConsultants = hasConsultants && Keep("consultants");
             hasModules = hasModules && Keep("modules");
             hasFalAi = hasFalAi && Keep("fal-ai");
@@ -962,7 +970,7 @@ public class ClaudeSession : ILlmSessionAdapter
         }
         if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasNotifications
             && !hasWidgets && !hasCodeGraph && !hasDify && !hasDesktop && !hasDataset && !hasModules && !hasFalAi && !hasGlif && userServers is null
-            && !hasExternal && !hasWatch && !hasWebSearch
+            && !hasExternal && !hasWatch && !hasWebSearch && !hasArchitecture
             && !(hasConsultants && (memoryServerPath is not null
                 || personaAgents!.MemoryServers.Any(ConsultantHttp)))) return (null, "", []);
 
@@ -1609,6 +1617,26 @@ public class ClaudeSession : ILlmSessionAdapter
                 };
                 // Состав фиксирован (2 инструмента), вариативен только транспорт
                 shapes["websearch"] = "t:http";
+            }
+
+            if (hasArchitecture)
+            {
+                // C4-модель проекта (arch_*): единственная ветка — http, как у веб-поиска.
+                // Сессия-вызыватель едет хвостом URL — по ней тулсет резолвит проект и
+                // проверяет владельца; файл модели читает и пишет общее хранилище раздела
+                servers[McpEndpoints.ArchitectureName] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["type"] = "http",
+                    ["url"] = McpEndpoints.EndpointFor(_architectureMcp!.ApiUrl, McpEndpoints.ArchitectureName, Info.Id),
+                    ["headers"] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["Authorization"] = $"Bearer {_architectureMcp.TokenFactory()}",
+                        [McpEndpoints.CallerSessionHeader] = Info.Id,
+                    },
+                    ["alwaysLoad"] = true,
+                };
+                // Состав фиксирован (5 инструментов), вариативен только транспорт
+                shapes[McpEndpoints.ArchitectureName] = "t:http";
             }
 
             if (hasDify && _difyMcp is not null)

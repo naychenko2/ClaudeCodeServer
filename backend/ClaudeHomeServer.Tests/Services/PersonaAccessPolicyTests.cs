@@ -140,6 +140,29 @@ public class PersonaAccessPolicyTests
             "mcp__wsp__chats_send", "mcp__wsp__chats_report_up", "mcp__wsp__chats_history"]);
     }
 
+    // Пишущие инструменты C4-модели: список запретов в Main пишется строками (вертикаль —
+    // динамический модуль, ссылки на неё у Main нет), поэтому соответствие сверяем здесь:
+    // новый пишущий arch_* без строки в ReadOnlyDisallowed — дыра профиля «Только чтение»
+    [Fact]
+    public void ReadOnly_ОтрезаетВсеПишущиеИнструментыАрхитектуры()
+    {
+        var result = PersonaAccessPolicy.BuildExtraDisallowed(Make(PersonaAccess.ReadOnly));
+        var catalog = ClaudeHomeServer.Services.Architecture.ArchitectureToolset.AllTools.Select(t => t.Name).ToHashSet();
+        var writes = ClaudeHomeServer.Services.Architecture.ArchitectureToolset.WriteTools;
+
+        writes.Should().Contain(["arch_create_element", "arch_delete_element"]);
+        // Обратная сторона: всё, что не чтение, обязано быть в WriteTools — иначе новый
+        // пишущий инструмент прошёл бы мимо обоих гейтов «Только чтение»
+        catalog.Except(["arch_context", "arch_search", "arch_get_element"]).Should().BeEquivalentTo(writes);
+        foreach (var tool in writes)
+        {
+            catalog.Should().Contain(tool, "запрет на несуществующее имя — тихо неработающий гейт");
+            result.Should().Contain("mcp__architecture__" + tool);
+        }
+        result.Should().NotContain(["mcp__architecture__arch_context", "mcp__architecture__arch_get_element",
+            "mcp__architecture__arch_search"]);
+    }
+
     // Список запретов wsp живёт в PersonaAccessPolicy, каталог инструментов — в
     // WorkspaceToolset: опечатка в имени прошла бы молча (deny неизвестного имени wsp — не
     // падение CLI, а тихо неработающий запрет). Сверяем каждое имя с живым каталогом.

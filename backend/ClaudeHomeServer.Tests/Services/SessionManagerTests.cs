@@ -10025,6 +10025,35 @@ public class SessionManagerTests : IDisposable
         InvokePrivate("ConsultantsEnabled", TestUserId, session, null).Should().Be(true);
     }
 
+    // Гейт «модуль Architecture реально загружен» (Viaduct 10.2): без записи в сторе
+    // подсистем тулсета нет в реестре — ход не должен объявлять CLI мёртвый сервер.
+    // Остальные замки открыты (привязок нет, фич-флага у раздела нет), меняется только стор.
+    [Fact]
+    public void Архитектура_ГейтЗагрузкиМодуля_ПоСторуПодсистем()
+    {
+        var dir = MkProjectDir("gates-arch");
+        var user = _userStore.Add("arch-gate-owner", "password123", "user");
+        var project = _projectManager.Create("GA", dir, user.Id, user.Username);
+        var states = new SubsystemStateStore();
+        typeof(SessionManager).GetField("_subsystemStates", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .SetValue(_sut, states);
+
+        InvokePrivate("BuildArchitectureContext", user.Id, project.Id, null)
+            .Should().BeNull("модуль не загружен — записи architecture в сторе нет");
+
+        states.RecordActive(new ArchitectureStubSubsystem());
+
+        InvokePrivate("BuildArchitectureContext", user.Id, project.Id, null)
+            .Should().NotBeNull("модуль загружен (RecordActive), прочие замки открыты");
+    }
+
+    private sealed class ArchitectureStubSubsystem : IAppSubsystem
+    {
+        public string Key => McpEndpoints.ArchitectureName;
+        public string Title => "Архитектура (заглушка)";
+        public void Register(Microsoft.Extensions.DependencyInjection.IServiceCollection services, IConfiguration config) { }
+    }
+
     [Fact]
     public async Task Консультанты_Off_СнимаютПодсказкуНоОставляютСерверПерсон()
     {

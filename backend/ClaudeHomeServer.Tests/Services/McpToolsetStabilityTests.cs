@@ -94,6 +94,7 @@ public class McpToolsetStabilityTests
     [SkippableTheory]
     [InlineData("private WidgetsMcpContext? BuildWidgetsContext", "widgets")]
     [InlineData("private CodeGraphMcpContext? BuildCodeGraphContext", "codegraph")]
+    [InlineData("private ArchitectureMcpContext? BuildArchitectureContext", "architecture")]
     // internal с волны 2 http: те же формулы резолвят тулсеты по живой сессии-вызывателю
     [InlineData("internal bool PersonasEnabled", "personas")]
     [InlineData("internal bool ConsultantsEnabled", "consultants")]
@@ -445,6 +446,43 @@ public class McpToolsetStabilityTests
                 $"{name}: состояние хода не должно влиять на состав инструментов");
         }
         checkedAny.Should().BeTrue("хотя бы один тулсет с ToolsFor обязан существовать");
+    }
+
+    /// <summary>
+    /// Тулсет архитектуры живёт в вертикали (ClaudeHomeServer.Architecture), вне папки,
+    /// которую обходит сторож выше, — поэтому свой сторож: состав ToolsFor решается только
+    /// по владельцу и сессии (флаг, привязка персоны), а не по ходу.
+    /// </summary>
+    [SkippableFact]
+    public void СоставToolsFor_ТулсетаАрхитектуры_НеЧитаетСостояниеХода()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        string? path = null;
+        while (dir is not null && path is null)
+        {
+            var candidate = Path.Combine(dir.FullName, "backend", "ClaudeHomeServer.Architecture",
+                "Services", "Architecture", "ArchitectureToolset.cs");
+            if (File.Exists(candidate)) path = candidate;
+            dir = dir.Parent;
+        }
+        Skip.If(path is null, "ArchitectureToolset.cs не найден (сборка вне дерева репозитория)");
+
+        var source = File.ReadAllText(path!);
+        var start = source.IndexOf("public IReadOnlyList<McpToolSchema> ToolsFor(", StringComparison.Ordinal);
+        start.Should().BeGreaterThan(0, "ToolsFor обязан существовать");
+        var end = source.IndexOf("\n    public ", start + 1, StringComparison.Ordinal);
+        end.Should().BeGreaterThan(start);
+        var resolve = source.IndexOf("private bool TryResolve(", StringComparison.Ordinal);
+        resolve.Should().BeGreaterThan(0, "резолв состава обязан существовать");
+        var resolveEnd = source.IndexOf("\n    // ", resolve, StringComparison.Ordinal);
+
+        foreach (var body in new[] { source[start..end], source[resolve..resolveEnd] })
+        {
+            body.Should().NotContain("TurnDelegation", "гейт делегирования живёт в CallAsync, не в составе");
+            body.Should().NotContain("_currentTurn", "состояние хода не должно влиять на состав инструментов");
+        }
+        source[resolve..resolveEnd].Should().Contain("IsServerToolEnabled(",
+            "Off-привязка персоны tool:architecture — та же точка, что в SessionManager");
     }
 
     /// <summary>

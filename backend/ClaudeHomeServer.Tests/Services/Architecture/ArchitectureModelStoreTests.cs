@@ -271,7 +271,7 @@ public class ArchitectureModelStoreTests : IDisposable
             new ArchitectureModelGenerator(NullLogger<ArchitectureModelGenerator>.Instance));
         var project = projects.Create("Alice", _root, "alice", "alice", createDirectory: false);
 
-        var result = await controller.Generate(project.Id, default);
+        var result = await controller.Generate(project.Id, null, default);
 
         var obj = result.Should().BeOfType<ObjectResult>().Subject;
         obj.StatusCode.Should().Be(503);
@@ -288,7 +288,7 @@ public class ArchitectureModelStoreTests : IDisposable
             new ArchitectureModelGenerator(NullLogger<ArchitectureModelGenerator>.Instance));
         var project = projects.Create("Alice", _root, "alice", "alice", createDirectory: false);
 
-        (await controller.Generate(project.Id, default)).Should().BeOfType<ForbidResult>();
+        (await controller.Generate(project.Id, null, default)).Should().BeOfType<ForbidResult>();
         File.Exists(ModelPath).Should().BeFalse();
     }
 }

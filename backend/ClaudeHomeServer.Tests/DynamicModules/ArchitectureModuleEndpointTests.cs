@@ -43,6 +43,25 @@ public class ArchitectureModuleEndpointTests : IDisposable
         body.GetProperty("exists").GetBoolean().Should().BeFalse();
     }
 
+    // Кнопка «Собрать из кода» шлёт POST без тела и без Content-Type: [FromBody] с
+    // EmptyBodyBehavior.Allow обязан пропустить его как «без агента», а не отбить 415
+    [Fact]
+    public async Task Сборка_из_кода__пустой_POST_без_ContentType__не_415()
+    {
+        var dir = Path.Combine(_factory.TempDir, "arch-generate");
+        Directory.CreateDirectory(dir);
+        var created = await _client.PostAsJsonAsync("/api/projects", new { name = "ArchGenerate", rootPath = dir });
+        created.EnsureSuccessStatusCode();
+        var projectId = JsonSerializer.Deserialize<JsonElement>(await created.Content.ReadAsStringAsync())
+            .GetProperty("id").GetString()!;
+
+        var response = await _client.PostAsync($"/api/projects/{projectId}/architecture/generate", content: null);
+
+        response.StatusCode.Should().NotBe(HttpStatusCode.UnsupportedMediaType);
+        response.StatusCode.Should().Be(HttpStatusCode.OK,
+            "проход 1 без агента: пустой проект даёт пустой граф, модель собирается");
+    }
+
     [Fact]
     public async Task Статус_подсистем__architecture_активна_по_факту_загрузки()
     {

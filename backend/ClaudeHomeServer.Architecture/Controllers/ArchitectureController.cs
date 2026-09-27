@@ -2,6 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.CodeGraph;
+using ClaudeHomeServer.Services.Composition;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -33,7 +34,8 @@ public class ArchitectureController(
     ILogger<ArchitectureController> logger,
     ArchitectureModelGenerator generator,
     ArchitectureModelStore store,
-    IArchitectureCodeSource? graphs = null) : ControllerBase
+    IArchitectureCodeSource? graphs = null,
+    IArchitectureAgentLauncher? agents = null) : ControllerBase
 {
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
 
@@ -95,12 +97,30 @@ public class ArchitectureController(
     /// 403 — чужой проект; 409 — файл модели повреждён (не перезаписываем);
     /// 503 — граф кода построить не удалось.
     /// </summary>
+    /// <remarks>
+    /// Тело <c>{ withAgent }</c> необязательно (пусто = без агента). С агентом проход 1
+    /// всё равно идёт первым и синхронно, затем ставится задача архитектору (или без
+    /// персоны) — в ответе <c>agentTaskId</c>/<c>agentPersonaId</c>; исполнитель не стартовал —
+    /// 200 с <c>agentError=launch_failed</c> (проход 1 не откатывается); незавершённая
+    /// агентная сборка в проекте — 409 <c>build_in_progress</c> с <c>agentTaskId</c> идущей
+    /// задачи (видна заранее — отказ ДО прохода 1, <c>result = null</c>; поймана под замком
+    /// запуска — в <c>result</c> итог прохода 1); шва нет — 503 <c>agent_unavailable</c>
+    /// с <c>result</c> прохода 1.
+    /// </remarks>
     [HttpPost("generate")]
-    public async Task<IActionResult> Generate(string projectId, CancellationToken ct)
+    public async Task<IActionResult> Generate(string projectId,
+        [FromBody(EmptyBodyBehavior = Microsoft.AspNetCore.Mvc.ModelBinding.EmptyBodyBehavior.Allow)] ArchitectureGenerateRequest? body,
+        CancellationToken ct)
     {
         if (OwnedProject(projectId, out var denied) is not { } project) return denied!;
         if (graphs is null) return GraphUnavailable();
         var root = project.RootPath;
+
+        // Ранний отказ: агентная сборка уже идёт — проход 1 не гоняем и модель под работающим
+        // агентом не трогаем. Сборку БЕЗ агента не блокируем. Главная проверка — под замком
+        // в LaunchAsync, эта лишь экономит проход 1 в очевидном случае.
+        if (body?.WithAgent == true && agents?.IsBuildInProgress(project.Id, project.OwnerId!) is { } running)
+            return BuildInProgress(running, result: null);
 
         try
         {
@@ -115,7 +135,8 @@ public class ArchitectureController(
             if (snapshot is null) return GraphUnavailable();
 
             var result = await generator.GenerateAsync(root, project.Name, ToInput(snapshot, root), ct);
-            return Ok(result);
+            if (body?.WithAgent != true) return Ok(result);
+            return await LaunchAgentAsync(project, result, ct);
         }
         catch (ArchitectureModelCorruptException ex)
         {
@@ -132,6 +153,34 @@ public class ArchitectureController(
             return StatusCode(500, new { message = "Не удалось собрать модель архитектуры" });
         }
     }
+
+    // Проход 2: постановка по итогу прохода 1 + список ручных элементов (их агенту трогать
+    // нельзя, а тулсет происхождения не показывает) → задача через Core-шов
+    private async Task<IActionResult> LaunchAgentAsync(Project project, ArchitectureGenerateResult result, CancellationToken ct)
+    {
+        if (agents is null)
+            return StatusCode(503, new { code = "agent_unavailable", message = "Агентная сборка недоступна — модель собрана без агента", result });
+
+        var model = await store.ReadAsync(project.RootPath, ct);
+        var meta = await ArchitectureModelStore.ReadMetaAsync(
+            SafePath.Join(project.RootPath, ArchitectureModelGenerator.MetaRelPath), ct);
+        var manual = ArchitectureModelMerger.ManualElementNames(
+            model.Content is { } text ? System.Text.Json.Nodes.JsonNode.Parse(text) : null,
+            meta?["elements"] as System.Text.Json.Nodes.JsonObject);
+
+        var launch = await agents.LaunchAsync(project.Id, project.OwnerId!,
+            ArchitectureAgentPrompt.Build(result, manual), ct);
+        if (launch.Error == "build_in_progress")
+            return BuildInProgress(launch.TaskId, result);
+
+        logger.LogInformation("Сборка архитектуры с агентом: проект {ProjectId}, задача {TaskId}, персона {PersonaId}, ошибка {Error}",
+            project.Id, launch.TaskId, launch.PersonaId ?? "(без персоны)", launch.Error ?? "-");
+        return Ok(result with { AgentTaskId = launch.TaskId, AgentPersonaId = launch.PersonaId, AgentError = launch.Error });
+    }
+
+    // 409 с id блокирующей задачи (ссылка в UI); result — итог прохода 1, null при раннем отказе
+    private ConflictObjectResult BuildInProgress(string? agentTaskId, ArchitectureGenerateResult? result) =>
+        Conflict(new { code = "build_in_progress", message = "Агент уже собирает архитектуру этого проекта", agentTaskId, result });
 
     // Проект есть и принадлежит вызывающему — иначе готовый 404/403 в denied
     private Project? OwnedProject(string projectId, out IActionResult? denied)
@@ -164,3 +213,6 @@ public class ArchitectureController(
 
 /// <summary>Тело PUT модели: содержимое persist-обёртки Viaduct и версия-основание.</summary>
 public record ArchitectureModelPutRequest(string? Content, string? BaseVersion);
+
+/// <summary>Тело POST generate: <c>withAgent</c> — проход 2 (задача архитектору) после прохода 1.</summary>
+public record ArchitectureGenerateRequest(bool WithAgent = false);

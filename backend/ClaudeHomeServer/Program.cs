@@ -591,6 +591,10 @@ builder.Services.AddSingleton<TaskExecutionService>();
 // Адаптер резолвит TaskExecutionService через конструктор, DI форвардер ниже.
 builder.Services.AddSingleton<TaskExecutorAdapter>();
 builder.Services.AddSingleton<ITaskExecutor>(sp => sp.GetRequiredService<TaskExecutorAdapter>());
+// Шов IArchitectureAgentLauncher (Core) → адаптер → TaskManager + TaskExecutionService:
+// галочка «С агентом» у сборки архитектуры ставит задачу архитектору (или без персоны).
+// У контроллера Architecture шов необязателен (нет → 503 agent_unavailable).
+builder.Services.AddSingleton<IArchitectureAgentLauncher, ArchitectureAgentLauncherAdapter>();
 // Раздача под-задач и волны режима «Командная реализация» (Э3): создание задач по плану
 // и пакетный запуск исполнителей. Конструктор вешает хук в SessionManager — сервис нужно
 // прогреть на старте (ниже), иначе «Запустить» в карточке плана осталось бы без раздачи.

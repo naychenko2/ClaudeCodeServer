@@ -4,6 +4,7 @@ import { AlertTriangle, ChevronRight, History, RefreshCw, Settings, Trash2 } fro
 import type { AuthState, ChangelogDay, ChangelogGeneration, ChangelogItem, DaySummaryStub, ChangelogStatus } from '../types';
 import { api } from '../lib/api';
 import { C, FONT, FS, R, MODAL_W, SHADOW, CHAT_MAX_W } from '../lib/design';
+import { modelFamily } from '../lib/models';
 import { useIsMobile } from '../lib/breakpoints';
 import { EmptyState } from './EmptyState';
 import { HubHeader } from './HubHeader';
@@ -77,8 +78,7 @@ function fmtCost(usd: number): string {
 // Полный id модели («claude-haiku-4-5-20251001») в подписи не нужен — хватает тира
 function shortModel(m: string | null | undefined): string | null {
   if (!m) return null;
-  const tier = /(opus|sonnet|haiku|fable)/i.exec(m);
-  return tier ? tier[1].toLowerCase() : m;
+  return modelFamily(m);
 }
 
 export function ProductHistory({ isMobile, onClose, auth, onLogout, onHubTab }: {

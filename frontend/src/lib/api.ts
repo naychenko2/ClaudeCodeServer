@@ -475,7 +475,7 @@ export const api = {
   models: {
     list: () =>
       request<{
-        models: { value: string; displayName: string; description?: string | null; provider?: string | null; contextWindow?: number | null; isCurated?: boolean }[];
+        models: { value: string; displayName: string; description?: string | null; provider?: string | null; contextWindow?: number | null; isCurated?: boolean; resolvedVersion?: string | null }[];
         providers?: Record<string, import('./models').ProviderCapabilities>;
         // Резолвнутые модели агентных мест (ключ каталога → модель или null): по ним
         // пикеры подписывают пункт «По умолчанию (<модель>)»

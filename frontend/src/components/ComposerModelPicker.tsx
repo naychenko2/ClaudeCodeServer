@@ -1,5 +1,6 @@
 import { Sparkles, Gem, Brain, Feather, Lock, Zap, Cpu } from 'lucide-react';
 import { useModels, modelProvider, providerLabel, modelLabel, useDefaultModelOption,
+  modelFamily, versionHint,
   USAGE, type UsageKey } from '../lib/models';
 import { WindowBadge } from './ModelPicker';
 import { ComposerMenu, type ComposerMenuGroup } from './ComposerMenu';
@@ -42,12 +43,12 @@ interface Props {
 // max/ultra/pro — тяжёлые). Незнакомая модель получает нейтральный чип.
 export function ModelIcon({ value, size = 14 }: { value?: string | null; size?: number }) {
   const props = { size, strokeWidth: 2, style: { flexShrink: 0 } as const };
-  const v = (value ?? '').toLowerCase();
+  const v = modelFamily((value ?? '').toLowerCase());
   if (!v) return <Sparkles {...props} />;                                  // «По умолчанию»
-  if (/fable|ultra|\bmax\b/.test(v)) return <Gem {...props} />;            // самая мощная
-  if (/opus|\bpro\b|reasoner|\br1\b/.test(v)) return <Brain {...props} />; // тяжёлые рассуждения
-  if (/haiku|mini|flash|lite|fast|turbo|nano|small/.test(v)) return <Zap {...props} />; // быстрая
-  if (/sonnet|chat|\bv3\b/.test(v)) return <Feather {...props} />;         // экономичная
+  if (v === 'fable' || /ultra|\bmax\b/.test(v)) return <Gem {...props} />;            // самая мощная
+  if (v === 'opus' || /\bpro\b|reasoner|\br1\b/.test(v)) return <Brain {...props} />; // тяжёлые рассуждения
+  if (v === 'haiku' || /mini|flash|lite|fast|turbo|nano|small/.test(v)) return <Zap {...props} />; // быстрая
+  if (v === 'sonnet' || /chat|\bv3\b/.test(v)) return <Feather {...props} />;         // экономичная
   return <Cpu {...props} />;                                              // нейтральная
 }
 
@@ -109,6 +110,7 @@ export function ComposerModelPicker({ value, onChange, started, isMobile, compac
     items: byProvider.get(pk)!.map(m => ({
       value: m.value,
       label: m.label,
+      hint: versionHint(m),
       description: m.description,
       icon: <ModelIcon value={m.value} />,
       badge: <WindowBadge tokens={m.contextWindow} />,

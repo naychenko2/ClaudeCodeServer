@@ -13,6 +13,7 @@ export interface ModelOption {
   provider?: string;       // "claude" | ключ CLI-провайдера (deepseek/glm/…); отсутствует у fallback = claude
   contextWindow?: number;  // точное окно с бэка (модели CLI-провайдеров); иначе regex-фолбэк
   curated?: boolean;       // false — модель из опроса API провайдера (без карточки/описания)
+  resolvedVersion?: string; // Claude: какая версия сейчас стоит за семейством («Opus 5.5»)
 }
 
 // Возможности провайдера (блок providers из /api/models) — UI скрывает недоступное
@@ -50,20 +51,30 @@ const CLAUDE_CAPS: ProviderCapabilities = {
   supportsAgents: true,
 };
 
-// Алиасы вместо конкретных версий — не протухают при выходе новых моделей
+// Семейства моделей Claude — единственный список в продукте. Модели Claude храним и
+// показываем только семейством: версию выбирает CLI, окно 1M ставит сервер при запуске.
+export const CLAUDE_FAMILIES = ['opus', 'fable', 'sonnet', 'haiku'] as const;
+export type ClaudeFamily = typeof CLAUDE_FAMILIES[number];
+
+const FAMILY_LABELS: Record<ClaudeFamily, string> = {
+  opus: 'Opus', fable: 'Fable', sonnet: 'Sonnet', haiku: 'Haiku',
+};
+
+// id модели Claude → семейство: «claude-opus-4-8», «opus[1m]», «claude-fable-5-1[1m]»,
+// «claude-haiku-4-5-20251001» → opus/fable/haiku. Сторонние модели возвращаются как есть.
+export function modelFamily(value: string): string {
+  const m = /^(?:claude-)?(opus|fable|sonnet|haiku)(?:[-.\d]*)(?:\[1m\])?$/i.exec(value.trim());
+  return m ? m[1].toLowerCase() : value;
+}
+
+function isClaudeFamily(value: string): value is ClaudeFamily {
+  return (CLAUDE_FAMILIES as readonly string[]).includes(value);
+}
+
 export const FALLBACK_MODELS: ModelOption[] = [
   { value: '', label: 'По умолчанию' },
-  { value: 'opus', label: 'Opus' },
-  { value: 'sonnet', label: 'Sonnet' },
-  { value: 'haiku', label: 'Haiku' },
+  ...CLAUDE_FAMILIES.map(f => ({ value: f, label: FAMILY_LABELS[f] })),
 ];
-
-// Подписи для id, сохранённых в старых сессиях (их нет в динамическом списке CLI)
-const LEGACY_LABELS: Record<string, string> = {
-  'claude-opus-4-8': 'Opus 4.8',
-  'claude-sonnet-4-6': 'Sonnet 4.6',
-  'claude-haiku-4-5-20251001': 'Haiku 4.5',
-};
 
 let _models: ModelOption[] = FALLBACK_MODELS;
 let _providers: Record<string, ProviderCapabilities> = { claude: CLAUDE_CAPS };
@@ -85,26 +96,15 @@ function emit() {
   _listeners.forEach(fn => fn());
 }
 
-// Русские описания моделей Claude по стабильному id-алиасу: описания из CLI приходят
-// на английском, а UI русский. Формулировки версионно-нейтральные (без номеров версий),
-// чтобы не устаревать при обновлении моделей Claude; незнакомый алиас → описание из CLI.
+// Русские описания моделей Claude по семейству: описания из CLI приходят на английском,
+// а UI русский. Формулировки без номеров версий; незнакомое значение → описание из CLI.
 const CLAUDE_DESC_RU: Record<string, string> = {
   'default': 'Универсальная · сложные повседневные задачи',
   'opus': 'Универсальная · сложные повседневные задачи',
-  // Оба написания приходят от CLI в разных версиях: алиас «fable[1m]» → ключ «fable»,
-  // версионный id «claude-fable-5-1» → ключ «claude-fable»
   'fable': 'Самая мощная · трудные и долгие задачи',
-  'claude-fable': 'Самая мощная · трудные и долгие задачи',
   'sonnet': 'Экономичная · рутинные задачи',
   'haiku': 'Самая быстрая · короткие ответы',
 };
-
-// Ключ описания — алиас без суффикса окна («opus[1m]» → «opus») и без хвоста версии
-// («claude-fable-5-1» → «claude-fable»): описания версионно-нейтральные, поэтому и ключ
-// не должен нести номер версии — иначе новая версия модели теряет русское описание.
-function claudeDescKey(value: string): string {
-  return value.replace(/\[1m\]$/i, '').replace(/-\d+(?:-\d+)*$/, '');
-}
 
 // Загрузить список с сервера (вызывается при старте после проверки auth).
 // value 'default' у CLI означает «модель по умолчанию» — маппим в '' (не передавать --model).
@@ -116,11 +116,12 @@ export async function loadModels(): Promise<void> {
       label: m.value === 'default' ? 'По умолчанию' : m.displayName,
       // Claude: русский перевод по алиасу, иначе описание из CLI как есть
       description: (m.provider ?? 'claude') === 'claude'
-        ? (CLAUDE_DESC_RU[claudeDescKey(m.value)] ?? m.description ?? undefined)
+        ? (CLAUDE_DESC_RU[modelFamily(m.value)] ?? m.description ?? undefined)
         : (m.description ?? undefined),
       provider: m.provider ?? undefined,
       contextWindow: m.contextWindow ?? undefined,
       curated: m.isCurated ?? true,
+      resolvedVersion: m.resolvedVersion ?? undefined,
     }));
     if (opts.length > 0) {
       _models = opts;
@@ -259,6 +260,11 @@ export function useProviders(): ProviderInfo[] {
   return getProviders();
 }
 
+// Подсказка к пункту-семейству: какая версия сейчас за ним стоит («сейчас Opus 5.5»)
+export function versionHint(option: Pick<ModelOption, 'resolvedVersion'>): string | undefined {
+  return option.resolvedVersion ? `сейчас ${option.resolvedVersion}` : undefined;
+}
+
 export function getModels(): ModelOption[] {
   return _models;
 }
@@ -286,41 +292,43 @@ export function useDefaultModelOption(usage: UsageKey = USAGE.chatNew): ModelOpt
   return defaultModelOption(usage);
 }
 
-// Короткая подпись модели для отображения (id → label).
-// Неизвестный id показываем как есть — например, фактическую модель из session_started.
+// Короткая подпись модели для отображения (id → label). Версионный id Claude (старые
+// сессии, фактическая модель из session_started) подписываем семейством; незнакомый
+// сторонний id показываем как есть.
 export function modelLabel(value?: string | null): string {
   if (!value) return 'По умолчанию';
-  return _models.find(m => m.value === value)?.label
-    ?? FALLBACK_MODELS.find(m => m.value === value)?.label
-    ?? LEGACY_LABELS[value]
-    ?? value;
+  const exact = _models.find(m => m.value === value)?.label;
+  if (exact) return exact;
+  const family = modelFamily(value);
+  if (!isClaudeFamily(family)) return value;
+  return _models.find(m => m.value === family)?.label ?? FAMILY_LABELS[family];
 }
 
 // Размер контекстного окна модели (токены) для индикатора заполнения.
-// Матч по подстроке: фактический id из session_started (claude-opus-5-...)
-// не совпадает с алиасом из MODELS.
-//   Opus 4.6+/Opus 5/Sonnet 4.6+/Sonnet 5/Fable 5 — 1M; Haiku 4.5 — 200k; старые модели — 200k.
-// Порядок важен: конкретные (haiku) раньше общих. ВАЖНО: это спека модели;
-// эффективное окно, от которого claude CLI считает авто-компакт, может быть
-// меньше (200k) — если проценты разойдутся с реальным компактом, свериться.
+// Фактическое окно хода бэкенд не присылает, поэтому у Claude окно берётся по семейству:
+// окно 1M ставит сервер при запуске, суффикса [1m] в значении нет. ВАЖНО: это спека модели;
+// эффективное окно, от которого claude CLI считает авто-компакт, может быть меньше —
+// если проценты разойдутся с реальным компактом, свериться.
 export const DEFAULT_CONTEXT_WINDOW = 200_000;
 const CONTEXT_1M = 1_000_000;
 
+const FAMILY_WINDOWS: Record<ClaudeFamily, number> = {
+  opus: CONTEXT_1M, fable: CONTEXT_1M, sonnet: CONTEXT_1M, haiku: 200_000,
+};
+
+// Сторонние модели без точного окна из каталога
 const CONTEXT_WINDOWS: Array<{ match: RegExp; window: number }> = [
-  { match: /haiku/i, window: 200_000 },
-  { match: /opus-(4-[6-9]|5)|opus-4\.[6-9]/i, window: CONTEXT_1M },
-  { match: /sonnet-(4-[6-9]|5)|sonnet-4\.[6-9]/i, window: CONTEXT_1M },
-  { match: /fable|mythos/i, window: CONTEXT_1M },
+  { match: /mythos/i, window: CONTEXT_1M },
   { match: /deepseek/i, window: CONTEXT_1M }, // V4-модели — 1M (точное окно приходит с бэка)
   { match: /glm.*\[1m\]/i, window: CONTEXT_1M }, // glm-5.2[1m] — окно 1M
-  // Общий фолбэк для opus/sonnet без узнаваемой версии — консервативно 200k
-  { match: /opus|sonnet/i, window: 200_000 },
 ];
 
 export function contextWindowFor(model?: string | null): number {
   if (!model) return DEFAULT_CONTEXT_WINDOW;
-  // Точное значение из каталога (модели CLI-провайдеров несут окно с бэка) приоритетнее regex
+  // Точное значение из каталога (модели CLI-провайдеров несут окно с бэка) приоритетнее
   const exact = _models.find(m => m.value === model)?.contextWindow;
   if (exact) return exact;
+  const family = modelFamily(model);
+  if (isClaudeFamily(family)) return FAMILY_WINDOWS[family];
   return CONTEXT_WINDOWS.find(m => m.match.test(model))?.window ?? DEFAULT_CONTEXT_WINDOW;
 }

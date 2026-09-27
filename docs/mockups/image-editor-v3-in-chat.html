@@ -363,12 +363,48 @@
   .ed-foot { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--c-border-light); flex-wrap: wrap; }
   .ed-foot .hint { flex: 1; min-width: 160px; }
 
-  /* Git-полоса — копия ProjectGitBar: стоит над композером, пока картинка не выбрана */
+  /* Git-полоса — копия ProjectGitBar: полоса над композером по умолчанию */
   .gbar { margin: 6px 14px; display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 6px 0 10px; background: var(--c-bg-panel); border: 1px solid var(--c-border); border-radius: 12px; font-size: 12px; min-width: 0; }
   .gbar .br { display: inline-flex; align-items: center; gap: 6px; min-width: 0; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: var(--c-text-primary); }
   .gbar .br span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .gbar .gb { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 8px; border-radius: 8px; border: 1px solid var(--c-border); background: var(--c-bg-white); cursor: pointer; font-size: 12px; white-space: nowrap; }
   .gbar .add { color: var(--c-success-text); } .gbar .del { color: var(--c-danger-text); }
+  .gbar.mini { height: 30px; border-radius: 10px; cursor: pointer; gap: 7px; }
+  .gbar.mini .sum { font-size: 11.5px; color: var(--c-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }
+
+  /* Переключатель полос над композером: A — иконки-вкладки, B — список «Git ▾», C — строка иконок у края композера */
+  .dot { position: absolute; top: 1px; right: 1px; width: 6px; height: 6px; border-radius: 50%; background: var(--c-accent); }
+  .stabs { display: inline-flex; gap: 1px; padding: 1px; background: var(--c-bg-inset); border-radius: 8px; flex: 0 0 auto; }
+  .stabs button { position: relative; width: 24px; height: 22px; border: none; border-radius: 7px; background: transparent; color: var(--c-text-muted); display: grid; place-items: center; cursor: pointer; padding: 0; }
+  .stabs button:hover:not([disabled]) { color: var(--c-text-primary); }
+  .stabs button.on { background: var(--c-bg-card); color: var(--c-accent); box-shadow: var(--shadow-card); }
+  .stabs button[disabled] { opacity: .38; cursor: default; }
+  .swb { position: relative; display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 6px 0 4px; margin-left: -4px; border: none; border-radius: 8px; background: transparent; cursor: pointer; font-size: 12px; font-weight: 600; color: var(--c-text-heading); white-space: nowrap; flex: 0 0 auto; }
+  .swb:hover { background: var(--c-bg-selected); }
+  .swb .cv { color: var(--c-text-muted); display: inline-grid; }
+  .swb:focus-visible, .stabs button:focus-visible, .srail button:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+  .menu .mi .ico { color: var(--c-text-muted); padding-top: 1px; }
+  .menu .mi.on .ico { color: var(--c-accent); }
+  .menu .sep { height: 1px; background: var(--c-divider); margin: 4px 2px; }
+  .soon { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; border-radius: 5px; font-size: 10px; font-weight: 600; background: var(--c-bg-selected); color: var(--c-text-muted); margin-left: 4px; }
+  .dock { display: flex; align-items: stretch; padding-left: 8px; }
+  .dock .dcol { flex: 1; min-width: 0; }
+  .dock .dcol > .ibar, .dock .dcol > .gbar, .dock .dcol > .composer { margin-left: 6px; }
+  .srail { flex: 0 0 26px; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 7px 0 12px; border-right: 1px solid var(--c-border-light); }
+  .srail button { position: relative; width: 24px; height: 24px; border: none; border-radius: 7px; background: transparent; color: var(--c-text-muted); display: grid; place-items: center; cursor: pointer; padding: 0; }
+  .srail button:hover:not([disabled]) { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .srail button.on { background: var(--c-accent-light); color: var(--c-accent); }
+  .srail button[disabled] { opacity: .38; cursor: default; }
+  .swnote { margin-top: 10px; background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 12px; padding: 10px 12px; font-size: 12.5px; line-height: 1.5; max-width: 980px; }
+  .swnote b { color: var(--c-text-heading); }
+  .swnote .pm { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px; margin-top: 4px; }
+  @media (max-width: 700px) { .swnote .pm { grid-template-columns: 1fr; } }
+  /* Шторка выбора полосы на телефоне */
+  .sitem { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 48px; border: none; background: transparent; text-align: left; padding: 6px 10px; border-radius: 10px; cursor: pointer; font-size: 14px; }
+  .sitem:hover:not([disabled]) { background: var(--c-bg-selected); }
+  .sitem.on { color: var(--c-accent); background: var(--c-accent-light); }
+  .sitem[disabled] { opacity: .5; cursor: default; }
+  .sitem small { display: block; font-size: 11.5px; color: var(--c-text-muted); }
 
 
   /* Карточка-черновик «Новая картинка» */
@@ -380,16 +416,20 @@
 <div class="page">
   <h1 class="doc">Редактор картинок v3 — всё в основном чате проекта</h1>
   <p class="lead">Отдельного окна редактора нет. Картинка живёт в ленте как карточка-стопка (нить картинки). Крупно и с пометками —
-    в попапе <b>«Редактировать»</b> у картинки, персонажи — в панели <b>«Персонажи»</b>. Пока картинка выбрана, над композером стоит
-    полоса <b>«Картинки»</b> и доступен режим композера <b>«Картинка»</b>; без выбранной картинки там обычная git-полоса и режим «Чат».
+    в попапе <b>«Редактировать»</b> у картинки, персонажи — в панели <b>«Персонажи»</b>. Над композером живут <b>полосы</b>: «Git»
+    (по умолчанию), «Картинки», позже «Видео», «Звук», «Локальные файлы». Человек переключает их сам; при выборе картинки полоса
+    сама переходит на «Картинки», а после снятия выбора возвращается прежняя. Режим композера <b>«Картинка»</b> — только при выбранной картинке.
     Это макет: код продукта не менялся. Описание — <code>image-editor-v3-in-chat-proposal.md</code>.</p>
   <div class="demo">
     <div class="grp"><span class="lbl">Тема</span><button class="tbtn" data-demo="theme:light">Светлая</button><button class="tbtn" data-demo="theme:dark">Тёмная</button></div>
     <div class="grp"><span class="lbl">Ширина</span><button class="tbtn" data-demo="w:desk">Десктоп</button><button class="tbtn" data-demo="w:mob">Телефон 390</button></div>
+    <div class="grp"><span class="lbl">Переключатель полос</span><button class="tbtn" data-demo="sw:tabs" data-testid="sw-tabs">A · Иконки на полосе</button><button class="tbtn" data-demo="sw:dd" data-testid="sw-dd">B · Список «Git ▾» (рекомендую)</button><button class="tbtn" data-demo="sw:edge" data-testid="sw-edge">C · Иконки у края композера</button></div>
+    <div class="grp"><span class="lbl">Полос</span><button class="tbtn" data-demo="n:2" data-testid="n-2">2 (сейчас)</button><button class="tbtn" data-demo="n:5" data-testid="n-5">5 (с будущими)</button></div>
     <div class="grp"><span class="lbl">Сценарий</span><button class="tbtn" data-demo="reset">Сначала</button></div>
-    <span class="lbl">Сценарий: «Редактировать» у картинки → пометка → закрыть → режим «Картинка» → отправка → ✕ на чипе «Работаем с…».</span>
+    <span class="lbl">Сценарий: переключить полосу на «Картинки» → «Работать с этой» у картинки → режим «Картинка» → ✕ на чипе — вернулась прежняя полоса.</span>
   </div>
   <div class="frame"><div class="app" id="app"></div><div id="peek" class="island"></div></div>
+  <div class="swnote" id="swnote" data-testid="swnote"></div>
   <p class="caption">Цены, модели и ответы агента условные. Персонаж, образцы, промпт и пометки уходят в запрос только к выбранной картинке.</p>
 </div>
 <script>
@@ -452,6 +492,24 @@ IC.target = '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/>';
 IC.undo = '<path d="M9 14 4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/>';
 IC.check = '<path d="M20 6 9 17l-5-5"/>';
 IC.chats = IC.chat;
+IC.video = '<rect x="2" y="6" width="14" height="12" rx="2"/><path d="m16 10 6-3v10l-6-3"/>';
+IC.audio = '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>';
+IC.laptop = '<rect x="4" y="4" width="16" height="11" rx="1.5"/><path d="M2 19h20"/>';
+IC.panels = '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 14h18M3 17h18"/>';
+
+// ---------- Полосы над композером: реестр, чтобы новые полосы добавлялись одной строкой ----------
+const STRIPS = [
+  { id: 'git', title: 'Git', icon: 'git' },
+  { id: 'img', title: 'Картинки', icon: 'img' },
+  { id: 'video', title: 'Видео', icon: 'video', soon: true },
+  { id: 'audio', title: 'Звук', icon: 'audio', soon: true },
+  { id: 'local', title: 'Локальные файлы', icon: 'laptop', soon: true },
+];
+const SW_NOTES = {
+  tabs: { name: 'A · Иконки-вкладки слева на полосе', plus: ['Все полосы на виду, переключение в один клик', 'Сразу понятно, что полос несколько'], minus: ['При 5 полосах съедает ~130 px ширины на КАЖДОЙ полосе; с 6–7 уже не влезает', 'Будущие неактивные иконки шумят постоянно', 'На телефоне не помещается рядом с содержимым полосы'] },
+  dd: { name: 'B · Заголовок полосы со списком «Git ▾» — рекомендую', plus: ['Ширина как у нынешнего заголовка при любом числе полос', 'В меню видно состояние каждой полосы: ветка и дифф, «Работаем с hero.png»', 'Тот же приём на телефоне и в свёрнутой строке', 'Точка на ▾ подсказывает, что в скрытой полосе есть выбранная картинка'], minus: ['Два клика вместо одного', 'Соседние полосы не видны — это закрывает автопереключение при выборе картинки'] },
+  edge: { name: 'C · Тонкая строка иконок у левого края композера', plus: ['Ноль высоты, переключение в один клик', 'Полоса сама не меняется, переключатель отдельно'], minus: ['Вторая «рельса» рядом с рельсой панелей — легко спутать', 'Отнимает ~30 px ширины и у полосы, и у композера', 'На телефоне места нет; со свёрнутой полосой висит вдоль пустоты'] },
+};
 // ---------- Картинки сцены (это «фото», от темы не зависят) ----------
 let uid = 0;
 // d: { lamp: null|0..3, bg, painting, wide, evening: null|0..3 }
@@ -584,6 +642,10 @@ let S;
 function initState() {
   S = {
     theme: S ? S.theme : 'light', mobile: S ? S.mobile : false,
+    // Полосы: sw — вариант переключателя, nStrips — показывать ли будущие, strip — текущая,
+    // stripPrev/stripAuto — куда вернуться после автопереключения, stripOff — полоса скрыта (телефон)
+    sw: S ? S.sw : 'dd', nStrips: S ? S.nStrips : 5, strip: 'git', stripPrev: null, stripAuto: false,
+    stripOff: S ? S.mobile : false, stripOffPrev: false,
     zones: { left: ['chats'], right: ['files'] },
     home: { chats: 'left', files: 'right', chars: 'right' },
     editor: false,
@@ -595,7 +657,7 @@ function initState() {
     },
     threads: {}, tseq: 0, focus: null, pickOpen: null,
     mode: 'chat', chatDraft: '', promptDraft: '', promptBy: null, myPrompt: '', sendMarks: true,
-    barOpen: true, provider: 'fal', model: 'auto', count: 3, keepSize: true, agentSet: null,
+    barOpen: !(S && S.mobile), provider: 'fal', model: 'auto', count: 3, keepSize: true, agentSet: null,
     menu: null, samples: [{ kind: 'light', name: 'тёплый свет', role: 'style' }], roleEdit: null,
     characters: [{ id: 'anya', name: 'Аня', desc: '25 лет, рыжие волосы до плеч, веснушки', photos: [0, 1, 2, 3, 4] }],
     charOn: null, charForm: null, charDel: null,
@@ -657,20 +719,51 @@ function nextFree(folder, base) {
 }
 const baseOf = n => n.replace(/\.(png|jpg|jpeg|webp)$/i, '').replace(/\.v\d+$/, '');
 
-// ---------- Отрисовка: полоса «Картинки» ----------
-function viewBar() {
+// ---------- Отрисовка: полосы над композером ----------
+const strips = () => STRIPS.filter(s => !s.soon || S.nStrips === 5);
+const stripT = id => STRIPS.find(s => s.id === id);
+function stripStatus(id) {
+  if (id === 'git') return 'feat/site-header · +42 −7 · 2 к публикации';
+  if (id === 'img') { const t = ft(); return t ? `Работаем с ${fileLabel(t)}` : `${prov().name} · ${model().name} · картинка не выбрана`; }
+  return 'появится позже';
+}
+// Картинка выбрана, а её полоса скрыта — точка на переключателе
+const imgHidden = () => !!S.focus && (S.strip !== 'img' || S.stripOff);
+const dotHtml = s => s.id === 'img' && imgHidden() ? '<span class="dot" title="Картинка выбрана — её полоса скрыта"></span>' : '';
+// Переключатель внутри полосы: A — иконки-вкладки, B — «Git ▾», C — ничего (он у края композера)
+function switcher() {
+  const c = stripT(S.strip);
+  // На телефоне любой вариант сводится к кнопке, открывающей шторку «Полоса над композером»
+  if (S.mobile) return `<button class="swb" data-act="sheet:strips" data-testid="sw" title="Сменить полосу над композером">${ic(c.icon, 1)}${c.title}<span class="cv">${ic('down', 1)}</span></button>`;
+  if (S.sw === 'tabs') return `<span class="stabs" role="tablist" aria-label="Полоса над композером" data-testid="stabs">${strips().map(s => `<button role="tab" aria-selected="${s.id === S.strip}" class="${s.id === S.strip ? 'on' : ''}" ${s.soon ? 'disabled' : ''} data-act="strip:${s.id}" data-testid="tab-${s.id}" title="${s.title}${s.soon ? ' — скоро' : ''}">${ic(s.icon, 1)}${dotHtml(s)}</button>`).join('')}</span>`;
+  if (S.sw === 'edge') return '';
+  const menu = S.menu === 'strips' ? `<div class="menu up" style="min-width:290px" data-testid="stripMenu">${strips().map(s => `<button class="mi ${s.id === S.strip ? 'on' : ''}" ${s.soon ? 'disabled' : ''} data-act="strip:${s.id}" data-testid="mi-${s.id}"><span class="ico">${ic(s.icon, 1)}</span><span class="grow">${s.title}${s.soon ? '<span class="soon">скоро</span>' : ''}<small>${esc(stripStatus(s.id))}</small></span>${s.id === S.strip ? ic('check', 1) : ''}</button>`).join('')}<div class="sep"></div><button class="mi" data-act="${S.barOpen ? 'barClose' : 'barOpen'}" data-testid="mi-collapse"><span class="ico">${ic(S.barOpen ? 'up' : 'down', 1)}</span><span class="grow">${S.barOpen ? 'Свернуть полосу в строку' : 'Развернуть полосу'}</span></button></div>` : '';
+  return `<span class="dd"><button class="swb" data-act="menu:strips" data-testid="sw" aria-haspopup="menu" aria-expanded="${S.menu === 'strips'}" title="Сменить полосу над композером">${ic(c.icon, 1)}${c.title}<span class="cv">${ic('down', 1)}</span>${S.strip !== 'img' ? dotHtml({ id: 'img' }) : ''}</button>${menu}</span>`;
+}
+// Вариант C: тонкая вертикальная строка иконок у левого края полосы и композера
+function viewEdgeRail() {
+  return `<div class="srail" role="tablist" aria-label="Полоса над композером" data-testid="srail">${strips().map(s => `<button role="tab" aria-selected="${s.id === S.strip}" class="${s.id === S.strip ? 'on' : ''}" ${s.soon ? 'disabled' : ''} data-act="strip:${s.id}" data-testid="edge-${s.id}" title="${s.title}${s.soon ? ' — скоро' : ''}">${ic(s.icon, 1)}${dotHtml(s)}</button>`).join('')}</div>`;
+}
+const edgeTitle = s => S.sw === 'edge' && !S.mobile ? `<span class="ttl">${ic(s.icon, 1)} ${s.title}</span>` : '';
+function viewStrip() {
+  if (S.mobile && S.stripOff) return '';
+  return S.strip === 'img' ? viewImgBar() : viewGitBar();
+}
+
+function viewImgBar() {
   const t = ft();
   const p = prov(), m = model();
   const ch = S.charOn && charById(S.charOn);
-  // Полоса «Картинки» есть только при выбранной картинке; иначе на её месте git-полоса
-  if (!t) return viewGitBar();
-  const draft = !t.steps.length;
+  const draft = t && !t.steps.length;
   if (!S.barOpen) {
-    const parts = [`Работаем с: ${fileLabel(t)}`, `${p.name} · ${m.name}`, variantsWord(S.count), shortPrice()];
+    const parts = t ? [`Работаем с: ${fileLabel(t)}`] : ['Картинка не выбрана'];
+    parts.push(`${p.name} · ${m.name}`, variantsWord(S.count), shortPrice());
     if (ch) parts.push(ch.name);
-    return `<div class="ibar mini" data-act="barOpen" title="Развернуть полосу «Картинки»" data-testid="ibar-mini">${ic('img', 1)}<span class="sum">${esc(parts.join(' · '))}</span><span class="x ib sm" data-act="unfocus" title="Снять выбор картинки" data-testid="unfocus-mini">${ic('x', 1)}</span></div>`;
+    return `<div class="ibar mini" data-act="barOpen" title="Развернуть полосу «Картинки»" data-testid="ibar-mini">${switcher()}${S.sw === 'edge' && !S.mobile ? ic('img', 1) : ''}<span class="sum">${esc(parts.join(' · '))}</span>${t ? `<span class="x ib sm" data-act="unfocus" title="Снять выбор картинки" data-testid="unfocus-mini">${ic('x', 1)}</span>` : ''}<span class="ib sm" title="Развернуть">${ic('down', 1)}</span></div>`;
   }
-  const focusChip = `<span class="chip acc" data-testid="focusChip" title="Режим «Картинка» и агент работают с этой картинкой">${draft ? ic('spark', 1) : `<span class="th">${pic(curStep(t).d)}</span>`}Работаем с: <b>${esc(fileLabel(t))}</b>${draft ? ` · сохранять в <span class="mono">${esc(t.folder)}/</span>` : ''}${t.steps.length > 1 ? ` · шаг ${t.cur + 1}` : ''}<span class="x" data-act="unfocus" title="Снять выбор — вернётся git-полоса и режим «Чат»" data-testid="unfocus">${ic('x', 1)}</span></span>`;
+  const focusChip = t
+    ? `<span class="chip acc" data-testid="focusChip" title="Режим «Картинка» и агент работают с этой картинкой">${draft ? ic('spark', 1) : `<span class="th">${pic(curStep(t).d)}</span>`}Работаем с: <b>${esc(fileLabel(t))}</b>${draft ? ` · сохранять в <span class="mono">${esc(t.folder)}/</span>` : ''}${t.steps.length > 1 ? ` · шаг ${t.cur + 1}` : ''}<span class="x" data-act="unfocus" title="Снять выбор — вернётся прежняя полоса и режим «Чат»" data-testid="unfocus">${ic('x', 1)}</span></span>`
+    : `<span class="hint" data-testid="noSelHint" style="min-width:0">Выберите картинку в ленте или нарисуйте новую</span><button class="chip dash" data-act="drawNew" data-testid="drawNew" title="Карточка-черновик «Новая картинка» в ленте, композер — в режим «Картинка»">${ic('spark', 1)} Нарисовать новую</button>`;
   const provMenu = S.menu === 'prov' ? `<div class="menu up">${PROVIDERS.map(x => `<button class="mi ${x.id === S.provider ? 'on' : ''}" data-act="setProv:${x.id}"><span class="grow">${x.name}<small>${x.hint}</small></span>${x.id === S.provider ? ic('check', 1) : ''}</button>`).join('')}</div>` : '';
   const modelMenu = S.menu === 'model' ? `<div class="menu up">${p.models.map(x => `<button class="mi ${x.id === m.id ? 'on' : ''}" data-act="setModel:${x.id}"><span class="grow">${x.name}<small>${x.hint}${x.mask ? ' · правит по маске' : ''}</small></span>${x.id === m.id ? ic('check', 1) : ''}</button>`).join('')}</div>` : '';
   const agentModel = S.agentSet && S.agentSet.model;
@@ -678,10 +771,10 @@ function viewBar() {
   const sampleMenu = S.menu === 'sample' ? `<div class="menu up"><button class="mi" data-act="addSample:pc"><span class="grow">С компьютера<small>PNG, JPG или WebP до 20 МБ</small></span></button><button class="mi" data-act="addSample:proj"><span class="grow">Из файлов проекта…<small>Любая картинка этого проекта</small></span></button></div>` : '';
   return `<div class="ibar" data-testid="ibar">
     <div class="row">
-      <span class="ttl">${ic('img', 1)} Картинки</span>
+      ${switcher()}${edgeTitle(stripT('img'))}
       ${focusChip}
       <span class="grow"></span>
-      <button class="ib sm" data-act="barClose" title="Свернуть в строку">${ic('up', 1)}</button>
+      <button class="ib sm" data-act="barClose" title="Свернуть в строку" data-testid="collapse">${ic('up', 1)}</button>
     </div>
     <div class="row">
       <span class="dd"><button class="ddb" data-act="menu:prov" data-testid="prov">${esc(p.name)} ${ic('down', 1)}</button>${provMenu}</span>
@@ -691,7 +784,7 @@ function viewBar() {
       ${ch ? `<span class="chip acc" title="Подключённый персонаж — его фото уходят в запрос"><span class="th" style="border-radius:50%">${faceSVG(ch.photos[0])}</span>${esc(ch.name)}<span class="x" data-act="charOff" title="Отключить персонажа">${ic('x', 1)}</span></span>` : `<span class="chip dash" data-act="openChars" title="Открыть панель «Персонажи»">${ic('user', 1)} Персонаж</span>`}
       ${samples}
       <span class="dd"><span class="chip dash" data-act="menu:sample">${ic('plus', 1)} Образец</span>${sampleMenu}</span>
-      ${!draft ? `<label class="chip ${S.keepSize ? 'acc' : ''}" data-act="keepSize" title="Результат вернётся в размере оригинала">${ic(S.keepSize ? 'check' : 'expand', 1)} Размер оригинала</label>` : ''}
+      ${t && !draft ? `<label class="chip ${S.keepSize ? 'acc' : ''}" data-act="keepSize" title="Результат вернётся в размере оригинала">${ic(S.keepSize ? 'check' : 'expand', 1)} Размер оригинала</label>` : ''}
     </div>
     ${maskBlock() ? `<div class="warn">${ic('alert', 1)} ${esc(m.name)} не правит по маске — кисть в редакторе она не увидит. <button class="btn xs" data-act="useFill">Взять ${S.provider === 'hf' ? 'GPT Image 2.5' : 'FLUX Fill'}</button></div>` : ''}
   </div>`;
@@ -699,13 +792,16 @@ function viewBar() {
 
 // Git-полоса — как ProjectGitBar сейчас: ветка, дифф, «Зафиксировать», «Опубликовать», свернуть
 function viewGitBar() {
+  const edge = S.sw === 'edge' && !S.mobile;
+  if (!S.barOpen) return `<div class="gbar mini" data-act="barOpen" title="Развернуть полосу «Git»" data-testid="gitbar-mini">${switcher()}${edge ? ic('git', 1) : ''}<span class="sum"><span class="mono">feat/site-header</span> · <span class="add">+42</span> <span class="del">−7</span> · ↑2</span><span class="ib sm" title="Развернуть">${ic('down', 1)}</span></div>`;
   return `<div class="gbar" data-testid="gitbar">
-    <span class="br">${ic('git', 1)}<span>feat/site-header</span></span>
+    ${switcher()}
+    <span class="br">${edge ? ic('git', 1) : ''}<span>feat/site-header</span></span>
     <span class="grow"></span>
     <button class="gb" data-act="toastStatic:Панель «Изменения» — как сейчас" title="Открыть изменения"><span class="add">+42</span><span class="del">−7</span></button>
     ${S.mobile ? '' : `<button class="gb" data-act="toastStatic:Фиксация — как сейчас" title="Зафиксировать изменения (git commit)">${ic('check', 1)} Зафиксировать ${ic('down', 1)}</button>`}
     <button class="gb" data-act="toastStatic:Публикация — как сейчас" title="Опубликовать (git push)">${ic('upload', 1)} ${S.mobile ? '2' : 'Опубликовать 2'}</button>
-    <button class="ib sm" data-act="toastStatic:Сворачивание git-полосы — как сейчас" title="Свернуть гит-бар">${ic('up', 1)}</button>
+    <button class="ib sm" data-act="barClose" title="Свернуть полосу в строку" data-testid="collapse">${ic('up', 1)}</button>
   </div>`;
 }
 
@@ -804,10 +900,9 @@ function viewChat() {
   const body = c.msgs.length ? c.msgs.map(viewMsg).join('') : `<div class="empty"><div class="big">Новый чат</div>Напишите сообщение или включите режим «Картинка».</div>`;
   return `<div class="island main">
     <div class="ph">${S.mobile ? `<button class="ib" data-act="sheet:chats" title="Чаты">${ic('chat')}</button>` : ''}<span class="ttl" style="overflow:hidden;text-overflow:ellipsis">${esc(c.name)}</span><span class="sub">Проект «Сайт студии»</span><span class="grow"></span>
-      ${S.mobile ? `<button class="ib" data-act="sheet:files" title="Файлы">${ic('tree')}</button><button class="ib" data-act="sheet:chars" title="Персонажи" data-testid="mobChars">${ic('users')}</button>` : ''}</div>
+      ${S.mobile ? `<button class="ib" data-act="sheet:files" title="Файлы">${ic('tree')}</button><button class="ib" data-act="sheet:chars" title="Персонажи" data-testid="mobChars">${ic('users')}</button><button class="ib ${S.stripOff ? '' : 'on'}" data-act="sheet:strips" title="Полоса над композером" data-testid="mobStrips" style="position:relative">${ic('panels')}${S.stripOff && S.focus ? '<span class="dot"></span>' : ''}</button>` : ''}</div>
     <div class="feed" id="feed">${body}${S.typing ? '<div class="typing">Claude печатает…</div>' : ''}</div>
-    ${viewBar()}
-    ${viewComposer()}
+    ${S.sw === 'edge' && !S.mobile ? `<div class="dock">${viewEdgeRail()}<div class="dcol">${viewStrip()}${viewComposer()}</div></div>` : `${viewStrip()}${viewComposer()}`}
   </div>`;
 }
 
@@ -952,6 +1047,13 @@ function viewRail(z) {
 }
 function viewSheet() {
   if (!S.sheet) return '';
+  if (S.sheet === 'strips') {
+    const items = strips().map(s => `<button class="sitem ${!S.stripOff && s.id === S.strip ? 'on' : ''}" ${s.soon ? 'disabled' : ''} data-act="stripPick:${s.id}" data-testid="si-${s.id}">${ic(s.icon)}<span class="grow">${s.title}${s.soon ? '<span class="soon">скоро</span>' : ''}<small>${esc(stripStatus(s.id))}</small></span>${!S.stripOff && s.id === S.strip ? ic('check', 1) : ''}</button>`).join('');
+    return `<div class="ovl" style="z-index:69" data-act="sheetClose"></div><div class="sheet" style="height:auto;max-height:86%" data-testid="sheet-strips"><div class="grab"></div><div class="ph" style="background:transparent">${ic('panels', 1)}<span class="ttl">Полоса над композером</span><span class="grow"></span><button class="ib" data-act="sheetClose">${ic('x', 1)}</button></div>
+      <div class="pbody">${items}<div class="menu" style="position:static;box-shadow:none;border:none;padding:0;min-width:0"><div class="sep"></div></div>
+      <button class="sitem ${S.stripOff ? 'on' : ''}" data-act="stripPick:off" data-testid="si-off">${ic('x')}<span class="grow">Не показывать полосу<small>Больше места ленте. Выбранная картинка всё равно покажет свою полосу</small></span>${S.stripOff ? ic('check', 1) : ''}</button>
+      <p class="hint" style="margin:8px 10px 4px">Выбор запоминается для проекта на этом устройстве. Строка полосы над композером тоже переключает: нажмите на её название.</p></div></div>`;
+  }
   return `<div class="ovl" style="z-index:69" data-act="sheetClose"></div><div class="sheet" data-testid="sheet"><div class="grab"></div><div class="ph" style="background:transparent">${ic(PANELS[S.sheet].icon, 1)}<span class="ttl">${PANELS[S.sheet].title}</span><span class="grow"></span><button class="ib" data-act="sheetClose">${ic('x', 1)}</button></div><div class="pbody">${panelBody(S.sheet)}</div></div>`;
 }
 function viewSave() {
@@ -972,9 +1074,12 @@ function render() {
   document.documentElement.dataset.theme = S.theme;
   // Режим «Картинка» живёт только при выбранной картинке
   if (!ft()) { S.mode = 'chat'; S.editor = false; }
+  syncStrip();
   document.querySelectorAll('[data-demo]').forEach(b => {
     const [k, v] = b.dataset.demo.split(':');
     if (k === 'theme') b.setAttribute('aria-pressed', S.theme === v);
+    if (k === 'sw') b.setAttribute('aria-pressed', S.sw === v);
+    if (k === 'n') b.setAttribute('aria-pressed', S.nStrips === +v);
     if (k === 'w') b.setAttribute('aria-pressed', (v === 'mob') === S.mobile);
   });
   const ta = document.getElementById('ta');
@@ -991,6 +1096,24 @@ function render() {
   const ta2 = document.getElementById('ta');
   if (ta2 && (focusTa || render.focusTa)) { ta2.focus(); if (taSel && !render.focusTa) ta2.setSelectionRange(...taSel); else ta2.setSelectionRange(ta2.value.length, ta2.value.length); }
   render.focusTa = false;
+  const N = SW_NOTES[S.sw];
+  document.getElementById('swnote').innerHTML = `<b>${N.name}</b>${S.mobile ? ' · <span class="sec">на телефоне все три варианта сводятся к одной кнопке «Git ▾» и шторке «Полоса над композером»</span>' : ''}
+    <div class="pm"><div>${N.plus.map(x => '＋ ' + esc(x)).join('<br>')}</div><div>${N.minus.map(x => '− ' + esc(x)).join('<br>')}</div></div>`;
+}
+// Автопереключение: выбрали картинку — полоса переходит на «Картинки»; сняли выбор — возвращается прежняя,
+// если человек сам не переключал полосу за это время
+function showImgStrip() {
+  if (S.strip !== 'img') { if (!S.stripAuto) S.stripPrev = S.strip; S.strip = 'img'; S.stripAuto = true; }
+  if (S.stripOff) { S.stripOff = false; S.stripOffPrev = true; S.stripAuto = true; }
+}
+function syncStrip() {
+  const f = S.focus;
+  if (f && !syncStrip.last) showImgStrip();
+  else if (!f && syncStrip.last) {
+    if (S.stripAuto) { if (S.stripPrev) S.strip = S.stripPrev; if (S.stripOffPrev) S.stripOff = true; }
+    S.stripAuto = false; S.stripPrev = null; S.stripOffPrev = false;
+  }
+  syncStrip.last = f;
 }
 const viewToast = () => `<div class="toast" data-testid="toast">${esc(S.toast)}${S.toastAct ? `<button data-act="${S.toastAct[1]}">${esc(S.toastAct[0])}</button>` : ''}</div>`;
 
@@ -1099,6 +1222,10 @@ function take(tid) {
 // ---------- Действия ----------
 const ACT = {
   barOpen() { S.barOpen = true; }, barClose() { S.barOpen = false; },
+  // Ручной выбор полосы: запоминается, автоматический возврат после снятия выбора отменяется
+  strip(id) { if (stripT(id).soon) return; S.strip = id; S.stripAuto = false; S.stripPrev = null; S.stripOff = false; S.stripOffPrev = false; S.menu = null; },
+  stripPick(id) { S.sheet = null; if (id === 'off') { S.stripOff = true; S.stripAuto = false; S.stripPrev = null; S.stripOffPrev = false; return; } ACT.strip(id); },
+  drawNew() { startDraft('images'); },
   menu(k) { S.menu = S.menu === k ? null : k; S.roleEdit = null; },
   setProv(id) { S.provider = id; S.model = PROVIDERS.find(p => p.id === id).models[0].id; S.menu = null; S.agentSet = null; },
   setModel(id) { S.model = id; S.menu = null; S.agentSet = null; },
@@ -1113,8 +1240,11 @@ const ACT = {
     const t = ft();
     // Пустой черновик без вариантов уходит из ленты вместе с выбором
     if (t && !t.steps.length && !t.gen && !t.variants) { S.chats[S.chat].msgs = msgs().filter(m => m.thread !== t.id); delete S.threads[t.id]; }
+    const back = S.stripAuto && S.stripPrev ? S.stripPrev : S.strip;
+    const where = S.mobile && S.stripAuto && S.stripOffPrev ? ', полоса снова скрыта'
+      : back !== 'img' ? `, над композером снова полоса «${stripT(back).title}»` : ', полоса «Картинки» осталась — её выбрали вы';
     S.focus = null; S.mode = 'chat'; S.editor = false;
-    toast('Картинка больше не выбрана: режим «Чат», над композером снова git-полоса');
+    toast('Картинка больше не выбрана: режим «Чат»' + where);
   },
   focus(id) { S.focus = id; S.pickOpen = null; },
   edClose() { S.editor = false; S.cvPop = null; },
@@ -1137,7 +1267,7 @@ const ACT = {
   charDelAsk(id) { S.charForm = null; S.charDel = id; },
   charDel() { const id = S.charDel; S.characters = S.characters.filter(c => c.id !== id); if (S.charOn === id) S.charOn = null; S.charDel = null; toast('Персонаж удалён'); },
   charDelNo() { S.charDel = null; },
-  mode(m) { const ta = document.getElementById('ta'); if (ta) { if (S.mode === 'image') S.promptDraft = ta.value; else S.chatDraft = ta.value; } S.mode = m; if (m === 'image') S.barOpen = !S.mobile || S.barOpen; render.focusTa = true; },
+  mode(m) { const ta = document.getElementById('ta'); if (ta) { if (S.mode === 'image') S.promptDraft = ta.value; else S.chatDraft = ta.value; } S.mode = m; if (m === 'image') { S.barOpen = !S.mobile || S.barOpen; showImgStrip(); } render.focusTa = true; },
   noMarks() { S.sendMarks = false; },
   send() { send(); return 'skip'; },
   restoreMine() { if (!S.myPrompt) return; S.promptDraft = S.myPrompt; S.myPrompt = ''; S.promptBy = null; S.mode = 'image'; render.focusTa = true; },
@@ -1255,8 +1385,10 @@ document.addEventListener('click', e => {
   if (demo) {
     const [k, v] = demo.dataset.demo.split(':');
     if (k === 'theme') S.theme = v;
-    if (k === 'w') { S.mobile = v === 'mob'; S.sheet = null; if (S.mobile) S.barOpen = false; }
-    if (k === 'reset') { Object.values(S.threads).forEach(t => t.gen && clearInterval(t.gen.timer)); initState(); }
+    if (k === 'w') { S.mobile = v === 'mob'; S.sheet = null; S.barOpen = !S.mobile; S.stripOff = S.mobile && !S.focus; S.stripOffPrev = false; }
+    if (k === 'sw') { S.sw = v; S.menu = null; }
+    if (k === 'n') S.nStrips = +v;
+    if (k === 'reset') { Object.values(S.threads).forEach(t => t.gen && clearInterval(t.gen.timer)); initState(); syncStrip.last = null; }
     render(); return;
   }
   const el = e.target.closest('[data-act]');

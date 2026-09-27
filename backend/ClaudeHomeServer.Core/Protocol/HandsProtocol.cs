@@ -136,8 +136,8 @@ public static class HandsFiles
 /// Программы, которые мост не запускает никогда (решение владельца 2б, 2026-09-27): белого
 /// списка нет, любая другая <c>.exe</c> по полному пути запускается. Здесь — интерпретаторы,
 /// оболочки и терминалы: каждый исполняет произвольные команды, и окна их процессов тоже чужие.
-/// Сравнение по имени файла без учёта регистра (и по имени без расширения); <c>python*</c> —
-/// по префиксу.
+/// Сравнение по имени файла без учёта регистра (и по имени без расширения); <c>python*</c> и
+/// <c>pwsh*</c> — по префиксу (сборки <c>pwsh-preview.exe</c>, <c>pwsh-7.4-preview.exe</c>).
 /// </summary>
 public static class HandsForbiddenApps
 {
@@ -152,7 +152,7 @@ public static class HandsForbiddenApps
         "wt.exe", "WindowsTerminal.exe", "OpenConsole.exe", "conhost.exe",
     ];
 
-    public static readonly IReadOnlyList<string> NamePrefixes = ["python"];
+    public static readonly IReadOnlyList<string> NamePrefixes = ["python", "pwsh"];
 }
 
 /// <summary>

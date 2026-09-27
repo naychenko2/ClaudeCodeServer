@@ -65,7 +65,7 @@ public static class HandsAppPaths
 
     /// <summary>
     /// Интерпретатор из <see cref="HandsForbiddenApps"/>: по имени, по имени без расширения
-    /// (<c>cmd.com</c> — тот же cmd) и по префиксу <c>python*</c>. Регистр не важен.
+    /// (<c>cmd.com</c> — тот же cmd) и по префиксам <c>python*</c>, <c>pwsh*</c>. Регистр не важен.
     /// </summary>
     public static bool IsForbidden(string normalizedPath)
     {

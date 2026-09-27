@@ -189,7 +189,7 @@ public class HandsWindowTests
     [InlineData("allmonitors")]
     public void Screen_targets_are_denied_even_with_own_handle(string? target)
     {
-        var decision = Machine.Policy().CheckScreenshot("capture", target, Machine.Own, null);
+        var decision = Machine.Policy().CheckScreenshot("capture", target, Machine.Own, null, null);
 
         Assert.False(decision.Allowed);
         Assert.Contains("target='window'", decision.Reason);
@@ -200,8 +200,8 @@ public class HandsWindowTests
     [InlineData("WINDOW")]
     public void Own_window_capture_is_allowed(string target)
     {
-        Assert.True(Machine.Policy().CheckScreenshot(null, target, Machine.Own, null).Allowed);
-        Assert.True(Machine.Policy().CheckScreenshot("capture", target, Machine.Own, "inline").Allowed);
+        Assert.True(Machine.Policy().CheckScreenshot(null, target, Machine.Own, null, null).Allowed);
+        Assert.True(Machine.Policy().CheckScreenshot("capture", target, Machine.Own, "inline", null).Allowed);
     }
 
     [Fact]
@@ -209,21 +209,32 @@ public class HandsWindowTests
     {
         var policy = Machine.Policy();
 
-        Assert.False(policy.CheckScreenshot("capture", "window", Machine.UserNotepad, null).Allowed);
-        Assert.False(policy.CheckScreenshot("capture", "window", Machine.TerminalInJob, null).Allowed);
-        Assert.False(policy.CheckScreenshot("capture", "window", null, null).Allowed);
+        Assert.False(policy.CheckScreenshot("capture", "window", Machine.UserNotepad, null, null).Allowed);
+        Assert.False(policy.CheckScreenshot("capture", "window", Machine.TerminalInJob, null, null).Allowed);
+        Assert.False(policy.CheckScreenshot("capture", "window", null, null, null).Allowed);
     }
 
     [Fact]
     public void Capture_to_file_is_denied()
     {
-        Assert.False(Machine.Policy().CheckScreenshot("capture", "window", Machine.Own, "file").Allowed);
+        Assert.False(Machine.Policy().CheckScreenshot("capture", "window", Machine.Own, "file", null).Allowed);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("inline")]
+    [InlineData("file")]
+    public void Output_path_is_denied_in_any_mode(string? outputMode)
+    {
+        var decision = Machine.Policy().CheckScreenshot("capture", "window", Machine.Own, outputMode, @"C:\Users\an\evil.jpg");
+
+        Assert.False(decision.Allowed);
     }
 
     [Fact]
     public void Monitor_list_carries_no_pixels_and_is_allowed()
     {
-        Assert.True(Machine.Policy().CheckScreenshot("list_monitors", null, null, null).Allowed);
-        Assert.False(Machine.Policy().CheckScreenshot("record", "window", Machine.Own, null).Allowed);
+        Assert.True(Machine.Policy().CheckScreenshot("list_monitors", null, null, null, null).Allowed);
+        Assert.False(Machine.Policy().CheckScreenshot("record", "window", Machine.Own, null, null).Allowed);
     }
 }

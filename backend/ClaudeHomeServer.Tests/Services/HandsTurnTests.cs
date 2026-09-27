@@ -50,7 +50,7 @@ internal sealed class HandsTurnHarness : IDisposable
         get { lock (_messages) return [.. _messages]; }
     }
 
-    public HandsTurnHarness(bool handsEnabled, IReadOnlyList<string>? handsProviders,
+    public HandsTurnHarness(bool handsEnabled,
         ClaudeMode mode = ClaudeMode.Default, string? model = null, LlmProviderRegistry? providers = null,
         Func<ExternalMcpContext?>? external = null, DeviceExecRefusedException? refuse = null)
     {
@@ -80,8 +80,7 @@ internal sealed class HandsTurnHarness : IDisposable
             WidgetsMcp: new WidgetsMcpContext("http://localhost:5999", () => "tok", UseHttp: true),
             ExternalMcpProvider: external,
             Launcher: _launcher,
-            HandsEnabled: handsEnabled,
-            HandsProviders: handsProviders);
+            HandsEnabled: handsEnabled);
         Session = new ClaudeSession(new Session { Model = model, Mode = mode }, context, providers: providers);
     }
 
@@ -190,7 +189,7 @@ public class HandsTurnTests
     [Fact]
     public async Task РукиВключены_ShellНеЗапрещён_МаркерРук_БезStdio()
     {
-        using var h = new HandsTurnHarness(true, [HandsProviders.Claude], external: () => External);
+        using var h = new HandsTurnHarness(true, external: () => External);
         var turn = await h.RunTurnAsync();
 
         turn.Disallowed.Should().NotContain(["Bash", "PowerShell", "Monitor", "BashOutput", "KillShell", "Task", "Agent",
@@ -215,30 +214,38 @@ public class HandsTurnTests
     [Fact]
     public async Task РукиВыключены_НабораНет_StdioЕдет_МаркераНет()
     {
-        using var h = new HandsTurnHarness(false, [HandsProviders.Claude], external: () => External);
+        using var h = new HandsTurnHarness(false, external: () => External);
         var turn = await h.RunTurnAsync();
 
         turn.McpServers!.ContainsKey(DeviceExecPlaceholders.HandsServerName).Should().BeFalse();
         turn.McpServers!.ContainsKey("ext-stdio").Should().BeTrue();
     }
 
+    // Решение владельца 2026-09-27: списка «кому доверяем руки» нет, руки работают у любого
+    // провайдера. Раньше DeepSeek без явного доверия шёл без рук со статусом «провайдер не разрешён»
     [Fact]
-    public async Task ПровайдерНеДоверен_ХодБезРук_СтатусПровайдерНеРазрешён()
+    public async Task ЛюбойПровайдер_РукиЕсть_СтатусаОтказаНет()
     {
-        using var h = new HandsTurnHarness(true, ["deepseek"]);
+        var providers = new LlmProviderRegistry(Helpers.TestConfig.Build(new Dictionary<string, string?>
+        {
+            ["LlmProviders:deepseek:AnthropicBaseUrl"] = "https://deepseek.example.com/anthropic",
+            ["LlmProviders:deepseek:ApiKey"] = "sk-test",
+            ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-v5",
+        }));
+        using var h = new HandsTurnHarness(true, model: "deepseek-v5", providers: providers);
         var turn = await h.RunTurnAsync();
 
-        turn.Disallowed.Should().NotContain("Bash");
-        turn.McpServers!.ContainsKey(DeviceExecPlaceholders.HandsServerName).Should().BeFalse();
-        h.Messages.OfType<HandsStatusMessage>().Should().ContainSingle()
-            .Which.State.Should().Be(HandsChatStates.ProviderNotAllowed);
+        turn.McpServers!.ContainsKey(DeviceExecPlaceholders.HandsServerName).Should().BeTrue(
+            "руки не зависят от провайдера хода");
+        HandsTurnRules.PermissionRefusal(turn.Args).Should().BeNull();
+        h.Messages.OfType<HandsStatusMessage>().Should().BeEmpty("отказа по провайдеру больше нет");
     }
 
     // Агент отказал ходу: руки держит другой ход этой машины — бейдж узнаёт это по коду отказа
     [Fact]
     public async Task ОтказРукиЗаняты_СтатусНедоступныСПричинойBusy()
     {
-        using var h = new HandsTurnHarness(true, [HandsProviders.Claude],
+        using var h = new HandsTurnHarness(true,
             refuse: new DeviceExecRefusedException(DeviceExecRefusal.HandsBusy, HandsMachineLock.BusyText));
         await h.RunTurnAsync();
 
@@ -254,7 +261,7 @@ public class HandsTurnTests
     [InlineData(DeviceExecRefusal.GatewayRefused, "Шлюз не выдал ходу маршрут.")]
     public async Task ПрочийОтказУстройства_БезПризнакаBusy(DeviceExecRefusal reason, string text)
     {
-        using var h = new HandsTurnHarness(true, [HandsProviders.Claude],
+        using var h = new HandsTurnHarness(true,
             refuse: new DeviceExecRefusedException(reason, text));
         await h.RunTurnAsync();
 
@@ -265,7 +272,7 @@ public class HandsTurnTests
     [Fact]
     public async Task РукиИРежимБезОграничений_ПонижениеДоAcceptEdits_СтрокаВЛенту()
     {
-        using var h = new HandsTurnHarness(true, [HandsProviders.Claude], mode: ClaudeMode.Bypass);
+        using var h = new HandsTurnHarness(true, mode: ClaudeMode.Bypass);
         var first = await h.RunTurnAsync();
         var second = await h.RunTurnAsync();
 
@@ -280,7 +287,7 @@ public class HandsTurnTests
     [Fact]
     public async Task БезРук_РежимБезОграниченийКакБыл()
     {
-        using var h = new HandsTurnHarness(false, [HandsProviders.Claude], mode: ClaudeMode.Bypass);
+        using var h = new HandsTurnHarness(false, mode: ClaudeMode.Bypass);
         var turn = await h.RunTurnAsync();
 
         turn.PermissionMode.Should().Be("bypassPermissions", "контроль: понижение — только у хода с руками");
@@ -297,7 +304,7 @@ public class HandsTurnTests
             ["LlmProviders:glm:SupportsImages"] = "false",
             ["LlmProviders:glm:Models:0:Id"] = "glm-5",
         }));
-        using var h = new HandsTurnHarness(true, ["glm"], model: "glm-5", providers: providers);
+        using var h = new HandsTurnHarness(true, model: "glm-5", providers: providers);
         var turn = await h.RunTurnAsync();
 
         var hands = turn.McpServers![DeviceExecPlaceholders.HandsServerName]!.AsObject();

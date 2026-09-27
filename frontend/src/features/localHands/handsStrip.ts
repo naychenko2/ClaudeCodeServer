@@ -12,7 +12,7 @@ import { FLAGS, getFlag } from '../../lib/featureFlags';
 import { getPendingFocus, releaseStrip, requestStrip } from '../../lib/composerStrips';
 import {
   HANDS_BADGE_LOADING, HandsChatState, handsEventReceived, handsInitialFailed, handsInitialLoaded,
-  type HandsBadgeState, type HandsProviderNote,
+  type HandsBadgeState,
 } from '../../lib/localHands';
 import type { ServerMessage } from '../../types';
 
@@ -21,12 +21,11 @@ export const HANDS_STRIP = 'hands';
 // Руки проекта глазами полосы: available — тумблер проекта включён и матрица их пускает
 // (handsRefusal == null)
 export interface HandsProjectInfo { available: boolean; deviceName: string | null }
-// Провайдер чата (Session.provider) — для строки «видит снимки окон / только текст окон»
+// Провайдер чата (Session.provider) — для строки «видит снимки окон / видит только текст окон»
 export interface HandsSessionInfo { state: HandsBadgeState; provider: string | null }
 
 const _projects = new Map<string, HandsProjectInfo>();
 const _sessions = new Map<string, HandsSessionInfo>();
-let _providers: readonly HandsProviderNote[] | null = null;
 let _version = 0;
 const _listeners = new Set<() => void>();
 
@@ -62,12 +61,6 @@ export function setHandsSessionProvider(sessionId: string, provider: string | nu
   if (getHandsSession(sessionId).provider === provider && _sessions.has(sessionId)) return;
   patchSession(sessionId, { provider });
 }
-
-export function setHandsProviders(list: readonly HandsProviderNote[]) {
-  _providers = list;
-  emit();
-}
-export function getHandsProviders() { return _providers; }
 
 // ---------- фокус ----------
 
@@ -139,6 +132,5 @@ export function useHandsStripVersion() {
 export function __resetHandsStrip() {
   _projects.clear();
   _sessions.clear();
-  _providers = null;
   emit();
 }

@@ -11,7 +11,6 @@ export const HandsChatState = {
   Allowed: 'allowed',
   Unavailable: 'unavailable',
   Stopped: 'stopped',
-  ProviderNotAllowed: 'provider-not-allowed',
 } as const;
 
 // Причины остановки — зеркало HandsEndReason (HandsProtocol.cs)
@@ -25,7 +24,6 @@ export const HandsEndReason = {
 
 // Границы «только свои окна» нет (решение владельца 2026-09-27, ADR-016 §7)
 export const HANDS_ANY_WINDOW_TEXT = 'ИИ может видеть и трогать любые окна на этом компьютере, в том числе снимать экран.';
-export const HANDS_SETTINGS_HINT = 'Меню профиля → «Руки на устройствах».';
 
 // ---------- секция проекта ----------
 
@@ -35,8 +33,6 @@ export interface HandsSectionInput {
   refusal: string | null;
   // Устройство проекта не в сети; null — неизвестно (серверный проект, устройство отозвано)
   deviceOffline: boolean;
-  // Список доверенных провайдеров пуст; null — ещё не загружен
-  noProviders: boolean | null;
 }
 
 export type HandsSectionTone = 'neutral' | 'ok' | 'warning';
@@ -49,7 +45,6 @@ export interface HandsSectionView {
   // Отказ матрицы — показываем текст сервера как есть
   refusal: string | null;
   offlineNote: boolean;
-  noProvidersWarning: boolean;
 }
 
 export function handsSectionView(i: HandsSectionInput): HandsSectionView {
@@ -62,17 +57,14 @@ export function handsSectionView(i: HandsSectionInput): HandsSectionView {
       canToggle: i.handsEnabled,
       refusal: i.refusal,
       offlineNote: false,
-      noProvidersWarning: false,
     };
   }
-  const noProviders = i.handsEnabled && i.noProviders === true;
   return {
-    summary: !i.handsEnabled ? 'Выключены' : noProviders ? 'Нет провайдеров' : 'Включены',
-    tone: !i.handsEnabled ? 'neutral' : noProviders ? 'warning' : 'ok',
+    summary: i.handsEnabled ? 'Включены' : 'Выключены',
+    tone: i.handsEnabled ? 'ok' : 'neutral',
     canToggle: true,
     refusal: null,
     offlineNote: i.deviceOffline,
-    noProvidersWarning: noProviders,
   };
 }
 
@@ -177,14 +169,6 @@ export function handsBadgeView(status: HandsStatusSnapshot | null, projectDevice
         title: stoppedReasonText(status.reason),
         canStop: false,
       };
-    case HandsChatState.ProviderNotAllowed:
-      return {
-        tone: 'neutral',
-        text: 'Руки недоступны: провайдер',
-        short: 'Нет рук',
-        title: `Провайдеру этого чата руки не доверены — ход идёт без рук. ${HANDS_SETTINGS_HINT}`,
-        canStop: false,
-      };
     default:
       return {
         tone: 'neutral',
@@ -221,24 +205,23 @@ export function handsStripView(status: HandsStatusSnapshot | null, projectDevice
         ? 'Руки заняты другим ходом на этом устройстве'
         : 'Руки недоступны на устройстве');
     case HandsChatState.Stopped: return v('Остановлено', stoppedReasonText(status.reason));
-    case HandsChatState.ProviderNotAllowed: return v('Провайдеру чата руки не доверены');
     default: return v('Руки включены');
   }
 }
 
-export interface HandsProviderNote { key: string; displayName: string; supportsImages: boolean }
+export interface HandsProviderNote { key: string; caps: { displayName: string; supportsImages: boolean } }
 
-// Провайдер чата и что он видит. Ключ чата не нашёлся среди доверенных — это подписка
-// Claude (у пулов свои ключи) либо провайдер без рук; второе покажет сама полоса статусом
+// Провайдер чата и что он видит. Руки есть у любого провайдера (решение владельца
+// 2026-09-27), единственное различие — зрение: без него мост идёт без снимков окон.
+// Ключ чата не нашёлся в каталоге провайдеров — это подписка пула Claude (у пулов свои ключи)
 export function handsProviderLabel(
   sessionProvider: string | null | undefined,
-  options: readonly HandsProviderNote[] | null,
+  providers: readonly HandsProviderNote[],
 ): string | null {
-  if (!options) return null;
   const key = (sessionProvider || 'claude').toLowerCase();
-  const o = options.find(x => x.key.toLowerCase() === key) ?? options.find(x => x.key.toLowerCase() === 'claude');
+  const o = providers.find(x => x.key.toLowerCase() === key) ?? providers.find(x => x.key.toLowerCase() === 'claude');
   if (!o) return null;
-  return `${o.displayName} · ${o.supportsImages ? 'видит снимки окон' : 'только текст окон'}`;
+  return `${o.caps.displayName} · ${o.caps.supportsImages ? 'видит снимки окон' : 'видит только текст окон'}`;
 }
 
 function stoppedReasonText(reason: string | null | undefined): string {

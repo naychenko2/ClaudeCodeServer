@@ -1201,20 +1201,18 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
 
     // Руки локального проекта (ADR-016 §7) — свойство чата, а не хода: матрица
     // ProjectCapabilities.HandsRefusal (флаг local-hands, локальный проект, hands у устройства,
-    // тумблер проекта) плюс явное доверие владельца хоть одному провайдеру. Провайдер хода
-    // сверяет ClaudeSession (HandsActiveNow), фолбэк режет цепочку до того же списка.
+    // тумблер проекта). Провайдер хода не сужает ни руки, ни фолбэк (решение владельца
+    // 2026-09-27): снимки окон отсекает зрение провайдера в ClaudeSession.
     // Канал устройства резолвится лениво: прямая зависимость замкнула бы граф синглтонов.
-    private (bool Enabled, IReadOnlyList<string>? Providers) HandsFor(string? projectId)
+    private bool HandsFor(string? projectId)
     {
-        if (projectId is null || _projects.GetById(projectId) is not { OwnerId: { } ownerId } project) return (false, null);
-        var providers = _users.GetById(ownerId)?.HandsProviders;
-        if (providers is not { Count: > 0 }) return (false, null);
+        if (projectId is null || _projects.GetById(projectId) is not { OwnerId: { } ownerId } project) return false;
         var device = ProjectCapabilities.IsDeviceBound(project)
             ? _services?.GetService<Execution.IDeviceExecChannel>()?.GetStatus(ownerId, project.DeviceId!)
             : null;
         var refusal = ProjectCapabilities.HandsRefusal(project, device,
             _flags.IsEnabled(ownerId, FeatureFlagKeys.LocalHands), project.HandsEnabled);
-        return refusal is null ? (true, providers) : (false, null);
+        return refusal is null;
     }
 
     // Работает ли у проекта чата группа «нужен контент на сервере» (ADR-016 §4). Чат вне
@@ -4117,8 +4115,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             MainRootPath: projectRoot,
             ServerContent: ServerContentFor(session.ProjectId),
             TranscriptOnServer: TranscriptOnServer(session),
-            HandsEnabled: hands.Enabled,
-            HandsProviders: hands.Providers));
+            HandsEnabled: hands));
         entry.Process = adapter;
         entry.RunId = runId;
 
@@ -5665,8 +5662,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 MainRootPath: projectRoot,
                 ServerContent: ProjectCapabilities.ServerContentEnabled(project),
                 TranscriptOnServer: ProjectCapabilities.TranscriptOnServer(project),
-                HandsEnabled: hands.Enabled,
-                HandsProviders: hands.Providers);
+                HandsEnabled: hands);
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;

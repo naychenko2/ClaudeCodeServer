@@ -861,7 +861,7 @@ public class McpToolsetStabilityTests
     [Fact]
     public async Task РукиВключены_ДваХода_ОднаСигнатура()
     {
-        using var h = new HandsTurnHarness(true, [ClaudeHomeServer.Protocol.HandsProviders.Claude],
+        using var h = new HandsTurnHarness(true,
             mode: ClaudeHomeServer.Models.ClaudeMode.Bypass);
         var first = await h.RunTurnAsync("первый ход");
         var second = await h.RunTurnAsync("второй ход, другой текст");

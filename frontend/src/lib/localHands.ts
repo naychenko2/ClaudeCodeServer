@@ -1,4 +1,4 @@
-// Руки локального проекта в веб-морде (ADR-016 §7): тексты секции проекта, бейджа чата и
+// Руки локального проекта в веб-морде (ADR-016 §7): тексты секции проекта, полосы «Руки» и
 // строк ленты. Чистые функции — компоненты только рисуют то, что вернулось отсюда.
 //
 // Решения владельца 2026-09-27: сеанса «на N минут» нет, руки включает тумблер проекта;
@@ -75,7 +75,7 @@ export function handsSectionView(i: HandsSectionInput): HandsSectionView {
   };
 }
 
-// ---------- бейдж чата ----------
+// ---------- состояние рук чата (база полосы «Руки»; «бейдж» — историческое имя) ----------
 
 export type HandsBadgeTone = 'neutral' | 'success' | 'warning';
 
@@ -195,6 +195,51 @@ export function handsBadgeView(status: HandsStatusSnapshot | null, projectDevice
   }
 }
 
+// ---------- полоса «Руки» над композером ----------
+
+export interface HandsStripView {
+  tone: HandsBadgeTone;
+  // Статус одной строкой — он же строка меню переключателя полос
+  text: string;
+  // Причина остановки — начало второй строки; null — причины нет
+  detail: string | null;
+  title: string;
+  canStop: boolean;
+}
+
+// Тексты полосы: тон, подсказка и «Стоп» — те же, что у бейджа, короче только статус
+export function handsStripView(status: HandsStatusSnapshot | null, projectDeviceName: string | null): HandsStripView {
+  const b = handsBadgeView(status, projectDeviceName);
+  const v = (text: string, detail: string | null = null): HandsStripView =>
+    ({ tone: b.tone, text, detail, title: b.title, canStop: b.canStop });
+  switch (status?.state) {
+    case HandsChatState.Active: return v('ИИ управляет компьютером');
+    case HandsChatState.Allowed: return v('Руки готовы');
+    case HandsChatState.Unavailable:
+      return v(status.reason === HandsEndReason.Busy
+        ? 'Руки заняты другим ходом на этом устройстве'
+        : 'Руки недоступны на устройстве');
+    case HandsChatState.Stopped: return v('Остановлено', stoppedReasonText(status.reason));
+    case HandsChatState.ProviderNotAllowed: return v('Провайдеру чата руки не доверены');
+    default: return v('Руки включены');
+  }
+}
+
+export interface HandsProviderNote { key: string; displayName: string; supportsImages: boolean }
+
+// Провайдер чата и что он видит. Ключ чата не нашёлся среди доверенных — это подписка
+// Claude (у пулов свои ключи) либо провайдер без рук; второе покажет сама полоса статусом
+export function handsProviderLabel(
+  sessionProvider: string | null | undefined,
+  options: readonly HandsProviderNote[] | null,
+): string | null {
+  if (!options) return null;
+  const key = (sessionProvider || 'claude').toLowerCase();
+  const o = options.find(x => x.key.toLowerCase() === key) ?? options.find(x => x.key.toLowerCase() === 'claude');
+  if (!o) return null;
+  return `${o.displayName} · ${o.supportsImages ? 'видит снимки окон' : 'только текст окон'}`;
+}
+
 function stoppedReasonText(reason: string | null | undefined): string {
   switch (reason) {
     case HandsEndReason.StoppedFromTray:
@@ -211,7 +256,7 @@ function stoppedReasonText(reason: string | null | undefined): string {
 // ---------- строки ленты ----------
 
 // Строка ленты на событие hands_status; null — событие ленту не трогает (активность,
-// провайдер — они живут в бейдже и повторялись бы каждым ходом)
+// провайдер — они живут в полосе «Руки» и повторялись бы каждым ходом)
 export function handsStatusFeedLine(status: HandsStatusSnapshot): string | null {
   if (status.state !== HandsChatState.Stopped) return null;
   const where = `на устройстве${onDevice(status.deviceName)}`;

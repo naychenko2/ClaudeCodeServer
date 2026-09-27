@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Полоса «Руки» над композером — макет</title>
+<!--
+  Решения Майи (2026-09-27), по образцу полосы «Картинки» (image-editor-v3-in-chat.html):
+  • 1-я строка: переключатель хоста «Руки ▾» на месте заголовка · Dot тона · статус · «Стоп» (только active).
+  • 2-я строка: [причина остановки ·] устройство · провайдер · «видит снимки окон» / «только текст окон»;
+    C.textMuted, кегль FS.xs.
+  • Статус — Dot + текст, Badge в полосе не берём (спорит с заголовком хоста).
+    active — success; готовы — neutral; заняты / остановлено — warning; недоступны — neutral, текст muted.
+  • Свёрнутая — одна строка 30 px, вторая строка прячется. Мобила 360 — только свёрнутая строка,
+    сжимается лишь текст статуса (ellipsis), полный текст — тостом по тапу.
+  • Фон C.bgPanel, borderTop C.borderLight — как у «Картинок».
+  Отступление при вёрстке: «Стоп» — Button ghostFilled, а не secondary: у secondary фон C.bgPanel,
+  на полосе с тем же фоном кнопка пропадает. На мобиле кнопка 32 px (цель касания), строку
+  раздвигает как 24 px за счёт отрицательного поля.
+-->
+<style>
+  .light { --bg:#f6f5f2; --panel:#efede8; --white:#fff; --bl:#e4e1da; --b:#d6d2c9; --t:#1f1d1a; --ts:#4a463f; --tm:#8a857b; --ok:#2f9e5b; --warn:#d08a1e; --acc:#5b5bd6; }
+  .dark  { --bg:#16161a; --panel:#1f1f24; --white:#2a2a31; --bl:#2c2c33; --b:#3a3a42; --t:#ecebe8; --ts:#c3c1bb; --tm:#8d8b85; --ok:#4cc27d; --warn:#e8a33b; --acc:#8b8bf0; }
+  body { margin:0; font:13px system-ui, sans-serif; background:#ccc; display:flex; flex-wrap:wrap; gap:24px; padding:24px; }
+  .frame { background:var(--bg); color:var(--t); width:720px; border-radius:12px; overflow:hidden; box-shadow:0 2px 12px #0003; }
+  .frame.m { width:360px; }
+  h3 { margin:0; padding:10px 12px; font-size:12px; color:var(--tm); }
+  .strip { background:var(--panel); border-top:1px solid var(--bl); }
+  .row { display:flex; align-items:center; gap:8px; min-height:30px; padding:2px 8px; font-size:12px; color:var(--ts); min-width:0; }
+  .sw { display:inline-flex; align-items:center; gap:4px; height:24px; padding:0 9px; border:1px solid var(--b); border-radius:8px; font-weight:600; flex-shrink:0; }
+  .dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+  .st { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--t); }
+  .st.muted { color:var(--tm); }
+  .stop { height:24px; padding:0 9px; border:1px solid var(--b); background:var(--white); color:var(--ts); border-radius:8px; font-weight:600; flex-shrink:0; }
+  .m .stop { height:32px; margin:-4px 0; }
+  .d { padding:0 8px 4px; font-size:11px; color:var(--tm); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .composer { margin:8px; height:56px; border:1px solid var(--b); border-radius:14px; background:var(--white); }
+</style>
+</head>
+<body>
+<script>
+  const states = [
+    ['ИИ управляет компьютером', 'ok', true, ''],
+    ['Руки готовы', 'tm', false, ''],
+    ['Руки заняты другим ходом на этом устройстве', 'warn', false, ''],
+    ['Остановлено', 'warn', false, 'Человек у компьютера нажал «Стоп» — ход прерван · '],
+    ['Руки недоступны на устройстве', 'tm', false, ''],
+  ];
+  const strip = (s, collapsed) => `<div class="strip"><div class="row">
+      <span class="sw">🖥 Руки ▾</span><span class="dot" style="background:var(--${s[1]})"></span>
+      <span class="st ${s[1] === 'tm' ? 'muted' : ''}">${s[0]}</span>${s[2] ? '<button class="stop">■ Стоп</button>' : ''}</div>
+      ${collapsed ? '' : `<div class="d">${s[3]}Ноутбук · Claude · видит снимки окон</div>`}</div>`;
+  for (const theme of ['light', 'dark']) {
+    document.write(`<div class="frame ${theme}"><h3>${theme === 'light' ? 'Светлая' : 'Тёмная'} · десктоп, развёрнута</h3>
+      ${states.map(s => strip(s, false)).join('<div style="height:6px"></div>')}
+      <h3>Свёрнута — строка 30 px</h3>${strip(states[0], true)}<div class="composer"></div></div>`);
+    document.write(`<div class="frame m ${theme}"><h3>Мобила 360 · только строка</h3>
+      ${states.map(s => strip(s, true)).join('<div style="height:6px"></div>')}<div class="composer"></div></div>`);
+  }
+</script>
+</body>
+</html>

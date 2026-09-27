@@ -62,6 +62,8 @@ export const designSystem = [
 // не тонет в легаси-долге общего линта.
 export const imageEditorImportGuard = {
   files: ['src/features/imageEditor/**/*.{ts,tsx}'],
+  // Тесты в бандл remote не попадают, вторую копию ядра они не соберут — им можно в ядро напрямую
+  ignores: ['**/*.test.{ts,tsx}'],
   rules: {
     'no-restricted-imports': ['error', {
       patterns: [{

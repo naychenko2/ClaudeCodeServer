@@ -49,3 +49,4 @@ export type { BadgeTone, BadgeSize } from './Badge';
 export { SidebarSection } from './SidebarSection';
 export { BackButton } from './BackButton';
 export { WaitingIndicator } from './WaitingIndicator';
+export { MetaChip } from './MetaChip';

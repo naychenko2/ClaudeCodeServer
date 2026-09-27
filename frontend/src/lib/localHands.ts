@@ -19,6 +19,8 @@ export const HandsEndReason = {
   StoppedFromTray: 'tray-stop',
   HandsDisabled: 'disabled',
   AgentStopping: 'agent-stopping',
+  // У unavailable: руки держит другой ход на той же машине
+  Busy: 'busy',
 } as const;
 
 export const HANDS_OWN_WINDOWS_TEXT = 'ИИ видит и трогает только окна, которые открыл сам.';
@@ -150,6 +152,15 @@ export function handsBadgeView(status: HandsStatusSnapshot | null, projectDevice
         canStop: false,
       };
     case HandsChatState.Unavailable:
+      if (status.reason === HandsEndReason.Busy) {
+        return {
+          tone: 'warning',
+          text: 'Руки заняты другим ходом на этом устройстве',
+          short: 'Заняты',
+          title: `Руки на устройстве${onDevice(device)} держит другой ход — дождись его конца или останови его из трея. Этот ход не запущен.`,
+          canStop: false,
+        };
+      }
       return {
         tone: 'warning',
         text: 'Руки недоступны на устройстве',

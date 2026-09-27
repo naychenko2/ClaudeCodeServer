@@ -52,7 +52,7 @@ internal sealed class HandsTurnHarness : IDisposable
 
     public HandsTurnHarness(bool handsEnabled, IReadOnlyList<string>? handsProviders,
         ClaudeMode mode = ClaudeMode.Default, string? model = null, LlmProviderRegistry? providers = null,
-        Func<ExternalMcpContext?>? external = null)
+        Func<ExternalMcpContext?>? external = null, DeviceExecRefusedException? refuse = null)
     {
         Directory.CreateDirectory(_root);
         // Штатный ход CLI: init, ответ, result — и выход. Убитый без result процесс ClaudeSession
@@ -64,13 +64,13 @@ internal sealed class HandsTurnHarness : IDisposable
             """{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"готово"}]},"session_id":"hands-csid"}""",
             """{"type":"result","subtype":"success","is_error":false,"duration_ms":1,"num_turns":1,"result":"готово","session_id":"hands-csid","total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}""",
         ]);
-        _launcher = new CapturingLauncher(_processes, transcript);
+        _launcher = new CapturingLauncher(_processes, transcript) { Refuse = refuse };
         var context = new LlmSessionContext(
             RootPath: _root,
             OnMessage: m =>
             {
                 lock (_messages) _messages.Add(m);
-                if (m is ExitedMessage) _exited.TrySetResult();
+                if (m is ExitedMessage or ErrorMessage) _exited.TrySetResult();
                 return Task.CompletedTask;
             },
             RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
@@ -114,6 +114,8 @@ internal sealed class HandsTurnHarness : IDisposable
     private sealed class CapturingLauncher(List<Process> processes, string transcript) : IProcessLauncher
     {
         private TaskCompletionSource? _started;
+        // Отказ устройства на старте хода — как у RemoteProcessRunner локального проекта
+        public DeviceExecRefusedException? Refuse { get; init; }
         public IReadOnlyList<string>? Args { get; private set; }
         public JsonObject? McpServers { get; private set; }
         public bool IsSandboxed => false;
@@ -136,6 +138,11 @@ internal sealed class HandsTurnHarness : IDisposable
             var i = Args?.ToList().IndexOf("--mcp-config") ?? -1;
             if (i >= 0 && File.Exists(Args![i + 1]))
                 McpServers = JsonNode.Parse(File.ReadAllText(Args[i + 1]))?["mcpServers"] as JsonObject;
+            if (Refuse is not null)
+            {
+                _started?.TrySetResult();
+                throw Refuse;
+            }
 
             var fake = new ProcessSpec
             {
@@ -225,6 +232,34 @@ public class HandsTurnTests
         turn.McpServers!.ContainsKey(DeviceExecPlaceholders.HandsServerName).Should().BeFalse();
         h.Messages.OfType<HandsStatusMessage>().Should().ContainSingle()
             .Which.State.Should().Be(HandsChatStates.ProviderNotAllowed);
+    }
+
+    // Агент отказал ходу: руки держит другой ход этой машины — бейдж узнаёт это по коду отказа
+    [Fact]
+    public async Task ОтказРукиЗаняты_СтатусНедоступныСПричинойBusy()
+    {
+        using var h = new HandsTurnHarness(true, [HandsProviders.Claude],
+            refuse: new DeviceExecRefusedException(DeviceExecRefusal.HandsBusy, HandsMachineLock.BusyText));
+        await h.RunTurnAsync();
+
+        h.Messages.OfType<HandsStatusMessage>().Should().ContainSingle()
+            .Which.Should().Be(new HandsStatusMessage(HandsChatStates.Unavailable, Reason: HandsEndReason.Busy));
+        h.Messages.OfType<ErrorMessage>().Should().ContainSingle().Which.Text.Should().Be(HandsMachineLock.BusyText);
+    }
+
+    // Прочие отказы устройства — только ошибка хода; даже текст про занятые руки без кода busy не даёт
+    [Theory]
+    [InlineData(DeviceExecRefusal.AgentRefused, HandsMachineLock.BusyText)]
+    [InlineData(DeviceExecRefusal.Offline, "Устройство не в сети")]
+    [InlineData(DeviceExecRefusal.GatewayRefused, "Шлюз не выдал ходу маршрут.")]
+    public async Task ПрочийОтказУстройства_БезПризнакаBusy(DeviceExecRefusal reason, string text)
+    {
+        using var h = new HandsTurnHarness(true, [HandsProviders.Claude],
+            refuse: new DeviceExecRefusedException(reason, text));
+        await h.RunTurnAsync();
+
+        h.Messages.OfType<ErrorMessage>().Should().ContainSingle();
+        h.Messages.OfType<HandsStatusMessage>().Should().NotContain(m => m.Reason == HandsEndReason.Busy);
     }
 
     [Fact]

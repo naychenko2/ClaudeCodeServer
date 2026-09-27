@@ -160,8 +160,10 @@ public sealed class RemoteProcessRunner : IProcessLauncher
             {
                 head.Add(frame);
                 if (frame.Channel == DeviceExecFrameChannel.Stderr) continue;
-                if (frame.Channel == DeviceExecFrameChannel.Exit && ExitError(frame) is { } error)
-                    throw new DeviceExecRefusedException(DeviceExecRefusal.AgentRefused, error);
+                if (frame.Channel == DeviceExecFrameChannel.Exit && ExitError(frame) is { } exit)
+                    throw new DeviceExecRefusedException(
+                        exit.Refusal == HandsEndReason.Busy ? DeviceExecRefusal.HandsBusy : DeviceExecRefusal.AgentRefused,
+                        exit.Error!);
                 break;
             }
         }
@@ -169,12 +171,12 @@ public sealed class RemoteProcessRunner : IProcessLauncher
         return head.Count == 0 ? stream : new PrefetchedStream(stream, head);
     }
 
-    private static string? ExitError(DeviceExecFrame frame)
+    private static DeviceExecExit? ExitError(DeviceExecFrame frame)
     {
         try
         {
             var exit = DeviceExecJson.Deserialize<DeviceExecExit>(frame.Payload.Span);
-            return string.IsNullOrWhiteSpace(exit?.Error) ? null : exit.Error;
+            return string.IsNullOrWhiteSpace(exit?.Error) ? null : exit;
         }
         catch (System.Text.Json.JsonException) { return null; }
     }

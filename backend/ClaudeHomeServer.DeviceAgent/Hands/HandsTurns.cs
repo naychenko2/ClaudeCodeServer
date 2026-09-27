@@ -211,7 +211,7 @@ internal static class HandsAttach
         var jobName = HandsBridgeArgs.TurnJobPrefix + turnId + "." + Guid.NewGuid().ToString("N")[..8];
         var rewritten = Rewrite(files, runtime.Component.BridgePath, jobName);
 
-        var lease = runtime.MachineLock.TryAcquire() ?? throw new ExecRefusedException(HandsMachineLock.BusyText);
+        var lease = runtime.MachineLock.TryAcquire() ?? throw new ExecRefusedException(HandsMachineLock.BusyText, HandsEndReason.Busy);
         return new HandsTurnLease(lease, jobName, rewritten);
     }
 

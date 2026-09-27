@@ -113,7 +113,7 @@ internal sealed class TurnExecutor
         catch (ExecRefusedException e)
         {
             _log.LogWarning("Ход {TurnId} не запущен: {Reason}", control.TurnId, e.Message);
-            await RefuseAsync(link, control.TurnId, e.Message);
+            await RefuseAsync(link, control.TurnId, e.Message, e.Code);
             return;
         }
 
@@ -311,12 +311,12 @@ internal sealed class TurnExecutor
         }
     }
 
-    private static async Task RefuseAsync(ExecLink link, string? turnId, string reason)
+    private static async Task RefuseAsync(ExecLink link, string? turnId, string reason, string? code = null)
     {
         try
         {
             await link.SendAsync(DeviceExecFrameChannel.Stderr, Encoding.UTF8.GetBytes(reason + "\n"));
-            await link.SendAsync(DeviceExecFrameChannel.Exit, DeviceExecJson.Serialize(new DeviceExecExit(RefusedExitCode, Error: reason)));
+            await link.SendAsync(DeviceExecFrameChannel.Exit, DeviceExecJson.Serialize(new DeviceExecExit(RefusedExitCode, Error: reason, Refusal: code)));
             await link.DrainAsync(TimeSpan.FromSeconds(10));
         }
         catch (OperationCanceledException) { }

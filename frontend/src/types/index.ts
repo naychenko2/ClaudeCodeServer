@@ -748,6 +748,16 @@ export interface ImageLaunchFields {
   timestamp?: number;
 }
 
+// Запись модуля в ленте чата (StoredModuleRecord / ModuleRecordMessage, ADR-019 §2): data —
+// JSON модуля, ядро его не разбирает; fallback — текст строки, когда модуля нет
+export interface ModuleRecordFields {
+  module: string;
+  recordType: string;
+  data?: unknown;
+  fallback: string;
+  timestamp?: number;
+}
+
 // Пометка снимка холста у сообщения чата картинки (ADR-018 §3, StoredUserMessage.ImageSnapshot):
 // revision — ревизия холста на момент отправки; attached=false — холст не менялся, снимок не приложен
 export interface ImageSnapshotMark {
@@ -1151,6 +1161,8 @@ export type ServerMessage = { sessionId: string } & (
   // StoredImageFileMovedMessage. Рисует их модуль редактора через слот chat-item-tool
   | ({ type: 'image_launch' } & ImageLaunchFields)
   | { type: 'image_file_moved'; from: string; to: string; timestamp?: number }
+  // Запись модуля в ленте (ADR-019 §2): живая копия StoredModuleRecord
+  | ({ type: 'module_record' } & ModuleRecordFields)
   | { type: 'truncated' }
   | { type: 'redacted_thinking' }
   | { type: 'exited' }
@@ -2021,6 +2033,9 @@ export type ChatItem =
   // Тихие строки чата картинки: «Вы запустили: …» и «Сохранено как …» (ADR-018 §1, §2)
   | ({ kind: 'image_launch' } & ImageLaunchFields)
   | { kind: 'image_file_moved'; from: string; to: string; timestamp?: number }
+  // Запись модуля (ADR-019 §2): карточку рисует модуль через слот chat-item-tool по ключу
+  // `${module}:${recordType}`, без модуля — строка fallback
+  | ({ kind: 'module_record' } & ModuleRecordFields)
   | { kind: 'truncated' }
   | { kind: 'redacted_thinking' }
   // ts — момент остановки (история: StoredInterruptedMessage.Timestamp); в живой ленте нет

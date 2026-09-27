@@ -259,7 +259,7 @@ export const PERSISTED_KINDS = new Set<ChatItem['kind']>([
   'ask_question', 'plan_review', 'team_plan', 'team_escalation',
   'file_changed', 'result', 'fal_cost', 'glif_cost', 'compact_boundary', 'context_pruned', 'error',
   'work_loop_stopped', 'model_switched', 'branched_from', 'interrupted',
-  'image_launch', 'image_file_moved',
+  'image_launch', 'image_file_moved', 'module_record',
 ]);
 
 // Стоит ли заменить живую ленту историей с сервера: сравнение длин БЕЗ live-only
@@ -768,6 +768,15 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
     case 'image_file_moved':
       if (prev.items.some(it => it.kind === 'image_file_moved' && it.to === msg.to && it.timestamp === msg.timestamp)) return prev;
       return withItems([...prev.items, { kind: 'image_file_moved', from: msg.from, to: msg.to, timestamp: msg.timestamp }]);
+
+    case 'module_record':
+      // Повторная доставка той же записи (веерная рассылка) ленту не удваивает
+      if (prev.items.some(it => it.kind === 'module_record' && it.module === msg.module && it.recordType === msg.recordType
+        && it.timestamp === msg.timestamp && JSON.stringify(it.data) === JSON.stringify(msg.data))) return prev;
+      return withItems([...prev.items, {
+        kind: 'module_record', module: msg.module, recordType: msg.recordType, data: msg.data,
+        fallback: msg.fallback, timestamp: msg.timestamp,
+      }]);
 
     case 'compact_status':
       // Ход компакции: compacting → началась; compact_result — завершилась.

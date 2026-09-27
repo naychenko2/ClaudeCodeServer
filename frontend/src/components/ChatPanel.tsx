@@ -1,6 +1,6 @@
 import { setAudioFocus } from '../lib/audioFocus';
 import { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback, Fragment, type HTMLAttributes } from 'react';
-import { ArrowDown, ArrowUp, RotateCw, CircleHelp, Archive, ArchiveRestore } from 'lucide-react';
+import { ArrowDown, ArrowUp, RotateCw, CircleHelp, Archive, ArchiveRestore, GitBranch } from 'lucide-react';
 import type { Project, Session, ChatItem, SkillInfo, AgentInfo, ClaudeBilling, Persona, Task, WorkLoopState, SessionTeamImplement, TeamPlanDecision, ImageSnapshotMark } from '../types';
 import { ProjectFeature } from '../types';
 import { featureReason, isLocalProject, useProjectFeature } from '../lib/projectCapabilities';
@@ -50,6 +50,7 @@ import { getDraft, setDraft } from '../lib/drafts';
 import { useModelCaps, assistantName, planModelChange } from '../lib/models';
 import { Composer } from './Composer';
 import { ProjectGitBar } from './ProjectGitBar';
+import { ComposerStripHost } from './chat/ComposerStripHost';
 import { C, R, SHADOW, SP, FS, PANEL_ANIM, CHAT_MAX_W, CHAT_GUTTER_L } from '../lib/design';
 import { VAR_PAD_R, VAR_SHIFT, VAR_W, useChatGutter } from '../lib/chatGutter';
 import { navPush, type NavSnapshot } from '../lib/nav';
@@ -2888,7 +2889,26 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
               чата, дерево текущего хода, суммарный diff и кнопки «Зафиксировать»/
               «Опубликовать». Правой панели «Изменения» на мобиле нет — отсюда гейт
               !isMobile; на мобиле о дереве хода сообщает только отметка в ленте. */}
-          {project && !isMobile && !embedded && <ProjectGitBar project={project} session={session} turnTree={turnTree} turnTreeLive={isWaiting} onCommitOwn={handleCommitOwn} onCommitAll={handleCommitAll} />}
+          {/* Полосы над композером (реестр composer-strip): одна за раз, Git — встроенный
+              вклад каркаса; какая видна — решает стор lib/composerStrips. */}
+          {project && !embedded && (
+            <ComposerStripHost projectId={project.id} sessionId={session.id} isMobile={isMobile === true}
+              builtins={[{
+                name: 'git', order: 0,
+                render: ({ switcher }) => (
+                  <>
+                    {switcher && <div style={{ display: 'flex', marginTop: SP.xs }}>{switcher}</div>}
+                    <ProjectGitBar project={project} session={session} turnTree={turnTree} turnTreeLive={isWaiting} onCommitOwn={handleCommitOwn} onCommitAll={handleCommitAll} />
+                  </>
+                ),
+                action: {
+                  title: 'Git',
+                  icon: <GitBranch size={14} strokeWidth={ICON_STROKE} />,
+                  // Правой панели «Изменения» на мобиле нет — git-полоса там не показывается
+                  isAvailable: () => !isMobile,
+                },
+              }]} />
+          )}
           {/* Подъём композера над лентой даёт сама белая карточка (Composer), а не эта
               обёртка: полоса контролов вынесена из карточки, и тень на обёртке рисовала
               серый ореол вокруг пустой области под ней и полоску над полем ввода. */}

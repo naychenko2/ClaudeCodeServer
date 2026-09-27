@@ -1,7 +1,7 @@
-import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, type ReactNode } from 'react';
+import { Fragment, useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, useSyncExternalStore, type ReactNode } from 'react';
 import type { Project } from '../types';
 import { canRunTurn } from '../lib/projectCapabilities';
-import { AlertTriangle, AudioLines, Ban, ArrowUp, Check, ChevronDown, Eye, EyeOff, FolderGit2, Lock, Mic, Paperclip, Plus, RefreshCw, ShieldCheck, Users, VolumeX, Unplug, WifiOff, X } from 'lucide-react';
+import { AlertTriangle, AudioLines, Ban, ArrowUp, Check, ChevronDown, Eye, EyeOff, FolderGit2, Lock, MessageSquare, Mic, Paperclip, Plus, RefreshCw, ShieldCheck, Users, VolumeX, Unplug, WifiOff, X } from 'lucide-react';
 import { C, R, FS, FONT, MODAL_W, SHADOW, SP, Z } from '../lib/design';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset } from '../lib/rateLimit';
 import { SkillsDropdown } from './SkillsDropdown';
@@ -34,7 +34,10 @@ import { Waveform, fmtRecTime } from './chat/VoiceRecordingRow';
 import { getDraft, setDraft } from '../lib/drafts';
 import { middleEllipsis } from '../lib/paths';
 import { showToast } from '../lib/toast';
-import { IconButton, Modal, Notice } from './ui';
+import { Button, IconButton, Modal, Notice } from './ui';
+import { SLOT_COMPOSER_CHIP, SLOT_COMPOSER_MODE, useSlot } from '../lib/subsystems/registry';
+import type { ComposerChipCtx, ComposerModeApi, ComposerModeCtx } from '../lib/subsystems/registry';
+import { getComposerStripsVersion, subscribeComposerStrips } from '../lib/composerStrips';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { useVoiceInput } from '../hooks/useVoiceInput';
 import { useHandsFree, type SpeechPhase } from '../hooks/useHandsFree';
@@ -598,6 +601,19 @@ export function Composer({
   useEffect(() => {
     setDraft(sessionId, text);
   }, [sessionId, text]);
+  // Режимы поля ввода от подсистем (слот composer-mode, например «Картинка»): текст режима
+  // уходит мимо агента через onSubmit вклада и хранится отдельно от черновика чата.
+  // Доступность режима зависит от состояния владельца; пересчитываемся по сигналу стора
+  // полос: владелец режима и полосы — одна подсистема, её выбор проходит через этот стор
+  useSyncExternalStore(subscribeComposerStrips, getComposerStripsVersion, getComposerStripsVersion);
+  const modeCtx: ComposerModeCtx = { projectId: project?.id ?? null, sessionId };
+  const slotModes = useSlot<ComposerModeCtx, ComposerModeApi>(SLOT_COMPOSER_MODE)
+    .filter(c => c.name && c.action && c.action.isAvailable(modeCtx));
+  const slotChips = useSlot<ComposerChipCtx>(SLOT_COMPOSER_CHIP);
+  const [modeId, setModeId] = useState<string | null>(null);
+  // Режим пропал (условие стало ложным) — поле само возвращается в «Чат»
+  const activeMode = slotModes.find(c => c.name === modeId)?.action ?? null;
+  const [modeText, setModeText] = useState('');
   // Преднастройка из раздела «Заметки»: «Спросить Claude про это» кладёт контекст
   // заметки в sessionStorage — забираем при появлении композера и по событию
   // (на случай, если чат уже открыт и композер смонтирован).
@@ -879,7 +895,7 @@ export function Composer({
     setModeMenuBottom(r ? window.innerHeight - r.top + 6 : 80);
   });
 
-  const hasText = text.trim().length > 0;
+  const hasText = (activeMode ? modeText : text).trim().length > 0;
 
   // Обновление состояния autocomplete при каждом изменении текста
   const updateSkillDropdown = useCallback((newText: string, cursorPos: number) => {
@@ -1011,6 +1027,19 @@ export function Composer({
     // ADR-016 §3.4: локальный проект с недоступной exec (устройство офлайн/нет
     // харнеса). Причину уже показал баннер над полем, здесь только гасим Enter
     if (execBlocked) return false;
+    // Режим подсистемы: текст — её, агенту ничего не уходит. Отказ вклада (исключение) —
+    // текст остаётся в поле
+    if (activeMode && overrideText === undefined) {
+      const mt = modeText.trim();
+      if (!mt) return false;
+      try {
+        await activeMode.onSubmit(modeCtx, mt);
+        setModeText('');
+        return true;
+      } catch {
+        return false;
+      }
+    }
     const t = (overrideText ?? text).trim();
     // Обычная отправка руками снимает пометку голосового хода: её текст человек писал сам,
     // и вернуть его в поле при прерывании — правильное поведение
@@ -1383,7 +1412,7 @@ export function Composer({
   const containerStyle: React.CSSProperties = {
     position: 'relative',
     background: C.bgWhite,
-    border: `1px solid ${dragOver || hasText ? C.accent : C.border}`,
+    border: `1px solid ${dragOver || hasText || activeMode ? C.accent : C.border}`,
     borderRadius: R.xxl,
     padding: isMobile ? '8px 10px' : '7px 8px',
     // Подъём как у островов, но разлётом ВВЕРХ (SHADOW.lift): композер стоит на
@@ -1657,13 +1686,29 @@ export function Composer({
   ) : (
     // Обёртка нужна ghost-слою подсказки: он позиционируется поверх ПУСТОГО textarea
     // (подсказка видна только при пустом поле, совмещать с текстом юзера не нужно)
-    <div style={{ position: 'relative', flex: 1, minWidth: 0, width: isMobile ? '100%' : undefined, display: 'flex' }}>
+    <div style={{ position: 'relative', flex: 1, minWidth: 0, width: isMobile ? '100%' : undefined, display: 'flex', alignItems: 'center' }}>
+      {slotModes.length > 0 && (
+        // Переключатель режимов — в одну строку с полем: композер не становится выше
+        <div data-composer-modes="" style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0, marginRight: SP.xs }}>
+          <IconButton size="sm" active={!activeMode} title={`Чат — сообщение ${asstName}`} ariaLabel="Режим «Чат»"
+            onClick={() => setModeId(null)}>
+            <MessageSquare size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+          </IconButton>
+          {slotModes.map(m => (
+            <IconButton key={m.name} size="sm" active={modeId === m.name} title={m.action!.title} ariaLabel={`Режим «${m.action!.title}»`}
+              onClick={() => { setModeId(m.name!); textareaRef.current?.focus(); }}>
+              {m.action!.icon}
+            </IconButton>
+          ))}
+        </div>
+      )}
       <textarea
         autoComplete="off"
         ref={textareaRef}
         className="cc-composer-input"
-        value={text}
+        value={activeMode ? modeText : text}
         onChange={(e) => {
+          if (activeMode) { setModeText(e.target.value); return; }
           setText(e.target.value);
           updateSkillDropdown(e.target.value, e.target.selectionStart ?? e.target.value.length);
         }}
@@ -1671,7 +1716,7 @@ export function Composer({
         onInput={autoResize}
         onPaste={handlePaste}
         // Пока видна ghost-подсказка, обычный плейсхолдер прячем — тексты бы наложились
-        placeholder={suggestionVisible ? '' : teamMechMeta ? teamMechMeta.placeholder : `Спросите ${asstName}…`}
+        placeholder={activeMode ? activeMode.placeholder(modeCtx) : suggestionVisible ? '' : teamMechMeta ? teamMechMeta.placeholder : `Спросите ${asstName}…`}
         rows={1}
         style={{
           flex: 1,
@@ -2436,10 +2481,22 @@ export function Composer({
         </div>
       )}
 
+      {/* Чипы подсистем (слот composer-chip): вклад сам решает, рисоваться ли */}
+      {slotChips.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, padding: '0 12px' }}>
+          {slotChips.map(c => (
+            <Fragment key={c.name}>{c.render?.({ projectId: project?.id ?? null, sessionId, isMobile: !!isMobile })}</Fragment>
+          ))}
+        </div>
+      )}
+
       {/* В белой рамке — только сам ввод: поле, микрофон и «отправить».
           Выросшее выше столбца кнопок поле разворачивает правую группу
           вертикально (columnRight) — кнопки прижимаются к низу, «отправить»
           остаётся в правом нижнем углу, поле забирает ширину карточки */}
+      {activeMode?.hint && !talkActive && (
+        <div data-composer-mode-hint="" style={{ padding: `${SP.xxs}px ${SP.sm}px 0` }}>{activeMode.hint(modeCtx)}</div>
+      )}
       <div style={{ display: 'flex', alignItems: columnRight ? 'flex-end' : 'center', gap: 6 }}>
         {inputArea}
         <div style={{ display: 'flex', flexDirection: columnRight ? 'column' : 'row', alignItems: 'center', gap: 6, flexShrink: 0 }}>
@@ -2452,7 +2509,14 @@ export function Composer({
             ? talkStopButton
             : isListening
               ? <>{cancelRecBtn}{confirmRecBtn}</>
-              : <>{phrasesButton}{micButton}{!canSend && !isGenerating && voiceButton ? voiceButton : sendButton}</>}
+              : activeMode
+                ? (
+                  <Button size="sm" pill variant="primary" disabled={!hasText || execBlocked} data-composer-send=""
+                    onClick={() => void handleSend()}>
+                    {activeMode.submitLabel ? activeMode.submitLabel(modeCtx) : <ArrowUp size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+                  </Button>
+                )
+                : <>{phrasesButton}{micButton}{!canSend && !isGenerating && voiceButton ? voiceButton : sendButton}</>}
         </div>
       </div>
       </div>

@@ -143,6 +143,11 @@ export { NOTES_KEYS } from '../../pages/workspace/panelCatalog';
 // ─── pages/workspace/panelStackState ─────────────────────────────────────────
 export { notesPanels, zoneOf } from '../../pages/workspace/panelStackState';
 
+// ─── composerStrips ──────────────────────────────────────────────────────────
+// Владелец полосы над композером просит показать её в чате и снимает запрос
+// (правило старшинства — в самом сторе, ADR-019 решение 3)
+export { requestStrip, releaseStrip } from '../composerStrips';
+
 // ─── signalr ─────────────────────────────────────────────────────────────────
 export { onMessage, onReconnected } from '../signalr';
 

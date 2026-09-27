@@ -1043,11 +1043,24 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
   // Своя карточка записи от подсистемы (редактор картинок: image_generate, image_launch…):
   // ключ — имя инструмента у tool_use, иначе kind. Прямых веток по именам модулей в ядре нет
   const chatSessionId = useContext(ChatSessionContext);
-  const ownView = useSlotItem<ChatItemToolCtx>('chat-item-tool', item.kind === 'tool_use' ? item.name : item.kind);
+  // Запись модуля (module_record) — по ключу `${module}:${recordType}`
+  const ownKey = item.kind === 'tool_use' ? item.name
+    : item.kind === 'module_record' ? `${item.module}:${item.recordType}` : item.kind;
+  const ownView = useSlotItem<ChatItemToolCtx>('chat-item-tool', ownKey);
   if (ownView?.render) {
     return <>{ownView.render({ item, online, projectId: project?.id ?? null, sessionId: chatSessionId, persona })}</>;
   }
   switch (item.kind) {
+    case 'module_record':
+      // Модуль выключен или не знает записи — готовый текст строки от сервера
+      return item.fallback ? (
+        <div data-module-record={ownKey} style={{
+          alignSelf: 'center', maxWidth: 420, textAlign: 'center', overflowWrap: 'anywhere',
+          fontSize: FS.xs, color: C.textMuted, lineHeight: 1.45,
+        }}>
+          {item.fallback}
+        </div>
+      ) : null;
     case 'user_message': {
       // Служебный ход механики штаба (ответ на карточку, возврат в интервью, сводка волны) —
       // компактная плашка-разделитель вместо пузыря «Автоматически» с сырым текстом директивы

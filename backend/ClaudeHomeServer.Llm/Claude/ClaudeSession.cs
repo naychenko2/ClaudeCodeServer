@@ -2224,12 +2224,15 @@ public class ClaudeSession : ILlmSessionAdapter
                         details = $"[Win32:206]{ex.Message}";
                         text = TurnFailureText.PromptOverflow;
                     }
-                    else if (ex is Execution.DeviceExecRefusedException)
+                    else if (ex is Execution.DeviceExecRefusedException refused)
                     {
                         // Отказ устройства локального проекта: текст отказа — человеку, маркер —
                         // классификатору фолбэка (другая пара не лечит офлайн-устройство)
                         details = TurnErrorClassifier.DeviceRefusedMarker + ex.Message;
                         text = TurnFailureText.ForException(ex);
+                        // Руки держит другой ход этой машины — бейдж говорит это сам, а не «устройство недоступно»
+                        if (refused.Reason == Execution.DeviceExecRefusal.HandsBusy)
+                            await _onMessage(new HandsStatusMessage(HandsChatStates.Unavailable, Reason: HandsEndReason.Busy));
                     }
                     else if (ex is System.ComponentModel.Win32Exception w32)
                     {

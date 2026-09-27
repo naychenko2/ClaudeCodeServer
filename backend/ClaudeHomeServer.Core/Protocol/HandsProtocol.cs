@@ -195,6 +195,12 @@ public static class HandsEndReason
     /// <summary>Компонент убран командой <c>ai-home-agent hands disable</c> посреди хода.</summary>
     public const string HandsDisabled = "disabled";
     public const string AgentStopping = "agent-stopping";
+    /// <summary>
+    /// Ход не получил руки: их держит другой ход на этой машине (<see cref="HandsMachineLock"/>).
+    /// Приходит кодом отказа <see cref="DeviceExecExit.Refusal"/>, в чат — <c>Reason</c> у
+    /// <see cref="HandsChatStates.Unavailable"/>.
+    /// </summary>
+    public const string Busy = "busy";
 }
 
 /// <summary>

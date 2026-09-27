@@ -82,4 +82,8 @@ internal sealed class InProcessExecStream(string execId) : IDeviceExecStream
 
     public ValueTask DeviceExitAsync(int? code, string? signal = null) =>
         DeviceSendAsync(DeviceExecFrameChannel.Exit, DeviceExecJson.Serialize(new DeviceExecExit(code, signal)));
+
+    // Отказ агента кадром Exit: текст для человека и машинный код
+    public ValueTask DeviceRefuseAsync(string error, string? refusal = null) =>
+        DeviceSendAsync(DeviceExecFrameChannel.Exit, DeviceExecJson.Serialize(new DeviceExecExit(127, Error: error, Refusal: refusal)));
 }

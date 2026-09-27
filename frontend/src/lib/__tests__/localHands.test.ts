@@ -110,6 +110,12 @@ describe('handsBadgeView', () => {
     expect(v.title).not.toContain('заняты');
   });
 
+  it('unavailable с причиной busy — руки заняты другим ходом, без «Стоп»', () => {
+    const v = handsBadgeView({ state: HandsChatState.Unavailable, reason: HandsEndReason.Busy }, 'home-pc');
+    expect(v).toMatchObject({ tone: 'warning', canStop: false, text: 'Руки заняты другим ходом на этом устройстве' });
+    expect(v.title).not.toContain('не на связи');
+  });
+
   it('allowed — руки готовы, без «Стоп»', () => {
     expect(handsBadgeView({ state: HandsChatState.Allowed }, 'pc')).toMatchObject({ text: 'Руки готовы', canStop: false });
   });

@@ -83,6 +83,8 @@ public enum DeviceExecRefusal
     AgentOutdated,
     /// <summary>Агент отказал ходу по кадру spawn: папка вне разрешённых корней машины, нет копии CLI.</summary>
     AgentRefused,
+    /// <summary>Агент отказал ходу с руками: их держит другой ход на этой машине (<see cref="Protocol.HandsEndReason.Busy"/>).</summary>
+    HandsBusy,
     /// <summary>Агент устройства не объявил выдачу папки проекта (старая версия).</summary>
     NoBindFolderCapability,
 }

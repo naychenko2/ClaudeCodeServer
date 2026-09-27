@@ -849,4 +849,24 @@ public class McpToolsetStabilityTests
         body.Should().NotContain("_currentTurn",
             "состояние хода не должно влиять на состав инструментов памяти");
     }
+
+    /// <summary>
+    /// Руки локального проекта (ADR-016 §7) — свойство чата: маркер рук, запреты HandsTurnRules и
+    /// режим прав входят в сигнатуру запуска. Два хода одного чата с руками обязаны дать ОДНУ
+    /// сигнатуру — иначе каждый ход перезапускал бы CLI со всеми MCP (и с мостом рук).
+    /// </summary>
+    [Fact]
+    public async Task РукиВключены_ДваХода_ОднаСигнатура()
+    {
+        using var h = new HandsTurnHarness(true, [ClaudeHomeServer.Protocol.HandsProviders.Claude],
+            mode: ClaudeHomeServer.Models.ClaudeMode.Bypass);
+        var first = await h.RunTurnAsync("первый ход");
+        var second = await h.RunTurnAsync("второй ход, другой текст");
+
+        first.McpServers!.ContainsKey(ClaudeHomeServer.Protocol.DeviceExecPlaceholders.HandsServerName)
+            .Should().BeTrue("кейс про чат с руками");
+        first.Signature.Should().NotBeNullOrEmpty();
+        second.Signature.Should().Be(first.Signature,
+            "руки — свойство чата, а не хода: сигнатура запуска между ходами не мерцает");
+    }
 }

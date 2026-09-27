@@ -774,6 +774,9 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDesktopDeviceDi
     ClaudeHomeServer.Services.Desktop.DesktopDeviceDirectory>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDesktopHandsNotifier,
     ClaudeHomeServer.Services.Composition.DesktopHandsNotifier>();
+// Статус рук локального проекта (ADR-016 §7) — в чат хода из донесений агента
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.ILocalHandsNotifier,
+    ClaudeHomeServer.Services.Composition.LocalHandsNotifier>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDesktopCallCanceller,
     ClaudeHomeServer.Services.Desktop.DesktopRouterCallCanceller>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DesktopHandsSessionService>();

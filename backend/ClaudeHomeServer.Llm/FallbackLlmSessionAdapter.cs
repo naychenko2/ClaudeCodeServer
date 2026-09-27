@@ -105,6 +105,10 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // Транскрипт чата на диске сервера. false — локальный проект (ADR-016): транскрипт на
     // устройстве в единственном профиле CLI, провайдера выбирает шлюз — переносить нечего
     private readonly bool _transcriptOnServer;
+    // Руки локального проекта (LlmSessionContext.HandsEnabled/HandsProviders): ход с руками
+    // уходит по цепочке только к провайдерам, которым владелец доверил руки (TrimChainForHands)
+    private readonly bool _handsEnabled;
+    private readonly IReadOnlyList<string>? _handsProviders;
     private readonly CancellationTokenSource _cts = new();
 
     // Активная оркестрация фолбэка (null — сообщения проходят насквозь)
@@ -141,7 +145,9 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         Turn.ITurnEventBus? events = null,
         TimeSpan? egressRetryDelay = null,
         ILocalEndpointProbe? localProbe = null,
-        bool transcriptOnServer = true)
+        bool transcriptOnServer = true,
+        bool handsEnabled = false,
+        IReadOnlyList<string>? handsProviders = null)
     {
         _inner = inner;
         _effectiveModel = effectiveModel;
@@ -165,6 +171,8 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         _events = events;
         _localProbe = localProbe;
         _transcriptOnServer = transcriptOnServer;
+        _handsEnabled = handsEnabled;
+        _handsProviders = handsProviders;
         _egressRetryDelay = egressRetryDelay ?? EgressRetryDelay;
         _profileRoot = initialProfileRoot ?? ResolveRootFor(CurrentProviderKey(Info.Model));
     }
@@ -492,7 +500,8 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         // Цепочка хода (ADR-007 §4): конкретные модели пресета, первый = основной, остальные
         // = план фолбэка. Есть цепочка (Count > 1) — фолбэк идёт по её шагам; нет (одноэлементная
         // или пустая) — после пула честная ошибка, автоподбора больше нет. Вычисляем один раз за ход.
-        var chain = TrimChainForDesktop(_effectiveChain?.Invoke() ?? Array.Empty<string>());
+        var chain = TrimChainForHands(TrimChainForDesktop(_effectiveChain?.Invoke() ?? Array.Empty<string>()),
+            out var handsTrimmed);
         var chainIndex = 0;
         // Отладка «почему выбралась эта модель»: построенная цепочка хода одной строкой.
         LogDebug($"Цепочка хода ({Info.Id}): [{string.Join(", ", chain)}]");
@@ -953,7 +962,11 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                     // + «ни одна не ответила»); тупик сразу (нет пула и цепочки) — FailClosed:
                     // одиночный error, причина уже в ленте от ErrorMessage(ExpectResultFollows).
                     turnOutcome = "failed";
-                    if (cls == FallbackErrorClass.ContextOverflow || attempted.Count > 1)
+                    // Цепочку обрезали руки — причина тупика в недоверенных провайдерах, и
+                    // человек должен прочитать именно это, а не «ни одна модель не ответила»
+                    if (handsTrimmed && cls != FallbackErrorClass.ContextOverflow)
+                        await FailHandsNowhereAsync(turn, end);
+                    else if (cls == FallbackErrorClass.ContextOverflow || attempted.Count > 1)
                         await FailExhaustedAsync(turn, trace, substitutions, end);
                     else
                         await FailClosedAsync(turn, end);
@@ -1430,6 +1443,56 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         // без строки в логе исчерпание цепочки в десктопном чате неотличимо от поломки.
         LogInfo($"Десктопный чат: цепочка обрезана до пула Claude ({chain.Count} → {kept.Count} шагов) — транскрипт с кадрами рабочего стола стороннему провайдеру не отдаём");
         return kept;
+    }
+
+    // Руки локального проекта (ADR-016 §7): в окнах могут быть любые данные человека, а шаг к
+    // другому провайдеру — это копия транскрипта со снимками окон ему. Поэтому ход с руками
+    // идёт по цепочке только к провайдерам, которым владелец доверил руки. Первый шаг не трогаем
+    // (как в TrimChainForDesktop): это пара, на которой чат живёт. Не доверен сам первый шаг —
+    // ход идёт без рук (ClaudeSession.HandsActiveNow), и резать нечего.
+    private IReadOnlyList<string> TrimChainForHands(IReadOnlyList<string> chain, out bool trimmed)
+    {
+        trimmed = false;
+        if (!_handsEnabled || chain.Count <= 1 || !HandsAllowed(chain[0])) return chain;
+        var kept = new List<string> { chain[0] };
+        for (var i = 1; i < chain.Count; i++)
+            if (HandsAllowed(chain[i])) kept.Add(chain[i]);
+        if (kept.Count == chain.Count) return chain;
+        trimmed = true;
+        LogInfo($"Чат с руками: цепочка обрезана до доверенных провайдеров ({chain.Count} → {kept.Count} шагов)");
+        return kept;
+    }
+
+    // Провайдер шага для списка рук: подписки пула Claude — одно "claude", остальные — ключ реестра
+    private bool HandsAllowed(string? model) =>
+        HandsProviders.Allowed(_handsProviders, _providers?.ProviderKey(model) ?? HandsProviders.Claude);
+
+    // Финал «ход с руками идти некуда»: основной провайдер отказал, а доверенных в цепочке нет.
+    // Порядок как у FailClosedAsync: ошибка {ExpectResultFollows} строго перед result.
+    private async Task FailHandsNowhereAsync(FallbackTurn turn, AttemptEnd end)
+    {
+        List<ServerMessage> held;
+        lock (turn.Sync)
+        {
+            held = [.. turn.Held];
+            turn.Held.Clear();
+            turn.Settled = true;
+        }
+        var orig = held.OfType<ResultMessage>().FirstOrDefault();
+        var result = orig is { Subtype: "error" }
+            ? orig
+            : new ResultMessage("error", orig?.DurationMs ?? 0, orig?.NumTurns ?? 0,
+                orig?.Usage, orig?.TotalCostUsd,
+                ApiErrorStatus: orig?.ApiErrorStatus ?? end.Result?.ApiErrorStatus);
+        var names = (_handsProviders ?? [])
+            .Select(k => string.Equals(k, HandsProviders.Claude, StringComparison.OrdinalIgnoreCase)
+                ? "Claude" : _providers?.GetByKey(k)?.DisplayName ?? k)
+            .Distinct(StringComparer.Ordinal).ToList();
+        await _downstream(new ErrorMessage(HandsTurnRules.FallbackNowhereText(names),
+            ExpectResultFollows: true, Details: HeldErrorDetails(held) ?? end.ErrorText));
+        await _downstream(result);
+        foreach (var m in held.Where(m => m is not ResultMessage and not ErrorMessage { ExpectResultFollows: true }))
+            await _downstream(m);
     }
 
     // Оценка размера контекста текущего хода. Составная (собирается фабрикой): живое значение

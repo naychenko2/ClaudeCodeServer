@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Гейт рук (план docs/research/hands-plan-2026-09.md, Ш2): вся логика «что можно модели»
+       без единого вызова WinAPI, чтобы тесты шли на Linux CI. Окна, процессы и Job — за
+       интерфейсом IHandsWindowSystem; настоящая реализация живёт в HandsBridge.
+       Контракт Ш1 (hands-apps.json, запрещённые программы) подключён исходником, а не ссылкой
+       на Core: Core тянет ASP.NET, мосту он не нужен. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>ClaudeHomeServer.HandsBridge.Policy</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\ClaudeHomeServer.Core\Protocol\HandsProtocol.cs" Link="Contract\HandsProtocol.cs" />
+  </ItemGroup>
+
+</Project>

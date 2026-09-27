@@ -138,6 +138,10 @@ public class Project
     // Дефолт false: старые записи projects.json читаются штатно, BackupSchema.Version не
     // двигается (аддитивное поле с дефолтом формат не ломает).
     public bool DesktopAgentEnabled { get; set; }
+    // Руки на устройстве локального проекта (ADR-016 §7, флаг local-hands) — одно из условий
+    // ProjectCapabilities.HandsRefusal. Это свойство чата, а не хода: начатые чаты подхватят
+    // перемену со следующего сообщения через перезапуск CLI. Дефолт false — формат не ломается.
+    public bool HandsEnabled { get; set; }
     // Автоимпорт «Историй решений»: наблюдать ветку ccs/dossiers/v1 и подтягивать
     // паспорта по новому tip (сценарий «вторая машина / сосед по общей папке» —
     // ветку привозит чужой git pull, DossierAutoImporter только читает её).

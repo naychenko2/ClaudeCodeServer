@@ -239,6 +239,10 @@ public sealed record DesktopCancelCommand(string CallId, string Reason);
 /// совместимая. Хеш, размер и путь архива (относительно <c>/agent/</c>) — под RID из Hello;
 /// архива под этот RID нет — поля пустые. Хеш едет по аутентифицированному каналу
 /// устройства, сам архив агент качает анонимной ручкой.
+///
+/// Компонент рук (ADR-016 §7): <see cref="HandsArchivePath"/>, <see cref="HandsArchiveSha256"/>
+/// и <see cref="HandsArchiveSize"/> — архив <c>HandsBridge</c> ТОЙ ЖЕ версии, что у агента, под
+/// его RID. Нет такого архива — поля пустые, и <c>ai-home-agent hands enable</c> честно отказывает.
 /// </summary>
 public sealed record DeviceHelloAck(
     int ProtocolVersion,
@@ -253,7 +257,10 @@ public sealed record DeviceHelloAck(
     string? AgentMinVersion = null,
     string? AgentArchiveSha256 = null,
     long? AgentArchiveSize = null,
-    string? AgentArchivePath = null);
+    string? AgentArchivePath = null,
+    string? HandsArchiveSha256 = null,
+    long? HandsArchiveSize = null,
+    string? HandsArchivePath = null);
 
 /// <summary>
 /// Открыть канал исполнения: устройство отвечает WebSocket-подключением на
@@ -377,10 +384,17 @@ public static class DeviceCapabilities
     /// <summary>Ретранслятор чтения для других устройств (этап 5).</summary>
     public const string Relay = "relay";
 
+    /// <summary>
+    /// Руки (ADR-016, раздел «Руки»): компонент <c>HandsBridge</c> установлен командой
+    /// <c>ai-home-agent hands enable</c> и его SHA-256 сверен. Сеанса на машине нет (решение
+    /// владельца 1в): объявленная возможность и тумблер проекта — всё, что нужно ходу.
+    /// </summary>
+    public const string Hands = "hands";
+
     /// <summary>Выдача папки проекта (<see cref="DeviceExecPurposes.BindFolder"/>); старый агент её не объявляет.</summary>
     public const string BindFolder = "bind-folder";
 
-    public static readonly IReadOnlyList<string> All = [Exec, Files, Relay, BindFolder];
+    public static readonly IReadOnlyList<string> All = [Exec, Files, Relay, Hands, BindFolder];
 
     /// <summary>Только известные значения, без дублей, в порядке <see cref="All"/>.</summary>
     public static List<string> Normalize(IEnumerable<string>? declared)

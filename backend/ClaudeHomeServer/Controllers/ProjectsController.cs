@@ -47,8 +47,14 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         // осиротевший дефолт (как в AuthController.Me для личной)
         var defaultPersonaId = p.DefaultPersonaId is { } dpid && personas.Get(dpid, UserId) is not null
             ? dpid : null;
-        return new { p.Id, p.Name, p.RootPath, RelativePath = relativePath, p.CreatedAt, p.UpdatedAt, p.GroupId, p.SystemPrompt, p.ShowHiddenFiles, p.PermissionRules, p.BoardColumns, p.TagRegistry, Icon = ProjectIconDto(p.Icon), p.McpServersOn, p.DesktopAgentEnabled, Background = Services.Backgrounds.ProjectBackgroundView.Of(p), BuiltInSystemPrompt = ProjectManager.BuiltInSystemPrompt, SessionCount = sessions.CountByProject(p.Id), DefaultPersonaId = defaultPersonaId, p.OnboardingSessionId, p.PresetKey, p.AutoImportDossiers, p.ArchiveAfterDays, p.DeviceId, Device = DeviceDto(device), Capabilities = ProjectCapabilities.For(p, device), FolderNotice = folderNotice };
+        return new { p.Id, p.Name, p.RootPath, RelativePath = relativePath, p.CreatedAt, p.UpdatedAt, p.GroupId, p.SystemPrompt, p.ShowHiddenFiles, p.PermissionRules, p.BoardColumns, p.TagRegistry, Icon = ProjectIconDto(p.Icon), p.McpServersOn, p.DesktopAgentEnabled, p.HandsEnabled, HandsRefusal = HandsToggleRefusal(p, device), Background = Services.Backgrounds.ProjectBackgroundView.Of(p), BuiltInSystemPrompt = ProjectManager.BuiltInSystemPrompt, SessionCount = sessions.CountByProject(p.Id), DefaultPersonaId = defaultPersonaId, p.OnboardingSessionId, p.PresetKey, p.AutoImportDossiers, p.ArchiveAfterDays, p.DeviceId, Device = DeviceDto(device), Capabilities = ProjectCapabilities.For(p, device), FolderNotice = folderNotice };
     }
+
+    // Можно ли включить руки проекта (ADR-016 §7): матрица без тумблера самого проекта —
+    // человеку нужна причина, по которой тумблер недоступен, а не «выключено тумблером».
+    // null — тумблер доступен.
+    private string? HandsToggleRefusal(Project p, ClaudeHomeServer.Services.Execution.DeviceExecStatus? device) =>
+        ProjectCapabilities.HandsRefusal(p, device, flags.IsEnabled(UserId, FeatureFlagKeys.LocalHands), projectHandsEnabled: true);
 
     // Состояние устройства локального проекта (ADR-016); у серверного — null. Канала нет
     // (подсистема устройств выключена) — устройство считается ненайденным, а не падает.
@@ -436,6 +442,23 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         return Ok(new { project = WithCount(updated), handsStopped = stopped });
     }
 
+    // Тумблер рук локального проекта (ADR-016 §7). Включение — только когда матрица пускает
+    // (флаг, локальный проект, руки установлены на устройстве); выключение доступно всегда.
+    // Руки — свойство чата: адаптеры живых чатов проекта пересоздаются при следующем сообщении.
+    // Идущий ход доработает со старым составом — гасит руки на месте человек у машины («Стоп»).
+    [HttpPut("{id}/hands")]
+    public IActionResult SetHands(string id, [FromBody] SetHandsRequest req)
+    {
+        var p = projects.GetById(id);
+        if (p is null || p.OwnerId != UserId) return NotFound();
+        if (req.Enabled && HandsToggleRefusal(p, DeviceStatusOf(p)) is { } refusal)
+            return BadRequest(new { error = refusal });
+
+        var updated = projects.SetHandsEnabled(id, req.Enabled);
+        sessions.InvalidateHandsSessions(UserId, id);
+        return Ok(WithCount(updated));
+    }
+
     // Порог автоправила архивации чатов проекта (флаг chat-auto-archive, план v4 шаг 6):
     // убирать в архив чаты проекта без сообщений дольше N дней. days = null — наследовать
     // личный порог владельца. Настройка за флагом: ручной архив и раздел «Архив» работают
@@ -666,6 +689,7 @@ public record SetProjectDeviceRequest(string? DeviceId, string? RootPath = null)
 // null = не менять, пустой список = «никто не включён»).
 // Enabled — грань десктопного агента в проекте (ADR-008): выключение гасит сеансы рук
 public record SetDesktopAgentRequest(bool Enabled);
+public record SetHandsRequest(bool Enabled);
 // Порог автоправила архивации проекта (дней); null — наследовать личный порог владельца
 public record SetProjectArchiveDaysRequest(int? Days);
 

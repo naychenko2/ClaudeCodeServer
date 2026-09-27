@@ -108,9 +108,13 @@ public sealed class RemoteProcessRunner : IProcessLauncher
         var spawn = BuildSpawn(spec);
         // Отказ шлюза — DeviceExecRefusedException с его текстом, до канала и ретранслятора
         var gateway = StartGatewayTurn(spec);
+        // Ход с маркером рук: донесения агента о руках принимаются только по нему (ADR-016 §7).
+        // Регистрация — ДО отправки spec: «active» агент шлёт раньше, чем мы дождёмся вердикта
+        var hands = HasHandsMarker(spawn);
         IDeviceExecStream? stream = null;
         try
         {
+            if (hands) DeviceHandsTurns.Register(_ownerId, _deviceId, turnId, spec.SessionId!);
             var control = DeviceExecJson.Serialize(
                 new DeviceExecControl(DeviceExecControlOps.Spawn, turnId, spawn, gateway));
             if (control.Length > DeviceExecProtocol.MaxPayloadBytes)
@@ -128,6 +132,8 @@ public sealed class RemoteProcessRunner : IProcessLauncher
             exec.Run(() =>
             {
                 Execs.TryRemove(new KeyValuePair<string, RemoteExec>(exec.Key, exec));
+                // Не Remove: итог о руках агент шлёт уже после кадра Exit
+                if (hands) DeviceHandsTurns.End(_ownerId, _deviceId, turnId);
                 _gateway.EndTurn(gateway.TurnId);
             });
             if (spec.Track) ProcessRegistry.Register(exec.Relay);
@@ -135,6 +141,7 @@ public sealed class RemoteProcessRunner : IProcessLauncher
         }
         catch
         {
+            if (hands) DeviceHandsTurns.Remove(_ownerId, _deviceId, turnId);
             _gateway.EndTurn(gateway.TurnId);
             if (stream is not null) _ = stream.DisposeAsync().AsTask();
             throw;
@@ -156,8 +163,10 @@ public sealed class RemoteProcessRunner : IProcessLauncher
             {
                 head.Add(frame);
                 if (frame.Channel == DeviceExecFrameChannel.Stderr) continue;
-                if (frame.Channel == DeviceExecFrameChannel.Exit && ExitError(frame) is { } error)
-                    throw new DeviceExecRefusedException(DeviceExecRefusal.AgentRefused, error);
+                if (frame.Channel == DeviceExecFrameChannel.Exit && ExitError(frame) is { } exit)
+                    throw new DeviceExecRefusedException(
+                        exit.Refusal == HandsEndReason.Busy ? DeviceExecRefusal.HandsBusy : DeviceExecRefusal.AgentRefused,
+                        exit.Error!);
                 break;
             }
         }
@@ -165,12 +174,12 @@ public sealed class RemoteProcessRunner : IProcessLauncher
         return head.Count == 0 ? stream : new PrefetchedStream(stream, head);
     }
 
-    private static string? ExitError(DeviceExecFrame frame)
+    private static DeviceExecExit? ExitError(DeviceExecFrame frame)
     {
         try
         {
             var exit = DeviceExecJson.Deserialize<DeviceExecExit>(frame.Payload.Span);
-            return string.IsNullOrWhiteSpace(exit?.Error) ? null : exit.Error;
+            return string.IsNullOrWhiteSpace(exit?.Error) ? null : exit;
         }
         catch (System.Text.Json.JsonException) { return null; }
     }
@@ -242,6 +251,10 @@ public sealed class RemoteProcessRunner : IProcessLauncher
 
     internal static string NewTurnId() => Guid.NewGuid().ToString("N")[..12];
 
+    // Маркер рук переживает санитизацию только в каноническом узле — его и ищем
+    internal static bool HasHandsMarker(DeviceExecSpawn spawn) =>
+        spawn.Files.Any(f => f.Content.Contains(DeviceExecPlaceholders.Hands, StringComparison.Ordinal));
+
     private string ExecKey(string turnId) => _ownerId + "/" + turnId;
 
     // ---------- сборка spawn по allow-list ----------
@@ -291,7 +304,8 @@ public sealed class RemoteProcessRunner : IProcessLauncher
     /// <summary>
     /// MCP-конфиг для устройства: только http-серверы нашего бэкенда, адрес
     /// <c>{сайдкар}/mcp/{имя}/{хвост}</c>, никаких заголовков и env. Авторизацию и
-    /// <c>X-Caller-Session-Id</c> ставит шлюз по привязке токена хода.
+    /// <c>X-Caller-Session-Id</c> ставит шлюз по привязке токена хода. Плюс маркер рук
+    /// <see cref="DeviceExecPlaceholders.Hands"/> — без команды и путей.
     /// </summary>
     internal static string SanitizeMcpConfig(string json)
     {
@@ -301,6 +315,21 @@ public sealed class RemoteProcessRunner : IProcessLauncher
             foreach (var (name, node) in src)
             {
                 if (node is not JsonObject server) continue;
+                // Маркер рук (ADR-016 §7) — единственный не-http узел, который едет: без
+                // команды, путей и env, пересобранный из двух известных полей. Узел целиком
+                // заменяет агент на свой мост; любой другой stdio-узел выбрасывается ниже.
+                if (name == DeviceExecPlaceholders.HandsServerName)
+                {
+                    if ((server["type"] as JsonValue)?.TryGetValue<string>(out var ht) == true
+                        && ht == DeviceExecPlaceholders.Hands)
+                        servers[name] = new JsonObject
+                        {
+                            ["type"] = DeviceExecPlaceholders.Hands,
+                            [DeviceExecPlaceholders.HandsVisionField] =
+                                (server[DeviceExecPlaceholders.HandsVisionField] as JsonValue)?.TryGetValue<bool>(out var v) == true && v,
+                        };
+                    continue;
+                }
                 var type = (server["type"] as JsonValue)?.TryGetValue<string>(out var t) == true ? t : null;
                 var url = (server["url"] as JsonValue)?.TryGetValue<string>(out var u) == true ? u : null;
                 if (type is not ("http" or "sse") || url is null) continue;

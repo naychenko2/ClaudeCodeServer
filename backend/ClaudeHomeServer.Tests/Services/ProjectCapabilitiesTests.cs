@@ -164,6 +164,48 @@ public class ProjectCapabilitiesTests
     public void Привязка_ФлагИExec_ДажеОфлайн_Можно() =>
         ProjectCapabilities.BindRefusal(true, Device(online: false)).Should().BeNull();
 
+    // --- Руки (ADR-016 §7, план рук Ш1) ---
+
+    private static DeviceExecStatus WithHands() => Device(caps: [DeviceCapabilities.Exec, DeviceCapabilities.Hands]);
+
+    [Fact]
+    public void Руки_ВсеУсловия_Можно_ДажеОфлайн()
+    {
+        ProjectCapabilities.HandsRefusal(Local(), WithHands(), handsFlagEnabled: true, projectHandsEnabled: true)
+            .Should().BeNull();
+        ProjectCapabilities.HandsRefusal(Local(), WithHands() with { Online = false }, true, true)
+            .Should().BeNull("сеанс и онлайн проверяются при ходе, а не в матрице");
+    }
+
+    [Fact]
+    public void Руки_КаждоеНевыполненноеУсловие_СвояПричина()
+    {
+        ProjectCapabilities.HandsRefusal(Local(), WithHands(), false, true).Should().Be(ProjectCapabilities.HandsFlagOffReason);
+        ProjectCapabilities.HandsRefusal(Server(), WithHands(), true, true).Should().Be(ProjectCapabilities.HandsNotLocalReason);
+        ProjectCapabilities.HandsRefusal(Local(), null, true, true).Should().Be(ProjectCapabilities.DeviceMissingReason);
+        ProjectCapabilities.HandsRefusal(Local(), Device(), true, true).Should().Be(ProjectCapabilities.HandsNotInstalledReason);
+        ProjectCapabilities.HandsRefusal(Local(), WithHands(), true, false).Should().Be(ProjectCapabilities.HandsProjectOffReason);
+    }
+
+    [Fact]
+    public void Руки_ВозможностьУстройстваНеТеряетсяПриНормализации() =>
+        DeviceCapabilities.Normalize(["EXEC", " hands ", "мусор"]).Should().Equal(DeviceCapabilities.Exec, DeviceCapabilities.Hands);
+
+    // Решение владельца 3б: shell в ходе с руками разрешён, из правил хода остался только режим прав
+    [Theory]
+    [InlineData("--permission-mode acceptEdits", true)]
+    [InlineData("--permission-mode default", true)]
+    [InlineData("--permission-mode=plan", true)]
+    [InlineData("--permission-mode bypassPermissions", false)]
+    [InlineData("--permission-mode=BypassPermissions", false)]
+    [InlineData("--permission-mode acceptEdits --permission-mode bypassPermissions", false)]
+    [InlineData("--permission-mode acceptEdits --dangerously-skip-permissions", false)]
+    [InlineData("--permission-mode acceptEdits --allow-dangerously-skip-permissions", false)]
+    [InlineData("--print --output-format stream-json", false)]
+    [InlineData("--permission-mode", false)]
+    public void Руки_РежимПравХода_БезBypassИТолькоЯвный(string args, bool ok) =>
+        (HandsTurnRules.PermissionRefusal(args.Split(' ')) is null).Should().Be(ok);
+
     // --- Вердикт для фоновой работы (ADR-016, вариант А плана §5) ---
 
     [Fact]

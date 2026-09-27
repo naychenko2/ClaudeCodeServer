@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text;
 using ClaudeHomeServer.DeviceAgent.Composition;
+using ClaudeHomeServer.DeviceAgent.Hands;
 using ClaudeHomeServer.DeviceAgent.Processes;
 using ClaudeHomeServer.DeviceAgent.Sidecar;
 using ClaudeHomeServer.Protocol;
@@ -36,6 +37,9 @@ internal sealed record ExecOptions
     public Func<IReadOnlyDictionary<string, string>> InheritedEnvironment { get; init; } = CliEnvironment.CurrentProcess;
 
     public Func<TurnLaunch, TurnProcess> Launcher { get; init; } = TurnProcess.Start;
+
+    /// <summary>Руки (ADR-016 §7); null — на этом устройстве их нет, ход с маркером рук отказывает.</summary>
+    public HandsRuntime? Hands { get; init; }
 }
 
 /// <summary>
@@ -55,6 +59,9 @@ internal sealed class TurnExecutor
     private readonly SessionFileJanitor _janitor;
     private readonly ILogger _log;
     private readonly ConcurrentDictionary<string, TurnProcess> _live = new(StringComparer.Ordinal);
+    // Донесения о руках уходят серверу строго по очереди: «доступны» не обгонит «действует руками»
+    private readonly Lock _reportLock = new();
+    private Task _reports = Task.CompletedTask;
 
     public TurnExecutor(ExecOptions options, ICliLeaseSource cli, TurnGrants grants, TurnJournal journal,
         ILogger<TurnExecutor>? log = null)
@@ -74,6 +81,7 @@ internal sealed class TurnExecutor
     /// <summary>Остановка агента: живые ходы не переживают его.</summary>
     public void KillAll()
     {
+        _options.Hands?.Registry.Stop(null, HandsEndReason.AgentStopping);
         foreach (var (turnId, process) in _live)
         {
             _log.LogWarning("Агент останавливается — убиваю ход {TurnId}", turnId);
@@ -105,7 +113,7 @@ internal sealed class TurnExecutor
         catch (ExecRefusedException e)
         {
             _log.LogWarning("Ход {TurnId} не запущен: {Reason}", control.TurnId, e.Message);
-            await RefuseAsync(link, control.TurnId, e.Message);
+            await RefuseAsync(link, control.TurnId, e.Message, e.Code);
             return;
         }
 
@@ -141,6 +149,16 @@ internal sealed class TurnExecutor
             if (Interlocked.Exchange(ref killed, 1) == 1) return;
             _log.LogInformation("Ход {TurnId}: убиваю дерево процессов ({Reason})", turnId, reason);
             process.KillTree();
+        }
+
+        // Руки хода: мост — потомок CLI в Job хода, поэтому «Стоп» гасит его вместе с деревом хода
+        var hands = setup.Hands is null ? null : _options.Hands;
+        var handsRegistration = hands?.Registry.Attach(turnId, setup.Launch.WorkingDirectory,
+            reason => Kill($"руки погашены: {reason}"));
+        if (hands is not null)
+        {
+            _log.LogInformation("Ход {TurnId}: руки подключены (Job {Job})", turnId, setup.Hands!.JobName);
+            Report(hands, new DeviceHandsReport(turnId, HandsChatStates.Active));
         }
 
         try
@@ -188,6 +206,14 @@ internal sealed class TurnExecutor
         finally
         {
             process.KillTree();
+            if (hands is not null)
+            {
+                var stopReason = hands.Registry.StopReasonOf(turnId);
+                handsRegistration!.Dispose();
+                Report(hands, stopReason is null
+                    ? new DeviceHandsReport(turnId, HandsChatStates.Allowed)
+                    : new DeviceHandsReport(turnId, HandsChatStates.Stopped, stopReason));
+            }
             _live.TryRemove(turnId, out _);
             // Убитый CLI не успел убрать свои файлы сессии в профиле — за него это делает агент
             if (Volatile.Read(ref killed) == 1) _janitor.CleanUp(process.Id);
@@ -241,9 +267,21 @@ internal sealed class TurnExecutor
             throw new ExecRefusedException($"рабочий каталог хода не найден на устройстве: {workingDirectory}");
         }
 
-        // Аренда — первой: не готов харнес — не создаём ни каталогов, ни выдач
-        var cli = _cli.TryAcquire(out var problem)
-            ?? throw new ExecRefusedException(problem ?? $"{Cli.ManagedCli.NotReadyPrefix}: копии CLI нет");
+        // Руки — до аренды: отказ по рукам не должен занимать копию CLI
+        var hands = HandsAttach.Prepare(spawn, control.TurnId, _options.Hands);
+
+        // Аренда — первой после рук: не готов харнес — не создаём ни каталогов, ни выдач
+        ICliHandle? cli;
+        try
+        {
+            cli = _cli.TryAcquire(out var problem)
+                ?? throw new ExecRefusedException(problem ?? $"{Cli.ManagedCli.NotReadyPrefix}: копии CLI нет");
+        }
+        catch
+        {
+            hands?.Dispose();
+            throw;
+        }
 
         TurnWorkspace? workspace = null;
         string? grantKey = null;
@@ -254,30 +292,31 @@ internal sealed class TurnExecutor
             var sidecarUrl = _options.SidecarUrl();
             var sidecarTurnUrl = DeviceSidecarRoutes.TurnUrl(sidecarUrl, grantKey);
 
-            workspace.Materialize(spawn.Files ?? [], sidecarTurnUrl);
+            workspace.Materialize(hands?.Files ?? spawn.Files ?? [], sidecarTurnUrl);
             var args = workspace.ResolveArgs(spawn.Args);
             Directory.CreateDirectory(_options.ConfigDirectory);
             var env = CliEnvironment.Build(_options.IsWindows, _options.InheritedEnvironment(),
                 _options.ConfigDirectory, DeviceEgressRoutes.ProxyUrl(sidecarUrl, grantKey), sidecarTurnUrl, spawn.Env);
 
             return new TurnSetup(cli, workspace, _grants, grantKey,
-                new TurnLaunch(cli.ExecutablePath, args, workingDirectory, env));
+                new TurnLaunch(cli.ExecutablePath, args, workingDirectory, env, hands?.JobName), hands);
         }
         catch
         {
             if (grantKey is not null) _grants.Remove(grantKey);
             workspace?.Dispose();
             cli.Dispose();
+            hands?.Dispose();
             throw;
         }
     }
 
-    private static async Task RefuseAsync(ExecLink link, string? turnId, string reason)
+    private static async Task RefuseAsync(ExecLink link, string? turnId, string reason, string? code = null)
     {
         try
         {
             await link.SendAsync(DeviceExecFrameChannel.Stderr, Encoding.UTF8.GetBytes(reason + "\n"));
-            await link.SendAsync(DeviceExecFrameChannel.Exit, DeviceExecJson.Serialize(new DeviceExecExit(RefusedExitCode, Error: reason)));
+            await link.SendAsync(DeviceExecFrameChannel.Exit, DeviceExecJson.Serialize(new DeviceExecExit(RefusedExitCode, Error: reason, Refusal: code)));
             await link.DrainAsync(TimeSpan.FromSeconds(10));
         }
         catch (OperationCanceledException) { }
@@ -329,19 +368,35 @@ internal sealed class TurnExecutor
         }
     }
 
-    private sealed class TurnSetup(ICliHandle cli, TurnWorkspace workspace, TurnGrants grants, string grantKey, TurnLaunch launch)
-        : IDisposable
+    private void Report(HandsRuntime hands, DeviceHandsReport report)
+    {
+        if (hands.Status is not { } sink) return;
+        lock (_reportLock)
+            _reports = _reports.ContinueWith(async _ =>
+            {
+                try { await sink.ReportAsync(report, CancellationToken.None); }
+                catch (Exception e) when (e is not OperationCanceledException)
+                {
+                    _log.LogWarning("Ход {TurnId}: состояние рук «{State}» не ушло серверу: {Error}", report.TurnId, report.State, e.Message);
+                }
+            }, TaskScheduler.Default).Unwrap();
+    }
+
+    private sealed class TurnSetup(ICliHandle cli, TurnWorkspace workspace, TurnGrants grants, string grantKey, TurnLaunch launch,
+        HandsTurnLease? hands) : IDisposable
     {
         public ICliHandle Cli { get; } = cli;
         public TurnWorkspace Workspace { get; } = workspace;
         public TurnLaunch Launch { get; } = launch;
+        public HandsTurnLease? Hands { get; } = hands;
 
-        // Аренда держится весь ход и закрывается по его концу; выдача шлюза — тоже
+        // Аренда держится весь ход и закрывается по его концу; выдача шлюза и руки машины — тоже
         public void Dispose()
         {
             grants.Remove(grantKey);
             Workspace.Dispose();
             Cli.Dispose();
+            Hands?.Dispose();
         }
     }
 }

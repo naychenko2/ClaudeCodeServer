@@ -1196,6 +1196,24 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
             () => GetServiceToken(ownerId), UseHttp: HttpEndpointUsable(apiUrl));
     }
 
+    // Руки локального проекта (ADR-016 §7) — свойство чата, а не хода: матрица
+    // ProjectCapabilities.HandsRefusal (флаг local-hands, локальный проект, hands у устройства,
+    // тумблер проекта) плюс явное доверие владельца хоть одному провайдеру. Провайдер хода
+    // сверяет ClaudeSession (HandsActiveNow), фолбэк режет цепочку до того же списка.
+    // Канал устройства резолвится лениво: прямая зависимость замкнула бы граф синглтонов.
+    private (bool Enabled, IReadOnlyList<string>? Providers) HandsFor(string? projectId)
+    {
+        if (projectId is null || _projects.GetById(projectId) is not { OwnerId: { } ownerId } project) return (false, null);
+        var providers = _users.GetById(ownerId)?.HandsProviders;
+        if (providers is not { Count: > 0 }) return (false, null);
+        var device = ProjectCapabilities.IsDeviceBound(project)
+            ? _services?.GetService<Execution.IDeviceExecChannel>()?.GetStatus(ownerId, project.DeviceId!)
+            : null;
+        var refusal = ProjectCapabilities.HandsRefusal(project, device,
+            _flags.IsEnabled(ownerId, FeatureFlagKeys.LocalHands), project.HandsEnabled);
+        return refusal is null ? (true, providers) : (false, null);
+    }
+
     // Работает ли у проекта чата группа «нужен контент на сервере» (ADR-016 §4). Чат вне
     // проекта — да: его папка серверная
     private bool ServerContentFor(string? projectId) =>
@@ -3314,6 +3332,17 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         };
     }
 
+    // Руки — свойство чата (LlmSessionContext.HandsEnabled): тумблер проекта или список
+    // провайдеров владельца поменялся — адаптеры его живых чатов пересоздаются при следующем
+    // сообщении. Уборка ленивая, как у персоны: активный ход и доживающих агентов не рвём.
+    // projectId null — все проектные чаты владельца (правка списка провайдеров).
+    public void InvalidateHandsSessions(string ownerId, string? projectId)
+    {
+        foreach (var entry in _sessions.Values.Where(e => e.Info.ProjectId is not null
+                     && (projectId is null ? ResolveOwnerId(e.Info) == ownerId : e.Info.ProjectId == projectId)))
+            if (entry.Process is not null) entry.AdapterStale = true;
+    }
+
     // Сброс адаптеров живых сессий персоны (изменился профиль/возможности/привязки):
     // процесс пересоздаётся при следующем сообщении с актуальным контекстом,
     // транскрипт продолжается через --resume (паттерн SetPersona)
@@ -4059,6 +4088,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         var notificationsMcp = BuildNotificationsContext(ownerId, session.PersonaId, persona.Persona);
         var codeGraphMcp = BuildCodeGraphContext(ownerId, session.ProjectId, session.Id, rootPath, persona.Persona);
         var difyMcp = BuildDifyContext(ownerId);
+        var hands = HandsFor(session.ProjectId);
         var adapter = _adapters.Create(session, new LlmSessionContext(rootPath,
             msg => OnMessageAsync(session.Id, accumulator, msg, runId),
             rawSystemPrompt, ProjectManager.BuiltInSystemPrompt, permissionRules,
@@ -4106,7 +4136,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             // fallback сводится к no-op в CodeGraphPromptProvider.GetSliceAsync.
             MainRootPath: projectRoot,
             ServerContent: ServerContentFor(session.ProjectId),
-            TranscriptOnServer: TranscriptOnServer(session)));
+            TranscriptOnServer: TranscriptOnServer(session),
+            HandsEnabled: hands.Enabled,
+            HandsProviders: hands.Providers));
         entry.Process = adapter;
         entry.RunId = runId;
 
@@ -5611,6 +5643,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             var notificationsMcp = BuildNotificationsContext(project.OwnerId, entry.Info.PersonaId, persona.Persona);
             var codeGraphMcp = BuildCodeGraphContext(project.OwnerId, project.Id, entry.Info.Id, rootPath, persona.Persona);
             var difyMcp = BuildDifyContext(project.OwnerId);
+            var hands = HandsFor(project.Id);
             context = new LlmSessionContext(rootPath,
                 msg => OnMessageAsync(sessionId, accumulator, msg, runId),
                 project.SystemPrompt,
@@ -5653,7 +5686,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 // worktree-ветки не построен (ADR-003).
                 MainRootPath: projectRoot,
                 ServerContent: ProjectCapabilities.ServerContentEnabled(project),
-                TranscriptOnServer: ProjectCapabilities.TranscriptOnServer(project));
+                TranscriptOnServer: ProjectCapabilities.TranscriptOnServer(project),
+                HandsEnabled: hands.Enabled,
+                HandsProviders: hands.Providers);
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;

@@ -65,9 +65,10 @@ public sealed record DeviceExecFile(string Id, string Name, string Content);
 
 /// <summary>
 /// Данные кадра <see cref="DeviceExecFrameChannel.Exit"/>: код выхода или сигнал.
-/// <see cref="Error"/> — причина, по которой ход не запустился на устройстве.
+/// <see cref="Error"/> — причина, по которой ход не запустился на устройстве; <see cref="Refusal"/> —
+/// её машинный код, если сервер должен отличить отказ не по тексту (<see cref="HandsEndReason.Busy"/>).
 /// </summary>
-public sealed record DeviceExecExit(int? Code, string? Signal = null, string? Error = null);
+public sealed record DeviceExecExit(int? Code, string? Signal = null, string? Error = null, string? Refusal = null);
 
 /// <summary>Что агент согласен запускать по команде сервера.</summary>
 public static class DeviceExecCli
@@ -128,6 +129,24 @@ public static class DeviceExecPlaceholders
 
     /// <summary>Аргумент, вместо которого агент ставит путь материализованного файла.</summary>
     public static string File(string id) => FilePrefix + id + FileSuffix;
+
+    /// <summary>
+    /// Маркер «руки запрошены» (ADR-016, раздел «Руки»): значение поля <c>type</c> узла
+    /// <see cref="HandsServerName"/> в MCP-конфиге хода — <c>{"type":"{{ccs-hands}}","vision":true}</c>.
+    /// Команды, пути и env сервер не шлёт: узел целиком заменяет агент на stdio-запуск своего
+    /// <see cref="HandsFiles.BridgeExe"/>, и только если выполнены все условия подключения.
+    /// Любой другой stdio-узел сервера по-прежнему выбрасывается при санитизации конфига.
+    /// </summary>
+    public const string Hands = "{{ccs-hands}}";
+
+    /// <summary>Имя узла рук в <c>mcpServers</c>: одно, других локальных MCP в этой версии нет.</summary>
+    public const string HandsServerName = "hands";
+
+    /// <summary>
+    /// Поле узла рук: есть ли зрение у провайдера чата. <c>false</c> — агент запускает мост
+    /// без <c>screenshot_control</c>. Отсутствие поля агент читает как <c>false</c>.
+    /// </summary>
+    public const string HandsVisionField = "vision";
 }
 
 /// <summary>Единые опции JSON кадров Control/Exit для обеих сторон канала.</summary>

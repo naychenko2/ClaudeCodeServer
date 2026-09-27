@@ -7,7 +7,8 @@ namespace ClaudeHomeServer.Controllers;
 
 /// <summary>
 /// Раздача агента устройства (agent-distribution Р10, Р11): скрипты установки, указатель
-/// текущей выкатки и архивы версий. Пять ручек плюс HEAD на те же пути.
+/// текущей выкатки и архивы версий — агента и компонента рук (ADR-016 §7). Пять ручек плюс HEAD
+/// на те же пути.
 ///
 /// Анонимно намеренно: установщик качается ДО сопряжения, когда у машины нет никаких учётных
 /// данных, а обновляющийся агент ходит той же ручкой, потому что хеш архива он уже получил по
@@ -55,6 +56,8 @@ public sealed class AgentDownloadsController(
         {
             version = latest.Version,
             archives = latest.Archives.Values.ToDictionary(
+                a => a.Rid, a => new { file = a.File, size = a.Size, sha256 = a.Sha256 }),
+            hands = latest.Hands.Values.ToDictionary(
                 a => a.Rid, a => new { file = a.File, size = a.Size, sha256 = a.Sha256 }),
         });
     }

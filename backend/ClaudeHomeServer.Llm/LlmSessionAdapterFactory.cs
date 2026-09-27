@@ -188,7 +188,8 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
             contextSource: BuildContextSource(claudeSession),
             egress: _egress, events: context.Events,
             localProbe: _localProbe,
-            transcriptOnServer: context.TranscriptOnServer);
+            transcriptOnServer: context.TranscriptOnServer,
+            handsEnabled: context.HandsEnabled, handsProviders: context.HandsProviders);
         return fallback;
     }
 

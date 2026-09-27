@@ -11,6 +11,7 @@
   <Project Path="ClaudeHomeServer.DeviceAgent/ClaudeHomeServer.DeviceAgent.csproj" />
   <Project Path="ClaudeHomeServer.DeviceAgent.Tests/ClaudeHomeServer.DeviceAgent.Tests.csproj" />
   <Project Path="ClaudeHomeServer.DeviceAgent.Tests.ChildFixture/ClaudeHomeServer.DeviceAgent.Tests.ChildFixture.csproj" />
+  <Project Path="ClaudeHomeServer.DeviceAgent.Tray/ClaudeHomeServer.DeviceAgent.Tray.csproj" />
   <Project Path="ClaudeHomeServer.Diagnostics/ClaudeHomeServer.Diagnostics.csproj" />
   <Project Path="ClaudeHomeServer.Diagnostics.Tests/ClaudeHomeServer.Diagnostics.Tests.csproj" />
   <Project Path="ClaudeHomeServer.Docs/ClaudeHomeServer.Docs.csproj" />
@@ -57,4 +58,7 @@
   <Project Path="ClaudeHomeServer.Yandex/ClaudeHomeServer.Yandex.csproj" />
   <Project Path="ClaudeHomeServer.Yandex.Tests/ClaudeHomeServer.Yandex.Tests.csproj" />
   <Project Path="ConPtyBridge/ConPtyBridge.csproj" />
+  <Project Path="HandsBridge/HandsBridge.csproj" />
+  <Project Path="HandsBridge.Policy/HandsBridge.Policy.csproj" />
+  <Project Path="HandsBridge.Policy.Tests/HandsBridge.Policy.Tests.csproj" />
 </Solution>

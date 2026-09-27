@@ -77,6 +77,9 @@ public static class FeatureFlagKeys
     // на его машине через агента. Флаг закрывает создание и перепривязку локальных проектов
     // и весь UI; шлюз LLM у него свой тумблер (LlmGateway:Enabled), флагом не закрывается.
     public const string LocalProjects = "local-projects";
+    // Руки локальных проектов (ADR-016 §7): без флага сервер не выставляет чату HandsEnabled,
+    // тумблер рук в проекте не включается, а секции в UI нет.
+    public const string LocalHands = "local-hands";
 }
 
 /// <summary>
@@ -201,6 +204,14 @@ public static class FeatureFlagCatalog
             Key: FeatureFlagKeys.LocalProjects,
             Title: "Локальные проекты",
             Description: "Проект может жить на вашем компьютере, а не на сервере: Claude работает с его файлами через агента AI Home на этой машине. Чат и задачи такого проекта видны отовсюду, а ход идёт, только пока компьютер в сети.",
+            Default: false,
+            Stage: "dev"),
+
+        // Руки локальных проектов (ADR-016 §7): ИИ управляет окнами разрешённых программ.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.LocalHands,
+            Title: "Руки на устройстве",
+            Description: "Чаты локального проекта могут управлять окнами программ на вашем компьютере: запускать разрешённые программы, нажимать и вводить текст. Работает, только пока руки разрешены в меню значка агента на самом компьютере; команды оболочки в таких чатах выключены.",
             Default: false,
             Stage: "dev"),
     ];

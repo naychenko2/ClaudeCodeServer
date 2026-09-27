@@ -4,6 +4,7 @@ using ClaudeHomeServer.DeviceAgent.Cli;
 using ClaudeHomeServer.DeviceAgent.Composition;
 using ClaudeHomeServer.DeviceAgent.Credentials;
 using ClaudeHomeServer.DeviceAgent.Exec;
+using ClaudeHomeServer.DeviceAgent.Hands;
 using ClaudeHomeServer.DeviceAgent.Hosting;
 using ClaudeHomeServer.DeviceAgent.Install;
 using ClaudeHomeServer.DeviceAgent.Pairing;
@@ -26,6 +27,7 @@ namespace ClaudeHomeServer.DeviceAgent;
 ///   ai-home-agent uninstall [--purge]
 ///   ai-home-agent pair --server https://host --code ABCD2345 [--name "Ноутбук"] [--always-on]
 ///   ai-home-agent roots add ПУТЬ [--force] | roots remove ПУТЬ | roots list | roots auto [on|off]
+///   ai-home-agent hands enable | disable | status
 ///   ai-home-agent supervise
 ///   ai-home-agent [run]
 ///   ai-home-agent --version
@@ -66,6 +68,7 @@ public static class AgentProgram
                 "uninstall" when args[1..] is [] or ["--purge"] => await UninstallAsync(args.Contains("--purge"), paths),
                 "pair" => await PairAsync(args[1..], paths, log),
                 "roots" => Roots(args[1..], paths),
+                "hands" => await HandsAsync(args[1..], paths),
                 "run" => await RunAsync(paths, loggers, log),
                 _ => Usage(),
             };
@@ -86,6 +89,7 @@ public static class AgentProgram
         Console.Error.WriteLine("ai-home-agent roots remove ПУТЬ");
         Console.Error.WriteLine("ai-home-agent roots list");
         Console.Error.WriteLine("ai-home-agent roots auto [on|off]");
+        Console.Error.WriteLine(HandsCommands.Usage);
         Console.Error.WriteLine("ai-home-agent supervise");
         Console.Error.WriteLine("ai-home-agent [run]");
         Console.Error.WriteLine("ai-home-agent --version");
@@ -187,8 +191,21 @@ public static class AgentProgram
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; stop.Cancel(); };
 
         var autostart = Autostarts.ForCurrentOs(layout);
-        var supervisor = new AgentSupervisor(layout, new ProcessChildLauncher(agentLog.Append), autostart.Repoint, log);
-        return await supervisor.RunAsync(stop.Token);
+        var launcher = new ProcessChildLauncher(agentLog.Append);
+        var supervisor = new AgentSupervisor(layout, launcher, autostart.Repoint, log);
+
+        // Трей (Ш7) — только на Windows: там руки. «Выйти из агента» в трее гасит и супервизор
+        var tray = OperatingSystem.IsWindows()
+            ? Task.Run(async () =>
+            {
+                if (await new TraySupervisor(layout, launcher, log).RunAsync(stop.Token)) await stop.CancelAsync();
+            })
+            : Task.CompletedTask;
+
+        var code = await supervisor.RunAsync(stop.Token);
+        await stop.CancelAsync();
+        await tray;
+        return code;
     }
 
     // Корни, под которыми агент открывает файлы проектов: правит только человек на машине
@@ -226,6 +243,16 @@ public static class AgentProgram
             default:
                 return Usage();
         }
+    }
+
+    // Руки (ADR-016 §7): машинный выключатель — ставит и убирает компонент только человек на машине
+    private static async Task<int> HandsAsync(string[] args, AgentPaths paths)
+    {
+        using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
+        var commands = new HandsCommands(new HandsComponent(paths.DataDirectory),
+            () => DeviceRegistration.Load(paths.RegistrationFile) is { } r ? new Uri(r.ServerUrl) : null,
+            http, Version, Console.Out, Console.Error, handsSupported: OperatingSystem.IsWindows());
+        return await commands.RunAsync(args, CancellationToken.None);
     }
 
     private static string AutoState(AgentRootsStore roots) => roots.AutoEnabled
@@ -290,6 +317,13 @@ public static class AgentProgram
         await using var sidecar = await SidecarHost.StartAsync(grants, device, loggers, ct: stop.Token);
         log.LogInformation("Сайдкар слушает {Url}", sidecar.Url);
 
+        await using var control = new HubControlConnection(device, log);
+
+        // Руки (ADR-016 §7) — только на Windows: мост — Windows-программа, замок машины — именованный семафор
+        var hands = OperatingSystem.IsWindows()
+            ? new HandsRuntime(new HandsComponent(paths.DataDirectory), new NamedHandsMachineLock(), new HandsRegistry(), control)
+            : null;
+
         // Одна политика корней на исполнение ходов и на файлы проектов (ADR-016 §5)
         var rootsStore = new AgentRootsStore(paths.RootsFile);
         var policy = new AgentPathPolicy(rootsStore);
@@ -297,7 +331,7 @@ public static class AgentProgram
             new ExecOptions
             {
                 TurnsRoot = paths.TurnsRoot, ConfigDirectory = paths.CliProfile, SidecarUrl = () => sidecar.Url,
-                PathPolicy = policy,
+                PathPolicy = policy, Hands = hands,
                 InheritedEnvironment = OperatingSystem.IsWindows()
                     ? CliEnvironment.CurrentProcess
                     : () => GraphicalSessionEnvironment.Merge(CliEnvironment.CurrentProcess(), new ProcessCommandRunner()),
@@ -305,7 +339,18 @@ public static class AgentProgram
             new ManagedCliLeaseSource(managedCli), grants, journal, loggers.CreateLogger<TurnExecutor>());
         AppDomain.CurrentDomain.ProcessExit += (_, _) => executor.KillAll();
 
-        await using var control = new HubControlConnection(device, log);
+        // Pipe для трея: статус рук и «Стоп», без сервера и без localhost-API
+        await using var trayPipe = hands is null ? null
+            : new HandsTrayPipe(HandsPipe.NameForCurrentUser(), hands.Registry, () => hands.Component.IsReady,
+                () => control.IsConnected, loggers.CreateLogger<HandsTrayPipe>(),
+                () => new HandsTrayDevice(registration.ServerUrl, registration.DeviceName, Version, rootsStore.Roots,
+                    AgentLayout.OwnVersion() is null ? null : AgentLayout.Resolve(paths).LogDirectory));
+        try { trayPipe?.Start(); }
+        catch (IOException e)
+        {
+            // Имя занято чужим экземпляром — трей не увидит агента, но ходы и руки работают
+            log.LogError("Pipe трея не поднялся: {Error}", e.Message);
+        }
 
         // Вторая композиция файловых вертикалей (задача 4.2): та же Files и Git, что на
         // сервере, за политикой корней машины; localhost-API — только для веб-морды сервера.
@@ -346,7 +391,7 @@ public static class AgentProgram
         var updateLoop = updater is null ? new TaskCompletionSource<bool>().Task : RunUpdaterAsync(updater, log, stop.Token);
         await using var coordinator = new AgentCoordinator(control, new ManagedCliHarness(managedCli),
             new ExecSocketConnector(device), executor.RunAsync, Version, log, runRelay: relay.RunAsync,
-            updates: updater, activity: activity, runBindFolder: binder.RunAsync);
+            updates: updater, activity: activity, hands: hands, runBindFolder: binder.RunAsync);
 
         var exitCode = 0;
         try
@@ -356,6 +401,7 @@ public static class AgentProgram
             // Успешный ack — версия здорова: супервизор её не откатит, install дождался
             SupervisedRun.MarkHealthy();
             log.LogInformation("Агент на связи с {Server} как «{Name}»", registration.ServerUrl, registration.DeviceName);
+            _ = WatchHandsAsync(coordinator, log, stop.Token);
             // Раздачу могли переоткрыть без рестарта сервера (AGENT_ONLY=1): ack без переподключения — только так
             if (updater is not null) _ = coordinator.RunUpdateChecksAsync(UpdateCheckPeriod(), stop.Token);
             // Цикл обновления завершается true, только переключив active: выходим с 75, супервизор поднимет новую версию
@@ -391,6 +437,14 @@ public static class AgentProgram
         return new AgentUpdater(layout, Version, AgentCoordinator.RidName, new HttpAgentArchiveSource(http, device.ServerUri),
             activity, autostart.Repoint, () => SupervisedRun.SupervisorVersion(layout),
             log: loggers.CreateLogger<AgentUpdater>());
+    }
+
+    // Слежка за hands enable|disable; сбой её агента не валит
+    private static async Task WatchHandsAsync(AgentCoordinator coordinator, ILogger log, CancellationToken ct)
+    {
+        try { await coordinator.WatchHandsAsync(TimeSpan.FromSeconds(10), ct); }
+        catch (OperationCanceledException) { }
+        catch (Exception e) { log.LogError(e, "Слежка за компонентом рук упала — перемены рук видны после перезапуска агента"); }
     }
 
     private static TimeSpan UpdateCheckPeriod() =>

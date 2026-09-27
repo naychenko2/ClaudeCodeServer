@@ -3,12 +3,16 @@ using System.Diagnostics;
 
 namespace ClaudeHomeServer.DeviceAgent.Processes;
 
-/// <summary>Что запустить: путь к бинарю берётся только из аренды управляемой копии.</summary>
+/// <summary>
+/// Что запустить: путь к бинарю берётся только из аренды управляемой копии. <see cref="JobName"/> —
+/// имя Job Object хода с руками (Windows): по нему мост отличает свои окна от чужих.
+/// </summary>
 internal sealed record TurnLaunch(
     string ExecutablePath,
     IReadOnlyList<string> Args,
     string WorkingDirectory,
-    IReadOnlyDictionary<string, string> Environment);
+    IReadOnlyDictionary<string, string> Environment,
+    string? JobName = null);
 
 /// <summary>
 /// Процесс хода вместе с деревом потомков (у CLI дети — MCP-клиенты, Bash).

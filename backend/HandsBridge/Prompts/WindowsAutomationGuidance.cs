@@ -19,7 +19,7 @@ public static class WindowsAutomationGuidance
         "ui_click(windowHandle='<handle>', name='...' | nameContains='...' | automationId='...' | elementId='...') - click by name or reuse an id from ui_snapshot/ui_find. Add doubleClick=true to double-click an element without coordinates.\n" +
         "ui_type(windowHandle='<handle>', text='...', controlType='Edit') - type into a field (also accepts elementId='...')\n" +
         "ui_select(windowHandle='<handle>', value='...', name='...') - pick a value in a combo box / list / tab\n" +
-        "ui_read(windowHandle='<handle>', name='...') - read element text (OCR fallback; also accepts elementId='...')\n" +
+        "ui_read(windowHandle='<handle>', name='...') - read element text via UI Automation (no OCR; also accepts elementId='...')\n" +
         "ui_read_table(windowHandle='<handle>', automationId='...' | elementId='...') - extract a grid/table/details-list into structured rows + headers in ONE call (no OCR, no per-cell ui_read loop)\n" +
         "file_save(windowHandle='<handle>', filePath='C:\\path\\file.txt') - save via Save As dialog\n" +
         "file_open(windowHandle='<handle>', filePath='C:\\path\\file.txt') - open an existing file via the Open dialog (file must exist)\n" +

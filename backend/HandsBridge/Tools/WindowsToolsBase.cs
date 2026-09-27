@@ -44,7 +44,6 @@ public static class WindowsToolsBase
         _monitorService, _secureDesktopDetector, _imageProcessor);
     private static readonly AnnotatedScreenshotService _annotatedScreenshotService = new(
         _uiAutomationService, _screenshotService, _imageProcessor);
-    private static readonly LegacyOcrService _legacyOcrService = new(NullLogger<LegacyOcrService>.Instance);
     private static readonly ClipboardService _clipboardService = new(_uiAutomationThread);
     private static readonly MacroService _macroService = new();
     private static readonly ProcessService _processService = new();
@@ -88,9 +87,6 @@ public static class WindowsToolsBase
 
     /// <summary>Gets the annotated screenshot service.</summary>
     public static AnnotatedScreenshotService AnnotatedScreenshotService => _annotatedScreenshotService;
-
-    /// <summary>Gets the legacy OCR service.</summary>
-    public static LegacyOcrService LegacyOcrService => _legacyOcrService;
 
     /// <summary>Gets the clipboard service.</summary>
     public static ClipboardService ClipboardService => _clipboardService;

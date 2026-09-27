@@ -57,6 +57,9 @@
     <!-- Трей рук (Ш7): отдельный процесс ai-home-agent-tray рядом с агентом, его поднимает
          supervise (TraySupervisor). Ссылка и копирование — по образцу моста ConPTY выше -->
     <ProjectReference Include="..\ClaudeHomeServer.DeviceAgent.Tray\ClaudeHomeServer.DeviceAgent.Tray.csproj" Condition="'$(AgentTargetsWindows)' == 'true'" ReferenceOutputAssembly="false" Private="false" />
+    <!-- Мост рук: ссылка нужна, чтобы restore публикации агента восстановил мост под тот же RID
+         (иначе NETSDK1047 на его Publish ниже). TFM у моста windows — свойства TFM не согласуем -->
+    <ProjectReference Include="..\HandsBridge\HandsBridge.csproj" Condition="'$(AgentTargetsWindows)' == 'true'" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" Private="false" />
   </ItemGroup>
 
   <Target Name="CopyConPtyBridge" AfterTargets="Build" Condition="'$(AgentTargetsWindows)' == 'true'">
@@ -89,6 +92,15 @@
     <MSBuild Projects="..\ConPtyBridge\ConPtyBridge.csproj" Targets="Publish" Properties="$(_ConPtyBridgePublishProps)" />
     <!-- Трей — тем же набором свойств: тот же каталог, RID и SelfContained, общий рантайм -->
     <MSBuild Projects="..\ClaudeHomeServer.DeviceAgent.Tray\ClaudeHomeServer.DeviceAgent.Tray.csproj" Targets="Publish" Properties="$(_ConPtyBridgePublishProps)" />
+    <!-- Мост рук (ADR-016 §7) — так же, как трей: в каталог версии агента, с общим рантаймом,
+         без single-file. Своей установки у моста нет: его целостность — SHA-256 архива агента.
+         Ревизию к версии не приписываем (второй +хвост), символы Policy в архив не везём.
+         Файлы, которые опубликовал сам агент, мост не перезаписывает (HandsBridgeHostFiles):
+         его Microsoft.Extensions.* из NuGet одноимённы с ReadyToRun-сборками рантайма агента -->
+    <PropertyGroup>
+      <_AgentPublishedFiles>@(ResolvedFileToPublish->'%(RelativePath)', '|')</_AgentPublishedFiles>
+    </PropertyGroup>
+    <MSBuild Projects="..\HandsBridge\HandsBridge.csproj" Targets="Publish" Properties="$(_ConPtyBridgePublishProps);IncludeSourceRevisionInInformationalVersion=false;DebugType=none;HandsBridgeHostFiles=$(_AgentPublishedFiles)" />
   </Target>
 
   <!-- Linux/macOS: pty-bridge терминала собирается из исходника рядом с агентом (у сервера

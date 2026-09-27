@@ -35,14 +35,8 @@ public static class UIAutomationErrorType
     /// <summary>An internal error occurred.</summary>
     public const string InternalError = "internal_error";
 
-    /// <summary>OCR found no text in the specified region.</summary>
+    /// <summary>UI Automation exposes no text for the element (OCR was removed: take a window screenshot instead).</summary>
     public const string NoTextFound = "no_text_found";
-
-    /// <summary>The OCR region is outside screen bounds.</summary>
-    public const string InvalidRegion = "invalid_region";
-
-    /// <summary>The requested OCR language is not available.</summary>
-    public const string LanguageNotSupported = "language_not_supported";
 
     /// <summary>The foreground window does not match the expected target window.</summary>
     public const string WrongTargetWindow = "wrong_target_window";

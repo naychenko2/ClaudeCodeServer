@@ -323,8 +323,7 @@ public sealed class WindowEnumerator
         int index = 0;
         int resultIndex = 0;
 
-        // Use Screen.AllScreens to get device names (more reliable than MONITORINFOEX)
-        var screens = Screen.AllScreens;
+        var screens = DisplayMonitors.All();
 
         bool EnumMonitorCallback(nint hMon, nint hdcMonitor, ref RECT lprcMonitor, nint dwData)
         {
@@ -334,7 +333,7 @@ public sealed class WindowEnumerator
                 // Match with Screen by position
                 foreach (var screen in screens)
                 {
-                    if (screen.Bounds.X == lprcMonitor.Left && screen.Bounds.Y == lprcMonitor.Top)
+                    if (screen.Bounds.Left == lprcMonitor.Left && screen.Bounds.Top == lprcMonitor.Top)
                     {
                         monitorName = screen.DeviceName;
                         break;

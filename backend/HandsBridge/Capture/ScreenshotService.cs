@@ -353,7 +353,8 @@ public sealed class ScreenshotService
         CancellationToken cancellationToken)
     {
         // Get virtual screen bounds (encompasses all monitors)
-        var virtualScreen = SystemInformation.VirtualScreen;
+        var bounds = ScreenBounds.GetVirtual();
+        var virtualScreen = new Rectangle(bounds.Left, bounds.Top, bounds.Width, bounds.Height);
         var width = virtualScreen.Width;
         var height = virtualScreen.Height;
 

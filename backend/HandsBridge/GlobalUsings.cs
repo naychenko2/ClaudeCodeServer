@@ -6,6 +6,9 @@
 
 global using Sbroenne.WindowsMcp.Models;
 
+// GDI+ (Bitmap, Graphics, Rectangle): раньше глобальный using давал UseWindowsForms
+global using System.Drawing;
+
 // Гейт рук (HandsGate/HandsPolicy) — в каждом инструменте форка
 global using ClaudeHomeServer.HandsBridge;
 global using ClaudeHomeServer.HandsBridge.Policy;

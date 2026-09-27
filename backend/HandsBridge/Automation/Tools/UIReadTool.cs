@@ -8,19 +8,20 @@ using Sbroenne.WindowsMcp.Tools;
 namespace Sbroenne.WindowsMcp.Automation.Tools;
 
 /// <summary>
-/// MCP tool for reading text from UI elements with automatic OCR fallback.
+/// MCP tool for reading text from UI elements via UI Automation.
 /// </summary>
 [SupportedOSPlatform("windows")]
 [McpServerToolType]
 public static partial class UIReadTool
 {
     /// <summary>
-    /// Reads text from a UI element. If UIA text extraction fails, automatically tries OCR.
-    /// Keywords: read, read text, get text, extract text, OCR, text content, contents, value,
+    /// Reads text from a UI element via UI Automation.
+    /// Keywords: read, read text, get text, extract text, text content, contents, value,
     /// scrape, article text, web page text, what does it say.
     /// </summary>
     /// <remarks>
-    /// Extract text from UI elements or screen regions. Auto-falls back to OCR if normal text extraction fails.
+    /// Extract text from UI elements through UI Automation. There is no OCR: if the element exposes no text
+    /// (custom-rendered UI, canvas, images), the result says so — take a screenshot of the window instead.
     /// For web pages in Edge/Chrome, pass format='article' to get clean, token-efficient article text
     /// (main content only, navigation chrome and inline link URLs stripped, headings/lists as markdown).
     /// Reading the live signed-in browser window this way also works for authenticated/internal pages that
@@ -36,7 +37,6 @@ public static partial class UIReadTool
     /// <param name="elementId">Stable element id from a prior ui_find/ui_snapshot. When provided, reads that exact element directly and ignores the name/type selectors (avoids re-querying).</param>
     /// <param name="foundIndex">Return Nth match (1-based, default: 1).</param>
     /// <param name="includeChildren">Include child element text (default: false). Ignored when format='article'.</param>
-    /// <param name="language">OCR language code (e.g., 'en-US', 'de-DE'). Uses system default if not specified. Only used if OCR fallback triggers.</param>
     /// <param name="format">Text extraction mode: 'raw' (default, complete but includes nav chrome and link URLs) or 'article' (clean main-content text for web pages, chrome and inline URLs stripped, headings/lists as markdown).</param>
     /// <param name="includeDiagnostics">Include diagnostics (timing, query, elements scanned) in response. Default: false.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
@@ -53,7 +53,6 @@ public static partial class UIReadTool
         [DefaultValue(null)] string? elementId,
         [DefaultValue(1)] int foundIndex,
         [DefaultValue(false)] bool includeChildren,
-        [DefaultValue(null)] string? language,
         [DefaultValue(null)] string? format,
         [DefaultValue(false)] bool includeDiagnostics,
         CancellationToken cancellationToken)
@@ -120,28 +119,32 @@ public static partial class UIReadTool
             }
 
             var result = await automationService.GetTextAsync(elementIdToRead, windowHandle, includeChildren, mode, cancellationToken);
-            if (result.Success && !string.IsNullOrWhiteSpace(result.Text))
-            {
-                return WindowsToolsBase.ToCallToolResult(result, includeDiagnostics);
-            }
 
-            // Article mode is a UIA-only, structure-aware extraction; OCR (which returns raw pixels
-            // as flat text) cannot honor it, so skip the OCR fallback and return the UIA result.
-            if (mode == TextExtractionMode.Article)
-            {
-                return WindowsToolsBase.ToCallToolResult(result, includeDiagnostics);
-            }
-
-            // Руки: OCR-фолбэк upstream копировал прямоугольник окна С ЭКРАНА — вместе
-            // с чужими окнами, перекрывшими своё. Ветка удалена, снимок окна — screenshot_control.
-
-            return WindowsToolsBase.ToCallToolResult(result, includeDiagnostics);
+            // Руки: OCR-фолбэка нет (мост без проекции Windows SDK, решение 2026-09-27) — пустой
+            // текст честно называется непрочитанным, а не отдаётся пустой строкой
+            return WindowsToolsBase.ToCallToolResult(WhenNoText(result), includeDiagnostics);
         }
         catch (Exception ex)
         {
             return WindowsToolsBase.ErrorCallToolResult(actionName, ex);
         }
     }
+
+    /// <summary>Непрочитанный текст — честный отказ с подсказкой снять окно, а не пустой успех.</summary>
+    internal static UIAutomationResult WhenNoText(UIAutomationResult result) =>
+        result.Success && string.IsNullOrWhiteSpace(result.Text)
+            ? UIAutomationResult.CreateFailure(
+                result.Action,
+                UIAutomationErrorType.NoTextFound,
+                NoTextMessage,
+                result.Diagnostics,
+                NoTextRecovery)
+            : result;
+
+    internal const string NoTextMessage = "UI Automation exposes no text for this element; there is no OCR fallback.";
+
+    internal const string NoTextRecovery =
+        "Take a screenshot of the window with screenshot_control(target='window', windowHandle=...) and read the text from the image.";
 
     private static bool TryParseTextExtractionMode(string? format, out TextExtractionMode mode)
     {

@@ -129,7 +129,7 @@ public sealed class SystemResources
             | `ui_click` | Click buttons, checkboxes, menu items, links. |
             | `ui_type` | Type text into input fields. |
             | `ui_find` | Find elements, get details, inspect properties. |
-            | `ui_read` | Read text from elements (with OCR fallback). |
+            | `ui_read` | Read text from elements via UI Automation (no OCR). |
             | `file_save` | 💾 Save files to disk (handles Save As dialogs automatically!). |
             | `keyboard_control` | Send hotkeys (Ctrl+S), navigate (Tab, arrows). |
             | `mouse_control` | Low-level clicks (fallback when ui_click fails). |
@@ -196,7 +196,7 @@ public sealed class SystemResources
             | Save a file | file_save(windowHandle=..., filePath=...) | ⚠️ keyboard_control CANNOT handle Save As dialogs! |
             | Press hotkey (Ctrl+S) | keyboard_control(action='press', key='s', modifiers='ctrl') | ⚠️ Fails on elevated windows - use ui_type |
             | Navigate (Tab, arrows) | keyboard_control(action='press') | - |
-            | Read text from element | ui_read(windowHandle=..., nameContains=...) | ui_read with OCR fallback |
+            | Read text from element | ui_read(windowHandle=..., nameContains=...) | screenshot_control of the window if ui_read reports no_text_found |
             | Wait for new window | window_management(action='wait_for', title='...') | - |
             | Take screenshot | screenshot_control(target='window', windowHandle=...) | - |
             | Find visible elements | screenshot_control with annotate=true | ui_find(windowHandle=...) |

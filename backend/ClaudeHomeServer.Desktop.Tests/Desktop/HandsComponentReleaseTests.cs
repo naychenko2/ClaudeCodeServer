@@ -172,6 +172,28 @@ public class DeviceHubHandsReportTests : IDisposable
         ClaudeHomeServer.Services.Execution.DeviceHandsTurns.ChatStateOf(_owner, "dev-1", "chat-1").State.Should().Be(HandsChatStates.Stopped);
     }
 
+    // Дефект 3d761fc8: итог агент шлёт уже после кадра Exit — к этому времени сервер закрыл исполнение
+    [Fact]
+    public async Task Итог_после_конца_хода_принят_и_дошёл_до_чата_чужой_ход_отказ()
+    {
+        ClaudeHomeServer.Services.Execution.DeviceHandsTurns.Register(_owner, "dev-1", "turn-3", "chat-3");
+        ClaudeHomeServer.Services.Execution.DeviceHandsTurns.End(_owner, "dev-1", "turn-3");
+        var notifier = new Moq.Mock<ILocalHandsNotifier>();
+
+        await NewHub(notifier.Object, "dev-1").ReportHandsStatus(
+            new DeviceHandsReport("turn-3", HandsChatStates.Stopped, HandsEndReason.StoppedFromTray));
+        var forged = () => NewHub(notifier.Object, "dev-1").ReportHandsStatus(new DeviceHandsReport("turn-4", HandsChatStates.Stopped));
+        var afterFinal = () => NewHub(notifier.Object, "dev-1").ReportHandsStatus(new DeviceHandsReport("turn-3", HandsChatStates.Active));
+
+        await forged.Should().ThrowAsync<Microsoft.AspNetCore.SignalR.HubException>();
+        await afterFinal.Should().ThrowAsync<Microsoft.AspNetCore.SignalR.HubException>("итог закрыл окно донесений хода");
+        notifier.Verify(n => n.HandsStatusAsync(_owner, "dev-1", "chat-3", HandsChatStates.Stopped, HandsEndReason.StoppedFromTray,
+            Moq.It.IsAny<CancellationToken>()), Moq.Times.Once);
+        notifier.VerifyNoOtherCalls();
+        ClaudeHomeServer.Services.Execution.DeviceHandsTurns.ChatStateOf(_owner, "dev-1", "chat-3")
+            .Should().Be((HandsChatStates.Stopped, HandsEndReason.StoppedFromTray));
+    }
+
     [Fact]
     public async Task Причина_с_устройства_только_из_известного_набора()
     {

@@ -108,9 +108,13 @@ public sealed class RemoteProcessRunner : IProcessLauncher
         var spawn = BuildSpawn(spec);
         // Отказ шлюза — DeviceExecRefusedException с его текстом, до канала и ретранслятора
         var gateway = StartGatewayTurn(spec);
+        // Ход с маркером рук: донесения агента о руках принимаются только по нему (ADR-016 §7).
+        // Регистрация — ДО отправки spec: «active» агент шлёт раньше, чем мы дождёмся вердикта
+        var hands = HasHandsMarker(spawn);
         IDeviceExecStream? stream = null;
         try
         {
+            if (hands) DeviceHandsTurns.Register(_ownerId, _deviceId, turnId, spec.SessionId!);
             var control = DeviceExecJson.Serialize(
                 new DeviceExecControl(DeviceExecControlOps.Spawn, turnId, spawn, gateway));
             if (control.Length > DeviceExecProtocol.MaxPayloadBytes)
@@ -125,13 +129,11 @@ public sealed class RemoteProcessRunner : IProcessLauncher
             stream = AwaitAgentVerdictAsync(stream).GetAwaiter().GetResult();
             var exec = RemoteExec.Launch(ExecKey(turnId), turnId, stream, spec, _nodePath, _relayScript);
             Execs[exec.Key] = exec;
-            // Ход с маркером рук: донесения агента о руках принимаются только по нему (ADR-016 §7)
-            var hands = HasHandsMarker(spawn);
-            if (hands) DeviceHandsTurns.Register(_ownerId, _deviceId, turnId, spec.SessionId!);
             exec.Run(() =>
             {
                 Execs.TryRemove(new KeyValuePair<string, RemoteExec>(exec.Key, exec));
-                if (hands) DeviceHandsTurns.Remove(_ownerId, _deviceId, turnId);
+                // Не Remove: итог о руках агент шлёт уже после кадра Exit
+                if (hands) DeviceHandsTurns.End(_ownerId, _deviceId, turnId);
                 _gateway.EndTurn(gateway.TurnId);
             });
             if (spec.Track) ProcessRegistry.Register(exec.Relay);
@@ -139,6 +141,7 @@ public sealed class RemoteProcessRunner : IProcessLauncher
         }
         catch
         {
+            if (hands) DeviceHandsTurns.Remove(_ownerId, _deviceId, turnId);
             _gateway.EndTurn(gateway.TurnId);
             if (stream is not null) _ = stream.DisposeAsync().AsTask();
             throw;

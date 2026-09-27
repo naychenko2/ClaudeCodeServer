@@ -177,9 +177,12 @@ public class HandsTrayPipeTests
 
         var rules = server.GetAccessControl().GetAccessRules(true, true, typeof(SecurityIdentifier))
             .Cast<PipeAccessRule>().ToList();
-        var me = WindowsIdentity.GetCurrent().User!;
+        using var identity = WindowsIdentity.GetCurrent();
+        var me = identity.User!;
 
         server.GetAccessControl().AreAccessRulesProtected.Should().BeTrue("наследование от родителя отключено");
+        server.GetAccessControl().GetOwner(typeof(SecurityIdentifier)).Should().Be(identity.Owner,
+            "клиент с CurrentUserOnly сверяет владельца с WindowsIdentity.Owner; у повышенного процесса это Administrators");
         rules.Should().ContainSingle();
         rules[0].IdentityReference.Should().Be(me);
         rules[0].AccessControlType.Should().Be(AccessControlType.Allow);

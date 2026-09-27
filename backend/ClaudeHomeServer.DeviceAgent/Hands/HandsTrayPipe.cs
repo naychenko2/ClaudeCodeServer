@@ -72,14 +72,19 @@ internal sealed class HandsTrayPipe : IAsyncDisposable
     /// <summary>
     /// ACL pipe: одно разрешающее правило — текущему пользователю, наследование от родителя
     /// отключено. Ни «Все», ни «Прошедшие проверку», ни другие пользователи машины pipe не откроют.
+    /// Владелец — владелец по умолчанию из токена, а не SID пользователя: клиент с
+    /// <see cref="PipeOptions.CurrentUserOnly"/> сверяет владельца pipe именно с
+    /// <see cref="WindowsIdentity.Owner"/>, а у повышенного процесса это BUILTIN\Administrators —
+    /// с SID пользователя трей получал «not owned by the current user».
     /// </summary>
     [SupportedOSPlatform("windows")]
     internal static PipeSecurity CurrentUserOnlySecurity()
     {
         var security = new PipeSecurity();
         security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
-        var user = WindowsIdentity.GetCurrent().User!;
-        security.SetOwner(user);
+        using var identity = WindowsIdentity.GetCurrent();
+        var user = identity.User!;
+        security.SetOwner(identity.Owner ?? user);
         security.AddAccessRule(new PipeAccessRule(user, PipeAccessRights.FullControl, AccessControlType.Allow));
         return security;
     }

@@ -28,10 +28,14 @@ public sealed class LocalProcessRunner : IProcessLauncher
         // Процесс вышел — гасим его scope: оставшиеся в нём узлы MSBuild и VBCSCompiler
         // (реюз внутри хода) и прочие отпочковавшиеся потомки иначе живут в ccs-agents.slice
         // до своего idle-таймаута. Подписка ДО Start — выход не проскочит мимо обработчика.
+        // Шов гашения фиксируется на запуске, а не читается в момент выхода: Exited и Task.Run
+        // срабатывают с задержкой, и поздний вызов иначе уходит тому, кто подменил шов позже
+        // (так плавал Start_ИзоляцияВыключена_ScopeНеГасится — ловил стоп чужого процесса).
         if (wrapped)
         {
             var systemctl = ResolveSystemctlPath(systemdRun!);
-            process.Exited += (_, _) => StopScopeInBackground(systemctl, unit);
+            var stop = StopScope;
+            process.Exited += (_, _) => StopScopeInBackground(stop, systemctl, unit);
         }
         if (!process.Start())
             throw new InvalidOperationException($"Не удалось запустить {spec.FileName}");
@@ -284,10 +288,10 @@ public sealed class LocalProcessRunner : IProcessLauncher
 
     // Остановка scope уходит с потока события Exited: systemctl — процесс, а обработчик
     // Exited не должен ждать чужой ввод-вывод. Fail-open: сбой — warning, не исключение.
-    private static void StopScopeInBackground(string systemctl, string unit) =>
+    private static void StopScopeInBackground(Action<string, string> stop, string systemctl, string unit) =>
         _ = Task.Run(() =>
         {
-            try { StopScope(systemctl, unit); }
+            try { stop(systemctl, unit); }
             catch (Exception ex) { WarnScopeStopOnce(ex.GetType().Name, $"{ex.GetType().Name}: {ex.Message}"); }
         });
 

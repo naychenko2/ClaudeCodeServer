@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Тесты гейта рук на Linux CI: чистая политика с подделкой WinAPI плюс сторожа по исходникам
+       моста (HandsBridge — net10.0-windows, его тесты ubuntu-раннер не гоняет) -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\HandsBridge.Policy\HandsBridge.Policy.csproj" />
+    <!-- Мост нужен рантайм-тестам гейта (HandsBridgeGateRuntimeTests): TFM windows сюда не
+         подключить, поэтому только порядок сборки, а сборку грузим рефлексией из hands-bridge/ -->
+    <ProjectReference Include="..\HandsBridge\HandsBridge.csproj" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" Private="false" />
+  </ItemGroup>
+
+  <Target Name="CopyHandsBridgeOutput" AfterTargets="Build">
+    <MSBuild Projects="..\HandsBridge\HandsBridge.csproj" Targets="GetTargetPath" Properties="Configuration=$(Configuration)">
+      <Output TaskParameter="TargetOutputs" PropertyName="_HandsBridgeDll" />
+    </MSBuild>
+    <PropertyGroup>
+      <_HandsBridgeDir>$([System.IO.Path]::GetDirectoryName('$(_HandsBridgeDll)'))</_HandsBridgeDir>
+    </PropertyGroup>
+    <ItemGroup>
+      <_HandsBridgeFiles Include="$(_HandsBridgeDir)/*.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_HandsBridgeFiles)" DestinationFolder="$(OutDir)hands-bridge" SkipUnchangedFiles="true" />
+  </Target>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+</Project>

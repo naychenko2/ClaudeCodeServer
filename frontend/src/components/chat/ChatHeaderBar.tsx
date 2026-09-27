@@ -4,6 +4,8 @@ import type { Project, Session, ClaudeBilling, Persona, ProjectTag } from '../..
 import { api } from '../../lib/api';
 import { isArchivedChat } from '../../lib/chatFilters';
 import { HandsBadge } from '../../features/desktop/HandsBadge';
+import { LocalHandsBadge } from '../../features/localHands/LocalHandsBadge';
+import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { TagAssignMenu } from '../TagChip';
 import { modelLabel, modelProvider, assistantName } from '../../lib/models';
 import { effortLabel } from '../../lib/effort';
@@ -1072,6 +1074,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // (см. metaRow): на мобиле компактной иконкой, на десктопе коротким бейджем.
   const origin = resolveChatOrigin(session);
   const deviceBadge = projectDeviceBadge(project);
+  // Руки локального проекта (ADR-016 §7): бейдж сам решает, показываться ли, по проекту
+  const localHandsOn = useFeature(FLAGS.localHands);
   // Блок названия чата. На мобиле он целиком кликабелен как «назад».
   // Кликабельный стек аватаров группового чата (активный спикер — с цветным
   // кольцом) + поповер управления составом. Размер аватара параметром: компактный
@@ -1187,6 +1191,11 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     // Десктопный чат: руки, их устройство и «Стоп». Компонент сам решает, показываться
     // ли — у обычного чата он пуст, поэтому условия типа чата здесь нет
     slots.push(<HandsBadge key="hands" session={session} />);
+    // Руки локального проекта. С HandsBadge не пересекается: десктопный чат бывает только
+    // у серверного проекта, а этот бейдж — только у локального с включёнными руками
+    if (localHandsOn) slots.push(
+      <LocalHandsBadge key="local-hands" session={session} project={project} compact={isCompact} />
+    );
     // Локальный проект (ADR-016): где живут файлы и в сети ли устройство — иначе
     // закрытый гейт хода и пропавшие панели выглядят поломкой
     if (deviceBadge) slots.push(

@@ -86,6 +86,10 @@ public static class ProjectFeatures
     public const string WorkflowView = "workflowView";
     public const string ChatBranch = "chatBranch";
 
+    // Руки на устройстве (ADR-016, раздел «Руки»): ни в одну группу не входят — доступность
+    // считает ProjectCapabilities.HandsRefusal, а не состояние группы
+    public const string Hands = "hands";
+
     public static readonly IReadOnlyList<string> FileBound =
         [Files, Diff, Git, FileWatcher, Terminal, DevServers, Skills, Attachments];
 
@@ -128,6 +132,11 @@ public sealed record ProjectCapabilities(
     public const string ServerContentOffReason = "У локального проекта недоступно: его файлы лежат на устройстве, а не на сервере";
     public const string TranscriptOnDeviceReason =
         "У локального проекта недоступно: подробная история чата хранится на его устройстве";
+    public const string HandsFlagOffReason = "Руки выключены (экспериментальная функция «Руки на устройстве»)";
+    public const string HandsNotLocalReason = "Руки есть только у локального проекта: ИИ управляет программами на устройстве проекта";
+    public const string HandsNotInstalledReason =
+        "На устройстве не установлены руки: выполните на нём «ai-home-agent hands enable»";
+    public const string HandsProjectOffReason = "Руки выключены в настройках проекта";
 
     /// <summary>Проект привязан к устройству. Единственная проверка локальности во всём коде.</summary>
     public static bool IsDeviceBound(Project project) => project.DeviceId is not null;
@@ -237,6 +246,22 @@ public sealed record ProjectCapabilities(
         : !device.Online ? DeviceOfflineReason
         : !device.HasCapability(DeviceCapabilities.Relay) ? NoRelayReason
         : device.AgentProblem;
+
+    /// <summary>
+    /// Можно ли чатам проекта подключать руки (ADR-016, раздел «Руки»): флаг <c>local-hands</c>
+    /// владельца, локальный проект, устройство объявило <see cref="DeviceCapabilities.Hands"/>,
+    /// тумблер рук у проекта включён. null — можно, иначе причина для человека. Онлайн не
+    /// требуется, как у <see cref="BindRefusal"/>: без сети ход откажет по <see cref="Exec"/>.
+    /// Сеанс рук сервер не видит и здесь не проверяет — его проверяет агент при подключении.
+    /// Контракт шага Ш1; к серверу и фронту матрицу подключает Ш4.
+    /// </summary>
+    public static string? HandsRefusal(Project project, DeviceExecStatus? device, bool handsFlagEnabled, bool projectHandsEnabled) =>
+        !handsFlagEnabled ? HandsFlagOffReason
+        : !IsDeviceBound(project) ? HandsNotLocalReason
+        : device is null ? DeviceMissingReason
+        : !device.HasCapability(DeviceCapabilities.Hands) ? HandsNotInstalledReason
+        : !projectHandsEnabled ? HandsProjectOffReason
+        : null;
 
     /// <summary>
     /// Матрица для проекта. <paramref name="device"/> — состояние устройства проекта из шва

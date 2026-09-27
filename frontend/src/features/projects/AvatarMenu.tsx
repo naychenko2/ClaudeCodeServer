@@ -3,7 +3,7 @@ import { C, FS, R, SHADOW, Z } from '../../lib/design';
 import { ConnectionStatus } from '../../components/ConnectionStatus';
 import { SegmentedControl } from '../../components/ui';
 import { useThemeMode, setThemeMode, type ThemeMode } from '../../lib/themeMode';
-import { Bell, History, Book, BriefcaseBusiness, Box, Gauge, Users, Lock, FlaskConical, LogOut, Mic, Coins, MonitorSmartphone, Palette, Plug, Power, Rocket, SlidersHorizontal, SquareDashedMousePointer } from 'lucide-react';
+import { Bell, History, Book, BriefcaseBusiness, Box, Gauge, Users, Lock, FlaskConical, Hand, LogOut, Mic, Coins, MonitorSmartphone, Palette, Plug, Power, Rocket, SlidersHorizontal, SquareDashedMousePointer } from 'lucide-react';
 import { ICON_SIZE } from '../../components/ui/icons';
 import { isMicKeyboardFallback, clearMicKeyboardFallback } from '../../lib/voiceInput';
 import { showToast } from '../../lib/toast';
@@ -82,6 +82,9 @@ interface Props {
   // «Устройства» — компьютеры, которым можно отдать руки в десктопном чате (ADR-008).
   // За фич-флагом desktop-agent, поэтому HubHeader передаёт колбэк не всегда
   onShowDevices?: () => void;
+  // «Руки на устройствах» — каким провайдерам владелец доверил руки локальных проектов
+  // (ADR-016 §7). За флагом local-hands, поэтому HubHeader передаёт колбэк не всегда
+  onShowHandsProviders?: () => void;
   // «Выкатить на бой» — публикация продукта трей-раннером. Пункт только для админов И только
   // когда фича включена в конфиге сервера, поэтому HubHeader передаёт колбэк не всегда
   onShowDeploy?: () => void;
@@ -98,7 +101,7 @@ interface Props {
   onShowRemoteCommands?: () => void;
 }
 
-export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout, onShowChangePassword, onShowFeatureFlags, onShowUserManagement, hideStatus, onShowHistory, historyBadge = 0, historyNeverSeen = false, historyActive = false, onOpenKnowledge, onOpenSpecialties, onShowModelsSpend, onOpenSpend, onShowMcpServers, onShowDevices, onShowDeploy, onShowSubsystems, onShowPower, onShowRemoteCommands, onOpenNotifications, notifBadge = 0, notifActive = false }: Props) {
+export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout, onShowChangePassword, onShowFeatureFlags, onShowUserManagement, hideStatus, onShowHistory, historyBadge = 0, historyNeverSeen = false, historyActive = false, onOpenKnowledge, onOpenSpecialties, onShowModelsSpend, onOpenSpend, onShowMcpServers, onShowDevices, onShowHandsProviders, onShowDeploy, onShowSubsystems, onShowPower, onShowRemoteCommands, onOpenNotifications, notifBadge = 0, notifActive = false }: Props) {
   // Как обращаемся к пользователю; логин остаётся видимым отдельной строкой,
   // чтобы было понятно, под каким аккаунтом сидишь
   const name = displayName?.trim() || username;
@@ -358,6 +361,15 @@ export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout
             >
               <MonitorSmartphone size={ICON_SIZE.xs} strokeWidth={2} />
               Устройства
+            </button>
+          )}
+          {onShowHandsProviders && (
+            <button
+              onClick={() => { setOpen(false); onShowHandsProviders(); }}
+              style={dropdownItem}
+            >
+              <Hand size={ICON_SIZE.xs} strokeWidth={2} />
+              Руки на устройствах
             </button>
           )}
           <button

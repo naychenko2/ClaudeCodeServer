@@ -55,6 +55,7 @@ internal sealed class RelayHandler
             [RelayOperations.GitDiff] = GitDiffAsync,
             [RelayOperations.GitLog] = GitLogAsync,
             [RelayOperations.GitShow] = GitShowAsync,
+            [RelayOperations.CheckPath] = CheckPathAsync,
         };
     }
 
@@ -178,6 +179,16 @@ internal sealed class RelayHandler
             RelayVariants.CommitFile => Json(new CommitFileResponse(await _git.FileAtCommitAsync(null, root, sha, path, ct))),
             _ => Error(StatusCodes.BadRequest, "Операция не поддерживается ретранслятором"),
         };
+    }
+
+    // Годится ли папка под проект — вердикт той же политики корней, что судит ход (C1).
+    // Путь не абсолютный (например, путь Windows на Linux) — такой папки на машине нет
+    private Task<RelayReply> CheckPathAsync(RelayRequest r, Project project, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(r.RootPath) || !Path.IsPathFullyQualified(r.RootPath))
+            return Task.FromResult(Json(new RelayPathCheck(Exists: false, IsDirectory: false, InsideRoots: false)));
+        var check = _files.Policy.CheckRoot(r.RootPath);
+        return Task.FromResult(Json(new RelayPathCheck(check.Exists, check.IsDirectory, check.InsideRoots)));
     }
 
     // Реальный корень проекта под корнями машины — или отказ политики (403, как у localhost-API)

@@ -467,6 +467,33 @@ public class UserStore : IForgejoAccountStore, IUserStore
         }
     }
 
+    /// <summary>Провайдеры, которым владелец доверил руки (ADR-016 §7); пусто — никому.</summary>
+    public IReadOnlyList<string> GetHandsProviders(string id)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            return user?.HandsProviders is { } list ? [.. list] : [];
+        }
+    }
+
+    /// <summary>
+    /// Сохраняет провайдеров для рук (список приходит отвалидированным контроллером).
+    /// Возвращает false, если пользователь не найден.
+    /// </summary>
+    public bool SetHandsProviders(string id, IReadOnlyList<string> keys)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user is null) return false;
+            if ((user.HandsProviders ?? []).SequenceEqual(keys)) return true;
+            user.HandsProviders = keys.Count == 0 ? null : [.. keys];
+            Save();
+            return true;
+        }
+    }
+
     /// <summary>Быстрые фразы композера пользователя в порядке показа; пусто — не заведены.</summary>
     public IReadOnlyList<QuickPhrase> GetQuickPhrases(string id)
     {

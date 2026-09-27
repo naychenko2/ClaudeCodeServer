@@ -90,5 +90,8 @@ internal sealed class TurnWorkspace : IDisposable
         && value == value.Trim();
 }
 
-/// <summary>Ход не запущен: причина — готовый текст для человека.</summary>
-internal sealed class ExecRefusedException(string message) : Exception(message);
+/// <summary>Ход не запущен: причина — готовый текст для человека, <see cref="Code"/> — машинный код для сервера.</summary>
+internal sealed class ExecRefusedException(string message, string? code = null) : Exception(message)
+{
+    public string? Code { get; } = code;
+}

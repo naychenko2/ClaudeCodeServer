@@ -1,5 +1,6 @@
 using System.Text.Json;
 using ClaudeHomeServer.DeviceAgent.Composition;
+using ClaudeHomeServer.Protocol;
 
 namespace ClaudeHomeServer.DeviceAgent.Hosting;
 
@@ -8,9 +9,18 @@ namespace ClaudeHomeServer.DeviceAgent.Hosting;
 /// <c>roots.json</c> в конфиге агента, правится командой <c>ai-home-agent roots</c>, а не
 /// сервером — серверной проверке агент не доверяет. Файл перечитывается по времени правки,
 /// так что добавленный корень работает без перезапуска агента.
+///
+/// Автовыдача папок проектов (решение владельца 2026-09-27): подписи «добавлен автоматически
+/// для проекта «…»» лежат отдельным файлом <c>roots-labels.json</c>, а не в <c>roots.json</c> —
+/// формат корней не меняется, и откат агента не превратит их в «ни одного корня». Выключатель
+/// автовыдачи — файл-маркер <c>roots-auto-off</c>: ставит и снимает его только команда
+/// <c>roots auto on|off</c> на машине, в протоколе с сервером такой операции нет.
 /// </summary>
 internal sealed class AgentRootsStore(string file) : IAgentRoots
 {
+    private string LabelsFile => Path.Combine(Path.GetDirectoryName(file) ?? "", "roots-labels.json");
+    private string AutoOffFile => Path.Combine(Path.GetDirectoryName(file) ?? "", "roots-auto-off");
+
     private readonly Lock _lock = new();
     private DateTime _loadedStamp = DateTime.MinValue;
     private IReadOnlyList<string> _roots = [];
@@ -63,7 +73,64 @@ internal sealed class AgentRootsStore(string file) : IAgentRoots
         var roots = Load().ToList();
         var removed = roots.RemoveAll(r => AgentPathPolicy.PathComparer.Equals(r, full)) > 0;
         if (removed) Save(roots);
+        var labels = LoadLabels();
+        if (labels.Remove(full)) SaveLabels(labels);
         return removed;
+    }
+
+    /// <summary>Автовыдача папок проектов включена (по умолчанию — да).</summary>
+    public bool AutoEnabled => !File.Exists(AutoOffFile);
+
+    /// <summary>Выключатель автовыдачи: только команда на машине.</summary>
+    public void SetAuto(bool enabled)
+    {
+        if (enabled) File.Delete(AutoOffFile);
+        else File.WriteAllText(AutoOffFile, "Автовыдача папок проектов выключена командой «ai-home-agent roots auto off»\n");
+    }
+
+    /// <summary>
+    /// Корень, выданный автоматически под проект: как <see cref="Add"/> (общий на запись каталог —
+    /// отказ, без --force), плюс подпись для <c>roots list</c>. Имя проекта — только подпись.
+    /// </summary>
+    public void AddAuto(string path, string? projectName)
+    {
+        Add(path);
+        var labels = LoadLabels();
+        labels[Path.GetFullPath(path)] = $"добавлен автоматически для проекта «{DisplayName(projectName)}»";
+        SaveLabels(labels);
+    }
+
+    /// <summary>Подпись корня для <c>roots list</c>; null — добавлен вручную.</summary>
+    public string? LabelOf(string root) => LoadLabels().GetValueOrDefault(root);
+
+    // Имя приходит с сервера: без управляющих символов и с потолком длины
+    private static string DisplayName(string? name)
+    {
+        var clean = new string((name ?? "").Where(c => !char.IsControl(c)).ToArray()).Trim();
+        if (clean.Length > BindFolderProtocol.MaxProjectNameLength)
+            clean = clean[..BindFolderProtocol.MaxProjectNameLength];
+        return clean.Length == 0 ? "без имени" : clean;
+    }
+
+    private Dictionary<string, string> LoadLabels()
+    {
+        var labels = new Dictionary<string, string>(AgentPathPolicy.PathComparer);
+        if (!File.Exists(LabelsFile)) return labels;
+        try
+        {
+            foreach (var (k, v) in JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(LabelsFile)) ?? [])
+                labels[k] = v;
+        }
+        // Битые подписи — только без подписей: на корни это не влияет
+        catch (JsonException) { }
+        return labels;
+    }
+
+    private void SaveLabels(Dictionary<string, string> labels)
+    {
+        var tmp = LabelsFile + ".tmp";
+        File.WriteAllText(tmp, JsonSerializer.Serialize(labels, new JsonSerializerOptions { WriteIndented = true }));
+        File.Move(tmp, LabelsFile, overwrite: true);
     }
 
     private IReadOnlyList<string> Load()

@@ -279,6 +279,30 @@ public class RemoteProcessRunnerLoopTests
         agent.Spawned.Task.IsCompleted.Should().BeFalse();
     }
 
+    // Отказ агента различается по коду кадра Exit, а не по тексту: busy — только с кодом
+    [Theory]
+    [InlineData(HandsEndReason.Busy, DeviceExecRefusal.HandsBusy)]
+    [InlineData(null, DeviceExecRefusal.AgentRefused)]
+    [InlineData("другой-код", DeviceExecRefusal.AgentRefused)]
+    public void ОтказАгента_ПричинаПоКодуОтказа(string? refusal, DeviceExecRefusal expected)
+    {
+        var channel = new InProcessDeviceExecChannel
+        {
+            Agent = async s =>
+            {
+                await s.FromServer.ReadAsync();
+                await s.DeviceRefuseAsync(HandsMachineLock.BusyText, refusal);
+            },
+        };
+        var runner = new RemoteProcessRunner(channel, new FakeDeviceTurnGateway(), "owner-busy", "dev-1");
+
+        var act = () => runner.Start(ClaudeSpec("turn-busy"));
+
+        var refused = act.Should().Throw<DeviceExecRefusedException>().Which;
+        refused.Reason.Should().Be(expected);
+        refused.Message.Should().Be(HandsMachineLock.BusyText);
+    }
+
     [Fact]
     public void ХодБезЧата_ОтказДоШлюза()
     {

@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text;
 using ClaudeHomeServer.DeviceAgent.Composition;
 using ClaudeHomeServer.DeviceAgent.Exec;
+using ClaudeHomeServer.DeviceAgent.Hands;
 using ClaudeHomeServer.DeviceAgent.Processes;
 using ClaudeHomeServer.DeviceAgent.Sidecar;
 using ClaudeHomeServer.DeviceAgent.Tests.Composition;
@@ -27,7 +28,8 @@ internal sealed class TurnHarness : IAsyncDisposable
         ["GITHUB_TOKEN"] = "ghp_SECRET5",
     };
 
-    public TurnHarness(string cliPath, string? leaseProblem = null, Func<TurnLaunch, TurnProcess>? launcher = null)
+    public TurnHarness(string cliPath, string? leaseProblem = null, Func<TurnLaunch, TurnProcess>? launcher = null,
+        HandsRuntime? hands = null)
     {
         Root = Path.Combine(Path.GetTempPath(), "agent-turn-" + Guid.NewGuid().ToString("N")[..10]);
         WorkDir = Directory.CreateDirectory(Path.Combine(Root, "project")).FullName;
@@ -52,6 +54,7 @@ internal sealed class TurnHarness : IAsyncDisposable
             Launcher = launcher ?? TurnProcess.Start,
             // Разрешённый корень машины — сам каталог проекта
             PathPolicy = new AgentPathPolicy(new AgentSandbox.FixedRoots(WorkDir)),
+            Hands = hands,
         }, Cli, Grants, Journal, new ListLogger<TurnExecutor>(Logs));
     }
 

@@ -36,7 +36,7 @@ public sealed class DeviceHubExecOpenSender(IHubContext<DeviceHub, IDesktopDevic
 /// Авторизация WebSocket — только токен устройства плюс отпечаток: дефолтная JwtBearer и
 /// сервисный JWT владельца канал не открывают (та же граница, что у /api/devices/*).
 /// </summary>
-public sealed class DeviceExecChannel : IDeviceExecChannel, IDeviceRelayChannel
+public sealed class DeviceExecChannel : IDeviceExecChannel, IDeviceRelayChannel, IDeviceFolderBindChannel
 {
     private readonly DeviceRegistry _registry;
     private readonly DesktopCallRouter _router;
@@ -88,18 +88,25 @@ public sealed class DeviceExecChannel : IDeviceExecChannel, IDeviceRelayChannel
             HarnessProblem = problem,
             ExecProtocolVersion = DeviceExecProtocol.Version,
         };
-        return string.IsNullOrWhiteSpace(hello.AgentVersion) ? ack : WithAgentRelease(ack, hello.Rid);
+        return string.IsNullOrWhiteSpace(hello.AgentVersion) ? ack : WithAgentRelease(ack, hello.AgentVersion, hello.Rid);
     }
 
     // Минимальная версия — свойство кода и уходит всегда; текущая — только если сервер
     // раздаёт агента (выключенный Desktop или пустой каталог — null), архив — только под
     // RID, который агент объявил сам.
-    private DeviceHelloAck WithAgentRelease(DeviceHelloAck ack, string? rid)
+    private DeviceHelloAck WithAgentRelease(DeviceHelloAck ack, string agentVersion, string? rid)
     {
         // Один снимок на оба ответа: версия и архив не могут прийти из разных выкаток
-        var latest = _releases?.Current().Latest;
+        var snapshot = _releases?.Current();
+        var latest = snapshot?.Latest;
         var archive = latest is not null && DeviceAgentRids.IsSupported(rid)
             && latest.Archives.TryGetValue(rid!, out var found) ? found : null;
+        // Компонент рук — ТОЙ ЖЕ версии, что агент: аргументы запуска моста — контракт этой пары
+        // (ключ каталога — канонический, агент же шлёт версию с хвостом +sha)
+        var hands = snapshot is not null && DeviceAgentRids.IsSupported(rid)
+            && DeviceAgentVersion.Canonical(agentVersion) is { } ownVersion
+            && snapshot.Versions.TryGetValue(ownVersion, out var own)
+            && own.Hands.TryGetValue(rid!, out var h) ? h : null;
         return ack with
         {
             AgentMinVersion = DeviceAgentCompatibility.MinVersion,
@@ -107,6 +114,9 @@ public sealed class DeviceExecChannel : IDeviceExecChannel, IDeviceRelayChannel
             AgentArchiveSha256 = archive?.Sha256,
             AgentArchiveSize = archive?.Size,
             AgentArchivePath = archive?.RelativePath,
+            HandsArchiveSha256 = hands?.Sha256,
+            HandsArchiveSize = hands?.Size,
+            HandsArchivePath = hands?.RelativePath,
         };
     }
 
@@ -176,6 +186,31 @@ public sealed class DeviceExecChannel : IDeviceExecChannel, IDeviceRelayChannel
             ?? throw new DeviceExecRefusedException(DeviceExecRefusal.Offline, $"{name} не в сети.");
 
         return await OpenStreamAsync(connection, DeviceExecPurposes.Relay, RelayProtocol.MaxOutage, ct,
+            $"{name} не ответило за {(int)DeviceExecProtocol.OpenTimeout.TotalSeconds} с.");
+    }
+
+    /// <summary>
+    /// Канал одной выдачи папки проекта (решение владельца 2026-09-27): назначение
+    /// <see cref="DeviceExecPurposes.BindFolder"/>, короткий потолок простоя как у ретранслятора.
+    /// </summary>
+    public async Task<IDeviceExecStream> OpenBindFolderAsync(string ownerId, string deviceId, CancellationToken ct = default)
+    {
+        var status = GetStatus(ownerId, deviceId)
+            ?? throw new DeviceExecRefusedException(DeviceExecRefusal.UnknownDevice, "Устройство не найдено или отозвано.");
+
+        var name = $"Устройство «{status.DeviceName}»";
+        if (!status.Online)
+            throw new DeviceExecRefusedException(DeviceExecRefusal.Offline, $"{name} не в сети.");
+        if (!status.HasCapability(DeviceCapabilities.BindFolder))
+            throw new DeviceExecRefusedException(DeviceExecRefusal.NoBindFolderCapability,
+                $"{name}: агент не умеет выдавать папку проекта — обнови агента.");
+        if (status.AgentOutdated)
+            throw new DeviceExecRefusedException(DeviceExecRefusal.AgentOutdated, $"{name}: {status.AgentProblem}.");
+
+        var connection = _router.Find(ownerId, deviceId)
+            ?? throw new DeviceExecRefusedException(DeviceExecRefusal.Offline, $"{name} не в сети.");
+
+        return await OpenStreamAsync(connection, DeviceExecPurposes.BindFolder, RelayProtocol.MaxOutage, ct,
             $"{name} не ответило за {(int)DeviceExecProtocol.OpenTimeout.TotalSeconds} с.");
     }
 

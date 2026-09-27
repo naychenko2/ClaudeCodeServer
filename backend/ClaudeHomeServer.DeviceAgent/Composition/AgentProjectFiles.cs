@@ -30,6 +30,9 @@ internal sealed class AgentProjectFiles : IProjectFiles
 
     public event Action<string, string, FileMutationKind, string?>? OnMutated;
 
+    /// <summary>Политика корней машины — та же, что судит чтение файлов и ход.</summary>
+    public AgentPathPolicy Policy => _policy;
+
     public void NotifyMutated(string root, string relativePath, FileMutationKind kind) =>
         _files.NotifyMutated(root, relativePath, kind);
 

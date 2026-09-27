@@ -91,6 +91,10 @@ public class User
     // VideoFavorites.Defaults), пустой — «снял все звёздочки» и полоса честно пуста.
     // Мёртвые ключи (канал пропал из каталога) не каскадятся — фронт их просто не находит.
     public List<string>? FavoriteVideoChannels { get; set; }
+    // Провайдеры, которым владелец доверил руки локальных проектов (ADR-016 §7): ключи
+    // LlmProviderRegistry, родной Claude — "claude". null и пусто — руки выключены во всех
+    // проектах: разрешение явное, по умолчанию его нет. Фолбэк хода с руками режется до них.
+    public List<string>? HandsProviders { get; set; }
 }
 
 // Значения User.ExecutionEnvironment

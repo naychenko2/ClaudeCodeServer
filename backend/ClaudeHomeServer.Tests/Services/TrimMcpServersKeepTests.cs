@@ -91,7 +91,7 @@ public class TrimMcpServersKeepTests : IDisposable
             mcpConfigPath: mcpConfigPath, providers: providers);
         var method = typeof(ClaudeSession).GetMethod("BuildTurnMcpConfig",
             BindingFlags.NonPublic | BindingFlags.Instance)!;
-        var result = method.Invoke(session, [null, null])!;
+        var result = method.Invoke(session, [null, null, false])!;
         var type = result.GetType();
         var path = (string?)type.GetField("Item1")!.GetValue(result);
         var keys = (string)type.GetField("Item2")!.GetValue(result)!;

@@ -54,6 +54,14 @@ public sealed class DeviceAgentVersion : IEquatable<DeviceAgentVersion>, ICompar
         return true;
     }
 
+    /// <summary>
+    /// Каноническая запись версии — ключ каталога релизов: без хвоста <c>+sha</c>, который
+    /// агент шлёт из InformationalVersion (SemVer: метаданные сборки в сравнении не участвуют).
+    /// null — не версия агента. Любой поиск версии агента в каталоге идёт только через неё.
+    /// </summary>
+    public static string? Canonical(string? text) =>
+        TryParse(text?.Trim(), out var version) ? version.ToString() : null;
+
     public static DeviceAgentVersion Parse(string text) =>
         TryParse(text, out var version)
             ? version

@@ -39,6 +39,9 @@ export const FLAGS = {
   // Локальные проекты (ADR-016): проект на устройстве владельца, ход идёт через агента.
   // Что доступно у такого проекта, решает матрица capabilities из DTO проекта, а не флаг.
   localProjects: 'local-projects',
+  // Руки локальных проектов (ADR-016 §7): тумблер в проекте и провайдеры для рук.
+  // Без флага секции нет, и сервер не выдаёт чатам руки.
+  localHands: 'local-hands',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

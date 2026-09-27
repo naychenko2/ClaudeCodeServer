@@ -129,6 +129,43 @@ public class DeviceExecChannelTests : IDisposable
         ack.AgentArchivePath.Should().BeNull();
     }
 
+    // Компонент рук (ADR-016 §7): архив ТОЙ ЖЕ версии, что у агента, — по каналу устройства
+    // Реальная сборка шлёт InformationalVersion с хвостом +sha, а ключ каталога — канонический
+    [Theory]
+    [InlineData("")]
+    [InlineData("+abcdef12")]
+    public async Task Ack_НесётКомпонентРукСвоейВерсииИRid(string buildMetadata)
+    {
+        using var rel = new AgentReleaseFixture();
+        rel.PublishWithHands();
+        var rig = NewRig(releases: new AgentReleaseCatalog(rel.Config()));
+
+        var ack = await ConnectAsync(rig, AgentHello(RequiredCli) with
+        {
+            AgentVersion = AgentReleaseFixture.Version + buildMetadata,
+            Rid = "win-x64",
+        });
+
+        ack.HandsArchivePath.Should().Be($"{AgentReleaseFixture.Version}/win-x64/{AgentReleaseFixture.HandsFile}");
+        ack.HandsArchiveSha256.Should().Be(AgentReleaseFixture.Sha(rel.HandsBytes));
+        ack.HandsArchiveSize.Should().Be(rel.HandsBytes.Length);
+    }
+
+    [Theory]
+    [InlineData("1.199.0", "win-x64")]
+    [InlineData(AgentReleaseFixture.Version, "linux-x64")]
+    public async Task Ack_КомпонентаРукДругойВерсииИлиRid_Нет(string agentVersion, string rid)
+    {
+        using var rel = new AgentReleaseFixture();
+        rel.PublishWithHands();
+        var rig = NewRig(releases: new AgentReleaseCatalog(rel.Config()));
+
+        var ack = await ConnectAsync(rig, AgentHello(RequiredCli) with { AgentVersion = agentVersion, Rid = rid });
+
+        ack.HandsArchivePath.Should().BeNull();
+        ack.HandsArchiveSha256.Should().BeNull();
+    }
+
     [Fact]
     public async Task Ack_ДесктопВыключен_ТолькоМинимальнаяВерсия()
     {
@@ -341,6 +378,31 @@ public class DeviceExecChannelTests : IDisposable
         (await open.Should().ThrowAsync<DeviceExecRefusedException>()).Which.Reason.Should().Be(DeviceExecRefusal.NoResponse);
         rig.Opener.Calls.Should().Be(1);
         rig.Opener.Last!.Purpose.Should().Be(DeviceExecPurposes.Relay);
+    }
+
+    // ---------- выдача папки проекта (решение владельца 2026-09-27): своё назначение ----------
+
+    [Fact]
+    public async Task ВыдачаПапки_АгентБезВозможности_ОтказСразу()
+    {
+        var rig = NewRig();
+        await ConnectAsync(rig, AgentHello(RequiredCli, DeviceCapabilities.Exec, DeviceCapabilities.Files, DeviceCapabilities.Relay));
+
+        var open = () => rig.Channel.OpenBindFolderAsync(Owner, rig.Device.Id);
+        (await open.Should().ThrowAsync<DeviceExecRefusedException>()).Which.Reason.Should().Be(DeviceExecRefusal.NoBindFolderCapability);
+        rig.Opener.Calls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ВыдачаПапки_КомандаОткрытияСНазначениемBindFolder()
+    {
+        var rig = NewRig();
+        await ConnectAsync(rig, AgentHello(null, DeviceCapabilities.BindFolder));
+
+        var open = () => rig.Channel.OpenBindFolderAsync(Owner, rig.Device.Id);
+        (await open.Should().ThrowAsync<DeviceExecRefusedException>()).Which.Reason.Should().Be(DeviceExecRefusal.NoResponse);
+        rig.Opener.Calls.Should().Be(1);
+        rig.Opener.Last!.Purpose.Should().Be(DeviceExecPurposes.BindFolder);
     }
 
     [Fact]

@@ -75,7 +75,7 @@ public class McpHttpTransportConfigTests : IDisposable
     {
         var method = typeof(ClaudeSession).GetMethod("BuildTurnMcpConfig",
             BindingFlags.NonPublic | BindingFlags.Instance)!;
-        var result = method.Invoke(session, [difyDatasetId, personaAgents])!;
+        var result = method.Invoke(session, [difyDatasetId, personaAgents, false])!;
         var type = result.GetType();
         // У ValueTuple элементы — ПОЛЯ, а не свойства
         var path = (string?)type.GetField("Item1")!.GetValue(result);

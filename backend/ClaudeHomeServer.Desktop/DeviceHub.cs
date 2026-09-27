@@ -2,6 +2,7 @@ using System.Security.Claims;
 using ClaudeHomeServer.Protocol;
 using Microsoft.AspNetCore.Authorization;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Execution;
 using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services.Desktop;
@@ -49,7 +50,8 @@ public sealed class DeviceHub(
     DeviceExecChannel exec,
     ILogger<DeviceHub> log,
     AgentTicketService? agentTickets = null,
-    IProjectFilesChangedNotifier? filesChanged = null)
+    IProjectFilesChangedNotifier? filesChanged = null,
+    ILocalHandsNotifier? handsNotifier = null)
     : Hub<IDesktopDeviceClient>
 {
     private string? OwnerId => Context.User?.FindFirstValue(DesktopProtocol.OwnerIdClaim);
@@ -165,6 +167,37 @@ public sealed class DeviceHub(
         var full = report.Full || paths.Count > DeviceAgentApi.MaxChangedPaths;
         await filesChanged.FilesChangedAsync(report.ProjectId, full ? [] : paths, full);
     }
+
+    /// <summary>
+    /// Донесение агента о руках хода (ADR-016 §7): «ход действует руками», «руки доступны»,
+    /// «остановлено из трея». Принимается только по ходу с руками, который сервер сам отправил
+    /// ЭТОМУ устройству, — чужой чат устройство «пошевелить» не может. Состояние запоминается
+    /// у устройства (первая отрисовка бейджа) и уходит в чат хода.
+    /// </summary>
+    [HubMethodName(DeviceHandsReport.Method)]
+    public async Task ReportHandsStatus(DeviceHandsReport report)
+    {
+        if (OwnerId is not { Length: > 0 } ownerId || DeviceId is not { Length: > 0 } deviceId) return;
+        if (report is null || !HandsChatStates.FromDevice.Contains(report.State))
+            throw new HubException("Незнакомое состояние рук");
+        if (DeviceHandsTurns.SessionOf(ownerId, deviceId, report.TurnId ?? "") is not { } sessionId)
+            throw new HubException($"Ход {report.TurnId} с руками этому устройству не отправлялся");
+
+        // Причина — только из известного набора: текст с устройства в чат как есть не едет
+        var reason = report.State == HandsChatStates.Stopped && KnownEndReasons.Contains(report.Reason ?? "")
+            ? report.Reason
+            : null;
+        DeviceHandsTurns.SetLast(ownerId, deviceId,
+            new DeviceHandsLastState(sessionId, report.TurnId!, report.State, reason, DateTimeOffset.UtcNow));
+        DeviceHandsTurns.Accepted(ownerId, deviceId, report.TurnId!, report.State);
+        if (handsNotifier is not null)
+            await handsNotifier.HandsStatusAsync(ownerId, deviceId, sessionId, report.State, reason);
+    }
+
+    private static readonly HashSet<string> KnownEndReasons = new(StringComparer.Ordinal)
+    {
+        HandsEndReason.StoppedFromTray, HandsEndReason.HandsDisabled, HandsEndReason.AgentStopping,
+    };
 
     // Донесение по чужому или неизвестному callId — не «тихо ок»: устройство обязано увидеть отказ.
     private static HubException UnknownCall(string callId) =>

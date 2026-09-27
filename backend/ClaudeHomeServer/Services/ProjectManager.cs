@@ -505,6 +505,18 @@ public class ProjectManager : IProjectManager
         return project;
     }
 
+    // Тумблер рук локального проекта (ADR-016 §7): одно из условий ProjectCapabilities.HandsRefusal.
+    // Пересоздание адаптеров живых чатов — забота вызывающего контроллера.
+    public Project SetHandsEnabled(string id, bool enabled)
+    {
+        var project = _projects.GetValueOrDefault(id)
+            ?? throw new KeyNotFoundException($"Проект не найден: {id}");
+        project.HandsEnabled = enabled;
+        project.UpdatedAt = DateTime.UtcNow;
+        Save();
+        return project;
+    }
+
     // Порог автоправила архивации чатов проекта (флаг chat-auto-archive): null — наследовать
     // личный порог владельца. Диапазон валидирует контроллер, здесь сеттер, как у остальных
     // точечных обновлений.

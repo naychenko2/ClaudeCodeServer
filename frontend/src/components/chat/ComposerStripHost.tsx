@@ -8,7 +8,7 @@
 // строку» / «Развернуть полосу»; на телефоне то же меню открывается шторкой (прототип
 // docs/mockups/image-editor-v3-strips-prototype.html, вариант C). Пока полоса одна,
 // переключателя нет — полоса выглядит как раньше.
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { MouseEvent, ReactNode } from 'react';
 import { Check, ChevronDown, ChevronsDownUp, ChevronsUpDown } from 'lucide-react';
 import { C, FS, SP } from '../../lib/design';
@@ -43,6 +43,13 @@ export function ComposerStripHost({ projectId, sessionId, isMobile, builtins = [
   const fromSlot = useSlot<ComposerStripCtx, ComposerStripApi>(SLOT_COMPOSER_STRIP);
   const [menu, setMenu] = useState<DOMRect | null>(null);
   const [sheet, setSheet] = useState(false);
+  // Меню с якорем само Esc не ловит — закрываем здесь, как меню фиксации в ProjectGitBar
+  useEffect(() => {
+    if (!menu) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenu(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [menu]);
 
   const avail = { projectId, sessionId };
   // Встроенная полоса главнее одноимённого вклада: id полосы уникален

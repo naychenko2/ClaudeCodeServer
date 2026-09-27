@@ -225,6 +225,7 @@ hosted-сервис; код Viaduct в репу не попадает) в sandbo
 MF-remote `frontend/modules/architecture`. Статика `/modules/viaduct` — под тумблером подсистемы.
 Фич-флага нет: раздел и тулсет есть у всех, когда модуль загружен (`DynamicModules` → `architecture`
 + `Subsystems:architecture:Enabled`), выключается только конфигом.
+Кнопка «Собрать архитектуру»: проход 1 — код + кандидаты L1 с тегом `кандидат`, пропавшее — `нет в коде`; галочка «С агентом» — задача архитектору (Planner, иначе без персоны), 409 на двойной запуск.
 Устройство и ограничения — [architecture-section.md](docs/features/architecture-section.md),
 сборка — [viaduct-module.md](docs/operations/viaduct-module.md), решение — [ADR-016](docs/adr/ADR-016-viaduct-architecture-section.md).
 

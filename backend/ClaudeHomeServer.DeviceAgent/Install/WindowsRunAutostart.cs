@@ -15,8 +15,8 @@ internal interface IRunRegistry
 /// <summary>
 /// Windows: <c>HKCU\Software\Microsoft\Windows\CurrentVersion\Run</c> (Р6). Без админа,
 /// запись значения атомарна. Цена — агент живёт, пока пользователь вошёл в систему.
-/// Запись указывает на <c>versions/{v}/ai-home-agent.exe supervise</c>: сам супервизор
-/// обновляется лениво, при следующем входе.
+/// Запись указывает на <c>versions/{v}/ai-home-agent.exe supervise</c>; живой супервизор
+/// передаёт эстафету новой версии сам (<see cref="DetachedSupervisorHandoff"/>).
 /// </summary>
 internal sealed class WindowsRunAutostart(AgentLayout layout, IRunRegistry registry, IDetachedStarter starter) : IAutostart
 {

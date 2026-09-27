@@ -25,6 +25,8 @@ internal sealed partial class AgentLayout(string root)
     public string CurrentLink => Path.Combine(Root, "current");
     public string SupervisorPidFile => Path.Combine(Root, "supervisor.pid");
     public string SupervisorLockFile => Path.Combine(Root, "supervisor.lock");
+    /// <summary>PID нового супервизора, принявшего эстафету (<see cref="DetachedSupervisorHandoff"/>).</summary>
+    public string SupervisorHandoffFile => Path.Combine(Root, "supervisor.handoff");
     public string LogDirectory => Path.Combine(Root, "logs");
 
     public string VersionDir(string version) => Path.Combine(VersionsDir, Checked(version));

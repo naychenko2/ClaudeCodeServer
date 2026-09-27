@@ -12,8 +12,9 @@ internal static class SupervisedRun
     public static bool IsSupervised => SupervisorPid() is not null;
 
     /// <summary>
-    /// Версия, из каталога которой запущен супервизор: он обновляется лениво, и уборка версий
-    /// не должна удалить его каталог. null — не установить (нет pid-файла, процесс чужой).
+    /// Версия, из каталога которой запущен супервизор: эстафета новой версии может не
+    /// состояться, и уборка версий не должна удалить его каталог. null — не установить
+    /// (нет pid-файла, процесс чужой).
     /// </summary>
     public static string? SupervisorVersion(AgentLayout layout)
     {

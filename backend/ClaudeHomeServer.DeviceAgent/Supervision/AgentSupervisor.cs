@@ -55,13 +55,18 @@ internal sealed record SupervisorOptions
 }
 
 /// <summary>
-/// <c>ai-home-agent supervise</c> (Р7, пока без самообновления):
+/// <c>ai-home-agent supervise</c> (Р7):
 /// - поднимает дочерний <c>run</c> из <c>versions/{active}</c>;
 /// - код 75 — перечитать <c>active</c> и поднять новую версию без паузы;
 /// - любой другой код — перезапуск с бэкоффом 1→2→4…→60 с, сброс после 5 мин жизни;
 /// - версия без маркера healthy за 60 с (или упавшая до него) — убить дочерний, пометить
 ///   версию плохой, вернуть <c>active</c> на <c>previous</c> и переписать автозапуск;
-/// - версия, помеченная плохой меньше суток назад, не пробуется: сразу откат.
+/// - версия, помеченная плохой меньше суток назад, не пробуется: сразу откат;
+/// - <c>active</c> не своя версия — перед запуском дочернего автозапуск переводится на неё и
+///   эстафета уходит супервизору той версии (<see cref="ISupervisorHandoff"/>); принял — этот
+///   выходит. Проверка стоит только между дочерними: пока <c>run</c> жив, идёт ход или держит
+///   аренда, а выходит он с 75, только когда аренд нет. Не принял — остаёмся и поднимаем
+///   дочерний сами (контракт заморожен ровно для этого), повторно в эту версию не передаём.
 /// Откатываться некуда — версия продолжает работать: лучше агент, который ещё не
 /// дозвонился до сервера, чем никакого.
 /// </summary>
@@ -71,10 +76,16 @@ internal sealed class AgentSupervisor(
     Action<string> repointAutostart,
     ILogger log,
     SupervisorOptions? options = null,
-    ISupervisorClock? clock = null)
+    ISupervisorClock? clock = null,
+    string? ownVersion = null,
+    ISupervisorHandoff? handoff = null)
 {
     private readonly SupervisorOptions _options = options ?? new SupervisorOptions();
     private readonly ISupervisorClock _clock = clock ?? SystemSupervisorClock.Instance;
+    private readonly HashSet<string> _handoffRefused = [];
+
+    /// <summary>Супервизор вышел, отдав работу супервизору этой версии; null — остановлен или работает.</summary>
+    public string? HandedOffTo { get; private set; }
 
     public async Task<int> RunAsync(CancellationToken stop)
     {
@@ -94,6 +105,12 @@ internal sealed class AgentSupervisor(
                 log.LogWarning("Версия {Active} помечена плохой — не пробую, возвращаюсь на {Previous}", active, fallback);
                 Rollback(active, fallback, markBad: false);
                 continue;
+            }
+
+            if (handoff is not null && ownVersion is not null && active != ownVersion && !_handoffRefused.Contains(active))
+            {
+                if (await HandOffAsync(active, stop)) break;
+                if (stop.IsCancellationRequested) break;
             }
 
             var mustProve = !layout.IsHealthy(active);
@@ -149,8 +166,36 @@ internal sealed class AgentSupervisor(
             backoff = TimeSpan.FromTicks(Math.Min(backoff.Ticks * 2, _options.BackoffMax.Ticks));
         }
 
-        log.LogInformation("Супервизор остановлен");
+        if (HandedOffTo is null) log.LogInformation("Супервизор остановлен");
+        else log.LogInformation("Супервизор вышел, передав эстафету версии {Version}", HandedOffTo);
         return 0;
+    }
+
+    private async Task<bool> HandOffAsync(string active, CancellationToken stop)
+    {
+        log.LogInformation("Активна версия {Active}, супервизор — {Own}: передаю эстафету супервизору {Active}", active, ownVersion, active);
+        // Автозапуск — на новую версию до выхода: перезагрузка в окне эстафеты поднимет уже её
+        Repoint(active);
+
+        HandoffResult result;
+        try { result = await handoff!.HandOffAsync(active, stop); }
+        catch (OperationCanceledException) { return false; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException
+                                      or System.ComponentModel.Win32Exception)
+        {
+            result = HandoffResult.Failed(e.Message);
+        }
+
+        if (result.Accepted)
+        {
+            HandedOffTo = active;
+            log.LogInformation("Супервизор {Active} принял эстафету — выхожу", active);
+            return true;
+        }
+        _handoffRefused.Add(active);
+        log.LogWarning("Супервизор {Active} не принял эстафету: {Error}. Остаюсь супервизором {Own} и поднимаю дочерний {Active} сам; " +
+            "супервизор обновится при следующем входе", active, result.Error, ownVersion, active);
+        return false;
     }
 
     /// <summary>Куда откатиться с версии: прошлая, установленная и не помеченная плохой.</summary>
@@ -166,12 +211,17 @@ internal sealed class AgentSupervisor(
     {
         if (markBad) layout.MarkBad(failed, _clock.Now);
         layout.RollbackTo(previous);
-        try { repointAutostart(previous); }
+        Repoint(previous);
+        log.LogWarning("active = {Previous}; {Failed} {Mark}", previous, failed, markBad ? "помечена плохой" : "пропущена");
+    }
+
+    private void Repoint(string version)
+    {
+        try { repointAutostart(version); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
-            log.LogWarning("Автозапуск не переписан на {Version}: {Error}", previous, e.Message);
+            log.LogWarning("Автозапуск не переписан на {Version}: {Error}", version, e.Message);
         }
-        log.LogWarning("active = {Previous}; {Failed} {Mark}", previous, failed, markBad ? "помечена плохой" : "пропущена");
     }
 
     private async Task<bool> WaitHealthyAsync(string version, ISupervisedChild child, CancellationToken stop)

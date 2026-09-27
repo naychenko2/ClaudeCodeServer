@@ -63,6 +63,18 @@ internal sealed class SupervisorLock : IDisposable
         return new SupervisorLock(stream, layout.SupervisorPidFile);
     }
 
+    /// <summary>Эстафета: ждать, пока прежний супервизор отпустит замок; не дождались — null.</summary>
+    public static async Task<SupervisorLock?> WaitAsync(AgentLayout layout, TimeSpan timeout, TimeSpan? poll = null)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (true)
+        {
+            if (TryAcquire(layout) is { } acquired) return acquired;
+            if (DateTime.UtcNow >= deadline) return null;
+            await Task.Delay(poll ?? TimeSpan.FromMilliseconds(200));
+        }
+    }
+
     public void Dispose()
     {
         try { File.Delete(_pidFile); } catch (IOException) { }

@@ -52,7 +52,8 @@ public static class AgentProgram
         if (command == "run" && !SupervisedRun.ArmParentDeath()) return 0;
 
         var paths = AgentPaths.ForCurrentUser();
-        if (command == "supervise") return await SuperviseAsync(paths);
+        if (command == "supervise")
+            return SupervisorHandoffs.ParseArgs(args[1..]) is (true, var takeoverFrom) ? await SuperviseAsync(paths, takeoverFrom) : Usage();
 
         using var loggers = LoggerFactory.Create(b => b
             .AddSimpleConsole(o => { o.SingleLine = true; o.TimestampFormat = "HH:mm:ss "; })
@@ -161,9 +162,11 @@ public static class AgentProgram
 
     /// <summary>
     /// Супервизор (Р7): один на установку, журнал — в {root}/logs, дочерний — <c>run</c>
-    /// активной версии. SIGTERM и Ctrl+C гасят дочерний вежливо.
+    /// активной версии. SIGTERM и Ctrl+C гасят дочерний вежливо. <paramref name="takeoverFrom"/> —
+    /// поднят прежним супервизором для эстафеты: отметиться в <c>supervisor.handoff</c> и
+    /// ждать его замок, а не выходить сразу.
     /// </summary>
-    private static async Task<int> SuperviseAsync(AgentPaths paths)
+    private static async Task<int> SuperviseAsync(AgentPaths paths, int? takeoverFrom)
     {
         var detached = OperatingSystem.IsWindows() && ConsoleDetach.IfSoleOwner();
         var layout = AgentLayout.Resolve(paths);
@@ -178,11 +181,23 @@ public static class AgentProgram
         });
         var log = loggers.CreateLogger("ai-home-agent supervise");
 
-        using var single = SupervisorLock.TryAcquire(layout);
+        if (takeoverFrom is { } from)
+        {
+            log.LogInformation("Принимаю эстафету у супервизора pid={Pid} — жду его замок", from);
+            AgentLayout.WriteAtomic(layout.SupervisorHandoffFile, Environment.ProcessId.ToString());
+        }
+        using var single = takeoverFrom is null
+            ? SupervisorLock.TryAcquire(layout)
+            : await SupervisorLock.WaitAsync(layout, SupervisorHandoffs.LockWait);
         if (single is null)
         {
             log.LogInformation("Супервизор этой установки уже работает ({Root}) — выхожу", layout.Root);
             return 0;
+        }
+        if (takeoverFrom is not null)
+        {
+            try { File.Delete(layout.SupervisorHandoffFile); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
         }
         log.LogInformation("Супервизор {Version} стартовал из {Dir}, корень {Root}", Version, AppContext.BaseDirectory, layout.Root);
 
@@ -192,7 +207,10 @@ public static class AgentProgram
 
         var autostart = Autostarts.ForCurrentOs(layout);
         var launcher = new ProcessChildLauncher(agentLog.Append);
-        var supervisor = new AgentSupervisor(layout, launcher, autostart.Repoint, log);
+        // Самообновление супервизора — только у установленного из versions/: собранному из исходников отдавать некому
+        var own = AgentLayout.OwnVersion();
+        var supervisor = new AgentSupervisor(layout, launcher, autostart.Repoint, log,
+            ownVersion: own, handoff: own is null ? null : SupervisorHandoffs.ForCurrentOs(layout));
 
         // Трей (Ш7) — только на Windows: там руки. «Выйти из агента» в трее гасит и супервизор
         var tray = OperatingSystem.IsWindows()

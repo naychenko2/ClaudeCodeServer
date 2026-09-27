@@ -232,6 +232,11 @@ export interface ComposerModeApi {
   icon: ReactNode;
   // Режим предлагается, только пока условие истинно (например, выбрана картинка)
   isAvailable: (ctx: ComposerModeCtx) => boolean;
+  // Режим просит включить себя сам: ключ повода (черновик, «Редактировать»). Поле
+  // переключается один раз на каждый новый ключ, откуда бы ни пришло состояние —
+  // клик, агент, перезагрузка; ручной уход в «Чат» держится, пока ключ тот же.
+  // null — не просит. Сигнал о смене состояния — notifyComposer из kit
+  autoSelect?: (ctx: ComposerModeCtx) => string | null;
   placeholder: (ctx: ComposerModeCtx) => string;
   // Подпись кнопки отправки: «✦ Изменить · ≈ $0.15»
   submitLabel?: (ctx: ComposerModeCtx) => ReactNode;

@@ -145,8 +145,9 @@ export { notesPanels, zoneOf } from '../../pages/workspace/panelStackState';
 
 // ─── composerStrips ──────────────────────────────────────────────────────────
 // Владелец полосы над композером просит показать её в чате и снимает запрос
-// (правило старшинства — в самом сторе, ADR-019 решение 3)
-export { requestStrip, releaseStrip } from '../composerStrips';
+// (правило старшинства — в самом сторе, ADR-019 решение 3); notifyComposer — сигнал
+// композеру от владельца режима поля ввода
+export { requestStrip, releaseStrip, notifyComposer } from '../composerStrips';
 
 // ─── signalr ─────────────────────────────────────────────────────────────────
 export { onMessage, onReconnected } from '../signalr';

@@ -38,6 +38,7 @@ import { Button, IconButton, Modal, Notice } from './ui';
 import { SLOT_COMPOSER_CHIP, SLOT_COMPOSER_MODE, useSlot } from '../lib/subsystems/registry';
 import type { ComposerChipCtx, ComposerModeApi, ComposerModeCtx } from '../lib/subsystems/registry';
 import { getComposerStripsVersion, subscribeComposerStrips } from '../lib/composerStrips';
+import { nextComposerMode } from '../lib/composerModes';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { useVoiceInput } from '../hooks/useVoiceInput';
 import { useHandsFree, type SpeechPhase } from '../hooks/useHandsFree';
@@ -611,6 +612,15 @@ export function Composer({
     .filter(c => c.name && c.action && c.action.isAvailable(modeCtx));
   const slotChips = useSlot<ComposerChipCtx>(SLOT_COMPOSER_CHIP);
   const [modeId, setModeId] = useState<string | null>(null);
+  // Самовключение режима по поводу от владельца (черновик, «Редактировать»): считаем по
+  // состоянию, а не по клику — фокус картинки приходит и от агента, и после перезагрузки
+  const autoKeyRef = useRef<string | null>(null);
+  const autoMode = nextComposerMode(slotModes, modeCtx, autoKeyRef.current, modeId);
+  useEffect(() => {
+    autoKeyRef.current = autoMode.key;
+    if (autoMode.modeId !== modeId) setModeId(autoMode.modeId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- переключаемся только на новый ключ
+  }, [autoMode.key]);
   // Режим пропал (условие стало ложным) — поле само возвращается в «Чат»
   const activeMode = slotModes.find(c => c.name === modeId)?.action ?? null;
   const [modeText, setModeText] = useState('');

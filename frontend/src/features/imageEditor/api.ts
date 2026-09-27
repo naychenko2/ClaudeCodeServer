@@ -149,6 +149,8 @@ export interface ImageEditJobInput {
   threadId?: string;
   // Шаг нити, от которого идёт правка (currentStepId); байты шага — в source
   baseStepId?: string;
+  // Версия нити, от которой правка (не передана — текущая); без source сервер сам берёт её картинку
+  versionId?: string;
 }
 
 export interface ImageEditUploadedReference { file: Blob; name: string; role: ReferenceRole }
@@ -180,6 +182,7 @@ export function jobForm(input: ImageEditJobInput): FormData {
   if (input.sessionId) form.append('sessionId', input.sessionId);
   if (input.threadId) form.append('threadId', input.threadId);
   if (input.baseStepId) form.append('baseStepId', input.baseStepId);
+  if (input.versionId) form.append('versionId', input.versionId);
   return form;
 }
 

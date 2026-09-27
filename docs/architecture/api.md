@@ -109,7 +109,8 @@ GET                 /api/knowledge/{id}/search?q=&topK=&method=semantic|fulltext
 ```
 GET                 /api/projects/{id}/image-editor/catalog              → поставщики, модели, caps
 POST                /api/projects/{id}/image-editor/quote                → котировка (цена или время и очередь)
-POST                /api/projects/{id}/image-editor/jobs                 multipart; sessionId? + threadId? — запуск в нить чата → 202 задача
+POST                /api/projects/{id}/image-editor/jobs                 multipart; sessionId? + threadId? [+ versionId?] — запуск в нить чата
+                                                                         от версии (нет — текущая; чужая — 404 version_not_found) → 202 задача
 GET/DELETE          /api/projects/{id}/image-editor/jobs/{jobId}         → задача / отмена
 GET                 /api/projects/{id}/image-editor/jobs/{jobId}/variants/{n}  → картинка варианта
 POST                /api/projects/{id}/image-editor/save                 { …, sessionId?, threadId? } → файл; занятое имя — 409 name_taken + suggestion
@@ -133,15 +134,34 @@ GET                 …/threads                          → { focus, revision, 
 POST                …/threads                          { file? | draftFolder?, revision } — взять картинку в работу
                                                        (ровно одно; нить по файлу уже есть — фокус на неё)
 PUT                 …/threads/focus                    { threadId | null, revision } — выбрать картинку или снять выбор
-DELETE              …/threads/{threadId}?revision=     убрать нить без шагов; с шагами или ждущими вариантами — 400
-POST                …/threads/{threadId}/take          { jobId + variant | stepId, revision } — «Взять»
-POST                …/threads/{threadId}/dismiss       { jobId, revision } — «Не брать»
-POST                …/threads/{threadId}/rollback      { stepId | null, revision } — откат (null — исходник)
+DELETE              …/threads/{threadId}?revision=     убрать нить без шагов, версий и идущих запусков; иначе — 400
+PUT                 …/threads/{threadId}/current       { versionId, stepId?, revision } — «продолжить от версии»: она
+                                                       текущая, нить в работе; ничего не удаляет; чужая — 404 version_not_found
+POST                …/threads/{threadId}/steps         { stepId, revision } — правка без ИИ (шаг из …/transform) в текущую
+                                                       версию; новой версии нет; чужой шаг — 404 step_not_found
 PUT                 …/threads/{threadId}/settings      { settings, revision } — поставщик, модель, число вариантов
+POST                …/threads/{threadId}/take          { jobId + variant | stepId, revision } — «Взять»   ┐ только нити
+POST                …/threads/{threadId}/dismiss       { jobId, revision } — «Не брать»                   │ до 27.09 со
+POST                …/threads/{threadId}/rollback      { stepId | null, revision } — откат стопки         ┘ стопками, иначе 400
 ```
 
-`take`, `rollback` и `save` — только человек: у агента таких MCP-инструментов нет (ADR-019,
-решение 1). Ручек чата картинки v2 (`image-editor/chats*`) больше нет.
+**Версии (изменение 27.09 к ADR-019).** Каждый вариант каждого запуска ИИ — версия нити сам, «Взять»
+нет. У нити: `versions[]` — `{ id, number, jobId, variant, baseVersionId, baseStepId, steps[],
+currentStepId, createdAt }` по порядку, первая всегда исходник (`id: "origin"`, `number: 0`, `jobId:
+null`); `currentVersionId` — версия «в работе»; `launches[]` — `{ jobId, baseVersionId, baseStepId, at,
+status: running | done | failed | cancelled | interrupted, initiator: human | agent, prompt }`.
+Картинка версии — шаг `currentStepId` (`GET …/steps/{id}`); у исходника без правок — файл нити, а у
+старой нити — её текущий шаг стопки (`currentStepId` нити). Старые поля (`stacks`, `currentStackId`,
+`currentStepId`, `pendingJobId`, `interruptedJobId`) остаются у нитей до 27.09.
+
+Запуск в нить кладёт внизу ленты якорь `module_record { module: "imageeditor", recordType:
+"image_launch_versions", data: { threadId, jobId, prompt, provider, model, count, estimate,
+initiator, baseVersionId } }` — один на запуск; его версии — `versions[]` с этим `jobId`, они
+появляются по завершении задачи вместе с `image_thread_changed` (раньше `image_edit_completed`).
+Якорь нити `image_thread` несёт `{ threadId, versionId: "origin" }` (у старых — `{ threadId, stackId }`).
+
+`save` — только человек: у агента такого MCP-инструмента нет (ADR-019, решение 1). Ручек чата
+картинки v2 (`image-editor/chats*`) больше нет.
 
 ## SignalR-хаб `/hubs/session`
 

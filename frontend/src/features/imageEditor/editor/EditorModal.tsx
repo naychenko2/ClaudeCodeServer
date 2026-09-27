@@ -1,13 +1,14 @@
 // Попап «Редактор» (записка v3, решение Андрея 1): Modal size="fullscreen" вместо окна
-// v2. Слева холст с зумом, панорамой и пометками, справа колонка 310 px: варианты,
-// быстрые действия, «Без ИИ», шаги с откатом. На 390 — на весь экран, секции ниже
-// холста прокруткой. Закрытие (✕, «Готово», Esc) выбор картинки не снимает; пометки
+// v2. Слева холст с зумом, панорамой и пометками, справа колонка 310 px: быстрые
+// действия, «Без ИИ», переход между версиями (у старой нити — варианты и шаги с откатом).
+// На 390 — на весь экран, секции ниже холста прокруткой. Открытая не текущая версия
+// становится текущей при первой правке: следующая правка всегда идёт от версии в работе. Закрытие (✕, «Готово», Esc) выбор картинки не снимает; пометки
 // остаются в сторе нити и уходят чипом со следующим сообщением.
 
 import { useMemo, useState, type ReactNode } from 'react';
 import { Check, Eye, Save } from 'lucide-react';
 import {
-  Button, Field, Modal, ModalActions, TextField, C, FS, R, SP, ICON_SIZE, ICON_STROKE, showToast, useIsMobile,
+  Button, Chip, Field, Modal, ModalActions, TextField, C, FS, R, SP, ICON_SIZE, ICON_STROKE, showToast, useIsMobile,
 } from 'aihome_shell/kit';
 import { imageEditorApi, type ImageTransformBase, type ImageTransformOp, type ImageEncodeSpec, type ImageEncodeFormat } from '../api';
 import { AdjustPanel } from '../AdjustPanel';
@@ -22,11 +23,16 @@ import { defaultStem, nameStem } from '../saveAs';
 import { splitPath } from '../format';
 import { fitCropRatio, initialCrop, isFullCrop, type CropRatio } from '../transforms';
 import type { ImageFractionRect } from '../api';
-import { rollbackTo, saveAsInThread, saveToProject, savedStepOf, takeVariant } from '../thread/actions';
+import {
+  applyStep, continueFrom, rollbackTo, saveAsInThread, saveToProject, savedStepOf, versionSaved,
+} from '../thread/actions';
 import { JobBlock } from '../thread/ThreadCard';
-import { chainOf, currentIndex, currentStack, saveFolder, stepOf, threadName, versionLabel } from '../thread/model';
-import { closeEditor, getThreadMarks, setThreadMarks, useThreads } from '../thread/threadStore';
-import { imageSrc, launchThread, threadHasImage } from '../thread/useThreadLaunch';
+import {
+  chainOf, currentIndex, currentStack, currentVersion, findVersion, isLegacyThread, ORIGIN, originFile, saveFolder, stepOf,
+  threadName, versionHasImage, versionLabel, versionName, versionShort, versionsOf, versionStep,
+} from '../thread/model';
+import { closeEditor, getThreadMarks, getThreadsState, setThreadMarks, showEditorVersion, useThreads } from '../thread/threadStore';
+import { imageSrc, launchThread, threadHasImage, versionSrc } from '../thread/useThreadLaunch';
 import { useJobStatus } from '../thread/useJobStatus';
 
 const ic = (I: typeof Check, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
@@ -42,7 +48,9 @@ function Section({ title, meta, children }: { title: string; meta?: string; chil
   );
 }
 
-export function EditorModal({ projectId, sessionId, threadId }: { projectId: string; sessionId: string; threadId: string }) {
+export function EditorModal({ projectId, sessionId, threadId, versionId = null }: {
+  projectId: string; sessionId: string; threadId: string; versionId?: string | null;
+}) {
   const mobile = useIsMobile();
   const api = useMemo(() => imageEditorApi(), []);
   const state = useThreads(projectId, sessionId);
@@ -64,30 +72,45 @@ export function EditorModal({ projectId, sessionId, threadId }: { projectId: str
   const chain = chainOf(thread, stack);
   const at = currentIndex(thread, chain, stack);
   const cur = chain[at];
-  const src = imageSrc(projectId, thread, thread.currentStepId);
+  // Нить с версиями: показана открытая версия (по умолчанию — текущая)
+  const legacy = isLegacyThread(thread);
+  const viewed = legacy ? null : findVersion(thread, versionId) ?? currentVersion(thread);
+  const viewedStep = viewed ? versionStep(thread, viewed) : thread.currentStepId;
+  const isCurrent = !viewed || viewed.id === thread.currentVersionId;
+  const src = viewed ? versionSrc(projectId, thread, viewed) : imageSrc(projectId, thread, thread.currentStepId);
   const shownSrc = preview && !before ? api.variantUrl(projectId, preview.jobId, preview.variant) : src;
   const dims = size && size.src === src ? { w: size.w, h: size.h } : null;
   const { marks } = getThreadMarks(thread.id);
   const running = !!thread.pendingJobId && (status?.phase ?? 'run') === 'run';
-  const hasImage = threadHasImage(thread);
+  const hasImage = viewed ? versionHasImage(thread, viewed) : threadHasImage(thread);
   const saved = savedStepOf(thread.id);
-  const canSave = !!thread.currentStepId && !transforming;
+  const inProject = viewed ? versionSaved(thread, viewed) : !!thread.currentStepId && thread.currentStepId === saved;
+  const canSave = !!viewedStep && !transforming;
 
-  const setMarks = (ms: Mark[]) => setThreadMarks(thread.id, ms, dims);
+  // Правка открытой не текущей версии: сначала она становится текущей
+  const ensureCurrent = async () => (isCurrent || !viewed ? true : continueFrom(projectId, sessionId, thread, viewed.id));
+  const fresh = () => getThreadsState(sessionId).threads.find(t => t.id === thread.id) ?? thread;
+
+  const setMarks = (ms: Mark[]) => {
+    if (ms.length && !isCurrent) void ensureCurrent();
+    setThreadMarks(thread.id, ms, dims);
+  };
   const onImageLoad = (img: HTMLImageElement) => {
     if (img.getAttribute('src') !== src) return;
     setSize({ src: src!, w: img.naturalWidth, h: img.naturalHeight });
   };
 
-  // Правка без ИИ: сервер пишет шаг, шаг привязывается к нити тем же take
-  const transformBase: ImageTransformBase | null = thread.currentStepId
-    ? { stepId: thread.currentStepId } : thread.file ? { path: thread.file } : null;
+  // Правка без ИИ: сервер пишет шаг, шаг ложится в текущую версию (у старой нити — take)
+  const baseFile = viewed ? (viewed.id === ORIGIN ? originFile(thread) : null) : thread.file;
+  const transformBase: ImageTransformBase | null = viewedStep
+    ? { stepId: viewedStep } : baseFile ? { path: baseFile } : null;
   const runTransform = async (ops: ImageTransformOp[], encode: ImageEncodeSpec | null) => {
     if (!transformBase) return;
     setTransforming(true);
     try {
+      if (!(await ensureCurrent())) return;
       const r = await api.transform(projectId, { base: transformBase, ops, encode });
-      if (r.stepId) await takeVariant(projectId, sessionId, thread, { stepId: r.stepId });
+      if (r.stepId) await applyStep(projectId, sessionId, fresh(), r.stepId);
       setThreadMarks(thread.id, [], null);
       setCrop(null);
     } catch (e) {
@@ -104,12 +127,15 @@ export function EditorModal({ projectId, sessionId, threadId }: { projectId: str
     if ((a === 'removeMarked') && !hasMaskMark(marks)) return 'Закрасьте кистью, что убрать';
     return '';
   };
-  const runQuick = (a: QuickAction) => {
-    void launchThread(projectId, sessionId, thread, a === 'outpaint' ? { kind: a, ratio } : { kind: a });
-    if (quickUsesOwnModel(a)) showToast('Улучшаем лица — один вариант', '', 'info');
+  // Быстрое действие запускает генерацию и закрывает попап: версии лягут в ленту внизу
+  const runQuick = async (a: QuickAction) => {
+    if (!(await ensureCurrent())) return;
+    const ok = await launchThread(projectId, sessionId, fresh(), a === 'outpaint' ? { kind: a, ratio } : { kind: a });
+    if (ok && quickUsesOwnModel(a)) showToast('Улучшаем лица — один вариант', '', 'info');
+    if (ok && !legacy) closeEditor();
   };
 
-  const save = async () => { setSaving(true); await saveToProject(projectId, sessionId, thread); setSaving(false); };
+  const save = async () => { setSaving(true); await saveToProject(projectId, sessionId, thread, viewedStep); setSaving(false); };
   const folder = saveFolder(thread);
   const baseName = thread.file ? defaultStem(splitPath(thread.file).name) : 'kartinka';
   const format: ImageEncodeFormat = thread.file && /\.jpe?g$/i.test(thread.file) ? 'jpeg' : thread.file && /\.webp$/i.test(thread.file) ? 'webp' : 'png';
@@ -164,11 +190,11 @@ export function EditorModal({ projectId, sessionId, threadId }: { projectId: str
         </Section>
       )}
       <Section title="Быстрые действия" meta="сразу, без промпта">
-        <QuickActions actions={QUICK_ACTIONS} blockReason={quickBlock} ratio={ratio} onRatio={setRatio} onRun={runQuick} />
+        <QuickActions actions={QUICK_ACTIONS} blockReason={quickBlock} ratio={ratio} onRatio={setRatio} onRun={a => { void runQuick(a); }} />
       </Section>
       {hasImage && (
-        <Section title="Без ИИ" meta="бесплатно, мгновенно">
-          <AdjustPanel api={api} projectId={projectId} stepId={thread.currentStepId ?? thread.file ?? ''} size={dims}
+        <Section title="Без ИИ" meta={legacy ? 'бесплатно, мгновенно' : 'бесплатно, мгновенно, шагом этой версии'}>
+          <AdjustPanel api={api} projectId={projectId} stepId={viewedStep ?? baseFile ?? ''} size={dims}
             base={transformBase ? Promise.resolve(transformBase) : null} sourceFormat={null} beforeBytes={null}
             blockReason={running ? 'Идёт генерация' : transforming ? 'Правка ещё сохраняется' : preview ? 'Сначала возьмите вариант или вернитесь к картинке' : ''}
             cropping={!!crop}
@@ -177,7 +203,19 @@ export function EditorModal({ projectId, sessionId, threadId }: { projectId: str
             onApply={(ops, encode) => { void runTransform(ops, encode); }} />
         </Section>
       )}
-      {chain.length > 0 && (
+      {viewed && (
+        <Section title="Версии" meta="в ленте — карточка на каждую">
+          <div data-editor-versions="" style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs }}>
+            {versionsOf(thread).filter(v => versionHasImage(thread, v)).map(v => (
+              <Chip key={v.id} selected={v.id === viewed.id} onClick={() => showEditorVersion(v.id)}
+                title={`${versionName(v)}${v.id === thread.currentVersionId ? ' · в работе' : ''}`}>
+                {versionShort(v)}{versionSaved(thread, v) ? ' ✓' : ''}{v.id === thread.currentVersionId ? ' ●' : ''}
+              </Chip>
+            ))}
+          </div>
+        </Section>
+      )}
+      {legacy && chain.length > 0 && (
         <Section title="Шаги этой картинки" meta="в ленте — одна карточка-стопка">
           <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs }}>
             {chain.map((p, i) => {
@@ -209,7 +247,9 @@ export function EditorModal({ projectId, sessionId, threadId }: { projectId: str
     </div>
   );
 
-  const subtitle = [versionLabel(thread, cur, saved), chain.length ? stepOf(at, chain.length) : null].filter(Boolean).join(' · ');
+  const subtitle = viewed
+    ? [versionName(viewed), inProject ? 'в проекте' : 'черновик', isCurrent ? 'в работе' : null].filter(Boolean).join(' · ')
+    : [versionLabel(thread, cur, saved), chain.length ? stepOf(at, chain.length) : null].filter(Boolean).join(' · ');
 
   return (
     <>
@@ -223,9 +263,9 @@ export function EditorModal({ projectId, sessionId, threadId }: { projectId: str
               </span>
             )}
             <Button size="sm" variant="secondary" leftIcon={ic(Save)} disabled={!canSave} onClick={() => setSaveAs(true)}>Сохранить как…</Button>
-            <Button size="sm" variant="secondary" disabled={!canSave || thread.currentStepId === saved} loading={saving}
+            <Button size="sm" variant="secondary" disabled={!canSave || inProject} loading={saving}
               onClick={() => { void save(); }}>
-              {thread.currentStepId && thread.currentStepId === saved ? 'В проекте' : 'Сохранить в проект'}
+              {inProject ? 'В проекте' : 'Сохранить в проект'}
             </Button>
             <Button size="sm" variant="primary" leftIcon={ic(Check)} onClick={closeEditor}>Готово</Button>
           </div>
@@ -253,7 +293,7 @@ export function EditorModal({ projectId, sessionId, threadId }: { projectId: str
         <SaveAsDialog projectId={projectId} sourcePath={thread.file}
           defaultName={thread.file ? baseName : nameStem(baseName)} folder={folder} format={format}
           onCheck={(f, name) => api.saveCheck(projectId, { folder: f, name, format })}
-          onSave={async v => { await saveAsInThread(projectId, sessionId, thread, v); setSaveAs(false); }}
+          onSave={async v => { await saveAsInThread(projectId, sessionId, thread, v, undefined, viewedStep); setSaveAs(false); }}
           onClose={() => setSaveAs(false)} />
       )}
     </>

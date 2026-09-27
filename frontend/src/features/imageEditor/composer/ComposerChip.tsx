@@ -33,7 +33,7 @@ export function ImageComposerChip({ ctx }: { ctx: ComposerChipCtx }) {
         </span>
       )}
       {projectId && sessionId && editor?.sessionId === sessionId && (
-        <EditorModal projectId={projectId} sessionId={sessionId} threadId={editor.threadId} />
+        <EditorModal projectId={projectId} sessionId={sessionId} threadId={editor.threadId} versionId={editor.versionId} />
       )}
     </>
   );

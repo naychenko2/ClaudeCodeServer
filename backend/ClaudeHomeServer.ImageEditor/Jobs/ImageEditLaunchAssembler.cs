@@ -13,15 +13,18 @@ namespace ClaudeHomeServer.Services.ImageEditor;
 //
 // Нить картинки (ADR-019). Запуск в нить — ThreadSessionId + ThreadId: нить обязана быть своей
 // в своём чате этого проекта, иначе отказ thread_not_found ДО запуска и траты (молча отбросить
-// нельзя: варианты ушли бы мимо карточки, которую человек видит). После старта варианты нити
-// ждут «Взять», ручной запуск ложится тихой строкой image_launch через IChatFeed, а ход узнаёт
-// о запуске из журнала нитей (блок ImageEditorStateContributor). Запуск без нити — без чата:
-// трата и события без SessionId.
+// нельзя: варианты ушли бы мимо карточки, которую человек видит). Основа правки — версия VersionId,
+// а без неё текущая версия нити (изменение 27.09): чужая версия — version_not_found до запуска.
+// Не прислан исходник — он берётся с картинки версии, не прислан BaseStepId — её шаг. После
+// старта внизу ленты ложится якорь запуска image_launch_versions, по завершении варианты
+// становятся версиями нити, а ход узнаёт о запуске из журнала нитей (блок
+// ImageEditorStateContributor). Запуск без нити — без чата: трата и события без SessionId.
 public sealed class ImageEditLaunchAssembler(
     IEnumerable<IImageEditor> editors,
     IImageEditJobs? jobs = null,
     IImageRaster? raster = null,
-    ImageThreadService? threads = null)
+    ImageThreadService? threads = null,
+    ImageEditSteps? steps = null)
 {
     public static readonly IReadOnlyList<string> AspectRatios = ["1:1", "16:9", "9:16"];
 
@@ -35,7 +38,7 @@ public sealed class ImageEditLaunchAssembler(
         var started = await jobs!.StartAsync(ownerId, project.Id, input, ct);
         if (started.Value is { } created && input is { ChatSessionId: { } chatId, ThreadId: { } threadId } && threads is not null)
             await threads.OnLaunchedAsync(ownerId, project.Id, chatId, threadId, jobs.Get(ownerId, project.Id, created.JobId),
-                created.JobId, input.Prompt, input.Initiator, ct);
+                created.JobId, input.Prompt, input.Initiator, input.BaseVersionId, input.BaseStepId, ct);
         return started;
     }
 
@@ -55,13 +58,26 @@ public sealed class ImageEditLaunchAssembler(
         if (string.IsNullOrWhiteSpace(req.QuoteId))
             return Invalid("Не указана котировка: сначала запросите цену");
 
-        string? threadId = null, chatId = null;
+        string? threadId = null, chatId = null, baseVersionId = null;
+        var source = req.Source;
+        var baseStepId = string.IsNullOrWhiteSpace(req.BaseStepId) ? null : req.BaseStepId.Trim();
         if (!string.IsNullOrWhiteSpace(req.ThreadId))
         {
             if (threads is null || !threads.OwnThread(ownerId, project.Id, req.ThreadSessionId, req.ThreadId))
                 return Fail<ImageEditJobInput>(ImageEditErrorCodes.ThreadNotFound, "Картинка не найдена в этом чате");
             threadId = req.ThreadId.Trim();
             chatId = req.ThreadSessionId!.Trim();
+
+            if (threads.Get(ownerId, chatId).Threads.FirstOrDefault(t => t.Id == threadId) is not { } thread)
+                return Fail<ImageEditJobInput>(ImageEditErrorCodes.ThreadNotFound, "Картинка не найдена в этом чате");
+            var version = string.IsNullOrWhiteSpace(req.VersionId) ? thread.CurrentVersion : thread.Version(req.VersionId.Trim());
+            if (version is null)
+                return Fail<ImageEditJobInput>(ImageEditErrorCodes.VersionNotFound, "Версии нет в этой картинке");
+            baseVersionId = version.Id;
+            var versionStep = thread.ImageStepOf(version);
+            baseStepId ??= versionStep;
+            if (source is null && versionStep is not null && steps?.Open(ownerId, project.Id, versionStep) is { } found)
+                source = new ImageBytes(found.Image.Bytes, found.Image.ContentType);
         }
 
         var aspectRatio = string.IsNullOrWhiteSpace(req.AspectRatio) ? null : req.AspectRatio.Trim();
@@ -69,7 +85,7 @@ public sealed class ImageEditLaunchAssembler(
             return Invalid($"Пропорции {aspectRatio} не поддерживаются: только {string.Join(", ", AspectRatios)}");
 
         var limits = ImageEditCatalog.DefaultLimits;
-        var sizes = new[] { req.Source?.Bytes, req.Mask?.Bytes, req.Annotated?.Bytes }
+        var sizes = new[] { source?.Bytes, req.Mask?.Bytes, req.Annotated?.Bytes }
             .Concat(req.Uploaded.Select(r => r.Bytes))
             .Where(b => b is not null);
         if (sizes.Any(b => b!.LongLength > MaxFileBytes))
@@ -102,7 +118,7 @@ public sealed class ImageEditLaunchAssembler(
             req.QuoteId.Trim(),
             req.Prompt ?? "",
             req.MarksJson,
-            req.Source,
+            source,
             req.Mask,
             req.Annotated,
             references,
@@ -111,9 +127,10 @@ public sealed class ImageEditLaunchAssembler(
             MatchSourceSize: req.MatchSourceSize,
             ChatSessionId: chatId,
             Initiator: req.Initiator,
-            BaseStepId: req.BaseStepId,
+            BaseStepId: baseStepId,
             AspectRatio: aspectRatio,
-            ThreadId: threadId));
+            ThreadId: threadId,
+            BaseVersionId: baseVersionId));
     }
 
     private static long MaxFileBytes => ImageEditCatalog.DefaultLimits.MaxFileMb * 1024L * 1024L;
@@ -157,7 +174,8 @@ public sealed class ImageEditLaunchAssembler(
 
 // Вход запуска до проверок. Uploaded — образцы, пришедшие байтами (с компьютера), уже с ролями;
 // ReferencePaths — образцы из проекта путями. Initiator — кто запустил: человек ручкой или агент
-// инструментом; ThreadSessionId + ThreadId — нить картинки в чате проекта (ADR-019)
+// инструментом; ThreadSessionId + ThreadId — нить картинки в чате проекта (ADR-019), VersionId —
+// версия нити, от которой правка (null — текущая)
 public sealed record ImageEditLaunchRequest(
     string? QuoteId,
     string? Prompt,
@@ -174,4 +192,5 @@ public sealed record ImageEditLaunchRequest(
     string? AspectRatio = null,
     ImageEditInitiator Initiator = ImageEditInitiator.Human,
     string? ThreadSessionId = null,
-    string? ThreadId = null);
+    string? ThreadId = null,
+    string? VersionId = null);

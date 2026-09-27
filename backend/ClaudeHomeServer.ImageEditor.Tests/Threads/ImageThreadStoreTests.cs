@@ -55,13 +55,13 @@ public class ImageThreadStoreTests : IDisposable
     }
 
     [Fact]
-    public void Новая_нить_с_первой_стопкой_и_фокусом_переживает_перечитывание()
+    public void Новая_нить_с_исходником_и_фокусом_переживает_перечитывание()
     {
         var (created, thread) = _store.Create(Owner, Chat, "images/hero.png", null, focus: true);
 
         created.Revision.Should().Be(1);
         created.Focus.Should().Be(thread.Id);
-        thread.Stacks.Should().ContainSingle().Which.StackId.Should().Be(thread.CurrentStackId);
+        thread.Versions.Should().ContainSingle().Which.Id.Should().Be(thread.CurrentVersionId);
 
         var reread = new ImageThreadStore(_store.Root).Get(Owner, Chat);
         reread.Focus.Should().Be(thread.Id);

@@ -1,74 +1,257 @@
-// Полоса «Картинки» над композером (реестр composer-strip, записка v3 «Полоса
-// «Картинки» — состав»). Первая строка — переключатель полос от хоста и чип «Работаем
-// с: …» (или «Нарисовать новую» без выбора), вторая — чем рисовать, число вариантов,
-// цена, персонаж и «Размер оригинала». Свёрнутая — одна строка 30 px.
+// Полоса «Картинки» над композером (реестр composer-strip; прототип полос, вариант C —
+// docs/mockups/image-editor-v3-strips-prototype.html). Одна строка высотой как у git-полосы:
+// переключатель от хоста, чип «Работаем с: …» (или «Нарисовать новую»), кнопка-сводка
+// «поставщик · модель · N вар. · цена ▾» и аватар персонажа. Настройки — карточкой над
+// полосой (на телефоне шторкой): поставщик, модель, число вариантов, персонаж, образцы,
+// «Размер оригинала». Свёрнутая — строка 30 px со сводкой, клик разворачивает.
 
-import { useEffect, useState, type ReactNode } from 'react';
-import { AlertTriangle, Minus, Plus, Sparkles, User } from 'lucide-react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
-  Button, Checkbox, Chip, IconButton, Modal, C, FS, R, SP, ICON_SIZE, ICON_STROKE,
+  AlertTriangle, ChevronDown, ChevronUp, FolderOpen, Image as ImageIcon, Minus, Plus, SlidersHorizontal, Sparkles, Upload, User, X,
+} from 'lucide-react';
+import {
+  Button, Checkbox, Chip, IconButton, Menu, MenuItem, Modal, C, FS, R, SHADOW, SP, Z, ICON_SIZE, ICON_STROKE, api as appApi,
 } from 'aihome_shell/kit';
 import type { ComposerStripCtx } from '../../../lib/subsystems/registryCore';
-import { AUTO_MODEL, imageEditorApi } from '../api';
+import { AUTO_MODEL, imageEditorApi, type ImageEditCatalog, type ReferenceRole } from '../api';
 import { CharactersPanel } from '../characters/CharactersPanel';
 import { CHARACTERS_PANEL, revealWorkspacePanel } from '../characters/panel';
 import { useCharacters } from '../characters/useCharacters';
-import { ProviderModelPicker } from '../ProviderModelPicker';
+import { maxSamples, roleShort, SAMPLE_ROLES, type Sample } from '../editorInputs';
+import { effectiveProvider, modelBlockReason, providerHint, variantsWord } from '../format';
+import { ProjectImagePicker } from '../PanelSections';
 import { createDraft, releaseFocus } from '../thread/actions';
-import { focusLabel, isEmptyThread } from '../thread/model';
+import { focusLabel } from '../thread/model';
 import { setPrefs } from '../thread/prefs';
-import { getFocusedThread, useThreads } from '../thread/threadStore';
-import { useThreadLaunch } from '../thread/useThreadLaunch';
+import { getFocusedThread, getSamples, setSamples, useThreads } from '../thread/threadStore';
+import type { ImageThread } from '../thread/threadsApi';
+import { activeSrc, launchSummaryParts, threadHasImage, useThreadLaunch } from '../thread/useThreadLaunch';
+import { stripSummary } from './summary';
 
 const ic = (I: typeof User, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
 
-// Персонаж — на проект: остаётся подключённым при смене картинки, чип на миг подсвечивается.
-// Пунктирный «Персонаж» открывает панель «Персонажи» (на телефоне — шторкой)
-function CharacterChip({ projectId, slug, focusKey, isMobile }: { projectId: string; slug: string | null; focusKey: string | null; isMobile: boolean }) {
-  const { list } = useCharacters(projectId);
-  const [sheet, setSheet] = useState(false);
-  const [flash, setFlash] = useState(false);
-  const [seenFocus, setSeenFocus] = useState(focusKey);
-  if (seenFocus !== focusKey) {
-    setSeenFocus(focusKey);
-    if (slug && focusKey) setFlash(true);
-  }
-  useEffect(() => {
-    if (!flash) return;
-    const t = setTimeout(() => setFlash(false), 1200);
-    return () => clearTimeout(t);
-  }, [flash]);
-  const current = list?.find(c => c.slug === slug) ?? null;
-  const avatar = current?.photos[0]
-    ? <img src={imageEditorApi().characterPhotoUrl(projectId, current.slug, current.photos[0].file)} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-    : undefined;
-  const openPanel = () => {
-    if (isMobile) setSheet(true);
-    else revealWorkspacePanel(CHARACTERS_PANEL);
-  };
+type Launch = ReturnType<typeof useThreadLaunch>;
+
+function Thumb({ src, round }: { src: string | null; round?: boolean }) {
+  if (!src) return null;
   return (
-    <span style={{ display: 'inline-flex' }}>
-      {slug
-        ? <Chip selected={flash} leading={avatar} maxW={160} title="Уходит в каждую генерацию" onClick={openPanel}
-            onRemove={() => setPrefs(projectId, { characterSlug: null })}>
-            {current?.name ?? slug}
-          </Chip>
-        : <Chip dashed leading={ic(User)} title="Персонажи проекта" onClick={openPanel}>Персонаж</Chip>}
-      {sheet && (
-        <Modal title="Персонажи" onClose={() => setSheet(false)}>
-          <CharactersPanel projectId={projectId} />
-        </Modal>
-      )}
+    <span style={{ display: 'inline-flex', width: 20, height: 20, flexShrink: 0, borderRadius: round ? R.full : R.sm, overflow: 'hidden', background: C.bgInset }}>
+      <img src={src} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
     </span>
   );
 }
 
+function Label({ children }: { children: ReactNode }) {
+  return (
+    <div style={{ fontSize: FS.xs, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase', letterSpacing: 0.4, margin: `${SP.md}px 0 ${SP.xs}px` }}>
+      {children}
+    </div>
+  );
+}
+
+// Выбор в карточке настроек: имя и подсказка в две строки
+function Opt({ on, name, hint, disabled, title, onClick }: {
+  on: boolean; name: string; hint?: string; disabled?: boolean; title?: string; onClick: () => void;
+}) {
+  return (
+    <Button size="sm" variant={on ? 'ghostAccent' : 'secondary'} disabled={disabled} title={title} onClick={onClick}
+      style={{ height: 'auto', padding: `${SP.xs}px ${SP.md}px`, border: `1px solid ${on ? C.accent : C.border}`, textAlign: 'left' }}>
+      <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 1, fontWeight: 400 }}>
+        <span>{name}</span>
+        {hint && <span style={{ fontSize: FS.xs, color: C.textMuted }}>{hint}</span>}
+      </span>
+    </Button>
+  );
+}
+
+function useCharacter(projectId: string, slug: string | null) {
+  const { list } = useCharacters(projectId);
+  const current = slug ? list?.find(c => c.slug === slug) ?? null : null;
+  const photo = current?.photos[0] ? imageEditorApi().characterPhotoUrl(projectId, current.slug, current.photos[0].file) : null;
+  return { current, photo, name: current?.name ?? slug };
+}
+
+function openCharacters(isMobile: boolean, sheet: () => void) {
+  if (isMobile) sheet();
+  else revealWorkspacePanel(CHARACTERS_PANEL);
+}
+
+// Образцы: чипы с миниатюрой, клик — роль, «+ Образец» — с компьютера или из проекта
+function SampleChips({ projectId, max }: { projectId: string; max: number }) {
+  const samples = getSamples(projectId);
+  const [roleFor, setRoleFor] = useState<string | null>(null);
+  const [addAt, setAddAt] = useState<DOMRect | null>(null);
+  const [picker, setPicker] = useState(false);
+  const input = useRef<HTMLInputElement>(null);
+  const id = () => `s${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  const add = (more: Sample[]) => setSamples(projectId, [...samples, ...more].slice(0, max));
+  const roleOf = roleFor ? samples.find(s => s.id === roleFor) ?? null : null;
+
+  return (
+    <>
+      {samples.map(s => (
+        <span key={s.id} data-sample={s.name} style={{ display: 'inline-flex' }}>
+          <Chip leading={<img src={s.url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />} maxW={170}
+            title={`Образец · ${roleShort(s.role).toLowerCase()} — нажмите, чтобы сменить роль`}
+            onClick={() => setRoleFor(s.id)}
+            onRemove={() => setSamples(projectId, samples.filter(x => x.id !== s.id))}>
+            {roleShort(s.role)} · {s.name}
+          </Chip>
+        </span>
+      ))}
+      {samples.length < max && (
+        <span style={{ display: 'inline-flex' }} onClick={e => setAddAt((e.currentTarget as HTMLElement).getBoundingClientRect())}>
+          <Chip dashed leading={ic(Plus)} title="Картинка-пример для модели: лицо, стиль или предмет">Образец</Chip>
+        </span>
+      )}
+      {addAt && (
+        <Menu anchor={addAt} minWidth={230} onClose={() => setAddAt(null)}>
+          <MenuItem icon={ic(Upload, ICON_SIZE.sm)} label="С компьютера" onClick={() => { setAddAt(null); input.current?.click(); }} />
+          <MenuItem icon={ic(FolderOpen, ICON_SIZE.sm)} label="Из файлов проекта…" onClick={() => { setAddAt(null); setPicker(true); }} />
+        </Menu>
+      )}
+      {roleOf && (
+        <Modal title={`Как модели использовать «${roleOf.name}»`} width={380} onClose={() => setRoleFor(null)}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs }}>
+            {SAMPLE_ROLES.map(([role, full]) => (
+              <Button key={role} size="sm" fullWidth variant={roleOf.role === role ? 'ghostAccent' : 'ghost'} style={{ justifyContent: 'flex-start' }}
+                onClick={() => { setSamples(projectId, samples.map(x => (x.id === roleOf.id ? { ...x, role: role as ReferenceRole } : x))); setRoleFor(null); }}>
+                {full}
+              </Button>
+            ))}
+          </div>
+        </Modal>
+      )}
+      {picker && (
+        <ProjectImagePicker projectId={projectId}
+          taken={samples.flatMap(s => (s.source === 'project' ? [s.path] : []))}
+          onPick={path => {
+            add([{ id: id(), source: 'project', name: path.split('/').pop() ?? path, role: 'style', path, url: appApi.files.fileUrl(projectId, path) }]);
+            setPicker(false);
+          }}
+          onClose={() => setPicker(false)} />
+      )}
+      <input ref={input} type="file" accept="image/png,image/jpeg,image/webp" multiple hidden
+        onChange={e => {
+          const files = [...(e.target.files ?? [])];
+          e.target.value = '';
+          if (files.length) add(files.map(f => ({ id: id(), source: 'upload', name: f.name, role: 'style', file: f, url: URL.createObjectURL(f) })));
+        }} />
+    </>
+  );
+}
+
+// Карточка настроек генерации — над полосой на десктопе и шторкой на телефоне
+function SettingsPanel({ projectId, L, catalog, isMobile, thread }: {
+  projectId: string; L: Launch; catalog: ImageEditCatalog; isMobile: boolean; thread: ImageThread | null;
+}) {
+  const [charSheet, setCharSheet] = useState(false);
+  const choice = L.settings.provider ?? 'settings';
+  const pv = effectiveProvider(catalog, choice);
+  const admin = catalog.providers.find(p => p.key === catalog.default.provider);
+  const count = L.settings.count;
+  const maxCount = L.model?.caps?.maxCount ?? catalog.limits.maxCount ?? 4;
+  const { current, photo, name } = useCharacter(projectId, L.prefs.characterSlug);
+  const max = maxSamples(catalog.limits.maxReferences, L.model?.caps?.maxReferences);
+
+  return (
+    <div data-image-settings="" style={{ fontSize: FS.sm }}>
+      <Label>Поставщик</Label>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs }}>
+        {admin && (
+          <Opt on={choice === 'settings'} name="Как в настройках" hint={`сейчас ${admin.label}`}
+            onClick={() => L.setSettings({ provider: null, model: null })} />
+        )}
+        {catalog.providers.map(p => (
+          <Opt key={p.key} on={choice === p.key} name={p.label} hint={providerHint(p)}
+            onClick={() => L.setSettings({ provider: p.key, model: null })} />
+        ))}
+      </div>
+      {pv && (
+        <>
+          <Label>Модель</Label>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs }}>
+            {pv.models.map(m => {
+              const why = modelBlockReason(m, L.hasImage, L.hasMask);
+              return (
+                <Opt key={m.id} on={m.id === L.model?.id} name={m.label} disabled={!!why} title={why || undefined}
+                  hint={why || (m.id === AUTO_MODEL ? 'подберём под задачу' : undefined)}
+                  onClick={() => L.setSettings({ model: m.id })} />
+              );
+            })}
+          </div>
+        </>
+      )}
+      <Label>Варианты и цена</Label>
+      <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap' }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', border: `1px solid ${C.border}`, borderRadius: R.md, background: C.bgWhite }}>
+          <IconButton size="xs" title="Меньше вариантов" ariaLabel="Меньше вариантов" disabled={count <= 1}
+            onClick={() => L.setSettings({ count: count - 1 })}>{ic(Minus)}</IconButton>
+          <span data-image-count="" style={{ minWidth: 14, textAlign: 'center', fontWeight: 600, color: C.textPrimary }}>{count}</span>
+          <IconButton size="xs" title="Больше вариантов" ariaLabel="Больше вариантов" disabled={count >= maxCount}
+            onClick={() => L.setSettings({ count: count + 1 })}>{ic(Plus)}</IconButton>
+        </span>
+        <span data-image-price="" style={{ color: C.textSecondary }}>{variantsWord(count)} · {L.price ?? L.priceLabel}</span>
+      </div>
+      <Label>Персонаж и образцы</Label>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs, alignItems: 'center' }}>
+        {L.prefs.characterSlug
+          ? <Chip selected leading={photo ? <img src={photo} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : undefined}
+              maxW={160} title="Фото персонажа уходят в каждую генерацию" onClick={() => openCharacters(isMobile, () => setCharSheet(true))}
+              onRemove={() => setPrefs(projectId, { characterSlug: null })}>
+              {current?.name ?? name}
+            </Chip>
+          : <Chip dashed leading={ic(User)} title="Персонажи проекта" onClick={() => openCharacters(isMobile, () => setCharSheet(true))}>Персонаж</Chip>}
+        {max > 0 && <SampleChips projectId={projectId} max={max} />}
+      </div>
+      {thread && threadHasImage(thread) && (
+        <>
+          <Label>Размер</Label>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: SP.sm, cursor: 'pointer', color: C.textPrimary }}>
+            <Checkbox checked={L.settings.matchSourceSize} onChange={v => L.setSettings({ matchSourceSize: v })} ariaLabel="Размер оригинала" />
+            Вернуть в размере оригинала
+          </label>
+        </>
+      )}
+      {L.blocked && L.model && (
+        <div style={{ display: 'flex', gap: SP.xs, alignItems: 'flex-start', marginTop: SP.md, padding: `${SP.xs}px ${SP.sm}px`, background: C.warningBg, color: C.warningText, borderRadius: R.md }}>
+          {ic(AlertTriangle)}<span>{L.model.label}: {L.blocked.charAt(0).toLowerCase() + L.blocked.slice(1)}</span>
+        </div>
+      )}
+      {charSheet && (
+        <Modal title="Персонажи" onClose={() => setCharSheet(false)}>
+          <CharactersPanel projectId={projectId} />
+        </Modal>
+      )}
+    </div>
+  );
+}
+
 export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
-  const { projectId, sessionId, isMobile, collapsed, switcher } = ctx;
+  const { projectId, sessionId, isMobile, collapsed, setCollapsed, switcher } = ctx;
   const state = useThreads(projectId, sessionId);
   const thread = state.focus ? state.threads.find(t => t.id === state.focus) ?? null : null;
   const L = useThreadLaunch(projectId, sessionId, thread);
   const [drafting, setDrafting] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [charSheet, setCharSheet] = useState(false);
+  const shell = useRef<HTMLDivElement>(null);
+  const { current: character, photo } = useCharacter(projectId, L.prefs.characterSlug);
+
+  // Карточка настроек закрывается кликом мимо полосы и Esc
+  useEffect(() => {
+    if (!open || isMobile) return;
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as Node | null;
+      // Меню и диалоги карточки рисуются порталом — клик по ним не «мимо»
+      if (t && (shell.current?.contains(t) || (t as Element).closest?.('[role="dialog"], [role="menu"]'))) return;
+      setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('pointerdown', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('pointerdown', onDown); window.removeEventListener('keydown', onKey); };
+  }, [open, isMobile]);
 
   const draw = async () => {
     if (!sessionId) return;
@@ -77,95 +260,128 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
     setDrafting(false);
   };
   const release = () => { if (sessionId) void releaseFocus(projectId, sessionId, thread); };
-
-  const [mobileOpen, setMobileOpen] = useState(false);
-  const summary = [L.provider?.label, L.model?.label, L.priceLabel].filter(Boolean).join(' · ');
-  const focusChip = thread && (
-    <Chip selected maxW={isMobile ? 190 : 320} title="К этой картинке относится режим «Картинка» и просьбы агенту" onRemove={release}>
-      Работаем с: {focusLabel(thread)}
-    </Chip>
+  const src = thread ? activeSrc(projectId, thread) : null;
+  const parts = {
+    focus: thread ? focusLabel(thread) : null, provider: L.provider?.label ?? null, model: L.model?.label ?? null,
+    count: L.settings.count, price: L.price ?? null, character: character?.name ?? null,
+  };
+  const title = switcher ?? (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, flexShrink: 0, fontSize: FS.sm, fontWeight: 600, color: C.textHeading }}>
+      {ic(ImageIcon)}Картинки
+    </span>
   );
 
-  const row = (children: ReactNode, h: number) => (
-    <div data-composer-strip="images" style={{
-      display: 'flex', alignItems: 'center', gap: SP.sm, minHeight: h, flexWrap: 'wrap',
-      padding: `${SP.xxs}px ${SP.sm}px`, fontSize: FS.sm, color: C.textSecondary,
-    }}>
-      {children}
-    </div>
-  );
-
-  // Телефон: полоса скрыта, пока картинка не выбрана; выбранная — строкой, тап разворачивает
-  if (isMobile && !thread) return null;
-  if (collapsed || (isMobile && !mobileOpen)) {
-    return row(
-      <>
-        {switcher}
-        {thread ? focusChip : <span style={{ color: C.textMuted }}>Картинка не выбрана</span>}
-        <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: C.textMuted }}>{summary}</span>
-        {isMobile && !collapsed && (
-          <Button size="xs" variant="ghost" onClick={() => setMobileOpen(true)}>Настроить</Button>
+  if (collapsed) {
+    return (
+      <div role="button" tabIndex={0} data-composer-strip="images" data-images-strip="mini" title="Развернуть полосу «Картинки»"
+        onClick={() => setCollapsed(false)}
+        onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setCollapsed(false); } }}
+        style={{
+          display: 'flex', alignItems: 'center', gap: SP.sm, height: 30, margin: '4px 0 6px', padding: '0 6px 0 4px',
+          boxSizing: 'border-box', minWidth: 0, cursor: 'pointer',
+          background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.lg,
+        }}>
+        {title}
+        <Thumb src={src} />
+        <span data-images-summary="" style={{ flex: 1, minWidth: 0, fontSize: FS.sm, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {stripSummary(parts)}
+        </span>
+        {thread && (
+          <span style={{ display: 'inline-flex' }} onClick={e => e.stopPropagation()}>
+            <IconButton size="xs" title="Снять выбор картинки" ariaLabel="Снять выбор картинки" onClick={release}>{ic(X)}</IconButton>
+          </span>
         )}
-      </>, 30,
+        <span style={{ display: 'inline-flex', color: C.textMuted }}>{ic(ChevronDown, ICON_SIZE.sm)}</span>
+      </div>
     );
   }
 
-  const count = L.settings.count;
-  const maxCount = L.model?.caps?.maxCount ?? L.catalog?.limits.maxCount ?? 4;
-  const withSteps = !!thread && !isEmptyThread(thread);
+  const noProviders = L.catalog && !L.catalog.providers.length;
+  const settings = L.catalog && !noProviders
+    ? <SettingsPanel projectId={projectId} L={L} catalog={L.catalog} isMobile={isMobile} thread={thread} /> : null;
 
   return (
-    <div style={{ borderTop: `1px solid ${C.borderLight}`, background: C.bgPanel }}>
-      {row(
-        <>
-          {switcher}
-          {thread ? focusChip : (
-            <>
-              <span style={{ color: C.textMuted, minWidth: 0 }}>Выберите картинку в ленте или нарисуйте новую</span>
-              <Button size="xs" variant="ghostAccent" leftIcon={ic(Sparkles)} loading={drafting} disabled={!sessionId}
-                title={sessionId ? undefined : 'Сначала начните чат'} onClick={() => { void draw(); }}>
-                Нарисовать новую
-              </Button>
-            </>
-          )}
-        </>, 36,
+    <div ref={shell} data-composer-strip="images" data-images-strip="full" style={{
+      position: 'relative', display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 8, boxSizing: 'border-box', minWidth: 0,
+      height: isMobile ? 44 : 51, margin: isMobile ? '6px 0' : '10px 0 8px', padding: isMobile ? '0 6px' : '0 8px',
+      background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.xxl,
+    }}>
+      {title}
+      {thread ? (
+        <span style={{ display: 'inline-flex', minWidth: 72, flex: '0 1 auto' }}>
+          <Chip selected leading={src ? <img src={src} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : ic(Sparkles)}
+            maxW="100%" title="Режим «Картинка» и Claude работают с этой версией. ✕ — снять выбор" onRemove={release}>
+            {!isMobile && 'Работаем с: '}<b>{focusLabel(thread, true)}</b>
+          </Chip>
+        </span>
+      ) : (
+        <span style={{ display: 'inline-flex', flexShrink: 0 }}>
+          <Chip dashed leading={ic(Sparkles)} title={sessionId ? 'Карточка «Новая картинка» в ленте, поле — в режим «Картинка»' : 'Сначала начните чат'}
+            onClick={sessionId && !drafting ? () => { void draw(); } : undefined}>
+            Нарисовать новую
+          </Chip>
+        </span>
       )}
-      {L.catalog && (L.catalog.providers.length ? row(
-        <>
-          <ProviderModelPicker catalog={L.catalog} provider={L.settings.provider ?? 'settings'}
-            model={L.settings.model ?? L.model?.id ?? AUTO_MODEL}
-            onProvider={p => L.setSettings({ provider: p === 'settings' ? null : p, model: null })}
-            onModel={m => L.setSettings({ model: m })}
-            hasImage={L.hasImage} hasMask={L.hasMask} priceLabel={L.priceLabel} mobile={isMobile} />
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xxs, border: `1px solid ${C.border}`, borderRadius: R.full, padding: `0 ${SP.xxs}px` }}>
-            <IconButton size="xs" title="Меньше вариантов" ariaLabel="Меньше вариантов" disabled={count <= 1}
-              onClick={() => L.setSettings({ count: count - 1 })}>{ic(Minus)}</IconButton>
-            <span style={{ minWidth: 14, textAlign: 'center', color: C.textPrimary }}>{count}</span>
-            <IconButton size="xs" title="Больше вариантов" ariaLabel="Больше вариантов" disabled={count >= maxCount}
-              onClick={() => L.setSettings({ count: count + 1 })}>{ic(Plus)}</IconButton>
-          </span>
-          <span data-image-price="" style={{ color: C.textPrimary, fontWeight: 600, whiteSpace: 'nowrap' }}>{L.priceLabel}</span>
-          <CharacterChip projectId={projectId} slug={L.prefs.characterSlug} focusKey={state.focus} isMobile={isMobile} />
-          {withSteps && (
-            <span style={{ display: 'inline-flex', alignItems: 'center' }} title="Результат вернётся в размере исходника">
-              <Checkbox checked={L.settings.matchSourceSize} onChange={v => L.setSettings({ matchSourceSize: v })}
-                ariaLabel="Размер оригинала" />
-              Размер оригинала
+      <span style={{ flex: 1 }} />
+      {noProviders ? (
+        <span style={{ fontSize: FS.xs, color: C.textMuted, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          Рисовать нечем: поставщиков не настроил администратор
+        </span>
+      ) : (
+        <span data-images-settings-toggle="" style={{ display: 'inline-flex', minWidth: 0, flex: '0 1 auto' }}>
+          <Button size="xs" variant="secondary"
+            leftIcon={ic(SlidersHorizontal)} title="Настройки генерации"
+            onClick={() => setOpen(v => !v)}
+            style={{ minWidth: 0, flex: '0 1 auto', height: 28, border: `1px solid ${open ? C.accent : C.border}`, background: C.bgWhite }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, minWidth: 0 }}>
+              <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {isMobile ? `${L.settings.count} вар.` : stripSummary(parts, true)}
+              </span>
+              {L.blocked && <span style={{ display: 'inline-flex', color: C.warningText }}>{ic(AlertTriangle)}</span>}
+              {ic(ChevronDown)}
             </span>
-          )}
-          {L.blocked && L.model && (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, color: C.warningText, fontSize: FS.xs }}>
-              {ic(AlertTriangle)}{L.model.label}: {L.blocked.charAt(0).toLowerCase() + L.blocked.slice(1)}
-            </span>
-          )}
-        </>, 36,
-      ) : row(<span style={{ color: C.textMuted }}>Рисовать нечем: администратор не настроил поставщиков картинок</span>, 36))}
+          </Button>
+        </span>
+      )}
+      {!isMobile && (L.prefs.characterSlug
+        ? (
+          <IconButton size="sm" title={`Персонаж: ${character?.name ?? L.prefs.characterSlug} — фото уходят в запрос`}
+            ariaLabel="Персонаж" onClick={() => revealWorkspacePanel(CHARACTERS_PANEL)}
+            style={{ padding: 0, borderRadius: R.full, border: `1.5px solid ${C.accent}`, overflow: 'hidden' }}>
+            {photo ? <img src={photo} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} /> : ic(User)}
+          </IconButton>
+        )
+        : (
+          <IconButton size="sm" title="Подключить персонажа" ariaLabel="Подключить персонажа"
+            onClick={() => openCharacters(isMobile, () => setCharSheet(true))}>{ic(User)}</IconButton>
+        ))}
+      <IconButton size="sm" title="Свернуть полосу в строку" ariaLabel="Свернуть полосу в строку" onClick={() => setCollapsed(true)}>
+        {ic(ChevronUp, ICON_SIZE.sm)}
+      </IconButton>
+
+      {open && settings && !isMobile && (
+        <div data-images-settings-card="" style={{
+          position: 'absolute', right: 0, bottom: 'calc(100% + 6px)', width: 380, maxWidth: 'calc(100vw - 40px)', zIndex: Z.dropdown,
+          boxSizing: 'border-box', padding: `${SP.xs}px ${SP.lg}px ${SP.md}px`, cursor: 'default',
+          background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: R.xxl, boxShadow: SHADOW.dropdown,
+        }}>
+          {settings}
+        </div>
+      )}
+      {open && settings && isMobile && (
+        <Modal title="Настройки генерации" onClose={() => setOpen(false)}>{settings}</Modal>
+      )}
+      {charSheet && (
+        <Modal title="Персонажи" onClose={() => setCharSheet(false)}>
+          <CharactersPanel projectId={projectId} />
+        </Modal>
+      )}
     </div>
   );
 }
 
-// Строка состояния в меню переключателя «Git ▾»
-export function imagesStripStatus(sessionId: string | null): string {
+// Строка состояния в меню переключателя полос — та же сводка, что у свёрнутой строки
+export function imagesStripStatus(projectId: string, sessionId: string | null): string {
   const t = getFocusedThread(sessionId);
-  return t ? `Работаем с ${focusLabel(t)}` : 'картинка не выбрана';
+  return stripSummary({ focus: t ? focusLabel(t) : null, character: null, ...launchSummaryParts(projectId, t) });
 }

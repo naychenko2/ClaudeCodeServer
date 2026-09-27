@@ -8,7 +8,8 @@ using ClaudeHomeServer.Services.Turn;
 namespace ClaudeHomeServer.Services.ImageEditor.Chats;
 
 // Блок «Картинки в этом чате» в каждом ходе чата проекта с нитями (ADR-019 §3): какая картинка
-// в работе, у каждой файл, шаг и ожидающие выбора варианты, плюс журнал «с прошлого сообщения».
+// в работе, у каждой файл, версии (id, «версия N», какая текущая, откуда выросла — чтобы агент
+// понимал «поправь предыдущую / вторую»), идущие запуски, плюс журнал «с прошлого сообщения».
 // Ручной запуск агент узнаёт именно отсюда: тихую строку image_launch в ленте модель не видит.
 // Нить в транскрипт CLI не входит, поэтому после компакции и --resume модель узнаёт о ней только
 // отсюда. Чат без нитей блока не получает.
@@ -73,12 +74,16 @@ public sealed class ImageEditorStateContributor(
         {
             var what = t.File is { Length: > 0 } file ? $"файл {file}"
                 : $"новая картинка, ещё не сохранена (человек сохранит её в {DraftFolderText(t.DraftFolder)})";
+            var current = t.CurrentVersion is { } cv ? $"; правка пойдёт от: {ImageThread.Label(cv)}" : "";
+            // Стопка — формат нитей до 27.09: её шаг показывается, пока она есть
             var steps = t.CurrentStack?.Steps ?? [];
             var at = t.CurrentStepId is { } s && steps.Contains(s) ? steps.ToList().IndexOf(s) + 1 : 0;
-            var step = steps.Count == 0 ? "шагов нет" : at == 0 ? $"на холсте исходник, шагов {steps.Count}" : $"шаг {at} из {steps.Count}";
-            var pending = t.PendingJobId is { } p ? "; варианты ждут выбора человека" + Outcome(job(p))
+            var stack = steps.Count == 0 ? "" : at == 0 ? $"; старая стопка: на холсте исходник, шагов {steps.Count}"
+                : $"; старая стопка: шаг {at} из {steps.Count}";
+            var pending = t.PendingJobId is { } p ? "; варианты старой стопки ждут выбора человека" + Outcome(job(p))
                 : t.InterruptedJobId is not null ? "; последняя задача потеряна при перезапуске сервера, варианты недоступны" : "";
-            sb.AppendLine($"- {t.Id}{(t.Id == state.Focus ? " (в работе)" : "")}: {what}; {step}{pending}");
+            sb.AppendLine($"- {t.Id}{(t.Id == state.Focus ? " (в работе)" : "")}: {what}{current}{stack}{pending}");
+            RenderVersions(sb, t, job);
         }
         if (fresh.Count > 0)
         {
@@ -87,6 +92,41 @@ public sealed class ImageEditorStateContributor(
                 sb.AppendLine("- " + e.Text + Outcome(e.JobId is { } id && e.Kind == ImageThreadEventKinds.Launched ? job(id) : null));
         }
         return sb.ToString().TrimEnd();
+    }
+
+    // Сколько последних версий показывать у картинки: исходник и текущая видны всегда
+    public const int MaxVersionsShown = 8;
+
+    // «  версии: …» и «  рисуется: …» под строкой картинки
+    private static void RenderVersions(StringBuilder sb, ImageThread t, Func<string, ImageEditJobDto?> job)
+    {
+        var ai = t.Versions.Where(v => !v.IsOrigin).ToList();
+        var shown = ai.TakeLast(MaxVersionsShown).ToList();
+        if (t.CurrentVersion is { IsOrigin: false } cv && !shown.Contains(cv)) shown.Insert(0, cv);
+        if (ai.Count > 0 || t.Versions.Any(v => v.IsOrigin && v.Steps.Count > 0))
+        {
+            sb.AppendLine("  версии:");
+            foreach (var v in t.Versions.Where(v => v.IsOrigin).Concat(shown))
+                sb.AppendLine("  - " + VersionLine(t, v));
+            if (ai.Count > shown.Count) sb.AppendLine($"  - (ещё {ai.Count - shown.Count} раньше — полный список в image_state)");
+        }
+        foreach (var l in t.Launches.Where(l => l.Status == ImageThreadLaunchStatus.Running))
+            sb.AppendLine($"  рисуется: «{l.Prompt}», от: {(t.Version(l.BaseVersionId) is { } b ? ImageThread.Label(b) : "исходника")}"
+                + Outcome(job(l.JobId)));
+        foreach (var l in t.Launches.Where(l => l.Status == ImageThreadLaunchStatus.Interrupted).TakeLast(1))
+            sb.AppendLine($"  запуск «{l.Prompt}» потерян при перезапуске сервера, вариантов не будет — запусти заново");
+    }
+
+    // «исходник [origin] (в работе), правок без ИИ 2» / «версия 3 [id] — вариант 1 запуска «фон», от: исходник»
+    private static string VersionLine(ImageThread t, ImageThreadVersion v)
+    {
+        var head = $"{ImageThread.Label(v)} [{v.Id}]{(v.Id == t.CurrentVersionId ? " (в работе)" : "")}";
+        var edits = v.IsOrigin ? v.Steps.Count : Math.Max(0, v.Steps.Count - 1);
+        var editsText = edits > 0 ? $", правок без ИИ {edits}" : "";
+        if (v.IsOrigin) return head + editsText;
+        var prompt = t.Launches.FirstOrDefault(l => l.JobId == v.JobId)?.Prompt;
+        var from = t.Version(v.BaseVersionId) is { } b ? ImageThread.Label(b) : "исходник";
+        return $"{head} — вариант {v.Variant}{(prompt is null ? "" : $" запуска «{prompt}»")}, от: {from}{editsText}";
     }
 
     public const string ChoiceRule =

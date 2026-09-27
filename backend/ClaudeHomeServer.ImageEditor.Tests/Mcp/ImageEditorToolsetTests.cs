@@ -303,7 +303,7 @@ public class ImageEditorToolsetTests : IDisposable
     // ── Запуск в нить ─────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task Агент_запускает_генерацию_в_нить_варианты_ждут_человека()
+    public async Task Агент_запускает_генерацию_в_нить_с_якорем_запуска_внизу_ленты()
     {
         var thread = Thread();
         var toolset = Toolset();
@@ -322,8 +322,13 @@ public class ImageEditorToolsetTests : IDisposable
         job.ChatSessionId.Should().Be(ChatId);
         job.ThreadId.Should().Be(thread);
         job.Count.Should().Be(2);
-        _store.Get(Owner, ChatId).Threads.Single().PendingJobId.Should().Be(jobId);
-        Lines(ImageThreadService.RecordTypes.Launch).Should().BeEmpty("запуск агента виден карточкой вызова, а не тихой строкой");
+        var launch = _store.Get(Owner, ChatId).Threads.Single().Launches.Should().ContainSingle().Subject;
+        launch.JobId.Should().Be(jobId);
+        launch.Initiator.Should().Be(SpendInitiators.Agent);
+        launch.BaseVersionId.Should().Be(ImageThreadVersion.OriginId);
+        Lines(ImageThreadService.RecordTypes.Launch).Should().BeEmpty("тихая строка ручного запуска больше не пишется");
+        Lines(ImageThreadService.RecordTypes.LaunchVersions).Should().ContainSingle()
+            .Which.Data!.Value.GetProperty("jobId").GetString().Should().Be(jobId);
     }
 
     // ADR-018 §7: трата агента — одна запись на владельца чата, инициатор — агент, SessionId — чат

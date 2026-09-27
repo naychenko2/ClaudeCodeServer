@@ -209,10 +209,10 @@ export interface ComposerStripCtx {
   projectId: string;
   sessionId: string | null;
   isMobile: boolean;
-  // Свёрнута ли полоса в строку 30 px (одно состояние на все полосы)
+  // Свёрнута ли полоса в строку 30 px — своё у каждой полосы каждого чата
   collapsed: boolean;
   // Свернуть в строку / развернуть (кнопка ⌃ в полосе, клик по свёрнутой строке)
-  setCollapsed?: (collapsed: boolean) => void;
+  setCollapsed: (collapsed: boolean) => void;
   // Переключатель «Git ▾» от хоста: полоса ставит его на место своего заголовка
   switcher: ReactNode;
 }
@@ -221,7 +221,7 @@ export interface ComposerStripApi {
   icon: ReactNode;
   // false — полоса не предлагается (нет git, модуль недоступен в проекте)
   isAvailable?: (ctx: { projectId: string; sessionId: string | null }) => boolean;
-  // Строка состояния в меню переключателя: «feat/site-header · +42 −7», «Работаем с hero.png»
+  // Строка состояния в меню переключателя: «feat/site-header · 3 файла изменено», «Работаем с: hero.png · версия 2»
   status?: (ctx: { projectId: string; sessionId: string | null }) => ReactNode;
 }
 
@@ -232,6 +232,11 @@ export interface ComposerModeApi {
   icon: ReactNode;
   // Режим предлагается, только пока условие истинно (например, выбрана картинка)
   isAvailable: (ctx: ComposerModeCtx) => boolean;
+  // Режим просит включить себя сам: ключ повода (черновик, «Редактировать»). Поле
+  // переключается один раз на каждый новый ключ, откуда бы ни пришло состояние —
+  // клик, агент, перезагрузка; ручной уход в «Чат» держится, пока ключ тот же.
+  // null — не просит. Сигнал о смене состояния — notifyComposer из kit
+  autoSelect?: (ctx: ComposerModeCtx) => string | null;
   placeholder: (ctx: ComposerModeCtx) => string;
   // Подпись кнопки отправки: «✦ Изменить · ≈ $0.15»
   submitLabel?: (ctx: ComposerModeCtx) => ReactNode;

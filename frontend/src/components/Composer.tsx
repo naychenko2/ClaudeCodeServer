@@ -38,6 +38,7 @@ import { Button, IconButton, Modal, Notice } from './ui';
 import { SLOT_COMPOSER_CHIP, SLOT_COMPOSER_MODE, useSlot } from '../lib/subsystems/registry';
 import type { ComposerChipCtx, ComposerModeApi, ComposerModeCtx } from '../lib/subsystems/registry';
 import { getComposerStripsVersion, subscribeComposerStrips } from '../lib/composerStrips';
+import { nextComposerMode } from '../lib/composerModes';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { useVoiceInput } from '../hooks/useVoiceInput';
 import { useHandsFree, type SpeechPhase } from '../hooks/useHandsFree';
@@ -611,6 +612,15 @@ export function Composer({
     .filter(c => c.name && c.action && c.action.isAvailable(modeCtx));
   const slotChips = useSlot<ComposerChipCtx>(SLOT_COMPOSER_CHIP);
   const [modeId, setModeId] = useState<string | null>(null);
+  // Самовключение режима по поводу от владельца (черновик, «Редактировать»): считаем по
+  // состоянию, а не по клику — фокус картинки приходит и от агента, и после перезагрузки
+  const autoKeyRef = useRef<string | null>(null);
+  const autoMode = nextComposerMode(slotModes, modeCtx, autoKeyRef.current, modeId);
+  useEffect(() => {
+    autoKeyRef.current = autoMode.key;
+    if (autoMode.modeId !== modeId) setModeId(autoMode.modeId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- переключаемся только на новый ключ
+  }, [autoMode.key]);
   // Режим пропал (условие стало ложным) — поле само возвращается в «Чат»
   const activeMode = slotModes.find(c => c.name === modeId)?.action ?? null;
   const [modeText, setModeText] = useState('');
@@ -1677,18 +1687,15 @@ export function Composer({
     </div>
   );
 
-  const inputArea = talkActive ? loopArea : isListening ? (
-    <div style={{ ...dotsStyle, gap: 10 }}>
-      <span style={{ width: 9, height: 9, borderRadius: '50%', background: C.danger, animation: 'pulsedot 1s ease-in-out infinite', flexShrink: 0 }} />
-      <span style={{ fontSize: 13, color: C.dangerText, fontWeight: 600, fontFamily: FONT.mono, flexShrink: 0, minWidth: 34 }}>{fmtRecTime(recSeconds)}</span>
-      <Waveform />
-    </div>
-  ) : (
-    // Обёртка нужна ghost-слою подсказки: он позиционируется поверх ПУСТОГО textarea
-    // (подсказка видна только при пустом поле, совмещать с текстом юзера не нужно)
-    <div style={{ position: 'relative', flex: 1, minWidth: 0, width: isMobile ? '100%' : undefined, display: 'flex', alignItems: 'center' }}>
-      {slotModes.length > 0 && (
-        // Переключатель режимов — в одну строку с полем: композер не становится выше
+  // Сегмент режимов поля: в «Чате» — слева от поля, в режиме подсистемы («Картинка») —
+  // в нижней строке действий: поле тогда на всю ширину, три строки как в прототипе полос
+  const modesSeg = slotModes.length > 0 && (
+        // Сегмент «Чат | …» слева поля. По макету (.mswitch) это радио-группа из
+        // двух кнопок — она появляется только при выбранной картинке, иначе первая
+        // кнопка «Чат» рисуется одна. Здесь slotModes.length > 0 уже отфильтровано
+        // isAvailable, поэтому «Картинка» в списке означает картинка выбрана — рисуем
+        // полный сегмент, иначе (например, другие подсистемы заведут свои режимы) —
+        // оставляем только кнопку «Чат», чтобы высота композера не менялась
         <div data-composer-modes="" style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0, marginRight: SP.xs }}>
           <IconButton size="sm" active={!activeMode} title={`Чат — сообщение ${asstName}`} ariaLabel="Режим «Чат»"
             onClick={() => setModeId(null)}>
@@ -1701,7 +1708,18 @@ export function Composer({
             </IconButton>
           ))}
         </div>
-      )}
+      );
+  const inputArea = talkActive ? loopArea : isListening ? (
+    <div style={{ ...dotsStyle, gap: 10 }}>
+      <span style={{ width: 9, height: 9, borderRadius: '50%', background: C.danger, animation: 'pulsedot 1s ease-in-out infinite', flexShrink: 0 }} />
+      <span style={{ fontSize: 13, color: C.dangerText, fontWeight: 600, fontFamily: FONT.mono, flexShrink: 0, minWidth: 34 }}>{fmtRecTime(recSeconds)}</span>
+      <Waveform />
+    </div>
+  ) : (
+    // Обёртка нужна ghost-слою подсказки: он позиционируется поверх ПУСТОГО textarea
+    // (подсказка видна только при пустом поле, совмещать с текстом юзера не нужно)
+    <div style={{ position: 'relative', flex: 1, minWidth: 0, width: isMobile ? '100%' : undefined, display: 'flex', alignItems: 'center' }}>
+      {!activeMode && modesSeg}
       <textarea
         autoComplete="off"
         ref={textareaRef}
@@ -1721,13 +1739,14 @@ export function Composer({
         style={{
           flex: 1,
           width: '100%',
+          minWidth: 0, // иначе flex-item не сжимается меньше content и наезжает на send-кнопку при длинном submitLabel
           border: 'none',
           outline: 'none',
           resize: 'none',
           fontSize: isMobile ? 16 : 15, // 16px — чтобы iOS не зумил при фокусе
           color: C.textPrimary,
           background: 'transparent',
-          minHeight: 34,
+          minHeight: activeMode ? 78 : 34,
           maxHeight: 200,
           lineHeight: '1.5',
           padding: isMobile ? '6px 8px' : '6px 4px',
@@ -1739,9 +1758,15 @@ export function Composer({
       {suggestionVisible && promptSuggestion && (
         // Ghost text как в Claude Code Desktop: серый текст подсказки в самом поле
         // + бейдж-клавиша ⇥ (тап — принять; на десктопе также → / Tab).
-        // pointerEvents:none у слоя — тап по полю ставит фокус как обычно
+        // pointerEvents:none у слоя — тап по полю ставит фокус как обычно.
+        // ВАЖНО: позиционируется ТОЛЬКО над textarea (left/right через те же отступы
+        // что у textarea), а не inset:0 — иначе ghost закрывал send-кнопку и переключатель
+        // режима, при длинном submitLabel «✦ Изменить · ≈ $0.15» и длинном имени модели
+        // они визуально наезжали на подсказку
         <div style={{
-          position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', gap: 8,
+          position: 'absolute', top: 0, bottom: 0,
+          left: 0, right: 0,
+          display: 'flex', alignItems: 'center', gap: 8,
           padding: isMobile ? '0 8px' : '0 4px', pointerEvents: 'none', boxSizing: 'border-box',
           fontSize: isMobile ? 16 : 15, lineHeight: '1.5', color: C.textMuted, minWidth: 0,
         }}>
@@ -2510,15 +2535,23 @@ export function Composer({
             : isListening
               ? <>{cancelRecBtn}{confirmRecBtn}</>
               : activeMode
-                ? (
-                  <Button size="sm" pill variant="primary" disabled={!hasText || execBlocked} data-composer-send=""
-                    onClick={() => void handleSend()}>
-                    {activeMode.submitLabel ? activeMode.submitLabel(modeCtx) : <ArrowUp size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
-                  </Button>
-                )
+                ? null
                 : <>{phrasesButton}{micButton}{!canSend && !isGenerating && voiceButton ? voiceButton : sendButton}</>}
         </div>
       </div>
+      {/* Режим подсистемы: третья строка — сегмент режимов слева, запуск справа */}
+      {activeMode && !talkActive && !isListening && (
+        <div data-composer-mode-bar="" style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, padding: `0 ${SP.xxs}px ${SP.xxs}px` }}>
+          {modesSeg}
+          <span style={{ flex: 1 }} />
+          <span data-composer-send="" style={{ display: 'inline-flex', minWidth: 0, flexShrink: 1 }}>
+            <Button size="sm" pill variant="primary" disabled={!hasText || execBlocked}
+              onClick={() => void handleSend()} style={{ minWidth: 0 }}>
+              {activeMode.submitLabel ? activeMode.submitLabel(modeCtx) : <ArrowUp size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+            </Button>
+          </span>
+        </div>
+      )}
       </div>
     </div>
 

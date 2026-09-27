@@ -14,6 +14,34 @@ export interface ImageThreadStack {
   old: boolean;
 }
 
+// Версия картинки (изменение 27.09 к ADR-019): каждый вариант каждого запуска ИИ. Первая
+// всегда исходник: id "origin", number 0, jobId null. baseVersionId/baseStepId — от чего
+// правили; steps — шаги версии (у версии от ИИ первым идёт сам вариант, дальше правки без ИИ)
+export interface ImageThreadVersion {
+  id: string;
+  number: number;
+  jobId: string | null;
+  variant: number | null;
+  baseVersionId: string | null;
+  baseStepId: string | null;
+  steps: string[];
+  currentStepId: string | null;
+  createdAt: string;
+}
+
+export type ImageThreadLaunchStatus = 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted';
+
+// Запуск ИИ в нить: его якорь в ленте — запись image_launch_versions с тем же jobId
+export interface ImageThreadLaunch {
+  jobId: string;
+  baseVersionId: string | null;
+  baseStepId: string | null;
+  at: string;
+  status: ImageThreadLaunchStatus;
+  initiator: 'human' | 'agent';
+  prompt: string | null;
+}
+
 export interface ImageThreadSettings {
   provider: string | null;
   model: string | null;
@@ -39,6 +67,10 @@ export interface ImageThread {
   // запуск или «Не брать» (dismiss с этим jobId)
   interruptedJobId?: string | null;
   createdAt: string;
+  // Версии и запуски (с 27.09); у ответа старого сервера их нет
+  versions?: ImageThreadVersion[];
+  currentVersionId?: string | null;
+  launches?: ImageThreadLaunch[];
 }
 
 // Запись журнала нитей «с прошлого сообщения»: launched, taken, saved, interrupted
@@ -96,6 +128,12 @@ export const threadsApi = {
   // stepId = null — вернуться к исходнику
   rollback: (projectId: string, sessionId: string, threadId: string, stepId: string | null, revision: number) =>
     post<ImageThreadsState>(`${one(projectId, sessionId, threadId)}/rollback`, { stepId, revision }),
+  // «Продолжить от версии»: версия становится текущей, нить — в работе. Ничего не удаляет
+  current: (projectId: string, sessionId: string, threadId: string, versionId: string, revision: number) =>
+    post<ImageThreadsState>(`${one(projectId, sessionId, threadId)}/current`, { versionId, revision }, 'PUT'),
+  // Правка без ИИ (шаг из /transform) — шагом текущей версии, новой версии не создаёт
+  addStep: (projectId: string, sessionId: string, threadId: string, stepId: string, revision: number) =>
+    post<ImageThreadsState>(`${one(projectId, sessionId, threadId)}/steps`, { stepId, revision }),
   settings: (projectId: string, sessionId: string, threadId: string, settings: ImageThreadSettings, revision: number) =>
     post<ImageThreadsState>(`${one(projectId, sessionId, threadId)}/settings`, { settings, revision }, 'PUT'),
   subscribe: (handler: (e: ImageThreadChangedEvent) => void) => onMessage(msg => {

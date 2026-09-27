@@ -102,6 +102,7 @@
     -->
     <ProjectReference Include="..\ClaudeHomeServer.Dossiers\ClaudeHomeServer.Dossiers.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Memory\ClaudeHomeServer.Memory.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Architecture\ClaudeHomeServer.Architecture.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Backgrounds\ClaudeHomeServer.Backgrounds.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Modules\ClaudeHomeServer.Modules.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.ProjectIcons\ClaudeHomeServer.ProjectIcons.csproj" />
@@ -152,5 +153,13 @@
     <Copy SourceFiles="..\ClaudeHomeServer.Notes\bin\$(Configuration)\net10.0\ClaudeHomeServer.Notes.dll"
           DestinationFolder="$(OutDir)modules\notes" SkipUnchangedFiles="true"
           Condition="Exists('..\ClaudeHomeServer.Notes\bin\$(Configuration)\net10.0\ClaudeHomeServer.Notes.dll')" />
+  </Target>
+  <!-- Architecture (Viaduct 10.2): динамический модуль, как Notes. Без копии хосты
+       WebApplicationFactory не найдут dll — раздела нет, тулсет arch_* выпадает из реестра,
+       и тесты контроллера/стабильности состава проходили бы на пустом наборе. -->
+  <Target Name="CopyArchitectureModuleForTests" AfterTargets="Build">
+    <Copy SourceFiles="..\ClaudeHomeServer.Architecture\bin\$(Configuration)\net10.0\ClaudeHomeServer.Architecture.dll"
+          DestinationFolder="$(OutDir)modules\architecture" SkipUnchangedFiles="true"
+          Condition="Exists('..\ClaudeHomeServer.Architecture\bin\$(Configuration)\net10.0\ClaudeHomeServer.Architecture.dll')" />
   </Target>
 </Project>

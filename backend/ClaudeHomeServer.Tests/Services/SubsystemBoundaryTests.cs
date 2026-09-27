@@ -95,6 +95,7 @@ public class SubsystemBoundaryTests
         _ = typeof(ClaudeHomeServer.Services.Backgrounds.BackgroundsSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.IProjectBackgroundWriter).Assembly;
         _ = typeof(ClaudeHomeServer.Services.ProjectIcons.ProjectIconsSubsystem).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Architecture.ArchitectureSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.IProjectIconMigrator).Assembly;
         _ = typeof(ClaudeHomeServer.Services.IDataBackupService).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Terminal.TerminalService).Assembly;
@@ -403,6 +404,23 @@ public class SubsystemBoundaryTests
                     .Concat(new[]
                     {
                         "ClaudeHomeServer.Services.ProjectIcons",
+                    })
+                    .ToArray(),
+                Array.Empty<string>()),
+        },
+        // Architecture — раздел «Архитектура» (встраивание Viaduct). Контроллер и раздача
+        // Viaduct живут в вертикали (namespace под этим корнем — иначе выпали бы из-под
+        // сторожа); снимок графа кода — через Core-шов IArchitectureCodeSource, поэтому
+        // ссылки на CodeGraph нет; швы и SafePath — Core (IsCoreAssembly).
+        new object[]
+        {
+            new VerticalBoundary(
+                "Architecture",
+                "ClaudeHomeServer.Services.Architecture",
+                SharedAllowedPrefixes
+                    .Concat(new[]
+                    {
+                        "ClaudeHomeServer.Services.Architecture",
                     })
                     .ToArray(),
                 Array.Empty<string>()),

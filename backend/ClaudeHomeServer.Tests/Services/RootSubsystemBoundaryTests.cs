@@ -99,6 +99,7 @@ public class RootSubsystemBoundaryTests
         _ = typeof(ClaudeHomeServer.Services.Desktop.DesktopCallRouter).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Backgrounds.BackgroundsSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.ProjectIcons.ProjectIconsSubsystem).Assembly;
+        _ = typeof(ClaudeHomeServer.Services.Architecture.ArchitectureSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Terminal.TerminalService).Assembly;
         // Llm — отдельная сборка (Этап 5, финал линии): форс-загрузка нужна, чтобы
         // сторож видел сборку Llm.dll и её root-типы.

@@ -731,6 +731,8 @@ builder.Services.AddSubsystems(builder.Configuration,
     new ClaudeHomeServer.Services.Deploy.DeploySubsystem(),
     new ClaudeHomeServer.Services.Backgrounds.BackgroundsSubsystem(),
     new ClaudeHomeServer.Services.ProjectIcons.ProjectIconsSubsystem(),
+    // Architecture — динамический модуль (Viaduct 10.2, сценарий Б, как Notes): грузится
+    // ModuleLoader'ом по пути из секции DynamicModules, НЕ через ProjectReference.
     // ProjectServices — раздел «Сервисы проекта» (Preview/DevServer). Регистрация ниже
     // всех: вертикаль листовая, ни от кого не зависит; наоборот, на неё ссылаются
     // PreviewController и SessionHub (через Program.cs).

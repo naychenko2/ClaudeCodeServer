@@ -116,6 +116,32 @@
           SkipUnchangedFiles="true" />
   </Target>
 
+  <!-- Динамический модуль Architecture (раздел «Архитектура», Viaduct 10.2): тот же паттерн,
+       что Notes. ReferenceOutputAssembly="false" — Main не видит типы вертикали на компиляции;
+       швы (IArchitectureCodeSource, IStaticBranchContributor, McpEndpoints.ArchitectureName)
+       живут в Core. Копия dll — на Build И Publish: без Publish деплой терял бы модуль, и раздел
+       молча пропадал бы на бою (грабля Notes). -->
+  <ItemGroup>
+    <ProjectReference Include="..\ClaudeHomeServer.Architecture\ClaudeHomeServer.Architecture.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+  <!-- Две цели, а не одна с условием на $(PublishDir): SDK задаёт PublishDir и на обычной
+       сборке (bin\...\publish\), и условие «PublishDir не пуст» уводило бы копию Build мимо
+       $(OutDir) — dotnet run не нашёл бы модуль. -->
+  <PropertyGroup>
+    <ArchitectureModuleDll>..\ClaudeHomeServer.Architecture\bin\$(Configuration)\net10.0\ClaudeHomeServer.Architecture.dll</ArchitectureModuleDll>
+  </PropertyGroup>
+  <Target Name="CopyArchitectureModule" AfterTargets="Build">
+    <Copy SourceFiles="$(ArchitectureModuleDll)" DestinationFolder="$(OutDir)modules\architecture"
+          SkipUnchangedFiles="true" Condition="Exists('$(ArchitectureModuleDll)')" />
+  </Target>
+  <Target Name="CopyArchitectureModuleOnPublish" AfterTargets="Publish">
+    <!-- На Publish тихий пропуск недопустим: бой остался бы без модуля, раздел пропал бы молча -->
+    <Error Condition="!Exists('$(ArchitectureModuleDll)')"
+           Text="Модуль Architecture не собран: нет $(ArchitectureModuleDll) — публикация без него потеряла бы раздел «Архитектура»" />
+    <Copy SourceFiles="$(ArchitectureModuleDll)" DestinationFolder="$(PublishDir)modules\architecture"
+          SkipUnchangedFiles="true" />
+  </Target>
+
   <!-- === Модульность (Этап 3+, Этап 5)
        Вертикали Video/Yandex/Reader/CodeGraph/Skills/Git/Personas/Spend/Knowledge/
        Changelog/Diagnostics/Docs/Tts/WebSearch/Tasks/Modules/ProjectServices/Backgrounds
@@ -126,7 +152,8 @@
        До этапа 3 всё это жило одной сборкой, и инвариант «вертикаль зависит только
        от спинки» соблюдался логически; теперь он держится физически — вертикаль не
        может «протянуть руку» в Main, потому что ProjectReference в её .csproj нет.
-       Notes — исключение: динамический модуль (см. CopyNotesModule), не прямой референс. -->
+       Notes и Architecture — исключения: динамические модули (см. CopyNotesModule,
+       CopyArchitectureModule), не прямые референсы. -->
   <ItemGroup>
     <ProjectReference Include="..\ClaudeHomeServer.Backgrounds\ClaudeHomeServer.Backgrounds.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />

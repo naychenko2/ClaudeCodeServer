@@ -12,13 +12,13 @@ namespace ClaudeHomeServer.Controllers;
 /// <summary>
 /// Первая отрисовка бейджа рук в чате (ADR-016 §7): дальше состояние едет событием
 /// <c>hands_status</c>. <c>state = null</c> — у чата рук нет вовсе (флаг, не локальный проект,
-/// тумблер проекта, пустой список провайдеров) и бейдж не рисуется.
+/// тумблер проекта) и бейдж не рисуется.
 /// </summary>
 [ApiController]
 [Authorize]
 [Route("api/sessions")]
 public class SessionHandsController(
-    SessionManager sessions, ProjectManager projects, UserStore users, FeatureFlagService flags,
+    SessionManager sessions, ProjectManager projects, FeatureFlagService flags,
     IDeviceExecChannel? devices = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -34,8 +34,7 @@ public class SessionHandsController(
         if (session.ProjectId is null || projects.GetById(session.ProjectId) is not { } project
             || !ProjectCapabilities.IsDeviceBound(project))
             return none;
-        if (!flags.IsEnabled(UserId, FeatureFlagKeys.LocalHands) || !project.HandsEnabled
-            || users.GetById(UserId)?.HandsProviders is not { Count: > 0 })
+        if (!flags.IsEnabled(UserId, FeatureFlagKeys.LocalHands) || !project.HandsEnabled)
             return none;
 
         var device = devices?.GetStatus(UserId, project.DeviceId!);

@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   HANDS_BADGE_LOADING, handsBadgeStatus, handsBadgeView, handsEventReceived, handsInitialFailed, handsInitialLoaded,
-  handsSectionView, handsStatusFeedLine, HandsChatState, HandsEndReason,
+  handsProviderLabel, handsSectionView, handsStatusFeedLine, HandsChatState, HandsEndReason,
 } from '../localHands';
 import { featureReason, isFeatureAvailable } from '../projectCapabilities';
 import { applyServerMessage, initialChatState } from '../chatReducer';
 import { ProjectFeature, type Project, type ServerMessage } from '../../types';
 
-const base = { handsEnabled: false, refusal: null, deviceOffline: false, noProviders: false };
+const base = { handsEnabled: false, refusal: null, deviceOffline: false };
 
 // Решения владельца 2026-09-27: ни сеанса со сроком, ни белого списка, ни запрета терминала —
 // ни одна строка веб-UI рук не должна их обещать
@@ -23,18 +23,9 @@ describe('handsSectionView', () => {
     expect(v).toMatchObject({ summary: 'Выключены', tone: 'neutral', canToggle: true, refusal: null });
   });
 
-  it('включено, провайдеры есть — «Включены»', () => {
+  it('включено — «Включены» без условий про провайдеров (решение владельца 2026-09-27)', () => {
     const v = handsSectionView({ ...base, handsEnabled: true });
-    expect(v).toMatchObject({ summary: 'Включены', tone: 'ok', noProvidersWarning: false });
-  });
-
-  it('включено без провайдеров — предупреждение', () => {
-    const v = handsSectionView({ ...base, handsEnabled: true, noProviders: true });
-    expect(v).toMatchObject({ summary: 'Нет провайдеров', tone: 'warning', noProvidersWarning: true });
-  });
-
-  it('список провайдеров ещё не загружен — не пугаем', () => {
-    expect(handsSectionView({ ...base, handsEnabled: true, noProviders: null }).noProvidersWarning).toBe(false);
+    expect(v).toMatchObject({ summary: 'Включены', tone: 'ok' });
   });
 
   it('устройство не в сети — тумблер работает, строка про возвращение', () => {
@@ -96,12 +87,6 @@ describe('handsBadgeView', () => {
     expect(v.title).toContain('любые окна на этом компьютере, в том числе снимать экран');
   });
 
-  it('провайдер не доверен — подсказка, где настроить', () => {
-    const v = handsBadgeView({ state: HandsChatState.ProviderNotAllowed }, 'home-pc');
-    expect(v).toMatchObject({ short: 'Нет рук', canStop: false });
-    expect(v.title).toContain('Руки на устройствах');
-  });
-
   it('unavailable — устройство не на связи или руки не установлены, без «Стоп»', () => {
     const v = handsBadgeView({ state: HandsChatState.Unavailable }, 'home-pc');
     expect(v).toMatchObject({ tone: 'warning', short: 'Нет рук', canStop: false, text: 'Руки недоступны на устройстве' });
@@ -126,7 +111,7 @@ describe('handsBadgeView', () => {
 
   it.each([
     HandsChatState.Active, HandsChatState.Allowed, HandsChatState.Unavailable,
-    HandsChatState.Stopped, HandsChatState.ProviderNotAllowed, 'initial',
+    HandsChatState.Stopped, 'initial',
   ])('%s — без сроков, «разрешите в трее» и белого списка', state => {
     for (const reason of Object.values(HandsEndReason)) {
       const v = handsBadgeView(state === 'initial' ? null : { state, reason, deviceName: 'pc' }, 'pc');
@@ -143,7 +128,6 @@ describe('handsStatusFeedLine', () => {
 
   it('активность и провайдер ленту не трогают', () => {
     expect(handsStatusFeedLine({ state: HandsChatState.Active })).toBeNull();
-    expect(handsStatusFeedLine({ state: HandsChatState.ProviderNotAllowed })).toBeNull();
   });
 
   it.each(Object.values(HandsEndReason))('остановка %s — без сроков', reason => {
@@ -188,5 +172,26 @@ describe('возможность Hands в матрице', () => {
 
   it('старый бэк без поля — недоступно', () => {
     expect(isFeatureAvailable(project({}), ProjectFeature.Hands)).toBe(false);
+  });
+});
+
+describe('handsProviderLabel', () => {
+  const providers = [
+    { key: 'claude', caps: { displayName: 'Claude', supportsImages: true } },
+    { key: 'glm', caps: { displayName: 'GLM', supportsImages: false } },
+    { key: 'deepseek', caps: { displayName: 'DeepSeek', supportsImages: true } },
+  ];
+
+  it('провайдер со зрением — видит снимки окон', () => {
+    expect(handsProviderLabel('deepseek', providers)).toBe('DeepSeek · видит снимки окон');
+  });
+
+  it('провайдер без зрения — видит только текст окон', () => {
+    expect(handsProviderLabel('glm', providers)).toBe('GLM · видит только текст окон');
+  });
+
+  it('подписка пула Claude (свой ключ) и пустой провайдер — это Claude', () => {
+    expect(handsProviderLabel('acc-a', providers)).toBe('Claude · видит снимки окон');
+    expect(handsProviderLabel(null, providers)).toBe('Claude · видит снимки окон');
   });
 });

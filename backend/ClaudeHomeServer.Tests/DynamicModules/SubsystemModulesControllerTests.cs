@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
 using ClaudeHomeServer.Controllers;
+using ClaudeHomeServer.Services.DynamicModules;
 using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.DynamicModules;
@@ -30,6 +31,14 @@ public class SubsystemModulesControllerTests
             ["DynamicModules:1:Backend:AssemblyPath"] = "modules/__stub/StubModule.dll",
         }).Build();
 
+    // Корень статики — заведомо пустой каталог: файлов remoteEntry.js нет, URL уходит без ?v=
+    private static SubsystemModulesController Controller(IConfiguration config) =>
+        new(config, new RemoteStaticFiles(new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                [RemoteStaticFiles.RootKey] = Path.Combine(Path.GetTempPath(), "ccs_no_remotes_" + Guid.NewGuid().ToString("N")),
+            }).Build()));
+
     private static JsonElement ParseItems(OkObjectResult result)
     {
         // Controller отдаёт анонимный объект { items = [...] } — сериализуем и читаем.
@@ -40,7 +49,7 @@ public class SubsystemModulesControllerTests
     [Fact]
     public void ЗаполненныйFrontend_КонтроллерВозвращает_Id_RemoteUrl_ExposedModule()
     {
-        var controller = new SubsystemModulesController(TwoModuleConfig());
+        var controller = Controller(TwoModuleConfig());
 
         var result = (OkObjectResult)controller.List();
         var items = ParseItems(result);
@@ -66,7 +75,7 @@ public class SubsystemModulesControllerTests
             ["DynamicModules:0:Backend:AssemblyPath"] = "modules/__stub/StubModule.dll",
         }).Build();
 
-        var controller = new SubsystemModulesController(config);
+        var controller = Controller(config);
 
         var result = (OkObjectResult)controller.List();
         ParseItems(result).GetArrayLength().Should().Be(0,
@@ -87,7 +96,7 @@ public class SubsystemModulesControllerTests
             ["DynamicModules:0:Frontend:ExposedModule"] = "./subsystem",
         }).Build();
 
-        var controller = new SubsystemModulesController(config);
+        var controller = Controller(config);
 
         var result = (OkObjectResult)controller.List();
         ParseItems(result).GetArrayLength().Should().Be(0,
@@ -113,7 +122,7 @@ public class SubsystemModulesControllerTests
             ["Subsystems:spend:Enabled"] = "false",
         }).Build();
 
-        var controller = new SubsystemModulesController(config);
+        var controller = Controller(config);
 
         var result = (OkObjectResult)controller.List();
         ParseItems(result).GetArrayLength().Should().Be(0,

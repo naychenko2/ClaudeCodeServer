@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.DynamicModules;
 
 namespace ClaudeHomeServer.Controllers;
 
@@ -14,7 +15,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/subsystem-modules")]
-public class SubsystemModulesController(IConfiguration config) : ControllerBase
+public class SubsystemModulesController(IConfiguration config, RemoteStaticFiles remoteFiles) : ControllerBase
 {
     [HttpGet]
     public IActionResult List()
@@ -43,7 +44,16 @@ public class SubsystemModulesController(IConfiguration config) : ControllerBase
             && !string.IsNullOrEmpty(m.remoteUrl)
             && bool.TryParse(m.enabled, out var on) && on
             && SubsystemGate.IsEnabled(config, m.id!))
-        .Select(m => new { m.id, m.remoteUrl, m.exposedModule })
+        // ?v={хеш remoteEntry.js}: URL меняется ровно вместе со сборкой модуля, иначе браузер
+        // после выкатки держит старый remoteEntry со ссылками на удалённые чанки
+        .Select(m => new
+        {
+            m.id,
+            remoteUrl = remoteFiles.ContentVersion(m.remoteUrl!) is { } v
+                ? RemoteStaticFiles.WithVersion(m.remoteUrl!, v)
+                : m.remoteUrl,
+            m.exposedModule,
+        })
         .ToList();
         return Ok(new { items });
     }

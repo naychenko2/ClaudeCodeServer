@@ -42,6 +42,8 @@ GET                 /api/history/day/{date}                       → { date, it
 GET                 /api/history/new-count            ?since=iso  → { count } (новые коммиты во всех проектах после даты; для бейджа)
 GET                 /api/feature-flags                → { definitions[], values{} }  (реестр + эффективные значения юзера)
 PUT                 /api/feature-flags/{key}          { enabled } → { values{} }      (override per-user; ключ валидируется по каталогу)
+GET                 /api/subsystem-modules            → { items[{ id, remoteUrl, exposedModule }] }  (MF-remote подсистем; remoteUrl с ?v={хеш remoteEntry.js на диске} — меняется с каждой сборкой модуля, сам remoteEntry.js отдаётся no-cache, /{имя}-remote/assets/** — immutable)
+GET                 /api/modules                      → { items[] }  (внешние YARP-модули; remoteEntry с ?v= — хеш файла из нашей статики, иначе версия манифеста)
 PUT                 /api/auth/timezone                { timeZone }  (IANA-зона устройства — для напоминаний)
 GET                 /api/tasks                        ?from=&to=&q=&status=&priority=&assignee=&projectId=&personal=&personaId=  (все задачи владельца с фильтрами; personaId — поручения персоне)
 POST                /api/tasks/{id}/execute           → Task  (запуск Claude-исполнителя; personaId у задачи → от лица персоны)

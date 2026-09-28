@@ -209,6 +209,55 @@ remote debugging for this browser instance» (Chrome 144+) плюс `--cdp-endpo
 6. Playwright `--extension` с токеном и сторонним провайдером через шлюз: подключается ли, видит
    ли только свою группу вкладок.
 
+## Как запустить пробник
+
+Пункты чек-листа 1, 2, 3, 5 и 4 (только «голый» CDP) проверяет один консольный exe на C#
+(нумерация в таблице ниже своя, как в выводе пробника):
+[`browser-hands-probe/`](browser-hands-probe/) (.NET 10, без Node и без Playwright, в решение
+не входит). CDP идёт по двум `AnonymousPipeServerStream` с `HandleInheritability.Inheritable`,
+хэндлы передаются ключом `--remote-debugging-pipe --remote-debugging-io-pipes=<вход>,<выход>`.
+Порядок подтверждён по исходнику Chromium: первый хэндл Chrome читает, во второй пишет
+(`AdoptPipes` в `content/browser/devtools/devtools_agent_host_impl.cc`). Chrome запускается
+через `CreateProcess` приостановленным, при необходимости кладётся в Job с
+`KILL_ON_JOB_CLOSE` и только потом возобновляется, чтобы ни один потомок не успел выйти из Job.
+
+**Запуск.** Скопировать `BrowserHandsProbe.exe` на Windows-машину с установленным Chrome и
+запустить двойным кликом. Около минуты окна Chrome будут открываться и закрываться сами. В конце
+консоль ждёт Enter, отчёт сохраняется рядом с exe в `BrowserHandsProbe-report-<дата>.txt`
+(если туда писать нельзя, то в `%TEMP%`). В файле есть приложения: хвост `chrome_debug.log` при
+ошибке и текст `chrome://sandbox`.
+
+- Где взять exe: в worktree спайка, `docs/research/browser-hands-probe/dist/BrowserHandsProbe.exe`
+  (11,3 МБ, single-file, self-contained, trimmed). В git не вносится (`.gitignore` папки).
+- Собрать самому (нужен .NET 10 SDK, на Windows или кросс-сборкой с Linux):
+  `dotnet publish docs/research/browser-hands-probe -c Release -r win-x64 --self-contained -o dist`.
+- Ключи: `--chrome "<путь>\chrome.exe"` (или переменная `CHROME_PATH`), если Chrome стоит не в
+  стандартном месте. Без ключа Chrome ищется в `App Paths` реестра (HKCU, HKLM), `%ProgramFiles%`,
+  `%ProgramFiles(x86)%`, `%LOCALAPPDATA%`. Ещё есть `--headless` и `--no-pause`.
+- Профили создаются в `%TEMP%\hands-browser-probe-<id>\`, после прогона каталог удаляется. Свой
+  Chrome владельца пробник не трогает, но в строках «во всей системе» считает и его процессы.
+
+**Что проверяется и что значит PASS.**
+
+| Пункт | Что делает пробник | PASS |
+|---|---|---|
+| 1. `io-pipes` | Без Job: `Browser.getVersion` → `Target.createTarget` → `attachToTarget(flatten)` → `Page.navigate` (data:-страница с кнопкой) → `Page.loadEventFired` → `Accessibility.getFullAXTree` | в AX-дереве есть кнопка «Hello». При FAIL печатаются версия файла `chrome.exe`, шаг, точная ошибка, код выхода Chrome и строки лога про DevTools/pipe |
+| 2a. Песочница в Job | То же в Job с `KILL_ON_JOB_CLOSE`, дерево процессов с типами (`--type=` из командной строки) | страница получена, есть `renderer`, браузер жив, в логе нет ERROR/FATAL со словом sandbox |
+| 2b. `TerminateJobObject` | Снимок дерева (все `chrome.exe`, включая `crashpad-handler`), `TerminateJobObject`, опрос каждые 10 мс | все процессы дерева вышли и счётчик живых в Job равен 0 за ≤10 с, время в мс |
+| 3. Закрытие труб | Без Job: закрываем свой пишущий конец | браузер и всё дерево вышли сами за ≤20 с; время до EOF, выхода браузера и всего дерева |
+| 4. Профиль занят | Проверка занятости до запуска (`lockfile` открывается с `FileShare.None` + скрытое окно `Chrome_MessageWindow` с заголовком = путь профиля), первый Chrome, снова проверка, второй Chrome с тем же профилем | занятость видна до запуска второго: «свободен → занят → свободен после гашения». Поведение второго записывается: ответ, EOF или таймаут, код выхода, ушёл ли его URL в первый процесс |
+| 5. Холодный старт | Три запуска со свежим профилем, в Job, с окном | три удачных замера: первый ответ CDP и страница + AX-дерево |
+
+**Самопроверка на Linux** (тот же код CDP-клиента, трубы — fd 3/4 через FIFO, Job и
+`lockfile` только на Windows, поэтому 2 = SKIP): Chrome 153.0.8010.52 headless. 1 — PASS,
+первый ответ 176 мс, страница + AX-дерево 215 мс. 3 — PASS, после закрытия нашего конца
+браузер вышел за 40 мс, все 16 процессов за 51 мс. 4 — PASS: второй запуск закрыл трубу
+(EOF) и вышел с кодом 21 через 76 мс (`RESULT_CODE_NORMAL_EXIT_PROCESS_NOTIFIED`: командная
+строка передана первому процессу); занятость видна до запуска по `SingletonLock`.
+5 — PASS, 209/211/213 мс. Проверка мутацией: без нулевого байта в конце сообщения все пункты
+краснеют по таймауту, и после провала не остаётся ни одного процесса Chrome. Цифры для Windows
+headed будут другими, этот прогон подтверждает только логику пробника.
+
 ## Воспроизведение
 
 Пробники лежали в `/tmp/spike` на машине разработки (в репозиторий не вносились):

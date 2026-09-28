@@ -203,6 +203,56 @@ public class LocalImageEditorTests : IDisposable
         sent.Prompt.Should().StartWith("удали").And.Contain(LocalImageEditor.EraseNote);
     }
 
+    // Живой прогон 2026-09-28 (w15-*): серые поля Qwen-Image достраивает без швов — дорисовка в каталоге
+    [Fact]
+    public void Каталог_ДорисовкаЗаКраяУQwen()
+    {
+        var editor = new LocalImageEditor(new FakeMedia());
+
+        editor.Models.Single(m => m.Id == LocalImageEditor.QwenImage).Caps.Ops.Should().Contain(ImageEditOp.Outpaint);
+        editor.PickModel(ImageEditOp.Outpaint, EditMode.Auto, new EditTraits(false, 0, false))!.Id.Should().Be(LocalImageEditor.QwenImage);
+    }
+
+    [Fact]
+    public async Task ДорисовкаЗаКрая_ПоляПодПропорцию_ОдинХолстБезОбразцов()
+    {
+        var media = new FakeMedia();
+        var service = Service(Editor(media));
+        var input = Input("") with
+        {
+            AspectRatio = "16:9",
+            References = [new ReferenceImage(TestImages.Png(4, 4), "image/png", ReferenceRole.Style, null)],
+        };
+
+        var job = await RunAsync(service, Quote(ImageEditOp.Outpaint, count: 2), input);
+
+        job.Status.Should().Be(ImageEditJobStatus.Completed, job.Error);
+        media.Submitted.Should().HaveCount(2, "вариант — прогон");
+        var sent = media.Submitted.First();
+        sent.Op.Should().Be(LocalImageOp.Edit);
+        // 8×8 до 16:9 — ширина 14, по 3 px слева и справа
+        sent.Pad.Should().Be(new LocalImagePad(3, 0, 3, 0));
+        sent.Images.Should().ContainSingle("образец другой пропорции сбил бы модель с полей");
+        sent.Prompt.Should().Be(LocalImageEditor.OutpaintNote);
+    }
+
+    [Theory]
+    [InlineData(1024, 1024, "16:9", 398, 0, 398, 0)]
+    [InlineData(1024, 1024, "9:16", 0, 398, 0, 398)]
+    [InlineData(1000, 500, "1:1", 0, 250, 0, 250)]
+    [InlineData(9, 8, "16:9", 2, 0, 3, 0)]       // нечётный пиксель — правой стороне
+    [InlineData(800, 600, "4:3", 200, 150, 200, 150)] // пропорция уже та — холст в полтора раза
+    [InlineData(800, 600, null, 200, 150, 200, 150)]
+    public void Поля_ПодПропорцию(int w, int h, string? aspect, int left, int top, int right, int bottom) =>
+        OutpaintSpec.ForAspect(w, h, aspect).Should().Be(new OutpaintSpec(left, top, right, bottom));
+
+    [Theory]
+    [InlineData("16x9")]
+    [InlineData("0:1")]
+    [InlineData("a:b")]
+    public void Поля_НечитаемаяПропорция_Null(string aspect) =>
+        OutpaintSpec.ForAspect(100, 100, aspect).Should().BeNull();
+
     [Fact]
     public async Task Правка_ВариантыИдутПрогонамиПоОчереди()
     {

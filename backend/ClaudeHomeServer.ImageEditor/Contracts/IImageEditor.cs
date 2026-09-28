@@ -89,7 +89,43 @@ public record ImageBytes(byte[] Bytes, string ContentType);
 public record ReferenceImage(byte[] Bytes, string ContentType, ReferenceRole Role, string? Label);
 
 // Поля дорисовки за края в пикселях по сторонам
-public record OutpaintSpec(int Left, int Top, int Right, int Bottom);
+public record OutpaintSpec(int Left, int Top, int Right, int Bottom)
+{
+    // Та же пропорция уже есть (или она не задана) — холст растёт в полтора раза по обеим сторонам
+    private const double SameAspectTolerance = 0.01;
+
+    // Поля под пропорцию «W:H» поровну с двух сторон: холст растёт только по недостающей стороне.
+    // null — пропорция не читается
+    public static OutpaintSpec? ForAspect(int width, int height, string? aspect)
+    {
+        if (width < 1 || height < 1) return null;
+        double target;
+        if (string.IsNullOrWhiteSpace(aspect))
+        {
+            target = (double)width / height;
+        }
+        else
+        {
+            var parts = aspect.Split(':');
+            if (parts.Length != 2
+                || !double.TryParse(parts[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var aw)
+                || !double.TryParse(parts[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var ah)
+                || !double.IsFinite(aw) || !double.IsFinite(ah) || aw <= 0 || ah <= 0)
+                return null;
+            target = aw / ah;
+        }
+
+        var current = (double)width / height;
+        if (Math.Abs(current / target - 1) <= SameAspectTolerance)
+            return Split(width / 2, height / 2);
+        return current < target
+            ? Split((int)Math.Round(height * target, MidpointRounding.AwayFromZero) - width, 0)
+            : Split(0, (int)Math.Round(width / target, MidpointRounding.AwayFromZero) - height);
+    }
+
+    // Нечётный пиксель — правой и нижней стороне
+    private static OutpaintSpec Split(int dx, int dy) => new(dx / 2, dy / 2, dx - dx / 2, dy - dy / 2);
+}
 
 public record CharacterRef(string Slug, string Name, string? Description);
 

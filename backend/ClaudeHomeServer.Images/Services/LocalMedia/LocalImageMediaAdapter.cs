@@ -150,6 +150,27 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
             images = [erased.Image!.Bytes, .. images.Skip(1)];
         }
 
+        // Дорисовка за края: поля заливаются серым на холсте, размер результата — по холсту
+        (int Width, int Height)? canvas = null;
+        if (request.Pad is { } pad)
+        {
+            if (request.Op != LocalImageOp.Edit || raster is null || request.EraseMask is not null)
+                return LocalImageSubmitted.Fail("Дорисовка за края здесь недоступна.");
+            if (pad.Left < 0 || pad.Top < 0 || pad.Right < 0 || pad.Bottom < 0
+                || pad.Left + pad.Top + pad.Right + pad.Bottom == 0)
+                return LocalImageSubmitted.Fail("Поля дорисовки заданы неверно.");
+            var probe = raster.Probe(images[0]);
+            if (probe is null) return LocalImageSubmitted.Fail("Картинка 1 — не PNG, JPEG или WebP.");
+            var padded = raster.Apply(images[0], [new PadOp(probe.DisplayWidth + pad.Left + pad.Right,
+                probe.DisplayHeight + pad.Top + pad.Bottom, OutpaintFill, pad.Left, pad.Top)],
+                new ImageEncodeSpec(ImageEncodeFormat.Png));
+            if (!padded.Ok)
+                return LocalImageSubmitted.Fail("Холст не удалось расширить: " + padded.Message,
+                    busy: padded.Error == RasterError.Busy);
+            images = [padded.Image!.Bytes, .. images.Skip(1)];
+            canvas = OutpaintSize(padded.Image.Width, padded.Image.Height);
+        }
+
         ComfyQueueState queue;
         try
         {
@@ -187,7 +208,7 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
                 LocalImageOp.Generate when names.Count == 0 => GenerateGraph(prompt, request.Aspect, seed, count, prefix),
                 // Генерация по образцам — граф правки на пустом холсте нужного размера
                 LocalImageOp.Generate => ComfyWorkflows.EditImage(prompt, names, SizeFor(request.Aspect), seed, prefix),
-                LocalImageOp.Edit => ComfyWorkflows.EditImage(prompt, names, null, seed, prefix),
+                LocalImageOp.Edit => ComfyWorkflows.EditImage(prompt, names, canvas, seed, prefix),
                 _ => ComfyWorkflows.FaceDetail(names[0], seed, prefix),
             };
             var queued = await comfy.QueuePromptAsync(graph, ct);
@@ -206,6 +227,23 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
         var size = SizeFor(aspect);
         return ComfyWorkflows.GenerateImage(prompt, "", size.Width, size.Height, seed, ComfyWorkflows.DefaultSteps,
             count, prefix);
+    }
+
+    // Заливка полей дорисовки — тот же нейтральный серый, что у стирания кистью: «замени серое»
+    // Qwen-Image понимает
+    internal const string OutpaintFill = "#808080";
+
+    // Площадь результата дорисовки — как у квадрата таблицы Qwen-Image (1328²)
+    private const double OutpaintArea = 1328d * 1328d;
+
+    // Размер результата дорисовки: пропорция расширенного холста, площадь как у таблицы Qwen-Image,
+    // стороны кратны 16 (латент VAE 8× и патчи 2×2)
+    internal static (int Width, int Height) OutpaintSize(int width, int height)
+    {
+        var scale = Math.Sqrt(OutpaintArea / ((double)width * height));
+        return (Snap(width * scale), Snap(height * scale));
+
+        static int Snap(double side) => Math.Max(16, (int)Math.Round(side / 16, MidpointRounding.AwayFromZero) * 16);
     }
 
     // Размер из таблицы Qwen-Image; соотношение не из таблицы — ближайшее по пропорции

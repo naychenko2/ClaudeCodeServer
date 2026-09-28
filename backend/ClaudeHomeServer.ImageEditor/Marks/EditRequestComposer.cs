@@ -140,8 +140,18 @@ public static class EditRequestComposer
                 1, null, null, model.Id, null)
             : null;
 
+        // Фронт присылает только пропорцию, а поставщикам (Bria Expand, FLUX.2 Outpaint) нужны
+        // поля в пикселях — считаем их здесь, одинаково для всех драйверов
+        OutpaintSpec? outpaint = null;
+        if (op == ImageEditOp.Outpaint)
+        {
+            var size = ImageDimensions.Read(source!.Bytes);
+            outpaint = size is { } s ? OutpaintSpec.ForAspect(s.Width, s.Height, aspectRatio) : null;
+            if (outpaint is null) return Invalid("Не удалось посчитать поля дорисовки");
+        }
+
         return ImageEditCallResult<ImageEditRequest>.Ok(new ImageEditRequest(
-            op, prompt, source, maskChannel, references, count, aspectRatio, null, model.Id, input.Character, maskPass,
+            op, prompt, source, maskChannel, references, count, aspectRatio, outpaint, model.Id, input.Character, maskPass,
             Instruction: input.Prompt?.Trim()));
     }
 

@@ -262,7 +262,10 @@ export type ImageTransformOp =
   | { type: 'rotate'; degrees: 90 | 180 | 270 }
   | { type: 'flip'; axis: ImageFlipAxis }
   // либо width/height в px, либо percent; lockAspect — недостающую сторону досчитать
-  | { type: 'resize'; width?: number | null; height?: number | null; percent?: number | null; lockAspect?: boolean };
+  | { type: 'resize'; width?: number | null; height?: number | null; percent?: number | null; lockAspect?: boolean }
+  // Холст width×height не меньше картинки, картинка без масштабирования; left/top null — по центру.
+  // color «#RRGGBB»/«#RRGGBBAA», null — прозрачно (у JPEG сервер зальёт белым)
+  | { type: 'pad'; width: number; height: number; color?: string | null; left?: number | null; top?: number | null };
 
 // База правки: файл проекта, шаг истории сеанса или вариант задачи — ровно одно из трёх
 export type ImageTransformBase =

@@ -22,6 +22,7 @@ public enum ImageFlipAxis { Horizontal, Vertical }
 [System.Text.Json.Serialization.JsonDerivedType(typeof(RotateOp), "rotate")]
 [System.Text.Json.Serialization.JsonDerivedType(typeof(FlipOp), "flip")]
 [System.Text.Json.Serialization.JsonDerivedType(typeof(ResizeOp), "resize")]
+[System.Text.Json.Serialization.JsonDerivedType(typeof(PadOp), "pad")]
 public abstract record ImageTransformOp;
 
 public sealed record AutoOrientOp : ImageTransformOp;
@@ -35,4 +36,10 @@ public sealed record FlipOp(ImageFlipAxis Axis) : ImageTransformOp;
 
 // Либо Width/Height в px, либо Percent; LockAspect — недостающую сторону досчитать по пропорциям
 public sealed record ResizeOp(int? Width = null, int? Height = null, double? Percent = null, bool LockAspect = true)
+    : ImageTransformOp;
+
+// Поля: холст Width×Height в px, картинка без масштабирования по центру (или в точке Left/Top,
+// если заданы). Холст не меньше картинки. Color — «#RRGGBB» или «#RRGGBBAA»; null — прозрачный,
+// у JPEG прозрачное на выходе ложится на белый
+public sealed record PadOp(int Width, int Height, string? Color = null, int? Left = null, int? Top = null)
     : ImageTransformOp;

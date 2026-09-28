@@ -40,7 +40,8 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
     private static readonly IReadOnlyList<ImageEditModelInfo> Catalog =
     [
         new(QwenImage, "Qwen-Image 2.1",
-            new ImageEditCaps([ImageEditOp.Generate, ImageEditOp.Edit, ImageEditOp.Inpaint], MaskSupport.AsReference,
+            new ImageEditCaps([ImageEditOp.Generate, ImageEditOp.Edit, ImageEditOp.Inpaint, ImageEditOp.Outpaint],
+                MaskSupport.AsReference,
                 MaxReferences: 15, MaxCount: 4, FaceByReferences: true, MaxCharacterPhotos: 1),
             new ImageEditPriceHint(0, ImageEditPriceUnits.Free, "image")),
         new(FaceDetailer, "Улучшить лица",
@@ -51,7 +52,7 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
     public ImageEditModelInfo? PickModel(ImageEditOp op, EditMode mode, EditTraits traits) => op switch
     {
         ImageEditOp.EnhanceFaces => Catalog[1],
-        ImageEditOp.Generate or ImageEditOp.Edit or ImageEditOp.Inpaint => Catalog[0],
+        ImageEditOp.Generate or ImageEditOp.Edit or ImageEditOp.Inpaint or ImageEditOp.Outpaint => Catalog[0],
         _ => null,
     };
 
@@ -117,6 +118,19 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
                     EraseMask: eraseMask);
                 runs = Math.Clamp(req.Count, 1, 4);
                 break;
+            case ImageEditOp.Outpaint:
+            {
+                if (req.Source is null) return Fail(EditOutcome.Failed, "Нет исходной картинки");
+                // Поля — явные или под пропорцию запроса; холст расширяет адаптер, граф — шаблон правки
+                var size = ImageDimensions.Read(req.Source.Bytes);
+                var spec = req.Outpaint ?? (size is { } s ? OutpaintSpec.ForAspect(s.Width, s.Height, req.AspectRatio) : null);
+                if (spec is null) return Fail(EditOutcome.Failed, "Не удалось посчитать поля дорисовки");
+                // Холст один, без образцов: образец с другой пропорцией сбил бы модель с полей
+                run = new LocalImageRequest(LocalImageOp.Edit, OutpaintPrompt(req.Instruction), [req.Source.Bytes],
+                    null, 1, Pad: new LocalImagePad(spec.Left, spec.Top, spec.Right, spec.Bottom));
+                runs = Math.Clamp(req.Count, 1, 4);
+                break;
+            }
             case ImageEditOp.Edit or ImageEditOp.Inpaint:
                 if (req.Source is null) return Fail(EditOutcome.Failed, "Нет исходной картинки");
                 // Отдельного канала маски нет: маска уже лежит среди образцов (MaskSupport.AsReference)
@@ -224,6 +238,14 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
 
     private static string ErasePrompt(string? instruction) =>
         string.IsNullOrWhiteSpace(instruction) ? EraseNote : $"{instruction.Trim()}\n\n{EraseNote}";
+
+    internal const string OutpaintNote =
+        "Серые поля по краям картинки — пустое место, которое нужно заполнить. Дострой в них сцену так, " +
+        "чтобы она естественно продолжала картинку: тот же свет, перспектива, стиль и цвета, без рамок, " +
+        "полос и видимых швов. Серого цвета в результате остаться не должно. Центральную часть картинки не меняй.";
+
+    private static string OutpaintPrompt(string? instruction) =>
+        string.IsNullOrWhiteSpace(instruction) ? OutpaintNote : $"{instruction.Trim()}\n\n{OutpaintNote}";
 
     private static readonly EditCost Free = new(0, ImageEditPriceUnits.Free);
 

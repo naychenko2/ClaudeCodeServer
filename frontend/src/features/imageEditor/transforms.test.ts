@@ -4,7 +4,7 @@ import { dropStepsFrom, pushStep, stepSaveSource, type History } from './editorI
 import { maskExportSize } from './marks';
 import {
   boxForm, chainTransform, containDims, coverCrop, fitCropRatio, FORMAT_PRESETS, formatBytes, initialCrop, moveCrop, presetDims,
-  resizeCrop, sameAspect, SIZE_PRESETS, sizeFormChanged, sizeFormOps, transformedSize, weightEstimator, WEIGHT_DEBOUNCE_MS,
+  PAD_WHITE, padBgFor, resizeCrop, sameAspect, SIZE_PRESETS, sizeFormChanged, sizeFormOps, transformedSize, weightEstimator, WEIGHT_DEBOUNCE_MS,
   type SizeForm,
 } from './transforms';
 
@@ -84,6 +84,7 @@ describe('размеры после правок', () => {
     expect(transformedSize({ w: 1000, h: 500 }, [{ type: 'crop', rect: { x: 0.1, y: 0, width: 0.5, height: 0.5 } }])).toEqual({ w: 500, h: 250 });
     expect(transformedSize({ w: 1600, h: 1200 }, [{ type: 'resize', width: 800, lockAspect: true }])).toEqual({ w: 800, h: 600 });
     expect(transformedSize({ w: 1600, h: 1200 }, [{ type: 'resize', percent: 50 }])).toEqual({ w: 800, h: 600 });
+    expect(transformedSize({ w: 1440, h: 1080 }, [{ type: 'pad', width: 1920, height: 1080 }])).toEqual({ w: 1920, h: 1080 });
   });
 
   it('пресет — по длинной стороне', () => {
@@ -143,6 +144,35 @@ describe('размеры после правок', () => {
     // Пропорции совпали — выбор не нужен, просто ресайз в рамку
     expect(sizeFormOps({ w: 3840, h: 2160 }, { ...base, w: 3840, h: 2160, ...boxForm({ w: 3840, h: 2160 }, { w: 1920, h: 1080 }, 'cover') }).ops)
       .toEqual([{ type: 'resize', width: 1920, height: 1080, lockAspect: false }]);
+  });
+
+  it('«С полями»: вписать без искажения, затем поля до ровно рамки; у JPEG поля только белые', () => {
+    const size = { w: 1600, h: 1200 };
+    const wide = { w: 1920, h: 1080 };
+    const base: SizeForm = { unit: 'px', w: 1600, h: 1200, percent: 100, format: 'png', quality: 85 };
+    const padded = { ...base, ...boxForm(size, wide, 'pad') };
+    expect(padded).toMatchObject({ w: 1920, h: 1080 });
+    const r = sizeFormOps(size, padded);
+    expect(r.ops).toEqual([
+      { type: 'resize', width: 1440, height: 1080, lockAspect: false },
+      { type: 'pad', width: 1920, height: 1080, color: PAD_WHITE, left: null, top: null },
+    ]);
+    expect(r.target).toEqual(wide);
+    expect(transformedSize(size, r.ops)).toEqual(wide);
+    // Прозрачные поля — цвета нет; у JPEG прозрачность недоступна, поля белые
+    expect(sizeFormOps(size, { ...padded, padBg: 'transparent' }).ops[1]).toMatchObject({ type: 'pad', color: null });
+    expect(sizeFormOps(size, { ...padded, padBg: 'transparent', format: 'webp' }).ops[1]).toMatchObject({ color: null });
+    expect(sizeFormOps(size, { ...padded, padBg: 'transparent', format: 'jpeg' }).ops[1]).toMatchObject({ color: PAD_WHITE });
+    expect(padBgFor('transparent', 'jpeg')).toBe('white');
+    // eslint-disable-next-line design/no-raw-color -- контракт цвета полей сервера
+    expect(PAD_WHITE).toBe('#FFFFFF');
+    // Картинка уже влезает в рамку по одной стороне без масштаба — ресайза нет, только поля
+    expect(sizeFormOps({ w: 1440, h: 1080 }, { ...base, ...boxForm({ w: 1440, h: 1080 }, wide, 'pad') }).ops)
+      .toEqual([{ type: 'pad', width: 1920, height: 1080, color: PAD_WHITE, left: null, top: null }]);
+    // Пропорции совпали — полей нет, просто ресайз
+    expect(sizeFormOps({ w: 3840, h: 2160 }, { ...base, ...boxForm({ w: 3840, h: 2160 }, wide, 'pad') }).ops)
+      .toEqual([{ type: 'resize', width: 1920, height: 1080, lockAspect: false }]);
+    expect(sizeFormChanged(size, padded, 'png')).toBe(true);
   });
 
   it('вес по-человечески', () => {

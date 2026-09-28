@@ -14,7 +14,8 @@ public class LocalImageMediaAdapterTests
 {
     private readonly FakeComfy _comfy = new();
 
-    private LocalImageMediaAdapter Build(bool enabled = true, int maxQueue = 4, HttpMessageHandler? handler = null)
+    private LocalImageMediaAdapter Build(bool enabled = true, int maxQueue = 4, HttpMessageHandler? handler = null,
+        ClaudeHomeServer.Services.Images.Editing.Raster.IImageRaster? raster = null)
     {
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
@@ -23,7 +24,7 @@ public class LocalImageMediaAdapterTests
             ["LocalMedia:MaxComfyQueue"] = maxQueue.ToString(),
         }).Build();
         var client = new ComfyClient(new FakeComfyFactory(handler ?? _comfy), config);
-        return new LocalImageMediaAdapter(client, config, NullLogger<LocalImageMediaAdapter>.Instance);
+        return new LocalImageMediaAdapter(client, config, NullLogger<LocalImageMediaAdapter>.Instance, raster);
     }
 
     private static LocalImageRequest Edit(string prompt = "убери провод") =>
@@ -173,5 +174,53 @@ public class LocalImageMediaAdapterTests
 
         submitted.Error.Should().Be("Стирание по маске здесь недоступно.");
         _comfy.Requests.Should().HaveCount(requestsBefore);
+    }
+
+    // «Дорисовать за края»: холст расширяется серыми полями до ComfyUI, латент — в пропорции холста
+    [Fact]
+    public async Task Дорисовка_расширяет_холст_серыми_полями_и_латент_по_холсту()
+    {
+        var adapter = Build(raster: new ClaudeHomeServer.Services.Images.Editing.Raster.SkiaImageRaster());
+        using var red = new SkiaSharp.SKBitmap(20, 10);
+        red.Erase(SkiaSharp.SKColors.Red);
+        using var encoded = red.Encode(SkiaSharp.SKEncodedImageFormat.Png, 100);
+
+        var submitted = await adapter.SubmitAsync(Edit() with
+        {
+            Images = [encoded.ToArray()],
+            Pad = new LocalImagePad(0, 3, 0, 7),
+        }, default);
+
+        submitted.Error.Should().BeNull();
+        using (var canvas = SkiaSharp.SKBitmap.Decode(_comfy.UploadedBytes.Values.Should().ContainSingle().Subject))
+        {
+            (canvas.Width, canvas.Height).Should().Be((20, 20));
+            canvas.GetPixel(10, 1).Should().Be(new SkiaSharp.SKColor(0x80, 0x80, 0x80), "верхнее поле — серое");
+            canvas.GetPixel(10, 3).Should().Be(SkiaSharp.SKColors.Red, "картинка начинается с 3-й строки");
+            canvas.GetPixel(10, 12).Should().Be(SkiaSharp.SKColors.Red);
+            canvas.GetPixel(10, 13).Should().Be(new SkiaSharp.SKColor(0x80, 0x80, 0x80), "нижнее поле — серое");
+        }
+        var graph = _comfy.Prompts.Should().ContainSingle().Subject["prompt"]!.AsObject();
+        var lat = graph["lat"]!["inputs"]!.AsObject();
+        (lat["width"]!.GetValue<int>(), lat["height"]!.GetValue<int>()).Should().Be((1328, 1328));
+        graph["ks"]!["inputs"]!["latent_image"]!.AsArray()[0]!.GetValue<string>().Should().Be("lat");
+    }
+
+    [Theory]
+    [InlineData(1820, 1024, 1776, 992)]  // живой прогон w15: квадрат 1024 до 16:9
+    [InlineData(1024, 1820, 992, 1776)]
+    [InlineData(20, 20, 1328, 1328)]
+    public void Размер_дорисовки_площадь_таблицы_стороны_кратны_16(int w, int h, int ew, int eh) =>
+        LocalImageMediaAdapter.OutpaintSize(w, h).Should().Be((ew, eh));
+
+    [Fact]
+    public async Task Дорисовка_без_растра_отказ_до_ComfyUI()
+    {
+        var adapter = Build();
+
+        var submitted = await adapter.SubmitAsync(Edit() with { Pad = new LocalImagePad(1, 0, 1, 0) }, default);
+
+        submitted.Error.Should().Be("Дорисовка за края здесь недоступна.");
+        _comfy.Prompts.Should().BeEmpty();
     }
 }

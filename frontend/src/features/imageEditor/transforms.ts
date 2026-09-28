@@ -49,6 +49,8 @@ export function transformedSize(size: Dims, ops: ImageTransformOp[]): Dims {
         const nh = op.height ?? (lock && op.width ? Math.round(h * op.width / w) : h);
         [w, h] = [nw, nh];
       }
+    } else if (op.type === 'pad') {
+      [w, h] = [op.width, op.height];
     }
   }
   return { w, h };
@@ -60,6 +62,7 @@ export function opTitle(op: ImageTransformOp, encode?: ImageEncodeSpec | null): 
     case 'rotate': return op.degrees === 270 ? 'Поворот влево' : op.degrees === 90 ? 'Поворот вправо' : 'Поворот на 180°';
     case 'flip': return op.axis === 'horizontal' ? 'Отражение по горизонтали' : 'Отражение по вертикали';
     case 'resize': return encode ? 'Размер и сжатие' : 'Размер';
+    case 'pad': return 'Поля';
     case 'autoOrient': return 'Ориентация';
   }
 }
@@ -142,8 +145,15 @@ export const FORMAT_PRESETS: FormatPreset[] = [
 ];
 
 // Картинка в рамку формата: contain — целиком, без искажения (результат может быть уже
-// рамки по одной стороне), cover — заполнить рамку, лишнее срезать по центру
-export type BoxFit = 'contain' | 'cover';
+// рамки по одной стороне), pad — целиком и ровно рамка, пустое место залить полями,
+// cover — заполнить рамку, лишнее срезать по центру
+export type BoxFit = 'contain' | 'pad' | 'cover';
+
+// Фон полей: у JPEG прозрачности нет — там всегда белый
+export type PadBg = 'white' | 'transparent';
+// eslint-disable-next-line design/no-raw-color -- цвет пикселей файла на сервере, а не цвет интерфейса
+export const PAD_WHITE = '#FFFFFF';
+export const padBgFor = (bg: PadBg | undefined, format: ImageEncodeFormat): PadBg => (format === 'jpeg' ? 'white' : bg ?? 'white');
 
 // Самый большой размер с пропорциями картинки, влезающий в рамку
 export function containDims(size: Dims, box: Dims): Dims {
@@ -188,11 +198,13 @@ export interface SizeForm {
   quality: number;
   // Выбран формат-рамка: w/h формы — уже итог под fit
   box?: (Dims & { fit: BoxFit }) | null;
+  // Фон полей при fit = pad; не задан — белый
+  padBg?: PadBg;
 }
 
 // Форма под формат-рамку: при другом соотношении по умолчанию — вписать без искажения
 export function boxForm(size: Dims, box: Dims, fit: BoxFit): Pick<SizeForm, 'unit' | 'w' | 'h' | 'box'> {
-  const d = fit === 'cover' || sameAspect(size, box) ? box : containDims(size, box);
+  const d = fit !== 'contain' || sameAspect(size, box) ? box : containDims(size, box);
   return { unit: 'px', w: d.w, h: d.h, box: { ...box, fit } };
 }
 
@@ -204,10 +216,20 @@ export function sizeFormOps(size: Dims, f: SizeForm): { ops: ImageTransformOp[];
     ? { w: Math.max(1, Math.round(size.w * f.percent / 100)), h: Math.max(1, Math.round(size.h * f.percent / 100)) }
     : { w: Math.max(1, Math.round(f.w)), h: Math.max(1, Math.round(f.h)) };
   const resized = target.w !== size.w || target.h !== size.h;
-  const cover = f.unit === 'px' && f.box?.fit === 'cover' && !sameAspect(size, f.box);
+  const other = f.unit === 'px' && !!f.box && !sameAspect(size, f.box);
+  const cover = other && f.box!.fit === 'cover';
+  // Поля: картинка вписывается в рамку без искажения, остаток рамки — поля по центру.
+  // Ресайз — обеими сторонами: при двух сторонах сервер lockAspect не смотрит
+  const pad = other && f.box!.fit === 'pad';
+  const fit = pad ? containDims(size, f.box!) : target;
+  const scaled = fit.w !== size.w || fit.h !== size.h;
   const ops: ImageTransformOp[] = [
     ...(cover ? [{ type: 'crop' as const, rect: coverCrop(size, f.box!) }] : []),
-    ...(resized || cover ? [{ type: 'resize' as const, width: target.w, height: target.h, lockAspect: false }] : []),
+    ...((pad ? scaled : resized || cover) ? [{ type: 'resize' as const, width: fit.w, height: fit.h, lockAspect: false }] : []),
+    ...(pad ? [{
+      type: 'pad' as const, width: target.w, height: target.h,
+      color: padBgFor(f.padBg, f.format) === 'white' ? PAD_WHITE : null, left: null, top: null,
+    }] : []),
   ];
   const encode: ImageEncodeSpec = f.format === 'png' ? { format: 'png' } : { format: f.format, quality: f.quality };
   return { ops, encode, target };

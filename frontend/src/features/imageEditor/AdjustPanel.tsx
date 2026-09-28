@@ -7,8 +7,8 @@ import { Button, IconButton, SegmentedControl, TextField, ICON_SIZE, ICON_STROKE
 import type { ImageEditorApi, ImageEncodeFormat, ImageEncodeSpec, ImageTransformBase, ImageTransformOp } from './api';
 import { SectionHint } from './EditorSections';
 import {
-  boxForm, containDims, FORMAT_PRESETS, formatBytes, lockedHeight, lockedWidth, presetDims, QUALITY_DEFAULT, QUALITY_MIN,
-  sameAspect, SIZE_PRESETS, sizeFormChanged, sizeFormOps, type BoxFit, type Dims, type SizeForm,
+  boxForm, containDims, FORMAT_PRESETS, formatBytes, lockedHeight, lockedWidth, padBgFor, presetDims, QUALITY_DEFAULT, QUALITY_MIN,
+  sameAspect, SIZE_PRESETS, sizeFormChanged, sizeFormOps, type BoxFit, type Dims, type PadBg, type SizeForm,
 } from './transforms';
 import { useWeight } from './useWeight';
 
@@ -17,6 +17,8 @@ const ic = (I: typeof Crop, size: number = ICON_SIZE.xs) => <I size={size} strok
 const FORMATS: { value: ImageEncodeFormat; label: string }[] = [
   { value: 'png', label: 'PNG' }, { value: 'jpeg', label: 'JPG' }, { value: 'webp', label: 'WebP' },
 ];
+
+const PAD_BGS: { value: PadBg; label: string }[] = [{ value: 'white', label: 'Белый' }, { value: 'transparent', label: 'Прозрачный' }];
 
 const Label = ({ children }: { children: string }) => (
   <div style={{ fontSize: FS.xs, color: C.textMuted, fontWeight: 600 }}>{children}</div>
@@ -97,8 +99,10 @@ function SizeCompress({ api, projectId, size, base, sourceFormat, beforeBytes, o
   const box = form.unit === 'px' ? form.box ?? null : null;
   const boxOn = (b: Dims) => !!box && box.w === b.w && box.h === b.h;
   const pickBox = (b: Dims, fit: BoxFit) => { set(boxForm(size, b, fit)); setLock(true); };
-  // Пропорции рамки другие — человек выбирает: вписать целиком или обрезать под рамку
+  // Пропорции рамки другие — человек выбирает: вписать целиком, дополнить полями или обрезать под рамку
   const boxChoice = box && !sameAspect(size, box) ? box : null;
+  const padBg = padBgFor(form.padBg, form.format);
+  const fitDims = boxChoice ? containDims(size, boxChoice) : null;
 
   const weightText = !changed
     ? beforeBytes != null ? `Сейчас ${formatBytes(beforeBytes)}` : ''
@@ -153,11 +157,28 @@ function SizeCompress({ api, projectId, size, base, sourceFormat, beforeBytes, o
       {boxChoice && (
         <div data-box-fit="true" style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs }}>
           <SegmentedControl value={boxChoice.fit} onChange={fit => pickBox(boxChoice, fit)}
-            options={[{ value: 'contain', label: 'Вписать' }, { value: 'cover', label: 'Обрезать' }]} />
+            options={[{ value: 'contain', label: 'Вписать' }, { value: 'pad', label: 'С полями' }, { value: 'cover', label: 'Обрезать' }]} />
+          {boxChoice.fit === 'pad' && (
+            <div data-pad-bg="true" style={{ display: 'flex', alignItems: 'center', gap: SP.xxs, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: FS.sm, color: C.textSecondary }}>Поля</span>
+              {PAD_BGS.map(b => {
+                const noAlpha = b.value === 'transparent' && form.format === 'jpeg';
+                return (
+                  <Button key={b.value} size="xs" pill variant={padBg === b.value ? 'ghostAccent' : 'ghostFilled'} disabled={noAlpha}
+                    title={noAlpha ? 'У JPG нет прозрачности — выберите PNG или WebP' : `${b.label} фон полей`}
+                    onClick={() => set({ padBg: b.value })}>
+                    {b.label}
+                  </Button>
+                );
+              })}
+            </div>
+          )}
           <SectionHint>
             {boxChoice.fit === 'contain'
-              ? `Пропорции другие: картинка целиком, без искажения — ${containDims(size, boxChoice).w}×${containDims(size, boxChoice).h}`
-              : `Заполнит ${boxChoice.w}×${boxChoice.h}, лишнее по краям срежется по центру`}
+              ? `Пропорции другие: картинка целиком, без искажения — ${fitDims!.w}×${fitDims!.h}`
+              : boxChoice.fit === 'pad'
+                ? `Ровно ${boxChoice.w}×${boxChoice.h}: картинка ${fitDims!.w}×${fitDims!.h} по центру, по краям поля${form.format === 'jpeg' ? ' — у JPG только белые' : ''}`
+                : `Заполнит ${boxChoice.w}×${boxChoice.h}, лишнее по краям срежется по центру`}
           </SectionHint>
         </div>
       )}

@@ -15,6 +15,7 @@ import {
 } from '../api';
 import { useCatalog } from '../thread/catalog';
 import { effectiveProvider, isFreeUnit, priceSum, priceText, variantsWord } from '../format';
+import { launchOf, launchVersions } from '../thread/model';
 import { getFocusedThread, openEditor, useThreads } from '../thread/threadStore';
 import { launchThread, useThreadLaunch } from '../thread/useThreadLaunch';
 
@@ -220,13 +221,19 @@ export function ImageLaunchCard({ ctx }: { ctx: ChatItemToolCtx }) {
   // threadId в image_generate обязателен (ADR-019, решение 1): по нему карточка ведёт в попап нити
   const threadId = str(input.threadId);
   const result = item.isError ? null : parseLaunchResult(item.result);
-  const { status, cancel } = useLaunchStatus(ctx.projectId, result?.jobId ?? null);
+  // Запуск нити с версиями (v3) целиком рисует якорь image_launch_versions: строка
+  // запуска, прогресс, «Отменить», версии. Своя карточка тут — второй блок на запуск
+  const threads = useThreads(ctx.projectId, ctx.sessionId);
+  const thread = threadId ? threads.threads.find(t => t.id === threadId) : undefined;
+  const owned = !!result && !!thread && (!!launchOf(thread, result.jobId) || launchVersions(thread, result.jobId).length > 0);
+  const { status, cancel } = useLaunchStatus(ctx.projectId, owned ? null : result?.jobId ?? null);
   const running = !!result && (!status || status.phase === 'run');
   const progress = useProgress(running, status?.createdAt ?? null, result?.expectedSeconds ?? null);
 
   const count = num(input.count) ?? num(result?.changes.find(c => c.field === 'count')?.to)
     ?? (status?.phase === 'done' && status.variants ? status.variants : null);
 
+  if (owned) return null;
   if (item.result === undefined) {
     return <Card><CardHead icon={<Dot color={C.accent} />} title="Запускаю генерацию…" /></Card>;
   }

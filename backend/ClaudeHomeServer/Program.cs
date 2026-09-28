@@ -1278,6 +1278,9 @@ builder.Services.AddSingleton<IAuthorizationHandler, AdminByStoreHandler>();
 builder.Services.Configure<ForwardedHeadersOptions>(o =>
     o.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto);
 
+// Лимитеры RateLimitingMiddleware утилизирует контейнер: иначе их таймер держит хост
+// после остановки (см. RateLimiterLifetime)
+builder.Services.AddSingleton<RateLimiterOwner>();
 // Защита /api/auth/login от перебора паролей — фиксированное окно на IP.
 builder.Services.AddRateLimiter(options =>
 {
@@ -1690,7 +1693,7 @@ if (!app.Environment.IsDevelopment())
 app.UseRouting();
 app.UseCors();
 // UseRateLimiter — после UseRouting, иначе эндпоинт-политика [EnableRateLimiting] не видна
-app.UseRateLimiter();
+app.UseRateLimiterOwnedByHost();
 // Инспекционная копия — только чтение. Гейт один на весь пайплайн, а не перечень
 // контроллеров: перечень устаревает с каждым новым эндпоинтом. Стоит ДО аутентификации
 // (иначе запись отбивал бы 401 раньше нас, и гейт работал бы только для залогиненных),

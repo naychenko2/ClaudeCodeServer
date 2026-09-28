@@ -74,6 +74,15 @@ public sealed class LocalMediaJob
     public List<LocalMediaOutput> Outputs { get; set; } = [];
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? FinishedAt { get; set; }
+    // Статистика (поля аддитивные: у задач старого формата — null). EtaSeconds — оценка при
+    // постановке, у незамеренных операций null. StartedAt — по часам бэкенда: первое
+    // наблюдение running, по завершении уточняется как FinishedAt − RunSeconds. RunSeconds —
+    // только по меткам ComfyUI (execution_start → execution_success/error)
+    public int? EtaSeconds { get; set; }
+    public DateTime? StartedAt { get; set; }
+    public double? RunSeconds { get; set; }
+    public int? Steps { get; set; }
+    public List<string>? CachedNodes { get; set; }
 }
 
 // Задачи локальной генерации: data/local-media-jobs.json. Переживает рестарт бэкенда, пока

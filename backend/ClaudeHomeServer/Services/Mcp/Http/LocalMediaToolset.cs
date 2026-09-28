@@ -164,6 +164,8 @@ public sealed class LocalMediaToolset(
     private static JsonObject JobJson(LocalMediaJobView view)
     {
         var job = view.Job;
+        var at = DateTime.UtcNow;
+        var terminal = LocalMediaStatuses.IsTerminal(job.Status);
         var json = new JsonObject
         {
             ["job_id"] = job.Id,
@@ -172,10 +174,20 @@ public sealed class LocalMediaToolset(
             ["seed"] = job.Seed,
         };
         if (job.Heavy) json["heavy"] = true;
-        if (view.Position is { } position && !LocalMediaStatuses.IsTerminal(job.Status)) json["position"] = position;
-        if (view.EtaSeconds is { } eta) json["eta_seconds"] = eta;
+        if (view.Position is { } position && !terminal) json["position"] = position;
+        // От постановки: у завершённой задачи — до её конца, дальше не растёт
+        json["elapsed_seconds"] = Seconds((terminal && job.FinishedAt is { } end ? end : at) - job.CreatedAt);
+        if (view.EtaSeconds is { } eta)
+        {
+            json["eta_seconds"] = eta;
+            // Грубая оценка снизу по доле ETA с начала прогона (не с постановки: очередь
+            // исказила бы её); потолок 95 — «готово» говорит только статус
+            if (job.Status == LocalMediaStatuses.Running && job.StartedAt is { } started && eta > 0)
+                json["progress_estimate"] = (int)Math.Floor(Math.Clamp((at - started).TotalSeconds / eta, 0, 0.95) * 100);
+        }
         if (job.Error is { } error) json["error"] = error;
         if (view.Warning is { } warning) json["warning"] = warning;
+        if (terminal) json["stats"] = StatsJson(job);
 
         if (job.Status == LocalMediaStatuses.Completed)
         {
@@ -198,6 +210,26 @@ public sealed class LocalMediaToolset(
         }
         return json;
     }
+
+    // Статистика завершённой задачи: неизвестное не выводится вовсе (без null-заглушек).
+    // Размеры картинок — из первого файла результата, у видео — заданные при постановке
+    private static JsonObject StatsJson(LocalMediaJob job)
+    {
+        var stats = new JsonObject();
+        if (job.StartedAt is { } started) stats["queue_wait_seconds"] = Seconds(started - job.CreatedAt);
+        if (job.RunSeconds is { } run) stats["run_seconds"] = Math.Round(run, 1);
+        if (job.FinishedAt is { } finished) stats["total_seconds"] = Seconds(finished - job.CreatedAt);
+        if (job.Steps is { } steps) stats["steps"] = steps;
+        if (job.Frames is { } frames) stats["frames"] = frames;
+        var first = job.Outputs.FirstOrDefault();
+        if ((job.Width ?? first?.Width) is { } width) stats["width"] = width;
+        if ((job.Height ?? first?.Height) is { } height) stats["height"] = height;
+        if (job.DurationSeconds is { } duration) stats["duration_seconds"] = duration;
+        if (job.CachedNodes is { } cached) stats["cached_nodes"] = cached.Count;
+        return stats;
+    }
+
+    private static double Seconds(TimeSpan span) => Math.Round(Math.Max(0, span.TotalSeconds), 1);
 
     internal static string StreamUrl(string projectId, string path) =>
         $"/api/projects/{Uri.EscapeDataString(projectId)}/files/stream?path={Uri.EscapeDataString(path)}";

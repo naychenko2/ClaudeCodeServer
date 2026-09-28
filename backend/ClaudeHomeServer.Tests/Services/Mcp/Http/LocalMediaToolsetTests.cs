@@ -44,7 +44,7 @@ public class LocalMediaToolsetTests : IDisposable
     }
 
     private sealed record Env(LocalMediaToolset Toolset, McpToolCallContext Context, Session Session, Project Project,
-        SessionManager Sessions, ProjectManager Projects);
+        SessionManager Sessions, ProjectManager Projects, LocalMediaJobStore? Store);
 
     private Env Build(bool enabled = true, bool withService = true)
     {
@@ -64,16 +64,17 @@ public class LocalMediaToolsetTests : IDisposable
         var session = sessions.CreateAsync(project.Id, ClaudeMode.Auto).GetAwaiter().GetResult();
 
         LocalMediaService? media = null;
+        LocalMediaJobStore? store = null;
         if (withService)
         {
-            var store = new LocalMediaJobStore(config);
+            store = new LocalMediaJobStore(config);
             var client = new ComfyClient(new FakeComfyFactory(_comfy), config);
             media = new LocalMediaService(client, store, new LocalMediaProjectAccess(projects), config,
                 NullLogger<LocalMediaService>.Instance);
         }
         var toolset = new LocalMediaToolset(sessions, projects, media);
         return new Env(toolset, new McpToolCallContext(TestUserId, session.Id, session.Id), session, project,
-            sessions, projects);
+            sessions, projects, store);
     }
 
     [Fact]
@@ -206,6 +207,94 @@ public class LocalMediaToolsetTests : IDisposable
         image["content_type"]!.GetValue<string>().Should().Be("image/png");
         image["width"]!.GetValue<int>().Should().Be(1664);
         File.Exists(Path.Combine(env.Project.RootPath, path)).Should().BeTrue();
+    }
+
+    private static async Task<JsonObject> StatusAsync(Env env, string jobId)
+    {
+        var result = await env.Toolset.CallAsync("local_job_status", new JsonObject { ["job_id"] = jobId },
+            env.Context, default);
+        result.IsError.Should().BeFalse(result.Text);
+        return JsonNode.Parse(result.Text)!.AsObject();
+    }
+
+    [Fact]
+    public async Task Статистика_ЗавершённаяЗадача_БлокStatsСДлительностьюПоComfy()
+    {
+        var env = Build();
+        var submitted = JsonNode.Parse((await env.Toolset.CallAsync("local_generate_image",
+            new JsonObject { ["prompt"] = "котик", ["steps"] = 20 }, env.Context, default)).Text)!.AsObject();
+        var jobId = submitted["job_id"]!.GetValue<string>();
+        submitted["elapsed_seconds"]!.GetValue<double>().Should().BeGreaterThanOrEqualTo(0);
+        submitted.ContainsKey("stats").Should().BeFalse("stats — только у завершённой задачи");
+
+        var promptId = _comfy.Pending.Single();
+        _comfy.Complete(promptId, ($"{jobId}_00001_.png", LocalMediaTestImages.Png(1328, 1328)));
+        _comfy.Timings(promptId, 1790595587925, 1790596373095, "enc", "vae");
+        var json = await StatusAsync(env, jobId);
+
+        json["status"]!.GetValue<string>().Should().Be("completed");
+        json["eta_seconds"]!.GetValue<int>().Should().Be(LocalMediaService.GenerateImageEta(20, 1));
+        json.ContainsKey("progress_estimate").Should().BeFalse();
+        var stats = json["stats"]!.AsObject();
+        stats["run_seconds"]!.GetValue<double>().Should().Be(785.2);
+        stats["queue_wait_seconds"]!.GetValue<double>().Should().BeGreaterThanOrEqualTo(0);
+        stats["total_seconds"]!.GetValue<double>().Should().BeGreaterThanOrEqualTo(0);
+        stats["steps"]!.GetValue<int>().Should().Be(20);
+        stats["width"]!.GetValue<int>().Should().Be(1328, "у картинки размеры — из первого файла результата");
+        stats["height"]!.GetValue<int>().Should().Be(1328);
+        stats["cached_nodes"]!.GetValue<int>().Should().Be(2);
+        stats.ContainsKey("frames").Should().BeFalse("неизвестное не выводится null-заглушкой");
+        stats.ContainsKey("duration_seconds").Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Статистика_ИдущаяЗадача_ОценкаПрогрессаНеВыше95()
+    {
+        var env = Build();
+        var jobId = JsonNode.Parse((await env.Toolset.CallAsync("local_generate_image",
+            new JsonObject { ["prompt"] = "котик" }, env.Context, default)).Text)!["job_id"]!.GetValue<string>();
+        var promptId = _comfy.Pending.Single();
+        _comfy.Pending.Remove(promptId);
+        _comfy.Running.Add(promptId);
+
+        var fresh = await StatusAsync(env, jobId);
+        fresh["status"]!.GetValue<string>().Should().Be("running");
+        fresh["progress_estimate"]!.GetValue<int>().Should().BeInRange(0, 95);
+        fresh.ContainsKey("stats").Should().BeFalse();
+
+        // Прогон идёт дольше ETA: оценка упирается в потолок, «100» говорит только статус
+        env.Store!.Update(jobId, TestUserId, j => j.StartedAt = DateTime.UtcNow.AddHours(-1));
+        var overdue = await StatusAsync(env, jobId);
+        overdue["progress_estimate"]!.GetValue<int>().Should().Be(95);
+        overdue["elapsed_seconds"]!.GetValue<double>().Should().BeGreaterThanOrEqualTo(0);
+    }
+
+    [Fact]
+    public async Task Статистика_ЗадачаСтарогоФормата_ОтветСобирается_БезRunSeconds()
+    {
+        var jobId = "lm_" + new string('c', 32);
+        File.WriteAllText(Path.Combine(_tempDir, LocalMediaJobStore.FileName), $$"""
+            {"Version":1,"Jobs":[{"Id":"{{jobId}}","OwnerId":"{{TestUserId}}","ProjectId":"p-old",
+              "Op":"image_to_video","PromptId":"p1","Status":"completed","Seed":5,"Width":1344,"Height":768,
+              "DurationSeconds":5,"Frames":124,
+              "Outputs":[{"Path":".cc-attachments/local-media/2026-09-01/x-1.mp4","ContentType":"video/mp4","Width":1344,"Height":768}],
+              "CreatedAt":"2026-09-01T10:00:00Z","FinishedAt":"2026-09-01T10:05:30Z"}]}
+            """);
+        var env = Build();
+
+        var json = await StatusAsync(env, jobId);
+
+        json["status"]!.GetValue<string>().Should().Be("completed");
+        json.ContainsKey("eta_seconds").Should().BeFalse();
+        json["elapsed_seconds"]!.GetValue<double>().Should().Be(330, "у завершённой задачи — до её конца");
+        var stats = json["stats"]!.AsObject();
+        stats["total_seconds"]!.GetValue<double>().Should().Be(330);
+        stats["frames"]!.GetValue<int>().Should().Be(124);
+        stats["duration_seconds"]!.GetValue<int>().Should().Be(5);
+        stats.ContainsKey("run_seconds").Should().BeFalse();
+        stats.ContainsKey("queue_wait_seconds").Should().BeFalse();
+        stats.ContainsKey("cached_nodes").Should().BeFalse();
+        json["videos"]!.AsArray().Should().ContainSingle();
     }
 
     [Fact]

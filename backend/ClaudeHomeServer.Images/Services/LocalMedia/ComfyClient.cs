@@ -13,9 +13,21 @@ public sealed record ComfyQueued(string PromptId);
 // Файл-выход ноды: SaveImage и SaveVideo оба кладут его в outputs.{node}.images
 public sealed record ComfyOutputFile(string FileName, string Subfolder, string Type);
 
-// Latents — файлы SaveLatent (outputs.{node}.latents): служебные, в проект не идут
+// Latents — файлы SaveLatent (outputs.{node}.latents): служебные, в проект не идут.
+// StartedAtMs/FinishedAtMs — метки status.messages по часам ComfyUI (мс): сравнивать их
+// можно только друг с другом, не с часами бэкенда. CachedNodes — ноды, взятые из кэша
 public sealed record ComfyHistoryEntry(bool Completed, bool Failed, string? Error, IReadOnlyList<ComfyOutputFile> Files,
-    IReadOnlyList<ComfyOutputFile> Latents);
+    IReadOnlyList<ComfyOutputFile> Latents)
+{
+    public long? StartedAtMs { get; init; }
+    public long? FinishedAtMs { get; init; }
+    public IReadOnlyList<string> CachedNodes { get; init; } = [];
+
+    // Длительность прогона по меткам ComfyUI; null — меток нет или они несостоятельны
+    public double? RunSeconds => StartedAtMs is { } start && FinishedAtMs is { } end && end >= start
+        ? (end - start) / 1000.0
+        : null;
+}
 
 // Снимок очереди: id задач по порядку — идущая первой
 public sealed record ComfyQueueState(IReadOnlyList<string> Running, IReadOnlyList<string> Pending)
@@ -104,14 +116,36 @@ public sealed class ComfyClient(IHttpClientFactory http, IConfiguration config)
         var failed = statusStr == "error";
 
         string? error = null;
-        if (failed && status?["messages"] is JsonArray messages)
+        long? startedAt = null, finishedAt = null;
+        var cached = new List<string>();
+        if (status?["messages"] is JsonArray messages)
             foreach (var m in messages)
-                if (m is JsonArray { Count: >= 2 } pair && pair[0]?.GetValue<string>() == "execution_error")
+            {
+                if (m is not JsonArray { Count: >= 2 } pair) continue;
+                var kind = pair[0] is JsonValue k && k.TryGetValue<string>(out var s) ? s : null;
+                var data = pair[1] as JsonObject;
+                switch (kind)
                 {
-                    var text = pair[1]?["exception_message"]?.GetValue<string>();
-                    var node = pair[1]?["node_type"]?.GetValue<string>();
-                    error = Trim($"{node}: {text}".Trim(' ', ':'), 400);
+                    case "execution_start":
+                        startedAt = Timestamp(data);
+                        break;
+                    case "execution_cached" when (data?["nodes"]) is JsonArray nodes:
+                        cached.AddRange(nodes.OfType<JsonValue>().Select(n => n.ToString()).Where(n => n.Length > 0));
+                        break;
+                    case "execution_success" or "execution_interrupted":
+                        finishedAt = Timestamp(data);
+                        break;
+                    case "execution_error":
+                        finishedAt = Timestamp(data);
+                        if (failed)
+                        {
+                            var text = data?["exception_message"]?.GetValue<string>();
+                            var node = data?["node_type"]?.GetValue<string>();
+                            error = Trim($"{node}: {text}".Trim(' ', ':'), 400);
+                        }
+                        break;
                 }
+            }
 
         var files = new List<ComfyOutputFile>();
         var latents = new List<ComfyOutputFile>();
@@ -131,7 +165,19 @@ public sealed class ComfyClient(IHttpClientFactory http, IConfiguration config)
                         }
 
         return new ComfyHistoryEntry(completed && !failed, failed, error ?? (failed ? "ComfyUI завершил задачу ошибкой" : null),
-            files, latents);
+            files, latents)
+        {
+            StartedAtMs = startedAt,
+            FinishedAtMs = finishedAt,
+            CachedNodes = cached,
+        };
+
+        // Метка сообщения — миллисекунды эпохи; число бывает и целым, и дробным
+        static long? Timestamp(JsonObject? data) =>
+            data?["timestamp"] is not JsonValue v ? null
+            : v.TryGetValue<long>(out var l) ? l
+            : v.TryGetValue<double>(out var d) ? (long)d
+            : null;
     }
 
     public async Task<byte[]> DownloadAsync(ComfyOutputFile file, CancellationToken ct)

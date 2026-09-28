@@ -126,6 +126,29 @@ public sealed class FakeComfy : HttpMessageHandler
         }
     }
 
+    // Метки прогона в status.messages истории, как у настоящего ComfyUI (мс эпохи по его часам)
+    public void Timings(string promptId, long startMs, long endMs, params string[] cachedNodes)
+    {
+        var status = History[promptId]["status"]!.AsObject();
+        var failed = status["status_str"]!.GetValue<string>() == "error";
+        var messages = new JsonArray
+        {
+            new JsonArray("execution_start", new JsonObject { ["prompt_id"] = promptId, ["timestamp"] = startMs }),
+            new JsonArray("execution_cached", new JsonObject
+            {
+                ["nodes"] = new JsonArray([.. cachedNodes.Select(n => (JsonNode)n)]), ["prompt_id"] = promptId,
+                ["timestamp"] = startMs,
+            }),
+        };
+        var end = failed
+            ? status["messages"]!.AsArray().OfType<JsonArray>().First(m => m[0]!.GetValue<string>() == "execution_error")[1]!
+                .DeepClone().AsObject()
+            : new JsonObject { ["prompt_id"] = promptId };
+        end["timestamp"] = endMs;
+        messages.Add(new JsonArray(failed ? "execution_error" : "execution_success", end));
+        status["messages"] = messages;
+    }
+
     public void Fail(string promptId, string message)
     {
         Pending.Remove(promptId);

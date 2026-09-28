@@ -120,6 +120,60 @@ public class LocalMediaServiceTests : IDisposable
     }
 
     [Fact]
+    public void Клиент_История_МеткиПрогонаИКэшНод()
+    {
+        var entry = JsonNode.Parse("""
+            {"status":{"status_str":"success","completed":true,"messages":[
+                ["execution_start",{"prompt_id":"p","timestamp":1790595587925}],
+                ["execution_cached",{"nodes":["enc","vae"],"prompt_id":"p","timestamp":1790595587930}],
+                ["execution_success",{"prompt_id":"p","timestamp":1790596373095}]]},
+             "outputs":{}}
+            """)!.AsObject();
+
+        var parsed = ComfyClient.ParseHistory(entry);
+
+        parsed.StartedAtMs.Should().Be(1790595587925);
+        parsed.FinishedAtMs.Should().Be(1790596373095);
+        parsed.RunSeconds.Should().BeApproximately(785.17, 0.001);
+        parsed.CachedNodes.Should().Equal("enc", "vae");
+    }
+
+    [Fact]
+    public void Клиент_История_БезMessages_МетокНет_БезИсключения()
+    {
+        var entry = JsonNode.Parse("""{"status":{"status_str":"success","completed":true},"outputs":{}}""")!.AsObject();
+
+        var parsed = ComfyClient.ParseHistory(entry);
+
+        parsed.Completed.Should().BeTrue();
+        parsed.StartedAtMs.Should().BeNull();
+        parsed.FinishedAtMs.Should().BeNull();
+        parsed.RunSeconds.Should().BeNull();
+        parsed.CachedNodes.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Стор_СтарыйФорматБезСтатистики_ГрузитсяСNull()
+    {
+        var data = Directory.CreateDirectory(Path.Combine(_tempDir, "data")).FullName;
+        File.WriteAllText(Path.Combine(data, LocalMediaJobStore.FileName), $$"""
+            {"Version":1,"Jobs":[{"Id":"lm_{{new string('b', 32)}}","OwnerId":"{{Owner}}","ProjectId":"{{ProjectId}}",
+              "Op":"generate_image","PromptId":"p1","Status":"completed","Seed":5,"Outputs":[],
+              "CreatedAt":"2026-09-01T10:00:00Z","FinishedAt":"2026-09-01T10:01:00Z"}]}
+            """);
+        var (_, store) = Build();
+
+        var job = store.Get("lm_" + new string('b', 32), Owner)!;
+
+        job.Status.Should().Be(LocalMediaStatuses.Completed);
+        job.EtaSeconds.Should().BeNull();
+        job.StartedAt.Should().BeNull();
+        job.RunSeconds.Should().BeNull();
+        job.Steps.Should().BeNull();
+        job.CachedNodes.Should().BeNull();
+    }
+
+    [Fact]
     public void Клиент_ПозицияВОчереди()
     {
         var queue = new ComfyQueueState(["a"], ["b", "c"]);
@@ -328,6 +382,51 @@ public class LocalMediaServiceTests : IDisposable
         view!.Job.Status.Should().Be(LocalMediaStatuses.Failed);
         view.Job.Error.Should().Contain("CUDA out of memory");
         store.ActiveCount(Owner).Should().Be(0, "упавшая задача освобождает лимит");
+    }
+
+    [Fact]
+    public async Task Статистика_ИдущаяСETAИНачалом_ЗавершённаяСДлительностьюПоComfy()
+    {
+        var (service, store) = Build();
+        var submitted = (await service.SubmitAsync(Generate(), default)).View!.Job;
+        submitted.EtaSeconds.Should().Be(LocalMediaService.GenerateImageEta(25, 1), "ETA сохраняется в задаче");
+        submitted.Steps.Should().Be(25);
+        _comfy.Pending.Remove(submitted.PromptId);
+        _comfy.Running.Add(submitted.PromptId);
+
+        var running = await service.GetAsync(Owner, submitted.Id, default);
+        var again = await service.GetAsync(Owner, submitted.Id, default);
+
+        running!.Job.Status.Should().Be(LocalMediaStatuses.Running);
+        running.EtaSeconds.Should().Be(submitted.EtaSeconds, "опрос отдаёт ETA из задачи, а не только ответ постановки");
+        running.Job.StartedAt.Should().NotBeNull();
+        again!.Job.StartedAt.Should().Be(running.Job.StartedAt, "начало фиксируется один раз");
+
+        _comfy.Complete(submitted.PromptId, ($"{submitted.Id}_00001_.png", LocalMediaTestImages.Png(64, 64)));
+        _comfy.Timings(submitted.PromptId, 1790595587925, 1790596373095, "enc");
+        var done = (await service.GetAsync(Owner, submitted.Id, default))!.Job;
+
+        done.Status.Should().Be(LocalMediaStatuses.Completed);
+        done.RunSeconds.Should().BeApproximately(785.17, 0.001);
+        done.StartedAt.Should().NotBeNull().And.BeOnOrBefore(done.FinishedAt!.Value);
+        done.CachedNodes.Should().Equal("enc");
+        store.Get(submitted.Id, Owner)!.RunSeconds.Should().Be(done.RunSeconds, "статистика персистится в сторе");
+    }
+
+    [Fact]
+    public async Task Статистика_УпавшаяЗадача_ДлительностьПоComfy()
+    {
+        var (service, _) = Build();
+        var job = (await service.SubmitAsync(Generate(), default)).View!.Job;
+        _comfy.Fail(job.PromptId, "CUDA out of memory");
+        _comfy.Timings(job.PromptId, 1_000_000, 1_012_500);
+
+        var view = await service.GetAsync(Owner, job.Id, default);
+
+        view!.Job.Status.Should().Be(LocalMediaStatuses.Failed);
+        view.Job.Error.Should().Contain("CUDA out of memory");
+        view.Job.RunSeconds.Should().Be(12.5);
+        view.Job.StartedAt.Should().BeOnOrBefore(view.Job.FinishedAt!.Value);
     }
 
     [Fact]
@@ -699,6 +798,7 @@ public class LocalMediaServiceTests : IDisposable
         result.Error.Should().BeNull();
         var job = result.View!.Job;
         job.Heavy.Should().BeFalse("identity по умолчанию — match");
+        job.EtaSeconds.Should().BeNull("референсы не замерены — время не обещаем, а не 0");
         _comfy.Uploads.Should().Equal($"{job.Id}-ref1.png", $"{job.Id}-ref2.png", $"{job.Id}-refvid1.mp4", $"{job.Id}-refaud1.wav");
         var r2v = Graph(_comfy)["r2v"]!["inputs"]!;
         r2v["ref_image_size"]!.GetValue<string>().Should().Be("match");

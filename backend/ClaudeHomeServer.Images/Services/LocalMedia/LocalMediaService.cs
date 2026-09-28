@@ -33,9 +33,13 @@ public sealed record LocalMediaRequest(
     string? Identity = null);
 
 // Задача и её живое положение: Position — сколько задач ComfyUI впереди (0 — идёт),
-// Warning — временный сбой опроса (ComfyUI недоступен), задача при этом жива
+// Warning — временный сбой опроса (ComfyUI недоступен), задача при этом жива. EtaSeconds без
+// явного значения берётся из задачи: иначе local_jobs_wait теряет оценку после постановки
 public sealed record LocalMediaJobView(LocalMediaJob Job, int? Position = null, int? EtaSeconds = null,
-    string? Warning = null);
+    string? Warning = null)
+{
+    public int? EtaSeconds { get; init; } = EtaSeconds ?? Job.EtaSeconds;
+}
 
 public sealed record LocalMediaCallResult(LocalMediaJobView? View, string? Error)
 {
@@ -138,6 +142,8 @@ public sealed class LocalMediaService(
             try
             {
                 (graph, eta) = await BuildGraphAsync(request, job, root, prompt, seed, prefix, options, ct);
+                // Незамеренная операция остаётся с null: время не обещаем
+                job.EtaSeconds = eta;
             }
             catch (LocalMediaInputException ex)
             {
@@ -179,6 +185,7 @@ public sealed class LocalMediaService(
                 var size = AspectSize(request.Aspect ?? "1:1");
                 var steps = Math.Clamp(request.Steps ?? ComfyWorkflows.DefaultSteps, ComfyWorkflows.MinSteps, ComfyWorkflows.MaxSteps);
                 var count = Math.Clamp(request.Count ?? 1, 1, ComfyWorkflows.MaxCount);
+                job.Steps = steps;
                 var graph = ComfyWorkflows.GenerateImage(prompt, request.NegativePrompt?.Trim() ?? "",
                     size.Width, size.Height, seed, steps, count, prefix);
                 return (graph, GenerateImageEta(steps, count));
@@ -590,13 +597,18 @@ public sealed class LocalMediaService(
                 else
                 {
                     var status = position == 0 ? LocalMediaStatuses.Running : LocalMediaStatuses.Queued;
-                    var current = status == job.Status ? job : store.Update(job.Id, job.OwnerId, j => j.Status = status) ?? job;
+                    // StartedAt — один раз, при первом наблюдении running: опора оценки прогресса
+                    var current = status == job.Status ? job : store.Update(job.Id, job.OwnerId, j =>
+                    {
+                        j.Status = status;
+                        if (status == LocalMediaStatuses.Running) j.StartedAt ??= DateTime.UtcNow;
+                    }) ?? job;
                     return new LocalMediaJobView(current, position);
                 }
             }
 
             if (history.Failed)
-                return new LocalMediaJobView(Fail(job, history.Error ?? "ComfyUI завершил задачу ошибкой.", history.Files));
+                return new LocalMediaJobView(Fail(job, history.Error ?? "ComfyUI завершил задачу ошибкой.", history));
             if (!history.Completed)
                 return new LocalMediaJobView(job, 0);
             return new LocalMediaJobView(await CollectAsync(job, history, ct));
@@ -624,10 +636,10 @@ public sealed class LocalMediaService(
             if (LocalMediaStatuses.IsTerminal(current.Status)) return current;
 
             var root = projects.ResolveRoot(current.OwnerId, current.ProjectId);
-            if (root is null) return Fail(current, "Проект задачи недоступен — результат некуда сохранить.", files);
+            if (root is null) return Fail(current, "Проект задачи недоступен — результат некуда сохранить.", history);
 
             var wanted = files.Where(f => ContentTypeOf(Path.GetExtension(f.FileName)) is not null).ToList();
-            if (wanted.Count == 0) return Fail(current, "ComfyUI не вернул файлов результата.", files);
+            if (wanted.Count == 0) return Fail(current, "ComfyUI не вернул файлов результата.", history);
 
             var folder = $"{ResultsFolder}/{current.CreatedAt:yyyy-MM-dd}";
             var outputs = new List<LocalMediaOutput>();
@@ -670,16 +682,17 @@ public sealed class LocalMediaService(
                 j.LatentAudio = latentAudio;
                 j.ComfyOutputs = ComfyNames(files);
                 j.FinishedAt = DateTime.UtcNow;
+                ApplyRunStats(j, history);
             }) ?? current;
         }
         catch (UnauthorizedAccessException)
         {
-            return Fail(job, "Папка результатов идёт через символическую ссылку или вне проекта — результат не сохранён.", files);
+            return Fail(job, "Папка результатов идёт через символическую ссылку или вне проекта — результат не сохранён.", history);
         }
         catch (IOException ex)
         {
             log.LogWarning(ex, "Не удалось записать результат задачи {JobId}", job.Id);
-            return Fail(job, "Не удалось записать результат в папку проекта.", files);
+            return Fail(job, "Не удалось записать результат в папку проекта.", history);
         }
         finally
         {
@@ -705,15 +718,31 @@ public sealed class LocalMediaService(
     private static List<string> ComfyNames(IReadOnlyList<ComfyOutputFile> files) =>
         files.Select(f => f.Subfolder.Length == 0 ? f.FileName : $"{f.Subfolder}/{f.FileName}").ToList();
 
-    // files — что ComfyUI успел положить в output: их убирает чистка
-    private LocalMediaJob Fail(LocalMediaJob job, string error, IReadOnlyList<ComfyOutputFile>? files = null) =>
+    // history.Files — что ComfyUI успел положить в output: их убирает чистка
+    private LocalMediaJob Fail(LocalMediaJob job, string error, ComfyHistoryEntry? history = null) =>
         store.Update(job.Id, job.OwnerId, j =>
         {
             j.Status = LocalMediaStatuses.Failed;
             j.Error = error;
             j.FinishedAt = DateTime.UtcNow;
-            if (files is not null) j.ComfyOutputs = ComfyNames(files);
+            if (history is not null)
+            {
+                j.ComfyOutputs = ComfyNames(history.Files);
+                ApplyRunStats(j, history);
+            }
         }) ?? job;
+
+    // Статистика прогона из истории ComfyUI. Часы ComfyUI с часами бэкенда не сравниваются:
+    // из истории берётся только длительность. Начало — раньшее из «первого наблюдения running»
+    // и «FinishedAt − длительность»: оба не раньше настоящего начала, ближе — меньшее
+    private static void ApplyRunStats(LocalMediaJob job, ComfyHistoryEntry history)
+    {
+        job.CachedNodes = [.. history.CachedNodes];
+        if (history.RunSeconds is not { } run || job.FinishedAt is not { } finished) return;
+        job.RunSeconds = run;
+        var fromHistory = finished - TimeSpan.FromSeconds(run);
+        job.StartedAt = job.StartedAt is { } observed && observed < fromHistory ? observed : fromHistory;
+    }
 
     // Сбор висящих задач фоном: результат попадает в проект, даже если агент не спрашивает.
     // Возвращает число задач, дошедших до конца. Забывание старых задач и чистка ComfyUI —

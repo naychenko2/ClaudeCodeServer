@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chainOf, currentIndex, currentStack, focusLabel, interruptedOf, launchedPrompt, saveFolder, versionLabel } from './model';
+import { chainOf, currentIndex, currentStack, focusLabel, interruptedOf, launchEndNote, launchedPrompt, saveFolder, versionLabel } from './model';
 import type { ImageThread } from './threadsApi';
 
 const thread = (patch: Partial<ImageThread>): ImageThread => ({
@@ -184,5 +184,23 @@ describe('версии картинки (изменение 27.09 к ADR-019)', 
     });
     expect(versionStep(t, t.versions![0])).toBe('st0');
     expect(versionStep(t, t.versions![1])).toBe('st1');
+  });
+});
+
+describe('launchEndNote', () => {
+  it('отмена и перезапуск с частью готовых вариантов называют, сколько готово', () => {
+    expect(launchEndNote('cancelled', 1, 3)).toBe('Отменено — готово 1 из 3.');
+    expect(launchEndNote('interrupted', 2, 3)).toBe('Прервано перезапуском сервера — готово 2 из 3.');
+  });
+
+  it('без готовых вариантов — прежние тексты', () => {
+    expect(launchEndNote('cancelled', 0, 3)).toBe('Генерация отменена.');
+    expect(launchEndNote('interrupted', 0, 3)).toBe('Генерация прервана перезапуском сервера.');
+    expect(launchEndNote('failed', 0, 1)).toBe('Сервис рисования отказал — версий нет.');
+  });
+
+  it('идущий и доделанный запуск надписи не несут', () => {
+    expect(launchEndNote('running', 1, 3)).toBeNull();
+    expect(launchEndNote('done', 3, 3)).toBeNull();
   });
 });

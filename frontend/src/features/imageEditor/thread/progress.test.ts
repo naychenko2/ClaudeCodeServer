@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMockApi, type ImageEditEvent, type ImageEditJobInput } from '../api';
-import { progressPercent } from './useJobStatus';
+import { jobPercent, progressPercent, type JobStatus } from './useJobStatus';
 
 describe('progressPercent', () => {
   it('в очереди полоса стоит на готовых прогонах', () => {
@@ -19,6 +19,27 @@ describe('progressPercent', () => {
   it('без ETA прогона — ETA котировки, без неё — 30 секунд', () => {
     expect(progressPercent({ run: null, runs: null, etaSeconds: null, elapsed: 10, fallbackEta: 20 })).toBeCloseTo(50);
     expect(progressPercent({ run: null, runs: null, etaSeconds: null, elapsed: 15 })).toBeCloseTo(50);
+  });
+});
+
+describe('jobPercent', () => {
+  const t0 = 1_000_000;
+  const base: JobStatus = {
+    phase: 'run', variants: [], count: 0, cost: null, charged: null, error: null, model: null, createdAt: t0,
+    run: null, runs: null, eta: null, runStartedAt: null, queuePosition: null, fallbackEta: 20,
+  };
+
+  it('без прогонов (fal, Higgsfield) переход queued→running не откатывает полосу', () => {
+    const queued = jobPercent(base, t0 + 6000, t0);
+    // Событие running ставит начало прогона на момент перехода — у fal без номера прогона
+    const running = jobPercent({ ...base, runStartedAt: t0 + 6000 }, t0 + 6500, t0);
+    expect(queued).toBeCloseTo(30);
+    expect(running).toBeGreaterThanOrEqual(queued);
+  });
+
+  it('с прогонами (local) отсчёт — от начала текущего прогона', () => {
+    const status = { ...base, run: 2, runs: 2, eta: 10, runStartedAt: t0 + 20_000 };
+    expect(jobPercent(status, t0 + 25_000, t0)).toBeCloseTo(75);
   });
 });
 

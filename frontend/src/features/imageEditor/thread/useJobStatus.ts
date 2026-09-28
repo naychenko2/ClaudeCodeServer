@@ -134,11 +134,16 @@ export function useProgress(status: JobStatus | null, running: boolean, fallback
     return () => clearInterval(t);
   }, [running]);
   const queuePosition = running && status?.queuePosition ? status.queuePosition : null;
-  // Прогон без своих сведений (fal, Higgsfield до Running) считаем от создания задачи
-  const start = status?.runStartedAt ?? (status?.run != null ? now : status?.createdAt ?? mounted);
-  const percent = progressPercent({
+  return { percent: jobPercent(status, now, mounted, fallbackEta, queuePosition != null), queuePosition };
+}
+
+// Проценты задачи на момент now. Задачу без своих прогонов (fal, Higgsfield) считаем от создания
+// через все стадии: отсчёт от перехода в Running откатывал полосу назад
+export function jobPercent(status: JobStatus | null, now: number, mounted: number,
+  fallbackEta: number | null = null, queued = false): number {
+  const start = status?.run != null ? status.runStartedAt ?? now : status?.createdAt ?? mounted;
+  return progressPercent({
     run: status?.run ?? null, runs: status?.runs ?? null, etaSeconds: status?.eta ?? null,
-    elapsed: (now - start) / 1000, fallbackEta: status?.fallbackEta ?? fallbackEta, queued: queuePosition != null,
+    elapsed: (now - start) / 1000, fallbackEta: status?.fallbackEta ?? fallbackEta, queued,
   });
-  return { percent, queuePosition };
 }

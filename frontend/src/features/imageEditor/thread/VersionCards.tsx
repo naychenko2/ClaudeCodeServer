@@ -16,7 +16,7 @@ import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import { isFreeUnit, money, variantsWord } from '../format';
 import { continueFrom, saveToProject, versionSaved } from './actions';
 import {
-  findVersion, fromVersion, isEmptyThread, launchOf, launchVersions, ORIGIN, saveFolder, threadName,
+  findVersion, fromVersion, isEmptyThread, launchEndNote, launchOf, launchVersions, ORIGIN, saveFolder, threadName,
   versionHasImage, versionMeta, versionName, versionPrimary, versionStep,
 } from './model';
 import { recordOf } from './records';
@@ -235,6 +235,7 @@ export function LaunchAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
   const head = base && versionHasImage(thread, base) ? `Правка ${fromVersion(base)}` : 'Генерация';
   const info = [model, variantsWord(count), estimateText(data.estimate)].filter(Boolean).join(' · ');
   const status = launch?.status ?? (versions.length ? 'done' : 'running');
+  const endNote = launchEndNote(status, versions.length, count);
 
   return (
     <div data-image-launch={status} style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, minWidth: 0 }}>
@@ -258,14 +259,10 @@ export function LaunchAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
         </div>
       )}
 
-      {status !== 'running' && !versions.length && (
-        <div data-image-launch-empty="" style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap' }}>
-          <Note>
-            {status === 'cancelled' ? 'Генерация отменена.'
-              : status === 'interrupted' ? 'Генерация прервана перезапуском сервера.'
-              : 'Сервис рисования отказал — версий нет.'}
-          </Note>
-          {status === 'interrupted' && prompt && focused && (
+      {endNote && (
+        <div data-image-launch-empty={versions.length ? undefined : ''} style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap' }}>
+          <Note>{endNote}</Note>
+          {status === 'interrupted' && !versions.length && prompt && focused && (
             <Button size="xs" variant="secondary" leftIcon={ic(RotateCcw)} disabled={busy} title={`«${prompt}»`}
               onClick={() => {
                 setBusy(true);

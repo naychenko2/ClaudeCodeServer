@@ -125,6 +125,21 @@ export const launchVersions = (t: ImageThread, jobId: string) =>
 
 export const hasRunningLaunch = (t: ImageThread) => (t.launches ?? []).some(l => l.status === 'running');
 
+// Надпись под запуском, кончившимся не целиком. Отмена и перезапуск сервера с частью готовых
+// вариантов называются прямо: без надписи лента выглядит так, будто остальное недорисовалось
+export function launchEndNote(status: ImageThreadLaunch['status'], ready: number, count: number): string | null {
+  if (status === 'running' || status === 'done') return null;
+  if (ready > 0) {
+    const of = `готово ${ready} из ${Math.max(ready, count)}`;
+    return status === 'cancelled' ? `Отменено — ${of}.`
+      : status === 'interrupted' ? `Прервано перезапуском сервера — ${of}.`
+      : null;
+  }
+  return status === 'cancelled' ? 'Генерация отменена.'
+    : status === 'interrupted' ? 'Генерация прервана перезапуском сервера.'
+    : 'Сервис рисования отказал — версий нет.';
+}
+
 // Подпись под картинкой версии: «вариант 1 из 2 · от исходника · FLUX Kontext»
 export function versionMeta(t: ImageThread, v: ImageThreadVersion, model?: string | null): string {
   if (v.id === ORIGIN) return [t.file ? 'исходный файл' : '', v.steps.length ? 'с правками без ИИ' : ''].filter(Boolean).join(' · ');

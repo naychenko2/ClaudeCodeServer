@@ -148,7 +148,13 @@ public record ImageEditJobDto(
     int Count = 0,
     ImageEditEstimateDto? Estimate = null,
     // Нить картинки, в которую запущена задача (ADR-019); чат нити — ChatSessionId
-    string? ThreadId = null);
+    string? ThreadId = null,
+    // Текущий прогон драйвера для полосы прогресса: номер (с 1), число, ETA прогона и сколько
+    // он уже идёт по часам бэкенда (только в Running). Поставщик их не знает — null
+    int? Run = null,
+    int? Runs = null,
+    int? EtaSeconds = null,
+    int? RunElapsedSeconds = null);
 
 public static class ImageEditSizeNotes
 {

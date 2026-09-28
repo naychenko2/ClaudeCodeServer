@@ -26,10 +26,12 @@ public class ImageEditJobServiceTests : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    private ImageEditJobService Service(params IImageEditor[] editors)
+    private ImageEditJobService Service(params IImageEditor[] editors) => Service(null, editors);
+
+    private ImageEditJobService Service(TimeProvider? time, params IImageEditor[] editors)
     {
         var service = new ImageEditJobService(editors, new ImageEditWorkspace(Path.Combine(_dir, "image-editor")),
-            NullLogger<ImageEditJobService>.Instance, _spend, _broadcaster);
+            NullLogger<ImageEditJobService>.Instance, _spend, _broadcaster, time);
         _services.Add(service);
         return service;
     }
@@ -377,6 +379,49 @@ public class ImageEditJobServiceTests : IDisposable
 
         third.ErrorCode.Should().Be(ImageEditErrorCodes.TooManyJobs);
         gate.SetResult();
+    }
+
+    // Полоса прогресса: «прошло» считается часами бэкенда от перехода в Running, наружу — уже
+    // разницей, а не меткой; вне Running его нет
+    [Fact]
+    public async Task Прогресс_ПрошлоСПереходаВRunning_ПоЧасамБэкенда()
+    {
+        var time = new ManualTime(new DateTimeOffset(2026, 9, 28, 12, 0, 0, TimeSpan.Zero));
+        var running = new TaskCompletionSource();
+        var gate = new TaskCompletionSource();
+        var editor = new ScriptedEditor("fal", async (_, progress, ct) =>
+        {
+            progress.Report(new EditProgress(EditStage.Queued, 2, Run: 2, Runs: 3, EtaSeconds: 40));
+            time.Advance(TimeSpan.FromSeconds(30));
+            progress.Report(new EditProgress(EditStage.Running, null, Run: 2, Runs: 3, EtaSeconds: 40));
+            running.TrySetResult();
+            await gate.Task.WaitAsync(ct);
+            return new ImageEditResult(EditOutcome.Ok, [new EditedImage(TestImages.Png(2, 2), "image/png")], null, true, "r", null);
+        });
+        var service = Service(time, editor);
+        var jobId = await StartAsync(service, "owner", "fal");
+        await running.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        time.Advance(TimeSpan.FromSeconds(7));
+        var job = service.Get("owner", Project, jobId)!;
+
+        job.Status.Should().Be(ImageEditJobStatus.Running);
+        job.RunElapsedSeconds.Should().Be(7, "отсчёт — с перехода в Running, а не с постановки в очередь");
+        (job.Run, job.Runs, job.EtaSeconds).Should().Be((2, 3, 40));
+        var progress = _broadcaster.ToOwnerCalls.Select(c => c.Message).OfType<ImageEditProgressMessage>().ToList();
+        progress.First().RunElapsedSeconds.Should().BeNull("в очереди прогон ещё не идёт");
+        progress.Last().Should().Match<ImageEditProgressMessage>(m =>
+            m.Run == 2 && m.Runs == 3 && m.EtaSeconds == 40 && m.RunElapsedSeconds == 0);
+
+        gate.SetResult();
+        (await WaitDone(service, "owner", jobId)).RunElapsedSeconds.Should().BeNull();
+    }
+
+    private sealed class ManualTime(DateTimeOffset now) : TimeProvider
+    {
+        private DateTimeOffset _now = now;
+        public void Advance(TimeSpan by) => _now += by;
+        public override DateTimeOffset GetUtcNow() => _now;
     }
 
     // Драйвер со сценарием: цена по ориентиру (по умолчанию 1.5 за вариант, null — прайса

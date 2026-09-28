@@ -29,6 +29,10 @@ public class LocalImageEditorTests : IDisposable
         public ConcurrentQueue<LocalImageRequest> Submitted { get; } = new();
         public List<string> Cancelled { get; } = [];
         public LocalImageSubmitted? Refuse { get; set; }
+        // ETA прогона в ответе на постановку; RunningFirst — первый опрос билета отвечает Running
+        public int? SubmitEta { get; set; } = 45;
+        public bool RunningFirst { get; set; }
+        private readonly ConcurrentDictionary<string, bool> _seen = new();
 
         public Task<int?> QueueLengthAsync(CancellationToken ct) => Task.FromResult(Queue);
 
@@ -43,11 +47,13 @@ public class LocalImageEditorTests : IDisposable
         {
             if (Refuse is { } refuse) return Task.FromResult(refuse);
             Submitted.Enqueue(request);
-            return Task.FromResult(new LocalImageSubmitted("t" + Submitted.Count, 0, 45, null));
+            return Task.FromResult(new LocalImageSubmitted("t" + Submitted.Count, 0, SubmitEta, null));
         }
 
         public Task<LocalImagePoll> PollAsync(string ticket, CancellationToken ct)
         {
+            if (RunningFirst && _seen.TryAdd(ticket, true))
+                return Task.FromResult(new LocalImagePoll(LocalImageState.Running, null, [], null));
             var request = Submitted.ElementAt(int.Parse(ticket[1..]) - 1);
             var files = Enumerable.Range(0, request.Count)
                 .Select(i => new LocalImageFile(TestImages.Png(8, 8, (byte)i), "image/png"))
@@ -201,6 +207,29 @@ public class LocalImageEditorTests : IDisposable
 
         job.Variants.Should().Equal(1, 2, 3);
         media.Submitted.Should().HaveCount(3).And.OnlyContain(r => r.Count == 1);
+    }
+
+    // Полоса прогресса: каждая стадия несёт номер прогона, их число и ETA из ответа на постановку
+    [Fact]
+    public async Task Прогресс_НесётНомерПрогонаЧислоИEta()
+    {
+        var media = new FakeMedia { SubmitEta = 52, RunningFirst = true };
+        var reports = new List<EditProgress>();
+        var request = new ImageEditRequest(ImageEditOp.Edit, "сделай вечер", new ImageBytes(TestImages.Png(8, 8), "image/png"),
+            null, [], 2, null, null, LocalImageEditor.QwenImage, null);
+
+        var result = await Editor(media).RunAsync(request, new SyncProgress(reports.Add), default);
+
+        result.Outcome.Should().Be(EditOutcome.Ok, result.Error);
+        reports.Select(r => (r.Stage, r.Run)).Should().Equal(
+            (EditStage.Queued, 1), (EditStage.Running, 1), (EditStage.Downloading, 1),
+            (EditStage.Queued, 2), (EditStage.Running, 2), (EditStage.Downloading, 2));
+        reports.Should().OnlyContain(r => r.Runs == 2 && r.EtaSeconds == 52);
+    }
+
+    private sealed class SyncProgress(Action<EditProgress> report) : IProgress<EditProgress>
+    {
+        public void Report(EditProgress value) => report(value);
     }
 
     [Fact]

@@ -115,7 +115,10 @@ public record EditedImage(byte[] Bytes, string ContentType);
 // Сумма в единицах поставщика (ImageEditPriceUnits.*)
 public record EditCost(double Amount, string Unit);
 
-public record EditProgress(EditStage Stage, int? QueuePosition = null);
+// Run/Runs — номер текущего прогона (с 1) и их число, EtaSeconds — ожидаемое время прогона;
+// заполняет только драйвер, который это знает (local), остальные оставляют null
+public record EditProgress(EditStage Stage, int? QueuePosition = null, int? Run = null, int? Runs = null,
+    int? EtaSeconds = null);
 
 // Charged: true — списано, false — точно не списано, null — неизвестно («Списание
 // уточняется у сервиса»)

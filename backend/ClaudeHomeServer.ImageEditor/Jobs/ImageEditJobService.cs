@@ -96,6 +96,12 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         public DateTime CreatedAt { get; init; }
         public ImageEditJobStatus Status { get; set; } = ImageEditJobStatus.Queued;
         public int? QueuePosition { get; set; }
+        // Текущий прогон драйвера (номер, число, ETA) и момент его перехода в Running по часам
+        // бэкенда: наружу уходит уже посчитанное «прошло», часы браузера с нашими не сверены
+        public int? Run { get; set; }
+        public int? Runs { get; set; }
+        public int? EtaSeconds { get; set; }
+        public DateTime? RunStartedAt { get; set; }
         public List<int> Variants { get; } = [];
         public EditCost? Cost { get; set; }
         public EditOutcome? Outcome { get; set; }
@@ -474,20 +480,31 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         public void Report(EditProgress value)
         {
             owner.OnAccepted(job);
+            int? elapsed;
             lock (job.Gate)
             {
                 if (!job.IsActive) return;
-                job.Status = value.Stage switch
+                var status = value.Stage switch
                 {
                     EditStage.Running => ImageEditJobStatus.Running,
                     EditStage.Downloading => ImageEditJobStatus.Downloading,
                     _ => ImageEditJobStatus.Queued,
                 };
+                // Отсчёт — с перехода в Running, в том числе нового прогона после предыдущего
+                if (status == ImageEditJobStatus.Running
+                    && (job.Status != ImageEditJobStatus.Running || job.Run != value.Run))
+                    job.RunStartedAt = owner.Now();
+                job.Status = status;
                 job.QueuePosition = value.QueuePosition;
+                job.Run = value.Run;
+                job.Runs = value.Runs;
+                job.EtaSeconds = value.EtaSeconds;
+                elapsed = owner.RunElapsedSeconds(job);
             }
             _ = owner.Broadcast(job.OwnerId,
                 new ImageEditProgressMessage(job.Id, job.ProjectId, value.Stage, value.QueuePosition,
-                    job.ChatSessionId, job.Initiator, job.ThreadId));
+                    job.ChatSessionId, job.Initiator, job.ThreadId, value.Run, value.Runs, value.EtaSeconds,
+                    elapsed));
         }
     }
 
@@ -519,13 +536,20 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
     private ImageEditQuoteDto ToDto(Quote q) =>
         new(q.Id, q.Provider, q.Model.Id, q.Estimate, q.ExpiresAt, q.ExpectedSeconds);
 
-    private static ImageEditJobDto ToDto(Job j)
+    private ImageEditJobDto ToDto(Job j)
     {
         lock (j.Gate)
             return new ImageEditJobDto(j.Id, j.ProjectId, j.Status, j.Quote.Provider, j.Quote.Model.Id,
                 [.. j.Variants], j.Cost, j.Outcome, j.Charged, j.Error, j.QueuePosition, j.CreatedAt,
-                j.ChatSessionId, j.Initiator, j.BaseStepId, j.SizeNote, j.Quote.Count, j.Quote.Estimate, j.ThreadId);
+                j.ChatSessionId, j.Initiator, j.BaseStepId, j.SizeNote, j.Quote.Count, j.Quote.Estimate, j.ThreadId,
+                j.Run, j.Runs, j.EtaSeconds, RunElapsedSeconds(j));
     }
+
+    // Сколько идёт текущий прогон по часам бэкенда; вне Running — null. Звать под j.Gate
+    private int? RunElapsedSeconds(Job j) =>
+        j.Status == ImageEditJobStatus.Running && j.RunStartedAt is { } started
+            ? Math.Max(0, (int)(Now() - started).TotalSeconds)
+            : null;
 
     private void PruneQuotes()
     {

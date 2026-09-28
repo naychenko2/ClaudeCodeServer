@@ -121,6 +121,14 @@ export interface ImageEditJob {
   initiator?: ImageEditInitiator;
   // Нить основного чата (ADR-019), если задача запущена в нить
   threadId?: string | null;
+  // Оценка котировки, по которой запущена задача
+  estimate?: ImageEditEstimate | null;
+  // Полоса прогресса: номер текущего прогона (с 1), их число, ETA прогона и сколько он уже
+  // идёт по часам бэкенда (только в running). Поставщики без этих сведений отдают null
+  run?: number | null;
+  runs?: number | null;
+  etaSeconds?: number | null;
+  runElapsedSeconds?: number | null;
 }
 
 // Кто запустил задачу или написал промпт: человек в редакторе или агент чата картинки
@@ -296,7 +304,8 @@ export interface ImageSnapshot { revision: string; attached: boolean }
 interface ImageEditEventOrigin { chatSessionId?: string | null; initiator?: ImageEditInitiator; threadId?: string | null }
 
 export type ImageEditEvent = ImageEditEventOrigin & (
-  | { type: 'image_edit_progress'; jobId: string; projectId: string; stage: EditStage; queuePosition?: number | null }
+  | { type: 'image_edit_progress'; jobId: string; projectId: string; stage: EditStage; queuePosition?: number | null;
+      run?: number | null; runs?: number | null; etaSeconds?: number | null; runElapsedSeconds?: number | null }
   | { type: 'image_edit_completed'; jobId: string; projectId: string; variants: number[]; cost?: EditCost | null }
   | { type: 'image_edit_failed'; jobId: string; projectId: string; outcome: EditOutcome; charged?: boolean | null; error?: string | null; retryQuote?: ImageEditQuote | null });
 
@@ -464,7 +473,7 @@ export function createMockApi(mode: 'fal' | 'all'): ImageEditorApi {
   const listeners = new Set<(e: ImageEditEvent) => void>();
   const emit = (e: ImageEditEvent) => listeners.forEach(fn => fn(e));
   const quotes = new Map<string, ImageEditQuote & { count: number }>();
-  const jobs = new Map<string, { job: ImageEditJob; timers: number[]; leaveQueue: () => void }>();
+  const jobs = new Map<string, { job: ImageEditJob; timers: number[]; leaveQueue: () => void; runStartedAt?: number }>();
   let characters: { character: ImageEditCharacter; urls: Map<string, string> }[] = [];
   const delay = <T,>(v: T, ms = 150) => new Promise<T>(r => setTimeout(() => r(v), ms));
   let seq = 0;
@@ -532,14 +541,26 @@ export function createMockApi(mode: 'fal' | 'all'): ImageEditorApi {
       let queued = q.estimate.unit === 'free';
       if (queued) localQueue++;
       const leaveQueue = () => { if (queued) { queued = false; localQueue--; } };
-      const entry = { job, timers: [] as number[], leaveQueue };
+      const entry: { job: ImageEditJob; timers: number[]; leaveQueue: () => void; runStartedAt?: number } =
+        { job, timers: [], leaveQueue };
       jobs.set(jobId, entry);
       // «сломать» генерацию можно словом в запросе — так проверяется экран ошибки
       const failKind: EditOutcome | null = /кредит/i.test(input.prompt) ? 'insufficientCredits'
         : /ошибк/i.test(input.prompt) ? 'failed' : null;
       const total = (q.expectedSeconds ?? 8) * 1000;
       const at = (ms: number, fn: () => void) => entry.timers.push(window.setTimeout(fn, ms));
-      at(200, () => { job.status = 'running'; emit({ type: 'image_edit_progress', jobId, projectId, stage: 'running', ...origin }); });
+      // Локальные модели мока, как настоящие, рисуют варианты прогонами по одному, с ETA прогона
+      const runs = q.estimate.unit === 'free' ? Math.max(1, q.count) : 1;
+      const etaSeconds = Math.round((q.expectedSeconds ?? 8) / runs);
+      job.estimate = q.estimate;
+      for (let i = 0; i < runs; i++) {
+        const run = i + 1;
+        at(i === 0 ? 200 : (total * i) / runs, () => {
+          Object.assign(job, { status: 'running', run, runs, etaSeconds });
+          entry.runStartedAt = Date.now();
+          emit({ type: 'image_edit_progress', jobId, projectId, stage: 'running', run, runs, etaSeconds, runElapsedSeconds: 0, ...origin });
+        });
+      }
       if (failKind) {
         at(total / 2, () => {
           leaveQueue();
@@ -548,7 +569,10 @@ export function createMockApi(mode: 'fal' | 'all'): ImageEditorApi {
           emit({ type: 'image_edit_failed', jobId, projectId, outcome: failKind, charged: false, error: job.error, ...origin });
         });
       } else {
-        at(total * 0.85, () => { job.status = 'downloading'; emit({ type: 'image_edit_progress', jobId, projectId, stage: 'downloading', ...origin }); });
+        at(total * 0.95, () => {
+          job.status = 'downloading';
+          emit({ type: 'image_edit_progress', jobId, projectId, stage: 'downloading', run: runs, runs, etaSeconds, ...origin });
+        });
         at(total, () => {
           leaveQueue();
           const cost = q.estimate.amount != null ? { amount: q.estimate.amount, unit: q.estimate.unit } : null;
@@ -562,7 +586,10 @@ export function createMockApi(mode: 'fal' | 'all'): ImageEditorApi {
     getJob: async (_projectId, jobId) => {
       const e = jobs.get(jobId);
       if (!e) throw Object.assign(new Error('Задача не найдена'), { status: 404, body: { code: 'job_not_found' } });
-      return delay({ ...e.job }, 50);
+      // Как бэкенд: «прошло» считается в момент ответа и только в running
+      const runElapsedSeconds = e.job.status === 'running' && e.runStartedAt != null
+        ? Math.floor((Date.now() - e.runStartedAt) / 1000) : null;
+      return delay({ ...e.job, runElapsedSeconds }, 50);
     },
     cancelJob: async (_projectId, jobId) => {
       const e = jobs.get(jobId);

@@ -21,7 +21,7 @@ import { recordOf } from './records';
 import { openEditor, useThreads } from './threadStore';
 import type { ImageThread, ImageThreadEvent, ImageThreadStack } from './threadsApi';
 import { imageSrc, launchThread } from './useThreadLaunch';
-import { useJobStatus, useProgress } from './useJobStatus';
+import { queueText, useJobStatus, useProgress } from './useJobStatus';
 import { OriginAnchor, VersionCard } from './VersionCards';
 
 const ic = (I: typeof X, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
@@ -90,7 +90,7 @@ export function JobBlock({ projectId, sessionId, thread, inEditor, onPreview }: 
   const [picked, setPicked] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const phase = status?.phase ?? 'run';
-  const progress = useProgress(phase === 'run', status?.createdAt ?? null);
+  const progress = useProgress(status, phase === 'run');
   const count = thread.settings?.count ?? status?.count ?? 1;
   const api = imageEditorApi();
   const cost = status?.cost;
@@ -102,11 +102,11 @@ export function JobBlock({ projectId, sessionId, thread, inEditor, onPreview }: 
         <Acts>
           <Dot color={C.accent} />
           <span style={{ fontSize: FS.sm, color: C.textPrimary }}>
-            Рисуем {variantsWord(count)}…{status?.model ? ` · ${status.model}` : ''}
+            Рисуем {variantsWord(count)}…{status?.model ? ` · ${status.model}` : ''}{queueText(progress.queuePosition)}
           </span>
           <Button size="xs" variant="ghost" leftIcon={ic(X)} onClick={() => { void cancel(); }}>Отменить</Button>
         </Acts>
-        <ProgressBar value={progress} transition="width .5s linear" />
+        <ProgressBar value={progress.percent} transition="width .5s linear" />
         <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(count, 4)}, minmax(0, 1fr))`, gap: SP.xs }}>
           {Array.from({ length: Math.min(count, 4) }, (_, i) => (
             <div key={i} style={{ aspectRatio: '1 / 1', borderRadius: R.md, background: C.bgInset }} />

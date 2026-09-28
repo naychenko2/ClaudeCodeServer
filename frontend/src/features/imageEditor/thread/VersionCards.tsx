@@ -23,7 +23,7 @@ import { recordOf } from './records';
 import { openEditor, useThreads } from './threadStore';
 import type { ImageThread, ImageThreadVersion } from './threadsApi';
 import { launchThread, versionSrc } from './useThreadLaunch';
-import { useJobStatus, useProgress } from './useJobStatus';
+import { queueText, useJobStatus, useProgress } from './useJobStatus';
 
 const ic = (I: typeof X, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
 
@@ -201,14 +201,14 @@ function Skeleton({ mobile }: { mobile: boolean }) {
 function RunningLine({ projectId, jobId, model }: { projectId: string; jobId: string; model: string | null }) {
   const { status, cancel } = useJobStatus(projectId, jobId);
   const running = (status?.phase ?? 'run') === 'run';
-  const progress = useProgress(running, status?.createdAt ?? null);
+  const progress = useProgress(status, running);
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs, maxWidth: CARD_W * 2 + SP.md }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, fontSize: FS.sm, color: C.textSecondary }}>
-        <Dot color={C.accent} />Рисуем…{model ? ` · ${model}` : ''}
+        <Dot color={C.accent} />Рисуем…{model ? ` · ${model}` : ''}{queueText(progress.queuePosition)}
         <Button size="xs" variant="ghost" leftIcon={ic(X)} onClick={() => { void cancel(); }}>Отменить</Button>
       </div>
-      <ProgressBar value={progress} transition="width .5s linear" />
+      <ProgressBar value={progress.percent} transition="width .5s linear" />
     </div>
   );
 }

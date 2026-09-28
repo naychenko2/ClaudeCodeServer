@@ -3,20 +3,19 @@
 // строки «Вы запустили: …» и «Сохранено как …» из истории чатов картинки v2 — старые
 // чаты уходят в архив, но открываются и должны читаться.
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { AlertTriangle, Check, ExternalLink, Image as ImageIcon, SlidersHorizontal, Sparkles, X, Zap } from 'lucide-react';
 import {
-  Button, Dot, ProgressBar, C, FS, R, SHADOW, SP, ICON_SIZE, ICON_STROKE, onReconnected, personaLabel, showToast,
+  Button, Dot, ProgressBar, C, FS, R, SHADOW, SP, ICON_SIZE, ICON_STROKE, personaLabel,
 } from 'aihome_shell/kit';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import type { ChatItem } from '../../../types';
-import {
-  AUTO_MODEL, imageEditorApi, type EditCost, type ImageEditCatalog, type ImageEditEstimate, type ImageEditJob,
-} from '../api';
+import { AUTO_MODEL, type ImageEditCatalog, type ImageEditEstimate } from '../api';
 import { useCatalog } from '../thread/catalog';
 import { effectiveProvider, isFreeUnit, priceSum, priceText, variantsWord } from '../format';
 import { launchOf, launchVersions } from '../thread/model';
 import { getFocusedThread, openEditor, useThreads } from '../thread/threadStore';
+import { useJobStatus, useProgress } from '../thread/useJobStatus';
 import { launchThread, useThreadLaunch } from '../thread/useThreadLaunch';
 
 type ToolItem = Extract<ChatItem, { kind: 'tool_use' }>;
@@ -106,80 +105,6 @@ export function parseLaunchResult(text: string | undefined): LaunchResult | null
   };
 }
 
-// ── Живой статус задачи: события image_edit_*, догон GET …/jobs/{id} ──
-
-type LaunchPhase = 'run' | 'done' | 'cancel' | 'error' | 'lost';
-
-interface LaunchStatus {
-  phase: LaunchPhase;
-  variants: number;
-  charged: boolean | null;
-  error: string | null;
-  cost: EditCost | null;
-  createdAt: number | null;
-}
-
-function statusOf(job: ImageEditJob): LaunchStatus {
-  const base = { variants: job.variants.length, charged: job.charged ?? null, error: job.error ?? null, cost: job.cost ?? null, createdAt: Date.parse(job.createdAt) || null };
-  switch (job.status) {
-    case 'completed': return { ...base, phase: 'done' };
-    case 'cancelled': return { ...base, phase: 'cancel' };
-    case 'failed': return { ...base, phase: job.outcome === 'cancelled' ? 'cancel' : 'error' };
-    case 'interrupted': return { ...base, phase: 'lost' };
-    default: return { ...base, phase: 'run' };
-  }
-}
-
-function useLaunchStatus(projectId: string | null, jobId: string | null) {
-  const [status, setStatus] = useState<LaunchStatus | null>(null);
-  const api = useMemo(() => imageEditorApi(), []);
-  useEffect(() => {
-    if (!projectId || !jobId) return;
-    let alive = true;
-    const load = () => api.getJob(projectId, jobId)
-      .then(job => { if (alive) setStatus(statusOf(job)); })
-      // Задачи нет: бэкенд перезапускался, а задачи живут в памяти
-      .catch(() => { if (alive) setStatus(s => s ?? { phase: 'lost', variants: 0, charged: null, error: null, cost: null, createdAt: null }); });
-    void load();
-    const off = api.subscribe(e => {
-      if (e.jobId !== jobId) return;
-      if (e.type === 'image_edit_completed') {
-        setStatus(s => ({ ...(s ?? EMPTY_STATUS), phase: 'done', variants: e.variants.length, cost: e.cost ?? null }));
-      } else if (e.type === 'image_edit_failed') {
-        setStatus(s => ({ ...(s ?? EMPTY_STATUS), phase: e.outcome === 'cancelled' ? 'cancel' : 'error', charged: e.charged ?? null, error: e.error ?? null }));
-      }
-    });
-    const offRe = onReconnected(() => { void load(); });
-    return () => { alive = false; off(); offRe(); };
-  }, [api, projectId, jobId]);
-
-  const cancel = async () => {
-    if (!projectId || !jobId) return;
-    try {
-      const job = await api.cancelJob(projectId, jobId);
-      setStatus(statusOf(job));
-    } catch (e) {
-      showToast(`Не удалось отменить: ${(e as Error).message}`, '', 'error');
-    }
-  };
-  return { status, cancel };
-}
-
-const EMPTY_STATUS: LaunchStatus = { phase: 'run', variants: 0, charged: null, error: null, cost: null, createdAt: null };
-
-// Проценты от ожидаемой длительности: поставщики процентов не присылают
-function useProgress(running: boolean, startedAt: number | null, expectedSeconds: number | null): number {
-  const [mounted] = useState(() => Date.now());
-  const [now, setNow] = useState(mounted);
-  useEffect(() => {
-    if (!running) return;
-    const t = setInterval(() => setNow(Date.now()), 500);
-    return () => clearInterval(t);
-  }, [running]);
-  const expected = Math.max(5, expectedSeconds ?? 30) * 1000;
-  return Math.max(0, Math.min(95, ((now - (startedAt ?? mounted)) / expected) * 90));
-}
-
 // ── Общий вид ──
 
 function Card({ tone, children }: { tone?: 'ok' | 'off'; children: ReactNode }) {
@@ -226,12 +151,12 @@ export function ImageLaunchCard({ ctx }: { ctx: ChatItemToolCtx }) {
   const threads = useThreads(ctx.projectId, ctx.sessionId);
   const thread = threadId ? threads.threads.find(t => t.id === threadId) : undefined;
   const owned = !!result && !!thread && (!!launchOf(thread, result.jobId) || launchVersions(thread, result.jobId).length > 0);
-  const { status, cancel } = useLaunchStatus(ctx.projectId, owned ? null : result?.jobId ?? null);
+  const { status, cancel } = useJobStatus(ctx.projectId ?? '', owned || !ctx.projectId ? null : result?.jobId ?? null);
   const running = !!result && (!status || status.phase === 'run');
-  const progress = useProgress(running, status?.createdAt ?? null, result?.expectedSeconds ?? null);
+  const progress = useProgress(status, running, result?.expectedSeconds ?? null);
 
   const count = num(input.count) ?? num(result?.changes.find(c => c.field === 'count')?.to)
-    ?? (status?.phase === 'done' && status.variants ? status.variants : null);
+    ?? (status?.phase === 'done' && status.count ? status.count : null);
 
   if (owned) return null;
   if (item.result === undefined) {
@@ -272,7 +197,10 @@ export function ImageLaunchCard({ ctx }: { ctx: ChatItemToolCtx }) {
         </div>
       )}
       {phase === 'run' && (
-        <ProgressBar value={progress} transition="width .5s linear" />
+        <>
+          <ProgressBar value={progress.percent} transition="width .5s linear" />
+          {progress.queuePosition && <Note>В очереди {progress.queuePosition}</Note>}
+        </>
       )}
       {phase === 'cancel' && noMoney && <Note>{noMoney}</Note>}
       {phase === 'error' && <Note>{status?.error ?? 'Сервис рисования отказал.'}{status?.charged === false && !free ? ' Деньги не списаны.' : ''}</Note>}

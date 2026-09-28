@@ -150,9 +150,10 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
                 }
                 current = ticket;
                 tickets.Add(ticket);
-                progress.Report(new EditProgress(EditStage.Queued, submitted.QueuePosition));
+                var at = new EditProgress(EditStage.Queued, submitted.QueuePosition, i + 1, runs, submitted.EtaSeconds);
+                progress.Report(at);
 
-                var done = await WaitAsync(ticket, progress, token);
+                var done = await WaitAsync(ticket, at, progress, token);
                 current = null;
                 if (done.State == LocalImageState.Failed)
                 {
@@ -160,7 +161,7 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
                     return new ImageEditResult(EditOutcome.Failed, [], Free, false, RemoteId(tickets),
                         "Локальная модель не справилась: " + (done.Error ?? "ComfyUI завершил задачу ошибкой"));
                 }
-                progress.Report(new EditProgress(EditStage.Downloading));
+                progress.Report(at with { Stage = EditStage.Downloading, QueuePosition = null });
                 images.AddRange(done.Files.Select(f => new EditedImage(f.Bytes, f.ContentType)));
             }
         }
@@ -179,7 +180,9 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
             : new ImageEditResult(EditOutcome.Ok, images, Free, false, RemoteId(tickets), null);
     }
 
-    private async Task<LocalImagePoll> WaitAsync(string ticket, IProgress<EditProgress> progress, CancellationToken ct)
+    // at — отчёт о постановке прогона: его номер и ETA едут в каждой стадии ожидания
+    private async Task<LocalImagePoll> WaitAsync(string ticket, EditProgress at, IProgress<EditProgress> progress,
+        CancellationToken ct)
     {
         var stage = EditStage.Queued;
         int? position = null;
@@ -192,7 +195,7 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
             {
                 stage = next;
                 position = poll.QueuePosition;
-                progress.Report(new EditProgress(stage, stage == EditStage.Queued ? position : null));
+                progress.Report(at with { Stage = stage, QueuePosition = stage == EditStage.Queued ? position : null });
             }
             await Task.Delay(PollInterval, ct);
         }

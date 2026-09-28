@@ -49,6 +49,19 @@ public class ModuleEventSerializationTests : IDisposable
         json.GetProperty("initiator").GetString().Should().Be("agent", "enum уходит строкой, как у остальных событий");
     }
 
+    // Поля полосы прогресса — хвостом события, в camelCase
+    [Fact]
+    public void Событие_прогресса_несёт_прогон_и_прошедшее_время()
+    {
+        var json = Wire(new ImageEditProgressMessage("job-1", "p-1", EditStage.Running, null,
+            Run: 2, Runs: 3, EtaSeconds: 40, RunElapsedSeconds: 7));
+
+        json.GetProperty("run").GetInt32().Should().Be(2);
+        json.GetProperty("runs").GetInt32().Should().Be(3);
+        json.GetProperty("etaSeconds").GetInt32().Should().Be(40);
+        json.GetProperty("runElapsedSeconds").GetInt32().Should().Be(7);
+    }
+
     // Живая пара записи модуля (ADR-019 §2): data модуля уходит как есть, а не строкой JSON,
     // поле recordType не путается с type события протокола
     [Fact]

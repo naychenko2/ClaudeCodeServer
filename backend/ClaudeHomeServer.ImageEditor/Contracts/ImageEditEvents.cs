@@ -19,8 +19,10 @@ public static class ImageEditEventNames
 // ChatSessionId и Initiator в событиях задачи — те же, что в ImageEditJobDto: карточка запуска
 // агентом в ленте находит свою задачу. Хвостовые поля, старый фронт их не видит.
 
+// Run/Runs/EtaSeconds/RunElapsedSeconds — как в ImageEditJobDto: полоса прогресса
 public record ImageEditProgressMessage(string JobId, string ProjectId, EditStage Stage, int? QueuePosition,
-    string? ChatSessionId = null, ImageEditInitiator Initiator = ImageEditInitiator.Human, string? ThreadId = null)
+    string? ChatSessionId = null, ImageEditInitiator Initiator = ImageEditInitiator.Human, string? ThreadId = null,
+    int? Run = null, int? Runs = null, int? EtaSeconds = null, int? RunElapsedSeconds = null)
     : ServerMessage(ImageEditEventNames.Progress);
 
 // SizeNote — как в ImageEditJobDto: варианты не приведены к размеру исходника

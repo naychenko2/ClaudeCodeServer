@@ -230,6 +230,7 @@ public sealed class SkiaImageRaster : IImageRaster
         RotateOp r => throw new RasterFailure(RasterError.InvalidOp, $"Поворот только на 90, 180 или 270°, а не на {r.Degrees}"),
         FlipOp f => Flip(src, f.Axis),
         ResizeOp r => Resize(src, r),
+        PadOp p => Pad(src, p),
         _ => throw new RasterFailure(RasterError.InvalidOp, $"Неизвестная операция {op.GetType().Name}"),
     };
 
@@ -301,19 +302,58 @@ public sealed class SkiaImageRaster : IImageRaster
         }
     }
 
+    private static SKBitmap Pad(SKBitmap src, PadOp op)
+    {
+        if (op.Width > MaxSide || op.Height > MaxSide)
+            throw new RasterFailure(RasterError.InvalidOp, $"Холст {op.Width}×{op.Height} больше {MaxSide} px");
+        if (op.Width < src.Width || op.Height < src.Height)
+            throw new RasterFailure(RasterError.InvalidOp,
+                $"Холст {op.Width}×{op.Height} меньше картинки {src.Width}×{src.Height}");
+        var color = op.Color is null ? SKColors.Transparent : ParseColor(op.Color);
+        var left = op.Left ?? (op.Width - src.Width) / 2;
+        var top = op.Top ?? (op.Height - src.Height) / 2;
+        if (left < 0 || top < 0 || left + src.Width > op.Width || top + src.Height > op.Height)
+            throw new RasterFailure(RasterError.InvalidOp, "Картинка не помещается на холст в заданной точке");
+
+        // У непрозрачного исходника поля всё равно могут быть прозрачными — холсту нужна альфа
+        var info = src.Info.WithSize(op.Width, op.Height);
+        if (color.Alpha != 255 && info.AlphaType == SKAlphaType.Opaque) info = info.WithAlphaType(SKAlphaType.Premul);
+        var dst = new SKBitmap(info);
+        using var canvas = new SKCanvas(dst);
+        canvas.Clear(color);
+        using var image = SKImage.FromBitmap(src);
+        canvas.DrawImage(image, left, top, Nearest);
+        canvas.Flush();
+        return dst;
+    }
+
+    // «#RRGGBB» или «#RRGGBBAA», как в CSS (у SKColor.Parse альфа первой — не годится)
+    private static SKColor ParseColor(string value)
+    {
+        var hex = value.Trim().TrimStart('#');
+        if (hex.Length is not (6 or 8) || !uint.TryParse(hex, System.Globalization.NumberStyles.HexNumber,
+                System.Globalization.CultureInfo.InvariantCulture, out var v))
+            throw new RasterFailure(RasterError.InvalidOp, $"Цвет полей «{value}» — не #RRGGBB и не #RRGGBBAA");
+        if (hex.Length == 6) v = (v << 8) | 0xFF;
+        return new SKColor((byte)(v >> 24), (byte)(v >> 16), (byte)(v >> 8), (byte)v);
+    }
+
+    // Половина — от нуля, как Math.round в JS у положительных: фронт считает размер тем же правилом
+    private static int RoundSide(double value) => (int)Math.Round(value, MidpointRounding.AwayFromZero);
+
     private static (int W, int H) TargetSize(int w, int h, ResizeOp op)
     {
         if (op.Percent is { } p)
         {
             if (!double.IsFinite(p) || p <= 0)
                 throw new RasterFailure(RasterError.InvalidOp, "Процент ресайза должен быть больше нуля");
-            return ((int)Math.Round(w * p / 100d), (int)Math.Round(h * p / 100d));
+            return (RoundSide(w * p / 100d), RoundSide(h * p / 100d));
         }
         return (op.Width, op.Height) switch
         {
             ({ } tw, { } th) => (tw, th),
-            ({ } tw, null) => (tw, op.LockAspect ? (int)Math.Round((double)h * tw / w) : h),
-            (null, { } th) => (op.LockAspect ? (int)Math.Round((double)w * th / h) : w, th),
+            ({ } tw, null) => (tw, op.LockAspect ? RoundSide((double)h * tw / w) : h),
+            (null, { } th) => (op.LockAspect ? RoundSide((double)w * th / h) : w, th),
             _ => throw new RasterFailure(RasterError.InvalidOp, "У ресайза нет ни размеров, ни процента"),
         };
     }

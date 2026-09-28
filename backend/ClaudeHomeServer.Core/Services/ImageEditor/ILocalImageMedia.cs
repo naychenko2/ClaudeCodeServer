@@ -36,7 +36,9 @@ public enum LocalImageOp { Generate, Edit, FaceDetail }
 // образцы (тогда граф правки на пустом холсте размера Aspect); у FaceDetail — ровно одна.
 // Aspect — ключ таблицы размеров Qwen-Image («1:1», «16:9» …); null — по холсту или 1:1.
 // EraseMask — только у Edit: белое на маске закрашивается на холсте нейтральным серым до
-// модели («удали» кистью). Маску-образец Qwen-Image не понимает, а серую заливку — да
+// модели («удали» кистью). Маску-образец Qwen-Image не понимает, а серую заливку — да.
+// Pad — только у Edit: холст расширяется полями нейтрального серого до модели («Дорисовать за
+// края»), результат — в пропорции расширенного холста
 public sealed record LocalImageRequest(
     LocalImageOp Op,
     string Prompt,
@@ -44,7 +46,11 @@ public sealed record LocalImageRequest(
     string? Aspect,
     int Count,
     long? Seed = null,
-    byte[]? EraseMask = null);
+    byte[]? EraseMask = null,
+    LocalImagePad? Pad = null);
+
+// Поля в пикселях холста по сторонам
+public sealed record LocalImagePad(int Left, int Top, int Right, int Bottom);
 
 // Busy — очередь GPU занята или ComfyUI не ответил: это «попробуй позже», а не ошибка запроса
 public sealed record LocalImageSubmitted(string? Ticket, int? QueuePosition, int? EtaSeconds, string? Error, bool Busy = false)

@@ -236,6 +236,76 @@ public class SkiaImageRasterTests
     }
 
     [Fact]
+    public void Ресайз_округляет_половину_от_нуля_как_JS()
+    {
+        // 2×5 до ширины 1 → высота 2,5; банковское округление дало бы 2
+        var tall = Png(Solid(2, 5, SKColors.Gray));
+        var byWidth = _raster.Apply(tall, [new ResizeOp(Width: 1)]);
+        (byWidth.Image!.Width, byWidth.Image.Height).Should().Be((1, 3));
+
+        var byHeight = _raster.Apply(Png(Solid(5, 2, SKColors.Gray)), [new ResizeOp(Height: 1)]);
+        (byHeight.Image!.Width, byHeight.Image.Height).Should().Be((3, 1));
+
+        var byPercent = _raster.Apply(Png(Solid(5, 5, SKColors.Gray)), [new ResizeOp(Percent: 50)]);
+        (byPercent.Image!.Width, byPercent.Image.Height).Should().Be((3, 3));
+    }
+
+    [Fact]
+    public void Поля_холст_нужного_размера_картинка_по_центру_фон_прозрачный_у_PNG()
+    {
+        // Непрозрачный JPEG 20×10 на холст 40×30 в PNG: поля обязаны стать прозрачными
+        var source = Jpeg(Solid(20, 10, SKColors.Red), quality: 100);
+
+        var padded = _raster.Apply(source, [new PadOp(40, 30)], new ImageEncodeSpec(ImageEncodeFormat.Png));
+
+        padded.Ok.Should().BeTrue(padded.Message);
+        (padded.Image!.Width, padded.Image.Height).Should().Be((40, 30));
+        using var b = SKBitmap.Decode(padded.Image.Bytes);
+        // Картинка занимает x 10..29, y 10..19
+        IsNear(b.GetPixel(10, 10), SKColors.Red).Should().BeTrue();
+        IsNear(b.GetPixel(29, 19), SKColors.Red).Should().BeTrue();
+        b.GetPixel(9, 15).Alpha.Should().Be(0, "слева от картинки — поле");
+        b.GetPixel(30, 15).Alpha.Should().Be(0, "справа от картинки — поле");
+        b.GetPixel(20, 9).Alpha.Should().Be(0, "над картинкой — поле");
+        b.GetPixel(20, 20).Alpha.Should().Be(0, "под картинкой — поле");
+    }
+
+    [Fact]
+    public void Поля_у_JPEG_белые_а_заданный_цвет_и_точка_соблюдаются()
+    {
+        var source = Png(Solid(20, 10, SKColors.Red));
+
+        var jpeg = _raster.Apply(source, [new PadOp(40, 30)], new ImageEncodeSpec(ImageEncodeFormat.Jpeg, 100));
+        jpeg.Ok.Should().BeTrue(jpeg.Message);
+        using (var b = SKBitmap.Decode(jpeg.Image!.Bytes))
+        {
+            IsNear(b.GetPixel(2, 2), SKColors.White, 8).Should().BeTrue("у JPEG поля белые");
+            IsNear(b.GetPixel(20, 15), SKColors.Red).Should().BeTrue();
+        }
+
+        var colored = _raster.Apply(source, [new PadOp(40, 30, "#0000FF", Left: 0, Top: 20)]);
+        using (var b = SKBitmap.Decode(colored.Image!.Bytes))
+        {
+            IsNear(b.GetPixel(5, 25), SKColors.Red).Should().BeTrue("картинка в левом нижнем углу");
+            b.GetPixel(30, 5).Should().Be(SKColors.Blue);
+        }
+
+        _raster.Apply(source, [new PadOp(10, 30)]).Error.Should().Be(RasterError.InvalidOp, "холст уже картинки");
+        _raster.Apply(source, [new PadOp(40, 30, "синий")]).Error.Should().Be(RasterError.InvalidOp);
+        _raster.Apply(source, [new PadOp(40, 30, Left: 25)]).Error.Should().Be(RasterError.InvalidOp);
+    }
+
+    [Fact]
+    public void Поля_приходят_из_JSON_по_дискриминатору_pad()
+    {
+        var ops = System.Text.Json.JsonSerializer.Deserialize<List<ImageTransformOp>>(
+            """[{"type":"pad","width":1920,"height":1080,"color":"#FFFFFF"}]""",
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+
+        ops.Should().ContainSingle().Which.Should().Be(new PadOp(1920, 1080, "#FFFFFF"));
+    }
+
+    [Fact]
     public void Обрезка_поворот_отражение_цепочкой()
     {
         // 40×20: левая половина красная, правая синяя

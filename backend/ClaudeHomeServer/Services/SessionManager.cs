@@ -106,6 +106,10 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // systemDirective в идущий процесс слать нельзя) — она уезжает префиксом ближайшего
         // хода, см. BuildCliTurnText. null — пометки нет либо она уже уехала.
         public volatile Llm.SubagentRunPassport? TruncatedBgNote;
+        // Прошлый ход остановил человек («Стоп» в чате или в трее рук): пометка едет префиксом
+        // ближайшего хода (BuildCliTurnText). Транскрипт CLI убитого хода обрывается молча, и
+        // без неё модель принимает обрыв за сбой и доделывает прерванное. Одноразовая.
+        public volatile bool UserStopNote;
         // Сколько добиваний подряд отправлено ЗА ОДНОГО агента (потолок — MaxSubagentNudges).
         // Обнуляется штатным отчётом ТОГО ЖЕ агента и любым ходом человека: две попытки — на серию.
         public int SubagentNudges;
@@ -4498,6 +4502,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // Превью чата для карточки списка: первые 100 символов сообщения
     internal static string ChatPreview(string text) => text.Length > 100 ? text[..100] + "…" : text;
 
+    // Сигнал модели после «Стоп» человека — общий для кнопки в чате и в трее рук
+    internal const string UserStopNoteText =
+        "[Ход остановлен человеком (кнопка «Стоп»). Прерванное молча не доделывай: продолжай его, " +
+        "только если об этом просят ниже.]";
+
     // Текст хода для CLI: исходное сообщение + обвязки.
     // Протокол цикла «до готово» — пока Session.WorkLoop активен. Своей вставки ultrawork
     // больше нет: слова ultrawork/ulw ловит keyword-detector плагина oh-my-claudecode.
@@ -4513,6 +4522,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         {
             entry.TruncatedBgNote = null;
             result = SubagentPrompts.TruncatedBgAgent(cutBgAgent) + "\n\n" + result;
+        }
+
+        if (entry.UserStopNote)
+        {
+            entry.UserStopNote = false;
+            result = UserStopNoteText + "\n\n" + result;
         }
 
         if (entry.Info.WorkLoop is { } loop)
@@ -6236,7 +6251,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             // Отметка в историю — только когда было что останавливать (чат занят, в том числе
             // зависший: человек нажал «Стоп» и видит отметку в живой ленте)
             if (byUser && entry.Info.Status is SessionStatus.Working or SessionStatus.Waiting)
+            {
                 RecordUserInterrupt(sessionId, entry);
+                // Пометка модели — только когда прерывается живой ход: у зависшего чата ход уже
+                // мёртв, и «Стоп» лишь реанимирует его
+                if (!stuck) entry.UserStopNote = true;
+            }
             // «Стоп» замораживает очередь (не чистит): сообщения остаются ждать возобновления,
             // а последнее пользовательское возвращается в композер (composer_restore).
             // При реанимации не замораживаем: размораживающего конца хода уже не будет,

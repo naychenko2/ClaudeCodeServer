@@ -23,12 +23,12 @@ public class HandsTurnExecutorTests : IDisposable
 
     public void Dispose() => _fx.Dispose();
 
-    private static TurnHarness NewHarness(HandsRuntime hands)
+    private static TurnHarness NewHarness(HandsRuntime hands, TimeSpan? drainTimeout = null)
     {
         Skip.If(OperatingSystem.IsWindows(), "ветка Unix: группа процессов через setsid");
         Skip.If(UnixGroupProcess.FindSetsid() is null, "нет setsid на этой машине");
         var cliDir = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "fake-cli-" + Guid.NewGuid().ToString("N")[..8]));
-        return new TurnHarness(FakeUnixCli.Write(cliDir.FullName), hands: hands);
+        return new TurnHarness(FakeUnixCli.Write(cliDir.FullName), hands: hands, drainTimeout: drainTimeout);
     }
 
     private static DeviceExecSpawn HandsSpawn(TurnHarness h, bool vision = false) =>
@@ -62,6 +62,8 @@ public class HandsTurnExecutorTests : IDisposable
         var frames = await h.Server.ReadUntilExitAsync(Wait);
         await h.Run!.WaitAsync(Wait);
         TurnHarness.ExitOf(frames).Signal.Should().Be("SIGKILL");
+        TurnHarness.ExitOf(frames).StoppedBy.Should().Be(HandsEndReason.StoppedFromTray,
+            "причина едет в кадре конца процесса — сервер узнаёт о «Стопе» раньше, чем о смерти CLI");
         await WaitDeadAsync(bridge);
         var stopped = await sink.WaitAsync(r => r.State == HandsChatStates.Stopped, Wait);
         stopped.Should().Be(new DeviceHandsReport("turn-hands", HandsChatStates.Stopped, HandsEndReason.StoppedFromTray));
@@ -71,6 +73,41 @@ public class HandsTurnExecutorTests : IDisposable
         // Следующий ход снова может взять руки: «Стоп» гасит ход, а не руки машины навсегда
         using var next = hands.MachineLock.TryAcquire();
         next.Should().NotBeNull();
+    }
+
+    [SkippableFact]
+    public async Task Стоп_из_трея_без_связи_гасит_руки_сразу_а_причина_доходит_после_возврата_связи()
+    {
+        _fx.WithBridge();
+        var sink = new RecordingSink();
+        var hands = _fx.Runtime(sink: sink);
+        // Обычный конец хода ждёт подтверждения 300 мс — «Стоп» обязан ждать связи дольше
+        await using var h = NewHarness(hands, drainTimeout: TimeSpan.FromMilliseconds(300));
+
+        await h.StartAsync(HandsSpawn(h), turnId: "turn-offline");
+        await h.WaitStdoutAsync("\"init\"", new StringBuilder(), Wait);
+        var bridge = h.ReadPid("grandchild.pid");
+        await sink.WaitAsync(r => r.State == HandsChatStates.Active, Wait);
+
+        // Сервер пропал, «Стоп» нажат без связи: руки гаснут на машине, не дожидаясь сервера
+        h.Server.ReconnectGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        h.Server.Break();
+        hands.Registry.Stop(null, HandsEndReason.StoppedFromTray).Should().Be(1);
+        await WaitDeadAsync(bridge);
+        await sink.WaitAsync(r => r.State == HandsChatStates.Stopped, Wait);
+        hands.Registry.Active.Should().BeEmpty("трей не показывает руки занятыми, пока агент ждёт сервер");
+        using (var free = hands.MachineLock.TryAcquire())
+            free.Should().NotBeNull("руки машины отпущены сразу, а не по подтверждению сервера");
+
+        // Связи нет дольше обычного ожидания подтверждения — кадр конца хода не брошен
+        await Task.Delay(TimeSpan.FromMilliseconds(1500));
+        h.Run!.IsCompleted.Should().BeFalse("ход, погашенный человеком, ждёт связи, чтобы донести причину");
+
+        h.Server.ReconnectGate.SetResult();
+        var frames = await h.Server.ReadUntilExitAsync(Wait);
+        await h.Run!.WaitAsync(Wait);
+        TurnHarness.ExitOf(frames).StoppedBy.Should().Be(HandsEndReason.StoppedFromTray,
+            "по возврату связи сервер узнаёт, что ход остановил человек, — и не уводит его в фолбэк");
     }
 
     [SkippableFact]

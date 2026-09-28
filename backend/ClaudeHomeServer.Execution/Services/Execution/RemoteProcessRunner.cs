@@ -64,9 +64,10 @@ public sealed class RemoteProcessRunner : IProcessLauncher
     private readonly string _deviceId;
     private readonly string _relayScript;
     private readonly string _nodePath;
+    private readonly IHumanTurnStop? _humanStop;
 
     public RemoteProcessRunner(IDeviceExecChannel channel, IDeviceTurnGateway gateway, string ownerId, string deviceId,
-        string? relayScriptPath = null, string? nodePath = null)
+        string? relayScriptPath = null, string? nodePath = null, IHumanTurnStop? humanStop = null)
     {
         _channel = channel;
         _gateway = gateway;
@@ -74,6 +75,7 @@ public sealed class RemoteProcessRunner : IProcessLauncher
         _deviceId = deviceId;
         _relayScript = relayScriptPath ?? Path.Combine(AppContext.BaseDirectory, "exec-relay.mjs");
         _nodePath = nodePath ?? ResolveNode();
+        _humanStop = humanStop;
     }
 
     public string DeviceId => _deviceId;
@@ -127,7 +129,7 @@ public sealed class RemoteProcessRunner : IProcessLauncher
             // Отказ агента по кадру spawn (папка вне разрешённых корней, нет копии CLI) — тоже
             // DeviceExecRefusedException с его причиной: иначе человек увидит «процесс упал»
             stream = AwaitAgentVerdictAsync(stream).GetAwaiter().GetResult();
-            var exec = RemoteExec.Launch(ExecKey(turnId), turnId, stream, spec, _nodePath, _relayScript);
+            var exec = RemoteExec.Launch(ExecKey(turnId), turnId, stream, spec, _nodePath, _relayScript, _humanStop);
             Execs[exec.Key] = exec;
             exec.Run(() =>
             {
@@ -371,6 +373,8 @@ public sealed class RemoteProcessRunner : IProcessLauncher
         private readonly IDeviceExecStream _stream;
         private readonly TcpListener _listener;
         private readonly byte[] _relayKey;
+        private readonly string? _sessionId;
+        private readonly IHumanTurnStop? _humanStop;
         private int _killSent;
         private volatile bool _exited;
 
@@ -378,8 +382,11 @@ public sealed class RemoteProcessRunner : IProcessLauncher
         public string TurnId { get; }
         public Process Relay { get; }
 
-        private RemoteExec(string key, string turnId, IDeviceExecStream stream, TcpListener listener, byte[] relayKey, Process relay)
+        private RemoteExec(string key, string turnId, IDeviceExecStream stream, TcpListener listener, byte[] relayKey, Process relay,
+            string? sessionId, IHumanTurnStop? humanStop)
         {
+            _sessionId = sessionId;
+            _humanStop = humanStop;
             Key = key;
             TurnId = turnId;
             _stream = stream;
@@ -389,7 +396,7 @@ public sealed class RemoteProcessRunner : IProcessLauncher
         }
 
         public static RemoteExec Launch(string key, string turnId, IDeviceExecStream stream, ProcessSpec spec,
-            string nodePath, string relayScript)
+            string nodePath, string relayScript, IHumanTurnStop? humanStop)
         {
             if (!File.Exists(relayScript))
                 throw new InvalidOperationException($"Не найден ретранслятор удалённого исполнения: {relayScript}");
@@ -429,7 +436,8 @@ public sealed class RemoteProcessRunner : IProcessLauncher
                 var relay = new Process { StartInfo = psi, EnableRaisingEvents = spec.EnableRaisingEvents };
                 if (!relay.Start())
                     throw new InvalidOperationException("Не удалось запустить ретранслятор удалённого исполнения");
-                return new RemoteExec(key, turnId, stream, listener, Encoding.ASCII.GetBytes(relayKey), relay);
+                return new RemoteExec(key, turnId, stream, listener, Encoding.ASCII.GetBytes(relayKey), relay,
+                    spec.SessionId, humanStop);
             }
             catch
             {
@@ -528,6 +536,7 @@ public sealed class RemoteProcessRunner : IProcessLauncher
                             break;
                         case DeviceExecFrameChannel.Exit:
                             _exited = true;
+                            NoteHumanStop(frame);
                             await net.WriteAsync(DeviceExecFrames.Encode(frame.Channel, 0, frame.Payload.Span), ct);
                             return;
                     }
@@ -540,6 +549,24 @@ public sealed class RemoteProcessRunner : IProcessLauncher
             {
                 // Конец вывода: ретранслятор допишет своё и выйдет с полученным кодом
                 try { client.Client.Shutdown(SocketShutdown.Send); } catch { }
+            }
+        }
+
+        // «Стоп» человека на устройстве: прерываем ход тем же путём, что веб-«Стоп», и строго
+        // ДО того, как код выхода уйдёт ретранслятору, — иначе ClaudeSession увидит смерть CLI
+        // раньше прерывания, и фолбэк примет её за отказ провайдера (обрыв → Unreachable →
+        // следующая модель цепочки). Чат берём из spec сервера, а не из кадра устройства.
+        private void NoteHumanStop(DeviceExecFrame frame)
+        {
+            if (_humanStop is null || string.IsNullOrEmpty(_sessionId)) return;
+            try
+            {
+                var exit = DeviceExecJson.Deserialize<DeviceExecExit>(frame.Payload.Span);
+                if (exit?.StoppedBy == HandsEndReason.StoppedFromTray) _humanStop.StoppedByHuman(_sessionId);
+            }
+            catch (Exception e)
+            {
+                Console.Error.WriteLine($"[RemoteProcessRunner] Остановка хода {TurnId} человеком не доставлена: {e.Message}");
             }
         }
 

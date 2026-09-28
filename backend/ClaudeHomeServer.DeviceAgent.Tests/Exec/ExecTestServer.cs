@@ -30,6 +30,9 @@ internal sealed class ExecTestServer : IExecSocketConnector, IAsyncDisposable
     /// <summary>Сервер «забыл» исполнение: переподключение — отказ (как 404).</summary>
     public bool RefuseReconnect { get; set; }
 
+    /// <summary>Сервер недоступен: переподключение ждёт, пока ворота не откроют.</summary>
+    public TaskCompletionSource? ReconnectGate { get; set; }
+
     /// <summary>Подтверждения агента не доходят: неподтверждённое уйдёт повторно.</summary>
     public bool IgnoreAcks { get; set; }
 
@@ -44,6 +47,7 @@ internal sealed class ExecTestServer : IExecSocketConnector, IAsyncDisposable
     public async Task<WebSocket> ConnectAsync(string execId, CancellationToken ct)
     {
         if (Connections > 0 && RefuseReconnect) throw new ExecLinkRefusedException("исполнения больше нет (404)");
+        if (Connections > 0 && ReconnectGate is { } gate) await gate.Task.WaitAsync(ct);
 
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();

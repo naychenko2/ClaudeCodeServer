@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Models;
@@ -39,6 +40,8 @@ public class ImageThreadVersionsTests : IDisposable
     private readonly RecordingBroadcaster _broadcaster = new();
     private readonly MemorySpendStore _spend = new();
     private readonly List<ImageEditJobService> _services = [];
+    // Задачи, по которым исполнитель отработал Finished после слушателя нитей: jobId → сигнал
+    private readonly ConcurrentDictionary<string, TaskCompletionSource> _finished = new();
 
     public ImageThreadVersionsTests()
     {
@@ -319,7 +322,7 @@ public class ImageThreadVersionsTests : IDisposable
     }
 
     private (ImageEditorToolset Toolset, ImageThreadService Threads, ImageEditJobService Jobs, ImageEditSteps Steps) Agent(
-        IImageEditor? editor = null)
+        IImageEditor? editor = null, bool finishBeforeLaunch = false)
     {
         editor ??= new VariantsEditor();
         var jobs = NewJobs(editor);
@@ -332,8 +335,15 @@ public class ImageThreadVersionsTests : IDisposable
         projects.Setup(p => p.GetById(ProjectId)).Returns(new Project { Id = ProjectId, OwnerId = Owner, RootPath = _root });
         var threads = new ImageThreadService(_store, NullLogger<ImageThreadService>.Instance, directory.Object, _feed, _broadcaster, steps);
         threads.Watch(jobs);
+        // Слушатели Finished зовутся по очереди: этот — после нитей, их запись и рассылка уже прошли
+        jobs.Finished += (_, job) =>
+        {
+            FinishedSignal(job.JobId).TrySetResult();
+            return Task.CompletedTask;
+        };
         IImageEditor[] editors = [editor];
-        var launcher = new ImageEditLaunchAssembler(editors, jobs, raster, threads, steps);
+        IImageEditJobs launchJobs = finishBeforeLaunch ? new FinishFirstJobs(jobs, id => FinishedSignal(id).Task) : jobs;
+        var launcher = new ImageEditLaunchAssembler(editors, launchJobs, raster, threads, steps);
         var accessor = new Mock<IMcpSessionAccessor>();
         accessor.Setup(a => a.GetOwned(Chat, Owner)).Returns(session);
         var flags = new Mock<IFeatureFlagGate>();
@@ -359,16 +369,17 @@ public class ImageThreadVersionsTests : IDisposable
         return JsonNode.Parse(result.Text)!["jobId"]!.GetValue<string>();
     }
 
-    // Варианты становятся версиями по событию исполнителя — ждём, пока запуск закроется
+    private TaskCompletionSource FinishedSignal(string jobId) =>
+        _finished.GetOrAdd(jobId, _ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+
+    // Варианты становятся версиями по событию исполнителя — ждём его. Если задача кончилась раньше,
+    // чем запуск лёг в нить, финал догнал сборщик запуска ещё до ответа image_generate
     private async Task<ImageThread> Finished(string threadId, string jobId)
     {
-        for (var i = 0; i < 500; i++)
-        {
-            var thread = Thread(threadId);
-            if (thread.Launches.Single(l => l.JobId == jobId).Status != ImageThreadLaunchStatus.Running) return thread;
-            await Task.Delay(10);
-        }
-        throw new TimeoutException("запуск не закрылся");
+        await FinishedSignal(jobId).Task.WaitAsync(TimeSpan.FromSeconds(30));
+        var thread = Thread(threadId);
+        thread.Launches.Single(l => l.JobId == jobId).Status.Should().NotBe(ImageThreadLaunchStatus.Running, "запуск закрыт");
+        return thread;
     }
 
     [Fact]
@@ -405,6 +416,22 @@ public class ImageThreadVersionsTests : IDisposable
             && e.Text.StartsWith("Готово «синий фон» в картинку images/hero.png: версии 1–3"));
         _broadcaster.ToOwnerCalls.Select(c => c.Message).OfType<ImageThreadChangedMessage>()
             .Should().Contain(m => m.State.Threads.Single().Versions.Count == 4);
+    }
+
+    // Быстрый поставщик кончил задачу раньше, чем запуск лёг в нить: Finished не нашёл запуска, финал
+    // догоняет сборщик запуска — иначе запуск навсегда оставался бы «Рисуем…»
+    [Fact]
+    public async Task Задача_кончилась_раньше_записи_запуска_в_нить_и_запуск_всё_равно_закрыт_версиями()
+    {
+        var (toolset, _, _, _) = Agent(finishBeforeLaunch: true);
+        var id = Opened();
+
+        var jobId = await Generate(toolset, id, 2);
+
+        var thread = Thread(id);
+        thread.Launches.Single(l => l.JobId == jobId).Status.Should().Be(ImageThreadLaunchStatus.Done);
+        thread.Versions.Where(v => !v.IsOrigin).Select(v => v.Variant).Should().Equal(1, 2);
+        _store.Get(Owner, Chat).Events.Should().ContainSingle(e => e.Kind == ImageThreadEventKinds.Versions);
     }
 
     [Fact]
@@ -574,6 +601,30 @@ public class ImageThreadVersionsTests : IDisposable
         }
 
         public Task<bool> CancelRemoteAsync(string remoteId, CancellationToken ct) => Task.FromResult(false);
+    }
+
+    // Исполнитель, чей запуск возвращается только после Finished: задача гарантированно кончилась
+    // раньше, чем сборщик запуска запишет её в нить
+    private sealed class FinishFirstJobs(ImageEditJobService inner, Func<string, Task> finished) : IImageEditJobs
+    {
+        public Task<ImageEditCallResult<ImageEditQuoteDto>> QuoteAsync(string ownerId, string projectId,
+            ImageEditQuoteRequest request, CancellationToken ct) => inner.QuoteAsync(ownerId, projectId, request, ct);
+
+        public async Task<ImageEditCallResult<ImageEditJobCreatedDto>> StartAsync(string ownerId, string projectId,
+            ImageEditJobInput input, CancellationToken ct)
+        {
+            var started = await inner.StartAsync(ownerId, projectId, input, ct);
+            if (started.Value is { } created) await finished(created.JobId).WaitAsync(TimeSpan.FromSeconds(30), ct);
+            return started;
+        }
+
+        public ImageEditJobDto? Get(string ownerId, string projectId, string jobId) => inner.Get(ownerId, projectId, jobId);
+
+        public Task<ImageEditJobDto?> CancelAsync(string ownerId, string projectId, string jobId, CancellationToken ct) =>
+            inner.CancelAsync(ownerId, projectId, jobId, ct);
+
+        public EditedImage? OpenVariant(string ownerId, string projectId, string jobId, int variant) =>
+            inner.OpenVariant(ownerId, projectId, jobId, variant);
     }
 
     // Поставщик, который сразу отдаёт столько настоящих PNG, сколько вариантов просили

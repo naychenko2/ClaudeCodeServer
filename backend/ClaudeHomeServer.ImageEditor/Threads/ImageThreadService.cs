@@ -51,6 +51,11 @@ public sealed class ImageThreadService(
     // Сколько раз агент перечитывает ревизию, если человек записал своё между чтением и записью
     private const int AgentAttempts = 3;
 
+    // Разбор вариантов в версии: событие Finished и догонка финала сборщиком запуска
+    // (ImageEditLaunchAssembler) могут прийти вместе — второй обязан увидеть уже закрытый запуск,
+    // иначе варианты легли бы лишними шагами рабочей папки
+    private readonly SemaphoreSlim _versionsGate = new(1, 1);
+
     public ImageThreadsState Get(string ownerId, string sessionId) => store.Get(ownerId, sessionId);
 
     // Чат этого проекта (проект уже свой — его проверил вызывающий): владение следует из проекта
@@ -284,10 +289,16 @@ public sealed class ImageThreadService(
         if (job is not { ThreadId: { } threadId, ChatSessionId: { } sessionId } || steps is null) return;
         try
         {
-            if (RunningLaunch(ownerId, sessionId, threadId, job) is not ({ } thread, { } launch)) return;
-            var taken = TakeVariants(ownerId, job, thread, launch);
-            if (taken.Count == 0) return;
-            var written = store.AddLaunchVersions(ownerId, sessionId, threadId, job.JobId, taken);
+            ImageThreadWrite written;
+            await _versionsGate.WaitAsync();
+            try
+            {
+                if (RunningLaunch(ownerId, sessionId, threadId, job) is not ({ } thread, { } launch)) return;
+                var taken = TakeVariants(ownerId, job, thread, launch);
+                if (taken.Count == 0) return;
+                written = store.AddLaunchVersions(ownerId, sessionId, threadId, job.JobId, taken);
+            }
+            finally { _versionsGate.Release(); }
             if (written.Status == ImageThreadWriteStatus.Ok)
                 await AfterAsync(ownerId, job.ProjectId, sessionId, written);
         }
@@ -308,20 +319,26 @@ public sealed class ImageThreadService(
         if (job is not { ThreadId: { } threadId, ChatSessionId: { } sessionId }) return;
         try
         {
-            if (RunningLaunch(ownerId, sessionId, threadId, job) is not ({ } thread, { } launch)) return;
-
-            var taken = steps is null ? [] : TakeVariants(ownerId, job, thread, launch);
-            var versions = thread.Versions.Count(v => v.JobId == job.JobId) + taken.Count;
-            var status = job.Status switch
+            ImageThreadWrite written;
+            await _versionsGate.WaitAsync();
+            try
             {
-                ImageEditJobStatus.Cancelled => ImageThreadLaunchStatus.Cancelled,
-                _ when versions == 0 => ImageThreadLaunchStatus.Failed,
-                _ => ImageThreadLaunchStatus.Done,
-            };
+                if (RunningLaunch(ownerId, sessionId, threadId, job) is not ({ } thread, { } launch)) return;
 
-            var written = store.FinishLaunch(ownerId, sessionId, threadId, job.JobId, status, taken,
-                (after, all) => new ImageThreadEvent(store.Now(), ImageThreadEventKinds.Versions,
-                    VersionsText(after, launch, all, job), threadId, job.JobId));
+                var taken = steps is null ? [] : TakeVariants(ownerId, job, thread, launch);
+                var versions = thread.Versions.Count(v => v.JobId == job.JobId) + taken.Count;
+                var status = job.Status switch
+                {
+                    ImageEditJobStatus.Cancelled => ImageThreadLaunchStatus.Cancelled,
+                    _ when versions == 0 => ImageThreadLaunchStatus.Failed,
+                    _ => ImageThreadLaunchStatus.Done,
+                };
+
+                written = store.FinishLaunch(ownerId, sessionId, threadId, job.JobId, status, taken,
+                    (after, all) => new ImageThreadEvent(store.Now(), ImageThreadEventKinds.Versions,
+                        VersionsText(after, launch, all, job), threadId, job.JobId));
+            }
+            finally { _versionsGate.Release(); }
             if (written.Status == ImageThreadWriteStatus.Ok)
                 await AfterAsync(ownerId, job.ProjectId, sessionId, written);
         }

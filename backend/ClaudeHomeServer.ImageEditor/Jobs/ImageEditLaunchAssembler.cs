@@ -37,8 +37,16 @@ public sealed class ImageEditLaunchAssembler(
 
         var started = await jobs!.StartAsync(ownerId, project.Id, input, ct);
         if (started.Value is { } created && input is { ChatSessionId: { } chatId, ThreadId: { } threadId } && threads is not null)
+        {
             await threads.OnLaunchedAsync(ownerId, project.Id, chatId, threadId, jobs.Get(ownerId, project.Id, created.JobId),
                 created.JobId, input.Prompt, input.Initiator, input.BaseVersionId, input.BaseStepId, ct);
+            // Быстрый поставщик мог закончить задачу раньше, чем запуск лёг в нить: Finished тогда не
+            // нашёл запуска, и карточка висела бы в «Рисуем…». Финал догоняется здесь; событие, пришедшее
+            // следом, увидит закрытый запуск и ничего не сделает
+            if (jobs.Get(ownerId, project.Id, created.JobId) is
+                { Status: ImageEditJobStatus.Completed or ImageEditJobStatus.Failed or ImageEditJobStatus.Cancelled } done)
+                await threads.OnJobFinishedAsync(ownerId, done);
+        }
         return started;
     }
 

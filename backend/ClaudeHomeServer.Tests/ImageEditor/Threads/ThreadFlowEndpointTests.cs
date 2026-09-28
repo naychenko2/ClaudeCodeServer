@@ -55,12 +55,19 @@ public class ThreadFlowEndpointTests : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    // Задачи в памяти: запоминают вход и отдают DTO с его чатом и нитью; у каждой вариант 1
+    // Задачи в памяти: запоминают вход и отдают DTO с его чатом и нитью; у каждой вариант 1. Задача
+    // идёт, пока тест не завершит её (Finish): иначе сборщик запуска догнал бы финал сразу
     private sealed class ThreadJobs : IImageEditJobs
     {
         public ImageEditJobInput? LastInput;
         public int Started;
         private readonly Dictionary<string, (string Owner, string Project, ImageEditJobInput Input)> _jobs = [];
+        private readonly HashSet<string> _finished = [];
+
+        public void Finish(string jobId)
+        {
+            lock (_jobs) _finished.Add(jobId);
+        }
 
         public Task<ImageEditCallResult<ImageEditQuoteDto>> QuoteAsync(
             string ownerId, string projectId, ImageEditQuoteRequest request, CancellationToken ct) =>
@@ -80,7 +87,8 @@ public class ThreadFlowEndpointTests : IDisposable
         {
             lock (_jobs)
                 return _jobs.TryGetValue(jobId, out var j) && j.Owner == ownerId && j.Project == projectId
-                    ? new ImageEditJobDto(jobId, projectId, ImageEditJobStatus.Completed, "fal", "m", [1], null,
+                    ? new ImageEditJobDto(jobId, projectId,
+                        _finished.Contains(jobId) ? ImageEditJobStatus.Completed : ImageEditJobStatus.Running, "fal", "m", [1], null,
                         EditOutcome.Ok, true, null, null, DateTime.UtcNow, j.Input.ChatSessionId, j.Input.Initiator,
                         Count: 1, ThreadId: j.Input.ThreadId)
                     : null;
@@ -148,9 +156,12 @@ public class ThreadFlowEndpointTests : IDisposable
     }
 
     // Исполнитель закончил задачу: варианты становятся версиями (так его событие зовёт сервис нитей)
-    private async Task FinishJob(string jobId) =>
+    private async Task FinishJob(string jobId)
+    {
+        _jobs.Finish(jobId);
         await _factory.Services.GetRequiredService<ImageThreadService>()
             .OnJobFinishedAsync(_ownerId, _jobs.Get(_ownerId, _projectId, jobId)!);
+    }
 
     [Fact]
     public async Task Взять_картинку_в_работу_кладёт_якорь_нити_в_ленту_один_раз()

@@ -6,7 +6,7 @@ import { defineConfig, globalIgnores } from 'eslint/config'
 import tseslint from 'typescript-eslint'
 import reactHooks from 'eslint-plugin-react-hooks'
 import reactRefresh from 'eslint-plugin-react-refresh'
-import { imageEditorImportGuard } from './eslint.config.js'
+import { designPlugin, imageEditorImportGuard } from './eslint.config.js'
 
 export default defineConfig([
   globalIgnores(['dist', 'dev-dist']),
@@ -20,6 +20,7 @@ export default defineConfig([
       '@typescript-eslint': tseslint.plugin,
       'react-hooks': reactHooks,
       'react-refresh': reactRefresh,
+      design: designPlugin,
     },
   },
   imageEditorImportGuard,

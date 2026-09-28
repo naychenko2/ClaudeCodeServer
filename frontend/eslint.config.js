@@ -41,10 +41,12 @@ export const RAW_COLOR_ALLOWED = [
 // Щиток дизайн-системы. Вынесен отдельно, потому что подключается дважды: здесь (в общий
 // линт) и в eslint.design.config.js — под `npm run lint:design`, который проверяет ТОЛЬКО
 // дизайн-правила и потому держится зелёным, в отличие от общего линта с его легаси-долгом.
+export const designPlugin = { rules: { 'no-raw-color': noRawColor } }
+
 export const designSystem = [
   {
     files: ['src/**/*.{ts,tsx}'],
-    plugins: { design: { rules: { 'no-raw-color': noRawColor } } },
+    plugins: { design: designPlugin },
     rules: { 'design/no-raw-color': 'error' },
   },
   {

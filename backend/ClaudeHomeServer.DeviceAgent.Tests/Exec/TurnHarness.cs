@@ -29,7 +29,7 @@ internal sealed class TurnHarness : IAsyncDisposable
     };
 
     public TurnHarness(string cliPath, string? leaseProblem = null, Func<TurnLaunch, TurnProcess>? launcher = null,
-        HandsRuntime? hands = null)
+        HandsRuntime? hands = null, TimeSpan? drainTimeout = null)
     {
         Root = Path.Combine(Path.GetTempPath(), "agent-turn-" + Guid.NewGuid().ToString("N")[..10]);
         WorkDir = Directory.CreateDirectory(Path.Combine(Root, "project")).FullName;
@@ -50,7 +50,7 @@ internal sealed class TurnHarness : IAsyncDisposable
             ConfigDirectory = Profile,
             SidecarUrl = () => SidecarUrl,
             InheritedEnvironment = () => inherited,
-            DrainTimeout = TimeSpan.FromSeconds(10),
+            DrainTimeout = drainTimeout ?? TimeSpan.FromSeconds(10),
             Launcher = launcher ?? TurnProcess.Start,
             // Разрешённый корень машины — сам каталог проекта
             PathPolicy = new AgentPathPolicy(new AgentSandbox.FixedRoots(WorkDir)),

@@ -67,8 +67,12 @@ public sealed record DeviceExecFile(string Id, string Name, string Content);
 /// Данные кадра <see cref="DeviceExecFrameChannel.Exit"/>: код выхода или сигнал.
 /// <see cref="Error"/> — причина, по которой ход не запустился на устройстве; <see cref="Refusal"/> —
 /// её машинный код, если сервер должен отличить отказ не по тексту (<see cref="HandsEndReason.Busy"/>).
+/// <see cref="StoppedBy"/> — <see cref="HandsEndReason"/>, если ход погашен на устройстве снаружи
+/// (например, «Стоп» в трее): едет в том же кадре, что и конец процесса, поэтому сервер узнаёт
+/// причину раньше, чем увидит смерть CLI, и не принимает остановку человеком за отказ провайдера.
 /// </summary>
-public sealed record DeviceExecExit(int? Code, string? Signal = null, string? Error = null, string? Refusal = null);
+public sealed record DeviceExecExit(int? Code, string? Signal = null, string? Error = null, string? Refusal = null,
+    string? StoppedBy = null);
 
 /// <summary>Что агент согласен запускать по команде сервера.</summary>
 public static class DeviceExecCli

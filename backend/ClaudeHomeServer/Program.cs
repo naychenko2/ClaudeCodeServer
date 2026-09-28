@@ -308,7 +308,11 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.ILauncherFacto
         sp.GetRequiredService<IUserStore>(),
         sp.GetRequiredService<ClaudeHomeServer.Services.Execution.SandboxManager>(),
         () => sp.GetService<ClaudeHomeServer.Services.Execution.IDeviceExecChannel>(),
-        () => sp.GetService<ClaudeHomeServer.Services.Execution.IDeviceTurnGateway>()));
+        () => sp.GetService<ClaudeHomeServer.Services.Execution.IDeviceTurnGateway>(),
+        () => sp.GetService<ClaudeHomeServer.Services.Execution.IHumanTurnStop>()));
+// «Стоп» из трея рук = прерывание хода человеком, тем же путём, что веб-«Стоп»
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IHumanTurnStop,
+    ClaudeHomeServer.Services.Composition.HumanTurnStop>();
 // Узкий шов пула preview-портов песочницы для вертикали ProjectServices
 // (Этап 5, волна C, шаг 2): DevServerService в отдельной сборке
 // получает только диапазон, всё остальное в SandboxManager остаётся

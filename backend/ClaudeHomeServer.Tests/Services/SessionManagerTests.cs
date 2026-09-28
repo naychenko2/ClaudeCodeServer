@@ -1761,6 +1761,37 @@ public class SessionManagerTests : IDisposable
         (await _sut.GetHistoryAsync(session.Id)).OfType<StoredInterruptedMessage>().Should().BeEmpty();
     }
 
+    // «Стоп» в чате и «Стоп» в трее рук — один исход: прерывание адаптера (фолбэк на нём
+    // запрещён), отметка в истории и пометка модели в начале следующего хода
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Стоп_ВЧатеИВТрееРук_ОдинИсход_ОтметкаИПометкаМодели(bool fromTray)
+    {
+        var (session, adapter) = await MkRunningTurnAsync("stop-note-" + fromTray);
+        string? sent = null;
+        adapter.Setup(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+                It.IsAny<int>(), It.IsAny<bool>()))
+            .Callback<string, IReadOnlyList<string>?, int, bool>((t, _, _, _) => sent = t)
+            .Returns(Task.CompletedTask);
+
+        if (fromTray) new ClaudeHomeServer.Services.Composition.HumanTurnStop(_sut).StoppedByHuman(session.Id);
+        else _sut.Interrupt(session.Id);
+
+        adapter.Verify(a => a.Interrupt(), Times.Once());
+        (await _sut.GetHistoryAsync(session.Id)).OfType<StoredInterruptedMessage>().Should().ContainSingle();
+
+        // Ход прерван — чат свободен, следующее сообщение человека уходит в CLI с пометкой
+        session.Status = SessionStatus.Active;
+        await _sut.SendMessageAsync(session.Id, "что дальше?", []);
+        sent.Should().StartWith(SessionManager.UserStopNoteText).And.EndWith("что дальше?");
+
+        // Пометка одноразовая
+        session.Status = SessionStatus.Active;
+        await _sut.SendMessageAsync(session.Id, "ещё", []);
+        sent.Should().Be("ещё");
+    }
+
     [Fact]
     public async Task PreemptForPending_ПишетОтметкуВИсторию()
     {

@@ -33,6 +33,14 @@ internal sealed record ExecOptions
     /// <summary>Сколько ждать подтверждения хвоста вывода после конца хода.</summary>
     public TimeSpan DrainTimeout { get; init; } = TimeSpan.FromSeconds(30);
 
+    /// <summary>
+    /// Сколько ждать подтверждения конца хода, погашенного человеком («Стоп» в трее). Причина
+    /// едет в кадре Exit, и потерять его нельзя: без неё сервер примет остановку за отказ
+    /// провайдера и уйдёт в фолбэк. Поэтому ждём весь потолок простоя связи, а не 30 с — «Стоп»
+    /// мог прийти, пока сервер недоступен.
+    /// </summary>
+    public TimeSpan StoppedDrainTimeout { get; init; } = DeviceExecProtocol.MaxOutage;
+
     /// <summary>Окружение агента — источник наследуемых по allow-list переменных.</summary>
     public Func<IReadOnlyDictionary<string, string>> InheritedEnvironment { get; init; } = CliEnvironment.CurrentProcess;
 
@@ -161,6 +169,22 @@ internal sealed class TurnExecutor
             Report(hands, new DeviceHandsReport(turnId, HandsChatStates.Active));
         }
 
+        // Руки отпускаются, как только дерево хода мертво, — не дожидаясь подтверждения конца
+        // вывода сервером: оно может ждать связи минутами, а трей и следующий ход — нет
+        var handsReleased = 0;
+        string? ReleaseHands()
+        {
+            if (hands is null) return null;
+            var reason = hands.Registry.StopReasonOf(turnId);
+            if (Interlocked.Exchange(ref handsReleased, 1) == 1) return reason;
+            handsRegistration!.Dispose();
+            setup.Hands!.Dispose();
+            Report(hands, reason is null
+                ? new DeviceHandsReport(turnId, HandsChatStates.Allowed)
+                : new DeviceHandsReport(turnId, HandsChatStates.Stopped, reason));
+            return reason;
+        }
+
         try
         {
             await link.SendAsync(DeviceExecFrameChannel.Info,
@@ -184,15 +208,19 @@ internal sealed class TurnExecutor
             // без этого чтение stdout не дождалось бы конца. Ход кончился — дерево тоже.
             process.KillTree();
             await Task.WhenAll(stdout, stderr);
+            var stoppedBy = ReleaseHands();
 
+            // Причина остановки едет в том же кадре, что и конец процесса: сервер узнаёт о «Стопе»
+            // человека раньше, чем увидит смерть CLI
             var exit = Volatile.Read(ref killed) == 1
-                ? new DeviceExecExit(process.ExitCode, "SIGKILL")
+                ? new DeviceExecExit(process.ExitCode, "SIGKILL", StoppedBy: stoppedBy)
                 : new DeviceExecExit(process.ExitCode);
             if (!link.Finished.IsCompleted)
             {
                 await link.SendAsync(DeviceExecFrameChannel.Exit, DeviceExecJson.Serialize(exit), CancellationToken.None);
-                if (!await link.DrainAsync(_options.DrainTimeout))
-                    _log.LogWarning("Ход {TurnId}: сервер не подтвердил конец вывода за {Timeout}", turnId, _options.DrainTimeout);
+                var drain = exit.StoppedBy is null ? _options.DrainTimeout : _options.StoppedDrainTimeout;
+                if (!await link.DrainAsync(drain))
+                    _log.LogWarning("Ход {TurnId}: сервер не подтвердил конец вывода за {Timeout}", turnId, drain);
             }
 
             _ = input;
@@ -206,14 +234,7 @@ internal sealed class TurnExecutor
         finally
         {
             process.KillTree();
-            if (hands is not null)
-            {
-                var stopReason = hands.Registry.StopReasonOf(turnId);
-                handsRegistration!.Dispose();
-                Report(hands, stopReason is null
-                    ? new DeviceHandsReport(turnId, HandsChatStates.Allowed)
-                    : new DeviceHandsReport(turnId, HandsChatStates.Stopped, stopReason));
-            }
+            ReleaseHands();
             _live.TryRemove(turnId, out _);
             // Убитый CLI не успел убрать свои файлы сессии в профиле — за него это делает агент
             if (Volatile.Read(ref killed) == 1) _janitor.CleanUp(process.Id);

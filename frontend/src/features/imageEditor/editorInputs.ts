@@ -1,9 +1,13 @@
 // Входы генерации из левой панели редактора v2: образцы с ролями, быстрые действия и
 // история шагов. Чистые функции — их держат тесты editorInputs.test.ts.
 
-import type {
-  ImageEditJobInput, ImageEditOp, ImageEditProjectReference, ImageEditUploadedReference, ImageTransformBase, ReferenceRole,
+import {
+  AUTO_MODEL,
+  type ImageEditCatalog, type ImageEditJobInput, type ImageEditModel, type ImageEditOp, type ImageEditPriceHint,
+  type ImageEditProjectReference, type ImageEditProvider, type ImageEditUploadedReference, type ImageTransformBase,
+  type ReferenceRole,
 } from './api';
+import { isFreeUnit, priceSum } from './format';
 
 // ── Образцы ──
 
@@ -104,23 +108,81 @@ export function quickPlan(action: QuickAction, ratio: OutpaintRatio): LaunchPlan
 // поставщика тут ни при чём, и вариант всегда один
 export const quickUsesOwnModel = (action: QuickAction) => action === 'enhanceFaces';
 
-// Почему быстрое действие недоступно (пусто — доступно). providerOps — что умеет
-// поставщик целиком (null — неизвестно), modelOps — явно выбранная модель
-export function quickBlockReason(
-  action: QuickAction, hasImage: boolean, hasMask: boolean, modelOps: ImageEditOp[] | null,
-  providerOps: ImageEditOp[] | null = null,
-): string {
-  const op = quickPlan(action, '1:1').op;
-  if (providerOps && !providerOps.includes(op)) {
-    return action === 'enhanceFaces'
-      ? 'Есть только у «Локальных моделей» — выберите их в «Чем рисовать»'
-      : 'Этот поставщик так не умеет — возьмите другого в «Чем рисовать»';
-  }
-  if (!hasImage) return 'Сначала загрузите картинку';
-  if (action === 'removeMarked' && !hasMask) return 'Сначала отметьте кистью, что убрать';
-  if (modelOps && !quickUsesOwnModel(action) && !modelOps.includes(op)) return 'Выбранная модель так не умеет — возьмите «Авто» или другую';
-  return '';
+// Чем запускать быстрое действие: поставщик, модель, умеющая операцию, и число вариантов
+// в её пределах. model = auto — каталог не знает возможностей моделей, решает сервер
+export interface QuickRoute {
+  provider: string;
+  providerLabel: string;
+  model: string;
+  count: number;
+  // Сколько образцов модель принимает; null — неизвестно
+  maxReferences: number | null;
+  priceHint: ImageEditPriceHint | null;
 }
+
+// route — чем запускать; нет его — reason, почему нельзя, и fallback — другой
+// поставщик, который умеет (только на этот запуск, выбор в полосе не меняется)
+export interface QuickAvailability { route: QuickRoute | null; reason: string; fallback: QuickRoute | null }
+
+// «Локальные модели не умеют дорисовку за края»
+const QUICK_SKILL: Record<QuickAction, string> = {
+  removeBackground: 'убирать фон',
+  upscale: 'улучшать качество',
+  removeMarked: 'стирать отмеченное',
+  outpaint: 'дорисовку за края',
+  enhanceFaces: 'улучшать лица',
+};
+
+const cannot = (label: string) => (/модели$/i.test(label) ? 'не умеют' : 'не умеет');
+
+// Модель поставщика под операцию: выбранная, если умеет, иначе первая умеющая (как «Авто»
+// внутри поставщика). Возможности хоть одной модели неизвестны — «Авто», решит сервер
+function pickQuickModel(p: ImageEditProvider, preferId: string, op: ImageEditOp): ImageEditModel | null {
+  const models = p.models.filter(m => m.id !== AUTO_MODEL);
+  const preferred = models.find(m => m.id === preferId && m.caps?.ops.includes(op));
+  if (preferred) return preferred;
+  if (models.some(m => !m.caps)) return { id: AUTO_MODEL, label: 'Авто' };
+  return models.find(m => m.caps!.ops.includes(op)) ?? null;
+}
+
+function toRoute(p: ImageEditProvider, m: ImageEditModel, action: QuickAction, count: number): QuickRoute {
+  const max = m.caps?.maxCount ?? count;
+  return {
+    provider: p.key, providerLabel: p.label, model: m.id,
+    count: quickUsesOwnModel(action) ? 1 : Math.max(1, Math.min(count, max)),
+    maxReferences: m.caps ? m.caps.maxReferences : null,
+    priceHint: m.priceHint ?? null,
+  };
+}
+
+// Правило доступности быстрого действия ДО запуска — по возможностям моделей каталога
+export function quickAvailability(
+  action: QuickAction, catalog: ImageEditCatalog | null, providerKey: string | null, modelId: string, count: number,
+): QuickAvailability {
+  const pv = catalog?.providers.find(p => p.key === providerKey) ?? null;
+  if (!catalog || !pv) return { route: null, reason: 'Рисовать нечем: поставщик картинок не настроен', fallback: null };
+  const op = quickPlan(action, '1:1').op;
+  const own = pickQuickModel(pv, modelId, op);
+  if (own) return { route: toRoute(pv, own, action, count), reason: '', fallback: null };
+  const reason = `${pv.label} ${cannot(pv.label)} ${QUICK_SKILL[action]}`;
+  for (const p of catalog.providers) {
+    if (p.key === pv.key) continue;
+    const m = pickQuickModel(p, AUTO_MODEL, op);
+    if (m) return { route: null, reason, fallback: toRoute(p, m, action, count) };
+  }
+  return { route: null, reason, fallback: null };
+}
+
+// «Взять fal · ≈ $0.04»: ориентир из каталога, до котировки — платный запуск не начинается
+export function fallbackLabel(r: QuickRoute): string {
+  const h = r.priceHint;
+  const price = !h ? null : isFreeUnit(h.unit) ? 'бесплатно' : priceSum(h.amount * r.count, h.unit, true);
+  return price ? `Взять ${r.providerLabel} · ${price}` : `Взять ${r.providerLabel}`;
+}
+
+// Действие, которого не умеет ни один поставщик каталога, не показывается вовсе
+export const quickOffered = (action: QuickAction, catalog: ImageEditCatalog | null) =>
+  !catalog || catalog.providers.some(p => pickQuickModel(p, AUTO_MODEL, quickPlan(action, '1:1').op));
 
 export function actionTitle(a: LaunchAction): string {
   if (a.kind === 'prompt') {

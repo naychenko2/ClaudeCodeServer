@@ -31,7 +31,7 @@ internal sealed class TrayApp : IDisposable
     private readonly PlateWindow _plate;
     private int _exitCode;
 
-    public TrayApp(string pipeName)
+    public TrayApp(string pipeName, TrayStateStore state)
     {
         _proc = WindowProc;
         var instance = GetModuleHandleW(null);
@@ -50,7 +50,7 @@ internal sealed class TrayApp : IDisposable
         var size = Math.Max(16, GetSystemMetrics(SM_CXSMICON));
         foreach (var kind in Enum.GetValues<TrayIconKind>()) _icons[kind] = IconFactory.Create(kind, size);
 
-        _plate = new PlateWindow(Stop);
+        _plate = new PlateWindow(Stop, state);
         _model.Changed += Refresh;
         _pipe = new TrayPipeClient(pipeName,
             () => Post(_model.OnConnected),

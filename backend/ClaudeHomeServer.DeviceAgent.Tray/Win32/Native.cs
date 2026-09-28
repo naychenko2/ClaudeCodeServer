@@ -17,7 +17,10 @@ internal static class Native
     public const uint WM_COMMAND = 0x0111;
     public const uint WM_TIMER = 0x0113;
     public const uint WM_MOUSEMOVE = 0x0200;
+    public const uint WM_LBUTTONDOWN = 0x0201;
     public const uint WM_LBUTTONUP = 0x0202;
+    public const uint WM_CAPTURECHANGED = 0x0215;
+    public const uint WM_MOUSELEAVE = 0x02A3;
     public const uint WM_RBUTTONUP = 0x0205;
     public const uint WM_DISPLAYCHANGE = 0x007E;
     public const uint WM_SETTINGCHANGE = 0x001A;
@@ -30,6 +33,7 @@ internal static class Native
     public const uint WS_POPUP = 0x80000000;
     public const uint WS_EX_TOPMOST = 0x00000008;
     public const uint WS_EX_TOOLWINDOW = 0x00000080;
+    public const uint WS_EX_LAYERED = 0x00080000;
     public const uint WS_EX_NOACTIVATE = 0x08000000;
 
     public const int SW_HIDE = 0;
@@ -37,6 +41,9 @@ internal static class Native
     public const int SW_SHOWNOACTIVATE = 4;
 
     public static readonly nint HWND_TOPMOST = -1;
+    public const uint SWP_NOSIZE = 0x0001;
+    public const uint SWP_NOMOVE = 0x0002;
+    public const uint SWP_NOZORDER = 0x0004;
     public const uint SWP_NOACTIVATE = 0x0010;
     public const uint SWP_SHOWWINDOW = 0x0040;
 
@@ -62,7 +69,10 @@ internal static class Native
     public const uint MB_TOPMOST = 0x40000;
     public const int IDOK = 1;
 
-    public const int SPI_GETWORKAREA = 0x0030;
+    public const uint LWA_ALPHA = 0x02;
+    public const uint TME_LEAVE = 0x02;
+    public const uint MONITORINFOF_PRIMARY = 0x01;
+    public const int MDT_EFFECTIVE_DPI = 0;
     public const int SM_CXSMICON = 49;
     public const int IDC_ARROW = 32512;
     public const int IDC_HAND = 32649;
@@ -114,6 +124,28 @@ internal static class Native
 
         public readonly bool Contains(int x, int y) => x >= Left && x < Right && y >= Top && y < Bottom;
     }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct MONITORINFOEX
+    {
+        public uint cbSize;
+        public RECT rcMonitor;
+        public RECT rcWork;
+        public uint dwFlags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+        public string szDevice;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct TRACKMOUSEEVENT
+    {
+        public uint cbSize;
+        public uint dwFlags;
+        public nint hwndTrack;
+        public uint dwHoverTime;
+    }
+
+    public delegate bool MonitorEnumProc(nint monitor, nint hdc, ref RECT rect, nint data);
 
     [StructLayout(LayoutKind.Sequential)]
     public struct MSG
@@ -266,8 +298,29 @@ internal static class Native
     [DllImport("user32.dll")]
     public static extern bool KillTimer(nint hwnd, nuint id);
 
+    [DllImport("user32.dll")]
+    public static extern bool SetLayeredWindowAttributes(nint hwnd, uint colorKey, byte alpha, uint flags);
+
+    [DllImport("user32.dll")]
+    public static extern bool TrackMouseEvent(ref TRACKMOUSEEVENT track);
+
+    [DllImport("user32.dll")]
+    public static extern nint SetCapture(nint hwnd);
+
+    [DllImport("user32.dll")]
+    public static extern bool ReleaseCapture();
+
+    [DllImport("user32.dll")]
+    public static extern bool GetWindowRect(nint hwnd, out RECT rect);
+
+    [DllImport("user32.dll")]
+    public static extern bool EnumDisplayMonitors(nint hdc, nint clip, MonitorEnumProc proc, nint data);
+
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    public static extern bool SystemParametersInfoW(int action, int param, ref RECT rect, int winIni);
+    public static extern bool GetMonitorInfoW(nint monitor, ref MONITORINFOEX info);
+
+    [DllImport("shcore.dll")]
+    public static extern int GetDpiForMonitor(nint monitor, int type, out uint dpiX, out uint dpiY);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     public static extern int MessageBoxW(nint hwnd, string text, string caption, uint type);

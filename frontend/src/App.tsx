@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, lazy, Suspense, createElement } from 'react'
+import { useState, useEffect, useRef, useCallback, lazy, Suspense, createElement } from 'react'
 import type { Project, AuthState } from './types'
 import { C } from './lib/design'
 import { LoginPage } from './pages/LoginPage'
@@ -441,6 +441,15 @@ export default function App() {
     localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(fresh))
     setProject(fresh)
   }), [])
+
+  // Секция настроек открытого проекта сохранила своё поле (тумблер рук, MCP, устройство):
+  // realtime у проектов нет, поэтому свежий DTO несём сюда сами. Иначе чаты держат прежний
+  // объект до перезагрузки — так включённые в открытом чате руки не доходили до полосы «Руки»
+  const handleOpenProjectUpdated = useCallback((fresh: Project) => {
+    if (fresh.id !== projectIdRef.current) return
+    localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(fresh))
+    setProject(fresh)
+  }, [])
 
   // Связь: возврат offline → online теперь тихий. Маркер у аватарки
   // (useConnectionDisplayState) сам показывает состояние с гистерезисом
@@ -1292,7 +1301,7 @@ export default function App() {
                 // key: прямой переход проект→проект (back/forward) обязан перемонтировать
                 // WorkspacePage — иначе useState-инициализаторы не перечитают состояние
                 // нового проекта и на экране остаётся чат/файл/вкладка старого
-                ? <WorkspacePage key={project.id} project={project} onGoToProjects={goToProjects} onSwitchHub={switchHubTab} auth={auth} onLogout={logout} />
+                ? <WorkspacePage key={project.id} project={project} onProjectUpdated={handleOpenProjectUpdated} onGoToProjects={goToProjects} onSwitchHub={switchHubTab} auth={auth} onLogout={logout} />
                 : <ProjectListPage onOpen={openProject} onLogout={logout} auth={auth} onHubTab={switchHubTab} />
       }
       {auth && historyOpen && (

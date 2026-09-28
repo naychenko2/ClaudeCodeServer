@@ -14,9 +14,9 @@ const store = new Map<string, string>();
 import { __resetComposerStrips, getActiveStrip, getPendingFocus, selectStrip } from '../../lib/composerStrips';
 import { setAllFlags } from '../../lib/featureFlags';
 import { getSlotContributions, SLOT_COMPOSER_STRIP, type ComposerStripApi } from '../../lib/subsystems/registryCore';
-import type { ServerMessage } from '../../types';
+import type { Project, ServerMessage } from '../../types';
 import {
-  __resetHandsStrip, HANDS_STRIP, handsStatusLoaded, handsStripOnMessage, setHandsProject,
+  __resetHandsStrip, HANDS_STRIP, handsProjectInfo, handsStatusLoaded, handsStripOnMessage, setHandsProject,
 } from './handsStrip';
 import './handsStripManifest';
 
@@ -104,5 +104,45 @@ describe('полоса «Руки» — доступность', () => {
 
   it('с флагом и доступными руками полоса есть — вклад каркаса не зависит от тумблера подсистем', () => {
     expect(available()).toContain(HANDS_STRIP);
+  });
+});
+
+// Проект в том виде, в каком его сейчас отдаёт GET /api/projects (прод 053af8f8): руки решают
+// тумблер handsEnabled и отказ матрицы handsRefusal. Ни флага local-hands, ни списка
+// провайдеров рук в ответе больше нет
+const dto = (patch: Partial<Project> = {}): Project => ({
+  id: P, name: 'Test local', rootPath: 'c:/Sources/test', createdAt: '', updatedAt: '',
+  deviceId: 'd1', handsEnabled: true, handsRefusal: null,
+  device: { id: 'd1', name: 'WORK', online: true, platform: 'windows', harnessReady: true, harnessProblem: null },
+  ...patch,
+}) as unknown as Project;
+
+describe('полоса «Руки» — из DTO проекта', () => {
+  it('hands_status=active: полоса запрошена и видна без флага и провайдеров, stopped — ушла', () => {
+    setAllFlags({});
+    setHandsProject(P, handsProjectInfo(dto()));
+    handsStripOnMessage(S, hands('active'));
+    expect(available()).toContain(HANDS_STRIP);
+    expect(active()).toBe(HANDS_STRIP);
+    handsStripOnMessage(S, hands('stopped', 'tray-stop'));
+    expect(active()).toBe('git');
+  });
+
+  it('руки включили тумблером в открытом чате: свежий DTO проекта открывает полосу', () => {
+    setAllFlags({});
+    // Чат открыт до тумблера: чаты видят проект с выключенными руками
+    setHandsProject(P, handsProjectInfo(dto({ handsEnabled: false })));
+    handsStripOnMessage(S, hands('active'));
+    expect(active()).toBe('git');
+    // Сохранение секции «Руки на устройстве» доносит свежий DTO до чатов (App → WorkspacePage)
+    setHandsProject(P, handsProjectInfo(dto()));
+    handsStripOnMessage(S, hands('active'));
+    expect(active()).toBe(HANDS_STRIP);
+  });
+
+  it('отказ матрицы при включённом тумблере — полосы нет', () => {
+    setHandsProject(P, handsProjectInfo(dto({ handsRefusal: 'Агент устройства устарел' })));
+    handsStripOnMessage(S, hands('active'));
+    expect(available()).not.toContain(HANDS_STRIP);
   });
 });

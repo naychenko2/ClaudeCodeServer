@@ -13,7 +13,8 @@ import {
   HANDS_BADGE_LOADING, HandsChatState, handsEventReceived, handsInitialFailed, handsInitialLoaded,
   type HandsBadgeState,
 } from '../../lib/localHands';
-import type { ServerMessage } from '../../types';
+import { isFeatureAvailable } from '../../lib/projectCapabilities';
+import { ProjectFeature, type Project, type ServerMessage } from '../../types';
 
 export const HANDS_STRIP = 'hands';
 
@@ -44,6 +45,14 @@ export function setHandsProject(projectId: string, info: HandsProjectInfo) {
   if (prev && prev.available === info.available && prev.deviceName === info.deviceName) return;
   _projects.set(projectId, info);
   emit();
+}
+// Руки проекта из его DTO: тумблер проекта и отказ матрицы. Флага и списка провайдеров
+// больше нет, сверх DTO полоса ничего не ждёт
+export function handsProjectInfo(project: Project): HandsProjectInfo {
+  return {
+    available: project.handsEnabled === true && isFeatureAvailable(project, ProjectFeature.Hands),
+    deviceName: project.device?.name ?? null,
+  };
 }
 export function getHandsProject(projectId: string): HandsProjectInfo | null {
   return _projects.get(projectId) ?? null;

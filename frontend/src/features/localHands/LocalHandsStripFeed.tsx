@@ -1,10 +1,9 @@
 import { useEffect } from 'react';
 import { onMessage } from '../../lib/signalr';
-import { isFeatureAvailable } from '../../lib/projectCapabilities';
 import { api } from '../../lib/api';
-import { ProjectFeature, type Project, type Session } from '../../types';
+import type { Project, Session } from '../../types';
 import {
-  applyHandsFocus, handsStatusFailed, handsStatusLoaded, handsStripOnMessage, resetHandsSession,
+  applyHandsFocus, handsProjectInfo, handsStatusFailed, handsStatusLoaded, handsStripOnMessage, resetHandsSession,
   setHandsProject, setHandsSessionProvider,
 } from './handsStrip';
 import { watchHandsAvailability } from './handsStripManifest';
@@ -13,8 +12,7 @@ import { watchHandsAvailability } from './handsStripManifest';
 // Полоса рисуется только активной, поэтому запросить фокус сама не может — это делает он:
 // первая отрисовка — GET /api/sessions/{id}/hands-status, дальше события hands_status.
 export function LocalHandsStripFeed({ session, project }: { session: Session; project: Project }) {
-  const available = project.handsEnabled === true && isFeatureAvailable(project, ProjectFeature.Hands);
-  const deviceName = project.device?.name ?? null;
+  const { available, deviceName } = handsProjectInfo(project);
 
   useEffect(() => {
     setHandsProject(project.id, { available, deviceName });

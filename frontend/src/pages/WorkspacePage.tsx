@@ -82,6 +82,8 @@ import { useHasChatContext } from '../lib/chatContext';
 
 interface Props {
   project: Project;
+  // Секция настроек сохранила поле проекта — свежий DTO открытому проекту приложения
+  onProjectUpdated?: (updated: Project) => void;
   onGoToProjects: () => void;
   // Переключение раздела хаба «Чаты | Проекты» из верхней шапки проекта
   onSwitchHub: (t: HubTabValue) => void;
@@ -295,7 +297,7 @@ function histReducer(s: FileHistoryState, a: FileHistoryAction): FileHistoryStat
   }
 }
 
-export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLogout }: Props) {
+export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwitchHub, auth, onLogout }: Props) {
   // Гейт подсистемы «Заметки»: при выключенной notes панель «notes» (notes/ репы)
   // не должна появляться в рельсе панелей и принимать клики. Рельсу собирает
   // PanelZone из `allowedKeys` и `panels`: если ключ есть в WORKSPACE_KEYS, но
@@ -422,6 +424,12 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
 
   const [editProjectOpen, setEditProjectOpen] = useState(false);
   const [projectForEdit, setProjectForEdit] = useState(project);
+  // Сохранение секции настроек (тумблер рук, MCP, устройство) — и диалогу, и проекту, который
+  // видят чаты: иначе они держат прежний объект до перезагрузки страницы
+  const handleProjectUpdated = useCallback((updated: Project) => {
+    setProjectForEdit(updated);
+    onProjectUpdated?.(updated);
+  }, [onProjectUpdated]);
   type ToolsTab = 'terminal' | 'preview';
   const [toolsTab, setToolsTab] = useState<ToolsTab>('terminal');
   const [terminalBusy, setTerminalBusy] = useState(false);
@@ -1865,7 +1873,7 @@ const windowWidth = useWindowWidth();
             project={projectForEdit}
             onSuccess={updated => { setProjectForEdit(updated); setEditProjectOpen(false); }}
             onIconUpdated={setProjectForEdit}
-            onProjectUpdated={setProjectForEdit}
+            onProjectUpdated={handleProjectUpdated}
             onClose={() => setEditProjectOpen(false)}
           />
         )}
@@ -2014,7 +2022,7 @@ const windowWidth = useWindowWidth();
           project={projectForEdit}
           onSuccess={updated => { setProjectForEdit(updated); setEditProjectOpen(false); }}
           onIconUpdated={setProjectForEdit}
-          onProjectUpdated={setProjectForEdit}
+          onProjectUpdated={handleProjectUpdated}
           onClose={() => setEditProjectOpen(false)}
         />
       )}

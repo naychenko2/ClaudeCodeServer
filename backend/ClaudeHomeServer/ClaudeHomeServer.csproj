@@ -178,6 +178,29 @@
           SkipUnchangedFiles="true" Condition="Exists('..\ClaudeHomeServer.ImageEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.ImageEditor.dll')" />
   </Target>
 
+  <!-- Динамический модуль Architecture (раздел «Архитектура», Viaduct 10.2): тот же паттерн,
+       что Notes. ReferenceOutputAssembly="false" — Main не видит типы вертикали на компиляции;
+       швы (IArchitectureCodeSource, IStaticBranchContributor, McpEndpoints.ArchitectureName)
+       живут в Core. Копия dll — на Build И Publish: без Publish деплой терял бы модуль, и раздел
+       молча пропадал бы на бою (грабля Notes). -->
+  <ItemGroup>
+    <ProjectReference Include="..\ClaudeHomeServer.Architecture\ClaudeHomeServer.Architecture.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+  <PropertyGroup>
+    <ArchitectureModuleDll>..\ClaudeHomeServer.Architecture\bin\$(Configuration)\net10.0\ClaudeHomeServer.Architecture.dll</ArchitectureModuleDll>
+  </PropertyGroup>
+  <Target Name="CopyArchitectureModule" AfterTargets="Build">
+    <Copy SourceFiles="$(ArchitectureModuleDll)" DestinationFolder="$(OutDir)modules\architecture"
+          SkipUnchangedFiles="true" Condition="Exists('$(ArchitectureModuleDll)')" />
+  </Target>
+  <Target Name="CopyArchitectureModuleOnPublish" AfterTargets="Publish">
+    <!-- На Publish тихий пропуск недопустим: бой остался бы без модуля, раздел пропал бы молча -->
+    <Error Condition="!Exists('$(ArchitectureModuleDll)')"
+           Text="Модуль Architecture не собран: нет $(ArchitectureModuleDll) — публикация без него потеряла бы раздел «Архитектура»" />
+    <Copy SourceFiles="$(ArchitectureModuleDll)" DestinationFolder="$(PublishDir)modules\architecture"
+          SkipUnchangedFiles="true" />
+  </Target>
+
   <!-- Нативный libSkiaSharp.pdb из SkiaSharp.NativeAssets.Win32 весит ~84 МБ и в выкладке не
        нужен: без этой цели публикация win-x64 вырастает почти на 0,1 ГБ (ADR-018 §9, размер
        публикации). Символы остаются в пакете NuGet, если понадобится разбор дампа. -->
@@ -198,7 +221,7 @@
        До этапа 3 всё это жило одной сборкой, и инвариант «вертикаль зависит только
        от спинки» соблюдался логически; теперь он держится физически — вертикаль не
        может «протянуть руку» в Main, потому что ProjectReference в её .csproj нет.
-       Notes, Spend и ImageEditor — исключения (динамические модули, см. Copy*Module выше),
+       Notes, Spend, ImageEditor и Architecture — исключения (динамические модули, см. Copy*Module выше),
        не прямые референсы. -->
   <ItemGroup>
     <ProjectReference Include="..\ClaudeHomeServer.Backgrounds\ClaudeHomeServer.Backgrounds.csproj" />

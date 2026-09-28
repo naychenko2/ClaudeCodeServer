@@ -167,6 +167,7 @@ export default defineConfig({
       '/spend-remote': { target: 'http://localhost:5175', changeOrigin: true },
       // MF remote редактора картинок (dev): dev-сервер модуля на :5176.
       '/image-editor-remote': { target: 'http://localhost:5176', changeOrigin: true },
+      '/architecture-remote': { target: 'http://localhost:5177', changeOrigin: true, rewrite: (p: string) => p.replace(/^\/architecture-remote/, '') },
     },
   },
   preview: {
@@ -181,6 +182,7 @@ export default defineConfig({
       '/notes-remote': { target: 'http://localhost:5174', changeOrigin: true },
       '/spend-remote': { target: 'http://localhost:5175', changeOrigin: true },
       '/image-editor-remote': { target: 'http://localhost:5176', changeOrigin: true },
+      '/architecture-remote': { target: 'http://localhost:5177', changeOrigin: true, rewrite: (p: string) => p.replace(/^\/architecture-remote/, '') },
     },
   },
 });

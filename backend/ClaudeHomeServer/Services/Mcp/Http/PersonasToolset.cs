@@ -587,6 +587,33 @@ public sealed partial class PersonasToolset(
         return any ? contract : null;
     }
 
+    // Патч контракта для personas_update: слот, которого нет в аргументах, остаётся null
+    // («не менять» — PersonaManager.MergeContract), а пустая строка / пустой массив доходят
+    // как есть — это явная очистка слота. OptionalArg/ListArg проглотили бы её в null.
+    private static PersonaContract? ContractPatchFrom(JsonObject arguments)
+    {
+        string? Str(string name) => arguments.ContainsKey(name) ? StringArg(arguments, name) : null;
+        List<string>? List(string name) => arguments.ContainsKey(name) ? ListArg(arguments, name) ?? [] : null;
+
+        var contract = new PersonaContract
+        {
+            Character = Str("character"),
+            Tone = Str("tone"),
+            MustDo = List("mustDo"),
+            MustNot = List("mustNot"),
+            OutputFormat = Str("outputFormat"),
+            SpeechExamples = List("speechExamples"),
+        };
+        var any = contract.Character is not null || contract.Tone is not null || contract.MustDo is not null
+            || contract.MustNot is not null || contract.OutputFormat is not null || contract.SpeechExamples is not null;
+        if (!any && OptionalArg(arguments, "systemPrompt") is { } legacy)
+        {
+            contract.Character = legacy;
+            any = true;
+        }
+        return any ? contract : null;
+    }
+
     private static PersonaSpecialty? SpecialtyArg(JsonObject arguments) =>
         Enum.TryParse<PersonaSpecialty>(StringArg(arguments, "specialty"), true, out var parsed) ? parsed : null;
 
@@ -635,7 +662,7 @@ public sealed partial class PersonasToolset(
             ? string.Equals(StringArg(arguments, "scope"), "project", StringComparison.OrdinalIgnoreCase)
                 ? PersonaScope.Project : PersonaScope.Global
             : null;
-        var contract = ContractFrom(arguments);
+        var contract = ContractPatchFrom(arguments);
         return new UpdatePersonaRequest(
             Name: OptionalArg(arguments, "name"),
             Role: arguments.ContainsKey("role") ? StringArg(arguments, "role") : null,

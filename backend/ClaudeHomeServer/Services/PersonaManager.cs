@@ -205,6 +205,24 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         return clean.IsEmpty ? null : clean;
     }
 
+    // Частичная правка контракта по слотам: null-слот патча — «не менять» (берётся текущий),
+    // пустая строка / пустой список — явная очистка (её доделает NormalizeContract).
+    // Без мержа частичный personas_update обнулял все не переданные слоты.
+    internal static PersonaContract? MergeContract(PersonaContract? current, PersonaContract? patch)
+    {
+        if (patch is null) return current;
+        return new PersonaContract
+        {
+            Character = patch.Character ?? current?.Character,
+            Tone = patch.Tone ?? current?.Tone,
+            MustDo = patch.MustDo ?? current?.MustDo,
+            MustNot = patch.MustNot ?? current?.MustNot,
+            OutputFormat = patch.OutputFormat ?? current?.OutputFormat,
+            SpeechExamples = patch.SpeechExamples ?? current?.SpeechExamples,
+            Instructions = patch.Instructions ?? current?.Instructions,
+        };
+    }
+
     private static string? TrimToNull(string? s) =>
         string.IsNullOrWhiteSpace(s) ? null : s.Trim();
 
@@ -601,8 +619,9 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             if (role is not null) persona.Role = role.Length == 0 ? null : role.Trim();
             if (description is not null) persona.Description = description;
             if (systemPrompt is not null) persona.SystemPrompt = systemPrompt;
-            // null — не менять; объект с пустыми слотами — сбросить контракт (нормализуется в null)
-            if (contract is not null) persona.Contract = NormalizeContract(contract);
+            // Мерж по слотам: null-слот — не менять, ""/[] — очистить; все слоты пусты —
+            // контракт нормализуется в null
+            if (contract is not null) persona.Contract = NormalizeContract(MergeContract(persona.Contract, contract));
             if (model is not null) persona.Model = TrimToNull(model);
             // Уровень модели: null — не менять, "" (и мусор — его отсекает контроллер) — сбросить
             if (modelTier is not null)

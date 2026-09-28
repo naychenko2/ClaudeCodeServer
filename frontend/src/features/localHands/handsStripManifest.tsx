@@ -3,7 +3,7 @@
 // ответ сервера).
 
 import { registerSubsystem, type ComposerStripApi, type ComposerStripCtx, type SubsystemManifest } from '../../lib/subsystems/registryCore';
-import { HandsStrip, handsStripIcon, handsStripStatus } from './HandsStrip';
+import { HandsStrip, handsStripIcon, handsStripStatus } from './HandsStripView';
 import { HANDS_STRIP, handsStripAvailable, subscribeHandsStrip } from './handsStrip';
 
 export const handsManifest: SubsystemManifest = {

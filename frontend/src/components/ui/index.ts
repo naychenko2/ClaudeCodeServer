@@ -53,6 +53,7 @@ export type { NoticeTone } from './Notice';
 export { SidebarSection } from './SidebarSection';
 export { BackButton } from './BackButton';
 export { WaitingIndicator } from './WaitingIndicator';
+export { MetaChip } from './MetaChip';
 export { Checkbox } from './Checkbox';
 export type { CheckboxProps } from './Checkbox';
 export { Chip, ChipX } from './Chip';

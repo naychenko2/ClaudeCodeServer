@@ -214,6 +214,11 @@ one-shot действия и разговор с исполнителем «Ло
 [docs/features/project-map-hygiene.md](docs/features/project-map-hygiene.md), план —
 [project-map-hygiene-plan-2026-09.md](docs/research/project-map-hygiene-plan-2026-09.md).
 
+## Раздел «Архитектура» (Viaduct)
+
+C4-схема проекта в Viaduct (sandbox-iframe), модель — `docs/architecture/model.viaduct.json` под git; динамический модуль + MF-remote, фич-флага нет. **Код Viaduct здесь не правится.**
+Инварианты и подробности — [backend/ClaudeHomeServer.Architecture/CLAUDE.md](backend/ClaudeHomeServer.Architecture/CLAUDE.md): файл подхватывается сам при работе с этой папкой; при правках со стороны фронтенда открой его руками.
+
 ## Внутренние подсистемы (Services/Composition)
 
 Внутренние границы продукта — **подсистемы**, контракт

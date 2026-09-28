@@ -186,8 +186,10 @@ builder.Services.AddSingleton<Microsoft.Extensions.Options.IConfigureOptions<Mic
     // Notes — теперь динамический модуль (сценарий Б): ApplicationPart добавляется
     // ModuleLoader'ом по пути из DynamicModules-конфига (см. ниже), а не автоматически
     // через ProjectReference. Старый gate по имени сборки ("ClaudeHomeServer.Notes") удалён.
-    // Гейт «выключить Notes» — теперь `DynamicModules.notes.Enabled=false` (ModuleLoader
-    // просто не загрузит dll) + `Subsystems:Notes:Enabled` для Main-side-форвардеров.
+    // Гейт «выключить Notes» — любой из двух замков: `DynamicModules.notes.Enabled=false`
+    // (ModuleLoader не загрузит dll) или `Subsystems:Notes:Enabled=false` — ModuleLoader
+    // проверяет его ДО Register: без регистрации сервисов, без ApplicationPart (маршрутов
+    // нет) и без RecordActive; Main-side-форвардеры читают тот же гейт.
 
 // Динамические модули (сценарий Б): отдельные сборки, грузятся по пути из секции "DynamicModules"
 // конфига при старте (не через ProjectReference). Load-once, выгрузки нет (DI сам не выгружает).
@@ -205,11 +207,12 @@ builder.Services.AddSingleton<Microsoft.Extensions.Options.IConfigureOptions<Mic
 // тот же инстанс.
 var dynamicModuleStore = new ClaudeHomeServer.Services.Composition.SubsystemStateStore();
 builder.Services.AddSingleton(dynamicModuleStore);
+// Реестр — вне using: ниже по нему же идёт раздача MF-remote загруженных модулей.
+var dynamicModuleRegistry = new ClaudeHomeServer.Services.DynamicModules.ModuleRegistry(builder.Configuration);
 using (var dynamicModuleLogFactory = LoggerFactory.Create(logging => logging
     .AddConfiguration(builder.Configuration.GetSection("Logging"))
     .AddConsole()))
 {
-    var dynamicModuleRegistry = new ClaudeHomeServer.Services.DynamicModules.ModuleRegistry(builder.Configuration);
     var dynamicModuleLoader = new ClaudeHomeServer.Services.DynamicModules.ModuleLoader(
         dynamicModuleRegistry,
         builder.Configuration,
@@ -418,6 +421,12 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Git.IGitCommitInspector,
 // синглтон `CodeGraphService`, что и подсистем.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.CodeGraph.ICodeGraphInspector,
     ClaudeHomeServer.Services.CodeGraph.CodeGraphInspector>();
+// Шов снимка графа для раздела «Архитектура» (Viaduct 10.1, разрез Architecture↔CodeGraph).
+// Под гейтом CodeGraph: у контроллера Architecture шов необязателен (нет → 503
+// graph_unavailable), а форвардер без CodeGraphService не резолвится.
+if (SubsystemGate.IsEnabled(builder.Configuration, ClaudeHomeServer.Services.CodeGraph.CodeGraphSubsystem.SubsystemKey))
+    builder.Services.AddSingleton<ClaudeHomeServer.Services.CodeGraph.IArchitectureCodeSource,
+        ClaudeHomeServer.Services.CodeGraph.ArchitectureCodeSource>();
 builder.Services.AddSingleton<ProjectGroupManager>();
 builder.Services.AddSingleton<ProjectEventLogService>();
 // Этап 5, волна E: узкий Core-шов IProjectEventLogService для выноса Notes (NotesService
@@ -720,6 +729,10 @@ builder.Services.AddSingleton<TaskExecutionService>();
 // Адаптер резолвит TaskExecutionService через конструктор, DI форвардер ниже.
 builder.Services.AddSingleton<TaskExecutorAdapter>();
 builder.Services.AddSingleton<ITaskExecutor>(sp => sp.GetRequiredService<TaskExecutorAdapter>());
+// Шов IArchitectureAgentLauncher (Core) → адаптер → TaskManager + TaskExecutionService:
+// галочка «С агентом» у сборки архитектуры ставит задачу архитектору (или без персоны).
+// У контроллера Architecture шов необязателен (нет → 503 agent_unavailable).
+builder.Services.AddSingleton<IArchitectureAgentLauncher, ArchitectureAgentLauncherAdapter>();
 // Раздача под-задач и волны режима «Командная реализация» (Э3): создание задач по плану
 // и пакетный запуск исполнителей. Конструктор вешает хук в SessionManager — сервис нужно
 // прогреть на старте (ниже), иначе «Запустить» в карточке плана осталось бы без раздачи.
@@ -912,6 +925,8 @@ builder.Services.AddSubsystems(builder.Configuration,
     new ClaudeHomeServer.Services.Deploy.DeploySubsystem(),
     new ClaudeHomeServer.Services.Backgrounds.BackgroundsSubsystem(),
     new ClaudeHomeServer.Services.ProjectIcons.ProjectIconsSubsystem(),
+    // Architecture — динамический модуль (Viaduct 10.2, сценарий Б, как Notes): грузится
+    // ModuleLoader'ом по пути из секции DynamicModules, НЕ через ProjectReference.
     // ProjectServices — раздел «Сервисы проекта» (Preview/DevServer). Регистрация ниже
     // всех: вертикаль листовая, ни от кого не зависит; наоборот, на неё ссылаются
     // PreviewController и SessionHub (через Program.cs).
@@ -1956,6 +1971,12 @@ app.Use(async (ctx, next) =>
     });
 }
 
+// Статические ветки подсистем (сейчас — собранный Viaduct раздела «Архитектура»):
+// ставятся здесь, после защитных middleware и до SPA-фолбэка, а не в UseSubsystems —
+// там ветка ушла бы из-под HTTPS-редиректа и перехватчика превью-хоста
+foreach (var contributor in app.Services.GetServices<IStaticBranchContributor>())
+    contributor.Configure(app);
+
 // Раздача фронтенда: wwwroot/ рядом с exe (prod) или ../../frontend/dist (dev)
 var wwwrootPath = Path.Combine(AppContext.BaseDirectory, "wwwroot");
 var devDistPath = Path.GetFullPath(Path.Combine(
@@ -1990,9 +2011,10 @@ if (Directory.Exists(distPath))
     // указывать на dev-dist, не на wwwroot), чтобы в проде запрос remoteEntry.js всегда
     // резолвился в файл, а не SPA-fallback → index.html (loadRemote упал бы).
     // Middleware стоит РАНЬШЕ MapFallbackToFile, поэтому перехватывает /*-remote/* до SPA-фолбэка.
-    foreach (var module in app.Configuration.GetSection("DynamicModules").GetChildren())
+    // Список раздачи — только загруженные модули (выключенный гейтом remote не отдаём).
+    foreach (var servedModule in dynamicModuleRegistry.ServedRemotes(dynamicModuleStore))
     {
-        var remoteUrl = module["Frontend:RemoteUrl"];
+        var remoteUrl = servedModule.Frontend!.RemoteUrl;
         if (string.IsNullOrEmpty(remoteUrl)) continue;
         // L3 (2026-09-15): абсолютный URL (https://…) не начинается с '/' — TrimStart+Split
         // дал бы папку "https:" → Directory.Exists=false → тихий пропуск без лога.
@@ -2000,7 +2022,7 @@ if (Directory.Exists(distPath))
         {
             app.Logger.LogWarning(
                 "[DynamicModules] Frontend:RemoteUrl модуля {Key} не является относительным путём ({Url}) — раздача MF-remote пропущена",
-                module["Key"], remoteUrl);
+                servedModule.Key, remoteUrl);
             continue;
         }
         // Из RemoteUrl = "/{имя}-remote/remoteEntry.js" папка на диске = первый слаг URL.

@@ -28,6 +28,7 @@ public static class McpEndpoints
     public const string LocalMediaName = "local-media";
     public const string WidgetsName = "widgets";
     public const string WorkspaceName = "wsp";
+    public const string ArchitectureName = "architecture";
 
     /// <summary>
     /// Имя заголовка вызывающей MCP-сессии: ставит общий api() каждого MCP-сервера в свой запрос,

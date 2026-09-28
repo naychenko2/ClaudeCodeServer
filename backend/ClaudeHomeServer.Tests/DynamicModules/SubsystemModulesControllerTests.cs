@@ -2,8 +2,10 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
 using ClaudeHomeServer.Controllers;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.DynamicModules;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Tests.DynamicModules;
 
@@ -32,12 +34,26 @@ public class SubsystemModulesControllerTests
         }).Build();
 
     // Корень статики — заведомо пустой каталог: файлов remoteEntry.js нет, URL уходит без ?v=
-    private static SubsystemModulesController Controller(IConfiguration config) =>
-        new(config, new RemoteStaticFiles(new ConfigurationBuilder().AddInMemoryCollection(
-            new Dictionary<string, string?>
-            {
-                [RemoteStaticFiles.RootKey] = Path.Combine(Path.GetTempPath(), "ccs_no_remotes_" + Guid.NewGuid().ToString("N")),
-            }).Build()));
+    private static RemoteStaticFiles NoRemotes() =>
+        new(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            [RemoteStaticFiles.RootKey] = Path.Combine(Path.GetTempPath(), "ccs_no_remotes_" + Guid.NewGuid().ToString("N")),
+        }).Build());
+
+    // Стор состава подсистем с указанными ключами как реально загруженными (RecordActive).
+    private static SubsystemStateStore Loaded(params string[] keys)
+    {
+        var store = new SubsystemStateStore();
+        foreach (var key in keys) store.RecordActive(new FakeSubsystem(key));
+        return store;
+    }
+
+    private sealed class FakeSubsystem(string key) : IAppSubsystem
+    {
+        public string Key => key;
+        public string Title => key;
+        public void Register(IServiceCollection services, IConfiguration config) { }
+    }
 
     private static JsonElement ParseItems(OkObjectResult result)
     {
@@ -49,7 +65,7 @@ public class SubsystemModulesControllerTests
     [Fact]
     public void ЗаполненныйFrontend_КонтроллерВозвращает_Id_RemoteUrl_ExposedModule()
     {
-        var controller = Controller(TwoModuleConfig());
+        var controller = new SubsystemModulesController(TwoModuleConfig(), Loaded("notes"), NoRemotes());
 
         var result = (OkObjectResult)controller.List();
         var items = ParseItems(result);
@@ -75,11 +91,35 @@ public class SubsystemModulesControllerTests
             ["DynamicModules:0:Backend:AssemblyPath"] = "modules/__stub/StubModule.dll",
         }).Build();
 
-        var controller = Controller(config);
+        var controller = new SubsystemModulesController(config, Loaded("__stub"), NoRemotes());
 
         var result = (OkObjectResult)controller.List();
         ParseItems(result).GetArrayLength().Should().Be(0,
             "модуль без Frontend:RemoteUrl в список subsystem remotes не попадает");
+    }
+
+    [Fact]
+    public void МодульВыключенГейтом_ВОтветНеПопадает_NotesОстаётся()
+    {
+        // architecture в манифесте с Frontend, но гейт Subsystems:architecture:Enabled=false —
+        // ModuleLoader его не загрузил (RecordDisabled), в ActiveKeys только notes.
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["DynamicModules:0:Key"] = "notes",
+            ["DynamicModules:0:Enabled"] = "true",
+            ["DynamicModules:0:Frontend:RemoteUrl"] = "/notes-remote/remoteEntry.js",
+            ["DynamicModules:1:Key"] = "architecture",
+            ["DynamicModules:1:Enabled"] = "true",
+            ["DynamicModules:1:Frontend:RemoteUrl"] = "/architecture-remote/remoteEntry.js",
+            ["Subsystems:architecture:Enabled"] = "false",
+        }).Build();
+        var store = Loaded("notes");
+        store.RecordDisabled(new FakeSubsystem("architecture"));
+
+        var items = ParseItems((OkObjectResult)new SubsystemModulesController(config, store, NoRemotes()).List());
+
+        items.GetArrayLength().Should().Be(1, "выключенный гейтом модуль фронту не отдаём");
+        items[0].GetProperty("id").GetString().Should().Be("notes");
     }
 
     [Fact]
@@ -96,7 +136,7 @@ public class SubsystemModulesControllerTests
             ["DynamicModules:0:Frontend:ExposedModule"] = "./subsystem",
         }).Build();
 
-        var controller = Controller(config);
+        var controller = new SubsystemModulesController(config, Loaded(), NoRemotes());
 
         var result = (OkObjectResult)controller.List();
         ParseItems(result).GetArrayLength().Should().Be(0,
@@ -122,7 +162,7 @@ public class SubsystemModulesControllerTests
             ["Subsystems:spend:Enabled"] = "false",
         }).Build();
 
-        var controller = Controller(config);
+        var controller = new SubsystemModulesController(config, Loaded(), NoRemotes());
 
         var result = (OkObjectResult)controller.List();
         ParseItems(result).GetArrayLength().Should().Be(0,

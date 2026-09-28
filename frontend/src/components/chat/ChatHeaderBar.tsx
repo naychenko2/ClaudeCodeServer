@@ -1,11 +1,11 @@
-import { useState, useEffect, useRef, type ReactNode } from 'react';
+import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react';
 import { Plus, Menu as MenuIcon, Tags, Bell, BellOff, History, Hourglass, ListChecks, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore, HardDrive } from 'lucide-react';
 import type { Project, Session, ClaudeBilling, Persona, ProjectTag } from '../../types';
 import { api } from '../../lib/api';
 import { isArchivedChat } from '../../lib/chatFilters';
 import { HandsBadge } from '../../features/desktop/HandsBadge';
 import { TagAssignMenu } from '../TagChip';
-import { modelLabel, modelProvider, assistantName } from '../../lib/models';
+import { modelLabel, modelProvider, assistantName, useProviders } from '../../lib/models';
 import { effortLabel } from '../../lib/effort';
 import { ExpiryButton } from './ExpiryButton';
 import { ExpiryPicker } from './ExpiryPicker';
@@ -19,7 +19,8 @@ import { PersonaFace } from '../../features/personas/PersonaFace';
 import { GroupParticipantsPopover } from '../../features/personas/GroupParticipantsPopover';
 import { personaTitleLines } from '../../lib/personas';
 import { AGENT_COLORS, agentDotColor } from '../AgentSelector';
-import { type RateWindow, RATE_COLORS, windowLabel, fmtReset, worstWindow } from '../../lib/rateLimit';
+import { type RateWindow, type RatePillSegment, RATE_COLORS, windowLabel, fmtReset, worstWindow, withAccountFallback, ratePillSegments, ratePillCompact, ratePillVisible, ratePillMoreText } from '../../lib/rateLimit';
+import { useAccountUsage, accountSnapshotsFor } from '../../lib/accountUsage';
 import { type ContextEstimate } from '../../lib/context';
 import { prunedSummaryText } from '../../lib/contextPruned';
 import { ContextThresholdsDialog } from '../ContextThresholdsDialog';
@@ -97,12 +98,16 @@ function RateRow({ w }: { w: RateWindow }) {
         <span style={{ fontFamily: FONT.sans, fontSize: 12, color: C.textSecondary }}>
           {windowLabel(w.limitType)}{w.isUsingOverage ? ' · перерасход' : ''}
         </span>
-        <span style={{ fontFamily: FONT.mono, fontSize: 12, fontWeight: 700, color: c.text }}>{w.pct}%{w.isUsingOverage ? '+' : ''}</span>
+        <span style={{ fontFamily: FONT.mono, fontSize: 12, fontWeight: 700, color: c.text }}>{w.stale ? '—' : `${w.pct}%${w.isUsingOverage ? '+' : ''}`}</span>
       </div>
-      <div style={{ height: 4, borderRadius: 2, background: C.track, overflow: 'hidden', margin: '3px 0' }}>
-        <div style={{ width: `${Math.min(100, w.pct)}%`, height: '100%', background: c.fill }} />
-      </div>
-      {reset && <div style={{ fontFamily: FONT.sans, fontSize: 10.5, color: C.textMuted }}>сброс {reset}</div>}
+      {!w.stale && (
+        <div style={{ height: 4, borderRadius: 2, background: C.track, overflow: 'hidden', margin: '3px 0' }}>
+          <div style={{ width: `${Math.min(100, w.pct)}%`, height: '100%', background: c.fill }} />
+        </div>
+      )}
+      {w.stale
+        ? <div style={{ fontFamily: FONT.sans, fontSize: 10.5, color: C.textMuted }}>данные устарели</div>
+        : reset && <div style={{ fontFamily: FONT.sans, fontSize: 10.5, color: C.textMuted }}>сброс {reset}</div>}
     </div>
   );
 }
@@ -247,32 +252,90 @@ function ClaudeCostPopoverBody({ stats, billing, onBillingChange, windows }: {
 // В режиме подписки сумма — это ≈ API-эквивалент (отдельно не списывается), что и поясняется.
 // Проп isMobile: на планшете передаём isCompact через isMobile — узкие раскладки
 // ведут себя одинаково (мини-размеры, wide-поповер).
+// Окна лимитов на лицевой стороне пилюли, каждое цветом своего уровня.
+// compact — только худшее окно и «+N» (мобила/планшет: шапка тесная).
+// Нормальный уровень — нейтральным текстом пилюли: янтарь и красный заметны только на фоне спокойных окон
+// Мини-бар окна — тот же, что у пилюли контекста (ContextAmount): трек + заливка цветом уровня.
+// Процент неизвестен — бар не рисуем, остаётся «—».
+function RateMiniBar({ seg, compact }: { seg: RatePillSegment; compact?: boolean }) {
+  if (seg.pct === null) return null;
+  return (
+    <span style={{ width: compact ? 18 : 26, height: 5, borderRadius: 3, background: C.track, overflow: 'hidden', display: 'inline-block' }}>
+      <span style={{ display: 'block', width: `${seg.pct}%`, height: '100%', background: RATE_COLORS[seg.level].fill }} />
+    </span>
+  );
+}
+
+function RatePillText({ windows, compact }: { windows: RateWindow[]; compact?: boolean }) {
+  const segColor = (level: RateWindow['level']) => level === 'normal' ? C.textSecondary : RATE_COLORS[level].text;
+  const segStyle = (level: RateWindow['level']) => ({ color: segColor(level), display: 'inline-flex', alignItems: 'center', gap: 5 });
+  if (compact) {
+    const c = ratePillCompact(windows);
+    if (!c) return <span style={{ color: C.textMuted }}>—</span>;
+    return (
+      <span style={{ whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center' }}>
+        <span style={segStyle(c.head.level)}>{c.head.label} <RateMiniBar seg={c.head} compact /> {c.head.text}</span>
+        {c.more > 0 && <span style={{ color: C.textSecondary, fontWeight: 600 }}>{ratePillMoreText(c.more)}</span>}
+      </span>
+    );
+  }
+  // Десктоп: не больше трёх окон, остальные — «+N» (полный список в подсказке и поповере)
+  const { segments: segs, more } = ratePillVisible(windows);
+  if (segs.length === 0) return <span style={{ color: C.textMuted }}>—</span>;
+  return (
+    <span style={{ whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center' }}>
+      {segs.map((s, i) => (
+        <span key={s.limitType} style={{ display: 'inline-flex', alignItems: 'center', whiteSpace: 'pre' }}>
+          {i > 0 && <span style={{ color: C.textMuted, fontWeight: 400 }}> · </span>}
+          <span style={segStyle(s.level)}>{s.label} <RateMiniBar seg={s} /> {s.text}</span>
+        </span>
+      ))}
+      {more > 0 && <span style={{ color: C.textSecondary, fontWeight: 600 }}>{ratePillMoreText(more)}</span>}
+    </span>
+  );
+}
+
+// Лицевая сторона пилюли Claude. По API-ключу деньги реальные — сумма стоит первой, окна
+// (если они есть) рядом; по подписке сумма — лишь API-эквивалент и живёт в поповере
+function ClaudePillAmount({ stats, billing, windows, compact }: {
+  stats: CostStats; billing: ClaudeBilling; windows: RateWindow[]; compact?: boolean;
+}) {
+  if (billing !== 'api' || stats.cost <= 0) return <RatePillText windows={windows} compact={compact} />;
+  return (
+    <span style={{ whiteSpace: 'nowrap' }}>
+      <span style={{ color: C.textSecondary }}>{fmtUsd(stats.cost)}</span>
+      {windows.length > 0 && <>
+        <span style={{ color: C.textMuted, fontWeight: 400 }}> · </span>
+        <RatePillText windows={windows} compact={compact} />
+      </>}
+    </span>
+  );
+}
+
+// Подсказка пилюли — все окна полными подписями (доступно без клика, наведением)
+function rateTitle(windows: RateWindow[]): string {
+  const segs = ratePillSegments(windows);
+  if (segs.length === 0) return 'Лимиты подписки Claude — нажмите для разбивки';
+  return 'Лимиты подписки: ' + segs.map(s => `${windowLabel(s.limitType)} ${s.text}${s.stale ? ' (данные устарели)' : ''}`).join(', ') + ' — нажмите для разбивки';
+}
+
 function CostBadge({ stats, isMobile, billing, onBillingChange, windows, resetKey }: {
   stats: CostStats; isMobile?: boolean; billing: ClaudeBilling; onBillingChange?: (b: ClaudeBilling) => void;
   windows: RateWindow[]; resetKey?: string;
 }) {
   const worst = worstWindow(windows);
   if (!hasClaudeCostInfo(stats, windows)) return null;
-  const sub = billing === 'subscription';
   const tone = worst && worst.level !== 'normal' ? worst.level : undefined;
-  const amountNode = (
-    <>
-      <span>{stats.cost > 0 ? (sub ? '≈ ' : '') + fmtUsd(stats.cost) : '—'}</span>
-      {tone && worst && (
-        <span style={{ marginLeft: 5, color: RATE_COLORS[worst.level].text, fontWeight: 700 }}>· {worst.pct}%</span>
-      )}
-    </>
-  );
+  // На пилюле — лимиты (и сумма в режиме API-ключа); токены живут в поповере
+  const apiCost = billing === 'api' && stats.cost > 0;
   return (
     <BadgeShell
       label="Claude"
-      amount={amountNode}
+      amount={<ClaudePillAmount stats={stats} billing={billing} windows={windows} compact={isMobile} />}
       isCompact={isMobile}
       tone={tone}
       resetKey={resetKey}
-      title={sub
-        ? 'Claude ≈ по API-тарифу · по подписке отдельно не списывается'
-        : 'Стоимость Claude — нажмите для разбивки'}
+      title={(apiCost ? `Claude по API-ключу: ${fmtUsd(stats.cost)}. ` : '') + rateTitle(windows)}
     >
       <ClaudeCostPopoverBody stats={stats} billing={billing} onBillingChange={onBillingChange} windows={windows} />
     </BadgeShell>
@@ -352,31 +415,33 @@ function ProviderCostPopoverBody({ providerName, stats, balance }: {
   );
 }
 
+// Лицевая сторона пилюли стороннего провайдера — всегда квота или баланс, без токенов и
+// суммы (разбивка в поповере): квота подписки (GLM) — израсходованный процент, денежный
+// баланс (DeepSeek) — остаток. Источника нет — прочерк.
+function providerPillLabel(balance: ProviderBalance | null): string {
+  if (!balance) return '—';
+  if (balance.currency === '%') {
+    const used = quotaUsedPct(balance);
+    return used !== null ? `${used}%` : '—';
+  }
+  return `${balance.totalBalance} ${balance.currency}`;
+}
+
+function ProviderPillText({ balance }: { balance: ProviderBalance | null }) {
+  const tone = providerBalanceTone(balance);
+  return <span style={{ whiteSpace: 'nowrap', color: tone ? RATE_COLORS[tone].text : balance ? C.textSecondary : C.textMuted }}>{providerPillLabel(balance)}</span>;
+}
+
 function ProviderCostBadge({ providerName, stats, balance, isMobile, resetKey }: {
   providerName: string; stats: CostStats; balance: ProviderBalance | null; isMobile?: boolean; resetKey?: string;
 }) {
   // Есть активность (хотя бы один ход) или баланс — иначе в начале сессии прячем
   if (!hasProviderCostInfo(stats, balance)) return null;
   const tone = providerBalanceTone(balance);
-  const hasCost = stats.cost > 0;
-  const totalTokens = stats.input + stats.output;
-  const isQuota = balance?.currency === '%';
-  const usedPct = isQuota ? quotaUsedPct(balance) : null;
-  // Сумма в пилюле: деньги, если считаем стоимость; иначе токены; иначе прочерк
-  const amountNode = (
-    <>
-      <span>{hasCost ? fmtUsd(stats.cost) : totalTokens > 0 ? `${fmtTokens(totalTokens)} ток.` : '—'}</span>
-      {tone && balance && (
-        <span style={{ marginLeft: 5, color: RATE_COLORS[tone].text, fontWeight: 700 }}>
-          · {isQuota ? (usedPct !== null ? `${usedPct}%` : '—') : <>{balance.totalBalance} {balance.currency}</>}
-        </span>
-      )}
-    </>
-  );
   return (
     <BadgeShell
       label={providerName}
-      amount={amountNode}
+      amount={<ProviderPillText balance={balance} />}
       isCompact={isMobile}
       tone={tone}
       resetKey={resetKey}
@@ -715,12 +780,11 @@ function MobileCombinedBadge(props: {
     : (worst && worst.level !== 'normal' ? worst.level : undefined);
   const tone = worseTone(ctxTone, costTone);
 
-  // Краткая сумма стоимости в пилюле
-  const sub = billing === 'subscription';
-  const totalTokens = cost.input + cost.output;
+  // Вторая строка чипа — лимиты, а не сумма: у Claude худшее окно + «+N»,
+  // у стороннего провайдера квота или баланс. Сумма — только по API-ключу, токены — в поповере
   const costSummary = isCliProvider
-    ? (cost.cost > 0 ? fmtUsd(cost.cost) : totalTokens > 0 ? `${fmtTokens(totalTokens)} ток.` : '—')
-    : (cost.cost > 0 ? (sub ? '≈' : '') + fmtUsd(cost.cost) : '—');
+    ? <ProviderPillText balance={balance} />
+    : <ClaudePillAmount stats={cost} billing={billing} windows={windows} compact />;
 
   // Пилюля в две строки (без текстового лейбла): строка 1 — контекст, строка 2 — стоимость.
   // Компактнее по ширине, чтобы не распирать узкую мобильную шапку.
@@ -1046,7 +1110,17 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   } : null;
   const asstName = assistantName(session.model);
   const providerKey = session.provider ?? modelProvider(session.model);
-  const isCliProvider = providerKey !== 'claude';
+  // Сторонний провайдер — только ключ из каталога провайдеров. Дополнительные подписки пула
+  // Claude названы произвольно (claude-3, work-account) и остаются Claude.
+  // useProviders — подписка на каталог: до его загрузки чат перерисуется, когда тот придёт
+  const isCliProvider = useProviders().some(p => p.key !== 'claude' && p.key === providerKey);
+  // Окна лимитов: живые события чата, а где процента нет — последний снимок аккаунта
+  // этого чата (цифры видны с открытия, до первого хода)
+  const accountUsage = useAccountUsage(!isCliProvider && !compact);
+  const limitWindows = useMemo(
+    () => isCliProvider ? rateWindows : withAccountFallback(rateWindows, accountSnapshotsFor(accountUsage, providerKey)),
+    [isCliProvider, rateWindows, accountUsage, providerKey],
+  );
   // Баланс провайдера — только для сессий сторонних провайдеров (для плашки статистики);
   // 404 (провайдер без источника баланса, напр. GLM) — просто без блока баланса
   const [provBalance, setProvBalance] = useState<ProviderBalance | null>(null);
@@ -1347,7 +1421,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // у Claude — CostBadge с лимитами подписки
   const providerCostBadge = isCliProvider
     ? <ProviderCostBadge providerName={asstName} stats={cost} balance={provBalance} isMobile={isCompact} resetKey={session.id} />
-    : <CostBadge stats={cost} isMobile={isCompact} billing={billing} onBillingChange={onBillingChange} windows={rateWindows} resetKey={session.id} />;
+    : <CostBadge stats={cost} isMobile={isCompact} billing={billing} onBillingChange={onBillingChange} windows={limitWindows} resetKey={session.id} />;
   // Бейдж расхода токенов чата (аналитика v2): обновляется по завершению хода —
   // триггер cost.results растёт вместе с result-сообщениями ленты
   const spendBadge = spendBadgeSlot?.render?.({ sessionId: session.id, chatName: session.name, resultCount: cost.results, isMobile: isCompact });
@@ -1364,7 +1438,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
           canCompact={canCompact} compactNote={compactNote} onCompact={onCompact}
           online={online} assistantName={asstName}
           isCliProvider={isCliProvider} providerName={asstName} cost={cost} falCost={falCost} glifCost={glifCost}
-          balance={provBalance} billing={billing} onBillingChange={onBillingChange} windows={rateWindows}
+          balance={provBalance} billing={billing} onBillingChange={onBillingChange} windows={limitWindows}
           activeWorkflow={activeWorkflow}
           resetKey={session.id}
         />
@@ -1563,7 +1637,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     mechanic: !!lastMechanic,
     workflow: !!activeWorkflow,
     context: hasContextInfo(ctxEstimate),
-    cost: isCliProvider ? hasProviderCostInfo(cost, provBalance) : hasClaudeCostInfo(cost, rateWindows),
+    cost: isCliProvider ? hasProviderCostInfo(cost, provBalance) : hasClaudeCostInfo(cost, limitWindows),
     fal: falCost.total > 0,
     glif: glifCost.count > 0,
     // У расхода собственный источник (SpendBadge грузит его сам), снаружи виден
@@ -1609,7 +1683,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
             canCompact={canCompact} compactNote={compactNote} onCompact={() => {}}
             online={online} assistantName={asstName}
             isCliProvider={isCliProvider} providerName={asstName} cost={cost} falCost={falCost} glifCost={glifCost}
-            balance={provBalance} billing={billing} onBillingChange={onBillingChange} windows={rateWindows}
+            balance={provBalance} billing={billing} onBillingChange={onBillingChange} windows={limitWindows}
             activeWorkflow={activeWorkflow}
             resetKey={`menu-${session.id}`}
           />

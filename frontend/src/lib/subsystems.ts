@@ -21,6 +21,7 @@ import { useSyncExternalStore } from 'react';
 export const SUBSYSTEMS = {
   notes: 'notes',
   spend: 'spend',
+  architecture: 'architecture',
 } as const;
 
 export type SubsystemKey = (typeof SUBSYSTEMS)[keyof typeof SUBSYSTEMS];

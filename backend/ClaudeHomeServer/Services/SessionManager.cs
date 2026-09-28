@@ -596,6 +596,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // Фабрика логгеров для вертикали (волна В): TeamPlanService получает собственный
     // типизированный ILogger. null — в тестах без DI, TeamPlanService работает на NullLogger.
     private readonly ILoggerFactory? _loggerFactory;
+    // Снимок загруженных подсистем: гейт объявления arch_* по факту загрузки модуля
+    private readonly Composition.SubsystemStateStore? _subsystemStates;
     // Драйверы среды исполнения владельцев (local / docker-песочница)
     private readonly Execution.ILauncherFactory _launchers;
     private readonly Execution.SandboxManager _sandbox;
@@ -758,10 +760,14 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         Execution.IProjectDeviceGate? deviceGate = null,
         // Корень DI: реестр MCP-тулсетов резолвится лениво (BuildImageEditorContext) — прямая
         // зависимость дала бы цикл SessionManager → реестр → тулсеты → SessionManager
-        IServiceProvider? services = null)
+        IServiceProvider? services = null,
+        // Опционально (в тестах не передаётся): снимок загруженных подсистем — факт загрузки
+        // динамических модулей (Architecture). Без него сервер arch_* ходу не объявляется.
+        Composition.SubsystemStateStore? subsystemStates = null)
     {
         _deviceGate = deviceGate;
         _services = services;
+        _subsystemStates = subsystemStates;
         _turnEvents = turnEvents;
         _loggerFactory = loggerFactory;
         _taskLookup = tasks is null ? null : new Composition.TaskLookupAdapter(tasks);
@@ -1073,6 +1079,25 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         return new WebSearchMcpContext(apiUrl, () => GetServiceToken(ownerId!), HttpEndpointUsable(apiUrl));
     }
 
+    // Контекст MCP-сервера архитектуры (arch_*: C4-модель проекта). Все оси — свойства
+    // владельца/сессии/процесса, не хода (инвариант стабильности состава ADR-012): чат
+    // проекта, модуль Architecture реально загружен (динамическая сборка, Viaduct 10.2: без
+    // dll тулсета нет в реестре, и ход объявил бы CLI мёртвый сервер — урок форвардера
+    // Knowledge у Notes) и не выключен вторым замком Subsystems:architecture:Enabled, плюс
+    // Off-привязка персоны tool:architecture. Фич-флага у раздела нет (решение 2026-09-26):
+    // включение — только конфигом модуля. Тулсет перепроверяет то же на каждом вызове.
+    private ArchitectureMcpContext? BuildArchitectureContext(string? ownerId, string? projectId, Persona? persona)
+    {
+        if (ownerId is null || string.IsNullOrEmpty(projectId)) return null;
+        // Локальный проект (ADR-016): модели и графа кода на сервере нет — тулсету не с чем работать
+        if (_projects.GetById(projectId) is not { } project || !ProjectCapabilities.FilesOnServer(project)) return null;
+        if (_subsystemStates?.ActiveKeys().Contains(McpEndpoints.ArchitectureName, StringComparer.OrdinalIgnoreCase) != true) return null;
+        if (!Composition.SubsystemGate.IsEnabled(_config, McpEndpoints.ArchitectureName)) return null;
+        if (!_bindings.ServerToolEnabled(ownerId, persona, "architecture")) return null;
+        var apiUrl = ResolveTasksApiUrl(ownerId);
+        return new ArchitectureMcpContext(apiUrl, () => GetServiceToken(ownerId), HttpEndpointUsable(apiUrl));
+    }
+
     // MCP-сервер Higgsfield: инстансное OAuth-подключение (единый вход админа, шарится
     // всеми владельцами). Узел присутствует в конфиге хода только когда:
     //   1) инстанс подключён (EnsureFresh() ≠ null) — иначе прокси некому ретранслировать
@@ -1166,8 +1191,9 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         CodeGraphMcpContext? codeGraph = null, DifyMcpContext? dify = null,
         WatchMcpContext? watch = null, WebSearchMcpContext? webSearch = null,
         HiggsfieldMcpContext? higgsfield = null, ImageEditorMcpContext? imageEditor = null,
-        LocalMediaMcpContext? localMedia = null) =>
-        widgets is { UseHttp: true } || memory is { UseHttp: true }
+        LocalMediaMcpContext? localMedia = null, ArchitectureMcpContext? architecture = null) =>
+        architecture is { UseHttp: true }
+        || widgets is { UseHttp: true } || memory is { UseHttp: true }
         || tasks is { UseHttp: true } || notes is { UseHttp: true } || personas is { UseHttp: true }
         || workspace is { UseHttp: true } || notifications is { UseHttp: true }
         || codeGraph is { UseHttp: true } || dify is { UseHttp: true }
@@ -4064,6 +4090,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         var personasMcp = BuildPersonasContext(ownerId, session.ProjectId, session, persona.Persona);
         var notificationsMcp = BuildNotificationsContext(ownerId, session.PersonaId, persona.Persona);
         var codeGraphMcp = BuildCodeGraphContext(ownerId, session.ProjectId, session.Id, rootPath, persona.Persona);
+        var architectureMcp = BuildArchitectureContext(ownerId, session.ProjectId, persona.Persona);
         var difyMcp = BuildDifyContext(ownerId);
         var hands = HandsFor(session.ProjectId);
         var adapter = _adapters.Create(session, new LlmSessionContext(rootPath,
@@ -4097,8 +4124,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             OrchestrationDone: BuildOrchestrationDone(session.Id),
             HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp,
                 workspace, notificationsMcp, codeGraphMcp, difyMcp, watchMcp, webSearchMcp, higgsfieldMcp,
-                imageEditorMcp, localMediaMcp),
+                imageEditorMcp, localMediaMcp, architectureMcp),
             HttpMcpEnabledProvider: HttpMcpEnabled,
+            ArchitectureMcp: architectureMcp,
             // Материалы контекста — только у проектных чатов (адреса file/task живут внутри
             // проекта); во внепроектной ветке восстановления провайдер не передаётся вовсе
             ChatContextProvider: session.ProjectId is not null ? BuildChatContextProvider(session.Id) : null,
@@ -4297,6 +4325,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         _log.LogInformation("Доставка хода {Session}: src={Src} cause={Cause} origin={Origin} mode={Mode} text=\"{Text}\"",
             sessionId, deliverySrc, effectiveCause, senderOrigin ?? "-", mode ?? "-",
             (text.Length > 60 ? text[..60] : text).Replace('\n', ' '));
+
+        if (TurnStarting is { } onTurnStarting)
+        {
+            try { await onTurnStarting(sessionId); }
+            catch (Exception ex) { _log.LogWarning(ex, "Хук старта хода {Session} упал", sessionId); }
+        }
 
         // Режим, выбранный в Composer, применяется со следующего хода: процесс claude
         // пересоздаётся в RunTurnAsync и читает --permission-mode из Info.Mode.
@@ -5616,6 +5650,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             var personasMcp = BuildPersonasContext(project.OwnerId, project.Id, entry.Info, persona.Persona);
             var notificationsMcp = BuildNotificationsContext(project.OwnerId, entry.Info.PersonaId, persona.Persona);
             var codeGraphMcp = BuildCodeGraphContext(project.OwnerId, project.Id, entry.Info.Id, rootPath, persona.Persona);
+            var architectureMcp = BuildArchitectureContext(project.OwnerId, project.Id, persona.Persona);
             var difyMcp = BuildDifyContext(project.OwnerId);
             var hands = HandsFor(project.Id);
             context = new LlmSessionContext(rootPath,
@@ -5647,8 +5682,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 OrchestrationDone: BuildOrchestrationDone(sessionId),
                 HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp,
                     workspace, notificationsMcp, codeGraphMcp, difyMcp, watchMcp, webSearchMcp, higgsfieldMcp,
-                    imageEditorMcp, localMediaMcp),
+                    imageEditorMcp, localMediaMcp, architectureMcp),
                 HttpMcpEnabledProvider: HttpMcpEnabled,
+                ArchitectureMcp: architectureMcp,
                 ChatContextProvider: BuildChatContextProvider(sessionId),
                 Events: _turnEvents,
                 WatchMcp: watchMcp,
@@ -6979,6 +7015,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // в вертикали Services.Tasks, и прямая ссылка на него из спины уронила бы сторож границ.
     // null — признак не задан (тесты, либо стора задач нет): ждать нечего.
     public Func<string, bool>? HasLiveDelegatedTasks { get; set; }
+
+    // Старт нового хода в сессии (любой источник: человек, очередь, авто-ход). Вешает
+    // TaskExecutionService — по тем же причинам, что HasLiveDelegatedTasks: продолжение в чате
+    // исполнителя после «Стоп» снимает пометку остановки, иначе задача числилась бы мёртвой.
+    // Сбой хука ход не роняет. null — хук не задан (тесты без стора задач).
+    public Func<string, Task>? TurnStarting { get; set; }
 
     // Резолв названия задачи по id (волна 1 team-blocker-honest, дефект 1430b732): штаб
     // публикует карточку остановки с TaskId, и подпись диалога снятия должна показать

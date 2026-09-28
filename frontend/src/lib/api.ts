@@ -16,6 +16,61 @@ export interface GlyphCandidate {
   name?: string | null;
 }
 
+// Итог «Собрать архитектуру» (POST /projects/{id}/architecture/generate).
+// graphBuiltAt — время снимка графа кода, которым помечена карта (ISO); added/matched —
+// новые и сохранённые элементы: повторная сборка ручные описания не трогает.
+export interface ArchitectureGenerateResult {
+  modelPath: string;
+  graphBuiltAt: string | null;
+  generatedAt: string;
+  containers: number;
+  components: number;
+  added: number;
+  matched: number;
+  connectionsAdded: number;
+  // Проход 1 «Собрать архитектуру»: внешние системы-кандидаты (тег «кандидат»), элементы из
+  // кода, которых больше нет (тег «нет в коде»), снятые пометки и удалённые руками (не
+  // пересоздаются); missing/candidatesSkipped — имена для сводки
+  candidates?: number;
+  markedMissing?: number;
+  unmarked?: number;
+  skippedDeleted?: number;
+  missing?: string[] | null;
+  candidatesSkipped?: string[] | null;
+  // Проход 2 (withAgent): задача исполнителю, его персона (null — без персоны-архитектора)
+  // и код отказа; launch_failed — задача создана, но исполнитель не стартовал
+  agentTaskId?: string | null;
+  agentPersonaId?: string | null;
+  agentError?: string | null;
+  warnings?: ArchitectureModelFinding[] | null;
+}
+
+// Несостыковка модели (ArchitectureModelValidator на бэке): висящая ссылка, точка связи,
+// которой у карточки нет, дубль id. Предупреждение — запись она не блокирует
+export interface ArchitectureModelFinding {
+  kind: 'dangling_parent' | 'dangling_connection' | 'dangling_flow_step' | 'unknown_handle' | 'duplicate_id';
+  elementId: string;
+  text: string;
+}
+
+// Модель раздела «Архитектура» (GET /projects/{id}/architecture/model). version — SHA-256
+// содержимого файла; updatedBy — имя человека или «Сборка из кода».
+export interface ArchitectureModelDto {
+  exists: boolean;
+  content: string | null;
+  version: string | null;
+  updatedAt: string | null;
+  updatedBy: string | null;
+  warnings?: ArchitectureModelFinding[];
+}
+
+export interface ArchitectureSaveResult {
+  version: string;
+  updatedAt: string | null;
+  updatedBy: string | null;
+  warnings?: ArchitectureModelFinding[];
+}
+
 
 // Итог выкатки, как его пишет трей-раннер в deploy-status.json. Формат чужой — читаем как есть.
 // result: running | ok | blocked | build-failed | rolled-back | failed | error.
@@ -838,6 +893,25 @@ export const api = {
     // поэтому таймаут запроса поднят до 3 минут (дефолтный 30с перехватил бы сборку).
     codeGraphBuild: (id: string) =>
       request<void>(`/projects/${encodeURIComponent(id)}/code-graph/build`, { method: 'POST', timeoutMs: 180_000 }),
+    // «Собрать из кода» (раздел «Архитектура»): стартовая модель Viaduct из графа кода,
+    // слияние с docs/architecture/model.viaduct.json без затирания ручных описаний.
+    // Если графа нет, бэкенд строит его в том же запросе (на CCS ~1.5 мин), отсюда таймаут.
+    // 409 code=model_corrupt — файл модели битый, 503 code=graph_unavailable — графа нет.
+    // withAgent — проход 2: задача исполнителю (персона-архитектор, если есть). 409
+    // code=build_in_progress (+agentTaskId, result) — агент уже собирает; 503
+    // code=agent_unavailable (+result) — собрано без агента.
+    architectureGenerate: (id: string, withAgent = false) =>
+      request<ArchitectureGenerateResult>(`/projects/${encodeURIComponent(id)}/architecture/generate`,
+        { method: 'POST', body: JSON.stringify({ withAgent }), timeoutMs: 300_000 }),
+    // Хранилище модели раздела «Архитектура»: content — байты файла как есть (null —
+    // модели ещё нет). live: устаревшая модель из офлайн-кэша дала бы ложный конфликт.
+    architectureModel: (id: string) =>
+      request<ArchitectureModelDto>(`/projects/${encodeURIComponent(id)}/architecture/model`, { live: true }),
+    // Запись от версии baseVersion (null — «модели не было»); 409 code=version_conflict,
+    // в err.body.current — состояние файла на сервере.
+    architectureSaveModel: (id: string, content: string, baseVersion: string | null) =>
+      request<ArchitectureSaveResult>(`/projects/${encodeURIComponent(id)}/architecture/model`,
+        { method: 'PUT', body: JSON.stringify({ content, baseVersion }) }),
     // Preview: сервисы проекта (инференс из манифестов + сохранённые в .claude/launch.json).
     // У локального проекта — у агента устройства (projectRequest); внешнего доступа там нет
     services: (id: string) =>

@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build && npm run build:notes && npm run build:spend && npm run build:image-editor",
-    "build:quiet": "tsc -b && vite build --logLevel warn && npm run build:notes && npm run build:spend && npm run build:image-editor",
+    "build": "tsc -b && vite build && npm run build:notes && npm run build:spend && npm run build:image-editor && npm run build:architecture",
+    "build:quiet": "tsc -b && vite build --logLevel warn && npm run build:notes && npm run build:spend && npm run build:image-editor && npm run build:architecture",
     "lint": "eslint .",
     "lint:design": "eslint --config eslint.design.config.js .",
     "test": "vitest run",
@@ -17,7 +17,9 @@
     "build:spend": "cd modules/spend && npx vite build && node -e \"const fs=require('fs');const dst='../../dist/spend-remote';fs.rmSync(dst,{recursive:true,force:true});fs.cpSync('dist',dst,{recursive:true});console.log('[spend] published to',dst)\"",
     "dev:spend": "cd modules/spend && npx vite",
     "build:image-editor": "cd modules/image-editor && npx vite build && node -e \"const fs=require('fs');const dst='../../dist/image-editor-remote';fs.rmSync(dst,{recursive:true,force:true});fs.cpSync('dist',dst,{recursive:true});console.log('[image-editor] published to',dst)\"",
-    "dev:image-editor": "cd modules/image-editor && npx vite"
+    "dev:image-editor": "cd modules/image-editor && npx vite",
+    "build:architecture": "cd modules/architecture && npx vite build && node -e \"const fs=require('fs');const dst='../../dist/architecture-remote';fs.rmSync(dst,{recursive:true,force:true});fs.cpSync('dist',dst,{recursive:true});console.log('[architecture] published to',dst)\"",
+    "dev:architecture": "cd modules/architecture && npx vite"
   },
   "dependencies": {
     "@babel/runtime": "^8.0.0",

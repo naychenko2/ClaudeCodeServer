@@ -33,4 +33,14 @@ public sealed class ModuleRegistry
     }
 
     public IReadOnlyList<ModuleDescriptor> All => _modules;
+
+    // Модули, чей MF-remote раздаём по /{key}-remote: запись включена, Frontend есть И модуль
+    // реально загружен (активен в сторе). Одного Enabled мало: при Subsystems:{Key}:Enabled=false
+    // ModuleLoader сборку не грузит, а remote раздавался бы всё равно. Стор к месту раздачи уже
+    // заполнен — LoadAll идёт в Program.cs до построения конвейера.
+    public IEnumerable<ModuleDescriptor> ServedRemotes(SubsystemStateStore states)
+    {
+        var active = states.ActiveKeys().ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return _modules.Where(m => m.Enabled && m.Frontend is not null && active.Contains(m.Key));
+    }
 }

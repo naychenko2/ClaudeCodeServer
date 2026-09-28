@@ -1,0 +1,186 @@
+using System.Net;
+using System.Net.Http.Json;
+using System.Text.Json;
+using ClaudeHomeServer.Services.Architecture;
+using ClaudeHomeServer.Tests.Helpers;
+using FluentAssertions;
+using Microsoft.AspNetCore.Hosting;
+
+namespace ClaudeHomeServer.Tests.DynamicModules;
+
+// Architecture как динамический модуль (Viaduct 10.2): полный подъём хоста — Program.cs
+// читает запись architecture в DynamicModules, ModuleLoader грузит dll из
+// modules/architecture (копия CopyArchitectureModuleForTests), контроллер подключается
+// AssemblyPart'ом. Main на компиляции типы вертикали не видит — отвечает только загруженная
+// сборка. Образец — StubModuleEndpointTests.
+public class ArchitectureModuleEndpointTests : IDisposable
+{
+    private readonly TestWebApplicationFactory _factory = new();
+    private readonly HttpClient _client;
+
+    public ArchitectureModuleEndpointTests()
+    {
+        _client = _factory.CreateAuthenticatedClient();
+    }
+
+    public void Dispose() => _factory.Dispose();
+
+    [Fact]
+    public async Task Модель_проекта__контроллер_загруженного_модуля_отвечает_200()
+    {
+        var dir = Path.Combine(_factory.TempDir, "arch-project");
+        Directory.CreateDirectory(dir);
+        var created = await _client.PostAsJsonAsync("/api/projects", new { name = "ArchProject", rootPath = dir });
+        created.EnsureSuccessStatusCode();
+        var projectId = JsonSerializer.Deserialize<JsonElement>(await created.Content.ReadAsStringAsync())
+            .GetProperty("id").GetString()!;
+
+        var response = await _client.GetAsync($"/api/projects/{projectId}/architecture/model");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK,
+            "контроллер динамически загруженного модуля найден роутером, сервисы зарегистрированы");
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.GetProperty("exists").GetBoolean().Should().BeFalse();
+    }
+
+    // Проверка модели: висящая ссылка — предупреждение в ответе PUT и GET, запись при этом
+    // проходит; чистая модель — пустой список
+    [Fact]
+    public async Task Модель_с_висящей_связью__сохраняется_с_предупреждением_чистая__без()
+    {
+        var dir = Path.Combine(_factory.TempDir, "arch-warnings");
+        Directory.CreateDirectory(dir);
+        var created = await _client.PostAsJsonAsync("/api/projects", new { name = "ArchWarnings", rootPath = dir });
+        created.EnsureSuccessStatusCode();
+        var projectId = JsonSerializer.Deserialize<JsonElement>(await created.Content.ReadAsStringAsync())
+            .GetProperty("id").GetString()!;
+        var url = $"/api/projects/{projectId}/architecture/model";
+        const string dangling = """
+            {"state":{"model":{"systems":[{"id":"s1","name":"CCS","connections":[{"targetId":"gone"}]}],
+            "containers":[],"components":[],"codeElements":[]}},"version":0}
+            """;
+
+        var put = await _client.PutAsJsonAsync(url, new { content = dangling, baseVersion = (string?)null });
+        put.StatusCode.Should().Be(HttpStatusCode.OK, "находки записи не блокируют");
+        var saved = JsonSerializer.Deserialize<JsonElement>(await put.Content.ReadAsStringAsync());
+        var warning = saved.GetProperty("warnings").EnumerateArray().Should().ContainSingle().Subject;
+        warning.GetProperty("kind").GetString().Should().Be(ArchitectureModelValidator.KindDanglingConnection);
+        warning.GetProperty("text").GetString().Should().Contain("связь → gone");
+
+        var got = JsonSerializer.Deserialize<JsonElement>(await _client.GetStringAsync(url));
+        got.GetProperty("warnings").GetArrayLength().Should().Be(1);
+
+        var clean = dangling.Replace("""{"targetId":"gone"}""", "");
+        var put2 = await _client.PutAsJsonAsync(url, new { content = clean, baseVersion = saved.GetProperty("version").GetString() });
+        put2.StatusCode.Should().Be(HttpStatusCode.OK);
+        JsonSerializer.Deserialize<JsonElement>(await put2.Content.ReadAsStringAsync())
+            .GetProperty("warnings").GetArrayLength().Should().Be(0);
+
+        // Непривычная форма (state не объект): хранилище её пускает, проверка не роняет запрос
+        var odd = await _client.PutAsJsonAsync(url, new
+        {
+            content = """{"state":1}""",
+            baseVersion = JsonSerializer.Deserialize<JsonElement>(await put2.Content.ReadAsStringAsync()).GetProperty("version").GetString(),
+        });
+        odd.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await _client.GetAsync(url)).StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    // Кнопка «Собрать из кода» шлёт POST без тела и без Content-Type: [FromBody] с
+    // EmptyBodyBehavior.Allow обязан пропустить его как «без агента», а не отбить 415
+    [Fact]
+    public async Task Сборка_из_кода__пустой_POST_без_ContentType__не_415()
+    {
+        var dir = Path.Combine(_factory.TempDir, "arch-generate");
+        Directory.CreateDirectory(dir);
+        var created = await _client.PostAsJsonAsync("/api/projects", new { name = "ArchGenerate", rootPath = dir });
+        created.EnsureSuccessStatusCode();
+        var projectId = JsonSerializer.Deserialize<JsonElement>(await created.Content.ReadAsStringAsync())
+            .GetProperty("id").GetString()!;
+
+        var response = await _client.PostAsync($"/api/projects/{projectId}/architecture/generate", content: null);
+
+        response.StatusCode.Should().NotBe(HttpStatusCode.UnsupportedMediaType);
+        response.StatusCode.Should().Be(HttpStatusCode.OK,
+            "проход 1 без агента: пустой проект даёт пустой граф, модель собирается");
+    }
+
+    [Fact]
+    public async Task Статус_подсистем__architecture_активна_по_факту_загрузки()
+    {
+        var response = await _client.GetAsync("/api/auth/me");
+        response.EnsureSuccessStatusCode();
+
+        // Именно поле subsystems: проверка по всему телу прошла бы вхолостую
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.GetProperty("subsystems").EnumerateArray().Select(e => e.GetString())
+            .Should().Contain("architecture",
+                "ModuleLoader записал модуль в SubsystemStateStore — ключ уходит фронту в /api/auth/me");
+        // Фич-флага у раздела нет (решение 2026-09-26): включение — только конфигом модуля
+        body.GetProperty("featureFlags").TryGetProperty("architecture", out _)
+            .Should().BeFalse("раздел гейтится загрузкой модуля, а не флагом владельца");
+    }
+    // Ветка /modules/viaduct на ПОЛНОМ хосте (а не воспроизведённым у себя циклом Program.cs):
+    // вклад IStaticBranchContributor загруженного модуля реально встал в конвейер. В тестовом
+    // хосте собранного фронта нет, SPA-фолбэка нет, и промах маршрутизации тоже дал бы 404 —
+    // поэтому проверка различает ветку по телу: код NotInstalledCode пишет только она.
+    [Fact]
+    public async Task Ветка_viaduct__стоит_в_конвейере_и_честно_говорит_не_установлено()
+    {
+        var response = await _client.GetAsync(ViaductStaticHosting.RequestPath + "/");
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.GetProperty("error").GetString().Should().Be(ViaductStaticHosting.NotInstalledCode,
+            "ответила именно ветка Viaduct, а не общий 404 роутинга или SPA-фолбэк");
+    }
+
+    // ─── Отключаемость: Subsystems:architecture:Enabled=false ─────────────────────
+
+    // Настройка едет UseSetting'ом — хост-конфигурацией в CreateBuilder(args), то есть успевает
+    // к ModuleLoader.LoadAll (разбор механики — шапка NotesDisabledTests). Запись в
+    // DynamicModules остаётся Enabled=true: выключает именно гейт подсистемы.
+    private sealed class DisabledArchitectureFactory : TestWebApplicationFactory
+    {
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            base.ConfigureWebHost(builder);
+            builder.UseSetting("Subsystems:architecture:Enabled", "false");
+        }
+    }
+
+    [Fact]
+    public async Task Гейт_выключен__модуль_не_загружен_REST_и_viaduct_недоступны()
+    {
+        using var disabled = new DisabledArchitectureFactory();
+        var client = disabled.CreateAuthenticatedClient();
+
+        // Гейт доехал, RestartRequired честный: в конфиге выключено и в процессе не активно
+        var subsystems = await client.GetFromJsonAsync<JsonElement>("/api/admin/subsystems");
+        var arch = subsystems.EnumerateArray().Single(s => s.GetProperty("key").GetString() == "architecture");
+        arch.GetProperty("enabled").GetBoolean().Should().BeFalse();
+        arch.GetProperty("active").GetBoolean().Should().BeFalse("ModuleLoader не звал Register");
+        arch.GetProperty("restartRequired").GetBoolean().Should().BeFalse("конфиг и процесс согласны");
+
+        var me = JsonSerializer.Deserialize<JsonElement>(await client.GetStringAsync("/api/auth/me"));
+        me.GetProperty("subsystems").EnumerateArray().Select(e => e.GetString())
+            .Should().NotContain("architecture");
+
+        // Контроллера нет: на СУЩЕСТВУЮЩЕМ своём проекте включённый хост отвечает 200
+        // (тест выше), здесь маршрут не сопоставлен — общий 404 без тела контроллера
+        var dir = Path.Combine(disabled.TempDir, "arch-off");
+        Directory.CreateDirectory(dir);
+        var created = await client.PostAsJsonAsync("/api/projects", new { name = "ArchOff", rootPath = dir });
+        created.EnsureSuccessStatusCode();
+        var projectId = JsonSerializer.Deserialize<JsonElement>(await created.Content.ReadAsStringAsync())
+            .GetProperty("id").GetString()!;
+        (await client.GetAsync($"/api/projects/{projectId}/architecture/model"))
+            .StatusCode.Should().Be(HttpStatusCode.NotFound, "ApplicationPart модуля не подключён");
+
+        // Ветки /modules/viaduct нет: ответа с кодом NotInstalledCode (его пишет только ветка) нет.
+        // Статус не проверяем: соседние тесты прогона кладут общий wwwroot/index.html
+        // (TestWebApplicationFactory), и промах уходит в SPA-фолбэк 200 вместо 404.
+        var viaduct = await client.GetAsync(ViaductStaticHosting.RequestPath + "/");
+        (await viaduct.Content.ReadAsStringAsync()).Should().NotContain(ViaductStaticHosting.NotInstalledCode);
+    }
+}

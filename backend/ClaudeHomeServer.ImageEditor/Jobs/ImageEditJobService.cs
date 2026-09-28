@@ -72,6 +72,11 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
     // Сбой слушателя задачу не роняет
     public event Func<string, ImageEditJobDto, Task>? Finished;
 
+    // Вариант готов, а задача ещё идёт (драйвер отдал EditProgress.Ready): вариант уже лежит в рабочей
+    // папке и в job.Variants. Слушатель — нити картинок: вариант становится версией сразу. Для
+    // последнего варианта приходит раньше Finished. Сбой слушателя задачу не роняет
+    public event Func<string, ImageEditJobDto, Task>? VariantReady;
+
     private sealed record Quote(
         string Id, string OwnerId, string ProjectId, string Provider, ImageEditModelInfo Model,
         ImageEditOp Op, int Count, ImageEditEstimateDto Estimate, DateTime ExpiresAt, int? ExpectedSeconds);
@@ -113,6 +118,11 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         public bool SpendWritten { get; set; }
         public double? RecordedAmount { get; set; }
         public Task Completion { get; set; } = Task.CompletedTask;
+        // Очередь разбора готовых по ходу вариантов (EditProgress.Ready): отчёт синхронный, а
+        // приведение размера и событие — асинхронные, и финал обязан их дождаться. Правится под Gate
+        public Task Pipeline { get; set; } = Task.CompletedTask;
+        // Сколько вариантов драйвер уже отдал по ходу: финал пишет только те, что после них
+        public int ReadyCount { get; set; }
 
         public bool IsActive => Status is ImageEditJobStatus.Queued or ImageEditJobStatus.Running or ImageEditJobStatus.Downloading;
     }
@@ -245,6 +255,12 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             result = new ImageEditResult(EditOutcome.Failed, [], null, null, null, "Сбой поставщика: " + ex.Message);
         }
 
+        // Варианты, отданные по ходу, разбираются до финала при любом исходе: иначе Finished обогнал
+        // бы VariantReady последнего варианта, а отмена потеряла бы уже готовые
+        Task pipeline;
+        lock (job.Gate) pipeline = job.Pipeline;
+        await pipeline;
+
         try
         {
             if (!cancelled && result.Outcome == EditOutcome.Ok && result.Images.Count > 0)
@@ -265,11 +281,13 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         }
     }
 
-    private async Task NotifyFinishedAsync(Job job)
+    private Task NotifyFinishedAsync(Job job) => NotifyAsync(Finished, job, "завершения");
+
+    private async Task NotifyAsync(Func<string, ImageEditJobDto, Task>? handlers, Job job, string what)
     {
-        if (Finished is not { } finished) return;
+        if (handlers is null) return;
         var dto = ToDto(job);
-        foreach (var listener in finished.GetInvocationList().Cast<Func<string, ImageEditJobDto, Task>>())
+        foreach (var listener in handlers.GetInvocationList().Cast<Func<string, ImageEditJobDto, Task>>())
         {
             try
             {
@@ -277,24 +295,63 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             }
             catch (Exception ex)
             {
-                _log.LogWarning(ex, "Редактор картинок: слушатель завершения задачи {JobId} упал", job.Id);
+                _log.LogWarning(ex, "Редактор картинок: слушатель {What} задачи {JobId} упал", what, job.Id);
             }
         }
     }
 
+    // Вариант к размеру исходника и в рабочую папку под номером n; true — пропорции не совпали
+    private async Task<bool> SaveVariantAsync(Job job, int n, EditedImage image)
+    {
+        var mismatch = false;
+        if (job.MatchSize is { } size && _fitter is not null)
+        {
+            var match = await _fitter.MatchSizeAsync(image, size.Width, size.Height, CancellationToken.None);
+            image = match.Image;
+            mismatch = match.Mismatch;
+        }
+        _workspace.SaveVariant(job.OwnerId, job.Id, n, image);
+        return mismatch;
+    }
+
+    // Звено очереди Pipeline: варианты first.. сохраняются, попадают в job.Variants и уходят
+    // слушателям VariantReady. Не бросает — иначе следующее звено и финал не дождались бы очереди
+    private async Task DeliverReadyAsync(Task previous, Job job, int first, IReadOnlyList<EditedImage> ready)
+    {
+        // Звено заводится под job.Gate в потоке драйвера: разбор уходит из него сразу
+        await Task.Yield();
+        await previous;
+        try
+        {
+            for (var i = 0; i < ready.Count; i++)
+            {
+                var n = first + i;
+                var mismatch = await SaveVariantAsync(job, n, ready[i]);
+                lock (job.Gate)
+                {
+                    job.Variants.Add(n);
+                    if (mismatch) job.SizeNote = ImageEditSizeNotes.AspectMismatch;
+                }
+            }
+            await NotifyAsync(VariantReady, job, "готового варианта");
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Редактор картинок: готовые варианты задачи {JobId} не разобраны", job.Id);
+        }
+    }
+
+    // Финал пишет только хвост: варианты, отданные по ходу (ReadyCount), уже лежат в job.Variants
     private async Task CompleteAsync(Job job, ImageEditResult result)
     {
+        int delivered;
+        lock (job.Gate) delivered = job.ReadyCount;
         string? sizeNote = null;
-        for (var i = 0; i < result.Images.Count; i++)
+        List<int> tail = [];
+        for (var i = delivered; i < result.Images.Count; i++)
         {
-            var image = result.Images[i];
-            if (job.MatchSize is { } size && _fitter is not null)
-            {
-                var match = await _fitter.MatchSizeAsync(image, size.Width, size.Height, CancellationToken.None);
-                image = match.Image;
-                if (match.Mismatch) sizeNote = ImageEditSizeNotes.AspectMismatch;
-            }
-            _workspace.SaveVariant(job.OwnerId, job.Id, i + 1, image);
+            if (await SaveVariantAsync(job, i + 1, result.Images[i])) sizeNote = ImageEditSizeNotes.AspectMismatch;
+            tail.Add(i + 1);
         }
 
         var cost = result.ActualCost ?? EstimateCost(job.Quote);
@@ -302,12 +359,13 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         RecordSpend(job, cost?.Amount);
         lock (job.Gate)
         {
-            job.Variants.AddRange(Enumerable.Range(1, result.Images.Count));
+            job.Variants.AddRange(tail);
             job.Cost = cost;
             job.Outcome = EditOutcome.Ok;
             job.Charged = result.Charged ?? true;
-            job.SizeNote = sizeNote;
+            job.SizeNote = sizeNote ?? job.SizeNote;
             job.Status = ImageEditJobStatus.Completed;
+            sizeNote = job.SizeNote;
         }
         await NotifyFinishedAsync(job);
         await Broadcast(job.OwnerId, new ImageEditCompletedMessage(job.Id, job.ProjectId, [.. job.Variants], cost,
@@ -474,7 +532,8 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
 
     // ── Прогресс и события ───────────────────────────────────────────────────────
 
-    // Синхронный IProgress: Progress<T> увёл бы отчёт в пул и перемешал бы стадии
+    // Синхронный IProgress: Progress<T> увёл бы отчёт в пул и перемешал бы стадии. Поэтому и готовые
+    // варианты (Ready) здесь не ждутся, а только встают звеном в job.Pipeline — по порядку отчётов
     private sealed class JobProgress(ImageEditJobService owner, Job job) : IProgress<EditProgress>
     {
         public void Report(EditProgress value)
@@ -483,6 +542,11 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             int? elapsed;
             lock (job.Gate)
             {
+                if (value.Ready is { Count: > 0 } ready)
+                {
+                    job.Pipeline = owner.DeliverReadyAsync(job.Pipeline, job, job.ReadyCount + 1, ready);
+                    job.ReadyCount += ready.Count;
+                }
                 if (!job.IsActive) return;
                 var status = value.Stage switch
                 {

@@ -131,6 +131,35 @@ public class ImageThreadVersionsTests : IDisposable
     }
 
     [Fact]
+    public void Финал_после_версий_по_ходу_не_дублирует_их_и_журнал_видит_все_версии_запуска()
+    {
+        var id = Opened();
+        _store.AddLaunch(Owner, Chat, id, Launch("job-1", ImageThreadVersion.OriginId));
+
+        var partial = _store.AddLaunchVersions(Owner, Chat, id, "job-1", [(1, "a"), (2, "b")]);
+        partial.NewVersions.Should().HaveCount(2);
+        Thread(id).Launches.Single().Status.Should().Be(ImageThreadLaunchStatus.Running, "статус меняет только финал");
+        var first = Thread(id).Versions.Single(v => v.Variant == 1);
+        Thread(id).CurrentVersionId.Should().Be(first.Id, "текущая сдвигается по тому же правилу, что и в финале");
+        _store.Get(Owner, Chat).Events.Should().BeEmpty("журнал — одной строкой в финале");
+
+        IReadOnlyList<ImageThreadVersion>? logged = null;
+        var finished = _store.FinishLaunch(Owner, Chat, id, "job-1", ImageThreadLaunchStatus.Done,
+            [(1, "a"), (2, "b"), (3, "c")], (_, all) =>
+            {
+                logged = all;
+                return null;
+            });
+
+        finished.NewVersions.Should().ContainSingle().Which.Variant.Should().Be(3);
+        var ai = Thread(id).Versions.Where(v => !v.IsOrigin).ToList();
+        ai.Select(v => (v.Number, v.Variant)).Should().Equal((1, 1), (2, 2), (3, 3));
+        logged!.Select(v => v.Number).Should().Equal(1, 2, 3);
+        Thread(id).CurrentVersionId.Should().Be(first.Id);
+        Thread(id).Launches.Single().Status.Should().Be(ImageThreadLaunchStatus.Done);
+    }
+
+    [Fact]
     public void Продолжить_от_старой_версии_и_запуск_растят_новые_версии_от_неё_а_старые_не_тронуты()
     {
         var id = Opened();
@@ -289,9 +318,11 @@ public class ImageThreadVersionsTests : IDisposable
         return jobs;
     }
 
-    private (ImageEditorToolset Toolset, ImageThreadService Threads, ImageEditJobService Jobs, ImageEditSteps Steps) Agent()
+    private (ImageEditorToolset Toolset, ImageThreadService Threads, ImageEditJobService Jobs, ImageEditSteps Steps) Agent(
+        IImageEditor? editor = null)
     {
-        var jobs = NewJobs();
+        editor ??= new VariantsEditor();
+        var jobs = NewJobs(editor);
         var raster = new SkiaImageRaster();
         var steps = new ImageEditSteps(raster, new ImageEditWorkspace(Path.Combine(_dir, "image-editor")), jobs);
         var session = new Session { Id = Chat, OwnerId = Owner, ProjectId = ProjectId };
@@ -301,7 +332,7 @@ public class ImageThreadVersionsTests : IDisposable
         projects.Setup(p => p.GetById(ProjectId)).Returns(new Project { Id = ProjectId, OwnerId = Owner, RootPath = _root });
         var threads = new ImageThreadService(_store, NullLogger<ImageThreadService>.Instance, directory.Object, _feed, _broadcaster, steps);
         threads.Watch(jobs);
-        IImageEditor[] editors = [new VariantsEditor()];
+        IImageEditor[] editors = [editor];
         var launcher = new ImageEditLaunchAssembler(editors, jobs, raster, threads, steps);
         var accessor = new Mock<IMcpSessionAccessor>();
         accessor.Setup(a => a.GetOwned(Chat, Owner)).Returns(session);
@@ -315,11 +346,12 @@ public class ImageThreadVersionsTests : IDisposable
     private static Task<McpToolCallResult> Call(ImageEditorToolset toolset, string tool, JsonObject args) =>
         toolset.CallAsync(tool, args, new McpToolCallContext(Owner, Chat, Chat), default);
 
-    private async Task<string> Generate(ImageEditorToolset toolset, string threadId, int count, string? versionId = null)
+    private async Task<string> Generate(ImageEditorToolset toolset, string threadId, int count, string? versionId = null,
+        string provider = VariantsEditor.ProviderKey)
     {
         var args = new JsonObject
         {
-            ["threadId"] = threadId, ["prompt"] = "синий фон", ["provider"] = VariantsEditor.ProviderKey, ["count"] = count,
+            ["threadId"] = threadId, ["prompt"] = "синий фон", ["provider"] = provider, ["count"] = count,
         };
         if (versionId is not null) args["versionId"] = versionId;
         var result = await Call(toolset, ImageEditorToolset.ToolGenerate, args);
@@ -442,6 +474,62 @@ public class ImageThreadVersionsTests : IDisposable
             .Should().Be(ImageEditErrorCodes.StepNotFound);
     }
 
+    // Варианты по готовности: первый вариант — версия, пока запуск ещё идёт; финал добирает хвост
+    [Fact]
+    public async Task Готовый_вариант_становится_версией_пока_запуск_идёт_и_финал_без_дублей()
+    {
+        var editor = new StagedEditor();
+        var (toolset, _, jobs, _) = Agent(editor);
+        var id = Opened();
+
+        var jobId = await Generate(toolset, id, 3, provider: StagedEditor.ProviderKey);
+        var partial = await Until(() => Thread(id) is var t && t.Versions.Count == 2 ? t : null);
+
+        partial.Launches.Single().Status.Should().Be(ImageThreadLaunchStatus.Running);
+        partial.Versions.Last().Should().Match<ImageThreadVersion>(v => v.JobId == jobId && v.Variant == 1 && v.Number == 1);
+        partial.CurrentVersionId.Should().Be(partial.Versions.Last().Id);
+        jobs.Get(Owner, ProjectId, jobId)!.Status.Should().NotBe(ImageEditJobStatus.Completed);
+        _store.Get(Owner, Chat).Events.Should().NotContain(e => e.Kind == ImageThreadEventKinds.Versions);
+        _broadcaster.ToOwnerCalls.Select(c => c.Message).OfType<ImageThreadChangedMessage>()
+            .Should().Contain(m => m.State.Threads.Single().Versions.Count == 2);
+
+        editor.Release.SetResult();
+        var done = await Finished(id, jobId);
+
+        done.Versions.Where(v => !v.IsOrigin).Select(v => (v.Number, v.Variant)).Should().Equal((1, 1), (2, 2), (3, 3));
+        done.Launches.Single().Status.Should().Be(ImageThreadLaunchStatus.Done);
+        _store.Get(Owner, Chat).Events.Where(e => e.Kind == ImageThreadEventKinds.Versions).Should().ContainSingle()
+            .Which.Text.Should().StartWith("Готово «синий фон» в картинку images/hero.png: версии 1–3");
+    }
+
+    [Fact]
+    public async Task Отмена_посередине_оставляет_готовые_версии_и_статус_отменён()
+    {
+        var editor = new StagedEditor();
+        var (toolset, _, jobs, _) = Agent(editor);
+        var id = Opened();
+        var jobId = await Generate(toolset, id, 3, provider: StagedEditor.ProviderKey);
+        await Until(() => Thread(id).Versions.Count == 2 ? Thread(id) : null);
+
+        await jobs.CancelAsync(Owner, ProjectId, jobId, default);
+        var done = await Finished(id, jobId);
+
+        done.Launches.Single().Status.Should().Be(ImageThreadLaunchStatus.Cancelled);
+        done.Versions.Where(v => !v.IsOrigin).Should().ContainSingle().Which.Variant.Should().Be(1);
+        _store.Get(Owner, Chat).Events.Where(e => e.Kind == ImageThreadEventKinds.Versions).Should().ContainSingle()
+            .Which.Text.Should().Be("Запуск «синий фон» в картинку images/hero.png отменён; готова версия 1");
+    }
+
+    private static async Task<T> Until<T>(Func<T?> probe) where T : class
+    {
+        for (var i = 0; i < 500; i++)
+        {
+            if (probe() is { } found) return found;
+            await Task.Delay(10);
+        }
+        throw new TimeoutException("не дождались");
+    }
+
     private sealed class RecordingFeed : IChatFeed
     {
         public List<(string SessionId, StoredModuleRecord Record)> Records { get; } = [];
@@ -451,6 +539,41 @@ public class ImageThreadVersionsTests : IDisposable
             lock (Records) Records.Add((sessionId, record));
             return Task.FromResult(true);
         }
+    }
+
+    // Поставщик по прогону на вариант: первый вариант отдаёт отчётом Ready сразу, остальные — после
+    // Release; отмена посередине обрывает его
+    private sealed class StagedEditor : IImageEditor
+    {
+        public const string ProviderKey = "staged";
+
+        private static readonly ImageEditModelInfo Model = new("m", "M",
+            new ImageEditCaps([ImageEditOp.Edit, ImageEditOp.Generate], MaskSupport.AsReference, 3, 4, false));
+
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public string Key => ProviderKey;
+        public string Label => "Staged";
+        public string PriceUnit => ImageEditPriceUnits.Free;
+        public bool Enabled => true;
+        public IReadOnlyList<ImageEditModelInfo> Models => [Model];
+        public ImageEditModelInfo? PickModel(ImageEditOp op, EditMode mode, EditTraits traits) => Model;
+
+        public async Task<ImageEditResult> RunAsync(ImageEditRequest req, IProgress<EditProgress> progress, CancellationToken ct)
+        {
+            SKColor[] colors = [SKColors.Blue, SKColors.Green, SKColors.Yellow, SKColors.Black];
+            var images = new List<EditedImage>();
+            for (var i = 0; i < req.Count; i++)
+            {
+                if (i == 1) await Release.Task.WaitAsync(ct);
+                var image = new EditedImage(Png(8, 6, colors[i]), "image/png");
+                images.Add(image);
+                progress.Report(new EditProgress(EditStage.Downloading, Run: i + 1, Runs: req.Count, Ready: [image]));
+            }
+            return new ImageEditResult(EditOutcome.Ok, images, new EditCost(0, PriceUnit), false, null, null);
+        }
+
+        public Task<bool> CancelRemoteAsync(string remoteId, CancellationToken ct) => Task.FromResult(false);
     }
 
     // Поставщик, который сразу отдаёт столько настоящих PNG, сколько вариантов просили

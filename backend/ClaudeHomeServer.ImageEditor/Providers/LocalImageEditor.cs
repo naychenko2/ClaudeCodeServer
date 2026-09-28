@@ -11,9 +11,10 @@ namespace ClaudeHomeServer.Services.ImageEditor;
 // кистью: маску-образец модель не понимает (живой прогон 2026-09-26: стёрла фон, а отмеченное
 // оставила), поэтому область маски закрашивается на холсте серым, и модель заменяет серое фоном.
 // Стирание идёт одним холстом, без образцов и размеченной копии — на копии виден стираемый
-// предмет. Граф правки отдаёт
-// один вариант за прогон, поэтому варианты правки идут прогонами по очереди — общая очередь
-// ComfyUI не забивается чужими ожиданиями одного человека.
+// предмет. Варианты правки и генерации идут прогонами по очереди, по одному на вариант: общая
+// очередь ComfyUI не забивается ожиданиями одного человека, а каждый готовый вариант сразу уходит
+// отчётом EditProgress.Ready. Граф ComfyWorkflows при этом не трогается — он общий с MCP-инструментом
+// local_generate_image, где batch_size остаётся.
 public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, IImageEditQuoter
 {
     public const string ProviderKey = "local";
@@ -27,6 +28,7 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
     public const int MaxImages = 16;
 
     internal TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(2);
+    internal TimeSpan Ceiling { get; set; } = JobCeiling;
 
     public string Key => ProviderKey;
     public string Label => "Локальные модели";
@@ -34,7 +36,7 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
     public bool Enabled => media?.Available == true;
     public IReadOnlyList<ImageEditModelInfo> Models => Catalog;
 
-    // Генерация — до 4 вариантов одним прогоном; правка — до 16 картинок всего (холст и 15 образцов)
+    // Генерация — до 4 вариантов, прогон на вариант; правка — до 16 картинок всего (холст и 15 образцов)
     private static readonly IReadOnlyList<ImageEditModelInfo> Catalog =
     [
         new(QwenImage, "Qwen-Image 2.1",
@@ -69,7 +71,7 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
             EtaSeconds: Eta(model, request), QueueLength: queue);
     }
 
-    // Время всех вариантов: генерация идёт одним прогоном, правка — прогоном на вариант
+    // Время всех вариантов: и генерация, и правка идут прогоном на вариант
     private int? Eta(ImageEditModelInfo model, ImageEditQuoteRequest request)
     {
         var count = Math.Max(1, request.Count);
@@ -79,9 +81,7 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
         var images = request.References + (request.HasAnnotations ? 1 : 0) + (request.HasMask ? 1 : 0)
                      + (request.HasCharacter ? 1 : 0);
         if (request.Op == ImageEditOp.Generate)
-            return images == 0
-                ? media!.EtaSeconds(LocalImageOp.Generate, count, 0)
-                : media!.EtaSeconds(LocalImageOp.Generate, count, images) * count;
+            return media!.EtaSeconds(LocalImageOp.Generate, 1, images) * count;
         return media!.EtaSeconds(LocalImageOp.Edit, 1, images + 1) * count;
     }
 
@@ -92,7 +92,7 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
         if (media is null) return Fail(EditOutcome.Unavailable, "Локальные модели недоступны на этом сервере");
 
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeout.CancelAfter(JobCeiling);
+        timeout.CancelAfter(Ceiling);
         var token = timeout.Token;
 
         var references = req.References.Select(r => r.Bytes).ToList();
@@ -106,9 +106,10 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
                 runs = 1;
                 break;
             case ImageEditOp.Generate:
-                // Холст генерации по тексту не нужен: берутся только образцы человека
-                run = new LocalImageRequest(LocalImageOp.Generate, req.Prompt, references, req.AspectRatio, req.Count);
-                runs = references.Count == 0 ? 1 : Math.Clamp(req.Count, 1, 4);
+                // Холст генерации по тексту не нужен: берутся только образцы человека. Прогон на
+                // вариант и без образцов: первый вариант виден сразу, а не после всей пачки
+                run = new LocalImageRequest(LocalImageOp.Generate, req.Prompt, references, req.AspectRatio, 1);
+                runs = Math.Clamp(req.Count, 1, 4);
                 break;
             case ImageEditOp.Edit or ImageEditOp.Inpaint
                 when req.Source is not null && EraseMaskOf(req) is { } eraseMask:
@@ -130,8 +131,6 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
             return Fail(EditOutcome.Failed,
                 $"Локальная модель берёт не больше {MaxImages} картинок за раз, а в запросе {run.Images.Count} " +
                 "(исходник, пометки, маска, образцы и фото персонажа). Уберите лишние образцы");
-        // Генерация по тексту без образцов отдаёт все варианты одним прогоном, остальное — по одному
-        if (runs > 1) run = run with { Count = 1 };
 
         var images = new List<EditedImage>();
         var tickets = new List<string>();
@@ -161,8 +160,10 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
                     return new ImageEditResult(EditOutcome.Failed, [], Free, false, RemoteId(tickets),
                         "Локальная модель не справилась: " + (done.Error ?? "ComfyUI завершил задачу ошибкой"));
                 }
-                progress.Report(at with { Stage = EditStage.Downloading, QueuePosition = null });
-                images.AddRange(done.Files.Select(f => new EditedImage(f.Bytes, f.ContentType)));
+                // Готовый прогон уходит в отчёт сразу: вариант становится версией, не дожидаясь остальных
+                List<EditedImage> ready = [.. done.Files.Select(f => new EditedImage(f.Bytes, f.ContentType))];
+                images.AddRange(ready);
+                progress.Report(at with { Stage = EditStage.Downloading, QueuePosition = null, Ready = ready });
             }
         }
         catch (OperationCanceledException)
@@ -172,7 +173,7 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
             if (ct.IsCancellationRequested) throw;
             if (images.Count == 0)
                 return new ImageEditResult(EditOutcome.Failed, [], Free, false, RemoteId(tickets),
-                    $"Локальная видеокарта не успела за {JobCeiling.TotalMinutes:0} минут — очередь занята");
+                    $"Локальная видеокарта не успела за {Ceiling.TotalMinutes:0} минут — очередь занята");
         }
 
         return images.Count == 0

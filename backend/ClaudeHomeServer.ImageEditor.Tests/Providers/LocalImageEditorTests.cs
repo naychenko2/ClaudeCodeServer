@@ -32,13 +32,17 @@ public class LocalImageEditorTests : IDisposable
         // ETA прогона в ответе на постановку; RunningFirst — первый опрос билета отвечает Running
         public int? SubmitEta { get; set; } = 45;
         public bool RunningFirst { get; set; }
+        // Постоянная часть времени генерации по тексту: с ней батч дешевле прогонов по одному
+        public int GenerateBase { get; set; }
+        // Билеты с этого номера висят в очереди вечно (чужие прогоны заняли видеокарту)
+        public int? QueuedFrom { get; set; }
         private readonly ConcurrentDictionary<string, bool> _seen = new();
 
         public Task<int?> QueueLengthAsync(CancellationToken ct) => Task.FromResult(Queue);
 
         public int? EtaSeconds(LocalImageOp op, int count, int images) => op switch
         {
-            LocalImageOp.Generate when images == 0 => 40 * count,
+            LocalImageOp.Generate when images == 0 => GenerateBase + 40 * count,
             LocalImageOp.FaceDetail => 25,
             _ => 60 + 10 * (images - 1),
         };
@@ -54,6 +58,8 @@ public class LocalImageEditorTests : IDisposable
         {
             if (RunningFirst && _seen.TryAdd(ticket, true))
                 return Task.FromResult(new LocalImagePoll(LocalImageState.Running, null, [], null));
+            if (QueuedFrom is { } from && int.Parse(ticket[1..]) >= from)
+                return Task.FromResult(new LocalImagePoll(LocalImageState.Queued, 5, [], null));
             var request = Submitted.ElementAt(int.Parse(ticket[1..]) - 1);
             var files = Enumerable.Range(0, request.Count)
                 .Select(i => new LocalImageFile(TestImages.Png(8, 8, (byte)i), "image/png"))
@@ -225,6 +231,56 @@ public class LocalImageEditorTests : IDisposable
             (EditStage.Queued, 1), (EditStage.Running, 1), (EditStage.Downloading, 1),
             (EditStage.Queued, 2), (EditStage.Running, 2), (EditStage.Downloading, 2));
         reports.Should().OnlyContain(r => r.Runs == 2 && r.EtaSeconds == 52);
+    }
+
+    // Варианты по готовности: генерация по тексту тоже идёт прогоном на вариант (граф ComfyWorkflows
+    // не тронут — батч остаётся у MCP-инструмента), и каждый скачанный прогон сразу уходит отчётом Ready
+    [Fact]
+    public async Task ГенерацияПоТексту_ПрогонНаВариант_КаждыйОтдаётReady()
+    {
+        var media = new FakeMedia();
+        var reports = new List<EditProgress>();
+        var request = new ImageEditRequest(ImageEditOp.Generate, "кот в шляпе", null, null, [], 3, "1:1", null,
+            LocalImageEditor.QwenImage, null);
+
+        var result = await Editor(media).RunAsync(request, new SyncProgress(reports.Add), default);
+
+        result.Outcome.Should().Be(EditOutcome.Ok, result.Error);
+        media.Submitted.Should().HaveCount(3).And.OnlyContain(r => r.Op == LocalImageOp.Generate && r.Count == 1);
+        var ready = reports.Where(r => r.Ready is not null).ToList();
+        ready.Select(r => (r.Stage, r.Run, r.Ready!.Count)).Should().Equal(
+            (EditStage.Downloading, 1, 1), (EditStage.Downloading, 2, 1), (EditStage.Downloading, 3, 1));
+        result.Images.Should().HaveCount(3, "итог несёт все варианты по порядку")
+            .And.Equal(ready.SelectMany(r => r.Ready!));
+    }
+
+    [Fact]
+    public async Task КотировкаГенерацииПоТексту_ВремяПрогонаНаЧислоВариантов()
+    {
+        var media = new FakeMedia { GenerateBase = 20 };
+        var service = Service(Editor(media));
+
+        var quote = await service.QuoteAsync("user-a", Project, Quote(ImageEditOp.Generate, count: 3), default);
+
+        quote.Value!.Estimate.EtaSeconds.Should().Be(media.EtaSeconds(LocalImageOp.Generate, 1, 0) * 3,
+            "три прогона по одному, а не один батч на три (он дал бы 140)");
+    }
+
+    // Потолок задачи истёк посреди пачки: готовое не теряется — результат Ok с тем, что успело
+    [Fact]
+    public async Task ПотолокИстёкПосредиПачки_ГотовыеВариантыОстаются()
+    {
+        var media = new FakeMedia { QueuedFrom = 2 };
+        var editor = Editor(media);
+        editor.Ceiling = TimeSpan.FromMilliseconds(300);
+        var service = Service(editor);
+
+        var job = await RunAsync(service, Quote(ImageEditOp.Edit, count: 3), Input("сделай вечер"));
+
+        job.Status.Should().Be(ImageEditJobStatus.Completed, job.Error);
+        job.Variants.Should().Equal(1);
+        service.OpenVariant("user-a", Project, job.JobId, 1).Should().NotBeNull();
+        media.Cancelled.Should().Equal(["t2"], "повисший в очереди прогон снимается");
     }
 
     private sealed class SyncProgress(Action<EditProgress> report) : IProgress<EditProgress>

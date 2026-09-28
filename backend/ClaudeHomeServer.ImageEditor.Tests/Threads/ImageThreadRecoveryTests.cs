@@ -3,6 +3,7 @@ using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.ImageEditor;
+using ClaudeHomeServer.Services.ImageEditor.Chats;
 using ClaudeHomeServer.Services.ImageEditor.Threads;
 using ClaudeHomeServer.Tests.ImageEditor.Fakes;
 using FluentAssertions;
@@ -88,6 +89,31 @@ public class ImageThreadRecoveryTests : IDisposable
         var revision = after.Store.Get(Owner, Chat).Revision;
         (await after.Threads.RecoverInterruptedAsync(after.Jobs, default)).Should().Be(0);
         after.Store.Get(Owner, Chat).Revision.Should().Be(revision);
+    }
+
+    // Запуск с вариантами по готовности: часть уже стала версиями до перезапуска — они остаются,
+    // запуск помечается прерванным, а журнал и блок хода говорят, что сохранено и что нет
+    [Fact]
+    public async Task После_перезапуска_запуск_с_частью_версий_прерван_а_версии_на_месте()
+    {
+        var before = Instance();
+        var thread = before.Store.Create(Owner, Chat, "images/hero.png", null, focus: true).Thread;
+        before.Store.AddLaunch(Owner, Chat, thread.Id, new ImageThreadLaunch("job-partial", ImageThreadVersion.OriginId, null,
+            before.Store.Now(), ImageThreadLaunchStatus.Running, "human", "синий фон"));
+        before.Store.AddLaunchVersions(Owner, Chat, thread.Id, "job-partial", [(1, "a"), (2, "b")]);
+
+        var after = Instance();
+        (await after.Threads.RecoverInterruptedAsync(after.Jobs, default)).Should().Be(1);
+
+        var state = after.Store.Get(Owner, Chat);
+        var t = state.Threads.Single();
+        t.Launches.Single().Status.Should().Be(ImageThreadLaunchStatus.Interrupted);
+        t.Versions.Where(v => v.JobId == "job-partial").Select(v => v.Number).Should().Equal(1, 2);
+        state.Events.Should().ContainSingle(e => e.Kind == ImageThreadEventKinds.Interrupted).Which.Text.Should().Be(
+            $"{ImageThreadService.InterruptedPartialText}: картинка images/hero.png, часть вариантов сохранена (версии 1–2), " +
+            "остальные не дорисованы — запусти заново");
+        ImageEditorStateContributor.RenderThreads(state, [], _ => null)
+            .Should().Contain("прерван перезапуском сервера: часть вариантов уже версии").And.NotContain("вариантов не будет");
     }
 
     [Fact]

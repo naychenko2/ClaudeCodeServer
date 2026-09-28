@@ -259,10 +259,26 @@ public sealed class ImageThreadStore(string root, TimeProvider? time = null)
             }, log);
         });
 
+    // Готовые по ходу варианты идущего запуска: версии добавляются, статус запуска НЕ меняется — его
+    // меняет только FinishLaunch (иначе финал не нашёл бы запуск Running и потерял бы хвост).
+    // Журнал не пишется: строка одна на весь запуск, в финале
+    public ImageThreadWrite AddLaunchVersions(string ownerId, string sessionId, string threadId, string jobId,
+        IReadOnlyList<(int Variant, string StepId)> variants) =>
+        Mutate(ownerId, sessionId, threadId, null, (state, thread) =>
+        {
+            if (thread.Launches.FirstOrDefault(l => l.JobId == jobId) is not { Status: ImageThreadLaunchStatus.Running } launch)
+                return new ImageThreadWrite(ImageThreadWriteStatus.Ok, state);
+            var (after, added) = WithLaunchVersions(thread, launch, variants);
+            return added.Count == 0
+                ? new ImageThreadWrite(ImageThreadWriteStatus.Ok, state)
+                : Replace(state, after) with { NewVersions = added };
+        });
+
     // Запуск кончился: status — ImageThreadLaunchStatus.*, variants — (номер варианта, шаг с его
-    // байтами) по порядку. Каждый вариант — новая версия внизу с основой запуска. Текущей
-    // становится первая новая версия, если человек не сменил текущую, пока шла генерация. Запуск
-    // уже не идёт (повтор, потерян при перезапуске) — ничего не меняет
+    // байтами) по порядку. Каждый вариант — новая версия внизу с основой запуска; вариант, уже
+    // ставший версией по ходу (AddLaunchVersions), не дублируется. Текущей становится первая новая
+    // версия, если человек не сменил текущую, пока шла генерация. Запуск уже не идёт (повтор, потерян
+    // при перезапуске) — ничего не меняет. log получает ВСЕ версии запуска, а не только прирост
     public ImageThreadWrite FinishLaunch(string ownerId, string sessionId, string threadId, string jobId, string status,
         IReadOnlyList<(int Variant, string StepId)> variants,
         Func<ImageThread, IReadOnlyList<ImageThreadVersion>, ImageThreadEvent?>? log = null) =>
@@ -271,19 +287,33 @@ public sealed class ImageThreadStore(string root, TimeProvider? time = null)
             if (thread.Launches.FirstOrDefault(l => l.JobId == jobId) is not { Status: ImageThreadLaunchStatus.Running } launch)
                 return new ImageThreadWrite(ImageThreadWriteStatus.Ok, state);
 
-            var number = thread.Versions.Max(v => v.Number) + 1;
-            var now = Now();
-            List<ImageThreadVersion> added = [.. variants.Select((v, i) => new ImageThreadVersion(NewId(), number + i, jobId,
-                v.Variant, launch.BaseVersionId, launch.BaseStepId, [v.StepId], v.StepId, now))];
-            var moveCurrent = added.Count > 0 && thread.CurrentVersionId == launch.BaseVersionId;
-            var after = thread with
+            var (grown, added) = WithLaunchVersions(thread, launch, variants);
+            var after = grown with
             {
-                Versions = [.. thread.Versions, .. added],
-                CurrentVersionId = moveCurrent ? added[0].Id : thread.CurrentVersionId,
-                Launches = [.. thread.Launches.Select(l => l.JobId == jobId ? l with { Status = status } : l)],
+                Launches = [.. grown.Launches.Select(l => l.JobId == jobId ? l with { Status = status } : l)],
             };
-            return Replace(state, after, log?.Invoke(after, added)) with { NewVersions = added };
+            List<ImageThreadVersion> all = [.. after.Versions.Where(v => v.JobId == jobId)];
+            return Replace(state, after, log?.Invoke(after, all)) with { NewVersions = added };
         });
+
+    // Версии вариантов запуска внизу нити; пара (JobId, Variant), уже ставшая версией, пропускается.
+    // Текущая сдвигается на первую новую, только пока текущей остаётся основа запуска
+    private (ImageThread After, List<ImageThreadVersion> Added) WithLaunchVersions(ImageThread thread,
+        ImageThreadLaunch launch, IReadOnlyList<(int Variant, string StepId)> variants)
+    {
+        var number = thread.Versions.Max(v => v.Number) + 1;
+        var now = Now();
+        List<ImageThreadVersion> added = [.. variants
+            .Where(v => !thread.Versions.Any(x => x.JobId == launch.JobId && x.Variant == v.Variant))
+            .Select((v, i) => new ImageThreadVersion(NewId(), number + i, launch.JobId,
+                v.Variant, launch.BaseVersionId, launch.BaseStepId, [v.StepId], v.StepId, now))];
+        var moveCurrent = added.Count > 0 && thread.CurrentVersionId == launch.BaseVersionId;
+        return (thread with
+        {
+            Versions = [.. thread.Versions, .. added],
+            CurrentVersionId = moveCurrent ? added[0].Id : thread.CurrentVersionId,
+        }, added);
+    }
 
     // Задачи, которых нет в живом реестре (isAlive = false), снимаются с нитей чата: их оборвал
     // перезапуск сервера, вариантов не будет. Сверка идёт под замком хранилища, поэтому запуск,

@@ -276,42 +276,52 @@ public sealed class ImageThreadService(
         }
     }
 
-    // Задача кончилась (зовёт исполнитель): у готовой каждый вариант ложится шагом (байты как
-    // есть, родитель — шаг-основа запуска) и становится версией нити внизу; у сбоя и отмены запуск
-    // просто закрывается. Задача вне нити, чужой чат или запуск, которого нить не знает, —
-    // ничего. Сбой здесь не роняет исполнителя: варианты остаются в задаче до TTL
+    // Вариант готов, а задача ещё идёт (зовёт исполнитель, событие VariantReady): варианты, ещё не
+    // ставшие версиями, ложатся шагами и версиями внизу. Статус запуска и журнал не трогаются —
+    // это дело финала. Сбой здесь не роняет исполнителя: финал подберёт вариант ещё раз
+    public async Task OnVariantReadyAsync(string ownerId, ImageEditJobDto job)
+    {
+        if (job is not { ThreadId: { } threadId, ChatSessionId: { } sessionId } || steps is null) return;
+        try
+        {
+            if (RunningLaunch(ownerId, sessionId, threadId, job) is not ({ } thread, { } launch)) return;
+            var taken = TakeVariants(ownerId, job, thread, launch);
+            if (taken.Count == 0) return;
+            var written = store.AddLaunchVersions(ownerId, sessionId, threadId, job.JobId, taken);
+            if (written.Status == ImageThreadWriteStatus.Ok)
+                await AfterAsync(ownerId, job.ProjectId, sessionId, written);
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "Редактор картинок: готовые варианты задачи {JobId} не стали версиями нити {ThreadId}",
+                job.JobId, threadId);
+        }
+    }
+
+    // Задача кончилась (зовёт исполнитель): варианты, ещё не ставшие версиями по ходу, ложатся
+    // шагами (байты как есть, родитель — шаг-основа запуска) и становятся версиями внизу — при
+    // любом исходе, отмена тоже оставляет готовое. Статус запуска меняется только здесь; Failed —
+    // только если у запуска нет ни одной версии. Задача вне нити, чужой чат или запуск, которого
+    // нить не знает, — ничего. Сбой здесь не роняет исполнителя: варианты остаются в задаче до TTL
     public async Task OnJobFinishedAsync(string ownerId, ImageEditJobDto job)
     {
         if (job is not { ThreadId: { } threadId, ChatSessionId: { } sessionId }) return;
         try
         {
-            if (directory?.GetById(sessionId) is not { } session || session.ProjectId != job.ProjectId) return;
-            var thread = store.Get(ownerId, sessionId).Threads.FirstOrDefault(t => t.Id == threadId);
-            if (thread?.Launches.FirstOrDefault(l => l.JobId == job.JobId) is not { Status: ImageThreadLaunchStatus.Running } launch)
-                return;
+            if (RunningLaunch(ownerId, sessionId, threadId, job) is not ({ } thread, { } launch)) return;
 
-            var taken = new List<(int Variant, string StepId)>();
+            var taken = steps is null ? [] : TakeVariants(ownerId, job, thread, launch);
+            var versions = thread.Versions.Count(v => v.JobId == job.JobId) + taken.Count;
             var status = job.Status switch
             {
-                ImageEditJobStatus.Completed => ImageThreadLaunchStatus.Done,
                 ImageEditJobStatus.Cancelled => ImageThreadLaunchStatus.Cancelled,
-                _ => ImageThreadLaunchStatus.Failed,
+                _ when versions == 0 => ImageThreadLaunchStatus.Failed,
+                _ => ImageThreadLaunchStatus.Done,
             };
-            if (status == ImageThreadLaunchStatus.Done && steps is not null)
-            {
-                foreach (var n in job.Variants)
-                {
-                    var step = steps.TakeVariant(ownerId, job.ProjectId, job.JobId, n, launch.BaseStepId, thread.File);
-                    if (step.Value is { } s) taken.Add((n, s.StepId));
-                    else log.LogWarning("Редактор картинок: вариант {Variant} задачи {JobId} не стал версией: {Error}",
-                        n, job.JobId, step.Error);
-                }
-                if (taken.Count == 0) status = ImageThreadLaunchStatus.Failed;
-            }
 
             var written = store.FinishLaunch(ownerId, sessionId, threadId, job.JobId, status, taken,
-                (after, added) => new ImageThreadEvent(store.Now(), ImageThreadEventKinds.Versions,
-                    VersionsText(after, launch, added, job), threadId, job.JobId));
+                (after, all) => new ImageThreadEvent(store.Now(), ImageThreadEventKinds.Versions,
+                    VersionsText(after, launch, all, job), threadId, job.JobId));
             if (written.Status == ImageThreadWriteStatus.Ok)
                 await AfterAsync(ownerId, job.ProjectId, sessionId, written);
         }
@@ -321,23 +331,59 @@ public sealed class ImageThreadService(
         }
     }
 
-    // «Готово «синий фон»: версии 3–4 картинки hero.png (от исходника)» / «… не получилось»
-    private static string VersionsText(ImageThread thread, ImageThreadLaunch launch, IReadOnlyList<ImageThreadVersion> added,
+    // Идущий запуск задачи в нити своего чата; иначе null
+    private (ImageThread Thread, ImageThreadLaunch Launch)? RunningLaunch(string ownerId, string sessionId, string threadId,
+        ImageEditJobDto job)
+    {
+        if (directory?.GetById(sessionId) is not { } session || session.ProjectId != job.ProjectId) return null;
+        var thread = store.Get(ownerId, sessionId).Threads.FirstOrDefault(t => t.Id == threadId);
+        return thread?.Launches.FirstOrDefault(l => l.JobId == job.JobId) is { Status: ImageThreadLaunchStatus.Running } launch
+            ? (thread, launch)
+            : null;
+    }
+
+    // Варианты задачи, ещё не ставшие версиями, — шагами рабочей папки. Уже взятые пропускаются ДО
+    // TakeVariant: иначе в рабочей папке остался бы лишний шаг
+    private List<(int Variant, string StepId)> TakeVariants(string ownerId, ImageEditJobDto job, ImageThread thread,
+        ImageThreadLaunch launch)
+    {
+        var taken = new List<(int Variant, string StepId)>();
+        foreach (var n in job.Variants)
+        {
+            if (thread.Versions.Any(v => v.JobId == job.JobId && v.Variant == n)) continue;
+            var step = steps!.TakeVariant(ownerId, job.ProjectId, job.JobId, n, launch.BaseStepId, thread.File);
+            if (step.Value is { } s) taken.Add((n, s.StepId));
+            else log.LogWarning("Редактор картинок: вариант {Variant} задачи {JobId} не стал версией: {Error}",
+                n, job.JobId, step.Error);
+        }
+        return taken;
+    }
+
+    // «Готово «синий фон»: версии 3–4 картинки hero.png (от исходника)» / «… не получилось» /
+    // «… отменён; готовы версии 3–4». all — все версии запуска, а не только прирост финала
+    private static string VersionsText(ImageThread thread, ImageThreadLaunch launch, IReadOnlyList<ImageThreadVersion> all,
         ImageEditJobDto job)
     {
         var what = $"«{launch.Prompt}» в картинку {Name(thread)}";
-        if (added.Count == 0)
-            return job.Status == ImageEditJobStatus.Cancelled ? $"Запуск {what} отменён"
+        var cancelled = job.Status == ImageEditJobStatus.Cancelled;
+        if (all.Count == 0)
+            return cancelled ? $"Запуск {what} отменён"
                 : $"Запуск {what} не получился" + (string.IsNullOrWhiteSpace(job.Error) ? "" : $" ({job.Error})");
-        var numbers = added.Count == 1 ? $"версия {added[0].Number}" : $"версии {added[0].Number}–{added[^1].Number}";
+        var numbers = all.Count == 1 ? $"версия {all[0].Number}" : $"версии {all[0].Number}–{all[^1].Number}";
+        if (cancelled) return $"Запуск {what} отменён; {(all.Count == 1 ? "готова" : "готовы")} {numbers}";
         var from = thread.Version(launch.BaseVersionId) is { } b ? $", от: {ImageThread.Label(b)}" : "";
-        var current = thread.CurrentVersion is { } c && added.Contains(c) ? $"; в работе {ImageThread.Label(c)}" : "";
+        var current = thread.CurrentVersion is { } c && all.Contains(c) ? $"; в работе {ImageThread.Label(c)}" : "";
         return $"Готово {what}: {numbers}{from}{current}";
     }
 
-    // Варианты запуска становятся версиями, как только исполнитель их скачал: подписку ставит
-    // регистрация модуля (ImageEditorSubsystem), в тестах — сам тест
-    public void Watch(ImageEditJobService jobs) => jobs.Finished += OnJobFinishedAsync;
+    // Варианты запуска становятся версиями, как только исполнитель их скачал (VariantReady), хвост и
+    // статус — по завершению (Finished): подписку ставит регистрация модуля (ImageEditorSubsystem), в
+    // тестах — сам тест
+    public void Watch(ImageEditJobService jobs)
+    {
+        jobs.VariantReady += OnVariantReadyAsync;
+        jobs.Finished += OnJobFinishedAsync;
+    }
 
     // Человек сохранил картинку нити: нить идёт за новым файлом, в ленте тихая строка
     public async Task OnSavedAsync(string ownerId, string projectId, string sessionId, string threadId, string path,
@@ -359,12 +405,14 @@ public sealed class ImageThreadService(
     }
 
     public const string InterruptedText = "Задача потеряна при перезапуске сервера";
+    public const string InterruptedPartialText = "Запуск прерван перезапуском сервера";
 
     // После перезапуска сервера (ADR-019): реестр задач живёт в памяти, и PendingJobId, которого
     // в нём нет, не дождётся ни вариантов, ни отказа — карточка висела бы в «Рисуем…». Такая
     // задача снимается с нити с пометкой InterruptedJobId и записью журнала для хода, владельцу
-    // уходит image_thread_changed. Текст покрывает и задачу, которая до рестарта уже отрисовала
-    // варианты и ждала «Взять»: они тоже потеряны вместе с реестром. Трату не трогает: поставщик принял задачу до перезапуска, и
+    // уходит image_thread_changed. Варианты, ставшие версиями по ходу (VariantReady), остаются —
+    // текст тогда называет их; не дорисованные и у старых нитей ждавшие «Взять» потеряны вместе с
+    // реестром. Трату не трогает: поставщик принял задачу до перезапуска, и
     // «не списано» от него уже не придёт (инвариант учёта — отмена после принятия трату не отменяет)
     public async Task<int> RecoverInterruptedAsync(IImageEditJobs? jobs, CancellationToken ct)
     {
@@ -378,7 +426,7 @@ public sealed class ImageThreadService(
                 var state = store.DropDeadPending(ownerId, sessionId,
                     jobId => projectId is not null && jobs?.Get(ownerId, projectId, jobId) is not null,
                     (thread, jobId) => new ImageThreadEvent(store.Now(), ImageThreadEventKinds.Interrupted,
-                        $"{InterruptedText}: картинка {Name(thread)}, варианты недоступны — запусти заново", thread.Id, jobId));
+                        InterruptedEventText(thread, jobId), thread.Id, jobId));
                 if (state is null) continue;
                 dropped++;
                 if (projectId is not null) await BroadcastAsync(ownerId, projectId, sessionId, state);
@@ -389,6 +437,17 @@ public sealed class ImageThreadService(
             }
         }
         return dropped;
+    }
+
+    // «…: картинка hero.png, часть вариантов сохранена (версии 3–4), остальные не дорисованы — запусти заново»
+    private static string InterruptedEventText(ImageThread thread, string jobId)
+    {
+        var kept = thread.Versions.Where(v => v.JobId == jobId).ToList();
+        if (kept.Count == 0)
+            return $"{InterruptedText}: картинка {Name(thread)}, варианты недоступны — запусти заново";
+        var numbers = kept.Count == 1 ? $"версия {kept[0].Number}" : $"версии {kept[0].Number}–{kept[^1].Number}";
+        return $"{InterruptedPartialText}: картинка {Name(thread)}, часть вариантов сохранена ({numbers}), " +
+               "остальные не дорисованы — запусти заново";
     }
 
     public async Task BroadcastAsync(string ownerId, string projectId, string sessionId, ImageThreadsState state)

@@ -114,7 +114,9 @@ public sealed class ImageEditorStateContributor(
             sb.AppendLine($"  рисуется: «{l.Prompt}», от: {(t.Version(l.BaseVersionId) is { } b ? ImageThread.Label(b) : "исходника")}"
                 + Outcome(job(l.JobId)));
         foreach (var l in t.Launches.Where(l => l.Status == ImageThreadLaunchStatus.Interrupted).TakeLast(1))
-            sb.AppendLine($"  запуск «{l.Prompt}» потерян при перезапуске сервера, вариантов не будет — запусти заново");
+            sb.AppendLine(t.Versions.Any(v => v.JobId == l.JobId)
+                ? $"  запуск «{l.Prompt}» прерван перезапуском сервера: часть вариантов уже версии, остальные не дорисованы — запусти заново"
+                : $"  запуск «{l.Prompt}» потерян при перезапуске сервера, вариантов не будет — запусти заново");
     }
 
     // «исходник [origin] (в работе), правок без ИИ 2» / «версия 3 [id] — вариант 1 запуска «фон», от: исходник»

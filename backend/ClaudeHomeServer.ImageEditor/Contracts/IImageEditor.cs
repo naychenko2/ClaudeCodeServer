@@ -116,9 +116,11 @@ public record EditedImage(byte[] Bytes, string ContentType);
 public record EditCost(double Amount, string Unit);
 
 // Run/Runs — номер текущего прогона (с 1) и их число, EtaSeconds — ожидаемое время прогона;
-// заполняет только драйвер, который это знает (local), остальные оставляют null
+// заполняет только драйвер, который это знает (local), остальные оставляют null.
+// Ready — варианты, готовые прямо сейчас (скачан прогон): исполнитель отдаёт их в нить, не дожидаясь
+// остальных. Итоговый ImageEditResult.Images всё равно несёт ВСЕ варианты по порядку
 public record EditProgress(EditStage Stage, int? QueuePosition = null, int? Run = null, int? Runs = null,
-    int? EtaSeconds = null);
+    int? EtaSeconds = null, IReadOnlyList<EditedImage>? Ready = null);
 
 // Charged: true — списано, false — точно не списано, null — неизвестно («Списание
 // уточняется у сервиса»)

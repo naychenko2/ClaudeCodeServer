@@ -1,6 +1,7 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.ImageEditor.Versioning;
+using ClaudeHomeServer.Services.Images.Editing.Raster;
 using ClaudeHomeServer.Tests.ImageEditor.Fakes;
 using ClaudeHomeServer.Tests.ImageEditor.Providers;
 using FluentAssertions;
@@ -415,6 +416,121 @@ public class ImageEditJobServiceTests : IDisposable
 
         gate.SetResult();
         (await WaitDone(service, "owner", jobId)).RunElapsedSeconds.Should().BeNull();
+    }
+
+    // ── Варианты по готовности (EditProgress.Ready) ──────────────────────────
+
+    private static EditedImage Variant(byte shade) => new(TestImages.Png(4, 4, shade), "image/png");
+
+    private static async Task WaitUntil(Func<bool> condition, string what)
+    {
+        for (var i = 0; i < 500; i++)
+        {
+            if (condition()) return;
+            await Task.Delay(10);
+        }
+        throw new TimeoutException(what);
+    }
+
+    [Fact]
+    public async Task ПоГотовности_ПервыйВариантВиденПокаЗадачаИдёт_ФиналБезДублей()
+    {
+        var gate = new TaskCompletionSource();
+        var ready = new List<ImageEditJobDto>();
+        EditedImage[] images = [Variant(1), Variant(2), Variant(3)];
+        var editor = new ScriptedEditor("fal", async (_, progress, ct) =>
+        {
+            progress.Report(new EditProgress(EditStage.Downloading, Run: 1, Runs: 3, Ready: [images[0]]));
+            await gate.Task.WaitAsync(ct);
+            progress.Report(new EditProgress(EditStage.Downloading, Run: 2, Runs: 3, Ready: [images[1]]));
+            progress.Report(new EditProgress(EditStage.Downloading, Run: 3, Runs: 3, Ready: [images[2]]));
+            return new ImageEditResult(EditOutcome.Ok, images, null, true, "r", null);
+        });
+        var service = Service(editor);
+        service.VariantReady += (_, dto) => { lock (ready) ready.Add(dto); return Task.CompletedTask; };
+        var jobId = await StartAsync(service, "owner", "fal", count: 3);
+
+        await WaitUntil(() => service.Get("owner", Project, jobId)!.Variants.Count == 1, "первый вариант не отдан");
+        var running = service.Get("owner", Project, jobId)!;
+        running.Status.Should().NotBe(ImageEditJobStatus.Completed, "задача ещё идёт");
+        running.Variants.Should().Equal(1);
+        service.OpenVariant("owner", Project, jobId, 1)!.Bytes.Should().Equal(images[0].Bytes);
+        service.OpenVariant("owner", Project, jobId, 2).Should().BeNull("второго ещё нет");
+
+        gate.SetResult();
+        var done = await WaitDone(service, "owner", jobId);
+
+        done.Status.Should().Be(ImageEditJobStatus.Completed);
+        done.Variants.Should().Equal(1, 2, 3);
+        service.OpenVariant("owner", Project, jobId, 3)!.Bytes.Should().Equal(images[2].Bytes);
+        lock (ready) ready.Select(d => d.Variants.Count).Should().Equal(1, 2, 3);
+        _broadcaster.ToOwnerCalls.Select(c => c.Message).OfType<ImageEditCompletedMessage>()
+            .Should().ContainSingle().Which.Variants.Should().Equal(1, 2, 3);
+    }
+
+    // Разбор готового варианта медленный (приведение размера), а драйвер уже вернул итог: Finished
+    // обязан дождаться очереди — иначе нить закрыла бы запуск раньше, чем узнала о последнем варианте
+    [Fact]
+    public async Task ПоГотовности_ПоследнийVariantReadyРаньшеFinished()
+    {
+        var events = new List<string>();
+        EditedImage[] images = [Variant(1), Variant(2)];
+        var editor = new ScriptedEditor("fal", (_, progress, _) =>
+        {
+            progress.Report(new EditProgress(EditStage.Downloading, Run: 1, Runs: 2, Ready: [images[0]]));
+            progress.Report(new EditProgress(EditStage.Downloading, Run: 2, Runs: 2, Ready: [images[1]]));
+            return Task.FromResult(new ImageEditResult(EditOutcome.Ok, images, null, true, "r", null));
+        });
+        var service = new ImageEditJobService([editor], new ImageEditWorkspace(Path.Combine(_dir, "image-editor")),
+            NullLogger<ImageEditJobService>.Instance, _spend, _broadcaster, raster: new SlowRaster());
+        _services.Add(service);
+        service.VariantReady += (_, dto) => { lock (events) events.Add($"ready {dto.Variants.Count}"); return Task.CompletedTask; };
+        service.Finished += (_, dto) => { lock (events) events.Add($"finished {dto.Variants.Count}"); return Task.CompletedTask; };
+
+        var jobId = await StartAsync(service, "owner", "fal", count: 2);
+        var done = await WaitDone(service, "owner", jobId);
+
+        done.Variants.Should().Equal(1, 2);
+        await WaitUntil(() => { lock (events) return events.Count == 3; }, "события не пришли");
+        lock (events) events.Should().Equal("ready 1", "ready 2", "finished 2");
+    }
+
+    [Fact]
+    public async Task ПоГотовности_ОтменаПосерединеОставляетГотовыйВариант()
+    {
+        var editor = new ScriptedEditor("fal", async (_, progress, ct) =>
+        {
+            progress.Report(new EditProgress(EditStage.Downloading, Run: 1, Runs: 3, Ready: [Variant(1)]));
+            await Task.Delay(Timeout.Infinite, ct);
+            throw new OperationCanceledException(ct);
+        });
+        var service = Service(editor);
+        var jobId = await StartAsync(service, "owner", "fal", count: 3);
+        await WaitUntil(() => service.Get("owner", Project, jobId)!.Variants.Count == 1, "первый вариант не отдан");
+
+        var cancelled = await service.CancelAsync("owner", Project, jobId, default);
+
+        cancelled!.Status.Should().Be(ImageEditJobStatus.Cancelled);
+        cancelled.Variants.Should().Equal(1);
+        service.OpenVariant("owner", Project, jobId, 1).Should().NotBeNull("отмена не стирает готовое");
+    }
+
+    // Растр, у которого чтение заголовка тянется: разбор варианта заметно дольше, чем драйвер
+    private sealed class SlowRaster : IImageRaster
+    {
+        private readonly SkiaImageRaster _inner = new();
+
+        public RasterProbe? Probe(byte[] data)
+        {
+            Thread.Sleep(100);
+            return _inner.Probe(data);
+        }
+
+        public RasterOutcome Apply(byte[] data, IReadOnlyList<ImageTransformOp> ops, ImageEncodeSpec? encode = null) =>
+            _inner.Apply(data, ops, encode);
+        public RasterOutcome Encode(byte[] data, ImageEncodeSpec encode) => _inner.Encode(data, encode);
+        public RasterOutcome ResizeMask(byte[] mask, int width, int height) => _inner.ResizeMask(mask, width, height);
+        public RasterOutcome EraseMasked(byte[] image, byte[] mask) => _inner.EraseMasked(image, mask);
     }
 
     private sealed class ManualTime(DateTimeOffset now) : TimeProvider

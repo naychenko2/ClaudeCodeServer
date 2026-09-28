@@ -567,9 +567,9 @@ public class ImageEditorToolsetTests : IDisposable
         var job = await WaitDone(Parse(result)["jobId"]!.GetValue<string>());
         job.Status.Should().Be(ImageEditJobStatus.Completed);
         job.ThreadId.Should().Be(draft, "варианты черновика попадают в его карточку");
-        var submitted = media.Submitted.Should().ContainSingle().Subject;
-        submitted.Op.Should().Be(LocalImageOp.Generate);
-        submitted.Images.Should().BeEmpty("у черновика исходника нет — генерация по тексту");
+        // Прогон на вариант: генерация по тексту идёт по одному, как и правка
+        media.Submitted.Should().HaveCount(job.Count).And.OnlyContain(s =>
+            s.Op == LocalImageOp.Generate && s.Count == 1 && s.Images.Count == 0, "у черновика исходника нет — генерация по тексту");
         var record = _spend.Records.Should().ContainSingle().Subject;
         record.OwnerId.Should().Be(Owner);
         record.Initiator.Should().Be(SpendInitiators.Agent);

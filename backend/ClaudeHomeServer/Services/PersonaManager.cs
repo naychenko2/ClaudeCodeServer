@@ -36,11 +36,14 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
     // передаются (Program), опциональность — ради юнит-тестов, создающих стор без них.
     private readonly UserModelTierResolver? _userTiers;
     private readonly SpecialtySettingsStore? _specialty;
+    // Сведение родного Claude к семейству на записи; без реестра (юнит-тесты) — по форме id
+    private readonly LlmProviderRegistry? _providers;
 
     public PersonaManager(IConfiguration config, ILogger<PersonaManager>? log = null,
         ProjectEventLogService? events = null, UserModelTierResolver? userTiers = null,
-        SpecialtySettingsStore? specialty = null)
+        SpecialtySettingsStore? specialty = null, LlmProviderRegistry? providers = null)
     {
+        _providers = providers;
         _log = log;
         _events = events;
         _userTiers = userTiers;
@@ -185,7 +188,35 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
     // (id модели, в т.ч. тир-алиас с окном opus[1m], либо "preset:{id}"). Окно [1m] не срезаем:
     // стор хранит намерение, рантайм резолвит его по способности пула. tier:* в ячейке запрещает
     // контроллер (ячейка уже адресована уровнем) — здесь не проверяем.
-    private static string? NormalizeTierCell(string? cell) => TrimToNull(cell);
+    // Модель персоны или ячейки уровня на записи: родной Claude — семейством (opus/fable…),
+    // версию выбирает CLI, окно — сервер. preset:{id}, сторонние id и пустое — как есть.
+    private string? NormalizeModel(string? model)
+    {
+        var trimmed = TrimToNull(model);
+        return _providers is not null ? _providers.CanonicalizeModel(trimmed) : ClaudeModelFamily.Canonicalize(trimmed);
+    }
+
+    // Разовая миграция (ClaudeModelFamilyMigration): модель и ячейки уровней всех персон через
+    // map (null — не менять). Возвращает число изменённых полей; 0 — стор не переписывается.
+    public int RemapModels(Func<string, string?> map)
+    {
+        lock (_saveLock)
+        {
+            var changed = 0;
+            foreach (var persona in _personas.Values)
+            {
+                if (Remapped(persona.Model, map) is { } model) { persona.Model = model; changed++; }
+                if (Remapped(persona.TierStrong, map) is { } strong) { persona.TierStrong = strong; changed++; }
+                if (Remapped(persona.TierMedium, map) is { } medium) { persona.TierMedium = medium; changed++; }
+                if (Remapped(persona.TierWeak, map) is { } weak) { persona.TierWeak = weak; changed++; }
+            }
+            if (changed > 0) Save();
+            return changed;
+        }
+    }
+
+    private static string? Remapped(string? value, Func<string, string?> map) =>
+        value is not null && map(value.Trim()) is { } next && next != value ? next : null;
 
     // Нормализация контракта (P1): трим слотов, выброс пустых элементов списков;
     // полностью пустой контракт эквивалентен отсутствию → null (legacy-режим).
@@ -305,15 +336,15 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             Description = description,
             SystemPrompt = systemPrompt,
             Contract = NormalizeContract(contract),
-            // Стор хранит намерение (в т.ч. opus[1m]); окно резолвится в рантайме по пулу
-            Model = TrimToNull(model),
+            // Стор хранит семейство (opus, не opus[1m]); окно резолвится в рантайме по пулу
+            Model = NormalizeModel(model),
             // Уровень модели: мусор и пустая строка — «не задан» (валидация — в контроллере)
             ModelTier = ModelTiers.TryParse(modelTier, out var tier) ? tier : null,
             // Свои модели по уровням (ADR-007 §2): значение ячейки — id модели ИЛИ "preset:{id}".
             // tier:* в ячейке запрещает контроллер; здесь только нормализация.
-            TierStrong = NormalizeTierCell(tierStrong),
-            TierMedium = NormalizeTierCell(tierMedium),
-            TierWeak = NormalizeTierCell(tierWeak),
+            TierStrong = NormalizeModel(tierStrong),
+            TierMedium = NormalizeModel(tierMedium),
+            TierWeak = NormalizeModel(tierWeak),
             Effort = effort,
             Specialty = specialty,
             Scope = scope,
@@ -622,14 +653,14 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             // Мерж по слотам: null-слот — не менять, ""/[] — очистить; все слоты пусты —
             // контракт нормализуется в null
             if (contract is not null) persona.Contract = NormalizeContract(MergeContract(persona.Contract, contract));
-            if (model is not null) persona.Model = TrimToNull(model);
+            if (model is not null) persona.Model = NormalizeModel(model);
             // Уровень модели: null — не менять, "" (и мусор — его отсекает контроллер) — сбросить
             if (modelTier is not null)
                 persona.ModelTier = ModelTiers.TryParse(modelTier, out var tier) ? tier : null;
             // Свои модели по уровням: null — не менять, "" — сбросить, иначе id/preset:{id}
-            if (tierStrong is not null) persona.TierStrong = NormalizeTierCell(tierStrong);
-            if (tierMedium is not null) persona.TierMedium = NormalizeTierCell(tierMedium);
-            if (tierWeak is not null) persona.TierWeak = NormalizeTierCell(tierWeak);
+            if (tierStrong is not null) persona.TierStrong = NormalizeModel(tierStrong);
+            if (tierMedium is not null) persona.TierMedium = NormalizeModel(tierMedium);
+            if (tierWeak is not null) persona.TierWeak = NormalizeModel(tierWeak);
             if (effort is not null) persona.Effort = effort.Length == 0 ? null : effort;
             // Специальность (функциональная роль): null — не менять; None — сбросить явно
             if (specialty is not null) persona.Specialty = specialty.Value;

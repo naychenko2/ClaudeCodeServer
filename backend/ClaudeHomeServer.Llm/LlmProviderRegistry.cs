@@ -141,23 +141,25 @@ public class LlmProviderRegistry
     // Wire-токен провайдера модели ("claude" | key) — для guard смены провайдера и фронта
     public string ProviderKey(string? model) => ResolveByModel(model)?.Key ?? "claude";
 
-    // Алиас-тир модели ("opus"|"sonnet"|"haiku") для пина сабагента в frontmatter .md
-    // и для чипа модели на карточке персоны-агента. Пинится только тир Claude-модели:
-    // алиас безопасен у всех провайдеров — Claude-чат резолвит его в настоящий тир,
-    // сторонние маппят env-переменными BuildCliEnv. ID сторонних провайдеров и
-    // незнакомые Claude-ID не пинятся (null — без пина). Единая точка — используется
-    // PersonaAgentFileSync (генерация .md) и ModelAssignmentResolver (чип карточки).
+    // Алиас семейства модели (opus/fable/sonnet/haiku) для пина сабагента в frontmatter .md
+    // и для чипа модели на карточке персоны-агента. Пинится только семейство Claude-модели:
+    // алиас безопасен у всех провайдеров — Claude-чат резолвит его в последнюю версию,
+    // сторонние маппят env-переменными BuildCliEnv (в т.ч. ANTHROPIC_DEFAULT_FABLE_MODEL).
+    // ID сторонних провайдеров и незнакомые Claude-ID не пинятся (null — без пина). Единая
+    // точка — используется PersonaAgentFileSync (генерация .md) и ModelAssignmentResolver (чип).
     public string? ModelTierAlias(string? model)
     {
         if (string.IsNullOrWhiteSpace(model)) return null;
         if (!string.Equals(ProviderKey(model), "claude", StringComparison.OrdinalIgnoreCase))
             return null;
-        var m = model.ToLowerInvariant();
-        if (m.Contains("opus")) return "opus";
-        if (m.Contains("sonnet")) return "sonnet";
-        if (m.Contains("haiku")) return "haiku";
-        return null;
+        return ClaudeModelFamily.Resolve(model)?.Alias;
     }
+
+    // Свести модель к семейству на ЗАПИСИ (сессия, персона, пресет, назначение, задача).
+    // Порядок важен: сторонний провайдер, объявивший id вида claude-* или перехвативший алиас,
+    // резолвится в себя и остаётся нетронутым — сводится только родной Claude.
+    public string? CanonicalizeModel(string? model) =>
+        ResolveByModel(model) is not null ? model : ClaudeModelFamily.Canonicalize(model);
 
     // Канонический дефолт родного Claude (подписка) для spend-аналитики: совпадает с алиасом
     // "default" из ClaudeCatalog (ModelCatalogService.Fallback) — стабилен и узнаваем фронтом.
@@ -181,36 +183,24 @@ public class LlmProviderRegistry
         return DefaultClaudeModel;
     }
 
-    // Claude-каталог CLI отдаёт Opus только базовым алиасом с суффиксом окна ("opus[1m]").
-    // Базовый алиас ("opus") резолвится надёжно в любом окружении/аккаунте, а "opus[1m]"
-    // требует доступа к 1M-окну И прогретого каталога — иначе CLI отбивает «model may not
-    // exist / no access» (наблюдалось у проактивности глобальной персоны на проде: ход шёл
-    // с --model opus[1m] и падал, хотя прямой вызов той же модели работал). Перед передачей
-    // в --model сводим тир-алиас+суффикс к базовому алиасу. Полные id (claude-fable-5[1m]) и
-    // модели сторонних провайдеров (glm-5.2[1m]) НЕ трогаем — паттерн матчит только базовые
-    // Claude-тир-алиасы opus/sonnet/haiku, у которых базовый алиас гарантированно существует.
-    private static readonly System.Text.RegularExpressions.Regex ClaudeTierWindowAlias =
-        new(@"^(opus|sonnet|haiku)\[1m\]$",
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase
-            | System.Text.RegularExpressions.RegexOptions.Compiled);
+    // Алиас семейства с суффиксом окна («opus[1m]») сводится к голому алиасу; полные id
+    // (claude-fable-5[1m]) и модели сторонних провайдеров (glm-5.2[1m]) НЕ трогаем.
+    public static string? StripClaudeWindowAlias(string? model) =>
+        IsClaudeTierWindowAlias(model) ? ClaudeModelFamily.FromAliasOrWindowAlias(model)!.Alias : model;
 
-    public static string? StripClaudeWindowAlias(string? model)
-    {
-        if (string.IsNullOrWhiteSpace(model)) return model;
-        var match = ClaudeTierWindowAlias.Match(model.Trim());
-        return match.Success ? match.Groups[1].Value.ToLowerInvariant() : model;
-    }
-
-    // Базовый Claude-тир-алиас с суффиксом 1M-окна (opus[1m]/sonnet[1m]/haiku[1m]).
-    // Только такие модели требуют проверки способности подписки перед --model: полные id
-    // (claude-fable-5[1m]) и модели сторонних провайдеров (glm-5.2[1m]) CLI разбирает сам.
+    // Алиас семейства с суффиксом окна 1M (opus[1m], fable[1m]…). Только такие модели требуют
+    // проверки способности подписки перед --model: полные id и модели сторонних провайдеров
+    // CLI разбирает сам. Сохранённые значения суффикса не несут (храним семейство) — окно
+    // дописывает ClaudeSubscriptionPool.LaunchModel.
     public static bool IsClaudeTierWindowAlias(string? model) =>
-        !string.IsNullOrWhiteSpace(model) && ClaudeTierWindowAlias.IsMatch(model.Trim());
+        !string.IsNullOrWhiteSpace(model)
+        && model.Trim().EndsWith(ClaudeModelFamily.WindowSuffix, StringComparison.OrdinalIgnoreCase)
+        && ClaudeModelFamily.FromAliasOrWindowAlias(model) is not null;
 
     // Окно контекста РОДНОГО Claude, которое объявляем CLI (CLAUDE_CODE_MAX_CONTEXT_TOKENS).
     // Считается по модели, КОТОРАЯ РЕАЛЬНО УЕДЕТ В --model, т.е. уже после
-    // ClaudeSubscriptionPool.ResolveWindowAlias: суффикс [1m] у тир-алиаса срезается, когда
-    // в пуле нет живого кандидата с доступом к 1M, и объявить в этом случае 1M хуже, чем не
+    // ClaudeSubscriptionPool.LaunchModel: суффикс [1m] к семейству дописывается, только когда
+    // подписка хода тянет окно 1M, и объявить без него 1M хуже, чем не
     // объявлять ничего — CLI не сожмёт контекст вовремя и ход упадёт «Prompt is too long»
     // вместо компакта. Зачем объявлять вообще: суффикс окна живёт только во флаге --model и
     // внутрь сабагента не передаётся (в транскрипте agent-*.jsonl модель идёт без суффикса) —
@@ -373,6 +363,7 @@ public class LlmProviderRegistry
         "ANTHROPIC_DEFAULT_OPUS_MODEL",
         "ANTHROPIC_DEFAULT_SONNET_MODEL",
         "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        "ANTHROPIC_DEFAULT_FABLE_MODEL",
         "CLAUDE_CODE_SUBAGENT_MODEL",
         "CLAUDE_CODE_AUTO_COMPACT_WINDOW", // окно автокомпакта задают вместе с моделью 1M
         "CLAUDE_CODE_MAX_CONTEXT_TOKENS",  // окно контекста модели, ставим сами (см. BuildCliEnv)
@@ -421,6 +412,9 @@ public class LlmProviderRegistry
             // персоны-сабагента) схлопывался в модель сессии, и тир strong/medium не различался
             ["ANTHROPIC_DEFAULT_SONNET_MODEL"] = medium,
             ["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = small,
+            // fable — сильный тир наравне с opus: без маппинга алиас fable (пин персоны-сабагента)
+            // ушёл бы на эндпоинт провайдера id модели Anthropic
+            ["ANTHROPIC_DEFAULT_FABLE_MODEL"] = main,
             ["CLAUDE_CODE_SUBAGENT_MODEL"] = small,
         };
         // Реальное окно контекста модели. Id сторонних моделей CLI не знает и тогда считает
@@ -1095,16 +1089,15 @@ public class LlmProviderRegistry
         }
 
         // Модель-дефолты (как для CLI-провайдеров, но без ANTHROPIC_BASE_URL).
-        // ТОЛЬКО полные id: тир-алиасы (opus/sonnet/haiku, в т.ч. с суффиксом окна
-        // opus[1m]/sonnet[1m]/haiku[1m]) CLI резолвит лишь во флаге --model — из
-        // ANTHROPIC_MODEL алиас уходит в API сырым id и валит ход «There's an issue
-        // with the selected model (opus[1m])» (воспроизведено на проде). Полные id
-        // с окном (claude-fable-5[1m]) и модели сторонних провайдеров (glm-5.2[1m])
-        // сюда не относятся — их суффикс разбирает сам CLI, env им нужен.
-        // Модель задаёт --model, который ClaudeSession передаёт всегда.
+        // Семейства Claude (opus/fable/sonnet/haiku — в любой форме, с окном и без) сюда НЕ
+        // идут никогда: CLI резолвит алиас лишь во флаге --model — из ANTHROPIC_MODEL алиас
+        // уходит в API сырым id и валит ход «There's an issue with the selected model»
+        // (воспроизведено на проде с opus[1m] и с fable). default — тоже не id.
+        // Прочие id (claude-mythos-*, сторонние glm-5.2[1m]) — env им нужен, суффикс CLI
+        // разбирает сам. Модель задаёт --model, который ClaudeSession передаёт всегда.
         if (!string.IsNullOrWhiteSpace(model)
-            && !IsClaudeTierAlias(model)
-            && !IsClaudeTierWindowAlias(model))
+            && ClaudeModelFamily.Resolve(model) is null
+            && !model.Trim().Equals(DefaultClaudeModel, StringComparison.OrdinalIgnoreCase))
         {
             env["ANTHROPIC_MODEL"] = model;
             env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = model;
@@ -1114,36 +1107,25 @@ public class LlmProviderRegistry
         return env;
     }
 
-    // Тир-алиас Claude (opus/sonnet/haiku, регистронезависимо) — не полный id модели
-    internal static bool IsClaudeTierAlias(string model) =>
-        model.Equals("opus", StringComparison.OrdinalIgnoreCase)
-        || model.Equals("sonnet", StringComparison.OrdinalIgnoreCase)
-        || model.Equals("haiku", StringComparison.OrdinalIgnoreCase);
+    // Голый алиас семейства Claude (opus/fable/sonnet/haiku, регистронезависимо) — не полный id
+    internal static bool IsClaudeTierAlias(string model) => ClaudeModelFamily.FromAlias(model) is not null;
 
     // Модель РОДНОГО Claude (подписка), а не неизвестный id. Нужна там, где null от
     // ResolveByModel надо прочитать однозначно: он означает и «родной Claude», и «такой
     // модели нет ни у одного провайдера» — а последствия у этих двух случаев разные
-    // (переезд на подписку против честного отказа). Форма id: пусто (решает CLI), алиас
-    // каталога default/opus/sonnet/haiku (в т.ч. с суффиксом окна opus[1m]) и полный
-    // id Anthropic claude-* (claude-fable-5[1m] и пр.). Знание о форме id живёт здесь же,
-    // рядом с остальными разборщиками алиасов.
+    // (переезд на подписку против честного отказа). Форма id: пусто (решает CLI), default,
+    // семейство из ClaudeModelFamily (в т.ч. с суффиксом окна) и полный id Anthropic claude-*.
     //
-    // Две оговорки для того, кто будет править:
-    // 1) Корректность держится на ПОРЯДКЕ вызовов — ResolveByModel зовётся ПЕРЕД этим
-    //    предикатом (SessionManager.MigrateProviderAsync). Сторонний провайдер, объявивший
-    //    модель с id claude-* или перехвативший алиас, резолвится в себя, и до предиката
-    //    управление не доходит; переставленные местами проверки дадут ложноположительные.
-    // 2) Список форм — ручная копия ModelCatalogService.Fallback: реальный каталог родных
-    //    моделей приходит от живого CLI (QueryCliAsync → models[].value), а сюда он не
-    //    заглядывает. Появился новый алиас в каталоге CLI — дописать и здесь, иначе выбор
-    //    родной модели из выпадающего списка даст ложное «модель не найдена».
+    // Корректность держится на ПОРЯДКЕ вызовов — ResolveByModel зовётся ПЕРЕД этим
+    // предикатом (SessionManager.MigrateProviderAsync). Сторонний провайдер, объявивший
+    // модель с id claude-* или перехвативший алиас, резолвится в себя, и до предиката
+    // управление не доходит; переставленные местами проверки дадут ложноположительные.
     public static bool IsNativeClaudeModel(string? model)
     {
         if (string.IsNullOrWhiteSpace(model)) return true;
         var m = model.Trim();
         return m.Equals(DefaultClaudeModel, StringComparison.OrdinalIgnoreCase)
-            || IsClaudeTierAlias(m)
-            || IsClaudeTierWindowAlias(m)
+            || ClaudeModelFamily.Resolve(m) is not null
             || m.StartsWith("claude-", StringComparison.OrdinalIgnoreCase);
     }
 

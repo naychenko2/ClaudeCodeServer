@@ -64,8 +64,13 @@ public sealed class LocalActionOverridesStore
     private readonly object _writeLock = new();
     private volatile Dictionary<string, string> _overrides = new(StringComparer.OrdinalIgnoreCase);
 
-    public LocalActionOverridesStore(IConfiguration config, ILogger<LocalActionOverridesStore>? log = null)
+    // Сведение родного Claude к семейству на записи; без реестра (юнит-тесты) — по форме id
+    private readonly LlmProviderRegistry? _providers;
+
+    public LocalActionOverridesStore(IConfiguration config, ILogger<LocalActionOverridesStore>? log = null,
+        LlmProviderRegistry? providers = null)
     {
+        _providers = providers;
         _log = log;
         // Путь выводим ТОЛЬКО от DataPath: иначе стор ляжет рядом с исполняемым файлом и
         // настройка станет эфемерной (потеряется при следующем деплое).
@@ -87,7 +92,7 @@ public sealed class LocalActionOverridesStore
         var action = LocalActionCatalog.Find(actionKey);
         if (action is null || string.IsNullOrWhiteSpace(route)) return false;
 
-        var value = route.Trim();
+        var value = CanonRoute(route.Trim());
         lock (_writeLock)
         {
             var prev = _overrides;
@@ -122,12 +127,38 @@ public sealed class LocalActionOverridesStore
             foreach (var (key, route) in routes)
             {
                 if (LocalActionCatalog.Find(key) is not { } a || string.IsNullOrWhiteSpace(route)) continue;
-                next[a.Key] = route.Trim();
+                next[a.Key] = CanonRoute(route.Trim());
             }
             _overrides = next;
             Persist(next);
         }
         _log?.LogInformation("Маршруты фоновых действий заданы пресетом ({Count})", _overrides.Count);
+    }
+
+    // Маршрут-модель родного Claude — семейством (opus/fable…); LocalRoute, tier:*, preset:*
+    // и сторонние id остаются как есть.
+    private string CanonRoute(string route) =>
+        (_providers is not null ? _providers.CanonicalizeModel(route) : ClaudeModelFamily.Canonicalize(route)) ?? route;
+
+    // Разовая миграция (ClaudeModelFamilyMigration): маршруты через map (null — не менять).
+    // Возвращает число изменённых маршрутов; 0 — файл не переписывается.
+    public int RemapModels(Func<string, string?> map)
+    {
+        lock (_writeLock)
+        {
+            var next = new Dictionary<string, string>(_overrides, StringComparer.OrdinalIgnoreCase);
+            var changed = 0;
+            foreach (var (key, route) in _overrides)
+                if (map(route.Trim()) is { } mapped && mapped != route)
+                {
+                    next[key] = mapped;
+                    changed++;
+                }
+            if (changed == 0) return 0;
+            _overrides = next;
+            Persist(next);
+            return changed;
+        }
     }
 
     // Снять все оверрайды разом — все действия возвращаются к значению из конфига/каталога.

@@ -19,8 +19,13 @@ public class AppSettingsService : ITierModelResolver
     private AppSettings _settings = new();
     private readonly object _lock = new();
 
-    public AppSettingsService(IConfiguration config, ILogger<AppSettingsService>? log = null)
+    // Сведение родного Claude к семейству на записи; без реестра (юнит-тесты) — по форме id
+    private readonly Llm.LlmProviderRegistry? _providers;
+
+    public AppSettingsService(IConfiguration config, ILogger<AppSettingsService>? log = null,
+        Llm.LlmProviderRegistry? providers = null)
     {
+        _providers = providers;
         var projectsPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         _storePath = Path.Combine(Path.GetDirectoryName(projectsPath)!, "app-settings.json");
         _configDefault = config["DefaultProjectsPath"] ?? "";
@@ -74,15 +79,43 @@ public class AppSettingsService : ITierModelResolver
                 ClaudeBilling = settings.ClaudeBilling ?? _settings.ClaudeBilling,
                 DailyBriefingEnabled = settings.DailyBriefingEnabled ?? _settings.DailyBriefingEnabled,
                 // null = не прислали (оставить прежним), "" = сознательная очистка слота
-                ModelTierStrong = settings.ModelTierStrong ?? _settings.ModelTierStrong,
-                ModelTierMedium = settings.ModelTierMedium ?? _settings.ModelTierMedium,
-                ModelTierWeak = settings.ModelTierWeak ?? _settings.ModelTierWeak,
+                ModelTierStrong = CanonSlot(settings.ModelTierStrong) ?? _settings.ModelTierStrong,
+                ModelTierMedium = CanonSlot(settings.ModelTierMedium) ?? _settings.ModelTierMedium,
+                ModelTierWeak = CanonSlot(settings.ModelTierWeak) ?? _settings.ModelTierWeak,
             };
             // Запись через JsonFileStore: атомарна (tmp + move), крэш посреди сохранения
             // не оставляет обрезанный app-settings.json — раньше был голый WriteAllText
             JsonFileStore.Save(_storePath, _settings);
         }
         return Get();
+    }
+
+    // Слот родного Claude храним семейством (opus/fable…): версию выбирает CLI, окно — сервер.
+    // null и "" (очистка слота) проходят как есть.
+    private string? CanonSlot(string? model) =>
+        string.IsNullOrWhiteSpace(model) ? model
+        : _providers is not null ? _providers.CanonicalizeModel(model.Trim())
+        : Llm.ClaudeModelFamily.Canonicalize(model.Trim());
+
+    // Разовая миграция (ClaudeModelFamilyMigration): слоты через map (null — не менять).
+    // Возвращает число изменённых слотов; 0 — файл не переписывается.
+    public int RemapModels(Func<string, string?> map)
+    {
+        lock (_lock)
+        {
+            var changed = 0;
+            string? Remap(string? v)
+            {
+                if (string.IsNullOrWhiteSpace(v) || map(v.Trim()) is not { } next || next == v) return v;
+                changed++;
+                return next;
+            }
+            _settings.ModelTierStrong = Remap(_settings.ModelTierStrong);
+            _settings.ModelTierMedium = Remap(_settings.ModelTierMedium);
+            _settings.ModelTierWeak = Remap(_settings.ModelTierWeak);
+            if (changed > 0) JsonFileStore.Save(_storePath, _settings);
+            return changed;
+        }
     }
 
     private void Load()

@@ -35,15 +35,15 @@ public class ClaudeSession : ILlmSessionAdapter
     // учитывается по модели, которой реально идёт ход. Сам резолв остаётся приватным.
     internal string? EffectiveTurnModel => EffectiveModel;
 
-    // Модель для --model / set_model: суффикс [1m] тир-алиаса едет в CLI КАК ЕСТЬ. Тихого среза
-    // в базовый алиас здесь нет и быть не должно: для длинного чата деградация в 200K — мина
-    // (контекст в сотни тысяч токенов не влезет, и человек получит непонятное переполнение
-    // вместо причины). Недоступность окна разбирает слой выше — FallbackLlmSessionAdapter:
-    // уводит ход на шаг цепочки, а исчерпав её, отвечает честным Window1MUnavailable.
-    // Пул не задан вовсе (тесты, сборка без подписок) — срезаем: способность аккаунта неизвестна,
-    // и надёжный 200K лучше падения на неизвестном плане.
+    // Модель для --model / set_model. Хранится семейство (opus/fable/sonnet/haiku), окно 1M
+    // дописывает пул по плану подписки хода (ClaudeSubscriptionPool.LaunchModel): Max получает
+    // opus[1m], Pro — opus с объявленным окном 200K, и CLI сожмёт контекст вовремя.
+    // Пул не задан вовсе (тесты, сборка без подписок) — окно не дописываем: способность аккаунта
+    // неизвестна, и надёжный 200K лучше падения на неизвестном плане.
     private string? ResolveModelForCli(string? model) =>
-        _subscriptionPool is null ? LlmProviderRegistry.StripClaudeWindowAlias(model) : model;
+        _subscriptionPool is null
+            ? LlmProviderRegistry.StripClaudeWindowAlias(model)
+            : _subscriptionPool.LaunchModel(model, Info.Provider);
 
     // Цепочка хода для фолбэка (ADR-007 §4): упорядоченные конкретные модели пресета (первая =
     // основная, остальные = план подмен). Пустая Info.Model → резолв по месту мог дать пресет;

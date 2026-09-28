@@ -538,7 +538,7 @@ public sealed class ModelAssignmentResolver(
     /// <summary>
     /// Состояние чипа для пары (персона, сессия): sessionModel — Session.Model чата
     /// (null — родной Claude по подписке). Маппинг стороннего чата строго по BuildCliEnv:
-    /// opus→main, sonnet→medium, haiku→small, без пина→CLAUDE_CODE_SUBAGENT_MODEL=small;
+    /// opus/fable→main, sonnet→medium, haiku→small, без пина→CLAUDE_CODE_SUBAGENT_MODEL=small;
     /// незаданный MediumModel/SmallModel провайдера сворачивается в «основная» —
     /// именно так env отображает пустой слот на main.
     /// </summary>
@@ -559,7 +559,7 @@ public sealed class ModelAssignmentResolver(
         var hasSmall = !string.IsNullOrWhiteSpace(provider.SmallModel);
         return alias switch
         {
-            "opus" => Main(),
+            "opus" or "fable" => Main(),
             "sonnet" => hasMedium
                 ? new SubagentModelChip(SubagentModelChip.KindProviderMedium, "провайдер: средняя", ChipHintProvider)
                 : Main(),

@@ -638,7 +638,7 @@ public class SessionManagerTests : IDisposable
 
         var updated = await _sut.UpdateAsync(session.Id, TestUserId, name: null, model: "opus[1m]", effort: null);
 
-        updated!.Model.Should().Be("opus[1m]");
+        updated!.Model.Should().Be("opus", "родной Claude хранится семейством, окно — при запуске");
         updated.Provider.Should().Be("claude",
             "родная Claude-модель → ключ из пула (пустой пул → PrimaryKey), а не застрявший glm");
     }
@@ -2100,6 +2100,88 @@ public class SessionManagerTests : IDisposable
 
         session.Model.Should().Be("glm-5.2[1m]",
             "маркер уже стоит — повторный проход не перебивает выбор пользователя");
+    }
+
+    // --- Модели родного Claude храним семействами (opus/fable/sonnet/haiku) ---
+
+    private ClaudeModelFamilyMigration NewFamilyMigration()
+    {
+        var config = GlmMigrationConfig();
+        return new ClaudeModelFamilyMigration(
+            new ClaudeHomeServer.Services.Llm.LlmProviderRegistry(TestConfig.Build(new Dictionary<string, string?>
+            {
+                ["LlmProviders:glm:ApiKey"] = "sk-test",
+                ["LlmProviders:glm:AnthropicBaseUrl"] = "https://glm.example.com",
+                ["LlmProviders:glm:Models:0:Id"] = "glm-5.2",
+            })),
+            _sut, config, NullLogger<ClaudeModelFamilyMigration>.Instance,
+            personas: _personaManager, appSettings: _appSettings, users: _userStore,
+            localActions: _actionOverrides);
+    }
+
+    [Fact]
+    public async Task МиграцияСемейств_СводитПрибитыеВерсииИСтавитМаркер()
+    {
+        var opus48 = await MkSessionWithModelAsync("opus48", "claude-opus-4-8");
+        var fable5 = await MkSessionWithModelAsync("fable5", "claude-fable-5[1m]");
+        var fable51 = await MkSessionWithModelAsync("fable51", "claude-fable-5-1[1m]");
+        var opus1m = await MkSessionWithModelAsync("opus1m", "opus[1m]");
+        var fable1m = await MkSessionWithModelAsync("fable1m", "fable[1m]");
+        var glm = await MkSessionWithModelAsync("glm", "glm-5.2");
+        var def = await MkSessionWithModelAsync("def", "default");
+        var empty = await MkSessionWithModelAsync("empty", null);
+        var persona = _personaManager.Create(TestUserId, "Модельная", null, null, null,
+            model: null, effort: null, PersonaScope.Global, projectId: null, color: null,
+            greeting: null, memoryEnabled: false);
+        persona.Model = "claude-opus-5";
+        persona.TierStrong = "claude-fable-5-1[1m]";
+        _sut.SetVoiceMode(opus48.Id, false); // стор на диске — чтобы было с чего снять копию
+
+        await NewFamilyMigration().StartAsync(CancellationToken.None);
+
+        opus48.Model.Should().Be("opus");
+        fable5.Model.Should().Be("fable");
+        fable51.Model.Should().Be("fable");
+        opus1m.Model.Should().Be("opus");
+        fable1m.Model.Should().Be("fable");
+        glm.Model.Should().Be("glm-5.2", "модель стороннего провайдера не трогаем");
+        def.Model.Should().Be("default");
+        empty.Model.Should().BeNull();
+        _personaManager.Get(persona.Id, TestUserId)!.Model.Should().Be("opus");
+        _personaManager.Get(persona.Id, TestUserId)!.TierStrong.Should().Be("fable");
+        File.Exists(Path.Combine(_tempDir, ClaudeModelFamilyMigration.MarkerFileName)).Should().BeTrue();
+        Directory.GetFiles(_tempDir, "sessions.json.bak-*").Should().ContainSingle();
+        (await File.ReadAllTextAsync(Path.Combine(_tempDir, "sessions.json")))
+            .Should().NotContain("claude-opus-4-8").And.NotContain("[1m]");
+
+        // Идемпотентность: повторное сведение ничего не меняет
+        var migration = NewFamilyMigration();
+        _sut.RemapModels(migration.Canonical).Should().Be(0);
+        _personaManager.RemapModels(migration.Canonical).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task МиграцияСемейств_ПовторныйСтарт_НичегоНеТрогает()
+    {
+        await NewFamilyMigration().StartAsync(CancellationToken.None);
+        var session = await MkSessionWithModelAsync("second-run", "claude-opus-4-8");
+
+        await NewFamilyMigration().StartAsync(CancellationToken.None);
+
+        session.Model.Should().Be("claude-opus-4-8", "маркер уже стоит — второй проход не идёт");
+    }
+
+    [Fact]
+    public async Task ЗаписьМодели_РоднойClaudeСводитсяКСемейству()
+    {
+        var session = await MkSessionWithModelAsync("write", null);
+
+        var updated = await _sut.UpdateAsync(session.Id, TestUserId, null, "claude-fable-5-1[1m]", null);
+
+        updated!.Model.Should().Be("fable");
+        _personaManager.Create(TestUserId, "Пин", null, null, null, model: "opus[1m]", effort: null,
+            PersonaScope.Global, projectId: null, color: null, greeting: null, memoryEnabled: false)
+            .Model.Should().Be("opus");
     }
 
     [Fact]

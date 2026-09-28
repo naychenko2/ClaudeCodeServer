@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useLayoutEffect, type ReactNode } from 'react';
 import { ChevronDown, Check, ArrowRightLeft } from 'lucide-react';
-import { C, R, FONT, SHADOW, SP, Z } from '../lib/design';
+import { C, R, FONT, FS, SHADOW, SP, Z } from '../lib/design';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
 // Общая механика выпадающих меню полосы контролов композера (модель, усилие) —
@@ -15,6 +15,7 @@ export interface ComposerMenuItem {
   value: string;
   label: string;
   description?: string;
+  hint?: string;       // вторичный текст рядом с подписью (напр. текущая версия семейства модели)
   icon?: ReactNode;
   badge?: ReactNode;   // правый бейдж строки (напр. окно контекста модели)
 }
@@ -170,11 +171,19 @@ export function ComposerMenu({
                     <span style={{ flex: 1, minWidth: 0 }}>
                       <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <span style={{
-                          flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, color: C.textHeading,
+                          flex: it.hint ? '0 1 auto' : 1, minWidth: 0, fontSize: 13, fontWeight: 600, color: C.textHeading,
                           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                         }}>
                           {it.label}
                         </span>
+                        {it.hint && (
+                          <span style={{
+                            flex: 1, minWidth: 0, fontSize: FS.xs, color: C.textMuted,
+                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                          }}>
+                            {it.hint}
+                          </span>
+                        )}
                         {it.badge}
                       </span>
                       {it.description && (

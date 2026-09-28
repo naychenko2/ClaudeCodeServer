@@ -1376,13 +1376,14 @@ public class LocalActionRoutingTests
     public void ResolveChain_СценарийИнцидента_DesignerСПресетомКими()
     {
         // Инцидент 2026-08-26: персона Майя (designer), TierStrong = preset «Сильный — Кими».
-        // Старт на kimi-k3 → цепочка обязана продолжиться opus[1m] и glm-5.3[1m] из её
-        // матрицы, а не обрубаться на хвосте общего слота «Мощный».
+        // Старт на kimi-k3 → цепочка обязана продолжиться opus и glm-5.3[1m] из её матрицы,
+        // а не обрубаться на хвосте общего слота «Мощный». Шаг родного Claude стор хранит
+        // семейством (opus[1m] → opus), окно дописывается при запуске.
         var (resolver, ownerId, persona) = BuildIncidentResolver();
 
         var chain = resolver.ResolveChain(LocalActionCatalog.TasksExecutor, "kimi-k3", ownerId, persona);
 
-        chain.Should().BeEquivalentTo(new[] { "kimi-k3", "opus[1m]", "glm-5.3[1m]" },
+        chain.Should().BeEquivalentTo(new[] { "kimi-k3", "opus", "glm-5.3[1m]" },
             opts => opts.WithStrictOrdering(),
             "цепочка строится по матрице специальности дизайнера");
     }

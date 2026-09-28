@@ -19,8 +19,13 @@ public class UserStore : IForgejoAccountStore, IUserStore
     // мутирующие методы спокойно вызывают Save() уже из-под взятого лока.
     private readonly object _lock = new();
 
-    public UserStore(IConfiguration config, IHostEnvironment env, ILogger<UserStore> logger)
+    // Сведение родного Claude к семейству на записи; без реестра (юнит-тесты) — по форме id
+    private readonly Llm.LlmProviderRegistry? _providers;
+
+    public UserStore(IConfiguration config, IHostEnvironment env, ILogger<UserStore> logger,
+        Llm.LlmProviderRegistry? providers = null)
     {
+        _providers = providers;
         var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         var dataDir = Path.GetDirectoryName(dataPath) ?? Path.Combine(AppContext.BaseDirectory, "data");
         _filePath = Path.Combine(dataDir, "users.json");
@@ -398,8 +403,35 @@ public class UserStore : IForgejoAccountStore, IUserStore
         }
     }
 
-    private static string? NormalizeTier(string? value) =>
-        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    // Слот родного Claude — семейством (opus/fable…): версию выбирает CLI, окно — сервер
+    private string? NormalizeTier(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null
+        : _providers is not null ? _providers.CanonicalizeModel(value.Trim())
+        : Llm.ClaudeModelFamily.Canonicalize(value.Trim());
+
+    // Разовая миграция (ClaudeModelFamilyMigration): per-user слоты через map (null — не
+    // менять). Возвращает число изменённых слотов; 0 — файл не переписывается.
+    public int RemapModels(Func<string, string?> map)
+    {
+        lock (_lock)
+        {
+            var changed = 0;
+            string? Remap(string? v)
+            {
+                if (string.IsNullOrWhiteSpace(v) || map(v.Trim()) is not { } next || next == v) return v;
+                changed++;
+                return next;
+            }
+            foreach (var user in _users)
+            {
+                user.ModelTierStrong = Remap(user.ModelTierStrong);
+                user.ModelTierMedium = Remap(user.ModelTierMedium);
+                user.ModelTierWeak = Remap(user.ModelTierWeak);
+            }
+            if (changed > 0) Save();
+            return changed;
+        }
+    }
 
     /// <summary>Состав «Стены» пользователя (id чатов в порядке монет); пусто — не настроена.</summary>
     public IReadOnlyList<string> GetWallChatIds(string id)

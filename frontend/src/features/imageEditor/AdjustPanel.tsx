@@ -7,8 +7,8 @@ import { Button, IconButton, SegmentedControl, TextField, ICON_SIZE, ICON_STROKE
 import type { ImageEditorApi, ImageEncodeFormat, ImageEncodeSpec, ImageTransformBase, ImageTransformOp } from './api';
 import { SectionHint } from './EditorSections';
 import {
-  formatBytes, lockedHeight, lockedWidth, presetDims, QUALITY_DEFAULT, QUALITY_MIN, SIZE_PRESETS, sizeFormChanged, sizeFormOps,
-  type Dims, type SizeForm,
+  boxForm, containDims, FORMAT_PRESETS, formatBytes, lockedHeight, lockedWidth, presetDims, QUALITY_DEFAULT, QUALITY_MIN,
+  sameAspect, SIZE_PRESETS, sizeFormChanged, sizeFormOps, type BoxFit, type Dims, type SizeForm,
 } from './transforms';
 import { useWeight } from './useWeight';
 
@@ -87,12 +87,18 @@ function SizeCompress({ api, projectId, size, base, sourceFormat, beforeBytes, o
   const weight = useWeight(api, projectId, changed && valid ? base : null, ops, encode);
 
   const num = (v: string) => Math.max(0, Math.round(Number(v.replace(/\D/g, '')) || 0));
-  const setW = (w: number) => set(lock ? { w, h: w ? lockedHeight(size, w) : form.h } : { w });
-  const setH = (h: number) => set(lock ? { h, w: h ? lockedWidth(size, h) : form.w } : { h });
+  // Ручной ввод снимает формат-рамку: дальше стороны задаёт человек
+  const setW = (w: number) => set(lock ? { w, h: w ? lockedHeight(size, w) : form.h, box: null } : { w, box: null });
+  const setH = (h: number) => set(lock ? { h, w: h ? lockedWidth(size, h) : form.w, box: null } : { h, box: null });
 
   const presetOn = (p: number | '50%') => (p === '50%'
     ? form.unit === '%' && form.percent === 50
-    : form.unit === 'px' && Math.max(form.w, form.h) === p && form.w === presetDims(size, p).w);
+    : form.unit === 'px' && !form.box && Math.max(form.w, form.h) === p && form.w === presetDims(size, p).w);
+  const box = form.unit === 'px' ? form.box ?? null : null;
+  const boxOn = (b: Dims) => !!box && box.w === b.w && box.h === b.h;
+  const pickBox = (b: Dims, fit: BoxFit) => { set(boxForm(size, b, fit)); setLock(true); };
+  // Пропорции рамки другие — человек выбирает: вписать целиком или обрезать под рамку
+  const boxChoice = box && !sameAspect(size, box) ? box : null;
 
   const weightText = !changed
     ? beforeBytes != null ? `Сейчас ${formatBytes(beforeBytes)}` : ''
@@ -102,7 +108,7 @@ function SizeCompress({ api, projectId, size, base, sourceFormat, beforeBytes, o
   return (
     <div data-size-compress="true" style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
       <Label>Размер и сжатие</Label>
-      <SegmentedControl value={form.unit} onChange={unit => set({ unit })}
+      <SegmentedControl value={form.unit} onChange={unit => set({ unit, box: null })}
         options={[{ value: 'px', label: 'Пиксели' }, { value: '%', label: 'Проценты' }]} />
       {form.unit === 'px' ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs }}>
@@ -125,15 +131,36 @@ function SizeCompress({ api, projectId, size, base, sourceFormat, beforeBytes, o
           <span style={{ fontSize: FS.sm, color: C.textMuted }}>% · {target.w}×{target.h}</span>
         </div>
       )}
-      <div style={{ display: 'flex', gap: SP.xxs, flexWrap: 'wrap' }}>
+      <Label>По длинной стороне</Label>
+      <div data-size-presets="true" style={{ display: 'flex', gap: SP.xxs, flexWrap: 'wrap' }}>
         {SIZE_PRESETS.map(p => (
           <Button key={p} size="xs" pill variant={presetOn(p) ? 'ghostAccent' : 'ghostFilled'} title={`${p} px по длинной стороне`}
-            onClick={() => { const d = presetDims(size, p); set({ unit: 'px', w: d.w, h: d.h }); setLock(true); }}>
+            onClick={() => { const d = presetDims(size, p); set({ unit: 'px', w: d.w, h: d.h, box: null }); setLock(true); }}>
             {String(p)}
           </Button>
         ))}
-        <Button size="xs" pill variant={presetOn('50%') ? 'ghostAccent' : 'ghostFilled'} onClick={() => set({ unit: '%', percent: 50 })}>50 %</Button>
+        <Button size="xs" pill variant={presetOn('50%') ? 'ghostAccent' : 'ghostFilled'} onClick={() => set({ unit: '%', percent: 50, box: null })}>50 %</Button>
       </div>
+      <Label>Под формат</Label>
+      <div data-format-presets="true" style={{ display: 'flex', gap: SP.xxs, flexWrap: 'wrap' }}>
+        {FORMAT_PRESETS.map(p => (
+          <Button key={p.key} size="xs" pill variant={boxOn(p) ? 'ghostAccent' : 'ghostFilled'} title={`${p.label}: ${p.w}×${p.h} px`}
+            onClick={() => pickBox(p, 'contain')}>
+            {`${p.label} · ${p.w}×${p.h}`}
+          </Button>
+        ))}
+      </div>
+      {boxChoice && (
+        <div data-box-fit="true" style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs }}>
+          <SegmentedControl value={boxChoice.fit} onChange={fit => pickBox(boxChoice, fit)}
+            options={[{ value: 'contain', label: 'Вписать' }, { value: 'cover', label: 'Обрезать' }]} />
+          <SectionHint>
+            {boxChoice.fit === 'contain'
+              ? `Пропорции другие: картинка целиком, без искажения — ${containDims(size, boxChoice).w}×${containDims(size, boxChoice).h}`
+              : `Заполнит ${boxChoice.w}×${boxChoice.h}, лишнее по краям срежется по центру`}
+          </SectionHint>
+        </div>
+      )}
       <Label>Формат</Label>
       <SegmentedControl value={form.format} onChange={format => set({ format })} options={FORMATS} />
       {form.format !== 'png' && (

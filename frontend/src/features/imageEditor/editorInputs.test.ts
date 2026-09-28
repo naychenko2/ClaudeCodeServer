@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { jobForm } from './api';
+import { AUTO_MODEL, jobForm, type ImageEditCatalog, type ImageEditModel, type ImageEditOp, type ImageEditProvider } from './api';
 import {
-  actionTitle, applyAgentReferences, currentSrc, EMPTY_HISTORY, goToStep, maxSamples, panelJobInput, pushStep, quickBlockReason, quickPlan,
-  samplesToJobInput, stepLabel, type History, type HistoryStep, type Sample,
+  actionTitle, applyAgentReferences, currentSrc, EMPTY_HISTORY, goToStep, maxSamples, panelJobInput, pushStep, quickPlan,
+  fallbackLabel, quickAvailability, quickOffered, samplesToJobInput, stepLabel, type History, type HistoryStep, type Sample,
 } from './editorInputs';
 
 const upload = (id: string, name: string, role: Sample['role']): Sample =>
@@ -56,24 +56,8 @@ describe('быстрые действия', () => {
     expect(quickPlan('outpaint', '16:9')).toMatchObject({ op: 'outpaint', aspectRatio: '16:9', useMask: false });
   });
 
-  it('без картинки, без кисти и у модели без операции — недоступно с причиной', () => {
-    expect(quickBlockReason('upscale', false, false, null)).toBe('Сначала загрузите картинку');
-    expect(quickBlockReason('removeMarked', true, false, null)).toBe('Сначала отметьте кистью, что убрать');
-    expect(quickBlockReason('removeMarked', true, true, null)).toBe('');
-    expect(quickBlockReason('outpaint', true, false, ['edit', 'inpaint'])).not.toBe('');
-    expect(quickBlockReason('outpaint', true, false, ['outpaint'])).toBe('');
-  });
-
-  it('«Улучшить лица» — только у поставщика, который умеет, и не зависит от выбранной модели', () => {
+  it('«Улучшить лица» — операция своей модели, заголовок шага', () => {
     expect(quickPlan('enhanceFaces', '1:1')).toMatchObject({ op: 'enhanceFaces', useMask: false, prompt: '' });
-    expect(quickBlockReason('enhanceFaces', true, false, null, ['generate', 'edit', 'upscale']))
-      .toBe('Есть только у «Локальных моделей» — выберите их в «Чем рисовать»');
-    // Явно выбранная Qwen-Image лица не правит, но действие берёт свою модель
-    expect(quickBlockReason('enhanceFaces', true, false, ['generate', 'edit'], ['generate', 'edit', 'enhanceFaces'])).toBe('');
-    expect(quickBlockReason('enhanceFaces', false, false, null, ['enhanceFaces'])).toBe('Сначала загрузите картинку');
-    // Чего не умеет поставщик целиком, то не лечится «Авто»
-    expect(quickBlockReason('upscale', true, false, null, ['generate', 'edit', 'enhanceFaces']))
-      .toBe('Этот поставщик так не умеет — возьмите другого в «Чем рисовать»');
     expect(actionTitle({ kind: 'enhanceFaces' })).toBe('Улучшены лица');
   });
 
@@ -140,5 +124,58 @@ describe('образцы из состояния агента', () => {
   it('агент убрал все образцы — остаются только с компьютера', () => {
     const list = [project('p1', 'images/dusk.png', 'style'), upload('u1', 'лицо.png', 'character')];
     expect(applyAgentReferences(list, [], make).map(s => s.id)).toEqual(['u1']);
+  });
+});
+
+// Каталог как у живого сервера: у fal дорисовку умеет Bria Expand (один вариант), у локальных
+// моделей её нет вовсе — Qwen-Image правит и рисует, FaceDetailer — только лица
+const model = (id: string, ops: ImageEditOp[], maxCount = 4, price = 0.04, unit = 'usd', maxReferences = 3): ImageEditModel =>
+  ({ id, label: id, caps: { ops, mask: 'none', maxReferences, maxCount, faceByReferences: false }, priceHint: { amount: price, unit, per: 'image' } });
+const AUTO: ImageEditModel = { id: AUTO_MODEL, label: 'Авто' };
+const FAL: ImageEditProvider = { key: 'fal', label: 'fal', priceUnit: 'usd', models: [
+  AUTO, model('nano', ['edit', 'inpaint']), model('bria-expand', ['outpaint'], 1, 0.04, 'usd', 0), model('bria-rmbg', ['removeBackground'], 1, 0.018, 'usd', 0),
+] };
+const LOCAL: ImageEditProvider = { key: 'local', label: 'Локальные модели', priceUnit: 'free', models: [
+  AUTO, model('qwen', ['generate', 'edit', 'inpaint'], 4, 0, 'free'), model('face', ['enhanceFaces'], 1, 0, 'free', 0),
+] };
+const catalog = (...providers: ImageEditProvider[]): ImageEditCatalog =>
+  ({ default: { provider: providers[0].key, model: AUTO_MODEL }, providers, limits: { maxFileMb: 20, maxReferences: 6, maxCount: 4 }, reason: null });
+
+describe('доступность быстрого действия по каталогу — до запуска', () => {
+  it('«Локальные модели · Авто»: дорисовки нет — кнопка неактивна с причиной и «Взять fal»', () => {
+    const r = quickAvailability('outpaint', catalog(LOCAL, FAL), 'local', AUTO_MODEL, 3);
+    expect(r.route).toBeNull();
+    expect(r.reason).toBe('Локальные модели не умеют дорисовку за края');
+    // Разовый поставщик — модель, которая умеет, и вариантов в её пределах
+    expect(r.fallback).toMatchObject({ provider: 'fal', model: 'bria-expand', count: 1, maxReferences: 0 });
+    expect(fallbackLabel(r.fallback!)).toBe('Взять fal · ≈ $0.04');
+  });
+
+  it('у поставщика есть умеющая модель — берётся она, даже если в полосе выбрана другая', () => {
+    const r = quickAvailability('outpaint', catalog(FAL, LOCAL), 'fal', 'nano', 4);
+    expect(r).toMatchObject({ reason: '', fallback: null, route: { provider: 'fal', model: 'bria-expand', count: 1 } });
+    // Выбранная модель умеет сама — остаётся она
+    expect(quickAvailability('removeMarked', catalog(FAL), 'fal', 'nano', 2).route).toMatchObject({ model: 'nano', count: 2 });
+  });
+
+  it('то же правило для остальных действий: фон, лица, апскейл', () => {
+    const c = catalog(LOCAL, FAL);
+    expect(quickAvailability('removeBackground', c, 'local', 'qwen', 2)).toMatchObject({
+      reason: 'Локальные модели не умеют убирать фон', fallback: { provider: 'fal', model: 'bria-rmbg' },
+    });
+    expect(quickAvailability('enhanceFaces', c, 'local', 'qwen', 3).route).toMatchObject({ provider: 'local', model: 'face', count: 1 });
+    const faces = quickAvailability('enhanceFaces', c, 'fal', AUTO_MODEL, 3);
+    expect(faces).toMatchObject({ reason: 'fal не умеет улучшать лица', fallback: { provider: 'local', model: 'face' } });
+    expect(fallbackLabel(faces.fallback!)).toBe('Взять Локальные модели · бесплатно');
+    // Апскейла нет ни у кого: причина есть, перехода нет, кнопки не показываем
+    expect(quickAvailability('upscale', c, 'local', AUTO_MODEL, 1)).toMatchObject({ route: null, fallback: null });
+    expect(quickOffered('upscale', c)).toBe(false);
+    expect(quickOffered('outpaint', c)).toBe(true);
+    expect(quickOffered('upscale', null)).toBe(true);
+  });
+
+  it('возможности модели неизвестны — «Авто», решает сервер', () => {
+    const blind: ImageEditProvider = { ...LOCAL, models: [AUTO, { id: 'x', label: 'X' }] };
+    expect(quickAvailability('outpaint', catalog(blind), 'local', AUTO_MODEL, 2).route).toMatchObject({ model: AUTO_MODEL, count: 2 });
   });
 });

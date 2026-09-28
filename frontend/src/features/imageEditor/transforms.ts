@@ -129,7 +129,42 @@ export const isFullCrop = (r: ImageFractionRect) => r.x < 0.001 && r.y < 0.001 &
 // ── Размер и сжатие ──
 
 // Пресеты по длинной стороне, плюс «50 %»
-export const SIZE_PRESETS = [1920, 1280, 1080, 512] as const;
+export const SIZE_PRESETS = [512, 1024, 1536, 2048] as const;
+
+// Стандартные форматы: рамка в пикселях
+export interface FormatPreset { key: string; label: string; w: number; h: number }
+export const FORMAT_PRESETS: FormatPreset[] = [
+  { key: '1:1', label: '1:1', w: 1080, h: 1080 },
+  { key: '4:5', label: '4:5', w: 1080, h: 1350 },
+  { key: '9:16', label: '9:16', w: 1080, h: 1920 },
+  { key: '16:9', label: '16:9', w: 1920, h: 1080 },
+  { key: 'social', label: 'Соцсети', w: 1200, h: 630 },
+];
+
+// Картинка в рамку формата: contain — целиком, без искажения (результат может быть уже
+// рамки по одной стороне), cover — заполнить рамку, лишнее срезать по центру
+export type BoxFit = 'contain' | 'cover';
+
+// Самый большой размер с пропорциями картинки, влезающий в рамку
+export function containDims(size: Dims, box: Dims): Dims {
+  const k = Math.min(box.w / size.w, box.h / size.h);
+  return { w: Math.max(1, Math.round(size.w * k)), h: Math.max(1, Math.round(size.h * k)) };
+}
+
+// Пропорции картинки и рамки совпадают (с точностью до пикселя округления) — выбор
+// «вписать или обрезать» не нужен
+export function sameAspect(size: Dims, box: Dims): boolean {
+  const d = containDims(size, box);
+  return Math.abs(d.w - box.w) <= 1 && Math.abs(d.h - box.h) <= 1;
+}
+
+// Рамка обрезки в долях с пропорциями box — самая большая по центру
+export function coverCrop(size: Dims, box: Dims): ImageFractionRect {
+  const r = (box.w / box.h) * (size.h / size.w);
+  const width = r >= 1 ? 1 : r;
+  const height = r >= 1 ? 1 / r : 1;
+  return { x: (1 - width) / 2, y: (1 - height) / 2, width, height };
+}
 
 export const QUALITY_MIN = 40;
 export const QUALITY_DEFAULT = 85;
@@ -151,18 +186,29 @@ export interface SizeForm {
   percent: number;
   format: ImageEncodeFormat;
   quality: number;
+  // Выбран формат-рамка: w/h формы — уже итог под fit
+  box?: (Dims & { fit: BoxFit }) | null;
+}
+
+// Форма под формат-рамку: при другом соотношении по умолчанию — вписать без искажения
+export function boxForm(size: Dims, box: Dims, fit: BoxFit): Pick<SizeForm, 'unit' | 'w' | 'h' | 'box'> {
+  const d = fit === 'cover' || sameAspect(size, box) ? box : containDims(size, box);
+  return { unit: 'px', w: d.w, h: d.h, box: { ...box, fit } };
 }
 
 // Операции формы: ресайз, только если размер и правда другой; кодирование — всегда
-// (формат и качество — сама суть «сжатия»)
+// (формат и качество — сама суть «сжатия»). Размер уходит на сервер всегда в пикселях:
+// проценты сервер округляет по-банковски, и подпись под полем разошлась бы с итогом
 export function sizeFormOps(size: Dims, f: SizeForm): { ops: ImageTransformOp[]; encode: ImageEncodeSpec; target: Dims } {
   const target = f.unit === '%'
     ? { w: Math.max(1, Math.round(size.w * f.percent / 100)), h: Math.max(1, Math.round(size.h * f.percent / 100)) }
     : { w: Math.max(1, Math.round(f.w)), h: Math.max(1, Math.round(f.h)) };
   const resized = target.w !== size.w || target.h !== size.h;
-  const ops: ImageTransformOp[] = !resized ? []
-    : f.unit === '%' ? [{ type: 'resize', percent: f.percent }]
-      : [{ type: 'resize', width: target.w, height: target.h, lockAspect: false }];
+  const cover = f.unit === 'px' && f.box?.fit === 'cover' && !sameAspect(size, f.box);
+  const ops: ImageTransformOp[] = [
+    ...(cover ? [{ type: 'crop' as const, rect: coverCrop(size, f.box!) }] : []),
+    ...(resized || cover ? [{ type: 'resize' as const, width: target.w, height: target.h, lockAspect: false }] : []),
+  ];
   const encode: ImageEncodeSpec = f.format === 'png' ? { format: 'png' } : { format: f.format, quality: f.quality };
   return { ops, encode, target };
 }
@@ -170,7 +216,8 @@ export function sizeFormOps(size: Dims, f: SizeForm): { ops: ImageTransformOp[];
 // Форма ничего не меняет — применять нечего
 export function sizeFormChanged(size: Dims, f: SizeForm, sourceFormat: ImageEncodeFormat | null): boolean {
   const { ops } = sizeFormOps(size, f);
-  return ops.length > 0 || f.format !== sourceFormat || (f.format !== 'png' && f.quality !== QUALITY_DEFAULT);
+  // Формат исходника неизвестен — считаем его PNG, иначе «Применить» горит без правок
+  return ops.length > 0 || f.format !== (sourceFormat ?? 'png') || (f.format !== 'png' && f.quality !== QUALITY_DEFAULT);
 }
 
 export function formatOf(mime: string): ImageEncodeFormat | null {

@@ -5,7 +5,7 @@
 // становится текущей при первой правке: следующая правка всегда идёт от версии в работе. Закрытие (✕, «Готово», Esc) выбор картинки не снимает; пометки
 // остаются в сторе нити и уходят чипом со следующим сообщением.
 
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Check, Eye, Save } from 'lucide-react';
 import {
   Button, Chip, Field, Modal, ModalActions, TextField, C, FS, R, SP, ICON_SIZE, ICON_STROKE, showToast, useIsMobile,
@@ -17,11 +17,11 @@ import { EditorCanvas } from '../EditorCanvas';
 import { MarksTools, MobileToolbar } from '../EditorSections';
 import { QuickActions } from '../PanelSections';
 import { SaveAsDialog } from '../SaveAsDialog';
-import { QUICK_ACTIONS, quickUsesOwnModel, type OutpaintRatio, type QuickAction } from '../editorInputs';
+import { QUICK_ACTIONS, quickOffered, quickUsesOwnModel, type OutpaintRatio, type QuickAction } from '../editorInputs';
 import { hasMaskMark, type Mark, type Tool } from '../marks';
 import { defaultStem, nameStem } from '../saveAs';
 import { splitPath } from '../format';
-import { fitCropRatio, initialCrop, isFullCrop, type CropRatio } from '../transforms';
+import { fitCropRatio, formatOf, initialCrop, isFullCrop, type CropRatio } from '../transforms';
 import type { ImageFractionRect } from '../api';
 import {
   applyStep, continueFrom, rollbackTo, saveAsInThread, saveToProject, savedStepOf, versionSaved,
@@ -32,7 +32,9 @@ import {
   threadName, versionHasImage, versionLabel, versionName, versionShort, versionsOf, versionStep,
 } from '../thread/model';
 import { closeEditor, getThreadMarks, getThreadsState, setThreadMarks, showEditorVersion, useThreads } from '../thread/threadStore';
-import { imageSrc, launchThread, threadHasImage, versionSrc } from '../thread/useThreadLaunch';
+import { imageSrc, launchThread, quickAvailabilityFor, threadHasImage, versionSrc } from '../thread/useThreadLaunch';
+import { useCatalog } from '../thread/catalog';
+import { effectiveSettings, usePrefs } from '../thread/prefs';
 import { useJobStatus } from '../thread/useJobStatus';
 
 const ic = (I: typeof Check, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
@@ -46,6 +48,21 @@ function Section({ title, meta, children }: { title: string; meta?: string; chil
       {children}
     </section>
   );
+}
+
+// Формат и вес показанной картинки — из её ответа (браузер берёт его из кэша холста).
+// undefined — ещё не узнали: форма «Размер и сжатие» ждёт, иначе считала бы от PNG
+function useSourceInfo(src: string | null) {
+  const [info, setInfo] = useState<{ src: string; format: ImageEncodeFormat | null; bytes: number | null } | null>(null);
+  useEffect(() => {
+    if (!src) return;
+    let alive = true;
+    fetch(src).then(r => r.blob())
+      .then(b => { if (alive) setInfo({ src, format: formatOf(b.type), bytes: b.size }); })
+      .catch(() => { if (alive) setInfo({ src, format: null, bytes: null }); });
+    return () => { alive = false; };
+  }, [src]);
+  return info && info.src === src ? info : undefined;
 }
 
 export function EditorModal({ projectId, sessionId, threadId, versionId = null }: {
@@ -66,6 +83,14 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null }
   const [saving, setSaving] = useState(false);
   const [transforming, setTransforming] = useState(false);
   const { status } = useJobStatus(projectId, thread?.pendingJobId ?? null);
+  const catalog = useCatalog(projectId);
+  const prefs = usePrefs(projectId);
+  const viewedSrc = useMemo(() => {
+    if (!thread) return null;
+    const v = isLegacyThread(thread) ? null : findVersion(thread, versionId) ?? currentVersion(thread);
+    return v ? versionSrc(projectId, thread, v) : imageSrc(projectId, thread, thread.currentStepId);
+  }, [projectId, thread, versionId]);
+  const sourceInfo = useSourceInfo(viewedSrc);
 
   if (!thread) return null;
   const stack = currentStack(thread);
@@ -120,17 +145,26 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null }
     }
   };
 
+  // Умеет ли поставщик полосы действие — по каталогу, до котировки и запуска
+  const settings = effectiveSettings(prefs, thread.settings);
+  const quickActions = QUICK_ACTIONS.filter(a => quickOffered(a, catalog));
+  const availability = (a: QuickAction) => (catalog ? quickAvailabilityFor(catalog, settings, a) : null);
   const quickBlock = (a: QuickAction) => {
     if (running) return 'Идёт генерация';
     if (transforming) return 'Правка ещё сохраняется';
     if (!hasImage) return 'Сначала нарисуйте картинку';
     if ((a === 'removeMarked') && !hasMaskMark(marks)) return 'Закрасьте кистью, что убрать';
-    return '';
+    return availability(a)?.reason ?? '';
+  };
+  // «Взять fal» предлагаем, только когда мешает одно умение поставщика
+  const quickFallback = (a: QuickAction) => {
+    const r = availability(a);
+    return r && !r.route && quickBlock(a) === r.reason ? r.fallback : null;
   };
   // Быстрое действие запускает генерацию и закрывает попап: версии лягут в ленту внизу
-  const runQuick = async (a: QuickAction) => {
+  const runQuick = async (a: QuickAction, provider?: string) => {
     if (!(await ensureCurrent())) return;
-    const ok = await launchThread(projectId, sessionId, fresh(), a === 'outpaint' ? { kind: a, ratio } : { kind: a });
+    const ok = await launchThread(projectId, sessionId, fresh(), a === 'outpaint' ? { kind: a, ratio } : { kind: a }, provider ? { provider } : undefined);
     if (ok && quickUsesOwnModel(a)) showToast('Улучшаем лица — один вариант', '', 'info');
     if (ok && !legacy) closeEditor();
   };
@@ -190,12 +224,14 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null }
         </Section>
       )}
       <Section title="Быстрые действия" meta="сразу, без промпта">
-        <QuickActions actions={QUICK_ACTIONS} blockReason={quickBlock} ratio={ratio} onRatio={setRatio} onRun={a => { void runQuick(a); }} />
+        <QuickActions actions={quickActions} blockReason={quickBlock} fallback={quickFallback} ratio={ratio} onRatio={setRatio}
+          onRun={(a, provider) => { void runQuick(a, provider); }} />
       </Section>
       {hasImage && (
         <Section title="Без ИИ" meta={legacy ? 'бесплатно, мгновенно' : 'бесплатно, мгновенно, шагом этой версии'}>
           <AdjustPanel api={api} projectId={projectId} stepId={viewedStep ?? baseFile ?? ''} size={dims}
-            base={transformBase ? Promise.resolve(transformBase) : null} sourceFormat={null} beforeBytes={null}
+            base={transformBase ? Promise.resolve(transformBase) : null}
+            sourceFormat={sourceInfo?.format} beforeBytes={sourceInfo?.bytes ?? null}
             blockReason={running ? 'Идёт генерация' : transforming ? 'Правка ещё сохраняется' : preview ? 'Сначала возьмите вариант или вернитесь к картинке' : ''}
             cropping={!!crop}
             onOp={op => { void runTransform([op], null); }}

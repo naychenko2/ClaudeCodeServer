@@ -3,8 +3,9 @@ import type { ImageTransformBase, ImageTransformRequest, ImageTransformResponse 
 import { dropStepsFrom, pushStep, stepSaveSource, type History } from './editorInputs';
 import { maskExportSize } from './marks';
 import {
-  chainTransform, fitCropRatio, formatBytes, initialCrop, moveCrop, presetDims, resizeCrop, sizeFormChanged, sizeFormOps,
-  transformedSize, weightEstimator, WEIGHT_DEBOUNCE_MS, type SizeForm,
+  boxForm, chainTransform, containDims, coverCrop, fitCropRatio, FORMAT_PRESETS, formatBytes, initialCrop, moveCrop, presetDims,
+  resizeCrop, sameAspect, SIZE_PRESETS, sizeFormChanged, sizeFormOps, transformedSize, weightEstimator, WEIGHT_DEBOUNCE_MS,
+  type SizeForm,
 } from './transforms';
 
 // Сервер-заглушка: отвечает, когда тест скажет, и помнит, с какой базой звали
@@ -93,7 +94,11 @@ describe('размеры после правок', () => {
   it('форма размера: без изменения размера ресайза нет, кодирование есть всегда', () => {
     const f: SizeForm = { unit: 'px', w: 1600, h: 1200, percent: 100, format: 'webp', quality: 70 };
     expect(sizeFormOps({ w: 1600, h: 1200 }, f)).toEqual({ ops: [], encode: { format: 'webp', quality: 70 }, target: { w: 1600, h: 1200 } });
-    expect(sizeFormOps({ w: 1600, h: 1200 }, { ...f, unit: '%', percent: 50 }).ops).toEqual([{ type: 'resize', percent: 50 }]);
+    // Проценты уходят пикселями: сервер округляет по-банковски, 1001 × 50 % дал бы у него 500, а подпись — 501
+    expect(sizeFormOps({ w: 1600, h: 1200 }, { ...f, unit: '%', percent: 50 }).ops)
+      .toEqual([{ type: 'resize', width: 800, height: 600, lockAspect: false }]);
+    expect(sizeFormOps({ w: 1001, h: 601 }, { ...f, unit: '%', percent: 50 }))
+      .toMatchObject({ ops: [{ type: 'resize', width: 501, height: 301 }], target: { w: 501, h: 301 } });
     expect(sizeFormOps({ w: 1600, h: 1200 }, { ...f, format: 'png' }).encode).toEqual({ format: 'png' });
   });
 
@@ -103,6 +108,41 @@ describe('размеры после правок', () => {
     expect(sizeFormChanged({ w: 100, h: 50 }, { ...f, quality: 60 }, 'jpeg')).toBe(true);
     expect(sizeFormChanged({ w: 100, h: 50 }, f, 'png')).toBe(true);
     expect(sizeFormChanged({ w: 100, h: 50 }, { ...f, w: 50 }, 'jpeg')).toBe(true);
+    // Формат исходника неизвестен: PNG-форма без правок — не изменение (раньше «Применить» горела всегда)
+    expect(sizeFormChanged({ w: 100, h: 50 }, { ...f, format: 'png' }, null)).toBe(false);
+  });
+
+  it('пресеты по длинной стороне — 512…2048, пропорции не искажаются', () => {
+    expect([...SIZE_PRESETS]).toEqual([512, 1024, 1536, 2048]);
+    expect(presetDims({ w: 1600, h: 1200 }, 1024)).toEqual({ w: 1024, h: 768 });
+    expect(presetDims({ w: 1200, h: 1600 }, 2048)).toEqual({ w: 1536, h: 2048 });
+  });
+
+  it('формат-рамка: по умолчанию вписать без искажения, «Обрезать» — срез по центру и точный размер', () => {
+    expect(FORMAT_PRESETS.map(p => `${p.label} ${p.w}×${p.h}`)).toEqual([
+      '1:1 1080×1080', '4:5 1080×1350', '9:16 1080×1920', '16:9 1920×1080', 'Соцсети 1200×630',
+    ]);
+    const size = { w: 1600, h: 1200 };
+    const square = { w: 1080, h: 1080 };
+    expect(sameAspect(size, square)).toBe(false);
+    expect(sameAspect({ w: 3840, h: 2160 }, { w: 1920, h: 1080 })).toBe(true);
+    expect(containDims(size, square)).toEqual({ w: 1080, h: 810 });
+    const base: SizeForm = { unit: 'px', w: 1600, h: 1200, percent: 100, format: 'png', quality: 85 };
+    const contain = { ...base, ...boxForm(size, square, 'contain') };
+    expect(sizeFormOps(size, contain).ops).toEqual([{ type: 'resize', width: 1080, height: 810, lockAspect: false }]);
+    const cover = { ...base, ...boxForm(size, square, 'cover') };
+    expect(coverCrop(size, square)).toEqual({ x: 0.125, y: 0, width: 0.75, height: 1 });
+    expect(sizeFormOps(size, cover)).toMatchObject({
+      ops: [{ type: 'crop', rect: { x: 0.125, y: 0, width: 0.75, height: 1 } }, { type: 'resize', width: 1080, height: 1080 }],
+      target: square,
+    });
+    // Итог «Обрезать» — ровно рамка и без искажения: срез уже в пропорциях рамки
+    expect(transformedSize(size, sizeFormOps(size, cover).ops)).toEqual(square);
+    const tall = coverCrop({ w: 1000, h: 1000 }, { w: 1080, h: 1920 });
+    expect(tall.width * 1000 / (tall.height * 1000)).toBeCloseTo(1080 / 1920, 6);
+    // Пропорции совпали — выбор не нужен, просто ресайз в рамку
+    expect(sizeFormOps({ w: 3840, h: 2160 }, { ...base, w: 3840, h: 2160, ...boxForm({ w: 3840, h: 2160 }, { w: 1920, h: 1080 }, 'cover') }).ops)
+      .toEqual([{ type: 'resize', width: 1920, height: 1080, lockAspect: false }]);
   });
 
   it('вес по-человечески', () => {

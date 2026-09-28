@@ -1351,7 +1351,9 @@ export function Composer({
   const [suggestionDismissed, setSuggestionDismissed] = useState(false);
   // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс «скрыто» при приходе новой подсказки
   useEffect(() => { setSuggestionDismissed(false); }, [promptSuggestion]);
-  const suggestionVisible = !!promptSuggestion && text.trim() === '' && !suggestionDismissed && !isGenerating && !isListening;
+  // Подсказка — следующее сообщение агенту: в режиме подсистемы («Картинка») поле держит
+  // свой текст, и подсказка легла бы поверх промпта модели
+  const suggestionVisible = !!promptSuggestion && !activeMode && text.trim() === '' && !suggestionDismissed && !isGenerating && !isListening;
   const acceptSuggestion = useCallback(() => {
     if (!promptSuggestion) return;
     setText(promptSuggestion);
@@ -1716,10 +1718,13 @@ export function Composer({
       <Waveform />
     </div>
   ) : (
-    // Обёртка нужна ghost-слою подсказки: он позиционируется поверх ПУСТОГО textarea
-    // (подсказка видна только при пустом поле, совмещать с текстом юзера не нужно)
-    <div style={{ position: 'relative', flex: 1, minWidth: 0, width: isMobile ? '100%' : undefined, display: 'flex', alignItems: 'center' }}>
-      {!activeMode && modesSeg}
+    // Сегмент режимов — снаружи позиционированной обёртки: ghost-слой подсказки
+    // (left: 0) иначе ложился поверх иконок «Чат | Картинка»
+    <div style={{ flex: 1, minWidth: 0, width: isMobile ? '100%' : undefined, display: 'flex', alignItems: 'center' }}>
+    {!activeMode && modesSeg}
+    {/* Обёртка нужна ghost-слою подсказки: он позиционируется поверх ПУСТОГО textarea
+        (подсказка видна только при пустом поле, совмещать с текстом юзера не нужно) */}
+    <div data-composer-input="" style={{ position: 'relative', flex: 1, minWidth: 0, display: 'flex', alignItems: 'center' }}>
       <textarea
         autoComplete="off"
         ref={textareaRef}
@@ -1787,6 +1792,7 @@ export function Composer({
           </button>
         </div>
       )}
+    </div>
     </div>
   );
 

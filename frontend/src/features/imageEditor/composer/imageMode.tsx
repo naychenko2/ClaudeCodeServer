@@ -46,12 +46,11 @@ export const imageMode: ComposerModeApi = {
   title: 'Картинка',
   icon: <ImageIcon size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
   isAvailable: ctx => !!getFocusedThread(ctx.sessionId),
-  // Черновик: у пустой картинки режим «Чат» бессмыслен. Иначе — по просьбе входа
-  // «Редактировать» / «Нарисовать»; выбор картинки агентом режим сам не меняет
+  // Только по явной просьбе человека: «Нарисовать новую», «Редактировать» / «Нарисовать»
+  // из дерева. Выбор картинки агентом — и черновика тоже — режим сам не меняет: человек
+  // продолжает разговор с агентом, а не пишет промпт модели
   autoSelect: ctx => {
-    const t = getFocusedThread(ctx.sessionId);
-    if (!t) return null;
-    if (!t.file && isEmptyThread(t)) return `draft:${t.id}`;
+    if (!getFocusedThread(ctx.sessionId)) return null;
     const n = getImageModeRequest(ctx.sessionId);
     return n ? `request:${n}` : null;
   },

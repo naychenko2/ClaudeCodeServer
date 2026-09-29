@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Окружение node — localStorage нет; стору полос хватает заглушки
 (globalThis as unknown as { localStorage: Storage }).localStorage = {
@@ -6,14 +6,16 @@ import { beforeEach, describe, expect, it } from 'vitest';
 } as Storage;
 import { nextComposerMode } from '../../../lib/composerModes';
 import { __resetComposerStrips, getComposerStripsVersion } from '../../../lib/composerStrips';
-import type { ImageThread, ImageThreadsState } from '../thread/threadsApi';
+import { createDraft } from '../thread/actions';
+import { threadsApi, type ImageThread, type ImageThreadsState } from '../thread/threadsApi';
 import { __applyThreads, __resetThreadStore, requestImageMode } from '../thread/threadStore';
 import { imageMode } from './imageMode';
 
 // Дефект QA v3-polish #2/#3: фокус картинки пришёл с сервера (агент image_new, перезагрузка,
 // другая вкладка), а поле ввода оставалось в «Чате» — без подсказки «Промпт модели» и
-// кнопки «Сгенерировать». Правило записки v3: есть выбранная картинка — есть переключатель,
-// у черновика режим «Картинка» включается сам
+// кнопки «Сгенерировать». Правило записки v3: есть выбранная картинка — есть переключатель.
+// Жалоба Андрея 29.09: черновик, заведённый агентом посреди разговора, уводил поле в
+// «Картинку» — режим включается сам только по явной просьбе человека
 
 const CTX = { projectId: 'p1', sessionId: 's1' };
 const MODES = [{ name: 'image', action: imageMode }];
@@ -35,13 +37,21 @@ beforeEach(() => {
   __resetThreadStore();
   __resetComposerStrips();
 });
+afterEach(() => vi.restoreAllMocks());
 
 describe('режим «Картинка» при фокусе с сервера', () => {
-  it('черновик, выбранный извне: переключатель есть, режим «Картинка» включён', () => {
+  it('черновик, выбранный извне (агент): переключатель есть, режим остаётся «Чат»', () => {
     __applyThreads('s1', 'p1', state('d1', [thread({ id: 'd1', file: null, draftFolder: '' })]));
     const c = composer(null, null);
     expect(c.switcher).toBe(true);
-    expect(c.modeId).toBe('image');
+    expect(c.modeId).toBeNull();
+  });
+
+  it('«Нарисовать новую» от человека включает режим у черновика', async () => {
+    vi.spyOn(threadsApi, 'create').mockResolvedValue(state('d1', [thread({ id: 'd1', file: null, draftFolder: '' })], 2));
+    const before = composer(null, null);
+    expect(await createDraft('p1', 's1', '')).toBe(true);
+    expect(composer(before.key, null).modeId).toBe('image');
   });
 
   it('картинка-файл, выбранная извне: переключатель есть, режим остаётся «Чат»', () => {
@@ -53,7 +63,9 @@ describe('режим «Картинка» при фокусе с сервера'
 
   it('ручной уход в «Чат» у черновика держится, пока повод тот же', () => {
     __applyThreads('s1', 'p1', state('d1', [thread({ id: 'd1', file: null, draftFolder: '' })]));
+    requestImageMode('s1');
     const first = composer(null, null);
+    expect(first.modeId).toBe('image');
     // Человек нажал «Чат» — перерисовка с тем же ключом режим не навязывает
     expect(composer(first.key, null).modeId).toBeNull();
   });

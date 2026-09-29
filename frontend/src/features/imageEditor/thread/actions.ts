@@ -10,7 +10,7 @@ import {
   chainOf, currentStack, currentVersion, hasRunningLaunch, isEmptyThread, isLegacyThread, ORIGIN, originFile, saveFolder,
   versionStep,
 } from './model';
-import { closeEditor, getEditor, getThreadsState, mutate, setThreadMarks } from './threadStore';
+import { closeEditor, getEditor, getThreadsState, mutate, requestImageMode, setThreadMarks } from './threadStore';
 import { threadsApi, type ImageThread, type ImageThreadTake, type ImageThreadVersion } from './threadsApi';
 
 // Шаг, который уже лежит в проекте файлом нити: версия «в проекте», а не «черновик»
@@ -74,9 +74,13 @@ export const workWith = (projectId: string, sessionId: string, threadId: string 
 export const workWithFile = (projectId: string, sessionId: string, file: string) =>
   mutate(projectId, sessionId, rev => threadsApi.create(projectId, sessionId, { file, revision: rev }));
 
-// «✦ Нарисовать новую»: карточка-черновик «Новая картинка» и фокус на неё
-export const createDraft = (projectId: string, sessionId: string, folder: string) =>
-  mutate(projectId, sessionId, rev => threadsApi.create(projectId, sessionId, { draftFolder: folder, revision: rev }));
+// «✦ Нарисовать новую»: карточка-черновик «Новая картинка» и фокус на неё. Черновик завёл
+// человек — это и есть просьба о режиме «Картинка»; черновик агента режим не меняет
+export async function createDraft(projectId: string, sessionId: string, folder: string) {
+  const ok = await mutate(projectId, sessionId, rev => threadsApi.create(projectId, sessionId, { draftFolder: folder, revision: rev }));
+  if (ok) requestImageMode(sessionId);
+  return ok;
+}
 
 // ✕ на чипе: снять выбор; пустая нить (черновик или файл без шагов) уходит из ленты целиком
 export async function releaseFocus(projectId: string, sessionId: string, t: ImageThread | null) {

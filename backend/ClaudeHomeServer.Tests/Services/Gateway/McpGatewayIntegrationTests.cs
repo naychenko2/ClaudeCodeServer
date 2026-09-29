@@ -96,4 +96,17 @@ public sealed class McpGatewayIntegrationTests : IDisposable
         bare.Headers.Add(TurnTokenEndpointFilter.HeaderName, turn.Token);
         (await device.SendAsync(bare)).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
+
+    // Токен серверного хода провайдера (ADR-016 §2) годится только LLM-шлюзу: MCP-шлюз остаётся
+    // за устройствами, серверный CLI ходит в MCP напрямую со своим сервисным JWT
+    [Fact]
+    public async Task ТокенСерверногоХодаПровайдера_401()
+    {
+        var server = _factory.Services.GetRequiredService<TurnTokenService>().Issue("owner-x", "chat-1", null,
+            new GatewayRoute(GatewayUpstreamKind.Provider, "m", ProviderKey: "minimax"), TurnTokenLifetime.Process);
+        var req = new HttpRequestMessage(HttpMethod.Post, $"/gw/t/{server.Grant.TurnId}/mcp/tasks/chat-1") { Content = Json(ToolsList) };
+        req.Headers.Add(TurnTokenEndpointFilter.HeaderName, server.Token);
+
+        (await _factory.CreateClient().SendAsync(req)).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
 }

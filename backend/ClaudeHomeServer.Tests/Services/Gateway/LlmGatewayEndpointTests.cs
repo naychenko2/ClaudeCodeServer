@@ -139,12 +139,62 @@ public sealed class LlmGatewayEndpointTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task ТокенБезПривязкиКУстройству_401()
+    public async Task ТокенБезПривязкиКУстройству_СУчёткойУстройства_401()
     {
         var start = _kit.Selector.StartTurn(_tokens, "owner", "chat", null, "sonnet");
 
         (await _client.SendAsync(Req(HttpMethod.Get, start.Token!, "api/hello"))).StatusCode
-            .Should().Be(HttpStatusCode.Unauthorized, "шлюз принимает только токен, привязанный к устройству");
+            .Should().Be(HttpStatusCode.Unauthorized, "устройство предъявляет только токен, привязанный к нему");
+    }
+
+    // Серверный ход провайдера (ADR-016 §2): токен без устройства, учётки нет вовсе
+    private HttpRequestMessage ServerReq(IssuedTurnToken t, string path, string? json = null)
+    {
+        var r = new HttpRequestMessage(json is null ? HttpMethod.Get : HttpMethod.Post, $"/gw/t/{t.Grant.TurnId}/llm/{path}");
+        r.Headers.TryAddWithoutValidation(TurnTokenEndpointFilter.HeaderName, t.Token);
+        if (json is not null) r.Content = new StringContent(json, Encoding.UTF8, "application/json");
+        return r;
+    }
+
+    [Fact]
+    public async Task СерверныйХодПровайдера_БезУчёткиУстройства_Проходит_КлючСервера()
+    {
+        var t = _kit.Selector.StartTurn(_tokens, "owner", "chat", null, "mmx-m3", TurnTokenLifetime.Process).Token!;
+
+        var resp = await _client.SendAsync(ServerReq(t, "v1/messages", """{"model":"mmx-m3","max_tokens":1}"""));
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var (up, _) = _upstream.Calls.Single();
+        up.RequestUri!.ToString().Should().Be("https://mmx.test/anthropic/v1/messages");
+        up.Headers.GetValues("x-api-key").Should().Equal("mmx-key");
+    }
+
+    [Fact]
+    public async Task СерверныйХод_ПодпискаИлиОтозванныйИлиВыдуманный_401()
+    {
+        var subscription = _kit.Selector.StartTurn(_tokens, "owner", "chat", null, "sonnet").Token!;
+        (await _client.SendAsync(ServerReq(subscription, "api/hello"))).StatusCode
+            .Should().Be(HttpStatusCode.Unauthorized, "подписки серверному ходу через шлюз не положены");
+
+        var provider = _kit.Selector.StartTurn(_tokens, "owner", "chat", null, "mmx-m3", TurnTokenLifetime.Process).Token!;
+        var forged = ServerReq(provider, "api/hello");
+        forged.Headers.Remove(TurnTokenEndpointFilter.HeaderName);
+        forged.Headers.TryAddWithoutValidation(TurnTokenEndpointFilter.HeaderName, "выдуманный");
+        (await _client.SendAsync(forged)).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+
+        _tokens.RevokeTurn(provider.Grant.TurnId).Should().BeTrue();
+        (await _client.SendAsync(ServerReq(provider, "api/hello"))).StatusCode
+            .Should().Be(HttpStatusCode.Unauthorized, "токен отозван по выходу процесса");
+        _upstream.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ТокенУстройства_БезУчётки_ПоПрежнему401()
+    {
+        var t = Start("mmx-m3");
+
+        (await _client.SendAsync(ServerReq(t, "api/hello"))).StatusCode
+            .Should().Be(HttpStatusCode.Unauthorized, "токен устройства без учётки устройства не проходит и с правом серверного хода");
     }
 
     [Fact]

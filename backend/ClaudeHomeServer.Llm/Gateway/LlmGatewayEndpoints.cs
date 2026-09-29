@@ -56,7 +56,8 @@ public static class LlmGatewayEndpoints
                 ctx.HttpContext.RequestServices.GetRequiredService<IOptionsMonitor<LlmGatewayOptions>>().CurrentValue.Enabled
                     ? next(ctx)
                     : ValueTask.FromResult<object?>(Results.NotFound()))
-            .AddEndpointFilter<TurnTokenEndpointFilter>()
+            // Токен хода устройства или серверного хода провайдера (NormalizeToolInputArrays)
+            .AddEndpointFilter(TurnTokenEndpointFilter.InvokeWithServerTurnAsync)
             // Авторизация — токен хода (фильтр выше), а не JWT пользователя.
             .AllowAnonymous();
 

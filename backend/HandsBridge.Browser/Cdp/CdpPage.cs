@@ -129,6 +129,25 @@ public sealed class CdpPage(CdpConnection connection, string targetId, string se
         await DispatchKeyEventAsync("keyUp", "Enter", "Enter", 13, cancellationToken: cancellationToken);
     }
 
+    /// <summary>
+    /// Выделить весь текст фокусного поля командой редактора <c>selectAll</c> (как Ctrl+A) —
+    /// следующая вставка заменит прежний текст, JS страницы не нужен.
+    /// </summary>
+    public async Task SelectAllAsync(CancellationToken cancellationToken = default)
+    {
+        const int ctrl = 2;
+        await Send("Input.dispatchKeyEvent", new JsonObject
+        {
+            ["type"] = "rawKeyDown",
+            ["key"] = "a",
+            ["code"] = "KeyA",
+            ["windowsVirtualKeyCode"] = 65,
+            ["modifiers"] = ctrl,
+            ["commands"] = new JsonArray("selectAll"),
+        }, cancellationToken);
+        await DispatchKeyEventAsync("keyUp", "a", "KeyA", 65, cancellationToken: cancellationToken);
+    }
+
     /// <summary>Снимок видимой области в PNG — только в память, файлом не пишется.</summary>
     public async Task<byte[]> CaptureScreenshotAsync(CancellationToken cancellationToken = default)
     {

@@ -2,16 +2,10 @@ using System.Diagnostics;
 using System.Runtime.Versioning;
 using ClaudeHomeServer.HandsBridge.Browser.Cdp;
 using ClaudeHomeServer.HandsBridge.Browser.Launch;
+using ClaudeHomeServer.HandsBridge.Browser.Session;
 using Microsoft.Win32;
 
 namespace ClaudeHomeServer.HandsBridge.Browser;
-
-/// <summary>
-/// Итог <see cref="BrowserHost.AcquireAsync"/>: браузер либо отказ для модели (по-английски, как
-/// остальные отказы моста). <see cref="Restarted"/> — прежний Chrome умер (окно закрыли руками),
-/// поднят новый: ссылки снимка устарели.
-/// </summary>
-internal sealed record BrowserAcquire(CdpBrowser? Browser, bool Restarted, string? Refusal);
 
 /// <summary>
 /// Один Chrome на процесс моста в профиле проекта (<c>--browser-profile</c>): ленивый старт на
@@ -19,12 +13,8 @@ internal sealed record BrowserAcquire(CdpBrowser? Browser, bool Restarted, strin
 /// профиль занят — отказ инструмента, мост и остальные руки работают.
 /// </summary>
 [SupportedOSPlatform("windows")]
-internal sealed class BrowserHost : IAsyncDisposable
+internal sealed class BrowserHost : IBrowserSource, IAsyncDisposable
 {
-    /// <summary>Текст модели после перезапуска: состояние снимка сброшено.</summary>
-    public const string RestartedNotice =
-        "The browser was restarted (its window had been closed): earlier snapshot refs are gone, take a fresh browser_snapshot.";
-
     private const string NoProfileRefusal =
         "The browser is not available: the device agent did not pass a browser profile to the hands bridge (update the AI Home agent).";
 
@@ -43,7 +33,14 @@ internal sealed class BrowserHost : IAsyncDisposable
     /// <summary>Хост моста; до <see cref="Configure"/> профиля нет и браузер отказывает.</summary>
     public static BrowserHost Shared { get; private set; } = new(null);
 
-    public static void Configure(string? profileDirectory) => Shared = new BrowserHost(profileDirectory);
+    /// <summary>Сессия инструментов <c>browser_*</c> поверх <see cref="Shared"/>.</summary>
+    public static BrowserSession Session { get; private set; } = new(Shared);
+
+    public static void Configure(string? profileDirectory)
+    {
+        Shared = new BrowserHost(profileDirectory);
+        Session = new BrowserSession(Shared);
+    }
 
     public async Task<BrowserAcquire> AcquireAsync(CancellationToken cancellationToken = default)
     {

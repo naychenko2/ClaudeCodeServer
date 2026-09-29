@@ -28,11 +28,10 @@ public static partial class AppTool
     /// process/window metadata. Do not use powershell or shell commands to launch apps unless this tool fails or
     /// the task explicitly requires shell execution.
     ///
-    /// Examples: app(programPath='notepad.exe'), app(programPath='calc.exe'), app(programPath='msedge.exe', arguments='https://example.com').
+    /// Examples: app(programPath='notepad.exe'), app(programPath='calc.exe').
     /// After launch, the window is focused and ready for input. Use the returned handle for subsequent operations.
-    /// Launch a browser with a URL, then use ui_find/ui_click/ui_type with the returned handle to automate page content.
-    /// Edge (msedge.exe) and Chrome (chrome.exe) page content is fully automatable: links, buttons, and form fields
-    /// surface as ARIA/visible-text UIA names. Browser chrome (address bar, tabs) is best-effort — use keyboard shortcuts.
+    /// For web pages do not launch a browser here: use the browser_* tools (browser_navigate, browser_snapshot,
+    /// browser_click, browser_type), which drive this project's own Chrome without touching the user's windows.
     ///
     /// HANDS: any program can be started by the full path to its .exe, except interpreters and terminals (cmd, PowerShell,
     /// Python, Node, bash, Windows Terminal, Explorer...). Launcher stubs that hand off to another process (calc.exe,

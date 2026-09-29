@@ -29,30 +29,31 @@ public sealed class ImageEditLaunchAssembler(
     public static readonly IReadOnlyList<string> AspectRatios = ["1:1", "16:9", "9:16"];
 
     public async Task<ImageEditCallResult<ImageEditJobCreatedDto>> LaunchAsync(
-        string ownerId, Project project, ImageEditLaunchRequest req, CancellationToken ct)
+        string ownerId, ImageEditScope scope, ImageEditLaunchRequest req, CancellationToken ct)
     {
-        var assembled = await AssembleAsync(ownerId, project, req, ct);
+        var assembled = await AssembleAsync(ownerId, scope, req, ct);
         if (assembled.Value is not { } input)
             return Fail<ImageEditJobCreatedDto>(assembled.ErrorCode, assembled.Error);
 
-        var started = await jobs!.StartAsync(ownerId, project.Id, input, ct);
+        var started = await jobs!.StartAsync(ownerId, scope.Key, input, ct);
         if (started.Value is { } created && input is { ChatSessionId: { } chatId, ThreadId: { } threadId } && threads is not null)
         {
-            await threads.OnLaunchedAsync(ownerId, project.Id, chatId, threadId, jobs.Get(ownerId, project.Id, created.JobId),
+            await threads.OnLaunchedAsync(ownerId, scope.Key, chatId, threadId, jobs.Get(ownerId, scope.Key, created.JobId),
                 created.JobId, input.Prompt, input.Initiator, input.BaseVersionId, input.BaseStepId, ct);
             // Быстрый поставщик мог закончить задачу раньше, чем запуск лёг в нить: Finished тогда не
             // нашёл запуска, и карточка висела бы в «Рисуем…». Финал догоняется здесь; событие, пришедшее
             // следом, увидит закрытый запуск и ничего не сделает
-            if (jobs.Get(ownerId, project.Id, created.JobId) is
+            if (jobs.Get(ownerId, scope.Key, created.JobId) is
                 { Status: ImageEditJobStatus.Completed or ImageEditJobStatus.Failed or ImageEditJobStatus.Cancelled } done)
                 await threads.OnJobFinishedAsync(ownerId, done);
         }
         return started;
     }
 
-    // Вход задачи без запуска: всё проверено, байты прочитаны, нить своя или её нет
+    // Вход задачи без запуска: всё проверено, байты прочитаны, нить своя или её нет. Диск проекта
+    // (образцы путями, персонаж, путь исходника) — только у области проекта: у личной отказ до RootPath
     public async Task<ImageEditCallResult<ImageEditJobInput>> AssembleAsync(
-        string ownerId, Project project, ImageEditLaunchRequest req, CancellationToken ct)
+        string ownerId, ImageEditScope scope, ImageEditLaunchRequest req, CancellationToken ct)
     {
         // Драйверов может не быть вовсе (не настроены или ещё не подключены) — это понятный
         // отказ, а не 500 и не 202 на задачу, которая никогда не начнётся
@@ -65,13 +66,16 @@ public sealed class ImageEditLaunchAssembler(
             return Fail<ImageEditJobInput>(ImageEditErrorCodes.RasterUnavailable, "Обработка картинок выключена на этом сервере");
         if (string.IsNullOrWhiteSpace(req.QuoteId))
             return Invalid("Не указана котировка: сначала запросите цену");
+        if (scope.Project is null
+            && (req.ReferencePaths.Count > 0 || req.CharacterSlug is { Length: > 0 } || req.SourcePath is { Length: > 0 }))
+            return Invalid("Вне проекта нельзя брать образцы, персонажей и исходник из файлов проекта");
 
         string? threadId = null, chatId = null, baseVersionId = null;
         var source = req.Source;
         var baseStepId = string.IsNullOrWhiteSpace(req.BaseStepId) ? null : req.BaseStepId.Trim();
         if (!string.IsNullOrWhiteSpace(req.ThreadId))
         {
-            if (threads is null || !threads.OwnThread(ownerId, project.Id, req.ThreadSessionId, req.ThreadId))
+            if (threads is null || !threads.OwnThread(ownerId, scope.Key, req.ThreadSessionId, req.ThreadId))
                 return Fail<ImageEditJobInput>(ImageEditErrorCodes.ThreadNotFound, "Картинка не найдена в этом чате");
             threadId = req.ThreadId.Trim();
             chatId = req.ThreadSessionId!.Trim();
@@ -84,7 +88,7 @@ public sealed class ImageEditLaunchAssembler(
             baseVersionId = version.Id;
             var versionStep = thread.ImageStepOf(version);
             baseStepId ??= versionStep;
-            if (source is null && versionStep is not null && steps?.Open(ownerId, project.Id, versionStep) is { } found)
+            if (source is null && versionStep is not null && steps?.Open(ownerId, scope.Key, versionStep) is { } found)
                 source = new ImageBytes(found.Image.Bytes, found.Image.ContentType);
         }
 
@@ -103,7 +107,7 @@ public sealed class ImageEditLaunchAssembler(
 
         foreach (var (path, role) in req.ReferencePaths)
         {
-            var read = await ReadProjectImageAsync(project.RootPath, path, "Образец", ct);
+            var read = await ReadProjectImageAsync(scope.Project!.RootPath, path, "Образец", ct);
             if (read.Value is not { } image) return Fail<ImageEditJobInput>(read.ErrorCode, read.Error);
             references.Add(new ReferenceImage(image.Bytes, image.ContentType, role, Path.GetFileName(path)));
         }
@@ -111,7 +115,7 @@ public sealed class ImageEditLaunchAssembler(
         CharacterRef? character = null;
         if (req.CharacterSlug is { Length: > 0 } slug)
         {
-            var found = CharacterStore.ForRequest(project.RootPath, slug);
+            var found = CharacterStore.ForRequest(scope.Project!.RootPath, slug);
             if (found is null) return Invalid("Персонаж не найден");
             character = found.Ref;
             references.InsertRange(0, found.Photos);
@@ -119,7 +123,7 @@ public sealed class ImageEditLaunchAssembler(
         if (references.Count > limits.MaxReferences)
             return Invalid($"Образцов не больше {limits.MaxReferences}");
 
-        if (req.SourcePath is { Length: > 0 } sourcePath && ProjectLinkGuard.ResolveInside(project.RootPath, sourcePath) is null)
+        if (req.SourcePath is { Length: > 0 } sourcePath && ProjectLinkGuard.ResolveInside(scope.Project!.RootPath, sourcePath) is null)
             return Invalid("Исходник вне папки проекта или идёт через символическую ссылку");
 
         return ImageEditCallResult<ImageEditJobInput>.Ok(new ImageEditJobInput(

@@ -547,6 +547,131 @@ public class ImageThreadVersionsTests : IDisposable
             .Which.Text.Should().Be("Запуск «синий фон» в картинку images/hero.png отменён; готова версия 1");
     }
 
+    // ── Личный чат вне проекта (область ImageEditScope.Personal) ─────────────
+
+    private static readonly Session PersonalChat = new() { Id = Chat, OwnerId = Owner, ProjectId = null };
+    private static ImageEditScope PersonalScope => ImageEditScope.Of(PersonalChat);
+
+    private (ImageEditLaunchAssembler Launcher, ImageEditJobService Jobs, ImageEditSteps Steps) Personal()
+    {
+        var editor = new VariantsEditor();
+        var jobs = NewJobs(editor);
+        var raster = new SkiaImageRaster();
+        var steps = new ImageEditSteps(raster, new ImageEditWorkspace(Path.Combine(_dir, "image-editor")), jobs);
+        var directory = new Mock<ISessionDirectory>();
+        directory.Setup(d => d.GetById(Chat)).Returns(PersonalChat);
+        var threads = new ImageThreadService(_store, NullLogger<ImageThreadService>.Instance, directory.Object, _feed, _broadcaster, steps);
+        threads.Watch(jobs);
+        jobs.Finished += (_, job) =>
+        {
+            FinishedSignal(job.JobId).TrySetResult();
+            return Task.CompletedTask;
+        };
+        return (new ImageEditLaunchAssembler([editor], jobs, raster, threads, steps), jobs, steps);
+    }
+
+    private static ImageEditLaunchRequest PersonalRequest(string quoteId, string? threadId,
+        IReadOnlyList<(string, ReferenceRole)>? referencePaths = null, string? character = null, string? sourcePath = null) =>
+        new(quoteId, "синий фон", null, sourcePath, null, null, null, [], referencePaths ?? [], character,
+            ThreadSessionId: threadId is null ? null : Chat, ThreadId: threadId);
+
+    private static async Task<string> PersonalQuote(ImageEditJobService jobs, int count)
+    {
+        var quote = await jobs.QuoteAsync(Owner, ImageEditScope.Personal, new ImageEditQuoteRequest(
+            VariantsEditor.ProviderKey, ImageEditCatalog.AutoModelId, EditMode.Auto, ImageEditOp.Generate, count,
+            false, 0, false, null, null), default);
+        quote.Value.Should().NotBeNull(quote.Error);
+        return quote.Value!.QuoteId;
+    }
+
+    private async Task<string> LaunchPersonal(ImageEditLaunchAssembler launcher, ImageEditJobService jobs, string threadId, int count)
+    {
+        var started = await launcher.LaunchAsync(Owner, PersonalScope, PersonalRequest(await PersonalQuote(jobs, count), threadId), default);
+        started.Value.Should().NotBeNull(started.Error);
+        return started.Value!.JobId;
+    }
+
+    private string PersonalDraft() => _store.Open(Owner, Chat, null, "", Revision).Thread!.Id;
+
+    // Главная грабля разреза: RunningLaunch сверял session.ProjectId с ключом задачи, и у личного
+    // чата (ProjectId = null) варианты никогда не становились версиями — карточка висела «Рисуем…»
+    [Fact]
+    public async Task Запуск_в_нить_личного_чата_даёт_версии_нити()
+    {
+        var (launcher, jobs, steps) = Personal();
+        var id = PersonalDraft();
+
+        var jobId = await LaunchPersonal(launcher, jobs, id, 2);
+        var thread = await Finished(id, jobId);
+
+        thread.Launches.Single().Status.Should().Be(ImageThreadLaunchStatus.Done);
+        var ai = thread.Versions.Where(v => !v.IsOrigin).ToList();
+        ai.Select(v => v.Variant).Should().Equal(1, 2);
+        foreach (var v in ai)
+            steps.Open(Owner, ImageEditScope.Personal, v.CurrentStepId!).Should().NotBeNull();
+        jobs.Get(Owner, ImageEditScope.Personal, jobId)!.ProjectId.Should().Be(ImageEditScope.Personal);
+        _broadcaster.ToOwnerCalls.Select(c => c.Message).OfType<ImageThreadChangedMessage>()
+            .Should().Contain(m => m.ProjectId == ImageEditScope.Personal && m.State.Threads.Single().Versions.Count == 3);
+    }
+
+    [Fact]
+    public async Task Трата_личного_запуска_без_проекта_и_с_чатом()
+    {
+        var (launcher, jobs, _) = Personal();
+        var id = PersonalDraft();
+
+        await Finished(id, await LaunchPersonal(launcher, jobs, id, 2));
+
+        _spend.Records.Should().NotBeEmpty();
+        _spend.Records.Should().OnlyContain(r => r.ProjectId == null && r.SessionId == Chat,
+            "«Расход» не должен получить несуществующий проект «personal»");
+    }
+
+    // Ключ личной области — константа, а не «на чат»: ветка получает копию нитей с шагами старого
+    // чата, и шаги обязаны открываться в ней тем же ключом
+    [Fact]
+    public async Task Ветвление_личного_чата_оставляет_версии_открываемыми_в_ветке()
+    {
+        var (launcher, jobs, steps) = Personal();
+        var id = PersonalDraft();
+        await Finished(id, await LaunchPersonal(launcher, jobs, id, 2));
+        var bus = new TurnEventBus();
+        await new ImageThreadLifecycle(_store, NullLogger<ImageThreadLifecycle>.Instance, bus).StartAsync(default);
+
+        await bus.PublishAsync(new SessionBranched(new TurnContext("branch-1", Owner, 0, 0, null), Chat));
+
+        var branched = _store.Get(Owner, "branch-1").Threads.Single(t => t.Id == id);
+        var branchScope = ImageEditScope.Of(new Session { Id = "branch-1", OwnerId = Owner, ProjectId = null });
+        branchScope.Key.Should().Be(ImageEditScope.Personal);
+        var ai = branched.Versions.Where(v => !v.IsOrigin).ToList();
+        ai.Should().HaveCount(2);
+        foreach (var v in ai)
+            steps.Open(Owner, branchScope.Key, v.CurrentStepId!).Should().NotBeNull("версия видна в ветке");
+    }
+
+    public static TheoryData<string> ProjectDiskInputs => ["reference", "character", "source"];
+
+    [Theory]
+    [MemberData(nameof(ProjectDiskInputs))]
+    public async Task Сборщик_личной_области_отказывает_на_диск_проекта_без_падения(string input)
+    {
+        var (launcher, jobs, _) = Personal();
+        var quoteId = await PersonalQuote(jobs, 1);
+        var request = input switch
+        {
+            "reference" => PersonalRequest(quoteId, null, referencePaths: [("images/hero.png", ReferenceRole.Style)]),
+            "character" => PersonalRequest(quoteId, null, character: "anna"),
+            _ => PersonalRequest(quoteId, null, sourcePath: "images/hero.png"),
+        };
+
+        var assembled = await launcher.AssembleAsync(Owner, PersonalScope, request, default);
+        var launched = await launcher.LaunchAsync(Owner, PersonalScope, request, default);
+
+        assembled.ErrorCode.Should().Be(ImageEditErrorCodes.InvalidRequest);
+        launched.ErrorCode.Should().Be(ImageEditErrorCodes.InvalidRequest);
+        _spend.Records.Should().BeEmpty("отказ до запуска и траты");
+    }
+
     private static async Task<T> Until<T>(Func<T?> probe) where T : class
     {
         for (var i = 0; i < 500; i++)

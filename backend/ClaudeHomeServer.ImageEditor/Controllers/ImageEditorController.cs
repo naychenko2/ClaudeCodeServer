@@ -114,7 +114,7 @@ public class ImageEditorController(
             ThreadId: form.ThreadId,
             VersionId: form.VersionId);
 
-        var started = await launcher.LaunchAsync(UserId, project, request, ct);
+        var started = await launcher.LaunchAsync(UserId, ImageEditScope.Of(project), request, ct);
         return Map(started, created => StatusCode(StatusCodes.Status202Accepted, created));
     }
 

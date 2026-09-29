@@ -9,6 +9,7 @@
 
 import { useEffect, useSyncExternalStore } from 'react';
 import { onMessage, onReconnected, request, showToast } from 'aihome_shell/kit';
+import { scopeBase } from '../scope';
 import type { ImageThreadSettings } from './threadsApi';
 
 export interface ProjectPrefs extends ImageThreadSettings { characterSlug: string | null }
@@ -21,7 +22,7 @@ const key = (projectId: string) => `cc-image-prefs:${projectId}`;
 // Разовый перенос prefs устройства на сервер: после него localStorage — лишь кэш
 const migratedKey = (projectId: string) => `cc-image-prefs-migrated:${projectId}`;
 
-const url = (projectId: string) => `/projects/${encodeURIComponent(projectId)}/image-editor/prefs`;
+const url = (projectId: string) => `${scopeBase(projectId)}/prefs`;
 
 export const prefsApi = {
   get: (projectId: string) => request<ProjectPrefs>(url(projectId), { live: true }),

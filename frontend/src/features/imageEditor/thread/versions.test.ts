@@ -11,7 +11,7 @@ const store = new Map<string, string>();
   length: 0,
 } as Storage;
 import { activeStepOf, applyStep, continueFrom, versionSaved } from './actions';
-import { versionPrimary } from './model';
+import { downloadName, versionPrimary } from './model';
 import { __applyThreads, __resetThreadStore } from './threadStore';
 import { threadsApi, type ImageThread, type ImageThreadsState, type ImageThreadVersion } from './threadsApi';
 
@@ -62,6 +62,24 @@ describe('главная кнопка карточки версии', () => {
   });
   it('картинка не в работе — «Работать с этой» на любой версии', () => {
     expect(versionPrimary(t, t.versions![2], false, false)).toBe('work');
+  });
+  it('личный чат вне проекта: у версии в работе — «Скачать» вместо «Сохранить в проект»', () => {
+    const draft = withVersions({ file: null, draftFolder: '' });
+    expect(versionPrimary(draft, draft.versions![2], true, false, true)).toBe('download');
+    expect(versionPrimary(draft, draft.versions![2], true, false, false)).toBe('save');
+    // Прочие кнопки — как у проекта; у пустой версии скачивать нечего
+    expect(versionPrimary(draft, draft.versions![1], true, false, true)).toBe('continue');
+    expect(versionPrimary(draft, draft.versions![2], false, false, true)).toBe('work');
+    const empty = withVersions({ file: null, draftFolder: '', versions: [ver('origin')], currentVersionId: 'origin' });
+    expect(versionPrimary(empty, empty.versions![0], true, false, true)).toBeNull();
+  });
+  it('имя скачанного черновика — image-v{N} с расширением по типу, у файла проекта — его имя', () => {
+    const draft = withVersions({ file: null, draftFolder: '' });
+    expect(downloadName(draft, draft.versions![2], 'image/png')).toBe('image-v2.png');
+    expect(downloadName(draft, draft.versions![1], 'image/jpeg')).toBe('image-v1.jpg');
+    expect(downloadName(draft, draft.versions![1], 'image/webp')).toBe('image-v1.webp');
+    expect(downloadName(draft, draft.versions![1], '')).toBe('image-v1.png');
+    expect(downloadName(t, t.versions![2], 'image/png')).toBe('hero.png');
   });
   it('исходник без правок лежит в проекте файлом, версия ИИ — черновик до сохранения', () => {
     expect(versionSaved(t, t.versions![0])).toBe(true);

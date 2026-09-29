@@ -2878,9 +2878,10 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
           {/* Полоса «Руки»: состояние рук чата и её фокус питает отдельный компонент — сама
               полоса рисуется только активной */}
           {project && !embedded && <LocalHandsStripFeed session={session} project={project} />}
-          {project && !embedded && (
-            <ComposerStripHost projectId={project.id} sessionId={session.id} isMobile={isMobile === true}
-              builtins={[{
+          {/* В личном чате вне проекта Git нет — остаются полосы, доступные без проекта («Картинки») */}
+          {!embedded && (
+            <ComposerStripHost projectId={project?.id ?? null} sessionId={session.id} isMobile={isMobile === true}
+              builtins={project ? [{
                 name: 'git', order: 0,
                 render: ({ switcher, collapsed, setCollapsed }) => (
                   // Заголовок-селектор полосы теперь живёт внутри самой полосы (ProjectGitBar),
@@ -2903,7 +2904,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
                     return `${branch} · ${gitStripStatus(g.status, g.unpushed.length).text}`;
                   },
                 },
-              }]} />
+              }] : []} />
           )}
           {/* Подъём композера над лентой даёт сама белая карточка (Composer), а не эта
               обёртка: полоса контролов вынесена из карточки, и тень на обёртке рисовала

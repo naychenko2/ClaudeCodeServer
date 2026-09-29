@@ -46,12 +46,14 @@ export function dropCharacter(projectId: string, slug: string) {
   emit();
 }
 
-export function useCharacters(projectId: string): { list: ImageEditCharacter[] | null; error: boolean } {
+// projectId = null — персонажей нет (личный чат вне проекта): список пуст, запроса нет
+export function useCharacters(projectId: string | null): { list: ImageEditCharacter[] | null; error: boolean } {
   useSyncExternalStore(
     fn => { _listeners.add(fn); return () => { _listeners.delete(fn); }; },
     () => _version, () => _version,
   );
-  useEffect(() => { void load(projectId); }, [projectId]);
+  useEffect(() => { if (projectId) void load(projectId); }, [projectId]);
+  if (!projectId) return { list: [], error: false };
   const e = _entries.get(projectId);
   return { list: e?.list ?? null, error: e?.error ?? false };
 }

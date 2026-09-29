@@ -16,6 +16,7 @@ import { CropBar } from '../CropBar';
 import { EditorCanvas } from '../EditorCanvas';
 import { MarksTools, MobileToolbar } from '../EditorSections';
 import { QuickActions } from '../PanelSections';
+import { isPersonalScope } from '../scope';
 import { SaveAsDialog } from '../SaveAsDialog';
 import { QUICK_ACTIONS, quickOffered, quickUsesOwnModel, type OutpaintRatio, type QuickAction } from '../editorInputs';
 import { hasMaskMark, type Mark, type Tool } from '../marks';
@@ -70,6 +71,8 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null }
 }) {
   const mobile = useIsMobile();
   const api = useMemo(() => imageEditorApi(), []);
+  // Личный чат вне проекта: сохранять некуда — «Скачать» живёт в карточке версии
+  const personal = isPersonalScope(projectId);
   const state = useThreads(projectId, sessionId);
   const thread = state.threads.find(t => t.id === threadId) ?? null;
   const [tool, setTool] = useState<Tool>('mask');
@@ -219,7 +222,7 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null }
         </Section>
       )}
       {!mobile && hasImage && (
-        <Section title="Пометки" meta="уйдут со следующим сообщением">
+        <Section title="Пометки" meta={personal ? 'уйдут со следующим запуском' : 'уйдут со следующим сообщением'}>
           <MarksTools tool={tool} onTool={setTool} marksCount={marks.length} onClear={() => setMarks([])} disabled={!!preview || !!crop} />
         </Section>
       )}
@@ -284,7 +287,7 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null }
   );
 
   const subtitle = viewed
-    ? [versionName(viewed), inProject ? 'в проекте' : 'черновик', isCurrent ? 'в работе' : null].filter(Boolean).join(' · ')
+    ? [versionName(viewed), personal ? null : inProject ? 'в проекте' : 'черновик', isCurrent ? 'в работе' : null].filter(Boolean).join(' · ')
     : [versionLabel(thread, cur, saved), chain.length ? stepOf(at, chain.length) : null].filter(Boolean).join(' · ');
 
   return (
@@ -295,14 +298,20 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null }
           <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap', width: '100%', justifyContent: 'flex-end' }}>
             {!mobile && (
               <span style={{ marginRight: 'auto', fontSize: FS.xs, color: C.textMuted }}>
-                {marks.length ? 'Пометки уйдут со следующим сообщением — в режиме «Картинка» или агенту' : 'Отметьте место кистью, рамкой или стрелкой — модель это увидит'}
+                {!marks.length ? 'Отметьте место кистью, рамкой или стрелкой — модель это увидит'
+                  : personal ? 'Пометки уйдут со следующим запуском в режиме «Картинка»'
+                  : 'Пометки уйдут со следующим сообщением — в режиме «Картинка» или агенту'}
               </span>
             )}
-            <Button size="sm" variant="secondary" leftIcon={ic(Save)} disabled={!canSave} onClick={() => setSaveAs(true)}>Сохранить как…</Button>
-            <Button size="sm" variant="secondary" disabled={!canSave || inProject} loading={saving}
-              onClick={() => { void save(); }}>
-              {inProject ? 'В проекте' : 'Сохранить в проект'}
-            </Button>
+            {!personal && (
+              <>
+                <Button size="sm" variant="secondary" leftIcon={ic(Save)} disabled={!canSave} onClick={() => setSaveAs(true)}>Сохранить как…</Button>
+                <Button size="sm" variant="secondary" disabled={!canSave || inProject} loading={saving}
+                  onClick={() => { void save(); }}>
+                  {inProject ? 'В проекте' : 'Сохранить в проект'}
+                </Button>
+              </>
+            )}
             <Button size="sm" variant="primary" leftIcon={ic(Check)} onClick={closeEditor}>Готово</Button>
           </div>
         )}>
@@ -325,7 +334,7 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null }
           </Field>
         </Modal>
       )}
-      {saveAs && (
+      {saveAs && !personal && (
         <SaveAsDialog projectId={projectId} sourcePath={thread.file}
           defaultName={thread.file ? baseName : nameStem(baseName)} folder={folder} format={format}
           onCheck={(f, name) => api.saveCheck(projectId, { folder: f, name, format })}

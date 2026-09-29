@@ -1,6 +1,7 @@
 // API редактора картинок (ADR-017). Контракт — DTO и маршруты из
 // backend/ClaudeHomeServer.Core/Services/ImageEditor (волна 1), база
-// api/projects/{projectId}/image-editor. Enum'ы приходят строками в camelCase.
+// api/projects/{projectId}/image-editor, у личного чата — api/image-editor/chats/{sessionId}
+// (scope.ts). Enum'ы приходят строками в camelCase.
 //
 // Мок-режим: пока драйверов поставщиков нет, живой сервер отдаёт пустой каталог и
 // 409 на запуск. Для работы экрана без драйверов в localStorage ставится
@@ -8,6 +9,7 @@
 // Мок повторяет контракт целиком, включая SignalR-события задачи.
 
 import { request, readStoredToken, onMessage } from 'aihome_shell/kit';
+import { projectBase, scopeBase } from './scope';
 import { transformedSize } from './transforms';
 
 export type ImageEditOp = 'generate' | 'edit' | 'inpaint' | 'outpaint' | 'removeBackground' | 'upscale' | 'enhanceFaces';
@@ -352,7 +354,7 @@ export interface ImageEditorApi {
   stepUrl(projectId: string, stepId: string): string;
 }
 
-const base = (projectId: string) => `/projects/${encodeURIComponent(projectId)}/image-editor`;
+const base = scopeBase;
 
 const withToken = (url: string) => {
   const token = readStoredToken();
@@ -368,7 +370,7 @@ function characterForm(input: ImageEditCharacterInput): FormData {
   return form;
 }
 
-const charBase = (projectId: string) => `${base(projectId)}/characters`;
+const charBase = (projectId: string) => `${projectBase(projectId)}/characters`;
 
 const IMAGE_EDIT_EVENTS = new Set(['image_edit_progress', 'image_edit_completed', 'image_edit_failed']);
 
@@ -385,7 +387,7 @@ const liveApi: ImageEditorApi = {
   variantUrl: (projectId, jobId, n) =>
     withToken(`/api${base(projectId)}/jobs/${encodeURIComponent(jobId)}/variants/${n}`),
   save: (projectId, req) =>
-    request<{ path: string }>(`${base(projectId)}/save`, { method: 'POST', body: JSON.stringify(req) }),
+    request<{ path: string }>(`${projectBase(projectId)}/save`, { method: 'POST', body: JSON.stringify(req) }),
   subscribe: handler => onMessage(msg => {
     const m = msg as unknown as { type?: string };
     if (m.type && IMAGE_EDIT_EVENTS.has(m.type)) handler(m as unknown as ImageEditEvent);
@@ -403,7 +405,7 @@ const liveApi: ImageEditorApi = {
   saveCheck: (projectId, req) => {
     const q = new URLSearchParams({ folder: req.folder ?? '', name: req.name });
     if (req.format) q.set('format', req.format);
-    return request<SaveCheckResponse>(`${base(projectId)}/save/check?${q}`, { live: true });
+    return request<SaveCheckResponse>(`${projectBase(projectId)}/save/check?${q}`, { live: true });
   },
   transform: (projectId, req, opts) =>
     request<ImageTransformResponse>(`${base(projectId)}/transform${opts?.dryRun ? '?dryRun=true' : ''}`,

@@ -35,10 +35,10 @@ const NARROW_STRIP = 520;
 export const handsStripIcon = <MonitorSmartphone size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />;
 
 // Строка меню переключателя «Git ▾»
-export function handsStripStatus({ projectId, sessionId }: { projectId: string; sessionId: string | null }): ReactNode {
+export function handsStripStatus({ projectId, sessionId }: { projectId: string | null; sessionId: string | null }): ReactNode {
   if (!sessionId) return null;
   const status = handsBadgeStatus(getHandsSession(sessionId).state);
-  return handsStripView(status, getHandsProject(projectId)?.deviceName ?? null).text;
+  return handsStripView(status, (projectId ? getHandsProject(projectId)?.deviceName : null) ?? null).text;
 }
 
 export function HandsStrip({ ctx }: { ctx: ComposerStripCtx }) {
@@ -56,7 +56,7 @@ export function HandsStrip({ ctx }: { ctx: ComposerStripCtx }) {
 
   const session = getHandsSession(sessionId);
   const status = handsBadgeStatus(session.state);
-  const device = getHandsProject(projectId)?.deviceName ?? status?.deviceName ?? null;
+  const device = (projectId ? getHandsProject(projectId)?.deviceName : null) ?? status?.deviceName ?? null;
   const view = handsStripView(status, device);
   const vision = handsProviderVision(session.provider, providers);
   const summary = handsStripSummary(status, device, vision);

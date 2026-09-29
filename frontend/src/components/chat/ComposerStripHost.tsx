@@ -34,8 +34,9 @@ function ItemLabel({ title, status }: { title: string; status: ReactNode }) {
   );
 }
 
+// projectId = null — личный чат вне проекта: полосы сами решают, доступны ли они без проекта
 export function ComposerStripHost({ projectId, sessionId, isMobile, builtins = [] }: {
-  projectId: string;
+  projectId: string | null;
   sessionId: string | null;
   isMobile: boolean;
   builtins?: ComposerStripContribution[];

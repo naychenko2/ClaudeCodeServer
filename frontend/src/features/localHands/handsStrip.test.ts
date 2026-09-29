@@ -16,7 +16,7 @@ import { setAllFlags } from '../../lib/featureFlags';
 import { getSlotContributions, SLOT_COMPOSER_STRIP, type ComposerStripApi } from '../../lib/subsystems/registryCore';
 import type { Project, ServerMessage } from '../../types';
 import {
-  __resetHandsStrip, HANDS_STRIP, handsProjectInfo, handsStatusLoaded, handsStripOnMessage, setHandsProject,
+  __resetHandsStrip, HANDS_STRIP, handsProjectInfo, handsStripAvailable, handsStatusLoaded, handsStripOnMessage, setHandsProject,
 } from './handsStrip';
 import './handsStripManifest';
 
@@ -104,6 +104,12 @@ describe('полоса «Руки» — доступность', () => {
 
   it('с флагом и доступными руками полоса есть — вклад каркаса не зависит от тумблера подсистем', () => {
     expect(available()).toContain(HANDS_STRIP);
+  });
+
+  it('личный чат вне проекта (projectId = null) — полосы нет, даже когда руки чата активны', () => {
+    handsStripOnMessage(S, hands('active'));
+    expect(handsStripAvailable({ projectId: P, sessionId: S })).toBe(true);
+    expect(handsStripAvailable({ projectId: null, sessionId: S })).toBe(false);
   });
 });
 

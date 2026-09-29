@@ -11,6 +11,7 @@ import {
 } from 'aihome_shell/kit';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import { imageEditorApi } from '../api';
+import { enterScope } from '../scope';
 import { isFreeUnit, money, variantsWord } from '../format';
 import { dismissJob, saveToProject, savedStepOf, takeVariant, workWith } from './actions';
 import {
@@ -285,10 +286,12 @@ function StackCard({ projectId, sessionId, thread, stack, focused, events }: {
 // карточка-стопка старой нити: старые чаты открываются как были
 export function ThreadAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
   const rec = recordOf(ctx.item);
-  const state = useThreads(ctx.projectId, ctx.sessionId);
+  // Личный чат вне проекта: ctx.projectId = null, область — personal
+  const projectId = enterScope(ctx.projectId, ctx.sessionId);
+  const state = useThreads(projectId, ctx.sessionId);
   const data = (rec?.data ?? {}) as { threadId?: unknown; stackId?: unknown; versionId?: unknown };
   const thread = typeof data.threadId === 'string' ? state.threads.find(t => t.id === data.threadId) : undefined;
-  if (!ctx.projectId || !ctx.sessionId || !thread) {
+  if (!ctx.sessionId || !thread) {
     // Нить удалили (пустой черновик сняли ✕) — якорь в истории остался; рисуем след
     return rec?.fallback ? <Note>{rec.fallback}</Note> : null;
   }
@@ -297,12 +300,12 @@ export function ThreadAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
   if (byVersion) {
     const v = typeof data.versionId === 'string' && data.versionId !== ORIGIN ? findVersion(thread, data.versionId) : null;
     return v
-      ? <VersionCard projectId={ctx.projectId} sessionId={ctx.sessionId} thread={thread} version={v} focused={focused} />
-      : <OriginAnchor projectId={ctx.projectId} sessionId={ctx.sessionId} thread={thread} focused={focused} />;
+      ? <VersionCard projectId={projectId} sessionId={ctx.sessionId} thread={thread} version={v} focused={focused} />
+      : <OriginAnchor projectId={projectId} sessionId={ctx.sessionId} thread={thread} focused={focused} />;
   }
   const stack = typeof data.stackId === 'string' ? findStack(thread, data.stackId) : currentStack(thread);
   return (
-    <StackCard projectId={ctx.projectId} sessionId={ctx.sessionId} thread={thread} stack={stack}
+    <StackCard projectId={projectId} sessionId={ctx.sessionId} thread={thread} stack={stack}
       focused={focused} events={state.events} />
   );
 }

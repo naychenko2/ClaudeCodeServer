@@ -125,9 +125,9 @@ export function resetHandsSession(sessionId: string) {
 // ---------- вклад в реестр ----------
 
 // Полоса предлагается, только пока руки проекта включены и доступны, а сервер не ответил
-// «у чата рук нет»
-export function handsStripAvailable({ projectId, sessionId }: { projectId: string; sessionId: string | null }): boolean {
-  if (!sessionId) return false;
+// «у чата рук нет». Рук у личного чата вне проекта нет: они живут на устройстве проекта
+export function handsStripAvailable({ projectId, sessionId }: { projectId: string | null; sessionId: string | null }): boolean {
+  if (!projectId || !sessionId) return false;
   if (getHandsProject(projectId)?.available !== true) return false;
   return getHandsSession(sessionId).state.kind !== 'none';
 }

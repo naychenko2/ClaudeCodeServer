@@ -17,7 +17,7 @@ import { computeTodoBatches } from '../hooks/useSessionArtifacts';
 import { useChatScroll } from '../hooks/useChatScroll';
 import { useOnline } from '../hooks/useOnline';
 import { api, setGitSessionContext } from '../lib/api';
-import { ensureGit, getGitState, gitStripStatus, loadUnpushedLog } from '../lib/git';
+import { ensureGit, getGitState, gitStripStatus, loadUnpushedLog, useGitStripAvailable } from '../lib/git';
 import { slugify } from '../lib/slug';
 import { parseWorkflowMeta } from '../lib/workflowMeta';
 import { detectTeamMechanic, buildTeamTurnText, DEFAULT_TEAM_SETTINGS, type TeamMechanicId } from '../features/team/teamMechanics';
@@ -227,6 +227,10 @@ function memoizedCacheEntry(
 
 export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTaskAside, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, onAddToWall, onChatDeleted, skills, agents, attachedFiles, onAttachedFilesChange, greetingBubble, headerIsland, embedded, composerFocusSignal, contextBar, headerDragProps, availableChatIds }: Props) {
   const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, teamImplement: liveTeamImplement, teamPlanning: liveTeamPlanning, teamWavePulse, promptSuggestion, pending, composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending, preemptForPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
+  // Доступность встроенной полосы Git над композером (builtins ниже) — примитивный
+  // boolean, чтобы перерисовывать этот огромный компонент ровно при смене доступности,
+  // а не на каждый emit git-стора (busy, changedBy и т.п.)
+  const gitStripAvailable = useGitStripAvailable(project?.id ?? null);
   // Открылся пустой чат (только что создан — своей истории у него нет) — курсор сразу
   // в поле ввода: сюда пришли писать, а не читать. Решение принимаем один раз на чат и
   // только ПОСЛЕ загрузки истории: до неё items пуст у любого чата, и фокус улетал бы
@@ -2888,6 +2892,9 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
                 action: {
                   title: 'Git',
                   icon: <GitBranch size={14} strokeWidth={ICON_STROKE} />,
+                  // Пока статус не получен — доступна (без дребезга «Картинки → Git» в
+                  // проекте с git); после ответа — только в настоящем репозитории
+                  isAvailable: () => gitStripAvailable,
                   // На телефоне полоса тоже есть (прототип полос): по умолчанию свёрнута в строку
                   status: () => {
                     const g = getGitState(project.id);

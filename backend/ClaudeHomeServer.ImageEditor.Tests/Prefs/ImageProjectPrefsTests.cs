@@ -146,14 +146,16 @@ public class ImageProjectPrefsTests : IDisposable
             "без картинки в работе — выбор проекта; удалённый персонаж не подключён");
     }
 
-    private (ImageEditorStateContributor Contributor, PromptSessionContext Context, ImageThreadStore Threads) Contributor(bool agentLaunch = true)
+    private (ImageEditorStateContributor Contributor, PromptSessionContext Context, ImageThreadStore Threads) Contributor(
+        bool agentLaunch = true, bool personal = false, bool flag = true)
     {
         var threads = new ImageThreadStore(Path.Combine(_dir, ImageThreadStore.DirName));
         var flags = new Mock<IFeatureFlagGate>();
-        flags.Setup(f => f.IsEnabled(Owner, FeatureFlagKeys.ImageEditor)).Returns(true);
+        flags.Setup(f => f.IsEnabled(Owner, FeatureFlagKeys.ImageEditor)).Returns(flag);
         var config = TestImages.Config((ImageEditorToolset.AgentLaunchKey, agentLaunch ? "true" : "false"));
         var contributor = new ImageEditorStateContributor(flags.Object, threads: threads, prefs: _prefs, config: config);
-        var context = new PromptSessionContext(new Session { Id = Chat, OwnerId = Owner, ProjectId = ProjectId }, Owner, null, _root);
+        var context = new PromptSessionContext(
+            new Session { Id = Chat, OwnerId = Owner, ProjectId = personal ? null : ProjectId }, Owner, null, _root);
         return (contributor, context, threads);
     }
 
@@ -204,5 +206,95 @@ public class ImageProjectPrefsTests : IDisposable
 
         text.Should().Contain($"- {opened.Thread!.Id} (в работе): файл images/hero.png");
         text.Should().Contain(ImageEditorStateContributor.PriorityRule);
+    }
+
+    // ── Личный чат вне проекта: блок всегда при флаге и AgentLaunch (решение Андрея 29.09) ──
+
+    [Fact]
+    public async Task Личный_чат_без_нитей_и_выбора_короткий_блок_без_выбора_человека()
+    {
+        var (contributor, context, _) = Contributor(personal: true);
+
+        contributor.IsEnabled(context).Should().BeTrue("в личном чате блок есть всегда — иначе «нарисуй» уйдёт мимо image_generate");
+        var text = (await contributor.BuildAsync(context, "нарисуй кота"))!.Sections.Single().Text;
+
+        text.Should().Be(ImageEditorStateContributor.RenderEmpty());
+        text.Should().Contain("В работе: ничего не выбрано");
+        text.Should().Contain(ImageEditorStateContributor.PersonalPriorityRule);
+        text.Should().NotContain("Выбор человека", "выбора человека нет");
+        text.Should().NotContain(ImageEditorStateContributor.ChoiceRule);
+        text.Should().NotContain("local-media", "в личном чате local-media нет");
+        text.Should().NotContain("проект");
+    }
+
+    [Fact]
+    public void Личный_чат_правило_приоритета_ведёт_локальную_просьбу_в_image_generate()
+    {
+        ImageEditorStateContributor.PersonalPriorityRule.Should().Contain("image_generate с provider local")
+            .And.NotContain("local-media");
+        ImageEditorStateContributor.PriorityRule.Should().Contain("local-media", "проектный текст не меняется");
+    }
+
+    [Fact]
+    public async Task Личный_чат_с_сохранённым_личным_выбором_блок_с_выбором()
+    {
+        await _prefs.SetAsync(Owner, new ImageEditScope(ImageEditScope.Personal, null),
+            new ImageProjectPrefs("local", "qwen-image-2.1", 2, true, null));
+        var (contributor, context, _) = Contributor(personal: true);
+
+        var text = (await contributor.BuildAsync(context, "нарисуй кота"))!.Sections.Single().Text;
+
+        text.Should().Contain("Выбор человека в полосе «Картинки»: поставщик local, модель qwen-image-2.1, вариантов 2, персонаж не подключён");
+        text.Should().Contain(ImageEditorStateContributor.ChoiceRule);
+        text.Should().Contain(ImageEditorStateContributor.PersonalPriorityRule);
+        text.Should().NotContain(ImageEditorStateContributor.PriorityRule);
+    }
+
+    [Fact]
+    public async Task Личный_чат_с_нитями_черновик_скачивает_человек()
+    {
+        var (contributor, context, threads) = Contributor(personal: true);
+        var draft = threads.Open(Owner, Chat, null, "", 0, null);
+
+        var text = (await contributor.BuildAsync(context, "дальше"))!.Sections.Single().Text;
+
+        text.Should().Contain($"- {draft.Thread!.Id} (в работе): новая картинка, ещё не сохранена (человек скачает её)");
+        text.Should().Contain(ImageEditorStateContributor.PersonalPriorityRule);
+        text.Should().NotContain("корень проекта");
+    }
+
+    [Fact]
+    public async Task Личный_чат_без_запуска_агентом_как_у_проекта()
+    {
+        var (contributor, context, threads) = Contributor(agentLaunch: false, personal: true);
+
+        contributor.IsEnabled(context).Should().BeFalse("без image_generate блоку без нитей и выбора нечего сказать");
+        (await contributor.BuildAsync(context, "нарисуй кота")).Should().BeNull();
+
+        threads.Open(Owner, Chat, null, "", 0, null);
+        contributor.IsEnabled(context).Should().BeTrue("нити есть — блок есть");
+        (await contributor.BuildAsync(context, "дальше"))!.Sections.Single().Text
+            .Should().NotContain("image_new → image_generate");
+    }
+
+    [Fact]
+    public void Личный_чат_без_флага_блока_нет()
+    {
+        var (contributor, context, _) = Contributor(personal: true, flag: false);
+
+        contributor.IsEnabled(context).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Сохранённый_выбор_по_области_личный_отдельно_от_проекта()
+    {
+        _prefs.HasSaved(Owner, new ImageEditScope(ImageEditScope.Personal, null)).Should().BeFalse();
+        _prefs.HasSaved(Owner, ImageEditScope.Personal).Should().BeFalse("строковая версия — только для проекта");
+
+        await _prefs.SetAsync(Owner, new ImageEditScope(ImageEditScope.Personal, null), ImageProjectPrefs.Default);
+
+        _prefs.HasSaved(Owner, new ImageEditScope(ImageEditScope.Personal, null)).Should().BeTrue();
+        _prefs.HasSaved("owner-2", new ImageEditScope(ImageEditScope.Personal, null)).Should().BeFalse("у другого владельца свой выбор");
+        _prefs.HasSaved(Owner, ImageEditScope.Of(_project)).Should().BeFalse("выбор личного чата не делает выбор проекта");
     }
 }

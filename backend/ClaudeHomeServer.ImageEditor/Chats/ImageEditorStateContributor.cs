@@ -9,13 +9,15 @@ using Microsoft.Extensions.Configuration;
 
 namespace ClaudeHomeServer.Services.ImageEditor.Chats;
 
-// Блок «Картинки в этом чате» в каждом ходе чата проекта с нитями (ADR-019 §3): какая картинка
+// Блок «Картинки в этом чате» в каждом ходе чата с нитями (ADR-019 §3): какая картинка
 // в работе, у каждой файл, версии (id, «версия N», какая текущая, откуда выросла — чтобы агент
 // понимал «поправь предыдущую / вторую»), идущие запуски, плюс журнал «с прошлого сообщения».
 // Ручной запуск агент узнаёт именно отсюда: тихую строку image_launch в ленте модель не видит.
 // Нить в транскрипт CLI не входит, поэтому после компакции и --resume модель узнаёт о ней только
-// отсюда. Чат без нитей получает короткий блок (выбор в полосе и правило приоритета), только если
-// человек явно сохранил выбор в полосе проекта; без файла выбора и без нитей блока нет.
+// отсюда. Чат ПРОЕКТА без нитей получает короткий блок (выбор в полосе и правило приоритета),
+// только если человек явно сохранил выбор в полосе проекта; без файла выбора и без нитей блока нет.
+// ЛИЧНЫЙ чат вне проекта при ImageEditor:AgentLaunch получает блок всегда (решение Андрея 29.09):
+// иначе «нарисуй» без настроек уходит мимо image_generate. Развилка — вид чата, свойство сессии.
 //
 // Секция едет хвостом хода ВСЕГДА (PromptSection.InTurnTail): она меняется от хода к ходу, и в
 // системном блоке обнуляла бы prefix cache всей истории у любого провайдера, а не только у
@@ -40,31 +42,39 @@ public sealed class ImageEditorStateContributor(
 
     public bool IsEnabled(PromptSessionContext sessionContext) =>
         sessionContext.OwnerId is { Length: > 0 } ownerId
-        && sessionContext.Session.ProjectId is not null
         && flags.IsEnabled(ownerId, FeatureFlagKeys.ImageEditor)
-        && (HasThreads(ownerId, sessionContext.Session) || HasSavedPrefs(ownerId, sessionContext.Session));
+        && (PersonalAlways(sessionContext.Session)
+            || HasThreads(ownerId, sessionContext.Session) || HasSavedPrefs(ownerId, sessionContext.Session));
+
+    // Личный чат без нитей и выбора — блок ради правила приоритета, а оно есть только при image_generate
+    private bool PersonalAlways(Session session) => _agentLaunch && session.ProjectId is null;
 
     private bool HasThreads(string ownerId, Session session) =>
-        threads is not null && session.ProjectId is not null && threads.Get(ownerId, session.Id).Threads.Count > 0;
+        threads is not null && threads.Get(ownerId, session.Id).Threads.Count > 0;
 
     private bool HasSavedPrefs(string ownerId, Session session) =>
-        prefs is not null && session.ProjectId is { } projectId && prefs.HasSaved(ownerId, projectId);
+        prefs is not null && prefs.HasSaved(ownerId, ImageEditScope.Of(session));
 
     public Task<PromptSectionContribution?> BuildAsync(PromptSessionContext sessionContext, string? turnText)
     {
         var session = sessionContext.Session;
-        if (sessionContext.OwnerId is not { Length: > 0 } ownerId || session.ProjectId is not { } projectId)
+        if (sessionContext.OwnerId is not { Length: > 0 } ownerId)
             return Task.FromResult<PromptSectionContribution?>(null);
 
-        var projectPrefs = prefs?.Get(ownerId, projectId);
+        var scope = ImageEditScope.Of(session);
+        // У проекта — через проект: персонаж проверяется на его диске; у личной области персонажа нет
+        var scopePrefs = session.ProjectId is { } projectId ? prefs?.Get(ownerId, projectId) : prefs?.Get(ownerId, scope);
         string block;
         if (threads is not null && HasThreads(ownerId, session))
         {
             var (state, fresh) = threads.TakeForTurn(ownerId, session.Id);
-            block = RenderThreads(state, fresh, jobId => jobs?.Get(ownerId, projectId, jobId), projectPrefs, _agentLaunch);
+            block = RenderThreads(state, fresh, jobId => jobs?.Get(ownerId, scope.Key, jobId), scopePrefs, _agentLaunch,
+                scope.IsPersonal);
         }
-        else if (projectPrefs is not null && HasSavedPrefs(ownerId, session))
-            block = RenderChoice(projectPrefs, _agentLaunch);
+        else if (scopePrefs is not null && HasSavedPrefs(ownerId, session))
+            block = RenderChoice(scopePrefs, _agentLaunch, scope.IsPersonal);
+        else if (PersonalAlways(session))
+            block = RenderEmpty();
         else
             return Task.FromResult<PromptSectionContribution?>(null);
         return Task.FromResult<PromptSectionContribution?>(new PromptSectionContribution(
@@ -75,7 +85,8 @@ public sealed class ImageEditorStateContributor(
     // prefs — выбор человека в полосе «Картинки» проекта: для картинки в работе показываются её
     // настройки (а без них и без фокуса — проекта), персонаж всегда из проекта
     public static string RenderThreads(ImageThreadsState state, IReadOnlyList<ImageThreadEvent> fresh,
-        Func<string, ImageEditJobDto?> job, Prefs.ImageProjectPrefs? prefs = null, bool priorityRule = false)
+        Func<string, ImageEditJobDto?> job, Prefs.ImageProjectPrefs? prefs = null, bool priorityRule = false,
+        bool personal = false)
     {
         var sb = new StringBuilder();
         sb.AppendLine("## Картинки в этом чате");
@@ -88,11 +99,11 @@ public sealed class ImageEditorStateContributor(
             sb.AppendLine(ChoiceText(focused?.Settings ?? prefs.ToThreadSettings(), prefs.CharacterSlug));
             sb.AppendLine(ChoiceRule);
         }
-        if (priorityRule) sb.AppendLine(PriorityRule);
+        if (priorityRule) sb.AppendLine(personal ? PersonalPriorityRule : PriorityRule);
         foreach (var t in state.Threads.OrderByDescending(t => t.Id == state.Focus))
         {
             var what = t.File is { Length: > 0 } file ? $"файл {file}"
-                : $"новая картинка, ещё не сохранена (человек сохранит её в {DraftFolderText(t.DraftFolder)})";
+                : $"новая картинка, ещё не сохранена ({DraftSaveText(t.DraftFolder, personal)})";
             var current = t.CurrentVersion is { } cv ? $"; правка пойдёт от: {ImageThread.Label(cv)}" : "";
             // Стопка — формат нитей до 27.09: её шаг показывается, пока она есть
             var steps = t.CurrentStack?.Steps ?? [];
@@ -114,16 +125,21 @@ public sealed class ImageEditorStateContributor(
     }
 
     // Чат без нитей при явно сохранённом выборе: без списка картинок и журнала «с прошлого сообщения»
-    public static string RenderChoice(Prefs.ImageProjectPrefs prefs, bool priorityRule)
+    public static string RenderChoice(Prefs.ImageProjectPrefs prefs, bool priorityRule, bool personal = false)
     {
         var sb = new StringBuilder();
         sb.AppendLine("## Картинки в этом чате");
         sb.AppendLine("В работе: ничего не выбрано");
         sb.AppendLine(ChoiceText(prefs.ToThreadSettings(), prefs.CharacterSlug));
         sb.AppendLine(ChoiceRule);
-        if (priorityRule) sb.AppendLine(PriorityRule);
+        if (priorityRule) sb.AppendLine(personal ? PersonalPriorityRule : PriorityRule);
         return sb.ToString().TrimEnd();
     }
+
+    // Личный чат без нитей и без сохранённого выбора: выбора человека нет, поэтому ни ChoiceText,
+    // ни ChoiceRule («это выбор человека») — только правило приоритета
+    public static string RenderEmpty() =>
+        "## Картинки в этом чате\nВ работе: ничего не выбрано\n" + PersonalPriorityRule;
 
     // Сколько последних версий показывать у картинки: исходник и текущая видны всегда
     public const int MaxVersionsShown = 8;
@@ -172,6 +188,14 @@ public sealed class ImageEditorStateContributor(
         + "fal-ai, glif, higgsfield и local-media для картинок — только если человек в своей просьбе прямо назвал этот сервис. "
         + "Видео, аудио и музыка — как раньше.";
 
+    // То же для личного чата вне проекта: local-media там нет, локальная картинка — драйвер local
+    // редактора, а черновик человек скачивает, а не сохраняет в проект
+    public const string PersonalPriorityRule =
+        "Картинки в этом чате рисуй через image_new → image_generate: они уважают выбор человека в полосе "
+        + "«Картинки» и цену. Просьба нарисовать локально / на своей видеокарте / бесплатно — это "
+        + "image_generate с provider local. fal-ai, glif и higgsfield для картинок — только если человек "
+        + "в своей просьбе прямо назвал этот сервис. Видео, аудио и музыка — как раньше.";
+
     // «Выбор человека в полосе «Картинки»: поставщик fal, модель auto, вариантов 2, персонаж anya»
     public static string ChoiceText(ImageThreadSettings settings, string? character) =>
         "Выбор человека в полосе «Картинки»: "
@@ -182,6 +206,10 @@ public sealed class ImageEditorStateContributor(
 
     public static string DraftFolderText(string? folder) =>
         string.IsNullOrEmpty(folder) ? "корень проекта" : $"папку {folder}";
+
+    // Куда денется черновик: в проекте человек сохранит его в папку, в личном чате — скачает
+    public static string DraftSaveText(string? folder, bool personal) =>
+        personal ? "человек скачает её" : $"человек сохранит её в {DraftFolderText(folder)}";
 
     private static string Outcome(ImageEditJobDto? job) => job switch
     {

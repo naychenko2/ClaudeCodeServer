@@ -380,7 +380,7 @@ public class McpToolsetStabilityTests
         var body = MethodBody(File.ReadAllText(path!),
             "internal ImageEditorMcpContext? BuildImageEditorContext");
 
-        body.Should().Contain("ProjectId", "сервер есть в любом чате проекта");
+        body.Should().NotContain("ProjectId", "сервер есть в любом чате владельца — проектном и личном");
         body.Should().NotContain("ImageChat", "отдельного чата картинки в v3 нет");
         body.Should().NotContain("Thread", "фокус и нити картинок не влияют на состав серверов");
         body.Should().Contain("FeatureFlagKeys.ImageEditor", "флаг владельца гейтит сервер");
@@ -389,6 +389,43 @@ public class McpToolsetStabilityTests
         body.Should().NotContain("_currentTurn", "состояние хода не должно влиять на состав серверов");
         body.Should().NotContain("TurnDelegation", "гейт делегирования живёт в CallAsync тулсета");
         body.Should().NotContain("IsBusy", "идущий ход не должен влиять на состав серверов");
+    }
+
+    /// <summary>
+    /// Сервер image-editor едет и в личные чаты, поэтому контекст обязаны собирать ВСЕ три
+    /// точки сборки LlmSessionContext: StartNewSessionAsync и обе ветки EnsureProcessCoreAsync.
+    /// Забытая ветка «вне проекта» дала бы личному чату сервер на первом ходу и отняла бы его
+    /// после перезапуска процесса — другая сигнатура запуска и «No such tool available».
+    /// </summary>
+    [SkippableFact]
+    public void СерверРедактораКартинок_ВсеТочкиСборкиКонтекстаПередаютЕгоСинхронно()
+    {
+        var path = FindSource("Services", "SessionManager.cs");
+        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+        var source = File.ReadAllText(path!);
+
+        var ensure = MethodBody(source, "private async Task EnsureProcessCoreAsync(");
+        var split = ensure.IndexOf("if (entry.Info.ProjectId is null)", StringComparison.Ordinal);
+        split.Should().BeGreaterThan(0, "ветвление «вне проекта / проект» обязано существовать");
+        var elseAt = ensure.IndexOf("\n        else\n", split, StringComparison.Ordinal);
+        elseAt.Should().BeGreaterThan(split, "у ветвления обязана быть проектная ветка");
+
+        var points = new Dictionary<string, string>
+        {
+            ["StartNewSessionAsync"] = MethodBody(source, "private async Task StartNewSessionAsync("),
+            ["EnsureProcessCoreAsync, вне проекта"] = ensure[split..elseAt],
+            ["EnsureProcessCoreAsync, проект"] = ensure[elseAt..],
+        };
+        foreach (var (name, body) in points)
+        {
+            body.Should().Contain("BuildImageEditorContext(", $"{name} обязан собирать контекст image-editor");
+            body.Should().Contain("ImageEditorMcp: imageEditorMcp", $"{name} обязан передать его в LlmSessionContext");
+            var active = body.IndexOf("HttpMcpActive: HttpMcpActive(", StringComparison.Ordinal);
+            active.Should().BeGreaterThan(0, $"{name} обязан считать признак HttpMcpActive");
+            var activeEnd = body.IndexOf("HttpMcpEnabledProvider", active, StringComparison.Ordinal);
+            body[active..activeEnd].Should().Contain("imageEditorMcp",
+                $"{name}: без сервера в HttpMcpActive ход без прочих http-серверов уйдёт в прокси");
+        }
     }
 
     /// <summary>

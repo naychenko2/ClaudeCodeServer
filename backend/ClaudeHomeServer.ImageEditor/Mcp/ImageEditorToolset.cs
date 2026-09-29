@@ -11,10 +11,13 @@ using ClaudeHomeServer.Services.Turn;
 namespace ClaudeHomeServer.Services.ImageEditor.Mcp;
 
 /// <summary>
-/// MCP-сервер редактора картинок для агента любого чата проекта (ADR-019 §4). Тулсет живёт в
-/// модуле по прецеденту NotesToolset; ехать ли серверу в ход, решает Main
-/// (SessionManager.BuildImageEditorContext). Маршрут — <c>POST /mcp/image-editor/{sessionId}</c>:
-/// хвост несёт чат, по нему тулсет находит владельца, проект и нити картинок чата.
+/// MCP-сервер редактора картинок для агента любого чата владельца — проектного и личного вне
+/// проекта (ADR-019 §4, «Изменение 29.09»). Тулсет живёт в модуле по прецеденту NotesToolset;
+/// ехать ли серверу в ход, решает Main (SessionManager.BuildImageEditorContext). Маршрут —
+/// <c>POST /mcp/image-editor/{sessionId}</c>: хвост несёт чат, по нему тулсет находит владельца,
+/// область (проект или личную) и нити картинок чата. Схемы одинаковые в обоих видах чатов:
+/// проектные аргументы (file, folder, references, character) у личной области отказывают на
+/// вызове, до обращения к диску.
 ///
 /// Агент видит нити и сам берёт картинку в работу или заводит черновик (решение Андрея 1) — это
 /// всегда видно в ленте тихой строкой «Claude взял в работу: …». Каждый вариант запуска сразу
@@ -109,19 +112,19 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
     public async Task<McpToolCallResult> CallAsync(string tool, JsonObject arguments,
         McpToolCallContext context, CancellationToken ct)
     {
-        if (!TryResolve(context, out var session, out var project, out var error))
+        if (!TryResolve(context, out var session, out var scope, out var error))
             return Deny(error);
         if (ToolsOfInstance.All(t => t.Name != tool))
             return Deny($"Инструмент {tool} недоступен на этом сервере.");
 
         return tool switch
         {
-            ToolState => Json(DescribeState(context.OwnerId, session, project)),
-            ToolFocus => await FocusAsync(arguments, context.OwnerId, session, project, ct),
-            ToolNew => await NewAsync(arguments, context.OwnerId, session, project, ct),
+            ToolState => Json(DescribeState(context.OwnerId, session, scope)),
+            ToolFocus => await FocusAsync(arguments, context.OwnerId, session, scope, ct),
+            ToolNew => await NewAsync(arguments, context.OwnerId, session, scope, ct),
             ToolSuggestPrompt => SuggestPrompt(arguments),
-            ToolGenerate => await GenerateAsync(arguments, context.OwnerId, session, project, ct),
-            ToolCancel => await CancelAsync(arguments, context.OwnerId, session, project, ct),
+            ToolGenerate => await GenerateAsync(arguments, context.OwnerId, session, scope, ct),
+            ToolCancel => await CancelAsync(arguments, context.OwnerId, session, scope, ct),
             _ => Deny($"Неизвестный инструмент: {tool}"),
         };
     }
@@ -129,7 +132,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
     // ── image_focus и image_new ────────────────────────────────────────────────
 
     private async Task<McpToolCallResult> FocusAsync(JsonObject args, string ownerId, Session session,
-        Project project, CancellationToken ct)
+        ImageEditScope scope, CancellationToken ct)
     {
         var threadId = Str(args, "threadId");
         var file = Str(args, "file");
@@ -146,54 +149,62 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         ImageThreadWrite written;
         if (file is not null)
         {
+            // У личной области файлов проекта нет — отказ до обращения к диску
+            if (scope.Project is not { } project)
+                return Deny(NoProjectFiles);
             if (ProjectImagePath(project, file) is not { } path)
                 return Deny($"Картинка не найдена в проекте: {file}");
-            written = await _threads.AgentOpenAsync(ownerId, project.Id, session.Id, path, null, ct);
+            written = await _threads.AgentOpenAsync(ownerId, scope.Key, session.Id, path, null, ct);
         }
         else
         {
-            written = await _threads.AgentFocusAsync(ownerId, project.Id, session.Id, threadId, ct);
+            written = await _threads.AgentFocusAsync(ownerId, scope.Key, session.Id, threadId, ct);
             if (written.Status == ImageThreadWriteStatus.Ok && versionId is not null)
-                written = await _threads.AgentContinueAsync(ownerId, project.Id, session.Id, threadId!, versionId);
+                written = await _threads.AgentContinueAsync(ownerId, scope.Key, session.Id, threadId!, versionId);
         }
 
         return written.Status switch
         {
-            ImageThreadWriteStatus.Ok => Json(Focused(written.State, file is null ? null : HumanChoice(ownerId, project, written.State))),
+            ImageThreadWriteStatus.Ok => Json(Focused(written.State, scope, file is null ? null : HumanChoice(ownerId, scope, written.State))),
             ImageThreadWriteStatus.ThreadNotFound => Deny($"Картинки {threadId} нет в этом чате. Список — image_state."),
             _ => Deny("Человек как раз меняет выбор картинки — повтори позже."),
         };
     }
 
     private async Task<McpToolCallResult> NewAsync(JsonObject args, string ownerId, Session session,
-        Project project, CancellationToken ct)
+        ImageEditScope scope, CancellationToken ct)
     {
         var folder = ImageThreadPathTracker.Normalize(Str(args, "folder") ?? "");
-        if (folder.Length > 0
-            && (ProjectLinkGuard.ResolveInside(project.RootPath, folder) is not { } full || !Directory.Exists(full)))
-            return Deny($"Папка не найдена в проекте: {folder}");
+        if (folder.Length > 0)
+        {
+            // Папка — место сохранения в проект; у личной области проекта нет, черновик человек скачает
+            if (scope.Project is not { } project)
+                return Deny("В чате вне проекта папок нет: вызови image_new без folder — человек скачает картинку сам.");
+            if (ProjectLinkGuard.ResolveInside(project.RootPath, folder) is not { } full || !Directory.Exists(full))
+                return Deny($"Папка не найдена в проекте: {folder}");
+        }
 
-        var written = await _threads.AgentOpenAsync(ownerId, project.Id, session.Id, null, folder, ct);
+        var written = await _threads.AgentOpenAsync(ownerId, scope.Key, session.Id, null, folder, ct);
         return written.Status == ImageThreadWriteStatus.Ok
-            ? Json(Focused(written.State, HumanChoice(ownerId, project, written.State)))
+            ? Json(Focused(written.State, scope, HumanChoice(ownerId, scope, written.State)))
             : Deny("Человек как раз меняет выбор картинки — повтори позже.");
     }
 
     // humanChoice — настройки, которые картинка унаследовала из полосы «Картинки», и правило
-    private static object Focused(ImageThreadsState state, object? humanChoice = null) => new
+    private static object Focused(ImageThreadsState state, ImageEditScope scope, object? humanChoice = null) => new
     {
         focus = state.Focus,
-        thread = state.Threads.FirstOrDefault(t => t.Id == state.Focus) is { } t ? DescribeThread(t) : null,
+        thread = state.Threads.FirstOrDefault(t => t.Id == state.Focus) is { } t ? DescribeThread(t, scope) : null,
         humanChoice,
         note = "Человек видит в ленте, какую картинку ты взял в работу, и может снять выбор.",
     };
 
-    // Выбор человека для картинки в работе (без фокуса — для проекта): что возьмёт image_generate
+    // Выбор человека для картинки в работе (без фокуса — для области): что возьмёт image_generate
     // без provider/model/count/character
-    private object? HumanChoice(string ownerId, Project project, ImageThreadsState state)
+    private object? HumanChoice(string ownerId, ImageEditScope scope, ImageThreadsState state)
     {
         if (_prefs is null) return null;
-        var prefs = _prefs.Get(ownerId, project);
+        var prefs = _prefs.Get(ownerId, scope);
         var settings = state.Threads.FirstOrDefault(t => t.Id == state.Focus)?.Settings ?? prefs.ToThreadSettings();
         return new
         {
@@ -201,6 +212,9 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             rule = Chats.ImageEditorStateContributor.ChoiceRule,
         };
     }
+
+    private const string NoProjectFiles =
+        "В чате вне проекта нет файлов проекта: заведи новую картинку (image_new) или возьми картинку этого чата по threadId.";
 
     // Путь картинки проекта в форме нитей: от корня через «/», строго внутри и без ссылки наружу
     private static string? ProjectImagePath(Project project, string file)
@@ -216,7 +230,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
     // ── image_generate ─────────────────────────────────────────────────────────
 
     private async Task<McpToolCallResult> GenerateAsync(JsonObject args, string ownerId, Session session,
-        Project project, CancellationToken ct)
+        ImageEditScope scope, CancellationToken ct)
     {
         // threadId обязателен (решение Андрея 1): человек мог сменить картинку посреди хода, и
         // запуск «по текущему фокусу» ушёл бы не туда. Отказ — до гейта и лимита хода
@@ -244,7 +258,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         var launched = false;
         try
         {
-            var result = await LaunchAsync(args, ownerId, session, project, thread, version, ct);
+            var result = await LaunchAsync(args, ownerId, session, scope, thread, version, ct);
             launched = !result.IsError;
             return result;
         }
@@ -255,11 +269,12 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
     }
 
     private async Task<McpToolCallResult> LaunchAsync(JsonObject args, string ownerId, Session session,
-        Project project, ImageThread thread, ImageThreadVersion version, CancellationToken ct)
+        ImageEditScope scope, ImageThread thread, ImageThreadVersion version, CancellationToken ct)
     {
-        // Что не передано — выбор человека: настройки нити, иначе полосы «Картинки» проекта, а
-        // поставщик по умолчанию — как у каталога. Персонаж — подключённый в полосе проекта
-        var prefs = _prefs?.Get(ownerId, project);
+        // Что не передано — выбор человека: настройки нити, иначе полосы «Картинки» области, а
+        // поставщик по умолчанию — как у каталога. Персонаж — подключённый в полосе проекта (у
+        // личной области его нет)
+        var prefs = _prefs?.Get(ownerId, scope);
         var settings = thread.Settings ?? prefs?.ToThreadSettings();
         var provider = Str(args, "provider") ?? settings?.Provider ?? DefaultProvider();
         if (provider is null)
@@ -268,18 +283,23 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         var prompt = Str(args, "prompt") ?? "";
         var matchSourceSize = Bool(args, "matchSourceSize") ?? settings?.MatchSourceSize ?? true;
         var references = ReferencesArg(args);
+        // Проектные аргументы в личном чате — отказ до котировки (сборщик отказал бы тоже, но позже)
+        if (scope.Project is null && (references.Count > 0 || Str(args, "character") is not null))
+            return Deny("В чате вне проекта нет файлов проекта и персонажей: запусти без references и character.");
 
         // Исходник — картинка версии-основы (её шаг), иначе файл нити с диска проекта. У черновика
         // «Новая картинка» без шага исходника нет вовсе: рисуем новую по тексту
         ImageBytes? source = null;
         string? baseStepId = null;
-        if (thread.ImageStepOf(version) is { Length: > 0 } stepId && _steps?.Open(ownerId, project.Id, stepId) is { } step)
+        if (thread.ImageStepOf(version) is { Length: > 0 } stepId && _steps?.Open(ownerId, scope.Key, stepId) is { } step)
         {
             source = new ImageBytes(step.Image.Bytes, step.Image.ContentType);
             baseStepId = stepId;
         }
         else if (thread.File is { Length: > 0 } file)
         {
+            // Нить по файлу бывает только в проекте; у личной области — отказ до диска
+            if (scope.Project is not { } project) return Deny(NoProjectFiles);
             // Тот же путь чтения, что у образцов человека: проверки пути и лимита одни
             var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(project.RootPath, file, "Файл картинки", ct);
             if (read.Value is not { } image) return Deny(read.Error!);
@@ -306,9 +326,9 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             Width: size?.Width,
             Height: size?.Height,
             Removal: EditIntent.IsRemoval(prompt));
-        var quote = await _jobs!.QuoteAsync(ownerId, project.Id, quoteRequest, ct);
+        var quote = await _jobs!.QuoteAsync(ownerId, scope.Key, quoteRequest, ct);
         if (quote.Value is not { } q)
-            return await FailAsync(quote.ErrorCode, quote.Error, ownerId, project, quoteRequest, ct);
+            return await FailAsync(quote.ErrorCode, quote.Error, ownerId, scope, quoteRequest, ct);
 
         var request = new ImageEditLaunchRequest(
             q.QuoteId, prompt, MarksJson: null, thread.File, source, Mask: null, Annotated: null,
@@ -321,9 +341,9 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             ThreadSessionId: session.Id,
             ThreadId: thread.Id,
             VersionId: version.Id);
-        var started = await _launcher.LaunchAsync(ownerId, ImageEditScope.Of(project), request, ct);
+        var started = await _launcher.LaunchAsync(ownerId, scope, request, ct);
         if (started.Value is not { } created)
-            return await FailAsync(started.ErrorCode, started.Error, ownerId, project, quoteRequest, ct);
+            return await FailAsync(started.ErrorCode, started.Error, ownerId, scope, quoteRequest, ct);
 
         return Json(new
         {
@@ -332,13 +352,14 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             baseVersion = new { versionId = version.Id, label = ImageThread.Label(version) },
             quote = new { q.Provider, q.Model, q.Estimate, q.ExpectedSeconds },
             note = "Генерация идёт отдельно от хода: остановка разговора её не отменяет, отмена — image_cancel. "
-                + "Каждый вариант станет новой версией картинки внизу ленты; сохранить в проект может только человек.",
+                + "Каждый вариант станет новой версией картинки внизу ленты; "
+                + (scope.IsPersonal ? "скачать её может только человек." : "сохранить в проект может только человек."),
         });
     }
 
     // Отказ поставщика: в результате — котировка соседа, чтобы человек повторил одним кликом.
     // Сам тулсет второй раз не запускает — выбор поставщика не подменяется
-    private async Task<McpToolCallResult> FailAsync(string? code, string? error, string ownerId, Project project,
+    private async Task<McpToolCallResult> FailAsync(string? code, string? error, string ownerId, ImageEditScope scope,
         ImageEditQuoteRequest failed, CancellationToken ct)
     {
         ImageEditQuoteDto? retry = null;
@@ -347,7 +368,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             foreach (var other in ImageEditCatalog.Available(_editors)
                          .Where(e => !string.Equals(e.Key, failed.Provider, StringComparison.OrdinalIgnoreCase)))
             {
-                var alt = await _jobs!.QuoteAsync(ownerId, project.Id,
+                var alt = await _jobs!.QuoteAsync(ownerId, scope.Key,
                     failed with { Provider = other.Key, Model = ImageEditCatalog.AutoModelId }, ct);
                 if (alt.Value is { } value) { retry = value; break; }
             }
@@ -371,14 +392,14 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
     // ── image_cancel ───────────────────────────────────────────────────────────
 
     private async Task<McpToolCallResult> CancelAsync(JsonObject args, string ownerId, Session session,
-        Project project, CancellationToken ct)
+        ImageEditScope scope, CancellationToken ct)
     {
         var jobId = Str(args, "jobId") ?? "";
         // Задача другого чата (или чужая) неотличима от несуществующей
-        var job = _jobs?.Get(ownerId, project.Id, jobId);
+        var job = _jobs?.Get(ownerId, scope.Key, jobId);
         if (job is null || job.ChatSessionId != session.Id)
             return Deny("Задача не найдена.");
-        var cancelled = await _jobs!.CancelAsync(ownerId, project.Id, jobId, ct);
+        var cancelled = await _jobs!.CancelAsync(ownerId, scope.Key, jobId, ct);
         return cancelled is null
             ? Deny("Задача не найдена.")
             : Json(new { cancelled.JobId, cancelled.Status, cancelled.Charged });
@@ -399,7 +420,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         });
     }
 
-    private object DescribeState(string ownerId, Session session, Project project)
+    private object DescribeState(string ownerId, Session session, ImageEditScope scope)
     {
         var state = _threads.Get(ownerId, session.Id);
         var place = ImagePlaceKeys.ImageEditor;
@@ -411,13 +432,13 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             focus = state.Focus,
             threads = state.Threads.Select(t => new
             {
-                thread = DescribeThread(t),
-                size = t.File is { Length: > 0 } file ? SizeOf(project, file) : null,
-                pendingJob = t.PendingJobId is { } jobId && _jobs?.Get(ownerId, project.Id, jobId) is { } j
+                thread = DescribeThread(t, scope),
+                size = t.File is { Length: > 0 } file && scope.Project is { } project ? SizeOf(project, file) : null,
+                pendingJob = t.PendingJobId is { } jobId && _jobs?.Get(ownerId, scope.Key, jobId) is { } j
                     ? new { j.JobId, j.Status, j.Provider, j.Model, variants = j.Variants.Count, j.Cost, j.Error, j.Initiator }
                     : null,
                 running = t.Launches.Where(l => l.Status == ImageThreadLaunchStatus.Running)
-                    .Select(l => _jobs?.Get(ownerId, project.Id, l.JobId) is { } j
+                    .Select(l => _jobs?.Get(ownerId, scope.Key, l.JobId) is { } j
                         ? new { j.JobId, j.Status, j.Provider, j.Model, j.Count, l.Prompt, from = l.BaseVersionId }
                         : new { l.JobId, Status = ImageEditJobStatus.Queued, Provider = "", Model = "", Count = 0, l.Prompt, from = l.BaseVersionId }),
             }),
@@ -425,15 +446,20 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             defaultModel = catalog.Default.Model,
             providers = catalog.Providers,
             agentLaunch = _agentLaunch,
-            humanChoice = HumanChoice(ownerId, project, state),
-            note = state.Threads.Count == 0
-                ? "В этом чате ещё нет картинок. Возьми картинку проекта в работу (image_focus с file) или заведи новую (image_new)."
-                : "Каждый вариант запуска — версия картинки. Править другую версию — versionId в image_generate. "
+            humanChoice = HumanChoice(ownerId, scope, state),
+            note = (state.Threads.Count, scope.IsPersonal) switch
+            {
+                (0, true) => "В этом чате ещё нет картинок. Заведи новую (image_new): это чат вне проекта, файлов проекта тут нет.",
+                (0, false) => "В этом чате ещё нет картинок. Возьми картинку проекта в работу (image_focus с file) или заведи новую (image_new).",
+                (_, true) => "Каждый вариант запуска — версия картинки. Править другую версию — versionId в image_generate. "
+                    + "Скачать картинку может только человек.",
+                _ => "Каждый вариант запуска — версия картинки. Править другую версию — versionId в image_generate. "
                     + "Сохранить в проект может только человек.",
+            },
         };
     }
 
-    private static object DescribeThread(ImageThread t)
+    private static object DescribeThread(ImageThread t, ImageEditScope scope)
     {
         var steps = t.CurrentStack?.Steps ?? [];
         var at = t.CurrentStepId is { } s ? steps.ToList().IndexOf(s) + 1 : 0;
@@ -444,8 +470,8 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             draft = t.File is { Length: > 0 } ? null : new
             {
                 folder = t.DraftFolder ?? "",
-                note = "Картинки ещё нет: это новая картинка, человек сохранит её в "
-                    + Chats.ImageEditorStateContributor.DraftFolderText(t.DraftFolder)
+                note = "Картинки ещё нет: это новая картинка, "
+                    + Chats.ImageEditorStateContributor.DraftSaveText(t.DraftFolder, scope.IsPersonal)
                     + ". image_generate без op нарисует её по тексту.",
             },
             currentVersionId = t.CurrentVersionId,
@@ -507,20 +533,25 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
 
     // ── Маршрут: /mcp/image-editor/{sessionId} ─────────────────────────────────
 
-    // Чат проекта владельца токена при включённом флаге. Любой отказ одним текстом: чужой чат
-    // неотличим от несуществующего, а состав у него пустой
-    private bool TryResolve(McpToolCallContext context, out Session session, out Project project, out string error)
+    // Чат владельца токена при включённом флаге: у чата проекта — его проект (свой), у личного —
+    // личная область. Сопоставление — только ImageEditScope.Of. Любой отказ одним текстом: чужой
+    // чат неотличим от несуществующего, а состав у него пустой
+    private bool TryResolve(McpToolCallContext context, out Session session, out ImageEditScope scope, out string error)
     {
         session = null!;
-        project = null!;
-        error = "Чат проекта не найден — инструменты редактора картинок недоступны.";
+        scope = null!;
+        error = "Чат не найден — инструменты редактора картинок недоступны.";
         if (!TryParseRoute(context.RouteTail, out var sessionId)) return false;
-        if (_sessions.GetOwned(sessionId, context.OwnerId) is not { ProjectId: { } projectId } owned)
-            return false;
+        if (_sessions.GetOwned(sessionId, context.OwnerId) is not { } owned) return false;
         if (!_flags.IsEnabled(context.OwnerId, FeatureFlagKeys.ImageEditor)) return false;
-        if (_projects.GetById(projectId) is not { } found || found.OwnerId != context.OwnerId) return false;
+        if (owned.ProjectId is { } projectId)
+        {
+            if (_projects.GetById(projectId) is not { } found || found.OwnerId != context.OwnerId) return false;
+            scope = ImageEditScope.Of(found);
+        }
+        else
+            scope = ImageEditScope.Of(owned);
         session = owned;
-        project = found;
         return true;
     }
 

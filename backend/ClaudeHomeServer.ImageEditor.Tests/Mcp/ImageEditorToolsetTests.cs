@@ -125,11 +125,11 @@ public class ImageEditorToolsetTests : IDisposable
     private IEnumerable<StoredModuleRecord> Lines(string recordType) =>
         _feed.Records.Where(r => r.SessionId == ChatId && r.Record.RecordType == recordType).Select(r => r.Record);
 
-    private async Task<ImageEditJobDto> WaitDone(string jobId)
+    private async Task<ImageEditJobDto> WaitDone(string jobId, string scopeKey = ProjectId)
     {
         for (var i = 0; i < 500; i++)
         {
-            var job = _jobs.Get(Owner, ProjectId, jobId)!;
+            var job = _jobs.Get(Owner, scopeKey, jobId)!;
             if (job.Status is ImageEditJobStatus.Completed or ImageEditJobStatus.Failed or ImageEditJobStatus.Cancelled)
                 return job;
             await Task.Delay(10);
@@ -218,18 +218,175 @@ public class ImageEditorToolsetTests : IDisposable
     }
 
     [Fact]
-    public void Чужой_чат_чат_вне_проекта_и_выключенный_флаг_пустой_состав()
+    public void Чужой_чат_и_выключенный_флаг_пустой_состав_а_личный_чат_полный()
     {
-        AddChat("outside", Owner, projectId: null);
+        AddChat(PersonalChat, Owner, projectId: null);
         var toolset = Toolset();
 
         toolset.ToolsFor(Ctx()).Should().HaveCount(6, "сервер есть в любом чате проекта");
+        toolset.ToolsFor(Ctx(tail: PersonalChat)).Select(t => t.Name).Should().Equal(
+            toolset.ToolsFor(Ctx()).Select(t => t.Name), "схемы одни для чата проекта и личного");
         toolset.ToolsFor(Ctx(owner: Stranger)).Should().BeEmpty("чат владельца B чужаку не виден");
+        toolset.ToolsFor(Ctx(owner: Stranger, tail: PersonalChat)).Should().BeEmpty("личный чат владельца B чужаку не виден");
         toolset.ToolsFor(Ctx(tail: "missing")).Should().BeEmpty();
         toolset.ToolsFor(Ctx(tail: "../chat-b")).Should().BeEmpty();
-        toolset.ToolsFor(Ctx(tail: "outside")).Should().BeEmpty("чат вне проекта картинок не имеет");
         _flagOn.Remove(Owner);
         toolset.ToolsFor(Ctx()).Should().BeEmpty("флаг image-editor владельца выключен");
+        toolset.ToolsFor(Ctx(tail: PersonalChat)).Should().BeEmpty("флаг image-editor владельца выключен");
+    }
+
+    // ── Личный чат вне проекта (ADR-019, «Изменение 29.09») ───────────────────
+
+    private const string PersonalChat = "chat-personal";
+
+    private IReadOnlyList<ImageEditJobDto> PersonalJobs() =>
+        _store.Get(Owner, PersonalChat).Events
+            .Select(e => e.JobId).OfType<string>().Distinct()
+            .Select(id => _jobs.Get(Owner, ImageEditScope.Personal, id)).OfType<ImageEditJobDto>().ToList();
+
+    private async Task<string> PersonalDraft(ImageEditorToolset toolset)
+    {
+        var result = await Call(toolset, ImageEditorToolset.ToolNew, ctx: Ctx(tail: PersonalChat));
+        result.IsError.Should().BeFalse(result.Text);
+        return Parse(result)["focus"]!.GetValue<string>();
+    }
+
+    [Fact]
+    public async Task Личный_чат_image_new_без_папки_заводит_черновик_тихой_строкой()
+    {
+        AddChat(PersonalChat, Owner, projectId: null);
+        var toolset = Toolset();
+
+        var result = await Call(toolset, ImageEditorToolset.ToolNew, ctx: Ctx(tail: PersonalChat));
+
+        result.IsError.Should().BeFalse(result.Text);
+        var thread = _store.Get(Owner, PersonalChat).Threads.Should().ContainSingle().Subject;
+        thread.File.Should().BeNull();
+        _store.Get(Owner, PersonalChat).Focus.Should().Be(thread.Id);
+        Parse(result)["thread"]!["draft"]!["note"]!.GetValue<string>().Should().Contain("скачает")
+            .And.NotContain("проект");
+        _feed.Records.Where(r => r.SessionId == PersonalChat && r.Record.RecordType == ImageThreadService.RecordTypes.Focus)
+            .Should().ContainSingle().Which.Record.Fallback.Should().Be("Claude взял в работу: новая картинка");
+    }
+
+    // Файл и папка есть в проекте владельца — но у личной области проекта нет, и отказ идёт до диска
+    [Fact]
+    public async Task Личный_чат_файл_и_папка_проекта_отказ_без_следов()
+    {
+        AddChat(PersonalChat, Owner, projectId: null);
+        var toolset = Toolset();
+
+        var focus = await Call(toolset, ImageEditorToolset.ToolFocus, new JsonObject { ["file"] = "images/hero.png" },
+            Ctx(tail: PersonalChat));
+        var draft = await Call(toolset, ImageEditorToolset.ToolNew, new JsonObject { ["folder"] = "art" },
+            Ctx(tail: PersonalChat));
+
+        focus.IsError.Should().BeTrue();
+        focus.Text.Should().Contain("вне проекта").And.Contain("image_new");
+        draft.IsError.Should().BeTrue();
+        draft.Text.Should().Contain("вне проекта");
+        _store.Get(Owner, PersonalChat).Threads.Should().BeEmpty();
+        _feed.Records.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Личный_чат_image_state_без_проектных_подсказок()
+    {
+        AddChat(PersonalChat, Owner, projectId: null);
+        var toolset = Toolset();
+
+        var state = await Call(toolset, ImageEditorToolset.ToolState, ctx: Ctx(tail: PersonalChat));
+
+        state.IsError.Should().BeFalse(state.Text);
+        Parse(state)["note"]!.GetValue<string>().Should().Contain("image_new").And.NotContain("image_focus с file");
+    }
+
+    [Fact]
+    public async Task Личный_чат_локальная_генерация_ключом_personal_трата_без_проекта_и_потолок_хода()
+    {
+        AddChat(PersonalChat, Owner, projectId: null);
+        var media = new LocalImageEditorTests.FakeMedia();
+        var toolset = Toolset([HiggsfieldImageEditorTests.Create().Editor,
+            new LocalImageEditor(media) { PollInterval = TimeSpan.FromMilliseconds(1) }]);
+        var thread = await PersonalDraft(toolset);
+        var args = () => new JsonObject { ["threadId"] = thread, ["prompt"] = "кот", ["provider"] = "local" };
+
+        var first = await Call(toolset, ImageEditorToolset.ToolGenerate, args(), Ctx(tail: PersonalChat));
+        first.IsError.Should().BeFalse(first.Text);
+        var jobId = Parse(first)["jobId"]!.GetValue<string>();
+        Parse(first)["quote"]!["provider"]!.GetValue<string>().Should().Be("local");
+        _jobs.Get(Owner, ProjectId, jobId).Should().BeNull("задача личного чата живёт в области personal");
+        var job = _jobs.Get(Owner, ImageEditScope.Personal, jobId)!;
+        job.Initiator.Should().Be(ImageEditInitiator.Agent);
+        job.ChatSessionId.Should().Be(PersonalChat);
+
+        (await Call(toolset, ImageEditorToolset.ToolGenerate, args(), Ctx(tail: PersonalChat))).IsError.Should().BeFalse();
+        var third = await Call(toolset, ImageEditorToolset.ToolGenerate, args(), Ctx(tail: PersonalChat));
+        third.IsError.Should().BeTrue();
+        third.Text.Should().Contain("не больше 2");
+        PersonalJobs().Should().HaveCount(2).And.OnlyContain(j => j.Provider == "local");
+
+        await WaitDone(jobId, ImageEditScope.Personal);
+        _spend.Records.Should().NotBeEmpty().And.OnlyContain(r => r.ProjectId == null && r.OwnerId == Owner
+            && r.Initiator == SpendInitiators.Agent && r.SessionId == PersonalChat);
+    }
+
+    [Fact]
+    public async Task Личный_чат_делегированный_ход_отказ_задачи_нет()
+    {
+        AddChat(PersonalChat, Owner, projectId: null);
+        _turnGate.Setup(g => g.Deny(Owner, PersonalChat, It.IsAny<string>()))
+            .Returns("Запуск генерации недоступно на делегированном ходу");
+        var toolset = Toolset();
+        var thread = await PersonalDraft(toolset);
+
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate, Gen(thread), Ctx(tail: PersonalChat));
+
+        result.IsError.Should().BeTrue();
+        result.Text.Should().Contain("делегированном ходу");
+        PersonalJobs().Should().BeEmpty();
+        _spend.Records.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Личный_чат_образцы_и_персонаж_проекта_отказ_до_котировки()
+    {
+        AddChat(PersonalChat, Owner, projectId: null);
+        var toolset = Toolset();
+        var thread = await PersonalDraft(toolset);
+
+        var withRefs = Gen(thread);
+        withRefs["references"] = new JsonArray(new JsonObject { ["path"] = "images/hero.png", ["role"] = "style" });
+        var withCharacter = Gen(thread);
+        withCharacter["character"] = "anya";
+
+        foreach (var args in new[] { withRefs, withCharacter })
+        {
+            var result = await Call(toolset, ImageEditorToolset.ToolGenerate, args, Ctx(tail: PersonalChat));
+            result.IsError.Should().BeTrue();
+            result.Text.Should().Contain("вне проекта");
+        }
+        PersonalJobs().Should().BeEmpty();
+        _spend.Records.Should().BeEmpty();
+        (await Call(toolset, ImageEditorToolset.ToolGenerate, Gen(thread, "a"), Ctx(tail: PersonalChat))).IsError
+            .Should().BeFalse("отказы не съели место в потолке хода");
+    }
+
+    [Fact]
+    public async Task Личный_чат_чужого_владельца_не_виден_и_его_нити_не_трогаются()
+    {
+        AddChat(PersonalChat, Owner, projectId: null);
+        var toolset = Toolset();
+        var thread = await PersonalDraft(toolset);
+        var stranger = Ctx(owner: Stranger, tail: PersonalChat);
+
+        (await Call(toolset, ImageEditorToolset.ToolState, ctx: stranger)).IsError.Should().BeTrue();
+        (await Call(toolset, ImageEditorToolset.ToolNew, ctx: stranger)).IsError.Should().BeTrue();
+        (await Call(toolset, ImageEditorToolset.ToolGenerate, Gen(thread), stranger)).IsError.Should().BeTrue();
+        _store.Get(Stranger, PersonalChat).Threads.Should().BeEmpty();
+        _store.Get(Owner, PersonalChat).Threads.Should().ContainSingle();
+        PersonalJobs().Should().BeEmpty();
+        _spend.Records.Should().BeEmpty();
     }
 
     // ── Выбор картинки агентом: всегда тихой строкой ──────────────────────────

@@ -9,8 +9,8 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Tests.ImageEditor.Threads;
 
-// Сервер image-editor в конфиге хода (ADR-019 §4): любой чат проекта — есть, чат вне проекта —
-// нет, флаг владельца выключен — нет. Модуль выключен — тулсета нет в реестре и контекста тоже
+// Сервер image-editor в конфиге хода (ADR-019 §4): любой чат владельца — проектный и личный —
+// есть, флаг владельца выключен — нет. Модуль выключен — тулсета нет в реестре и контекста тоже
 // (ImageEditorDisabledTests). Инструменты сервера идут без карточки разрешения — но только в
 // ходе, куда сервер действительно едет.
 public class ImageEditorMcpContextTests : IDisposable
@@ -53,11 +53,14 @@ public class ImageEditorMcpContextTests : IDisposable
     }
 
     [Fact]
-    public void Чат_вне_проекта_сервера_не_получает()
+    public void Чат_вне_проекта_тоже_получает_сервер()
     {
         SetFlag(true);
 
-        Sessions.BuildImageEditorContext(OwnerId, Chat(projectId: null)).Should().BeNull();
+        var context = Sessions.BuildImageEditorContext(OwnerId, Chat(projectId: null));
+
+        context.Should().NotBeNull("в личном чате агент рисует через image_new → image_generate");
+        context!.AutoAllowTools.Should().BeEquivalentTo(ImageEditorAgentTools.AutoAllowTools);
     }
 
     [Fact]

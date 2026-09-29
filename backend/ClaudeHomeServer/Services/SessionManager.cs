@@ -1120,14 +1120,16 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         return new HiggsfieldMcpContext(apiUrl, () => GetServiceToken(ownerId!), HttpEndpointUsable(apiUrl));
     }
 
-    // MCP-сервер редактора картинок (ADR-019 §4): в любом чате проекта, при флаге image-editor у
-    // владельца и загруженном модуле. Последнее — наличие тулсета в реестре: модуль выключен, а
+    // MCP-сервер редактора картинок (ADR-019 §4): в любом чате владельца — проектном и личном,
+    // при флаге image-editor и загруженном модуле. Контекст собирается во ВСЕХ трёх точках
+    // (StartNewSessionAsync и обе ветки EnsureProcessCoreAsync) — иначе состав прыгает между
+    // первым ходом и перезапуском процесса (сторож в McpToolsetStabilityTests). Последнее — наличие тулсета в реестре: модуль выключен, а
     // контекст собран — CLI получил бы сервер, отвечающий 404, и «fetch failed» у всех
     // инструментов хода. Все условия — свойства сессии, владельца и процесса; от хода, фокуса и
     // нитей картинок состав не зависит (McpToolsetStabilityTests).
     internal ImageEditorMcpContext? BuildImageEditorContext(string? ownerId, Session session)
     {
-        if (ownerId is null || string.IsNullOrEmpty(session.ProjectId)) return null;
+        if (ownerId is null) return null;
         if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.ImageEditor)) return null;
         _mcpToolsets ??= _services?.GetService<Services.Mcp.Http.McpToolsetRegistry>();
         if (_mcpToolsets?.Find(McpEndpoints.ImageEditorName) is null) return null;
@@ -5601,6 +5603,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             var watchMcp = BuildWatchContext(entry.Info.OwnerId);
             var webSearchMcp = BuildWebSearchContext(entry.Info.OwnerId, persona.Persona);
             var higgsfieldMcp = BuildHiggsfieldContext(entry.Info.OwnerId, persona.Persona);
+            var imageEditorMcp = BuildImageEditorContext(entry.Info.OwnerId, entry.Info);
             var tasksMcp = TasksMcpEnabled(entry.Info.OwnerId, entry.Info, persona.Persona)
                 ? BuildTasksContext(entry.Info.OwnerId, null, persona.Persona) : null;
             var notesMcp = _bindings.EffectiveToolEnabled(entry.Info.OwnerId, persona.Persona, "notes")
@@ -5636,12 +5639,13 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 OrchestrationDone: BuildOrchestrationDone(sessionId),
                 HttpMcpActive: HttpMcpActive(widgetsMcp, persona.Memory, tasksMcp, notesMcp, personasMcp,
                     workspace, notificationsMcp, dify: difyMcp, watch: watchMcp, webSearch: webSearchMcp,
-                    higgsfield: higgsfieldMcp),
+                    higgsfield: higgsfieldMcp, imageEditor: imageEditorMcp),
                 HttpMcpEnabledProvider: HttpMcpEnabled,
                 Events: _turnEvents,
                 WatchMcp: watchMcp,
                 WebSearchMcp: webSearchMcp,
                 HiggsfieldMcp: higgsfieldMcp,
+                ImageEditorMcp: imageEditorMcp,
                 // Чат вне проекта — fallback для slice графа не применяется (граф ключуется проектом)
                 MainRootPath: null);
                 // Чат вне проекта: трейлер CCS-Session в подсказке досье (DossierTrailerContributor) пропускается

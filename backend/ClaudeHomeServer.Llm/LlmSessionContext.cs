@@ -163,8 +163,8 @@ public sealed record ArchitectureMcpContext(string ApiUrl, Func<string> TokenFac
 public sealed record HiggsfieldMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp);
 
 // Контекст MCP-сервера редактора картинок (ADR-019 §4): тулсет живёт в модуле, сессия едет
-// хвостом URL (/mcp/image-editor/{sessionId}). null — чат вне проекта, флаг image-editor у
-// владельца выключен или модуль не загружен (тулсета нет в реестре — иначе «fetch failed» у
+// хвостом URL (/mcp/image-editor/{sessionId}), в любом чате владельца — проектном и личном.
+// null — флаг image-editor у владельца выключен или модуль не загружен (тулсета нет в реестре — иначе «fetch failed» у
 // всего хода). Всё это — свойства сессии, владельца и процесса, не хода. stdio-ветки нет.
 // AutoAllowTools — инструменты сервера, которые DecidePermission пропускает без карточки.
 public sealed record ImageEditorMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp,

@@ -118,6 +118,11 @@ public sealed class ImageProjectPrefsService(
         projects?.GetById(projectId) is { } project && project.OwnerId == ownerId
         && store.Exists(ownerId, projectId);
 
+    // То же по области: у личной — файл выбора владельца (строковая версия на «personal» молча
+    // false — такого проекта нет), у проекта — с проверкой владения
+    public bool HasSaved(string ownerId, ImageEditScope scope) =>
+        scope.IsPersonal ? store.Exists(ownerId, ImageEditScope.Personal) : HasSaved(ownerId, scope.Key);
+
     // Проверка тела PUT …/prefs — общая для ручек проекта и личного чата; null — годится
     public static string? Validate(ImageProjectPrefs? req)
     {

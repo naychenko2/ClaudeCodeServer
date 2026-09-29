@@ -40,6 +40,8 @@ public static partial class BrowserTabsTool
             return HandsGate.Deny(HandsTools.BrowserTabs, gate.Reason!);
         }
 
+        HandsGate.Acted(HandsTools.BrowserTabs);
+
         var reply = await BrowserHost.Session.TabsAsync(action, gate.Url, tabId, cancellationToken);
         return BrowserToolResult.From(HandsTools.BrowserTabs, reply);
     }

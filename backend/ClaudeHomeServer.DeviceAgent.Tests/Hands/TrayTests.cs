@@ -13,7 +13,10 @@ public class TrayModelTests
     private static readonly HandsTrayDevice Device = new("https://home.example.ru/", "home-pc", "1.842.0",
         [@"C:\Проекты\Бухгалтерия", @"D:\work"], @"C:\Users\me\AppData\Local\ai-home-agent\logs");
 
-    private static readonly HandsActiveTurn Turn = new("turn-1", @"C:\Проекты\Бухгалтерия\", DateTimeOffset.UtcNow);
+    private static readonly HandsActiveTurn Turn = new("turn-1", @"C:\Проекты\Бухгалтерия\", DateTimeOffset.UtcNow, Acting: true);
+
+    /// <summary>Тот же ход до первого действия моста: руки подключены, но не действовали.</summary>
+    private static readonly HandsActiveTurn Attached = Turn with { Acting = false };
 
     private static HandsPipeMessage Status(bool online = true, bool installed = true, params HandsActiveTurn[] turns) =>
         new(HandsPipeTypes.Status, Status: new HandsTrayStatus(installed, turns, online, Device));
@@ -102,6 +105,38 @@ public class TrayModelTests
             "Фокус может переключаться. Окна хода закроются вместе с ним.", StopVisible: true));
         StopItem(model).Should().Match<TrayMenuItem>(i => i.Enabled);
         model.Menu().Select(i => i.Text).Should().Contain("Сейчас работает: проект «Бухгалтерия»");
+    }
+
+    [Fact]
+    public void Руки_подключены_но_не_действовали_плашки_нет_а_Стоп_доступен()
+    {
+        var model = Connected();
+
+        model.Apply(Status(turns: Attached)).Should().BeNull("подключение без действия — не повод для уведомления");
+
+        model.HandsActive.Should().BeFalse();
+        model.HandsAttached.Should().BeTrue();
+        model.Plate.Visible.Should().BeFalse("разговорный ход плашку не зажигает");
+        model.Icon.Should().Be(TrayIconKind.Idle);
+        model.Tooltip.Should().Be("AI Home — агент устройства · на связи");
+        StopItem(model).Enabled.Should().BeTrue("ход с руками идёт — остановить его можно и до первого действия");
+        model.StopRequest().Should().Be(new HandsPipeMessage(HandsPipeTypes.TurnStop));
+        model.Menu().Select(i => i.Text).Should().ContainInOrder(TrayModel.AttachedText, "Ход проекта «Бухгалтерия»", "Остановить руки");
+
+        // Первое действие моста: плашка, значок и одно уведомление
+        model.Apply(Status(turns: Turn)).Should().NotBeNull();
+        model.Plate.Visible.Should().BeTrue();
+        model.Icon.Should().Be(TrayIconKind.HandsActive);
+        model.Apply(Status(turns: Turn)).Should().BeNull("о ходе уже сказано");
+    }
+
+    [Fact]
+    public void Агент_без_признака_действия_считается_действующим()
+    {
+        var model = Connected(Status(turns: Turn with { Acting = null }));
+
+        model.HandsActive.Should().BeTrue("старый агент шлёт ход только тогда, когда руки подключены — как раньше");
+        model.Plate.Visible.Should().BeTrue();
     }
 
     [Fact]
@@ -249,8 +284,13 @@ public class TrayPipeClientTests
             stopped.TrySetResult(reason);
             turn!.Dispose(); // как KillTree: ход погашен — руки отцепились
         });
-        await ui.UntilAsync(m => m.HandsActive);
-        ui.Model.Plate.StopVisible.Should().BeTrue();
+        // Руки подключены, мост ещё не действовал: плашки нет, «Стоп» из меню доступен
+        await ui.UntilAsync(m => m.HandsAttached);
+        ui.Run(() =>
+        {
+            ui.Model.Plate.Visible.Should().BeFalse();
+            ui.Model.HandsActive.Should().BeFalse();
+        });
 
         HandsPipeMessage request = null!;
         ui.Run(() => request = ui.Model.StopRequest()!);
@@ -259,6 +299,41 @@ public class TrayPipeClientTests
         (await stopped.Task.WaitAsync(Wait)).Should().Be(HandsEndReason.StoppedFromTray, "«Стоп» дошёл до агента при недоступном сервере");
         await ui.UntilAsync(m => m.ShowsStoppedNotice);
         ui.Model.Plate.Title.Should().Be(TrayModel.StoppedNotice);
+    }
+
+    [Fact]
+    public async Task Первое_действие_хода_зажигает_плашку_и_уведомляет_трей()
+    {
+        var registry = new HandsRegistry();
+        var name = PipeName();
+        await using var agent = new HandsTrayPipe(name, registry, () => true, serverOnline: () => true);
+        agent.Start();
+
+        var ui = new Ui();
+        var notifications = new List<TrayNotification>();
+        await using var client = new TrayPipeClient(name,
+            () => ui.Run(ui.Model.OnConnected),
+            () => ui.Run(ui.Model.OnDisconnected),
+            m => ui.Run(() => { if (ui.Model.Apply(m) is { } n) notifications.Add(n); }));
+        client.Start();
+        await ui.UntilAsync(m => m.Status is not null);
+
+        using (registry.Attach("turn-0", "/work/report", _ => { })) { }
+        registry.MarkActing("turn-0").Should().BeFalse("отцепившийся ход «действующим» не становится");
+        registry.MarkActing("turn-unknown").Should().BeFalse();
+
+        using var turn = registry.Attach("turn-1", "/work/report", _ => { });
+        await ui.UntilAsync(m => m.HandsAttached);
+        ui.Run(() => notifications.Should().BeEmpty());
+
+        registry.MarkActing("turn-1").Should().BeTrue();
+        registry.MarkActing("turn-1").Should().BeFalse("признак ставится один раз");
+        await ui.UntilAsync(m => m.HandsActive);
+        ui.Run(() =>
+        {
+            ui.Model.Plate.Visible.Should().BeTrue();
+            notifications.Should().ContainSingle().Which.Title.Should().Be("ИИ начал работать с компьютером");
+        });
     }
 
     [Fact]

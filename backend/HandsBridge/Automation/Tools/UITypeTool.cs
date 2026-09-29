@@ -75,6 +75,8 @@ public static partial class UITypeTool
             return HandsGate.Deny(HandsTools.UiType, gate);
         }
 
+        HandsGate.Acted(HandsTools.UiType);
+
         if (string.IsNullOrWhiteSpace(windowHandle))
         {
             return WindowsToolsBase.FailResult(

@@ -32,6 +32,8 @@ public static partial class BrowserSnapshotTool
             return HandsGate.Deny(HandsTools.BrowserSnapshot, gate);
         }
 
+        HandsGate.Acted(HandsTools.BrowserSnapshot);
+
         var reply = await BrowserHost.Session.SnapshotAsync(@ref, cancellationToken);
         return BrowserToolResult.From(HandsTools.BrowserSnapshot, reply);
     }

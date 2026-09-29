@@ -69,6 +69,8 @@ public static partial class UIClickTool
             return HandsGate.Deny(HandsTools.UiClick, gate);
         }
 
+        HandsGate.Acted(HandsTools.UiClick);
+
         if (string.IsNullOrWhiteSpace(windowHandle))
         {
             return WindowsToolsBase.FailResult(

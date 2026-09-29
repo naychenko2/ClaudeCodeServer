@@ -77,7 +77,7 @@ internal sealed class HandsRegistry
     // Причины у недавно отцепившихся ходов: подписчик Changed узнаёт их уже после снятия регистрации
     private readonly Dictionary<string, string?> _ended = new(StringComparer.Ordinal);
 
-    /// <summary>Руки подключились к ходу или отцепились от него.</summary>
+    /// <summary>Руки подключились к ходу, начали действовать или отцепились от него.</summary>
     public event Action? Changed;
 
     public IReadOnlyList<HandsActiveTurn> Active
@@ -94,10 +94,25 @@ internal sealed class HandsRegistry
     /// </summary>
     public IDisposable Attach(string turnId, string? projectRoot, Action<string> stop)
     {
-        var entry = new Entry(new HandsActiveTurn(turnId, projectRoot, DateTimeOffset.UtcNow), stop);
+        var entry = new Entry(new HandsActiveTurn(turnId, projectRoot, DateTimeOffset.UtcNow, Acting: false), stop);
         lock (_lock) _active[turnId] = entry;
         Changed?.Invoke();
         return new Registration(this, turnId, entry);
+    }
+
+    /// <summary>
+    /// Мост хода впервые подействовал: с этой минуты ход «управляет компьютером». false — хода с
+    /// руками уже нет или признак уже стоит.
+    /// </summary>
+    public bool MarkActing(string turnId)
+    {
+        lock (_lock)
+        {
+            if (!_active.TryGetValue(turnId, out var entry) || entry.Turn.IsActing) return false;
+            entry.Turn = entry.Turn with { Acting = true };
+        }
+        Changed?.Invoke();
+        return true;
     }
 
     /// <summary>Причина, по которой руки хода погашены снаружи; null — ход кончился сам.</summary>
@@ -137,7 +152,7 @@ internal sealed class HandsRegistry
 
     private sealed class Entry(HandsActiveTurn turn, Action<string> stop)
     {
-        public HandsActiveTurn Turn { get; } = turn;
+        public HandsActiveTurn Turn { get; set; } = turn;
         public Action<string> StopAction { get; } = stop;
         public string? StopReason { get; set; }
     }
@@ -159,17 +174,26 @@ internal sealed record HandsRuntime(
     IHandsMachineLock MachineLock,
     HandsRegistry Registry,
     IHandsStatusSink? Status = null,
-    string? BrowserProfilesRoot = null);
+    string? BrowserProfilesRoot = null,
+    IHandsActivityEvents? Activity = null);
 
-/// <summary>Руки, подключённые к ходу: замок машины и имя Job хода живут до конца хода.</summary>
-internal sealed class HandsTurnLease(IDisposable machineLock, string jobName, IReadOnlyList<DeviceExecFile> files) : IDisposable
+/// <summary>Руки, подключённые к ходу: замок машины, имя Job и событие действия хода живут до конца хода.</summary>
+internal sealed class HandsTurnLease(IDisposable machineLock, string jobName, IReadOnlyList<DeviceExecFile> files,
+    IHandsActivityWait? activity = null) : IDisposable
 {
     public string JobName { get; } = jobName;
 
     /// <summary>Файлы spec с узлом моста вместо маркера.</summary>
     public IReadOnlyList<DeviceExecFile> Files { get; } = files;
 
-    public void Dispose() => machineLock.Dispose();
+    /// <summary>Событие «мост подействовал»; null — у агента нет событий, ход «управляющим» не станет.</summary>
+    public IHandsActivityWait? Activity { get; } = activity;
+
+    public void Dispose()
+    {
+        Activity?.Dispose();
+        machineLock.Dispose();
+    }
 }
 
 /// <summary>
@@ -211,17 +235,31 @@ internal static class HandsAttach
         var browserProfile = runtime.BrowserProfilesRoot is { } profiles && projectRoot is not null
             ? HandsBrowserProfile.PathFor(profiles, projectRoot)
             : null;
-        var rewritten = Rewrite(files, runtime.Component.BridgePath, browserProfile);
+        // Имя события — свойство хода, а не чата: узел моста живёт только в файлах хода на машине,
+        // серверная сигнатура запуска CLI его не видит
+        var activityName = runtime.Activity is null
+            ? null
+            : HandsBridgeArgs.ActivityEventPrefix + turnId + "." + Guid.NewGuid().ToString("N")[..8];
+        var rewritten = Rewrite(files, runtime.Component.BridgePath, browserProfile, activityName);
 
         var lease = runtime.MachineLock.TryAcquire() ?? throw new ExecRefusedException(HandsMachineLock.BusyText, HandsEndReason.Busy);
-        return new HandsTurnLease(lease, jobName, rewritten);
+        try
+        {
+            return new HandsTurnLease(lease, jobName, rewritten, activityName is null ? null : runtime.Activity!.Create(activityName));
+        }
+        catch
+        {
+            lease.Dispose();
+            throw;
+        }
     }
 
     /// <summary>
     /// Маркер допустим ровно в одном месте: <c>mcpServers.hands.type</c> одного JSON-файла spec.
     /// Любое другое вхождение — отказ, а не «подставим, где нашли».
     /// </summary>
-    internal static IReadOnlyList<DeviceExecFile> Rewrite(IReadOnlyList<DeviceExecFile> files, string bridgePath, string? browserProfile = null)
+    internal static IReadOnlyList<DeviceExecFile> Rewrite(IReadOnlyList<DeviceExecFile> files, string bridgePath, string? browserProfile = null,
+        string? activityEvent = null)
     {
         var result = new List<DeviceExecFile>(files.Count);
         var replaced = 0;
@@ -256,6 +294,11 @@ internal static class HandsAttach
             {
                 args.Add(HandsBridgeArgs.BrowserProfile);
                 args.Add(browserProfile);
+            }
+            if (activityEvent is not null)
+            {
+                args.Add(HandsBridgeArgs.ActivityEvent);
+                args.Add(activityEvent);
             }
             servers[DeviceExecPlaceholders.HandsServerName] = new JsonObject
             {

@@ -29,8 +29,10 @@ internal sealed class HandsTrayPipe : IAsyncDisposable
     private readonly CancellationTokenSource _stop = new();
     private readonly Lock _lock = new();
     private readonly List<Client> _clients = [];
-    // Ходы с руками, о которых треям уже сказано: из разницы рождаются hands-active/hands-ended
+    // Ходы с руками, о которых треям уже сказано: из разницы рождаются hands-ended (отцепился) и
+    // hands-active (начал действовать — подключение без действия уведомления не стоит)
     private HashSet<string> _announced = new(StringComparer.Ordinal);
+    private HashSet<string> _announcedActing = new(StringComparer.Ordinal);
     private Task? _accept;
 
     public HandsTrayPipe(string name, HandsRegistry registry, Func<bool> installed, Func<bool> serverOnline, ILogger? log = null,
@@ -186,15 +188,18 @@ internal sealed class HandsTrayPipe : IAsyncDisposable
     {
         var active = _registry.Active;
         var now = active.Select(t => t.TurnId).ToHashSet(StringComparer.Ordinal);
-        HashSet<string> before;
+        var acting = active.Where(t => t.IsActing).Select(t => t.TurnId).ToHashSet(StringComparer.Ordinal);
+        HashSet<string> before, actingBefore;
         lock (_lock)
         {
             before = _announced;
+            actingBefore = _announcedActing;
             _announced = now;
+            _announcedActing = acting;
         }
 
         var messages = new List<HandsPipeMessage>();
-        foreach (var turn in active.Where(t => !before.Contains(t.TurnId)))
+        foreach (var turn in active.Where(t => t.IsActing && !actingBefore.Contains(t.TurnId)))
             messages.Add(new(HandsPipeTypes.HandsActive, Turn: turn));
         foreach (var gone in before.Where(id => !now.Contains(id)))
             messages.Add(new(HandsPipeTypes.HandsEnded, TurnId: gone, Reason: _registry.StopReasonOf(gone)));

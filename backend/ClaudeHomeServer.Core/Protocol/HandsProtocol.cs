@@ -78,7 +78,10 @@ public static class HandsTurnRules
 /// </summary>
 public static class HandsChatStates
 {
-    /// <summary>Руки подключены к идущему ходу: «ИИ управляет компьютером».</summary>
+    /// <summary>
+    /// Ход уже подействовал руками: «ИИ управляет компьютером». Агент шлёт его по первому
+    /// разрешённому действию моста, а не по подключению рук — разговорный ход его не шлёт.
+    /// </summary>
     public const string Active = "active";
     /// <summary>Руки доступны ходам чата, сейчас ни к одному не подключены.</summary>
     public const string Allowed = "allowed";
@@ -141,6 +144,16 @@ public static class HandsBridgeArgs
     /// корня проекта, сервер и модель его не задают. Каталог создаёт мост при первом <c>browser_*</c>.
     /// </summary>
     public const string BrowserProfile = "--browser-profile";
+
+    /// <summary>
+    /// Именованное событие Windows хода: мост поднимает его при первом разрешённом гейтом
+    /// действии рук, и только тогда агент шлёт «ИИ управляет компьютером». Имя создаёт агент
+    /// (<see cref="ActivityEventPrefix"/> + ход), сервер и модель его не задают.
+    /// </summary>
+    public const string ActivityEvent = "--activity-event";
+
+    /// <summary>Префикс имени события <see cref="ActivityEvent"/>.</summary>
+    public const string ActivityEventPrefix = @"Local\AiHome.Hands.Acted.";
 
     /// <summary>
     /// Префикс имени Job хода с руками. Мосту имя больше не передаётся (<c>--turn-job</c> снят вместе
@@ -261,7 +274,10 @@ public static class HandsPipeTypes
     // агент → трей
     /// <summary>Снимок <see cref="HandsPipeMessage.Status"/>: ответ на запрос и рассылка при любой перемене.</summary>
     public const string Status = "status";
-    /// <summary>Руки подключились к ходу <see cref="HandsPipeMessage.Turn"/> — повод для уведомления.</summary>
+    /// <summary>
+    /// Ход <see cref="HandsPipeMessage.Turn"/> впервые подействовал руками — повод для уведомления.
+    /// Подключение рук без действия приходит только снимком <see cref="Status"/>.
+    /// </summary>
     public const string HandsActive = "hands-active";
     /// <summary>Руки хода отцепились: <see cref="HandsPipeMessage.TurnId"/>, <see cref="HandsPipeMessage.Reason"/>.</summary>
     public const string HandsEnded = "hands-ended";
@@ -281,7 +297,10 @@ public sealed record HandsPipeMessage(
 
 /// <summary>Что показывает трей.</summary>
 /// <param name="Installed">Мост рук лежит в каталоге версии агента.</param>
-/// <param name="ActiveTurns">Ходы, к которым сейчас подключены руки (не больше одного — <see cref="HandsMachineLock"/>).</param>
+/// <param name="ActiveTurns">
+/// Ходы, к которым сейчас подключены руки (не больше одного — <see cref="HandsMachineLock"/>);
+/// «ИИ управляет компьютером» — только у тех, где <see cref="HandsActiveTurn.IsActing"/>.
+/// </param>
 /// <param name="ServerOnline">Связь агента с сервером — «Стоп» работает и без неё.</param>
 /// <param name="Device">Сведения для меню трея; null — агент их не прислал.</param>
 public sealed record HandsTrayStatus(
@@ -303,7 +322,15 @@ public sealed record HandsTrayDevice(
     IReadOnlyList<string> Roots,
     string? LogDirectory);
 
-/// <summary>Ход с руками: «ИИ управляет компьютером».</summary>
+/// <summary>Ход, к которому подключены руки.</summary>
 /// <param name="TurnId">Ход исполнения на устройстве (<c>DeviceExecControl.TurnId</c>).</param>
 /// <param name="ProjectRoot">Рабочий каталог хода — чтобы человек узнал проект.</param>
-public sealed record HandsActiveTurn(string TurnId, string? ProjectRoot, DateTimeOffset StartedAt);
+/// <param name="Acting">
+/// Мост уже действовал в этом ходе — «ИИ управляет компьютером», плашка. false — руки подключены,
+/// но ход ещё не трогал машину: плашки нет, «Стоп» доступен. null — агент старше признака, считается «действует».
+/// </param>
+public sealed record HandsActiveTurn(string TurnId, string? ProjectRoot, DateTimeOffset StartedAt, bool? Acting = null)
+{
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool IsActing => Acting != false;
+}

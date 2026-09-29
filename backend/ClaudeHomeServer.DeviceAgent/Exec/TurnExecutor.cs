@@ -163,25 +163,40 @@ internal sealed class TurnExecutor
         var hands = setup.Hands is null ? null : _options.Hands;
         var handsRegistration = hands?.Registry.Attach(turnId, setup.Launch.WorkingDirectory,
             reason => Kill($"руки погашены: {reason}"));
+        // «Действует руками» — не подключение, а первое действие моста: разговорный ход с руками
+        // плашку не зажигает. Под замком с отпусканием рук, чтобы «действует» не обогнал итог хода
+        var handsSync = new Lock();
+        var handsReleased = false;
         if (hands is not null)
         {
             _log.LogInformation("Ход {TurnId}: руки подключены (Job {Job})", turnId, setup.Hands!.JobName);
-            Report(hands, new DeviceHandsReport(turnId, HandsChatStates.Active));
+            setup.Hands.Activity?.Acted.ContinueWith(_ =>
+            {
+                lock (handsSync)
+                {
+                    if (handsReleased || !hands.Registry.MarkActing(turnId)) return;
+                    _log.LogInformation("Ход {TurnId}: руки начали действовать", turnId);
+                    Report(hands, new DeviceHandsReport(turnId, HandsChatStates.Active));
+                }
+            }, CancellationToken.None, TaskContinuationOptions.OnlyOnRanToCompletion, TaskScheduler.Default);
         }
 
         // Руки отпускаются, как только дерево хода мертво, — не дожидаясь подтверждения конца
         // вывода сервером: оно может ждать связи минутами, а трей и следующий ход — нет
-        var handsReleased = 0;
         string? ReleaseHands()
         {
             if (hands is null) return null;
             var reason = hands.Registry.StopReasonOf(turnId);
-            if (Interlocked.Exchange(ref handsReleased, 1) == 1) return reason;
-            handsRegistration!.Dispose();
-            setup.Hands!.Dispose();
-            Report(hands, reason is null
-                ? new DeviceHandsReport(turnId, HandsChatStates.Allowed)
-                : new DeviceHandsReport(turnId, HandsChatStates.Stopped, reason));
+            lock (handsSync)
+            {
+                if (handsReleased) return reason;
+                handsReleased = true;
+                handsRegistration!.Dispose();
+                setup.Hands!.Dispose();
+                Report(hands, reason is null
+                    ? new DeviceHandsReport(turnId, HandsChatStates.Allowed)
+                    : new DeviceHandsReport(turnId, HandsChatStates.Stopped, reason));
+            }
             return reason;
         }
 

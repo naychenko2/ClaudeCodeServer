@@ -30,6 +30,8 @@ public static partial class BrowserClickTool
             return HandsGate.Deny(HandsTools.BrowserClick, gate);
         }
 
+        HandsGate.Acted(HandsTools.BrowserClick);
+
         var reply = await BrowserHost.Session.ClickAsync(@ref, cancellationToken);
         return BrowserToolResult.From(HandsTools.BrowserClick, reply);
     }

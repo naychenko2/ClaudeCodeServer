@@ -316,6 +316,163 @@ public sealed class BrowserSessionTests : IAsyncLifetime
         Assert.DoesNotContain(BrowserSession.ShortSnapshotHint, reply.Text);
     }
 
+    // ---------- browser_query ----------
+
+    /// <summary>
+    /// DOM по сценарию: документ 1, ссылки 11-13 по селектору <c>a</c>, кнопка снимка (backend 42)
+    /// — узел 50, внутри неё <c>span</c> — узел 51.
+    /// </summary>
+    void UseDom(string? bigHtml = null)
+    {
+        var browser = _source.Current;
+        browser.Override = (method, p) => method switch
+        {
+            "DOM.getDocument" => """{"root":{"nodeId":1,"backendNodeId":1,"nodeName":"#document"}}""",
+            "DOM.pushNodesByBackendIdsToFrontend" => p.GetProperty("backendNodeIds")[0].GetInt32() == ButtonNode
+                ? """{"nodeIds":[50]}"""
+                : """{"nodeIds":[0]}""",
+            "DOM.querySelectorAll" => (p.GetProperty("nodeId").GetInt32(), p.GetProperty("selector").GetString()) switch
+            {
+                (1, "a") => """{"nodeIds":[11,12,13]}""",
+                (1, "article") => """{"nodeIds":[20]}""",
+                (50, "span") => """{"nodeIds":[51]}""",
+                _ => """{"nodeIds":[]}""",
+            },
+            "DOM.getOuterHTML" => JsonSerializer.Serialize(new
+            {
+                outerHTML = p.GetProperty("nodeId").GetInt32() switch
+                {
+                    11 => "<a href=\"/one\" class=\"r\">First <b>result</b></a>",
+                    12 => "<a href=\"/two\">Second &amp; more</a>",
+                    13 => "<a href=\"/three\">Third</a>",
+                    20 => bigHtml ?? "<article><h1>Title</h1><script>evil()</script><p>Body&nbsp;text</p></article>",
+                    50 => "<button>Go <span>now</span></button>",
+                    51 => "<span>now</span>",
+                    _ => "",
+                },
+            }),
+            "DOM.describeNode" => p.GetProperty("nodeId").GetInt32() switch
+            {
+                11 => """{"node":{"nodeId":11,"localName":"a","nodeName":"A","attributes":["href","/one","class","r"]}}""",
+                12 => """{"node":{"nodeId":12,"localName":"a","nodeName":"A","attributes":["href","/two"]}}""",
+                _ => """{"node":{"nodeId":13,"localName":"a","nodeName":"A","attributes":["href","/three","title","say \"hi\""]}}""",
+            },
+            _ => null,
+        };
+        browser.Fail = (method, p) => method == "DOM.querySelectorAll" && p.GetProperty("selector").GetString() == "a[" ? "DOM Error while querying" : null;
+    }
+
+    [Fact]
+    public async Task Query_text_reads_every_match_as_plain_text()
+    {
+        UseDom();
+
+        var reply = await _session.QueryAsync("a", null, "text", null, CancellationToken.None);
+
+        Assert.False(reply.IsError, reply.Text);
+        Assert.Contains("URL: https://example.org/", reply.Text);
+        Assert.Contains("3 elements match 'a':", reply.Text);
+        Assert.Contains("[1] First result\n[2] Second & more\n[3] Third", reply.Text);
+        Assert.Equal("S1", _source.Current.SessionsOf("DOM.querySelectorAll").Single());
+        Assert.Empty(_source.Current.Sent("Runtime.evaluate"));
+    }
+
+    [Fact]
+    public async Task Query_defaults_to_text_and_drops_scripts()
+    {
+        UseDom();
+
+        var reply = await _session.QueryAsync("article", null, null, null, CancellationToken.None);
+
+        Assert.Contains("1 element matches 'article':", reply.Text);
+        Assert.Contains("[1] Title\nBody text", reply.Text);
+        Assert.DoesNotContain("evil", reply.Text);
+    }
+
+    [Fact]
+    public async Task Query_attributes_gives_tag_and_attributes()
+    {
+        UseDom();
+
+        var reply = await _session.QueryAsync("a", null, "attributes", null, CancellationToken.None);
+
+        Assert.Contains("[1] <a href=\"/one\" class=\"r\">", reply.Text);
+        Assert.Contains("[3] <a href=\"/three\" title=\"say &quot;hi&quot;\">", reply.Text);
+        Assert.Empty(_source.Current.Sent("DOM.getOuterHTML"));
+    }
+
+    [Fact]
+    public async Task Query_html_gives_outer_html()
+    {
+        UseDom();
+
+        var reply = await _session.QueryAsync("a", null, "html", 2, CancellationToken.None);
+
+        Assert.Contains("3 elements match 'a' (showing the first 2):", reply.Text);
+        Assert.Contains("[1] <a href=\"/one\" class=\"r\">First <b>result</b></a>", reply.Text);
+        Assert.DoesNotContain("/three", reply.Text);
+        Assert.Contains("[1 more elements match; raise limit", reply.Text);
+        Assert.Equal(2, _source.Current.Sent("DOM.getOuterHTML").Count);
+    }
+
+    [Fact]
+    public async Task Query_by_ref_reads_the_element_and_selector_searches_inside_it()
+    {
+        await Snapshot();
+        UseDom();
+
+        var element = await _session.QueryAsync(null, "e1", "html", null, CancellationToken.None);
+        var inside = await _session.QueryAsync("span", "e1", "text", null, CancellationToken.None);
+
+        Assert.Contains("1 element matches element e1:", element.Text);
+        Assert.Contains("[1] <button>Go <span>now</span></button>", element.Text);
+        Assert.Contains("1 element matches 'span' inside e1:", inside.Text);
+        Assert.Contains("[1] now", inside.Text);
+        Assert.Equal(ButtonNode, _source.Current.Sent("DOM.pushNodesByBackendIdsToFrontend")[0].GetProperty("backendNodeIds")[0].GetInt32());
+        Assert.Equal(ButtonNode, _session.ResolveRef("e1"));
+    }
+
+    [Fact]
+    public async Task Query_of_a_ref_gone_from_the_document_asks_for_a_fresh_snapshot()
+    {
+        await Snapshot();
+        UseDom();
+        _source.Current.Override = (method, _) => method == "DOM.pushNodesByBackendIdsToFrontend" ? """{"nodeIds":[0]}""" : null;
+
+        var reply = await _session.QueryAsync(null, "e1", null, null, CancellationToken.None);
+
+        Assert.True(reply.IsError);
+        Assert.Contains("stale", reply.Text);
+    }
+
+    [Fact]
+    public async Task Invalid_selector_and_no_matches_are_told_plainly()
+    {
+        UseDom();
+
+        var bad = await _session.QueryAsync("a[", null, null, null, CancellationToken.None);
+        var none = await _session.QueryAsync("table", null, null, null, CancellationToken.None);
+
+        Assert.True(bad.IsError);
+        Assert.Contains("Selector 'a[' was rejected by the page: DOM Error while querying", bad.Text);
+        Assert.False(none.IsError);
+        Assert.EndsWith("No elements match 'table'.", none.Text);
+    }
+
+    [Fact]
+    public async Task Query_output_is_capped_and_the_cut_is_said_honestly()
+    {
+        UseDom("<article>" + string.Concat(Enumerable.Range(0, 3000).Select(i => $"<p>Paragraph number {i}</p>")) + "</article>");
+
+        var reply = await _session.QueryAsync("article", null, "text", null, CancellationToken.None);
+
+        Assert.True(reply.Text.Length <= BrowserSession.QueryBudgetChars, $"ответ {reply.Text.Length}");
+        Assert.Contains("Paragraph number 0\n", reply.Text);
+        Assert.DoesNotContain("Paragraph number 2999", reply.Text);
+        Assert.EndsWith("[output cut at 20000 characters: 1 of 1 matching elements shown, the last one partly. " +
+                        "Narrow the selector, lower limit or query a single element.]", reply.Text);
+    }
+
     static int Index(ScriptedBrowser browser, string entry, bool last = false)
     {
         var timeline = browser.Timeline.ToList();

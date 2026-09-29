@@ -40,6 +40,7 @@ public static class WindowsAutomationGuidance
         "browser_navigate(url='https://...') - open a page (only http, https, about:blank); the reply already has a short snapshot with refs like [ref=e12]\n" +
         "browser_click(ref='e12') / browser_type(ref='e7', text='...', submit=true) - act by refs; the reply has a fresh short snapshot with new refs, so do NOT call browser_snapshot after every action\n" +
         "browser_snapshot() - the full accessibility tree: only when the short one was cut, the page changed on its own, or with ref='...' for a subtree\n" +
+        "browser_query(selector='article' | ref='e12', mode='text'|'attributes'|'html') - exact text, links (href) or markup of chosen elements without paging through snapshots; no page scripts run\n" +
         "browser_tabs(action='list'|'new'|'select'|'close') - tabs of this browser; browser_wait(text='...') - wait for text instead of sleeping\n" +
         "browser_screenshot() - only when you must see the layout or images; text and refs come from browser_snapshot\n" +
         "Downloads are blocked and page dialogs are closed automatically (their text is reported).\n\n" +

@@ -21,6 +21,7 @@ public static partial class BrowserSnapshotTool
         "with fresh refs: call this only when that one was cut, when the page changed on its own, or for a subtree. " +
         "Refs live until the next snapshot, navigation, tab switch or browser restart; a new snapshot replaces all earlier refs. " +
         "Large pages are cut to a size budget; pass ref of a container element to read just its subtree. " +
+        "For exact text, links or attributes of specific elements browser_query is cheaper. " +
         "Prefer this over browser_screenshot whenever text is enough.")]
     [McpServerTool(Name = "browser_snapshot", Title = "Browser: Read Page", ReadOnly = true, OpenWorld = false)]
     public static async Task<CallToolResult> ExecuteAsync(

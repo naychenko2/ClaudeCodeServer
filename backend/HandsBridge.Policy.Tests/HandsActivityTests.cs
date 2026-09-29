@@ -41,6 +41,8 @@ public class HandsActivityTests
         { HandsTools.BrowserTabs, "list" },
         { HandsTools.BrowserWait, null },
         { HandsTools.BrowserScreenshot, null },
+        // Первый browser_* поднимает на столе владельца окно Chrome, даже если он только читает DOM
+        { HandsTools.BrowserQuery, null },
     };
 
     public static readonly TheoryData<string, string?> ReadingOnly = new()

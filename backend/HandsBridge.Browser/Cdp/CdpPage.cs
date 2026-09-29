@@ -72,6 +72,58 @@ public sealed class CdpPage(CdpConnection connection, string targetId, string se
     public Task<JsonElement> GetFullAXTreeAsync(CancellationToken cancellationToken = default) =>
         Send("Accessibility.getFullAXTree", null, cancellationToken);
 
+    // ---------- DOM: чтение без JS ----------
+
+    /// <summary>
+    /// nodeId корня документа. Каждый вызов раздаёт nodeId заново, прежние гаснут — поэтому
+    /// между запросами nodeId не храним, ссылки снимка держатся на <c>backendNodeId</c>.
+    /// </summary>
+    public async Task<int> GetDocumentAsync(CancellationToken cancellationToken = default)
+    {
+        var r = await Send("DOM.getDocument", null, cancellationToken);
+        return r.TryGetProperty("root", out var root) && root.TryGetProperty("nodeId", out var id) ? id.GetInt32() : 0;
+    }
+
+    /// <summary>nodeId узла по <c>backendNodeId</c> (после <see cref="GetDocumentAsync"/>); 0 — узла в документе нет.</summary>
+    public async Task<int> PushBackendNodeAsync(int backendNodeId, CancellationToken cancellationToken = default)
+    {
+        var r = await Send("DOM.pushNodesByBackendIdsToFrontend",
+            new JsonObject { ["backendNodeIds"] = new JsonArray(backendNodeId) }, cancellationToken);
+        return r.TryGetProperty("nodeIds", out var ids) && ids.ValueKind == JsonValueKind.Array && ids.GetArrayLength() > 0
+            ? ids[0].GetInt32()
+            : 0;
+    }
+
+    /// <summary>Узлы по CSS-селектору внутри <paramref name="nodeId"/>, в порядке документа.</summary>
+    public async Task<int[]> QuerySelectorAllAsync(int nodeId, string selector, CancellationToken cancellationToken = default)
+    {
+        var r = await Send("DOM.querySelectorAll", new JsonObject { ["nodeId"] = nodeId, ["selector"] = selector }, cancellationToken);
+        return r.TryGetProperty("nodeIds", out var ids) && ids.ValueKind == JsonValueKind.Array
+            ? [.. ids.EnumerateArray().Select(i => i.GetInt32())]
+            : [];
+    }
+
+    public async Task<string> GetOuterHtmlAsync(int nodeId, CancellationToken cancellationToken = default) =>
+        CdpBrowser.Str(await Send("DOM.getOuterHTML", new JsonObject { ["nodeId"] = nodeId }, cancellationToken), "outerHTML");
+
+    /// <summary>Имя элемента и его атрибуты парами в порядке разметки.</summary>
+    public async Task<(string Name, IReadOnlyList<KeyValuePair<string, string>> Attributes)> DescribeNodeAsync(
+        int nodeId, CancellationToken cancellationToken = default)
+    {
+        var r = await Send("DOM.describeNode", new JsonObject { ["nodeId"] = nodeId }, cancellationToken);
+        if (!r.TryGetProperty("node", out var node))
+            return ("", []);
+        var name = CdpBrowser.Str(node, "localName") is { Length: > 0 } local ? local : CdpBrowser.Str(node, "nodeName");
+        var attributes = new List<KeyValuePair<string, string>>();
+        if (node.TryGetProperty("attributes", out var flat) && flat.ValueKind == JsonValueKind.Array)
+        {
+            var items = flat.EnumerateArray().Select(a => a.GetString() ?? "").ToArray();
+            for (var i = 0; i + 1 < items.Length; i += 2)
+                attributes.Add(new(items[i], items[i + 1]));
+        }
+        return (name, attributes);
+    }
+
     public Task ScrollIntoViewAsync(int backendNodeId, CancellationToken cancellationToken = default) =>
         Send("DOM.scrollIntoViewIfNeeded", Node(backendNodeId), cancellationToken);
 

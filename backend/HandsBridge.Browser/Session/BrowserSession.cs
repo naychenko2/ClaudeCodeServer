@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using ClaudeHomeServer.HandsBridge.Browser.Cdp;
+using ClaudeHomeServer.HandsBridge.Browser.Dom;
 using ClaudeHomeServer.HandsBridge.Browser.Snapshot;
 
 namespace ClaudeHomeServer.HandsBridge.Browser.Session;
@@ -53,6 +54,18 @@ public sealed class BrowserSession(IBrowserSource source)
     /// <summary>Хвост короткого снимка, если он обрезан.</summary>
     public const string ShortSnapshotHint =
         "This is a short snapshot after the action; call browser_snapshot for the full page.";
+
+    /// <summary>
+    /// Бюджет ответа <c>browser_query</c>: запрос прицельный, модель сама попросила именно эти
+    /// элементы, поэтому бюджет больше полного снимка — около 5 тыс. токенов. Этого хватает на
+    /// статью или таблицу целиком, а случайный <c>body</c> в режиме <c>html</c> всё равно режется.
+    /// </summary>
+    public const int QueryBudgetChars = 20_000;
+
+    /// <summary>Совпадений в ответе <c>browser_query</c> без явного limit.</summary>
+    public const int DefaultQueryLimit = 10;
+
+    private const int MaxAttributeValueChars = 500;
 
     /// <summary>Ожидание текста без явного времени.</summary>
     public const int DefaultTextWaitMs = 10_000;
@@ -251,6 +264,86 @@ public sealed class BrowserSession(IBrowserSource source)
                     return new BrowserReply(sb.ToString().TrimEnd());
                 }
             }
+        }, cancellationToken);
+
+    /// <summary>
+    /// Чтение DOM текущей вкладки без JS (<c>browser_query</c>): элементы по CSS-селектору (внутри
+    /// элемента по ссылке, если она есть) или сам элемент по ссылке; из каждого — текст, атрибуты
+    /// или разметка. Ответ не длиннее <see cref="QueryBudgetChars"/>, обрезка честно помечена.
+    /// Ссылки снимка запрос не трогает.
+    /// </summary>
+    /// <param name="mode"><c>text</c> (по умолчанию), <c>attributes</c> или <c>html</c> — проверено гейтом.</param>
+    /// <param name="limit">Сколько совпадений показать; по умолчанию <see cref="DefaultQueryLimit"/>.</param>
+    public Task<BrowserReply> QueryAsync(string? selector, string? reference, string? mode, int? limit, CancellationToken cancellationToken) =>
+        RunAsync(async browser =>
+        {
+            var page = await CurrentPageAsync(browser, cancellationToken);
+            int? backendNode = null;
+            if (reference is not null && (backendNode = ResolveRef(reference)) is null)
+                return Stale(reference);
+
+            var scope = await page.GetDocumentAsync(cancellationToken);
+            if (backendNode is { } node)
+            {
+                try
+                {
+                    scope = await page.PushBackendNodeAsync(node, cancellationToken);
+                }
+                catch (CdpProtocolException ex) when (NodeGone(ex))
+                {
+                    scope = 0;
+                }
+                if (scope == 0)
+                    return Stale(reference!);
+            }
+
+            int[] matches;
+            if (selector is null)
+            {
+                matches = [scope];
+            }
+            else
+            {
+                try
+                {
+                    matches = await page.QuerySelectorAllAsync(scope, selector, cancellationToken);
+                }
+                catch (CdpProtocolException ex)
+                {
+                    return new BrowserReply($"Selector '{selector}' was rejected by the page: {ex.ErrorMessage}. Use a valid CSS selector.", IsError: true);
+                }
+            }
+
+            var what = selector is null ? $"element {reference}" : reference is null ? $"'{selector}'" : $"'{selector}' inside {reference}";
+            var header = await DescribeAsync(browser, page.TargetId, cancellationToken) + "\n\n";
+            if (matches.Length == 0)
+                return new BrowserReply(header + $"No elements match {what}.");
+
+            var shown = Math.Min(matches.Length, limit ?? DefaultQueryLimit);
+            var output = new QueryOutput(QueryBudgetChars - header.Length);
+            output.Line(matches.Length == 1
+                ? $"1 element matches {what}:"
+                : $"{matches.Length} elements match {what}" + (shown < matches.Length ? $" (showing the first {shown}):" : ":"));
+
+            var done = 0;
+            for (; done < shown && !output.Full; done++)
+            {
+                var item = (mode ?? "text") switch
+                {
+                    "html" => await page.GetOuterHtmlAsync(matches[done], cancellationToken),
+                    "attributes" => FormatAttributes(await page.DescribeNodeAsync(matches[done], cancellationToken)),
+                    _ => HtmlText.ToText(await page.GetOuterHtmlAsync(matches[done], cancellationToken)),
+                };
+                output.Item(done + 1, item.Length == 0 ? "(no text)" : item);
+            }
+
+            if (output.Full)
+                output.Tail($"[output cut at {QueryBudgetChars} characters: {done} of {matches.Length} matching elements shown, " +
+                            "the last one partly. Narrow the selector, lower limit or query a single element.]");
+            else if (shown < matches.Length)
+                output.Tail($"[{matches.Length - shown} more elements match; raise limit (up to 100) or narrow the selector.]");
+
+            return new BrowserReply(header + output);
         }, cancellationToken);
 
     /// <summary>
@@ -551,6 +644,52 @@ public sealed class BrowserSession(IBrowserSource source)
         if (parameters.TryGetProperty("frame", out var frame) && frame.TryGetProperty("parentId", out _))
             return;
         ClearRefs(targetId);
+    }
+
+    // ---------- ответ browser_query ----------
+
+    private static string FormatAttributes((string Name, IReadOnlyList<KeyValuePair<string, string>> Attributes) node)
+    {
+        var sb = new StringBuilder("<").Append(node.Name);
+        foreach (var (name, value) in node.Attributes)
+        {
+            var clipped = value.Length > MaxAttributeValueChars ? value[..MaxAttributeValueChars] + "…" : value;
+            sb.Append(' ').Append(name).Append("=\"").Append(clipped.Replace("\"", "&quot;")).Append('"');
+        }
+        return sb.Append('>').ToString();
+    }
+
+    /// <summary>Текст ответа с потолком: последний не влезший кусок режется, дальше ничего не пишется.</summary>
+    private sealed class QueryOutput(int budget)
+    {
+        // Запас под хвост об обрезке: он обязан влезть всегда
+        private const int TailReserve = 300;
+
+        private readonly StringBuilder _sb = new();
+
+        public bool Full { get; private set; }
+
+        public void Line(string text) => Append(text + "\n");
+
+        public void Item(int index, string text) => Append($"[{index}] {text}\n");
+
+        public void Tail(string text) => _sb.Append(text);
+
+        private void Append(string text)
+        {
+            var left = budget - TailReserve - _sb.Length;
+            if (text.Length <= left)
+            {
+                _sb.Append(text);
+                return;
+            }
+
+            if (left > 1)
+                _sb.Append(text, 0, left - 1).Append("…\n");
+            Full = true;
+        }
+
+        public override string ToString() => _sb.ToString().TrimEnd('\n');
     }
 
     // ---------- разбор ----------

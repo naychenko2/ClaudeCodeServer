@@ -15,12 +15,12 @@ public class HandsBrowserTests
         string[] browser =
         [
             "browser_navigate", "browser_snapshot", "browser_click", "browser_type",
-            "browser_tabs", "browser_wait", "browser_screenshot",
+            "browser_tabs", "browser_wait", "browser_screenshot", "browser_query",
         ];
 
         Assert.All(browser, t => Assert.Contains(t, HandsTools.All));
         Assert.Equal(HandsTools.All.Count, HandsTools.All.Distinct().Count());
-        Assert.Equal(7, HandsTools.All.Count(t => t.StartsWith("browser_", StringComparison.Ordinal)));
+        Assert.Equal(browser.Length, HandsTools.All.Count(t => t.StartsWith("browser_", StringComparison.Ordinal)));
     }
 
     [Fact]
@@ -212,6 +212,58 @@ public class HandsBrowserTests
     public void Endless_or_empty_wait_is_denied(string? text, int? ms)
     {
         Assert.False(HandsPolicy.CheckBrowserWait(text, ms).Allowed);
+    }
+
+    // ---------- чтение DOM ----------
+
+    [Theory]
+    [InlineData("a.result", null, null, null)]
+    [InlineData("table.prices tr", null, "text", 1)]
+    [InlineData("a[href*=\"download\"]", null, "attributes", HandsPolicy.MaxBrowserQueryLimit)]
+    [InlineData(null, "e12", "html", null)]
+    [InlineData("li", "e1", "text", 50)]
+    public void Query_by_selector_ref_or_both_is_allowed(string? selector, string? reference, string? mode, int? limit)
+    {
+        var decision = HandsPolicy.CheckBrowserQuery(selector, reference, mode, limit, Refs);
+
+        Assert.True(decision.Allowed, decision.Reason);
+    }
+
+    [Fact]
+    public void Query_selector_may_be_exactly_at_the_cap()
+    {
+        Assert.True(HandsPolicy.CheckBrowserQuery(new string('a', HandsPolicy.MaxBrowserSelectorChars), null, null, null, Refs).Allowed);
+    }
+
+    [Theory]
+    [InlineData(null, null, null, null, "selector")]
+    [InlineData("", null, null, null, "empty")]
+    [InlineData("   ", null, null, null, "empty")]
+    [InlineData("a\nb", null, null, null, "control")]
+    [InlineData("a", null, "innerText", null, "mode")]
+    [InlineData("a", null, "TEXT", null, "mode")]
+    [InlineData("a", null, "evaluate", null, "mode")]
+    [InlineData("a", null, null, 0, "limit")]
+    [InlineData("a", null, null, -1, "limit")]
+    [InlineData("a", null, null, HandsPolicy.MaxBrowserQueryLimit + 1, "limit")]
+    [InlineData(null, "e99", null, null, "stale")]
+    [InlineData(null, "body", null, null, "not a snapshot ref")]
+    [InlineData("a", "e99", null, null, "stale")]
+    public void Bad_query_arguments_are_denied(string? selector, string? reference, string? mode, int? limit, string reason)
+    {
+        var decision = HandsPolicy.CheckBrowserQuery(selector, reference, mode, limit, Refs);
+
+        Assert.False(decision.Allowed);
+        Assert.Contains(reason, decision.Reason);
+    }
+
+    [Fact]
+    public void Too_long_selector_is_denied()
+    {
+        var decision = HandsPolicy.CheckBrowserQuery(new string('a', HandsPolicy.MaxBrowserSelectorChars + 1), null, null, null, Refs);
+
+        Assert.False(decision.Allowed);
+        Assert.Contains("longer", decision.Reason);
     }
 
     // ---------- снимок экрана ----------

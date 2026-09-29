@@ -107,6 +107,30 @@ public sealed class ToolInputNormalizerTests
     }
 
     [Fact]
+    public void КореньInput_НеРазворачиваетсяДажеБезСхемы()
+    {
+        var (result, changed) = Run("""{"item":["a"]}""");
+
+        result!.ToJsonString().Should().Be("""{"item":["a"]}""", "tool_use.input обязан остаться объектом");
+        changed.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("""{"$ref":"#/$defs/Order"}""")]
+    [InlineData("""{"allOf":[{"$ref":"#/$defs/Order"}]}""")]
+    [InlineData("""{"anyOf":[{"$ref":"#/$defs/Order"}]}""")]
+    [InlineData("""{"oneOf":[{"$ref":"#/$defs/Order"},{"$ref":"#/$defs/Box"}]}""")]
+    public void ТипЗаRefИлиAllOf_НеРазворачивается(string fieldSchema)
+    {
+        var schema = """{"type":"object","properties":{"order":""" + fieldSchema + "}}";
+
+        var (result, changed) = Run("""{"order":{"item":"x"}}""", schema);
+
+        result!.ToJsonString().Should().Be("""{"order":{"item":"x"}}""", "за $ref может стоять object с законным полем item");
+        changed.Should().BeEmpty();
+    }
+
+    [Fact]
     public void СхемаAnyOfСМассивом_Разворачивает()
     {
         const string schema = """

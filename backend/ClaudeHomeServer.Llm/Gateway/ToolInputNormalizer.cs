@@ -29,7 +29,9 @@ public static class ToolInputNormalizer
     {
         if (node is JsonObject obj)
         {
-            if (IsWrapper(obj) && ShouldUnwrap(schema))
+            // Корень input — всегда объект по контракту API: массив на его месте сломал бы вызов
+            // хуже исходного дефекта (схемы инструмента в запросе может не оказаться)
+            if (path != "$" && IsWrapper(obj) && ShouldUnwrap(schema))
             {
                 var value = obj[WrapperKey];
                 obj.Remove(WrapperKey);
@@ -64,13 +66,17 @@ public static class ToolInputNormalizer
 
     private static bool IsWrapper(JsonObject obj) => obj.Count == 1 && obj.ContainsKey(WrapperKey);
 
-    // Схема знает тип поля — верим ей; не знает — эвристика «обёртка = массив».
+    // Схема знает тип поля — верим ей; схемы поля нет вовсе — эвристика «обёртка = массив».
+    // Схема есть, но тип спрятан за $ref/allOf (их не резолвим) — не трогаем: там вполне может
+    // быть object с законным полем item, и разворот молча сломал бы вызов.
     private static bool ShouldUnwrap(JsonNode? schema)
     {
         var types = Types(schema);
-        if (types.Count == 0) return true;
-        return types.Contains("array") && !types.Contains("object");
+        if (types.Count > 0) return types.Contains("array") && !types.Contains("object");
+        return schema is not JsonObject s || !Opaque(s) && !Branches(s).Any(b => b is JsonObject o && Opaque(o));
     }
+
+    private static bool Opaque(JsonObject s) => s["$ref"] is not null || s["allOf"] is not null;
 
     // Типы узла схемы: type (строка или массив) плюс type ветвей anyOf/oneOf.
     private static HashSet<string> Types(JsonNode? schema)

@@ -255,42 +255,53 @@ function ClaudeCostPopoverBody({ stats, billing, onBillingChange, windows }: {
 // Окна лимитов на лицевой стороне пилюли, каждое цветом своего уровня.
 // compact — только худшее окно и «+N» (мобила/планшет: шапка тесная).
 // Нормальный уровень — нейтральным текстом пилюли: янтарь и красный заметны только на фоне спокойных окон
-// Мини-бар окна — тот же, что у пилюли контекста (ContextAmount): трек + заливка цветом уровня.
-// Процент неизвестен — бар не рисуем, остаётся «—».
-function RateMiniBar({ seg, compact }: { seg: RatePillSegment; compact?: boolean }) {
-  if (seg.pct === null) return null;
+// Стопка мини-баров: окна друг под другом в постоянном порядке (5ч → неделя → по моделям),
+// каждое — трек + заливка цветом своего уровня. Процент неизвестен — пустой трек, чтобы
+// стопка не прыгала по высоте; подписи и цифры всех окон — в подсказке и поповере.
+// При дробном масштабе экрана (125%, 150%) полосы в 3px начинались с разных долей
+// физического пикселя и сглаживались по-разному — верхняя плотнее нижней. Поэтому
+// толщина и зазор считаются в целых физических пикселях, а края рисуются без
+// сглаживания (crispEdges): шаг полос целый — все три округляются одинаково.
+function RateBarStack({ segs, compact }: { segs: RatePillSegment[]; compact?: boolean }) {
+  const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
+  const snap = (css: number) => Math.max(1, Math.round(css * dpr)) / dpr;
+  const w = compact ? 18 : 24;
+  const h = snap(compact ? 2 : 3);
+  const gap = snap(compact ? 1 : 2);
+  const total = segs.length * h + (segs.length - 1) * gap;
   return (
-    <span style={{ width: compact ? 18 : 26, height: 5, borderRadius: 3, background: C.track, overflow: 'hidden', display: 'inline-block' }}>
-      <span style={{ display: 'block', width: `${seg.pct}%`, height: '100%', background: RATE_COLORS[seg.level].fill }} />
-    </span>
+    <svg width={w} height={total} viewBox={`0 0 ${w} ${total}`} shapeRendering="crispEdges" aria-hidden style={{ flexShrink: 0, display: 'block' }}>
+      {segs.map((s, i) => {
+        const y = i * (h + gap);
+        return (
+          <g key={s.limitType}>
+            {/* Цвет — через style: C.* это var(--…), а в атрибуте fill CSS-переменные не резолвятся */}
+            <rect x={0} y={y} width={w} height={h} rx={h / 2} style={{ fill: C.track }} />
+            {s.pct !== null && s.pct > 0 && (
+              <rect x={0} y={y} width={Math.max(h, (w * s.pct) / 100)} height={h} rx={h / 2} style={{ fill: RATE_COLORS[s.level].fill }} />
+            )}
+          </g>
+        );
+      })}
+    </svg>
   );
 }
 
+// Лицевая сторона лимитов: стопка баров видимых окон + подпись худшего окна («5ч 41%») и «+N»
+// за окна, не влезшие в стопку. Одинаково на десктопе и мобиле, compact — лишь мельче бары.
 function RatePillText({ windows, compact }: { windows: RateWindow[]; compact?: boolean }) {
-  const segColor = (level: RateWindow['level']) => level === 'normal' ? C.textSecondary : RATE_COLORS[level].text;
-  const segStyle = (level: RateWindow['level']) => ({ color: segColor(level), display: 'inline-flex', alignItems: 'center', gap: 5 });
-  if (compact) {
-    const c = ratePillCompact(windows);
-    if (!c) return <span style={{ color: C.textMuted }}>—</span>;
-    return (
-      <span style={{ whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center' }}>
-        <span style={segStyle(c.head.level)}>{c.head.label} <RateMiniBar seg={c.head} compact /> {c.head.text}</span>
-        {c.more > 0 && <span style={{ color: C.textSecondary, fontWeight: 600 }}>{ratePillMoreText(c.more)}</span>}
-      </span>
-    );
-  }
-  // Десктоп: не больше трёх окон, остальные — «+N» (полный список в подсказке и поповере)
   const { segments: segs, more } = ratePillVisible(windows);
-  if (segs.length === 0) return <span style={{ color: C.textMuted }}>—</span>;
+  const worst = ratePillCompact(windows)?.head;
+  if (segs.length === 0 || !worst) return <span style={{ color: C.textMuted }}>—</span>;
+  const color = worst.level === 'normal' ? C.textSecondary : RATE_COLORS[worst.level].text;
   return (
-    <span style={{ whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center' }}>
-      {segs.map((s, i) => (
-        <span key={s.limitType} style={{ display: 'inline-flex', alignItems: 'center', whiteSpace: 'pre' }}>
-          {i > 0 && <span style={{ color: C.textMuted, fontWeight: 400 }}> · </span>}
-          <span style={segStyle(s.level)}>{s.label} <RateMiniBar seg={s} /> {s.text}</span>
-        </span>
-      ))}
-      {more > 0 && <span style={{ color: C.textSecondary, fontWeight: 600 }}>{ratePillMoreText(more)}</span>}
+    <span style={{ whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+      <RateBarStack segs={segs} compact={compact} />
+      <span>
+        {/* Процентов нет ни у одного окна — «худшее» выбрано наугад, подпись окна ничего не значит */}
+        <span style={{ color }}>{windows.some(w => w.hasUtil) ? `${worst.label} ${worst.text}` : worst.text}</span>
+        {more > 0 && <span style={{ color: C.textSecondary, fontWeight: 600 }}>{ratePillMoreText(more)}</span>}
+      </span>
     </span>
   );
 }
@@ -474,7 +485,8 @@ function ContextAmount({ estimate, isCompacting, isMobile }: {
           <span style={{ display: 'block', width: `${estimate.pct}%`, height: '100%', background: c.fill }} />
         </span>
       ) : null}
-      <span style={{ color: tone ? c.text : undefined }}>
+      {/* Норма — нейтральным текстом, как у лимитов Claude: янтарь и красный заметны только на спокойном фоне */}
+      <span style={{ color: tone ? c.text : C.textSecondary }}>
         {isCompacting ? '…' : hasPct ? `${estimate.pct}%` : estimate.fresh ? '✦' : '—'}
       </span>
     </span>

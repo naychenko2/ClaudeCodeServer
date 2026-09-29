@@ -79,7 +79,7 @@ internal sealed partial class ChromeProcess : ICdpTransport, IAsyncDisposable
         try
         {
             var commandLine = ChromeCommandLine.Build(chromePath, ChromeCommandLine.Arguments(
-                profileDirectory, toChrome.GetClientHandleAsString(), fromChrome.GetClientHandleAsString()));
+                profileDirectory, toChrome.GetClientHandleAsString(), fromChrome.GetClientHandleAsString(), UserUiLanguage()));
 
             job = WindowsHandsSystem.CreateKillOnCloseJob(out var jobError);
             if (job == 0)
@@ -101,6 +101,30 @@ internal sealed partial class ChromeProcess : ICdpTransport, IAsyncDisposable
             fromChrome.Dispose();
             throw;
         }
+    }
+
+    /// <summary>
+    /// Первый язык интерфейса пользователя Windows (<c>ru-RU</c>) или null. Только WinAPI:
+    /// <c>CultureInfo</c> у моста пуст (<c>InvariantGlobalization</c>), а <c>LANG</c> хода —
+    /// заглушка <c>C.UTF-8</c> агента, не язык владельца.
+    /// </summary>
+    private static unsafe string? UserUiLanguage()
+    {
+        const uint MuiLanguageName = 0x8;
+        uint count = 0, size = 0;
+        if (!GetUserPreferredUILanguages(MuiLanguageName, &count, null, &size) || size == 0)
+            return null;
+
+        var buffer = new char[size];
+        fixed (char* p = buffer)
+        {
+            if (!GetUserPreferredUILanguages(MuiLanguageName, &count, p, &size))
+                return null;
+        }
+
+        // Список через '\0', первый — действующий язык интерфейса
+        var end = Array.IndexOf(buffer, '\0');
+        return end > 0 ? new string(buffer, 0, end) : null;
     }
 
     /// <summary>
@@ -253,6 +277,11 @@ internal sealed partial class ChromeProcess : ICdpTransport, IAsyncDisposable
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool UpdateProcThreadAttribute(nint lpAttributeList, uint dwFlags, nint attribute, nint lpValue,
         nint cbSize, nint lpPreviousValue, nint lpReturnSize);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static unsafe partial bool GetUserPreferredUILanguages(uint dwFlags, uint* pulNumLanguages, char* pwszLanguagesBuffer,
+        uint* pcchLanguagesBuffer);
 
     [LibraryImport("kernel32.dll")]
     private static partial void DeleteProcThreadAttributeList(nint lpAttributeList);

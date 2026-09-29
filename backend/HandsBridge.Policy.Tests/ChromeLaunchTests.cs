@@ -85,6 +85,27 @@ public class ChromeLaunchTests
         Assert.DoesNotContain(args, a => a.StartsWith("--remote-debugging-port", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void User_ui_language_goes_to_interface_and_accept_language()
+    {
+        var args = ChromeCommandLine.Arguments(@"C:\Agent\browser-profiles\abc", "1234", "5678", "ru-RU");
+
+        // Без явного языка свежий профиль слал сайтам чужой Accept-Language (Ш8: example.org на арабском)
+        Assert.Equal(["--lang=ru-RU", "--accept-lang=ru-RU,ru", "about:blank"], args.TakeLast(3));
+        Assert.Single(args, a => a.StartsWith("--lang=", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("ru-RU", new[] { "--lang=ru-RU", "--accept-lang=ru-RU,ru" })]
+    [InlineData("en", new[] { "--lang=en", "--accept-lang=en" })]
+    [InlineData("zh-Hans-CN", new[] { "--lang=zh-Hans-CN", "--accept-lang=zh-Hans-CN,zh" })]
+    [InlineData(null, new string[0])]
+    [InlineData("", new string[0])]
+    [InlineData("C.UTF-8", new string[0])]
+    [InlineData("ru-RU --remote-debugging-port=9222", new string[0])]
+    public void Language_arguments_accept_only_language_tags(string? language, string[] expected) =>
+        Assert.Equal(expected, ChromeCommandLine.LanguageArguments(language));
+
     [Theory]
     [InlineData(@"C:\Users\me\AppData\Local\AiHomeAgent\browser-profiles\0123456789abcdef")]
     [InlineData(@"C:\Users\Иван Петров\AppData\Local\AiHomeAgent\browser-profiles\key")]
@@ -93,7 +114,7 @@ public class ChromeLaunchTests
     public void Command_line_splits_back_into_the_same_arguments(string profile)
     {
         const string chrome = @"C:\Program Files\Google\Chrome\Application\chrome.exe";
-        var args = ChromeCommandLine.Arguments(profile, "11", "22");
+        var args = ChromeCommandLine.Arguments(profile, "11", "22", "ru-RU");
 
         var parts = HandsArguments.Split(ChromeCommandLine.Build(chrome, args));
 

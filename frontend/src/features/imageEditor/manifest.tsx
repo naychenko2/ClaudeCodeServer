@@ -60,7 +60,7 @@ export const manifest: SubsystemManifest = {
           title: 'Картинки',
           icon: <ImageIcon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
           isAvailable: () => getFlag(FLAGS.imageEditor),
-          status: ({ projectId, sessionId }: { projectId: string; sessionId: string | null }) => imagesStripStatus(projectId, sessionId),
+          status: ({ projectId, sessionId }: { projectId: string | null; sessionId: string | null }) => imagesStripStatus(projectId, sessionId),
         },
       },
     ],

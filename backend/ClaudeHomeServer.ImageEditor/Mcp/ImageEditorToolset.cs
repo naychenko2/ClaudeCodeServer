@@ -321,7 +321,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             ThreadSessionId: session.Id,
             ThreadId: thread.Id,
             VersionId: version.Id);
-        var started = await _launcher.LaunchAsync(ownerId, project, request, ct);
+        var started = await _launcher.LaunchAsync(ownerId, ImageEditScope.Of(project), request, ct);
         if (started.Value is not { } created)
             return await FailAsync(started.ErrorCode, started.Error, ownerId, project, quoteRequest, ct);
 

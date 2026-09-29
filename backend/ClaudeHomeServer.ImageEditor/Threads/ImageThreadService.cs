@@ -58,13 +58,18 @@ public sealed class ImageThreadService(
 
     public ImageThreadsState Get(string ownerId, string sessionId) => store.Get(ownerId, sessionId);
 
-    // Чат этого проекта (проект уже свой — его проверил вызывающий): владение следует из проекта
-    public bool OwnChat(string projectId, string? sessionId) =>
-        !string.IsNullOrWhiteSpace(sessionId) && directory?.GetById(sessionId.Trim()) is { } s && s.ProjectId == projectId;
+    // Чат этой области (область уже своя — её проверил вызывающий): владение следует из области.
+    // scopeKey — id проекта или ImageEditScope.Personal у личного чата вне проекта. Ключ Personal
+    // общий у всех владельцев, и владения он не доказывает: его держат гейт личного маршрута и
+    // хранилище нитей владельца в OwnThread
+
+    public bool OwnChat(string scopeKey, string? sessionId) =>
+        !string.IsNullOrWhiteSpace(sessionId) && directory?.GetById(sessionId.Trim()) is { } s
+        && ImageEditScope.Of(s).Key == scopeKey;
 
     // Своя нить своего чата: для запуска и сохранения, где чужое молча отбрасывается
-    public bool OwnThread(string ownerId, string projectId, string? sessionId, string? threadId) =>
-        OwnChat(projectId, sessionId) && !string.IsNullOrWhiteSpace(threadId)
+    public bool OwnThread(string ownerId, string scopeKey, string? sessionId, string? threadId) =>
+        OwnChat(scopeKey, sessionId) && !string.IsNullOrWhiteSpace(threadId)
         && store.Get(ownerId, sessionId!.Trim()).Threads.Any(t => t.Id == threadId.Trim());
 
     // Взять картинку в работу: новая нить с фокусом и якорем её стопки в ленте; нить по этому
@@ -352,7 +357,7 @@ public sealed class ImageThreadService(
     private (ImageThread Thread, ImageThreadLaunch Launch)? RunningLaunch(string ownerId, string sessionId, string threadId,
         ImageEditJobDto job)
     {
-        if (directory?.GetById(sessionId) is not { } session || session.ProjectId != job.ProjectId) return null;
+        if (directory?.GetById(sessionId) is not { } session || ImageEditScope.Of(session).Key != job.ProjectId) return null;
         var thread = store.Get(ownerId, sessionId).Threads.FirstOrDefault(t => t.Id == threadId);
         return thread?.Launches.FirstOrDefault(l => l.JobId == job.JobId) is { Status: ImageThreadLaunchStatus.Running } launch
             ? (thread, launch)
@@ -439,14 +444,15 @@ public sealed class ImageThreadService(
             ct.ThrowIfCancellationRequested();
             try
             {
-                var projectId = directory?.GetById(sessionId)?.ProjectId;
+                // Чата уже нет — задачи считаются мёртвыми, рассылать некому
+                var scopeKey = directory?.GetById(sessionId) is { } session ? ImageEditScope.Of(session).Key : null;
                 var state = store.DropDeadPending(ownerId, sessionId,
-                    jobId => projectId is not null && jobs?.Get(ownerId, projectId, jobId) is not null,
+                    jobId => scopeKey is not null && jobs?.Get(ownerId, scopeKey, jobId) is not null,
                     (thread, jobId) => new ImageThreadEvent(store.Now(), ImageThreadEventKinds.Interrupted,
                         InterruptedEventText(thread, jobId), thread.Id, jobId));
                 if (state is null) continue;
                 dropped++;
-                if (projectId is not null) await BroadcastAsync(ownerId, projectId, sessionId, state);
+                if (scopeKey is not null) await BroadcastAsync(ownerId, scopeKey, sessionId, state);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

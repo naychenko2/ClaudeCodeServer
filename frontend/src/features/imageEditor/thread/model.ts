@@ -45,9 +45,10 @@ export function versionLabel(t: ImageThread, pos: ThreadPos | undefined, savedSt
 }
 
 // Чип выбранной картинки: «Работаем с: hero.png · версия 2» (short — «hero.png · в2»);
-// у нити со стопками — «hero.png · шаг 2»
-export function focusLabel(t: ImageThread, short = false): string {
+// у нити со стопками — «hero.png · шаг 2». personal — личный чат: сохранять некуда
+export function focusLabel(t: ImageThread, short = false, personal = false): string {
   if (!t.file && isEmptyThread(t)) {
+    if (personal) return 'Новая картинка';
     const folder = t.draftFolder ? `${t.draftFolder.replace(/\/$/, '')}/` : 'корень проекта';
     return `Новая картинка · сохранять в ${folder}`;
   }
@@ -165,12 +166,35 @@ export function versionMeta(t: ImageThread, v: ImageThreadVersion, model?: strin
 }
 
 // Главная кнопка карточки версии (прототип полос): у версии в работе — «Сохранить в проект»,
-// пока она черновик; у остальных версий выбранной картинки — «Продолжить от неё»; у
-// картинки, которая не в работе, — «Работать с этой». null — кнопки нет
-export type VersionPrimary = 'save' | 'continue' | 'work' | null;
+// пока она черновик (в личном чате вне проекта сохранять некуда — «Скачать»); у остальных
+// версий выбранной картинки — «Продолжить от неё»; у картинки, которая не в работе, —
+// «Работать с этой». null — кнопки нет
+export type VersionPrimary = 'save' | 'download' | 'continue' | 'work' | null;
 
-export function versionPrimary(t: ImageThread, v: ImageThreadVersion, focused: boolean, saved: boolean): VersionPrimary {
+export function versionPrimary(
+  t: ImageThread, v: ImageThreadVersion, focused: boolean, saved: boolean, personal = false,
+): VersionPrimary {
   if (!focused) return 'work';
   if (t.currentVersionId !== v.id) return 'continue';
-  return !saved && versionStep(t, v) ? 'save' : null;
+  if (!versionStep(t, v)) return null;
+  if (personal) return 'download';
+  return saved ? null : 'save';
+}
+
+// Правый край действий карточки-стопки: «Сохранить в проект», метка «В проекте» или ничего.
+// Личному чату сохранять некуда — у него остаётся только «Скачать»
+export function stackSaveState(
+  t: ImageThread, isCurrent: boolean, unsaved: boolean, personal: boolean,
+): 'save' | 'in-project' | null {
+  if (!isCurrent || personal) return null;
+  if (unsaved) return 'save';
+  return t.file ? 'in-project' : null;
+}
+
+// Имя скачанного файла: у картинки проекта — имя файла, у черновика — «image-v3.png»
+// (расширение — по типу ответа сервера)
+export function downloadName(t: ImageThread, v: ImageThreadVersion, mime: string): string {
+  if (t.file) return threadName(t);
+  const ext = /jpe?g/i.test(mime) ? 'jpg' : /webp/i.test(mime) ? 'webp' : 'png';
+  return `image-v${v.number}.${ext}`;
 }

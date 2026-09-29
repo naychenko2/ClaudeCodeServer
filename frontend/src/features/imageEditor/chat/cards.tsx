@@ -11,6 +11,7 @@ import {
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import type { ChatItem } from '../../../types';
 import { AUTO_MODEL, type ImageEditCatalog, type ImageEditEstimate } from '../api';
+import { enterScope } from '../scope';
 import { useCatalog } from '../thread/catalog';
 import { effectiveProvider, isFreeUnit, priceSum, priceText, variantsWord } from '../format';
 import { launchOf, launchVersions } from '../thread/model';
@@ -141,17 +142,19 @@ function Acts({ children }: { children: ReactNode }) {
 
 export function ImageLaunchCard({ ctx }: { ctx: ChatItemToolCtx }) {
   const item = ctx.item as ToolItem;
-  const catalog = useCatalog(ctx.projectId);
+  // Личный чат вне проекта: ctx.projectId = null, область — personal
+  const scope = enterScope(ctx.projectId, ctx.sessionId);
+  const catalog = useCatalog(scope);
   const input = inputOf(item);
   // threadId в image_generate обязателен (ADR-019, решение 1): по нему карточка ведёт в попап нити
   const threadId = str(input.threadId);
   const result = item.isError ? null : parseLaunchResult(item.result);
   // Запуск нити с версиями (v3) целиком рисует якорь image_launch_versions: строка
   // запуска, прогресс, «Отменить», версии. Своя карточка тут — второй блок на запуск
-  const threads = useThreads(ctx.projectId, ctx.sessionId);
+  const threads = useThreads(scope, ctx.sessionId);
   const thread = threadId ? threads.threads.find(t => t.id === threadId) : undefined;
   const owned = !!result && !!thread && (!!launchOf(thread, result.jobId) || launchVersions(thread, result.jobId).length > 0);
-  const { status, cancel } = useJobStatus(ctx.projectId ?? '', owned || !ctx.projectId ? null : result?.jobId ?? null);
+  const { status, cancel } = useJobStatus(scope, owned ? null : result?.jobId ?? null);
   const running = !!result && (!status || status.phase === 'run');
   const progress = useProgress(status, running, result?.expectedSeconds ?? null);
 
@@ -224,9 +227,10 @@ export function ImagePromptCard({ ctx }: { ctx: ChatItemToolCtx }) {
   const prompt = str(input.prompt);
   const count = num(input.count);
   // Промпт уходит в выбранную картинку чата: без выбора запускать не во что
-  useThreads(ctx.projectId, ctx.sessionId);
+  const scope = enterScope(ctx.projectId, ctx.sessionId);
+  useThreads(scope, ctx.sessionId);
   const thread = getFocusedThread(ctx.sessionId);
-  const L = useThreadLaunch(ctx.projectId ?? '', ctx.sessionId, thread);
+  const L = useThreadLaunch(scope, ctx.sessionId, thread);
   const [busy, setBusy] = useState(false);
   const [launched, setLaunched] = useState(false);
 
@@ -236,9 +240,9 @@ export function ImagePromptCard({ ctx }: { ctx: ChatItemToolCtx }) {
       : null;
   }
   const generate = async () => {
-    if (!thread || !ctx.projectId || !ctx.sessionId) return;
+    if (!thread || !ctx.sessionId) return;
     setBusy(true);
-    const ok = await launchThread(ctx.projectId, ctx.sessionId, thread, { kind: 'prompt', prompt });
+    const ok = await launchThread(scope, ctx.sessionId, thread, { kind: 'prompt', prompt });
     setBusy(false);
     if (ok) setLaunched(true);
   };
@@ -281,7 +285,7 @@ function SysLine({ icon, children }: { icon: ReactNode; children: ReactNode }) {
 // «Вы запустили: «вечер» · FLUX Fill · ≈ $0.10 · 2 варианта»
 export function ImageLaunchRow({ ctx }: { ctx: ChatItemToolCtx }) {
   const item = ctx.item as Extract<ChatItem, { kind: 'image_launch' }>;
-  const catalog = useCatalog(ctx.projectId);
+  const catalog = useCatalog(enterScope(ctx.projectId, ctx.sessionId));
   const model = modelLabel(catalog, item.provider, item.model);
   const est = item.estimate;
   // Строка — след в истории: время и очередь на момент запуска в неё не пишутся

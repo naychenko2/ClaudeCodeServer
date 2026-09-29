@@ -474,7 +474,8 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             {
                 Timestamp = Now(),
                 OwnerId = job.OwnerId,
-                ProjectId = job.ProjectId,
+                // У личной области проекта нет: «Расход» не должен получить несуществующий проект
+                ProjectId = ImageEditScope.ProjectIdOf(job.ProjectId),
                 SessionId = job.ChatSessionId,
                 Initiator = job.Initiator == ImageEditInitiator.Agent ? SpendInitiators.Agent : SpendInitiators.Human,
                 Provider = job.Quote.Provider,

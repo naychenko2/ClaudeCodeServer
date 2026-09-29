@@ -4,6 +4,8 @@
 // «поставщик · модель · N вар. · цена ▾» и аватар персонажа. Настройки — карточкой над
 // полосой (на телефоне шторкой): поставщик, модель, число вариантов, персонаж, образцы,
 // «Размер оригинала». Свёрнутая — строка 30 px со сводкой, клик разворачивает.
+// В личном чате вне проекта (область personal) нет персонажа и образцов из проекта: их
+// источник — папки проекта.
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
@@ -21,6 +23,7 @@ import { maxSamples, roleShort, SAMPLE_ROLES, type Sample } from '../editorInput
 import { effectiveProvider, modelBlockReason, providerHint, variantsWord } from '../format';
 import { ProjectImagePicker } from '../PanelSections';
 import { createDraft, releaseFocus } from '../thread/actions';
+import { enterScope, isPersonalScope } from '../scope';
 import { focusLabel } from '../thread/model';
 import { setPrefs } from '../thread/prefs';
 import { getFocusedThread, getSamples, setSamples, useThreads } from '../thread/threadStore';
@@ -64,10 +67,11 @@ function Opt({ on, name, hint, disabled, title, onClick }: {
   );
 }
 
-function useCharacter(projectId: string, slug: string | null) {
+// projectId = null — личная область: персонажей нет, запросов к проекту тоже
+function useCharacter(projectId: string | null, slug: string | null) {
   const { list } = useCharacters(projectId);
-  const current = slug ? list?.find(c => c.slug === slug) ?? null : null;
-  const photo = current?.photos[0] ? imageEditorApi().characterPhotoUrl(projectId, current.slug, current.photos[0].file) : null;
+  const current = projectId && slug ? list?.find(c => c.slug === slug) ?? null : null;
+  const photo = projectId && current?.photos[0] ? imageEditorApi().characterPhotoUrl(projectId, current.slug, current.photos[0].file) : null;
   return { current, photo, name: current?.name ?? slug };
 }
 
@@ -77,7 +81,9 @@ function openCharacters(isMobile: boolean, sheet: () => void) {
 }
 
 // Образцы: чипы с миниатюрой, клик — роль, «+ Образец» — с компьютера или из проекта
+// (у личной области — сразу с компьютера)
 function SampleChips({ projectId, max }: { projectId: string; max: number }) {
+  const personal = isPersonalScope(projectId);
   const samples = getSamples(projectId);
   const [roleFor, setRoleFor] = useState<string | null>(null);
   const [addAt, setAddAt] = useState<DOMRect | null>(null);
@@ -100,7 +106,8 @@ function SampleChips({ projectId, max }: { projectId: string; max: number }) {
         </span>
       ))}
       {samples.length < max && (
-        <span style={{ display: 'inline-flex' }} onClick={e => setAddAt((e.currentTarget as HTMLElement).getBoundingClientRect())}>
+        <span style={{ display: 'inline-flex' }}
+          onClick={e => { if (personal) input.current?.click(); else setAddAt((e.currentTarget as HTMLElement).getBoundingClientRect()); }}>
           <Chip dashed leading={ic(Plus)} title="Картинка-пример для модели: лицо, стиль или предмет">Образец</Chip>
         </span>
       )}
@@ -122,7 +129,7 @@ function SampleChips({ projectId, max }: { projectId: string; max: number }) {
           </div>
         </Modal>
       )}
-      {picker && (
+      {picker && !personal && (
         <ProjectImagePicker projectId={projectId}
           taken={samples.flatMap(s => (s.source === 'project' ? [s.path] : []))}
           onPick={path => {
@@ -151,7 +158,8 @@ function SettingsPanel({ projectId, L, catalog, isMobile, thread }: {
   const admin = catalog.providers.find(p => p.key === catalog.default.provider);
   const count = L.settings.count;
   const maxCount = L.model?.caps?.maxCount ?? catalog.limits.maxCount ?? 4;
-  const { current, photo, name } = useCharacter(projectId, L.prefs.characterSlug);
+  const personal = isPersonalScope(projectId);
+  const { current, photo, name } = useCharacter(personal ? null : projectId, L.prefs.characterSlug);
   const max = maxSamples(catalog.limits.maxReferences, L.model?.caps?.maxReferences);
 
   return (
@@ -193,9 +201,9 @@ function SettingsPanel({ projectId, L, catalog, isMobile, thread }: {
         </span>
         <span data-image-price="" style={{ color: C.textSecondary }}>{variantsWord(count)} · {L.price ?? L.priceLabel}</span>
       </div>
-      <Label>Персонаж и образцы</Label>
+      {(!personal || max > 0) && <Label>{personal ? 'Образцы' : 'Персонаж и образцы'}</Label>}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs, alignItems: 'center' }}>
-        {L.prefs.characterSlug
+        {personal ? null : L.prefs.characterSlug
           ? <Chip selected leading={photo ? <img src={photo} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : undefined}
               maxW={160} title="Фото персонажа уходят в каждую генерацию" onClick={() => openCharacters(isMobile, () => setCharSheet(true))}
               onRemove={() => setPrefs(projectId, { characterSlug: null })}>
@@ -218,7 +226,7 @@ function SettingsPanel({ projectId, L, catalog, isMobile, thread }: {
           {ic(AlertTriangle)}<span>{L.model.label}: {L.blocked.charAt(0).toLowerCase() + L.blocked.slice(1)}</span>
         </div>
       )}
-      {charSheet && (
+      {charSheet && !personal && (
         <Modal title="Персонажи" onClose={() => setCharSheet(false)}>
           <CharactersPanel projectId={projectId} />
         </Modal>
@@ -228,7 +236,9 @@ function SettingsPanel({ projectId, L, catalog, isMobile, thread }: {
 }
 
 export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
-  const { projectId, sessionId, isMobile, collapsed, setCollapsed, switcher } = ctx;
+  const { sessionId, isMobile, collapsed, setCollapsed, switcher } = ctx;
+  const projectId = enterScope(ctx.projectId, sessionId);
+  const personal = isPersonalScope(projectId);
   const state = useThreads(projectId, sessionId);
   const thread = state.focus ? state.threads.find(t => t.id === state.focus) ?? null : null;
   const L = useThreadLaunch(projectId, sessionId, thread);
@@ -236,7 +246,7 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
   const [open, setOpen] = useState(false);
   const [charSheet, setCharSheet] = useState(false);
   const shell = useRef<HTMLDivElement>(null);
-  const { current: character, photo } = useCharacter(projectId, L.prefs.characterSlug);
+  const { current: character, photo } = useCharacter(personal ? null : projectId, L.prefs.characterSlug);
 
   // Карточка настроек закрывается кликом мимо полосы и Esc
   useEffect(() => {
@@ -262,7 +272,7 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
   const release = () => { if (sessionId) void releaseFocus(projectId, sessionId, thread); };
   const src = thread ? activeSrc(projectId, thread) : null;
   const parts = {
-    focus: thread ? focusLabel(thread) : null, provider: L.provider?.label ?? null, model: L.model?.label ?? null,
+    focus: thread ? focusLabel(thread, false, personal) : null, provider: L.provider?.label ?? null, model: L.model?.label ?? null,
     count: L.settings.count, price: L.price ?? null, character: character?.name ?? null,
   };
   const title = switcher ?? (
@@ -310,8 +320,8 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
       {thread ? (
         <span style={{ display: 'inline-flex', minWidth: 72, flex: '0 1 auto' }}>
           <Chip selected leading={src ? <img src={src} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : ic(Sparkles)}
-            maxW="100%" title="Режим «Картинка» и Claude работают с этой версией. ✕ — снять выбор" onRemove={release}>
-            {!isMobile && 'Работаем с: '}<b>{focusLabel(thread, true)}</b>
+            maxW="100%" title={personal ? 'Режим «Картинка» работает с этой версией. ✕ — снять выбор' : 'Режим «Картинка» и Claude работают с этой версией. ✕ — снять выбор'} onRemove={release}>
+            {!isMobile && 'Работаем с: '}<b>{focusLabel(thread, true, personal)}</b>
           </Chip>
         </span>
       ) : (
@@ -343,7 +353,7 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
           </Button>
         </span>
       )}
-      {!isMobile && (L.prefs.characterSlug
+      {!isMobile && !personal && (L.prefs.characterSlug
         ? (
           <IconButton size="sm" title={`Персонаж: ${character?.name ?? L.prefs.characterSlug} — фото уходят в запрос`}
             ariaLabel="Персонаж" onClick={() => revealWorkspacePanel(CHARACTERS_PANEL)}
@@ -371,7 +381,7 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
       {open && settings && isMobile && (
         <Modal title="Настройки генерации" onClose={() => setOpen(false)}>{settings}</Modal>
       )}
-      {charSheet && (
+      {charSheet && !personal && (
         <Modal title="Персонажи" onClose={() => setCharSheet(false)}>
           <CharactersPanel projectId={projectId} />
         </Modal>
@@ -381,7 +391,8 @@ export function ImagesStrip({ ctx }: { ctx: ComposerStripCtx }) {
 }
 
 // Строка состояния в меню переключателя полос — та же сводка, что у свёрнутой строки
-export function imagesStripStatus(projectId: string, sessionId: string | null): string {
+export function imagesStripStatus(projectId: string | null, sessionId: string | null): string {
+  const scope = enterScope(projectId, sessionId);
   const t = getFocusedThread(sessionId);
-  return stripSummary({ focus: t ? focusLabel(t) : null, character: null, ...launchSummaryParts(projectId, t) });
+  return stripSummary({ focus: t ? focusLabel(t, false, isPersonalScope(scope)) : null, character: null, ...launchSummaryParts(scope, t) });
 }

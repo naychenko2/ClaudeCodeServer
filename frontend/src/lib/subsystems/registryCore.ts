@@ -222,8 +222,9 @@ export const SLOT_WORKSPACE_PANEL_DEF = 'workspace-panel-def';
 // Слот `composer-strip`: полоса над композером (Git, Картинки, …). Имя вклада — id
 // полосы; render рисует саму полосу, action описывает её для переключателя «Git ▾».
 // Выбор активной полосы — стор lib/composerStrips.ts, не сама полоса.
+// projectId = null — личный чат вне проекта: полосы проекта (Git, «Руки») в нём не предлагаются
 export interface ComposerStripCtx {
-  projectId: string;
+  projectId: string | null;
   sessionId: string | null;
   isMobile: boolean;
   // Свёрнута ли полоса в строку 30 px — своё у каждой полосы каждого чата
@@ -237,9 +238,9 @@ export interface ComposerStripApi {
   title: string;
   icon: ReactNode;
   // false — полоса не предлагается (нет git, модуль недоступен в проекте)
-  isAvailable?: (ctx: { projectId: string; sessionId: string | null }) => boolean;
+  isAvailable?: (ctx: { projectId: string | null; sessionId: string | null }) => boolean;
   // Строка состояния в меню переключателя: «feat/site-header · 3 файла изменено», «Работаем с: hero.png · версия 2»
-  status?: (ctx: { projectId: string; sessionId: string | null }) => ReactNode;
+  status?: (ctx: { projectId: string | null; sessionId: string | null }) => ReactNode;
 }
 
 // Слот `composer-mode`: режим поля ввода рядом с «Чатом» («Картинка»). Имя вклада — id режима.

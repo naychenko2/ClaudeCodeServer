@@ -3,7 +3,7 @@
 > Этот файл — вынесенная часть корневого `CLAUDE.md`: он загружается, только когда идёт работа с файлами этой папки.
 
 Правка картинок проекта моделями (fal, Higgsfield, «Локальные модели») и без ИИ (обрезка,
-поворот, размер, сжатие) прямо в любом чате проекта: нити картинок, фокус, агент с тулсетом,
+поворот, размер, сжатие) прямо в чате — проекта или личном вне проекта: нити картинок, фокус, агент с тулсетом,
 персонажи, версии файлов. За флагом `image-editor`. Решения —
 [ADR-017](../../docs/adr/ADR-017-image-editor.md) (v1),
 [ADR-018](../../docs/adr/ADR-018-image-editor-v2.md) (v2; §10 — вынос в модуль, §11 — локальные
@@ -25,6 +25,31 @@ MF-remote `frontend/modules/image-editor` над кодом `frontend/src/featur
 `image-editor`), `Characters/`, `Versioning/`, `Contracts/`. Тесты —
 `ClaudeHomeServer.ImageEditor.Tests`; тесты контроллеров, нитей, миграции и
 `McpToolsetStabilityTests` остались в `ClaudeHomeServer.Tests`.
+
+**Личный чат вне проекта** — маршрут `api/image-editor/chats/{sessionId}/…` (`PersonalImageEditorController`,
+`PersonalThreadsController`) с областью `ImageEditScope.Personal`. Тело ручек общее с проектными
+(`ImageEditorEndpoints`, `ImageThreadEndpoints`), гейт — `ImageEditScopeGate`: личный вход пускает только
+свой чат с `ProjectId == null`. `save`, `save/check` и `characters*` там нет — 404
+([разрез](../../docs/research/image-editor-personal-chats-cut-2026-09.md), ADR-019 «Изменение 29.09»).
+Инварианты:
+
+- **Ключ области — константа `personal`, одна на владельца, а не на чат**: ветвление копирует нити
+  с шагами, и ключ «на чат» потерял бы в ветке все версии. Изоляцию держат владелец в путях
+  хранилищ и гейт личного маршрута, а не ключ.
+- **Сопоставление «чат ↔ область» — только `ImageEditScope.Of`** (`OwnChat`, `RunningLaunch`,
+  восстановление после перезапуска). Инлайновый `?? "personal"` разойдётся, и варианты личного
+  запуска молча не станут версиями.
+- У личной области `Project == null`: всё, что читает диск проекта (образцы путями, персонаж,
+  `SourcePath`, `transform` от файла, нить по файлу), отказывает ДО `RootPath`, а не падает.
+- Трата личного запуска пишет `ProjectId = null` (`ImageEditScope.ProjectIdOf`), иначе «Расход»
+  получит несуществующий проект.
+- **Агента с тулсетом в личном чате нет осознанно**: `BuildImageEditorContext` и блок хвоста хода
+  требуют `ProjectId`. Снимать это — отдельная задача: условие входит в сигнатуру запуска CLI
+  (`McpToolsetStabilityTests`). Поэтому на фронте пометки в личном чате не уходят агенту
+  вложением, а ждут запуска в режиме «Картинка».
+- Фронт: ключ области — `features/imageEditor/scope.ts` (`enterScope`, `isPersonalScope`); проектное
+  API каркаса (файлы, персонажи, «Сохранить в проект») у личной области не зовётся — типы тут не
+  спасают, проверять `isPersonalScope`.
 
 **Нить и фокус (ADR-019 §1–§3).** Картинка «в работе» — нить в хранилище модуля
 `data/image-threads/{ownerId}/{sessionId}.json` (не в `data/image-editor`: TTL его не чистит, бэкап

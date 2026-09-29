@@ -1,8 +1,10 @@
-// Нити картинок основного чата (ADR-019 §1): REST …/sessions/{sessionId}/threads и
+// Нити картинок основного чата (ADR-019 §1): REST …/sessions/{sessionId}/threads (у личного
+// чата — …/chats/{sessionId}/threads) и
 // событие image_thread_changed. Каждая мутация несёт revision и отвечает полным
 // состоянием; старая ревизия — 409 с актуальным состоянием в теле.
 
 import { onMessage, request } from 'aihome_shell/kit';
+import { threadsBase } from '../scope';
 
 export interface ImageThreadStack {
   stackId: string;
@@ -103,8 +105,7 @@ export interface ImageThreadChangedEvent {
 // Ровно одно: вариант задачи этой нити или шаг правки без ИИ (stepId из /transform)
 export type ImageThreadTake = { jobId: string; variant: number } | { stepId: string };
 
-const base = (projectId: string, sessionId: string) =>
-  `/projects/${encodeURIComponent(projectId)}/image-editor/sessions/${encodeURIComponent(sessionId)}/threads`;
+const base = threadsBase;
 const one = (projectId: string, sessionId: string, threadId: string) =>
   `${base(projectId, sessionId)}/${encodeURIComponent(threadId)}`;
 

@@ -7,19 +7,20 @@ import { useEffect } from 'react';
 import { Image as ImageIcon, Sparkles } from 'lucide-react';
 import { requestStrip, C, FS, SP, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
 import type { ComposerModeApi, ComposerModeCtx } from '../../../lib/subsystems/registryCore';
+import { enterScope } from '../scope';
 import { currentVersion, isEmptyThread, isLegacyThread, lastLaunchPrompt, ORIGIN, threadName, versionName } from '../thread/model';
 import { getFocusedThread, getImageModeRequest, IMAGES_STRIP, useThreads } from '../thread/threadStore';
 import { launchThread, useThreadLaunch } from '../thread/useThreadLaunch';
 
 function useFocused(ctx: ComposerModeCtx) {
-  const state = useThreads(ctx.projectId, ctx.sessionId);
+  const state = useThreads(enterScope(ctx.projectId, ctx.sessionId), ctx.sessionId);
   return state.focus ? state.threads.find(t => t.id === state.focus) ?? null : null;
 }
 
 // «✦ Изменить · ≈ $0.15», у черновика «✦ Сгенерировать · …», у локальной модели «бесплатно»
 function SubmitLabel({ ctx }: { ctx: ComposerModeCtx }) {
   const thread = useFocused(ctx);
-  const L = useThreadLaunch(ctx.projectId ?? '', ctx.sessionId, thread);
+  const L = useThreadLaunch(enterScope(ctx.projectId, ctx.sessionId), ctx.sessionId, thread);
   const verb = thread && (thread.file || !isEmptyThread(thread)) ? 'Изменить' : 'Сгенерировать';
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, whiteSpace: 'nowrap' }}>
@@ -32,7 +33,7 @@ function SubmitLabel({ ctx }: { ctx: ComposerModeCtx }) {
 // «Промпт модели · уходит прямо в FLUX Fill, без агента»
 function Hint({ ctx }: { ctx: ComposerModeCtx }) {
   const thread = useFocused(ctx);
-  const L = useThreadLaunch(ctx.projectId ?? '', ctx.sessionId, thread);
+  const L = useThreadLaunch(enterScope(ctx.projectId, ctx.sessionId), ctx.sessionId, thread);
   useEffect(() => { if (ctx.sessionId) requestStrip(ctx.sessionId, IMAGES_STRIP); }, [ctx.sessionId]);
   return (
     <span style={{ fontSize: FS.xs, color: C.textMuted }}>
@@ -71,8 +72,8 @@ export const imageMode: ComposerModeApi = {
   hint: ctx => <Hint ctx={ctx} />,
   onSubmit: async (ctx, text) => {
     const t = getFocusedThread(ctx.sessionId);
-    if (!t || !ctx.projectId || !ctx.sessionId) return;
-    const ok = await launchThread(ctx.projectId, ctx.sessionId, t, { kind: 'prompt', prompt: text });
+    if (!t || !ctx.sessionId) return;
+    const ok = await launchThread(enterScope(ctx.projectId, ctx.sessionId), ctx.sessionId, t, { kind: 'prompt', prompt: text });
     // Текст остаётся в поле, если запуск не прошёл: ядро чистит поле только без исключения
     if (!ok) throw new Error('Генерация не запущена');
   },

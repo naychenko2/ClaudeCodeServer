@@ -6,7 +6,7 @@
 // остаются в сторе нити и уходят чипом со следующим сообщением.
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Check, Eye, Save } from 'lucide-react';
+import { Check, Download, Eye, Save } from 'lucide-react';
 import {
   Button, Chip, Field, Modal, ModalActions, TextField, C, FS, R, SP, ICON_SIZE, ICON_STROKE, showToast, useIsMobile,
 } from 'aihome_shell/kit';
@@ -16,6 +16,7 @@ import { CropBar } from '../CropBar';
 import { EditorCanvas } from '../EditorCanvas';
 import { MarksTools, MobileToolbar } from '../EditorSections';
 import { QuickActions } from '../PanelSections';
+import { isPersonalScope } from '../scope';
 import { SaveAsDialog } from '../SaveAsDialog';
 import { QUICK_ACTIONS, quickOffered, quickUsesOwnModel, type OutpaintRatio, type QuickAction } from '../editorInputs';
 import { hasMaskMark, type Mark, type Tool } from '../marks';
@@ -27,8 +28,9 @@ import {
   applyStep, continueFrom, rollbackTo, saveAsInThread, saveToProject, savedStepOf, versionSaved,
 } from '../thread/actions';
 import { JobBlock } from '../thread/ThreadCard';
+import { download, PERSONAL_DOWNLOAD_HINT } from '../thread/download';
 import {
-  chainOf, currentIndex, currentStack, currentVersion, findVersion, isLegacyThread, ORIGIN, originFile, saveFolder, stepOf,
+  chainOf, currentIndex, currentStack, currentVersion, downloadName, findVersion, isLegacyThread, ORIGIN, originFile, saveFolder, stepOf,
   threadName, versionHasImage, versionLabel, versionName, versionShort, versionsOf, versionStep,
 } from '../thread/model';
 import { closeEditor, getThreadMarks, getThreadsState, setThreadMarks, showEditorVersion, useThreads } from '../thread/threadStore';
@@ -70,6 +72,8 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null }
 }) {
   const mobile = useIsMobile();
   const api = useMemo(() => imageEditorApi(), []);
+  // Личный чат вне проекта: сохранять некуда — вместо «Сохранить» в футере «Скачать»
+  const personal = isPersonalScope(projectId);
   const state = useThreads(projectId, sessionId);
   const thread = state.threads.find(t => t.id === threadId) ?? null;
   const [tool, setTool] = useState<Tool>('mask');
@@ -219,7 +223,7 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null }
         </Section>
       )}
       {!mobile && hasImage && (
-        <Section title="Пометки" meta="уйдут со следующим сообщением">
+        <Section title="Пометки" meta={personal ? 'уйдут со следующим запуском' : 'уйдут со следующим сообщением'}>
           <MarksTools tool={tool} onTool={setTool} marksCount={marks.length} onClear={() => setMarks([])} disabled={!!preview || !!crop} />
         </Section>
       )}
@@ -284,7 +288,7 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null }
   );
 
   const subtitle = viewed
-    ? [versionName(viewed), inProject ? 'в проекте' : 'черновик', isCurrent ? 'в работе' : null].filter(Boolean).join(' · ')
+    ? [versionName(viewed), personal ? null : inProject ? 'в проекте' : 'черновик', isCurrent ? 'в работе' : null].filter(Boolean).join(' · ')
     : [versionLabel(thread, cur, saved), chain.length ? stepOf(at, chain.length) : null].filter(Boolean).join(' · ');
 
   return (
@@ -295,14 +299,26 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null }
           <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap', width: '100%', justifyContent: 'flex-end' }}>
             {!mobile && (
               <span style={{ marginRight: 'auto', fontSize: FS.xs, color: C.textMuted }}>
-                {marks.length ? 'Пометки уйдут со следующим сообщением — в режиме «Картинка» или агенту' : 'Отметьте место кистью, рамкой или стрелкой — модель это увидит'}
+                {!marks.length ? 'Отметьте место кистью, рамкой или стрелкой — модель это увидит'
+                  : personal ? 'Пометки уйдут со следующим запуском в режиме «Картинка»'
+                  : 'Пометки уйдут со следующим сообщением — в режиме «Картинка» или агенту'}
               </span>
             )}
-            <Button size="sm" variant="secondary" leftIcon={ic(Save)} disabled={!canSave} onClick={() => setSaveAs(true)}>Сохранить как…</Button>
-            <Button size="sm" variant="secondary" disabled={!canSave || inProject} loading={saving}
-              onClick={() => { void save(); }}>
-              {inProject ? 'В проекте' : 'Сохранить в проект'}
-            </Button>
+            {personal ? (
+              <Button size="sm" variant="secondary" leftIcon={ic(Download)} disabled={!src || !hasImage || transforming}
+                title={PERSONAL_DOWNLOAD_HINT}
+                onClick={() => { if (src) void download(src, mime => (viewed ? downloadName(thread, viewed, mime) : threadName(thread))); }}>
+                Скачать
+              </Button>
+            ) : (
+              <>
+                <Button size="sm" variant="secondary" leftIcon={ic(Save)} disabled={!canSave} onClick={() => setSaveAs(true)}>Сохранить как…</Button>
+                <Button size="sm" variant="secondary" disabled={!canSave || inProject} loading={saving}
+                  onClick={() => { void save(); }}>
+                  {inProject ? 'В проекте' : 'Сохранить в проект'}
+                </Button>
+              </>
+            )}
             <Button size="sm" variant="primary" leftIcon={ic(Check)} onClick={closeEditor}>Готово</Button>
           </div>
         )}>
@@ -325,7 +341,7 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null }
           </Field>
         </Modal>
       )}
-      {saveAs && (
+      {saveAs && !personal && (
         <SaveAsDialog projectId={projectId} sourcePath={thread.file}
           defaultName={thread.file ? baseName : nameStem(baseName)} folder={folder} format={format}
           onCheck={(f, name) => api.saveCheck(projectId, { folder: f, name, format })}

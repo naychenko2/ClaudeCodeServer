@@ -16,6 +16,7 @@ import {
   quickAvailability, quickPlan, quickUsesOwnModel, samplesToJobInput,
   type LaunchAction, type LaunchPlan, type QuickAction, type QuickRoute,
 } from '../editorInputs';
+import { isPersonalScope } from '../scope';
 import { useQuote } from '../useQuote';
 import { getCatalog, loadCatalog, useCatalog } from './catalog';
 import { effectiveSettings, getPrefs, setPrefs, usePrefs } from './prefs';
@@ -25,9 +26,10 @@ import { getSamples, getThreadMarks, mutate, setThreadMarks, useThreadStoreVersi
 import { threadsApi, type ImageThread, type ImageThreadSettings, type ImageThreadVersion } from './threadsApi';
 
 // Картинка позиции нити: шаг — из рабочей папки редактора, исходник — файл проекта
+// (у личной области файлов нет: сервер не заводит ей нить по файлу)
 export function imageSrc(projectId: string, t: ImageThread, stepId: string | null): string | null {
   if (stepId) return imageEditorApi().stepUrl(projectId, stepId);
-  return t.file ? appApi.files.fileUrl(projectId, t.file) : null;
+  return t.file && !isPersonalScope(projectId) ? appApi.files.fileUrl(projectId, t.file) : null;
 }
 
 // Картинка версии: её шаг или файл-исходник
@@ -35,7 +37,7 @@ export function versionSrc(projectId: string, t: ImageThread, v: ImageThreadVers
   const stepId = versionStep(t, v);
   if (stepId) return imageEditorApi().stepUrl(projectId, stepId);
   const file = v.id === 'origin' ? originFile(t) : null;
-  return file ? appApi.files.fileUrl(projectId, file) : null;
+  return file && !isPersonalScope(projectId) ? appApi.files.fileUrl(projectId, file) : null;
 }
 
 // Картинка, от которой пойдёт следующая правка

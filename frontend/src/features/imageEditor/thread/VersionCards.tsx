@@ -14,10 +14,12 @@ import {
 } from 'aihome_shell/kit';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import { isFreeUnit, money, variantsWord } from '../format';
+import { enterScope, isPersonalScope } from '../scope';
 import { continueFrom, saveToProject, versionSaved } from './actions';
+import { download, PERSONAL_DOWNLOAD_HINT } from './download';
 import {
-  findVersion, fromVersion, isEmptyThread, launchEndNote, launchOf, launchVersions, ORIGIN, saveFolder, threadName,
-  versionHasImage, versionMeta, versionName, versionPrimary, versionStep,
+  downloadName, findVersion, fromVersion, isEmptyThread, launchEndNote, launchOf, launchVersions, ORIGIN, saveFolder,
+  threadName, versionHasImage, versionMeta, versionName, versionPrimary, versionStep,
 } from './model';
 import { recordOf } from './records';
 import { openEditor, useThreads } from './threadStore';
@@ -28,13 +30,6 @@ import { queueText, useJobStatus, useProgress } from './useJobStatus';
 const ic = (I: typeof X, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
 
 const CARD_W = 300;
-
-function download(src: string, name: string) {
-  const a = document.createElement('a');
-  a.href = src;
-  a.download = name;
-  a.click();
-}
 
 function Note({ children }: { children: ReactNode }) {
   return <div style={{ fontSize: FS.sm, color: C.textMuted, lineHeight: 1.45 }}>{children}</div>;
@@ -87,7 +82,9 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
   const saved = versionSaved(thread, version);
   const name = `${threadName(thread)} · ${versionName(version)}`;
   const meta = versionMeta(thread, version, model);
-  const primary = versionPrimary(thread, version, focused, saved);
+  const personal = isPersonalScope(projectId);
+  const primary = versionPrimary(thread, version, focused, saved, personal);
+  const save = () => { if (src) void download(src, mime => downloadName(thread, version, mime)); };
   const run = async (fn: () => Promise<unknown>) => { setBusy(true); await fn(); setBusy(false); };
   const open = () => openEditor(sessionId, thread.id, version.id);
 
@@ -99,7 +96,7 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
           fontSize: FS.sm, fontWeight: 600, color: C.textHeading, minWidth: 0, flex: 1,
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
         }}>{name}</span>
-        <Badge size="xs" tone={saved ? 'success' : 'warning'}>{saved ? 'в проекте' : 'черновик'}</Badge>
+        {!personal && <Badge size="xs" tone={saved ? 'success' : 'warning'}>{saved ? 'в проекте' : 'черновик'}</Badge>}
       </div>
       <Picture src={src} onOpen={open} />
       {meta && (
@@ -113,6 +110,11 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
           <Button size="xs" variant="secondary" leftIcon={ic(Save)} disabled={busy}
             onClick={() => { void run(() => saveToProject(projectId, sessionId, thread, versionStep(thread, version))); }}>
             Сохранить в проект
+          </Button>
+        )}
+        {primary === 'download' && src && (
+          <Button size="xs" variant="secondary" leftIcon={ic(Download)} title={personal ? PERSONAL_DOWNLOAD_HINT : undefined} onClick={save}>
+            Скачать
           </Button>
         )}
         {primary === 'continue' && (
@@ -129,9 +131,9 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
             Работать с этой
           </Button>
         )}
-        {src && (
+        {src && primary !== 'download' && (
           <span style={{ marginLeft: 'auto', display: 'inline-flex' }}>
-            <IconButton size="xs" title="Скачать" ariaLabel="Скачать" onClick={() => download(src, threadName(thread))}>
+            <IconButton size="xs" title="Скачать" ariaLabel="Скачать" onClick={save}>
               {ic(Download)}
             </IconButton>
           </span>
@@ -142,7 +144,7 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
 }
 
 // Черновик «Новая картинка» до первой версии: пунктирная рамка вместо картинки
-function DraftBox({ thread, focused }: { thread: ImageThread; focused: boolean }) {
+function DraftBox({ thread, focused, personal }: { thread: ImageThread; focused: boolean; personal: boolean }) {
   const mobile = useIsMobile();
   const folder = saveFolder(thread);
   const drawn = !isEmptyThread(thread);
@@ -155,7 +157,7 @@ function DraftBox({ thread, focused }: { thread: ImageThread; focused: boolean }
     }}>
       <b style={{ color: C.textHeading, fontSize: FS.base }}>Новая картинка</b>
       {drawn ? 'Нарисована — версии ниже' : focused ? 'Опишите её в поле ввода — версии лягут в ленту ниже' : 'Ещё не нарисована'}
-      <span style={{ fontSize: FS.xs }}>сохранять в {folder ? `${folder}/` : 'корень проекта'}</span>
+      {!personal && <span style={{ fontSize: FS.xs }}>сохранять в {folder ? `${folder}/` : 'корень проекта'}</span>}
     </div>
   );
 }
@@ -165,7 +167,7 @@ export function OriginAnchor({ projectId, sessionId, thread, focused }: {
   projectId: string; sessionId: string; thread: ImageThread; focused: boolean;
 }) {
   const origin = findVersion(thread, ORIGIN);
-  if (!origin || !versionHasImage(thread, origin)) return <DraftBox thread={thread} focused={focused} />;
+  if (!origin || !versionHasImage(thread, origin)) return <DraftBox thread={thread} focused={focused} personal={isPersonalScope(projectId)} />;
   return <VersionCard projectId={projectId} sessionId={sessionId} thread={thread} version={origin} focused={focused} />;
 }
 
@@ -215,14 +217,16 @@ function RunningLine({ projectId, jobId, model }: { projectId: string; jobId: st
 
 export function LaunchAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
   const rec = recordOf(ctx.item);
-  const state = useThreads(ctx.projectId, ctx.sessionId);
+  // Личный чат вне проекта: ctx.projectId = null, область — personal
+  const projectId = enterScope(ctx.projectId, ctx.sessionId);
+  const state = useThreads(projectId, ctx.sessionId);
   const mobile = useIsMobile();
   const [busy, setBusy] = useState(false);
   const data = (rec?.data ?? {}) as LaunchData;
   const jobId = str(data.jobId);
   const thread = typeof data.threadId === 'string' ? state.threads.find(t => t.id === data.threadId) : undefined;
-  const { projectId, sessionId } = ctx;
-  if (!projectId || !sessionId || !thread || !jobId) return rec?.fallback ? <Note>{rec.fallback}</Note> : null;
+  const { sessionId } = ctx;
+  if (!sessionId || !thread || !jobId) return rec?.fallback ? <Note>{rec.fallback}</Note> : null;
 
   const launch = launchOf(thread, jobId);
   const versions = launchVersions(thread, jobId);

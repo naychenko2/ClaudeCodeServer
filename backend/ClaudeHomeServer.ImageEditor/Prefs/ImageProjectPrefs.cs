@@ -94,14 +94,18 @@ public sealed class ImageProjectPrefsService(
     public ImageThreadSettings SettingsFor(string ownerId, string projectId) =>
         store.Get(ownerId, projectId).ToThreadSettings();
 
-    // Персонаж, которого уже нет в проекте (удалили), читается как null
-    public ImageProjectPrefs Get(string ownerId, Project project)
+    // Персонаж, которого уже нет в проекте (удалили), читается как null; у личной области
+    // персонажей нет вовсе — всегда null
+    public ImageProjectPrefs Get(string ownerId, ImageEditScope scope)
     {
-        var prefs = store.Get(ownerId, project.Id);
-        return prefs.CharacterSlug is { } slug && CharacterStore.Get(project.RootPath, slug) is null
+        var prefs = store.Get(ownerId, scope.Key);
+        return prefs.CharacterSlug is { } slug
+               && (scope.Project is not { } project || CharacterStore.Get(project.RootPath, slug) is null)
             ? prefs with { CharacterSlug = null }
             : prefs;
     }
+
+    public ImageProjectPrefs Get(string ownerId, Project project) => Get(ownerId, ImageEditScope.Of(project));
 
     // Для блока хода, где на руках только id проекта: чужой или пропавший проект — умолчания
     public ImageProjectPrefs Get(string ownerId, string projectId) =>
@@ -114,25 +118,39 @@ public sealed class ImageProjectPrefsService(
         projects?.GetById(projectId) is { } project && project.OwnerId == ownerId
         && store.Exists(ownerId, projectId);
 
-    public async Task<ImageProjectPrefs> SetAsync(string ownerId, Project project, ImageProjectPrefs prefs)
+    // Проверка тела PUT …/prefs — общая для ручек проекта и личного чата; null — годится
+    public static string? Validate(ImageProjectPrefs? req)
     {
-        store.Save(ownerId, project.Id, prefs with
+        if (req is null || req.Count < 1 || req.Count > ImageEditCatalog.DefaultLimits.MaxCount)
+            return $"Число вариантов — от 1 до {ImageEditCatalog.DefaultLimits.MaxCount}";
+        if (req.CharacterSlug is { Length: > 0 } slug && !CharacterStore.IsValidSlug(slug.Trim()))
+            return "Недопустимый персонаж";
+        return null;
+    }
+
+    public Task<ImageProjectPrefs> SetAsync(string ownerId, Project project, ImageProjectPrefs prefs) =>
+        SetAsync(ownerId, ImageEditScope.Of(project), prefs);
+
+    // У личной области персонаж принудительно null: папки characters/ у неё нет
+    public async Task<ImageProjectPrefs> SetAsync(string ownerId, ImageEditScope scope, ImageProjectPrefs prefs)
+    {
+        store.Save(ownerId, scope.Key, prefs with
         {
             Provider = Blank(prefs.Provider),
             Model = Blank(prefs.Model),
-            CharacterSlug = Blank(prefs.CharacterSlug),
+            CharacterSlug = scope.Project is null ? null : Blank(prefs.CharacterSlug),
         });
-        var saved = Get(ownerId, project);
+        var saved = Get(ownerId, scope);
         if (broadcaster is not null)
         {
             try
             {
-                await broadcaster.ToOwner(ownerId, new ImageProjectPrefsChangedMessage(project.Id, saved));
+                await broadcaster.ToOwner(ownerId, new ImageProjectPrefsChangedMessage(scope.Key, saved));
             }
             catch (Exception ex)
             {
                 // Потерянное событие фронт догоняет GET …/prefs
-                log.LogDebug(ex, "Редактор картинок: настройки проекта {ProjectId} не разосланы", project.Id);
+                log.LogDebug(ex, "Редактор картинок: настройки области {ScopeKey} не разосланы", scope.Key);
             }
         }
         return saved;

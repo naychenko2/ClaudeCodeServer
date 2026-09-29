@@ -22,11 +22,23 @@ internal static class CliEnvironment
     public static readonly IReadOnlyList<string> InheritedEverywhere = ["PATH", "HOME", "USERPROFILE", "LANG"];
 
     /// <summary>
-    /// Дополнительно на Windows — минимум, без которого не стартуют сам CLI и его Bash:
-    /// системный каталог, оболочка, расширения исполняемых, временные и профильные каталоги.
+    /// Дополнительно на Windows — системные переменные пользовательской сессии, без секретов:
+    /// каталоги ОС и профиля, Program Files, имя машины и пользователя, сведения о процессоре.
+    /// Без <c>ALLUSERSPROFILE</c>/<c>ProgramData</c> <c>SHGetKnownFolderPath</c> отказывает
+    /// в известных папках, и падают NuGet, MSBuild, установщики (инцидент 2026-09-29).
+    /// Прокси, токены и учётки сюда не входят никогда.
     /// </summary>
     public static readonly IReadOnlyList<string> InheritedOnWindows =
-        ["SystemRoot", "ComSpec", "PATHEXT", "TEMP", "TMP", "APPDATA", "LOCALAPPDATA"];
+    [
+        "SystemRoot", "windir", "SystemDrive", "ComSpec", "PATHEXT", "OS",
+        "TEMP", "TMP", "APPDATA", "LOCALAPPDATA", "HOMEDRIVE", "HOMEPATH", "PUBLIC",
+        "ALLUSERSPROFILE", "ProgramData", "DriverData",
+        "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432",
+        "CommonProgramFiles", "CommonProgramFiles(x86)", "CommonProgramW6432",
+        "USERNAME", "USERDOMAIN", "COMPUTERNAME",
+        "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "PROCESSOR_IDENTIFIER",
+        "PROCESSOR_LEVEL", "PROCESSOR_REVISION",
+    ];
 
     /// <summary>
     /// Дополнительно не на Windows — графическая сессия: без неё приложения, которые ход

@@ -197,9 +197,8 @@ public class ClaudeSession : ILlmSessionAdapter
     private volatile int _currentTurnAgentDepth;
     // Реакционный авто-ход постановщика на доклад делегированной задачи (TaskExecutionService.
     // ReportToDelegatorAsync) — отдельный от agentDepth флаг: ход обычного пользовательского
-    // чата (agentDepth=0), но tasks_run_executor всё равно должен быть недоступен, иначе A может
-    // сам себе запустить только что созданную задачу → новый доклад → новая реакция →
-    // бесконечный платный цикл A↔B. Выставляется/сбрасывается вместе с _currentTurnAgentDepth.
+    // чата (agentDepth=0), на котором закрыты действия, учитывающие этот признак (запуск
+    // задач к ним больше не относится). Выставляется/сбрасывается вместе с _currentTurnAgentDepth.
     private volatile bool _currentTurnSuppressTasksExecute;
     // Стриминг tool_use: индекс content-блока → (id инструмента, накопленный partial_json).
     // Concurrent — для видимости между потоками пампа разных ходов

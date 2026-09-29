@@ -10,8 +10,9 @@ const store = new Map<string, string>();
   key: () => null,
   length: 0,
 } as Storage;
-import { activeStepOf, applyStep, continueFrom, versionSaved } from './actions';
-import { downloadName, versionPrimary } from './model';
+import { imageEditorApi } from '../api';
+import { activeStepOf, applyStep, continueFrom, saveAsInThread, saveToProject, versionSaved } from './actions';
+import { downloadName, stackSaveState, versionPrimary } from './model';
 import { __applyThreads, __resetThreadStore } from './threadStore';
 import { threadsApi, type ImageThread, type ImageThreadsState, type ImageThreadVersion } from './threadsApi';
 
@@ -124,5 +125,36 @@ describe('правка без ИИ и «Продолжить от неё»', () 
     expect(await continueFrom('p1', 'c1', t, 'origin')).toBe(true);
     expect(cur).toHaveBeenCalledWith('p1', 'c1', 't1', 'origin', 3);
     expect(remove).not.toHaveBeenCalled();
+  });
+});
+
+// Личный чат вне проекта (ревью ИЛ-3): «Сохранить в проект» нет ни в карточке-стопке, ни в
+// действиях — иначе клик уходит в проектную ручку и падает тостом «У личного чата нет проекта»
+describe('сохранение в личном чате', () => {
+  it('карточка-стопка личного чата не предлагает «Сохранить в проект» даже у несохранённого шага', () => {
+    expect(stackSaveState(legacy(), true, true, true)).toBeNull();
+    expect(stackSaveState(legacy(), true, false, true)).toBeNull();
+  });
+
+  it('у чата проекта карточка-стопка сохраняет несохранённый шаг и помечает сохранённый', () => {
+    expect(stackSaveState(legacy(), true, true, false)).toBe('save');
+    expect(stackSaveState(legacy(), true, false, false)).toBe('in-project');
+    expect(stackSaveState(legacy(), false, true, false)).toBeNull();
+  });
+
+  it('saveToProject и saveAsInThread в личной области не зовут проектную ручку', async () => {
+    const save = vi.spyOn(imageEditorApi(), 'save').mockResolvedValue({ path: 'img/hero-2.png' });
+    expect(await saveToProject('personal', 's1', withVersions(), 's2r')).toBeNull();
+    await saveAsInThread('personal', 's1', withVersions(), { folder: '', fileName: 'x' }, undefined, 's2r');
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('в проекте saveToProject сохраняет следующей версией', async () => {
+    // Тост успеха шлёт событие в window, а окружение тестов — node
+    vi.stubGlobal('window', { dispatchEvent: () => true });
+    const save = vi.spyOn(imageEditorApi(), 'save').mockResolvedValue({ path: 'img/hero-2.png' });
+    expect(await saveToProject('p1', 's1', withVersions(), 's2r')).toBe('img/hero-2.png');
+    expect(save).toHaveBeenCalledWith('p1', expect.objectContaining({ stepId: 's2r', mode: 'next-version' }));
+    vi.unstubAllGlobals();
   });
 });

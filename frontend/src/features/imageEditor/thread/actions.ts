@@ -5,6 +5,7 @@
 import { showToast } from 'aihome_shell/kit';
 import { imageEditorApi, nameTakenSuggestion, type ImageEncodeFormat } from '../api';
 import { nameStem } from '../saveAs';
+import { isPersonalScope } from '../scope';
 import {
   chainOf, currentStack, currentVersion, hasRunningLaunch, isEmptyThread, isLegacyThread, ORIGIN, originFile, saveFolder,
   versionStep,
@@ -94,7 +95,8 @@ export async function releaseFocus(projectId: string, sessionId: string, t: Imag
 export async function saveToProject(
   projectId: string, sessionId: string, t: ImageThread, stepId: string | null = activeStepOf(t),
 ): Promise<string | null> {
-  if (!stepId) return null;
+  // Личному чату сохранять некуда: кнопки там нет, а это — страховка от будущих вызовов
+  if (isPersonalScope(projectId) || !stepId) return null;
   const api = imageEditorApi();
   try {
     let res: { path: string };
@@ -121,7 +123,7 @@ export async function saveAsInThread(
   projectId: string, sessionId: string, t: ImageThread, v: { folder: string; fileName: string }, format?: ImageEncodeFormat,
   stepId: string | null = activeStepOf(t),
 ): Promise<void> {
-  if (!stepId) return;
+  if (isPersonalScope(projectId) || !stepId) return;
   try {
     const res = await imageEditorApi().save(projectId, {
       variant: 0, stepId, folder: v.folder, fileName: v.fileName, mode: 'as', sessionId, threadId: t.id,

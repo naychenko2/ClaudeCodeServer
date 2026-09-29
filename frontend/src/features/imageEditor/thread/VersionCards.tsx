@@ -16,6 +16,7 @@ import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import { isFreeUnit, money, variantsWord } from '../format';
 import { enterScope, isPersonalScope } from '../scope';
 import { continueFrom, saveToProject, versionSaved } from './actions';
+import { download, PERSONAL_DOWNLOAD_HINT } from './download';
 import {
   downloadName, findVersion, fromVersion, isEmptyThread, launchEndNote, launchOf, launchVersions, ORIGIN, saveFolder,
   threadName, versionHasImage, versionMeta, versionName, versionPrimary, versionStep,
@@ -29,28 +30,6 @@ import { queueText, useJobStatus, useProgress } from './useJobStatus';
 const ic = (I: typeof X, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
 
 const CARD_W = 300;
-
-function clickLink(href: string, name: string) {
-  const a = document.createElement('a');
-  a.href = href;
-  a.download = name;
-  a.click();
-}
-
-// Скачивание через blob: имя с расширением по типу ответа (у черновика его неоткуда взять).
-// Сбой запроса — обычная ссылка, как раньше
-async function download(src: string, name: (mime: string) => string) {
-  try {
-    const r = await fetch(src);
-    if (!r.ok) throw new Error(String(r.status));
-    const blob = await r.blob();
-    const url = URL.createObjectURL(blob);
-    clickLink(url, name(blob.type));
-    setTimeout(() => URL.revokeObjectURL(url), 60_000);
-  } catch {
-    clickLink(src, name(''));
-  }
-}
 
 function Note({ children }: { children: ReactNode }) {
   return <div style={{ fontSize: FS.sm, color: C.textMuted, lineHeight: 1.45 }}>{children}</div>;
@@ -134,7 +113,9 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
           </Button>
         )}
         {primary === 'download' && src && (
-          <Button size="xs" variant="secondary" leftIcon={ic(Download)} onClick={save}>Скачать</Button>
+          <Button size="xs" variant="secondary" leftIcon={ic(Download)} title={personal ? PERSONAL_DOWNLOAD_HINT : undefined} onClick={save}>
+            Скачать
+          </Button>
         )}
         {primary === 'continue' && (
           <Button size="xs" variant="secondary" leftIcon={ic(Undo2)} disabled={busy}

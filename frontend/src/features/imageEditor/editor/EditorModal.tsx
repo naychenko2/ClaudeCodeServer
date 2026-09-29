@@ -6,7 +6,7 @@
 // остаются в сторе нити и уходят чипом со следующим сообщением.
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Check, Eye, Save } from 'lucide-react';
+import { Check, Download, Eye, Save } from 'lucide-react';
 import {
   Button, Chip, Field, Modal, ModalActions, TextField, C, FS, R, SP, ICON_SIZE, ICON_STROKE, showToast, useIsMobile,
 } from 'aihome_shell/kit';
@@ -28,8 +28,9 @@ import {
   applyStep, continueFrom, rollbackTo, saveAsInThread, saveToProject, savedStepOf, versionSaved,
 } from '../thread/actions';
 import { JobBlock } from '../thread/ThreadCard';
+import { download, PERSONAL_DOWNLOAD_HINT } from '../thread/download';
 import {
-  chainOf, currentIndex, currentStack, currentVersion, findVersion, isLegacyThread, ORIGIN, originFile, saveFolder, stepOf,
+  chainOf, currentIndex, currentStack, currentVersion, downloadName, findVersion, isLegacyThread, ORIGIN, originFile, saveFolder, stepOf,
   threadName, versionHasImage, versionLabel, versionName, versionShort, versionsOf, versionStep,
 } from '../thread/model';
 import { closeEditor, getThreadMarks, getThreadsState, setThreadMarks, showEditorVersion, useThreads } from '../thread/threadStore';
@@ -71,7 +72,7 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null }
 }) {
   const mobile = useIsMobile();
   const api = useMemo(() => imageEditorApi(), []);
-  // Личный чат вне проекта: сохранять некуда — «Скачать» живёт в карточке версии
+  // Личный чат вне проекта: сохранять некуда — вместо «Сохранить» в футере «Скачать»
   const personal = isPersonalScope(projectId);
   const state = useThreads(projectId, sessionId);
   const thread = state.threads.find(t => t.id === threadId) ?? null;
@@ -303,7 +304,13 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null }
                   : 'Пометки уйдут со следующим сообщением — в режиме «Картинка» или агенту'}
               </span>
             )}
-            {!personal && (
+            {personal ? (
+              <Button size="sm" variant="secondary" leftIcon={ic(Download)} disabled={!src || !hasImage || transforming}
+                title={PERSONAL_DOWNLOAD_HINT}
+                onClick={() => { if (src) void download(src, mime => (viewed ? downloadName(thread, viewed, mime) : threadName(thread))); }}>
+                Скачать
+              </Button>
+            ) : (
               <>
                 <Button size="sm" variant="secondary" leftIcon={ic(Save)} disabled={!canSave} onClick={() => setSaveAs(true)}>Сохранить как…</Button>
                 <Button size="sm" variant="secondary" disabled={!canSave || inProject} loading={saving}

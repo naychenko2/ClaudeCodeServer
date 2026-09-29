@@ -171,6 +171,16 @@ export function versionPrimary(
   return saved ? null : 'save';
 }
 
+// Правый край действий карточки-стопки: «Сохранить в проект», метка «В проекте» или ничего.
+// Личному чату сохранять некуда — у него остаётся только «Скачать»
+export function stackSaveState(
+  t: ImageThread, isCurrent: boolean, unsaved: boolean, personal: boolean,
+): 'save' | 'in-project' | null {
+  if (!isCurrent || personal) return null;
+  if (unsaved) return 'save';
+  return t.file ? 'in-project' : null;
+}
+
 // Имя скачанного файла: у картинки проекта — имя файла, у черновика — «image-v3.png»
 // (расширение — по типу ответа сервера)
 export function downloadName(t: ImageThread, v: ImageThreadVersion, mime: string): string {

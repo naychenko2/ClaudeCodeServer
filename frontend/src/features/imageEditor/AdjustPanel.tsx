@@ -6,6 +6,7 @@ import { Crop, FlipHorizontal2, FlipVertical2, Link2, Link2Off, RotateCcw, Rotat
 import { Button, IconButton, SegmentedControl, TextField, ICON_SIZE, ICON_STROKE, C, FS, SP } from 'aihome_shell/kit';
 import type { ImageEditorApi, ImageEncodeFormat, ImageEncodeSpec, ImageTransformBase, ImageTransformOp } from './api';
 import { SectionHint } from './EditorSections';
+import { isPersonalScope } from './scope';
 import {
   boxForm, containDims, FORMAT_PRESETS, formatBytes, lockedHeight, lockedWidth, padBgFor, presetDims, QUALITY_DEFAULT, QUALITY_MIN,
   sameAspect, SIZE_PRESETS, sizeFormChanged, sizeFormOps, type BoxFit, type Dims, type PadBg, type SizeForm,
@@ -63,7 +64,9 @@ export function AdjustPanel({ api, projectId, stepId, size, base, sourceFormat, 
         ? <SizeCompress key={`${stepId}:${size.w}x${size.h}:${sourceFormat}`} api={api} projectId={projectId} size={size} base={base}
             sourceFormat={sourceFormat} beforeBytes={beforeBytes} onApply={onApply} />
         : <SectionHint>{blockReason || 'Картинка загружается…'}</SectionHint>}
-      <SectionHint>Каждая правка — отдельный шаг истории, оригинал в проекте не меняется.</SectionHint>
+      <SectionHint>
+        {isPersonalScope(projectId) ? 'Каждая правка — отдельный шаг истории.' : 'Каждая правка — отдельный шаг истории, оригинал в проекте не меняется.'}
+      </SectionHint>
     </div>
   );
 }

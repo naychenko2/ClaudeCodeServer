@@ -11,12 +11,13 @@ import {
 } from 'aihome_shell/kit';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import { imageEditorApi } from '../api';
-import { enterScope } from '../scope';
+import { enterScope, isPersonalScope } from '../scope';
 import { isFreeUnit, money, variantsWord } from '../format';
 import { dismissJob, saveToProject, savedStepOf, takeVariant, workWith } from './actions';
+import { download } from './download';
 import {
   chainOf, currentIndex, currentStack, findStack, findVersion, interruptedOf, isEmptyThread, isLegacyThread, ORIGIN, saveFolder,
-  stepOf, threadName, versionLabel,
+  stackSaveState, stepOf, threadName, versionLabel,
 } from './model';
 import { recordOf } from './records';
 import { openEditor, useThreads } from './threadStore';
@@ -70,13 +71,6 @@ function StepImage({ src }: { src: string | null }) {
         style={{ display: 'block', maxWidth: '100%', maxHeight: 280, objectFit: 'contain' }} />
     </div>
   );
-}
-
-function download(src: string, name: string) {
-  const a = document.createElement('a');
-  a.href = src;
-  a.download = name;
-  a.click();
 }
 
 // ── Идущая генерация и варианты ──
@@ -223,6 +217,8 @@ function StackCard({ projectId, sessionId, thread, stack, focused, events }: {
   const src = pos ? imageSrc(projectId, thread, pos.stepId) : null;
   const folder = saveFolder(thread);
   const interrupted = isCurrent ? interruptedOf(thread, events) : null;
+  const personal = isPersonalScope(projectId);
+  const saveState = stackSaveState(thread, isCurrent, unsaved, personal);
 
   const edit = async () => {
     if (!focused && !(await workWith(projectId, sessionId, thread.id))) return;
@@ -235,7 +231,9 @@ function StackCard({ projectId, sessionId, thread, stack, focused, events }: {
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap', fontSize: FS.sm }}>
         <span style={{ display: 'inline-flex', color: C.textMuted }}>{ic(ImageIcon, ICON_SIZE.sm)}</span>
         <span style={{ fontWeight: 600, color: C.textHeading, overflowWrap: 'anywhere' }}>{threadName(thread)}</span>
-        <span style={{ color: C.textSecondary }}>· {draft ? `сохранять в ${folder ? `${folder}/` : 'корень проекта'}` : versionLabel(thread, pos, saved)}</span>
+        {!(draft && personal) && (
+          <span style={{ color: C.textSecondary }}>· {draft ? `сохранять в ${folder ? `${folder}/` : 'корень проекта'}` : versionLabel(thread, pos, saved)}</span>
+        )}
         {stack?.old && <Badge size="xs" tone="neutral">старая стопка</Badge>}
         {focused && isCurrent && <Badge size="xs" tone="accent">в работе</Badge>}
         {chain.length > 1 && (
@@ -268,13 +266,12 @@ function StackCard({ projectId, sessionId, thread, stack, focused, events }: {
           {!focused && <Button size="sm" variant="secondary" onClick={() => { void workWith(projectId, sessionId, thread.id); }}>Работать с этой</Button>}
           <Button size="sm" variant={focused ? 'secondary' : 'ghost'} leftIcon={ic(Pencil)} onClick={() => { void edit(); }}>Редактировать</Button>
           {src && (
-            <Button size="sm" variant="ghost" leftIcon={ic(Download)} title="Скачать" onClick={() => download(src, threadName(thread))}>
+            <Button size="sm" variant="ghost" leftIcon={ic(Download)} title="Скачать" onClick={() => { void download(src, () => threadName(thread)); }}>
               {mobile ? '' : 'Скачать'}
             </Button>
           )}
-          {isCurrent && (unsaved
-            ? <Button size="sm" variant="primary" loading={saving} onClick={() => { void save(); }}>Сохранить в проект</Button>
-            : thread.file && <span style={{ fontSize: FS.xs, color: C.textMuted }}>В проекте</span>)}
+          {saveState === 'save' && <Button size="sm" variant="primary" loading={saving} onClick={() => { void save(); }}>Сохранить в проект</Button>}
+          {saveState === 'in-project' && <span style={{ fontSize: FS.xs, color: C.textMuted }}>В проекте</span>}
         </Acts>
       )}
     </Frame>

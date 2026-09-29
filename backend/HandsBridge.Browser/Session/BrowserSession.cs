@@ -6,9 +6,6 @@ using ClaudeHomeServer.HandsBridge.Browser.Snapshot;
 
 namespace ClaudeHomeServer.HandsBridge.Browser.Session;
 
-/// <summary>Ответ инструмента <c>browser_*</c>: текст модели (по-английски) и, для снимка экрана, PNG.</summary>
-public sealed record BrowserReply(string Text, bool IsError = false, byte[]? Png = null);
-
 /// <summary>
 /// Состояние браузерной руки на процесс моста: текущая вкладка, таблица ссылок последнего снимка
 /// и заметки для модели. Гейт (<c>HandsPolicy</c>) уже пропустил вызов — здесь только исполнение.
@@ -263,30 +260,44 @@ public sealed class BrowserSession(IBrowserSource source)
 
     private async Task<BrowserReply> RunAsync(Func<CdpBrowser, Task<BrowserReply>> action, CancellationToken cancellationToken)
     {
+        var started = Stopwatch.GetTimestamp();
+        var meter = CdpMeter.Start();
         await _sync.WaitAsync(cancellationToken);
+        var queue = Stopwatch.GetElapsedTime(started);
         try
         {
             var acquired = await source.AcquireAsync(cancellationToken);
-            if (acquired.Browser is null)
-                return new BrowserReply(acquired.Refusal ?? "The browser is not available.", IsError: true);
-            if (!ReferenceEquals(acquired.Browser, _browser))
-                Reset(acquired.Browser, acquired.Restarted);
-
+            var acquire = Stopwatch.GetElapsedTime(started) - queue;
             BrowserReply reply;
-            try
+            if (acquired.Browser is null)
             {
-                reply = await action(acquired.Browser);
+                reply = new BrowserReply(acquired.Refusal ?? "The browser is not available.", IsError: true);
             }
-            catch (CdpDisconnectedException ex)
+            else
             {
-                reply = new BrowserReply($"{ex.Message}. The next browser_* call starts the browser again.", IsError: true);
-            }
-            catch (CdpException ex)
-            {
-                reply = new BrowserReply(ex.Message, IsError: true);
+                if (!ReferenceEquals(acquired.Browser, _browser))
+                    Reset(acquired.Browser, acquired.Restarted);
+
+                try
+                {
+                    reply = await action(acquired.Browser);
+                }
+                catch (CdpDisconnectedException ex)
+                {
+                    reply = new BrowserReply($"{ex.Message}. The next browser_* call starts the browser again.", IsError: true);
+                }
+                catch (CdpException ex)
+                {
+                    reply = new BrowserReply(ex.Message, IsError: true);
+                }
+
+                reply = WithNotices(reply);
             }
 
-            return WithNotices(reply);
+            return reply with
+            {
+                Timing = new BrowserTiming(Stopwatch.GetElapsedTime(started), queue, acquire, meter.Calls, meter.Cdp, meter.Wait),
+            };
         }
         finally
         {

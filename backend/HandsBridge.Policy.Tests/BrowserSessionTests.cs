@@ -44,6 +44,36 @@ public sealed class BrowserSessionTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Every_reply_carries_a_timing_for_hands_log()
+    {
+        _source.Current.LoadDelay = TimeSpan.FromMilliseconds(150);
+
+        var reply = await _session.NavigateAsync("https://example.org/", CancellationToken.None);
+
+        var timing = Assert.IsType<BrowserTiming>(reply.Timing);
+        Assert.True(timing.CdpCalls >= 3, $"CDP-вызовов {timing.CdpCalls}");
+        Assert.True(timing.Wait >= TimeSpan.FromMilliseconds(100), $"ожидание {timing.Wait}");
+        Assert.True(timing.Total >= timing.Cdp + timing.Wait - TimeSpan.FromMilliseconds(5));
+        var line = reply.LogLine("browser_navigate");
+        Assert.StartsWith("браузер: browser_navigate ", line);
+        Assert.Contains($"CDP {timing.CdpCalls} выз.", line);
+        Assert.Contains($"ответ {reply.Text.Length} симв.", line);
+        Assert.DoesNotContain("ошибка", line);
+    }
+
+    [Fact]
+    public async Task Refusal_is_timed_too_and_its_text_goes_to_the_log()
+    {
+        _source.Refusal = "Google Chrome was not found.";
+
+        var reply = await _session.SnapshotAsync(null, CancellationToken.None);
+
+        Assert.NotNull(reply.Timing);
+        Assert.Equal(0, reply.Timing!.CdpCalls);
+        Assert.Contains("ошибка: Google Chrome was not found.", reply.LogLine("browser_snapshot"));
+    }
+
+    [Fact]
     public async Task Click_goes_through_cdp_input_on_the_node_of_the_ref()
     {
         await Snapshot();
@@ -274,9 +304,16 @@ public sealed class BrowserSessionTests : IAsyncLifetime
                 var id = frame.GetProperty("id").GetInt32();
                 _pipe.Frame($$"""{"id":{{id}},"result":{{Result(method, parameters)}}}""");
                 if (method == "Page.navigate")
+                {
+                    if (LoadDelay > TimeSpan.Zero)
+                        await Task.Delay(LoadDelay);
                     _pipe.Frame("""{"method":"Page.loadEventFired","sessionId":"S1","params":{}}""");
+                }
             }
         }
+
+        /// <summary>Сколько страница «грузится» после ответа на Page.navigate.</summary>
+        public TimeSpan LoadDelay { get; set; }
 
         string Result(string method, JsonElement parameters) => method switch
         {

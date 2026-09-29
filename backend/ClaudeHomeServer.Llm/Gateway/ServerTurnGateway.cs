@@ -19,4 +19,8 @@ public sealed class ServerTurnGateway(UpstreamSelector selector, TurnTokenServic
         selector.StartTurn(tokens, ownerId, sessionId, deviceId: null, model, TurnTokenLifetime.Process);
 
     public void End(string gatewayTurnId) => tokens.RevokeTurn(gatewayTurnId);
+
+    // Токен ещё принимается шлюзом: его мог снять потолок жизни TurnTokenService, пока процесс
+    // жив, — такому процессу следующий ход не отдаём, иначе он получил бы 401
+    public bool IsAlive(string gatewayTurnId, string token) => tokens.Validate(gatewayTurnId, token) is not null;
 }

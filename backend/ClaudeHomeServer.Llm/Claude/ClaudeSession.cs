@@ -311,6 +311,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // Ход шлюза LLM этого процесса (серверный ход провайдера, ADR-016 §2): отзывается
         // финализацией прогона. null — процесс ходит в провайдера напрямую.
         public string? GatewayTurnId { get; init; }
+        public string? GatewayToken { get; init; }
         // turnId запуска — по нему pid-файл прогона в песочнице (Kill контейнерного pgid)
         public string? LaunchTurnId { get; init; }
         // Снимок промпта, с которым прогон СТАРТОВАЛ. Ходы, доигрывающиеся в этом же процессе,
@@ -847,15 +848,21 @@ public class ClaudeSession : ILlmSessionAdapter
 
     // Настоящий токен шлюза новому процессу: заглушки env заменяются уже после сигнатуры.
     // Отзыв — финализация прогона (FinalizeRunAsync) или сбой запуска.
-    private string BindGatewayTurn(IDictionary<string, string> env)
+    private (string TurnId, string Token) BindGatewayTurn(IDictionary<string, string> env)
     {
         var start = _serverGateway!.Start(Info.OwnerId!, Info.Id, EffectiveModel);
         if (start.Token is not { } issued)
             throw new InvalidOperationException(start.FailureText ?? "Шлюз LLM не выдал ходу маршрут.");
         env["ANTHROPIC_BASE_URL"] = GatewayBaseUrl(issued.Grant.TurnId);
         env["ANTHROPIC_CUSTOM_HEADERS"] = env["ANTHROPIC_CUSTOM_HEADERS"].Replace(GatewayTokenPlaceholder, issued.Token);
-        return issued.Grant.TurnId;
+        return (issued.Grant.TurnId, issued.Token);
     }
+
+    // Живой процесс получает следующий ход, только пока шлюз принимает его токен: потолок
+    // жизни TurnTokenService (страховка от потерянного отзыва) мог снять токен, а сигнатура
+    // по заглушкам этого не видит. Процесс без шлюза — без ограничений.
+    private bool GatewayTokenAlive(CliRun run) =>
+        run.GatewayTurnId is null || _serverGateway?.IsAlive(run.GatewayTurnId, run.GatewayToken!) == true;
 
     // Спан идущего хода — чтобы дописать в него фактическую модель, когда CLI её назовёт.
     // Тег ставится в двух местах, но никогда одновременно: при старте хода (до запуска
@@ -3912,7 +3919,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // окружение не изменилось — отдаём сообщение живому процессу в stdin, агенты
         // переживают смену хода. Собранный temp MCP-конфиг не пригодился — убираем.
         var existing = _run;
-        if (existing is not null && existing.TurnDone && existing.Signature == signature
+        if (existing is not null && existing.TurnDone && existing.Signature == signature && GatewayTokenAlive(existing)
             && TrySubmitTurn(existing, userMessageJson, turnSeq))
         {
             Console.WriteLine("[ClaudeSession] Ход отдан живому процессу прогона (фоновые агенты доживают)");
@@ -3988,7 +3995,7 @@ public class ClaudeSession : ILlmSessionAdapter
 
         // Ход через шлюз LLM идёт новым процессом — только теперь выдаём ему настоящий токен:
         // сигнатура посчитана по заглушкам, живому процессу ход отдан выше с его токеном
-        var gatewayTurnId = viaGateway ? BindGatewayTurn(envOverrides) : null;
+        var (gatewayTurnId, gatewayToken) = viaGateway ? BindGatewayTurn(envOverrides) : default((string?, string?));
 
         // ArgumentList/Args экранирует каждый аргумент корректно (важно для многострочного
         // системного промпта); env-оверрайды собраны выше — они входят в сигнатуру прогона.
@@ -4039,7 +4046,7 @@ public class ClaudeSession : ILlmSessionAdapter
 
             _fileWatcher.Start();
 
-            run = new CliRun { Process = process, Signature = signature, TurnMcpPath = turnMcpPath, LaunchTurnId = _currentTurnId, PromptSuggestionsActive = promptSuggestionsActive, PromptSnapshotId = turnSnapshotId, LastTurnSeq = turnSeq, GatewayTurnId = gatewayTurnId };
+            run = new CliRun { Process = process, Signature = signature, TurnMcpPath = turnMcpPath, LaunchTurnId = _currentTurnId, PromptSuggestionsActive = promptSuggestionsActive, PromptSnapshotId = turnSnapshotId, LastTurnSeq = turnSeq, GatewayTurnId = gatewayTurnId, GatewayToken = gatewayToken };
             // Смерть процесса — по событию ОС (см. HandleProcessExitedAsync): EnableRaisingEvents=true
             // выставлен в spec. Подписка обязательна: закрытие stdout ненадёжно как сигнал гибели
             // (дочерние node-процессы MCP держат pipe — P27), и без Exited обрыв хода зависает

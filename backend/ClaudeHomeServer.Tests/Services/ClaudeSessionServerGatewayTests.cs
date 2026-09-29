@@ -172,6 +172,19 @@ public sealed class ClaudeSessionServerGatewayTests : IDisposable
         await KillAndWaitAsync(second);
     }
 
+    // Живому процессу следующий ход отдаётся, только пока шлюз принимает его токен
+    [Fact]
+    public void IsAlive_ЖивойТокенДа_ОтозванныйИЧужойНет()
+    {
+        var gateway = new ServerTurnGateway(_kit.Selector, _tokens, _kit.Options);
+        var issued = gateway.Start("owner-1", "chat", "mmx-m3").Token!;
+
+        gateway.IsAlive(issued.Grant.TurnId, issued.Token).Should().BeTrue();
+        gateway.IsAlive(issued.Grant.TurnId, "чужой").Should().BeFalse();
+        gateway.End(issued.Grant.TurnId);
+        gateway.IsAlive(issued.Grant.TurnId, issued.Token).Should().BeFalse();
+    }
+
     [Fact]
     public async Task СбойЗапуска_ТокенОтозван()
     {

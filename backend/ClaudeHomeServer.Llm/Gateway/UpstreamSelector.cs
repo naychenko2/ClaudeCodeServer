@@ -115,6 +115,12 @@ public class UpstreamSelector(
             pool.MarkAuthDead(key);
     }
 
+    // Ответ upstream нужно чинить нормализатором tool_use.input (флаг провайдера
+    // NormalizeToolInputArrays). Подписки Claude — никогда: у родной модели дефекта нет.
+    public bool NormalizesToolInput(GatewayRoute route) =>
+        route.Kind == GatewayUpstreamKind.Provider
+        && providers.GetByKey(route.ProviderKey) is { NormalizeToolInputArrays: true };
+
     // Модель, с которой запрос уйдёт upstream.
     public string RewriteModel(GatewayRoute route, string? requested)
     {

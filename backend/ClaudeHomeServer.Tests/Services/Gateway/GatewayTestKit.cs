@@ -57,6 +57,12 @@ public sealed class GatewayTestKit : IDisposable
             ["LlmProviders:deepseek:SmallModel"] = "deepseek-v4-flash",
             ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-v4-pro",
             ["LlmProviders:deepseek:Models:1:Id"] = "deepseek-v4-flash",
+            // Провайдер с дефектом tool_use.input (как minimax): ответ чинит нормализатор шлюза
+            ["LlmProviders:mmx:DisplayName"] = "MMX",
+            ["LlmProviders:mmx:AnthropicBaseUrl"] = "https://mmx.test/anthropic",
+            ["LlmProviders:mmx:ApiKey"] = "mmx-key",
+            ["LlmProviders:mmx:NormalizeToolInputArrays"] = "true",
+            ["LlmProviders:mmx:Models:0:Id"] = "mmx-m3",
         };
         foreach (var (key, oauth, apiKey) in subs)
         {

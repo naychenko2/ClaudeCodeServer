@@ -346,6 +346,8 @@ public sealed class LlmSubsystem : IAppSubsystem
         services.AddSingleton<Gateway.EgressTunnelLimiter>();
         // Шов для удалённого раннера (Execution): выдача маршрута и токена хода на устройстве
         services.AddSingleton<ClaudeHomeServer.Services.Execution.IDeviceTurnGateway, Gateway.DeviceTurnGateway>();
+        // Серверный ход провайдера с NormalizeToolInputArrays — тоже через шлюз (ADR-016 §2)
+        services.AddSingleton<Gateway.ServerTurnGateway>();
         services.AddHttpClient(Gateway.LlmGatewayEndpoints.HttpClientName, c => c.Timeout = Timeout.InfiniteTimeSpan);
 
         // WorkflowAgentParser / WorkflowWatcher / WorkflowMetaResolver — статические

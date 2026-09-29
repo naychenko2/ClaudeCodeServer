@@ -18,6 +18,14 @@ public sealed class LlmGatewayOptions
 
     // Выход наружу собственного трафика CLI устройства (задача 2.9).
     public EgressGatewayOptions Egress { get; set; } = new();
+
+    // Диагностика дефекта провайдера (NormalizeToolInputArrays): каталог, куда шлюз кладёт
+    // тело ЗАПРОСА, ответ на который пришлось нормализовать, — чтобы воспроизвести дефект
+    // голым запросом к провайдеру. Пусто — дамп выключен. В теле весь разговор чата
+    // (ключей там нет: заголовки не пишутся), поэтому включать только на время разбора и
+    // не класть под data/ — оттуда всё уезжает в бэкапы. Храним последние DumpKeep файлов.
+    public string DumpNormalizedRequestsDir { get; set; } = "";
+    public int DumpKeep { get; set; } = 5;
 }
 
 public sealed class EgressGatewayOptions

@@ -214,6 +214,18 @@ UI скрывает недоступное (`useModelCaps` в `lib/models.ts`), 
 собирается отдельно от хоста и может нести CLI старее — работающие фоновые задачи важнее
 экономии файлов). Ручной дублер — `Claude:PersistOneShotSessions=true`.
 
+**Дефект `tool_use.input` у провайдера (`NormalizeToolInputArrays`).** MiniMax-M3 в боевом
+чате отдал массив аргумента MCP-инструмента обёрткой `{"item": [...]}` (fal `submit_job` →
+422). У провайдера с этим флагом серверный ход идёт не напрямую, а через шлюз LLM
+(`/gw/t/{turnId}/llm`, [ADR-016](../adr/ADR-016-local-projects.md) §2, пункт про серверный
+ход): `ToolInputNormalizer` разворачивает обёртку, сверяясь с `input_schema` инструмента
+из запроса, SSE-фильтр копит только `input_json_delta` tool_use-блоков, текст идёт без
+задержки. Каждое срабатывание — `LogWarning` категории `ClaudeHomeServer.LlmGateway`: нет
+срабатываний — флаг снимать. Требует `LlmGateway:Enabled=true`, иначе ход идёт напрямую
+с предупреждением. Для разбора `LlmGateway:DumpNormalizedRequestsDir` сохраняет тело
+запроса, ответ на который пришлось чинить (в теле весь разговор — вне `data/`, только на
+время разбора). One-shot вызовы (`OneShotClaudeRunner`) через шлюз не ходят.
+
 ## BareMode: короткая карта вместо полной CLAUDE.md
 
 Для локальных моделей с маленьким окном (vLLM/llama.cpp/qwen3.8-27b на 65–245 КБ)

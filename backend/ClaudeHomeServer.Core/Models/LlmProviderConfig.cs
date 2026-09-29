@@ -177,6 +177,13 @@ public class LlmProviderConfig
     // (cache_control), и менять ей порядок секций ради чужого выигрыша незачем.
     public bool RecallInTurnText { get; set; }
 
+    // Провайдер отдаёт массивы аргументов инструментов обёрткой {"item": [...]} (дефект
+    // MiniMax-M3, 29.09.2026) — ответ модели чинит шлюз LLM (ToolInputNormalizer). Ответ
+    // CCS видит только на пути через шлюз, поэтому серверные ходы такого провайдера идут
+    // через него же (ADR-016 §2, серверный ход провайдера). false — байты ответа как есть,
+    // ход напрямую на AnthropicBaseUrl, как раньше.
+    public bool NormalizeToolInputArrays { get; set; }
+
     public string EffectiveModelPrefix => string.IsNullOrWhiteSpace(ModelPrefix) ? Key : ModelPrefix;
 
     // Все префиксы для резолва по id модели (см. ModelPrefixes). Пустые строки

@@ -1,4 +1,4 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
@@ -308,6 +308,10 @@ public class ClaudeSession : ILlmSessionAdapter
         // ход можно отдать живому процессу только при полном совпадении (см. BuildLaunchSignature)
         public required string Signature { get; init; }
         public string? TurnMcpPath { get; init; }
+        // Ход шлюза LLM этого процесса (серверный ход провайдера, ADR-016 §2): отзывается
+        // финализацией прогона. null — процесс ходит в провайдера напрямую.
+        public string? GatewayTurnId { get; init; }
+        public string? GatewayToken { get; init; }
         // turnId запуска — по нему pid-файл прогона в песочнице (Kill контейнерного pgid)
         public string? LaunchTurnId { get; init; }
         // Снимок промпта, с которым прогон СТАРТОВАЛ. Ходы, доигрывающиеся в этом же процессе,
@@ -810,6 +814,56 @@ public class ClaudeSession : ILlmSessionAdapter
     // стабильности: два хода чата с одинаковыми свойствами обязаны дать одну сигнатуру
     internal string? LastLaunchSignature { get; private set; }
 
+    // Серверный ход провайдера с NormalizeToolInputArrays идёт через шлюз LLM (ADR-016 §2):
+    // ответ модели чинит нормализатор шлюза, ключ провайдера подставляет шлюз и в env процесса
+    // не попадает. null (тесты без DI, чат проекта на устройстве) — ход напрямую, как раньше.
+    private readonly Gateway.ServerTurnGateway? _serverGateway;
+    private readonly string? _llmGatewayApiUrl;
+
+    // Заглушки адреса и токена шлюза в env: env входит в сигнатуру запуска, а настоящий токен
+    // выдаётся только НОВОМУ процессу (BindGatewayTurn) — иначе сигнатура менялась бы каждый
+    // ход и живой процесс не получал бы следующий ход. Длины равны настоящим (Guid "N" и
+    // Base64Url 32 байт): оценка командной строки в ApplyBudget считает env вместе с ними.
+    private static readonly string GatewayTurnPlaceholder = new('0', 32);
+    private static readonly string GatewayTokenPlaceholder = new('0', 43);
+    // Авторизация CLI шлюзу не нужна (её заменяет токен хода), но CLI без неё не стартует
+    private const string GatewayAuthPlaceholder = "ccs-gateway";
+
+    // Ход провайдера с дефектом tool_use.input — через шлюз. Флаг есть, а шлюз выключен — ход
+    // идёт напрямую (чат не должен падать из-за костыля), дефект при этом не компенсируется.
+    private bool UseServerGateway()
+    {
+        if (_providers?.ResolveByModel(EffectiveModel) is not { NormalizeToolInputArrays: true } provider)
+            return false;
+        if (_serverGateway is null || string.IsNullOrWhiteSpace(_llmGatewayApiUrl) || string.IsNullOrEmpty(Info.OwnerId))
+            return false;
+        if (_serverGateway.Enabled) return true;
+        (_sessionLog ?? (ILogger?)_log)?.LogWarning(
+            "Провайдер {Provider} требует нормализатора tool_use.input, но шлюз LLM выключен (LlmGateway:Enabled) — ход идёт напрямую, дефект провайдера не компенсируется",
+            provider.Key);
+        return false;
+    }
+
+    private string GatewayBaseUrl(string turnId) => $"{_llmGatewayApiUrl!.TrimEnd('/')}/gw/t/{turnId}/llm";
+
+    // Настоящий токен шлюза новому процессу: заглушки env заменяются уже после сигнатуры.
+    // Отзыв — финализация прогона (FinalizeRunAsync) или сбой запуска.
+    private (string TurnId, string Token) BindGatewayTurn(IDictionary<string, string> env)
+    {
+        var start = _serverGateway!.Start(Info.OwnerId!, Info.Id, EffectiveModel);
+        if (start.Token is not { } issued)
+            throw new InvalidOperationException(start.FailureText ?? "Шлюз LLM не выдал ходу маршрут.");
+        env["ANTHROPIC_BASE_URL"] = GatewayBaseUrl(issued.Grant.TurnId);
+        env["ANTHROPIC_CUSTOM_HEADERS"] = env["ANTHROPIC_CUSTOM_HEADERS"].Replace(GatewayTokenPlaceholder, issued.Token);
+        return (issued.Grant.TurnId, issued.Token);
+    }
+
+    // Живой процесс получает следующий ход, только пока шлюз принимает его токен: потолок
+    // жизни TurnTokenService (страховка от потерянного отзыва) мог снять токен, а сигнатура
+    // по заглушкам этого не видит. Процесс без шлюза — без ограничений.
+    private bool GatewayTokenAlive(CliRun run) =>
+        run.GatewayTurnId is null || _serverGateway?.IsAlive(run.GatewayTurnId, run.GatewayToken!) == true;
+
     // Спан идущего хода — чтобы дописать в него фактическую модель, когда CLI её назовёт.
     // Тег ставится в двух местах, но никогда одновременно: при старте хода (до запуска
     // процесса, поток RunTurnAsync) и потом из ридера stdout, пока RunTurnAsync ждёт
@@ -831,8 +885,11 @@ public class ClaudeSession : ILlmSessionAdapter
         ModelAssignmentResolver? assignments = null,
         FileChangeAttributor? fileChangeAttributor = null,
         ILogger? logger = null,
-        ILogger<ClaudeSession>? sessionLogger = null)
+        ILogger<ClaudeSession>? sessionLogger = null,
+        Gateway.ServerTurnGateway? serverGateway = null)
     {
+        _serverGateway = serverGateway;
+        _llmGatewayApiUrl = context.LlmGatewayApiUrl;
         _log = logger;
         _sessionLog = sessionLogger;
         _providers = providers;
@@ -3628,6 +3685,11 @@ public class ClaudeSession : ILlmSessionAdapter
             ? lp : null;
         if (localProvider is not null)
             httpApiUrls.Add(localProvider.AnthropicBaseUrl);
+        // Ход через шлюз LLM: эндпоинт хода — адрес бэкенда, обход прокси нужен ему самому,
+        // как локальному провайдеру, независимо от транспорта MCP
+        var viaGateway = UseServerGateway();
+        if (viaGateway)
+            httpApiUrls.Add(_llmGatewayApiUrl);
         // Унаследованное — СКЛЕЙКОЙ обеих форм, а не «??»: на Linux словарь окружения
         // регистрозависим, и пустая NO_PROXY выигрывала у осмысленного lowercase-списка,
         // обнуляя его. Пустая строка — отсутствие значения; дедупликацию делает Merge.
@@ -3638,7 +3700,7 @@ public class ClaudeSession : ILlmSessionAdapter
         var noProxy = Services.Mcp.Http.LoopbackProxyBypass.ForTurn(
             httpMcpActive,
             _launcher.IsSandboxed,
-            localProvider is not null,
+            localProvider is not null || viaGateway,
             inheritedNoProxy,
             httpApiUrls.ToArray());
         if (noProxy is not null)
@@ -3662,9 +3724,24 @@ public class ClaudeSession : ILlmSessionAdapter
         // ANTHROPIC_CUSTOM_HEADERS к каждому обращению к API.
         //
         // Только у локального провайдера: наружу, чужому эндпоинту, id нашей сессии не нужен.
+        //
+        // Ход через шлюз LLM: адрес шлюза вместо эндпоинта провайдера, токен хода — заголовком,
+        // ключ провайдера из env убираем (его подставляет шлюз). Значения — заглушки, настоящие
+        // ставит BindGatewayTurn новому процессу. Заголовки склеиваются, а не перезаписываются:
+        // CLI читает ANTHROPIC_CUSTOM_HEADERS построчно.
+        var customHeaders = new List<string>();
+        if (viaGateway)
+        {
+            envOverrides["ANTHROPIC_BASE_URL"] = GatewayBaseUrl(GatewayTurnPlaceholder);
+            envOverrides["ANTHROPIC_AUTH_TOKEN"] = GatewayAuthPlaceholder;
+            envOverrides["ANTHROPIC_API_KEY"] = GatewayAuthPlaceholder;
+            customHeaders.Add($"{Gateway.TurnTokenEndpointFilter.HeaderName}: {GatewayTokenPlaceholder}");
+        }
         if (localProvider is not null)
-            envOverrides["ANTHROPIC_CUSTOM_HEADERS"] = $"X-CCS-Session: {Info.Id}";
-        else if (_subscriptionPool?.HasExtra == true
+            customHeaders.Add($"X-CCS-Session: {Info.Id}");
+        if (customHeaders.Count > 0)
+            envOverrides["ANTHROPIC_CUSTOM_HEADERS"] = string.Join("\n", customHeaders);
+        if (localProvider is null && _subscriptionPool?.HasExtra == true
             && _providers?.GetByKey(Info.Provider) is null)
         {
             // Подписка пула (включая "claude", если задана с токеном) — свой OAuth-профиль и
@@ -3842,7 +3919,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // окружение не изменилось — отдаём сообщение живому процессу в stdin, агенты
         // переживают смену хода. Собранный temp MCP-конфиг не пригодился — убираем.
         var existing = _run;
-        if (existing is not null && existing.TurnDone && existing.Signature == signature
+        if (existing is not null && existing.TurnDone && existing.Signature == signature && GatewayTokenAlive(existing)
             && TrySubmitTurn(existing, userMessageJson, turnSeq))
         {
             Console.WriteLine("[ClaudeSession] Ход отдан живому процессу прогона (фоновые агенты доживают)");
@@ -3916,6 +3993,10 @@ public class ClaudeSession : ILlmSessionAdapter
         // Задаём UTF-8 без BOM (BOM сломал бы первое сообщение в stdin).
         var utf8NoBom = new System.Text.UTF8Encoding(false);
 
+        // Ход через шлюз LLM идёт новым процессом — только теперь выдаём ему настоящий токен:
+        // сигнатура посчитана по заглушкам, живому процессу ход отдан выше с его токеном
+        var (gatewayTurnId, gatewayToken) = viaGateway ? BindGatewayTurn(envOverrides) : default((string?, string?));
+
         // ArgumentList/Args экранирует каждый аргумент корректно (важно для многострочного
         // системного промпта); env-оверрайды собраны выше — они входят в сигнатуру прогона.
         // OTel: дочерний спан запуска процесса (родитель — активный chat.turn).
@@ -3927,24 +4008,33 @@ public class ClaudeSession : ILlmSessionAdapter
                    claudeSessionId: Info.ClaudeSessionId,
                    mcpConfigHash: TurnTelemetry.McpConfigHash(effectiveMcpConfig)))
         {
-            process = _launcher.Start(new Execution.ProcessSpec
+            try
             {
-                FileName = _launcher.ClaudeCliCommand,
-                Args = args,
-                WorkingDirectory = _rootPath,
-                Env = envOverrides,
-                // Маршрут хода определяем только мы: системные ANTHROPIC_*/CLAUDE_CONFIG_DIR
-                // машины в ход не пускаем, иначе чат «на Claude» молча уедет на чужой эндпоинт
-                ClearEnv = _providers?.EnvKeysToClear ?? LlmProviderRegistry.ProviderEnvKeys,
-                StdioEncoding = utf8NoBom,
-                TurnId = _currentTurnId,
-                // Раннер устройства привязывает к чату токен шлюза (ADR-016 §2); local/docker поле не читают
-                SessionId = Info.Id,
-                // Событие Exited — единственный надёжный сигнал смерти процесса: закрытие stdout
-                // может не наступить (дочерние node-процессы MCP наследуют и держат pipe). Без него
-                // обрыв хода зависает в «ожидании» без диагностики (инцидент P27).
-                EnableRaisingEvents = true,
-            });
+                process = _launcher.Start(new Execution.ProcessSpec
+                {
+                    FileName = _launcher.ClaudeCliCommand,
+                    Args = args,
+                    WorkingDirectory = _rootPath,
+                    Env = envOverrides,
+                    // Маршрут хода определяем только мы: системные ANTHROPIC_*/CLAUDE_CONFIG_DIR
+                    // машины в ход не пускаем, иначе чат «на Claude» молча уедет на чужой эндпоинт
+                    ClearEnv = _providers?.EnvKeysToClear ?? LlmProviderRegistry.ProviderEnvKeys,
+                    StdioEncoding = utf8NoBom,
+                    TurnId = _currentTurnId,
+                    // Раннер устройства привязывает к чату токен шлюза (ADR-016 §2); local/docker поле не читают
+                    SessionId = Info.Id,
+                    // Событие Exited — единственный надёжный сигнал смерти процесса: закрытие stdout
+                    // может не наступить (дочерние node-процессы MCP наследуют и держат pipe). Без него
+                    // обрыв хода зависает в «ожидании» без диагностики (инцидент P27).
+                    EnableRaisingEvents = true,
+                });
+            }
+            catch
+            {
+                // Процесс не запустился — прогона, который отзовёт токен шлюза, не будет
+                if (gatewayTurnId is not null) _serverGateway!.End(gatewayTurnId);
+                throw;
+            }
         }
         _currentProcess = process;
 
@@ -3956,7 +4046,7 @@ public class ClaudeSession : ILlmSessionAdapter
 
             _fileWatcher.Start();
 
-            run = new CliRun { Process = process, Signature = signature, TurnMcpPath = turnMcpPath, LaunchTurnId = _currentTurnId, PromptSuggestionsActive = promptSuggestionsActive, PromptSnapshotId = turnSnapshotId, LastTurnSeq = turnSeq };
+            run = new CliRun { Process = process, Signature = signature, TurnMcpPath = turnMcpPath, LaunchTurnId = _currentTurnId, PromptSuggestionsActive = promptSuggestionsActive, PromptSnapshotId = turnSnapshotId, LastTurnSeq = turnSeq, GatewayTurnId = gatewayTurnId, GatewayToken = gatewayToken };
             // Смерть процесса — по событию ОС (см. HandleProcessExitedAsync): EnableRaisingEvents=true
             // выставлен в spec. Подписка обязательна: закрытие stdout ненадёжно как сигнал гибели
             // (дочерние node-процессы MCP держат pipe — P27), и без Exited обрыв хода зависает
@@ -4025,6 +4115,7 @@ public class ClaudeSession : ILlmSessionAdapter
             _launcher.Kill(process, _currentTurnId);
             process.Dispose();
             _currentProcess = null;
+            if (gatewayTurnId is not null) _serverGateway!.End(gatewayTurnId);
             if (turnMcpPath != null)
                 try { File.Delete(turnMcpPath); }
                 catch { /* temp-каталог приберёт ОС */ }
@@ -4167,6 +4258,8 @@ public class ClaudeSession : ILlmSessionAdapter
         // Прогон уже финализирован другим путём (см. FinalizeGate) — второй проход послал бы
         // дубль ExitedMessage и подчистил чужие ресурсы нового прогона
         if (Interlocked.Exchange(ref run.FinalizeGate, 1) == 1) return;
+        // Токен шлюза живёт ровно столько, сколько процесс (TurnTokenLifetime.Process)
+        if (run.GatewayTurnId is { } gatewayTurnId) _serverGateway?.End(gatewayTurnId);
         CloseStdin(run);
         // Всегда убиваем процесс. На Windows дочерние node-процессы MCP-серверов
         // НЕ завершаются автоматически при выходе родителя — без явного Kill с

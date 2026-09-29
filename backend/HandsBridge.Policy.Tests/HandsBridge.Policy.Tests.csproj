@@ -31,6 +31,11 @@
   </Target>
 
   <ItemGroup>
+    <!-- Сохранённые AX-деревья реальных страниц для тестов сжатия снимка -->
+    <None Include="Fixtures\AxTrees\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
     <PackageReference Include="xunit" Version="2.9.2" />
     <!-- Запуск программ руками — только на Windows: Skip.IfNot(IsWindows), на Linux CI честный skip -->

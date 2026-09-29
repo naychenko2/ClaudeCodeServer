@@ -27,6 +27,7 @@ public class TasksHttpDelegationGateTests : IDisposable
     private sealed class DepthAdapterFactory : ILlmSessionAdapterFactory
     {
         public volatile int AgentDepth;
+        public volatile bool SuppressTasksExecute;
 
         public ILlmSessionAdapter Create(Session session, LlmSessionContext context) =>
             new DepthAdapter(session, this);
@@ -36,7 +37,7 @@ public class TasksHttpDelegationGateTests : IDisposable
     {
         public Session Info => info;
         public int CurrentTurnAgentDepth => owner.AgentDepth;
-        public bool CurrentTurnSuppressTasksExecute => false;
+        public bool CurrentTurnSuppressTasksExecute => owner.SuppressTasksExecute;
         public bool HasLiveTurn => false;
         public bool HasQueuedTurn => false;
         public bool OrchestrationActive => false;
@@ -142,19 +143,34 @@ public class TasksHttpDelegationGateTests : IDisposable
     }
 
     /// <summary>
-    /// Реакционный авто-ход постановщика (агентная глубина 0, но ход — ответ на доклад
-    /// исполнителя): запуск тоже запрещён — иначе A сам себе запускает только что созданную
-    /// задачу и цикл «доклад → запуск → доклад» становится бесконечным.
+    /// Реакционный авто-ход постановщика (агентная глубина 0, ход — ответ на доклад
+    /// исполнителя): запуск разрешён — запрет снят решением владельца, он мешал ставить
+    /// следующую задачу. Гейт пропускает, отказ дальше даёт только отсутствие задачи.
     /// </summary>
     [Fact]
-    public async Task ХодДокладаИсполнителя_ТожеЗапрещён()
+    public async Task ХодДокладаИсполнителя_ГейтПропускает()
     {
         var (_, sessionId) = await CreateProjectWithSessionAsync();
-        // SuppressTasksExecute-флаг адаптера читается тем же GetActiveTurnDelegation;
-        // выставить его снаружи нельзя — проверяем через глубину (см. атрибут:
-        // AlsoWhenExecutorSuppressed) вторым уровнем юнит-проверки ShouldDeny в
-        // TaskExecutionServiceTests; здесь — сам факт, что тулсет вообще гейтит
-        _adapters.AgentDepth = 2;
+        _adapters.AgentDepth = 0;
+        _adapters.SuppressTasksExecute = true;
+
+        var answer = await CallToolAsync(Client, sessionId, "tasks_run_executor", new { taskId = "нет-такой" });
+
+        answer.GetProperty("result").GetProperty("isError").GetBoolean().Should().BeTrue();
+        ToolText(answer).Should().Contain("не найдена")
+            .And.NotContain("недоступно", "ход-реакция на доклад запуск больше не запрещает");
+    }
+
+    /// <summary>
+    /// Делегированный ход, пришедший ещё и докладом, по-прежнему запрещён: снятый запрет
+    /// касается только реакционного хода, цепочка делегирования дальше не идёт.
+    /// </summary>
+    [Fact]
+    public async Task ДелегированныйХодДоклада_ПоПрежнемуЗапрещён()
+    {
+        var (_, sessionId) = await CreateProjectWithSessionAsync();
+        _adapters.AgentDepth = 1;
+        _adapters.SuppressTasksExecute = true;
 
         var answer = await CallToolAsync(Client, sessionId, "tasks_run_executor", new { taskId = "any" });
 

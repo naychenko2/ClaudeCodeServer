@@ -2323,7 +2323,7 @@ public class SessionManagerTests : IDisposable
         deferred.Should().BeTrue();
         var queued = _sut.GetPending(session.Id).Should().ContainSingle().Subject;
         queued.Silent.Should().BeTrue();
-        queued.SuppressTasksExecute.Should().BeTrue("иначе постановщик самозапустит задачу и закольцует A↔B");
+        queued.SuppressTasksExecute.Should().BeTrue("признак хода-реакции едет с отложенным ходом");
         _sut.GetVisiblePending(session.Id).Should().BeEmpty("служебный ход призраком не показываем");
     }
 
@@ -5920,15 +5920,13 @@ public class SessionManagerTests : IDisposable
             new Dictionary<string, object?>(), controller: new object());
     }
 
-    // Фильтр запуска задачи ровно с теми настройками, что стоят на TasksController.Execute.
-    // Цикл «до готово» больше НЕ несёт отдельной квоты запусков: чистый рабочий ход
-    // координатора пропускается, лавину возвратов держит Iteration в ContinueWorkLoopAsync.
+    // Фильтр запуска задачи — тот самый атрибут, что стоит на TasksController.Execute:
+    // копия настроек в тесте разъехалась бы с контроллером незаметно.
     private static ClaudeHomeServer.Filters.DenyOnDelegatedTurnAttribute ExecuteFilter() =>
-        new("Запуск задачи на исполнение")
-        {
-            AlsoWhenExecutorSuppressed = true,
-            AllowInTeamImplement = true,
-        };
+        (ClaudeHomeServer.Filters.DenyOnDelegatedTurnAttribute)Attribute.GetCustomAttribute(
+            typeof(ClaudeHomeServer.Controllers.TasksController).GetMethod(
+                nameof(ClaudeHomeServer.Controllers.TasksController.Execute))!,
+            typeof(ClaudeHomeServer.Filters.DenyOnDelegatedTurnAttribute))!;
 
     [Fact]
     public async Task ГейтЗапуска_ОбычныйХодШтаба_ТожеРасходуетКвоту()
@@ -6182,10 +6180,8 @@ public class SessionManagerTests : IDisposable
     }
 
     // Регресс: запуск задачи из чата с включённым циклом на ходу ДОКЛАДА исполнителя —
-    // по-прежнему запрещён (тоже AlsoWhenExecutorSuppressed, иначе «доклад → запуск →
-    // доклад» → бесконечный круг). В чате с АКТИВНЫМ циклом ход-реакция — единственная точка,
-    // где координатор принимает результат и запускает следующего; круг уже оплачен инкрементом
-    // Iteration в ContinueWorkLoopAsync, поэтому запрет здесь срезает саму суть цикла.
+    // разрешён: ход-реакция — точка, где координатор принимает результат и запускает
+    // следующего исполнителя.
     [Fact]
     public async Task ГейтЗапуска_ХодДокладаВЧатеСЦиклом_Разрешён()
     {
@@ -6203,9 +6199,10 @@ public class SessionManagerTests : IDisposable
             + "ставит следующего исполнителя; лавину возвратов держит Iteration, не запрет");
     }
 
-    // Регресс: ход доклада вне цикла — запрет как раньше.
+    // Ход доклада вне цикла тоже запускает: запрет снят решением владельца (мешал ставить
+    // следующую задачу), цикл «доклад → запуск → доклад» останавливает «Стоп».
     [Fact]
-    public async Task ГейтЗапуска_ХодДокладаВнеЦикла_ЗапретКакРаньше()
+    public async Task ГейтЗапуска_ХодДокладаВнеЦикла_Разрешён()
     {
         var dir = MkProjectDir("wl-report-plain");
         var project = _projectManager.Create("WL-RP", dir, TestUserId, TestUsername);
@@ -6218,8 +6215,7 @@ public class SessionManagerTests : IDisposable
 
         ExecuteFilter().OnActionExecuting(context);
 
-        var result = context.Result.Should().BeOfType<Microsoft.AspNetCore.Mvc.ObjectResult>().Subject;
-        result.StatusCode.Should().Be(403, "без цикла запрет хода доклада сохраняется");
+        context.Result.Should().BeNull("ход-реакция на доклад запуск задачи больше не запрещает");
     }
 
     // Регресс: делегированный ход в чате с циклом — запрет как раньше.

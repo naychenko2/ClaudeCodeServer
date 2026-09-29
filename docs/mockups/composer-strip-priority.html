@@ -348,10 +348,11 @@ p.note code, .note code { background:var(--c-bg-inset); padding:1px 5px; border-
   <h2 class="sec">Ступени правой группы</h2>
   <p class="note">
     Форма правой группы выбирается по бюджету, а не по порогам 640/900. Порядок жертв подписей
-    внутри неё — по важности для человека: усилие первым (на дефолте «Усилие» — имя контрола,
-    ноль информации за 100 px), собеседник вторым (кто ведёт чат важнее уровня рассуждения),
-    модель последней (имя модели держится до предела). Номиналы: A-wide 534 · A 384 · B 313 ·
-    B2 222 · C 160.
+    внутри неё — по важности для человека: столбики уровня усилия первыми (уровень есть в
+    тултипе и меню плашки модели), собеседник вторым (кто ведёт чат важнее уровня рассуждения),
+    модель последней (имя модели держится до предела). Усилие с 2026-09-29 живёт в плашке
+    модели, отдельной плашки и замка в полосе нет. Номиналы: A-wide 419 · A 279 · B 254 ·
+    B2 163 · C 100.
   </p>
   <div id="formsGrid"></div>
 
@@ -422,7 +423,6 @@ p.note code, .note code { background:var(--c-bg-inset); padding:1px 5px; border-
           </div>
           <div class="s-right">
             <button class="pick icononly" title="Модель"><svg class="ic"><use href="#i-cpu"/></svg></button>
-            <button class="pick icononly" title="Усилие"><svg class="ic"><use href="#i-gauge"/></svg></button>
             <button class="pick icononly" title="Собеседник"><span class="avatar" style="margin:0">М</span></button>
           </div>
         </div>
@@ -472,7 +472,6 @@ p.note code, .note code { background:var(--c-bg-inset); padding:1px 5px; border-
           <button class="dots" title="Ещё"><span class="doti"></span><span class="doti"></span><span class="doti"></span></button>
           <div class="s-right">
             <button class="pick icononly" title="Модель"><svg class="ic"><use href="#i-cpu"/></svg></button>
-            <button class="pick icononly" title="Усилие"><svg class="ic"><use href="#i-gauge"/></svg></button>
             <button class="pick icononly" title="Собеседник"><span class="avatar" style="margin:0">М</span></button>
           </div>
         </div>
@@ -502,7 +501,7 @@ p.note code, .note code { background:var(--c-bg-inset); padding:1px 5px; border-
 
   <h2 class="sec">Мобильная колонка 360</h2>
   <p class="note">
-    Тот же алгоритм на мобильных номиналах: левый блок 48, «⋯» 46, правая C 164,
+    Тот же алгоритм на мобильных номиналах: левый блок 48, «⋯» 46, правая C 104,
     компактная пилюля с тач-целями 36×36 (72). Нижний ориентир продукта — 360 CSS px
     (<code>docs/design/target-devices.md</code>), ниже не проектируем.
   </p>
@@ -516,7 +515,6 @@ p.note code, .note code { background:var(--c-bg-inset); padding:1px 5px; border-
           </div>
           <div class="s-right">
             <button class="pick icononly" title="Модель"><svg class="ic"><use href="#i-cpu"/></svg></button>
-            <button class="pick icononly" title="Усилие"><svg class="ic"><use href="#i-gauge"/></svg></button>
             <button class="pick icononly" title="Собеседник"><span class="avatar" style="margin:0">М</span></button>
           </div>
         </div>
@@ -538,7 +536,6 @@ p.note code, .note code { background:var(--c-bg-inset); padding:1px 5px; border-
           </div>
           <div class="s-right">
             <button class="pick icononly" title="Модель"><svg class="ic"><use href="#i-cpu"/></svg></button>
-            <button class="pick icononly" title="Усилие"><svg class="ic"><use href="#i-gauge"/></svg></button>
             <button class="pick icononly" title="Собеседник"><span class="avatar" style="margin:0">М</span></button>
           </div>
         </div>
@@ -560,7 +557,6 @@ p.note code, .note code { background:var(--c-bg-inset); padding:1px 5px; border-
           <button class="dots" title="Ещё" style="width:46px;height:30px"><span class="doti"></span><span class="doti"></span><span class="doti"></span></button>
           <div class="s-right">
             <button class="pick icononly" title="Модель"><svg class="ic"><use href="#i-cpu"/></svg></button>
-            <button class="pick icononly" title="Усилие"><svg class="ic"><use href="#i-gauge"/></svg></button>
             <button class="pick icononly" title="Собеседник"><span class="avatar" style="margin:0">М</span></button>
           </div>
         </div>
@@ -610,20 +606,23 @@ function loopHTML(form) { // пилюля цикла: full | null (в меню)
   </span>`;
 }
 function rightHTML(form) {
-  const modelFull = `<button class="pick" title="Модель">${ICON('cpu',12)}Sonnet 4.5${ICON('chev',11)}</button>`;
-  const effortFull = `<button class="pick" title="Усилие">${ICON('gauge',12)}Усилие${ICON('chev',11)}</button>`;
+  // Усилие — не отдельная плашка, а пять столбиков уровня внутри плашки модели (EffortBars)
+  const bars = `<span style="display:inline-flex;align-items:flex-end;gap:1px;height:12px">${
+    [0, 1, 2, 3, 4].map(i => `<span style="width:3px;height:${4 + i * 2}px;border-radius:1px;background:currentColor;opacity:${i <= 2 ? 1 : 0.25}"></span>`).join('')
+  }</span>`;
+  const modelBars = `<button class="pick" title="Модель: Sonnet 4.5 · Усилие: Высокий">${ICON('cpu',12)}Sonnet 4.5${bars}${ICON('chev',11)}</button>`;
+  const modelFull = `<button class="pick" title="Модель: Sonnet 4.5 · Усилие: Высокий">${ICON('cpu',12)}Sonnet 4.5${ICON('chev',11)}</button>`;
   const compWide = `<button class="pick" title="Собеседник" style="max-width:270px"><span class="avatar">М</span><span style="overflow:hidden;text-overflow:ellipsis">UI/UX-дизайнер и исследователь (Майя)</span>${ICON('chev',11)}</button>`;
   const compA = `<button class="pick" title="Собеседник" style="max-width:140px"><span class="avatar">М</span><span style="overflow:hidden;text-overflow:ellipsis">Дизайнер (Майя)</span>${ICON('chev',11)}</button>`;
   const compIcon = `<button class="pick icononly" title="Собеседник: Дизайнер (Майя)"><span class="avatar" style="margin:0">М</span></button>`;
-  const modelIcon = `<button class="pick icononly" title="Модель: Sonnet 4.5">${ICON('cpu')}</button>`;
-  const effortIcon = `<button class="pick icononly" title="Усилие: среднее">${ICON('gauge')}</button>`;
-  // Жертвы подписей: усилие первым (B), собеседник вторым (B2), модель последней (C)
+  const modelIcon = `<button class="pick icononly" title="Модель: Sonnet 4.5 · Усилие: Высокий">${ICON('cpu')}</button>`;
+  // Жертвы подписей: столбики усилия первыми (B), собеседник вторым (B2), модель последней (C)
   switch (form) {
-    case 'A-wide': return `<div class="s-right">${modelFull}${effortFull}${compWide}</div>`;
-    case 'A':      return `<div class="s-right">${modelFull}${effortFull}${compA}</div>`;
-    case 'B':      return `<div class="s-right">${modelFull}${effortIcon}${compA}</div>`;
-    case 'B2':     return `<div class="s-right">${modelFull}${effortIcon}${compIcon}</div>`;
-    default:       return `<div class="s-right">${modelIcon}${effortIcon}${compIcon}</div>`;
+    case 'A-wide': return `<div class="s-right">${modelBars}${compWide}</div>`;
+    case 'A':      return `<div class="s-right">${modelBars}${compA}</div>`;
+    case 'B':      return `<div class="s-right">${modelFull}${compA}</div>`;
+    case 'B2':     return `<div class="s-right">${modelFull}${compIcon}</div>`;
+    default:       return `<div class="s-right">${modelIcon}${compIcon}</div>`;
   }
 }
 function stripHTML(step, active) {
@@ -641,7 +640,7 @@ function stripHTML(step, active) {
 
 // ===== Алгоритм ступеней (номиналы «с зазором», десктоп) =====
 const PADX = 16, LEFT = 112, MENU = 38, GAPS = 12;
-const RW = { 'A-wide': 534, 'A': 384, 'B': 313, 'B2': 222, 'C': 160 };
+const RW = { 'A-wide': 419, 'A': 279, 'B': 254, 'B2': 163, 'C': 100 };
 const TPW = { full: 150, compact: 130 };
 const KRW = { full: 180, noauto: 160, menu: 0 };
 const LPW = { full: 155, menu: 0 };
@@ -710,11 +709,11 @@ function renderLive() {
 // ===== Статичные секции =====
 function renderForms() {
   const forms = [
-    ['A-wide', 'Всё словами, собеседник до 270 px — 534', 'Ничего не свёрнуто'],
-    ['A', 'Собеседник с короткой подписью (до 140 px) — 384', 'Свёрнуто: длинная подпись собеседника'],
-    ['B', 'Усилие иконкой, модель и собеседник словами — 313', 'Свёрнуто: подпись усилия'],
-    ['B2', 'Усилие и собеседник иконками, модель словом — 222', 'Свёрнуто: подписи усилия и собеседника'],
-    ['C', 'Всё иконками — 160/164', 'Свёрнуто: подписи усилия, собеседника и модели'],
+    ['A-wide', 'Всё словами, столбики усилия, собеседник до 270 px — 419', 'Ничего не свёрнуто'],
+    ['A', 'Собеседник с короткой подписью (до 140 px) — 279', 'Свёрнуто: длинная подпись собеседника'],
+    ['B', 'Без столбиков усилия, модель и собеседник словами — 254', 'Свёрнуто: столбики усилия'],
+    ['B2', 'Собеседник иконкой, модель словом — 163', 'Свёрнуто: столбики усилия и подпись собеседника'],
+    ['C', 'Всё иконками — 100/104', 'Свёрнуто: столбики усилия, подписи собеседника и модели'],
   ];
   document.getElementById('formsGrid').innerHTML = forms.map(([f, sub, lost]) => `
     <div class="card">

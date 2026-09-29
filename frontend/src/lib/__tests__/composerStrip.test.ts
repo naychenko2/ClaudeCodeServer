@@ -5,14 +5,14 @@ import {
 } from '../composerStrip';
 
 // Лестница полосы контролов композера. Порядок деградации подписей правой группы:
-// усилие (B) → собеседник (B2) → модель (C). Граничные ширины ниже посчитаны
-// руками от номиналов: база = левый блок + паддинг + два зазора.
+// уровень усилия в плашке модели (B) → собеседник (B2) → модель (C). Граничные
+// ширины ниже посчитаны руками от номиналов: база = левый блок + паддинг + два зазора.
 //   база            = 112 + 16 + 4×2          = 136
-//   A-wide влезает с = 136 + 534               = 670
-//   A       влезает с = 136 + 384               = 520
-//   B       влезает с = 136 + 313               = 449
-//   B2      влезает с = 136 + 222               = 358
-//   C       влезает с = 136 + 160               = 296
+//   A-wide влезает с = 136 + 419               = 555
+//   A       влезает с = 136 + 279               = 415
+//   B       влезает с = 136 + 254               = 390
+//   B2      влезает с = 136 + 163               = 299
+//   C       влезает с = 136 + 100               = 236
 const NO_BADGES = { hasTP: false, hasKR: false, hasLoop: false } as const;
 const form = (w: number, isMobile = false) =>
   pickLayout(w, NO_BADGES.hasTP, NO_BADGES.hasKR, NO_BADGES.hasLoop, isMobile).rightForm;
@@ -20,40 +20,40 @@ const form = (w: number, isMobile = false) =>
 describe('pickLayout: лестница правой группы (десктоп)', () => {
   it('широкая полоса — всё словами (A-wide)', () => {
     expect(form(1200)).toBe('A-wide');
-    expect(form(670)).toBe('A-wide'); // ровно на границе номинала
+    expect(form(555)).toBe('A-wide'); // ровно на границе номинала
   });
 
   it('сужение — подпись собеседника укорачивается первой (A)', () => {
-    expect(form(669)).toBe('A');
-    expect(form(520)).toBe('A');
+    expect(form(554)).toBe('A');
+    expect(form(415)).toBe('A');
   });
 
-  it('дальше — усилие иконкой, собеседник ещё с подписью (B)', () => {
-    expect(form(519)).toBe('B');
-    expect(form(449)).toBe('B');
+  it('дальше — столбики усилия сняты, собеседник ещё с подписью (B)', () => {
+    expect(form(414)).toBe('B');
+    expect(form(390)).toBe('B');
   });
 
-  it('ещё уже — усилие и собеседник иконками, модель словом (B2)', () => {
-    expect(form(448)).toBe('B2');
-    expect(form(358)).toBe('B2');
+  it('ещё уже — собеседник иконкой, модель словом (B2)', () => {
+    expect(form(389)).toBe('B2');
+    expect(form(299)).toBe('B2');
   });
 
   it('предел — всё иконками (C)', () => {
-    expect(form(357)).toBe('C');
-    expect(form(296)).toBe('C');
+    expect(form(298)).toBe('C');
+    expect(form(236)).toBe('C');
     expect(form(100)).toBe('C'); // и ниже предела — тоже C, оверфлоу невозможен
   });
 
   it('ширина правой группы совпадает с номиналом выбранной формы', () => {
-    expect(pickLayout(600, false, false, false, false).rightWidth).toBe(STRIP_RIGHT_NOMINAL.A);
-    expect(pickLayout(500, false, false, false, false).rightWidth).toBe(STRIP_RIGHT_NOMINAL.B);
-    expect(pickLayout(400, false, false, false, false).rightWidth).toBe(STRIP_RIGHT_NOMINAL.B2);
+    expect(pickLayout(500, false, false, false, false).rightWidth).toBe(STRIP_RIGHT_NOMINAL.A);
+    expect(pickLayout(400, false, false, false, false).rightWidth).toBe(STRIP_RIGHT_NOMINAL.B);
+    expect(pickLayout(320, false, false, false, false).rightWidth).toBe(STRIP_RIGHT_NOMINAL.B2);
   });
 });
 
 describe('pickLayout: потолок подписей по форме (STRIP_RIGHT_MAX)', () => {
   it('усилие теряет подпись с формы B — раньше собеседника', () => {
-    expect(STRIP_RIGHT_MAX['A'].effort).toBe(110);        // ещё с подписью
+    expect(STRIP_RIGHT_MAX['A'].effort).toBe(25);         // ещё со столбиками
     expect(STRIP_RIGHT_MAX['B'].effort).toBe(null);       // уже иконка…
     expect(STRIP_RIGHT_MAX['B'].companionLabel).toBe(140); // …а собеседник ещё с подписью
   });

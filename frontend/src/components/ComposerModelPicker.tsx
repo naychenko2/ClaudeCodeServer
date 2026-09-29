@@ -2,13 +2,17 @@ import { Sparkles, Gem, Brain, Feather, Lock, Zap, Cpu } from 'lucide-react';
 import { useModels, modelProvider, providerLabel, modelLabel, useDefaultModelOption,
   modelFamily, versionHint,
   USAGE, type UsageKey } from '../lib/models';
+import { effortLabel } from '../lib/effort';
 import { WindowBadge } from './ModelPicker';
 import { ComposerMenu, type ComposerMenuGroup } from './ComposerMenu';
-import { C } from '../lib/design';
+import { ComposerEffortPanel, EffortBars } from './ComposerEffortPanel';
+import { C, FONT, FS, SP } from '../lib/design';
 
-// Выбор модели в полосе контролов композера. Вся механика меню — в ComposerMenu
-// (общая с пикером усилия и визуально одинаковая с меню режимов прав); здесь только
-// сборка групп и иконки.
+// Выбор модели и усилия в полосе контролов композера — одна плашка «модель · усилие»:
+// усилие — настройка модели, отдельной кнопкой оно лишь ело место в полосе. В меню
+// сверху список моделей, снизу ползунок усилия (если родитель передал onEffortChange).
+// Вся механика меню — в ComposerMenu (визуально одинаковая с меню режимов прав); здесь
+// только сборка групп и иконки.
 //
 // Провайдер-агностичен: модели группируются по провайдеру (Claude, DeepSeek, GLM,
 // OpenRouter, …), группа Claude идёт первой. Модели прямого HTTP-адаптера
@@ -30,6 +34,13 @@ interface Props {
   usage?: UsageKey;
   // Показывать пометку о заморозке модели у НАЧАТОГО чата. По умолчанию — да, когда started.
   showFreezeNote?: boolean;
+  // Усилие рассуждения. Родитель не передаёт onEffortChange, если провайдер усилие не
+  // поддерживает — тогда ни подписи, ни ползунка
+  effort?: string | null;
+  onEffortChange?: (effort: string) => void;
+  // Показывать столбики уровня усилия в плашке. Узкая полоса снимает их первыми
+  // (лестница STRIP_RIGHT_MAX): уровень остаётся в тултипе и в меню
+  showEffortLabel?: boolean;
   // Потолок ширины триггера в полной (не compact) форме. Задаётся родителем из таблицы
   // номиналов полосы контролов (STRIP_RIGHT_MAX в Composer.tsx) — иначе фактическая ширина
   // пикера может уехать за край полосы после снятия overflow:hidden. Compact-форма
@@ -53,7 +64,8 @@ export function ModelIcon({ value, size = 14 }: { value?: string | null; size?: 
 }
 
 export function ComposerModelPicker({ value, onChange, started, isMobile, compact,
-  usage = USAGE.chatNew, showFreezeNote, maxTriggerWidth }: Props) {
+  usage = USAGE.chatNew, showFreezeNote, effort, onEffortChange, showEffortLabel = true,
+  maxTriggerWidth }: Props) {
   const models = useModels();
   const defaultOption = useDefaultModelOption(usage);
 
@@ -117,37 +129,52 @@ export function ComposerModelPicker({ value, onChange, started, isMobile, compac
     })),
   }));
 
+  // Уровень усилия в плашке — столбиками, словом он только в тултипе и в меню
+  const effortValue = effort ?? '';
+  const frozen = !!started && (showFreezeNote ?? true);
+
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-      <ComposerMenu
-        value={current}
-        groups={[...defaultGroup, ...groups]}
-        onChange={onChange}
-        triggerIcon={<ModelIcon value={current} />}
-        // На дефолте пишем «Модель», а не «По умолчанию»: так плашка называет, чем
-        // управляет, и не сливается с соседней плашкой усилия. Точное значение — в тултипе.
-        triggerLabel={current ? modelLabel(current) : 'Модель'}
-        title={`Модель: ${current ? modelLabel(current) : defaultOption.label}`}
-        isMobile={isMobile}
-        compact={compact}
-        maxTriggerWidth={maxTriggerWidth}
-      />
-      {started && (showFreezeNote ?? true) && <ComposerFreezeNote />}
-    </div>
+    <ComposerMenu
+      value={current}
+      groups={[...defaultGroup, ...groups]}
+      onChange={onChange}
+      triggerIcon={<ModelIcon value={current} />}
+      // На дефолте пишем «Модель», а не «По умолчанию»: так плашка называет, чем
+      // управляет. Точное значение — в тултипе.
+      triggerLabel={current ? modelLabel(current) : 'Модель'}
+      triggerSuffix={onEffortChange && showEffortLabel && <EffortBars value={effortValue} />}
+      title={`Модель: ${current ? modelLabel(current) : defaultOption.label}`
+        + (onEffortChange ? ` · Усилие: ${effortLabel(effortValue)}` : '')}
+      isMobile={isMobile}
+      compact={compact}
+      maxTriggerWidth={maxTriggerWidth}
+      header={frozen && <ComposerFreezeNote />}
+      footer={onEffortChange && <ComposerEffortPanel value={effort} onChange={onEffortChange} />}
+    />
   );
 }
 
 // Пометка о заморозке модели у начатого чата: чат держит выбранную модель до конца,
-// правки цепочки и уровней действуют на новые чаты. В композере места на текст нет —
-// одна иконка замка рядом с плашкой, объяснение в тултипе (полная пометка — в
-// NewChatSetup, чтобы пользователь увидел её ещё ДО первого хода).
+// правки цепочки и уровней действуют на новые чаты. В полосе под неё места нет, поэтому
+// она стоит первой строкой меню — там, где человек и собирается модель сменить. В меню
+// одна короткая строка, полное объяснение — в тултипе (и в NewChatSetup ДО первого хода).
+// Текст — про цепочки, а не «модель закреплена»: сменить модель можно (строкой ниже
+// меню предупреждает о переносе чата), неизменна лишь раскладка цепочек и уровней.
+// Без заливки и с отчерком: это сведения о чате, а заливка — у пометки о переносе,
+// иначе две одинаковые серые плашки подряд не различить.
 function ComposerFreezeNote() {
   return (
-    <span
-      title="Модель этого чата зафиксирована при создании. Правки цепочек и уровней подействуют на новые чаты."
-      style={{ display: 'inline-flex', flexShrink: 0, color: C.textMuted, cursor: 'help' }}
+    <div
+      title="Модель этого чата выбрана при создании. Правки цепочек и уровней подействуют на новые чаты."
+      style={{
+        display: 'flex', alignItems: 'center', gap: SP.sm,
+        margin: `0 ${SP.xs}px ${SP.xs}px`, padding: `${SP.xs}px ${SP.sm}px ${SP.sm}px`,
+        borderBottom: `1px solid ${C.borderLight}`, cursor: 'help',
+        fontSize: FS.xs, color: C.textMuted, lineHeight: 1.35, fontFamily: FONT.sans,
+      }}
     >
-      <Lock size={12} strokeWidth={2} />
-    </span>
+      <Lock size={12} strokeWidth={2} style={{ flexShrink: 0 }} />
+      <span>Правки цепочек — только для новых чатов</span>
+    </div>
   );
 }

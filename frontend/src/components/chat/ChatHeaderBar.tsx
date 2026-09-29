@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react';
-import { Plus, Menu as MenuIcon, Tags, Bell, BellOff, History, Hourglass, ListChecks, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore, HardDrive } from 'lucide-react';
+import { Plus, Menu as MenuIcon, Tags, Bell, BellOff, History, Hourglass, ListChecks, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore, HardDrive, ChevronRight } from 'lucide-react';
 import type { Project, Session, ClaudeBilling, Persona, ProjectTag } from '../../types';
 import { api } from '../../lib/api';
 import { isArchivedChat } from '../../lib/chatFilters';
@@ -205,31 +205,59 @@ function ClaudeCostPopoverBody({ stats, billing, onBillingChange, windows }: {
   stats: CostStats; billing: ClaudeBilling; onBillingChange?: (b: ClaudeBilling) => void; windows: RateWindow[];
 }) {
   const sub = billing === 'subscription';
+  const [costOpen, setCostOpen] = useState(false);
+  const costBody = <>
+    {sub && (
+      <div style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted, marginBottom: 6, lineHeight: 1.45 }}>
+        Эквивалент на pay-as-you-go API. По подписке покрыто абонплатой — отдельно не списывается.
+      </div>
+    )}
+    {stats.cost > 0 && <>
+      <BadgeRow k={sub ? '≈ Всего' : 'Всего'} v={fmtUsd(stats.cost)} />
+      <BadgeRow k="Ходов" v={String(stats.turns || stats.results)} />
+      <BadgeRow k="Входные токены" v={fmtTokens(stats.input)} />
+      <BadgeRow k="Выходные токены" v={fmtTokens(stats.output)} />
+      <BadgeRow k="Кэш (чтение)" v={fmtTokens(stats.cacheRead)} />
+      <BadgeRow k="Кэш (запись)" v={fmtTokens(stats.cacheCreate)} />
+    </>}
+  </>;
+  // Есть лимиты — они главное, идут первыми; расход по API-тарифу свёрнут внизу над
+  // чертой «Оплата». Лимитов нет (оплата по ключу) — расход и есть содержимое, без сворачивания
+  if (windows.length === 0) {
+    return <>
+      <div style={badgeTitleStyle}>{sub ? 'Claude · ≈ по API-тарифу' : 'Стоимость Claude'}</div>
+      {costBody}
+      <BillingLine sub={sub} billing={billing} onBillingChange={onBillingChange} />
+    </>;
+  }
   return (
     <>
-      <div style={badgeTitleStyle}>{sub ? 'Claude · ≈ по API-тарифу' : 'Стоимость Claude'}</div>
-      {sub && (
-        <div style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted, marginBottom: 8, lineHeight: 1.45 }}>
-          Эквивалент на pay-as-you-go API. По подписке покрыто абонплатой — отдельно не списывается.
-        </div>
-      )}
-      {stats.cost > 0 && <>
-        <BadgeRow k={sub ? '≈ Всего' : 'Всего'} v={fmtUsd(stats.cost)} />
-        <BadgeRow k="Ходов" v={String(stats.turns || stats.results)} />
-        <BadgeRow k="Входные токены" v={fmtTokens(stats.input)} />
-        <BadgeRow k="Выходные токены" v={fmtTokens(stats.output)} />
-        <BadgeRow k="Кэш (чтение)" v={fmtTokens(stats.cacheRead)} />
-        <BadgeRow k="Кэш (запись)" v={fmtTokens(stats.cacheCreate)} />
-      </>}
-      {windows.length > 0 && (
-        <>
-          <div style={badgeSectionStyle}>Лимиты подписки</div>
-          {/* Порядок — как в стопке баров на пилюле (5 часов → неделя → по моделям), а не
-              по проценту: иначе строки попапа не совпадали бы с барами и прыгали местами */}
-          {ratePillSegments(windows).map(s => windows.find(w => w.limitType === s.limitType)!)
-            .map(w => <RateRow key={w.limitType} w={w} />)}
-        </>
-      )}
+      <div style={badgeTitleStyle}>Лимиты подписки</div>
+      {/* Порядок — как в стопке баров на пилюле (5 часов → неделя → по моделям), а не
+          по проценту: иначе строки попапа не совпадали бы с барами и прыгали местами */}
+      {ratePillSegments(windows).map(s => windows.find(w => w.limitType === s.limitType)!)
+        .map(w => <RateRow key={w.limitType} w={w} />)}
+      <button type="button" onClick={() => setCostOpen(o => !o)} aria-expanded={costOpen}
+        style={{
+          ...badgeSectionStyle, display: 'flex', alignItems: 'center', gap: 4, width: '100%',
+          border: 'none', background: 'none', padding: 0, cursor: 'pointer',
+        }}>
+        <ChevronRight size={12} strokeWidth={ICON_STROKE} style={{ transform: costOpen ? 'rotate(90deg)' : undefined, transition: 'transform 120ms' }} />
+        {sub ? '≈ по API-тарифу' : 'Стоимость'}
+        {stats.cost > 0 && <span style={{ marginLeft: 'auto', fontFamily: FONT.mono, textTransform: 'none' }}>{fmtUsd(stats.cost)}</span>}
+      </button>
+      {costOpen && costBody}
+      <BillingLine sub={sub} billing={billing} onBillingChange={onBillingChange} />
+    </>
+  );
+}
+
+// Строка «Оплата: Подписка | API-ключ» под чертой в конце поповера Claude
+function BillingLine({ sub, billing, onBillingChange }: {
+  sub: boolean; billing: ClaudeBilling; onBillingChange?: (b: ClaudeBilling) => void;
+}) {
+  return (
+    <>
       <div style={{ marginTop: 10, paddingTop: 8, borderTop: `1px solid ${C.bgInset}`, display: 'flex', alignItems: 'center', gap: 6, fontFamily: FONT.sans, fontSize: 11 }}>
         <span style={{ color: C.textMuted }}>Оплата:</span>
         {/* Настройка серверная, общая для всех — не-админу показываем режим без переключателя */}
@@ -549,7 +577,7 @@ function ContextPopoverBody({ estimate, isWaiting, isCompacting, canCompact, com
         <BadgeRow k="Обрезка контекста" v={prunedSummaryText(estimate.pruned)} />
       )}
       <div style={{ fontFamily: FONT.sans, fontSize: 10.5, color: C.textMuted, marginTop: 6, lineHeight: 1.4 }}>
-        Сжимает историю диалога в саммари, освобождая место в окне. При заполнении {assistantName} делает это автоматически.
+        Заменит историю кратким пересказом. При заполнении {assistantName} сожмёт сам.
       </div>
       {compactNote && (
         <div style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, marginTop: 8, padding: '6px 9px', background: C.bgInset, borderRadius: 6, lineHeight: 1.4 }}>

@@ -3,7 +3,7 @@ using System.Text.Json;
 using ClaudeHomeServer.HandsBridge.Browser.Cdp;
 using Xunit;
 
-namespace ClaudeHomeServer.HandsBridge.Policy.Tests;
+namespace HandsBridge.Policy.Tests;
 
 /// <summary>
 /// Протокол CDP на подделке трубы (ADR-016 §7.1, план Ш3): рамки, корреляция, события, обрыв.

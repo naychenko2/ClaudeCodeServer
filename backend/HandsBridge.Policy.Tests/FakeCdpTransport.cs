@@ -3,7 +3,7 @@ using System.Text.Json;
 using System.Threading.Channels;
 using ClaudeHomeServer.HandsBridge.Browser.Cdp;
 
-namespace ClaudeHomeServer.HandsBridge.Policy.Tests;
+namespace HandsBridge.Policy.Tests;
 
 /// <summary>
 /// Подделка трубы CDP: каждое чтение соединения получает ровно один кусок, положенный тестом

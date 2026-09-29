@@ -2,7 +2,7 @@ using System.Text.Json;
 using ClaudeHomeServer.HandsBridge.Browser.Cdp;
 using Xunit;
 
-namespace ClaudeHomeServer.HandsBridge.Policy.Tests;
+namespace HandsBridge.Policy.Tests;
 
 /// <summary>Обёртки команд браузера и вкладки поверх подделки трубы (план Ш3).</summary>
 public sealed class CdpPageTests : IAsyncLifetime

@@ -14,7 +14,7 @@ namespace Sbroenne.WindowsMcp.Tools;
 public static partial class BrowserNavigateTool
 {
     /// <summary>
-    /// Open a web page in the current tab of this project's own Chrome window and wait for it to load.
+    /// Open a web page in the current tab of this project's own Chrome window, wait until its content is ready and read it.
     /// Use browser_* tools for web pages instead of ui_* on a Chrome window.
     /// Keywords: browser, web, open url, go to, navigate, website, page, link.
     /// </summary>
@@ -22,11 +22,13 @@ public static partial class BrowserNavigateTool
     /// Chrome starts on the first browser_* call in this project's own profile: logins the owner made there are available.
     /// Only http, https and about:blank addresses open: local files, browser pages, javascript: and data: URLs are refused.
     /// Downloads are blocked. Page dialogs (alert, confirm) are closed automatically and their text is reported.
-    /// Returns the final URL and title; then call browser_snapshot to read the page and get element refs.
+    /// Waits for the page content (DOMContentLoaded) plus a short quiet, not for every ad and image.
+    /// The reply already contains a short snapshot of the page with element refs (up to 6000 characters): use its refs
+    /// for browser_click and browser_type directly. Call browser_snapshot only if that snapshot was cut and you need the rest.
     /// </remarks>
     /// <param name="url">Address to open: http://, https:// or about:blank.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>Final URL and title of the page, or the reason it could not be opened.</returns>
+    /// <returns>Final URL, title and a short snapshot of the page, or the reason it could not be opened.</returns>
     [McpServerTool(Name = "browser_navigate", Title = "Browser: Open Page", Destructive = false, OpenWorld = true)]
     public static async partial Task<CallToolResult> ExecuteAsync(
         string url,

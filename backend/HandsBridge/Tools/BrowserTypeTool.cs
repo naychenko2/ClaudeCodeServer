@@ -17,7 +17,8 @@ public static partial class BrowserTypeTool
     [Description(
         "Type text into a field of the current browser tab by its ref from browser_snapshot, replacing the field's text. " +
         "Input is delivered inside the browser: the user's keyboard focus is not touched. Set submit=true to press Enter " +
-        "after typing (for example to run a search), then take a fresh browser_snapshot to see the result.")]
+        "after typing (for example to run a search); if that opens another page, the tool waits for it to load. " +
+        "The reply contains a fresh short snapshot of the page with new refs: no separate browser_snapshot is needed.")]
     [McpServerTool(Name = "browser_type", Title = "Browser: Type", Destructive = true, OpenWorld = true)]
     public static async Task<CallToolResult> ExecuteAsync(
         [Description("Ref of a text field from the latest browser_snapshot, like e7.")] string @ref,

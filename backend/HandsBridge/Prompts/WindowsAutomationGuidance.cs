@@ -37,9 +37,9 @@ public static class WindowsAutomationGuidance
         "Pair with copy/paste hotkeys: focus app, keyboard_control(key='c', modifiers='ctrl'), then clipboard(action='get'); or clipboard(action='set', text='...') then keyboard_control(key='v', modifiers='ctrl').\n\n" +
         "### 2e. WEB PAGES (browser_*, not ui_* on a Chrome window)\n" +
         "For any web page use the browser_* tools: they drive this project's own Chrome over its debugging pipe. Do not start chrome.exe with app and do not use ui_*/window_management on a Chrome window for page content.\n" +
-        "browser_navigate(url='https://...') - open a page (only http, https, about:blank)\n" +
-        "browser_snapshot() - READ FIRST: compact accessibility tree with refs like [ref=e12]; take a new one after every page change\n" +
-        "browser_click(ref='e12') / browser_type(ref='e7', text='...', submit=true) - act only by refs from the latest snapshot\n" +
+        "browser_navigate(url='https://...') - open a page (only http, https, about:blank); the reply already has a short snapshot with refs like [ref=e12]\n" +
+        "browser_click(ref='e12') / browser_type(ref='e7', text='...', submit=true) - act by refs; the reply has a fresh short snapshot with new refs, so do NOT call browser_snapshot after every action\n" +
+        "browser_snapshot() - the full accessibility tree: only when the short one was cut, the page changed on its own, or with ref='...' for a subtree\n" +
         "browser_tabs(action='list'|'new'|'select'|'close') - tabs of this browser; browser_wait(text='...') - wait for text instead of sleeping\n" +
         "browser_screenshot() - only when you must see the layout or images; text and refs come from browser_snapshot\n" +
         "Downloads are blocked and page dialogs are closed automatically (their text is reported).\n\n" +

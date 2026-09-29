@@ -35,9 +35,29 @@ public sealed class BrowserSession(IBrowserSource source)
     /// </summary>
     public static readonly TimeSpan SettleTimeout = TimeSpan.FromSeconds(1);
 
+    /// <summary>
+    /// Окно, в которое после клика или Enter ловится начало перехода главного фрейма. Переход по
+    /// ссылке или отправка формы просят навигацию за десятки миллисекунд; не начался — снимок
+    /// берётся сразу, и заодно у страницы с перерисовкой без перехода есть время её закончить.
+    /// </summary>
+    public static readonly TimeSpan NavigationStartWindow = TimeSpan.FromMilliseconds(300);
+
+    /// <summary>
+    /// Бюджет снимка в ответе действия — половина полного (<see cref="AxSnapshotFormatter.DefaultBudgetChars"/>):
+    /// около 1,5–2 тыс. токенов на каждый клик и ввод вместо 3–4. Верх страницы с формой, меню и
+    /// первыми результатами в него влезает, а модели после действия обычно нужны именно они и
+    /// свежие ссылки; дальше — <c>browser_snapshot</c> или <c>browser_query</c>.
+    /// </summary>
+    public const int ActionSnapshotBudgetChars = 6_000;
+
+    /// <summary>Хвост короткого снимка, если он обрезан.</summary>
+    public const string ShortSnapshotHint =
+        "This is a short snapshot after the action; call browser_snapshot for the full page.";
+
     /// <summary>Ожидание текста без явного времени.</summary>
     public const int DefaultTextWaitMs = 10_000;
 
+    private const string AboutBlank = "about:blank";
     private const int MaxDialogChars = 300;
     private const string FreshSnapshot = "Take a fresh browser_snapshot and use its refs.";
 
@@ -63,7 +83,7 @@ public sealed class BrowserSession(IBrowserSource source)
 
     /// <summary>
     /// Переход по адресу, уже проверенному гейтом: готовность DOM не дольше <see cref="LoadTimeout"/>
-    /// плюс затишье не дольше <see cref="SettleTimeout"/>.
+    /// плюс затишье не дольше <see cref="SettleTimeout"/>, затем короткий снимок в ответ.
     /// </summary>
     public Task<BrowserReply> NavigateAsync(string url, CancellationToken cancellationToken) =>
         RunAsync(async browser =>
@@ -74,11 +94,10 @@ public sealed class BrowserSession(IBrowserSource source)
             if (navigation.ErrorText is not null)
                 return new BrowserReply($"Navigation to {url} failed: {navigation.ErrorText}", IsError: true);
 
-            var text = await DescribeAsync(browser, page.TargetId, cancellationToken) +
-                       "\nTake browser_snapshot to read the page and get element refs.";
-            if (!navigation.Loaded)
-                text += $"\nThe page content was not ready within {LoadTimeout.TotalSeconds:0} s; it may still be loading.";
-            return new BrowserReply(text);
+            var note = navigation.Loaded
+                ? null
+                : $"The page content was not ready within {LoadTimeout.TotalSeconds:0} s; it may still be loading.";
+            return new BrowserReply(await ActionSnapshotAsync(browser, page, note, cancellationToken));
         }, cancellationToken);
 
     /// <summary>
@@ -97,18 +116,15 @@ public sealed class BrowserSession(IBrowserSource source)
                     return Stale(reference);
             }
 
-            var tree = await page.GetFullAXTreeAsync(cancellationToken);
-            var snapshot = AxSnapshotFormatter.Format(tree, root);
-            lock (_state)
-            {
-                if (_current == page.TargetId)
-                    _refs = new Dictionary<string, int>(snapshot.Refs, StringComparer.Ordinal);
-            }
-
+            var snapshot = await TakeSnapshotAsync(page, root, AxSnapshotFormatter.DefaultBudgetChars, cancellationToken);
             return new BrowserReply(await DescribeAsync(browser, page.TargetId, cancellationToken) + "\n\n" + snapshot.Text);
         }, cancellationToken);
 
-    /// <summary>Клик по центру элемента: прокрутка к нему, его бокс, нажатие и отпускание событиями CDP.</summary>
+    /// <summary>
+    /// Клик по центру элемента: прокрутка к нему, его бокс, нажатие и отпускание событиями CDP.
+    /// Начался переход главного фрейма — ждём его документ, как у <see cref="NavigateAsync"/>;
+    /// затем короткий снимок в ответ.
+    /// </summary>
     public Task<BrowserReply> ClickAsync(string reference, CancellationToken cancellationToken) =>
         RunAsync(async browser =>
         {
@@ -116,6 +132,7 @@ public sealed class BrowserSession(IBrowserSource source)
             if (ResolveRef(reference) is not { } node)
                 return Stale(reference);
 
+            using var watch = page.WatchLoad();
             try
             {
                 await page.ScrollIntoViewAsync(node, cancellationToken);
@@ -133,12 +150,14 @@ public sealed class BrowserSession(IBrowserSource source)
                     IsError: true);
             }
 
-            return new BrowserReply($"Clicked {reference}. If the page changed, take a fresh browser_snapshot before using refs again.");
+            var note = await AfterActionAsync(page, watch, cancellationToken);
+            return new BrowserReply(await ActionSnapshotAsync(browser, page, $"Clicked {reference}.{note}", cancellationToken));
         }, cancellationToken);
 
     /// <summary>
     /// Ввод в поле: фокус по узлу, выделение прежнего текста командой редактора, вставка текста —
-    /// всё событиями CDP. <paramref name="submit"/> — Enter после ввода.
+    /// всё событиями CDP. <paramref name="submit"/> — Enter после ввода и ожидание перехода, как
+    /// после клика. В ответе — короткий снимок.
     /// </summary>
     public Task<BrowserReply> TypeAsync(string reference, string text, bool submit, CancellationToken cancellationToken) =>
         RunAsync(async browser =>
@@ -147,6 +166,7 @@ public sealed class BrowserSession(IBrowserSource source)
             if (ResolveRef(reference) is not { } node)
                 return Stale(reference);
 
+            using var watch = page.WatchLoad();
             try
             {
                 await page.FocusAsync(node, cancellationToken);
@@ -164,12 +184,16 @@ public sealed class BrowserSession(IBrowserSource source)
                 return new BrowserReply($"Element {reference} cannot take text input: it is not focusable.", IsError: true);
             }
 
-            return new BrowserReply(submit
-                ? $"Typed into {reference} and pressed Enter. Take a fresh browser_snapshot to see the result."
-                : $"Typed into {reference}.");
+            var note = submit
+                ? $"Typed into {reference} and pressed Enter.{await AfterActionAsync(page, watch, cancellationToken)}"
+                : $"Typed into {reference}.";
+            return new BrowserReply(await ActionSnapshotAsync(browser, page, note, cancellationToken));
         }, cancellationToken);
 
-    /// <summary>Вкладки своего браузера: <c>list</c>, <c>new</c> (адрес проверен гейтом), <c>select</c>, <c>close</c>.</summary>
+    /// <summary>
+    /// Вкладки своего браузера: <c>list</c>, <c>new</c> (адрес проверен гейтом), <c>select</c>,
+    /// <c>close</c>. Новая и выбранная вкладка приходят в ответе коротким снимком.
+    /// </summary>
     public Task<BrowserReply> TabsAsync(string action, string? url, string? tabId, CancellationToken cancellationToken) =>
         RunAsync(async browser =>
         {
@@ -177,20 +201,28 @@ public sealed class BrowserSession(IBrowserSource source)
             {
                 case "new":
                 {
-                    var targetId = await browser.CreateTargetAsync(url ?? "about:blank", cancellationToken);
-                    await AttachAsync(browser, targetId, cancellationToken);
+                    // Пустая вкладка и переход в ней: так ждём загрузку тем же путём, что browser_navigate
+                    var targetId = await browser.CreateTargetAsync(AboutBlank, cancellationToken);
+                    var page = await AttachAsync(browser, targetId, cancellationToken);
                     await browser.ActivateTargetAsync(targetId, cancellationToken);
-                    return new BrowserReply($"Opened tab {targetId} and made it current: {url}. " +
-                                            "It may still be loading; use browser_wait or browser_snapshot.");
+                    var note = $"Opened tab {targetId} and made it current.";
+                    if (url is not null && url != AboutBlank)
+                    {
+                        var navigation = await page.NavigateAsync(url, LoadTimeout, SettleTimeout, cancellationToken);
+                        if (navigation.ErrorText is not null)
+                            return new BrowserReply($"{note} Navigation to {url} failed: {navigation.ErrorText}", IsError: true);
+                        if (!navigation.Loaded)
+                            note += $" The page content was not ready within {LoadTimeout.TotalSeconds:0} s; it may still be loading.";
+                    }
+                    return new BrowserReply(await ActionSnapshotAsync(browser, page, note, cancellationToken));
                 }
                 case "select":
                 {
                     if (!await TabExistsAsync(browser, tabId!, cancellationToken))
                         return UnknownTab(tabId!);
-                    await AttachAsync(browser, tabId!, cancellationToken);
+                    var page = await AttachAsync(browser, tabId!, cancellationToken);
                     await browser.ActivateTargetAsync(tabId!, cancellationToken);
-                    return new BrowserReply("Current tab:\n" + await DescribeAsync(browser, tabId!, cancellationToken) +
-                                            "\nTake browser_snapshot to read it.");
+                    return new BrowserReply(await ActionSnapshotAsync(browser, page, "Current tab changed.", cancellationToken));
                 }
                 case "close":
                 {
@@ -265,6 +297,52 @@ public sealed class BrowserSession(IBrowserSource source)
                 "Screenshot of the visible part of the current tab.\n" + await DescribeAsync(browser, page.TargetId, cancellationToken),
                 Png: png);
         }, cancellationToken);
+
+    // ---------- снимок в ответе ----------
+
+    /// <summary>Снимок вкладки; таблица ссылок заменяется его ссылками, если вкладка всё ещё текущая.</summary>
+    private async Task<AxSnapshot> TakeSnapshotAsync(CdpPage page, int? root, int budgetChars, CancellationToken cancellationToken)
+    {
+        var tree = await page.GetFullAXTreeAsync(cancellationToken);
+        var snapshot = AxSnapshotFormatter.Format(tree, root, budgetChars);
+        lock (_state)
+        {
+            if (_current == page.TargetId)
+                _refs = new Dictionary<string, int>(snapshot.Refs, StringComparer.Ordinal);
+        }
+        return snapshot;
+    }
+
+    /// <summary>
+    /// Ответ действия: итог действия, вкладка и короткий снимок (<see cref="ActionSnapshotBudgetChars"/>)
+    /// с новыми ссылками — отдельный <c>browser_snapshot</c> после действия не нужен.
+    /// </summary>
+    private async Task<string> ActionSnapshotAsync(CdpBrowser browser, CdpPage page, string? note, CancellationToken cancellationToken)
+    {
+        var snapshot = await TakeSnapshotAsync(page, null, ActionSnapshotBudgetChars, cancellationToken);
+        var sb = new StringBuilder();
+        if (note is not null)
+            sb.Append(note).Append('\n');
+        sb.Append(await DescribeAsync(browser, page.TargetId, cancellationToken)).Append("\n\n").Append(snapshot.Text);
+        if (snapshot.TruncatedNodes > 0)
+            sb.Append('\n').Append(ShortSnapshotHint);
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// После клика или Enter: начался переход главного фрейма за <see cref="NavigationStartWindow"/> —
+    /// ждём его документ так же, как <c>browser_navigate</c>. Возвращает дополнение к итогу действия.
+    /// </summary>
+    private static async Task<string> AfterActionAsync(CdpPage page, CdpLoadWatch watch, CancellationToken cancellationToken)
+    {
+        if (!await watch.WaitForNavigationStartAsync(page.MainFrameId, NavigationStartWindow, cancellationToken))
+            return "";
+
+        var state = await watch.WaitForLoadAsync(page.MainFrameId, null, LoadTimeout, SettleTimeout, cancellationToken);
+        return state == CdpLoadState.NotLoaded
+            ? " The page started a navigation, but no new page content became ready; it may still be loading."
+            : " The page navigated.";
+    }
 
     // ---------- исполнение ----------
 

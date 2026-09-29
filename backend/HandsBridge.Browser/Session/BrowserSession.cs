@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using ClaudeHomeServer.HandsBridge.Browser.Cdp;
@@ -18,10 +19,25 @@ namespace ClaudeHomeServer.HandsBridge.Browser.Session;
 /// <item>Диалоги страницы закрываются сами (иначе страница заблокирована и любое ожидание висит
 /// до таймаута), их текст и перезапуск браузера доходят до модели заметкой в следующем ответе.</item>
 /// </list>
-/// JS страницы не исполняется ни одной командой: только навигация, дерево доступности и ввод.
+/// JS модели исполняет только <see cref="EvaluateAsync"/> (ADR-016 §7.1, решение 2026-09-29) — в
+/// сессии текущей вкладки; навигация, снимок, <c>browser_query</c>, клик и ввод JS не запускают.
 /// </summary>
-public sealed class BrowserSession(IBrowserSource source)
+/// <param name="evaluateTimeout">Потолок исполнения <c>browser_evaluate</c>; null — <see cref="EvaluateTimeout"/>.</param>
+public sealed class BrowserSession(IBrowserSource source, TimeSpan? evaluateTimeout = null)
 {
+    /// <summary>
+    /// Потолок исполнения скрипта модели: синхронную часть браузер обрывает сам, ожидание промиса
+    /// режет наш таймаут команды. Долгой работе в странице тут не место — ход не должен висеть.
+    /// </summary>
+    public static readonly TimeSpan EvaluateTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>Потолок результата <c>browser_evaluate</c> — как у <c>browser_query</c>.</summary>
+    public const int EvaluateResultBudgetChars = QueryBudgetChars;
+
+    private const int MaxLoggedScriptChars = 2_000;
+    private const int MaxLoggedResultChars = 500;
+    private const int MaxExceptionChars = 2_000;
+
     /// <summary>Заметка модели после перезапуска: состояние снимка сброшено.</summary>
     public const string RestartedNotice =
         "The browser was restarted (its window had been closed): earlier snapshot refs are gone, take a fresh browser_snapshot.";
@@ -347,6 +363,58 @@ public sealed class BrowserSession(IBrowserSource source)
         }, cancellationToken);
 
     /// <summary>
+    /// Скрипт модели (<c>browser_evaluate</c>), уже проверенный гейтом: <c>Runtime.evaluate</c>
+    /// в сессии ТЕКУЩЕЙ вкладки — не на цели браузера, — со значением по JSON и ожиданием промиса
+    /// не дольше потолка. Исключение страницы уходит модели текстом, результат режется до
+    /// <see cref="EvaluateResultBudgetChars"/>. Скрипт и итог — в <c>hands.log</c>.
+    /// </summary>
+    public Task<BrowserReply> EvaluateAsync(string script, CancellationToken cancellationToken) =>
+        RunAsync(async browser =>
+        {
+            var page = await CurrentPageAsync(browser, cancellationToken);
+            var limit = evaluateTimeout ?? EvaluateTimeout;
+            BrowserReply reply;
+            string outcome;
+            try
+            {
+                var r = await page.EvaluateAsync(script, limit, cancellationToken);
+                if (r.TryGetProperty("exceptionDetails", out var exception))
+                {
+                    outcome = "исключение";
+                    reply = new BrowserReply("The script threw an exception in the page:\n" + DescribeException(exception), IsError: true);
+                }
+                else
+                {
+                    outcome = "значение";
+                    reply = new BrowserReply(FormatResult(r.TryGetProperty("result", out var result) ? result : default));
+                }
+            }
+            catch (CdpTimeoutException)
+            {
+                outcome = "таймаут";
+                reply = new BrowserReply(
+                    string.Create(CultureInfo.InvariantCulture, $"The script did not finish within {limit.TotalSeconds:0.#} s ") +
+                    "(a long loop or a promise that never settles) " +
+                    "and its result was abandoned. Make it shorter or wait with browser_wait instead.", IsError: true);
+            }
+            catch (CdpProtocolException ex)
+            {
+                // Значение не сериализуется (циклические ссылки, DOM-узел) или выражение не разобрано
+                outcome = "ошибка CDP";
+                reply = new BrowserReply(
+                    $"The browser could not run the script or return its value: {ex.ErrorMessage}. " +
+                    "Return plain data (strings, numbers, arrays, objects), for example JSON.stringify(...) of what you need.",
+                    IsError: true);
+            }
+
+            return reply with
+            {
+                LogDetail = $"скрипт {script.Length} симв.: {OneLine(script, MaxLoggedScriptChars)} → {outcome}: " +
+                            OneLine(reply.Text, MaxLoggedResultChars),
+            };
+        }, cancellationToken);
+
+    /// <summary>
     /// Ожидание текста в дереве доступности текущей вкладки (опрос) либо пауза. Потолок времени
     /// держит гейт; без явного времени текст ждётся <see cref="DefaultTextWaitMs"/>.
     /// </summary>
@@ -644,6 +712,56 @@ public sealed class BrowserSession(IBrowserSource source)
         if (parameters.TryGetProperty("frame", out var frame) && frame.TryGetProperty("parentId", out _))
             return;
         ClearRefs(targetId);
+    }
+
+    // ---------- ответ browser_evaluate ----------
+
+    /// <summary>Значение скрипта: строка — как есть, прочее — JSON; не влезшее в бюджет режется с пометкой.</summary>
+    private static string FormatResult(JsonElement result)
+    {
+        if (result.ValueKind != JsonValueKind.Object)
+            return "Result: undefined";
+
+        var type = CdpBrowser.Str(result, "type");
+        string text;
+        string kind;
+        if (CdpBrowser.Str(result, "unserializableValue") is { Length: > 0 } special)
+        {
+            (kind, text) = (type, special);
+        }
+        else if (result.TryGetProperty("value", out var value))
+        {
+            (kind, text) = value.ValueKind == JsonValueKind.String
+                ? ("string", value.GetString()!)
+                : (value.ValueKind == JsonValueKind.Null ? "null" : type, value.GetRawText());
+        }
+        else
+        {
+            // undefined, функция, символ — у них нет значения по JSON
+            (kind, text) = (type, CdpBrowser.Str(result, "description") is { Length: > 0 } d ? d : type);
+        }
+
+        if (text.Length > EvaluateResultBudgetChars)
+            text = text[..EvaluateResultBudgetChars] +
+                   $"\n[result cut at {EvaluateResultBudgetChars} of {text.Length} characters: return less, for example a slice, a count or only the fields you need]";
+        return $"Result ({kind}):\n{text}";
+    }
+
+    private static string DescribeException(JsonElement details)
+    {
+        var description = details.TryGetProperty("exception", out var exception) &&
+                          CdpBrowser.Str(exception, "description") is { Length: > 0 } d
+            ? d
+            : CdpBrowser.Str(details, "text");
+        if (details.TryGetProperty("lineNumber", out var line) && details.TryGetProperty("columnNumber", out var column))
+            description += $"\n(at line {line.GetInt32() + 1}, column {column.GetInt32() + 1} of the script)";
+        return description.Length > MaxExceptionChars ? description[..MaxExceptionChars] + "…" : description;
+    }
+
+    private static string OneLine(string text, int max)
+    {
+        var flat = text.ReplaceLineEndings(" ⏎ ");
+        return flat.Length > max ? flat[..max] + "…" : flat;
     }
 
     // ---------- ответ browser_query ----------

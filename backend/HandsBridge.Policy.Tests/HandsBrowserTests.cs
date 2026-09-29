@@ -15,7 +15,7 @@ public class HandsBrowserTests
         string[] browser =
         [
             "browser_navigate", "browser_snapshot", "browser_click", "browser_type",
-            "browser_tabs", "browser_wait", "browser_screenshot", "browser_query",
+            "browser_tabs", "browser_wait", "browser_screenshot", "browser_query", "browser_evaluate",
         ];
 
         Assert.All(browser, t => Assert.Contains(t, HandsTools.All));
@@ -264,6 +264,51 @@ public class HandsBrowserTests
 
         Assert.False(decision.Allowed);
         Assert.Contains("longer", decision.Reason);
+    }
+
+    // ---------- JS модели ----------
+
+    [Theory]
+    [InlineData("document.title")]
+    [InlineData("(() => {\n  const rows = [...document.querySelectorAll('tr')];\n  return rows.length;\n})()")]
+    [InlineData("fetch('/api').then(r => r.status)")]
+    public void Script_of_the_model_is_allowed(string script)
+    {
+        Assert.True(HandsPolicy.CheckBrowserEvaluate(script).Allowed);
+    }
+
+    [Fact]
+    public void Script_may_be_exactly_at_the_cap()
+    {
+        Assert.True(HandsPolicy.CheckBrowserEvaluate(new string('1', HandsPolicy.MaxBrowserScriptChars)).Allowed);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(" \n\t ")]
+    public void Empty_script_is_denied(string? script)
+    {
+        var decision = HandsPolicy.CheckBrowserEvaluate(script);
+
+        Assert.False(decision.Allowed);
+        Assert.Contains("required", decision.Reason);
+    }
+
+    [Fact]
+    public void Too_long_script_is_denied()
+    {
+        var decision = HandsPolicy.CheckBrowserEvaluate(new string('1', HandsPolicy.MaxBrowserScriptChars + 1));
+
+        Assert.False(decision.Allowed);
+        Assert.Contains("longer", decision.Reason);
+    }
+
+    [Fact]
+    public void Javascript_and_data_urls_stay_denied_now_that_evaluate_exists()
+    {
+        Assert.False(HandsPolicy.CheckBrowserUrl("javascript:document.title").Allowed);
+        Assert.False(HandsPolicy.CheckBrowserUrl("data:text/html,<script>1</script>").Allowed);
     }
 
     // ---------- снимок экрана ----------

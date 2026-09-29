@@ -124,6 +124,27 @@ public sealed class CdpPage(CdpConnection connection, string targetId, string se
         return (name, attributes);
     }
 
+    // ---------- JS модели ----------
+
+    /// <summary>Запас на ответ браузера сверх потолка исполнения, который браузер держит сам.</summary>
+    private static readonly TimeSpan EvaluateReplyMargin = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// Выражение модели в странице ЭТОЙ вкладки (сессия вкладки, не цель браузера): значение
+    /// возвращается сериализованным (<c>returnByValue</c>), промис дожидается (<c>awaitPromise</c>).
+    /// Синхронное исполнение браузер обрывает сам по <c>timeout</c>, ожидание промиса и зависшую
+    /// страницу режет наш таймаут команды — <see cref="CdpTimeoutException"/>. Сырой ответ:
+    /// <c>result</c> (RemoteObject) и, при исключении страницы, <c>exceptionDetails</c>.
+    /// </summary>
+    public Task<JsonElement> EvaluateAsync(string expression, TimeSpan timeout, CancellationToken cancellationToken = default) =>
+        Connection.SendAsync("Runtime.evaluate", new JsonObject
+        {
+            ["expression"] = expression,
+            ["returnByValue"] = true,
+            ["awaitPromise"] = true,
+            ["timeout"] = (int)timeout.TotalMilliseconds,
+        }, SessionId, timeout + EvaluateReplyMargin, cancellationToken);
+
     public Task ScrollIntoViewAsync(int backendNodeId, CancellationToken cancellationToken = default) =>
         Send("DOM.scrollIntoViewIfNeeded", Node(backendNodeId), cancellationToken);
 

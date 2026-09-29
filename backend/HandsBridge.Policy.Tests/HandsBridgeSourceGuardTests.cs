@@ -33,6 +33,7 @@ public class HandsBridgeSourceGuardTests
         { HandsTools.BrowserWait, "Tools/BrowserWaitTool.cs", "HandsPolicy.CheckBrowserWait(" },
         { HandsTools.BrowserScreenshot, "Tools/BrowserScreenshotTool.cs", "HandsPolicy.CheckBrowserScreenshot(" },
         { HandsTools.BrowserQuery, "Tools/BrowserQueryTool.cs", "HandsPolicy.CheckBrowserQuery(" },
+        { HandsTools.BrowserEvaluate, "Tools/BrowserEvaluateTool.cs", "HandsPolicy.CheckBrowserEvaluate(" },
     };
 
     [Fact]

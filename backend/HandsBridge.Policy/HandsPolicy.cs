@@ -22,12 +22,13 @@ public static class HandsTools
     public const string BrowserWait = "browser_wait";
     public const string BrowserScreenshot = "browser_screenshot";
     public const string BrowserQuery = "browser_query";
+    public const string BrowserEvaluate = "browser_evaluate";
 
     public static readonly IReadOnlyList<string> All =
     [
         App, UiSnapshot, UiFind, UiClick, UiType, UiRead, WindowManagement, ScreenshotControl,
         BrowserNavigate, BrowserSnapshot, BrowserClick, BrowserType, BrowserTabs, BrowserWait, BrowserScreenshot,
-        BrowserQuery,
+        BrowserQuery, BrowserEvaluate,
     ];
 }
 
@@ -266,7 +267,7 @@ public sealed class HandsPolicy(IHandsWindowSystem windows, string? browserProfi
     /// Адрес <c>browser_navigate</c> и новой вкладки: белый список — <c>http</c>, <c>https</c> и
     /// ровно <c>about:blank</c> (ADR-016 §7.1). Всё прочее — отказ: <c>file:</c> и
     /// <c>chrome:</c> — не дело руки, <c>javascript:</c> и <c>data:</c> — исполнение JS от модели
-    /// в обход запрета <c>evaluate</c>. Переходим по нормализованной строке из решения, а не по
+    /// в обход гейта <c>browser_evaluate</c> и его журнала. Переходим по нормализованной строке из решения, а не по
     /// присланной: разбор .NET и Chromium не расходятся на том, что проверено.
     /// </summary>
     public static HandsUrlDecision CheckBrowserUrl(string? url)
@@ -394,6 +395,26 @@ public sealed class HandsPolicy(IHandsWindowSystem windows, string? browserProfi
                 : HandsDecision.Allow;
 
         return CheckBrowserRef(HandsTools.BrowserQuery, reference, resolveRef);
+    }
+
+    /// <summary>Потолок длины скрипта <c>browser_evaluate</c>.</summary>
+    public const int MaxBrowserScriptChars = 10_000;
+
+    /// <summary>
+    /// <c>browser_evaluate</c> — JS модели в странице текущей вкладки (ADR-016 §7.1, решение
+    /// владельца 2026-09-29). Гейт держит только форму: скрипт непустой и не длиннее
+    /// <see cref="MaxBrowserScriptChars"/>. Что скрипт сделает в странице, гейт не проверяет и
+    /// проверить не может: границы — вкладка своего профиля, потолок времени и размера результата
+    /// в сессии, запрет загрузок и схем адресов остаётся в силе.
+    /// </summary>
+    public static HandsDecision CheckBrowserEvaluate(string? script)
+    {
+        if (string.IsNullOrWhiteSpace(script))
+            return HandsDecision.Deny("script is required: a JavaScript expression, for example document.title.");
+
+        return script.Length > MaxBrowserScriptChars
+            ? HandsDecision.Deny($"script is longer than {MaxBrowserScriptChars} characters. Use a shorter expression or browser_query.")
+            : HandsDecision.Allow;
     }
 
     /// <summary><c>browser_screenshot</c>: как <see cref="CheckScreenshot"/> — только в ответ, на диск не пишется.</summary>

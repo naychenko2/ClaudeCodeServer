@@ -473,6 +473,129 @@ public sealed class BrowserSessionTests : IAsyncLifetime
                         "Narrow the selector, lower limit or query a single element.]", reply.Text);
     }
 
+    // ---------- browser_evaluate ----------
+
+    void EvaluateReturns(string json) =>
+        _source.Current.Override = (method, _) => method == "Runtime.evaluate" ? json : null;
+
+    [Fact]
+    public async Task Evaluate_runs_in_the_session_of_the_current_tab_and_returns_the_value()
+    {
+        EvaluateReturns("""{"result":{"type":"object","value":{"rows":3,"names":["a","b"]}}}""");
+
+        var reply = await _session.EvaluateAsync("({rows: 3, names: ['a', 'b']})", CancellationToken.None);
+
+        Assert.False(reply.IsError, reply.Text);
+        Assert.Equal("Result (object):\n{\"rows\":3,\"names\":[\"a\",\"b\"]}", reply.Text);
+        var browser = _source.Current;
+        Assert.Equal(["S1"], browser.SessionsOf("Runtime.evaluate"));
+        var sent = browser.Sent("Runtime.evaluate").Single();
+        Assert.Equal("({rows: 3, names: ['a', 'b']})", sent.GetProperty("expression").GetString());
+        Assert.True(sent.GetProperty("returnByValue").GetBoolean());
+        Assert.True(sent.GetProperty("awaitPromise").GetBoolean());
+        Assert.Equal((int)BrowserSession.EvaluateTimeout.TotalMilliseconds, sent.GetProperty("timeout").GetInt32());
+    }
+
+    [Fact]
+    public async Task Evaluate_follows_the_current_tab_and_never_goes_to_the_browser_target()
+    {
+        EvaluateReturns("""{"result":{"type":"number","value":1}}""");
+        await _session.EvaluateAsync("1", CancellationToken.None);
+        await _session.TabsAsync("new", null, null, CancellationToken.None);
+
+        await _session.EvaluateAsync("1", CancellationToken.None);
+
+        Assert.Equal(["S1", "S2"], _source.Current.SessionsOf("Runtime.evaluate"));
+    }
+
+    [Theory]
+    [InlineData("""{"result":{"type":"string","value":"Example Domain"}}""", "Result (string):\nExample Domain")]
+    [InlineData("""{"result":{"type":"undefined"}}""", "Result (undefined):\nundefined")]
+    [InlineData("""{"result":{"type":"object","subtype":"null","value":null}}""", "Result (null):\nnull")]
+    [InlineData("""{"result":{"type":"number","unserializableValue":"NaN","description":"NaN"}}""", "Result (number):\nNaN")]
+    [InlineData("""{"result":{"type":"boolean","value":true}}""", "Result (boolean):\ntrue")]
+    public async Task Evaluate_formats_every_kind_of_value(string cdp, string expected)
+    {
+        EvaluateReturns(cdp);
+
+        var reply = await _session.EvaluateAsync("x", CancellationToken.None);
+
+        Assert.False(reply.IsError, reply.Text);
+        Assert.Equal(expected, reply.Text);
+    }
+
+    [Fact]
+    public async Task Page_exception_reaches_the_model_as_text_and_goes_to_the_log()
+    {
+        EvaluateReturns("""
+            {"result":{"type":"object","subtype":"error"},
+             "exceptionDetails":{"text":"Uncaught","lineNumber":0,"columnNumber":9,
+               "exception":{"type":"object","subtype":"error","description":"TypeError: foo is not a function\n    at <anonymous>:1:10"}}}
+            """);
+
+        var reply = await _session.EvaluateAsync("undefined.foo()", CancellationToken.None);
+
+        Assert.True(reply.IsError);
+        Assert.Contains("The script threw an exception in the page:\nTypeError: foo is not a function", reply.Text);
+        Assert.Contains("(at line 1, column 10 of the script)", reply.Text);
+        var log = reply.LogLine("browser_evaluate");
+        Assert.Contains("скрипт 15 симв.: undefined.foo() → исключение: The script threw", log);
+    }
+
+    [Fact]
+    public async Task Hanging_script_is_abandoned_after_the_ceiling()
+    {
+        var session = new BrowserSession(_source, TimeSpan.FromMilliseconds(300));
+        _source.Current.Silent.Add("Runtime.evaluate");
+
+        var reply = await session.EvaluateAsync("new Promise(() => {})", CancellationToken.None);
+
+        Assert.True(reply.IsError);
+        Assert.Contains("did not finish within 0.3 s", reply.Text);
+        Assert.Equal(300, _source.Current.Sent("Runtime.evaluate").Single().GetProperty("timeout").GetInt32());
+        Assert.Contains("→ таймаут", reply.LogLine("browser_evaluate"));
+    }
+
+    [Fact]
+    public async Task Value_that_cannot_be_returned_is_explained()
+    {
+        _source.Current.Fail = (method, _) => method == "Runtime.evaluate" ? "Object reference chain is too long" : null;
+
+        var reply = await _session.EvaluateAsync("window", CancellationToken.None);
+
+        Assert.True(reply.IsError);
+        Assert.Contains("Object reference chain is too long", reply.Text);
+        Assert.Contains("JSON.stringify", reply.Text);
+    }
+
+    [Fact]
+    public async Task Big_result_is_cut_with_a_note()
+    {
+        var big = new string('x', BrowserSession.EvaluateResultBudgetChars + 5_000);
+        EvaluateReturns(JsonSerializer.Serialize(new { result = new { type = "string", value = big } }));
+
+        var reply = await _session.EvaluateAsync("'x'.repeat(25000)", CancellationToken.None);
+
+        Assert.False(reply.IsError);
+        Assert.True(reply.Text.Length < BrowserSession.EvaluateResultBudgetChars + 300, $"ответ {reply.Text.Length}");
+        Assert.EndsWith($"[result cut at {BrowserSession.EvaluateResultBudgetChars} of {big.Length} characters: " +
+                        "return less, for example a slice, a count or only the fields you need]", reply.Text);
+    }
+
+    [Fact]
+    public async Task Long_script_is_clipped_in_the_log_line()
+    {
+        EvaluateReturns("""{"result":{"type":"number","value":1}}""");
+        var script = "1;" + new string(' ', 5_000) + "\n2";
+
+        var reply = await _session.EvaluateAsync(script, CancellationToken.None);
+
+        var log = reply.LogLine("browser_evaluate");
+        Assert.Contains($"скрипт {script.Length} симв.: 1;", log);
+        Assert.True(log.Length < 3_000, $"строка лога {log.Length}");
+        Assert.DoesNotContain('\n', log);
+    }
+
     static int Index(ScriptedBrowser browser, string entry, bool last = false)
     {
         var timeline = browser.Timeline.ToList();

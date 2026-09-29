@@ -137,6 +137,12 @@ public static class HandsBridgeArgs
     public const string ExcludeTools = "--exclude-tools";
 
     /// <summary>
+    /// Каталог профиля Chrome браузерной руки (ADR-016 §7.1): путь считает агент от проверенного
+    /// корня проекта, сервер и модель его не задают. Каталог создаёт мост при первом <c>browser_*</c>.
+    /// </summary>
+    public const string BrowserProfile = "--browser-profile";
+
+    /// <summary>
     /// Префикс имени Job хода с руками. Мосту имя больше не передаётся (<c>--turn-job</c> снят вместе
     /// с границей «только свои окна», ADR-016 §7): Job хода нужен только агенту — <c>KillTree</c>
     /// по концу хода гасит всё, что ход открыл; имя остаётся для журнала.

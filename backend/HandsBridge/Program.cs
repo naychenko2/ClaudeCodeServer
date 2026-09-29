@@ -2,6 +2,8 @@ using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using ClaudeHomeServer.HandsBridge.Browser;
+using ClaudeHomeServer.Protocol;
 using Sbroenne.WindowsMcp.Catalog;
 using Sbroenne.WindowsMcp.Prompts;
 using Sbroenne.WindowsMcp.Resources;
@@ -52,7 +54,9 @@ HandsLog.Write($"мост {serverVersion} запущен: args=[{string.Join(' '
 
 // Руки: гейт до старта хоста. Границы «только свои окна» нет (решение владельца 2026-09-27,
 // ADR-016 §7), поэтому имя Job хода мосту не передаётся: Job хода нужен только агенту для KillTree.
-HandsGate.Configure();
+var browserProfile = GetOption(args, HandsBridgeArgs.BrowserProfile);
+HandsGate.Configure(browserProfile);
+BrowserHost.Configure(browserProfile);
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -118,7 +122,15 @@ var host = builder.Build();
 // Services are lazy-initialized via WindowsToolsBase when first accessed by tools.
 // No need for explicit service resolution here.
 
-await host.RunAsync();
+try
+{
+    await host.RunAsync();
+}
+finally
+{
+    // Браузерная рука: закрыть трубы и Job своего Chrome, не дожидаясь KillTree хода
+    await BrowserHost.Shared.DisposeAsync();
+}
 
 return 0;
 

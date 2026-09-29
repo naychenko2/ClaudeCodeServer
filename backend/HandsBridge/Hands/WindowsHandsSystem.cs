@@ -34,14 +34,9 @@ internal sealed partial class WindowsHandsSystem : IHandsWindowSystem, IDisposab
     /// <returns>0 — процесс в Job; иначе код ошибки Windows.</returns>
     public int AssignToAppsJob(Process process)
     {
-        var job = CreateJobObjectW(0, null);
+        var job = CreateKillOnCloseJob(out var createError);
         if (job == 0)
-            return Marshal.GetLastPInvokeError();
-
-        var info = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
-        info.BasicLimitInformation.LimitFlags = JobObjectLimitKillOnJobClose;
-        if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, ref info, (uint)Marshal.SizeOf<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>()))
-            return Fail(job);
+            return createError;
 
         var handle = OpenProcess(ProcessSetQuota | ProcessTerminate, false, (uint)process.Id);
         if (handle == 0)
@@ -66,6 +61,32 @@ internal sealed partial class WindowsHandsSystem : IHandsWindowSystem, IDisposab
             CloseHandle(job);
             return error;
         }
+    }
+
+    /// <summary>
+    /// Новый Job с KILL_ON_JOB_CLOSE (вложится в Job хода при первой посадке). 0 — сбой,
+    /// код ошибки Windows в <paramref name="error"/>.
+    /// </summary>
+    public static nint CreateKillOnCloseJob(out int error)
+    {
+        error = 0;
+        var job = CreateJobObjectW(0, null);
+        if (job == 0)
+        {
+            error = Marshal.GetLastPInvokeError();
+            return 0;
+        }
+
+        var info = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
+        info.BasicLimitInformation.LimitFlags = JobObjectLimitKillOnJobClose;
+        if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, ref info, (uint)Marshal.SizeOf<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>()))
+        {
+            error = Marshal.GetLastPInvokeError();
+            CloseHandle(job);
+            return 0;
+        }
+
+        return job;
     }
 
     public int? GetWindowProcessId(long hwnd)

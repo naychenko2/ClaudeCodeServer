@@ -3,8 +3,11 @@ using System.Text.Json.Nodes;
 
 namespace ClaudeHomeServer.HandsBridge.Browser.Cdp;
 
-/// <summary>Итог перехода: <see cref="ErrorText"/> — отказ сети или адреса, <see cref="Loaded"/> — дождались load.</summary>
-public sealed record CdpNavigation(string FrameId, string? ErrorText, bool Loaded);
+/// <summary>
+/// Итог перехода: <see cref="ErrorText"/> — отказ сети или адреса, <see cref="Loaded"/> — DOM
+/// документа готов (DOMContentLoaded), <see cref="Settled"/> — страница ещё и затихла.
+/// </summary>
+public sealed record CdpNavigation(string FrameId, string? ErrorText, bool Loaded, bool Settled = false);
 
 /// <summary>Диалог страницы (alert, confirm, prompt, beforeunload).</summary>
 public sealed record CdpDialog(string Type, string Message, string Url);
@@ -19,51 +22,128 @@ public sealed class CdpPage(CdpConnection connection, string targetId, string se
     public string TargetId { get; } = targetId;
     public string SessionId { get; } = sessionId;
 
-    /// <summary>Включить домен Page и события жизненного цикла — без них load не придёт.</summary>
+    /// <summary>
+    /// Главный фрейм вкладки — по нему ловятся переходы после клика. До <see cref="EnableAsync"/>
+    /// (и если браузер дерево фреймов не отдал) — id цели: у Chrome они совпадают.
+    /// </summary>
+    public string MainFrameId { get; private set; } = targetId;
+
+    /// <summary>
+    /// Включить домен Page и события жизненного цикла — без них DOMContentLoaded не придёт — и
+    /// узнать главный фрейм.
+    /// </summary>
     public async Task EnableAsync(CancellationToken cancellationToken = default)
     {
         await Send("Page.enable", null, cancellationToken);
         await Send("Page.setLifecycleEventsEnabled", new JsonObject { ["enabled"] = true }, cancellationToken);
+        var tree = await Send("Page.getFrameTree", null, cancellationToken);
+        if (tree.TryGetProperty("frameTree", out var node) && node.TryGetProperty("frame", out var frame) &&
+            CdpBrowser.Str(frame, "id") is { Length: > 0 } id)
+            MainFrameId = id;
     }
 
+    /// <summary>Начать наблюдение за загрузкой: зови ДО команды, которая вызывает переход.</summary>
+    public CdpLoadWatch WatchLoad() => new(Connection, SessionId);
+
     /// <summary>
-    /// Перейти и дождаться <c>Page.loadEventFired</c> не дольше <paramref name="loadTimeout"/>.
+    /// Перейти и дождаться DOMContentLoaded своего документа не дольше <paramref name="loadTimeout"/>,
+    /// затем затишья не дольше <paramref name="settle"/> (<see cref="CdpLoadWatch"/>).
     /// Не дождались — не ошибка: страница может грузиться дольше, <see cref="CdpNavigation.Loaded"/> = false.
-    /// Переход внутри документа (якорь) load не даёт: у него нет loaderId.
+    /// Переход внутри документа (якорь) загрузки не даёт: у него нет loaderId.
     /// </summary>
-    public async Task<CdpNavigation> NavigateAsync(string url, TimeSpan loadTimeout,
+    public async Task<CdpNavigation> NavigateAsync(string url, TimeSpan loadTimeout, TimeSpan settle,
         CancellationToken cancellationToken = default)
     {
-        using var waitCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        var load = Connection.WaitForEventAsync("Page.loadEventFired", SessionId, loadTimeout,
-            cancellationToken: waitCts.Token);
-        try
-        {
-            var r = await Send("Page.navigate", new JsonObject { ["url"] = url }, cancellationToken);
-            var frameId = CdpBrowser.Str(r, "frameId");
-            var error = CdpBrowser.Str(r, "errorText");
-            if (error.Length > 0) return new CdpNavigation(frameId, error, false);
-            if (CdpBrowser.Str(r, "loaderId").Length == 0) return new CdpNavigation(frameId, null, true);
-            try
-            {
-                await load;
-                return new CdpNavigation(frameId, null, true);
-            }
-            catch (CdpTimeoutException)
-            {
-                return new CdpNavigation(frameId, null, false);
-            }
-        }
-        finally
-        {
-            waitCts.Cancel();
-            try { await load; } catch { /* ожидание снято, исход уже не важен */ }
-        }
+        using var watch = WatchLoad();
+        var r = await Send("Page.navigate", new JsonObject { ["url"] = url }, cancellationToken);
+        var frameId = CdpBrowser.Str(r, "frameId");
+        var error = CdpBrowser.Str(r, "errorText");
+        if (error.Length > 0)
+            return new CdpNavigation(frameId, error, false);
+        var loaderId = CdpBrowser.Str(r, "loaderId");
+        if (loaderId.Length == 0)
+            return new CdpNavigation(frameId, null, true, true);
+
+        var state = await watch.WaitForLoadAsync(frameId, loaderId, loadTimeout, settle, cancellationToken);
+        return new CdpNavigation(frameId, null, state != CdpLoadState.NotLoaded, state == CdpLoadState.Settled);
     }
 
     /// <summary>Сырой ответ <c>Accessibility.getFullAXTree</c> (массив <c>nodes</c>) — вход сжатия снимка.</summary>
     public Task<JsonElement> GetFullAXTreeAsync(CancellationToken cancellationToken = default) =>
         Send("Accessibility.getFullAXTree", null, cancellationToken);
+
+    // ---------- DOM: чтение без JS ----------
+
+    /// <summary>
+    /// nodeId корня документа. Каждый вызов раздаёт nodeId заново, прежние гаснут — поэтому
+    /// между запросами nodeId не храним, ссылки снимка держатся на <c>backendNodeId</c>.
+    /// </summary>
+    public async Task<int> GetDocumentAsync(CancellationToken cancellationToken = default)
+    {
+        var r = await Send("DOM.getDocument", null, cancellationToken);
+        return r.TryGetProperty("root", out var root) && root.TryGetProperty("nodeId", out var id) ? id.GetInt32() : 0;
+    }
+
+    /// <summary>nodeId узла по <c>backendNodeId</c> (после <see cref="GetDocumentAsync"/>); 0 — узла в документе нет.</summary>
+    public async Task<int> PushBackendNodeAsync(int backendNodeId, CancellationToken cancellationToken = default)
+    {
+        var r = await Send("DOM.pushNodesByBackendIdsToFrontend",
+            new JsonObject { ["backendNodeIds"] = new JsonArray(backendNodeId) }, cancellationToken);
+        return r.TryGetProperty("nodeIds", out var ids) && ids.ValueKind == JsonValueKind.Array && ids.GetArrayLength() > 0
+            ? ids[0].GetInt32()
+            : 0;
+    }
+
+    /// <summary>Узлы по CSS-селектору внутри <paramref name="nodeId"/>, в порядке документа.</summary>
+    public async Task<int[]> QuerySelectorAllAsync(int nodeId, string selector, CancellationToken cancellationToken = default)
+    {
+        var r = await Send("DOM.querySelectorAll", new JsonObject { ["nodeId"] = nodeId, ["selector"] = selector }, cancellationToken);
+        return r.TryGetProperty("nodeIds", out var ids) && ids.ValueKind == JsonValueKind.Array
+            ? [.. ids.EnumerateArray().Select(i => i.GetInt32())]
+            : [];
+    }
+
+    public async Task<string> GetOuterHtmlAsync(int nodeId, CancellationToken cancellationToken = default) =>
+        CdpBrowser.Str(await Send("DOM.getOuterHTML", new JsonObject { ["nodeId"] = nodeId }, cancellationToken), "outerHTML");
+
+    /// <summary>Имя элемента и его атрибуты парами в порядке разметки.</summary>
+    public async Task<(string Name, IReadOnlyList<KeyValuePair<string, string>> Attributes)> DescribeNodeAsync(
+        int nodeId, CancellationToken cancellationToken = default)
+    {
+        var r = await Send("DOM.describeNode", new JsonObject { ["nodeId"] = nodeId }, cancellationToken);
+        if (!r.TryGetProperty("node", out var node))
+            return ("", []);
+        var name = CdpBrowser.Str(node, "localName") is { Length: > 0 } local ? local : CdpBrowser.Str(node, "nodeName");
+        var attributes = new List<KeyValuePair<string, string>>();
+        if (node.TryGetProperty("attributes", out var flat) && flat.ValueKind == JsonValueKind.Array)
+        {
+            var items = flat.EnumerateArray().Select(a => a.GetString() ?? "").ToArray();
+            for (var i = 0; i + 1 < items.Length; i += 2)
+                attributes.Add(new(items[i], items[i + 1]));
+        }
+        return (name, attributes);
+    }
+
+    // ---------- JS модели ----------
+
+    /// <summary>Запас на ответ браузера сверх потолка исполнения, который браузер держит сам.</summary>
+    private static readonly TimeSpan EvaluateReplyMargin = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// Выражение модели в странице ЭТОЙ вкладки (сессия вкладки, не цель браузера): значение
+    /// возвращается сериализованным (<c>returnByValue</c>), промис дожидается (<c>awaitPromise</c>).
+    /// Синхронное исполнение браузер обрывает сам по <c>timeout</c>, ожидание промиса и зависшую
+    /// страницу режет наш таймаут команды — <see cref="CdpTimeoutException"/>. Сырой ответ:
+    /// <c>result</c> (RemoteObject) и, при исключении страницы, <c>exceptionDetails</c>.
+    /// </summary>
+    public Task<JsonElement> EvaluateAsync(string expression, TimeSpan timeout, CancellationToken cancellationToken = default) =>
+        Connection.SendAsync("Runtime.evaluate", new JsonObject
+        {
+            ["expression"] = expression,
+            ["returnByValue"] = true,
+            ["awaitPromise"] = true,
+            ["timeout"] = (int)timeout.TotalMilliseconds,
+        }, SessionId, timeout + EvaluateReplyMargin, cancellationToken);
 
     public Task ScrollIntoViewAsync(int backendNodeId, CancellationToken cancellationToken = default) =>
         Send("DOM.scrollIntoViewIfNeeded", Node(backendNodeId), cancellationToken);

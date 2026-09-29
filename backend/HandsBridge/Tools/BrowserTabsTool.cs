@@ -21,12 +21,13 @@ public static partial class BrowserTabsTool
     /// action='list' shows every tab with its tabId and marks the current one. action='new' opens a tab (url is optional,
     /// same address rules as browser_navigate) and makes it current. action='select' makes a tab current, action='close'
     /// closes it; both need tabId. Other browser_* tools work on the current tab; switching tabs drops snapshot refs.
+    /// action='new' and action='select' reply with a short snapshot of the tab and its fresh refs.
     /// </remarks>
     /// <param name="action">One of: 'list', 'new', 'select', 'close'.</param>
     /// <param name="url">Address for action='new': http://, https:// or about:blank. Default: about:blank.</param>
     /// <param name="tabId">Tab id from action='list' for 'select' and 'close'.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The tab list or the result of the action.</returns>
+    /// <returns>The tab list, the result of the action, or a short snapshot of the new current tab.</returns>
     [McpServerTool(Name = "browser_tabs", Title = "Browser: Tabs", Destructive = true, OpenWorld = true)]
     public static async partial Task<CallToolResult> ExecuteAsync(
         string action,

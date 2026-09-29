@@ -21,11 +21,14 @@ public static class HandsTools
     public const string BrowserTabs = "browser_tabs";
     public const string BrowserWait = "browser_wait";
     public const string BrowserScreenshot = "browser_screenshot";
+    public const string BrowserQuery = "browser_query";
+    public const string BrowserEvaluate = "browser_evaluate";
 
     public static readonly IReadOnlyList<string> All =
     [
         App, UiSnapshot, UiFind, UiClick, UiType, UiRead, WindowManagement, ScreenshotControl,
         BrowserNavigate, BrowserSnapshot, BrowserClick, BrowserType, BrowserTabs, BrowserWait, BrowserScreenshot,
+        BrowserQuery, BrowserEvaluate,
     ];
 }
 
@@ -264,7 +267,7 @@ public sealed class HandsPolicy(IHandsWindowSystem windows, string? browserProfi
     /// Адрес <c>browser_navigate</c> и новой вкладки: белый список — <c>http</c>, <c>https</c> и
     /// ровно <c>about:blank</c> (ADR-016 §7.1). Всё прочее — отказ: <c>file:</c> и
     /// <c>chrome:</c> — не дело руки, <c>javascript:</c> и <c>data:</c> — исполнение JS от модели
-    /// в обход запрета <c>evaluate</c>. Переходим по нормализованной строке из решения, а не по
+    /// в обход гейта <c>browser_evaluate</c> и его журнала. Переходим по нормализованной строке из решения, а не по
     /// присланной: разбор .NET и Chromium не расходятся на том, что проверено.
     /// </summary>
     public static HandsUrlDecision CheckBrowserUrl(string? url)
@@ -349,6 +352,69 @@ public sealed class HandsPolicy(IHandsWindowSystem windows, string? browserProfi
             return HandsDecision.Deny($"Wait time must be between 1 and {MaxBrowserWaitMs} ms.");
 
         return HandsDecision.Allow;
+    }
+
+    /// <summary>Потолок длины CSS-селектора <c>browser_query</c>.</summary>
+    public const int MaxBrowserSelectorChars = 1_000;
+
+    /// <summary>Потолок числа элементов в ответе <c>browser_query</c>.</summary>
+    public const int MaxBrowserQueryLimit = 100;
+
+    /// <summary>Режимы <c>browser_query</c>: текст поддерева, атрибуты, разметка.</summary>
+    public static readonly IReadOnlyList<string> BrowserQueryModes = ["text", "attributes", "html"];
+
+    /// <summary>
+    /// <c>browser_query</c> — чтение DOM без JS: CSS-селектор, ссылка снимка или оба (селектор
+    /// внутри элемента). Селектор непустой, без управляющих символов и не длиннее
+    /// <see cref="MaxBrowserSelectorChars"/>; режим — из <see cref="BrowserQueryModes"/> (нет —
+    /// <c>text</c>); число элементов — от 1 до <see cref="MaxBrowserQueryLimit"/>; ссылка — как у
+    /// <see cref="CheckBrowserRef"/>.
+    /// </summary>
+    public static HandsDecision CheckBrowserQuery(string? selector, string? reference, string? mode, int? limit,
+        Func<string, int?> resolveRef)
+    {
+        if (mode is not null && !BrowserQueryModes.Contains(mode))
+            return HandsDecision.Deny($"Unknown browser_query mode '{mode}'. Use text, attributes or html.");
+
+        if (limit is { } n && (n <= 0 || n > MaxBrowserQueryLimit))
+            return HandsDecision.Deny($"limit must be between 1 and {MaxBrowserQueryLimit}.");
+
+        if (selector is not null)
+        {
+            if (string.IsNullOrWhiteSpace(selector))
+                return HandsDecision.Deny("selector must not be empty. Pass a CSS selector like 'a.result' or omit it and pass ref.");
+            if (selector.Length > MaxBrowserSelectorChars)
+                return HandsDecision.Deny($"selector is longer than {MaxBrowserSelectorChars} characters.");
+            if (selector.Any(char.IsControl))
+                return HandsDecision.Deny("selector must not contain control characters.");
+        }
+
+        if (reference is null)
+            return selector is null
+                ? HandsDecision.Deny("browser_query requires selector (CSS) or ref from a snapshot.")
+                : HandsDecision.Allow;
+
+        return CheckBrowserRef(HandsTools.BrowserQuery, reference, resolveRef);
+    }
+
+    /// <summary>Потолок длины скрипта <c>browser_evaluate</c>.</summary>
+    public const int MaxBrowserScriptChars = 10_000;
+
+    /// <summary>
+    /// <c>browser_evaluate</c> — JS модели в странице текущей вкладки (ADR-016 §7.1, решение
+    /// владельца 2026-09-29). Гейт держит только форму: скрипт непустой и не длиннее
+    /// <see cref="MaxBrowserScriptChars"/>. Что скрипт сделает в странице, гейт не проверяет и
+    /// проверить не может: границы — вкладка своего профиля, потолок времени и размера результата
+    /// в сессии, запрет загрузок и схем адресов остаётся в силе.
+    /// </summary>
+    public static HandsDecision CheckBrowserEvaluate(string? script)
+    {
+        if (string.IsNullOrWhiteSpace(script))
+            return HandsDecision.Deny("script is required: a JavaScript expression, for example document.title.");
+
+        return script.Length > MaxBrowserScriptChars
+            ? HandsDecision.Deny($"script is longer than {MaxBrowserScriptChars} characters. Use a shorter expression or browser_query.")
+            : HandsDecision.Allow;
     }
 
     /// <summary><c>browser_screenshot</c>: как <see cref="CheckScreenshot"/> — только в ответ, на диск не пишется.</summary>

@@ -17,8 +17,9 @@ public static partial class BrowserClickTool
     [Description(
         "Click an element of the current browser tab by its ref from browser_snapshot. " +
         "The click is delivered inside the browser: the user's mouse does not move and Chrome does not need to be in front. " +
-        "The element is scrolled into view and clicked at its center. If something covers it, nothing happens: " +
-        "check with a fresh browser_snapshot. After a click that changes the page, take a new snapshot before using refs.")]
+        "The element is scrolled into view and clicked at its center. If something covers it, nothing happens. " +
+        "If the click opens another page, the tool waits for it to load. The reply contains a fresh short snapshot of the " +
+        "page with new refs: use them directly, do not call browser_snapshot after every click.")]
     [McpServerTool(Name = "browser_click", Title = "Browser: Click", Destructive = true, OpenWorld = true)]
     public static async Task<CallToolResult> ExecuteAsync(
         [Description("Element ref from the latest browser_snapshot, like e12.")] string @ref,

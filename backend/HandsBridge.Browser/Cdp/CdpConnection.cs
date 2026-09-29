@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -62,6 +63,7 @@ public sealed class CdpConnection : IAsyncDisposable
         var result = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
         _pending[id] = new PendingCommand(method, result);
         var limit = timeout ?? _commandTimeout;
+        var started = Stopwatch.GetTimestamp();
         try
         {
             // Close мог пройти между проверкой выше и регистрацией: тогда он нас не увидел
@@ -76,6 +78,7 @@ public sealed class CdpConnection : IAsyncDisposable
         finally
         {
             _pending.TryRemove(id, out _);
+            CdpMeter.AddCall(Stopwatch.GetElapsedTime(started));
         }
     }
 
@@ -120,6 +123,7 @@ public sealed class CdpConnection : IAsyncDisposable
                 if (predicate is null || predicate(e.Params)) hit.TrySetResult(e.Params);
             },
             reason => hit.TrySetException(new CdpDisconnectedException(reason))));
+        var started = Stopwatch.GetTimestamp();
         try
         {
             return await hit.Task.WaitAsync(timeout, cancellationToken);
@@ -127,6 +131,10 @@ public sealed class CdpConnection : IAsyncDisposable
         catch (TimeoutException)
         {
             throw new CdpTimeoutException(method, timeout);
+        }
+        finally
+        {
+            CdpMeter.AddWait(Stopwatch.GetElapsedTime(started));
         }
     }
 

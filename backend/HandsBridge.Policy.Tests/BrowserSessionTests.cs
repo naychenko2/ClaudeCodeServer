@@ -44,6 +44,19 @@ public sealed class BrowserSessionTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Navigate_answers_after_dom_ready_and_a_short_quiet_not_after_load()
+    {
+        _source.Current.Settles = false;
+
+        var reply = await _session.NavigateAsync("https://example.org/", CancellationToken.None);
+
+        Assert.False(reply.IsError, reply.Text);
+        Assert.DoesNotContain("not ready", reply.Text);
+        Assert.True(reply.Timing!.Wait < BrowserSession.SettleTimeout + TimeSpan.FromSeconds(1), $"ожидание {reply.Timing.Wait}");
+        Assert.True(reply.Timing.Wait >= BrowserSession.SettleTimeout - TimeSpan.FromMilliseconds(50), $"ожидание {reply.Timing.Wait}");
+    }
+
+    [Fact]
     public async Task Every_reply_carries_a_timing_for_hands_log()
     {
         _source.Current.LoadDelay = TimeSpan.FromMilliseconds(150);
@@ -307,13 +320,23 @@ public sealed class BrowserSessionTests : IAsyncLifetime
                 {
                     if (LoadDelay > TimeSpan.Zero)
                         await Task.Delay(LoadDelay);
-                    _pipe.Frame("""{"method":"Page.loadEventFired","sessionId":"S1","params":{}}""");
+                    var session = frame.TryGetProperty("sessionId", out var s) ? s.GetString() : null;
+                    Lifecycle(session!, "DOMContentLoaded");
+                    if (Settles)
+                        Lifecycle(session!, "load");
                 }
             }
         }
 
         /// <summary>Сколько страница «грузится» после ответа на Page.navigate.</summary>
         public TimeSpan LoadDelay { get; set; }
+
+        /// <summary>Приходит ли load после DOMContentLoaded; нет — страница «висит» на рекламе.</summary>
+        public bool Settles { get; set; } = true;
+
+        /// <summary>Событие жизненного цикла главного фрейма F1 документа L1.</summary>
+        public void Lifecycle(string session, string name) =>
+            _pipe.Frame($$$"""{"method":"Page.lifecycleEvent","sessionId":"{{{session}}}","params":{"frameId":"F1","loaderId":"L1","name":"{{{name}}}"}}""");
 
         string Result(string method, JsonElement parameters) => method switch
         {
@@ -322,6 +345,7 @@ public sealed class BrowserSessionTests : IAsyncLifetime
             "Target.createTarget" => AddTab(),
             "Target.attachToTarget" => $$"""{"sessionId":"{{(parameters.GetProperty("targetId").GetString() == "T1" ? "S1" : "S2")}}"}""",
             "Page.navigate" => """{"frameId":"F1","loaderId":"L1"}""",
+            "Page.getFrameTree" => """{"frameTree":{"frame":{"id":"F1","loaderId":"L0","url":"about:blank"}}}""",
             "Accessibility.getFullAXTree" => Tree,
             "DOM.getBoxModel" => """{"model":{"content":[10,20,20,20,20,30,10,30]}}""",
             "Page.captureScreenshot" => """{"data":"AQID"}""",

@@ -25,8 +25,15 @@ public sealed class BrowserSession(IBrowserSource source)
     public const string RestartedNotice =
         "The browser was restarted (its window had been closed): earlier snapshot refs are gone, take a fresh browser_snapshot.";
 
-    /// <summary>Сколько <c>browser_navigate</c> ждёт события load.</summary>
+    /// <summary>Потолок ожидания готовности DOM (DOMContentLoaded) после перехода.</summary>
     public static readonly TimeSpan LoadTimeout = TimeSpan.FromSeconds(15);
+
+    /// <summary>
+    /// Короткое затишье после готовности DOM: ждём load или почти пустую сеть не дольше этого.
+    /// Секунды хватает догрузить скрипты, рисующие содержимое, и не ждать рекламу со счётчиками,
+    /// которые держали load до потолка.
+    /// </summary>
+    public static readonly TimeSpan SettleTimeout = TimeSpan.FromSeconds(1);
 
     /// <summary>Ожидание текста без явного времени.</summary>
     public const int DefaultTextWaitMs = 10_000;
@@ -54,20 +61,23 @@ public sealed class BrowserSession(IBrowserSource source)
             return _refs.TryGetValue(reference, out var node) ? node : null;
     }
 
-    /// <summary>Переход по адресу, уже проверенному гейтом, с ожиданием load не дольше <see cref="LoadTimeout"/>.</summary>
+    /// <summary>
+    /// Переход по адресу, уже проверенному гейтом: готовность DOM не дольше <see cref="LoadTimeout"/>
+    /// плюс затишье не дольше <see cref="SettleTimeout"/>.
+    /// </summary>
     public Task<BrowserReply> NavigateAsync(string url, CancellationToken cancellationToken) =>
         RunAsync(async browser =>
         {
             var page = await CurrentPageAsync(browser, cancellationToken);
             ClearRefs(page.TargetId);
-            var navigation = await page.NavigateAsync(url, LoadTimeout, cancellationToken);
+            var navigation = await page.NavigateAsync(url, LoadTimeout, SettleTimeout, cancellationToken);
             if (navigation.ErrorText is not null)
                 return new BrowserReply($"Navigation to {url} failed: {navigation.ErrorText}", IsError: true);
 
             var text = await DescribeAsync(browser, page.TargetId, cancellationToken) +
                        "\nTake browser_snapshot to read the page and get element refs.";
             if (!navigation.Loaded)
-                text += $"\nThe page did not finish loading within {LoadTimeout.TotalSeconds:0} s; it may still be loading.";
+                text += $"\nThe page content was not ready within {LoadTimeout.TotalSeconds:0} s; it may still be loading.";
             return new BrowserReply(text);
         }, cancellationToken);
 

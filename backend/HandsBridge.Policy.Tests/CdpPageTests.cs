@@ -49,31 +49,67 @@ public sealed class CdpPageTests : IAsyncLifetime
         await call;
     }
 
+    static readonly TimeSpan Forever = TimeSpan.FromMinutes(5);
+
     [Fact]
-    public async Task Navigate_waits_for_load_of_its_own_session_only()
+    public async Task Navigate_waits_for_dom_of_its_own_session_frame_and_document_only()
     {
-        var nav = _page.NavigateAsync("https://example.org/", Short);
+        var nav = _page.NavigateAsync("https://example.org/", Forever, Forever);
 
         var sent = await Expect("Page.navigate");
         Assert.Equal("S1", sent.GetProperty("sessionId").GetString());
         Reply(sent, """{"frameId":"F1","loaderId":"L1"}""");
-        var marker = _cdp.WaitForEventAsync("Marker", null, Short);
-        _pipe.Frame("""{"method":"Page.loadEventFired","sessionId":"S2","params":{}}""");
-        _pipe.Frame("""{"method":"Marker"}""");
-        await marker;
+        Lifecycle("S2", "F1", "L1", "DOMContentLoaded");
+        Lifecycle("S1", "F2", "L1", "DOMContentLoaded");
+        Lifecycle("S1", "F1", "L0", "DOMContentLoaded");
+        Lifecycle("S1", "F1", "L0", "load");
+        await Drain();
         Assert.False(nav.IsCompleted);
 
-        _pipe.Frame("""{"method":"Page.loadEventFired","sessionId":"S1","params":{}}""");
-        var result = await nav;
+        Lifecycle("S1", "F1", "L1", "DOMContentLoaded");
+        await Drain();
+        Assert.False(nav.IsCompleted);
+
+        Lifecycle("S1", "F1", "L1", "load");
+        var result = await nav.WaitAsync(Short);
         Assert.True(result.Loaded);
+        Assert.True(result.Settled);
         Assert.Null(result.ErrorText);
         Assert.Equal("F1", result.FrameId);
     }
 
     [Fact]
+    public async Task Dom_ready_arriving_before_the_navigate_reply_is_not_lost()
+    {
+        var nav = _page.NavigateAsync("https://example.org/", Forever, Forever);
+
+        var sent = await Expect("Page.navigate");
+        Lifecycle("S1", "F1", "L1", "DOMContentLoaded");
+        Lifecycle("S1", "F1", "L1", "networkAlmostIdle");
+        Reply(sent, """{"frameId":"F1","loaderId":"L1"}""");
+
+        var result = await nav.WaitAsync(Short);
+        Assert.True(result.Loaded);
+        Assert.True(result.Settled);
+    }
+
+    [Fact]
+    public async Task Navigate_does_not_wait_for_load_beyond_a_short_quiet_after_dom_ready()
+    {
+        var nav = _page.NavigateAsync("https://ads.example/", Forever, TimeSpan.FromMilliseconds(200));
+        Reply(await Expect("Page.navigate"), """{"frameId":"F1","loaderId":"L1"}""");
+        Lifecycle("S1", "F1", "L1", "DOMContentLoaded");
+
+        // load так и не придёт: реклама держит страницу, а ответ нужен сейчас
+        var result = await nav.WaitAsync(Short);
+        Assert.True(result.Loaded);
+        Assert.False(result.Settled);
+    }
+
+    [Fact]
     public async Task Navigate_returns_error_text_without_waiting_for_load()
     {
-        var nav = _page.NavigateAsync("https://nowhere.invalid/", TimeSpan.FromMinutes(5));
+        var nav = _page.NavigateAsync("https://nowhere.invalid/", Forever, Forever);
         Reply(await Expect("Page.navigate"), """{"frameId":"F1","loaderId":"L1","errorText":"net::ERR_NAME_NOT_RESOLVED"}""");
 
         var result = await nav.WaitAsync(Short);
@@ -82,9 +118,9 @@ public sealed class CdpPageTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Navigate_reports_not_loaded_when_load_does_not_come_in_time()
+    public async Task Navigate_reports_not_loaded_when_dom_is_not_ready_in_time()
     {
-        var nav = _page.NavigateAsync("https://slow.example/", TimeSpan.FromMilliseconds(200));
+        var nav = _page.NavigateAsync("https://slow.example/", TimeSpan.FromMilliseconds(200), Forever);
         Reply(await Expect("Page.navigate"), """{"frameId":"F1","loaderId":"L1"}""");
 
         Assert.False((await nav.WaitAsync(Short)).Loaded);
@@ -93,10 +129,88 @@ public sealed class CdpPageTests : IAsyncLifetime
     [Fact]
     public async Task Same_document_navigation_does_not_wait_for_load()
     {
-        var nav = _page.NavigateAsync("https://example.org/#top", TimeSpan.FromMinutes(5));
+        var nav = _page.NavigateAsync("https://example.org/#top", Forever, Forever);
         Reply(await Expect("Page.navigate"), """{"frameId":"F1"}""");
 
         Assert.True((await nav.WaitAsync(Short)).Loaded);
+    }
+
+    [Fact]
+    public async Task Broken_pipe_ends_the_load_wait_at_once()
+    {
+        var nav = _page.NavigateAsync("https://example.org/", Forever, Forever);
+        Reply(await Expect("Page.navigate"), """{"frameId":"F1","loaderId":"L1"}""");
+
+        _pipe.EndOfStream();
+
+        await Assert.ThrowsAsync<CdpDisconnectedException>(() => nav.WaitAsync(Short));
+    }
+
+    [Fact]
+    public async Task Navigation_start_after_a_click_is_seen_and_its_document_awaited()
+    {
+        using var watch = _page.WatchLoad();
+        _pipe.Frame("""{"method":"Page.frameRequestedNavigation","sessionId":"S1","params":{"frameId":"F2","reason":"scriptInitiated","url":"https://ads/"}}""");
+        _pipe.Frame("""{"method":"Page.frameRequestedNavigation","sessionId":"S1","params":{"frameId":"F1","reason":"anchorClick","url":"https://example.org/next"}}""");
+
+        Assert.True(await watch.WaitForNavigationStartAsync("F1", Short).WaitAsync(Short));
+
+        Lifecycle("S1", "F1", "L7", "init");
+        Lifecycle("S1", "F1", "L7", "DOMContentLoaded");
+        Lifecycle("S1", "F1", "L7", "load");
+        Assert.Equal(CdpLoadState.Settled, await watch.WaitForLoadAsync("F1", null, Forever, Forever).WaitAsync(Short));
+    }
+
+    [Fact]
+    public async Task Click_without_navigation_waits_only_the_short_window()
+    {
+        using var watch = _page.WatchLoad();
+
+        var started = DateTime.UtcNow;
+        Assert.False(await watch.WaitForNavigationStartAsync("F1", TimeSpan.FromMilliseconds(150)).WaitAsync(Short));
+        Assert.True(DateTime.UtcNow - started >= TimeSpan.FromMilliseconds(100));
+    }
+
+    [Fact]
+    public async Task Same_document_navigation_after_a_click_is_not_a_load()
+    {
+        using var watch = _page.WatchLoad();
+        _pipe.Frame("""{"method":"Page.navigatedWithinDocument","sessionId":"S1","params":{"frameId":"F1","url":"https://example.org/#b"}}""");
+
+        Assert.False(await watch.WaitForNavigationStartAsync("F1", Forever).WaitAsync(Short));
+    }
+
+    [Fact]
+    public async Task Stopped_loading_without_a_new_document_ends_the_wait_of_an_unknown_loader()
+    {
+        using var watch = _page.WatchLoad();
+        _pipe.Frame("""{"method":"Page.frameStoppedLoading","sessionId":"S1","params":{"frameId":"F1"}}""");
+
+        Assert.Equal(CdpLoadState.NotLoaded, await watch.WaitForLoadAsync("F1", null, Forever, Forever).WaitAsync(Short));
+    }
+
+    [Fact]
+    public async Task Enable_learns_the_main_frame()
+    {
+        var enable = _page.EnableAsync();
+        Reply(await Expect("Page.enable"), "{}");
+        Reply(await Expect("Page.setLifecycleEventsEnabled"), "{}");
+        Reply(await Expect("Page.getFrameTree"), """{"frameTree":{"frame":{"id":"MAIN","loaderId":"L0"},"childFrames":[]}}""");
+        await enable;
+
+        Assert.Equal("MAIN", _page.MainFrameId);
+    }
+
+    void Lifecycle(string session, string frame, string loader, string name) =>
+        _pipe.Frame($$$"""{"method":"Page.lifecycleEvent","sessionId":"{{{session}}}","params":{"frameId":"{{{frame}}}","loaderId":"{{{loader}}}","name":"{{{name}}}"}}""");
+
+    /// <summary>Все события до этой точки соединение уже разослало.</summary>
+    async Task Drain()
+    {
+        var marker = _cdp.WaitForEventAsync("Marker", null, Short);
+        _pipe.Frame("""{"method":"Marker"}""");
+        await marker;
+        await Task.Delay(50);
     }
 
     [Fact]

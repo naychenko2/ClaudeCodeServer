@@ -17,7 +17,7 @@ import { computeTodoBatches } from '../hooks/useSessionArtifacts';
 import { useChatScroll } from '../hooks/useChatScroll';
 import { useOnline } from '../hooks/useOnline';
 import { api, setGitSessionContext } from '../lib/api';
-import { ensureGit, getGitState, gitStripStatus, loadUnpushedLog, useGitStripAvailable } from '../lib/git';
+import { ensureGit, getGitState, gitStripIdle, gitStripStatus, loadUnpushedLog, useGitStripAvailable } from '../lib/git';
 import { slugify } from '../lib/slug';
 import { parseWorkflowMeta } from '../lib/workflowMeta';
 import { detectTeamMechanic, buildTeamTurnText, DEFAULT_TEAM_SETTINGS, type TeamMechanicId } from '../features/team/teamMechanics';
@@ -2901,6 +2901,12 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
                     if (!g.status?.isRepo) return null;
                     const branch = session.worktreeBranch ?? g.status.branch ?? '—';
                     return `${branch} · ${gitStripStatus(g.status, g.unpushed.length).text}`;
+                  },
+                  // Чистое дерево без своего worktree полоса сама держит строкой
+                  // (ProjectGitBar, autoMicro) — пункт «Развернуть» там ничего бы не сделал
+                  collapsible: () => {
+                    const g = getGitState(project.id);
+                    return !gitStripIdle(g.status, g.unpushed.length, !!session.worktreeBranch || !!turnTree);
                   },
                 },
               }]} />

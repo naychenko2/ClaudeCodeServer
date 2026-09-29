@@ -499,6 +499,13 @@ export function gitStripStatus(status: GitStatus | null, unpushed: number): { te
   return { text: 'чисто, всё опубликовано', tone: 'clean' };
 }
 
+// Git-полоса «без дела»: чисто, всё опубликовано и нет своего дерева (чата или хода).
+// Тогда полоса стоит строкой и не разворачивается — одно условие и для самой полосы,
+// и для пункта «Развернуть» в меню переключателя, иначе они разъедутся
+export function gitStripIdle(status: GitStatus | null, unpushed: number, hasTree: boolean): boolean {
+  return !hasTree && gitStripStatus(status, unpushed).tone === 'clean';
+}
+
 // Состояние git проекта (статус/история/ветки/busy/ошибка)
 export function useGitState(projectId: string): GitProjectState {
   return useSyncExternalStore(

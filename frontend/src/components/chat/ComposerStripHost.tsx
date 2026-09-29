@@ -81,13 +81,17 @@ export function ComposerStripHost({ projectId, sessionId, isMobile, builtins = [
           onClick={() => { close(); select(s.name!); }}
         />
       ))}
-      <MenuSep />
-      <MenuItem
-        icon={collapsed ? <ChevronsUpDown size={15} strokeWidth={ICON_STROKE} /> : <ChevronsDownUp size={15} strokeWidth={ICON_STROKE} />}
-        isMobile={isMobile}
-        label={collapsed ? 'Развернуть полосу' : 'Свернуть полосу в строку'}
-        onClick={() => { close(); setCollapsed(!collapsed); }}
-      />
+      {(current.action!.collapsible?.(avail) ?? true) && (
+        <>
+          <MenuSep />
+          <MenuItem
+            icon={collapsed ? <ChevronsUpDown size={15} strokeWidth={ICON_STROKE} /> : <ChevronsDownUp size={15} strokeWidth={ICON_STROKE} />}
+            isMobile={isMobile}
+            label={collapsed ? 'Развернуть полосу' : 'Свернуть полосу в строку'}
+            onClick={() => { close(); setCollapsed(!collapsed); }}
+          />
+        </>
+      )}
     </>
   );
 

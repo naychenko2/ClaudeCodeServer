@@ -240,6 +240,9 @@ export interface ComposerStripApi {
   isAvailable?: (ctx: { projectId: string; sessionId: string | null }) => boolean;
   // Строка состояния в меню переключателя: «feat/site-header · 3 файла изменено», «Работаем с: hero.png · версия 2»
   status?: (ctx: { projectId: string; sessionId: string | null }) => ReactNode;
+  // false — полоса сейчас не сворачивается и не разворачивается (чистый Git всегда строкой):
+  // пункт «Свернуть/Развернуть полосу» в меню переключателя не показывается
+  collapsible?: (ctx: { projectId: string; sessionId: string | null }) => boolean;
 }
 
 // Слот `composer-mode`: режим поля ввода рядом с «Чатом» («Картинка»). Имя вклада — id режима.

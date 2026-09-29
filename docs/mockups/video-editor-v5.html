@@ -1,0 +1,1727 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Редактор видео v5 — по сценам, сцена = файл</title>
+<style>
+  /* Токены — копия theme.css (обе темы): макет открывается без сети и без сборки.
+     Имена переменных повторяют C.* из lib/design.ts: --c-bg-panel = C.bgPanel и т. д. */
+  :root {
+    --c-bg-main: #F4F0E8; --c-bg-panel: #EDE7DC; --c-bg-card: #FBF8F2; --c-bg-white: #FFFFFF;
+    --c-bg-selected: #E8E1D4; --c-bg-inset: #E7E0D2;
+    --c-text-heading: #2A251F; --c-text-primary: #39332B; --c-text-secondary: #756B5E; --c-text-muted: #9A8F7E;
+    --c-on-accent: #FBF8F2; --c-accent: #D97757; --c-accent-light: #F4ECE1; --c-accent-muted: #EAD3C5;
+    --c-border: #E0D7C8; --c-border-light: #E8E1D4; --c-divider: #DDD4C4; --c-dashed: #D0C6B4;
+    --c-overlay: rgba(23, 19, 15, 0.42);
+    --c-diff-add-text: #3F7A4F; --c-diff-add-bg: #E3EFE2; --c-diff-rem-text: #B4452F; --c-diff-rem-bg: #F6E0DA;
+    --c-info: #3E7CA6; --c-warning-text: #8A6A28; --c-warning-bg: #F5ECD6; --c-danger: #B4452F; --c-danger-bg: #F6E0DA;
+    --c-success: #3F7A4F;
+    --shadow-focus: 0 0 0 3px rgba(217, 119, 87, 0.14);
+    --shadow-card: 0 2px 8px rgba(60, 50, 35, 0.05);
+    --shadow-island: 0 1px 2px rgba(60, 50, 35, 0.06), 0 6px 20px rgba(60, 50, 35, 0.10);
+    --shadow-dropdown: 0 8px 28px rgba(60, 50, 35, 0.16);
+    --shadow-modal: 0 24px 64px rgba(23, 19, 15, 0.28);
+    --shadow-sheet: 0 -8px 40px rgba(23, 19, 15, 0.22);
+  }
+  [data-theme="dark"] {
+    --c-bg-main: #201C18; --c-bg-panel: #272320; --c-bg-card: #2E2A25; --c-bg-white: #2E2A25;
+    --c-bg-selected: #38332D; --c-bg-inset: #1B1815;
+    --c-text-heading: #F2ECE1; --c-text-primary: #EDE6DB; --c-text-secondary: #B3A897; --c-text-muted: #8A8072;
+    --c-on-accent: #201C18; --c-accent: #E38A6A; --c-accent-light: #3A2E27; --c-accent-muted: #4A362C;
+    --c-border: #3D3830; --c-border-light: #34302A; --c-divider: #454037; --c-dashed: #4A443B;
+    --c-overlay: rgba(0, 0, 0, 0.58);
+    --c-diff-add-text: #8FC47E; --c-diff-add-bg: #2A3A26; --c-diff-rem-text: #EE8A72; --c-diff-rem-bg: #45281F;
+    --c-info: #5FA0CC; --c-warning-text: #E7B96E; --c-warning-bg: #3D3222; --c-danger: #EE8A72; --c-danger-bg: #45281F;
+    --c-success: #8FC47E;
+    --shadow-focus: 0 0 0 3px rgba(227, 138, 106, 0.24);
+    --shadow-card: 0 2px 10px rgba(0, 0, 0, 0.35);
+    --shadow-island: 0 1px 2px rgba(0,0,0,.30), 0 8px 24px rgba(0,0,0,.45);
+    --shadow-dropdown: 0 10px 32px rgba(0, 0, 0, 0.5);
+    --shadow-modal: 0 24px 64px rgba(0, 0, 0, 0.6);
+    --shadow-sheet: 0 -10px 46px rgba(0, 0, 0, 0.55);
+  }
+
+  /* Шкалы: FS xs 11 · sm 12 · base 13 · md 14 · lg 16; SP 2/4/8/12/16/24; R sm 6 · md 8 · lg 10 · xl 12 · xxl 14 · max 999 · sheet 22 */
+  * { box-sizing: border-box; }
+  html, body { overflow-x: hidden; }
+  body { margin: 0; padding: 12px 16px 40px; background: var(--c-bg-main); color: var(--c-text-primary);
+    font-family: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; }
+  body.w390 { padding: 6px 0 40px; }
+  button { font: inherit; color: inherit; }
+  textarea { font: inherit; color: inherit; }
+  svg { flex-shrink: 0; display: block; }
+  .mono { font-family: 'JetBrains Mono', 'Courier New', monospace; }
+  .grow { flex: 1 1 0; min-width: 0; }
+  .ell { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .muted { color: var(--c-text-muted); }
+  .page { max-width: 1360px; margin: 0 auto; }
+  h1.doc { font-family: 'PT Serif', Georgia, serif; font-size: 22px; color: var(--c-text-heading); margin: 0 0 4px; }
+  p.lead { color: var(--c-text-secondary); margin: 0 0 6px; max-width: 980px; line-height: 1.5; }
+  body.w390 h1.doc, body.w390 p.lead { padding: 0 12px; }
+  ins { text-decoration: none; background: var(--c-diff-add-bg); color: var(--c-diff-add-text); border-radius: 3px; padding: 0 1px; }
+  del { background: var(--c-diff-rem-bg); color: var(--c-diff-rem-text); border-radius: 3px; padding: 0 1px; }
+
+  /* Демо-управление макетом (не часть продукта) */
+  .demo { position: sticky; top: 0; z-index: 80; background: var(--c-bg-main); display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; padding: 8px 0 8px; }
+  body.w390 .demo { padding: 8px 12px 8px; }
+  .demo .grp { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+  .demo .lbl { font-size: 11px; color: var(--c-text-muted); margin-right: 2px; }
+  .tbtn { font-size: 12px; cursor: pointer; border: 1px solid var(--c-border); background: var(--c-bg-card); border-radius: 10px; padding: 4px 9px; }
+  .tbtn[aria-pressed="true"] { background: var(--c-accent); color: var(--c-on-accent); border-color: transparent; }
+  .vdesc { font-size: 12px; color: var(--c-text-secondary); margin: 0 0 8px; line-height: 1.5; max-width: 1100px; min-height: 18px; }
+  body.w390 .vdesc { padding: 0 12px; }
+  .vdesc b { color: var(--c-text-heading); }
+
+  .frame { border: 1px solid var(--c-border); border-radius: 14px; padding: 10px; background: var(--c-bg-main); }
+  body.w390 .frame { border: none; padding: 0; border-radius: 0; }
+
+  /* Раскладка приложения */
+  .app { position: relative; display: flex; gap: 8px; height: 900px; width: 100%; }
+  .app.mob { width: 390px; max-width: 100%; margin: 0 auto; height: 820px; border: 1px solid var(--c-border); border-radius: 22px; overflow: hidden; gap: 0; }
+  body.w390 .app.mob { border-radius: 0; border-left: none; border-right: none; }
+  .rail { width: 44px; flex: 0 0 44px; display: flex; flex-direction: column; align-items: center; gap: 6px; padding-top: 6px; }
+  .rail .ri { width: 32px; height: 32px; border-radius: 10px; display: grid; place-items: center; color: var(--c-text-muted); }
+  .rail .ri.on { background: var(--c-bg-selected); color: var(--c-accent); }
+  .island { background: var(--c-bg-panel); border: 1px solid var(--c-border-light); border-radius: 14px; box-shadow: var(--shadow-island);
+    display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+  .island.side { flex: 0 0 236px; }
+  .ph { height: 42px; flex: 0 0 42px; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 12px; border-bottom: 1px solid var(--c-border-light); background: var(--c-bg-inset);
+    font-weight: 600; color: var(--c-text-heading); }
+  .ph .sub { font-weight: 400; font-size: 11px; color: var(--c-text-muted); }
+  .chat { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; background: var(--c-bg-main); border-radius: 14px; overflow: hidden; border: 1px solid var(--c-border-light); position: relative; }
+  .app.mob .chat { border: none; border-radius: 0; }
+  .chat > .ph { background: var(--c-bg-main); font-family: 'PT Serif', Georgia, serif; font-size: 16px; color: var(--c-accent); border-bottom-color: var(--c-border-light); }
+  .feed { flex: 1 1 auto; overflow-y: auto; overflow-x: hidden; padding: 12px 16px 8px; display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+  .app.mob .feed { padding: 10px 10px 6px; }
+  .feedin { max-width: 950px; width: 100%; margin: 0 auto; display: flex; flex-direction: column; gap: 10px; }
+  .dock { padding: 0 16px 10px; position: relative; }
+  .dockin { max-width: 950px; margin: 0 auto; position: relative; }
+  .app.mob .dock { padding: 0 8px 8px; }
+
+  /* Дерево файлов */
+  .tree { padding: 6px 6px 10px; overflow-y: auto; flex: 1 1 auto; font-size: 12.5px; }
+  .tr { display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 6px; border-radius: 8px; color: var(--c-text-primary); cursor: default; position: relative; }
+  .tr:hover { background: var(--c-bg-selected); }
+  .tr svg { color: var(--c-text-muted); }
+  .tr.dir svg { color: var(--c-accent); }
+  .tr.hi { background: var(--c-accent-light); box-shadow: inset 0 0 0 1px var(--c-accent-muted); }
+  .tr.new .nm::after { content: ' · новое'; color: var(--c-accent); font-size: 11px; }
+  .tr .cb { width: 15px; height: 15px; border-radius: 5px; border: 1px solid var(--c-border); background: var(--c-bg-white); display: grid; place-items: center; flex-shrink: 0; cursor: pointer; padding: 0; }
+  .tr .cb.on { background: var(--c-accent); border-color: transparent; color: var(--c-on-accent); }
+  .tr .more { margin-left: auto; opacity: .0; }
+  .tr:hover .more, .tr .more.open { opacity: 1; }
+  .treefoot { padding: 8px; border-top: 1px solid var(--c-border-light); display: flex; flex-direction: column; gap: 6px; }
+  .treehint { font-size: 11px; color: var(--c-text-muted); line-height: 1.4; }
+
+  /* Сообщения ленты */
+  .umsg { align-self: flex-end; max-width: 80%; background: var(--c-bg-card); border: 1px solid var(--c-border-light); border-radius: 14px; padding: 8px 12px; line-height: 1.45; }
+  .amsg { display: flex; gap: 10px; align-items: flex-start; line-height: 1.5; }
+  .amsg .av { width: 24px; height: 24px; border-radius: 8px; background: var(--c-accent-light); color: var(--c-accent); display: grid; place-items: center; flex-shrink: 0; margin-top: 1px; }
+  .amsg .tx { min-width: 0; }
+  .amsg .acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .typing { font-size: 12px; color: var(--c-text-muted); padding-left: 34px; }
+  .quiet { display: block; font-size: 11.5px; color: var(--c-text-muted); text-align: center; line-height: 1.45; padding: 0 12px; }
+  .quiet b { color: var(--c-text-secondary); font-weight: 600; }
+  .lnk { color: var(--c-accent); cursor: pointer; background: none; border: none; padding: 0; font-size: inherit; }
+  .lnk:hover { text-decoration: underline; }
+  .empty { margin: auto; text-align: center; max-width: 460px; color: var(--c-text-secondary); line-height: 1.5; padding: 20px 8px; }
+  .empty h3 { font-family: 'PT Serif', Georgia, serif; color: var(--c-text-heading); font-weight: 400; font-size: 20px; margin: 0 0 6px; }
+  .sugg { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-top: 12px; }
+
+  /* ≈ Badge */
+  .badge { display: inline-flex; align-items: center; gap: 4px; height: 18px; padding: 0 7px; border-radius: 999px; font-size: 11px; font-weight: 600;
+    background: var(--c-accent-light); color: var(--c-accent); border: 1px solid var(--c-accent-muted); white-space: nowrap; }
+  .badge.n { background: var(--c-bg-selected); color: var(--c-text-secondary); border-color: var(--c-border); font-weight: 500; }
+  .badge.warn { background: var(--c-warning-bg); color: var(--c-warning-text); border-color: transparent; }
+  .badge.err { background: var(--c-danger-bg); color: var(--c-danger); border-color: transparent; }
+  .badge.ok { background: var(--c-diff-add-bg); color: var(--c-success); border-color: transparent; }
+
+  /* ≈ Button xs / sm */
+  .btn { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 9px; border-radius: 8px; font-size: 12px; cursor: pointer;
+    border: 1px solid transparent; background: transparent; color: var(--c-text-secondary); white-space: nowrap; flex-shrink: 0; }
+  .btn:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .btn.out { border-color: var(--c-border); background: var(--c-bg-card); color: var(--c-text-heading); }
+  .btn.acc { background: var(--c-accent); color: var(--c-on-accent); font-weight: 600; }
+  .btn.acc:hover { filter: brightness(1.05); }
+  .btn.dng { color: var(--c-danger); border-color: var(--c-border); background: var(--c-bg-card); }
+  .btn[disabled] { opacity: .45; cursor: not-allowed; }
+  .btn.sm { height: 24px; padding: 0 8px; font-size: 11.5px; }
+
+  /* Кнопки плашки — геометрия ProjectGitBar: 28 px, R.md */
+  .pill { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 9px; border: 1px solid var(--c-border); border-radius: 8px;
+    background: var(--c-bg-card); color: var(--c-text-heading); font-size: 12.5px; cursor: pointer; white-space: nowrap; min-width: 0; flex-shrink: 0; }
+  .pill .k { color: var(--c-text-muted); }
+  .pill svg.chev { color: var(--c-text-muted); }
+  .pill.live { border-color: var(--c-accent-muted); }
+  .bacc { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border: none; border-radius: 8px;
+    background: var(--c-accent); color: var(--c-on-accent); font-size: 12.5px; font-weight: 600; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
+  .bacc[disabled] { opacity: .45; cursor: not-allowed; }
+  .ibtn { display: inline-grid; place-items: center; width: 28px; height: 28px; border: none; background: transparent; border-radius: 8px;
+    color: var(--c-text-muted); cursor: pointer; flex-shrink: 0; padding: 0; }
+  .ibtn:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .ibtn.stop { color: var(--c-danger); border: 1px solid var(--c-border); background: var(--c-bg-card); }
+
+  /* ≈ Chip */
+  .chip { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--c-border);
+    background: var(--c-bg-card); color: var(--c-text-primary); font-size: 12px; white-space: nowrap; cursor: pointer; min-width: 0; flex-shrink: 0; }
+  .chip.picked { background: var(--c-accent-light); border-color: var(--c-accent-muted); color: var(--c-accent); }
+  .chip.dash { border-style: dashed; border-color: var(--c-dashed); background: transparent; color: var(--c-text-secondary); }
+  .chip.shrink { flex-shrink: 1; min-width: 120px; }
+  .chip .x { display: inline-grid; place-items: center; color: inherit; opacity: .7; margin-right: -4px; border: none; background: none; padding: 0; cursor: pointer; }
+  .chip .lead { width: 18px; height: 18px; border-radius: 5px; flex-shrink: 0; margin-left: -4px; }
+  .chip b { font-weight: 600; }
+
+  .step { display: inline-flex; align-items: center; gap: 2px; height: 28px; padding: 0 2px; border: 1px solid var(--c-border); border-radius: 999px; background: var(--c-bg-card); flex-shrink: 0; }
+  .step button { width: 22px; height: 22px; border: none; background: transparent; border-radius: 50%; color: var(--c-text-muted); display: grid; place-items: center; cursor: pointer; padding: 0; }
+  .step span { min-width: 14px; text-align: center; color: var(--c-text-heading); font-weight: 600; font-size: 12.5px; }
+  .price { font-size: 12.5px; font-weight: 600; color: var(--c-text-heading); white-space: nowrap; flex-shrink: 0; }
+  .price .k { font-weight: 400; color: var(--c-text-muted); }
+
+  /* === Плашка полосы — эталон ProjectGitBar: 51 px, R.xxl, bgPanel === */
+  .plate { position: relative; display: flex; align-items: center; gap: 6px; height: 51px; padding: 0 8px; margin: 8px 0;
+    background: var(--c-bg-panel); border: 1px solid var(--c-border); border-radius: 14px; min-width: 0; }
+  .vsep { width: 1px; height: 18px; background: var(--c-divider); flex-shrink: 0; }
+  .swwrap { position: relative; display: inline-flex; flex-shrink: 0; }
+  .sw { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 6px; border: none; border-radius: 8px; background: transparent;
+    color: var(--c-text-heading); font-size: 12.5px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+  .sw:hover, .sw.open { background: var(--c-bg-selected); }
+  .sw svg.ico { color: var(--c-accent); }
+  .sw svg.chev { color: var(--c-text-muted); }
+  .sw .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--c-accent); }
+  .spent { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 9px; border: 1px solid var(--c-border); border-radius: 8px; background: var(--c-bg-card);
+    font-size: 12.5px; color: var(--c-text-secondary); cursor: pointer; white-space: nowrap; flex-shrink: 0; }
+  .spent b { color: var(--c-text-heading); }
+  .pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--c-accent); animation: pulse 1.2s ease-in-out infinite; flex-shrink: 0; }
+  @keyframes pulse { 50% { opacity: .25; } }
+  .micro { display: flex; align-items: center; gap: 6px; height: 32px; margin: 6px 0; padding: 0 4px 0 2px; background: var(--c-bg-panel);
+    border: 1px solid var(--c-border); border-radius: 10px; min-width: 0; font-size: 12px; }
+  .micro .sw { height: 26px; font-size: 12px; }
+  .micro .exp { display: flex; align-items: center; gap: 6px; flex: 1 1 0; min-width: 0; border: none; background: transparent; padding: 0; cursor: pointer; height: 100%; color: var(--c-text-secondary); font-size: 12px; }
+  .micro .exp b { color: var(--c-text-heading); font-weight: 600; }
+  .bridge { font-size: 12px; }
+
+  /* ≈ Menu */
+  .menu { position: absolute; z-index: 40; background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 12px; box-shadow: var(--shadow-dropdown);
+    padding: 4px; min-width: 260px; max-width: min(380px, calc(100vw - 24px)); }
+  .menu.up { bottom: calc(100% + 6px); left: 0; }
+  .menu.upr { bottom: calc(100% + 6px); right: 0; }
+  .menu.dn { top: calc(100% + 4px); left: 0; }
+  .mi { display: flex; align-items: flex-start; gap: 10px; min-height: 34px; padding: 7px 10px; border-radius: 8px; color: var(--c-text-primary); font-size: 13px; cursor: pointer; line-height: 1.35; }
+  .mi:hover { background: var(--c-bg-selected); }
+  .mi.on { background: var(--c-accent-light); }
+  .mi .st { color: var(--c-text-muted); font-size: 11.5px; display: block; }
+  .mi svg { color: var(--c-text-muted); margin-top: 1px; }
+  .mi.on > svg { color: var(--c-accent); }
+  .mi.dis { opacity: .5; cursor: default; }
+  .msep { height: 1px; background: var(--c-border-light); margin: 4px 6px; }
+  .mhead { font-size: 11px; color: var(--c-text-muted); padding: 6px 10px 2px; }
+  .mrow { display: flex; justify-content: space-between; gap: 12px; padding: 5px 10px; font-size: 12.5px; }
+  .mrow .w { color: var(--c-text-muted); font-size: 11.5px; }
+  .mrow.cx { color: var(--c-text-muted); } .mrow.cx .a { text-decoration: line-through; }
+
+  /* === Композер: три строки === */
+  .comp { background: var(--c-bg-white); border: 1px solid var(--c-border); border-radius: 14px; padding: 8px 8px 8px 12px; display: flex; flex-direction: column; gap: 6px; }
+  .comp.direct { border-color: var(--c-accent-muted); box-shadow: var(--shadow-focus); }
+  .hint { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--c-text-muted); min-width: 0; }
+  .hint b { color: var(--c-text-secondary); font-weight: 600; }
+  .ta { width: 100%; min-height: 42px; max-height: 140px; border: none; outline: none; resize: none; background: transparent; font-size: 14px; line-height: 1.45; padding: 0 4px 0 0; }
+  .app.mob .ta { font-size: 16px; }
+  .ta::placeholder { color: var(--c-text-muted); }
+  .crow { display: flex; align-items: center; gap: 8px; min-width: 0; margin-left: -4px; }
+  .seg { display: inline-flex; padding: 2px; gap: 2px; border-radius: 10px; background: var(--c-bg-selected); flex-shrink: 0; }
+  .seg button { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 8px; font-size: 12px; color: var(--c-text-secondary); cursor: pointer; border: none; background: transparent; }
+  .seg button.on { background: var(--c-bg-card); color: var(--c-text-heading); box-shadow: var(--shadow-card); font-weight: 600; }
+  .seg button.on svg { color: var(--c-accent); }
+  .app.mob .crow .seg button { padding: 0 8px; }
+  .send { width: 32px; height: 32px; border-radius: 10px; border: none; background: var(--c-accent); color: var(--c-on-accent); display: grid; place-items: center; flex-shrink: 0; cursor: pointer; }
+  .submit { height: 32px; padding: 0 12px; border-radius: 10px; font-size: 13px; }
+
+  /* === Карточка фильма в ленте === */
+  .film { background: var(--c-bg-card); border: 1px solid var(--c-border-light); border-radius: 14px; box-shadow: var(--shadow-card); overflow: hidden; }
+  .film.cur { border-color: var(--c-accent); box-shadow: var(--shadow-focus); }
+  .fh { display: flex; align-items: center; gap: 8px; padding: 10px 10px 8px 12px; flex-wrap: wrap; }
+  .fh .nm { font-weight: 600; color: var(--c-text-heading); font-size: 14px; }
+  .fh .sub { color: var(--c-text-muted); font-size: 12px; }
+  .fh .ic { width: 26px; height: 26px; border-radius: 8px; background: var(--c-accent-light); color: var(--c-accent); display: grid; place-items: center; flex-shrink: 0; }
+  .plan { margin: 0 10px 8px; padding: 8px 10px; border-radius: 12px; background: var(--c-bg-panel); border: 1px solid var(--c-border-light); }
+  .plan .ph2 { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; }
+  .plan .ph2 b { color: var(--c-text-heading); }
+  .steps { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: 7px 0 6px; font-size: 12px; }
+  .stp { display: inline-flex; align-items: center; gap: 5px; color: var(--c-text-secondary); white-space: nowrap; }
+  .stp .si { width: 16px; height: 16px; border-radius: 50%; display: grid; place-items: center; border: 1px solid var(--c-border); color: var(--c-text-muted); font-size: 9px; }
+  .stp.done .si { background: var(--c-accent); border-color: transparent; color: var(--c-on-accent); }
+  .stp.now { color: var(--c-text-heading); font-weight: 600; }
+  .stp.now .si { border-color: var(--c-accent); }
+  .stp.now .si::after { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--c-accent); animation: pulse 1.2s infinite; }
+  .stp.skip { color: var(--c-text-muted); text-decoration: line-through; }
+  .stp .pr { color: var(--c-text-muted); font-weight: 400; }
+  .stp.arrow { color: var(--c-text-muted); }
+  .bar { height: 4px; border-radius: 999px; background: var(--c-bg-selected); overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--c-accent); border-radius: 999px; transition: width .1s linear; }
+  .money { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; font-size: 11.5px; color: var(--c-text-muted); }
+  .money b { color: var(--c-text-heading); font-weight: 600; }
+
+  .scenes { display: flex; flex-direction: column; gap: 2px; padding: 0 6px 6px; }
+  .scene { position: relative; display: grid; grid-template-columns: 150px minmax(0, 1fr) 176px; gap: 12px; padding: 8px 8px; border-radius: 10px; border: 1px solid transparent; cursor: pointer; }
+  .scene:hover { background: var(--c-bg-selected); }
+  .app.mob .scene { grid-template-columns: auto minmax(0, 1fr); gap: 6px 10px; padding: 8px 6px; }
+  .app.mob .sbody { grid-column: 1 / -1; grid-row: 2; }
+  .app.mob .fr { width: 56px; }
+  .app.mob .sside .bar { width: 96px; }
+  .app.mob .plan { margin: 0 6px 8px; }
+  .app.mob .scenes { padding: 0 2px 6px; }
+  .scene.sel { border-color: var(--c-accent); box-shadow: var(--shadow-focus); background: var(--c-bg-white); }
+  .scene.err { background: var(--c-danger-bg); }
+  .sfr { display: flex; align-items: center; gap: 4px; align-self: start; position: relative; }
+  .fr { width: 64px; aspect-ratio: 16 / 9; border-radius: 6px; border: 1px solid var(--c-border-light); position: relative; overflow: hidden; cursor: pointer; flex-shrink: 0; padding: 0; }
+  .fr.draft { border: 1px dashed var(--c-dashed); background: var(--c-bg-panel); color: var(--c-text-muted); font-size: 10px; display: grid; place-items: center; }
+  .fr.drawing { background: var(--c-bg-selected); }
+  .fr.drawing::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,.35), transparent); animation: shimmer 1.1s infinite; }
+  @keyframes shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+  .fr .fv { position: absolute; right: 2px; bottom: 2px; font-size: 9px; font-weight: 700; padding: 0 4px; border-radius: 4px; background: rgba(0,0,0,.45); color: #fff; }
+  .fr .fp { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(0,0,0,.15); }
+  .fr .fp i { display: block; height: 100%; background: var(--c-accent); }
+  .fr:hover { outline: 2px solid var(--c-accent-muted); }
+  .fr.changed { outline: 2px solid var(--c-warning-text); }
+  .sarr { width: 18px; height: 18px; display: grid; place-items: center; color: var(--c-text-muted); flex-shrink: 0; border-radius: 50%; }
+  .sarr.clip { background: var(--c-accent); color: var(--c-on-accent); }
+  .sbody { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+  .shead { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--c-text-muted); flex-wrap: wrap; }
+  .stext { font-size: 12.5px; line-height: 1.45; color: var(--c-text-primary); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; cursor: text; border-radius: 6px; padding: 1px 3px; margin: 0 -3px; }
+  .stext:hover { background: var(--c-bg-white); box-shadow: inset 0 0 0 1px var(--c-border); }
+  .stext.ph { color: var(--c-text-muted); font-style: italic; }
+  .stext.full { -webkit-line-clamp: unset; }
+  .stext .cur { display: inline-block; width: 1px; height: 13px; background: var(--c-accent); vertical-align: -2px; animation: pulse .8s infinite; }
+  .sedit { width: 100%; min-height: 58px; border: 1px solid var(--c-accent-muted); border-radius: 8px; background: var(--c-bg-white); box-shadow: var(--shadow-focus); padding: 4px 6px; font-size: 12.5px; line-height: 1.45; resize: vertical; outline: none; }
+  .app.mob .sedit { font-size: 16px; }
+  .shelp { font-size: 11px; color: var(--c-text-muted); }
+  .mark { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11.5px; color: var(--c-warning-text); margin-top: 2px; }
+  .mark.ag { color: var(--c-accent); }
+  .sside { display: flex; flex-direction: column; gap: 4px; align-items: flex-end; text-align: right; min-width: 0; }
+  .sst { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--c-text-secondary); white-space: nowrap; }
+  .sst .d { width: 7px; height: 7px; border-radius: 50%; background: var(--c-text-muted); flex-shrink: 0; }
+  .sst.run .d { background: var(--c-accent); animation: pulse 1.1s infinite; }
+  .sst.ok .d { background: var(--c-success); }
+  .sst.err { color: var(--c-danger); } .sst.err .d { background: var(--c-danger); }
+  .sst.off { color: var(--c-text-muted); }
+  .sside .bar { width: 120px; }
+  .sprice { font-size: 12px; color: var(--c-text-heading); font-weight: 600; white-space: nowrap; }
+  .sprice .k { font-weight: 400; color: var(--c-text-muted); }
+  .vnav { display: inline-flex; align-items: center; gap: 2px; font-size: 11.5px; color: var(--c-text-secondary); white-space: nowrap; }
+  .vnav button { width: 20px; height: 20px; border: none; background: transparent; border-radius: 6px; display: grid; place-items: center; cursor: pointer; color: var(--c-text-muted); padding: 0; }
+  .vnav button:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .vnav button[disabled] { opacity: .3; cursor: default; }
+  .vnote { font-size: 11px; color: var(--c-text-muted); max-width: 176px; }
+  .frmenu { top: calc(100% + 4px); left: 0; min-width: 230px; }
+
+  .assem { margin: 2px 10px 10px; border-radius: 12px; border: 1px solid var(--c-border-light); background: var(--c-bg-panel); padding: 10px; display: grid; grid-template-columns: minmax(0, 360px) 1fr; gap: 12px; align-items: start; }
+  .app.mob .assem { grid-template-columns: 1fr; }
+  .player { position: relative; aspect-ratio: 16 / 9; border-radius: 10px; overflow: hidden; background: #111; }
+  .player .reel { position: absolute; inset: 0; display: flex; width: 400%; }
+  .player .reel > div { flex: 1 1 0; }
+  .player.play .reel { animation: reel 8s steps(1) infinite; }
+  @keyframes reel { 0% { transform: translateX(0); } 25% { transform: translateX(-25%); } 50% { transform: translateX(-50%); } 75% { transform: translateX(-75%); } }
+  .player .pbtn { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 44px; height: 44px; border-radius: 50%; border: none; background: rgba(0,0,0,.45); color: #fff; display: grid; place-items: center; cursor: pointer; }
+  .player .ptime { position: absolute; left: 8px; bottom: 6px; right: 8px; display: flex; justify-content: space-between; font-size: 11px; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.6); }
+  .player .ptl { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(255,255,255,.25); }
+  .player.play .ptl i { animation: ptl 8s linear infinite; }
+  .player .ptl i { display: block; height: 100%; width: 0; background: var(--c-accent); }
+  @keyframes ptl { to { width: 100%; } }
+  .ainfo { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; line-height: 1.45; min-width: 0; }
+  .ainfo .t { font-weight: 600; color: var(--c-text-heading); }
+  .ainfo .acts { display: flex; flex-wrap: wrap; gap: 6px; }
+  .stale { display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--c-warning-text); }
+  .fempty { margin: 0 10px 10px; padding: 14px; border: 1px dashed var(--c-dashed); border-radius: 12px; color: var(--c-text-secondary); text-align: center; font-size: 12.5px; line-height: 1.5; }
+
+  /* Карточка картинки (нить из редактора картинок v3) */
+  .imgc { display: grid; grid-template-columns: 200px 1fr; gap: 12px; background: var(--c-bg-card); border: 1px solid var(--c-border-light); border-radius: 14px; padding: 8px; box-shadow: var(--shadow-card); }
+  .imgc.cur { border-color: var(--c-accent); box-shadow: var(--shadow-focus); }
+  .app.mob .imgc { grid-template-columns: 120px 1fr; gap: 8px; }
+  .imgc .big { aspect-ratio: 16 / 9; border-radius: 10px; border: 1px solid var(--c-border-light); position: relative; overflow: hidden; }
+  .imgc .meta { min-width: 0; display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; }
+  .imgc .ttl { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-weight: 600; color: var(--c-text-heading); }
+
+  /* Тост */
+  .toast { position: absolute; left: 50%; bottom: 150px; transform: translateX(-50%); z-index: 70; background: var(--c-text-heading); color: var(--c-bg-main); border-radius: 12px; padding: 8px 12px;
+    font-size: 12.5px; display: flex; align-items: center; gap: 10px; box-shadow: var(--shadow-dropdown); max-width: calc(100% - 24px); }
+  .toast button { background: none; border: none; color: var(--c-accent-muted); font-weight: 600; cursor: pointer; padding: 0; white-space: nowrap; }
+  [data-theme="dark"] .toast button { color: var(--c-accent); }
+
+  /* Шторки (телефон) */
+  .scrim { position: absolute; inset: 0; z-index: 50; background: var(--c-overlay); }
+  .sheet { position: absolute; left: 0; right: 0; bottom: 0; z-index: 51; background: var(--c-bg-card); border-radius: 22px 22px 0 0; box-shadow: var(--shadow-sheet); padding: 8px 14px 18px; max-height: 86%; overflow-y: auto; }
+  .sheet .grab { width: 36px; height: 4px; border-radius: 999px; background: var(--c-divider); margin: 0 auto 10px; }
+  .sheet .shh { display: flex; align-items: center; gap: 8px; font-weight: 600; color: var(--c-text-heading); font-size: 16px; margin-bottom: 10px; }
+  .kv { display: grid; grid-template-columns: 96px 1fr; gap: 10px 10px; align-items: center; font-size: 12.5px; }
+  .kv .l { color: var(--c-text-muted); font-size: 12px; }
+  .kv .c { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+
+  /* === Попап «Монтаж» (≈ Modal, почти во весь экран) === */
+  .mscrim { position: absolute; inset: 0; z-index: 60; background: var(--c-overlay); }
+  .modal { position: absolute; inset: 14px; z-index: 61; background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 16px; box-shadow: var(--shadow-modal); display: flex; flex-direction: column; overflow: hidden; }
+  .app.mob .modal { inset: 0; border-radius: 0; border: none; }
+  .mh { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--c-border-light); flex-wrap: wrap; }
+  .mh .t { font-family: 'PT Serif', Georgia, serif; font-size: 17px; color: var(--c-text-heading); }
+  .mbody { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: 290px minmax(0, 1fr); }
+  .app.mob .mbody { grid-template-columns: 1fr; overflow-y: auto; }
+  .mleft { border-right: 1px solid var(--c-border-light); background: var(--c-bg-panel); padding: 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+  .app.mob .mleft { order: 2; border-right: none; border-top: 1px solid var(--c-border-light); overflow: visible; }
+  .mleft h4 { margin: 0; font-size: 13px; color: var(--c-text-heading); display: flex; align-items: center; gap: 6px; }
+  .mleft .lbl { font-size: 11.5px; color: var(--c-text-muted); margin-bottom: 4px; }
+  .mleft textarea { width: 100%; min-height: 96px; border: 1px solid var(--c-border); border-radius: 10px; background: var(--c-bg-white); padding: 8px; font-size: 13px; line-height: 1.45; resize: vertical; outline: none; }
+  .app.mob .mleft textarea, .app.mob .scr textarea { font-size: 16px; }
+  .mleft textarea:focus, .scr textarea:focus { border-color: var(--c-accent-muted); box-shadow: var(--shadow-focus); }
+  .mcenter { min-width: 0; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+  .app.mob .mcenter { overflow: visible; padding: 10px; }
+  .ribbon { display: flex; align-items: center; gap: 6px; overflow-x: auto; padding: 4px 2px 8px; }
+  .rfr { width: 104px; flex-shrink: 0; }
+  .rfr .img { aspect-ratio: 16 / 9; border-radius: 8px; border: 1px solid var(--c-border-light); }
+  .rfr .cap { font-size: 11px; color: var(--c-text-muted); margin-top: 3px; }
+  .rsc { width: 120px; flex-shrink: 0; border: 1px solid var(--c-border); border-radius: 10px; padding: 6px; background: var(--c-bg-white); cursor: pointer; font-size: 11px; line-height: 1.35; color: var(--c-text-secondary); }
+  .rsc.sel { border-color: var(--c-accent); box-shadow: var(--shadow-focus); }
+  .rsc b { color: var(--c-text-heading); display: block; font-size: 11.5px; }
+  .rsc .tx { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .mplayer { max-width: 520px; width: 100%; align-self: center; }
+  .tl { border: 1px solid var(--c-border-light); border-radius: 12px; background: var(--c-bg-panel); padding: 8px 10px 10px; }
+  .tlh { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--c-text-muted); margin-bottom: 6px; }
+  .tlscroll { overflow-x: auto; padding-bottom: 4px; }
+  .track { display: flex; align-items: stretch; height: 44px; gap: 0; }
+  .tclip { position: relative; border-radius: 6px; overflow: hidden; border: 2px solid transparent; cursor: pointer; flex-shrink: 0; }
+  .tclip.sel { border-color: var(--c-accent); }
+  .tclip .lab { position: absolute; left: 5px; top: 3px; font-size: 10.5px; font-weight: 700; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.6); white-space: nowrap; }
+  .tclip .dur { position: absolute; left: 5px; bottom: 3px; font-size: 10px; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.6); }
+  .tclip .gap { position: absolute; top: 0; bottom: 0; right: 0; background: repeating-linear-gradient(45deg, rgba(0,0,0,.25) 0 4px, transparent 4px 8px); }
+  .tclip .hdl { position: absolute; right: 0; top: 0; bottom: 0; width: 10px; background: rgba(255,255,255,.85); cursor: ew-resize; display: grid; place-items: center; touch-action: none; }
+  .tclip .hdl::after { content: ''; width: 2px; height: 16px; border-radius: 2px; background: #555; }
+  .cut { width: 22px; flex-shrink: 0; display: grid; place-items: center; cursor: pointer; }
+  .cut span { width: 18px; height: 18px; border-radius: 5px; transform: rotate(45deg); background: var(--c-bg-white); border: 1px solid var(--c-border); display: grid; place-items: center; }
+  .cut span i { transform: rotate(-45deg); font-style: normal; font-size: 9px; font-weight: 700; color: var(--c-text-secondary); }
+  .cut.sel span { border-color: var(--c-accent); background: var(--c-accent-light); }
+  .cut.on span i { color: var(--c-accent); }
+  .mtrack { margin-top: 6px; height: 22px; border-radius: 6px; background: linear-gradient(90deg, var(--c-accent-muted), var(--c-accent-light) 80%, transparent); display: flex; align-items: center; padding: 0 8px; font-size: 11px; color: var(--c-text-secondary); cursor: pointer; border: 2px solid transparent; }
+  .mtrack.sel { border-color: var(--c-accent); }
+  .scr { display: flex; flex-direction: column; gap: 10px; }
+  .scr .row { display: grid; grid-template-columns: 150px 1fr; gap: 12px; padding: 10px; border: 1px solid var(--c-border-light); border-radius: 12px; background: var(--c-bg-white); }
+  .app.mob .scr .row { grid-template-columns: 1fr; }
+  .scr .row.sel { border-color: var(--c-accent); }
+  .scr textarea { width: 100%; min-height: 64px; border: 1px solid var(--c-border); border-radius: 8px; background: var(--c-bg-card); padding: 6px 8px; font-size: 13px; line-height: 1.5; resize: vertical; outline: none; }
+  .scr .hd { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--c-text-muted); margin-bottom: 4px; flex-wrap: wrap; }
+  .mfoot { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--c-border-light); font-size: 11.5px; color: var(--c-text-muted); flex-wrap: wrap; }
+  .segw { display: inline-flex; padding: 2px; gap: 2px; border-radius: 10px; background: var(--c-bg-selected); flex-wrap: wrap; }
+  .segw button { height: 26px; padding: 0 10px; border-radius: 8px; font-size: 12px; color: var(--c-text-secondary); cursor: pointer; border: none; background: transparent; }
+  .segw button.on { background: var(--c-bg-card); color: var(--c-text-heading); box-shadow: var(--shadow-card); font-weight: 600; }
+
+  /* Кадры фильма (градиенты вместо картинок) */
+  .g0 { background: linear-gradient(170deg, #22305A 0%, #6E5A8A 55%, #E9A07A 100%); }
+  .g1 { background: linear-gradient(180deg, #8FA3B8 0%, #C9D0D6 60%, #7E8C7A 100%); }
+  .g1b { background: linear-gradient(180deg, #B9C3CC 0%, #EEF0F1 55%, #A4AEA2 100%); }
+  .g2 { background: radial-gradient(circle at 60% 62%, #6B4A36 0 12%, transparent 13%), linear-gradient(180deg, #A7B0AA 0%, #CFC6B4 70%, #6B7B6E 100%); }
+  .g3 { background: radial-gradient(circle at 45% 60%, #F4EFE6 0 10%, transparent 11%), linear-gradient(180deg, #5A3E30 0%, #A9774F 60%, #E7C9A0 100%); }
+  .g4 { background: radial-gradient(circle at 50% 70%, #FFF3C4 0 14%, transparent 15%), linear-gradient(180deg, #F2B45A 0%, #F6CF83 50%, #7C6A8E 100%); }
+  .gm0 { background: linear-gradient(135deg, #5C7CA0, #E3B37E); }
+  .gm1 { background: linear-gradient(135deg, #7A9A8E, #D8E0C8); }
+  .gm2 { background: linear-gradient(135deg, #4F6378, #C9D6E3); }
+
+  /* ===== v5: сцена — нить, фильм — список файлов ===== */
+  .alt { filter: saturate(1.35) brightness(1.08); }
+  .vs1 { filter: hue-rotate(-14deg) saturate(1.12); } .vs2 { filter: brightness(1.12) saturate(.9); } .vs3 { filter: saturate(.72) contrast(1.06); }
+  .drawing { background: var(--c-bg-selected) !important; position: relative; }
+  .drawing::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,.35), transparent); animation: shimmer 1.1s infinite; }
+  /* Кадры A/B в полосе и карточке */
+  .sframes { display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0; }
+  .sfb { position: relative; width: 44px; height: 26px; border-radius: 6px; border: 1px solid var(--c-border); padding: 0; cursor: pointer; overflow: hidden; flex-shrink: 0; display: block; }
+  .sfb.big { width: 76px; height: 43px; }
+  .sfb .l { position: absolute; left: 3px; top: 1px; font-size: 9.5px; font-weight: 700; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.7); }
+  .sfb .v { position: absolute; right: 2px; bottom: 1px; font-size: 9px; font-weight: 700; padding: 0 3px; border-radius: 4px; background: rgba(0,0,0,.45); color: #fff; }
+  .sfb.empty { border-style: dashed; border-color: var(--c-accent-muted); background: var(--c-accent-light); color: var(--c-accent); font-size: 10.5px; font-weight: 600; display: grid; place-items: center; }
+  .sfb:hover { outline: 2px solid var(--c-accent-muted); }
+  .sfb.changed { outline: 2px solid var(--c-warning-text); }
+  .sfb .fp { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(0,0,0,.15); } .sfb .fp i { display: block; height: 100%; background: var(--c-accent); }
+  .sarr2 { color: var(--c-text-muted); display: grid; place-items: center; }
+  .fmenu { top: calc(100% + 4px); left: 0; min-width: 270px; }
+  .fmenu.up { top: auto; bottom: calc(100% + 6px); }
+  .imgpick { display: inline-block; width: 30px; height: 17px; border-radius: 4px; border: 1px solid var(--c-border-light); flex-shrink: 0; margin-top: 1px; }
+
+  /* Карточка сцены */
+  .scard { background: var(--c-bg-card); border: 1px solid var(--c-border-light); border-radius: 14px; box-shadow: var(--shadow-card); padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+  .scard.cur { border-color: var(--c-accent); box-shadow: var(--shadow-focus); }
+  .sch { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+  .sch .nm { font-weight: 600; color: var(--c-text-heading); font-size: 14px; }
+  .sch .sub { color: var(--c-text-muted); font-size: 12px; }
+  .sch .ic { width: 26px; height: 26px; border-radius: 8px; background: var(--c-accent-light); color: var(--c-accent); display: grid; place-items: center; flex-shrink: 0; }
+  .sgrid { display: grid; grid-template-columns: minmax(0, 320px) minmax(0, 1fr); gap: 12px; align-items: start; }
+  .app.mob .sgrid { grid-template-columns: 1fr; gap: 8px; }
+  .sright { display: flex; flex-direction: column; gap: 7px; min-width: 0; font-size: 12.5px; }
+  .clip { position: relative; aspect-ratio: 16 / 9; border-radius: 10px; overflow: hidden; background: #111; }
+  .clip .la, .clip .lb { position: absolute; inset: 0; }
+  .clip .lb { opacity: 0; }
+  .clip.play .lb { animation: xf 3.2s ease-in-out infinite; }
+  .clip.play .la { animation: kb 3.2s ease-in-out infinite; }
+  @keyframes xf { 0%, 12% { opacity: 0; } 88%, 100% { opacity: 1; } }
+  @keyframes kb { to { transform: scale(1.08); } }
+  .clip.pre { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; background: var(--c-bg-panel); border: 1px solid var(--c-border-light); }
+  .clip.pre > div { position: relative; }
+  .clip.pre .cap { position: absolute; left: 6px; top: 4px; font-size: 11px; font-weight: 700; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.6); }
+  .clip.pre .none { display: grid; place-items: center; color: var(--c-text-muted); font-size: 11.5px; text-align: center; padding: 6px; border: 1px dashed var(--c-dashed); border-radius: 8px; margin: 6px; }
+  .clip .shoot { position: absolute; inset: 0; background: rgba(0,0,0,.35); display: grid; place-items: center; color: #fff; font-size: 12px; font-weight: 600; text-shadow: 0 1px 2px rgba(0,0,0,.5); }
+  .clip .pbtn { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 44px; height: 44px; border-radius: 50%; border: none; background: rgba(0,0,0,.45); color: #fff; display: grid; place-items: center; cursor: pointer; }
+  .clip .ptime { position: absolute; left: 8px; bottom: 6px; right: 8px; display: flex; justify-content: space-between; font-size: 11px; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.6); }
+  .clip .ptl { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(255,255,255,.25); }
+  .clip .ptl i { display: block; height: 100%; width: 0; background: var(--c-accent); }
+  .clip.play .ptl i { animation: ptl 3.2s linear infinite; }
+  .frow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11.5px; color: var(--c-text-muted); }
+  .vers { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .vt { width: 58px; aspect-ratio: 16 / 9; border-radius: 7px; border: 2px solid transparent; position: relative; cursor: pointer; padding: 0; overflow: hidden; outline: 1px solid var(--c-border-light); }
+  .vt.on { border-color: var(--c-accent); box-shadow: var(--shadow-focus); outline: none; }
+  .vt .n { position: absolute; right: 3px; bottom: 1px; font-size: 9.5px; font-weight: 700; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.7); }
+  .vt .sv { position: absolute; left: 3px; top: 3px; width: 13px; height: 13px; border-radius: 50%; background: var(--c-success); color: #fff; display: grid; place-items: center; }
+  .vmeta { font-size: 11.5px; color: var(--c-text-muted); }
+  .vmeta b { color: var(--c-text-heading); font-weight: 600; }
+  .sacts { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .split { display: inline-flex; position: relative; }
+  .split .btn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+  .split .btn + .btn { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: 1px solid rgba(0,0,0,.12); padding: 0 6px; }
+  .savedln { font-size: 12px; color: var(--c-text-secondary); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .savedln .ok { color: var(--c-success); display: inline-flex; }
+  .scompact { display: flex; align-items: center; gap: 10px; background: var(--c-bg-card); border: 1px solid var(--c-border-light); border-radius: 12px; padding: 6px 8px 6px 6px; cursor: pointer; min-width: 0; }
+  .scompact:hover { border-color: var(--c-border); }
+  .scompact .th { width: 64px; aspect-ratio: 16 / 9; border-radius: 6px; flex-shrink: 0; position: relative; overflow: hidden; }
+  .scompact .t1 { font-weight: 600; color: var(--c-text-heading); font-size: 12.5px; }
+  .scompact .t2 { font-size: 11.5px; color: var(--c-text-muted); }
+  .scompact .run { display: inline-flex; align-items: center; gap: 5px; }
+
+  /* Карточка фильма — лёгкий список */
+  .fcard { background: var(--c-bg-card); border: 1px solid var(--c-border-light); border-radius: 14px; box-shadow: var(--shadow-card); padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+  .fcard.cur { border-color: var(--c-accent-muted); }
+  .fch { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .fch .nm { font-weight: 600; color: var(--c-text-heading); font-size: 14px; }
+  .fch .sub { color: var(--c-text-muted); font-size: 12px; }
+  .fch .ic { width: 26px; height: 26px; border-radius: 8px; background: var(--c-accent-light); color: var(--c-accent); display: grid; place-items: center; flex-shrink: 0; }
+  .tiles { display: flex; gap: 8px; overflow-x: auto; padding: 2px 2px 6px; align-items: stretch; }
+  .tile { width: 150px; flex-shrink: 0; border: 1px solid var(--c-border-light); border-radius: 10px; background: var(--c-bg-white); padding: 5px; cursor: grab; display: flex; flex-direction: column; gap: 4px; font-size: 11px; position: relative; }
+  .tile.cur { border-color: var(--c-accent); box-shadow: var(--shadow-focus); }
+  .tile.drag { opacity: .4; }
+  .tile.over { box-shadow: -4px 0 0 var(--c-accent); }
+  .tile .th { aspect-ratio: 16 / 9; border-radius: 6px; position: relative; overflow: hidden; }
+  .tile .th.none { border: 1px dashed var(--c-dashed); background: var(--c-bg-panel); display: grid; place-items: center; color: var(--c-text-muted); font-size: 10.5px; }
+  .tile .th .pos { position: absolute; left: 4px; top: 3px; font-size: 10px; font-weight: 700; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.7); }
+  .tile .th .gr { position: absolute; right: 3px; top: 3px; color: #fff; opacity: .8; }
+  .tile .th .fp { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(0,0,0,.2); } .tile .th .fp i { display: block; height: 100%; background: var(--c-accent); }
+  .tile .t1 { display: flex; align-items: center; gap: 4px; font-weight: 600; color: var(--c-text-heading); font-size: 11.5px; min-width: 0; }
+  .tile .tx { color: var(--c-text-secondary); line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .tile .tx .cur { display: inline-block; width: 1px; height: 11px; background: var(--c-accent); vertical-align: -1px; animation: pulse .8s infinite; }
+  .tile .ts { color: var(--c-text-muted); display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+  .tile .ts.warn { color: var(--c-warning-text); }
+  .tile .ts.ok { color: var(--c-success); }
+  .tile.add { border-style: dashed; border-color: var(--c-dashed); background: transparent; cursor: pointer; align-items: center; justify-content: center; color: var(--c-text-secondary); min-height: 112px; font-size: 12px; gap: 6px; }
+  .tile.add:hover { background: var(--c-bg-selected); }
+  .fstale { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 8px; border-radius: 10px; background: var(--c-warning-bg); color: var(--c-warning-text); font-size: 12px; }
+  .ffoot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--c-text-secondary); }
+  .app.mob .tile { width: 132px; }
+
+  /* Карточка картинки для кадра */
+  .imgc .big.none { border: 1px dashed var(--c-dashed); background: var(--c-bg-panel); display: grid; place-items: center; color: var(--c-text-muted); font-size: 12px; text-align: center; padding: 8px; }
+
+  /* «Монтаж» v5 */
+  .mres { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 12px; border-bottom: 1px solid var(--c-border-light); background: var(--c-diff-add-bg); color: var(--c-success); font-size: 12.5px; }
+  .mres.run { background: var(--c-bg-panel); color: var(--c-text-secondary); }
+  .mres b { color: var(--c-text-heading); }
+  .mwarn { font-size: 11.5px; color: var(--c-warning-text); display: flex; gap: 6px; align-items: center; }
+  .mtile { width: 128px; }
+  .tclip.off { opacity: .35; }
+  .scr .row.file textarea { display: none; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1 class="doc">Редактор видео v5 — по сценам, сцена = файл</h1>
+  <p class="lead">Фильм больше не снимается одним большим планом. Единица работы — <b>сцена</b>, как картинка у редактора картинок: сняли, посмотрели версии, сохранили в проект файлом <code>scene-01.mp4</code>, взяли следующую. Фильм — лёгкий список сохранённых сцен, «Монтаж» — только для итоговой сборки. Записка — <code>video-editor-v5-proposal.md</code>.</p>
+  <div class="demo" id="demo"></div>
+  <p class="vdesc" id="vdesc"></p>
+  <div class="frame"><div id="root"></div></div>
+</div>
+
+<script>
+// Иконки — пути lucide (как в продукте), обводка ICON_STROKE 1.75
+const P = {
+  film: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M7 3v18"/><path d="M3 7.5h4"/><path d="M3 12h18"/><path d="M3 16.5h4"/><path d="M17 3v18"/><path d="M17 7.5h4"/><path d="M17 16.5h4"/>',
+  clapper: '<path d="M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3Z"/><path d="m6.2 5.3 3.1 3.9"/><path d="m12.4 3.4 3.1 4"/><path d="M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/>',
+  image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/>',
+  git: '<line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
+  chev: '<path d="m6 9 6 6 6-6"/>',
+  left: '<path d="m15 18-6-6 6-6"/>', right: '<path d="m9 18 6-6-6-6"/>',
+  arrow: '<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  spark: '<path d="M9.9 15.5A2 2 0 0 0 8.5 14.1L2.4 12.5a.5.5 0 0 1 0-1l6.1-1.6A2 2 0 0 0 9.9 8.5l1.6-6.1a.5.5 0 0 1 1 0l1.6 6.1a2 2 0 0 0 1.4 1.4l6.1 1.6a.5.5 0 0 1 0 1l-6.1 1.6a2 2 0 0 0-1.4 1.4l-1.6 6.1a.5.5 0 0 1-1 0z"/>',
+  x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  more: '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
+  msg: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  up: '<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>',
+  mic: '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><path d="M12 19v3"/>',
+  play: '<polygon points="6 3 20 12 6 21 6 3"/>', pause: '<rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/>',
+  stop: '<rect x="5" y="5" width="14" height="14" rx="2"/>',
+  save: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/>',
+  scissors: '<circle cx="6" cy="6" r="3"/><path d="M8.12 8.12 12 12"/><path d="M20 4 8.12 15.88"/><circle cx="6" cy="18" r="3"/><path d="M14.8 14.8 20 20"/>',
+  music: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
+  folder: '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+  file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
+  video: '<path d="m16 13 5.2 3.5a.5.5 0 0 0 .8-.4V7.9a.5.5 0 0 0-.8-.4L16 11"/><rect x="2" y="6" width="14" height="12" rx="2"/>',
+  pencil: '<path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>',
+  down: '<path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/>',
+  alert: '<circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/>',
+  fold: '<path d="m7 20 5-5 5 5"/><path d="m7 4 5 5 5-5"/>',
+  chat: '<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/>',
+  cpu: '<rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2"/><path d="M15 20v2"/><path d="M2 15h2"/><path d="M2 9h2"/><path d="M20 15h2"/><path d="M20 9h2"/><path d="M9 2v2"/><path d="M9 20v2"/>',
+  user: '<circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 0 0-16 0"/>',
+  minus: '<path d="M5 12h14"/>', plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
+  panel: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 15h18"/>',
+  grip: '<circle cx="9" cy="12" r="1"/><circle cx="9" cy="5" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="19" r="1"/>',
+  skip: '<path d="M5 4v16"/><path d="M19 4 9 12l10 8V4Z"/>',
+};
+const ic = (n, s = 15, cls = '') => `<svg class="${cls}" width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">${P[n]}</svg>`;
+const chev = (s = 12) => ic('chev', s, 'chev');
+const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const usd = n => '$' + n.toFixed(2);
+const fmtT = s => { s = Math.round(s); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+const fmtS = s => (Math.round(s * 10) / 10).toString().replace('.', ',') + ' с';
+const pad2 = n => String(n).padStart(2, '0');
+const base = p => p.split('/').pop();
+const plural = (n, a, b, c) => { const m = n % 10, h = n % 100; return m === 1 && h !== 11 ? a : m >= 2 && m <= 4 && (h < 12 || h > 14) ? b : c; };
+const ORD = ['первую', 'вторую', 'третью', 'четвёртую', 'пятую', 'шестую', 'седьмую', 'восьмую'];
+
+/* ================= Данные ================= */
+const TEXTS = [
+  'Рассвет над хребтом. Камера медленно опускается в долину, свет растекается по склонам.',
+  'Долина тонет в тумане. Сквозь него проступает деревянная хижина, над трубой тянется дымок.',
+  'Наезд на окно хижины. На подоконнике дымится чашка кофе, пар поднимается в холодный воздух.',
+  'Камера уходит вверх от чашки к вершинам: солнце выходит из-за хребта, туман тает.',
+];
+const GORY1 = 'Туман медленно стекает с перевала, камера плывёт вправо к соседней вершине, свет становится теплее.';
+const AG = ['g0', 'g1', 'g2', 'g3', 'g4'];
+const PROV = {
+  fal: { t: 'fal', m: 'Veo 3.1', per: s => 0.2 * s, unit: '$', sub: s => `≈ ${usd(0.2 * s)} за вариант ${s} с` },
+  hf: { t: 'Higgsfield', m: 'Kling 3.0', per: s => 2 * s, unit: 'кр', sub: s => `${2 * s} кредитов за вариант ${s} с` },
+  local: { t: 'Локальные модели', m: 'MiniMax H3', per: () => 0, unit: 'free', sub: () => 'бесплатно · снимает по первому и последнему кадру · ~5 мин на вариант 5 с · очередь: 1' },
+};
+const CUTS = { cut: ['Встык', '|'], dissolve: ['Наплыв 1 с', '≈'], fade: ['Затемнение', '■'] };
+
+/* ================= Состояние ================= */
+function fresh(keep) {
+  return {
+    theme: keep?.theme || 'light', w: keep?.w || 1360,
+    strip: 'git', stripUser: false, prevStrip: null, collapsed: false, mobStrip: false,
+    menu: null, films: {}, scenes: {}, fid: null, sid: null, img: null, mode: 'chat',
+    feed: [], draft: { chat: '', scene: '', image: '' }, typing: false,
+    montage: null, prov: 'fal', dur: 8, vars: 2,
+    jobs: [], toast: null, sheet: null, edit: null, treeHi: null, treeSel: [], agent: null, drag: null,
+    tree: ['images/', 'images/горы/', 'images/горы/гора-1.png', 'images/горы/гора-2.png', 'images/горы/гора-3.png', 'images/hero.png',
+      'music/', 'music/утро.mp3', 'video/', 'video/клипы/', 'video/клипы/водопад.mp4', 'README.md'],
+    gOf: { 'images/горы/гора-1.png': 'gm0', 'images/горы/гора-2.png': 'gm1', 'images/горы/гора-3.png': 'gm2', 'images/hero.png': 'g4', 'video/клипы/водопад.mp4': 'gm1' },
+    treeNew: [], seq: 1,
+  };
+}
+let S = fresh();
+const uid = () => 'x' + (S.seq++);
+const mob = () => S.w === 390;
+const film = () => S.fid ? S.films[S.fid] : null;
+const curScene = () => S.sid ? S.scenes[S.sid] : null;
+const scenesOf = f => f.items.filter(it => it.k === 'scene').map(it => S.scenes[it.sid]);
+const lastSaved = sc => sc.saved[sc.saved.length - 1];
+const savedNow = sc => sc.saved.length > 0 && lastSaved(sc).v === sc.cur;
+const itemReady = it => it.k === 'file' || S.scenes[it.sid].saved.length > 0;
+const itemDur = it => it.k === 'file' ? it.trim : S.scenes[it.sid].trim;
+const readyItems = f => f.items.filter(itemReady);
+const filmDur = f => readyItems(f).reduce((a, it) => a + itemDur(it), 0);
+const spent = f => f.spend.filter(e => e.ok && !e.cr).reduce((a, e) => a + e.a, 0);
+const spentCr = f => f.spend.filter(e => e.ok && e.cr).reduce((a, e) => a + e.a, 0);
+const spentTxt = f => usd(spent(f)) + (spentCr(f) ? ` + ${spentCr(f)} кр` : '');
+const sceneSpent = sc => { const f = S.films[sc.fid]; const e = f.spend.filter(x => x.ok && x.sid === sc.id); const d = e.filter(x => !x.cr).reduce((a, x) => a + x.a, 0), c = e.filter(x => x.cr).reduce((a, x) => a + x.a, 0); return (d || !c ? usd(d) : '') + (c ? (d ? ' + ' : '') + c + ' кр' : ''); };
+const running = f => S.jobs.some(j => j.fid === f.id);
+const shootJob = sc => S.jobs.find(j => j.kind === 'shoot' && j.sid === sc.id);
+const textChanged = sc => sc.vers.length > 0 && sc.shot != null && sc.text.trim() !== sc.shot.trim() && sc.st !== 'shoot';
+const varsW = n => `${n} ${plural(n, 'вариант', 'варианта', 'вариантов')}`;
+const itemLabel = it => it.k === 'file' ? base(it.path) : `сцена ${S.scenes[it.sid].n}`;
+function sceneCost(sc) {
+  const p = PROV[S.prov]; const n = S.vars; const d = sc ? sc.dur : S.dur;
+  if (p.unit === 'free') return { a: 0, txt: `бесплатно · ~${Math.max(1, Math.round(d * n))} мин`, short: 'бесплатно' };
+  if (p.unit === 'кр') return { a: p.per(d) * n, cr: true, txt: `${p.per(d) * n} кр`, short: `${p.per(d) * n} кр` };
+  return { a: p.per(d) * n, txt: '≈ ' + usd(p.per(d) * n), short: usd(p.per(d) * n) };
+}
+function prevScene(sc) { const f = S.films[sc.fid]; const i = f.items.findIndex(it => it.sid === sc.id); for (let k = i - 1; k >= 0; k--) if (f.items[k].k === 'scene') return S.scenes[f.items[k].sid]; return null; }
+
+function newFilm(name) {
+  const f = { id: uid(), name, folder: 'video/' + name + '/', items: [], cuts: [], spend: [], built: 0, out: [], stale: false, why: [], building: false, script: false, nextN: 1, frameN: 0, music: 'утро.mp3' };
+  S.films[f.id] = f; addTree(f.folder + name + '.film');
+  return f;
+}
+function syncCuts(f) { const n = Math.max(0, f.items.length - 1); while (f.cuts.length < n) f.cuts.push('cut'); f.cuts.length = n; }
+function newScene(f, o = {}, afterSid) {
+  const sc = { id: uid(), fid: f.id, n: f.nextN++, A: o.A || null, B: o.B || null, text: o.text || '', target: o.target || '', shot: null, vers: [], cur: 0,
+    st: o.st || 'draft', saved: [], dur: S.dur, trim: S.dur, fch: false, pick: '', by: o.by || 'you', play: false };
+  S.scenes[sc.id] = sc;
+  const pos = afterSid ? f.items.findIndex(it => it.sid === afterSid) + 1 : f.items.length;
+  f.items.splice(pos, 0, { k: 'scene', sid: sc.id }); syncCuts(f);
+  return sc;
+}
+function newFrame(f, o = {}) {
+  f.frameN++;
+  const fr = { id: uid(), file: o.file || `${f.folder}кадры/кадр-${f.frameN}.png`, g: o.g || AG[(f.frameN - 1) % 5], ver: 1, st: o.st || 'ready', p: 0, alt: false };
+  S.gOf[fr.file] = fr.g;
+  return fr;
+}
+function frameFromFile(path) { return { id: uid(), file: path, g: S.gOf[path] || 'gm2', ver: 1, st: 'ready', p: 0, alt: false }; }
+const frCls = fr => fr ? `${fr.g}${fr.alt ? ' alt' : ''}` : '';
+function markStale(f, why) { if (!f.built) return; f.stale = true; if (!f.why.includes(why)) f.why.push(why); }
+
+/* ================= Лента ================= */
+function push(item) { S.feed.push(item); }
+function quiet(html, key) {
+  const last = S.feed[S.feed.length - 1];
+  if (key && last && last.t === 'quiet' && last.key === key) { last.html = html; return; }
+  push({ t: 'quiet', html, key });
+}
+function say(html, acts, delay = 500, then) {
+  S.typing = true; render();
+  setTimeout(() => { S.typing = false; push({ t: 'agent', html, acts }); then && then(); render(); }, delay);
+}
+function toast(text, act, actLabel) { S.toast = { text, act, actLabel, id: uid() }; const id = S.toast.id; setTimeout(() => { if (S.toast?.id === id) { S.toast = null; render(); } }, 4200); }
+function addTree(p) {
+  const parts = p.split('/'); let acc = '';
+  for (let k = 0; k < parts.length - 1; k++) { acc += parts[k] + '/'; if (!S.tree.includes(acc)) S.tree.push(acc); }
+  if (!S.tree.includes(p)) { S.tree.push(p); S.treeNew.push(p); }
+}
+const treeLink = p => `<button class="lnk" data-act="showTree" data-p="${esc(p)}">Показать в дереве</button>`;
+
+/* ================= Полосы и «в работе» ================= */
+function autoStrip(to) {
+  if (S.strip !== to) { S.prevStrip = S.strip; S.strip = to; S.stripUser = false; }
+  S.collapsed = false;
+  if (mob()) S.mobStrip = true;
+}
+function takeScene(sc, who) {
+  const f = S.films[sc.fid];
+  // Сцену взял агент — композер остаётся в «Чате»: ответ человека агенту не должен уйти в модель видео
+  S.fid = f.id; S.sid = sc.id; S.img = null; S.mode = who === 'claude' ? 'chat' : 'scene'; S.edit = null;
+  quiet(`${who === 'claude' ? 'Claude взял' : 'Вы взяли'} в работу: <b>сцена ${sc.n}</b> фильма «${esc(f.name)}»`, 'take');
+  autoStrip('video');
+  if (!S.feed.some(it => it.t === 'scene' && it.sid === sc.id)) push({ t: 'scene', sid: sc.id });
+  else render.scrollTo = `[data-card="${sc.id}"]`;
+  if (who !== 'claude') render.focusNext = 'ta';
+}
+function dropScene() {
+  const sc = curScene(); if (!sc) return;
+  S.sid = null; if (S.mode === 'scene') S.mode = 'chat';
+  quiet(`Вы сняли из работы: сцена ${sc.n} — карточка осталась в ленте, фильм «${esc(S.films[sc.fid].name)}» в работе`, 'take');
+}
+function dropFilm() {
+  const f = film(); if (!f) return;
+  S.fid = null; S.sid = null; if (S.mode === 'scene') S.mode = 'chat';
+  quiet(`Вы сняли из работы фильм «${esc(f.name)}» — карточки остались в ленте`, 'take');
+  if (!S.stripUser && S.strip === 'video' && S.prevStrip) S.strip = S.prevStrip;
+  if (mob() && !S.img) S.mobStrip = false;
+  toast(running(f) ? 'Фильм больше не в работе. Идущая съёмка продолжается — «Остановить» в карточке сцены' : 'Фильм больше не в работе: режим «Чат»');
+}
+
+/* ================= Движок задач ================= */
+function addJob(j) { j.p = 0; S.jobs.push(j); }
+function stopJobs(pred) { S.jobs = S.jobs.filter(j => !pred(j)); }
+setInterval(() => {
+  if (!S.jobs.length) return;
+  for (const j of [...S.jobs]) {
+    if (!S.jobs.includes(j)) continue;
+    j.p = Math.min(1, j.p + 0.1 / j.dur);
+    j.tick && j.tick(j);
+    if (j.p >= 1) { S.jobs.splice(S.jobs.indexOf(j), 1); j.done(); }
+  }
+  if (!S.drag) render();
+}, 100);
+
+/* ================= Сцена: съёмка, версии, сохранение ================= */
+function shootScene(sc, o) {
+  const f = S.films[sc.fid]; const cost = sceneCost(sc); const n = S.vars; const prov = PROV[S.prov];
+  sc.st = 'shoot'; sc.fch = false; sc.play = false;
+  sc.job = { n, cost, m: prov.m, who: o.who, note: o.note || '' };
+  addJob({ kind: 'shoot', fid: f.id, sid: sc.id, dur: o.agent ? 2.4 : 2.8,
+    done: () => {
+      const n0 = sc.vers.length; const by = o.who === 'claude' ? 'Claude' : 'вы';
+      for (let v = 0; v < n; v++) sc.vers.push({ n: n0 + v + 1, by, note: o.note || '', vs: (n0 + v) % 4 });
+      sc.cur = n0; sc.pick = ''; sc.st = 'ready'; sc.shot = sc.text; sc.job = null;
+      f.spend.push({ w: `Сцена ${sc.n} · ${prov.m} · ${varsW(n)}`, who: by, a: cost.a, cr: cost.cr, ok: true, sid: sc.id });
+      if (!o.agent) quiet(n0 ? `Сцена ${sc.n} переснята: версии ${n0 + 1}${n > 1 ? `–${n0 + n}` : ''} · текущая — версия ${n0 + 1}${sc.saved.length ? ' · в проекте пока прежний файл' : ''}` : `Сцена ${sc.n} снята: ${varsW(n)} · текущая — версия 1 · «Сохранить сцену» — в карточке`);
+      o.done && o.done();
+    } });
+}
+function stopScene(sc) {
+  const f = S.films[sc.fid];
+  const j = shootJob(sc);
+  const frameJobs = S.jobs.filter(x => x.kind === 'frame' && x.sid === sc.id);
+  stopJobs(x => x.sid === sc.id);
+  frameJobs.forEach(x => { x.fr.st = 'stopped'; });
+  if (j) { f.spend.push({ w: `Сцена ${sc.n} — остановлено`, who: 'вы', a: sc.job.cost.a, cr: sc.job.cost.cr, ok: false, sid: sc.id }); sc.st = sc.vers.length ? 'ready' : 'stopped'; sc.job = null; }
+  quiet(`Вы остановили сцену ${sc.n}${j ? ' — съёмка отменена, деньги не списаны' : ' — рисование кадров отменено'}`);
+  if (S.agent && S.agent.fid === f.id && S.agent.st === 'run') {
+    S.agent.st = 'stopped';
+    const done = scenesOf(f).filter(s => s.saved.length).length;
+    say(`Остановил на сцене ${sc.n}: ${j ? 'съёмка отменена' : 'кадры не дорисованы'} — деньги не списаны. Сохранено сцен: ${done} из ${scenesOf(f).length}, потрачено ${spentTxt(f)}. Продолжу с этой сцены, когда скажете.`,
+      [{ l: `Продолжить со сцены ${sc.n}`, a: 'agResume', acc: 1 }], 400);
+  }
+}
+function saveScene(sc, who) {
+  const f = S.films[sc.fid]; const b = f.folder + 'scene-' + pad2(sc.n);
+  let path = b + '.mp4', k = 2; while (S.tree.includes(path)) path = `${b}.v${k++}.mp4`;
+  const first = !sc.saved.length;
+  addTree(path); S.gOf[path] = sc.B.g; sc.saved.push({ path, v: sc.cur });
+  if (!first) markStale(f, `Сцена ${sc.n} обновлена`);
+  quiet(`${who === 'claude' ? `Claude сохранил сцену ${sc.n}` : 'Сохранено как'}: <b>${esc(path)}</b>${first ? '' : ` · фильм «${esc(f.name)}» берёт новый файл${f.built ? ' — пересобрать' : ''}`} · ${treeLink(path)}`);
+  if (who !== 'claude') toast('Сцена сохранена в проект: ' + path, 'showTree:' + path, 'Показать в дереве');
+  return path;
+}
+function nextScene(sc, how) {
+  const f = S.films[sc.fid]; let A;
+  if (how === 'last') {
+    const v = sc.vers[sc.cur];
+    A = newFrame(f, { file: `${f.folder}кадры/scene-${pad2(sc.n)}-последний-кадр.png`, g: sc.B.g }); A.alt = v.vs % 2 === 1;
+    addTree(A.file);
+  } else A = sc.B;
+  const nsc = newScene(f, { A }, sc.id);
+  S.menu = null;
+  takeScene(nsc, 'you');
+  quiet(`Вы завели сцену ${nsc.n}: кадр A — ${how === 'last' ? `последний кадр клипа сцены ${sc.n} (${esc(base(A.file))})` : `кадр B сцены ${sc.n}, стык без скачка`} · кадр B пока пустой`, 'take');
+  toast('Кадр B пустой: нажмите его в полосе — выбрать из проекта, нарисовать или отдать Claude');
+}
+function submitScene() {
+  const sc = curScene(); if (!sc) return;
+  if (sc.st === 'shoot') return toast('Сцена уже снимается — дождитесь или остановите');
+  if (!sc.A || !sc.B || sc.A.st !== 'ready' || sc.B.st !== 'ready') { toast('Нужны оба кадра: нажмите кадр B в полосе — выбрать, нарисовать или отдать Claude'); return; }
+  const cost = sceneCost(sc); const m = PROV[S.prov].m;
+  if (!sc.vers.length) {
+    if (!sc.text.trim()) { toast('Опишите сцену в поле ввода: что происходит от кадра A к кадру B'); render.focusNext = 'ta'; return; }
+    quiet(`Вы запустили: сцена ${sc.n} · ${m} · ${varsW(S.vars)} · ${cost.txt}`);
+    shootScene(sc, { who: 'you' });
+  } else {
+    const note = S.draft.scene.trim(); S.draft.scene = '';
+    quiet(`Вы запустили: ${note ? `«${esc(note)}»` : 'ещё варианты'} · сцена ${sc.n} · ${m} · ${varsW(S.vars)} · ${cost.txt}`);
+    shootScene(sc, { who: 'you', note });
+  }
+}
+function addFileItem(f, path) {
+  f.items.push({ k: 'file', path, dur: 6, trim: 6, g: S.gOf[path] || 'gm1' }); syncCuts(f);
+  markStale(f, `Добавлен ${base(path)}`);
+  quiet(`Вы добавили в фильм «${esc(f.name)}» готовый файл: <b>${esc(path)}</b> · 0:06 · место ${f.items.length}`);
+}
+function moveItem(f, from, to) {
+  if (from === to || to < 0 || to >= f.items.length) return;
+  const [it] = f.items.splice(from, 1); f.items.splice(to, 0, it);
+  markStale(f, 'Порядок сцен изменён');
+  quiet(`Вы переставили ${itemLabel(it)} на место ${to + 1} в фильме «${esc(f.name)}»`, 'order');
+  if (S.montage && S.montage.k === 'item' && S.montage.i === from) S.montage.i = to;
+}
+function build(f, who) {
+  if (f.building) return;
+  if (!readyItems(f).length) { toast('Собирать нечего: нет сохранённых сцен'); return; }
+  f.building = true;
+  addJob({ kind: 'build', fid: f.id, dur: 2.2, done: () => {
+    f.building = false; f.built++; f.stale = false; f.why = [];
+    let path = f.folder + f.name + '.mp4', k = 2; while (S.tree.includes(path)) path = `${f.folder}${f.name}.v${k++}.mp4`;
+    addTree(path); f.out.push(path);
+    const n = readyItems(f).length;
+    quiet(`${who === 'claude' ? 'Claude собрал' : 'Вы собрали'} фильм: <b>${esc(path)}</b> · ${n} ${plural(n, 'сцена', 'сцены', 'сцен')} · ${fmtT(filmDur(f))} · бесплатно · ${treeLink(path)}`);
+    if (S.montage && S.montage.fid === f.id) S.montage.done = path;
+    if (who === 'claude') say(`Собрал: <b>${esc(path)}</b>, ${fmtT(filmDur(f))}. Всего на фильм потрачено ${spentTxt(f)}. Любую сцену можно переснять в её карточке — фильм покажет «пересобрать». Порядок, склейки и музыка — в «Монтаже».`, null, 400);
+  } });
+}
+
+/* ================= Кадры и полоса «Картинки» ================= */
+function pickFrame(sc, slot, path) {
+  sc[slot] = frameFromFile(path);
+  if (sc.vers.length) sc.fch = true;
+  quiet(`Вы выбрали кадр ${slot} сцены ${sc.n}: <b>${esc(path)}</b>${sc.vers.length ? ' — клип снят по прежнему кадру' : ''}`, 'frame' + sc.id + slot);
+}
+function openImage(sc, slot, how) {
+  const fr = sc[slot]; const f = S.films[sc.fid];
+  S.menu = null; S.sheet = null; S.edit = null;
+  const card = { t: 'img', sid: sc.id, slot, fr: how === 'edit' ? fr : null, running: false, p: 0 };
+  S.img = card; S.mode = 'image';
+  if (S.strip !== 'images') { S.prevStrip = S.strip; S.strip = 'images'; S.stripUser = false; }
+  S.collapsed = false; if (mob()) S.mobStrip = true;
+  quiet(how === 'edit' ? `Вы взяли в работу картинку: <b>${esc(fr.file)}</b> — кадр ${slot} сцены ${sc.n}` : `Вы начали новую картинку — станет кадром ${slot} сцены ${sc.n} · сохранится в ${esc(f.folder)}кадры/`);
+  push(card);
+  render.focusNext = 'ta';
+  toast(how === 'edit' ? 'Кадр открыт полосой «Картинки». Новая версия сама станет кадром сцены' : 'Опишите картинку в поле ввода — она станет кадром ' + slot);
+}
+function genImage(text) {
+  const im = S.img; const sc = S.scenes[im.sid]; const f = S.films[sc.fid];
+  if (im.running) return;
+  im.running = true; im.p = 0;
+  quiet(`Вы запустили: «${esc(text)}» · Nano Banana Pro · 1 вариант · ≈ $0.04`);
+  addJob({ kind: 'img', fid: f.id, sid: sc.id, dur: 1.6, tick: j => { im.p = j.p; }, done: () => {
+    im.running = false;
+    f.spend.push({ w: `Кадр ${im.slot} сцены ${sc.n} · Nano Banana Pro`, who: 'вы', a: 0.04, ok: true, sid: sc.id });
+    const back = `<button class="lnk" data-act="backScene">↩ К сцене ${sc.n}</button>`;
+    if (im.fr) {
+      const fr = im.fr; fr.ver++; fr.alt = !fr.alt; fr.prompt = text;
+      const hit = Object.values(S.scenes).filter(s => (s.A === fr || s.B === fr) && s.vers.length);
+      hit.forEach(s => { s.fch = true; });
+      quiet(`Версия ${fr.ver} ${esc(base(fr.file))} стала кадром ${im.slot} сцены ${sc.n}${hit.length ? ` · у ${hit.map(s => 'сцены ' + s.n).join(' и ')} кадр изменён — переснять` : ''} · ${back}`);
+    } else {
+      const fr = newFrame(f, { g: 'g2' }); fr.prompt = text; addTree(fr.file);
+      sc[im.slot] = fr; im.fr = fr;
+      if (sc.vers.length) sc.fch = true;
+      quiet(`Картинка <b>${esc(fr.file)}</b> легла в проект и стала кадром ${im.slot} сцены ${sc.n} · ${back}`);
+    }
+  } });
+}
+function backToScene() {
+  const im = S.img; S.img = null; if (S.mode === 'image') S.mode = S.sid ? 'scene' : 'chat';
+  if (im && S.scenes[im.sid] && S.sid !== im.sid) { takeScene(S.scenes[im.sid], 'you'); return; }
+  S.strip = 'video'; S.stripUser = false; S.collapsed = false;
+  if (mob()) S.mobStrip = true;
+  render.focusNext = 'ta';
+}
+function agentFrame(sc, slot) {
+  const f = S.films[sc.fid];
+  S.menu = null; S.sheet = null;
+  push({ t: 'user', text: `Нарисуй кадр ${slot} для сцены ${sc.n}` });
+  const fr = newFrame(f, { st: 'drawing', g: 'g2' }); sc[slot] = fr;
+  say(`Нарисую кадр ${slot} сцены ${sc.n}${sc.text ? ' по тексту сцены' : ' — продолжение кадра A'}: хижина в тумане, тот же свет и ракурс, что в конце кадра A · Nano Banana Pro · ≈ $0.04. Картинка ляжет в ${esc(f.folder)}кадры/.`, null, 400, () => {
+    addJob({ kind: 'frame', fid: f.id, sid: sc.id, fr, dur: 1.4, tick: j => { fr.p = j.p; }, done: () => {
+      fr.st = 'ready'; addTree(fr.file);
+      f.spend.push({ w: `${base(fr.file)} · Nano Banana Pro`, who: 'Claude', a: 0.04, ok: true, sid: sc.id });
+      quiet(`Claude нарисовал кадр ${slot} сцены ${sc.n}: <b>${esc(fr.file)}</b> · $0.04 · ${treeLink(fr.file)}`);
+    } });
+  });
+}
+
+/* ================= Агент: по одной сцене ================= */
+function startAgentFilm() {
+  const f = newFilm('утро-в-горах'); f.script = true;
+  TEXTS.forEach(tx => newScene(f, { st: 'plan', target: tx, by: 'claude' }));
+  S.fid = f.id; S.sid = null; S.mode = 'chat';
+  quiet(`Claude взял в работу: фильм <b>${esc(f.name)}</b>`, 'take'); autoStrip('video');
+  S.agent = { fid: f.id, mode: 'one', k: 0, st: 'run' };
+  const c = sceneCost(null);
+  say(`Сделаю ролик «утро в горах» из 4 сцен по ${S.dur} с — от рассвета над хребтом к солнцу над вершинами. Сценарий, 4 коротких текста, пишу в карточку фильма: их можно править. Потом сниму <b>первую сцену и остановлюсь</b>, чтобы вы посмотрели. Сцена стоит ≈ ${usd(c.a + 0.08)}: два кадра по $0.04 и ${varsW(S.vars)} клипа ${c.cr ? '' : 'по ' + usd(c.a / S.vars)}.`, null, 600, () => {
+    push({ t: 'film', fid: f.id });
+    const scs = scenesOf(f); scs.forEach(s => { s.st = 'writing'; });
+    addJob({ kind: 'write', fid: f.id, dur: 1.6, tick: j => scs.forEach(s => { s.text = s.target.slice(0, Math.round(s.target.length * j.p)); }),
+      done: () => { scs.forEach(s => { s.text = s.target; s.st = 'plan'; }); agentScene(f, 0); } });
+  });
+}
+function agentScene(f, k) {
+  const ag = S.agent; ag.k = k; ag.st = 'run';
+  const scs = scenesOf(f); const sc = scs[k]; const prev = scs[k - 1];
+  if (sc.st === 'plan' || sc.st === 'stopped') sc.st = 'draft';
+  if (!sc.A) sc.A = prev ? prev.B : newFrame(f, { st: 'drawing', g: AG[0] });
+  if (!sc.B) sc.B = newFrame(f, { st: 'drawing', g: AG[(k + 1) % 5] });
+  takeScene(sc, 'claude');
+  const go = () => { if (sc.A.st === 'ready' && sc.B.st === 'ready' && S.agent?.st === 'run' && !shootJob(sc)) shootScene(sc, { who: 'claude', agent: true, done: () => agentShot(f, sc, k) }); };
+  const draw = fr => { fr.st = 'drawing'; fr.p = 0; addJob({ kind: 'frame', fid: f.id, sid: sc.id, fr, dur: 1.2, tick: j => { fr.p = j.p; }, done: () => {
+    fr.st = 'ready'; addTree(fr.file); f.spend.push({ w: `${base(fr.file)} · Nano Banana Pro`, who: 'Claude', a: 0.04, ok: true, sid: sc.id }); go(); } }); };
+  const need = [sc.A, sc.B].filter(fr => fr.st !== 'ready');
+  if (need.length) need.forEach(draw); else go();
+}
+function agentShot(f, sc, k) {
+  const ag = S.agent; const scs = scenesOf(f); const last = k === scs.length - 1;
+  sc.cur = sc.vers.length - 1; sc.pick = 'Claude взял последний вариант — камера движется ровнее';
+  if (ag.mode === 'all') { saveScene(sc, 'claude'); if (last) return agentFinish(f); return agentScene(f, k + 1); }
+  ag.st = 'ask';
+  const est = sceneCost(null).a + 0.04;
+  if (last) return say(`Сцена ${sc.n} готова · потрачено ${sceneSpent(sc)}. Это последняя сцена. Я выбрал версию ${sc.cur + 1} — стрелки и миниатюры в карточке листают версии. Сохранить её и перейти к сборке?`,
+    [{ l: `Сохранить сцену ${sc.n}`, a: 'agNext', acc: 1 }], 500);
+  say(`Сцена ${sc.n} готова · потрачено ${sceneSpent(sc)}. Я выбрал версию ${sc.cur + 1} — камера движется ровнее; миниатюры в карточке листают версии, плеер показывает текущую. Снимать ${ORD[k + 1]}?`,
+    [{ l: `Снимать ${ORD[k + 1]} · ≈ ${usd(est)}`, a: 'agNext', acc: 1 }, { l: `Сними все остальные · ${scs.length - k - 1} по ≈ ${usd(est)}`, a: 'agAll' }], 500);
+}
+function agContinue(mode) {
+  const ag = S.agent; if (!ag || ag.st !== 'ask') return;
+  const f = S.films[ag.fid]; const scs = scenesOf(f); const sc = scs[ag.k];
+  S.feed.forEach(it => { if (it.acts?.some(a => a.a === 'agNext')) it.used = true; });
+  ag.mode = mode; ag.st = 'run';
+  if (!savedNow(sc)) saveScene(sc, 'claude');
+  if (ag.k + 1 >= scs.length) return agentFinish(f);
+  const nk = ag.k + 1;
+  say(mode === 'all' ? `Снимаю сцены ${nk + 1}–${scs.length} подряд, каждую своей карточкой, и сохраняю сам. Остановить можно в карточке сцены или ■ в полосе — отменённое не списывается.`
+    : `Сохранил сцену ${sc.n}. Снимаю сцену ${nk + 1}: кадр A — это кадр B сцены ${sc.n}, стык без скачка.`, null, 400, () => agentScene(f, nk));
+}
+function agentFinish(f) {
+  S.agent.st = 'done';
+  const n = scenesOf(f).length;
+  say(`Все ${n} сцены сняты и сохранены в <b>${esc(f.folder)}</b> · потрачено ${spentTxt(f)}. Собрать фильм? Сборка бесплатная; порядок, склейки и музыку можно поправить в «Монтаже».`,
+    [{ l: 'Собери фильм', a: 'agBuild', acc: 1 }, { l: 'Открыть «Монтаж»', a: 'montage' }], 500);
+}
+
+/* ================= Ответ агента на текст ================= */
+function agentReply(t) {
+  const low = t.toLowerCase(); const f = film(); const sc = curScene(); const ag = S.agent;
+  if (ag && ag.st === 'ask') {
+    if (/все|остальн|подряд/.test(low)) return agContinue('all');
+    if (/^(да|ок|ага|снимай|давай|дальше|продолж|сохрани)|втор|трет|четв/.test(low)) return agContinue('one');
+    if (/^(нет|стоп|хватит|пока)/.test(low)) { ag.st = 'paused'; return say('Хорошо, жду. Сцены в карточках, продолжу, когда скажете «снимай дальше».', null, 300); }
+  }
+  if (ag && ag.st === 'paused' && /дальше|продолж|снимай/.test(low)) { ag.st = 'ask'; return agContinue(/все|остальн/.test(low) ? 'all' : 'one'); }
+  if (/ролик|видео|фильм|клип/.test(low) && !/собер/.test(low)) {
+    if (ag && ag.st === 'run') return say('Я ещё снимаю текущий фильм. Остановите его в карточке сцены — или дождитесь конца.', null, 300);
+    return startAgentFilm();
+  }
+  if (sc && /плавн|резк|медлен/.test(low)) {
+    if (!sc.vers.length) return say('Сцена ещё не снята — сначала «Снять» в полосе.', null, 300);
+    return say(`Сцена ${sc.n} и правда дёргает: движение за ${sc.dur} с слишком быстрое. Пересниму медленнее, ${varsW(S.vars)} · ${sceneCost(sc).txt}. Прежние версии остаются, файл в проекте не трогаю, пока не сохраните.`, null, 500,
+      () => shootScene(sc, { who: 'claude', note: 'медленнее по просьбе' }));
+  }
+  if (f && /собер/.test(low)) { if (!readyItems(f).length) return say('Собирать пока нечего — нет ни одной сохранённой сцены.', null, 300); build(f, 'claude'); return say('Собираю фильм из сохранённых файлов сцен — бесплатно.', null, 300); }
+  say(f ? 'В макете ответы заготовлены. Попробуйте: «сцена слишком резкая, сделай плавнее», «собери фильм».' : 'В макете ответы заготовлены. Попробуйте: «сделай ролик из 4 сцен про утро в горах».', null, 400);
+}
+
+/* ================= Отправка из композера ================= */
+function submit() {
+  const mode = S.mode;
+  if (mode === 'scene') return submitScene();
+  const t = (S.draft[mode] || '').trim();
+  if (!t) return;
+  S.draft[mode] = '';
+  if (mode === 'image') return genImage(t);
+  push({ t: 'user', text: t });
+  agentReply(t);
+}
+function commitEdit() {
+  const e = S.edit; if (!e) return;
+  const sc = S.scenes[e.sid]; const v = e.val.trim(); S.edit = null;
+  if (v === sc.text.trim()) return;
+  sc.text = v;
+  quiet(`Вы поправили текст сцены ${sc.n}: «${esc(v.length > 60 ? v.slice(0, 60) + '…' : v)}»${sc.vers.length ? ' — клип снят по прежнему тексту' : ''}`, 'txt' + sc.id);
+}
+
+/* ================= Отрисовка: кадры A/B ================= */
+function frameBtn(sc, slot, where, big) {
+  const fr = sc[slot]; const key = `fm:${where}:${sc.id}:${slot}`;
+  let cls = 'sfb' + (big ? ' big' : ''), inner = `<span class="l">${slot}</span>`, title;
+  if (!fr) { cls += ' empty'; inner = `+ ${slot}`; title = `Кадр ${slot} не выбран — выбрать из проекта, нарисовать или отдать Claude`; }
+  else if (fr.st === 'drawing') { cls += ' drawing'; inner += `<span class="fp"><i style="width:${Math.round(fr.p * 100)}%"></i></span>`; title = `Рисуем кадр ${slot}… ${Math.round(fr.p * 100)} %`; }
+  else if (fr.st === 'stopped') { cls += ' empty'; inner = `${slot} · стоп`; title = `Кадр ${slot} не дорисован`; }
+  else { cls += ' ' + frCls(fr); if (fr.ver > 1) inner += `<span class="v">v${fr.ver}</span>`; title = `Кадр ${slot} · ${fr.file} · версия ${fr.ver} — нажмите, чтобы заменить или править`; if (sc.fch && fr.ver > 1) cls += ' changed'; }
+  const act = mob() ? 'sheet' : 'menu';
+  return `<span class="swwrap"><button class="${cls}" data-act="${act}" data-m="${esc(mob() ? 'frame:' + sc.id + ':' + slot : key)}" title="${esc(title)}">${inner}</button>${!mob() && S.menu === key ? `<div data-act="noop" class="menu fmenu ${where === 'strip' ? 'up' : ''}">${frameMenuItems(sc, slot)}</div>` : ''}</span>`;
+}
+function framesPair(sc, where, big) {
+  return `<span class="sframes">${frameBtn(sc, 'A', where, big)}<span class="sarr2">${ic('arrow', big ? 14 : 12)}</span>${frameBtn(sc, 'B', where, big)}</span>`;
+}
+function frameMenuItems(sc, slot) {
+  const fr = sc[slot]; const f = S.films[sc.fid]; const prev = prevScene(sc);
+  const d = `data-s="${sc.id}" data-slot="${slot}"`;
+  const mi = (icn, t, st, act, extra = '') => `<div class="mi" data-act="${act}" ${d} ${extra}>${ic(icn, 15)}<div class="grow">${t}${st ? `<span class="st">${st}</span>` : ''}</div></div>`;
+  let h = `<div class="mhead">Кадр ${slot} сцены ${sc.n}${fr && fr.st === 'ready' ? ` · ${esc(fr.file)} · версия ${fr.ver}` : ' · не выбран'}</div>`;
+  if (fr && fr.st === 'ready') h += mi('pencil', 'Править кадр', `откроется полосой «Картинки» · версии, пометки, персонажи${sc.vers.length ? ' · снятый клип получит «Кадр изменён — переснять»' : ''}`, 'editFrame');
+  else h += mi('spark', 'Нарисовать через «Картинки»', `новая картинка ляжет в ${esc(f.folder)}кадры/ и станет кадром ${slot}`, 'drawFrame');
+  if (!(fr && fr.st === 'ready')) h += mi('chat', 'Отдать Claude', `нарисует по тексту сцены · ≈ $0.04`, 'agentFrame');
+  if (slot === 'A' && prev && prev.vers.length) {
+    h += mi('arrow', `Кадр B сцены ${prev.n}`, 'стык без скачка: сцена начнётся с того же кадра', 'joinPrev');
+    h += mi('video', `Последний кадр клипа сцены ${prev.n}`, 'продлить: сцена начнётся ровно там, где кончился снятый клип', 'lastFrame');
+  }
+  const imgs = S.tree.filter(p => /\.png$/.test(p) && (!fr || p !== fr.file)).slice(0, 7);
+  h += `<div class="msep"></div><div class="mhead">Выбрать из проекта</div>` + imgs.map(p => `<div class="mi" data-act="pickFrame" ${d} data-p="${esc(p)}"><span class="imgpick ${S.gOf[p] || 'gm2'}"></span><div class="grow ell">${esc(base(p))}<span class="st ell">${esc(p.slice(0, p.length - base(p).length))}</span></div></div>`).join('');
+  if (fr && fr.st === 'ready') h += `<div class="msep"></div>` + mi('folder', 'Показать в дереве', '', 'showTree', `data-p="${esc(fr.file)}"`);
+  return h;
+}
+
+/* ================= Отрисовка: полосы ================= */
+function stripMenu() {
+  const sc = curScene(); const f = film();
+  const items = [
+    ['git', 'git', 'Git', 'feat/site-header · +42 −7 · 2 к публикации'],
+    ['images', 'image', 'Картинки', S.img ? (S.img.fr ? `Работаем с ${base(S.img.fr.file)}` : 'новая картинка — кадр сцены') : 'картинка не выбрана'],
+    ['video', 'film', 'Видео', sc ? `Сцена ${sc.n} · ${S.films[sc.fid].name} · потрачено ${spentTxt(S.films[sc.fid])}` : f ? `Фильм ${f.name} · сцена не выбрана` : 'сцена не выбрана'],
+  ];
+  return `<div data-act="noop" class="menu up">${items.map(([k, i, t, st]) => `<div class="mi ${S.strip === k ? 'on' : ''}" data-act="strip" data-k="${k}">${ic(i, 15)}<div class="grow">${t}<span class="st">${esc(st)}</span></div>${S.strip === k ? ic('check', 14) : ''}</div>`).join('')}
+    <div class="msep"></div><div class="mi" data-act="collapse">${ic('fold', 15)}<div>Свернуть полосу в строку</div></div></div>`;
+}
+function switcher(label, icon) {
+  const wantDot = (film() && S.strip !== 'video') || (S.img && S.strip !== 'images');
+  return `<div class="swwrap"><button class="sw ${S.menu === 'strips' ? 'open' : ''}" data-act="menu" data-m="strips" title="Полоса над композером">${ic(icon, 15, 'ico')}${label}${wantDot ? '<span class="dot"></span>' : ''}${chev()}</button>${S.menu === 'strips' ? stripMenu() : ''}</div>`;
+}
+function provMenu() {
+  return `<div data-act="noop" class="menu up" style="min-width:330px">${Object.entries(PROV).map(([k, p]) => `<div class="mi ${S.prov === k ? 'on' : ''}" data-act="prov" data-k="${k}">${ic(k === 'local' ? 'cpu' : 'video', 15)}<div class="grow">${p.t} · ${p.m}<span class="st">${p.sub(S.dur)}</span></div>${S.prov === k ? ic('check', 14) : ''}</div>`).join('')}
+    <div class="msep"></div><div class="mhead">Меняется для следующих съёмок, снятое не пересчитывается</div></div>`;
+}
+function durMenu() {
+  return `<div data-act="noop" class="menu up" style="min-width:240px"><div class="mhead">Длительность сцены</div>
+    ${[5, 8, 10].map(d => `<div class="mi ${S.dur === d ? 'on' : ''}" data-act="dur" data-v="${d}">${ic('video', 15)}<div class="grow">${d} с<span class="st">${PROV[S.prov].sub(d)}</span></div></div>`).join('')}
+    <div class="msep"></div><div class="mhead">Пропорции фильма — 16:9, задаются у первой сцены</div></div>`;
+}
+function filmMenuItems(f) {
+  const n = readyItems(f).length;
+  const rows = f.items.map((it, i) => {
+    if (it.k === 'file') return `<div class="mi" data-act="noop">${ic('video', 15)}<div class="grow">${i + 1} · ${esc(base(it.path))}<span class="st">готовый файл · ${fmtS(it.trim)}</span></div></div>`;
+    const sc = S.scenes[it.sid];
+    return `<div class="mi ${S.sid === sc.id ? 'on' : ''}" data-act="takeScene" data-s="${sc.id}">${ic('clapper', 15)}<div class="grow">${i + 1} · Сцена ${sc.n}<span class="st">${esc(tileStatus(sc).t)}</span></div>${S.sid === sc.id ? ic('check', 14) : ''}</div>`;
+  }).join('');
+  return `<div class="mhead">Фильм: ${esc(f.name)} · ${n} ${plural(n, 'сцена готова', 'сцены готовы', 'сцен готово')} · ${fmtT(filmDur(f))}</div>${rows}<div class="msep"></div>
+    <div class="mi" data-act="filmNewScene" data-f="${f.id}">${ic('plus', 15)}<div>Новая сцена<span class="st">кадр A — кадр B последней сцены</span></div></div>
+    <div class="mi" data-act="menu" data-m="addfile:${f.id}">${ic('video', 15)}<div>Готовый mp4 из проекта…</div></div>
+    <div class="mi" data-act="montage" data-f="${f.id}">${ic('scissors', 15)}<div>Собрать фильм<span class="st">откроется «Монтаж»: порядок, склейки, музыка</span></div></div>
+    <div class="mi" data-act="scrollFilm" data-f="${f.id}">${ic('film', 15)}<div>Показать карточку фильма</div></div>`;
+}
+function spentMenu(f) {
+  const rows = f.spend.slice().reverse().map(e => `<div class="mrow ${e.ok ? '' : 'cx'}"><span class="grow ell">${esc(e.w)} <span class="w">· ${e.who}</span></span><span class="a">${e.cr ? e.a + ' кр' : usd(e.a)}</span>${e.ok ? '' : '<span class="w">не списано</span>'}</div>`).join('');
+  return `<div data-act="noop" class="menu upr" style="min-width:330px;max-height:340px;overflow:auto"><div class="mhead">Потрачено на фильм «${esc(f.name)}»</div>
+    ${rows || '<div class="mrow w">Пока ничего не потрачено</div>'}<div class="msep"></div>
+    <div class="mrow"><b class="grow">Всего</b><b>${spentTxt(f)}</b></div>
+    <div class="mhead" style="padding-bottom:6px">Деньги списываются, когда генерация готова. Остановленное не списывается. Склейка и сборка бесплатны.</div></div>`;
+}
+function shootLabel(sc) { return (sc.vers.length ? 'Переснять' : 'Снять') + ' · ' + sceneCost(sc).txt; }
+function canShoot(sc) { return sc && sc.st !== 'shoot' && sc.A?.st === 'ready' && sc.B?.st === 'ready'; }
+function videoStrip() {
+  const f = film(); const sc = curScene(); const p = PROV[S.prov];
+  const run = f && running(f);
+  const provPill = `<div class="swwrap"><button class="pill" data-act="menu" data-m="prov" title="Чем снимать">${p.t} <span class="k">· ${p.m}</span>${chev()}</button>${S.menu === 'prov' ? provMenu() : ''}</div>`;
+  const durPill = `<div class="swwrap"><button class="pill" data-act="menu" data-m="dur" title="Длительность сцены">${sc ? sc.dur : S.dur} с${chev()}</button>${S.menu === 'dur' ? durMenu() : ''}</div>`;
+  const step = `<span class="step" title="Вариантов за съёмку: каждый станет версией клипа"><button data-act="vars" data-d="-1" ${S.vars <= 1 ? 'disabled' : ''}>${ic('minus', 12)}</button><span>${S.vars}</span><button data-act="vars" data-d="1" ${S.vars >= 4 ? 'disabled' : ''}>${ic('plus', 12)}</button></span>`;
+  if (!f) {
+    return `<div class="plate">${switcher('Видео', 'film')}<div class="vsep"></div>
+      <span class="grow ell muted" style="font-size:12px" title="Выделите 2 картинки в «Файлах» → «Собрать видео», или попросите Claude: «сделай ролик про…»">Сцена не выбрана. Выделите 2 картинки в «Файлах» → «Собрать видео» или попросите Claude</span>
+      ${provPill}${durPill}${step}</div>`;
+  }
+  const filmKey = 'film';
+  const spentPill = `<div class="swwrap"><button class="spent" data-act="menu" data-m="spent" title="Потрачено на фильм «${esc(f.name)}» — по пунктам">${run ? '<span class="pulse"></span>' : ''}Потрачено: <b>${spentTxt(f)}</b>${chev()}</button>${S.menu === 'spent' ? spentMenu(f) : ''}</div>`;
+  const stop = run && sc && (shootJob(sc) || S.jobs.some(j => j.sid === sc.id)) ? `<button class="ibtn stop" data-act="stopScene" data-s="${sc.id}" title="Остановить сцену ${sc.n}: съёмку и рисование кадров">${ic('stop', 14)}</button>` : '';
+  const chipInner = sc ? `<span class="ell">Сцена <b>${sc.n}</b> · ${esc(f.name)}</span>` : `<span class="ell">Фильм: <b>${esc(f.name)}</b> · сцена не выбрана</span>`;
+  const chip = `<div class="swwrap" style="min-width:172px;flex:0 1 auto"><span class="chip picked shrink" style="max-width:100%;width:100%"><button class="lnk" style="color:inherit;display:inline-flex;align-items:center;gap:6px;min-width:0" data-act="menu" data-m="${filmKey}" title="Фильм «${esc(f.name)}»: сцены по порядку, «Добавить сцену», «Собрать фильм»">${ic('clapper', 13)}${chipInner}${chev(11)}</button><button class="x" data-act="${sc ? 'dropScene' : 'dropFilm'}" title="${sc ? 'Снять сцену из работы — фильм останется' : 'Снять фильм из работы'}">${ic('x', 12)}</button></span>${S.menu === filmKey ? `<div data-act="noop" class="menu up" style="min-width:300px">${filmMenuItems(f)}</div>` : ''}${S.menu === 'addfile:' + f.id ? addFileMenu(f, 'up') : ''}</div>`;
+  if (!sc) return `<div class="plate">${switcher('Видео', 'film')}<div class="vsep"></div>${chip}<button class="chip dash" data-act="filmNewScene" data-f="${f.id}">${ic('plus', 13)}Сцена</button><span class="grow"></span>${provPill}${durPill}${step}${spentPill}${run ? `<button class="ibtn stop" data-act="stopFilm" title="Остановить всё по фильму">${ic('stop', 14)}</button>` : ''}</div>`;
+  const tip = !canShoot(sc) ? (sc.st === 'shoot' ? 'Снимаем…' : 'Нужны оба кадра') : sc.vers.length ? 'Переснять: просьба из поля ввода уйдёт в модель вместе с текстом сцены' : 'Снять сцену по тексту из поля ввода';
+  const local = S.prov === 'local' ? `<span class="price" title="MiniMax H3 снимает по первому и последнему кадру сцены"><span class="k">бесплатно · очередь: 1</span></span>` : '';
+  return `<div class="plate">${switcher('Видео', 'film')}<div class="vsep"></div>${chip}${framesPair(sc, 'strip')}
+    ${provPill}${durPill}${step}${local}<span class="grow"></span>${spentPill}${stop}
+    <button class="bacc" data-act="shoot" ${canShoot(sc) ? '' : 'disabled'} title="${esc(tip)}">${sc.st === 'shoot' ? 'Снимаем…' : shootLabel(sc)}</button></div>`;
+}
+function addFileMenu(f, dir) {
+  const inFilm = new Set(f.items.flatMap(it => it.k === 'file' ? [it.path] : S.scenes[it.sid].saved.map(s => s.path)));
+  const list = S.tree.filter(p => /\.mp4$/.test(p) && !inFilm.has(p) && !f.out.includes(p));
+  return `<div data-act="noop" class="menu ${dir === 'up' ? 'up' : 'dn'}" style="min-width:280px"><div class="mhead">Готовый mp4 из проекта — встанет последним</div>${list.length ? list.map(p => `<div class="mi" data-act="addFile" data-f="${f.id}" data-p="${esc(p)}"><span class="imgpick ${S.gOf[p] || 'gm1'}"></span><div class="grow ell">${esc(base(p))}<span class="st ell">${esc(p)}</span></div></div>`).join('') : '<div class="mrow w">Других mp4 в проекте нет</div>'}</div>`;
+}
+function imagesStrip() {
+  const im = S.img;
+  if (!im) return `<div class="plate">${switcher('Картинки', 'image')}<div class="vsep"></div><span class="grow muted" style="font-size:12px">Картинка не выбрана</span><button class="pill">fal <span class="k">· Nano Banana Pro</span>${chev()}</button><span class="price">1 вариант <span class="k">· ≈ $0.04</span></span></div>`;
+  const sc = S.scenes[im.sid];
+  const chip = im.fr ? `<span class="chip picked shrink"><span class="lead ${frCls(im.fr)}"></span><span class="ell">Работаем с: <b>${esc(base(im.fr.file))}</b> · версия ${im.fr.ver}</span><button class="x" data-act="backScene" title="Снять картинку — вернуться к сцене">${ic('x', 12)}</button></span>`
+    : `<span class="chip picked shrink" style="border-style:dashed"><span class="ell">Новая картинка · станет кадром <b>${im.slot}</b></span><button class="x" data-act="backScene" title="Отменить — вернуться к сцене">${ic('x', 12)}</button></span>`;
+  return `<div class="plate">${switcher('Картинки', 'image')}<div class="vsep"></div>${chip}
+    <button class="chip dash bridge" data-act="backScene" title="Кадр ${im.slot} сцены ${sc.n} фильма «${esc(S.films[sc.fid].name)}». Новая версия сама станет кадром сцены">${ic('clapper', 13)}кадр ${im.slot} сцены ${sc.n} · ↩ к сцене</button>
+    <span class="grow"></span><button class="pill">fal <span class="k">· Nano Banana Pro</span>${chev()}</button>
+    <span class="step"><button>${ic('minus', 12)}</button><span>1</span><button>${ic('plus', 12)}</button></span>
+    <span class="price">≈ $0.04</span><button class="chip dash" title="Персонаж проекта">${ic('user', 13)}Персонаж</button></div>`;
+}
+function gitStrip() {
+  return `<div class="plate">${switcher('Git', 'git')}<div class="vsep"></div><span class="mono muted" style="font-size:12.5px">feat/site-header</span><span style="font-size:12px"><span style="color:var(--c-diff-add-text)">+42</span> <span style="color:var(--c-diff-rem-text)">−7</span></span><span class="grow"></span><button class="pill">2 к публикации</button><button class="bacc">Опубликовать</button></div>`;
+}
+function microLine() {
+  const f = film(); const sc = curScene();
+  let icon = 'git', label = 'Git', txt = 'feat/site-header · +42 −7', act = '';
+  if (S.strip === 'video') {
+    icon = 'film'; label = 'Видео';
+    txt = sc ? `<b>Сцена ${sc.n}</b> · ${esc(f.name)} · ${spentTxt(f)}` : f ? `<b>${esc(f.name)}</b> · сцена не выбрана · ${spentTxt(f)}` : 'сцена не выбрана';
+    if (sc) act = sc.st === 'shoot' ? `<button class="ibtn" style="width:26px;height:26px;color:var(--c-danger)" data-act="stopScene" data-s="${sc.id}" title="Остановить сцену">${ic('stop', 13)}</button>`
+      : `<button class="bacc" style="height:26px;padding:0 9px;font-size:12px" data-act="shoot" ${canShoot(sc) ? '' : 'disabled'} title="${esc(shootLabel(sc))}">${sc.vers.length ? 'Переснять' : 'Снять'}</button>`;
+  }
+  if (S.strip === 'images') { icon = 'image'; label = 'Картинки'; txt = S.img ? (S.img.fr ? `<b>${esc(base(S.img.fr.file))}</b> · кадр ${S.img.slot} · ≈ $0.04` : `<b>Новая картинка</b> · кадр ${S.img.slot} · ≈ $0.04`) : 'картинка не выбрана'; }
+  const run = f && running(f) && S.strip === 'video';
+  const wantDot = (f && S.strip !== 'video') || (S.img && S.strip !== 'images');
+  return `<div class="micro"><div class="swwrap"><button class="sw" data-act="${mob() ? 'sheet' : 'menu'}" data-m="strips">${ic(icon, 14, 'ico')}${label}${wantDot ? '<span class="dot"></span>' : ''}${chev()}</button>${!mob() && S.menu === 'strips' ? stripMenu() : ''}</div>
+    <button class="exp" data-act="${mob() ? 'sheet' : 'expand'}" data-m="strip">${run ? '<span class="pulse"></span>' : ''}<span class="ell">${txt}</span></button>
+    ${act}<button class="ibtn" style="width:26px;height:26px" data-act="${mob() ? 'sheet' : 'expand'}" data-m="strip" title="Развернуть">${ic('chev', 14)}</button></div>`;
+}
+function stripArea() {
+  if (mob()) return S.mobStrip ? microLine() : '';
+  if (S.collapsed) return microLine();
+  return S.strip === 'video' ? videoStrip() : S.strip === 'images' ? imagesStrip() : gitStrip();
+}
+
+/* ================= Композер ================= */
+function composer() {
+  const sc = curScene();
+  const modes = [['chat', 'chat', 'Чат']];
+  if (sc) modes.push(['scene', 'clapper', 'Сцена']);
+  if (S.img) modes.push(['image', 'image', 'Картинка']);
+  if (!modes.some(m => m[0] === S.mode)) S.mode = 'chat';
+  const m = S.mode;
+  let hint = '', ph = 'Спросите Claude…', val = S.draft[m] || '', btn = `<button class="send" data-act="submit" title="Отправить">${ic('up', 16)}</button>`;
+  if (m === 'scene') {
+    const pm = PROV[S.prov].m;
+    if (!sc.vers.length) {
+      hint = `<div class="hint">${ic('clapper', 12)}<span class="ell">Текст сцены ${sc.n} · от кадра A к кадру B · уходит прямо в <b>${pm}</b> вместе с кадрами, без агента · ${varsW(S.vars)} станут версиями клипа</span></div>`;
+      ph = `Что происходит в сцене ${sc.n} — от кадра A к кадру B? Например: камера медленно опускается в долину`;
+      val = sc.text;
+    } else {
+      hint = `<div class="hint">${ic('clapper', 12)}<span class="ell">Промпт модели · уходит в <b>${pm}</b> вместе с текстом сцены ${sc.n} и кадрами, без агента · ${varsW(S.vars)} станут новыми версиями</span></div>`;
+      ph = `Что изменить в сцене ${sc.n}? Например: сделай плавнее`;
+    }
+    btn = `<button class="btn acc submit" data-act="submit" ${canShoot(sc) ? '' : 'disabled'}>${ic('spark', 14)}${shootLabel(sc)}</button>`;
+  } else if (m === 'image') {
+    const im = S.img; const s2 = S.scenes[im.sid];
+    hint = `<div class="hint">${ic('image', 12)}<span class="ell">Промпт модели · уходит прямо в <b>Nano Banana Pro</b>, без агента · ${im.fr ? 'новая версия' : 'картинка'} станет кадром ${im.slot} сцены ${s2.n}</span></div>`;
+    ph = im.fr ? `Что изменить в ${base(im.fr.file)}? Например: туман гуще, солнце ниже` : 'Опишите картинку. Например: хижина в тумане, дым из трубы';
+    btn = `<button class="btn acc submit" data-act="submit" ${im.running ? 'disabled' : ''}>${ic('spark', 14)}${im.fr ? 'Изменить' : 'Нарисовать'} · ≈ $0.04</button>`;
+  }
+  const seg = modes.length > 1 ? `<div class="seg">${modes.map(([k, i, t]) => `<button class="${m === k ? 'on' : ''}" data-act="mode" data-k="${k}" title="${t}">${ic(i, 14)}${mob() ? '' : t}</button>`).join('')}</div>` : `<button class="ibtn" title="Прикрепить">${ic('plus', 16)}</button>`;
+  return `<div class="comp ${m !== 'chat' ? 'direct' : ''}">${hint}
+    <textarea id="ta" class="ta" rows="2" placeholder="${esc(ph)}">${esc(val)}</textarea>
+    <div class="crow">${seg}<span class="grow"></span>${m === 'chat' ? `<button class="ibtn" title="Голос">${ic('mic', 16)}</button>` : ''}${btn}</div></div>`;
+}
+
+/* ================= Карточка сцены ================= */
+function tileStatus(sc) {
+  const j = shootJob(sc);
+  if (sc.st === 'writing') return { t: 'пишем текст', c: '' };
+  if (sc.st === 'plan') return { t: 'в сценарии · не снята', c: '' };
+  if (sc.st === 'shoot') return { t: `снимаем · ${Math.round((j?.p || 0) * 100)} %`, c: '', p: j?.p };
+  if ([sc.A, sc.B].some(fr => fr && fr.st === 'drawing')) return { t: 'рисуем кадры', c: '' };
+  if (sc.st === 'stopped') return { t: 'остановлена · не списано', c: 'warn' };
+  if (sc.saved.length) {
+    const fch = textChanged(sc) || sc.fch;
+    return { t: fch ? 'изменена — переснять' : savedNow(sc) ? base(lastSaved(sc).path) : `${base(lastSaved(sc).path)} · есть новее`, c: fch || !savedNow(sc) ? 'warn' : 'ok' };
+  }
+  if (sc.vers.length) return { t: 'снята · не сохранена', c: 'warn' };
+  if (!sc.B) return { t: 'нет кадра B', c: '' };
+  return { t: sc.text ? 'не снята' : 'нет текста', c: '' };
+}
+function clipPlayer(sc, idx) {
+  const j = shootJob(sc);
+  if (!sc.vers.length) {
+    const cell = (slot) => { const fr = sc[slot]; if (!fr || fr.st === 'stopped') return `<div><div class="none" style="height:calc(100% - 12px)">Кадр ${slot}<br>${slot === 'B' ? 'выберите, нарисуйте<br>или отдайте Claude' : 'не выбран'}</div></div>`; return `<div class="${fr.st === 'drawing' ? 'drawing' : frCls(fr)}"><span class="cap">${slot}</span></div>`; };
+    return `<div class="clip pre">${cell('A')}${cell('B')}${j ? `<div class="shoot">Снимаем ${varsW(sc.job.n)} · ${Math.round(j.p * 100)} %</div>` : ''}</div>`;
+  }
+  const v = sc.vers[sc.cur];
+  return `<div class="clip ${sc.play ? 'play' : ''}"><div class="la ${frCls(sc.A)}"></div><div class="lb ${frCls(sc.B)} vs${v.vs}"></div>
+    ${j ? `<div class="shoot">Снимаем ещё ${varsW(sc.job.n)} · ${Math.round(j.p * 100)} %</div>` : `<button class="pbtn" data-act="playScene" data-s="${sc.id}" title="${sc.play ? 'Пауза' : 'Смотреть версию ' + v.n}">${ic(sc.play ? 'pause' : 'play', 18)}</button>`}
+    <div class="ptime"><span>версия ${v.n}</span><span>${fmtT(sc.dur)}</span></div><div class="ptl"><i></i></div></div>`;
+}
+function sceneCard(it) {
+  const sc = S.scenes[it.sid]; const f = S.films[sc.fid]; const cur = S.sid === sc.id;
+  const ts = tileStatus(sc); const pos = f.items.findIndex(x => x.sid === sc.id) + 1;
+  if (!cur) {
+    const v = sc.vers[sc.cur];
+    return `<div class="scompact" data-card="${sc.id}" data-act="takeScene" data-s="${sc.id}" title="Взять сцену в работу">
+      <div class="th ${sc.vers.length ? frCls(sc.B) + ' vs' + v.vs : sc.B ? frCls(sc.B) : 'drawing'}"></div>
+      <div class="grow" style="min-width:0"><div class="t1 ell">Сцена ${sc.n} · ${esc(f.name)} ${sc.st === 'shoot' ? `<span class="badge">снимаем ${Math.round((shootJob(sc)?.p || 0) * 100)} %</span>` : ''}</div>
+      <div class="t2 ell">${sc.vers.length ? `версия ${v.n} из ${sc.vers.length} · ` : ''}${esc(ts.t)} · потрачено ${sceneSpent(sc)}</div></div>
+      ${sc.st === 'shoot' ? `<button class="btn dng sm" data-act="stopScene" data-s="${sc.id}">${ic('stop', 12)}Остановить</button>` : `<button class="btn out sm" data-act="takeScene" data-s="${sc.id}">Работать с этой</button>`}</div>`;
+  }
+  const j = shootJob(sc);
+  const editing = S.edit && S.edit.sid === sc.id;
+  let text;
+  if (editing) text = `<textarea id="sedit" class="sedit" data-role="sedit">${esc(S.edit.val)}</textarea><div class="shelp">Клик мимо или Ctrl+Enter — сохранить, Esc — отменить</div>`;
+  else if (sc.text) text = `<div class="stext full" data-act="editText" data-s="${sc.id}" title="Нажмите, чтобы править">${esc(sc.text)}${sc.st === 'writing' ? '<span class="cur"></span>' : ''}</div>`;
+  else text = `<div class="stext ph" data-act="editText" data-s="${sc.id}">Текст сцены пишется в поле ввода в режиме «Сцена» — или нажмите здесь</div>`;
+  const marks = [];
+  const tch = textChanged(sc);
+  if ((tch || sc.fch) && sc.st !== 'shoot') marks.push(`<div class="mark">${ic('alert', 12)}${tch && sc.fch ? 'Текст и кадр изменены' : tch ? 'Текст изменён' : 'Кадр изменён'} — переснять<button class="btn out sm" data-act="reshoot" data-s="${sc.id}">Переснять · ${sceneCost(sc).txt}</button></div>`);
+  if (sc.st === 'stopped') marks.push(`<div class="mark">${ic('alert', 12)}Съёмка остановлена — деньги не списаны</div>`);
+  const prog = j ? `<div><div class="sst run"><span class="d"></span>${S.prov === 'local' ? 'Снимаем на своей GPU' : `Снимаем ${varsW(sc.job.n)} · ${Math.round(j.p * 100)} %`} · ${sc.job.m} · ${sc.job.cost.txt}${sc.job.note ? ` · «${esc(sc.job.note)}»` : ''}</div>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:4px"><div class="bar grow"><i style="width:${Math.round(j.p * 100)}%"></i></div><button class="btn dng sm" data-act="stopScene" data-s="${sc.id}">${ic('stop', 12)}Остановить</button></div></div>`
+    : [sc.A, sc.B].some(fr => fr && fr.st === 'drawing') ? `<div style="display:flex;gap:8px;align-items:center"><div class="sst run"><span class="d"></span>Рисуем кадры · Nano Banana Pro · $0.04 за кадр</div><span class="grow"></span><button class="btn dng sm" data-act="stopScene" data-s="${sc.id}">${ic('stop', 12)}Остановить</button></div>` : '';
+  let vers = '';
+  if (sc.vers.length) {
+    const v = sc.vers[sc.cur]; const savedIdx = new Set(sc.saved.map(s => s.v));
+    const note = sc.pick && sc.cur === sc.vers.length - 1 && v.by === 'Claude' ? `<span title="${esc(sc.pick)}">✦ выбрал Claude</span>` : v.note ? `по просьбе «${esc(v.note)}»` : v.by === 'Claude' ? 'снял Claude' : '';
+    vers = `<div class="vers">${sc.vers.map((x, k) => `<button class="vt ${frCls(sc.B)} vs${x.vs} ${k === sc.cur ? 'on' : ''}" data-act="pickVer" data-s="${sc.id}" data-v="${k}" title="Версия ${x.n}${x.note ? ' · «' + esc(x.note) + '»' : ''}${savedIdx.has(k) ? ' · сохранена' : ''}">${savedIdx.has(k) ? `<span class="sv">${ic('check', 9)}</span>` : ''}<span class="n">v${x.n}</span></button>`).join('')}
+      <span class="vnav"><button data-act="ver" data-s="${sc.id}" data-d="-1" ${sc.cur <= 0 ? 'disabled' : ''} title="Предыдущая версия">${ic('left', 13)}</button>версия ${v.n} из ${sc.vers.length}<button data-act="ver" data-s="${sc.id}" data-d="1" ${sc.cur >= sc.vers.length - 1 ? 'disabled' : ''} title="Следующая версия">${ic('right', 13)}</button></span></div>
+      ${note ? `<div class="vmeta">${note}</div>` : ''}`;
+  }
+  const saved = sc.saved.length ? `<div class="savedln">${savedNow(sc) ? `<span class="ok">${ic('check', 13)}</span>В проекте: <b>${esc(lastSaved(sc).path)}</b>` : `В проекте: ${esc(lastSaved(sc).path)} — версия ${sc.vers[lastSaved(sc).v].n}; текущая новее`} · ${treeLink(lastSaved(sc).path)}</div>`
+    : sc.vers.length ? `<div class="savedln muted">Ещё не в проекте · сохранится как ${esc(f.folder)}scene-${pad2(sc.n)}.mp4</div>` : '';
+  const nextKey = 'next:' + sc.id;
+  const acts = sc.vers.length ? `<div class="sacts">
+      <button class="btn out sm" data-act="moreVars" data-s="${sc.id}" ${sc.st === 'shoot' ? 'disabled' : ''}>${ic('spark', 13)}Ещё варианты · ${sceneCost(sc).txt}</button>
+      <button class="btn ${savedNow(sc) ? 'out' : 'acc'} sm" data-act="saveScene" data-s="${sc.id}" ${savedNow(sc) || sc.st === 'shoot' ? 'disabled' : ''} title="${savedNow(sc) ? 'Эта версия уже в проекте' : 'Сохранить текущую версию файлом в проект'}">${ic('save', 13)}${savedNow(sc) ? 'В проекте' : 'Сохранить сцену'}</button>
+      <span class="split swwrap"><button class="btn out sm" data-act="nextScene" data-s="${sc.id}" title="Сцена ${f.nextN}: кадр A — кадр B этой сцены">Следующая сцена ${ic('arrow', 13)}</button><button class="btn out sm" data-act="menu" data-m="${nextKey}" title="Как начать следующую сцену">${chev()}</button>
+      ${S.menu === nextKey ? `<div data-act="noop" class="menu dn" style="min-width:280px;left:auto;right:0"><div class="mi" data-act="nextScene" data-s="${sc.id}">${ic('arrow', 15)}<div>Кадр A = кадр B этой сцены<span class="st">стык без скачка</span></div></div><div class="mi" data-act="nextLast" data-s="${sc.id}">${ic('video', 15)}<div>Продлить от последнего кадра<span class="st">кадр A — последний кадр версии ${sc.vers[sc.cur].n}, ляжет в кадры/</span></div></div></div>` : ''}</span></div>` : '';
+  const price = sc.vers.length || f.spend.some(e => e.sid === sc.id && e.ok) ? `<span class="k">потрачено</span> ${sceneSpent(sc)}` : `<span class="k">${sceneCost(sc).txt}</span>`;
+  return `<div class="scard cur" data-card="${sc.id}">
+    <div class="sch"><span class="ic">${ic('clapper', 15)}</span><span class="nm">Сцена ${sc.n}</span><span class="sub">· ${esc(f.name)} · место ${pos} · ${sc.dur} с</span><span class="badge">в работе</span><span class="grow"></span><span class="sprice">${price}</span></div>
+    <div class="sgrid"><div>${clipPlayer(sc)}</div>
+      <div class="sright"><div class="frow">${framesPair(sc, 'card', true)}<span>кадр A → кадр B · нажмите кадр, чтобы заменить или править</span></div>
+        ${text}${marks.join('')}${prog}${vers}${saved}${acts}</div></div></div>`;
+}
+
+/* ================= Карточка фильма ================= */
+function tileHtml(f, it, i, where) {
+  const drag = `draggable="true" data-dragf="${f.id}" data-dragi="${i}"`;
+  const over = S.drag && S.drag.over === i && S.drag.from !== i ? 'over' : '';
+  const dragging = S.drag && S.drag.from === i ? 'drag' : '';
+  if (it.k === 'file') return `<div class="tile ${where === 'm' ? 'mtile' : ''} ${over} ${dragging} ${S.montage?.k === 'item' && S.montage.i === i && where === 'm' ? 'cur' : ''}" ${drag} ${where === 'm' ? `data-act="msel" data-k="item" data-i="${i}"` : ''} title="Перетащите, чтобы поменять порядок">
+    <div class="th ${it.g}"><span class="pos">${i + 1}</span><span class="gr">${ic('grip', 12)}</span></div><div class="t1 ell">${ic('video', 12)}${esc(base(it.path))}</div><div class="ts ok">готовый файл · ${fmtS(it.trim)}</div></div>`;
+  const sc = S.scenes[it.sid]; const ts = tileStatus(sc);
+  const th = sc.vers.length ? `${frCls(sc.B)} vs${sc.vers[sc.saved.length ? lastSaved(sc).v : sc.cur].vs}` : sc.B && sc.B.st === 'ready' ? frCls(sc.B) : sc.st === 'plan' || sc.st === 'writing' ? 'none' : sc.B ? 'drawing' : 'none';
+  const cur = where === 'm' ? S.montage?.k === 'item' && S.montage.i === i : S.sid === sc.id;
+  return `<div class="tile ${where === 'm' ? 'mtile' : ''} ${cur ? 'cur' : ''} ${over} ${dragging}" ${drag} data-act="${where === 'm' ? 'msel' : 'takeScene'}" data-k="item" data-i="${i}" data-s="${sc.id}" title="${where === 'm' ? 'Настройки сцены в сборке' : 'Взять сцену в работу'} · перетащите, чтобы поменять порядок">
+    <div class="th ${th}">${th === 'none' ? `Сцена ${sc.n}` : ''}<span class="pos">${i + 1}</span><span class="gr">${ic('grip', 12)}</span>${ts.p != null ? `<span class="fp"><i style="width:${Math.round(ts.p * 100)}%"></i></span>` : ''}</div>
+    <div class="t1 ell">Сцена ${sc.n}${S.sid === sc.id && where !== 'm' ? ' <span class="badge" style="height:16px;padding:0 5px;font-size:10px">в работе</span>' : ''}</div>
+    ${where === 'm' ? '' : `<div class="tx">${esc(sc.text || '')}${sc.st === 'writing' ? '<span class="cur"></span>' : ''}</div>`}
+    <div class="ts ${ts.c}">${ts.c === 'ok' ? ic('check', 11) : ''}${esc(ts.t)}${sc.saved.length ? ' · ' + fmtS(sc.trim) : ''}</div></div>`;
+}
+function filmCard(it) {
+  const f = S.films[it.fid]; const cur = S.fid === f.id;
+  const n = readyItems(f).length; const addKey = 'fadd:' + f.id;
+  const unsaved = scenesOf(f).filter(s => !s.saved.length).length;
+  const out = f.out[f.out.length - 1];
+  const tiles = f.items.map((x, i) => tileHtml(f, x, i, 'c')).join('');
+  const add = `<div class="swwrap"><button class="btn out sm" data-act="menu" data-m="${addKey}">${ic('plus', 13)}Добавить сцену${chev()}</button>${S.menu === addKey ? `<div data-act="noop" class="menu up" style="min-width:270px"><div class="mi" data-act="filmNewScene" data-f="${f.id}">${ic('clapper', 15)}<div>Новая сцена<span class="st">кадр A — кадр B последней сцены</span></div></div><div class="mi" data-act="menu" data-m="addfile:${f.id}:c">${ic('video', 15)}<div>Готовый mp4 из проекта…<span class="st">встанет в фильм последним, как сцена-файл</span></div></div></div>` : ''}${S.menu === 'addfile:' + f.id + ':c' ? addFileMenu(f, 'up') : ''}</div>`;
+  const building = f.building ? S.jobs.find(j => j.kind === 'build' && j.fid === f.id) : null;
+  return `<div class="fcard ${cur ? 'cur' : ''}" data-film="${f.id}">
+    <div class="fch"><span class="ic">${ic('film', 15)}</span><span class="nm">Фильм: ${esc(f.name)}</span><span class="sub">${n} ${plural(n, 'сцена готова', 'сцены готовы', 'сцен готово')}${f.items.length > n ? ` из ${f.items.length}` : ''} · ${fmtT(filmDur(f))} · 16:9</span>
+      ${f.script ? '<span class="badge n">сценарий Claude</span>' : ''}<span class="grow"></span>
+      <button class="btn out sm" data-act="montage" data-f="${f.id}">${ic('scissors', 13)}Монтаж</button></div>
+    ${f.stale ? `<div class="fstale">${ic('alert', 13)}<span class="grow">${esc(f.why.join(' · '))} — пересобрать</span><button class="btn acc sm" data-act="rebuild" data-f="${f.id}" ${f.building ? 'disabled' : ''}>Пересобрать · бесплатно</button></div>` : ''}
+    <div class="tiles">${tiles}</div>
+    <div class="ffoot">${building ? `<span class="sst run"><span class="d"></span>Собираем фильм… ${Math.round(building.p * 100)} %</span>` : out ? `<span class="ok" style="color:var(--c-success);display:inline-flex">${ic('check', 13)}</span><span>Собран: <b>${esc(out)}</b>${f.stale ? ' — устарел' : ''} · ${treeLink(out)}</span>` : `<span class="muted">${n ? `В сборку войдут сохранённые сцены${unsaved ? ` · не сохранено: ${unsaved}` : ''}` : 'Фильм соберётся из сохранённых сцен — пока их нет'}</span>`}
+      <span class="grow"></span>${add}<button class="btn acc sm" data-act="montage" data-f="${f.id}" ${n ? '' : 'disabled'} title="Откроется «Монтаж»: порядок, склейки, музыка">${ic('film', 13)}Собрать фильм</button></div></div>`;
+}
+function imgCard(it) {
+  const sc = S.scenes[it.sid]; const cur = S.img === it; const fr = it.fr;
+  const run = cur && it.running;
+  return `<div class="imgc ${cur ? 'cur' : ''}"><div class="big ${fr ? frCls(fr) : 'none'}">${fr ? '' : `Новая картинка<br>станет кадром ${it.slot} сцены ${sc.n}`}</div><div class="meta">
+    <div class="ttl">${fr ? esc(base(fr.file)) : 'Новая картинка'}${fr ? `<span class="badge n">версия ${fr.ver}</span>` : ''}${cur ? '<span class="badge">в работе</span>' : ''}</div>
+    <div class="muted">Кадр ${it.slot} сцены ${sc.n} фильма «${esc(S.films[sc.fid].name)}»${fr ? ' · ' + esc(fr.file) : ` · сохранится в ${esc(S.films[sc.fid].folder)}кадры/`}</div>
+    ${run ? `<div><span class="sst run"><span class="d"></span>Рисуем 1 вариант… ${Math.round((it.p || 0) * 100)} % · Nano Banana Pro · ≈ $0.04</span><div class="bar" style="margin-top:4px"><i style="width:${Math.round((it.p || 0) * 100)}%"></i></div></div>` : ''}
+    ${fr && fr.prompt ? `<div class="muted">Версия ${fr.ver} — «${esc(fr.prompt)}» · уже стала кадром ${it.slot} сцены ${sc.n}</div>` : !fr ? '<div class="muted">Опишите картинку в поле ввода — режим «Картинка».</div>' : '<div class="muted">Правьте в режиме «Картинка» или попапом «Редактор»: пометки, персонажи, версии — как у любой картинки.</div>'}
+    <div class="acts" style="display:flex;gap:6px;flex-wrap:wrap">${fr ? `<button class="btn sm">${ic('pencil', 13)}Редактор</button>` : ''}${cur ? `<button class="btn out sm" data-act="backScene">${ic('clapper', 13)}↩ К сцене ${sc.n}</button>` : ''}</div></div></div>`;
+}
+function feedHtml() {
+  if (!S.feed.length) return `<div class="empty"><h3>Новый чат</h3>Видео снимается по одной сцене: сцена — клип между двумя кадрами, готовая сцена ложится в проект файлом. Выделите 2 картинки в «Файлах» → «Собрать видео» или попросите Claude.
+    <div class="sugg"><button class="chip" data-act="suggest" data-t="Сделай ролик из 4 сцен про утро в горах">${ic('film', 13)}Сделай ролик из 4 сцен про утро в горах</button></div></div>`;
+  return `<div class="feedin">${S.feed.map(it => {
+    if (it.t === 'user') return `<div class="umsg">${esc(it.text)}</div>`;
+    if (it.t === 'agent') return `<div class="amsg"><span class="av">${ic('spark', 13)}</span><div class="tx">${it.html}${it.acts && !it.used ? `<div class="acts">${it.acts.map(a => `<button class="btn ${a.acc ? 'acc' : 'out'} sm" data-act="${a.a}" data-idx="${S.feed.indexOf(it)}" ${a.a === 'montage' ? `data-f="${S.agent?.fid || ''}"` : ''}>${esc(a.l)}</button>`).join('')}</div>` : ''}</div></div>`;
+    if (it.t === 'quiet') return `<div class="quiet">${it.html}</div>`;
+    if (it.t === 'film') return filmCard(it);
+    if (it.t === 'scene') return sceneCard(it);
+    if (it.t === 'img') return imgCard(it);
+    return '';
+  }).join('')}${S.typing ? '<div class="typing">Claude пишет…</div>' : ''}</div>`;
+}
+
+/* ================= Попап «Монтаж» — только сборка ================= */
+function pps() { return mob() ? 9 : 20; }
+function montageHtml() {
+  const m = S.montage; const f = S.films[m.fid];
+  const n = readyItems(f).length;
+  const bj = f.building ? S.jobs.find(j => j.kind === 'build' && j.fid === f.id) : null;
+  const res = bj ? `<div class="mres run"><span class="sst run"><span class="d"></span>Собираем ${esc(f.folder + f.name)}.mp4… ${Math.round(bj.p * 100)} %</span><span class="muted">склейка файлов сцен, склейки на стыках и музыка · бесплатно</span></div>`
+    : m.done ? `<div class="mres">${ic('check', 14)}<span class="grow">Фильм собран: <b>${esc(m.done)}</b> · ${fmtT(filmDur(f))}</span><button class="btn out sm" data-act="showTree" data-p="${esc(m.done)}">${ic('folder', 13)}Показать в дереве</button></div>` : '';
+  return `<div class="mscrim" data-act="closeMontage"></div><div class="modal" role="dialog" aria-label="Монтаж">
+    <div class="mh">${ic('scissors', 16)}<span class="t">Монтаж · ${esc(f.name)}</span><span class="muted" style="font-size:12px">${n} ${plural(n, 'сцена', 'сцены', 'сцен')} · ${fmtT(filmDur(f))} · потрачено ${spentTxt(f)}</span>
+      <div class="segw"><button class="${m.view === 'scenes' ? 'on' : ''}" data-act="mview" data-v="scenes">Сцены</button><button class="${m.view === 'script' ? 'on' : ''}" data-act="mview" data-v="script">Сценарий</button></div>
+      <span class="grow"></span><button class="btn acc sm" data-act="build" data-f="${f.id}" ${f.building || !n ? 'disabled' : ''}>${ic('film', 13)}${f.building ? 'Собираем…' : f.built ? 'Собрать заново · бесплатно' : 'Собрать фильм · бесплатно'}</button><button class="btn out sm" data-act="closeMontage">Готово</button></div>
+    ${res}
+    <div class="mbody" id="mbody"><div class="mleft">${montageLeft(f, m)}</div><div class="mcenter" id="mcenter">${m.view === 'script' ? scriptView(f, m) : scenesView(f, m)}</div></div>
+    <div class="mfoot">${ic('msg', 12)}<span class="grow">Порядок, подрезка, склейки и музыка меняют только сборку — файлы сцен не трогаются. Ручные правки уходят в ленту тихими строками, Claude их видит.</span></div></div>`;
+}
+function montageLeft(f, m) {
+  if (m.k === 'cut') {
+    const v = f.cuts[m.i]; if (v == null) return '';
+    return `<h4>${ic('scissors', 14)}Склейка ${m.i + 1} → ${m.i + 2}</h4><div class="lbl">Как ${esc(itemLabel(f.items[m.i]))} переходит в ${esc(itemLabel(f.items[m.i + 1]))}</div>
+      <div class="segw">${Object.entries(CUTS).map(([k, [t]]) => `<button class="${v === k ? 'on' : ''}" data-act="setCut" data-i="${m.i}" data-v="${k}">${t}</button>`).join('')}</div>
+      <div class="muted" style="font-size:11.5px">Бесплатно, генерация не нужна. Меняет только сборку.</div>`;
+  }
+  if (m.k === 'music') return `<h4>${ic('music', 14)}Музыка</h4><div class="lbl">Файл</div><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="chip ${f.music ? 'picked' : ''}" data-act="setMusic" data-v="утро.mp3">${ic('music', 13)}music/утро.mp3</button><button class="chip ${f.music ? '' : 'picked'}" data-act="setMusic" data-v="">Без музыки</button><button class="chip dash" data-act="musicAsk">${ic('spark', 13)}Подобрать с Claude…</button></div>
+    <div class="lbl">Громкость · 60 %</div><div class="bar"><i style="width:60%"></i></div><div class="lbl">Затухание в конце · 4 с</div>`;
+  const i = m.i; const it = f.items[i]; if (!it) return '<div class="muted">Выберите сцену на ленте или на таймлайне.</div>';
+  const order = `<div><div class="lbl">Порядок · место ${i + 1} из ${f.items.length}</div><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn out sm" data-act="mmove" data-i="${i}" data-d="-1" ${i === 0 ? 'disabled' : ''}>${ic('left', 13)}Раньше</button><button class="btn out sm" data-act="mmove" data-i="${i}" data-d="1" ${i === f.items.length - 1 ? 'disabled' : ''}>Позже${ic('right', 13)}</button><button class="btn sm" data-act="mremove" data-i="${i}">Убрать из фильма</button></div><div class="muted" style="font-size:11px;margin-top:4px">Или перетащите миниатюру на ленте. Убранная сцена остаётся файлом в проекте.</div></div>`;
+  const trim = (t, d) => `<div><div class="lbl">Подрезка · осталось ${fmtS(t)} из ${d} с</div><div style="display:flex;gap:6px"><button class="btn out sm" data-act="trim" data-i="${i}" data-d="-0.5">− 0,5 с</button><button class="btn out sm" data-act="trim" data-i="${i}" data-d="0.5">+ 0,5 с</button></div><div class="muted" style="font-size:11px;margin-top:4px">Или тяните ручку клипа на таймлайне</div></div>`;
+  if (it.k === 'file') return `<h4>${ic('video', 14)}${esc(base(it.path))}</h4><div class="fr ${it.g}" style="width:160px"></div><div class="muted" style="font-size:12px">Готовый файл из проекта · ${esc(it.path)} · ${it.dur} с. Текста и версий у него нет.</div>${trim(it.trim, it.dur)}${order}`;
+  const sc = S.scenes[it.sid];
+  const file = sc.saved.length ? lastSaved(sc) : null;
+  return `<h4>${ic('clapper', 14)}Сцена ${sc.n}${file ? ` · ${esc(base(file.path))}` : ''}</h4>
+    <div style="display:flex;gap:6px;align-items:center"><div class="fr ${frCls(sc.A)}" style="width:96px"></div>${ic('arrow', 13)}<div class="fr ${frCls(sc.B)}" style="width:96px"></div></div>
+    ${file ? `<div class="muted" style="font-size:12px">В сборку идёт файл <b>${esc(file.path)}</b> — версия ${sc.vers[file.v].n}${savedNow(sc) ? '' : ` · в карточке выбрана версия ${sc.vers[sc.cur].n}, она не сохранена`}</div>` : `<div class="mwarn">${ic('alert', 12)}Сцена не сохранена — в сборку не войдёт. Сохраните её в карточке сцены.</div>`}
+    <div><div class="lbl">Текст сцены</div><textarea id="mtext" data-role="mtext" data-s="${sc.id}">${esc(sc.text)}</textarea>
+    <div class="muted" style="font-size:11px">Тот же текст, что в карточке сцены. Правка не переснимает: у снятой сцены появится «Текст изменён — переснять».</div>${textChanged(sc) ? `<div class="mark">${ic('alert', 12)}Текст изменён — переснять</div>` : ''}</div>
+    ${trim(sc.trim, sc.dur)}${order}<button class="btn sm" data-act="takeScene" data-s="${sc.id}" style="align-self:flex-start">${ic('clapper', 13)}Открыть карточку сцены</button>`;
+}
+function scenesView(f, m) {
+  const p = pps();
+  const ready = f.items.map((it, i) => ({ it, i })).filter(x => itemReady(x.it));
+  const rib = f.items.map((it, i) => tileHtml(f, it, i, 'm')).join('');
+  const add = `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><div class="swwrap"><button class="btn out sm" data-act="menu" data-m="addfile:${f.id}:m">${ic('plus', 13)}Готовый mp4 из проекта${chev()}</button>${S.menu === 'addfile:' + f.id + ':m' ? addFileMenu(f, 'dn') : ''}</div><span class="muted" style="font-size:11.5px">Порядок — перетаскиванием миниатюр или «Раньше / Позже» слева</span></div>`;
+  const reel = ready.map(({ it }) => `<div class="${it.k === 'file' ? it.g : frCls(S.scenes[it.sid].B)}"></div>`).join('');
+  const unsaved = f.items.filter(it => !itemReady(it));
+  const player = `<div class="mplayer"><div class="player ${m.play ? 'play' : ''}"><div class="reel" style="width:${Math.max(1, ready.length) * 100}%">${reel}</div><button class="pbtn" data-act="mplay">${ic(m.play ? 'pause' : 'play', 18)}</button><div class="ptime"><span>${ready.length} ${plural(ready.length, 'файл', 'файла', 'файлов')}</span><span>${fmtT(filmDur(f))}</span></div><div class="ptl"><i></i></div></div></div>`;
+  const track = f.items.map((it, i) => {
+    const ok = itemReady(it); const dur = it.k === 'file' ? it.dur : S.scenes[it.sid].dur; const t = itemDur(it);
+    const g = it.k === 'file' ? it.g : frCls(S.scenes[it.sid].B);
+    const clip = `<div class="tclip ${g} ${ok ? '' : 'off'} ${m.k === 'item' && m.i === i ? 'sel' : ''}" style="width:${dur * p}px" data-act="msel" data-k="item" data-i="${i}" title="${esc(itemLabel(it))}${ok ? '' : ' — не сохранена, в сборку не войдёт'}"><span class="lab">${i + 1}</span><span class="dur">${fmtS(t)}</span>${t < dur ? `<span class="gap" style="width:${(dur - t) * p}px"></span>` : ''}${ok ? `<span class="hdl" data-trim="${i}" style="right:${(dur - t) * p}px" title="Подрезать конец клипа"></span>` : ''}</div>`;
+    const cut = i < f.cuts.length ? `<div class="cut ${m.k === 'cut' && m.i === i ? 'sel' : ''} ${f.cuts[i] !== 'cut' ? 'on' : ''}" data-act="msel" data-k="cut" data-i="${i}" title="Склейка ${i + 1} → ${i + 2}: ${CUTS[f.cuts[i]][0]}"><span><i>${CUTS[f.cuts[i]][1]}</i></span></div>` : '';
+    return clip + cut;
+  }).join('');
+  const width = f.items.reduce((a, it) => a + (it.k === 'file' ? it.dur : S.scenes[it.sid].dur) * p, 0) + f.cuts.length * 22;
+  return `<div class="tiles" style="padding-bottom:4px">${rib}</div>${add}
+    ${unsaved.length ? `<div class="mwarn">${ic('alert', 12)}${unsaved.map(itemLabel).join(', ')} не ${unsaved.length > 1 ? 'сохранены' : 'сохранена'} — в сборку не войдёт</div>` : ''}${player}
+    <div class="tl"><div class="tlh">${ic('scissors', 13)}Таймлайн · ${fmtT(filmDur(f))} · клик по ромбу — склейка, ручка справа у клипа — подрезка</div>
+      <div class="tlscroll" id="tlscroll"><div class="track">${track}</div><div class="mtrack ${m.k === 'music' ? 'sel' : ''}" style="width:${width}px" data-act="msel" data-k="music" data-i="0">${ic('music', 12)}&nbsp;${f.music ? 'music/' + esc(f.music) + ' · 60 % · затухание 4 с' : 'без музыки'}</div></div></div>`;
+}
+function scriptView(f, m) {
+  return `<div class="muted" style="font-size:12px;line-height:1.5">Сценарий · ${esc(f.name)} — тексты всех сцен по порядку. Это тот же текст, что в карточках сцен: правьте как документ или попросите Claude. Правка ничего не переснимает — у снятой сцены появится «Текст изменён — переснять».</div>
+    <div class="scr">${f.items.map((it, i) => {
+      if (it.k === 'file') return `<div class="row file"><div class="fr ${it.g}"></div><div><div class="hd">${i + 1} · ${esc(base(it.path))} · готовый файл · ${fmtS(it.trim)}</div><div class="muted" style="font-size:12px">Текста нет — это готовое видео из проекта.</div></div></div>`;
+      const sc = S.scenes[it.sid];
+      return `<div class="row ${m.k === 'item' && m.i === i ? 'sel' : ''}"><div style="display:flex;gap:4px;align-items:center"><div class="fr ${frCls(sc.A)}"></div>${ic('arrow', 12)}<div class="fr ${frCls(sc.B)}"></div></div>
+      <div><div class="hd">${i + 1} · Сцена ${sc.n} · ${sc.saved.length ? esc(base(lastSaved(sc).path)) : 'не сохранена'} · ${fmtS(sc.trim)}${textChanged(sc) ? ` <span class="badge warn">текст изменён — переснять</span>` : ''}</div><textarea id="stx${sc.id}" data-role="stext" data-s="${sc.id}">${esc(sc.text)}</textarea></div></div>`;
+    }).join('')}</div>`;
+}
+function logTextEdit(sc, orig, where) {
+  sc.text = sc.text.trim(); if (orig.trim() === sc.text) return;
+  quiet(`Вы поправили текст сцены ${sc.n}${where}: «${esc(sc.text.length > 60 ? sc.text.slice(0, 60) + '…' : sc.text)}»${sc.vers.length ? ' — клип снят по прежнему тексту, у сцены «Текст изменён — переснять»' : ''}`, 'txt' + sc.id);
+}
+
+/* ================= Дерево и шторки ================= */
+function treeHtml() {
+  const rows = S.tree.slice().sort().map(p => {
+    const dir = p.endsWith('/'); const depth = p.split('/').length - (dir ? 2 : 1);
+    const nm = dir ? p.split('/').slice(-2)[0] + '/' : base(p);
+    const isImg = /\.png$/.test(p); const sel = S.treeSel.includes(p);
+    const icon = dir ? 'folder' : /\.mp4$/.test(p) ? 'video' : isImg ? 'image' : /\.mp3$/.test(p) ? 'music' : /\.film$/.test(p) ? 'film' : 'file';
+    return `<div class="tr ${dir ? 'dir' : ''} ${S.treeHi === p ? 'hi' : ''} ${S.treeNew.includes(p) ? 'new' : ''}" style="padding-left:${6 + depth * 14}px" ${/\.film$/.test(p) ? 'title="Описание фильма: порядок сцен, склейки, музыка (открытый вопрос 1)"' : ''}>
+      ${isImg && p.startsWith('images/горы/') ? `<button class="cb ${sel ? 'on' : ''}" data-act="treeSel" data-p="${esc(p)}" title="Выделить">${sel ? ic('check', 11) : ''}</button>` : ''}
+      ${ic(icon, 14)}<span class="nm ell">${esc(nm)}</span></div>`;
+  }).join('');
+  return `<div class="tree">${rows}</div><div class="treefoot">${S.treeSel.length >= 2 ? `<button class="btn acc" data-act="collect">${ic('film', 14)}Собрать видео · ${S.treeSel.length} ${plural(S.treeSel.length, 'картинка', 'картинки', 'картинок')}</button>` : ''}<div class="treehint">Выделите 2 и больше картинок из images/горы/ — появится «Собрать видео». Каждая пара соседних картинок станет сценой.</div></div>`;
+}
+function sheetHtml() {
+  if (!S.sheet) return '';
+  let body = '';
+  const f = film(); const sc = curScene();
+  if (S.sheet === 'strips') {
+    body = `<div class="shh">Полоса над композером</div>${[['video', 'film', 'Видео', sc ? `Сцена ${sc.n} · ${spentTxt(f)}` : 'сцена не выбрана'], ['images', 'image', 'Картинки', S.img ? 'Работаем с кадром' : 'картинка не выбрана']].map(([k, i, t, st]) => `<div class="mi ${S.strip === k && S.mobStrip ? 'on' : ''}" data-act="strip" data-k="${k}">${ic(i, 16)}<div class="grow">${t}<span class="st">${esc(st)}</span></div></div>`).join('')}
+      <div class="msep"></div><div class="mi" data-act="hideStrip">${ic('x', 16)}<div>Не показывать полосу</div></div>`;
+  } else if (S.sheet.startsWith('frame:')) {
+    const [, sid, slot] = S.sheet.split(':'); body = `<div class="shh">${ic('image', 16)}Кадр ${slot}</div>${frameMenuItems(S.scenes[sid], slot)}`;
+  } else if (S.sheet === 'film' && f) {
+    body = `<div class="shh">${ic('film', 16)}Фильм</div>${filmMenuItems(f)}${S.menu === 'addfile:' + f.id ? addFileMenu(f, 'dn').replace('class="menu dn"', 'class="menu" style="position:static;box-shadow:none;margin-top:6px"') : ''}`;
+  } else if (S.sheet === 'strip') {
+    if (S.strip === 'images' && S.img) {
+      const im = S.img; const s2 = S.scenes[im.sid];
+      body = `<div class="shh">${ic('image', 16)}Картинки</div><div class="kv"><span class="l">Работаем с</span><div class="c"><span class="chip picked">${im.fr ? esc(base(im.fr.file)) : 'Новая картинка'}<button class="x" data-act="backScene">${ic('x', 12)}</button></span></div>
+        <span class="l">Сцена</span><div class="c"><button class="chip dash" data-act="backScene">${ic('clapper', 13)}кадр ${im.slot} сцены ${s2.n} · ↩ к сцене</button></div><span class="l">Модель</span><div class="c"><span class="pill">fal · Nano Banana Pro</span></div><span class="l">Цена</span><div class="c">1 вариант · ≈ $0.04</div></div>`;
+    } else {
+      body = `<div class="shh">${ic('film', 16)}Видео</div><div class="kv">
+        <span class="l">Работаем с</span><div class="c">${sc ? `<span class="chip picked">Сцена ${sc.n} · ${esc(f.name)}<button class="x" data-act="dropScene">${ic('x', 12)}</button></span>` : f ? `<span class="chip picked">Фильм: ${esc(f.name)}<button class="x" data-act="dropFilm">${ic('x', 12)}</button></span>` : '<span class="muted">сцена не выбрана</span>'}</div>
+        ${sc ? `<span class="l">Кадры</span><div class="c">${framesPair(sc, 'sheet', true)}</div>` : ''}
+        <span class="l">Чем снимать</span><div class="c">${Object.entries(PROV).map(([k, p]) => `<button class="chip ${S.prov === k ? 'picked' : ''}" data-act="prov" data-k="${k}">${p.t}</button>`).join('')}<span class="muted" style="font-size:11.5px;width:100%">${PROV[S.prov].m} · ${PROV[S.prov].sub(S.dur)}</span></div>
+        <span class="l">Длительность</span><div class="c">${[5, 8, 10].map(d => `<button class="chip ${S.dur === d ? 'picked' : ''}" data-act="dur" data-v="${d}">${d} с</button>`).join('')}</div>
+        <span class="l">Вариантов</span><div class="c"><span class="step"><button data-act="vars" data-d="-1">${ic('minus', 12)}</button><span>${S.vars}</span><button data-act="vars" data-d="1">${ic('plus', 12)}</button></span></div>
+        ${f ? `<span class="l">Потрачено</span><div class="c"><b>${spentTxt(f)}</b><span class="muted">на фильм «${esc(f.name)}»</span></div>` : ''}</div>
+        ${f ? `<div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap"><button class="btn out" data-act="sheet" data-m="film">${ic('film', 13)}Фильм</button><span class="grow"></span>${sc ? `<button class="btn acc" data-act="shoot" ${canShoot(sc) ? '' : 'disabled'}>${ic('spark', 13)}${shootLabel(sc)}</button>` : ''}</div>` : ''}`;
+    }
+  } else if (S.sheet === 'files') {
+    body = `<div class="shh">${ic('folder', 16)}Файлы</div>${treeHtml()}`;
+  }
+  return `<div class="scrim" data-act="closeSheet"></div><div class="sheet"><div class="grab"></div>${body}</div>`;
+}
+
+/* ================= Корневая отрисовка ================= */
+function appHtml() {
+  const chat = `<div class="chat"><div class="ph">${mob() ? `<span class="ell grow">Лендинг · утро</span><button class="ibtn" data-act="sheet" data-m="files" title="Файлы">${ic('folder', 16)}</button><button class="ibtn" data-act="sheet" data-m="strips" title="Полоса над композером">${ic('panel', 16)}</button>` : '<span class="ell grow">Лендинг · утро</span>'}</div>
+    <div class="feed" id="feed">${feedHtml()}</div>
+    <div class="dock"><div class="dockin">${stripArea()}${composer()}</div></div>
+    ${S.toast ? `<div class="toast"><span>${esc(S.toast.text)}</span>${S.toast.act ? `<button data-act="toastAct">${esc(S.toast.actLabel)}</button>` : ''}</div>` : ''}</div>`;
+  if (mob()) return `<div class="app mob">${chat}${sheetHtml()}${S.montage ? montageHtml() : ''}</div>`;
+  return `<div class="app"><div class="rail"><span class="ri on">${ic('chat', 16)}</span><span class="ri">${ic('folder', 16)}</span><span class="ri">${ic('user', 16)}</span></div>
+    <div class="island side"><div class="ph">${ic('folder', 15)}Файлы<span class="sub">лендинг</span></div>${treeHtml()}</div>${chat}
+    ${S.montage ? montageHtml() : ''}</div>`;
+}
+const JUMPS = [
+  ['1', 'Сцена из 2 картинок', 'В «Файлах» уже выделены гора-1.png и гора-2.png. Нажмите «Собрать видео» → сцена 1 в работе, полоса «Видео», композер в режиме «Сцена». Напишите текст сцены → «Снять» → в карточке 2 версии → выберите версию → «Сохранить сцену».'],
+  ['2', 'Следующая сцена', 'Сцена 1 фильма «горы» снята и сохранена. Нажмите «Следующая сцена →»: кадр A уже подставлен, кадр B пустой. Нажмите «+ B» в полосе → «Нарисовать через «Картинки»» → опишите картинку → «Нарисовать» → «↩ К сцене» → текст → «Снять» → «Сохранить сцену».'],
+  ['3', 'Агент по сценам', 'Пустой чат, в поле — просьба. Отправьте: Claude напишет сценарий из 4 текстов в карточку фильма, снимет сцену 1 и спросит «Снимать вторую?». Ответьте «да, и остальные тоже» — сцены 2–4 пойдут подряд, каждая своей карточкой.'],
+  ['4', 'Переснять сцену 2', 'Фильм из 4 сохранённых сцен собран. Сцена 2 в работе, в поле — «сделай плавнее». «Переснять» → версии 3 и 4 → «Сохранить сцену» → scene-02.v2.mp4, у фильма — «Сцена 2 обновлена — пересобрать».'],
+  ['5', 'Собрать фильм', '4 сцены сохранены, фильм не собран. «Собрать фильм» в карточке фильма → «Монтаж»: перетащите миниатюру или «Раньше/Позже», ромб склейки → «Затемнение», дорожка музыки → «Собрать фильм» → «Показать в дереве».'],
+  ['6', 'Готовый mp4 как сцена', 'Фильм «горы» со сценой 1. В карточке фильма «Добавить сцену» → «Готовый mp4 из проекта…» → водопад.mp4: он встанет в фильм как сцена-файл.'],
+  ['7', 'Телефон 390', 'Ширина 390: полоса — одна строка со «Снять»; тап — шторка с кадрами, моделью и вариантами. Карточки фильма и сцены в ленте, «Монтаж» — на весь экран.'],
+];
+let DESC = 'Выберите сценарий в «Сразу к» или начните с пустого чата.';
+function demoHtml() {
+  const t = (k, v, l) => `<button class="tbtn" data-demo="${k}" data-v="${v}" aria-pressed="${S[k] === v}">${l}</button>`;
+  return `<div class="grp"><span class="lbl">Тема</span>${t('theme', 'light', 'Светлая')}${t('theme', 'dark', 'Тёмная')}</div>
+    <div class="grp"><span class="lbl">Ширина</span>${t('w', 1360, '1360')}${t('w', 390, '390')}</div>
+    <div class="grp"><span class="lbl">Сразу к</span>${JUMPS.map(([k, l]) => `<button class="tbtn" data-jump="${k}" title="${esc(l)}">${k} · ${l}</button>`).join('')}<button class="tbtn" data-jump="0">Сначала</button></div>`;
+}
+
+let rendering = false;
+function render() {
+  document.documentElement.setAttribute('data-theme', S.theme);
+  document.body.classList.toggle('w390', mob());
+  document.getElementById('demo').innerHTML = demoHtml();
+  document.getElementById('vdesc').innerHTML = DESC;
+  const ae = document.activeElement; const aid = ae && ae.id; let s0, s1;
+  if (aid && ae.tagName === 'TEXTAREA') { s0 = ae.selectionStart; s1 = ae.selectionEnd; }
+  const sc = {}; ['feed', 'mcenter', 'mbody', 'tlscroll'].forEach(id => { const el = document.getElementById(id); if (el) sc[id] = [el.scrollTop, el.scrollLeft, el.scrollHeight - el.scrollTop - el.clientHeight < 40]; });
+  const tiles = [...document.querySelectorAll('.tiles')].map(el => el.scrollLeft);
+  const n0 = render.feedLen || 0;
+  rendering = true;
+  document.getElementById('root').innerHTML = appHtml();
+  rendering = false;
+  document.querySelectorAll('.tiles').forEach((el, k) => { if (tiles[k] != null) el.scrollLeft = tiles[k]; });
+  for (const [id, [t, l, bottom]] of Object.entries(sc)) { const el = document.getElementById(id); if (!el) continue; el.scrollLeft = l; el.scrollTop = id === 'feed' && (bottom || S.feed.length > n0) ? el.scrollHeight : t; }
+  render.feedLen = S.feed.length;
+  if (aid) { const el = document.getElementById(aid); if (el) { el.focus(); if (s0 != null) try { el.setSelectionRange(s0, s1); } catch (e) {} } }
+  if (render.focusNext) { const el = document.getElementById(render.focusNext); render.focusNext = null; if (el) { el.focus(); const n = el.value.length; el.setSelectionRange(n, n); } }
+  if (render.scrollTo) { const el = document.querySelector(render.scrollTo); render.scrollTo = null; if (el) el.scrollIntoView({ block: 'nearest' }); }
+}
+
+/* ================= Быстрые состояния («Сразу к») ================= */
+function ffGory() {
+  const f = newFilm('горы');
+  const sc = newScene(f, { A: frameFromFile('images/горы/гора-1.png'), B: frameFromFile('images/горы/гора-2.png'), text: GORY1 });
+  sc.st = 'ready'; sc.shot = GORY1; sc.vers = [{ n: 1, by: 'вы', note: '', vs: 0 }, { n: 2, by: 'вы', note: '', vs: 1 }]; sc.cur = 1;
+  const p = f.folder + 'scene-01.mp4'; addTree(p); S.gOf[p] = sc.B.g; sc.saved.push({ path: p, v: 1 });
+  f.spend.push({ w: 'Сцена 1 · Veo 3.1 · 2 варианта', who: 'вы', a: 3.2, ok: true, sid: sc.id });
+  S.treeNew = [];
+  quiet('Вы собрали видео из 2 картинок: фильм «горы» · сцена 1 в работе', 'take');
+  push({ t: 'film', fid: f.id });
+  S.fid = f.id; S.sid = sc.id; S.mode = 'scene'; S.strip = 'video'; S.prevStrip = 'git'; if (mob()) S.mobStrip = true;
+  push({ t: 'scene', sid: sc.id });
+  quiet(`Вы запустили: сцена 1 · Veo 3.1 · 2 варианта · ≈ $3.20`);
+  quiet(`Сохранено как: <b>${p}</b> · ${treeLink(p)}`);
+  return f;
+}
+function ffFilm(o = {}) {
+  const f = newFilm('утро-в-горах'); f.script = true;
+  const frs = [0, 1, 2, 3, 4].map(i => { const fr = newFrame(f, { g: AG[i] }); addTree(fr.file); return fr; });
+  frs.forEach(fr => f.spend.push({ w: `${base(fr.file)} · Nano Banana Pro`, who: 'Claude', a: 0.04, ok: true }));
+  TEXTS.forEach((tx, i) => {
+    const sc = newScene(f, { A: frs[i], B: frs[i + 1], text: tx, target: tx, by: 'claude' });
+    sc.st = 'ready'; sc.shot = tx; sc.vers = [{ n: 1, by: 'Claude', note: '', vs: 0 }, { n: 2, by: 'Claude', note: '', vs: 1 }]; sc.cur = 1; sc.pick = 'Claude взял последний вариант — камера движется ровнее';
+    const p = `${f.folder}scene-${pad2(sc.n)}.mp4`; addTree(p); S.gOf[p] = sc.B.g; sc.saved.push({ path: p, v: 1 });
+    f.spend.push({ w: `Сцена ${sc.n} · Veo 3.1 · 2 варианта`, who: 'Claude', a: 3.2, ok: true, sid: sc.id });
+  });
+  if (o.built) { const p = f.folder + f.name + '.mp4'; addTree(p); f.out.push(p); f.built = 1; }
+  S.treeNew = [];
+  push({ t: 'user', text: 'Сделай ролик из 4 сцен про утро в горах' });
+  quiet('Claude взял в работу: фильм <b>утро-в-горах</b>', 'take');
+  push({ t: 'agent', html: 'Сделаю ролик «утро в горах» из 4 сцен по 8 с. Сценарий — в карточке фильма; сниму первую сцену и остановлюсь, чтобы вы посмотрели.' });
+  push({ t: 'film', fid: f.id });
+  push({ t: 'agent', html: `Все 4 сцены сняты и сохранены в <b>${f.folder}</b> · потрачено ${spentTxt(f)}.${o.built ? ` Собрал фильм: <b>${f.out[0]}</b>, 0:32.` : ' Собрать фильм? Сборка бесплатная.'}` });
+  S.fid = f.id; S.strip = 'video'; S.prevStrip = 'git'; if (mob()) S.mobStrip = true;
+  return f;
+}
+function jump(k) {
+  stopJobs(() => true);
+  S = fresh(S);
+  const d = JUMPS.find(j => j[0] === k); DESC = d ? `<b>${d[0]} · ${d[1]}.</b> ${d[2]}` : 'Выберите сценарий в «Сразу к» или начните с пустого чата.';
+  if (k === '1') { S.treeSel = ['images/горы/гора-1.png', 'images/горы/гора-2.png']; }
+  if (k === '2') { ffGory(); }
+  if (k === '3') { S.draft.chat = 'Сделай ролик из 4 сцен про утро в горах'; render.focusNext = 'ta'; }
+  if (k === '4' || k === '7') {
+    if (k === '7') S.w = 390;
+    const f = ffFilm({ built: true }); const sc = scenesOf(f)[1];
+    push({ t: 'scene', sid: sc.id }); S.sid = sc.id; S.mode = 'scene';
+    quiet('Вы взяли в работу: <b>сцена 2</b> фильма «утро-в-горах»', 'take');
+    if (k === '4') { S.draft.scene = 'сделай плавнее'; render.focusNext = 'ta'; }
+  }
+  if (k === '5') { ffFilm({ built: false }); }
+  if (k === '6') { ffGory(); }
+  render();
+}
+
+/* ================= События ================= */
+document.addEventListener('click', e => {
+  const dm = e.target.closest('[data-demo]');
+  if (dm) { const k = dm.dataset.demo; let v = dm.dataset.v; v = k === 'w' ? +v : v; S[k] = v; if (k === 'w') { S.sheet = null; if (v === 390) S.mobStrip = !!(film() || S.img); } render(); return; }
+  const jp = e.target.closest('[data-jump]');
+  if (jp) { jump(jp.dataset.jump); return; }
+  const el = e.target.closest('[data-act]');
+  const act = el?.dataset.act;
+  if (!el) { if (S.menu) { S.menu = null; render(); } return; }
+  const sc = el.dataset.s ? S.scenes[el.dataset.s] : curScene();
+  const f = el.dataset.f ? S.films[el.dataset.f] : (sc ? S.films[sc.fid] : film());
+  const i = el.dataset.i != null ? +el.dataset.i : null;
+  const slot = el.dataset.slot;
+  if (el.dataset.idx && S.feed[+el.dataset.idx]?.t === 'agent') S.feed[+el.dataset.idx].used = true;
+  if (act !== 'menu' && act !== 'noop') S.menu = null;
+  switch (act) {
+    case 'noop': return;
+    case 'menu': S.menu = S.menu === el.dataset.m ? null : el.dataset.m; break;
+    case 'strip': S.strip = el.dataset.k; S.stripUser = true; S.collapsed = false; if (mob()) { S.mobStrip = true; S.sheet = null; } break;
+    case 'collapse': S.collapsed = true; break;
+    case 'expand': S.collapsed = false; break;
+    case 'sheet': S.sheet = el.dataset.m; break;
+    case 'closeSheet': S.sheet = null; break;
+    case 'hideStrip': S.mobStrip = false; S.sheet = null; break;
+    case 'prov': S.prov = el.dataset.k; if (film()) quiet(`Вы выбрали, чем снимать: ${PROV[S.prov].t} · ${PROV[S.prov].m}${S.prov === 'local' ? ' — бесплатно, по первому и последнему кадру, очередь локальной GPU' : ''}`, 'prov'); break;
+    case 'dur': S.dur = +el.dataset.v; { const c = curScene(); if (c && !c.vers.length) { c.dur = S.dur; c.trim = S.dur; } } break;
+    case 'vars': S.vars = Math.max(1, Math.min(4, S.vars + +el.dataset.d)); break;
+    case 'suggest': S.draft.chat = el.dataset.t; S.mode = 'chat'; submit(); break;
+    case 'submit': submit(); break;
+    case 'shoot': S.sheet = null; if (S.mode !== 'scene') S.mode = 'scene'; submitScene(); break;
+    case 'mode': S.mode = el.dataset.k; render.focusNext = 'ta'; break;
+    case 'treeSel': { const p = el.dataset.p; S.treeSel = S.treeSel.includes(p) ? S.treeSel.filter(x => x !== p) : [...S.treeSel, p]; break; }
+    case 'collect': {
+      const files = S.treeSel.slice().sort(); const nf = newFilm('горы');
+      const frs = files.map(frameFromFile);
+      for (let k = 0; k < frs.length - 1; k++) newScene(nf, { A: frs[k], B: frs[k + 1] });
+      S.treeSel = []; S.sheet = null;
+      quiet(`Вы собрали видео из ${files.length} картинок: фильм «горы» · ${frs.length - 1} ${plural(frs.length - 1, 'сцена', 'сцены', 'сцен')}`);
+      push({ t: 'film', fid: nf.id });
+      takeScene(scenesOf(nf)[0], 'you');
+      toast('Сцена 1 в работе. Опишите её в поле ввода и нажмите «Снять»'); break;
+    }
+    case 'takeScene': {
+      if (e.target.closest('textarea')) return;
+      if (e.target.closest('.btn') && el.classList.contains('scompact') ) return;
+      S.sheet = null;
+      if (S.montage) S.montage = null;
+      if (S.sid !== sc.id || S.strip !== 'video') takeScene(sc, 'you');
+      break;
+    }
+    case 'dropScene': dropScene(); S.sheet = null; break;
+    case 'dropFilm': dropFilm(); S.sheet = null; break;
+    case 'scrollFilm': render.scrollTo = `[data-film="${f.id}"]`; break;
+    case 'filmNewScene': {
+      S.sheet = null;
+      const last = scenesOf(f).slice(-1)[0];
+      if (last && last.B && last.B.st === 'ready') nextScene(last, 'join');
+      else { const nsc = newScene(f, {}); takeScene(nsc, 'you'); }
+      break;
+    }
+    case 'addFile': addFileItem(f, el.dataset.p); S.sheet = null; break;
+    case 'editText': {
+      if (sc.st === 'writing') return;
+      if (S.sid !== sc.id) takeScene(sc, 'you');
+      S.edit = { sid: sc.id, val: sc.text }; render.focusNext = 'sedit'; break;
+    }
+    case 'reshoot': quiet(`Вы запустили: пересъёмка сцены ${sc.n} ${sc.fch ? 'по новому кадру' : 'по новому тексту'} · ${PROV[S.prov].m} · ${varsW(S.vars)} · ${sceneCost(sc).txt}`); shootScene(sc, { who: 'you', note: sc.fch ? 'по новому кадру' : 'по новому тексту' }); break;
+    case 'moreVars': quiet(`Вы запустили: ещё варианты · сцена ${sc.n} · ${PROV[S.prov].m} · ${varsW(S.vars)} · ${sceneCost(sc).txt}`); shootScene(sc, { who: 'you' }); break;
+    case 'ver': case 'pickVer': {
+      sc.cur = act === 'ver' ? Math.max(0, Math.min(sc.vers.length - 1, sc.cur + +el.dataset.d)) : +el.dataset.v;
+      sc.play = false;
+      quiet(`Вы выбрали версию ${sc.vers[sc.cur].n} сцены ${sc.n}${sc.saved.length && !savedNow(sc) ? ' — в проекте другая версия, «Сохранить сцену» положит новый файл' : ''}`, 'ver' + sc.id); break;
+    }
+    case 'playScene': sc.play = !sc.play; break;
+    case 'saveScene': saveScene(sc, 'you'); break;
+    case 'nextScene': nextScene(sc, 'join'); break;
+    case 'nextLast': nextScene(sc, 'last'); break;
+    case 'stopScene': stopScene(sc); break;
+    case 'stopFilm': S.jobs.filter(j => j.fid === f.id && j.sid).map(j => S.scenes[j.sid]).filter((x, k, a) => a.indexOf(x) === k).forEach(stopScene); break;
+    case 'editFrame': openImage(sc, slot, 'edit'); break;
+    case 'drawFrame': openImage(sc, slot, 'new'); break;
+    case 'agentFrame': agentFrame(sc, slot); break;
+    case 'pickFrame': pickFrame(sc, slot, el.dataset.p); S.sheet = null; break;
+    case 'joinPrev': { const pv = prevScene(sc); sc.A = pv.B; if (sc.vers.length) sc.fch = true; quiet(`Кадр A сцены ${sc.n} — кадр B сцены ${pv.n}, стык без скачка`, 'frame' + sc.id + 'A'); S.sheet = null; break; }
+    case 'lastFrame': { const pv = prevScene(sc); const fr = newFrame(f, { file: `${f.folder}кадры/scene-${pad2(pv.n)}-последний-кадр.png`, g: pv.B.g }); addTree(fr.file); sc.A = fr; if (sc.vers.length) sc.fch = true; quiet(`Кадр A сцены ${sc.n} — последний кадр клипа сцены ${pv.n}: <b>${esc(fr.file)}</b>`, 'frame' + sc.id + 'A'); S.sheet = null; break; }
+    case 'backScene': backToScene(); S.sheet = null; break;
+    case 'agNext': agContinue('one'); break;
+    case 'agAll': push({ t: 'user', text: 'Сними все остальные' }); agContinue('all'); break;
+    case 'agResume': { const ag = S.agent; if (!ag) break; const af = S.films[ag.fid]; S.feed.forEach(it => { if (it.acts?.some(a => a.a === 'agResume')) it.used = true; }); quiet(`Вы продолжили: сцена ${scenesOf(af)[ag.k].n}`); agentScene(af, ag.k); break; }
+    case 'agBuild': { const af = S.films[S.agent.fid]; push({ t: 'user', text: 'Собери фильм' }); build(af, 'claude'); break; }
+    case 'rebuild': build(f, 'you'); break;
+    case 'build': if (f && !f.building) build(f, 'you'); break;
+    case 'showTree': case 'toastAct': {
+      const p = act === 'toastAct' ? S.toast.act.split(':').slice(1).join(':') : el.dataset.p;
+      S.treeHi = p; S.toast = null; if (S.montage) S.montage = null; if (mob()) S.sheet = 'files';
+      setTimeout(() => { if (S.treeHi === p) { S.treeHi = null; render(); } }, 3000);
+      render.scrollTree = p;
+      break;
+    }
+    case 'montage': { const mf = f || S.films[el.dataset.f]; if (!mf) break; S.montage = { fid: mf.id, view: 'scenes', k: 'item', i: 0, play: false, done: null }; S.sheet = null; break; }
+    case 'closeMontage': if (e.target.classList.contains('mscrim') || el.tagName === 'BUTTON') { S.montage = null; toast('«Монтаж» закрыт — порядок, склейки и музыка сохранены в фильме'); } break;
+    case 'mview': S.montage.view = el.dataset.v; break;
+    case 'msel': if (S.montage) { S.montage.k = el.dataset.k; S.montage.i = i; } break;
+    case 'mplay': S.montage.play = !S.montage.play; break;
+    case 'mmove': { const mf = S.films[S.montage.fid]; moveItem(mf, i, i + +el.dataset.d); S.montage.i = i + +el.dataset.d; break; }
+    case 'mremove': { const mf = S.films[S.montage.fid]; const [it] = mf.items.splice(i, 1); syncCuts(mf); markStale(mf, `Убрана ${itemLabel(it)}`); quiet(`Вы убрали из фильма «${esc(mf.name)}»: ${esc(itemLabel(it))} — файл остался в проекте`); S.montage.i = Math.max(0, i - 1); break; }
+    case 'setCut': { const mf = S.films[S.montage.fid]; mf.cuts[i] = el.dataset.v; markStale(mf, 'Склейки изменены'); quiet(`Вы поменяли склейку ${i + 1} → ${i + 2} на «${CUTS[el.dataset.v][0].toLowerCase()}»`, 'cut' + i); break; }
+    case 'setMusic': { const mf = S.films[S.montage.fid]; mf.music = el.dataset.v; markStale(mf, 'Музыка изменена'); quiet(mf.music ? `Вы поставили музыку: music/${esc(mf.music)}` : 'Вы убрали музыку из фильма', 'music'); break; }
+    case 'musicAsk': S.montage = null; S.draft.chat = 'Подбери музыку к фильму: спокойная, без слов'; S.mode = 'chat'; render.focusNext = 'ta'; break;
+    case 'trim': {
+      const mf = S.films[S.montage.fid]; const it = mf.items[i]; const o = it.k === 'file' ? it : S.scenes[it.sid];
+      o.trim = Math.max(1, Math.min(o.dur, o.trim + +el.dataset.d));
+      markStale(mf, 'Подрезка изменена'); quiet(`Вы подрезали ${esc(itemLabel(it))}: осталось ${fmtS(o.trim)} из ${o.dur} с`, 'trim' + i); break;
+    }
+    default: break;
+  }
+  render();
+  if (render.scrollTree) { const p = render.scrollTree; render.scrollTree = null; document.querySelector('.tr.hi')?.scrollIntoView({ block: 'nearest' }); }
+});
+let inputT = null;
+document.addEventListener('input', e => {
+  const t = e.target;
+  if (t.id === 'ta') {
+    const sc = curScene();
+    if (S.mode === 'scene' && sc && !sc.vers.length) { sc.text = t.value; clearTimeout(inputT); inputT = setTimeout(render, 250); }
+    else S.draft[S.mode] = t.value;
+    return;
+  }
+  if (t.dataset.role === 'sedit' && S.edit) { S.edit.val = t.value; return; }
+  if ((t.dataset.role === 'mtext' || t.dataset.role === 'stext') && S.montage) { S.scenes[t.dataset.s].text = t.value; }
+});
+document.addEventListener('keydown', e => {
+  const t = e.target;
+  if (t.id === 'ta' && e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); render(); document.getElementById('ta')?.focus(); return; }
+  if (t.dataset?.role === 'sedit') {
+    if (e.key === 'Escape') { S.edit = null; render(); }
+    else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { commitEdit(); render(); }
+    return;
+  }
+  if (e.key === 'Escape') { if (S.menu) S.menu = null; else if (S.sheet) S.sheet = null; else if (S.montage) { S.montage = null; toast('«Монтаж» закрыт — порядок, склейки и музыка сохранены в фильме'); } render(); }
+});
+document.addEventListener('focusin', e => {
+  const t = e.target;
+  if ((t.dataset?.role === 'mtext' || t.dataset?.role === 'stext') && S.montage && !rendering) {
+    const sid = t.dataset.s; if (S.montage.orig?.sid !== sid) S.montage.orig = { sid, v: S.scenes[sid].text };
+  }
+});
+document.addEventListener('focusout', e => {
+  if (rendering) return;
+  const t = e.target;
+  if (t.dataset?.role === 'sedit' && S.edit) { commitEdit(); setTimeout(render, 200); }
+  if (t.dataset?.role === 'mtext' || t.dataset?.role === 'stext') {
+    const o = S.montage?.orig; if (!o) return;
+    S.montage.orig = null;
+    logTextEdit(S.scenes[o.sid], o.v, t.dataset.role === 'stext' ? ' в «Сценарии»' : ' в «Монтаже»'); setTimeout(render, 200);
+  }
+});
+// Перетаскивание сцен в карточке фильма и в «Монтаже»
+document.addEventListener('dragstart', e => {
+  const t = e.target.closest?.('[data-dragf]'); if (!t) return;
+  S.drag = { fid: t.dataset.dragf, from: +t.dataset.dragi, over: null };
+  e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', t.dataset.dragi); } catch (x) {}
+  t.classList.add('drag');
+});
+document.addEventListener('dragover', e => {
+  if (!S.drag) return; const t = e.target.closest?.('[data-dragf]'); if (!t || t.dataset.dragf !== S.drag.fid) return;
+  e.preventDefault(); const o = +t.dataset.dragi;
+  if (S.drag.over !== o) { document.querySelectorAll('.tile.over').forEach(x => x.classList.remove('over')); S.drag.over = o; if (o !== S.drag.from) t.classList.add('over'); }
+});
+document.addEventListener('drop', e => {
+  if (!S.drag) return; e.preventDefault();
+  const t = e.target.closest?.('[data-dragf]'); const d = S.drag; S.drag = null;
+  if (t && t.dataset.dragf === d.fid) moveItem(S.films[d.fid], d.from, +t.dataset.dragi);
+  render();
+});
+document.addEventListener('dragend', () => { if (S.drag) { S.drag = null; render(); } });
+// Подрезка ручкой на таймлайне
+let trimDrag = null;
+document.addEventListener('pointerdown', e => {
+  const h = e.target.closest('[data-trim]'); if (!h || !S.montage) return;
+  e.preventDefault(); e.stopPropagation();
+  const mf = S.films[S.montage.fid]; const i = +h.dataset.trim; const it = mf.items[i]; const o = it.k === 'file' ? it : S.scenes[it.sid];
+  trimDrag = { i, x0: e.clientX, t0: o.trim, o, f: mf, it }; S.montage.k = 'item'; S.montage.i = i;
+});
+document.addEventListener('pointermove', e => {
+  if (!trimDrag) return; const o = trimDrag.o;
+  const v = Math.round((trimDrag.t0 + (e.clientX - trimDrag.x0) / pps()) * 2) / 2;
+  const nv = Math.max(1, Math.min(o.dur, v)); if (nv !== o.trim) { o.trim = nv; render(); }
+});
+document.addEventListener('pointerup', () => {
+  if (!trimDrag) return; const { f: mf, i, t0, o, it } = trimDrag; trimDrag = null;
+  if (o.trim !== t0) { markStale(mf, 'Подрезка изменена'); quiet(`Вы подрезали ${esc(itemLabel(it))}: осталось ${fmtS(o.trim)} из ${o.dur} с`, 'trim' + i); }
+  render();
+});
+// Состояние из адреса: ?jump=3&theme=dark&w=390
+(() => {
+  const q = new URLSearchParams(location.search);
+  if (q.get('theme')) S.theme = q.get('theme');
+  if (q.get('w')) S.w = +q.get('w');
+  if (q.get('jump')) jump(q.get('jump')); else render();
+})();
+</script>
+</body>
+</html>

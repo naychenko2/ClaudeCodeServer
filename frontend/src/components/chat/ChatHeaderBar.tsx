@@ -224,7 +224,10 @@ function ClaudeCostPopoverBody({ stats, billing, onBillingChange, windows }: {
       {windows.length > 0 && (
         <>
           <div style={badgeSectionStyle}>Лимиты подписки</div>
-          {windows.map(w => <RateRow key={w.limitType} w={w} />)}
+          {/* Порядок — как в стопке баров на пилюле (5 часов → неделя → по моделям), а не
+              по проценту: иначе строки попапа не совпадали бы с барами и прыгали местами */}
+          {ratePillSegments(windows).map(s => windows.find(w => w.limitType === s.limitType)!)
+            .map(w => <RateRow key={w.limitType} w={w} />)}
         </>
       )}
       <div style={{ marginTop: 10, paddingTop: 8, borderTop: `1px solid ${C.bgInset}`, display: 'flex', alignItems: 'center', gap: 6, fontFamily: FONT.sans, fontSize: 11 }}>

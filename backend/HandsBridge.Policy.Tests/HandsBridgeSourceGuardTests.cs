@@ -24,6 +24,14 @@ public class HandsBridgeSourceGuardTests
         { HandsTools.UiRead, "Automation/Tools/UIReadTool.cs", "HandsGate.Policy.CheckUi(HandsTools.UiRead," },
         { HandsTools.WindowManagement, "Tools/WindowManagementTool.cs", "HandsPolicy.CheckWindowAction(" },
         { HandsTools.ScreenshotControl, "Tools/ScreenshotControlTool.cs", "HandsPolicy.CheckScreenshot(" },
+        // Браузерная рука (ADR-016 §7.1): инструменты появляются в Ш6, до него эти строки красные
+        { HandsTools.BrowserNavigate, "Tools/BrowserNavigateTool.cs", "HandsPolicy.CheckBrowserUrl(" },
+        { HandsTools.BrowserSnapshot, "Tools/BrowserSnapshotTool.cs", "HandsPolicy.CheckBrowserSnapshot(" },
+        { HandsTools.BrowserClick, "Tools/BrowserClickTool.cs", "HandsPolicy.CheckBrowserRef(HandsTools.BrowserClick," },
+        { HandsTools.BrowserType, "Tools/BrowserTypeTool.cs", "HandsPolicy.CheckBrowserRef(HandsTools.BrowserType," },
+        { HandsTools.BrowserTabs, "Tools/BrowserTabsTool.cs", "HandsPolicy.CheckBrowserTabs(" },
+        { HandsTools.BrowserWait, "Tools/BrowserWaitTool.cs", "HandsPolicy.CheckBrowserWait(" },
+        { HandsTools.BrowserScreenshot, "Tools/BrowserScreenshotTool.cs", "HandsPolicy.CheckBrowserScreenshot(" },
     };
 
     [Fact]

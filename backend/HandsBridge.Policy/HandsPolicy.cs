@@ -14,9 +14,19 @@ public static class HandsTools
     public const string UiRead = "ui_read";
     public const string WindowManagement = "window_management";
     public const string ScreenshotControl = "screenshot_control";
+    public const string BrowserNavigate = "browser_navigate";
+    public const string BrowserSnapshot = "browser_snapshot";
+    public const string BrowserClick = "browser_click";
+    public const string BrowserType = "browser_type";
+    public const string BrowserTabs = "browser_tabs";
+    public const string BrowserWait = "browser_wait";
+    public const string BrowserScreenshot = "browser_screenshot";
 
     public static readonly IReadOnlyList<string> All =
-        [App, UiSnapshot, UiFind, UiClick, UiType, UiRead, WindowManagement, ScreenshotControl];
+    [
+        App, UiSnapshot, UiFind, UiClick, UiType, UiRead, WindowManagement, ScreenshotControl,
+        BrowserNavigate, BrowserSnapshot, BrowserClick, BrowserType, BrowserTabs, BrowserWait, BrowserScreenshot,
+    ];
 }
 
 /// <summary>
@@ -31,8 +41,18 @@ public static class HandsTools
 /// обход запрета этих программ в <c>app</c>. Читать и снимать такие окна можно. Закрыто по
 /// умолчанию: не узнали процесс окна или образ — ввод запрещён.
 /// </summary>
-public sealed class HandsPolicy(IHandsWindowSystem windows)
+/// <param name="browserProfilesRoot">
+/// Корень профилей браузерной руки в данных агента (ADR-016 §7.1): <c>app</c> не открывает
+/// программу с <c>user-data-dir</c> внутри него. null — браузерной руки у моста нет, беречь нечего.
+/// </param>
+public sealed class HandsPolicy(IHandsWindowSystem windows, string? browserProfilesRoot = null)
 {
+    // Кривой корень тихо выключил бы запрет, поэтому падаем при создании, а не пропускаем
+    private readonly string? _browserProfilesRoot = browserProfilesRoot is null
+        ? null
+        : HandsAppPaths.TryNormalize(browserProfilesRoot)
+          ?? throw new ArgumentException("Browser profiles root must be a full path", nameof(browserProfilesRoot));
+
     private const string ListWindows =
         "Call window_management(action='list') to get window handles.";
 
@@ -88,11 +108,56 @@ public sealed class HandsPolicy(IHandsWindowSystem windows)
                         $"Argument '{fragment}' is not allowed: it turns the program into a command launcher. " +
                         "Pass a URL or a file path instead.");
             }
+
+            if (UserDataDirIntoProfiles(arguments) is { } userDataDirDenial)
+                return HandsLaunchDecision.Deny(userDataDirDenial);
         }
 
         // Запускаем ровно проверенную строку, а не как путь прислала модель
         return HandsLaunchDecision.Allow(normalized);
     }
+
+    /// <summary>
+    /// Узкий запрет (решение 2026-09-29): <c>user-data-dir</c> в корень профилей браузерной руки
+    /// открыл бы профиль проекта в обход руки, а сама рука дальше получала бы «профиль занят».
+    /// Аргументы режутся по правилам Win32, ключ ищется во всех формах Chromium (<c>--</c>,
+    /// <c>-</c>, <c>/</c>, любой регистр), путь сравнивается после нормализации, а не подстрокой.
+    /// Путь, который не проверить (относительный, с переменными окружения), — отказ.
+    /// Остаток: короткие имена 8.3 и точки соединения диском не разворачиваются — их ловит
+    /// проверка занятости профиля до запуска браузера.
+    /// </summary>
+    private string? UserDataDirIntoProfiles(string arguments)
+    {
+        if (_browserProfilesRoot is null)
+            return null;
+
+        foreach (var argument in HandsArguments.Split(arguments))
+        {
+            var name = argument.TrimStart('-', '/');
+            if (name.Length == argument.Length ||
+                !name.StartsWith(UserDataDirSwitch, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var rest = name[UserDataDirSwitch.Length..];
+            if (rest.Length == 0 || rest[0] != '=')
+                continue;
+
+            var value = rest[1..];
+            var path = value.Contains('%') ? null : HandsAppPaths.TryNormalize(value);
+            if (path is null)
+                return "user-data-dir must be a full path without environment variables " +
+                       "(for example C:\\Users\\me\\ChromeProfile).";
+
+            if (path.Equals(_browserProfilesRoot, StringComparison.OrdinalIgnoreCase) ||
+                path.StartsWith(_browserProfilesRoot + "\\", StringComparison.OrdinalIgnoreCase))
+                return "user-data-dir points into the browser profiles of hands: " +
+                       "use the browser_* tools for this project's browser instead of starting it with app.";
+        }
+
+        return null;
+    }
+
+    private const string UserDataDirSwitch = "user-data-dir";
 
     // ---------- окна ----------
 
@@ -181,6 +246,119 @@ public sealed class HandsPolicy(IHandsWindowSystem windows)
 
         return HandsDecision.Allow;
     }
+
+    // ---------- браузер ----------
+
+    /// <summary>Потолок <c>browser_wait</c>: дольше модель ход не вешает.</summary>
+    public const int MaxBrowserWaitMs = 30_000;
+
+    private const string FreshSnapshot = "Take a fresh browser_snapshot and use its refs.";
+
+    /// <summary>Действия <c>browser_tabs</c>; вкладки только своего браузера, чужих в профиле нет.</summary>
+    private static readonly HashSet<string> TabActions = new(StringComparer.Ordinal)
+    {
+        "list", "new", "select", "close",
+    };
+
+    /// <summary>
+    /// Адрес <c>browser_navigate</c> и новой вкладки: белый список — <c>http</c>, <c>https</c> и
+    /// ровно <c>about:blank</c> (ADR-016 §7.1). Всё прочее — отказ: <c>file:</c> и
+    /// <c>chrome:</c> — не дело руки, <c>javascript:</c> и <c>data:</c> — исполнение JS от модели
+    /// в обход запрета <c>evaluate</c>. Переходим по нормализованной строке из решения, а не по
+    /// присланной: разбор .NET и Chromium не расходятся на том, что проверено.
+    /// </summary>
+    public static HandsUrlDecision CheckBrowserUrl(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+            return HandsUrlDecision.Deny("url is required (http, https or about:blank).");
+
+        // Chromium молча выкидывает табуляции и переводы строк из адреса: проверили бы одно, открыли другое
+        if (url.Any(char.IsControl))
+            return HandsUrlDecision.Deny("url must not contain control characters.");
+
+        var trimmed = url.Trim();
+        if (trimmed.Equals(AboutBlank, StringComparison.OrdinalIgnoreCase))
+            return HandsUrlDecision.Allow(AboutBlank);
+
+        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri) ||
+            uri.Scheme is not ("http" or "https") ||
+            string.IsNullOrEmpty(uri.Host))
+            return HandsUrlDecision.Deny(
+                "Only http, https and about:blank addresses can be opened: local files, browser pages, " +
+                "javascript: and data: URLs are not allowed.");
+
+        return HandsUrlDecision.Allow(uri.AbsoluteUri);
+    }
+
+    private const string AboutBlank = "about:blank";
+
+    /// <summary>
+    /// <c>browser_tabs</c>: <c>list</c>, <c>new</c> (адрес — через <see cref="CheckBrowserUrl"/>,
+    /// без адреса — <c>about:blank</c>), <c>select</c> и <c>close</c> (нужен <c>tabId</c>).
+    /// </summary>
+    public static HandsUrlDecision CheckBrowserTabs(string? action, string? url, string? tabId)
+    {
+        if (action is null || !TabActions.Contains(action))
+            return HandsUrlDecision.Deny($"Unknown browser_tabs action '{action}'. Use list, new, select or close.");
+
+        switch (action)
+        {
+            case "new":
+                return url is null ? HandsUrlDecision.Allow(AboutBlank) : CheckBrowserUrl(url);
+            case "select" or "close" when string.IsNullOrWhiteSpace(tabId):
+                return HandsUrlDecision.Deny($"browser_tabs(action='{action}') requires tabId. Call browser_tabs(action='list').");
+            default:
+                return url is null
+                    ? HandsUrlDecision.Allow(null)
+                    : HandsUrlDecision.Deny("url is only accepted with action='new'.");
+        }
+    }
+
+    /// <summary>
+    /// Ссылка на элемент из снимка (<c>e</c> и число): формат, затем знает ли её таблица ссылок
+    /// моста. Неизвестная или устаревшая после перехода ссылка — отказ, а не «поверим».
+    /// </summary>
+    /// <param name="resolveRef">backendDOMNodeId по ссылке из последнего снимка; null — ссылки нет.</param>
+    public static HandsDecision CheckBrowserRef(string tool, string? reference, Func<string, int?> resolveRef)
+    {
+        if (string.IsNullOrWhiteSpace(reference))
+            return HandsDecision.Deny($"{tool} requires ref. {FreshSnapshot}");
+
+        if (!IsRefFormat(reference))
+            return HandsDecision.Deny($"'{reference}' is not a snapshot ref (refs look like e12). {FreshSnapshot}");
+
+        return resolveRef(reference) is null
+            ? HandsDecision.Deny($"Ref '{reference}' is unknown or stale. {FreshSnapshot}")
+            : HandsDecision.Allow;
+    }
+
+    /// <summary><c>browser_snapshot</c>: без ссылки — вся страница, со ссылкой — её поддерево.</summary>
+    public static HandsDecision CheckBrowserSnapshot(string? reference, Func<string, int?> resolveRef) =>
+        reference is null ? HandsDecision.Allow : CheckBrowserRef(HandsTools.BrowserSnapshot, reference, resolveRef);
+
+    /// <summary>
+    /// <c>browser_wait</c>: текст на странице или пауза; время — от 1 мс до
+    /// <see cref="MaxBrowserWaitMs"/>, чтобы модель не повесила ход.
+    /// </summary>
+    public static HandsDecision CheckBrowserWait(string? text, int? timeoutMs)
+    {
+        if (string.IsNullOrEmpty(text) && timeoutMs is null)
+            return HandsDecision.Deny("browser_wait requires text to wait for or ms to pause.");
+
+        if (timeoutMs is { } ms && (ms <= 0 || ms > MaxBrowserWaitMs))
+            return HandsDecision.Deny($"Wait time must be between 1 and {MaxBrowserWaitMs} ms.");
+
+        return HandsDecision.Allow;
+    }
+
+    /// <summary><c>browser_screenshot</c>: как <see cref="CheckScreenshot"/> — только в ответ, на диск не пишется.</summary>
+    public static HandsDecision CheckBrowserScreenshot(string? outputPath) =>
+        string.IsNullOrEmpty(outputPath)
+            ? HandsDecision.Allow
+            : HandsDecision.Deny("outputPath is not allowed: screenshots are not written to disk. Omit it.");
+
+    private static bool IsRefFormat(string reference) =>
+        reference.Length is >= 2 and <= 10 && reference[0] == 'e' && reference.Skip(1).All(char.IsAsciiDigit);
 
     private static string NoInput(string what) =>
         $"{what} belongs to an interpreter, a terminal or Explorer (or its program is unknown): " +

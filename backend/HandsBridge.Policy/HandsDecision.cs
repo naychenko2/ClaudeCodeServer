@@ -18,3 +18,11 @@ public sealed record HandsLaunchDecision(bool Allowed, string? Reason, string? P
 
     public static HandsLaunchDecision Deny(string reason) => new(false, reason, null);
 }
+
+/// <summary>Решение по адресу браузера: при разрешении — нормализованный адрес, по нему и переходим.</summary>
+public sealed record HandsUrlDecision(bool Allowed, string? Reason, string? Url)
+{
+    public static HandsUrlDecision Allow(string? url) => new(true, null, url);
+
+    public static HandsUrlDecision Deny(string reason) => new(false, reason, null);
+}

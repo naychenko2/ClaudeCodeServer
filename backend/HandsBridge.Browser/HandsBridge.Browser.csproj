@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Браузерная рука (ADR-016 §7.1): протокол CDP по абстрактной трубе и сжатие дерева
+       доступности — без единого вызова WinAPI, чтобы тесты шли на Linux CI. Запуск Chrome,
+       анонимные трубы и Job живут в HandsBridge (net10.0-windows) и реализуют ICdpTransport.
+       Раскладка: Cdp/ — соединение и обёртки команд, Snapshot/ — сжатие AX-дерева. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>ClaudeHomeServer.HandsBridge.Browser</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+</Project>

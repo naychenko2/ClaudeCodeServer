@@ -1010,13 +1010,17 @@ export function Composer({
   // isListening в зависимостях не для красоты: на время записи textarea размонтирована
   // (вместо неё полоса с волной), распознанные куски копятся в text вхолостую — ref пустой.
   // Возвращается поле уже НОВЫМ узлом, без inline-высоты прошлого, то есть в одну строку
-  // при большом тексте; text при этом не меняется, и по нему эффект не сработал бы
+  // при большом тексте; text при этом не меняется, и по нему эффект не сработал бы.
+  // Слушаем видимое значение поля, а не text: у режима подсистемы свой буфер modeText, и
+  // смена режима, prefill промпта и очистка после отправки меняют value без события ввода —
+  // иначе поле держало бы высоту прошлого буфера
+  const fieldValue = activeMode ? modeText : text;
   useEffect(() => {
     autoResize();
-  }, [text, isListening, autoResize]);
+  }, [fieldValue, isListening, autoResize]);
 
   // Голосовая диктовка: после коммита нового текста уводим textarea в конец.
-  // Эффект стоит ПОСЛЕ useEffect [text, autoResize] выше — React выполняет эффекты
+  // Эффект стоит ПОСЛЕ useEffect [fieldValue, autoResize] выше — React выполняет эффекты
   // одного рендера в порядке объявления, поэтому к моменту срабатывания этого autoResize
   // уже обновил высоту и scrollHeight соответствует новому содержимому. Сбрасываем флаг
   // сразу, чтобы повторный запуск эффекта (напр. при быстром апдейте text из иной ветки)
@@ -1741,7 +1745,7 @@ export function Composer({
         autoComplete="off"
         ref={textareaRef}
         className="cc-composer-input"
-        value={activeMode ? modeText : text}
+        value={fieldValue}
         onChange={(e) => {
           if (activeMode) { setModeText(e.target.value); return; }
           setText(e.target.value);

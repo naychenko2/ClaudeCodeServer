@@ -254,6 +254,10 @@ export interface ComposerModeApi {
   // клик, агент, перезагрузка; ручной уход в «Чат» держится, пока ключ тот же.
   // null — не просит. Сигнал о смене состояния — notifyComposer из kit
   autoSelect?: (ctx: ComposerModeCtx) => string | null;
+  // Текст, который поле получает при входе в режим; key — повод (нить), на один key
+  // подставляется один раз и только в нетронутое поле. key отдавать и без текста
+  // (text: null): повод фиксируется с первого рендера, а не с появления текста
+  prefill?: (ctx: ComposerModeCtx) => { key: string; text: string | null } | null;
   placeholder: (ctx: ComposerModeCtx) => string;
   // Подпись кнопки отправки: «✦ Изменить · ≈ $0.15»
   submitLabel?: (ctx: ComposerModeCtx) => ReactNode;

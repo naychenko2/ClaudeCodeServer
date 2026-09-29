@@ -22,3 +22,18 @@ export function nextComposerMode(
   }
   return { key: null, modeId };
 }
+
+// Затравка поля режима (ComposerModeApi.prefill). key — повод (режим + нить): фиксируется
+// с первого рендера на нём, даже пока текста нет, — иначе первый запуск свежей нити,
+// пришедший после отправки, вернул бы промпт в очищенное поле. auto — текст, который
+// положили мы сами: пока человек его не трогал, смена нити заменяет его новым
+export interface PrefillState { key: string | null; auto: string | null }
+
+export function nextPrefill(
+  state: PrefillState, next: { key: string; text: string | null } | null, field: string,
+): { state: PrefillState; field: string } {
+  if (!next || next.key === state.key) return { state, field };
+  const untouched = !field.trim() || (state.auto !== null && field === state.auto);
+  if (!untouched) return { state: { key: next.key, auto: null }, field };
+  return { state: { key: next.key, auto: next.text }, field: next.text ?? '' };
+}

@@ -72,3 +72,17 @@ describe('режим «Картинка» при фокусе с сервера'
     expect(getComposerStripsVersion()).toBeGreaterThan(v);
   });
 });
+
+describe('затравка поля промптом последнего запуска', () => {
+  it('у нити с запусками — промпт с ключом по нити', () => {
+    __applyThreads('s1', 'p1', state('t1', [thread({ launches: [
+      { jobId: 'j1', baseVersionId: null, baseStepId: null, at: '2026-09-29T10:00:00Z', status: 'done', initiator: 'agent', prompt: 'закат над морем' },
+    ] } as Partial<ImageThread>)]));
+    expect(imageMode.prefill!(CTX)).toEqual({ key: 't1', text: 'закат над морем' });
+  });
+
+  it('у пустого черновика — ключ нити без текста', () => {
+    __applyThreads('s1', 'p1', state('d1', [thread({ id: 'd1', file: null, draftFolder: '' })]));
+    expect(imageMode.prefill!(CTX)).toEqual({ key: 'd1', text: null });
+  });
+});

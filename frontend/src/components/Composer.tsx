@@ -38,7 +38,7 @@ import { Button, IconButton, Modal, Notice } from './ui';
 import { SLOT_COMPOSER_CHIP, SLOT_COMPOSER_MODE, useSlot } from '../lib/subsystems/registry';
 import type { ComposerChipCtx, ComposerModeApi, ComposerModeCtx } from '../lib/subsystems/registry';
 import { getComposerStripsVersion, subscribeComposerStrips } from '../lib/composerStrips';
-import { nextComposerMode } from '../lib/composerModes';
+import { nextComposerMode, nextPrefill, type PrefillState } from '../lib/composerModes';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { useVoiceInput } from '../hooks/useVoiceInput';
 import { useHandsFree, type SpeechPhase } from '../hooks/useHandsFree';
@@ -624,6 +624,18 @@ export function Composer({
   // Режим пропал (условие стало ложным) — поле само возвращается в «Чат»
   const activeMode = slotModes.find(c => c.name === modeId)?.action ?? null;
   const [modeText, setModeText] = useState('');
+  // Затравка поля режима (например, промпт последнего запуска картинки) — правила в
+  // nextPrefill. Считаем от значения поля этого рендера, а не в updater'е setModeText:
+  // updater с записью в ref StrictMode зовёт дважды
+  const modePrefill = activeMode?.prefill?.(modeCtx) ?? null;
+  const prefillKey = modePrefill ? `${modeId}:${modePrefill.key}` : null;
+  const prefillRef = useRef<PrefillState>({ key: null, auto: null });
+  useEffect(() => {
+    const r = nextPrefill(prefillRef.current, prefillKey ? { key: prefillKey, text: modePrefill!.text } : null, modeText);
+    prefillRef.current = r.state;
+    if (r.field !== modeText) setModeText(r.field);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- подставляем только на новый повод
+  }, [prefillKey]);
   // Преднастройка из раздела «Заметки»: «Спросить Claude про это» кладёт контекст
   // заметки в sessionStorage — забираем при появлении композера и по событию
   // (на случай, если чат уже открыт и композер смонтирован).

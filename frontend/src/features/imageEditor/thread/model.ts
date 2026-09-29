@@ -116,6 +116,16 @@ export const versionName = (v: ImageThreadVersion) => (v.id === ORIGIN ? 'исх
 export const versionShort = (v: ImageThreadVersion) => (v.id === ORIGIN ? 'исходник' : `в${v.number}`);
 export const fromVersion = (v: ImageThreadVersion) => (v.id === ORIGIN ? 'от исходника' : `от версии ${v.number}`);
 
+// Промпт последнего запуска нити (по времени, кто бы ни запускал) — затравка поля режима
+// «Картинка». Запуски без промпта (фон, апскейл) пропускаются
+export function lastLaunchPrompt(t: ImageThread): string | null {
+  let best: ImageThreadLaunch | null = null;
+  for (const l of t.launches ?? []) {
+    if (l.prompt?.trim() && (!best || Date.parse(l.at) > Date.parse(best.at))) best = l;
+  }
+  return best?.prompt?.trim() ?? null;
+}
+
 export const launchOf = (t: ImageThread, jobId: string): ImageThreadLaunch | null =>
   t.launches?.find(l => l.jobId === jobId) ?? null;
 

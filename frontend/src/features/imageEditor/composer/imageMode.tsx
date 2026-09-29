@@ -7,7 +7,7 @@ import { useEffect } from 'react';
 import { Image as ImageIcon, Sparkles } from 'lucide-react';
 import { requestStrip, C, FS, SP, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
 import type { ComposerModeApi, ComposerModeCtx } from '../../../lib/subsystems/registryCore';
-import { currentVersion, isEmptyThread, isLegacyThread, ORIGIN, threadName, versionName } from '../thread/model';
+import { currentVersion, isEmptyThread, isLegacyThread, lastLaunchPrompt, ORIGIN, threadName, versionName } from '../thread/model';
 import { getFocusedThread, getImageModeRequest, IMAGES_STRIP, useThreads } from '../thread/threadStore';
 import { launchThread, useThreadLaunch } from '../thread/useThreadLaunch';
 
@@ -53,6 +53,12 @@ export const imageMode: ComposerModeApi = {
     if (!t.file && isEmptyThread(t)) return `draft:${t.id}`;
     const n = getImageModeRequest(ctx.sessionId);
     return n ? `request:${n}` : null;
+  },
+  // Промпт последнего запуска выбранной картинки — чтобы поправить, а не набирать заново.
+  // Ключ нити — и без запусков: первый запуск после отправки не новый повод
+  prefill: ctx => {
+    const t = getFocusedThread(ctx.sessionId);
+    return t ? { key: t.id, text: lastLaunchPrompt(t) || null } : null;
   },
   placeholder: ctx => {
     const t = getFocusedThread(ctx.sessionId);

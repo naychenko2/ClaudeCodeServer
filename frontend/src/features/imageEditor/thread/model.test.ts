@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { chainOf, currentIndex, currentStack, focusLabel, interruptedOf, launchEndNote, launchedPrompt, saveFolder, versionLabel } from './model';
-import type { ImageThread } from './threadsApi';
+import { chainOf, currentIndex, currentStack, focusLabel, interruptedOf, launchEndNote, lastLaunchPrompt, launchedPrompt, saveFolder, versionLabel } from './model';
+import type { ImageThread, ImageThreadLaunch } from './threadsApi';
 
 const thread = (patch: Partial<ImageThread>): ImageThread => ({
   id: 't1', file: 'images/hero.png', lineage: [], draftFolder: null, stacks: [], currentStackId: null,
@@ -202,5 +202,41 @@ describe('launchEndNote', () => {
   it('идущий и доделанный запуск надписи не несут', () => {
     expect(launchEndNote('running', 1, 3)).toBeNull();
     expect(launchEndNote('done', 3, 3)).toBeNull();
+  });
+});
+
+describe('промпт последнего запуска (затравка режима «Картинка»)', () => {
+  const launch = (jobId: string, at: string, prompt: string | null, initiator: 'human' | 'agent' = 'agent') =>
+    ({ jobId, baseVersionId: null, baseStepId: null, at, status: 'done', initiator, prompt }) as ImageThreadLaunch;
+  const withLaunches = (launches?: ImageThreadLaunch[]) => thread({ launches });
+
+  it('берёт последний по времени, а не по порядку в массиве', () => {
+    const t = withLaunches([
+      launch('j2', '2026-09-29T10:05:00Z', 'новый'),
+      launch('j1', '2026-09-29T10:00:00Z', 'старый'),
+    ]);
+    expect(lastLaunchPrompt(t)).toBe('новый');
+  });
+
+  it('пропускает запуски без промпта (фон, апскейл)', () => {
+    const t = withLaunches([
+      launch('j1', '2026-09-29T10:00:00Z', 'кот на окне'),
+      launch('j2', '2026-09-29T10:05:00Z', null),
+      launch('j3', '2026-09-29T10:06:00Z', '   '),
+    ]);
+    expect(lastLaunchPrompt(t)).toBe('кот на окне');
+  });
+
+  it('не зависит от инициатора', () => {
+    const t = withLaunches([
+      launch('j1', '2026-09-29T10:00:00Z', 'агента', 'agent'),
+      launch('j2', '2026-09-29T10:05:00Z', 'человека', 'human'),
+    ]);
+    expect(lastLaunchPrompt(t)).toBe('человека');
+  });
+
+  it('без запусков — null', () => {
+    expect(lastLaunchPrompt(withLaunches(undefined))).toBeNull();
+    expect(lastLaunchPrompt(withLaunches([]))).toBeNull();
   });
 });

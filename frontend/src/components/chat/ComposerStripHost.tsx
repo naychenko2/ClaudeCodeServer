@@ -43,15 +43,19 @@ export function ComposerStripHost({ projectId, sessionId, isMobile, builtins = [
     return `${head} — ${collapsed ? 'развернуть полосу' : 'свернуть полосу в строку'}`;
   };
 
-  // Дорожка с едущей белой плашкой (IconSegmented) — спокойнее акцентной заливки
-  // IconButton и переключается движением, как пилюля главного меню. Высота 24 влезает
-  // и в свёрнутую строку 30 px, и в slim-полосу телефона. Выбранная картинка, чья
+  // Ряд иконок с едущей мягкой подложкой (IconSegmented, тихий вид) — переключается
+  // движением, как пилюля главного меню. Высота 24 влезает и в свёрнутую строку
+  // 30 px, и в slim-полосу телефона. Выбранная картинка, чья
   // полоса скрыта ручным выбором, — точка на иконке её полосы
   const switcher = strips.length > 1 ? (
     // Клик по переключателю в свёрнутой строке не должен её разворачивать
     <span data-composer-strip-switcher="" onClick={e => e.stopPropagation()}
       style={{ display: 'inline-flex', alignItems: 'center', gap: SP.sm, flexShrink: 0 }}>
+      {/* quiet — без дорожки и белой плашки; persistKey — переключатель пересоздаётся
+          вместе с полосой, и без памяти позиции плашка не ехала бы, а возникала */}
       <IconSegmented
+        quiet
+        persistKey="composer-strip"
         value={active!}
         options={strips.map(s => ({
           value: s.name!,

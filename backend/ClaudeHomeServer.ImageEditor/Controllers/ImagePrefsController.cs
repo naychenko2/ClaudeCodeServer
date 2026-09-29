@@ -9,15 +9,14 @@ using Microsoft.AspNetCore.Mvc;
 namespace ClaudeHomeServer.Services.ImageEditor.Controllers;
 
 // Выбор человека в полосе «Картинки» проекта (без выбранной картинки): его берёт новая нить и
-// запуск агентом без аргументов. Гейты как у ThreadsController: флаг и чужой проект — 404.
-// Запись рассылает image_prefs_changed владельцу.
+// запуск агентом без аргументов. Гейт — ImageEditScopeGate: флаг и чужой проект — 404; проверка
+// тела общая с личной ручкой (PersonalImageEditorController). Запись рассылает image_prefs_changed.
 [ProjectCapability(ProjectCapabilityArea.FileBound)]
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/image-editor/prefs")]
 public class ImagePrefsController(
-    IFeatureFlagGate flags,
-    IProjectManager projects,
+    ImageEditScopeGate gate,
     ImageProjectPrefsService prefs) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -25,32 +24,16 @@ public class ImagePrefsController(
     [HttpGet]
     public IActionResult Get(string projectId)
     {
-        if (Gate(projectId, out var project) is { } denied) return denied;
-        return Ok(prefs.Get(UserId, project));
+        if (!gate.TryProject(UserId, projectId, out var project, out var denied)) return denied;
+        return Ok(prefs.Get(UserId, ImageEditScope.Of(project)));
     }
 
     [HttpPut]
     public async Task<IActionResult> Put(string projectId, [FromBody] ImageProjectPrefs? req)
     {
-        if (Gate(projectId, out var project) is { } denied) return denied;
-        if (req is null || req.Count < 1 || req.Count > ImageEditCatalog.DefaultLimits.MaxCount)
-            return Error($"Число вариантов — от 1 до {ImageEditCatalog.DefaultLimits.MaxCount}");
-        if (req.CharacterSlug is { Length: > 0 } slug && !CharacterStore.IsValidSlug(slug.Trim()))
-            return Error("Недопустимый персонаж");
-        return Ok(await prefs.SetAsync(UserId, project, req));
+        if (!gate.TryProject(UserId, projectId, out var project, out var denied)) return denied;
+        if (ImageProjectPrefsService.Validate(req) is { } error)
+            return StatusCode(StatusCodes.Status400BadRequest, new { error, code = ImageEditErrorCodes.InvalidRequest });
+        return Ok(await prefs.SetAsync(UserId, ImageEditScope.Of(project), req!));
     }
-
-    private IActionResult? Gate(string projectId, out Project project)
-    {
-        project = null!;
-        if (!flags.IsEnabled(UserId, FeatureFlagKeys.ImageEditor))
-            return NotFound(new { error = "Редактор картинок выключен" });
-        if (projects.GetById(projectId) is not { } found || found.OwnerId != UserId)
-            return NotFound(new { error = "Проект не найден" });
-        project = found;
-        return null;
-    }
-
-    private ObjectResult Error(string error) =>
-        StatusCode(StatusCodes.Status400BadRequest, new { error, code = ImageEditErrorCodes.InvalidRequest });
 }

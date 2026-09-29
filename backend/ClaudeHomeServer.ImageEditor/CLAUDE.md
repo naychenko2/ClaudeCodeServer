@@ -26,6 +26,12 @@ MF-remote `frontend/modules/image-editor` над кодом `frontend/src/featur
 `ClaudeHomeServer.ImageEditor.Tests`; тесты контроллеров, нитей, миграции и
 `McpToolsetStabilityTests` остались в `ClaudeHomeServer.Tests`.
 
+**Личный чат вне проекта** — маршрут `api/image-editor/chats/{sessionId}/…` (`PersonalImageEditorController`,
+`PersonalThreadsController`) с областью `ImageEditScope.Personal`. Тело ручек общее с проектными
+(`ImageEditorEndpoints`, `ImageThreadEndpoints`), гейт — `ImageEditScopeGate`: личный вход пускает только
+свой чат с `ProjectId == null`. `save`, `save/check` и `characters*` там нет — 404
+([разрез](../../docs/research/image-editor-personal-chats-cut-2026-09.md)).
+
 **Нить и фокус (ADR-019 §1–§3).** Картинка «в работе» — нить в хранилище модуля
 `data/image-threads/{ownerId}/{sessionId}.json` (не в `data/image-editor`: TTL его не чистит, бэкап
 берёт). У `Session` полей нет. В ленту пишутся только якоря и тихие строки — записи

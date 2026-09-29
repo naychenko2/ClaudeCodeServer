@@ -63,6 +63,8 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
             : null!);
         // Общая сборка входа запуска и блок нитей хвостом хода: им же пользуется MCP-тулсет
         services.AddSingleton<ImageEditLaunchAssembler>();
+        // Гейт области ручек: проект или личный чат вне проекта (разрез image-editor-personal-chats)
+        services.AddSingleton<Controllers.ImageEditScopeGate>();
         services.AddPromptSectionContributor<Chats.ImageEditorStateContributor>();
         // Нити картинок и фокус чата (ADR-019 §1): хранилище в data/image-threads, живёт и умирает
         // вместе с чатом по событиям шины session/deleted и session/branched

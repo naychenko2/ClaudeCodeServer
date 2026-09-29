@@ -53,7 +53,8 @@ WinForms и проекция Windows SDK — они добавляли к арх
 | `Window/WindowEnumerator.cs`, `Capture/MonitorService.cs` | `Screen.AllScreens` → `Native/DisplayMonitors.cs` (EnumDisplayMonitors + MONITORINFOEX) |
 | `Capture/ScreenshotService.cs` (снимок всех мониторов) | `SystemInformation.VirtualScreen` → `ScreenBounds.GetVirtual()` |
 | `Prompts/*`, `Resources/SystemResources.cs`, `Models/UIAutomationErrorType.cs` | упоминания OCR-фолбэка |
-| `Program.cs` | `HandsGate.Configure` до старта хоста |
+| `Program.cs` | `HandsGate.Configure` до старта хоста (профиль браузера и `--activity-event`) |
+| все инструменты, кроме `ui_snapshot`/`ui_find`/`ui_read` | `HandsGate.Acted(...)` сразу после отказа гейта: первое действие хода поднимает событие хода, и агент зажигает плашку (сторож `Tool_reports_its_action_after_the_gate`) |
 | `GlobalUsings.cs` | пространства имён гейта; `System.Drawing` вместо неявного от WinForms |
 | `HandsBridge.csproj` | ссылка на `HandsBridge.Policy`; TFM `net10.0-windows` без версии SDK, без `UseWindowsForms`, `System.Drawing.Common` пакетом, сателлиты только `en` |
 

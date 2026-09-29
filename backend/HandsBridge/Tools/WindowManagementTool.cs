@@ -76,11 +76,14 @@ public static partial class WindowManagementTool
         [DefaultValue(false)] bool discardChanges,
         CancellationToken cancellationToken)
     {
-        var gate = HandsPolicy.CheckWindowAction(JsonNamingPolicy.SnakeCaseLower.ConvertName(action.ToString()));
+        var windowAction = JsonNamingPolicy.SnakeCaseLower.ConvertName(action.ToString());
+        var gate = HandsPolicy.CheckWindowAction(windowAction);
         if (!gate.Allowed)
         {
             return HandsGate.Deny(HandsTools.WindowManagement, gate);
         }
+
+        HandsGate.Acted(HandsTools.WindowManagement, windowAction);
 
         try
         {

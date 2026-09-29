@@ -38,6 +38,8 @@ public static partial class BrowserWaitTool
             return HandsGate.Deny(HandsTools.BrowserWait, gate);
         }
 
+        HandsGate.Acted(HandsTools.BrowserWait);
+
         var reply = await BrowserHost.Session.WaitAsync(text, ms, cancellationToken);
         return BrowserToolResult.From(HandsTools.BrowserWait, reply);
     }

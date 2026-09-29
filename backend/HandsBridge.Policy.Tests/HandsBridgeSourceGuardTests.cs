@@ -61,6 +61,50 @@ public class HandsBridgeSourceGuardTests
     }
 
     /// <summary>
+    /// Сигнал «ход действует руками» (<see cref="HandsActivity"/>): каждый инструмент, который может
+    /// тронуть машину, сообщает о действии сразу после гейта — после возврата отказа, чтобы отказ
+    /// сигнал не поднимал, и до первого действия. Чтение дерева окна о действии не сообщает.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Gates))]
+    public void Tool_reports_its_action_after_the_gate(string tool, string file, string gateCall)
+    {
+        var body = ToolBody(file, tool);
+        var actedAt = body.IndexOf("HandsGate.Acted(HandsTools.", StringComparison.Ordinal);
+
+        if (tool is HandsTools.UiSnapshot or HandsTools.UiFind or HandsTools.UiRead)
+        {
+            Assert.True(actedAt < 0, $"{tool}: чтение не должно зажигать плашку");
+            return;
+        }
+
+        var gateAt = body.IndexOf(gateCall, StringComparison.Ordinal);
+        var denyAt = body.IndexOf("return HandsGate.Deny(HandsTools.", StringComparison.Ordinal);
+        var firstAwait = body.IndexOf("await ", StringComparison.Ordinal);
+
+        Assert.True(actedAt >= 0, $"{tool}: нет HandsGate.Acted — первое действие не зажжёт плашку");
+        Assert.Contains($"HandsGate.Acted(HandsTools.{ToolConstant(tool)}", body);
+        Assert.True(gateAt >= 0 && actedAt > denyAt, $"{tool}: сигнал раньше отказа гейта");
+        Assert.True(firstAwait < 0 || actedAt < firstAwait, $"{tool}: сигнал после действия");
+    }
+
+    [Fact]
+    public void Window_and_screenshot_report_their_action_name()
+    {
+        var windows = Read("Tools/WindowManagementTool.cs");
+        Assert.Contains("HandsPolicy.CheckWindowAction(windowAction);", windows);
+        Assert.Contains("HandsGate.Acted(HandsTools.WindowManagement, windowAction);", windows);
+        Assert.Contains("HandsGate.Acted(HandsTools.ScreenshotControl, action);", Read("Tools/ScreenshotControlTool.cs"));
+    }
+
+    [Fact]
+    public void Bridge_passes_the_activity_event_to_the_gate() =>
+        Assert.Contains("HandsGate.Configure(browserProfile, GetOption(args, HandsBridgeArgs.ActivityEvent));", Read("Program.cs"));
+
+    private static string ToolConstant(string tool) =>
+        typeof(HandsTools).GetFields().Single(f => f.IsLiteral && (string?)f.GetRawConstantValue() == tool).Name;
+
+    /// <summary>
     /// Граница «только свои окна» снята (ADR-016 §7): список, поиск (в том числе по заголовку) и
     /// окно переднего плана отдают все окна, а не фильтруются, и поиск окна после запуска — тоже.
     /// </summary>

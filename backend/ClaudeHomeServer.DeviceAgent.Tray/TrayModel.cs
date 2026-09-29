@@ -72,6 +72,7 @@ internal sealed class TrayModel
     public const string PlateHint = "Фокус может переключаться. Окна хода закроются вместе с ним.";
     public const string StoppedNotice = "Руки выключены. Ход прерван.";
     public const string StopText = "Стоп";
+    public const string AttachedText = "Руки подключены к ходу · пока не действуют";
     public static readonly TrayNotification StopUndelivered =
         new(AppTitle, "Агент не отвечает — «Стоп» не доставлен. Попробуйте ещё раз через несколько секунд.");
     /// <summary>Сколько плашка держит «Руки выключены» после «Стоп».</summary>
@@ -90,9 +91,19 @@ internal sealed class TrayModel
     /// <summary>Модель поменялась так, что UI надо перерисовать.</summary>
     public event Action? Changed;
 
-    private IReadOnlyList<HandsActiveTurn> Active => Connected ? Status?.ActiveTurns ?? [] : [];
+    // Ходы, к которым подключены руки; «ИИ управляет компьютером» — только те, что уже действовали
+    private IReadOnlyList<HandsActiveTurn> Attached => Connected ? Status?.ActiveTurns ?? [] : [];
 
+    private IReadOnlyList<HandsActiveTurn> Active => Attached.Where(t => t.IsActing).ToList();
+
+    /// <summary>Ход действует руками: плашка, значок, уведомление.</summary>
     public bool HandsActive => Active.Count > 0;
+
+    /// <summary>
+    /// К идущему ходу подключены руки — действовали или ещё нет. «Стоп» доступен уже здесь:
+    /// плашки до первого действия нет, но остановить ход с руками можно из меню.
+    /// </summary>
+    public bool HandsAttached => Attached.Count > 0;
 
     public void OnConnected()
     {
@@ -140,7 +151,8 @@ internal sealed class TrayModel
 
     private TrayNotification? NotifyStart(HandsActiveTurn turn)
     {
-        if (!_notified.Add(turn.TurnId)) return null;
+        // Подключение без действия — не повод: уведомление придёт с первым действием хода
+        if (!turn.IsActing || !_notified.Add(turn.TurnId)) return null;
         // Новый ход с руками гасит «Руки выключены» от прошлого
         _stoppedNotice = false;
         var who = ProjectName(turn.ProjectRoot) is { } name ? $"Проект «{name}»" : "Ход";
@@ -148,9 +160,9 @@ internal sealed class TrayModel
             $"{who} управляет окнами. Остановить — «Стоп» в углу экрана или в меню значка.");
     }
 
-    /// <summary>Кадр «Стоп» для pipe; null — ни один ход не действует руками.</summary>
+    /// <summary>Кадр «Стоп» для pipe; null — ни к одному ходу руки не подключены.</summary>
     /// <remarks>TurnId не указывается: «Стоп» гасит любой ход с руками, а не только показанный.</remarks>
-    public HandsPipeMessage? StopRequest() => HandsActive ? new HandsPipeMessage(HandsPipeTypes.TurnStop) : null;
+    public HandsPipeMessage? StopRequest() => HandsAttached ? new HandsPipeMessage(HandsPipeTypes.TurnStop) : null;
 
     /// <summary>Истекли <see cref="StoppedNoticeFor"/> после «Стоп»: плашка гаснет.</summary>
     public void StoppedNoticeExpired()
@@ -212,11 +224,16 @@ internal sealed class TrayModel
             items.Add(TrayMenuItem.Label(PlateTitle));
             if (ProjectName(Active[0].ProjectRoot) is { } name) items.Add(TrayMenuItem.Label($"Сейчас работает: проект «{name}»"));
         }
+        else if (HandsAttached)
+        {
+            items.Add(TrayMenuItem.Label(AttachedText));
+            if (ProjectName(Attached[0].ProjectRoot) is { } name) items.Add(TrayMenuItem.Label($"Ход проекта «{name}»"));
+        }
         else
         {
             items.Add(TrayMenuItem.Label(Status.Installed ? "Руки установлены · сейчас не действуют" : "Руки не установлены"));
         }
-        items.Add(new TrayMenuItem("Остановить руки", TrayCommands.Stop, Enabled: HandsActive));
+        items.Add(new TrayMenuItem("Остановить руки", TrayCommands.Stop, Enabled: HandsAttached));
         items.Add(TrayMenuItem.Separator);
 
         if (device is not null)

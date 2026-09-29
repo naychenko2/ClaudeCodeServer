@@ -107,8 +107,11 @@ public class HandsAttachTests : IDisposable
         var args = node["args"]!.AsArray().Select(a => (string?)a).ToList();
         // Имя Job хода мосту не едет: граница «только свои окна» снята (ADR-016 §7)
         args.Should().NotContain("--turn-job").And.NotContain(lease.JobName);
-        if (vision) args.Should().BeEmpty();
-        else args.Should().Equal(HandsBridgeArgs.ExcludeTools, "screenshot_control,browser_screenshot");
+        // Событие первого действия — своё у каждого хода, его создаёт агент
+        var activity = lease.Activity!.Name;
+        activity.Should().StartWith(HandsBridgeArgs.ActivityEventPrefix + "turn-7.");
+        if (vision) args.Should().Equal(HandsBridgeArgs.ActivityEvent, activity);
+        else args.Should().Equal(HandsBridgeArgs.ExcludeTools, "screenshot_control,browser_screenshot", HandsBridgeArgs.ActivityEvent, activity);
         JsonNode.Parse(content)!["mcpServers"]!["tasks"].Should().NotBeNull("прочие узлы не тронуты");
     }
 }

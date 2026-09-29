@@ -46,8 +46,8 @@ public class HandsTurnExecutorTests : IDisposable
         await h.StartAsync(HandsSpawn(h), turnId: "turn-hands");
         await h.WaitStdoutAsync("\"init\"", new StringBuilder(), Wait);
         var bridge = h.ReadPid("grandchild.pid");
-        await sink.WaitAsync(r => r.State == HandsChatStates.Active, Wait);
         hands.Registry.Active.Should().ContainSingle().Which.TurnId.Should().Be("turn-hands");
+        await ActAsync(hands, sink);
 
         // Конфиг, который увидел CLI: узел рук — наш мост с Job хода, маркера нет
         var argv = File.ReadAllLines(Path.Combine(h.WorkDir, "cli-argv.txt"));
@@ -92,7 +92,8 @@ public class HandsTurnExecutorTests : IDisposable
         await h.StartAsync(HandsSpawn(h), turnId: "turn-offline");
         await h.WaitStdoutAsync("\"init\"", new StringBuilder(), Wait);
         var bridge = h.ReadPid("grandchild.pid");
-        await sink.WaitAsync(r => r.State == HandsChatStates.Active, Wait);
+        // Руки подключены, но ещё не действовали — «Стоп» гасит ход и в этом состоянии
+        hands.Registry.Active.Should().ContainSingle().Which.IsActing.Should().BeFalse();
 
         // Сервер пропал, «Стоп» нажат без связи: руки гаснут на машине, не дожидаясь сервера
         h.Server.ReconnectGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -130,7 +131,8 @@ public class HandsTurnExecutorTests : IDisposable
         await h.Run!.WaitAsync(Wait);
 
         (await sink.WaitAsync(r => r.State == HandsChatStates.Allowed, Wait)).TurnId.Should().Be("turn-own");
-        sink.Reports.Should().NotContain(r => r.State == HandsChatStates.Stopped);
+        sink.Reports.Should().ContainSingle("ход без действия рук доносит только итог — «действует руками» не уходит")
+            .Which.State.Should().Be(HandsChatStates.Allowed);
         using var next = hands.MachineLock.TryAcquire();
         next.Should().NotBeNull("конец хода отдаёт руки машины");
     }
@@ -175,6 +177,71 @@ public class HandsTurnExecutorTests : IDisposable
         await h.SendStdinAsync("exit\n");
         await h.Server.ReadUntilExitAsync(Wait);
         sink.Reports.Should().BeEmpty();
+    }
+
+    [SkippableFact]
+    public async Task Действует_руками_уходит_только_по_событию_моста_и_ровно_один_раз()
+    {
+        _fx.WithBridge();
+        var sink = new RecordingSink();
+        var hands = _fx.Runtime(sink: sink);
+        await using var h = NewHarness(hands);
+
+        await h.StartAsync(HandsSpawn(h), turnId: "turn-act");
+        await h.WaitStdoutAsync("\"init\"", new StringBuilder(), Wait);
+
+        // Разговор: руки подключены, мост ещё не действовал — ни плашки, ни донесения
+        var name = _fx.Activity.Names.Should().ContainSingle().Subject;
+        name.Should().StartWith(HandsBridgeArgs.ActivityEventPrefix + "turn-act.");
+        var argv = File.ReadAllLines(Path.Combine(h.WorkDir, "cli-argv.txt"));
+        var config = File.ReadAllText(Path.Combine(h.WorkDir, "cli-file-" + Path.GetFileName(argv[Array.IndexOf(argv, "--mcp-config") + 1])));
+        JsonNode.Parse(config)!["mcpServers"]![DeviceExecPlaceholders.HandsServerName]!["args"]!.AsArray()
+            .Select(a => (string?)a).Should().ContainInConsecutiveOrder(HandsBridgeArgs.ActivityEvent, name);
+        hands.Registry.Active.Should().ContainSingle().Which.IsActing.Should().BeFalse();
+        sink.Reports.Should().BeEmpty();
+
+        // Первое действие моста — «действует руками»; повторный сигнал ничего не добавляет
+        _fx.Activity.Raise(name).Should().BeTrue();
+        _fx.Activity.Raise(name).Should().BeTrue();
+        (await sink.WaitAsync(r => r.State == HandsChatStates.Active, Wait)).TurnId.Should().Be("turn-act");
+        hands.Registry.Active.Should().ContainSingle().Which.IsActing.Should().BeTrue();
+
+        await h.SendStdinAsync("exit\n");
+        await h.Server.ReadUntilExitAsync(Wait);
+        await h.Run!.WaitAsync(Wait);
+        await sink.WaitAsync(r => r.State == HandsChatStates.Allowed, Wait);
+        sink.Reports.Select(r => r.State).Should().Equal(HandsChatStates.Active, HandsChatStates.Allowed);
+        _fx.Activity.Names.Should().BeEmpty("событие хода закрыто вместе с руками");
+        _fx.Activity.Raise(name).Should().BeFalse("после конца хода поднимать некому");
+    }
+
+    [SkippableFact]
+    public async Task Без_событий_у_агента_ход_с_руками_не_становится_действующим()
+    {
+        _fx.WithBridge();
+        var sink = new RecordingSink();
+        var hands = _fx.Runtime(sink: sink, activityEvents: false);
+        await using var h = NewHarness(hands);
+
+        await h.StartAsync(HandsSpawn(h), turnId: "turn-quiet");
+        await h.WaitStdoutAsync("\"init\"", new StringBuilder(), Wait);
+        var argv = File.ReadAllLines(Path.Combine(h.WorkDir, "cli-argv.txt"));
+        File.ReadAllText(Path.Combine(h.WorkDir, "cli-file-" + Path.GetFileName(argv[Array.IndexOf(argv, "--mcp-config") + 1])))
+            .Should().NotContain(HandsBridgeArgs.ActivityEvent);
+
+        await h.SendStdinAsync("exit\n");
+        await h.Server.ReadUntilExitAsync(Wait);
+        await h.Run!.WaitAsync(Wait);
+        await sink.WaitAsync(r => r.State == HandsChatStates.Allowed, Wait);
+        sink.Reports.Should().NotContain(r => r.State == HandsChatStates.Active);
+    }
+
+    /// <summary>Мост подействовал: поднять событие хода и дождаться «действует руками».</summary>
+    private async Task ActAsync(HandsRuntime hands, RecordingSink sink)
+    {
+        _fx.Activity.Raise(_fx.Activity.Names.Should().ContainSingle().Subject).Should().BeTrue();
+        await sink.WaitAsync(r => r.State == HandsChatStates.Active, Wait);
+        hands.Registry.Active.Should().ContainSingle().Which.IsActing.Should().BeTrue();
     }
 
     private static async Task WaitDeadAsync(int pid)

@@ -38,6 +38,8 @@ public static partial class BrowserNavigateTool
             return HandsGate.Deny(HandsTools.BrowserNavigate, gate.Reason!);
         }
 
+        HandsGate.Acted(HandsTools.BrowserNavigate);
+
         // Переходим по нормализованному адресу из решения гейта, а не по присланному
         var reply = await BrowserHost.Session.NavigateAsync(gate.Url!, cancellationToken);
         return BrowserToolResult.From(HandsTools.BrowserNavigate, reply);

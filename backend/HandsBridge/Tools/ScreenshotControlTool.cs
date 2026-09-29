@@ -91,6 +91,8 @@ public static partial class ScreenshotControlTool
             return HandsGate.Deny(HandsTools.ScreenshotControl, gate);
         }
 
+        HandsGate.Acted(HandsTools.ScreenshotControl, action);
+
         try
         {
             // Parse action

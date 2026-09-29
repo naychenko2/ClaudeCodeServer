@@ -31,6 +31,8 @@ public static partial class BrowserTypeTool
             return HandsGate.Deny(HandsTools.BrowserType, gate);
         }
 
+        HandsGate.Acted(HandsTools.BrowserType);
+
         var reply = await BrowserHost.Session.TypeAsync(@ref, text ?? "", submit, cancellationToken);
         return BrowserToolResult.From(HandsTools.BrowserType, reply);
     }

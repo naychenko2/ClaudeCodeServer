@@ -61,6 +61,8 @@ public static partial class AppTool
             return HandsGate.Deny(HandsTools.App, gate.Reason!);
         }
 
+        HandsGate.Acted(HandsTools.App);
+
         try
         {
             var result = await HandleLaunchAsync(gate.ProgramPath, arguments, workingDirectory, waitForWindow, timeoutMs, cancellationToken);

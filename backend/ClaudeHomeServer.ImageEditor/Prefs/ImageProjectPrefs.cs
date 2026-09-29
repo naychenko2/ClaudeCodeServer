@@ -48,6 +48,14 @@ public sealed class ImageProjectPrefsStore(string root)
         }
     }
 
+    // Сохранял ли человек выбор явно: Get без файла отдаёт умолчания, и по нему это не отличить
+    public bool Exists(string ownerId, string projectId)
+    {
+        var path = PathOf(ownerId, projectId);
+        lock (_gate)
+            return File.Exists(path);
+    }
+
     // Через временный файл: оборванная запись не оставит битый JSON
     public void Save(string ownerId, string projectId, ImageProjectPrefs prefs)
     {
@@ -100,6 +108,11 @@ public sealed class ImageProjectPrefsService(
         projects?.GetById(projectId) is { } project && project.OwnerId == ownerId
             ? Get(ownerId, project)
             : ImageProjectPrefs.Default;
+
+    // Выбор в полосе сохранён явно; чужой или пропавший проект — нет
+    public bool HasSaved(string ownerId, string projectId) =>
+        projects?.GetById(projectId) is { } project && project.OwnerId == ownerId
+        && store.Exists(ownerId, projectId);
 
     public async Task<ImageProjectPrefs> SetAsync(string ownerId, Project project, ImageProjectPrefs prefs)
     {

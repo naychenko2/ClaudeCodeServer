@@ -3,6 +3,7 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.ImageEditor.Chats;
+using ClaudeHomeServer.Services.ImageEditor.Mcp;
 using ClaudeHomeServer.Services.ImageEditor.Prefs;
 using ClaudeHomeServer.Services.ImageEditor.Threads;
 using ClaudeHomeServer.Services.Turn;
@@ -76,6 +77,19 @@ public class ImageProjectPrefsTests : IDisposable
     }
 
     [Fact]
+    public async Task Явное_сохранение_видно_только_после_записи_и_только_в_своём_проекте()
+    {
+        _prefs.HasSaved(Owner, ProjectId).Should().BeFalse("файла ещё нет");
+
+        await _prefs.SetAsync(Owner, _project, ImageProjectPrefs.Default);
+
+        _prefs.HasSaved(Owner, ProjectId).Should().BeTrue("даже выбор, совпавший с умолчаниями, сохранён явно");
+        _store.Save("owner-2", ProjectId, ImageProjectPrefs.Default);
+        _prefs.HasSaved("owner-2", ProjectId).Should().BeFalse("проект чужой, даже если файл лежит");
+        _prefs.HasSaved(Owner, "missing").Should().BeFalse("проекта нет");
+    }
+
+    [Fact]
     public async Task Удалённый_персонаж_читается_как_null()
     {
         var slug = Character();
@@ -130,5 +144,65 @@ public class ImageProjectPrefsTests : IDisposable
         var unfocused = (await contributor.BuildAsync(context, "дальше"))!.Sections.Single().Text;
         unfocused.Should().Contain("Выбор человека в полосе «Картинки»: поставщик fal, модель m1, вариантов 3, персонаж не подключён",
             "без картинки в работе — выбор проекта; удалённый персонаж не подключён");
+    }
+
+    private (ImageEditorStateContributor Contributor, PromptSessionContext Context, ImageThreadStore Threads) Contributor(bool agentLaunch = true)
+    {
+        var threads = new ImageThreadStore(Path.Combine(_dir, ImageThreadStore.DirName));
+        var flags = new Mock<IFeatureFlagGate>();
+        flags.Setup(f => f.IsEnabled(Owner, FeatureFlagKeys.ImageEditor)).Returns(true);
+        var config = TestImages.Config((ImageEditorToolset.AgentLaunchKey, agentLaunch ? "true" : "false"));
+        var contributor = new ImageEditorStateContributor(flags.Object, threads: threads, prefs: _prefs, config: config);
+        var context = new PromptSessionContext(new Session { Id = Chat, OwnerId = Owner, ProjectId = ProjectId }, Owner, null, _root);
+        return (contributor, context, threads);
+    }
+
+    [Fact]
+    public async Task Без_нитей_и_без_сохранённого_выбора_блока_нет()
+    {
+        var (contributor, context, _) = Contributor();
+
+        contributor.IsEnabled(context).Should().BeFalse();
+        (await contributor.BuildAsync(context, "нарисуй кота")).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Без_нитей_с_сохранённым_выбором_блок_с_выбором_и_правилом_приоритета()
+    {
+        await _prefs.SetAsync(Owner, _project, new ImageProjectPrefs("local", "qwen-image-2.1", 2, true, null));
+        var (contributor, context, _) = Contributor();
+
+        contributor.IsEnabled(context).Should().BeTrue("выбор в полосе сохранён явно");
+        var text = (await contributor.BuildAsync(context, "нарисуй кота"))!.Sections.Single().Text;
+
+        text.Should().Contain("В работе: ничего не выбрано");
+        text.Should().Contain("Выбор человека в полосе «Картинки»: поставщик local, модель qwen-image-2.1, вариантов 2, персонаж не подключён");
+        text.Should().Contain(ImageEditorStateContributor.ChoiceRule);
+        text.Should().Contain(ImageEditorStateContributor.PriorityRule);
+        text.Should().NotContain("С прошлого сообщения");
+    }
+
+    [Fact]
+    public async Task Без_запуска_агентом_правила_приоритета_нет()
+    {
+        await _prefs.SetAsync(Owner, _project, ImageProjectPrefs.Default);
+        var (contributor, context, _) = Contributor(agentLaunch: false);
+
+        var text = (await contributor.BuildAsync(context, "нарисуй кота"))!.Sections.Single().Text;
+
+        text.Should().Contain(ImageEditorStateContributor.ChoiceRule);
+        text.Should().NotContain("image_new → image_generate", "инструмента image_generate у агента нет");
+    }
+
+    [Fact]
+    public async Task С_нитями_прежний_вывод_плюс_правило_приоритета()
+    {
+        var (contributor, context, threads) = Contributor();
+        var opened = threads.Open(Owner, Chat, "images/hero.png", null, 0, new ImageThreadSettings("fal", null, 1, true));
+
+        var text = (await contributor.BuildAsync(context, "дальше"))!.Sections.Single().Text;
+
+        text.Should().Contain($"- {opened.Thread!.Id} (в работе): файл images/hero.png");
+        text.Should().Contain(ImageEditorStateContributor.PriorityRule);
     }
 }

@@ -2,8 +2,10 @@ using System.Globalization;
 using System.Text;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.ImageEditor.Mcp;
 using ClaudeHomeServer.Services.ImageEditor.Threads;
 using ClaudeHomeServer.Services.Turn;
+using Microsoft.Extensions.Configuration;
 
 namespace ClaudeHomeServer.Services.ImageEditor.Chats;
 
@@ -12,7 +14,8 @@ namespace ClaudeHomeServer.Services.ImageEditor.Chats;
 // понимал «поправь предыдущую / вторую»), идущие запуски, плюс журнал «с прошлого сообщения».
 // Ручной запуск агент узнаёт именно отсюда: тихую строку image_launch в ленте модель не видит.
 // Нить в транскрипт CLI не входит, поэтому после компакции и --resume модель узнаёт о ней только
-// отсюда. Чат без нитей блока не получает.
+// отсюда. Чат без нитей получает короткий блок (выбор в полосе и правило приоритета), только если
+// человек явно сохранил выбор в полосе проекта; без файла выбора и без нитей блока нет.
 //
 // Секция едет хвостом хода ВСЕГДА (PromptSection.InTurnTail): она меняется от хода к ходу, и в
 // системном блоке обнуляла бы prefix cache всей истории у любого провайдера, а не только у
@@ -21,8 +24,12 @@ public sealed class ImageEditorStateContributor(
     IFeatureFlagGate flags,
     IImageEditJobs? jobs = null,
     ImageThreadStore? threads = null,
-    Prefs.ImageProjectPrefsService? prefs = null) : IPromptSectionContributor
+    Prefs.ImageProjectPrefsService? prefs = null,
+    IConfiguration? config = null) : IPromptSectionContributor
 {
+    // Правило про image_generate — только когда инструмент есть, иначе агент сошлётся на несуществующий
+    private readonly bool _agentLaunch = config?.GetValue(ImageEditorToolset.AgentLaunchKey, true) ?? true;
+
     public const string SectionKey = "image-editor-state";
 
     public string Key => SectionKey;
@@ -33,22 +40,33 @@ public sealed class ImageEditorStateContributor(
 
     public bool IsEnabled(PromptSessionContext sessionContext) =>
         sessionContext.OwnerId is { Length: > 0 } ownerId
-        && HasThreads(ownerId, sessionContext.Session)
-        && flags.IsEnabled(ownerId, FeatureFlagKeys.ImageEditor);
+        && sessionContext.Session.ProjectId is not null
+        && flags.IsEnabled(ownerId, FeatureFlagKeys.ImageEditor)
+        && (HasThreads(ownerId, sessionContext.Session) || HasSavedPrefs(ownerId, sessionContext.Session));
 
     private bool HasThreads(string ownerId, Session session) =>
         threads is not null && session.ProjectId is not null && threads.Get(ownerId, session.Id).Threads.Count > 0;
 
+    private bool HasSavedPrefs(string ownerId, Session session) =>
+        prefs is not null && session.ProjectId is { } projectId && prefs.HasSaved(ownerId, projectId);
+
     public Task<PromptSectionContribution?> BuildAsync(PromptSessionContext sessionContext, string? turnText)
     {
         var session = sessionContext.Session;
-        if (sessionContext.OwnerId is not { Length: > 0 } ownerId || threads is null || !HasThreads(ownerId, session))
+        if (sessionContext.OwnerId is not { Length: > 0 } ownerId || session.ProjectId is not { } projectId)
             return Task.FromResult<PromptSectionContribution?>(null);
 
-        var (state, fresh) = threads.TakeForTurn(ownerId, session.Id);
-        var projectPrefs = session.ProjectId is { } projectId ? prefs?.Get(ownerId, projectId) : null;
-        var block = RenderThreads(state, fresh, jobId => session.ProjectId is { } pid ? jobs?.Get(ownerId, pid, jobId) : null,
-            projectPrefs);
+        var projectPrefs = prefs?.Get(ownerId, projectId);
+        string block;
+        if (threads is not null && HasThreads(ownerId, session))
+        {
+            var (state, fresh) = threads.TakeForTurn(ownerId, session.Id);
+            block = RenderThreads(state, fresh, jobId => jobs?.Get(ownerId, projectId, jobId), projectPrefs, _agentLaunch);
+        }
+        else if (projectPrefs is not null && HasSavedPrefs(ownerId, session))
+            block = RenderChoice(projectPrefs, _agentLaunch);
+        else
+            return Task.FromResult<PromptSectionContribution?>(null);
         return Task.FromResult<PromptSectionContribution?>(new PromptSectionContribution(
             [new PromptSection(Key, block, Title, InTurnTail: true)]));
     }
@@ -57,7 +75,7 @@ public sealed class ImageEditorStateContributor(
     // prefs — выбор человека в полосе «Картинки» проекта: для картинки в работе показываются её
     // настройки (а без них и без фокуса — проекта), персонаж всегда из проекта
     public static string RenderThreads(ImageThreadsState state, IReadOnlyList<ImageThreadEvent> fresh,
-        Func<string, ImageEditJobDto?> job, Prefs.ImageProjectPrefs? prefs = null)
+        Func<string, ImageEditJobDto?> job, Prefs.ImageProjectPrefs? prefs = null, bool priorityRule = false)
     {
         var sb = new StringBuilder();
         sb.AppendLine("## Картинки в этом чате");
@@ -70,6 +88,7 @@ public sealed class ImageEditorStateContributor(
             sb.AppendLine(ChoiceText(focused?.Settings ?? prefs.ToThreadSettings(), prefs.CharacterSlug));
             sb.AppendLine(ChoiceRule);
         }
+        if (priorityRule) sb.AppendLine(PriorityRule);
         foreach (var t in state.Threads.OrderByDescending(t => t.Id == state.Focus))
         {
             var what = t.File is { Length: > 0 } file ? $"файл {file}"
@@ -91,6 +110,18 @@ public sealed class ImageEditorStateContributor(
             foreach (var e in fresh)
                 sb.AppendLine("- " + e.Text + Outcome(e.JobId is { } id && e.Kind == ImageThreadEventKinds.Launched ? job(id) : null));
         }
+        return sb.ToString().TrimEnd();
+    }
+
+    // Чат без нитей при явно сохранённом выборе: без списка картинок и журнала «с прошлого сообщения»
+    public static string RenderChoice(Prefs.ImageProjectPrefs prefs, bool priorityRule)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("## Картинки в этом чате");
+        sb.AppendLine("В работе: ничего не выбрано");
+        sb.AppendLine(ChoiceText(prefs.ToThreadSettings(), prefs.CharacterSlug));
+        sb.AppendLine(ChoiceRule);
+        if (priorityRule) sb.AppendLine(PriorityRule);
         return sb.ToString().TrimEnd();
     }
 
@@ -133,6 +164,13 @@ public sealed class ImageEditorStateContributor(
 
     public const string ChoiceRule =
         "Это выбор человека — не передавай provider/model/character в image_generate, если он сам не просил сменить.";
+
+    // Выбор в полосе важнее правила проекта о сервисе для картинок (решение Андрея, план 21492bb8)
+    public const string PriorityRule =
+        "Картинки в этом проекте рисуй через image_new → image_generate: они уважают выбор человека в полосе "
+        + "(включая local — свою видеокарту) и цену. Этот выбор важнее правил проекта о сервисе для картинок. "
+        + "fal-ai, glif, higgsfield и local-media для картинок — только если человек в своей просьбе прямо назвал этот сервис. "
+        + "Видео, аудио и музыка — как раньше.";
 
     // «Выбор человека в полосе «Картинки»: поставщик fal, модель auto, вариантов 2, персонаж anya»
     public static string ChoiceText(ImageThreadSettings settings, string? character) =>

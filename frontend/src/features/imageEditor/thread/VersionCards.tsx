@@ -143,20 +143,19 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
   );
 }
 
-// Черновик «Новая картинка» до первой версии: пунктирная рамка вместо картинки
+// Черновик «Новая картинка» до первого запуска: пунктирная рамка вместо картинки
 function DraftBox({ thread, focused, personal }: { thread: ImageThread; focused: boolean; personal: boolean }) {
   const mobile = useIsMobile();
   const folder = saveFolder(thread);
-  const drawn = !isEmptyThread(thread);
   return (
     <div data-image-draft="" style={{
       width: mobile ? '100%' : CARD_W, maxWidth: '100%', boxSizing: 'border-box', padding: SP.lg,
       display: 'flex', flexDirection: 'column', alignItems: 'center', gap: SP.xs, textAlign: 'center',
-      border: `1.5px dashed ${focused && !drawn ? C.accent : C.border}`, borderRadius: R.xl, background: C.bgInset,
+      border: `1.5px dashed ${focused ? C.accent : C.border}`, borderRadius: R.xl, background: C.bgInset,
       fontSize: FS.sm, color: C.textMuted,
     }}>
       <b style={{ color: C.textHeading, fontSize: FS.base }}>Новая картинка</b>
-      {drawn ? 'Нарисована — версии ниже' : focused ? 'Опишите её в поле ввода — версии лягут в ленту ниже' : 'Ещё не нарисована'}
+      {focused ? 'Опишите её в поле ввода — версии лягут в ленту ниже' : 'Ещё не нарисована'}
       {!personal && <span style={{ fontSize: FS.xs }}>сохранять в {folder ? `${folder}/` : 'корень проекта'}</span>}
     </div>
   );
@@ -167,7 +166,11 @@ export function OriginAnchor({ projectId, sessionId, thread, focused }: {
   projectId: string; sessionId: string; thread: ImageThread; focused: boolean;
 }) {
   const origin = findVersion(thread, ORIGIN);
-  if (!origin || !versionHasImage(thread, origin)) return <DraftBox thread={thread} focused={focused} personal={isPersonalScope(projectId)} />;
+  if (!origin || !versionHasImage(thread, origin)) {
+    // После первого запуска черновик ничего не добавляет: результат — в якоре запуска ниже
+    if (thread.launches?.length || !isEmptyThread(thread)) return null;
+    return <DraftBox thread={thread} focused={focused} personal={isPersonalScope(projectId)} />;
+  }
   return <VersionCard projectId={projectId} sessionId={sessionId} thread={thread} version={origin} focused={focused} />;
 }
 

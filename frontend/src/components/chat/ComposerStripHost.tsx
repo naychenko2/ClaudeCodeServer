@@ -8,12 +8,11 @@
 // строку / развернуть. Имя и строка состояния полосы — в подсказке иконки (раньше жили
 // в выпадающем меню «Git ▾», которое стоило лишний клик и ~50 px ширины). Пока полоса
 // одна, переключателя нет — полоса выглядит как раньше.
-import type { MouseEvent } from 'react';
 import { C, SP } from '../../lib/design';
 import { useComposerStrip } from '../../lib/composerStrips';
 import { SLOT_COMPOSER_STRIP, useSlot } from '../../lib/subsystems/registry';
 import type { ComposerStripApi, ComposerStripCtx, SlotContribution } from '../../lib/subsystems/registry';
-import { Dot, IconButton } from '../ui';
+import { Dot, IconSegmented } from '../ui';
 
 export type ComposerStripContribution = SlotContribution<ComposerStripCtx, ComposerStripApi>;
 
@@ -44,37 +43,37 @@ export function ComposerStripHost({ projectId, sessionId, isMobile, builtins = [
     return `${head} — ${collapsed ? 'развернуть полосу' : 'свернуть полосу в строку'}`;
   };
 
-  // Выбранная картинка, чья полоса скрыта ручным выбором, — точка на иконке её полосы
+  // Дорожка с едущей белой плашкой (IconSegmented) — спокойнее акцентной заливки
+  // IconButton и переключается движением, как пилюля главного меню. Высота 24 влезает
+  // и в свёрнутую строку 30 px, и в slim-полосу телефона. Выбранная картинка, чья
+  // полоса скрыта ручным выбором, — точка на иконке её полосы
   const switcher = strips.length > 1 ? (
     // Клик по переключателю в свёрнутой строке не должен её разворачивать
     <span data-composer-strip-switcher="" onClick={e => e.stopPropagation()}
-      style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, flexShrink: 0 }}>
-      {strips.map(s => {
-        const on = s.name === active;
-        return (
-          <span key={s.name} style={{ position: 'relative', display: 'inline-flex' }}>
-            <IconButton
-              size={collapsed ? 'xs' : isMobile ? 'md' : 'sm'}
-              active={on}
-              title={hint(s)}
-              onClick={(e: MouseEvent) => {
-                e.stopPropagation();
-                if (!on) select(s.name!);
-                else if (s.action!.collapsible?.(avail) ?? true) setCollapsed(!collapsed);
-              }}
-            >
-              {s.action!.icon}
-            </IconButton>
-            {!!pendingFocus && pendingFocus !== active && pendingFocus === s.name && (
-              <span title="Картинка выбрана — её полоса сейчас не показана"
-                style={{ position: 'absolute', top: 1, right: 1, display: 'inline-flex', pointerEvents: 'none' }}>
-                <Dot color={C.accent} size={7} />
+      style={{ display: 'inline-flex', alignItems: 'center', gap: SP.sm, flexShrink: 0 }}>
+      <IconSegmented
+        value={active!}
+        options={strips.map(s => ({
+          value: s.name!,
+          label: hint(s),
+          icon: pendingFocus && pendingFocus !== active && pendingFocus === s.name
+            ? (
+              <span style={{ position: 'relative', display: 'inline-flex' }}>
+                {s.action!.icon}
+                <span style={{ position: 'absolute', top: -3, right: -4, display: 'inline-flex', pointerEvents: 'none' }}>
+                  <Dot color={C.accent} size={6} />
+                </span>
               </span>
-            )}
-          </span>
-        );
-      })}
-      <span style={{ width: 1, height: collapsed ? 16 : 22, background: C.divider, flexShrink: 0, marginLeft: SP.xs }} />
+            )
+            : s.action!.icon,
+        }))}
+        onChange={name => {
+          // Щелчок по активной — свернуть/развернуть полосу (если она это умеет)
+          if (name !== active) select(name);
+          else if (current.action!.collapsible?.(avail) ?? true) setCollapsed(!collapsed);
+        }}
+      />
+      <span style={{ width: 1, height: collapsed ? 16 : 22, background: C.divider, flexShrink: 0 }} />
     </span>
   ) : null;
 

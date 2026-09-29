@@ -106,6 +106,32 @@ public class SubscriptionOAuthUsageServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Ответ429_СтатусRateLimited_ЛогОдинРаз_Backoff()
+    {
+        // Прод 30.09: setup-токен упёрся в часовой лимит usage, а поллер молчал —
+        // на пилюле тире, в логе и на экране «Использование» пусто
+        var handler = new StubHandler(_ =>
+        {
+            var resp = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+            resp.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(3084));
+            return resp;
+        });
+        var (svc, usage) = CreateService(handler);
+
+        var log = await CaptureErrAsync(async () =>
+        {
+            await svc.PollAsync("claude", "sk-ant-oat01-secret", CancellationToken.None);
+            await svc.PollAsync("claude", "sk-ant-oat01-secret", CancellationToken.None);
+        });
+
+        svc.StatusOf("claude").Should().Be(SubscriptionOAuthUsageService.StatusRateLimited);
+        usage.GetAll().Should().BeEmpty();
+        handler.Calls.Should().Be(1, "второй тик ждёт Retry-After, эндпоинт не дёргается");
+        Regex.Matches(log, Regex.Escape("[OAuthUsage]")).Count.Should().Be(1);
+        log.Should().Contain("429").And.NotContain("sk-ant-oat01");
+    }
+
+    [Fact]
     public async Task Ответ500_СтатусError()
     {
         var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError));

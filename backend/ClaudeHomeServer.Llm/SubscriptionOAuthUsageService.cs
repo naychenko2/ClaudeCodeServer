@@ -55,6 +55,9 @@ public sealed partial class SubscriptionOAuthUsageService(
     public const string StatusOk = "ok";
     public const string StatusUnauthorized = "unauthorized";
     public const string StatusError = "error";
+    // rate_limited — эндпоинт ответил 429 на запрос usage: токен годный, но опрос упёрся
+    // в лимит частоты (у setup-токена он около раза в час) и ждёт backoff
+    public const string StatusRateLimited = "rate_limited";
 
     private readonly ConcurrentDictionary<string, string> _status = new();
 
@@ -265,6 +268,8 @@ public sealed partial class SubscriptionOAuthUsageService(
         if (r.Code == 429)
         {
             ApplyBackoff(key, b.Strikes, r.RetryAfter);
+            // Раньше 429 уходил в backoff молча: процентов нет, плашки нет, в логе пусто
+            SetStatus(key, StatusRateLimited, r.Code);
             return;
         }
         if (r.Code is < 200 or >= 300)
@@ -399,6 +404,10 @@ public sealed partial class SubscriptionOAuthUsageService(
         if (status == StatusUnauthorized)
             Console.Error.WriteLine($"[OAuthUsage] аккаунт '{key}': HTTP {httpCode} — токен не принят эндпоинтом usage " +
                 "(setup-токен вместо полноценного входа?); нужен `claude login` в профиле подписки");
+        else if (status == StatusRateLimited)
+            Console.Error.WriteLine($"[OAuthUsage] аккаунт '{key}': HTTP 429 — эндпоинт usage ограничил частоту опроса " +
+                $"(у setup-токена лимит около раза в час; без него — `claude login` в профиле подписки); " +
+                $"следующая попытка после {_backoff[key].AllowedAt.ToLocalTime():HH:mm}");
         else if (status == StatusError)
             Console.Error.WriteLine($"[OAuthUsage] аккаунт '{key}': HTTP {httpCode}");
         else if (prev is not null)

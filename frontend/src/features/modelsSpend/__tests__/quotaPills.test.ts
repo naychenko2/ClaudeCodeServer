@@ -99,6 +99,12 @@ describe('buildSubscriptionCard → expandedPills', () => {
     usageError: false,
   } as const;
 
+  // 429 опроса раньше ничем не показывался — пустая карточка говорила «данных пока нет»
+  it('rate_limited без снимков — хинт про ограничение частоты опроса', () => {
+    const card = buildSubscriptionCard('claude', baseSub, { ...ctx, pollStatuses: { claude: 'rate_limited' } });
+    expect(card.hint).toContain('ограничение частоты');
+  });
+
   it('без ограничений — expandedPills пустой', () => {
     const card = buildSubscriptionCard('claude', { ...baseSub, tier: 'Max' }, ctx);
     expect(card.expandedPills).toEqual([]);

@@ -1516,7 +1516,8 @@ export interface UsageResponse {
   // эндпоинты тоже шлют rate_limit_event, снимки пишутся под ключ провайдера
   providers?: Record<string, UsageSnapshot[]>;
   // Статус опроса api/oauth/usage по ключам аккаунтов: "ok" | "unauthorized" (токен
-  // не подходит — setup-токен вместо полноценного входа) | "error"
+  // не подходит — setup-токен вместо полноценного входа) | "rate_limited" (429: опрос
+  // упёрся в лимит частоты, ждёт backoff) | "error"
   pollStatuses?: Record<string, string>;
   // Локальная модель (Ollama или llama-server): какая модель и на какие фоновые действия
   // она заведена. Имя поля контрактное и не переименовывается вместе с движком.

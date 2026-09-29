@@ -237,6 +237,13 @@ function subFreshness(sub: SubscriptionUsage, pollStatus: string | undefined, la
       copyCommand: sub.loginCommand ?? null,
     };
   }
+  if (pollStatus === 'rate_limited') {
+    return {
+      corner: { dot: C.warning, text: `на ${fmtClock(ts)}`, textTone: C.warningText },
+      detail: <>Опрос лимитов упёрся в ограничение частоты: у setup-токена оно около раза в час. Показаны последние снимки. Полноценный вход в профиль аккаунта снимает ограничение.</>,
+      copyCommand: sub.loginCommand ?? null,
+    };
+  }
   if (pollStatus === 'error') {
     return {
       corner: { dot: C.warning, text: `на ${fmtClock(ts)}`, textTone: C.warningText },
@@ -355,7 +362,9 @@ export function buildSubscriptionCard(key: string, sub: SubscriptionUsage, ctx: 
       expandedPills: subscriptionExpandedPills(sub),
       hint: unauthorized
         ? 'Опрос лимитов недоступен — в профиле нет полноценного входа'
-        : 'Данных пока нет — цифры появятся после первого хода или ближайшего опроса',
+        : pollStatus === 'rate_limited'
+          ? 'Опрос лимитов упёрся в ограничение частоты — повторим позже'
+          : 'Данных пока нет — цифры появятся после первого хода или ближайшего опроса',
       hasExhausted: false,
       unavailableModels,
       onRecheckModel,

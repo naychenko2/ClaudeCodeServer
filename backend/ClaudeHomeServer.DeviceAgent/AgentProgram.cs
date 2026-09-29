@@ -334,7 +334,8 @@ public static class AgentProgram
 
         // Руки (ADR-016 §7) — только на Windows: мост — Windows-программа, замок машины — именованный семафор
         var hands = OperatingSystem.IsWindows()
-            ? new HandsRuntime(HandsComponent.ForThisAgent(), new NamedHandsMachineLock(), new HandsRegistry(), control)
+            ? new HandsRuntime(HandsComponent.ForThisAgent(), new NamedHandsMachineLock(), new HandsRegistry(), control,
+                paths.BrowserProfilesRoot)
             : null;
 
         // Одна политика корней на исполнение ходов и на файлы проектов (ADR-016 §5)

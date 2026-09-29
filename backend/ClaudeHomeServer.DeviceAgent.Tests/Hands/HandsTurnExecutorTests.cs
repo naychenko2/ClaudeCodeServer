@@ -1,6 +1,7 @@
 using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json.Nodes;
+using ClaudeHomeServer.DeviceAgent.Composition;
 using ClaudeHomeServer.DeviceAgent.Exec;
 using ClaudeHomeServer.DeviceAgent.Hands;
 using ClaudeHomeServer.DeviceAgent.Processes;
@@ -39,7 +40,7 @@ public class HandsTurnExecutorTests : IDisposable
     {
         _fx.WithBridge();
         var sink = new RecordingSink();
-        var hands = _fx.Runtime(sink: sink);
+        var hands = _fx.Runtime(sink: sink, browserProfiles: true);
         await using var h = NewHarness(hands);
 
         await h.StartAsync(HandsSpawn(h), turnId: "turn-hands");
@@ -55,7 +56,11 @@ public class HandsTurnExecutorTests : IDisposable
         config.Should().NotContain(DeviceExecPlaceholders.Hands);
         var node = JsonNode.Parse(config)!["mcpServers"]![DeviceExecPlaceholders.HandsServerName]!;
         ((string?)node["command"]).Should().Be(_fx.Component.BridgePath);
-        node["args"]!.AsArray().Select(a => (string?)a).Should().Contain(HandsAttach.ScreenshotTool, "у провайдера без зрения");
+        var bridgeArgs = node["args"]!.AsArray().Select(a => (string?)a).ToList();
+        bridgeArgs.Should().Contain(string.Join(",", HandsVision.ImageTools), "у провайдера без зрения");
+        // Профиль — от корня, который агент сверил сам, а не от сырого каталога из spec
+        bridgeArgs.Should().ContainInConsecutiveOrder(HandsBridgeArgs.BrowserProfile,
+            HandsBrowserProfile.PathFor(_fx.BrowserProfilesRoot, AgentPathPolicy.RealPath(h.WorkDir)));
 
         hands.Registry.Stop(null, HandsEndReason.StoppedFromTray).Should().Be(1);
 

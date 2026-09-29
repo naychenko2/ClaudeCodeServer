@@ -92,6 +92,25 @@ public class HandsBridgeGateRuntimeTests
         AssertGateDenied(result, "screenshot_control", "outputPath");
     }
 
+    [Theory]
+    [InlineData("file:///C:/Windows/win.ini")]
+    [InlineData("javascript:alert(1)")]
+    [InlineData("chrome://settings")]
+    public async Task Browser_navigate_to_forbidden_scheme_is_denied_by_gate(string url)
+    {
+        var result = await Call("Sbroenne.WindowsMcp.Tools.BrowserNavigateTool", new() { ["url"] = url });
+
+        AssertGateDenied(result, "browser_navigate", "Only http, https and about:blank");
+    }
+
+    [Fact]
+    public async Task Browser_click_by_ref_without_snapshot_is_denied_by_gate()
+    {
+        var result = await Call("Sbroenne.WindowsMcp.Tools.BrowserClickTool", new() { ["ref"] = "e1" });
+
+        AssertGateDenied(result, "browser_click", "unknown or stale");
+    }
+
     private static void AssertGateDenied((bool IsError, string Text) result, string tool, string reason)
     {
         Assert.True(result.IsError, result.Text);

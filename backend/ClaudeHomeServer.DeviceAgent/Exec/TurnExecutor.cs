@@ -275,9 +275,10 @@ internal sealed class TurnExecutor
             || !Directory.Exists(workingDirectory))
             throw new ExecRefusedException($"рабочий каталог хода не найден на устройстве: {workingDirectory}");
         // Серверу агент не доверяет: каталог сверяется с корнями машины по реальному пути
+        string projectRoot;
         try
         {
-            _options.PathPolicy.ProjectRoot(workingDirectory);
+            projectRoot = _options.PathPolicy.ProjectRoot(workingDirectory);
         }
         catch (AgentPathRefusedException e)
         {
@@ -289,7 +290,7 @@ internal sealed class TurnExecutor
         }
 
         // Руки — до аренды: отказ по рукам не должен занимать копию CLI
-        var hands = HandsAttach.Prepare(spawn, control.TurnId, _options.Hands);
+        var hands = HandsAttach.Prepare(spawn, control.TurnId, _options.Hands, projectRoot);
 
         // Аренда — первой после рук: не готов харнес — не создаём ни каталогов, ни выдач
         ICliHandle? cli;

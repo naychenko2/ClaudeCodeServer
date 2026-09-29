@@ -21,10 +21,26 @@ internal static class HandsGate
     /// <summary>Job программ рук; до <see cref="Configure"/> запуск невозможен.</summary>
     public static WindowsHandsSystem? System => s_system;
 
-    public static void Configure()
+    /// <param name="browserProfile">
+    /// Профиль Chrome браузерной руки (<c>--browser-profile</c>); его родитель — корень профилей
+    /// агента, в который <c>app</c> не пускает <c>user-data-dir</c>. Путь не полный — запрета нет,
+    /// а браузер откажет сам.
+    /// </param>
+    public static void Configure(string? browserProfile = null)
     {
         s_system = new WindowsHandsSystem();
-        s_policy = new HandsPolicy(s_system);
+        var profilesRoot = BrowserProfilesRoot(browserProfile);
+        s_policy = new HandsPolicy(s_system, profilesRoot);
+    }
+
+    private static string? BrowserProfilesRoot(string? browserProfile)
+    {
+        if (string.IsNullOrWhiteSpace(browserProfile))
+            return null;
+        var root = HandsAppPaths.TryNormalize(browserProfile) is { } profile ? Path.GetDirectoryName(profile) : null;
+        if (root is null)
+            HandsLog.Write($"гейт: путь профиля браузера «{browserProfile}» не полный — запрет user-data-dir для app не действует");
+        return root;
     }
 
     /// <summary>hwnd корня, записанный в идентификатор элемента; null — id неизвестен.</summary>

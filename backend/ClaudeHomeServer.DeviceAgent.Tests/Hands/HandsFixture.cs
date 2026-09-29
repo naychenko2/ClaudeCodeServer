@@ -24,8 +24,13 @@ internal sealed class HandsFixture : IDisposable
         return this;
     }
 
-    public HandsRuntime Runtime(IHandsMachineLock? machineLock = null, RecordingSink? sink = null, HandsRegistry? registry = null) =>
-        new(Component, machineLock ?? new InProcessHandsMachineLock(), registry ?? new HandsRegistry(), sink);
+    /// <summary>Корень профилей браузерной руки — как <c>AgentPaths.BrowserProfilesRoot</c> у боевого агента.</summary>
+    public string BrowserProfilesRoot => Path.Combine(AgentDirectory, "data", "browser-profiles");
+
+    public HandsRuntime Runtime(IHandsMachineLock? machineLock = null, RecordingSink? sink = null, HandsRegistry? registry = null,
+        bool browserProfiles = false) =>
+        new(Component, machineLock ?? new InProcessHandsMachineLock(), registry ?? new HandsRegistry(), sink,
+            browserProfiles ? BrowserProfilesRoot : null);
 
     /// <summary>MCP-конфиг хода, каким его шлёт сервер после санитизации.</summary>
     public static string McpConfig(bool vision = true, bool hands = true)

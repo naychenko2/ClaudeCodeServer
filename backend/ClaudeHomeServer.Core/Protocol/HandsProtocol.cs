@@ -133,7 +133,7 @@ public static class HandsForbiddenApps
 /// </summary>
 public static class HandsBridgeArgs
 {
-    /// <summary>Выключить инструменты моста: без зрения — <c>screenshot_control</c> (решение 7).</summary>
+    /// <summary>Выключить инструменты моста: без зрения — <see cref="HandsVision.ImageTools"/> (решение 7).</summary>
     public const string ExcludeTools = "--exclude-tools";
 
     /// <summary>
@@ -148,6 +148,16 @@ public static class HandsBridgeArgs
     /// по концу хода гасит всё, что ход открыл; имя остаётся для журнала.
     /// </summary>
     public const string TurnJobPrefix = @"Local\AiHome.Turn.";
+}
+
+/// <summary>
+/// Инструменты моста, которые отдают модели картинку: у провайдера без зрения агент выключает их
+/// все (<see cref="HandsBridgeArgs.ExcludeTools"/>, решение 7; браузер — ADR-016 §7.1). Одно
+/// определение на агента и мост — списки не разойдутся.
+/// </summary>
+public static class HandsVision
+{
+    public static readonly IReadOnlyList<string> ImageTools = ["screenshot_control", "browser_screenshot"];
 }
 
 /// <summary>

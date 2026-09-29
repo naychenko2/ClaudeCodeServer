@@ -23,6 +23,13 @@ public class HandsBrowserTests
         Assert.Equal(7, HandsTools.All.Count(t => t.StartsWith("browser_", StringComparison.Ordinal)));
     }
 
+    [Fact]
+    public void Vision_off_list_names_real_image_tools_of_the_bridge()
+    {
+        // Опечатка в списке агента молча оставила бы картинку провайдеру без зрения
+        Assert.Equal([HandsTools.ScreenshotControl, HandsTools.BrowserScreenshot], ClaudeHomeServer.Protocol.HandsVision.ImageTools);
+    }
+
     // ---------- адреса ----------
 
     [Theory]

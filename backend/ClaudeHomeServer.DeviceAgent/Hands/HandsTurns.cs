@@ -158,7 +158,8 @@ internal sealed record HandsRuntime(
     HandsComponent Component,
     IHandsMachineLock MachineLock,
     HandsRegistry Registry,
-    IHandsStatusSink? Status = null);
+    IHandsStatusSink? Status = null,
+    string? BrowserProfilesRoot = null);
 
 /// <summary>Руки, подключённые к ходу: замок машины и имя Job хода живут до конца хода.</summary>
 internal sealed class HandsTurnLease(IDisposable machineLock, string jobName, IReadOnlyList<DeviceExecFile> files) : IDisposable
@@ -184,18 +185,16 @@ internal static class HandsAttach
 
     public const string MisplacedMarkerText = "Маркер рук стоит не на своём месте в MCP-конфиге хода — руки не подключены.";
 
-    /// <summary>Инструмент моста, который выключается у провайдера без зрения.</summary>
-    public const string ScreenshotTool = "screenshot_control";
-
     /// <summary>Есть ли в файлах хода маркер рук.</summary>
     public static bool Requested(IReadOnlyList<DeviceExecFile> files) =>
         files.Any(f => f.Content?.Contains(DeviceExecPlaceholders.Hands, StringComparison.Ordinal) == true);
 
     /// <summary>
     /// Подключить руки: проверки по порядку, затем замок машины, затем подмена маркера.
-    /// null — рук ход не просил.
+    /// null — рук ход не просил. <paramref name="projectRoot"/> — корень проекта, уже сверенный
+    /// агентом с корнями машины (а не сырой каталог из spec): от него считается профиль браузера.
     /// </summary>
-    public static HandsTurnLease? Prepare(DeviceExecSpawn spawn, string turnId, HandsRuntime? runtime)
+    public static HandsTurnLease? Prepare(DeviceExecSpawn spawn, string turnId, HandsRuntime? runtime, string? projectRoot = null)
     {
         var files = spawn.Files ?? [];
         if (!Requested(files)) return null;
@@ -209,7 +208,10 @@ internal static class HandsAttach
             throw new ExecRefusedException($"Руки не подключены: {permission}.");
 
         var jobName = HandsBridgeArgs.TurnJobPrefix + turnId + "." + Guid.NewGuid().ToString("N")[..8];
-        var rewritten = Rewrite(files, runtime.Component.BridgePath);
+        var browserProfile = runtime.BrowserProfilesRoot is { } profiles && projectRoot is not null
+            ? HandsBrowserProfile.PathFor(profiles, projectRoot)
+            : null;
+        var rewritten = Rewrite(files, runtime.Component.BridgePath, browserProfile);
 
         var lease = runtime.MachineLock.TryAcquire() ?? throw new ExecRefusedException(HandsMachineLock.BusyText, HandsEndReason.Busy);
         return new HandsTurnLease(lease, jobName, rewritten);
@@ -219,7 +221,7 @@ internal static class HandsAttach
     /// Маркер допустим ровно в одном месте: <c>mcpServers.hands.type</c> одного JSON-файла spec.
     /// Любое другое вхождение — отказ, а не «подставим, где нашли».
     /// </summary>
-    internal static IReadOnlyList<DeviceExecFile> Rewrite(IReadOnlyList<DeviceExecFile> files, string bridgePath)
+    internal static IReadOnlyList<DeviceExecFile> Rewrite(IReadOnlyList<DeviceExecFile> files, string bridgePath, string? browserProfile = null)
     {
         var result = new List<DeviceExecFile>(files.Count);
         var replaced = 0;
@@ -246,7 +248,14 @@ internal static class HandsAttach
             if (!vision)
             {
                 args.Add(HandsBridgeArgs.ExcludeTools);
-                args.Add(ScreenshotTool);
+                args.Add(string.Join(",", HandsVision.ImageTools));
+            }
+            // Путь зависит только от корня проекта (свойство чата, не хода): сигнатура запуска
+            // CLI от хода к ходу не меняется
+            if (browserProfile is not null)
+            {
+                args.Add(HandsBridgeArgs.BrowserProfile);
+                args.Add(browserProfile);
             }
             servers[DeviceExecPlaceholders.HandsServerName] = new JsonObject
             {

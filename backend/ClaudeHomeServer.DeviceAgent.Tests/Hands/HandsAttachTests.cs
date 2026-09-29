@@ -108,8 +108,76 @@ public class HandsAttachTests : IDisposable
         // Имя Job хода мосту не едет: граница «только свои окна» снята (ADR-016 §7)
         args.Should().NotContain("--turn-job").And.NotContain(lease.JobName);
         if (vision) args.Should().BeEmpty();
-        else args.Should().Equal(HandsBridgeArgs.ExcludeTools, HandsAttach.ScreenshotTool);
+        else args.Should().Equal(HandsBridgeArgs.ExcludeTools, "screenshot_control,browser_screenshot");
         JsonNode.Parse(content)!["mcpServers"]!["tasks"].Should().NotBeNull("прочие узлы не тронуты");
+    }
+}
+
+/// <summary>
+/// Профиль Chrome браузерной руки (ADR-016 §7.1): путь считает агент от проверенного корня
+/// проекта, от хода он не зависит — сигнатура запуска CLI не меняется от хода к ходу.
+/// </summary>
+public class HandsBrowserProfileTests : IDisposable
+{
+    private readonly HandsFixture _fx = new();
+
+    public void Dispose() => _fx.Dispose();
+
+    private string? ProfileOf(string turnId, string? projectRoot, bool browserProfiles = true)
+    {
+        var spawn = new DeviceExecSpawn("claude", HandsFixture.HandsArgs, "/work", new Dictionary<string, string>(),
+            [HandsFixture.McpFile(HandsFixture.McpConfig(vision: true))], RedirectStdin: true);
+        using var lease = HandsAttach.Prepare(spawn, turnId, _fx.Runtime(browserProfiles: browserProfiles), projectRoot)!;
+        var args = JsonNode.Parse(lease.Files.Single().Content)!["mcpServers"]![DeviceExecPlaceholders.HandsServerName]!["args"]!
+            .AsArray().Select(a => (string)a!).ToList();
+        var at = args.IndexOf(HandsBridgeArgs.BrowserProfile);
+        return at < 0 ? null : args[at + 1];
+    }
+
+    [Fact]
+    public void Два_хода_одного_проекта_получают_один_профиль_а_два_проекта_разные()
+    {
+        _fx.WithBridge();
+
+        var first = ProfileOf("t1", "/work/app");
+        var second = ProfileOf("t2", "/work/app");
+        var other = ProfileOf("t3", "/work/other");
+
+        first.Should().NotBeNull().And.Be(second);
+        other.Should().NotBe(first);
+        Path.GetDirectoryName(first).Should().Be(_fx.BrowserProfilesRoot);
+        Path.GetFileName(first).Should().MatchRegex("^[0-9a-f]{16}$");
+    }
+
+    [Fact]
+    public void Без_корня_профилей_или_проверенного_корня_аргумента_нет()
+    {
+        _fx.WithBridge();
+
+        ProfileOf("t1", "/work/app", browserProfiles: false).Should().BeNull("старый рантайм без профилей");
+        ProfileOf("t1", projectRoot: null).Should().BeNull("без сверенного корня путь не считается");
+    }
+
+    [Fact]
+    public void На_Windows_регистр_и_хвостовой_слеш_корня_не_меняют_ключ()
+    {
+        HandsBrowserProfile.Key(@"C:\Work\App", ignoreCase: true)
+            .Should().Be(HandsBrowserProfile.Key(@"c:\work\app\", ignoreCase: true));
+        HandsBrowserProfile.Key("/work/App", ignoreCase: false)
+            .Should().NotBe(HandsBrowserProfile.Key("/work/app", ignoreCase: false), "на Linux регистр значим");
+    }
+
+    [Fact]
+    public void Профили_лежат_под_данными_агента_и_в_запретном_списке_выдачи_папок()
+    {
+        var paths = new ClaudeHomeServer.DeviceAgent.Hosting.AgentPaths(
+            Path.Combine(_fx.AgentDirectory, "config"), Path.Combine(_fx.AgentDirectory, "data"));
+        var profile = HandsBrowserProfile.PathFor(paths.BrowserProfilesRoot, "/work/app");
+
+        var context = ClaudeHomeServer.DeviceAgent.Hosting.ProjectFolderBinder.ContextForCurrentMachine(paths);
+
+        ClaudeHomeServer.DeviceAgent.Composition.AgentForbiddenPaths.RefusalOf(profile, context)
+            .Should().NotBeNull("профиль браузера не выдаётся проектом и не читается ретранслятором");
     }
 }
 

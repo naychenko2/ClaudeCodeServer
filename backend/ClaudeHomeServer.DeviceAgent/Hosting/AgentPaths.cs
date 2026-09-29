@@ -15,6 +15,11 @@ internal sealed record AgentPaths(string ConfigDirectory, string DataDirectory)
     public string CliProfile => Path.Combine(DataDirectory, "claude-profile");
     public string TurnsRoot => Path.Combine(DataDirectory, "turns");
     public string JournalDirectory => Path.Combine(DataDirectory, "journal");
+    /// <summary>
+    /// Профили Chrome браузерной руки, по каталогу на проект (ADR-016 §7.1). Лежат под данными
+    /// агента и потому в запретном списке выдачи папок; каталог профиля создаёт мост.
+    /// </summary>
+    public string BrowserProfilesRoot => Path.Combine(DataDirectory, "browser-profiles");
 
     public static AgentPaths ForCurrentUser()
     {

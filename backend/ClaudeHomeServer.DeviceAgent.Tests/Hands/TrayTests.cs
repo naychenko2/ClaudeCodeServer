@@ -100,7 +100,7 @@ public class TrayModelTests
         model.Tooltip.Should().Be("AI Home — ИИ управляет компьютером");
         model.Plate.Should().Be(new PlateView(true, "ИИ управляет компьютером", "Проект «Бухгалтерия»",
             "Фокус может переключаться. Окна хода закроются вместе с ним.", StopVisible: true));
-        StopItem(model).Should().Match<TrayMenuItem>(i => i.Enabled && i.IsDefault);
+        StopItem(model).Should().Match<TrayMenuItem>(i => i.Enabled);
         model.Menu().Select(i => i.Text).Should().Contain("Сейчас работает: проект «Бухгалтерия»");
     }
 

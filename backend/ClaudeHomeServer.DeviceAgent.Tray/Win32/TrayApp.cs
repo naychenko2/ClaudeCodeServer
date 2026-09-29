@@ -188,7 +188,6 @@ internal sealed class TrayApp : IDisposable
             var id = (uint)(FirstMenuId + commands.Count);
             commands.Add(item);
             AppendMenuW(menu, MF_STRING | grayed, id, text);
-            if (item.IsDefault) SetMenuDefaultItem(menu, id, 0);
         }
         return menu;
     }

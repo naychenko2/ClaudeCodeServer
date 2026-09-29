@@ -257,9 +257,6 @@ internal static class Native
     public static extern bool AppendMenuW(nint menu, uint flags, nuint id, string? text);
 
     [DllImport("user32.dll")]
-    public static extern bool SetMenuDefaultItem(nint menu, uint item, uint byPosition);
-
-    [DllImport("user32.dll")]
     public static extern bool DestroyMenu(nint menu);
 
     [DllImport("user32.dll")]
@@ -309,6 +306,9 @@ internal static class Native
 
     [DllImport("user32.dll")]
     public static extern bool ReleaseCapture();
+
+    [DllImport("user32.dll")]
+    public static extern nint GetCapture();
 
     [DllImport("user32.dll")]
     public static extern bool GetWindowRect(nint hwnd, out RECT rect);

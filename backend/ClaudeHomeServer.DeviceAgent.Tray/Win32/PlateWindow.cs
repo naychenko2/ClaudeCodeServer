@@ -17,6 +17,10 @@ namespace ClaudeHomeServer.DeviceAgent.Tray.Win32;
 /// ушедший в плашку, — ровно то, чего нельзя. Ручной путь проверен вживую: фокус не уходит.
 /// <c>WS_EX_TRANSPARENT</c> не ставить: сквозь плашку не нажать «Стоп».
 /// </para>
+/// <para>
+/// «Стоп» — обычная кнопка (<see cref="PlateStopButton"/>): срабатывает только отпусканием после
+/// своего же нажатия, под захватом мыши. Голое <c>WM_LBUTTONUP</c> над ней — чужой жест.
+/// </para>
 /// </summary>
 [SupportedOSPlatform("windows")]
 internal sealed class PlateWindow : IDisposable
@@ -41,6 +45,7 @@ internal sealed class PlateWindow : IDisposable
     private nint _bodyFont;
     private nint _hintFont;
     private PlateView _view = PlateView.Hidden;
+    private readonly PlateStopButton _stop = new();
     private bool _hoverStop;
     private bool _hover;
     private bool _tracking;
@@ -75,6 +80,7 @@ internal sealed class PlateWindow : IDisposable
     {
         var wasVisible = _view.Visible;
         _view = view;
+        if (!view.StopVisible) CancelStop();
         if (!view.Visible)
         {
             EndDrag();
@@ -147,6 +153,23 @@ internal sealed class PlateWindow : IDisposable
     {
         int pad = S(BasePad), width = S(BaseWidth), height = S(BaseHeight);
         return new RECT(width - pad - S(72), height - pad - S(30), width - pad, height - pad);
+    }
+
+    /// <summary>Курсор из <c>lParam</c> мышиного сообщения — на видимом «Стоп».</summary>
+    private bool OnStop(nint lParam) => _view.StopVisible && StopRect().Contains(LowWord(lParam), HighWord(lParam));
+
+    private void CancelStop()
+    {
+        if (!_stop.Armed) return;
+        _stop.Cancel(); // до ReleaseCapture: он пришлёт WM_CAPTURECHANGED
+        ReleaseStopCapture();
+    }
+
+    /// <summary>Как после перетаскивания: курсор мог уйти из окна, пока держали захват.</summary>
+    private void ReleaseStopCapture()
+    {
+        ReleaseCapture();
+        TrackLeave();
     }
 
     private void UpdateAlpha()
@@ -233,7 +256,9 @@ internal sealed class PlateWindow : IDisposable
                     Drag();
                     return 0;
                 }
-                var hover = _view.StopVisible && StopRect().Contains(LowWord(lParam), HighWord(lParam));
+                var hover = OnStop(lParam);
+                // Под захватом движения идут и за пределами окна: ушёл с «Стоп» — взвод снят
+                if (_stop.Move(hover)) ReleaseStopCapture();
                 if (hover != _hoverStop)
                 {
                     _hoverStop = hover;
@@ -243,14 +268,19 @@ internal sealed class PlateWindow : IDisposable
             case WM_MOUSELEAVE:
                 _tracking = false;
                 _hover = _hoverStop = false;
+                // Под своим захватом уход с кнопки уже поймал WM_MOUSEMOVE, а WM_MOUSELEAVE при
+                // захвате может прийти и с курсором на кнопке — не верить ему
+                if (GetCapture() != hwnd) CancelStop();
                 UpdateAlpha();
                 return 0;
             case WM_SETCURSOR when LowWord(lParam) == HTCLIENT:
                 SetCursor(LoadCursorW(0, _hoverStop ? IDC_HAND : IDC_ARROW));
                 return 1;
             case WM_LBUTTONDOWN:
-                // «Стоп» срабатывает на отпускании; нажатие на нём перетаскивание не начинает
-                if (!(_view.StopVisible && StopRect().Contains(LowWord(lParam), HighWord(lParam)))) BeginDrag();
+                // Нажатие на «Стоп» взводит его и захватывает мышь, чтобы отпускание пришло сюда же;
+                // нажатие мимо «Стоп» начинает перетаскивание
+                if (_stop.Down(OnStop(lParam))) SetCapture(hwnd);
+                else BeginDrag();
                 return 0;
             case WM_LBUTTONUP:
                 if (_grab is not null)
@@ -258,11 +288,16 @@ internal sealed class PlateWindow : IDisposable
                     EndDrag();
                     return 0;
                 }
-                if (_view.StopVisible && StopRect().Contains(LowWord(lParam), HighWord(lParam))) _onStop();
+                // Отпускание без своего нажатия (кнопку зажали в чужом окне) — не «Стоп»
+                if (!_stop.Armed) return 0;
+                var fire = _stop.Up(OnStop(lParam));
+                ReleaseStopCapture();
+                if (fire) _onStop();
                 return 0;
             case WM_CAPTURECHANGED:
-                // Захват отняли (Esc системы, другое окно) — считаем, что отпустили
+                // Захват отняли (Esc системы, другое окно) — считаем, что отпустили мимо
                 EndDrag();
+                CancelStop();
                 return 0;
             case WM_DISPLAYCHANGE:
                 // Сменились мониторы или разрешение: запомненное место могло уйти с экрана

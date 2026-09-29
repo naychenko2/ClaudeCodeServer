@@ -24,13 +24,13 @@ internal static class TrayCommands
 
 /// <summary>
 /// Пункт меню — только то, что рисует <c>TrackPopupMenu</c>: текст, подменю, разделитель,
-/// недоступный пункт, пункт по умолчанию.
+/// недоступный пункт. Пункта по умолчанию нет намеренно: единственным кандидатом был «Стоп»,
+/// а прерывание хода не должно висеть на случайном жесте.
 /// </summary>
 internal sealed record TrayMenuItem(
     string Text,
     string? Command = null,
     bool Enabled = true,
-    bool IsDefault = false,
     IReadOnlyList<TrayMenuItem>? Children = null,
     string? Argument = null)
 {
@@ -216,7 +216,7 @@ internal sealed class TrayModel
         {
             items.Add(TrayMenuItem.Label(Status.Installed ? "Руки установлены · сейчас не действуют" : "Руки не установлены"));
         }
-        items.Add(new TrayMenuItem("Остановить руки", TrayCommands.Stop, Enabled: HandsActive, IsDefault: HandsActive));
+        items.Add(new TrayMenuItem("Остановить руки", TrayCommands.Stop, Enabled: HandsActive));
         items.Add(TrayMenuItem.Separator);
 
         if (device is not null)

@@ -238,11 +238,8 @@ export interface ComposerStripApi {
   icon: ReactNode;
   // false — полоса не предлагается (нет git, модуль недоступен в проекте)
   isAvailable?: (ctx: { projectId: string; sessionId: string | null }) => boolean;
-  // Строка состояния в подсказке иконки переключателя: «feat/site-header · 3 файла изменено», «Работаем с: hero.png · версия 2»
+  // Строка состояния в меню переключателя: «feat/site-header · 3 файла изменено», «Работаем с: hero.png · версия 2»
   status?: (ctx: { projectId: string; sessionId: string | null }) => ReactNode;
-  // false — полоса сейчас не сворачивается и не разворачивается (чистый Git всегда строкой):
-  // щелчок по её активной иконке в переключателе ничего не сворачивает
-  collapsible?: (ctx: { projectId: string; sessionId: string | null }) => boolean;
 }
 
 // Слот `composer-mode`: режим поля ввода рядом с «Чатом» («Картинка»). Имя вклада — id режима.

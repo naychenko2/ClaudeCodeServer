@@ -152,7 +152,8 @@ public class SubscriptionOAuthUsageServiceTests : IDisposable
             "seven_day_fable": { "utilization": 23.0, "resets_at": "2026-07-30T00:00:00Z" },
             "extra_usage": { "is_enabled": true, "monthly_limit": 100, "used_credits": 5, "utilization": 5.0 },
             "account_kind": "max",
-            "meta": { "irrelevant": true }
+            "meta": { "irrelevant": true },
+            "nimbus_quill": { "utilization": 0.0 }
         }
         """;
         var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)

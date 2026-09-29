@@ -58,8 +58,10 @@ function rateLevel(w: RateLimitInfo): RateWindow['level'] {
 // Служебные события Anthropic, а не отдельные лимиты: seven_day_overage_included дублирует
 // недельное окно (сброс тот же), а общее правило seven_day_<модель> сделало бы из него
 // окно «Overage included». Режем здесь — единственная точка, через которую идут и пилюля,
-// и поповер (latestPerWindow и withAccountFallback сводятся к toRateWindows)
-const NON_WINDOW_TYPES = new Set(['seven_day_overage_included']);
+// и поповер (latestPerWindow и withAccountFallback сводятся к toRateWindows).
+// nimbus_quill — недокументированный объект ответа oauth/usage (кодовое имя Anthropic, 0% без
+// сброса): бэк его больше не пишет, но уже записанный снимок без сброса сам не протухнет
+const NON_WINDOW_TYPES = new Set(['seven_day_overage_included', 'nimbus_quill']);
 
 // Преобразует карту окон в отсортированный (по использованию, убыв.) массив
 export function toRateWindows(rateLimits: Record<string, RateLimitInfo>): RateWindow[] {

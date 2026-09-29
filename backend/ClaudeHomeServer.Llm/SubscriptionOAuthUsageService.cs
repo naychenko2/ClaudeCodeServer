@@ -435,9 +435,16 @@ public sealed partial class SubscriptionOAuthUsageService(
         {
             if (prop.Value.ValueKind != JsonValueKind.Object) continue;
             if (prop.Name == "extra_usage") RecordExtraUsage(key, root);
-            else RecordWindow(key, prop.Name, prop.Value);
+            else if (IsLimitWindow(prop.Name)) RecordWindow(key, prop.Name, prop.Value);
         }
     }
+
+    // Окна лимитов — только five_hour и seven_day / seven_day_<модель>: новые per-model окна
+    // подхватываются без правок, а посторонние объекты ответа — нет. Прод 30.09: эндпоинт
+    // отдаёт недокументированный nimbus_quill (utilization 0, без сброса) — кодовое имя
+    // Anthropic, а не лимит; всеядный разбор выводил его на пилюлю вечным «0%».
+    internal static bool IsLimitWindow(string name)
+        => name is "five_hour" or "seven_day" || name.StartsWith("seven_day_", StringComparison.Ordinal);
 
     // Окно из ответа: { "utilization": 51.0 (проценты), "resets_at": ISO }.
     private void RecordWindow(string key, string window, JsonElement w)

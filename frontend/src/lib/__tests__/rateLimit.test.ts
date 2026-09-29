@@ -77,6 +77,16 @@ describe('toRateWindows', () => {
     expect(out.map(w => w.limitType)).toEqual(['seven_day']);
     expect(ratePillSegments(out).map(s => s.label)).toEqual(['Нед']);
   });
+
+  it('nimbus_quill — кодовое имя из ответа oauth/usage, а не окно: старый снимок без сброса отсекается', () => {
+    const out = withAccountFallback(
+      [],
+      [{ timestamp: '2026-09-30T08:00:00Z', limitType: 'five_hour', utilization: 0.06, resetsAt: '2026-09-30T12:00:00Z' },
+        { timestamp: '2026-09-30T08:00:00Z', limitType: 'nimbus_quill', utilization: 0 }],
+      '2026-09-30T08:05:00Z',
+    );
+    expect(out.map(w => w.limitType)).toEqual(['five_hour']);
+  });
 });
 
 describe('latestPerWindow', () => {

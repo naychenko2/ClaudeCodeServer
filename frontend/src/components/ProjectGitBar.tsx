@@ -186,9 +186,11 @@ export function ProjectGitBar({
   // Метка ветки — без изменений на всех раскладках: это ответ на «где мы работаем».
   const branchLabel = (
     <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
+      {/* С переключателем полос иконка ветки уже стоит тоглом слева — не повторяем её;
+          папка worktree несёт свой смысл и остаётся */}
       {worktreeBranch
         ? <FolderGit2 size={15} strokeWidth={ICON_STROKE} color={C.accent} style={{ flexShrink: 0 }} />
-        : <GitBranch size={15} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />}
+        : !switcher && <GitBranch size={15} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />}
       <span title={worktreeBranch ? `Отдельное дерево чата: ${label}` : label} style={{
         fontFamily: FONT.mono, fontSize: 12.5, color: C.textSecondary,
         whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
@@ -391,7 +393,7 @@ export function ProjectGitBar({
       {switcher}
       {worktreeBranch
         ? <FolderGit2 size={14} strokeWidth={ICON_STROKE} color={C.accent} style={{ flexShrink: 0 }} />
-        : <GitBranch size={14} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />}
+        : !switcher && <GitBranch size={14} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />}
       <span title={worktreeBranch ? `Отдельное дерево чата: ${label}` : label} style={{
         fontFamily: FONT.mono, fontSize: 12, color: C.textSecondary,
         whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0,
@@ -450,18 +452,9 @@ export function ProjectGitBar({
           чата, только дерево хода, оба дерева сразу. Полный путь — в title */}
       {turnTreeSegment}
 
-      {/* Строка состояния: что делать дальше — публиковать или ничего. Число изменённых
-          файлов живёт первой цифрой в diff-пилюле, строкой его не дублируем */}
-      {hosted && !slim && strip.tone !== 'changes' && (
-        <span data-git-status={strip.tone} style={{
-          display: 'inline-flex', alignItems: 'center', gap: 5, fontFamily: FONT.sans, fontSize: 12, color: C.textMuted,
-          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0, flex: '0 1 auto',
-        }}>
-          <span style={{ width: 6, height: 6, borderRadius: R.full, background: toneColor, flexShrink: 0 }} />
-          {strip.text}
-        </span>
-      )}
-
+      {/* Строки состояния в полосе нет: всё, что она говорила, уже на кнопках — файлы
+          и строки в diff-пилюле, коммиты в «Опубликовать N», «чисто» в свёрнутой строке.
+          Текст состояния остался в подсказке иконки Git в переключателе (action.status) */}
       <div style={{ flex: 1 }} />
 
       {/* diff-пилюля +N/−M — кликом открывает панель «Изменения» */}

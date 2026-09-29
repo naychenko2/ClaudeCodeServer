@@ -2903,7 +2903,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
                     return `${branch} · ${gitStripStatus(g.status, g.unpushed.length).text}`;
                   },
                   // Чистое дерево без своего worktree полоса сама держит строкой
-                  // (ProjectGitBar, autoMicro) — пункт «Развернуть» там ничего бы не сделал
+                  // (ProjectGitBar, autoMicro) — щелчок по иконке Git её не разворачивает
                   collapsible: () => {
                     const g = getGitState(project.id);
                     return !gitStripIdle(g.status, g.unpushed.length, !!session.worktreeBranch || !!turnTree);

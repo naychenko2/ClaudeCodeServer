@@ -2,37 +2,20 @@
 // плюс встроенные полосы каркаса (Git — вкладом ChatPanel, ему нужны колбэки чата).
 // Какая полоса активна и свёрнута ли она — решает стор lib/composerStrips.ts (фокус
 // картинки → запомненная полоса чата → Git; свёрнутость — своя у каждой полосы чата).
-// Хост рисует заголовок-переключатель «Git ▾» / «Картинки ▾» один раз для всех полос
-// и отдаёт его полосе в ctx.switcher: полоса ставит его на место своего заголовка.
-// В меню переключателя у каждой полосы строка состояния и пункт «Свернуть полосу в
-// строку» / «Развернуть полосу»; на телефоне то же меню открывается шторкой (прототип
-// docs/mockups/image-editor-v3-strips-prototype.html, вариант C). Пока полоса одна,
-// переключателя нет — полоса выглядит как раньше.
-import { useEffect, useState } from 'react';
-import type { MouseEvent, ReactNode } from 'react';
-import { Check, ChevronDown, ChevronsDownUp, ChevronsUpDown } from 'lucide-react';
-import { C, FS, SP } from '../../lib/design';
+// Хост рисует переключатель полос один раз для всех и отдаёт его полосе в ctx.switcher:
+// полоса ставит его на место своего заголовка. Переключатель — ряд иконок-тоглов, по
+// одной на полосу: щелчок по чужой — показать её, по активной — свернуть полосу в
+// строку / развернуть. Имя и строка состояния полосы — в подсказке иконки (раньше жили
+// в выпадающем меню «Git ▾», которое стоило лишний клик и ~50 px ширины). Пока полоса
+// одна, переключателя нет — полоса выглядит как раньше.
+import type { MouseEvent } from 'react';
+import { C, SP } from '../../lib/design';
 import { useComposerStrip } from '../../lib/composerStrips';
 import { SLOT_COMPOSER_STRIP, useSlot } from '../../lib/subsystems/registry';
 import type { ComposerStripApi, ComposerStripCtx, SlotContribution } from '../../lib/subsystems/registry';
-import { Button, Dot, Menu, MenuItem, MenuSep, Modal } from '../ui';
-import { ICON_STROKE } from '../ui/icons';
+import { Dot, IconButton } from '../ui';
 
 export type ComposerStripContribution = SlotContribution<ComposerStripCtx, ComposerStripApi>;
-
-function ItemLabel({ title, status }: { title: string; status: ReactNode }) {
-  return (
-    <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-      <span>{title}</span>
-      {status != null && status !== '' && (
-        <span style={{
-          fontSize: FS.xs, color: C.textMuted, marginTop: 1,
-          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-        }}>{status}</span>
-      )}
-    </span>
-  );
-}
 
 export function ComposerStripHost({ projectId, sessionId, isMobile, builtins = [] }: {
   projectId: string;
@@ -41,15 +24,6 @@ export function ComposerStripHost({ projectId, sessionId, isMobile, builtins = [
   builtins?: ComposerStripContribution[];
 }) {
   const fromSlot = useSlot<ComposerStripCtx, ComposerStripApi>(SLOT_COMPOSER_STRIP);
-  const [menu, setMenu] = useState<DOMRect | null>(null);
-  const [sheet, setSheet] = useState(false);
-  // Меню с якорем само Esc не ловит — закрываем здесь, как меню фиксации в ProjectGitBar
-  useEffect(() => {
-    if (!menu) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenu(null); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [menu]);
 
   const avail = { projectId, sessionId };
   // Встроенная полоса главнее одноимённого вклада: id полосы уникален
@@ -61,80 +35,46 @@ export function ComposerStripHost({ projectId, sessionId, isMobile, builtins = [
   const current = strips.find(c => c.name === active);
   if (!current) return null;
 
-  const close = () => { setMenu(null); setSheet(false); };
+  // Подсказка иконки: имя полосы, её состояние и — у активной — что сделает щелчок
+  const hint = (s: ComposerStripContribution) => {
+    const status = s.action!.status?.(avail);
+    const head = typeof status === 'string' && status ? `${s.action!.title} · ${status}` : s.action!.title;
+    if (s.name !== active) return head;
+    if (!(s.action!.collapsible?.(avail) ?? true)) return head;
+    return `${head} — ${collapsed ? 'развернуть полосу' : 'свернуть полосу в строку'}`;
+  };
 
-  const items = (
-    <>
-      {strips.map(s => (
-        <MenuItem
-          key={s.name}
-          icon={s.action!.icon}
-          isMobile={isMobile}
-          label={
-            <span style={{ display: 'flex', alignItems: 'center', gap: SP.sm, minWidth: 0 }}>
-              <span style={{ flex: 1, minWidth: 0 }}>
-                <ItemLabel title={s.action!.title} status={s.action!.status?.(avail)} />
-              </span>
-              {s.name === active && <Check size={14} strokeWidth={ICON_STROKE} color={C.accent} style={{ flexShrink: 0 }} />}
-            </span>
-          }
-          onClick={() => { close(); select(s.name!); }}
-        />
-      ))}
-      {(current.action!.collapsible?.(avail) ?? true) && (
-        <>
-          <MenuSep />
-          <MenuItem
-            icon={collapsed ? <ChevronsUpDown size={15} strokeWidth={ICON_STROKE} /> : <ChevronsDownUp size={15} strokeWidth={ICON_STROKE} />}
-            isMobile={isMobile}
-            label={collapsed ? 'Развернуть полосу' : 'Свернуть полосу в строку'}
-            onClick={() => { close(); setCollapsed(!collapsed); }}
-          />
-        </>
-      )}
-    </>
-  );
-
-  // Выбранная картинка, чья полоса скрыта ручным выбором, — точка на «▾»
-  const dot = !!pendingFocus && pendingFocus !== active;
+  // Выбранная картинка, чья полоса скрыта ручным выбором, — точка на иконке её полосы
   const switcher = strips.length > 1 ? (
     // Клик по переключателю в свёрнутой строке не должен её разворачивать
     <span data-composer-strip-switcher="" onClick={e => e.stopPropagation()}
-      style={{ display: 'inline-flex', alignItems: 'center', gap: SP.sm, flexShrink: 0 }}>
-      <span style={{ position: 'relative', display: 'inline-flex' }}>
-        <Button
-          variant="ghost" size="xs"
-          leftIcon={current.action!.icon}
-          title={`${current.action!.title} — сменить полосу над полем ввода`}
-          style={{ fontWeight: 600, color: C.textHeading, paddingLeft: SP.xs, paddingRight: SP.xs }}
-          onClick={(e: MouseEvent) => {
-            if (isMobile) setSheet(true);
-            else setMenu((e.currentTarget as HTMLElement).getBoundingClientRect());
-          }}
-        >
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs }}>
-            {!isMobile && current.action!.title}
-            <ChevronDown size={12} strokeWidth={ICON_STROKE} color={C.textMuted} />
+      style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, flexShrink: 0 }}>
+      {strips.map(s => {
+        const on = s.name === active;
+        return (
+          <span key={s.name} style={{ position: 'relative', display: 'inline-flex' }}>
+            <IconButton
+              size={collapsed ? 'xs' : isMobile ? 'md' : 'sm'}
+              active={on}
+              title={hint(s)}
+              onClick={(e: MouseEvent) => {
+                e.stopPropagation();
+                if (!on) select(s.name!);
+                else if (s.action!.collapsible?.(avail) ?? true) setCollapsed(!collapsed);
+              }}
+            >
+              {s.action!.icon}
+            </IconButton>
+            {!!pendingFocus && pendingFocus !== active && pendingFocus === s.name && (
+              <span title="Картинка выбрана — её полоса сейчас не показана"
+                style={{ position: 'absolute', top: 1, right: 1, display: 'inline-flex', pointerEvents: 'none' }}>
+                <Dot color={C.accent} size={7} />
+              </span>
+            )}
           </span>
-        </Button>
-        {dot && (
-          <span title="Картинка выбрана — её полоса сейчас не показана"
-            style={{ position: 'absolute', top: 2, right: 0, display: 'inline-flex', pointerEvents: 'none' }}>
-            <Dot color={C.accent} size={7} />
-          </span>
-        )}
-      </span>
-      <span style={{ width: 1, height: collapsed ? 16 : 22, background: C.divider, flexShrink: 0 }} />
-      {menu && (
-        <Menu anchor={menu} onClose={() => setMenu(null)} minWidth={290} maxWidth={360} maxHeight={200}>
-          {items}
-        </Menu>
-      )}
-      {sheet && (
-        <Modal title="Полоса над полем ввода" onClose={() => setSheet(false)}>
-          <div style={{ display: 'flex', flexDirection: 'column' }}>{items}</div>
-        </Modal>
-      )}
+        );
+      })}
+      <span style={{ width: 1, height: collapsed ? 16 : 22, background: C.divider, flexShrink: 0, marginLeft: SP.xs }} />
     </span>
   ) : null;
 

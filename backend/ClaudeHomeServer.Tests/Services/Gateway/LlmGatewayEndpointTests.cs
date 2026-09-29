@@ -460,10 +460,15 @@ public sealed class LlmGatewayEndpointTests : IAsyncDisposable
     public async Task Json_ОбёрткаРазвёрнута_ContentLengthПересчитан_ДампЗапросаЗаписан()
     {
         var dumpDir = Path.Combine(_kit.TempDir, "dumps");
+        // Посторонние json в каталоге дампа чистка не трогает — только файлы с именем дампа
+        Directory.CreateDirectory(dumpDir);
+        File.WriteAllText(Path.Combine(dumpDir, "appsettings.Local.json"), "{}");
+        File.WriteAllText(Path.Combine(dumpDir, "x.json"), "{}");
         _kit.Options.CurrentValue = new LlmGatewayOptions
         {
             Enabled = true, AllowSubscriptions = true, AnthropicBaseUrl = "https://anthropic.test",
             DumpNormalizedRequestsDir = dumpDir,
+            DumpKeep = 1,
         };
         var t = Start("mmx-m3");
         _upstream.Respond = _ => new HttpResponseMessage(HttpStatusCode.OK)
@@ -481,8 +486,10 @@ public sealed class LlmGatewayEndpointTests : IAsyncDisposable
         JsonNode.Parse(text)!["content"]![0]!["input"]!.ToJsonString().Should().Be("""{"image_urls":["https://a.png"]}""");
         resp.Content.Headers.ContentLength.Should().Be(Encoding.UTF8.GetByteCount(text));
         _upstream.Calls.Single().Request.Headers.Contains("Accept-Encoding").Should().BeFalse("ответ под нормализатор не сжимается");
-        var dump = Directory.GetFiles(dumpDir, "*.json").Should().ContainSingle().Subject;
+        var dump = Directory.GetFiles(dumpDir, LlmGatewayEndpoints.DumpFilePrefix + "*.json").Should().ContainSingle().Subject;
         File.ReadAllText(dump).Should().Contain("\"set_urls\"").And.NotContain("mmx-key", "ключей в дампе нет");
+        File.Exists(Path.Combine(dumpDir, "appsettings.Local.json")).Should().BeTrue("чистка удаляет только свои дампы");
+        File.Exists(Path.Combine(dumpDir, "x.json")).Should().BeTrue();
     }
 
     private static async Task<string> ReadAtLeastAsync(Stream stream, int bytes)

@@ -192,6 +192,11 @@ public static class LlmGatewayEndpoints
 
     public const string LogCategory = "ClaudeHomeServer.LlmGateway";
 
+    // Имя файла дампа: префикс, метка времени UTC и id хода шлюза (Guid "N")
+    public const string DumpFilePrefix = "gw-normalized-";
+    private static readonly System.Text.RegularExpressions.Regex DumpFileName =
+        new(@"^gw-normalized-\d{8}-\d{6}-\d{3}-[0-9a-f]{32}\.json$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
     private static async Task WriteFilteredAsync(HttpContext ctx, ArrayBufferWriter<byte> filtered)
     {
         if (filtered.WrittenCount == 0) return;
@@ -202,6 +207,9 @@ public static class LlmGatewayEndpoints
     // Дамп тела запроса, ответ на который пришлось нормализовать (LlmGateway:DumpNormalizedRequestsDir):
     // по нему дефект провайдера воспроизводится голым запросом. Заголовки не пишутся — ключей
     // в файле нет. Сбой дампа ход не трогает.
+    //
+    // Чистка старых дампов удаляет ТОЛЬКО файлы с точным именем дампа (DumpFileName), никогда по
+    // маске «*.json»: каталог задаёт админ, и «.» или data/ иначе унесли бы appsettings и сторы.
     private static void DumpRequest(LlmGatewayOptions opts, byte[]? body, string turnId, ILogger log)
     {
         if (string.IsNullOrWhiteSpace(opts.DumpNormalizedRequestsDir) || body is not { Length: > 0 }) return;
@@ -209,9 +217,10 @@ public static class LlmGatewayEndpoints
         {
             Directory.CreateDirectory(opts.DumpNormalizedRequestsDir);
             var file = Path.Combine(opts.DumpNormalizedRequestsDir,
-                $"{DateTime.UtcNow:yyyyMMdd-HHmmss-fff}-{turnId}.json");
+                $"{DumpFilePrefix}{DateTime.UtcNow:yyyyMMdd-HHmmss-fff}-{turnId}.json");
             File.WriteAllBytes(file, body);
-            foreach (var old in new DirectoryInfo(opts.DumpNormalizedRequestsDir).GetFiles("*.json")
+            foreach (var old in new DirectoryInfo(opts.DumpNormalizedRequestsDir).GetFiles(DumpFilePrefix + "*.json")
+                         .Where(f => DumpFileName.IsMatch(f.Name))
                          .OrderByDescending(f => f.Name).Skip(Math.Max(1, opts.DumpKeep)))
                 old.Delete();
             log.LogWarning("Тело запроса с нормализованным ответом сохранено: {File}", file);

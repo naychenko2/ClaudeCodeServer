@@ -98,9 +98,12 @@ function RateRow({ w }: { w: RateWindow }) {
         <span style={{ fontFamily: FONT.sans, fontSize: 12, color: C.textSecondary }}>
           {windowLabel(w.limitType)}{w.isUsingOverage ? ' · перерасход' : ''}
         </span>
-        <span style={{ fontFamily: FONT.mono, fontSize: 12, fontWeight: 700, color: c.text }}>{w.stale ? '—' : `${w.pct}%${w.isUsingOverage ? '+' : ''}`}</span>
+        {/* Процента нет (событие хода без utilization) — не «0%», а «в пределах нормы», как на экране «Использование» */}
+        <span style={{ fontFamily: FONT.mono, fontSize: 12, fontWeight: 700, color: c.text }}>
+          {w.stale ? '—' : w.hasUtil ? `${w.pct}%${w.isUsingOverage ? '+' : ''}` : 'в пределах нормы'}
+        </span>
       </div>
-      {!w.stale && (
+      {!w.stale && w.hasUtil && (
         <div style={{ height: 4, borderRadius: 2, background: C.track, overflow: 'hidden', margin: '3px 0' }}>
           <div style={{ width: `${Math.min(100, w.pct)}%`, height: '100%', background: c.fill }} />
         </div>

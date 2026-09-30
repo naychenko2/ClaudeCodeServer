@@ -4,9 +4,9 @@ using Microsoft.AspNetCore.Http;
 
 namespace ClaudeHomeServer.Tests.Services;
 
-// Состав вызова аутентификации WebDAV зависит от платформы: NTLM валидирует SSPI, а он есть
-// только на Windows. На Linux Negotiate предлагать нельзя — Windows Mini-Redirector цепляется
-// за более сильную схему и крутит обречённое рукопожатие вместо отката на Basic.
+// Negotiate предлагаем только там, где Type3 есть чем проверить (SSPI или gss-ntlmssp с нашим
+// файлом): иначе Windows Mini-Redirector цепляется за более сильную схему и крутит обречённое
+// рукопожатие вместо отката на Basic. Проверка по запросу — WebDavNtlmUserFileTests.
 public class WebDavAuthChallengeTests
 {
     [Fact]
@@ -26,15 +26,13 @@ public class WebDavAuthChallengeTests
     }
 
     [Fact]
-    public void ВызовВОтвете_СоответствуетПлатформе()
+    public void БезПроверкиNtlm_ВОтветеТолькоBasic()
     {
+        // Нет NtlmUserFile в DI и http — Negotiate не предлагается ни на одной платформе
         var ctx = new DefaultHttpContext();
 
         WebDavHandler.SendAuthChallenge(ctx);
 
-        var header = ctx.Response.Headers["WWW-Authenticate"].ToString();
-        header.Should().Be(WebDavHandler.BuildAuthChallenge(OperatingSystem.IsWindows()));
-        if (!OperatingSystem.IsWindows())
-            header.Should().NotContain("Negotiate");
+        ctx.Response.Headers["WWW-Authenticate"].ToString().Should().Be("Basic realm=\"ClaudeHomeServer\"");
     }
 }

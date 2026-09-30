@@ -29,13 +29,16 @@ public static class WebDavHandler
     private const string BasicChallenge = "Basic realm=\"ClaudeHomeServer\"";
 
     /// <summary>
-    /// Есть ли чем проверить NTLM. На Windows Type3 валидирует SSPI против локальной SAM,
-    /// на прочих платформах Negotiate идёт через GSSAPI, и проверять нечем: нет ни
-    /// /etc/ntlm_user_file, ни winbind, ни домена — рукопожатие обречено падать на третьем шаге.
-    /// Предлагать там Negotiate нельзя: Windows Mini-Redirector держится за более сильную схему
-    /// и крутит NTLM по кругу вместо отката на Basic.
+    /// Предлагать ли Negotiate в этом запросе. Два условия:
+    /// • Type3 есть чем проверить (<see cref="NtlmUserFile.NegotiateAvailable"/>: SSPI на Windows,
+    ///   gss-ntlmssp с нашим файлом на Linux). Иначе Mini-Redirector держится за более сильную
+    ///   схему и крутит обречённое рукопожатие вместо отката на Basic;
+    /// • запрос пришёл по HTTPS. NetNTLMv2 по открытому :80 перехватывается и перебирается
+    ///   офлайн, а в файле — хэш ОСНОВНОГО пароля.
     /// </summary>
-    private static readonly bool NtlmAvailable = OperatingSystem.IsWindows();
+    internal static bool OfferNegotiate(HttpContext ctx) =>
+        ctx.Request.IsHttps
+        && (ctx.RequestServices?.GetService<NtlmUserFile>()?.NegotiateAvailable ?? false);
 
     /// <summary>Состав заголовка WWW-Authenticate: Negotiate предлагаем только там, где его есть чем проверить.</summary>
     internal static string BuildAuthChallenge(bool ntlmAvailable) =>
@@ -43,7 +46,7 @@ public static class WebDavHandler
 
     /// <summary>Выдаёт клиенту вызов аутентификации — единственная точка состава схем.</summary>
     internal static void SendAuthChallenge(HttpContext ctx) =>
-        ctx.Response.Headers["WWW-Authenticate"] = BuildAuthChallenge(NtlmAvailable);
+        ctx.Response.Headers["WWW-Authenticate"] = BuildAuthChallenge(OfferNegotiate(ctx));
 
     public static async Task HandleAsync(HttpContext ctx)
     {
@@ -52,9 +55,9 @@ public static class WebDavHandler
         // OPTIONS:
         // • Анонимный (без Auth) — Windows WebClient зондирует анонимно, пускаем без аутентификации.
         // • С Auth-заголовком — пускаем через TryAuthenticateAsync:
-        //   - Bearer невалидный → 401 + вызов (на Windows с Negotiate: Word переключает
-        //     соединение на NTLM до LOCK; без SSPI — только Basic, см. NtlmAvailable).
-        //   - NTLM T1 → 401 + T2 (нужно для завершения рукопожатия на соединении).
+        //   - Bearer невалидный → 401 + вызов (с Negotiate — Word переключает соединение
+        //     на NTLM до LOCK; без проверки NTLM или по http — только Basic, см. OfferNegotiate).
+        //   - NTLM T1 → 401 + T2 отвечает сам Negotiate-хендлер в UseAuthentication, до нас не доходит.
         //   - NTLM T3 / Basic / Bearer валидный → 200.
         if (ctx.Request.Method.Equals("OPTIONS", StringComparison.OrdinalIgnoreCase))
         {
@@ -180,7 +183,9 @@ public static class WebDavHandler
     /// <summary>
     /// Проверяет аутентификацию запроса.
     /// Приоритет: Basic (Mini-Redirector) > JWT Bearer (Office на повторных соединениях) > NTLM Negotiate.
-    /// При NTLM Type 1/3 делегирует ASP.NET Core Negotiate-хендлеру (SSPI).
+    /// Рукопожатие NTLM целиком ведёт ASP.NET Core Negotiate-хендлер ещё в UseAuthentication
+    /// (Type1 → 401 + Type2 там же, неудачный Type3 → <see cref="NegotiateFailure"/>); сюда
+    /// доходит только завершённое рукопожатие.
     /// </summary>
     private static async Task<bool> TryAuthenticateAsync(HttpContext ctx, UserStore users)
     {
@@ -204,55 +209,44 @@ public static class WebDavHandler
                 return true;
             }
             // Токен недействителен — выдаём вызов, чтобы Word переключился на NTLM/Basic
-            if (NtlmAvailable)
-            {
-                await ctx.ChallengeAsync("Negotiate");
-                ctx.Response.Headers.Append("WWW-Authenticate", BasicChallenge);
-            }
-            else
-            {
-                SendAuthChallenge(ctx);
-            }
+            SendAuthChallenge(ctx);
             return false;
         }
 
-        // Negotiate разбираем только там, где NTLM есть чем проверить; на прочих платформах
-        // возвращаем false — вызов с одним Basic выдаст вызывающий через SendAuthChallenge.
-        if (!NtlmAvailable || !authHeader.StartsWith("Negotiate ", StringComparison.OrdinalIgnoreCase))
+        // Negotiate принимаем только там, где сами его предлагаем (есть чем проверить, HTTPS);
+        // иначе false — вызов с одним Basic выдаст вызывающий через SendAuthChallenge.
+        if (!OfferNegotiate(ctx) || !authHeader.StartsWith("Negotiate ", StringComparison.OrdinalIgnoreCase))
             return false;
 
-        // Negotiate (NTLM) — ASP.NET Core Negotiate handler обрабатывает Type1/Type3 через SSPI
-        // и сохраняет состояние в IConnectionItems между запросами одного соединения.
         var result = await ctx.AuthenticateAsync("Negotiate");
         if (result.Succeeded)
         {
             // result.Principal — не ctx.User: Negotiate не обновляет ctx.User автоматически
             var winName = result.Principal?.Identity?.Name ?? "";
             var shortName = winName.Contains('\\') ? winName.Split('\\').Last() : winName;
-            // Маппинг Windows-аккаунта на пользователя приложения по совпадению имени —
-            // только явным opt-in (WebDav:NtlmMapWindowsNames): иначе любой локальный
-            // аккаунт с именем вида "admin" входит без пароля приложения
+            ctx.RequestServices.GetService<ILoggerFactory>()?.CreateLogger(typeof(WebDavHandler).FullName!)
+                .LogInformation("WebDAV: NTLM-вход {Name}", winName);
+            // Маппинг имени на пользователя приложения — только явным opt-in
+            // (WebDav:NtlmMapWindowsNames): иначе на Windows любой локальный аккаунт с именем
+            // вида "admin" входит без пароля приложения. На Linux имя берётся из нашего же
+            // файла (пароль gss-ntlmssp уже проверил), но гейт тот же.
             var mapNtlm = ctx.RequestServices.GetRequiredService<IConfiguration>()
                 .GetValue("WebDav:NtlmMapWindowsNames", false);
-            var ntlmUser = mapNtlm ? users.FindByUsername(shortName) : null;
+            var ntlmFile = ctx.RequestServices.GetService<NtlmUserFile>();
+            var fromOurFile = OperatingSystem.IsWindows() || ntlmFile?.Contains(shortName) == true;
+            var ntlmUser = mapNtlm && fromOurFile ? users.FindByUsername(shortName) : null;
             if (ntlmUser is not null)
             {
                 ctx.Items["DavUserId"] = ntlmUser.Id;
                 return true;
             }
-            // Windows-имя не найдено в UserStore — требуем Basic, чтобы пользователь ввёл свои учётные данные.
-            // Отвечаем только Basic (без Negotiate), иначе Windows зациклится на NTLM-рукопожатии.
-            ctx.Response.StatusCode = 401;
-            ctx.Response.ContentLength = 0;
-            ctx.Response.Headers["WWW-Authenticate"] = BasicChallenge;
-            return false;
         }
 
-        // Type 1: хендлер записал Type2 в connection items → ChallengeAsync добавит его в ответ.
-        // Type 3 failure: хендлер вернул Fail.
-        await ctx.ChallengeAsync("Negotiate");
-        // Добавляем Basic как запасной вариант (Office может попробовать Basic если NTLM не удался)
-        ctx.Response.Headers.Append("WWW-Authenticate", BasicChallenge);
+        // Имя не сопоставлено (или рукопожатие не завершено) — требуем Basic. Отвечаем только
+        // Basic (без Negotiate), иначе Windows зациклится на NTLM-рукопожатии.
+        ctx.Response.StatusCode = 401;
+        ctx.Response.ContentLength = 0;
+        ctx.Response.Headers["WWW-Authenticate"] = BasicChallenge;
         return false;
     }
 

@@ -27,7 +27,7 @@ public class ComfyWorkflowsTests
         "ModelSamplingAuraFlow", "DualCLIPLoader", "TextEncodeAceStepAudio1.5", "ConditioningZeroOut",
         "EmptyAceStep1.5LatentAudio", "SaveAudioMP3", "CheckpointLoaderSimple", "YuE2GenerateABC", "YuE2GenerateMusic",
         "EmptyYuE2LatentAudio", "PreviewAny", "MiniMaxMusic3TextEncode", "EmptyMiniMaxMusic3LatentAudio",
-        "VAEDecodeAudioTiled", "CcsAudioWorker",
+        "VAEDecodeAudioTiled", "CcsAudioWorker", "AudioEncoderLoader", "SheetSage2AudioToABC",
     ];
 
     private static JsonObject Inputs(JsonObject wf, string node) => wf[node]!["inputs"]!.AsObject();
@@ -141,6 +141,7 @@ public class ComfyWorkflowsTests
             ("music-yue2", ComfyWorkflows.YuE2Music("pop", "[Verse]\nла", null, 120, 1, "p")),
             ("music-yue2-abc", ComfyWorkflows.YuE2Music("pop", "[Verse]\nла", "X:1\nK:C\nCDEF|", 120, 1, "p")),
             ("music-minimax", ComfyWorkflows.MiniMaxMusic("lofi", "[Verse]\nла", 120, 1, "p")),
+            ("music-yue2-cover", ComfyWorkflows.YuE2Cover("folk", "[Verse]\nла", "ccs-local-media/lm_1-src.mp3", 60, 1, "p")),
             ("audio-worker", ComfyWorkflows.AudioWorker("separate", new JsonObject { ["mode"] = "vocals" },
                 ["ccs-local-media/lm_1-src.wav"], "lm_1", 30)),
         }.Select(g => new object[] { g.Name, g.Graph });

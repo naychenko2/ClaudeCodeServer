@@ -73,7 +73,7 @@ GPU: на замере Seed-VC 10 минут ждал BigVGAN, заняв оче
 | Инструмент | Модели | Результат |
 |---|---|---|
 | `local_music_generate` | ACE-Step 1.5 XL-sft + LM 4B (по умолчанию), YuE2-3B int8 (**CC BY-NC**), MiniMax Music 3 | mp3; у YuE2 ещё партитура `.abc`, её можно поправить и передать обратно в `abc` |
-| `local_music_edit` | ACE-Step 1.5 turbo (cover, repaint), xl-base (extract, lego, complete) | mp3 |
+| `local_music_edit` | ACE-Step 1.5 turbo (cover, repaint), xl-base (extract, lego, complete); YuE2 — cover по мелодии исходника нативными нодами ComfyUI | mp3 (у YuE2 ещё `.abc`) |
 | `local_speech` | Qwen3-TTS 1.7B (описание голоса, диктор, клон), Chatterbox Multilingual (клон) | wav |
 | `local_voice_convert` | Seed-VC (без обучения, речь и пение, GPL-3.0), RVC/Applio (моделью голоса) | wav/mp3 |
 | `local_voice_train` | RVC/Applio | `voice.pth` + `voice.index` в проекте |

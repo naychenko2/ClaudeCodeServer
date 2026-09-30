@@ -204,7 +204,7 @@ ComfyUI граф не примет, и машина без аудиостека 
 | Инструмент | Модель (лицензия) | Что делает |
 |---|---|---|
 | `local_music_generate` | ACE-Step 1.5 XL-sft + LM 4B (MIT), YuE2-3B int8 (**CC BY-NC 4.0**), MiniMax Music 3 (Apache-2.0 у репака Comfy-Org; у оригинала лицензия не указана) | песня или инструментал 10–240 с; у YuE2 ещё партитура `.abc` |
-| `local_music_edit` | ACE-Step 1.5 turbo / xl-base (MIT) | cover, repaint, extract, lego, complete |
+| `local_music_edit` | ACE-Step 1.5 turbo / xl-base (MIT), YuE2-3B (**CC BY-NC 4.0**) | cover, repaint, extract, lego, complete; у YuE2 — cover по мелодии исходника (SheetSage2) с новыми словами |
 | `local_speech` | Qwen3-TTS 1.7B (Apache-2.0), Chatterbox Multilingual (MIT) | озвучка по описанию голоса, диктором или клоном по образцу |
 | `local_voice_convert` | Seed-VC (GPL-3.0), RVC/Applio (MIT) | смена голоса: по образцу (речь и пение) или моделью голоса |
 | `local_voice_train` | RVC/Applio (MIT) | модель голоса `.pth` + `.index` в проект; тяжёлая |
@@ -227,6 +227,7 @@ ComfyUI граф не примет, и машина без аудиостека 
 | YuE2-3B int8 | песня 180 с, русский | 60 с | 6,8 ГБ | 3,8 ГБ | CER слов 13 % |
 | MiniMax Music 3 fp16 + TE int8 | песня 175 с, русский | 267 с | 19,4 ГБ | 3,7 ГБ | CER слов 5 % |
 | ACE-Step 1.5 turbo, правка | cover / repaint 15 с из 60 | 19 / 10 с | 10,7 ГБ | 5,4 ГБ | repaint: вне куска огибающая совпадает (1,00), внутри переписана (0,50) |
+| YuE2-3B int8, cover | трек 60 с по мелодии, новые слова | 20 с | 6,6 ГБ | 3,7 ГБ | партитура мелодии `.abc` рядом |
 | ACE-Step 1.5 xl-base (fp32), правка | extract / lego / complete, трек 60 с | 37 / 29 / 28 с | 16,1 ГБ | 14,3 ГБ | extract: огибающая с вокалом 0,70, с миксом 0,48 |
 | Qwen3-TTS VoiceDesign | 26 с речи по описанию | 42 с | 5,5 ГБ | 3,8 ГБ | CER 2,7 % |
 | Qwen3-TTS, 4 куска | 101 с речи (1345 знаков) | 76 с | 9,6 ГБ | 5,3 ГБ | CER 2,5 %, голос между кусками 0,97–0,98 |
@@ -271,8 +272,8 @@ RVC (разборчивость).
 - Файлы воркера сохраняют смысловой хвост: `{jobId}-vocals.mp3`, `{jobId}-drums.mp3`,
   `{jobId}-voice.pth` — по нему агент отличает стемы. Ответ задачи несёт `audio` (звук) и `files`
   (MIDI, тексты, модель голоса, партитура).
-- Партитура YuE2 приходит текстом `PreviewAny` из истории ComfyUI и пишется в
-  `{jobId}-score.abc`; поправленную передают обратно в `abc`.
+- Партитура YuE2 (генерация и cover) приходит текстом `PreviewAny` из истории ComfyUI и пишется в
+  `{jobId}-score.abc`; поправленную передают в `abc` у `local_music_generate`.
 
 ### Грабли стенда
 

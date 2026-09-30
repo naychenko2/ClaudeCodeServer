@@ -128,6 +128,38 @@ public static partial class ComfyWorkflows
         {
             score = abc;
         }
+        AddYuE2Tail(wf, style, lyrics, score, "full", seconds, seed, filenamePrefix);
+        return wf;
+    }
+
+    public const string SheetSageEncoder = "sheetsage2_bf16.safetensors";
+
+    // YuE2 cover: шаблон audio_yue2_music_cover. SheetSage2 снимает мелодию исходника в ABC
+    // (mode melody — рекомендация авторов для каверов), YuE2 поёт по ней новые слова в новом стиле.
+    // Партитура уходит в историю через PreviewAny — её можно поправить и отдать в local_music_generate
+    public static JsonObject YuE2Cover(string style, string lyrics, string audio, double seconds, long seed,
+        string filenamePrefix)
+    {
+        var wf = new JsonObject
+        {
+            ["ckpt"] = Node("CheckpointLoaderSimple", new JsonObject { ["ckpt_name"] = YuE2Checkpoint }),
+            ["src"] = Node("LoadAudio", new JsonObject { ["audio"] = audio }),
+            ["sse"] = Node("AudioEncoderLoader", new JsonObject { ["audio_encoder_name"] = SheetSageEncoder }),
+            ["abc"] = Node("SheetSage2AudioToABC", new JsonObject
+            {
+                ["audio_encoder"] = Link("sse"),
+                ["audio"] = Link("src"),
+                ["mode"] = "melody",
+            }),
+            ["score"] = Node("PreviewAny", new JsonObject { ["source"] = Link("abc") }),
+        };
+        AddYuE2Tail(wf, style, lyrics, Link("abc"), "melody", seconds, seed, filenamePrefix);
+        return wf;
+    }
+
+    private static void AddYuE2Tail(JsonObject wf, string style, string lyrics, JsonNode score, string mode,
+        double seconds, long seed, string filenamePrefix)
+    {
         wf["gen"] = Node("YuE2GenerateMusic", new JsonObject
         {
             ["clip"] = Link("ckpt", 1),
@@ -135,7 +167,7 @@ public static partial class ComfyWorkflows
             ["lyrics"] = lyrics,
             ["abc"] = score,
             ["seed"] = seed,
-            ["mode"] = "full",
+            ["mode"] = mode,
             ["max_duration"] = seconds,
             ["temperature"] = 1.0,
             ["top_p"] = 0.95,
@@ -159,7 +191,6 @@ public static partial class ComfyWorkflows
         });
         wf["dec"] = Node("VAEDecodeAudio", new JsonObject { ["samples"] = Link("ks"), ["vae"] = Link("ckpt", 2) });
         wf["save"] = SaveMp3("dec", filenamePrefix);
-        return wf;
     }
 
     // MiniMax Music 3: шаблон audio_minimax_music_3 (30 шагов, cfg 1.7, тайловый декод)

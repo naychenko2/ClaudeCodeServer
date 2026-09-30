@@ -55,6 +55,8 @@ public sealed partial class LocalMediaService
             case LocalMediaOps.MusicEdit:
             {
                 var task = OneOf(a, "task", "cover", MusicEditTasks);
+                if (OneOf(a, "engine", "ace", ["ace", "yue2"]) == "yue2")
+                    return await BuildYuE2CoverAsync(request, a, job, root, prompt, task, seed, prefix, options, ct);
                 if (task is "cover" or "repaint" && prompt.Length == 0)
                     throw new LocalMediaInputException("Для cover и repaint нужен prompt — стиль и содержание результата.");
                 var (name, seconds) = await AudioInputAsync(request, job, root, Required(a, "audio"), "src", options, ct);
@@ -193,6 +195,27 @@ public sealed partial class LocalMediaService
         }
     }
 
+    // Кавер YuE2: мелодия исходника (SheetSage2) + новые слова и стиль. Длина — по исходнику, не больше
+    // потолка песни
+    private async Task<(JsonObject Graph, int? EtaSeconds)> BuildYuE2CoverAsync(LocalMediaRequest request, JsonObject a,
+        LocalMediaJob job, string root, string prompt, string task, long seed, string prefix, LocalMediaOptions options,
+        CancellationToken ct)
+    {
+        if (task != "cover")
+            throw new LocalMediaInputException("У engine=yue2 только task=cover; repaint, extract, lego и complete — engine=ace.");
+        if (prompt.Length == 0)
+            throw new LocalMediaInputException("Нужен prompt — стиль кавера: жанр, инструменты, голос.");
+        var lyrics = Limit(Str(a, "lyrics") ?? "", ComfyWorkflows.MaxLyricsLength, "lyrics");
+        if (lyrics.Length == 0)
+            throw new LocalMediaInputException("YuE2 поёт по словам — передай lyrics (их можно взять из local_transcribe вокала).");
+        var (name, seconds) = await AudioInputAsync(request, job, root, Required(a, "audio"), "src", options, ct);
+        var length = (int)Math.Clamp(Math.Round(seconds ?? ComfyWorkflows.MaxMusicSeconds), ComfyWorkflows.MinMusicSeconds,
+            ComfyWorkflows.MaxMusicSeconds);
+        job.Engine = "yue2";
+        job.DurationSeconds = length;
+        return (ComfyWorkflows.YuE2Cover(prompt, lyrics, name, length, seed, prefix), YuE2CoverEta(length));
+    }
+
     private static (JsonObject Graph, int? EtaSeconds) BuildMusic(JsonObject a, LocalMediaJob job, string prompt, long seed,
         string prefix)
     {
@@ -328,6 +351,9 @@ public sealed partial class LocalMediaService
     public static int? MusicEditEta(string task, double? seconds) => seconds is not { } s ? null
         : task is "extract" or "lego" or "complete" ? 20 + (int)Math.Ceiling(s * 0.3)
         : 15 + (int)Math.Ceiling(s * 0.08);
+
+    // YuE2 cover: 60 с по мелодии исходника — 20 с
+    public static int? YuE2CoverEta(int seconds) => 8 + (int)Math.Ceiling(seconds * 0.2);
 
     // Qwen3-TTS: ~12 знаков русского текста на секунду речи, синтез ≈ длине речи плюс загрузка;
     // без расшифровки образца её делает whisper на CPU (+12 с). Chatterbox быстрее ≈ на треть

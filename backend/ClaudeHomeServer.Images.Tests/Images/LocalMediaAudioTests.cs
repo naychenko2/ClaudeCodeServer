@@ -219,6 +219,36 @@ public class LocalMediaAudioTests : IDisposable
     }
 
     [Fact]
+    public async Task КаверYuE2_МелодияИсходника_ДлинаПоИсходнику_БезСловОтказ()
+    {
+        var (service, _) = Build();
+        Put("song.wav", Wav(75));
+
+        var noLyrics = await service.SubmitAsync(Audio(LocalMediaOps.MusicEdit, new JsonObject
+        {
+            ["engine"] = "yue2", ["audio"] = "song.wav",
+        }, prompt: "folk"), default);
+        var repaint = await service.SubmitAsync(Audio(LocalMediaOps.MusicEdit, new JsonObject
+        {
+            ["engine"] = "yue2", ["task"] = "repaint", ["audio"] = "song.wav", ["lyrics"] = "ла",
+        }, prompt: "folk"), default);
+        var cover = await service.SubmitAsync(Audio(LocalMediaOps.MusicEdit, new JsonObject
+        {
+            ["engine"] = "yue2", ["audio"] = "song.wav", ["lyrics"] = "[Verse]\nла-ла",
+        }, prompt: "folk"), default);
+
+        noLyrics.Error.Should().Contain("lyrics");
+        repaint.Error.Should().Contain("только task=cover");
+        cover.Error.Should().BeNull();
+        var graph = _comfy.Prompts.Single()["prompt"]!.AsObject();
+        graph["src"]!["inputs"]!["audio"]!.GetValue<string>().Should().Be($"ccs-local-media/{cover.View!.Job.Id}-src.wav");
+        graph["abc"]!["class_type"]!.GetValue<string>().Should().Be("SheetSage2AudioToABC");
+        graph["gen"]!["inputs"]!["mode"]!.GetValue<string>().Should().Be("melody");
+        graph["gen"]!["inputs"]!["max_duration"]!.GetValue<double>().Should().Be(75);
+        cover.View.EtaSeconds.Should().Be(LocalMediaService.YuE2CoverEta(75));
+    }
+
+    [Fact]
     public async Task Сбор_ЗвукВПроект_ПартитураОтдельнымФайлом()
     {
         var (service, _) = Build();

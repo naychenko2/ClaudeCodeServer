@@ -4763,5 +4763,75 @@
   "output": [],
   "output_is_list": [],
   "output_name": []
+ },
+ "AudioEncoderLoader": {
+  "input": {
+   "required": {
+    "audio_encoder_name": [
+     "COMBO",
+     {
+      "multiselect": false,
+      "options": [
+       "sheetsage2_bf16.safetensors"
+      ]
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "audio_encoder_name"
+   ]
+  },
+  "output": [
+   "AUDIO_ENCODER"
+  ],
+  "output_is_list": [
+   false
+  ],
+  "output_name": [
+   "AUDIO_ENCODER"
+  ]
+ },
+ "SheetSage2AudioToABC": {
+  "input": {
+   "required": {
+    "audio_encoder": [
+     "AUDIO_ENCODER",
+     {}
+    ],
+    "audio": [
+     "AUDIO",
+     {}
+    ],
+    "mode": [
+     "COMBO",
+     {
+      "tooltip": "full: generates melody and chords; melody: generates melody only, recommended for covers.",
+      "multiselect": false,
+      "options": [
+       "melody",
+       "full"
+      ]
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "audio_encoder",
+    "audio",
+    "mode"
+   ]
+  },
+  "output": [
+   "STRING"
+  ],
+  "output_is_list": [
+   true
+  ],
+  "output_name": [
+   "abc"
+  ]
  }
 }

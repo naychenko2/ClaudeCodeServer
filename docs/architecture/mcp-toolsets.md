@@ -362,7 +362,7 @@ Bearer-токеном инстанса (`HiggsfieldOAuthService`). Состав 
 | `local_video_upscale` | Апскейл видео прошлой t2v/i2v-задачи по её латенту до 1440p или 2K; тяжёлая |
 | `local_video_inpaint` | Перерисовка видео по маске (Fun ControlNet), видео из белого списка размеров; тяжёлая |
 | `local_music_generate` | Песня или инструментал: `engine` ace (ACE-Step 1.5 XL) / yue2 (CC BY-NC, партитура `.abc`) / minimax |
-| `local_music_edit` | Правка трека ACE-Step: cover, repaint, extract, lego, complete (последние три — тяжёлые) |
+| `local_music_edit` | Правка трека ACE-Step: cover, repaint, extract, lego, complete (последние три — тяжёлые); `engine=yue2` — cover по мелодии исходника |
 | `local_speech` | Озвучка: Qwen3-TTS по описанию `voice`, диктором `speaker` или клоном `reference`; Chatterbox — клон |
 | `local_voice_convert` | Смена голоса: Seed-VC по образцу (речь, пение) или RVC моделью из `local_voice_train` |
 | `local_voice_train` | Модель голоса RVC (`.pth` + `.index` в проект); тяжёлая |

@@ -699,7 +699,7 @@ public sealed partial class LocalMediaService(
             }
 
             // Партитура YuE2 — текстом из истории: её можно поправить и передать обратно в abc
-            if (current.Op == LocalMediaOps.MusicGenerate && history.Texts.Count > 0)
+            if (current.Op is LocalMediaOps.MusicGenerate or LocalMediaOps.MusicEdit && history.Texts.Count > 0)
             {
                 var relative = $"{folder}/{current.Id}-score.abc";
                 var full = SafePath.Join(root, relative);

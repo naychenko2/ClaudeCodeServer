@@ -59,14 +59,17 @@ public sealed partial class LocalMediaToolset
             AudioLocal + "Правка готового трека моделью ACE-Step 1.5: task=cover — переаранжировать в другом стиле "
             + "(prompt, strength — насколько держаться исходника), repaint — перегенерировать кусок start_seconds..end_seconds, "
             + "extract — вытащить одну дорожку (track), lego — дописать дорожку (track) поверх трека, complete — "
-            + "доаранжировать инструментами (tracks). extract, lego и complete — тяжёлые: модель xl-base, одна задача за раз."
+            + "доаранжировать инструментами (tracks). extract, lego и complete — тяжёлые: модель xl-base, одна задача за раз. "
+            + "engine=yue2 — только cover: YuE2 снимает мелодию исходника и поёт по ней новые слова lyrics в новом стиле "
+            + "(лицензия CC BY-NC); вместе с mp3 кладёт партитуру .abc."
             + AudioTail,
             Obj(["audio", "task"], new JsonObject
             {
                 ["audio"] = Str(AudioRefDescription),
                 ["task"] = Enum(LocalMediaService.MusicEditTasks, "cover, repaint, extract, lego или complete"),
+                ["engine"] = Enum(["ace", "yue2"], "ace (по умолчанию) или yue2 — только для cover, нужны lyrics"),
                 ["prompt"] = Str("Для cover и repaint — стиль и содержание результата; для lego — характер новой дорожки"),
-                ["lyrics"] = Str("Слова для перегенерируемого куска или кавера (необязательно)"),
+                ["lyrics"] = Str("Слова для перегенерируемого куска или кавера; у engine=yue2 обязательны"),
                 ["strength"] = Num(0, 1, "Только cover: 0 — свободно, 1 — близко к исходнику (по умолчанию 0,6)"),
                 ["start_seconds"] = Num(0, 600, "Только repaint: начало куска, с"),
                 ["end_seconds"] = Num(-1, 600, "Только repaint: конец куска, с; −1 — до конца трека"),
@@ -180,8 +183,8 @@ public sealed partial class LocalMediaToolset
         AudioOp("local_music_generate", "ACE-Step 1.5 XL-sft + LM 4B / YuE2-3B int8 (CC BY-NC) / MiniMax Music 3",
             "песня или инструментал по стилю и словам, 10–240 с",
             "ace: 3 мин песни ≈ 74 с; yue2: 3 мин ≈ 60 с; minimax: 3 мин ≈ 4,5 мин"),
-        AudioOp("local_music_edit", "ACE-Step 1.5 turbo / xl-base", "cover, repaint, extract, lego, complete",
-            "трек 60 с: cover ≈ 19 с, repaint ≈ 10 с, extract/lego/complete ≈ 30–37 с"),
+        AudioOp("local_music_edit", "ACE-Step 1.5 turbo / xl-base; YuE2-3B (cover, CC BY-NC)", "cover, repaint, extract, lego, complete",
+            "трек 60 с: cover ≈ 19 с (yue2 ≈ 20 с), repaint ≈ 10 с, extract/lego/complete ≈ 30–37 с"),
         AudioOp("local_speech", "Qwen3-TTS 1.7B / Chatterbox Multilingual",
             "озвучка по описанию голоса, диктором или клоном по образцу",
             "qwen: ≈ длина речи + 15 с (25 с речи ≈ 40 с); chatterbox ≈ на треть быстрее"),

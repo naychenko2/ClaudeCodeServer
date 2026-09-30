@@ -130,7 +130,9 @@ Viaduct Community без форка; лицензионные рамки BUSL-1.
 агентом через MCP-сервер `image-editor`, «Сохранить как…», правки без ИИ на ImageSharp — черновик),
 [ADR-019](adr/ADR-019-image-editor-v3-in-chat.md) (редактор v3: работа с картинкой в основном чате
 проекта — нити и фокус в хранилище модуля, швы ядра `IChatFeed`, `module_record` и события
-жизненного цикла чата, чаты v2 уходят в архив, реестр полос над композером);
+жизненного цикла чата, чаты v2 уходят в архив, реестр полос над композером),
+[ADR-020](adr/ADR-020-local-media-audio.md) (аудио в local-media: музыка нативными нодами ComfyUI,
+голос, стемы и реставрация — venv-воркерами через узел `CcsAudioWorker` в общей очереди GPU1);
 [model-resolution-and-fallback.md](adr/model-resolution-and-fallback.md) — приложение к ADR-007
 (резолв модели и фолбэк хода по цепочке),
 [specialties-personalization-review.md](adr/specialties-personalization-review.md) — приложение

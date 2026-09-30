@@ -185,6 +185,7 @@ one-shot действия и разговор с исполнителем «Ло
 «Автоматически»; не нарисовалось — инициалы, догоняет `ImageBackfillService` ([image-generation.md](docs/features/image-generation.md)).
 Локальная генерация (`Services/Images/LocalMedia`) — MCP-сервер `local-media`, ComfyUI на своей GPU, только по явной просьбе (с флагом `local-media-default` — по умолчанию, облако при отказе лишь с согласия);
 **граф — только из шаблонов `ComfyWorkflows`**: произвольный граф = запись файлов хоста ([local-media.md](docs/features/local-media.md)).
+Аудио (музыка, голос, стемы) — там же, модели вне venv ComfyUI идут узлом `CcsAudioWorker` в общей очереди GPU1, веса — только при установке ([ADR-020](docs/adr/ADR-020-local-media-audio.md)).
 
 ## Редактор картинок (ClaudeHomeServer.ImageEditor)
 

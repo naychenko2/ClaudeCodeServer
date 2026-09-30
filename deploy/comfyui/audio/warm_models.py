@@ -36,6 +36,8 @@ if family == "seedvc":
 elif family == "audiosr":
     for n in ["basic", "speech"]:
         print(hf_hub_download(f"haoheliu/audiosr_{n}", "pytorch_model.bin"), flush=True)
+    # текстовая часть CLAP внутри AudioSR
+    print(snapshot_download("roberta-base", allow_patterns=["*.json", "*.txt", "model.safetensors"]), flush=True)
 elif family == "whisper":
     print(snapshot_download("mobiuslabsgmbh/faster-whisper-large-v3-turbo"), flush=True)
 elif family == "qwen3tts":

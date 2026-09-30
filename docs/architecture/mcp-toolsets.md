@@ -65,7 +65,7 @@
 | `higgsfield` | [HiggsfieldToolset.cs](../../backend/ClaudeHomeServer/Services/Mcp/Http/HiggsfieldToolset.cs) | 10 (белый список из 88+) | OAuth-подключение инстанса; белый список на вызов; хвост + `GetOwned` |
 | `watch` | [WatchToolset.cs](../../backend/ClaudeHomeServer/Services/Mcp/Http/WatchToolset.cs) | 3 | хвост + `GetOwned`; per-owner стор; **без** `DelegatedTurnGate` (решение ADR-013) |
 | `websearch` | [WebSearchToolset.cs](../../backend/ClaudeHomeServer/Services/Mcp/Http/WebSearchToolset.cs) | 2 | `Perplexity:ApiKey` (пустой — сервер не объявляется); квота чтения, общая с панелью «Чтение»; SSRF-рубежи ридера |
-| `local-media` | [LocalMediaToolset.cs](../../backend/ClaudeHomeServer/Services/Mcp/Http/LocalMediaToolset.cs) | 7 | `LocalMedia:Enabled` + подсистема `images`; чат проекта на сервере (`ProjectCapabilities`); не ReadOnly-персона; задачи per-owner; лимиты очереди |
+| `local-media` | [LocalMediaToolset.cs](../../backend/ClaudeHomeServer/Services/Mcp/Http/LocalMediaToolset.cs) | 20 | `LocalMedia:Enabled` + подсистема `images`; чат проекта на сервере (`ProjectCapabilities`); не ReadOnly-персона; задачи per-owner; лимиты очереди |
 
 Итого: 13 серверов, 152 инструмента.
 
@@ -345,7 +345,7 @@ Bearer-токеном инстанса (`HiggsfieldOAuthService`). Состав 
 пропадал молча); (6) статус handshake (Failed/Connected) пишется в `McpStatusStore`
 (`RecordProbe`), иначе UI держит сервер connected с нулём инструментов.
 
-### local-media — локальная генерация картинок и видео (ComfyUI)
+### local-media — локальная генерация картинок, видео и звука (ComfyUI)
 
 [LocalMediaToolset.cs](../../backend/ClaudeHomeServer/Services/Mcp/Http/LocalMediaToolset.cs) —
 наши модели на своей GPU; движок — вертикаль Images (`Services/LocalMedia`), модели, лимиты
@@ -361,9 +361,23 @@ Bearer-токеном инстанса (`HiggsfieldOAuthService`). Состав 
 | `local_reference_to_video` | Видео по референсам: 1–9 картинок, до 3 видео (2–15 с) и 3 звуков, `identity` match/max |
 | `local_video_upscale` | Апскейл видео прошлой t2v/i2v-задачи по её латенту до 1440p или 2K; тяжёлая |
 | `local_video_inpaint` | Перерисовка видео по маске (Fun ControlNet), видео из белого списка размеров; тяжёлая |
+| `local_music_generate` | Песня или инструментал: `engine` ace (ACE-Step 1.5 XL) / yue2 (CC BY-NC, партитура `.abc`) / minimax |
+| `local_music_edit` | Правка трека ACE-Step: cover, repaint, extract, lego, complete (последние три — тяжёлые) |
+| `local_speech` | Озвучка: Qwen3-TTS по описанию `voice`, диктором `speaker` или клоном `reference`; Chatterbox — клон |
+| `local_voice_convert` | Смена голоса: Seed-VC по образцу (речь, пение) или RVC моделью из `local_voice_train` |
+| `local_voice_train` | Модель голоса RVC (`.pth` + `.index` в проект); тяжёлая |
+| `local_audio_separate` | Стемы: vocals, 4stems, 6stems, karaoke |
+| `local_audio_to_midi` | Ноты в MIDI (Basic Pitch) |
+| `local_audio_enhance` | Шумодав, верхние частоты (AudioSR), мастеринг по референсу |
+| `local_transcribe` | Текст, SRT и LRC (Whisper large-v3-turbo) |
 | `local_job_status` | Статус задачи; готовая несёт `images`/`videos` с `url` и `path` |
 | `local_jobs_wait` | Ожидание до 15 с за вызов, до 12 задач; `all_done`, `not_found` |
 | `local_models` | Операции, размеры, ориентировочное время, длина очереди ComfyUI |
+
+Аудио ([ADR-020](../adr/ADR-020-local-media-audio.md)): аргументы идут в `LocalMediaService.Audio`
+как есть (`LocalMediaRequest.Args`), белые списки и пределы там; вызов отказывает до постановки при
+выключенном `LocalMedia:AudioEnabled`. Музыка и озвучка — с тем же первым предложением
+`ExplicitOnly`, что картинки и видео; обработка звука — с `AudioLocal` без запрета.
 
 **Гейты:** узел в конфиге хода строит `SessionManager.BuildLocalMediaContext` — только при
 `LocalMedia:Enabled` и включённой подсистеме `images`, в чате проекта с файлами на сервере

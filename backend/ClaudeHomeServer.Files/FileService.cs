@@ -339,11 +339,12 @@ public class FileService(
     {
         var path = SafeJoin(rootPath, relativePath);
         if (!File.Exists(path)) return false;
+        // Медиа — по тем же спискам, что и выбор плеера, иначе wav/webm/webp читались бы текстом
+        if (IsImageFile(rootPath, relativePath) || IsVideoFile(relativePath) || IsAudioFile(relativePath))
+            return true;
         var ext = Path.GetExtension(path).ToLowerInvariant();
         var binaryExts = new[] { ".zip", ".tar", ".gz", ".exe", ".dll", ".bin", ".pdf",
-            ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".svg",
-            ".mp3", ".mp4", ".avi", ".mov", ".wasm", ".so", ".dylib",
-            ".ppt" };
+            ".ico", ".wasm", ".so", ".dylib", ".ppt" };
         return binaryExts.Contains(ext);
     }
 

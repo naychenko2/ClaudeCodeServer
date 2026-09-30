@@ -494,6 +494,32 @@ public class FileServiceTests : IDisposable
         _svc.IsBinaryFile(_root, "ghost.exe").Should().BeFalse();
     }
 
+    [Theory]
+    [InlineData("voice.wav")]
+    [InlineData("track.flac")]
+    [InlineData("clip.webm")]
+    [InlineData("pic.webp")]
+    public void IsBinaryFile_MediaExtensions_ReturnsTrue(string filename)
+    {
+        File.WriteAllBytes(Path.Combine(_root, filename), [1, 2, 3]);
+        _svc.IsBinaryFile(_root, filename).Should().BeTrue();
+    }
+
+    [Fact]
+    public void FileContentReader_Wav_IsAudioWithWavMime()
+    {
+        File.WriteAllBytes(Path.Combine(_root, "voice.wav"), [0x52, 0x49, 0x46, 0x46]);
+        var view = FileContentReader.Read(_svc, _root, "voice.wav");
+        view.IsAudio.Should().BeTrue();
+        view.MimeType.Should().Be("audio/wav");
+    }
+
+    [Fact]
+    public void FileContentReader_StreamMime_Wav_IsAudioWav()
+    {
+        FileContentReader.StreamMime("a.wav").Should().Be("audio/wav");
+    }
+
     // ─── IsImageFile ─────────────────────────────────────────────────────────
 
     [Theory]

@@ -128,7 +128,11 @@ class CcsAudioWorker:
         log.info("аудио-воркер %s (%s): старт", op, OPS[op])
         # Веса ставятся при установке: скачивание внутри задачи держало бы общую очередь GPU
         env = dict(os.environ, PYTHONUNBUFFERED="1", HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1")
-        env.pop("PYTHONPATH", None)
+        # у воркера свой venv и свой torch: библиотеки ComfyUI (cu13) и его аллокатор
+        # (cuda_malloc.py ставит PYTORCH_CUDA_ALLOC_CONF=backend:cudaMallocAsync) ему чужие —
+        # AudioSR с ними забивал 24 ГБ и шёл втрое медленнее
+        for key in ("PYTHONPATH", "LD_LIBRARY_PATH", "LD_PRELOAD", "PYTORCH_CUDA_ALLOC_CONF"):
+            env.pop(key, None)
         # переменные семейства из машинного конфига (каталоги весов и т. п.)
         env.update({str(k): str(v) for k, v in (family.get("env") or {}).items()})
         proc = subprocess.Popen([family["python"], family["script"], job_path], env=env,

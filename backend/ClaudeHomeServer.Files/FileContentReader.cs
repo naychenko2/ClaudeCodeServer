@@ -27,13 +27,14 @@ public static class FileContentReader
         return new FileContentView(null, true, false, MimeType: "application/octet-stream", FileSize: files.GetFileSize(root, path));
     }
 
-    /// <summary>MIME отдачи потоком: видео для плеера, картинки для &lt;img src&gt; в markdown.</summary>
+    /// <summary>MIME отдачи потоком: видео и аудио для плеера, картинки для &lt;img src&gt; в markdown.</summary>
     public static string StreamMime(string path)
     {
         var ext = Path.GetExtension(path).TrimStart('.').ToLowerInvariant();
         return ext switch
         {
             "mp4" or "webm" or "mov" or "avi" or "mkv" => VideoMime(ext),
+            "mp3" or "wav" or "ogg" or "flac" or "aac" or "m4a" or "opus" or "weba" => AudioMime(ext),
             // Без типа браузер угадывает по содержимому, а SVG в таком режиме не рендерится вовсе
             "png" or "gif" or "bmp" or "webp" or "avif" => $"image/{ext}",
             "jpg" or "jpeg" => "image/jpeg",

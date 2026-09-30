@@ -3,8 +3,8 @@ namespace ClaudeHomeServer.Services.ImageEditor;
 // Поставщик «Локальные модели» (ADR-018, раздел «Локальные модели»): Qwen-Image 2.1 и
 // FaceDetailer в ComfyUI на своей видеокарте через Core-шов ILocalImageMedia — вертикаль Images
 // модулю не видна. Денег нет: котировка — ноль в единицах free плюс время по таблице замеров и
-// длина очереди GPU. Доступен всем; нет шва (Images выключена), тумблера LocalMedia:Enabled или
-// живого ComfyUI — поставщик скрыт в каталоге.
+// длина очереди GPU. Доступен всем; нет шва (Images выключена) или тумблера LocalMedia:Enabled —
+// поставщик не заведён и скрыт в каталоге, а лежащий ComfyUI — лишь «недоступен» (IImageEditor.Registered).
 //
 // Канала маски у Qwen-Image нет: маска и размеченная копия уходят образцами с ролями в запросе
 // (MaskSupport.AsReference), порядок картинок задаёт EditRequestComposer. Исключение — «удали»
@@ -34,6 +34,7 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
     public string Label => "Локальные модели";
     public string PriceUnit => ImageEditPriceUnits.Free;
     public bool Enabled => media?.Available == true;
+    public bool Registered => media?.Configured == true;
     public IReadOnlyList<ImageEditModelInfo> Models => Catalog;
 
     // Генерация — до 4 вариантов, прогон на вариант; правка — до 16 картинок всего (холст и 15 образцов)

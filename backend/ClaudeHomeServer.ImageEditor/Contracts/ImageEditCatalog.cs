@@ -1,8 +1,8 @@
 namespace ClaudeHomeServer.Services.ImageEditor;
 
-// Каталог редактора для фронта (ADR-017, раздел 2): только поставщики, доступные СЕЙЧАС,
-// их курируемые модели с caps и умолчание админа места image-editor. Чистая функция над
-// драйверами — без DI и без состояния, поэтому её не нужно регистрировать.
+// Каталог редактора для фронта (ADR-017, раздел 2): заведённые поставщики с пометкой, доступны ли
+// они СЕЙЧАС, их курируемые модели с caps и умолчание админа места image-editor. Чистая функция
+// над драйверами — без DI и без состояния, поэтому её не нужно регистрировать.
 //
 // Ненастроенный поставщик скрыт, а не роняет ответ: драйвер, у которого проверка
 // доступности или список моделей бросили исключение, считается недоступным.
@@ -83,20 +83,43 @@ public static class ImageEditCatalog
             .ThenBy(e => e.Key, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
+    // Заведённые поставщики (в том числе лежащие сейчас) в порядке показа
+    public static IReadOnlyList<IImageEditor> Registered(IEnumerable<IImageEditor> editors) =>
+        editors
+            .Where(IsRegistered)
+            .OrderBy(e => OrderOf(e.Key))
+            .ThenBy(e => e.Key, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
     public static IImageEditor? FindAvailable(IEnumerable<IImageEditor> editors, string? key) =>
         string.IsNullOrWhiteSpace(key)
             ? null
             : Available(editors).FirstOrDefault(e => string.Equals(e.Key, key.Trim(), StringComparison.OrdinalIgnoreCase));
 
+    // Текст отказа provider_unavailable: заведённый, но лежащий поставщик — «сейчас недоступен»,
+    // а не «не настроен»: админ его настроил, и человеку незачем идти к нему
+    public static string UnavailableError(IEnumerable<IImageEditor> editors, string? key)
+    {
+        var registered = string.IsNullOrWhiteSpace(key)
+            ? null
+            : Registered(editors).FirstOrDefault(e => string.Equals(e.Key, key.Trim(), StringComparison.OrdinalIgnoreCase));
+        return registered is null
+            ? $"Поставщик «{key}» не настроен или отключён администратором"
+            : $"Поставщик «{registered.Label}» сейчас недоступен";
+    }
+
     // adminProvider / adminModel — настройка места image-editor (auto | ключ поставщика).
-    // Умолчание админа на недоступного поставщика молча уступает первому доступному:
-    // человек ещё ничего не выбрал и не потратил.
+    // Явный выбор админа не подменяется соседом (инвариант модуля «явно выбранного поставщика не
+    // подменяем», ImageEditor/CLAUDE.md): он ищется среди ЗАВЕДЁННЫХ, и лежащий local остаётся
+    // умолчанием — запуск на него честно отказывает с котировкой облака (retryQuote), а не уходит
+    // в облако молча. Прежняя уступка первому доступному тратила деньги там, где админ выбрал
+    // бесплатное. «Авто» по-прежнему берёт первого ДОСТУПНОГО по ProviderOrder; local в нём
+    // последний намеренно: доступность мигает, и «Авто» с local первым молча уходило бы в облако.
     public static ImageEditCatalogDto Build(
         IEnumerable<IImageEditor> editors, string? adminProvider, string? adminModel,
         ImageEditLimitsDto? limits = null)
     {
-        var available = Available(editors);
-        var providers = available.Select(Describe).ToList();
+        var providers = Registered(editors).Select(e => Describe(e, IsAvailable(e))).ToList();
 
         ImageEditDefaultDto def;
         var preferred = IsAuto(adminProvider) ? null : providers.FirstOrDefault(p =>
@@ -111,7 +134,7 @@ public static class ImageEditCatalog
         }
         else
         {
-            def = new ImageEditDefaultDto(providers.FirstOrDefault()?.Key, AutoModelId);
+            def = new ImageEditDefaultDto(providers.FirstOrDefault(p => p.Available)?.Key, AutoModelId);
         }
 
         var reason = providers.Count == 0 ? ImageEditCatalogReasons.NoProviderConfigured : null;
@@ -124,7 +147,7 @@ public static class ImageEditCatalog
         && (string.Equals(model.Trim(), AutoModelId, StringComparison.OrdinalIgnoreCase)
             || SafeModels(editor).Any(m => string.Equals(m.Id, model.Trim(), StringComparison.OrdinalIgnoreCase)));
 
-    private static ImageEditProviderDto Describe(IImageEditor editor)
+    private static ImageEditProviderDto Describe(IImageEditor editor, bool available)
     {
         var models = new List<ImageEditModelDto>
         {
@@ -132,14 +155,26 @@ public static class ImageEditCatalog
         };
         models.AddRange(SafeModels(editor).Select(WithInputLimits)
             .Select(m => new ImageEditModelDto(m.Id, m.Label, null, m.Caps, m.PriceHint)));
-        return new ImageEditProviderDto(editor.Key, editor.Label, editor.PriceUnit, models);
+        return new ImageEditProviderDto(editor.Key, editor.Label, editor.PriceUnit, models, available);
     }
 
     private static bool IsAvailable(IImageEditor editor)
     {
         try
         {
-            return editor.Enabled && !string.IsNullOrWhiteSpace(editor.Key);
+            return IsRegistered(editor) && editor.Enabled;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool IsRegistered(IImageEditor editor)
+    {
+        try
+        {
+            return editor.Registered && !string.IsNullOrWhiteSpace(editor.Key);
         }
         catch
         {

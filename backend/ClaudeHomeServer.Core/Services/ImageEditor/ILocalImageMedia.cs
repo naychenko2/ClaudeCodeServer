@@ -15,6 +15,9 @@ public interface ILocalImageMedia
     // проверка живости кешируется
     bool Available { get; }
 
+    // Тумблер LocalMedia:Enabled включён — поставщик заведён, даже если ComfyUI сейчас лежит
+    bool Configured { get; }
+
     // Длина общей очереди ComfyUI (идущая плюс ждущие, с чужими прогонами); null — недоступен
     Task<int?> QueueLengthAsync(CancellationToken ct);
 

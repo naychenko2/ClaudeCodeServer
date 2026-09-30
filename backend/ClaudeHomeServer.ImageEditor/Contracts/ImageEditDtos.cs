@@ -17,11 +17,14 @@ public record ImageEditModelDto(
     ImageEditCaps? Caps,
     ImageEditPriceHint? PriceHint);
 
+// Available: false — поставщик заведён, но сейчас не отвечает (локальная видеокарта лежит):
+// в списке он виден с пометкой «недоступен», запуск на него даёт provider_unavailable
 public record ImageEditProviderDto(
     string Key,
     string Label,
     string PriceUnit,
-    IReadOnlyList<ImageEditModelDto> Models);
+    IReadOnlyList<ImageEditModelDto> Models,
+    bool Available = true);
 
 // HeavyFileMb — порог «тяжёлого файла» для диалога сохранения (ImageEditor:HeavyFileMb,
 // ADR-018 §9): больше — предложить сжатие, но не блокировать

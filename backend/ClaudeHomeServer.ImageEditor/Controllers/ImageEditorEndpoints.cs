@@ -56,7 +56,7 @@ public abstract class ImageEditorEndpoints(
         var editor = ImageEditCatalog.FindAvailable(editors, req.Provider);
         if (editor is null)
             return Error(StatusCodes.Status409Conflict, ImageEditErrorCodes.ProviderUnavailable,
-                $"Поставщик «{req.Provider}» не настроен или отключён администратором");
+                ImageEditCatalog.UnavailableError(editors, req.Provider));
         if (!ImageEditCatalog.HasModel(editor, req.Model))
             return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
                 $"Модели «{req.Model}» нет у поставщика {editor.Label}");

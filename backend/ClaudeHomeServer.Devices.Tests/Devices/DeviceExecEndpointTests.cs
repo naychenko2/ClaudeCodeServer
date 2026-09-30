@@ -5,7 +5,7 @@ using System.Text;
 using System.Threading.Channels;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
-using ClaudeHomeServer.Services.Desktop;
+using ClaudeHomeServer.Services.Devices;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
@@ -13,7 +13,7 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
-namespace ClaudeHomeServer.Tests.Services.Desktop;
+namespace ClaudeHomeServer.Tests.Services.Devices;
 
 // WebSocket /api/devices/exec на настоящем конвейере (ADR-016, задача 2.1): канал открывает
 // ТОЛЬКО токен устройства с отпечатком — пользовательский JWT и сервисный JWT владельца
@@ -73,7 +73,7 @@ public class DeviceExecEndpointTests : IDisposable
     {
         var request = ExecRequest(version, execId);
         request.Headers.Authorization = new AuthenticationHeaderValue("Device", _deviceToken);
-        request.Headers.Add(DesktopDeviceAuthHandler.FingerprintHeader, fingerprint ?? _fingerprint);
+        request.Headers.Add(DeviceAuthHandler.FingerprintHeader, fingerprint ?? _fingerprint);
         return request;
     }
 
@@ -90,7 +90,7 @@ public class DeviceExecEndpointTests : IDisposable
     {
         var request = new HttpRequestMessage(HttpMethod.Post, "/hubs/devices/negotiate?negotiateVersion=1");
         request.Headers.Authorization = new AuthenticationHeaderValue("Device", _deviceToken);
-        request.Headers.Add(DesktopDeviceAuthHandler.FingerprintHeader, _fingerprint);
+        request.Headers.Add(DeviceAuthHandler.FingerprintHeader, _fingerprint);
         return request;
     }
 
@@ -204,7 +204,7 @@ public class DeviceExecEndpointTests : IDisposable
         ws.ConfigureRequest = r =>
         {
             r.Headers.Authorization = $"Device {_deviceToken}";
-            r.Headers[DesktopDeviceAuthHandler.FingerprintHeader] = _fingerprint;
+            r.Headers[DeviceAuthHandler.FingerprintHeader] = _fingerprint;
             r.Headers[DeviceExecProtocol.VersionHeader] = DeviceExecProtocol.Version.ToString();
         };
         return await ws.ConnectAsync(new Uri($"ws://localhost{DeviceExecProtocol.Path}?execId={execId}"), CancellationToken.None);

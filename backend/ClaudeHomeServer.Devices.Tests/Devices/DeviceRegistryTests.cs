@@ -1,7 +1,7 @@
-using ClaudeHomeServer.Services.Desktop;
+using ClaudeHomeServer.Services.Devices;
 using FluentAssertions;
 
-namespace ClaudeHomeServer.Tests.Services.Desktop;
+namespace ClaudeHomeServer.Tests.Services.Devices;
 
 /// <summary>
 /// Реестр устройств десктопного агента (ADR-008, «Аутентификация и транспорт»).

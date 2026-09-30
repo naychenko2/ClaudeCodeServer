@@ -9,7 +9,7 @@ using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Composition.Llm;
 using ClaudeHomeServer.Services.Composition.Notifications;
 using ClaudeHomeServer.Services.Knowledge;
-using ClaudeHomeServer.Services.Desktop;
+using ClaudeHomeServer.Services.Devices;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Services.Team;
@@ -780,40 +780,41 @@ builder.Services.AddGatedHostedFrom(builder.Configuration, sp =>
 // === Канал устройства (ADR-016): агент локальных проектов на машине пользователя ===
 // Реестр устройств и хеши их токенов — единственный стор канала; живые соединения хаба
 // живут только в памяти.
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DeviceRegistry>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DevicePairingService>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DeviceConnectionRegistry>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Devices.DeviceRegistry>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Devices.DevicePairingService>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Devices.DeviceConnectionRegistry>();
 // Статус рук локального проекта (ADR-016 §7) — в чат хода из донесений агента
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.ILocalHandsNotifier,
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Devices.ILocalHandsNotifier,
     ClaudeHomeServer.Services.Composition.LocalHandsNotifier>();
 // Наблюдатель соединений — диспетчер выхода устройства в онлайн (ADR-016, план §5;
 // регистрация блоком ниже): форвард на тот же синглтон, не второй экземпляр.
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDeviceConnectionObserver>(
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Devices.IDeviceConnectionObserver>(
     sp => sp.GetRequiredService<ClaudeHomeServer.Services.Composition.DeviceOnlineDispatcher>());
 // Канал исполнения локальных проектов (ADR-016): шов IDeviceExecChannel (Core) — форвард
 // на тот же синглтон, который обслуживает WebSocket /api/devices/exec и Hello хаба.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IHostCliVersion, ClaudeHomeServer.Services.Execution.HostCliVersion>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DeviceHarnessPolicy>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDeviceExecOpenSender,
-    ClaudeHomeServer.Services.Desktop.DeviceHubExecOpenSender>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Devices.DeviceHarnessPolicy>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Devices.IDeviceExecOpenSender,
+    ClaudeHomeServer.Services.Devices.DeviceHubExecOpenSender>();
 // Каталог релизов агента устройства (agent-distribution Р3, Р5): его читают и ack хаба, и
 // анонимная раздача AgentDownloadsController. Тумблер Subsystems:desktop:Enabled пока гасит
-// только раздачу агента (Desktop не оформлен подсистемой IAppSubsystem): нет регистрации —
-// каталог null, раздача отвечает 503 с причиной, ack не называет версий.
+// только раздачу агента (Devices не оформлена подсистемой IAppSubsystem, ключ тумблера —
+// `desktop` ради совместимости с конфигами): нет регистрации — каталог null, раздача
+// отвечает 503 с причиной, ack не называет версий.
 if (SubsystemGate.IsEnabled(builder.Configuration, "desktop"))
-    builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.AgentReleaseCatalog>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DeviceExecChannel>();
+    builder.Services.AddSingleton<ClaudeHomeServer.Services.Devices.AgentReleaseCatalog>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Devices.DeviceExecChannel>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IDeviceExecChannel>(
-    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Desktop.DeviceExecChannel>());
+    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Devices.DeviceExecChannel>());
 // Ретранслятор чтения для других устройств (ADR-016 §5) — тот же канал исполнения
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IDeviceRelayChannel>(
-    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Desktop.DeviceExecChannel>());
+    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Devices.DeviceExecChannel>());
 // Выдача папки локального проекта агентом (решение владельца 2026-09-27) — он же
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IDeviceFolderBindChannel>(
-    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Desktop.DeviceExecChannel>());
+    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Devices.DeviceExecChannel>());
 // Билеты браузера к localhost-API агента и доставка событий его ватчера в веб-морду
 // (ADR-016, задача 4.2): только память, рестарт бэкенда отзывает все билеты.
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.AgentTicketService>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Devices.AgentTicketService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.IProjectFilesChangedNotifier,
     ClaudeHomeServer.Services.Composition.ProjectFilesChangedNotifier>();
 
@@ -1235,7 +1236,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer()
     .AddNegotiate()
     // токен устройства: 256 бит, на сервере только хеш в data/devices.json
-    .AddDesktopDeviceAuth();
+    .AddDeviceAuth();
 builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme)
     .Configure<JwtService>((opts, jwt) =>
     {
@@ -1722,7 +1723,7 @@ if (inspectionMode)
 }
 
 // Хаб устройств и канал исполнения — только HTTPS или петля, как сопряжение (ADR-008)
-ClaudeHomeServer.Services.Desktop.DeviceChannelGuard.UseDeviceChannelGuard(app);
+ClaudeHomeServer.Services.Devices.DeviceChannelGuard.UseDeviceChannelGuard(app);
 app.UseAuthentication();
 app.UseAuthorization();
 
@@ -2099,7 +2100,7 @@ app.MapHub<SessionHub>("/hubs/session");
 app.MapHub<TerminalHub>("/hubs/terminal");
 // Канал десктопного агента (ADR-008): исходящее соединение клиента с машины пользователя,
 // push команды в конкретное соединение. Схема авторизации — токен устройства, а не общий JWT
-app.MapHub<ClaudeHomeServer.Services.Desktop.DeviceHub>("/hubs/devices");
+app.MapHub<ClaudeHomeServer.Services.Devices.DeviceHub>("/hubs/devices");
 // Шлюз LLM локальных проектов (ADR-016): авторизация — токен хода, а не JWT; выключен
 // тумблером LlmGateway:Enabled (404). Подсистема llm отключаемая — маппим только при ней.
 if (app.Services.GetService<ClaudeHomeServer.Services.Llm.Gateway.UpstreamSelector>() is not null)

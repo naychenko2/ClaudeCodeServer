@@ -5,7 +5,7 @@ using System.Text;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
-using ClaudeHomeServer.Services.Desktop;
+using ClaudeHomeServer.Services.Devices;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -107,13 +107,13 @@ public class DevicesController(
     /// сервисный токен эту ручку не открывают. Какое устройство отзывать, берётся из токена,
     /// а не из запроса: чужое так не снять. Результат — то же надгробие, что при отзыве из веба.
     /// </summary>
-    [Authorize(AuthenticationSchemes = DesktopDeviceAuthHandler.SchemeName)]
+    [Authorize(AuthenticationSchemes = DeviceAuthHandler.SchemeName)]
     [HttpDelete("self")]
     public IActionResult RevokeSelf()
     {
         var ownerId = User.FindFirstValue(JwtRegisteredClaimNames.Sub);
-        var deviceId = User.FindFirstValue(DesktopDeviceAuthHandler.DeviceIdClaim);
-        if (User.Identity?.AuthenticationType != DesktopDeviceAuthHandler.SchemeName
+        var deviceId = User.FindFirstValue(DeviceAuthHandler.DeviceIdClaim);
+        if (User.Identity?.AuthenticationType != DeviceAuthHandler.SchemeName
             || string.IsNullOrEmpty(ownerId) || string.IsNullOrEmpty(deviceId))
             return Unauthorized();
 

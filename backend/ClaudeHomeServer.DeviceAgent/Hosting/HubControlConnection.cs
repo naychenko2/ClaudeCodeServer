@@ -11,7 +11,7 @@ namespace ClaudeHomeServer.DeviceAgent.Hosting;
 /// <summary>
 /// Канал управления — тот же хаб /hubs/devices, что у клиента рук ADR-008: авторизация
 /// только токеном устройства плюс отпечаток. Имена методов — часть протокола
-/// (<c>IDesktopDeviceClient</c> на сервере).
+/// (<c>IDeviceClient</c> на сервере).
 /// </summary>
 internal sealed class HubControlConnection : IControlConnection, IAgentTicketIntrospector, IFilesChangedSink,
     Hands.IHandsStatusSink, IAsyncDisposable
@@ -35,7 +35,6 @@ internal sealed class HubControlConnection : IControlConnection, IAgentTicketInt
             .Build();
 
         _connection.On<DeviceExecOpenCommand>("ExecOpen", command => ExecOpen?.Invoke(command) ?? Task.CompletedTask);
-        // Команды рук ADR-008 агенту не адресованы: SupportedSteps пуст, сервер их не шлёт
         _connection.Reconnected += _ => Reconnected?.Invoke() ?? Task.CompletedTask;
     }
 

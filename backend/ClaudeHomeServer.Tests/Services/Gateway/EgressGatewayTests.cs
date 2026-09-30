@@ -3,7 +3,7 @@ using System.Net.Sockets;
 using System.Net.WebSockets;
 using System.Text;
 using ClaudeHomeServer.Protocol;
-using ClaudeHomeServer.Services.Desktop;
+using ClaudeHomeServer.Services.Devices;
 using ClaudeHomeServer.Services.Llm.Gateway;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
@@ -156,7 +156,7 @@ public sealed class EgressGatewayTests : IDisposable
         var ws = ((TestServer)factory.Server).CreateWebSocketClient();
         ws.ConfigureRequest = r =>
         {
-            r.Headers["Authorization"] = DesktopDeviceAuthHandler.TokenPrefix + device.Token;
+            r.Headers["Authorization"] = DeviceAuthHandler.TokenPrefix + device.Token;
             r.Headers[TurnTokenEndpointFilter.DeviceFingerprintHeader] = GatewayTestDevice.Fingerprint;
             r.Headers[TurnTokenEndpointFilter.HeaderName] = turn.Token;
         };
@@ -291,7 +291,7 @@ public sealed class EgressGatewayTests : IDisposable
         var ws = ((TestServer)factory.Server).CreateWebSocketClient();
         ws.ConfigureRequest = r =>
         {
-            r.Headers["Authorization"] = DesktopDeviceAuthHandler.TokenPrefix + device.Token;
+            r.Headers["Authorization"] = DeviceAuthHandler.TokenPrefix + device.Token;
             r.Headers[TurnTokenEndpointFilter.DeviceFingerprintHeader] = GatewayTestDevice.Fingerprint;
             r.Headers[TurnTokenEndpointFilter.HeaderName] = turn.Token;
         };

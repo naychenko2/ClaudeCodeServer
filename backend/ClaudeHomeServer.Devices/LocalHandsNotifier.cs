@@ -1,4 +1,4 @@
-namespace ClaudeHomeServer.Services.Desktop;
+namespace ClaudeHomeServer.Services.Devices;
 
 /// <summary>
 /// Рассылка статуса рук локального проекта (ADR-016 §7) в чат хода — событие <c>hands_status</c>.

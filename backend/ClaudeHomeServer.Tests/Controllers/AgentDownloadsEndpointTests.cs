@@ -2,7 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
-using ClaudeHomeServer.Services.Desktop;
+using ClaudeHomeServer.Services.Devices;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.AspNetCore.Hosting;
@@ -150,7 +150,7 @@ public class AgentDownloadsEndpointTests : IDisposable
     {
         var request = new HttpRequestMessage(HttpMethod.Delete, "/api/devices/self");
         if (token is not null) request.Headers.Authorization = new AuthenticationHeaderValue("Device", token);
-        if (fingerprint is not null) request.Headers.Add(DesktopDeviceAuthHandler.FingerprintHeader, fingerprint);
+        if (fingerprint is not null) request.Headers.Add(DeviceAuthHandler.FingerprintHeader, fingerprint);
         return request;
     }
 

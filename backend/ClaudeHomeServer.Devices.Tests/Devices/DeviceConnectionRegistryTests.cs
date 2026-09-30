@@ -1,9 +1,9 @@
 using ClaudeHomeServer.Protocol;
-using ClaudeHomeServer.Services.Desktop;
+using ClaudeHomeServer.Services.Devices;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 
-namespace ClaudeHomeServer.Tests.Services.Desktop;
+namespace ClaudeHomeServer.Tests.Services.Devices;
 
 // Реестр соединений хаба устройств (ADR-016): до Hello устройство командам недоступно,
 // Hello делает его онлайн и будит наблюдателей, разрыв гасит.

@@ -1,5 +1,5 @@
 using ClaudeHomeServer.Protocol;
-using ClaudeHomeServer.Services.Desktop;
+using ClaudeHomeServer.Services.Devices;
 using ClaudeHomeServer.Services.Execution;
 
 namespace ClaudeHomeServer.Services.Composition;

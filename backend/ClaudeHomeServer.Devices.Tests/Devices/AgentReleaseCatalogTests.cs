@@ -1,8 +1,8 @@
 using ClaudeHomeServer.Protocol;
-using ClaudeHomeServer.Services.Desktop;
+using ClaudeHomeServer.Services.Devices;
 using ClaudeHomeServer.Tests.Helpers;
 
-namespace ClaudeHomeServer.Tests.Services.Desktop;
+namespace ClaudeHomeServer.Tests.Services.Devices;
 
 /// <summary>
 /// Каталог релизов агента (agent-distribution AD-3, Р3, Р11): всё, что пришло с диска,

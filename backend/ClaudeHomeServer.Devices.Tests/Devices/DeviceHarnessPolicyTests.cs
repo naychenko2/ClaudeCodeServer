@@ -1,9 +1,9 @@
-using ClaudeHomeServer.Services.Desktop;
+using ClaudeHomeServer.Services.Devices;
 using ClaudeHomeServer.Services.Execution;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 
-namespace ClaudeHomeServer.Tests.Services.Desktop;
+namespace ClaudeHomeServer.Tests.Services.Devices;
 
 // Устройства идут за хостом: требуемая версия CLI — версия CLI сервера, конфиг — только
 // аварийный пин поверх неё.

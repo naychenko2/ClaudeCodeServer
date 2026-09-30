@@ -1,11 +1,11 @@
-using ClaudeHomeServer.Services.Desktop;
+using ClaudeHomeServer.Services.Devices;
 using ClaudeHomeServer.Services.Llm.Gateway;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Tests.Services.Gateway;
 
 // Учётка устройства для тестов шлюза: настоящий DeviceRegistry во временном каталоге и
-// настоящая схема DesktopDeviceAuthHandler — вход шлюза принимает токен хода только вместе
+// настоящая схема DeviceAuthHandler — вход шлюза принимает токен хода только вместе
 // с ней (ADR-016 §2).
 public sealed class GatewayTestDevice : IDisposable
 {
@@ -33,14 +33,14 @@ public sealed class GatewayTestDevice : IDisposable
     public void AddTo(IServiceCollection services)
     {
         services.AddSingleton(Registry);
-        services.AddAuthentication().AddDesktopDeviceAuth();
+        services.AddAuthentication().AddDeviceAuth();
     }
 
     public HttpRequestMessage Sign(HttpRequestMessage request) => Sign(request, Token, Fingerprint);
 
     public static HttpRequestMessage Sign(HttpRequestMessage request, string deviceToken, string fingerprint)
     {
-        request.Headers.TryAddWithoutValidation("Authorization", DesktopDeviceAuthHandler.TokenPrefix + deviceToken);
+        request.Headers.TryAddWithoutValidation("Authorization", DeviceAuthHandler.TokenPrefix + deviceToken);
         request.Headers.TryAddWithoutValidation(TurnTokenEndpointFilter.DeviceFingerprintHeader, fingerprint);
         return request;
     }

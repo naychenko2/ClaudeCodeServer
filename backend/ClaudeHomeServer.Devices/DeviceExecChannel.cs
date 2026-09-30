@@ -5,7 +5,7 @@ using ClaudeHomeServer.Services.Execution;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
 
-namespace ClaudeHomeServer.Services.Desktop;
+namespace ClaudeHomeServer.Services.Devices;
 
 /// <summary>
 /// Отправка команды открытия канала исполнения в КОНКРЕТНОЕ соединение хаба устройства.
@@ -17,7 +17,7 @@ public interface IDeviceExecOpenSender
 }
 
 /// <summary>Боевой отправитель — push через хаб устройств.</summary>
-public sealed class DeviceHubExecOpenSender(IHubContext<DeviceHub, IDesktopDeviceClient> hub) : IDeviceExecOpenSender
+public sealed class DeviceHubExecOpenSender(IHubContext<DeviceHub, IDeviceClient> hub) : IDeviceExecOpenSender
 {
     public Task SendExecOpenAsync(string connectionId, DeviceExecOpenCommand command, CancellationToken ct = default)
         => hub.Clients.Client(connectionId).ExecOpen(command);
@@ -92,7 +92,7 @@ public sealed class DeviceExecChannel : IDeviceExecChannel, IDeviceRelayChannel,
     }
 
     // Минимальная версия — свойство кода и уходит всегда; текущая — только если сервер
-    // раздаёт агента (выключенный Desktop или пустой каталог — null), архив — только под
+    // раздаёт агента (выключенный канал устройств или пустой каталог — null), архив — только под
     // RID, который агент объявил сам.
     private DeviceHelloAck WithAgentRelease(DeviceHelloAck ack, string agentVersion, string? rid)
     {

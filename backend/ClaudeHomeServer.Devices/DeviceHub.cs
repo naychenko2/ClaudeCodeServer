@@ -5,10 +5,10 @@ using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Execution;
 using Microsoft.AspNetCore.SignalR;
 
-namespace ClaudeHomeServer.Services.Desktop;
+namespace ClaudeHomeServer.Services.Devices;
 
 /// <summary>Сервер → устройство. Строго типизированный клиент: имена методов — часть протокола.</summary>
-public interface IDesktopDeviceClient
+public interface IDeviceClient
 {
     /// <summary>
     /// Открыть канал исполнения (ADR-016): устройство подключается WebSocket'ом к
@@ -28,7 +28,7 @@ public interface IDesktopDeviceClient
 /// идёт отдельным WebSocket <see cref="DeviceExecProtocol.Path"/>.
 ///
 /// Живёт в самой вертикали, а не в <c>Hubs/</c> рядом с <c>SessionHub</c>/<c>TerminalHub</c>
-/// (Этап 5, вынос Desktop): это ОТДЕЛЬНЫЙ канал устройств, и все его зависимости —
+/// (Этап 5, вынос Devices): это ОТДЕЛЬНЫЙ канал устройств, и все его зависимости —
 /// собственные (<see cref="DeviceConnectionRegistry"/>, <see cref="DeviceExecChannel"/>).
 /// Оставить хаб в Main означало бы цикл Main.Hubs ⇄ вертикаль: хаб зовёт канал исполнения,
 /// канал пушит в хаб через <c>IHubContext&lt;DeviceHub&gt;</c>.
@@ -41,7 +41,7 @@ public sealed class DeviceHub(
     AgentTicketService? agentTickets = null,
     IProjectFilesChangedNotifier? filesChanged = null,
     ILocalHandsNotifier? handsNotifier = null)
-    : Hub<IDesktopDeviceClient>
+    : Hub<IDeviceClient>
 {
     private string? OwnerId => Context.User?.FindFirstValue(DesktopProtocol.OwnerIdClaim);
     private string? DeviceId => Context.User?.FindFirstValue(DesktopProtocol.DeviceIdClaim);

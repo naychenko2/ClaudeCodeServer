@@ -233,7 +233,7 @@
     <ProjectReference Include="..\ClaudeHomeServer.Changelog\ClaudeHomeServer.Changelog.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Deploy\ClaudeHomeServer.Deploy.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Diagnostics\ClaudeHomeServer.Diagnostics.csproj" />
-    <ProjectReference Include="..\ClaudeHomeServer.Desktop\ClaudeHomeServer.Desktop.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Devices\ClaudeHomeServer.Devices.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Docs\ClaudeHomeServer.Docs.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Dossiers\ClaudeHomeServer.Dossiers.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Execution\ClaudeHomeServer.Execution.csproj" />

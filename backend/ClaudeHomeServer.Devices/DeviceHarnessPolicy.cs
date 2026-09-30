@@ -1,7 +1,7 @@
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Protocol;
 
-namespace ClaudeHomeServer.Services.Desktop;
+namespace ClaudeHomeServer.Services.Devices;
 
 /// <summary>
 /// Требуемая версия управляемой копии CLI на устройствах (ADR-016 §3 «Управляемая копия

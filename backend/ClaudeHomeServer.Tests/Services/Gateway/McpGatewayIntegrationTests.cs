@@ -3,7 +3,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Services;
-using ClaudeHomeServer.Services.Desktop;
+using ClaudeHomeServer.Services.Devices;
 using ClaudeHomeServer.Services.Llm.Gateway;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;

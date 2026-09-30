@@ -320,7 +320,8 @@ public sealed partial class LocalMediaService
     // YuE2 int8: 180 с — 60 с
     public static int YuE2MusicEta(int seconds) => 10 + (int)Math.Ceiling(seconds * 0.28);
 
-    public static int? MiniMaxMusicEta(int seconds) => null;
+    // MiniMax Music 3 fp16 + энкодер int8: 175 с песни — 267 с
+    public static int? MiniMaxMusicEta(int seconds) => 30 + (int)Math.Ceiling(seconds * 1.35);
 
     public static int? MusicEditEta(string task, double? seconds) => null;
 

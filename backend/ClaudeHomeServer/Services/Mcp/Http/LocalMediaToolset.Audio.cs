@@ -38,7 +38,7 @@ public sealed partial class LocalMediaToolset
             ExplicitOnly + "Сгенерировать песню или инструментал НАШЕЙ моделью на своей GPU. engine=ace — ACE-Step 1.5 XL "
             + "(по умолчанию; 50+ языков вокала, 3 мин ≈ 1,5 мин генерации), yue2 — YuE2-3B (разборчивее вокал, пишет "
             + "партитуру .abc, которую можно поправить и передать в abc; лицензия CC BY-NC — только некоммерческое "
-            + "использование), minimax — MiniMax Music 3. Слова размечай секциями [Verse], [Chorus], [Bridge]; без слов — "
+            + "использование), minimax — MiniMax Music 3 (самый разборчивый вокал, но 3 мин ≈ 4,5 мин генерации). Слова размечай секциями [Verse], [Chorus], [Bridge]; без слов — "
             + "инструментал (только ace и minimax). Результат — mp3." + AudioTail,
             Obj(["prompt"], new JsonObject
             {
@@ -179,20 +179,20 @@ public sealed partial class LocalMediaToolset
     [
         AudioOp("local_music_generate", "ACE-Step 1.5 XL-sft + LM 4B / YuE2-3B int8 (CC BY-NC) / MiniMax Music 3",
             "песня или инструментал по стилю и словам, 10–240 с",
-            "ace: 3 мин песни ≈ 74 с; yue2: 3 мин ≈ 60 с; minimax — не замерено"),
+            "ace: 3 мин песни ≈ 74 с; yue2: 3 мин ≈ 60 с; minimax: 3 мин ≈ 4,5 мин"),
         AudioOp("local_music_edit", "ACE-Step 1.5 turbo / xl-base", "cover, repaint, extract, lego, complete", "не замерено"),
         AudioOp("local_speech", "Qwen3-TTS 1.7B / Chatterbox Multilingual",
             "озвучка по описанию голоса, диктором или клоном по образцу",
             "qwen: ≈ длина речи + 15 с (25 с речи ≈ 40 с); chatterbox ≈ на треть быстрее"),
         AudioOp("local_voice_convert", "Seed-VC (GPL-3.0) / RVC (Applio)", "смена голоса: по образцу или моделью голоса",
-            "не замерено"),
-        AudioOp("local_voice_train", "RVC (Applio)", "обучение модели голоса; тяжёлая", "не замерено"),
+            "речь 17 с ≈ 14 с, пение 30 с ≈ 16 с; rvc 17 с ≈ 11 с"),
+        AudioOp("local_voice_train", "RVC (Applio)", "обучение модели голоса; тяжёлая", "101 с записи, 100 эпох ≈ 4 мин"),
         AudioOp("local_audio_separate", "BS-RoFormer / HTDemucs ft / Mel-RoFormer karaoke", "стемы",
-            "трек 3 мин: vocals ≈ 71 с, 4stems ≈ 38 с"),
-        AudioOp("local_audio_to_midi", "Basic Pitch", "ноты в MIDI", "3 мин ≈ 15 с"),
+            "трек 3 мин: vocals ≈ 72 с, 4stems ≈ 39 с, 6stems ≈ 23 с, karaoke ≈ 74 с"),
+        AudioOp("local_audio_to_midi", "Basic Pitch", "ноты в MIDI", "3 мин ≈ 5–15 с"),
         AudioOp("local_audio_enhance", "DeepFilterNet 3 / AudioSR / Matchering", "шумодав, верхние частоты, мастеринг",
-            "denoise ≈ 20 с, master ≈ 15 с, upsample — не замерено"),
-        AudioOp("local_transcribe", "faster-whisper large-v3-turbo", "текст, SRT и LRC", "не замерено"),
+            "denoise ≈ 5–20 с, master ≈ 17 с, upsample: 30 с ≈ 1 мин, 120 с ≈ 1,5 мин"),
+        AudioOp("local_transcribe", "faster-whisper large-v3-turbo", "текст, SRT и LRC", "3 мин ≈ 7 с"),
     ];
 
     private static JsonObject AudioOp(string tool, string model, string what, string eta) => new()

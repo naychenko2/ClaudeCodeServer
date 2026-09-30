@@ -8,7 +8,7 @@
 | Что | Где |
 |---|---|
 | Музыка по тексту (ACE-Step 1.5 XL, YuE2, MiniMax Music 3) | нативные ноды ComfyUI 0.37, веса в `~/ai-data/comfy-models` |
-| Узел очереди для остальных моделей | `ccs_audio_worker/` → симлинк в `ComfyUI-h3/custom_nodes/` |
+| Узел очереди для остальных моделей | `ccs_audio_worker/` → копия в `~/ai-data/audio-workers/ccs` → симлинк в `ComfyUI-h3/custom_nodes/` |
 | Воркеры (один процесс на задачу) | `workers/worker_*.py`, общий код — `workers/ccs_common.py` |
 | venv и код моделей | `~/ai-data/audio-workers/<семейство>` |
 | Веса вне HF-кэша | `~/ai-data/audio-models` (Qwen3-TTS, Chatterbox, стемы, ACE-Step) |
@@ -22,7 +22,12 @@
 
 ```bash
 ./install.sh                     # окружения, веса, workers.json, симлинк узла
+./install.sh --link-only         # после выкатки новой версии: только узел, воркеры и workers.json
 ```
+
+Узел и воркеры копируются в `~/ai-data/audio-workers/ccs`, и ComfyUI ссылается на копию, а не на
+рабочее дерево git: иначе `checkout` другой ветки или удаление worktree ломает аудио. Правка узла
+вступает в силу после рестарта `comfyui-h3` (при пустой очереди), правка воркеров — сразу.
 
 Потом вручную:
 

@@ -6,6 +6,7 @@
 #   AUDIO_MODELS — веса вне HF-кэша             (по умолчанию ~/ai-data/audio-models)
 #   COMFY_ROOT   — ComfyUI                      (по умолчанию ~/ComfyUI-h3)
 #   HTTPS_PROXY  — если туннель режет загрузки, прокси с выходом мимо него (README, «Сеть»)
+#   --link-only  — без окружений и весов: обновить узел и воркеры после выкатки новой версии
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -16,6 +17,11 @@ export PATH=$HOME/.local/bin:$PATH
 TI="--index-url https://download.pytorch.org/whl/cu128 --extra-index-url https://pypi.org/simple --index-strategy unsafe-best-match"
 T28="torch==2.8.0+cu128 torchaudio==2.8.0+cu128"
 mkdir -p "$AUDIO_ROOT" "$AUDIO_MODELS"
+# Узел и воркеры — копией вне git-дерева: симлинк ComfyUI на рабочую копию сломался бы при первом
+# checkout другой ветки (или удалении worktree). Повторный запуск install.sh обновляет копию
+DEPLOY="$AUDIO_ROOT/ccs"
+mkdir -p "$DEPLOY"
+rsync -a --delete --exclude '__pycache__' "$HERE/" "$DEPLOY/"
 
 venv() { # venv <каталог> <python> — создаёт .venv, если его нет
   mkdir -p "$AUDIO_ROOT/$1"
@@ -24,6 +30,7 @@ venv() { # venv <каталог> <python> — создаёт .venv, если е�
 }
 clone() { [ -d "$AUDIO_ROOT/$2" ] || git clone -q --depth 1 "https://github.com/$1" "$AUDIO_ROOT/$2"; }
 
+if [ "${1:-}" != "--link-only" ]; then
 echo "== окружения"
 # стемы + мастеринг; audioread audio-separator не тянет сам
 P=$(venv util 3.12); uv pip install -q -p "$P" $TI $T28 "audio-separator[gpu]" audioread matchering soundfile
@@ -63,16 +70,18 @@ P=$(venv bench 3.12); uv pip install -q -p "$P" $TI $T28 nvidia-cudnn-cu12 faste
 echo "== веса (только вне шлагбаума: воркеры запускаются с HF_HUB_OFFLINE=1)"
 export HF_HUB_DISABLE_XET=1   # xet-клиент не видит HTTPS_PROXY
 "$AUDIO_ROOT/applio/.venv/bin/python" "$AUDIO_ROOT/applio/core.py" prerequisites --pretraineds-hifigan --models --no-exe
-"$AUDIO_ROOT/seedvc-env/.venv/bin/python" "$HERE/warm_models.py" seedvc
-"$AUDIO_ROOT/audiosr/.venv/bin/python" "$HERE/warm_models.py" audiosr
-"$AUDIO_ROOT/bench/.venv/bin/python" "$HERE/warm_models.py" whisper
-"$AUDIO_ROOT/qwen3tts-env/.venv/bin/python" "$HERE/warm_models.py" qwen3tts "$AUDIO_MODELS"
-"$AUDIO_ROOT/chatterbox/.venv/bin/python" "$HERE/warm_models.py" chatterbox "$AUDIO_MODELS"
-"$AUDIO_ROOT/util/.venv/bin/python" "$HERE/warm_models.py" separator "$AUDIO_MODELS"
-"$AUDIO_ROOT/acestep15/.venv/bin/python" "$HERE/warm_models.py" acestep "$AUDIO_MODELS"
+"$AUDIO_ROOT/seedvc-env/.venv/bin/python" "$DEPLOY/warm_models.py" seedvc
+"$AUDIO_ROOT/audiosr/.venv/bin/python" "$DEPLOY/warm_models.py" audiosr
+"$AUDIO_ROOT/bench/.venv/bin/python" "$DEPLOY/warm_models.py" whisper
+"$AUDIO_ROOT/qwen3tts-env/.venv/bin/python" "$DEPLOY/warm_models.py" qwen3tts "$AUDIO_MODELS"
+"$AUDIO_ROOT/chatterbox/.venv/bin/python" "$DEPLOY/warm_models.py" chatterbox "$AUDIO_MODELS"
+"$AUDIO_ROOT/util/.venv/bin/python" "$DEPLOY/warm_models.py" separator "$AUDIO_MODELS"
+"$AUDIO_ROOT/acestep15/.venv/bin/python" "$DEPLOY/warm_models.py" acestep "$AUDIO_MODELS"
+
+fi  # --link-only: только копия узла и воркеров, workers.json и симлинк — при выкатке новой версии
 
 echo "== конфиг воркеров"
-W="$HERE/workers"
+W="$DEPLOY/workers"
 cat > "$AUDIO_ROOT/workers.json" <<JSON
 {"families": {
   "tts": {"python": "$AUDIO_ROOT/qwen3tts-env/.venv/bin/python", "script": "$W/worker_tts.py"},
@@ -90,6 +99,6 @@ cat > "$AUDIO_ROOT/workers.json" <<JSON
 JSON
 
 echo "== узел ComfyUI"
-ln -sfn "$HERE/ccs_audio_worker" "$COMFY_ROOT/custom_nodes/ccs_audio_worker"
+ln -sfn "$DEPLOY/ccs_audio_worker" "$COMFY_ROOT/custom_nodes/ccs_audio_worker"
 echo "Готово. Дальше: веса музыки в ComfyUI (README, «Музыка»), рестарт comfyui-h3 при ПУСТОЙ очереди,"
 echo "LocalMedia:AudioEnabled=true в appsettings.Local.json бэкенда."

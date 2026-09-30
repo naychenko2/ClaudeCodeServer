@@ -16,7 +16,7 @@ import { isPanelKey, type PanelKey, type RailBadgeInfo } from './workspace/panel
 import { KnowledgePanel } from '../components/KnowledgePanel';
 import { ModelsSpendModal } from '../features/modelsSpend/ModelsSpendModal';
 import { ProjectIntroCard } from '../features/projects/ProjectIntroCard';
-import { subscribeModelProvidersNav } from '../lib/modelProvidersNav';
+import { hasPendingOpen, subscribeModelProvidersNav } from '../lib/modelProvidersNav';
 import { joinProject, leaveProject, onMessage, onReconnected } from '../lib/signalr';
 import { loadWorkspaceState, saveWorkspaceState, loadFileFullscreenPref, saveFileFullscreenPref, isLeftTab, type LeftTab } from '../lib/workspaceState';
 import { api } from '../lib/api';
@@ -405,9 +405,6 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
     window.addEventListener('open-fal-stats', open);
     return () => window.removeEventListener('open-fal-stats', open);
   }, []);
-  // Диплинк «Собрать цепочку…» из PresetOptions (RoutePicker/PersonaForm) — может
-  // сработать в контексте проекта, где HubHeader не смонтирован (см. HubHeader.tsx)
-  useEffect(() => subscribeModelProvidersNav(() => setShowModelsSpend(true)), []);
   // Открыть только что созданную сессию этого проекта (групповой чат из ChatPanel):
   // проект уже открыт, событие приходит без ремоунта страницы
   useEffect(() => {
@@ -551,6 +548,17 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
 const windowWidth = useWindowWidth();
   const viewportH = useViewportHeight();
   const isMobile = windowWidth <= MOBILE_MAX;
+  // Запросы навигации в «Модели и расход» («Собрать цепочку…» из PresetOptions, диплинк
+  // #/models из уведомления) открываем здесь только на мобиле: там HubHeader не смонтирован.
+  // На десктопе проекта модалку открывает его HubHeader — вторая подписка давала две
+  // модалки друг на друге. Условие читается в момент события (ref), а не вокруг хука.
+  const isMobileRef = useRef(isMobile);
+  useEffect(() => { isMobileRef.current = isMobile; });
+  useEffect(() => {
+    const open = () => { if (isMobileRef.current) setShowModelsSpend(true); };
+    if (hasPendingOpen()) open();
+    return subscribeModelProvidersNav(open);
+  }, []);
   const isTablet = windowWidth > MOBILE_MAX && windowWidth <= TABLET_MAX;
 
   // из git-панели «История»/«Изменения» → просмотр коммита в контентной области;

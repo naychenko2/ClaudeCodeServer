@@ -18,7 +18,7 @@ public record ImageEditModelDto(
     ImageEditPriceHint? PriceHint);
 
 // Available: false — поставщик заведён, но сейчас не отвечает (локальная видеокарта лежит):
-// в списке он виден с пометкой «недоступен», запуск на него даёт provider_unavailable
+// в списке он виден с пометкой «не отвечает», запуск на него даёт provider_unavailable
 public record ImageEditProviderDto(
     string Key,
     string Label,

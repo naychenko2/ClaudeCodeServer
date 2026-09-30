@@ -91,7 +91,7 @@ public class ImageEditCatalogTests
 
         catalog.Default.Should().Be(new ImageEditDefaultDto(LocalImageEditor.ProviderKey, ImageEditCatalog.AutoModelId));
         var local = catalog.Providers.Single(p => p.Key == LocalImageEditor.ProviderKey);
-        local.Available.Should().BeFalse("пункт виден с пометкой «недоступен», а не скрыт");
+        local.Available.Should().BeFalse("пункт виден с пометкой «не отвечает», а не скрыт");
         catalog.Providers.Single(p => p.Key == "fal").Available.Should().BeTrue();
     }
 

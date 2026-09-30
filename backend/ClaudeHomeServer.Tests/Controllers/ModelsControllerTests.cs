@@ -54,6 +54,11 @@ public class ModelsControllerTests : IClassFixture<TestWebApplicationFactory>
         body.TryGetProperty("latest", out _).Should().BeTrue();
         body.TryGetProperty("updateAvailable", out _).Should().BeTrue();
         body.TryGetProperty("checkedAt", out _).Should().BeTrue();
+        // Список изменений и новые модели: в тестовом хосте сторож в сеть не ходит — пусто
+        body.GetProperty("newModels").GetArrayLength().Should().Be(0);
+        body.GetProperty("changes").GetArrayLength().Should().Be(0);
+        body.GetProperty("hiddenCount").GetInt32().Should().Be(0);
+        body.GetProperty("truncated").GetBoolean().Should().BeFalse();
     }
 
     [Fact]

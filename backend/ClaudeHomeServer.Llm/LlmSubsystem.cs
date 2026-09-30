@@ -329,6 +329,14 @@ public sealed class LlmSubsystem : IAppSubsystem
                 Category: "ClaudeHomeServer.Llm.ClaudeCliUpdate",
                 Subject: "реестром npm (версия claude CLI)",
                 Consequence: "Проверка обновлений claude CLI пропущена до следующего раза."));
+        // CHANGELOG claude-code (~1 МБ) — список изменений и новые модели при отставании
+        services.AddQuietHttpClient(
+            Claude.ClaudeCliUpdateWatcher.ChangelogClientName,
+            new QuietHttpClientProfile(
+                Category: "ClaudeHomeServer.Llm.ClaudeCliChangelog",
+                Subject: "CHANGELOG claude-code на GitHub",
+                Consequence: "Уведомление об обновлении claude CLI уйдёт без списка изменений."))
+            .ConfigureHttpClient(c => c.MaxResponseContentBufferSize = 5 * 1024 * 1024);
         services.AddSingleton<Claude.ClaudeCliUpdateWatcher>();
         services.AddGatedHostedFrom(config, sp => sp.GetRequiredService<Claude.ClaudeCliUpdateWatcher>());
 

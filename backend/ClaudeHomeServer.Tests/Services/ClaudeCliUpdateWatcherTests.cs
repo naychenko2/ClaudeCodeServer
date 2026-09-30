@@ -58,7 +58,8 @@ public class ClaudeCliUpdateWatcherTests : IDisposable
         req.Type.Should().Be("claude_cli_update");
         req.Url.Should().Be("/models");
         req.Body.Should().Contain("2.1.283").And.Contain("2.1.300");
-        w.GetStatus().Should().Be(new ClaudeCliUpdateWatcher.Status("2.1.283", "2.1.300", true, w.GetStatus().CheckedAt));
+        var status = w.GetStatus();
+        (status.Current, status.Latest, status.UpdateAvailable).Should().Be(("2.1.283", "2.1.300", true));
     }
 
     [Fact]
@@ -165,8 +166,145 @@ public class ClaudeCliUpdateWatcherTests : IDisposable
         (await w.RefreshCurrentAsync()).Current.Should().Be("2.1.283");
     }
 
+    // --- список изменений и новые модели ---
+
+    private static string Section(string version, params string[] items) =>
+        $"## {version}\n\n" + string.Concat(items.Select(i => $"- {i}\n")) + "\n";
+
+    private const string Sonnet56 = "Added Claude Sonnet 5.6 (`claude-sonnet-5-6`), now the default Sonnet model";
+    private const string Haiku5 = "Added Claude Haiku 5 (`claude-haiku-5`), now the default Haiku model";
+    private const string Opus6 = "Added Claude Opus 6 (`claude-opus-6`), now the default Opus model";
+
+    [Fact]
+    public async Task OneModel_InTitle_ChangesInStatus()
+    {
+        _npm.Changelog = Section("2.1.300", Sonnet56, "Fixed a", "[VSCode] Fixed b") + Section("2.1.290", "Fixed c");
+        var w = Create();
+        await w.CheckOnceAsync();
+
+        _sender.Sent.Should().ContainSingle().Which.Req.Title.Should().Be("Вышла Claude Sonnet 5.6 — обновите claude CLI");
+        _sender.Sent[0].Req.Body.Should().Contain("Sonnet 5.6 (CLI 2.1.300)").And.Contain("2.1.283");
+        var st = w.GetStatus();
+        st.NewModels.Should().ContainSingle().Which.IsFamilyDefault.Should().BeTrue();
+        st.Changes.Select(c => c.Version).Should().Equal("2.1.300", "2.1.290");
+        st.HiddenCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task TwoModels_JoinedWithAnd()
+    {
+        _npm.Changelog = Section("2.1.300", Sonnet56, Haiku5);
+        await Create().CheckOnceAsync();
+        _sender.Sent.Single().Req.Title.Should().Be("Вышли Claude Sonnet 5.6 и Haiku 5 — обновите claude CLI");
+    }
+
+    [Fact]
+    public async Task ThreeModels_CountInTitle_AllInBody()
+    {
+        _npm.Changelog = Section("2.1.300", Sonnet56, Haiku5, Opus6);
+        await Create().CheckOnceAsync();
+        var req = _sender.Sent.Single().Req;
+        req.Title.Should().Be("Вышли новые модели Claude (3) — обновите claude CLI");
+        req.Body.Should().Contain("Sonnet 5.6").And.Contain("Haiku 5").And.Contain("Opus 6");
+    }
+
+    [Fact]
+    public async Task ChangelogDown_OldNotification_NoDigest_RetriedNextCheck()
+    {
+        _npm.ChangelogStatus = HttpStatusCode.InternalServerError;
+        var w = Create();
+        await w.CheckOnceAsync();
+
+        _sender.Sent.Single().Req.Title.Should().Be("Доступна новая версия claude CLI");
+        w.GetStatus().Changes.Should().BeEmpty();
+
+        await w.CheckOnceAsync();
+        _npm.ChangelogCalls.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task CompleteDigest_NotFetchedAgain()
+    {
+        _npm.Changelog = Section("2.1.300", "Fixed a");
+        var w = Create();
+        await w.CheckOnceAsync();
+        await w.CheckOnceAsync();
+        _npm.ChangelogCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task MissingLatestSection_KeptPartial_RetriedAndNotWipedByNetworkError()
+    {
+        _npm.Changelog = Section("2.1.290", "Fixed c");   // секции 2.1.300 ещё нет
+        var w = Create();
+        await w.CheckOnceAsync();
+        w.GetStatus().Changes.Select(c => c.Version).Should().Equal("2.1.290");
+
+        _npm.ChangelogStatus = HttpStatusCode.BadGateway;
+        await w.CheckOnceAsync();
+        _npm.ChangelogCalls.Should().Be(2);
+        w.GetStatus().Changes.Select(c => c.Version).Should().Equal("2.1.290");
+    }
+
+    [Fact]
+    public async Task Refresh_NarrowsDigest_WithoutNetwork_AndNoRefetch()
+    {
+        _npm.Changelog = Section("2.1.300", Sonnet56) + Section("2.1.290", Haiku5);
+        var w = Create();
+        await w.CheckOnceAsync();
+
+        _current = "2.1.295";
+        var st = await w.RefreshCurrentAsync();
+        st.Changes.Select(c => c.Version).Should().Equal("2.1.300");
+        st.NewModels.Select(m => m.Name).Should().Equal("Sonnet 5.6");
+        _npm.ChangelogCalls.Should().Be(1);
+
+        await w.CheckOnceAsync();
+        _npm.ChangelogCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task UpdatedWhileChangelogLoading_NoNotification_NoRefetch()
+    {
+        _npm.Changelog = Section("2.1.300", Sonnet56);
+        _npm.ChangelogGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var w = Create();
+
+        var check = w.CheckOnceAsync();
+        await _npm.ChangelogStarted.Task;
+        // Пока CHANGELOG качается, админ сделал claude update
+        _current = "2.1.300";
+        (await w.RefreshCurrentAsync()).UpdateAvailable.Should().BeFalse();
+        _npm.ChangelogGate.SetResult();
+        await check;
+
+        _sender.Sent.Should().BeEmpty();
+        w.GetStatus().Changes.Should().BeEmpty();
+        await w.CheckOnceAsync();
+        _npm.ChangelogCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public void OldStateFileWithoutDigest_Reads()
+    {
+        File.WriteAllText(StatePath, "{\"current\":\"2.1.283\",\"latest\":\"2.1.300\",\"lastNotifiedVersion\":null}");
+        var st = Create().GetStatus();
+        st.UpdateAvailable.Should().BeTrue();
+        st.Changes.Should().BeEmpty();
+        st.NewModels.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DigestSurvivesRestart()
+    {
+        _npm.Changelog = Section("2.1.300", Sonnet56);
+        await Create().CheckOnceAsync();
+        Create().GetStatus().NewModels.Select(m => m.Id).Should().Equal("claude-sonnet-5-6");
+    }
+
     // --- фейки ---
 
+    // Отвечает по адресу: npm latest или CHANGELOG (по умолчанию 404 — списка нет)
     private sealed class NpmHandler : HttpMessageHandler
     {
         public string? Version;
@@ -174,16 +312,29 @@ public class ClaudeCliUpdateWatcherTests : IDisposable
         public HttpStatusCode Status = HttpStatusCode.OK;
         public bool Throw;
         public int Calls;
+        public string? Changelog;
+        public HttpStatusCode? ChangelogStatus;
+        public int ChangelogCalls;
+        public TaskCompletionSource? ChangelogGate;
+        public readonly TaskCompletionSource ChangelogStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
+            if (request.RequestUri!.Host.Contains("githubusercontent"))
+            {
+                ChangelogCalls++;
+                ChangelogStarted.TrySetResult();
+                if (ChangelogGate is not null) await ChangelogGate.Task;
+                var code = ChangelogStatus ?? (Changelog is null ? HttpStatusCode.NotFound : HttpStatusCode.OK);
+                return new HttpResponseMessage(code) { Content = new StringContent(Changelog ?? "") };
+            }
             Calls++;
             if (Throw) throw new HttpRequestException("сеть недоступна");
             var body = RawBody ?? $"{{\"name\":\"@anthropic-ai/claude-code\",\"version\":\"{Version}\"}}";
-            return Task.FromResult(new HttpResponseMessage(Status)
+            return new HttpResponseMessage(Status)
             {
                 Content = new StringContent(body, Encoding.UTF8, "application/json"),
-            });
+            };
         }
     }
 

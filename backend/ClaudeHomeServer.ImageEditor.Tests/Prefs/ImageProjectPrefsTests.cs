@@ -263,6 +263,34 @@ public class ImageProjectPrefsTests : IDisposable
         text.Should().NotContain("корень проекта");
     }
 
+    // Фокус с прошлого сообщения не должен превращать просьбу о новой картинке в правку (баг 30.09)
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Картинка_в_работе_не_обязывает_продолжать_её_для_новой_просьбы(bool personal)
+    {
+        var (contributor, context, threads) = Contributor(personal: personal);
+        var draft = threads.Open(Owner, Chat, null, "", 0, null);
+
+        var text = (await contributor.BuildAsync(context, "нарисуй собаку"))!.Sections.Single().Text;
+
+        text.Should().Contain($"В работе: картинка {draft.Thread!.Id} — {ImageEditorStateContributor.FocusIsNotBindingText}");
+        text.Should().Contain(ImageEditorStateContributor.NewOrContinueRule);
+    }
+
+    [Fact]
+    public void Оба_правила_приоритета_различают_новую_картинку_и_продолжение()
+    {
+        foreach (var rule in new[] { ImageEditorStateContributor.PriorityRule, ImageEditorStateContributor.PersonalPriorityRule })
+            rule.Should().Contain(ImageEditorStateContributor.NewOrContinueRule);
+        ImageEditorStateContributor.NewOrContinueRule.Should().Contain("всегда image_new")
+            .And.Contain("даже если другая картинка в работе")
+            .And.Contain("Сомневаешься — новая картинка")
+            // Опорные примеры обеих сторон: без них модель хуже различает граничные просьбы
+            .And.Contain("«нарисуй собаку»")
+            .And.Contain("«поправь»");
+    }
+
     [Fact]
     public async Task Личный_чат_без_запуска_агентом_как_у_проекта()
     {

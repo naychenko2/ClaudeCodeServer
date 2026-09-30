@@ -55,7 +55,7 @@ uv pip install -q -p "$AUDIO_ROOT/applio/.venv/bin/python" $TI $T28 -r /tmp/appl
 # extract_model читает assets/config.json, который иначе создаёт только интерфейс Applio:
 # без него итоговая модель .pth молча не сохраняется
 cp -n "$AUDIO_ROOT/applio/assets/config_template.json" "$AUDIO_ROOT/applio/assets/config.json"
-P=$(venv audiosr 3.11); uv pip install -q -p "$P" $TI $T28 audiosr "setuptools<81" matplotlib
+P=$(venv audiosr 3.11); uv pip install -q -p "$P" $TI $T28 audiosr "setuptools<81" "matplotlib<3.8" "numpy==1.23.5"
 clone ace-step/ACE-Step-1.5 acestep15
 (cd "$AUDIO_ROOT/acestep15" && uv sync -q)
 P=$(venv bench 3.12); uv pip install -q -p "$P" $TI $T28 nvidia-cudnn-cu12 faster-whisper num2words soundfile numpy pyloudnorm

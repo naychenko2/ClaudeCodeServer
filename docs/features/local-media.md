@@ -210,7 +210,7 @@ ComfyUI граф не примет, и машина без аудиостека 
 | `local_voice_train` | RVC/Applio (MIT) | модель голоса `.pth` + `.index` в проект; тяжёлая |
 | `local_audio_separate` | BS-RoFormer, HTDemucs ft/6s, Mel-RoFormer karaoke (audio-separator, MIT) | стемы |
 | `local_audio_to_midi` | Basic Pitch (Apache-2.0) | ноты в `.mid` |
-| `local_audio_enhance` | DeepFilterNet 3 (MIT/Apache-2.0), AudioSR (код MIT, веса Apache-2.0), Matchering (GPL-3.0) | шумодав, верхние частоты до 48 кГц, мастеринг по референсу |
+| `local_audio_enhance` | DeepFilterNet 3 (MIT/Apache-2.0), AudioSR (код MIT, веса Apache-2.0), Matchering (GPL-3.0) | шумодав, верхние частоты до 48 кГц (кусками по 20 с: целиком 120 с не влезает в 24 ГБ), мастеринг по референсу |
 | `local_transcribe` | faster-whisper large-v3-turbo (MIT) | `.txt`, `.srt`, `.lrc` |
 
 ### Замеры (стенд, 2026-09-30)
@@ -242,6 +242,7 @@ ComfyUI граф не примет, и машина без аудиостека 
 | DeepFilterNet 3 | речь 26 с | 5–19 с | 0,7 ГБ | 1,1 ГБ | шум в паузах −18 дБ, речь −1 дБ |
 | Matchering | трек 180 с | 17 с (CPU) | — | 1,2 ГБ | −11,2 → −11,9 LUFS к референсу −13,6 |
 | Whisper large-v3-turbo | вокал 180 с / речь 101 с | 6,5 / 4,8 с | 2,4 ГБ | 1,6 ГБ | LRC построчно |
+| AudioSR basic | 30 с / 120 с (16 → 48 кГц) | 53 / 85 с | 13,5 / 15 ГБ | 7,6 ГБ | полоса 12–16 кГц: −67 → −29 дБ (оригинал −22) |
 
 **Выбор по функциям.** Песня — ACE-Step по умолчанию (50+ языков, инструментал), YuE2 —
 разборчивее вокал и партитура для правки, но NC. Озвучка по описанию — Qwen3-TTS (у Chatterbox
@@ -254,7 +255,7 @@ RVC (разборчивость).
 Формулы — `LocalMediaService.Audio` по таблице выше: у музыки от длины песни, у озвучки — от
 числа знаков (~12 знаков на секунду речи), у обработки — от длины входного звука. Длина входа
 читается из заголовков WAV/FLAC/MP3/OGG (`AudioProbe`); не прочиталась — ETA нет. Где замера нет
-(MiniMax Music 3, `local_music_edit`, `upsample`), ETA не обещаем.
+(MiniMax Music 3, `local_music_edit`), ETA не обещаем.
 
 ### Входы и результат
 

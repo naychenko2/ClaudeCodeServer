@@ -357,7 +357,8 @@ public sealed partial class LocalMediaService
         _ => null,
     };
 
-    public static int? UpsampleEta(double? seconds) => null;
+    // AudioSR кусками по 20 с: 30 с — 53 с, 120 с — 85 с (загрузка ≈15 с)
+    public static int? UpsampleEta(double? seconds) => seconds is { } s ? 20 + (int)Math.Ceiling(s * 0.6) : null;
 
     // Whisper large-v3-turbo на GPU: 180 с вокала — 6,5 с, 101 с речи — 4,8 с
     public static int? TranscribeEta(double? seconds) => seconds is { } s ? 3 + (int)Math.Ceiling(s * 0.02) : null;

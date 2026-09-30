@@ -3,7 +3,7 @@
 // Состояния §4: скелетон, ошибка-баннер, протухшие данные, пусто, недоступная/исчерпанная квота.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { AlertTriangle, ArrowUpCircle, ChevronDown, ChevronUp, ExternalLink } from 'lucide-react';
+import { AlertTriangle, ArrowUpCircle, ExternalLink } from 'lucide-react';
 import type { ProviderBalanceInfo, SpendOverviewResponse, SubscriptionUsage, UsageResponse, UsageSnapshot } from '../../types';
 import { api } from '../../lib/api';
 import { C, FONT, FS, GROUP_COLORS, R, SP } from '../../lib/design';
@@ -22,7 +22,7 @@ import { addDaysUtc, openSpend, spendQuery, todayUtc } from '../../lib/spendCont
 import { freeSourceLabel, isFreeSource } from '../../lib/spendSources';
 import { isLocalEngineKey } from '../../lib/localEngine';
 import { showToast } from '../../lib/toast';
-import { renderInlineCode } from '../../lib/inlineCode';
+import { CLI_CHANGELOG_URL, cliChangesSummary } from '../../lib/cliChangesSummary';
 import { KpiRibbon } from './KpiRibbon';
 import { ProviderCard } from './ProviderCard';
 import type { FreshnessSpec, PillSpec, ProviderCardData, UnavailableModelRow } from './ProviderCard';
@@ -517,7 +517,6 @@ export function QuotasTab({ balances, onClose }: { balances?: BalanceChipData[];
   // Версия claude CLI хоста (сторож обновлений): только админу. refresh при
   // открытии — после `claude update` строка сразу показывает актуальность.
   const [cli, setCli] = useState<Awaited<ReturnType<typeof api.models.claudeCli>> | null>(null);
-  const [cliChangesOpen, setCliChangesOpen] = useState(false);
   useEffect(() => {
     if (!isAdmin) return;
     let c = false;
@@ -756,11 +755,10 @@ export function QuotasTab({ balances, onClose }: { balances?: BalanceChipData[];
 
   // Строка версии claude CLI — до раннего выхода пустой вкладки: видна и без провайдеров.
   // Сравнить нельзя (updateAvailable = null) — строки нет. Новые модели — в самой плашке,
-  // список изменений — под ней раскрывашкой (без своей прокрутки: крутит модалка, на
-  // мобиле палец не застревает во вложенном списке).
+  // изменения — одной строкой-сводкой под ней и ссылкой на полный CHANGELOG (поштучный
+  // список из сотен пунктов, в основном исправлений, админу не нужен).
   const cliModels = cli?.newModels ?? [];
-  const cliChanges = cli?.changes ?? [];
-  const cliItemCount = cliChanges.reduce((n, v) => n + v.items.length, 0);
+  const cliSummary = cliChangesSummary(cli?.changes ?? []);
   // «будет по умолчанию» — только когда в семействе несколько новых версий: иначе пометка
   // стояла бы у каждой модели и ничего не различала
   const familyOf = (name: string) => name.split(' ')[0];
@@ -777,39 +775,17 @@ export function QuotasTab({ balances, onClose }: { balances?: BalanceChipData[];
             </div>
           )}
         </Notice>
-        {cliChanges.length > 0 && (
-          <>
-            <Button
-              variant="ghost" size="xs" style={{ marginTop: SP.xs }}
-              leftIcon={cliChangesOpen
-                ? <ChevronUp size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-                : <ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
-              onClick={() => setCliChangesOpen(o => !o)}
-            >
-              {cliChangesOpen ? 'Скрыть изменения'
-                : `Что изменилось: ${cliChanges.length} ${plural(cliChanges.length, 'версия', 'версии', 'версий')}, ${cliItemCount} ${plural(cliItemCount, 'пункт', 'пункта', 'пунктов')}`}
+        {cliSummary && (
+          <div style={{
+            marginTop: SP.xs, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: SP.sm,
+            fontSize: FS.xs, color: C.textSecondary,
+          }}>
+            <span>Что изменилось — {cliSummary}</span>
+            <Button variant="ghost" size="xs" href={CLI_CHANGELOG_URL}
+              leftIcon={<ExternalLink size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}>
+              Полный список
             </Button>
-            {cliChangesOpen && (
-              <div style={{ marginTop: SP.sm, display: 'flex', flexDirection: 'column', gap: SP.md }}>
-                {cliChanges.map(v => (
-                  <div key={v.version}>
-                    <div style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary }}>{v.version}</div>
-                    <ul style={{ margin: `${SP.xs}px 0 0`, paddingLeft: SP.lg, fontSize: FS.sm, color: C.textPrimary, lineHeight: 1.45 }}>
-                      {v.items.map((item, i) => (
-                        <li key={i} style={{ overflowWrap: 'anywhere', marginBottom: SP.xxs }}>{renderInlineCode(item)}</li>
-                      ))}
-                    </ul>
-                  </div>
-                ))}
-                {((cli.hiddenCount ?? 0) > 0 || cli.truncated) && (
-                  <div style={{ fontSize: FS.xs, color: C.textMuted }}>
-                    {(cli.hiddenCount ?? 0) > 0 && `Скрыто ${cli.hiddenCount} ${plural(cli.hiddenCount ?? 0, 'пункт', 'пункта', 'пунктов')} про VS Code, веб и другие продукты.`}
-                    {cli.truncated && ' Показаны последние версии.'}
-                  </div>
-                )}
-              </div>
-            )}
-          </>
+          </div>
         )}
       </div>
     ) : (

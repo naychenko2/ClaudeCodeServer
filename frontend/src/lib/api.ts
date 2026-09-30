@@ -536,6 +536,12 @@ export const api = {
         // пикеры подписывают пункт «По умолчанию (<модель>)»
         assignments?: Record<string, string | null>;
       }>('/models'),
+    // Версия claude CLI хоста и последняя вышедшая (только админ). refresh — перечитать
+    // локальную версию (после claude update), npm сервер при этом не опрашивает.
+    // updateAvailable = null — сравнить нельзя.
+    claudeCli: (refresh = false) =>
+      request<{ current: string | null; latest: string | null; updateAvailable: boolean | null; checkedAt: string | null }>(
+        `/models/claude-cli${refresh ? '?refresh=true' : ''}`),
     // Эффективный резолв для строки «Сейчас пойдёт» (считается той же кодовой дорогой,
     // что запуск хода — второй точки истины нет). sessionId вместе с personaId добавляет
     // в ответ subagentChip — чип модели на карточке персоны-сабагента.

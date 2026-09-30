@@ -3,11 +3,11 @@
 // Состояния §4: скелетон, ошибка-баннер, протухшие данные, пусто, недоступная/исчерпанная квота.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { AlertTriangle, ExternalLink } from 'lucide-react';
+import { AlertTriangle, ArrowUpCircle, ExternalLink } from 'lucide-react';
 import type { ProviderBalanceInfo, SpendOverviewResponse, SubscriptionUsage, UsageResponse, UsageSnapshot } from '../../types';
 import { api } from '../../lib/api';
 import { C, FONT, FS, GROUP_COLORS, R, SP } from '../../lib/design';
-import { Button, Dot } from '../../components/ui';
+import { Button, Dot, Notice } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { useIsMobile } from '../../lib/breakpoints';
 import {
@@ -22,6 +22,7 @@ import { addDaysUtc, openSpend, spendQuery, todayUtc } from '../../lib/spendCont
 import { freeSourceLabel, isFreeSource } from '../../lib/spendSources';
 import { isLocalEngineKey } from '../../lib/localEngine';
 import { showToast } from '../../lib/toast';
+import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { KpiRibbon } from './KpiRibbon';
 import { ProviderCard } from './ProviderCard';
 import type { FreshnessSpec, PillSpec, ProviderCardData, UnavailableModelRow } from './ProviderCard';
@@ -513,6 +514,17 @@ export function QuotasTab({ balances, onClose }: { balances?: BalanceChipData[];
 
   const isAdmin = me?.role === 'admin';
 
+  // Версия claude CLI хоста (сторож обновлений): только админу и за флагом. refresh при
+  // открытии — после `claude update` строка сразу показывает актуальность.
+  const cliWatch = useFeature(FLAGS.claudeCliUpdateWatch);
+  const [cli, setCli] = useState<Awaited<ReturnType<typeof api.models.claudeCli>> | null>(null);
+  useEffect(() => {
+    if (!isAdmin || !cliWatch) return;
+    let c = false;
+    api.models.claudeCli(true).then(d => { if (!c) setCli(d); }).catch(() => {});
+    return () => { c = true; };
+  }, [isAdmin, cliWatch]);
+
   const providerKeys = useMemo(() => cliProviderKeys(), []);
   const balanceKeys = useMemo(
     () => providerKeys.filter(k => { const c = providerCapsByKey(k); return c.hasBalance && c.configured !== false; }),
@@ -742,10 +754,25 @@ export function QuotasTab({ balances, onClose }: { balances?: BalanceChipData[];
 
   // === Рендер ===
 
+  // Строка версии claude CLI — до раннего выхода пустой вкладки: видна и без провайдеров.
+  // Сравнить нельзя (updateAvailable = null) — строки нет.
+  const cliLine = !isAdmin || !cliWatch || !cli || cli.updateAvailable == null ? null
+    : cli.updateAvailable ? (
+      <Notice icon={ArrowUpCircle} style={{ marginBottom: SP.md }}
+        title={`claude CLI ${cli.current} · доступна ${cli.latest}`}>
+        Новые модели Claude приходят только с обновлением CLI — выполните claude update на сервере.
+      </Notice>
+    ) : (
+      <div style={{ marginBottom: SP.md, fontSize: FS.xs, color: C.textSecondary }}>
+        claude CLI {cli.current} · актуальна
+      </div>
+    );
+
   // Пустое состояние
   if (!loading && !hasAny && quotaCards.length === 0 && moneyTiles.length === 0) {
     return (
       <div style={{ paddingTop: SP.md }}>
+        {cliLine}
         <div style={{ fontFamily: FONT.serif, fontSize: FS.xl, color: C.textHeading }}>Ни один провайдер не подключён</div>
         <div style={{ marginTop: SP.sm, fontSize: FS.sm, color: C.textSecondary, maxWidth: 460 }}>
           Ключи провайдеров задаются в файле настроек сервера. Добавьте ключ — и здесь появятся баланс, квоты и расход.
@@ -759,6 +786,7 @@ export function QuotasTab({ balances, onClose }: { balances?: BalanceChipData[];
 
   return (
     <div style={{ paddingTop: SP.md }}>
+      {cliLine}
       {/* Ошибка загрузки сводки — баннер + повтор (отдельные провайдер-ошибки видны в карточках) */}
       {usageError && (
         <div style={{

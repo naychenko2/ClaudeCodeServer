@@ -39,6 +39,9 @@ export const FLAGS = {
   // Локальные проекты (ADR-016): проект на устройстве владельца, ход идёт через агента.
   // Что доступно у такого проекта, решает матрица capabilities из DTO проекта, а не флаг.
   localProjects: 'local-projects',
+  // Сторож обновлений claude CLI: строка версий в «Модели и расход» (админ); серверное
+  // уведомление гейтится тем же флагом.
+  claudeCliUpdateWatch: 'claude-cli-update-watch',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

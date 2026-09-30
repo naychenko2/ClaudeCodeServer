@@ -7,7 +7,8 @@
 > раздача агента) остались в Main. До 2026-09-30 вертикаль называлась `Desktop`
 > (наследие ADR-008), namespace был `Services.Desktop`; внешние строки (схема аутентификации,
 > claim'ы, маршруты, `data/devices.json`, ключ конфигурации `Desktop:AllowSameHostPairing`,
-> `DesktopProtocol` и `DesktopDevice` в Core) не менялись, чтобы не рвать связь с установленными агентами.
+> `DesktopProtocol` и `DesktopDevice` в Core, **ключ тумблера `Subsystems:desktop`**) не
+> менялись, чтобы не рвать связь с установленными агентами и конфигами.
 
 Серверная половина агента локальных проектов ([ADR-016](../../docs/adr/ADR-016-local-projects.md)):
 реестр устройств и сопряжение, хаб управления `/hubs/devices`, канал исполнения

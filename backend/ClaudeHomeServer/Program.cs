@@ -798,8 +798,9 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Devices.IDeviceExecOpenS
     ClaudeHomeServer.Services.Devices.DeviceHubExecOpenSender>();
 // Каталог релизов агента устройства (agent-distribution Р3, Р5): его читают и ack хаба, и
 // анонимная раздача AgentDownloadsController. Тумблер Subsystems:desktop:Enabled пока гасит
-// только раздачу агента (Desktop не оформлен подсистемой IAppSubsystem): нет регистрации —
-// каталог null, раздача отвечает 503 с причиной, ack не называет версий.
+// только раздачу агента (Devices не оформлена подсистемой IAppSubsystem, ключ тумблера —
+// `desktop` ради совместимости с конфигами): нет регистрации — каталог null, раздача
+// отвечает 503 с причиной, ack не называет версий.
 if (SubsystemGate.IsEnabled(builder.Configuration, "desktop"))
     builder.Services.AddSingleton<ClaudeHomeServer.Services.Devices.AgentReleaseCatalog>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Devices.DeviceExecChannel>();

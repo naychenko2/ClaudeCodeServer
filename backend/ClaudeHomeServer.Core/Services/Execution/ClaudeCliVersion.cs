@@ -5,15 +5,24 @@ namespace ClaudeHomeServer.Services.Execution;
 
 // Версия claude CLI хоста по `claude --version` — одна точка на процесс. Нужна и User-Agent'у
 // опроса usage (SubscriptionOAuthUsageService), и требуемой версии CLI на устройствах
-// (DeviceHarnessPolicy: устройства идут за хостом). Опрашивается один раз за жизнь процесса:
-// обновление CLI на хосте подхватывается рестартом бэкенда, как и остальное окружение.
+// (DeviceHarnessPolicy: устройства идут за хостом), и сторожу обновлений CLI
+// (ClaudeCliUpdateWatcher). Первый опрос — при первом обращении; дальше версию перечитывает
+// RefreshAsync (сторож раз в сутки и раздел «Модели и расход» при открытии), поэтому
+// `claude update` на хосте подхватывается без рестарта бэкенда.
 public static class ClaudeCliVersion
 {
     private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(15);
-    private static readonly Lazy<Task<string?>> Probe = new(() => ProbeAsync());
+    private static readonly CliVersionCache Cache = new(ProbeAsync);
 
     // null — CLI не найден, не ответил за таймаут или ответил без номера версии.
-    public static Task<string?> GetAsync() => Probe.Value;
+    // После первого опроса отдаёт последнюю известную версию без нового процесса.
+    public static Task<string?> GetAsync() => Cache.GetAsync();
+
+    // Перечитать версию новым `claude --version`. Пустой ответ известную версию не затирает.
+    public static Task<string?> RefreshAsync() => Cache.RefreshAsync();
+
+    // Последняя известная версия без ожидания; null — опроса ещё не было или он не удался.
+    internal static bool TryGetKnown(out string? version) => Cache.TryGetKnown(out version);
 
     // «2.1.283 (Claude Code)» → «2.1.283»; без номера — null.
     public static string? Parse(string? output)
@@ -51,6 +60,68 @@ public static class ClaudeCliVersion
     private static readonly Regex Version = new(@"\d+\.\d+\.\d+", RegexOptions.CultureInvariant);
 }
 
+// Кэш версии с перечитыванием: экземпляр, а не статика, чтобы тесты создавали свой с
+// подменным опросом и не делили состояние (xUnit гоняет классы параллельно).
+//   - single-flight: параллельные опросы (сторож + эндпоинт) делят один процесс CLI;
+//   - неудачный опрос (null — например, бинарь подменяется посреди `claude update`)
+//     последнюю известную версию не затирает.
+internal sealed class CliVersionCache(Func<Task<string?>> probe)
+{
+    private readonly object _gate = new();
+    private Task<string?>? _inFlight;
+    private Task<string?>? _first;
+    private string? _known;
+    private bool _probed;
+
+    public Task<string?> GetAsync()
+    {
+        lock (_gate)
+        {
+            if (_probed) return Task.FromResult(_known);
+            return _first ??= _inFlight ?? StartLocked();
+        }
+    }
+
+    public Task<string?> RefreshAsync()
+    {
+        lock (_gate)
+            return _inFlight ?? StartLocked();
+    }
+
+    public bool TryGetKnown(out string? version)
+    {
+        lock (_gate)
+        {
+            version = _known;
+            return _probed;
+        }
+    }
+
+    // Вызывается под _gate: запускает опрос и регистрирует его как текущий
+    private Task<string?> StartLocked()
+    {
+        var task = RunAsync();
+        _inFlight = task;
+        return task;
+    }
+
+    private async Task<string?> RunAsync()
+    {
+        // Уступаем поток, чтобы StartLocked успел записать _inFlight до завершения опроса
+        await Task.Yield();
+        string? fresh = null;
+        try { fresh = await probe(); }
+        catch { /* опрос не должен ронять потребителей — считаем неудачей */ }
+        lock (_gate)
+        {
+            if (fresh is not null) _known = fresh;
+            _probed = true;
+            _inFlight = null;
+            return _known;
+        }
+    }
+}
+
 // Версия CLI хоста для синхронных потребителей (политика устройств читается на Hello агента).
 // Отдельный шов ради тестов: политика без него ведёт себя как раньше — версия только из конфига.
 public interface IHostCliVersion
@@ -62,15 +133,18 @@ public sealed class HostCliVersion : IHostCliVersion
 {
     private static readonly TimeSpan WaitLimit = TimeSpan.FromSeconds(15);
 
-    // Опрос стартует при создании синглтона, а не на первом Hello: к приходу агента ответ
-    // обычно уже готов, и чтение не ждёт процесс.
-    private readonly Task<string?> _probe = ClaudeCliVersion.GetAsync();
+    // Первый опрос стартует при создании синглтона, а не на первом Hello: к приходу агента
+    // ответ обычно уже готов, и чтение не ждёт процесс.
+    private readonly Task<string?> _first = ClaudeCliVersion.GetAsync();
 
+    // После первого опроса — последняя известная версия (её обновляет RefreshAsync),
+    // до него — ждём первый опрос не дольше WaitLimit.
     public string? Current
     {
         get
         {
-            try { return _probe.Wait(WaitLimit) ? _probe.Result : null; }
+            if (ClaudeCliVersion.TryGetKnown(out var known)) return known;
+            try { return _first.Wait(WaitLimit) ? _first.Result : null; }
             catch { return null; }
         }
     }

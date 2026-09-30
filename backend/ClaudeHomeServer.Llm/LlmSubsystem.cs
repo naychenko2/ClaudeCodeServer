@@ -321,6 +321,17 @@ public sealed class LlmSubsystem : IAppSubsystem
         services.AddSingleton<SubscriptionOAuthUsageService>();
         services.AddGatedHostedFrom(config, sp => sp.GetRequiredService<SubscriptionOAuthUsageService>());
 
+        // Сторож обновлений claude CLI: раз в сутки сверяет версию хоста с npm latest и
+        // уведомляет админов; singleton — снимок статуса читает /api/models/claude-cli.
+        services.AddQuietHttpClient(
+            Claude.ClaudeCliUpdateWatcher.HttpClientName,
+            new QuietHttpClientProfile(
+                Category: "ClaudeHomeServer.Llm.ClaudeCliUpdate",
+                Subject: "реестром npm (версия claude CLI)",
+                Consequence: "Проверка обновлений claude CLI пропущена до следующего раза."));
+        services.AddSingleton<Claude.ClaudeCliUpdateWatcher>();
+        services.AddGatedHostedFrom(config, sp => sp.GetRequiredService<Claude.ClaudeCliUpdateWatcher>());
+
         // Токен хода для шлюза LLM/MCP (ADR-016): в памяти, отзыв по turn/completed —
         // подписка в конструкторе, поэтому экземпляр создаётся при старте в Program.cs
         // (там же явный отзыв по удалению чата).

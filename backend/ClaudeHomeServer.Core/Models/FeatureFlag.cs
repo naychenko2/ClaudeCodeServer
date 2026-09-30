@@ -77,6 +77,10 @@ public static class FeatureFlagKeys
     // на его машине через агента. Флаг закрывает создание и перепривязку локальных проектов
     // и весь UI; шлюз LLM у него свой тумблер (LlmGateway:Enabled), флагом не закрывается.
     public const string LocalProjects = "local-projects";
+    // Сторож обновлений claude CLI: уведомление админу, что CLI на хосте отстал от npm latest
+    // (новые модели Claude приходят только с ним), и строка версий в «Модели и расход».
+    // Проверка идёт всегда; флаг гейтит доставку уведомления и UI-строку.
+    public const string ClaudeCliUpdateWatch = "claude-cli-update-watch";
 }
 
 /// <summary>
@@ -201,6 +205,14 @@ public static class FeatureFlagCatalog
             Key: FeatureFlagKeys.LocalProjects,
             Title: "Локальные проекты",
             Description: "Проект может жить на вашем компьютере, а не на сервере: Claude работает с его файлами через агента AI Home на этой машине. Чат и задачи такого проекта видны отовсюду, а ход идёт, только пока компьютер в сети.",
+            Default: false,
+            Stage: "dev"),
+
+        // Сторож обновлений claude CLI (только для админов): уведомление + строка версий.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.ClaudeCliUpdateWatch,
+            Title: "Напоминание обновить claude CLI",
+            Description: "Раз в сутки сервер сверяет версию claude CLI с последней вышедшей. Если сервер отстал, администратор получит уведомление: новые модели Claude появляются только после обновления CLI. В разделе «Модели и расход» видна текущая и доступная версия.",
             Default: false,
             Stage: "dev"),
     ];

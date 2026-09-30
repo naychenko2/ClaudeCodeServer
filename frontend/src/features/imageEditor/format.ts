@@ -58,6 +58,17 @@ export const providerHint = (p: ImageEditProvider) =>
   p.priceUnit === 'usd' ? 'оплата в долларах' : p.priceUnit === 'credits' ? 'оплата в кредитах'
     : isFreeUnit(p.priceUnit) ? 'бесплатно, на своей видеокарте' : '';
 
+// Пометка заведённого, но лежащего поставщика; пункт при этом остаётся выбираемым.
+// Одна короткая строка во всех местах: длинные варианты режутся на 320–360px, а
+// «не отвечает» читается как статус соединения — временность несёт сам глагол
+export const unavailableMark = (p: ImageEditProvider) => (p.available === false ? 'не отвечает' : '');
+
+// «Локальные модели (не отвечает)» — для строк-сводок без цвета
+export const providerTitle = (p: ImageEditProvider) => {
+  const mark = unavailableMark(p);
+  return mark ? `${p.label} (${mark})` : p.label;
+};
+
 // Операции поставщика — объединение caps его моделей; null — у какой-то модели caps нет,
 // и честно сказать, чего поставщик не умеет, нельзя
 export function providerOps(p: ImageEditProvider): ImageEditOp[] | null {

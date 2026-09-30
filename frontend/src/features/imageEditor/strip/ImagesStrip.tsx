@@ -20,7 +20,7 @@ import { CharactersPanel } from '../characters/CharactersPanel';
 import { CHARACTERS_PANEL, revealWorkspacePanel } from '../characters/panel';
 import { useCharacters } from '../characters/useCharacters';
 import { maxSamples, roleShort, SAMPLE_ROLES, type Sample } from '../editorInputs';
-import { effectiveProvider, modelBlockReason, providerHint, variantsWord } from '../format';
+import { effectiveProvider, modelBlockReason, providerHint, unavailableMark, variantsWord } from '../format';
 import { ProjectImagePicker } from '../PanelSections';
 import { createDraft, releaseFocus } from '../thread/actions';
 import { enterScope, isPersonalScope } from '../scope';
@@ -54,7 +54,7 @@ function Label({ children }: { children: ReactNode }) {
 
 // Выбор в карточке настроек: имя и подсказка в две строки
 function Opt({ on, name, hint, disabled, title, onClick }: {
-  on: boolean; name: string; hint?: string; disabled?: boolean; title?: string; onClick: () => void;
+  on: boolean; name: string; hint?: ReactNode; disabled?: boolean; title?: string; onClick: () => void;
 }) {
   return (
     <Button size="sm" variant={on ? 'ghostAccent' : 'secondary'} disabled={disabled} title={title} onClick={onClick}
@@ -148,6 +148,35 @@ function SampleChips({ projectId, max }: { projectId: string; max: number }) {
   );
 }
 
+// Подсказка с пометкой лежащего поставщика отдельным span цвета предупреждения
+function joinHint(hint: string, warn: string, warnFirst: boolean): ReactNode {
+  if (!warn) return hint;
+  const w = <span key="w" style={{ color: C.warningText }}>{warn}</span>;
+  if (!hint) return w;
+  return warnFirst ? <>{w} · {hint}</> : <>{hint} · {w}</>;
+}
+
+// Лежащий поставщик выбирается как обычный — пометка лишь предупреждает заранее
+export function ProviderOpts({ catalog, choice, onPick }: {
+  catalog: ImageEditCatalog; choice: string; onPick: (provider: string | null) => void;
+}) {
+  const admin = catalog.providers.find(p => p.key === catalog.default.provider);
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs }}>
+      {admin && (
+        <Opt on={choice === 'settings'} name="Как в настройках"
+          hint={joinHint(`сейчас ${admin.label}`, unavailableMark(admin), false)}
+          onClick={() => onPick(null)} />
+      )}
+      {catalog.providers.map(p => (
+        <Opt key={p.key} on={choice === p.key} name={p.label}
+          hint={joinHint(providerHint(p), unavailableMark(p), true)}
+          onClick={() => onPick(p.key)} />
+      ))}
+    </div>
+  );
+}
+
 // Карточка настроек генерации — над полосой на десктопе и шторкой на телефоне
 function SettingsPanel({ projectId, L, catalog, isMobile, thread }: {
   projectId: string; L: Launch; catalog: ImageEditCatalog; isMobile: boolean; thread: ImageThread | null;
@@ -155,7 +184,6 @@ function SettingsPanel({ projectId, L, catalog, isMobile, thread }: {
   const [charSheet, setCharSheet] = useState(false);
   const choice = L.settings.provider ?? 'settings';
   const pv = effectiveProvider(catalog, choice);
-  const admin = catalog.providers.find(p => p.key === catalog.default.provider);
   const count = L.settings.count;
   const maxCount = L.model?.caps?.maxCount ?? catalog.limits.maxCount ?? 4;
   const personal = isPersonalScope(projectId);
@@ -165,16 +193,7 @@ function SettingsPanel({ projectId, L, catalog, isMobile, thread }: {
   return (
     <div data-image-settings="" style={{ fontSize: FS.sm }}>
       <Label>Поставщик</Label>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs }}>
-        {admin && (
-          <Opt on={choice === 'settings'} name="Как в настройках" hint={`сейчас ${admin.label}`}
-            onClick={() => L.setSettings({ provider: null, model: null })} />
-        )}
-        {catalog.providers.map(p => (
-          <Opt key={p.key} on={choice === p.key} name={p.label} hint={providerHint(p)}
-            onClick={() => L.setSettings({ provider: p.key, model: null })} />
-        ))}
-      </div>
+      <ProviderOpts catalog={catalog} choice={choice} onPick={provider => L.setSettings({ provider, model: null })} />
       {pv && (
         <>
           <Label>Модель</Label>

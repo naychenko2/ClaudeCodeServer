@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Services.ImageEditor;
+using ClaudeHomeServer.Tests.ImageEditor.Providers;
 using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.ImageEditor;
@@ -77,6 +78,42 @@ public class ImageEditCatalogTests
         catalog.Default.Provider.Should().BeNull();
         catalog.Limits.Should().Be(ImageEditCatalog.DefaultLimits);
         catalog.Reason.Should().Be(ImageEditCatalogReasons.NoProviderConfigured);
+    }
+
+    // Лежащий ComfyUI: заведён (LocalMedia:Enabled), но не отвечает
+    private static LocalImageEditor LocalDown() =>
+        new(new LocalImageEditorTests.FakeMedia { Available = false });
+
+    [Fact]
+    public void Явный_local_админа_при_лежащем_ComfyUI_не_подменяется_облаком()
+    {
+        var catalog = ImageEditCatalog.Build([Fal, LocalDown()], LocalImageEditor.ProviderKey, null);
+
+        catalog.Default.Should().Be(new ImageEditDefaultDto(LocalImageEditor.ProviderKey, ImageEditCatalog.AutoModelId));
+        var local = catalog.Providers.Single(p => p.Key == LocalImageEditor.ProviderKey);
+        local.Available.Should().BeFalse("пункт виден с пометкой «не отвечает», а не скрыт");
+        catalog.Providers.Single(p => p.Key == "fal").Available.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Авто_при_лежащем_local_берёт_первого_доступного()
+    {
+        var catalog = ImageEditCatalog.Build([LocalDown(), Fal], "auto", null);
+
+        catalog.Default.Should().Be(new ImageEditDefaultDto("fal", ImageEditCatalog.AutoModelId));
+        catalog.Providers.Select(p => p.Key).Should().Equal("fal", LocalImageEditor.ProviderKey);
+    }
+
+    [Fact]
+    public void Незаведённый_local_отсутствует_в_каталоге()
+    {
+        var off = new LocalImageEditor(new LocalImageEditorTests.FakeMedia { Configured = false, Available = false });
+        var noSeam = new LocalImageEditor(null);
+
+        ImageEditCatalog.Build([Fal, off], LocalImageEditor.ProviderKey, null).Providers.Select(p => p.Key)
+            .Should().Equal("fal");
+        ImageEditCatalog.Build([Fal, noSeam], LocalImageEditor.ProviderKey, null).Default.Provider
+            .Should().Be("fal", "без подсистемы images поставщика local нет вовсе");
     }
 
     [Fact]

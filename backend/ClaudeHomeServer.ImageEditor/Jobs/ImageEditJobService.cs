@@ -135,7 +135,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         var editor = ImageEditCatalog.FindAvailable(_editors, request.Provider);
         if (editor is null)
             return Fail<ImageEditQuoteDto>(ImageEditErrorCodes.ProviderUnavailable,
-                $"Поставщик «{request.Provider}» не настроен или отключён администратором");
+                ImageEditCatalog.UnavailableError(_editors, request.Provider));
 
         var traits = new EditTraits(request.HasMask, request.References, request.HasCharacter, request.HasAnnotations, request.Removal);
         var op = request.HasMask && request.Op == ImageEditOp.Edit ? ImageEditOp.Inpaint : request.Op;

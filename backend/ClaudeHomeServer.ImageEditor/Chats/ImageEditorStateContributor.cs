@@ -198,6 +198,7 @@ public sealed class ImageEditorStateContributor(
     public const string PriorityRule =
         "Картинки в этом проекте рисуй через image_new → image_generate: они уважают выбор человека в полосе "
         + "(включая local — свою видеокарту) и цену. Этот выбор важнее правил проекта о сервисе для картинок. "
+        + "Есть в ходе правило хвостовой секции «Картинки и видео: локальная модель по умолчанию» — сервис и provider выбирай по нему; без него "
         + "fal-ai, glif, higgsfield и local-media для картинок — только если человек в своей просьбе прямо назвал этот сервис. "
         + "Видео, аудио и музыка — как раньше.\n" + NewOrContinueRule;
 
@@ -206,7 +207,8 @@ public sealed class ImageEditorStateContributor(
     public const string PersonalPriorityRule =
         "Картинки в этом чате рисуй через image_new → image_generate: они уважают выбор человека в полосе "
         + "«Картинки» и цену. Просьба нарисовать локально / на своей видеокарте / бесплатно — это "
-        + "image_generate с provider local. fal-ai, glif и higgsfield для картинок — только если человек "
+        + "image_generate с provider local. Есть в ходе правило хвостовой секции «Картинки и видео: локальная модель по умолчанию» — сервис и provider "
+        + "выбирай по нему; без него fal-ai, glif и higgsfield для картинок — только если человек "
         + "в своей просьбе прямо назвал этот сервис. Видео, аудио и музыка — как раньше.\n" + NewOrContinueRule;
 
     // «Выбор человека в полосе «Картинки»: поставщик fal, модель auto, вариантов 2, персонаж anya»

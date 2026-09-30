@@ -72,7 +72,8 @@ public class ImageEditorToolsetTests : IDisposable
     private void AddChat(string id, string owner, string? projectId) =>
         _sessions[id] = new Session { Id = id, OwnerId = owner, ProjectId = projectId };
 
-    private ImageEditorToolset Toolset(IImageEditor[]? editors = null, bool agentLaunch = true, bool withGate = true)
+    private ImageEditorToolset Toolset(IImageEditor[]? editors = null, bool agentLaunch = true, bool withGate = true,
+        IImagePlaceSettings? placeSettings = null)
     {
         editors ??= [HiggsfieldImageEditorTests.Create().Editor];
         var workspace = new ImageEditWorkspace(Path.Combine(_dir, "image-editor"));
@@ -97,7 +98,7 @@ public class ImageEditorToolsetTests : IDisposable
 
         var config = TestImages.Config((ImageEditorToolset.AgentLaunchKey, agentLaunch ? "true" : "false"));
         return new ImageEditorToolset(accessor.Object, flags.Object, projects.Object, editors, threads, launcher,
-            withGate ? _turnGate.Object : null, _jobs, events: _bus, config: config, prefs: prefs);
+            withGate ? _turnGate.Object : null, _jobs, placeSettings: placeSettings, events: _bus, config: config, prefs: prefs);
     }
 
     private static McpToolCallContext Ctx(string owner = Owner, string tail = ChatId) => new(owner, tail, tail);
@@ -672,6 +673,30 @@ public class ImageEditorToolsetTests : IDisposable
         body["code"]!.GetValue<string>().Should().Be(ImageEditErrorCodes.ProviderUnavailable);
         body["retryQuote"]!["provider"]!.GetValue<string>().Should().Be("fal");
         JobsOfChat().Should().BeEmpty("RunAsync заглушки бросает — запуска не было");
+    }
+
+    [Fact]
+    public async Task Явный_local_админа_при_лежащем_ComfyUI_отказывает_с_котировкой_облака_без_запуска()
+    {
+        var fal = new FakeImageEditor("fal", enabled: true, models: FakeImageEditor.Model("fal-edit"));
+        var media = new LocalImageEditorTests.FakeMedia { Available = false };
+        var place = new Mock<IImagePlaceSettings>();
+        place.Setup(p => p.ProviderFor(ImagePlaceKeys.ImageEditor)).Returns(LocalImageEditor.ProviderKey);
+        var toolset = Toolset([fal, new LocalImageEditor(media)], placeSettings: place.Object);
+
+        var state = Parse(await Call(toolset, ImageEditorToolset.ToolState));
+        state["defaultProvider"]!.GetValue<string>().Should().Be(LocalImageEditor.ProviderKey);
+
+        var result = await Call(toolset, ImageEditorToolset.ToolGenerate, Gen(Thread()));
+
+        result.IsError.Should().BeTrue();
+        var body = Parse(result);
+        body["code"]!.GetValue<string>().Should().Be(ImageEditErrorCodes.ProviderUnavailable);
+        body["error"]!.GetValue<string>().Should().Contain("сейчас недоступен");
+        body["retryQuote"]!["provider"]!.GetValue<string>().Should().Be("fal");
+        JobsOfChat().Should().BeEmpty("облако пришло котировкой, а не запуском: RunAsync заглушки fal бросает");
+        media.Submitted.Should().BeEmpty();
+        _spend.Records.Should().BeEmpty();
     }
 
     [Fact]

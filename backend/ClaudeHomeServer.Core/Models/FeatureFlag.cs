@@ -77,6 +77,9 @@ public static class FeatureFlagKeys
     // на его машине через агента. Флаг закрывает создание и перепривязку локальных проектов
     // и весь UI; шлюз LLM у него свой тумблер (LlmGateway:Enabled), флагом не закрывается.
     public const string LocalProjects = "local-projects";
+    // Локальная модель по умолчанию для картинок и видео: при включённом local-media агент
+    // рисует им без явной просьбы «локально». Гейтит хвостовую секцию промпта хода.
+    public const string LocalMediaDefault = "local-media-default";
 }
 
 /// <summary>
@@ -201,6 +204,14 @@ public static class FeatureFlagCatalog
             Key: FeatureFlagKeys.LocalProjects,
             Title: "Локальные проекты",
             Description: "Проект может жить на вашем компьютере, а не на сервере: Claude работает с его файлами через агента AI Home на этой машине. Чат и задачи такого проекта видны отовсюду, а ход идёт, только пока компьютер в сети.",
+            Default: false,
+            Stage: "dev"),
+
+        // Локальная модель по умолчанию для картинок и видео (MCP local-media).
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.LocalMediaDefault,
+            Title: "Локальная модель по умолчанию",
+            Description: "Если у вас включены локальные модели, картинки и видео агент рисует ими сам, без отдельной просьбы. Если локальная сейчас недоступна, агент скажет об этом и предложит облако.",
             Default: false,
             Stage: "dev"),
     ];

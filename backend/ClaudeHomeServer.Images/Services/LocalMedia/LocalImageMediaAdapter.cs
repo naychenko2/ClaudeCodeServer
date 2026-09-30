@@ -54,6 +54,8 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
         }
     }
 
+    public bool Configured => LocalMediaOptions.IsEnabled(config);
+
     // Задача опроса в процессе
     internal Task? Probing
     {

@@ -25,6 +25,7 @@ public class LocalImageEditorTests : IDisposable
     internal sealed class FakeMedia : ILocalImageMedia
     {
         public bool Available { get; set; } = true;
+        public bool Configured { get; set; } = true;
         public int? Queue { get; set; } = 3;
         public ConcurrentQueue<LocalImageRequest> Submitted { get; } = new();
         public List<string> Cancelled { get; } = [];
@@ -140,11 +141,14 @@ public class LocalImageEditorTests : IDisposable
     }
 
     [Theory]
-    [InlineData(true)]   // тумблер выключен или ComfyUI не отвечает
+    [InlineData(true)]   // тумблер LocalMedia:Enabled выключен
     [InlineData(false)]  // нет шва: подсистема images выключена
-    public void Каталог_БезComfyUi_ПоставщикСкрыт(bool withSeam)
+    public void Каталог_НеЗаведён_ПоставщикСкрыт(bool withSeam)
     {
-        IImageEditor editor = withSeam ? new LocalImageEditor(new FakeMedia { Available = false }) : new LocalImageEditor(null);
+        // Лежащий ComfyUI при включённом тумблере не скрывает, а помечает — см. ImageEditCatalogTests
+        IImageEditor editor = withSeam
+            ? new LocalImageEditor(new FakeMedia { Configured = false, Available = false })
+            : new LocalImageEditor(null);
 
         var catalog = ImageEditCatalog.Build([editor], null, null);
 

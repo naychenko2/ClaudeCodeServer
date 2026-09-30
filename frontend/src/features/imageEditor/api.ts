@@ -52,6 +52,9 @@ export interface ImageEditProvider {
   label: string;
   priceUnit: string;
   models: ImageEditModel[];
+  // false — заведён, но сейчас не отвечает (лежит ComfyUI): виден с пометкой «не отвечает»,
+  // выбрать можно, запуск получит provider_unavailable. Поля нет — доступен
+  available?: boolean;
 }
 
 export interface ImageEditCatalog {
@@ -435,7 +438,7 @@ const MOCK_PROVIDERS: ImageEditProvider[] = [
     { id: 'nano_banana_2', label: 'Nano Banana', caps: caps(ALL_EDIT, 'none'), priceHint: { amount: 1, unit: 'credits', per: 'image' } },
   ] },
   // Как LocalImageEditor на сервере: Qwen-Image без своего канала маски и FaceDetailer
-  { key: 'local', label: 'Локальные модели', priceUnit: 'free', models: [
+  { key: 'local', label: 'Локальные модели', priceUnit: 'free', available: true, models: [
     AUTO_ITEM,
     { id: 'qwen-image-2.1', label: 'Qwen-Image 2.1', caps: caps(['generate', 'edit', 'inpaint'], 'asReference'), priceHint: { amount: 0, unit: 'free', per: 'image' } },
     { id: 'face-detailer', label: 'Улучшить лица', caps: { ...caps(['enhanceFaces'], 'none'), maxReferences: 0, maxCount: 1 }, priceHint: { amount: 0, unit: 'free', per: 'image' } },

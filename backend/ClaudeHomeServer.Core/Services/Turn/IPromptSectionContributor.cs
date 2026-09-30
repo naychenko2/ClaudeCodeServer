@@ -66,7 +66,23 @@ public sealed record PromptSessionContext(
     IReadOnlyList<string>? WorkspaceSections = null,
     // Группа «нужен контент проекта на сервере» работает (ADR-016 §4); false — локальный
     // проект, контрибьюторы CodeGraph и досье молчат
-    bool ServerContent = true);
+    bool ServerContent = true,
+    // MCP-сервер local-media доехал до хода (в нём уже учтены чат проекта, файлы на
+    // сервере, не ADR-016 и не ReadOnly-персона)
+    bool HasLocalMediaMcp = false,
+    // MCP-сервер редактора картинок (image_new/image_generate) доехал до хода: без него
+    // TrimMcpServers или выключенный модуль оставляют ход без этих инструментов
+    bool HasImageEditorMcp = false,
+    // Живого человека у хода нет — см. TurnAudience.IsUnattended
+    bool Unattended = false);
+
+public static class TurnAudience
+{
+    // Ход без живого человека: исполнитель задачи, ход правила автоматизации персоны или
+    // делегированный ход (Task() из другого чата). Единственная точка этого признака.
+    public static bool IsUnattended(Session session, int agentDepth) =>
+        session.TaskExecution || session.AutomationRuleId is not null || agentDepth >= 1;
+}
 
 // Контракт контрибьютора секции системного промпта (этап 2 плана «Шина событий хода»,
 // ADR-013). Реестр собирается Filter-событием prompt/assembling; регистрация — через

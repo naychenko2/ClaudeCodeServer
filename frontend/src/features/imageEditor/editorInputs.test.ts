@@ -174,6 +174,13 @@ describe('доступность быстрого действия по ката
     expect(quickOffered('upscale', null)).toBe(true);
   });
 
+  it('лежащий поставщик запасным не предлагается; поле не пришло — доступен', () => {
+    const faces = (lp: ImageEditProvider) => quickAvailability('enhanceFaces', catalog(FAL, lp), 'fal', AUTO_MODEL, 1);
+    expect(faces({ ...LOCAL, available: false })).toMatchObject({ reason: 'fal не умеет улучшать лица', fallback: null });
+    expect(faces(LOCAL).fallback).toMatchObject({ provider: 'local', model: 'face' });
+    expect(faces({ ...LOCAL, available: true }).fallback).toMatchObject({ provider: 'local', model: 'face' });
+  });
+
   it('возможности модели неизвестны — «Авто», решает сервер', () => {
     const blind: ImageEditProvider = { ...LOCAL, models: [AUTO, { id: 'x', label: 'X' }] };
     expect(quickAvailability('outpaint', catalog(blind), 'local', AUTO_MODEL, 2).route).toMatchObject({ model: AUTO_MODEL, count: 2 });

@@ -183,7 +183,7 @@ one-shot действия и разговор с исполнителем «Ло
 модель админ выбирает отдельно для каждого места `ImagePlaces`: `persona-avatar` и `image-editor` (у
 редактора — лишь умолчание). **Явно выбранного провайдера не подменяем**, переход — только в
 «Автоматически»; не нарисовалось — инициалы, догоняет `ImageBackfillService` ([image-generation.md](docs/features/image-generation.md)).
-Локальная генерация (`Services/Images/LocalMedia`) — MCP-сервер `local-media`, ComfyUI на своей GPU, только по явной просьбе;
+Локальная генерация (`Services/Images/LocalMedia`) — MCP-сервер `local-media`, ComfyUI на своей GPU, только по явной просьбе (с флагом `local-media-default` — по умолчанию, облако при отказе лишь с согласия);
 **граф — только из шаблонов `ComfyWorkflows`**: произвольный граф = запись файлов хоста ([local-media.md](docs/features/local-media.md)).
 
 ## Редактор картинок (ClaudeHomeServer.ImageEditor)

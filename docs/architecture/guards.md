@@ -20,7 +20,6 @@
 | `TasksControllerDroppedGuardTests` | снятая штабом задача не затирается агентским PUT без заголовка | `team-implement-mode.md` (волна 1 team-blocker-honest) | только `PUT /api/tasks/{id}`; DELETE/создание вне скоупа |
 | `McpInstructionsLengthGuardTests` | `instructions` ответа initialize ≤ 1950 символов | тест: живой проб — CLI режет на ~2 КБ | только personas/tasks-серверы; вне node — skip |
 | `CoordinatorWriteGuardTests` | координатор не пишет файлы обходными shell-командами | `team-implement-mode.md` §Э7 (находка Веры) | регэксп — не AST; новые обходы вне списка InlineData |
-| `DesktopMcpToolsetStabilityTests` | состав `tools/list` desktop-server постоянен при любом env и состоянии хода | ADR-008 (desktop-agent) | строковый скан; только desktop-server |
 | `FalAccumulatorRaceRegressionTests` | стоимость FAL не теряется при оживлении аккумулятора под `_falPersistLock` | тест: ревью волны 2 (Blocker 1) | сценарий воспроизведён руками; один сценарий |
 | `HiggsfieldFailureClassRegressionTests` | failure-classification Higgsfield: немой EnsureFresh → NeedsAuth; снимок старше 24 ч → пустой состав | тест: мутационное ревью Глеба (коммит 3aa69833) | один зафиксированный порядок на путь; граница 24 ч — с запасом, не детерминированно |
 | `IlBoundaryRegressionTests` | IL-скан сторожей границ видит все живые швы из 7 известных — сейчас 6 (3 — во вложенных типах) | `docs/research/il-boundary-scan-2026-09.md`, комментарий теста | только 6 зафиксированных швов; переименование типа роняет тест |
@@ -160,36 +159,6 @@
 - **Расширение:** новый найденный обход — новая строка `InlineData` в
   `LooksLikeFileWrite_ИзвестныеСпособыЗаписи_True`; новый легитимный паттерн (чтобы не
   ложно падал) — строка в тест-False-наборе.
-
-### DesktopMcpToolsetStabilityTests
-
-- **Файл:** `backend/ClaudeHomeServer.Tests/Services/DesktopMcpToolsetStabilityTests.cs`
-- **Инвариант:** состав инструментов desktop-server (`tools/list` — ровно 6: devices,
-  screen, ui, act, open, run) не «мигает» при любом окружении и состоянии хода: набор
-  входит в сигнатуру запуска CLI (`BuildLaunchSignature`), мерцание = перезапуск процесса
-  claude со ВСЕМИ MCP-серверами («Stream closed», «No such tool available»).
-- **Источник:** ADR-008 (desktop-agent) — «Существующий `McpToolsetStabilityTests` новый
-  сервер не покрывает, а инвариант тот же и такой же смертельный»; инциденты-аналоги —
-  WORKSPACE_WRITE (по интенту) и TASKS_EXECUTE (по глубине делегирования).
-- **Как ловит:** три уровня: (1) живой node-процесс `mcp/desktop-server/index.js` —
-  `tools/list` при 3 видах окружения (штатный env; `DESKTOP_API_TOKEN=` пустой = грань
-  выключена; ни одной переменной) — состав обязан совпасть с константой `ExpectedTools`;
-  (2) строковый скан исходника: тело `const TOOLS = [` не содержит `process.env`/`if (`/
-  `.push(` (объявление целиком, без условий), `callDevice` — без `retry` (клик/ввод не
-  идемпотентны), тексты исходов (`applied_unverified`, `no_visible_change`, `unknown`) —
-  с запретом повтора, контент экрана/снапшота — в контейнере `untrusted(...)` /
-  «НЕДОВЕРЕННЫЕ ДАННЫЕ»; (3) живой запуск `claude --disallowedTools <deny-имена>` — CLI
-  обязан завершить ход с exit 0 без «matches no known tool» (класс дефекта MultiEdit).
-  Плюс: `BuildDesktopContext` (SessionManager) не смотрит на `_currentTurn*` (скип, пока
-  не реализован), `device` — человеческое имя, а не GUID, в схемах всех инструментов
-  кроме `desktop_devices`; `desktop_act` — `maxItems=10`, enum действий
-  click/type/key/scroll/focus, `desktop_screen` — `scope` дефолт `window` + `snapshotId`.
-- **Слепые зоны:** строковый скан ищет маркеры в исходнике JS — переименование
-  `const TOOLS = [`/секции-разметчики роняет сам сторож, но обход через новый
-  `require`/импорт мимо этих маркеров не виден; живой node-прогон skip-нётся без node.
-- **Расширение:** новый desktop-инструмент — строка в `ExpectedTools` (состав
-  «полный и единственный»); новый env-зависимый сервер — свой класс по образцу
-  (живой `tools/list` + скан исходника + deny-прогон CLI).
 
 ### FalAccumulatorRaceRegressionTests
 
@@ -765,8 +734,8 @@
    `SharedAllowedPrefixes` — единый источник для всех трёх boundary-
    сторожей. Новый список, копирующий чужой — новый кандидат на расхождение.
 5. **Зависимости от окружения — skip с диагнозом, не тишина.** Node
-   (McpToolset, Desktop, McpInstructions, LucideGlyph), Linux
-   (InotifyLeak), claude CLI (Desktop deny-прогон), node_modules (Lucide) —
+   (McpToolset, McpInstructions, LucideGlyph), Linux
+   (InotifyLeak), node_modules (Lucide) —
    везде `Skip.If` с причиной; но ProjectMap и boundary-сторожи НАПРЯМУЮ
    падают, если дерево/сборки не найдены: «молчаливо зелёный сторож хуже
    отсутствующего».

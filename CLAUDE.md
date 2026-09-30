@@ -236,7 +236,7 @@ C4-схема проекта в Viaduct (sandbox-iframe), модель — `docs
 держим намеренно: источник правды — таблица в коде, а устаревший список хуже его отсутствия.
 
 **Правило зависимостей:** вертикаль зависит от спины (`Microsoft.*`, `Models`,
-`Services.Http`/`Composition`/`Mcp`) и от явных швов (например, `IDesktopChatDirectory`), но
+`Services.Http`/`Composition`/`Mcp`) и от явных швов (например, `IDeviceExecChannel`), но
 НИКОГДА от другой вертикали напрямую. Нужна связь — два пути: событие `TurnEventBus`
 ([ADR-013](docs/adr/ADR-013-turn-event-bus.md)) либо явный интерфейс-шов. Держат правило
 сторожа `SubsystemBoundaryTests` и `SubsystemBoundaryCoverageTests` (default-deny +
@@ -295,7 +295,7 @@ WorkingDirectory = `project.RootPath`. Маппинг `stream-json` → `ServerM
 общий `POST /mcp/{name}[/{хвост}]`, node-процесса нет вовсе. Хвост маршрута несёт контекст вызова
 (сессия-вызыватель, у `memory` — персона и проект), по нему тулсет живьём резолвит
 проект/персону/привязки; владелец берётся из claim `sub` сервисного JWT, не из маршрута.
-На stdio остались только `desktop` (capability-токен, ADR-008) и внешние модули;
+На stdio остались только внешние модули;
 у `watch`, `websearch` и `higgsfield` stdio-ветки отката нет вовсе. Замороженные
 `mcp/*-server/index.js` — ветки отката под `Mcp:HttpTransport=false`.
 
@@ -351,10 +351,9 @@ diff/артефакты/виджеты; оправдывает интеграц�
 **Перед правками в персонах (промпт, память, групповые чаты, пантеон OmO, аватары, MCP
 personas/memory) — прочитай [docs/architecture/personas.md](docs/architecture/personas.md).**
 
-## Десктопный агент (ClaudeHomeServer.Desktop, за флагом `desktop-agent`)
+## Канал устройства (ClaudeHomeServer.Desktop)
 
-Руки песочницы на машине пользователя: MCP-сервер `desktop` плюс WPF-клиент, за флагом `desktop-agent`.
-
+Серверная половина агента локальных проектов ([ADR-016](docs/adr/ADR-016-local-projects.md)): реестр и сопряжение устройств, хаб `/hubs/devices`, канал исполнения; руки ADR-008 удалены 2026-09-30.
 Инварианты и подробности — [backend/ClaudeHomeServer.Desktop/CLAUDE.md](backend/ClaudeHomeServer.Desktop/CLAUDE.md): файл подхватывается сам при работе с этой папкой; при правках со стороны фронтенда открой его руками.
 
 ## Механики OmO в чатах

@@ -3,7 +3,7 @@
 // Состояния §4: скелетон, ошибка-баннер, протухшие данные, пусто, недоступная/исчерпанная квота.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { AlertTriangle, ArrowUpCircle, ExternalLink } from 'lucide-react';
+import { AlertTriangle, ArrowUpCircle, ChevronDown, ChevronUp, ExternalLink } from 'lucide-react';
 import type { ProviderBalanceInfo, SpendOverviewResponse, SubscriptionUsage, UsageResponse, UsageSnapshot } from '../../types';
 import { api } from '../../lib/api';
 import { C, FONT, FS, GROUP_COLORS, R, SP } from '../../lib/design';
@@ -23,6 +23,7 @@ import { freeSourceLabel, isFreeSource } from '../../lib/spendSources';
 import { isLocalEngineKey } from '../../lib/localEngine';
 import { showToast } from '../../lib/toast';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
+import { renderInlineCode } from '../../lib/inlineCode';
 import { KpiRibbon } from './KpiRibbon';
 import { ProviderCard } from './ProviderCard';
 import type { FreshnessSpec, PillSpec, ProviderCardData, UnavailableModelRow } from './ProviderCard';
@@ -518,6 +519,7 @@ export function QuotasTab({ balances, onClose }: { balances?: BalanceChipData[];
   // открытии — после `claude update` строка сразу показывает актуальность.
   const cliWatch = useFeature(FLAGS.claudeCliUpdateWatch);
   const [cli, setCli] = useState<Awaited<ReturnType<typeof api.models.claudeCli>> | null>(null);
+  const [cliChangesOpen, setCliChangesOpen] = useState(false);
   useEffect(() => {
     if (!isAdmin || !cliWatch) return;
     let c = false;
@@ -755,13 +757,63 @@ export function QuotasTab({ balances, onClose }: { balances?: BalanceChipData[];
   // === Рендер ===
 
   // Строка версии claude CLI — до раннего выхода пустой вкладки: видна и без провайдеров.
-  // Сравнить нельзя (updateAvailable = null) — строки нет.
+  // Сравнить нельзя (updateAvailable = null) — строки нет. Новые модели — в самой плашке,
+  // список изменений — под ней раскрывашкой (без своей прокрутки: крутит модалка, на
+  // мобиле палец не застревает во вложенном списке).
+  const cliModels = cli?.newModels ?? [];
+  const cliChanges = cli?.changes ?? [];
+  const cliItemCount = cliChanges.reduce((n, v) => n + v.items.length, 0);
+  // «будет по умолчанию» — только когда в семействе несколько новых версий: иначе пометка
+  // стояла бы у каждой модели и ничего не различала
+  const familyOf = (name: string) => name.split(' ')[0];
+  const modelLabel = (m: (typeof cliModels)[number]) =>
+    `${m.name} (с ${m.cliVersion}${m.isFamilyDefault && cliModels.filter(o => familyOf(o.name) === familyOf(m.name)).length > 1 ? ', будет по умолчанию' : ''})`;
   const cliLine = !isAdmin || !cliWatch || !cli || cli.updateAvailable == null ? null
     : cli.updateAvailable ? (
-      <Notice icon={ArrowUpCircle} style={{ marginBottom: SP.md }}
-        title={`claude CLI ${cli.current} · доступна ${cli.latest}`}>
-        Новые модели Claude приходят только с обновлением CLI — выполните claude update на сервере.
-      </Notice>
+      <div style={{ marginBottom: SP.md }}>
+        <Notice icon={ArrowUpCircle} title={`claude CLI ${cli.current} · доступна ${cli.latest}`}>
+          Новые модели Claude приходят только с обновлением CLI — выполните claude update на сервере.
+          {cliModels.length > 0 && (
+            <div style={{ marginTop: SP.xs, fontWeight: 600 }}>
+              Новые модели: {cliModels.map(modelLabel).join(', ')}
+            </div>
+          )}
+        </Notice>
+        {cliChanges.length > 0 && (
+          <>
+            <Button
+              variant="ghost" size="xs" style={{ marginTop: SP.xs }}
+              leftIcon={cliChangesOpen
+                ? <ChevronUp size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+                : <ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+              onClick={() => setCliChangesOpen(o => !o)}
+            >
+              {cliChangesOpen ? 'Скрыть изменения'
+                : `Что изменилось: ${cliChanges.length} ${plural(cliChanges.length, 'версия', 'версии', 'версий')}, ${cliItemCount} ${plural(cliItemCount, 'пункт', 'пункта', 'пунктов')}`}
+            </Button>
+            {cliChangesOpen && (
+              <div style={{ marginTop: SP.sm, display: 'flex', flexDirection: 'column', gap: SP.md }}>
+                {cliChanges.map(v => (
+                  <div key={v.version}>
+                    <div style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary }}>{v.version}</div>
+                    <ul style={{ margin: `${SP.xs}px 0 0`, paddingLeft: SP.lg, fontSize: FS.sm, color: C.textPrimary, lineHeight: 1.45 }}>
+                      {v.items.map((item, i) => (
+                        <li key={i} style={{ overflowWrap: 'anywhere', marginBottom: SP.xxs }}>{renderInlineCode(item)}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+                {((cli.hiddenCount ?? 0) > 0 || cli.truncated) && (
+                  <div style={{ fontSize: FS.xs, color: C.textMuted }}>
+                    {(cli.hiddenCount ?? 0) > 0 && `Скрыто ${cli.hiddenCount} ${plural(cli.hiddenCount ?? 0, 'пункт', 'пункта', 'пунктов')} про VS Code, веб и другие продукты.`}
+                    {cli.truncated && ' Показаны последние версии.'}
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        )}
+      </div>
     ) : (
       <div style={{ marginBottom: SP.md, fontSize: FS.xs, color: C.textSecondary }}>
         claude CLI {cli.current} · актуальна

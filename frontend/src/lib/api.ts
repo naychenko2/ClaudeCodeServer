@@ -540,7 +540,15 @@ export const api = {
     // локальную версию (после claude update), npm сервер при этом не опрашивает.
     // updateAvailable = null — сравнить нельзя.
     claudeCli: (refresh = false) =>
-      request<{ current: string | null; latest: string | null; updateAvailable: boolean | null; checkedAt: string | null }>(
+      request<{
+        current: string | null; latest: string | null; updateAvailable: boolean | null; checkedAt: string | null;
+        // Из CHANGELOG пропущенных версий (current, latest]; пусто — списка нет.
+        // isFamilyDefault — самая новая в семействе: алиас пойдёт на неё после обновления
+        newModels?: { name: string; id: string; cliVersion: string; isFamilyDefault: boolean }[];
+        changes?: { version: string; items: string[]; hidden: number }[];
+        hiddenCount?: number;
+        truncated?: boolean;
+      }>(
         `/models/claude-cli${refresh ? '?refresh=true' : ''}`),
     // Эффективный резолв для строки «Сейчас пойдёт» (считается той же кодовой дорогой,
     // что запуск хода — второй точки истины нет). sessionId вместе с personaId добавляет

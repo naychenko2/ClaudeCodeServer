@@ -20,7 +20,7 @@ import { CharactersPanel } from '../characters/CharactersPanel';
 import { CHARACTERS_PANEL, revealWorkspacePanel } from '../characters/panel';
 import { useCharacters } from '../characters/useCharacters';
 import { maxSamples, roleShort, SAMPLE_ROLES, type Sample } from '../editorInputs';
-import { effectiveProvider, modelBlockReason, ownerUnavailableMark, providerHint, unavailableMark, variantsWord } from '../format';
+import { effectiveProvider, modelBlockReason, providerHint, unavailableMark, variantsWord } from '../format';
 import { ProjectImagePicker } from '../PanelSections';
 import { createDraft, releaseFocus } from '../thread/actions';
 import { enterScope, isPersonalScope } from '../scope';
@@ -165,7 +165,7 @@ export function ProviderOpts({ catalog, choice, onPick }: {
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs }}>
       {admin && (
         <Opt on={choice === 'settings'} name="Как в настройках"
-          hint={joinHint(`сейчас ${admin.label}`, ownerUnavailableMark(admin), false)}
+          hint={joinHint(`сейчас ${admin.label}`, unavailableMark(admin), false)}
           onClick={() => onPick(null)} />
       )}
       {catalog.providers.map(p => (

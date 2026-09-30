@@ -52,7 +52,7 @@ export interface ImageEditProvider {
   label: string;
   priceUnit: string;
   models: ImageEditModel[];
-  // false — заведён, но сейчас не отвечает (лежит ComfyUI): виден с пометкой «недоступен»,
+  // false — заведён, но сейчас не отвечает (лежит ComfyUI): виден с пометкой «не отвечает»,
   // выбрать можно, запуск получит provider_unavailable. Поля нет — доступен
   available?: boolean;
 }

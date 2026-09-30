@@ -6,7 +6,7 @@ import { useState, type MouseEvent, type ReactNode } from 'react';
 import { AlertTriangle, Check, ChevronDown, Coins } from 'lucide-react';
 import { Button, Menu, MenuItem, Modal, ICON_SIZE, ICON_STROKE, C, FS, R, SP } from 'aihome_shell/kit';
 import type { ImageEditCatalog, ImageEditModel, ImageEditProvider } from './api';
-import { effectiveProvider, isFreeUnit, modelBlockReason, money, ownerUnavailableMark, providerHint, unavailableMark, type ProviderChoice } from './format';
+import { effectiveProvider, isFreeUnit, modelBlockReason, money, providerHint, unavailableMark, type ProviderChoice } from './format';
 
 interface Props {
   catalog: ImageEditCatalog;
@@ -52,7 +52,7 @@ export function ProviderItems({ catalog, value, onPick }: { catalog: ImageEditCa
     <>
       {admin && (
         <MenuItem icon={tick(value === 'settings')} onClick={() => onPick('settings')}
-          label={<Row name="Как в настройках" hint={`сейчас ${admin.label} — выбрал администратор`} aside={<Warn text={ownerUnavailableMark(admin)} />} />} />
+          label={<Row name="Как в настройках" hint={`сейчас ${admin.label} — выбрал администратор`} aside={<Warn text={unavailableMark(admin)} />} />} />
       )}
       {catalog.providers.map(p => (
         <MenuItem key={p.key} icon={tick(value === p.key)} onClick={() => onPick(p.key)}
